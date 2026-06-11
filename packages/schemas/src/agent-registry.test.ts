@@ -114,6 +114,18 @@ describe("SupervisorConfigSchema", () => {
     ).not.toThrow()
   })
 
+  it("accepts escalation_pools and defaults it to an empty array", () => {
+    // Transfer destinations (Console combo). Previously consumed by the
+    // mcp-server but missing from the contract → stripped on write.
+    const parsed = SupervisorConfigSchema.parse({ enabled: false })
+    expect(parsed.escalation_pools).toEqual([])
+    const withPools = SupervisorConfigSchema.parse({
+      enabled: false,
+      escalation_pools: ["sac_ia", "reembolso_ia"],
+    })
+    expect(withPools.escalation_pools).toEqual(["sac_ia", "reembolso_ia"])
+  })
+
   it("rejects positive sentiment_alert_threshold", () => {
     expect(() =>
       SupervisorConfigSchema.parse({

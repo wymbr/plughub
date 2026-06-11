@@ -2,6 +2,87 @@
 
 ---
 
+## Config Consolidation — Fase 0: contrato + guard-rail (2026-06-11)
+
+Fundação da consolidação de config (estratégia híbrida — `docs/arcos/config-consolidation.md` §8).
+
+**F0.1 — Contrato**: seção **permanente** "Configuration — Single Source Invariants" no CLAUDE.md
+(4 invariantes: fonte única por domínio; provisão só via API; todo campo editável na UI; env só
+secret/wiring, config-api vence em duplicação). O burn-down das violações herdadas (F1–F4) é rastreado
+no escopo "Config Consolidation" do TODO + guard.
+
+**F0.2 — Guard-rail**: `infra/check_config_invariants.py` — script dependency-free (roda no host:
+`python infra/check_config_invariants.py`) com allowlist de **4 violações conhecidas** (seed.py escreve
+Redis direto; pools em fonte dupla YAML+seed.py; `PLUGHUB_INSTANCE_TTL_SECONDS` e
+`PLUGHUB_ATTACHMENT_EXPIRY_DAYS` duplicando o config-api). **Falha (exit 1) se surgir violação NOVA**;
+avisa quando uma conhecida é corrigida (para sair do allowlist). Burn-down objetivo da migração.
+
+Sem build (script + docs). Próximo: F1.1 (de-duplicar pools — eliminar lista hardcoded + escrita Redis
+do `seed.py`) e F1.2 (precedência env×config).
+
+---
+
+## Bugfix — Console Transfer "No destinations available" (contrato + config) (2026-06-11)
+
+**Sintoma**: o botão Transfer do Console mostrava sempre "No destinations available".
+
+**Causa-raiz (duas camadas)**:
+1. **Contrato dessincronizado**: o Transfer lê `capabilities.escalations` ← `supervisor_capabilities`
+   (mcp-server) ← `GET {agent-registry}/v1/pools/{id}` → `pool.supervisor_config.escalation_pools`. Mas
+   o `SupervisorConfigSchema` (`@plughub/schemas`) **não declarava `escalation_pools`** — e a registry
+   valida o body com `CreatePoolSchema.parse`/`UpdatePoolSchema.parse`, então o Zod **descartava** o
+   campo no write. O dado nunca persistia, mesmo se semeado.
+2. **Dado ausente na config**: nenhum pool definia `escalation_pools`.
+
+**Fix (na origem, dado 100% na config — a registry é a fonte única de pool config)**:
+- **Contrato**: `escalation_pools: z.array(z.string()).default([])` adicionado ao
+  `SupervisorConfigSchema`. Sincroniza contrato↔consumidor; a registry passa a aceitar e persistir o
+  campo (flui por `PoolRegistrationSchema` → Create/Update). +teste no `agent-registry.test.ts`.
+- **Config**: `infra/registry/tenant_demo.yaml` — `retencao_humano.supervisor_config.escalation_pools =
+  [sac_ia, reembolso_ia, portabilidade_ia]` (destinos customer-facing). O RegistrySyncer faz UPSERT na
+  registry no restart do bridge → o dado vive na config; o mcp-server (sem mudança) passa a lê-lo.
+
+Fix interino: o dado entra na registry via o YAML (RegistrySyncer); o mcp-server lê da registry. Build:
+`@plughub/schemas` + `agent-registry`; restart `orchestrator-bridge` (re-sync do YAML mount).
+**Direção (decidida 2026-06-11)**: o YAML passa a ser tratado como seed-a-eliminar — `escalation_pools`
+e os demais campos de pool hoje só setáveis via YAML (hooks NPS/wrap-up, timeouts, queue, mentionable,
+etc.) devem ser **expostos na tela `config/resources/pool`**, para o provisionamento sair 100% da
+config. Inventário de campos + plano de UI: ver `docs/arcos/pool-config-surface.md` (a criar) e `TODO.md`.
+
+---
+
+## Bugfix — Console: contato vazava para todos os agentes do mesmo pool (2026-06-11)
+
+**Sintoma**: com dois humanos logados no mesmo pool (ex.: admin + operator em `retencao_humano`), um
+contato alocado a UM agente aparecia no Console do OUTRO — os dois "servindo" o mesmo contato.
+
+**Causa-raiz**: o modelo de identidade por usuário existe (`registerHumanAgent` → `instanceId =
+"human-{userId}"`, server.ts) e a Routing Engine aloca o contato a UMA instância, publicando
+`conversation.assigned` com o `instance_id` alvo (bridge `_notify_human_agent_assigned`). **Mas** toda
+conexão WS assina o canal do POOL `pool:events:{poolId}` e o handler aceitava QUALQUER
+`conversation.assigned` daquele canal **sem filtrar pelo `instance_id`** → fan-out pro pool inteiro.
+Regressão: o canal por pool é legado (1 humano por pool); o modelo por-usuário (C1) entrou sem filtrar.
+
+**Fix**: a conexão calcula `expectedInstanceId = "human-${userId}"` no connect e descarta
+`conversation.assigned` cujo `instance_id` aponta para outro agente. Aplicado nos **dois** caminhos de
+entrega: o pub/sub ao vivo (`subscriber.on("message")`, antes do `forward()` que faz `ws.send`) e a
+reentrega do `pool:pending_assignment` (reconexão). Lógica extraída para `lib/assignment-filter.ts`
+(`shouldDropAssignment`, pura/testável). **Backward-compatible**: `userId` vazio (cliente legado) ou
+`instance_id` vazio no evento → não filtra (nunca over-filtra).
+
+**Testes**: `__tests__/assignment-filter.test.ts` (alvo diferente → drop; alvo próprio → keep; legado/
+defensivo → keep; não-assignment → keep). Build: `mcp-server-plughub`.
+
+**Limitação remanescente (notada)**: `pool:pending_assignment:{poolId}` é UMA chave por pool (last-write
+wins) — se dois agentes têm pending simultâneo, a reconexão pode perder um. O filtro impede a entrega
+ERRADA, mas a chave por-instância (`pool:pending_assignment:{poolId}:{instanceId}`) fica como melhoria
+futura. Relaciona à fila pull/inbox (proposta). O "Transfer: No destinations available" (handoff
+humano→humano) segue em aberto — investigar junto da fila.
+
+→ Ver `docs/guias/conference-mechanics.md` § Histórico.
+
+---
+
 ## Bancada — item 6: débitos de teste pré-existentes corrigidos (2026-06-11)
 
 Fecha os follow-ups A. Ambos os débitos eram **drift teste×implementação** (a impl evoluiu, os testes

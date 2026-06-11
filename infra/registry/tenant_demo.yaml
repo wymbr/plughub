@@ -63,6 +63,15 @@ pools:
       copilot:    copilot_sac
       auth:       auth_ia       # @auth      → convida agente_auth_ia_v1 (PIN texto)
       auth_form:  auth_form_ia  # @auth_form → convida agente_auth_form_v1 (formulário)
+    # Destinos de transferência pool→pool oferecidos no botão "Transfer" do Console.
+    # Lidos pelo mcp-server supervisor_capabilities → capabilities.escalations.
+    # enabled=false: sem monitoramento de supervisor IA; só declara os destinos.
+    supervisor_config:
+      enabled: false
+      escalation_pools:
+        - sac_ia
+        - reembolso_ia
+        - portabilidade_ia
     # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
     # on_human_start: reservado para avaliadores em tempo real (Echo desativado no demo).
     # on_human_end:   dispara wrapup (agents_only) + NPS (customer-only) em paralelo.

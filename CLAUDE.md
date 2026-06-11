@@ -185,6 +185,25 @@ system_error         — unrecoverable error
 
 ---
 
+## Configuration — Single Source Invariants
+
+> Regras permanentes. O código ainda tem violações herdadas em burn-down (`docs/arcos/config-consolidation.md`),
+> enforçadas pelo guard `infra/check_config_invariants.py` (falha em violação nova).
+
+- **One source per domain** — cada domínio tem UM store canônico: settings horizontais → config-api
+  (`platform_config`); pools/skills → agent-registry; users/ABAC → auth-api; forms/campaigns →
+  evaluation-api; planos → pricing-api. Config nunca duplicada entre stores.
+- **Provisioning only via official API** — todo provisionamento (incl. seed/demo) escreve ATRAVÉS da
+  API do store. Proibido: escrita direta em Redis/DB de config, e listas de config hardcoded em
+  scripts/serviços.
+- **Every config field is UI-editable** — todo campo de config tem superfície na tela do módulo. Campo
+  que só existe em YAML/arquivo é dívida a fechar.
+- **env only for secrets and wiring** — env é exclusivamente para segredos (JWT, tokens, creds) e
+  topologia (URLs, brokers, portas, tenant). Config de negócio/tuning nunca em env. Quando env e
+  config-api têm a mesma chave, **config-api vence**.
+
+---
+
 ## MCP Interception — Hybrid Proxy Model
 
 | Agent type | Mechanism | Network hop |

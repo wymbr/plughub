@@ -63,6 +63,12 @@ export const SupervisorConfigSchema = z.object({
   sentiment_alert_threshold: z.number().min(-1).max(0).default(-0.30),
   relevance_model:          RelevanceModelSchema.optional(),
   proactive_delegation:     ProactiveDelegationSchema.optional(),
+  // Pool→pool transfer/escalation destinations offered to the human agent in the
+  // Console "Transfer" combo. Read by mcp-server `supervisor_capabilities`
+  // (→ capabilities.escalations). Previously consumed but NOT declared here, so
+  // the registry's Zod parse silently stripped it on write — the field never
+  // persisted and the combo showed "No destinations available".
+  escalation_pools:         z.array(z.string()).default([]),
 })
 export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>
 

@@ -224,22 +224,42 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      `instanceId` + `hdel` no hash `menu:waiting` (testes usavam key plana + `del`). Só testes. Ver
      CHANGELOG. **Follow-ups A (1–6) COMPLETOS.**
 
-  **🐞 BUG conhecido (registrado 2026-06-11) — contato vaza p/ todos os agentes do mesmo pool no Console:**
-  Dois humanos logados no mesmo pool (ex.: admin + operator em `retencao_humano`) veem o **mesmo**
-  contato; um contato alocado a um agente aparece no Console do outro. **Causa-raiz** (validada no
-  código): o modelo por-usuário existe (`registerHumanAgent` → `instanceId="human-{userId}"`,
-  `server.ts:301`) e a Routing Engine aloca a UMA instância, publicando `conversation.assigned` com o
-  `instance_id` alvo. **Mas** toda conexão WS assina o canal do POOL `pool:events:{poolId}`
-  (`server.ts:2115`) e o `forward()` aceita QUALQUER `conversation.assigned` daquele canal **sem
-  filtrar pelo `instance_id`** → fan-out pro pool inteiro. Idem na reentrega de
-  `pool:pending_assignment:{poolId}` (`server.ts:2130`). Regressão: o canal por pool é legado (1 humano
-  por pool); o modelo por-usuário (C1) entrou sem filtrar o fan-out. **Fix proposto** (contido,
-  backward-compat): a conexão já tem `userId` → `expectedInstanceId="human-${userId}"`; aceitar
-  `conversation.assigned` só quando `event.instance_id===expectedInstanceId` (userId vazio → legado, sem
-  filtro); mesmo filtro no pending. ~10 linhas no ramo `conversation.assigned` do WS handler (sem tocar
-  no teardown posatt/StrictMode). Rebuild `mcp-server-plughub`. Relaciona à fila pull/inbox (proposta).
-  Também observado: **Transfer "No destinations available"** no Console — bloqueia o handoff humano→humano
-  (parte do porquê F5 multi-humano não roda hoje); investigar junto.
+  **✅ BUG corrigido (2026-06-11) — contato vazava p/ todos os agentes do mesmo pool no Console:**
+  Causa-raiz: `conversation.assigned` publicado no canal do POOL `pool:events:{poolId}`; o WS handler
+  aceitava qualquer assignment sem filtrar o `instance_id` alvo → fan-out pro pool (regressão do modelo
+  por-usuário C1 sobre o canal por pool legado). **Fix**: conexão calcula `expectedInstanceId =
+  "human-${userId}"` e descarta `conversation.assigned` de outro alvo, nos dois caminhos (pub/sub ao vivo
+  + reentrega de `pool:pending_assignment`). Helper puro `lib/assignment-filter.ts` (`shouldDropAssignment`)
+  + teste. Backward-compat (userId/target vazio → não filtra). Rebuild `mcp-server-plughub`. Ver CHANGELOG
+  + `conference-mechanics.md` § Histórico.
+  **Pendências relacionadas (abertas)**: (a) `pool:pending_assignment:{poolId}` é UMA chave por pool
+  (last-write wins) → chave por-instância é melhoria futura (liga à fila pull/inbox).
+
+  **🔧 Transfer "No destinations available" + Pool Config Surface (2026-06-11):**
+  Causa do Transfer: `supervisor_capabilities` lê `pool.supervisor_config.escalation_pools` da registry,
+  mas (1) o `SupervisorConfigSchema` não declarava o campo → Zod descartava no write; (2) nenhum pool
+  semeava. **Feito (8.1/8.2)**: campo no schema + teste; seed em `retencao_humano` no YAML. Falta build
+  (`@plughub/schemas`+`agent-registry`) + restart bridge + validar combo.
+  **Iniciativa maior (decidida pelo usuário)**: o YAML é seed-a-eliminar; TODO config de pool deve ser
+  editável na tela `config/resources/pool` (registry-backed), pra provisionamento sair 100% da config.
+  **Inventário-fonte + plano**: `docs/arcos/pool-config-surface.md`. Gap principal (não na UI hoje):
+  `hooks` (wrap-up/NPS/post), `supervisor_config` (escalation_pools/intent_map), `mentionable_pools`,
+  `deploy` (skill+concorrência IA), `evaluation`, `agent_kind`, `session_reservation`,
+  `max_concurrent_sessions`, `agent_groups`, `webhook_skill_id`. Fases no doc.
+
+  **▶ ESCOPO: Config Consolidation (estratégia HÍBRIDA, 2026-06-11)** — plano completo em
+  `docs/arcos/config-consolidation.md` §8. Os invariantes "Configuration — Single Source" no CLAUDE.md
+  são **permanentes**; este escopo é o burn-down das violações herdadas até o guard ficar limpo.
+  - [x] **F0.1** ✅ Invariantes de config (permanentes) no CLAUDE.md, seção "Configuration — Single Source"
+  - [x] **F0.2** ✅ Guard-rail: `infra/check_config_invariants.py` (allowlist de 4 violações conhecidas;
+        falha se surgir nova; avisa quando uma é corrigida). Roda via `python3` ou container:
+        `docker run --rm -v "$PWD":/repo -w /repo python:3.11-slim python infra/check_config_invariants.py`
+  - [ ] **F1.1** De-duplicar pools: eliminar lista hardcoded + escrita Redis do `infra/seed/seed.py`; registry = fonte única
+  - [ ] **F1.2** Precedência env×config: config-api vence; remover `PLUGHUB_INSTANCE_TTL_SECONDS`/`PLUGHUB_ATTACHMENT_EXPIRY_DAYS` duplicados
+  - [ ] **F2** Migração por domínio (read-path-first): pools (UI, `pool-config-surface.md`) → TTLs → hooks → masking → ABAC/users → evaluation/pricing → defaults hardcoded
+  - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
+  - [ ] **F4** Política de env vars (segurança) — inventário final
+  - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).
   **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
   o que o skill já tem vs. o que falta para chamar `survey_record` com atribuição:
   · `session_id` — **disponível** à YAML como built-in `$.session_id` (`interpolate.ts` `resolveJsonPathRef`,
