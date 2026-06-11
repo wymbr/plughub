@@ -38,6 +38,27 @@ import asyncpg
 
 logger = logging.getLogger("plughub.channel-gateway.attachment")
 
+
+async def resolve_attachment_expiry_days(redis, tenant_id: str, default: int) -> int:
+    """
+    Política de expiração de anexos (dias) — fonte ÚNICA é o config-api.
+
+    Invariante "Configuration — Single Source" (config-api vence): lê
+    `{tenant}:config:webchat:attachment_expiry_days` (escrito pelo config-api no
+    Redis), com fallback ao `default` (settings) quando ausente ou Redis indisponível.
+    Substitui a leitura direta de `settings.attachment_expiry_days` (que vinha do env
+    `PLUGHUB_ATTACHMENT_EXPIRY_DAYS`, removido — config de negócio não vive em env).
+    """
+    if not tenant_id or redis is None:
+        return default
+    try:
+        raw = await redis.get(f"{tenant_id}:config:webchat:attachment_expiry_days")
+        if raw:
+            return int(raw if isinstance(raw, str) else raw.decode())
+    except Exception:
+        pass
+    return default
+
 # ─── Allowlist de MIME types aceitos ─────────────────────────────────────────
 
 MIME_LIMITS: dict[str, int] = {

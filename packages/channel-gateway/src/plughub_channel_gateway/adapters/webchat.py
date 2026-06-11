@@ -754,9 +754,11 @@ class WebchatAdapter:
             )
             return
 
-        expires_at = datetime.now(timezone.utc) + timedelta(
-            days=self._settings.attachment_expiry_days
+        from ..attachment_store import resolve_attachment_expiry_days
+        _expiry_days = await resolve_attachment_expiry_days(
+            self._redis, self._settings.tenant_id, self._settings.attachment_expiry_days
         )
+        expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days)
         try:
             file_id, upload_url = await self._attachment_store.reserve(
                 tenant_id  = self._settings.tenant_id,

@@ -261,7 +261,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   - [ ] **F1.1b** Aposentar as DEFINIÇÕES de pool do `seed.py` (lista hardcoded duplica o YAML): migrar
         `channel_endpoints` (e agent_types únicos) p/ YAML + RegistrySyncer; deletar `seed.py` + serviço
         `demo-seed`. Limpa `pools_double_source`. (RegistrySyncer já é fonte única de pools.)
-  - [ ] **F1.2** Precedência env×config: config-api vence; remover `PLUGHUB_INSTANCE_TTL_SECONDS`/`PLUGHUB_ATTACHMENT_EXPIRY_DAYS` duplicados
+  - [x] **F1.2** ✅ (2026-06-11) Precedência env×config (rigoroso, config-api vence):
+        `attachment_expiry` — channel-gateway lê `{tenant}:config:webchat:attachment_expiry_days` do
+        config-api (helper `resolve_attachment_expiry_days`, 4 adapters) + env removido + teste.
+        `instance_ttl` — env removido (routing-engine usa default 30s da spec; tunable→config-api se preciso).
+        Guard 3→1 (detecção por assignment ativo). Ver CHANGELOG.
   - [ ] **F2** Migração por domínio (read-path-first): pools (UI, `pool-config-surface.md`) → TTLs → hooks → masking → ABAC/users → evaluation/pricing → defaults hardcoded
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final

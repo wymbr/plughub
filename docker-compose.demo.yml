@@ -614,7 +614,9 @@ services:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_KAFKA_BROKERS: kafka:29092
       PLUGHUB_AGENT_REGISTRY_URL: http://agent-registry:3300
-      PLUGHUB_INSTANCE_TTL_SECONDS: 3600
+      # PLUGHUB_INSTANCE_TTL_SECONDS removido (config-consolidation F1.2): tuning não
+      # vive em env. instance_ttl_seconds usa o default do código (30s, conforme spec);
+      # se precisar ser configurável, vira chave no config-api (não env).
       # Fix (2026-06-05): faltava — o RoutingConfigCache tentava localhost:3600 no
       # boot e caía nos defaults hard-coded (mensagens/limites custom do tenant
       # via Config API não chegavam ao routing até um config.changed bem-sucedido).
@@ -1105,7 +1107,9 @@ services:
       PLUGHUB_REDIS_URL:                  redis://redis:6379
       PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!
       PLUGHUB_WS_AUTH_TIMEOUT_S:          "30"
-      PLUGHUB_ATTACHMENT_EXPIRY_DAYS:     "7"
+      # PLUGHUB_ATTACHMENT_EXPIRY_DAYS removido (config-consolidation F1.2): config-api
+      # vence. O channel-gateway lê {tenant}:config:webchat:attachment_expiry_days
+      # (escrito pelo config-api) via resolve_attachment_expiry_days; fallback ao default.
       PLUGHUB_DATABASE_URL:               postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_WEBCHAT_SERVING_BASE_URL:   http://localhost:8010/webchat/v1/attachments
       PLUGHUB_WEBCHAT_UPLOAD_BASE_URL:    http://localhost:8010/webchat/v1/upload

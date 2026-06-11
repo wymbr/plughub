@@ -27,10 +27,10 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Violações conhecidas (allowlist de burn-down). Remover a entrada quando o item
 # correspondente do escopo (F1.x) for concluído — o guard avisa quando isso ocorrer.
 KNOWN: dict[str, str] = {
-    # seed_redis_write — RESOLVIDO em F1.1a (2026-06-11): seed.py não escreve mais Redis.
+    # seed_redis_write          — RESOLVIDO em F1.1a (2026-06-11): seed.py não escreve mais Redis.
+    # env_dup_instance_ttl      — RESOLVIDO em F1.2 (2026-06-11): env removido (instance_ttl = default spec).
+    # env_dup_attachment_expiry — RESOLVIDO em F1.2 (2026-06-11): channel-gateway lê do config-api.
     "pools_double_source":       "pools definidos em tenant_demo.yaml E seed.py (F1.1b)",
-    "env_dup_instance_ttl":      "PLUGHUB_INSTANCE_TTL_SECONDS duplica config-api ns session (F1.2)",
-    "env_dup_attachment_expiry": "PLUGHUB_ATTACHMENT_EXPIRY_DAYS duplica config-api ns webchat (F1.2)",
 }
 
 
@@ -57,11 +57,16 @@ def detect() -> dict[str, str]:
         found["pools_double_source"] = f"{len(dup)} pools em ambos: {', '.join(sorted(dup)[:5])}…"
 
     # 3. env only for secrets/wiring: chaves de config de negócio não podem viver
-    #    em env duplicando o config-api.
+    #    em env duplicando o config-api. Detecta ASSIGNMENT ativo (não comentário):
+    #    `^\s*NAME:\s*<valor>` — uma linha começando com `#` não casa.
     compose = _read("docker-compose.demo.yml")
-    if "PLUGHUB_INSTANCE_TTL_SECONDS" in compose:
+
+    def _env_assigned(name: str) -> bool:
+        return re.search(rf"^\s*{re.escape(name)}:\s*\S", compose, re.M) is not None
+
+    if _env_assigned("PLUGHUB_INSTANCE_TTL_SECONDS"):
         found["env_dup_instance_ttl"] = "docker-compose.demo.yml"
-    if "PLUGHUB_ATTACHMENT_EXPIRY_DAYS" in compose:
+    if _env_assigned("PLUGHUB_ATTACHMENT_EXPIRY_DAYS"):
         found["env_dup_attachment_expiry"] = "docker-compose.demo.yml"
 
     return found

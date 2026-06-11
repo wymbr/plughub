@@ -2,6 +2,32 @@
 
 ---
 
+## Config Consolidation — F1.2: precedência env×config (config-api vence) (2026-06-11)
+
+Triagem do perigo "config de negócio em env duplicando o config-api" (invariante "env only for
+secrets/wiring"). Duas violações no guard.
+
+**`PLUGHUB_ATTACHMENT_EXPIRY_DAYS` (channel-gateway) — dup real**: o config-api já tem
+`webchat.attachment_expiry_days` (escrito no Redis como `{tenant}:config:webchat:attachment_expiry_days`),
+mas os adapters liam `settings.attachment_expiry_days` (do env), **ignorando o config-api**. Fix
+(config-api vence): novo helper `resolve_attachment_expiry_days(redis, tenant_id, default)` em
+`attachment_store.py` — lê a chave do config-api no Redis, fallback ao default. Aplicado nos 4 adapters
+(webchat/whatsapp/email/webrtc), espelhando o padrão já existente do `jwt_secret` per-tenant. Env
+removido do compose. +5 testes (`test_attachment_expiry_resolver.py`).
+
+**`PLUGHUB_INSTANCE_TTL_SECONDS` (routing-engine) — tuning em env**: sobrescrevia
+`instance_ttl_seconds` (30→3600); sem chave equivalente no config-api e contra a spec ("TTL 30s"). Fix:
+env removido — o routing-engine usa o default do código (30s, conforme spec; instâncias são renovadas
+pelo heartbeat de 15s do bridge). Se um dia precisar ser configurável, vira chave no config-api (não env).
+
+Guard: detecção de env passou a casar **assignment ativo** (`^\s*NAME:\s*valor`, ignora comentários);
+`env_dup_instance_ttl` e `env_dup_attachment_expiry` saem do allowlist (3→1 violação conhecida — resta só
+`pools_double_source` da F1.1b). Build: `channel-gateway` + `restart routing-engine` (env). **Validação
+(usuário)**: guard 1/0; upload no webchat respeita o `attachment_expiry_days` do config-api; instâncias
+AI seguem vivas (heartbeat).
+
+---
+
 ## Bugfix — Console Transfer 8.3: rota REST era um stub vazio (2026-06-11)
 
 Terceira e **última** camada do bug do Transfer. Após corrigir o contrato (8.1 — `escalation_pools` no

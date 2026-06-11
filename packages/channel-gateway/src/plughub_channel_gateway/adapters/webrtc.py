@@ -1336,9 +1336,11 @@ class WebRTCAdapter(ChannelAdapter):
 
         if file_bytes and self._attachment_store is not None:
             try:
-                expires_at = datetime.now(timezone.utc) + timedelta(
-                    days=s.attachment_expiry_days
+                from ..attachment_store import resolve_attachment_expiry_days
+                _expiry_days = await resolve_attachment_expiry_days(
+                    self._redis, s.tenant_id, s.attachment_expiry_days
                 )
+                expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days)
                 file_id_reserved, _ = await self._attachment_store.reserve(
                     tenant_id  = s.tenant_id,
                     session_id = session_id,

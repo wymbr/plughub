@@ -311,9 +311,11 @@ class WhatsAppAdapter(ChannelAdapter):
         if self._attachment_store is not None:
             try:
                 from datetime import timedelta
-                expires_at = datetime.now(timezone.utc) + timedelta(
-                    days=self._settings.attachment_expiry_days
+                from ..attachment_store import resolve_attachment_expiry_days
+                _expiry_days = await resolve_attachment_expiry_days(
+                    self._redis, tenant_id, self._settings.attachment_expiry_days
                 )
+                expires_at = datetime.now(timezone.utc) + timedelta(days=_expiry_days)
                 ext = _mime_to_ext(mime_type)
                 file_id, _ = await self._attachment_store.reserve(
                     tenant_id  = tenant_id,
