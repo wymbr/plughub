@@ -2,6 +2,28 @@
 
 ---
 
+## Bugfix — Console Transfer 8.3: rota REST era um stub vazio (2026-06-11)
+
+Terceira e **última** camada do bug do Transfer. Após corrigir o contrato (8.1 — `escalation_pools` no
+`SupervisorConfigSchema`) e a config (8.2 — seed no YAML), o combo Transfer **continuava vazio**.
+Diagnóstico via runtime: a registry persistia `escalation_pools` corretamente
+(`["sac_ia","reembolso_ia","portabilidade_ia"]`), mas a rota REST que o frontend chama —
+`GET /api/supervisor_capabilities/:sessionId` (server.ts) — era um **stub hardcoded** que sempre
+devolvia `{suggested_agents: [], escalations: []}`. A lógica real (ler `supervisor_config.escalation_pools`)
+existia só no **tool MCP** `supervisor.ts`, nunca ligada à rota REST. Por isso o Transfer nunca funcionou.
+
+**Fix**: a rota passa a resolver `tenant_id`/`pool_id` do `session:{id}:meta` e ler
+`supervisor_config.escalation_pools` da agent-registry (`GET /v1/pools/{poolId}`, header `x-tenant-id`),
+mapeando para `escalations: [{pool_id}]` — mesma fonte do tool. Fallback de URL corrigido p/
+`agent-registry:3300`. `suggested_agents` segue `[]` (vinha do stub; sem regressão — os agentes
+mentionáveis usam outro endpoint). Build: `mcp-server-plughub`.
+
+Com as 3 camadas (contrato + config + endpoint), o Transfer lista os destinos configurados em
+`supervisor_config.escalation_pools` do pool. Editar esses destinos na UI é a fatia F2-pools
+(`pool-config-surface.md`).
+
+---
+
 ## Config Consolidation — F1.1a: seed.py deixa de escrever Redis (2026-06-11)
 
 Primeira fatia da triagem de perigos ativos. `infra/seed/seed.py` escrevia direto no Redis

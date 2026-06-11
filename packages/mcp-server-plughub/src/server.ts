@@ -1349,11 +1349,45 @@ export async function startServer(config: ServerConfig): Promise<void> {
   })
 
   // GET /supervisor_capabilities/:sessionId
-  app.get("/api/supervisor_capabilities/:sessionId", async (_req: Request, res: Response) => {
-    res.json({
-      suggested_agents: [],
-      escalations:      [],
-    })
+  // Powers the Console "Transfer" combo (escalations) + suggested agents.
+  // Resolves tenant_id/pool_id from session meta, then reads the pool's
+  // supervisor_config.escalation_pools from the agent-registry — the same source
+  // as the supervisor_capabilities MCP tool. (Was a hardcoded empty stub → Transfer
+  // always showed "No destinations available" even with escalation_pools configured.)
+  app.get("/api/supervisor_capabilities/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+    let tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+    let poolId   = ""
+    try {
+      const metaRaw = await redis.get(`session:${sessionId}:meta`)
+      if (metaRaw) {
+        const meta = JSON.parse(metaRaw) as Record<string, string>
+        if (meta["tenant_id"]) tenantId = meta["tenant_id"]
+        poolId = meta["pool_id"] ?? ""
+      }
+    } catch { /* use fallback tenant; poolId stays "" */ }
+
+    const escalations: Array<{ pool_id: string }> = []
+    if (poolId && tenantId) {
+      try {
+        const registryUrl = process.env["AGENT_REGISTRY_URL"] ?? "http://agent-registry:3300"
+        const r = await fetch(`${registryUrl}/v1/pools/${encodeURIComponent(poolId)}`, {
+          headers: { "x-tenant-id": tenantId },
+        })
+        if (r.ok) {
+          const pool = await r.json() as Record<string, unknown>
+          const sc   = pool["supervisor_config"] as Record<string, unknown> | null
+          const pools = sc?.["escalation_pools"]
+          if (Array.isArray(pools)) {
+            for (const pid of pools) {
+              if (typeof pid === "string" && pid) escalations.push({ pool_id: pid })
+            }
+          }
+        }
+      } catch { /* agent-registry unavailable — return empty escalations */ }
+    }
+
+    res.json({ suggested_agents: [], escalations })
   })
 
   // GET /copilot_state/:sessionId
