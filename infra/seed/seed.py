@@ -30,7 +30,6 @@ import urllib.error
 # Config
 # ─────────────────────────────────────────────────────────────────────────────
 REGISTRY_URL = os.environ.get("AGENT_REGISTRY_URL", "http://agent-registry:3300")
-REDIS_URL    = os.environ.get("REDIS_URL",           "redis://redis:6379")
 TENANT_ID    = os.environ.get("TENANT_ID",           "tenant_demo")
 MAX_WAIT_S   = int(os.environ.get("SEED_MAX_WAIT",   "120"))
 
@@ -141,58 +140,11 @@ def wait_for_registry() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Redis helper  (pure Python, no redis-py dependency)
+# (F1.1a, 2026-06-11) Redis helper REMOVIDO — o seed não escreve mais Redis.
+# pool_config:{id} e {tenant}:pools são populados pelo routing-engine a partir de
+# registry.changed (kafka_listener._handle_pool_event → save_pool_config). Ver
+# docs/arcos/config-consolidation.md (invariante "provisioning only via API").
 # ─────────────────────────────────────────────────────────────────────────────
-
-class RedisConn:
-    """Minimal synchronous Redis client via raw TCP (RESP protocol)."""
-
-    def __init__(self, url: str) -> None:
-        import socket
-        url   = url.replace("redis://", "")
-        host, _, port_s = url.partition(":")
-        port  = int(port_s) if port_s else 6379
-        self._s = socket.create_connection((host, port), timeout=10)
-        self._f = self._s.makefile("rb")
-
-    def _send(self, *args: str | bytes) -> None:
-        parts = [f"*{len(args)}\r\n".encode()]
-        for a in args:
-            b = a.encode() if isinstance(a, str) else a
-            parts.append(f"${len(b)}\r\n".encode())
-            parts.append(b + b"\r\n")
-        self._s.sendall(b"".join(parts))
-
-    def _read(self):  # noqa: ANN001
-        line = self._f.readline().decode().rstrip("\r\n")
-        t, data = line[0], line[1:]
-        if t == "+":
-            return data
-        if t == "-":
-            raise RuntimeError(data)
-        if t == ":":
-            return int(data)
-        if t == "$":
-            n = int(data)
-            if n == -1:
-                return None
-            blob = self._f.read(n + 2)
-            return blob[:-2].decode()
-        if t == "*":
-            n = int(data)
-            return [self._read() for _ in range(n)]
-        raise RuntimeError(f"Unknown RESP type {t!r}")
-
-    def set(self, key: str, value: str) -> str:
-        self._send("SET", key, value)
-        return self._read()
-
-    def sadd(self, key: str, *members: str) -> int:
-        self._send("SADD", key, *members)
-        return self._read()
-
-    def close(self) -> None:
-        self._s.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -484,59 +436,6 @@ def seed_channel_endpoints() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Step 4: write Redis keys (pool configs, instances, rosters, pool sets)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def seed_redis() -> None:
-    """
-    Writes pool configuration data to Redis.
-
-    Agent instance registration (instance keys, pool:*:instances sets) is now
-    handled by the orchestrator-bridge InstanceBootstrap module, which derives
-    instances from Agent Registry configuration at startup and keeps them alive
-    via a 15-second heartbeat loop.
-
-    This function only writes:
-      - pool_config:{pool_id}  — routing scores and SLA config (no TTL)
-      - {tenant}:pools         — global set of known pool IDs
-    """
-    log(f"Conectando ao Redis em {REDIS_URL} …")
-    try:
-        r = RedisConn(REDIS_URL)
-    except Exception as e:
-        die(f"Não foi possível conectar ao Redis: {e}")
-
-    # ── Pool configs (TTL-free — routing engine reads these) ─────────────────
-    log("Gravando pool configs no Redis …")
-    for pool in POOLS:
-        key   = f"{TENANT_ID}:pool_config:{pool['pool_id']}"
-        pool_config_data = {
-            "pool_id":             pool["pool_id"],
-            "tenant_id":           TENANT_ID,
-            "channel_types":       pool["channel_types"],
-            "sla_target_ms":       pool["sla_target_ms"],
-            "routing_expression":  pool["routing_expression"],
-            "competency_weights":  {},
-            "aging_factor":        0.4,
-            "breach_factor":       0.8,
-            "remote_sites":        [],
-            "is_human_pool":       pool.get("is_human_pool", False),
-        }
-        if pool.get("hooks"):
-            pool_config_data["hooks"] = pool["hooks"]
-        value = json.dumps(pool_config_data)
-        r.set(key, value)
-        ok(f"pool_config:{pool['pool_id']}")
-
-    # ── Global pools set ─────────────────────────────────────────────────────
-    pool_ids = [p["pool_id"] for p in POOLS]
-    r.sadd(f"{TENANT_ID}:pools", *pool_ids)
-    ok(f"pools set: {', '.join(pool_ids)}")
-
-    r.close()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -547,7 +446,6 @@ def main() -> None:
     print("━" * 57)
     print()
     log(f"AGENT_REGISTRY_URL : {REGISTRY_URL}")
-    log(f"REDIS_URL          : {REDIS_URL}")
     log(f"TENANT_ID          : {TENANT_ID}")
     print()
 
@@ -561,9 +459,6 @@ def main() -> None:
     print()
 
     seed_channel_endpoints()
-    print()
-
-    seed_redis()
     print()
 
     print("━" * 57)

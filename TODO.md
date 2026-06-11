@@ -254,7 +254,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   - [x] **F0.2** ✅ Guard-rail: `infra/check_config_invariants.py` (allowlist de 4 violações conhecidas;
         falha se surgir nova; avisa quando uma é corrigida). Roda via `python3` ou container:
         `docker run --rm -v "$PWD":/repo -w /repo python:3.11-slim python infra/check_config_invariants.py`
-  - [ ] **F1.1** De-duplicar pools: eliminar lista hardcoded + escrita Redis do `infra/seed/seed.py`; registry = fonte única
+  - [x] **F1.1a** ✅ (2026-06-11) `seed.py` não escreve mais Redis: removidos `seed_redis()` + helper
+        `RedisConn` (redundante — routing-engine popula `pool_config:{id}` e `{tenant}:pools` via
+        `registry.changed`→`save_pool_config`). Guard: `seed_redis_write` saiu do allowlist.
+  - [ ] **F1.1b** Aposentar as DEFINIÇÕES de pool do `seed.py` (lista hardcoded duplica o YAML): migrar
+        `channel_endpoints` (e agent_types únicos) p/ YAML + RegistrySyncer; deletar `seed.py` + serviço
+        `demo-seed`. Limpa `pools_double_source`. (RegistrySyncer já é fonte única de pools.)
   - [ ] **F1.2** Precedência env×config: config-api vence; remover `PLUGHUB_INSTANCE_TTL_SECONDS`/`PLUGHUB_ATTACHMENT_EXPIRY_DAYS` duplicados
   - [ ] **F2** Migração por domínio (read-path-first): pools (UI, `pool-config-surface.md`) → TTLs → hooks → masking → ABAC/users → evaluation/pricing → defaults hardcoded
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)

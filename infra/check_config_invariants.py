@@ -27,8 +27,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Violações conhecidas (allowlist de burn-down). Remover a entrada quando o item
 # correspondente do escopo (F1.x) for concluído — o guard avisa quando isso ocorrer.
 KNOWN: dict[str, str] = {
-    "seed_redis_write":          "infra/seed/seed.py escreve Redis direto (F1.1)",
-    "pools_double_source":       "pools definidos em tenant_demo.yaml E seed.py (F1.1)",
+    # seed_redis_write — RESOLVIDO em F1.1a (2026-06-11): seed.py não escreve mais Redis.
+    "pools_double_source":       "pools definidos em tenant_demo.yaml E seed.py (F1.1b)",
     "env_dup_instance_ttl":      "PLUGHUB_INSTANCE_TTL_SECONDS duplica config-api ns session (F1.2)",
     "env_dup_attachment_expiry": "PLUGHUB_ATTACHMENT_EXPIRY_DAYS duplica config-api ns webchat (F1.2)",
 }

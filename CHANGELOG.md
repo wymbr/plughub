@@ -2,6 +2,27 @@
 
 ---
 
+## Config Consolidation — F1.1a: seed.py deixa de escrever Redis (2026-06-11)
+
+Primeira fatia da triagem de perigos ativos. `infra/seed/seed.py` escrevia direto no Redis
+(`{tenant}:pool_config:{id}` + `{tenant}:pools`) — violação do invariante "provisioning only via API".
+
+**Achado (validado no código)**: é **redundante**. Ao registrar um pool na agent-registry, a registry
+publica `registry.changed`; o routing-engine consome (`kafka_listener._handle_pool_event`) e o
+`save_pool_config` (registry.py:1255) escreve **ambos** `pool_config:{id}` **e** `{tenant}:pools` — com
+**mais** campos do que o seed escrevia. O boot normal já produz as chaves.
+
+**Mudança**: removidos `seed_redis()`, o helper `RedisConn` (RESP cru) e a chamada no `main()` + a env
+`REDIS_URL` (agora sem uso no seed). O guard `check_config_invariants.py` teve `seed_redis_write` retirado
+do allowlist (burn-down: 4→3 violações conhecidas).
+
+**Validação (usuário)**: após `restart` do demo, conferir que `{tenant_demo}:pool_config:retencao_humano`
+e `{tenant_demo}:pools` continuam populados (pelo routing-engine, via `registry.changed`) — e o guard
+roda sem violação nova. **Pendente F1.1b**: aposentar as DEFINIÇÕES de pool do seed.py (lista hardcoded
+duplica o YAML) — migrar channel_endpoints p/ YAML/RegistrySyncer e deletar seed.py + serviço demo-seed.
+
+---
+
 ## Config Consolidation — Fase 0: contrato + guard-rail (2026-06-11)
 
 Fundação da consolidação de config (estratégia híbrida — `docs/arcos/config-consolidation.md` §8).
