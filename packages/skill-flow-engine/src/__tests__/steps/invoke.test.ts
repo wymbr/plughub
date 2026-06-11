@@ -238,4 +238,30 @@ describe("executeInvoke — resolução de inputs com JSONPath", () => {
       "mcp-server-crm",
     )
   })
+
+  it("resolve o built-in $.segment_id do próprio agente", async () => {
+    const mcpCall = vi.fn().mockResolvedValue({ ok: true })
+    const ctx = makeCtx({
+      segmentId: "seg-abc-123",
+      mcpCall,
+      saveState: vi.fn().mockImplementation(async (s: PipelineState) => { ctx.state = s }),
+    })
+
+    const stepWithSegment: InvokeStep = {
+      id:         "registrar_sinal",
+      type:       "invoke",
+      target:     { mcp_server: "mcp-server-plughub", tool: "survey_record" },
+      input:      { grain: "segment", segment_id: "$.segment_id" },
+      on_success: "ok",
+      on_failure: "fail",
+    }
+
+    await executeInvoke(stepWithSegment, ctx)
+
+    expect(mcpCall).toHaveBeenCalledWith(
+      "survey_record",
+      { grain: "segment", segment_id: "seg-abc-123" },
+      "mcp-server-plughub",
+    )
+  })
 })

@@ -2,6 +2,25 @@
 
 ---
 
+## Bancada — Fechamento (follow-ups A) item 1: built-in `$.segment_id` no interpolate (2026-06-11)
+
+Quick win do plano "fechar a bancada". O `survey_record(grain=segment)` precisa do `segment_id` do
+próprio agente para atribuir o sinal. O `ctx.segmentId` já chegava ao `StepContext` (bridge passa via
+`/execute`, já usado em `@segment.*` e escritas `scope: segment`), mas **não estava exposto como
+built-in JSONPath** — a YAML só alcançava `$.session_id`/`$.tenant_id`/`$.customer_id`/`$.instance_id`.
+
+**Mudança (1 linha)**: `resolveJsonPathRef` (`interpolate.ts`) ganha `segment_id: ctx.segmentId` no
+`evalContext`. Skills passam a ler `$.segment_id` e entregá-lo a `survey_record` — sinal de segmento
+"sobre si mesmo" genérico via skill, **sem o bridge injetar nada** (o caso NPS-sobre-o-humano no
+`on_human_end`, com segment_id de OUTRO agente, segue dependendo do bridge — F10.3b, inalterado).
+
+**Teste**: novo caso em `invoke.test.ts` ("resolve o built-in $.segment_id do próprio agente") cobre o
+caminho real `resolveInputValue`→JSONPath num step invoke (`survey_record`).
+
+Build: `skill-flow-engine` (TS) exige rebuild. Sem migração, sem mudança de conferência.
+
+---
+
 ## Bancada de agentes F10.3b — cutover F5: NPS de segmento unificado em session_signal (2026-06-10)
 
 Unifica o NPS por agente (grão segmento) no mesmo store/fluxo dos demais grãos (Opção 2): **um caminho

@@ -186,8 +186,9 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   6 falhas em `test_reports.py::TestQueryAgentAvailabilityReport` (`query_agent_availability() missing
   positional arg 'tenant_id'` — descasamento assinatura×teste, pré-existente, não relacionado à bancada).
   **▶ PRÓXIMA SESSÃO (planejada 2026-06-10) — FECHAR A BANCADA (follow-ups A), ordem sugerida:**
-  1. **`$.segment_id` no `interpolate.ts`** (1 linha em `resolveJsonPathRef`: `segment_id: ctx.segmentId`
-     no evalContext) — quick win; destrava sinal de segmento "sobre si mesmo" genérico via skill.
+  1. ✅ (2026-06-11) **`$.segment_id` no `interpolate.ts`** — `segment_id: ctx.segmentId` no evalContext
+     de `resolveJsonPathRef`; teste em `invoke.test.ts`. Skill lê `$.segment_id` p/ `survey_record(grain=segment)`
+     "sobre si mesmo". Ver CHANGELOG 2026-06-11.
   2. **F11 — survey diferida + grão journey E2E**: resolver `session_at` da sessão original via
      **enrichment no consumer** (`parse_session_signal_event` quando `captured_at ≠ session_at`, lookup
      `analytics.sessions.opened_at` por `origin_session_id`); workflow agendado disparando `survey_record`
@@ -208,8 +209,8 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   junto de `tenant_id`/`customer_id`/`instance_id`). Logo `grain=session|workflow|journey` é direto.
   · `segment_id` do PRÓPRIO agente — o bridge **já passa** no `/execute` (`activate_native_agent`
   `payload["segment_id"]`, main.py ~465) → `StepContext.segmentId`; usado em `@segment.*` e escritas
-  `scope: segment`. **MAS não está exposto como built-in `$.segment_id`** — falta 1 linha em
-  `resolveJsonPathRef` (`segment_id: ctx.segmentId` no evalContext) para o skill lê-lo e passar à tool.
+  `scope: segment`. **Exposto como built-in `$.segment_id`** ✅ (2026-06-11, follow-ups A item 1) —
+  `resolveJsonPathRef` (`segment_id: ctx.segmentId` no evalContext); o skill já lê e passa à tool.
   · segmento de OUTRO agente (caso NPS-sobre-o-humano no `on_human_end`): o `segment_id`/`agent_key` do
   ALVO vivem no `hook_conf` (5º campo) — no **bridge**, não no ctx do agente de pesquisa. Cutover precisa
   o bridge **injetar no ctx** (ex.: `session.surveyed_segment_id` + `session.surveyed_agent_key`) antes

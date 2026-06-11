@@ -476,3 +476,9 @@ Normalização: NPS 0–10 → promotor(≥9)/neutro(7–8)/detrator(≤6); CSAT
 > **F11 (futura)** — survey **diferida** e grão **journey** ponta-a-ponta: workflow agendado dispara
 > `survey_record` dias depois; `session_at` resolvido da sessão original via enrichment no consumer
 > (`captured_at`=chegada). Schema/tool já comportam (sem migração).
+
+### 14.5 Fechamento da bancada (follow-ups A)
+
+| Item | Estado | Nota |
+|---|---|---|
+| 1 — built-in `$.segment_id` | ✅ (2026-06-11) | `resolveJsonPathRef` (`interpolate.ts`) expõe `segment_id: ctx.segmentId` no `evalContext`. Skill lê `$.segment_id` e passa a `survey_record(grain=segment)` — sinal de segmento **sobre si mesmo** sem injeção do bridge. Atribuição NPS-sobre-o-humano (segment de OUTRO agente, via `hook_conf`/`@ctx`) segue na F10.3b. |

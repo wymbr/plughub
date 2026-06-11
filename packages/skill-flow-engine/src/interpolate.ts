@@ -269,6 +269,10 @@ function resolveJsonPathRef(ref: string, ctx: StepContext): unknown {
       tenant_id:      ctx.tenantId,
       customer_id:    ctx.customerId,
       instance_id:    ctx.instanceId,
+      // Segment UUID of the running agent — lets a skill pass its OWN segment to
+      // survey_record(grain=segment) for a "signal about itself" without the bridge
+      // having to inject it (see analytics-agents-workbench §14, TODO follow-ups A item 1).
+      segment_id:     ctx.segmentId,
     }
     return JSONPath({ path: ref, json: evalContext as object, wrap: false })
   } catch {
