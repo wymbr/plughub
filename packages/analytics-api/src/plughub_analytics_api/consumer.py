@@ -22,7 +22,8 @@ Topics → tables mapping:
   evaluation.events          → evaluation_results + evaluation_events (Arc 6)
   mcp.audit                  → session_timeline   (segment_id enriched via SegmentEnricher)
   agent.events               → agent_business_events (Arc 12)
-  session.signals            → session_signal (F10 — survey grão contato/jornada)
+  session.signals            → session_signal (F10 — survey; session_at enriched
+                               from origin opened_at for deferred surveys, F11)
   calibration.events         → calibration_events (Arc 13)
 
 Batch strategy:
@@ -116,6 +117,46 @@ def _inject_cached_channel(rows: list[dict]) -> None:
             # Restore origin_session_id if missing
             if not row.get("origin_session_id") and cached_origin:
                 row["origin_session_id"] = cached_origin
+
+
+# ── F11: session_at enrichment for session.signals ────────────────────────────
+# parse_session_signal_event sets session_at = captured_at, which is correct only
+# for same-day ("no ato") surveys.  For DEFERRED surveys (captured_at days after
+# the original session) the golden rule (§7) requires bucketizing by the ORIGINAL
+# session's date so the quali aligns with the quanti.  We resolve it from
+# analytics.sessions.opened_at keyed by origin_session_id and overwrite session_at;
+# date (partition) and TTL follow automatically in the row builder.
+# Fallback (origin not in sessions yet / lookup error): keep captured_at — the row
+# is never dropped.  Cache mirrors _channel_cache (bounded FIFO).
+_session_opened_cache: dict[tuple[str, str], str] = {}
+_SESSION_OPENED_CACHE_MAX = 50_000
+
+
+async def _enrich_signal_session_at(rows: list[dict], store: "AnalyticsStore") -> None:
+    """Overwrite session_at with the original session's opened_at when resolvable."""
+    for row in rows:
+        if row.get("table") != "session_signal":
+            continue
+        tenant_id = row.get("tenant_id", "")
+        origin_id = row.get("origin_session_id") or row.get("session_id", "")
+        if not tenant_id or not origin_id:
+            continue
+        key       = (tenant_id, origin_id)
+        opened_at = _session_opened_cache.get(key)
+        if opened_at is None:
+            try:
+                opened_at = await store.lookup_session_opened_at(tenant_id, origin_id)
+            except Exception as exc:
+                logger.debug(
+                    "session_at enrichment lookup failed origin=%s: %s", origin_id, exc
+                )
+                opened_at = None
+            if opened_at:
+                if len(_session_opened_cache) >= _SESSION_OPENED_CACHE_MAX:
+                    _session_opened_cache.pop(next(iter(_session_opened_cache)))
+                _session_opened_cache[key] = opened_at
+        if opened_at:
+            row["session_at"] = opened_at
 
 
 _TOPICS = [
@@ -374,6 +415,13 @@ async def _process_message(
         _cache_inbound_channel(raw)
     elif topic == "conversations.routed":
         _inject_cached_channel(rows)
+
+    # ── F11: bucketize survey signals by the ORIGINAL session's date ──────────
+    # Resolves session_at from analytics.sessions.opened_at (origin_session_id);
+    # corrects deferred surveys where captured_at ≠ session_at. No-op fallback to
+    # captured_at when the origin session is not resolvable.
+    elif topic == "session.signals":
+        await _enrich_signal_session_at(rows, store)
 
     # ── Arc 8: pause interval Redis state machine ─────────────────────────
     # agent.lifecycle may return action=open (store in Redis) or

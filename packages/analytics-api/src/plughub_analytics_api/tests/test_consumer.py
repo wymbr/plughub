@@ -27,7 +27,7 @@ from ..models import (
     parse_session_signal_event,
     _normalize_signal_value,
 )
-from ..consumer import _write_row
+from ..consumer import _write_row, _enrich_signal_session_at, _session_opened_cache
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -49,6 +49,7 @@ def make_store() -> MagicMock:
     s.insert_contact_insight       = AsyncMock()
     s.insert_agent_business_event  = AsyncMock()
     s.insert_session_signal        = AsyncMock()
+    s.lookup_session_opened_at     = AsyncMock(return_value=None)
     return s
 
 
@@ -1181,3 +1182,62 @@ class TestParseSessionSignalEvent:
         for row in rows:
             await _write_row(store, row, "session.signals", 0)
         store.insert_session_signal.assert_awaited_once()
+
+
+# ── F11: session_at enrichment for deferred surveys ───────────────────────────
+
+class TestSignalSessionAtEnrichment:
+    """_enrich_signal_session_at: bucketize by the ORIGINAL session's opened_at."""
+
+    def _rows(self):
+        return parse_session_signal_event({
+            "event_id":          "evt-survey-defer-1",
+            "tenant_id":         TENANT,
+            "origin_session_id": "sess-original-007",
+            "grain":             "session",
+            "captured_at":       "2026-06-20T15:00:00+00:00",   # 10 dias depois
+            "signals":           [{"metric": "nps", "value": 9}],
+        })
+
+    def setup_method(self):
+        _session_opened_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_deferred_overwrites_session_at_with_origin_opened_at(self):
+        store = make_store()
+        store.lookup_session_opened_at = AsyncMock(
+            return_value="2026-06-10T09:30:00+00:00"   # data da sessão original
+        )
+        rows = self._rows()
+        await _enrich_signal_session_at(rows, store)
+        # session_at passa a ser o opened_at da origem; captured_at intacto.
+        assert rows[0]["session_at"]  == "2026-06-10T09:30:00+00:00"
+        assert rows[0]["captured_at"] == "2026-06-20T15:00:00+00:00"
+        store.lookup_session_opened_at.assert_awaited_once_with(TENANT, "sess-original-007")
+
+    @pytest.mark.asyncio
+    async def test_origin_not_found_keeps_captured_at(self):
+        store = make_store()  # lookup returns None by default
+        rows = self._rows()
+        await _enrich_signal_session_at(rows, store)
+        # sem origem resolvível → fallback seguro: session_at = captured_at.
+        assert rows[0]["session_at"] == "2026-06-20T15:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_lookup_error_keeps_captured_at(self):
+        store = make_store()
+        store.lookup_session_opened_at = AsyncMock(side_effect=RuntimeError("ch down"))
+        rows = self._rows()
+        await _enrich_signal_session_at(rows, store)
+        assert rows[0]["session_at"] == "2026-06-20T15:00:00+00:00"
+
+    @pytest.mark.asyncio
+    async def test_cache_avoids_repeat_lookup(self):
+        store = make_store()
+        store.lookup_session_opened_at = AsyncMock(
+            return_value="2026-06-10T09:30:00+00:00"
+        )
+        await _enrich_signal_session_at(self._rows(), store)
+        await _enrich_signal_session_at(self._rows(), store)
+        # segunda chamada serve do cache → lookup só uma vez.
+        store.lookup_session_opened_at.assert_awaited_once()

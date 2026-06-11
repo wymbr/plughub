@@ -189,10 +189,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   1. ✅ (2026-06-11) **`$.segment_id` no `interpolate.ts`** — `segment_id: ctx.segmentId` no evalContext
      de `resolveJsonPathRef`; teste em `invoke.test.ts`. Skill lê `$.segment_id` p/ `survey_record(grain=segment)`
      "sobre si mesmo". Ver CHANGELOG 2026-06-11.
-  2. **F11 — survey diferida + grão journey E2E**: resolver `session_at` da sessão original via
-     **enrichment no consumer** (`parse_session_signal_event` quando `captured_at ≠ session_at`, lookup
-     `analytics.sessions.opened_at` por `origin_session_id`); workflow agendado disparando `survey_record`
-     dias depois; grão `journey` ponta-a-ponta. Schema/tool já comportam (sem migração).
+  2. **F11.1** ✅ (2026-06-11) — enrichment de `session_at`: consumer resolve `analytics.sessions.opened_at`
+     da origem (por `origin_session_id`) e sobrescreve `session_at` no ramo `session.signals`; fallback
+     `captured_at`. `AnalyticsStore.lookup_session_opened_at` + `consumer._enrich_signal_session_at` (cache).
+     Grão `journey` já aceito. **F11.2 (validação)**: diferido **simulado via curl/seed** (decisão do
+     usuário) — publicar `session.signals`/`survey_record` com origem de `opened_at` anterior + grão journey,
+     conferir `session_at = opened_at`. Workflow agendado real (dias depois) fica futuro. Ver CHANGELOG.
   3. **`quality_criteria` cross-form**: alinhar dimensões equivalentes entre formulários (por
      `dimension_id`/label) — hoje compara só dentro do mesmo form (guard na UI).
   4. **Validações E2E reais F5/F7 + limpeza de fixtures sintéticos**: agora que há fluxos reais

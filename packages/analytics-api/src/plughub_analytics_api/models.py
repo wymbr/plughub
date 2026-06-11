@@ -996,10 +996,10 @@ def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
     `segment` o evento carrega segment_id (obrigatório) + agent_key (atribuição ao
     agente); demais grãos têm agent_key vazio (não atribuíveis). Normalização
     nps/csat aplicada quando value_label não vem explícito. session_at = captured_at
-    no caso no-ato (mesmo dia); para surveys DIFERIDAS (captured_at ≠ session_at), a
-    resolução precisa de session_at da sessão original é F11 (enrichment).
-    value_label explícito do produtor prevalece. O timing (no ato × diferido) é
-    captured_at × session_at, não um grão.
+    aqui (default no-ato/mesmo dia); para surveys DIFERIDAS o consumer sobrescreve
+    session_at com o opened_at da sessão original via enrichment (F11 —
+    _enrich_signal_session_at em consumer.py). value_label explícito do produtor
+    prevalece. O timing (no ato × diferido) é captured_at × session_at, não um grão.
     """
     tenant_id  = payload.get("tenant_id")
     origin_id  = payload.get("origin_session_id")

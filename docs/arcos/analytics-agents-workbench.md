@@ -473,12 +473,20 @@ Normalização: NPS 0–10 → promotor(≥9)/neutro(7–8)/detrator(≤6); CSAT
 | **F10.3a — Exposição dos novos grãos na bancada** ✅ (2026-06-10) | lente `session_nps` no `/reports/agents/compare`: `session_signal` (grain=session, metric=nps) ⋈ atribuição por `session_id` → NPS de sessão dos contatos do agente (cruzamento §8, **contexto** não-atribuível). Seção "Voz do cliente" no detalhe type-aware: NPS do agente (segmento, F5) × NPS da sessão (contexto). i18n en+pt-BR. **Não toca F5.** | detalhe mostra NPS agente × NPS sessão; lente válida no compare |
 | **F10.3b — Cutover F5 (unificação Opção 2)** ✅ (2026-06-10) | caminho **B unificado** (um fluxo de escrita): `agente_nps_v1` chama `survey_record(grain=segment)`; bridge escreve `session.surveyed_segment_id`/`agent_key` via `@ctx` (`fire_pool_hooks`); `_compare_nps_lens` migra para `session_signal` (grão segment, `INNER JOIN segments` p/ agent_type/label) → lentes `nps`+`session_nps` leem a mesma tabela (**acaba a duplicação**). **Legado removido**: bridge não escreve mais `segments.nps_score` (`_apply_nps_to_segment` deletado); coluna vestigial. | ✅ testes + seed + **E2E do hook real** (fluxo humano → `survey_record grain:segment, nps=8`). Cutover finalizado |
 
-> **F11 (futura)** — survey **diferida** e grão **journey** ponta-a-ponta: workflow agendado dispara
-> `survey_record` dias depois; `session_at` resolvido da sessão original via enrichment no consumer
-> (`captured_at`=chegada). Schema/tool já comportam (sem migração).
+> **F11.1** ✅ (2026-06-11) — **enrichment de `session_at` para surveys diferidas**. O consumer
+> resolve `analytics.sessions.opened_at` da sessão original (por `origin_session_id`) e sobrescreve
+> `session_at` no ramo `session.signals`; `date`/TTL seguem do row builder. Fallback seguro =
+> `captured_at`. `AnalyticsStore.lookup_session_opened_at` + `consumer._enrich_signal_session_at`
+> (cache FIFO). Grão `journey` já aceito (parser/schema). Ver CHANGELOG 2026-06-11.
+>
+> **F11.2 (validação)** — diferido **simulado via curl/seed** (decisão do usuário): publicar
+> `session.signals`/`survey_record` com `origin` de sessão `opened_at` dias anterior + grão `journey`,
+> conferir `session_at = opened_at` no ClickHouse. Sem agendador (workflow agendado real fica futuro;
+> schema/tool já comportam, sem migração).
 
 ### 14.5 Fechamento da bancada (follow-ups A)
 
 | Item | Estado | Nota |
 |---|---|---|
 | 1 — built-in `$.segment_id` | ✅ (2026-06-11) | `resolveJsonPathRef` (`interpolate.ts`) expõe `segment_id: ctx.segmentId` no `evalContext`. Skill lê `$.segment_id` e passa a `survey_record(grain=segment)` — sinal de segmento **sobre si mesmo** sem injeção do bridge. Atribuição NPS-sobre-o-humano (segment de OUTRO agente, via `hook_conf`/`@ctx`) segue na F10.3b. |
+| 2 — F11.1 enrichment `session_at` | ✅ (2026-06-11) | Consumer resolve `opened_at` da origem e sobrescreve `session_at` no ramo `session.signals` (regra de ouro §7 no diferido). Fallback `captured_at`. F11.2 = validação E2E diferido simulado (curl/seed); workflow agendado real fica futuro. |

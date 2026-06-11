@@ -2,6 +2,39 @@
 
 ---
 
+## Bancada F11.1 — enrichment de `session_at` para surveys diferidas (2026-06-11)
+
+Implementa a espinha da F11 (item 2 dos follow-ups A): **bucketização correta de sinais de survey
+diferida**. O parser `parse_session_signal_event` cravava `session_at = captured_at` — correto só no
+no-ato (mesmo dia). Numa survey **diferida** (collect/workflow dias depois), `captured_at` é a chegada,
+não a data da sessão original — quebrando a **regra de ouro** (§7): a quali deve bucketizar pela data
+da sessão **original**, alinhada com o quanti.
+
+**Mecanismo (consumer-side, sem migração)**: o sinal é chaveado por `origin_session_id`. Após o parse,
+para o tópico `session.signals`, o consumer resolve o `opened_at` da sessão original e **sobrescreve
+`session_at`**; `date` (partição) e TTL seguem do row builder (já derivam de `session_at`). Fallback
+seguro = `captured_at` (origem ainda não ingerida / erro de lookup) — nenhum evento é descartado.
+
+- `AnalyticsStore.lookup_session_opened_at(tenant, session_id)` — `SELECT opened_at FROM sessions FINAL …`
+  (ISO8601; molde dos lookups Arc 5; `asyncio.to_thread`).
+- `consumer._enrich_signal_session_at(rows, store)` — cache FIFO bounded (`_session_opened_cache`,
+  espelha `_channel_cache`); chamado em `_process_message` no ramo `session.signals`.
+- Parser inalterado no contrato (default `session_at=captured_at`); docstring atualizada.
+
+**Testes** (`test_consumer.py::TestSignalSessionAtEnrichment`): diferido → `session_at=opened_at`
+(captured_at intacto); origem ausente → fallback captured_at; erro de lookup → fallback; cache evita
+lookup repetido.
+
+**Grão `journey`** já é aceito pelo parser/schema (`_SESSION_SIGNAL_GRAINS`) — sem trabalho de schema.
+
+**F11.2 (validação E2E — diferido simulado, decisão do usuário)**: publicar `session.signals` (ou chamar
+`survey_record`) com `origin_session_id` de uma sessão cujo `opened_at` é dias anterior + grão `journey`,
+e conferir `session_at = opened_at` no ClickHouse. Sem agendador (escolha "simular via curl/seed").
+
+Build: `analytics-api` (Python) exige rebuild. Sem migração de schema.
+
+---
+
 ## Bancada — Fechamento (follow-ups A) item 1: built-in `$.segment_id` no interpolate (2026-06-11)
 
 Quick win do plano "fechar a bancada". O `survey_record(grain=segment)` precisa do `segment_id` do

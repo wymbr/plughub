@@ -1428,6 +1428,52 @@ class AnalyticsStore:
 
         return await asyncio.to_thread(_query)
 
+    async def lookup_session_opened_at(
+        self,
+        tenant_id:  str,
+        session_id: str,
+    ) -> str | None:
+        """
+        Return the ISO8601 opened_at of the ORIGINAL session (F11 enrichment).
+
+        Used by the session.signals consumer to bucketize survey signals by the
+        original session's date (golden rule §7) instead of captured_at — which
+        only coincides for same-day "no-ato" surveys.  For DEFERRED surveys
+        (captured_at days later) this resolves the correct session_at.
+
+        Returns None when the session is not (yet) in analytics.sessions; the
+        caller then keeps captured_at as a safe fallback (no event dropped).
+        Runs in a thread-pool executor to avoid blocking the event loop.
+        """
+        def _query() -> str | None:
+            client = self.new_client()
+            try:
+                result = client.query(
+                    f"""
+                    SELECT opened_at
+                    FROM {self._database}.sessions FINAL
+                    WHERE tenant_id  = %(tenant_id)s
+                      AND session_id = %(session_id)s
+                    ORDER BY opened_at ASC
+                    LIMIT 1
+                    """,
+                    parameters={
+                        "tenant_id":  tenant_id,
+                        "session_id": session_id,
+                    },
+                )
+                rows = result.result_rows
+                if not rows or rows[0][0] is None:
+                    return None
+                val = rows[0][0]
+                # clickhouse-connect returns a datetime for DateTime64 columns;
+                # normalise to ISO8601 so the row builder's _parse_dt handles it.
+                return val.isoformat() if hasattr(val, "isoformat") else str(val)
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_query)
+
 
 # ─── Row builders ─────────────────────────────────────────────────────────────
 
