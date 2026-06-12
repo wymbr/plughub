@@ -307,6 +307,7 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
             (módulo `analytics` inexistente, `relatorio` vs `report`, `billing.view` vs `visualizar`) → 422
             → demo users sem ABAC. Realinhado ao `modules.yaml`; `set_module_config` falha em 422. Ver CHANGELOG.
       - [ ] **Item 6** seeds `seed_evaluation`/`seed_pricing` → bootstrap idempotente via API (liga à Fase 3).
+            **Estacionado (2026-06-12): atacar junto da revisão dos módulos evaluation/pricing.**
 
   **▶ ARCO: Config HTTP Propagation** (aberto 2026-06-12) — `docs/arcos/config-http-propagation.md`.
   Achado durante o masking: o padrão "config-api vence via leitura direta do Redis" **nunca funcionou**
@@ -389,7 +390,7 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
 
 ---
 
-## Governança de Capacidade — contratado como fonte única *(novo, 2026-06-04)*
+## Governança de Capacidade — contratado como fonte única *(✅ ARCO CONCLUÍDO 2026-06-05)*
 
 Nasce da validação do fechamento Fase 2 Pools: contratado não governa config nem
 runtime (Σ reservas pode exceder C / shared negativo; quota Redis documentada mas
@@ -449,7 +450,7 @@ em Analytics/Agents.
 
 ---
 
-## Fila de sistema — tier gratuito *(arco ATIVO — spec em discussão→fechada 2026-06-05)*
+## Fila de sistema — tier gratuito *(✅ ARCO CONCLUÍDO 2026-06-05)*
 
 **Spec/ADR**: [`docs/arcos/system-queue.md`](docs/arcos/system-queue.md).
 Recon 2026-06-05 (a armadilha de sempre, na direção boa): a fila muda está

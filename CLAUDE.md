@@ -690,39 +690,25 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ---
 
-## Arc 11 — Console: Superfície de Orquestração Humana
+## Arc 11 — Console como Superfície de Orquestração ✅
 
-Eleva o Console de interface de atendimento para **superfície de orquestração** — operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe. Visão: AI e humanos são simétricos no modelo de sessão; o Console deve refletir isso na UI.
-
-**Quatro funcionalidades planejadas**: (F1) Cartões de participantes AI em tempo real com step/status do Skill-Flow; (F2) Botão "Adicionar Especialista" — lista agentes de `mentionable_pools` e os invoca via A2A `assist`; (F3) Ação "Delegar Tarefa" — context menu sobre mensagens, drawer com instrução + visibilidade, card de resultado quando `agent_done` chega; (F4) Tab de Orquestração — grafo/lista de steps do Skill-Flow ativo com ações de intervenção para supervisores (injetar contexto, pular step, force-complete).
-
-**Permissões**: F1–F3 requerem `agent_assist.operacao`; F4 intervenções requerem role `supervisor` com scope ABAC.
+O Console é uma **superfície de orquestração**: o operador humano dirige, delega e monitora agentes AI como coparticipantes de primeira classe (AI e humanos simétricos no modelo de sessão). Funcionalidades: cartões de participantes AI em tempo real (step/status do Skill-Flow); "Adicionar Especialista" (invoca pools de `mentionable_pools` via A2A `assist`); "Delegar Tarefa" (seleção de mensagens → drawer instrução+visibilidade → card de resultado no `agent_done`); Tab de Orquestração (steps do Skill-Flow + intervenções de supervisor). **Permissões**: operar = `agent_assist.operacao`; intervir = role `supervisor` + scope ABAC.
 
 → See [`docs/arcos/arc11-console-orchestration.md`](docs/arcos/arc11-console-orchestration.md)
 
 ---
 
-## Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy
+## Arc 6 Fase 2 — Observabilidade por Deploy ✅
 
-Transforma o módulo de avaliação de "relatório de conformidade" em **ferramenta de melhoria contínua**. Primitiva central: usar eventos de deploy (`skill_deployments`) como âncoras temporais objetivas — cada deploy delimita um "epoch" de performance, eliminando datas arbitrárias como base de comparação.
-
-**Dual-Slice Comparison**: modo de consulta que retorna dois conjuntos de métricas em paralelo. Slices por: dois agentes (humano vs AI), dois períodos (antes/depois de treinamento), dois deploys (v2 vs v3 de um skill), ou deploy epoch automático. Métricas: `evaluation_score`, `resolution_rate`, `escalation_rate`, `aht_ms`, `nps`. Inclui `statistical_significance` com aviso quando N < 30.
-
-**Componentes de UI**: (C1) Gráfico Índice × Tempo com linhas verticais nos deploys (Recharts ReferenceLine); (C2) Card de Comparação com delta por métrica e drill-down por critério; (C3) Painel de grupos (até 4 slices simultâneos, barras agrupadas).
-
-**Infraestrutura nova**: `analytics.deploy_events` ClickHouse table alimentada por `registry.changed` Kafka + consumer em analytics-api. Três novos endpoints: `GET /reports/deploy-timeline`, `GET /reports/quality-comparison`, `GET /reports/quality-timeseries`.
+Comparação de qualidade ancorada em **deploy epochs** (eventos `skill_deployments` como âncoras temporais objetivas, não datas arbitrárias). **Dual-slice**: duas séries de métricas em paralelo (dois agentes, dois períodos, dois deploys, ou epoch automático) — `evaluation_score`/`resolution_rate`/`escalation_rate`/`aht_ms`/`nps` + `statistical_significance` (aviso N<30). Infra: `analytics.deploy_events` (ClickHouse, alimentada por `registry.changed`) + endpoints `GET /reports/deploy-timeline`, `/quality-comparison`, `/quality-timeseries`.
 
 → See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md)
 
 ---
 
-## Arc 12 — Agent Business Events
+## Arc 12 — Agent Business Events ✅
 
-MCP tool `agent_event(category, value, tags?)` para agentes (AI e humanos) publicarem KPIs de negócio estruturados durante sessões. Categoria hierárquica em dot notation: `pool_id.skill_id.metric_key`. Contexto de sessão (`tenant_id`, `agent_type_id`, `skill_id`, `pool_id`) resolvido automaticamente do `session_token` — o agente só passa `category`, `value` e `tags`.
-
-**Restrições de governança**: primeiro segmento do `category` deve ser o `pool_id` da sessão (namespace isolation); tags com PII keywords bloqueadas (`cpf`, `phone`, `email`, `token`, etc.); máx 10 tags, 64 chars por chave/valor; rate limit de 50 eventos por sessão (configurável). Passa pelo `McpInterceptor` — auditado em `mcp.audit`.
-
-**Infraestrutura**: Kafka topic `agent.events` → ClickHouse `analytics.agent_business_events` (MergeTree, TTL 2 anos) com `category_l1..l4` pré-decompostos. Três endpoints analytics: `/reports/agent-events/series` (time-series + deploy markers), `/reports/agent-events/summary`, `/reports/agent-events/categories`. Integra com Arc 6 Fase 2: `quality-comparison` e `quality-timeseries` aceitam `metrics[]=agent_event:{category}`. Dashboard: cards `agent_event_timeseries` e `agent_event_summary` com seletor de categoria dinâmico.
+MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de negócio durante sessões. `category` hierárquico `pool_id.skill_id.metric_key` (1º segmento = pool_id da sessão, namespace isolation); contexto resolvido do `session_token`; tags bloqueiam PII; rate limit configurável; auditado via `McpInterceptor`. Infra: topic `agent.events` → ClickHouse `analytics.agent_business_events` (`category_l1..l4` pré-decompostos) + endpoints `/reports/agent-events/{series,summary,categories}`. Integra com Arc 6 Fase 2 (`metrics[]=agent_event:{category}`).
 
 → See [`docs/arcos/arc12-agent-business-events.md`](docs/arcos/arc12-agent-business-events.md)
 
@@ -744,35 +730,19 @@ Módulo ABAC `audit` para DPO/compliance — ortogonal às roles existentes. Qua
 
 ---
 
-## Arc 13 — Evaluation Review, Contestation & Calibration
+## Arc 13 — Evaluation Review, Contestation & Calibration ✅
 
-Dois fluxos separados pelo tipo de agente avaliado. **Fluxo 1 (agente humano)**: revisor AI pré-publicação (gate de qualidade configurável por campanha) → contestação por dimensão → human reviewer sempre decisão final. `ContestationThread` append-only, imutável. `max_rounds` configurável (padrão 3, máx 5) via `ContestationPolicy`. **Fluxo 2 (agente AI)**: `evaluation_finalized` imediato sem contestação + curadoria amostral paralela por regras configuráveis (`score_extremes`, `deploy_baseline`, `score_outlier`, `na_excess`, `random_baseline`, `reviewer_signal`). Revisor AI gera `calibration_signal` como output secundário → `CurationReview` → curador humano complementa → `CalibrationNote` publicada no knowledge namespace → feedback ao avaliador via RAG. **Loop de evolução contínua**: `calibration_score` por skill version no Calibration Dashboard — correlaciona melhora do avaliador com deploy epochs (Arc 6 Fase 2).
-
-**Vínculo com Arc 6 Fase 2**: `evaluation_finalized` é a única fonte de truth para relatórios de qualidade. Novo Kafka topic `calibration.events` + endpoint `GET /reports/evaluator-calibration` adicionam dimensão de calibração ao dashboard de qualidade.
+Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicação (gate por campanha) → contestação por dimensão → human reviewer decide (`ContestationThread` append-only; `max_rounds` via `ContestationPolicy`). **AI**: `evaluation_finalized` imediato + curadoria amostral por regras configuráveis; revisor AI gera `calibration_signal` → `CalibrationNote` no knowledge namespace → feedback ao avaliador via RAG. **Invariante**: `evaluation_finalized` é a única fonte de truth para relatórios de qualidade. Topic `calibration.events` + `GET /reports/evaluator-calibration` (Calibration Dashboard, correlaciona com deploy epochs do Arc 6 Fase 2).
 
 → See [`docs/arcos/arc13-review-contestation.md`](docs/arcos/arc13-review-contestation.md)
 
 ---
 
-## Arc 15 — Canal WebRTC com SFU Enterprise
+## Arc 15 — Canal WebRTC com SFU (LiveKit) ✅
 
-Canal WebRTC browser-to-SFU com medium negociado em tempo real (video → voice → text). Coexiste com canal voice (PSTN/Twilio): `voice` = callers externos via tronco, `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (Docker/k8s) — gravação por egress, supervisão hidden subscriber, multi-participante. Twilio permanece exclusivamente como tronco PSTN no canal voice.
-
-**Medium negotiation**: `negotiate_medium(agent.media_capabilities, pool.webrtc_media_fallback_order)` — tenta video → voice → text; re-negocia quando agente muda (routing.assigned). **Signaling**: WS `/ws/webrtc/{pool_id}` → `webrtc.ready` (LiveKit URL + token + negotiated_medium). Tokens emitidos exclusivamente pelo Channel Gateway — nunca expostos ao browser. **STT/TTS**: mesmos FallbackSTTProvider/FallbackTTSProvider do canal voice; transporte muda de Twilio Media Streams para LiveKit server SDK PCM frames. **Gravação**: LiveKit Egress API (TrackCompositeEgress dual-channel) → AttachmentStore → recording.completed stream event. **Console overlay**: WebRTCOverlay.tsx embutido no Console — grid de vídeo ou waveform conforme medium; MediaControls; useWebRTCSession() hook. **Agent capability**: `media_capabilities: [video, voice, text]` em AgentTypeSchema — medium=text é fallback universal.
-
-Seis fases: A (infra + signaling), B (media negotiation + agent schema), C (STT/TTS pipeline), D (egress recording), E (Console UI), F (customer widget).
+Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (ver § Pending).
 
 → See [`docs/arcos/arc15-webrtc.md`](docs/arcos/arc15-webrtc.md)
-
----
-
-## Arc 18 — Workflow Execution Trace *(deprecated pelo Arc 19)*
-
-Spec original superseded pelo Arc 19. Todas as superfícies dependiam de entidades eliminadas: `workflow-api` (deprecado), `Analytics/Processes` e `Analytics/Journeys` (eliminados), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
-
-**Conceito que sobrevive**: step-level trace (`ProcessStepTimeline`) reaproveitado como aba "Trace" no detalhe de session em Analytics/Sessions para `channel_type: webhook`. Fonte: Redis `pipeline_state.transitions[]` (ativas/suspensas), stream persistido (fechadas). Implementar como parte da Arc 19 Fase E.
-
-→ See [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md) (spec original, para referência histórica)
 
 ---
 
