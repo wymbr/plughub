@@ -1,50 +1,36 @@
 """
 test_ws_auth_timeout_resolver.py
-Unit tests for resolve_ws_auth_timeout_s (config-consolidation F2-TTL).
+Unit tests for resolve_ws_auth_timeout_s (config-http-propagation arc).
 
-Invariante "Configuration — Single Source": config-api vence — o timeout efetivo
-do handshake WS vem de {tenant}:config:webchat:auth_timeout_s (Redis, escrito pelo
-config-api), com fallback ao default quando ausente. Usado por webchat e webrtc.
+The resolver now reads from the HTTP-backed WebchatConfigCache (not Redis). Used
+by webchat and webrtc for the WS auth handshake timeout.
 """
 import pytest
 
 from ..attachment_store import resolve_ws_auth_timeout_s
+from .. import webchat_config as wc
 
 
-class _FakeRedis:
-    def __init__(self, val):
-        self._val = val
-
-    async def get(self, key):  # noqa: ANN001
-        if isinstance(self._val, Exception):
-            raise self._val
-        return self._val
-
-
-@pytest.mark.asyncio
-async def test_reads_config_api_value_over_default():
-    # config-api vence: 45 (Redis) sobrepõe o default 30.
-    assert await resolve_ws_auth_timeout_s(_FakeRedis("45"), "tenant_demo", 30) == 45
+@pytest.fixture(autouse=True)
+def _reset_cache():
+    wc.webchat_config._data = {}
+    yield
+    wc.webchat_config._data = {}
 
 
 @pytest.mark.asyncio
-async def test_falls_back_to_default_when_key_absent():
-    assert await resolve_ws_auth_timeout_s(_FakeRedis(None), "tenant_demo", 30) == 30
+async def test_reads_config_cache_value():
+    wc.webchat_config._data = {"auth_timeout_s": 45}
+    assert await resolve_ws_auth_timeout_s(None, "tenant_demo", 30) == 45
 
 
 @pytest.mark.asyncio
-async def test_no_tenant_or_no_redis_returns_default():
-    assert await resolve_ws_auth_timeout_s(_FakeRedis("60"), "", 30) == 30
+async def test_falls_back_to_builtin_default_when_absent():
+    # Cache empty → WebchatConfigCache._DEFAULTS provides 30.
     assert await resolve_ws_auth_timeout_s(None, "tenant_demo", 30) == 30
 
 
 @pytest.mark.asyncio
-async def test_redis_error_returns_default():
-    assert await resolve_ws_auth_timeout_s(
-        _FakeRedis(RuntimeError("redis down")), "tenant_demo", 30
-    ) == 30
-
-
-@pytest.mark.asyncio
-async def test_decodes_bytes_value():
-    assert await resolve_ws_auth_timeout_s(_FakeRedis(b"20"), "tenant_demo", 30) == 20
+async def test_coerces_string_value():
+    wc.webchat_config._data = {"auth_timeout_s": "60"}
+    assert await resolve_ws_auth_timeout_s(None, "tenant_demo", 30) == 60

@@ -300,6 +300,18 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       - [ ] **Restante cat. C** (defaults/tuning, §8 item 7): `EVALUATOR_POOL`, `VITE_DEFAULT_POOL`,
             `REPLAY_SPEED_FACTOR` (config de negócio/UI em env → config-api); `PLUGHUB_ANALYTICS_OPEN_ACCESS`
             fica (flag de demo). `webrtc._AUTH_TIMEOUT_S` agora é só default (ok).
+
+  **▶ ARCO: Config HTTP Propagation** (aberto 2026-06-12) — `docs/arcos/config-http-propagation.md`.
+  Achado durante o masking: o padrão "config-api vence via leitura direta do Redis" **nunca funcionou**
+  (chave `{tenant}:config:...` nunca escrita; cache `plughub:cfg:...` é TTL). **F1.2 e F2-TTL eram
+  latentes** (sempre default) — consertados pela Fase 1. Padrão-alvo = HTTP-backed cache
+  (Session/RoutingConfigCache).
+  - [x] **Fase 1** ✅ (2026-06-12) channel-gateway `WebchatConfigCache` (HTTP + config.changed); resolvers
+        leem do cache; `config_api_url`/`PLUGHUB_CONFIG_API_URL`; testes reescritos. Conserta F1.2+F2-TTL.
+  - [ ] **Fase 2** mcp-server masking via HTTP + seed `masking.context_rules` + aposentar JSON órfão e
+        `saveContextMaskingConfig` dead-code (substitui o item 4 "masking" do §8).
+  - [ ] **Fase 3** varredura de outros leitores diretos (`{tenant}:config:sms|whatsapp:*` etc.) + doc +
+        guard lint opcional contra leitura direta das chaves do config-api.
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

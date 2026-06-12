@@ -43,21 +43,19 @@ async def resolve_attachment_expiry_days(redis, tenant_id: str, default: int) ->
     """
     Política de expiração de anexos (dias) — fonte ÚNICA é o config-api.
 
-    Invariante "Configuration — Single Source" (config-api vence): lê
-    `{tenant}:config:webchat:attachment_expiry_days` (escrito pelo config-api no
-    Redis), com fallback ao `default` (settings) quando ausente ou Redis indisponível.
-    Substitui a leitura direta de `settings.attachment_expiry_days` (que vinha do env
-    `PLUGHUB_ATTACHMENT_EXPIRY_DAYS`, removido — config de negócio não vive em env).
+    config-http-propagation arc: lê do `WebchatConfigCache` (HTTP-backed,
+    namespace webchat), que busca o valor via `GET /config/webchat?tenant_id=` do
+    config-api e invalida no `config.changed`. Substitui a leitura direta do Redis
+    `{tenant}:config:webchat:attachment_expiry_days` (chave que NUNCA era escrita —
+    o config-api só mantém a cache TTL `plughub:cfg:...`; o resolver antigo sempre
+    caía no default). `redis`/`tenant_id` mantidos na assinatura por compat dos
+    call-sites; o tenant efetivo é o `settings.tenant_id` carregado no cache.
     """
-    if not tenant_id or redis is None:
-        return default
+    from .webchat_config import webchat_config
     try:
-        raw = await redis.get(f"{tenant_id}:config:webchat:attachment_expiry_days")
-        if raw:
-            return int(raw if isinstance(raw, str) else raw.decode())
-    except Exception:
-        pass
-    return default
+        return int(webchat_config.get("attachment_expiry_days", default))
+    except (TypeError, ValueError):
+        return default
 
 
 async def resolve_ws_auth_timeout_s(redis, tenant_id: str, default: int) -> int:
@@ -65,24 +63,17 @@ async def resolve_ws_auth_timeout_s(redis, tenant_id: str, default: int) -> int:
     Timeout (s) para o cliente enviar conn.authenticate no handshake WS — fonte
     ÚNICA é o config-api.
 
-    Invariante "Configuration — Single Source" (config-api vence): lê
-    `{tenant}:config:webchat:auth_timeout_s` (escrito pelo config-api no Redis),
-    com fallback ao `default` quando ausente ou Redis indisponível. Substitui a
-    leitura direta de `settings.ws_auth_timeout_s` (env `PLUGHUB_WS_AUTH_TIMEOUT_S`,
-    removido) no webchat e a constante hardcoded `_AUTH_TIMEOUT_S` no webrtc — ambos
-    adapters passam a usar a mesma chave de config (config de negócio não vive em env
-    nem hardcoded). Usado pré-auth: o tenant vem de `settings.tenant_id` (wiring),
-    conhecido antes do cliente autenticar.
+    config-http-propagation arc: lê do `WebchatConfigCache` (HTTP-backed,
+    `webchat.auth_timeout_s`), em vez da chave Redis `{tenant}:config:webchat:auth_timeout_s`
+    (nunca escrita). Usado por webchat e webrtc. `redis`/`tenant_id` mantidos por
+    compat; o tenant efetivo é o `settings.tenant_id` carregado no cache. O default
+    do código (settings.ws_auth_timeout_s / webrtc `_AUTH_TIMEOUT_S`) é o fallback.
     """
-    if not tenant_id or redis is None:
-        return default
+    from .webchat_config import webchat_config
     try:
-        raw = await redis.get(f"{tenant_id}:config:webchat:auth_timeout_s")
-        if raw:
-            return int(raw if isinstance(raw, str) else raw.decode())
-    except Exception:
-        pass
-    return default
+        return int(webchat_config.get("auth_timeout_s", default))
+    except (TypeError, ValueError):
+        return default
 
 # ─── Allowlist de MIME types aceitos ─────────────────────────────────────────
 

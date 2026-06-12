@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Set via PLUGHUB_AGENT_REGISTRY_URL.
     # Example: "http://agent-registry:3000"
     agent_registry_url:         str = "http://localhost:3000"
+
+    # Config API — source of horizontal config (webchat namespace etc.). Read via
+    # the HTTP-backed WebchatConfigCache (config-http-propagation arc), NOT the
+    # Redis cache directly. Set via PLUGHUB_CONFIG_API_URL. Example: http://config-api:3600
+    config_api_url:             str = "http://localhost:3600"
     # In-process TTL (seconds) for channel endpoint lookups.
     # Keeps hot-path latency low while reflecting config changes within ~30s.
     # Set via PLUGHUB_ENDPOINT_CACHE_TTL_S.

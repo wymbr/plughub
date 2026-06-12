@@ -39,6 +39,7 @@ from .config import get_settings, Settings
 from .context_reader import ContextReader
 from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
+from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
 
 logger = logging.getLogger("plughub.channel-gateway")
@@ -294,9 +295,46 @@ async def lifespan(app: FastAPI):
         )
         await adapter.handle_collect_event(enriched)
 
+    # config-http-propagation arc: load the webchat config namespace from the
+    # Config API (HTTP) at startup, then keep it fresh via config.changed events.
+    await webchat_config.reload(settings.config_api_url, settings.tenant_id)
+
+    async def _config_changed_consumer() -> None:
+        """
+        Kafka consumer for config.changed — reloads the WebchatConfigCache when a
+        value in the `webchat` namespace changes (e.g. auth_timeout_s,
+        attachment_expiry_days edited in the Config UI). Canonical pattern shared
+        with orchestrator-bridge / routing-engine config caches.
+        """
+        from aiokafka import AIOKafkaConsumer
+        import json as _json
+
+        consumer = AIOKafkaConsumer(
+            "config.changed",
+            bootstrap_servers = settings.kafka_brokers,
+            group_id          = f"{settings.kafka_group_id}-config",
+            auto_offset_reset = "latest",
+        )
+        await consumer.start()
+        try:
+            async for msg in consumer:
+                try:
+                    event = _json.loads(msg.value)
+                    if event.get("namespace") == "webchat":
+                        await webchat_config.reload(settings.config_api_url, settings.tenant_id)
+                        logger.info(
+                            "config.changed: webchat namespace reloaded (key=%s)",
+                            event.get("key"),
+                        )
+                except Exception as exc:
+                    logger.warning("config.changed consumer error: %s", exc)
+        finally:
+            await consumer.stop()
+
     pubsub_task     = asyncio.create_task(_registry.start_pubsub_listener())
     outbound_task   = asyncio.create_task(outbound.run())
     collect_task    = asyncio.create_task(_collect_events_consumer())
+    config_task     = asyncio.create_task(_config_changed_consumer())
     # Arc 19 Fase D: expira suspends/delegates webhook vencidos (resume_tokens)
     timeout_scan_task = asyncio.create_task(_webhook_adapter.run_timeout_scanner())
 
@@ -307,6 +345,7 @@ async def lifespan(app: FastAPI):
     pubsub_task.cancel()
     outbound_task.cancel()
     collect_task.cancel()
+    config_task.cancel()
     timeout_scan_task.cancel()
     await _producer.stop()
     await db_pool.close()

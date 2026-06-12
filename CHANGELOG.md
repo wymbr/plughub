@@ -2,6 +2,34 @@
 
 ---
 
+## Config HTTP Propagation — Fase 1: channel-gateway (conserta F1.2 + F2-TTL) (2026-06-12)
+
+Abre o arco `docs/arcos/config-http-propagation.md`. **Diagnóstico**: o padrão "config-api vence via
+leitura direta do Redis" (usado na F1.2 e na F2-TTL) **nunca funcionou** — as chaves
+`{tenant}:config:webchat:*` que os resolvers liam **não são escritas por ninguém** (o config-api só
+mantém a cache TTL `plughub:cfg:...`, e o channel-gateway não consumia `config.changed`). Resultado: os
+adapters sempre caíam no default do código; mudar o valor no config-api não tinha efeito. (Os testes
+unitários passavam porque mockavam o Redis retornando valor — testavam a lógica do resolver, não a
+populção da chave.)
+
+**Correção (padrão canônico, espelha `SessionConfigCache`/`RoutingConfigCache`)**:
+- `webchat_config.py`: novo `WebchatConfigCache` — busca `GET /config/webchat?tenant_id=` via HTTP,
+  cacheia in-process, defaults no código (auth_timeout_s=30, attachment_expiry_days=30).
+- `main.py`: reload no startup + consumer `config.changed` (recarrega quando `namespace == "webchat"`).
+- `attachment_store.py`: `resolve_attachment_expiry_days`/`resolve_ws_auth_timeout_s` passam a ler do
+  `WebchatConfigCache` (não do Redis). Assinaturas mantidas — call-sites (4 adapters + webchat/webrtc)
+  inalterados. Comentários "config-api vence via Redis" corrigidos.
+- `config.py` + compose: setting `config_api_url` + `PLUGHUB_CONFIG_API_URL=http://config-api:3600`.
+- Testes reescritos: `test_webchat_config.py` (cache) + `test_{attachment_expiry,ws_auth_timeout}_resolver.py`
+  agora testam a leitura via cache (não Redis).
+
+Sem env novo de config de negócio → guard 0/0 inalterado. Build: `channel-gateway`. **Validação
+(usuário)**: alterar `auth_timeout_s` na WebChatConfigPage → o handshake WS passa a respeitar o novo valor
+(agora de verdade); idem `attachment_expiry_days`. **Próximo**: Fase 2 (mcp-server masking) + Fase 3
+(varredura + guard lint).
+
+---
+
 ## Config Consolidation — F2-TTL: ws_auth_timeout (config-api vence) (2026-06-12)
 
 Fatia §8 item 2 (TTLs/timeouts — matar duplicação env×config). Após a F1.2 (instance_ttl +
