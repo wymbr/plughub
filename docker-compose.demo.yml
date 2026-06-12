@@ -765,10 +765,11 @@ services:
       KAFKA_BROKERS:   kafka:29092
       REDIS_URL:       redis://redis:6379
       DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
-      # F2 (bancada): era avaliador_qualidade — pool inexistente no registry do
-      # demo; o pool de avaliação pós-sessão é avaliacao_ia (skill_avaliacao_v1).
-      EVALUATOR_POOL:  avaliacao_ia
-      REPLAY_SPEED_FACTOR: "10.0"
+      CONFIG_API_URL:  http://config-api:3600
+      PLUGHUB_TENANT_ID: tenant_demo
+      # EVALUATOR_POOL / REPLAY_SPEED_FACTOR removidos (config-consolidation item 7b):
+      # vêm do config-api namespace `evaluation` (evaluator_pool=avaliacao_ia,
+      # replay_speed_factor=10.0), lidos no startup via GET /config/evaluation.
     depends_on:
       kafka:
         condition: service_healthy
@@ -777,6 +778,10 @@ services:
       redis:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      # item 7b: espera o config-api ficar healthy antes do startup, senão o fetch
+      # de config (evaluator_pool, replay_speed, TTLs) corre e cai no default.
+      config-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "kill -0 1"]
@@ -1359,8 +1364,9 @@ services:
     ports:
       - "5173:5173"
     environment:
-      # Pool e agent type padrão exibidos na UI ao abrir sem query params
-      VITE_DEFAULT_POOL:   retencao_humano
+      # VITE_DEFAULT_POOL removido (config-consolidation item 7a): env morto — não é
+      # lido em lugar nenhum (agent-assist-ui usa só VITE_MCP_WS_URL/VITE_ANALYTICS_URL/
+      # VITE_TENANT_ID; a unificação no platform-ui não consome esse default).
       VITE_TENANT_ID:      tenant_demo
     depends_on:
       mcp-server-plughub:

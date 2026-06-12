@@ -2,6 +2,59 @@
 
 ---
 
+## Config Consolidation — F2 item 7: defaults/env cat. C (2026-06-12)
+
+Fecha a categoria C do §6 (config de negócio que vazou pra env).
+
+**7a — VITE_DEFAULT_POOL**: era **env morto** — não é lido em lugar nenhum (nem platform-ui nem
+agent-assist-ui, que só usa VITE_MCP_WS_URL/VITE_ANALYTICS_URL/VITE_TENANT_ID). Removido do compose
+(estava no bloco agent-assist-ui).
+
+**7b — EVALUATOR_POOL + REPLAY_SPEED_FACTOR** (session-replayer): movidos para o config-api namespace
+`evaluation` (`evaluator_pool`=avaliacao_ia, `replay_speed_factor`=10.0). Achados latentes corrigidos de
+passagem: (1) `CONFIG_API_URL` não era setado no compose do session-replayer e o default era
+`http://localhost:3500` (porta do analytics!) → o fetch de config (incl. os TTLs `replayer_hydration_ttl_s`/
+`replay_context_ttl_s`) **já falhava** e caía no default; (2) o fetcher não passava `?tenant_id=` (exigido
+desde 2026-06-05); (3) o default de código de EVALUATOR_POOL era `avaliador_qualidade` (pool inexistente).
+(4) o session-replayer não tinha `config-api` no `depends_on` → subia antes do config-api estar pronto e o
+fetch de startup dava Connection refused. Fix: fetcher genérico `_fetch_config_value(namespace, key,
+tenant_id, default)` (str/int/float), URL default 3500→3600, `CONFIG_API_URL`+`PLUGHUB_TENANT_ID` no
+compose, `depends_on: config-api (service_healthy)`, seed `evaluation.evaluator_pool`/`replay_speed_factor`,
+consumer lê via config-api no startup, envs removidos.
+
+Builds: `config-api` (+ rodar `config-seed` p/ as 2 chaves novas) + `session-replayer`. Guard 0/0.
+**Validação (usuário)**: `curl .../config/evaluation?tenant_id=tenant_demo` lista `evaluator_pool` +
+`replay_speed_factor`; logs do session-replayer mostram `Config API evaluation.evaluator_pool=avaliacao_ia`
+e `Config API session.replayer_hydration_ttl_s=...` (agora os TTLs também pegam, antes caíam no default).
+**Categoria C do §6 fechada.**
+
+---
+
+## Config HTTP Propagation — Fase 3: authorized_roles + guard lint (arco completo) (2026-06-12)
+
+Fecha o arco `docs/arcos/config-http-propagation.md`.
+
+**3b — authorized_roles (mcp-server stream masking)**: mesmo bug do context_rules. `loadAccessPolicy` lia
+`{tenant}:masking:access_policy` (legacy, nunca escrito — `saveAccessPolicy` sem chamador) e os tiers
+`plughub:cfg:...` (cache TTL), caindo sempre no hardcoded `["evaluator","reviewer"]`. Agora lê
+`GET /config/masking → authorized_roles` (HTTP) com cache TTL 60s in-process; `saveAccessPolicy` removido;
+caller em `session.ts` passa `CONFIG_API_URL`. authorized_roles vira de fato configurável.
+
+**3c — secrets exemptos**: as credenciais `{tenant}:config:sms|whatsapp|voice:*` (access_token,
+account_sid, auth_token) e `{tenant}:config:webchat:jwt_secret` são **secrets** (cat. A) — não vão pro
+config-api por invariante. O override por tenant no Redis é capacidade **não implementada** (sem writer); a
+fonte é o env. Não migradas (documentado no arc doc).
+
+**3a — guard lint**: `infra/check_config_invariants.py` ganhou `config_cache_direct_read` — falha se algum
+serviço fora do config-api ler `plughub:cfg:*` direto (`.get/.mget/.hget`). Trava a regressão do padrão
+furado. **0 ofensores** após as Fases 1–3b.
+
+Builds: `mcp-server-plughub`. Guard: rodar — deve seguir **0/0** (incl. o novo lint). **Arco completo
+(Fases 1–3)** — F1.2, F2-TTL e masking (context_rules + authorized_roles) agora consomem config-api de
+verdade via HTTP; secrets ficam em env por design.
+
+---
+
 ## Bugfix — platform-ui nginx: PUT /config/masking/{key} dava 405 (2026-06-12)
 
 Surfaceado ao validar a Fase 2 (salvar `context_rules` pela Masking page → 405). O nginx da platform-ui

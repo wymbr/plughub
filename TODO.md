@@ -297,9 +297,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
             config-api; webchat + webrtc (foldado, sem a constante `_AUTH_TIMEOUT_S` hardcoded) usam o
             resolver; env `PLUGHUB_WS_AUTH_TIMEOUT_S` removido; guard ganhou `env_dup_ws_auth_timeout`
             (0/0). Ver CHANGELOG.
-      - [ ] **Restante cat. C** (defaults/tuning, §8 item 7): `EVALUATOR_POOL`, `VITE_DEFAULT_POOL`,
-            `REPLAY_SPEED_FACTOR` (config de negócio/UI em env → config-api); `PLUGHUB_ANALYTICS_OPEN_ACCESS`
-            fica (flag de demo). `webrtc._AUTH_TIMEOUT_S` agora é só default (ok).
+      - [x] **Item 7 (cat. C)** ✅ (2026-06-12): 7a `VITE_DEFAULT_POOL` era env morto → removido. 7b
+            `EVALUATOR_POOL`+`REPLAY_SPEED_FACTOR` → config-api `evaluation` (session-replayer lê via HTTP;
+            consertados de passagem: CONFIG_API_URL 3500→3600 + ausente no compose, `?tenant_id=` faltando,
+            default errado `avaliador_qualidade`). `PLUGHUB_ANALYTICS_OPEN_ACCESS` fica (flag de demo).
+            `webrtc._AUTH_TIMEOUT_S` é só default (ok). **Categoria C fechada.** Ver CHANGELOG.
 
   **▶ ARCO: Config HTTP Propagation** (aberto 2026-06-12) — `docs/arcos/config-http-propagation.md`.
   Achado durante o masking: o padrão "config-api vence via leitura direta do Redis" **nunca funcionou**
@@ -311,10 +313,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   - [x] **Fase 2** ✅ (2026-06-12) mcp-server masking via HTTP (`GET /config/masking`) + seed
         `masking.context_rules` global + aposentado JSON órfão e `saveContextMaskingConfig` dead-code.
         Fecha o item 4 "masking" do §8. Ver CHANGELOG.
-  - [ ] **Fase 3** varredura de outros leitores diretos: `authorized_roles` (mcp-server, tem caminho
-        legado durável que funciona — migrar por consistência); `{tenant}:config:sms|whatsapp:*`
-        (credenciais de canal — caminho GatewayConfig, avaliar). + guard lint opcional contra leitura
-        direta das chaves do config-api fora do config-api.
+  - [x] **Fase 3** ✅ (2026-06-12) **ARCO COMPLETO**. 3b: `authorized_roles` migrado para HTTP
+        (`loadAccessPolicy` + cache; `saveAccessPolicy` dead-code removido). 3c: creds
+        `{tenant}:config:sms|whatsapp|voice:*` + `webchat:jwt_secret` são **secrets exemptos** (sem writer;
+        env-first; documentado). 3a: guard `config_cache_direct_read` (falha em leitura direta de
+        `plughub:cfg:*` fora do config-api; 0 ofensores). Ver CHANGELOG.
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

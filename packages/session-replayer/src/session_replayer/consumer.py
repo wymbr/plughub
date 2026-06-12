@@ -34,37 +34,49 @@ from .stream_persister import StreamPersister
 logger = logging.getLogger(__name__)
 
 
-async def _fetch_config_ttl(config_api_url: str, key: str, default: int) -> int:
+async def _fetch_config_value(
+    config_api_url: str, namespace: str, key: str, tenant_id: str, default,
+):
     """
-    Fetches a single TTL value from the Config API session namespace at startup.
+    Fetches a single value from a Config API namespace at startup.
+    GET /config/{namespace}?tenant_id=... — resolves tenant override → global default.
     Uses urllib (no extra dependency) in a thread executor to stay non-blocking.
-    Falls back to `default` on any error.
+    Falls back to `default` on any error / missing key.
     """
-    url = f"{config_api_url.rstrip('/')}/config/session"
+    url = f"{config_api_url.rstrip('/')}/config/{namespace}?tenant_id={tenant_id}"
     loop = asyncio.get_event_loop()
 
-    def _get() -> int | None:
+    def _get():
         with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
             body = json.loads(resp.read())
             entries = body.get("entries") or body
             entry = entries.get(key)
             if isinstance(entry, dict) and "value" in entry:
-                return int(entry["value"])
-            if isinstance(entry, (int, float)):
-                return int(entry)
-        return None
+                return entry["value"]
+            return entry
 
     try:
         result = await loop.run_in_executor(None, _get)
         if result is not None:
-            logger.info("Config API session.%s=%d", key, result)
+            logger.info("Config API %s.%s=%s", namespace, key, result)
             return result
     except Exception as exc:
         logger.warning(
-            "Could not fetch session.%s from Config API (%s) — using default %ds: %s",
-            key, url, default, exc,
+            "Could not fetch %s.%s from Config API (%s) — using default %s: %s",
+            namespace, key, url, default, exc,
         )
     return default
+
+
+async def _fetch_config_ttl(
+    config_api_url: str, key: str, tenant_id: str, default: int
+) -> int:
+    """Thin int wrapper over _fetch_config_value for the `session` namespace TTLs."""
+    val = await _fetch_config_value(config_api_url, "session", key, tenant_id, default)
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 
 class SessionReplayerConsumer:
@@ -76,9 +88,13 @@ class SessionReplayerConsumer:
         self._kafka_brokers      = os.getenv("KAFKA_BROKERS",   "localhost:9092")
         self._redis_url          = os.getenv("REDIS_URL",        "redis://localhost:6379")
         self._postgres_dsn       = os.getenv("DATABASE_URL",     "postgresql://plughub:plughub@localhost:5432/plughub")
-        self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3500")
-        self._evaluator_pool     = os.getenv("EVALUATOR_POOL",   "avaliador_qualidade")
-        self._default_speed      = float(os.getenv("REPLAY_SPEED_FACTOR", "10.0"))
+        self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3600")
+        self._tenant_id          = os.getenv("PLUGHUB_TENANT_ID", "tenant_demo")
+        # config-consolidation item 7b: evaluator_pool + replay speed come from the
+        # Config API `evaluation` namespace (fetched in start()); these are the
+        # in-code fallback defaults. Was env EVALUATOR_POOL / REPLAY_SPEED_FACTOR.
+        self._evaluator_pool     = "avaliacao_ia"
+        self._default_speed      = 10.0
         self._group_id_persister = "session-replayer-persister"
         self._group_id_replayer  = "session-replayer-replayer"
 
@@ -90,13 +106,26 @@ class SessionReplayerConsumer:
 
     async def start(self) -> None:
         """Inicializa infra e inicia os dois consumers em paralelo."""
-        # Load session TTLs from Config API before starting consumers.
+        # Load config from the Config API before starting consumers.
         self._hydration_ttl = await _fetch_config_ttl(
-            self._config_api_url, "replayer_hydration_ttl_s", HYDRATION_TTL_SECONDS
+            self._config_api_url, "replayer_hydration_ttl_s", self._tenant_id, HYDRATION_TTL_SECONDS
         )
         self._replay_context_ttl = await _fetch_config_ttl(
-            self._config_api_url, "replay_context_ttl_s", REPLAY_CONTEXT_TTL
+            self._config_api_url, "replay_context_ttl_s", self._tenant_id, REPLAY_CONTEXT_TTL
         )
+        # config-consolidation item 7b: evaluator pool + replay speed from the
+        # `evaluation` namespace (was env EVALUATOR_POOL / REPLAY_SPEED_FACTOR).
+        self._evaluator_pool = str(await _fetch_config_value(
+            self._config_api_url, "evaluation", "evaluator_pool",
+            self._tenant_id, self._evaluator_pool,
+        ))
+        try:
+            self._default_speed = float(await _fetch_config_value(
+                self._config_api_url, "evaluation", "replay_speed_factor",
+                self._tenant_id, self._default_speed,
+            ))
+        except (TypeError, ValueError):
+            pass
 
         self._redis   = aioredis.from_url(self._redis_url, decode_responses=False)
         self._pg_pool = await asyncpg.create_pool(self._postgres_dsn, min_size=2, max_size=10)

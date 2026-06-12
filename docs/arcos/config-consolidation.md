@@ -97,9 +97,9 @@ tópico Kafka, `SKILLS_DIR`/`REGISTRY_CONFIG_DIR`, `*_TENANT_ID`/`BOOTSTRAP_TENA
 | `PLUGHUB_INSTANCE_TTL_SECONDS` (3600) | orchestrator-bridge | config-api `session` | TTLs já moram no ns `session` — **duplicado** |
 | `PLUGHUB_ATTACHMENT_EXPIRY_DAYS` (7) | channel-gateway | config-api `webchat` | ns `webchat` já existe — **duplicado** |
 | `PLUGHUB_WS_AUTH_TIMEOUT_S` (30) | channel-gateway | config-api `webchat` | ✅ F2-TTL (config-api vence; webchat+webrtc via `resolve_ws_auth_timeout_s`; env removido; guard cobre) |
-| `REPLAY_SPEED_FACTOR` (10) | session-replayer | config-api (replay/eval) | tuning |
-| `EVALUATOR_POOL` (avaliacao_ia) | session-replayer | config-api `evaluation` ou registry | **config de negócio** (qual pool avalia) |
-| `VITE_DEFAULT_POOL` (retencao_humano) | platform-ui | config-api (ui) | default de UI |
+| `REPLAY_SPEED_FACTOR` (10) | session-replayer | config-api (replay/eval) | ✅ item 7b → `evaluation.replay_speed_factor` |
+| `EVALUATOR_POOL` (avaliacao_ia) | session-replayer | config-api `evaluation` ou registry | ✅ item 7b → `evaluation.evaluator_pool` (default errado `avaliador_qualidade` corrigido) |
+| `VITE_DEFAULT_POOL` (retencao_humano) | platform-ui | config-api (ui) | ✅ item 7a — era **env morto** (não lido); removido do compose (era do agent-assist-ui) |
 | `PLUGHUB_ANALYTICS_OPEN_ACCESS` (true) | analytics-api | env (flag de demo) | OK ficar (mas perigoso em prod) |
 
 **Achado**: TTLs e attachment-expiry estão **em env E no config-api** ao mesmo tempo — risco de divergência

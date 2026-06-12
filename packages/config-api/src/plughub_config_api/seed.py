@@ -566,6 +566,22 @@ _SEED: list[tuple[str, str, object, str]] = [
         "POST /v1/evaluation/results/{id}/lock by an operator. "
         "Source: evaluation-api/main.py"
     ),
+    # config-consolidation item 7b: moved from env EVALUATOR_POOL / REPLAY_SPEED_FACTOR
+    # (session-replayer). Consumed by session-replayer at startup via GET /config/evaluation.
+    (
+        "evaluation", "evaluator_pool",
+        "avaliacao_ia",
+        "Pool that runs the post-session evaluator agent (skill_avaliacao_v1). "
+        "The session-replayer routes evaluation.requested to this pool. "
+        "Source: session-replayer/consumer.py (was env EVALUATOR_POOL)"
+    ),
+    (
+        "evaluation", "replay_speed_factor",
+        10.0,
+        "Speed multiplier for session replay during evaluation (1.0 = real time; "
+        "10.0 = 10x faster batch replay). "
+        "Source: session-replayer/consumer.py (was env REPLAY_SPEED_FACTOR)"
+    ),
 
     # ── agent_activity ────────────────────────────────────────────────────────
     # Source: orchestrator-bridge (agent_pause events), Agent Assist UI (PauseReasonModal)
