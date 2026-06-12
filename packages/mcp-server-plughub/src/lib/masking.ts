@@ -213,69 +213,55 @@ export class MaskingService {
     }
   }
 
+  // In-process TTL cache for authorized_roles (config-http-propagation arc).
+  // loadAccessPolicy runs on the message-read hot path; bound Config API fetches.
+  private static _accessPolicyCache = new Map<string, { roles: MaskingAccessPolicy['authorized_roles']; expiresAt: number }>()
+  private static readonly _ACCESS_POLICY_TTL_MS = 60_000
+
   /**
-   * Carrega MaskingAccessPolicy do Redis para o tenant.
+   * Loads the MaskingAccessPolicy (which roles may read original_content unmasked).
    *
-   * Lookup chain (first found wins):
-   *   1. {tenantId}:masking:access_policy — legacy key, explicit override
-   *   2. plughub:cfg:{tenantId}:masking:authorized_roles — Config API tenant-level cache
-   *   3. plughub:cfg:__global__:masking:authorized_roles — Config API global default
-   *   4. Hardcoded default: ["evaluator", "reviewer"]
-   *
-   * This means masking access policy is editable via ConfigPanel (Config API UI)
-   * without requiring a separate admin endpoint.
+   * config-http-propagation arc: reads `authorized_roles` from the Config API HTTP
+   * endpoint (`GET /config/masking` → resolves tenant→global), with a 60s in-process
+   * TTL cache. Replaces the previous direct Redis reads (the `plughub:cfg:...` TTL
+   * cache was only transiently populated, and the legacy `{tenant}:masking:access_policy`
+   * key was never written — `saveAccessPolicy` had no callers — so the value was
+   * effectively the hardcoded default regardless of config). Falls back to
+   * ["evaluator", "reviewer"] on HTTP error / missing / invalid value.
    */
   static async loadAccessPolicy(
-    redis:    { get(key: string): Promise<string | null> },
-    tenantId: string
+    configApiUrl: string,
+    tenantId:     string
   ): Promise<MaskingAccessPolicy> {
-    // 1. Legacy key (explicit override — highest priority)
-    try {
-      const raw = await redis.get(`${tenantId}:masking:access_policy`)
-      if (raw) return JSON.parse(raw) as MaskingAccessPolicy
-    } catch { /* continue */ }
-
-    // 2. Config API tenant-level cache (managed via ConfigPanel)
-    try {
-      const raw = await redis.get(`plughub:cfg:${tenantId}:masking:authorized_roles`)
-      if (raw) {
-        const roles = JSON.parse(raw) as MaskingAccessPolicy['authorized_roles']
-        if (Array.isArray(roles) && roles.length > 0) {
-          return { tenant_id: tenantId, authorized_roles: roles }
-        }
-      }
-    } catch { /* continue */ }
-
-    // 3. Config API global default cache
-    try {
-      const raw = await redis.get(`plughub:cfg:__global__:masking:authorized_roles`)
-      if (raw) {
-        const roles = JSON.parse(raw) as MaskingAccessPolicy['authorized_roles']
-        if (Array.isArray(roles) && roles.length > 0) {
-          return { tenant_id: tenantId, authorized_roles: roles }
-        }
-      }
-    } catch { /* continue */ }
-
-    // 4. Hardcoded default
-    return {
-      tenant_id:        tenantId,
-      authorized_roles: ["evaluator", "reviewer"],
+    const cached = MaskingService._accessPolicyCache.get(tenantId)
+    if (cached && cached.expiresAt > Date.now()) {
+      return { tenant_id: tenantId, authorized_roles: cached.roles }
     }
-  }
 
-  /**
-   * Persiste MaskingAccessPolicy no Redis (legacy key).
-   * Chamado por admin endpoints que escrevem diretamente a policy.
-   * Nota: editar via Config API (namespace masking, key authorized_roles) é a
-   * forma preferida — use loadAccessPolicy para leitura, que já faz fallback.
-   */
-  static async saveAccessPolicy(
-    redis:    { set(key: string, value: string): Promise<unknown> },
-    tenantId: string,
-    policy:   MaskingAccessPolicy
-  ): Promise<void> {
-    await redis.set(`${tenantId}:masking:access_policy`, JSON.stringify(policy))
+    let roles: MaskingAccessPolicy['authorized_roles'] = ["evaluator", "reviewer"]
+    try {
+      const base = configApiUrl.replace(/\/$/, "")
+      const resp = await fetch(
+        `${base}/config/masking?tenant_id=${encodeURIComponent(tenantId)}`,
+        { signal: AbortSignal.timeout(5000) },
+      )
+      if (resp.ok) {
+        const body    = await resp.json() as Record<string, unknown>
+        const entries = (body["entries"] ?? body) as Record<string, unknown>
+        const rawEntry = entries["authorized_roles"]
+        const value = (rawEntry && typeof rawEntry === "object" && "value" in (rawEntry as object))
+          ? (rawEntry as { value: unknown }).value
+          : rawEntry
+        if (Array.isArray(value) && value.length > 0 && value.every(r => typeof r === "string")) {
+          roles = value as MaskingAccessPolicy['authorized_roles']
+        }
+      }
+    } catch { /* keep default */ }
+
+    MaskingService._accessPolicyCache.set(tenantId, {
+      roles, expiresAt: Date.now() + MaskingService._ACCESS_POLICY_TTL_MS,
+    })
+    return { tenant_id: tenantId, authorized_roles: roles }
   }
 
   // ─────────────────────────────────────────────

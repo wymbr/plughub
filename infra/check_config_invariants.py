@@ -74,6 +74,38 @@ def detect() -> dict[str, str]:
     if _env_assigned("PLUGHUB_WS_AUTH_TIMEOUT_S"):
         found["env_dup_ws_auth_timeout"] = "docker-compose.demo.yml"
 
+    # 4. config-http-propagation arc: nenhum serviço FORA do config-api pode ler a
+    #    cache Redis do config-api (`plughub:cfg:...`) diretamente. Config de negócio
+    #    é consumida via a API HTTP do config-api (+ cache in-process + config.changed),
+    #    como SessionConfigCache / RoutingConfigCache. Leitura direta = padrão furado
+    #    (a chave é TTL/transitória; o valor nem sempre está lá). Secrets em
+    #    `{tenant}:config:...` são OUTRO mecanismo (env-first) e NÃO são flagados aqui.
+    _read_call = re.compile(r"\.(get|mget|hget|hgetall)\s*\(")
+    offenders: list[str] = []
+    for sub in ("py", "ts"):
+        for p in (ROOT / "packages").glob(f"*/src/**/*.{sub}"):
+            sp = str(p).replace("\\", "/")
+            if "/config-api/" in sp:
+                continue
+            if "test" in p.name.lower() or "__tests__" in sp or "/tests/" in sp:
+                continue
+            try:
+                txt = p.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            for ln in txt.splitlines():
+                s = ln.lstrip()
+                if s.startswith(("#", "//", "*", "/*")):
+                    continue
+                if "plughub:cfg:" in ln and _read_call.search(ln):
+                    offenders.append(str(p.relative_to(ROOT)).replace("\\", "/"))
+                    break
+    if offenders:
+        found["config_cache_direct_read"] = (
+            f"{len(offenders)} arquivo(s) leem plughub:cfg:* direto: "
+            + ", ".join(sorted(offenders)[:5])
+        )
+
     return found
 
 

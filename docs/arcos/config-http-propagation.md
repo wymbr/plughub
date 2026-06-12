@@ -50,10 +50,23 @@ config-api. Default no código continua como fallback (config-api indisponível)
   mcp-server. JSON órfão `infra/config-seed/masking-context-rules.json` aposentado (git rm). Ver CHANGELOG.
   *Pendente derivado*: `authorized_roles` (stream masking) ainda lê do Redis, mas tem caminho durável
   legado `{tenant}:masking:access_policy` que funciona — migrar na Fase 3 por consistência.
-- **Fase 3 (pendente) — varredura + guard.** Achar outros leitores diretos de `:config:`/`plughub:cfg:`
-  fora do config-api (ex.: credenciais `{tenant}:config:sms|whatsapp:...` — caminho de GatewayConfig, a
-  avaliar) e migrar/registrar. Opcional: lint no guard que falhe em leitura direta dessas chaves fora do
-  config-api (impede regressão do padrão furado).
+- **Fase 3 ✅ (2026-06-12) — varredura + guard.**
+  - **3b** — `authorized_roles` (mcp-server stream masking) migrado para HTTP: `loadAccessPolicy` lê
+    `GET /config/masking` → `authorized_roles` com cache TTL 60s in-process; removidos o `saveAccessPolicy`
+    dead-code e os tiers `plughub:cfg:`/legacy `{tenant}:masking:access_policy` (nunca escritos → era
+    sempre o hardcoded). Caller em `session.ts` passa `CONFIG_API_URL`.
+  - **3c** — credenciais `{tenant}:config:sms|whatsapp|voice:*` (access_token, account_sid, auth_token) e
+    `{tenant}:config:webchat:jwt_secret`: são **secrets** (cat. A), **exemptos** do arco — não vão pro
+    config-api por invariante ("env só para secret/wiring"). O override por tenant no Redis é uma
+    capacidade **não implementada** (nenhum writer); a fonte é o env. *Não migrar.* Se um dia precisar de
+    creds por tenant, é feature de **gestão de secrets** (ex.: GatewayConfig escrevendo num secret store),
+    não config-api.
+  - **3a** — guard lint (`infra/check_config_invariants.py`): `config_cache_direct_read` falha se algum
+    serviço fora do config-api ler `plughub:cfg:*` diretamente (`.get/.mget/.hget`). Trava a regressão do
+    padrão furado. 0 ofensores após Fases 1–3b.
+
+**Arco completo** (Fases 1–3). Bug ativo restante: nenhum. Os secrets em `{tenant}:config:...` ficam fora
+por design (cat. A).
 
 ## Invariante (proposto)
 

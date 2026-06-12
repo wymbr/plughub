@@ -362,7 +362,9 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // Carrega a MaskingAccessPolicy do tenant e filtra original_content
         // das mensagens para roles não autorizados.
         // primary e specialist nunca recebem original_content — operam via tokens.
-        const accessPolicy = await MaskingService.loadAccessPolicy(redis, tenant_id)
+        const accessPolicy = await MaskingService.loadAccessPolicy(
+          process.env["CONFIG_API_URL"] ?? "http://localhost:3600", tenant_id,
+        )
 
         // Determina o role do participante solicitante
         let requesterRole = "primary"
