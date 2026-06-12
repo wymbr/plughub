@@ -268,6 +268,23 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
         `instance_ttl` — env removido (routing-engine usa default 30s da spec; tunable→config-api se preciso).
         Guard 3→1 (detecção por assignment ativo). Ver CHANGELOG.
   - [ ] **F2** Migração por domínio (read-path-first): pools (UI, `pool-config-surface.md`) → TTLs → hooks → masking → ABAC/users → evaluation/pricing → defaults hardcoded
+    - **F2-pool (UI de pool)** — fatiado por grupo de campos. Decisões de modelagem 2026-06-12 em
+      `pool-config-surface.md` § Decisões: combos referenciam **pool_id** (não skill, estável a versões);
+      Transfer ≠ @mention (listas separadas); `max_concurrent_sessions` e `webhook_skill_id` ficam fora
+      do drawer (este último é config de canal); `supervisor_config.enabled` não exposto.
+      - [x] **F2.A** ✅ (2026-06-12) Hooks (on_human_start/on_human_end/post_human) — `HookListEditor` no
+            PoolsPage + tipos + i18n. Backend já persistia. Ver CHANGELOG.
+      - [x] **F2.B** ✅ (2026-06-12) Transfer (`escalation_pools`, merge-safe em supervisor_config) +
+            @mention (`mentionable_pools`, lista alias→pool) — `PoolListEditor`/`MentionListEditor`, seções
+            separadas no drawer. Backend já persistia. Ver CHANGELOG.
+      - [ ] **F2.C** Tipo & Capacidade: `agent_kind` (radio) + `session_reservation` (espelhar 422 Σ≤C;
+            guard queue⇒human na UI).
+      - [ ] **F2.D** Avaliação: coluna Prisma `evaluation` (Json) + handler expõe `{sampling_rate,
+            skill_id_template}` + `evaluation_template_id`; `agent_groups` (multi-select /v1/groups).
+            Rodar guard (0/0).
+      - [ ] **F2.E** Deploy — investigação-primeiro: confirmar se a plataforma consome o que a tela Deploy
+            grava (`PUT /slots/next`→promote→`PoolSkillSlot.current`→bootstrap→instância) antes de decidir
+            a profundidade da UI em resources/pool.
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

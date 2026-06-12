@@ -15,6 +15,9 @@ import {
   RoutingWeights,
   ROUTING_WEIGHTS_DEFAULTS,
   RoutingWeightsDinamicos,
+  PoolHooks,
+  PoolHookEntry,
+  PoolHookSide,
 } from '@/types'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
@@ -137,6 +140,189 @@ function PoolExceptionsEditor({
           {t('pools.exceptions.add')}
         </button>
       </div>
+    </div>
+  )
+}
+
+// ── Hooks editor ───────────────────────────────────────────────────────────────
+// Editor for one hook slot (a list of { pool, side, nps_on_disconnect } entries).
+// The stored reference is a pool_id (stable across skill-flow version changes);
+// the option label surfaces the pool's currently deployed skill as a visual hint.
+
+const EMPTY_HOOKS: PoolHooks = { on_human_start: [], on_human_end: [], post_human: [] }
+
+interface PoolOption { value: string; label: string }
+
+function HookListEditor({
+  entries, onChange, poolOptions,
+}: {
+  entries:     PoolHookEntry[]
+  onChange:    (e: PoolHookEntry[]) => void
+  poolOptions: PoolOption[]
+}) {
+  const { t } = useTranslation('configRecursos')
+
+  const add = () =>
+    onChange([...entries, { pool: '', side: 'agent', nps_on_disconnect: 'timeout' }])
+
+  const remove = (i: number) => onChange(entries.filter((_, idx) => idx !== i))
+
+  const update = (i: number, patch: Partial<PoolHookEntry>) =>
+    onChange(entries.map((e, idx) => idx === i ? { ...e, ...patch } : e))
+
+  return (
+    <div className="space-y-2">
+      {entries.length === 0 ? (
+        <p className="text-xs text-muted-light italic">{t('pools.hooks.none')}</p>
+      ) : entries.map((entry, i) => (
+        <div key={i} className="flex flex-col gap-1.5 px-2 py-2 bg-surface-muted border border-border rounded">
+          <div className="flex items-center gap-2">
+            <select
+              value={entry.pool}
+              onChange={e => update(i, { pool: e.target.value })}
+              className="flex-1 min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+            >
+              <option value="">{t('pools.hooks.selectPool')}</option>
+              {poolOptions.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <select
+              value={entry.side}
+              onChange={e => update(i, { side: e.target.value as PoolHookSide })}
+              className="w-28 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+            >
+              <option value="agent">{t('pools.hooks.sideAgent')}</option>
+              <option value="customer">{t('pools.hooks.sideCustomer')}</option>
+            </select>
+            <button type="button" onClick={() => remove(i)}
+              className="text-red hover:text-red-text text-sm flex-shrink-0">✕</button>
+          </div>
+          {entry.side === 'customer' && (
+            <div className="flex items-center gap-2 pl-1">
+              <span className="text-2xs text-muted-light">{t('pools.hooks.npsOnDisconnect')}:</span>
+              <select
+                value={entry.nps_on_disconnect}
+                onChange={e => update(i, { nps_on_disconnect: e.target.value as PoolHookEntry['nps_on_disconnect'] })}
+                className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+              >
+                <option value="timeout">{t('pools.hooks.npsTimeout')}</option>
+                <option value="skip">{t('pools.hooks.npsSkip')}</option>
+              </select>
+            </div>
+          )}
+        </div>
+      ))}
+      <button type="button" onClick={add}
+        className="text-xs text-secondary hover:text-primary transition-colors">
+        {t('pools.hooks.add')}
+      </button>
+    </div>
+  )
+}
+
+// ── Transfer destinations editor (escalation_pools: string[]) ───────────────────
+// A list of pool_ids the human agent can escalate/transfer the contact to.
+
+function PoolListEditor({
+  values, onChange, poolOptions, addLabel, noneLabel, selectLabel,
+}: {
+  values:      string[]
+  onChange:    (v: string[]) => void
+  poolOptions: PoolOption[]
+  addLabel:    string
+  noneLabel:   string
+  selectLabel: string
+}) {
+  const add    = () => onChange([...values, ''])
+  const remove = (i: number) => onChange(values.filter((_, idx) => idx !== i))
+  const update = (i: number, val: string) => onChange(values.map((v, idx) => idx === i ? val : v))
+
+  return (
+    <div className="space-y-2">
+      {values.length === 0 ? (
+        <p className="text-xs text-muted-light italic">{noneLabel}</p>
+      ) : values.map((val, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <select
+            value={val}
+            onChange={e => update(i, e.target.value)}
+            className="flex-1 min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">{selectLabel}</option>
+            {poolOptions.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => remove(i)}
+            className="text-red hover:text-red-text text-sm flex-shrink-0">✕</button>
+        </div>
+      ))}
+      <button type="button" onClick={add}
+        className="text-xs text-secondary hover:text-primary transition-colors">
+        {addLabel}
+      </button>
+    </div>
+  )
+}
+
+// ── @mention specialists editor (mentionable_pools: alias → pool) ───────────────
+
+interface MentionEntry { alias: string; pool: string }
+
+function MentionListEditor({
+  entries, onChange, poolOptions,
+}: {
+  entries:     MentionEntry[]
+  onChange:    (e: MentionEntry[]) => void
+  poolOptions: PoolOption[]
+}) {
+  const { t } = useTranslation('configRecursos')
+
+  const add    = () => onChange([...entries, { alias: '', pool: '' }])
+  const remove = (i: number) => onChange(entries.filter((_, idx) => idx !== i))
+  const update = (i: number, patch: Partial<MentionEntry>) =>
+    onChange(entries.map((e, idx) => idx === i ? { ...e, ...patch } : e))
+
+  // When a pool is picked and the alias is still empty, suggest the pool_id as alias.
+  const pickPool = (i: number, pool: string) =>
+    onChange(entries.map((e, idx) =>
+      idx === i ? { ...e, pool, alias: e.alias.trim() ? e.alias : pool } : e))
+
+  return (
+    <div className="space-y-2">
+      {entries.length === 0 ? (
+        <p className="text-xs text-muted-light italic">{t('pools.mention.none')}</p>
+      ) : entries.map((entry, i) => (
+        <div key={i} className="flex items-center gap-2">
+          <div className="flex items-center gap-1 w-32 shrink-0">
+            <span className="text-sm text-muted-light">@</span>
+            <input
+              type="text"
+              value={entry.alias}
+              placeholder={t('pools.mention.aliasPlaceholder')}
+              onChange={e => update(i, { alias: e.target.value })}
+              className="w-full min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+            />
+          </div>
+          <select
+            value={entry.pool}
+            onChange={e => pickPool(i, e.target.value)}
+            className="flex-1 min-w-0 text-sm border border-border-strong rounded px-2 py-1.5 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+          >
+            <option value="">{t('pools.mention.selectPool')}</option>
+            {poolOptions.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+          <button type="button" onClick={() => remove(i)}
+            className="text-red hover:text-red-text text-sm flex-shrink-0">✕</button>
+        </div>
+      ))}
+      <button type="button" onClick={add}
+        className="text-xs text-secondary hover:text-primary transition-colors">
+        {t('pools.mention.add')}
+      </button>
     </div>
   )
 }
@@ -297,6 +483,12 @@ const PoolsPage: React.FC = () => {
     // Queue treatment (queue-attended-model, skill-first): flow de fila + teto
     queue_skill_id:              '',
     queue_max_wait_s:            null as number | null,
+    // Lifecycle hooks (wrap-up / NPS / post) — pool references per slot
+    hooks:                       { ...EMPTY_HOOKS } as PoolHooks,
+    // Transfer/escalate destinations (supervisor_config.escalation_pools)
+    escalation_pools:            [] as string[],
+    // @mention specialists (mentionable_pools) as an editable alias→pool list
+    mention_pools:               [] as MentionEntry[],
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -418,6 +610,8 @@ const PoolsPage: React.FC = () => {
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_skill_id: '', queue_max_wait_s: null,
+      hooks: { ...EMPTY_HOOKS },
+      escalation_pools: [], mention_pools: [],
     })
     setCalExceptions([])
     setError('')
@@ -437,6 +631,15 @@ const PoolsPage: React.FC = () => {
       routing_weights:             buildDefaultWeights(pool),
       queue_skill_id:              pool.queue_config?.skill_id ?? '',
       queue_max_wait_s:            pool.queue_config?.max_wait_s ?? null,
+      hooks: {
+        on_human_start: pool.hooks?.on_human_start ?? [],
+        on_human_end:   pool.hooks?.on_human_end   ?? [],
+        post_human:     pool.hooks?.post_human     ?? [],
+      },
+      escalation_pools: pool.supervisor_config?.escalation_pools ?? [],
+      mention_pools: Object.entries(pool.mentionable_pools ?? {}).map(
+        ([alias, p]) => ({ alias, pool: p }),
+      ),
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -488,6 +691,42 @@ const PoolsPage: React.FC = () => {
 
       const poolId = editingPool ? editingPool.pool_id : formData.pool_id
 
+      // Hooks: drop entries with no pool selected; send empty slots to clear when
+      // the pool previously had hooks (otherwise omit to leave untouched).
+      const cleanHooks: PoolHooks = {
+        on_human_start: formData.hooks.on_human_start.filter(h => h.pool),
+        on_human_end:   formData.hooks.on_human_end.filter(h => h.pool),
+        post_human:     formData.hooks.post_human.filter(h => h.pool),
+      }
+      const hasHooks =
+        cleanHooks.on_human_start.length > 0 ||
+        cleanHooks.on_human_end.length > 0 ||
+        cleanHooks.post_human.length > 0
+      const hadHooks = !!(editingPool?.hooks && (
+        (editingPool.hooks.on_human_start?.length ?? 0) > 0 ||
+        (editingPool.hooks.on_human_end?.length ?? 0) > 0 ||
+        (editingPool.hooks.post_human?.length ?? 0) > 0
+      ))
+
+      // Transfer destinations → supervisor_config.escalation_pools. Merge-safe:
+      // preserve the rest of supervisor_config (enabled, intent_capability_map, …).
+      const cleanEscalation = formData.escalation_pools.filter(Boolean)
+      const hadSupervisor   = !!editingPool?.supervisor_config
+      const mergedSupervisor = {
+        ...(editingPool?.supervisor_config ?? {}),
+        enabled: editingPool?.supervisor_config?.enabled ?? false,
+        escalation_pools: cleanEscalation,
+      }
+
+      // @mention specialists → mentionable_pools (alias → pool). Drop incomplete rows.
+      const cleanMentions: Record<string, string> = {}
+      for (const m of formData.mention_pools) {
+        const alias = m.alias.trim()
+        if (alias && m.pool) cleanMentions[alias] = m.pool
+      }
+      const hadMentions = !!(editingPool?.mentionable_pools &&
+        Object.keys(editingPool.mentionable_pools).length > 0)
+
       const payload = {
         description:       formData.description,
         channel_types:     formData.channel_types,
@@ -511,6 +750,15 @@ const PoolsPage: React.FC = () => {
             ...(formData.queue_max_wait_s !== null ? { max_wait_s: formData.queue_max_wait_s } : {}),
           },
         } : (editingPool?.queue_config ? { queue_config: null } : {})),
+        // Lifecycle hooks: send when present; send empty slots to clear; else omit.
+        ...(hasHooks ? { hooks: cleanHooks }
+          : (hadHooks ? { hooks: { ...EMPTY_HOOKS } } : {})),
+        // Transfer destinations nested in supervisor_config (merge-safe). Send when
+        // present or to clear the list while preserving the rest of the object.
+        ...((cleanEscalation.length > 0 || hadSupervisor) ? { supervisor_config: mergedSupervisor } : {}),
+        // @mention specialists: send when present; send {} to clear; else omit.
+        ...(Object.keys(cleanMentions).length > 0 ? { mentionable_pools: cleanMentions }
+          : (hadMentions ? { mentionable_pools: {} } : {})),
       }
       if (editingPool) {
         await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)
@@ -614,6 +862,21 @@ const PoolsPage: React.FC = () => {
     { value: '', label: t('pools.fields.noneOption') },
     ...calendars.map(c => ({ value: c.id, label: c.name })),
   ]
+
+  // Pool options for hook/transfer/mention combos. The stored value is the
+  // pool_id (stable across skill versions); the label surfaces the pool's
+  // currently deployed skill as a hint. Excludes the pool being edited.
+  const poolComboOptions: PoolOption[] = pools
+    .filter(p => p.pool_id !== editingPool?.pool_id)
+    .map(p => ({
+      value: p.pool_id,
+      label: p.deployed_skill_id
+        ? `${p.pool_id} — ${p.deployed_skill_id}`
+        : p.pool_id,
+    }))
+
+  const setHookSlot = (slot: keyof PoolHooks, entries: PoolHookEntry[]) =>
+    setFormData(prev => ({ ...prev, hooks: { ...prev.hooks, [slot]: entries } }))
 
   // ── render ────────────────────────────────────────────────────────────────────
 
@@ -751,6 +1014,72 @@ const PoolsPage: React.FC = () => {
                 />
               </div>
             </div>
+          </div>
+
+          {/* ── Lifecycle hooks (wrap-up / NPS / post) ───────────────────────── */}
+          <div className="border-t border-border pt-4">
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.hooks.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.hooks.hint')}</p>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs font-medium text-dark">{t('pools.hooks.onHumanStart')}</p>
+                <p className="text-2xs text-muted-light mb-1">{t('pools.hooks.onHumanStartHint')}</p>
+                <HookListEditor
+                  entries={formData.hooks.on_human_start}
+                  onChange={e => setHookSlot('on_human_start', e)}
+                  poolOptions={poolComboOptions}
+                />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-dark">{t('pools.hooks.onHumanEnd')}</p>
+                <p className="text-2xs text-muted-light mb-1">{t('pools.hooks.onHumanEndHint')}</p>
+                <HookListEditor
+                  entries={formData.hooks.on_human_end}
+                  onChange={e => setHookSlot('on_human_end', e)}
+                  poolOptions={poolComboOptions}
+                />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-dark">{t('pools.hooks.postHuman')}</p>
+                <p className="text-2xs text-muted-light mb-1">{t('pools.hooks.postHumanHint')}</p>
+                <HookListEditor
+                  entries={formData.hooks.post_human}
+                  onChange={e => setHookSlot('post_human', e)}
+                  poolOptions={poolComboOptions}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ── Transfer / escalate destinations (supervisor_config.escalation_pools) ── */}
+          <div className="border-t border-border pt-4">
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.transfer.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.transfer.hint')}</p>
+            </div>
+            <PoolListEditor
+              values={formData.escalation_pools}
+              onChange={v => setFormData(prev => ({ ...prev, escalation_pools: v }))}
+              poolOptions={poolComboOptions}
+              addLabel={t('pools.transfer.add')}
+              noneLabel={t('pools.transfer.none')}
+              selectLabel={t('pools.transfer.selectPool')}
+            />
+          </div>
+
+          {/* ── @mention specialists (mentionable_pools: alias → pool) ───────────── */}
+          <div>
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.mention.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.mention.hint')}</p>
+            </div>
+            <MentionListEditor
+              entries={formData.mention_pools}
+              onChange={e => setFormData(prev => ({ ...prev, mention_pools: e }))}
+              poolOptions={poolComboOptions}
+            />
           </div>
 
           {/* ── Calendar ──────────────────────────────────────────────────────── */}

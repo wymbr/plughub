@@ -31,15 +31,15 @@ Legenda **UI hoje**: ✅ exposto · ❌ ausente (gap) · ➖ legado/skip.
 | `evaluation` | {sampling_rate, skill_id_template} | Amostragem + template do avaliador (Arc 6) | registration | ❌ |
 | `evaluation_template_id` | string? | ID explícito do template de avaliação | registration | ❌ |
 | `supervisor_config.enabled` | bool | Liga monitor de supervisor IA | registration | ❌ |
-| `supervisor_config.escalation_pools` | string[] | **Destinos do botão Transfer** (pool→pool) | registration | ❌ |
+| `supervisor_config.escalation_pools` | string[] | **Destinos do botão Transfer** (pool→pool) | registration | ✅ (F2.B, merge-safe) |
 | `supervisor_config.intent_capability_map` | map | Capacidades sugeridas por intent (Agent Assist) | registration | ❌ |
 | `supervisor_config.*` (history_window_days, insight_categories, sentiment_alert_threshold, relevance_model, proactive_delegation) | vários | Config do supervisor/copilot | registration | ❌ |
-| `mentionable_pools` | map alias→pool | Aliases `@mention` (convidar IA assist) | registration | ❌ |
+| `mentionable_pools` | map alias→pool | Aliases `@mention` (convidar IA assist) | registration | ✅ (F2.B) |
 | `agent_groups` | string[] | Agent Groups (Arc 9) a que o pool pertence | registration | ❌ |
 | `copilot_skill_id` | string? | (deprecated) skill do co-pilot | registration | ➖ |
-| `hooks.on_human_start[]` | {pool, side, nps_on_disconnect} | Hooks ao humano ENTRAR (ex.: copilot) | registration | ❌ |
-| `hooks.on_human_end[]` | {pool, side, nps_on_disconnect} | **Hooks ao FECHAR: wrap-up + NPS** (qual pool/skill, side, nps_on_disconnect) | registration | ❌ |
-| `hooks.post_human[]` | {pool, side, nps_on_disconnect} | Hooks após os on_human_end (qualidade/resumo) | registration | ❌ |
+| `hooks.on_human_start[]` | {pool, side, nps_on_disconnect} | Hooks ao humano ENTRAR (ex.: copilot) | registration | ✅ (F2.A) |
+| `hooks.on_human_end[]` | {pool, side, nps_on_disconnect} | **Hooks ao FECHAR: wrap-up + NPS** (qual pool/skill, side, nps_on_disconnect) | registration | ✅ (F2.A) |
+| `hooks.post_human[]` | {pool, side, nps_on_disconnect} | Hooks após os on_human_end (qualidade/resumo) | registration | ✅ (F2.A) |
 | `queue_config.skill_id` | string? | Flow de tratamento de fila | registration | ✅ |
 | `queue_config.max_wait_s` | int | Teto de espera (max_wait_exceeded) | registration | ✅ (timeout) |
 | `queue_config.agent_type_id` | string | (legacy) | registration | ➖ |
@@ -54,6 +54,25 @@ Legenda **UI hoje**: ✅ exposto · ❌ ausente (gap) · ➖ legado/skip.
 - **"Wrap-up"** → `hooks.on_human_end[]` com `{pool: wrapup_ia, side: agent}`. ❌ não exposto.
 - **"Timeouts"** → `sla_target_ms` ✅, `max_reply_time_ms` ✅, `queue_config.max_wait_s` ✅. Já cobertos.
 - **Transfer** → `supervisor_config.escalation_pools` ❌ (fix de contrato aplicado 2026-06-11; falta UI).
+
+## Decisões de modelagem (F2, 2026-06-12, com o usuário)
+
+- **Combos referenciam pool, não skill_id**: hooks, `escalation_pools` (Transfer) e `mentionable_pools`
+  (@mention) guardam **pool_id**. Motivo: o pool é estável a mudanças de versão da skill-flow — referência
+  por skill forçaria reescrever todas as referências a cada deploy. O label do combo exibe a
+  `deployed_skill_id` corrente só como dica visual.
+- **Transfer ≠ @mention** (são listas distintas): `escalation_pools` = destinos de escalate (transfere o
+  contato para outra fila); `mentionable_pools` = lista de pools de especialistas acionáveis pelo agente
+  humano via `@alias` (assist/conferência, NÃO transfere). Seções separadas na UI.
+- **`max_concurrent_sessions` fora do editável**: enforcement no routing é *deferred* e na prática se
+  sobrepõe a `session_reservation` (que vira a única alavanca de capacidade na UI).
+- **`webhook_skill_id` fora do drawer de pool**: webhook é um canal — ao ser acionado pede um pool ao Core
+  como qualquer canal, e o vínculo endpoint→pool já vive em `Configurations/Channels` (channel endpoint).
+  *(Consolidação futura: rota de webhook 100% via channel endpoints; `webhook_skill_id` é candidato a
+  cleanup.)*
+- **`supervisor_config.enabled` não exposto**: a ativação de copilot/assist é coberta por hook
+  `on_human_start`. A UI só persiste `escalation_pools` dentro de `supervisor_config` (merge-safe,
+  preservando `intent_capability_map` etc.); `enabled` mantém o valor existente (default `false`).
 
 ## Gap a fechar (não lido/editável na UI hoje)
 

@@ -53,6 +53,43 @@
       "label": "Context Store Visibility",
       "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included."
     },
+    "hooks": {
+      "label": "Lifecycle Hooks",
+      "hint": "Specialists (pools) triggered at points of the human service. Each hook recruits an available instance from the chosen pool.",
+      "onHumanStart": "When the human agent joins",
+      "onHumanStartHint": "e.g. activate copilot / context assistant.",
+      "onHumanEnd": "When the service ends",
+      "onHumanEndHint": "e.g. wrap-up (agent side) + NPS (customer side).",
+      "postHuman": "After the end hooks",
+      "postHumanHint": "e.g. quality agent, automatic summary.",
+      "pool": "Specialist pool",
+      "selectPool": "— Select a pool —",
+      "side": "Side",
+      "sideAgent": "Agent",
+      "sideCustomer": "Customer",
+      "npsOnDisconnect": "If customer disconnected",
+      "npsSkip": "Skip",
+      "npsTimeout": "Trigger",
+      "add": "+ Add hook",
+      "none": "No hooks configured.",
+      "deployedSkill": "deploy: {{skill}}"
+    },
+    "transfer": {
+      "label": "Transfer / Escalate",
+      "hint": "Pools the human agent can transfer (escalate) the contact to. Shown in the Console Transfer combo.",
+      "add": "+ Add destination",
+      "none": "No transfer destinations.",
+      "selectPool": "— Select a pool —"
+    },
+    "mention": {
+      "label": "@mention Specialists",
+      "hint": "Specialist pools the human agent can invoke via @alias (assist / conference — does not transfer the contact).",
+      "add": "+ Add specialist",
+      "none": "No specialists configured.",
+      "alias": "Alias",
+      "aliasPlaceholder": "e.g. copilot",
+      "selectPool": "— Select a pool —"
+    },
     "routingFixed": {
       "label": "Routing Weights — Fixed",
       "hint": "Importance of each competency skill in this pool. Set to 0 to ignore the skill in routing.",

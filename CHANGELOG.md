@@ -2,6 +2,59 @@
 
 ---
 
+## Config Consolidation — F2.B: Transfer + @mention na UI de pool (2026-06-12)
+
+Segunda fatia da Fase 2. Expõe `supervisor_config.escalation_pools` (destinos do botão Transfer do
+Console) e `mentionable_pools` (especialistas @mention) na tela `config/resources/pool` — antes só no YAML.
+
+**Modelagem**: Transfer e @mention são **listas distintas** (Transfer = escalate/transfere o contato;
+@mention = convida especialista em assist/conferência, não transfere). Ambas referenciam **pool_id**
+(estável a versões de skill). `escalation_pools` é gravado **merge-safe** dentro de `supervisor_config`
+(preserva `enabled`, `intent_capability_map`, etc.; `enabled` mantém valor existente / default `false` —
+não exposto na UI por decisão: ativação de copilot/assist é coberta por hook `on_human_start`).
+`mentionable_pools` é editado como lista alias→pool; o alias (`@handle`) é auto-sugerido do pool_id.
+
+**Mudança (platform-ui apenas — backend já persiste/retorna ambos)**:
+- `PoolsPage.tsx`: componentes `PoolListEditor` (Transfer) e `MentionListEditor` (@mention) + duas seções
+  no drawer; submit faz merge-safe de supervisor_config e converte a lista de menções em Record.
+- i18n `configRecursos.pools.transfer.*` e `pools.mention.*` (en + pt-BR).
+
+Sem mudança de backend → guard não afetado. Build: `platform-ui`. **Validação (usuário)**: editar
+`retencao_humano` → Transfer deve listar `sac_ia`, `reembolso_ia`, `portabilidade_ia`; @mention deve
+listar `@copilot→copilot_sac`, `@auth→auth_ia`, `@auth_form→auth_form_ia` (carregados do YAML). Adicionar/
+remover, salvar, confirmar via `GET /v1/pools` (supervisor_config.escalation_pools + mentionable_pools).
+Confirmar no Console que o combo Transfer e o @mention refletem. **Próximo**: F2.C (agent_kind +
+session_reservation).
+
+---
+
+## Config Consolidation — F2.A: Hooks de ciclo de vida na UI de pool (2026-06-12)
+
+Primeira fatia da Fase 2 (UI de pool, `pool-config-surface.md`). Expõe `hooks` (on_human_start /
+on_human_end / post_human) na tela `config/resources/pool` — antes só editável via YAML. Destrava
+wrap-up + NPS configuráveis pela UI.
+
+**Decisões de modelagem (com o usuário)**: os combos referenciam **pool_id**, não skill_id — o pool é
+estável a mudanças de versão da skill-flow (referência por skill forçaria reescrever todas as referências
+a cada deploy). O label do combo mostra a skill deployada (`deployed_skill_id`) só como dica visual.
+`side` (agent/customer) é mantido porque distingue wrap-up de NPS; `nps_on_disconnect` só aparece quando
+`side=customer`.
+
+**Mudança (platform-ui apenas — backend já persiste/retorna `hooks` via `PoolRegistrationSchema`)**:
+- `types/index.ts`: `Pool`/`CreatePoolInput`/`UpdatePoolInput` estendidos com os campos do gap (hooks,
+  supervisor_config, mentionable_pools, agent_kind, session_reservation, evaluation, agent_groups,
+  webhook_skill_id, deployed_skill_id read-only) + tipos `PoolHooks`/`PoolHookEntry`.
+- `PoolsPage.tsx`: componente `HookListEditor` (lista por slot) + 3 listas no drawer; payload envia
+  `hooks` quando presente, slots vazios para limpar, ou omite. Combo de pool rotulado pela skill.
+- i18n `configRecursos.pools.hooks.*` (en + pt-BR).
+
+Sem mudança de backend → guard não afetado. Build: `platform-ui`. **Validação (usuário)**: editar
+`retencao_humano` → ver wrap-up (wrapup_ia, agent) + NPS (nps_ia, customer, skip) já carregados; salvar e
+confirmar persistência via `GET /v1/pools`. **Próximo**: F2.B (Transfer `escalation_pools` +
+@mention `mentionable_pools`, listas separadas).
+
+---
+
 ## Config Consolidation — F1.1b: seed.py aposentado, pools com fonte única (2026-06-11)
 
 Fecha a Fase 1 da consolidação. O `infra/seed/seed.py` (serviço `demo-seed`) ainda definia pools (lista

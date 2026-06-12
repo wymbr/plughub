@@ -53,6 +53,43 @@
       "label": "Visibilidade do Context Store",
       "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos."
     },
+    "hooks": {
+      "label": "Hooks de Ciclo de Vida",
+      "hint": "Especialistas (pools) acionados em pontos do atendimento humano. Cada hook recruta uma instância disponível do pool escolhido.",
+      "onHumanStart": "Ao entrar o agente humano",
+      "onHumanStartHint": "Ex.: ativar copilot / assistente de contexto.",
+      "onHumanEnd": "Ao encerrar o atendimento",
+      "onHumanEndHint": "Ex.: wrap-up (lado agente) + NPS (lado cliente).",
+      "postHuman": "Após os hooks de encerramento",
+      "postHumanHint": "Ex.: agente de qualidade, resumo automático.",
+      "pool": "Pool especialista",
+      "selectPool": "— Selecione um pool —",
+      "side": "Lado",
+      "sideAgent": "Agente",
+      "sideCustomer": "Cliente",
+      "npsOnDisconnect": "Se o cliente desconectou",
+      "npsSkip": "Pular",
+      "npsTimeout": "Disparar",
+      "add": "+ Adicionar hook",
+      "none": "Nenhum hook configurado.",
+      "deployedSkill": "deploy: {{skill}}"
+    },
+    "transfer": {
+      "label": "Transferência / Escalonamento",
+      "hint": "Pools para onde o agente humano pode transferir (escalar) o contato. Aparece no combo Transfer do Console.",
+      "add": "+ Adicionar destino",
+      "none": "Nenhum destino de transferência.",
+      "selectPool": "— Selecione um pool —"
+    },
+    "mention": {
+      "label": "Especialistas @mention",
+      "hint": "Pools de especialistas acionáveis pelo agente humano via @alias (assist / conferência — não transfere o contato).",
+      "add": "+ Adicionar especialista",
+      "none": "Nenhum especialista configurado.",
+      "alias": "Alias",
+      "aliasPlaceholder": "ex.: copilot",
+      "selectPool": "— Selecione um pool —"
+    },
     "routingFixed": {
       "label": "Pesos de Roteamento — Fixos",
       "hint": "Importância de cada competency skill neste pool. Defina 0 para ignorar a skill no roteamento.",

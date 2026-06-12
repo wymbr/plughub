@@ -91,28 +91,104 @@ export interface QueueConfig {
   skill_id?: string
 }
 
+// ── Pool lifecycle hooks (spec Pool Hooks v1 / PoolHooksSchema) ───────────────
+export type PoolHookSide = 'agent' | 'customer'
+export type PoolHookNpsOnDisconnect = 'skip' | 'timeout'
+
+export interface PoolHookEntry {
+  /** pool_id de onde o especialista é recrutado (wrapup_ia, nps_ia, …). */
+  pool: string
+  /** agent = interage com o agente humano; customer = interage com o cliente. */
+  side: PoolHookSide
+  /** Só relevante para side=customer: skip = não dispara se o cliente desconectou. */
+  nps_on_disconnect: PoolHookNpsOnDisconnect
+}
+
+export interface PoolHooks {
+  on_human_start: PoolHookEntry[]
+  on_human_end:   PoolHookEntry[]
+  post_human:     PoolHookEntry[]
+}
+
+/**
+ * supervisor_config — tipado de forma frouxa de propósito: a UI edita apenas
+ * `enabled` e `escalation_pools`, mas precisa preservar campos não editados
+ * (intent_capability_map, relevance_model, …) no write (merge-safe).
+ */
+export interface PoolSupervisorConfig {
+  enabled?: boolean
+  escalation_pools?: string[]
+  [key: string]: unknown
+}
+
+/** evaluation config persistido no pool (sampling + template). */
+export interface PoolEvaluationConfig {
+  sampling_rate?: number
+  skill_id_template?: string
+}
+
 export interface Pool {
   pool_id: string
   tenant_id: string
+  /** Tipagem do pool — governa gates C_ai/C_human e a regra queue⇒human. */
+  agent_kind?: 'human' | 'ai' | null
   description?: string
   channel_types: string[]
   sla_target_ms: number
   /** Maximum reply time per customer message (ms). Null = no per-message SLA. */
   max_reply_time_ms?: number | null
+  /** Arc 19: skill "DIN" do pool webhook (obrigatório quando channel inclui webhook). */
+  webhook_skill_id?: string | null
+  /** Throttle opcional de backpressure downstream (webhook). */
+  max_concurrent_sessions?: number | null
+  /** Fatia reservada de sessões simultâneas (admissão híbrida). */
+  session_reservation?: number | null
   /** Queue agent + max_wait_s (queue-attended-model). Null = tenant default. */
   queue_config?: QueueConfig | null
+  /** Hooks de ciclo de vida (wrap-up/NPS/post). */
+  hooks?: PoolHooks | null
+  /** Config do supervisor IA + destinos de Transfer (escalation_pools). */
+  supervisor_config?: PoolSupervisorConfig | null
+  /** Mapa alias → pool_id dos agentes endereçáveis via @mention. */
+  mentionable_pools?: Record<string, string> | null
+  /** IDs dos Agent Groups (Arc 9) a que o pool pertence. */
+  agent_groups?: string[]
+  /** Amostragem + template do avaliador (Arc 6). */
+  evaluation?: PoolEvaluationConfig | null
+  /** ID explícito do template de avaliação. */
+  evaluation_template_id?: string | null
   calendar_id?: string
   /** ContextoTab namespace visibility config. Null = use platform default. */
   context_visibility?: { operator_namespaces: string[] } | null
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
+  /** Read-only: skill atualmente deployada (PoolSkillSlot.current) — anexado pelo GET. */
+  deployed_skill_id?: string
+  /** Read-only: concorrência do deploy atual. */
+  deployed_max_concurrent_sessions?: number
   status: string
   created_at: string
   updated_at: string
 }
 
-export interface CreatePoolInput {
+/** Campos do gap compartilhados por Create/Update (todos opcionais). */
+interface PoolGapFields {
+  agent_kind?: 'human' | 'ai' | null
+  webhook_skill_id?: string | null
+  max_concurrent_sessions?: number | null
+  session_reservation?: number | null
+  max_reply_time_ms?: number | null
+  hooks?: PoolHooks | null
+  supervisor_config?: PoolSupervisorConfig | null
+  mentionable_pools?: Record<string, string> | null
+  agent_groups?: string[]
+  evaluation?: PoolEvaluationConfig | null
+  evaluation_template_id?: string | null
+  context_visibility?: { operator_namespaces: string[] } | null
+}
+
+export interface CreatePoolInput extends PoolGapFields {
   pool_id: string
   description?: string
   channel_types: string[]
@@ -126,7 +202,7 @@ export interface CreatePoolInput {
   queue_config?: QueueConfig | null
 }
 
-export interface UpdatePoolInput {
+export interface UpdatePoolInput extends PoolGapFields {
   description?: string
   channel_types?: string[]
   sla_target_ms?: number
