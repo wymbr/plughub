@@ -667,17 +667,20 @@ function invalidateContextMaskingCache(tenantId: string): void {
   contextMaskingConfigCache.delete(tenantId)
 }
 
+// config-http-propagation arc: masking config comes from the Config API HTTP
+// endpoint (not direct Redis reads). The 60s TTL cache above bounds fetch load.
+const CONFIG_API_URL = process.env["CONFIG_API_URL"] ?? "http://localhost:3600"
+
 /**
  * Resolve the ContextMaskingConfig for a tenant, with in-process TTL cache.
- * Delegates to MaskingService.loadContextMaskingConfig() on a cache miss.
+ * Delegates to MaskingService.loadContextMaskingConfig() (Config API HTTP) on miss.
  */
 async function getContextMaskingConfig(
-  redis:    { get(key: string): Promise<string | null> },
   tenantId: string,
 ): Promise<ContextMaskingConfig> {
   const cached = contextMaskingConfigCache.get(tenantId)
   if (cached && cached.expiresAt > Date.now()) return cached.config
-  const config = await MaskingService.loadContextMaskingConfig(redis, tenantId)
+  const config = await MaskingService.loadContextMaskingConfig(CONFIG_API_URL, tenantId)
   contextMaskingConfigCache.set(tenantId, { config, expiresAt: Date.now() + CONTEXT_MASKING_CACHE_TTL_MS })
   return config
 }
@@ -824,11 +827,10 @@ async function applyContextMaskingDynamic(
   rawHash:      Record<string, string>,
   role:         string,
   allowedNs:    string[],
-  redis:        { get(key: string): Promise<string | null> },
   tenantId:     string,
 ): Promise<Record<string, unknown>> {
   const isSupervisor = ["supervisor", "admin", "evaluator", "reviewer"].includes(role)
-  const config       = await getContextMaskingConfig(redis, tenantId)
+  const config       = await getContextMaskingConfig(tenantId)
   const result: Record<string, unknown> = {}
 
   for (const [tag, raw] of Object.entries(rawHash)) {
@@ -1053,7 +1055,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         try {
           const hash = await redis.hgetall(`${tenantId}:ctx:${sessionId}`)
           if (hash && Object.keys(hash).length > 0) {
-            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, redis, tenantId)
+            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, tenantId)
           }
         } catch { /* non-fatal */ }
       }

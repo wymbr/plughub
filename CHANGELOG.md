@@ -2,6 +2,48 @@
 
 ---
 
+## Bugfix — platform-ui nginx: PUT /config/masking/{key} dava 405 (2026-06-12)
+
+Surfaceado ao validar a Fase 2 (salvar `context_rules` pela Masking page → 405). O nginx da platform-ui
+(build de produção) tinha a location de rotas SPA `^/config/(access|billing|platform|masking|recursos)(/|$)`
+**antes** do proxy do config-api. O `(/|$)` capturava `/config/masking/context_rules` (a escrita do
+config-api) junto com `/config/masking` (a página) — `masking` é nome de página E de namespace do
+config-api. O PUT caía no `try_files` (estático) → **405**. (webchat não colidia: não é nome de página.)
+
+**Fix**: regex da location SPA trocada de `(/|$)` para `/?$` (casa só a página exata; escritas de 2
+segmentos `/config/{ns}/{key}` caem no proxy do config-api) + incluídas as páginas que faltavam
+(`resources|channels|canais|groups|calendars`) — antes quebravam em hard-refresh. Build: `platform-ui`.
+
+---
+
+## Config HTTP Propagation — Fase 2: mcp-server masking (2026-06-12)
+
+Conserta o `context_rules` (masking de campo do ContextStore) e fecha o item "masking" da Fase 2 da
+config-consolidation (§8 item 4). Mesmo bug das Fases anteriores: `masking.ts::loadContextMaskingConfig`
+lia `plughub:cfg:...:masking:context_rules` direto do Redis (cache TTL transitória; default global nunca
+escrito de forma durável — `saveContextMaskingConfig` era dead-code sem chamador), então quase sempre caía
+no `DEFAULT_CONTEXT_MASKING_CONFIG` independentemente do valor configurado.
+
+**Correção**:
+- `mcp-server lib/masking.ts`: `loadContextMaskingConfig(configApiUrl, tenantId)` busca via
+  `GET /config/masking?tenant_id=` (HTTP, resolve tenant→global), valida com `ContextMaskingConfigSchema`,
+  fallback `DEFAULT_CONTEXT_MASKING_CONFIG`. Removido o `saveContextMaskingConfig` dead-code. O cache TTL
+  60s in-process do `server.ts` (`getContextMaskingConfig`) foi mantido; `redis` saiu da assinatura de
+  `getContextMaskingConfig`/`applyContextMaskingDynamic`.
+- `config-api seed.py`: novo `masking.context_rules` global (= conteúdo do JSON órfão) — agora
+  `GET /config/masking` retorna o default editável.
+- `infra/config-seed/masking-context-rules.json` **aposentado** (órfão — nada o carregava; `git rm`).
+- `CONFIG_API_URL` no serviço mcp-server-plughub (compose). Comentário de `@plughub/schemas/audit.ts`
+  corrigido (descrevia leitura direta do Redis).
+
+Sem env novo de negócio → guard 0/0. Builds: `config-api` (rodar seed) + `mcp-server-plughub` +
+`@plughub/schemas` (se buildado à parte). **Validação (usuário)**: rodar o seed do config-api (cria
+`masking.context_rules`); alterar `context_rules` na Masking page → `supervisor_state` reflete o novo
+mascaramento (cache TTL ≤ 60s). **Próximo**: Fase 3 (varredura: `authorized_roles`,
+`{tenant}:config:sms|whatsapp:*`; + guard lint opcional).
+
+---
+
 ## Config HTTP Propagation — Fase 1: channel-gateway (conserta F1.2 + F2-TTL) (2026-06-12)
 
 Abre o arco `docs/arcos/config-http-propagation.md`. **Diagnóstico**: o padrão "config-api vence via

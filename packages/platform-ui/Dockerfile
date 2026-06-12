@@ -140,9 +140,13 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
-    # SPA routes under /config — must come BEFORE config-api proxy\n\
-    # These are React Router routes; hard refresh must serve index.html, not config-api\n\
-    location ~ ^/config/(access|billing|platform|masking|recursos)(/|$) {\n\
+    # SPA routes under /config — must come BEFORE config-api proxy.\n\
+    # These are React Router PAGE routes (single segment). Use /?$ so only the exact\n\
+    # page (optionally trailing slash) is served by the SPA — config-api key writes\n\
+    # like /config/masking/context_rules (2 segments) fall through to the proxy below.\n\
+    # (`masking` is both a page name and a config-api namespace, so the old\n\
+    #  ^/config/masking(/|$) wrongly captured PUT /config/masking/context_rules → 405.)\n\
+    location ~ ^/config/(access|billing|platform|masking|recursos|resources|channels|canais|groups|calendars)/?$ {\n\
         try_files $uri $uri/ /index.html;\n\
     }\n\
 \n\

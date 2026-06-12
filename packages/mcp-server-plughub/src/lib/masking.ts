@@ -289,54 +289,42 @@ export class MaskingService {
    * It applies visual presentation rules per tag name × caller role when
    * delivering the ContextStore snapshot via GET /api/supervisor_state.
    *
-   * Lookup chain (first found wins):
-   *   1. plughub:cfg:{tenantId}:masking:context_rules — tenant-level override
-   *   2. plughub:cfg:__global__:masking:context_rules  — global default (seeded from
-   *      infra/config-seed/masking-context-rules.json)
-   *   3. DEFAULT_CONTEXT_MASKING_CONFIG — hardcoded fallback matching
-   *      the original TAG_PII_CATEGORY behaviour exactly
+   * config-http-propagation arc: fetches via the Config API HTTP endpoint
+   * (`GET /config/masking?tenant_id=`), which resolves tenant override → global
+   * default. Replaces the previous direct Redis reads of `plughub:cfg:...` — that
+   * key is the Config API's 60s TTL cache (only transiently populated after an API
+   * read), and the global default was never durably written, so the reader almost
+   * always fell back to DEFAULT_CONTEXT_MASKING_CONFIG regardless of the configured
+   * value. The caller (server.ts getContextMaskingConfig) wraps this in a 60s
+   * in-process TTL cache.
    *
-   * Result is validated against ContextMaskingConfigSchema before use.
-   * Invalid JSON or schema mismatches fall through to the next tier.
+   * Result is validated against ContextMaskingConfigSchema. On HTTP error, missing
+   * value, or schema mismatch it falls back to DEFAULT_CONTEXT_MASKING_CONFIG.
    *
-   * Spec: docs/guias/context-masking-rules.md
+   * Spec: docs/arcos/config-http-propagation.md, docs/guias/context-masking-rules.md
    */
   static async loadContextMaskingConfig(
-    redis:    { get(key: string): Promise<string | null> },
-    tenantId: string
+    configApiUrl: string,
+    tenantId:     string
   ): Promise<ContextMaskingConfig> {
-    const keys = [
-      `plughub:cfg:${tenantId}:masking:context_rules`,
-      `plughub:cfg:__global__:masking:context_rules`,
-    ]
-    for (const key of keys) {
-      try {
-        const raw = await redis.get(key)
-        if (!raw) continue
-        const parsed = ContextMaskingConfigSchema.safeParse(JSON.parse(raw))
-        if (parsed.success) return parsed.data
-      } catch { /* fall through to next tier */ }
-    }
+    try {
+      const base = configApiUrl.replace(/\/$/, "")
+      const url  = `${base}/config/masking?tenant_id=${encodeURIComponent(tenantId)}`
+      const resp = await fetch(url, { signal: AbortSignal.timeout(5000) })
+      if (resp.ok) {
+        const body    = await resp.json() as Record<string, unknown>
+        const entries = (body["entries"] ?? body) as Record<string, unknown>
+        const rawEntry = entries["context_rules"]
+        // Config API may wrap the value in a { value, ... } envelope or return it flat.
+        const value = (rawEntry && typeof rawEntry === "object" && "value" in (rawEntry as object))
+          ? (rawEntry as { value: unknown }).value
+          : rawEntry
+        if (value != null) {
+          const parsed = ContextMaskingConfigSchema.safeParse(value)
+          if (parsed.success) return parsed.data
+        }
+      }
+    } catch { /* fall through to default */ }
     return DEFAULT_CONTEXT_MASKING_CONFIG
-  }
-
-  /**
-   * Persists a ContextMaskingConfig to the Config API Redis key.
-   *
-   * @param scope "global" writes the global default; a tenant_id string writes
-   *              a tenant-level override.
-   *
-   * Used by:
-   *   - the seed loader (scope = "global") on first startup
-   *   - the MaskingPage UI admin endpoint (scope = tenantId)
-   */
-  static async saveContextMaskingConfig(
-    redis:    { set(key: string, value: string): Promise<unknown> },
-    scope:    "global" | string,
-    config:   ContextMaskingConfig
-  ): Promise<void> {
-    const tenantPart = scope === "global" ? "__global__" : scope
-    const key = `plughub:cfg:${tenantPart}:masking:context_rules`
-    await redis.set(key, JSON.stringify(config))
   }
 }

@@ -92,9 +92,10 @@ export type MaskedResult = z.infer<typeof MaskedResultSchema>
  * These are purely display semantics — they carry no implied data-type semantics
  * (e.g. "last_4" works on CPF, contract number, credit card, etc.).
  *
- * Stored in Config API: namespace "masking", key "context_rules"
- * Redis: plughub:cfg:{tenantId}:masking:context_rules (tenant override)
- *        plughub:cfg:__global__:masking:context_rules  (global default)
+ * Stored in Config API: namespace "masking", key "context_rules" (global default
+ * seeded in config-api seed.py; tenant overrides via the Masking page).
+ * Consumed by mcp-server via GET /config/masking (config-http-propagation arc) —
+ * not by direct Redis reads.
  */
 export const ContextMaskingTypeSchema = z.enum([
   "plain",        // no masking — show value as-is

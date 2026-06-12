@@ -308,10 +308,13 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
   (Session/RoutingConfigCache).
   - [x] **Fase 1** ✅ (2026-06-12) channel-gateway `WebchatConfigCache` (HTTP + config.changed); resolvers
         leem do cache; `config_api_url`/`PLUGHUB_CONFIG_API_URL`; testes reescritos. Conserta F1.2+F2-TTL.
-  - [ ] **Fase 2** mcp-server masking via HTTP + seed `masking.context_rules` + aposentar JSON órfão e
-        `saveContextMaskingConfig` dead-code (substitui o item 4 "masking" do §8).
-  - [ ] **Fase 3** varredura de outros leitores diretos (`{tenant}:config:sms|whatsapp:*` etc.) + doc +
-        guard lint opcional contra leitura direta das chaves do config-api.
+  - [x] **Fase 2** ✅ (2026-06-12) mcp-server masking via HTTP (`GET /config/masking`) + seed
+        `masking.context_rules` global + aposentado JSON órfão e `saveContextMaskingConfig` dead-code.
+        Fecha o item 4 "masking" do §8. Ver CHANGELOG.
+  - [ ] **Fase 3** varredura de outros leitores diretos: `authorized_roles` (mcp-server, tem caminho
+        legado durável que funciona — migrar por consistência); `{tenant}:config:sms|whatsapp:*`
+        (credenciais de canal — caminho GatewayConfig, avaliar). + guard lint opcional contra leitura
+        direta das chaves do config-api fora do config-api.
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

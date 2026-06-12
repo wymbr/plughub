@@ -587,6 +587,7 @@ services:
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
+      CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:

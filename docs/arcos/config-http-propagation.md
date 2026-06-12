@@ -42,10 +42,14 @@ config-api. Default no código continua como fallback (config-api indisponível)
   startup. `resolve_attachment_expiry_days`/`resolve_ws_auth_timeout_s` passam a ler do cache (não do
   Redis); assinaturas mantidas por compat dos call-sites. Setting `config_api_url` + env
   `PLUGHUB_CONFIG_API_URL`. Testes reescritos (cache, não Redis). Ver CHANGELOG.
-- **Fase 2 (pendente) — mcp-server masking.** `loadContextMaskingConfig` busca `context_rules`
-  (+ `authorized_roles`) via HTTP do config-api + cache in-process + invalidação; seed
-  `masking.context_rules` global no config-api; aposentar `masking-context-rules.json` órfão +
-  `saveContextMaskingConfig` dead-code + comentário stale.
+- **Fase 2 ✅ (2026-06-12) — mcp-server masking.** `loadContextMaskingConfig` passou a buscar
+  `context_rules` via `GET /config/masking?tenant_id=` (HTTP) com validação `ContextMaskingConfigSchema` →
+  fallback `DEFAULT_CONTEXT_MASKING_CONFIG`; o cache TTL 60s in-process do `server.ts` foi mantido.
+  Removidas as leituras diretas de `plughub:cfg:...` e o `saveContextMaskingConfig` dead-code. Seed
+  `masking.context_rules` global no config-api (= conteúdo do JSON órfão). `CONFIG_API_URL` no
+  mcp-server. JSON órfão `infra/config-seed/masking-context-rules.json` aposentado (git rm). Ver CHANGELOG.
+  *Pendente derivado*: `authorized_roles` (stream masking) ainda lê do Redis, mas tem caminho durável
+  legado `{tenant}:masking:access_policy` que funciona — migrar na Fase 3 por consistência.
 - **Fase 3 (pendente) — varredura + guard.** Achar outros leitores diretos de `:config:`/`plughub:cfg:`
   fora do config-api (ex.: credenciais `{tenant}:config:sms|whatsapp:...` — caminho de GatewayConfig, a
   avaliar) e migrar/registrar. Opcional: lint no guard que falhe em leitura direta dessas chaves fora do

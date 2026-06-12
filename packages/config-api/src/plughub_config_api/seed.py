@@ -411,6 +411,34 @@ _SEED: list[tuple[str, str, object, str]] = [
         "[DEPRECATED — use audit_policy.capture_output_default] "
         "Whether MCP tool call outputs are captured in audit records by default."
     ),
+    # context_rules genuinely lives under the 'masking' namespace (readers/writers:
+    # mcp-server lib/masking.ts, MaskingPage putConfig('masking','context_rules')).
+    # The audit_policy rename covered authorized_roles/retention/capture, NOT this.
+    # config-http-propagation arc: seeded here as the single global default so
+    # GET /config/masking returns it; mcp-server reads it via HTTP (no more orphan
+    # infra/config-seed/masking-context-rules.json, no in-code DEFAULT-only path).
+    # Shape mirrors @plughub/schemas ContextMaskingConfigSchema / DEFAULT_CONTEXT_MASKING_CONFIG.
+    (
+        "masking", "context_rules",
+        {
+            "default_unmatched_operator": "plain",
+            "rules": [
+                {"pattern": "caller.cpf",              "role": "operator",   "type": "last_2",       "label": "CPF do cliente"},
+                {"pattern": "caller.cnpj",             "role": "operator",   "type": "last_2",       "label": "CNPJ do cliente"},
+                {"pattern": "caller.telefone",         "role": "operator",   "type": "last_4",       "label": "Telefone do cliente"},
+                {"pattern": "caller.email",            "role": "operator",   "type": "email_domain", "label": "E-mail do cliente"},
+                {"pattern": "account.numero_contrato", "role": "operator",   "type": "last_4",       "label": "Número do contrato"},
+                {"pattern": "account.valor_fatura",    "role": "operator",   "type": "financial",    "label": "Valor da fatura"},
+                {"pattern": "account.limite_credito",  "role": "operator",   "type": "hidden",       "label": "Limite de crédito (ocultado para operadores)"},
+                {"pattern": "caller.*",                "role": "operator",   "type": "last_4",       "label": "Dados do cliente — catch-all (campos não mapeados)"},
+                {"pattern": "account.*",               "role": "operator",   "type": "financial",    "label": "Dados da conta — catch-all (campos não mapeados)"},
+                {"pattern": "*",                       "role": "supervisor", "type": "plain",        "label": "Supervisor e admin veem todos os campos sem máscara"},
+            ],
+        },
+        "ContextStore field-level masking rules (per tag × role). Global default; "
+        "tenant overrides set via the Masking page. Consumed by mcp-server via "
+        "GET /config/masking (config-http-propagation arc)."
+    ),
 
     # ── pricing ───────────────────────────────────────────────────────────────
     # Source: packages/pricing-api — unit prices per resource type.
