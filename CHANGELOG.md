@@ -2,6 +2,28 @@
 
 ---
 
+## Config Consolidation — F2-pool: fechamento (D dissolvida, E resolvida) (2026-06-12)
+
+Fecha a UI de pool da Fase 2. F2.A–C expuseram hooks, Transfer/@mention, agent_kind e session_reservation.
+As duas últimas fatias se resolveram **sem código de UI**, por aplicação do invariante de fonte única:
+
+- **F2.D dissolvida**: `evaluation`/`evaluation_template_id` são donos de **Quality → Campaigns**
+  (evaluation-api); o `pool.evaluation` consumido por `rules-engine/evaluation_sampler` é caminho
+  legado/dormente (`on_pool_config` nunca é chamado). `agent_groups` é dono do **módulo Groups + JWT**
+  (`supervised_groups[]`, Arc 9). Expor qualquer um no pool duplicaria a fonte → fora do drawer por design.
+- **F2.E resolvida (nada no pool)**: investigação confirmou que o deploy é consumido **ponta a ponta** —
+  `promote` (next→current) publica `registry.changed` → orchestrator-bridge `bootstrap.request_refresh()`
+  → `_build_desired_from_deploy` lê `deployed_skill_id`/`deployed_max_concurrent_sessions` do
+  `GET /v1/pools` e provisiona as instâncias IA. Dono = tela **Fluxo → Deploy**; por fonte única, não se
+  duplica no drawer.
+
+Resultado: todo o gap de `pool-config-surface.md` está resolvido — exposto na UI (A–C), com dono em outro
+módulo (D, E) ou deixado fora por decisão (`max_concurrent_sessions`, `webhook_skill_id`). Só docs nesta
+fatia (sem código). Guard inalterado. **Próximo na Fase 2 (config-consolidation §8): TTLs/timeouts
+(env×config) → masking → ABAC/users → evaluation/pricing seeds → defaults hardcoded.**
+
+---
+
 ## Config Consolidation — F2.C: Tipo & Capacidade na UI de pool (2026-06-12)
 
 Terceira fatia da Fase 2. Expõe `agent_kind` (human/ai) e `session_reservation` na tela

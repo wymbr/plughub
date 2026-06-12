@@ -280,12 +280,18 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       - [x] **F2.C** ✅ (2026-06-12) Tipo & Capacidade: `agent_kind` (Select inferido/human/ai) +
             `session_reservation`; aviso queue⇒human; `registry.ts` propaga 422 (Σ≤C) ao banner.
             `max_concurrent_sessions`/`webhook_skill_id` fora por decisão. Ver CHANGELOG.
-      - [ ] **F2.D** Avaliação: coluna Prisma `evaluation` (Json) + handler expõe `{sampling_rate,
-            skill_id_template}` + `evaluation_template_id`; `agent_groups` (multi-select /v1/groups).
-            Rodar guard (0/0).
-      - [ ] **F2.E** Deploy — investigação-primeiro: confirmar se a plataforma consome o que a tela Deploy
-            grava (`PUT /slots/next`→promote→`PoolSkillSlot.current`→bootstrap→instância) antes de decidir
-            a profundidade da UI em resources/pool.
+      - [x] **F2.D** ✅ (2026-06-12) **DISSOLVIDA por fonte única** — nada a expor no pool. `evaluation`/
+            `evaluation_template_id` são donos de **Quality/Campaigns** (evaluation-api; o `pool.evaluation`
+            do rules-engine é caminho legado/dormente — `on_pool_config` nunca é chamado). `agent_groups`
+            é dono do **módulo Groups + JWT** (`supervised_groups[]`, Arc 9). Expor qualquer um violaria o
+            invariante de fonte única. Ver `pool-config-surface.md` § Decisões/Gap.
+            *Cleanup futuro (opcional): remover o caminho dormente `evaluation_sampler`/`on_pool_config`
+            do rules-engine, ou religá-lo só se a campanha não cobrir.*
+      - [x] **F2.E** ✅ (2026-06-12) Deploy — **RESOLVIDO (decisão: nada no pool)**. Investigação confirmou
+            consumo ponta a ponta: `PUT /slots/next`→`promote` (next→current) publica `registry.changed` →
+            orchestrator-bridge `bootstrap.request_refresh()` → `_build_desired_from_deploy` lê
+            `deployed_skill_id`/`deployed_max_concurrent_sessions` do `GET /v1/pools` e provisiona instâncias.
+            Dono = tela Fluxo→Deploy; por fonte única, não se duplica no drawer de pool. **F2-pool COMPLETA.**
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

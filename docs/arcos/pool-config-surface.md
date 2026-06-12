@@ -28,14 +28,14 @@ Legenda **UI hoje**: ✅ exposto · ❌ ausente (gap) · ➖ legado/skip.
 | `max_concurrent_sessions` | int? | Throttle de backpressure downstream (webhook) | registration | ❌ |
 | `session_reservation` | int? | Fatia reservada de sessões (admissão híbrida) | registration | ✅ (F2.C) |
 | `routing_expression` | weights | Pesos do scoring (sla/wait/tier/churn/negócio) | registration | ✅ (pesos) |
-| `evaluation` | {sampling_rate, skill_id_template} | Amostragem + template do avaliador (Arc 6) | registration | ❌ |
-| `evaluation_template_id` | string? | ID explícito do template de avaliação | registration | ❌ |
+| `evaluation` | {sampling_rate, skill_id_template} | Amostragem + template do avaliador (Arc 6) | registration | ➖ (dono: Quality/Campaigns) |
+| `evaluation_template_id` | string? | ID explícito do template de avaliação | registration | ➖ (dono: Quality/Campaigns) |
 | `supervisor_config.enabled` | bool | Liga monitor de supervisor IA | registration | ❌ |
 | `supervisor_config.escalation_pools` | string[] | **Destinos do botão Transfer** (pool→pool) | registration | ✅ (F2.B, merge-safe) |
 | `supervisor_config.intent_capability_map` | map | Capacidades sugeridas por intent (Agent Assist) | registration | ❌ |
 | `supervisor_config.*` (history_window_days, insight_categories, sentiment_alert_threshold, relevance_model, proactive_delegation) | vários | Config do supervisor/copilot | registration | ❌ |
 | `mentionable_pools` | map alias→pool | Aliases `@mention` (convidar IA assist) | registration | ✅ (F2.B) |
-| `agent_groups` | string[] | Agent Groups (Arc 9) a que o pool pertence | registration | ❌ |
+| `agent_groups` | string[] | Agent Groups (Arc 9) a que o pool pertence | registration | ➖ (dono: módulo Groups + JWT) |
 | `copilot_skill_id` | string? | (deprecated) skill do co-pilot | registration | ➖ |
 | `hooks.on_human_start[]` | {pool, side, nps_on_disconnect} | Hooks ao humano ENTRAR (ex.: copilot) | registration | ✅ (F2.A) |
 | `hooks.on_human_end[]` | {pool, side, nps_on_disconnect} | **Hooks ao FECHAR: wrap-up + NPS** (qual pool/skill, side, nps_on_disconnect) | registration | ✅ (F2.A) |
@@ -73,12 +73,37 @@ Legenda **UI hoje**: ✅ exposto · ❌ ausente (gap) · ➖ legado/skip.
 - **`supervisor_config.enabled` não exposto**: a ativação de copilot/assist é coberta por hook
   `on_human_start`. A UI só persiste `escalation_pools` dentro de `supervisor_config` (merge-safe,
   preservando `intent_capability_map` etc.); `enabled` mantém o valor existente (default `false`).
+- **`evaluation` / `evaluation_template_id` NÃO expostos no pool** (fonte única): a amostragem e a
+  configuração de avaliação são donas do módulo **Quality → Campaigns** (evaluation-api: sampling +
+  reviewer rules + scheduling; instances criadas na `session_closed`). O `pool.evaluation`
+  (`sampling_rate`/`skill_id_template`, consumido por `rules-engine/evaluation_sampler`) é o caminho
+  **legado/dormente** — `on_pool_config` nunca é chamado, o sampler sempre usa o default. Expor no pool
+  duplicaria a fonte → fica fora do drawer por design. *(Cleanup futuro: remover o caminho dormente do
+  rules-engine ou religá-lo só se a campanha não cobrir.)*
+- **`agent_groups` NÃO exposto no pool** (dono = módulo Groups): grupo é definido no **perfil do
+  usuário** (auth-api `agent_groups`/GroupsPage) e a permissão de ver dados do grupo vem no **JWT**
+  (`supervised_groups[]`, Arc 9). `Pool.agent_groups` é denormalização escrita no ContextStore — não é
+  editado à mão no pool. Fica fora do drawer.
 
-## Gap a fechar (não lido/editável na UI hoje)
+## Gap a fechar — estado (2026-06-12)
 
-`agent_kind`, `deploy {skill_id, max_concurrent_sessions}`, `webhook_skill_id`, `max_concurrent_sessions`,
-`session_reservation`, `evaluation` + `evaluation_template_id`, `supervisor_config` (incl.
-`escalation_pools`), `mentionable_pools`, `agent_groups`, `hooks` (on_human_start/on_human_end/post_human).
+Fechados na UI: `hooks` ✅ (F2.A), `supervisor_config.escalation_pools` ✅ (F2.B), `mentionable_pools`
+✅ (F2.B), `agent_kind` ✅ (F2.C), `session_reservation` ✅ (F2.C).
+
+Conscientemente FORA do drawer de pool (ver § Decisões): `max_concurrent_sessions` (deferred/overlap),
+`webhook_skill_id` (config de canal), `evaluation` + `evaluation_template_id` (dono: Quality/Campaigns),
+`agent_groups` (dono: módulo Groups + JWT), `supervisor_config.*` restantes/`intent_capability_map`
+(preservados merge-safe, não editados).
+
+**`deploy {skill_id, max_concurrent_sessions}`** — RESOLVIDO (F2.E, decisão: nada no pool). O ciclo de
+deploy tem dono próprio na tela **Fluxo → Deploy** (`/agent-flow/deploy`) e é **consumido ponta a ponta**:
+`PUT /v1/pools/:id/slots/next` (staging) → `POST /promote` (next→current) publica `registry.changed` →
+orchestrator-bridge `bootstrap.request_refresh()` → `_build_desired_from_deploy` lê `deployed_skill_id`
++ `deployed_max_concurrent_sessions` do `GET /v1/pools` e provisiona as instâncias IA. Pelo princípio de
+fonte única, deploy NÃO é editável no drawer de pool (sem duplicar o ciclo).
+
+**F2-pool COMPLETA**: todo o gap de campos do pool ou foi exposto na UI (A–C) ou tem dono consciente em
+outro módulo/tela (D, E) ou foi deixado fora por decisão (max_concurrent_sessions, webhook_skill_id).
 
 ## Plano de fases (proposto)
 
