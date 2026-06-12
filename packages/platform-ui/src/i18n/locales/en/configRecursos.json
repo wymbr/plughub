@@ -14,6 +14,7 @@
     "fields": {
       "poolId": "Pool ID",
       "description": "Description",
+      "type": "Type",
       "channelTypes": "Channels",
       "slaTargetMs": "SLA (ms)",
       "status": "Status",
@@ -52,6 +53,18 @@
     "contextVisibility": {
       "label": "Context Store Visibility",
       "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included."
+    },
+    "typeCapacity": {
+      "label": "Type & Capacity",
+      "agentKind": "Pool type",
+      "agentKindHint": "Governs capacity gates (AI vs. human) and the rule queue ⇒ human. Inferred = the platform decides (deploy slot ⇒ AI; otherwise human).",
+      "kindInferred": "— Inferred —",
+      "kindHuman": "Human",
+      "kindAi": "AI",
+      "queueNeedsHuman": "Queue treatment requires a Human pool — set type to Human or clear the queue skill-flow.",
+      "sessionReservation": "Session reservation",
+      "sessionReservationHint": "Dedicated simultaneous-session slice carved from the contracted capacity (C). Empty = shares the common bucket. Σ reservations ≤ C.",
+      "reservationPlaceholder": "shared"
     },
     "hooks": {
       "label": "Lifecycle Hooks",

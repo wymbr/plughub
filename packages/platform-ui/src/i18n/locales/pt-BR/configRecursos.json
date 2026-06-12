@@ -14,6 +14,7 @@
     "fields": {
       "poolId": "ID do Pool",
       "description": "Descrição",
+      "type": "Tipo",
       "channelTypes": "Canais",
       "slaTargetMs": "SLA (ms)",
       "status": "Status",
@@ -52,6 +53,18 @@
     "contextVisibility": {
       "label": "Visibilidade do Context Store",
       "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos."
+    },
+    "typeCapacity": {
+      "label": "Tipo & Capacidade",
+      "agentKind": "Tipo do pool",
+      "agentKindHint": "Governa os gates de capacidade (IA vs. humano) e a regra fila ⇒ humano. Inferido = a plataforma decide (deploy ⇒ IA; senão humano).",
+      "kindInferred": "— Inferido —",
+      "kindHuman": "Humano",
+      "kindAi": "IA",
+      "queueNeedsHuman": "Tratamento de fila exige pool Humano — defina o tipo como Humano ou limpe a skill-flow da fila.",
+      "sessionReservation": "Reserva de sessões",
+      "sessionReservationHint": "Fatia dedicada de sessões simultâneas separada da capacidade contratada (C). Vazio = usa o bucket compartilhado. Σ reservas ≤ C.",
+      "reservationPlaceholder": "compartilhado"
     },
     "hooks": {
       "label": "Hooks de Ciclo de Vida",

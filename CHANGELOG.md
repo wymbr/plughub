@@ -2,6 +2,30 @@
 
 ---
 
+## Config Consolidation — F2.C: Tipo & Capacidade na UI de pool (2026-06-12)
+
+Terceira fatia da Fase 2. Expõe `agent_kind` (human/ai) e `session_reservation` na tela
+`config/resources/pool`. `max_concurrent_sessions` e `webhook_skill_id` ficaram **fora** por decisão
+(enforcement deferred / config de canal — ver `pool-config-surface.md` § Decisões).
+
+**Mudança (platform-ui apenas — backend já persiste/valida ambos)**:
+- `PoolsPage.tsx`: seção "Tipo & Capacidade" (Select agent_kind inferido/human/ai + Input
+  session_reservation). `agent_kind` só vai no payload quando explicitamente setado (`''` deixa o backfill
+  do registry inferir); `session_reservation` envia número ou `null` para limpar. Aviso inline quando
+  `agent_kind=ai` + fila configurada (espelha o guard backend queue⇒human). Coluna **Tipo** (badge
+  Humano/IA) adicionada à lista de pools — visível sem abrir o drawer.
+- `api/registry.ts`: `createPool`/`updatePool` agora propagam a mensagem de erro do registry (helper
+  `poolError`) — o **422 de `Σ session_reservation > C`** aparece no banner do drawer em vez do genérico.
+- i18n `configRecursos.pools.typeCapacity.*` (en + pt-BR).
+
+Sem mudança de backend → guard não afetado. Build: `platform-ui`. **Validação (usuário)**: (1) editar
+`retencao_humano` → tipo já vem **Humano**; pools IA (`sac_ia`, …) vêm **IA**. (2) Setar `agent_kind=ai`
+num pool com fila → aviso inline. (3) Pôr `session_reservation` alto que estoure C → salvar deve mostrar
+o 422 do registry no banner. **Próximo**: F2.D (coluna `evaluation` no backend + sampling_rate +
+agent_groups).
+
+---
+
 ## Config Consolidation — F2.B: Transfer + @mention na UI de pool (2026-06-12)
 
 Segunda fatia da Fase 2. Expõe `supervisor_config.escalation_pools` (destinos do botão Transfer do

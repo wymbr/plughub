@@ -277,8 +277,9 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
       - [x] **F2.B** ✅ (2026-06-12) Transfer (`escalation_pools`, merge-safe em supervisor_config) +
             @mention (`mentionable_pools`, lista alias→pool) — `PoolListEditor`/`MentionListEditor`, seções
             separadas no drawer. Backend já persistia. Ver CHANGELOG.
-      - [ ] **F2.C** Tipo & Capacidade: `agent_kind` (radio) + `session_reservation` (espelhar 422 Σ≤C;
-            guard queue⇒human na UI).
+      - [x] **F2.C** ✅ (2026-06-12) Tipo & Capacidade: `agent_kind` (Select inferido/human/ai) +
+            `session_reservation`; aviso queue⇒human; `registry.ts` propaga 422 (Σ≤C) ao banner.
+            `max_concurrent_sessions`/`webhook_skill_id` fora por decisão. Ver CHANGELOG.
       - [ ] **F2.D** Avaliação: coluna Prisma `evaluation` (Json) + handler expõe `{sampling_rate,
             skill_id_template}` + `evaluation_template_id`; `agent_groups` (multi-select /v1/groups).
             Rodar guard (0/0).

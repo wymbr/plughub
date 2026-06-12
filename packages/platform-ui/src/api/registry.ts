@@ -47,13 +47,20 @@ export const getPool = async (poolId: string, tenantId: string): Promise<Pool> =
   return response.json()
 }
 
+// Extract a human-readable error from a non-OK pool response. The registry
+// returns { error, details? } (e.g. 422 when Σ session_reservation > contracted C).
+const poolError = async (response: Response, fallback: string): Promise<Error> => {
+  const body = await response.json().catch(() => ({})) as { error?: string }
+  return new Error(body.error || fallback)
+}
+
 export const createPool = async (data: CreatePoolInput, tenantId: string): Promise<Pool> => {
   const response = await fetch(`${getBaseUrl()}/v1/pools`, {
     method: 'POST',
     headers: headers(tenantId),
     body: JSON.stringify(data)
   })
-  if (!response.ok) throw new Error('Failed to create pool')
+  if (!response.ok) throw await poolError(response, 'Failed to create pool')
   return response.json()
 }
 
@@ -63,7 +70,7 @@ export const updatePool = async (poolId: string, data: UpdatePoolInput, tenantId
     headers: headers(tenantId),
     body: JSON.stringify(data)
   })
-  if (!response.ok) throw new Error('Failed to update pool')
+  if (!response.ok) throw await poolError(response, 'Failed to update pool')
   return response.json()
 }
 

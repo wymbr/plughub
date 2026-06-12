@@ -474,6 +474,10 @@ const PoolsPage: React.FC = () => {
   const [formData, setFormData] = useState({
     pool_id:           '',
     description:       '',
+    // Type & capacity (capacity-governance): agent_kind governs queue⇒human and
+    // the AI/human capacity gates; '' = inferred by the registry backfill.
+    agent_kind:        '' as '' | 'human' | 'ai',
+    session_reservation:         null as number | null,
     channel_types:     [] as string[],
     sla_target_ms:     30000,
     max_reply_time_ms:           null as number | null,
@@ -606,7 +610,8 @@ const PoolsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
-      pool_id: '', description: '', channel_types: [], sla_target_ms: 30000,
+      pool_id: '', description: '', agent_kind: '', session_reservation: null,
+      channel_types: [], sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_skill_id: '', queue_max_wait_s: null,
@@ -623,6 +628,8 @@ const PoolsPage: React.FC = () => {
     setFormData({
       pool_id:         pool.pool_id,
       description:     pool.description || '',
+      agent_kind:        pool.agent_kind ?? '',
+      session_reservation:         pool.session_reservation ?? null,
       channel_types:     pool.channel_types,
       sla_target_ms:     pool.sla_target_ms,
       max_reply_time_ms:           pool.max_reply_time_ms ?? null,
@@ -731,6 +738,12 @@ const PoolsPage: React.FC = () => {
         description:       formData.description,
         channel_types:     formData.channel_types,
         sla_target_ms:     formData.sla_target_ms,
+        // Type & capacity. agent_kind: send only when explicitly set ('' leaves the
+        // registry backfill to infer). session_reservation: number to set, null to clear.
+        ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
+        ...(formData.session_reservation !== null
+          ? { session_reservation: formData.session_reservation }
+          : (editingPool?.session_reservation != null ? { session_reservation: null } : {})),
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
         // calendar_id: null limpa no registry (undefined era removido pelo
         // JSON.stringify e o valor antigo persistia).
@@ -792,8 +805,9 @@ const PoolsPage: React.FC = () => {
 
       await loadPools()
       handleClose()
-    } catch {
-      setError(tCommon('failedToSave'))
+    } catch (e) {
+      // Surface the registry's error (e.g. 422 Σ session_reservation > contracted C).
+      setError(e instanceof Error && e.message ? e.message : tCommon('failedToSave'))
     } finally {
       setIsSaving(false)
     }
@@ -803,6 +817,15 @@ const PoolsPage: React.FC = () => {
 
   const columns = [
     { key: 'pool_id', label: t('pools.fields.poolId') },
+    {
+      key: 'agent_kind',
+      label: t('pools.fields.type'),
+      render: (kind?: string) => kind === 'ai'
+        ? <Badge variant="default" className="text-xs bg-secondary/10 text-secondary border border-secondary/30">{t('pools.typeCapacity.kindAi')}</Badge>
+        : kind === 'human'
+          ? <Badge variant="default" className="text-xs">{t('pools.typeCapacity.kindHuman')}</Badge>
+          : <span className="text-xs text-gray">—</span>,
+    },
     {
       key: 'channel_types',
       label: t('pools.fields.channelTypes'),
@@ -983,6 +1006,44 @@ const PoolsPage: React.FC = () => {
               />
               <p className="text-xs text-muted-light mt-0.5">{t('pools.fields.maxReplyHint')}</p>
             </div>
+          </div>
+
+          {/* ── Type & capacity (agent_kind + session_reservation) ───────────── */}
+          <div>
+            <p className="text-sm font-semibold text-dark mb-2">{t('pools.typeCapacity.label')}</p>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <Select
+                  label={t('pools.typeCapacity.agentKind')}
+                  value={formData.agent_kind}
+                  onChange={e => setFormData({ ...formData, agent_kind: e.target.value as '' | 'human' | 'ai' })}
+                  options={[
+                    { value: '',      label: t('pools.typeCapacity.kindInferred') },
+                    { value: 'human', label: t('pools.typeCapacity.kindHuman') },
+                    { value: 'ai',    label: t('pools.typeCapacity.kindAi') },
+                  ]}
+                />
+              </div>
+              <div className="w-40">
+                <Input
+                  label={t('pools.typeCapacity.sessionReservation')}
+                  type="number"
+                  placeholder={t('pools.typeCapacity.reservationPlaceholder')}
+                  value={formData.session_reservation ?? ''}
+                  onChange={e => {
+                    const v = e.target.value
+                    setFormData({ ...formData, session_reservation: v === '' ? null : parseInt(v) })
+                  }}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-light mt-0.5">{t('pools.typeCapacity.agentKindHint')}</p>
+            <p className="text-xs text-muted-light mt-0.5">{t('pools.typeCapacity.sessionReservationHint')}</p>
+            {formData.agent_kind === 'ai' && formData.queue_skill_id.trim() && (
+              <div className="mt-2 bg-warning-light border border-warning/30 text-warning-text px-3 py-1.5 rounded text-xs">
+                {t('pools.typeCapacity.queueNeedsHuman')}
+              </div>
+            )}
           </div>
 
           {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}

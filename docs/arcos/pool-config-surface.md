@@ -19,14 +19,14 @@ Legenda **UI hoje**: ✅ exposto · ❌ ausente (gap) · ➖ legado/skip.
 | Campo | Tipo | O que faz | Onde mora | UI hoje |
 |---|---|---|---|---|
 | `pool_id` | string | Identidade do pool | registration | ✅ |
-| `agent_kind` | `human`\|`ai` | Tipagem (gates C_ai/C_human; queue⇒human) | registration | ❌ |
+| `agent_kind` | `human`\|`ai` | Tipagem (gates C_ai/C_human; queue⇒human) | registration | ✅ (F2.C) |
 | `description` | string | Descrição | registration | ✅ |
 | `channel_types` | Channel[] | Canais que apontam pro pool (hard filter) | registration | ✅ |
 | `sla_target_ms` | int | SLA do atendimento (score factor) | registration | ✅ (timeout) |
 | `max_reply_time_ms` | int? | Tempo máx por resposta do agente | registration | ✅ (timeout) |
 | `webhook_skill_id` | string? | Skill "DIN" do pool webhook (Arc 19) | registration | ❌ |
 | `max_concurrent_sessions` | int? | Throttle de backpressure downstream (webhook) | registration | ❌ |
-| `session_reservation` | int? | Fatia reservada de sessões (admissão híbrida) | registration | ❌ |
+| `session_reservation` | int? | Fatia reservada de sessões (admissão híbrida) | registration | ✅ (F2.C) |
 | `routing_expression` | weights | Pesos do scoring (sla/wait/tier/churn/negócio) | registration | ✅ (pesos) |
 | `evaluation` | {sampling_rate, skill_id_template} | Amostragem + template do avaliador (Arc 6) | registration | ❌ |
 | `evaluation_template_id` | string? | ID explícito do template de avaliação | registration | ❌ |
