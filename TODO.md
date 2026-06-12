@@ -302,6 +302,11 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
             consertados de passagem: CONFIG_API_URL 3500→3600 + ausente no compose, `?tenant_id=` faltando,
             default errado `avaliador_qualidade`). `PLUGHUB_ANALYTICS_OPEN_ACCESS` fica (flag de demo).
             `webrtc._AUTH_TIMEOUT_S` é só default (ok). **Categoria C fechada.** Ver CHANGELOG.
+      - [x] **Item 5 (ABAC/users)** ✅ (2026-06-12): `modules.yaml` = catálogo (auth-api carrega no startup);
+            `seed_auth.py` provisiona users via API. Bug: `module_config` do seed drifted do catálogo
+            (módulo `analytics` inexistente, `relatorio` vs `report`, `billing.view` vs `visualizar`) → 422
+            → demo users sem ABAC. Realinhado ao `modules.yaml`; `set_module_config` falha em 422. Ver CHANGELOG.
+      - [ ] **Item 6** seeds `seed_evaluation`/`seed_pricing` → bootstrap idempotente via API (liga à Fase 3).
 
   **▶ ARCO: Config HTTP Propagation** (aberto 2026-06-12) — `docs/arcos/config-http-propagation.md`.
   Achado durante o masking: o padrão "config-api vence via leitura direta do Redis" **nunca funcionou**

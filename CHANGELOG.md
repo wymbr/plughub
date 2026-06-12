@@ -2,6 +2,29 @@
 
 ---
 
+## Config Consolidation — F2 item 5: ABAC/users (seed_auth × modules.yaml) (2026-06-12)
+
+Fonte única do domínio auth. `infra/modules.yaml` é o catálogo ABAC (carregado pelo auth-api no startup →
+`module_registry`); `infra/seed/seed_auth.py` provisiona os demo users **via a API HTTP** do auth-api
+(POST /auth/users + PUT module-config) — já estava limpo nisso.
+
+**Bug + drift corrigido**: o `module_config` hardcoded no seed_auth **divergia** do catálogo —
+referenciava o módulo **`analytics`** (inexistente), `evaluation.relatorio` (no catálogo é `report`),
+`evaluation.permissoes` (inexistente) e `billing.view`/`manage_*` (no catálogo é `visualizar`/`gerenciar`).
+Como o PUT module-config valida contra o `module_registry` e rejeita **todo** o config com **422** se houver
+qualquer campo desconhecido, os demo users (supervisor/operator) ficavam **sem module_config** (ABAC vazio).
+
+**Fix (item 5)**: `seed_auth.py` realinhado ao `modules.yaml` (campos reais): supervisor →
+`evaluation.revisar`/`report`, `contacts.visualizar`/`exportar`, `billing.visualizar`; operator →
+`evaluation.contestar`, `contacts.operacao`/`visualizar`. `set_module_config` agora **falha (die) em 422**
+(drift de schema é erro de config, não ruído) — pega divergência futura entre seed e catálogo.
+
+Sem build (seed/yaml). **Validação (usuário)**: rodar `seed_auth.py` (auth-api no ar) → sem 422; logar como
+`supervisor@plughub.local` e confirmar que vê Avaliação/Revisar + relatórios; `operator@plughub.local` vê
+Console/Contatos. **Item 5 (ABAC/users) fechado.** Restam na Fase 2: item 6 (seeds → bootstrap idempotente).
+
+---
+
 ## Config Consolidation — F2 item 7: defaults/env cat. C (2026-06-12)
 
 Fecha a categoria C do §6 (config de negócio que vazou pra env).

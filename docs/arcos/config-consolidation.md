@@ -111,7 +111,7 @@ tópico Kafka, `SKILLS_DIR`/`REGISTRY_CONFIG_DIR`, `*_TENANT_ID`/`BOOTSTRAP_TENA
 |---|---|---|---|
 | config-api | seed `_SEED` (hardcoded) + masking JSON | parcial | defaults ainda hardcoded em serviços; env vars cat. C |
 | agent-registry | `tenant_demo.yaml` **+** `seed.py` (dup + Redis) | parcial | **fonte dupla**; campos de pool fora da UI (pool-config-surface) |
-| auth-api | `modules.yaml` + `seed_auth.py` | parcial | módulos ABAC e users semeados por 2 caminhos |
+| auth-api | `modules.yaml` (catálogo) + `seed_auth.py` (users via API) | ✅ item 5 | os 2 caminhos são complementares (catálogo × users); o real problema era **drift** do `module_config` do seed × `modules.yaml` (campos inexistentes → 422 → ABAC vazio). Corrigido + seed falha em 422 |
 | evaluation-api | `seed_evaluation.py` | sim | seed via script (poderia ser bootstrap idempotente via API) |
 | pricing-api | `seed_pricing.py` | sim (Billing) | idem |
 | Redis | `seed.py` direto | não | **estado não deveria ser semeado** — deriva do boot normal |

@@ -7,16 +7,18 @@ Usuários criados:
       → seeded pelo próprio auth-api no startup; este script é idempotente
 
   supervisor@plughub.local  / changeme_supervisor (roles: supervisor)
-      module_config:
-        evaluation.revisar   = read_write  (scope: global)
-        evaluation.relatorio = read_only
-        analytics.view       = read_only
-        analytics.export     = read_only
+      module_config (campos do catálogo infra/modules.yaml):
+        evaluation.revisar    = read_write
+        evaluation.report     = read_only
+        contacts.visualizar   = read_only
+        contacts.exportar     = read_write
+        billing.visualizar    = read_only
 
   operator@plughub.local    / changeme_operator  (roles: operator)
-      module_config:
-        evaluation.contestar = read_write  (scope: global)
-        analytics.view       = read_only
+      module_config (campos do catálogo infra/modules.yaml):
+        evaluation.contestar  = read_write
+        contacts.operacao     = read_write
+        contacts.visualizar   = read_only
 
 Uso:
   AUTH_API_URL=http://auth-api:3200 AUTH_ADMIN_TOKEN=<token> python seed_auth.py
@@ -109,12 +111,23 @@ def set_module_config(user_id: str, config: dict):
     status, body = _req("PUT", f"/auth/users/{user_id}/module-config", config)
     if status == 200:
         ok(f"module_config atualizado para {user_id}")
+    elif status == 422:
+        # Drift de schema: algum módulo/campo não existe no module_registry
+        # (catálogo = infra/modules.yaml). Falha alto — é erro de config, não ruído.
+        die(f"module_config para {user_id} viola o catálogo (modules.yaml): {body}")
     else:
         warn(f"Falha ao definir module_config para {user_id}: {status} {body}")
 
 
 # ─── Definições de usuários demo ──────────────────────────────────────────────
 
+# IMPORTANTE: os campos abaixo DEVEM existir em infra/modules.yaml (a fonte única do
+# catálogo ABAC, carregada pelo auth-api no module_registry). O PUT module-config
+# valida cada módulo/campo contra o registro e rejeita TODO o config com 422 se houver
+# qualquer campo desconhecido. Manter este seed alinhado ao modules.yaml.
+# (config-consolidation item 5: antes referenciava módulo `analytics` inexistente,
+#  `evaluation.relatorio`/`permissoes` e `billing.view` — campos que não existem no
+#  catálogo → 422 → demo users ficavam sem ABAC.)
 DEMO_USERS = [
     {
         "email":    "supervisor@plughub.local",
@@ -123,21 +136,15 @@ DEMO_USERS = [
         "roles":    ["supervisor"],
         "module_config": {
             "evaluation": {
-                "revisar":    {"access": "read_write", "scope": []},
-                "contestar":  {"access": "none",       "scope": []},
-                "relatorio":  {"access": "read_only",  "scope": []},
-                "formularios":{"access": "none",       "scope": []},
-                "permissoes": {"access": "none",       "scope": []},
+                "revisar": {"access": "read_write", "scope": []},  # revisa/decide
+                "report":  {"access": "read_only",  "scope": []},  # relatórios de qualidade
             },
-            "analytics": {
-                "view":              {"access": "read_only", "scope": []},
-                "export":            {"access": "read_only", "scope": []},
-                "segment_drilldown": {"access": "none",      "scope": []},
+            "contacts": {
+                "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios
+                "exportar":   {"access": "read_write", "scope": []},  # exporta dados
             },
             "billing": {
-                "view":              {"access": "read_only", "scope": []},
-                "manage_resources":  {"access": "none",      "scope": []},
-                "manage_pricing":    {"access": "none",      "scope": []},
+                "visualizar": {"access": "read_only", "scope": []},
             },
         },
     },
@@ -148,16 +155,11 @@ DEMO_USERS = [
         "roles":    ["operator"],
         "module_config": {
             "evaluation": {
-                "contestar":  {"access": "read_write", "scope": []},
-                "revisar":    {"access": "none",       "scope": []},
-                "relatorio":  {"access": "none",       "scope": []},
-                "formularios":{"access": "none",       "scope": []},
-                "permissoes": {"access": "none",       "scope": []},
+                "contestar": {"access": "read_write", "scope": []},  # contesta avaliações
             },
-            "analytics": {
-                "view":              {"access": "read_only", "scope": []},
-                "export":            {"access": "none",      "scope": []},
-                "segment_drilldown": {"access": "none",      "scope": []},
+            "contacts": {
+                "operacao":   {"access": "read_write", "scope": []},  # Monitor/Agent Assist
+                "visualizar": {"access": "read_only",  "scope": []},  # vê contatos
             },
         },
     },
