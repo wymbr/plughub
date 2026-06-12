@@ -292,6 +292,14 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
             orchestrator-bridge `bootstrap.request_refresh()` → `_build_desired_from_deploy` lê
             `deployed_skill_id`/`deployed_max_concurrent_sessions` do `GET /v1/pools` e provisiona instâncias.
             Dono = tela Fluxo→Deploy; por fonte única, não se duplica no drawer de pool. **F2-pool COMPLETA.**
+    - **F2-TTL (TTLs/timeouts env×config)** — §8 item 2.
+      - [x] **ws_auth_timeout** ✅ (2026-06-12) `resolve_ws_auth_timeout_s` lê `webchat.auth_timeout_s` do
+            config-api; webchat + webrtc (foldado, sem a constante `_AUTH_TIMEOUT_S` hardcoded) usam o
+            resolver; env `PLUGHUB_WS_AUTH_TIMEOUT_S` removido; guard ganhou `env_dup_ws_auth_timeout`
+            (0/0). Ver CHANGELOG.
+      - [ ] **Restante cat. C** (defaults/tuning, §8 item 7): `EVALUATOR_POOL`, `VITE_DEFAULT_POOL`,
+            `REPLAY_SPEED_FACTOR` (config de negócio/UI em env → config-api); `PLUGHUB_ANALYTICS_OPEN_ACCESS`
+            fica (flag de demo). `webrtc._AUTH_TIMEOUT_S` agora é só default (ok).
   - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).

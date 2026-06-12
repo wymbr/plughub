@@ -354,10 +354,16 @@ class WebRTCAdapter(ChannelAdapter):
         contact_id:     str = ""
         participant_id: str = ""
 
+        # Auth timeout — config-api wins (Single Source); _AUTH_TIMEOUT_S is the
+        # fallback default. Same config key as webchat (webchat.auth_timeout_s).
+        from ..attachment_store import resolve_ws_auth_timeout_s
+        auth_timeout_s = await resolve_ws_auth_timeout_s(
+            self._redis, self._settings.tenant_id, _AUTH_TIMEOUT_S,
+        )
         try:
             session_id, contact_id, participant_id = await asyncio.wait_for(
                 self._auth_handshake(ws, pool_id),
-                timeout=float(_AUTH_TIMEOUT_S),
+                timeout=float(auth_timeout_s),
             )
         except asyncio.TimeoutError:
             logger.warning("webrtc auth_timeout — closing WS")

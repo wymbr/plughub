@@ -59,6 +59,31 @@ async def resolve_attachment_expiry_days(redis, tenant_id: str, default: int) ->
         pass
     return default
 
+
+async def resolve_ws_auth_timeout_s(redis, tenant_id: str, default: int) -> int:
+    """
+    Timeout (s) para o cliente enviar conn.authenticate no handshake WS — fonte
+    ÚNICA é o config-api.
+
+    Invariante "Configuration — Single Source" (config-api vence): lê
+    `{tenant}:config:webchat:auth_timeout_s` (escrito pelo config-api no Redis),
+    com fallback ao `default` quando ausente ou Redis indisponível. Substitui a
+    leitura direta de `settings.ws_auth_timeout_s` (env `PLUGHUB_WS_AUTH_TIMEOUT_S`,
+    removido) no webchat e a constante hardcoded `_AUTH_TIMEOUT_S` no webrtc — ambos
+    adapters passam a usar a mesma chave de config (config de negócio não vive em env
+    nem hardcoded). Usado pré-auth: o tenant vem de `settings.tenant_id` (wiring),
+    conhecido antes do cliente autenticar.
+    """
+    if not tenant_id or redis is None:
+        return default
+    try:
+        raw = await redis.get(f"{tenant_id}:config:webchat:auth_timeout_s")
+        if raw:
+            return int(raw if isinstance(raw, str) else raw.decode())
+    except Exception:
+        pass
+    return default
+
 # ─── Allowlist de MIME types aceitos ─────────────────────────────────────────
 
 MIME_LIMITS: dict[str, int] = {

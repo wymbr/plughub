@@ -70,6 +70,9 @@ def detect() -> dict[str, str]:
         found["env_dup_instance_ttl"] = "docker-compose.demo.yml"
     if _env_assigned("PLUGHUB_ATTACHMENT_EXPIRY_DAYS"):
         found["env_dup_attachment_expiry"] = "docker-compose.demo.yml"
+    # F2-TTL: config-api tem webchat.auth_timeout_s; o env não pode reintroduzir o dup.
+    if _env_assigned("PLUGHUB_WS_AUTH_TIMEOUT_S"):
+        found["env_dup_ws_auth_timeout"] = "docker-compose.demo.yml"
 
     return found
 

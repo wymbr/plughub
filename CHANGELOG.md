@@ -2,6 +2,32 @@
 
 ---
 
+## Config Consolidation — F2-TTL: ws_auth_timeout (config-api vence) (2026-06-12)
+
+Fatia §8 item 2 (TTLs/timeouts — matar duplicação env×config). Após a F1.2 (instance_ttl +
+attachment_expiry), o timeout do handshake WS (`ws_auth_timeout_s`) ainda vinha do env
+`PLUGHUB_WS_AUTH_TIMEOUT_S` no webchat, **ignorando** o `webchat.auth_timeout_s` que o config-api já tem
+semeado e editável na WebChatConfigPage — mesma duplicação do attachment_expiry. O webrtc usava uma
+constante hardcoded `_AUTH_TIMEOUT_S` (mesmo conceito, sem fonte de config).
+
+**Mudança (config-api vence, espelha F1.2)**:
+- `attachment_store.py`: novo `resolve_ws_auth_timeout_s(redis, tenant_id, default)` — lê
+  `{tenant}:config:webchat:auth_timeout_s` do Redis (config-api), fallback ao default.
+- `adapters/webchat.py`: o auth-wait resolve o timeout do config-api (`settings.ws_auth_timeout_s` vira só
+  fallback). Tenant vem de `settings.tenant_id` (wiring), conhecido pré-auth.
+- `adapters/webrtc.py`: **foldado** — passa a ler a mesma chave; `_AUTH_TIMEOUT_S` (30) vira só o default.
+- `docker-compose.demo.yml`: `PLUGHUB_WS_AUTH_TIMEOUT_S` removido (comentário explica, como na F1.2).
+- `check_config_invariants.py`: nova detecção `env_dup_ws_auth_timeout` — o guard passa a pegar
+  reintrodução do env (antes nem olhava). Como o env já saiu, segue **0/0**.
+- +5 testes (`test_ws_auth_timeout_resolver.py`).
+
+Build: `channel-gateway`. **Validação (usuário)**: rodar o guard (0/0); alterar `auth_timeout_s` na
+WebChatConfigPage e confirmar que o handshake WS respeita o novo valor (sem o env); webrtc idem.
+**Próximo (§8)**: masking (`audit_policy`) → ABAC/users → seeds evaluation/pricing → defaults hardcoded
+restantes (incl. `EVALUATOR_POOL`, `VITE_DEFAULT_POOL`, `REPLAY_SPEED_FACTOR` da cat. C).
+
+---
+
 ## Config Consolidation — F2-pool: fechamento (D dissolvida, E resolvida) (2026-06-12)
 
 Fecha a UI de pool da Fase 2. F2.A–C expuseram hooks, Transfer/@mention, agent_kind e session_reservation.

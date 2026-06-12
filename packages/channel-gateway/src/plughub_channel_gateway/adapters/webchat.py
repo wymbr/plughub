@@ -156,10 +156,16 @@ class WebchatAdapter:
         await self._ws.accept()
 
         # ── Auth handshake ─────────────────────────────────────────────────────
+        # Auth timeout — config-api wins (Single Source). settings.ws_auth_timeout_s
+        # is only the fallback default; tenant comes from settings (deployment wiring).
+        from ..attachment_store import resolve_ws_auth_timeout_s
+        auth_timeout_s = await resolve_ws_auth_timeout_s(
+            self._redis, self._settings.tenant_id, self._settings.ws_auth_timeout_s,
+        )
         try:
             await asyncio.wait_for(
                 self._auth_handshake(),
-                timeout=float(self._settings.ws_auth_timeout_s),
+                timeout=float(auth_timeout_s),
             )
         except asyncio.TimeoutError:
             logger.warning("auth_timeout — no conn.authenticate received")

@@ -1089,7 +1089,9 @@ services:
       PLUGHUB_KAFKA_BROKERS:              kafka:29092
       PLUGHUB_REDIS_URL:                  redis://redis:6379
       PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!
-      PLUGHUB_WS_AUTH_TIMEOUT_S:          "30"
+      # PLUGHUB_WS_AUTH_TIMEOUT_S removido (config-consolidation F2-TTL): config-api
+      # vence. webchat e webrtc leem {tenant}:config:webchat:auth_timeout_s (escrito
+      # pelo config-api) via resolve_ws_auth_timeout_s; fallback ao default do código.
       # PLUGHUB_ATTACHMENT_EXPIRY_DAYS removido (config-consolidation F1.2): config-api
       # vence. O channel-gateway lê {tenant}:config:webchat:attachment_expiry_days
       # (escrito pelo config-api) via resolve_attachment_expiry_days; fallback ao default.
