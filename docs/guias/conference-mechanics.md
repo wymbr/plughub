@@ -954,6 +954,12 @@ multi-humano (segment-end do não-último + fan-out + NPS) continua fora de esco
 **Validação E2E**: (1) single-humano fecha com wrap-up+NPS 1× e `session:closed` setado; (2) transfer
 A→B sem marcador prematuro na origem, NPS só em B.
 
+> **Adendo (G7 Slice 4′ Item 1, 2026-06-13):** o bridge tratava só a sua própria escrita do marcador.
+> O **mcp-server** ainda seta `session:closed` de forma INCONDICIONAL no `/api/agent_done` (server.ts
+> ~1475, p/ ganhar a corrida com `pending_assignment` no reconnect single-humano). Em `other_human_active`
+> o bridge agora **desfaz** (`delete session:{id}:closed`) — o mcp-server segue setando síncrono (race
+> protection no single-humano), o bridge só desfaz quando há continuação. Fecha o vazamento do §4.
+
 ### Mudança 13 — NPS como hook de fim-de-CONTATO (`on_contact_end`, G7 Fase 3b-i, 2026-06-13)
 
 **Problema**: o NPS era um entry `side=customer` dentro de `on_human_end` (hook de fim-de-SEGMENTO),

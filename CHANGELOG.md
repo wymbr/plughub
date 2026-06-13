@@ -2,6 +2,26 @@
 
 ---
 
+## G7 Sub-arco multi-humano · Slice 4′ Item 1 — marcador session:closed em other_human_active (2026-06-13)
+
+O mcp-server seta `session:{id}:closed` **incondicional** no `/api/agent_done` (server.ts ~1475, p/
+ganhar a corrida com `pending_assignment` no reconnect single-humano). Em **continuação** (outro agente
+customer-facing ativo) esse marcador vazava → o Routing Engine descartaria re-rotas/reconexões da sessão
+ainda viva (§4).
+
+- **bridge** `process_contact_event`, branch `other_human_active`: passa a **desfazer**
+  (`delete session:{id}:closed`) o marcador, já que o contato continua. O mcp-server segue setando síncrono
+  (preserva a proteção de corrida no single-humano); o bridge só desfaz quando detecta continuação —
+  opção (a) do §4.
+
+**Rebuild**: `orchestrator-bridge`. **Limitação documentada (Item 2, não feito):** no path
+**customer-disconnect** com N humanos, só o pool do `meta` (last-writer) recebe wrap-up; dar
+`segment_wrapup` por humano ali exigiria reintroduzir o gating `arm_close` num path frágil que serve o
+caso comum single-humano — adiado (edge raro, baixo impacto). Doc: g7 §11. **Sub-arco multi-humano:
+Slices 1/2′/3/4′-Item1 ✅.**
+
+---
+
 ## G7 Sub-arco multi-humano · Slice 3 — fan-out humano↔humano (2026-06-13)
 
 Gap (1) do §7: numa conferência com 2+ humanos, a mensagem normal de um humano ia só ao cliente

@@ -282,8 +282,13 @@ falta é o wrap-up por peer e o fan-out.
   forward self-skip a msg do próprio remetente (que já tem echo otimista local). Console sem mudança;
   cliente/IA não duplicam (stream + outbound separados). Atribuição-por-nome = polish. Doc:
   `conference-mechanics.md` § Mudança 15.
-- **Slice 4′ (pendente) — limpeza**: marcador `session:closed` do mcp-server condicionado à
-  não-continuação (server.ts ~1475, §4); peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
+- **Slice 4′ Item 1 ✅ (2026-06-13)** — marcador `session:closed`: o mcp-server segue setando síncrono no
+  `/api/agent_done`; o bridge **desfaz** (`delete`) no branch `other_human_active` (contato continua),
+  fechando o vazamento do §4. **Item 2 (adiado, limitação conhecida)**: wrap-up por peer no
+  **customer-disconnect** com N humanos — só o pool do `meta` (last-writer) recebe wrap-up hoje; dar
+  `segment_wrapup` por humano ali exigiria reintroduzir o gating `arm_close` num path frágil que também
+  serve o caso comum single-humano → não feito (edge raro, baixo impacto; wrap-up = notas internas e o
+  cliente já saiu). Peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
 
 **Fora do sub-arco (arcos próprios):** unificação de contabilidade de agente kind-agnostic (registro único
 "agente anexado customer-facing"); detecção de queda involuntária de humano (heartbeat, gap G4) + re-rota.

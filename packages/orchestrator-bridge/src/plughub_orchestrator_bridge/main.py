@@ -5202,8 +5202,20 @@ async def process_contact_event(
                     # G7 Fase 3a — other_human_active: o contato CONTINUA com outro agente.
                     # NÃO escrevemos session:closed (antes era escrito incondicionalmente
                     # no topo, descartando re-rotas legítimas — §4).
+                    # G7 Slice 4′ Item 1 — o mcp-server seta session:closed de forma
+                    # INCONDICIONAL no /api/agent_done (server.ts ~1475, p/ ganhar a corrida
+                    # com pending_assignment no reconnect single-humano). Em continuação
+                    # (outro agente ativo) esse marcador vaza → o Routing Engine descartaria
+                    # re-rotas/reconexões da sessão ainda viva. Desfazemos aqui. Ver §4 / g7 §11.
+                    try:
+                        await redis_client.delete(f"session:{session_id}:closed")
+                    except Exception as _mk_exc:
+                        logger.warning(
+                            "Could not undo session:closed marker (other_human_active): "
+                            "session=%s — %s", session_id, _mk_exc,
+                        )
                     logger.info(
-                        "Agent dropped, %d agent(s) still active (no session:closed — "
+                        "Agent dropped, %d agent(s) still active (session:closed undone — "
                         "contact continues): session=%s instance=%s",
                         remaining, session_id, instance_id,
                     )

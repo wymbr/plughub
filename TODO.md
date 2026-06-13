@@ -523,9 +523,13 @@ ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `prima
   humanos no mesmo pool colidem); customer-disconnect multi-humano → Slice 4′. Mudança 14 / g7 §11.
 - **Slice 3 ✅** (2026-06-13) — fan-out msg humano↔humano (gap 1): ramo normal do agent-WS publica em
   `agent:events` + self-skip no forward. Mudança 15 / g7 §11. (Polish: atribuição-por-nome do remetente.)
-- **Slice 4′** — limpeza: marcador `session:closed` do mcp-server condicionado à não-continuação
-  (server.ts ~1475); peer IA encerra pelo flow (`complete`), não por wrap-up. **Absorve** G1–G6.
-Nó frágil → fatiar com gates de E2E.
+- **Slice 4′ Item 1 ✅** (2026-06-13) — bridge desfaz `session:closed` em `other_human_active` (mcp-server
+  segue setando síncrono; fecha o vazamento do §4). **Item 2 adiado (limitação)**: wrap-up por peer no
+  customer-disconnect multi-humano — exigiria `arm_close` num path frágil; edge raro, baixo impacto.
+  Mudança / g7 §11.
+
+**Sub-arco multi-humano: Slices 1/2′/3/4′-Item1 ✅.** Resta só o Item 2 (adiado) + os arcos próprios
+abaixo (unificação de contabilidade; queda involuntária de humano).
 
 ### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta)*
 Anchor "último agente customer-facing" hoje é aproximado por 2 registros (`human_agents` +
