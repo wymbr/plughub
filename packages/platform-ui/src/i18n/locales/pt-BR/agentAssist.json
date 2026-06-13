@@ -164,6 +164,8 @@
     "inviteSent":         "Convite enviado: {{agentTypeId}}",
     "escalatingTo":       "Escalando para: {{poolId}}",
     "transferComingSoon": "Transferir: em breve",
+    "transferDone":       "Transferido para {{pool}}",
+    "transferFailed":     "Falha ao transferir para {{pool}}",
     "clientDisconnected": "Cliente desconectou",
     "delegateDone":       "Agente delegado concluiu a tarefa",
     "specialistInvited":  "Especialista @{{alias}} convidado",

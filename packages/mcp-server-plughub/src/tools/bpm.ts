@@ -680,6 +680,11 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
                 type:         "menu.render",
                 session_id:   parsed.session_id,
                 menu_id:      messageId,
+                // G7 (c): instance de ORIGEM deste menu (= chave do menu:waiting).
+                // O Console ecoa em menu_submit (agent_key) p/ roteamento
+                // determinístico ao menu:result:{sid}:{instance}, sem depender de
+                // resolução de pid — funciona com N humanos/wrap-ups.
+                source_instance: authorId,
                 interaction:  parsed.menu!.interaction,
                 prompt:       parsed.message,
                 options:      parsed.menu!.options       ?? [],

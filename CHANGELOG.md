@@ -2,6 +2,131 @@
 
 ---
 
+## G7 Slice A — wrap-up multi-humano: identidade de participante por-segmento (2026-06-12)
+
+**Report:** o wrap-up (`agente_wrapup_v1`, hook `on_human_end` side=agent) só funcionava quando o
+humano era o **segmento final** do contato; em multi-humano (humano convidado como specialist ou
+origem+destino de transfer) endereçava/roteava errado. **Causa-raiz:** o isolamento dependia de um
+único campo de **sessão** `session.human_agent_participant_id`, lido por 4 componentes e sobrescrito
+a cada humano que sai → colapsa com ≥2 humanos. Ver
+[`docs/adr/adr-participant-identity-single-source.md`](docs/adr/adr-participant-identity-single-source.md).
+
+**(a) Endereçamento por-segmento** — `orchestrator-bridge`: `fire_pool_hooks` monta o `_fixed_pid`
+(side=agent) a partir do `instance_id` do humano DESTE segmento (`human_seg:{pool}`) e guarda
+`session:{id}:hook_served_human:{conference_id}`; no join do wrap-up (`process_routed`, antes do
+`activate_native_agent`) grava `segment.{wrapupSegId}.served_human_participant_id` no ContextStore
+(espelha `inviter_participant_id`). `agente_wrapup_v1.yaml`: 8× visibility →
+`@segment.served_human_participant_id` (auto-prefixa via `resolveSegmentRef`; `@ctx.segment.*` NÃO
+auto-prefixa). Linchpin verificado: `activate_native_agent` envia `segment_id=_part_seg_id` →
+`ctx.segmentId` = segmento onde o campo é gravado.
+
+**(b) Entrega isolada** — `mcp-server` `subscriber.on("message")`: `forward()` fazia `ws.send`
+incondicional (menu.render broadcast a todos os Consoles). Adicionado filtro: descarta evento de
+array-visibility que não inclui a identidade da conexão (`expectedInstanceId`/`agentInstanceId`);
+`"all"`/`"agents_only"` passam; identidade desconhecida → encaminha conservador.
+
+**(c) Entrada por remetente real** — `mcp-server`: (c1) handler de texto WS resolve `agentPid` pela
+identidade da conexão (`expectedInstanceId`), com fallback no campo global só sem conexão; (c2)
+`menu_submit` aceita `agent_key` e roteia direto ao `menu:result:{sid}:{agent_key}` (fallback no scan
+por visibility). `bpm.ts` menu.render expõe `source_instance = authorId` (= `ctx.instanceId` =
+chave do `menu:waiting` = sufixo do BLPOP — alinhamento verificado). platform-ui (`types.ts`,
+`AgentAssistContext`, `AgentAssistPage`) ecoa `source_instance` como `agent_key`.
+
+`session.human_agent_participant_id` mantido como fallback single-humano (não aposentado ainda).
+**Rebuild:** `orchestrator-bridge` (Python; re-sync da YAML no boot) + `mcp-server-plughub` +
+`platform-ui`. Doc: `docs/guias/conference-mechanics.md` § Mudança 10; invariante no CLAUDE.md.
+**Falta no G7:** Slice B (wrap-up no transfer = fim-de-segmento, sem armar close) + Fase 3 (close por
+continuação + NPS de contato).
+
+---
+
+## G7 Fase 0 (classificador read-only) + convite de humano como specialist (2026-06-12)
+
+**G7 Fase 0 — `_has_continuation` (read-only):** função em `orchestrator-bridge/main.py` que classifica se um
+fim de segmento humano é continuação (`transfer` / `other_human_active` / `specialist_active`) ou fim de
+contato (`no_continuation`), + log `G7-decision` em `process_contact_event`. Sem mudar comportamento.
+**Validada E2E nos 3 casos** (`no_continuation`, `transfer`, e `other_human_active` confirmado em log com 2
+humanos: `remaining=1 → continuation=True (other_human_active)`).
+
+**Convite de humano como specialist:** o endpoint `GET /v1/pools/:poolId/mentionable-agents` (agent-registry
+`routes/pools.ts`) passou a incluir pools `agent_kind=human` (placeholder `agent_type_id="human_agent"`),
+além dos IA (deploy skill). O dispatch do @mention (mcp-server) já era agnóstico a kind (roteia ao pool com
+`conference_id`). + alias `humanoxxx: humanoxxx` no `mentionable_pools` do `retencao_humano` no YAML demo.
+**Validado E2E**: `@humanoxxx` → `Human agent notified: pool=humanoxxx` → 2 humanos simultâneos numa
+conferência (1ª vez possível). Rebuild: `agent-registry` + restart `orchestrator-bridge`.
+
+**Gaps multi-humano expostos** (pré-existentes; ver `docs/arcos/g7-segment-contact-decoupling.md` §7): sem
+fan-out msg humano↔humano; roteamento do menu do wrap-up vai pra conferência em vez do `menu:result`; NPS não
+dispara em multi-humano. **Reordenação do G7**: Fase 1 (wrap-up do não-último) adiada (depende de conferência
+multi-humano); prioriza-se Fase 2/3 (close+NPS-de-contato para single/transfer).
+
+---
+
+## Console Transfer funcional + G7 (decoupling segment-end × contact-close) (2026-06-12)
+
+O "Transfer" do Console era um **stub** (`handleTransferTo` → toast `transferComingSoon`) e o mecanismo de
+transfer do `session_escalate` tinha bug latente: publicava `conversations.inbound` sem `started_at` → o
+Routing Engine descartava como **"Unrecognised inbound event"** (a re-rota nunca acontecia).
+
+**Implementado** (branch cirúrgico G7):
+
+- **mcp-server** `POST /api/session_transfer/:sessionId` (auth JWT, `participant_id=human-{userId}`):
+  `participant_left` (stream) → `session.closed{reason:agent_transfer}` em `agent:events` (origem larga o
+  contato no Console) → `contact_closed{reason:agent_transfer, instance_id:origem, outcome:transferred}`
+  (limpeza da origem no bridge) → `conversations.inbound` **válido** (`customer_id`/`channel` literal/
+  `started_at`/`pool_id=target`) que re-roteia (router migra o bucket).
+- **platform-ui** `handleTransferTo` → `fetch` na rota (toasts `transferDone`/`transferFailed`, i18n en+pt-BR).
+- **orchestrator-bridge** `process_contact_event`: (A) não seta `session:{id}:closed` quando
+  `reason==agent_transfer` (senão o `is_closing` guard descarta a re-rota); (B) no `remaining<=0`, se
+  `reason==agent_transfer` → return após a limpeza da origem (restore + `participant_left` `outcome=transferred`
+  + `agent_done` lifecycle DECR + SREM `human_agents`), **sem** `_mark_contact_ended`/`on_human_end`/close. O
+  SREM libera `human_active` → cai o guard "Skipping duplicate routing / already-served" que bloqueava o destino.
+
+**Validado E2E**: 1 contato com 2 segmentos humanos primários distintos (`operator@…` `transferred` em
+`retencao_humano` → `admin@…` `resolved` em `humanoxxx`), `on_human_end` (wrap-up + NPS) disparando só no
+fechamento do humano **final**, e o sinal `session_signal` NPS=10 corretamente chaveado ao `segment_id`/
+`agent_key` do segmento final (atribuição per-segmento — F5). **Config**: o pool humano de destino precisa ter
+os hooks `on_human_end` (wrapup+nps) ou o fechamento final fecha sem wrap-up/NPS.
+
+**Rebuild**: `mcp-server-plughub` + `platform-ui` + `orchestrator-bridge`. Doc: `docs/guias/conference-mechanics.md`
+§ Mudança 9; gap **G7** registrado no CLAUDE.md. **Dívida aberta (G7)**: decoupling segment-end×contact-close só
+para o caso transfer; wrap-up transfer-aware do segmento que sai = Estágio 3 opcional.
+
+---
+
+## Bancada — F7 validado E2E real + F5 achado estrutural (NPS once-per-contact) (2026-06-12)
+
+**F7 (motivo de escalação) — validado E2E com DADO REAL** (antes só fixture). Contato real conduzido via
+webchat (:5173) + Console (:5174) no navegador: `sac_ia` → "Falar com especialista" →
+`escalate(reason=specialist_needed)` → `retencao_humano` (operador) → Close → wrap-up classificado
+**Escalado** + motivo **Retenção/insatisfação**. `plughub_demo.segments` da sessão:
+
+- IA: `flow_id=skill_atendimento_sac_v1`, `outcome=escalated_human`, `escalation_reason=specialist_needed`.
+- Humano: `agent_type=human`, `outcome=escalated`, `close_reason=agent_hangup`, `escalation_reason=retention`.
+
+Confirma o wiring ponta a ponta da lente `escalation_reason` (IA via `pipeline_state.results.escalation_reason`
+lido pelo bridge na conclusão; humano via menu do wrap-up → acumulador `seg_signal` → bridge). Nota de
+execução: o menu `interaction: list`/`button` exige **eventos de mouse completos** para submeter a seleção
+(um `.click()` JS puro não dispara o handler). Pré-requisito: rebuild de `orchestrator-bridge` +
+`skill-flow-service` + `analytics-api` para a imagem carregar o código F7.
+
+**F5 (NPS/wrap-up multi-humano) — achado estrutural, PAUSADO.** "2 NPS num mesmo contato" é **impossível**:
+o NPS é customer-facing e dispara **uma vez por contato, no segmento humano final** (`on_human_end` não
+dispara em transfer/handoff intermediário — confirmado E2E: após transfer o cliente não recebe NPS, só no
+fechamento). Com **um operador**, transfer→re-escala **reusa o mesmo segmento humano** (sessão com
+`humans=1`), então nem por construção saem 2 segmentos humanos. Validar "1 sinal por agente" requer **2
+contatos com fechamento humano distinto** (idealmente 2 operadores p/ `agent_key` distinto, ou 2º pool
+humano com `on_human_end`). **Caminho de escrita do NPS confirmado saudável**: `survey_record(grain=segment)`
+publica `session.signals` com `segment_id`/`agent_key`/`value` correto quando o cliente responde de verdade —
+o "não gravava" observado em automação foi artefato de `.click()` JS no webchat (não dispara o handler real),
+**não regressão**. Diferença cosmética notada (deferida): o `menu`/`notify` do NPS renderiza como "structured
+content" no transcript em vez de texto puro; **dado intacto**.
+
+**Pendente F5**: criar 2º operador/pool humano → rodar 2 contatos → conferir 2 linhas
+`session_signal (grain=segment, metric=nps)` com `segment_id` distintos.
+
+---
+
 ## Config Consolidation — F2 item 5: ABAC/users (seed_auth × modules.yaml) (2026-06-12)
 
 Fonte única do domínio auth. `infra/modules.yaml` é o catálogo ABAC (carregado pelo auth-api no startup →

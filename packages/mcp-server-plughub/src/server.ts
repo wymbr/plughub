@@ -1527,12 +1527,133 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
   })
 
+  // POST /api/session_transfer/:sessionId
+  // Console "Transfer" action (human agent → another pool). Mirrors the
+  // session_escalate MCP tool (mode: transfer) but authenticated via the operator's
+  // JWT instead of a session_token. Removes the current agent from the conference
+  // (participant_left), re-routes the session to target_pool (conversations.inbound
+  // mode=transfer), and marks the agent done (outcome=transferred).
+  //
+  // Stage 1 (G7): basic transfer — origin leaves + re-route. This intentionally does
+  // NOT fire on_human_end (no conversations.events/contact_closed), so no wrap-up/NPS
+  // and no contact close yet. The transfer-aware wrap-up (on_human_end as segment-end,
+  // close_reason=agent_transfer, NPS skipped, contact kept alive) is wired in the
+  // orchestrator-bridge in a follow-up stage. See docs/guias/conference-mechanics.md.
+  app.post("/api/session_transfer/:sessionId", async (req: Request, res: Response) => {
+    const { sessionId } = req.params
+    try {
+      const payload       = verifyJwtPayload(req.headers.authorization)
+      const userId        = typeof payload["sub"] === "string" ? payload["sub"] : ""
+      const participantId = userId ? `human-${userId}` : ""
+      if (!participantId) {
+        res.status(401).json({ error: "unauthorized" })
+        return
+      }
+
+      const body          = req.body as Record<string, unknown>
+      const targetPool     = (body?.["target_pool"] as string) ?? ""
+      const handoffReason  = (body?.["handoff_reason"] as string) || "agent_transfer"
+      if (!targetPool) {
+        res.status(400).json({ error: "target_pool_required" })
+        return
+      }
+
+      // Resolve tenant/channel/customer/instance from session meta.
+      let tenantId       = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+      let channel        = "webchat"
+      let customerId     = ""
+      let originInstance = participantId   // human-{userId}; bridge keys cleanup on this
+      try {
+        const metaRaw = await redis.get(`session:${sessionId}:meta`)
+        if (metaRaw) {
+          const meta = JSON.parse(metaRaw) as Record<string, string>
+          if (meta["tenant_id"])        tenantId       = meta["tenant_id"]
+          if (meta["channel"])          channel        = meta["channel"]
+          if (meta["customer_id"])      customerId     = meta["customer_id"]
+          else if (meta["contact_id"])  customerId     = meta["contact_id"]
+          if (meta["instance_id"])      originInstance = meta["instance_id"]
+        }
+      } catch { /* use fallbacks */ }
+
+      const eventId   = crypto.randomUUID()
+      const timestamp = new Date().toISOString()
+      // Channel must be one of the ConversationInboundEvent literals or the routing
+      // request fails validation. session meta sometimes stores "chat" → normalise.
+      const VALID_CHANNELS = ["whatsapp", "webchat", "voice", "email", "sms", "instagram", "telegram", "webrtc", "webhook"]
+      const routeChannel = VALID_CHANNELS.includes(channel) ? channel : "webchat"
+
+      // 1. Current agent leaves the conference (visibility: all — customer must know).
+      try {
+        await writeStreamEntry(redis as any, {
+          stream_key:  `session:${sessionId}:stream`,
+          type:        "participant_left",
+          author_id:   participantId,
+          author_role: "primary",
+          visibility:  "all",
+          payload:     { participant_id: participantId, reason: handoffReason },
+          event_id:    eventId,
+          timestamp,
+        })
+      } catch { /* non-fatal */ }
+
+      // 1b. Tell the ORIGIN agent's Console to drop this contact — it has been handed off.
+      //     session.closed with reason=agent_transfer (NOT a customer-disconnect reason)
+      //     hits the Console's removal branch (unregister + delete from the contact list).
+      //     Only the origin is subscribed to agent:events:{session_id} at transfer time; the
+      //     target subscribes fresh after it is assigned, so it is not affected.
+      try {
+        await redis.publish(`agent:events:${sessionId}`, JSON.stringify({
+          type:       "session.closed",
+          session_id: sessionId,
+          reason:     "agent_transfer",
+        }))
+      } catch { /* non-fatal */ }
+
+      // 2. Remove the origin agent from the conference (segment-end). Triggers the
+      //    bridge's contact_closed(reason=agent_transfer) branch (G7): restore instance,
+      //    participant_left (analytics, outcome=transferred), agent_done lifecycle DECR,
+      //    and SREM session:{id}:human_agents — clearing human_active so the re-route can
+      //    activate the target agent. The transfer branch does NOT set session:closed,
+      //    does NOT fire on_human_end (wrap-up/NPS) and does NOT close the contact.
+      //    Published BEFORE the re-route so the origin is gone before the target activates.
+      await kafka.publish("conversations.events", {
+        event_type:  "contact_closed",
+        session_id:  sessionId,
+        instance_id: originInstance,
+        reason:      "agent_transfer",
+        outcome:     "transferred",
+      })
+
+      // 3. Re-route the session to the target pool. Must be a VALID ConversationInboundEvent
+      //    (routing request) — required: session_id, tenant_id, customer_id (non-empty),
+      //    channel (valid literal), started_at. pool_id restricts routing to the target pool.
+      //    The router migrates the session bucket from the origin pool to target_pool.
+      //    (A previous version copied the session_escalate payload without started_at → it
+      //    failed Pydantic validation and the Routing Engine discarded it as "Unrecognised
+      //    inbound event" — the transfer never routed.)
+      await kafka.publish("conversations.inbound", {
+        session_id:  sessionId,
+        tenant_id:   tenantId,
+        customer_id: customerId || sessionId,
+        channel:     routeChannel,
+        pool_id:     targetPool,
+        started_at:  timestamp,
+      })
+
+      res.json({ ok: true, session_id: sessionId, target_pool: targetPool, handoff_reason: handoffReason })
+    } catch {
+      res.status(500).json({ error: "transfer_failed" })
+    }
+  })
+
   // Menu substitution — supervisor answers a pending menu step on behalf of the customer.
   // XADD interaction_result to the session stream so the Skill Flow engine can resume
   // the suspended menu step.  Also pub/sub notifies agents watching the stream.
   app.post("/api/menu_submit/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
-    const { menu_id, interaction, result, displayText: rawDisplayText } = req.body as Record<string, unknown>
+    const { menu_id, interaction, result, displayText: rawDisplayText, agent_key } = req.body as Record<string, unknown>
+    // G7 (c): instance de origem do menu (ecoado do source_instance do menu.render).
+    const explicitAgentKey = typeof agent_key === "string" && agent_key ? agent_key : ""
 
     if (!menu_id || !interaction) {
       res.status(400).json({ error: "menu_id and interaction are required" })
@@ -1582,7 +1703,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
       try {
         const waitingHash = await redis.hgetall(`menu:waiting:${sessionId}`)
         console.log(`[menu_submit] session=${sessionId} menu:waiting =`, JSON.stringify(waitingHash))
-        if (waitingHash && Object.keys(waitingHash).length > 0) {
+        // G7 (c): roteamento determinístico por instance de origem. O Console ecoa
+        // o source_instance do menu.render como agent_key — casa direto a fila do
+        // agente dono do menu, sem depender de resolução de pid (multi-humano).
+        // Mantém o scan por visibility como fallback (botões legados sem agent_key
+        // e substituição por supervisor).
+        if (explicitAgentKey && waitingHash && waitingHash[explicitAgentKey] !== undefined) {
+          try {
+            const meta = JSON.parse(waitingHash[explicitAgentKey] as string)
+            targetVisibility = meta.visibility ?? "agents_only"
+          } catch { /* keep default visibility */ }
+          const resultKey = explicitAgentKey !== "_default_"
+            ? `menu:result:${sessionId}:${explicitAgentKey}`
+            : `menu:result:${sessionId}`
+          console.log(`[menu_submit] LPUSH ${resultKey} [value] (explicit agent_key)`)
+          await redis.lpush(resultKey, resultText)
+          pushed = true
+        }
+        if (!pushed && waitingHash && Object.keys(waitingHash).length > 0) {
           for (const [agentKey, metaJson] of Object.entries(waitingHash)) {
             try {
               const meta = JSON.parse(metaJson as string)
@@ -2277,6 +2415,25 @@ export async function startServer(config: ServerConfig): Promise<void> {
             return
           }
         }
+        // ── G7 (b) — outbound delivery isolation by array visibility ──────────
+        // forward() does ws.send() unconditionally, so in a multi-human conference
+        // EVERY Console subscribed to agent:events:{session} receives a wrap-up
+        // menu.render / message.text addressed (visibility array) to ONE specific
+        // human — the other human's Console would render it too. Drop array-vis
+        // events that do not include this connection's own identity. String
+        // visibilities ("all", "agents_only") pass through unchanged. When the
+        // identity is unknown (pool-fallback, no userId) we forward conservatively.
+        {
+          const _selfId = expectedInstanceId || agentInstanceId || ""
+          const _vis = _ev["visibility"]
+          if (Array.isArray(_vis) && _selfId && !(_vis as string[]).includes(_selfId)) {
+            console.log(
+              `[agent-ws] array-visibility ${String(_ev["type"])} filtered ` +
+              `(self=${_selfId} not in vis=[${(_vis as string[]).join(",")}]) — not forwarded`
+            )
+            return
+          }
+        }
         // ── Targeted-assignment filter ────────────────────────────────────────
         // conversation.assigned is published to the pool-wide channel; only the
         // agent the contact was routed to should receive it. Drop assignments
@@ -2563,17 +2720,25 @@ export async function startServer(config: ServerConfig): Promise<void> {
             // ["@ctx.session.human_agent_participant_id"]) match correctly.
             // The bridge writes session.human_agent_participant_id before firing hooks.
             // Mirrors the same lookup in the menu_submit handler.
-            let agentPid = agentInstanceId || poolId || "human_agent"
-            try {
-              const ctxTenantId = agentTenantId || (process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo")
-              const rawPid = await redis.hget(`${ctxTenantId}:ctx:${targetSessionId}`, "session.human_agent_participant_id")
-              if (rawPid) {
-                const pidEntry = JSON.parse(rawPid)
-                if (typeof pidEntry.value === "string" && pidEntry.value) {
-                  agentPid = pidEntry.value
+            // G7 (c): resolver o remetente pela identidade da PRÓPRIA conexão
+            // (expectedInstanceId = human-${userId}). Com a visibility do wrap-up
+            // agora por-segmento ([served_human_pid] = human-${userId}), isso
+            // desambigua N humanos. O campo de SESSÃO global colapsava em
+            // multi-humano. Fallback no global só quando a conexão é desconhecida
+            // (pool-fallback legado sem userId).
+            let agentPid = expectedInstanceId || agentInstanceId || poolId || "human_agent"
+            if (!expectedInstanceId) {
+              try {
+                const ctxTenantId = agentTenantId || (process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo")
+                const rawPid = await redis.hget(`${ctxTenantId}:ctx:${targetSessionId}`, "session.human_agent_participant_id")
+                if (rawPid) {
+                  const pidEntry = JSON.parse(rawPid)
+                  if (typeof pidEntry.value === "string" && pidEntry.value) {
+                    agentPid = pidEntry.value
+                  }
                 }
-              }
-            } catch { /* fallback to instance/pool id */ }
+              } catch { /* fallback to instance/pool id */ }
+            }
             for (const [aKey, metaJson] of Object.entries(waitingHash)) {
               try {
                 const meta = JSON.parse(metaJson as string)

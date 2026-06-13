@@ -201,13 +201,31 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
      `quality` faz guard/ressalva. `quality_criteria` segue same-form. **Futuro**: catálogo canônico de
      dimensões (única base rigorosa p/ comparar dimensões entre forms) → arco próprio. Ver CHANGELOG.
   4. **Validações E2E reais F5/F7 + limpeza de fixtures** — EM ANDAMENTO (2026-06-11):
-     - **F7** ✅ código destravado: `escalate` do `skill_atendimento_sac_v1` ganhou `reason: specialist_needed`
-       (gap — sem isso a IA não grava `escalation_reason`). Humano já cabeado (`agente_wrapup_v1`).
-       Falta a **rodada E2E do usuário**: limpar sintético (`ALTER TABLE segments UPDATE escalation_reason=''
-       WHERE escalation_reason!=''`) → rodar fluxo real (sac→escala→humano wrap-up escalado+motivo) →
-       conferir 1 linha IA + 1 humana reais. Restart orchestrator-bridge (mount, sem rebuild).
-     - **F5** multi-humano: rodar contato com 2 handoffs humanos sequenciais → 2 sinais de segmento
-       (`survey_record grain=segment`), 1 por agente. Valida atribuição per-segmento real.
+     - **F7** ✅ **VALIDADO E2E REAL (2026-06-12, ver CHANGELOG)**: contato real
+       `sac_ia`→escala→`retencao_humano`→wrap-up escalado+motivo (conduzido via webchat+Console no
+       navegador). `plughub_demo.segments` da sessão: 1 linha IA (`flow_id=skill_atendimento_sac_v1`,
+       `outcome=escalated_human`, `escalation_reason=specialist_needed`) + 1 linha humana
+       (`agent_type=human`, `outcome=escalated`, `escalation_reason=retention`). Wiring confirmado ponta
+       a ponta (IA via `pipeline_state.results.escalation_reason`; humano via menu do wrap-up→`seg_signal`
+       →bridge). Nota de execução: menu `list`/`button` exige **eventos de mouse completos** p/ submeter
+       a seleção (um `.click()` JS puro não dispara o handler).
+     - **F5** inline (grão segmento) — ✅ **CONCLUÍDO E VALIDADO E2E (2026-06-12)**. O NPS/wrap-up inline
+       é **1 por contato, no segmento humano final** — "2 NPS inline num contato" é estrutural (não existe).
+       O **transfer funcional** (ver CHANGELOG "Console Transfer + G7") destravou e **validou** a atribuição
+       per-segmento real: contato com 2 segmentos humanos (`operator@…` `transferred` em `retencao_humano` →
+       `admin@…` `resolved` em `humanoxxx`), e o sinal `session_signal grain=segment metric=nps=10`
+       corretamente chaveado ao `segment_id`/`agent_key` do segmento **final** (admin), não ao transferido.
+       Caminho de escrita do NPS confirmado saudável (`survey_record grain=segment`; o "não gravava" em
+       automação era artefato de `.click()` JS no webchat, não regressão).
+       **Reclassificação (decisão 2026-06-12)**: a riqueza "**N sinais por agente/segmento**" **NÃO é inline**
+       — é o **modelo de pesquisa multi-grão OUTBOUND** (`session_signal` grãos `journey | session | segment`,
+       até 3 grãos por fluxo, configurável: avaliar a journey, cada contato e cada segmento). Base parcial na
+       F10.2b (`survey_collector_ia`/`survey_reconnect_ia`). Falta o **planejamento da orquestração** (quando/
+       como cada grão dispara, surveys diferidas `captured_at≠session_at`) → vira **F11 / arco de pesquisa
+       multi-grão** (evaluation), separado do G7 (ciclo de vida). Ver `docs/arcos/g7-segment-contact-decoupling.md` §5.
+     - **NPS render (cosmético, diferido)**: a mensagem do `menu`/`notify` passou a ser exibida no
+       transcript como "structured content" (texto dentro do envelope) em vez de texto puro; o **dado do
+       NPS é gravado normalmente**. Revisar o emit do `menu`/`notify` + render no transcript depois.
      - **F8** ⏸ **ADIADO**: `evaluation_dimension_scores` segue com fixture (seed de `evaluation_results`).
        O avaliador `agente_avaliacao_v1` não roda no demo (test-grade, sem associação form/campanha) —
        consertar o pipeline de avaliação é **arco próprio**. Fixture documentado até lá.
@@ -473,6 +491,34 @@ sintéticos + backstops + fixes da validação (headroom nos drains, dedupe do
 aviso, release imediato no contact_closed). **Fase B ✅** (2026-06-05): causa
 queue_full na demanda reprimida + tier da fila (Atendida/Sistema) na aba Fila.
 **ARCO CONCLUÍDO** — item 7 do capacity-governance destravado.
+
+---
+
+## G7 — Decoupling segment-end × contact-close *(arco aberto)*
+
+Spec em [`docs/arcos/g7-segment-contact-decoupling.md`](docs/arcos/g7-segment-contact-decoupling.md).
+`on_human_end` está acoplado a `_trigger_contact_close` (conflação camadas 1/3). Entregue:
+Fase 0 (classificador `_has_continuation`) + branch `agent_transfer` (transfer funcional — Mudança 9) +
+**Slice A ✅** (wrap-up multi-humano: identidade de participante por-segmento — Mudança 10 + ADR
+`adr-participant-identity-single-source`; resolve o gap (2) menu-routing do sub-arco multi-humano).
+**Falta** (modelo-alvo): **Slice B** — wrap-up no transfer (disparar wrap-up side=agent por-segmento no branch
+`agent_transfer`, **sem** armar `posatt`/`hook_pending` de close; agora desbloqueado pela Slice A); **Fase 3** —
+contact-close como decisão separada ("há continuação?") + NPS como hook de **contato** de 1ª classe (sair da
+carona do último `on_human_end`); wrap-up em **todo** fim de segmento (inclusive humano não-último);
+continuações além do transfer (re-fila, handback IA). Sub-arco multi-humano aberto: gap (1) fan-out msg
+humano↔humano + gap (3) NPS multi-humano. **Absorve** os gaps G1–G6. Nó frágil → fatiar com gates de E2E.
+
+---
+
+## F11 — Pesquisa multi-grão outbound *(planejamento)*
+
+A avaliação do cliente é **outbound** e pode rodar em **até 3 grãos** (`session_signal`: `journey | session |
+segment`), configurável por fluxo: avaliar a journey inteira, cada contato, e cada segmento em cada contato.
+Base parcial na F10.2b (`survey_collector_ia`/`survey_reconnect_ia` + `survey_record grain=segment`). **Falta o
+planejamento da orquestração**: quando/como cada grão dispara (1 ao fim do contato/journey + N por segmento,
+diferidas, `captured_at≠session_at`). Arco de **evaluation**, separado do G7 (ciclo de vida). O F5 inline (grão
+segmento) está ✅ concluído; a riqueza "N sinais por agente" mora aqui, não no inline. Ver
+`docs/arcos/g7-segment-contact-decoupling.md` §5.
 
 ---
 

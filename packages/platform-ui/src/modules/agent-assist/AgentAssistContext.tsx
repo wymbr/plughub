@@ -493,6 +493,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         timestamp: new Date().toISOString(),
         menuData: {
           menu_id:      event.menu_id,
+          source_instance: (event as unknown as Record<string, unknown>)["source_instance"] as string | undefined,
           interaction:  event.interaction,
           prompt:       event.prompt,
           options:      event.options,

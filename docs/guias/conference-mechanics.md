@@ -816,5 +816,88 @@ chave por-instância fica como melhoria futura (liga à proposta de fila pull/in
 
 ---
 
+### Mudança 9 — Console Transfer funcional + G7 (decoupling segment-end × contact-end, 2026-06-12)
+
+**Problema**: o "Transfer" do Console era um **stub** (`handleTransferTo` → `addToast(transferComingSoon)`) —
+nunca executava nada. A lista de destinos (`supervisor_config.escalation_pools`) estava cabeada, mas a
+**ação** não. Além disso, o mecanismo de transfer do tool `session_escalate` (mode: transfer) tinha um bug
+**latente**: publicava em `conversations.inbound` um payload com `mode/from_participant/handoff_reason` mas
+**sem `started_at`/`customer_id` válidos** → falhava a validação Pydantic do `ConversationInboundEvent` no
+Routing Engine, que o descartava como **"Unrecognised inbound event (not a routing request)"**. Ou seja, a
+re-rota nunca acontecia — o transfer "executava mas a origem não saía e o destino não recebia".
+
+**Correção (G7 — branch cirúrgico)**:
+
+- **mcp-server** `POST /api/session_transfer/:sessionId` (auth JWT, `participant_id = human-{userId}`), publica
+  em ordem: (1) `participant_left` no stream (cliente vê a saída); (2) `session.closed{reason:agent_transfer}`
+  em `agent:events:{session_id}` — só a **origem** está inscrita nesse canal no momento do transfer, então o
+  Console dela **larga o contato** (branch de remoção do `AgentAssistContext`); (3) `conversations.events
+  contact_closed{reason:agent_transfer, instance_id:origem, outcome:transferred}` — aciona a limpeza da origem
+  no bridge; (4) `conversations.inbound` **válido** (`session_id, tenant_id, customer_id, channel literal,
+  pool_id=target, started_at`) → re-rota pro pool destino (o router migra o bucket).
+- **orchestrator-bridge** `process_contact_event` (`contact_closed`): (A) **não** seta `session:{id}:closed`
+  quando `reason==agent_transfer` (senão o `is_closing` guard do routing descartaria a re-rota); (B) o branch
+  agente-específico roda a limpeza normal da origem (restore + `participant_left` analytics
+  `outcome=transferred` + `agent_done` no lifecycle → `remove_conversation` DECR + **SREM** `human_agents`),
+  mas no `remaining<=0`, se `reason==agent_transfer` → **return** sem `_mark_contact_ended`, sem disparar
+  `on_human_end` e sem `_trigger_contact_close`. O SREM libera o flag `human_active`, removendo o guard
+  "Skipping duplicate routing / already-served" que bloqueava a ativação do destino.
+
+**Efeito**: `on_human_end` deixa de significar obrigatoriamente "fim de contato" — no transfer é tratado como
+**fim de segmento** (a origem sai, o contato segue pela re-rota). Validado E2E: 1 contato com 2 segmentos
+humanos primários distintos (origem `transferred` no pool A → destino `resolved` no pool B), `on_human_end`
+(wrap-up + NPS) disparando só no **fechamento do humano final**, e o sinal NPS de `session_signal`
+corretamente chaveado ao `segment_id`/`agent_key` do segmento final (atribuição per-segmento — F5).
+
+**Config necessária**: o pool humano de destino precisa ter os hooks `on_human_end` (ex.: `wrapup_ia` +
+`nps_ia`) configurados, senão o fechamento do humano final fecha o contato **sem** wrap-up/NPS (o dispatch
+lê `pool.hooks.on_human_end`; vazio → `_trigger_contact_close` direto).
+
+**G7 — dívida aberta (decoupling parcial)**: o desacoplamento segment-end × contact-end foi feito **só para o
+caso transfer** (`reason==agent_transfer`). Permanece dívida: (1) `on_human_end` como fim-de-segmento
+**genérico** — num conference com 2+ humanos primários, um humano que **não é o último** a sair (sem transfer)
+não dispara `on_human_end` → seu segmento não ganha wrap-up; (2) NPS como hook de **fim-de-contato** de 1ª
+classe (hoje "pega carona" no `on_human_end` do último humano); (3) reconhecer outras continuações além do
+transfer explícito (re-fila, handback IA). O **wrap-up transfer-aware** (segmento que sai coletar o motivo via
+`escalation_reasons` → `survey_record`) **não é um caminho dedicado** — é caso particular de "todo fim de
+segmento gera wrap-up" e fica **absorvido no arco G7** ([`docs/arcos/g7-segment-contact-decoupling.md`](../arcos/g7-segment-contact-decoupling.md));
+o transfer é funcional sem ele (o segmento que sai registra `outcome=transferred` sem nota). A avaliação
+**per-segmento do cliente** é **outbound** (modelo multi-grão journey/session/segment — F11), não inline.
+
+---
+
+### Mudança 10 — wrap-up multi-humano: identidade de participante por-segmento (G7 Slice A, 2026-06-12)
+
+**Problema**: o wrap-up (`on_human_end` side=agent) só funcionava com o humano sendo o **segmento
+final** do contato. Em multi-humano (humano convidado como specialist; origem+destino de transfer)
+o isolamento dependia de **um** campo de SESSÃO `session.human_agent_participant_id`, lido por 4
+componentes (`fire_pool_hooks` `_fixed_pid`; `mcp-server` `menu_submit` e texto WS; visibility da
+`agente_wrapup_v1.yaml`) e **sobrescrito** a cada humano que sai → colapsa com ≥2 humanos. Saída
+mal-endereçada (visibility errada) + entrega broadcast (`forward()` fazia `ws.send` incondicional) +
+entrada resolvendo o humano errado. Ver
+[`docs/adr/adr-participant-identity-single-source.md`](../adr/adr-participant-identity-single-source.md).
+
+**Correção (3 partes)**:
+- **(a) saída — endereço**: `fire_pool_hooks` deriva o `_fixed_pid` (side=agent) do `instance_id` do
+  humano DESTE segmento (`human_seg:{pool}`) e guarda `session:{id}:hook_served_human:{conference_id}`;
+  o join do wrap-up (`process_routed`, antes de `activate_native_agent`) grava
+  `segment.{wrapupSegId}.served_human_participant_id` no ContextStore (padrão `inviter_participant_id`).
+  YAML usa `@segment.served_human_participant_id` (auto-prefixa para `segment.{ctx.segmentId}.…`;
+  `@ctx.segment.*` **não** auto-prefixa). `ctx.segmentId == _part_seg_id` (verificado).
+- **(b) saída — entrega**: filtro em `subscriber.on("message")` antes do `forward()` — descarta evento
+  de **array-visibility** que não inclui a identidade da conexão (`expectedInstanceId`/`agentInstanceId`);
+  `"all"`/`"agents_only"` passam; identidade desconhecida → encaminha conservador.
+- **(c) entrada — remetente**: (c1) texto WS resolve `agentPid` pela conexão (`expectedInstanceId`),
+  fallback no global só sem conexão; (c2) `menu_submit` aceita `agent_key` e roteia direto ao
+  `menu:result:{sid}:{agent_key}` (fallback no scan). `menu.render` expõe `source_instance = authorId`
+  (= `ctx.instanceId` = chave do `menu:waiting` = sufixo do BLPOP); o Console ecoa como `agent_key`.
+
+**Keys novas**: `session:{id}:hook_served_human:{conference_id}` (TTL 4h, side=agent) ·
+ctx `segment.{segId}.served_human_participant_id`. **`session.human_agent_participant_id`** mantido só
+como fallback single-humano (não aposentado). **Limitação**: o `author_id` do echo no `menu_submit`
+(botão) ainda sai do campo global — cosmético, roteamento já correto.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

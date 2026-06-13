@@ -8,11 +8,14 @@
 #   - Registrar dados de wrap-up no ContextStore (session.wrapup.*)
 #   - Obrigatório quando configurado — contato não fecha antes do wrap-up
 #
-# Isolamento de visibilidade:
-#   Todas as mensagens usam visibility: ["@ctx.session.human_agent_participant_id"].
-#   O cliente NÃO vê o wrap-up — é uma conversa exclusiva com o agente humano
-#   que encerrou. Supervisores e outros participantes da conferência também
-#   NÃO veem — evita poluir sessões com múltiplos agentes.
+# Isolamento de visibilidade (G7 — por-segmento):
+#   Todas as mensagens usam visibility: ["@segment.served_human_participant_id"].
+#   O prefixo @segment auto-resolve para segment.{wrapupSegId}.served_human_participant_id
+#   (resolveSegmentRef), campo gravado pelo bridge no
+#   join a partir do humano que ESTE hook serve. Assim cada wrap-up endereça só o seu
+#   humano — funciona com 2+ humanos na conferência (o campo de SESSÃO global
+#   session.human_agent_participant_id colapsava em multi-humano). O cliente,
+#   supervisores e os demais humanos NÃO veem este wrap-up.
 #
 # Invariantes:
 #   - Wrap-up é obrigatório — o contato não fecha até este agente completar
@@ -41,7 +44,7 @@ steps:
     interaction: text
     prompt: "📝 Wrap-up — por favor, descreva brevemente o que foi tratado neste atendimento:"
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     timeout_s: 30
     output_as: wrapup_resumo
     on_success: registrar_resumo
@@ -54,7 +57,7 @@ steps:
     type: notify
     message: "✅ Resumo registrado."
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     context_tags:
       outputs:
         wrapup_resumo:
@@ -74,7 +77,7 @@ steps:
     interaction: button
     prompt: "Como você classifica este atendimento?"
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     timeout_s: 30
     options:
       - id: resolvido
@@ -96,7 +99,7 @@ steps:
     type: notify
     message: "✅ Classificação registrada."
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     context_tags:
       outputs:
         wrapup_classificacao:
@@ -128,7 +131,7 @@ steps:
     interaction: list
     prompt: "Qual o motivo da escalação?"
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     timeout_s: 30
     options:
       - id: customer_request
@@ -156,7 +159,7 @@ steps:
     type: notify
     message: "✅ Motivo registrado."
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     context_tags:
       outputs:
         wrapup_escalation_reason:
@@ -174,7 +177,7 @@ steps:
     interaction: text
     prompt: "Há próximos passos necessários? (digite 'não' para pular)"
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     timeout_s: 30
     output_as: wrapup_proximos_passos
     on_success: registrar_proximos_passos
@@ -187,7 +190,7 @@ steps:
     type: notify
     message: "✅ Wrap-up completo. Obrigado!"
     visibility:
-      - "@ctx.session.human_agent_participant_id"
+      - "@segment.served_human_participant_id"
     context_tags:
       outputs:
         wrapup_proximos_passos:

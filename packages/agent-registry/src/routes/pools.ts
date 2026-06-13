@@ -339,6 +339,19 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
       currentSlots.filter(s => !!s.skill_id).map(s => [s.pool_id, s.skill_id as string]),
     )
 
+    // Human pools have NO deploy skill (humans don't deploy a skill_id). Resolve the
+    // target pools' agent_kind so a HUMAN pool can also be invited as a specialist into
+    // the conference (Arc 11 — AI and humans are symmetric co-participants). The @mention
+    // dispatch (mcp-server) is already agent-kind-agnostic: it routes to the target pool
+    // with conference_id, so the Routing Engine allocates a human there just like an AI.
+    const targetPools = await (prisma as any).pool.findMany({
+      where: { tenant_id: tenantId, pool_id: { in: targetPoolIds } },
+      select: { pool_id: true, agent_kind: true },
+    }) as Array<{ pool_id: string; agent_kind: string | null }>
+    const kindByPool = new Map<string, string | null>(
+      targetPools.map(p => [p.pool_id, p.agent_kind]),
+    )
+
     // Build alias-indexed response: one entry per alias (key in mentionable_pools)
     // so the UI can construct @alias mentions (not @agent_type_id which is not a valid alias)
     const agents: Array<{
@@ -349,12 +362,15 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
 
     for (const [alias, targetPoolId] of Object.entries(mentionablePools)) {
       const skillId = skillByPool.get(targetPoolId)
-      if (!skillId) continue
-      agents.push({
-        alias,
-        agent_type_id: skillId,   // deploy-driven: agent_type_id == skill_id
-        pool_id:       targetPoolId,
-      })
+      if (skillId) {
+        // AI specialist — deploy-driven agent_type_id == skill_id (formats to a name in UI).
+        agents.push({ alias, agent_type_id: skillId, pool_id: targetPoolId })
+      } else if (kindByPool.get(targetPoolId) === "human") {
+        // Human pool (no deploy skill) — invite a HUMAN specialist into the conference.
+        // Placeholder agent_type_id so the UI can render it.
+        agents.push({ alias, agent_type_id: "human_agent", pool_id: targetPoolId })
+      }
+      // else: undeployed AI pool (no current skill, not human) → still skipped.
     }
 
     return res.json({ agents })

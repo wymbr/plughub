@@ -236,6 +236,8 @@ export const AgentAssistPage: React.FC = () => {
       const contact = contacts.get(selectedSessionId);
       const menuMsg = contact?.messages.find(m => m.menuData?.menu_id === menuId);
       const interaction = menuMsg?.menuData?.interaction ?? "button";
+      // G7 (c): instance de origem do menu → roteamento determinístico no backend.
+      const sourceInstance = menuMsg?.menuData?.source_instance ?? "";
 
       let displayText: string;
       if (typeof result === "string") {
@@ -278,7 +280,7 @@ export const AgentAssistPage: React.FC = () => {
         const resp = await fetch(`/api/menu_submit/${selectedSessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify({ menu_id: menuId, interaction, result, displayText }),
+          body:    JSON.stringify({ menu_id: menuId, interaction, result, displayText, agent_key: sourceInstance }),
         });
         if (resp.ok) {
           setSubstitutionMode(false);
@@ -387,12 +389,25 @@ export const AgentAssistPage: React.FC = () => {
     [selectedSessionId, handleSend, addToast],
   );
 
-  // Transfer to pool
+  // Transfer to pool (G7 — Stage 1): calls /api/session_transfer which mirrors the
+  // session_escalate tool (mode: transfer) — current agent leaves the conference and
+  // the session is re-routed to the target pool. The transfer-aware wrap-up
+  // (on_human_end as segment-end) is wired in the orchestrator-bridge in a follow-up.
   const handleTransferTo = useCallback(
     (poolId: string) => {
-      addToast(t("message.transferComingSoon") + ` → ${poolId}`, "info");
+      if (!selectedSessionId) return;
+      fetch(`/api/session_transfer/${selectedSessionId}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${session?.accessToken ?? ""}` },
+        body:    JSON.stringify({ target_pool: poolId, handoff_reason: "agent_transfer" }),
+      })
+        .then(r => {
+          if (r.ok) addToast(t("message.transferDone", { pool: poolId }), "info");
+          else      addToast(t("message.transferFailed", { pool: poolId }), "error");
+        })
+        .catch(() => addToast(t("message.transferFailed", { pool: poolId }), "error"));
     },
-    [addToast, t],
+    [selectedSessionId, session, addToast, t],
   );
 
   // ── Derived state ──────────────────────────────────────────────────────

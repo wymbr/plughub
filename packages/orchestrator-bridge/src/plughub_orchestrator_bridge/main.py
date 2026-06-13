@@ -956,12 +956,14 @@ async def fire_pool_hooks(
     # (session.close_origin), semeia o acumulador do segmento e guarda o
     # segment_id para carimbar no hook_conf de cada hook desta leva.
     _hook_human_seg_id = ""
+    _hook_human_instance_id = ""   # G7: pid do humano DESTE segmento (não o global)
     if hook_type == "on_human_end":
         try:
             _raw_hs = await redis_client.get(f"session:{session_id}:human_seg:{pool_id}")
             if _raw_hs:
                 _hs_rec = json.loads(_raw_hs if isinstance(_raw_hs, str) else _raw_hs.decode())
                 _hook_human_seg_id = _hs_rec.get("segment_id", "") or ""
+                _hook_human_instance_id = _hs_rec.get("instance_id", "") or ""
                 if _hook_human_seg_id:
                     _hs_transport = ""
                     try:
@@ -1168,20 +1170,38 @@ async def fire_pool_hooks(
                             _cpid_raw if isinstance(_cpid_raw, str) else _cpid_raw.decode()
                         )
                 else:
-                    # Read human_agent_participant_id from ContextStore
-                    _ha_raw = await redis_client.hget(
-                        f"{tenant_id}:ctx:{session_id}",
-                        "session.human_agent_participant_id",
-                    )
-                    if _ha_raw:
-                        _ha_entry = json.loads(
-                            _ha_raw if isinstance(_ha_raw, str) else _ha_raw.decode()
+                    # G7/multi-humano: preferir o instance_id do humano DESTE segmento
+                    # (human_seg:{pool}) ao campo de SESSÃO global
+                    # human_agent_participant_id — assim cada wrap-up endereça o seu
+                    # humano. Fallback no global p/ post_human / registro ausente.
+                    if _hook_human_instance_id:
+                        _fixed_pid = _hook_human_instance_id
+                    else:
+                        _ha_raw = await redis_client.hget(
+                            f"{tenant_id}:ctx:{session_id}",
+                            "session.human_agent_participant_id",
                         )
-                        _fixed_pid = _ha_entry.get("value")
+                        if _ha_raw:
+                            _ha_entry = json.loads(
+                                _ha_raw if isinstance(_ha_raw, str) else _ha_raw.decode()
+                            )
+                            _fixed_pid = _ha_entry.get("value")
                 if _fixed_pid:
                     _pset_key = f"session:{session_id}:posatt:{conference_id}:participants"
                     await redis_client.sadd(_pset_key, _fixed_pid)
                     await redis_client.expire(_pset_key, 14400)
+                    # G7: guarda o pid do humano servido por ESTE hook (keyed por
+                    # conference_id) para o join do wrap-up (process_routed) gravar
+                    # segment.{wrapupSegId}.served_human_participant_id — fonte da
+                    # visibility por-segmento (substitui o campo global na YAML).
+                    if hook_side == "agent":
+                        try:
+                            await redis_client.setex(
+                                f"session:{session_id}:hook_served_human:{conference_id}",
+                                14400, _fixed_pid,
+                            )
+                        except Exception:
+                            pass
                     logger.debug(
                         "fire_pool_hooks: posatt participants fixed-side registered: "
                         "session=%s conf=%s side=%s pid=%s",
@@ -2604,6 +2624,43 @@ async def process_routed(
                     session_id, _inviter_exc,
                 )
 
+            # ── G7: served_human_participant_id (wrap-up hook, por-segmento) ───────
+            # Quando este join é um hook side=agent (wrap-up), fire_pool_hooks deixou
+            # session:{id}:hook_served_human:{conference_id} = pid do humano DESTE
+            # segmento. Grava no namespace segment-scoped do próprio wrap-up para que
+            # suas mensagens usem visibility ["@ctx.segment.served_human_participant_id"]
+            # — isolando o wrap-up ao humano certo mesmo com 2+ humanos na conferência
+            # (substitui o campo de SESSÃO global session.human_agent_participant_id).
+            try:
+                _served_raw = await redis_client.get(
+                    f"session:{session_id}:hook_served_human:{conference_id}"
+                )
+                if _served_raw:
+                    _served_pid = (
+                        _served_raw if isinstance(_served_raw, str) else _served_raw.decode()
+                    )
+                    if _served_pid:
+                        _ctx_key   = f"{tenant_id}:ctx:{session_id}"
+                        _ctx_now   = datetime.now(timezone.utc).isoformat()
+                        _ctx_field = f"segment.{_part_seg_id}.served_human_participant_id"
+                        await redis_client.hset(_ctx_key, _ctx_field, json.dumps({
+                            "value":      _served_pid,
+                            "confidence": 1.0,
+                            "source":     "bridge:wrapup_hook",
+                            "visibility": "agents_only",
+                            "updated_at": _ctx_now,
+                        }))
+                        await redis_client.expire(_ctx_key, _stl())
+                        logger.debug(
+                            "served_human_participant_id written: session=%s seg=%s human=%s",
+                            session_id, _part_seg_id, _served_pid,
+                        )
+            except Exception as _served_exc:
+                logger.warning(
+                    "Could not write served_human_participant_id: session=%s — %s",
+                    session_id, _served_exc,
+                )
+
         asyncio.create_task(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
@@ -3629,6 +3686,39 @@ async def process_queued(
     )
 
 
+# ── G7 — ponto único de verdade: este fim de segmento é também fim de contato? ──
+
+async def _has_continuation(
+    redis_client: aioredis.Redis,
+    session_id: str,
+    reason: str,
+    remaining: int,
+) -> tuple[bool, str]:
+    """G7: classifica se o fim de um segmento humano é uma CONTINUAÇÃO (o contato
+    segue) ou um fim de contato. Read-only — não muda estado.
+
+    Continuação quando:
+      - reason == "agent_transfer"  → re-rota em voo para outro pool;
+      - remaining > 0               → ainda há outro humano primário ativo;
+      - active_ai_specialists > 0   → specialist IA ainda respondendo.
+    Caso contrário → fim de contato (no_continuation).
+
+    Retorna (is_continuation, motivo). Nas fases ≥3 do G7 esta decisão passa a
+    governar contact-close + disparo do NPS. Ver docs/arcos/g7-segment-contact-decoupling.md.
+    """
+    if reason == "agent_transfer":
+        return True, "transfer"
+    if remaining > 0:
+        return True, "other_human_active"
+    try:
+        _spec = await redis_client.scard(f"session:{session_id}:active_ai_specialists")
+        if _spec and int(_spec) > 0:
+            return True, "specialist_active"
+    except Exception:
+        pass
+    return False, "no_continuation"
+
+
 # ── Process conversations.events — notify human agent on contact_closed ───────
 
 async def process_contact_event(
@@ -3991,7 +4081,12 @@ async def process_contact_event(
         # evitando o "ghost contact" no Agent Assist ao reconectar.
         # TTL 7 dias: cobre sessões que ficam na fila por muito tempo.
         try:
-            await redis_client.setex(f"session:{session_id}:closed", 604800, reason)
+            # G7 — transfer: the session is being RE-ROUTED to another pool, not closed.
+            # Writing the closed marker would make the Routing Engine discard the re-route
+            # in _drain_queue_for_agent / the is_closing guard ("already-closing session"),
+            # so skip it for agent_transfer.
+            if reason != "agent_transfer":
+                await redis_client.setex(f"session:{session_id}:closed", 604800, reason)
         except Exception as exc:
             logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
 
@@ -4691,11 +4786,45 @@ async def process_contact_event(
 
                 await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")
+                # ── G7 Fase 0 — classificador read-only de continuação (sem agir) ──────
+                # Torna observável, antes de mudar comportamento, se este fim de segmento
+                # humano é também fim de contato. As fases seguintes do G7 passam a AGIR
+                # sobre esta decisão (wrap-up por segmento, NPS como hook de contato,
+                # contact-close por "há continuação?"). Ver docs/arcos/g7-segment-contact-decoupling.md.
+                try:
+                    _g7_cont, _g7_motive = await _has_continuation(
+                        redis_client, session_id, reason, remaining
+                    )
+                    logger.info(
+                        "G7-decision: session=%s instance=%s reason=%s remaining=%d "
+                        "→ continuation=%s (%s)",
+                        session_id, instance_id, reason, remaining, _g7_cont, _g7_motive,
+                    )
+                except Exception as _g7_exc:
+                    logger.debug(
+                        "G7-decision: classifier failed session=%s — %s", session_id, _g7_exc
+                    )
                 if remaining <= 0:
                     # Last human agent dropped — clear the fast-lookup flag
                     await redis_client.delete(f"session:{session_id}:human_agent")
                     await redis_client.delete(f"session:{session_id}:human_agents")
                     logger.info("Last human agent dropped: session=%s", session_id)
+
+                    # ── G7 — Transfer: origin segment ended, CONTACT continues ────────
+                    # The cleanup above (restore, participant_left outcome=transferred,
+                    # agent_done lifecycle DECR, SREM human_agents) already removed the
+                    # origin so the in-flight re-route (conversations.inbound to the target
+                    # pool) can activate the target agent (the human_active guard now
+                    # passes). A transfer is a mid-contact handoff: do NOT freeze AHT, do
+                    # NOT fire on_human_end (wrap-up/NPS) and do NOT close the contact.
+                    # (The transfer-aware wrap-up is a separate follow-up stage.)
+                    if reason == "agent_transfer":
+                        logger.info(
+                            "Transfer: origin segment ended, contact continues "
+                            "(re-routed) — session=%s instance=%s",
+                            session_id, instance_id,
+                        )
+                        return
 
                     # ── Record true contact end time (G1 fix) ─────────────────
                     # The human agent is the last active participant — freeze AHT

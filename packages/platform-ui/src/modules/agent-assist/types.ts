@@ -40,6 +40,9 @@ export interface WsMessageText {
 export interface WsMenuRender {
   type: "menu.render";
   menu_id: string;
+  /** G7 (c): instance de origem do menu (= chave do menu:waiting). Ecoado em
+   *  menu_submit como agent_key p/ roteamento determinístico (multi-humano). */
+  source_instance?: string;
   interaction: "text" | "button" | "list" | "checklist" | "form";
   prompt: string;
   options?: Array<{ id: string; label: string }>;
@@ -70,6 +73,8 @@ export interface MenuField {
  */
 export interface ChatMenuData {
   menu_id:       string;
+  /** G7 (c): instance de origem do menu, ecoado como agent_key em menu_submit. */
+  source_instance?: string;
   interaction:   "text" | "button" | "list" | "checklist" | "form";
   prompt:        string;
   options?:      MenuOption[];
