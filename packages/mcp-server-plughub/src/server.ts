@@ -2933,11 +2933,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
       }
     })
 
-    // Ping every 30s to keep connection alive
+    // Ping every 30s to keep the connection alive + detect DEAD (half-open) connections.
+    // G7 heartbeat Slice 2: o ws.close nem sempre dispara num drop "sujo" (meia-conexão:
+    // sleep, partição de rede). O ping de PROTOCOLO (ws.ping) é auto-respondido pelo
+    // browser (RFC 6455) → o evento 'pong' reseta isAlive. Sem pong num ciclo completo →
+    // conexão morta → ws.terminate() dispara ws.on('close') → grace → agent_disconnect
+    // (heartbeat Slice 1) → re-rota. O {type:"ping"} app-level é mantido (o Console pode usá-lo).
+    let isAlive = true
+    ws.on("pong", () => { isAlive = true })
     const pingInterval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "ping" }))
+      if (ws.readyState !== WebSocket.OPEN) return
+      if (!isAlive) {
+        console.warn(`[agent-ws] no pong within interval — terminating dead connection pool=${poolId} user=${userId}`)
+        try { ws.terminate() } catch { /* noop */ }
+        return
       }
+      isAlive = false
+      try { ws.ping() } catch { /* noop */ }
+      ws.send(JSON.stringify({ type: "ping" }))
     }, 30_000)
 
     ws.on("close", () => {

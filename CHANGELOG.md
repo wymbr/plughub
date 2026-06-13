@@ -2,6 +2,18 @@
 
 ---
 
+## Heartbeat · Slice 2 — pong-tracking (drop sujo) (2026-06-13)
+
+Hardening da Slice 1: `ws.close` nem sempre dispara numa meia-conexão (sleep, partição de rede). O
+agent-WS passa a usar **ping de protocolo** (`ws.ping`, auto-respondido pelo browser via RFC 6455):
+evento `pong` reseta `isAlive`; um ciclo de 30s sem pong → `ws.terminate()` → dispara `ws.on('close')` →
+grace → `agent_disconnect` (Slice 1) → re-rota. Falso positivo é auto-curável (Console reconecta dentro
+do grace de 2.5s → cancela). O `{type:"ping"}` app-level é mantido. **Sem mudança no Console** (browser
+responde o pong de protocolo automaticamente). **Rebuild**: `mcp-server-plughub`. **Arco heartbeat
+completo** (Slices 1+2). Doc: `conference-mechanics.md` § Mudança 16 (adendo).
+
+---
+
 ## Heartbeat / queda involuntária de humano · Slice 1 — detecção de drop + re-rota (2026-06-13)
 
 Gap G4: humano que cai mid-contato (WS drop, não `agent_done`) não disparava nada → o contato ficava

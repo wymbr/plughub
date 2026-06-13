@@ -549,8 +549,27 @@ Humano que cai (disconnect/crash) deixava o contato órfão (gap G4). Alvo: drop
 - **Slice 1 ✅** (2026-06-13) — detecção via `ws.close`+grace (mcp-server publica
   `contact_closed(agent_disconnect)` p/ sessões onde o humano ainda está em `human_agents`) + bridge:
   `remaining>0` sem peer wrap-up; `remaining<=0` re-rota `conversations.inbound` ao `_ha_pool`. Mudança 16.
-- **Slice 2 (pendente, hardening)** — pong-tracking do ping de 30s (ou TTL de instância humana no routing)
-  p/ detectar meia-conexão que não emite `ws.close`.
+- **Slice 2 ✅** (2026-06-13, hardening) — pong-tracking: ping de PROTOCOLO (`ws.ping`, auto-respondido
+  pelo browser) + evento `pong` reseta `isAlive`; sem pong num ciclo de 30s → `ws.terminate()` dispara
+  `ws.close` → grace → `agent_disconnect` (Slice 1). Fecha o "drop sujo" (meia-conexão que não emite
+  `close`). Mudança 16 (adendo). **Arco heartbeat completo.**
+
+---
+
+## Hardening de Auth — postura de sessão do Console *(proposta — não é bug)*
+
+Hoje (Arc 7, por design): `access_token` em memória; `refresh_token` em `localStorage('plughub_refresh_token')`
+→ **silent re-auth** no mount (`POST /auth/refresh`). Reabrir a URL após fechar a aba entra logado sem
+credencial — esperado, mas é um trade-off UX×segurança. Levers de endurecimento (cada um é arco próprio,
+escolher conforme exigência de segurança para um console que vê PII):
+- **refresh_token em cookie httpOnly** (em vez de `localStorage`) → mitiga exfiltração por XSS. Maior
+  mudança (auth-api seta cookie; CORS/SameSite; CSRF token).
+- **Idle/inactivity timeout** — não existe hoje; sessão dura enquanto o refresh_token for válido. Adicionar
+  expiração por inatividade no Console + invalidação no auth-api.
+- **TTL do refresh_token** — encurtar no auth-api (hoje rotaciona indefinidamente enquanto usado).
+- **"Fechar aba = deslogar"** — trocar `localStorage` por `sessionStorage` (morre com a aba); custo de
+  conforto (reloga a cada nova aba).
+Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, manter o comportamento atual.
 
 ---
 

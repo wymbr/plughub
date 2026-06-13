@@ -1052,9 +1052,14 @@ restore + `participant_left` + agent_done lifecycle DECR + SREM `human_agents`).
   por `customer_side`). **Não** escreve `session:closed` (contato continua); o mcp-server tb não setou
   (só `/api/agent_done` seta). Degrada gracioso: sem humano no pool → routing enfileira/`no_resource`.
 
-**Limitação/hardening (Slice 2)**: meia-conexão que não emite `close` depende de timeout TCP; rastrear
-pong do ping de 30s (ou TTL de instância humana no routing) fecharia o "drop sujo".
 **Keys novas**: nenhuma. **Rebuild**: `mcp-server-plughub` + `orchestrator-bridge`.
+
+> **Adendo (heartbeat Slice 2, 2026-06-13) — pong-tracking p/ "drop sujo":** o `ws.close` nem sempre
+> dispara numa meia-conexão (sleep, partição). O agent-WS passa a usar **ping de protocolo** (`ws.ping`,
+> auto-respondido pelo browser via RFC 6455): o evento `pong` reseta `isAlive`; se um ciclo de 30s passa
+> sem pong → `ws.terminate()` → dispara `ws.on('close')` → grace → `agent_disconnect` (Slice 1). Falso
+> positivo é auto-curável (Console reconecta dentro do grace → cancela). O `{type:"ping"}` app-level é
+> mantido. **Arco heartbeat completo** (Slices 1+2). Rebuild: `mcp-server-plughub`.
 
 ---
 
