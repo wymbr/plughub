@@ -277,8 +277,11 @@ falta é o wrap-up por peer e o fan-out.
   humano segue com `on_human_end`+`on_contact_end`. (É a **Fase 1**.) **Limitação**: `human_seg` keyed por
   pool → 2 humanos no mesmo pool colidem; wrap-up por peer no customer-disconnect é Slice 4′. Doc:
   `conference-mechanics.md` § Mudança 14.
-- **Slice 3 (pendente)** — fan-out humano↔humano (gap 1): mensagem de um humano alcança os outros humanos
-  da conferência (hoje vai só ao cliente + remetente).
+- **Slice 3 ✅ (2026-06-13)** — fan-out humano↔humano (gap 1): o ramo normal do agent-WS publica a msg em
+  `agent:events:{session}` (`author.instance_id`, visibility=all) p/ os outros humanos; o filtro de
+  forward self-skip a msg do próprio remetente (que já tem echo otimista local). Console sem mudança;
+  cliente/IA não duplicam (stream + outbound separados). Atribuição-por-nome = polish. Doc:
+  `conference-mechanics.md` § Mudança 15.
 - **Slice 4′ (pendente) — limpeza**: marcador `session:closed` do mcp-server condicionado à
   não-continuação (server.ts ~1475, §4); peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
 

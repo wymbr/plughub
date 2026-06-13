@@ -521,7 +521,8 @@ ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `prima
 - **Slice 2′ ✅** (2026-06-13) — wrap-up por peer humano: `other_human_active` dispara `segment_wrapup`
   para o humano que sai (incl. não-último). É a **Fase 1**. Limitação: `human_seg` keyed por pool (2
   humanos no mesmo pool colidem); customer-disconnect multi-humano → Slice 4′. Mudança 14 / g7 §11.
-- **Slice 3** — fan-out msg humano↔humano (gap 1).
+- **Slice 3 ✅** (2026-06-13) — fan-out msg humano↔humano (gap 1): ramo normal do agent-WS publica em
+  `agent:events` + self-skip no forward. Mudança 15 / g7 §11. (Polish: atribuição-por-nome do remetente.)
 - **Slice 4′** — limpeza: marcador `session:closed` do mcp-server condicionado à não-continuação
   (server.ts ~1475); peer IA encerra pelo flow (`complete`), não por wrap-up. **Absorve** G1–G6.
 Nó frágil → fatiar com gates de E2E.

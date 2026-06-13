@@ -1002,6 +1002,28 @@ por peer no path **customer-disconnect** (N humanos) fica para a Slice 4′.
 **Keys novas**: nenhuma. **Rebuild**: `orchestrator-bridge`. **Validação E2E**: admin (não-último) fecha →
 `Peer wrap-up (segment_wrapup) dispatched`, Console coleta wrap-up, contato segue sob o operator.
 
+### Mudança 15 — fan-out humano↔humano (G7 Slice 3, 2026-06-13)
+
+**Problema** (gap 1 do §7): numa conferência com 2+ humanos, a mensagem **normal** (texto ao cliente) de
+um humano era publicada em `conversations.outbound` (→ cliente) + stream + analytics, mas **não** em
+`agent:events:{session}` → os outros humanos (subscritos a `agent:events` via Console) não recebiam. Os
+ramos `@mention` e resposta-a-hook do agent-WS já publicavam em `agent:events`; só o ramo normal não.
+
+**Mudança** (`mcp-server/server.ts`, agent-WS):
+- O ramo normal customer-facing passa a `redis.publish(agent:events:{session}, {type:"message.text",
+  author:{type:"agent_human", instance_id}, session_id, contact_id, visibility:"all", …})` — fan-out aos
+  outros humanos. **Gotcha**: o `session_id` no payload é **obrigatório** — o handler `message.text` do
+  Console faz `if (!sid) return` e dropa o evento sem ele (foi o bug da 1ª tentativa).
+- O filtro de forward (mesmo bloco do filtro de array-visibility) ganha **self-skip**: `message.text`
+  cujo `author.instance_id == self` (`expectedInstanceId||agentInstanceId`) não é reenviado ao próprio
+  remetente — ele já exibe via echo otimista local (id `local-…` ≠ `message_id` real → dedup-por-id do
+  Console não pegaria → render duplo). Outros humanos (instance ≠ self) recebem.
+
+**Por que não duplica**: o cliente não assina `agent:events` (recebe via channel-gateway/outbound);
+agentes IA leem o **stream** (a msg já é escrita lá, visibility=all). O fan-out em `agent:events` é só
+para Consoles humanos. **Escopo**: msg aparece como `agent_human` genérico (atribuição-por-nome é polish).
+**Keys novas**: nenhuma. **Rebuild**: `mcp-server-plughub`.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

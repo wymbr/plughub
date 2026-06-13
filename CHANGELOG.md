@@ -2,6 +2,27 @@
 
 ---
 
+## G7 Sub-arco multi-humano · Slice 3 — fan-out humano↔humano (2026-06-13)
+
+Gap (1) do §7: numa conferência com 2+ humanos, a mensagem normal de um humano ia só ao cliente
+(outbound) + stream + analytics, **não** a `agent:events:{session}` → os outros humanos não viam.
+(Os ramos `@mention` e resposta-a-hook já publicavam em `agent:events`; só o ramo normal não.)
+
+- **mcp-server** `server.ts` (agent-WS): (1) o ramo normal customer-facing passa a publicar a msg em
+  `agent:events:{session}` (`author.instance_id`, `visibility:"all"`) — fan-out aos outros humanos;
+  (2) o filtro de forward ganha **self-skip**: `message.text` cujo `author.instance_id == self` não é
+  reenviado ao próprio remetente (ele já tem o echo otimista local; ids diferentes → o dedup-por-id do
+  Console não pegaria → evita render duplo).
+- **Console: sem mudança** — já renderiza `message.text` de `agent:events`; o self-skip server-side
+  evita o double. Cliente não assina `agent:events`; agentes IA leem o stream → sem duplicação.
+
+**Rebuild**: `mcp-server-plughub`. **Gate**: admin manda texto → aparece no Console do operator + cliente;
+operator manda → aparece no admin + cliente; nenhum vê a própria msg 2×. **Escopo**: a msg aparece como
+`agent_human` genérico (atribuição-por-nome admin/operator = polish, fora desta fatia). Doc:
+`conference-mechanics.md` § Mudança 15, g7 §11.
+
+---
+
 ## G7 Sub-arco multi-humano · Slice 2′ — wrap-up por peer humano (2026-06-13)
 
 Modelo **peer/Teams-like** (invariante revisada g7 §10/§11): humanos numa conferência são peers; o

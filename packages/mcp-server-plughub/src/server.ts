@@ -2440,6 +2440,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
             return
           }
         }
+        // ── G7 Slice 3 — self-skip do fan-out humano↔humano ───────────────────
+        // O ramo normal do agent-WS publica a msg do humano em agent:events para os
+        // OUTROS humanos. O remetente já a exibe via echo otimista local (id local-…,
+        // que não casa com o message_id real → o dedup-por-id do Console não pega),
+        // então pulamos o forward da própria msg de volta pra ele. Outros humanos
+        // (instance ≠ self) recebem normalmente.
+        {
+          const _selfId2  = expectedInstanceId || agentInstanceId || ""
+          const _author   = _ev["author"] as Record<string, unknown> | undefined
+          const _authInst = _author && typeof _author["instance_id"] === "string"
+            ? (_author["instance_id"] as string) : ""
+          if (_ev["type"] === "message.text" && _selfId2 && _authInst && _authInst === _selfId2) {
+            console.log(`[agent-ws] message.text self-skip (author=${_authInst} == self) — not forwarded`)
+            return
+          }
+        }
         // ── Targeted-assignment filter ────────────────────────────────────────
         // conversation.assigned is published to the pool-wide channel; only the
         // agent the contact was routed to should receive it. Drop assignments
@@ -2847,6 +2863,29 @@ export async function startServer(config: ServerConfig): Promise<void> {
             text:       msgText,   // kept for channel-gateway backward compat
             timestamp:  msgTs,
           })
+
+          // G7 Slice 3 — fan-out humano↔humano: além do cliente (outbound), publica a
+          // mensagem em agent:events:{session} para os OUTROS humanos da conferência a
+          // receberem. O ramo normal não fazia isso (só @mention/hook publicavam aqui),
+          // então peers humanos não viam as msgs uns dos outros. O próprio remetente é
+          // filtrado no forward por author.instance_id == self (já tem o echo otimista
+          // local). Cliente não assina agent:events; agentes IA leem o stream (escrito
+          // abaixo) — sem duplicação. Ver conference-mechanics §Mudança 15.
+          try {
+            await redis.publish(`agent:events:${targetSessionId}`, JSON.stringify({
+              type:       "message.text",
+              message_id: outMsgId,
+              author:     { type: "agent_human", id: agentInstanceId || poolId, instance_id: agentInstanceId || poolId },
+              text:       msgText,
+              timestamp:  msgTs,
+              // session_id é OBRIGATÓRIO: o handler message.text do Console dropa o
+              // evento sem ele (`if (!sid) return`). contact_id por paridade com o
+              // evento do cliente (bridge). Ver conference-mechanics §Mudança 15.
+              session_id: targetSessionId,
+              contact_id: contactId,
+              visibility: "all",
+            }))
+          } catch { /* non-fatal */ }
 
           // Write to canonical stream so supervision SSE and analytics can see the message.
           try {
