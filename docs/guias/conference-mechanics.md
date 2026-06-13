@@ -1030,6 +1030,32 @@ agentes IA leem o **stream** (a msg já é escrita lá, visibility=all). O fan-o
 para Consoles humanos. **Escopo**: msg aparece como `agent_human` genérico (atribuição-por-nome é polish).
 **Keys novas**: nenhuma. **Rebuild**: `mcp-server-plughub`.
 
+### Mudança 16 — queda involuntária de humano: detecção + re-rota (heartbeat Slice 1, 2026-06-13)
+
+**Problema (gap G4)**: humano que cai mid-contato (WS drop, não `agent_done`) só disparava
+`participant_left` no stream + `unregisterHumanAgent` (tira do roster do pool) — **nenhum**
+`contact_closed`. O bridge nunca processava o drop → contato **órfão** (sem re-rota nem close) até o
+cliente sair ou o watchdog de órfãos.
+
+**Detecção**: o `ws.close` + grace de 2.5s (cancela em reconnect — cobre refresh/StrictMode) é o sinal
+de drop genuíno. No callback do grace, o mcp-server publica `contact_closed(reason="agent_disconnect",
+instance_id)` para cada sessão inscrita onde o humano **ainda** está em `human_agents` (`sismember` dedup
+vs. quem já fez `agent_done`).
+
+**Bridge** (`process_contact_event`): `agent_disconnect` reusa o branch `agent_closed` (segment-end:
+restore + `participant_left` + agent_done lifecycle DECR + SREM `human_agents`). Duas diferenças:
+- `other_human_active` (`remaining>0`): **não** dispara o peer wrap-up da Slice 2′ (humano sumiu, não
+  preenche menu) — só encerra o segmento; contato segue sob o outro.
+- `remaining<=0`: **re-rota** — publica `conversations.inbound` ao `_ha_pool` do humano que caiu
+  (espelha o transfer, Mudança 9) → routing aloca novo humano ou enfileira. Posse re-estabelecida por
+  **alocação** (não promoção — invariante §10). Cliente presente é implícito (se tivesse saído, viria
+  por `customer_side`). **Não** escreve `session:closed` (contato continua); o mcp-server tb não setou
+  (só `/api/agent_done` seta). Degrada gracioso: sem humano no pool → routing enfileira/`no_resource`.
+
+**Limitação/hardening (Slice 2)**: meia-conexão que não emite `close` depende de timeout TCP; rastrear
+pong do ping de 30s (ou TTL de instância humana no routing) fecharia o "drop sujo".
+**Keys novas**: nenhuma. **Rebuild**: `mcp-server-plughub` + `orchestrator-bridge`.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

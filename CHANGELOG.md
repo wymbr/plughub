@@ -2,6 +2,30 @@
 
 ---
 
+## Heartbeat / queda involuntária de humano · Slice 1 — detecção de drop + re-rota (2026-06-13)
+
+Gap G4: humano que cai mid-contato (WS drop, não `agent_done`) não disparava nada → o contato ficava
+**órfão** (sem re-rota nem close) até o cliente sair ou o watchdog. Agora o drop vira fim-de-segmento +
+re-rota, mantendo o cliente atendido.
+
+- **mcp-server** (`server.ts`, grace-timer do `ws.close`): no drop genuíno (sem reconnect dentro do grace
+  de 2.5s), para cada sessão inscrita onde o humano AINDA está em `human_agents` (`sismember` dedup vs.
+  quem já saiu por `agent_done`), publica `contact_closed(reason="agent_disconnect", instance_id)`.
+- **bridge** `process_contact_event`: `agent_disconnect` flui pelo branch `agent_closed` (segment-end:
+  restore + `participant_left` + lifecycle DECR + SREM `human_agents`). Diferenças: (a) `other_human_active`
+  **não** dispara peer wrap-up (humano sumiu, não preenche menu); (b) `remaining<=0` → **re-rota**
+  (`conversations.inbound` ao `_ha_pool` do humano que caiu, espelhando o transfer) em vez de close —
+  posse re-estabelecida por alocação; cliente presente é implícito (se tivesse saído viria por
+  `customer_side`). Sem `session:closed` (contato continua).
+
+**Rebuild**: `mcp-server-plughub` + `orchestrator-bridge`. **Gate**: humano cai mid-contato (fechar a aba,
+não Close) → log `agent_disconnect published` (mcp) + `re-routing to pool=… (contact kept alive)` (bridge);
+contato re-aloca/enfileira no pool e segue; com outro humano na conferência, segue sob ele sem wrap-up do
+que caiu. **Limitação/hardening (Slice 2)**: detecção de meia-conexão por pong-tracking (hoje depende do
+WS close; ping de 30s não rastreia pong). Doc: `conference-mechanics.md` § Mudança 16, TODO.
+
+---
+
 ## G7 Sub-arco multi-humano · Slice 4′ Item 1 — marcador session:closed em other_human_active (2026-06-13)
 
 O mcp-server seta `session:{id}:closed` **incondicional** no `/api/agent_done` (server.ts ~1475, p/

@@ -531,16 +531,26 @@ ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `prima
 **Sub-arco multi-humano: Slices 1/2′/3/4′-Item1 ✅.** Resta só o Item 2 (adiado) + os arcos próprios
 abaixo (unificação de contabilidade; queda involuntária de humano).
 
-### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta)*
-Anchor "último agente customer-facing" hoje é aproximado por 2 registros (`human_agents` +
-`ai_agents`/`active_ai_specialists`) + defer G2. Unificar num registro único de "agente anexado
-customer-facing" (humano/IA, peer vs. transiente como atributo, não como kind) + hooks de fim-de-segmento
-kind-aware. Norte: Unified Session Model / Arc 11. Liga ao §8.1 e ao sub-arco multi-humano.
+### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta — diferido)*
+Anchor "último agente customer-facing" hoje é aproximado por **4 chaves** com papéis distintos:
+`human_agent` (flag → entrega inbound/guard), `human_agents` (SET → remaining/close/restore/participant_left),
+`ai_agents` (SET → restore + leitura supervisor/bpm), `active_ai_specialists` (SET → defer/continuação).
+Três dimensões misturadas: anexação × kind (entrega/restore/wrap-up) × estado (rodando). Alvo: HASH único
+`session:{id}:agents → {kind, role, customer_facing, running}` do qual as 4 respostas são derivadas.
+**Investigação 2026-06-13 — DIFERIDO**: é refactor **puro-interno** (não corrige bug; o modelo de 2 sets+defer
+já aproxima o anchor), toca o caminho **mais frágil** (close) + consumidores cross-package (mcp-server
+supervisor/bpm/server) e só é gateável por **paridade**. Alto custo/risco, payoff diferido (manutenibilidade).
+**Decisão**: fazer **oportunística** (quando um bug concreto justificar ou encostada em feature que já toque
+essas chaves), não como refactor standalone. Heartbeat priorizado antes (valor real).
 
-### Detecção de queda involuntária de humano *(arco próprio, proposta)*
-Humano-dono que cai (disconnect/crash) hoje não é detectado (sem heartbeat de humano — gap G4). Alvo:
-heartbeat/timeout do humano → re-rota ao pool de origem (posse re-estabelecida por alocação, não por
-promoção). Mantém o contato vivo sob os agentes customer-facing restantes enquanto re-aloca.
+### Detecção de queda involuntária de humano *(arco próprio)*
+Humano que cai (disconnect/crash) deixava o contato órfão (gap G4). Alvo: drop → re-rota ao pool do dono
+(posse re-estabelecida por alocação, não promoção); contato vivo sob os agentes customer-facing restantes.
+- **Slice 1 ✅** (2026-06-13) — detecção via `ws.close`+grace (mcp-server publica
+  `contact_closed(agent_disconnect)` p/ sessões onde o humano ainda está em `human_agents`) + bridge:
+  `remaining>0` sem peer wrap-up; `remaining<=0` re-rota `conversations.inbound` ao `_ha_pool`. Mudança 16.
+- **Slice 2 (pendente, hardening)** — pong-tracking do ping de 30s (ou TTL de instância humana no routing)
+  p/ detectar meia-conexão que não emite `ws.close`.
 
 ---
 

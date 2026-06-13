@@ -4997,6 +4997,66 @@ async def process_contact_event(
                             )
                         return
 
+                    # ── G7 heartbeat Slice 1 — agent_disconnect do ÚLTIMO humano ──────
+                    # O humano caiu (WS drop, não agent_done) e não há outro agente
+                    # customer-facing (remaining<=0). Se o cliente tivesse saído, viria por
+                    # customer_side — estar aqui implica cliente presente. Re-rota ao pool
+                    # do dono (re-estabelece a posse por ALOCAÇÃO, não promoção) em vez de
+                    # fechar → mantém o cliente atendido. Sem wrap-up/NPS (o humano sumiu).
+                    # Não escreve session:closed (contato continua) — o mcp-server tb não
+                    # setou (só /api/agent_done seta). Ver g7 §11 / heartbeat.
+                    if reason == "agent_disconnect":
+                        _rr_customer = session_id
+                        _rr_channel  = "webchat"
+                        try:
+                            _rr_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                            if _rr_raw_meta:
+                                _rr_meta = json.loads(_rr_raw_meta)
+                                _rr_customer = (
+                                    _rr_meta.get("customer_id")
+                                    or _rr_meta.get("contact_id")
+                                    or session_id
+                                )
+                                _rr_ch = _rr_meta.get("channel", "webchat") or "webchat"
+                                _rr_channel = "webchat" if _rr_ch == "chat" else _rr_ch
+                        except Exception:
+                            pass
+                        if _kafka_producer and _ha_pool and _ha_tenant:
+                            try:
+                                await _kafka_producer.send_and_wait(
+                                    TOPIC_INBOUND,
+                                    json.dumps({
+                                        "session_id":  session_id,
+                                        "tenant_id":   _ha_tenant,
+                                        "customer_id": _rr_customer,
+                                        "channel":     _rr_channel,
+                                        "pool_id":     _ha_pool,
+                                        "started_at":  datetime.now(timezone.utc).isoformat(),
+                                    }).encode("utf-8"),
+                                )
+                                logger.info(
+                                    "agent_disconnect: last human dropped — re-routing to "
+                                    "pool=%s (contact kept alive): session=%s instance=%s",
+                                    _ha_pool, session_id, instance_id,
+                                )
+                            except Exception as _rr_exc:
+                                logger.error(
+                                    "agent_disconnect re-route failed — closing: session=%s — %s",
+                                    session_id, _rr_exc,
+                                )
+                                asyncio.create_task(
+                                    _trigger_contact_close(redis_client, session_id)
+                                )
+                        else:
+                            logger.warning(
+                                "agent_disconnect: cannot re-route (producer/pool/tenant "
+                                "missing) — closing: session=%s", session_id,
+                            )
+                            asyncio.create_task(
+                                _trigger_contact_close(redis_client, session_id)
+                            )
+                        return
+
                     # ── G7 Fase 3a — marcador session:closed (no_continuation) ────
                     # Chegou aqui ⇒ fim-de-contato (no_continuation) OU defer por
                     # specialist ainda ativo: este fim-de-segmento fecha (ou vai
@@ -5225,7 +5285,9 @@ async def process_contact_event(
                     # outros). _ha_pool/_ha_tenant são por-instance (Slice 1b) e
                     # human_seg:{_ha_pool} (escrito acima) atribui ao segmento deste humano.
                     # Ver g7 §11.
-                    if http and _ha_pool and _ha_tenant:
+                    # G7 heartbeat: num agent_disconnect o humano SUMIU — não pode preencher
+                    # o menu de wrap-up → pula o segment_wrapup (só encerra o segmento acima).
+                    if reason != "agent_disconnect" and http and _ha_pool and _ha_tenant:
                         _oha_customer = session_id
                         try:
                             _oha_raw_meta = await redis_client.get(f"session:{session_id}:meta")

@@ -2954,9 +2954,32 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // does NOT unregister the agent — the new connection will cancel this timer.
       if (poolId) {
         console.log(`[agent-ws] Scheduling unregister in ${UNREGISTER_GRACE_MS}ms: pool=${poolId} user=${userId}`)
-        const timer = setTimeout(() => {
+        const timer = setTimeout(async () => {
           console.log(`[agent-ws] Grace period elapsed — calling unregisterHumanAgent pool=${poolId} user=${userId}`)
           pendingUnregister.delete(poolId)
+          // G7 heartbeat Slice 1 — queda involuntária: drop genuíno confirmado (sem reconnect
+          // dentro do grace). Para cada sessão ativa onde ESTE humano AINDA está anexado
+          // (em human_agents → não saiu por agent_done), publica contact_closed(agent_disconnect)
+          // para o bridge encerrar o segmento e re-rotar/continuar. O sismember dedup evita
+          // republicar quando o humano já fechou via agent_done (o SREM já o tirou da SET).
+          if (agentInstanceId) {
+            for (const sid of subscribedSessions) {
+              try {
+                const attached = await redis.sismember(`session:${sid}:human_agents`, agentInstanceId)
+                if (attached) {
+                  await kafka.publish("conversations.events", {
+                    event_type:  "contact_closed",
+                    session_id:  sid,
+                    instance_id: agentInstanceId,
+                    reason:      "agent_disconnect",
+                  })
+                  console.log(`[agent-ws] agent_disconnect published: session=${sid} instance=${agentInstanceId}`)
+                }
+              } catch (e) {
+                console.error(`[agent-ws] agent_disconnect publish error session=${sid}:`, e)
+              }
+            }
+          }
           unregisterHumanAgent(poolId, userId, redis, kafka).catch((err) =>
             console.error(`[agent-ws] unregisterHumanAgent pool=${poolId} user=${userId}:`, err)
           )
