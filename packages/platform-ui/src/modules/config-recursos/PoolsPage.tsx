@@ -149,21 +149,23 @@ function PoolExceptionsEditor({
 // The stored reference is a pool_id (stable across skill-flow version changes);
 // the option label surfaces the pool's currently deployed skill as a visual hint.
 
-const EMPTY_HOOKS: PoolHooks = { on_human_start: [], on_human_end: [], post_human: [] }
+const EMPTY_HOOKS: PoolHooks = { on_human_start: [], on_human_end: [], on_contact_end: [], post_human: [] }
 
 interface PoolOption { value: string; label: string }
 
 function HookListEditor({
-  entries, onChange, poolOptions,
+  entries, onChange, poolOptions, defaultSide = 'agent',
 }: {
   entries:     PoolHookEntry[]
   onChange:    (e: PoolHookEntry[]) => void
   poolOptions: PoolOption[]
+  /** G7 Fase 3b-ii: novas entries de on_contact_end nascem side=customer (NPS). */
+  defaultSide?: PoolHookSide
 }) {
   const { t } = useTranslation('configRecursos')
 
   const add = () =>
-    onChange([...entries, { pool: '', side: 'agent', nps_on_disconnect: 'timeout' }])
+    onChange([...entries, { pool: '', side: defaultSide, nps_on_disconnect: 'timeout' }])
 
   const remove = (i: number) => onChange(entries.filter((_, idx) => idx !== i))
 
@@ -641,6 +643,7 @@ const PoolsPage: React.FC = () => {
       hooks: {
         on_human_start: pool.hooks?.on_human_start ?? [],
         on_human_end:   pool.hooks?.on_human_end   ?? [],
+        on_contact_end: pool.hooks?.on_contact_end ?? [],
         post_human:     pool.hooks?.post_human     ?? [],
       },
       escalation_pools: pool.supervisor_config?.escalation_pools ?? [],
@@ -703,15 +706,18 @@ const PoolsPage: React.FC = () => {
       const cleanHooks: PoolHooks = {
         on_human_start: formData.hooks.on_human_start.filter(h => h.pool),
         on_human_end:   formData.hooks.on_human_end.filter(h => h.pool),
+        on_contact_end: formData.hooks.on_contact_end.filter(h => h.pool),
         post_human:     formData.hooks.post_human.filter(h => h.pool),
       }
       const hasHooks =
         cleanHooks.on_human_start.length > 0 ||
         cleanHooks.on_human_end.length > 0 ||
+        cleanHooks.on_contact_end.length > 0 ||
         cleanHooks.post_human.length > 0
       const hadHooks = !!(editingPool?.hooks && (
         (editingPool.hooks.on_human_start?.length ?? 0) > 0 ||
         (editingPool.hooks.on_human_end?.length ?? 0) > 0 ||
+        (editingPool.hooks.on_contact_end?.length ?? 0) > 0 ||
         (editingPool.hooks.post_human?.length ?? 0) > 0
       ))
 
@@ -1100,6 +1106,16 @@ const PoolsPage: React.FC = () => {
                   entries={formData.hooks.on_human_end}
                   onChange={e => setHookSlot('on_human_end', e)}
                   poolOptions={poolComboOptions}
+                />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-dark">{t('pools.hooks.onContactEnd')}</p>
+                <p className="text-2xs text-muted-light mb-1">{t('pools.hooks.onContactEndHint')}</p>
+                <HookListEditor
+                  entries={formData.hooks.on_contact_end}
+                  onChange={e => setHookSlot('on_contact_end', e)}
+                  poolOptions={poolComboOptions}
+                  defaultSide="customer"
                 />
               </div>
               <div>

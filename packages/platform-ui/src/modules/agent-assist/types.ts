@@ -301,6 +301,14 @@ export interface ContactSession {
   channel:          string;           // "webchat" | "whatsapp" | "voice" | …
   /** Pool this contact was assigned through — from conversation.assigned.pool_id */
   poolId:           string;
+  /**
+   * Instance allocated to THIS console for this contact — from
+   * conversation.assigned.instance_id. Sent back in /api/agent_done so the
+   * platform attributes the close to the correct participant (multi-humano:
+   * cada humano fecha o SEU segmento; não pode cair no meta.instance_id global
+   * last-writer). Null until the assigned event arrives. Ver g7 §10 / Slice 1.
+   */
+  instanceId:       string | null;
   /** SLA target in ms for this contact — from pool config or supervisorState */
   slaTargetMs:      number | null;
   /** Maximum reply time per customer message (ms). Null = no per-message SLA configured. */

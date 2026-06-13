@@ -107,6 +107,8 @@ export interface PoolHookEntry {
 export interface PoolHooks {
   on_human_start: PoolHookEntry[]
   on_human_end:   PoolHookEntry[]
+  /** G7 Fase 3: hook de fim-de-CONTATO (NPS/pesquisa, side=customer), 1× por contato. */
+  on_contact_end: PoolHookEntry[]
   post_human:     PoolHookEntry[]
 }
 

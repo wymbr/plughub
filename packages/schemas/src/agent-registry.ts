@@ -151,9 +151,21 @@ const PoolHookEntrySchema = z.object({
 export type PoolHookEntry = z.infer<typeof PoolHookEntrySchema>
 
 export const PoolHooksSchema = z.object({
-  on_human_start: z.array(PoolHookEntrySchema).default([]),
-  on_human_end:   z.array(PoolHookEntrySchema).default([]),
-  post_human:     z.array(PoolHookEntrySchema).default([]),
+  on_human_start:  z.array(PoolHookEntrySchema).default([]),
+  on_human_end:    z.array(PoolHookEntrySchema).default([]),
+  /**
+   * G7 Fase 3 — hook de fim-de-CONTATO (1ª classe). Dispara UMA vez quando o
+   * contato encerra de fato (no_continuation), independente de quantos segmentos
+   * houve. Uso típico: pesquisa NPS / satisfação (side=customer). Separado do
+   * on_human_end (fim-de-SEGMENTO, side=agent / wrap-up) para que a avaliação do
+   * cliente não pegue carona no último segmento humano.
+   *
+   * Dono autoritativo (g7 §10): o pool do `primary` corrente. Em single+transfer
+   * é o pool do humano cujo agent_done fecha o contato (a posse só se move via
+   * transfer; task/assist/delegate são specialist que volta ao chamador).
+   */
+  on_contact_end:  z.array(PoolHookEntrySchema).default([]),
+  post_human:      z.array(PoolHookEntrySchema).default([]),
 })
 export type PoolHooks = z.infer<typeof PoolHooksSchema>
 
@@ -241,9 +253,12 @@ export const PoolRegistrationSchema = z.object({
    *                   (após conversation.assigned ser publicado).
    *                   Uso típico: auto-activar co-pilot ou assistente de contexto.
    *
-   * on_human_end    — disparado quando o agente humano chama agent_done
-   *                   mas ANTES do contato ser encerrado (requer Fase B).
-   *                   Uso típico: pesquisa NPS, atualização de CRM, encerramento guiado.
+   * on_human_end    — disparado no fim de SEGMENTO humano (agent_done), antes do
+   *                   contato encerrar. Uso típico: wrap-up / notas internas do
+   *                   agente (side=agent). G7 Fase 3: NPS saiu daqui → on_contact_end.
+   *
+   * on_contact_end  — disparado no fim de CONTATO (no_continuation), 1× por contato.
+   *                   Uso típico: pesquisa NPS / satisfação (side=customer). Ver g7 §10.
    *
    * post_human      — disparado após todos os hooks on_human_end concluírem,
    *                   imediatamente antes do contact_close (requer Fase B).

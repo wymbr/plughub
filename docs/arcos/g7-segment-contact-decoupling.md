@@ -182,3 +182,105 @@ pelo destino). Console: a origem entra em modo wrap-up (não larga o contato). D
 `conference-mechanics.md` § Mudança 11 + CHANGELOG. Generaliza-se naturalmente para a **Fase 1**
 (wrap-up do não-último: mesmo `segment_wrapup` no branch `other_human_active`) quando o sub-arco
 multi-humano fechar o encerramento de segmento do não-último (o achado §8.1).
+
+## 10. Fase 3 — close por continuação + NPS como hook de fim-de-CONTATO
+
+Decisão (2026-06-13): seguir a reordenação do §7 — atacar a Fase 3 (single-humano + transfer) antes do
+sub-arco multi-humano. Nome do hook escolhido: **`on_contact_end`** (consistente com o vocabulário de
+lifecycle `_trigger_contact_close`/`_close_contact_layer`/`_mark_contact_ended`; nota: o grão de survey
+`SignalGrainSchema` e o Unified Session Model usam `session`, mas o hook vive na camada de close). NPS
+migra de `on_human_end side=customer` para `on_contact_end` via **cutover no registry YAML** (sem
+dual-read).
+
+### Invariante de posse e ciclo de vida (revisada 2026-06-13 — modelo peer/kind-agnostic)
+
+> **Modelo peer / Teams-like.** O contato é uma conferência (Camada 3): vive enquanto há agente atendendo
+> o cliente. A saída de um agente **não** encerra o contato se ainda há outro atendendo — só encerra o
+> **segmento** daquele agente. O contato (Camada 1) acaba quando: o **cliente** sai, **ou** o **último
+> agente com I/O ao cliente** sai sem continuação (sem transfer/re-rota pendente).
+>
+> - **Agente = humano OU IA** (premissa do Unified Session Model / Arc 11). O anchor é "último agente
+>   *customer-facing*", **não** "último humano". Orquestrador/`primary` pode ser humano ou IA.
+> - **I/O ao cliente é o que ancora.** Quem só fala agente↔agente (wrap-up `side=agent`, expert
+>   consultivo, copiloto) **não** segura o contato — é Camada 2/3, não Camada 1.
+> - **Peer vs. transiente é ortogonal ao kind.** Orquestrador (humano/IA) ancora; helper invitado por
+>   `assist`/`task`/`delegate` (humano/IA) é transiente, "volta ao chamador" — não ancora sozinho, mas
+>   *defere* o close enquanto está no meio de uma resposta (padrão `active_ai_specialists`/G2).
+> - **`primary`/posse = PAPEL, não âncora de vida.** Serve para analytics e atribuição de NPS
+>   (`on_contact_end` dispara do pool do agente cujo close fecha o contato — o último customer-facing).
+>   Posse muda por `transfer`; **não há promoção implícita nem owner-lifeline**: a saída do `primary`
+>   (voluntária ou por queda) com outro agente customer-facing ativo não mata o contato nem promove
+>   ninguém — segue até o último sair (igual Teams/Meet; Zoom reatribui host, sala continua).
+>
+> *Contabilidade hoje:* o anchor "último agente customer-facing" é **aproximado** por dois registros
+> (`human_agents` + `ai_agents`/`active_ai_specialists`) + o defer do G2. Unificar num registro único de
+> "agente anexado customer-facing" é **arco próprio** (TODO § Unificação de contabilidade de agente).
+> Queda **involuntária** do humano-dono sem heartbeat (gap G4) → detecção + re-rota = arco próprio.
+
+### Slicing
+
+- **3a ✅ (2026-06-13)** — close governado por `_has_continuation` + marcador `session:closed`
+  condicional. Parity-preserving em single+transfer. O literal `agent_transfer` no `remaining<=0` virou
+  `_g7_cont and _g7_motive=="transfer"`; o marcador saiu do topo (incondicional) e foi fatiado:
+  `customer_side` escreve no topo; `agent_closed` escreve só no `no_continuation`/defer-specialist; o
+  branch `other_human_active` (`remaining>0`) **não** escreve (antes vazava → Routing Engine descartava
+  re-rotas, §4). Doc: `conference-mechanics.md` § Mudança 12.
+- **3b-i ✅ (2026-06-13)** — campo `on_contact_end` no `PoolHooksSchema` + cutover do `tenant_demo.yaml`
+  (`nps_ia` de `on_human_end`→`on_contact_end`) + migração dos pools de DB via
+  `infra/migrations/g7_nps_to_on_contact_end.py` (API oficial, idempotente) + dispatch no bridge nos 4
+  sites (no_continuation, customer_disconnect, 2× defer-por-specialist): dispara `on_human_end` (wrap-up,
+  side=agent) **e** `on_contact_end` (NPS, side=customer). **Sem `arm_close`**: o wrap-up continua em
+  `on_human_end` (que já arma `posatt:active`) e o NPS em `on_contact_end` (que arma
+  `posatt:active`+`posatt:customer_active`) → a conferência sobrevive até os dois terminarem; o completion
+  handler de `process_routed` é genérico por `_hook_side`+contador (zero mudança). Doc:
+  `conference-mechanics.md` § Mudança 13.
+- **3b-ii ✅ (2026-06-13)** — editor de `on_contact_end` na tela de Pools (`PoolsPage.tsx`: EMPTY_HOOKS,
+  load/save/hadHooks + 4ª seção; `HookListEditor` ganhou `defaultSide` → entries novas nascem
+  `side=customer`) + `PoolHooks` type + i18n `configRecursos` (en + pt-BR). Fecha o invariante
+  "every config field is UI-editable" e o caveat da 3b-i (a tela antiga dropava `on_contact_end` no save).
+
+**G7 Fase 3 completa** (3a + 3b-i + 3b-ii). Validado E2E: single-humano byte-parity (×2), transfer A→B
+com NPS só em B incluindo o pool migrado `humanoxxx` disparando `on_contact_end`. Restam, no arco G7
+geral, o **sub-arco multi-humano** (§11) e a **Fase 1** (wrap-up do não-último).
+
+## 11. Sub-arco multi-humano (modelo peer / Teams-like)
+
+### Investigação (2026-06-13) — raiz do §8.1
+
+A causa do segmento do primário não-último travado "live" + contato que não fecha **não** é multi-humano
+em si: é **identidade de participante num campo de escopo-sessão**. Cadeia:
+`activate_human_agent` sobrescreve `session:{id}:meta.instance_id` last-writer-wins a cada humano ativado;
+o Console descartava o `instance_id` do `conversation.assigned` e mandava só `{outcome}` no
+`/api/agent_done`; o mcp-server resolvia `instance_id = meta.instance_id` (= último humano ativado). Com 2
+humanos, **os dois** closes eram atribuídos ao último → o instance do outro nunca saía de `human_agents`
+→ `remaining` nunca chegava a 0 → contato não fechava, segmento "live". (Mesma classe de bug da Slice A.)
+
+**Modelo-alvo: peer / Teams-like (kind-agnostic — ver invariante §10).** Humanos numa conferência são
+peers; o contato fecha quando o **último agente customer-facing** sai (não quando o "dono" sai). **Sem**
+sucessão, **sem** owner-lifeline, **sem** defer-no-close-do-dono, **sem** distinção voluntário/involuntário
+(sair é sair → encerra o segmento; contato segue se há outro customer-facing). A **Slice 1** já entrega o
+lifecycle "último apaga a luz" correto (co-primário em `human_agents` + close em `remaining==0`); o que
+falta é o wrap-up por peer e o fan-out.
+
+### Slicing
+
+- **Slice 1 ✅ (2026-06-13)** — identidade por-participante no `agent_done` (raiz do §8.1). Console captura
+  `instance_id` do `conversation.assigned` por-contato (`ContactSession.instanceId`) e envia no
+  `POST /api/agent_done`; mcp-server usa `body.instance_id` (fallback `meta`). **Slice 1b**:
+  `pool_id`/`agent_type_id`/`tenant`/`user_login` do humano que fecha vêm de
+  `participant_meta:{instance_id}` (não do `meta` de sessão last-writer) — corrigido nos dois paths
+  (agent_closed + customer_disconnect). Resultado: cada humano encerra o SEU segmento, com o SEU pool;
+  contato fecha quando o último sai, em qualquer ordem.
+- **Slice 2′ ✅ (2026-06-13) — wrap-up por peer humano**: o branch `other_human_active` (`remaining>0`)
+  dispara `segment_wrapup` para o humano que sai (espelha o `agent_transfer`), em vez de só logar. Reusa
+  `human_seg:{_ha_pool}` (por-instance, Slice 1b) + `seg_signal`; não arma close (contato segue). O último
+  humano segue com `on_human_end`+`on_contact_end`. (É a **Fase 1**.) **Limitação**: `human_seg` keyed por
+  pool → 2 humanos no mesmo pool colidem; wrap-up por peer no customer-disconnect é Slice 4′. Doc:
+  `conference-mechanics.md` § Mudança 14.
+- **Slice 3 (pendente)** — fan-out humano↔humano (gap 1): mensagem de um humano alcança os outros humanos
+  da conferência (hoje vai só ao cliente + remetente).
+- **Slice 4′ (pendente) — limpeza**: marcador `session:closed` do mcp-server condicionado à
+  não-continuação (server.ts ~1475, §4); peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
+
+**Fora do sub-arco (arcos próprios):** unificação de contabilidade de agente kind-agnostic (registro único
+"agente anexado customer-facing"); detecção de queda involuntária de humano (heartbeat, gap G4) + re-rota.

@@ -502,11 +502,40 @@ Fase 0 (classificador `_has_continuation`) + branch `agent_transfer` (transfer f
 **Slice A ✅** (wrap-up multi-humano: identidade de participante por-segmento — Mudança 10 + ADR
 `adr-participant-identity-single-source`; resolve o gap (2) menu-routing do sub-arco multi-humano).
 **Slice B ✅** (wrap-up no transfer — hook type `segment_wrapup`, fim-de-segmento sem armar close; Mudança 11).
-**Falta** (modelo-alvo): **Fase 3** —
-contact-close como decisão separada ("há continuação?") + NPS como hook de **contato** de 1ª classe (sair da
-carona do último `on_human_end`); wrap-up em **todo** fim de segmento (inclusive humano não-último);
-continuações além do transfer (re-fila, handback IA). Sub-arco multi-humano aberto: gap (1) fan-out msg
-humano↔humano + gap (3) NPS multi-humano. **Absorve** os gaps G1–G6. Nó frágil → fatiar com gates de E2E.
+**Fase 3 ✅ COMPLETA** (2026-06-13): **3a** (close governado por `_has_continuation` + marcador
+`session:closed` condicional, parity-preserving single+transfer), **3b-i** (`on_contact_end` no schema +
+cutover YAML + `infra/migrations/g7_nps_to_on_contact_end.py` p/ pools de DB + dispatch no bridge nos 4
+sites; sem `arm_close` — wrap-up via `on_human_end` e NPS via `on_contact_end`, ambos armam `posatt`;
+completion handler genérico inalterado), **3b-ii** (editor de `on_contact_end` na UI de Pools + i18n;
+fecha o invariante UI-editable). Invariante de posse: dono = `primary` corrente, posse só move via
+`transfer`; `task`/`assist`/`delegate` são `specialist` que volta ao chamador. Validado E2E (single ×2 +
+transfer A→B com NPS só em B, incl. pool migrado `humanoxxx`). Mudança 12/13 + g7 §10.
+
+**Sub-arco multi-humano** (modelo **peer / Teams-like, kind-agnostic** — invariante revisada g7 §10/§11;
+bloqueante p/ Fase 1). Raiz do §8.1 = identidade de participante em campo de escopo-sessão. Anchor de
+ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `primary`/posse = papel
+(analytics + NPS), não âncora; sem sucessão/owner-lifeline. Fatias:
+- **Slice 1 ✅** (2026-06-13, +1b) — identidade por-participante no close (Console envia `instance_id`;
+  mcp-server usa `body`; bridge lê pool/agent_type por-instance via `participant_meta`). Cada humano
+  encerra seu segmento, com seu pool; contato fecha quando o último sai, em qualquer ordem.
+- **Slice 2′ ✅** (2026-06-13) — wrap-up por peer humano: `other_human_active` dispara `segment_wrapup`
+  para o humano que sai (incl. não-último). É a **Fase 1**. Limitação: `human_seg` keyed por pool (2
+  humanos no mesmo pool colidem); customer-disconnect multi-humano → Slice 4′. Mudança 14 / g7 §11.
+- **Slice 3** — fan-out msg humano↔humano (gap 1).
+- **Slice 4′** — limpeza: marcador `session:closed` do mcp-server condicionado à não-continuação
+  (server.ts ~1475); peer IA encerra pelo flow (`complete`), não por wrap-up. **Absorve** G1–G6.
+Nó frágil → fatiar com gates de E2E.
+
+### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta)*
+Anchor "último agente customer-facing" hoje é aproximado por 2 registros (`human_agents` +
+`ai_agents`/`active_ai_specialists`) + defer G2. Unificar num registro único de "agente anexado
+customer-facing" (humano/IA, peer vs. transiente como atributo, não como kind) + hooks de fim-de-segmento
+kind-aware. Norte: Unified Session Model / Arc 11. Liga ao §8.1 e ao sub-arco multi-humano.
+
+### Detecção de queda involuntária de humano *(arco próprio, proposta)*
+Humano-dono que cai (disconnect/crash) hoje não é detectado (sem heartbeat de humano — gap G4). Alvo:
+heartbeat/timeout do humano → re-rota ao pool de origem (posse re-estabelecida por alocação, não por
+promoção). Mantém o contato vivo sob os agentes customer-facing restantes enquanto re-aloca.
 
 ---
 

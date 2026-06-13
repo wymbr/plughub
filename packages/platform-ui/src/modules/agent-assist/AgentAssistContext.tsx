@@ -56,6 +56,7 @@ function makeContact(sessionId: string, poolId: string, channel = "webchat"): Co
     customerName:      null,
     channel,
     poolId,
+    instanceId:        null,
     slaTargetMs:       null,
     maxReplyTimeMs:    null,
     messages:          [],
@@ -264,7 +265,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // ── New contact assigned ──────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      const { session_id, contact_id, pool_id } = event;
+      const { session_id, contact_id, pool_id, instance_id } = event;
       const resolvedPool = pool_id ?? sourcePoolId;
 
       // Register session→pool mapping so send() targets the correct WS connection
@@ -288,6 +289,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
         next.set(session_id, {
           ...makeContact(session_id, resolvedPool),
           contactId:         contact_id ?? null,
+          instanceId:        instance_id ?? null,
           slaTargetMs,
           maxReplyTimeMs,
           sessionClosed:     alreadyClosed,

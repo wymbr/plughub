@@ -2,6 +2,132 @@
 
 ---
 
+## G7 Sub-arco multi-humano · Slice 2′ — wrap-up por peer humano (2026-06-13)
+
+Modelo **peer/Teams-like** (invariante revisada g7 §10/§11): humanos numa conferência são peers; o
+contato fecha quando o último agente customer-facing sai. Esta fatia dá wrap-up ao humano **não-último**.
+
+- **bridge** `process_contact_event`, branch `other_human_active` (`remaining>0`): em vez de só logar,
+  dispara `fire_pool_hooks(hook_type="segment_wrapup", pool_id=_ha_pool)` para o humano que sai — igual
+  ao branch `agent_transfer`. `_ha_pool`/`_ha_tenant` são por-instance (Slice 1b); `human_seg:{pool}`
+  (escrito na saída deste humano) atribui ao segmento dele. `segment_wrapup` **não** arma
+  `posatt`/`hook_pending` → não fecha o contato (segue sob os outros). A conclusão aplica a disposição ao
+  `seg_signal` → re-publish do segmento.
+- O **último** humano (`no_continuation`) segue inalterado: `on_human_end`(wrap-up) + `on_contact_end`(NPS).
+
+**Rebuild**: `orchestrator-bridge`. **Gate**: conferência admin+operator → admin (não-último) fecha →
+`Peer wrap-up (segment_wrapup) dispatched … pool=retencao_humano`, Console do admin coleta o wrap-up,
+segmento re-publicado; contato continua sob operator; operator fecha → wrap-up+NPS+fecha. **Limitação
+conhecida** (pré-existente): `human_seg` é keyed por pool → 2 humanos no MESMO pool colidem; wrap-up por
+peer no path customer-disconnect é Slice 4′. Doc: `conference-mechanics.md` § Mudança 14, g7 §11.
+
+---
+
+## G7 Sub-arco multi-humano · Slice 1 (+1b) — identidade por-participante no close (2026-06-13)
+
+Raiz do §8.1 (segmento do não-último primário travado "live" + contato não fecha): o close lia a
+identidade do humano de um campo de SESSÃO (`session:{id}:meta.instance_id`), que `activate_human_agent`
+sobrescreve last-writer-wins a cada humano ativado. Com 2 humanos, o `agent_done` de ambos era atribuído
+ao último ativado → o segmento do outro nunca encerrava. Mesmo princípio da Slice A / ADR de identidade
+única (identidade de participante não pode viver em campo de escopo-sessão).
+
+- **platform-ui** (`agent-assist`): `ContactSession.instanceId` (novo); `conversation.assigned` passa a
+  capturar `instance_id` por-contato (antes descartado); `handleClose` envia `instance_id` no corpo do
+  `POST /api/agent_done` (todas as rotas de close passam por ele, incl. auto-close).
+- **mcp-server** (`/api/agent_done`): usa `body.instance_id` quando presente; fallback `meta.instance_id`
+  (compat). Assim o `contact_closed` carrega o instance do humano que realmente fechou.
+- **Slice 1b** (bridge): `pool_id`/`agent_type_id`/`tenant`/`user_login` do humano que fecha passam a vir
+  de `session:{id}:participant_meta:{instance_id}` (gravado por `activate_human_agent`), não do `meta` de
+  sessão (last-writer). Sem isso, o close do não-último saía com o pool do último (`agent_done` lifecycle
+  DECRementava o pool errado + segmento atribuído ao pool errado em Analytics). Corrigido nos **dois**
+  paths (agent_closed + customer_disconnect), com fallback no `meta`.
+- **Efeito**: cada humano encerra o SEU segmento, com o SEU pool; `remaining` chega a 0 quando todos saem
+  → contato fecha; contadores de pool DECRementam corretamente.
+
+**Rebuild**: `platform-ui` (`--no-cache`) + `mcp-server-plughub`. **Gate**: 2-humanos (admin + convidado
+por @mention), cada Close encerra o segmento do humano certo (instance correto no log do bridge), nenhum
+segmento fica "live", contato fecha quando ambos saem. **Follow-up conhecido** (Slice 2/4): o mcp-server
+ainda seta `session:closed` incondicionalmente (server.ts ~1475) — em multi-humano deve ser condicionado
+à não-continuação (§4). Docs: `g7-segment-contact-decoupling.md` § 10.
+
+---
+
+## G7 Fase 3b-ii — editor de `on_contact_end` na UI de Pools (2026-06-13)
+
+Fecha o invariante "every config field is UI-editable" para `on_contact_end` e o caveat da 3b-i
+(salvar um pool pela tela antiga dropava o campo). Só `platform-ui`.
+
+- **`src/types/index.ts`**: `on_contact_end: PoolHookEntry[]` em `PoolHooks`.
+- **`PoolsPage.tsx`**: `EMPTY_HOOKS`, load (`formData.hooks`), save (`cleanHooks`+`hasHooks`+`hadHooks`)
+  e 4ª seção no editor de hooks (entre on_human_end e post_human). `HookListEditor` ganhou prop
+  `defaultSide` — entries novas de `on_contact_end` nascem `side=customer` (NPS).
+- **i18n** (`configRecursos`, en + pt-BR): chaves `pools.hooks.onContactEnd` + `onContactEndHint`;
+  `onHumanEnd`/`onHumanEndHint` reescritas (fim-de-segmento / wrap-up, sem NPS). Reusa
+  `side`/`npsOnDisconnect`.
+
+**Rebuild**: `platform-ui` (`--no-cache`). **Gate**: abrir pool migrado → ver `on_contact_end` com
+`nps_ia` → editar/salvar → `GET /v1/pools/{id}` confirma que `on_contact_end` **persiste** (não é mais
+dropado). **G7 Fase 3 completa** (3a + 3b-i + 3b-ii). Docs: `g7-segment-contact-decoupling.md` § 10.
+
+---
+
+## G7 Fase 3b-i — NPS como hook de fim-de-CONTATO (`on_contact_end`) (2026-06-13)
+
+NPS deixa de pegar carona no `on_human_end` (fim-de-SEGMENTO) e vira hook de
+fim-de-CONTATO de 1ª classe. Cutover limpo (sem dual-read): wrap-up fica em
+`on_human_end` (side=agent), NPS migra para `on_contact_end` (side=customer).
+
+- **schema** (`packages/schemas/src/agent-registry.ts`): novo campo
+  `on_contact_end: PoolHookEntry[]` em `PoolHooksSchema` + doc no campo `hooks`.
+  `hooks` é coluna `Json?` no Prisma → sem migração de DB.
+- **bridge `fire_pool_hooks`**: `on_contact_end` adicionado aos 4 conjuntos existentes
+  (set `hook_pending`, stash `human_seg`→`surveyed_segment_id` para o NPS gravar
+  `survey_record grain=segment`, escrita de `hook_conf`, INCR `posatt:active`
+  +`posatt:customer_active`). Completion handler em `process_routed` é genérico
+  (por `_hook_side` + contador por tipo) → **sem mudança**. `post_human` continua
+  gatilhado por `on_human_end` (dispara após o wrap-up; `post_human=[]` no demo).
+- **bridge `process_contact_event`**: nos 4 sites de dispatch (no_continuation,
+  customer_disconnect, e os 2 caminhos de defer-por-specialist) passa a disparar
+  `on_human_end` (wrap-up) **e** `on_contact_end` (NPS) separadamente. A decisão
+  "mantém WS aberto" passa a olhar `on_contact_end` (com fallback defensivo p/
+  entries side=customer em `on_human_end` de pools ainda não migrados).
+- **cutover** `infra/registry/tenant_demo.yaml` (`retencao_humano`): entry `nps_ia`
+  movida de `on_human_end`→`on_contact_end`. Migração dos pools de DB (criados via
+  UI, ex.: `humanoxxx`) via `infra/migrations/g7_nps_to_on_contact_end.py` (API
+  oficial, idempotente, dry-run por default).
+
+**Rebuild**: `schemas` + `agent-registry` + `orchestrator-bridge`. **Pendente 3b-ii**:
+editor de `on_contact_end` no platform-ui + i18n. **Gate E2E**: single-humano
+byte-parity (wrap-up no Console + NPS ao cliente, fecha 1×); pool sem NPS fecha após
+wrap-up sem teardown prematuro; transfer inalterado. Docs: `conference-mechanics.md`
+§ Mudança 13, `g7-segment-contact-decoupling.md` § 10.
+
+---
+
+## G7 Fase 3a — close governado por `_has_continuation` + marcador condicional (2026-06-13)
+
+Primeiro passo do decoupling de close (escopo single-humano + transfer; parity-preserving). A decisão de
+fim-de-contato passa a ser governada pelo classificador `_has_continuation` (antes read-only) e o marcador
+`session:closed` deixa de ser escrito incondicionalmente.
+
+- **bridge** `process_contact_event`: (1) o literal `if reason=="agent_transfer"` no branch
+  `remaining<=0` vira `if _g7_cont and _g7_motive=="transfer"` (com default por `reason` antes do
+  `try`, preservando o transfer se o classificador falhar); (2) a escrita do marcador `session:closed`
+  saiu do topo do handler (incondicional, exceto transfer) e foi **fatiada**: `customer_side` escreve no
+  topo (cliente saiu = sempre fim-de-contato); `agent_closed` escreve só no path `no_continuation`/defer
+  por specialist (dentro de `remaining<=0`, após o transfer retornar); o branch `other_human_active`
+  (`remaining>0`) **não** escreve — antes vazava o marcador em multi-humano e fazia o Routing Engine
+  descartar re-rotas legítimas (§4).
+- **Efeito**: single-humano e transfer **inalterados** (marcador escrito/omitido como antes); a única
+  mudança de comportamento é não-escrever o marcador em `other_human_active` — fundação para o sub-arco
+  multi-humano, cujo close completo continua fora de escopo.
+
+**Rebuild**: `orchestrator-bridge` (Python). **Gate E2E**: single-humano fecha com wrap-up+NPS 1× e
+marcador setado; transfer A→B sem marcador prematuro, NPS só em B. Docs: `conference-mechanics.md`
+§ Mudança 12, `g7-segment-contact-decoupling.md` § 10.
+
+---
+
 ## G7 Slice B — wrap-up no transfer (fim-de-segmento, sem close) (2026-06-13)
 
 Hook type novo **`segment_wrapup`**: dispara só o wrap-up `side=agent` para o segmento do humano que

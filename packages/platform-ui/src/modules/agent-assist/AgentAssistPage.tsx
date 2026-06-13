@@ -210,10 +210,15 @@ export const AgentAssistPage: React.FC = () => {
     async (sessionId: string, payload: ClosePayload) => {
       handledSessions.current.add(sessionId);
       try {
+        // G7 Slice 1: envia o instance_id DESTE console (do conversation.assigned)
+        // para o platform atribuir o close ao participante certo. Sem isso o
+        // mcp-server cai no meta.instance_id global (last-writer) e, em
+        // multi-humano, o agent_done de um humano é atribuído a outro. Ver g7 §10.
+        const instanceId = contacts.get(sessionId)?.instanceId ?? undefined;
         await fetch(`/api/agent_done/${sessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(payload),
+          body:    JSON.stringify({ ...payload, instance_id: instanceId }),
         });
         setContacts(prev => {
           const c = prev.get(sessionId);
@@ -227,7 +232,7 @@ export const AgentAssistPage: React.FC = () => {
         addToast(t("message.closingError"), "error");
       }
     },
-    [addToast, setContacts, handledSessions]
+    [addToast, setContacts, handledSessions, contacts, t]
   );
 
   const handleMenuSubmit = useCallback(

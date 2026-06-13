@@ -94,8 +94,10 @@ pools:
         - reembolso_ia
         - portabilidade_ia
     # Pool lifecycle hooks — acionam especialistas em pontos do ciclo de atendimento.
-    # on_human_start: reservado para avaliadores em tempo real (Echo desativado no demo).
-    # on_human_end:   dispara wrapup (agents_only) + NPS (customer-only) em paralelo.
+    # on_human_start:  reservado para avaliadores em tempo real (Echo desativado no demo).
+    # on_human_end:    fim-de-SEGMENTO humano → wrap-up (agents_only).
+    # on_contact_end:  fim-de-CONTATO → NPS (customer-only). G7 Fase 3b: NPS saiu do
+    #                  on_human_end (não pega mais carona no último segmento humano).
     hooks:
       on_human_start: []  # Echo evaluator removido do demo — era agente de debug do receive step
       on_human_end:
@@ -104,7 +106,10 @@ pools:
         # routing-engine não aloca novo contato ao agente até o wrap-up concluir.
         - pool: wrapup_ia
           side: agent
-        # Arc 14: side=customer → segmento interage com o cliente.
+      # G7 Fase 3b: NPS é hook de fim-de-CONTATO (1ª classe), dispara 1× quando o
+      # contato encerra de fato (no_continuation) — dono = pool do primary corrente.
+      on_contact_end:
+        # side=customer → segmento interage com o cliente.
         # nps_on_disconnect=skip → se o cliente desconectou, NPS não é disparado.
         - pool: nps_ia
           side: customer

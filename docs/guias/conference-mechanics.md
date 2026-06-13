@@ -927,6 +927,81 @@ segmento da origem re-publicado com a disposição, contato segue e fecha só no
 **Ponto de validação aberto**: contabilidade de pool com destino+wrap-up concorrentes (`session:pool`
 é slot único — pior caso +1 no contador do destino; ver nota em `fire_pool_hooks`).
 
+### Mudança 12 — close governado por `_has_continuation` + marcador condicional (G7 Fase 3a, 2026-06-13)
+
+**Problema**: o marcador `session:{id}:closed` (lido pelo Routing Engine em `_drain_queue_for_agent` /
+`is_closing` para descartar re-rotas de sessões que estão fechando) era escrito **incondicionalmente** no
+topo de `process_contact_event` para todo reason ≠ `agent_transfer`, **antes** de saber se o fim do
+segmento humano era também fim de contato. Em multi-humano (`remaining>0`, "Agent dropped, N still
+active") o marcador vazava → o Routing Engine descartava re-rotas/reconexões legítimas de uma sessão que
+**continuava** ativa (§4 / §8.1).
+
+**Mudança** (parity-preserving em single+transfer):
+- A escrita do marcador foi **fatiada por caminho**: `customer_side` (cliente saiu/timeout/agent_done)
+  escreve no topo (sempre fim-de-contato); `agent_closed` escreve **só** no path `no_continuation`/defer
+  por specialist (dentro de `remaining<=0`, após o `transfer` retornar); o branch `other_human_active`
+  (`remaining>0`) **não** escreve — o contato continua com outro `primary`.
+- O literal `if reason == "agent_transfer"` no `remaining<=0` virou `if _g7_cont and
+  _g7_motive == "transfer"` (o classificador `_has_continuation` passa a **governar** o close; default
+  por `reason` antes do `try` preserva o transfer se o classificador falhar).
+
+**Comportamento**: single-humano e transfer **inalterados** (marcador escrito/omitido como antes). Única
+mudança observável: o marcador deixa de ser escrito em `other_human_active` — remove um dano conhecido
+(re-rotas descartadas) e é fundação para o sub-arco multi-humano. O encerramento completo do contato
+multi-humano (segment-end do não-último + fan-out + NPS) continua fora de escopo (sub-arco multi-humano).
+
+**Keys novas**: nenhuma. **Rebuild**: `orchestrator-bridge` (Python).
+**Validação E2E**: (1) single-humano fecha com wrap-up+NPS 1× e `session:closed` setado; (2) transfer
+A→B sem marcador prematuro na origem, NPS só em B.
+
+### Mudança 13 — NPS como hook de fim-de-CONTATO (`on_contact_end`, G7 Fase 3b-i, 2026-06-13)
+
+**Problema**: o NPS era um entry `side=customer` dentro de `on_human_end` (hook de fim-de-SEGMENTO),
+pegando carona no último segmento humano. Em transfer/multi-humano isso confunde "qual segmento dispara
+o NPS do contato". G7 Fase 3 separa: **wrap-up = fim-de-segmento** (`on_human_end`, side=agent),
+**NPS = fim-de-contato** (`on_contact_end`, side=customer, 1× por contato).
+
+**Hook type novo `on_contact_end`** (cutover limpo, sem dual-read):
+- **schema**: `on_contact_end: PoolHookEntry[]` em `PoolHooksSchema`. `hooks` é `Json?` no Prisma → sem
+  migração de DB.
+- `fire_pool_hooks`: `on_contact_end` entra nos 4 conjuntos existentes — set `hook_pending`, stash
+  `human_seg`→`surveyed_segment_id` (para o agente de NPS gravar `survey_record grain=segment`), escrita
+  do `hook_conf`, e INCR `posatt:active`+`posatt:customer_active` (side=customer). **Não** precisou de
+  `arm_close`: o wrap-up segue em `on_human_end` (que já arma `posatt:active`) e o NPS em `on_contact_end`
+  (que arma os dois contadores) → o `_destroy_conference` (posatt:active==0) espera **ambos** e o
+  `_close_contact_layer` (posatt:customer_active==0) espera o NPS.
+- **completion handler** (`process_routed`): **zero mudança** — é genérico por `_hook_side` + contador
+  por `hook_pending:{tipo}`. Única especificidade: `post_human` é gatilhado por `on_human_end` completar
+  (dispara após o wrap-up; `post_human=[]` no demo).
+- `process_contact_event`: nos 4 sites de dispatch (no_continuation, customer_disconnect, e os 2 caminhos
+  de defer-por-specialist — nativo e Kafka) dispara `on_human_end` **e** `on_contact_end` separadamente.
+  A decisão "mantém WS aberto" passa a olhar `on_contact_end` (com fallback p/ entries side=customer em
+  `on_human_end` de pools não migrados).
+
+**Cutover**: `infra/registry/tenant_demo.yaml` (`retencao_humano`) move `nps_ia` para `on_contact_end`;
+pools de DB (criados via UI, ex.: `humanoxxx`) migram por `infra/migrations/g7_nps_to_on_contact_end.py`
+(API oficial `/v1/pools`, idempotente, dry-run por default). **Rebuild**: `schemas`+`agent-registry`+
+`orchestrator-bridge`. **Validação E2E**: single-humano byte-parity (wrap-up no Console + NPS ao cliente,
+fecha 1×); pool sem NPS fecha após wrap-up sem teardown prematuro; transfer inalterado.
+
+### Mudança 14 — wrap-up por peer humano (G7 Slice 2′, 2026-06-13)
+
+**Modelo peer/Teams-like** (invariante g7 §10): humanos numa conferência são peers; o contato fecha
+quando o último agente customer-facing sai. Esta mudança dá wrap-up ao humano **não-último**.
+
+No branch `other_human_active` (`remaining>0`) de `process_contact_event`, o humano que sai passa a
+disparar `fire_pool_hooks(hook_type="segment_wrapup", pool_id=_ha_pool)` — antes só logava. Mesmo
+mecanismo do `agent_transfer` (Mudança 11): `segment_wrapup` dispara só `side=agent`, **não** arma
+`posatt:active`/`hook_pending` (o contato segue sob os outros), e a conclusão aplica a disposição ao
+`seg_signal`→re-publish do segmento. `_ha_pool`/`_ha_tenant` vêm por-instance (`participant_meta`, Slice
+1b) e `human_seg:{_ha_pool}` (escrito na saída deste humano) atribui ao segmento dele. O último humano
+(`no_continuation`) segue com `on_human_end`+`on_contact_end`.
+
+**Limitação** (pré-existente): `human_seg` é keyed por pool → 2 humanos no MESMO pool colidem. Wrap-up
+por peer no path **customer-disconnect** (N humanos) fica para a Slice 4′.
+**Keys novas**: nenhuma. **Rebuild**: `orchestrator-bridge`. **Validação E2E**: admin (não-último) fecha →
+`Peer wrap-up (segment_wrapup) dispatched`, Console coleta wrap-up, contato segue sob o operator.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

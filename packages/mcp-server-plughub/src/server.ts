@@ -1498,14 +1498,20 @@ export async function startServer(config: ServerConfig): Promise<void> {
       //    If pool.hooks.on_human_end is non-empty, the bridge fires specialist agents
       //    (e.g. agente_finalizacao_v1) before closing the customer connection.
       //    If on_human_end is empty, the bridge closes immediately — same UX as before.
-      let instanceId = ""
-      try {
-        const metaRaw2 = await redis.get(`session:${sessionId}:meta`)
-        if (metaRaw2) {
-          const meta2 = JSON.parse(metaRaw2) as Record<string, string>
-          instanceId = meta2["instance_id"] ?? ""
-        }
-      } catch { /* non-fatal */ }
+      // G7 Slice 1: prefer the instance_id sent by THIS console (the participant
+      // closing). meta.instance_id is session-global (last-writer-wins on each
+      // activate_human_agent), so in multi-humano it misattributes the close to
+      // the last-activated human. Falls back to meta for backward compat. Ver g7 §10.
+      let instanceId = (body?.["instance_id"] as string) ?? ""
+      if (!instanceId) {
+        try {
+          const metaRaw2 = await redis.get(`session:${sessionId}:meta`)
+          if (metaRaw2) {
+            const meta2 = JSON.parse(metaRaw2) as Record<string, string>
+            instanceId = meta2["instance_id"] ?? ""
+          }
+        } catch { /* non-fatal */ }
+      }
       await kafka.publish("conversations.events", {
         event_type:  "contact_closed",
         session_id:  sessionId,

@@ -677,6 +677,22 @@ async def activate_human_agent(
             )
         except Exception:
             pass
+        # G7 Slice 1b: per-instance participant meta (pool/agent_type/tenant/login)
+        # keyed by instance_id — fonte por-participante para o path de close, evitando
+        # o meta.pool_id de SESSÃO (last-writer, errado em multi-humano). Ver g7 §11.
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:participant_meta:{instance_id}",
+                14400,
+                json.dumps({
+                    "pool_id":       pool_id,
+                    "agent_type_id": routing_result.get("agent_type_id", "") or "",
+                    "tenant_id":     tenant_id,
+                    "user_login":    _human_user_login,
+                }),
+            )
+        except Exception:
+            pass
     asyncio.create_task(_publish_participant_event(
         session_id=session_id,
         tenant_id=tenant_id,
@@ -940,7 +956,7 @@ async def fire_pool_hooks(
     # When process_routed detects a conference agent completing that has a hook_conf
     # key, it decrements the counter. When it hits 0 → _trigger_contact_close() (for post_human)
     # or checks for post_human hooks (for on_human_end).
-    if hook_type in ("on_human_end", "post_human") and hook_list:
+    if hook_type in ("on_human_end", "post_human", "on_contact_end") and hook_list:
         try:
             await redis_client.setex(
                 f"session:{session_id}:hook_pending:{hook_type}",
@@ -962,7 +978,10 @@ async def fire_pool_hooks(
     _hook_human_instance_id = ""   # G7: pid do humano DESTE segmento (não o global)
     # G7 Slice B: segment_wrapup também serve um segmento humano específico (o que
     # transferiu) — mesma leitura de human_seg + served_human stash que on_human_end.
-    if hook_type in ("on_human_end", "segment_wrapup"):
+    # G7 Fase 3b: on_contact_end (NPS) também precisa do stash — o agente de NPS lê
+    # session.surveyed_segment_id/surveyed_agent_key para gravar survey_record(grain=segment)
+    # atribuído ao segmento do humano dono do contato.
+    if hook_type in ("on_human_end", "segment_wrapup", "on_contact_end"):
         try:
             _raw_hs = await redis_client.get(f"session:{session_id}:human_seg:{pool_id}")
             if _raw_hs:
@@ -1129,7 +1148,7 @@ async def fire_pool_hooks(
         # where origin_pool is the pool the human agent belongs to (used for wrap_up_pending
         # cleanup in process_routed so it can derive human-{origin_pool} instance_id).
         # Backward compat: parse uses split(":", 3) and defaults missing parts gracefully.
-        if hook_type in ("on_human_end", "post_human", "on_human_start", "segment_wrapup"):
+        if hook_type in ("on_human_end", "post_human", "on_human_start", "segment_wrapup", "on_contact_end"):
             try:
                 # F5: 5º campo = segment_id do humano que este on_human_end serve
                 # (vazio p/ post_human/on_human_start). Parse com split(":", 4).
@@ -1152,8 +1171,11 @@ async def fire_pool_hooks(
         # G7 Slice B: segment_wrapup entra neste bloco para registrar o participants
         # SET + wrap_up_pending, MAS nunca faz INCR posatt:active — é fim-de-segmento,
         # não pode gatilhar _close_contact_layer/_destroy_conference (o contato segue).
-        if hook_type in ("on_human_end", "post_human", "segment_wrapup"):
-            if hook_type in ("on_human_end", "post_human"):
+        # G7 Fase 3b: on_contact_end (NPS, side=customer) arma posatt:active +
+        # posatt:customer_active — fim-de-CONTATO: gatilha _close_contact_layer (WS) e
+        # participa do _destroy_conference.
+        if hook_type in ("on_human_end", "post_human", "segment_wrapup", "on_contact_end"):
+            if hook_type in ("on_human_end", "post_human", "on_contact_end"):
                 try:
                     await redis_client.incr(f"session:{session_id}:posatt:active")
                     await redis_client.expire(f"session:{session_id}:posatt:active", 14400)
@@ -3403,32 +3425,45 @@ async def process_routed(
                                 _npd_pool_cfg = await get_pool_config(
                                     http, _npd_tenant, _npd_pool
                                 )
-                                _npd_hooks = (
-                                    ((_npd_pool_cfg or {}).get("hooks") or {})
-                                    .get("on_human_end", [])
-                                )
-                                if _npd_hooks:
+                                _npd_hooks_cfg = (_npd_pool_cfg or {}).get("hooks") or {}
+                                _npd_hooks      = _npd_hooks_cfg.get("on_human_end", [])
+                                # G7 Fase 3b: NPS migrou para on_contact_end.
+                                _npd_contact    = _npd_hooks_cfg.get("on_contact_end", [])
+                                if _npd_hooks or _npd_contact:
                                     await _write_pre_hook_context(
                                         redis_client, _npd_tenant, session_id,
                                         close_origin="agent_closed",
                                         human_instance_id=_npd_h_inst,
                                         customer_participant_id=_npd_cust_pid,
                                     )
-                                    asyncio.create_task(fire_pool_hooks(
-                                        http=http, redis_client=redis_client,
-                                        session_id=session_id,
-                                        pool_id=_npd_pool,
-                                        tenant_id=_npd_tenant,
-                                        customer_id=_npd_customer,
-                                        hook_type="on_human_end",
-                                    ))
-                                    asyncio.create_task(_hook_timeout_guard(
-                                        redis_client, session_id, "on_human_end",
-                                    ))
+                                    if _npd_hooks:
+                                        asyncio.create_task(fire_pool_hooks(
+                                            http=http, redis_client=redis_client,
+                                            session_id=session_id,
+                                            pool_id=_npd_pool,
+                                            tenant_id=_npd_tenant,
+                                            customer_id=_npd_customer,
+                                            hook_type="on_human_end",
+                                        ))
+                                        asyncio.create_task(_hook_timeout_guard(
+                                            redis_client, session_id, "on_human_end",
+                                        ))
+                                    if _npd_contact:
+                                        asyncio.create_task(fire_pool_hooks(
+                                            http=http, redis_client=redis_client,
+                                            session_id=session_id,
+                                            pool_id=_npd_pool,
+                                            tenant_id=_npd_tenant,
+                                            customer_id=_npd_customer,
+                                            hook_type="on_contact_end",
+                                        ))
+                                        asyncio.create_task(_hook_timeout_guard(
+                                            redis_client, session_id, "on_contact_end",
+                                        ))
                                     logger.info(
-                                        "on_human_end hooks dispatched (native deferred): "
-                                        "session=%s pool=%s count=%d",
-                                        session_id, _npd_pool, len(_npd_hooks),
+                                        "contact-end hooks dispatched (native deferred): "
+                                        "session=%s pool=%s on_human_end=%d on_contact_end=%d",
+                                        session_id, _npd_pool, len(_npd_hooks), len(_npd_contact),
                                     )
                                 else:
                                     asyncio.create_task(
@@ -3979,28 +4014,41 @@ async def process_contact_event(
                                 _pd_pool_cfg = await get_pool_config(
                                     http, _pd_tenant, _pd_pool
                                 )
-                                _pd_hooks = (
-                                    ((_pd_pool_cfg or {}).get("hooks") or {})
-                                    .get("on_human_end", [])
-                                )
-                                if _pd_hooks:
+                                _pd_hooks_cfg = (_pd_pool_cfg or {}).get("hooks") or {}
+                                _pd_hooks      = _pd_hooks_cfg.get("on_human_end", [])
+                                # G7 Fase 3b: NPS migrou para on_contact_end.
+                                _pd_contact    = _pd_hooks_cfg.get("on_contact_end", [])
+                                if _pd_hooks or _pd_contact:
                                     await _write_pre_hook_context(
                                         redis_client, _pd_tenant, session_id,
                                         close_origin="agent_closed",
                                         human_instance_id=_pd_h_inst,
                                         customer_participant_id=_pd_cust_pid,
                                     )
-                                    asyncio.create_task(fire_pool_hooks(
-                                        http=http, redis_client=redis_client,
-                                        session_id=session_id,
-                                        pool_id=_pd_pool,
-                                        tenant_id=_pd_tenant,
-                                        customer_id=_pd_customer,
-                                        hook_type="on_human_end",
-                                    ))
-                                    asyncio.create_task(_hook_timeout_guard(
-                                        redis_client, session_id, "on_human_end",
-                                    ))
+                                    if _pd_hooks:
+                                        asyncio.create_task(fire_pool_hooks(
+                                            http=http, redis_client=redis_client,
+                                            session_id=session_id,
+                                            pool_id=_pd_pool,
+                                            tenant_id=_pd_tenant,
+                                            customer_id=_pd_customer,
+                                            hook_type="on_human_end",
+                                        ))
+                                        asyncio.create_task(_hook_timeout_guard(
+                                            redis_client, session_id, "on_human_end",
+                                        ))
+                                    if _pd_contact:
+                                        asyncio.create_task(fire_pool_hooks(
+                                            http=http, redis_client=redis_client,
+                                            session_id=session_id,
+                                            pool_id=_pd_pool,
+                                            tenant_id=_pd_tenant,
+                                            customer_id=_pd_customer,
+                                            hook_type="on_contact_end",
+                                        ))
+                                        asyncio.create_task(_hook_timeout_guard(
+                                            redis_client, session_id, "on_contact_end",
+                                        ))
                                 else:
                                     asyncio.create_task(
                                         _trigger_contact_close(redis_client, session_id)
@@ -4109,20 +4157,23 @@ async def process_contact_event(
 
     try:
         # ── Marcar sessão como encerrada ──────────────────────────────────────
-        # Escrita para TODOS os motivos de encerramento (não só customer_side).
-        # O Routing Engine lê este marcador em _drain_queue_for_agent para
-        # descartar sessões que ainda estão na fila mas já foram encerradas,
-        # evitando o "ghost contact" no Agent Assist ao reconectar.
-        # TTL 7 dias: cobre sessões que ficam na fila por muito tempo.
-        try:
-            # G7 — transfer: the session is being RE-ROUTED to another pool, not closed.
-            # Writing the closed marker would make the Routing Engine discard the re-route
-            # in _drain_queue_for_agent / the is_closing guard ("already-closing session"),
-            # so skip it for agent_transfer.
-            if reason != "agent_transfer":
+        # O Routing Engine lê este marcador em _drain_queue_for_agent / is_closing
+        # para descartar sessões que ainda estão na fila mas já foram encerradas,
+        # evitando o "ghost contact" no Agent Assist ao reconectar. TTL 7 dias.
+        #
+        # G7 Fase 3a — marcador condicionado à NÃO-continuação:
+        #   • customer_side (cliente saiu/timeout/agent_done) → sempre fim-de-contato:
+        #     escreve aqui.
+        #   • agent_closed → ADIADO para o path remaining<=0/no_continuation (abaixo),
+        #     após conhecer `remaining`. Antes era escrito incondicionalmente (exceto
+        #     agent_transfer), o que VAZAVA o marcador em other_human_active (multi-humano)
+        #     fazendo o Routing Engine descartar re-rotas legítimas. transfer continua sem
+        #     marcador (re-rota em voo). Ver docs/arcos/g7-segment-contact-decoupling.md §10.
+        if customer_side:
+            try:
                 await redis_client.setex(f"session:{session_id}:closed", 604800, reason)
-        except Exception as exc:
-            logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
+            except Exception as exc:
+                logger.warning("Could not set session:closed marker: session=%s — %s", session_id, exc)
 
         if customer_side:
 
@@ -4367,16 +4418,31 @@ async def process_contact_event(
                             )
                     except Exception:
                         pass
+                    # G7 Slice 1b: pool/agent_type/tenant por-instance (participant_meta),
+                    # não do meta de SESSÃO (last-writer) — cada humano da conferência
+                    # sai com o SEU pool. Fallback no meta p/ compat. Ver g7 §11.
                     _hm_pool = _hm_at = _hm_ten = ""
                     try:
-                        _hm_raw_meta = await redis_client.get(f"session:{session_id}:meta")
-                        if _hm_raw_meta:
-                            _hm_m = json.loads(_hm_raw_meta)
-                            _hm_pool = _hm_m.get("pool_id", "")
-                            _hm_at   = _hm_m.get("agent_type_id", "")
-                            _hm_ten  = _hm_m.get("tenant_id", "") or _hm_m.get("tenant", "")
+                        _hm_pm_raw = await redis_client.get(
+                            f"session:{session_id}:participant_meta:{_hm_inst_str}"
+                        )
+                        if _hm_pm_raw:
+                            _hm_pm = json.loads(_hm_pm_raw)
+                            _hm_pool = _hm_pm.get("pool_id", "") or ""
+                            _hm_at   = _hm_pm.get("agent_type_id", "") or ""
+                            _hm_ten  = _hm_pm.get("tenant_id", "") or ""
                     except Exception:
                         pass
+                    if not _hm_pool or not _hm_ten:
+                        try:
+                            _hm_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                            if _hm_raw_meta:
+                                _hm_m = json.loads(_hm_raw_meta)
+                                _hm_pool = _hm_pool or _hm_m.get("pool_id", "")
+                                _hm_at   = _hm_at   or _hm_m.get("agent_type_id", "")
+                                _hm_ten  = _hm_ten  or (_hm_m.get("tenant_id", "") or _hm_m.get("tenant", ""))
+                        except Exception:
+                            pass
                     asyncio.create_task(_publish_participant_event(
                         session_id=session_id,
                         tenant_id=_hm_ten,
@@ -4492,11 +4558,11 @@ async def process_contact_event(
                     _cs_pool_cfg = await get_pool_config(
                         http, _cs_tenant_id, _cs_pool_id
                     )
-                    _cs_on_human_end = (
-                        ((_cs_pool_cfg or {}).get("hooks") or {})
-                        .get("on_human_end", [])
-                    )
-                    if _cs_on_human_end:
+                    _cs_hooks_cfg      = (_cs_pool_cfg or {}).get("hooks") or {}
+                    _cs_on_human_end   = _cs_hooks_cfg.get("on_human_end", [])
+                    # G7 Fase 3b: NPS migrou para on_contact_end (fim-de-CONTATO).
+                    _cs_on_contact_end = _cs_hooks_cfg.get("on_contact_end", [])
+                    if _cs_on_human_end or _cs_on_contact_end:
                         _cs_hooks_fired = True
                         _hooks_pending = True
                         # Escreve close_origin + customer/human participant_id no
@@ -4507,22 +4573,37 @@ async def process_contact_event(
                             human_instance_id=_last_human_instance_id,
                             customer_participant_id=_cs_meta.get("customer_participant_id") if _cs_meta else None,
                         )
-                        asyncio.create_task(fire_pool_hooks(
-                            http=http, redis_client=redis_client,
-                            session_id=session_id,
-                            pool_id=_cs_pool_id,
-                            tenant_id=_cs_tenant_id,
-                            customer_id=_cs_customer_id,
-                            hook_type="on_human_end",
-                        ))
-                        asyncio.create_task(_hook_timeout_guard(
-                            redis_client, session_id, "on_human_end",
-                        ))
+                        if _cs_on_human_end:
+                            asyncio.create_task(fire_pool_hooks(
+                                http=http, redis_client=redis_client,
+                                session_id=session_id,
+                                pool_id=_cs_pool_id,
+                                tenant_id=_cs_tenant_id,
+                                customer_id=_cs_customer_id,
+                                hook_type="on_human_end",
+                            ))
+                            asyncio.create_task(_hook_timeout_guard(
+                                redis_client, session_id, "on_human_end",
+                            ))
+                        # NPS de fim-de-contato. Em customer_disconnect, entries com
+                        # nps_on_disconnect=skip são puladas dentro de fire_pool_hooks.
+                        if _cs_on_contact_end:
+                            asyncio.create_task(fire_pool_hooks(
+                                http=http, redis_client=redis_client,
+                                session_id=session_id,
+                                pool_id=_cs_pool_id,
+                                tenant_id=_cs_tenant_id,
+                                customer_id=_cs_customer_id,
+                                hook_type="on_contact_end",
+                            ))
+                            asyncio.create_task(_hook_timeout_guard(
+                                redis_client, session_id, "on_contact_end",
+                            ))
                         logger.info(
-                            "on_human_end hooks dispatched (client disconnect): "
-                            "session=%s pool=%s count=%d (timeout guard: %ds)",
+                            "contact-end hooks dispatched (client disconnect): "
+                            "session=%s pool=%s on_human_end=%d on_contact_end=%d (timeout guard: %ds)",
                             session_id, _cs_pool_id, len(_cs_on_human_end),
-                            _HOOK_TIMEOUT_S,
+                            len(_cs_on_contact_end), _HOOK_TIMEOUT_S,
                         )
 
                 if not _cs_hooks_fired:
@@ -4704,18 +4785,35 @@ async def process_contact_event(
                     except Exception:
                         pass
                 _ha_pool = _ha_agent_type_id = _ha_tenant = _ha_user_login = ""
+                # G7 Slice 1b: pool/agent_type/tenant/login DESTE humano vêm do registro
+                # por-instance (participant_meta:{instance_id}), não do meta de SESSÃO
+                # (pool_id é last-writer-wins → em multi-humano o close do não-último
+                # era atribuído ao pool do último). Fallback no meta p/ compat. Ver g7 §11.
                 try:
-                    _ha_raw_meta = await redis_client.get(f"session:{session_id}:meta")
-                    if _ha_raw_meta:
-                        _ha_m = json.loads(_ha_raw_meta)
-                        _ha_pool          = _ha_m.get("pool_id", "")
-                        _ha_agent_type_id = _ha_m.get("agent_type_id", "")
-                        _ha_user_login    = _ha_m.get("user_login", "") or ""
-                        _ha_tenant        = (
-                            _ha_m.get("tenant_id", "") or _ha_m.get("tenant", "")
-                        )
+                    _ha_pm_raw = await redis_client.get(
+                        f"session:{session_id}:participant_meta:{instance_id}"
+                    )
+                    if _ha_pm_raw:
+                        _ha_pm = json.loads(_ha_pm_raw)
+                        _ha_pool          = _ha_pm.get("pool_id", "") or ""
+                        _ha_agent_type_id = _ha_pm.get("agent_type_id", "") or ""
+                        _ha_user_login    = _ha_pm.get("user_login", "") or ""
+                        _ha_tenant        = _ha_pm.get("tenant_id", "") or ""
                 except Exception:
                     pass
+                if not _ha_pool or not _ha_tenant:
+                    try:
+                        _ha_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                        if _ha_raw_meta:
+                            _ha_m = json.loads(_ha_raw_meta)
+                            _ha_pool          = _ha_pool          or _ha_m.get("pool_id", "")
+                            _ha_agent_type_id = _ha_agent_type_id or _ha_m.get("agent_type_id", "")
+                            _ha_user_login    = _ha_user_login    or (_ha_m.get("user_login", "") or "")
+                            _ha_tenant        = _ha_tenant        or (
+                                _ha_m.get("tenant_id", "") or _ha_m.get("tenant", "")
+                            )
+                    except Exception:
+                        pass
                 # ── Arc 5: retrieve segment_id stored at activate_human_agent ────
                 _ha_seg_id = ""
                 _ha_seq_idx = 0
@@ -4820,11 +4918,16 @@ async def process_contact_event(
 
                 await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")
-                # ── G7 Fase 0 — classificador read-only de continuação (sem agir) ──────
-                # Torna observável, antes de mudar comportamento, se este fim de segmento
-                # humano é também fim de contato. As fases seguintes do G7 passam a AGIR
-                # sobre esta decisão (wrap-up por segmento, NPS como hook de contato,
-                # contact-close por "há continuação?"). Ver docs/arcos/g7-segment-contact-decoupling.md.
+                # ── G7 Fase 3a — classificador de continuação GOVERNA o close ──────────
+                # _has_continuation decide se este fim de segmento humano é também fim de
+                # contato. Fase 3a AGE sobre a decisão: o motivo `transfer` dispara
+                # segment_wrapup sem fechar (re-rota); no_continuation — e o defer por
+                # specialist ainda ativo — escreve o marcador session:closed e segue para
+                # o close. Default por `reason` para preservar o transfer mesmo se o
+                # classificador falhar. Ver docs/arcos/g7-segment-contact-decoupling.md §10.
+                _g7_cont, _g7_motive = (reason == "agent_transfer"), (
+                    "transfer" if reason == "agent_transfer" else "no_continuation"
+                )
                 try:
                     _g7_cont, _g7_motive = await _has_continuation(
                         redis_client, session_id, reason, remaining
@@ -4857,7 +4960,7 @@ async def process_contact_event(
                     # transferiu e atribuída ao seu segmento (seg_signal → re-publish).
                     # O contato segue pela re-rota; o wrap-up roda em paralelo, isolado
                     # pela identidade por-segmento da Slice A.
-                    if reason == "agent_transfer":
+                    if _g7_cont and _g7_motive == "transfer":
                         logger.info(
                             "Transfer: origin segment ended, contact continues "
                             "(re-routed) — session=%s instance=%s",
@@ -4893,6 +4996,23 @@ async def process_contact_event(
                                 "session=%s origin_pool=%s", session_id, _ha_pool,
                             )
                         return
+
+                    # ── G7 Fase 3a — marcador session:closed (no_continuation) ────
+                    # Chegou aqui ⇒ fim-de-contato (no_continuation) OU defer por
+                    # specialist ainda ativo: este fim-de-segmento fecha (ou vai
+                    # fechar) o contato. O transfer já retornou acima; o branch
+                    # remaining>0 (other_human_active) NÃO escreve (contato continua).
+                    # Antes este marcador era escrito incondicionalmente no topo do
+                    # handler — agora é condicional. Ver g7 §10.
+                    try:
+                        await redis_client.setex(
+                            f"session:{session_id}:closed", 604800, reason
+                        )
+                    except Exception as _mk_exc:
+                        logger.warning(
+                            "Could not set session:closed marker (no_continuation): "
+                            "session=%s — %s", session_id, _mk_exc,
+                        )
 
                     # ── Record true contact end time (G1 fix) ─────────────────
                     # The human agent is the last active participant — freeze AHT
@@ -5004,11 +5124,11 @@ async def process_contact_event(
                             _pool_cfg_hooks = await get_pool_config(
                                 http, _tenant_id_hooks, _pool_id_hooks
                             )
-                            _on_human_end = (
-                                ((_pool_cfg_hooks or {}).get("hooks") or {})
-                                .get("on_human_end", [])
-                            )
-                            if _on_human_end:
+                            _hooks_cfg = (_pool_cfg_hooks or {}).get("hooks") or {}
+                            _on_human_end   = _hooks_cfg.get("on_human_end", [])
+                            # G7 Fase 3b: NPS migrou para on_contact_end (fim-de-CONTATO).
+                            _on_contact_end = _hooks_cfg.get("on_contact_end", [])
+                            if _on_human_end or _on_contact_end:
                                 # Escreve close_origin + customer/human participant_id no
                                 # ContextStore ANTES de disparar os hooks.
                                 await _write_pre_hook_context(
@@ -5018,13 +5138,13 @@ async def process_contact_event(
                                     customer_participant_id=_meta_hooks.get("customer_participant_id") if _meta_hooks else None,
                                 )
 
-                                # Arc 14 Fase E: only close the customer WS immediately
-                                # when there are NO customer-side hooks (NPS/survey).
-                                # If a side=customer hook exists, the WS must stay open
-                                # so the NPS agent can deliver its menu prompts.
-                                # _close_contact_layer() fires from process_routed when
-                                # posatt:customer_active reaches 0 (last NPS segment done).
-                                _has_customer_hooks = any(
+                                # Arc 14 Fase E / G7 Fase 3b: só fecha o WS do cliente já
+                                # se NÃO houver pesquisa ao cliente. NPS vive em
+                                # on_contact_end; a checagem de entries side=customer em
+                                # on_human_end fica como defesa para pools ainda não
+                                # migrados ao cutover. _close_contact_layer() dispara de
+                                # process_routed quando posatt:customer_active chega a 0.
+                                _has_customer_hooks = bool(_on_contact_end) or any(
                                     (
                                         e.get("side", "agent")
                                         if isinstance(e, dict) else "agent"
@@ -5036,28 +5156,37 @@ async def process_contact_event(
                                         _close_contact_layer(redis_client, session_id)
                                     )
 
-                                # Pool has on_human_end hooks — dispatch them.
-                                # _destroy_conference() fires when posatt:active hits 0
-                                # (each hook completion DECRs in process_routed).
-                                asyncio.create_task(fire_pool_hooks(
-                                    http=http, redis_client=redis_client,
-                                    session_id=session_id,
-                                    pool_id=_pool_id_hooks,
-                                    tenant_id=_tenant_id_hooks,
-                                    customer_id=_customer_id_hooks,
-                                    hook_type="on_human_end",
-                                ))
-                                # Safety net: if hook agents never start or complete
-                                # (e.g. pool has no running instances), force-close
-                                # the conference after _HOOK_TIMEOUT_S seconds.
-                                asyncio.create_task(_hook_timeout_guard(
-                                    redis_client, session_id, "on_human_end",
-                                ))
+                                # Wrap-up de fim-de-segmento (side=agent).
+                                if _on_human_end:
+                                    asyncio.create_task(fire_pool_hooks(
+                                        http=http, redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_pool_id_hooks,
+                                        tenant_id=_tenant_id_hooks,
+                                        customer_id=_customer_id_hooks,
+                                        hook_type="on_human_end",
+                                    ))
+                                    asyncio.create_task(_hook_timeout_guard(
+                                        redis_client, session_id, "on_human_end",
+                                    ))
+                                # NPS de fim-de-contato (side=customer, 1ª classe).
+                                if _on_contact_end:
+                                    asyncio.create_task(fire_pool_hooks(
+                                        http=http, redis_client=redis_client,
+                                        session_id=session_id,
+                                        pool_id=_pool_id_hooks,
+                                        tenant_id=_tenant_id_hooks,
+                                        customer_id=_customer_id_hooks,
+                                        hook_type="on_contact_end",
+                                    ))
+                                    asyncio.create_task(_hook_timeout_guard(
+                                        redis_client, session_id, "on_contact_end",
+                                    ))
                                 logger.info(
-                                    "on_human_end hooks dispatched: session=%s pool=%s count=%d "
-                                    "(timeout guard scheduled: %ds)",
+                                    "contact-end hooks dispatched: session=%s pool=%s "
+                                    "on_human_end=%d on_contact_end=%d (timeout guard: %ds)",
                                     session_id, _pool_id_hooks, len(_on_human_end),
-                                    _HOOK_TIMEOUT_S,
+                                    len(_on_contact_end), _HOOK_TIMEOUT_S,
                                 )
                             else:
                                 # No hooks — close the contact immediately
@@ -5070,10 +5199,47 @@ async def process_contact_event(
                                 _trigger_contact_close(redis_client, session_id)
                             )
                 else:
+                    # G7 Fase 3a — other_human_active: o contato CONTINUA com outro agente.
+                    # NÃO escrevemos session:closed (antes era escrito incondicionalmente
+                    # no topo, descartando re-rotas legítimas — §4).
                     logger.info(
-                        "Agent dropped, %d agent(s) still active: session=%s instance=%s",
+                        "Agent dropped, %d agent(s) still active (no session:closed — "
+                        "contact continues): session=%s instance=%s",
                         remaining, session_id, instance_id,
                     )
+                    # G7 Slice 2′ — wrap-up por peer: o humano que sai (não-último) faz o
+                    # wrap-up do SEU segmento, igual ao transfer. segment_wrapup dispara só
+                    # side=agent e NÃO arma posatt/hook_pending (o contato segue sob os
+                    # outros). _ha_pool/_ha_tenant são por-instance (Slice 1b) e
+                    # human_seg:{_ha_pool} (escrito acima) atribui ao segmento deste humano.
+                    # Ver g7 §11.
+                    if http and _ha_pool and _ha_tenant:
+                        _oha_customer = session_id
+                        try:
+                            _oha_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                            if _oha_raw_meta:
+                                _oha_meta = json.loads(_oha_raw_meta)
+                                _oha_customer = (
+                                    _oha_meta.get("customer_id")
+                                    or _oha_meta.get("contact_id")
+                                    or session_id
+                                )
+                        except Exception:
+                            pass
+                        asyncio.create_task(fire_pool_hooks(
+                            http=http,
+                            redis_client=redis_client,
+                            session_id=session_id,
+                            pool_id=_ha_pool,
+                            tenant_id=_ha_tenant,
+                            customer_id=_oha_customer,
+                            hook_type="segment_wrapup",
+                        ))
+                        logger.info(
+                            "Peer wrap-up (segment_wrapup) dispatched for non-last human: "
+                            "session=%s pool=%s instance=%s",
+                            session_id, _ha_pool, instance_id,
+                        )
             else:
                 # instance_id not in event (legacy path) — fall back to clearing everything.
                 # Root cause of "Ocupados never decrements": instance_id is empty when the
