@@ -897,6 +897,36 @@ ctx `segment.{segId}.served_human_participant_id`. **`session.human_agent_partic
 como fallback single-humano (não aposentado). **Limitação**: o `author_id` do echo no `menu_submit`
 (botão) ainda sai do campo global — cosmético, roteamento já correto.
 
+### Mudança 11 — wrap-up no transfer (G7 Slice B, 2026-06-13)
+
+**Problema**: no transfer (Mudança 9) a origem saía como fim-de-segmento **sem** wrap-up — registrava
+`outcome=transferred` sem o motivo. A Slice B coleta a disposição do humano que transferiu, atribuída
+ao **segmento da origem**, sem fechar o contato (segue pelo destino).
+
+**Tipo de hook novo `segment_wrapup`** (fim-de-segmento, não fim-de-contato):
+- `fire_pool_hooks(hook_type="segment_wrapup")` reusa a lista `on_human_end` do pool **filtrando para
+  `side=agent`** (só o wrap-up, **sem NPS**); grava `hook_conf` (`segment_wrapup:…`), o stash
+  `hook_served_human` (Slice A) e `wrap_up_pending`; **NÃO** faz `INCR posatt:active`/`hook_pending`
+  (não pode gatilhar `_close_contact_layer`/`_destroy_conference`).
+- Branch `agent_transfer` em `process_contact_event`: troca o `return` seco por
+  `fire_pool_hooks(segment_wrapup, pool_id=origin_pool)` + `return` — sem `_mark_contact_ended`, sem close.
+- Conclusão em `process_routed` (`completed_hook_type == "segment_wrapup"`): aplica
+  `_apply_wrapup_to_segment` (disposição→`seg_signal`→re-publish do segmento da origem), limpa
+  `wrap_up_pending`, publica `posatt_segment_complete` (fecha o painel da origem) e **pula** o
+  `DECR hook_pending`/`DECR posatt:active`/`_destroy_conference`.
+
+**Console (B2)**: o `session.closed{reason:agent_transfer}` deixa de **remover** o contato da origem —
+agora entra em **modo wrap-up** (`sessionClosed=true`, mantém inscrito em `agent:events`), recebendo o
+`menu.render` do wrap-up (visibility `[origin_pid]`, isolado pela Slice A). A remoção acontece no
+`posatt_segment_complete` (origem nos recipients) quando o wrap-up conclui. (O mcp-server já não fazia
+teardown em `agent_transfer` — só nos reasons `agent_done`/`conference_destroyed`/`posatt`.)
+
+**Keys novas**: nenhuma (reusa `hook_conf`/`hook_served_human`/`seg_signal`/`wrap_up_pending`).
+**Validação E2E**: transfer A→B → origem coleta motivo via wrap-up (isolado, não vaza pro cliente/destino),
+segmento da origem re-publicado com a disposição, contato segue e fecha só no humano final.
+**Ponto de validação aberto**: contabilidade de pool com destino+wrap-up concorrentes (`session:pool`
+é slot único — pior caso +1 no contador do destino; ver nota em `fire_pool_hooks`).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

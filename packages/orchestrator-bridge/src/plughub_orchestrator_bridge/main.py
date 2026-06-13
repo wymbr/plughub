@@ -913,7 +913,10 @@ async def fire_pool_hooks(
         return
 
     hooks      = pool_config.get("hooks") or {}
-    hook_list  = hooks.get(hook_type, [])
+    # G7 Slice B: segment_wrapup reusa a lista on_human_end do pool (o loop abaixo
+    # filtra para side=agent). Pools não declaram uma lista "segment_wrapup".
+    _hook_list_key = "on_human_end" if hook_type == "segment_wrapup" else hook_type
+    hook_list  = hooks.get(_hook_list_key, [])
 
     if not hook_list:
         logger.debug(
@@ -957,7 +960,9 @@ async def fire_pool_hooks(
     # segment_id para carimbar no hook_conf de cada hook desta leva.
     _hook_human_seg_id = ""
     _hook_human_instance_id = ""   # G7: pid do humano DESTE segmento (não o global)
-    if hook_type == "on_human_end":
+    # G7 Slice B: segment_wrapup também serve um segmento humano específico (o que
+    # transferiu) — mesma leitura de human_seg + served_human stash que on_human_end.
+    if hook_type in ("on_human_end", "segment_wrapup"):
         try:
             _raw_hs = await redis_client.get(f"session:{session_id}:human_seg:{pool_id}")
             if _raw_hs:
@@ -1012,6 +1017,11 @@ async def fire_pool_hooks(
     # find the first hook's pool_id and DECR it while it is still running.
     # Deleting the key here makes each hook INCR its own pool independently.
     # retencao_humano is DECR'd by the human's own remove_conversation (agent_done).
+    #
+    # G7 Slice B (nota): no segment_wrapup o contato CONTINUA (destino ativo). A chave
+    # session:pool é um slot único e não representa destino + wrap-up concorrentes —
+    # contabilidade de pool nesse cenário é ponto de validação E2E (pior caso: +1 no
+    # contador do destino). Mantido o delete (comportamento provado do on_human_end).
     if tenant_id and session_id:
         try:
             await redis_client.delete(f"{tenant_id}:session:pool:{session_id}")
@@ -1037,6 +1047,11 @@ async def fire_pool_hooks(
         if isinstance(entry, dict):
             hook_side          = entry.get("side", "agent") or "agent"
             nps_on_disconnect  = entry.get("nps_on_disconnect", "timeout") or "timeout"
+
+        # G7 Slice B: segment_wrapup dispara SÓ o wrap-up (side=agent) — sem NPS.
+        # O NPS é hook de fim-de-CONTATO (Fase 3), não de fim-de-segmento.
+        if hook_type == "segment_wrapup" and hook_side != "agent":
+            continue
 
         # Arc 14 Fase D: skip customer-side hooks when nps_on_disconnect="skip"
         # and the client already disconnected.
@@ -1114,10 +1129,11 @@ async def fire_pool_hooks(
         # where origin_pool is the pool the human agent belongs to (used for wrap_up_pending
         # cleanup in process_routed so it can derive human-{origin_pool} instance_id).
         # Backward compat: parse uses split(":", 3) and defaults missing parts gracefully.
-        if hook_type in ("on_human_end", "post_human", "on_human_start"):
+        if hook_type in ("on_human_end", "post_human", "on_human_start", "segment_wrapup"):
             try:
                 # F5: 5º campo = segment_id do humano que este on_human_end serve
                 # (vazio p/ post_human/on_human_start). Parse com split(":", 4).
+                # G7 Slice B: segment_wrapup carrega o mesmo 5º campo (segmento da origem).
                 await redis_client.setex(
                     f"session:{session_id}:hook_conf:{conference_id}",
                     14400,
@@ -1133,25 +1149,29 @@ async def fire_pool_hooks(
         # Decremented in process_routed when the hook agent completes.
         # When the counter reaches 0, _destroy_conference() is called.
         # Only tracked for on_human_end and post_human (not on_human_start).
-        if hook_type in ("on_human_end", "post_human"):
-            try:
-                await redis_client.incr(f"session:{session_id}:posatt:active")
-                await redis_client.expire(f"session:{session_id}:posatt:active", 14400)
-                # Arc 14 Fase E: track customer-side hooks separately.
-                # _close_contact_layer() fires only after posatt:customer_active hits 0,
-                # keeping the customer WebSocket open while NPS is running.
-                if hook_side == "customer":
-                    await redis_client.incr(f"session:{session_id}:posatt:customer_active")
-                    await redis_client.expire(f"session:{session_id}:posatt:customer_active", 14400)
-                logger.debug(
-                    "fire_pool_hooks: posatt:active INCR — session=%s hook=%s side=%s conf=%s",
-                    session_id, hook_type, hook_side, conference_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "fire_pool_hooks: could not INCR posatt:active: session=%s — %s",
-                    session_id, exc,
-                )
+        # G7 Slice B: segment_wrapup entra neste bloco para registrar o participants
+        # SET + wrap_up_pending, MAS nunca faz INCR posatt:active — é fim-de-segmento,
+        # não pode gatilhar _close_contact_layer/_destroy_conference (o contato segue).
+        if hook_type in ("on_human_end", "post_human", "segment_wrapup"):
+            if hook_type in ("on_human_end", "post_human"):
+                try:
+                    await redis_client.incr(f"session:{session_id}:posatt:active")
+                    await redis_client.expire(f"session:{session_id}:posatt:active", 14400)
+                    # Arc 14 Fase E: track customer-side hooks separately.
+                    # _close_contact_layer() fires only after posatt:customer_active hits 0,
+                    # keeping the customer WebSocket open while NPS is running.
+                    if hook_side == "customer":
+                        await redis_client.incr(f"session:{session_id}:posatt:customer_active")
+                        await redis_client.expire(f"session:{session_id}:posatt:customer_active", 14400)
+                    logger.debug(
+                        "fire_pool_hooks: posatt:active INCR — session=%s hook=%s side=%s conf=%s",
+                        session_id, hook_type, hook_side, conference_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "fire_pool_hooks: could not INCR posatt:active: session=%s — %s",
+                        session_id, exc,
+                    )
 
             # Arc 14 Fase B: register the fixed-side participant in the posatt
             # participants SET so process_routed can publish a targeted session.closed
@@ -1216,7 +1236,7 @@ async def fire_pool_hooks(
                     # if the cleanup path is never reached (e.g. bridge crash).
                     # Key uses human-{pool_id} — same format routing-engine uses to index
                     # pool instances — NOT participant_id from ContextStore (unreliable).
-                    if hook_side == "agent" and hook_type == "on_human_end":
+                    if hook_side == "agent" and hook_type in ("on_human_end", "segment_wrapup"):
                         try:
                             _human_iid = f"human-{pool_id}"
                             _wp_key = (
@@ -3118,9 +3138,20 @@ async def process_routed(
                     _hook_origin_pool   = _hl_parts[3] if len(_hl_parts) > 3 else ""  # Arc 14 Fase C
                     _hook_human_seg     = _hl_parts[4] if len(_hl_parts) > 4 else ""   # F5
 
-                    remaining_hooks = await redis_client.decr(
-                        f"session:{session_id}:hook_pending:{completed_hook_type}"
-                    )
+                    # G7 Slice B: segment_wrapup é fim-de-SEGMENTO (transfer) — NÃO
+                    # arma contadores de close. Não DECR hook_pending/posatt:active,
+                    # não dispara _close_contact_layer/_destroy_conference. Só aplica a
+                    # disposição ao segmento, limpa wrap_up_pending e fecha o painel
+                    # de wrap-up da origem (posatt_segment_complete). O contato segue
+                    # pelo destino (re-rota já em voo).
+                    _is_segment_wrapup = (completed_hook_type == "segment_wrapup")
+
+                    if _is_segment_wrapup:
+                        remaining_hooks = 0
+                    else:
+                        remaining_hooks = await redis_client.decr(
+                            f"session:{session_id}:hook_pending:{completed_hook_type}"
+                        )
                     logger.info(
                         "Hook agent completed: session=%s conference=%s hook=%s pool=%s side=%s remaining=%d",
                         session_id, conference_id, completed_hook_type, _hook_target_pool,
@@ -3174,7 +3205,7 @@ async def process_routed(
                     # so the routing-engine can allocate new contacts to this agent.
                     # Use origin_pool from hook_conf (4th field) to derive instance_id:
                     # human-{origin_pool} — same key written by fire_pool_hooks.
-                    if _hook_side == "agent" and completed_hook_type == "on_human_end":
+                    if _hook_side == "agent" and completed_hook_type in ("on_human_end", "segment_wrapup"):
                         try:
                             if _hook_origin_pool and tenant_id:
                                 _wup_iid = f"human-{_hook_origin_pool}"
@@ -3303,28 +3334,31 @@ async def process_routed(
 
                     # Arc 14: DECR posatt:active for this completing hook segment.
                     # Done AFTER dispatching post_human so INCRs precede this DECR.
+                    # G7 Slice B: segment_wrapup nunca fez INCR posatt:active e NÃO pode
+                    # fechar o contato (segue pelo destino) — pula DECR + _destroy.
                     _posatt_remaining = -1
-                    try:
-                        _posatt_remaining = await redis_client.decr(
-                            f"session:{session_id}:posatt:active"
-                        )
-                        logger.info(
-                            "posatt:active DECR: session=%s conference=%s hook=%s remaining=%d",
-                            session_id, conference_id, completed_hook_type, _posatt_remaining,
-                        )
-                    except Exception as _pa_exc:
-                        logger.warning(
-                            "Could not DECR posatt:active: session=%s — %s",
-                            session_id, _pa_exc,
-                        )
+                    if not _is_segment_wrapup:
+                        try:
+                            _posatt_remaining = await redis_client.decr(
+                                f"session:{session_id}:posatt:active"
+                            )
+                            logger.info(
+                                "posatt:active DECR: session=%s conference=%s hook=%s remaining=%d",
+                                session_id, conference_id, completed_hook_type, _posatt_remaining,
+                            )
+                        except Exception as _pa_exc:
+                            logger.warning(
+                                "Could not DECR posatt:active: session=%s — %s",
+                                session_id, _pa_exc,
+                            )
 
-                    # Destroy conference when all posatt segments finished AND no new
-                    # segments were just dispatched (post_human dispatch adds more INCRs).
-                    # _close_contact_layer() already closed the customer WS immediately.
-                    if _posatt_remaining <= 0 and not _dispatched_post:
-                        asyncio.create_task(
-                            _destroy_conference(redis_client, session_id)
-                        )
+                        # Destroy conference when all posatt segments finished AND no new
+                        # segments were just dispatched (post_human dispatch adds more INCRs).
+                        # _close_contact_layer() already closed the customer WS immediately.
+                        if _posatt_remaining <= 0 and not _dispatched_post:
+                            asyncio.create_task(
+                                _destroy_conference(redis_client, session_id)
+                            )
 
             except Exception as exc:
                 logger.warning(
@@ -4815,15 +4849,49 @@ async def process_contact_event(
                     # agent_done lifecycle DECR, SREM human_agents) already removed the
                     # origin so the in-flight re-route (conversations.inbound to the target
                     # pool) can activate the target agent (the human_active guard now
-                    # passes). A transfer is a mid-contact handoff: do NOT freeze AHT, do
-                    # NOT fire on_human_end (wrap-up/NPS) and do NOT close the contact.
-                    # (The transfer-aware wrap-up is a separate follow-up stage.)
+                    # passes). A transfer is a mid-contact handoff: do NOT freeze AHT and
+                    # do NOT close the contact.
+                    # G7 Slice B: fire a SEGMENT wrap-up (side=agent only) for the origin
+                    # segment — fim-de-segmento, sem armar contadores de close, sem NPS.
+                    # A disposição (motivo da escalação/transfer) é coletada do humano que
+                    # transferiu e atribuída ao seu segmento (seg_signal → re-publish).
+                    # O contato segue pela re-rota; o wrap-up roda em paralelo, isolado
+                    # pela identidade por-segmento da Slice A.
                     if reason == "agent_transfer":
                         logger.info(
                             "Transfer: origin segment ended, contact continues "
                             "(re-routed) — session=%s instance=%s",
                             session_id, instance_id,
                         )
+                        if http and _ha_pool and _ha_tenant:
+                            _tr_customer = session_id
+                            try:
+                                _tr_raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                                if _tr_raw_meta:
+                                    _tr_meta = json.loads(_tr_raw_meta)
+                                    _tr_customer = (
+                                        _tr_meta.get("customer_id")
+                                        or _tr_meta.get("contact_id")
+                                        or session_id
+                                    )
+                            except Exception:
+                                pass
+                            # Sem _hook_timeout_guard: segment_wrapup não segura o
+                            # contato (não há hook_pending/posatt). wrap_up_pending tem
+                            # TTL próprio; hook_conf/participants expiram sozinhos.
+                            asyncio.create_task(fire_pool_hooks(
+                                http=http,
+                                redis_client=redis_client,
+                                session_id=session_id,
+                                pool_id=_ha_pool,
+                                tenant_id=_ha_tenant,
+                                customer_id=_tr_customer,
+                                hook_type="segment_wrapup",
+                            ))
+                            logger.info(
+                                "Transfer wrap-up (segment_wrapup) dispatched: "
+                                "session=%s origin_pool=%s", session_id, _ha_pool,
+                            )
                         return
 
                     # ── Record true contact end time (G1 fix) ─────────────────

@@ -170,3 +170,15 @@ Slice A (identidade por-segmento) está **correta e provada** isoladamente (sess
 `served_human_participant_id` gravado certo). O conserto ponta-a-ponta deste cenário pertence a
 **Fase 3 (close por continuação)** + ao **sub-arco multi-humano** (encerrar o segmento de cada
 primário no seu `agent_done`, independente de ser o último). Slice A é pré-requisito.
+
+## 9. Slice B ✅ — wrap-up no transfer (hook type `segment_wrapup`, 2026-06-13)
+
+Primeira aplicação do modelo-alvo "todo fim de segmento gera wrap-up" — para o caso **transfer**
+(continuação `transfer` do `_has_continuation`). Hook type novo **`segment_wrapup`**: dispara só o
+wrap-up `side=agent` para o segmento da origem, **sem** armar `posatt:active`/`hook_pending` e **sem**
+NPS (NPS é fim-de-CONTATO, Fase 3). O branch `agent_transfer` troca o `return` seco por esse dispatch;
+a conclusão aplica a disposição ao segmento (`seg_signal`→re-publish) e **não** fecha o contato (segue
+pelo destino). Console: a origem entra em modo wrap-up (não larga o contato). Detalhe em
+`conference-mechanics.md` § Mudança 11 + CHANGELOG. Generaliza-se naturalmente para a **Fase 1**
+(wrap-up do não-último: mesmo `segment_wrapup` no branch `other_human_active`) quando o sub-arco
+multi-humano fechar o encerramento de segmento do não-último (o achado §8.1).

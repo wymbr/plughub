@@ -501,8 +501,8 @@ Spec em [`docs/arcos/g7-segment-contact-decoupling.md`](docs/arcos/g7-segment-co
 Fase 0 (classificador `_has_continuation`) + branch `agent_transfer` (transfer funcional — Mudança 9) +
 **Slice A ✅** (wrap-up multi-humano: identidade de participante por-segmento — Mudança 10 + ADR
 `adr-participant-identity-single-source`; resolve o gap (2) menu-routing do sub-arco multi-humano).
-**Falta** (modelo-alvo): **Slice B** — wrap-up no transfer (disparar wrap-up side=agent por-segmento no branch
-`agent_transfer`, **sem** armar `posatt`/`hook_pending` de close; agora desbloqueado pela Slice A); **Fase 3** —
+**Slice B ✅** (wrap-up no transfer — hook type `segment_wrapup`, fim-de-segmento sem armar close; Mudança 11).
+**Falta** (modelo-alvo): **Fase 3** —
 contact-close como decisão separada ("há continuação?") + NPS como hook de **contato** de 1ª classe (sair da
 carona do último `on_human_end`); wrap-up em **todo** fim de segmento (inclusive humano não-último);
 continuações além do transfer (re-fila, handback IA). Sub-arco multi-humano aberto: gap (1) fan-out msg

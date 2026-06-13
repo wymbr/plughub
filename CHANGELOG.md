@@ -2,6 +2,29 @@
 
 ---
 
+## G7 Slice B — wrap-up no transfer (fim-de-segmento, sem close) (2026-06-13)
+
+Hook type novo **`segment_wrapup`**: dispara só o wrap-up `side=agent` para o segmento do humano que
+transferiu, **sem** armar contadores de close (`hook_pending`/`posatt:active`) e **sem** NPS. Coleta a
+disposição (motivo da escalação/transfer) e atribui ao segmento da origem (`seg_signal`→re-publish),
+enquanto o contato segue pelo destino.
+
+- **bridge** `fire_pool_hooks`: aceita `hook_type="segment_wrapup"` (reusa lista `on_human_end`
+  filtrando `side=agent`); grava `hook_conf`+`hook_served_human`+`wrap_up_pending` mas **não** INCR
+  `posatt:active`/`hook_pending`. Branch `agent_transfer` em `process_contact_event` troca o `return`
+  seco por `fire_pool_hooks(segment_wrapup, pool_id=origin_pool)`. Conclusão em `process_routed`
+  (`completed_hook_type=="segment_wrapup"`): aplica `_apply_wrapup_to_segment`, limpa `wrap_up_pending`,
+  publica `posatt_segment_complete`, e **pula** DECR de close + `_destroy_conference`.
+- **platform-ui** `AgentAssistContext`: `session.closed{agent_transfer}` deixa de remover o contato da
+  origem → entra em **modo wrap-up** (`sessionClosed=true`, mantém inscrito), recebe o `menu.render`
+  (visibility `[origin_pid]`, isolado pela Slice A). Removido no `posatt_segment_complete`.
+
+Reusa a identidade por-segmento da Slice A (sem ela o wrap-up da origem vazaria/colidiria com o destino
+ativo). **Rebuild**: `orchestrator-bridge` + `platform-ui`. Doc: `conference-mechanics.md` § Mudança 11.
+**Aberto**: contabilidade de pool destino+wrap-up concorrentes (`session:pool` slot único — validação E2E).
+
+---
+
 ## G7 Slice A — wrap-up multi-humano: identidade de participante por-segmento (2026-06-12)
 
 **Report:** o wrap-up (`agente_wrapup_v1`, hook `on_human_end` side=agent) só funcionava quando o

@@ -427,14 +427,22 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       // state and can still interact with hook agents.  The actual removal happens
       // when reason === "agent_done" (published by _trigger_contact_close after all
       // hooks have completed).
+      // G7 Slice B: "agent_transfer" — a origem transferiu o contato (o contato
+      // SEGUE pelo destino). Não remover: entrar em modo wrap-up para a origem
+      // responder o wrap-up do seu segmento (segment_wrapup). A remoção acontece
+      // quando o wrap-up conclui (session.closed reason="posatt_segment_complete"
+      // com a origem nos recipients).
       if (
         event.reason === "client_disconnect" ||
         event.reason === "customer_disconnect" ||
         event.reason === "session_timeout" ||
-        event.reason === "timeout"
+        event.reason === "timeout" ||
+        event.reason === "agent_transfer"
       ) {
         const reasonLabel =
-          event.reason === "session_timeout" || event.reason === "timeout"
+          event.reason === "agent_transfer"
+            ? "Contato transferido."
+            : event.reason === "session_timeout" || event.reason === "timeout"
             ? "Sessão encerrada por inatividade."
             : "Cliente desconectou.";
         const toastId = addToast(`${reasonLabel} Aguardando encerramento...`, "warning", /* persistent */ true);
