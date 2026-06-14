@@ -253,11 +253,11 @@ class Router:
             if result:
                 return result
 
-        # Calculate resource_score for each available instance
-        best_instance: AgentInstance | None = None
-        best_pool:     PoolConfig   | None = None
-        best_score:    float               = -1.0
-
+        # Calculate resource_score for each available instance.
+        # Router atomic allocation (Fatia B): coletamos TODOS os candidatos pontuados
+        # e, em seguida, tentamos um CLAIM atômico do melhor; se ele falhar (perdeu a
+        # corrida de concorrência / instância lotada), caímos no próximo best. Isso
+        # elimina a sobre-alocação do antigo select→mark_busy não-atômico.
         # Arc 7d — performance_score_weight is dynamically overridable via
         # Config API namespace "routing" key "performance_score_weight".
         # Falls back to env-var setting when Config API is unavailable.
@@ -266,6 +266,7 @@ class Router:
             self._settings.performance_score_weight,
         )
 
+        candidates: list[tuple[float, PoolConfig, AgentInstance]] = []
         for pool in pools:
             instances = await self._instances.get_ready_instances(
                 event.tenant_id, pool.pool_id
@@ -295,10 +296,30 @@ class Router:
                 )
                 if rscore < 0:
                     continue  # hard filter
-                if rscore > best_score:
-                    best_score    = rscore
-                    best_instance = inst
-                    best_pool     = pool
+                candidates.append((rscore, pool, inst))
+
+        # Maior score primeiro; o claim atômico arbitra alocações concorrentes.
+        candidates.sort(key=lambda c: c[0], reverse=True)
+
+        # claim_instance usa occupant "{session_id}::{conference_id}": duas confs da MESMA
+        # sessão (conference_ids distintos) NÃO dividem vaga → a 2ª recebe -1 e re-seleciona
+        # outra instância; re-rota da mesma sessão (mesmo occupant) é idempotente. Quem
+        # recebe claim=-1 (lotada / tomada por chamador concorrente) tenta o próximo best.
+        best_instance: AgentInstance | None = None
+        best_pool:     PoolConfig   | None = None
+        best_score:    float               = -1.0
+        for rscore, pool, inst in candidates:
+            claimed = await self._instances.claim_instance(
+                event.tenant_id, inst.instance_id,
+                event.session_id, event.conference_id, inst.max_concurrent,
+            )
+            if claimed >= 1:
+                best_instance, best_pool, best_score = inst, pool, rscore
+                break
+            logger.info(
+                "router.claim: instance=%s busy/taken (claim=-1) — re-selecting next best: "
+                "session=%s pool=%s", inst.instance_id, event.session_id, pool.pool_id,
+            )
 
         if not best_instance or not best_pool:
             return RoutingResult(
@@ -454,6 +475,20 @@ class Router:
                         event.tenant_id, event.session_id
                     )
                     dequeue_sid = event.session_id if (cur_sp and cur_sp == pool.pool_id) else None
+                # Router atomic allocation (Fatia B): reserva atômica da instância de
+                # afinidade antes do mark_busy. Se lotada (claim=-1), cai no roteamento
+                # normal (return None) em vez de sobre-alocar.
+                _aff_claimed = await self._instances.claim_instance(
+                    event.tenant_id, inst.instance_id,
+                    event.session_id, event.conference_id, inst.max_concurrent,
+                )
+                if _aff_claimed < 1:
+                    logger.info(
+                        "router.affinity: affinity instance %s busy (claim=-1) — "
+                        "falling back to normal routing: session=%s",
+                        inst.instance_id, event.session_id,
+                    )
+                    return None
                 await self._instances.mark_busy(
                     event.tenant_id, pool.pool_id, inst.instance_id,
                     session_id=dequeue_sid,

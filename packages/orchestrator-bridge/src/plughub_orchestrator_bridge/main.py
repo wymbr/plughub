@@ -895,6 +895,8 @@ async def fire_pool_hooks(
     tenant_id:    str,
     customer_id:  str,
     hook_type:    str,
+    human_instance_id: str = "",
+    arm_contact_close: bool = False,
 ) -> None:
     """
     Dispatch pool lifecycle hooks defined in pool.hooks[hook_type].
@@ -983,11 +985,32 @@ async def fire_pool_hooks(
     # atribuído ao segmento do humano dono do contato.
     if hook_type in ("on_human_end", "segment_wrapup", "on_contact_end"):
         try:
-            _raw_hs = await redis_client.get(f"session:{session_id}:human_seg:{pool_id}")
+            # G7 Item1 Fatia 1: prefere a chave por-INSTÂNCIA (human_seg:{instance_id})
+            # quando o caller a fornece — desambigua 2 humanos no MESMO pool (a chave
+            # por-pool colapsava, limitação da Mudança 14/Slice 2′). Fallback na chave
+            # por-pool (legado/single-humano/sessões in-flight durante deploy).
+            _hs_key = (
+                f"session:{session_id}:human_seg:{human_instance_id}"
+                if human_instance_id
+                else f"session:{session_id}:human_seg:{pool_id}"
+            )
+            _raw_hs = await redis_client.get(_hs_key)
+            _hs_via_fallback = False
+            if not _raw_hs and human_instance_id:
+                _raw_hs = await redis_client.get(
+                    f"session:{session_id}:human_seg:{pool_id}"
+                )
+                _hs_via_fallback = bool(_raw_hs)
             if _raw_hs:
                 _hs_rec = json.loads(_raw_hs if isinstance(_raw_hs, str) else _raw_hs.decode())
                 _hook_human_seg_id = _hs_rec.get("segment_id", "") or ""
                 _hook_human_instance_id = _hs_rec.get("instance_id", "") or ""
+                logger.info(
+                    "G7 Item1 human_seg READ: session=%s hook=%s key=%s fallback=%s "
+                    "→ seg=%s human_inst=%s pool=%s",
+                    session_id, hook_type, _hs_key, _hs_via_fallback,
+                    _hook_human_seg_id, _hook_human_instance_id, pool_id,
+                )
                 if _hook_human_seg_id:
                     _hs_transport = ""
                     try:
@@ -1195,6 +1218,30 @@ async def fire_pool_hooks(
                         session_id, exc,
                     )
 
+            # G7 Fatia 2b/3 — fan-out do customer-disconnect: cada segment_wrapup de
+            # peer arma contact_close_pending (segment_wrapup NÃO toca posatt:active).
+            # O teardown (_close_contact_layer/_destroy_conference) espera o contador
+            # zerar, garantindo que TODOS os humanos recebam wrap-up antes do contato
+            # fechar. Marcador por-conferência → DECR idempotente em process_routed.
+            if arm_contact_close and hook_type == "segment_wrapup":
+                try:
+                    await redis_client.incr(f"session:{session_id}:contact_close_pending")
+                    await redis_client.expire(
+                        f"session:{session_id}:contact_close_pending", 14400
+                    )
+                    await redis_client.setex(
+                        f"session:{session_id}:close_arming:{conference_id}", 14400, "1",
+                    )
+                    logger.debug(
+                        "fire_pool_hooks: contact_close_pending armed — session=%s conf=%s",
+                        session_id, conference_id,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "fire_pool_hooks: could not arm contact_close_pending: session=%s — %s",
+                        session_id, exc,
+                    )
+
             # Arc 14 Fase B: register the fixed-side participant in the posatt
             # participants SET so process_routed can publish a targeted session.closed
             # when this segment completes.
@@ -1342,6 +1389,44 @@ async def _hook_timeout_guard(
         logger.warning(
             "_hook_timeout_guard: error checking pending key: session=%s — %s",
             session_id, exc,
+        )
+
+
+async def _contact_close_timeout_guard(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+) -> None:
+    """G7 Fatia 2b/3 — safety net do fan-out de customer-disconnect.
+
+    Os wrap-ups de peer usam segment_wrapup (NÃO usam hook_pending), então o
+    _hook_timeout_guard não os cobre. Se algum peer não completar em _HOOK_TIMEOUT_S
+    (pool sem instância, etc.), este guard força o fechamento do contato para não
+    deixar a conferência presa em contact_close_pending > 0.
+
+    Idempotente: limpa o contador antes de fechar (close layers têm guards NX).
+    """
+    await asyncio.sleep(_HOOK_TIMEOUT_S)
+    key = f"session:{session_id}:contact_close_pending"
+    try:
+        raw = await redis_client.get(key)
+        remaining = 0
+        if raw is not None:
+            try:
+                remaining = int(raw if isinstance(raw, str) else raw.decode())
+            except (ValueError, AttributeError):
+                remaining = 0
+        if remaining > 0:
+            logger.warning(
+                "_contact_close_timeout_guard: %d peer wrap-up(s) did not complete "
+                "within %ds — force-closing contact: session=%s",
+                remaining, _HOOK_TIMEOUT_S, session_id,
+            )
+            await redis_client.delete(key)
+            await _close_contact_layer(redis_client, session_id)
+            await _destroy_conference(redis_client, session_id)
+    except Exception as exc:
+        logger.warning(
+            "_contact_close_timeout_guard: error: session=%s — %s", session_id, exc,
         )
 
 
@@ -1650,6 +1735,26 @@ async def _destroy_conference(
     except Exception as exc:
         logger.warning(
             "_destroy_conference: could not read posatt:active: session=%s — %s (proceeding)",
+            session_id, exc,
+        )
+
+    # G7 Fatia 2b/3 — guarda do fan-out de customer-disconnect: enquanto houver
+    # wrap-ups de peer pendentes (contact_close_pending > 0), NÃO destrói a
+    # conferência. O último segment_wrapup a completar (process_routed) zera o
+    # contador e dispara o teardown. Espelha o guard de posatt:active acima.
+    try:
+        _ccp_raw = await redis_client.get(f"session:{session_id}:contact_close_pending")
+        if _ccp_raw:
+            _ccp = int(_ccp_raw if isinstance(_ccp_raw, str) else _ccp_raw.decode())
+            if _ccp > 0:
+                logger.info(
+                    "_destroy_conference: contact_close_pending=%d — deferring destroy "
+                    "(peer wrap-ups still running): session=%s", _ccp, session_id,
+                )
+                return
+    except Exception as exc:
+        logger.warning(
+            "_destroy_conference: could not read contact_close_pending: session=%s — %s (proceeding)",
             session_id, exc,
         )
 
@@ -3382,6 +3487,47 @@ async def process_routed(
                                 _destroy_conference(redis_client, session_id)
                             )
 
+                    # G7 Fatia 2b/3 — conclusão de um segment_wrapup do fan-out de
+                    # customer-disconnect: DECR contact_close_pending (via marcador
+                    # close_arming por-conferência, idempotente). Quando zera E não há
+                    # posatt:active pendente → fecha o contato (deferido até aqui para
+                    # que TODOS os humanos recebessem wrap-up). segment_wrapup de
+                    # transfer/peer-continuação não tem o marcador → no-op.
+                    if _is_segment_wrapup:
+                        try:
+                            _arming = await redis_client.getdel(
+                                f"session:{session_id}:close_arming:{conference_id}"
+                            )
+                            if _arming:
+                                _ccp_rem = await redis_client.decr(
+                                    f"session:{session_id}:contact_close_pending"
+                                )
+                                logger.info(
+                                    "contact_close_pending DECR: session=%s conf=%s remaining=%d",
+                                    session_id, conference_id, _ccp_rem,
+                                )
+                                if _ccp_rem <= 0:
+                                    # Todos os wrap-ups de peer terminaram. _close_contact_layer
+                                    # é idempotente (contact_close_fired NX) e _destroy_conference
+                                    # se auto-guarda em posatt:active — então, na ordem âncora-por-
+                                    # último, o _destroy aqui adia e a conclusão da âncora
+                                    # (posatt→0) o re-dispara. Robusto em qualquer ordem.
+                                    logger.info(
+                                        "Fan-out complete (contact_close_pending=0) — closing "
+                                        "contact: session=%s", session_id,
+                                    )
+                                    asyncio.create_task(
+                                        _close_contact_layer(redis_client, session_id)
+                                    )
+                                    asyncio.create_task(
+                                        _destroy_conference(redis_client, session_id)
+                                    )
+                        except Exception as _ccp_exc:
+                            logger.warning(
+                                "Could not process contact_close_pending: session=%s — %s",
+                                session_id, _ccp_exc,
+                            )
+
             except Exception as exc:
                 logger.warning(
                     "Hook completion detection error: session=%s conference=%s — %s",
@@ -3444,6 +3590,7 @@ async def process_routed(
                                             tenant_id=_npd_tenant,
                                             customer_id=_npd_customer,
                                             hook_type="on_human_end",
+                                            human_instance_id=_npd_h_inst or "",
                                         ))
                                         asyncio.create_task(_hook_timeout_guard(
                                             redis_client, session_id, "on_human_end",
@@ -3456,6 +3603,7 @@ async def process_routed(
                                             tenant_id=_npd_tenant,
                                             customer_id=_npd_customer,
                                             hook_type="on_contact_end",
+                                            human_instance_id=_npd_h_inst or "",
                                         ))
                                         asyncio.create_task(_hook_timeout_guard(
                                             redis_client, session_id, "on_contact_end",
@@ -4033,6 +4181,7 @@ async def process_contact_event(
                                             tenant_id=_pd_tenant,
                                             customer_id=_pd_customer,
                                             hook_type="on_human_end",
+                                            human_instance_id=_pd_h_inst or "",
                                         ))
                                         asyncio.create_task(_hook_timeout_guard(
                                             redis_client, session_id, "on_human_end",
@@ -4045,6 +4194,7 @@ async def process_contact_event(
                                             tenant_id=_pd_tenant,
                                             customer_id=_pd_customer,
                                             hook_type="on_contact_end",
+                                            human_instance_id=_pd_h_inst or "",
                                         ))
                                         asyncio.create_task(_hook_timeout_guard(
                                             redis_client, session_id, "on_contact_end",
@@ -4433,6 +4583,7 @@ async def process_contact_event(
                             _hm_ten  = _hm_pm.get("tenant_id", "") or ""
                     except Exception:
                         pass
+                    _hm_login = ""
                     if not _hm_pool or not _hm_ten:
                         try:
                             _hm_raw_meta = await redis_client.get(f"session:{session_id}:meta")
@@ -4441,6 +4592,41 @@ async def process_contact_event(
                                 _hm_pool = _hm_pool or _hm_m.get("pool_id", "")
                                 _hm_at   = _hm_at   or _hm_m.get("agent_type_id", "")
                                 _hm_ten  = _hm_ten  or (_hm_m.get("tenant_id", "") or _hm_m.get("tenant", ""))
+                        except Exception:
+                            pass
+                    # ── G7 Fatia 3 — human_seg por humano TAMBÉM no customer_side ──
+                    # O branch agent_closed escreve human_seg no agent_done; o
+                    # customer-disconnect usa ESTE loop, que não escrevia → o fan-out
+                    # (fire_pool_hooks) não achava human_seg:{inst} e _fixed_pid caía no
+                    # global (last-writer) → TODOS os wrap-ups iam pro mesmo humano
+                    # (operator recebia 2, admin 0). Escrevemos aqui (dual-write) para
+                    # cada humano antes do fan-out rodar. Ver g7 §11 / Mudança 17.
+                    if _hm_seg_id and _hm_pool:
+                        _hm_hs_record = {
+                            "segment_id":     _hm_seg_id,
+                            "instance_id":    _hm_inst_str,
+                            "pool_id":        _hm_pool,
+                            "agent_type_id":  _hm_at,
+                            "user_login":     _hm_login,
+                            "joined_at":      _hm_joined_iso,
+                            "duration_ms":    _hm_dur,
+                            "sequence_index": 0,
+                            "tenant_id":      _hm_ten,
+                        }
+                        try:
+                            await redis_client.setex(
+                                f"session:{session_id}:human_seg:{_hm_inst_str}",
+                                604800, json.dumps(_hm_hs_record),
+                            )
+                            await redis_client.setex(
+                                f"session:{session_id}:human_seg:{_hm_pool}",
+                                604800, json.dumps(_hm_hs_record),
+                            )
+                            logger.info(
+                                "G7 Item1 human_seg WRITE (customer_side): session=%s "
+                                "instance=%s pool=%s seg=%s",
+                                session_id, _hm_inst_str, _hm_pool, _hm_seg_id,
+                            )
                         except Exception:
                             pass
                     asyncio.create_task(_publish_participant_event(
@@ -4562,7 +4748,17 @@ async def process_contact_event(
                     _cs_on_human_end   = _cs_hooks_cfg.get("on_human_end", [])
                     # G7 Fase 3b: NPS migrou para on_contact_end (fim-de-CONTATO).
                     _cs_on_contact_end = _cs_hooks_cfg.get("on_contact_end", [])
-                    if _cs_on_human_end or _cs_on_contact_end:
+                    # G7 Fatia 2b/3 — peers (humanos ≠ âncora) que também precisam de
+                    # wrap-up no customer-disconnect. A âncora (_last_human_instance_id)
+                    # segue o caminho atual (on_human_end arma posatt; on_contact_end NPS);
+                    # cada peer dispara segment_wrapup do SEU pool (arm_contact_close).
+                    # Single-humano → _cs_peers vazio → byte-parity (nenhum fan-out).
+                    _cs_peers = [
+                        (m.decode() if isinstance(m, bytes) else m)
+                        for m in (_human_members or [])
+                        if (m.decode() if isinstance(m, bytes) else m) != _last_human_instance_id
+                    ]
+                    if _cs_on_human_end or _cs_on_contact_end or _cs_peers:
                         _cs_hooks_fired = True
                         _hooks_pending = True
                         # Escreve close_origin + customer/human participant_id no
@@ -4581,6 +4777,7 @@ async def process_contact_event(
                                 tenant_id=_cs_tenant_id,
                                 customer_id=_cs_customer_id,
                                 hook_type="on_human_end",
+                                human_instance_id=_last_human_instance_id or "",
                             ))
                             asyncio.create_task(_hook_timeout_guard(
                                 redis_client, session_id, "on_human_end",
@@ -4595,15 +4792,62 @@ async def process_contact_event(
                                 tenant_id=_cs_tenant_id,
                                 customer_id=_cs_customer_id,
                                 hook_type="on_contact_end",
+                                human_instance_id=_last_human_instance_id or "",
                             ))
                             asyncio.create_task(_hook_timeout_guard(
                                 redis_client, session_id, "on_contact_end",
                             ))
+                        # ── G7 Fatia 2b/3 — fan-out dos peers ────────────────────
+                        # Cada humano ≠ âncora recebe segment_wrapup do SEU pool
+                        # (resolvido por participant_meta), armando contact_close_pending.
+                        # O contato só fecha quando todos completarem (guard em
+                        # _destroy_conference + teardown na conclusão em process_routed).
+                        _cs_peers_fired = 0
+                        for _peer_inst in _cs_peers:
+                            _peer_pool = ""
+                            try:
+                                _peer_pm_raw = await redis_client.get(
+                                    f"session:{session_id}:participant_meta:{_peer_inst}"
+                                )
+                                if _peer_pm_raw:
+                                    _peer_pm = json.loads(_peer_pm_raw)
+                                    _peer_pool = _peer_pm.get("pool_id", "") or ""
+                            except Exception:
+                                pass
+                            if not _peer_pool:
+                                logger.warning(
+                                    "customer_disconnect fan-out: no pool for peer — "
+                                    "skipping wrap-up: session=%s instance=%s",
+                                    session_id, _peer_inst,
+                                )
+                                continue
+                            asyncio.create_task(fire_pool_hooks(
+                                http=http, redis_client=redis_client,
+                                session_id=session_id,
+                                pool_id=_peer_pool,
+                                tenant_id=_cs_tenant_id,
+                                customer_id=_cs_customer_id,
+                                hook_type="segment_wrapup",
+                                human_instance_id=_peer_inst,
+                                arm_contact_close=True,
+                            ))
+                            _cs_peers_fired += 1
+                            logger.info(
+                                "Peer wrap-up (segment_wrapup, customer_disconnect fan-out) "
+                                "dispatched: session=%s pool=%s instance=%s",
+                                session_id, _peer_pool, _peer_inst,
+                            )
+                        if _cs_peers_fired:
+                            # Timeout-guard do contador (segment_wrapup não usa
+                            # hook_pending → o _hook_timeout_guard não o cobre).
+                            asyncio.create_task(_contact_close_timeout_guard(
+                                redis_client, session_id,
+                            ))
                         logger.info(
                             "contact-end hooks dispatched (client disconnect): "
-                            "session=%s pool=%s on_human_end=%d on_contact_end=%d (timeout guard: %ds)",
+                            "session=%s pool=%s on_human_end=%d on_contact_end=%d peers=%d (timeout guard: %ds)",
                             session_id, _cs_pool_id, len(_cs_on_human_end),
-                            len(_cs_on_contact_end), _HOOK_TIMEOUT_S,
+                            len(_cs_on_contact_end), _cs_peers_fired, _HOOK_TIMEOUT_S,
                         )
 
                 if not _cs_hooks_fired:
@@ -4758,6 +5002,28 @@ async def process_contact_event(
             if not is_human:
                 return  # not a human session — nothing to do
 
+            # ── Fatia 2a — gate de idempotência (double-processing guard) ─────
+            # agent_done/contact_closed pode chegar 2× (double-submit do Console
+            # ou redelivery do Kafka): o 2º passe recriava o segmento (joined_at já
+            # getdel'd → duração 0) e re-disparava segment_wrapup (conferência
+            # redundante). SREM é ATÔMICO e retorna quantos removeu: se 0, este
+            # instance já saiu (duplicado, OU já encerrado por outro caminho —
+            # heartbeat drop) → no-op. O duplicado do ÚLTIMO humano já era pego
+            # pelo is_human (flag deletada no remaining<=0); este gate cobre o
+            # NÃO-último (flag segue viva sob o outro humano). A remoção aqui
+            # substitui o SREM redundante mais abaixo. Ver g7 §11 + Mudança 17.
+            if instance_id:
+                _close_removed = await redis_client.srem(
+                    f"session:{session_id}:human_agents", instance_id
+                )
+                if _close_removed == 0:
+                    logger.info(
+                        "Duplicate/late agent close ignored (instance not in "
+                        "human_agents): session=%s instance=%s reason=%s",
+                        session_id, instance_id, reason,
+                    )
+                    return
+
             # ── Restore this specific agent's instance ────────────────────────
             await _restore_instance(redis_client, session_id, instance_id)
 
@@ -4848,9 +5114,22 @@ async def process_contact_event(
                         "tenant_id":      _ha_tenant,
                     }
                     try:
+                        # G7 Item1 Fatia 1: chave canônica por-INSTÂNCIA (resolve a
+                        # colisão de 2 humanos no mesmo pool). Espelho por-pool mantido
+                        # como fallback de back-compat enquanto callers não migrados
+                        # existirem (remover no cleanup da Fatia 4).
+                        await redis_client.setex(
+                            f"session:{session_id}:human_seg:{instance_id}",
+                            604800, json.dumps(_hs_record),
+                        )
                         await redis_client.setex(
                             f"session:{session_id}:human_seg:{_ha_pool}",
                             604800, json.dumps(_hs_record),
+                        )
+                        logger.info(
+                            "G7 Item1 human_seg WRITE: session=%s instance=%s pool=%s seg=%s "
+                            "(dual-write: human_seg:{inst} + human_seg:{pool})",
+                            session_id, instance_id, _ha_pool, _ha_seg_id,
                         )
                         # Semeia o acumulador com o registro + outcome PLACEHOLDER
                         # (_done_outcome): garante que um re-publish de NPS-só (pool
@@ -4916,7 +5195,8 @@ async def process_contact_event(
                         session_id, _kafka_producer is not None, _ha_tenant, _ha_pool,
                     )
 
-                await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
+                # Fatia 2a: SREM já feito atomicamente no gate de idempotência acima
+                # (este SREM redundante foi removido). Apenas lê o remaining resultante.
                 remaining = await redis_client.scard(f"session:{session_id}:human_agents")
                 # ── G7 Fase 3a — classificador de continuação GOVERNA o close ──────────
                 # _has_continuation decide se este fim de segmento humano é também fim de
@@ -4990,6 +5270,7 @@ async def process_contact_event(
                                 tenant_id=_ha_tenant,
                                 customer_id=_tr_customer,
                                 hook_type="segment_wrapup",
+                                human_instance_id=instance_id,
                             ))
                             logger.info(
                                 "Transfer wrap-up (segment_wrapup) dispatched: "
@@ -5225,6 +5506,7 @@ async def process_contact_event(
                                         tenant_id=_tenant_id_hooks,
                                         customer_id=_customer_id_hooks,
                                         hook_type="on_human_end",
+                                        human_instance_id=instance_id,
                                     ))
                                     asyncio.create_task(_hook_timeout_guard(
                                         redis_client, session_id, "on_human_end",
@@ -5238,6 +5520,7 @@ async def process_contact_event(
                                         tenant_id=_tenant_id_hooks,
                                         customer_id=_customer_id_hooks,
                                         hook_type="on_contact_end",
+                                        human_instance_id=instance_id,
                                     ))
                                     asyncio.create_task(_hook_timeout_guard(
                                         redis_client, session_id, "on_contact_end",
@@ -5308,6 +5591,7 @@ async def process_contact_event(
                             tenant_id=_ha_tenant,
                             customer_id=_oha_customer,
                             hook_type="segment_wrapup",
+                            human_instance_id=instance_id,
                         ))
                         logger.info(
                             "Peer wrap-up (segment_wrapup) dispatched for non-last human: "

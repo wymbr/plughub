@@ -100,6 +100,7 @@ def _make_decider(
     inst_reg.get_oldest_queue_wait_ms.return_value = oldest_queue_ms
     inst_reg.get_session_affinity.return_value = None
     inst_reg.mark_busy.return_value = None
+    inst_reg.claim_instance.return_value = 1
 
     return Decider(inst_reg, pool_reg)
 
@@ -358,6 +359,7 @@ class TestPriorityScoreInfluence:
         inst_reg.get_oldest_queue_wait_ms.side_effect = get_oldest
         inst_reg.get_session_affinity.return_value = None
         inst_reg.mark_busy.return_value = None
+        inst_reg.claim_instance.return_value = 1
 
         decider = Decider(inst_reg, pool_reg)
 
@@ -596,6 +598,7 @@ class TestTieBreaking:
         inst_reg.get_oldest_queue_wait_ms.return_value = None
         inst_reg.get_session_affinity.return_value = None
         inst_reg.mark_busy.return_value = None
+        inst_reg.claim_instance.return_value = 1
 
         with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):
             decider = Decider(inst_reg, pool_reg)
@@ -630,6 +633,7 @@ class TestTieBreaking:
         inst_reg.get_oldest_queue_wait_ms.return_value = None
         inst_reg.get_session_affinity.return_value = None
         inst_reg.mark_busy.return_value = None
+        inst_reg.claim_instance.return_value = 1
 
         with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):
             decider = Decider(inst_reg, pool_reg)
@@ -667,6 +671,7 @@ class TestTieBreaking:
         inst_reg.get_oldest_queue_wait_ms.return_value = None
         inst_reg.get_session_affinity.return_value = None
         inst_reg.mark_busy.return_value = None
+        inst_reg.claim_instance.return_value = 1
 
         results: set[str] = set()
         with patch("plughub_routing.decide.compute_priority_score", return_value=0.5):

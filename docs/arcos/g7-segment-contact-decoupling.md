@@ -284,11 +284,56 @@ falta é o wrap-up por peer e o fan-out.
   `conference-mechanics.md` § Mudança 15.
 - **Slice 4′ Item 1 ✅ (2026-06-13)** — marcador `session:closed`: o mcp-server segue setando síncrono no
   `/api/agent_done`; o bridge **desfaz** (`delete`) no branch `other_human_active` (contato continua),
-  fechando o vazamento do §4. **Item 2 (adiado, limitação conhecida)**: wrap-up por peer no
-  **customer-disconnect** com N humanos — só o pool do `meta` (last-writer) recebe wrap-up hoje; dar
-  `segment_wrapup` por humano ali exigiria reintroduzir o gating `arm_close` num path frágil que também
-  serve o caso comum single-humano → não feito (edge raro, baixo impacto; wrap-up = notas internas e o
-  cliente já saiu). Peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
+  fechando o vazamento do §4.
+- **Slice 4′ Item 2 — wrap-up por peer no customer-disconnect multi-humano (RETOMADO 2026-06-14, fatiado).**
+  Investigação reconfirmou o nó frágil: o path customer-disconnect (`process_contact_event` ~4534) lê
+  **um** `_cs_pool_id` do `meta` (last-writer) → só um humano ganha wrap-up; dar `segment_wrapup` por
+  humano de um **único** evento esbarra na contabilidade `hook_pending` (SET, não INCR) + `posatt`
+  (`segment_wrapup` não arma close de propósito) → exige tornar a contabilidade **aditiva** (a "Fatia 2").
+  Decisão de modelagem: a colisão "mesmo pool" é operacionalmente inexistente (1 agente por pool basta);
+  cada humano da conferência é de um **pool distinto**, e o fan-out endereça por `instance_id`.
+  - **Fatia 1 ✅ (2026-06-14)** — `human_seg` por-instância (dual-write + `human_instance_id` em
+    `fire_pool_hooks`, threading nos 10 call-sites). Fundação parity-preserving do fan-out. Validado E2E
+    (single-humano + multi-humano pools distintos, `fallback=False`, zero cross-attribution). Ver
+    `conference-mechanics.md` § Mudança 17 + CHANGELOG. **Levanta a limitação "mesmo pool" da Mudança 14.**
+  - **Fatia 2 (próxima)** — contabilidade aditiva de `hook_pending`/`posatt` para suportar N
+    fins-de-segmento concorrentes a partir de um disparo (ou contador `arm_close` dedicado que o
+    `segment_wrapup` arma no disconnect, sem contaminar o caso comum). Gate isolado do contador antes do
+    fan-out.
+  - **Fatia 3** — fan-out do customer-disconnect: iterar `human_agents`, resolver pool por-instância
+    (`participant_meta`), wrap-up por humano + **um** `on_contact_end`. Single-humano = byte-parity.
+  - **Fatia 4** — docs/CHANGELOG/TODO + cleanup (rebaixar logs a debug; remover espelho `human_seg:{pool}`).
+  Peer IA encerra pelo flow (`complete`), não por wrap-up de menu.
 
 **Fora do sub-arco (arcos próprios):** unificação de contabilidade de agente kind-agnostic (registro único
 "agente anexado customer-facing"); detecção de queda involuntária de humano (heartbeat, gap G4) + re-rota.
+
+**Achado (Fatia 1, 2026-06-14) — double-processing de `agent_done` do não-último → CORRIGIDO na Fatia 2a:**
+no E2E multi-humano (sessão `d878eb2b`) o `agent_done` do humano não-último foi processado **2×** (dois
+`G7-decision`/`Peer wrap-up dispatched`, duas conferências `segment_wrapup`, **segmento fantasma de
+duração zero** em `analytics.segments`). Idempotência ausente em `process_contact_event` (redelivery Kafka
+ou publish duplicado), **upstream** do G7 — a Fatia 1 só o expôs via log. **Fatia 2a (2026-06-14)**: gate
+`SREM human_agents` atômico no topo do branch (`removed==0`→no-op) + remoção do `SREM` redundante. Sem
+chave nova, race-safe. Ver `conference-mechanics.md` § Mudança 18 + CHANGELOG.
+
+**Revalorização do Item 2 (2026-06-14):** teste manual "2 humanos + reiniciar cliente" mostrou que só **um**
+humano recebe wrap-up no customer-disconnect (o pool do `meta`; o outro fecha sem wrap-up). O usuário trata
+isso como comportamento **desejado a corrigir** (cada humano registra a disposição do seu segmento mesmo no
+disconnect), não "edge raro/baixo impacto" como a investigação inicial supôs. Eleva a prioridade da
+**Fatia 2b/3** (o fan-out) — que é exatamente o conserto desse cenário.
+
+**Fatia 2b/3 (2026-06-14) — fan-out entregue (bridge), E2E bloqueado por gap-2:** o fan-out
+(`contact_close_pending` + `segment_wrapup` por peer + `human_seg` no customer_side) está **correto na
+entrega/atribuição** (validado: 2 `human_seg WRITE`, READs `fallback=False`, cada menu ao seu console). Mas
+a **conclusão E2E concorrente falha** por um gap pré-existente de plumbing de menu (gap-2 abaixo). Detalhe:
+`conference-mechanics.md` § Mudança 19.
+
+**Causa-raiz REAL (corrigida 2026-06-14) — corrida de sobre-alocação no router (não é plumbing de menu):**
+o sintoma é a colisão da chave de menu `{sid}:{instanceId}` (2 segmentos da mesma sessão na mesma
+instância), mas a co-locação **não é por design** — é **bug de concorrência do router**: instâncias AI são
+single-occupancy (`max_concurrent=1`); o consumer do routing é concorrente (`asyncio.create_task` por
+inbound); `get_ready_instances`→`mark_busy` é não-atômico → dois inbound paralelos (o fan-out de wrap-up)
+leem a mesma instância `current_sessions=0`, ambos a escolhem (lost update). **Afeta todos os pools** sob
+concorrência (latente p/ sessões distintas: só desbalanceia carga). **Fix primário = alocação atômica no
+router** (claim que rejeita sobre-capacidade). O menu-por-`segmentId` vira hardening opcional. Detalhe em
+`conference-mechanics.md` § Mudança 19 + TODO § Router (corrida de sobre-alocação).

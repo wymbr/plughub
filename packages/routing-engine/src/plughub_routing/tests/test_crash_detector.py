@@ -147,7 +147,9 @@ class TestHandleCrash:
         """Instance without InstanceMeta only removes from pool sets."""
         redis = AsyncMock()
         redis.srem       = AsyncMock(return_value=1)
-        redis.scan_iter  = AsyncMock(return_value=_async_iter([]))
+        # scan_iter é método SÍNCRONO que retorna um async-iterator (não coroutine):
+        # MagicMock (não AsyncMock) para o `async for` funcionar.
+        redis.scan_iter  = MagicMock(return_value=_async_iter([]))
 
         registry = AsyncMock()
         registry.get_instance_meta = AsyncMock(return_value=None)

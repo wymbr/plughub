@@ -524,12 +524,103 @@ ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `prima
 - **Slice 3 ✅** (2026-06-13) — fan-out msg humano↔humano (gap 1): ramo normal do agent-WS publica em
   `agent:events` + self-skip no forward. Mudança 15 / g7 §11. (Polish: atribuição-por-nome do remetente.)
 - **Slice 4′ Item 1 ✅** (2026-06-13) — bridge desfaz `session:closed` em `other_human_active` (mcp-server
-  segue setando síncrono; fecha o vazamento do §4). **Item 2 adiado (limitação)**: wrap-up por peer no
-  customer-disconnect multi-humano — exigiria `arm_close` num path frágil; edge raro, baixo impacto.
-  Mudança / g7 §11.
+  segue setando síncrono; fecha o vazamento do §4).
+- **Slice 4′ Item 2 — wrap-up por peer no customer-disconnect multi-humano (RETOMADO 2026-06-14, fatiado).**
+  Investigação reconfirmou o nó frágil (path customer-disconnect lê 1 pool do `meta`; `segment_wrapup` por
+  humano de um único evento esbarra em `hook_pending` SET + `posatt` não-armado → exige contabilidade
+  aditiva). Decisão: colisão "mesmo pool" é operacionalmente inexistente (1 agente/pool); fan-out endereça
+  por `instance_id`. Ver g7 §11 + `conference-mechanics.md` § Mudança 17.
+  - **Fatia 1 ✅** (2026-06-14) — `human_seg:{pool}`→`{instance_id}` (dual-write + param `human_instance_id`
+    em `fire_pool_hooks`; threading em 10 call-sites). Parity-preserving; validado E2E single + multi-humano
+    pools distintos (`fallback=False`, zero cross-attribution). Levanta a limitação "mesmo pool" da
+    Mudança 14/Slice 2′. Ver CHANGELOG.
+  - **Fatia 2a ✅** (2026-06-14) — idempotência do close do agente: gate `SREM human_agents` atômico no
+    topo do branch (`removed==0`→no-op), `SREM` redundante removido. Mata o double-processing (segmento
+    fantasma + wrap-up duplicado). Validado E2E (não-regressão multi-humano agent_done; sem fantasma).
+    Log `Duplicate/late agent close ignored`. Ver CHANGELOG + `conference-mechanics.md` § Mudança 18.
+  - **Fatia 2b/3 ✅ (lado bridge) — fan-out implementado e correto; E2E bloqueado por gap-2** (2026-06-14):
+    contador `contact_close_pending` + `close_arming:{conf}` + guarda no `_destroy_conference` + DECR/teardown
+    na conclusão do `segment_wrapup`; customer_disconnect dispara `segment_wrapup(arm_contact_close)` por peer;
+    `human_seg:{instance}` escrito no loop `customer_side`; `_contact_close_timeout_guard`. **Entrega/atribuição
+    validadas** (2 human_seg WRITE, READs fallback=False, cada menu ao seu console). **NÃO fecha E2E** →
+    gap-2 abaixo. Ver CHANGELOG + `conference-mechanics.md` § Mudança 19.
+  - **Fatia 4** — cleanup (logs `G7 Item1 human_seg`→debug; remover espelho `human_seg:{pool}` quando o
+    gap-2 fechar). Pendente até o gap-2.
 
-**Sub-arco multi-humano: Slices 1/2′/3/4′-Item1 ✅.** Resta só o Item 2 (adiado) + os arcos próprios
-abaixo (unificação de contabilidade; queda involuntária de humano).
+### Router — corrida de sobre-alocação de instância (concorrência) *(arco próprio, root-caused 2026-06-14)*
+**É a causa-raiz REAL do bloqueio E2E da Fatia 2b/3** (o "gap-2 de menu" era sintoma). Cadeia confirmada:
+(1) instâncias AI são **single-occupancy** — bootstrap cria N instâncias `max_concurrent=1` a partir de
+`max_concurrent_sessions` (`instance_bootstrap.py:1008-1036`); (2) o consumer do routing processa inbound
+**concorrente** (`main.py:149` `asyncio.create_task(_process_message)` por msg, sem serialização);
+(3) `get_ready_instances`(`registry.py:161`)→`mark_busy`(`registry.py:639` `current_sessions += 1`) é
+**não-atômico**, sem claim. → Dois inbound paralelos (ex.: fan-out de wrap-up) leem a mesma instância com
+`current_sessions=0`, ambos a escolhem, ambos `mark_busy` `0→1` (**lost update**) → 2 sessões na MESMA
+instância single-occupancy. **Visível** quando são 2 segmentos da MESMA sessão (chave de menu
+`{sid}:{instanceId}` colide → inputs cruzam, menus expiram); **latente** p/ sessões distintas (só
+desbalanceia carga / estoura capacidade em silêncio). **Afeta todos os pools sob concorrência.**
+**Fix primário = alocação atômica** (claim que rejeita sobre-capacidade e re-seleciona). **Modelo escolhido
+(decisão 2026-06-14): semáforo de contagem por-instância via SET de occupant_ids + Lua atômico** —
+`claim`=SADD-se-SCARD<max, `release`=SREM, `current_sessions`=SCARD. Atômico **e idempotente** (occupant
+repetido = no-op → cobre redelivery de agent_done). Por que não as alternativas: contador INCR/DECR no JSON
+não é idempotente (double agent_done sub-conta); mutex grosso por-pool serializa o select+score lento e tem
+fragilidade de TTL (expira no meio do trabalho → corrida volta; precisaria Redlock/fencing). A consulta
+(`get_ready_instances`) é read-only e o `decide()` pontua TODOS os candidatos antes de escolher → não dá pra
+"marcar na consulta"; a marca vem **depois**, atômica, com re-seleção do perdedor (otimista/CAS).
+Fatias:
+- **Fatia A — primitivas atômicas ✅ VALIDADA** (2026-06-14; `test_instance_semaphore.py` 5/5 contra Redis real,
+  incl. 25 claims concorrentes em max=1 → 1 vencedor): `registry.py`
+  ganhou `_instance_sessions_key`, Lua `_CLAIM_INSTANCE_LUA`/`_RELEASE_INSTANCE_LUA` e métodos
+  `claim_instance`/`release_instance`/`instance_session_count`. **Aditiva** — nada chama ainda (zero mudança
+  de comportamento). Teste de integração `tests/test_instance_semaphore.py` (Redis real, skippable): N claims
+  concorrentes em max=1 → 1 vencedor; idempotência claim/release; teto multi-capacidade; claim×release sem
+  lost update. **Gate**: `REDIS_URL=redis://localhost:6379 pytest test_instance_semaphore.py` verde.
+- **Fatia B — wiring no `decide()` ✅** (2026-06-14): `route()` coleta candidatos pontuados → claim em cascata
+  com re-seleção do perdedor (`-1`→próximo best); `_try_affinity` faz claim da instância de afinidade. occupant
+  composto `"{session_id}::{conference_id}"` (confs da mesma sessão não dividem vaga). `mark_busy` sincroniza
+  `current_sessions` do `SCARD` (não incrementa). **Absorveu a Fatia C**: `remove_conversation` usa
+  `release_instance` (release por prefixo de sessão). Validado: suíte verde + 2 testes de re-seleção. Ver CHANGELOG.
+- **Fatia C — release ✅ (foldada na B)**: `remove_conversation`→`release_instance` por prefixo. Resíduo opcional:
+  `get_ready_instances`/snapshots passarem a ler `SCARD` direto (hoje leem o JSON mantido em sincronia pelo
+  claim/release — funciona como hint; o claim é o gate atômico). Baixa prioridade.
+- **Fatia D — gate E2E (parcial ✅)**: re-seleção + **instâncias distintas** provadas E2E (`router.claim ...
+  claim=-1 — re-selecting`; `wrapup_ia-002`/`-018`), zero sobre-alocação. **Pendente**: "os dois wrap-ups
+  completam" ainda bloqueado pela **camada 3** (pipeline isolation, abaixo); e "2 contatos simultâneos no mesmo
+  pool → spread" não exercitado isoladamente.
+
+### Camada 3 — isolamento de `pipeline_state`/lock por conferência *(sub-arco próprio, root-caused 2026-06-14)*
+**Última camada para o E2E do G7 Item 2** (os dois humanos com wrap-up no customer-disconnect). O skill-flow
+chaveia `pipeline_state` e o **lock** por `session_id` (`state.ts`: `PIPELINE_KEY`/`LOCK_KEY` =
+`{tenant}:pipeline:{sessionId}[:running]`). Dois agentes de conferência da **mesma sessão** (operator
+`on_human_end` + admin `segment_wrapup`) rodam concorrentes → o 1º adquire o lock e o segura durante o BLPOP do
+menu; o 2º falha `renewLock` → aborta (`on_failure`) **sem renderizar** → menu nunca publicado → timeout → fecha
+(confirmado E2E: só 1 `menu.render` publicado, sessão `5ea8dfae`). **Fix**: isolar o pipeline dos agentes de
+conferência por `conference_id` — ex.: `activate_native_agent`/`process_routed` passar
+`"{session_id}:{conference_id}"` (ou o `instance_id`) como chave de pipeline para hooks, separando-os entre si
+e do fluxo do agente principal. **1º passo**: investigar como `activate_native_agent` passa o id de pipeline
+hoje (confirmar que usa `session_id` puro). Cross-cutting no skill-flow — gate por paridade (sequencial) + E2E
+(concorrente). Ver `conference-mechanics.md` § Mudança 20.
+- **Hardening opcional (gap-2 menu)**: chave de menu por `segmentId` como defesa-em-profundidade p/ pools com
+  `max_concurrent>1` legítimo + 2 segmentos da mesma sessão. Provavelmente **desnecessário** após Fatias B/C
+  (concorrentes vão para instâncias distintas). Reavaliar no fim.
+- **Sintoma observado pós-Fatia B (a investigar)**: `@mention` de humano (ex.: convidar `humanoxxx`) passou a
+  demorar **alguns segundos** para o agente ser avisado — antes era **imediato**. **Insight (usuário)**: num
+  invite ÚNICO não há concorrência → `claim_instance` deveria retornar **≥1 sempre**; se está lento por causa
+  do claim, é porque retornou **−1 sem contenção** → o SET `instance:{id}:sessions` da instância humana está com
+  occupant(s) **VAZADO(s)** (release que não casou em algum caminho de saída do humano) → re-seleção → fila →
+  drain (~latência). Seria **bug de release (leak)**, não contenção. **Teste decisivo** (invite único, operator
+  ocioso): (a) `grep router.claim` no routing — se aparecer `claim=-1` p/ instância humana, confirma; (b)
+  `SCARD/SMEMBERS tenant_demo:instance:human-{userId}:sessions` com o operator ocioso DEVE ser 0 — se >0, é leak.
+  **Resultado do teste decisivo (2026-06-14): leak DESCARTADO** — `SCARD` do `instance:human-{userId}:sessions`
+  com operator ocioso = **0**, e sem `claim=-1`. Logo a latência **não vem do claim/alocação atômica** (a
+  Fatia B não segura o invite). A causa, se real, está em **outro ponto da cadeia do @mention** (dispatch no
+  mcp-server → conference inbound → routing → activate_human → `conversation.assigned` → forward ao Console).
+  **Próximo passo p/ localizar** (quando priorizado): invite único com captura cronometrada ponta-a-ponta —
+  timestamp do @mention enviado vs. do `conversation.assigned` no Console — para ver onde está o gap. Pode até
+  não ser regressão da Fatia B (medir antes de atribuir). Baixa prioridade (latência, não erro).
+Detalhe em `conference-mechanics.md` § Mudança 19 + g7 §11.
+
+**Sub-arco multi-humano: Slices 1/2′/3/4′-Item1 ✅; Item 2 em curso (Fatia 1 ✅).** Restam Fatias 2-4 do
+Item 2 + os arcos próprios abaixo (unificação de contabilidade; queda involuntária de humano).
 
 ### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta — diferido)*
 Anchor "último agente customer-facing" hoje é aproximado por **4 chaves** com papéis distintos:

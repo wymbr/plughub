@@ -43,6 +43,16 @@ def _instance_key(tenant_id: str, instance_id: str) -> str:
     """Spec: {tenant_id}:instance:{instance_id}"""
     return f"{tenant_id}:instance:{instance_id}"
 
+def _instance_sessions_key(tenant_id: str, instance_id: str) -> str:
+    """Per-instance occupancy SET — semáforo de contagem atômico (claim/release).
+
+    Membros = occupant_ids (conference_id quando presente, senão session_id). SCARD =
+    current_sessions real (fonte de verdade). Usado por claim_instance/release_instance
+    (Lua atômico) para eliminar a corrida de sobre-alocação do select→mark_busy
+    não-atômico. Ver TODO § Router (corrida de sobre-alocação).
+    """
+    return f"{tenant_id}:instance:{instance_id}:sessions"
+
 def _pool_instances_key(tenant_id: str, pool_id: str) -> str:
     """Set of instance_ids present (ready) in the pool."""
     return f"{tenant_id}:pool:{pool_id}:instances"
@@ -110,6 +120,57 @@ def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
 
 
 # ─────────────────────────────────────────────
+# Atomic instance semaphore (claim/release) — Lua
+# ─────────────────────────────────────────────
+# Elimina a corrida de sobre-alocação do select→mark_busy não-atômico: a reserva é
+# um ato atômico (Redis executa Lua single-threaded). Modelo = semáforo de contagem
+# por-instância sobre um SET de occupant_ids; SCARD é a contagem real. claim/release
+# são IDEMPOTENTES (cobre de quebra o redelivery de agent_done). Single-key (cluster-safe).
+#
+# OCCUPANT = "{session_id}::{conference_id}"  (conference_id vazio p/ contato normal).
+# Por quê: duas conferências da MESMA sessão (ex.: fan-out de wrap-up) têm conference_ids
+# distintos → occupants distintos → NÃO dividem a mesma vaga (a 2ª recebe -1 e re-seleciona
+# outra instância). Já o RELEASE só conhece o session_id (o agent_done não carrega
+# conference_id) → libera por PREFIXO "{session_id}::" (remove a(s) vaga(s) desta sessão
+# nesta instância). Simétrico: claim deriva de (session_id, conference_id); release de (session_id).
+#
+# claim: KEYS[1]=sessions set; ARGV[1]=occupant_id; ARGV[2]=max_concurrent; ARGV[3]=ttl_s
+#   retorna a nova ocupação (>=1) em sucesso/idempotente; -1 se lotado.
+_CLAIM_INSTANCE_LUA = """
+if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
+  return redis.call('SCARD', KEYS[1])
+end
+local n = redis.call('SCARD', KEYS[1])
+if n >= tonumber(ARGV[2]) then
+  return -1
+end
+redis.call('SADD', KEYS[1], ARGV[1])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+return n + 1
+"""
+
+# release: KEYS[1]=sessions set; ARGV[1]=prefixo de sessão ("{session_id}::")
+#   remove TODAS as vagas desta sessão na instância; retorna a ocupação restante.
+#   Idempotente (sessão ausente = no-op).
+_RELEASE_INSTANCE_LUA = """
+local members = redis.call('SMEMBERS', KEYS[1])
+local prefix = ARGV[1]
+local plen = string.len(prefix)
+for i = 1, #members do
+  if string.sub(members[i], 1, plen) == prefix then
+    redis.call('SREM', KEYS[1], members[i])
+  end
+end
+local n = redis.call('SCARD', KEYS[1])
+if n <= 0 then
+  redis.call('DEL', KEYS[1])
+  return 0
+end
+return n
+"""
+
+
+# ─────────────────────────────────────────────
 # InstanceRegistry
 # ─────────────────────────────────────────────
 
@@ -123,6 +184,62 @@ class InstanceRegistry:
     def __init__(self, redis_client: aioredis.Redis) -> None:
         self._redis    = redis_client
         self._settings = get_settings()
+
+    # ── Atomic instance semaphore (claim/release) ────────────────────────────
+    # Reserva/libera atômica de uma vaga na instância. Substitui o `current_sessions
+    # += 1` (mark_busy) e o `-= 1` (remove_conversation) não-atômicos pela primitiva
+    # correta. occupant = "{session_id}::{conference_id}"; release por prefixo de sessão
+    # (o agent_done só carrega session_id). Ver TODO § Router (corrida de sobre-alocação).
+    @staticmethod
+    def _occupant_id(session_id: str, conference_id: str | None) -> str:
+        return f"{session_id}::{conference_id or ''}"
+
+    @staticmethod
+    def _session_prefix(session_id: str) -> str:
+        return f"{session_id}::"
+
+    async def claim_instance(
+        self,
+        tenant_id:      str,
+        instance_id:    str,
+        session_id:     str,
+        conference_id:  str | None,
+        max_concurrent: int,
+        ttl_seconds:    int = 86_400,
+    ) -> int:
+        """Reserva atômica de uma vaga (occupant = session_id::conference_id). Retorna a
+        nova ocupação (>=1) em sucesso/idempotente; -1 se lotado. Quem recebe -1 deve
+        re-selecionar outro best instance. Duas confs da mesma sessão (conference_ids
+        distintos) NÃO compartilham vaga → vão para instâncias distintas."""
+        res = await self._redis.eval(
+            _CLAIM_INSTANCE_LUA, 1,
+            _instance_sessions_key(tenant_id, instance_id),
+            self._occupant_id(session_id, conference_id),
+            str(int(max_concurrent)), str(int(ttl_seconds)),
+        )
+        return int(res)
+
+    async def release_instance(
+        self,
+        tenant_id:   str,
+        instance_id: str,
+        session_id:  str,
+    ) -> int:
+        """Libera a(s) vaga(s) desta sessão na instância (prefixo "{session_id}::",
+        idempotente). Retorna a ocupação restante."""
+        res = await self._redis.eval(
+            _RELEASE_INSTANCE_LUA, 1,
+            _instance_sessions_key(tenant_id, instance_id),
+            self._session_prefix(session_id),
+        )
+        return int(res)
+
+    async def instance_session_count(self, tenant_id: str, instance_id: str) -> int:
+        """Ocupação real da instância (SCARD do SET de sessões). Fonte de verdade
+        para os leitores na Fatia B (get_ready_instances/snapshots)."""
+        return int(await self._redis.scard(
+            _instance_sessions_key(tenant_id, instance_id)
+        ))
 
     async def get_ready_instances(
         self, tenant_id: str, pool_id: str
@@ -345,7 +462,14 @@ class InstanceRegistry:
                     # when neither instance_meta nor the agent_done event carry pools).
                     inst_pools = list(inst.pools or [])
                     old_sessions = inst.current_sessions
-                    inst.current_sessions = max(0, inst.current_sessions - 1)
+                    # Fatia B: libera a vaga ATOMICAMENTE (release por prefixo de sessão)
+                    # e sincroniza o espelho current_sessions com a fonte de verdade (SCARD).
+                    # Substitui o `-= 1` não-atômico (mesma classe de lost-update do mark_busy).
+                    # conversation_id == session_id → release_instance remove "{session_id}::*".
+                    remaining = await self.release_instance(
+                        tenant_id, instance_id, conversation_id,
+                    )
+                    inst.current_sessions = remaining
                     if inst.current_sessions < inst.max_concurrent:
                         inst.state = "ready"
                     new_current_sessions = inst.current_sessions
@@ -636,7 +760,11 @@ class InstanceRegistry:
         if "status" in data and "state" not in data:
             data["state"] = data["status"]
         inst = AgentInstance.model_validate(data)
-        inst.current_sessions += 1
+        # Fatia B: a reserva da vaga já foi feita atomicamente por claim_instance
+        # (no decide/route, ANTES deste mark_busy). Aqui apenas SINCRONIZAMOS o espelho
+        # current_sessions do JSON com a fonte de verdade (SCARD do SET de occupants) —
+        # não incrementamos mais (o `+= 1` não-atômico era a causa do lost update).
+        inst.current_sessions = await self.instance_session_count(tenant_id, instance_id)
         if inst.current_sessions >= inst.max_concurrent:
             inst.state = "busy"
 

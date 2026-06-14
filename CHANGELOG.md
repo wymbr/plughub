@@ -2,6 +2,149 @@
 
 ---
 
+## Router · Alocação atômica · Fatia B — claim/release no decide + release simétrico (2026-06-14)
+
+Liga as primitivas da Fatia A ao caminho de alocação, eliminando de fato a corrida de sobre-alocação
+(seleção otimista + claim atômico + re-seleção do perdedor). **Arco do router concluído.**
+
+- **`router.py route()`**: em vez de escolher só o `best`, coleta **todos** os candidatos pontuados, ordena
+  por score e tenta `claim_instance` em cascata — o 1º que vence aloca; quem recebe `−1` (perdeu a corrida /
+  instância lotada) **re-seleciona** o próximo best; nenhum candidato → fila (caminho atual). `_try_affinity()`
+  faz claim da instância de afinidade (`−1` → roteamento normal). occupant = `"{session_id}::{conference_id}"`.
+- **`registry.py`**: occupant composto + **release por prefixo de sessão** (`release_instance(session_id)` →
+  `"{session_id}::*"`), pois o `agent_done` só carrega `session_id` (simetria claim↔release). `mark_busy`
+  **sincroniza** `current_sessions` do `SCARD` (não incrementa mais); `remove_conversation` usa
+  `release_instance` (não decrementa mais). Elimina o read-modify-write não-atômico dos dois lados.
+- **Testes**: `test_router.py` +2 (re-seleção em claim perdido; fila quando todos perdem) + mock
+  `claim_instance`; `test_decide.py` mock `claim_instance`; `test_instance_semaphore.py` ampliado
+  (release-por-prefixo, "release só afeta a própria sessão", confs concorrentes da mesma sessão). Corrigidos 2
+  **drifts pré-existentes** (só teste): `test_routing_config` (`params={tenant_id}`), `test_crash_detector`
+  (`scan_iter` MagicMock).
+
+**Rebuild**: `routing-engine`. **Validado**: suíte 102 verde + 6 do semáforo; **E2E** mostrou
+`router.claim ... claim=-1 — re-selecting` e os dois wrap-ups concorrentes em **instâncias distintas**
+(`wrapup_ia-002` / `-018`), zero sobre-alocação. **Follow-ups abertos** (sub-arcos, ver TODO): (1) isolamento
+de `pipeline_state`/lock do skill-flow por conferência (hoje por `session_id` → 2 wrap-ups concorrentes da
+mesma sessão colidem no lock; o não-vencedor aborta sem renderizar — última camada do E2E do G7 Item 2);
+(2) latência do `@mention` de humano (leak descartado, origem a localizar, baixa prioridade).
+
+---
+
+## Router · Alocação atômica · Fatia A — semáforo por-instância (claim/release) (2026-06-14)
+
+Primeira fatia do conserto da **corrida de sobre-alocação** do router (causa-raiz real do bloqueio E2E da
+Fatia 2b/3 do G7, e bug geral sob concorrência — ver `conference-mechanics.md` § Mudança 19). A alocação
+atual faz `get_ready_instances` (leitura) → score → `mark_busy` (`current_sessions += 1`, read-modify-write)
+**sem atomicidade**, e o consumer processa inbound **concorrente** (`asyncio.create_task` por msg) → dois
+inbound paralelos pegam a mesma instância single-occupancy (lost update).
+
+**Fatia A (aditiva — nada chama ainda, zero mudança de comportamento)**: primitivas atômicas em `registry.py`:
+- `_instance_sessions_key` = SET de occupant_ids por instância (`{tenant}:instance:{id}:sessions`); `SCARD` =
+  ocupação real (fonte de verdade).
+- Lua `_CLAIM_INSTANCE_LUA` (atômico: `SADD` se `SCARD < max`, idempotente via `SISMEMBER`, com TTL) +
+  `_RELEASE_INSTANCE_LUA` (`SREM` idempotente).
+- `claim_instance()→int` (nova ocupação ≥1, ou −1 se lotado), `release_instance()→int` (ocupação restante),
+  `instance_session_count()→int` (SCARD).
+
+**Modelo escolhido (semáforo de contagem por-instância)** sobre as alternativas: idempotente (cobre
+redelivery de `agent_done`), atômico de verdade (Lua single-threaded), sem fragilidade de TTL de mutex
+distribuído, e fino (só serializa colisões reais; o select+score caro continua paralelo).
+
+**Validado E2E**: `tests/test_instance_semaphore.py` (Redis real) — 5/5: 25 claims concorrentes em max=1 →
+1 vencedor/24 `−1`/ocupação=1 (sem lost update); idempotência claim+release; teto multi-capacidade;
+claim×release sem corromper contagem. **Rebuild**: nenhum p/ rodar o teste (aditivo). Próximo: Fatia B
+(wiring no `decide()` com re-seleção + `mark_busy` usando claim). Ver TODO § Router.
+
+---
+
+## G7 Item 1 (Slice 4′) · Fatia 2b/3 — fan-out do wrap-up no customer-disconnect (entrega ✅, E2E bloqueado por gap-2) (2026-06-14)
+
+Fan-out do wrap-up por peer no customer-disconnect multi-humano. **Lado bridge entregue e correto**;
+a conclusão E2E concorrente está **bloqueada por um gap pré-existente de plumbing de menu** (gap-2 do §7),
+agora com root-cause cravado.
+
+- **`fire_pool_hooks(arm_contact_close)`** — no fan-out, cada `segment_wrapup` de peer faz `INCR
+  session:{id}:contact_close_pending` + marcador `close_arming:{conference_id}` (segment_wrapup não toca
+  posatt:active).
+- **`_destroy_conference`** — guarda nova: adia enquanto `contact_close_pending > 0` (espelha o guard de
+  posatt:active). **`process_routed`** (conclusão de `segment_wrapup`): `GETDEL close_arming` → `DECR
+  contact_close_pending`; ao zerar → `_close_contact_layer` (idempotente) + `_destroy_conference`.
+- **customer_disconnect** (`process_contact_event`) — âncora (`_last_human_instance_id`) inalterada
+  (on_human_end + on_contact_end); **cada peer** dispara `segment_wrapup` do seu pool (resolvido por
+  `participant_meta`, `arm_contact_close=True`). Single-humano → sem peers → byte-parity.
+- **`human_seg` no customer_side** — o loop de `human_members` passou a escrever `human_seg:{instance}`
+  (dual-write) por humano (o branch agent_closed já fazia; sem isto o fan-out caía no pid global). Corrige
+  a 1ª regressão observada (operator recebia 2 / admin 0).
+- **`_contact_close_timeout_guard`** (180s) — rede de segurança (segment_wrapup não usa hook_pending).
+
+**Validado**: entrega/atribuição corretas — 2 `human_seg WRITE`, READs `fallback=False`, cada wrap-up ao
+seu console (visibility por-segmento). **NÃO fecha E2E** — e a investigação revelou que a causa **não** é
+plumbing de menu, e sim uma **corrida de sobre-alocação no router** (diagnóstico corrigido 2026-06-14):
+instâncias de `wrapup_ia` são **single-occupancy** (`max_concurrent=1`), o consumer do routing é
+**concorrente** (`asyncio.create_task` por inbound) e `get_ready_instances`→`mark_busy` é **não-atômico**
+→ os dois inbound de wrap-up (paralelos) leem a `-019` com `current_sessions=0`, ambos a escolhem (lost
+update) → 2 segmentos da MESMA sessão na MESMA instância → chave de menu `{sid}:{instanceId}` colide. **A
+corrida afeta qualquer pool** sob concorrência (latente: p/ sessões distintas só desbalanceia carga). **Fix
+primário = alocação atômica no router** (claim que rejeita sobre-capacidade); menu-por-`segmentId` vira
+hardening opcional. Ver `conference-mechanics.md` § Mudança 19 + `g7…` §11. **Rebuild**: `orchestrator-bridge`.
+
+---
+
+## G7 Item 1 (Slice 4′) · Fatia 2a — idempotência do `agent_done` (fim do double-processing) (2026-06-14)
+
+Fix do achado da Fatia 1: o `agent_done`/`contact_closed` do humano podia chegar **2×** (double-submit do
+Console ou redelivery Kafka — o consumer despacha cada msg como task, sem serialização). O 2º passe
+recriava o segmento (`participant_joined_at` já `getdel`'d → duração 0 → **segmento fantasma**) e
+re-disparava `segment_wrapup` (conferência redundante).
+
+**Mecanismo (sem chave nova, race-safe)**: o branch de close do agente (`process_contact_event`) ganha um
+**gate de idempotência** logo após o `is_human`, antes do restore e dos side-effects: `SREM human_agents
+instance_id` é atômico e retorna quantos removeu — se **0**, o instance já saiu (duplicado, ou já encerrado
+por outro caminho, ex. heartbeat drop) → `return` no-op (log `Duplicate/late agent close ignored`). O
+duplicado do **último** humano já era pego pelo `is_human` (flag deletada no `remaining<=0`); o gate cobre
+o **não-último** (flag segue viva sob o outro humano). O `SREM` redundante mais abaixo foi removido.
+
+**Rebuild**: `orchestrator-bridge`. **Validado E2E**: multi-humano agent_done pós-fix — um só `Peer wrap-up
+dispatched` por close, **sem segmento fantasma**, ambos os wrap-ups + NPS corretos (não-regressão). A
+captura explícita do guard (`Duplicate/late agent close ignored`) é oportunística (dup é intermitente);
+correção é correta por construção (SREM atômico). Doc: `conference-mechanics.md` § Mudança 18.
+
+---
+
+## G7 Item 1 (Slice 4′) · Fatia 1 — `human_seg` por-instância (fundação do fan-out) (2026-06-14)
+
+Fundação parity-preserving para o wrap-up por peer no customer-disconnect multi-humano (Item 1). O
+registro do segmento humano `session:{id}:human_seg:{pool}` passa a ser keyed por **instância**
+(`human_seg:{instance_id}`), com **dual-write** do espelho por-pool como fallback de back-compat.
+Razão real (decisão 2026-06-14): a colisão "2 humanos no mesmo pool" é operacionalmente inexistente
+(agentes de um pool são equivalentes — 1 por pool basta); o valor da fatia é ser o substrato correto
+para o fan-out da Fatia 3, que precisa endereçar o segmento de **cada** humano (pools distintos) por
+`instance_id` ao iterar `human_agents`.
+
+- **`fire_pool_hooks`** ganha param `human_instance_id` (default `""`); o reader prefere
+  `human_seg:{instance_id}` e cai no espelho `human_seg:{pool}` só se a chave por-instância faltar
+  (sessão in-flight durante deploy / caller não migrado).
+- **Writer** (`participant_left`) faz dual-write: `human_seg:{instance_id}` (canônica) +
+  `human_seg:{pool}` (espelho legado).
+- **Threading** nos 10 call-sites que leem `human_seg` (on_human_end / on_contact_end / segment_wrapup):
+  defer nativo (`_npd_h_inst`), defer-Kafka (`_pd_h_inst`), customer_disconnect (`_last_human_instance_id`),
+  transfer / no_continuation / other_human_active (`instance_id`).
+- **Observabilidade**: `logger.info` em WRITE (instance/pool/seg) e READ (qual chave casou + `fallback`).
+
+**Rebuild**: `orchestrator-bridge`. **Validado E2E**: (1) single-humano byte-parity (NPS=10 → segmento
+humano; READ `fallback=False` na chave por-instância); (3) **multi-humano pools distintos** (admin
+`retencao_humano` sai não-último → `segment_wrapup` lê `human_seg:human-{admin}`, `escalated`;
+operator `humanoxxx` sai último → `on_human_end`+`on_contact_end` leem `human_seg:human-{operator}`,
+NPS=10 no segmento do operator) — duas chaves por-instância distintas, zero cross-attribution.
+Cenário "mesmo pool" descartado por não ter sentido operacional. Doc: `conference-mechanics.md`
+§ Mudança 17 + `g7-segment-contact-decoupling.md` §11.
+
+**Achado registrado (pré-existente, não-regressão — ver TODO)**: o `agent_done` do humano não-último
+foi processado **2×** (double-dispatch de `segment_wrapup` + segmento fantasma de duração zero). É
+idempotência ausente em `process_contact_event`, upstream da Fatia 1; atribuição permanece correta.
+
+---
+
 ## Heartbeat · Slice 2 — pong-tracking (drop sujo) (2026-06-13)
 
 Hardening da Slice 1: `ws.close` nem sempre dispara numa meia-conexão (sleep, partição de rede). O

@@ -1061,6 +1061,125 @@ restore + `participant_left` + agent_done lifecycle DECR + SREM `human_agents`).
 > positivo é auto-curável (Console reconecta dentro do grace → cancela). O `{type:"ping"}` app-level é
 > mantido. **Arco heartbeat completo** (Slices 1+2). Rebuild: `mcp-server-plughub`.
 
+### Mudança 17 — `human_seg` por-instância (G7 Item 1 / Slice 4′ Fatia 1, 2026-06-14)
+
+**Contexto**: o registro do segmento humano `session:{id}:human_seg:{pool}` (Mudança 7/14) era keyed
+por **pool**. A "limitação" anotada (2 humanos no mesmo pool colidem) é, na prática, **operacionalmente
+inexistente** — agentes de um pool são equivalentes, basta 1 por pool num contato. O motivo real da
+mudança é ser a **fundação** do fan-out da Fatia 3 (wrap-up por peer no customer-disconnect): para dar
+wrap-up ao segmento de **cada** humano (pools distintos), o fan-out precisa endereçar por `instance_id`
+ao iterar o SET `human_agents`.
+
+**Mudança** (parity-preserving):
+- Chave canônica `session:{id}:human_seg:{instance_id}`; **dual-write** do espelho legado
+  `human_seg:{pool}` como fallback de back-compat (sessões in-flight / callers não migrados).
+- `fire_pool_hooks(..., human_instance_id="")`: o reader prefere a chave por-instância e só cai no
+  espelho por-pool se a por-instância faltar (`fallback=True` no log).
+- Threading do `human_instance_id` nos 10 call-sites que leem `human_seg` (on_human_end /
+  on_contact_end / segment_wrapup): defer nativo/Kafka (`_npd_h_inst`/`_pd_h_inst`), customer_disconnect
+  (`_last_human_instance_id`), transfer / no_continuation / other_human_active (`instance_id`).
+- Logs `G7 Item1 human_seg WRITE/READ` (INFO) para observabilidade do gate (manter até a Fatia 3;
+  rebaixar a debug no cleanup da Fatia 4).
+
+**Keys**: `session:{id}:human_seg:{instance_id}` (TTL 7d, nova canônica) + `human_seg:{pool}` (espelho,
+a remover no cleanup). **Rebuild**: `orchestrator-bridge`. **Validação E2E**: single-humano (byte-parity,
+READ `fallback=False`) + multi-humano pools distintos (admin não-último `segment_wrapup` → seg do admin;
+operator último `on_human_end`+`on_contact_end` → seg do operator + NPS; duas chaves por-instância, zero
+cross-attribution). A Mudança 14 (peer wrap-up) deixa de ter a limitação "mesmo pool".
+
+> **Achado (pré-existente)**: no E2E multi-humano o `agent_done` do não-último foi processado **2×**
+> (double-dispatch de `segment_wrapup` + segmento fantasma de duração zero em `analytics.segments`).
+> Idempotência ausente em `process_contact_event` (redelivery/publish duplicado), **upstream** da Fatia 1.
+> **Corrigido na Fatia 2a (Mudança 18).**
+
+### Mudança 18 — idempotência do close do agente (G7 Item 1 / Fatia 2a, 2026-06-14)
+
+**Problema**: o `agent_done`/`contact_closed` do humano podia chegar **2×** (double-submit do Console ou
+redelivery Kafka — o consumer do bridge despacha cada msg como `asyncio.create_task`, sem serialização).
+O 2º passe recriava o segmento humano (`participant_joined_at` já `getdel`'d no 1º → duração 0 →
+**segmento fantasma** em `analytics.segments`) e re-disparava `segment_wrapup` (conferência redundante).
+Exposto pela Mudança 17 (logs), pré-existente.
+
+**Mudança** (sem chave nova, race-safe): o branch de close do agente em `process_contact_event` ganha um
+**gate de idempotência** logo após o `is_human`, **antes** do `_restore_instance` e dos side-effects:
+```python
+if instance_id:
+    _close_removed = await redis_client.srem(f"session:{session_id}:human_agents", instance_id)
+    if _close_removed == 0:
+        # já saiu (duplicado, ou encerrado por outro caminho — heartbeat drop) → no-op
+        return
+```
+`SREM` é atômico e retorna quantos removeu → o 2º passe vê 0 e retorna. O `SREM` redundante mais abaixo
+(antes do `scard remaining`) foi removido. O duplicado do **último** humano já era pego pelo `is_human`
+(flag deletada no `remaining<=0`); o gate cobre o **não-último** (flag viva sob o outro humano) — onde o
+fantasma aparecia. Cobre também a corrida entre `agent_done` e heartbeat-drop do mesmo instance.
+
+**Keys**: nenhuma. **Rebuild**: `orchestrator-bridge`. **Validação**: multi-humano agent_done pós-fix —
+um só `Peer wrap-up dispatched` por close, **sem segmento fantasma**, wrap-ups+NPS corretos
+(não-regressão). Log `Duplicate/late agent close ignored` aparece quando um duplicado de fato chega
+(intermitente); correção correta por construção (SREM atômico).
+
+### Mudança 19 — fan-out do wrap-up no customer-disconnect + gap-2 de menu concorrente (G7 Fatia 2b/3, 2026-06-14)
+
+**Objetivo**: no customer-disconnect com N humanos, dar wrap-up a **cada** humano (antes só o pool do
+`meta` recebia). **Lado bridge entregue e correto; E2E bloqueado por gap-2 (menu concorrente).**
+
+**Mecanismo (bridge)**:
+- Contador novo `session:{id}:contact_close_pending` (+ marcador `close_arming:{conference_id}`): cada
+  `segment_wrapup` do fan-out faz INCR; `_destroy_conference` adia enquanto `>0`; a conclusão do
+  `segment_wrapup` (`process_routed`) faz `GETDEL close_arming`→DECR e, ao zerar, dispara
+  `_close_contact_layer`+`_destroy_conference` (ambos idempotentes/auto-guardados).
+- `process_contact_event` (customer_disconnect): âncora (`_last_human_instance_id`) mantém
+  on_human_end+on_contact_end; cada **peer** dispara `fire_pool_hooks(segment_wrapup, arm_contact_close=True)`.
+- O loop `customer_side` passou a escrever `human_seg:{instance}` por humano (o branch agent_closed já
+  fazia) — sem isto o fan-out caía no pid global e mandava todos os wrap-ups ao último humano.
+- `_contact_close_timeout_guard` (180s): segment_wrapup não usa hook_pending → guarda dedicada.
+
+**Validado**: entrega/atribuição corretas (2 `human_seg WRITE`, READs `fallback=False`, cada menu ao seu
+console por visibility de segmento).
+
+**Bloqueio E2E — CAUSA-RAIZ REAL: corrida de sobre-alocação no router (corrigido o diagnóstico
+2026-06-14)**: as duas conferências de wrap-up caíram na **mesma instância** `wrapup_ia-019`, e como são da
+**mesma sessão** a chave de menu `menu:result:{sid}:{instanceId}` colidiu (inputs cruzam, menus expiram).
+Mas a co-locação **não é por design** — é **bug de concorrência**: (1) cada instância de `wrapup_ia` é
+**single-occupancy** (`max_concurrent=1`; bootstrap cria N instâncias de cap 1 a partir de
+`max_concurrent_sessions`); (2) o consumer do routing processa inbound **concorrente**
+(`main.py` `asyncio.create_task(_process_message)` por msg); (3) `get_ready_instances`→`mark_busy` é
+**não-atômico** (read-modify-write em `current_sessions`, sem claim). Os dois inbound paralelos leem a -019
+com `current_sessions=0`, ambos a escolhem, ambos `mark_busy` `0→1` (**lost update**). **Evidência**:
+`posatt segment closed` dos dois com `recipients=[wrapup_ia-019,…]`; `[menu_submit]` com
+`agent_key=wrapup_ia-019` e visibility ora `[operator]` ora `[admin]`; `menu:waiting` com 1 campo só.
+
+**Impacto geral**: a corrida afeta **qualquer pool** sob alocação concorrente — latente (para sessões
+distintas só desbalanceia carga / estoura capacidade em silêncio, pois as chaves de menu diferem por
+`sessionId`), ficou **visível** aqui via 2 segmentos da MESMA sessão.
+
+**Fix primário = alocação atômica no router** (claim que rejeita sobre-capacidade e re-seleciona; ex.: Lua
+ou INCR-and-check em `current_sessions`). Conserta o wrap-up (concorrentes passam a ir para instâncias
+distintas → chaves de menu distintas) **e** a sobre-alocação em todos os pools. **Hardening secundário
+(opcional)**: chave de menu por `segmentId` (já no `ctx`) como defesa-em-profundidade para pools que
+legitimamente tenham `max_concurrent>1` com 2 segmentos da mesma sessão.
+
+**Keys novas**: `session:{id}:contact_close_pending`, `session:{id}:close_arming:{conference_id}`.
+**Rebuild**: `orchestrator-bridge`.
+
+### Mudança 20 — alocação atômica no router (fix da corrida) + camada 3 restante (2026-06-14)
+
+**Resolve a causa-raiz da Mudança 19** (corrida de sobre-alocação): o router agora faz **seleção otimista +
+claim atômico + re-seleção** (semáforo de contagem por-instância via Lua, `claim_instance`/`release_instance`
+sobre `instance:{id}:sessions`; occupant `"{session_id}::{conference_id}"`; release por prefixo de sessão).
+`mark_busy`/`remove_conversation` deixam de fazer read-modify-write em `current_sessions` (sincronizam do
+`SCARD`). Validado E2E: dois wrap-ups concorrentes da mesma sessão caem em **instâncias distintas** (não mais a
+mesma `-019`/`-002`), `router.claim ... claim=-1 — re-selecting` confirmando a arbitragem. Detalhe e fatias em
+CHANGELOG (Router · Alocação atômica A/B) + TODO § Router.
+
+**Camada 3 ainda aberta (bloqueia os dois wrap-ups concorrentes da mesma sessão):** com instâncias distintas,
+a colisão de chave de menu sumiu, mas o **skill-flow chaveia `pipeline_state`/lock por `session_id`**
+(`state.ts` `PIPELINE_KEY`/`LOCK_KEY`). Dois agentes de conferência da mesma sessão → o 1º segura o lock no
+BLPOP do menu, o 2º aborta (`renewLock=false`) **sem renderizar** → timeout. Fix = isolar o pipeline dos
+hooks por `conference_id` (sub-arco; TODO § Camada 3). Até lá, o fan-out de wrap-up multi-humano no
+customer-disconnect entrega só **um** wrap-up por vez (o outro só rodaria sequencialmente).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

@@ -143,6 +143,7 @@ class TestRoutingConfigCacheReload:
 
         mock_client.get.assert_called_once_with(
             "http://config-api:3600/config/routing",
+            params={"tenant_id": "__global__"},
             timeout=5.0,
         )
 

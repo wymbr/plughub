@@ -60,6 +60,7 @@ async def test_allocates_available_instance():
     pool_reg.get_candidate_pools.return_value  = [make_pool()]
     inst_reg.get_ready_instances.return_value  = [make_instance()]
     inst_reg.mark_busy.return_value            = None
+    inst_reg.claim_instance.return_value       = 1
 
     router = Router(inst_reg, pool_reg)
     result = await router.route(make_event())
@@ -68,6 +69,49 @@ async def test_allocates_available_instance():
     assert result.instance_id == "inst_001"
     assert result.pool_id     == "retencao_humano"
     assert result.priority_score >= 0
+
+
+@pytest.mark.asyncio
+async def test_reselects_next_best_when_claim_loses_race():
+    """Fatia B: se o claim atômico do melhor candidato falha (-1, perdeu a corrida /
+    instância lotada), o router re-seleciona o próximo best e aloca esse."""
+    inst_reg  = AsyncMock()
+    pool_reg  = AsyncMock()
+    inst_reg.get_session_affinity.return_value = None
+    pool_reg.get_candidate_pools.return_value  = [make_pool()]
+    inst_reg.get_ready_instances.return_value  = [
+        make_instance(instance_id="inst_A"),
+        make_instance(instance_id="inst_B"),
+    ]
+    inst_reg.mark_busy.return_value = None
+    # 1º candidato (top score) perde o claim (-1); 2º vence (1).
+    inst_reg.claim_instance.side_effect = [-1, 1]
+
+    router = Router(inst_reg, pool_reg)
+    result = await router.route(make_event())
+
+    assert result.allocated is True
+    assert result.instance_id == "inst_B"          # re-selecionou o próximo best
+    assert inst_reg.claim_instance.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_queues_when_all_claims_lose_race():
+    """Fatia B: se TODOS os candidatos falham o claim (pool de fato lotado sob
+    concorrência), cai no caminho de fila (allocated=False), sem sobre-alocar."""
+    inst_reg  = AsyncMock()
+    pool_reg  = AsyncMock()
+    inst_reg.get_session_affinity.return_value = None
+    pool_reg.get_candidate_pools.return_value  = [make_pool()]
+    inst_reg.get_ready_instances.return_value  = [make_instance(instance_id="inst_A")]
+    inst_reg.mark_busy.return_value = None
+    inst_reg.claim_instance.return_value = -1
+
+    router = Router(inst_reg, pool_reg)
+    result = await router.route(make_event())
+
+    assert result.allocated is False
+    inst_reg.mark_busy.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -107,6 +151,7 @@ async def test_routing_mode_autonomous_high_confidence():
     pool_reg.get_candidate_pools.return_value  = [make_pool()]
     inst_reg.get_ready_instances.return_value  = [make_instance()]
     inst_reg.mark_busy.return_value            = None
+    inst_reg.claim_instance.return_value       = 1
 
     router = Router(inst_reg, pool_reg)
     result = await router.route(make_event(confidence=0.92))
@@ -122,6 +167,7 @@ async def test_routing_mode_supervised_low_confidence():
     pool_reg.get_candidate_pools.return_value  = [make_pool()]
     inst_reg.get_ready_instances.return_value  = [make_instance()]
     inst_reg.mark_busy.return_value            = None
+    inst_reg.claim_instance.return_value       = 1
 
     router = Router(inst_reg, pool_reg)
     result = await router.route(make_event(confidence=0.40))
@@ -138,6 +184,7 @@ async def test_session_affinity_registered_for_stateful():
     stateful_instance = make_instance(execution_model="stateful")
     inst_reg.get_ready_instances.return_value  = [stateful_instance]
     inst_reg.mark_busy.return_value            = None
+    inst_reg.claim_instance.return_value       = 1
     inst_reg.set_session_affinity              = AsyncMock()
 
     router = Router(inst_reg, pool_reg)
