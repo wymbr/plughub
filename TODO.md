@@ -659,6 +659,22 @@ Humano que cai (disconnect/crash) deixava o contato órfão (gap G4). Alvo: drop
 
 ---
 
+## Frente 3 — Revisão de config / eliminar seeds *(em curso)*
+
+Meta: produção sem seeds re-aplicados — DB é fonte de verdade; setup inicial de DB versionado.
+- **Fase 1 ✅ (2026-06-15)** — **seed-if-absent / DB-owned** no `RegistrySyncer` (`registry_syncer.py`): no 409,
+  não sobrescreve pool config nem deploy-slot (capacidade); edições de UI sobrevivem a rebuild. Env
+  `REGISTRY_SYNC_RECONCILE=true` = reconcile legado (YAML vence) p/ dev. Skills seguem upsert (código). Curou o
+  sintoma "Transfer/`escalation_pools` some a cada build". Ver CHANGELOG 2026-06-15 + CLAUDE.md § Configuration.
+- **Fase 2 (próxima)** — converter os seeds YAML em **migração versionada if-absent, store por store**
+  (agent-registry, config-api `platform_config`, auth `module_registry`, evaluation forms/campaigns…), rumo ao
+  "setup inicial de DB versionado, sem YAML de registry". Eliminar YAML **gradualmente** sem retrabalho.
+- **Higiene**: `CLAUDE.md` e `registry_syncer.py` referenciam `docs/arcos/config-consolidation.md` que **não
+  existe** no filesystem — criar (consolidar o burn-down de violações + a regra de precedência) ou ajustar as
+  referências.
+
+---
+
 ## Hardening de Auth — postura de sessão do Console *(proposta — não é bug)*
 
 Hoje (Arc 7, por design): `access_token` em memória; `refresh_token` em `localStorage('plughub_refresh_token')`

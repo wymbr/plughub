@@ -32,9 +32,18 @@ YAML format (one file per tenant, or a single file):
 
 Algorithm per entity:
   POST → 201   created, done
-  POST → 409   already exists → PATCH to apply any config drift
+  POST → 409   already exists → see Precedence below
   POST → 422   validation error (bad pool ref etc.) → logged as error, skip
   POST → other → logged as error, skip
+
+Precedence (config-consolidation — seed-if-absent / DB-owned, DEFAULT):
+  On 409 (entity already exists) the syncer DOES NOT overwrite it — the DB is
+  authoritative, so UI edits (escalation_pools, mentionable_pools, hooks, deploy
+  capacity, …) survive restarts/rebuilds. The YAML only SEEDS a fresh/empty
+  registry. Set REGISTRY_SYNC_RECONCILE=true for the legacy dev/GitOps behaviour
+  where the YAML re-applies its config over existing rows on every startup.
+  (Applies to pools and deploy-slots; skills still upsert — they are code, not
+  tenant-editable config.)
 
 Prune (REGISTRY_SYNC_PRUNE=true, default):
   After upsert, list all agent_types in the registry for the tenant.
@@ -63,6 +72,21 @@ import yaml
 _SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+_v\d+$")
 
 logger = logging.getLogger("plughub.registry-syncer")
+
+
+def _reconcile_enabled() -> bool:
+    """
+    Provisioning precedence (config-consolidation):
+      default (seed-if-absent / DB-owned): the YAML seeds an EMPTY registry
+        (201 on create); once a pool/deploy-slot exists, the DB is authoritative
+        and the syncer NEVER overwrites it on restart — UI edits (escalation_pools,
+        mentionable_pools, hooks, deploy capacity, …) survive rebuilds.
+      REGISTRY_SYNC_RECONCILE=true: legacy dev/GitOps mode — the YAML wins,
+        re-applying config drift over existing rows on every startup.
+    """
+    return os.getenv("REGISTRY_SYNC_RECONCILE", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 # ── Result ────────────────────────────────────────────────────────────────────
@@ -268,7 +292,12 @@ class RegistrySyncer:
     ) -> None:
         slots_url = f"{self._registry_url}/v1/pools/{pool_id}/slots"
         try:
-            # Idempotency: skip if current slot already matches desired state.
+            # Idempotency + seed-if-absent precedence:
+            #   - current matches the YAML → skip;
+            #   - current is SET but differs → it was edited in the UI (capacity);
+            #     under seed-if-absent (default) the slot is DB-owned → skip (do
+            #     NOT overwrite). REGISTRY_SYNC_RECONCILE=true re-applies the YAML.
+            #   - current is UNSET → seed from YAML (fresh DB).
             async with http.get(
                 slots_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
@@ -276,11 +305,19 @@ class RegistrySyncer:
                     body = await resp.json()
                     current = (body.get("slots") or {}).get("current") or {}
                     cfg = current.get("config_json") or {}
-                    if (
+                    _matches = (
                         current.get("set")
                         and current.get("skill_id") == skill_id
                         and int(cfg.get("max_concurrent_sessions") or 0) == max_concurrent
-                    ):
+                    )
+                    if _matches:
+                        report.deploy_slots_skipped += 1
+                        return
+                    if current.get("set") and not _reconcile_enabled():
+                        logger.debug(
+                            "  deploy slot pool=%s set & differs — DB-owned "
+                            "(seed-if-absent), skipping reconcile", pool_id,
+                        )
                         report.deploy_slots_skipped += 1
                         return
 
@@ -534,7 +571,21 @@ class RegistrySyncer:
             report.errors.append(msg)
             return
 
-        # 409 → already exists, PUT to apply any config drift (e.g. mentionable_pools)
+        # 409 → already exists. Provisioning precedence (seed-if-absent / DB-owned):
+        #   default: the pool is DB-owned — the syncer does NOT overwrite existing
+        #     pool config on restart. This is what stops escalation_pools /
+        #     mentionable_pools / hooks from being clobbered to the YAML values on
+        #     every rebuild (config edited in the UI survives).
+        #   REGISTRY_SYNC_RECONCILE=true: legacy — PUT the YAML over the existing
+        #     row to re-apply config drift (dev/GitOps).
+        if not _reconcile_enabled():
+            logger.debug(
+                "  pool %s exists — DB-owned (seed-if-absent), skipping reconcile", pid,
+            )
+            report.pools_skipped += 1
+            return
+
+        # reconcile mode: PUT the YAML config over the existing pool (drift)
         # Send only mutable fields (everything except pool_id)
         patch_body = {k: v for k, v in pool.items() if k != "pool_id"}
         patch_url  = f"{self._registry_url}/v1/pools/{pid}"

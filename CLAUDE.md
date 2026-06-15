@@ -196,6 +196,12 @@ system_error         — unrecoverable error
 - **Provisioning only via official API** — todo provisionamento (incl. seed/demo) escreve ATRAVÉS da
   API do store. Proibido: escrita direta em Redis/DB de config, e listas de config hardcoded em
   scripts/serviços.
+- **Seed-if-absent / DB-owned (provisioning precedence)** — o YAML declarativo (`infra/registry/*.yaml`)
+  apenas **semeia DB vazio** (201 no create); uma vez que a entidade existe, o **DB é fonte de verdade** e o
+  `RegistrySyncer` **não sobrescreve** no restart (edições de UI sobrevivem a rebuild — pools, deploy/capacity,
+  hooks, escalation/mentionable). `REGISTRY_SYNC_RECONCILE=true` restaura o reconcile (YAML vence) p/ dev/
+  GitOps. Skills seguem upsert (são código, não config de tenant). Alvo Fase 2: YAML→migração versionada
+  if-absent, store por store.
 - **Every config field is UI-editable** — todo campo de config tem superfície na tela do módulo. Campo
   que só existe em YAML/arquivo é dívida a fechar.
 - **env only for secrets and wiring** — env é exclusivamente para segredos (JWT, tokens, creds) e

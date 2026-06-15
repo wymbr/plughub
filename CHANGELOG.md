@@ -2,6 +2,26 @@
 
 ---
 
+## Config — RegistrySyncer seed-if-absent (DB-owned, para o clobber de pools no rebuild) (2026-06-15)
+
+Frente 3 Fase 1. **Sintoma**: a lista de pools do Transfer (`supervisor_config.escalation_pools`) — e qualquer
+config de pool editada na UI — **sumia a cada rebuild**. **Causa** (não era perda de dado): o
+`RegistrySyncer._sync_pool` fazia, no boot do `orchestrator-bridge`, um `PUT /v1/pools/{id}` com o corpo do
+YAML sempre que o pool já existia (409), **sobrescrevendo** a edição de UI (que estava salva no Postgres) com os
+valores do `infra/registry/tenant_demo.yaml`. O mesmo vetor existia no `_ensure_deploy_slot` (capacidade).
+
+**Fix** (`registry_syncer.py`): provisioning **seed-if-absent / DB-owned** por padrão — no 409, o syncer
+**não sobrescreve** (pool/deploy-slot DB-owned; o YAML só semeia DB vazio no 201). Helper `_reconcile_enabled()`
++ env `REGISTRY_SYNC_RECONCILE=true` restaura o reconcile legado (YAML vence) p/ dev/GitOps. **Skills seguem
+upsert** (código, não config de tenant). Invariante registrada em `CLAUDE.md` § Configuration.
+
+**Validado**: rebuild com DB existente → `Registry sync: pools(created=0 skip=20) deploy_slots(set=0 skip=19)`,
+**zero** `pool ... updated (config drift)` (antes apareceriam ~20); + teste manual: edição de `escalation_pools`
+na UI **sobrevive** ao rebuild. Sanidade: DB zerado ainda semeia tudo do YAML no 1º boot. **Rebuild**:
+`orchestrator-bridge`. **Fase 2** (TODO): YAML→migração versionada if-absent, store por store.
+
+---
+
 ## G7 Hook-pool por segmento — on_human_end/on_contact_end usam o pool de quem fecha (2026-06-15)
 
 Fecha o gap de atribuição de pool nos hooks de fim-de-segmento/contato (o "follow-up `_cs_pool_id`" + o gêmeo
