@@ -384,6 +384,10 @@ class LifecycleEventHandler:
             pool = await self._pools.get_pool(tenant_id, pool_id)
             if not pool:
                 continue
+            # Frente 1: pools pull NÃO são auto-drenados — o agente puxa o contato
+            # explicitamente (work_task_claim). O drain por agent_ready só vale push.
+            if getattr(pool, "dispatch_mode", "push") == "pull":
+                continue
 
             assert self._router is not None
             contact = await self._router.dequeue(instance, pool, now_ms)

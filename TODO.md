@@ -847,9 +847,20 @@ Liga com o **gate de promoção** homologação→produção (descritivo §20.1)
 **Status (2026-06-15):** plano consolidado em `docs/product/frente1-dispatch-pull-aprovacao-plano-consolidado.md`
 (módulos + task list + esforço; decisões D1–D3 resolvidas). Sub-fatiamento da F1 (pull core) confirmado:
 F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atômico) → F1.3 (lease).
-- **F1.0a ✅ (2026-06-15)** — `dispatch_mode: push|pull` (default push) ponta a ponta: `@plughub/schemas`
+- **F1.0 ✅ (2026-06-15)** — `dispatch_mode: push|pull` (default push) ponta a ponta: `@plughub/schemas`
   `PoolRegistrationSchema`, agent-registry (coluna Prisma + migração + POST/PUT), routing `PoolConfig` +
-  `kafka_listener`. Aditivo, zero comportamento (`route()` só ramifica em F1.1). **F1.0b (UI select) — em curso.**
+  `kafka_listener`, **UI select** na PoolsPage (+ i18n). Aditivo. Validado (`teste_demo` → `dispatch_mode=pull`).
+- **F1.1 ✅ (2026-06-15)** — branch no `route()` (pool pull → parqueia, pula `_allocate`, reusa caminho queued)
+  + `_drain_queue_for_agent` e `_periodic_queue_drain` pulam pools pull. Validado: push byte-parity; pull
+  parqueia (`Contact persisted to queue pool=teste_demo`) sem `Routed`/drain.
+- **F1.2 ✅ (2026-06-15)** — claim atômico no Router: `work_task_claim` (`ZREM` 1-vencedor + `claim_instance`
+  no semáforo do recurso + rollback se −1 + `mark_busy` + lease + publica `conversations.routed` → reusa
+  bridge/Console) e `work_task_release` (lease off + `release_instance` + re-enfileira). Registry:
+  `atomic_claim_dequeue`, `write/delete_claim_lease`. Testes `test_work_queue_claim.py` 5/5 + suíte 96 verde.
+  Invocação (tool mcp-server) é F2.
+- **F1.3 (próxima)** — lease + auto-release: `claim_lease_s` (config-api ns `routing`) + heartbeat de renovação
+  + auto-release via crash_detector (desconectou → re-enfileira o claimado) + lease TTL como backstop.
+- **F2** — tools mcp-server (`work_queue_list`/`claim`/`release`) + API no routing + inbox no Console.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

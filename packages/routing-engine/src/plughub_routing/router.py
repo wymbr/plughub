@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from .models import (
     ConversationInboundEvent,
+    ConversationRoutedEvent,
     QueuedContact,
     AgentInstance,
     PoolConfig,
@@ -95,6 +96,25 @@ class Router:
 
         if not pools:
             return self._build_queued_result(event, now)
+
+        # ── Frente 1: dispatch pull ───────────────────────────────────────────
+        # Pools em dispatch_mode "pull" NÃO auto-alocam: o contato é parqueado na
+        # fila e um agente logado o retira explicitamente (work_task_claim, F1.2).
+        # Pula o _allocate e segue o MESMO caminho de "queued" (release do pool de
+        # origem + queue.position) que uma alocação que falha.
+        if event.pool_id and getattr(pools[0], "dispatch_mode", "push") == "pull":
+            queued_result = self._build_queued_result(event, now)
+            asyncio.create_task(
+                self._release_session_from_pool(
+                    event.tenant_id, event.session_id, event.pool_id
+                )
+            )
+            _pull_pool = pools[0]
+            asyncio.create_task(self._publish_queue_position(event, _pull_pool))
+            asyncio.create_task(
+                self._write_snapshot(event.tenant_id, _pull_pool.pool_id, _pull_pool)
+            )
+            return queued_result
 
         # Try local site
         try:
@@ -513,6 +533,133 @@ class Router:
             allocated=False, queued=True, routing_mode="supervised", routed_at=now,
             pool_id=event.pool_id,
         )
+
+    # ─────────────────────────────────────────────
+    # Frente 1 — Dispatch pull: claim / release
+    # Operações expostas como tools/API na F2; aqui são as FUNÇÕES do routing —
+    # o Routing Engine continua o único árbitro (ZREM/claim/mark_busy/lease/routed
+    # acontecem DENTRO dele; a Console só solicita).
+    # ─────────────────────────────────────────────
+
+    @property
+    def _claim_lease_s(self) -> int:
+        return int(getattr(self._settings, "claim_lease_s", 180))
+
+    async def work_task_claim(
+        self,
+        tenant_id:     str,
+        pool_id:       str,
+        session_id:    str,
+        instance_id:   str,
+        conference_id: str = "",
+    ) -> dict:
+        """
+        Pull: retirada explícita de um contato da fila por um agente logado.
+        Atômica e composta:
+          1. valida a instância do agente;
+          2. lê o pacote do contato (para routed/rollback);
+          3. ZREM atômico da fila (um vencedor) — perdeu → already_claimed;
+          4. reserva a vaga no semáforo do RECURSO (push+pull) — −1 (sem capacidade)
+             → ROLLBACK re-enfileira → no_capacity;
+          5. mark_busy + grava lease do claim;
+          6. publica conversations.routed → reusa bridge/Console (vira atendimento).
+        """
+        now = datetime.now(timezone.utc).isoformat()
+
+        inst = await self._instances.get_instance(tenant_id, instance_id)
+        if inst is None:
+            return {"claimed": False, "reason": "instance_not_found"}
+
+        contact = await self._instances.get_full_queued_contact(tenant_id, session_id)
+        if contact is None:
+            return {"claimed": False, "reason": "not_in_queue"}
+
+        # 3 — atomic win
+        won = await self._instances.atomic_claim_dequeue(tenant_id, pool_id, session_id)
+        if not won:
+            return {"claimed": False, "reason": "already_claimed"}
+
+        # 4 — reserva a vaga do recurso (semáforo compartilhado push+pull)
+        occ = await self._instances.claim_instance(
+            tenant_id, instance_id, session_id,
+            conference_id or None, int(inst.max_concurrent),
+        )
+        if occ == -1:
+            # rollback — re-enfileira (JSON ainda armazenado)
+            await self._instances.add_queued_contact(
+                tenant_id, pool_id, session_id, contact,
+                int(contact.get("queued_at_ms")
+                    or int(datetime.now(timezone.utc).timestamp() * 1000)),
+            )
+            logger.info(
+                "work_task_claim: no capacity — rolled back: session=%s instance=%s pool=%s",
+                session_id, instance_id, pool_id,
+            )
+            return {"claimed": False, "reason": "no_capacity"}
+
+        # 5 — mark_busy + lease
+        await self._instances.mark_busy(tenant_id, pool_id, instance_id, session_id)
+        try:
+            await self._instances.write_claim_lease(
+                tenant_id, pool_id, session_id, instance_id, self._claim_lease_s,
+            )
+        except Exception as exc:
+            logger.warning(
+                "work_task_claim: could not write lease session=%s — %s", session_id, exc
+            )
+
+        # 6 — publica conversations.routed (reusa todo o downstream)
+        result = RoutingResult(
+            session_id=session_id, tenant_id=tenant_id, allocated=True,
+            instance_id=instance_id, agent_type_id=inst.agent_type_id,
+            pool_id=pool_id, routing_mode="supervised",
+            allocated_site=self._local_site, routed_at=now,
+        )
+        if self._producer:
+            await self._producer.send(
+                self._settings.kafka_topic_routed,
+                value=ConversationRoutedEvent(
+                    session_id=session_id, tenant_id=tenant_id,
+                    result=result, routed_at=now,
+                ).model_dump(),
+            )
+        logger.info(
+            "work_task_claim: claimed session=%s instance=%s pool=%s occ=%d",
+            session_id, instance_id, pool_id, occ,
+        )
+        return {
+            "claimed": True, "instance_id": instance_id,
+            "pool_id": pool_id, "contact": contact,
+        }
+
+    async def work_task_release(
+        self,
+        tenant_id:   str,
+        pool_id:     str,
+        session_id:  str,
+        instance_id: str,
+    ) -> dict:
+        """
+        Pull: devolve um contato claimado à fila — remove a lease, libera a vaga do
+        recurso (release_instance) e re-enfileira pelos critérios do routing
+        (add_queued_contact, NÃO preserva posição). O agente desistiu da task.
+        """
+        await self._instances.delete_claim_lease(tenant_id, pool_id, session_id)
+        remaining = await self._instances.release_instance(
+            tenant_id, instance_id, session_id
+        )
+
+        contact = await self._instances.get_full_queued_contact(tenant_id, session_id)
+        if contact is not None:
+            await self._instances.add_queued_contact(
+                tenant_id, pool_id, session_id, contact,
+                int(datetime.now(timezone.utc).timestamp() * 1000),   # re-ordena
+            )
+        logger.info(
+            "work_task_release: released session=%s instance=%s pool=%s remaining=%d requeued=%s",
+            session_id, instance_id, pool_id, remaining, contact is not None,
+        )
+        return {"released": True, "requeued": contact is not None}
 
 
 def _contact_to_event(contact: QueuedContact) -> ConversationInboundEvent:

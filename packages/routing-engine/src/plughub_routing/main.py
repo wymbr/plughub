@@ -1134,6 +1134,10 @@ async def _periodic_queue_drain(
                         )
                         if raw_cfg:
                             _pool_cfg = json.loads(raw_cfg) or {}
+                            # Frente 1: pools pull não são auto-drenados (o agente
+                            # puxa via work_task_claim) — pula o pool inteiro neste ciclo.
+                            if _pool_cfg.get("dispatch_mode") == "pull":
+                                continue
                             _qc = _pool_cfg.get("queue_config") or {}
                             attended_wait_s = int(_qc.get("max_wait_s") or 0)
                         _now_ms = int(

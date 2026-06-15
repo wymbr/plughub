@@ -77,6 +77,11 @@ def _pool_set_key(tenant_id: str) -> str:
     """Set of all pool_ids for the tenant."""
     return f"{tenant_id}:pools"
 
+def _claim_lease_key(tenant_id: str, pool_id: str, session_id: str) -> str:
+    """Frente 1 (pull): lease do claim — {instance_id, claimed_at}, TTL curto
+    renovado por heartbeat (F1.3). Ao expirar, o auto-release re-enfileira."""
+    return f"{tenant_id}:pool:{pool_id}:claim:{session_id}"
+
 def _queue_key(tenant_id: str, pool_id: str) -> str:
     """Sorted set of queued contacts (score = queued_at_ms)."""
     return f"{tenant_id}:pool:{pool_id}:queue"
@@ -927,6 +932,42 @@ class InstanceRegistry:
                 await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
         except Exception:
             pass
+
+    async def atomic_claim_dequeue(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> bool:
+        """
+        Frente 1 (pull claim): remoção ATÔMICA do contato da fila do pool (ZREM de
+        um membro específico = "um único vencedor", sem lock distribuído).
+        Retorna True se ESTE chamador removeu (venceu o claim); False se já não
+        estava na fila (outro agente levou / já saiu).
+
+        NÃO apaga o JSON do contato (`_queue_contact_key`): em sucesso o caller o
+        mantém para o release re-enfileirar; em rollback (sem capacidade) o caller
+        re-`add_queued_contact`. O JSON expira por TTL no fim de vida do contato.
+        """
+        removed = await self._redis.zrem(_queue_key(tenant_id, pool_id), session_id)
+        return bool(removed)
+
+    async def write_claim_lease(
+        self, tenant_id: str, pool_id: str, session_id: str,
+        instance_id: str, ttl_seconds: int,
+    ) -> None:
+        """Frente 1 (pull): grava/renova a lease do claim (TTL curto)."""
+        await self._redis.set(
+            _claim_lease_key(tenant_id, pool_id, session_id),
+            json.dumps({
+                "instance_id": instance_id,
+                "claimed_at":  datetime.now(timezone.utc).isoformat(),
+            }),
+            ex=int(ttl_seconds),
+        )
+
+    async def delete_claim_lease(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> None:
+        """Frente 1 (pull): remove a lease do claim (release/auto-release)."""
+        await self._redis.delete(_claim_lease_key(tenant_id, pool_id, session_id))
 
     async def get_full_queued_contact(
         self, tenant_id: str, session_id: str
