@@ -602,50 +602,15 @@ nunca `session_id` cru; fecha branch `--conf--` + YAML-fallback) e **Fatia A2** 
   `max_concurrent>1` legítimo + 2 segmentos da mesma sessão. **Desnecessário** após a alocação atômica
   (concorrentes vão para instâncias distintas) + Fatia A (pipelines distintos). Encerrado salvo regressão.
 
-### Latência do `@mention` de humano *(aberto — baixa prioridade, medir antes de atribuir)*
-- **Sintoma observado pós-Fatia B (a investigar)**: `@mention` de humano (ex.: convidar `humanoxxx`) passou a
-  demorar **alguns segundos** para o agente ser avisado — antes era **imediato**. **Insight (usuário)**: num
-  invite ÚNICO não há concorrência → `claim_instance` deveria retornar **≥1 sempre**; se está lento por causa
-  do claim, é porque retornou **−1 sem contenção** → o SET `instance:{id}:sessions` da instância humana está com
-  occupant(s) **VAZADO(s)** (release que não casou em algum caminho de saída do humano) → re-seleção → fila →
-  drain (~latência). Seria **bug de release (leak)**, não contenção. **Teste decisivo** (invite único, operator
-  ocioso): (a) `grep router.claim` no routing — se aparecer `claim=-1` p/ instância humana, confirma; (b)
-  `SCARD/SMEMBERS tenant_demo:instance:human-{userId}:sessions` com o operator ocioso DEVE ser 0 — se >0, é leak.
-  **Resultado do teste decisivo (2026-06-14): leak DESCARTADO** — `SCARD` do `instance:human-{userId}:sessions`
-  com operator ocioso = **0**, e sem `claim=-1`. Logo a latência **não vem do claim/alocação atômica** (a
-  Fatia B não segura o invite). A causa, se real, está em **outro ponto da cadeia do @mention** (dispatch no
-  mcp-server → conference inbound → routing → activate_human → `conversation.assigned` → forward ao Console).
-  **Próximo passo p/ localizar** (quando priorizado): invite único com captura cronometrada ponta-a-ponta —
-  timestamp do @mention enviado vs. do `conversation.assigned` no Console — para ver onde está o gap. Pode até
-  não ser regressão da Fatia B (medir antes de atribuir). Baixa prioridade (latência, não erro).
-- **Pista nova (2026-06-15)**: a latência deu **impressão de coincidir com o momento em que `demo_ia` escalou
-  para `retencao_humano` também** — i.e., quando há **alocação humana concorrente** (o primário sendo alocado
-  ~ junto do convite @mention), **nem sempre**. Sugere contenção/serialização no caminho de
-  `activate_human_agent` ou no consumo de `conversations.routed` quando dois destinos humanos chegam próximos,
-  não no claim atômico (leak já descartado). **Medir**: timestamps de `@mention` enviado →
-  `conversation.assigned` no Console, correlacionando com o `routed` do primário. Persistiu após Camada 3
-  (Fatias A/A2 só tocam pipeline de IA/hook, não o path humano).
-- **Hipótese estrutural (2026-06-15, investigada)**: o consumer de `conversations.routed` do bridge é
-  concorrente (`asyncio.create_task(_dispatch)`, main.py ~7053) → **não** é o gargalo. O gargalo provável é o
-  **drain da fila**: humanos **nunca** publicam `agent_ready` (kafka_listener ~302), e o drain **imediato** da
-  fila é disparado justamente por `agent_ready` (kafka_listener 284-287). Se o convite @mention de humano
-  **erra a alocação imediata** (instância humana não-`ready`/não-claimable no instante — p.ex. concorrência com
-  a escalação `demo_ia`→`retencao_humano`) e cai na **fila**, não há evento que o drene → espera o **drain
-  periódico de `queue_drain_interval_s=5`s** (config.py:60). Bate com "alguns segundos" + "nem sempre".
-  **Falta cravar**: *por que* erra a alocação imediata sob concorrência (router.route do convite vê a instância
-  humana como não-disponível? admission sem headroom?).
-  **Harness de medição (próximo repro)**:
-  ```bash
-  # 1) timestamp do @mention enviado (mcp-server dispatch) e do conversation.assigned (bridge)
-  docker compose ... logs --since 5m mcp-server-plughub | grep -E 'mention|dispatch'
-  docker compose ... logs --since 5m orchestrator-bridge | grep -E 'conversation.assigned|activate_human'
-  # 2) routing: o convite foi pra fila? quando drenou?
-  docker compose ... logs --since 5m routing-engine | grep -E 'router.claim|queue|drain|conference'
-  ```
-  Se aparecer o convite enfileirado e drenado ~5s depois (sem `agent_ready` no meio) → hipótese confirmada;
-  fix = drain imediato para convites de conferência humana (não depender de `agent_ready`), ou alocação direta
-  do specialist humano sem passar pela fila. **Medir antes de implementar** (toca o path frágil do routing).
-Detalhe em `conference-mechanics.md` § Mudança 19/21 + g7 §11.
+### Latência do `@mention` de humano — RESOLVIDO (não é bug, 2026-06-15)
+**Conclusão**: não havia latência anômala. O `@mention` de um pool cujo **agente humano ainda não logou** cai
+na fila do contato (nenhuma instância `ready` no pool) e é entregue assim que o operador **faz login**
+(`agent_ready` → `Queue drain: ... became ready`). Comportamento **esperado**. Confirmado: com o operador
+logado, `@mention` → `Routed → human-…` em **~33 ms** (sem fila); sem login, aguarda na fila até o login. Os
+"alguns segundos / nem sempre" eram o tempo até o operador (`humanoxxx`) logar — o que estava logado/servindo
+era o `retencao_humano` (admin), daí a impressão de "coincidir com a escalação". **Sem ação.** (Mecanismo de
+referência: convite a pool sem agente ready → `Contact persisted to queue` → drain no `agent_ready`; eventual
+melhoria de UX — sinalizar no Console "convidando, aguardando login do agente" — é cosmética, não bug.)
 
 **Sub-arco multi-humano: Slices 1/2′/3/4′ ✅; Item 2 ✅ (Camada 3, 2026-06-15).** Restam só os arcos próprios
 abaixo (unificação de contabilidade; queda involuntária de humano) + o follow-up `_cs_pool_id` acima.
