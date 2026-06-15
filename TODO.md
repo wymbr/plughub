@@ -595,11 +595,17 @@ por `--seg--{segment_id}` (a evidência `5ea8dfae` era **build stale**). Bloquei
 **Fatia A** (chave de pipeline endurecida em `activate_native_agent`: `segment_id or instance_id or uuid`,
 nunca `session_id` cru; fecha branch `--conf--` + YAML-fallback) e **Fatia A2** (isenção de hook no dedup
 `conference:specialist:{pool_id}` que colapsava os 2 wrap-ups do mesmo pool numa corrida). Validado E2E 2×.
-- **Follow-up (não-bloqueante, classe Slice-1b)**: a âncora do fan-out de customer-disconnect dispara
-  `on_human_end` com `_cs_pool_id` lido do `meta` (last-writer = último humano ativado) em vez do
-  `participant_meta` da própria âncora. Invisível hoje (todos os pools humanos → `wrapup_ia`); corrigir
-  (ler `participant_meta:{_last_human_instance_id}`) se algum pool humano tiver config de wrap-up divergente.
-  `process_contact_event` ~4720 (`_cs_pool_id`).
+- **Follow-up ✅ RESOLVIDO (2026-06-15, Fatia 1 — hook-pool por segmento)**: `on_human_end`/`on_contact_end` do
+  último/âncora passam a resolver o pool de `participant_meta:{instância que fecha}` (fallback `meta`), nos
+  **dois** close paths (`agent_closed` `_pool_id_hooks` + `customer_disconnect` `_cs_pool_id`; cobre o
+  **deferred** via stash). Validado E2E (admin último → `origin_pool=retencao_humano`; pré-fix `humanoxxx`).
+  Ver CHANGELOG 2026-06-15 + conference-mechanics § Mudança 22.
+- **Gaps remanescentes do modelo de hooks (follow-ups, baixa prioridade)**: (2) survey **customer-side
+  por-segmento** (grão=segment NPS) não dispara p/ peers no fan-out — `segment_wrapup` reusa a lista
+  `on_human_end` mas filtra `side=agent` (`main.py` ~938), então surveys customer-side só saem na âncora/
+  primário; (4) binding **grão↔boundary** (skill em "contact ends" gravar `grain=session`) é convenção, não
+  contrato; disparo **grão=journey** não plumbado (sem boundary de fim-de-journey) → F11. Convergir
+  `on_human_end`(último)+`segment_wrapup`(peers) num mecanismo único de wrap-up por-segmento = higiene opcional.
 - **Hardening opcional (gap-2 menu)**: chave de menu por `segmentId` como defesa-em-profundidade p/ pools com
   `max_concurrent>1` legítimo + 2 segmentos da mesma sessão. **Desnecessário** após a alocação atômica
   (concorrentes vão para instâncias distintas) + Fatia A (pipelines distintos). Encerrado salvo regressão.

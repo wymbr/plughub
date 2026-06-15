@@ -1202,6 +1202,22 @@ duplicate conference invite`. **Rebuild**: `orchestrator-bridge`. **Follow-up**:
 `meta` (last-writer) em vez do `participant_meta` (classe Slice-1b; invisível enquanto pools convergem p/
 `wrapup_ia`); latência do `@mention` (TODO § Camada 3).
 
+### Mudança 22 — hook-pool por segmento: on_human_end/on_contact_end do pool de quem fecha (2026-06-15)
+
+Os hooks de fim-de-segmento (wrap-up) e fim-de-contato (NPS) do **último/âncora** segmento passam a resolver o
+pool de `participant_meta:{instância que fecha}` (fallback `session:meta`), alinhando-os aos **peers** (que já
+usavam `participant_meta`). Antes vinham do `session:meta` (last-writer = último humano **ativado**) → config do
+pool errado quando os pools humanos divergem. Dois sites: `agent_closed` (`_pool_id_hooks` por `instance_id`;
+cobre o **deferred** via stash `pending_on_human_end`) e `customer_disconnect` (`_cs_pool_id` por
+`_last_human_instance_id`).
+
+Modelo de referência (G7): **wrap-up** é por-segmento (todo fim de segmento → wrap-up com o pool **próprio**;
+sem relação com âncora). **NPS** é grão-configurável (`segment | contact | journey`, definido no skill-flow do
+agente NPS; `survey_record(grain)`): em grão=contact dispara **uma vez** na âncora (último a se desligar) com o
+pool **desse** segmento — a âncora é só o ponto de disparo único, não "o NPS do Primary". Validado E2E
+(sequencial, admin último → `on_human_end`/`on_contact_end origin_pool=retencao_humano`; pré-fix saía
+`humanoxxx` do meta). Paridade de comportamento (`target_pool` `wrapup_ia`/`nps_ia`).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

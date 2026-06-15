@@ -2,6 +2,35 @@
 
 ---
 
+## G7 Hook-pool por segmento — on_human_end/on_contact_end usam o pool de quem fecha (2026-06-15)
+
+Fecha o gap de atribuição de pool nos hooks de fim-de-segmento/contato (o "follow-up `_cs_pool_id`" + o gêmeo
+no `agent_closed`). Antes, o pool que resolvia a config de `on_human_end` (wrap-up do último segmento) e
+`on_contact_end` (NPS de contato) vinha do `session:meta` (last-writer = último humano **ativado**), não do
+segmento que fecha. Com pools humanos divergentes, wrap-up/NPS rodavam a config do pool errado.
+
+Modelo (confirmado com o usuário): wrap-up é **por-segmento** (cada fim de segmento, pool próprio); NPS
+(`on_contact_end`) é grão-**contact**, dispara **uma vez** na âncora (último segmento a se desligar) com o pool
+**desse** segmento; a granularidade vive no skill-flow do agente NPS — `survey_record(grain)` já suporta os 4
+grãos. Wrap-up/NPS são agent-skills configuráveis (UI Pools: "When the human segment ends" / "When the contact
+ends — fires once per contact"), não core.
+
+Fix (`orchestrator-bridge`, 2 sites de cómputo): resolve o pool de `participant_meta:{instância que fecha}` com
+**fallback** ao `session:meta` (paridade se faltar):
+- `agent_closed` (`_pool_id_hooks`, `instance_id` do `agent_done`) — cobre também o disparo **deferred** (o
+  stash `pending_on_human_end` copia `_pool_id_hooks`).
+- `customer_disconnect` (`_cs_pool_id`, `_last_human_instance_id` da âncora). Os **peers** já resolviam por
+  `participant_meta`; isto alinha a âncora/último a eles.
+
+**Validado E2E** (sequencial: humanoxxx encerra 1º, admin `retencao_humano` por último): `segment_wrapup
+origin_pool=humanoxxx` (peer); `on_human_end`+`on_contact_end origin_pool=retencao_humano` (admin, âncora) —
+**pré-fix saía `humanoxxx`** (meta). Paridade mantida (`target_pool` `wrapup_ia`/`nps_ia`, 2 wrap-ups
+`pushed=true`). **Rebuild**: `orchestrator-bridge`. **Gaps remanescentes** (follow-ups, ver TODO): (2) survey
+customer-side por-segmento não dispara p/ peers (`segment_wrapup` filtra `side=agent`); (4) binding
+grão↔boundary é convenção; disparo grão=journey = F11.
+
+---
+
 ## G7 Camada 3 — isolamento de pipeline por conferência + dedup de hook (Fatias A/A2) (2026-06-15)
 
 Fecha o E2E do **G7 Item 2** (os DOIS humanos recebem wrap-up no customer-disconnect, de forma

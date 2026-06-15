@@ -4767,6 +4767,23 @@ async def process_contact_event(
                         "session=%s — %s", session_id, _exc,
                     )
 
+                # G7 (hook-pool por segmento): a âncora (último a se desligar) dispara
+                # on_human_end/on_contact_end com o SEU pool (participant_meta do
+                # _last_human_instance_id), não o do session:meta (last-writer = último
+                # humano ATIVADO). Alinha a âncora aos peers (que já resolvem por
+                # participant_meta). Fallback ao meta preserva paridade se faltar.
+                if _last_human_instance_id:
+                    try:
+                        _anchor_pm_raw = await redis_client.get(
+                            f"session:{session_id}:participant_meta:{_last_human_instance_id}"
+                        )
+                        if _anchor_pm_raw:
+                            _anchor_pool = json.loads(_anchor_pm_raw).get("pool_id", "") or ""
+                            if _anchor_pool:
+                                _cs_pool_id = _anchor_pool
+                    except Exception:
+                        pass
+
                 _cs_hooks_fired = False
                 if http and _cs_pool_id and _cs_tenant_id:
                     _cs_pool_cfg = await get_pool_config(
@@ -5414,6 +5431,22 @@ async def process_contact_event(
                             "agent_closed: could not read session meta for hooks: "
                             "session=%s — %s", session_id, _exc,
                         )
+
+                    # G7 (hook-pool por segmento): os hooks de fim-de-segmento/contato
+                    # usam o pool do segmento que FECHA (participant_meta:{instance_id}),
+                    # não o do session:meta (last-writer = último humano ATIVADO). Também
+                    # corrige o disparo deferred (o stash pending_on_human_end copia
+                    # _pool_id_hooks). Fallback ao meta preserva paridade se faltar.
+                    try:
+                        _pm_raw_hooks = await redis_client.get(
+                            f"session:{session_id}:participant_meta:{instance_id}"
+                        )
+                        if _pm_raw_hooks:
+                            _pm_pool_hooks = json.loads(_pm_raw_hooks).get("pool_id", "") or ""
+                            if _pm_pool_hooks:
+                                _pool_id_hooks = _pm_pool_hooks
+                    except Exception:
+                        pass
 
                     # ── G2 fix: defer on_human_end if AI specialists still active ─
                     # A task-step specialist (e.g. assist mode) may still be replying
