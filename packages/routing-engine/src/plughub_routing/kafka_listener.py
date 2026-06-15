@@ -206,16 +206,19 @@ class RegistryEventHandler:
                 queue_config             = pool_data.get("queue_config") or None,
                 # Capacity-governance item 2: tipagem do pool (gate por tipo)
                 agent_kind               = pool_data.get("agent_kind") or None,
+                # Frente 1: modo de despacho da fila (push default | pull)
+                dispatch_mode            = pool_data.get("dispatch_mode") or "push",
             )
             await self._pools.save_pool_config(config)
             logger.info(
                 "Pool cache updated: tenant=%s pool=%s channels=%s mentionable_pools=%s "
-                "agent_groups=%s webhook_skill_id=%s max_concurrent_sessions=%s",
+                "agent_groups=%s webhook_skill_id=%s max_concurrent_sessions=%s dispatch_mode=%s",
                 tenant_id, config.pool_id, config.channel_types,
                 list(config.mentionable_pools.keys()) if config.mentionable_pools else [],
                 config.agent_groups,
                 config.webhook_skill_id,
                 config.max_concurrent_sessions,
+                config.dispatch_mode,
             )
         except Exception as exc:
             logger.error("Error processing pool event: %s — %s", pool_data, exc)

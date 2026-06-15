@@ -194,6 +194,13 @@ export const PoolRegistrationSchema = z.object({
    */
   webhook_skill_id:       z.string().optional(),
   /**
+   * Frente 1 — modo de despacho da fila do pool.
+   *   "push" (default): o Routing Engine auto-aloca (comportamento atual).
+   *   "pull": o contato é parqueado na fila e NÃO auto-alocado; um agente logado
+   *           lista e pede o claim explicitamente. Push e pull coexistem por pool.
+   */
+  dispatch_mode:          z.enum(["push", "pull"]).optional(),
+  /**
    * Arc 19 (revisado 2026-06-04) — throttle OPCIONAL de downstream.
    * NÃO é capacidade: alocação real é capada pelos slots de instância do
    * deploy (Bootstrap) + admissão híbrida. Quando setado num pool webhook,

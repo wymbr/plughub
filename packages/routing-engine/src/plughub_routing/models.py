@@ -205,6 +205,11 @@ class PoolConfig(BaseModel):
     # tipo na admissão (sessões em pools 'ai' ≤ C_ai) — Etapa 2 do item 2.
     agent_kind: str | None = None
 
+    # Frente 1 (dispatch pull): "push" (auto-aloca, default) | "pull" (agente puxa
+    # da fila — route() parqueia sem alocar; agent_ready não drena; claim explícito).
+    # F1.0 é só plumbing: o route() só passa a ramificar em F1.1.
+    dispatch_mode: str = "push"
+
 
 # ─────────────────────────────────────────────
 # Queue

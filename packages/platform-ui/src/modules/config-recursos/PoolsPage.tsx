@@ -479,6 +479,7 @@ const PoolsPage: React.FC = () => {
     // Type & capacity (capacity-governance): agent_kind governs queue⇒human and
     // the AI/human capacity gates; '' = inferred by the registry backfill.
     agent_kind:        '' as '' | 'human' | 'ai',
+    dispatch_mode:     'push' as 'push' | 'pull',
     session_reservation:         null as number | null,
     channel_types:     [] as string[],
     sla_target_ms:     30000,
@@ -612,7 +613,7 @@ const PoolsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
-      pool_id: '', description: '', agent_kind: '', session_reservation: null,
+      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', session_reservation: null,
       channel_types: [], sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
@@ -631,6 +632,7 @@ const PoolsPage: React.FC = () => {
       pool_id:         pool.pool_id,
       description:     pool.description || '',
       agent_kind:        pool.agent_kind ?? '',
+      dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
       session_reservation:         pool.session_reservation ?? null,
       channel_types:     pool.channel_types,
       sla_target_ms:     pool.sla_target_ms,
@@ -747,6 +749,7 @@ const PoolsPage: React.FC = () => {
         // Type & capacity. agent_kind: send only when explicitly set ('' leaves the
         // registry backfill to infer). session_reservation: number to set, null to clear.
         ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
+        dispatch_mode:     formData.dispatch_mode,
         ...(formData.session_reservation !== null
           ? { session_reservation: formData.session_reservation }
           : (editingPool?.session_reservation != null ? { session_reservation: null } : {})),
@@ -1050,6 +1053,20 @@ const PoolsPage: React.FC = () => {
                 {t('pools.typeCapacity.queueNeedsHuman')}
               </div>
             )}
+          </div>
+
+          {/* ── Dispatch mode (Frente 1 — pull) ──────────────────────────────── */}
+          <div>
+            <Select
+              label={t('pools.dispatch.label')}
+              value={formData.dispatch_mode}
+              onChange={e => setFormData({ ...formData, dispatch_mode: e.target.value as 'push' | 'pull' })}
+              options={[
+                { value: 'push', label: t('pools.dispatch.push') },
+                { value: 'pull', label: t('pools.dispatch.pull') },
+              ]}
+            />
+            <p className="text-xs text-muted-light mt-0.5">{t('pools.dispatch.hint')}</p>
           </div>
 
           {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}

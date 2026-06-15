@@ -32,6 +32,8 @@ model Pool {
   webhook_skill_id       String?  // Required when channel_types includes "webhook"
   // Arc 19: max concurrent sessions for webhook pools (capacity limit); informational for others
   max_concurrent_sessions Int?
+  // Frente 1 (dispatch pull): "push" (auto-allocate, default) | "pull" (agent pulls from queue)
+  dispatch_mode          String  @default("push")
   // Fase B (queue-attended-model): dedicated session slots (cap+guarantee) carved
   // from the installation total. NULL = pool draws from the shared bucket.
   session_reservation     Int?

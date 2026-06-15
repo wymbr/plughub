@@ -141,6 +141,8 @@ export interface Pool {
   max_reply_time_ms?: number | null
   /** Arc 19: skill "DIN" do pool webhook (obrigatório quando channel inclui webhook). */
   webhook_skill_id?: string | null
+  /** Frente 1: modo de despacho da fila — "push" (auto-aloca, default) | "pull" (agente puxa). */
+  dispatch_mode?: 'push' | 'pull'
   /** Throttle opcional de backpressure downstream (webhook). */
   max_concurrent_sessions?: number | null
   /** Fatia reservada de sessões simultâneas (admissão híbrida). */

@@ -66,6 +66,12 @@
       "sessionReservationHint": "Fatia dedicada de sessões simultâneas separada da capacidade contratada (C). Vazio = usa o bucket compartilhado. Σ reservas ≤ C.",
       "reservationPlaceholder": "compartilhado"
     },
+    "dispatch": {
+      "label": "Modo de despacho da fila",
+      "push": "Push (auto-aloca)",
+      "pull": "Pull (agente puxa da fila)",
+      "hint": "Push (padrão): o routing aloca o contato automaticamente. Pull: o contato aguarda na fila e um agente logado o retira (claim) explicitamente. Recomendado para assíncrono (e-mail, back-office, aprovação)."
+    },
     "hooks": {
       "label": "Hooks de Ciclo de Vida",
       "hint": "Especialistas (pools) acionados em pontos do atendimento humano. Cada hook recruta uma instância disponível do pool escolhido.",

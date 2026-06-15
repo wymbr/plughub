@@ -844,6 +844,28 @@ Modo de despacho **pull** genérico no Routing Engine (operador puxa da fila) + 
 
 Liga com o **gate de promoção** homologação→produção (descritivo §20.1): promover vira um workflow com passo de aprovação.
 
+**Status (2026-06-15):** plano consolidado em `docs/product/frente1-dispatch-pull-aprovacao-plano-consolidado.md`
+(módulos + task list + esforço; decisões D1–D3 resolvidas). Sub-fatiamento da F1 (pull core) confirmado:
+F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atômico) → F1.3 (lease).
+- **F1.0a ✅ (2026-06-15)** — `dispatch_mode: push|pull` (default push) ponta a ponta: `@plughub/schemas`
+  `PoolRegistrationSchema`, agent-registry (coluna Prisma + migração + POST/PUT), routing `PoolConfig` +
+  `kafka_listener`. Aditivo, zero comportamento (`route()` só ramifica em F1.1). **F1.0b (UI select) — em curso.**
+
+**Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
+- **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
+  que termina com `escalate` re-roteia o CONTATO em vez de **voltar ao chamador**. O `agente_auth_form_v1.yaml`
+  escala nos dois caminhos (sucesso/falha) → invocado como specialist (admin servindo), escala pro
+  `retencao_humano` → fila → drena de volta (sintoma: mensagem de fila espúria). Modelo-alvo (definição do
+  usuário): invite/task **sempre voltam ao chamador**. Fix preferido: **engine** — flow em modo conference
+  specialist trata `escalate`/`complete` como **retorno-ao-chamador** (devolve outcome), não re-roteia o contato.
+  É o **núcleo da F4** (aprovação = specialist que devolve outcome). Sub-arco próprio.
+- **B — multi-sessão humana no push (ligado ao pull)**: humano servindo entra `state="busy"`;
+  `get_ready_instances` exige `state=="ready"` → mesmo com vaga (`max_concurrent=3`; a cap humana vem da URL do
+  WS do Console — `mcp-server` server.ts:2147 default 3 — não do `auth`), um humano em atendimento não recebe 2º
+  contato concorrente via **push** → vai pra fila. É o gap que o **pull (F1)** endereça (o humano puxa o
+  próximo). Decisão de modelo: o push também deveria oferecer (manter `ready` enquanto sob capacidade)? Medir ao
+  vivo (`state`/`current_sessions`/`max_concurrent` da instância) se for atacar.
+
 ---
 
 ## Record/Replay Harness — gravação/replay em todas as costuras *(proposta — não implementado)*

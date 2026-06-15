@@ -66,6 +66,12 @@
       "sessionReservationHint": "Dedicated simultaneous-session slice carved from the contracted capacity (C). Empty = shares the common bucket. Σ reservations ≤ C.",
       "reservationPlaceholder": "shared"
     },
+    "dispatch": {
+      "label": "Queue dispatch mode",
+      "push": "Push (auto-allocate)",
+      "pull": "Pull (agent pulls from queue)",
+      "hint": "Push (default): the routing engine auto-allocates the contact. Pull: the contact waits in the queue and a logged-in agent claims it explicitly. Recommended for async (email, back-office, approval)."
+    },
     "hooks": {
       "label": "Lifecycle Hooks",
       "hint": "Specialists (pools) triggered at points of the human service. Each hook recruits an available instance from the chosen pool.",
