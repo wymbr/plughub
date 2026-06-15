@@ -469,21 +469,24 @@ async def activate_native_agent(
     # Arc 19: resume context — when set, the engine picks up from the suspended step.
     if resume_context:
         payload["resume_context"] = resume_context
-    # Conference specialists (hook agents) share the same session_id for
-    # message delivery, but each needs its own pipeline_state and execution
-    # lock.  Use the agent's unique segment_id — each participant in the
-    # session has a distinct segment, so two hook agents running in parallel
-    # on the same session never collide.
+    # Conference agents (hook agents AND task-step specialists) share the same
+    # session_id for message delivery, but each needs its own pipeline_state and
+    # execution lock so two of them running in parallel on the same session never
+    # collide on the lock (G7 Camada 3 — fan-out de wrap-up concorrente).
+    # Isolate by the agent's unique segment_id; fall back to instance_id, then a
+    # uuid — NEVER the raw session_id, which the primary agent legitimately uses
+    # for its own pipeline.  (Before: the segment-less branch keyed by
+    # conference_id, which collided when two agents shared a conference_id; and
+    # the YAML-fallback path passed neither, silently keying on session_id puro.)
     #
     # Arc 19: webhook sessions are PRIMARY (non-conference) agents — they must
-    # NOT use a segment-suffixed pipeline_session_id.  The analytics-api
+    # NOT use a suffixed pipeline_session_id.  The analytics-api
     # GET /sessions/{id}/pipeline-state reads from {tenant}:pipeline:{session_id}
     # directly; a suffix would make the pipeline inaccessible to analytics.
-    # Only apply the suffix when conference_id is set (specialist isolation).
-    if segment_id and conference_id:
-        payload["pipeline_session_id"] = f"{session_id}--seg--{segment_id[:8]}"
-    elif conference_id:
-        payload["pipeline_session_id"] = f"{session_id}--conf--{conference_id[:8]}"
+    # Only apply the suffix when conference_id is set (conference isolation).
+    if conference_id:
+        iso = segment_id or instance_id or uuid.uuid4().hex
+        payload["pipeline_session_id"] = f"{session_id}--seg--{iso[:8]}"
     # else: primary agents (including webhook) use session_id directly — no suffix
 
     url = f"{SKILL_FLOW_URL}/execute"
@@ -2381,6 +2384,12 @@ async def process_routed(
                 agent_type_id=agent_type_id, tenant_id=tenant_id,
                 skills=[],       # no skills list; resolve_flow_for_agent will use YAML directly
                 instance_id=yaml_instance_id,  # pass actual id so engine lock includes it
+                # G7 Camada 3: conference hook agents reaching the YAML-fallback path
+                # (registry 404/unavailable) must isolate their pipeline too. Passing
+                # conference_id makes activate_native_agent suffix pipeline_session_id
+                # (by instance_id, since no segment_id is generated here) instead of
+                # silently keying on session_id puro and colliding with a peer hook.
+                conference_id=conference_id,
             )
 
             # Skill flow ended naturally — clear the completing marker so that any
@@ -2537,7 +2546,26 @@ async def process_routed(
         # A repeat @mention while the specialist is already running would cause the
         # routing engine to generate another conversations.routed for the same pool.
         # Guard against that here so we don't double-activate the specialist.
-        if conference_id and pool_id:
+        #
+        # G7 fan-out EXEMPTION: hook agents (wrap-up / NPS) are NOT subject to this
+        # pool-level dedup. In a multi-human customer-disconnect the anchor's
+        # on_human_end AND each peer's segment_wrapup both target wrapup_ia — two
+        # legitimate agents of the SAME pool serving different humans/segments.
+        # They are identifiable by hook_conf (set by fire_pool_hooks, unique per
+        # conference_id) and their lifecycle is governed by posatt/hook_pending,
+        # not by this guard. Without the exemption the second hook to reach here
+        # races on conference:specialist:{pool_id} (written further below) and is
+        # silently skipped, so one human never gets a wrap-up — intermittent,
+        # depending on the dispatch ordering of the two hooks.
+        _is_hook_conf = False
+        if conference_id:
+            try:
+                _is_hook_conf = bool(await redis_client.exists(
+                    f"session:{session_id}:hook_conf:{conference_id}"
+                ))
+            except Exception:
+                _is_hook_conf = False
+        if conference_id and pool_id and not _is_hook_conf:
             try:
                 existing_spec = await redis_client.get(
                     f"session:{session_id}:conference:specialist:{pool_id}"

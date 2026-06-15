@@ -1173,12 +1173,34 @@ sobre `instance:{id}:sessions`; occupant `"{session_id}::{conference_id}"`; rele
 mesma `-019`/`-002`), `router.claim ... claim=-1 — re-selecting` confirmando a arbitragem. Detalhe e fatias em
 CHANGELOG (Router · Alocação atômica A/B) + TODO § Router.
 
-**Camada 3 ainda aberta (bloqueia os dois wrap-ups concorrentes da mesma sessão):** com instâncias distintas,
-a colisão de chave de menu sumiu, mas o **skill-flow chaveia `pipeline_state`/lock por `session_id`**
-(`state.ts` `PIPELINE_KEY`/`LOCK_KEY`). Dois agentes de conferência da mesma sessão → o 1º segura o lock no
-BLPOP do menu, o 2º aborta (`renewLock=false`) **sem renderizar** → timeout. Fix = isolar o pipeline dos
-hooks por `conference_id` (sub-arco; TODO § Camada 3). Até lá, o fan-out de wrap-up multi-humano no
-customer-disconnect entrega só **um** wrap-up por vez (o outro só rodaria sequencialmente).
+**Camada 3 — DIAGNÓSTICO REVISADO (2026-06-15, ver Mudança 21):** a afirmação acima ("skill-flow chaveia
+`pipeline_state`/lock por `session_id`") estava **incorreta para o binário em HEAD** — o bridge **já sufixa**
+`pipeline_session_id` por `--seg--{segment_id}` para agentes de conferência (`activate_native_agent`); a
+evidência `5ea8dfae` veio de um **build stale**. O bloqueio real do E2E concorrente eram **outros dois**
+pontos (corrigidos na Mudança 21): o YAML-fallback que não sufixava, e o **dedup de specialist por `pool_id`**
+que colapsava os dois wrap-ups do mesmo pool numa corrida.
+
+### Mudança 21 — Camada 3: hardening do pipeline por conferência + isenção de hook no dedup (G7 Item 2 ✅, 2026-06-15)
+
+**Fecha o E2E do G7 Item 2** (2 humanos com wrap-up determinístico no customer-disconnect). Duas correções no
+`orchestrator-bridge`:
+
+- **Fatia A — chave de pipeline robusta** (`activate_native_agent`): para qualquer `conference_id`, isolar por
+  `segment_id or instance_id or uuid` — nunca `session_id` cru. Byte-parity no native comum
+  (`--seg--{segment_id[:8]}`). Conserta o branch sem-segmento (era `--conf--{conf}`, colidia ao compartilhar
+  `conference_id`) e o **YAML-fallback** (`process_routed`, registry 404) que ativava sem `conference_id`/
+  `segment_id` (chaveava `session_id` puro) — agora propaga `conference_id`.
+- **Fatia A2 — hook isento do dedup de specialist** (`process_routed`): no fan-out multi-humano, âncora
+  (`on_human_end`) e peer (`segment_wrapup`) miram ambos `wrapup_ia`. O dedup `conference:specialist:{pool_id}`
+  (anti repeat-@mention) é **corrida** (marcador escrito após o check) → colapsava o 2º hook → 1 humano sem
+  wrap-up, intermitente. Hooks (detectados por `hook_conf:{conference_id}`, gravado no `fire_pool_hooks`) são
+  **isentos**; repeat-@mention de specialist (sem `hook_conf`) segue protegido.
+
+**Validado E2E** (admin `retencao_humano` + operator `humanoxxx`, reiniciar cliente): 2 runs verdes,
+`wrapup_ia-001`+`-002` em `menu:waiting`, `pipeline=` distintos, ambos `pushed=true`, **zero** `Skipping
+duplicate conference invite`. **Rebuild**: `orchestrator-bridge`. **Follow-up**: âncora usa `_cs_pool_id` do
+`meta` (last-writer) em vez do `participant_meta` (classe Slice-1b; invisível enquanto pools convergem p/
+`wrapup_ia`); latência do `@mention` (TODO § Camada 3).
 
 ---
 

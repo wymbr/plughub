@@ -337,3 +337,19 @@ leem a mesma instância `current_sessions=0`, ambos a escolhem (lost update). **
 concorrência (latente p/ sessões distintas: só desbalanceia carga). **Fix primário = alocação atômica no
 router** (claim que rejeita sobre-capacidade). O menu-por-`segmentId` vira hardening opcional. Detalhe em
 `conference-mechanics.md` § Mudança 19 + TODO § Router (corrida de sobre-alocação).
+
+**Item 2 ✅ — Camada 3 fechada (2026-06-15).** Após a alocação atômica (instâncias distintas), o E2E
+concorrente ainda falhava **intermitentemente** — mas o root cause da Mudança 20 ("skill-flow chaveia por
+`session_id` puro") estava **errado para HEAD**: o bridge já sufixava `pipeline_session_id` por
+`--seg--{segment_id}`; a evidência `5ea8dfae` era **build stale**. Os bloqueios reais eram dois (Mudança 21):
+- **Fatia A** — chave de pipeline endurecida em `activate_native_agent` (`segment_id or instance_id or uuid`,
+  nunca `session_id` cru; fecha o branch `--conf--` e o YAML-fallback que não sufixava).
+- **Fatia A2** — **isenção de hook no dedup de specialist por `pool_id`** (`process_routed`): âncora
+  (`on_human_end`) e peer (`segment_wrapup`) miram ambos `wrapup_ia`; o dedup `conference:specialist:{pool_id}`
+  colapsava o 2º numa corrida → 1 humano sem wrap-up. Hooks (via `hook_conf:{conference_id}`) ficam isentos.
+
+Validado E2E 2× (admin + operator, reiniciar cliente): `wrapup_ia-001`+`-002`, `pipeline=` distintos, ambos
+`pushed=true`, zero `Skipping duplicate conference invite`. Ver `conference-mechanics.md` § Mudança 21 +
+CHANGELOG 2026-06-15. **Follow-up** (não-bloqueante): âncora do fan-out lê `_cs_pool_id` do `meta`
+(last-writer) em vez do `participant_meta` da âncora — classe Slice-1b, invisível enquanto os pools convergem
+para `wrapup_ia`.

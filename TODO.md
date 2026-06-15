@@ -587,21 +587,22 @@ Fatias:
   completam" ainda bloqueado pela **camada 3** (pipeline isolation, abaixo); e "2 contatos simultâneos no mesmo
   pool → spread" não exercitado isoladamente.
 
-### Camada 3 — isolamento de `pipeline_state`/lock por conferência *(sub-arco próprio, root-caused 2026-06-14)*
-**Última camada para o E2E do G7 Item 2** (os dois humanos com wrap-up no customer-disconnect). O skill-flow
-chaveia `pipeline_state` e o **lock** por `session_id` (`state.ts`: `PIPELINE_KEY`/`LOCK_KEY` =
-`{tenant}:pipeline:{sessionId}[:running]`). Dois agentes de conferência da **mesma sessão** (operator
-`on_human_end` + admin `segment_wrapup`) rodam concorrentes → o 1º adquire o lock e o segura durante o BLPOP do
-menu; o 2º falha `renewLock` → aborta (`on_failure`) **sem renderizar** → menu nunca publicado → timeout → fecha
-(confirmado E2E: só 1 `menu.render` publicado, sessão `5ea8dfae`). **Fix**: isolar o pipeline dos agentes de
-conferência por `conference_id` — ex.: `activate_native_agent`/`process_routed` passar
-`"{session_id}:{conference_id}"` (ou o `instance_id`) como chave de pipeline para hooks, separando-os entre si
-e do fluxo do agente principal. **1º passo**: investigar como `activate_native_agent` passa o id de pipeline
-hoje (confirmar que usa `session_id` puro). Cross-cutting no skill-flow — gate por paridade (sequencial) + E2E
-(concorrente). Ver `conference-mechanics.md` § Mudança 20.
+### Camada 3 — isolamento de `pipeline_state`/lock por conferência ✅ *(resolvido 2026-06-15 — ver g7 §11 Item 2, conference-mechanics § Mudança 21)*
+**Fechada.** Diagnóstico da Mudança 20 estava **errado para HEAD**: o bridge já sufixava `pipeline_session_id`
+por `--seg--{segment_id}` (a evidência `5ea8dfae` era **build stale**). Bloqueios reais corrigidos:
+**Fatia A** (chave de pipeline endurecida em `activate_native_agent`: `segment_id or instance_id or uuid`,
+nunca `session_id` cru; fecha branch `--conf--` + YAML-fallback) e **Fatia A2** (isenção de hook no dedup
+`conference:specialist:{pool_id}` que colapsava os 2 wrap-ups do mesmo pool numa corrida). Validado E2E 2×.
+- **Follow-up (não-bloqueante, classe Slice-1b)**: a âncora do fan-out de customer-disconnect dispara
+  `on_human_end` com `_cs_pool_id` lido do `meta` (last-writer = último humano ativado) em vez do
+  `participant_meta` da própria âncora. Invisível hoje (todos os pools humanos → `wrapup_ia`); corrigir
+  (ler `participant_meta:{_last_human_instance_id}`) se algum pool humano tiver config de wrap-up divergente.
+  `process_contact_event` ~4720 (`_cs_pool_id`).
 - **Hardening opcional (gap-2 menu)**: chave de menu por `segmentId` como defesa-em-profundidade p/ pools com
-  `max_concurrent>1` legítimo + 2 segmentos da mesma sessão. Provavelmente **desnecessário** após Fatias B/C
-  (concorrentes vão para instâncias distintas). Reavaliar no fim.
+  `max_concurrent>1` legítimo + 2 segmentos da mesma sessão. **Desnecessário** após a alocação atômica
+  (concorrentes vão para instâncias distintas) + Fatia A (pipelines distintos). Encerrado salvo regressão.
+
+### Latência do `@mention` de humano *(aberto — baixa prioridade, medir antes de atribuir)*
 - **Sintoma observado pós-Fatia B (a investigar)**: `@mention` de humano (ex.: convidar `humanoxxx`) passou a
   demorar **alguns segundos** para o agente ser avisado — antes era **imediato**. **Insight (usuário)**: num
   invite ÚNICO não há concorrência → `claim_instance` deveria retornar **≥1 sempre**; se está lento por causa
@@ -617,10 +618,37 @@ hoje (confirmar que usa `session_id` puro). Cross-cutting no skill-flow — gate
   **Próximo passo p/ localizar** (quando priorizado): invite único com captura cronometrada ponta-a-ponta —
   timestamp do @mention enviado vs. do `conversation.assigned` no Console — para ver onde está o gap. Pode até
   não ser regressão da Fatia B (medir antes de atribuir). Baixa prioridade (latência, não erro).
-Detalhe em `conference-mechanics.md` § Mudança 19 + g7 §11.
+- **Pista nova (2026-06-15)**: a latência deu **impressão de coincidir com o momento em que `demo_ia` escalou
+  para `retencao_humano` também** — i.e., quando há **alocação humana concorrente** (o primário sendo alocado
+  ~ junto do convite @mention), **nem sempre**. Sugere contenção/serialização no caminho de
+  `activate_human_agent` ou no consumo de `conversations.routed` quando dois destinos humanos chegam próximos,
+  não no claim atômico (leak já descartado). **Medir**: timestamps de `@mention` enviado →
+  `conversation.assigned` no Console, correlacionando com o `routed` do primário. Persistiu após Camada 3
+  (Fatias A/A2 só tocam pipeline de IA/hook, não o path humano).
+- **Hipótese estrutural (2026-06-15, investigada)**: o consumer de `conversations.routed` do bridge é
+  concorrente (`asyncio.create_task(_dispatch)`, main.py ~7053) → **não** é o gargalo. O gargalo provável é o
+  **drain da fila**: humanos **nunca** publicam `agent_ready` (kafka_listener ~302), e o drain **imediato** da
+  fila é disparado justamente por `agent_ready` (kafka_listener 284-287). Se o convite @mention de humano
+  **erra a alocação imediata** (instância humana não-`ready`/não-claimable no instante — p.ex. concorrência com
+  a escalação `demo_ia`→`retencao_humano`) e cai na **fila**, não há evento que o drene → espera o **drain
+  periódico de `queue_drain_interval_s=5`s** (config.py:60). Bate com "alguns segundos" + "nem sempre".
+  **Falta cravar**: *por que* erra a alocação imediata sob concorrência (router.route do convite vê a instância
+  humana como não-disponível? admission sem headroom?).
+  **Harness de medição (próximo repro)**:
+  ```bash
+  # 1) timestamp do @mention enviado (mcp-server dispatch) e do conversation.assigned (bridge)
+  docker compose ... logs --since 5m mcp-server-plughub | grep -E 'mention|dispatch'
+  docker compose ... logs --since 5m orchestrator-bridge | grep -E 'conversation.assigned|activate_human'
+  # 2) routing: o convite foi pra fila? quando drenou?
+  docker compose ... logs --since 5m routing-engine | grep -E 'router.claim|queue|drain|conference'
+  ```
+  Se aparecer o convite enfileirado e drenado ~5s depois (sem `agent_ready` no meio) → hipótese confirmada;
+  fix = drain imediato para convites de conferência humana (não depender de `agent_ready`), ou alocação direta
+  do specialist humano sem passar pela fila. **Medir antes de implementar** (toca o path frágil do routing).
+Detalhe em `conference-mechanics.md` § Mudança 19/21 + g7 §11.
 
-**Sub-arco multi-humano: Slices 1/2′/3/4′-Item1 ✅; Item 2 em curso (Fatia 1 ✅).** Restam Fatias 2-4 do
-Item 2 + os arcos próprios abaixo (unificação de contabilidade; queda involuntária de humano).
+**Sub-arco multi-humano: Slices 1/2′/3/4′ ✅; Item 2 ✅ (Camada 3, 2026-06-15).** Restam só os arcos próprios
+abaixo (unificação de contabilidade; queda involuntária de humano) + o follow-up `_cs_pool_id` acima.
 
 ### Unificação de contabilidade de agente (kind-agnostic) *(arco próprio, proposta — diferido)*
 Anchor "último agente customer-facing" hoje é aproximado por **4 chaves** com papéis distintos:

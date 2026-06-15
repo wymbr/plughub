@@ -2,6 +2,38 @@
 
 ---
 
+## G7 Camada 3 — isolamento de pipeline por conferência + dedup de hook (Fatias A/A2) (2026-06-15)
+
+Fecha o E2E do **G7 Item 2** (os DOIS humanos recebem wrap-up no customer-disconnect, de forma
+**determinística**). A investigação reabriu o diagnóstico da Mudança 20: o isolamento de `pipeline_state`/lock
+por conferência **já estava na fonte** (o bridge sufixa `pipeline_session_id` por `--seg--{segment_id}` desde
+antes; o `5ea8dfae` que motivou a Mudança 20 era **build stale**). Restavam dois pontos reais, ambos no
+`orchestrator-bridge`:
+
+- **Fatia A — hardening da chave de pipeline** (`activate_native_agent`): a derivação virou regra única —
+  para **qualquer** `conference_id`, isolar por `segment_id or instance_id or uuid`, **nunca** `session_id`
+  cru. Byte-parity no caminho native comum (`segment_id` sempre presente → `--seg--{segment_id[:8]}`,
+  idêntico). Fecha dois gaps latentes: o branch sem-segmento (era `--conf--{conf}`, colidia se 2 agentes
+  dividissem `conference_id`) e o **YAML-fallback** (`process_routed`, registry 404) que ativava sem
+  `conference_id`/`segment_id` → chaveava em `session_id` puro. O fallback passa a propagar `conference_id`.
+- **Fatia A2 — isenção de hooks no dedup de specialist por `pool_id`** (`process_routed`): no fan-out
+  multi-humano a âncora (`on_human_end`) **e** o peer (`segment_wrapup`) miram ambos `wrapup_ia` — dois agentes
+  **legítimos do mesmo pool** servindo humanos diferentes. O dedup `conference:specialist:{pool_id}` (anti
+  repeat-@mention) colapsava o segundo numa **corrida** (marcador escrito depois do check) → 1 humano ficava
+  sem wrap-up, **intermitente**. Agora hooks (identificados por `hook_conf:{conference_id}`, já gravado pelo
+  `fire_pool_hooks`) são **isentos** desse dedup; repeat-@mention de specialist (sem `hook_conf`) segue
+  protegido.
+
+**Rebuild**: `orchestrator-bridge`. **Validado E2E** (2 humanos — admin `retencao_humano` + operator
+`humanoxxx` via @mention — reiniciar cliente, responder nos 2 consoles): 2 runs verdes, `wrapup_ia-001`+`-002`
+em `menu:waiting`, `pipeline=` distintos (`--seg--`), ambos `pushed=true`, **zero** `Skipping duplicate
+conference invite: specialist pool=wrapup_ia`. **G7 sub-arco multi-humano Item 2 concluído.**
+**Follow-up aberto** (TODO): (1) âncora do fan-out usa `_cs_pool_id` do `meta` (last-writer) em vez do
+`participant_meta` da âncora — invisível enquanto os pools convergem para `wrapup_ia` (classe Slice-1b);
+(2) latência do `@mention` de humano (ver TODO § Camada 3).
+
+---
+
 ## Router · Alocação atômica · Fatia B — claim/release no decide + release simétrico (2026-06-14)
 
 Liga as primitivas da Fatia A ao caminho de alocação, eliminando de fato a corrida de sobre-alocação
