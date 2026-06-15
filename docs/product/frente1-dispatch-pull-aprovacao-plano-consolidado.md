@@ -3,6 +3,8 @@
 > Consolidação dos três specs (`routing-pull-dispatch-spec.md`, `human-work-queue-aprovacao-spec.md`,
 > `pull-inbox-console-ui-spec.md`) num **mapa de impacto por módulo + task list fatiada + esforço**, para dar
 > visão de esforço antes de implementar. **Status:** planejamento. **Data:** 2026-06-15.
+> **Rev. 2026-06-15:** decisões D1–D3 resolvidas (§4); nó frágil #1 refinado para "capacidade compartilhada
+> push+pull no semáforo do recurso + rollback do `ZREM`" — a fila em si não tem conflito (§3, F1).
 
 ## 0. Dependências verificadas (não precisam ser construídas)
 
@@ -50,32 +52,37 @@
 
 ## 3. Nós frágeis e gates
 
-1. **Pull core × semáforo de instância atômico** (recém-construído). O `ZREM` tira da **fila**; o
-   `claim_instance` reserva a **instância**. Protocolo coerente: `ZREM` ok → `claim_instance`; se a instância
-   não tem capacidade (`-1`), **rollback** (re-`add_queued_contact`) e responde "sem capacidade". Gate: **E2E
-   concorrente** (N agentes, 1 vencedor por task; nenhuma sobre-alocação; rollback sem vazar da fila).
+1. **Capacidade compartilhada push+pull no semáforo do RECURSO** (não é conflito de fila). A fila é limpa: o
+   `ZREM` é o árbitro de "quem pega o contato" (um vencedor); `agent_ready` drena **só push**; pull **nunca
+   auto-aloca** (entra na fila pelas regras de prioridade atuais); `list`/`view` leem só os não-reservados
+   (reservado = `ZREM` → fora da lista). O ponto real é a **capacidade do agente** (`max_concurrent_sessions`),
+   **compartilhada** entre push e pull — o claim/`reserve` do pull consome um slot do **mesmo recurso** que o
+   push, logo passa pelo **mesmo semáforo do recurso** (`claim_instance`). Race só no **último slot** (TOCTOU:
+   checar capacidade antes do botão Pull não basta — um push pode comer o slot entre o check e o claim).
+   Solução = o claim do pull **reserva via `claim_instance`** (push+pull combinados); como são duas operações
+   (`ZREM` da fila + `claim_instance` do slot), **rollback** (re-`add_queued_contact`) se a capacidade perder.
+   Não é mecanismo novo — é reusar o semáforo que já existe. Gate: **E2E concorrente** (push roteado + Pull no
+   **mesmo agente** disputando o último slot → 1 só vence, sem sobre-alocação, sem contato órfão).
 2. **Weight-ordering muda a ordem de dequeue do PUSH** → risco de regressão no push. Gate: **paridade push**.
    Mitigação: **adiar para F6** (pull começa FIFO; weight é enhancement), isolando o risco do core.
 3. **Lease/auto-release**: desconexão do Console → crash_detector re-enfileira; lease TTL = backstop "conectado
    ocioso". Gate: E2E (fechar aba → task volta claimável).
 4. **Latência do piscar** = intervalo do heartbeat (aceitável p/ async; cadência mais curta com inbox aberta).
 
-## 4. Decisões a confirmar antes de codar
+## 4. Decisões (resolvidas — 2026-06-15)
 
-- **D1 — `channel_type` "console" vs delegate+pull-pool+inbox.** Os três specs realizam a aprovação por
-  **`delegate` a um pool pull + inbox lendo a fila** (sem novo `channel_type`). Na nossa discussão tínhamos
-  cogitado modelar como `channel_type` "console" consumido por `collect`/`delegate`. **Recomendação:** seguir os
-  specs (mais simples, zero novo canal); o "Console como mídia de dados entre passos" já se realiza pelo
+- **D1 ✅ — seguir os specs (delegate + pull-pool + inbox; SEM `channel_type` "console").** A aprovação é
+  `delegate` a um pool pull + inbox lendo a fila; o "Console como mídia de dados entre passos" se realiza pelo
   `delegate.context` (pacote) + o retorno (`$.pipeline_state.<delegate>`). Reavaliar só se surgir caso que o
   pull-pool não cubra.
-- **D2 — Weight-ordering em v1 ou adiar.** Recomendação: **adiar (F6)**; v1 pull = FIFO + cor de SLA.
-- **D3 — `claim_lease_s`**: dedicado no namespace `routing` (já decidido nos specs), default por pool.
+- **D2 ✅ — Weight-ordering ADIADO (F6).** v1 pull = FIFO + cor de SLA; weight é enhancement pós-v1.
+- **D3 ✅ — `claim_lease_s` dedicado, default por pool** (namespace `routing` da Config API).
 
 ## 5. Task list fatiada (dependências + esforço + gate)
 
 | Fatia | Entrega | Dep. | Esforço | Gate |
 |---|---|---|---|---|
-| **F1 — Pull core (routing)** | `dispatch_mode`; `route()` branch; agent-ready ignora pull; claim `ZREM`+`mark_busy`+segmento+lease+heartbeat; release/auto-release. | — | **G** (frágil) | unit + E2E: 1 vencedor; rollback sem-capacidade; auto-release no disconnect |
+| **F1 — Pull core (routing)** | `dispatch_mode`; `route()`: pull→fila (sem alocar), push inalterado; `agent_ready` drena **só push**; claim = `ZREM` (1 vencedor) + reserva de slot pelo **semáforo do recurso** (`claim_instance`, push+pull) + abre segmento + lease/heartbeat; **rollback** (re-enfileira) se a capacidade perder; release/auto-release. | — | **G** (frágil) | unit + E2E: 1 vencedor; push+Pull no último slot do mesmo agente sem sobre-alocação; rollback sem órfão; auto-release no disconnect |
 | **F2 — Ops tools (mcp-server)** | `work_queue_list`/`work_task_claim`/`work_task_release`; gate capacidade. | F1 | **M** | tool E2E (list/claim/release/preview) |
 | **F3 — Inbox genérico (Console UI)** | 3-zonas; rail/lista/preview/Pull; estados/lock; cor SLA; capacidade; heartbeat snapshot; ABAC `approvals.operacao`. | F2 | **G** | UI E2E com pool pull genérico (ex.: e-mail) |
 | **F4 — Aprovação: pacote + agente + rota** | `delegate.context` (decisions/attachments/form_ext); agente de aprovação (skill YAML nível c) que captura e devolve outcome; `choice` no workflow principal; edições auditadas. | F1 | **M** | E2E aprovação ponta-a-ponta (delegate→claim→decide→resume→rota) |
