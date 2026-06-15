@@ -2,6 +2,33 @@
 
 ---
 
+## Frente 1 — Pull core (dispatch pull no Routing Engine, F1.0–F1.3) (2026-06-15)
+
+Fundação do **dispatch pull** (operador puxa da fila) — modo genérico por pool, coexistindo com push. Spec:
+`docs/product/frente1-dispatch-pull-aprovacao-plano-consolidado.md`. **Routing-side completo; UI/tools = F2.**
+
+- **F1.0** — campo `dispatch_mode: push|pull` (default push) ponta a ponta: `@plughub/schemas`
+  `PoolRegistrationSchema`, agent-registry (coluna Prisma + migração + POST/PUT), routing `PoolConfig` +
+  `kafka_listener`, **UI select** na PoolsPage (+ i18n). Aditivo.
+- **F1.1** — `route()`: pool pull → **parqueia na fila** (pula `_allocate`, reusa caminho queued); o drain por
+  `agent_ready` e o drain periódico **ignoram pools pull**. Push byte-parity.
+- **F1.2** — claim atômico no `Router`: `work_task_claim` (`ZREM` 1-vencedor + `claim_instance` no semáforo do
+  RECURSO push+pull + **rollback** se sem capacidade + `mark_busy` + lease + publica `conversations.routed` →
+  reusa bridge/Console) e `work_task_release` (lease off + `release_instance` + re-enfileira). Registry:
+  `atomic_claim_dequeue`, `write/delete_claim_lease`.
+- **F1.3** — `claim_lease_s` (config-api ns `routing`, 180) lido via `routing_config`; branch pull deleta a
+  claim lease no re-parque. **Auto-release de pull é emergente**: o crash_detector pula humanos → a desconexão
+  do humano (mcp-server WS lifecycle) re-roteia → `route()` parqueia → contato volta claimável + vaga liberada.
+  Renovação de lease por heartbeat + sweeper "ocioso conectado" diferidos (spec "sem sweep dedicado").
+
+**Invariante preservada**: Routing Engine é o único árbitro — `ZREM`/`claim`/`mark_busy`/lease/`routed`
+acontecem DENTRO dele. **Testes**: `test_work_queue_claim.py` 6/6 (1-vencedor, happy-path+routed, already_claimed,
+no_capacity+rollback, release, route-pull-parqueia+limpa-lease) + suíte routing 96 verde. **Rebuild**:
+agent-registry, routing-engine, config-api, platform-ui. **Falta (F2)**: tools mcp-server + API HTTP no routing
++ inbox no Console → pull usável ponta-a-ponta.
+
+---
+
 ## Config — RegistrySyncer seed-if-absent (DB-owned, para o clobber de pools no rebuild) (2026-06-15)
 
 Frente 3 Fase 1. **Sintoma**: a lista de pools do Transfer (`supervisor_config.escalation_pools`) — e qualquer

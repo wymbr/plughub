@@ -24,6 +24,7 @@ logger = logging.getLogger("plughub.routing.routing_config")
 # Defaults matching Config API seed — routing namespace
 _DEFAULTS: dict[str, Any] = {
     "snapshot_ttl_s":           120,
+    "claim_lease_s":            180,   # Frente 1 (pull): TTL da lease do claim
     "sla_default_ms":           480_000,
     "estimated_wait_factor":    0.7,
     "congestion_sla_factor":    1.5,

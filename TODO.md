@@ -858,9 +858,16 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
   bridge/Console) e `work_task_release` (lease off + `release_instance` + re-enfileira). Registry:
   `atomic_claim_dequeue`, `write/delete_claim_lease`. Testes `test_work_queue_claim.py` 5/5 + suíte 96 verde.
   Invocação (tool mcp-server) é F2.
-- **F1.3 (próxima)** — lease + auto-release: `claim_lease_s` (config-api ns `routing`) + heartbeat de renovação
-  + auto-release via crash_detector (desconectou → re-enfileira o claimado) + lease TTL como backstop.
-- **F2** — tools mcp-server (`work_queue_list`/`claim`/`release`) + API no routing + inbox no Console.
+- **F1.3 ✅ (2026-06-15)** — `claim_lease_s` no config-api (ns `routing`, 180) + `routing_config` + `Router`
+  lê dele; branch pull do `route()` **deleta a claim lease** no re-parque. **Correção do desenho**: o
+  crash_detector **pula humanos** → o auto-release de pull (humano) é **emergente**: desconexão (mcp-server WS
+  lifecycle / arco "queda involuntária") → bridge re-roteia → `route()` parqueia (F1.1) + limpa lease → contato
+  volta claimável + vaga liberada por `agent_done`/`release_instance`. **Diferido** (spec "sem sweep dedicado"):
+  renovação da lease por heartbeat + sweeper de "conectado-mas-ocioso" (a inbox da F2 sinaliza melhor). Testes
+  6/6 + suíte 96 verde. **Pull core (F1.0–F1.3) COMPLETO.**
+- **F2 (próxima)** — tools mcp-server (`work_queue_list`/`claim`/`release`) + **API HTTP no routing** (o engine
+  não tem hoje) + **inbox no Console** (3-zonas, preview→Pull, cor SLA, capacidade). É onde o pull vira usável
+  ponta-a-ponta (E2E pela UI) + valida o auto-release completo.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

@@ -82,6 +82,14 @@ _SEED: list[tuple[str, str, object, str]] = [
         "dashboard automatically."
     ),
     (
+        "routing", "claim_lease_s",
+        180,
+        "Frente 1 (dispatch pull): TTL (segundos) da lease do claim "
+        "({tenant}:pool:{pool}:claim:{session}). Curto e independente do SLA "
+        "fim-a-fim. Backstop para claim ocioso; auto-release principal é por "
+        "desconexão (mcp-server) → re-parque na fila."
+    ),
+    (
         "routing", "sla_default_ms",
         480_000,
         "Default SLA target in milliseconds (8 minutes) used when a pool "

@@ -24,7 +24,19 @@ from plughub_routing.registry import (
     InstanceRegistry, _queue_key, _claim_lease_key, _instance_sessions_key,
 )
 from plughub_routing.router import Router
-from plughub_routing.models import AgentInstance
+from plughub_routing.models import AgentInstance, ConversationInboundEvent, PoolConfig
+
+
+class _FakePoolRegistry:
+    """PoolRegistry mínimo — devolve um único pool config para o route()."""
+    def __init__(self, pool: PoolConfig | None) -> None:
+        self._pool = pool
+
+    async def get_pool(self, tenant_id: str, pool_id: str) -> PoolConfig | None:
+        return self._pool if (self._pool and self._pool.pool_id == pool_id) else None
+
+    async def get_candidate_pools(self, tenant_id: str, channel: str) -> list[PoolConfig]:
+        return [self._pool] if self._pool else []
 
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -164,3 +176,30 @@ async def test_release_requeues_and_frees_slot(env):
     assert await client.get(_claim_lease_key(tenant, pool, sid)) is None
     # contato claimável de novo
     assert await client.zscore(_queue_key(tenant, pool), sid) is not None
+
+
+@pytest.mark.asyncio
+async def test_route_pull_parks_and_clears_lease(env):
+    """F1.1+F1.3: route() de um pool pull PARQUEIA (não aloca) e LIMPA a claim
+    lease anterior da sessão (re-parque após desconexão)."""
+    reg, _router, client, producer, tenant, pool = env
+    sid = "ses-reparque"
+    pool_cfg = PoolConfig(
+        pool_id=pool, tenant_id=tenant, channel_types=["webchat"],
+        sla_target_ms=30000, dispatch_mode="pull",
+    )
+    router = Router(reg, _FakePoolRegistry(pool_cfg), kafka_producer=producer)
+
+    # lease órfã pré-existente (de um claim anterior)
+    await reg.write_claim_lease(tenant, pool, sid, "human-old", 180)
+    assert await client.get(_claim_lease_key(tenant, pool, sid)) is not None
+
+    event = ConversationInboundEvent(
+        session_id=sid, tenant_id=tenant, customer_id="",
+        channel="webchat", pool_id=pool, started_at="2026-01-01T00:00:00Z",
+    )
+    result = await router.route(event)
+    assert result.queued is True and result.allocated is False   # parqueou, não alocou
+
+    await asyncio.sleep(0.05)   # deixa o create_task(delete_claim_lease) rodar
+    assert await client.get(_claim_lease_key(tenant, pool, sid)) is None  # lease limpa

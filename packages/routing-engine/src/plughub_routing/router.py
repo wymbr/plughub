@@ -103,6 +103,14 @@ class Router:
         # Pula o _allocate e segue o MESMO caminho de "queued" (release do pool de
         # origem + queue.position) que uma alocação que falha.
         if event.pool_id and getattr(pools[0], "dispatch_mode", "push") == "pull":
+            # F1.3: re-parque limpa qualquer claim lease anterior desta sessão — um
+            # contato re-enfileirado (ex.: agente desconectou → bridge re-roteia →
+            # aqui) não pode ficar com lease órfã apontando a um claim que acabou.
+            asyncio.create_task(
+                self._instances.delete_claim_lease(
+                    event.tenant_id, event.pool_id, event.session_id
+                )
+            )
             queued_result = self._build_queued_result(event, now)
             asyncio.create_task(
                 self._release_session_from_pool(
@@ -543,7 +551,8 @@ class Router:
 
     @property
     def _claim_lease_s(self) -> int:
-        return int(getattr(self._settings, "claim_lease_s", 180))
+        # Config API namespace `routing` (cache routing_config); default 180.
+        return int(routing_config.get("claim_lease_s", 180))
 
     async def work_task_claim(
         self,
