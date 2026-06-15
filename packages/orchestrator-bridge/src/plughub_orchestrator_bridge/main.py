@@ -1008,7 +1008,7 @@ async def fire_pool_hooks(
                 _hs_rec = json.loads(_raw_hs if isinstance(_raw_hs, str) else _raw_hs.decode())
                 _hook_human_seg_id = _hs_rec.get("segment_id", "") or ""
                 _hook_human_instance_id = _hs_rec.get("instance_id", "") or ""
-                logger.info(
+                logger.debug(
                     "G7 Item1 human_seg READ: session=%s hook=%s key=%s fallback=%s "
                     "→ seg=%s human_inst=%s pool=%s",
                     session_id, hook_type, _hs_key, _hs_via_fallback,
@@ -4650,7 +4650,7 @@ async def process_contact_event(
                                 f"session:{session_id}:human_seg:{_hm_pool}",
                                 604800, json.dumps(_hm_hs_record),
                             )
-                            logger.info(
+                            logger.debug(
                                 "G7 Item1 human_seg WRITE (customer_side): session=%s "
                                 "instance=%s pool=%s seg=%s",
                                 session_id, _hm_inst_str, _hm_pool, _hm_seg_id,
@@ -5154,7 +5154,7 @@ async def process_contact_event(
                             f"session:{session_id}:human_seg:{_ha_pool}",
                             604800, json.dumps(_hs_record),
                         )
-                        logger.info(
+                        logger.debug(
                             "G7 Item1 human_seg WRITE: session=%s instance=%s pool=%s seg=%s "
                             "(dual-write: human_seg:{inst} + human_seg:{pool})",
                             session_id, instance_id, _ha_pool, _ha_seg_id,

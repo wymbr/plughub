@@ -544,8 +544,9 @@ ciclo de vida = **último agente com I/O ao cliente** sai (humano ou IA); `prima
     `human_seg:{instance}` escrito no loop `customer_side`; `_contact_close_timeout_guard`. **Entrega/atribuição
     validadas** (2 human_seg WRITE, READs fallback=False, cada menu ao seu console). **NÃO fecha E2E** →
     gap-2 abaixo. Ver CHANGELOG + `conference-mechanics.md` § Mudança 19.
-  - **Fatia 4** — cleanup (logs `G7 Item1 human_seg`→debug; remover espelho `human_seg:{pool}` quando o
-    gap-2 fechar). Pendente até o gap-2.
+  - **Fatia 4 ✅ (2026-06-15)** — cleanup: logs `G7 Item1 human_seg` (READ + 2× WRITE) rebaixados a `debug`.
+    Espelho `human_seg:{pool}` **mantido por decisão** — é fallback defensivo barato no `fire_pool_hooks`
+    (~linha 1002, p/ sessões in-flight durante deploy); remover teria valor marginal num path frágil (close).
 
 ### Router — corrida de sobre-alocação de instância (concorrência) *(arco próprio, root-caused 2026-06-14)*
 **É a causa-raiz REAL do bloqueio E2E da Fatia 2b/3** (o "gap-2 de menu" era sintoma). Cadeia confirmada:
@@ -582,10 +583,11 @@ Fatias:
 - **Fatia C — release ✅ (foldada na B)**: `remove_conversation`→`release_instance` por prefixo. Resíduo opcional:
   `get_ready_instances`/snapshots passarem a ler `SCARD` direto (hoje leem o JSON mantido em sincronia pelo
   claim/release — funciona como hint; o claim é o gate atômico). Baixa prioridade.
-- **Fatia D — gate E2E (parcial ✅)**: re-seleção + **instâncias distintas** provadas E2E (`router.claim ...
-  claim=-1 — re-selecting`; `wrapup_ia-002`/`-018`), zero sobre-alocação. **Pendente**: "os dois wrap-ups
-  completam" ainda bloqueado pela **camada 3** (pipeline isolation, abaixo); e "2 contatos simultâneos no mesmo
-  pool → spread" não exercitado isoladamente.
+- **Fatia D — gate E2E ✅ (2026-06-15)**: re-seleção + **instâncias distintas** provadas E2E (`router.claim ...
+  claim=-1 — re-selecting`; `wrapup_ia-002`/`-018`), zero sobre-alocação. "Os dois wrap-ups completam"
+  **validado** após a Camada 3 (Fatias A/A2; 2 runs verdes, `pushed=true` nos dois). **Arco do router
+  concluído.** Residual opcional (baixa prioridade): "2 contatos simultâneos no mesmo pool → spread" não
+  exercitado isoladamente.
 
 ### Camada 3 — isolamento de `pipeline_state`/lock por conferência ✅ *(resolvido 2026-06-15 — ver g7 §11 Item 2, conference-mechanics § Mudança 21)*
 **Fechada.** Diagnóstico da Mudança 20 estava **errado para HEAD**: o bridge já sufixava `pipeline_session_id`
