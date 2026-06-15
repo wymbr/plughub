@@ -666,12 +666,16 @@ Meta: produção sem seeds re-aplicados — DB é fonte de verdade; setup inicia
   não sobrescreve pool config nem deploy-slot (capacidade); edições de UI sobrevivem a rebuild. Env
   `REGISTRY_SYNC_RECONCILE=true` = reconcile legado (YAML vence) p/ dev. Skills seguem upsert (código). Curou o
   sintoma "Transfer/`escalation_pools` some a cada build". Ver CHANGELOG 2026-06-15 + CLAUDE.md § Configuration.
-- **Fase 2 (próxima)** — converter os seeds YAML em **migração versionada if-absent, store por store**
-  (agent-registry, config-api `platform_config`, auth `module_registry`, evaluation forms/campaigns…), rumo ao
-  "setup inicial de DB versionado, sem YAML de registry". Eliminar YAML **gradualmente** sem retrabalho.
-- **Higiene**: `CLAUDE.md` e `registry_syncer.py` referenciam `docs/arcos/config-consolidation.md` que **não
-  existe** no filesystem — criar (consolidar o burn-down de violações + a regra de precedência) ou ajustar as
-  referências.
+- **Fase 2 — correção ✅ / arquitetura DIFERIDA (auditoria 2026-06-15)**: a auditoria por store mostrou que
+  **todos já são seed-if-absent** (pools via Fase 1; config-api `overwrite=False`; pricing/evaluation checam
+  existência; users 409; catálogo ABAC e skills re-aplicam de propósito = código). Ou seja, **não há bug
+  pendente** — a "config some no rebuild" está resolvida. O que sobra é só o **sonho arquitetural** (converter
+  seeds/YAML em **migração versionada if-absent**, modelo `initdb/01_platform_config.sql`, aposentando
+  `infra/seed/*.py` + YAML de registry, store por store) — **baixa urgência**, burn-down gradual sem retrabalho.
+  Resíduo opcional: `set_module_config` do `seed_auth` if-absent (demo-users). Ver `docs/arcos/config-
+  consolidation.md` §9.
+- **Doc** ✅ — `docs/arcos/config-consolidation.md` existe; atualizado com a auditoria + precedência seed-if-
+  absent (§9). Referências de `CLAUDE.md`/`registry_syncer.py` resolvem.
 
 ---
 

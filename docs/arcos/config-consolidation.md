@@ -158,3 +158,42 @@ Inventário final (cat. A/B do §6) + política: o que fica em env por design e 
 
 > **Limpeza oportunista (a proposta "por módulo" do usuário)**: ao passar por cada módulo numa fase
 > acima, eliminar de uma vez qualquer config indevida local dele — sem virar uma varredura própria.
+
+---
+
+## 9. Atualização 2026-06-15 — burn-down completo + seed-if-absent (DB-owned)
+
+### Estado das fases (§8)
+- **Fase 0 ✅** — invariantes no CLAUDE.md + guard `check_config_invariants.py`.
+- **Fase 1 ✅** — `seed.py` aposentado (sem Redis direto, sem pools hardcoded); precedência env×config-api
+  resolvida (`instance_ttl`/`attachment_expiry`/`ws_auth_timeout`). **Allowlist do guard vazio** = burn-down dos
+  perigos ativos completo; o guard agora falha em qualquer violação NOVA.
+- **Fase 2 (parcial)** — pools UI-editáveis (hooks/transfer/capacidade/tipo) ✅; ABAC/users ✅; masking via HTTP
+  ✅ (arco Config HTTP Propagation). Resto = limpeza oportunista.
+
+### Frente 3 Fase 1 (2026-06-15) — precedência seed-if-absent / DB-owned
+Bug **adicional** ao §4: o `RegistrySyncer._sync_pool` re-aplicava o YAML por cima de pools existentes a cada
+boot (`PUT` no 409) → config editada na UI (`escalation_pools`, hooks, capacidade) **sumia no rebuild**. Fix: no
+**409**, o syncer **não sobrescreve** (seed-if-absent / DB-owned); `REGISTRY_SYNC_RECONCILE=true` restaura o
+reconcile legado. Cobre pool config + deploy-slot. Skills seguem upsert (código). Invariante "Seed-if-absent /
+DB-owned" registrada no `CLAUDE.md` § Configuration. Detalhe: `CHANGELOG.md` 2026-06-15.
+
+### Auditoria de provisionamento (atualiza §7 — todos os stores são if-absent)
+A correção "config some no rebuild" está **completa**:
+
+| Store | Mecanismo | Seed-if-absent? |
+|---|---|---|
+| Pools/deploy (agent-registry) | RegistrySyncer ← YAML | ✅ (Frente 3 Fase 1) |
+| platform_config (config-api) | initdb SQL + `config-seed` | ✅ (`overwrite=False`, skip existing) |
+| Pricing | `seed_pricing.py` | ✅ (`if existing`) |
+| Evaluation forms/campaigns | `seed_evaluation.py` | ✅ (verifica por nome) |
+| Users (auth) | `seed_auth.py` | ✅ users (409); ⚠ re-aplica `module_config` de demo-user (resíduo) |
+| Catálogo ABAC `module_registry` | `modules.yaml` startup | `DO UPDATE` — intencional (catálogo=código) |
+| Skills | RegistrySyncer | upsert — intencional (código) |
+
+### O que resta (Fase 2 arquitetural — DIFERIDA, baixa urgência)
+A **correção** está feita; o **sonho** ("setup inicial de DB versionado, sem YAML/seed scripts") segue como
+burn-down gradual: convergir tudo para **migração versionada if-absent** (modelo: `initdb/01_platform_config.sql`)
+e aposentar `infra/seed/*.py` + o YAML de registry, **store por store, sem retrabalho**. Nenhum bug — só
+arquitetura. Resíduo opcional: tornar o `set_module_config` do `seed_auth` if-absent (demo-users). Ideia: estender
+o guard (§8) para detectar seed que sobrescreve config DB-owned no restart.
