@@ -628,6 +628,17 @@ já aproxima o anchor), toca o caminho **mais frágil** (close) + consumidores c
 supervisor/bpm/server) e só é gateável por **paridade**. Alto custo/risco, payoff diferido (manutenibilidade).
 **Decisão**: fazer **oportunística** (quando um bug concreto justificar ou encostada em feature que já toque
 essas chaves), não como refactor standalone. Heartbeat priorizado antes (valor real).
+**Re-avaliação 2026-06-15 (pós Camada 3 + fan-out) — MANTÉM DIFERIDO**: as entregas recentes adicionaram
+bookkeeping paralelo (`human_seg:{instance}`, `hook_conf`, `posatt`, `contact_close_pending`, `close_arming`)
+**por cima** das 4 chaves, sem reestruturá-las; e os bugs corrigidos estavam no `session:meta` (last-writer) e
+no dedup por `pool_id`, **não** nas 4 chaves de contabilidade (que seguem aproximando o anchor corretamente).
+Nenhum dos 2 gatilhos foi atingido. Argumento contra reforçado: close path recém-estabilizado (2 runs verdes),
+refactor gateável só por paridade com raio cross-package (mcp-server supervisor/bpm/evaluation). Mapa atual:
+`human_agent` flag (~10 sites, hot path entrega) · `human_agents` SET (~10: remaining/restore/participant_left/
+fan-out) · `ai_agents` SET (~8: restore no close) · `active_ai_specialists` SET (~7: defer G2). Único
+incremento baixo-risco se encostar no path de entrega: derivar `human_agent` de `SCARD(human_agents)>0` — mas
+há aresta (flag setada mesmo com `instance_id` vazio em `activate_human_agent` → não é 1:1). Manter HASH único
+oportunístico.
 
 ### Detecção de queda involuntária de humano *(arco próprio)*
 Humano que cai (disconnect/crash) deixava o contato órfão (gap G4). Alvo: drop → re-rota ao pool do dono
