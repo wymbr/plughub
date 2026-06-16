@@ -30,6 +30,10 @@ interface PullInboxPanelProps {
   instanceId:   string
   /** Chamado após um claim bem-sucedido (sessionId) — ex.: selecionar na lista. */
   onClaimed?:   (sessionId: string) => void
+  /** F2b-2b — clicar na linha abre o preview read-only (sem claim). */
+  onPreview?:   (sessionId: string, poolId: string) => void
+  /** Sessão em preview no momento (highlight da linha). */
+  previewSessionId?: string | null
   /** Intervalo de polling em ms (default 4000). */
   pollMs?:      number
 }
@@ -43,7 +47,7 @@ function fmtAge(ms: number | null): string {
 }
 
 export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
-  pullPools, instanceId, onClaimed, pollMs = 4000,
+  pullPools, instanceId, onClaimed, onPreview, previewSessionId, pollMs = 4000,
 }) => {
   const { t } = useTranslation("agentAssist")
   const [contacts, setContacts] = useState<QueueContact[]>([])
@@ -117,16 +121,23 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
           {contacts.map(c => (
             <li
               key={c.session_id}
-              className="flex items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-gray-50"
+              className={`flex items-center justify-between gap-2 rounded px-2 py-1.5 ${
+                previewSessionId === c.session_id ? "bg-primary-light" : "hover:bg-gray-50"
+              }`}
             >
-              <div className="min-w-0">
+              <button
+                type="button"
+                onClick={() => onPreview?.(c.session_id, c.pool_id)}
+                className="min-w-0 flex-1 text-left"
+                title={t("pullInbox.previewHint", { defaultValue: "Ver contexto antes de atender" })}
+              >
                 <div className="text-sm text-dark truncate">
                   {c.summary ?? c.session_id.slice(0, 8)}
                 </div>
                 <div className="text-xs text-muted-light truncate">
                   {c.pool_id}{c.age_ms != null ? ` · ${fmtAge(c.age_ms)}` : ""}
                 </div>
-              </div>
+              </button>
               <button
                 type="button"
                 disabled={claiming === c.session_id}

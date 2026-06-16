@@ -31,7 +31,7 @@ import { useTranslation } from "react-i18next";
 import { useAuth } from "@/auth/useAuth";
 import { Clock, WifiOff } from "lucide-react";
 
-import { ActiveTab, ClosePayload, ResponseTimer } from "./types";
+import { ActiveTab, ClosePayload, ResponseTimer, ChatMessage } from "./types";
 import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
 import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
@@ -54,6 +54,9 @@ import {
 } from "./components/ParticipantFilterBar";
 import { CopilotBanner }   from "./components/CopilotBanner";
 import { WebRTCOverlay }   from "./components/WebRTCOverlay";
+
+// Set vazio estável para o preview read-only (ChatArea sem seleção de mensagens).
+const EMPTY_MESSAGE_IDS: Set<string> = new Set<string>();
 
 // ── AgentAssistPage ────────────────────────────────────────────────────────
 export const AgentAssistPage: React.FC = () => {
@@ -121,6 +124,57 @@ export const AgentAssistPage: React.FC = () => {
   const { state: supervisorState, refresh: refreshSupervisorState } = useSupervisorState(selectedSessionId, lastWsEvent);
   const capabilities = useSupervisorCapabilities(selectedSessionId, supervisorState);
   const copilotSuggestions = useCopilotState(selectedSessionId, lastCopilotEvent);
+
+  // ── F2b-2b — Preview read-only de contato em fila (pull) antes do claim ──
+  // Reusa os endpoints read-only existentes (conversation_history + supervisor_state),
+  // keyed só por sessionId — sem virar participante. Sem cache: ao trocar de alvo
+  // (ou sair do preview) o anterior é descartado (D2).
+  const [previewSessionId, setPreviewSessionId] = useState<string | null>(null);
+  const [previewPoolId,    setPreviewPoolId]    = useState<string | null>(null);
+  const [previewMessages,  setPreviewMessages]  = useState<ChatMessage[]>([]);
+  const { state: previewSupervisorState } = useSupervisorState(previewSessionId, lastWsEvent);
+
+  useEffect(() => {
+    if (!previewSessionId) { setPreviewMessages([]); return; }
+    let alive = true;
+    const load = async () => {
+      try {
+        const res  = await fetch(`/api/conversation_history/${previewSessionId}`);
+        const data = res.ok ? (await res.json() as { messages?: ChatMessage[] }) : { messages: [] };
+        if (alive) setPreviewMessages(data.messages ?? []);
+      } catch { /* transient — preview pode ficar momentaneamente vazio */ }
+    };
+    load();
+    const id = setInterval(load, 4000);   // D3 — segue o poll
+    return () => { alive = false; clearInterval(id); };
+  }, [previewSessionId]);
+
+  const handlePreviewQueueContact = useCallback((sessionId: string, poolId: string) => {
+    setSelectedSessionId(null);   // sai do atendimento focado → centro mostra o preview
+    setPreviewSessionId(sessionId);
+    setPreviewPoolId(poolId);
+  }, [setSelectedSessionId]);
+
+  const claimPreviewContact = useCallback(async (sessionId: string, poolId: string) => {
+    const instanceId = session?.userId ? `human-${session.userId}` : "";
+    try {
+      const res = await fetch(`/api/work_queue/claim/${encodeURIComponent(sessionId)}`, {
+        method:  "POST",
+        headers: { "content-type": "application/json" },
+        body:    JSON.stringify({ pool_id: poolId, instance_id: instanceId }),
+      });
+      const result = await res.json() as { claimed?: boolean; reason?: string };
+      if (result.claimed) {
+        setPreviewSessionId(null);
+        setPreviewPoolId(null);
+        setSelectedSessionId(sessionId);   // o WS conversation.assigned anexa o contato real
+      } else {
+        addToast(t(`pullInbox.claimReason.${result.reason ?? "failed"}`, { defaultValue: result.reason ?? "" }), "error");
+      }
+    } catch (e) {
+      addToast(String(e), "error");
+    }
+  }, [session, setSelectedSessionId, addToast, t]);
 
   // Arc 11 / console-acoes-tab — mentionable agents for current pool
   const currentPoolId     = selected?.poolId ?? null;
@@ -481,16 +535,38 @@ export const AgentAssistPage: React.FC = () => {
             )}
           </div>
 
-          {/* Center column header: ActionBar only (no tab switcher) */}
+          {/* Center column header: ActionBar (atendimento) ou barra de preview (fila pull) */}
           <div className="flex flex-1 overflow-hidden">
-            <ActionBar
-              contact={selected}
-              onEncerrar={() => { if (selected) handleClose(selected.sessionId, { issue_status: "closed", outcome: "resolved" }); }}
-              onTransferTo={handleTransferTo}
-              onDesligar={handleDesligar}
-              substitutionMode={substitutionMode}
-              onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
-            />
+            {(!selected && previewSessionId) ? (
+              <div className="flex items-center gap-2 px-4 w-full">
+                <span className="text-xs font-mono text-muted truncate">{previewSessionId.slice(0, 8)}</span>
+                {previewPoolId && <span className="text-2xs text-muted-light">· {previewPoolId}</span>}
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => { if (previewSessionId) claimPreviewContact(previewSessionId, previewPoolId ?? ""); }}
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90"
+                >
+                  {t("pullInbox.claim", { defaultValue: "Atender (Pull)" })}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
+                  className="rounded border border-border px-2.5 py-1.5 text-xs text-muted hover:text-dark"
+                >
+                  {t("common.close", { defaultValue: "Fechar" })}
+                </button>
+              </div>
+            ) : (
+              <ActionBar
+                contact={selected}
+                onEncerrar={() => { if (selected) handleClose(selected.sessionId, { issue_status: "closed", outcome: "resolved" }); }}
+                onTransferTo={handleTransferTo}
+                onDesligar={handleDesligar}
+                substitutionMode={substitutionMode}
+                onToggleSubstitutionMode={() => setSubstitutionMode(prev => !prev)}
+              />
+            )}
           </div>
 
           {/* Right-panel tab bar: Agentes · Contexto · Histórico */}
@@ -533,14 +609,16 @@ export const AgentAssistPage: React.FC = () => {
                   availablePools.find(ap => ap.pool_id === p)?.dispatch_mode === "pull"
                 )}
                 instanceId={session?.userId ? `human-${session.userId}` : ""}
-                onClaimed={(sid) => setSelectedSessionId(sid)}
+                previewSessionId={previewSessionId}
+                onPreview={handlePreviewQueueContact}
+                onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
               />
             </div>
           </div>
 
           {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}
           <div className="flex flex-col flex-1 overflow-hidden bg-white">
-            {!selected ? (
+            {(!selected && !previewSessionId) ? (
               <div className="flex-1 flex flex-col items-center justify-center text-muted text-sm select-none gap-3">
                 {activePools.length === 0 ? (
                   <>
@@ -556,7 +634,7 @@ export const AgentAssistPage: React.FC = () => {
                   </>
                 )}
               </div>
-            ) : (
+            ) : selected ? (
               <>
                 {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}
                 {selected.channel === "webrtc" && (
@@ -612,6 +690,30 @@ export const AgentAssistPage: React.FC = () => {
                   capabilities={selected.capabilities ?? null}
                 />
               </>
+            ) : (
+              /* F2b-2b — preview read-only do contato em fila (sem input; "Atender" na action bar) */
+              <>
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-warning-light border-b border-warning/30 text-xs text-warning-text">
+                  <Clock className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+                  <span>{t("pullInbox.previewBanner", { defaultValue: "Contato em espera — visualização read-only. Use \"Atender\" para assumir." })}</span>
+                </div>
+                <ChatArea
+                  messages={previewMessages}
+                  aiTyping={false}
+                  sessionClosed={false}
+                  liveState={previewSupervisorState ? {
+                    sentimentScore: previewSupervisorState.sentiment.current,
+                    sentimentAlert: previewSupervisorState.sentiment.alert,
+                    sentimentTrend: previewSupervisorState.sentiment.trend,
+                    intent:         previewSupervisorState.intent.current,
+                    flags:          previewSupervisorState.flags,
+                  } : null}
+                  substitutionMode={false}
+                  onMenuSubmit={() => {}}
+                  selectedMessageIds={EMPTY_MESSAGE_IDS}
+                  onToggleSelection={() => {}}
+                />
+              </>
             )}
           </div>
 
@@ -619,11 +721,11 @@ export const AgentAssistPage: React.FC = () => {
           <div className="w-[280px] flex-shrink-0 border-l border-border overflow-hidden bg-surface-muted">
             <RightPanel
               activeTab={activeTab}
-              supervisorState={selected?.supervisorState ?? null}
+              supervisorState={selected ? (selected.supervisorState ?? null) : previewSupervisorState}
               customerId={selected?.contactId ?? null}
               tenantId={session?.tenantId}
-              sessionId={selected?.sessionId ?? null}
-              sessionMessages={selected?.messages ?? []}
+              sessionId={selected?.sessionId ?? previewSessionId}
+              sessionMessages={selected ? selected.messages : previewMessages}
               onTerminateSegment={handleTerminateSegment}
               agentName={agentName}
               substitutionMode={substitutionMode}

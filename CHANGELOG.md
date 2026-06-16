@@ -2,6 +2,28 @@
 
 ---
 
+## Frente 1 — Pull F2b-2b-1: preview/triagem read-only antes do claim (2026-06-16)
+
+Triagem da fila pull: o operador **percorre os contatos em espera e vê contexto+histórico** antes de escolher
+qual atender — sem virar participante até o claim. **Puro UI** (backend já coberto por endpoints read-only
+existentes, keyed só por `sessionId`):
+
+- **Mensagens (centro)**: reusa `GET /api/conversation_history/:sessionId` (carrega tudo — D2).
+- **Contexto/SLA (abas direitas)**: reusa `GET /api/supervisor_state/:sessionId` via `useSupervisorState`.
+- **Fluxo**: clicar na **linha** da inbox (`PullInboxPanel`) → `previewSessionId` → centro renderiza a conversa
+  **read-only** (banner + `ChatArea` sem input) + abas Context/History, exatamente como um atendimento; action
+  bar troca para **"Atender (Pull)"** + **Fechar**. Linha previewada destacada; trocar de linha troca o preview;
+  poll 4s (D3). **Sem cache** (D2): ao trocar/fechar descarta o anterior. **Atender** → claim existente → WS
+  `conversation.assigned` anexa o contato real e seleciona. Botão **Pull** por-linha mantido como claim rápido.
+- Arquivos: `AgentAssistPage.tsx` (estado/preview/claim + branch de render centro/header/direita ciente de
+  preview), `PullInboxPanel.tsx` (linha clicável + highlight). Sem mudança de backend.
+
+**E2E**: fila → clica a linha → preview read-only (system+cliente) → "Atender (Pull)" → atende (input/Serving) →
+Close encerra no webchat. **Rebuild**: platform-ui. **Próximo (F2b-2b-2)**: polish — cor por SLA, gating de
+capacidade, idade auto-refresh.
+
+---
+
 ## Frente 1 — Pull F2 (API + tools + inbox no Console) + fix de propagação de pool_config (2026-06-16)
 
 Pull usável ponta-a-ponta: o operador vê a fila pull no Console e puxa o contato.

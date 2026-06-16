@@ -2,7 +2,9 @@
 
 > **Contexto:** a interface humana do **dispatch pull genérico** (`routing-pull-dispatch-spec.md`). **Integrada ao Console** (não é tela à parte): reusa o layout de atendimento push — lista à esquerda, conteúdo no meio, action bar — para minimizar UI nova e manter a memória muscular do operador.
 > **Genérica:** lista qualquer contato de pool pull (e-mail, back-office, webhook/aprovação). A **aprovação** é uma especialização (pacote/decisões por cima).
-> **Status:** especificação de UI. **Data:** Junho 2026.
+> **Status:** especificação de UI. **Implementado:** inbox (F2b-2a) + preview read-only/triagem (F2b-2b-1) — ver CHANGELOG 2026-06-16. **Pendente:** polish (cor por SLA, gating de capacidade, idade auto-refresh — F2b-2b-2). **Data:** Junho 2026.
+>
+> **Notas de implementação (2026-06-16):** o painel da fila (`PullInboxPanel`) está ancorado no rodapé da coluna de contatos (não num rail dedicado piscante — simplificação). O preview reusa `GET /api/conversation_history/:sessionId` (centro) e `GET /api/supervisor_state/:sessionId` (abas Context/History), ambos read-only por `sessionId`, sem backend novo. Clicar na linha → preview read-only; action bar "Atender (Pull)"/"Fechar"; o botão Pull por-linha é atalho de claim direto.
 
 ---
 

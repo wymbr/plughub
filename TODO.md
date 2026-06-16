@@ -884,11 +884,13 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     propagação de `pool_config`** (`publishRegistryChanged` no POST/PUT de pool + `agent_kind`/`dispatch_mode`/…
     no `_pool_config_diverged.MANAGED`) — destravou login humano em pool human e toggle push↔pull. **E2E OK**:
     parqueia → lista → Pull → atende (bidirecional).
-  - **F2b-2b (próxima) — preview/triagem antes do claim** *(pedido do usuário)*: hoje a inbox só mostra
-    `session_id` + idade e puxa às cegas. Falta o operador **percorrer os contatos da fila e ver
-    contexto+histórico de cada um ANTES de escolher** qual atender. Itens: preview read-only no centro ao
-    selecionar (não-claim) um item da fila; resumo/identidade + últimas mensagens do stream; cor por SLA;
-    indicador de capacidade; "Pull" explícito só após inspecionar. **Desenho antes de implementar.**
+  - **F2b-2b-1 ✅ (2026-06-16) — preview/triagem read-only antes do claim** *(pedido do usuário)*: clicar na
+    linha da inbox abre preview read-only no centro (conversa via `conversation_history` + abas Context/History
+    via `supervisor_state`, ambos read-only por sessionId — **sem backend novo**), action bar "Atender (Pull)"/
+    "Fechar", input oculto, poll 4s, sem cache ao trocar. Atender → claim existente → atende. **E2E OK**.
+  - **F2b-2b-2 (próxima) — polish**: cor por SLA nas linhas da fila (verde/amarelo/vermelho por idade×SLA);
+    gating de capacidade (bloqueia "Atender" no teto de sessões simultâneas); idade auto-refresh; opcional:
+    limpar o preview se o contato for reivindicado por outro agente (sai da `list`).
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
