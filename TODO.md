@@ -865,9 +865,15 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
   volta claimável + vaga liberada por `agent_done`/`release_instance`. **Diferido** (spec "sem sweep dedicado"):
   renovação da lease por heartbeat + sweeper de "conectado-mas-ocioso" (a inbox da F2 sinaliza melhor). Testes
   6/6 + suíte 96 verde. **Pull core (F1.0–F1.3) COMPLETO.**
-- **F2 (próxima)** — tools mcp-server (`work_queue_list`/`claim`/`release`) + **API HTTP no routing** (o engine
-  não tem hoje) + **inbox no Console** (3-zonas, preview→Pull, cor SLA, capacidade). É onde o pull vira usável
-  ponta-a-ponta (E2E pela UI) + valida o auto-release completo.
+- **F2** — tools mcp-server + API HTTP no routing + inbox no Console. Sub-fatiada:
+  - **F2a-1 ✅ (2026-06-15)** — API HTTP no routing (`http_api.py`, aiohttp): `POST /v1/work_queue/{claim,release}`
+    → `Router.work_task_claim/release`; `/health`; auth `X-Admin-Token` opcional; porta `ROUTING_HTTP_PORT`
+    (3550). `main.py` injeta `router._producer` (liga claim routed **e** `queue.position_updated`, antes latente)
+    + inicia o server. `aiohttp` no pyproject. Validado (health + claim wiring) + suíte 96 verde.
+  - **F2a-2 (próxima)** — tools mcp-server: `work_queue_list` (Redis-direct) + `work_task_claim`/`release`
+    (HTTP → API routing), com `accessible_pools` (ABAC) + capacidade.
+  - **F2b** — inbox no Console (3-zonas, preview→Pull, cor SLA, capacidade, heartbeat). E2E pela UI + valida
+    auto-release.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

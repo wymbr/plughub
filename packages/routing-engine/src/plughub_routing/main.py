@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from .evaluation_consumer import EvaluationConsumer, load_evaluation_flow
 from .models import ConversationInboundEvent, ConversationRoutedEvent
 from .registry import InstanceRegistry, PoolRegistry
 from .router import Router
+from .http_api import start_http_api
 from .kafka_listener import run_listeners
 from .routing_config import routing_config
 from . import mute_queue
@@ -69,6 +71,18 @@ async def run() -> None:
     await consumer.start()
     await producer.start()
     logger.info("✅ Routing Engine started — consuming %s", settings.kafka_topic_inbound)
+
+    # F2a: o Router publica conversations.routed em work_task_claim (pull) e
+    # queue.position_updated nos contatos enfileirados — ambos via self._producer.
+    # O Router foi criado antes do producer (linha ~41), então injeta-se agora.
+    router._producer = producer
+
+    # F2a-1: API HTTP do dispatch pull (claim/release). O Routing Engine continua o
+    # único árbitro — ZREM/claim/mark_busy/lease/routed acontecem DENTRO dele; a
+    # Console/mcp-server só solicita. (work_queue_list é Redis-direta no mcp-server.)
+    http_api_runner = await start_http_api(
+        router, int(os.getenv("ROUTING_HTTP_PORT", "3550"))
+    )
 
     # Start kafka_listener in background (populates Redis cache of pools and instances)
     listener_task = asyncio.create_task(
@@ -158,6 +172,7 @@ async def run() -> None:
         occupancy_task.cancel()
         admission_reconcile_task.cancel()
         evaluation_task.cancel()
+        await http_api_runner.cleanup()
         await consumer.stop()
         await producer.stop()
         await redis_client.aclose()
