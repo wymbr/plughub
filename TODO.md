@@ -895,8 +895,9 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     (F1.2) com feedback antecipado. **Frente 1 / Pull — completa (F1+F2).**
   - **F2b-2b-3 ✅ (2026-06-16)** — agrupamento da inbox por pool (cabeçalho recolhível nome+contagem; dentro do
     grupo mais-antigo-primeiro; pool_id sai da linha). Facilita localizar contatos por fila.
-  - **F2b-2b-4 (próxima, opcional)** — divisória ajustável entre área de contatos e fila pull (drag handle +
-    persistir proporção em localStorage). Hoje o split é 50/50 fixo.
+  - **F2b-2b-4 ✅ (2026-06-16)** — divisória arrastável entre contatos e fila pull: `flexBasis` da área de
+    contatos controlado por drag (clamp 15–85%), persistido em `localStorage` (`plughub_pull_split_pct`).
+    **Frente 1 / Pull — encerrada (F1 + F2 + polish).**
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

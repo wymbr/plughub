@@ -184,6 +184,7 @@
     "previewHint":   "Preview context before claiming",
     "previewBanner": "Waiting contact — read-only preview. Use \"Claim\" to take it.",
     "atCapacity":    "Maximum concurrent sessions reached",
+    "resizeHint":    "Drag to resize",
     "claimReason": {
       "already_claimed": "Already claimed by another agent",
       "no_capacity":     "No capacity available",

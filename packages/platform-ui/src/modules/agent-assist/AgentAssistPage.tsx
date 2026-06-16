@@ -93,6 +93,36 @@ export const AgentAssistPage: React.FC = () => {
   const [showPauseModal,    setShowPauseModal]      = useState(false);
   // Participant filter bar
   const [filterKey,         setFilterKey]          = useState<FilterKey>(null);
+  // F2b-2b-4 — divisória ajustável (contatos × fila pull), persistida em localStorage.
+  const splitColRef = useRef<HTMLDivElement | null>(null);
+  const [contactsPct, setContactsPct] = useState<number>(() => {
+    try {
+      const v = Number(localStorage.getItem("plughub_pull_split_pct"));
+      if (Number.isFinite(v) && v >= 15 && v <= 85) return v;
+    } catch { /* ignore */ }
+    return 50;
+  });
+  const pctRef = useRef(contactsPct);
+  pctRef.current = contactsPct;
+  const startSplitDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const col = splitColRef.current;
+    if (!col) return;
+    const onMove = (ev: MouseEvent) => {
+      const rect    = col.getBoundingClientRect();
+      const pct     = ((ev.clientY - rect.top) / rect.height) * 100;
+      const clamped = Math.min(85, Math.max(15, pct));
+      pctRef.current = clamped;
+      setContactsPct(clamped);
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      try { localStorage.setItem("plughub_pull_split_pct", String(Math.round(pctRef.current))); } catch { /* ignore */ }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
   // Arc 11 Fase C — message selection and delegation
   const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
   const [showDelegarDrawer,  setShowDelegarDrawer]  = useState(false);
@@ -606,10 +636,13 @@ export const AgentAssistPage: React.FC = () => {
         <div className="flex flex-1 overflow-hidden">
 
           {/* Contact list */}
-          <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden flex flex-col">
-            {/* Contatos atendidos — quando há fila pull, divide a coluna em duas
-                metades (atendidos × pull); senão ocupa tudo. Cada metade rola. */}
-            <div className="flex-1 min-h-0 overflow-hidden">
+          <div ref={splitColRef} className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden flex flex-col">
+            {/* Contatos atendidos — quando há fila pull, divide a coluna (proporção
+                ajustável via divisória); senão ocupa tudo. Cada metade rola. */}
+            <div
+              className={`min-h-0 overflow-hidden ${hasPullQueues ? "" : "flex-1"}`}
+              style={hasPullQueues ? { flexBasis: `${contactsPct}%`, flexGrow: 0, flexShrink: 0 } : undefined}
+            >
               <ContactList
                 contacts={[...contacts.values()]}
                 selectedSessionId={selectedSessionId}
@@ -617,21 +650,31 @@ export const AgentAssistPage: React.FC = () => {
                 onSelect={handleSelectContact}
               />
             </div>
-            {/* Frente 1 — inbox das filas pull: metade inferior da coluna (não rodapé) */}
+            {/* Frente 1 — inbox das filas pull: parte inferior da coluna */}
             {hasPullQueues && (
-              <div className="flex-1 min-h-0 overflow-y-auto border-t border-border">
-                <PullInboxPanel
-                  pullPools={pullPoolIds}
-                  instanceId={session?.userId ? `human-${session.userId}` : ""}
-                  poolSla={poolSlaMap}
-                  claimDisabled={atCapacity}
-                  claimDisabledReason={t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" })}
-                  previewSessionId={previewSessionId}
-                  onPreview={handlePreviewQueueContact}
-                  onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
-                  onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
+              <>
+                {/* F2b-2b-4 — divisória arrastável (ajusta a proporção contatos × fila) */}
+                <div
+                  onMouseDown={startSplitDrag}
+                  className="h-1 flex-shrink-0 cursor-row-resize bg-border hover:bg-primary/40"
+                  title={t("pullInbox.resizeHint", { defaultValue: "Arraste para ajustar" })}
+                  role="separator"
+                  aria-orientation="horizontal"
                 />
-              </div>
+                <div className="flex-1 min-h-0 overflow-y-auto">
+                  <PullInboxPanel
+                    pullPools={pullPoolIds}
+                    instanceId={session?.userId ? `human-${session.userId}` : ""}
+                    poolSla={poolSlaMap}
+                    claimDisabled={atCapacity}
+                    claimDisabledReason={t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" })}
+                    previewSessionId={previewSessionId}
+                    onPreview={handlePreviewQueueContact}
+                    onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
+                    onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
+                  />
+                </div>
+              </>
             )}
           </div>
 

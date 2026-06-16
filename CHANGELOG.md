@@ -38,6 +38,15 @@ recolhível (nome + contagem + chevron) por fila; dentro de cada fila, ordem **m
 a cor por SLA reforça). O `pool_id` saiu da linha (vira o cabeçalho) → linhas mais limpas. Resolve a localização
 quando há contatos de várias filas misturados. Só UI (`PullInboxPanel.tsx`).
 
+**F2b-2b-4 — divisória ajustável (2026-06-16)**: a fronteira entre a área de contatos e a fila pull virou uma
+**divisória arrastável** (`flexBasis` da área de contatos, clamp 15–85%), com a proporção persistida em
+`localStorage` (`plughub_pull_split_pct`). Substitui o split 50/50 fixo. Só UI (`AgentAssistPage.tsx` + chave
+i18n `pullInbox.resizeHint`).
+
+**Limpeza**: removido o botão **Pull** por-linha da inbox — o claim passa a ser exclusivamente pelo fluxo de
+preview ("Atender (Pull)" na action bar). A linha permanece clicável (abre o preview). **Frente 1 / Pull
+encerrada (F1 + F2 + polish).**
+
 ---
 
 ## Frente 1 — Pull F2 (API + tools + inbox no Console) + fix de propagação de pool_config (2026-06-16)

@@ -184,6 +184,7 @@
     "previewHint":   "Ver contexto antes de atender",
     "previewBanner": "Contato em espera — visualização read-only. Use \"Atender\" para assumir.",
     "atCapacity":    "Capacidade máxima de atendimentos atingida",
+    "resizeHint":    "Arraste para ajustar",
     "claimReason": {
       "already_claimed": "Já reivindicado por outro agente",
       "no_capacity":     "Sem capacidade disponível",

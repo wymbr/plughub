@@ -221,17 +221,6 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                               </div>
                             )}
                           </button>
-                          <button
-                            type="button"
-                            disabled={claiming === c.session_id || claimDisabled}
-                            onClick={() => handlePull(c)}
-                            title={claimDisabled ? claimDisabledReason : undefined}
-                            className="shrink-0 rounded bg-primary px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
-                          >
-                            {claiming === c.session_id
-                              ? t("pullInbox.pulling", { defaultValue: "..." })
-                              : t("pullInbox.pull", { defaultValue: "Pull" })}
-                          </button>
                         </li>
                       )
                     })}
