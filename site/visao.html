@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Visão: a próxima etapa da IA não é responder, é resolver o processo</title>
+<meta name="description" content="A visão do PlugHub: o valor da IA migrou de responder contatos isolados para conduzir processos inteiros — com humanos e IA na mesma conversa, qualidade auditável e automação na velocidade da confiança.">
+<meta property="og:title" content="PlugHub — A próxima etapa da IA não é responder. É resolver o processo.">
+<meta property="og:description" content="Humanos e IA na mesma conversa. Processos que você confia porque pode medir. Automação que avança na velocidade que você permitir.">
+<meta property="og:type" content="article">
+<link rel="alternate" hreflang="pt-BR" href="visao.html">
+<link rel="alternate" hreflang="en" href="en/vision.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --green:#059669; --warning:#D97706; --ink:#16242f; --muted:#56697a;
+    --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .narrow{max-width:760px}
+  section{scroll-margin-top:72px}
+  h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+  .eyebrow{font-size:13px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--secondary)}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:15px;padding:12px 22px;border-radius:9px;border:1.5px solid transparent;cursor:pointer;transition:.15s}
+  .btn-primary{background:var(--primary);color:#fff}
+  .btn-primary:hover{background:var(--primary-d)}
+  .btn-ghost{background:transparent;color:var(--primary);border-color:var(--line)}
+  .btn-ghost:hover{border-color:var(--secondary);background:var(--soft)}
+  .btn-light{background:#fff;color:var(--primary)}
+  .btn-outline-light{background:transparent;color:#fff;border-color:rgba(255,255,255,.4)}
+  .btn-outline-light:hover{border-color:#fff;background:rgba(255,255,255,.1)}
+
+  header{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
+  .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
+  .nav-links{display:flex;align-items:center;gap:26px}
+  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}
+  .nav-links a.lnk:hover{color:var(--primary)}
+  .nav-links a.lnk.active{color:var(--primary);font-weight:600}
+  .nav-cta{display:flex;align-items:center;gap:10px}
+  .nav-cta .btn{padding:9px 16px;font-size:14px}
+  .menu-btn{display:none;background:none;border:0;font-size:24px;color:var(--primary);cursor:pointer}
+  .lang{font-size:12.5px;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:7px 10px;letter-spacing:.02em}
+  .lang:hover{color:var(--primary);border-color:var(--secondary)}
+
+  .hero{background:linear-gradient(180deg,var(--soft2),#fff);padding:84px 0 56px;border-bottom:1px solid var(--line)}
+  .hero h1{font-size:44px;font-weight:700;max-width:820px}
+  .hero .sub{font-size:19px;color:var(--muted);max-width:680px;margin-top:18px}
+  .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}
+
+  .sec{padding:60px 0}
+  .sec.alt{background:var(--soft)}
+  .sec-head{max-width:760px;margin-bottom:18px}
+  .sec-head h2{font-size:30px;font-weight:700;margin-top:8px}
+  .lead{font-size:18px;color:var(--ink);max-width:760px;margin-top:14px}
+  .lead.muted{color:var(--muted)}
+  p.body{font-size:17px;color:var(--muted);max-width:760px;margin-top:14px}
+  p.body strong{color:var(--primary)}
+
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:24px}
+  .card h3{font-size:18px;font-weight:600;color:var(--primary);margin-bottom:8px}
+  .card p{color:var(--muted);font-size:15px}
+  .card a.more{color:var(--secondary);font-weight:600;font-size:14px}
+
+  .dial{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:26px}
+  .step{border:1px solid var(--line);border-radius:12px;padding:20px;background:#fff;position:relative}
+  .step .n{font-size:12px;font-weight:700;letter-spacing:.05em;color:var(--accent)}
+  .step h4{font-size:16px;font-weight:600;color:var(--ink);margin:6px 0}
+  .step p{font-size:14px;color:var(--muted)}
+  .step.s1{border-left:4px solid var(--primary)}
+  .step.s2{border-left:4px solid var(--secondary)}
+  .step.s3{border-left:4px solid var(--accent)}
+
+  .quote{font-size:22px;line-height:1.5;color:var(--ink);max-width:820px;border-left:4px solid var(--accent);padding:6px 0 6px 22px;margin-top:22px}
+  .quote strong{color:var(--primary)}
+
+  .cta{background:var(--dark);color:#fff;border-radius:20px;padding:52px 40px;text-align:center}
+  .cta h2{font-size:30px;font-weight:700}
+  .cta p{color:#a9c2d8;font-size:17px;margin:14px auto 26px;max-width:580px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+  footer{border-top:1px solid var(--line);padding:48px 0 32px;background:var(--soft);font-size:14px;color:var(--muted)}
+  .fcols{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr;gap:24px;margin-bottom:28px}
+  footer h5{font-size:13px;font-weight:700;color:var(--ink);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px}
+  footer a{display:block;color:var(--muted);margin-bottom:7px}
+  footer a:hover{color:var(--primary)}
+  .fbottom{border-top:1px solid var(--line);padding-top:18px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:13px}
+
+  @media (max-width:860px){
+    .nav-links{display:none}.menu-btn{display:block}
+    .nav-links.open{display:flex;position:absolute;top:64px;left:0;right:0;background:#fff;flex-direction:column;align-items:flex-start;gap:14px;padding:20px 24px;border-bottom:1px solid var(--line)}
+    .hero h1{font-size:32px}.hero .sub{font-size:17px}
+    .g2,.dial{grid-template-columns:1fr}
+    .sec-head h2{font-size:25px}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a href="index.html" class="brand"><span class="dot"></span>PlugHub</a>
+    <nav class="nav-links" id="navlinks">
+      <a class="lnk active" href="visao.html" aria-current="page">Visão</a>
+      <a class="lnk" href="index.html#como-funciona">Como funciona</a>
+      <a class="lnk" href="index.html#canais">Canais</a>
+      <a class="lnk" href="index.html#solucoes">Soluções</a>
+      <a class="lnk" href="desenvolvedores.html">Desenvolvedores</a>
+      <a class="lnk" href="qualidade.html">Qualidade</a>
+      <a class="lnk" href="compliance.html">Compliance</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="lang" href="en/vision.html" hreflang="en" aria-label="English version">EN</a>
+      <a class="btn btn-ghost" href="/docs">Documentação</a>
+      <a class="btn btn-primary" href="index.html#testar">Começar a testar</a>
+    </div>
+    <button class="menu-btn" onclick="document.getElementById('navlinks').classList.toggle('open')" aria-label="Menu">≡</button>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <p class="eyebrow">Visão do produto</p>
+      <h1>A próxima etapa da IA não é responder. É resolver o processo.</h1>
+      <p class="sub">Humanos e IA na mesma conversa. Processos que você confia porque pode medir. Automação que avança na velocidade que você permitir.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="index.html#como-funciona">Ver como funciona →</a>
+        <a class="btn btn-ghost" href="/docs">Documentação</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ONDA 1 -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">A primeira onda já passou</p><h2>Respostas isoladas não somam num resultado.</h2></div>
+      <p class="body">A primeira geração de IA aplicada ao atendimento aprendeu a <strong>responder bem</strong> — e responde cada vez melhor. O limite não está na qualidade de cada resposta; está no fato de que cada resposta vive <strong>isolada</strong>. A IA resolve com competência o contato que tem diante de si, mas não enxerga que aquele contato é um passo dentro de um processo maior: a mesma pessoa que pergunta hoje é a que negociou ontem e vai pagar amanhã, em outro canal, falando com outro atendente. Quando cada interação é tratada como um evento solto, o ganho fica preso ali — responde-se o passo, não se conduz o processo. E é <strong>entre os passos</strong>, nas conexões que ninguém costura, que mora a maior parte do valor não capturado.</p>
+      <p class="body">Por isso, em muitos cenários, o retorno de automatizar respostas isoladas tem ficado aquém do esperado — não porque as respostas sejam ruins, mas porque uma sequência de respostas desconectadas não soma num resultado. O próximo salto não é responder melhor. É <strong>ligar essas respostas num processo que chega ao fim</strong>.</p>
+    </div>
+  </section>
+
+  <!-- VALOR NO PROCESSO -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Para onde o valor migrou</p><h2>O valor migrou para o processo.</h2></div>
+      <p class="body">O próximo salto — e o maior retorno — não está em responder mais rápido. Está em <strong>automatizar e reinventar o processo inteiro</strong>: a cobrança que começa numa mensagem e termina num acordo pago; o onboarding que cruza e-mail, chat e voz ao longo de dias; a retenção que precisa entender o cliente antes de falar com ele. Aqui o ganho não é medido em minutos economizados — é medido em <strong>dinheiro recuperado, churn evitado, ciclo encurtado, capital de giro liberado</strong>. E o desperdício de verdade não vive dentro da conversa; vive <strong>entre as etapas</strong> — nos handoffs, no retrabalho, na espera, no dado que se perde de um sistema para outro.</p>
+      <p class="body">Essa é a etapa menos trivial. E é exatamente para ela que o PlugHub foi construído.</p>
+    </div>
+  </section>
+
+  <!-- CONFIANÇA -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">O verdadeiro obstáculo</p><h2>O que trava a automação de processo não é a IA — é a confiança.</h2></div>
+      <p class="body">Entregar um processo de verdade a uma automação exige três coisas que nenhum modelo, sozinho, oferece: <strong>conhecimento do processo, integração com a realidade dos sistemas que já existem, e prova de que se pode confiar</strong>. Ninguém coloca a cobrança, o crédito ou a saúde de um cliente nas mãos de uma automação que não consegue medir, auditar e reverter.</p>
+      <p class="body">O PlugHub trata a confiança como o produto, não como um detalhe. Cada decisão da automação é <strong>medida, auditável e reversível</strong>. Você não recebe uma caixa-preta com uma taxa de acerto autodeclarada — você recebe evidência, por etapa, de que o processo está sendo conduzido com qualidade.</p>
+    </div>
+  </section>
+
+  <!-- DIAL DO ANTEPARO -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">A ideia central</p><h2>O dial do anteparo — automação na velocidade da confiança.</h2></div>
+      <p class="body">No modelo antigo, a IA tenta resolver e, quando falha, joga para o humano. O humano é só a rede de segurança — um anteparo que recebe o que sobra, sempre num único sentido. No PlugHub, humano e IA são <strong>participantes iguais da mesma conversa</strong>. O humano começa no comando do processo, a IA assume pedaços, e a cada pedaço que a avaliação prova confiável, o humano recua — de forma medida, auditada e reversível.</p>
+      <div class="dial">
+        <div class="step s1"><p class="n">PASSO 1</p><h4>Humano no comando</h4><p>O processo começa conduzido por pessoas, com a IA apoiando onde já é seguro.</p></div>
+        <div class="step s2"><p class="n">PASSO 2</p><h4>A IA assume o que se prova</h4><p>Cada etapa que a avaliação mostra confiável passa a ser conduzida pela automação.</p></div>
+        <div class="step s3"><p class="n">PASSO 3</p><h4>Recuo medido e reversível</h4><p>O anteparo humano recua na velocidade que a evidência permite — e retoma na hora se a confiança cai.</p></div>
+      </div>
+      <p class="quote">O anteparo não é um fallback permanente; é um <strong>dial</strong> que se move em direção à automação na velocidade que a confiança permitir. Você não escolhe entre "tudo humano" e "tudo robô". Você gira o dial.</p>
+    </div>
+  </section>
+
+  <!-- COMO TORNA POSSÍVEL -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Como o PlugHub torna isso possível</p><h2>Quatro fundamentos, já na arquitetura.</h2></div>
+      <div class="grid g2">
+        <div class="card">
+          <h3>Humano e IA na mesma sessão, como iguais</h3>
+          <p>Não há "transferência para o atendente" como ruptura. Há uma conversa única onde pessoas e agentes de IA entram, saem, colaboram e se revezam — com o cliente sempre na mesma linha.</p>
+          <a class="more" href="index.html#como-funciona">Ver como funciona →</a>
+        </div>
+        <div class="card">
+          <h3>Qualidade que se vê, se mede e melhora</h3>
+          <p>Teste antes de soltar, acompanhe a qualidade de cada resolução em tempo real, compare versões e audite qualquer interação. A automação melhora porque você vê onde ela acerta e onde erra — e ajusta com base em evidência.</p>
+          <a class="more" href="qualidade.html">Conhecer Qualidade →</a>
+        </div>
+        <div class="card">
+          <h3>Dado sensível sem exposição</h3>
+          <p>Cartão, CPF, dado bancário ou de saúde são capturados e processados dentro da conversa, com quem atende <strong>supervisionando o progresso sem ver o dado bruto</strong>. Cada participante vê só o que precisa — por campo, por papel — com auditoria completa.</p>
+          <a class="more" href="compliance.html">Conhecer Compliance →</a>
+        </div>
+        <div class="card">
+          <h3>O processo como unidade — e sem amarras</h3>
+          <p>A jornada inteira do cliente — todos os contatos, canais e dias de um mesmo processo — é tratada como uma coisa só, medida no nível do resultado. E sem lock-in de LLM, framework ou nuvem: roda por cima do que você já tem.</p>
+          <a class="more" href="index.html#cliente">Ver continuidade do processo →</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- POR QUE PAGA -->
+  <section class="sec alt">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Por que isso paga</p><h2>Muda o numerador do ROI.</h2></div>
+      <p class="body">Automatizar uma resposta economiza o custo de uma resposta. Automatizar um processo <strong>libera receita, recupera dinheiro e reduz o ciclo de ponta a ponta</strong>. O retorno do nível do processo é de outra ordem de grandeza — e é defensável, porque está amarrado a métricas de negócio que a diretoria já acompanha, não a um custo de atendimento que sempre será espremido.</p>
+    </div>
+  </section>
+
+  <!-- PROMESSA / CTA -->
+  <section class="sec">
+    <div class="wrap">
+      <div class="cta">
+        <h2>Não é sobre responder mais rápido.</h2>
+        <p>É sobre resolver o que importa — e poder provar que resolveu. Humanos e IA, na mesma conversa; processos que você confia porque pode medir; automação que avança na velocidade que você permitir.</p>
+        <div class="cta-row">
+          <a class="btn btn-light" href="index.html#como-funciona">Ver como funciona →</a>
+          <a class="btn btn-outline-light" href="/docs">Documentação</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="fcols">
+      <div>
+        <div class="brand" style="margin-bottom:10px"><span class="dot"></span>PlugHub</div>
+        <p style="max-width:260px">Orquestração de agentes humanos e IA para atendimento e automação. Compliance e portabilidade by design.</p>
+      </div>
+      <div>
+        <h5>Produto</h5>
+        <a href="visao.html">Visão</a>
+        <a href="index.html#como-funciona">Como funciona</a>
+        <a href="index.html#canais">Canais</a>
+        <a href="index.html#solucoes">Soluções</a>
+        <a href="qualidade.html">Qualidade &amp; avaliação</a>
+        <a href="compliance.html">Compliance</a>
+      </div>
+      <div>
+        <h5>Desenvolvedores</h5>
+        <a href="desenvolvedores.html">Visão geral</a>
+        <a href="/docs">Documentação</a>
+        <a href="desenvolvedores.html">SDK &amp; MCP</a>
+        <a href="desenvolvedores.html">Portabilidade</a>
+      </div>
+      <div>
+        <h5>Empresa</h5>
+        <a href="mailto:contato@opuscom.com.br">Contato</a>
+        <a href="index.html#testar">Acesso de teste</a>
+        <a href="/privacidade">Privacidade / LGPD</a>
+      </div>
+    </div>
+    <div class="fbottom">
+      <span>© 2026 PlugHub. Todos os direitos reservados.</span>
+      <span>MCP-first · BYO LLM · LGPD by design</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.querySelectorAll('#navlinks a').forEach(function(a){
+    a.addEventListener('click',function(){document.getElementById('navlinks').classList.remove('open')});
+  });
+</script>
+</body>
+</html>

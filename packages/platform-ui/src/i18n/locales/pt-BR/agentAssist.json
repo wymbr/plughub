@@ -175,6 +175,24 @@
   "contacts": {
     "label": "Contatos"
   },
+  "pullInbox": {
+    "title":         "Filas (pull)",
+    "empty":         "Nenhum contato aguardando.",
+    "pull":          "Pull",
+    "pulling":       "…",
+    "claim":         "Atender (Pull)",
+    "previewHint":   "Ver contexto antes de atender",
+    "previewBanner": "Contato em espera — visualização read-only. Use \"Atender\" para assumir.",
+    "atCapacity":    "Capacidade máxima de atendimentos atingida",
+    "claimReason": {
+      "already_claimed": "Já reivindicado por outro agente",
+      "no_capacity":     "Sem capacidade disponível",
+      "failed":          "Não foi possível atender"
+    }
+  },
+  "common": {
+    "close": "Fechar"
+  },
   "centerTab": {
     "atual":     "Atual",
     "historico": "Histórico"

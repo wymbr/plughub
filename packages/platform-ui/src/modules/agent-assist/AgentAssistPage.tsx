@@ -107,6 +107,19 @@ export const AgentAssistPage: React.FC = () => {
   // ── Derived state needed before hook calls ────────────────────────────
   const selected = selectedSessionId ? contacts.get(selectedSessionId) ?? null : null;
 
+  // F2b-2b-2 — capacidade do agente (gating do claim na fila pull) + SLA por pool
+  // (cor de urgência das linhas). maxConcurrentSessions vem do JWT (default 3).
+  const maxConcurrent = session?.maxConcurrentSessions ?? 3;
+  const atCapacity    = contacts.size >= maxConcurrent;
+  const poolSlaMap: Record<string, number | null> = {};
+  for (const p of availablePools) poolSlaMap[p.pool_id] = p.sla_target_ms ?? null;
+  // Pools pull ativos (accessible ∩ dispatch_mode=pull). Se houver, a inbox divide
+  // a coluna esquerda em duas metades (atendidos × fila pull) em vez de ficar no rodapé.
+  const pullPoolIds = activePools.filter(p =>
+    availablePools.find(ap => ap.pool_id === p)?.dispatch_mode === "pull"
+  );
+  const hasPullQueues = pullPoolIds.length > 0;
+
   // Auto-close sessions that arrive already closed (client disconnected before
   // this agent received the contact). Arc 14: wrap-up is handled by hook agents,
   // so we skip the manual CloseModal and call agent_done immediately with defaults.
@@ -544,8 +557,10 @@ export const AgentAssistPage: React.FC = () => {
                 <div className="flex-1" />
                 <button
                   type="button"
+                  disabled={atCapacity}
+                  title={atCapacity ? t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" }) : undefined}
                   onClick={() => { if (previewSessionId) claimPreviewContact(previewSessionId, previewPoolId ?? ""); }}
-                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90"
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                 >
                   {t("pullInbox.claim", { defaultValue: "Atender (Pull)" })}
                 </button>
@@ -592,7 +607,8 @@ export const AgentAssistPage: React.FC = () => {
 
           {/* Contact list */}
           <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden flex flex-col">
-            {/* Contatos atendidos — ocupa o espaço e rola */}
+            {/* Contatos atendidos — quando há fila pull, divide a coluna em duas
+                metades (atendidos × pull); senão ocupa tudo. Cada metade rola. */}
             <div className="flex-1 min-h-0 overflow-hidden">
               <ContactList
                 contacts={[...contacts.values()]}
@@ -601,19 +617,22 @@ export const AgentAssistPage: React.FC = () => {
                 onSelect={handleSelectContact}
               />
             </div>
-            {/* Frente 1 F2b-2a — inbox das filas pull, ancorada no rodapé da coluna
-                (altura natural, limitada e rolável quando há muitos contatos) */}
-            <div className="flex-shrink-0 max-h-[50%] overflow-y-auto">
-              <PullInboxPanel
-                pullPools={activePools.filter(p =>
-                  availablePools.find(ap => ap.pool_id === p)?.dispatch_mode === "pull"
-                )}
-                instanceId={session?.userId ? `human-${session.userId}` : ""}
-                previewSessionId={previewSessionId}
-                onPreview={handlePreviewQueueContact}
-                onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
-              />
-            </div>
+            {/* Frente 1 — inbox das filas pull: metade inferior da coluna (não rodapé) */}
+            {hasPullQueues && (
+              <div className="flex-1 min-h-0 overflow-y-auto border-t border-border">
+                <PullInboxPanel
+                  pullPools={pullPoolIds}
+                  instanceId={session?.userId ? `human-${session.userId}` : ""}
+                  poolSla={poolSlaMap}
+                  claimDisabled={atCapacity}
+                  claimDisabledReason={t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" })}
+                  previewSessionId={previewSessionId}
+                  onPreview={handlePreviewQueueContact}
+                  onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
+                  onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
+                />
+              </div>
+            )}
           </div>
 
           {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}

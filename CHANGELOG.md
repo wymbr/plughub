@@ -19,8 +19,24 @@ existentes, keyed só por `sessionId`):
   preview), `PullInboxPanel.tsx` (linha clicável + highlight). Sem mudança de backend.
 
 **E2E**: fila → clica a linha → preview read-only (system+cliente) → "Atender (Pull)" → atende (input/Serving) →
-Close encerra no webchat. **Rebuild**: platform-ui. **Próximo (F2b-2b-2)**: polish — cor por SLA, gating de
-capacidade, idade auto-refresh.
+Close encerra no webchat. **Rebuild**: platform-ui.
+
+**F2b-2b-2 (polish, 2026-06-16)**: cor por SLA nas linhas (idade÷`sla_target` do pool: verde<0.6 / amarelo≥0.6 /
+vermelho≥1.0); idade ao vivo (tick 1s a partir de `queued_at_ms`); **gating de capacidade**
+(`contacts.size ≥ maxConcurrentSessions` do JWT desabilita Pull/Atender + hint — reforça o rollback server-side
+`no_capacity` da F1.2 com feedback antecipado); auto-clear do preview quando o contato previewado sai da fila
+(claim de outro agente / timeout). Só UI (`PullInboxPanel.tsx` + `AgentAssistPage.tsx`). **Frente 1 / Pull
+completa (F1+F2).**
+
+**Ajustes de UX (2026-06-16)**: (1) a coluna esquerda agora **divide em duas metades** (contatos atendidos ×
+fila pull, ambas roláveis) quando há pool pull ativo — antes a inbox ficava espremida no rodapé; sem pool pull,
+os contatos ocupam tudo. (2) **i18n**: as strings da inbox (`pullInbox.*` + `common.close`) estavam só como
+`defaultValue` (PT fixo) → agora registradas em `en/` e `pt-BR/` (namespace `agentAssist`), respeitando o idioma.
+
+**F2b-2b-3 — agrupamento por fila (2026-06-16)**: a inbox agora agrupa os contatos **por pool**, com cabeçalho
+recolhível (nome + contagem + chevron) por fila; dentro de cada fila, ordem **mais-antigo-primeiro** (FIFO/triagem;
+a cor por SLA reforça). O `pool_id` saiu da linha (vira o cabeçalho) → linhas mais limpas. Resolve a localização
+quando há contatos de várias filas misturados. Só UI (`PullInboxPanel.tsx`).
 
 ---
 

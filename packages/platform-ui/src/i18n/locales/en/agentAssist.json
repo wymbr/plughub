@@ -175,6 +175,24 @@
   "contacts": {
     "label": "Contacts"
   },
+  "pullInbox": {
+    "title":         "Pull queues",
+    "empty":         "No contacts waiting.",
+    "pull":          "Pull",
+    "pulling":       "…",
+    "claim":         "Claim (Pull)",
+    "previewHint":   "Preview context before claiming",
+    "previewBanner": "Waiting contact — read-only preview. Use \"Claim\" to take it.",
+    "atCapacity":    "Maximum concurrent sessions reached",
+    "claimReason": {
+      "already_claimed": "Already claimed by another agent",
+      "no_capacity":     "No capacity available",
+      "failed":          "Could not claim"
+    }
+  },
+  "common": {
+    "close": "Close"
+  },
   "centerTab": {
     "atual":     "Current",
     "historico": "History"

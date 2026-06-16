@@ -888,9 +888,15 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     linha da inbox abre preview read-only no centro (conversa via `conversation_history` + abas Context/History
     via `supervisor_state`, ambos read-only por sessionId — **sem backend novo**), action bar "Atender (Pull)"/
     "Fechar", input oculto, poll 4s, sem cache ao trocar. Atender → claim existente → atende. **E2E OK**.
-  - **F2b-2b-2 (próxima) — polish**: cor por SLA nas linhas da fila (verde/amarelo/vermelho por idade×SLA);
-    gating de capacidade (bloqueia "Atender" no teto de sessões simultâneas); idade auto-refresh; opcional:
-    limpar o preview se o contato for reivindicado por outro agente (sai da `list`).
+  - **F2b-2b-2 ✅ (2026-06-16) — polish**: cor por SLA nas linhas (verde<0.6 / amarelo≥0.6 / vermelho≥1.0 de
+    idade÷sla_target do pool); idade ao vivo (tick 1s a partir de `queued_at_ms`); gating de capacidade
+    (`atCapacity = contacts.size ≥ maxConcurrentSessions` do JWT) desabilita Pull/Atender + hint; auto-clear do
+    preview quando o contato sai da fila (claim de outro / timeout). Reforça o rollback server-side `no_capacity`
+    (F1.2) com feedback antecipado. **Frente 1 / Pull — completa (F1+F2).**
+  - **F2b-2b-3 ✅ (2026-06-16)** — agrupamento da inbox por pool (cabeçalho recolhível nome+contagem; dentro do
+    grupo mais-antigo-primeiro; pool_id sai da linha). Facilita localizar contatos por fila.
+  - **F2b-2b-4 (próxima, opcional)** — divisória ajustável entre área de contatos e fila pull (drag handle +
+    persistir proporção em localStorage). Hoje o split é 50/50 fixo.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

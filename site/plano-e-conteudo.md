@@ -119,6 +119,11 @@ Uma home navegável por âncoras, cobrindo o essencial do funil:
 - **Qualidade:** Console de orquestração humana, sentimento em tempo real, session replay, bancada humano×IA.
 - **CTA final + rodapé.**
 
+### /visao (implementada — site/visao.html · en/vision.html)
+- **Página de visão/manifesto** — o "porquê" estratégico que faltava ao site. Narrativa: a primeira onda (responder contatos isolados) virou commodity → o valor migrou para o **processo** → o obstáculo é **confiança** → o **dial do anteparo** (humano no comando, IA recua na velocidade que a avaliação libera) → quatro fundamentos já na arquitetura (conferência humano+IA, qualidade auditável, dado sensível sem exposição, processo como unidade/sem lock-in) → por que paga (muda o numerador do ROI).
+- **Honestidade:** a seção de **modelo de entrega (produto + professional service)** do material interno foi **omitida** da página pública — é narrativa de negócio/vendas, não recurso de produto, e destoaria do CTA self-service. Todos os claims se restringem ao que está implementado.
+- **Encaixe na nav:** primeiro item ("Visão"/"Vision") em todas as 8 páginas; **teaser** na home (PT/EN) logo após o hero, com "Ler a visão →". Seções deep-linkam para Como funciona, Qualidade e Compliance. Seletor PT⇄EN interligado.
+
 ### /desenvolvedores (implementada — site/desenvolvedores.html) · trilha-chave do CTA
 - **Conceitos em 1 min:** sessão = conferência; contrato `agent_login→ready→busy→done`; Skill Flow declarativo; MCP única integração.
 - **Skill Flow:** exemplo YAML (reason/choice/task), os 13+ tipos de passo, deploy lifecycle (draft/published, hot deploy, rollback, agendado, graceful).
