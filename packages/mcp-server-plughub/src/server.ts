@@ -27,6 +27,7 @@ import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
+import { listQueue, claimTask, releaseTask } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
@@ -1456,6 +1457,75 @@ export async function startServer(config: ServerConfig): Promise<void> {
       })
     } catch {
       res.status(500).json({ error: "copilot_state_unavailable" })
+    }
+  })
+
+  // ── Frente 1 (dispatch pull) — inbox do Console ─────────────────────────────
+  // GET  /api/work_queue/list?tenant_id=&pools=a,b&top_n=  → contatos claimáveis (Redis-direct)
+  // POST /api/work_queue/claim/:sessionId    { pool_id, instance_id, conference_id? }
+  // POST /api/work_queue/release/:sessionId  { pool_id, instance_id }
+  // A escrita (claim/release) vai ao Routing Engine (único árbitro) via lib/work-queue.
+  const _wqRoutingUrl = process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550"
+  const _wqAdminToken = process.env["ROUTING_ADMIN_TOKEN"] || undefined
+  const _wqTenant = () => process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo"
+
+  app.get("/api/work_queue/list", async (req: Request, res: Response) => {
+    try {
+      const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
+      const poolsRaw = (req.query["pools"] as string) || ""
+      const pools    = poolsRaw.split(",").map(s => s.trim()).filter(Boolean)
+      const topN     = req.query["top_n"] ? parseInt(req.query["top_n"] as string, 10) : 20
+      const contacts = await listQueue(redis, tenantId, pools, topN)
+      res.json({ contacts, total: contacts.length })
+    } catch (err) {
+      res.status(500).json({ error: "list_failed", message: String(err) })
+    }
+  })
+
+  app.post("/api/work_queue/claim/:sessionId", async (req: Request, res: Response) => {
+    try {
+      const sessionId  = String(req.params["sessionId"] ?? "")
+      const body       = (req.body ?? {}) as Record<string, unknown>
+      const tenantId   = (body["tenant_id"] as string) || _wqTenant()
+      const poolId     = body["pool_id"] as string
+      const instanceId = body["instance_id"] as string
+      if (!sessionId || !poolId || !instanceId) {
+        res.status(400).json({ error: "missing_fields", message: "session_id, pool_id e instance_id são obrigatórios" })
+        return
+      }
+      const result = await claimTask(_wqRoutingUrl, _wqAdminToken, {
+        tenant_id:     tenantId,
+        pool_id:       poolId,
+        session_id:    sessionId,
+        instance_id:   instanceId,
+        conference_id: (body["conference_id"] as string) ?? "",
+      })
+      res.json(result)
+    } catch (err) {
+      res.status(502).json({ error: "routing_unreachable", message: String(err) })
+    }
+  })
+
+  app.post("/api/work_queue/release/:sessionId", async (req: Request, res: Response) => {
+    try {
+      const sessionId  = String(req.params["sessionId"] ?? "")
+      const body       = (req.body ?? {}) as Record<string, unknown>
+      const tenantId   = (body["tenant_id"] as string) || _wqTenant()
+      const poolId     = body["pool_id"] as string
+      const instanceId = body["instance_id"] as string
+      if (!sessionId || !poolId || !instanceId) {
+        res.status(400).json({ error: "missing_fields", message: "session_id, pool_id e instance_id são obrigatórios" })
+        return
+      }
+      const result = await releaseTask(_wqRoutingUrl, _wqAdminToken, {
+        tenant_id:   tenantId,
+        pool_id:     poolId,
+        session_id:  sessionId,
+        instance_id: instanceId,
+      })
+      res.json(result)
+    } catch (err) {
+      res.status(502).json({ error: "routing_unreachable", message: String(err) })
     }
   })
 

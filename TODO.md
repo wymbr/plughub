@@ -874,8 +874,13 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     sorted set + `queue_contact`) + `work_task_claim`/`work_task_release` (`fetch` → API routing). Registrado
     nos 2 sites do `server.ts`; keys `queueContact`/`claimLease` no `infra/redis`. Build TS OK. **F2a completa
     (backend do pull pronto).** Validação funcional das tools = via F2b (a Console é o cliente MCP).
-  - **F2b (próxima)** — inbox no Console (3-zonas, preview→Pull, cor SLA, capacidade, heartbeat). É onde o pull
-    vira usável ponta-a-ponta + valida o auto-release completo.
+  - **F2b-1 ✅ (2026-06-15)** — rotas HTTP `/api/work_queue/{list,claim/:sessionId,release/:sessionId}` no
+    mcp-server (Express, onde vivem `/api/agent_done` etc.) + `lib/work-queue.ts` compartilhado (a tool MCP e as
+    rotas HTTP usam a mesma lógica). **Correção de rumo**: a Console usa rotas HTTP `/api/*`, não tools MCP — as
+    tools (F2a-2) servem clientes MCP/IA. Validado (`/api/work_queue/list` → `{contacts:[],total:0}`).
+  - **F2b-2 (próxima)** — inbox no Console (UI 3-zonas: rail de filas pull → lista → preview central → "Pull";
+    cor SLA, capacidade, heartbeat). Última peça: pull usável ponta-a-ponta + E2E (claim, concorrência,
+    auto-release). Consome as rotas `/api/work_queue/*`.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
