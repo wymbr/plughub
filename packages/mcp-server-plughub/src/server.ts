@@ -26,6 +26,7 @@ import { registerExternalAgentTools } from "./tools/external-agent"
 import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
+import { registerWorkQueueTools }    from "./tools/work_queue"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
@@ -96,6 +97,12 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const operationalDeps: OperationalDeps = { redis }
 
+  const workQueueDeps = {
+    redis,
+    routingUrl: process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550",
+    adminToken: process.env["ROUTING_ADMIN_TOKEN"] || undefined,
+  }
+
   const delegationDeps: DelegationDeps = {
     redis,
     skillFlowUrl: process.env["SKILL_FLOW_URL"]   ?? "http://localhost:3400",
@@ -129,6 +136,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerEvaluationTools(server, evalDeps)
   registerExternalAgentTools(server, externalAgentDeps)
   registerOperationalTools(server, operationalDeps)
+  registerWorkQueueTools(server, workQueueDeps)
   registerDelegationTools(server, delegationDeps)
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
@@ -927,6 +935,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerEvaluationTools(mcpServer, sharedEvalDeps)
     registerExternalAgentTools(mcpServer, sharedExternalAgentDeps)
     registerOperationalTools(mcpServer, { redis })
+    registerWorkQueueTools(mcpServer, {
+      redis,
+      routingUrl: process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550",
+      adminToken: process.env["ROUTING_ADMIN_TOKEN"] || undefined,
+    })
     registerDelegationTools(mcpServer, {
       redis,
       skillFlowUrl: process.env["SKILL_FLOW_URL"]    ?? "http://localhost:3400",

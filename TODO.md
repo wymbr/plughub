@@ -870,10 +870,12 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     → `Router.work_task_claim/release`; `/health`; auth `X-Admin-Token` opcional; porta `ROUTING_HTTP_PORT`
     (3550). `main.py` injeta `router._producer` (liga claim routed **e** `queue.position_updated`, antes latente)
     + inicia o server. `aiohttp` no pyproject. Validado (health + claim wiring) + suíte 96 verde.
-  - **F2a-2 (próxima)** — tools mcp-server: `work_queue_list` (Redis-direct) + `work_task_claim`/`release`
-    (HTTP → API routing), com `accessible_pools` (ABAC) + capacidade.
-  - **F2b** — inbox no Console (3-zonas, preview→Pull, cor SLA, capacidade, heartbeat). E2E pela UI + valida
-    auto-release.
+  - **F2a-2 ✅ (2026-06-15)** — tools mcp-server (`tools/work_queue.ts`): `work_queue_list` (Redis-direct: lê
+    sorted set + `queue_contact`) + `work_task_claim`/`work_task_release` (`fetch` → API routing). Registrado
+    nos 2 sites do `server.ts`; keys `queueContact`/`claimLease` no `infra/redis`. Build TS OK. **F2a completa
+    (backend do pull pronto).** Validação funcional das tools = via F2b (a Console é o cliente MCP).
+  - **F2b (próxima)** — inbox no Console (3-zonas, preview→Pull, cor SLA, capacidade, heartbeat). É onde o pull
+    vira usável ponta-a-ponta + valida o auto-release completo.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

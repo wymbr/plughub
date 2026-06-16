@@ -44,6 +44,14 @@ export const keys = {
   poolQueue: (tenantId: string, poolId: string) =>
     `${tenantId}:pool:${poolId}:queue`,
 
+  /** JSON do contato enfileirado (escrito pelo Routing Engine) */
+  queueContact: (tenantId: string, sessionId: string) =>
+    `${tenantId}:queue_contact:${sessionId}`,
+
+  /** Frente 1 (pull): lease do claim — {instance_id, claimed_at} */
+  claimLease: (tenantId: string, poolId: string, sessionId: string) =>
+    `${tenantId}:pool:${poolId}:claim:${sessionId}`,
+
   /** SET de instance_ids disponíveis (prontos) num pool */
   poolInstances: (tenantId: string, poolId: string) =>
     `${tenantId}:pool:${poolId}:instances`,
