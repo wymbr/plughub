@@ -94,7 +94,7 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
     if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
     const res  = await fetch(`${API_BASE}/pools`, { headers });
     if (!res.ok) return [];
-    type RawPool = { pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null; max_reply_time_ms?: number | null };
+    type RawPool = { pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null; max_reply_time_ms?: number | null; dispatch_mode?: 'push' | 'pull' };
     const json = await res.json() as { pools: RawPool[] } | RawPool[];
     const data = Array.isArray(json) ? json : (json.pools ?? []);
     const list: PoolInfo[] = data.map(p => ({
@@ -103,6 +103,7 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       channel_types:         p.channel_types ?? [],
       sla_target_ms:         p.sla_target_ms ?? null,
       max_reply_time_ms:     p.max_reply_time_ms ?? null,
+      dispatch_mode:         p.dispatch_mode ?? 'push',
     }));
     if (accessiblePools.length === 0) return list;
     return list.filter(p => accessiblePools.includes(p.pool_id));

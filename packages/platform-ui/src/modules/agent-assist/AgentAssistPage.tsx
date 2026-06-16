@@ -44,6 +44,7 @@ import { AgentInput }          from "./components/AgentInput";
 import { PauseReasonModal }    from "./components/PauseReasonModal";
 import { RightPanel }          from "./components/RightPanel";
 import { ContactList }         from "./components/ContactList";
+import { PullInboxPanel }      from "./components/PullInboxPanel";
 import { ToastContainer }      from "./components/ToastContainer";
 import { DelegarTarefaDrawer } from "./components/DelegarTarefaDrawer";
 import {
@@ -514,13 +515,27 @@ export const AgentAssistPage: React.FC = () => {
         <div className="flex flex-1 overflow-hidden">
 
           {/* Contact list */}
-          <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden">
-            <ContactList
-              contacts={[...contacts.values()]}
-              selectedSessionId={selectedSessionId}
-              aiTypingSessions={aiTypingSessions}
-              onSelect={handleSelectContact}
-            />
+          <div className="w-[200px] flex-shrink-0 bg-surface-alt border-r border-border overflow-hidden flex flex-col">
+            {/* Contatos atendidos — ocupa o espaço e rola */}
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <ContactList
+                contacts={[...contacts.values()]}
+                selectedSessionId={selectedSessionId}
+                aiTypingSessions={aiTypingSessions}
+                onSelect={handleSelectContact}
+              />
+            </div>
+            {/* Frente 1 F2b-2a — inbox das filas pull, ancorada no rodapé da coluna
+                (altura natural, limitada e rolável quando há muitos contatos) */}
+            <div className="flex-shrink-0 max-h-[50%] overflow-y-auto">
+              <PullInboxPanel
+                pullPools={activePools.filter(p =>
+                  availablePools.find(ap => ap.pool_id === p)?.dispatch_mode === "pull"
+                )}
+                instanceId={session?.userId ? `human-${session.userId}` : ""}
+                onClaimed={(sid) => setSelectedSessionId(sid)}
+              />
+            </div>
           </div>
 
           {/* Center column: ParticipantFilterBar + ChatArea + CopilotBanner + AgentInput */}

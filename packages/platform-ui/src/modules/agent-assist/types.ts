@@ -267,6 +267,8 @@ export interface PoolInfo {
   sla_target_ms:        number | null;
   /** Maximum time to reply to a customer message (ms). Null = no per-message SLA. */
   max_reply_time_ms:    number | null;
+  /** Frente 1 — modo de despacho da fila: "push" (auto-aloca, default) | "pull" (agente puxa). */
+  dispatch_mode?:       'push' | 'pull';
 }
 
 // ── Multi-contact session state ───────────────────────────────────────────────

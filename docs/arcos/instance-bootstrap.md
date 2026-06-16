@@ -101,6 +101,21 @@ reconcile(tenant_id):
 | `registry.changed` (Kafka) | `reconcile()` — immediate after signal |
 | `config.changed` namespace=`quota` (Kafka) | `reconcile()` — quota limits changed, may affect instance count |
 
+### `_pool_config_diverged` — campos gerenciados (2026-06-16)
+
+O `SET pool_config` no reconcile só dispara quando o conteúdo **diverge** (`_pool_config_diverged`); senão só
+renova TTL. O set `MANAGED` é o subset de campos comparados. **Furo corrigido**: campos de
+governança/dispatch faltavam no `MANAGED`, então mudanças de UI neles não eram detectadas como divergência — e,
+como o heartbeat de 15s reescreve `pool_config` a partir do **cache em memória** (atualizado só no reconcile), o
+valor velho era re-estampado até o reconcile periódico de 5min. Sintoma observado: `agent_kind` ai→human (gate de
+login humano) e `dispatch_mode` push↔pull (Frente 1) "não propagavam". `MANAGED` agora inclui `agent_kind`,
+`dispatch_mode`, `session_reservation`, `max_concurrent_sessions`, `queue_config`, `webhook_skill_id`, `hooks`,
+`supervisor_config`, `calendar_id`, `context_visibility`, `agent_groups`.
+
+**Pré-requisito do gatilho**: o reconcile imediato só ocorre se o agent-registry publicar `registry.changed` na
+mutação. O CRUD de pool (`pools.ts` POST/PUT) passou a chamar `publishRegistryChanged("pool", id, op)` além do
+`publishRegistryEvent` (que vai só ao tópico do routing). Sem isso, a propagação esperava o reconcile de 5min.
+
 ## Dry-run (Audit Without Applying)
 
 ```python

@@ -2,6 +2,40 @@
 
 ---
 
+## Frente 1 — Pull F2 (API + tools + inbox no Console) + fix de propagação de pool_config (2026-06-16)
+
+Pull usável ponta-a-ponta: o operador vê a fila pull no Console e puxa o contato.
+
+- **F2a-1** — API HTTP no Routing Engine (`http_api.py`, aiohttp, porta `ROUTING_HTTP_PORT`=3550):
+  `POST /v1/work_queue/claim|release` → `Router.work_task_claim/release`; produtor Kafka injetado
+  (`router._producer`) após `producer.start()`.
+- **F2a-2** — tools mcp-server (`tools/work_queue.ts`) + lib compartilhada (`lib/work-queue.ts`):
+  `work_queue_list` (Redis-direto `zrevrange` em `pool:{}:queue`), `work_queue_claim|release` (HTTP ao routing —
+  o engine continua o único árbitro).
+- **F2b-1** — rotas Express `/api/work_queue/{list,claim/:sid,release/:sid}` no mcp-server (consumidas pela
+  inbox humana; clientes humanos não falam MCP).
+- **F2b-2a** — `PullInboxPanel` no Console (`AgentAssistPage`, rodapé da coluna de contatos): poll 4s de
+  `/api/work_queue/list?pools=`, botão **Pull** → `claim/:sid` → contato vira atendimento normal (Serving).
+  `dispatch_mode` propagado em `PoolInfo`/`fetchPools`. Layout: coluna esquerda em flex-column (contatos
+  atendidos `flex-1` roláveis; inbox pull ancorada no rodapé `max-h-50%`).
+
+**Fix de propagação de `pool_config`** (destravou o gate de login humano): mudar `agent_kind` ai→human na UI
+não propagava — o `orchestrator-bridge` reescrevia `pool_config` no Redis a partir do **cache em memória velho**
+(heartbeat 15s), e `pools.ts` só publicava `pool.updated` (tópico do routing), **nunca** `registry.changed`
+(tópico que o bridge consome p/ reconciliar). 
+- `pools.ts`: POST/PUT agora também chamam `publishRegistryChanged("pool", id, op)` → bridge reconcilia na hora.
+- `instance_bootstrap.py` `_pool_config_diverged`: `MANAGED` ganhou `agent_kind, dispatch_mode,
+  session_reservation, max_concurrent_sessions, queue_config, webhook_skill_id, hooks, supervisor_config,
+  calendar_id, context_visibility, agent_groups` — o reconcile passa a reescrever o Redis quando esses campos
+  mudam. A **mesma classe de bug** atingia `dispatch_mode` (toggle push↔pull era revertido por ~5min).
+
+**E2E validado**: `teste_demo` (human+pull) → webchat parqueia na fila muda → "Filas (pull)" lista o contato →
+**Pull** → atende (mensagens bidirecionais; webchat mostra "Agente entrou no atendimento"). **Rebuild**:
+agent-registry, orchestrator-bridge, mcp-server-plughub, routing-engine, platform-ui. **Próximo (F2b-2b)**:
+preview/triagem — ver contexto+histórico de cada contato da fila ANTES do claim.
+
+---
+
 ## Frente 1 — Pull core (dispatch pull no Routing Engine, F1.0–F1.3) (2026-06-15)
 
 Fundação do **dispatch pull** (operador puxa da fila) — modo genérico por pool, coexistindo com push. Spec:

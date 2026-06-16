@@ -878,9 +878,17 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     mcp-server (Express, onde vivem `/api/agent_done` etc.) + `lib/work-queue.ts` compartilhado (a tool MCP e as
     rotas HTTP usam a mesma lógica). **Correção de rumo**: a Console usa rotas HTTP `/api/*`, não tools MCP — as
     tools (F2a-2) servem clientes MCP/IA. Validado (`/api/work_queue/list` → `{contacts:[],total:0}`).
-  - **F2b-2 (próxima)** — inbox no Console (UI 3-zonas: rail de filas pull → lista → preview central → "Pull";
-    cor SLA, capacidade, heartbeat). Última peça: pull usável ponta-a-ponta + E2E (claim, concorrência,
-    auto-release). Consome as rotas `/api/work_queue/*`.
+  - **F2b-2a ✅ (2026-06-16)** — inbox mínima funcional: `PullInboxPanel` no rodapé da coluna de contatos do
+    Console (`AgentAssistPage`), poll 4s de `/api/work_queue/list?pools=`, botão **Pull** → `claim/:sid` →
+    contato vira atendimento normal (Serving). `dispatch_mode` em `PoolInfo`/`fetchPools`. Junto: **fix de
+    propagação de `pool_config`** (`publishRegistryChanged` no POST/PUT de pool + `agent_kind`/`dispatch_mode`/…
+    no `_pool_config_diverged.MANAGED`) — destravou login humano em pool human e toggle push↔pull. **E2E OK**:
+    parqueia → lista → Pull → atende (bidirecional).
+  - **F2b-2b (próxima) — preview/triagem antes do claim** *(pedido do usuário)*: hoje a inbox só mostra
+    `session_id` + idade e puxa às cegas. Falta o operador **percorrer os contatos da fila e ver
+    contexto+histórico de cada um ANTES de escolher** qual atender. Itens: preview read-only no centro ao
+    selecionar (não-claim) um item da fila; resumo/identidade + últimas mensagens do stream; cor por SLA;
+    indicador de capacidade; "Pull" explícito só após inspecionar. **Desenho antes de implementar.**
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)

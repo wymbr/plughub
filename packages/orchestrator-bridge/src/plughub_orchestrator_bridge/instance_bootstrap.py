@@ -1080,6 +1080,14 @@ def _pool_config_diverged(existing: dict, desired: dict) -> bool:
         "skills", "remote_sites",
         # @mention routing — alias → pool_id map for human agent @mention commands
         "mentionable_pools",
+        # Capacity-governance & dispatch (item 2 + Frente 1): mudanças nestes
+        # campos via UI/YAML PRECISAM reescrever o pool_config no Redis na hora —
+        # senão o gate de login humano (agent_kind) e o despacho da fila
+        # (dispatch_mode) leem valor velho até o reconcile periódico (5min).
+        "agent_kind", "dispatch_mode", "session_reservation",
+        "max_concurrent_sessions", "queue_config", "webhook_skill_id",
+        "hooks", "supervisor_config", "calendar_id", "context_visibility",
+        "agent_groups",
     }
     for key in MANAGED:
         if existing.get(key) != desired.get(key):

@@ -7,7 +7,7 @@ import { Router, Request, Response, NextFunction } from "express"
 import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
-import { publishRegistryEvent } from "../infra/kafka"
+import { publishRegistryEvent, publishRegistryChanged } from "../infra/kafka"
 import { contractedCapacity } from "../lib/capacity"
 
 export const poolsRouter = Router()
@@ -135,6 +135,9 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
       tenant_id: tenantId,
       pool:      formatted,
     })
+    // Notifica o orchestrator-bridge para reconciliar imediatamente — senão o
+    // heartbeat dele reescreve o pool_config a partir do cache em memória velho.
+    await publishRegistryChanged(tenantId, "pool", body.pool_id, "created")
 
     return res.status(201).json(formatted)
   } catch (err) {
@@ -299,6 +302,10 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       tenant_id: tenantId,
       pool:      formatted,
     })
+    // Notifica o orchestrator-bridge para reconciliar imediatamente — senão o
+    // heartbeat dele reescreve o pool_config a partir do cache em memória velho
+    // (ex.: agent_kind ai→human ou dispatch_mode push↔pull não propagavam).
+    await publishRegistryChanged(tenantId, "pool", req.params["pool_id"]!, "updated")
 
     return res.json(formatted)
   } catch (err) {
