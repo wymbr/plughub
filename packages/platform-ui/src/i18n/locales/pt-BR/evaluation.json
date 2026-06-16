@@ -88,6 +88,8 @@
     "frequentFlags":  "Flags frequentes",
     "pause":          "Pausar",
     "resume":         "Retomar",
+    "dispatch":       "Rodar agora",
+    "dispatchHint":   "Despacha as avaliações pendentes para o pool avaliador (avaliação real)",
     "status": {
       "active":    "Ativa",
       "paused":    "Pausada",

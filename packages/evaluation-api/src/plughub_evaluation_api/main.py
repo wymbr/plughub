@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import db as _db
+from .sampling import should_sample, compute_priority
 from .router import router
 from .contestation_router import contestation_router
 
@@ -122,6 +123,92 @@ async def _run_workflow_consumer(app: FastAPI) -> None:
         await consumer.stop()
 
 
+# ─── conversations.session_closed → sampling (S2.1, campaign-driven) ───────────
+
+def _duration_s(started_at: str | None, closed_at: str | None) -> float:
+    """Duração da sessão em segundos a partir dos ISO timestamps (0 se faltarem)."""
+    if not started_at or not closed_at:
+        return 0.0
+    try:
+        a = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        b = datetime.fromisoformat(str(closed_at).replace("Z", "+00:00"))
+        return max(0.0, (b - a).total_seconds())
+    except Exception:
+        return 0.0
+
+
+async def _sample_on_close(db_pool: _db.asyncpg.Pool, payload: dict) -> None:
+    """No fechamento, amostra contra as campanhas ATIVAS e cria uma
+    EvaluationInstance(status=scheduled) por match. NÃO roda o avaliador — só
+    registra o candidato (barato). O dispatcher (S2.2/S2.3) é quem despacha na
+    janela do calendário da campanha."""
+    session_id = payload.get("session_id")
+    tenant_id  = payload.get("tenant_id")
+    if not session_id or not tenant_id:
+        return
+
+    session_meta = {
+        "pool_id":       payload.get("pool_id"),
+        "channel":       payload.get("channel"),
+        "outcome":       payload.get("outcome"),
+        "agent_type_id": payload.get("agent_type_id"),
+        "duration_s":    _duration_s(payload.get("started_at"), payload.get("closed_at")),
+    }
+
+    campaigns = await _db.list_campaigns(db_pool, tenant_id, status="active", limit=500)
+    for c in campaigns:
+        # Hard filter: pool avaliado (evaluation_pool_id; fallback ao pool_id legado).
+        epid = c.get("evaluation_pool_id") or c.get("pool_id")
+        if epid and session_meta.get("pool_id") != epid:
+            continue
+        rules = c.get("sampling_rules") or {}
+        if not should_sample(
+            session_id, session_meta, rules, counter=int(c.get("total_instances") or 0)
+        ):
+            continue
+        if await _db.instance_exists_for_session(db_pool, c["id"], session_id, tenant_id):
+            continue
+        priority = compute_priority(session_meta, rules)
+        inst = await _db.create_instance(
+            db_pool,
+            tenant_id=tenant_id,
+            campaign_id=c["id"],
+            form_id=c["form_id"],
+            session_id=session_id,
+            priority=priority,
+        )
+        logger.info(
+            "sampling: scheduled instance %s (campaign=%s session=%s pool=%s)",
+            inst.get("id"), c["id"], session_id, session_meta.get("pool_id"),
+        )
+
+
+async def _run_session_closed_consumer(app: FastAPI) -> None:
+    consumer = AIOKafkaConsumer(
+        "conversations.session_closed",
+        bootstrap_servers=settings.kafka_brokers,
+        group_id="evaluation-api-sampling-consumer",
+        auto_offset_reset="latest",
+    )
+    await consumer.start()
+    logger.info("conversations.session_closed sampling consumer started")
+    try:
+        async for msg in consumer:
+            if not msg.value:
+                continue
+            try:
+                payload = json.loads(msg.value)
+            except Exception:
+                logger.warning("sampling: invalid session_closed payload")
+                continue
+            try:
+                await _sample_on_close(app.state.db_pool, payload)
+            except Exception as exc:
+                logger.error("sampling: failed for %s: %s", payload.get("session_id"), exc)
+    finally:
+        await consumer.stop()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="PlugHub Evaluation API",
@@ -166,10 +253,19 @@ def create_app() -> FastAPI:
         )
         logger.info("workflow.events consumer task scheduled")
 
+        # S2.1 — conversations.session_closed sampling consumer (campaign-driven)
+        app.state.sampling_consumer_task = asyncio.create_task(
+            _run_session_closed_consumer(app),
+            name="session-closed-sampling-consumer",
+        )
+        logger.info("conversations.session_closed sampling consumer task scheduled")
+
     @app.on_event("shutdown")
     async def shutdown() -> None:
         if hasattr(app.state, "workflow_consumer_task"):
             app.state.workflow_consumer_task.cancel()
+        if hasattr(app.state, "sampling_consumer_task"):
+            app.state.sampling_consumer_task.cancel()
         if hasattr(app.state, "kafka_producer"):
             await app.state.kafka_producer.stop()
         if hasattr(app.state, "redis"):

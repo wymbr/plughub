@@ -2,6 +2,87 @@
 
 ---
 
+## Frente 2 — S2.2: avaliação real ponta-a-ponta (dispatcher + form no ReplayContext) (2026-06-16)
+
+Liga o **avaliador real** (decoplado do seeder sintético). Quatro fatias:
+
+**Slice A — `evaluator_pool` por campanha** (pool do AGENTE avaliador, ≠ `evaluation_pool_id` que é o pool
+avaliado). Coluna `evaluator_pool TEXT` (null/'' = default global); `create_campaign`/`update_campaign`; campo
+**SELECT** de pools na `CampaignsPage` (setar e **limpar** para "Padrão global" — envia `''`, não `undefined`).
+
+**Slice B — Replayer carrega o form no ReplayContext** (`session-replayer/consumer.py`): o
+`_handle_evaluation_requested` passa `form_id/campaign_id/instance_id` ao `prepare()` e busca o
+`evaluation_form` via `GET /v1/evaluation/forms/{id}` (helper `_fetch_evaluation_form`, env
+`EVALUATION_API_URL`). Sem o form, o agente avaliador não tinha critérios.
+
+**Slice C — dispatcher** (`evaluation-api`): `POST /v1/evaluation/campaigns/{id}/dispatch` emite
+`evaluation.requested` (tópico `evaluation.events`) para cada instance `scheduled` — `evaluator_pool` da
+campanha (fallback `settings.default_evaluator_pool=avaliacao_ia`), `form_id`, `campaign_id`, `instance_id`.
+Emitter `emit_evaluation_requested` (shape = `EvaluationRequest`). Instances ficam `scheduled` p/ o avaliador
+reivindicar (claim → assigned).
+
+**Slice D — "Rodar agora"** na `CampaignsPage`: botão primário + `dispatchCampaign` em `evaluation-hooks.ts`;
+i18n `campaigns.dispatch`/`dispatchHint` (en + pt-BR). **Rebuild**: evaluation-api, session-replayer, platform-ui.
+
+---
+
+## Avaliação — Editar/Excluir campanha na UI (2026-06-16)
+
+Fecha o gap de CRUD de campanha (o `CampaignsPage` só tinha create + pause/resume). **Excluir**: nova rota
+`DELETE /v1/evaluation/campaigns/{id}` + `db.delete_campaign` (hard delete em transação, cascata de
+instances/results/criterion/threads/curation); botão "Excluir" (com confirm) no detalhe. **Editar**: o
+`CreateModal` ganhou modo edição (`editing` prop) — prefill dos campos escalares (name/description/form/
+evaluation_pool/calendar/sampling/reviewer/workflow/contestation) e submit via `PUT` (`updateCampaign`) em vez de
+`createCampaign`; botão "Editar" no detalhe; título/CTA do modal cientes do modo. Clients
+`updateCampaign`/`deleteCampaign` em `evaluation-hooks.ts`. **Rebuild**: evaluation-api, platform-ui.
+
+---
+
+## Frente 2 — Avaliação campaign-driven: S1 (create) + S2.1 (trigger por campanha) (2026-06-16)
+
+**Shakedown E2E do módulo de avaliação** — bugs reais encontrados rodando o fluxo (docs diziam "completo").
+
+**S1 — destravar create de campanha/form** (`evaluation-api/router.py`):
+- `CampaignCreate.pool_id` virou opcional e **espelha** `evaluation_pool_id` (o UI tem um seletor só
+  "Evaluation Pool"; antes 422 `pool_id required`). Validator `_mirror_pools`.
+- Endpoints de forms expõem **`form_id`** (= `id`) na resposta (`_expose_form_id`). Sem isso o `<select>` caía no
+  fallback do HTML e enviava o NOME do form → 400 `form not found`.
+
+**S2.1 — avaliação dirigida por CAMPANHA, não pelo fechamento** (decisão de arquitetura): o gatilho inline
+`session_closed → avaliação` era o modelo antigo e foi **removido como gatilho**. Avaliação agora é amostrada por
+campanha e despachada depois (janela do calendário — vale de atendimento), evitando concorrer com o atendimento
+ao vivo. Quem quiser avaliar no fim usa o mecanismo **genérico** de pool hooks (on_segment_end/on_contact_end).
+- `session-replayer/consumer.py`: o Persister **não publica mais** `evaluation.requested` no fechamento (segue
+  persistindo o stream p/ replay posterior).
+- `orchestrator-bridge/main.py`: o evento `conversations.session_closed` foi **enriquecido** com `pool_id`,
+  `channel`, `started_at` (o `should_sample` filtra por pool/canal/duração).
+- `evaluation-api`: novo consumer de `conversations.session_closed` (`_run_session_closed_consumer` +
+  `_sample_on_close`) → casa com campanhas ATIVAS (`should_sample` + hard filter `evaluation_pool_id`) → cria
+  `EvaluationInstance(status=scheduled)`. **Não roda o avaliador** (barato — só registra o candidato).
+  Idempotente via `instance_exists_for_session`. **Rebuild**: evaluation-api, orchestrator-bridge,
+  session-replayer.
+
+**S2.Q1b — seeder enriquecido (datas + atribuição de agente)** p/ validar Trend/Comparison + lentes
+quality/quality_criteria do bench de Agents: (1) `evaluated_at` propagado seeder→`IngestBody`→`emit_instance_completed`
+→ timestamp do `evaluation_results` (séries temporais espalhadas em `days_back` dias, default 30); (2) o seeder
+emite um **segment sintético** por sessão (`conversations.participants` → `analytics.segments`) com `agent_type_id`
++ `user_id`/`flow_id`, dando ao bench o AGENTE avaliado (join por session_id; `agent_key`=user_id|flow_id);
+NPS alinhado ao mesmo `agent_key`. Flush do ClickHouse estendido p/ `segments`+`participation_intervals`.
+**Também corrigidos no shakedown**: avg_score 0–10→0–1 no consumer (Bug B), `ScorePill` coage string (Bug A),
+`campaign_id`/`form_id` expostos nas respostas (id vs entity_id), botões Gerar/Limpar na CampaignsPage.
+
+**S2.Q1 — avaliador FAKE (seeder sintético) p/ validar o módulo Quality em VOLUME** (decisão: validar o módulo
+desacoplado do agente LLM, que precisa de massa real). `POST /v1/evaluation/admin/seed-synthetic` (evaluation-api)
+gera N avaliações sintéticas para uma campanha pelo **mesmo caminho real** (`create_instance` + `ingest_result`
+→ result + criterion_responses + dimension_threads + finalização/contestação + Kafka `evaluation.events` →
+ClickHouse), mix humano/IA, + sinais de **NPS** sintéticos (`session.signals`, grão session). UI: botão "Gerar
+avaliações de teste" na CampaignsPage (`seedSyntheticEvaluations`). **Bug corrigido de caminho:** `ingest_result`
+para `evaluated_agent_type="ai_agent"` referenciava `initial_state` indefinido (`UnboundLocalError`) — nunca fora
+exercitado. **Rebuild**: evaluation-api, platform-ui. **Próximo**: validar Avaliações/Reports/Curadoria/NPS em
+volume; depois S2.2 (avaliador real) quando houver massa.
+
+---
+
 ## Frente 1 — Pull F2b-2b-1: preview/triagem read-only antes do claim (2026-06-16)
 
 Triagem da fila pull: o operador **percorre os contatos em espera e vê contexto+histórico** antes de escolher

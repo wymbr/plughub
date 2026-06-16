@@ -776,12 +776,22 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
     session_id = payload.get("session_id") or ""
     instance_id = payload.get("instance_id") or ""
     campaign_id = payload.get("campaign_id") or None
-    overall_score = payload.get("overall_score")
-    if overall_score is None and payload.get("composite_score") is not None:
-        try:
-            overall_score = float(payload["composite_score"]) / 10.0
-        except (TypeError, ValueError):
-            overall_score = None
+    # Os buckets/avg do relatório operam em escala 0–1. Preferir normalized_score
+    # (já 0–1); senão normalizar overall_score (÷10 se vier em 0–10); fallback composite.
+    overall_score = payload.get("normalized_score")
+    if overall_score is None:
+        raw = payload.get("overall_score")
+        if raw is not None:
+            try:
+                raw = float(raw)
+                overall_score = raw / 10.0 if raw > 1.0 else raw
+            except (TypeError, ValueError):
+                overall_score = None
+        elif payload.get("composite_score") is not None:
+            try:
+                overall_score = float(payload["composite_score"]) / 10.0
+            except (TypeError, ValueError):
+                overall_score = None
     eval_status = payload.get("eval_status") or _EVAL_EVENT_STATUS_MAP.get(event_type, event_type)
     locked = 1 if payload.get("locked") or event_type == "evaluation.locked" else 0
     compliance_flags = payload.get("compliance_flags") or []

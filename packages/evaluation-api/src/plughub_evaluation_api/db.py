@@ -243,7 +243,8 @@ ALTER TABLE evaluation.campaigns
 ALTER TABLE evaluation.campaigns
     ADD COLUMN IF NOT EXISTS evaluation_pool_id     TEXT,           -- pool being evaluated (sampling filter)
     ADD COLUMN IF NOT EXISTS evaluation_calendar_id TEXT,           -- calendar for SLA + scheduling windows
-    ADD COLUMN IF NOT EXISTS gateway_config_ids     TEXT[] NOT NULL DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS gateway_config_ids     TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS evaluator_pool         TEXT;           -- S2.2: pool do AGENTE avaliador (null = default global)
 
 -- evaluation.results: workflow motor state tracking
 ALTER TABLE evaluation.results
@@ -537,6 +538,7 @@ async def create_campaign(
     evaluation_pool_id: str | None = None,
     evaluation_calendar_id: str | None = None,
     gateway_config_ids: list[str] | None = None,
+    evaluator_pool: str | None = None,
 ) -> dict[str, Any]:
     campaign_id = _new_id("evcampaign_")
     async with pool.acquire() as conn:
@@ -545,9 +547,10 @@ async def create_campaign(
             INSERT INTO evaluation.campaigns
                 (id, tenant_id, name, description, form_id, pool_id,
                  sampling_rules, reviewer_rules, schedule, created_by,
-                 evaluation_pool_id, evaluation_calendar_id, gateway_config_ids)
+                 evaluation_pool_id, evaluation_calendar_id, gateway_config_ids,
+                 evaluator_pool)
             VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,
-                    $11,$12,$13)
+                    $11,$12,$13,$14)
             RETURNING *
             """,
             campaign_id, tenant_id, name, description, form_id, pool_id,
@@ -558,6 +561,7 @@ async def create_campaign(
             evaluation_pool_id,
             evaluation_calendar_id,
             gateway_config_ids or [],
+            evaluator_pool,
         )
     return _row(row)  # type: ignore[return-value]
 
@@ -608,7 +612,8 @@ async def update_campaign(
     allowed = {"name", "description", "status", "sampling_rules", "reviewer_rules", "schedule",
                "total_instances", "completed_instances", "avg_score",
                "review_workflow_skill_id", "contestation_policy",
-               "evaluation_pool_id", "evaluation_calendar_id", "gateway_config_ids"}
+               "evaluation_pool_id", "evaluation_calendar_id", "gateway_config_ids",
+               "evaluator_pool"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return await get_campaign(pool, campaign_id, tenant_id)
@@ -637,6 +642,45 @@ async def update_campaign(
             *args,
         )
     return _row(row)
+
+
+async def delete_campaign(pool: asyncpg.Pool, campaign_id: str, tenant_id: str) -> bool:
+    """Remove a campanha e seus dependentes (instances/results/critérios/threads/
+    curation) numa transação — hard delete. Filhos antes dos pais (best-effort)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            rows = await conn.fetch(
+                "SELECT id FROM evaluation.instances WHERE campaign_id=$1 AND tenant_id=$2",
+                campaign_id, tenant_id,
+            )
+            inst_ids = [r["id"] for r in rows]
+            if inst_ids:
+                for tbl, col in (
+                    ("criterion_responses", "instance_id"),
+                    ("contestation_threads", "evaluation_instance_id"),
+                    ("curation_reviews",     "instance_id"),
+                    ("results",              "instance_id"),
+                    ("instances",            "id"),
+                ):
+                    try:
+                        await conn.execute(
+                            f"DELETE FROM evaluation.{tbl} WHERE {col} = ANY($1::text[])",
+                            inst_ids,
+                        )
+                    except Exception:
+                        pass
+            try:
+                await conn.execute(
+                    "DELETE FROM evaluation.results WHERE campaign_id=$1 AND tenant_id=$2",
+                    campaign_id, tenant_id,
+                )
+            except Exception:
+                pass
+            res = await conn.execute(
+                "DELETE FROM evaluation.campaigns WHERE id=$1 AND tenant_id=$2",
+                campaign_id, tenant_id,
+            )
+    return res.split()[-1] != "0"
 
 
 # ─── Instances CRUD ───────────────────────────────────────────────────────────
@@ -669,6 +713,52 @@ async def create_instance(
             campaign_id,
         )
     return _row(row)  # type: ignore[return-value]
+
+
+async def instance_exists_for_session(
+    pool: asyncpg.Pool, campaign_id: str, session_id: str, tenant_id: str
+) -> bool:
+    """S2.1 (sampling no close): idempotência — evita instância duplicada quando o
+    evento conversations.session_closed é re-consumido (restart / at-least-once)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM evaluation.instances "
+            "WHERE campaign_id=$1 AND session_id=$2 AND tenant_id=$3 LIMIT 1",
+            campaign_id, session_id, tenant_id,
+        )
+    return row is not None
+
+
+async def flush_synthetic(pool: asyncpg.Pool, tenant_id: str) -> dict[str, int]:
+    """Apaga a massa SINTÉTICA do tenant (instâncias com session_id LIKE 'synthetic_%')
+    e tudo que a referencia — para o ciclo gerar/limpar do avaliador fake. Best-effort
+    por tabela (filhos antes dos pais)."""
+    counts: dict[str, int] = {}
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id FROM evaluation.instances "
+            "WHERE tenant_id=$1 AND session_id LIKE 'synthetic_%'",
+            tenant_id,
+        )
+        inst_ids = [r["id"] for r in rows]
+        if not inst_ids:
+            return {"instances": 0}
+        for tbl, col in (
+            ("criterion_responses", "instance_id"),
+            ("contestation_threads", "evaluation_instance_id"),
+            ("curation_reviews",     "instance_id"),
+            ("results",              "instance_id"),
+            ("instances",            "id"),
+        ):
+            try:
+                res = await conn.execute(
+                    f"DELETE FROM evaluation.{tbl} WHERE {col} = ANY($1::text[])",
+                    inst_ids,
+                )
+                counts[tbl] = int(res.split()[-1])
+            except Exception:
+                counts[tbl] = -1
+    return counts
 
 
 async def get_instance(pool: asyncpg.Pool, instance_id: str, tenant_id: str) -> dict[str, Any] | None:

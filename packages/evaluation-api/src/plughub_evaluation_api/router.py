@@ -56,7 +56,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+import random
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import asyncpg
@@ -64,7 +66,7 @@ import httpx
 import jwt as pyjwt
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .config import settings
 from . import db as _db
@@ -248,6 +250,22 @@ class FormUpdate(BaseModel):
     status:           str | None = None
 
 
+def _expose_form_id(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """O UI espera `form_id`; o DB usa `id` como PK (evform_*). Expõe ambos na
+    resposta — sem isso o <select> cai no fallback HTML e envia o NOME do form."""
+    if row is not None and "form_id" not in row and "id" in row:
+        row["form_id"] = row["id"]
+    return row
+
+
+def _expose_campaign_id(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """O UI espera `campaign_id`; o DB usa `id` como PK (evcampaign_*). Expõe ambos
+    — sem isso o front envia campaign_id=undefined (pause/resume/seed quebram com 422)."""
+    if row is not None and "campaign_id" not in row and "id" in row:
+        row["campaign_id"] = row["id"]
+    return row
+
+
 @router.get("/v1/evaluation/forms")
 async def list_forms(
     request: Request,
@@ -258,6 +276,7 @@ async def list_forms(
 ) -> dict:
     pool = _pool(request)
     rows = await _db.list_forms(pool, tenant_id, status=status, limit=limit, offset=offset)
+    rows = [_expose_form_id(r) for r in rows]
     return {"tenant_id": tenant_id, "forms": rows, "count": len(rows)}
 
 
@@ -265,7 +284,7 @@ async def list_forms(
 async def create_form(body: FormCreate, request: Request) -> dict:
     pool = _pool(request)
     row = await _db.create_form(pool, **body.model_dump())
-    return row
+    return _expose_form_id(row)
 
 
 @router.get("/v1/evaluation/forms/{form_id}")
@@ -274,7 +293,7 @@ async def get_form(form_id: str, tenant_id: str, request: Request) -> dict:
     row = await _db.get_form(pool, form_id, tenant_id)
     if not row:
         raise HTTPException(404, detail="form not found")
-    return row
+    return _expose_form_id(row)
 
 
 @router.put("/v1/evaluation/forms/{form_id}")
@@ -284,7 +303,7 @@ async def update_form(form_id: str, tenant_id: str, body: FormUpdate, request: R
     row = await _db.update_form(pool, form_id, tenant_id, **updates)
     if not row:
         raise HTTPException(404, detail="form not found")
-    return row
+    return _expose_form_id(row)
 
 
 @router.delete("/v1/evaluation/forms/{form_id}", status_code=204)
@@ -303,7 +322,10 @@ class CampaignCreate(BaseModel):
     name:                       str
     description:                str = ""
     form_id:                    str
-    pool_id:                    str
+    # pool_id (legado: escopo ABAC + índice, NOT NULL no DB) e evaluation_pool_id
+    # (pool avaliado) representam o MESMO pool para campanhas de pool único — o UI
+    # expõe um seletor só ("Evaluation Pool"). Aceitamos qualquer um e espelhamos.
+    pool_id:                    str | None = None
     sampling_rules:             dict = Field(default_factory=dict)
     reviewer_rules:             dict = Field(default_factory=dict)
     schedule:                   dict = Field(default_factory=dict)
@@ -315,6 +337,18 @@ class CampaignCreate(BaseModel):
     evaluation_pool_id:         str | None = None   # pool being evaluated (sampling filter)
     evaluation_calendar_id:     str | None = None   # calendar for SLA + scheduling windows
     gateway_config_ids:         list[str] = Field(default_factory=list)  # model configs for evaluators
+    evaluator_pool:             str | None = None   # S2.2: pool do agente AVALIADOR (null = default global)
+
+    @model_validator(mode="after")
+    def _mirror_pools(self) -> "CampaignCreate":
+        # Espelha pool_id ↔ evaluation_pool_id (mesmo pool). Pelo menos um exigido.
+        if not self.pool_id and self.evaluation_pool_id:
+            self.pool_id = self.evaluation_pool_id
+        if not self.evaluation_pool_id and self.pool_id:
+            self.evaluation_pool_id = self.pool_id
+        if not self.pool_id:
+            raise ValueError("pool_id ou evaluation_pool_id é obrigatório")
+        return self
 
 
 class CampaignUpdate(BaseModel):
@@ -330,6 +364,7 @@ class CampaignUpdate(BaseModel):
     evaluation_pool_id:         str | None = None
     evaluation_calendar_id:     str | None = None
     gateway_config_ids:         list[str] | None = None
+    evaluator_pool:             str | None = None   # S2.2
 
 
 @router.get("/v1/evaluation/campaigns")
@@ -351,6 +386,7 @@ async def list_campaigns(
         limit=limit,
         offset=offset,
     )
+    rows = [_expose_campaign_id(r) for r in rows]
     return {"tenant_id": tenant_id, "campaigns": rows, "count": len(rows)}
 
 
@@ -376,6 +412,7 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
         evaluation_pool_id=data.get("evaluation_pool_id"),
         evaluation_calendar_id=data.get("evaluation_calendar_id"),
         gateway_config_ids=data.get("gateway_config_ids") or [],
+        evaluator_pool=data.get("evaluator_pool"),
     )
     # Patch v2 scalar fields not handled by create (jsonb fields via update)
     v2_updates: dict[str, Any] = {}
@@ -385,7 +422,7 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
         v2_updates["contestation_policy"] = data["contestation_policy"]
     if v2_updates:
         row = await _db.update_campaign(pool, row["id"], body.tenant_id, **v2_updates) or row
-    return row
+    return _expose_campaign_id(row)
 
 
 @router.get("/v1/evaluation/campaigns/{campaign_id}")
@@ -394,7 +431,7 @@ async def get_campaign(campaign_id: str, tenant_id: str, request: Request) -> di
     row = await _db.get_campaign(pool, campaign_id, tenant_id)
     if not row:
         raise HTTPException(404, detail="campaign not found")
-    return row
+    return _expose_campaign_id(row)
 
 
 @router.put("/v1/evaluation/campaigns/{campaign_id}")
@@ -404,7 +441,7 @@ async def update_campaign(campaign_id: str, tenant_id: str, body: CampaignUpdate
     row = await _db.update_campaign(pool, campaign_id, tenant_id, **updates)
     if not row:
         raise HTTPException(404, detail="campaign not found")
-    return row
+    return _expose_campaign_id(row)
 
 
 @router.post("/v1/evaluation/campaigns/{campaign_id}/pause")
@@ -413,7 +450,7 @@ async def pause_campaign(campaign_id: str, tenant_id: str, request: Request) -> 
     row = await _db.update_campaign(pool, campaign_id, tenant_id, status="paused")
     if not row:
         raise HTTPException(404, detail="campaign not found")
-    return row
+    return _expose_campaign_id(row)
 
 
 @router.post("/v1/evaluation/campaigns/{campaign_id}/resume")
@@ -422,7 +459,15 @@ async def resume_campaign(campaign_id: str, tenant_id: str, request: Request) ->
     row = await _db.update_campaign(pool, campaign_id, tenant_id, status="active")
     if not row:
         raise HTTPException(404, detail="campaign not found")
-    return row
+    return _expose_campaign_id(row)
+
+
+@router.delete("/v1/evaluation/campaigns/{campaign_id}", status_code=204)
+async def delete_campaign(campaign_id: str, tenant_id: str, request: Request) -> None:
+    pool = _pool(request)
+    ok = await _db.delete_campaign(pool, campaign_id, tenant_id)
+    if not ok:
+        raise HTTPException(404, detail="campaign not found")
 
 
 # ─── Instances ────────────────────────────────────────────────────────────────
@@ -492,6 +537,51 @@ async def create_instance(body: InstanceCreate, request: Request) -> dict:
         expires_at=expires_at.isoformat() if expires_at else None,
     )
     return row
+
+
+@router.post("/v1/evaluation/campaigns/{campaign_id}/dispatch")
+async def dispatch_campaign(
+    campaign_id: str, tenant_id: str, request: Request, limit: int = 100,
+) -> dict:
+    """
+    S2.2 dispatcher — emits `evaluation.requested` for every *scheduled* instance of the
+    campaign. The session-replayer builds the ReplayContext (with the form) and the
+    Routing Engine allocates an evaluator agent from the campaign's `evaluator_pool`
+    (fallback: global default). Instances stay `scheduled` so the evaluator can claim them.
+    Used by the "Rodar agora" button and (later) the windowed dispatcher.
+    """
+    _require_admin(request)
+    pool = _pool(request)
+    producer = _kafka_producer(request)
+
+    campaign = await _db.get_campaign(pool, campaign_id, tenant_id)
+    if not campaign:
+        raise HTTPException(404, detail="campaign not found")
+
+    evaluator_pool = (campaign.get("evaluator_pool") or "").strip() or settings.default_evaluator_pool
+
+    rows = await _db.list_instances(
+        pool, tenant_id, campaign_id=campaign_id, status="scheduled",
+        limit=limit, offset=0,
+    )
+    dispatched = 0
+    for row in rows:
+        await _kafka.emit_evaluation_requested(
+            producer, settings.evaluation_topic,
+            instance_id=row["id"],
+            tenant_id=row.get("tenant_id") or tenant_id,
+            session_id=row["session_id"],
+            campaign_id=row.get("campaign_id") or campaign_id,
+            form_id=row.get("form_id") or campaign["form_id"],
+            evaluator_pool=evaluator_pool,
+        )
+        dispatched += 1
+
+    return {
+        "campaign_id":    campaign_id,
+        "dispatched":     dispatched,
+        "evaluator_pool": evaluator_pool,
+    }
 
 
 @router.get("/v1/evaluation/instances/{instance_id}")
@@ -565,6 +655,7 @@ class IngestBody(BaseModel):
     # Arc 13 Fase B — per-dimension evidence and evaluation type
     dimension_threads: list[dict] = Field(default_factory=list)  # [{dimension_id, score, justification, evidence_entries[]}]
     evaluated_agent_type: str = "human_agent"  # "human_agent" | "ai_agent"
+    evaluated_at: str | None = None            # backdating opcional (seeder sintético — séries temporais)
 
 
 @router.post("/v1/evaluation/ingest", status_code=201)
@@ -641,6 +732,8 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
     except Exception:
         pre_review = False
 
+    # Default p/ o ramo ai_agent (antes ficava indefinido → UnboundLocalError no return).
+    initial_state = "auto_finalized"
     if body.evaluated_agent_type == "ai_agent":
         # Fluxo 2: immediate finalization — no contestation allowed for AI agents
         await _db.finalize_result(
@@ -699,6 +792,7 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
         overall_score=body.overall_score,
         passed=body.passed,
         eval_status=body.eval_status,
+        evaluated_at=body.evaluated_at,
     )
 
     return {
@@ -710,6 +804,182 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
         "evaluated_agent_type":    body.evaluated_agent_type,
         "eval_status":             body.eval_status,
     }
+
+
+# ─── Synthetic seeder (avaliador fake — S2.Q1: valida o módulo em volume) ──────
+
+class SeedSyntheticBody(BaseModel):
+    tenant_id:      str
+    campaign_id:    str
+    count:          int = 50
+    human_ratio:    float = 0.7          # fração evaluated_agent_type="human_agent"
+    days_back:      int = 30             # espalha as datas nos últimos N dias (séries temporais)
+    agent_type_ids: list[str] = Field(default_factory=list)  # variedade de agentes avaliados (NPS agent_key)
+    seed_nps:       bool = True
+    pool_id:        str = ""             # pool dos sinais de NPS (default = evaluation_pool da campanha)
+
+
+def _rand_criterion_responses(form: dict) -> tuple[list[dict], list[dict], float]:
+    """Gera criterion_responses + dimension_threads aleatórios a partir das
+    dimensões/critérios do form (ignora type=auto_computed). create_criterion_responses
+    lê `score` (não `value`). Retorna também overall_score (média 0–10)."""
+    crit_resps: list[dict] = []
+    dim_threads: list[dict] = []
+    scores: list[float] = []
+    for dim in (form.get("dimensions") or []):
+        dim_id = dim.get("id") or dim.get("dimension_id") or "dim"
+        dim_scores: list[float] = []
+        for crit in (dim.get("criteria") or []):
+            if crit.get("type") == "auto_computed":
+                continue
+            cid = crit.get("criterion_id") or crit.get("id") or "crit"
+            cname = crit.get("label") or crit.get("name") or cid
+            if random.random() < 0.08:
+                crit_resps.append({"criterion_id": cid, "criterion_name": cname,
+                                   "dimension_id": dim_id, "na": True, "score": None,
+                                   "value": None, "na_reason": "sintético: não aplicável",
+                                   "justification": "Avaliação sintética (N/A)."})
+                continue
+            val = round(random.uniform(4.0, 10.0), 1)
+            dim_scores.append(val); scores.append(val)
+            crit_resps.append({"criterion_id": cid, "criterion_name": cname,
+                               "dimension_id": dim_id, "na": False,
+                               "score": val, "value": val, "max_score": 10.0,
+                               "justification": "Avaliação sintética para teste de volume.",
+                               "evidence_refs": [random.randint(0, 5)]})
+        if dim_scores:
+            dscore = round(sum(dim_scores) / len(dim_scores), 2)
+            dim_threads.append({
+                "dimension_id": dim_id, "score": dscore,
+                "justification": "Síntese sintética da dimensão para teste de volume do módulo de qualidade.",
+                "evidence_entries": [{
+                    "stream_entry_id": f"synthetic-{uuid.uuid4().hex[:8]}",
+                    "excerpt": "trecho sintético de evidência",
+                    "relevance_note": "evidência gerada artificialmente",
+                }],
+            })
+    overall = round(sum(scores) / len(scores), 2) if scores else round(random.uniform(5, 9), 2)
+    return crit_resps, dim_threads, overall
+
+
+@router.post("/v1/evaluation/admin/seed-synthetic", status_code=201)
+async def seed_synthetic(body: SeedSyntheticBody, request: Request) -> dict:
+    """Avaliador FAKE: gera `count` avaliações sintéticas para uma campanha pelo
+    MESMO caminho de uma avaliação real (cria instance + ingest_result), validando
+    o módulo de qualidade em VOLUME sem depender do agente LLM nem de massa real.
+    Opcionalmente injeta sinais de NPS sintéticos (grão session)."""
+    pool = _pool(request)
+    producer = _kafka_producer(request)
+
+    campaign = await _db.get_campaign(pool, body.campaign_id, body.tenant_id)
+    if not campaign:
+        raise HTTPException(404, detail="campaign not found")
+    form = await _db.get_form(pool, campaign["form_id"], body.tenant_id)
+    if not form:
+        raise HTTPException(400, detail="campaign form not found")
+
+    eval_pool   = campaign.get("evaluation_pool_id") or campaign.get("pool_id") or ""
+    nps_pool    = body.pool_id or eval_pool
+    passing     = float(form.get("passing_score") or 7.0)
+    # Agentes sintéticos p/ a atribuição do bench (agent_key = user_id | flow_id).
+    synth_humans = [("agente_humano_demo", f"user_h{i}")  for i in range(1, 4)]
+    synth_ais    = [(f"agente_ia_demo_{i}", f"flow_ia{i}") for i in range(1, 4)]
+
+    created = 0
+    nps_emitted = 0
+    now = datetime.now(timezone.utc)
+    span_days = max(0, body.days_back)
+    for _ in range(max(1, min(body.count, 1000))):
+        session_id = f"synthetic_{uuid.uuid4().hex}"
+        is_human = random.random() < body.human_ratio
+        # Agente avaliado (atribuição p/ o bench): humano usa user_id, IA usa flow_id.
+        if is_human:
+            atype, akey = random.choice(synth_humans)
+            seg_user, seg_flow, seg_kind = akey, "", "human"
+        else:
+            atype, akey = random.choice(synth_ais)
+            seg_user, seg_flow, seg_kind = "", akey, "ai"
+        # Data espalhada nos últimos N dias (para Trend/Comparison terem série).
+        evaluated_at = (now - timedelta(days=random.uniform(0, span_days),
+                                        hours=random.uniform(0, 23))).isoformat()
+        inst = await _db.create_instance(
+            pool, tenant_id=body.tenant_id, campaign_id=body.campaign_id,
+            form_id=campaign["form_id"], session_id=session_id,
+            priority=random.randint(1, 10),
+        )
+        crit_resps, dim_threads, overall = _rand_criterion_responses(form)
+        ingest = IngestBody(
+            tenant_id=body.tenant_id, instance_id=inst["id"], session_id=session_id,
+            campaign_id=body.campaign_id, form_id=campaign["form_id"],
+            evaluator_agent_id="synthetic_evaluator",
+            overall_score=overall, max_score=10.0, normalized_score=round(overall / 10.0, 3),
+            passed=overall >= passing, eval_status="submitted",
+            evaluator_notes="seed sintético (avaliador fake)",
+            criterion_responses=crit_resps, dimension_threads=dim_threads,
+            evaluated_agent_type="human_agent" if is_human else "ai_agent",
+            evaluated_at=evaluated_at,
+        )
+        try:
+            await ingest_result(ingest, request)
+            created += 1
+        except Exception as exc:
+            logger.warning("seed-synthetic: ingest failed for %s: %s", session_id, exc)
+            continue
+        # Segment sintético (conversations.participants → analytics.segments): dá ao
+        # bench o AGENTE avaliado por join em session_id (lentes quality/quality_criteria).
+        try:
+            await producer.send_and_wait("conversations.participants", json.dumps({
+                "type":           "participant_left",
+                "event_id":       str(uuid.uuid4()),
+                "session_id":     session_id,
+                "tenant_id":      body.tenant_id,
+                "participant_id": f"{atype}-synthetic",
+                "pool_id":        eval_pool,
+                "agent_type_id":  atype,
+                "agent_type":     seg_kind,
+                "user_id":        seg_user,
+                "flow_id":        seg_flow,
+                "user_login":     seg_user,
+                "role":           "primary",
+                "sequence_index": 0,
+                "joined_at":      evaluated_at,
+                "outcome":        "resolved",
+                "duration_ms":    random.randint(60_000, 600_000),
+                "timestamp":      evaluated_at,
+            }).encode("utf-8"))
+        except Exception as exc:
+            logger.warning("seed-synthetic: participant emit failed: %s", exc)
+        if body.seed_nps and random.random() < 0.6:
+            try:
+                await producer.send_and_wait("session.signals", json.dumps({
+                    "event_id": str(uuid.uuid4()),
+                    "tenant_id": body.tenant_id,
+                    "origin_session_id": session_id,
+                    "grain": "session",
+                    "segment_id": None,
+                    "agent_key": akey,
+                    "survey_session_id": None,
+                    "pool_id": nps_pool,
+                    "signals": [{"metric": "nps", "value": float(random.randint(0, 10))}],
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                }).encode("utf-8"))
+                nps_emitted += 1
+            except Exception as exc:
+                logger.warning("seed-synthetic: nps emit failed: %s", exc)
+
+    return {
+        "campaign_id": body.campaign_id, "requested": body.count,
+        "results_created": created, "nps_signals_emitted": nps_emitted,
+    }
+
+
+@router.post("/v1/evaluation/admin/flush-synthetic")
+async def flush_synthetic(tenant_id: str, request: Request) -> dict:
+    """Apaga a massa sintética (session_id LIKE 'synthetic_%') do Postgres da
+    evaluation-api. O ClickHouse é limpo pelo endpoint equivalente da analytics-api."""
+    pool = _pool(request)
+    deleted = await _db.flush_synthetic(pool, tenant_id)
+    return {"tenant_id": tenant_id, "deleted": deleted}
 
 
 # ─── Results ──────────────────────────────────────────────────────────────────

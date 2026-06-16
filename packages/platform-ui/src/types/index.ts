@@ -602,6 +602,7 @@ export interface EvaluationCampaign {
   contestation_policy?:     ContestationPolicy
   review_workflow_skill_id?: string
   evaluation_pool_id?:      string
+  evaluator_pool?:          string | null   // S2.2: pool do agente avaliador
   evaluation_calendar_id?:  string
   gateway_config_ids?:      string[]
   total_instances:          number

@@ -147,6 +147,63 @@ export async function pauseCampaign(campaignId: string, token?: string) {
   return r.json() as Promise<EvaluationCampaign>
 }
 
+export async function updateCampaign(campaignId: string, tenantId: string, body: Partial<EvaluationCampaign>, token?: string) {
+  const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
+    method: 'PUT',
+    headers: adminHeaders(token),
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json() as Promise<EvaluationCampaign>
+}
+
+export async function deleteCampaign(campaignId: string, tenantId: string, token?: string) {
+  const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
+    method: 'DELETE',
+    headers: adminHeaders(token),
+  })
+  if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+}
+
+// S2.Q1 — avaliador fake: gera avaliações sintéticas para validar o módulo em volume.
+export async function seedSyntheticEvaluations(
+  tenantId: string, campaignId: string, count: number, token?: string,
+): Promise<{ results_created: number; nps_signals_emitted: number; requested: number }> {
+  const r = await fetch(`${BASE}/admin/seed-synthetic`, {
+    method: 'POST',
+    headers: adminHeaders(token),
+    body: JSON.stringify({ tenant_id: tenantId, campaign_id: campaignId, count }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+// S2.Q1 — limpa a massa sintética: Postgres (evaluation-api) + ClickHouse (analytics-api).
+export async function flushSyntheticEvaluations(
+  tenantId: string, token?: string,
+): Promise<{ pg: unknown; ch: unknown }> {
+  const q = `?tenant_id=${encodeURIComponent(tenantId)}`
+  const pgRes = await fetch(`${BASE}/admin/flush-synthetic${q}`, { method: 'POST', headers: adminHeaders(token) })
+  if (!pgRes.ok) throw new Error(`evaluation flush HTTP ${pgRes.status}: ${await pgRes.text()}`)
+  const pg = await pgRes.json()
+  // analytics-api é alcançado pelo proxy "/reports" → 3500
+  const chRes = await fetch(`/reports/admin/flush-synthetic${q}`, { method: 'POST', headers: adminHeaders(token) })
+  const ch = chRes.ok ? await chRes.json() : { error: `HTTP ${chRes.status}` }
+  return { pg, ch }
+}
+
+// S2.2 — dispara a avaliação real das instances scheduled da campanha (Rodar agora).
+export async function dispatchCampaign(
+  campaignId: string, tenantId: string, token?: string,
+): Promise<{ campaign_id: string; dispatched: number; evaluator_pool: string }> {
+  const r = await fetch(
+    `${BASE}/campaigns/${campaignId}/dispatch?tenant_id=${encodeURIComponent(tenantId)}`,
+    { method: 'POST', headers: adminHeaders(token) },
+  )
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
 export async function resumeCampaign(campaignId: string, token?: string) {
   const r = await fetch(`${BASE}/campaigns/${campaignId}/resume`, {
     method: 'POST',

@@ -899,6 +899,52 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     contatos controlado por drag (clamp 15–85%), persistido em `localStorage` (`plughub_pull_split_pct`).
     **Frente 1 / Pull — encerrada (F1 + F2 + polish).**
 
+## Frente 2 — Avaliação campaign-driven (shakedown E2E)
+
+Decisão de arquitetura: avaliação é **sempre dirigida por campanha**, nunca pelo fechamento inline (modelo antigo,
+removido). Janela de despacho = **calendário da campanha** (`evaluation_calendar_id`, sem campo novo); throttle =
+capacidade do pool avaliador (`avaliacao_ia.max_concurrent_sessions`). Avaliar no fim do atendimento = opt-in via
+pool hooks genéricos (sem campo dedicado).
+- **S1 ✅ (2026-06-16)** — create de campanha/form destravado (pool_id espelha evaluation_pool_id; forms expõem
+  form_id). Ver CHANGELOG.
+- **S2.1 ✅ (2026-06-16)** — trigger inline removido (session-replayer) + payload `session_closed` enriquecido
+  (bridge) + consumer de sampling na evaluation-api criando `EvaluationInstance(scheduled)` por campanha ativa.
+- **S2.Q1 ✅ (2026-06-16)** — avaliador FAKE: `POST /v1/evaluation/admin/seed-synthetic` gera avaliações
+  sintéticas (via ingest real) + NPS, p/ validar o módulo em volume sem o LLM. Botão na CampaignsPage. Corrigido
+  bug `initial_state` no ingest (ramo ai_agent). Falta: chaves i18n `campaigns.seedSynthetic*` (en/pt-BR) +
+  (opcional) backdating de datas e segmentos sintéticos p/ time-series/agent-comparison/epochs do bench.
+- **S2.Q1b ✅ (2026-06-16)** — seeder enriquecido (datas espalhadas + segments sintéticos p/ atribuição de agente)
+  → validou o **bench** de Agents (lentes quality / quality by dimension + NPS) com dado sintético.
+- **Consolidação Quality ✅ (2026-06-16)** — abas **Trend** e **Comparison** da página Analytics→Quality
+  **removidas** (estavam quebradas/redundantes; `quality-timeseries`/`quality-comparison` não retornavam dado
+  sintético). Comparação de qualidade por agente/dimensão/tempo vive no **bench** (Analytics→Agents). Página
+  Quality ficou só com **Summary**. `TimeseriesView`/`ComparisonView` viraram código morto (não removido).
+  **Backlog (diferido)** — capacidades ÚNICAS das abas removidas, NÃO presentes no bench: (a) marcadores/
+  comparação por **deploy-epoch** (Arc 6 Fase 2 — "deploy melhorou a qualidade?"); (b) **significância
+  estatística** (N<30); (c) comparação de **períodos arbitrários A vs B**; (d) overlay multi-métrica num gráfico.
+  Se a observabilidade por deploy virar necessidade, adicionar um modo "comparar fatias/deploy" ao bench.
+- **Nits do bench (diferido)**:
+  - **Quality score geral diluído** — KPI "Quality score 0.00 (N evals)" do drill-down e a curva da lente quality
+    saem baixos/zero, enquanto as **dimensões** (radar) estão corretas. Causa provável: o agregado geral
+    média/zero-fill **por sessões/dias sem avaliação** (102 sessões × 36 evals → ~0.25), ao passo que a cross-cut
+    usa `avg(overall_score)` só sobre evals. Fix = alinhar o denominador (média só sobre avaliações) no
+    lens/drill-down de qualidade (analytics-api `reports_query.py`).
+  - **Janela/período inconsistente** *(hipótese do usuário)* — KPI, lente e tabela de dimensão podem usar
+    períodos diferentes; e o **default do range é estranho** (volta alguns dias em vez de hoje/vazio). Revisar:
+    (a) garantir que todos os cálculos usem o MESMO período selecionado; (b) default mais previsível (hoje, ou
+    vazio = tudo). Vale para o bench e para o Summary de Quality.
+  - NPS por agente parece alto. Pequeno.
+- ~~**S2.2**~~ ✅ 2026-06-16 (ver CHANGELOG) — `evaluator_pool` por campanha (SELECT/UI) + dispatcher `POST /campaigns/{id}/dispatch`
+  ("Rodar agora") emitindo `evaluation.requested` por instância scheduled + Replayer carregando o form no ReplayContext.
+  **Falta o gate E2E**: confirmar avaliador real consumindo o form e submetendo (depende de instances `scheduled` existirem).
+- **S2.3** — dispatcher automático: drena instances `scheduled` das campanhas cujo `evaluation_calendar_id` está
+  aberto (calendar-api `is_open`), respeitando a capacidade do pool avaliador.
+- **S2.4** — amarrar o workflow de revisão (`review_workflow_skill_id`) ao resultado.
+- **Gap UI (pós-pipeline)** — CampaignsPage não tem editar/deletar campanha (só create + pause/resume); a API tem
+  `CampaignUpdate`/PUT. Adicionar quando o pipeline estiver fluindo.
+- **Surface de instances** — verificar se há tela que lista instances `scheduled` (hoje Avaliações mostra
+  resultados). Pode ser preciso um surface para o operador ver a fila de avaliação agendada.
+
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
   que termina com `escalate` re-roteia o CONTATO em vez de **voltar ao chamador**. O `agente_auth_form_v1.yaml`

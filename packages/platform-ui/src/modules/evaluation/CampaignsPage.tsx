@@ -10,8 +10,13 @@ import {
   useCampaigns,
   useForms,
   createCampaign,
+  updateCampaign,
   pauseCampaign,
   resumeCampaign,
+  deleteCampaign,
+  seedSyntheticEvaluations,
+  flushSyntheticEvaluations,
+  dispatchCampaign,
   useCampaignReport,
   useCurationSamplingRules,
   saveCurationSamplingRules,
@@ -145,6 +150,7 @@ interface CreateModalProps {
   onClose: () => void
   onCreated: () => void
   adminToken: string
+  editing?: EvaluationCampaign | null   // null/undefined = criar; objeto = editar (PUT)
 }
 
 const WORKFLOW_SKILL_VALUES = [
@@ -306,34 +312,44 @@ function CurationSamplingRulesEditor({
   )
 }
 
-function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
+function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalProps) {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const { forms } = useForms(TENANT)
   const poolOptions     = usePoolOptions(TENANT)
   const calendarOptions = useCalendarOptions(TENANT)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [formId, setFormId] = useState('')
-  const [evaluationPoolId,     setEvaluationPoolId]     = useState('')
-  const [evaluationCalendarId, setEvaluationCalendarId] = useState('')
-  const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed'>('percentage')
-  const [samplingRate, setSamplingRate] = useState('0.1')
-  const [autoReview, setAutoReview] = useState(true)
-  const [scoreThreshold, setScoreThreshold] = useState('7')
+  const isEdit = !!editing
+  // Prefill em modo edição (o modal é montado fresco ao abrir).
+  const _sr = (editing?.sampling_rules ?? {}) as { mode?: string; rate?: number; every_n?: number }
+  const _rr = (editing?.reviewer_rules ?? {}) as { auto_review?: boolean; score_threshold?: number }
+  const [name, setName] = useState(editing?.name ?? '')
+  const [description, setDescription] = useState(editing?.description ?? '')
+  const [formId, setFormId] = useState(editing?.form_id ?? '')
+  const [evaluationPoolId,     setEvaluationPoolId]     = useState(editing?.evaluation_pool_id ?? '')
+  const [evaluatorPool,        setEvaluatorPool]        = useState((editing as { evaluator_pool?: string } | null)?.evaluator_pool ?? '')
+  const [evaluationCalendarId, setEvaluationCalendarId] = useState(editing?.evaluation_calendar_id ?? '')
+  const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed'>((_sr.mode as 'all'|'percentage'|'fixed') || 'percentage')
+  const [samplingRate, setSamplingRate] = useState(String(_sr.rate ?? _sr.every_n ?? '0.1'))
+  const [autoReview, setAutoReview] = useState(_rr.auto_review ?? true)
+  const [scoreThreshold, setScoreThreshold] = useState(String(_rr.score_threshold ?? '7'))
 
-  // Contestation / workflow fields
-  const [workflowSkillId, setWorkflowSkillId] = useState('skill_revisao_simples_v1')
-  const [enableContestation, setEnableContestation] = useState(false)
-  const [maxRounds, setMaxRounds] = useState('3')
-  const [contestDeadlineHours, setContestDeadlineHours] = useState('72')
-  const [reviewDeadlineHours, setReviewDeadlineHours] = useState('48')
+  // Contestation / workflow fields — prefill em modo edição (contestation_policy).
+  const _cp = (editing?.contestation_policy ?? {}) as {
+    max_rounds?: number; contest_deadline_hours?: number; review_deadline_hours?: number
+    auto_lock_on_timeout?: boolean; reviewer_type?: string; use_business_hours?: boolean
+    pre_review_enabled?: boolean; pre_review_agent_pool?: string | null
+  }
+  const [workflowSkillId, setWorkflowSkillId] = useState(editing?.review_workflow_skill_id ?? 'skill_revisao_simples_v1')
+  const [enableContestation, setEnableContestation] = useState(!!editing?.contestation_policy)
+  const [maxRounds, setMaxRounds] = useState(String(_cp.max_rounds ?? '3'))
+  const [contestDeadlineHours, setContestDeadlineHours] = useState(String(_cp.contest_deadline_hours ?? '72'))
+  const [reviewDeadlineHours, setReviewDeadlineHours] = useState(String(_cp.review_deadline_hours ?? '48'))
   const [authorityLevel, setAuthorityLevel] = useState<'supervisor' | 'manager' | 'director'>('supervisor')
-  const [autoLockOnTimeout, setAutoLockOnTimeout] = useState(true)
-  const [reviewerType, setReviewerType] = useState<'ai' | 'human' | 'ai_then_human'>('ai_then_human')
-  const [useBusinessHours, setUseBusinessHours] = useState(false)
-  const [preReviewEnabled, setPreReviewEnabled] = useState(false)
-  const [preReviewPool, setPreReviewPool] = useState('')
+  const [autoLockOnTimeout, setAutoLockOnTimeout] = useState(_cp.auto_lock_on_timeout ?? true)
+  const [reviewerType, setReviewerType] = useState<'ai' | 'human' | 'ai_then_human'>((_cp.reviewer_type as 'ai'|'human'|'ai_then_human') || 'ai_then_human')
+  const [useBusinessHours, setUseBusinessHours] = useState(_cp.use_business_hours ?? false)
+  const [preReviewEnabled, setPreReviewEnabled] = useState(_cp.pre_review_enabled ?? false)
+  const [preReviewPool, setPreReviewPool] = useState(_cp.pre_review_agent_pool ?? '')
 
   // Arc 13 — curation sampling rules
   const [curationRules, setCurationRules] = useState<Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[]>(
@@ -352,6 +368,40 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
     setSaving(true)
     setError(null)
     try {
+      if (isEdit && editing) {
+        // Edição (PUT) — form_id/pool não mudam; status preservado.
+        await updateCampaign(editing.campaign_id, TENANT, {
+          name,
+          description,
+          review_workflow_skill_id: workflowSkillId || undefined,
+          evaluation_pool_id:     evaluationPoolId     || undefined,
+          evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
+          evaluation_calendar_id: evaluationCalendarId || undefined,
+          sampling_rules: {
+            mode: samplingMode,
+            rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
+            every_n: samplingMode === 'fixed' ? parseInt(samplingRate) : undefined,
+          },
+          reviewer_rules: {
+            auto_review: autoReview,
+            score_threshold: autoReview ? parseFloat(scoreThreshold) : undefined,
+          },
+          contestation_policy: enableContestation ? {
+            contestation_roles:     ['supervisor', 'admin'],
+            max_rounds:             parseInt(maxRounds),
+            contest_deadline_hours: parseInt(contestDeadlineHours),
+            review_deadline_hours:  parseInt(reviewDeadlineHours),
+            auto_lock_on_timeout:   autoLockOnTimeout,
+            reviewer_type:          isArc13Skill ? reviewerType : undefined,
+            use_business_hours:     useBusinessHours || undefined,
+            pre_review_enabled:     preReviewEnabled || undefined,
+            pre_review_agent_pool:  preReviewEnabled ? preReviewPool || null : undefined,
+          } : undefined,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any, adminToken)
+        onCreated()
+        return
+      }
       const campaign = await createCampaign({
         tenant_id: TENANT,
         form_id: formId,
@@ -360,6 +410,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
         status: 'draft',
         review_workflow_skill_id: workflowSkillId || undefined,
         evaluation_pool_id:     evaluationPoolId     || undefined,
+        evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
         evaluation_calendar_id: evaluationCalendarId || undefined,
         sampling_rules: {
           mode: samplingMode,
@@ -400,7 +451,7 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-[620px] max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b">
-          <h2 className="font-semibold text-dark">{t('campaigns.modal.title')}</h2>
+          <h2 className="font-semibold text-dark">{isEdit ? t('campaigns.modal.editTitle', { defaultValue: 'Editar campanha' }) : t('campaigns.modal.title')}</h2>
           <button onClick={onClose} className="text-muted-light hover:text-muted">{t('campaigns.modal.close')}</button>
         </div>
 
@@ -459,6 +510,28 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
                     {p.description ? `${p.pool_id} — ${p.description}` : p.pool_id}
                   </option>
                 ))}
+              </select>
+            </div>
+
+            {/* S2.2 — Evaluator pool (quem AVALIA; vazio = default global avaliacao_ia) */}
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1">
+                {t('campaigns.modal.evaluatorPoolLabel', { defaultValue: 'Pool avaliador' })}
+              </label>
+              <select
+                className="w-full border border-border-strong rounded px-3 py-1.5 text-sm"
+                value={evaluatorPool}
+                onChange={e => setEvaluatorPool(e.target.value)}
+              >
+                <option value="">{t('campaigns.modal.evaluatorPoolDefault', { defaultValue: 'Padrão global (avaliacao_ia)' })}</option>
+                {poolOptions.map(p => (
+                  <option key={p.pool_id} value={p.pool_id}>
+                    {p.description ? `${p.pool_id} — ${p.description}` : p.pool_id}
+                  </option>
+                ))}
+                {evaluatorPool && !poolOptions.some(p => p.pool_id === evaluatorPool) && (
+                  <option value={evaluatorPool}>{evaluatorPool}</option>
+                )}
               </select>
             </div>
 
@@ -713,7 +786,9 @@ function CreateModal({ onClose, onCreated, adminToken }: CreateModalProps) {
             disabled={saving}
             className="bg-primary text-white px-4 py-1.5 text-sm rounded hover:bg-primary-dark disabled:opacity-50"
           >
-            {saving ? t('campaigns.modal.submit_saving') : t('campaigns.modal.submit')}
+            {saving
+              ? t('campaigns.modal.submit_saving')
+              : (isEdit ? t('campaigns.modal.submitEdit', { defaultValue: 'Salvar alterações' }) : t('campaigns.modal.submit'))}
           </button>
         </div>
       </div>
@@ -837,6 +912,16 @@ export default function CampaignsPage() {
   const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000)
   const [selected, setSelected] = useState<EvaluationCampaign | null>(null)
   const [showCreate, setShowCreate] = useState(false)
+  const [editingCampaign, setEditingCampaign] = useState<EvaluationCampaign | null>(null)
+
+  // Re-sincroniza `selected` com a lista quando ela recarrega (após editar, o
+  // objeto antigo ficava stale → o modal de edição pré-preenchia valores velhos).
+  useEffect(() => {
+    if (!selected) return
+    const fresh = campaigns.find(c => c.campaign_id === selected.campaign_id)
+    if (fresh && fresh !== selected) setSelected(fresh)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [campaigns])
   const [actionError, setActionError] = useState<string | null>(null)
 
   const toggleStatus = async (c: EvaluationCampaign) => {
@@ -847,6 +932,57 @@ export default function CampaignsPage() {
       reload()
     } catch (e) {
       setActionError(String(e))
+    }
+  }
+
+  // S2.Q1 — avaliador fake: gera avaliações sintéticas para validar o módulo em volume.
+  const [seeding, setSeeding] = useState(false)
+  const [seedMsg, setSeedMsg] = useState<string | null>(null)
+  const handleSeed = async (c: EvaluationCampaign, count: number) => {
+    setSeeding(true); setSeedMsg(null); setActionError(null)
+    try {
+      const res = await seedSyntheticEvaluations(TENANT, c.campaign_id, count, adminToken)
+      setSeedMsg(`${res.results_created} avaliações + ${res.nps_signals_emitted} NPS gerados`)
+      reload()
+    } catch (e) {
+      setActionError(String(e))
+    } finally {
+      setSeeding(false)
+    }
+  }
+  const handleFlush = async () => {
+    if (!window.confirm('Limpar TODA a massa sintética (avaliações + NPS de teste)?')) return
+    setSeeding(true); setSeedMsg(null); setActionError(null)
+    try {
+      await flushSyntheticEvaluations(TENANT, adminToken)
+      setSeedMsg('Dados de teste limpos (Postgres + ClickHouse).')
+      reload()
+    } catch (e) {
+      setActionError(String(e))
+    } finally {
+      setSeeding(false)
+    }
+  }
+  const handleDelete = async (c: EvaluationCampaign) => {
+    if (!window.confirm(`Excluir a campanha "${c.name}" e TODAS as suas avaliações? Ação irreversível.`)) return
+    setActionError(null)
+    try {
+      await deleteCampaign(c.campaign_id, TENANT, adminToken)
+      setSelected(null)
+      reload()
+    } catch (e) {
+      setActionError(String(e))
+    }
+  }
+  const handleDispatch = async (c: EvaluationCampaign) => {
+    setSeeding(true); setSeedMsg(null); setActionError(null)
+    try {
+      const res = await dispatchCampaign(c.campaign_id, TENANT, adminToken)
+      setSeedMsg(`${res.dispatched} avaliação(ões) despachada(s) → pool ${res.evaluator_pool}`)
+    } catch (e) {
+      setActionError(String(e))
+    } finally {
+      setSeeding(false)
     }
   }
 
@@ -922,7 +1058,55 @@ export default function CampaignsPage() {
                   : <><Play  className="w-3.5 h-3.5 inline mr-1" aria-hidden="true" />{t('campaigns.resume')}</>
                 }
               </button>
+              {/* S2.2 — dispara a avaliação REAL das instances scheduled */}
+              <button
+                onClick={() => handleDispatch(selected)}
+                disabled={seeding}
+                title={t('campaigns.dispatchHint', { defaultValue: 'Despacha as avaliações pendentes para o pool avaliador (avaliação real)' })}
+                className="text-xs px-3 py-1 rounded bg-primary text-white hover:bg-primary-dark disabled:opacity-50"
+              >
+                {t('campaigns.dispatch', { defaultValue: 'Rodar agora' })}
+              </button>
+              {/* S2.Q1 — avaliador fake: gera volume sintético p/ validar o módulo */}
+              <button
+                onClick={() => handleSeed(selected, 50)}
+                disabled={seeding}
+                title={t('campaigns.seedSyntheticHint', { defaultValue: 'Gera 50 avaliações sintéticas (teste de volume do módulo)' })}
+                className="text-xs px-3 py-1 rounded border border-secondary/40 text-secondary hover:bg-secondary/10 disabled:opacity-50"
+              >
+                {seeding
+                  ? t('campaigns.seedSyntheticBusy', { defaultValue: 'Gerando…' })
+                  : t('campaigns.seedSynthetic', { defaultValue: 'Gerar avaliações de teste' })}
+              </button>
+              <button
+                onClick={handleFlush}
+                disabled={seeding}
+                title={t('campaigns.flushSyntheticHint', { defaultValue: 'Apaga toda a massa sintética (avaliações + NPS de teste)' })}
+                className="text-xs px-3 py-1 rounded border border-red/40 text-red-text hover:bg-red-light disabled:opacity-50"
+              >
+                {t('campaigns.flushSynthetic', { defaultValue: 'Limpar dados de teste' })}
+              </button>
+              <button
+                onClick={() => { setEditingCampaign(selected); setShowCreate(true) }}
+                title={t('campaigns.editHint', { defaultValue: 'Editar a campanha' })}
+                className="text-xs px-3 py-1 rounded border border-border text-muted hover:text-dark hover:bg-border/50"
+              >
+                {t('campaigns.edit', { defaultValue: 'Editar' })}
+              </button>
+              <button
+                onClick={() => handleDelete(selected)}
+                disabled={seeding}
+                title={t('campaigns.deleteHint', { defaultValue: 'Excluir a campanha e suas avaliações' })}
+                className="text-xs px-3 py-1 rounded border border-red/40 text-red-text hover:bg-red-light disabled:opacity-50"
+              >
+                {t('campaigns.delete', { defaultValue: 'Excluir' })}
+              </button>
             </div>
+            {seedMsg && (
+              <div className="text-xs text-green-text bg-green-light border border-green/30 rounded px-3 py-1.5">
+                {seedMsg}
+              </div>
+            )}
 
             {actionError && <div className="bg-red-light text-red-text text-sm p-2 rounded">{actionError}</div>}
 
@@ -987,6 +1171,18 @@ export default function CampaignsPage() {
                   </div>
                 ) : (
                   <div className="text-xs text-muted-light italic">{t('campaigns.detail.noPool')}</div>
+                )}
+              </div>
+
+              {/* S2.2 — Evaluator pool */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-muted mb-2">{t('campaigns.detail.evaluatorPool', { defaultValue: 'Pool avaliador' })}</div>
+                {(selected as { evaluator_pool?: string }).evaluator_pool ? (
+                  <div className="font-mono text-xs bg-surface-muted border rounded px-2 py-1 break-all text-dark">
+                    {(selected as { evaluator_pool?: string }).evaluator_pool}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-light italic">{t('campaigns.detail.evaluatorPoolDefault', { defaultValue: 'Padrão global (avaliacao_ia)' })}</div>
                 )}
               </div>
 
@@ -1071,9 +1267,13 @@ export default function CampaignsPage() {
 
       {showCreate && (
         <CreateModal
+          key={editingCampaign
+            ? `edit-${editingCampaign.campaign_id}-${(editingCampaign as { updated_at?: string }).updated_at ?? ''}`
+            : 'new'}
           adminToken={adminToken}
-          onClose={() => setShowCreate(false)}
-          onCreated={() => { setShowCreate(false); reload() }}
+          editing={editingCampaign}
+          onClose={() => { setShowCreate(false); setEditingCampaign(null) }}
+          onCreated={() => { setShowCreate(false); setEditingCampaign(null); reload() }}
         />
       )}
     </div>

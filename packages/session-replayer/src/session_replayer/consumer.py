@@ -79,6 +79,34 @@ async def _fetch_config_ttl(
         return default
 
 
+async def _fetch_evaluation_form(
+    eval_api_url: str, form_id: str, tenant_id: str
+) -> dict | None:
+    """
+    GET /v1/evaluation/forms/{form_id}?tenant_id=... — fetches the EvaluationForm so the
+    Replayer can inject it into the ReplayContext (Arc 6). Public-read endpoint, no auth.
+    Uses urllib in a thread executor to stay non-blocking. Returns None on any error.
+    """
+    loop = asyncio.get_event_loop()
+    url = f"{eval_api_url.rstrip('/')}/v1/evaluation/forms/{form_id}?tenant_id={tenant_id}"
+
+    def _get():
+        with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+            return json.loads(resp.read())
+
+    try:
+        form = await loop.run_in_executor(None, _get)
+        if isinstance(form, dict):
+            logger.info("Replayer: fetched evaluation_form %s for ReplayContext", form_id)
+            return form
+    except Exception as exc:
+        logger.warning(
+            "Replayer: could not fetch evaluation_form %s from %s — %s",
+            form_id, url, exc,
+        )
+    return None
+
+
 class SessionReplayerConsumer:
     """
     Orquestra os dois consumers Kafka e os componentes do pipeline.
@@ -89,6 +117,7 @@ class SessionReplayerConsumer:
         self._redis_url          = os.getenv("REDIS_URL",        "redis://localhost:6379")
         self._postgres_dsn       = os.getenv("DATABASE_URL",     "postgresql://plughub:plughub@localhost:5432/plughub")
         self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3600")
+        self._eval_api_url       = os.getenv("EVALUATION_API_URL", "http://localhost:3400")
         self._tenant_id          = os.getenv("PLUGHUB_TENANT_ID", "tenant_demo")
         # config-consolidation item 7b: evaluator_pool + replay speed come from the
         # Config API `evaluation` namespace (fetched in start()); these are the
@@ -197,29 +226,13 @@ class SessionReplayerConsumer:
             logger.error("Persister: failed for session %s: %s", event.session_id, exc)
             return
 
-        # Publica evaluation.requested para iniciar o pipeline de avaliação
-        # O pool e as dimensões podem ser configurados por tenant via Agent Registry
-        # (aqui usamos defaults do ambiente)
-        req = EvaluationRequest(
-            evaluation_id  = str(uuid.uuid4()),
-            session_id     = event.session_id,
-            tenant_id      = event.tenant_id,
-            evaluator_pool = self._evaluator_pool,
-            speed_factor   = self._default_speed,
-            requested_at   = datetime.now(timezone.utc),
-        )
-
-        try:
-            await self._producer.send_and_wait(
-                "evaluation.events",
-                value=req.model_dump(mode="json"),
-            )
-            logger.info(
-                "Persister: evaluation.requested published for session %s (eval_id=%s)",
-                event.session_id, req.evaluation_id,
-            )
-        except Exception as exc:
-            logger.error("Persister: failed to publish evaluation.requested: %s", exc)
+        # NOTA (S2.1 — modelo campaign-driven): o Persister NÃO dispara mais
+        # `evaluation.requested` no fechamento. Avaliação é dirigida por CAMPANHA:
+        # a evaluation-api amostra a sessão (cria EvaluationInstance=scheduled) e um
+        # dispatcher publica `evaluation.requested` na janela do calendário da
+        # campanha. Aqui só persistimos o stream (necessário para o replay quando a
+        # avaliação rodar mais tarde). Avaliar no fim do atendimento, se desejado,
+        # é opt-in via pool hooks genéricos (on_segment_end/on_contact_end).
 
     # ─────────────────────────────────────────
     # Consumer 2: Replayer
@@ -274,6 +287,14 @@ class SessionReplayerConsumer:
             tenant_id  = req.tenant_id,
         )
 
+        # Arc 6 — busca o EvaluationForm da campanha para injetar no ReplayContext.
+        # Sem o form, o agente avaliador não tem critérios para pontuar.
+        evaluation_form = None
+        if req.form_id:
+            evaluation_form = await _fetch_evaluation_form(
+                self._eval_api_url, req.form_id, req.tenant_id,
+            )
+
         try:
             # prepare() → hydration + leitura stream + escrita ReplayContext no Redis
             await replayer.prepare(
@@ -281,6 +302,11 @@ class SessionReplayerConsumer:
                 speed_factor    = req.speed_factor,
                 comparison_mode = req.comparison_mode,
                 dimensions      = req.dimensions,
+                # Arc 6 — campaign context
+                form_id         = req.form_id,
+                campaign_id     = req.campaign_id,
+                instance_id     = req.instance_id,
+                evaluation_form = evaluation_form,
             )
             logger.info(
                 "Replayer: ReplayContext ready for session %s — evaluator pool=%s",

@@ -65,6 +65,41 @@ async def emit_instance_created(
     })
 
 
+async def emit_evaluation_requested(
+    producer: Any,
+    topic: str,
+    *,
+    instance_id: str,
+    tenant_id: str,
+    session_id: str,
+    campaign_id: str,
+    form_id: str,
+    evaluator_pool: str,
+    speed_factor: float = 10.0,
+) -> None:
+    """
+    Emit `evaluation.requested` (S2.2 dispatcher) — consumed by the session-replayer,
+    which builds the ReplayContext (with the form) and lets the Routing Engine allocate
+    an evaluator agent from `evaluator_pool`. Shape mirrors EvaluationRequest.
+    """
+    await _publish(producer, topic, {
+        "event_type":     "evaluation.requested",
+        "event_id":       str(uuid.uuid4()),
+        "timestamp":      _now_iso(),
+        "requested_at":   _now_iso(),
+        "evaluation_id":  instance_id,
+        "instance_id":    instance_id,
+        "tenant_id":      tenant_id,
+        "session_id":     session_id,
+        "campaign_id":    campaign_id,
+        "form_id":        form_id,
+        "evaluator_pool": evaluator_pool,
+        "speed_factor":   speed_factor,
+        "comparison_mode": False,
+        "dimensions":     [],
+    })
+
+
 async def emit_instance_assigned(
     producer: Any,
     topic: str,
@@ -97,11 +132,15 @@ async def emit_instance_completed(
     overall_score: float | None,
     passed: bool | None,
     eval_status: str,
+    evaluated_at: str | None = None,
 ) -> None:
     await _publish(producer, topic, {
         "event_type":    "evaluation.instance.completed",
         "event_id":      str(uuid.uuid4()),
-        "timestamp":     _now_iso(),
+        # evaluated_at permite backdating (seeder sintético — séries temporais);
+        # default = agora. O consumer usa este timestamp para o evaluation_results.
+        "timestamp":     evaluated_at or _now_iso(),
+        "evaluated_at":  evaluated_at or _now_iso(),
         "instance_id":   instance_id,
         "result_id":     result_id,
         "tenant_id":     tenant_id,

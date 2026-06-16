@@ -195,6 +195,30 @@ async def trigger_performance_sync() -> JSONResponse:
     return JSONResponse(status_code=200, content=result)
 
 
+@app.post("/reports/admin/flush-synthetic")
+async def flush_synthetic(tenant_id: str = "tenant_demo") -> JSONResponse:
+    """Apaga a massa sintética (LIKE 'synthetic_%') do ClickHouse — par do flush da
+    evaluation-api, para o ciclo gerar/limpar do avaliador fake. Best-effort por tabela."""
+    store: AnalyticsStore = app.state.store
+    db = store._database
+    deleted: dict[str, str] = {}
+    for tbl, col in (
+        ("evaluation_results",      "session_id"),
+        ("evaluation_events",       "session_id"),
+        ("session_signal",          "origin_session_id"),
+        ("segments",                "session_id"),
+        ("participation_intervals", "session_id"),
+    ):
+        try:
+            store._client.command(
+                f"ALTER TABLE {db}.{tbl} DELETE WHERE {col} LIKE 'synthetic_%'"
+            )
+            deleted[tbl] = "ok"
+        except Exception as exc:
+            deleted[tbl] = f"skip: {exc}"
+    return JSONResponse(status_code=200, content={"tenant_id": tenant_id, "deleted": deleted})
+
+
 def run() -> None:
     import uvicorn
     settings = get_settings()

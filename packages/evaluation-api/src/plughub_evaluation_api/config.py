@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     default_sample_rate: float = 0.1   # 10% of sessions
     default_instance_ttl_hours: int = 72
 
+    # S2.2 dispatcher — pool do agente avaliador quando a campanha não define
+    # evaluator_pool. Fallback global (mesmo default do session-replayer).
+    default_evaluator_pool: str = "avaliacao_ia"
+
     port: int = 3400
 
     model_config = {"env_prefix": "PLUGHUB_EVALUATION_"}

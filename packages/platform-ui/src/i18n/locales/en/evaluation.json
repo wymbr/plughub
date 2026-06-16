@@ -88,6 +88,8 @@
     "frequentFlags":  "Frequent flags",
     "pause":          "Pause",
     "resume":         "Resume",
+    "dispatch":       "Run now",
+    "dispatchHint":   "Dispatch pending evaluations to the evaluator pool (real evaluation)",
     "status": {
       "active":    "Active",
       "paused":    "Paused",

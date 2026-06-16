@@ -1684,6 +1684,12 @@ async def _close_contact_layer(
                     "outcome":      _last_outcome_val or None,
                     "close_reason": _close_reason_biz,
                     "closed_at":    _ended_at_close,
+                    # S2.1 (avaliação campaign-driven): campos que a amostragem por
+                    # campanha precisa (should_sample filtra por pool/canal/duração).
+                    # O bridge já os tem do contact_closed acima.
+                    "pool_id":      _pool_id_close,
+                    "channel":      _channel_close,
+                    "started_at":   _started_at_close,
                 }).encode("utf-8"),
             )
             logger.info(

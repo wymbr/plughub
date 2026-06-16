@@ -78,7 +78,10 @@ function KpiCard({ label, value, sub }: { label: string; value: string; sub?: st
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
 type Tab = 'summary' | 'timeseries' | 'comparison'
-const TAB_IDS: Tab[] = ['summary', 'timeseries', 'comparison']
+// Consolidação (2026-06-16): Trend/Comparison aposentados — a comparação de
+// qualidade (por agente/dimensão/tempo) vive no bench (Analytics → Agents).
+// Mantém só o Summary (tabela agregada por campanha).
+const TAB_IDS: Tab[] = ['summary']
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // TAB: RESUMO
@@ -646,8 +649,13 @@ function ComparisonView({ tenantId }: { tenantId: string }) {
 
       {error && <div className="mx-5 mt-3 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text">{error}</div>}
 
-      {/* Results */}
-      {result && (
+      {/* Results — guarda contra resposta sem slices (evita tela branca) */}
+      {result && (!result.slice_a || !result.slice_b) && (
+        <div className="mx-5 mt-3 px-3 py-2 bg-warning/10 border border-warning/30 rounded text-xs text-warning-text">
+          {t('quality.comparison.noData', { defaultValue: 'Sem dados para comparar nas fatias selecionadas.' })}
+        </div>
+      )}
+      {result && result.slice_a && result.slice_b && (
         <div className="px-5 py-4 flex flex-col gap-4">
           {/* Significance badge */}
           {sig && (
@@ -761,9 +769,8 @@ export default function AnaliseQualidadePage() {
 
       {/* Tab content */}
       <div className="flex-1 overflow-hidden min-h-0">
-        {activeTab === 'summary'    && <SummaryView    tenantId={tenantId} />}
-        {activeTab === 'timeseries' && <TimeseriesView tenantId={tenantId} />}
-        {activeTab === 'comparison' && <ComparisonView tenantId={tenantId} />}
+        {activeTab === 'summary' && <SummaryView tenantId={tenantId} />}
+        {/* Trend/Comparison removidos — consolidados no bench (Analytics → Agents) */}
       </div>
     </div>
   )

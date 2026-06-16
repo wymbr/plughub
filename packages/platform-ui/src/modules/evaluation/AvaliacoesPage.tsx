@@ -37,13 +37,18 @@ import type {
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
-function ScorePill({ score }: { score: number }) {
+function ScorePill({ score }: { score: number | string | null | undefined }) {
+  // ClickHouse/NUMERIC pode chegar como string; coagimos e protegemos contra null/NaN.
+  const s = Number(score)
+  if (!Number.isFinite(s)) {
+    return <span className="px-2 py-0.5 rounded text-sm text-muted-light">—</span>
+  }
   const bg =
-    score >= 0.8 ? 'bg-green-light text-green-text' :
-    score >= 0.6 ? 'bg-warning-light text-warning-text' :
-                   'bg-red-light text-red-text'
+    s >= 0.8 ? 'bg-green-light text-green-text' :
+    s >= 0.6 ? 'bg-warning-light text-warning-text' :
+               'bg-red-light text-red-text'
   // Display as 0–10 scale if ≤ 1, raw otherwise
-  const display = score <= 1 ? (score * 10).toFixed(1) : score.toFixed(1)
+  const display = s <= 1 ? (s * 10).toFixed(1) : s.toFixed(1)
   return <span className={`px-2 py-0.5 rounded text-sm font-bold ${bg}`}>{display}</span>
 }
 
