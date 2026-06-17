@@ -27,9 +27,18 @@ Return the raw JSON object only."""
 
 
 class ReasonEngine:
-    def __init__(self, provider: LLMProvider, model_profiles: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider,
+        model_profiles: dict[str, Any],
+        max_tokens: int = 4096,
+    ) -> None:
         self._provider       = provider
         self._model_profiles = model_profiles
+        # Teto de tokens da saída estruturada. 1024 (antigo, hardcoded) truncava a
+        # rubrica de avaliação (N critérios × observações) → JSON inválido. É teto:
+        # respostas curtas do realtime não mudam.
+        self._max_tokens     = max_tokens
 
     async def process(self, req: ReasonRequest) -> ReasonResponse:
         profile = self._model_profiles.get(req.model_profile)
@@ -60,7 +69,7 @@ class ReasonEngine:
             ],
             tools=None,
             model_id=profile.model_id,
-            max_tokens=1024,
+            max_tokens=self._max_tokens,
         )
 
         latency_ms = int((time.monotonic() - start) * 1000)

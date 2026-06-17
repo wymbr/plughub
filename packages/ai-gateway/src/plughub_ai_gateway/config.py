@@ -68,8 +68,11 @@ class Settings(BaseSettings):
     # Semantic cache TTL
     cache_ttl_seconds: int = 300  # 5 minutes
 
-    # Inference max_tokens default
-    inference_max_tokens: int = 1024
+    # Inference max_tokens default — é um TETO (o modelo para quando termina, então
+    # subir não aumenta custo de respostas curtas). 1024 truncava o JSON estruturado
+    # de saídas maiores (ex.: rubrica de avaliação com N critérios × observações) →
+    # "Unterminated string" no parse. 4096 cobre as rubricas; realtime curto não muda.
+    inference_max_tokens: int = 4096
 
     # Kafka — metering (usage.events)
     kafka_brokers: str = "kafka:9092"

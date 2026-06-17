@@ -766,6 +766,9 @@ services:
       REDIS_URL:       redis://redis:6379
       DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
       CONFIG_API_URL:  http://config-api:3600
+      # S2.2 Slice B: Replayer busca o EvaluationForm da campanha (GET /v1/evaluation/forms/{id})
+      # para injetar no ReplayContext. Dentro da rede docker o host é o nome do serviço.
+      EVALUATION_API_URL: http://evaluation-api:3400
       PLUGHUB_TENANT_ID: tenant_demo
       # EVALUATOR_POOL / REPLAY_SPEED_FACTOR removidos (config-consolidation item 7b):
       # vêm do config-api namespace `evaluation` (evaluator_pool=avaliacao_ia,

@@ -936,7 +936,17 @@ pool hooks genéricos (sem campo dedicado).
   - NPS por agente parece alto. Pequeno.
 - ~~**S2.2**~~ ✅ 2026-06-16 (ver CHANGELOG) — `evaluator_pool` por campanha (SELECT/UI) + dispatcher `POST /campaigns/{id}/dispatch`
   ("Rodar agora") emitindo `evaluation.requested` por instância scheduled + Replayer carregando o form no ReplayContext.
-  **Falta o gate E2E**: confirmar avaliador real consumindo o form e submetendo (depende de instances `scheduled` existirem).
+  **Gate E2E rodado 2026-06-17**: cadeia provada ponta-a-ponta — dispatch → Replayer(+form) → routing → `agente_avaliacao_v1`
+  (`login → get_context → evaluate` com inferência real do Claude). Dois bugs pré-existentes corrigidos no caminho:
+  (a) tools `evaluation_context_get`/`evaluation_submit` exigiam `participant_id`/`evaluation_id` UUID (IDs são opacos)
+  → `z.string().min(1)`; (b) `ReasonEngine.max_tokens` hardcoded 1024 truncava a rubrica → 4096. **Pendente**: o `submit`
+  só fecha verde numa sessão com conversa real (a sessão de teste vazia faz o LLM devolver score=null e omitir
+  evidências → submit recusa, corretamente). Validar com sessão real OU implementar degradação graciosa (abaixo).
+- **Robustez avaliador — sessão sem dados** *(novo backlog)*: avaliar uma sessão "magra" (sem transcrição/participantes)
+  não deve falhar duro no `evaluation_submit`. O LLM corretamente sinaliza "dados insuficientes" (score=null, sem
+  evidence_entries), mas o submit exige number+evidence. Opções: (a) avaliador detecta sessão sem conteúdo e marca a
+  instance como `skipped`/`error` com motivo, sem chamar submit; (b) submit aceita avaliação "não avaliável"
+  (composite=null + flag) como resultado de 1ª classe. Decidir contrato antes de codar.
 - **S2.3** — dispatcher automático: drena instances `scheduled` das campanhas cujo `evaluation_calendar_id` está
   aberto (calendar-api `is_open`), respeitando a capacidade do pool avaliador.
 - **S2.4** — amarrar o workflow de revisão (`review_workflow_skill_id`) ao resultado.

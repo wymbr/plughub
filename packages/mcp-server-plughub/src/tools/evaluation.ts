@@ -409,7 +409,10 @@ function buildComparisonReport(
 const EvaluationContextGetInputSchema = z.object({
   session_token:  z.string().min(1),
   session_id:     z.string().min(1),
-  participant_id: z.string().uuid(),
+  // participant_id é um identificador OPACO (instance_id do avaliador, ex.
+  // "evinstance_<hex>" ou "teste_demo-009"), nunca um UUID canônico — só humanos
+  // recebem UUID. Exigir .uuid() aqui fazia TODA avaliação falhar no get_context.
+  participant_id: z.string().min(1),
 })
 
 // ── Arc 6 — EvaluationCriterionResponse input schema ─────────────────────────
@@ -487,8 +490,11 @@ const ComparisonTurnInputSchema = z.object({
 const EvaluationSubmitInputSchema = z.object({
   session_token:      z.string().min(1),
   session_id:         z.string().min(1),
-  participant_id:     z.string().uuid(),
-  evaluation_id:      z.string().uuid(),
+  // IDs opacos (instance_id do avaliador / evaluation_id prefixado tipo
+  // "evinstance_<hex>") — não são UUID canônico. Exigir .uuid() fazia o submit
+  // falhar mesmo após a pontuação. Ver get_context.
+  participant_id:     z.string().min(1),
+  evaluation_id:      z.string().min(1),
   composite_score:    z.number().min(0).max(10),
   dimensions:         z.array(EvaluationDimensionInputSchema).default([]),
   summary:            z.string().min(1),

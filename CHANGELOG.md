@@ -2,6 +2,26 @@
 
 ---
 
+## Fix — avaliador real travava por validação UUID em IDs opacos (2026-06-16)
+
+Descoberto no gate E2E da S2.2. O skill `agente_avaliacao_v1` passa `participant_id`/`evaluation_id` =
+`evaluation_id` (formato prefixado `evinstance_<hex>`, **não** UUID canônico; instance-ids de agente AI
+também são tipo `teste_demo-009`). As tools `evaluation_context_get` e `evaluation_submit`
+(`mcp-server-plughub/tools/evaluation.ts`) validavam esses campos com `z.string().uuid()` → **toda**
+avaliação morria no `get_context` (`MCP error -32602 Invalid uuid → participant_id`), caindo em
+`complete_error`. Relaxado para `z.string().min(1)` (são identificadores opacos, só humanos recebem UUID).
+**Rebuild**: mcp-server-plughub.
+
+Segundo achado no mesmo gate: com o `get_context` destravado, o passo `reason` chamou o AI Gateway e o
+LLM **gerou** a rubrica, mas a saída era truncada (`ai-gateway` HTTP 422 `invalid JSON — Unterminated
+string`). Causa: `ReasonEngine` (`ai-gateway/reason.py`) tinha `max_tokens=1024` **hardcoded** no path
+`/v1/reason` — baixo demais para o JSON de uma rubrica com N critérios × observações. Tornado
+parametrizável (`ReasonEngine(max_tokens=...)`) e ligado a `settings.inference_max_tokens`, elevado para
+**4096** (é um teto: o modelo para quando termina, então não encarece respostas curtas do realtime).
+**Rebuild**: ai-gateway.
+
+---
+
 ## Frente 2 — S2.2: avaliação real ponta-a-ponta (dispatcher + form no ReplayContext) (2026-06-16)
 
 Liga o **avaliador real** (decoplado do seeder sintético). Quatro fatias:

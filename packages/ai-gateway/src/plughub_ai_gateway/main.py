@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.reason_eng  = ReasonEngine(
         provider=_legacy_provider,
         model_profiles=settings.model_profiles,
+        max_tokens=settings.inference_max_tokens,
     )
     app.state.session_mgr = session_mgr
 
