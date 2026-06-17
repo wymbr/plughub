@@ -969,6 +969,52 @@ pool hooks genéricos (sem campo dedicado).
 - **Surface de instances** — verificar se há tela que lista instances `scheduled` (hoje Avaliações mostra
   resultados). Pode ser preciso um surface para o operador ver a fila de avaliação agendada.
 
+### Shakedown pós-submit Arc 13 (2026-06-17) — gaps descobertos
+
+> O Arc 13 está marcado "completo (A–H)" nos docs, mas o pós-submit nunca rodou com resultado de avaliador
+> **real** (só com o seeder sintético, que usa o ramo **ai_agent**/auto_finalized via `/ingest` direto). Com o
+> avaliador real agora persistindo (S2.2), o shakedown achou gaps análogos ao da S2.2 — "docs dizem completo,
+> código não". **Causa comum: o fluxo HUMANO nunca chega a `evaluation_finalized`.**
+
+- **G-FIN — avaliação de agente humano nunca emite `evaluation_finalized`** *(crítico)*: `emit_evaluation_finalized`/
+  `finalize_result` só são chamados no ramo **ai_agent** do `ingest_result` (router.py). No fluxo humano nenhum
+  caminho finaliza: (a) `submit_review` (contestation_router) chega a `closed_upheld`/`closed_revised`/
+  `closed_max_rounds` mas **não emite** `evaluation_finalized` nem grava `final_score`; (b) o consumer de
+  `workflow.completed` só faz `lock_result` (≠ finalize). Como o invariante do Arc 13 é "só `evaluation_finalized`
+  conta pros relatórios de qualidade" (Arc 6 Fase 2 filtra `type='evaluation_finalized'`), **avaliações humanas reais
+  ficam invisíveis aos relatórios canônicos**. Fix: emitir `evaluation_finalized` + `finalize_result` nos estados
+  terminais do fluxo humano (manual e via workflow).
+- **G-TIMEOUT — sem scanner de deadline de contestação** *(crítico, caso comum)*: o caso comum é o avaliado **não
+  contestar**. O state machine prevê `[contest_deadline expirado] → timeout_contestation → evaluation_finalized`, mas
+  **não existe scanner** na evaluation-api (os únicos `create_task` são os 3 consumers: workflow/sampling/ingest). Sem
+  ele, um resultado humano fica em `contestation_open` **para sempre** → nunca finaliza → nunca entra nos relatórios.
+  Fix: background scanner (como o timeout scanner do workflow-api) que finaliza `contestation_open`/`under_review`
+  vencidos (`deadline_at`/`contest_deadline_hours`) → `timeout_contestation`/`timeout_review` → `evaluation_finalized`.
+- **G-S2.4 — motor de review (workflow) não amarrado ao resultado** *(= S2.4)*: a contestação NÃO dispara
+  automaticamente um revisor AI; `submit_review` é manual (POST). O `skill_revisao_treplica_v1`/`review_workflow_skill_id`
+  não está ligado ao ciclo de vida do resultado; o consumer de `workflow.*` só seta `action_required`/`deadline_at`
+  (suspended) e `lock` (completed). Ligar o workflow ao contest→review→finalize.
+- **G-PROBE — endpoints contest/review sem auth ABAC** *(verificar/segurança)*: `file_contestation`/`submit_review`
+  confiam só em headers `X-Tenant-ID`/`X-User-Id`/`X-Author-Type`, sem validar JWT/ABAC nem `available_actions`
+  server-side (a checagem ABAC vive no `list_results`, não no endpoint de escrita). Revisar antes de produção.
+- **G-UI — UI de review/contestação humana existe mas não surfaça** *(crítico p/ uso; confirmado por screenshot 2026-06-17)*:
+  `AvaliacoesPage` (`/evaluation/evaluations`, roteada + no nav Quality) lista resultados, mas a coluna **Actions vem
+  "—" para todos** (inclusive o resultado real). Os painéis `HumanReviewPanel`/`DimensionContestPanel13`/`ReviewPanel`/
+  `ContestPanel` (drill-down) só renderizam quando `result.available_actions` inclui `review`/`contest` — e esse campo é
+  computado **server-side por ABAC** (`evaluation.revisar`/`contestar`); os usuários demo (Admin incluso) não têm esses
+  grants no `module_config` → as ações nunca aparecem. Some-se: (a) a tela exibe `eval_status` ("Submitted"), **não** o
+  `contestation_state` (nosso `closed_upheld` aparece como "Submitted"); (b) coluna Date "—"; (c) sem `evaluation_finalized`
+  (G-FIN) o status nunca evolui. A página ainda é **híbrida de 2 contratos** (Arc 6 `/contestations`+`reviewResult` e
+  Arc 13 `/instances/.../contest|review|threads`). Trabalho: provisionar os grants ABAC dos papéis (revisor/avaliado),
+  unificar no contrato Arc 13, surfaçar `contestation_state`/threads/`finalized`, e validar E2E.
+- **Superfícies a confirmar/faltando**: avaliado **acompanhar/contestar as próprias avaliações** (self-view existe no
+  código, idem gated por ABAC); fila de revisão do supervisor ("Awaiting my action" depende de `available_actions`);
+  timeline de `ContestationThread` no drill-down; páginas **Curation**/**Calibration** (Arc 13 Fase H) — existem mas
+  nunca validadas com dado real (só seeder).
+- **Confirmado ao vivo (2026-06-17)**: probe contest→review→`closed_upheld` fechou em estado terminal **sem**
+  `evaluation_finalized` (`eval_status` seguiu "submitted", `finalized_at`/`final_score` null) → **G-FIN comprovado**.
+- **Próximo**: exercitar Fluxo 2 (curadoria/`calibration_signal`→CalibrationNote→KB), que só rodou via seeder.
+
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
   que termina com `escalate` re-roteia o CONTATO em vez de **voltar ao chamador**. O `agente_auth_form_v1.yaml`
