@@ -193,7 +193,10 @@ steps:
     prompt_id:  evaluation_rubric_v3
     input:
       # Transcript com eventos originais (original_content disponível para evaluator)
-      replay_events:       "$.pipeline_state.eval_context.context.replay_events"
+      # NB: o ReplayContext serializa a lista de eventos como `events` (models.py
+      # ReplayContext.events, sem alias) — referenciar `.context.events`, não
+      # `.context.replay_events` (descasamento latente: mascarado por sessões vazias).
+      replay_events:       "$.pipeline_state.eval_context.context.events"
       # Formulário de avaliação com dimensões e critérios (inclui type por critério)
       evaluation_form:     "$.pipeline_state.eval_context.evaluation_form"
       # Snippets de conhecimento: pré-carregados + RAG hits fundidos

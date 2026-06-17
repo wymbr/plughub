@@ -1,6 +1,6 @@
 # Arc 6 — Plataforma de Avaliação de Qualidade
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-06-17 · Estado: Arc 16 + S2.2 (avaliador real campaign-driven validado)
 
 Plataforma completa de avaliação de qualidade de interações: formulários configuráveis, campanhas de amostragem, agentes avaliadores com RAG, revisão humana, contestação e relatórios analíticos.
 
@@ -11,6 +11,42 @@ Este documento descreve o Arc 6 Fase 1. Partes substanciais — em especial o fl
 - **(a) Arc 13 — Review, Contestation & Calibration** reescreveu substancialmente o fluxo de review/contestação descrito aqui. O modelo atual usa **contestação por dimensão** (`dimension_threads[]` com `evidence_entries[]` obrigatório por dimensão), `evaluation_finalized` como única fonte de verdade para relatórios de qualidade, dois agentes novos (`agente_pre_revisor_v1` — gate de qualidade pré-publicação; `agente_revisor_v1` — árbitro pós-contestação), além de curadoria amostral e calibração para o fluxo de agentes AI. As afirmações sobre `EvaluationContestation`/`ContestationRound` simples e `available_actions` neste doc estão **superadas** pelo Arc 13. Ver [`arc13-review-contestation.md`](arc13-review-contestation.md).
 - **(b) Arc 6 Fase 2 — Observabilidade de Mudanças** adicionou comparação estruturada de qualidade por **deploy epoch** (Dual-Slice Comparison, deploy timeline, endpoints `quality-comparison`/`quality-timeseries`). Ver [`arc6-phase2-observability.md`](arc6-phase2-observability.md).
 - **(c) UI**: além das páginas descritas neste doc, o módulo de avaliação ganhou `CalibrationDashboard` (`/evaluation/calibration` — calibration score por skill version) e `CuradoriaPage` (`/evaluation/curadoria` — fila de curadoria do feedback loop RAG), ambas introduzidas pelo Arc 13.
+- **(d) S2.2 — avaliador real campaign-driven (validado 2026-06-17)**: ver § "Caminho do avaliador real" abaixo.
+
+## Caminho do avaliador real (campaign-driven) — validado 2026-06-17
+
+Cadeia ponta-a-ponta provada com uma sessão webchat **real** (ver `CHANGELOG.md` 2026-06-17):
+
+```
+sessão real → POST /v1/evaluation/instances (scheduled)
+  → POST /v1/evaluation/campaigns/{id}/dispatch  (admin; emite evaluation.requested por instância scheduled)
+  → session-replayer: monta ReplayContext (transcript + form + campaign/instance) em {tenant}:replay:{sid}:context
+  → routing-engine EvaluationConsumer → POST skill-flow-service /execute (flow agente_avaliacao_v1, session_id = evaluation_id)
+  → agente_avaliacao_v1: login → evaluation_context_get → (RAG) → evaluate (reason, Claude real) → evaluation_submit
+  → evaluation_submit publica evaluation.completed em evaluation.events
+  → evaluation-api ingest consumer (evaluation-api-ingest-consumer) → _ingest_core
+  → EvaluationResult no Postgres (overall_score) + EvaluationInstance → completed + ContestationThread round=1 por dimensão
+```
+
+**Invariantes/decisões deste caminho:**
+
+- O flow do avaliador **não dá `claim`** na instance. O ciclo de vida (`scheduled → completed`) é avançado pelo
+  **ingest consumer** ao processar `evaluation.completed`, não pelo agente. O `evaluator_agent_id` da instance
+  permanece `null` (o `evaluator_id` do resultado é o `evaluation_id`/`participant_id` do avaliador).
+- **Persistência**: `evaluation.completed` é consumido por DOIS destinos independentes — analytics-api/clickhouse-consumer
+  (ClickHouse, só analytics) **e** evaluation-api (`_ingest_from_completed_event` → `_ingest_core`, Postgres). As leituras
+  de `GET /v1/evaluation/results` e a página **Avaliações** vêm do **Postgres**. O consumer é **idempotente** (pula
+  instance já `completed`; `auto_offset_reset=latest`, então só vê eventos publicados após subir → re-dispatch p/ revalidar).
+- **Transcript**: o step `reason` lê `$.pipeline_state.eval_context.context.events` (o campo do `ReplayContext` é
+  `events`, **não** `replay_events` — bug latente corrigido no gate; sessões vazias o mascaravam).
+- **Shim de compat no `evaluation_submit`** (pendente da revisão form-driven, ver `TODO.md`): `dimension_threads`
+  normaliza `observation→justification` + default `evidence_entries=[]` com `score` nullable; `criterion.score` nullable
+  (N/A); `compliance_flags` coage objeto→string. Causa: prompt `evaluation_rubric_v3` **fixo** + `_format_schema` do
+  ai-gateway transmite o `output_schema` de forma **lossy** (só top-level) → o LLM adivinha o shape. A revisão unifica
+  o contrato (YAML `output_schema` ≡ submit Zod), transmite o schema aninhado e parametriza o prompt pela form,
+  removendo o shim.
+- **Sessão sem dados** *(backlog)*: sessão "magra" ainda falha duro (`overall_score=null` × `composite_score` obrigatório).
+  Contrato escolhido: avaliador marca a instance `skipped`/`error` sem chamar submit (ver `TODO.md`).
 
 ## Novos pacotes
 

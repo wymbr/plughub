@@ -662,7 +662,14 @@ class IngestBody(BaseModel):
 async def ingest_result(body: IngestBody, request: Request) -> dict:
     pool = _pool(request)
     producer = _kafka_producer(request)
+    return await _ingest_core(pool, producer, body)
 
+
+async def _ingest_core(pool, producer, body: IngestBody) -> dict:
+    """Core ingest logic — callable both from the HTTP route and from the
+    evaluation.events consumer (real-evaluator path, see _ingest_from_completed_event).
+    Persists the EvaluationResult + criterion responses + ContestationThreads and
+    advances the EvaluationInstance to completed."""
     # Verify instance exists
     instance = await _db.get_instance(pool, body.instance_id, body.tenant_id)
     if not instance:
@@ -804,6 +811,46 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
         "evaluated_agent_type":    body.evaluated_agent_type,
         "eval_status":             body.eval_status,
     }
+
+
+async def _ingest_from_completed_event(pool, producer, ev: dict) -> None:
+    """Bridge: `evaluation.completed` (published by the evaluation_submit MCP tool)
+    → ingest. This is the Arc 13 designed-but-missing link that persists the REAL
+    evaluator's result into Postgres and advances the EvaluationInstance to
+    completed. Without it, only ClickHouse (analytics) received the event and the
+    instance stayed `scheduled` (Avaliações empty). Idempotent: skips instances
+    already completed (re-dispatch / Kafka redelivery)."""
+    instance_id = ev.get("instance_id")
+    if not instance_id:
+        return  # ad-hoc evaluations without an instance are analytics-only
+    tenant_id = ev.get("tenant_id") or ""
+    inst = await _db.get_instance(pool, instance_id, tenant_id)
+    if not inst:
+        logger.warning("ingest-consumer: instance %s not found (tenant=%s)", instance_id, tenant_id)
+        return
+    if inst.get("status") == "completed":
+        logger.info("ingest-consumer: instance %s already completed — skip", instance_id)
+        return
+
+    body = IngestBody(
+        tenant_id=tenant_id,
+        instance_id=instance_id,
+        session_id=ev.get("session_id", "") or "",
+        campaign_id=ev.get("campaign_id") or inst.get("campaign_id") or "",
+        form_id=ev.get("form_id") or inst.get("form_id") or "",
+        evaluator_agent_id=ev.get("evaluator_id", "") or "",
+        overall_score=ev.get("composite_score"),
+        eval_status=ev.get("eval_status", "submitted") or "submitted",
+        evaluator_notes=ev.get("summary", "") or "",
+        criterion_responses=ev.get("criterion_responses", []) or [],
+        dimension_threads=ev.get("dimension_threads", []) or [],
+        evaluated_agent_type=ev.get("evaluated_agent_type", "human_agent") or "human_agent",
+    )
+    res = await _ingest_core(pool, producer, body)
+    logger.info(
+        "ingest-consumer: persisted result %s for instance=%s session=%s score=%s",
+        res.get("result_id"), instance_id, body.session_id, body.overall_score,
+    )
 
 
 # ─── Synthetic seeder (avaliador fake — S2.Q1: valida o módulo em volume) ──────

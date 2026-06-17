@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from . import db as _db
 from .sampling import should_sample, compute_priority
-from .router import router
+from .router import router, _ingest_from_completed_event
 from .contestation_router import contestation_router
 
 logging.basicConfig(
@@ -209,6 +209,44 @@ async def _run_session_closed_consumer(app: FastAPI) -> None:
         await consumer.stop()
 
 
+async def _run_evaluation_completed_consumer(app: FastAPI) -> None:
+    """Consume evaluation.events, filter `evaluation.completed` (published by the
+    evaluation_submit MCP tool) and persist via ingest. This is the Arc 13
+    real-evaluator link — previously missing, so only analytics-api/ClickHouse
+    consumed these events while the evaluation-api Postgres (results + instance
+    lifecycle) never advanced. group_id is independent of the other consumers."""
+    consumer = AIOKafkaConsumer(
+        settings.evaluation_topic,
+        bootstrap_servers=settings.kafka_brokers,
+        group_id="evaluation-api-ingest-consumer",
+        auto_offset_reset="latest",
+    )
+    await consumer.start()
+    logger.info("evaluation.events ingest consumer started (topic=%s)", settings.evaluation_topic)
+    try:
+        async for msg in consumer:
+            if not msg.value:
+                continue
+            try:
+                payload = json.loads(msg.value)
+            except Exception:
+                logger.warning("ingest-consumer: invalid evaluation.events payload")
+                continue
+            if payload.get("event_type") != "evaluation.completed":
+                continue
+            try:
+                await _ingest_from_completed_event(
+                    app.state.db_pool, app.state.kafka_producer, payload,
+                )
+            except Exception as exc:
+                logger.error(
+                    "ingest-consumer: failed for instance=%s: %s",
+                    payload.get("instance_id"), exc,
+                )
+    finally:
+        await consumer.stop()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="PlugHub Evaluation API",
@@ -260,12 +298,22 @@ def create_app() -> FastAPI:
         )
         logger.info("conversations.session_closed sampling consumer task scheduled")
 
+        # Arc 13 real-evaluator link — evaluation.completed → ingest
+        # (persists EvaluationResult + advances instance; was missing).
+        app.state.ingest_consumer_task = asyncio.create_task(
+            _run_evaluation_completed_consumer(app),
+            name="evaluation-completed-ingest-consumer",
+        )
+        logger.info("evaluation.events ingest consumer task scheduled")
+
     @app.on_event("shutdown")
     async def shutdown() -> None:
         if hasattr(app.state, "workflow_consumer_task"):
             app.state.workflow_consumer_task.cancel()
         if hasattr(app.state, "sampling_consumer_task"):
             app.state.sampling_consumer_task.cancel()
+        if hasattr(app.state, "ingest_consumer_task"):
+            app.state.ingest_consumer_task.cancel()
         if hasattr(app.state, "kafka_producer"):
             await app.state.kafka_producer.stop()
         if hasattr(app.state, "redis"):

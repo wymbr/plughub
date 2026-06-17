@@ -2,6 +2,53 @@
 
 ---
 
+## S2.2 — Avaliação real VERDE ponta-a-ponta com sessão de conversa real (2026-06-17)
+
+Fechado o gate da S2.2 com uma sessão webchat **real** (retenção: agente humano João reverte o
+cancelamento de TV da Maria com oferta; cliente aceita; NPS=10; wrap-up "Resolvido"; 26 eventos no
+stream). Cadeia inteira verde com avaliação real do Claude: sessão real → `POST /v1/evaluation/instances`
+→ `dispatch` → session-replayer (ReplayContext + form + transcript) → routing → `agente_avaliacao_v1`
+(login → get_context → evaluate) → `evaluation_submit` → Kafka `evaluation.completed` → **consumer de
+ingest novo** → `EvaluationResult` no Postgres (`overall_score=7.8`) + instance `completed`. Resultado
+visível em Avaliação → Avaliações (`contestation_state=contestation_open`, fluxo humano).
+
+Três causas-raiz corrigidas (todas "docs diziam completo, código não"):
+
+**1. Transcript nunca chegava ao avaliador (descasamento de campo, latente).** O step `reason` do
+`agente_avaliacao_v1.yaml` lia `$.pipeline_state.eval_context.context.replay_events`, mas o
+`ReplayContext` (session-replayer `models.py`) serializa a lista de eventos como **`events`** (sem alias).
+Resultado: `replay_events=0` → o LLM corretamente devolvia "sem dados de transcrição" (score=null) **mesmo
+em sessão rica**. Estava mascarado porque os gates anteriores usavam sessões vazias (0 eventos de qualquer
+forma). Fix: JSONPath → `.context.events` (mantida a chave `replay_events` que o prompt espera).
+
+**2. Drift de contrato avaliador↔submit (shim defensivo).** O prompt `evaluation_rubric_v3` é **fixo** e o
+ai-gateway `_format_schema` transmite o `output_schema` de forma **lossy** (só campos top-level —
+`OutputFieldSchema` não modela `items`/`properties`/`description`/`nullable`), então o LLM **inventa** o
+shape: dimensão com `observation`/`max_score`/`weighted_score` (não `justification`/`evidence_entries`),
+`compliance_flags` como objetos, `score=null` em critérios N/A. O `evaluation_submit` (Zod estrito) recusava.
+Shim de compatibilidade no `evaluation_submit` (`mcp-server-plughub/tools/evaluation.ts`): `dimension_threads`
+normaliza `observation→justification` e default `evidence_entries=[]` com `score` nullable; `criterion.score`
+nullable (N/A); `compliance_flags` coage objeto→string. Marcado como compat pendente da revisão form-driven
+(Task #5 / TODO) — a avaliação já é real (8.2/7.8 com justificativas), só faltava persistir.
+
+**3. Elo de persistência do avaliador real faltando (Arc 13).** `evaluation_submit` publica
+`evaluation.completed`/`eval.instance.submitted` em `evaluation.events`, mas **nenhum consumer** ligava isso
+ao `POST /v1/evaluation/ingest` — só analytics-api/clickhouse-consumer consumiam → o resultado ia pro
+ClickHouse mas **nunca pro Postgres da evaluation-api**, e a instance ficava `scheduled` (o flow nunca dá
+`claim`). Novo consumer `evaluation-api-ingest-consumer` (`main.py`) filtra `event_type=evaluation.completed`,
+mapeia → `IngestBody` e chama o núcleo reusável `_ingest_core` (refatorado de `ingest_result`). Idempotente
+(pula instance já `completed`). `_ingest_from_completed_event` no `router.py`.
+
+**Rebuilds**: mcp-server-plughub, evaluation-api; **restart**: routing-engine (recarrega o flow do disco).
+
+**Achados colaterais (não corrigidos — registrados)**: (a) ai-gateway sentiment pipeline quebra
+(`name '_classify' is not defined` + `UnknownTopicOrPartitionError` no `sentiment.updated`) — fire-and-forget,
+não derruba o `reason`; (b) `criterion.justification` é stripado pelo Zod do submit (perda de texto — a ser
+resolvido pela unificação de contrato da revisão); (c) `session_meta.closed_at/outcome/duration_ms` nulos
+para a sessão avaliada (o LLM nota "sessão aparenta aberta", mas avalia pelo transcript).
+
+---
+
 ## Fix — avaliador real travava por validação UUID em IDs opacos (2026-06-16)
 
 Descoberto no gate E2E da S2.2. O skill `agente_avaliacao_v1` passa `participant_id`/`evaluation_id` =

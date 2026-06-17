@@ -400,7 +400,7 @@ Consumes: `conversations.routed`, `conversations.queued`, `conversations.abandon
 | `queue.position_updated` | Routing Engine | Channel Gateway, Analytics |
 | `mcp.audit` | McpInterceptor / proxy sidecar | Analytics, LGPD |
 | `sentiment.updated` | AI Gateway | analytics-api |
-| `evaluation.events` | evaluation-api | analytics-api → ClickHouse |
+| `evaluation.events` | evaluation-api (requested), session-replayer (requested), mcp-server-plughub (completed) | session-replayer + routing-engine (requested→avaliador); evaluation-api (completed→ingest, persiste result+instance); analytics-api → ClickHouse |
 | `workflow.events` | workflow-api | skill-flow-worker |
 | `collect.events` | workflow-api | analytics-api |
 | `session.signals` | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse |
@@ -660,6 +660,8 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 **Workflow as review motor**: `campaign.review_workflow_skill_id` (e.g. `skill_revisao_treplica_v1`) drives state. Submit result → `POST /v1/workflow/trigger` → workflow suspends → `workflow.events` consumer updates `action_required`, `deadline_at`, `resume_token`. Human acts → evaluation-api writes `session.review_decision` to ContextStore → `POST /v1/workflow/resume`. Timeout → `locked=true`. YAML is sole owner of round count logic.
 
 **mcp-server-knowledge** (TypeScript, port 3401): pgvector knowledge base for RAG. Tools: `knowledge_search`, `knowledge_upsert`, `knowledge_delete`. **agente_avaliacao_v1**: loads form + knowledge snippets via `evaluation_context_get`, scores each criterion with evidence, submits via `evaluation_submit`. Analytics: `evaluation_results` + `evaluation_events` ClickHouse tables; `GET /reports/evaluations` + `/reports/evaluations/summary`.
+
+**Real-evaluator persistence path** (validated 2026-06-17): the flow never `claim`s — `evaluation_submit` publishes `evaluation.completed` to `evaluation.events`, and the evaluation-api **ingest consumer** (`evaluation-api-ingest-consumer`, idempotent) maps it → `_ingest_core` (POST-ingest core) → `EvaluationResult` in Postgres + instance → `completed`. Reads (`/v1/evaluation/results`) and the Avaliações UI come from Postgres; ClickHouse is analytics-only. The agente_avaliacao_v1 reason step reads the transcript from `ReplayContext.context.events` (the model field is `events`, not `replay_events`). The current `evaluation_submit` carries a compat shim for the prompt×schema drift (fixed `evaluation_rubric_v3` + lossy `_format_schema` conveyance) — to be removed by the form-driven prompt revision. See [`docs/arcos/arc6-evaluation.md`](docs/arcos/arc6-evaluation.md).
 
 → See [`docs/arcos/arc6-evaluation.md`](docs/arcos/arc6-evaluation.md)
 
