@@ -71,7 +71,7 @@ from pydantic import BaseModel, Field, model_validator
 from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
-from .sampling import should_sample, compute_expires_at, compute_priority
+from .sampling import should_sample, compute_expires_at, compute_priority, compute_deadline_at
 from .sampling_engine import run_curation_sampling
 
 logger = logging.getLogger("plughub.evaluation.router")
@@ -665,6 +665,87 @@ async def ingest_result(body: IngestBody, request: Request) -> dict:
     return await _ingest_core(pool, producer, body)
 
 
+async def finalize_evaluation(
+    pool, producer, *,
+    result_id: str,
+    tenant_id: str,
+    instance_id: str,
+    session_id: str,
+    campaign_id: str,
+    contestation_state: str,
+    final_score: float,
+    finalize_reason: str | None = None,
+    final_scores_by_dimension: list[dict] | None = None,
+    process_duration_ms: int = 0,
+    evaluated_agent_type: str | None = None,
+    run_curation: bool = False,
+    normalized_score: float | None = None,
+) -> dict | None:
+    """T3 — ÚNICO ponto que finaliza um resultado e emite `evaluation_finalized`.
+    Todos os caminhos terminais (ingest IA, ai_review, submit_review, scanner) passam por
+    aqui. Idempotente: se já finalizado, `finalize_result` retorna None e nenhum evento é
+    emitido (seguro p/ race scanner × ação × redelivery)."""
+    row = await _db.finalize_result(
+        pool, result_id,
+        contestation_state=contestation_state,
+        final_score=final_score,
+        process_duration_ms=process_duration_ms,
+        finalize_reason=finalize_reason,
+    )
+    if row is None:
+        return None  # já finalizado — idempotente, sem evento duplicado
+
+    # Garante evaluated_agent_type no resultado (o ramo IA não o gravava).
+    if evaluated_agent_type and not row.get("evaluated_agent_type"):
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE evaluation.results SET evaluated_agent_type=$1 WHERE id=$2",
+                evaluated_agent_type, result_id,
+            )
+
+    reason = finalize_reason or _db._FINALIZE_REASON_MAP.get(contestation_state)
+    await _kafka.emit_evaluation_finalized(
+        producer,
+        instance_id=instance_id,
+        session_id=session_id,
+        campaign_id=campaign_id,
+        tenant_id=tenant_id,
+        final_score=final_score,
+        final_scores_by_dimension=final_scores_by_dimension or [],
+        contestation_state=contestation_state,
+        process_duration_ms=process_duration_ms,
+        finalize_reason=reason,
+        segment_id=row.get("segment_id"),               # populado por T2
+        round=row.get("round", 1),
+        evaluated_agent_type=evaluated_agent_type or row.get("evaluated_agent_type"),
+        form_version=row.get("form_version"),            # populado por T2
+    )
+
+    if run_curation:
+        asyncio.create_task(
+            run_curation_sampling(
+                pool, instance_id=instance_id, tenant_id=tenant_id,
+                campaign_id=campaign_id,
+                normalized_score=float(normalized_score or final_score or 0),
+            ),
+            name=f"curation-sampling-{instance_id}",
+        )
+    return row
+
+
+async def apply_state_deadline(pool, campaign: dict | None, result_id: str, kind: str) -> None:
+    """T4 — computa e grava deadline_at na entrada de `open` (kind='contest') ou
+    `under_review` (kind='review'). Best-effort: falha não interrompe a transição."""
+    policy = (campaign or {}).get("contestation_policy") or {}
+    hours = (policy.get("contest_deadline_hours", 48) if kind == "contest"
+             else policy.get("review_deadline_hours", 24))
+    try:
+        dl = await compute_deadline_at(campaign or {}, settings.calendar_api_url, hours=int(hours))
+        await _db.set_deadline_at(pool, result_id, dl)
+    except Exception as exc:
+        logger.warning("apply_state_deadline failed (non-fatal): %s", exc)
+
+
 async def _ingest_core(pool, producer, body: IngestBody) -> dict:
     """Core ingest logic — callable both from the HTTP route and from the
     evaluation.events consumer (real-evaluator path, see _ingest_from_completed_event).
@@ -694,6 +775,20 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
         comparison_report=body.comparison_report,
         knowledge_snippets=body.knowledge_snippets,
     )
+
+    # T2 — propaga segmento/identidade do avaliado + form_version da instance p/ o result
+    # (a posse do 5a lê do result). Best-effort.
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE evaluation.results
+                      SET segment_id=$1, evaluated_user_id=$2, form_version=$3, updated_at=now()
+                    WHERE id=$4""",
+                instance.get("segment_id"), instance.get("evaluated_user_id"),
+                int(instance.get("form_version") or 1), result["id"],
+            )
+    except Exception as exc:
+        logger.warning("propagate segment to result failed (non-fatal): %s", exc)
 
     # Create criterion responses
     criteria_rows: list[dict] = []
@@ -742,37 +837,25 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
     # Default p/ o ramo ai_agent (antes ficava indefinido → UnboundLocalError no return).
     initial_state = "auto_finalized"
     if body.evaluated_agent_type == "ai_agent":
-        # Fluxo 2: immediate finalization — no contestation allowed for AI agents
-        await _db.finalize_result(
-            pool, result["id"],
-            contestation_state="auto_finalized",
-            final_score=float(body.overall_score or 0),
-            process_duration_ms=0,
-        )
-        await _kafka.emit_evaluation_finalized(
-            producer,
+        # Fluxo 2: finalização imediata via finalize_evaluation (emissor único, T3).
+        await finalize_evaluation(
+            pool, producer,
+            result_id=result["id"],
+            tenant_id=body.tenant_id,
             instance_id=body.instance_id,
             session_id=body.session_id,
             campaign_id=body.campaign_id,
-            tenant_id=body.tenant_id,
+            contestation_state="auto_finalized",
             final_score=float(body.overall_score or 0),
+            finalize_reason="auto_ai",
             final_scores_by_dimension=[
                 {"dimension_id": d.get("dimension_id", ""), "score": d.get("score", 0)}
                 for d in body.dimension_threads
             ],
-            contestation_state="auto_finalized",
             process_duration_ms=0,
-        )
-        # Fluxo 2: trigger curation sampling as non-blocking background task
-        asyncio.create_task(
-            run_curation_sampling(
-                pool,
-                instance_id=body.instance_id,
-                tenant_id=body.tenant_id,
-                campaign_id=body.campaign_id,
-                normalized_score=float(body.normalized_score or body.overall_score or 0),
-            ),
-            name=f"curation-sampling-{body.instance_id}",
+            evaluated_agent_type="ai_agent",
+            run_curation=True,
+            normalized_score=float(body.normalized_score or body.overall_score or 0),
         )
     else:
         # Fluxo 1: human agent — set contestation_state based on pre_review config
@@ -787,6 +870,9 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
                 "UPDATE evaluation.results SET evaluated_agent_type=$1, updated_at=now() WHERE id=$2",
                 body.evaluated_agent_type, result["id"],
             )
+        # T4 — deadline de contestação ao entrar em open.
+        if initial_state == "contestation_open":
+            await apply_state_deadline(pool, campaign, result["id"], "contest")
 
     # Emit Kafka lifecycle event
     await _kafka.emit_instance_completed(

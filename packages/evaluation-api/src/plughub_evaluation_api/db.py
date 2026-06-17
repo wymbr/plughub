@@ -293,6 +293,81 @@ ALTER TABLE evaluation.results
     ADD COLUMN IF NOT EXISTS final_score         NUMERIC(6,3),
     ADD COLUMN IF NOT EXISTS process_duration_ms BIGINT;
 
+-- ── T1 — Modelo de estado canônico (docs/product/evaluation-reconciliation-spec.md §13.1)
+-- Migração idempotente (opção b): DDL explícito guardado, sem framework novo.
+-- Colapsa contestation_state/eval_status/action_required no canônico result_state +
+-- finalize_reason + round. Fase 1 (aditiva + backfill); as funções escritoras passam a
+-- gravar result_state num passo seguinte. contestation_state segue como legado durante a
+-- transição (eval_status mantém-se como espelho depreciado — decisão A).
+ALTER TABLE evaluation.results
+    ADD COLUMN IF NOT EXISTS result_state    TEXT,
+    ADD COLUMN IF NOT EXISTS finalize_reason TEXT,
+    ADD COLUMN IF NOT EXISTS round           SMALLINT NOT NULL DEFAULT 1;
+
+-- Backfill a partir do legado (roda uma vez; guardado por result_state ainda NULL).
+UPDATE evaluation.results SET
+    result_state = CASE
+        WHEN contestation_state IN (
+            'auto_finalized','closed_upheld','closed_revised','closed_max_rounds',
+            'timeout_contestation','timeout_review') THEN 'finalized'
+        WHEN contestation_state = 'pre_review_pending' THEN 'ai_review'
+        WHEN contestation_state = 'contestation_open'  THEN 'open'
+        WHEN contestation_state = 'under_review'        THEN 'under_review'
+        WHEN evaluated_agent_type = 'ai_agent'          THEN 'finalized'
+        ELSE 'open'
+    END,
+    finalize_reason = CASE
+        WHEN contestation_state = 'auto_finalized'       THEN 'auto_ai'
+        WHEN contestation_state = 'closed_upheld'        THEN 'upheld'
+        WHEN contestation_state = 'closed_revised'       THEN 'revised'
+        WHEN contestation_state = 'closed_max_rounds'    THEN 'max_rounds'
+        WHEN contestation_state = 'timeout_contestation' THEN 'contest_timeout'
+        WHEN contestation_state = 'timeout_review'       THEN 'review_timeout'
+        WHEN evaluated_agent_type = 'ai_agent'           THEN 'auto_ai'
+        ELSE NULL
+    END,
+    round = COALESCE(NULLIF(current_round, 0), 1)
+WHERE result_state IS NULL;
+
+-- CHECKs nomeados (idempotentes via pg_constraint).
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_result_state') THEN
+        ALTER TABLE evaluation.results ADD CONSTRAINT chk_result_state
+            CHECK (result_state IS NULL OR result_state IN
+                ('ai_review','open','under_review','finalized','error_rejected'));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_finalize_reason') THEN
+        ALTER TABLE evaluation.results ADD CONSTRAINT chk_finalize_reason
+            CHECK (finalize_reason IS NULL OR finalize_reason IN
+                ('auto_ai','uncontested','upheld','revised','max_rounds',
+                 'contest_timeout','review_timeout'));
+    END IF;
+END $$;
+
+-- instances.status: adicionar 'skipped' (thin-session). Mantém os estados legados
+-- (under_review/reviewed/contested/locked) por compat com linhas existentes; a remoção
+-- deles é cleanup posterior, quando nada mais os escrever.
+DO $$ BEGIN
+    ALTER TABLE evaluation.instances DROP CONSTRAINT IF EXISTS instances_status_check;
+    ALTER TABLE evaluation.instances DROP CONSTRAINT IF EXISTS chk_instance_status;
+    ALTER TABLE evaluation.instances ADD CONSTRAINT chk_instance_status CHECK (
+        status IN ('scheduled','assigned','in_progress','completed','skipped',
+                   'expired','error',
+                   'under_review','reviewed','contested','locked'));  -- legado
+END $$;
+
+-- ── T2 — Chave por segmento + form_version pin (spec §13.2) ───────────────────
+ALTER TABLE evaluation.instances
+    ADD COLUMN IF NOT EXISTS evaluated_user_id TEXT,
+    ADD COLUMN IF NOT EXISTS form_version      INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE evaluation.results
+    ADD COLUMN IF NOT EXISTS segment_id        TEXT,
+    ADD COLUMN IF NOT EXISTS evaluated_user_id TEXT,
+    ADD COLUMN IF NOT EXISTS form_version      INTEGER NOT NULL DEFAULT 1;
+-- Unicidade por segmento (linhas legadas têm segment_id NULL → fora do índice).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_evinstance_campaign_segment
+    ON evaluation.instances (campaign_id, segment_id) WHERE segment_id IS NOT NULL;
+
 -- ── ContestationThread (Arc 13) ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS evaluation.contestation_threads (
     id                      TEXT        PRIMARY KEY,        -- "evthread_{uuid}"
@@ -693,6 +768,8 @@ async def create_instance(
     form_id: str,
     session_id: str,
     segment_id: str | None = None,
+    evaluated_user_id: str | None = None,   # T2 — identidade do humano avaliado (posse, 5a)
+    form_version: int = 1,                  # T2 — versão fixada do formulário
     priority: int = 5,
     expires_at: datetime | None = None,
 ) -> dict[str, Any]:
@@ -701,11 +778,13 @@ async def create_instance(
         row = await conn.fetchrow(
             """
             INSERT INTO evaluation.instances
-                (id, tenant_id, campaign_id, form_id, session_id, segment_id, priority, expires_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                (id, tenant_id, campaign_id, form_id, session_id, segment_id,
+                 evaluated_user_id, form_version, priority, expires_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
             RETURNING *
             """,
-            instance_id, tenant_id, campaign_id, form_id, session_id, segment_id, priority, expires_at,
+            instance_id, tenant_id, campaign_id, form_id, session_id, segment_id,
+            evaluated_user_id, form_version, priority, expires_at,
         )
         # increment campaign counter
         await conn.execute(
@@ -713,6 +792,19 @@ async def create_instance(
             campaign_id,
         )
     return _row(row)  # type: ignore[return-value]
+
+
+async def instance_exists_for_segment(
+    pool: asyncpg.Pool, campaign_id: str, segment_id: str, tenant_id: str
+) -> bool:
+    """T2 — idempotência por segmento: unicidade (campaign_id, segment_id)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM evaluation.instances "
+            "WHERE campaign_id=$1 AND segment_id=$2 AND tenant_id=$3 LIMIT 1",
+            campaign_id, segment_id, tenant_id,
+        )
+    return row is not None
 
 
 async def instance_exists_for_session(
@@ -1592,6 +1684,24 @@ async def delete_sampling_rule(pool: asyncpg.Pool, rule_id: str, tenant_id: str)
 
 # ─── Arc 13 — Result finalization helpers ─────────────────────────────────────
 
+# T1 — mapeamento do contestation_state legado → finalize_reason canônico.
+_FINALIZE_REASON_MAP = {
+    "auto_finalized":       "auto_ai",
+    "closed_upheld":        "upheld",
+    "closed_revised":       "revised",
+    "closed_max_rounds":    "max_rounds",
+    "timeout_contestation": "contest_timeout",
+    "timeout_review":       "review_timeout",
+}
+
+# T1 — mapeamento do contestation_state legado → result_state canônico.
+_RESULT_STATE_MAP = {
+    "pre_review_pending": "ai_review",
+    "contestation_open":  "open",
+    "under_review":       "under_review",
+}
+
+
 async def finalize_result(
     pool: asyncpg.Pool,
     result_id: str,
@@ -1599,32 +1709,39 @@ async def finalize_result(
     contestation_state: str,
     final_score: float,
     process_duration_ms: int,
+    finalize_reason: str | None = None,
 ) -> dict[str, Any] | None:
     """
     Mark a result as evaluation_finalized.
-    Sets contestation_state, final_score, finalized_at, process_duration_ms.
-    Also sets eval_status='locked' (final state).
+    Sets result_state='finalized' + finalize_reason (canônico) e, em lockstep,
+    contestation_state (legado) + eval_status='locked' (espelho depreciado).
+    `finalize_reason` explícito (T3) vence; senão deriva do contestation_state.
+    Idempotente: guarda por result_state já 'finalized'.
     """
+    reason = finalize_reason or _FINALIZE_REASON_MAP.get(contestation_state)
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             UPDATE evaluation.results
-               SET contestation_state  = $1,
-                   final_score         = $2,
-                   process_duration_ms = $3,
+               SET result_state        = 'finalized',
+                   finalize_reason     = $1,
+                   contestation_state  = $2,
+                   final_score         = $3,
+                   process_duration_ms = $4,
                    finalized_at        = now(),
                    eval_status         = 'locked',
                    locked_at           = now(),
                    locked_by           = 'arc13_finalization',
-                   lock_reason         = $4,
+                   lock_reason         = $5,
                    action_required     = NULL,
                    resume_token        = NULL,
                    updated_at          = now()
-             WHERE id = $5
-               AND eval_status != 'locked'
+             WHERE id = $6
+               AND result_state IS DISTINCT FROM 'finalized'
             RETURNING *
             """,
-            contestation_state, final_score, process_duration_ms, contestation_state, result_id,
+            reason, contestation_state, final_score, process_duration_ms,
+            contestation_state, result_id,
         )
     return _row(row)
 
@@ -1637,20 +1754,24 @@ async def set_contestation_state(
     action_required: str | None = None,
     current_round: int | None = None,
 ) -> dict[str, Any] | None:
-    """Update contestation_state (and optionally action_required / current_round) on a result."""
+    """Update contestation_state (legado) + result_state canônico (em lockstep) e,
+    opcionalmente, action_required / round on a result."""
+    rstate = _RESULT_STATE_MAP.get(state)  # None p/ estados não mapeados → mantém o atual
     if current_round is not None:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
                 UPDATE evaluation.results
                    SET contestation_state = $1,
-                       action_required    = $2,
-                       current_round      = $3,
+                       result_state       = COALESCE($2, result_state),
+                       action_required    = $3,
+                       current_round      = $4,
+                       round              = $5,
                        updated_at         = now()
-                 WHERE id = $4
+                 WHERE id = $6
                 RETURNING *
                 """,
-                state, action_required, current_round, result_id,
+                state, rstate, action_required, current_round, current_round, result_id,
             )
     else:
         async with pool.acquire() as conn:
@@ -1658,14 +1779,47 @@ async def set_contestation_state(
                 """
                 UPDATE evaluation.results
                    SET contestation_state = $1,
-                       action_required    = $2,
+                       result_state       = COALESCE($2, result_state),
+                       action_required    = $3,
                        updated_at         = now()
-                 WHERE id = $3
+                 WHERE id = $4
                 RETURNING *
                 """,
-                state, action_required, result_id,
+                state, rstate, action_required, result_id,
             )
     return _row(row)
+
+
+# ─── T4 — Deadline scanner ─────────────────────────────────────────────────────
+
+async def set_deadline_at(
+    pool: asyncpg.Pool, result_id: str, deadline_at: datetime,
+) -> None:
+    """Grava o deadline_at (computado na entrada do estado open/under_review)."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE evaluation.results SET deadline_at=$1, updated_at=now() WHERE id=$2",
+            deadline_at, result_id,
+        )
+
+
+async def list_expired_results(
+    pool: asyncpg.Pool, *, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Resultados em open/under_review com deadline_at vencido — alvo do scanner."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM evaluation.results
+             WHERE result_state IN ('open', 'under_review')
+               AND deadline_at IS NOT NULL
+               AND deadline_at <= now()
+             ORDER BY deadline_at ASC
+             LIMIT $1
+            """,
+            limit,
+        )
+    return [_row(r) for r in rows]
 
 
 # ─── Pool factory ─────────────────────────────────────────────────────────────

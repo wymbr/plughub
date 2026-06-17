@@ -285,11 +285,18 @@ async def emit_evaluation_finalized(
     final_scores_by_dimension: list[dict],
     contestation_state: str,
     process_duration_ms: int,
+    # T3 — payload estendido (canônico). Defaults p/ compat com chamadores antigos.
+    finalize_reason: str | None = None,
+    segment_id: str | None = None,
+    round: int = 1,
+    evaluated_agent_type: str | None = None,
+    form_version: int | None = None,
 ) -> None:
     """
     Emit evaluation_finalized event to evaluation.events topic.
-    This is the canonical event for quality analytics (Arc 6 Fase 2).
-    Only emitted when the full contestation cycle is complete.
+    This is the canonical event for quality analytics (Arc 6 Fase 2) and the
+    single source of truth for quality reports (spec §1). Emitido por TODO caminho
+    terminal via finalize_evaluation() (router.py).
     """
     topic = "evaluation.events"
     await _publish(producer, topic, {
@@ -304,4 +311,10 @@ async def emit_evaluation_finalized(
         "final_scores_by_dimension":  final_scores_by_dimension,
         "contestation_state":         contestation_state,
         "process_duration_ms":        process_duration_ms,
+        # T3 — campos canônicos
+        "finalize_reason":            finalize_reason,
+        "segment_id":                 segment_id,
+        "round":                      round,
+        "evaluated_agent_type":       evaluated_agent_type,
+        "form_version":               form_version,
     })

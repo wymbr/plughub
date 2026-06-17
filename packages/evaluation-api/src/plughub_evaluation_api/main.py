@@ -137,16 +137,138 @@ def _duration_s(started_at: str | None, closed_at: str | None) -> float:
         return 0.0
 
 
-async def _sample_on_close(db_pool: _db.asyncpg.Pool, payload: dict) -> None:
-    """No fechamento, amostra contra as campanhas ATIVAS e cria uma
-    EvaluationInstance(status=scheduled) por match. NÃO roda o avaliador — só
-    registra o candidato (barato). O dispatcher (S2.2/S2.3) é quem despacha na
-    janela do calendário da campanha."""
+# ─── T2 — acumulador de segmentos por sessão (conversations.participants) ──────
+
+def _segs_key(tenant_id: str, session_id: str) -> str:
+    return f"{tenant_id}:eval:segs:{session_id}"
+
+
+async def _on_participant_event(redis_client, msg_value: bytes) -> None:
+    """Acumula segmentos de AGENTE (role primary/specialist) por sessão, com a
+    identidade do humano (user_id) e o tipo (human/ai). Exclui supervisor/evaluator."""
+    try:
+        ev = json.loads(msg_value)
+    except Exception:
+        return
+    if ev.get("role") not in ("primary", "specialist"):
+        return
+    seg_id = ev.get("segment_id"); session_id = ev.get("session_id"); tenant_id = ev.get("tenant_id")
+    if not (seg_id and session_id and tenant_id):
+        return
+    agent_type = ev.get("agent_type") or ""
+    rec = {
+        "segment_id":           seg_id,
+        "role":                 ev.get("role"),
+        "agent_type":           agent_type,
+        "evaluated_agent_type": "human_agent" if agent_type == "human" else "ai_agent",
+        "user_id":              ev.get("user_id", "") or "",
+        "user_login":           ev.get("user_login", "") or "",
+        "pool_id":              ev.get("pool_id", "") or "",
+        "agent_type_id":        ev.get("agent_type_id", "") or "",
+        "flow_id":              ev.get("flow_id", "") or "",
+    }
+    try:
+        key = _segs_key(tenant_id, session_id)
+        await redis_client.hset(key, seg_id, json.dumps(rec))
+        await redis_client.expire(key, 90000)  # ~25h cobre a sessão + close
+    except Exception as exc:
+        logger.debug("participants accumulate failed: %s", exc)
+
+
+async def _read_session_segments(redis_client, tenant_id: str, session_id: str) -> list[dict]:
+    try:
+        h = await redis_client.hgetall(_segs_key(tenant_id, session_id))
+        out: list[dict] = []
+        for v in (h or {}).values():
+            try:
+                out.append(json.loads(v))
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return []
+
+
+async def _run_participants_consumer(app: FastAPI) -> None:
+    consumer = AIOKafkaConsumer(
+        "conversations.participants",
+        bootstrap_servers=settings.kafka_brokers,
+        group_id="evaluation-api-participants-consumer",
+        auto_offset_reset="latest",
+    )
+    await consumer.start()
+    logger.info("conversations.participants consumer started")
+    try:
+        async for msg in consumer:
+            if msg.value:
+                try:
+                    await _on_participant_event(app.state.redis, msg.value)
+                except Exception as exc:
+                    logger.error("participant event error: %s", exc)
+    finally:
+        await consumer.stop()
+
+
+async def _sample_one_target(
+    db_pool, campaigns: list, *, tenant_id: str, session_id: str,
+    sample_key: str, meta: dict, segment_id: str | None = None,
+    evaluated_user_id: str | None = None,
+) -> None:
+    """Amostra UM alvo (segmento ou sessão-fallback) contra as campanhas ativas."""
+    for c in campaigns:
+        epid = c.get("evaluation_pool_id") or c.get("pool_id")
+        if epid and meta.get("pool_id") != epid:
+            continue
+        rules = c.get("sampling_rules") or {}
+        if not should_sample(sample_key, meta, rules, counter=int(c.get("total_instances") or 0)):
+            continue
+        if segment_id is not None:
+            if await _db.instance_exists_for_segment(db_pool, c["id"], segment_id, tenant_id):
+                continue
+        elif await _db.instance_exists_for_session(db_pool, c["id"], session_id, tenant_id):
+            continue
+        priority = compute_priority(meta, rules)
+        inst = await _db.create_instance(
+            db_pool, tenant_id=tenant_id, campaign_id=c["id"], form_id=c["form_id"],
+            session_id=session_id, segment_id=segment_id,
+            evaluated_user_id=evaluated_user_id, priority=priority,
+        )
+        logger.info(
+            "sampling: scheduled instance %s (campaign=%s session=%s segment=%s pool=%s)",
+            inst.get("id"), c["id"], session_id, segment_id, meta.get("pool_id"),
+        )
+
+
+async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dict) -> None:
+    """T2 — no fechamento, faz fan-out por SEGMENTO de agente (acumulado de
+    conversations.participants) e amostra cada um contra as campanhas ativas. Sem
+    segmentos acumulados → fallback legado por sessão. NÃO roda o avaliador."""
     session_id = payload.get("session_id")
     tenant_id  = payload.get("tenant_id")
     if not session_id or not tenant_id:
         return
+    campaigns = await _db.list_campaigns(db_pool, tenant_id, status="active", limit=500)
+    if not campaigns:
+        return
 
+    segments = await _read_session_segments(redis_client, tenant_id, session_id)
+    if segments:
+        for seg in segments:
+            seg_meta = {
+                "pool_id":       seg.get("pool_id"),
+                "channel":       payload.get("channel"),
+                "outcome":       payload.get("outcome"),
+                "agent_type_id": seg.get("agent_type_id"),
+                "duration_s":    _duration_s(payload.get("started_at"), payload.get("closed_at")),
+            }
+            await _sample_one_target(
+                db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
+                sample_key=seg["segment_id"], meta=seg_meta,
+                segment_id=seg["segment_id"], evaluated_user_id=(seg.get("user_id") or None),
+            )
+        return
+
+    # Fallback: sem participants acumulados → comportamento legado por sessão.
     session_meta = {
         "pool_id":       payload.get("pool_id"),
         "channel":       payload.get("channel"),
@@ -154,33 +276,10 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, payload: dict) -> None:
         "agent_type_id": payload.get("agent_type_id"),
         "duration_s":    _duration_s(payload.get("started_at"), payload.get("closed_at")),
     }
-
-    campaigns = await _db.list_campaigns(db_pool, tenant_id, status="active", limit=500)
-    for c in campaigns:
-        # Hard filter: pool avaliado (evaluation_pool_id; fallback ao pool_id legado).
-        epid = c.get("evaluation_pool_id") or c.get("pool_id")
-        if epid and session_meta.get("pool_id") != epid:
-            continue
-        rules = c.get("sampling_rules") or {}
-        if not should_sample(
-            session_id, session_meta, rules, counter=int(c.get("total_instances") or 0)
-        ):
-            continue
-        if await _db.instance_exists_for_session(db_pool, c["id"], session_id, tenant_id):
-            continue
-        priority = compute_priority(session_meta, rules)
-        inst = await _db.create_instance(
-            db_pool,
-            tenant_id=tenant_id,
-            campaign_id=c["id"],
-            form_id=c["form_id"],
-            session_id=session_id,
-            priority=priority,
-        )
-        logger.info(
-            "sampling: scheduled instance %s (campaign=%s session=%s pool=%s)",
-            inst.get("id"), c["id"], session_id, session_meta.get("pool_id"),
-        )
+    await _sample_one_target(
+        db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
+        sample_key=session_id, meta=session_meta,
+    )
 
 
 async def _run_session_closed_consumer(app: FastAPI) -> None:
@@ -202,7 +301,7 @@ async def _run_session_closed_consumer(app: FastAPI) -> None:
                 logger.warning("sampling: invalid session_closed payload")
                 continue
             try:
-                await _sample_on_close(app.state.db_pool, payload)
+                await _sample_on_close(app.state.db_pool, app.state.redis, payload)
             except Exception as exc:
                 logger.error("sampling: failed for %s: %s", payload.get("session_id"), exc)
     finally:
@@ -245,6 +344,43 @@ async def _run_evaluation_completed_consumer(app: FastAPI) -> None:
                 )
     finally:
         await consumer.stop()
+
+
+# ─── T4 — deadline scanner ────────────────────────────────────────────────────
+
+async def _run_deadline_scanner(app: FastAPI) -> None:
+    """Varre resultados com deadline_at vencido e finaliza por timeout:
+    open → uncontested; under_review → review_timeout. Roteia pelo finalize_evaluation
+    (emissor único, idempotente). O deadline_at é computado na entrada do estado via
+    calendar-api; aqui só comparamos now() >= deadline_at."""
+    from .router import finalize_evaluation
+    logger.info("deadline scanner started (interval=60s)")
+    while True:
+        await asyncio.sleep(60)
+        try:
+            pool = app.state.db_pool
+            producer = app.state.kafka_producer
+            rows = await _db.list_expired_results(pool)
+            for r in rows:
+                is_open = r.get("result_state") == "open"
+                reason  = "uncontested" if is_open else "review_timeout"
+                cstate  = "timeout_contestation" if is_open else "timeout_review"
+                res = await finalize_evaluation(
+                    pool, producer,
+                    result_id=r["id"], tenant_id=r.get("tenant_id", ""),
+                    instance_id=r.get("instance_id", ""),
+                    session_id=r.get("session_id", "") or "",
+                    campaign_id=r.get("campaign_id", "") or "",
+                    contestation_state=cstate,
+                    finalize_reason=reason,
+                    final_score=float(r.get("overall_score") or r.get("final_score") or 0),
+                    evaluated_agent_type=r.get("evaluated_agent_type"),
+                    process_duration_ms=0,
+                )
+                if res is not None:
+                    logger.info("deadline scanner finalized result=%s reason=%s", r["id"], reason)
+        except Exception as exc:
+            logger.error("deadline scanner error: %s", exc)
 
 
 def create_app() -> FastAPI:
@@ -306,6 +442,20 @@ def create_app() -> FastAPI:
         )
         logger.info("evaluation.events ingest consumer task scheduled")
 
+        # T4 — deadline scanner (finaliza por timeout)
+        app.state.deadline_scanner_task = asyncio.create_task(
+            _run_deadline_scanner(app),
+            name="deadline-scanner",
+        )
+        logger.info("deadline scanner task scheduled")
+
+        # T2 — participants consumer (acumula segmentos por sessão p/ fan-out)
+        app.state.participants_consumer_task = asyncio.create_task(
+            _run_participants_consumer(app),
+            name="participants-consumer",
+        )
+        logger.info("conversations.participants consumer task scheduled")
+
     @app.on_event("shutdown")
     async def shutdown() -> None:
         if hasattr(app.state, "workflow_consumer_task"):
@@ -314,6 +464,10 @@ def create_app() -> FastAPI:
             app.state.sampling_consumer_task.cancel()
         if hasattr(app.state, "ingest_consumer_task"):
             app.state.ingest_consumer_task.cancel()
+        if hasattr(app.state, "deadline_scanner_task"):
+            app.state.deadline_scanner_task.cancel()
+        if hasattr(app.state, "participants_consumer_task"):
+            app.state.participants_consumer_task.cancel()
         if hasattr(app.state, "kafka_producer"):
             await app.state.kafka_producer.stop()
         if hasattr(app.state, "redis"):

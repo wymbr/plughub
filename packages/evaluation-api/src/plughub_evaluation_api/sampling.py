@@ -158,6 +158,38 @@ async def compute_expires_at(
     return now + timedelta(hours=ttl_hours)
 
 
+async def compute_deadline_at(
+    campaign: dict[str, Any],
+    calendar_api_url: str,
+    *,
+    hours: int,
+) -> datetime:
+    """T4 — deadline de contestação/revisão em horário comercial.
+    Usa contestation_policy.use_business_hours + evaluation_calendar_id da campanha;
+    sem calendário/flag ou hours<=0 → wall-clock. Best-effort (fallback wall-clock)."""
+    now = datetime.now(tz=timezone.utc)
+    if hours <= 0:
+        return now + timedelta(hours=1)  # degenerate; evita deadline no passado
+    policy = campaign.get("contestation_policy") or {}
+    use_business = policy.get("use_business_hours", False)
+    calendar_id = campaign.get("evaluation_calendar_id")
+    if not use_business or not calendar_id:
+        return now + timedelta(hours=hours)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{calendar_api_url}/v1/calendar/business-deadline",
+                json={"calendar_id": calendar_id, "from_dt": now.isoformat(), "hours": hours},
+            )
+            if resp.status_code == 200:
+                deadline_str = resp.json().get("deadline")
+                if deadline_str:
+                    return datetime.fromisoformat(deadline_str)
+    except Exception as exc:
+        logger.warning("calendar-api deadline call failed, wall-clock: %s", exc)
+    return now + timedelta(hours=hours)
+
+
 # ─── Priority scoring ─────────────────────────────────────────────────────────
 
 def compute_priority(

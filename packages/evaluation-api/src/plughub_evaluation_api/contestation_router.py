@@ -180,8 +180,9 @@ async def file_contestation(
             detail=f"contestation not allowed in state: {result.get('contestation_state')}",
         )
 
-    # Determine current round (human agent files round=2 on first contest, +2 per cycle)
-    current_round = (result.get("current_round") or 1) + 1
+    # T5 — round = ciclo atual (contestação=1, réplica=2, tréplica=3). O contest NÃO
+    # incrementa o round; só move open→under_review dentro do mesmo ciclo.
+    current_round = result.get("round") or 1
 
     thread = await _db.create_contestation_thread(
         request.app.state.db_pool,
@@ -195,7 +196,7 @@ async def file_contestation(
         evidence_entries=[e.model_dump() for e in body.evidence_entries],
     )
 
-    # Advance state machine — persist updated current_round
+    # Advance state machine (mesmo round).
     await _db.set_contestation_state(
         request.app.state.db_pool,
         result["id"],
@@ -203,6 +204,13 @@ async def file_contestation(
         action_required="review",
         current_round=current_round,
     )
+
+    # T4 — deadline de revisão ao entrar em under_review.
+    from .router import apply_state_deadline  # local import: evita ciclo em import-time
+    campaign = await _db.get_campaign(
+        request.app.state.db_pool, result.get("campaign_id", ""), tenant_id
+    )
+    await apply_state_deadline(request.app.state.db_pool, campaign, result["id"], "review")
 
     logger.info("contestation filed: instance=%s dimension=%s round=%s by=%s",
                 instance_id, body.dimension_id, current_round, user_id)
@@ -238,15 +246,16 @@ async def submit_review(
     if result.get("contestation_state") != "under_review":
         raise HTTPException(status_code=409, detail="result not under_review")
 
-    current_round = result.get("current_round") or 2
-    review_round = current_round + 1  # round 3 = first review, 5 = second, etc.
+    # T5 — round = ciclo (1=contestação, 2=réplica, 3=tréplica). A revisão NÃO incrementa
+    # o round; ela decide e então reabre (round+1) ou finaliza no último.
+    current_round = result.get("round") or 1
 
     thread = await _db.create_contestation_thread(
         request.app.state.db_pool,
         tenant_id=tenant_id,
         evaluation_instance_id=instance_id,
         dimension_id=body.dimension_id,
-        round=review_round,
+        round=current_round,
         author_type=author_type,
         author_id=author_id,
         text=body.text,
@@ -255,39 +264,55 @@ async def submit_review(
         evidence_entries=[e.model_dump() for e in body.evidence_entries],
     )
 
-    # Determine next state: check max_rounds before allowing another cycle
-    # review_round 3 = 1 cycle, 5 = 2 cycles, 7 = 3 cycles, etc.
-    # cycles_completed = (review_round - 1) // 2
     max_rounds = 3  # default
+    campaign = None
     try:
         campaign = await _db.get_campaign(
             request.app.state.db_pool, result.get("campaign_id", ""), tenant_id
         )
         if campaign:
-            policy = campaign.get("contestation_policy") or {}
-            max_rounds = int(policy.get("max_rounds", 3))
+            max_rounds = int((campaign.get("contestation_policy") or {}).get("max_rounds", 3))
     except Exception:
-        pass  # non-fatal — default to 3
+        pass  # non-fatal — default 3
 
-    cycles_completed = (review_round - 1) // 2
-    max_rounds_reached = cycles_completed >= max_rounds
+    from .router import finalize_evaluation, apply_state_deadline  # local import: evita ciclo
 
-    if body.decision == "upheld" or max_rounds_reached:
-        next_state = "closed_upheld" if body.decision == "upheld" else "closed_max_rounds"
-    else:
+    if current_round < max_rounds:
+        # T5 — decisão ATIVA (upheld OU revised) REABRE para a apelação seguinte enquanto
+        # há round restante; o avaliado decide re-contestar (avança) ou aceitar (o prazo
+        # finaliza em uncontested). Só o último round finaliza pela revisão.
         next_state = "contestation_open"
-
-    await _db.set_contestation_state(
-        request.app.state.db_pool,
-        result["id"],
-        next_state,
-        action_required=None,
-        current_round=review_round,
-    )
+        await _db.set_contestation_state(
+            request.app.state.db_pool, result["id"], next_state,
+            action_required=None, current_round=current_round + 1,
+        )
+        _camp = campaign or await _db.get_campaign(
+            request.app.state.db_pool, result.get("campaign_id", ""), tenant_id
+        )
+        await apply_state_deadline(request.app.state.db_pool, _camp, result["id"], "contest")
+    else:
+        # Último round → finaliza pelo emissor único (T3). reason pela decisão.
+        # (Consolidação por overrides via pesos do form é T7; aqui usamos a nota corrente.)
+        reason   = "revised" if body.decision == "revised" else "upheld"
+        next_state = "closed_revised" if body.decision == "revised" else "closed_upheld"
+        await finalize_evaluation(
+            request.app.state.db_pool,
+            request.app.state.kafka_producer,
+            result_id=result["id"],
+            tenant_id=tenant_id,
+            instance_id=instance_id,
+            session_id=result.get("session_id", "") or "",
+            campaign_id=result.get("campaign_id", "") or "",
+            contestation_state=next_state,
+            finalize_reason=reason,
+            final_score=float(result.get("overall_score") or result.get("final_score") or 0),
+            evaluated_agent_type=result.get("evaluated_agent_type"),
+            process_duration_ms=0,
+        )
 
     logger.info(
-        "review submitted: instance=%s dimension=%s decision=%s round=%s cycles=%s max=%s next_state=%s by=%s",
-        instance_id, body.dimension_id, body.decision, review_round, cycles_completed, max_rounds, next_state, author_id,
+        "review submitted: instance=%s dimension=%s decision=%s round=%s max=%s next_state=%s by=%s",
+        instance_id, body.dimension_id, body.decision, current_round, max_rounds, next_state, author_id,
     )
     return {"thread": thread, "contestation_state": next_state}
 
