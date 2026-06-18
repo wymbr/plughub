@@ -452,6 +452,38 @@ CREATE TABLE IF NOT EXISTS evaluation.curation_sampling_rules (
 
 CREATE INDEX IF NOT EXISTS idx_evcsrules_campaign
     ON evaluation.curation_sampling_rules (campaign_id, enabled, priority ASC);
+
+-- ── T6b — Form deploy lifecycle + immutable version snapshots (spec §16.1) ─────
+-- deploy_status (draft|published) espelha o Skill Deploy Lifecycle (CLAUDE.md).
+-- `status` (draft/active/archived) é ortogonal (ciclo de listagem/arquivamento).
+ALTER TABLE evaluation.forms
+    ADD COLUMN IF NOT EXISTS deploy_status TEXT NOT NULL DEFAULT 'draft';
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='forms_deploy_status_check') THEN
+        ALTER TABLE evaluation.forms
+            ADD CONSTRAINT forms_deploy_status_check
+            CHECK (deploy_status IN ('draft','published'));
+    END IF;
+END $$;
+
+-- Snapshot imutável da definição por versão publicada. Instances pinam (form_id, version);
+-- avaliações em curso leem o snapshot da versão sob a qual nasceram (consumo: T7).
+CREATE TABLE IF NOT EXISTS evaluation.form_versions (
+    form_id       TEXT         NOT NULL REFERENCES evaluation.forms(id),
+    tenant_id     TEXT         NOT NULL,
+    version       INTEGER      NOT NULL,
+    name          TEXT         NOT NULL,
+    description   TEXT         NOT NULL DEFAULT '',
+    dimensions    JSONB        NOT NULL DEFAULT '[]',   -- snapshot imutável da definição
+    total_weight  NUMERIC(6,3) NOT NULL DEFAULT 1.0,
+    passing_score NUMERIC(6,3),
+    scoring_method TEXT,
+    published_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
+    published_by  TEXT         NOT NULL DEFAULT 'operator',
+    PRIMARY KEY (form_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_evformversions_tenant
+    ON evaluation.form_versions (tenant_id, form_id, version DESC);
 """
 
 
@@ -605,10 +637,20 @@ async def update_form(
     **fields: Any,
 ) -> dict[str, Any] | None:
     allowed = {"name", "description", "dimensions", "total_weight", "passing_score",
-               "allow_na", "knowledge_domains", "status"}
+               "allow_na", "knowledge_domains", "status", "deploy_status"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return await get_form(pool, form_id, tenant_id)
+
+    # T6b — editar um form PUBLICADO bifurca um novo DRAFT (version+1), preservando o
+    # snapshot publicado. Drafts editam in-place. (deploy_status explícito no corpo,
+    # ex. a própria publicação, não dispara o fork.)
+    if "deploy_status" not in updates:
+        cur = await get_form(pool, form_id, tenant_id)
+        if cur and cur.get("deploy_status") == "published":
+            updates["deploy_status"] = "draft"
+            updates["version"] = int(cur.get("version") or 1) + 1
+            allowed = allowed | {"version"}
 
     set_parts = []
     args: list[Any] = []
@@ -642,6 +684,84 @@ async def delete_form(pool: asyncpg.Pool, form_id: str, tenant_id: str) -> bool:
             form_id, tenant_id,
         )
     return result.split()[-1] != "0"
+
+
+# ─── T6b — Form deploy lifecycle (publish + immutable version snapshots) ─────────
+
+async def publish_form(
+    pool: asyncpg.Pool, form_id: str, tenant_id: str, *, published_by: str = "operator",
+) -> dict[str, Any] | None:
+    """Snapshot imutável da definição corrente em form_versions (na versão atual) e
+    marca o form como published. Idempotente: o snapshot é INSERT ON CONFLICT DO
+    NOTHING (a versão publicada nunca muda); republicar a mesma versão é no-op."""
+    async with pool.acquire() as conn:
+        raw = await conn.fetchrow(
+            "SELECT * FROM evaluation.forms WHERE id=$1 AND tenant_id=$2",
+            form_id, tenant_id,
+        )
+        if raw is None:
+            return None
+        f = dict(raw)
+        version = int(f.get("version") or 1)
+        await conn.execute(
+            """
+            INSERT INTO evaluation.form_versions
+                (form_id, tenant_id, version, name, description, dimensions,
+                 total_weight, passing_score, scoring_method, published_by)
+            VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+            ON CONFLICT (form_id, version) DO NOTHING
+            """,
+            form_id, tenant_id, version, f.get("name") or "", f.get("description") or "",
+            f.get("dimensions") if isinstance(f.get("dimensions"), str) else json.dumps(f.get("dimensions") or []),
+            f.get("total_weight"), f.get("passing_score"), None, published_by,
+        )
+        row = await conn.fetchrow(
+            "UPDATE evaluation.forms SET deploy_status='published', updated_at=now() "
+            "WHERE id=$1 AND tenant_id=$2 RETURNING *",
+            form_id, tenant_id,
+        )
+    return normalize_form(_row(row))
+
+
+async def latest_published_version(
+    pool: asyncpg.Pool, form_id: str, tenant_id: str,
+) -> int | None:
+    """Maior versão já publicada (snapshot) de um form; None se nunca publicado."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT max(version) AS v FROM evaluation.form_versions "
+            "WHERE form_id=$1 AND tenant_id=$2",
+            form_id, tenant_id,
+        )
+    return int(row["v"]) if row and row["v"] is not None else None
+
+
+async def list_form_versions(
+    pool: asyncpg.Pool, form_id: str, tenant_id: str,
+) -> list[dict[str, Any]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM evaluation.form_versions "
+            "WHERE form_id=$1 AND tenant_id=$2 ORDER BY version DESC",
+            form_id, tenant_id,
+        )
+    return [normalize_form(r) for r in _rows(rows)]  # type: ignore[misc]
+
+
+async def get_form_version(
+    pool: asyncpg.Pool, form_id: str, tenant_id: str, version: int,
+) -> dict[str, Any] | None:
+    """Lê o snapshot imutável de uma versão. Fallback para o form vivo (normalizado)
+    quando não há snapshot (forms legados nunca publicados)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.form_versions "
+            "WHERE form_id=$1 AND tenant_id=$2 AND version=$3",
+            form_id, tenant_id, version,
+        )
+    if row is not None:
+        return normalize_form(_row(row))
+    return await get_form(pool, form_id, tenant_id)
 
 
 # ─── Campaigns CRUD ───────────────────────────────────────────────────────────

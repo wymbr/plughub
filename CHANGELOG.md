@@ -2,6 +2,32 @@
 
 ---
 
+## T6b — Deploy lifecycle do form + snapshots imutáveis de versão (2026-06-18)
+
+Segundo chunk da T6 (spec `evaluation-reconciliation-spec.md` §16.1), versionamento alinhado
+ao Skill Deploy Lifecycle. **Tem schema novo** (aplicado por `ensure_schema` no boot — sem
+migração manual). Validado verde via `infra/test/test_t6b_form_versioning.sh`
+(create draft v1 → publish v1 → edit→draft v2 → publish v2 → snapshots imutáveis → republish idempotente).
+
+**Schema (`db.py`)**: `evaluation.forms.deploy_status` (`draft|published`, CHECK idempotente;
+ortogonal ao `status` legado) + tabela imutável `evaluation.form_versions` (PK `form_id,version`,
+snapshot da definição).
+
+**db helpers**: `publish_form` (snapshot `ON CONFLICT DO NOTHING` + marca published; idempotente),
+`get_form_version` (snapshot c/ fallback ao form vivo), `list_form_versions`,
+`latest_published_version`. `update_form` **bifurca novo draft** (`version+1`, `deploy_status=draft`)
+ao editar form publicado; drafts editam in-place (snapshot intacto).
+
+**router**: `POST /forms/{id}/publish`, `GET /forms/{id}/versions`, `GET /forms/{id}/versions/{version}`.
+
+**Sampling**: `_sample_one_target` pina a versão **publicada** na instance
+(`form_version = latest_published_version ?? versão viva`), substituindo o stub `=1` da T2.
+
+**Fronteira (não-bug)**: o avaliador ler o snapshot pinado é a T7 (reconstrói o caminho do
+avaliador). **Rebuild**: evaluation-api. Pendente T6: T6c (UI FormsPage).
+
+---
+
 ## T6a — Modelo do critério enriquecido + normalização-na-leitura (2026-06-18)
 
 Primeiro chunk da T6 (form como fonte única — spec `evaluation-reconciliation-spec.md`

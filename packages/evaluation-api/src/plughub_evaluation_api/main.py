@@ -228,10 +228,16 @@ async def _sample_one_target(
         elif await _db.instance_exists_for_session(db_pool, c["id"], session_id, tenant_id):
             continue
         priority = compute_priority(meta, rules)
+        # T6b — fixa a versão PUBLICADA do form no momento do agendamento (o avaliador
+        # lê o snapshot dessa versão em T7). Sem versão publicada → versão viva (default 1).
+        form_version = await _db.latest_published_version(db_pool, c["form_id"], tenant_id)
+        if form_version is None:
+            _form = await _db.get_form(db_pool, c["form_id"], tenant_id)
+            form_version = int((_form or {}).get("version") or 1)
         inst = await _db.create_instance(
             db_pool, tenant_id=tenant_id, campaign_id=c["id"], form_id=c["form_id"],
             session_id=session_id, segment_id=segment_id,
-            evaluated_user_id=evaluated_user_id, priority=priority,
+            evaluated_user_id=evaluated_user_id, form_version=form_version, priority=priority,
         )
         logger.info(
             "sampling: scheduled instance %s (campaign=%s session=%s segment=%s pool=%s)",

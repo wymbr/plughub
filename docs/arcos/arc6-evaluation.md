@@ -29,9 +29,28 @@ sem reescrita de dados.** Validado verde via `infra/test/test_t6a_form_model.sh`
 - DB/router já tratam `dimensions` como JSONB/`list[dict]` opaco → novos campos fazem
   round-trip sem mudança de schema. **Sem migração.**
 
-Pendente na T6: **T6b** (versionamento/deploy lifecycle: `deploy_status` draft/published +
-snapshot imutável) e **T6c** (FormsPage: seletor de `type`, `scoring_guidance`, editor de
-opções, `na_guidance`, toggle `evidence_required`, `auto_source`, controles de versão).
+### T6b — Deploy lifecycle do form + snapshots imutáveis de versão (2026-06-18) ✅
+
+Versionamento alinhado ao Skill Deploy Lifecycle (§16.1). **Tem schema novo** (aplicado por
+`ensure_schema` no boot). Validado verde via `infra/test/test_t6b_form_versioning.sh`.
+
+- **Schema:** `evaluation.forms.deploy_status` (`draft|published`, CHECK idempotente; ortogonal
+  ao `status` draft/active/archived) + tabela imutável `evaluation.form_versions`
+  (PK `(form_id, version)`) — snapshot da definição por versão publicada.
+- **db (`db.py`):** `publish_form` (snapshot `ON CONFLICT DO NOTHING` + `deploy_status=published`;
+  idempotente — a versão publicada nunca muda), `get_form_version` (lê o snapshot; fallback ao
+  form vivo p/ legados), `list_form_versions`, `latest_published_version`. `update_form`
+  **bifurca um novo draft** (`version+1`, `deploy_status=draft`) ao editar um form publicado;
+  drafts editam in-place, snapshot intacto.
+- **router:** `POST /forms/{id}/publish`, `GET /forms/{id}/versions`, `GET /forms/{id}/versions/{version}`.
+- **Pin:** o sampling (`_sample_one_target`) fixa a **versão publicada** na instance
+  (`form_version = latest_published_version ?? versão viva`), substituindo o stub `=1` da T2.
+
+**Fronteira (não-bug):** o **avaliador ler o snapshot pinado** é a **T7** (reconstrói o caminho
+do avaliador/saída form-driven). No T6b o pin é gravado e os snapshots existem; o consumo é T7.
+
+Pendente na T6: **T6c** (FormsPage: seletor de `type`, `scoring_guidance`, editor de opções,
+`na_guidance`, toggle `evidence_required`, `auto_source`, controles de versão/publish).
 
 ---
 

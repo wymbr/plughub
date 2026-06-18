@@ -315,6 +315,38 @@ async def delete_form(form_id: str, tenant_id: str, request: Request) -> None:
         raise HTTPException(404, detail="form not found")
 
 
+# ─── T6b — Form deploy lifecycle (publish + version snapshots) ──────────────────
+
+class FormPublish(BaseModel):
+    published_by: str = "operator"
+
+
+@router.post("/v1/evaluation/forms/{form_id}/publish")
+async def publish_form(form_id: str, tenant_id: str, body: FormPublish, request: Request) -> dict:
+    """Publica a versão corrente do form: snapshot imutável em form_versions + deploy_status=published."""
+    pool = _pool(request)
+    row = await _db.publish_form(pool, form_id, tenant_id, published_by=body.published_by)
+    if not row:
+        raise HTTPException(404, detail="form not found")
+    return _expose_form_id(row)
+
+
+@router.get("/v1/evaluation/forms/{form_id}/versions")
+async def list_form_versions(form_id: str, tenant_id: str, request: Request) -> dict:
+    pool = _pool(request)
+    versions = await _db.list_form_versions(pool, form_id, tenant_id)
+    return {"form_id": form_id, "versions": versions, "count": len(versions)}
+
+
+@router.get("/v1/evaluation/forms/{form_id}/versions/{version}")
+async def get_form_version(form_id: str, version: int, tenant_id: str, request: Request) -> dict:
+    pool = _pool(request)
+    row = await _db.get_form_version(pool, form_id, tenant_id, version)
+    if not row:
+        raise HTTPException(404, detail="form version not found")
+    return _expose_form_id(row)
+
+
 # ─── Campaigns ────────────────────────────────────────────────────────────────
 
 class CampaignCreate(BaseModel):
