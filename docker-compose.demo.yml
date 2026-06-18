@@ -842,6 +842,9 @@ services:
       PLUGHUB_AUTH_SEED_ADMIN_EMAIL:    admin@plughub.local
       PLUGHUB_AUTH_SEED_ADMIN_PASSWORD: changeme_admin
       PLUGHUB_AUTH_SEED_TENANT_ID:      tenant_demo
+      # Path do modules.yaml montado — override tem prioridade sobre a heurística parents[4]
+      # do main.py (que, em layout site-packages, resolveria p/ um path errado → registry vazio).
+      PLUGHUB_AUTH_MODULES_YAML:        /infra/modules.yaml
     depends_on:
       postgres:
         condition: service_healthy

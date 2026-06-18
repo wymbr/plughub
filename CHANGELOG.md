@@ -2,6 +2,23 @@
 
 ---
 
+## T8-D — ABAC gerir_rubrica + epochs por versão (2026-06-18) — T8 completo
+
+Último chunk do T8 (spec §16.3). **modules.yaml + Sidebar.** Validado via
+`infra/test/test_t8d_abac_rubrica.sh`.
+
+- ABAC: campo `gerir_rubrica` no módulo `evaluation` (modules.yaml; upsert no boot do auth-api →
+  `up -d --force-recreate auth-api`). Gate da Rubrica/Prompt repointado `formularios` →
+  `gerir_rubrica` (separação de deveres; admin vê via bypass de role).
+- Deploy epochs: os snapshots `rubric_template_versions` (published_at via `/versions`) já são os
+  epochs da rubrica — nada novo a emitir.
+- **Gap registrado**: Arc 6 Fase 2 (deploy_events + endpoints deploy-timeline/quality-comparison/
+  quality-timeseries) é doc-✅ mas ausente no código da analytics-api — a comparação ancorada em
+  epochs depende de construir essa infra (fora do T8). **Rebuild**: auth-api + platform-ui.
+- **T8 completo** (A storage/versões; B1 composição/preview; B2 runtime; C UI; D ABAC/epochs).
+
+---
+
 ## T8-C — UI Rubrica/Prompt (2026-06-18)
 
 Chunk C do T8 (spec §16.3): página de edição da rubrica-template + preview + publish/versões.

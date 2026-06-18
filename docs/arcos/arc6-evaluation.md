@@ -10,6 +10,28 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T8-D — ABAC `gerir_rubrica` + epochs por versão (2026-06-18) ✅ — **T8 completo**
+
+Último chunk do T8 (spec §16.3). **modules.yaml + Sidebar.** Validado via
+`infra/test/test_t8d_abac_rubrica.sh`.
+
+- **ABAC**: campo novo `gerir_rubrica` no módulo `evaluation` (`infra/modules.yaml`) — perfil
+  "mantenedor de prompt", ortogonal a `formularios` (separação de deveres). O auth-api faz
+  upsert do schema no boot (`ON CONFLICT DO UPDATE`), então `up -d --force-recreate auth-api`
+  re-semeia e o campo aparece em `/modules/evaluation` e em `/config/access`. Gate da página
+  Rubrica/Prompt repointado `formularios` → `gerir_rubrica` (admin segue vendo via bypass de role).
+- **Deploy epochs**: os **snapshots de `rubric_template_versions`** (`published_at`/`published_by`
+  por versão, via `/versions`) **são** os epochs da rubrica — já existem e são consultáveis; não
+  foi necessário emitir nada novo.
+- **Gap registrado (doc×código)**: o **Arc 6 Fase 2 inteiro está doc-✅ mas ausente no código** —
+  não há `analytics.deploy_events` (tabela/consumer) nem os endpoints `deploy-timeline`/
+  `quality-comparison`/`quality-timeseries` na analytics-api (`arc6-phase2-observability.md`
+  afirma "implementado"). A comparação de qualidade antes/depois ancorada em epochs depende de
+  construir essa infra — fora do T8 (ver TODO/handoff).
+
+**T8 completo** (A: storage/versões; B1: composição/preview; B2: runtime; C: UI; D: ABAC/epochs).
+
+
 ### T8-C — UI Rubrica/Prompt (2026-06-18) ✅
 
 Página nova no grupo Quality (spec §16.3): edição da rubrica-template + preview do prompt

@@ -68,6 +68,13 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+      # T8-D — gerir a rubrica-template/prompt do avaliador (perfil "mantenedor de prompt",
+      # ortogonal a formulários). Gate da página Rubrica/Prompt (spec §16.3).
+      gerir_rubrica:
+        label: Gerenciar rubrica/prompt do avaliador
+        domain: [none, read_write]
+        scopable: false
+        default: none
 
   # ── Contatos ──────────────────────────────────────────────────────────────────
   - module_id: contacts

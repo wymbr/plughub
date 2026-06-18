@@ -130,15 +130,26 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   versões; hooks no `evaluation-hooks.ts`; nav no grupo Quality (`nav.eval.rubric`, ABAC
   `formularios`) + i18n. Validar por browser (rebuild platform-ui).
 
-**PRÓXIMA TAREFA: T8-D — ABAC `gerir_rubrica` + deploy epoch no publish (§16.3).** (1) Adicionar
-o campo `gerir_rubrica` ao módulo `evaluation` em `infra/modules.yaml` (label "Rubrica/Prompt";
-default none) e trocar o gate de nav/ABAC da RubricPage de `formularios` → `gerir_rubrica`
-(Sidebar + qualquer checagem na página). `up -d --force-recreate auth-api` p/ re-seed do
-`module_registry`. (2) **Deploy epoch no publish**: `publish_rubric_template` deve registrar um
-deploy epoch p/ comparação antes/depois (Arc 6 Fase 2) — ver como o publish de form/skill emite
-(`registry.changed` → `analytics.deploy_events`); emitir evento análogo (ex.: `rubric.published`
-ou reusar `registry.changed` com `entity_type=rubric_template`). Validar: campo ABAC aparece em
-`/config/access`, gate funciona, e o epoch entra na timeline de qualidade. Fecha o T8.
+- **T8-D** — ABAC `gerir_rubrica` + epochs por versão (§16.3). Campo `gerir_rubrica` no módulo
+  `evaluation` (`infra/modules.yaml`; upsert no boot → `up -d --force-recreate auth-api`); gate da
+  RubricPage `formularios` → `gerir_rubrica` (Sidebar). Epochs = snapshots `rubric_template_versions`
+  (já existem via `/versions`). Test `test_t8d_abac_rubrica.sh`. **T8 COMPLETO** (A/B1/B2/C/D).
+
+> **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
+> (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/
+> `quality-timeseries` **não existem** na analytics-api, apesar de `arc6-phase2-observability.md`
+> marcá-los "implementado ✅". A comparação de qualidade ancorada em deploy/epoch (usada por T11 e
+> pela calibração estrutural do T14-d) depende de construir essa infra. Candidato a arco próprio.
+
+**PRÓXIMA TAREFA: escolher entre os remanescentes da spec** (todos dep. já satisfeitas):
+- **T11 — Relatórios Oficial × Operacional** (§17.3): default `result_state='finalized'` (lê
+  `evaluation_finalized`) vs modo Operacional (inclui provisório, rotulado). Backend+UI; dep. T3 (✓).
+- **T9 — Drill-down** (§17.1): detalhe da avaliação como "modo preenchido + ações" do render do
+  Forms (form + transcript com evidência clicável). UI grande; dep. T5 (✓).
+- **T10 — 3 papéis ABAC + `available_actions`** (§17.2): auto-visão/fila/supervisão; wiring de
+  `available_actions` server-side. dep. T5 (✓) + roles.
+- **T16 — Corrigir docs** (§19): arc6/arc13/CLAUDE.md/TODO — mover ✅ falsos (inclui o gap Arc 6 Fase 2).
+- **Pendências e2e-blocked**: T14-a (scoring desloca), T8-B2 runtime, fronteiras do avaliador real.
 
 **Pendente do T14 — laço mole ponta-a-ponta + estrutural.** Falta desta tarefa:
 (a) **validar que o scoring desloca** com a nota injetada — hoje a nota chega ao contexto
