@@ -2,6 +2,24 @@
 
 ---
 
+## T13 (core) — Degradação thin-session/erro (2026-06-18)
+
+Degradação da camada de trabalho (spec §8/§18.2). **Code-only na evaluation-api, sem migração**
+(enums `skipped`/`error_rejected` já da T1). Validado via `infra/test/test_t13_degradation.sh`
+(thin→skipped, erro→error, guard 409, fora dos relatórios).
+
+- `POST /v1/evaluation/instances/{id}/skip` → instance `skipped` (thin-session, sem submit/result);
+- `POST /v1/evaluation/instances/{id}/mark-error` → instance `error` (falha do avaliador);
+- guardados (409 se já terminal); reusam `update_instance_status`;
+- `skipped`/`error`/`error_rejected` fora dos relatórios de qualidade por construção
+  (filtram `evaluation_finalized`).
+
+**Fronteira (T13-skill, e2e-blocked)**: ramo thin no `agente_avaliacao_v1.yaml` (choice vs
+`thin_min_turns` por campanha → tool `evaluation_skip`) + `on_failure→evaluation_mark_error`;
+classificação recuperável/irrecuperável→`error_rejected` é a T12 (ai_review). **Rebuild**: evaluation-api.
+
+---
+
 ## T7b-3 — Remoção dos shims do evaluation_submit (2026-06-18) — T7 completo
 
 Com a saída form-driven via tool-use (T7b-2), os shims de normalização do `evaluation_submit`

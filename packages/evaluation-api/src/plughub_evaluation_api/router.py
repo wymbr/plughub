@@ -665,6 +665,56 @@ async def expire_instance(instance_id: str, tenant_id: str, request: Request) ->
     )
 
 
+# ─── T13 — degradação: thin-session (skipped) e erro de avaliação (error) ──────
+# skipped = não avaliável, sem culpa do avaliador (sessão sem dados) → SEM submit.
+# error   = o avaliador falhou; classificação recuperável/irrecuperável (→ error_rejected)
+#           é a T12 (ai_review). Ambos terminais p/ a camada de trabalho e FORA dos
+#           relatórios de qualidade (que filtram evaluation_finalized, nunca emitido aqui).
+
+_INSTANCE_TERMINAL = {"completed", "skipped", "error", "error_rejected", "expired"}
+
+
+class InstanceSkipBody(BaseModel):
+    reason: str = "thin_session"   # motivo (auditoria); ex.: thin_session, no_transcript
+
+
+class InstanceErrorBody(BaseModel):
+    reason: str = "evaluation_error"
+    detail: str = ""
+
+
+@router.post("/v1/evaluation/instances/{instance_id}/skip")
+async def skip_instance(instance_id: str, tenant_id: str, body: InstanceSkipBody, request: Request) -> dict:
+    """Marca a instance como `skipped` (thin-session). Não cria result, não submete.
+    Guardado: só a partir de estado não-terminal."""
+    _require_admin(request)
+    pool = _pool(request)
+    inst = await _db.get_instance(pool, instance_id, tenant_id)
+    if not inst:
+        raise HTTPException(404, detail="instance not found")
+    if inst.get("status") in _INSTANCE_TERMINAL:
+        raise HTTPException(409, detail=f"instance already terminal: {inst.get('status')}")
+    row = await _db.update_instance_status(pool, instance_id, tenant_id, "skipped")
+    logger.info("instance skipped (thin-session): %s reason=%s", instance_id, body.reason)
+    return {"instance_id": instance_id, "status": "skipped", "reason": body.reason}
+
+
+@router.post("/v1/evaluation/instances/{instance_id}/mark-error")
+async def mark_instance_error(instance_id: str, tenant_id: str, body: InstanceErrorBody, request: Request) -> dict:
+    """Marca a instance como `error` (falha do avaliador). A classificação
+    recuperável→retry vs irrecuperável→error_rejected é a T12 (ai_review)."""
+    _require_admin(request)
+    pool = _pool(request)
+    inst = await _db.get_instance(pool, instance_id, tenant_id)
+    if not inst:
+        raise HTTPException(404, detail="instance not found")
+    if inst.get("status") in _INSTANCE_TERMINAL:
+        raise HTTPException(409, detail=f"instance already terminal: {inst.get('status')}")
+    row = await _db.update_instance_status(pool, instance_id, tenant_id, "error")
+    logger.info("instance error: %s reason=%s detail=%s", instance_id, body.reason, body.detail[:200])
+    return {"instance_id": instance_id, "status": "error", "reason": body.reason}
+
+
 # ─── Ingest (from evaluation_submit MCP tool) ─────────────────────────────────
 
 class IngestBody(BaseModel):

@@ -10,6 +10,24 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T13 (core) — Degradação thin-session/erro (2026-06-18) ✅
+
+Degradação da camada de trabalho (spec §8/§18.2). **Code-only na evaluation-api** (enums
+`skipped`/`error_rejected` já vieram da T1). Validado via `infra/test/test_t13_degradation.sh`.
+
+- **`POST /v1/evaluation/instances/{id}/skip`** → instance `skipped` (thin-session: sem dados,
+  sem culpa do avaliador) — **sem submit, sem result**.
+- **`POST /v1/evaluation/instances/{id}/mark-error`** → instance `error` (falha do avaliador).
+- Ambos **guardados** (409 se já terminal) e reusam `update_instance_status`.
+- `skipped`/`error`/`error_rejected` ficam **fora dos relatórios de qualidade** por construção
+  (filtram `evaluation_finalized`, nunca emitido nesses caminhos).
+
+**Fronteira (T13-skill, e2e-blocked):** ramo thin-session no `agente_avaliacao_v1.yaml` (choice
+pós-`get_context` vs `thin_min_turns` por campanha → tool `evaluation_skip`) + `on_failure →
+evaluation_mark_error`. A classificação recuperável→retry vs irrecuperável→`error_rejected`
+(result) é a **T12** (ai_review).
+
+
 ### T6a — Modelo do critério enriquecido + normalização-na-leitura (2026-06-18) ✅
 
 Primeiro chunk da T6 (form como fonte única, §5.3/§16.1). **Add-only, retrocompatível,
