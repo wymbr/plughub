@@ -54,19 +54,91 @@ class EvidenceEntryBody(BaseModel):
 
 
 class ContestBody(BaseModel):
-    """Filed by human_agent contesting a result."""
+    """T5/5c — contestação por critério em LOTE (vários critérios num round).
+
+    Forma canônica (lote): ``dimension_ids`` + ``reasons`` (criterion_id → texto) +
+    ``evidence`` opcional (criterion_id → entradas). ``round`` opcional faz anti-replay.
+    Forma legada (single, compat): ``dimension_id`` + ``text`` + ``evidence_entries``.
+    """
+    # batch (canônico)
+    dimension_ids: list[str] | None = None
+    reasons: dict[str, str] | None = None
+    evidence: dict[str, list[EvidenceEntryBody]] | None = None
+    round: int | None = None  # anti-replay opcional
+    # single (legado/compat)
+    dimension_id: str | None = None
+    text: str | None = None
+    evidence_entries: list[EvidenceEntryBody] | None = None
+
+    def normalized_items(self) -> list[dict]:
+        """→ [{criterion_id, text, evidence_entries}] a partir de qualquer das formas."""
+        items: list[dict] = []
+        if self.dimension_ids:
+            reasons = self.reasons or {}
+            evidence = self.evidence or {}
+            for cid in self.dimension_ids:
+                txt = (reasons.get(cid) or "").strip()
+                if not txt:
+                    raise HTTPException(status_code=400, detail=f"missing reason for criterion {cid}")
+                items.append({
+                    "criterion_id": cid,
+                    "text": txt,
+                    "evidence_entries": [e.model_dump() for e in (evidence.get(cid) or [])],
+                })
+        elif self.dimension_id:
+            txt = (self.text or "").strip()
+            if not txt:
+                raise HTTPException(status_code=400, detail="text required")
+            items.append({
+                "criterion_id": self.dimension_id,
+                "text": txt,
+                "evidence_entries": [e.model_dump() for e in (self.evidence_entries or [])],
+            })
+        if not items:
+            raise HTTPException(status_code=400, detail="no criteria to contest")
+        return items
+
+
+class ReviewDecisionItem(BaseModel):
+    """Decisão do revisor para um critério contestado."""
     dimension_id: str
-    text: str = Field(..., min_length=1)
+    decision: str  # "upheld" | "revised"
+    justification: str | None = None  # forma da UI/MCP
+    text: str | None = None           # forma legada
+    score_override: float | None = None
     evidence_entries: list[EvidenceEntryBody] = []
+
+    def reason_text(self) -> str:
+        return (self.justification or self.text or "").strip()
 
 
 class ReviewBody(BaseModel):
-    """Filed by reviewer_ai or human_reviewer after contestation."""
-    dimension_id: str
-    decision: str  # "upheld" | "revised"
-    text: str = Field(..., min_length=1)
+    """T5/5c — revisão em LOTE: decisão para o conjunto de critérios contestados do round.
+
+    Forma canônica: ``dimension_decisions`` (lista de :class:`ReviewDecisionItem`).
+    Forma legada (single, compat): ``dimension_id`` + ``decision`` + ``text``.
+    """
+    dimension_decisions: list[ReviewDecisionItem] | None = None
+    reviewer_id: str | None = None
+    # single (legado/compat)
+    dimension_id: str | None = None
+    decision: str | None = None
+    text: str | None = None
     score_override: float | None = None
-    evidence_entries: list[EvidenceEntryBody] = []
+    evidence_entries: list[EvidenceEntryBody] | None = None
+
+    def normalized_decisions(self) -> list[ReviewDecisionItem]:
+        if self.dimension_decisions:
+            return self.dimension_decisions
+        if self.dimension_id and self.decision:
+            return [ReviewDecisionItem(
+                dimension_id=self.dimension_id,
+                decision=self.decision,
+                text=self.text,
+                score_override=self.score_override,
+                evidence_entries=self.evidence_entries or [],
+            )]
+        raise HTTPException(status_code=400, detail="dimension_decisions required")
 
 
 class PreReviewBody(BaseModel):
@@ -167,15 +239,18 @@ async def file_contestation(
     request: Request,
 ) -> dict:
     """
-    Human agent contests a specific dimension of their evaluation result.
-    Creates a ContestationThread with author_type=human_agent.
-    Updates result contestation_state → 'under_review'.
+    T5/5c — o avaliado contesta um CONJUNTO de critérios da sua avaliação num único round.
+    Cria uma ContestationThread (author_type=human_agent) por critério e move o resultado
+    contestation_open → under_review uma única vez (o round inteiro segue para revisão).
     """
     tenant_id = _get_tenant(request)
     # 5a — JWT obrigatório (mata o header-only do G-PROBE); identidade vem do 'sub'.
     from .router import _decode_jwt, _check_abac_permission  # local import: evita ciclo
     jwt_payload = _decode_jwt(request)
     user_id = jwt_payload["sub"]
+
+    # Normaliza lote/single ANTES de tocar o estado (valida shape do corpo).
+    items = body.normalized_items()
 
     # Verify instance exists and is in contestation_open state
     instance = await _db.get_instance(request.app.state.db_pool, instance_id, tenant_id)
@@ -196,6 +271,13 @@ async def file_contestation(
     # incrementa o round; só move open→under_review dentro do mesmo ciclo.
     current_round = result.get("round") or 1
 
+    # Anti-replay opcional: se o cliente declarou o round, tem de bater com o corrente.
+    if body.round is not None and body.round != current_round:
+        raise HTTPException(
+            status_code=409,
+            detail=f"round mismatch: body={body.round} current={current_round}",
+        )
+
     # 5a — POSSE: só o avaliado contesta a própria avaliação.
     evaluated = result.get("evaluated_user_id")
     if evaluated and evaluated != user_id:
@@ -206,19 +288,22 @@ async def file_contestation(
     if not _check_abac_permission(jwt_payload, _contest_field(current_round), _pool_id):
         raise HTTPException(status_code=403, detail=f"missing permission: {_contest_field(current_round)}")
 
-    thread = await _db.create_contestation_thread(
-        request.app.state.db_pool,
-        tenant_id=tenant_id,
-        evaluation_instance_id=instance_id,
-        dimension_id=body.dimension_id,
-        round=current_round,
-        author_type="human_agent",
-        author_id=user_id,
-        text=body.text,
-        evidence_entries=[e.model_dump() for e in body.evidence_entries],
-    )
+    # Uma thread human_agent por critério contestado (mesmo round).
+    threads = []
+    for it in items:
+        threads.append(await _db.create_contestation_thread(
+            request.app.state.db_pool,
+            tenant_id=tenant_id,
+            evaluation_instance_id=instance_id,
+            dimension_id=it["criterion_id"],
+            round=current_round,
+            author_type="human_agent",
+            author_id=user_id,
+            text=it["text"],
+            evidence_entries=it["evidence_entries"],
+        ))
 
-    # Advance state machine (mesmo round).
+    # Advance state machine UMA vez (round inteiro → under_review).
     await _db.set_contestation_state(
         request.app.state.db_pool,
         result["id"],
@@ -234,9 +319,16 @@ async def file_contestation(
     )
     await apply_state_deadline(request.app.state.db_pool, campaign, result["id"], "review")
 
-    logger.info("contestation filed: instance=%s dimension=%s round=%s by=%s",
-                instance_id, body.dimension_id, current_round, user_id)
-    return {"thread": thread, "contestation_state": "under_review"}
+    contested = [it["criterion_id"] for it in items]
+    logger.info("contestation filed: instance=%s criteria=%s round=%s by=%s",
+                instance_id, contested, current_round, user_id)
+    return {
+        "submitted": True,
+        "contested_dimensions": contested,
+        "contestation_state": "under_review",
+        "current_round": current_round,
+        "threads": threads,
+    }
 
 
 @contestation_router.post("/v1/evaluation/instances/{instance_id}/review")
@@ -246,8 +338,11 @@ async def submit_review(
     request: Request,
 ) -> dict:
     """
-    Revisão HUMANA de uma contestação (5a). JWT + ABAC do round + guarda revisor≠avaliado.
-    Cria ContestationThread com a decisão e score_override opcional.
+    T5/5c — Revisão HUMANA em LOTE de uma contestação. JWT + ABAC do round + guarda
+    revisor≠avaliado. Exige decisão para o conjunto EXATO de critérios contestados no
+    round corrente (gate "tratar todas" §15.3 → 409 pending_contestations se faltar).
+    Cria uma ContestationThread por decisão; aplica a transição do round uma única vez
+    (reabre para o próximo round ou finaliza no último).
     """
     tenant_id = _get_tenant(request)
     # 5a — JWT obrigatório; revisor é sempre humano (a revisão IA é o ai-review/pre-review).
@@ -256,10 +351,15 @@ async def submit_review(
     author_id = jwt_payload["sub"]
     author_type = "human_reviewer"
 
-    if body.decision not in ("upheld", "revised"):
-        raise HTTPException(status_code=400, detail="decision must be upheld or revised")
-    if body.decision == "revised" and body.score_override is None:
-        raise HTTPException(status_code=400, detail="score_override required when decision=revised")
+    # T5/5c — normaliza lote/single e valida cada decisão.
+    decisions = body.normalized_decisions()
+    for d in decisions:
+        if d.decision not in ("upheld", "revised"):
+            raise HTTPException(status_code=400, detail=f"decision must be upheld or revised ({d.dimension_id})")
+        if d.decision == "revised" and d.score_override is None:
+            raise HTTPException(status_code=400, detail=f"score_override required when decision=revised ({d.dimension_id})")
+        if not d.reason_text():
+            raise HTTPException(status_code=400, detail=f"justification required ({d.dimension_id})")
 
     result = await _db.get_result_by_instance(request.app.state.db_pool, instance_id, tenant_id)
     if not result:
@@ -281,19 +381,47 @@ async def submit_review(
     # o round; ela decide e então reabre (round+1) ou finaliza no último.
     current_round = result.get("round") or 1
 
-    thread = await _db.create_contestation_thread(
-        request.app.state.db_pool,
-        tenant_id=tenant_id,
-        evaluation_instance_id=instance_id,
-        dimension_id=body.dimension_id,
-        round=current_round,
-        author_type=author_type,
-        author_id=author_id,
-        text=body.text,
-        decision=body.decision,
-        score_override=body.score_override,
-        evidence_entries=[e.model_dump() for e in body.evidence_entries],
-    )
+    # T5/5c — gate "tratar todas" (§15.3): a revisão tem de cobrir o conjunto EXATO de
+    # critérios contestados no round corrente. Faltando algum → 409 pending_contestations.
+    contested = set(await _db.list_contested_criteria_for_round(
+        request.app.state.db_pool, instance_id, tenant_id, current_round,
+    ))
+    decided = {d.dimension_id for d in decisions}
+    missing = contested - decided
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "pending_contestations", "missing": sorted(missing),
+                    "contested": sorted(contested), "round": current_round},
+        )
+    extra = decided - contested
+    if extra:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "decision_for_uncontested_criterion", "extra": sorted(extra),
+                    "contested": sorted(contested), "round": current_round},
+        )
+
+    # Uma thread human_reviewer por critério decidido (mesmo round).
+    threads = []
+    for d in decisions:
+        threads.append(await _db.create_contestation_thread(
+            request.app.state.db_pool,
+            tenant_id=tenant_id,
+            evaluation_instance_id=instance_id,
+            dimension_id=d.dimension_id,
+            round=current_round,
+            author_type=author_type,
+            author_id=author_id,
+            text=d.reason_text(),
+            decision=d.decision,
+            score_override=d.score_override,
+            evidence_entries=[e.model_dump() for e in d.evidence_entries],
+        ))
+
+    upheld  = [d.dimension_id for d in decisions if d.decision == "upheld"]
+    revised = [d.dimension_id for d in decisions if d.decision == "revised"]
+    any_revised = len(revised) > 0
 
     max_rounds = 3  # default
     campaign = None
@@ -308,24 +436,27 @@ async def submit_review(
 
     from .router import finalize_evaluation, apply_state_deadline  # local import: evita ciclo
 
+    finalized = False
     if current_round < max_rounds:
-        # T5 — decisão ATIVA (upheld OU revised) REABRE para a apelação seguinte enquanto
-        # há round restante; o avaliado decide re-contestar (avança) ou aceitar (o prazo
-        # finaliza em uncontested). Só o último round finaliza pela revisão.
+        # T5 — decisão do round (qualquer upheld/revised) REABRE para a apelação seguinte
+        # enquanto há round restante; o avaliado decide re-contestar (avança) ou aceitar
+        # (o prazo finaliza em uncontested). Só o último round finaliza pela revisão.
         next_state = "contestation_open"
         await _db.set_contestation_state(
             request.app.state.db_pool, result["id"], next_state,
             action_required=None, current_round=current_round + 1,
         )
-        _camp = campaign or await _db.get_campaign(
+        _camp2 = campaign or await _db.get_campaign(
             request.app.state.db_pool, result.get("campaign_id", ""), tenant_id
         )
-        await apply_state_deadline(request.app.state.db_pool, _camp, result["id"], "contest")
+        await apply_state_deadline(request.app.state.db_pool, _camp2, result["id"], "contest")
+        new_round = current_round + 1
     else:
-        # Último round → finaliza pelo emissor único (T3). reason pela decisão.
-        # (Consolidação por overrides via pesos do form é T7; aqui usamos a nota corrente.)
-        reason   = "revised" if body.decision == "revised" else "upheld"
-        next_state = "closed_revised" if body.decision == "revised" else "closed_upheld"
+        # Último round → finaliza pelo emissor único (T3). reason: revised se houve qualquer
+        # override no round; senão upheld. (Consolidação por pesos do form é T7; aqui a
+        # nota corrente.)
+        reason   = "revised" if any_revised else "upheld"
+        next_state = "closed_revised" if any_revised else "closed_upheld"
         await finalize_evaluation(
             request.app.state.db_pool,
             request.app.state.kafka_producer,
@@ -340,12 +471,22 @@ async def submit_review(
             evaluated_agent_type=result.get("evaluated_agent_type"),
             process_duration_ms=0,
         )
+        finalized = True
+        new_round = current_round
 
     logger.info(
-        "review submitted: instance=%s dimension=%s decision=%s round=%s max=%s next_state=%s by=%s",
-        instance_id, body.dimension_id, body.decision, current_round, max_rounds, next_state, author_id,
+        "review submitted: instance=%s upheld=%s revised=%s round=%s max=%s next_state=%s finalized=%s by=%s",
+        instance_id, upheld, revised, current_round, max_rounds, next_state, finalized, author_id,
     )
-    return {"thread": thread, "contestation_state": next_state}
+    return {
+        "submitted": True,
+        "contestation_state": next_state,
+        "current_round": new_round,
+        "finalized": finalized,
+        "dimensions_upheld": upheld,
+        "dimensions_revised": revised,
+        "threads": threads,
+    }
 
 
 @contestation_router.post("/v1/evaluation/instances/{instance_id}/pre-review")

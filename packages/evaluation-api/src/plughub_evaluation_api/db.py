@@ -1418,6 +1418,27 @@ async def list_contestation_threads(
     return _rows(rows)
 
 
+async def list_contested_criteria_for_round(
+    pool: asyncpg.Pool,
+    evaluation_instance_id: str,
+    tenant_id: str,
+    round: int,
+) -> list[str]:
+    """T5/5c — conjunto de critérios contestados pelo avaliado (author_type=human_agent)
+    no round corrente. Base do gate 'tratar todas' do submit_review (§15.3)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT dimension_id
+              FROM evaluation.contestation_threads
+             WHERE evaluation_instance_id=$1 AND tenant_id=$2
+               AND round=$3 AND author_type='human_agent'
+            """,
+            evaluation_instance_id, tenant_id, round,
+        )
+    return [r["dimension_id"] for r in rows]
+
+
 # ─── Arc 13 — CurationReview ──────────────────────────────────────────────────
 
 async def create_curation_review(

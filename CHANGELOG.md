@@ -2,6 +2,40 @@
 
 ---
 
+## T5 chunk 5c — Contestação em lote por critério + gate "tratar todas" (2026-06-18)
+
+Reconciliação Arc 6 + Arc 13 (spec `docs/product/evaluation-reconciliation-spec.md`, §4/§15).
+Unifica o contrato de contestação no nível de **critério** sob o envelope de round/estado do
+resultado. Code-only na `evaluation-api` (**sem migração** — usa colunas já existentes de
+T1/T2). Validado verde ponta-a-ponta na demo via `infra/test/test_5c_contestation.sh` (4 steps:
+contest em lote → gate 409 → guarda 403 → review completo finaliza).
+
+**`POST /instances/{id}/contest` em lote** (`contestation_router.py`): aceita
+`{dimension_ids[], reasons{criterion_id→texto}, evidence?, round?}`; cria uma
+`ContestationThread` (`author_type=human_agent`) por critério e move `contestation_open →
+under_review` **uma única vez**. `round` opcional faz anti-replay. Forma single legada aceita.
+
+**`POST /instances/{id}/review` em lote + gate (§15.3)**: aceita `dimension_decisions[]`. O
+**gate server-side "tratar todas"** exige decisão para o conjunto **exato** de critérios
+contestados no round corrente → faltando algum, **`409 pending_contestations`**
+(`missing`/`contested`/`round` no detail); critério não-contestado → `400`. Cria uma thread
+`human_reviewer` por decisão e aplica a transição do round **uma vez**: reabre `round+1`
+enquanto há round restante ou **finaliza no último** via o emissor único `finalize_evaluation`
+(T3) — reason `revised` se houve qualquer override, senão `upheld`.
+
+**Helper novo** (`db.py`): `list_contested_criteria_for_round` (distinct `dimension_id` com
+`author_type='human_agent'` no round) — base do gate. **ABAC/posse (5a) preservados**:
+contest exige posse + `contestar*` do round; review exige `revisar*` do round + guarda
+revisor≠avaliado.
+
+**Fronteira (não-bug):** a consolidação do `score_override` na nota final pelos pesos do form
+é a **T7**; no 5c o `finalize()` usa a `overall_score` corrente como placeholder, então
+`final_score` ainda não reflete overrides.
+
+**Rebuild**: evaluation-api (`docker compose -f docker-compose.demo.yml up -d --build evaluation-api`).
+
+---
+
 ## S2.2 — Avaliação real VERDE ponta-a-ponta com sessão de conversa real (2026-06-17)
 
 Fechado o gate da S2.2 com uma sessão webchat **real** (retenção: agente humano João reverte o

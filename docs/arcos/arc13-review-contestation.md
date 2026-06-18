@@ -6,6 +6,47 @@ Fecha o ciclo completo de qualidade da plataforma de avaliação (Arc 6): revis�
 
 ---
 
+## Reconciliação Arc 6 + Arc 13 (em andamento — fonte de verdade: spec)
+
+> **Atenção:** vários ✅ abaixo descrevem o **alvo**, não o que o código fazia no baseline
+> `eval-baseline` (2026-06-17). A correção completa destes docs é a tarefa **T16/G-DOCS**.
+> A arquitetura-alvo e o estado-atual×alvo vivem em
+> [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
+
+### T5 chunk 5c — Contestação em lote por critério + gate "tratar todas" (2026-06-18) ✅
+
+Unifica o contrato de contestação no nível de **critério** sob o envelope de round/estado do
+resultado (§4, §15 da spec). Validado verde ponta-a-ponta na demo
+(`infra/test/test_5c_contestation.sh`).
+
+- **`POST /v1/evaluation/instances/{id}/contest`** aceita um **conjunto** de critérios num
+  round: `{dimension_ids[], reasons{criterion_id→texto}, evidence?{criterion_id→[...]}, round?}`.
+  Cria uma `ContestationThread` (`author_type=human_agent`) por critério e move o resultado
+  `contestation_open → under_review` **uma única vez** (o round inteiro segue para revisão).
+  `round` opcional faz anti-replay (409 em divergência). Forma single legada continua aceita.
+- **`POST /v1/evaluation/instances/{id}/review`** aceita `dimension_decisions[]` em lote. **Gate
+  server-side "tratar todas" (§15.3):** as decisões têm de cobrir o conjunto **exato** dos
+  critérios contestados no round corrente — faltando algum → **`409 pending_contestations`**
+  (com `missing`/`contested`/`round` no detail); critério não-contestado → `400`. Cria uma
+  thread `human_reviewer` por decisão e aplica a transição do round **uma vez**: reabre
+  `round+1` enquanto há round restante ou **finaliza no último** via o emissor único
+  `finalize_evaluation` (T3) — reason `revised` se houve qualquer override no round, senão
+  `upheld`.
+- **Conjunto contestado do round** vem de `db.list_contested_criteria_for_round` (distinct
+  `dimension_id` com `author_type='human_agent'` no round).
+- **ABAC/posse (5a) preservados:** contest exige posse do segmento + campo `contestar*` do
+  round; review exige `revisar*` do round + guarda **revisor≠avaliado**.
+
+**Fronteira do 5c (não é bug):** a consolidação do `score_override` na **nota final** pelos
+pesos do formulário é a **T7** (saída form-driven/agregação). No 5c o `finalize()` usa a
+`overall_score` corrente como placeholder — por isso `final_score` ainda não reflete overrides.
+
+Mudança só na `evaluation-api`, **code-only (sem migração)**: `db.py`
+(`list_contested_criteria_for_round`) + `contestation_router.py` (`/contest` e `/review` em
+lote + gate). Rebuild: `docker compose -f docker-compose.demo.yml up -d --build evaluation-api`.
+
+---
+
 ## Dependência — Arc 6 Fase 2 (Quality Timeseries × Deploy Epochs)
 
 **Este Arc é produtor de dados para o Arc 6 Fase 2.** A série histórica de qualidade só é válida se usar o **score canônico final** — após encerramento do processo de revisão/contestação, nunca o score bruto do AI avaliador.
