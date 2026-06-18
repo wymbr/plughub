@@ -62,6 +62,7 @@ function RecalibrateDrawer({ review, isBias, onClose, onSubmit }: RecalibrateDra
   const [noteText,     setNoteText]     = useState(signal?.observation ?? '')
   const [curatorNotes, setCuratorNotes] = useState('')
   const [dimensionId,  setDimensionId]  = useState(signal?.dimension_id ?? '')
+  const [criterionId,  setCriterionId]  = useState(signal?.criterion_id ?? '')
   const [evaluatorId,  setEvaluatorId]  = useState(signal?.evaluator_id ?? '')
   const [skillVersion, setSkillVersion] = useState(signal?.skill_version ?? '')
   const [severity,     setSeverity]     = useState<string>(
@@ -83,6 +84,7 @@ function RecalibrateDrawer({ review, isBias, onClose, onSubmit }: RecalibrateDra
         curator_notes:          curatorNotes || undefined,
         calibration_note_text:  noteText,
         dimension_id:           dimensionId,
+        criterion_id:           criterionId || undefined,
         evaluator_id:           evaluatorId,
         skill_version:          skillVersion,
         severity,
@@ -139,16 +141,29 @@ function RecalibrateDrawer({ review, isBias, onClose, onSubmit }: RecalibrateDra
               />
             </label>
 
-            <label className="block">
-              <span className="text-sm font-medium text-dark">{t('curation.drawer.dimensionLabel')}</span>
-              <input
-                type="text"
-                className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 mt-1"
-                value={dimensionId}
-                onChange={e => setDimensionId(e.target.value)}
-                placeholder={t('curation.drawer.dimensionPlaceholder')}
-              />
-            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-sm font-medium text-dark">{t('curation.drawer.dimensionLabel')}</span>
+                <input
+                  type="text"
+                  className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 mt-1"
+                  value={dimensionId}
+                  onChange={e => setDimensionId(e.target.value)}
+                  placeholder={t('curation.drawer.dimensionPlaceholder')}
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm font-medium text-dark">{t('curation.drawer.criterionLabel')}</span>
+                <input
+                  type="text"
+                  className="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 mt-1"
+                  value={criterionId}
+                  onChange={e => setCriterionId(e.target.value)}
+                  placeholder={t('curation.drawer.criterionPlaceholder')}
+                />
+              </label>
+            </div>
+            <p className="text-xs text-muted-light -mt-1">{t('curation.drawer.criterionHint')}</p>
 
             <div className="grid grid-cols-2 gap-3">
               <label className="block">

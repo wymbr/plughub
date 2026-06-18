@@ -157,6 +157,7 @@ class CurationResolveBody(BaseModel):
     # Fields for creating a CalibrationNote (required when status != "approved")
     calibration_note_text: str | None = None
     dimension_id: str | None = None
+    criterion_id: str | None = None   # T14 (c) — critério implicado (opcional; RAG por critério)
     evaluator_id: str | None = None
     skill_version: str | None = None
     severity: str = "low"  # "low" | "medium" | "high"
@@ -697,6 +698,7 @@ async def resolve_curation(
             tenant_id=tenant_id,
             campaign_id=_campaign_id,  # 5d — bug: usava 'row' inexistente → NameError
             dimension_id=body.dimension_id,
+            criterion_id=body.criterion_id,  # T14 (c)
             evaluator_id=body.evaluator_id,
             skill_version=body.skill_version,
             text=body.calibration_note_text,
@@ -730,6 +732,7 @@ async def resolve_curation(
                         "source_ref": f"calibration_note:{calibration_note['id']}",
                         "metadata": {
                             "dimension_id":  calibration_note.get("dimension_id", ""),
+                            "criterion_id":  calibration_note.get("criterion_id") or "",  # T14 (c)
                             "evaluator_id":  calibration_note.get("evaluator_id", ""),
                             "skill_version": calibration_note.get("skill_version", ""),
                             "severity":      note_severity,

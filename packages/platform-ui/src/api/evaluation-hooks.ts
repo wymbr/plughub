@@ -829,6 +829,7 @@ export interface CurationReview {
   calibration_signal:     {
     severity:      string
     dimension_id:  string
+    criterion_id?: string
     observation:   string
     evaluator_id:  string
     skill_version: string
@@ -842,6 +843,7 @@ export interface CurationResolvePayload {
   curator_notes?:         string
   calibration_note_text?: string
   dimension_id?:          string
+  criterion_id?:          string
   evaluator_id?:          string
   skill_version?:         string
   severity?:              string
