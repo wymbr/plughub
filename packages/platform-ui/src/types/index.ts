@@ -605,6 +605,8 @@ export interface EvaluationCampaign {
   evaluator_pool?:          string | null   // S2.2: pool do agente avaliador
   evaluation_calendar_id?:  string
   gateway_config_ids?:      string[]
+  period_start?:            string | null   // T17 — janela de dados (closed_at), ISO; null = aberto
+  period_end?:              string | null
   total_instances:          number
   completed:                number
   pending:                  number

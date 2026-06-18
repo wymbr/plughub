@@ -328,6 +328,10 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
   const [evaluationPoolId,     setEvaluationPoolId]     = useState(editing?.evaluation_pool_id ?? '')
   const [evaluatorPool,        setEvaluatorPool]        = useState((editing as { evaluator_pool?: string } | null)?.evaluator_pool ?? '')
   const [evaluationCalendarId, setEvaluationCalendarId] = useState(editing?.evaluation_calendar_id ?? '')
+  // T17 — janela de dados (period_start/period_end). API devolve ISO; o input date usa só
+  // a parte YYYY-MM-DD. No submit reconverte (start=00:00:00Z, end=23:59:59Z p/ incluir o dia).
+  const [periodStart, setPeriodStart] = useState((editing?.period_start ?? '').slice(0, 10))
+  const [periodEnd,   setPeriodEnd]   = useState((editing?.period_end ?? '').slice(0, 10))
   const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed'>((_sr.mode as 'all'|'percentage'|'fixed') || 'percentage')
   const [samplingRate, setSamplingRate] = useState(String(_sr.rate ?? _sr.every_n ?? '0.1'))
   const [autoReview, setAutoReview] = useState(_rr.auto_review ?? true)
@@ -377,6 +381,8 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
           evaluation_pool_id:     evaluationPoolId     || undefined,
           evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
           evaluation_calendar_id: evaluationCalendarId || undefined,
+          period_start:           periodStart ? `${periodStart}T00:00:00Z` : undefined,
+          period_end:             periodEnd   ? `${periodEnd}T23:59:59Z`   : undefined,
           sampling_rules: {
             mode: samplingMode,
             rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
@@ -412,6 +418,8 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
         evaluation_pool_id:     evaluationPoolId     || undefined,
         evaluator_pool:         evaluatorPool,   // '' limpa (volta ao default global)
         evaluation_calendar_id: evaluationCalendarId || undefined,
+        period_start:           periodStart ? `${periodStart}T00:00:00Z` : undefined,
+        period_end:             periodEnd   ? `${periodEnd}T23:59:59Z`   : undefined,
         sampling_rules: {
           mode: samplingMode,
           rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
@@ -548,6 +556,29 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
+            </div>
+
+            {/* T17 — janela de dados (quais sessões entram, por closed_at) */}
+            <div className="col-span-2 grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-muted mb-1">{t('campaigns.modal.periodStartLabel', { defaultValue: 'Período — início (opcional)' })}</label>
+                <input
+                  type="date"
+                  className="w-full border border-border-strong rounded px-3 py-1.5 text-sm"
+                  value={periodStart}
+                  onChange={e => setPeriodStart(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-muted mb-1">{t('campaigns.modal.periodEndLabel', { defaultValue: 'Período — fim (opcional)' })}</label>
+                <input
+                  type="date"
+                  className="w-full border border-border-strong rounded px-3 py-1.5 text-sm"
+                  value={periodEnd}
+                  onChange={e => setPeriodEnd(e.target.value)}
+                />
+              </div>
+              <p className="col-span-2 text-xs text-muted-light -mt-1">{t('campaigns.modal.periodHint', { defaultValue: 'Quais sessões entram, por data de fechamento. Vazio = janela aberta (streaming a partir da ativação). Início no passado = reprocessa o histórico (backfill).' })}</p>
             </div>
 
             <div className="col-span-2">
@@ -1195,6 +1226,18 @@ export default function CampaignsPage() {
                   </div>
                 ) : (
                   <div className="text-xs text-muted-light italic">{t('campaigns.detail.noCalendar')}</div>
+                )}
+              </div>
+
+              {/* T17 — janela de dados (período) */}
+              <div className="bg-white border rounded p-3">
+                <div className="text-xs font-semibold text-muted mb-2">{t('campaigns.detail.period', { defaultValue: 'Janela de dados (período)' })}</div>
+                {selected.period_start || selected.period_end ? (
+                  <div className="font-mono text-xs bg-surface-muted border rounded px-2 py-1 text-dark">
+                    {(selected.period_start ?? '∞').slice(0, 10)} → {(selected.period_end ?? '∞').slice(0, 10)}
+                  </div>
+                ) : (
+                  <div className="text-xs text-muted-light italic">{t('campaigns.detail.noPeriod', { defaultValue: 'Janela aberta (todas as sessões)' })}</div>
                 )}
               </div>
 

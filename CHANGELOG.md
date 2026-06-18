@@ -2,6 +2,19 @@
 
 ---
 
+## T17-UI — Janela de período na CampaignsPage (2026-06-18)
+
+Fecha o gap de UI do T17 (o backend — period_start/period_end + filtro forward + backfill — já
+existia, mas a tela de campanha não expunha os campos, furando "every config field is UI-editable").
+**Só platform-ui.** Validar por browser.
+
+- `CampaignsPage`: dois inputs `type=date` (período início/fim) no form de criar/editar (start→
+  `T00:00:00Z`, end→`T23:59:59Z`); fiação em create/update; exibição no painel de detalhe
+  (`período → ∞` quando aberto). `EvaluationCampaign` += `period_start/period_end`. i18n
+  `campaigns.modal.period*` + `campaigns.detail.period/noPeriod` (en+pt-BR). **Rebuild**: platform-ui.
+
+---
+
 ## T8-D — ABAC gerir_rubrica + epochs por versão (2026-06-18) — T8 completo
 
 Último chunk do T8 (spec §16.3). **modules.yaml + Sidebar.** Validado via
