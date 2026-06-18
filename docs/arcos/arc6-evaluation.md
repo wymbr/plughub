@@ -10,6 +10,25 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T8-B2 — Fiação de runtime da rubrica (2026-06-18) ✅
+
+Faz o avaliador REAL receber a rubrica-template efetiva (spec §16.2). evaluation-api testável
+por API (`infra/test/test_t8b2_effective_rubric.sh`); fiação mcp-server/skill **inspecionada**
+(runtime do avaliador e2e-blocked — gotcha 1; precisa de sessão webchat fresca).
+
+- **evaluation-api**: `GET /v1/evaluation/rubric-templates/effective` — body efetivo COM
+  fallback built-in (`resolve_rubric` → body/source; null → `DEFAULT_RUBRIC_BODY`/`builtin_default`).
+  **Nunca devolve null** — o avaliador nunca fica sem instruções gerais.
+- **mcp-server** (`evaluation_context_get`): chama `/rubric-templates/effective` (campaign-aware)
+  e expõe `rubric_instructions` + `rubric_source` no contexto (ao lado de `calibration_notes`).
+  **Requer rebuild do mcp-server.**
+- **skill** `agente_avaliacao_v1.yaml`: `input.rubric_instructions` ←
+  `$.pipeline_state.eval_context.rubric_instructions` no step `reason`; `prompt_id` renomeado
+  `evaluation_rubric_v3` → `evaluation_form_driven_v1` (vestigial — `prompt_id` é `z.string()`
+  obrigatório no schema e o ai-gateway o ignora; não dá p/ remover, então fica honesto).
+- **Próximo**: T8-C (UI Rubrica/Prompt), T8-D (ABAC `gerir_rubrica` + deploy epoch no publish).
+
+
 ### T8-B1 — Composição + preview do prompt (2026-06-18) ✅
 
 Segundo chunk do T8 (spec §5.1/§16.3): camada de **composição** do prompt do avaliador na

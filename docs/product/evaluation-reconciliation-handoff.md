@@ -119,16 +119,21 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   + notas por `criterion_id` + transcript placeholder) + `POST /rubric-templates/preview`
   (precedência rubric_body → rubric_id → `resolve_rubric` → builtin). Test `test_t8b_rubric_preview.sh`.
 
-**PRÓXIMA TAREFA: T8-B2 — fiação de runtime da rubrica (§16.2).** Fazer o avaliador REAL usar a
-rubrica composta: (1) `mcp-server-plughub` `evaluation_context_get` chama
-`GET /rubric-templates/resolve?tenant_id=&campaign_id=` (ou um endpoint de composição) e expõe
-`rubric_instructions` no contexto (TS → rebuild mcp-server); (2) skill `agente_avaliacao_v1.yaml`:
-`input.rubric_instructions: "$.pipeline_state.eval_context.rubric_instructions"` no step `reason`;
-(3) **remover** `prompt_id: evaluation_rubric_v3` (vestigial). Built-in default quando resolve→null.
-Runtime e2e-blocked (gotcha 1) → validar por inspeção + (se possível) proxy `/v1/reason`. Reusa o
-`compose_rubric_prompt`/`resolve_rubric` já prontos. Depois: T8-C (UI Rubrica/Prompt — página no
-grupo Quality, editor/preview/publish), T8-D (ABAC `gerir_rubrica` no modules.yaml + deploy epoch no
-publish via `registry.changed`/`deploy_events`).
+- **T8-B2** — fiação de runtime da rubrica (§16.2). evaluation-api `GET /rubric-templates/effective`
+  (body + fallback built-in, nunca null); mcp-server `evaluation_context_get` expõe
+  `rubric_instructions`/`rubric_source`; skill `agente_avaliacao_v1.yaml` passa `rubric_instructions`
+  ao `reason` + `prompt_id` renomeado p/ `evaluation_form_driven_v1` (vestigial). Test
+  `test_t8b2_effective_rubric.sh`. **Rebuild mcp-server.** Runtime e2e-blocked → mcp/skill inspecionados.
+
+**PRÓXIMA TAREFA: T8-C — UI Rubrica/Prompt (§16.3).** Página nova no grupo **Quality** (ao lado de
+Forms/Campaigns/Knowledge/Evaluations/Calibration/Curation), rota `/evaluation/rubric`. Editor da
+rubrica-template (default do tenant + override por campanha; lista via `GET /rubric-templates`),
+draft livre, **preview do prompt composto** (`POST /rubric-templates/preview` — já pronto, aceita
+`rubric_body` draft + `form_id` + `campaign_id`), e **publish** (`POST /{id}/publish`). Mostra
+`deploy_status`/`version`/histórico (`GET /{id}/versions`). i18n (en+pt-BR), nav entry + ABAC gate
+(reusar `formularios` por ora; o campo `gerir_rubrica` dedicado entra no T8-D). Tudo backend já
+existe (T8-A/B); é UI + hooks. Depois: T8-D (ABAC `gerir_rubrica` no `modules.yaml` + deploy epoch
+no publish via `registry.changed`/`deploy_events`).
 
 **Pendente do T14 — laço mole ponta-a-ponta + estrutural.** Falta desta tarefa:
 (a) **validar que o scoring desloca** com a nota injetada — hoje a nota chega ao contexto

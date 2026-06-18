@@ -2,6 +2,22 @@
 
 ---
 
+## T8-B2 — Fiação de runtime da rubrica (2026-06-18)
+
+Chunk B2 do T8 (spec §16.2): o avaliador real passa a receber a rubrica-template efetiva.
+evaluation-api validado via `infra/test/test_t8b2_effective_rubric.sh`; mcp-server/skill
+inspecionados (runtime e2e-blocked).
+
+- evaluation-api: `GET /rubric-templates/effective` (body efetivo + fallback built-in; nunca null).
+- mcp-server `evaluation_context_get`: fetch effective + expõe `rubric_instructions`/`rubric_source`.
+  **Rebuild mcp-server.**
+- skill `agente_avaliacao_v1.yaml`: `reason.input.rubric_instructions` ←
+  `eval_context.rubric_instructions`; `prompt_id` renomeado `evaluation_rubric_v3` →
+  `evaluation_form_driven_v1` (vestigial; `prompt_id` é obrigatório no schema, ai-gateway ignora).
+- **Rebuild**: evaluation-api + mcp-server-plughub. Próximo: T8-C (UI), T8-D (ABAC + epoch).
+
+---
+
 ## T8-B1 — Composição + preview do prompt (2026-06-18)
 
 Chunk B1 do T8 (spec §5.1/§16.3): camada de composição do prompt do avaliador na evaluation-api

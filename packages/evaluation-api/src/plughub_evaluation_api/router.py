@@ -412,6 +412,24 @@ async def resolve_rubric_template(
     return {"tenant_id": tenant_id, "campaign_id": campaign_id, "resolved": eff}
 
 
+@router.get("/v1/evaluation/rubric-templates/effective")
+async def effective_rubric_template(
+    request: Request, tenant_id: str, campaign_id: str | None = None,
+) -> dict:
+    """T8-B2 — body EFETIVO da rubrica COM fallback built-in (resolve → body/source; null
+    → DEFAULT_RUBRIC_BODY/builtin_default). Consumido pelo `evaluation_context_get`
+    (mcp-server) p/ expor `rubric_instructions` ao avaliador em runtime. Sempre devolve um
+    body (nunca null) — o avaliador nunca fica sem instruções gerais."""
+    pool = _pool(request)
+    eff = await _db.resolve_rubric(pool, tenant_id, campaign_id=campaign_id)
+    if eff:
+        return {"body": eff.get("body") or DEFAULT_RUBRIC_BODY,
+                "source": eff.get("source"), "scope": eff.get("scope"),
+                "version": eff.get("version"), "rubric_id": eff.get("rubric_id")}
+    return {"body": DEFAULT_RUBRIC_BODY, "source": "builtin_default",
+            "scope": None, "version": None, "rubric_id": None}
+
+
 @router.get("/v1/evaluation/rubric-templates/{rubric_id}")
 async def get_rubric_template(rubric_id: str, tenant_id: str, request: Request) -> dict:
     pool = _pool(request)

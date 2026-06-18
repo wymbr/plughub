@@ -1001,6 +1001,27 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           }
         }
 
+        // ── T8-B2: rubrica-template efetiva (instruções gerais do avaliador) ──
+        // Resolve override pub. da campanha → default pub. do tenant → built-in (sempre
+        // devolve um body). O skill passa isto ao reason como `rubric_instructions`.
+        let rubricInstructions = ""
+        let rubricSource = ""
+        if (evaluationApiUrl) {
+          try {
+            const q = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ""
+            const rubRes = await fetch(
+              `${evaluationApiUrl}/v1/evaluation/rubric-templates/effective?tenant_id=${encodeURIComponent(tenant_id)}${q}`,
+            )
+            if (rubRes.ok) {
+              const r = await rubRes.json() as { body?: string; source?: string }
+              rubricInstructions = r.body ?? ""
+              rubricSource = r.source ?? ""
+            }
+          } catch (err) {
+            console.warn("evaluation_context_get: failed to fetch effective rubric", err)
+          }
+        }
+
         return ok({
           session_id,
           participant_id,
@@ -1012,6 +1033,9 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           participant_summary: participantSummary,
           // Arc 13 Fase B: calibration notes for RAG-based evaluator calibration
           calibration_notes: calibrationNotes,
+          // T8-B2: instruções gerais (rubrica-template efetiva) — fonte do prompt do avaliador
+          rubric_instructions: rubricInstructions,
+          rubric_source:       rubricSource,
         })
       } catch (e) {
         return handleCaughtError(e)

@@ -170,7 +170,8 @@ steps:
     on_failure: evaluate   # degrade gracefully — avalia sem snippets RAG extras
 
   # ── Step 4: LLM avalia todos os critérios do formulário ───────────────────────
-  # O prompt evaluation_rubric_v3 instrui o LLM a:
+  # As instruções gerais vêm de `rubric_instructions` (rubrica-template efetiva, T8-B2);
+  # combinadas com o formulário, elas orientam o LLM a:
   #   1. Ler o formulário (form.dimensions[].criteria[]) com pesos e instruções
   #   2. IGNORAR completamente critérios com type=auto_computed — SessionMetrics
   #      os preenche automaticamente; incluí-los seria dupla contagem
@@ -190,12 +191,19 @@ steps:
   #   7. Produzir highlights, improvement_points, compliance_flags
   - id:         evaluate
     type:       reason
-    prompt_id:  evaluation_rubric_v3
+    # T8-B2 — prompt_id é vestigial (o ai-gateway é stateless/genérico e NÃO resolve
+    # prompt_id para texto); a rubrica vem via `rubric_instructions` no input (rubrica-
+    # template efetiva, composta upstream). Mantido só porque o schema exige string.
+    prompt_id:  evaluation_form_driven_v1
     # T7b-2b — schema form-driven montado UPSTREAM (evaluation_context_get) → tool-use
     # nativo no ai-gateway (T7b-1). Quando presente, o engine pula a validação estática
     # local; o output_schema abaixo permanece como fallback (será removido no T7b-3).
     json_schema_ref: "$.pipeline_state.eval_context.evaluation_output_schema"
     input:
+      # T8-B2 — instruções gerais de avaliação (rubrica-template efetiva: override pub. da
+      # campanha → default pub. do tenant → built-in). Como pontuar, citar evidência, N/A,
+      # anti-viés. Substitui o (vestigial) evaluation_rubric_v3.
+      rubric_instructions: "$.pipeline_state.eval_context.rubric_instructions"
       # Transcript com eventos originais (original_content disponível para evaluator)
       # NB: o ReplayContext serializa a lista de eventos como `events` (models.py
       # ReplayContext.events, sem alias) — referenciar `.context.events`, não
