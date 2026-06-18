@@ -28,6 +28,8 @@ export async function executeReason(
     ctx,
     ctx.contextStore,
   )
+  // T7b — JSON Schema (montado upstream do form), inline ou via json_schema_ref.
+  const jsonSchema    = resolveJsonSchema(step, ctx)
   const maxRetries    = step.max_format_retries ?? 1
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -38,9 +40,28 @@ export async function executeReason(
         output_schema: step.output_schema,
         session_id:    ctx.sessionId,
         attempt,
+        ...(jsonSchema ? { json_schema: jsonSchema } : {}),
       })
 
-      // Validar retorno contra output_schema
+      // T7b — com JSON Schema, o ai-gateway garante o shape via tool-use (validação
+      // recursiva lá). Aceita o resultado direto, sem a validação estática local.
+      if (jsonSchema) {
+        if (step.context_tags?.outputs && ctx.contextStore) {
+          await extractOutputsToCtx(
+            ctx.contextStore, ctx.sessionId, ctx.customerId,
+            step.context_tags.outputs, result,
+            `ai_inferred:${step.id}`, ctx.segmentId, ctx.journeyId,
+          )
+        }
+        return {
+          next_step_id:      step.on_success,
+          output_as:         step.output_as,
+          output_value:      result,
+          transition_reason: "on_success",
+        }
+      }
+
+      // Validar retorno contra output_schema (caminho flat / compat)
       const validated = validateAgainstSchema(result, step.output_schema)
       if (validated.success) {
         // ── context_tags (Opção A): escrever outputs no ContextStore ─────────
@@ -94,6 +115,31 @@ export async function executeReason(
     transition_reason: "on_failure",
   }
 }
+
+/**
+ * T7b — resolve o JSON Schema do reason step: inline (`step.json_schema`) ou via
+ * referência JSONPath (`step.json_schema_ref`) contra o pipeline_state. Retorna
+ * undefined quando ausente/não resolvido → o step cai no caminho flat (output_schema).
+ */
+function resolveJsonSchema(
+  step: ReasonStep,
+  ctx:  StepContext,
+): Record<string, unknown> | undefined {
+  const inline = (step as { json_schema?: Record<string, unknown> }).json_schema
+  if (inline && typeof inline === "object" && Object.keys(inline).length > 0) {
+    return inline
+  }
+  const ref = (step as { json_schema_ref?: string }).json_schema_ref
+  if (ref) {
+    const evalContext = { pipeline_state: ctx.state.results, session: ctx.sessionContext }
+    const resolved = JSONPath({ path: ref, json: evalContext as object, wrap: false })
+    if (resolved && typeof resolved === "object" && !Array.isArray(resolved)) {
+      return resolved as Record<string, unknown>
+    }
+  }
+  return undefined
+}
+
 
 /** Valida o retorno do AI Gateway contra o output_schema declarado no step */
 function validateAgainstSchema(

@@ -262,6 +262,13 @@ export const ReasonStepSchema = z.object({
   prompt_id:          z.string(),
   input:              StepInputSchema.optional(),
   output_schema:      z.record(ReasonOutputFieldSchema),
+  // T7b — JSON Schema completo (montado UPSTREAM a partir do form) para tool-use
+  // nativo no ai-gateway. Inline (`json_schema`) OU referência JSONPath resolvida do
+  // pipeline_state (`json_schema_ref`, ex. "$.pipeline_state.eval_context.evaluation_output_schema").
+  // Quando presente, o reason usa tool-use e PULA a validação estática local
+  // (o ai-gateway valida recursivamente). `output_schema` permanece como fallback.
+  json_schema:        z.record(z.unknown()).optional(),
+  json_schema_ref:    z.string().optional(),
   output_as:          z.string(),
   max_format_retries: z.number().int().min(0).max(3).default(1),
   /**

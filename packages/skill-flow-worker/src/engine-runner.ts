@@ -193,6 +193,7 @@ export class EngineRunner {
     output_schema: Record<string, unknown>
     session_id:    string
     attempt:       number
+    json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
   }): Promise<unknown> {
     const url = `${this.settings.aiGatewayUrl}/v1/reason`
 
@@ -205,6 +206,7 @@ export class EngineRunner {
         input:         payload.input,
         output_schema: payload.output_schema,
         attempt:       payload.attempt,
+        ...(payload.json_schema ? { json_schema: payload.json_schema } : {}),
       }),
     })
 

@@ -295,6 +295,85 @@ function calculateScores(
   return { scores, itemsExcluded }
 }
 
+// ─── T7b-2b — JSON Schema do form (montado UPSTREAM; o ai-gateway não monta) ───
+/**
+ * Deriva o JSON Schema de saída do avaliador a partir do EvaluationForm.
+ * Modelo de saída = `criterion_responses[]` (compatível com a agregação T7a, que lê
+ * `score`/`na`/`justification`/`evidence` por critério). `criterion_id` é um enum dos
+ * critérios não-auto do form; `score` é 0..max (nullable p/ `na`). Critérios
+ * `auto_computed` são omitidos (preenchidos pelo SessionMetricsExtractor no ingest).
+ * Retorna undefined quando o form não tem critérios pontuáveis.
+ */
+function buildEvaluationOutputSchema(form: unknown): Record<string, unknown> | undefined {
+  if (!form || typeof form !== "object") return undefined
+  const f = form as Record<string, unknown>
+
+  // Achata dimensions[].criteria[] (modelo aninhado) com fallback a criteria[] flat.
+  const crits: Array<Record<string, unknown>> = []
+  const dims = f["dimensions"]
+  if (Array.isArray(dims)) {
+    for (const d of dims) {
+      const cs = (d as Record<string, unknown>)?.["criteria"]
+      if (Array.isArray(cs)) for (const c of cs) if (c && typeof c === "object") crits.push(c as Record<string, unknown>)
+    }
+  }
+  if (crits.length === 0 && Array.isArray(f["criteria"])) {
+    for (const c of f["criteria"] as unknown[]) if (c && typeof c === "object") crits.push(c as Record<string, unknown>)
+  }
+
+  const scorable = crits.filter(c => (c["type"] ?? "score") !== "auto_computed")
+  const ids = scorable
+    .map(c => (c["criterion_id"] ?? c["id"]) as string | undefined)
+    .filter((x): x is string => typeof x === "string" && x.length > 0)
+  if (ids.length === 0) return undefined
+
+  const maxScore = Math.max(
+    10,
+    ...scorable.map(c => (typeof c["max_score"] === "number" ? (c["max_score"] as number) : 10)),
+  )
+
+  return {
+    type: "object",
+    required: ["criterion_responses"],
+    properties: {
+      criterion_responses: {
+        type: "array",
+        description:
+          "Uma entrada por critério avaliável do formulário (omita os auto_computed). " +
+          "Quando o critério não se aplica, na=true e score=null.",
+        items: {
+          type: "object",
+          required: ["criterion_id", "score", "justification"],
+          properties: {
+            criterion_id:  { type: "string", enum: ids },
+            score:         { type: ["number", "null"], minimum: 0, maximum: maxScore,
+                             description: "Nota 0–" + maxScore + " ou null quando na=true" },
+            na:            { type: "boolean", description: "true quando o critério não é aplicável" },
+            justification: { type: "string", description: "Fundamentação (≥ 20 palavras)" },
+            evidence: {
+              type: "array",
+              description: "Evidências do transcript que sustentam a nota.",
+              items: {
+                type: "object",
+                required: ["stream_entry_id"],
+                properties: {
+                  stream_entry_id: { type: "string" },
+                  excerpt:         { type: "string" },
+                  relevance_note:  { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+      overall_observation: { type: "string", description: "Síntese da avaliação (≥ 50 palavras)" },
+      highlights:          { type: "array", items: { type: "string" } },
+      improvement_points:  { type: "array", items: { type: "string" } },
+    },
+  }
+}
+
+
 // ─── Helpers — comparação turn-a-turn ────────────────────────────────────────
 
 /**
@@ -517,7 +596,10 @@ const EvaluationSubmitInputSchema = z.object({
   // falhar mesmo após a pontuação. Ver get_context.
   participant_id:     z.string().min(1),
   evaluation_id:      z.string().min(1),
-  composite_score:    z.number().min(0).max(10),
+  // T7b — a nota geral NÃO é mais saída do LLM (form-driven): a evaluation-api a
+  // recomputa de criterion_responses pelos pesos do form (T7a). Opcional/default 0;
+  // o ingest a descarta e recomputa.
+  composite_score:    z.number().min(0).max(10).optional().default(0),
   dimensions:         z.array(EvaluationDimensionInputSchema).default([]),
   summary:            z.string().min(1),
   highlights:         z.array(z.string()).default([]),
@@ -900,6 +982,10 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
 
         if (context["evaluation_form"] !== undefined && context["evaluation_form"] !== null) {
           arc6Meta["evaluation_form"] = context["evaluation_form"]
+          // T7b-2b — JSON Schema derivado do form (montado UPSTREAM). O skill o referencia
+          // via json_schema_ref → reason usa tool-use nativo no ai-gateway (T7b-1).
+          const outSchema = buildEvaluationOutputSchema(context["evaluation_form"])
+          if (outSchema) arc6Meta["evaluation_output_schema"] = outSchema
         }
         if (typeof context["campaign_id"] === "string") {
           arc6Meta["campaign_id"] = context["campaign_id"]

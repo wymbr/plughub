@@ -191,6 +191,10 @@ steps:
   - id:         evaluate
     type:       reason
     prompt_id:  evaluation_rubric_v3
+    # T7b-2b — schema form-driven montado UPSTREAM (evaluation_context_get) → tool-use
+    # nativo no ai-gateway (T7b-1). Quando presente, o engine pula a validação estática
+    # local; o output_schema abaixo permanece como fallback (será removido no T7b-3).
+    json_schema_ref: "$.pipeline_state.eval_context.evaluation_output_schema"
     input:
       # Transcript com eventos originais (original_content disponível para evaluator)
       # NB: o ReplayContext serializa a lista de eventos como `events` (models.py
@@ -354,16 +358,15 @@ steps:
       session_id:           "$.session.session_id"
       participant_id:       "$.session.evaluation_id"
       evaluation_id:        "$.session.evaluation_id"
-      # Scores e narrativas
-      composite_score:      "$.pipeline_state.llm_result.overall_score"
+      # T7b — narrativa (a NOTA é recomputada do form pela evaluation-api no ingest;
+      # o LLM não devolve overall_score nem dimension_threads — os threads round-1
+      # nascem por critério de criterion_responses no ingest, T7a).
       summary:              "$.pipeline_state.llm_result.overall_observation"
       highlights:           "$.pipeline_state.llm_result.highlights"
       improvement_points:   "$.pipeline_state.llm_result.improvement_points"
-      compliance_flags:     "$.pipeline_state.llm_result.compliance_flags"
-      # Arc 6: critérios por item com evidence e N/A (exceto auto_computed)
+      # Arc 6: critérios por item com evidence e N/A (exceto auto_computed) — saída
+      # form-driven via tool-use (T7b-2b). create_criterion_responses lê `score`.
       criterion_responses:  "$.pipeline_state.llm_result.criterion_responses"
-      # Arc 13 Fase B: dimension_threads com evidence_entries estruturadas
-      dimension_threads:    "$.pipeline_state.llm_result.dimension_threads"
       # Arc 13 Fase B: tipo do agente avaliado — aciona fluxo correto
       evaluated_agent_type: "$.session.evaluated_agent_type"
       # instance_id e campaign_id são resolvidos pelo evaluation_submit

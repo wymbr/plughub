@@ -2,6 +2,32 @@
 
 ---
 
+## T7b-2 — Composição do JSON Schema do form + skill form-driven (2026-06-18)
+
+Liga o avaliador ao conveyance do T7b-1 (spec §5.4/§16.2). **2a** (skill-flow-engine) + **2b**
+(mcp-server + skill). Validado: substância do conveyance via proxy
+(`infra/test/test_t7b2_schema_conveyance.sh` — envelope do form → /v1/reason tool-use →
+criterion_responses conforme, incl. score nullable). E2e completo do avaliador bloqueado pela
+infra de replay/alocação do demo (replayer curto-circuita alocação no cache-hit; sessões antigas
+não re-hidratam) — confirma em run real fresco.
+
+**T7b-2a (skill-flow-engine)**: `ReasonStep` += `json_schema` (inline) e `json_schema_ref`
+(JSONPath do pipeline_state); `reason.ts` resolve, repassa `json_schema` ao ai-gateway e **pula
+a validação estática local** quando presente; tipos de `aiGatewayCall` (executor+engine) +
+runners (`skill-flow-worker`, `skill-flow-service`) forwardam. 3 unit tests.
+
+**T7b-2b (mcp-server + skill)**: `buildEvaluationOutputSchema(form)` deriva o JSON Schema
+(`criterion_responses[]` com `criterion_id` enum não-auto, `score` 0..max nullable, `na`,
+`justification`, `evidence`) e o `evaluation_context_get` expõe `evaluation_output_schema`;
+o skill `agente_avaliacao_v1.yaml` referencia via `json_schema_ref`. `composite_score` do
+`evaluation_submit` virou opcional (nota recomputada no ingest — T7a); removidos os mapeamentos
+mortos `composite_score`/`dimension_threads` no submit do skill.
+
+**Rebuild**: mcp-server-plughub, skill-flow-service (inclui engine); restart orchestrator-bridge.
+**Fronteira (T7b-3)**: remover shims do `evaluation_submit` + `evaluation_rubric_v3` fixo.
+
+---
+
 ## T7b-1 — ai-gateway: reason aceita JSON Schema via tool-use nativo (2026-06-18)
 
 Primeiro sub-chunk do conveyance form-driven (spec §5.4). **Code-only no ai-gateway.** Validado

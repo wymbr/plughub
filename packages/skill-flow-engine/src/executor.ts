@@ -70,6 +70,7 @@ export interface StepContext {
     output_schema: Record<string, unknown>
     session_id:    string
     attempt:       number
+    json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
   }): Promise<unknown>
 
   /** Persiste o pipeline_state atual */

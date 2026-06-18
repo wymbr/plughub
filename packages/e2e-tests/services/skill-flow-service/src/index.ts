@@ -234,6 +234,7 @@ async function aiGatewayCall(payload: {
   output_schema: Record<string, unknown>
   session_id:    string
   attempt:       number
+  json_schema?:  Record<string, unknown>   // T7b — forwardado via JSON.stringify(payload)
 }): Promise<unknown> {
   const url = `${AI_GATEWAY_URL}/v1/reason`
   console.log(

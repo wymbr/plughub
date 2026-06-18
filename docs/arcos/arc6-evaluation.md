@@ -93,6 +93,33 @@ Primeiro sub-chunk do conveyance (§5.4). **Code-only no ai-gateway.** Validado 
 + skill `agente_avaliacao_v1.yaml` usar o schema dinâmico (T7b-2); remover os shims do
 `evaluation_submit` + `evaluation_rubric_v3` fixo (T7b-3).
 
+### T7b-2 — Composição do JSON Schema do form + skill form-driven (2026-06-18) ✅
+
+Liga o avaliador ao conveyance do T7b-1. **2a** (skill-flow-engine) + **2b** (composição/skill).
+
+- **T7b-2a (skill-flow-engine):** `ReasonStep` ganhou `json_schema` (inline) e
+  `json_schema_ref` (JSONPath resolvido do `pipeline_state`); `reason.ts` resolve e repassa
+  `json_schema` ao ai-gateway e **pula a validação estática local** quando presente (o
+  ai-gateway valida via tool-use). Tipos de `aiGatewayCall` (executor+engine) + runners
+  (`skill-flow-worker`, `skill-flow-service`) forwardam `json_schema`. 3 unit tests.
+- **T7b-2b (mcp-server + skill):** `buildEvaluationOutputSchema(form)` deriva o JSON Schema
+  (`criterion_responses[]` com `criterion_id` enum dos critérios não-auto, `score` 0..max
+  nullable, `na`, `justification`, `evidence`) e o `evaluation_context_get` expõe
+  `evaluation_output_schema`. O skill `agente_avaliacao_v1.yaml` referencia via
+  `json_schema_ref: "$.pipeline_state.eval_context.evaluation_output_schema"`. `composite_score`
+  do `evaluation_submit` virou opcional (a nota é recomputada no ingest — T7a); removidos os
+  mapeamentos mortos `composite_score`/`dimension_threads` no submit do skill.
+
+**Validação:** o e2e completo do avaliador está bloqueado pela infra de replay/alocação do
+demo (o `session-replayer` curto-circuita a alocação no cache-hit; sessões antigas não
+re-hidratam). A substância do conveyance foi validada via **proxy**
+(`infra/test/test_t7b2_schema_conveyance.sh`): o mesmo envelope que `buildEvaluationOutputSchema`
+produz → `/v1/reason` tool-use → `criterion_responses` conforme (incl. `score` nullable). O
+T7b-1 já provara o tool-use ao vivo. O e2e natural confirma quando houver sessão real fresca.
+
+**Fronteira (T7b-3):** remover os shims do `evaluation_submit` (`observation→justification`,
+default `evidence_entries`, coerção `compliance_flags`) + o `evaluation_rubric_v3` fixo.
+
 ---
 
 ## Evolução posterior

@@ -81,3 +81,46 @@ describe("executeReason — validação de output_schema", () => {
     expect(aiGatewayCall).toHaveBeenCalledTimes(2)
   })
 })
+
+// ── T7b-2a — json_schema (tool-use): pula a validação estática local ──────────
+
+describe("executeReason — json_schema (T7b)", () => {
+  const jsonSchema = {
+    type: "object",
+    required: ["criterion_responses"],
+    properties: {
+      criterion_responses: { type: "array", items: { type: "object" } },
+    },
+  }
+
+  it("inline json_schema: repassa ao gateway e aceita o resultado sem validação estática", async () => {
+    const aiGatewayCall = vi.fn().mockResolvedValue({ criterion_responses: [{ criterion_id: "c1" }] })
+    const ctx = { ...makeCtx({}), aiGatewayCall }
+    const s = { ...step, json_schema: jsonSchema } as ReasonStep
+    const result = await executeReason(s, ctx)
+    expect(result.next_step_id).toBe("proximo")             // on_success mesmo sem intencao/confianca
+    expect(aiGatewayCall).toHaveBeenCalledTimes(1)          // sem retry de validação
+    expect(aiGatewayCall.mock.calls[0][0]).toMatchObject({ json_schema: jsonSchema })
+  })
+
+  it("json_schema_ref: resolve do pipeline_state e repassa ao gateway", async () => {
+    const aiGatewayCall = vi.fn().mockResolvedValue({ criterion_responses: [] })
+    const ctx = makeCtx({})
+    ctx.state.results = { eval_context: { evaluation_output_schema: jsonSchema } }
+    const ctx2 = { ...ctx, aiGatewayCall }
+    const s = { ...step, json_schema_ref: "$.pipeline_state.eval_context.evaluation_output_schema" } as ReasonStep
+    const result = await executeReason(s, ctx2)
+    expect(result.next_step_id).toBe("proximo")
+    expect(aiGatewayCall.mock.calls[0][0]).toMatchObject({ json_schema: jsonSchema })
+  })
+
+  it("json_schema_ref ausente no contexto: cai no caminho flat (output_schema)", async () => {
+    // Sem o schema no pipeline_state → resolveJsonSchema retorna undefined → valida flat.
+    const aiGatewayCall = vi.fn().mockResolvedValue({ intencao: "portabilidade", confianca: 0.9 })
+    const ctx = { ...makeCtx({}), aiGatewayCall }
+    const s = { ...step, json_schema_ref: "$.pipeline_state.eval_context.nao_existe" } as ReasonStep
+    const result = await executeReason(s, ctx)
+    expect(result.next_step_id).toBe("proximo")
+    expect(aiGatewayCall.mock.calls[0][0].json_schema).toBeUndefined()
+  })
+})
