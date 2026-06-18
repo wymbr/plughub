@@ -489,7 +489,7 @@ async def resolve_curation(
         calibration_note = await _db.create_calibration_note(
             request.app.state.db_pool,
             tenant_id=tenant_id,
-            campaign_id=row["campaign_id"],
+            campaign_id=_campaign_id,  # 5d — bug: usava 'row' inexistente → NameError
             dimension_id=body.dimension_id,
             evaluator_id=body.evaluator_id,
             skill_version=body.skill_version,

@@ -1223,12 +1223,23 @@ async def get_criteria(result_id: str, tenant_id: str, request: Request) -> dict
 
 
 @router.post("/v1/evaluation/results/{result_id}/review")
+def _deprecated_arc6(name: str) -> None:
+    """5d — endpoints Arc 6 (result-level review + /contestations) substituídos pelo
+    contrato único Arc 13 (/v1/evaluation/instances/{id}/contest|review). Mantidos
+    funcionais até a migração de UI (T9/T10); então removidos."""
+    logger.warning(
+        "DEPRECATED Arc6 endpoint '%s' — use /v1/evaluation/instances/{id}/contest|review (T5).",
+        name,
+    )
+
+
 async def review_result(result_id: str, tenant_id: str, body: ReviewBody, request: Request) -> dict:
     """
+    DEPRECATED (5d) — use POST /v1/evaluation/instances/{id}/review (mantida/revisada).
     Human reviewer approves or rejects an evaluation result.
-    Requires: Bearer JWT with sub=user_id + can_review permission for campaign/pool.
     Anti-replay: body.round must equal result.current_round (409 on mismatch).
     """
+    _deprecated_arc6("results/{id}/review")
     pool = _pool(request)
     redis_client = _redis(request)
 
@@ -1347,10 +1358,11 @@ async def list_contestations(
 @router.post("/v1/evaluation/contestations", status_code=201)
 async def create_contestation(body: ContestationCreate, request: Request) -> dict:
     """
+    DEPRECATED (5d) — use POST /v1/evaluation/instances/{id}/contest (por critério).
     File a contestation on an evaluation result.
-    Requires: Bearer JWT with sub=user_id + can_contest permission for campaign/pool.
     Anti-replay: body.round must equal result.current_round (409 on mismatch).
     """
+    _deprecated_arc6("contestations")
     pool = _pool(request)
     producer = _kafka_producer(request)
     redis_client = _redis(request)
@@ -1428,6 +1440,9 @@ async def get_contestation(contestation_id: str, tenant_id: str, request: Reques
 
 @router.post("/v1/evaluation/contestations/{contestation_id}/adjudicate")
 async def adjudicate(contestation_id: str, tenant_id: str, body: AdjudicateBody, request: Request) -> dict:
+    """DEPRECATED (5d) — adjudicação por X-Admin-Token substituída pela revisão humana
+    ABAC em /v1/evaluation/instances/{id}/review."""
+    _deprecated_arc6("contestations/{id}/adjudicate")
     pool = _pool(request)
     producer = _kafka_producer(request)
     allowed = {"accepted", "rejected", "withdrawn"}
