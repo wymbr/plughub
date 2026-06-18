@@ -2,6 +2,30 @@
 
 ---
 
+## T7a — Agregação determinística form-driven + validação no ingest (2026-06-18)
+
+Primeiro chunk da T7 (spec `evaluation-reconciliation-spec.md` §5.2/§16.2 — form como fonte
+única da NOTA). **Code-only, sem migração.** Validado verde via `infra/test/test_t7a_aggregation.sh`
+(overall do LLM descartado → recomputa 7.0 de (8+6)/2; threads round-1 por critério; 3 casos
+de validação → 422).
+
+**`scoring.py` (novo, lógica pura)**: `aggregate_scores(form, criterion_responses)` recomputa
+bottom-up pelos pesos/tipos do form (`na`/`text` fora; pesos re-normalizados; score/auto→score,
+boolean→true/false_score, choice→choice_scores, normalizado 0–10) → `(overall, by_dimension[])`.
+`validate_criterion_responses` → violações (criterion inexistente, regra de `na`, faixa).
+
+**`router._ingest_core`**: carrega o snapshot pinado (`get_form_version` pela `form_version` da
+instance; fallback ao form vivo) e **descarta a `overall_score` recebida**, usando a recomputada.
+Valida: `strict_validation=True` na rota HTTP `/ingest` → 422; consumer real (`_ingest_from_completed_event`)
+e seeder sintético passam `False` (logam e seguem — endurecer é T7b). Threads round-1 nascem **por
+critério** de `criterion_responses` (author `evaluator_ai`; fallback `dimension_threads`). Resposta
+do ingest passa a expor `overall_score` + `final_scores_by_dimension`.
+
+**Fronteira (T7b)**: conveyance tool-use nativo (JSON Schema do form ao `reason`), `output_schema`
+dinâmico no skill e remoção dos shims. **Rebuild**: evaluation-api.
+
+---
+
 ## T6b — Deploy lifecycle do form + snapshots imutáveis de versão (2026-06-18)
 
 Segundo chunk da T6 (spec `evaluation-reconciliation-spec.md` §16.1), versionamento alinhado

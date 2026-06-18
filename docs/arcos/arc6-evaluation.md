@@ -52,6 +52,27 @@ do avaliador/saída form-driven). No T6b o pin é gravado e os snapshots existem
 Pendente na T6: **T6c** (FormsPage: seletor de `type`, `scoring_guidance`, editor de opções,
 `na_guidance`, toggle `evidence_required`, `auto_source`, controles de versão/publish).
 
+### T7a — Agregação determinística form-driven + validação no ingest (2026-06-18) ✅
+
+Primeiro chunk da T7 (form como fonte única da NOTA, §5.2/§16.2). **Code-only, sem migração.**
+Validado verde via `infra/test/test_t7a_aggregation.sh`.
+
+- **`scoring.py` (novo, lógica pura):** `aggregate_scores(form, criterion_responses)` recomputa a
+  nota bottom-up pelos pesos/tipos do form (`na`/`text` fora; pesos re-normalizados;
+  score/auto→`score`, boolean→`true/false_score`, choice→`choice_scores`, tudo 0–10) →
+  `(overall, [{dimension_id, score}])`. `validate_criterion_responses` → violações (criterion
+  inexistente, regra de `na`, faixa).
+- **`_ingest_core`:** carrega o **snapshot pinado** (`get_form_version` pela `form_version` da
+  instance; fallback ao form vivo) e **descarta a `overall_score` recebida**, usando a
+  recomputada (e `normalized_score`). Valida `criterion_responses`: `strict_validation=True` na
+  rota HTTP `/ingest` → **422**; consumer real e seeder passam `False` (logam e seguem —
+  endurecer/forçar shape é T7b). Threads round-1 nascem **por critério** de `criterion_responses`
+  (author `evaluator_ai`; fallback `dimension_threads` legado). Resposta do ingest passa a
+  incluir `overall_score` + `final_scores_by_dimension`.
+
+**Fronteira (T7b):** o conveyance tool-use nativo (JSON Schema do form ao `reason`),
+`output_schema` dinâmico no skill e a **remoção dos shims** ficam para o T7b.
+
 ---
 
 ## Evolução posterior

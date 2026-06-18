@@ -71,6 +71,7 @@ from pydantic import BaseModel, Field, model_validator
 from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
+from . import scoring as _scoring
 from .sampling import should_sample, compute_expires_at, compute_priority, compute_deadline_at
 from .sampling_engine import run_curation_sampling
 
@@ -778,15 +779,46 @@ async def apply_state_deadline(pool, campaign: dict | None, result_id: str, kind
         logger.warning("apply_state_deadline failed (non-fatal): %s", exc)
 
 
-async def _ingest_core(pool, producer, body: IngestBody) -> dict:
+async def _ingest_core(pool, producer, body: IngestBody, *, strict_validation: bool = True) -> dict:
     """Core ingest logic — callable both from the HTTP route and from the
     evaluation.events consumer (real-evaluator path, see _ingest_from_completed_event).
     Persists the EvaluationResult + criterion responses + ContestationThreads and
-    advances the EvaluationInstance to completed."""
+    advances the EvaluationInstance to completed.
+
+    T7a — o formulário é a fonte única da nota: a `overall_score` recebida é DESCARTADA
+    e recomputada de `criterion_responses` pelos pesos/tipos do snapshot pinado do form
+    (`scoring.aggregate_scores`); `criterion_responses` é validado contra a definição do
+    form (`scoring.validate_criterion_responses`). `strict_validation=True` (rota HTTP)
+    rejeita com 422; o consumer real passa `False` (loga e segue — endurecer é T7b)."""
     # Verify instance exists
     instance = await _db.get_instance(pool, body.instance_id, body.tenant_id)
     if not instance:
         raise HTTPException(404, detail=f"instance {body.instance_id} not found")
+
+    # ── T7a — agregação determinística + validação form-driven ────────────────────
+    # Carrega o snapshot pinado da versão do form (T6b); fallback ao form vivo (T6a).
+    overall_score    = body.overall_score
+    normalized_score = body.normalized_score
+    agg_by_dimension: list[dict] = []
+    try:
+        _form = await _db.get_form_version(
+            pool, body.form_id, body.tenant_id, int(instance.get("form_version") or 1),
+        )
+    except Exception as exc:
+        logger.warning("ingest: form snapshot load failed (non-fatal): %s", exc)
+        _form = None
+    if _form and body.criterion_responses:
+        violations = _scoring.validate_criterion_responses(_form, body.criterion_responses)
+        if violations:
+            if strict_validation:
+                raise HTTPException(
+                    422, detail={"error": "invalid_criterion_responses", "violations": violations},
+                )
+            logger.warning("ingest: criterion_responses violations (non-strict): %s", violations)
+        agg_overall, agg_by_dimension = _scoring.aggregate_scores(_form, body.criterion_responses)
+        if agg_overall is not None:
+            overall_score    = agg_overall          # descarta a nota do LLM (§5.2)
+            normalized_score = round(agg_overall / 10.0, 3)
 
     # Create result
     result = await _db.create_result(
@@ -797,9 +829,9 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
         campaign_id=body.campaign_id,
         form_id=body.form_id,
         evaluator_agent_id=body.evaluator_agent_id,
-        overall_score=body.overall_score,
+        overall_score=overall_score,
         max_score=body.max_score,
-        normalized_score=body.normalized_score,
+        normalized_score=normalized_score,
         passed=body.passed,
         eval_status=body.eval_status,
         evaluator_notes=body.evaluator_notes,
@@ -831,31 +863,49 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
             body.criterion_responses,
         )
 
-    # ── Arc 13 Fase B: persist ContestationThread round=1 per dimension ──────
-    # One thread per dimension the evaluator scored — creates the immutable
-    # audit trail that contestation/review threads will be appended to.
+    # ── T7a — ContestationThread round=1 nasce POR CRITÉRIO de criterion_responses ──
+    # (chave canônica = criterion_id; §16.2). O trilho de auditoria imutável que as
+    # contestações/revisões anexam vem direto das respostas do avaliador. Fallback ao
+    # dimension_threads legado quando não há criterion_responses.
+    if body.criterion_responses:
+        _thread_src = [
+            {
+                "dimension_id":     r.get("criterion_id") or r.get("dimension_id", "unknown"),
+                "justification":    r.get("notes") or r.get("justification", ""),
+                "evidence_entries": r.get("evidence") or r.get("evidence_entries", []),
+            }
+            for r in body.criterion_responses
+        ]
+    else:
+        _thread_src = [
+            {
+                "dimension_id":     d.get("dimension_id") or d.get("criterion_id", "unknown"),
+                "justification":    d.get("justification", ""),
+                "evidence_entries": d.get("evidence_entries", []),
+            }
+            for d in (body.dimension_threads or [])
+        ]
     thread_count = 0
-    if body.dimension_threads:
-        for dim in body.dimension_threads:
-            dim_id = dim.get("dimension_id") or dim.get("criterion_id", "unknown")
-            try:
-                await _db.create_contestation_thread(
-                    pool,
-                    tenant_id=body.tenant_id,
-                    evaluation_instance_id=body.instance_id,
-                    dimension_id=dim_id,
-                    round=1,
-                    author_type="evaluator_ai",
-                    author_id=body.evaluator_agent_id,
-                    text=dim.get("justification", ""),
-                    evidence_entries=dim.get("evidence_entries", []),
-                )
-                thread_count += 1
-            except Exception as exc:
-                logger.warning(
-                    "failed to create contestation thread for dimension=%s: %s",
-                    dim_id, exc,
-                )
+    for dim in _thread_src:
+        dim_id = dim["dimension_id"]
+        try:
+            await _db.create_contestation_thread(
+                pool,
+                tenant_id=body.tenant_id,
+                evaluation_instance_id=body.instance_id,
+                dimension_id=dim_id,
+                round=1,
+                author_type="evaluator_ai",
+                author_id=body.evaluator_agent_id,
+                text=dim["justification"],
+                evidence_entries=dim["evidence_entries"],
+            )
+            thread_count += 1
+        except Exception as exc:
+            logger.warning(
+                "failed to create contestation thread for criterion=%s: %s",
+                dim_id, exc,
+            )
 
     # ── Arc 13 Fase B: set evaluated_agent_type + initial contestation_state ──
     # Fluxo 2 (AI agent): finalize immediately (no contestation).
@@ -878,16 +928,16 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
             session_id=body.session_id,
             campaign_id=body.campaign_id,
             contestation_state="auto_finalized",
-            final_score=float(body.overall_score or 0),
+            final_score=float(overall_score or 0),
             finalize_reason="auto_ai",
-            final_scores_by_dimension=[
+            final_scores_by_dimension=agg_by_dimension or [
                 {"dimension_id": d.get("dimension_id", ""), "score": d.get("score", 0)}
                 for d in body.dimension_threads
             ],
             process_duration_ms=0,
             evaluated_agent_type="ai_agent",
             run_curation=True,
-            normalized_score=float(body.normalized_score or body.overall_score or 0),
+            normalized_score=float(normalized_score or overall_score or 0),
         )
     else:
         # Fluxo 1: human agent — set contestation_state based on pre_review config
@@ -914,7 +964,7 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
         tenant_id=body.tenant_id,
         session_id=body.session_id,
         campaign_id=body.campaign_id,
-        overall_score=body.overall_score,
+        overall_score=overall_score,
         passed=body.passed,
         eval_status=body.eval_status,
         evaluated_at=body.evaluated_at,
@@ -928,6 +978,8 @@ async def _ingest_core(pool, producer, body: IngestBody) -> dict:
         "contestation_state":      initial_state,
         "evaluated_agent_type":    body.evaluated_agent_type,
         "eval_status":             body.eval_status,
+        "overall_score":           overall_score,
+        "final_scores_by_dimension": agg_by_dimension,
     }
 
 
@@ -964,10 +1016,11 @@ async def _ingest_from_completed_event(pool, producer, ev: dict) -> None:
         dimension_threads=ev.get("dimension_threads", []) or [],
         evaluated_agent_type=ev.get("evaluated_agent_type", "human_agent") or "human_agent",
     )
-    res = await _ingest_core(pool, producer, body)
+    # T7a — consumer real é lenient (loga violações; endurecer/forçar shape é T7b).
+    res = await _ingest_core(pool, producer, body, strict_validation=False)
     logger.info(
         "ingest-consumer: persisted result %s for instance=%s session=%s score=%s",
-        res.get("result_id"), instance_id, body.session_id, body.overall_score,
+        res.get("result_id"), instance_id, body.session_id, res.get("overall_score"),
     )
 
 
@@ -1085,7 +1138,9 @@ async def seed_synthetic(body: SeedSyntheticBody, request: Request) -> dict:
             evaluated_at=evaluated_at,
         )
         try:
-            await ingest_result(ingest, request)
+            # T7a — seeder sintético é lenient (pode marcar na em critério sem na_allowed);
+            # a nota é recomputada do form como em qualquer ingest.
+            await _ingest_core(pool, producer, ingest, strict_validation=False)
             created += 1
         except Exception as exc:
             logger.warning("seed-synthetic: ingest failed for %s: %s", session_id, exc)
