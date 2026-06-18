@@ -10,6 +10,25 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T8-B1 — Composição + preview do prompt (2026-06-18) ✅
+
+Segundo chunk do T8 (spec §5.1/§16.3): camada de **composição** do prompt do avaliador na
+evaluation-api (upstream; ai-gateway segue stateless). **Code-only evaluation-api**, testável
+por API (`infra/test/test_t8b_rubric_preview.sh`). A **fiação de runtime** (mcp-server expor
+`rubric_instructions` + skill + remover `evaluation_rubric_v3`) fica para o **T8-B2** (e2e-blocked).
+
+- **`prompt_composer.py`** (novo): `DEFAULT_RUBRIC_BODY` (factory/built-in) + `compose_rubric_prompt`
+  (instruções gerais + critérios do form com `scoring_guidance`/escala/peso, **pula auto_computed**
+  + notas de calibração agrupadas por `criterion_id` (T14 c) + placeholder de transcript). Sem I/O
+  — recebe dados já buscados, devolve `{composed_prompt, sections, rubric_source, criteria_count,
+  calibration_notes_count}`.
+- **router**: `POST /v1/evaluation/rubric-templates/preview` — precedência da rubrica:
+  `rubric_body` explícito (preview de draft) → body vivo de `rubric_id` → `resolve_rubric` (override
+  pub. campanha → default pub. tenant) → `builtin_default`. Busca form + notas publicadas, compõe.
+- **Próximo**: T8-B2 (runtime: `evaluation_context_get` → `rubric_instructions`, skill ao `reason`,
+  remove `evaluation_rubric_v3`), T8-C (UI), T8-D (ABAC + deploy epoch).
+
+
 ### T8-A — Rubrica-template: fundação backend (2026-06-18) ✅
 
 Primeiro chunk do T8 (spec §16.3): storage + versionamento da **rubrica-template** (instruções

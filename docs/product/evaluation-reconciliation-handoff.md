@@ -114,15 +114,21 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   instruções via `input`, mas hoje sem bloco de rubrica — só `scoring_guidance` por critério +
   descrições do schema).
 
-**PRÓXIMA TAREFA: T8-B — composição + preview do prompt (§16.3).** Camada de composição que
-monta a rubrica efetiva (`resolve_rubric`, já pronta) + critérios do form (com `scoring_guidance`)
-+ RAG (`CalibrationNote` por `criterion_id` + knowledge) + transcript → expõe um campo
-`rubric_instructions` (via `evaluation_context_get` no mcp-server **ou** um endpoint de composição
-na evaluation-api) que o skill `agente_avaliacao_v1` passa ao `reason` no `input`. Endpoint
-`POST /v1/evaluation/rubric-templates/preview` (template/form/sample → prompt composto) p/ o preview
-da UI. **Remover** o `prompt_id: evaluation_rubric_v3` vestigial do skill. Built-in default quando
-`resolve_rubric` → null. Runtime do avaliador é e2e-blocked (gotcha 1) → validar composição/preview
-por API. Depois: T8-C (UI Rubrica/Prompt) e T8-D (ABAC `gerir_rubrica` + deploy epoch no publish).
+- **T8-B1** — composição + preview (§5.1/§16.3). `prompt_composer.py` (`DEFAULT_RUBRIC_BODY` +
+  `compose_rubric_prompt`: instruções gerais + critérios c/ `scoring_guidance` pulando auto_computed
+  + notas por `criterion_id` + transcript placeholder) + `POST /rubric-templates/preview`
+  (precedência rubric_body → rubric_id → `resolve_rubric` → builtin). Test `test_t8b_rubric_preview.sh`.
+
+**PRÓXIMA TAREFA: T8-B2 — fiação de runtime da rubrica (§16.2).** Fazer o avaliador REAL usar a
+rubrica composta: (1) `mcp-server-plughub` `evaluation_context_get` chama
+`GET /rubric-templates/resolve?tenant_id=&campaign_id=` (ou um endpoint de composição) e expõe
+`rubric_instructions` no contexto (TS → rebuild mcp-server); (2) skill `agente_avaliacao_v1.yaml`:
+`input.rubric_instructions: "$.pipeline_state.eval_context.rubric_instructions"` no step `reason`;
+(3) **remover** `prompt_id: evaluation_rubric_v3` (vestigial). Built-in default quando resolve→null.
+Runtime e2e-blocked (gotcha 1) → validar por inspeção + (se possível) proxy `/v1/reason`. Reusa o
+`compose_rubric_prompt`/`resolve_rubric` já prontos. Depois: T8-C (UI Rubrica/Prompt — página no
+grupo Quality, editor/preview/publish), T8-D (ABAC `gerir_rubrica` no modules.yaml + deploy epoch no
+publish via `registry.changed`/`deploy_events`).
 
 **Pendente do T14 — laço mole ponta-a-ponta + estrutural.** Falta desta tarefa:
 (a) **validar que o scoring desloca** com a nota injetada — hoje a nota chega ao contexto

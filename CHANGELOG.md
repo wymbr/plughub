@@ -2,6 +2,23 @@
 
 ---
 
+## T8-B1 — Composição + preview do prompt (2026-06-18)
+
+Chunk B1 do T8 (spec §5.1/§16.3): camada de composição do prompt do avaliador na evaluation-api
+(upstream; ai-gateway stateless). **Code-only evaluation-api.** Validado via
+`infra/test/test_t8b_rubric_preview.sh` (draft/built-in/resolvida + critérios + scoring_guidance +
+auto_computed pulado).
+
+- `prompt_composer.py` (novo): `DEFAULT_RUBRIC_BODY` (built-in) + `compose_rubric_prompt`
+  (instruções gerais + critérios c/ scoring_guidance, pula auto_computed + notas de calibração por
+  criterion_id + transcript placeholder). Sem I/O.
+- router: `POST /rubric-templates/preview` (precedência: rubric_body → rubric_id → resolve_rubric →
+  builtin_default; busca form + notas publicadas; compõe). **Rebuild**: evaluation-api.
+- Próximo: T8-B2 (runtime: evaluation_context_get/skill + remove evaluation_rubric_v3), T8-C (UI),
+  T8-D (ABAC + deploy epoch).
+
+---
+
 ## T8-A — Rubrica-template: fundação backend (2026-06-18)
 
 Chunk A do T8 (spec §16.3): storage + versionamento da rubrica-template (default por tenant +

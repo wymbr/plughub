@@ -81,6 +81,7 @@ from .sampling import (
 )
 from .sampling_engine import run_curation_sampling
 from .backfill import run_campaign_backfill
+from .prompt_composer import compose_rubric_prompt, DEFAULT_RUBRIC_BODY
 
 logger = logging.getLogger("plughub.evaluation.router")
 
@@ -461,6 +462,61 @@ async def get_rubric_template_version(
     if not row:
         raise HTTPException(404, detail="rubric template version not found")
     return row
+
+
+# ─── T8-B — Composição + preview do prompt (spec §5.1/§16.3) ───────────────────
+
+class RubricPreview(BaseModel):
+    tenant_id:           str
+    form_id:             str | None = None
+    campaign_id:         str | None = None
+    rubric_body:         str | None = None   # preview de um DRAFT em edição (vence resolve)
+    rubric_id:           str | None = None   # ou: body vivo de uma rubrica específica
+    include_calibration: bool = True
+
+
+@router.post("/v1/evaluation/rubric-templates/preview")
+async def preview_rubric_prompt(body: RubricPreview, request: Request) -> dict:
+    """Compõe e devolve o prompt do avaliador (instruções gerais + critérios do form +
+    notas de calibração + placeholder de transcript), p/ o preview da UI Rubrica/Prompt.
+    Precedência da rubrica: `rubric_body` explícito → body vivo de `rubric_id` →
+    `resolve_rubric` (override pub. campanha → default pub. tenant) → built-in default."""
+    pool = _pool(request)
+
+    # 1) resolve a rubrica a usar
+    rubric_body: str | None = body.rubric_body
+    rubric_source = "explicit_body"
+    if rubric_body is None and body.rubric_id:
+        rt = await _db.get_rubric_template(pool, body.rubric_id, body.tenant_id)
+        if rt:
+            rubric_body, rubric_source = rt.get("body") or "", "rubric_id_live"
+    if rubric_body is None:
+        eff = await _db.resolve_rubric(pool, body.tenant_id, campaign_id=body.campaign_id)
+        if eff:
+            rubric_body, rubric_source = eff.get("body") or "", eff.get("source") or "resolved"
+    if rubric_body is None:
+        rubric_body, rubric_source = DEFAULT_RUBRIC_BODY, "builtin_default"
+
+    # 2) form (critérios)
+    form = await _db.get_form(pool, body.form_id, body.tenant_id) if body.form_id else None
+    if body.form_id and not form:
+        raise HTTPException(404, detail="form not found")
+
+    # 3) notas de calibração publicadas da campanha (RAG)
+    notes: list[dict] = []
+    if body.include_calibration and body.campaign_id:
+        notes = await _db.list_calibration_notes(
+            pool, body.tenant_id, campaign_id=body.campaign_id,
+            published_to_kb=True, limit=20,
+        )
+
+    result = compose_rubric_prompt(
+        rubric_body=rubric_body, rubric_source=rubric_source,
+        form=form, calibration_notes=notes,
+    )
+    result["form_id"] = body.form_id
+    result["campaign_id"] = body.campaign_id
+    return result
 
 
 # ─── Campaigns ────────────────────────────────────────────────────────────────
