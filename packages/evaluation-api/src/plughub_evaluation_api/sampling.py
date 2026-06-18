@@ -190,6 +190,59 @@ async def compute_deadline_at(
     return now + timedelta(hours=hours)
 
 
+# ─── T15 — janela de despacho (calendar window) ───────────────────────────────
+
+async def campaign_dispatch_open(
+    campaign: dict[str, Any],
+    calendar_api_url: str,
+    *,
+    at: datetime | None = None,
+) -> bool:
+    """T15 (§18.4) — a campanha está DENTRO da janela de despacho agora?
+
+    A janela é definida por associações de calendário na entidade
+    ``evaluation_campaign:{campaign_id}`` na calendar-api (mesmo padrão da workflow-api,
+    entity_type=workflow). Consulta ``GET /v1/engine/is-open``:
+
+    - sem associação (``calendars_count == 0``) → **aberto** (campanha sem janela
+      configurada despacha sempre — comportamento default e caso comum);
+    - com associação → honra ``status == 'open'`` (fora de horário/feriado → fechado);
+    - calendar-api inacessível/erro → **aberto** (best-effort, nunca bloqueia o despacho,
+      no mesmo espírito do fallback wall-clock dos deadlines).
+
+    `evaluation_calendar_id` na campanha continua sendo o ponteiro de calendário (usado em
+    deadlines/SLA); a janela de despacho usa a associação da entidade da campanha.
+    """
+    campaign_id = campaign.get("id")
+    tenant_id   = campaign.get("tenant_id")
+    if not campaign_id or not tenant_id:
+        return True
+    when = at or datetime.now(tz=timezone.utc)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{calendar_api_url}/v1/engine/is-open",
+                params={
+                    "tenant_id":   tenant_id,
+                    "entity_type": "evaluation_campaign",
+                    "entity_id":   campaign_id,
+                    "at":          when.isoformat(),
+                },
+            )
+            if resp.status_code != 200:
+                logger.debug("is-open %s for campaign %s — open (best-effort)",
+                             resp.status_code, campaign_id)
+                return True
+            data = resp.json()
+            if int(data.get("calendars_count", 0)) == 0:
+                return True  # nenhuma janela configurada → despacha
+            return data.get("status") == "open"
+    except Exception as exc:
+        logger.warning("is-open call failed for campaign %s — open (best-effort): %s",
+                       campaign_id, exc)
+        return True
+
+
 # ─── Priority scoring ─────────────────────────────────────────────────────────
 
 def compute_priority(

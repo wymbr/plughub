@@ -72,7 +72,10 @@ from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
 from . import scoring as _scoring
-from .sampling import should_sample, compute_expires_at, compute_priority, compute_deadline_at
+from .sampling import (
+    should_sample, compute_expires_at, compute_priority, compute_deadline_at,
+    campaign_dispatch_open,
+)
 from .sampling_engine import run_curation_sampling
 
 logger = logging.getLogger("plughub.evaluation.router")
@@ -621,6 +624,92 @@ async def dispatch_campaign(
         "campaign_id":    campaign_id,
         "dispatched":     dispatched,
         "evaluator_pool": evaluator_pool,
+    }
+
+
+# ─── T15 — dispatcher por janela de calendário (§18.4) ────────────────────────
+# Despacho idempotente das instances `scheduled` de uma campanha, gated pela janela de
+# calendário. Compartilhado pelo scanner de fundo (main._run_dispatch_scanner) e pelo
+# endpoint de scan abaixo. Difere do `/campaigns/{id}/dispatch` manual ("Rodar agora"),
+# que força o emit de TODAS as scheduled sem janela nem cooldown.
+
+async def dispatch_campaign_scheduled(
+    pool: asyncpg.Pool,
+    producer: Any,
+    campaign: dict,
+    *,
+    calendar_api_url: str,
+    cooldown_s: int,
+    batch_limit: int,
+    respect_window: bool = True,
+) -> dict:
+    """Emite `evaluation.requested` para as instances despacháveis da campanha (idempotente
+    via `dispatched_at` + cooldown). Gated pela janela de calendário quando
+    `respect_window`. Retorna resumo {campaign_id, in_window, dispatched, evaluator_pool}."""
+    campaign_id = campaign["id"]
+    tenant_id   = campaign["tenant_id"]
+
+    in_window = True
+    if respect_window:
+        in_window = await campaign_dispatch_open(campaign, calendar_api_url)
+        if not in_window:
+            return {"campaign_id": campaign_id, "in_window": False, "dispatched": 0}
+
+    evaluator_pool = (campaign.get("evaluator_pool") or "").strip() or settings.default_evaluator_pool
+    rows = await _db.claim_dispatchable_instances(
+        pool, campaign_id, tenant_id,
+        cooldown_s=cooldown_s, limit=batch_limit,
+    )
+    for row in rows:
+        await _kafka.emit_evaluation_requested(
+            producer, settings.evaluation_topic,
+            instance_id=row["id"],
+            tenant_id=row.get("tenant_id") or tenant_id,
+            session_id=row["session_id"],
+            campaign_id=row.get("campaign_id") or campaign_id,
+            form_id=row.get("form_id") or campaign["form_id"],
+            evaluator_pool=evaluator_pool,
+        )
+    return {
+        "campaign_id":    campaign_id,
+        "in_window":      in_window,
+        "dispatched":     len(rows),
+        "evaluator_pool": evaluator_pool,
+    }
+
+
+@router.post("/v1/evaluation/dispatch/scan")
+async def dispatch_scan(
+    tenant_id: str, request: Request,
+    campaign_id: str | None = None,
+) -> dict:
+    """T15 — roda UMA passada do dispatcher windowed sob demanda (ops + testes), com a
+    mesma lógica do scanner de fundo. Sem `campaign_id` → varre as campanhas ativas do
+    tenant; com `campaign_id` → só ela. Idempotente (cooldown via `dispatched_at`)."""
+    _require_admin(request)
+    pool = _pool(request)
+    producer = _kafka_producer(request)
+
+    if campaign_id:
+        c = await _db.get_campaign(pool, campaign_id, tenant_id)
+        campaigns = [c] if c else []
+    else:
+        campaigns = await _db.list_campaigns(pool, tenant_id, status="active", limit=200)
+
+    results = []
+    for c in campaigns:
+        if not c:
+            continue
+        results.append(await dispatch_campaign_scheduled(
+            pool, producer, c,
+            calendar_api_url=settings.calendar_api_url,
+            cooldown_s=settings.dispatch_redispatch_cooldown_s,
+            batch_limit=settings.dispatch_batch_limit,
+        ))
+    return {
+        "scanned":    len(results),
+        "dispatched": sum(r.get("dispatched", 0) for r in results),
+        "campaigns":  results,
     }
 
 

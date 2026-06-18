@@ -388,6 +388,14 @@ ALTER TABLE evaluation.results
 CREATE UNIQUE INDEX IF NOT EXISTS uq_evinstance_campaign_segment
     ON evaluation.instances (campaign_id, segment_id) WHERE segment_id IS NOT NULL;
 
+-- ── T15 — dispatcher por janela de calendário (spec §18.4) ────────────────────
+-- `dispatched_at`: carimbo do último despacho windowed (evaluation.requested emitido).
+-- Idempotência do scanner: instances `scheduled` só são re-despachadas após o cooldown
+-- (não re-despacha assigned/in_progress, já fora do filtro status='scheduled'). NULL =
+-- nunca despachada pelo scanner. O dispatch manual ("Rodar agora") NÃO mexe nesse campo.
+ALTER TABLE evaluation.instances
+    ADD COLUMN IF NOT EXISTS dispatched_at TIMESTAMPTZ;
+
 -- ── ContestationThread (Arc 13) ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS evaluation.contestation_threads (
     id                      TEXT        PRIMARY KEY,        -- "evthread_{uuid}"
@@ -2048,6 +2056,63 @@ async def list_expired_results(
             limit,
         )
     return [_row(r) for r in rows]
+
+
+# ─── T15 — dispatcher por janela de calendário ────────────────────────────────
+
+async def list_active_campaigns(
+    pool: asyncpg.Pool, *, limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Campanhas ativas de TODOS os tenants — alvo do dispatch scanner (§18.4)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM evaluation.campaigns
+             WHERE status = 'active'
+             ORDER BY created_at ASC
+             LIMIT $1
+            """,
+            limit,
+        )
+    return _rows(rows)
+
+
+async def claim_dispatchable_instances(
+    pool: asyncpg.Pool,
+    campaign_id: str,
+    tenant_id: str,
+    *,
+    cooldown_s: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """T15 — reivindica atomicamente as instances `scheduled` despacháveis da campanha e
+    carimba `dispatched_at=now()` no mesmo UPDATE (idempotência + race-safe entre ciclos do
+    scanner). Despacháveis = `scheduled`, não expiradas, e que nunca foram despachadas ou
+    cuja última tentativa já passou do cooldown (re-despacha se o avaliador não pegou).
+    Retorna as linhas reivindicadas (para emitir `evaluation.requested`)."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE evaluation.instances
+               SET dispatched_at = now(),
+                   updated_at    = now()
+             WHERE id IN (
+               SELECT id FROM evaluation.instances
+                WHERE campaign_id = $1
+                  AND tenant_id   = $2
+                  AND status      = 'scheduled'
+                  AND (expires_at IS NULL OR expires_at > now())
+                  AND (dispatched_at IS NULL
+                       OR dispatched_at < now() - make_interval(secs => $3))
+                ORDER BY priority ASC, scheduled_at ASC
+                LIMIT $4
+                FOR UPDATE SKIP LOCKED
+             )
+            RETURNING *
+            """,
+            campaign_id, tenant_id, float(cooldown_s), limit,
+        )
+    return _rows(rows)
 
 
 # ─── Pool factory ─────────────────────────────────────────────────────────────

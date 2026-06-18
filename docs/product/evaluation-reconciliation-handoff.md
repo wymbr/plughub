@@ -84,13 +84,23 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
    instance.status inclui `skipped`/`error`/`error_rejected`/`expired`. `finalize_evaluation` é o
    ÚNICO emissor de `evaluation_finalized` (relatórios filtram isso).
 
-**PRÓXIMA TAREFA: T15 — dispatcher por janela de calendário (§18.4).** Tarefa agendada que
-despacha as instances `scheduled` de cada campanha na janela do `schedule`+`evaluation_calendar_id`
-(calendar-api `:3700`), emitindo `evaluation.requested`; idempotente (não re-despacha
-assigned/in_progress); substitui/complementa o `POST /campaigns/{id}/dispatch` manual. Backend
-contido, testável por API. Avaliar sub-chunking (scanner/loop vs janela de calendário).
+- **T15** — dispatcher por janela de calendário (§18.4). Tarefa de fundo
+  (`main._run_dispatch_scanner`, loop ~60s, gated `dispatch_scanner_enabled`) + endpoint
+  `POST /v1/evaluation/dispatch/scan` (admin, uma passada). Core `router.dispatch_campaign_scheduled`.
+  Idempotência via `instances.dispatched_at` + cooldown (`db.claim_dispatchable_instances`, claim
+  atômico). Janela = `calendar-api /v1/engine/is-open` na entidade `evaluation_campaign:{id}`
+  (`sampling.campaign_dispatch_open`; sem associação/down → aberto best-effort). Manual
+  `/campaigns/{id}/dispatch` permanece (força). Test `test_t15_dispatcher.sh`. *(O scanner real
+  emitindo p/ avaliador é e2e-blocked pela infra do demo — gotcha 1; validado por API.)*
 
-**Depois:** T17-backfill (job batch sobre segmentos persistidos), T14 (calibração com dado real
+**PRÓXIMA TAREFA: T17-backfill — job batch sobre segmentos persistidos (§18.5).** Enumera os
+segmentos já fechados na janela `[period_start, period_end]` da campanha a partir do store
+persistido (`analytics.segments` / Session Replayer), cria as instances por segmento e as despacha
+(encaixa no dispatcher T15); o avaliador reconstrói o transcript via Hydrator/ReplayContext.
+Liga à validação de prompt (T8 + deploy epochs) rodando uma campanha sobre janela histórica.
+Dep. T2 (chave por segmento). Avaliar fonte dos segmentos (analytics-api vs replayer) e sub-chunking.
+
+**Depois:** T14 (calibração com dado real
 + bug `resolve_curation` já corrigido no 5d? confirmar), T8 (rubrica-template UI Quality),
 T9–T11 (UI: drill-down modo Forms, 3 papéis ABAC, relatórios Oficial×Operacional), T16 (corrigir
 docs arc6/arc13/CLAUDE.md/TODO), T4b (notificar avaliado no enter-`open`), + fronteiras e2e-blocked.

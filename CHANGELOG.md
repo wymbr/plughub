@@ -2,6 +2,29 @@
 
 ---
 
+## T15 — Dispatcher por janela de calendário (2026-06-18)
+
+Tarefa de fundo que despacha as instances `scheduled` de cada campanha ativa **na janela de
+calendário** da campanha, emitindo `evaluation.requested` (spec §18.4). **Code-only na
+evaluation-api.** Validado via `infra/test/test_t15_dispatcher.sh` (default-open; idempotência por
+cooldown; gating fechado/aberto via associação de calendário). Complementa o `POST
+/campaigns/{id}/dispatch` manual ("Rodar agora"), que permanece para disparo sob demanda.
+
+- DDL: `evaluation.instances += dispatched_at TIMESTAMPTZ` (idempotência do scanner; o dispatch
+  manual não mexe nele).
+- `db.claim_dispatchable_instances`: claim atômico (`FOR UPDATE SKIP LOCKED`) das scheduled
+  não-expiradas fora do cooldown, carimbando `dispatched_at=now()` no mesmo UPDATE (race-safe);
+  `db.list_active_campaigns` (cross-tenant).
+- `sampling.campaign_dispatch_open`: janela via `calendar-api /v1/engine/is-open` para a entidade
+  `evaluation_campaign:{id}`; sem associação / calendar-api down → aberto (best-effort).
+- `router.dispatch_campaign_scheduled` (core compartilhado) + `POST /v1/evaluation/dispatch/scan`
+  (admin; uma passada sob demanda) + `main._run_dispatch_scanner` (loop ~60s, gated por
+  `dispatch_scanner_enabled`).
+- Knobs (`config.py`): `dispatch_scanner_enabled`/`_interval_s`/`dispatch_redispatch_cooldown_s`/
+  `dispatch_batch_limit`. **Rebuild**: evaluation-api.
+
+---
+
 ## T17 (core) — Janela de dados da campanha + filtro forward (2026-06-18)
 
 Janela de dados explícita por `closed_at` (spec §18.5), ortogonal ao `schedule`. **Schema novo**

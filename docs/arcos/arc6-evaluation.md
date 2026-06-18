@@ -10,6 +10,37 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T15 — Dispatcher por janela de calendário (2026-06-18) ✅
+
+Tarefa de fundo que despacha as instances `scheduled` de cada campanha ativa **na janela de
+calendário** da campanha, emitindo `evaluation.requested` (spec §18.4). **Code-only na
+evaluation-api.** Validado via `infra/test/test_t15_dispatcher.sh`. Complementa — não substitui
+— o `POST /campaigns/{id}/dispatch` manual ("Rodar agora", que força todas as scheduled).
+
+- DDL: `evaluation.instances += dispatched_at TIMESTAMPTZ` (carimbo do último despacho windowed;
+  NULL = nunca despachada pelo scanner; o dispatch manual **não** mexe nele).
+- **Idempotência** (`db.claim_dispatchable_instances`): UPDATE atômico (`FOR UPDATE SKIP LOCKED`)
+  que reivindica scheduled não-expiradas **e** fora do cooldown (`dispatched_at IS NULL OR
+  dispatched_at < now() - cooldown`), carimbando `dispatched_at=now()` no mesmo statement →
+  race-safe entre ciclos; não re-despacha assigned/in_progress (já fora do filtro `scheduled`);
+  re-despacha após o cooldown se o avaliador não pegou.
+- **Janela** (`sampling.campaign_dispatch_open`): `GET calendar-api /v1/engine/is-open` para a
+  entidade `evaluation_campaign:{id}`. Sem associação (`calendars_count==0`) ou calendar-api
+  indisponível → **aberto** (best-effort, nunca bloqueia); com associação → honra
+  `status=='open'`. `evaluation_calendar_id` segue como ponteiro de SLA/deadline; a janela de
+  despacho usa a associação da entidade da campanha (mesmo padrão da workflow-api).
+- **Core compartilhado** `router.dispatch_campaign_scheduled(campaign, *, respect_window=True)`:
+  gate de janela → claim → emit. Usado pelo scanner e pelo endpoint.
+- **Scanner** `main._run_dispatch_scanner` (loop ~60s, molde do deadline scanner; cross-tenant
+  via `db.list_active_campaigns`), gated por `dispatch_scanner_enabled`.
+- **Endpoint** `POST /v1/evaluation/dispatch/scan?tenant_id=&campaign_id=` (admin-token): roda
+  UMA passada sob demanda (ops + testes), mesma lógica do scanner; resumo por campanha com
+  `in_window`/`dispatched`.
+- Knobs (`config.py`, env `PLUGHUB_EVALUATION_*`): `dispatch_scanner_enabled` (True),
+  `dispatch_scanner_interval_s` (60), `dispatch_redispatch_cooldown_s` (3600),
+  `dispatch_batch_limit` (100).
+
+
 ### T17 (core) — Janela de dados da campanha + filtro forward (2026-06-18) ✅
 
 Janela de dados explícita (spec §18.5), ortogonal ao `schedule`. **Schema novo** na

@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # evaluator_pool. Fallback global (mesmo default do session-replayer).
     default_evaluator_pool: str = "avaliacao_ia"
 
+    # T15 — dispatcher por janela de calendário (§18.4)
+    dispatch_scanner_enabled: bool      = True   # liga a tarefa de fundo
+    dispatch_scanner_interval_s: int    = 60     # período de varredura
+    dispatch_redispatch_cooldown_s: int = 3600   # não re-despacha scheduled dentro disso
+    dispatch_batch_limit: int           = 100    # máx. instances por campanha/ciclo
+
     port: int = 3400
 
     model_config = {"env_prefix": "PLUGHUB_EVALUATION_"}

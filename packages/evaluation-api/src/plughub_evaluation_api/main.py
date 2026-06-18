@@ -423,6 +423,36 @@ async def _run_deadline_scanner(app: FastAPI) -> None:
             logger.error("deadline scanner error: %s", exc)
 
 
+# ─── T15 — dispatcher por janela de calendário ────────────────────────────────
+
+async def _run_dispatch_scanner(app: FastAPI) -> None:
+    """Varre as campanhas ativas (todos os tenants) e despacha as instances `scheduled`
+    que estão na janela de calendário da campanha, emitindo `evaluation.requested`.
+    Idempotente (cooldown via `dispatched_at`); não re-despacha assigned/in_progress.
+    Spec §18.4. Complementa o `POST /campaigns/{id}/dispatch` manual ("Rodar agora")."""
+    from .router import dispatch_campaign_scheduled
+    interval = settings.dispatch_scanner_interval_s
+    logger.info("dispatch scanner started (interval=%ss)", interval)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            pool = app.state.db_pool
+            producer = app.state.kafka_producer
+            campaigns = await _db.list_active_campaigns(pool, limit=500)
+            for campaign in campaigns:
+                res = await dispatch_campaign_scheduled(
+                    pool, producer, campaign,
+                    calendar_api_url=settings.calendar_api_url,
+                    cooldown_s=settings.dispatch_redispatch_cooldown_s,
+                    batch_limit=settings.dispatch_batch_limit,
+                )
+                if res.get("dispatched"):
+                    logger.info("dispatch scanner: campaign=%s dispatched=%s",
+                                res["campaign_id"], res["dispatched"])
+        except Exception as exc:
+            logger.error("dispatch scanner error: %s", exc)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="PlugHub Evaluation API",
@@ -496,6 +526,14 @@ def create_app() -> FastAPI:
         )
         logger.info("conversations.participants consumer task scheduled")
 
+        # T15 — dispatcher por janela de calendário (§18.4)
+        if settings.dispatch_scanner_enabled:
+            app.state.dispatch_scanner_task = asyncio.create_task(
+                _run_dispatch_scanner(app),
+                name="dispatch-scanner",
+            )
+            logger.info("dispatch scanner task scheduled")
+
     @app.on_event("shutdown")
     async def shutdown() -> None:
         if hasattr(app.state, "workflow_consumer_task"):
@@ -508,6 +546,8 @@ def create_app() -> FastAPI:
             app.state.deadline_scanner_task.cancel()
         if hasattr(app.state, "participants_consumer_task"):
             app.state.participants_consumer_task.cancel()
+        if hasattr(app.state, "dispatch_scanner_task"):
+            app.state.dispatch_scanner_task.cancel()
         if hasattr(app.state, "kafka_producer"):
             await app.state.kafka_producer.stop()
         if hasattr(app.state, "redis"):
