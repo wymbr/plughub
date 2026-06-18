@@ -10,6 +10,24 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T8-C — UI Rubrica/Prompt (2026-06-18) ✅
+
+Página nova no grupo Quality (spec §16.3): edição da rubrica-template + preview do prompt
+composto + publish/versões. **Só platform-ui** (backend pronto em T8-A/B). Validação por
+browser (sem build Node no WSL — gotcha 6).
+
+- **`RubricPage.tsx`** (`/evaluation/rubric`): toggle de escopo **default do tenant ↔ override
+  por campanha** (seletor de campanha), editor name/body (draft livre), badge
+  `deploy_status`/version, **Salvar** (create/update), **Publicar** (snapshot), **Preview**
+  (seletor de form → `POST /rubric-templates/preview` com o body em edição → mostra
+  `composed_prompt` + `rubric_source` + contagens) e histórico de **Versões**.
+- **hooks** (`evaluation-hooks.ts`): `useRubricTemplates`, `create/update/publishRubricTemplate`,
+  `useRubricVersions`, `previewRubric` + tipos.
+- **nav/rota/i18n**: entry no grupo Quality (`nav.eval.rubric`, ABAC `formularios` por ora —
+  `gerir_rubrica` dedicado é T8-D); rota `/evaluation/rubric`; namespace `rubric.*` (en+pt-BR).
+- **Próximo**: T8-D (ABAC `gerir_rubrica` no `modules.yaml` + deploy epoch no publish).
+
+
 ### T8-B2 — Fiação de runtime da rubrica (2026-06-18) ✅
 
 Faz o avaliador REAL receber a rubrica-template efetiva (spec §16.2). evaluation-api testável

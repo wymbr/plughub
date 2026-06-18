@@ -125,15 +125,20 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   ao `reason` + `prompt_id` renomeado p/ `evaluation_form_driven_v1` (vestigial). Test
   `test_t8b2_effective_rubric.sh`. **Rebuild mcp-server.** Runtime e2e-blocked → mcp/skill inspecionados.
 
-**PRÓXIMA TAREFA: T8-C — UI Rubrica/Prompt (§16.3).** Página nova no grupo **Quality** (ao lado de
-Forms/Campaigns/Knowledge/Evaluations/Calibration/Curation), rota `/evaluation/rubric`. Editor da
-rubrica-template (default do tenant + override por campanha; lista via `GET /rubric-templates`),
-draft livre, **preview do prompt composto** (`POST /rubric-templates/preview` — já pronto, aceita
-`rubric_body` draft + `form_id` + `campaign_id`), e **publish** (`POST /{id}/publish`). Mostra
-`deploy_status`/`version`/histórico (`GET /{id}/versions`). i18n (en+pt-BR), nav entry + ABAC gate
-(reusar `formularios` por ora; o campo `gerir_rubrica` dedicado entra no T8-D). Tudo backend já
-existe (T8-A/B); é UI + hooks. Depois: T8-D (ABAC `gerir_rubrica` no `modules.yaml` + deploy epoch
-no publish via `registry.changed`/`deploy_events`).
+- **T8-C** — UI Rubrica/Prompt (§16.3). `RubricPage.tsx` (`/evaluation/rubric`): escopo
+  default-tenant ↔ override-campanha, editor + Salvar/Publicar/Preview (`composed_prompt`) +
+  versões; hooks no `evaluation-hooks.ts`; nav no grupo Quality (`nav.eval.rubric`, ABAC
+  `formularios`) + i18n. Validar por browser (rebuild platform-ui).
+
+**PRÓXIMA TAREFA: T8-D — ABAC `gerir_rubrica` + deploy epoch no publish (§16.3).** (1) Adicionar
+o campo `gerir_rubrica` ao módulo `evaluation` em `infra/modules.yaml` (label "Rubrica/Prompt";
+default none) e trocar o gate de nav/ABAC da RubricPage de `formularios` → `gerir_rubrica`
+(Sidebar + qualquer checagem na página). `up -d --force-recreate auth-api` p/ re-seed do
+`module_registry`. (2) **Deploy epoch no publish**: `publish_rubric_template` deve registrar um
+deploy epoch p/ comparação antes/depois (Arc 6 Fase 2) — ver como o publish de form/skill emite
+(`registry.changed` → `analytics.deploy_events`); emitir evento análogo (ex.: `rubric.published`
+ou reusar `registry.changed` com `entity_type=rubric_template`). Validar: campo ABAC aparece em
+`/config/access`, gate funciona, e o epoch entra na timeline de qualidade. Fecha o T8.
 
 **Pendente do T14 — laço mole ponta-a-ponta + estrutural.** Falta desta tarefa:
 (a) **validar que o scoring desloca** com a nota injetada — hoje a nota chega ao contexto

@@ -48,7 +48,8 @@
       "evaluations": "Avaliações",
       "reports": "Relatórios",
       "calibration": "Calibração",
-      "curadoria": "Curadoria"
+      "curadoria": "Curadoria",
+      "rubric": "Rubrica / Prompt"
     },
     "config": "Configuração",
     "resources": "Recursos",

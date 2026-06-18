@@ -2,6 +2,21 @@
 
 ---
 
+## T8-C — UI Rubrica/Prompt (2026-06-18)
+
+Chunk C do T8 (spec §16.3): página de edição da rubrica-template + preview + publish/versões.
+**Só platform-ui** (backend pronto T8-A/B). Validação por browser (sem build Node no WSL).
+
+- `RubricPage.tsx` (`/evaluation/rubric`): escopo default-tenant ↔ override-campanha, editor
+  name/body, badge deploy_status/version, Salvar/Publicar/Preview (composed_prompt + source) +
+  histórico de versões.
+- hooks `evaluation-hooks.ts`: `useRubricTemplates`, `create/update/publishRubricTemplate`,
+  `useRubricVersions`, `previewRubric`.
+- nav no grupo Quality (`nav.eval.rubric`, ABAC `formularios`), rota `/evaluation/rubric`, i18n
+  `rubric.*` (en+pt-BR). **Rebuild**: platform-ui. Próximo: T8-D (ABAC `gerir_rubrica` + deploy epoch).
+
+---
+
 ## T8-B2 — Fiação de runtime da rubrica (2026-06-18)
 
 Chunk B2 do T8 (spec §16.2): o avaliador real passa a receber a rubrica-template efetiva.

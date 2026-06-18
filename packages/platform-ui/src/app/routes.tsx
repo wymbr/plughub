@@ -23,6 +23,7 @@ import AvaliacoesPage from '@/modules/evaluation/AvaliacoesPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import CalibrationDashboard from '@/modules/evaluation/CalibrationDashboard'
 import CuradoriaPage from '@/modules/evaluation/CuradoriaPage'
+import RubricPage from '@/modules/evaluation/RubricPage'
 import { AgentAssistPage } from '@/modules/agent-assist/AgentAssistPage'
 import AccessPage from '@/modules/access/AccessPage'
 import GroupsPage from '@/modules/groups/GroupsPage'
@@ -119,6 +120,7 @@ export const routes: RouteObject[] = [
       { path: 'evaluation/reports',      element: <EvalReportsPage /> },
       { path: 'evaluation/calibration', element: <CalibrationDashboard /> },
       { path: 'evaluation/curadoria',   element: <CuradoriaPage /> },
+      { path: 'evaluation/rubric',      element: <RubricPage /> },
 
       // ── Configuration ─────────────────────────────────────────────
       { path: 'config/resources',  element: <ConfigRecursosIndex /> },

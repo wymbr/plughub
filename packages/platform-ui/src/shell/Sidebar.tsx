@@ -94,6 +94,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      roles: ['operator', 'supervisor', 'admin'] },
         { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        roles: ['supervisor', 'admin'] },
         { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       roles: ['supervisor', 'admin'] },
+        { label: t('nav.eval.rubric'),      href: '/evaluation/rubric',      icon: FileCheck,    roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
       ]
     },
 

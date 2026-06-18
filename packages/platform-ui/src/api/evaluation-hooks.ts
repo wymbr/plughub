@@ -96,6 +96,126 @@ export async function deleteForm(formId: string, token?: string) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
 }
 
+// ── Rubric templates (T8-C) ─────────────────────────────────────────────────────
+
+export interface RubricTemplate {
+  id:            string
+  tenant_id:     string
+  scope:         'tenant' | 'campaign'
+  campaign_id:   string | null
+  name:          string
+  body:          string
+  version:       number
+  deploy_status: 'draft' | 'published'
+  created_at:    string
+  updated_at:    string
+}
+
+export interface RubricVersion {
+  rubric_id:    string
+  version:      number
+  name:         string
+  body:         string
+  published_at: string
+  published_by: string
+}
+
+export interface RubricPreviewResult {
+  composed_prompt:         string
+  sections:                Record<string, string>
+  rubric_source:           string
+  criteria_count:          number
+  calibration_notes_count: number
+}
+
+export function useRubricTemplates(tenantId: string, campaignId?: string) {
+  const [templates, setTemplates] = useState<RubricTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const q = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ''
+      const r = await fetch(`${BASE}/rubric-templates?tenant_id=${tenantId}${q}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setTemplates(d?.rubric_templates ?? [])
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [tenantId, campaignId])
+
+  useEffect(() => { if (tenantId) load() }, [load, tenantId])
+  return { templates, loading, error, reload: load }
+}
+
+export async function createRubricTemplate(
+  tenantId: string,
+  body: { scope: 'tenant' | 'campaign'; campaign_id?: string; name?: string; body?: string },
+): Promise<RubricTemplate> {
+  const r = await fetch(`${BASE}/rubric-templates`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, tenant_id: tenantId }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function updateRubricTemplate(
+  rubricId: string, tenantId: string, body: { name?: string; body?: string },
+): Promise<RubricTemplate> {
+  const r = await fetch(`${BASE}/rubric-templates/${rubricId}?tenant_id=${tenantId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+export async function publishRubricTemplate(rubricId: string, tenantId: string): Promise<RubricTemplate> {
+  const r = await fetch(`${BASE}/rubric-templates/${rubricId}/publish?tenant_id=${tenantId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+export function useRubricVersions(rubricId: string | null, tenantId: string) {
+  const [versions, setVersions] = useState<RubricVersion[]>([])
+  const load = useCallback(async () => {
+    if (!rubricId) { setVersions([]); return }
+    try {
+      const r = await fetch(`${BASE}/rubric-templates/${rubricId}/versions?tenant_id=${tenantId}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setVersions(d?.versions ?? [])
+    } catch { setVersions([]) }
+  }, [rubricId, tenantId])
+  useEffect(() => { load() }, [load])
+  return { versions, reload: load }
+}
+
+export async function previewRubric(
+  tenantId: string,
+  body: { form_id?: string; campaign_id?: string; rubric_body?: string; rubric_id?: string },
+): Promise<RubricPreviewResult> {
+  const r = await fetch(`${BASE}/rubric-templates/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, tenant_id: tenantId }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 
 export function useCampaigns(tenantId: string, pollMs = 0) {
