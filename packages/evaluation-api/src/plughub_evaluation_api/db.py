@@ -462,6 +462,12 @@ CREATE TABLE IF NOT EXISTS evaluation.calibration_notes (
 CREATE INDEX IF NOT EXISTS idx_evcalnotes_campaign
     ON evaluation.calibration_notes (campaign_id, evaluator_id, created_at DESC);
 
+-- T14 (c) — criterion_id: ancora a nota de calibração no CRITÉRIO implicado (não só na
+-- dimensão), p/ o RAG injetar a orientação no bloco do critério certo (spec §6/§18.3).
+-- Nullable: notas legadas têm null; dimension_id mantém-se p/ retrocompat.
+ALTER TABLE evaluation.calibration_notes
+    ADD COLUMN IF NOT EXISTS criterion_id TEXT;
+
 -- ── CurationSamplingRule (Arc 13) ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS evaluation.curation_sampling_rules (
     id           TEXT        PRIMARY KEY,                   -- "evcsrule_{uuid}"
@@ -512,6 +518,46 @@ CREATE TABLE IF NOT EXISTS evaluation.form_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_evformversions_tenant
     ON evaluation.form_versions (tenant_id, form_id, version DESC);
+
+-- ── T8-A — Rubrica-template (spec §16.3) ──────────────────────────────────────
+-- Instruções gerais de avaliação (como pontuar 0/5/10, citar evidência por
+-- stream_entry_id, N/A, anti-viés) — fonte única do prompt, fora do ai-gateway
+-- (que segue stateless). Default por tenant + override por campanha; versionada
+-- (snapshot imutável), espelhando o lifecycle de forms (T6b) e ancorando deploy epochs.
+CREATE TABLE IF NOT EXISTS evaluation.rubric_templates (
+    id            TEXT        PRIMARY KEY,                 -- "evrubric_{uuid}"
+    tenant_id     TEXT        NOT NULL,
+    scope         TEXT        NOT NULL DEFAULT 'tenant'
+                  CHECK (scope IN ('tenant','campaign')),
+    campaign_id   TEXT,                                    -- NULL p/ default; set p/ override
+    name          TEXT        NOT NULL DEFAULT 'Rubric template',
+    body          TEXT        NOT NULL DEFAULT '',         -- texto das instruções gerais
+    version       INTEGER     NOT NULL DEFAULT 1,
+    deploy_status TEXT        NOT NULL DEFAULT 'draft'
+                  CHECK (deploy_status IN ('draft','published')),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by    TEXT        NOT NULL DEFAULT 'operator'
+);
+-- Um default por tenant; um override por campanha (índices parciais únicos).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rubric_tenant_default
+    ON evaluation.rubric_templates (tenant_id) WHERE scope='tenant';
+CREATE UNIQUE INDEX IF NOT EXISTS uq_rubric_campaign
+    ON evaluation.rubric_templates (campaign_id) WHERE scope='campaign' AND campaign_id IS NOT NULL;
+
+-- Snapshot imutável da rubrica por versão publicada (avaliações pinam a versão).
+CREATE TABLE IF NOT EXISTS evaluation.rubric_template_versions (
+    rubric_id     TEXT        NOT NULL REFERENCES evaluation.rubric_templates(id),
+    tenant_id     TEXT        NOT NULL,
+    version       INTEGER     NOT NULL,
+    name          TEXT        NOT NULL,
+    body          TEXT        NOT NULL,
+    published_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    published_by  TEXT        NOT NULL DEFAULT 'operator',
+    PRIMARY KEY (rubric_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_evrubricversions_tenant
+    ON evaluation.rubric_template_versions (tenant_id, rubric_id, version DESC);
 """
 
 
@@ -801,6 +847,217 @@ async def get_form_version(
     if row is not None:
         return normalize_form(_row(row))
     return await get_form(pool, form_id, tenant_id)
+
+
+# ─── T8-A — Rubric templates (spec §16.3) ─────────────────────────────────────
+
+async def get_rubric_template(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.rubric_templates WHERE id=$1 AND tenant_id=$2",
+            rubric_id, tenant_id,
+        )
+    return _row(row)
+
+
+async def list_rubric_templates(
+    pool: asyncpg.Pool, tenant_id: str, *, campaign_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Lista a default do tenant + (se houver) o override da campanha pedida."""
+    cond = "WHERE tenant_id=$1"
+    args: list[Any] = [tenant_id]
+    if campaign_id is not None:
+        args.append(campaign_id)
+        cond += f" AND (scope='tenant' OR campaign_id=${len(args)})"
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT * FROM evaluation.rubric_templates {cond} ORDER BY scope ASC, created_at DESC",
+            *args,
+        )
+    return _rows(rows)
+
+
+async def get_tenant_default_rubric(pool: asyncpg.Pool, tenant_id: str) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.rubric_templates WHERE tenant_id=$1 AND scope='tenant'",
+            tenant_id,
+        )
+    return _row(row)
+
+
+async def get_campaign_rubric(
+    pool: asyncpg.Pool, tenant_id: str, campaign_id: str,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.rubric_templates "
+            "WHERE tenant_id=$1 AND scope='campaign' AND campaign_id=$2",
+            tenant_id, campaign_id,
+        )
+    return _row(row)
+
+
+async def create_rubric_template(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    scope: str = "tenant",
+    campaign_id: str | None = None,
+    name: str = "Rubric template",
+    body: str = "",
+    created_by: str = "operator",
+) -> dict[str, Any]:
+    rubric_id = _new_id("evrubric_")
+    if scope == "campaign" and not campaign_id:
+        raise ValueError("campaign scope requires campaign_id")
+    if scope == "tenant":
+        campaign_id = None
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.rubric_templates
+                (id, tenant_id, scope, campaign_id, name, body, created_by)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING *
+            """,
+            rubric_id, tenant_id, scope, campaign_id, name, body, created_by,
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def update_rubric_template(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str, updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Atualiza name/body. Editar uma rubrica PUBLICADA bifurca para draft E **incrementa
+    a versão** (a versão publicada fica congelada no snapshot; a próxima publicação cria um
+    snapshot novo). Espelha o intent do update_form (T6b)."""
+    allowed = {"name", "body", "deploy_status"}
+    upd = {k: v for k, v in updates.items() if k in allowed and v is not None}
+    if not upd:
+        return await get_rubric_template(pool, rubric_id, tenant_id)
+    extra_sets: list[str] = []
+    if "deploy_status" not in upd:
+        cur = await get_rubric_template(pool, rubric_id, tenant_id)
+        if cur and cur.get("deploy_status") == "published":
+            upd["deploy_status"] = "draft"
+            extra_sets.append("version=version+1")   # bifurca p/ nova versão
+    sets, args = [], []
+    for k, v in upd.items():
+        args.append(v)
+        sets.append(f"{k}=${len(args)}")
+    sets.extend(extra_sets)
+    args.extend([rubric_id, tenant_id])
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"UPDATE evaluation.rubric_templates SET {', '.join(sets)}, updated_at=now() "
+            f"WHERE id=${len(args)-1} AND tenant_id=${len(args)} RETURNING *",
+            *args,
+        )
+    return _row(row)
+
+
+async def publish_rubric_template(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str, *, published_by: str = "operator",
+) -> dict[str, Any] | None:
+    """Snapshot imutável da rubrica corrente em rubric_template_versions e marca
+    published. Idempotente (ON CONFLICT DO NOTHING; a versão publicada nunca muda)."""
+    async with pool.acquire() as conn:
+        raw = await conn.fetchrow(
+            "SELECT * FROM evaluation.rubric_templates WHERE id=$1 AND tenant_id=$2",
+            rubric_id, tenant_id,
+        )
+        if raw is None:
+            return None
+        r = dict(raw)
+        version = int(r.get("version") or 1)
+        await conn.execute(
+            """
+            INSERT INTO evaluation.rubric_template_versions
+                (rubric_id, tenant_id, version, name, body, published_by)
+            VALUES ($1,$2,$3,$4,$5,$6)
+            ON CONFLICT (rubric_id, version) DO NOTHING
+            """,
+            rubric_id, tenant_id, version, r.get("name") or "", r.get("body") or "", published_by,
+        )
+        row = await conn.fetchrow(
+            "UPDATE evaluation.rubric_templates SET deploy_status='published', updated_at=now() "
+            "WHERE id=$1 AND tenant_id=$2 RETURNING *",
+            rubric_id, tenant_id,
+        )
+    return _row(row)
+
+
+async def list_rubric_template_versions(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str,
+) -> list[dict[str, Any]]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM evaluation.rubric_template_versions "
+            "WHERE rubric_id=$1 AND tenant_id=$2 ORDER BY version DESC",
+            rubric_id, tenant_id,
+        )
+    return _rows(rows)
+
+
+async def get_rubric_template_version(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str, version: int,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.rubric_template_versions "
+            "WHERE rubric_id=$1 AND tenant_id=$2 AND version=$3",
+            rubric_id, tenant_id, version,
+        )
+    return _row(row)
+
+
+async def latest_published_rubric_version(
+    pool: asyncpg.Pool, rubric_id: str, tenant_id: str,
+) -> int | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT max(version) AS v FROM evaluation.rubric_template_versions "
+            "WHERE rubric_id=$1 AND tenant_id=$2",
+            rubric_id, tenant_id,
+        )
+    return int(row["v"]) if row and row["v"] is not None else None
+
+
+async def _resolve_published_snapshot(
+    pool: asyncpg.Pool, rubric: dict[str, Any] | None, tenant_id: str, scope: str, source: str,
+) -> dict[str, Any] | None:
+    """Devolve o último SNAPSHOT publicado de uma rubrica (independe do estado vivo: a
+    rubrica pode estar em draft por edição, mas a versão publicada continua válida)."""
+    if not rubric:
+        return None
+    v = await latest_published_rubric_version(pool, rubric["id"], tenant_id)
+    if not v:
+        return None
+    snap = await get_rubric_template_version(pool, rubric["id"], tenant_id, v)
+    if not snap:
+        return None
+    return {"rubric_id": rubric["id"], "scope": scope, "version": v,
+            "name": snap.get("name", ""), "body": snap.get("body", ""), "source": source}
+
+
+async def resolve_rubric(
+    pool: asyncpg.Pool, tenant_id: str, *, campaign_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Rubrica EFETIVA (spec §5.1/§16.3): override PUBLICADO da campanha vence; senão a
+    default PUBLICADA do tenant; senão None (o compositor — chunk B — cai num built-in).
+    Sempre lê o SNAPSHOT publicado (não o draft vivo), p/ avaliações usarem a versão
+    estável mesmo enquanto a rubrica é re-editada. Retorna {rubric_id, scope, version,
+    name, body, source}."""
+    if campaign_id:
+        ov = await get_campaign_rubric(pool, tenant_id, campaign_id)
+        res = await _resolve_published_snapshot(pool, ov, tenant_id, "campaign", "campaign_override")
+        if res:
+            return res
+    df = await get_tenant_default_rubric(pool, tenant_id)
+    return await _resolve_published_snapshot(pool, df, tenant_id, "tenant", "tenant_default")
 
 
 # ─── Campaigns CRUD ───────────────────────────────────────────────────────────
@@ -1772,18 +2029,19 @@ async def create_calibration_note(
     skill_version: str,
     text: str,
     severity: str = "low",
+    criterion_id: str | None = None,   # T14 (c) — critério implicado (opcional)
 ) -> dict[str, Any]:
     note_id = _new_id("evcalnote_")
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO evaluation.calibration_notes
-                (id, tenant_id, campaign_id, dimension_id, evaluator_id,
+                (id, tenant_id, campaign_id, dimension_id, criterion_id, evaluator_id,
                  skill_version, text, severity)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
             RETURNING *
             """,
-            note_id, tenant_id, campaign_id, dimension_id, evaluator_id,
+            note_id, tenant_id, campaign_id, dimension_id, criterion_id, evaluator_id,
             skill_version, text, severity,
         )
     return _row(row)  # type: ignore[return-value]

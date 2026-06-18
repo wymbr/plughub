@@ -355,6 +355,114 @@ async def get_form_version(form_id: str, version: int, tenant_id: str, request: 
     return _expose_form_id(row)
 
 
+# ─── T8-A — Rubric templates (spec §16.3) ──────────────────────────────────────
+# Rubrica-template: instruções gerais de avaliação, default por tenant + override por
+# campanha, versionada (snapshot imutável), espelhando o lifecycle de forms (T6b).
+# Endpoints abertos (tenant_id), como forms; ABAC `gerir_rubrica` entra com a UI (chunk D).
+
+class RubricCreate(BaseModel):
+    tenant_id:   str
+    scope:       str = "tenant"          # "tenant" | "campaign"
+    campaign_id: str | None = None
+    name:        str = "Rubric template"
+    body:        str = ""
+    created_by:  str = "operator"
+
+
+class RubricUpdate(BaseModel):
+    name:          str | None = None
+    body:          str | None = None
+    deploy_status: str | None = None     # normalmente não setado à mão (publish faz isso)
+
+
+class RubricPublish(BaseModel):
+    published_by: str = "operator"
+
+
+@router.get("/v1/evaluation/rubric-templates")
+async def list_rubric_templates(
+    request: Request, tenant_id: str, campaign_id: str | None = None,
+) -> dict:
+    pool = _pool(request)
+    rows = await _db.list_rubric_templates(pool, tenant_id, campaign_id=campaign_id)
+    return {"tenant_id": tenant_id, "rubric_templates": rows, "count": len(rows)}
+
+
+@router.post("/v1/evaluation/rubric-templates", status_code=201)
+async def create_rubric_template(body: RubricCreate, request: Request) -> dict:
+    pool = _pool(request)
+    try:
+        row = await _db.create_rubric_template(pool, **body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, detail=str(exc))
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(409, detail="rubric template already exists for this scope")
+    return row
+
+
+@router.get("/v1/evaluation/rubric-templates/resolve")
+async def resolve_rubric_template(
+    request: Request, tenant_id: str, campaign_id: str | None = None,
+) -> dict:
+    """Rubrica EFETIVA (override publicado da campanha → default publicado do tenant →
+    null). Base do compositor do prompt (chunk B) e do preview da UI."""
+    pool = _pool(request)
+    eff = await _db.resolve_rubric(pool, tenant_id, campaign_id=campaign_id)
+    return {"tenant_id": tenant_id, "campaign_id": campaign_id, "resolved": eff}
+
+
+@router.get("/v1/evaluation/rubric-templates/{rubric_id}")
+async def get_rubric_template(rubric_id: str, tenant_id: str, request: Request) -> dict:
+    pool = _pool(request)
+    row = await _db.get_rubric_template(pool, rubric_id, tenant_id)
+    if not row:
+        raise HTTPException(404, detail="rubric template not found")
+    return row
+
+
+@router.put("/v1/evaluation/rubric-templates/{rubric_id}")
+async def update_rubric_template(
+    rubric_id: str, tenant_id: str, body: RubricUpdate, request: Request,
+) -> dict:
+    pool = _pool(request)
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    row = await _db.update_rubric_template(pool, rubric_id, tenant_id, updates)
+    if not row:
+        raise HTTPException(404, detail="rubric template not found")
+    return row
+
+
+@router.post("/v1/evaluation/rubric-templates/{rubric_id}/publish")
+async def publish_rubric_template(
+    rubric_id: str, tenant_id: str, body: RubricPublish, request: Request,
+) -> dict:
+    """Publica a rubrica corrente: snapshot imutável em rubric_template_versions +
+    deploy_status=published. (Deploy epoch p/ comparação antes/depois entra no chunk D.)"""
+    pool = _pool(request)
+    row = await _db.publish_rubric_template(pool, rubric_id, tenant_id, published_by=body.published_by)
+    if not row:
+        raise HTTPException(404, detail="rubric template not found")
+    return row
+
+
+@router.get("/v1/evaluation/rubric-templates/{rubric_id}/versions")
+async def list_rubric_template_versions(rubric_id: str, tenant_id: str, request: Request) -> dict:
+    pool = _pool(request)
+    versions = await _db.list_rubric_template_versions(pool, rubric_id, tenant_id)
+    return {"rubric_id": rubric_id, "versions": versions, "count": len(versions)}
+
+
+@router.get("/v1/evaluation/rubric-templates/{rubric_id}/versions/{version}")
+async def get_rubric_template_version(
+    rubric_id: str, version: int, tenant_id: str, request: Request,
+) -> dict:
+    pool = _pool(request)
+    row = await _db.get_rubric_template_version(pool, rubric_id, tenant_id, version)
+    if not row:
+        raise HTTPException(404, detail="rubric template version not found")
+    return row
+
+
 # ─── Campaigns ────────────────────────────────────────────────────────────────
 
 class CampaignCreate(BaseModel):

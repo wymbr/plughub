@@ -2,6 +2,45 @@
 
 ---
 
+## T8-A — Rubrica-template: fundação backend (2026-06-18)
+
+Chunk A do T8 (spec §16.3): storage + versionamento da rubrica-template (default por tenant +
+override por campanha), espelhando forms (T6b). **Code-only evaluation-api.** Validado via
+`infra/test/test_t8a_rubric_template.sh` (CRUD + versionamento imutável + resolução
+default/override). Descoberta: `evaluation_rubric_v3` é vestigial (ai-gateway `reason` genérico,
+não resolve `prompt_id`) — não há rubrica-template hoje; o T8 a cria.
+
+- db: tabelas `rubric_templates` + `rubric_template_versions` (snapshot imutável); índices únicos
+  parciais (1 default/tenant, 1 override/campanha); funções CRUD + `publish_rubric_template` +
+  versions + `resolve_rubric` (override publicado da campanha → default publicado do tenant → null;
+  lê do snapshot). Editar publicada bifurca draft + bumpa versão.
+- router: `rubric-templates` CRUD + `/resolve` (efetiva) + `/publish` + `/versions`. Abertos
+  (tenant_id), como forms. **Rebuild**: evaluation-api.
+- Próximos chunks: B (composição/preview + remove evaluation_rubric_v3), C (UI), D (ABAC + epoch).
+
+---
+
+## T14 (c) — criterion_id na CalibrationNote (2026-06-18)
+
+Laço mole de calibração ancorado no **critério** (spec §6/§18.3): a `CalibrationNote` ganha
+`criterion_id` p/ o RAG injetar a orientação no bloco do critério certo. **Code-only
+evaluation-api + UI** (mcp-server pass-through). Validado via
+`infra/test/test_t14_calibration_criterion.sh` (round-trip resolve→note→list; cobre (b)
+`resolve_curation` sem NameError).
+
+- db: `calibration_notes += criterion_id TEXT` (nullable); `create_calibration_note` aceita o
+  campo; `list_calibration_notes` (`SELECT *`) já retorna.
+- contestation_router: `CurationResolveBody += criterion_id`; `resolve_curation` passa ao create
+  + `metadata.criterion_id` no snippet do `mcp-server-knowledge`.
+- mcp-server `evaluation_context_get`: `calibration_notes` pass-through → `criterion_id` flui ao
+  contexto sem mudança TS.
+- platform-ui `CuradoriaPage`: campo "Critério" (opcional) + `CurationResolvePayload.criterion_id`
+  + i18n `curation.drawer.criterion*` (en+pt-BR).
+- Fora desta leva: composição do prompt por critério + validação de scoring (a, e2e-blocked);
+  laço estrutural (d, dep. T8). **Rebuild**: evaluation-api + platform-ui.
+
+---
+
 ## T17-backfill — Reprocesso da janela de dados por segmento (2026-06-18)
 
 Backfill do passado (spec §18.5): enumera os segmentos fechados na janela

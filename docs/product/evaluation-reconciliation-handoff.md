@@ -101,15 +101,47 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   `test_t17_backfill.sh`. *(Criação real depende de `analytics.segments` ter dados na janela —
   e2e-dependente; contrato + idempotência validados por API.)*
 
-**PRÓXIMA TAREFA: T14 — validar calibração com dois laços, com dado real (§18.3).** A
-maquinaria existe mas só rodou no seeder. (a) **Laço mole (RAG)**: `calibration_signal` → fila de
-curadoria → curador resolve (`approved/recalibrated/bias_flagged`) → `CalibrationNote` → publica no
-`mcp-server-knowledge` → RAG na próxima avaliação → **verificar que o scoring desloca**. (b)
-**corrigir bug** `resolve_curation` (referência a `row` inexistente → deveria ser `_cr_row`;
-NameError em recalibrated/bias_flagged — *confirmar se já corrigido no 5d*). (c) **enriquecer**:
-`CalibrationNote.criterion_id` p/ o RAG injetar a nota no bloco do critério certo. (d) **Laço
-estrutural**: curador edita rubrica-template/`scoring_guidance` (T8) → versionado → deploy epoch →
-comparação antes/depois. Dep. T8 (rubrica na UI) — avaliar o que dá p/ validar sem a UI do T8.
+- **T14 (c)** — `CalibrationNote.criterion_id` (§6/§18.3). db (`calibration_notes += criterion_id`,
+  `create_calibration_note`), `resolve_curation` (CurationResolveBody + KB metadata), mcp-server
+  pass-through (sem TS), `CuradoriaPage` drawer (campo Critério) + i18n. Test
+  `test_t14_calibration_criterion.sh` (round-trip; cobre (b) `resolve_curation` já com `_cr_row`).
+- **T8-A** — rubrica-template, fundação backend (§16.3). Tabelas `rubric_templates` +
+  `rubric_template_versions` (default tenant + override campanha, snapshot imutável, espelha
+  forms/T6b); funções db (CRUD + publish + `resolve_rubric` = override pub. → default pub. → null,
+  lê snapshot) + endpoints `rubric-templates` (CRUD + `/resolve` + `/publish` + `/versions`,
+  abertos). Test `test_t8a_rubric_template.sh`. **Achado:** `evaluation_rubric_v3` é vestigial
+  (ai-gateway `reason` genérico não resolve `prompt_id`; o skill `agente_avaliacao_v1` passa as
+  instruções via `input`, mas hoje sem bloco de rubrica — só `scoring_guidance` por critério +
+  descrições do schema).
+
+**PRÓXIMA TAREFA: T8-B — composição + preview do prompt (§16.3).** Camada de composição que
+monta a rubrica efetiva (`resolve_rubric`, já pronta) + critérios do form (com `scoring_guidance`)
++ RAG (`CalibrationNote` por `criterion_id` + knowledge) + transcript → expõe um campo
+`rubric_instructions` (via `evaluation_context_get` no mcp-server **ou** um endpoint de composição
+na evaluation-api) que o skill `agente_avaliacao_v1` passa ao `reason` no `input`. Endpoint
+`POST /v1/evaluation/rubric-templates/preview` (template/form/sample → prompt composto) p/ o preview
+da UI. **Remover** o `prompt_id: evaluation_rubric_v3` vestigial do skill. Built-in default quando
+`resolve_rubric` → null. Runtime do avaliador é e2e-blocked (gotcha 1) → validar composição/preview
+por API. Depois: T8-C (UI Rubrica/Prompt) e T8-D (ABAC `gerir_rubrica` + deploy epoch no publish).
+
+**Pendente do T14 — laço mole ponta-a-ponta + estrutural.** Falta desta tarefa:
+(a) **validar que o scoring desloca** com a nota injetada — hoje a nota chega ao contexto
+(`evaluation_context_get.calibration_notes`), mas a **composição do prompt por critério** (skill
+`agente_avaliacao_v1` agrupar a nota no bloco do `criterion_id`) e a prova de deslocamento são
+**e2e-blocked** pelo avaliador real (gotcha 1) — precisa de sessão webchat fresca ou proxy via
+`/v1/reason`. (d) **laço estrutural**: editar rubrica-template/`scoring_guidance` → versão → deploy
+epoch → comparação antes/depois — **dep. T8** (UI Rubrica). Ver nota de design abaixo (fluxo IA da
+curadoria em alto volume) p/ quando mexer no roteamento revisor→curadoria.
+
+> **Nota de design (futuro — fluxo IA da curadoria em alto volume).** O revisor `ai_review`
+> deve triar o VOLUME inline (corrige/rejeita) e alimentar o humano com **um % das correções
+> + os não-resolvidos**, mas: (1) o % de corrigidos tem de ser **sorteio sistemático**,
+> independente da auto-avaliação do revisor (corretor não escolhe a própria auditoria); (2)
+> manter **sempre um canal cego** (`random_baseline`) que **contorna** o revisor → pega o
+> ponto-cego dele (erro plausível que ele não marca). Hoje o canal cego existe
+> (`run_curation_sampling`), mas falta o **sorteio de um % das correções** do revisor (hoje só
+> escala por `calibration_signal` opcional = auto-seleção). Não muda o escopo do T14; entra
+> quando mexermos no fluxo IA da curadoria.
 
 **Depois:** T8 (rubrica-template UI Quality),
 T9–T11 (UI: drill-down modo Forms, 3 papéis ABAC, relatórios Oficial×Operacional), T16 (corrigir

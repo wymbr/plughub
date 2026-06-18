@@ -10,6 +10,52 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T8-A — Rubrica-template: fundação backend (2026-06-18) ✅
+
+Primeiro chunk do T8 (spec §16.3): storage + versionamento da **rubrica-template** (instruções
+gerais de avaliação — como pontuar, citar evidência, N/A, anti-viés), **default por tenant +
+override por campanha**, versionada (snapshot imutável), espelhando o lifecycle de forms (T6b).
+**Code-only evaluation-api**, testável por API (`infra/test/test_t8a_rubric_template.sh`).
+Descoberta: `evaluation_rubric_v3` é **vestigial** (o `reason` do ai-gateway é genérico e não
+resolve `prompt_id`) — não há rubrica-template como texto hoje; o T8 a cria.
+
+- **db**: tabelas `rubric_templates` (scope tenant|campaign, campaign_id, body, version,
+  deploy_status) + `rubric_template_versions` (snapshot imutável); índices únicos parciais
+  (1 default/tenant, 1 override/campanha). Funções: get/list/create/`update_rubric_template`
+  (editar publicada → bifurca draft **e bumpa versão**), `publish_rubric_template` (snapshot
+  `ON CONFLICT DO NOTHING`), list/get versions, `latest_published_rubric_version`,
+  **`resolve_rubric`** (override publicado da campanha → default publicado do tenant → null;
+  sempre lê o **snapshot publicado**, não o draft vivo).
+- **router**: `GET/POST /v1/evaluation/rubric-templates`, `GET /rubric-templates/resolve`
+  (efetiva — base do compositor/preview), `GET/PUT /{id}`, `POST /{id}/publish`,
+  `GET /{id}/versions(/{v})`. Abertos (tenant_id), como forms; ABAC `gerir_rubrica` entra no chunk D.
+- **Próximos chunks**: B (composição + preview + skill usa `rubric_instructions`, remove
+  `evaluation_rubric_v3`), C (UI Rubrica/Prompt), D (ABAC + deploy epoch).
+
+
+### T14 (c) — criterion_id na CalibrationNote (2026-06-18) ✅
+
+Enriquecimento do laço mole de calibração (spec §6/§18.3): a `CalibrationNote` passa a
+ancorar no **critério** implicado, não só na dimensão, p/ o RAG injetar a orientação no
+bloco do critério certo. **Code-only evaluation-api + UI** (mcp-server é pass-through →
+sem rebuild TS). Validado via `infra/test/test_t14_calibration_criterion.sh` (round-trip
+resolve→note→list; cobre (b) `resolve_curation` sem NameError — já usava `_cr_row`).
+
+- **db**: `calibration_notes += criterion_id TEXT` (nullable; `dimension_id` mantido);
+  `create_calibration_note` aceita `criterion_id`. `list_calibration_notes` é `SELECT *` →
+  retorna o campo automaticamente.
+- **contestation_router**: `CurationResolveBody += criterion_id`; `resolve_curation` passa ao
+  create + inclui em `metadata.criterion_id` do snippet publicado no `mcp-server-knowledge`.
+- **mcp-server** (`evaluation_context_get`): `calibration_notes` é **pass-through** das notas
+  da API → o `criterion_id` já flui ao contexto do avaliador (sem mudança TS).
+- **platform-ui** (`CuradoriaPage` drawer): campo "Critério" (opcional, prefill de
+  `signal.criterion_id`) ao lado de Dimensão; `CurationResolvePayload += criterion_id`; i18n
+  `curation.drawer.criterion*` (en+pt-BR).
+- **Escopo desta leva**: só (c) (o dado flui ponta-a-ponta). A **composição do prompt por
+  critério** (skill agrupar a nota no bloco) e a validação de que o **scoring desloca** (a)
+  ficam para depois — e2e-blocked pelo avaliador real. Laço estrutural (d) depende do T8.
+
+
 ### T17-backfill — Reprocesso da janela de dados por segmento (2026-06-18) ✅
 
 Backfill do passado (spec §18.5): enumera os segmentos já fechados na janela
