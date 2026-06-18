@@ -60,9 +60,14 @@ class LLMProvider(ABC):
         tools:      list[dict] | None,
         model_id:   str,
         max_tokens: int,
+        force_tool: str | None = None,
     ) -> LLMResponse:
         """
         Calls the model and returns a normalised LLMResponse.
         Converts any SDK exception to ProviderError.
+
+        force_tool — when set, forces the model to call exactly that tool
+        (structured output / T7b). Each provider maps it to its native
+        tool_choice format.
         """
         ...

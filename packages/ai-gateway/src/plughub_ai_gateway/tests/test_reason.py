@@ -4,8 +4,64 @@ Tests for output_schema validation in ReasonEngine.
 """
 
 import pytest
-from ..reason import _validate_schema, _clean_json, _format_schema
+from ..reason import _validate_schema, _clean_json, _format_schema, _validate_json_schema
 from ..models import OutputFieldSchema
+
+
+# ── T7b — _validate_json_schema (recursive JSON Schema safety net) ─────────────
+
+_FORM_SCHEMA = {
+    "type": "object",
+    "required": ["criterion_responses"],
+    "properties": {
+        "criterion_responses": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["criterion_id", "score"],
+                "properties": {
+                    "criterion_id": {"type": "string"},
+                    "score":        {"type": ["number", "null"], "minimum": 0, "maximum": 10},
+                    "na":           {"type": "boolean"},
+                    "justification":{"type": "string"},
+                },
+            },
+        },
+        "overall_observation": {"type": "string"},
+    },
+}
+
+
+def test_json_schema_accepts_valid_nested():
+    data = {"criterion_responses": [
+        {"criterion_id": "c1", "score": 8, "justification": "ok"},
+        {"criterion_id": "c2", "score": None, "na": True},  # nullable score
+    ]}
+    assert _validate_json_schema(data, _FORM_SCHEMA) == []
+
+
+def test_json_schema_flags_missing_required_top():
+    assert any("criterion_responses" in e for e in _validate_json_schema({}, _FORM_SCHEMA))
+
+
+def test_json_schema_flags_missing_required_nested():
+    data = {"criterion_responses": [{"criterion_id": "c1"}]}  # falta score
+    assert any("score" in e and "required" in e for e in _validate_json_schema(data, _FORM_SCHEMA))
+
+
+def test_json_schema_flags_out_of_range():
+    data = {"criterion_responses": [{"criterion_id": "c1", "score": 99}]}
+    assert any("maximum" in e for e in _validate_json_schema(data, _FORM_SCHEMA))
+
+
+def test_json_schema_flags_wrong_type():
+    data = {"criterion_responses": [{"criterion_id": 5, "score": 8}]}
+    assert any("expected string" in e for e in _validate_json_schema(data, _FORM_SCHEMA))
+
+
+def test_json_schema_array_must_be_array():
+    assert any("expected array" in e for e in _validate_json_schema(
+        {"criterion_responses": {"criterion_id": "c1"}}, _FORM_SCHEMA))
 
 
 # ── _validate_schema ──────────────────────────

@@ -41,6 +41,7 @@ class AnthropicProvider(LLMProvider):
         tools:      list[dict] | None,
         model_id:   str,
         max_tokens: int,
+        force_tool: str | None = None,
     ) -> LLMResponse:
         """
         Calls the Anthropic Messages API and returns a normalised LLMResponse.
@@ -74,6 +75,9 @@ class AnthropicProvider(LLMProvider):
             }
             if anthropic_tools:
                 kwargs["tools"] = anthropic_tools
+                # T7b — força exatamente a tool nomeada (structured output).
+                if force_tool:
+                    kwargs["tool_choice"] = {"type": "tool", "name": force_tool}
 
             # System prompt extracted from messages with role=system
             system_msgs = [m.get("content", "") for m in messages if m.get("role") == "system"]

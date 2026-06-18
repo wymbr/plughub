@@ -2,6 +2,28 @@
 
 ---
 
+## T7b-1 — ai-gateway: reason aceita JSON Schema via tool-use nativo (2026-06-18)
+
+Primeiro sub-chunk do conveyance form-driven (spec §5.4). **Code-only no ai-gateway.** Validado
+verde ao vivo (`infra/test/test_t7b1_reason_toolschema.sh`, Claude real devolveu saída conforme)
++ 17 unit tests (`tests/test_reason.py`, validador recursivo).
+
+**`ReasonRequest.json_schema`** opcional: presente → `reason` usa **tool-use nativo** (uma tool
+cujo `input_schema` é o JSON Schema montado UPSTREAM do form; o ai-gateway não monta nada, só
+repassa) com `tool_choice` forçado; ausente → caminho flat (compat).
+
+**`LLMProvider.call(..., force_tool=None)`** (base + anthropic + openai): mapeia o tool_choice
+forçado por provedor (Anthropic `{"type":"tool","name":...}`, OpenAI `{"type":"function",...}`).
+
+**`reason._process_tool_use`**: lê `tool_calls[0].input`, valida com `_validate_json_schema`
+(recursivo lite: object/array/number/string/boolean, required=presença de chave, enum, min/max,
+nullable) e re-tenta até 3× com correção — a rede de segurança do §5.4.
+
+**Fronteira (T7b-2/3)**: montar o JSON Schema do form no `evaluation_context_get` + skill usar
+schema dinâmico (T7b-2); remover shims + `evaluation_rubric_v3` (T7b-3). **Rebuild**: ai-gateway.
+
+---
+
 ## T7a — Agregação determinística form-driven + validação no ingest (2026-06-18)
 
 Primeiro chunk da T7 (spec `evaluation-reconciliation-spec.md` §5.2/§16.2 — form como fonte

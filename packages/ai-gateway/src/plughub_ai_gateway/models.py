@@ -96,6 +96,10 @@ class ReasonRequest(BaseModel):
     prompt_id:     str = Field(..., description="Ref ao Prompt Registry")
     input:         dict[str, Any]
     output_schema: dict[str, OutputFieldSchema]
+    # T7b — optional full JSON Schema (montado UPSTREAM a partir do form). Quando
+    # presente, o reason usa tool-use nativo (tool_choice forçado) e o ai-gateway
+    # NÃO monta nada — só repassa o schema. Ausente → caminho flat (compat).
+    json_schema:   dict[str, Any] | None = None
     model_profile: ModelProfile = Field(default="balanced")
     # Injected by the engine — controls format retry
     attempt:       int          = Field(default=0, ge=0)

@@ -73,6 +73,26 @@ Validado verde via `infra/test/test_t7a_aggregation.sh`.
 **Fronteira (T7b):** o conveyance tool-use nativo (JSON Schema do form ao `reason`),
 `output_schema` dinâmico no skill e a **remoção dos shims** ficam para o T7b.
 
+### T7b-1 — ai-gateway: reason aceita JSON Schema via tool-use nativo (2026-06-18) ✅
+
+Primeiro sub-chunk do conveyance (§5.4). **Code-only no ai-gateway.** Validado verde ao vivo
+(`infra/test/test_t7b1_reason_toolschema.sh`, Claude real) + 17 unit tests
+(`tests/test_reason.py`, validador recursivo).
+
+- **`ReasonRequest.json_schema`** opcional: quando presente, o `reason` usa **tool-use nativo**
+  (uma tool cujo `input_schema` é o JSON Schema **montado upstream do form** — o ai-gateway
+  **não monta nada**, só repassa) com `tool_choice` forçado; ausente → caminho flat (compat).
+- **`LLMProvider.call(..., force_tool=None)`** — Anthropic mapeia `tool_choice={"type":"tool",
+  "name":...}`, OpenAI `{"type":"function",...}`.
+- **`reason._process_tool_use`** lê `tool_calls[0].input`, valida com `_validate_json_schema`
+  (validador recursivo lite: object/array/number/string/boolean, `required`=presença de chave,
+  `enum`, `min/max`, `nullable` via `nullable:true` ou `type:[...,"null"]`) e **re-tenta** até 3×
+  com correção — a rede de segurança do §5.4.
+
+**Fronteira (T7b-2/3):** montar o JSON Schema do snapshot do form no `evaluation_context_get`
++ skill `agente_avaliacao_v1.yaml` usar o schema dinâmico (T7b-2); remover os shims do
+`evaluation_submit` + `evaluation_rubric_v3` fixo (T7b-3).
+
 ---
 
 ## Evolução posterior

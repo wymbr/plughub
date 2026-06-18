@@ -53,6 +53,7 @@ class OpenAIProvider(LLMProvider):
         tools:      list[dict] | None,
         model_id:   str,
         max_tokens: int,
+        force_tool: str | None = None,
     ) -> LLMResponse:
         """
         Calls the OpenAI Chat Completions API and returns a normalised LLMResponse.
@@ -102,7 +103,11 @@ class OpenAIProvider(LLMProvider):
             }
             if openai_tools:
                 kwargs["tools"]       = openai_tools
-                kwargs["tool_choice"] = "auto"
+                # T7b — força exatamente a function nomeada (structured output).
+                kwargs["tool_choice"] = (
+                    {"type": "function", "function": {"name": force_tool}}
+                    if force_tool else "auto"
+                )
 
             response = await self._client.chat.completions.create(**kwargs)
 
