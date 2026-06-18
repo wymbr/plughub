@@ -562,6 +562,71 @@ async def submit_pre_review(
     }
 
 
+# ─── T12 — ai-review (resolve o gate de resultados sinalizados) ────────────────
+
+class AiReviewBody(BaseModel):
+    adjusted_overall:   float | None = None   # ajuste opcional da nota geral (0–10)
+    notes:              str = ""
+    calibration_signal: dict | None = None    # opcional → fila de curadoria (laço mole)
+
+
+@contestation_router.post("/v1/evaluation/instances/{instance_id}/ai-review")
+async def submit_ai_review(instance_id: str, body: AiReviewBody, request: Request) -> dict:
+    """T12 — resolve o gate `ai_review` de um resultado sinalizado no ingest (score fora
+    de faixa ∨ sem nota). O revisor IA (sistema) opcionalmente ajusta a nota e PUBLICA:
+    avaliado IA → finalize(auto_ai); avaliado humano → contestation_open (abre janela).
+    Timeout técnico do gate (stall → publica sem ajuste) é follow-up."""
+    tenant_id = _get_tenant(request)
+    _require_admin(request)  # revisor IA = sistema
+    pool = request.app.state.db_pool
+    producer = request.app.state.kafka_producer
+
+    result = await _db.get_result_by_instance(pool, instance_id, tenant_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="result not found")
+    if result.get("result_state") != "ai_review" and result.get("contestation_state") != "pre_review_pending":
+        raise HTTPException(status_code=409, detail=f"result not in ai_review: {result.get('result_state')}")
+
+    final = (body.adjusted_overall if body.adjusted_overall is not None
+             else float(result.get("overall_score") or result.get("final_score") or 0))
+    if body.adjusted_overall is not None:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE evaluation.results SET overall_score=$1, normalized_score=$2, updated_at=now() WHERE id=$3",
+                final, round(final / 10.0, 3), result["id"],
+            )
+
+    if body.calibration_signal:
+        try:
+            await _db.create_curation_review(
+                pool, tenant_id=tenant_id, evaluation_instance_id=instance_id, trigger="reviewer_signal",
+            )
+        except Exception as exc:
+            logger.warning("ai-review: curation review failed (non-fatal): %s", exc)
+
+    from .router import finalize_evaluation, apply_state_deadline  # local import: evita ciclo
+    eat = result.get("evaluated_agent_type")
+    if eat == "ai_agent":
+        await finalize_evaluation(
+            pool, producer,
+            result_id=result["id"], tenant_id=tenant_id, instance_id=instance_id,
+            session_id=result.get("session_id", "") or "",
+            campaign_id=result.get("campaign_id", "") or "",
+            contestation_state="auto_finalized", finalize_reason="auto_ai",
+            final_score=final, evaluated_agent_type="ai_agent",
+            run_curation=True, normalized_score=round(final / 10.0, 3),
+        )
+        logger.info("ai-review: instance=%s (ai_agent) → finalized auto_ai score=%s", instance_id, final)
+        return {"instance_id": instance_id, "result_state": "finalized", "published_to": "auto_ai"}
+
+    # avaliado humano: publica abrindo a janela de contestação
+    await _db.set_contestation_state(pool, result["id"], "contestation_open", action_required=None)
+    _camp = await _db.get_campaign(pool, result.get("campaign_id", "") or "", tenant_id)
+    await apply_state_deadline(pool, _camp, result["id"], "contest")
+    logger.info("ai-review: instance=%s (human) → contestation_open score=%s", instance_id, final)
+    return {"instance_id": instance_id, "result_state": "open", "published_to": "human_contestation"}
+
+
 # ─── CurationReview (curator queue) ──────────────────────────────────────────
 
 @contestation_router.get("/v1/evaluation/curations")

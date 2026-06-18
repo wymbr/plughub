@@ -2,6 +2,27 @@
 
 ---
 
+## T12 — Gate ai_review (sinalizados) (2026-06-18)
+
+Gate de qualidade antes de publicar (spec §18.1). **Code-only na evaluation-api.** Validado via
+`infra/test/test_t12_ai_review.sh` (flag→ai_review→ai-review→finalized; em-faixa→finaliza direto;
+guard 409). Inclui fix do bug latente §2.2.
+
+- **`_is_flagged` no `_ingest_core`**: score fora de faixa (regra `score_extremes`, params min/max)
+  ∨ sem nota → result `ai_review` (via `pre_review_pending`) antes de publicar (AI e humano);
+  não-sinalizado → comportamento atual.
+- **`POST /instances/{id}/ai-review`** (admin): ajuste opcional + calibration_signal opcional →
+  publica (IA→finalize auto_ai; humano→contestation_open+deadline); 409 fora de ai_review.
+- **Fix §2.2 (latente)**: `results_contestation_state_check` recriado permissivo —
+  aceitava só `closed_upheld/closed_revised/...` mas o código grava `auto_finalized`
+  (ingest IA) e `closed_max_rounds` → CheckViolation. contestation_state é espelho deprecado
+  (T1 decisão A); verdade é `result_state`/`chk_result_state`.
+
+**Rebuild**: evaluation-api. **Fronteira**: timeout técnico do gate; ajuste por critério;
+erro irrecuperável→error_rejected (liga T13).
+
+---
+
 ## T13 (core) — Degradação thin-session/erro (2026-06-18)
 
 Degradação da camada de trabalho (spec §8/§18.2). **Code-only na evaluation-api, sem migração**

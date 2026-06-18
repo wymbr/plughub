@@ -344,6 +344,19 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+-- T1/§2.2 — o CHECK legado de contestation_state não incluía os valores que as
+-- escritoras gravam (auto_finalized via ingest IA; closed_max_rounds via submit_review)
+-- → CheckViolation latente. contestation_state é ESPELHO DEPRECADO (decisão A); recria-se
+-- o CHECK permissivo p/ não bloquear o fluxo canônico (a verdade é result_state/chk_result_state).
+DO $$ BEGIN
+    ALTER TABLE evaluation.results DROP CONSTRAINT IF EXISTS results_contestation_state_check;
+    ALTER TABLE evaluation.results ADD CONSTRAINT results_contestation_state_check
+        CHECK (contestation_state IS NULL OR contestation_state IN (
+            'pre_review_pending','contestation_open','under_review',
+            'timeout_contestation','timeout_review','closed_upheld','closed_revised',
+            'auto_finalized','closed_max_rounds'));
+END $$;
+
 -- instances.status: adicionar 'skipped' (thin-session). Mantém os estados legados
 -- (under_review/reviewed/contested/locked) por compat com linhas existentes; a remoção
 -- deles é cleanup posterior, quando nada mais os escrever.

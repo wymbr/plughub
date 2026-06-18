@@ -10,6 +10,25 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T12 — Gate ai_review (sinalizados) (2026-06-18) ✅
+
+Gate de qualidade antes de publicar (spec §18.1). **Code-only na evaluation-api.** Validado
+via `infra/test/test_t12_ai_review.sh`. Inclui o fix do bug latente §2.2 (CHECK de
+`contestation_state` não aceitava `auto_finalized`/`closed_max_rounds` → CheckViolation no ramo IA).
+
+- **Flagging no `_ingest_core`** (`_is_flagged`): score fora de faixa (regra `score_extremes`
+  da campanha, params `min`/`max`) ∨ sem nota → result entra em **`ai_review`** (via
+  `pre_review_pending`) **antes de publicar** (AI e humano). Não-sinalizado → comportamento
+  atual (auto_ai p/ IA; contestation_open/pre_review p/ humano).
+- **`POST /v1/evaluation/instances/{id}/ai-review`** (revisor IA = sistema, admin-token):
+  ajuste opcional da nota + sinal de calibração opcional, e **publica** — avaliado IA →
+  `finalize(auto_ai)`; avaliado humano → `contestation_open` + deadline. Guard 409 fora de `ai_review`.
+- **Fix §2.2**: `results_contestation_state_check` recriado permissivo (espelho deprecado).
+
+**Fronteira (follow-up):** timeout técnico do gate (stall → publica sem ajuste); ajuste **por
+critério** (recompute via pesos do form); classificação de erro irrecuperável → `error_rejected`
+(encaixa aqui, liga ao T13).
+
 ### T13 (core) — Degradação thin-session/erro (2026-06-18) ✅
 
 Degradação da camada de trabalho (spec §8/§18.2). **Code-only na evaluation-api** (enums

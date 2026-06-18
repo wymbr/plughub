@@ -829,6 +829,29 @@ async def apply_state_deadline(pool, campaign: dict | None, result_id: str, kind
         logger.warning("apply_state_deadline failed (non-fatal): %s", exc)
 
 
+async def _is_flagged(pool, campaign_id: str, tenant_id: str, score: float | None) -> tuple[bool, str]:
+    """T12 — sinaliza o resultado para o gate ai_review: score fora de faixa (regra
+    `score_extremes` da campanha, params `min`/`max`) ou sem nota (erro). Sem regra
+    configurada → não sinaliza (comportamento atual)."""
+    if score is None:
+        return True, "no_score"
+    try:
+        rules = await _db.list_sampling_rules(pool, tenant_id, campaign_id)
+    except Exception:
+        return False, ""
+    for r in (rules or []):
+        if not r.get("enabled", True) or r.get("rule_type") != "score_extremes":
+            continue
+        p = r.get("params") or {}
+        lo = p.get("min", p.get("config_min"))
+        hi = p.get("max", p.get("config_max"))
+        if lo is not None and float(score) < float(lo):
+            return True, f"below_min({lo})"
+        if hi is not None and float(score) > float(hi):
+            return True, f"above_max({hi})"
+    return False, ""
+
+
 async def _ingest_core(pool, producer, body: IngestBody, *, strict_validation: bool = True) -> dict:
     """Core ingest logic — callable both from the HTTP route and from the
     evaluation.events consumer (real-evaluator path, see _ingest_from_completed_event).
@@ -966,9 +989,25 @@ async def _ingest_core(pool, producer, body: IngestBody, *, strict_validation: b
     except Exception:
         pre_review = False
 
+    # T12 — flagging: score fora de faixa (regra score_extremes) ∨ sem nota → gate ai_review
+    # ANTES de publicar (vale p/ AI e humano). Resolve via POST /instances/{id}/ai-review.
+    flagged, flag_reason = await _is_flagged(pool, body.campaign_id, body.tenant_id, overall_score)
+
     # Default p/ o ramo ai_agent (antes ficava indefinido → UnboundLocalError no return).
     initial_state = "auto_finalized"
-    if body.evaluated_agent_type == "ai_agent":
+    if flagged:
+        initial_state = "pre_review_pending"   # _RESULT_STATE_MAP → result_state 'ai_review'
+        # action_required só aceita review|contestation (CHECK); o gate é o result_state.
+        await _db.set_contestation_state(
+            pool, result["id"], "pre_review_pending", action_required=None,
+        )
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE evaluation.results SET evaluated_agent_type=$1, updated_at=now() WHERE id=$2",
+                body.evaluated_agent_type, result["id"],
+            )
+        logger.info("ingest: result %s FLAGGED (%s) → ai_review (gate)", result["id"], flag_reason)
+    elif body.evaluated_agent_type == "ai_agent":
         # Fluxo 2: finalização imediata via finalize_evaluation (emissor único, T3).
         await finalize_evaluation(
             pool, producer,
