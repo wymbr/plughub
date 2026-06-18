@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlugHub — Visão (versão comercial)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --primary:#1B4F8A; --primary-d:#15406e; --secondary:#2D9CDB; --accent:#00B4D8;
+    --ink:#16242f; --muted:#52606d; --line:#e3e8ee; --bg:#ffffff; --soft:#f5f8fb; --soft2:#eef4fa; --dark:#0f2336;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Inter,system-ui,sans-serif;color:var(--ink);background:#e9eef4;line-height:1.62;-webkit-font-smoothing:antialiased}
+  strong{color:var(--primary)}
+
+  /* Toolbar (screen only) */
+  #bar{position:sticky;top:0;z-index:10;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:10px 18px}
+  #bar .t{font-weight:600;font-size:13px;letter-spacing:.2px}
+  #bar button{background:#fff;color:var(--primary);border:0;border-radius:6px;padding:8px 16px;font-weight:600;cursor:pointer;font-size:13px}
+  #bar button:hover{background:#eaf2fb}
+
+  .page{max-width:820px;margin:22px auto;background:var(--bg);box-shadow:0 2px 16px rgba(15,35,54,.10)}
+
+  /* Cover */
+  .cover{background:linear-gradient(135deg,var(--primary),var(--secondary));color:#fff;padding:54px 56px 46px}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;font-size:21px;margin-bottom:30px}
+  .brand .dot{width:24px;height:24px;border-radius:7px;background:#fff;position:relative}
+  .brand .dot::after{content:"";position:absolute;inset:7px;border-radius:3px;background:var(--accent)}
+  .kicker{text-transform:uppercase;letter-spacing:2px;font-size:11.5px;font-weight:600;opacity:.9;margin-bottom:14px}
+  .cover h1{font-size:33px;line-height:1.16;font-weight:800;max-width:660px}
+  .cover .lede{font-size:16px;opacity:.95;margin-top:18px;max-width:620px}
+  .cover .tags{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .cover .tag{font-size:12px;font-weight:600;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:5px 12px}
+
+  /* Body */
+  .body{padding:40px 56px 20px}
+  .body > p.intro{font-size:16.5px;color:var(--muted);border-left:3px solid var(--accent);padding-left:18px;margin-bottom:8px}
+  h2{font-size:20px;color:var(--primary);margin:30px 0 4px;font-weight:700}
+  h2 .n{color:var(--accent);font-weight:800;margin-right:8px}
+  p{margin:10px 0;font-size:14.7px}
+  .lead{color:var(--muted)}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:14px 0}
+  .mini{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--soft)}
+  .mini h4{font-size:14px;color:var(--primary);margin-bottom:5px}
+  .mini p{font-size:13px;color:var(--muted);margin:0}
+
+  .levers{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
+  .lever{border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .lever.up{border-left:4px solid var(--green,#059669)}
+  .lever h4{font-size:15px;color:var(--primary);margin-bottom:6px}
+  .lever p{font-size:13.5px;color:var(--muted);margin:0}
+
+  .note{background:var(--soft2);border:1px solid var(--line);border-radius:10px;padding:14px 18px;font-size:13.6px;color:var(--muted);margin:14px 0}
+  .note strong{color:var(--primary)}
+
+  ul.pill{list-style:none;margin:12px 0;display:flex;flex-direction:column;gap:9px}
+  ul.pill li{position:relative;padding-left:22px;font-size:14.3px;color:var(--ink)}
+  ul.pill li::before{content:"→";position:absolute;left:0;color:var(--accent);font-weight:700}
+  ul.pill li b{color:var(--primary)}
+
+  .dial{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:14px 0}
+  .step{border:1px solid var(--line);border-radius:10px;padding:14px;background:#fff}
+  .step .s{font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--accent)}
+  .step h5{font-size:13.5px;margin:4px 0;color:var(--ink)}
+  .step p{font-size:12.3px;color:var(--muted);margin:0}
+  .step.s1{border-left:4px solid var(--primary)} .step.s2{border-left:4px solid var(--secondary)} .step.s3{border-left:4px solid var(--accent)}
+
+  .quote{font-size:18px;line-height:1.5;color:var(--ink);border-left:4px solid var(--accent);padding:8px 0 8px 20px;margin:22px 0}
+  .quote strong{color:var(--primary)}
+
+  /* Closing */
+  .close{margin:18px 56px 0;background:var(--dark);color:#fff;border-radius:14px;padding:30px 34px}
+  .close h3{font-size:19px;font-weight:700}
+  .close p{color:#a9c2d8;font-size:14px;margin-top:8px}
+  .close .contact{margin-top:16px;font-size:13.5px;color:#cfe0ef}
+  .close .contact a{color:#fff;font-weight:600;text-decoration:none}
+
+  footer{padding:20px 56px 40px;color:var(--muted);font-size:11.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+
+  @media print{
+    body{background:#fff}
+    #bar{display:none}
+    .page{max-width:none;margin:0;box-shadow:none}
+    .cover{min-height:247mm;display:flex;flex-direction:column;justify-content:center;padding:24mm 18mm;break-after:page;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .cover h1{font-size:36px}
+    .body{padding:16mm 18mm 4mm}
+    .close{margin:6mm 18mm 0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    footer{padding:8mm 18mm}
+    .cover,.close,.mini,.lever,.note,.step{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    h2{break-after:avoid} .cols,.levers,.dial,.note,.quote,.close{break-inside:avoid}
+    @page{margin:0}
+  }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <span class="t">PlugHub — Visão (versão comercial)</span>
+  <button onclick="window.print()">Salvar como PDF / Imprimir</button>
+</div>
+
+<div class="page">
+
+  <!-- COVER -->
+  <section class="cover">
+    <div class="brand"><span class="dot"></span>PlugHub</div>
+    <p class="kicker">Visão do produto</p>
+    <h1>Decompor e orquestrar: o caminho para o payback que a IA prometeu.</h1>
+    <p class="lede">Muitas empresas não acham retorno na IA — e a causa raramente é falta de um modelo maior. A nossa proposta vai na linha de decompor agentes e amarrá-los em workflow, atacando as duas alavancas do retorno: custo e resultado.</p>
+    <div class="tags">
+      <span class="tag">Orquestração humano + IA</span>
+      <span class="tag">Workflow de ciclo longo</span>
+      <span class="tag">Qualidade auditável</span>
+      <span class="tag">Sem lock-in</span>
+    </div>
+  </section>
+
+  <!-- BODY -->
+  <section class="body">
+
+    <p class="intro">A forma como a IA foi aplicada ao atendimento sempre respondeu aos limites de contexto e de modelo da época. Esses limites mudaram — e o próximo salto de valor não vem de um modelo maior, e sim de decompor processos de ciclo longo em especialistas orquestrados. O PlugHub foi concebido para isso.</p>
+
+    <h2><span class="n">1.</span>Por que a IA começou onde começou</h2>
+    <p class="lead">A primeira geração de IA no atendimento foi moldada por uma restrição real — contexto curto, modelos menos capazes. Dadas elas, duas estratégias eram as racionais, e funcionaram: <strong>substituir sistemas e plataformas pontuais</strong> (um bot no lugar da URA, um classificador, um sumarizador) e <strong>agentes especialistas de escopo estreito</strong>. Quanto mais focado o problema, melhor o resultado — porque cabia na janela e o modelo não se perdia. Não foi um erro; foi a arquitetura possível. Mas a restrição que a justificava afrouxou.</p>
+
+    <h2><span class="n">2.</span>Por que um modelo maior não basta</h2>
+    <p class="lead">A tentação é jogar o processo inteiro num contexto gigante e deixar um modelo resolver tudo. Três coisas não mudaram e derrubam essa ideia:</p>
+    <div class="cols">
+      <div class="mini"><h4>Contexto grande degrada</h4><p>Diluição e perda de foco no meio de um contexto enorme. Um contexto específico e menor é mais preciso e estável.</p></div>
+      <div class="mini"><h4>Ciclo longo é estado</h4><p>Um processo de dias, que atravessa sessões e espera terceiros, não cabe em contexto nenhum. Precisa de persistência, não de mais tokens.</p></div>
+      <div class="mini"><h4>Custo</h4><p>Um contexto máximo é reprocessado por inteiro a cada chamada — paga-se o todo mesmo quando a etapa usa uma fração.</p></div>
+    </div>
+    <p class="lead">Contexto maior é <strong>necessário, não suficiente</strong>: habilita o próximo passo, mas não é o próximo passo.</p>
+
+    <h2><span class="n">3.</span>O salto: decompor agentes + workflow</h2>
+    <p class="lead">É aplicar ao processo a estratégia que a engenharia sempre usou contra a complexidade — decompor — e coordenar as partes: um <strong>orquestrador</strong> que convoca quem sabe cada etapa; <strong>especialistas reaproveitados</strong> (humanos e IA, próprios e externos); e um <strong>workflow com estado persistente</strong> que costura as etapas no tempo. Isso move as duas alavancas do retorno de uma vez:</p>
+    <div class="levers">
+      <div class="lever"><h4>Custo cai por construção</h4><p>Cada etapa carrega só o contexto que usa, com o modelo certo — barato no trivial, caro só no raciocínio. Etapas que não precisam de IA (uma chamada a sistema, uma regra) não pagam inferência.</p></div>
+      <div class="lever up"><h4>Ganho sobe — decompor é redesenhar</h4><p>Boa parte do retorno some quando se automatiza o processo humano como ele é. Ao decompor, cada etapa fica visível para a pergunta certa: isso ainda precisa existir? O ganho está no processo que ficou mais curto.</p></div>
+    </div>
+    <div class="note"><strong>Redesenhar não conflita com reaproveitar.</strong> O redesenho acontece na composição — o workflow que reordena ou elimina etapas — enquanto os especialistas seguem como blocos reusáveis, recompostos numa ordem nova. É por isso que decompor torna o redesenho barato. E os poucos blocos que não sobrevivem ao corte eram os que só existiam para compensar uma limitação humana — não reuso perdido.</div>
+
+    <h2><span class="n">4.</span>O PlugHub: a plataforma onde o processo roda de ponta a ponta</h2>
+    <p class="lead">Não é só um orquestrador — orquestrar costura as etapas, e a plataforma dá a elas tudo o que falta para virar operação real:</p>
+    <ul class="pill">
+      <li><b>Orquestrador + especialistas, humanos e IA</b> — participantes iguais da mesma conversa; é o que torna a automação gradual possível.</li>
+      <li><b>Workflow de ciclo longo com memória</b> — passos que persistem por dias com suspensão e retomada; cada etapa lê só o contexto que lhe diz respeito.</li>
+      <li><b>O modelo certo em cada etapa, sem amarras</b> — troca de provedor por configuração; traga o agente que já existe, inclusive externo.</li>
+      <li><b>A operação ao redor, nativa</b> — canais (voz, WhatsApp, webchat, WebRTC, e-mail), qualidade e compliance (mascaramento, auditoria) na mesma plataforma: o processo decomposto fica operável, medível e auditável.</li>
+    </ul>
+
+    <h2><span class="n">5.</span>O resultado: custo menor, ganho maior, payback</h2>
+    <p class="lead">O retorno melhora pelas duas pontas: decompor <strong>aperta o custo</strong> (menos tokens, modelo certo por etapa, inferência só onde agrega) e <strong>levanta o resultado</strong> — o valor do processo inteiro, redesenhado, não da resposta isolada. E como cada etapa é específica, é mensurável e auditável: a confiança que permite, enfim, entregar um processo real à automação. É aí que o humano encontra seu lugar — como um especialista a mais, que começa no comando e recua na velocidade que a evidência liberar:</p>
+    <div class="dial">
+      <div class="step s1"><p class="s">PASSO 1</p><h5>Humano no comando</h5><p>O processo começa conduzido por pessoas, com a IA apoiando onde já é seguro.</p></div>
+      <div class="step s2"><p class="s">PASSO 2</p><h5>A IA assume o que se prova</h5><p>Cada etapa que a avaliação mostra confiável passa à automação.</p></div>
+      <div class="step s3"><p class="s">PASSO 3</p><h5>Recuo medido e reversível</h5><p>O humano recua na velocidade que a evidência permite — e retoma se a confiança cai.</p></div>
+    </div>
+
+    <p class="quote">O payback que a IA prometeu não vem de um cérebro maior — vem do <strong>processo decomposto, orquestrado e redesenhado</strong>. Exatamente para o que o PlugHub foi feito.</p>
+
+  </section>
+
+  <!-- CLOSE -->
+  <section class="close">
+    <h3>Vamos olhar o seu processo?</h3>
+    <p>Mostramos como o PlugHub decompõe, orquestra e mede um processo de ponta a ponta — e onde está o seu payback.</p>
+    <p class="contact">Fale conosco: <a href="mailto:contato@opuscom.com.br">contato@opuscom.com.br</a></p>
+  </section>
+
+  <footer>
+    <span>© 2026 PlugHub · OpusCom</span>
+    <span>Orquestração de agentes humanos e IA · compliance e portabilidade by design</span>
+  </footer>
+
+</div>
+</body>
+</html>

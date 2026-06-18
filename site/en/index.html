@@ -42,8 +42,8 @@
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
   .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
   .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
-  .nav-links{display:flex;align-items:center;gap:26px}
-  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}
+  .nav-links{display:flex;align-items:center;gap:20px;margin-left:28px}
+  .nav-links a.lnk{font-size:14px;font-weight:500;color:var(--muted)}
   .nav-links a.lnk:hover{color:var(--primary)}
   .nav-cta{display:flex;align-items:center;gap:10px}
   .nav-cta .btn{padding:9px 16px;font-size:14px}
@@ -176,8 +176,8 @@
       <div style="background:var(--soft2);border:1px solid var(--line);border-radius:16px;padding:30px 32px;display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap">
         <div style="max-width:680px">
           <p class="eyebrow">Vision</p>
-          <h2 style="font-size:24px;font-weight:700;margin:6px 0 8px">The next step for AI isn't answering. It's resolving the process.</h2>
-          <p style="color:var(--muted);font-size:16px">Answering an isolated contact is table stakes now. The value is in running the whole process — humans and AI in the same conversation, with automation that advances at the speed of trust.</p>
+          <h2 style="font-size:24px;font-weight:700;margin:6px 0 8px">Why so many companies don't find payback on AI — and what changes it.</h2>
+          <p style="color:var(--muted);font-size:16px">The return rarely comes from a bigger model. It comes from decomposing agents and tying them into a workflow: lower cost, bigger result, the whole process. PlugHub was built for this.</p>
         </div>
         <a class="btn btn-primary" href="vision.html">Read the vision →</a>
       </div>
@@ -188,8 +188,8 @@
   <section class="sec">
     <div class="wrap sec-head">
       <p class="eyebrow">The category shift</p>
-      <h2>An AI agent isn't a bot trapped in a silo.</h2>
-      <p>In most stacks, AI sits in one corner and humans in another. Handoffs drop context, customers feel the seams — and you're locked to one LLM and one vendor. PlugHub puts <strong>humans and AI in the same session as equal participants</strong>, runs every integration through one auditable protocol, and lets you swap LLM, framework, or cloud anytime.</p>
+      <h2>From the isolated contact to the whole process.</h2>
+      <p>The first wave of AI automated loose answers. The leap is running the <strong>whole process</strong> — decomposing it into steps and orchestrating specialists, human and AI, over a workflow that lasts as long as the process does. For that, humans and AI have to be <strong>equal participants in the same session</strong> (not a handoff that drops context), every integration through one auditable protocol, and the stack under your control — <strong>no lock-in</strong> to one LLM, framework, or cloud.</p>
     </div>
   </section>
 
@@ -198,9 +198,18 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Differentiators</p>
-        <h2>Seven things no incumbent ships together.</h2>
+        <h2>Decompose and orchestrate the process — and seven pieces that make it real.</h2>
+        <p>The core argument is one: AI's return comes from decomposing agents and tying them into a workflow over the whole process, not from automating an isolated answer. The seven pieces below are what no incumbent ships together to make that happen.</p>
       </div>
       <div class="grid g3">
+        <div class="card" style="grid-column:1/-1;border-left:4px solid var(--accent);display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap">
+          <div style="max-width:780px">
+            <p class="num">The core idea</p>
+            <h3 style="font-size:20px">Decompose and orchestrate the whole process — not an isolated answer</h3>
+            <p>An orchestrator leads specialists (human and AI) over a <strong>long-cycle workflow</strong>. Each step runs in its own context, with the right model — which <strong>drives cost down</strong> — and the process is redesigned as it's decomposed — which <strong>raises the result</strong>. That's the path to payback.</p>
+          </div>
+          <a class="btn btn-ghost" href="vision.html">Read the vision →</a>
+        </div>
         <div class="card"><p class="num">01</p><h3>Unified conference room</h3><p>Humans and AI come and go from the same session in defined roles — primary, specialist, supervisor. Nobody gets "transferred"; they're in the room together. The customer never feels the switch.</p></div>
         <div class="card"><p class="num">02</p><h3>MCP + interception guard</h3><p>MCP is the only way in. Every call to a business system clears permission checks, an injection guard, and an audit record. Compliance is a primitive, not a plugin.</p></div>
         <div class="card"><p class="num">03</p><h3>LLM-agnostic AI Gateway</h3><p>Bring your own LLM. Multi-account, automatic fallback, and cross-provider rotation — change models without touching the agent. No AI lock-in.</p></div>
@@ -219,7 +228,7 @@
       <div class="sec-head">
         <p class="eyebrow">How it works</p>
         <h2>Every contact is a conference room — with someone in charge.</h2>
-        <p>Every session has an <strong>orchestrator — AI or human —</strong> running it, while specialists and supervisors come and go as needed, all equal participants. The business process is channel-abstract; channels plug in underneath. A three-level model keeps your logic independent of where the customer is — start on one channel, continue on another, context intact.</p>
+        <p>This is where decomposition becomes operation. Every session has an <strong>orchestrator — AI or human —</strong> that runs it and calls specialists as each step needs, all equal participants. The business process is <strong>decomposed into steps</strong> and channel-abstract; channels plug in underneath. A three-level model keeps your logic independent of where the customer is — start on one channel, continue on another, context intact across the whole cycle.</p>
       </div>
       <div class="levels">
         <div class="level a"><span class="badge">a</span><div><h4>Business flow (channel-abstract)</h4><p>Orchestrates agents and sub-flows, persists via suspend/resume. Never touches the channel.</p></div></div>

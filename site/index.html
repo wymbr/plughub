@@ -42,8 +42,8 @@
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;color:var(--primary)}
   .brand .dot{width:22px;height:22px;border-radius:6px;background:var(--primary);position:relative}
   .brand .dot::after{content:"";position:absolute;inset:6px;border-radius:3px;background:var(--accent)}
-  .nav-links{display:flex;align-items:center;gap:26px}
-  .nav-links a.lnk{font-size:14.5px;font-weight:500;color:var(--muted)}
+  .nav-links{display:flex;align-items:center;gap:20px;margin-left:28px}
+  .nav-links a.lnk{font-size:14px;font-weight:500;color:var(--muted)}
   .nav-links a.lnk:hover{color:var(--primary)}
   .nav-cta{display:flex;align-items:center;gap:10px}
   .nav-cta .btn{padding:9px 16px;font-size:14px}
@@ -176,8 +176,8 @@
       <div style="background:var(--soft2);border:1px solid var(--line);border-radius:16px;padding:30px 32px;display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap">
         <div style="max-width:680px">
           <p class="eyebrow">Visão</p>
-          <h2 style="font-size:24px;font-weight:700;margin:6px 0 8px">A próxima etapa da IA não é responder. É resolver o processo.</h2>
-          <p style="color:var(--muted);font-size:16px">Responder um contato isolado já é o básico. O valor está em conduzir o processo inteiro — com humanos e IA na mesma conversa e automação que avança na velocidade da confiança.</p>
+          <h2 style="font-size:24px;font-weight:700;margin:6px 0 8px">Por que tantas empresas não acham payback na IA — e o que muda isso.</h2>
+          <p style="color:var(--muted);font-size:16px">O retorno raramente vem de um modelo maior. Vem de decompor agentes e amarrá-los em workflow: menos custo, mais resultado, o processo inteiro. O PlugHub foi concebido para isso.</p>
         </div>
         <a class="btn btn-primary" href="visao.html">Ler a visão →</a>
       </div>
@@ -188,8 +188,8 @@
   <section class="sec">
     <div class="wrap sec-head">
       <p class="eyebrow">A virada de categoria</p>
-      <h2>Agente de IA não é um bot preso num silo.</h2>
-      <p>Nas soluções tradicionais, a IA atende num canto e o humano em outro — o handoff perde contexto e o cliente sente a troca. E você fica preso a um provedor de LLM e a um fornecedor. O PlugHub trata <strong>humano e IA como participantes iguais da mesma sessão</strong>, integra tudo por um protocolo único auditável, e te deixa trocar de LLM, de framework ou de nuvem quando quiser.</p>
+      <h2>Do contato isolado ao processo inteiro.</h2>
+      <p>A primeira onda da IA automatizou respostas soltas. O salto está em conduzir o <strong>processo inteiro</strong> — decompondo-o em etapas e orquestrando especialistas, humanos e IA, sobre um workflow que dura o tempo que o processo durar. Para isso, humano e IA precisam ser <strong>participantes iguais da mesma sessão</strong> (não um handoff que perde contexto), tudo integrado por um protocolo único auditável, e com a stack sob seu controle — <strong>sem prisão</strong> a um LLM, framework ou nuvem.</p>
     </div>
   </section>
 
@@ -198,9 +198,18 @@
     <div class="wrap">
       <div class="sec-head">
         <p class="eyebrow">Diferenciais</p>
-        <h2>Sete coisas que nenhum incumbente entrega junto.</h2>
+        <h2>Decompor e orquestrar o processo — e sete peças que tornam isso real.</h2>
+        <p>O argumento central é um só: o retorno da IA vem de decompor agentes e amarrá-los em workflow sobre o processo inteiro, não de automatizar uma resposta isolada. As sete peças abaixo são o que nenhum incumbente entrega junto para fazer isso acontecer.</p>
       </div>
       <div class="grid g3">
+        <div class="card" style="grid-column:1/-1;border-left:4px solid var(--accent);display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap">
+          <div style="max-width:780px">
+            <p class="num">A ideia central</p>
+            <h3 style="font-size:20px">Decompor e orquestrar o processo inteiro — não uma resposta isolada</h3>
+            <p>Um orquestrador conduz especialistas (humanos e IA) sobre um <strong>workflow de ciclo longo</strong>. Cada etapa roda no seu contexto, com o modelo certo — o que <strong>derruba o custo</strong> — e o processo é redesenhado ao ser decomposto — o que <strong>eleva o resultado</strong>. É esse o caminho para o payback.</p>
+          </div>
+          <a class="btn btn-ghost" href="visao.html">Ler a visão →</a>
+        </div>
         <div class="card"><p class="num">01</p><h3>Sala de conferência unificada</h3><p>Humano e IA entram e saem da mesma sessão com papéis (primary, especialista, supervisor). Não há "transferência" — há participação. O cliente nunca percebe a troca.</p></div>
         <div class="card"><p class="num">02</p><h3>MCP + interception guard</h3><p>MCP é o único protocolo de integração, e toda chamada a sistema de negócio passa por validação de permissão, guarda anti-injeção e auditoria. Compliance é primitiva, não plugin.</p></div>
         <div class="card"><p class="num">03</p><h3>AI Gateway agnóstico</h3><p>Traga seu LLM. Multi-conta, fallback automático e rotação entre provedores — troca de modelo sem tocar o agente. Sem lock-in de IA.</p></div>
@@ -219,7 +228,7 @@
       <div class="sec-head">
         <p class="eyebrow">Como funciona</p>
         <h2>Todo contato é uma sala de conferência — com um orquestrador no controle.</h2>
-        <p>Cada sessão tem um <strong>orquestrador (IA ou humano)</strong> conduzindo, e especialistas e supervisores entram e saem conforme a necessidade — todos como participantes iguais. O processo de negócio é channel-abstract; os canais entram por baixo. Um modelo em três níveis mantém a lógica independente de onde o cliente fala — começar num canal e continuar em outro, preservando o contexto.</p>
+        <p>É aqui que a decomposição vira operação. Cada sessão tem um <strong>orquestrador (IA ou humano)</strong> que conduz e convoca especialistas conforme a etapa — todos participantes iguais. O processo de negócio é <strong>decomposto em passos</strong> e channel-abstract; os canais entram por baixo. Um modelo em três níveis mantém a lógica independente de onde o cliente fala — começar num canal e continuar em outro, preservando o contexto ao longo de todo o ciclo.</p>
       </div>
       <div class="levels">
         <div class="level a"><span class="badge">a</span><div><h4>Fluxo de negócio (channel-abstract)</h4><p>Orquestra agentes e sub-fluxos, persiste por suspend/resume. Nunca toca o canal.</p></div></div>
