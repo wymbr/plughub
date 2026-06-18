@@ -279,6 +279,13 @@ ALTER TABLE evaluation.campaigns
     ADD COLUMN IF NOT EXISTS pre_review_enabled     BOOLEAN  NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS pre_review_agent_pool  TEXT;
 
+-- T17 — janela de DADOS da campanha (quais sessões entram, por closed_at). Ortogonal ao
+-- `schedule` (quando o avaliador roda). NULL = aberto. Forward: filtro no sampling;
+-- backfill (start no passado) = job batch (follow-up). Spec §18.5.
+ALTER TABLE evaluation.campaigns
+    ADD COLUMN IF NOT EXISTS period_start TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS period_end   TIMESTAMPTZ;
+
 -- evaluation.results: contestation state machine + pre_review tracking (Arc 13)
 ALTER TABLE evaluation.results
     ADD COLUMN IF NOT EXISTS contestation_state  TEXT
@@ -531,6 +538,17 @@ def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}{uuid4().hex}"
+
+
+def _parse_ts(v: Any) -> Any:
+    """T17 — ISO string → datetime (asyncpg exige datetime p/ TIMESTAMPTZ, não str).
+    datetime passa direto; None/inválido → None."""
+    if v is None or isinstance(v, datetime):
+        return v
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 # ─── T6a — form criterion model normalization (migration-without-rewrite) ───────
@@ -795,6 +813,8 @@ async def create_campaign(
     evaluation_calendar_id: str | None = None,
     gateway_config_ids: list[str] | None = None,
     evaluator_pool: str | None = None,
+    period_start: str | None = None,      # T17 — janela de dados (ISO; NULL=aberto)
+    period_end: str | None = None,
 ) -> dict[str, Any]:
     campaign_id = _new_id("evcampaign_")
     async with pool.acquire() as conn:
@@ -804,9 +824,9 @@ async def create_campaign(
                 (id, tenant_id, name, description, form_id, pool_id,
                  sampling_rules, reviewer_rules, schedule, created_by,
                  evaluation_pool_id, evaluation_calendar_id, gateway_config_ids,
-                 evaluator_pool)
+                 evaluator_pool, period_start, period_end)
             VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,
-                    $11,$12,$13,$14)
+                    $11,$12,$13,$14,$15,$16)
             RETURNING *
             """,
             campaign_id, tenant_id, name, description, form_id, pool_id,
@@ -818,6 +838,8 @@ async def create_campaign(
             evaluation_calendar_id,
             gateway_config_ids or [],
             evaluator_pool,
+            _parse_ts(period_start),
+            _parse_ts(period_end),
         )
     return _row(row)  # type: ignore[return-value]
 
@@ -869,7 +891,7 @@ async def update_campaign(
                "total_instances", "completed_instances", "avg_score",
                "review_workflow_skill_id", "contestation_policy",
                "evaluation_pool_id", "evaluation_calendar_id", "gateway_config_ids",
-               "evaluator_pool"}
+               "evaluator_pool", "period_start", "period_end"}
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return await get_campaign(pool, campaign_id, tenant_id)
@@ -878,10 +900,14 @@ async def update_campaign(
     args: list[Any] = []
     idx = 1
     jsonb_fields = {"sampling_rules", "reviewer_rules", "schedule", "contestation_policy"}
+    ts_fields    = {"period_start", "period_end"}   # T17 — cast ISO→timestamptz
     for k, v in updates.items():
         if k in jsonb_fields:
             set_parts.append(f"{k}=${idx}::jsonb")
             args.append(json.dumps(v))
+        elif k in ts_fields:
+            set_parts.append(f"{k}=${idx}")
+            args.append(_parse_ts(v))
         else:
             set_parts.append(f"{k}=${idx}")
             args.append(v)

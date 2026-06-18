@@ -137,6 +137,35 @@ def _duration_s(started_at: str | None, closed_at: str | None) -> float:
         return 0.0
 
 
+def _to_dt(v) -> "datetime | None":
+    """Aceita ISO string (com 'Z') ou datetime; None se não parseável."""
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _within_campaign_window(campaign: dict, closed_at) -> bool:
+    """T17 — sessão entra na campanha se closed_at ∈ [period_start, period_end]
+    (NULL = aberto). Sem closed_at → não filtra (não descarta)."""
+    ps = _to_dt(campaign.get("period_start"))
+    pe = _to_dt(campaign.get("period_end"))
+    if ps is None and pe is None:
+        return True
+    cat = _to_dt(closed_at)
+    if cat is None:
+        return True
+    if ps is not None and cat < ps:
+        return False
+    if pe is not None and cat > pe:
+        return False
+    return True
+
+
 # ─── T2 — acumulador de segmentos por sessão (conversations.participants) ──────
 
 def _segs_key(tenant_id: str, session_id: str) -> str:
@@ -212,12 +241,15 @@ async def _run_participants_consumer(app: FastAPI) -> None:
 async def _sample_one_target(
     db_pool, campaigns: list, *, tenant_id: str, session_id: str,
     sample_key: str, meta: dict, segment_id: str | None = None,
-    evaluated_user_id: str | None = None,
+    evaluated_user_id: str | None = None, closed_at=None,
 ) -> None:
     """Amostra UM alvo (segmento ou sessão-fallback) contra as campanhas ativas."""
     for c in campaigns:
         epid = c.get("evaluation_pool_id") or c.get("pool_id")
         if epid and meta.get("pool_id") != epid:
+            continue
+        # T17 — janela de dados (forward): descarta sessões fora de [period_start, period_end].
+        if not _within_campaign_window(c, closed_at):
             continue
         rules = c.get("sampling_rules") or {}
         if not should_sample(sample_key, meta, rules, counter=int(c.get("total_instances") or 0)):
@@ -271,6 +303,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
                 db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
                 sample_key=seg["segment_id"], meta=seg_meta,
                 segment_id=seg["segment_id"], evaluated_user_id=(seg.get("user_id") or None),
+                closed_at=payload.get("closed_at"),
             )
         return
 
@@ -285,6 +318,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
     await _sample_one_target(
         db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
         sample_key=session_id, meta=session_meta,
+        closed_at=payload.get("closed_at"),
     )
 
 

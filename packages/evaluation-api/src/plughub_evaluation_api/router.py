@@ -371,6 +371,9 @@ class CampaignCreate(BaseModel):
     evaluation_calendar_id:     str | None = None   # calendar for SLA + scheduling windows
     gateway_config_ids:         list[str] = Field(default_factory=list)  # model configs for evaluators
     evaluator_pool:             str | None = None   # S2.2: pool do agente AVALIADOR (null = default global)
+    # T17 — janela de dados (quais sessões entram, por closed_at; ISO; NULL = aberto)
+    period_start:               str | None = None
+    period_end:                 str | None = None
 
     @model_validator(mode="after")
     def _mirror_pools(self) -> "CampaignCreate":
@@ -398,6 +401,8 @@ class CampaignUpdate(BaseModel):
     evaluation_calendar_id:     str | None = None
     gateway_config_ids:         list[str] | None = None
     evaluator_pool:             str | None = None   # S2.2
+    period_start:               str | None = None   # T17 — janela de dados (ISO)
+    period_end:                 str | None = None
 
 
 @router.get("/v1/evaluation/campaigns")
@@ -446,6 +451,8 @@ async def create_campaign(body: CampaignCreate, request: Request) -> dict:
         evaluation_calendar_id=data.get("evaluation_calendar_id"),
         gateway_config_ids=data.get("gateway_config_ids") or [],
         evaluator_pool=data.get("evaluator_pool"),
+        period_start=data.get("period_start"),
+        period_end=data.get("period_end"),
     )
     # Patch v2 scalar fields not handled by create (jsonb fields via update)
     v2_updates: dict[str, Any] = {}

@@ -10,6 +10,22 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T17 (core) — Janela de dados da campanha + filtro forward (2026-06-18) ✅
+
+Janela de dados explícita (spec §18.5), ortogonal ao `schedule`. **Schema novo** na
+evaluation-api. Validado via `infra/test/test_t17_period_window.sh`.
+
+- DDL: `evaluation.campaigns += period_start, period_end` (TIMESTAMPTZ; NULL=aberto).
+- `create_campaign`/`update_campaign` + `CampaignCreate`/`CampaignUpdate` aceitam os campos
+  (ISO→`datetime` via `_parse_ts`; asyncpg exige datetime, não string).
+- **Filtro forward** no sampling (`_sample_one_target` → `_within_campaign_window`): descarta
+  sessões com `closed_at` fora de `[period_start, period_end]`, nos dois caminhos do
+  `_sample_on_close` (segmento + fallback).
+
+Modos: `start=null,end=null` → forward streaming (atual); `end` setado → bounded;
+`start` no passado → **backfill batch** (enumera segmentos persistidos) = **T17-backfill** (follow-up).
+
+
 ### T12 — Gate ai_review (sinalizados) (2026-06-18) ✅
 
 Gate de qualidade antes de publicar (spec §18.1). **Code-only na evaluation-api.** Validado

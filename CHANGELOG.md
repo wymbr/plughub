@@ -2,6 +2,23 @@
 
 ---
 
+## T17 (core) — Janela de dados da campanha + filtro forward (2026-06-18)
+
+Janela de dados explícita por `closed_at` (spec §18.5), ortogonal ao `schedule`. **Schema novo**
+na evaluation-api. Validado via `infra/test/test_t17_period_window.sh` (create/update/get round-trip).
+
+- DDL: `evaluation.campaigns += period_start, period_end` (TIMESTAMPTZ; NULL=aberto).
+- `create_campaign`/`update_campaign` + `CampaignCreate`/`CampaignUpdate` aceitam os campos
+  (`_parse_ts`: ISO→datetime, pois asyncpg exige datetime p/ TIMESTAMPTZ).
+- Filtro forward no sampling: `_sample_one_target` → `_within_campaign_window` descarta sessões
+  com `closed_at` fora de `[period_start, period_end]` (NULL=aberto), nos dois caminhos do
+  `_sample_on_close`.
+
+Modos: forward (atual); bounded (`end` set); backfill (`start` no passado) = **T17-backfill**
+(job batch sobre segmentos persistidos, follow-up). **Rebuild**: evaluation-api.
+
+---
+
 ## T12 — Gate ai_review (sinalizados) (2026-06-18)
 
 Gate de qualidade antes de publicar (spec §18.1). **Code-only na evaluation-api.** Validado via
