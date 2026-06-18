@@ -17,6 +17,9 @@ Endpoints:
     PUT    /v1/evaluation/campaigns/{id}          update campaign
     POST   /v1/evaluation/campaigns/{id}/pause    pause
     POST   /v1/evaluation/campaigns/{id}/resume   resume
+    POST   /v1/evaluation/campaigns/{id}/dispatch manual dispatch ("Rodar agora")
+    POST   /v1/evaluation/campaigns/{id}/backfill T17 — backfill da janela de dados
+    POST   /v1/evaluation/dispatch/scan           T15 — uma passada do dispatcher windowed
 
   Instances:
     GET    /v1/evaluation/instances               list instances
@@ -77,6 +80,7 @@ from .sampling import (
     campaign_dispatch_open,
 )
 from .sampling_engine import run_curation_sampling
+from .backfill import run_campaign_backfill
 
 logger = logging.getLogger("plughub.evaluation.router")
 
@@ -711,6 +715,44 @@ async def dispatch_scan(
         "dispatched": sum(r.get("dispatched", 0) for r in results),
         "campaigns":  results,
     }
+
+
+@router.post("/v1/evaluation/campaigns/{campaign_id}/backfill")
+async def backfill_campaign(
+    campaign_id: str, tenant_id: str, request: Request,
+) -> dict:
+    """T17-backfill (§18.5) — reprocessa o PASSADO: enumera os segmentos fechados na janela
+    de dados da campanha (`[period_start, period_end]`, por `analytics.segments`) e cria as
+    instances por segmento (mesma amostragem do forward; idempotente por
+    `(campaign_id, segment_id)`). As instances nascem `scheduled` → despachadas pelo T15.
+    Exige `period_start` (a janela de dados); `period_end` nulo → até agora. Admin-token."""
+    _require_admin(request)
+    pool = _pool(request)
+
+    campaign = await _db.get_campaign(pool, campaign_id, tenant_id)
+    if not campaign:
+        raise HTTPException(404, detail="campaign not found")
+
+    period_start = campaign.get("period_start")
+    if not period_start:
+        raise HTTPException(
+            400, detail="backfill requires period_start (campaign data window); set it first",
+        )
+    period_end = campaign.get("period_end")
+
+    def _iso(v: Any) -> str:
+        return v.isoformat() if isinstance(v, datetime) else str(v)
+
+    from_dt = _iso(period_start)
+    to_dt   = _iso(period_end) if period_end else datetime.now(tz=timezone.utc).isoformat()
+
+    return await run_campaign_backfill(
+        pool, campaign,
+        analytics_api_url=settings.analytics_api_url,
+        from_dt=from_dt, to_dt=to_dt,
+        page_size=settings.backfill_page_size,
+        max_segments=settings.backfill_max_segments,
+    )
 
 
 @router.get("/v1/evaluation/instances/{instance_id}")

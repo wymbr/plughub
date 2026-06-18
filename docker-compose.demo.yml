@@ -1282,6 +1282,7 @@ services:
       PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
       PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
       PLUGHUB_EVALUATION_SESSION_REPLAYER_URL: http://mcp-server-plughub:3100
+      PLUGHUB_EVALUATION_ANALYTICS_API_URL:   http://analytics-api:3500
     depends_on:
       postgres:
         condition: service_healthy

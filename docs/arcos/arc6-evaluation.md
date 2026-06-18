@@ -10,6 +10,32 @@ Plataforma completa de avaliação de qualidade de interações: formulários co
 > [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
 > Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
 
+### T17-backfill — Reprocesso da janela de dados por segmento (2026-06-18) ✅
+
+Backfill do passado (spec §18.5): enumera os segmentos já fechados na janela
+`[period_start, period_end]` da campanha a partir de `analytics.segments` (REST `GET
+/reports/segments` da analytics-api) e cria instances por segmento, com a mesma amostragem
+do forward. **Code-only na evaluation-api.** Validado via `infra/test/test_t17_backfill.sh`
+(contrato 400/summary + idempotência). As instances nascem `scheduled` → despachadas pelo
+T15 (o backfill **não** despacha nem roda o avaliador).
+
+- **`backfill.py`** (novo): `fetch_closed_segments` (pagina `/reports/segments`, role ∈
+  {primary, specialist}, best-effort → []); `run_campaign_backfill` (reusa
+  `should_sample`/`compute_priority`/`instance_exists_for_segment`/`latest_published_version`/
+  `create_instance`; dedup por `(campaign_id, segment_id)`; `evaluated_user_id` do
+  `segment.user_id`; `form_version` pinado).
+- **Endpoint** `POST /v1/evaluation/campaigns/{id}/backfill` (admin-token): exige
+  `period_start` (400 se ausente); `period_end` nulo → até `now()`. Retorna
+  `{scanned, created, skipped_pool, skipped_sample, skipped_dup}`.
+- **Idempotente**: re-rodar não duplica (dedup por segmento); amostragem percentual é
+  determinística (hash do `segment_id`).
+- Config: `analytics_api_url` (env `PLUGHUB_EVALUATION_ANALYTICS_API_URL`,
+  `http://analytics-api:3500` no demo), `backfill_page_size` (200), `backfill_max_segments`
+  (5000). **Janela**: o `/reports/segments` filtra por `started_at ∈ [from,to]` (aproxima o
+  `closed_at`; segmentos são curtos ante a janela). **Limitação**: `channel` não vem no
+  segmento persistido → regras de sampling por canal não se aplicam no backfill.
+
+
 ### T15 — Dispatcher por janela de calendário (2026-06-18) ✅
 
 Tarefa de fundo que despacha as instances `scheduled` de cada campanha ativa **na janela de
@@ -54,7 +80,8 @@ evaluation-api. Validado via `infra/test/test_t17_period_window.sh`.
   `_sample_on_close` (segmento + fallback).
 
 Modos: `start=null,end=null` → forward streaming (atual); `end` setado → bounded;
-`start` no passado → **backfill batch** (enumera segmentos persistidos) = **T17-backfill** (follow-up).
+`start` no passado → **backfill batch** (enumera segmentos persistidos) = **T17-backfill** ✅
+(ver subseção acima).
 
 
 ### T12 — Gate ai_review (sinalizados) (2026-06-18) ✅

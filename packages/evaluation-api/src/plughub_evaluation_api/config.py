@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     # Session Replayer (to fetch ReplayContext)
     session_replayer_url: str = "http://localhost:3300"  # mcp-server-plughub
 
+    # Analytics API (T17-backfill — enumera segmentos persistidos via /reports/segments)
+    analytics_api_url: str = "http://localhost:3500"
+    backfill_page_size: int    = 200    # paginação do /reports/segments
+    backfill_max_segments: int = 5000   # teto de segurança por job de backfill
+
     # Workflow API (Arc 4 — review/contestation state machine)
     workflow_api_url: str = "http://localhost:3800"
 

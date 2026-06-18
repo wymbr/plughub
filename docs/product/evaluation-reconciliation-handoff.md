@@ -93,14 +93,24 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   `/campaigns/{id}/dispatch` permanece (força). Test `test_t15_dispatcher.sh`. *(O scanner real
   emitindo p/ avaliador é e2e-blocked pela infra do demo — gotcha 1; validado por API.)*
 
-**PRÓXIMA TAREFA: T17-backfill — job batch sobre segmentos persistidos (§18.5).** Enumera os
-segmentos já fechados na janela `[period_start, period_end]` da campanha a partir do store
-persistido (`analytics.segments` / Session Replayer), cria as instances por segmento e as despacha
-(encaixa no dispatcher T15); o avaliador reconstrói o transcript via Hydrator/ReplayContext.
-Liga à validação de prompt (T8 + deploy epochs) rodando uma campanha sobre janela histórica.
-Dep. T2 (chave por segmento). Avaliar fonte dos segmentos (analytics-api vs replayer) e sub-chunking.
+- **T17-backfill** — job batch sobre segmentos persistidos (§18.5). `backfill.py`
+  (`fetch_closed_segments` pagina analytics-api `GET /reports/segments`;
+  `run_campaign_backfill` reusa sampling + dedup `(campaign_id, segment_id)`) + endpoint
+  `POST /v1/evaluation/campaigns/{id}/backfill` (admin; exige `period_start`). Cria instances
+  `scheduled` → T15 despacha. Config `analytics_api_url` (+ env no compose). Test
+  `test_t17_backfill.sh`. *(Criação real depende de `analytics.segments` ter dados na janela —
+  e2e-dependente; contrato + idempotência validados por API.)*
 
-**Depois:** T14 (calibração com dado real
-+ bug `resolve_curation` já corrigido no 5d? confirmar), T8 (rubrica-template UI Quality),
+**PRÓXIMA TAREFA: T14 — validar calibração com dois laços, com dado real (§18.3).** A
+maquinaria existe mas só rodou no seeder. (a) **Laço mole (RAG)**: `calibration_signal` → fila de
+curadoria → curador resolve (`approved/recalibrated/bias_flagged`) → `CalibrationNote` → publica no
+`mcp-server-knowledge` → RAG na próxima avaliação → **verificar que o scoring desloca**. (b)
+**corrigir bug** `resolve_curation` (referência a `row` inexistente → deveria ser `_cr_row`;
+NameError em recalibrated/bias_flagged — *confirmar se já corrigido no 5d*). (c) **enriquecer**:
+`CalibrationNote.criterion_id` p/ o RAG injetar a nota no bloco do critério certo. (d) **Laço
+estrutural**: curador edita rubrica-template/`scoring_guidance` (T8) → versionado → deploy epoch →
+comparação antes/depois. Dep. T8 (rubrica na UI) — avaliar o que dá p/ validar sem a UI do T8.
+
+**Depois:** T8 (rubrica-template UI Quality),
 T9–T11 (UI: drill-down modo Forms, 3 papéis ABAC, relatórios Oficial×Operacional), T16 (corrigir
 docs arc6/arc13/CLAUDE.md/TODO), T4b (notificar avaliado no enter-`open`), + fronteiras e2e-blocked.

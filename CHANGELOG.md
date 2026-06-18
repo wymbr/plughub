@@ -2,6 +2,28 @@
 
 ---
 
+## T17-backfill — Reprocesso da janela de dados por segmento (2026-06-18)
+
+Backfill do passado (spec §18.5): enumera os segmentos fechados na janela
+`[period_start, period_end]` da campanha via `analytics.segments` (REST `GET
+/reports/segments`) e cria instances por segmento (mesma amostragem do forward; idempotente
+por `(campaign_id, segment_id)`). **Code-only na evaluation-api.** Validado via
+`infra/test/test_t17_backfill.sh` (contrato 400/summary + idempotência). Instances nascem
+`scheduled` → despachadas pelo T15; o backfill não despacha.
+
+- `backfill.py` (novo): `fetch_closed_segments` (pagina `/reports/segments`, role ∈
+  {primary,specialist}, best-effort) + `run_campaign_backfill` (reusa sampling/dedup/
+  create_instance; `evaluated_user_id` do segmento; `form_version` pinado).
+- `POST /v1/evaluation/campaigns/{id}/backfill` (admin): exige `period_start` (400 senão);
+  `period_end` nulo → now(). Retorna `{scanned, created, skipped_pool/sample/dup}`.
+- Config: `analytics_api_url` (env `PLUGHUB_EVALUATION_ANALYTICS_API_URL` =
+  `http://analytics-api:3500` no compose), `backfill_page_size`, `backfill_max_segments`.
+- Janela filtra por `started_at` (aproxima closed_at); `channel` ausente no segmento →
+  regras por canal não se aplicam no backfill. **Rebuild**: evaluation-api (`--force-recreate`
+  p/ a env nova).
+
+---
+
 ## T15 — Dispatcher por janela de calendário (2026-06-18)
 
 Tarefa de fundo que despacha as instances `scheduled` de cada campanha ativa **na janela de
