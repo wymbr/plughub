@@ -129,6 +129,15 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="admin token required")
 
 
+# 5a — campo ABAC por round (cada um concede um round; perfil combina o que precisar).
+def _contest_field(round_n: int) -> str:
+    return {1: "contestar", 2: "contestar_replica", 3: "contestar_treplica"}.get(round_n, "contestar_treplica")
+
+
+def _review_field(round_n: int) -> str:
+    return {1: "revisar", 2: "revisar_replica", 3: "revisar_treplica"}.get(round_n, "revisar_treplica")
+
+
 # ─── ContestationThread endpoints ────────────────────────────────────────────
 
 @contestation_router.get("/v1/evaluation/instances/{instance_id}/threads")
@@ -163,7 +172,10 @@ async def file_contestation(
     Updates result contestation_state → 'under_review'.
     """
     tenant_id = _get_tenant(request)
-    user_id = _get_user(request)
+    # 5a — JWT obrigatório (mata o header-only do G-PROBE); identidade vem do 'sub'.
+    from .router import _decode_jwt, _check_abac_permission  # local import: evita ciclo
+    jwt_payload = _decode_jwt(request)
+    user_id = jwt_payload["sub"]
 
     # Verify instance exists and is in contestation_open state
     instance = await _db.get_instance(request.app.state.db_pool, instance_id, tenant_id)
@@ -183,6 +195,16 @@ async def file_contestation(
     # T5 — round = ciclo atual (contestação=1, réplica=2, tréplica=3). O contest NÃO
     # incrementa o round; só move open→under_review dentro do mesmo ciclo.
     current_round = result.get("round") or 1
+
+    # 5a — POSSE: só o avaliado contesta a própria avaliação.
+    evaluated = result.get("evaluated_user_id")
+    if evaluated and evaluated != user_id:
+        raise HTTPException(status_code=403, detail="only the evaluated agent can contest this result")
+    # 5a — ABAC: campo de contestação do round corrente, com scope no pool da campanha.
+    _camp = await _db.get_campaign(request.app.state.db_pool, result.get("campaign_id", ""), tenant_id)
+    _pool_id = (_camp or {}).get("pool_id")
+    if not _check_abac_permission(jwt_payload, _contest_field(current_round), _pool_id):
+        raise HTTPException(status_code=403, detail=f"missing permission: {_contest_field(current_round)}")
 
     thread = await _db.create_contestation_thread(
         request.app.state.db_pool,
@@ -224,16 +246,16 @@ async def submit_review(
     request: Request,
 ) -> dict:
     """
-    Reviewer (AI or human) submits decision on a contested dimension.
-    author_type determined by X-Author-Type header (reviewer_ai | human_reviewer).
-    Creates ContestationThread with decision and optional score_override.
+    Revisão HUMANA de uma contestação (5a). JWT + ABAC do round + guarda revisor≠avaliado.
+    Cria ContestationThread com a decisão e score_override opcional.
     """
     tenant_id = _get_tenant(request)
-    author_id = _get_user(request)
-    author_type = request.headers.get("X-Author-Type", "reviewer_ai")
+    # 5a — JWT obrigatório; revisor é sempre humano (a revisão IA é o ai-review/pre-review).
+    from .router import _decode_jwt, _check_abac_permission  # local import: evita ciclo
+    jwt_payload = _decode_jwt(request)
+    author_id = jwt_payload["sub"]
+    author_type = "human_reviewer"
 
-    if author_type not in ("reviewer_ai", "human_reviewer"):
-        raise HTTPException(status_code=400, detail="X-Author-Type must be reviewer_ai or human_reviewer")
     if body.decision not in ("upheld", "revised"):
         raise HTTPException(status_code=400, detail="decision must be upheld or revised")
     if body.decision == "revised" and body.score_override is None:
@@ -245,6 +267,15 @@ async def submit_review(
 
     if result.get("contestation_state") != "under_review":
         raise HTTPException(status_code=409, detail="result not under_review")
+
+    # 5a — guarda revisor≠avaliado: ninguém revisa a própria avaliação.
+    if result.get("evaluated_user_id") and result["evaluated_user_id"] == author_id:
+        raise HTTPException(status_code=403, detail="reviewer cannot be the evaluated agent")
+    # 5a — ABAC: campo de revisão do round corrente, scope no pool da campanha.
+    _round = result.get("round") or 1
+    _camp = await _db.get_campaign(request.app.state.db_pool, result.get("campaign_id", ""), tenant_id)
+    if not _check_abac_permission(jwt_payload, _review_field(_round), (_camp or {}).get("pool_id")):
+        raise HTTPException(status_code=403, detail=f"missing permission: {_review_field(_round)}")
 
     # T5 — round = ciclo (1=contestação, 2=réplica, 3=tréplica). A revisão NÃO incrementa
     # o round; ela decide e então reabre (round+1) ou finaliza no último.

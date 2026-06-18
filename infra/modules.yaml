@@ -32,6 +32,32 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+      # T5/5a — campos por round (contestação/réplica/tréplica). Cada um concede um round;
+      # um perfil combina o que precisar. contestar/revisar = round 1.
+      contestar_replica:
+        label: Contestar avaliações (réplica - round 2)
+        domain: [none, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      contestar_treplica:
+        label: Contestar avaliações (tréplica - round 3)
+        domain: [none, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      revisar_replica:
+        label: Revisar réplica (round 2)
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
+      revisar_treplica:
+        label: Revisar tréplica (round 3)
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
       report:
         label: Visualizar relatórios de qualidade
         domain: [none, read_only]
