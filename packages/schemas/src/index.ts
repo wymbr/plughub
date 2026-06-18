@@ -196,6 +196,9 @@ export {
   EvaluationFormSchema,
   EvidenceRefSchema,
   EvaluationCriterionResponseSchema,
+  // T6 — criterion field derivation helpers
+  deriveContestable,
+  deriveEvidenceRequired,
   // Arc 6 — Campaign + Instance
   SamplingRulesSchema,
   ReviewerRulesSchema,

@@ -488,6 +488,54 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}{uuid4().hex}"
 
 
+# ─── T6a — form criterion model normalization (migration-without-rewrite) ───────
+# The criterion model is enriched in spec §5.3, but legacy forms only carry
+# label/description/max_score/type. Rather than rewrite stored forms, we fill the
+# derived/default fields ON READ so every consumer (FormsPage, evaluator context,
+# aggregation) sees a complete criterion. Non-destructive: only the returned dict
+# is enriched; the stored JSONB is untouched. Derivation mirrors the @plughub/
+# schemas helpers (deriveContestable / deriveEvidenceRequired).
+
+def _derive_contestable(ctype: str) -> bool:
+    return ctype != "auto_computed"
+
+
+def _derive_evidence_required(ctype: str) -> bool:
+    return ctype in ("score", "boolean")
+
+
+def normalize_form(form: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Fill derived/default criterion fields on a form read. Walks the nested
+    dimensions[].criteria[] model. Idempotent and non-destructive."""
+    if not form:
+        return form
+    dims = form.get("dimensions")
+    if not isinstance(dims, list):
+        return form
+    for dim in dims:
+        if not isinstance(dim, dict):
+            continue
+        crits = dim.get("criteria")
+        if not isinstance(crits, list):
+            continue
+        for c in crits:
+            if not isinstance(c, dict):
+                continue
+            ctype = c.get("type") or "score"
+            c["type"] = ctype
+            if c.get("question") is None:
+                c["question"] = c.get("description")
+            c.setdefault("scoring_guidance", None)
+            c.setdefault("na_guidance", None)
+            c.setdefault("applies_when", None)
+            c.setdefault("min_score", 0)
+            if c.get("evidence_required") is None:
+                c["evidence_required"] = _derive_evidence_required(ctype)
+            if c.get("contestable") is None:
+                c["contestable"] = _derive_contestable(ctype)
+    return form
+
+
 # ─── Forms CRUD ───────────────────────────────────────────────────────────────
 
 async def create_form(
@@ -518,7 +566,7 @@ async def create_form(
             total_weight, passing_score, allow_na,
             knowledge_domains or [], created_by,
         )
-    return _row(row)  # type: ignore[return-value]
+    return normalize_form(_row(row))  # type: ignore[return-value]
 
 
 async def get_form(pool: asyncpg.Pool, form_id: str, tenant_id: str) -> dict[str, Any] | None:
@@ -527,7 +575,7 @@ async def get_form(pool: asyncpg.Pool, form_id: str, tenant_id: str) -> dict[str
             "SELECT * FROM evaluation.forms WHERE id=$1 AND tenant_id=$2",
             form_id, tenant_id,
         )
-    return _row(row)
+    return normalize_form(_row(row))
 
 
 async def list_forms(
@@ -547,7 +595,7 @@ async def list_forms(
             f"SELECT * FROM evaluation.forms {cond} ORDER BY created_at DESC LIMIT ${len(args)+1} OFFSET ${len(args)+2}",
             *args, limit, offset,
         )
-    return _rows(rows)
+    return [normalize_form(r) for r in _rows(rows)]  # type: ignore[misc]
 
 
 async def update_form(
@@ -584,7 +632,7 @@ async def update_form(
             f"WHERE id=${idx} AND tenant_id=${idx+1} RETURNING *",
             *args,
         )
-    return _row(row)
+    return normalize_form(_row(row))
 
 
 async def delete_form(pool: asyncpg.Pool, form_id: str, tenant_id: str) -> bool:

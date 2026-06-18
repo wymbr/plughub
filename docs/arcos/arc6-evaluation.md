@@ -4,6 +4,37 @@
 
 Plataforma completa de avaliação de qualidade de interações: formulários configuráveis, campanhas de amostragem, agentes avaliadores com RAG, revisão humana, contestação e relatórios analíticos.
 
+## Reconciliação Arc 6 + Arc 13 (em andamento — fonte de verdade: spec)
+
+> Arquitetura-alvo e estado-atual×alvo em
+> [`docs/product/evaluation-reconciliation-spec.md`](../product/evaluation-reconciliation-spec.md).
+> Alguns ✅ abaixo/neste doc descrevem o baseline, não o alvo (correção = T16/G-DOCS).
+
+### T6a — Modelo do critério enriquecido + normalização-na-leitura (2026-06-18) ✅
+
+Primeiro chunk da T6 (form como fonte única, §5.3/§16.1). **Add-only, retrocompatível,
+sem reescrita de dados.** Validado verde via `infra/test/test_t6a_form_model.sh`.
+
+- **`@plughub/schemas` (`EvaluationCriterionSchema`)** ganhou campos opcionais: `question`
+  (canônico; cai pra `description`), `scoring_guidance`, `min_score`, `choice_scores`,
+  `true_score`/`false_score`, `na_guidance`, `applies_when`, `evidence_required`,
+  `contestable`. Helpers `deriveContestable(type)` (auto_computed→false) e
+  `deriveEvidenceRequired(type)` (score/boolean→true) — **fonte única** da regra de
+  derivação, reusada por backend, UI (T6c) e agregação (T7).
+- **evaluation-api `normalize_form()`** preenche os derivados/default **na leitura**
+  (`get_form`/`list_forms`/`create_form`/`update_form`) — a "migração sem reescrita":
+  forms legados expõem `type=score`, `question=description`, `min_score=0`,
+  `evidence_required`/`contestable` derivados, **sem tocar o JSONB armazenado**. Campos
+  explícitos nunca são sobrescritos.
+- DB/router já tratam `dimensions` como JSONB/`list[dict]` opaco → novos campos fazem
+  round-trip sem mudança de schema. **Sem migração.**
+
+Pendente na T6: **T6b** (versionamento/deploy lifecycle: `deploy_status` draft/published +
+snapshot imutável) e **T6c** (FormsPage: seletor de `type`, `scoring_guidance`, editor de
+opções, `na_guidance`, toggle `evidence_required`, `auto_source`, controles de versão).
+
+---
+
 ## Evolução posterior
 
 Este documento descreve o Arc 6 Fase 1. Partes substanciais — em especial o fluxo de revisão e contestação — foram **reescritas por arcos posteriores**. Ao consultar este doc, considere:

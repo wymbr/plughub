@@ -2,6 +2,30 @@
 
 ---
 
+## T6a — Modelo do critério enriquecido + normalização-na-leitura (2026-06-18)
+
+Primeiro chunk da T6 (form como fonte única — spec `evaluation-reconciliation-spec.md`
+§5.3/§16.1). **Add-only, retrocompatível, sem migração** (DB/router tratam `dimensions`
+como JSONB opaco → novos campos round-trip). Validado verde via
+`infra/test/test_t6a_form_model.sh` (legado→defaults; auto_computed→não-contestável/sem-evidência;
+text→contestável; override explícito preservado).
+
+**`@plughub/schemas` (`EvaluationCriterionSchema`)**: campos opcionais novos — `question`
+(canônico, cai pra `description`), `scoring_guidance`, `min_score`, `choice_scores`,
+`true_score`/`false_score`, `na_guidance`, `applies_when`, `evidence_required`,
+`contestable`. Helpers exportados `deriveContestable(type)` (auto_computed→false) e
+`deriveEvidenceRequired(type)` (score/boolean→true) — fonte única da derivação para backend,
+UI e agregação (T7).
+
+**evaluation-api (`db.py`)**: `normalize_form()` preenche derivados/default por critério **na
+leitura** (`get_form`/`list_forms`/`create_form`/`update_form`) — migração-sem-reescrita do
+§16.1, não-destrutiva (JSONB armazenado intacto; campos explícitos nunca sobrescritos).
+
+Isolado a `@plughub/schemas` + evaluation-api (platform-ui tem `EvaluationCriterion` próprio
+em `types/index.ts` → T6c). **Rebuild**: evaluation-api. Pendente T6: T6b (versionamento), T6c (UI).
+
+---
+
 ## T5 chunk 5c — Contestação em lote por critério + gate "tratar todas" (2026-06-18)
 
 Reconciliação Arc 6 + Arc 13 (spec `docs/product/evaluation-reconciliation-spec.md`, §4/§15).

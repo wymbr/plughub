@@ -349,6 +349,27 @@ export const EvaluationCriterionSchema = z.object({
     good: z.array(z.string()).default([]),
     bad:  z.array(z.string()).default([]),
   }).optional(),
+  // ── T6 — enriched criterion model (spec §5.3; add-only, all optional) ────────
+  /** The question being evaluated. Canonical going forward; falls back to `description`. */
+  question:          z.string().optional(),
+  /** Scale anchoring: what 0 / mid / max mean. Empty = current behavior. */
+  scoring_guidance:  z.string().optional(),
+  /** Lower bound of the numeric scale (type="score"); pairs with max_score. */
+  min_score:         z.number().default(0),
+  /** option → score map (type="choice"). Aggregation consumes this in T7. */
+  choice_scores:     z.record(z.string(), z.number()).optional(),
+  /** boolean → score map (type="boolean"). */
+  true_score:        z.number().optional(),
+  false_score:       z.number().optional(),
+  /** Guidance for when N/A applies. The N/A itself is contestable. */
+  na_guidance:       z.string().optional(),
+  /** Conditional applicability expression; empty = always applies. */
+  applies_when:      z.string().optional(),
+  /** Whether citing evidence is required. Absent → deriveEvidenceRequired(type). */
+  evidence_required: z.boolean().optional(),
+  /** Whether the criterion can be contested. Absent → deriveContestable(type)
+   *  (auto_computed → false; everything else → true). */
+  contestable:       z.boolean().optional(),
   // ── Arc 13 — auto_computed fields ──────────────────────────────────────────
   /** Source metric for auto_computed type. Format: "session_metric.{metric_name}" */
   computation_source: z.string().optional(),
@@ -360,6 +381,23 @@ export const EvaluationCriterionSchema = z.object({
   comparison:         z.enum(["lt", "gt", "lte", "gte"]).optional(),
 })
 export type EvaluationCriterion = z.infer<typeof EvaluationCriterionSchema>
+
+/**
+ * T6 — derivation rules for criterion fields that are computed from `type` when
+ * not explicitly set on the form. Keep these the single source of truth so the
+ * evaluation-api (read-time normalization), the FormsPage UI, and the aggregation
+ * (T7) all derive identically.
+ */
+export function deriveContestable(type: EvaluationCriterionType): boolean {
+  // auto_computed is a deterministic fact (SessionMetricsExtractor) → not contestable.
+  return type !== "auto_computed"
+}
+
+export function deriveEvidenceRequired(type: EvaluationCriterionType): boolean {
+  // Evidence is meaningful for graded judgments; text is qualitative and
+  // auto_computed is deterministic, so neither requires cited evidence by default.
+  return type === "score" || type === "boolean"
+}
 
 /**
  * EvaluationForm — reusable structured evaluation template.
