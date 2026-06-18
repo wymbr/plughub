@@ -519,42 +519,23 @@ const EvidenceEntryInputSchema = z.object({
  * DimensionThreadInput — Arc 13 Fase B: per-dimension evaluation with evidence.
  * Required for each scored dimension. Skipped for auto_computed criteria.
  */
-// COMPAT SHIM (pending the form-driven prompt revision — see TODO § "Prompt de
-// avaliação form-driven"). The current FIXED evaluation_rubric_v3 prompt, combined
-// with the lossy nested-schema conveyance in ai-gateway (_format_schema only emits
-// top-level fields), makes the LLM emit `observation` instead of `justification`
-// and omit `evidence_entries`. Rather than hard-fail a real evaluation, we normalize
-// gracefully here at the persistence boundary. The strict Arc 13 contract
-// (justification ≥10 chars + ≥1 evidence_entry per scored dimension) is restored by
-// the revision that (a) conveys the full nested output_schema to the LLM and
-// (b) unifies the YAML output_schema with this Zod schema as a single contract.
-const DimensionThreadInputSchema = z.preprocess(
-  (raw) => {
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      const d = raw as Record<string, unknown>
-      if (d["justification"] === undefined && typeof d["observation"] === "string") {
-        d["justification"] = d["observation"]
-      }
-      if (d["evidence_entries"] === undefined) d["evidence_entries"] = []
-    }
-    return raw
-  },
-  z.object({
-    dimension_id:     z.string().min(1),
-    /** Score assigned (0–max_score). Nullable when the dimension was N/A. */
-    score:            z.number().min(0).nullable(),
-    /** Justification for the score — shim: optional (strict Arc 13 wants ≥10 chars). */
-    justification:    z.string().min(1).optional(),
-    /** Evidence entries — shim: optional/default [] (strict Arc 13 wants ≥1). */
-    evidence_entries: z.array(EvidenceEntryInputSchema).default([]),
-  })
-)
+// T7b-3 — DEPRECATED input. A saída form-driven (T7b-2) usa `criterion_responses`; os
+// threads round-1 nascem POR CRITÉRIO no ingest (T7a). Mantido como entrada opcional
+// (compat), SEM os shims antigos (observation→justification, default de evidence_entries):
+// o tool-use garante o shape e a validação recursiva + retry do ai-gateway (T7b-1) é a rede.
+const DimensionThreadInputSchema = z.object({
+  dimension_id:     z.string().min(1),
+  /** Score assigned (0–max_score). Nullable when the dimension was N/A. */
+  score:            z.number().min(0).nullable(),
+  justification:    z.string().min(1).optional(),
+  evidence_entries: z.array(EvidenceEntryInputSchema).default([]),
+})
 
 const EvaluationCriterionResponseInputSchema = z.object({
   criterion_id:  z.string().min(1),
   /** true when criterion is not applicable to this session */
   na:            z.boolean().default(false),
-  // Shim: nullable — the LLM emits score:null for N/A criteria (na=true).
+  // Contrato form-driven: score é null quando na=true (não é shim).
   score:         z.number().min(0).nullable().optional(),  // for type "score"
   boolean_value: z.boolean().optional(),           // for type "boolean"
   choice_value:  z.string().optional(),            // for type "choice"
@@ -604,22 +585,9 @@ const EvaluationSubmitInputSchema = z.object({
   summary:            z.string().min(1),
   highlights:         z.array(z.string()).default([]),
   improvement_points: z.array(z.string()).default([]),
-  // Shim: the fixed prompt sometimes emits flag OBJECTS instead of strings.
-  // Coerce to string so the submit doesn't hard-fail (pending form-driven revision).
-  compliance_flags:   z.array(z.unknown()).default([]).transform((arr) =>
-    arr.map((x) =>
-      typeof x === "string"
-        ? x
-        : (x && typeof x === "object"
-            ? String(
-                (x as Record<string, unknown>)["description"]
-                  ?? (x as Record<string, unknown>)["flag"]
-                  ?? (x as Record<string, unknown>)["type"]
-                  ?? JSON.stringify(x),
-              )
-            : String(x)),
-    ),
-  ),
+  // T7b-3 — sem shim de coerção: a saída form-driven (tool-use) não emite
+  // compliance_flags como objetos; o contrato é string[].
+  compliance_flags:   z.array(z.string()).default([]),
   is_benchmark:       z.boolean().default(false),
 
   /**

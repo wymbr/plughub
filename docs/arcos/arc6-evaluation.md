@@ -120,6 +120,27 @@ T7b-1 já provara o tool-use ao vivo. O e2e natural confirma quando houver sess�
 **Fronteira (T7b-3):** remover os shims do `evaluation_submit` (`observation→justification`,
 default `evidence_entries`, coerção `compliance_flags`) + o `evaluation_rubric_v3` fixo.
 
+### T7b-3 — Remoção dos shims do evaluation_submit (2026-06-18) ✅ — **T7 completo**
+
+Com a saída form-driven via tool-use (T7b-2), os shims de normalização viraram dead-weight:
+
+- **Removido** o `z.preprocess` do `DimensionThreadInputSchema` (`observation→justification`,
+  default de `evidence_entries`). `dimension_threads` permanece como entrada **opcional
+  deprecada** (compat) — a saída usa `criterion_responses` e os threads round-1 nascem por
+  critério no ingest (T7a).
+- **Removida** a coerção objeto→string de `compliance_flags` (agora `z.array(z.string())`).
+- O `score` nullable de `criterion_responses` **não** era shim — é o contrato (null em `na`);
+  comentário corrigido.
+- **`evaluation_rubric_v3`**: confirmado **vestigial** — não existe prompt fixo no ai-gateway,
+  e o `reason` ignora `prompt_id` (usa `_SYSTEM_TOOL` genérico + o form no input). A composição
+  da rubrica-template é a **T8** (UI Quality). Nada a remover em código.
+
+A rede de segurança é a validação recursiva + retry do ai-gateway (T7b-1) + a validação do
+ingest contra o form (T7a). **Rebuild**: mcp-server-plughub.
+
+> **T7 completo** (T7a + T7b-1/2/3): a nota e o contrato de saída são **form-driven** —
+> JSON Schema do form via tool-use, agregação determinística no ingest, sem shims.
+
 ---
 
 ## Evolução posterior

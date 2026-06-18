@@ -2,6 +2,27 @@
 
 ---
 
+## T7b-3 — Remoção dos shims do evaluation_submit (2026-06-18) — T7 completo
+
+Com a saída form-driven via tool-use (T7b-2), os shims de normalização do `evaluation_submit`
+(`mcp-server-plughub/tools/evaluation.ts`) viraram dead-weight e foram removidos:
+
+- removido o `z.preprocess` do `DimensionThreadInputSchema` (`observation→justification` +
+  default de `evidence_entries`); `dimension_threads` fica como entrada opcional **deprecada**
+  (a saída usa `criterion_responses`; threads round-1 nascem por critério no ingest — T7a);
+- removida a coerção objeto→string de `compliance_flags` (agora `z.array(z.string())`);
+- `score` nullable de `criterion_responses` não era shim (contrato: null em `na`) — comentário corrigido;
+- `evaluation_rubric_v3`: confirmado **vestigial** (não há prompt fixo no ai-gateway; o `reason`
+  ignora `prompt_id`) — composição de rubrica é T8. Nada a remover em código.
+
+Rede de segurança: validação recursiva + retry do ai-gateway (T7b-1) + validação do ingest
+contra o form (T7a). **Rebuild**: mcp-server-plughub.
+
+**T7 completo** (T7a + T7b-1/2/3): contrato de saída e nota são form-driven (JSON Schema do
+form via tool-use; agregação determinística no ingest; sem shims).
+
+---
+
 ## T7b-2 — Composição do JSON Schema do form + skill form-driven (2026-06-18)
 
 Liga o avaliador ao conveyance do T7b-1 (spec §5.4/§16.2). **2a** (skill-flow-engine) + **2b**
