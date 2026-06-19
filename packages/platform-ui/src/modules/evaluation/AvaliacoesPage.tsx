@@ -125,10 +125,11 @@ function elapsed(fromIso?: string | null): string {
 
 // ── T9-B.1: CriterionDetail — render tipado (form∪resposta, por tipo) ────────────
 
-function CriterionDetail({ def, resp, t }: {
-  def:   EvaluationCriterion          // definição do form (versão fixada)
-  resp?: CriterionResponseRow         // resposta do avaliador (join por criterion_id)
-  t:     TFn
+function CriterionDetail({ def, resp, thread, t }: {
+  def:     EvaluationCriterion          // definição do form (versão fixada)
+  resp?:   CriterionResponseRow         // resposta do avaliador (join por criterion_id)
+  thread?: ContestationThread           // T9-B.2 — histórico (contestação/revisão) do critério
+  t:       TFn
 }) {
   const type   = def.type ?? 'score'
   const isAuto  = type === 'auto_computed'
@@ -172,6 +173,20 @@ function CriterionDetail({ def, resp, t }: {
               {ev.stream_entry_id ?? `#${ev.turn_index ?? i}`}
             </span>
           ))}
+        </div>
+      )}
+      {/* T9-B.2 — estado + provisória→final (Δ) quando houve contestação/revisão */}
+      {thread && thread.current_state !== 'neutral' && (
+        <div className="flex items-center gap-2 mt-1 text-xs">
+          <span className="px-1.5 py-0.5 rounded-full bg-revised-light text-revised-text font-medium">
+            {t(`dimensionStates.${thread.current_state}`, { defaultValue: String(thread.current_state) })}
+          </span>
+          {Number(thread.original_score) !== Number(thread.current_score) && (
+            <span className="text-revised">
+              {Number(thread.original_score).toFixed(1)} → <b>{Number(thread.current_score).toFixed(1)}</b>
+              {' '}(Δ {(Number(thread.current_score) - Number(thread.original_score)).toFixed(1)})
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -1151,6 +1166,8 @@ function DetailPanel({
   const { criteria: responses } = useResultCriteria(result.result_id, TENANT)
   const { form: pinnedForm }    = useFormVersion(result.form_id ?? null, result.form_version, TENANT)
   const respByCrit = new Map((responses ?? []).map(r => [r.criterion_id, r]))
+  // T9-B.2 — threads keyed por dimension_id (= criterion_id, spec §15.5)
+  const threadByCrit = new Map(threads.map(th => [th.dimension_id, th]))
   const mergedCriteria: { def: EvaluationCriterion; resp?: CriterionResponseRow }[] = []
   const dims = Array.isArray(pinnedForm?.dimensions) ? pinnedForm!.dimensions : []
   for (const dim of dims) {
@@ -1265,11 +1282,11 @@ function DetailPanel({
           </div>
         )}
 
-        {/* ── Arc 13: Dimension threads view ────────────────────────────────── */}
+        {/* ── T9-B.2: histórico por critério (contestação/revisão, round a round) ── */}
         {isArc13 && mode !== 'contest' && (
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-semibold text-muted">{t('detail.dimensionThreads')}</span>
+              <span className="text-xs font-semibold text-muted">{t('detail.criterionHistory', { defaultValue: 'Histórico por critério' })}</span>
               {threadLoading && <span className="text-xs text-muted-light">⟳</span>}
             </div>
             {threads.map(th => (
@@ -1290,7 +1307,7 @@ function DetailPanel({
             {mergedCriteria.length > 0 ? (
               <div className="border rounded">
                 {mergedCriteria.map(({ def, resp }) => (
-                  <CriterionDetail key={def.criterion_id} def={def} resp={resp} t={t} />
+                  <CriterionDetail key={def.criterion_id} def={def} resp={resp} thread={threadByCrit.get(def.criterion_id)} t={t} />
                 ))}
               </div>
             ) : responses.length > 0 ? (
@@ -1299,7 +1316,7 @@ function DetailPanel({
                   <CriterionDetail
                     key={r.criterion_id}
                     def={{ criterion_id: r.criterion_id, label: r.criterion_name || r.criterion_id, description: '', weight: 0, allows_na: false, max_score: r.max_score ?? 10 } as EvaluationCriterion}
-                    resp={r} t={t}
+                    resp={r} thread={threadByCrit.get(r.criterion_id)} t={t}
                   />
                 ))}
               </div>

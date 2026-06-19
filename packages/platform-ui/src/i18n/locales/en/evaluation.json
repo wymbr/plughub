@@ -461,7 +461,16 @@
     "notContestable": "not contestable",
     "yes": "Yes",
     "no": "No",
-    "noCriteria": "No criteria."
+    "noCriteria": "No criteria.",
+    "criterionHistory": "Criterion history"
+  },
+  "dimensionStates": {
+    "neutral": "neutral",
+    "pre_reviewed": "pre-reviewed",
+    "contested": "contested",
+    "upheld": "upheld",
+    "revised": "revised",
+    "timeout": "timed out"
   },
   "review": {
     "openContestations": "Open Contestations",

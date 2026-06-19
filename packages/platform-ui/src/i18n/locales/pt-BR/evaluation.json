@@ -461,7 +461,16 @@
     "notContestable": "não contestável",
     "yes": "Sim",
     "no": "Não",
-    "noCriteria": "Sem critérios."
+    "noCriteria": "Sem critérios.",
+    "criterionHistory": "Histórico por critério"
+  },
+  "dimensionStates": {
+    "neutral": "neutro",
+    "pre_reviewed": "pré-revisado",
+    "contested": "contestado",
+    "upheld": "mantida",
+    "revised": "revisada",
+    "timeout": "prazo vencido"
   },
   "review": {
     "openContestations": "Contestações abertas",

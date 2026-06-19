@@ -2,6 +2,22 @@
 
 ---
 
+## T9-B.2 — Timeline por critério + provisória/final Δ (2026-06-19)
+
+Fecha o T9-B (blueprint §B). **Só platform-ui.** Validar por browser.
+
+- `CriterionDetail`: badge de **estado** por critério (`contested`/`upheld`/`revised`/`timeout` —
+  oculto p/ `neutral`) + **provisória → final (Δ)** quando houve override (`thread.original_score`
+  → `current_score`), materializando "a nota real consolida só no finalized" (§14.1/B.4).
+- `DetailPanel`: threads agrupadas por `dimension_id` (= `criterion_id`, §15.5) e passadas a cada
+  `CriterionDetail`; seção de histórico relabelada "Dimension threads" → **"Histórico por critério"**
+  (a timeline round-a-round já vem do `DimensionThreadCard`, keyed por critério).
+- i18n `dimensionStates.*` + `detail.criterionHistory` (en+pt-BR). **Rebuild**: platform-ui.
+  **T9-B completo** (B.1 render tipado + B.2 timeline/Δ). Próximo: T9-C (transcript + evidência,
+  rota dedicada).
+
+---
+
 ## T9-B.1 — Drill-down: render tipado por critério (2026-06-19)
 
 Nível 3 do drill-down (blueprint `t9-evaluations-ia.md` §B). **Só platform-ui.** O detalhe da
