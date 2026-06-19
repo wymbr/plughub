@@ -152,13 +152,16 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   + filtro "Awaiting my action" client-side). B.2 timeline por critério (badge de estado + provisória/
   final Δ; histórico via `DimensionThreadCard`). **T9-A e T9-B validados no browser.**
 
-> **T9-C (transcript + evidência) — PRÓXIMA SESSÃO (própria).** Decisão fechada (blueprint D1/D2/D3):
-> rota dedicada `/:campaignId/:resultId`; transcript de `analytics.messages` (persistido, **mascarado
-> para todos** — revisão cega, D3) via endpoint escopado p/ avaliação (gate de papel de avaliação, não
-> `audit.sessions`); evidência clicável por `stream_entry_id`; endpoint delega ao session-replayer (D2).
-> **Reveal de PII (Opção B / Audit-LGPD Fase 2) fica sob demanda**, não entra no T9-C. e2e/validação por
-> inspeção (seed sem mensagens reais; só `e8f75639`). Depois: T10 (`available_actions`/3 papéis), T11
-> (relatórios Oficial×Operacional), T16 (docs).
+> **T9-C (transcript + evidência) — CONCLUÍDO 2026-06-19.** C1 (analytics-api
+> `GET /v1/transcript/sessions/{id}`, mascarado por construção sobre `analytics.messages`, janela por
+> segmento) + C2 (evaluation-api `GET /v1/evaluation/results/{id}/transcript`, gate por papel de
+> avaliação — **não** `audit.sessions` —, delega ao analytics-api) + C3 (rota dedicada D1
+> `/:campaignId/:resultId`, split critérios|transcript, evidência clicável por `stream_entry_id`,
+> validado no browser com `e8f75639`). **Desvio do D2 registrado**: delegou-se ao **analytics-api**
+> (dono de `analytics.messages`, já mascarado/durável), não ao session-replayer (sem HTTP + store
+> durável desmascarado). Reveal de PII (Audit-LGPD Fase 2) fica sob demanda. Testes
+> `test_t9c1_transcript_window.sh` + `test_t9c2_transcript.sh`. **PRÓXIMO: T10** (`available_actions`/
+> 3 papéis no nível 3), depois T11 (relatórios Oficial×Operacional), T16 (docs).
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

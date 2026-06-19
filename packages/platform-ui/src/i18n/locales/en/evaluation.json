@@ -462,7 +462,26 @@
     "yes": "Yes",
     "no": "No",
     "noCriteria": "No criteria.",
-    "criterionHistory": "Criterion history"
+    "criterionHistory": "Criterion history",
+    "openFullscreen": "Open fullscreen (transcript)"
+  },
+  "transcript": {
+    "title": "Transcript",
+    "masked": "masked",
+    "maskedHint": "Masked content (blind review)",
+    "loading": "Loading…",
+    "error": "Failed to load transcript",
+    "empty": "No messages in this window",
+    "scope": {
+      "segment": "Segment",
+      "contact": "Contact"
+    }
+  },
+  "evalDetail": {
+    "back": "Evaluations",
+    "title": "Evaluation",
+    "loadError": "Failed to load the evaluation",
+    "evidenceHint": "Click an evidence id to highlight the message in the transcript."
   },
   "dimensionStates": {
     "neutral": "neutral",

@@ -2,6 +2,28 @@
 
 ---
 
+## T9-C3 — platform-ui: rota dedicada do nível 3 + transcript com evidência (2026-06-19)
+
+Fecha o T9-C (blueprint §C, D1). **Só platform-ui.** Validado no browser (sessão real
+`e8f75639`). Nível 3 do drill-down vira **rota dedicada** (tela cheia) com formulário preenchido
+e transcript mascarado lado a lado.
+
+- `EvaluationDetailPage.tsx` (novo): rota `evaluation/evaluations/:campaignId/:resultId` (D1).
+  Split: esquerda = critérios (reusa `CriterionDetail` do T9-B, join form fixado ∪ respostas);
+  direita = `TranscriptPanel` (mascarado, toggle **Segmento/Contato**, bolhas por papel). Clicar o
+  id de evidência num critério **rola e destaca** a mensagem no transcript (C.3, via
+  `t9c-msg-{stream_entry_id}`). Breadcrumb ← volta ao nível 2 da campanha.
+- `evaluation-hooks.ts`: `useResult` + `useResultTranscript` (+ tipos `TranscriptMessage`/
+  `ResultTranscript`) consumindo o endpoint do T9-C2.
+- `AvaliacoesPage.tsx`: `CriterionDetail` e `ScorePill` exportados; chip de evidência clicável via
+  prop `onEvidenceClick` (compat: vira `<span>` sem o handler); botão **⤢** no header do
+  `DetailPanel` abre a rota dedicada (painel inline + ações de revisar/contestar intactos).
+- `routes.tsx` + i18n `transcript.*`/`evalDetail.*`/`detail.openFullscreen` (en+pt-BR). **Rebuild**:
+  platform-ui. **T9-C completo** (C1 analytics-api + C2 evaluation-api + C3 UI). As ações no nível 3
+  (3 papéis via `available_actions`) seguem como **T10**.
+
+---
+
 ## T9-C2 — evaluation-api: GET /results/{id}/transcript (orquestra + delega) (2026-06-19)
 
 Segundo elo do T9-C (blueprint §C, D2/D3). **Só evaluation-api.** O nível 3 ganha a porta que

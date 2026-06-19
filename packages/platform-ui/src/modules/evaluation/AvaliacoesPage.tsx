@@ -11,7 +11,7 @@
  * available_actions comes from the server (Bearer JWT → ABAC) — never computed locally.
  */
 import React, { useState, useEffect, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
@@ -44,7 +44,7 @@ import type {
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
-function ScorePill({ score }: { score: number | string | null | undefined }) {
+export function ScorePill({ score }: { score: number | string | null | undefined }) {
   // ClickHouse/NUMERIC pode chegar como string; coagimos e protegemos contra null/NaN.
   const s = Number(score)
   if (!Number.isFinite(s)) {
@@ -125,11 +125,12 @@ function elapsed(fromIso?: string | null): string {
 
 // ── T9-B.1: CriterionDetail — render tipado (form∪resposta, por tipo) ────────────
 
-function CriterionDetail({ def, resp, thread, t }: {
+export function CriterionDetail({ def, resp, thread, t, onEvidenceClick }: {
   def:     EvaluationCriterion          // definição do form (versão fixada)
   resp?:   CriterionResponseRow         // resposta do avaliador (join por criterion_id)
   thread?: ContestationThread           // T9-B.2 — histórico (contestação/revisão) do critério
   t:       TFn
+  onEvidenceClick?: (streamEntryId: string) => void  // T9-C3 — clica evidência → rola/destaca transcript
 }) {
   const type   = def.type ?? 'score'
   const isAuto  = type === 'auto_computed'
@@ -167,12 +168,23 @@ function CriterionDetail({ def, resp, thread, t }: {
       )}
       {resp?.evidence && resp.evidence.length > 0 && (
         <div className="flex flex-wrap gap-1 mt-1">
-          {resp.evidence.map((ev, i) => (
-            <span key={i} title={ev.excerpt || ev.relevance_note || ''}
-              className="text-[10px] font-mono px-1 rounded bg-primary-light text-primary cursor-default">
-              {ev.stream_entry_id ?? `#${ev.turn_index ?? i}`}
-            </span>
-          ))}
+          {resp.evidence.map((ev, i) => {
+            const sid = ev.stream_entry_id
+            const label = sid ?? `#${ev.turn_index ?? i}`
+            const title = ev.excerpt || ev.relevance_note || ''
+            return onEvidenceClick && sid ? (
+              <button key={i} type="button" title={title}
+                onClick={() => onEvidenceClick(sid)}
+                className="text-[10px] font-mono px-1 rounded bg-primary-light text-primary hover:bg-primary hover:text-white transition-colors cursor-pointer">
+                {label}
+              </button>
+            ) : (
+              <span key={i} title={title}
+                className="text-[10px] font-mono px-1 rounded bg-primary-light text-primary cursor-default">
+                {label}
+              </span>
+            )
+          })}
         </div>
       )}
       {/* T9-B.2 — estado + provisória→final (Δ) quando houve contestação/revisão */}
@@ -1147,6 +1159,7 @@ function DetailPanel({
   onAction:   () => void
 }) {
   const { t } = useTranslation('evaluation')
+  const navigate = useNavigate()
   const [mode, setMode] = useState<'view' | 'review' | 'contest'>('view')
 
   const canReview  = result.available_actions?.includes('review')
@@ -1200,6 +1213,13 @@ function DetailPanel({
         <ScorePill score={result.overall_score} />
         <StatusBadge status={result.eval_status} t={t} />
         {result.locked && <span title={t('detail.locked')}>🔒</span>}
+        {result.campaign_id && (
+          <button
+            onClick={() => navigate(`/evaluation/evaluations/${result.campaign_id}/${result.result_id}`)}
+            title={t('detail.openFullscreen', { defaultValue: 'Abrir em tela cheia (transcript)' })}
+            className="text-muted-light hover:text-primary ml-1 text-base leading-none"
+          >⤢</button>
+        )}
         <button onClick={onClose} className="text-muted-light hover:text-muted ml-1 text-lg leading-none">✕</button>
       </div>
 

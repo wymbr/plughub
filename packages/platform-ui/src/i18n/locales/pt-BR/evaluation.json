@@ -462,7 +462,26 @@
     "yes": "Sim",
     "no": "Não",
     "noCriteria": "Sem critérios.",
-    "criterionHistory": "Histórico por critério"
+    "criterionHistory": "Histórico por critério",
+    "openFullscreen": "Abrir em tela cheia (transcript)"
+  },
+  "transcript": {
+    "title": "Transcript",
+    "masked": "mascarado",
+    "maskedHint": "Conteúdo mascarado (revisão cega)",
+    "loading": "Carregando…",
+    "error": "Falha ao carregar o transcript",
+    "empty": "Sem mensagens nesta janela",
+    "scope": {
+      "segment": "Segmento",
+      "contact": "Contato"
+    }
+  },
+  "evalDetail": {
+    "back": "Avaliações",
+    "title": "Avaliação",
+    "loadError": "Falha ao carregar a avaliação",
+    "evidenceHint": "Clique no id de evidência para destacar a mensagem no transcript."
   },
   "dimensionStates": {
     "neutral": "neutro",

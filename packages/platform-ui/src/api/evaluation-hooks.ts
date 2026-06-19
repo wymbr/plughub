@@ -529,6 +529,90 @@ export async function fetchResultWithActions(
   return r.json()
 }
 
+/** T9-C3 — single result (with server-side available_actions) as a hook (dedicated page). */
+export function useResult(
+  resultId: string | null,
+  tenantId: string,
+  accessToken?: string,
+  pollMs = 0,
+) {
+  const [result, setResult] = useState<EvaluationResultWithActions | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!resultId) { setResult(null); setLoading(false); return }
+    try {
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/results/${resultId}?tenant_id=${encodeURIComponent(tenantId)}`, { headers })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setResult(await r.json()); setError(null)
+    } catch (e) { setError(String(e)) } finally { setLoading(false) }
+  }, [resultId, tenantId, accessToken])
+
+  useEffect(() => {
+    load()
+    if (pollMs > 0) { const id = setInterval(load, pollMs); return () => clearInterval(id) }
+  }, [load, pollMs])
+
+  return { result, loading, error, reload: load }
+}
+
+// ── T9-C — transcript (nível 3) ─────────────────────────────────────────────────
+
+export interface TranscriptMessage {
+  stream_entry_id: string
+  event_type:      string
+  author_id:       string | null
+  author_role:     string | null
+  visibility?:     string
+  content:         string          // mascarado por construção (D3)
+  created_at:      string
+}
+
+export interface ResultTranscript {
+  result_id:  string
+  session_id: string
+  segment_id: string | null
+  scope:      string               // "segment" | "contact"
+  window?:    { start: string; end: string } | null
+  masked:     boolean
+  messages:   TranscriptMessage[]
+}
+
+/** T9-C3 — transcript mascarado do result, delegado pelo evaluation-api ao analytics-api.
+ *  scope: "segment" (janela do segmento avaliado) | "contact" (sessão inteira). */
+export function useResultTranscript(
+  resultId: string | null,
+  tenantId: string,
+  scope: 'segment' | 'contact',
+  accessToken?: string,
+) {
+  const [data, setData] = useState<ResultTranscript | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    if (!resultId) { setData(null); setLoading(false); return }
+    setLoading(true)
+    try {
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(
+        `${BASE}/results/${resultId}/transcript?tenant_id=${encodeURIComponent(tenantId)}&scope=${scope}`,
+        { headers },
+      )
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setData(await r.json()); setError(null)
+    } catch (e) { setError(String(e)) } finally { setLoading(false) }
+  }, [resultId, tenantId, scope, accessToken])
+
+  useEffect(() => { load() }, [load])
+
+  return { data, loading, error, reload: load }
+}
+
 // ── Contestations ─────────────────────────────────────────────────────────────
 
 export function useContestations(tenantId: string, resultId?: string) {

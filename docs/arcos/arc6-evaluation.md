@@ -455,6 +455,13 @@ propagado do instance no ingest, T2), gateia por `_can_view_transcript` (ABAC
 Devolve `{result_id, session_id, segment_id, scope, window, masked:true, messages}`. É a porta que
 a UI do nível 3 (T9-C3) consome. Test `infra/test/test_t9c2_transcript.sh`.
 
+**T9-C3 (platform-ui)** — rota dedicada `evaluation/evaluations/:campaignId/:resultId` (D1):
+`EvaluationDetailPage` em tela cheia, split critérios (reusa `CriterionDetail` do T9-B) | transcript
+mascarado (`useResultTranscript`, toggle Segmento/Contato). O chip de evidência (`stream_entry_id`)
+rola e destaca a mensagem no transcript (C.3). Entrada via botão ⤢ no `DetailPanel` inline (ações de
+revisar/contestar permanecem no painel). Validado no browser com a sessão real `e8f75639`.
+**T9-C completo.** As ações no nível 3 (3 papéis via `available_actions`) são o T10.
+
 ## Novos pacotes
 
 - `packages/evaluation-api/` — Python FastAPI, porta 3400. Ciclo de vida completo de formulários, campanhas, instâncias, resultados e contestações.

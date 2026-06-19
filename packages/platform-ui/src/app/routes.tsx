@@ -20,6 +20,7 @@ import FormsPage from '@/modules/evaluation/FormsPage'
 import EvalCampaignsPage from '@/modules/evaluation/CampaignsPage'
 import KnowledgePage from '@/modules/evaluation/KnowledgePage'
 import AvaliacoesPage from '@/modules/evaluation/AvaliacoesPage'
+import EvaluationDetailPage from '@/modules/evaluation/EvaluationDetailPage'
 import EvalReportsPage from '@/modules/evaluation/ReportsPage'
 import CalibrationDashboard from '@/modules/evaluation/CalibrationDashboard'
 import CuradoriaPage from '@/modules/evaluation/CuradoriaPage'
@@ -116,6 +117,7 @@ export const routes: RouteObject[] = [
       { path: 'evaluation/campaigns',    element: <EvalCampaignsPage /> },
       { path: 'evaluation/knowledge',    element: <KnowledgePage /> },
       { path: 'evaluation/evaluations',  element: <AvaliacoesPage /> },
+      { path: 'evaluation/evaluations/:campaignId/:resultId', element: <EvaluationDetailPage /> },
       { path: 'evaluation/avaliacoes',   element: <Navigate to="/evaluation/evaluations" replace /> },
       { path: 'evaluation/reports',      element: <EvalReportsPage /> },
       { path: 'evaluation/calibration', element: <CalibrationDashboard /> },
