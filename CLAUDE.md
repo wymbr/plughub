@@ -707,11 +707,20 @@ O Console é uma **superfície de orquestração**: o operador humano dirige, de
 
 ---
 
-## Arc 6 Fase 2 — Observabilidade por Deploy ✅
+## Arc 6 Fase 2 — Observabilidade por Deploy ⚠️ NÃO IMPLEMENTADO (gap doc×código, T16)
 
-Comparação de qualidade ancorada em **deploy epochs** (eventos `skill_deployments` como âncoras temporais objetivas, não datas arbitrárias). **Dual-slice**: duas séries de métricas em paralelo (dois agentes, dois períodos, dois deploys, ou epoch automático) — `evaluation_score`/`resolution_rate`/`escalation_rate`/`aht_ms`/`nps` + `statistical_significance` (aviso N<30). Infra: `analytics.deploy_events` (ClickHouse, alimentada por `registry.changed`) + endpoints `GET /reports/deploy-timeline`, `/quality-comparison`, `/quality-timeseries`.
+> **Correção T16 (2026-06-19):** este arco era marcado ✅ mas **não existe no código** — não há
+> tabela `analytics.deploy_events`, consumer de `registry.changed`/`skill_deployed`, nem os endpoints
+> `deploy-timeline`/`quality-comparison`/`quality-timeseries` (auditoria: grep zero em `analytics-api`).
+> A UI (`AnaliseQualidadePage` Trend/Comparison) existe mas está desativada (`TAB_IDS=['summary']`),
+> apontando para endpoints inexistentes. É **proposta**, registrada em `## Pending` e em `TODO.md`.
 
-→ See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md)
+Proposta: comparação de qualidade ancorada em **deploy epochs** (deploys como âncoras temporais
+objetivas) com **dual-slice** (`evaluation_score`/`resolution_rate`/`escalation_rate`/`aht_ms`/`nps`
++ `statistical_significance`). O T11 (relatório Oficial×Operacional) entregou a base de qualidade
+finalizada (`evaluation_finalized`) **independentemente** desta Fase 2.
+
+→ See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md) (alvo de design)
 
 ---
 
@@ -778,6 +787,19 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 ---
 
 ## Pending (Next Iteration)
+
+### Arc 6 Fase 2 — Observabilidade por Deploy *(NÃO implementado — gap doc×código, T16 2026-06-19)*
+- Estava marcado ✅ mas não existe no código. Falta: tabela ClickHouse `analytics.deploy_events`;
+  consumer de `registry.changed`/`skill_deployed` no analytics-api; endpoints `GET /reports/deploy-timeline`,
+  `/quality-comparison` (dual-slice por agente/período/deploy_epoch + `statistical_significance`),
+  `/quality-timeseries` (série + `deploy_markers`). UI já existe parcial e **desativada**
+  (`AnaliseQualidadePage` Trend/Comparison, `MetricSelector`) apontando p/ os endpoints inexistentes —
+  reativar ao construir o backend. Candidato a arco próprio. **Spec de implementação fechada (2026-06-19):**
+  `docs/product/arc6-phase2-deploy-observability-spec.md`. Decisões: **entra como NOVA LENTE `deploy` no
+  board de Agentes** (`/reports/agents/compare?lens=deploy`), não tela/aba nova (consolidação 2026-06-16);
+  deploy timeline via REST do agent-registry; qualidade = `evaluation_finalized`/Oficial; comparação de
+  versão via epochs+N. Chunks P2-A (REST deploys) · P2-B (lente no compare) · P2-C (front + cleanup views mortas).
+  Visão/mockups: `docs/arcos/arc6-phase2-observability.md`.
 
 ### Arc 15 — WebRTC (decisão em aberto)
 - bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado).

@@ -923,6 +923,21 @@ pool hooks genéricos (sem campo dedicado).
   comparação por **deploy-epoch** (Arc 6 Fase 2 — "deploy melhorou a qualidade?"); (b) **significância
   estatística** (N<30); (c) comparação de **períodos arbitrários A vs B**; (d) overlay multi-métrica num gráfico.
   Se a observabilidade por deploy virar necessidade, adicionar um modo "comparar fatias/deploy" ao bench.
+  - **T16 ✅ (2026-06-19) — correção de verdade nas docs**: `arc6-phase2-observability.md` e o resumo do
+    CLAUDE.md (§ Arc 6 Fase 2) afirmavam "implementado ✅", mas auditoria confirmou **gap total** (sem
+    `analytics.deploy_events`, sem consumer `skill_deployed`, sem `deploy-timeline`/`quality-comparison`/
+    `quality-timeseries`). Corrigidos para "NÃO implementado / proposta"; gap registrado no `## Pending` do
+    CLAUDE.md. A base de qualidade finalizada do T11 (`evaluation_finalized` + `/reports/evaluations/quality`)
+    é independente desta Fase 2. *(Demais "✅ falsos" da spec §19 — finalize/`result_state`/`evaluation_finalized`
+    — foram de fato implementados nos T1–T11, então deixaram de ser falsos.)*
+  - **Spec de implementação fechada (2026-06-19):** `docs/product/arc6-phase2-deploy-observability-spec.md`.
+    Decisões: **entra como NOVA LENTE `deploy` no board de Agentes** (`/reports/agents/compare?lens=deploy`),
+    NÃO tela/aba nova (consolidação 2026-06-16 — toda comparação no bench; views Trend/Comparison da Quality
+    são deletadas no cleanup); deploy timeline via REST do agent-registry (sem tabela/consumer); qualidade =
+    `evaluation_finalized`/Oficial; comparação de versão via **epochs como buckets + N/significância** (sem
+    endpoint A/B). Chunks: **P2-A** REST deploys (helper) · **P2-B** lente `deploy` em `query_agents_compare`
+    · **P2-C** front (LENSES+CompareChart) + cleanup. Backlog (fora): período-A/B arbitrário, overlay
+    multi-métrica/agent_event, C3, NPS, export.
 - **Nits do bench (diferido)**:
   - **Quality score geral diluído** — KPI "Quality score 0.00 (N evals)" do drill-down e a curva da lente quality
     saem baixos/zero, enquanto as **dimensões** (radar) estão corretas. Causa provável: o agregado geral

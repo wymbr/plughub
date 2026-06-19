@@ -1,7 +1,29 @@
 # Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
-> **Status: implementado.** As quatro fases (A–D) descritas neste documento estão concluídas: tabela `analytics.deploy_events`, os três endpoints (`deploy-timeline`, `quality-comparison`, `quality-timeseries`) e os componentes de UI (gráfico Índice × Tempo, card de comparação, painel de grupos). O texto abaixo descreve o estado atual da plataforma — o que está escrito em tempo futuro ("serão criados") refere-se ao estado já entregue.
+> Última atualização: 2026-06-19 (T16 — correção de verdade) · Estado: **PROPOSTA / NÃO IMPLEMENTADO**
+>
+> ⚠️ **CORREÇÃO (T16, 2026-06-19): este arco NÃO está implementado.** A versão anterior deste doc
+> afirmava "Status: implementado ✅" para as quatro fases (A–D), mas a auditoria do T16 confirmou que
+> **nada disso existe no código**:
+> - **Backend ausente**: não há tabela `analytics.deploy_events`, nem consumer de `registry.changed`
+>   `event_type=skill_deployed` no analytics-api, nem os endpoints `GET /reports/deploy-timeline`,
+>   `/quality-comparison`, `/quality-timeseries` (grep zero em `packages/analytics-api`).
+> - **UI órfã**: `AnaliseQualidadePage` tem `TimeseriesView`/`ComparisonView`/`MetricSelector` que
+>   chamam `/reports/quality-timeseries` e `/reports/quality-comparison`, mas as abas estão
+>   **desativadas** (`TAB_IDS = ['summary']`) — código morto apontando para endpoints inexistentes.
+>
+> O texto abaixo descreve o **alvo de design** (proposta), não o estado atual. Os "✅" nas seções de
+> fase são **aspiracionais** e foram mantidos apenas como especificação do que construir. Ver
+> `TODO.md` § "Arc 6 Fase 2 — Observabilidade por Deploy (NÃO implementado)". Descoberto no T8-D,
+> reconfirmado no T16. Nota: o T11 (relatório Oficial×Operacional) entregou a base de qualidade
+> finalizada (`evaluation_finalized`) de forma independente desta Fase 2.
+>
+> 📌 **Spec de implementação fechada (2026-06-19):** `docs/product/arc6-phase2-deploy-observability-spec.md`
+> — aterrada no que existe hoje (pós-T11). Decisão de arquitetura: **a Fase 2 entra como uma NOVA LENTE
+> `deploy` no board de Agentes** (`/reports/agents/compare?lens=deploy`), NÃO como página/abas separadas
+> (consolidação 2026-06-16 — toda comparação no bench). Os mockups de UI deste doc (gráfico Índice×Tempo,
+> card de comparação, painel de grupos) são **a visão**; a entrega real reusa o board e suas lentes.
+> Use a spec como fonte de implementação; este doc é a visão.
 
 Extensão da plataforma de avaliação para suportar **comparação estruturada de qualidade ao longo do tempo**, usando eventos de deploy como âncoras temporais objetivas. O objetivo é transformar o módulo de avaliação de "relatório de conformidade" em "ferramenta de melhoria contínua".
 
@@ -265,9 +287,12 @@ O frontend usa `deploy_markers` para desenhar linhas verticais sobre a série te
 
 ---
 
-## Fases de Implementação — todas concluídas
+## Fases de Implementação — PLANO (nenhuma implementada)
 
-### Fase A — Infraestrutura de Deploy Events ✅
+> Os "✅" abaixo são **aspiracionais** (plano de implementação), **não** estado entregue — ver o
+> banner de correção no topo (T16). Nenhuma das fases A–D existe no código hoje.
+
+### Fase A — Infraestrutura de Deploy Events *(não implementado)*
 
 **Backend:**
 1. `analytics-api`: consumer `registry.changed` com `event_type: "skill_deployed"` → `INSERT INTO analytics.deploy_events`.
@@ -278,7 +303,7 @@ Fase A foi infraestrutura pura, sem mudança de UI.
 
 ---
 
-### Fase B — Quality Comparison Endpoint + Card de Comparação (C2) ✅
+### Fase B — Quality Comparison Endpoint + Card de Comparação (C2) *(não implementado)*
 
 **Backend:**
 1. `GET /reports/quality-comparison` (dual-slice) no analytics-api — ClickHouse queries com parâmetros de slice.
@@ -291,7 +316,7 @@ Fase A foi infraestrutura pura, sem mudança de UI.
 
 ---
 
-### Fase C — Index × Time com Deploy Markers (C1) ✅
+### Fase C — Index × Time com Deploy Markers (C1) *(não implementado — UI órfã desativada)*
 
 **Backend:**
 1. `GET /reports/quality-timeseries` com `deploy_markers[]`.
@@ -304,7 +329,7 @@ Fase A foi infraestrutura pura, sem mudança de UI.
 
 ---
 
-### Fase D — Painel de Grupos de Comparação (C3) ✅
+### Fase D — Painel de Grupos de Comparação (C3) *(não implementado)*
 
 **Frontend:**
 1. Rota dedicada de comparação em Analytics.
