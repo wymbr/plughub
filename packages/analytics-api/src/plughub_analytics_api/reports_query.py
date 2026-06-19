@@ -1758,7 +1758,8 @@ def _fetch_quality(
     else:
         source = fin_src
 
-    group_col = "date" if group_by == "date" else group_by
+    # date → toString p/ JSON-serializável (Date do ClickHouse não serializa direto → 500)
+    group_col = "toString(date)" if group_by == "date" else group_by
     result = client.query(f"""
         SELECT
             {group_col}                              AS group_key,

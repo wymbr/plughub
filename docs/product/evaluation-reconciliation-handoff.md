@@ -169,8 +169,16 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
 > legado + **read agrupado** `get_instance_threads_grouped` que o endpoint `/threads` nunca tinha).
 > Testes: `test_available_actions.py` (pytest 22), `test_t10c_visibility_scope.sh`,
 > `test_t10d_arc13_tenant_fallback.sh`, `test_t10d2_threads_grouped.sh`. Diferido: escopo por
-> `supervised_agent_types` (AI por tipo) — result sem `agent_type_id`. **PRÓXIMO: T11** (relatórios
-> Oficial×Operacional), depois T16 (docs, incl. gap Arc 6 Fase 2).
+> `supervised_agent_types` (AI por tipo) — result sem `agent_type_id`.
+
+> **T11 (Relatórios Oficial × Operacional) — CONCLUÍDO 2026-06-19.** A+B (analytics): o invariante
+> `evaluation_finalized` (antes descartado pelo consumer) agora é capturado em tabela ClickHouse
+> dedicada (`evaluation_finalized`, keyed por instance_id; `emit` += result_id); `GET
+> /reports/evaluations/quality` com `mode=oficial` (só finalized) × `operacional` (+ provisório
+> rotulado), fatiável por finalize_reason/segment_id/form_version. C (UI): `AnaliseQualidadePage`
+> (`/analise/quality`) vira o relatório Oficial×Operacional (toggle/banner/KPIs/chips/group_by/CSV),
+> substituindo a fonte legada. Testes `test_t11_quality_report.sh`. **PRÓXIMO: T16** (corrigir docs,
+> incl. o gap Arc 6 Fase 2 ausente), ou pendências e2e-blocked.
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

@@ -2,6 +2,25 @@
 
 ---
 
+## T11-C — UI do relatório de qualidade Oficial × Operacional (2026-06-19)
+
+Fecha o T11. **Só platform-ui.** Validado no browser. O relatório de qualidade discoverable
+(`/analise/quality` → aba Resumo / `AnaliseQualidadePage.SummaryView`) passa a ser o relatório
+Oficial × Operacional, substituindo a fonte legada (`/reports/evaluations/summary`, modelo
+`eval_status` pré-T3).
+
+- `SummaryView` reescrito p/ consumir `GET /reports/evaluations/quality` (hook `useQualityReport`):
+  toggle **Oficial** (default; só finalizadas — invariante) × **Operacional** (inclui provisório,
+  rotulado), com banner; `group_by` campanha/motivo/segmento/versão/tipo de agente/data; KPIs
+  Finalizadas (+ Provisórias no Operacional) + nota média; chips de `finalize_reason`; tabela com
+  distribuição (alta/média/baixa) + colunas Finalizadas/Provisórias no Operacional; CSV.
+- `useQualityReport` hook + i18n (`contacts` namespace: `quality.modes/modeBanner/finalizeReasons/
+  kpi.finalized|provisional/table.total/groupByOptions.*`, en + pt-BR). Fix `group_by=date` (cast
+  `toString(date)` no SQL — `Date` do ClickHouse não serializava em JSON → 500). A aba órfã que
+  havia sido posta em `/evaluation/reports` (fora do nav) foi removida. **T11 COMPLETO** (A+B+C).
+
+---
+
 ## T11-A+B — Relatório de qualidade Oficial × Operacional (§17.3) (2026-06-19)
 
 Backend dos relatórios de qualidade em dois modos nunca blendados. **evaluation-api + analytics-api.**

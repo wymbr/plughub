@@ -18,6 +18,7 @@ import {
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts'
 import { useAuth } from '@/auth/useAuth'
+import { useQualityReport } from '@/api/evaluation-hooks'
 import Spinner from '@/components/ui/Spinner'
 import {
   MetricDef,
@@ -87,115 +88,77 @@ const TAB_IDS: Tab[] = ['summary']
 // TAB: RESUMO
 // ═══════════════════════════════════════════════════════════════════════════════
 
-interface SummaryRow {
-  group_key:             string
-  total_evaluated:       number
-  count_submitted:       number
-  count_approved:        number
-  count_rejected:        number
-  count_contested:       number
-  count_locked:          number
-  avg_score:             number
-  min_score:             number
-  max_score:             number
-  score_excellent:       number
-  score_good:            number
-  score_fair:            number
-  score_poor:            number
-  with_compliance_flags: number
-}
+type QGroupBy = 'campaign_id' | 'finalize_reason' | 'segment_id' | 'form_version' | 'evaluated_agent_type' | 'date'
+const Q_GROUP_BY_VALUES: QGroupBy[] = ['campaign_id', 'finalize_reason', 'segment_id', 'form_version', 'evaluated_agent_type', 'date']
 
-type GroupBy = 'campaign_id' | 'form_id' | 'evaluator_id' | 'date'
-
-const GROUP_BY_VALUES: GroupBy[] = ['campaign_id', 'form_id', 'evaluator_id', 'date']
-
-function ScoreBar({ row }: { row: SummaryRow }) {
-  const { t } = useTranslation('contacts')
-  const total = row.total_evaluated || 1
-  const segments = [
-    { count: row.score_excellent, color: '#059669', label: t('quality.scoreLabels.excellent') },
-    { count: row.score_good,      color: '#2D9CDB', label: t('quality.scoreLabels.good') },
-    { count: row.score_fair,      color: '#D97706', label: t('quality.scoreLabels.fair') },
-    { count: row.score_poor,      color: '#DC2626', label: t('quality.scoreLabels.poor') },
-  ]
+function QDistBar({ high, mid, low }: { high: number; mid: number; low: number }) {
+  const total = high + mid + low || 1
   return (
-    <div className="flex h-4 rounded overflow-hidden w-24 gap-px" title={
-      segments.map(s => `${s.label}: ${s.count}`).join(' · ')
-    }>
-      {segments.map(s => (
-        s.count > 0
-          ? <div key={s.label}
-              style={{ width: `${(s.count / total) * 100}%`, background: s.color }} />
-          : null
-      ))}
+    <div className="flex h-4 rounded overflow-hidden w-24 gap-px" title={`Alta:${high} · Média:${mid} · Baixa:${low}`}>
+      {high > 0 && <div style={{ width: `${(high / total) * 100}%`, background: '#059669' }} />}
+      {mid > 0  && <div style={{ width: `${(mid / total) * 100}%`, background: '#D97706' }} />}
+      {low > 0  && <div style={{ width: `${(low / total) * 100}%`, background: '#DC2626' }} />}
     </div>
   )
 }
 
+/**
+ * SummaryView — T11: relatório de qualidade Oficial × Operacional (§17.3).
+ * Oficial (default) = só finalizadas (invariante); Operacional = inclui provisório, rotulado.
+ * Fonte: GET /reports/evaluations/quality (via useQualityReport).
+ */
 function SummaryView({ tenantId }: { tenantId: string }) {
   const { t } = useTranslation('contacts')
+  const [mode,    setMode]    = useState<'oficial' | 'operacional'>('oficial')
   const [fromDt,  setFromDt]  = useState(iso7DaysAgo)
   const [toDt,    setToDt]    = useState(isoToday)
-  const [groupBy, setGroupBy] = useState<GroupBy>('campaign_id')
-  const [data,    setData]    = useState<SummaryRow[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<keyof SummaryRow>('total_evaluated')
-  const [sortAsc, setSortAsc] = useState(false)
+  const [groupBy, setGroupBy] = useState<QGroupBy>('campaign_id')
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null)
-    try {
-      const qs = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, group_by: groupBy })
-      const res  = await fetch(`/reports/evaluations/summary?${qs}`)
-      const body = await res.json()
-      if (body.error) throw new Error(body.error)
-      setData(body.data ?? [])
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); setData([]) }
-    finally { setLoading(false) }
-  }, [tenantId, fromDt, toDt, groupBy])
+  const { rows, finalize_reasons, meta, loading, error } = useQualityReport(
+    tenantId, { mode, group_by: groupBy, from_dt: fromDt, to_dt: toDt }, 0,
+  )
 
-  useEffect(() => { load() }, [load])
-
-  const totalEvaluated  = data.reduce((s, r) => s + r.total_evaluated, 0)
-  const totalContested  = data.reduce((s, r) => s + r.count_contested, 0)
-  const weightedScore   = data.reduce((s, r) => s + (r.avg_score ?? 0) * r.total_evaluated, 0)
-  const avgScore        = totalEvaluated > 0 ? weightedScore / totalEvaluated : null
-
-  function handleSort(k: keyof SummaryRow) {
-    if (k === sortKey) setSortAsc(a => !a); else { setSortKey(k); setSortAsc(false) }
-  }
-  const sorted = [...data].sort((a, b) => {
-    const va = a[sortKey], vb = b[sortKey]
-    const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
-    return sortAsc ? cmp : -cmp
-  })
+  const totalN        = rows.reduce((s, r) => s + r.n, 0)
+  const weightedScore = rows.reduce((s, r) => s + (r.avg_score ?? 0) * r.n, 0)
+  const avgScore      = totalN > 0 ? weightedScore / totalN : null
+  const reasonEntries = Object.entries(finalize_reasons || {}).sort((a, b) => b[1] - a[1])
+  const sorted        = [...rows].sort((a, b) => b.n - a.n)
 
   function exportCsv() {
-    const cols: (keyof SummaryRow)[] = ['group_key','total_evaluated','avg_score','min_score','max_score','score_excellent','score_good','score_fair','score_poor','count_contested','count_approved','count_rejected','count_locked','with_compliance_flags']
+    const cols = ['group_key', 'n', 'finalized_n', 'provisional_n', 'avg_score', 'score_high', 'score_mid', 'score_low'] as const
     const header = cols.join(',')
-    const rows   = data.map(r => cols.map(c => r[c]).join(',')).join('\n')
-    const blob   = new Blob([header + '\n' + rows], { type: 'text/csv' })
+    const body   = rows.map(r => cols.map(c => (r as unknown as Record<string, unknown>)[c]).join(',')).join('\n')
+    const blob   = new Blob([header + '\n' + body], { type: 'text/csv' })
     const url    = URL.createObjectURL(blob)
     const a      = document.createElement('a')
-    a.href = url; a.download = `qualidade_${fromDt}_${toDt}.csv`; a.click()
+    a.href = url; a.download = `qualidade_${mode}_${fromDt}_${toDt}.csv`; a.click()
     URL.revokeObjectURL(url)
   }
 
-  function Th({ label, k, align = 'left' }: { label: string; k: keyof SummaryRow; align?: string }) {
-    const active = sortKey === k
-    return (
-      <th onClick={() => handleSort(k)}
-        className={`px-3 py-2.5 font-medium text-${align} cursor-pointer select-none whitespace-nowrap hover:text-dark transition-colors ${active ? 'text-primary' : 'text-muted'}`}>
-        {label}{active ? (sortAsc ? ' ↑' : ' ↓') : ''}
-      </th>
-    )
-  }
+  const groupLabel = (g: string) =>
+    t(`quality.groupByOptions.${g}`, { defaultValue: ({
+      campaign_id: 'Campanha', finalize_reason: 'Motivo de finalização', segment_id: 'Segmento',
+      form_version: 'Versão do form', evaluated_agent_type: 'Tipo de agente', date: 'Data',
+    } as Record<string, string>)[g] ?? g })
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Filter bar */}
       <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-3 flex-shrink-0 flex-wrap">
+        {/* Mode toggle — Oficial × Operacional (nunca blendados, §17.3) */}
+        <div className="flex items-center gap-1">
+          {([
+            { v: 'oficial',     l: t('quality.modes.oficial',     { defaultValue: 'Oficial' }) },
+            { v: 'operacional', l: t('quality.modes.operacional', { defaultValue: 'Operacional' }) },
+          ] as const).map(o => (
+            <button key={o.v} onClick={() => setMode(o.v)}
+              className={`text-xs px-3 py-1 rounded border font-medium transition-colors ${
+                mode === o.v ? 'bg-primary text-white border-primary'
+                             : 'bg-white text-muted border-border-strong hover:bg-surface-muted'}`}>
+              {o.l}
+            </button>
+          ))}
+        </div>
         <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.from')}</label>
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)}
             className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
@@ -205,25 +168,50 @@ function SummaryView({ tenantId }: { tenantId: string }) {
             className="text-xs border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40" />
         </div>
         <div className="flex items-center gap-1.5"><label className="text-xs text-muted">{t('quality.groupBy')}</label>
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value as GroupBy)}
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value as QGroupBy)}
             className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40">
-            {GROUP_BY_VALUES.map(v => <option key={v} value={v}>{t(`quality.groupByOptions.${v}`)}</option>)}
+            {Q_GROUP_BY_VALUES.map(v => <option key={v} value={v}>{groupLabel(v)}</option>)}
           </select>
         </div>
         <div className="flex-1" />
-        {loading ? <Spinner /> : <button onClick={load} className="text-xs text-muted-light hover:text-muted px-2 py-1">↻</button>}
-        <button onClick={exportCsv} disabled={data.length === 0}
+        {loading && <Spinner />}
+        <button onClick={exportCsv} disabled={rows.length === 0}
           className="text-xs border border-border rounded px-2.5 py-1 text-muted hover:bg-surface-muted disabled:opacity-40">↓ CSV</button>
       </div>
+
+      {/* Mode banner */}
+      <div className={`mx-5 mt-3 text-xs rounded px-3 py-2 border ${mode === 'oficial'
+        ? 'bg-green-light text-green-text border-green/30'
+        : 'bg-warning/10 text-warning-text border-warning/30'}`}>
+        {mode === 'oficial'
+          ? t('quality.modeBanner.oficial', { defaultValue: '✓ Oficial — somente avaliações finalizadas (invariante de qualidade).' })
+          : t('quality.modeBanner.operacional', { defaultValue: '◷ Operacional — inclui avaliações em andamento (provisório), rotuladas. Não é a nota oficial.' })}
+      </div>
+
       {/* KPI strip */}
       <div className="flex gap-3 px-5 py-3 flex-shrink-0 flex-wrap">
-        <KpiCard label={t('quality.kpi.evaluations')} value={totalEvaluated.toLocaleString()} />
+        <KpiCard label={t('quality.kpi.finalized', { defaultValue: 'Finalizadas' })} value={String(meta.total_finalized)} />
+        {mode === 'operacional' && (
+          <KpiCard label={t('quality.kpi.provisional', { defaultValue: 'Provisórias' })} value={String(meta.total_provisional)} />
+        )}
         <KpiCard label={t('quality.kpi.avgScore')} value={avgScore !== null ? pct(avgScore) : '—'}
           sub={avgScore !== null ? (avgScore >= 0.9 ? t('quality.scoreLabels.excellent') : avgScore >= 0.7 ? t('quality.scoreLabels.good') : avgScore >= 0.5 ? t('quality.scoreLabels.fair') : t('quality.scoreLabels.poor')) : undefined} />
-        <KpiCard label={t('quality.kpi.contestations')} value={pct(totalEvaluated > 0 ? totalContested / totalEvaluated : null)}
-          sub={`${totalContested} / ${totalEvaluated}`} />
       </div>
+
+      {/* Finalize-reason chips */}
+      {reasonEntries.length > 0 && (
+        <div className="px-5 pb-2 flex items-center gap-2 flex-wrap flex-shrink-0">
+          <span className="text-xs text-muted-light">{t('quality.finalizeReasons', { defaultValue: 'Motivos de finalização' })}:</span>
+          {reasonEntries.map(([reason, n]) => (
+            <span key={reason} className="text-xs bg-surface-muted text-muted rounded px-2 py-0.5 border border-border">
+              {reason}: <strong className="text-dark">{n}</strong>
+            </span>
+          ))}
+        </div>
+      )}
+
       {error && <div className="mx-5 mb-2 px-3 py-2 bg-red-light border border-red/30 rounded text-xs text-red-text flex-shrink-0">{error}</div>}
+
       {/* Table */}
       <div className="flex-1 overflow-auto px-5 pb-5">
         {sorted.length === 0 && !loading ? (
@@ -234,33 +222,31 @@ function SummaryView({ tenantId }: { tenantId: string }) {
           <table className="w-full text-xs bg-white border border-border rounded-lg overflow-hidden border-separate border-spacing-0">
             <thead className="sticky top-0 z-10 bg-surface-muted border-b border-border">
               <tr>
-                <Th label={t(`quality.groupByOptions.${groupBy}`)} k="group_key" />
-                <Th label={t('quality.table.evaluations')} k="total_evaluated" align="right" />
-                <Th label={t('quality.table.avgScore')} k="avg_score" align="right" />
-                <Th label={t('quality.table.minMax')} k="min_score" align="right" />
+                <th className="px-3 py-2.5 text-left text-muted font-medium">{groupLabel(groupBy)}</th>
+                <th className="px-3 py-2.5 text-right text-muted font-medium">{t('quality.table.total', { defaultValue: 'Total' })}</th>
+                {mode === 'operacional' && (
+                  <>
+                    <th className="px-3 py-2.5 text-right text-muted font-medium">{t('quality.kpi.finalized', { defaultValue: 'Finalizadas' })}</th>
+                    <th className="px-3 py-2.5 text-right text-muted font-medium">{t('quality.kpi.provisional', { defaultValue: 'Provisórias' })}</th>
+                  </>
+                )}
+                <th className="px-3 py-2.5 text-right text-muted font-medium">{t('quality.table.avgScore')}</th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium">{t('quality.table.distribution')}</th>
-                <Th label={t('quality.table.contested')} k="count_contested" align="right" />
-                <Th label={t('quality.table.approved')} k="count_approved" align="right" />
-                <Th label={t('quality.table.rejected')} k="count_rejected" align="right" />
-                <Th label={t('quality.table.withFlags')} k="with_compliance_flags" align="right" />
               </tr>
             </thead>
             <tbody>
               {sorted.map((row, i) => (
                 <tr key={i} className="border-t border-border hover:bg-surface-muted">
                   <td className="px-3 py-2.5 font-mono text-dark max-w-[200px] truncate" title={row.group_key}>{row.group_key || '—'}</td>
-                  <td className="px-3 py-2.5 text-right font-medium">{row.total_evaluated.toLocaleString('pt-BR')}</td>
+                  <td className="px-3 py-2.5 text-right font-medium">{row.n.toLocaleString('pt-BR')}</td>
+                  {mode === 'operacional' && (
+                    <>
+                      <td className="px-3 py-2.5 text-right text-green-text">{row.finalized_n}</td>
+                      <td className="px-3 py-2.5 text-right text-warning-text">{row.provisional_n}</td>
+                    </>
+                  )}
                   <td className="px-3 py-2.5 text-right font-bold" style={{ color: scoreColor(row.avg_score) }}>{pct(row.avg_score)}</td>
-                  <td className="px-3 py-2.5 text-right text-muted">{pct(row.min_score)} / {pct(row.max_score)}</td>
-                  <td className="px-3 py-2.5"><ScoreBar row={row} /></td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className={row.count_contested > 0 ? 'text-warning font-medium' : 'text-muted-light'}>{row.count_contested}</span>
-                  </td>
-                  <td className="px-3 py-2.5 text-right text-muted">{row.count_approved}</td>
-                  <td className="px-3 py-2.5 text-right text-muted">{row.count_rejected}</td>
-                  <td className="px-3 py-2.5 text-right">
-                    <span className={row.with_compliance_flags > 0 ? 'text-red font-medium' : 'text-border-strong'}>{row.with_compliance_flags}</span>
-                  </td>
+                  <td className="px-3 py-2.5"><QDistBar high={row.score_high} mid={row.score_mid} low={row.score_low} /></td>
                 </tr>
               ))}
             </tbody>

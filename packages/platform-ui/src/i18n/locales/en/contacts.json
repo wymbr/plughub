@@ -471,11 +471,24 @@
     },
     "groupBy": "Group by",
     "groupByOptions": {
-      "campaign_id":  "Campaign",
-      "form_id":      "Form",
-      "evaluator_id": "Evaluator",
-      "date":         "Date"
+      "campaign_id":          "Campaign",
+      "form_id":              "Form",
+      "evaluator_id":         "Evaluator",
+      "finalize_reason":      "Finalize reason",
+      "segment_id":           "Segment",
+      "form_version":         "Form version",
+      "evaluated_agent_type": "Agent type",
+      "date":                 "Date"
     },
+    "modes": {
+      "oficial":     "Official",
+      "operacional": "Operational"
+    },
+    "modeBanner": {
+      "oficial":     "✓ Official — finalized evaluations only (the quality invariant).",
+      "operacional": "◷ Operational — includes in-progress (provisional) evaluations, labeled. Not the official score."
+    },
+    "finalizeReasons": "Finalize reasons",
     "scoreLabels": {
       "excellent": "Excellent",
       "good":      "Good",
@@ -485,7 +498,9 @@
     "kpi": {
       "evaluations":   "Evaluations",
       "avgScore":      "Avg. Score",
-      "contestations": "Contestations"
+      "contestations": "Contestations",
+      "finalized":     "Finalized",
+      "provisional":   "Provisional"
     },
     "table": {
       "evaluations": "Evaluations",
@@ -495,7 +510,8 @@
       "contested":   "Contested",
       "approved":    "Approved",
       "rejected":    "Rejected",
-      "withFlags":   "With Flags"
+      "withFlags":   "With Flags",
+      "total":       "Total"
     },
     "noData": "No evaluations in period",
     "timeseries": {

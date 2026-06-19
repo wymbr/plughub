@@ -1017,6 +1017,71 @@ export function useEvaluationsSummary(
   return { rows, group_by: groupBy, meta, loading, error }
 }
 
+// ── T11 — Quality report Oficial × Operacional (/reports/evaluations/quality) ──
+
+export interface QualityRow {
+  group_key:     string
+  n:             number
+  finalized_n:   number
+  provisional_n: number
+  avg_score:     number
+  score_high:    number
+  score_mid:     number
+  score_low:     number
+}
+
+export interface QualityReportResult {
+  rows:             QualityRow[]
+  mode:             string
+  group_by:         string
+  finalize_reasons: Record<string, number>
+  meta:             { total: number; total_finalized: number; total_provisional: number; from_dt: string; to_dt: string }
+  loading:          boolean
+  error:            string | null
+}
+
+export function useQualityReport(
+  tenantId: string,
+  params: { mode?: 'oficial' | 'operacional'; group_by?: string; campaign_id?: string;
+            finalize_reason?: string; from_dt?: string; to_dt?: string } = {},
+  pollMs = 0,
+): QualityReportResult {
+  const [rows, setRows] = useState<QualityRow[]>([])
+  const [mode, setMode] = useState<string>('oficial')
+  const [groupBy, setGroupBy] = useState<string>('campaign_id')
+  const [reasons, setReasons] = useState<Record<string, number>>({})
+  const [meta, setMeta] = useState({ total: 0, total_finalized: 0, total_provisional: 0, from_dt: '', to_dt: '' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetch_ = () => {
+    const q = new URLSearchParams({
+      tenant_id: tenantId,
+      mode:      params.mode ?? 'oficial',
+      group_by:  params.group_by ?? 'campaign_id',
+    })
+    if (params.campaign_id)     q.set('campaign_id',     params.campaign_id)
+    if (params.finalize_reason) q.set('finalize_reason', params.finalize_reason)
+    if (params.from_dt)         q.set('from_dt',         params.from_dt)
+    if (params.to_dt)           q.set('to_dt',           params.to_dt)
+    setLoading(true)
+    fetch(`${ANALYTICS_BASE}/evaluations/quality?${q}`)
+      .then(r => r.json())
+      .then(d => {
+        setRows(d.data ?? []); setMode(d.mode ?? 'oficial'); setGroupBy(d.group_by ?? 'campaign_id')
+        setReasons(d.finalize_reasons ?? {}); setMeta(d.meta ?? meta); setError(d.error ? String(d.error) : null)
+      })
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false))
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  React.useEffect(() => { fetch_(); if (pollMs > 0) { const t = setInterval(fetch_, pollMs); return () => clearInterval(t) } },
+    [tenantId, params.mode, params.group_by, params.campaign_id, params.finalize_reason, params.from_dt, params.to_dt, pollMs])
+
+  return { rows, mode, group_by: groupBy, finalize_reasons: reasons, meta, loading, error }
+}
+
 // ── Calibration Dashboard (Arc 13 Fase G) ─────────────────────────────────────
 
 export interface CalibrationPoint {

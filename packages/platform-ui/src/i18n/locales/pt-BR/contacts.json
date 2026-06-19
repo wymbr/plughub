@@ -471,11 +471,24 @@
     },
     "groupBy": "Agrupar por",
     "groupByOptions": {
-      "campaign_id":  "Campanha",
-      "form_id":      "Formulário",
-      "evaluator_id": "Avaliador",
-      "date":         "Data"
+      "campaign_id":          "Campanha",
+      "form_id":              "Formulário",
+      "evaluator_id":         "Avaliador",
+      "finalize_reason":      "Motivo de finalização",
+      "segment_id":           "Segmento",
+      "form_version":         "Versão do formulário",
+      "evaluated_agent_type": "Tipo de agente",
+      "date":                 "Data"
     },
+    "modes": {
+      "oficial":     "Oficial",
+      "operacional": "Operacional"
+    },
+    "modeBanner": {
+      "oficial":     "✓ Oficial — somente avaliações finalizadas (invariante de qualidade).",
+      "operacional": "◷ Operacional — inclui avaliações em andamento (provisório), rotuladas. Não é a nota oficial."
+    },
+    "finalizeReasons": "Motivos de finalização",
     "scoreLabels": {
       "excellent": "Excelente",
       "good":      "Bom",
@@ -485,7 +498,9 @@
     "kpi": {
       "evaluations":   "Avaliações",
       "avgScore":      "Nota Média",
-      "contestations": "Contestações"
+      "contestations": "Contestações",
+      "finalized":     "Finalizadas",
+      "provisional":   "Provisórias"
     },
     "table": {
       "evaluations": "Avaliações",
@@ -495,7 +510,8 @@
       "contested":   "Contestadas",
       "approved":    "Aprovadas",
       "rejected":    "Rejeitadas",
-      "withFlags":   "c/ Flags"
+      "withFlags":   "c/ Flags",
+      "total":       "Total"
     },
     "noData": "Nenhuma avaliação no período",
     "timeseries": {

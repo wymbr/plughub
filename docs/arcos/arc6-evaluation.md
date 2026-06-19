@@ -477,7 +477,12 @@ Dois modos **nunca blendados** sobre o invariante de qualidade:
   (default; só `evaluation_finalized` — o invariante) × `mode=operacional` (finalized ∪ provisório de
   `evaluation_results` ainda não finalizados, rotulado). Fatiável por `finalize_reason`/`segment_id`/
   `form_version`/`campaign_id` + `group_by`; distribuição por `finalize_reason` (qualidade do ciclo).
-  Test `infra/test/test_t11_quality_report.sh`. UI (toggle na ReportsPage) = T11-C, pendente.
+  Test `infra/test/test_t11_quality_report.sh`.
+- **UI (C)** — `AnaliseQualidadePage.SummaryView` (`/analise/quality`, a tela discoverable) reescrito
+  como o relatório Oficial × Operacional (toggle, banner, KPIs Finalizadas/Provisórias, chips de
+  `finalize_reason`, `group_by`, distribuição, CSV), consumindo `/reports/evaluations/quality` via
+  `useQualityReport`. Substitui a fonte legada `/reports/evaluations/summary` (modelo `eval_status`
+  pré-T3). **T11 completo.**
 
 ## Novos pacotes
 
