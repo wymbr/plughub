@@ -280,6 +280,33 @@ describe("evaluation_submit", () => {
     expect((event.criterion_responses as unknown[]).length).toBe(2)
   })
 
+  it("preserves form-driven justification + evidence.stream_entry_id (T9-C.fix)", async () => {
+    const { callTool } = makeServer()
+    await callTool("evaluation_submit", {
+      ...baseInput,
+      criterion_responses: [
+        {
+          criterion_id:  "crit_greeting",
+          na:            false,
+          score:         8.0,
+          // saída form-driven: `justification` (não `notes`) + evidência por stream_entry_id
+          justification: "A saudação seguiu o protocolo e o agente se identificou no início.",
+          evidence:      [{ stream_entry_id: "mfix1", excerpt: "bom dia, joao", relevance_note: "abertura cordial" }],
+        },
+      ],
+    })
+
+    const [, event] = mockKafka.publish.mock.calls[0] as [string, Record<string, unknown>]
+    const crs = event.criterion_responses as Array<Record<string, unknown>>
+    expect(crs).toHaveLength(1)
+    // justification NÃO pode ser descartado pelo Zod (era o bug)
+    expect(crs[0]?.justification).toBe("A saudação seguiu o protocolo e o agente se identificou no início.")
+    // evidência com stream_entry_id deve sobreviver (alinha a evidência clicável do nível 3)
+    const ev = crs[0]?.evidence as Array<Record<string, unknown>>
+    expect(ev?.[0]?.stream_entry_id).toBe("mfix1")
+    expect(ev?.[0]?.relevance_note).toBe("abertura cordial")
+  })
+
   it("includes knowledge_snippets in published event (Arc 6)", async () => {
     const { callTool } = makeServer()
     const result = await callTool("evaluation_submit", {

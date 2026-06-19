@@ -2,6 +2,49 @@
 
 ---
 
+## T9-C.fix2 — alinhamento do schema do evaluation_submit (caminho do avaliador real) (2026-06-19)
+
+Fecha a ponta que o T9-C.fix deixou aberta: o caminho do **avaliador IA real** perdia a
+justificativa por critério no boundary do `evaluation_submit` (mcp-server), antes de chegar ao
+ingest. **Só mcp-server-plughub (TS).** Validado por unit test (vitest).
+
+- **Causa**: a saída form-driven do LLM (`buildEvaluationOutputSchema`) emite por critério
+  `justification` + `evidence[]{stream_entry_id, excerpt, relevance_note}`. Mas o
+  `EvaluationCriterionResponseInputSchema` tinha campo `notes` (não `justification`) e
+  `EvidenceRefInputSchema` exigia o shape legado `{event_id, turn_index}` → o Zod **descartava**
+  `justification` e **rejeitava/perdia** a evidência form-driven antes do publish.
+- **Fix** (`tools/evaluation.ts`): `EvaluationCriterionResponseInputSchema += justification` (opcional);
+  `EvidenceRefInputSchema` passa a aceitar `stream_entry_id`/`excerpt`/`relevance_note` (form-driven)
+  mantendo `event_id`/`turn_index`/`quote`/`category` opcionais (compat). O handler já encaminha
+  `criterion_responses` como veio do Zod; o ingest (T9-C.fix) faz `notes||justification` e
+  `evidence||evidence_entries`. Cadeia real fechada: LLM → evaluation_submit → evento → ingest → UI.
+- Test `src/__tests__/evaluation.test.ts` (novo caso): `justification` e `evidence.stream_entry_id`
+  sobrevivem ao parse e ao evento publicado (16/16 passam). **Rebuild**: mcp-server-plughub.
+
+---
+
+## T9-C.fix — ingest persiste justificativa + evidência por critério (2026-06-19)
+
+Fecha um gap de mapeamento (anterior ao T9-C) que deixava o nível 3 **sem** a justificativa por
+critério e **sem** chips de evidência clicáveis. **Só evaluation-api.** Validado no browser.
+
+- **Causa**: `create_criterion_responses` gravava só `r.get("notes")`/`r.get("evidence")`, mas a saída
+  form-driven do avaliador (`evaluation.ts buildEvaluationOutputSchema`) emite a fundamentação como
+  **`justification`** e a evidência às vezes como **`evidence_entries`**. A justificativa sumia (campo
+  errado) e os chips ficavam vazios → `CriterionDetail` (T9-B) e o clique-evidência (T9-C3) não tinham
+  dado para mostrar.
+- **Fix** (`db.create_criterion_responses`): `notes ← notes || justification` e
+  `evidence ← evidence || evidence_entries`. `_parse_jsonb` já devolve `evidence` como array → a UI
+  recebe `{stream_entry_id, excerpt, relevance_note}` e renderiza/torna clicável.
+- Test `infra/test/test_t9cfix_criterion_evidence.sh` (ingest direto com `justification` + `evidence`
+  em c1 e `evidence_entries` em c2; valida persistência e `stream_entry_id`; imprime URL do nível 3).
+- **Pendência registrada (caminho do avaliador REAL, e2e-blocked)**: o `EvaluationCriterionResponseInputSchema`
+  do mcp-server (`evaluation_submit`) tem campo `notes`, divergente do `justification` do schema de
+  saída → o Zod pode descartar `justification` antes do ingest. Alinhar TS (aceitar `justification`) faz
+  parte da dívida "form-driven prompt revision" (ver `TODO.md`/handoff). Este fix cobre seeder + ingest direto.
+
+---
+
 ## T9-C3 — platform-ui: rota dedicada do nível 3 + transcript com evidência (2026-06-19)
 
 Fecha o T9-C (blueprint §C, D1). **Só platform-ui.** Validado no browser (sessão real

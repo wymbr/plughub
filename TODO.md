@@ -956,6 +956,14 @@ pool hooks genéricos (sem campo dedicado).
   `score`/`evidence`; LLM emite `score`/`observation`/objetos. Alvo: contrato ÚNICO (YAML `output_schema` ≡ submit
   Zod), schema aninhado transmitido ao LLM, prompt parametrizado pela form → **remove os shims de compat** do
   `evaluation_submit`. Nit relacionado: `criterion.justification` é stripado pelo Zod do submit (perda de texto).
+  **RESOLVIDO (T9-C.fix + T9-C.fix2, 2026-06-19)**: (a) ingest da evaluation-api faz fallback
+  `notes ← justification` e `evidence ← evidence_entries` (`db.create_criterion_responses`); (b) o
+  `EvaluationCriterionResponseInputSchema` do mcp-server passou a aceitar `justification` e o
+  `EvidenceRefInputSchema` o shape form-driven (`stream_entry_id`), com o legado opcional p/ compat
+  (unit test vitest cobrindo). A justificativa + evidência por `stream_entry_id` atravessam agora o
+  caminho do avaliador REAL (LLM → evaluation_submit → ingest → UI nível 3). *Nota: a unificação maior
+  do contrato (prompt form-driven + conveyance não-lossy do output_schema, removendo os shims) segue
+  pendente — este nit específico (perda da justificativa/evidência) está fechado.*
 - **Robustez avaliador — sessão sem dados** *(backlog — não bloqueou hoje; contrato escolhido: opção a)*: avaliar uma
   sessão "magra" (sem transcrição/participantes) ainda falha duro no `evaluation_submit` (o LLM devolve
   `overall_score=null` e o `composite_score` é `number` obrigatório). Contrato escolhido: o avaliador **detecta sessão

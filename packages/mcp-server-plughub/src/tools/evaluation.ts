@@ -497,11 +497,17 @@ const EvaluationContextGetInputSchema = z.object({
 // ── Arc 6 — EvaluationCriterionResponse input schema ─────────────────────────
 
 const EvidenceRefInputSchema = z.object({
-  /** event_id from the replay transcript */
-  event_id:   z.string().min(1),
-  turn_index: z.number().int().nonnegative(),
-  quote:      z.string().max(500).optional(),
-  category:   z.enum(["positive", "negative", "neutral"]).default("neutral"),
+  // Form-driven (T7b-2+) — shape que o LLM emite via buildEvaluationOutputSchema:
+  // evidência do transcript por stream entry. `stream_entry_id` é o que alinha com a
+  // evidência clicável do nível 3 (T9-C, C.3) e o que a UI/ingest consomem.
+  stream_entry_id: z.string().min(1).optional(),
+  excerpt:         z.string().max(1000).optional(),
+  relevance_note:  z.string().max(1000).optional(),
+  // Legado (Arc 6 pré-form-driven) — mantido opcional p/ compat (não rejeitar payloads antigos).
+  event_id:        z.string().min(1).optional(),
+  turn_index:      z.number().int().nonnegative().optional(),
+  quote:           z.string().max(500).optional(),
+  category:        z.enum(["positive", "negative", "neutral"]).optional(),
 })
 
 // ── Arc 13 Fase B — EvidenceEntry (stream-based, for ContestationThread) ─────
@@ -541,6 +547,10 @@ const EvaluationCriterionResponseInputSchema = z.object({
   choice_value:  z.string().optional(),            // for type "choice"
   text_value:    z.string().optional(),            // for type "text"
   notes:         z.string().optional(),
+  // T9-C.fix(mcp) — a saída form-driven (buildEvaluationOutputSchema) usa `justification`,
+  // não `notes`. Sem aceitá-lo aqui, o Zod o descartava antes do ingest → a justificativa
+  // por critério sumia no caminho do avaliador REAL. O ingest faz `notes || justification`.
+  justification: z.string().optional(),
   evidence:      z.array(EvidenceRefInputSchema).default([]),
 })
 
