@@ -1235,6 +1235,7 @@ async def finalize_evaluation(
         round=row.get("round", 1),
         evaluated_agent_type=evaluated_agent_type or row.get("evaluated_agent_type"),
         form_version=row.get("form_version"),            # populado por T2
+        result_id=result_id,                             # T11 — drill-down no analytics
     )
 
     if run_curation:

@@ -462,6 +462,23 @@ rola e destaca a mensagem no transcript (C.3). Entrada via botão ⤢ no `Detail
 revisar/contestar permanecem no painel). Validado no browser com a sessão real `e8f75639`.
 **T9-C completo.** As ações no nível 3 (3 papéis via `available_actions`) são o T10.
 
+## Relatórios de qualidade — Oficial × Operacional (T11, §17.3)
+
+Dois modos **nunca blendados** sobre o invariante de qualidade:
+
+- **Ingest** — `evaluation_finalized` (único emissor: `finalize_evaluation`) passa a chegar ao analytics.
+  Antes era descartado pelo consumer (sem `result_id`) e a tabela não tinha os campos. Agora:
+  `emit_evaluation_finalized` inclui `result_id`; tabela ClickHouse `analytics.evaluation_finalized`
+  (ReplacingMergeTree por `tenant_id, instance_id`); o consumer (`parse_evaluation_event`) grava
+  `finalize_reason`/`segment_id`/`form_version`/`evaluated_agent_type`/`final_score` (0–1). Keyed por
+  `instance_id` (estável entre completed e finalized) — não usa `evaluation_results` (cujo `result_id`
+  no demo = `evaluation_id`, colidiria).
+- **Query** — `GET /reports/evaluations/quality` (analytics-api, prefixo `/reports`): `mode=oficial`
+  (default; só `evaluation_finalized` — o invariante) × `mode=operacional` (finalized ∪ provisório de
+  `evaluation_results` ainda não finalizados, rotulado). Fatiável por `finalize_reason`/`segment_id`/
+  `form_version`/`campaign_id` + `group_by`; distribuição por `finalize_reason` (qualidade do ciclo).
+  Test `infra/test/test_t11_quality_report.sh`. UI (toggle na ReportsPage) = T11-C, pendente.
+
 ## Novos pacotes
 
 - `packages/evaluation-api/` — Python FastAPI, porta 3400. Ciclo de vida completo de formulários, campanhas, instâncias, resultados e contestações.

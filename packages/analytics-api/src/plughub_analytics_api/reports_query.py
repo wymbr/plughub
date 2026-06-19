@@ -1663,6 +1663,143 @@ def _fetch_evaluations_summary(
     }
 
 
+# ─── /reports/quality — T11: Oficial × Operacional (§17.3) ────────────────────
+
+_QUALITY_GROUPS = {"campaign_id", "finalize_reason", "segment_id", "form_version",
+                   "evaluated_agent_type", "date"}
+
+
+async def query_quality_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    mode:            str = "oficial",   # "oficial" (só finalized) | "operacional" (+ provisório)
+    group_by:        str = "campaign_id",
+    campaign_id:     str | None = None,
+    finalize_reason: str | None = None,
+    segment_id:      str | None = None,
+    form_version:    int | None = None,
+) -> dict:
+    """T11 — relatório de qualidade em DOIS modos, nunca blendados (spec §17.3):
+      - oficial: só `result_state='finalized'` (tabela `evaluation_finalized`) — o invariante.
+      - operacional: finalized ∪ provisório (evaluation_results ainda não finalizados), rotulado.
+    Fatiável por finalize_reason/segment_id/form_version/evaluated_agent_type."""
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    mode  = "operacional" if mode == "operacional" else "oficial"
+    if group_by not in _QUALITY_GROUPS:
+        group_by = "campaign_id"
+    try:
+        return await asyncio.to_thread(
+            _fetch_quality, client, database, tenant_id, since, until,
+            mode, group_by, campaign_id, finalize_reason, segment_id, form_version,
+        )
+    except Exception as exc:
+        logger.warning("query_quality_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "mode": mode, "group_by": group_by,
+                "meta": {"from_dt": since, "to_dt": until}, "error": "data_unavailable"}
+
+
+def _fetch_quality(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    mode: str, group_by: str, campaign_id: str | None,
+    finalize_reason: str | None, segment_id: str | None, form_version: int | None,
+) -> dict:
+    params: dict = {"tenant_id": tenant_id}
+
+    # filtros aplicáveis ao slice finalized
+    fin_conds = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'", f"timestamp < '{until}'",
+    ]
+    if campaign_id:
+        fin_conds.append("campaign_id = {campaign_id:String}"); params["campaign_id"] = campaign_id
+    if finalize_reason:
+        fin_conds.append("finalize_reason = {finalize_reason:String}"); params["finalize_reason"] = finalize_reason
+    if segment_id:
+        fin_conds.append("segment_id = {segment_id:String}"); params["segment_id"] = segment_id
+    if form_version is not None:
+        fin_conds.append("form_version = {form_version:Int32}"); params["form_version"] = int(form_version)
+    fin_where = " AND ".join(fin_conds)
+
+    fin_src = f"""
+        SELECT campaign_id, final_score AS score, finalize_reason, segment_id,
+               form_version, evaluated_agent_type, toDate(timestamp) AS date, 0 AS provisional
+        FROM {db}.evaluation_finalized FINAL
+        WHERE {fin_where}
+    """
+
+    if mode == "operacional":
+        prov_conds = [
+            "tenant_id = {tenant_id:String}",
+            f"timestamp >= '{since}'", f"timestamp < '{until}'",
+            "eval_status NOT IN ('skipped','error','error_rejected')",
+        ]
+        if campaign_id:
+            prov_conds.append("campaign_id = {campaign_id:String}")
+        prov_where = " AND ".join(prov_conds)
+        # provisório = evaluation_results cujo instance_id ainda NÃO finalizou
+        source = f"""
+            {fin_src}
+            UNION ALL
+            SELECT campaign_id, toFloat32(overall_score) AS score, '' AS finalize_reason,
+                   '' AS segment_id, toInt32(0) AS form_version, '' AS evaluated_agent_type,
+                   toDate(timestamp) AS date, 1 AS provisional
+            FROM {db}.evaluation_results FINAL
+            WHERE {prov_where}
+              AND instance_id NOT IN (
+                  SELECT instance_id FROM {db}.evaluation_finalized
+                  WHERE tenant_id = {{tenant_id:String}}
+              )
+        """
+    else:
+        source = fin_src
+
+    group_col = "date" if group_by == "date" else group_by
+    result = client.query(f"""
+        SELECT
+            {group_col}                              AS group_key,
+            count()                                  AS n,
+            countIf(provisional = 0)                 AS finalized_n,
+            countIf(provisional = 1)                 AS provisional_n,
+            round(avg(score), 4)                     AS avg_score,
+            countIf(score >= 0.8)                    AS score_high,
+            countIf(score >= 0.6 AND score < 0.8)    AS score_mid,
+            countIf(score < 0.6)                     AS score_low
+        FROM ( {source} )
+        GROUP BY {group_col}
+        ORDER BY n DESC
+    """, parameters=params)
+    rows = _rows_to_dicts(result)
+
+    # distribuição por finalize_reason (qualidade do ciclo) — sempre sobre o slice finalized
+    reason_res = client.query(f"""
+        SELECT finalize_reason AS reason, count() AS n
+        FROM {db}.evaluation_finalized FINAL
+        WHERE {fin_where}
+        GROUP BY finalize_reason ORDER BY n DESC
+    """, parameters=params)
+    by_reason = {r[0] or "unknown": r[1] for r in reason_res.result_rows}
+
+    total_fin  = sum(int(r.get("finalized_n", 0)) for r in rows)
+    total_prov = sum(int(r.get("provisional_n", 0)) for r in rows)
+    return {
+        "data":             rows,
+        "mode":             mode,
+        "group_by":         group_by,
+        "finalize_reasons": by_reason,
+        "meta": {
+            "total":           len(rows),
+            "total_finalized": total_fin,
+            "total_provisional": total_prov,
+            "from_dt": since, "to_dt": until,
+        },
+    }
+
+
 # ─── /reports/agents/compare — F3 bancada de agentes ─────────────────────────
 # Spec: docs/arcos/analytics-agents-workbench.md §11 (contrato) + §10 (regras) +
 # §13 (decisões). Multi-entidade × lente; bucket diário por session_at; média =

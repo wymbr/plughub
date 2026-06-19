@@ -474,6 +474,36 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, result_id, dimension_id)
 """
 
+# ── T11: evaluation_finalized — uma linha por avaliação FINALIZADA (invariante de
+# qualidade, spec §1/§17.3). Alimentada pelo evento `evaluation_finalized` (único emissor:
+# finalize_evaluation). Keyed por instance_id (presente no completed E no finalized; o
+# result_id do completed no demo = evaluation_id, então instance_id é a chave estável).
+# É a fonte do modo OFICIAL dos relatórios; fatiável por finalize_reason/segment_id/form_version.
+_DDL_EVALUATION_FINALIZED = """
+CREATE TABLE IF NOT EXISTS {db}.evaluation_finalized
+(
+    instance_id           String,
+    result_id             String,
+    session_id            String,
+    tenant_id             String,
+    campaign_id           Nullable(String),
+    final_score           Float32,
+    finalize_reason       String,
+    contestation_state    String,
+    evaluated_agent_type  String,
+    segment_id            String,
+    form_version          Int32,
+    round                 Int32,
+    process_duration_ms   Int64,
+    ingested_at           DateTime DEFAULT now(),
+    timestamp             DateTime64(3, 'UTC'),
+    date                  Date
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, instance_id)
+"""
+
 # ── contact_insights — business events published via insight_register MCP tool.
 # Each row represents a domain event emitted by an agent flow (e.g. "cancelamento",
 # "erro_consulta_saldo"). Consumed from conversations.events Kafka topic where
@@ -813,6 +843,7 @@ _ALL_DDL = [
     _DDL_EVALUATION_RESULTS,
     _DDL_EVALUATION_EVENTS,
     _DDL_EVALUATION_DIMENSION_SCORES,
+    _DDL_EVALUATION_FINALIZED,
     _DDL_CONTACT_INSIGHTS,
     _DDL_AGENT_PAUSE_INTERVALS,
     _DDL_AGENT_LOGIN_INTERVALS,
@@ -1171,6 +1202,23 @@ class AnalyticsStore:
             "evaluation_events",
             [_eval_event_row(row)],
             self._EVAL_EVENT_COLS,
+        )
+
+    # evaluation_finalized (T11 — invariante de qualidade / modo Oficial)
+
+    _EVAL_FINALIZED_COLS = [
+        "instance_id", "result_id", "session_id", "tenant_id", "campaign_id",
+        "final_score", "finalize_reason", "contestation_state", "evaluated_agent_type",
+        "segment_id", "form_version", "round", "process_duration_ms", "timestamp", "date",
+    ]
+
+    async def upsert_evaluation_finalized(self, row: dict) -> None:
+        """Insert/upsert a finalized-evaluation row (ReplacingMergeTree por instance_id)."""
+        await asyncio.to_thread(
+            self._insert,
+            "evaluation_finalized",
+            [_eval_finalized_row(row)],
+            self._EVAL_FINALIZED_COLS,
         )
 
     # evaluation_dimension_scores (F8 — nota por dimensão)
@@ -1794,6 +1842,28 @@ def _eval_dimension_row(d: dict) -> list:
         float(d.get("score", 0.0) or 0.0),
         float(d.get("weight", 0.0) or 0.0),
         d.get("eval_status", "submitted") or "submitted",
+        _parse_dt(ts) or datetime.utcnow(),
+        _today_utc(ts),
+    ]
+
+
+def _eval_finalized_row(d: dict) -> list:
+    """Row builder for evaluation_finalized table (T11 — invariante de qualidade)."""
+    ts = d.get("timestamp")
+    return [
+        d.get("instance_id", "") or "",
+        d.get("result_id", "") or "",
+        d.get("session_id", "") or "",
+        d.get("tenant_id", ""),
+        d.get("campaign_id") or None,
+        float(d.get("final_score", 0.0) or 0.0),
+        d.get("finalize_reason", "") or "",
+        d.get("contestation_state", "") or "",
+        d.get("evaluated_agent_type", "") or "",
+        d.get("segment_id", "") or "",
+        int(d.get("form_version", 0) or 0),
+        int(d.get("round", 1) or 1),
+        int(d.get("process_duration_ms", 0) or 0),
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

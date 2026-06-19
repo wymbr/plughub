@@ -291,6 +291,7 @@ async def emit_evaluation_finalized(
     round: int = 1,
     evaluated_agent_type: str | None = None,
     form_version: int | None = None,
+    result_id: str | None = None,   # T11 — id do EvaluationResult (p/ drill-down no analytics)
 ) -> None:
     """
     Emit evaluation_finalized event to evaluation.events topic.
@@ -303,6 +304,7 @@ async def emit_evaluation_finalized(
         "event_type":                 "evaluation_finalized",
         "event_id":                   str(uuid.uuid4()),
         "timestamp":                  _now_iso(),
+        "result_id":                  result_id,
         "instance_id":                instance_id,
         "session_id":                 session_id,
         "campaign_id":                campaign_id,

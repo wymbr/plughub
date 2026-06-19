@@ -758,6 +758,37 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
     tenant_id  = payload.get("tenant_id")
     result_id  = payload.get("result_id")
 
+    # T11 — evaluation_finalized: invariante de qualidade (modo Oficial). Vai p/ a tabela
+    # dedicada `evaluation_finalized` (keyed por instance_id), NÃO p/ evaluation_results
+    # (evita a colisão de identidade result_id=evaluation_id do completed). final_score
+    # normalizado 0–1 (escala dos buckets do relatório).
+    if event_type == "evaluation_finalized":
+        if not tenant_id:
+            return None
+        fs = payload.get("final_score")
+        try:
+            fs = float(fs)
+            fs = fs / 10.0 if fs > 1.0 else fs
+        except (TypeError, ValueError):
+            fs = 0.0
+        return [{
+            "table":                "evaluation_finalized",
+            "instance_id":          payload.get("instance_id") or "",
+            "result_id":            payload.get("result_id") or "",
+            "session_id":           payload.get("session_id") or "",
+            "tenant_id":            tenant_id,
+            "campaign_id":          payload.get("campaign_id") or None,
+            "final_score":          fs,
+            "finalize_reason":      payload.get("finalize_reason") or "",
+            "contestation_state":   payload.get("contestation_state") or "",
+            "evaluated_agent_type": payload.get("evaluated_agent_type") or "",
+            "segment_id":           payload.get("segment_id") or "",
+            "form_version":         payload.get("form_version") or 0,
+            "round":                payload.get("round") or 1,
+            "process_duration_ms":  payload.get("process_duration_ms") or 0,
+            "timestamp":            payload.get("timestamp") or _now(),
+        }]
+
     # F2 (bancada de agentes): aceita o evento publicado DIRETO pelo avaliador
     # (evaluation_submit → event_type "evaluation.completed", com evaluation_id e
     # composite_score 0–10). O caminho desenhado no Arc 13 (eval.instance.submitted

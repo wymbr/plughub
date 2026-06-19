@@ -2,6 +2,28 @@
 
 ---
 
+## T11-A+B — Relatório de qualidade Oficial × Operacional (§17.3) (2026-06-19)
+
+Backend dos relatórios de qualidade em dois modos nunca blendados. **evaluation-api + analytics-api.**
+Validado por API (Kafka e2e + query). Antes: o invariante `evaluation_finalized` **não chegava ao
+ClickHouse** (o consumer descartava o evento por falta de `result_id`; a tabela não tinha os campos).
+
+- **Ingest (A)** — `emit_evaluation_finalized` passa a incluir `result_id`; nova tabela ClickHouse
+  `evaluation_finalized` (ReplacingMergeTree por `tenant_id, instance_id` — chave estável presente no
+  completed e no finalized). O consumer ganha branch dedicado em `parse_evaluation_event` p/
+  `event_type='evaluation_finalized'` → grava `result_state` implícito + `finalize_reason`/`segment_id`/
+  `form_version`/`evaluated_agent_type`/`final_score` (0–1), sem poluir `evaluation_results` (evita a
+  colisão `result_id=evaluation_id` do completed). Roteamento no consumer + DDL/cols/row builder/insert.
+- **Query (B)** — `GET /reports/evaluations/quality`: `mode=oficial` (default; só `evaluation_finalized`
+  — o invariante) × `mode=operacional` (finalized ∪ provisório de `evaluation_results` ainda não
+  finalizados, rotulado por `provisional`/`finalized_n`/`provisional_n`), nunca blendados. Fatiável por
+  `finalize_reason`/`segment_id`/`form_version`/`campaign_id` + `group_by`
+  (campaign_id|finalize_reason|segment_id|form_version|evaluated_agent_type|date); distribuição por
+  `finalize_reason`. Test `test_t11_quality_report.sh` (publica finalized no Kafka → consumer → tabela;
+  seed direto → valida oficial=3/operacional=4/fatiamento). **Pendente**: T11-C (UI toggle na ReportsPage).
+
+---
+
 ## T10-D — ações do nível 3 na rota dedicada + Arc 13 acionável + threads agrupadas (2026-06-19)
 
 Conclui o T10. Traz revisar/contestar para a rota dedicada e, no caminho, fecha dois gaps

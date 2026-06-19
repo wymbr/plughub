@@ -46,6 +46,7 @@ from .reports_query import (
     query_agents_cross,
     query_evaluations_report,
     query_evaluations_summary,
+    query_quality_report,
     query_participation_report,
     query_quality_report,
     query_segments_report,
@@ -627,6 +628,43 @@ async def get_evaluations_summary(
         group_by   = group_by,
     )
     return _respond(data, format, f"evaluations_summary_{_today_label()}.csv")
+
+
+# ─── GET /reports/evaluations/quality — T11: Oficial × Operacional (§17.3) ────
+
+@router.get("/evaluations/quality")
+async def get_evaluations_quality(
+    request:         Request,
+    tenant_id:       str           = Query(...),
+    from_dt:         Optional[str] = Query(None),
+    to_dt:           Optional[str] = Query(None),
+    mode:            str           = Query("oficial"),   # oficial | operacional
+    group_by:        str           = Query("campaign_id"),
+    campaign_id:     Optional[str] = Query(None),
+    finalize_reason: Optional[str] = Query(None),
+    segment_id:      Optional[str] = Query(None),
+    form_version:    Optional[int] = Query(None),
+    format:          str           = Query("json"),
+) -> Response:
+    """T11 — relatório de qualidade em DOIS modos (nunca blendados):
+      - **oficial** (default): só avaliações FINALIZADAS (`evaluation_finalized`) — o invariante.
+      - **operacional**: finalized ∪ provisório (em andamento), rotulado por `provisional`.
+    group_by: campaign_id | finalize_reason | segment_id | form_version | evaluated_agent_type | date.
+    Fatiável por finalize_reason/segment_id/form_version. format: json | csv."""
+    data = await query_quality_report(
+        client          = request.app.state.store.new_client(),
+        database        = request.app.state.store._database,
+        tenant_id       = tenant_id,
+        from_dt         = from_dt,
+        to_dt           = to_dt,
+        mode            = mode,
+        group_by        = group_by,
+        campaign_id     = campaign_id,
+        finalize_reason = finalize_reason,
+        segment_id      = segment_id,
+        form_version    = form_version,
+    )
+    return _respond(data, format, f"evaluations_quality_{_today_label()}.csv")
 
 
 # ─── GET /reports/agents/compare — F3 bancada de agentes ─────────────────────
