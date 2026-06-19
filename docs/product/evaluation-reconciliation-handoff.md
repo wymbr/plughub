@@ -177,8 +177,15 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
 > /reports/evaluations/quality` com `mode=oficial` (só finalized) × `operacional` (+ provisório
 > rotulado), fatiável por finalize_reason/segment_id/form_version. C (UI): `AnaliseQualidadePage`
 > (`/analise/quality`) vira o relatório Oficial×Operacional (toggle/banner/KPIs/chips/group_by/CSV),
-> substituindo a fonte legada. Testes `test_t11_quality_report.sh`. **PRÓXIMO: T16** (corrigir docs,
-> incl. o gap Arc 6 Fase 2 ausente), ou pendências e2e-blocked.
+> substituindo a fonte legada. Testes `test_t11_quality_report.sh`.
+
+> **T16 (correção de docs) — CONCLUÍDO 2026-06-19.** Único ✅ falso restante após T1–T11: **Arc 6 Fase 2**
+> (deploy_events/deploy-timeline/quality-comparison/quality-timeseries — grep zero; UI desativada).
+> Corrigidos `arc6-phase2-observability.md` (→ "NÃO IMPLEMENTADO / proposta"), `CLAUDE.md` (§ Arc 6 Fase 2
+> + `## Pending`) e `TODO.md`. Os demais ✅ da spec §19 (finalize/result_state/evaluation_finalized/
+> contrato form-driven) deixaram de ser falsos — implementados nos T1–T11. **Reconciliação Evaluation
+> essencialmente concluída (T1–T11 + T16).** Restam: Arc 6 Fase 2 (arco próprio), e2e-blocked (avaliador
+> real, T14-a), nits do bench.
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

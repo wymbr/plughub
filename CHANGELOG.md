@@ -2,6 +2,23 @@
 
 ---
 
+## T16 — Correção de verdade nas docs (✅ falsos, gap Arc 6 Fase 2) (2026-06-19)
+
+Spec §19. **Só docs.** Auditoria de ✅ doc×código após T1–T11.
+
+- **Arc 6 Fase 2 (gap confirmado)**: `arc6-phase2-observability.md` afirmava "Status: implementado ✅"
+  (tabela `analytics.deploy_events`, endpoints `deploy-timeline`/`quality-comparison`/`quality-timeseries`,
+  UI), mas **nada existe** no código (grep zero em `analytics-api`; UI Trend/Comparison desativada em
+  `AnaliseQualidadePage`, `TAB_IDS=['summary']`). Corrigido: doc reescrito p/ "PROPOSTA / NÃO IMPLEMENTADO"
+  (banner + fases A–D rotuladas *não implementado*); resumo do `CLAUDE.md` (§ Arc 6 Fase 2) corrigido +
+  gap registrado no `## Pending`; nota em `TODO.md`.
+- **Demais ✅ da spec §19 deixaram de ser falsos**: o que a spec listava como aspiracional
+  (`finalize_evaluation`, `result_state`, `evaluation_finalized` como fonte de verdade, contestação por
+  dimensão, contrato form-driven) **foi implementado** nos T1–T11 — logo os ✅ de arc6/arc13 agora têm
+  código que os sustenta. T16 não os remove; apenas corrige o que permanece sem lastro (Arc 6 Fase 2).
+
+---
+
 ## T11-C — UI do relatório de qualidade Oficial × Operacional (2026-06-19)
 
 Fecha o T11. **Só platform-ui.** Validado no browser. O relatório de qualidade discoverable
