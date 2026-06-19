@@ -422,6 +422,31 @@ sessão real → POST /v1/evaluation/instances (scheduled)
 - **Sessão sem dados** *(backlog)*: sessão "magra" ainda falha duro (`overall_score=null` × `composite_score` obrigatório).
   Contrato escolhido: avaliador marca a instance `skipped`/`error` sem chamar submit (ver `TODO.md`).
 
+## Transcript do nível 3 (T9-C) — porta de leitura mascarada
+
+O detalhe da avaliação (nível 3 do drill-down, blueprint `docs/product/t9-evaluations-ia.md` §C)
+mostra o **transcript** ao lado do formulário, com evidência clicável. Decisões fechadas:
+
+- **D3 — mascarado para todos (revisão cega).** Fonte = `analytics.messages` (ClickHouse,
+  persistido). A tabela **não tem coluna `original_content`** → só conteúdo mascarado existe ali;
+  D3 é garantido pela própria camada de storage, sem vault/cifragem/reveal. (Reveal de PII por
+  token, gated+auditado, é Audit-LGPD Fase 2, sob demanda — fora do T9-C.)
+- **D2 — porta limpa.** O `evaluation-api` **não** consulta ClickHouse direto; delega ao
+  `analytics-api`. *(Nota: o blueprint D2 dizia "delega ao session-replayer", mas o replayer não
+  tem superfície HTTP e seu store durável `session_stream_events` guarda `original_content`
+  **desmascarado** — delegar ali exigiria re-mascarar na leitura. A intenção de D2 — não possuir o
+  storage nem reinventar masking — é melhor honrada delegando ao analytics-api, dono de
+  `analytics.messages`, já mascarado e durável.)*
+- **C.3/C.4.** A janela do transcript é recortada pela do `ContactSegment` avaliado
+  (`started_at/ended_at` de `analytics.segments`), expansível ao contato; cada mensagem carrega
+  `stream_entry_id` (== `message_id` == `event_id` do stream canônico) p/ casar com a evidência.
+
+**T9-C1 (analytics-api)** — `transcript.py`: `GET /v1/transcript/sessions/{session_id}`
+(`?segment_id=&scope=segment|contact`). Resolve a janela do segmento e devolve o transcript
+mascarado (`stream_entry_id`+`content`+`author_role`+`created_at`, `masked: true`). Router próprio
+`/v1/transcript` (não `/v1/audit`): o gate de papel de avaliação fica no evaluation-api (T9-C2);
+aqui só isolamento por tenant. Test `infra/test/test_t9c1_transcript_window.sh`.
+
 ## Novos pacotes
 
 - `packages/evaluation-api/` — Python FastAPI, porta 3400. Ciclo de vida completo de formulários, campanhas, instâncias, resultados e contestações.

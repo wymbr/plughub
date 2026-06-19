@@ -44,6 +44,7 @@ from .admin           import router as admin_router
 from .sessions        import router as sessions_router
 from .supervisor      import router as supervisor_router
 from .audit           import router as audit_router
+from .transcript      import router as transcript_router
 
 
 @asynccontextmanager
@@ -154,6 +155,7 @@ app.include_router(admin_router)
 app.include_router(sessions_router)
 app.include_router(supervisor_router)
 app.include_router(audit_router)
+app.include_router(transcript_router)
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────

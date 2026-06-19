@@ -2,6 +2,27 @@
 
 ---
 
+## T9-C1 — analytics-api: leitura de transcript mascarado por segmento (2026-06-19)
+
+Backend do T9-C (blueprint `t9-evaluations-ia.md` §C, decisões D2/D3). **Só analytics-api.**
+Primeiro elo da entrega do transcript do nível 3: a **porta limpa** que o evaluation-api delega
+(D2), sobre `analytics.messages` (persistido, **mascarado por construção** — não há coluna
+`original_content`, então D3/revisão cega é garantido no storage).
+
+- `transcript.py` (novo): `GET /v1/transcript/sessions/{session_id}` com `?segment_id=&scope=segment|contact`.
+  Resolve a janela `started_at/ended_at` de `analytics.segments FINAL` e janela `analytics.messages`
+  por `session_id`+timestamp (C.4). Segmento desconhecido/aberto → fallback p/ `contact` (flag no
+  `scope` devolvido). Cada msg carrega `stream_entry_id` (== `message_id` == `event_id` do stream
+  canônico → alinha a evidência clicável, C.3) + `content` mascarado; `masked: true`.
+- Router separado de `/v1/audit` (semântica de avaliação, não LGPD): o gate de **papel de avaliação**
+  fica no evaluation-api (T9-C2); aqui só isolamento por tenant, espelhando `audit.py`.
+- Registrado em `main.py` (`include_router(transcript_router)`).
+- Test `infra/test/test_t9c1_transcript_window.sh` (seed direto no ClickHouse: 4 msgs + 1 segmento;
+  valida janela=2, contact=4, fallback, mascaramento e alinhamento de `stream_entry_id`).
+  Próximo: T9-C2 (evaluation-api orquestra `result → session_id+segment_id`, gate ABAC, delega aqui).
+
+---
+
 ## T9-B.2 — Timeline por critério + provisória/final Δ (2026-06-19)
 
 Fecha o T9-B (blueprint §B). **Só platform-ui.** Validar por browser.
