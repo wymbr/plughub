@@ -25,7 +25,10 @@ import {
   type TranscriptMessage,
 } from '@/api/evaluation-hooks'
 import type { EvaluationCriterion, CriterionResponseRow } from '@/types'
-import { CriterionDetail, ScorePill } from './AvaliacoesPage'
+import {
+  CriterionDetail, ScorePill,
+  HumanReviewPanel, DimensionContestPanel13, ReviewPanel, ContestPanel,
+} from './AvaliacoesPage'
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string
 
@@ -130,21 +133,32 @@ export default function EvaluationDetailPage() {
   const { t } = useTranslation('evaluation')
   const { campaignId = '', resultId = '' } = useParams()
   const navigate = useNavigate()
-  const { session, getAccessToken, tenantId: TENANT } = useAuth()
+  const { session, getAccessToken, tenantId: TENANT, currentUser } = useAuth()
 
   const [jwtToken, setJwtToken] = useState('')
   const [scope, setScope] = useState<'segment' | 'contact'>('segment')
   const [highlightedId, setHighlightedId] = useState<string | null>(null)
+  const [mode, setMode] = useState<'view' | 'review' | 'contest'>('view')
 
   useEffect(() => {
     getAccessToken().then(tok => setJwtToken(tok ?? '')).catch(() => {})
   }, [getAccessToken, session])
 
-  const { result, loading: resultLoading, error: resultError } = useResult(resultId, TENANT, jwtToken)
+  const { result, loading: resultLoading, error: resultError, reload: reloadResult } = useResult(resultId, TENANT, jwtToken)
   const { criteria: responses } = useResultCriteria(resultId, TENANT)
   const { form: pinnedForm } = useFormVersion(result?.form_id ?? null, result?.form_version, TENANT)
-  const { data: threadData } = useContestationThreads(result?.instance_id ?? null, jwtToken, 0)
+  const { data: threadData, reload: reloadThreads } = useContestationThreads(result?.instance_id ?? null, jwtToken, 0)
   const threads = threadData?.threads ?? []
+
+  // T10-D — ações dirigidas por available_actions (server-side, ABAC + posse)
+  const userId       = currentUser?.userId ?? ''
+  const canReview    = result?.available_actions?.includes('review') ?? false
+  const canContest   = result?.available_actions?.includes('contest') ?? false
+  const isArc13      = threads.length > 0
+  const currentRound = threadData?.current_round ?? result?.current_round ?? 1
+  const handleActionDone = useCallback(() => {
+    setMode('view'); reloadResult(); reloadThreads()
+  }, [reloadResult, reloadThreads])
 
   // T9-B — join form (versão fixada) ∪ respostas, por criterion_id
   const respByCrit = useMemo(
@@ -192,6 +206,27 @@ export default function EvaluationDetailPage() {
             </span>
           </>
         )}
+        {/* T10-D — ações por available_actions (server-side); read-only quando vazio */}
+        {result && !result.locked && (canReview || canContest) && (
+          <div className="ml-auto flex gap-2">
+            {canReview && (
+              <button
+                onClick={() => setMode(m => m === 'review' ? 'view' : 'review')}
+                className={`text-xs px-3 py-1 rounded font-medium border transition-colors ${
+                  mode === 'review' ? 'bg-primary text-white border-primary'
+                                    : 'bg-white text-primary border-primary hover:bg-primary-light'}`}
+              >✓ {t('detail.review', { defaultValue: 'Revisar' })}</button>
+            )}
+            {canContest && (
+              <button
+                onClick={() => setMode(m => m === 'contest' ? 'view' : 'contest')}
+                className={`text-xs px-3 py-1 rounded font-medium border transition-colors ${
+                  mode === 'contest' ? 'bg-contested text-white border-contested'
+                                     : 'bg-white text-contested border-contested hover:bg-contested-light'}`}
+              >⚑ {t('detail.contest', { defaultValue: 'Contestar' })}</button>
+            )}
+          </div>
+        )}
       </div>
 
       {resultError && (
@@ -211,6 +246,36 @@ export default function EvaluationDetailPage() {
             )}
           </div>
           <div className="flex-1 overflow-y-auto p-3">
+            {/* T10-D — painel de ação ativo (revisar/contestar), dirigido por available_actions */}
+            {result && mode === 'review' && (
+              isArc13 && result.instance_id ? (
+                <HumanReviewPanel
+                  threads={threads} instanceId={result.instance_id}
+                  jwtToken={jwtToken} userId={userId}
+                  onDone={handleActionDone} onCancel={() => setMode('view')}
+                />
+              ) : (
+                <ReviewPanel
+                  result={{ ...result, criterion_responses: responses } as any}
+                  jwtToken={jwtToken} adminToken="" onDone={handleActionDone}
+                />
+              )
+            )}
+            {result && mode === 'contest' && (
+              isArc13 && result.instance_id ? (
+                <DimensionContestPanel13
+                  threads={threads} instanceId={result.instance_id}
+                  currentRound={currentRound} jwtToken={jwtToken}
+                  onDone={handleActionDone} onCancel={() => setMode('view')}
+                />
+              ) : (
+                <ContestPanel
+                  result={{ ...result, criterion_responses: responses } as any}
+                  userId={userId} jwtToken={jwtToken}
+                  onDone={handleActionDone} onCancel={() => setMode('view')}
+                />
+              )
+            )}
             {resultLoading && <div className="text-xs text-muted-light text-center py-8">⟳ {t('transcript.loading', { defaultValue: 'Carregando…' })}</div>}
             {!resultLoading && mergedCriteria.length > 0 ? (
               <div className="border rounded">

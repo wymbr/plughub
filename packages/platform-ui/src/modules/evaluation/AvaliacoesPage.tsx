@@ -246,7 +246,7 @@ function parseContestationReason(reason: string): ParsedCriterionContestation[] 
 
 // ── ReviewPanel (inline in drill-down) ────────────────────────────────────────
 
-function ReviewPanel({
+export function ReviewPanel({
   result,
   jwtToken,
   adminToken,
@@ -539,7 +539,7 @@ function CriterionContestRow({
   )
 }
 
-function ContestPanel({
+export function ContestPanel({
   result,
   userId,
   jwtToken,
@@ -790,7 +790,7 @@ function DimensionThreadCard({ thread }: { thread: ContestationThread }) {
 
 const MIN_REVIEW_WORDS = 20
 
-function HumanReviewPanel({
+export function HumanReviewPanel({
   threads,
   instanceId,
   jwtToken,
@@ -980,7 +980,7 @@ function HumanReviewPanel({
 
 const MIN_CONTEST_WORDS = 10
 
-function DimensionContestPanel13({
+export function DimensionContestPanel13({
   threads,
   instanceId,
   currentRound,

@@ -763,11 +763,21 @@ export async function fetchContestationThreads(
   const r = await fetch(`${BASE}/instances/${instanceId}/threads`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   const d = await r.json()
+  // Guard de shape: cada thread DEVE ter `entries[]` + estado/score (a UI faz .length/.map).
+  // Normaliza p/ tolerar respostas parciais/legadas e nunca crashar o render.
+  const threads = (Array.isArray(d.threads) ? d.threads : []).map((t: any) => ({
+    dimension_id:    t.dimension_id,
+    dimension_label: t.dimension_label ?? t.dimension_id,
+    current_state:   t.current_state ?? 'neutral',
+    original_score:  t.original_score ?? 0,
+    current_score:   t.current_score ?? t.original_score ?? 0,
+    entries:         Array.isArray(t.entries) ? t.entries : [],
+  }))
   return {
     instance_id:   d.instance_id  ?? instanceId,
     result_id:     d.result_id    ?? null,
     current_round: d.current_round ?? 0,
-    threads:       d.threads       ?? [],
+    threads,
   }
 }
 

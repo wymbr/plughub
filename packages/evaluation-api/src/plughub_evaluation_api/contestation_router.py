@@ -180,11 +180,20 @@ class SamplingRuleUpdateBody(BaseModel):
 # ─── Auth helpers (reuse from router.py pattern) ──────────────────────────────
 
 def _get_tenant(request: Request) -> str:
-    """Extract tenant_id from X-Tenant-ID header (same pattern as main router)."""
+    """Tenant via header `X-Tenant-ID`; fallback ao claim `tenant_id` do Bearer JWT.
+
+    T10-D — os hooks Arc 13 da UI (threads/contest/review) mandam só o `Authorization: Bearer`,
+    não o `X-Tenant-ID`. Sem este fallback, `GET /instances/{id}/threads` e os submits davam 400 →
+    a UI caía no caminho Arc 6 legado (que mexe em `eval_status` mas não em `result_state`). O JWT
+    do auth-api carrega `tenant_id`, então derivamos dele quando o header falta."""
     tenant_id = request.headers.get("X-Tenant-ID") or request.headers.get("x-tenant-id")
-    if not tenant_id:
-        raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
-    return tenant_id
+    if tenant_id:
+        return tenant_id
+    from .router import _decode_jwt_optional  # local import: evita ciclo
+    payload = _decode_jwt_optional(request)
+    if payload and payload.get("tenant_id"):
+        return str(payload["tenant_id"])
+    raise HTTPException(status_code=400, detail="X-Tenant-ID header or Bearer token required")
 
 
 def _get_user(request: Request) -> str:
@@ -224,13 +233,20 @@ async def list_threads(
     Returns threads grouped by dimension, ordered by round ASC.
     """
     tenant_id = _get_tenant(request)
-    threads = await _db.list_contestation_threads(
-        request.app.state.db_pool,
-        instance_id,
-        tenant_id,
-        dimension_id=dimension_id,
+    # T10-D2 — leitura AGRUPADA por dimensão (entries/current_state/scores) que a UI espera.
+    grouped = await _db.get_instance_threads_grouped(
+        request.app.state.db_pool, instance_id, tenant_id,
     )
-    return {"threads": threads, "count": len(threads)}
+    threads = grouped["threads"]
+    if dimension_id:
+        threads = [t for t in threads if t["dimension_id"] == dimension_id]
+    return {
+        "instance_id":   grouped["instance_id"],
+        "result_id":     grouped["result_id"],
+        "current_round": grouped["current_round"],
+        "threads":       threads,
+        "count":         len(threads),
+    }
 
 
 @contestation_router.post("/v1/evaluation/instances/{instance_id}/contest")

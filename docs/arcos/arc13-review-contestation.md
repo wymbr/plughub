@@ -253,8 +253,17 @@ Somente `author_type: "human_agent"` pode abrir contestação. `available_action
 > de contestação do round R → `["contest"]`; `under_review(R)` ∧ caller ≠ avaliado ∧ campo de revisão
 > do round R → `["review"]`; senão `[]` (read-only). Campo casado por round
 > (`contestar`/`_replica`/`_treplica`; idem `revisar`). Guardas: locked/finalized/sem-token → `[]`;
-> não-dono não contesta; ninguém se revisa. Cobertura: `tests/test_available_actions.py`. Pendente:
-> T10-D (ações na rota dedicada do nível 3).
+> não-dono não contesta; ninguém se revisa. Cobertura: `tests/test_available_actions.py`.
+
+> **T10-D (2026-06-19) — ações no nível 3 + Arc 13 acionável + threads agrupadas.** (1) Rota dedicada
+> ganhou barra revisar/contestar dirigida por `available_actions` (painéis Arc 13/fallback). (2) **Fix
+> tenant**: `_get_tenant` (contestation_router) cai no claim `tenant_id` do Bearer JWT quando falta
+> `X-Tenant-ID` — sem isso `GET /threads` e os submits `/contest`·`/review` davam 400 e a UI caía no Arc
+> 6 legado (mexia em `eval_status`, não `result_state`). (3) **Read agrupado** (`db.get_instance_threads_grouped`):
+> o storage de threads é PLANO (1 linha por entry); o endpoint agora agrupa por dimensão →
+> `entries[]`/`current_state`/`original_score`/`current_score` (0–1, do `criterion_responses`)/
+> `dimension_label` (do form fixado), que é o shape que a UI sempre esperou. Esses 2 gaps estavam
+> mascarados pelo 400. Testes `test_t10d_arc13_tenant_fallback.sh` + `test_t10d2_threads_grouped.sh`.
 
 > **T10-C (2026-06-19) — visibilidade self-scope.** `list_results` escopa por linha via
 > `_compute_result_scope(jwt)`: admin → tudo; não-admin → `evaluated_user_id ∈ (supervised_user_ids ∪

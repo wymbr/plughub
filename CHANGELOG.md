@@ -2,6 +2,31 @@
 
 ---
 
+## T10-D — ações do nível 3 na rota dedicada + Arc 13 acionável + threads agrupadas (2026-06-19)
+
+Conclui o T10. Traz revisar/contestar para a rota dedicada e, no caminho, fecha dois gaps
+pré-existentes do Arc 13 que estavam mascarados. evaluation-api + platform-ui. Validado por API + browser.
+
+- **UI (platform-ui)** — `EvaluationDetailPage`: barra de ações ✓ Revisar / ⚑ Contestar dirigida por
+  `result.available_actions` (server-side, T10-A); painel ativo (Arc 13 `HumanReviewPanel`/
+  `DimensionContestPanel13`, fallback Arc 6) na coluna esquerda, transcript à direita; `onDone`
+  recarrega result + threads. Painéis exportados de `AvaliacoesPage`. Sem campo de ação → read-only.
+- **Fix tenant (evaluation-api)** — `_get_tenant` (contestation_router) cai no claim `tenant_id` do
+  Bearer JWT quando o header `X-Tenant-ID` falta. Os hooks Arc 13 da UI mandam só o Bearer → antes
+  `GET /threads` e os submits `/contest`·`/review` davam **400** → a UI caía no Arc 6 legado (mexia em
+  `eval_status`, não em `result_state` → lista não mudava, deixava recontestar). Test
+  `test_t10d_arc13_tenant_fallback.sh` (contest só com Bearer → 200; `result_state` open→under_review).
+- **Read agrupado (evaluation-api)** — `db.get_instance_threads_grouped`: o `GET /instances/{id}/threads`
+  agora devolve UMA thread por dimensão (a UI espera assim; o storage é plano). Reconstrói `entries[]`
+  (timeline por round), `current_state` (máquina: evaluator→neutral, human_agent→contested, reviewer
+  revised/upheld), `original/current_score` normalizados 0–1 (do `criterion_responses`) e
+  `dimension_label` (da versão fixada do form). Test `test_t10d2_threads_grouped.sh`
+  (contest→contested, review→upheld, label/score/entries). Guard de shape no hook `fetchContestationThreads`.
+- **T10 COMPLETO** (A lógica de ação · B provisionamento já existente · C visibilidade self-scope ·
+  D ações na rota + Arc 13 acionável + threads agrupadas).
+
+---
+
 ## T10-C — visibilidade self-scope em list_results (2026-06-19)
 
 Fronteira dura de visibilidade da tela de Avaliações (spec §17.2): role+Grupo+pool = quem vê o quê;

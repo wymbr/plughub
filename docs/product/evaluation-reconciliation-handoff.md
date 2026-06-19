@@ -160,8 +160,17 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
 > validado no browser com `e8f75639`). **Desvio do D2 registrado**: delegou-se ao **analytics-api**
 > (dono de `analytics.messages`, já mascarado/durável), não ao session-replayer (sem HTTP + store
 > durável desmascarado). Reveal de PII (Audit-LGPD Fase 2) fica sob demanda. Testes
-> `test_t9c1_transcript_window.sh` + `test_t9c2_transcript.sh`. **PRÓXIMO: T10** (`available_actions`/
-> 3 papéis no nível 3), depois T11 (relatórios Oficial×Operacional), T16 (docs).
+> `test_t9c1_transcript_window.sh` + `test_t9c2_transcript.sh`.
+
+> **T10 (available_actions / 3 papéis) — CONCLUÍDO 2026-06-19.** A (`_compute_available_actions` por
+> result_state+round+posse) · B (provisionamento ABAC já existia no `seed_auth.py`) · C (visibilidade
+> self-scope em `list_results`: atendente=self, supervisor=Grupo, admin=tudo) · D (ações na rota
+> dedicada + **fix tenant** `_get_tenant`→JWT que destravou o Arc 13 acionável, antes 400 → Arc 6
+> legado + **read agrupado** `get_instance_threads_grouped` que o endpoint `/threads` nunca tinha).
+> Testes: `test_available_actions.py` (pytest 22), `test_t10c_visibility_scope.sh`,
+> `test_t10d_arc13_tenant_fallback.sh`, `test_t10d2_threads_grouped.sh`. Diferido: escopo por
+> `supervised_agent_types` (AI por tipo) — result sem `agent_type_id`. **PRÓXIMO: T11** (relatórios
+> Oficial×Operacional), depois T16 (docs, incl. gap Arc 6 Fase 2).
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

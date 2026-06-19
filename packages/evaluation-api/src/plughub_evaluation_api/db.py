@@ -1907,6 +1907,125 @@ async def list_contestation_threads(
     return _rows(rows)
 
 
+def _iso_ts(ts: Any) -> str:
+    """datetime/qualquer → ISO8601 string (vazio se None)."""
+    if ts is None:
+        return ""
+    if isinstance(ts, datetime):
+        return ts.isoformat()
+    return str(ts)
+
+
+async def get_instance_threads_grouped(
+    pool: asyncpg.Pool,
+    evaluation_instance_id: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """T10-D2 — leitura AGRUPADA das contestation_threads para a UI (Arc 13).
+
+    O storage é plano (uma linha por entry: dimension_id+round+author). A UI espera UMA thread
+    por dimensão com `entries[]` + `current_state` + `original_score`/`current_score` (0–1).
+    Aqui agrupamos por `dimension_id`, reconstruímos a timeline (entries por round), derivamos o
+    estado pela máquina (última ação significativa) e os scores: `original` vem do
+    `criterion_responses` (normalizado 0–1); `current` = último override revisado, senão original.
+    """
+    flat   = await list_contestation_threads(pool, evaluation_instance_id, tenant_id)
+    result = await get_result_by_instance(pool, evaluation_instance_id, tenant_id)
+    result_id = result.get("id") if result else None
+
+    # score (normalizado 0–1) + label por critério/dimensão, do criterion_responses
+    crit_meta: dict[str, dict[str, Any]] = {}
+    if result_id:
+        for cr in await list_criterion_responses(pool, result_id, tenant_id):
+            cid = cr.get("criterion_id")
+            if not cid:
+                continue
+            norm: float | None = None
+            score = cr.get("score")
+            if score is not None:
+                try:
+                    s = float(score)
+                    m = float(cr.get("max_score") or 10) or 10.0
+                    norm = round(s / m, 4)
+                except Exception:
+                    norm = None
+            crit_meta[cid] = {"score": norm, "label": cr.get("criterion_name") or cid}
+
+    # Label oficial vem do FORM (versão fixada), não do criterion_responses (criterion_name
+    # costuma vir vazio). Precedência: form.label → criterion_name → criterion_id.
+    form_labels: dict[str, str] = {}
+    if result and result.get("form_id"):
+        form = await get_form_version(
+            pool, result["form_id"], tenant_id, int(result.get("form_version") or 1),
+        )
+        for d in ((form or {}).get("dimensions") or []):
+            for c in (d.get("criteria") or []):
+                cid = c.get("criterion_id") or c.get("id")
+                if cid:
+                    form_labels[cid] = c.get("label") or c.get("name") or cid
+
+    by_dim: dict[str, list[dict[str, Any]]] = {}
+    for r in flat:
+        by_dim.setdefault(r["dimension_id"], []).append(r)
+
+    threads: list[dict[str, Any]] = []
+    max_round = 0
+    for dim_id, rows in by_dim.items():
+        rows.sort(key=lambda x: (x.get("round", 0) or 0, _iso_ts(x.get("created_at"))))
+        meta     = crit_meta.get(dim_id, {})
+        original = meta.get("score") or 0
+        current  = original
+        state    = "neutral"
+        entries: list[dict[str, Any]] = []
+        for r in rows:
+            at       = r.get("author_type")
+            decision = r.get("decision")
+            override = r.get("score_override")
+            if at == "evaluator_ai":
+                e_score: float | None = original
+            elif override is not None:
+                e_score = round(float(override), 4)
+            else:
+                e_score = None
+            entries.append({
+                "round":            r.get("round", 1),
+                "author_role":      at,
+                "action":           decision,
+                "score":            e_score,
+                "justification":    r.get("text", "") or "",
+                "evidence_entries": r.get("evidence_entries") or [],
+                "submitted_at":     _iso_ts(r.get("created_at")),
+            })
+            max_round = max(max_round, int(r.get("round", 1) or 1))
+            # estado pela última ação (rounds crescem com o avanço do fluxo)
+            if at == "pre_reviewer_ai":
+                state = "pre_reviewed"
+            elif at == "human_agent":
+                state = "contested"
+            elif at in ("reviewer_ai", "human_reviewer"):
+                if decision == "revised":
+                    state = "revised"
+                    if override is not None:
+                        current = round(float(override), 4)
+                elif decision == "upheld":
+                    state = "upheld"
+        threads.append({
+            "dimension_id":    dim_id,
+            "dimension_label": form_labels.get(dim_id) or meta.get("label") or dim_id,
+            "current_state":   state,
+            "original_score":  original,
+            "current_score":   current,
+            "entries":         entries,
+        })
+    threads.sort(key=lambda t: t["dimension_id"])
+    return {
+        "instance_id":   evaluation_instance_id,
+        "result_id":     result_id,
+        "current_round": max_round or 1,
+        "threads":       threads,
+    }
+
+
 async def list_contested_criteria_for_round(
     pool: asyncpg.Pool,
     evaluation_instance_id: str,
