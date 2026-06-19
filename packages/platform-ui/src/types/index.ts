@@ -487,6 +487,38 @@ export interface EvaluationCriterion {
   applies_when?: string | null
   max_score:     number
   instructions?: string | null
+  // T6a — modelo enriquecido do critério (opcionais; normalize_form preenche na leitura)
+  type?:             'score' | 'boolean' | 'choice' | 'text' | 'auto_computed'
+  question?:         string | null
+  scoring_guidance?: string | null
+  na_guidance?:      string | null
+  min_score?:        number
+  scale?:            unknown
+  choice_scores?:    Record<string, number>
+  auto_source?:      string | null
+  evidence_required?: boolean
+  contestable?:      boolean
+}
+
+// T9-B — resposta de critério como o backend devolve (GET /results/{id}/criteria)
+export interface CriterionEvidence {
+  stream_entry_id?: string
+  excerpt?:         string
+  relevance_note?:  string
+  turn_index?:      number
+}
+export interface CriterionResponseRow {
+  criterion_id:    string
+  criterion_name?: string
+  dimension_id?:   string
+  na:              boolean
+  score:           number | null
+  max_score?:      number | null
+  boolean_value?:  boolean | null
+  choice_value?:   string | null
+  text_value?:     string | null
+  notes?:          string | null
+  evidence?:       CriterionEvidence[]
 }
 
 export interface EvaluationDimension {
@@ -667,6 +699,7 @@ export interface EvaluationResult {
   evaluated_agent_type?:'human_agent' | 'ai_agent' | null
   current_round?:       number
   deadline_at?:         string | null
+  form_version?:        number   // T2 — versão fixada do form sob a qual a avaliação nasceu
 }
 
 export interface EvaluationContestation {

@@ -19,6 +19,8 @@ import {
   useCampaigns,
   useCampaignSummaries,
   type CampaignSummary,
+  useResultCriteria,
+  useFormVersion,
   useContestations,
   reviewResult,
   createContestation,
@@ -31,6 +33,8 @@ import {
 import type {
   EvaluationResultWithActions,
   EvaluationCriterionResponse,
+  EvaluationCriterion,
+  CriterionResponseRow,
   EvaluationContestation,
   EvaluationCampaign,
   // Arc 13
@@ -118,29 +122,58 @@ function elapsed(fromIso?: string | null): string {
   return `${Math.floor(h / 24)}d`
 }
 
-// ── CriterionRow ───────────────────────────────────────────────────────────────
 
-function CriterionRow({ cr }: { cr: EvaluationCriterionResponse }) {
+// ── T9-B.1: CriterionDetail — render tipado (form∪resposta, por tipo) ────────────
+
+function CriterionDetail({ def, resp, t }: {
+  def:   EvaluationCriterion          // definição do form (versão fixada)
+  resp?: CriterionResponseRow         // resposta do avaliador (join por criterion_id)
+  t:     TFn
+}) {
+  const type   = def.type ?? 'score'
+  const isAuto  = type === 'auto_computed'
+  const label  = def.label || def.criterion_id
+
+  let valueNode: React.ReactNode
+  if (resp?.na) {
+    valueNode = <span className="text-muted-light italic">N/A{resp.notes ? ` — ${resp.notes}` : ''}</span>
+  } else if (isAuto) {
+    valueNode = <span className="text-muted-light">{t('detail.autoComputed', { defaultValue: 'auto (métrica)' })}: {resp?.score ?? '—'}</span>
+  } else if (type === 'boolean') {
+    valueNode = <span className="font-medium text-dark">{resp?.boolean_value == null ? '—' : resp.boolean_value ? t('detail.yes', { defaultValue: 'Sim' }) : t('detail.no', { defaultValue: 'Não' })}</span>
+  } else if (type === 'choice') {
+    valueNode = <span className="font-medium text-dark">{resp?.choice_value ?? '—'}</span>
+  } else if (type === 'text') {
+    valueNode = <span className="text-muted">{resp?.text_value ?? '—'}</span>
+  } else {
+    valueNode = <ScorePill score={resp?.score ?? null} />
+  }
+
   return (
-    <div className="border-b last:border-0 py-2 px-3 text-sm">
-      <div className="flex items-start gap-3">
-        <span className="font-mono text-xs text-muted-light w-36 shrink-0 pt-0.5">{cr.criterion_id}</span>
-        <div className="flex-1">
-          {cr.na ? (
-            <span className="text-muted-light italic">N/A — {cr.na_reason}</span>
-          ) : (
-            <>
-              <div className="flex items-center gap-2 mb-1">
-                <ScorePill score={cr.value ?? 0} />
-                {cr.evidence_refs && cr.evidence_refs.length > 0 && (
-                  <span className="text-xs text-muted-light">refs: [{cr.evidence_refs.join(', ')}]</span>
-                )}
-              </div>
-              <p className="text-muted text-xs leading-relaxed">{cr.justification}</p>
-            </>
-          )}
-        </div>
+    <div className={`border-b last:border-0 py-2 px-3 text-sm ${isAuto ? 'opacity-60' : ''}`}>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-medium text-dark">{label}</span>
+        <span className="text-[10px] px-1 rounded bg-surface-alt text-muted-light">{type}</span>
+        {isAuto && <span className="text-[10px] text-muted-light">· {t('detail.notContestable', { defaultValue: 'não contestável' })}</span>}
+        <span className="ml-auto">{valueNode}</span>
       </div>
+      {def.question && <p className="text-xs text-muted-light mt-0.5">{def.question}</p>}
+      {!resp?.na && type !== 'text' && resp?.notes && (
+        <p className="text-muted text-xs mt-1 leading-relaxed">{resp.notes}</p>
+      )}
+      {def.scoring_guidance && (
+        <p className="text-[11px] text-muted-light mt-1">↳ {def.scoring_guidance}</p>
+      )}
+      {resp?.evidence && resp.evidence.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1">
+          {resp.evidence.map((ev, i) => (
+            <span key={i} title={ev.excerpt || ev.relevance_note || ''}
+              className="text-[10px] font-mono px-1 rounded bg-primary-light text-primary cursor-default">
+              {ev.stream_entry_id ?? `#${ev.turn_index ?? i}`}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1113,6 +1146,19 @@ function DetailPanel({
   const threads  = threadData?.threads ?? []
   const currentRound = threadData?.current_round ?? result.current_round ?? 0
 
+  // T9-B.1 — render tipado: respostas do resultado + versão FIXADA do form (join por critério)
+  const { tenantId: TENANT } = useAuth()
+  const { criteria: responses } = useResultCriteria(result.result_id, TENANT)
+  const { form: pinnedForm }    = useFormVersion(result.form_id ?? null, result.form_version, TENANT)
+  const respByCrit = new Map((responses ?? []).map(r => [r.criterion_id, r]))
+  const mergedCriteria: { def: EvaluationCriterion; resp?: CriterionResponseRow }[] = []
+  const dims = Array.isArray(pinnedForm?.dimensions) ? pinnedForm!.dimensions : []
+  for (const dim of dims) {
+    for (const def of (dim.criteria ?? [])) {
+      mergedCriteria.push({ def, resp: respByCrit.get(def.criterion_id) })
+    }
+  }
+
   const handleActionDone = () => {
     setMode('view')
     reloadThreads()
@@ -1232,15 +1278,34 @@ function DetailPanel({
           </div>
         )}
 
-        {/* ── Arc 6 fallback: criteria list ─────────────────────────────────── */}
-        {!isArc13 && mode !== 'contest' && (result.criterion_responses ?? []).length > 0 && (
+        {/* ── T9-B.1: critérios preenchidos (render tipado, versão fixada do form) ── */}
+        {mode === 'view' && (
           <div>
-            <div className="text-xs font-semibold text-muted mb-2">{t('detail.evaluatedCriteria')}</div>
-            <div className="border rounded">
-              {result.criterion_responses.map(cr => (
-                <CriterionRow key={cr.criterion_id} cr={cr} />
-              ))}
+            <div className="text-xs font-semibold text-muted mb-2">
+              {t('detail.evaluatedCriteria')}
+              {result.form_version != null && (
+                <span className="ml-1 font-normal text-muted-light">· form v{result.form_version}</span>
+              )}
             </div>
+            {mergedCriteria.length > 0 ? (
+              <div className="border rounded">
+                {mergedCriteria.map(({ def, resp }) => (
+                  <CriterionDetail key={def.criterion_id} def={def} resp={resp} t={t} />
+                ))}
+              </div>
+            ) : responses.length > 0 ? (
+              <div className="border rounded">
+                {responses.map(r => (
+                  <CriterionDetail
+                    key={r.criterion_id}
+                    def={{ criterion_id: r.criterion_id, label: r.criterion_name || r.criterion_id, description: '', weight: 0, allows_na: false, max_score: r.max_score ?? 10 } as EvaluationCriterion}
+                    resp={r} t={t}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-xs text-muted-light italic px-1">{t('detail.noCriteria', { defaultValue: 'Sem critérios.' })}</div>
+            )}
           </div>
         )}
 
@@ -1397,11 +1462,12 @@ export default function AvaliacoesPage() {
   const { campaigns } = useCampaigns(TENANT)
   const { summaries } = useCampaignSummaries(TENANT, 30_000)
 
-  // Build filters for useResults — escopado pela campanha da URL (nível 2)
+  // Build filters for useResults — escopado pela campanha da URL (nível 2).
+  // "Awaiting my action" é filtro CLIENT-SIDE sobre available_actions (ABAC por linha) —
+  // NÃO mandar action_required ao backend (zerava results e não voltava). T9-B fix.
   const filters = {
     evalStatus:     statusFilter || undefined,
     campaignId:     campaignId   || undefined,
-    actionRequired: myActionsOnly ? ('any' as const) : undefined,
     limit: 100,
   }
 

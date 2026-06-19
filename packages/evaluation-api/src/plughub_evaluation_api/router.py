@@ -275,6 +275,15 @@ def _expose_campaign_id(row: dict[str, Any] | None) -> dict[str, Any] | None:
     return row
 
 
+def _expose_result_id(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """O UI espera `result_id`; o DB usa `id` como PK (evresult_*) e já carrega
+    `campaign_id` (FK). Expõe `result_id` = `id` — sem isso a seleção de linha do
+    drill-down compara undefined===undefined (toda linha aparece selecionada). T9-B."""
+    if row is not None and "result_id" not in row and "id" in row:
+        row["result_id"] = row["id"]
+    return row
+
+
 @router.get("/v1/evaluation/forms")
 async def list_forms(
     request: Request,
@@ -1685,6 +1694,7 @@ async def list_results(
                 campaign_pool_cache[c_id] = None
         row_pool_id = campaign_pool_cache.get(c_id)
         row["available_actions"] = _compute_available_actions(row, jwt_payload, row_pool_id)
+        _expose_result_id(row)
 
     return {"tenant_id": tenant_id, "results": rows, "count": len(rows)}
 
@@ -1716,6 +1726,7 @@ async def get_result(
     available_actions = _compute_available_actions(row, jwt_payload, pool_id)
 
     result_with_actions = dict(row)
+    _expose_result_id(result_with_actions)
     result_with_actions["available_actions"] = available_actions
     if available_actions and row.get("deadline_at"):
         result_with_actions["action_context"] = {

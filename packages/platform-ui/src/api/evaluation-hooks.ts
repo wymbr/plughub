@@ -216,6 +216,41 @@ export async function previewRubric(
   return r.json()
 }
 
+// ── T9-B — critérios do resultado + versão fixada do form ───────────────────────
+
+export function useResultCriteria(resultId: string | null, tenantId: string) {
+  const [criteria, setCriteria] = useState<import('@/types').CriterionResponseRow[]>([])
+  const [loading, setLoading] = useState(false)
+  const load = useCallback(async () => {
+    if (!resultId) { setCriteria([]); return }
+    setLoading(true)
+    try {
+      const r = await fetch(`${BASE}/results/${resultId}/criteria?tenant_id=${tenantId}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setCriteria(d?.criterion_responses ?? [])
+    } catch { setCriteria([]) } finally { setLoading(false) }
+  }, [resultId, tenantId])
+  useEffect(() => { load() }, [load])
+  return { criteria, loading, reload: load }
+}
+
+/** Snapshot da versão fixada do form (T6b) — base do render tipado por critério. */
+export function useFormVersion(formId: string | null, version: number | null | undefined, tenantId: string) {
+  const [form, setForm] = useState<EvaluationForm | null>(null)
+  const load = useCallback(async () => {
+    if (!formId) { setForm(null); return }
+    try {
+      const v = version ?? 1
+      const r = await fetch(`${BASE}/forms/${formId}/versions/${v}?tenant_id=${tenantId}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      setForm(await r.json())
+    } catch { setForm(null) }
+  }, [formId, version, tenantId])
+  useEffect(() => { load() }, [load])
+  return { form }
+}
+
 // ── Campaign summaries (T9-A2 — nível 1) ────────────────────────────────────────
 
 export interface CampaignSummary {

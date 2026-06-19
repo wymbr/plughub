@@ -456,7 +456,12 @@
     "awaitingReview": "review",
     "awaitingContest": "contestation",
     "deadline": "Deadline",
-    "elapsed": "in state"
+    "elapsed": "in state",
+    "autoComputed": "auto (metric)",
+    "notContestable": "not contestable",
+    "yes": "Yes",
+    "no": "No",
+    "noCriteria": "No criteria."
   },
   "review": {
     "openContestations": "Open Contestations",

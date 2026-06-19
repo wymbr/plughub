@@ -2,6 +2,33 @@
 
 ---
 
+## T9-B.1 — Drill-down: render tipado por critério (2026-06-19)
+
+Nível 3 do drill-down (blueprint `t9-evaluations-ia.md` §B). **Só platform-ui.** O detalhe da
+avaliação passa a renderizar os critérios **por tipo**, contra a **versão fixada do form** —
+fechando o gap G-UI (o painel antes não tinha fonte de dado para os critérios). Validar por browser.
+
+- `CriterionDetail` (novo): render por tipo (`score`→nota, `boolean`→Sim/Não, `choice`→opção,
+  `text`→qualitativo, `auto_computed`→cinza, não-contestável) + label/pergunta/`scoring_guidance` +
+  justificativa + **evidência como chips** (`stream_entry_id`).
+- `DetailPanel`: busca `useResultCriteria` (GET `/results/{id}/criteria`) + `useFormVersion`
+  (snapshot da `form_version` pinada, B.1 do blueprint) e faz o **join form∪respostas** por
+  `criterion_id` (iterando a definição do form → mostra todos os critérios, inclusive os sem
+  resposta); fallback genérico quando não há snapshot. Removido o `CriterionRow` antigo
+  (tratava tudo como score, sem dado).
+- Tipos: `EvaluationCriterion` += `type/scoring_guidance/...` (T6a); `CriterionResponseRow`
+  (shape real do backend: score/boolean/choice/text/notes/evidence); `EvaluationResult += form_version`.
+- i18n `detail.autoComputed/notContestable/yes/no/noCriteria` (en+pt-BR).
+- **Fix (bug exposto no teste): seleção de linha.** A API de results devolvia `id` (PK), não
+  `result_id`; o front comparava `undefined===undefined` → toda linha "selecionada" e o clique não
+  abria o painel. Add `_expose_result_id` (id→result_id) em `list_results`/`get_result` (espelha
+  `_expose_form_id`/`_expose_campaign_id`).
+- **Fix: "Awaiting my action" zerava a lista.** O filtro mandava `action_required=any` ao backend
+  (retornava [] p/ admin) e não voltava; passou a ser **client-side** sobre `available_actions`.
+- **Rebuild**: evaluation-api (result_id) + platform-ui. Próximo: T9-B.2 (timeline por critério + Δ).
+
+---
+
 ## T9-A2.2 — Lista de Avaliações em dois níveis (UI) (2026-06-19)
 
 Frontend do nível 1 + escopo do nível 2 (blueprint `t9-evaluations-ia.md`). **Só platform-ui.**
