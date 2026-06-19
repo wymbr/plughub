@@ -209,37 +209,80 @@ async def _resume_workflow(resume_token: str, tenant_id: str) -> None:
         logger.warning("workflow resume HTTP call failed (non-fatal): %s", exc)
 
 
+# T10 — round → campo ABAC (§15.4/§17.2). R=1→base; R=2→réplica; R=3→tréplica.
+_CONTEST_FIELD_BY_ROUND = {1: "contestar", 2: "contestar_replica", 3: "contestar_treplica"}
+_REVIEW_FIELD_BY_ROUND  = {1: "revisar",   2: "revisar_replica",   3: "revisar_treplica"}
+
+
+def _round_field(mapping: dict[int, str], rnd: int) -> str:
+    """Campo ABAC do round; clampa rounds <1→1 e >3→tréplica (maior definido)."""
+    if rnd < 1:
+        rnd = 1
+    return mapping.get(rnd, mapping[max(mapping)])
+
+
 def _compute_available_actions(
     result: dict[str, Any],
     jwt_payload: dict[str, Any] | None,
     pool_id: str | None,
 ) -> list[str]:
-    """Compute available_actions server-side using ABAC — never trust the client."""
-    if result.get("eval_status") == "locked":
+    """T10 — `available_actions` deriva de `result_state` + round corrente + **posse**
+    (spec §17.2), nunca confiando no cliente. Reescreve a versão antiga (dependente de
+    `action_required` do workflow):
+
+      | open(R)         ∧ caller é o avaliado (dono do segmento) ∧ campo de contestação do round R | contest |
+      | under_review(R) ∧ caller ≠ avaliado                      ∧ campo de revisão     do round R | review  |
+      | caso contrário (incl. nenhum campo / locked / sem token)                                    | []      |
+
+    A posse usa `caller (jwt.sub) == result.evaluated_user_id` (T2). Round vem de
+    `current_round` (default 1). O campo ABAC é casado por round e validado por
+    `_check_abac_permission` (escopo de pool incluído)."""
+    if result.get("eval_status") == "locked" or result.get("locked"):
         return []
-    action_required = result.get("action_required")
-    if not action_required or not jwt_payload:
+    if not jwt_payload:
         return []
 
-    if action_required == "review" and _check_abac_permission(jwt_payload, "revisar", pool_id):
-        return ["review"]
-    if action_required == "contestation" and _check_abac_permission(jwt_payload, "contestar", pool_id):
-        return ["contest"]
+    state    = result.get("result_state")
+    rnd      = int(result.get("current_round") or 1)
+    caller   = jwt_payload.get("sub")
+    evaluated = result.get("evaluated_user_id")
+    is_owner = bool(caller) and bool(evaluated) and caller == evaluated
+
+    if state == "open":
+        field = _round_field(_CONTEST_FIELD_BY_ROUND, rnd)
+        if is_owner and _check_abac_permission(jwt_payload, field, pool_id):
+            return ["contest"]
+        return []
+
+    if state == "under_review":
+        if is_owner:
+            return []  # não se revisa a si mesmo
+        field = _round_field(_REVIEW_FIELD_BY_ROUND, rnd)
+        if _check_abac_permission(jwt_payload, field, pool_id):
+            return ["review"]
+        return []
+
     return []
 
 
 def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None) -> bool:
     """T9-C — gate de leitura do transcript (nível 3), por PAPEL DE AVALIAÇÃO (não
-    `audit.sessions`). Nível 3 é "mesma tela para todos" (blueprint §2/§4): qualquer
-    field de avaliação com acesso no pool habilita a visão (read-only para observadores;
-    ações vêm de `available_actions`). Graceful degradation: token legado sem
-    `module_config` ou chamada anônima (endpoints de avaliação são abertos por tenant) →
-    permitido, espelhando `_check_abac_permission`. O conteúdo é mascarado (D3), baixa
-    sensibilidade."""
+    `audit.sessions`). Nível 3 é "mesma tela para todos" (blueprint §2/§4): QUALQUER campo
+    do módulo `evaluation` com acesso != none habilita a visão (read-only p/ observador;
+    ações vêm de `available_actions`). Generaliza sobre os campos (o módulo usa `report`
+    como leitura, além de `revisar`/`contestar`/round-variants/`formularios`/`gerir_rubrica`)
+    — não enumera nomes. Graceful degradation: token legado/anônimo ou `module_config`
+    vazio → permitido (endpoints de avaliação são abertos por tenant; conteúdo mascarado, D3)."""
     if not jwt_payload:
         return True
-    for field in ("visualizar", "revisar", "contestar"):
-        if _check_abac_permission(jwt_payload, field, pool_id):
+    module_config = jwt_payload.get("module_config", {})
+    if not module_config:
+        return True  # legado / admin sem module_config → degradação permissiva
+    eval_cfg = module_config.get("evaluation", {})
+    if not isinstance(eval_cfg, dict):
+        return False
+    for field_cfg in eval_cfg.values():
+        if isinstance(field_cfg, dict) and field_cfg.get("access", "none") != "none":
             return True
     return False
 

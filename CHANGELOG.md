@@ -2,6 +2,28 @@
 
 ---
 
+## T10-A — available_actions por result_state + round + posse (2026-06-19)
+
+Núcleo do T10 (spec §17.2): `available_actions` deixa de depender de `action_required` (workflow)
+e passa a derivar de **estado + round corrente + posse**. **Só evaluation-api.** Validado por unit
+test (pytest, 16/16).
+
+- `_compute_available_actions` reescrito (`router.py`): `open(R)` ∧ caller é o avaliado (dono,
+  `jwt.sub == result.evaluated_user_id`) ∧ campo de contestação do round R → `["contest"]`;
+  `under_review(R)` ∧ caller ≠ avaliado ∧ campo de revisão do round R → `["review"]`; senão `[]`.
+  Campo ABAC casado por round (`contestar`/`_replica`/`_treplica`; idem `revisar`),
+  via `_CONTEST_FIELD_BY_ROUND`/`_REVIEW_FIELD_BY_ROUND` + `_round_field` (clamp 1..3). Guardas:
+  locked/finalized/sem-token → `[]`; não-dono não contesta; ninguém se revisa.
+- **Fix do gate de leitura** (`_can_view_transcript`, regressão do T9-C2): generalizado p/ "qualquer
+  campo do módulo `evaluation` com acesso ≠ none". Antes checava `visualizar`, **inexistente** no
+  módulo (a leitura é `report`) → observador report-only tomava 403 no transcript.
+- Test `tests/test_available_actions.py` (função pura, sem DB): matriz estados×papéis×posse×round +
+  o gate de leitura. **Provisionamento (B) já existe** (`seed_auth.py`: supervisor `revisar`+`report`,
+  operator `contestar`). **Pendente**: T10-C (visibilidade self-scope em `list_results`) e T10-D
+  (superfície de ações na rota dedicada do nível 3).
+
+---
+
 ## T9-C.fix2 — alinhamento do schema do evaluation_submit (caminho do avaliador real) (2026-06-19)
 
 Fecha a ponta que o T9-C.fix deixou aberta: o caminho do **avaliador IA real** perdia a

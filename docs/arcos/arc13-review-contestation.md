@@ -247,6 +247,15 @@ Cada `EvaluationCriterion` ganha `dimension_id` e `dimension_label`. Critérios 
 
 Somente `author_type: "human_agent"` pode abrir contestação. `available_actions` retorna `[]` para avaliações de agentes AI. Isso é verificado server-side, nunca client-side.
 
+> **T10-A (2026-06-19) — `available_actions` por estado+round+posse.** `_compute_available_actions`
+> (evaluation-api `router.py`) foi reescrito p/ a regra da spec §17.2 (não depende mais de
+> `action_required`): `open(R)` ∧ caller é o avaliado (`jwt.sub == result.evaluated_user_id`) ∧ campo
+> de contestação do round R → `["contest"]`; `under_review(R)` ∧ caller ≠ avaliado ∧ campo de revisão
+> do round R → `["review"]`; senão `[]` (read-only). Campo casado por round
+> (`contestar`/`_replica`/`_treplica`; idem `revisar`). Guardas: locked/finalized/sem-token → `[]`;
+> não-dono não contesta; ninguém se revisa. Cobertura: `tests/test_available_actions.py`. Pendente:
+> T10-C (visibilidade self-scope em `list_results`) e T10-D (ações na rota dedicada do nível 3).
+
 ### 4 — Revisor AI atua pré-publicação, configurável por campanha ✅
 
 O revisor AI não é um árbitro pós-contestação — é um **gate de qualidade que atua antes do resultado ser publicado ao agente humano**. Configurado por campanha via `pre_review_enabled` e `pre_review_agent_pool`. Objetivo: melhorar a qualidade da avaliação antes que o avaliado a veja, reduzindo contestações evitáveis.
