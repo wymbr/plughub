@@ -2,6 +2,21 @@
 
 ---
 
+## T9-A2.1 — Sumário por campanha (backend, nível 1) (2026-06-19)
+
+Backend do nível 1 da lista de Avaliações (blueprint `t9-evaluations-ia.md`). **Code-only
+evaluation-api.** Validado via `infra/test/test_t9a2_campaign_summary.sh`.
+
+- `db.campaign_summaries(tenant_id, campaign_ids?)`: GROUP BY tenant-wide — instances por status;
+  results por `result_state`; `finalize_reason` (finalized); `evaluated_agent_type` (humano/IA);
+  AVG(`process_duration_ms`); SLA vencido (`deadline_at<now` em open/under_review). Consolidado
+  **global por campanha**.
+- `GET /v1/evaluation/reports/campaign-summary?tenant_id=&campaign_id=` (aberto). O frontend (A2.2)
+  mescla com nome/período/pool da campanha. **Rebuild**: evaluation-api. Próximo: A2.2 (UI nível 1
+  + escopo nível 2 + remoção da coluna de campanha).
+
+---
+
 ## T9-A1 — Colunas canônicas da lista de Avaliações (nível 2) (2026-06-19)
 
 Primeiro chunk do T9 (blueprint `docs/product/t9-evaluations-ia.md`; spec §7.1). A lista deixa de

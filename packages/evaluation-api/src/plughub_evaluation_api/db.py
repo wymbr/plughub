@@ -2373,6 +2373,68 @@ async def claim_dispatchable_instances(
     return _rows(rows)
 
 
+# ─── T9-A2 — sumário por campanha (nível 1 da lista de Avaliações) ────────────
+
+async def campaign_summaries(
+    pool: asyncpg.Pool, tenant_id: str, *, campaign_ids: list[str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Agregados por campanha p/ o nível 1 (cards de campanha). **Global por campanha**
+    (o consolidado é a média da campanha; o escopo de QUAIS campanhas o viewer vê é do
+    caller — ABAC+Pools). Poucas queries GROUP BY tenant-wide. Spec §7.5 / blueprint T9."""
+    cond = ""
+    args: list[Any] = [tenant_id]
+    if campaign_ids:
+        args.append(campaign_ids)
+        cond = f" AND campaign_id = ANY(${len(args)})"
+
+    out: dict[str, dict[str, Any]] = {}
+    def slot(cid: str) -> dict[str, Any]:
+        return out.setdefault(cid, {
+            "instance_status": {}, "result_state": {}, "finalize_reason": {},
+            "evaluated": {}, "avg_process_ms": None, "sla_overdue": 0, "total_results": 0,
+        })
+
+    async with pool.acquire() as conn:
+        for r in await conn.fetch(
+            f"SELECT campaign_id, status, COUNT(*) AS n FROM evaluation.instances "
+            f"WHERE tenant_id=$1{cond} GROUP BY campaign_id, status", *args):
+            slot(r["campaign_id"])["instance_status"][r["status"]] = int(r["n"])
+
+        for r in await conn.fetch(
+            f"SELECT campaign_id, result_state, COUNT(*) AS n FROM evaluation.results "
+            f"WHERE tenant_id=$1{cond} GROUP BY campaign_id, result_state", *args):
+            s = slot(r["campaign_id"])
+            s["result_state"][r["result_state"] or "unknown"] = int(r["n"])
+            s["total_results"] += int(r["n"])
+
+        for r in await conn.fetch(
+            f"SELECT campaign_id, finalize_reason, COUNT(*) AS n FROM evaluation.results "
+            f"WHERE tenant_id=$1 AND result_state='finalized' AND finalize_reason IS NOT NULL{cond} "
+            f"GROUP BY campaign_id, finalize_reason", *args):
+            slot(r["campaign_id"])["finalize_reason"][r["finalize_reason"]] = int(r["n"])
+
+        for r in await conn.fetch(
+            f"SELECT campaign_id, evaluated_agent_type, COUNT(*) AS n FROM evaluation.results "
+            f"WHERE tenant_id=$1 AND evaluated_agent_type IS NOT NULL{cond} "
+            f"GROUP BY campaign_id, evaluated_agent_type", *args):
+            slot(r["campaign_id"])["evaluated"][r["evaluated_agent_type"]] = int(r["n"])
+
+        for r in await conn.fetch(
+            f"SELECT campaign_id, AVG(process_duration_ms)::float AS avg_ms FROM evaluation.results "
+            f"WHERE tenant_id=$1 AND result_state='finalized' AND process_duration_ms IS NOT NULL{cond} "
+            f"GROUP BY campaign_id", *args):
+            slot(r["campaign_id"])["avg_process_ms"] = r["avg_ms"]
+
+        for r in await conn.fetch(
+            f"SELECT campaign_id, COUNT(*) AS n FROM evaluation.results "
+            f"WHERE tenant_id=$1 AND result_state IN ('open','under_review') "
+            f"AND deadline_at IS NOT NULL AND deadline_at < now(){cond} "
+            f"GROUP BY campaign_id", *args):
+            slot(r["campaign_id"])["sla_overdue"] = int(r["n"])
+
+    return out
+
+
 # ─── Pool factory ─────────────────────────────────────────────────────────────
 
 async def create_pool(dsn: str) -> asyncpg.Pool:

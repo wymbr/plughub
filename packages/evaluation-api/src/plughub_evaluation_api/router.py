@@ -937,6 +937,20 @@ async def backfill_campaign(
     )
 
 
+@router.get("/v1/evaluation/reports/campaign-summary")
+async def campaign_summary(
+    request: Request, tenant_id: str, campaign_id: str | None = None,
+) -> dict:
+    """T9-A2 — agregados por campanha p/ o nível 1 da lista de Avaliações (cards de
+    campanha): contagens por instance status e por `result_state`, distribuição de
+    `finalize_reason`, split humano/IA, tempo médio (`process_duration_ms`) e SLA vencido.
+    Consolidado **global por campanha**; o frontend mescla com nome/período/pool da campanha."""
+    pool = _pool(request)
+    ids = [campaign_id] if campaign_id else None
+    summaries = await _db.campaign_summaries(pool, tenant_id, campaign_ids=ids)
+    return {"tenant_id": tenant_id, "summaries": summaries}
+
+
 @router.get("/v1/evaluation/instances/{instance_id}")
 async def get_instance(instance_id: str, tenant_id: str, request: Request) -> dict:
     pool = _pool(request)
