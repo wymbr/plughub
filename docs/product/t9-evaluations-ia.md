@@ -132,7 +132,60 @@ aparece é dirigido por **`available_actions`** (computado server-side a partir 
 
 ---
 
-## 6. Referências
+## 6. Notas de implementação — chunks B e C
+
+### B — render tipado por critério + timeline (nível 3)
+
+- **B.1 — versão fixada do form (sempre).** Renderizar contra o **snapshot** da `form_version`
+  pinada (`get_form_version`), nunca a versão viva. Decisão: **manter sempre o formulário usado**
+  pela avaliação (a avaliação é imutável quanto à régua sob a qual nasceu).
+- **B.2 — composição (form ∪ respostas) + registro de `auto_computed`.** O detalhe itera os
+  critérios do form fixado e casa com `criterion_responses` por `criterion_id`; `auto_computed`
+  vem do `instance.session_metrics`. **Definir uma LISTA CANÔNICA das métricas `auto_computed`**
+  (o registro de saídas do SessionMetricsExtractor) para que qualquer **importação/backfill** de
+  histórico recalcule todas elas de forma consistente. *(Item de design do B / do extractor.)*
+- **B.3 — reuso do render do Forms.** Reusar o componente de render do FormsPage em modo
+  "preenchido + ações" (§7.2). **Verificar reusabilidade antes de estimar** — se acoplado ao modo
+  edição, vira sub-passo de refactor (ou render paralelo = dívida).
+- **B.4 — provisória vs final.** Critério revisado mostra valor do avaliador + override + Δ; a nota
+  real consolida só em `finalized` (§14.1).
+- **B.5 — UI.** A timeline por critério provavelmente **estende o render do formulário** com
+  pop-up/drawer (ou equivalente) por critério — não uma tela à parte.
+
+### C — transcript + evidência + mascaramento (nível 3)
+
+- **C.1 — fonte abstraída (store persistido, não Redis vivo).** O transcript vem do **stream
+  persistido** (Stream Persister/PostgreSQL via Hydrator/Replayer), não do Redis (que expira ~1h)
+  — assim avaliações históricas têm transcript. **O avaliador / a UI / a evaluation-api NÃO
+  conhecem Redis/ReplayContext** — pedem o transcript a um **serviço de transcript** por trás de
+  uma porta limpa. (Decisão: a abstração é obrigatória; o consumidor não sabe a origem.)
+- **C.2 — mascaramento server-side por papel (crítico).** O endpoint decide no servidor qual campo
+  expõe: revisor autorizado → `original_content`; **avaliado → nunca o desmascarado** (default
+  `authorized_roles: [evaluator, reviewer]`, LGPD). Nunca mandar desmascarado e esconder no cliente.
+  **Reusar/alinhar com o modelo de masking existente** (Core/Audit-LGPD), não reinventar.
+- **C.3 — alinhamento de `stream_entry_id`.** As mensagens do transcript devem carregar o **mesmo**
+  `stream_entry_id` que a evidência citou (espaço de ids do `ReplayContext.events`), senão o
+  clique-na-evidência não acha a mensagem.
+- **C.4 — escopo no segmento.** Transcript filtrado pela janela do `ContactSegment` avaliado
+  (`started_at`/`ended_at`), expansível ao contato. Vem do `segment_id` no result (T2).
+
+### Decisões de design (fechadas)
+
+- **D1 — Nível 3 como ROTA dedicada** (não painel inline). Modelo mais limpo dado o peso do nível 3
+  (form preenchido + transcript lado a lado + ações + mascaramento): tela cheia em rota própria
+  (ex.: `/evaluation/evaluations/:campaignId/:resultId`). O restante da IA segue rotas
+  (`:campaignId` para o nível 2). *(O T9-A1 mantém a estrutura atual; a reestruturação de rotas
+  entra com o nível 1 / A2 e com o B/C.)*
+- **D2 — Endpoint de transcript DELEGA ao session-replayer.** Para honrar C.1, o endpoint de
+  transcript **não consulta `sessions_stream` direto** (acoplaria a evaluation-api ao storage do
+  replayer e duplicaria o masking). Em vez disso, **delega ao session-replayer** (que já é dono do
+  ensure-before-read + Hydrator) para os eventos, e o **mascaramento por papel alinha com o modelo
+  de masking/audit existente**. A evaluation-api orquestra (escopo do segmento, papel do caller),
+  não possui o storage nem reinventa o masking.
+
+---
+
+## 7. Referências
 - `docs/product/evaluation-reconciliation-spec.md` §7 (UI), §17 (T9/T10/T11).
 - Arc 7 (`accessible_pools`), Arc 9 (Grupos/supervisor scope), Arc 5 (segmentos), T1 (`result_state`),
   T2 (segmento+`agent_user_id`), T17 (período), T10 (`available_actions`).
