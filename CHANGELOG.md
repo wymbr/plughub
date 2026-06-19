@@ -2,6 +2,28 @@
 
 ---
 
+## T9-C2 — evaluation-api: GET /results/{id}/transcript (orquestra + delega) (2026-06-19)
+
+Segundo elo do T9-C (blueprint §C, D2/D3). **Só evaluation-api.** O nível 3 ganha a porta que
+a UI consome: resolve `result → session_id+segment_id`, gateia por **papel de avaliação** e
+**delega** a leitura mascarada ao analytics-api (T9-C1).
+
+- `router.py`: `GET /v1/evaluation/results/{result_id}/transcript` (`?scope=segment|contact`).
+  Busca o result (`get_result`), resolve `pool_id` da campanha p/ escopo ABAC, e chama via `httpx`
+  o `analytics-api` (`settings.analytics_api_url` + `/v1/transcript/sessions/{session_id}`,
+  `segment_id` quando `scope=segment`). Devolve `{result_id, session_id, segment_id, scope, window,
+  masked:true, messages}`. Erros: 404 (result), 409 (sem session_id), 502 (delegação).
+- `_can_view_transcript(jwt, pool_id)` (novo): gate por `module_config.evaluation`
+  (`visualizar`/`revisar`/`contestar` no pool) — **não** `audit.sessions`. Nível 3 = "mesma tela
+  p/ todos" (read-only p/ observador). Graceful degradation: token legado/anônimo → permitido
+  (endpoints de avaliação são abertos por tenant; conteúdo mascarado, baixa sensibilidade).
+- `_ingest_core` já propaga `instance.segment_id → result` (T2), então o recorte por segmento
+  funciona fim-a-fim. Test `infra/test/test_t9c2_transcript.sh` (seed CH + form/campanha/instance/
+  ingest → valida janela=2/contact=4/404/mascarado/ids alinhados). Próximo: T9-C3 (rota dedicada +
+  UI com evidência clicável).
+
+---
+
 ## T9-C1 — analytics-api: leitura de transcript mascarado por segmento (2026-06-19)
 
 Backend do T9-C (blueprint `t9-evaluations-ia.md` §C, decisões D2/D3). **Só analytics-api.**

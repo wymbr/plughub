@@ -32,6 +32,7 @@ Endpoints:
     GET    /v1/evaluation/results                 list results
     GET    /v1/evaluation/results/{id}            get result
     GET    /v1/evaluation/results/{id}/criteria   get criterion responses
+    GET    /v1/evaluation/results/{id}/transcript transcript (delegado ao analytics-api; mascarado)
     POST   /v1/evaluation/results/{id}/review     reviewer submits review
     POST   /v1/evaluation/results/{id}/lock       admin lock
 
@@ -225,6 +226,22 @@ def _compute_available_actions(
     if action_required == "contestation" and _check_abac_permission(jwt_payload, "contestar", pool_id):
         return ["contest"]
     return []
+
+
+def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None) -> bool:
+    """T9-C — gate de leitura do transcript (nível 3), por PAPEL DE AVALIAÇÃO (não
+    `audit.sessions`). Nível 3 é "mesma tela para todos" (blueprint §2/§4): qualquer
+    field de avaliação com acesso no pool habilita a visão (read-only para observadores;
+    ações vêm de `available_actions`). Graceful degradation: token legado sem
+    `module_config` ou chamada anônima (endpoints de avaliação são abertos por tenant) →
+    permitido, espelhando `_check_abac_permission`. O conteúdo é mascarado (D3), baixa
+    sensibilidade."""
+    if not jwt_payload:
+        return True
+    for field in ("visualizar", "revisar", "contestar"):
+        if _check_abac_permission(jwt_payload, field, pool_id):
+            return True
+    return False
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -1741,6 +1758,73 @@ async def get_criteria(result_id: str, tenant_id: str, request: Request) -> dict
     pool = _pool(request)
     rows = await _db.list_criterion_responses(pool, result_id, tenant_id)
     return {"result_id": result_id, "criterion_responses": rows, "count": len(rows)}
+
+
+@router.get("/v1/evaluation/results/{result_id}/transcript")
+async def get_result_transcript(
+    result_id: str,
+    tenant_id: str,
+    request: Request,
+    scope: str = "segment",   # "segment" (janela do segmento avaliado) | "contact"
+) -> dict:
+    """T9-C2 — transcript do nível 3 (blueprint §C, D2/D3).
+
+    Orquestra: resolve `result → session_id + segment_id`, gateia por PAPEL DE AVALIAÇÃO
+    (ABAC `module_config.evaluation`, NÃO `audit.sessions`) e **delega ao analytics-api**
+    (porta limpa, D2) a leitura sobre `analytics.messages` (mascarado por construção, D3).
+    O evaluation-api não toca ClickHouse nem reinventa masking; o analytics-api recorta a
+    janela do segmento (C.4) e devolve `stream_entry_id` alinhado à evidência (C.3)."""
+    if scope not in ("segment", "contact"):
+        raise HTTPException(422, detail="scope must be 'segment' or 'contact'")
+
+    pool = _pool(request)
+    row = await _db.get_result(pool, result_id, tenant_id)
+    if not row:
+        raise HTTPException(404, detail="result not found")
+
+    # Resolve pool_id da campanha p/ escopo ABAC
+    pool_id: str | None = None
+    if row.get("campaign_id"):
+        campaign = await _db.get_campaign(pool, row["campaign_id"], tenant_id)
+        pool_id = campaign.get("pool_id") if campaign else None
+
+    jwt_payload = _decode_jwt_optional(request)
+    if not _can_view_transcript(jwt_payload, pool_id):
+        raise HTTPException(403, detail="no evaluation permission to view transcript")
+
+    session_id = row.get("session_id")
+    if not session_id:
+        raise HTTPException(409, detail="result has no session_id")
+    segment_id = row.get("segment_id")
+
+    params: dict[str, Any] = {"tenant_id": tenant_id, "scope": scope}
+    if scope == "segment" and segment_id:
+        params["segment_id"] = segment_id
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{settings.analytics_api_url}/v1/transcript/sessions/{session_id}",
+                params=params,
+            )
+    except Exception as exc:
+        logger.error("transcript delegation to analytics-api failed: %s", exc)
+        raise HTTPException(502, detail="transcript service unavailable")
+
+    if resp.status_code >= 400:
+        logger.warning("analytics-api transcript %s: %s", resp.status_code, resp.text)
+        raise HTTPException(502, detail=f"transcript service error ({resp.status_code})")
+
+    body = resp.json()
+    return {
+        "result_id":  result_id,
+        "session_id": session_id,
+        "segment_id": segment_id,
+        "scope":      body.get("scope", scope),
+        "window":     body.get("window"),
+        "masked":     True,
+        "messages":   body.get("messages", []),
+    }
 
 
 @router.post("/v1/evaluation/results/{result_id}/review")

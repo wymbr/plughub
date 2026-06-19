@@ -447,6 +447,14 @@ mascarado (`stream_entry_id`+`content`+`author_role`+`created_at`, `masked: true
 `/v1/transcript` (não `/v1/audit`): o gate de papel de avaliação fica no evaluation-api (T9-C2);
 aqui só isolamento por tenant. Test `infra/test/test_t9c1_transcript_window.sh`.
 
+**T9-C2 (evaluation-api)** — `GET /v1/evaluation/results/{result_id}/transcript`
+(`?scope=segment|contact`). Orquestra: resolve `result → session_id+segment_id` (segment_id
+propagado do instance no ingest, T2), gateia por `_can_view_transcript` (ABAC
+`module_config.evaluation` — `visualizar`/`revisar`/`contestar` no pool da campanha; legado/anônimo
+→ permitido, conteúdo mascarado) e **delega** via `httpx` ao analytics-api (`analytics_api_url`).
+Devolve `{result_id, session_id, segment_id, scope, window, masked:true, messages}`. É a porta que
+a UI do nível 3 (T9-C3) consome. Test `infra/test/test_t9c2_transcript.sh`.
+
 ## Novos pacotes
 
 - `packages/evaluation-api/` — Python FastAPI, porta 3400. Ciclo de vida completo de formulários, campanhas, instâncias, resultados e contestações.
