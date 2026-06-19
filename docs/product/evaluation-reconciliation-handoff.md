@@ -144,6 +144,21 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   `docs/product/t9-evaluations-ia.md`). `ResultStateBadge` (`result_state`+round+`finalize_reason`),
   coluna "Agente avaliado (segmento)", data finalized/deadline/created + elapsed. Só platform-ui
   (`list_results` já devolve os campos). Follow-up: filtro de Status ainda em `eval_status`.
+- **T9-A2** — lista em dois níveis (campanha→avaliações). A2.1 backend (`db.campaign_summaries` +
+  `GET /reports/campaign-summary`, test `test_t9a2_campaign_summary.sh`); A2.2 UI (`CampaignsLevel`,
+  drill por `?campaign=`, breadcrumb, coluna de campanha removida; `useCampaignSummaries`).
+- **T9-B** — drill-down nível 3. B.1 render tipado por critério (`CriterionDetail`, join form∪respostas
+  contra a versão fixada via `useFormVersion`/`useResultCriteria`; **fix pré-existente** `_expose_result_id`
+  + filtro "Awaiting my action" client-side). B.2 timeline por critério (badge de estado + provisória/
+  final Δ; histórico via `DimensionThreadCard`). **T9-A e T9-B validados no browser.**
+
+> **T9-C (transcript + evidência) — PRÓXIMA SESSÃO (própria).** Decisão fechada (blueprint D1/D2/D3):
+> rota dedicada `/:campaignId/:resultId`; transcript de `analytics.messages` (persistido, **mascarado
+> para todos** — revisão cega, D3) via endpoint escopado p/ avaliação (gate de papel de avaliação, não
+> `audit.sessions`); evidência clicável por `stream_entry_id`; endpoint delega ao session-replayer (D2).
+> **Reveal de PII (Opção B / Audit-LGPD Fase 2) fica sob demanda**, não entra no T9-C. e2e/validação por
+> inspeção (seed sem mensagens reais; só `e8f75639`). Depois: T10 (`available_actions`/3 papéis), T11
+> (relatórios Oficial×Operacional), T16 (docs).
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

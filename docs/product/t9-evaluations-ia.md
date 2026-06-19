@@ -125,8 +125,11 @@ aparece é dirigido por **`available_actions`** (computado server-side a partir 
   ajuste de backend (avaliar no T9-A1/A2). Reusa Arc 7 (pools) + Arc 9 (Grupos).
 - **Sumário por campanha** (nível 1): agregação por `result_state`/`finalize_reason`/`process_duration_ms`
   — provável endpoint novo na evaluation-api (ou ClickHouse/analytics).
-- **Transcript** (nível 3): não existe endpoint escopado para avaliação hoje; reusar `ReplayContext`
-  (session-replayer) ou novo endpoint + masking por papel. e2e-blocked.
+- **Transcript** (nível 3): fonte = `analytics.messages` (ClickHouse, persistido, já **mascarado** —
+  `GET /v1/audit/sessions/{id}/messages` é o precedente; precisa de um endpoint **escopado para
+  avaliação** com gate por papel de avaliação, não `audit.sessions`). **Mascarado para todos (D3)** —
+  sem unmask, sem vault durável. `stream_entry_id` alinha com a evidência (C.3). Validação por
+  inspeção (seed sem mensagens reais; só a sessão real `e8f75639` tem transcript).
 
 **Ordem sugerida:** T9-A1 → T9-A2 → T9-B → T9-C. Um chunk por vez, validado no browser.
 
@@ -182,6 +185,16 @@ aparece é dirigido por **`available_actions`** (computado server-side a partir 
   ensure-before-read + Hydrator) para os eventos, e o **mascaramento por papel alinha com o modelo
   de masking/audit existente**. A evaluation-api orquestra (escopo do segmento, papel do caller),
   não possui o storage nem reinventa o masking.
+- **D3 — Transcript MASCARADO para todos (revisão cega); reveal é Fase 2 sob demanda.**
+  **Decisão de produto:** o revisor avalia **sem** os dados reais — o transcript mostra apenas o
+  conteúdo mascarado (`display_partial`, ex.: `****1234`/`***-00`), inclusive para
+  `evaluator`/`reviewer`. Racional: (a) LGPD por minimização — não persistir/expor PII evita o
+  fardo de vault durável + cifragem + retenção + auditoria de reveal; (b) revisão cega reduz viés
+  (julga o manejo do agente, não a identidade do cliente); (c) o parcial basta p/ a maioria dos
+  critérios. **Fonte:** `analytics.messages` (ClickHouse, persistido, já mascarado) — não precisa do
+  Token Vault nem do `original_content` (que de todo modo expiram). **Reversível:** os tokens estão
+  no conteúdo, então o **reveal por token, gated e auditado** (Opção B / Audit-LGPD Fase 2) pode ser
+  plugado depois **sob demanda**, sem redesenho. Ver `docs/adr/adr-message-masking.md`.
 
 ---
 
