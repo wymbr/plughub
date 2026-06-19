@@ -254,7 +254,14 @@ Somente `author_type: "human_agent"` pode abrir contestação. `available_action
 > do round R → `["review"]`; senão `[]` (read-only). Campo casado por round
 > (`contestar`/`_replica`/`_treplica`; idem `revisar`). Guardas: locked/finalized/sem-token → `[]`;
 > não-dono não contesta; ninguém se revisa. Cobertura: `tests/test_available_actions.py`. Pendente:
-> T10-C (visibilidade self-scope em `list_results`) e T10-D (ações na rota dedicada do nível 3).
+> T10-D (ações na rota dedicada do nível 3).
+
+> **T10-C (2026-06-19) — visibilidade self-scope.** `list_results` escopa por linha via
+> `_compute_result_scope(jwt)`: admin → tudo; não-admin → `evaluated_user_id ∈ (supervised_user_ids ∪
+> {sub})` (atendente = só os próprios; supervisor = Grupo Arc 9 + próprios); `accessible_pools` (Arc 7)
+> filtra por pool. `db.list_results` ganhou `evaluated_user_ids`/`accessible_pools`; `InstanceCreate`
+> expõe `evaluated_user_id`. **ABAC nunca amplia visibilidade** — só governa a ação nas linhas visíveis.
+> Diferido: escopo por `supervised_agent_types` (AI por tipo) — result sem `agent_type_id`.
 
 ### 4 — Revisor AI atua pré-publicação, configurável por campanha ✅
 

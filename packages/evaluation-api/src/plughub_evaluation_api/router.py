@@ -287,6 +287,34 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
     return False
 
 
+def _compute_result_scope(
+    jwt_payload: dict[str, Any] | None,
+) -> tuple[list[str] | None, list[str] | None]:
+    """T10-C — escopo de VISIBILIDADE (filtro de linha) a partir do JWT (spec §17.2).
+    Retorna `(evaluated_user_ids, accessible_pools)`; `None` = sem filtro naquele eixo.
+
+    Fronteira dura por role (role+Grupo+pool = visibilidade; ABAC = ação):
+      - sem token → (None, None): endpoints de avaliação são abertos por tenant (posture demo).
+      - admin → (None, accessible): vê todas as pessoas; `accessible_pools` ainda restringe se setado.
+      - não-admin → `evaluated_user_ids = supervised_user_ids ∪ {sub}`
+        (atendente sem Grupo = só os próprios; supervisor = pessoas do(s) Grupo(s) Arc 9 + os próprios).
+
+    `accessible_pools` (Arc 7): `[]` = todos; não-vazio = filtro adicional de linha.
+    Nota: escopo por `supervised_agent_types` (avaliações de AGENTES AI por tipo) fica DIFERIDO — o
+    result não carrega `agent_type_id` (exigiria join/enriquecimento); a posse humana é o escopo novo."""
+    if not jwt_payload:
+        return None, None
+    accessible = (jwt_payload.get("accessible_pools") or []) or None
+    roles = jwt_payload.get("roles") or []
+    if "admin" in roles:
+        return None, accessible
+    sub = jwt_payload.get("sub")
+    supervised = jwt_payload.get("supervised_user_ids") or []
+    allowed = [u for u in {*supervised, sub} if u]
+    # não-admin sempre escopado; se (impossível) sem sub, sentinela que não casa nada.
+    return (allowed or ["__no_self__"]), accessible
+
+
 # ─── Health ───────────────────────────────────────────────────────────────────
 
 @router.get("/health")
@@ -775,6 +803,7 @@ class InstanceCreate(BaseModel):
     campaign_id: str
     session_id:  str
     segment_id:  str | None = None
+    evaluated_user_id: str | None = None   # T2/T10-C — identidade do humano avaliado (posse + self-scope)
     priority:    int = 5
 
 
@@ -821,6 +850,7 @@ async def create_instance(body: InstanceCreate, request: Request) -> dict:
         form_id=campaign["form_id"],
         session_id=body.session_id,
         segment_id=body.segment_id,
+        evaluated_user_id=body.evaluated_user_id,
         priority=body.priority,
         expires_at=expires_at,
     )
@@ -1728,6 +1758,9 @@ async def list_results(
     db_pool = _pool(request)
     jwt_payload = _decode_jwt_optional(request)
 
+    # T10-C — visibilidade: escopo de linha por role+Grupo+pool (nunca amplia; ABAC = ação).
+    evaluated_user_ids, accessible_pools = _compute_result_scope(jwt_payload)
+
     rows = await _db.list_results(
         db_pool, tenant_id,
         campaign_id=campaign_id,
@@ -1737,6 +1770,8 @@ async def list_results(
         pool_id=pool_id,
         evaluator_id=evaluator_id,
         locked=locked,
+        evaluated_user_ids=evaluated_user_ids,
+        accessible_pools=accessible_pools,
         limit=limit,
         offset=offset,
     )

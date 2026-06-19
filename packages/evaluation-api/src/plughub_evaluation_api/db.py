@@ -1531,30 +1531,34 @@ async def list_results(
     pool_id: str | None = None,            # filter via campaign → pool
     evaluator_id: str | None = None,
     locked: bool | None = None,
+    # T10-C — visibilidade (escopo de linha): None = sem filtro; lista = restringe.
+    evaluated_user_ids: list[str] | None = None,   # posse: result.evaluated_user_id ∈ lista
+    accessible_pools:   list[str] | None = None,    # Arc 7: campaign.pool_id ∈ lista
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    if pool_id:
-        # Join through campaigns to filter by pool_id
+    # Join na campanha quando filtramos por pool (explícito ou accessible_pools).
+    use_join = bool(pool_id or accessible_pools)
+    if use_join:
         base = """
             SELECT r.*
             FROM evaluation.results r
             LEFT JOIN evaluation.campaigns c ON c.id = r.campaign_id
             WHERE r.tenant_id=$1
         """
-        cond_prefix = "AND"
     else:
         base = "SELECT * FROM evaluation.results WHERE tenant_id=$1"
-        cond_prefix = "AND"
+    cond_prefix = "AND"
+    rp = "r." if use_join else ""   # prefixo de coluna da tabela results
 
     cond = ""
     args: list[Any] = [tenant_id]
 
     for col, val in [
-        ("r.campaign_id" if pool_id else "campaign_id", campaign_id),
-        ("r.session_id"  if pool_id else "session_id",  session_id),
-        ("r.eval_status" if pool_id else "eval_status",  eval_status),
-        ("r.evaluator_id" if pool_id else "evaluator_id", evaluator_id),
+        (f"{rp}campaign_id",  campaign_id),
+        (f"{rp}session_id",   session_id),
+        (f"{rp}eval_status",  eval_status),
+        (f"{rp}evaluator_id", evaluator_id),
     ]:
         if val is not None:
             args.append(val)
@@ -1564,17 +1568,25 @@ async def list_results(
         args.append(pool_id)
         cond += f" {cond_prefix} c.pool_id=${len(args)}"
 
+    # T10-C — escopo de visibilidade (filtro de linha; nunca amplia)
+    if evaluated_user_ids is not None:
+        args.append(evaluated_user_ids)
+        cond += f" {cond_prefix} {rp}evaluated_user_id = ANY(${len(args)})"
+    if accessible_pools:
+        args.append(accessible_pools)
+        cond += f" {cond_prefix} c.pool_id = ANY(${len(args)})"
+
     if action_required == "any":
-        cond += f" {cond_prefix} {'r.' if pool_id else ''}action_required IS NOT NULL"
+        cond += f" {cond_prefix} {rp}action_required IS NOT NULL"
     elif action_required is not None:
         args.append(action_required)
-        cond += f" {cond_prefix} {'r.' if pool_id else ''}action_required=${len(args)}"
+        cond += f" {cond_prefix} {rp}action_required=${len(args)}"
 
     if locked is not None:
         args.append(locked)
-        cond += f" {cond_prefix} {'r.' if pool_id else ''}locked=${len(args)}"
+        cond += f" {cond_prefix} {rp}locked=${len(args)}"
 
-    order_col = "r.submitted_at" if pool_id else "submitted_at"
+    order_col = f"{rp}submitted_at"
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             f"{base}{cond} ORDER BY {order_col} DESC NULLS LAST"

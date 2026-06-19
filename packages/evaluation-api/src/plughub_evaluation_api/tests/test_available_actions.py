@@ -9,7 +9,7 @@ Mais o gate de leitura `_can_view_transcript` (qualquer campo do módulo evaluat
 """
 from __future__ import annotations
 
-from ..router import _compute_available_actions, _can_view_transcript
+from ..router import _compute_available_actions, _can_view_transcript, _compute_result_scope
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────────
@@ -124,3 +124,39 @@ def test_view_with_report_only_allowed():
 def test_view_with_no_evaluation_access_denied():
     jwt = {"sub": "u", "module_config": {"evaluation": {"contestar": {"access": "none", "scope": []}}}}
     assert _can_view_transcript(jwt, None) is False
+
+
+# ─── T10-C — _compute_result_scope (visibilidade) ─────────────────────────────
+
+def test_scope_no_jwt_unrestricted():
+    assert _compute_result_scope(None) == (None, None)
+
+
+def test_scope_admin_unrestricted():
+    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": []}
+    assert _compute_result_scope(jwt) == (None, None)
+
+
+def test_scope_admin_with_accessible_pools():
+    jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": ["p1", "p2"]}
+    users, pools = _compute_result_scope(jwt)
+    assert users is None and pools == ["p1", "p2"]
+
+
+def test_scope_atendente_only_self():
+    jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": [], "supervised_user_ids": []}
+    users, pools = _compute_result_scope(jwt)
+    assert users == ["u_op"] and pools is None
+
+
+def test_scope_supervisor_group_plus_self():
+    jwt = {"sub": "u_sup", "roles": ["supervisor"], "accessible_pools": [],
+           "supervised_user_ids": ["u_a", "u_b"]}
+    users, _ = _compute_result_scope(jwt)
+    assert set(users) == {"u_sup", "u_a", "u_b"}
+
+
+def test_scope_non_admin_passes_accessible_pools():
+    jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": ["p9"], "supervised_user_ids": []}
+    users, pools = _compute_result_scope(jwt)
+    assert users == ["u_op"] and pools == ["p9"]

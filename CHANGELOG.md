@@ -2,6 +2,28 @@
 
 ---
 
+## T10-C — visibilidade self-scope em list_results (2026-06-19)
+
+Fronteira dura de visibilidade da tela de Avaliações (spec §17.2): role+Grupo+pool = quem vê o quê;
+ABAC = ação (nunca amplia). **Só evaluation-api.** Validado por unit test + API.
+
+- `_compute_result_scope(jwt)` (helper puro, `router.py`): sem token → sem filtro (posture aberta
+  por tenant); admin → tudo (+ `accessible_pools` se setado); não-admin → `evaluated_user_ids =
+  supervised_user_ids ∪ {sub}` (atendente sem Grupo = só os próprios; supervisor = pessoas do(s)
+  Grupo(s) Arc 9 + próprios). `accessible_pools` (Arc 7) como filtro de linha adicional.
+- `db.list_results` += `evaluated_user_ids`/`accessible_pools` (filtro `evaluated_user_id = ANY(...)`
+  + `campaign.pool_id = ANY(...)`; join na campanha quando há filtro de pool). Wired no endpoint
+  `GET /v1/evaluation/results`.
+- `InstanceCreate` passa a expor `evaluated_user_id` (paridade com o backfill/T2 + habilita o escopo
+  por posse em criação direta).
+- Testes: casos de `_compute_result_scope` em `tests/test_available_actions.py` (22/22) +
+  `infra/test/test_t10c_visibility_scope.sh` (escopo SQL real: operator vê só os próprios; admin tudo).
+- **Diferido (documentado)**: escopo por `supervised_agent_types` (avaliações de AGENTES AI por tipo) —
+  o result não carrega `agent_type_id` (exigiria join/enriquecimento). A posse humana é o escopo novo
+  da spec. **Pendente**: T10-D (superfície de ações revisar/contestar na rota dedicada do nível 3).
+
+---
+
 ## T10-A — available_actions por result_state + round + posse (2026-06-19)
 
 Núcleo do T10 (spec §17.2): `available_actions` deixa de depender de `action_required` (workflow)
