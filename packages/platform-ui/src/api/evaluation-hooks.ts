@@ -216,6 +216,40 @@ export async function previewRubric(
   return r.json()
 }
 
+// ── Campaign summaries (T9-A2 — nível 1) ────────────────────────────────────────
+
+export interface CampaignSummary {
+  instance_status: Record<string, number>
+  result_state:    Record<string, number>
+  finalize_reason: Record<string, number>
+  evaluated:       Record<string, number>
+  avg_process_ms:  number | null
+  sla_overdue:     number
+  total_results:   number
+}
+
+export function useCampaignSummaries(tenantId: string, pollMs = 0) {
+  const [summaries, setSummaries] = useState<Record<string, CampaignSummary>>({})
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch(`${BASE}/reports/campaign-summary?tenant_id=${tenantId}`)
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const d = await r.json()
+      setSummaries(d?.summaries ?? {})
+    } catch { /* keep last */ } finally { setLoading(false) }
+  }, [tenantId])
+
+  useEffect(() => {
+    if (!tenantId) return
+    load()
+    if (pollMs > 0) { const id = setInterval(load, pollMs); return () => clearInterval(id) }
+  }, [load, tenantId, pollMs])
+
+  return { summaries, loading, reload: load }
+}
+
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 
 export function useCampaigns(tenantId: string, pollMs = 0) {

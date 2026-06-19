@@ -419,6 +419,13 @@
     "loginRequired": "Faça login",
     "reload": "Recarregar"
   },
+  "campaignsLevel": {
+    "subtitle": "Selecione uma campanha para ver suas avaliações.",
+    "empty": "Nenhuma campanha.",
+    "openWindow": "janela aberta",
+    "avgTime": "tempo médio",
+    "back": "Campanhas"
+  },
   "table": {
     "session": "Sessão",
     "agent": "Agente avaliado (segmento)",

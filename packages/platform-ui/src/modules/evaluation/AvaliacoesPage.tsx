@@ -11,11 +11,14 @@
  * available_actions comes from the server (Bearer JWT → ABAC) — never computed locally.
  */
 import React, { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   useResults,
   useCampaigns,
+  useCampaignSummaries,
+  type CampaignSummary,
   useContestations,
   reviewResult,
   createContestation,
@@ -1300,6 +1303,74 @@ function DetailPanel({
   )
 }
 
+// ── T9-A2: Nível 1 — cards de campanha ──────────────────────────────────────────
+
+function fmtMs(ms: number | null): string {
+  if (ms == null) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.floor(m / 60)}h`
+}
+
+function CampaignsLevel({ campaigns, summaries, onOpen, t }: {
+  campaigns: EvaluationCampaign[]
+  summaries: Record<string, CampaignSummary>
+  onOpen: (id: string) => void
+  t: TFn
+}) {
+  return (
+    <div className="p-6 space-y-4">
+      <div>
+        <h1 className="text-xl font-semibold text-dark">{t('title')}</h1>
+        <p className="text-sm text-muted mt-0.5">{t('campaignsLevel.subtitle', { defaultValue: 'Selecione uma campanha para ver suas avaliações.' })}</p>
+      </div>
+      {campaigns.length === 0 && (
+        <div className="text-sm text-muted-light">{t('campaignsLevel.empty', { defaultValue: 'Nenhuma campanha.' })}</div>
+      )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {campaigns.map(c => {
+          const s  = summaries[c.campaign_id]
+          const rs = s?.result_state ?? {}
+          const ev = s?.evaluated ?? {}
+          const period = c.period_start || c.period_end
+            ? `${(c.period_start ?? '∞').slice(0, 10)} → ${(c.period_end ?? '∞').slice(0, 10)}`
+            : t('campaignsLevel.openWindow', { defaultValue: 'janela aberta' })
+          const chips: [string, number | undefined][] = [
+            ['finalized', rs.finalized], ['open', rs.open], ['under_review', rs.under_review],
+            ['ai_review', rs.ai_review], ['error_rejected', rs.error_rejected],
+          ]
+          return (
+            <button key={c.campaign_id} onClick={() => onOpen(c.campaign_id)}
+              className="text-left bg-white border rounded-lg p-4 hover:shadow-sm hover:border-primary/40 transition-shadow">
+              <div className="flex items-start justify-between gap-2">
+                <div className="font-medium text-dark truncate">{c.name}</div>
+                <span className="text-2xl font-bold text-primary">{s?.total_results ?? 0}</span>
+              </div>
+              <div className="text-xs text-muted-light mt-0.5 truncate">
+                {c.evaluation_pool_id ?? '—'} · {period}
+              </div>
+              <div className="flex flex-wrap gap-1 mt-3">
+                {chips.filter(([, n]) => (n ?? 0) > 0).map(([k, n]) => (
+                  <span key={k} className={`text-xs px-2 py-0.5 rounded-full font-medium ${RESULT_STATE_STYLES[k] ?? 'bg-surface-alt text-muted'}`}>
+                    {t(`resultStates.${k}`, { defaultValue: k })}: {n}
+                  </span>
+                ))}
+              </div>
+              <div className="flex items-center gap-3 mt-3 text-xs text-muted">
+                <span title={t('campaignsLevel.avgTime', { defaultValue: 'tempo médio' })}>⏱ {fmtMs(s?.avg_process_ms ?? null)}</span>
+                <span>👤 {ev.human_agent ?? 0} · 🤖 {ev.ai_agent ?? 0}</span>
+                {(s?.sla_overdue ?? 0) > 0 && <span className="text-red-text font-medium">⚠ SLA {s!.sla_overdue}</span>}
+              </div>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Main Page ──────────────────────────────────────────────────────────────────
 
 export default function AvaliacoesPage() {
@@ -1309,9 +1380,12 @@ export default function AvaliacoesPage() {
   const [adminToken, setAdminToken]   = useState('')
   const [selected, setSelected]       = useState<EvaluationResultWithActions | null>(null)
 
+  // T9-A2 — nível via URL: ?campaign= vazio → nível 1 (campanhas); setado → nível 2 escopado.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const campaignId = searchParams.get('campaign') || ''
+
   // Filters
   const [statusFilter, setStatusFilter]     = useState('')
-  const [campaignFilter, setCampaignFilter] = useState('')
   const [myActionsOnly, setMyActionsOnly]   = useState(false)
 
   // Resolve JWT on mount / session change
@@ -1319,13 +1393,14 @@ export default function AvaliacoesPage() {
     getAccessToken().then(t => setJwtToken(t ?? '')).catch(() => {})
   }, [getAccessToken, session])
 
-  // Load campaigns for the campaign filter dropdown
+  // Load campaigns (nível 1) + sumários agregados
   const { campaigns } = useCampaigns(TENANT)
+  const { summaries } = useCampaignSummaries(TENANT, 30_000)
 
-  // Build filters for useResults
+  // Build filters for useResults — escopado pela campanha da URL (nível 2)
   const filters = {
-    evalStatus:     statusFilter    || undefined,
-    campaignId:     campaignFilter  || undefined,
+    evalStatus:     statusFilter || undefined,
+    campaignId:     campaignId   || undefined,
     actionRequired: myActionsOnly ? ('any' as const) : undefined,
     limit: 100,
   }
@@ -1361,11 +1436,28 @@ export default function AvaliacoesPage() {
     { value: 'locked', label: t('statuses.locked') },
   ]
 
+  // T9-A2 — sem ?campaign= → nível 1 (cards de campanha)
+  if (!campaignId) {
+    return (
+      <CampaignsLevel
+        campaigns={campaigns as EvaluationCampaign[]}
+        summaries={summaries}
+        onOpen={(id) => setSearchParams({ campaign: id })}
+        t={t}
+      />
+    )
+  }
+  const selectedCampaign = (campaigns as EvaluationCampaign[]).find(c => c.campaign_id === campaignId)
+
   return (
     <div className="flex flex-col h-full">
-      {/* Filter bar */}
+      {/* Filter bar — nível 2 (escopado a uma campanha) */}
       <div className="border-b bg-white px-4 py-2 flex items-center gap-3 flex-wrap">
-        <span className="text-sm font-medium text-dark">{t('title')}</span>
+        <button onClick={() => setSearchParams({})} className="text-sm text-primary hover:underline">
+          ← {t('campaignsLevel.back', { defaultValue: 'Campanhas' })}
+        </button>
+        <span className="text-sm text-muted-light">/</span>
+        <span className="text-sm font-medium text-dark truncate max-w-[220px]">{selectedCampaign?.name ?? campaignId}</span>
 
         {/* Quick filter: Aguardando minha ação */}
         <button
@@ -1387,18 +1479,6 @@ export default function AvaliacoesPage() {
         >
           {STATUS_OPTIONS.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </select>
-
-        {/* Campaign filter */}
-        <select
-          value={campaignFilter}
-          onChange={e => setCampaignFilter(e.target.value)}
-          className="border border-border-strong rounded px-2 py-1 text-sm max-w-[200px]"
-        >
-          <option value="">{t('filters.allCampaigns')}</option>
-          {(campaigns as EvaluationCampaign[]).map(c => (
-            <option key={c.campaign_id} value={c.campaign_id}>{c.name}</option>
           ))}
         </select>
 
@@ -1447,7 +1527,6 @@ export default function AvaliacoesPage() {
               <thead>
                 <tr className="border-b bg-surface-muted text-xs text-muted">
                   <th className="text-left px-4 py-2 font-medium">{t('table.agent', { defaultValue: 'Agente avaliado (segmento)' })}</th>
-                  <th className="text-left px-4 py-2 font-medium">{t('table.campaign')}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.evaluator')}</th>
                   <th className="text-center px-4 py-2 font-medium">{t('table.score')}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.status')}</th>
@@ -1479,9 +1558,6 @@ export default function AvaliacoesPage() {
                           )}
                           <code className="break-all truncate max-w-[150px]">{r.session_id}</code>
                         </div>
-                      </td>
-                      <td className="px-4 py-2 text-xs text-muted truncate max-w-[140px]">
-                        {r.campaign_id ?? '—'}
                       </td>
                       <td className="px-4 py-2 text-xs text-muted truncate max-w-[140px]">
                         {r.evaluator_id}

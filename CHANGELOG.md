@@ -2,6 +2,20 @@
 
 ---
 
+## T9-A2.2 — Lista de Avaliações em dois níveis (UI) (2026-06-19)
+
+Frontend do nível 1 + escopo do nível 2 (blueprint `t9-evaluations-ia.md`). **Só platform-ui.**
+Validar por browser.
+
+- `AvaliacoesPage`: sem `?campaign=` → **nível 1** (`CampaignsLevel` — cards de campanha com total,
+  chips por `result_state`, tempo médio, split humano/IA, badge SLA, período/pool); clicar no card →
+  `?campaign=X` → **nível 2** (a tabela escopada à campanha, com **breadcrumb** "← Campanhas / nome"
+  e a **coluna de campanha removida**, agora redundante). Drill por query param (deep-linkable).
+- hook `useCampaignSummaries` (GET `/reports/campaign-summary`) + tipo `CampaignSummary`.
+- i18n `campaignsLevel.*` (en+pt-BR). **Rebuild**: platform-ui. Próximo: T9-B (drill-down nível 3).
+
+---
+
 ## T9-A2.1 — Sumário por campanha (backend, nível 1) (2026-06-19)
 
 Backend do nível 1 da lista de Avaliações (blueprint `t9-evaluations-ia.md`). **Code-only
