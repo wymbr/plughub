@@ -76,6 +76,45 @@ function fmt(iso: string) {
   return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
 }
 
+// ── T9-A1: estado canônico (result_state + round + finalize_reason) ─────────────
+type TFn = (key: string, opts?: Record<string, unknown>) => string
+
+const RESULT_STATE_STYLES: Record<string, string> = {
+  ai_review:      'bg-ai-light text-ai-text',
+  open:           'bg-contested-light text-contested-text',
+  under_review:   'bg-warning-light text-warning-text',
+  finalized:      'bg-green-light text-green-text',
+  error_rejected: 'bg-red-light text-red-text',
+}
+
+/** Badge canônica: result_state + round (open/under_review) + finalize_reason (finalized).
+ *  Fallback para eval_status em linhas legadas (sem result_state). */
+function ResultStateBadge({ r, t }: { r: EvaluationResultWithActions; t: TFn }) {
+  const rs = r.result_state
+  if (!rs) return <StatusBadge status={r.eval_status} t={t} />
+  const round  = (rs === 'open' || rs === 'under_review') && r.current_round
+    ? ` (r${r.current_round})` : ''
+  const reason = rs === 'finalized' && r.finalize_reason
+    ? ` · ${t(`finalizeReasons.${r.finalize_reason}`, { defaultValue: r.finalize_reason })}` : ''
+  return (
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${RESULT_STATE_STYLES[rs] ?? 'bg-surface-alt text-muted'}`}>
+      {t(`resultStates.${rs}`, { defaultValue: rs })}{round}{reason}
+    </span>
+  )
+}
+
+/** Duração humanizada desde `fromIso` até agora (m / h / d). */
+function elapsed(fromIso?: string | null): string {
+  if (!fromIso) return '—'
+  const ms = Date.now() - new Date(fromIso).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return '—'
+  const m = Math.floor(ms / 60000)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+
 // ── CriterionRow ───────────────────────────────────────────────────────────────
 
 function CriterionRow({ cr }: { cr: EvaluationCriterionResponse }) {
@@ -1407,7 +1446,7 @@ export default function AvaliacoesPage() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b bg-surface-muted text-xs text-muted">
-                  <th className="text-left px-4 py-2 font-medium">{t('table.session')}</th>
+                  <th className="text-left px-4 py-2 font-medium">{t('table.agent', { defaultValue: 'Agente avaliado (segmento)' })}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.campaign')}</th>
                   <th className="text-left px-4 py-2 font-medium">{t('table.evaluator')}</th>
                   <th className="text-center px-4 py-2 font-medium">{t('table.score')}</th>
@@ -1431,9 +1470,15 @@ export default function AvaliacoesPage() {
                       }`}
                     >
                       <td className="px-4 py-2">
-                        <code className="text-xs bg-surface-alt px-1 rounded text-muted break-all">
-                          {r.session_id}
-                        </code>
+                        <div className="text-xs text-dark font-medium truncate max-w-[170px]">
+                          {r.evaluated_user_id || r.segment_id || r.evaluator_id || '—'}
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px] text-muted-light mt-0.5">
+                          {r.evaluated_agent_type && (
+                            <span title={r.evaluated_agent_type}>{r.evaluated_agent_type === 'human_agent' ? '👤' : '🤖'}</span>
+                          )}
+                          <code className="break-all truncate max-w-[150px]">{r.session_id}</code>
+                        </div>
                       </td>
                       <td className="px-4 py-2 text-xs text-muted truncate max-w-[140px]">
                         {r.campaign_id ?? '—'}
@@ -1446,7 +1491,7 @@ export default function AvaliacoesPage() {
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-1">
-                          <StatusBadge status={r.eval_status} t={t} />
+                          <ResultStateBadge r={r} t={t} />
                           {r.locked && <span className="text-xs text-muted-light" title={t('detail.locked')}>🔒</span>}
                         </div>
                       </td>
@@ -1471,7 +1516,14 @@ export default function AvaliacoesPage() {
                         )}
                       </td>
                       <td className="px-4 py-2 text-xs text-muted-light whitespace-nowrap">
-                        {fmt(r.created_at)}
+                        {r.result_state === 'finalized' && r.finalized_at ? (
+                          <div>{fmt(r.finalized_at)}</div>
+                        ) : r.deadline_at && hasAction ? (
+                          <div className="text-warning-text">{t('table.deadline', { defaultValue: 'prazo' })}: {fmt(r.deadline_at)}</div>
+                        ) : (
+                          <div>{fmt(r.created_at)}</div>
+                        )}
+                        <div className="text-border-strong">{t('detail.elapsed', { defaultValue: 'no estado' })} {elapsed(r.updated_at)}</div>
                       </td>
                     </tr>
                   )

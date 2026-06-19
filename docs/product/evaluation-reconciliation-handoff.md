@@ -134,6 +134,16 @@ skill-flow-service, ai-gateway, @plughub/schemas) → rebuild da imagem do servi
   `evaluation` (`infra/modules.yaml`; upsert no boot → `up -d --force-recreate auth-api`); gate da
   RubricPage `formularios` → `gerir_rubrica` (Sidebar). Epochs = snapshots `rubric_template_versions`
   (já existem via `/versions`). Test `test_t8d_abac_rubrica.sh`. **T8 COMPLETO** (A/B1/B2/C/D).
+  *(Gotcha: auth-api tem `prefix="/auth"` → endpoints em `/auth/modules`, `/auth/login` etc.; e
+  `PLUGHUB_AUTH_MODULES_YAML=/infra/modules.yaml` no compose torna o seed do registry determinístico.)*
+
+- **T17-UI** — janela de período editável na CampaignsPage (`period_start/end`, inputs date +
+  detalhe). Fecha o gap de UI do T17. Só platform-ui.
+
+- **T9-A1** — colunas canônicas da lista de Avaliações (nível 2; blueprint
+  `docs/product/t9-evaluations-ia.md`). `ResultStateBadge` (`result_state`+round+`finalize_reason`),
+  coluna "Agente avaliado (segmento)", data finalized/deadline/created + elapsed. Só platform-ui
+  (`list_results` já devolve os campos). Follow-up: filtro de Status ainda em `eval_status`.
 
 > **GAP REGISTRADO (doc×código) — Arc 6 Fase 2 ausente.** Descoberto no T8-D: `deploy_events`
 > (tabela ClickHouse + consumer) e os endpoints `deploy-timeline`/`quality-comparison`/

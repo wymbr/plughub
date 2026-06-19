@@ -657,6 +657,16 @@ export interface EvaluationResult {
   locked:             boolean
   created_at:         string
   updated_at:         string
+  // T1/T9-A1 — modelo canônico de estado (substitui eval_status na exibição)
+  result_state?:        'ai_review' | 'open' | 'under_review' | 'finalized' | 'error_rejected' | null
+  finalize_reason?:     string | null
+  finalized_at?:        string | null
+  // T2 — chave por segmento + identidade do avaliado
+  segment_id?:          string | null
+  evaluated_user_id?:   string | null
+  evaluated_agent_type?:'human_agent' | 'ai_agent' | null
+  current_round?:       number
+  deadline_at?:         string | null
 }
 
 export interface EvaluationContestation {

@@ -394,6 +394,22 @@
     "contested":         "Contestado",
     "locked":            "Bloqueado"
   },
+  "resultStates": {
+    "ai_review":      "Revisão IA",
+    "open":           "Disponível p/ contestação",
+    "under_review":   "Em revisão",
+    "finalized":      "Finalizado",
+    "error_rejected": "Rejeitado por erro"
+  },
+  "finalizeReasons": {
+    "auto_ai":          "auto IA",
+    "uncontested":      "sem contestação",
+    "upheld":           "mantida",
+    "revised":          "revisada",
+    "max_rounds":       "rounds esgotados",
+    "contest_timeout":  "prazo de contestação",
+    "review_timeout":   "prazo de revisão"
+  },
   "filters": {
     "allStatuses": "Todos os status",
     "myActions": "Aguardando minha ação",
@@ -405,12 +421,14 @@
   },
   "table": {
     "session": "Sessão",
+    "agent": "Agente avaliado (segmento)",
     "campaign": "Campanha",
     "evaluator": "Avaliador",
     "score": "Nota",
     "status": "Status",
     "actions": "Ações",
-    "date": "Data"
+    "date": "Data",
+    "deadline": "prazo"
   },
   "detail": {
     "session": "Sessão",
@@ -430,7 +448,8 @@
     "awaiting": "Aguardando",
     "awaitingReview": "revisão",
     "awaitingContest": "contestação",
-    "deadline": "Prazo"
+    "deadline": "Prazo",
+    "elapsed": "no estado"
   },
   "review": {
     "openContestations": "Contestações abertas",

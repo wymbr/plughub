@@ -2,6 +2,24 @@
 
 ---
 
+## T9-A1 — Colunas canônicas da lista de Avaliações (nível 2) (2026-06-19)
+
+Primeiro chunk do T9 (blueprint `docs/product/t9-evaluations-ia.md`; spec §7.1). A lista deixa de
+mostrar `eval_status` cru ("Submitted") e passa ao modelo canônico. **Só platform-ui** (o
+`list_results` já devolve os campos via `SELECT *`). Validar por browser.
+
+- `AvaliacoesPage`: badge `ResultStateBadge` (`result_state` + round + `finalize_reason`; fallback
+  `eval_status` p/ linhas legadas); coluna 1 → **"Agente avaliado (segmento)"** (`evaluated_user_id`/
+  `segment_id` + ícone humano/IA, sessão como contexto); coluna Data → `finalized_at` /
+  `deadline_at` (prazo, quando há ação) / `created_at` + **elapsed** (tempo no estado, de `updated_at`).
+- `types/index.ts`: `EvaluationResult += result_state/finalize_reason/finalized_at/segment_id/
+  evaluated_user_id/evaluated_agent_type/current_round/deadline_at`.
+- i18n `resultStates.*` + `finalizeReasons.*` + `table.agent/deadline` + `detail.elapsed` (en+pt-BR).
+- **Follow-up**: o filtro de Status ainda usa o vocabulário antigo (eval_status) — alinhar ao
+  `result_state` quando o backend filtrar por ele. **Rebuild**: platform-ui.
+
+---
+
 ## T17-UI — Janela de período na CampaignsPage (2026-06-18)
 
 Fecha o gap de UI do T17 (o backend — period_start/period_end + filtro forward + backfill — já

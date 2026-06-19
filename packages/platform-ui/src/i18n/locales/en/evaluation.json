@@ -394,6 +394,22 @@
     "contested":         "Contested",
     "locked":            "Locked"
   },
+  "resultStates": {
+    "ai_review":      "AI review",
+    "open":           "Open for contestation",
+    "under_review":   "Under review",
+    "finalized":      "Finalized",
+    "error_rejected": "Rejected (error)"
+  },
+  "finalizeReasons": {
+    "auto_ai":          "auto AI",
+    "uncontested":      "uncontested",
+    "upheld":           "upheld",
+    "revised":          "revised",
+    "max_rounds":       "max rounds",
+    "contest_timeout":  "contest timeout",
+    "review_timeout":   "review timeout"
+  },
   "filters": {
     "allStatuses": "All statuses",
     "myActions": "Awaiting my action",
@@ -405,12 +421,14 @@
   },
   "table": {
     "session": "Session",
+    "agent": "Evaluated agent (segment)",
     "campaign": "Campaign",
     "evaluator": "Evaluator",
     "score": "Score",
     "status": "Status",
     "actions": "Actions",
-    "date": "Date"
+    "date": "Date",
+    "deadline": "deadline"
   },
   "detail": {
     "session": "Session",
@@ -430,7 +448,8 @@
     "awaiting": "Awaiting",
     "awaitingReview": "review",
     "awaitingContest": "contestation",
-    "deadline": "Deadline"
+    "deadline": "Deadline",
+    "elapsed": "in state"
   },
   "review": {
     "openContestations": "Open Contestations",
