@@ -1645,7 +1645,12 @@ async def create_criterion_responses(
                 r.get("criterion_id", ""), r.get("criterion_name", ""), r.get("dimension_id", ""),
                 r.get("na", False), r.get("score"), r.get("max_score"),
                 r.get("boolean_value"), r.get("choice_value"), r.get("text_value"),
-                r.get("notes"), json.dumps(r.get("evidence", [])),
+                # T9-C.fix — o avaliador IA emite a fundamentação como `justification` e a
+                # evidência como `evidence`/`evidence_entries` (saída form-driven, evaluation.ts
+                # buildEvaluationOutputSchema). Sem este fallback, a justificativa por critério e
+                # os chips de evidência (clicáveis → transcript, C.3) ficam vazios na UI do nível 3.
+                r.get("notes") or r.get("justification"),
+                json.dumps(r.get("evidence") or r.get("evidence_entries") or []),
                 r.get("weight", 1.0),
             )
             rows.append(_row(row))
