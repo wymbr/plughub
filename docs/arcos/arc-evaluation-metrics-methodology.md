@@ -243,6 +243,35 @@ genérico. Esta parte define o que adicionar.
 Argument correctness e faithfulness-vs-ferramenta custam mais (ligar `capture_input/output` por
 tool + LGPD).
 
+## II.5 Captura de tool I/O para faithfulness (R7) — masking + LGPD
+
+**Achado (assimetria + vazamento latente).** No `McpInterceptor`: o `input_snapshot` redige os
+campos vindos via `@masked` (`_sanitizeSnapshotForAudit` → `[MASKED]` + `masked_input_fields`); o
+`output_snapshot` é `capture_output ? result : undefined` — **resultado cru, sem máscara**. Logo,
+ligar `capture_output` numa tool que retorna PII grava **PII bruto no `mcp_audit_log`** (ClickHouse).
+Isso é vazamento **independente de avaliação** → o R7 tem um componente de **hardening de segurança**,
+não só feature.
+
+**Tensão.** Faithfulness-vs-ferramenta precisa do **valor cru** que a tool retornou para verificar
+("agente disse saldo R$500" vs retorno real); mascarar o output **destrói** a verificação. Mesmo
+problema de `content` × `original_content`.
+
+**Decisões (fechadas):**
+- **(a) Modelo masked+original** para output snapshots (espelho de mensagem).
+- **(b) Baseline = aplicar masking ao `output_snapshot`** (simétrico ao input) + `masked_categories`
+  — **fecha o vazamento** e habilita tool/argument correctness + **faithfulness sobre fatos não-PII**.
+  `capture_output` segue **opt-in por tool** (default off), dirigido por `data_categories`, com
+  `retention_days` curto para tools que tocam PII.
+- **(c) Faithfulness sobre VALOR PII = tier estendido (deferido):** reter o **original** só p/ papéis
+  autorizados (vault), com retenção limitada + `requires_consent`.
+- **(d) Captura opt-in por tool + retenção limitada.**
+- **Exposição ao avaliador (IA) = campo mínimo transiente.** O critério **declara o campo do output**
+  que verifica (ex.: `output.saldo`); o sistema faz **reveal escopado só daquele campo, just-in-time,
+  auditado**; o resultado guarda só o **veredito + evidência mascarada**, nunca o valor cru → **PII
+  jamais aterrissa no store de avaliação** (mais forte que o modelo de mensagem).
+
+**Externo:** N/A — contato externo não tem tool trace (tier-2 indisponível, IV.5).
+
 ---
 
 # PARTE III — Metodologia (LLM-as-judge) & Referências de Mercado
@@ -569,7 +598,9 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R4** | Completar o catálogo I.3 no extractor (faltam derivados p90/median, `max_consecutive_agent_messages`, `step_*`, `required_fields_captured_pct`, sentimento) nos **dois escopos** (contato + segmento) | `session_metrics_extractor.py` | A |
 | **R5** | **Tier-2 enabler:** buscar `tool_trace[]` do `mcp_audit_log` (via analytics-api `GET /mcp-calls`) para o `ReplayContext` / `evaluation_context_get` | session-replayer + mcp-server | II.4 |
 | **R6** | Dimensões qualitativas de IA como critérios de 1ª classe: **tool correctness**, **policy adherence** (trajetória `pipeline_state` × skill-flow), **faithfulness-vs-KB** | form templates + skill `agente_avaliacao_v1` | II.2 |
-| **R7** | Argument correctness + faithfulness-vs-ferramenta: habilitar `capture_input/output` por tool na `AuditPolicy` + tratamento LGPD (mascaramento/retenção do snapshot) | tool registry + audit | II.4 |
+| **R7a** | **Fix de segurança + baseline:** aplicar masking ao `output_snapshot` no `McpInterceptor` (hoje cru — vazamento) + `masked_categories`; habilita tool/argument correctness + faithfulness **não-PII**; `capture_output` opt-in por tool, `retention_days` curto p/ PII | sdk `mcp-interceptor.ts` + audit | II.5 |
+| **R7b** | **Faithfulness-PII (tier estendido, deferido):** vault de `output_snapshot` original p/ papéis autorizados + `requires_consent` + retenção limitada | audit/Core + config | II.5 |
+| **R7c** | **Reveal campo-mínimo transiente:** critério declara o campo verificável (`output.*`); reveal escopado just-in-time + auditado; resultado guarda só veredito + evidência mascarada (PII não entra no store de avaliação) | evaluation-api + skill avaliador | II.5 |
 | **R8a** | Controles de viés na rubrica (verbosity, self-enhancement, surface-fluency, authority) no `prompt_composer`/rubrica-template | `prompt_composer.py` (T8) | III.4 |
 | **R8b** | **Estágio 1** — gatilho de divergência sobre `calibration_score` (`1 − score` por `skill_version`; `>limiar` ∧ `N≥mín` → sinaliza no Calibration Dashboard + roteia); sinal, não auto-mutação | analytics-api + evaluation-api | III.4 |
 | **R8c** | **Estágio 2** — curadoria **cega-primeiro** (`%`-gated, SLA): humano re-pontua o form sem ver a IA → reveal + diff por dimensão; nota humana autoritativa no desacordo; reusa workflow de revisão; alimenta divergência + `CalibrationNote` | evaluation-api + `CuradoriaPage` | III.4 |
@@ -590,8 +621,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 
 - **Origem de `channel` no backfill** — necessária para condicionamento por canal em sessões
   históricas (R2 só cobre forward).
-- **Política LGPD de `output_snapshot`** — retenção/mascaramento ao guardar retorno de
-  ferramenta para faithfulness-vs-ferramenta (R7).
+- **Política LGPD de `output_snapshot`** — ✅ design fechado em §II.5 (fix do masking de output +
+  masked+original + reveal campo-mínimo transiente); implementação em R7a–c.
 - **Saudação por step nomeado** — se/quando instrumentar `saudacao` no skill-flow como âncora
   determinística (hoje proxy = primeira mensagem do agente).
 - **Métrica de divergência avaliador×humano** — ✅ design fechado em §III.4 (Estágio 1 gatilho +
