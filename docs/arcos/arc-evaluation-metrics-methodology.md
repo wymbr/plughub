@@ -281,6 +281,44 @@ Arc 13 (curadoria amostral → `CalibrationNote` → RAG) é precisamente o meca
   Scoring bias (arXiv 2506.22316): `https://arxiv.org/abs/2506.22316`
 - **Panorama 2026** — Future AGI: `https://futureagi.com/blog/llm-evaluation-frameworks-metrics-best-practices/`
 
+## III.4 Detecção de divergência & redução de viés (R8)
+
+Duas alavancas complementares — **reduzir** o viés (upstream) e **medir/detectar** (downstream) —
+mais a simetria humano×IA.
+
+**Redução — revisor heterogêneo (recomendado, configurável).** Fixar o modelo do revisor numa
+**família diferente** do avaliador descorrelaciona vieses de *modelo* (verbosity, position,
+self-enhancement). Barato (o AI Gateway já tem perfis + cross-provider). Default forte, **não
+obrigatório**. **Teto:** descorrelaciona viés de *modelo*, não de *dado* — mesma KB errada → ambos
+concordam no erro. Não substitui o check humano cego.
+
+**Redução — controles de viés na rubrica.** No `prompt_composer`/rubrica-template: verbosity,
+self-enhancement, surface-fluency, authority/emotional (literatura). Texto, por critério.
+
+**Detecção — Estágio 1 (gatilho barato).** Divergência = `1 − calibration_score` por `skill_version`
+(já computado em `query_evaluator_calibration`). `> limiar` (default 25%) ∧ `N ≥ mínimo` (default 30)
+→ sinaliza "recalibração recomendada" no Calibration Dashboard + roteia p/ fila. **Sinal, não
+auto-mutação** (humano recalibra). Caveat: a fonte (curadoria) é *ancorada* → subdetecta viés
+compartilhado.
+
+**Detecção — Estágio 2 (curadoria cega-primeiro, `%`-gated, SLA).** Upgrade da curadoria: o humano
+re-pontua o **mesmo form sem ver a nota da IA**; só depois o sistema revela + mostra o diff. Reusa a
+infra de curadoria/contestação (fila, SLA, `review_workflow_skill_id`/`ContestationPolicy`,
+`CuradoriaPage`). Entrega **divergência por dimensão** (dois `EvaluationResult` sobre o mesmo form),
+gera `CalibrationNote` no desacordo (RAG), e **pega o viés de KB** — porque o humano pontua **contra
+a realidade, não contra a KB** (diversidade de modelo não pega isso). `%`=0 desliga; `%`>0 liga.
+**A nota humana é autoritativa no desacordo** (como contestação `revised`): corrige o registro +
+alimenta a divergência por `skill_version` + o gatilho de recalibração; timeout de SLA → vale a nota
+da IA, sinalizada. Eixo de amostragem **distinto** do primário (ADR), chaveado por `skill_version`.
+
+**Simetria dos fluxos.** Humano avaliado: recurso = **contestação** (o avaliado dispara, SLA). IA
+avaliada: o agente **não** contesta (invariante Arc 13) → controle **proativo** = Estágio 2
+(`%`-amostral, SLA). Mesma máquina, gatilho diferente — não fere "IA nunca contesta" (não é o
+avaliado contestando, é QA humano re-pontuando cego).
+
+**Config (UI em Configurations):** limiar de divergência (25%), `N` mínimo (30), `%` do Estágio 2,
+e o modelo do revisor (≠ avaliador, recomendado).
+
 ---
 
 # PARTE IV — Amostragem de Contatos (cota por agente)
@@ -532,7 +570,11 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R5** | **Tier-2 enabler:** buscar `tool_trace[]` do `mcp_audit_log` (via analytics-api `GET /mcp-calls`) para o `ReplayContext` / `evaluation_context_get` | session-replayer + mcp-server | II.4 |
 | **R6** | Dimensões qualitativas de IA como critérios de 1ª classe: **tool correctness**, **policy adherence** (trajetória `pipeline_state` × skill-flow), **faithfulness-vs-KB** | form templates + skill `agente_avaliacao_v1` | II.2 |
 | **R7** | Argument correctness + faithfulness-vs-ferramenta: habilitar `capture_input/output` por tool na `AuditPolicy` + tratamento LGPD (mascaramento/retenção do snapshot) | tool registry + audit | II.4 |
-| **R8** | Rubrica com controles de viés (verbosity, self-enhancement, surface-fluency, authority) no `prompt_composer`; métrica de divergência >20–25% vs spot-check como gatilho de recalibração | `prompt_composer.py` (T8) + curadoria Arc 13 | III |
+| **R8a** | Controles de viés na rubrica (verbosity, self-enhancement, surface-fluency, authority) no `prompt_composer`/rubrica-template | `prompt_composer.py` (T8) | III.4 |
+| **R8b** | **Estágio 1** — gatilho de divergência sobre `calibration_score` (`1 − score` por `skill_version`; `>limiar` ∧ `N≥mín` → sinaliza no Calibration Dashboard + roteia); sinal, não auto-mutação | analytics-api + evaluation-api | III.4 |
+| **R8c** | **Estágio 2** — curadoria **cega-primeiro** (`%`-gated, SLA): humano re-pontua o form sem ver a IA → reveal + diff por dimensão; nota humana autoritativa no desacordo; reusa workflow de revisão; alimenta divergência + `CalibrationNote` | evaluation-api + `CuradoriaPage` | III.4 |
+| **R8d** | **Revisor heterogêneo** (recomendado): config de campanha modelo revisor ≠ avaliador (preferência outra família); caveat KB documentado | AI Gateway + config campanha | III.4 |
+| **R8e** | **UI em Configurations** dos parâmetros: limiar de divergência (25%), `N` mínimo (30), `%` do Estágio 2, modelo do revisor | platform-ui | III.4 |
 | **R9** | **Carimbar `skill_id` + `deploy_version` no `ContactSegment`** (resolvido do `SkillDeployment` ativo, ancorado no início do segmento); propagar a `analytics.segments` + evaluation instance + `evaluation_finalized` | orchestrator-bridge + schemas + analytics | IV.3 |
 | **R10** | Cota por agente cumulativa (déficit) no sampling engine: contador Redis `INCR` atômico; chave humano `(campaign, user_id)` / IA `(campaign, pool_id, skill_id, deploy_version)`; denominador = elegíveis | evaluation-api sampling | IV.2 |
 | **R11** | Config de campanha: `%` **por agente** (humano) + `%` por agente IA (menor); deixar explícito que o `%` é por-agente | evaluation-api + CampaignsPage | IV.2 |
@@ -552,7 +594,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
   ferramenta para faithfulness-vs-ferramenta (R7).
 - **Saudação por step nomeado** — se/quando instrumentar `saudacao` no skill-flow como âncora
   determinística (hoje proxy = primeira mensagem do agente).
-- **Métrica de divergência avaliador×humano** — formalizar o gatilho de recalibração (R8).
+- **Métrica de divergência avaliador×humano** — ✅ design fechado em §III.4 (Estágio 1 gatilho +
+  Estágio 2 curadoria cega-primeiro + revisor heterogêneo); implementação em R8a–e.
 - **Amostragem é virada para estado** — ✅ formalizado em
   [`docs/adr/adr-evaluation-sampling.md`](../adr/adr-evaluation-sampling.md) (contexto, decisão,
   trade-offs, alternativas). Implementação pendente (R9–R12).
