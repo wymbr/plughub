@@ -405,6 +405,41 @@ step/custo ficam **indisponíveis** para externo.
   ordenar por `closed_at` para reprodutibilidade.
 - **Segmento mínimo** — sintetizar 1 segmento (= contato inteiro) para o escopo-A funcionar.
 
+## IV.6 Arquitetura de ingestão (decisões fechadas)
+
+**Forma = A2 (document-ingest).** Um contrato único de alto nível (`QualityContact`,
+`ingestion_contract_v1`) entra num serviço de ingestão — em vez de o importador falar o protocolo
+de eventos cru ou escrever stores direto.
+
+**Fan-out = emitir eventos canônicos (fechado).** O serviço emite os eventos
+(`conversations.events` message_sent/closed, `conversations.participants`, lifecycle) e os
+**consumers existentes** fazem as escritas. Por quê: acoplamento mínimo (depende só dos schemas
+Zod de evento, não do layout do ClickHouse); reuso de dedup (ReplacingMergeTree → re-import não
+duplica), SegmentEnricher, DLQ/retry; zero drift com o nativo; e **o gatilho de amostragem vem de
+graça** (`session_closed` dispara o consumer de sampling). Preterido o acesso direto ao ClickHouse
+(acoplaria ao schema de storage).
+
+**Stream durável = opção Y (produtor puro — isola o ambiente interno).** O importador **não toca
+store nenhum** (Redis/PG/ClickHouse): é só produtor de eventos. Um **consumer interno** reconstrói
+`session_stream_events` (PG) **a partir dos eventos** (o Persister vivo lê do Redis; este lê de
+eventos). Assim as garantias do `writeStreamEntry` ficam 100% **dentro** da plataforma e o
+invariante nunca é dobrado por componente externo. Cuidados de implementação: **compartilhar a
+construção de linha** com o Persister vivo (sem drift de shape); `delta_ms` recalculado dos `ts`
+dos eventos; **append incremental** por `message_sent` (idempotente por `event_id`), `session_closed`
+finaliza; `original_content = null` (cego por construção, coerente com D3). *(Preterido: Z —
+importador escreve o Redis transiente e o Persister snapshota; reusa mais, mas escreve Redis ao
+vivo. Y isola melhor.)*
+
+**Masking = pré-processador externo (primário) + net no ingest.** O PII deixa de existir **fora**
+do PlugHub: o contrato exige conteúdo já mascarado + `masked_categories`. Como a responsabilidade
+LGPD recai no **armazenamento**, o serviço ainda roda uma passada-rede com as `MaskingRule` do
+PlugHub. `original_content = null`, sem tokens resolvíveis (sem vault/reveal) — revisão cega por
+construção.
+
+**Store-alvo do consumer Y:** `session_stream_events` (PG) — colunas `event_id`, `event_type`,
+`author` (flat), `payload`/content (mascarado), `original_content` (null externo),
+`masked_categories`, `delta_ms`, `segment_id`, `tenant_id`, `session_id`, `ts`.
+
 ---
 
 # PARTE V — Roteiro de Implementação
@@ -425,7 +460,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R10** | Cota por agente cumulativa (déficit) no sampling engine: contador Redis `INCR` atômico; chave humano `(campaign, user_id)` / IA `(campaign, pool_id, skill_id, deploy_version)`; denominador = elegíveis | evaluation-api sampling | IV.2 |
 | **R11** | Config de campanha: `%` **por agente** (humano) + `%` por agente IA (menor); deixar explícito que o `%` é por-agente | evaluation-api + CampaignsPage | IV.2 |
 | **R12** | Backfill ordenado por `closed_at` para reprodutibilidade do déficit | evaluation-api `backfill.py` | IV.2 |
-| **R13** | Contrato de ingestão externo versionado + importador (writer seguro, masking, identidade/versão, segmento mínimo) — escopo grau-transcript | novo pacote/contrato | IV.5 |
+| **R13a** | **Contrato `QualityContact` (`ingestion_contract_v1`)** + serviço de ingestão A2 (document → emite eventos canônicos; produtor puro, sem acesso a store); masking pré-processador + net no ingest; identidade/versão; segmento mínimo — escopo grau-transcript | novo pacote/contrato | IV.5/IV.6 |
+| **R13b** | **Consumer interno from-events** (opção Y): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` dos `ts`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6 |
 | **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético | platform-ui + agent-registry | IV.3 |
 
 ---
