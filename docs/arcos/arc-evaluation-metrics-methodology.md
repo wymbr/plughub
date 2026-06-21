@@ -440,6 +440,83 @@ construção.
 `author` (flat), `payload`/content (mascarado), `original_content` (null externo),
 `masked_categories`, `delta_ms`, `segment_id`, `tenant_id`, `session_id`, `ts`.
 
+## IV.7 Detalhamento — `QualityContact` + mapeamento para eventos
+
+### Contrato (`ingestion_contract_v1`)
+
+```
+QualityContact
+  contract_version: "ingestion_contract_v1"
+  tenant_id
+  external_id            # id na origem → deriva session_id determinístico (idempotência/re-import)
+  source                 # proveniência, ex: "ccaas:genesys" → flag source=external_import
+  channel, medium
+  opened_at, closed_at   # ISO-8601
+  outcome, close_reason
+  customer_ref?          # pseudônimo do cliente (mascarado) → customer_id/contact_id
+
+  segments: [ {          # 1..N (mínimo 1 = contato inteiro)
+     segment_ref         # id local no contato → segment_id
+     external_agent_id   # → mapeado p/ user_id (humano) / agent_id (IA) via mapa por source
+     agent_kind: human | ai
+     role: primary | specialist | ...   # default primary
+     pool_id
+     skill_id?, deploy_version?         # só IA — habilita cota por versão (ADR)
+     started_at, ended_at
+     outcome?, close_reason?
+  } ]
+
+  messages: [ {          # ordenadas por ts
+     ts                  # ISO-8601
+     author_role         # customer | agent | ...
+     author_id?          # participant_id (opcional)
+     segment_ref         # amarra a msg do agente ao segmento
+     content             # JÁ mascarado
+     content_type?       # default "text"
+     visibility?         # default "all"
+     masked: true        # obrigatório
+     masked_categories?: [ ... ]
+  } ]
+
+  metrics?: { ... }      # session_metric.* pré-computado (opcional; senão derivamos do transcript)
+  tool_trace?: [ ... ]   # opcional/raro → se presente, destrava tier-2
+```
+
+### Mapeamento → eventos canônicos
+
+O serviço deriva `session_id` de `(tenant_id, external_id)` e emite em ordem de `ts`. Não escreve
+store nenhum (produtor puro).
+
+| Origem no contrato | Evento emitido | Campos-chave |
+|---|---|---|
+| abertura | `conversations.events` `contact_open` | session_id, channel, customer_id=`customer_ref`, opened_at, source |
+| cada `segment` | `conversations.participants` `participant_joined` | segment_id=`segment_ref`, participant_id, pool_id, agent_type_id, role, agent_type, **skill_id/deploy_version** (R9), started_at |
+| cada `message` | `conversations.events` `message_sent` | event_id (determinístico de `external_id`+índice), author_role, author{id,role}, content, content_type, visibility, masked_categories, timestamp, segment_id |
+| fim de `segment` | `agent.lifecycle` `agent_done` + `participants` `participant_left` | outcome, handoff_reason, agent_type_id, pool_id, ended_at |
+| fechamento | `conversations.events` `contact_closed` | outcome, close_reason, closed_at |
+
+Consequências: os consumers existentes populam ClickHouse (`messages`/`segments`/`sessions`); o
+`contact_closed` dispara a **amostragem** (ADR; emitir em ordem de `closed_at` no batch).
+
+### Consumer Y (`source=external_import` → `session_stream_events`)
+
+Único net-novo. Consome `conversations.events` **só de `source=external_import`** (gating — nativo
+segue via Persister-do-Redis, sem dupla-persistência). Para `contact_open`/`message_sent`/
+`contact_closed`: **append** de uma linha por evento (`event_id` único → `ON CONFLICT DO NOTHING`,
+idempotente), com `author={id,role}`, `payload={content,content_type}`, `original_content=null`,
+`masked_categories`. No `contact_closed`, **recalcula `delta_ms`** sobre as linhas ordenadas por
+`ts` — mesma lógica do Persister vivo, **extraída para um helper compartilhado** (sem drift, sem
+estado por sessão). Hydrator/Replayer leem transparente.
+
+### Sub-decisões fechadas
+
+1. **Mapa de identidade/versão por `source`** no Config API (`external_agent_id → user_id/agent_id`
+   `+ skill_id/deploy_version`) — não se repete por contato. Sem versão → fallback do ADR
+   `(campaign, pool, skill)`.
+2. **Gating do Y por `source=external_import`** — confirmado.
+3. **`delta_ms` recalculado na finalização** (`contact_closed`), helper compartilhado com o
+   Persister — confirmado.
+
 ---
 
 # PARTE V — Roteiro de Implementação
@@ -460,8 +537,9 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R10** | Cota por agente cumulativa (déficit) no sampling engine: contador Redis `INCR` atômico; chave humano `(campaign, user_id)` / IA `(campaign, pool_id, skill_id, deploy_version)`; denominador = elegíveis | evaluation-api sampling | IV.2 |
 | **R11** | Config de campanha: `%` **por agente** (humano) + `%` por agente IA (menor); deixar explícito que o `%` é por-agente | evaluation-api + CampaignsPage | IV.2 |
 | **R12** | Backfill ordenado por `closed_at` para reprodutibilidade do déficit | evaluation-api `backfill.py` | IV.2 |
-| **R13a** | **Contrato `QualityContact` (`ingestion_contract_v1`)** + serviço de ingestão A2 (document → emite eventos canônicos; produtor puro, sem acesso a store); masking pré-processador + net no ingest; identidade/versão; segmento mínimo — escopo grau-transcript | novo pacote/contrato | IV.5/IV.6 |
-| **R13b** | **Consumer interno from-events** (opção Y): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` dos `ts`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6 |
+| **R13a** | **Contrato `QualityContact` (`ingestion_contract_v1`)** + serviço de ingestão A2 (document → emite eventos canônicos; produtor puro, sem acesso a store); masking pré-processador + net no ingest; segmento mínimo; emitir em ordem de `closed_at` — escopo grau-transcript | novo pacote/contrato | IV.5/IV.6/IV.7 |
+| **R13b** | **Consumer interno from-events** (opção Y, gated por `source=external_import`): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` recalculado no `contact_closed`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6/IV.7 |
+| **R13c** | **Mapa de identidade/versão por `source`** no Config API (`external_agent_id → user_id/agent_id` `+ skill_id/deploy_version`); fallback ADR `(campaign, pool, skill)` quando sem versão | config-api + serviço de ingestão | IV.7 |
 | **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético | platform-ui + agent-registry | IV.3 |
 
 ---
