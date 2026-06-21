@@ -835,8 +835,10 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
   REST do agent-registry (D1). Ver § "Arc 6 Fase 2" acima.
 - **PENDENTE (núcleo do objetivo — §4.1/D4):** série **por epoch/versão** (bucket `[deploy N, deploy N+1)`,
   eixo X = versões, ponto = qualidade média da versão, N por versão). Hoje "comparar versão N vs N+1" é
-  leitura manual via markers, não um eixo de versões. Decisão do usuário (2026-06-20): **deixar o 1º corte
-  como está e reavaliar depois**.
+  leitura manual via markers, não um eixo de versões. **Design fechado (2026-06-21)** em
+  `docs/arcos/arc-evaluation-metrics-methodology.md` §IV.8: destravado pelo carimbo de versão (R9) →
+  `GROUP BY deploy_version` exato (não mais inferência por timeline); âncora `(pool,skill)`; UI epoch
+  single-skill esconde média+multi-seleção. Implementação em R15a/R15b, dependente do R9.
 - **PENDENTE (UX desta lente):** a "média dos agentes" (§4.5) + multi-seleção são herdadas do board (D3) e
   viram ruído numa lente focada em versões de UMA skill — avaliar remover/ocultar a média e focar single-skill
   quando o epoch entrar.

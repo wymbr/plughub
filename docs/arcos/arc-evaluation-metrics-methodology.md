@@ -584,6 +584,27 @@ estado por sessão). Hydrator/Replayer leem transparente.
 3. **`delta_ms` recalculado na finalização** (`contact_closed`), helper compartilhado com o
    Persister — confirmado.
 
+## IV.8 Núcleo epoch/versão (Arc 6 Fase 2) — destravado pelo R9
+
+Pendência herdada: a lente `deploy` entregue (P3) é **diária + markers**; o núcleo §4.1/D4 (série
+por **epoch/versão**, eixo X = versões, ponto = qualidade média da versão) ficou pendente porque a
+atribuição de versão era **inferida pela timeline de deploys** (errada no overlap de hot-deploy). O
+**R9** (carimbo `deploy_version` no segmento → `evaluation_finalized`) torna isso um **`GROUP BY
+deploy_version` exato** — e mais simples que a timeline-bucket que o D4 imaginava.
+
+Decisões (fechadas):
+- **Âncora = `(pool, skill)`**, X = `deploy_version` (coerente com a âncora-pool entregue + a chave
+  do R9).
+- **`deploy_version` denormalizado no `evaluation_finalized`** (query sem join; o `segment_id` já
+  está lá como alternativa de join).
+- **Query** `lens=deploy&mode=epoch`: ponto = `avg(final_score)` por versão, `n` por versão,
+  ordenado por `deployed_at`, `min_sample=30`, indicador de **"N pendentes de fechamento"** (lag de
+  finalização — sobretudo no fluxo humano).
+- **UI epoch:** foco single-`(pool,skill)`, **esconde a média dos agentes + multi-seleção**; o modo
+  diário+markers (1º corte) permanece como visão alternativa.
+- **Dependência dura: R9.** Substitui o plano antigo de tabela/consumer `analytics.deploy_events`
+  (já preterido por D1/REST). Roadmap: R15a (query epoch) + R15b (UI epoch).
+
 ---
 
 # PARTE V — Roteiro de Implementação
@@ -614,6 +635,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R13b** | **Consumer interno from-events** (opção Y, gated por `source=external_import`): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` recalculado no `contact_closed`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6/IV.7 |
 | **R13c** | **Mapa de identidade/versão por `source`** no Config API (`external_agent_id → user_id/agent_id` `+ skill_id/deploy_version`); fallback ADR `(campaign, pool, skill)` quando sem versão | config-api + serviço de ingestão | IV.7 |
 | **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético | platform-ui + agent-registry | IV.3 |
+| **R15a** | **Núcleo epoch (query)**: `deploy_version` denormalizado no `evaluation_finalized` (via R9); `lens=deploy&mode=epoch` → série por `(pool, skill)` bucketizada por `deploy_version` (`avg(final_score)`, `n`/versão, ordem `deployed_at`, `min_sample=30`, "N pendentes") | analytics-api | IV.8 |
+| **R15b** | **Núcleo epoch (UI)**: modo epoch single-`(pool,skill)`, eixo X = versões, esconde média + multi-seleção; diário+markers como modo alternativo | platform-ui `AgentsBenchPage`/`DeployChart` | IV.8 |
 
 ---
 
@@ -646,6 +669,6 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
   nova; `start_time` é aproximado, e o carimbo no início do segmento (R9) é a convenção robusta.
 - **Carga: piso de cobertura × teto de `%`** — em baixo volume o piso (1º contato sempre) eleva
   a taxa efetiva acima do `%` configurado; decisão consciente de produto.
-- **Núcleo epoch/versão (Arc 6 Fase 2)** — correlação das métricas de qualidade por versão de
-  deploy permanece pendente (ver `## Pending` no CLAUDE.md). O carimbo de versão (R9) é o insumo
-  que o destrava com precisão.
+- **Núcleo epoch/versão (Arc 6 Fase 2)** — ✅ design fechado em §IV.8 (destravado pelo R9: `GROUP BY
+  deploy_version` exato; âncora `(pool,skill)`; UI epoch single-skill). Implementação em R15a/R15b,
+  **dependente do R9**. Substitui o plano antigo de `analytics.deploy_events`.
