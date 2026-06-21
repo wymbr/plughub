@@ -1810,7 +1810,12 @@ def _fetch_quality(
 
 _COMPARE_LENSES = {"resolution", "sessions_aht", "availability", "pause_reason",
                    "quality", "nps", "session_nps", "wrapup", "quality_criteria",
-                   "escalation_reason"}
+                   "escalation_reason", "deploy"}
+# deploy (Arc 6 Fase 2 / P2-B): qualidade OFICIAL (evaluation_finalized.final_score)
+# por entidade IA (agent_key = flow_id = skill_id), série diária por data da SESSÃO +
+# deploy_markers (linhas verticais de deploy, lidas em query-time do agent-registry —
+# D1 da spec). Domain `ai`: humanos não têm deploy de skill (gating no front, P2-C).
+# 1º corte = série diária + markers (spec §6); agregação por epoch é refinamento.
 # session_nps (F10.3a): lê de session_signal (grain=session, metric=nps) via atribuição
 # por session_id — voz do cliente no grão sessão, cruzada ao agente (contexto/§8).
 # nps (F10.3b): lê de session_signal (grain=segment, metric=nps). wrapup (F5): lê de
@@ -1822,6 +1827,42 @@ _COMPARE_LENSES_PENDING: set[str] = set()
 # Folding da família escalate (§13.2): o alvo humano-vs-IA é recuperável pela
 # topologia do segmento seguinte; a bancada compara o CONCEITO escalação.
 _ESCALATE_FAMILY_SQL = "('escalated', 'escalated_human', 'escalated_ai', 'transferred')"
+
+# deploy lens (Arc 6 Fase 2): N mínimo p/ significância por bucket (spec §5).
+# Constante por ora; alvo = config-api namespace `quality_comparison_min_sample`.
+_DEPLOY_MIN_SAMPLE = 30
+
+
+async def _fetch_deploy_markers(
+    tenant_id: str, pool_ids: list[str], since: str, until: str,
+) -> list[dict]:
+    """deploy_markers da lente ancorada no POOL (Arc 6 Fase 2, spec §11): para cada
+    pool selecionado, a timeline de deploys que o atingiram (agent-registry
+    `GET /v1/pools/:id/deployments`, D1). Cada marker carrega `pool_id` (a qual curva
+    pertence) + `skill_id`+`version_label` (o que foi deployado). Um deploy que atinge
+    N pools aparece como marker em cada um deles. Filtra ao window [since, until] (só
+    markers desenháveis no eixo). Degradação: registry fora → []."""
+    from .config import get_settings
+    from .deployments_client import fetch_pool_deployments
+
+    base_url = get_settings().agent_registry_url
+    lo, hi = since[:10], until[:10]   # YYYY-MM-DD; markers desenháveis no eixo
+    markers: list[dict] = []
+    for pool_id in pool_ids:
+        deploys = await fetch_pool_deployments(base_url, tenant_id, pool_id)
+        for d in deploys:
+            at = d.get("deployed_at") or ""
+            if at[:10] and lo <= at[:10] <= hi:
+                markers.append({
+                    "deploy_id":     d.get("deploy_id"),
+                    "pool_id":       pool_id,
+                    "skill_id":      d.get("skill_id"),
+                    "version_label": d.get("version_label"),
+                    "deployed_at":   at,
+                    "deployed_by":   d.get("deployed_by"),
+                })
+    markers.sort(key=lambda m: m.get("deployed_at") or "")
+    return markers
 
 
 async def query_agents_compare(
@@ -1860,7 +1901,7 @@ async def query_agents_compare(
         }
 
     try:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             _fetch_agents_compare, client, database, tenant_id, since, until,
             lens, pool_id, entities or [], include_average,
             accessible_pools, supervised_agent_types,
@@ -1872,6 +1913,19 @@ async def query_agents_compare(
             "meta": {"lens": lens, "bucket": "day", "from_dt": since, "to_dt": until},
             "error": "data_unavailable",
         }
+
+    # ── deploy lens (ancorada no POOL, §11): anexa deploy_markers por pool ───────
+    # As entidades desta lente SÃO pool_ids (o front seleciona pools). Degradação
+    # graciosa: registry fora → markers vazios, série intacta (nunca 500).
+    if lens == "deploy":
+        pool_ids = [e for e in (entities or [])
+                    if e and not e.startswith(_POOL_ENTITY_PREFIX)]
+        result["deploy_markers"] = await _fetch_deploy_markers(
+            tenant_id, pool_ids, since, until,
+        )
+        result["meta"]["min_sample"] = _DEPLOY_MIN_SAMPLE
+
+    return result
 
 
 # Prefixo de pseudo-entidade "média do pool" (F9). entity = "pool:<pool_id>".
@@ -1936,6 +1990,12 @@ def _per_agent_for_lens(
             accessible_pools, supervised_agent_types,
         )
         metric_keys = []  # distribuição por motivo vive no summary.reasons[] (como pause_reason)
+    elif lens == "deploy":
+        per_agent = _compare_deploy_lens(
+            client, db, tenant_id, since, until, pool_id,
+            accessible_pools, supervised_agent_types,
+        )
+        metric_keys = ["avg_score"]  # qualidade Oficial; markers vêm no envelope (async)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
@@ -2675,6 +2735,85 @@ def _compare_quality_lens(
             "n_evaluations": n,
             "avg_score":     round(ssum / n, 4) if n else None,
             "form_ids":      sorted(a.pop("_forms")),
+        }
+    return per_agent
+
+
+def _compare_deploy_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    deploy (Arc 6 Fase 2 — ancorada no POOL, spec §11) — fonte: evaluation_finalized
+    (modo OFICIAL) × atribuição (F2). Espelha a lente `quality`, mas:
+      - lê `final_score` de `evaluation_finalized` (não `overall_score` provisório);
+      - **a unidade da curva é o `pool_id`** (não o skill/flow_id): um skill pode rodar
+        em vários pools, e deploy é pool-centric (`SkillDeployment.pool_ids`). Cada pool
+        é uma curva; a versão muda via deploys do pool (markers, no envelope);
+      - domain `ai`: só sessões IA (`attr.agent_type != 'human'`) — pools humanos não
+        têm deploy de skill.
+    Bucketiza pela data da SESSÃO avaliada (session_started_at — regra de ouro §7).
+    Os `deploy_markers` (timeline de versão por pool) vêm no envelope, buscados em
+    query-time do agent-registry pela camada async. N (n_evaluations) no ponto e no summary.
+    """
+    fin_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    outer = ["attr.agent_type != 'human'"]  # domain ai — pools humanos não têm deploy
+    if pool_id:
+        outer.append("attr.pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools is not None:
+        scope: list[str] = []
+        if _apply_pool_scope(scope, accessible_pools):
+            outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
+        else:
+            return {}
+    attr_sql = _session_agent_attribution_sql(db)
+
+    # agent_key = pool_id: a entidade desta lente é o POOL (curva por pool).
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            attr.pool_id                         AS agent_key,
+            any(attr.agent_type)                 AS agent_type,
+            attr.pool_id                         AS label,
+            toString(toDate(attr.session_started_at)) AS bucket,
+            count()                              AS n,
+            avg(fin.final_score)                 AS avg_score
+        FROM (
+            SELECT * FROM {db}.evaluation_finalized FINAL
+            WHERE {" AND ".join(fin_conditions)}
+        ) AS fin
+        JOIN ({attr_sql}) AS attr ON fin.session_id = attr.session_id
+        WHERE {" AND ".join(outer)}
+        GROUP BY attr.pool_id, toDate(attr.session_started_at)
+        ORDER BY agent_key, bucket
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_n": 0, "_score_sum": 0.0,
+        })
+        n = int(r["n"] or 0)
+        score = float(r["avg_score"]) if r["avg_score"] is not None else None
+        a["buckets"][r["bucket"]] = {
+            "date": r["bucket"], "avg_score": round(score, 4) if score is not None else None, "n": n,
+        }
+        a["_n"] += n
+        if score is not None:
+            a["_score_sum"] += score * n
+    for a in per_agent.values():
+        n = a.pop("_n")
+        ssum = a.pop("_score_sum")
+        a["summary"] = {
+            "n_evaluations": n,
+            "avg_score":     round(ssum / n, 4) if n else None,
         }
     return per_agent
 

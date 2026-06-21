@@ -938,6 +938,27 @@ pool hooks genéricos (sem campo dedicado).
     endpoint A/B). Chunks: **P2-A** REST deploys (helper) · **P2-B** lente `deploy` em `query_agents_compare`
     · **P2-C** front (LENSES+CompareChart) + cleanup. Backlog (fora): período-A/B arbitrário, overlay
     multi-métrica/agent_event, C3, NPS, export.
+  - **P2 entregue — 1º corte §6 (2026-06-20):** P2-A/B/C implementados e validados no browser (ver CHANGELOG).
+    A lente `deploy` existe no bench como **série DIÁRIA + `deploy_markers`** (Oficial). **Núcleo PENDENTE**
+    (decisão do usuário: deixar como está e reavaliar): (1) **série por epoch/versão** (§4.1/D4) — eixo X =
+    versões, ponto = qualidade média da versão, N por versão; hoje "v1 vs v2" é leitura manual via markers;
+    (2) **média/multi-seleção** herdadas do board (§4.5/D3) são ruído numa lente de versões de UMA skill —
+    avaliar remover/ocultar a média e focar single-skill quando o epoch entrar; (3) markers exigem
+    `flow_id == skill_id` (§8) — no demo `sac_ia` (agent_type_id) ≠ `skill_atendimento_sac_v1` (skill_id),
+    então só alinha quando o `flow_id` carrega o skill_id real. Seed de validação: `infra/test/seed_deploy_lens_demo.sh`.
+  - **Decisão de âncora — POOL (2026-06-20, spec §11):** após walkthrough, a unidade da lente passa a ser o
+    **pool** (par `(pool, skill)` colapsado), não o `flow_id`/skill. Motivo: `skill_id` é estável (deploy não
+    muda o id; `version` é campo à parte; deploy é pool-centric via `PoolSkillSlot`+`SkillDeployment.pool_ids`),
+    e **um skill pode rodar em vários pools** → âncora-skill mistura pools. Com pool: 1 curva por pool, deploy
+    compartilhado vira o mesmo marcador em cada curva. **Chunks P3:** P3-A `GET /v1/pools/:id/deployments`
+    (agent-registry) · P3-B re-ancorar `_compare_deploy_lens` por `pool_id` + markers da timeline do pool
+    (analytics-api) · P3-C front (entidades=pools, curva/pool, sem média). Detalhe: spec §11.
+  - **P3 ✅ entregue e validado no browser (2026-06-20)** — ver CHANGELOG "P3 — ... RE-ANCORADA no POOL".
+    Curva por pool + pontos de deploy coloridos por pool (`ReferenceDot` na altura da curva), sem média,
+    flag N<30, estado-vazio "selecione um pool". Fix CH: `any(attr.agent_type)` (constante `'ai'` colidia).
+    **Resta P4 (núcleo §4.1):** série por **epoch/versão** — eixo X = versões do pool (`[deploy N, deploy N+1)`),
+    ponto = qualidade média da versão, N por versão. Hoje o eixo é tempo + pontos de deploy (leitura da versão
+    ainda manual). Diferido por decisão do usuário ("deixar e reavaliar").
 - **Nits do bench (diferido)**:
   - **Quality score geral diluído** — KPI "Quality score 0.00 (N evals)" do drill-down e a curva da lente quality
     saem baixos/zero, enquanto as **dimensões** (radar) estão corretas. Causa provável: o agregado geral

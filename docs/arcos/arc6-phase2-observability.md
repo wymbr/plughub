@@ -1,22 +1,20 @@
 # Arc 6 Fase 2 — Observabilidade de Mudanças e Comparação por Deploy
 
-> Última atualização: 2026-06-19 (T16 — correção de verdade) · Estado: **PROPOSTA / NÃO IMPLEMENTADO**
+> Última atualização: 2026-06-20 (P2 — 1º corte entregue) · Estado: **1º CORTE §6 ENTREGUE · núcleo epoch PENDENTE**
 >
-> ⚠️ **CORREÇÃO (T16, 2026-06-19): este arco NÃO está implementado.** A versão anterior deste doc
-> afirmava "Status: implementado ✅" para as quatro fases (A–D), mas a auditoria do T16 confirmou que
-> **nada disso existe no código**:
-> - **Backend ausente**: não há tabela `analytics.deploy_events`, nem consumer de `registry.changed`
->   `event_type=skill_deployed` no analytics-api, nem os endpoints `GET /reports/deploy-timeline`,
->   `/quality-comparison`, `/quality-timeseries` (grep zero em `packages/analytics-api`).
-> - **UI órfã**: `AnaliseQualidadePage` tem `TimeseriesView`/`ComparisonView`/`MetricSelector` que
->   chamam `/reports/quality-timeseries` e `/reports/quality-comparison`, mas as abas estão
->   **desativadas** (`TAB_IDS = ['summary']`) — código morto apontando para endpoints inexistentes.
+> ✅ **P2 (2026-06-20): a lente `deploy` existe no board de Agentes** (`/reports/agents/compare?lens=deploy`,
+> domain `ai`) — entregue como **série DIÁRIA de `avg(final_score)` (Oficial) + `deploy_markers`** lidos via
+> REST do agent-registry (decisão D1). É o **1º corte da §6 da spec**, não o comportamento-núcleo. Fonte de
+> implementação e status detalhado: `docs/product/arc6-phase2-deploy-observability-spec.md` (§7) + CHANGELOG
+> "P2 — ... (1º corte §6)". Cleanup do T16 feito: `TimeseriesView`/`ComparisonView` mortas removidas de
+> `AnaliseQualidadePage` (os endpoints `quality-timeseries`/`quality-comparison` nunca existiram).
 >
-> O texto abaixo descreve o **alvo de design** (proposta), não o estado atual. Os "✅" nas seções de
-> fase são **aspiracionais** e foram mantidos apenas como especificação do que construir. Ver
-> `TODO.md` § "Arc 6 Fase 2 — Observabilidade por Deploy (NÃO implementado)". Descoberto no T8-D,
-> reconfirmado no T16. Nota: o T11 (relatório Oficial×Operacional) entregou a base de qualidade
-> finalizada (`evaluation_finalized`) de forma independente desta Fase 2.
+> ⚠️ **PENDENTE (núcleo do objetivo):** a série por **epoch/versão** do §4.1 (eixo X = versões da skill,
+> ponto = qualidade média da versão) **não foi entregue** — hoje "comparar versão N vs N+1" é leitura manual
+> pelos markers, não um eixo de versões. Também pendente: rever a "média dos agentes"/multi-seleção (§4.5/D3),
+> que viram ruído nesta lente. Decisão do usuário (2026-06-20): deixar o 1º corte como está e reavaliar.
+> A tabela `analytics.deploy_events`/consumer da proposta original foi **substituída** por D1 (REST), não é
+> mais um gap. Os mockups abaixo (Índice×Tempo, card de comparação, painel de grupos) são **a visão** original.
 >
 > 📌 **Spec de implementação fechada (2026-06-19):** `docs/product/arc6-phase2-deploy-observability-spec.md`
 > — aterrada no que existe hoje (pós-T11). Decisão de arquitetura: **a Fase 2 entra como uma NOVA LENTE

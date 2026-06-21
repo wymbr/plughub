@@ -103,13 +103,23 @@ desenha `ReferenceLine`; a granularidade por epoch entra como refinamento. Decid
 
 ## 7. Fases / chunks (pequenos, revisáveis)
 
-| Chunk | Entrega | Onde | Teste |
-|---|---|---|---|
-| **P2-A** | `fetch_skill_deployments` (REST agent-registry + cache + config `agent_registry_url`) | analytics-api | seed deploy no agent-registry → helper retorna a lista |
-| **P2-B** | Lente `deploy` em `query_agents_compare` (qualidade por epoch + markers + N por bucket; domain `ai`) | analytics-api | seed `evaluation_finalized`+`segments`+deploys → série por versão + markers + N |
-| **P2-C** | Bench: `LENSES += deploy` + branch `CompareChart` (linha + `ReferenceLine` + versão + flag N<30); **deletar views mortas** da Quality | platform-ui | browser |
+> **Status de entrega (2026-06-20):** P2-A/B/C ✅ entregues e validados no browser, **mas no formato do
+> 1º corte da §6** (série DIÁRIA + `deploy_markers`), **não** na granularidade por **epoch/versão** do §4.1.
+> O bucket por epoch + a reavaliação da média/multi-seleção ficaram **diferidos** (decisão do usuário:
+> "deixar como está e reavaliar"). Ver CHANGELOG "P2 — ... (1º corte §6)" e CLAUDE.md § Arc 6 Fase 2.
+
+| Chunk | Entrega | Onde | Teste | Status |
+|---|---|---|---|---|
+| **P2-A** | `fetch_skill_deployments` (REST agent-registry + cache + config `agent_registry_url`) | analytics-api | seed deploy no agent-registry → helper retorna a lista | ✅ (`test_deployments_client.py`, 9) |
+| **P2-B** | Lente `deploy` em `query_agents_compare` (qualidade + markers + N; domain `ai`) | analytics-api | seed `evaluation_finalized`+`segments`+deploys → série + markers + N | ✅ **diária** (epoch/versão diferido) (`test_deploy_lens.py`, 5) |
+| **P2-C** | Bench: `LENSES += deploy` + branch `CompareChart` (linha + `ReferenceLine` + flag N<30); **deletar views mortas** da Quality | platform-ui | browser | ✅ (série diária; média/multi-seleção a rever) |
 
 Ordem A → B → C. C inclui o cleanup das views mortas.
+
+**Follow-up (núcleo do objetivo, não entregue):** série por **epoch/versão** (§4.1) — eixo X = versões da
+skill, ponto = qualidade média da versão, N por versão; e reavaliar a "média dos agentes"/multi-seleção
+(§4.5/D3) que viram ruído nesta lente. Limitações registradas: markers exigem `flow_id == skill_id` (§8);
+`ReferenceLine` em eixo categórico só rende com o dia do deploy como categoria (o front injeta).
 
 ---
 
@@ -146,3 +156,41 @@ Ordem A → B → C. C inclui o cleanup das views mortas.
 - Código: `reports_query.py` (`query_agents_compare`, `_COMPARE_LENSES`, `_session_agent_attribution_sql`),
   `AgentsBenchPage.tsx`/`CompareChart` (lentes + `ReferenceLine`), agent-registry `GET /v1/skills/:id/deployments`.
 - Visão/mockups: `docs/arcos/arc6-phase2-observability.md`.
+
+---
+
+## 11. Decisão de âncora — POOL (revisão pós-validação, 2026-06-20)
+
+> Revê a premissa §4/§8 ("entidade = `flow_id = skill_id`") **a favor do pool**, após walkthrough com o
+> usuário. Motivada pelo cenário **um skill em vários pools** e pela natureza do modelo de dados real.
+
+**Modelo de dados confirmado** (`agent-registry/prisma/schema.prisma`): `skill_id` é **estável** (o editor
+edita o `flow` do mesmo `skill_id`; `version` é campo à parte; deploy não muda o id). Deploy é
+**pool-centric**: `PoolSkillSlot` (3 slots previous/current/next por pool, snapshots imutáveis,
+promote/rollback) + `SkillDeployment.pool_ids[]` (um deploy atinge vários pools). `segments` carrega
+**`pool_id` E `flow_id`**.
+
+**Decisão:** a unidade da lente `deploy` é o **pool** (precisamente o par `(pool, skill)`, que colapsa em
+pool enquanto um pool roda um skill por vez via o slot `current`).
+- **Curva** = `avg(final_score)` das sessões do pool no tempo (atribuição já devolve `pool_id`).
+- **Timeline de versão** = deploys **do pool** (`SkillDeployment` onde `pool ∈ pool_ids`), cada um com
+  `skill_id`+`version`+`deployed_at`. Cobre bump de versão (mesmo skill), troca de skill e multi-pool.
+- **Multi-pool:** skill S em pools A e B → **uma curva por pool**; o deploy de S (que atinge A e B) é o
+  **mesmo marcador** nas duas curvas → lê-se "a v2 ajudou em A, piorou em B".
+- **Sem a "média dos agentes"** nesta lente (vira ruído — §4.5/D3 revisto para esta lente).
+
+**Por que muda o que foi entregue:** a P2-B atual ancora por `flow_id` (skill) → mistura pools e não mostra
+S@A vs S@B. Re-ancorar por `pool_id`.
+
+**Chunks (P3) — ✅ ENTREGUES e validados no browser (2026-06-20):**
+- **P3-A** ✅ `agent-registry`: `GET /v1/pools/:id/deployments` (deploys onde `pool ∈ pool_ids`, desc por
+  `deployed_at`). Header `x-tenant-id`. Validado por curl.
+- **P3-B** ✅ `analytics-api`: `_compare_deploy_lens` agrupa por `attr.pool_id`; `_fetch_deploy_markers` usa
+  `fetch_pool_deployments` (markers com `pool_id`+`skill_id`+`version_label`). Test `test_deploy_lens.py` (5).
+  Fix CH: `any(attr.agent_type)` (constante `'ai'` colidia com o `WHERE` → query falhava). **Bucket por epoch
+  NÃO entrou** (eixo segue = tempo) — é o P4.
+- **P3-C** ✅ `platform-ui`: entidades = pools (curva por pool, marcadores = `ReferenceDot` por pool na altura
+  da curva, chip `pool · skill versão`); sem "média dos agentes"; estado-vazio "selecione um pool".
+
+**Não-objetivo ainda:** `(pool, skill)` explícito (só se um pool rodar vários skills em paralelo). **P4 (núcleo
+§4.1):** série por **epoch/versão** — eixo X = versões do pool, ponto = qualidade média da versão, N por versão.

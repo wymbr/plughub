@@ -676,7 +676,7 @@ async def get_agents_compare(
     from_dt:         Optional[str]  = Query(None),
     to_dt:           Optional[str]  = Query(None),
     lens:            str            = Query("resolution",
-                                            description="resolution | sessions_aht | availability | pause_reason | quality"),
+                                            description="resolution | sessions_aht | availability | pause_reason | quality | deploy (ai)"),
     pool_id:         Optional[str]  = Query(None),
     entities:        Optional[str]  = Query(None,
                                             description="agent_keys separados por vírgula (vazio = só a média do escopo)"),

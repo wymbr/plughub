@@ -19,7 +19,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
-  ScatterChart, Scatter, ZAxis, ReferenceLine,
+  ScatterChart, Scatter, ZAxis, ReferenceLine, ReferenceDot,
   RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
@@ -29,8 +29,8 @@ import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 // domain: 'universal' (humano + IA) | 'human' (IA desabilitada na lista).
 // primaryKey: métrica plotada no gráfico mínimo da F4.1 (F4.2 enriquece a viz).
 
-type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'session_nps' | 'wrapup' | 'escalation_reason'
-type Domain = 'universal' | 'human'
+type LensId = 'resolution' | 'sessions_aht' | 'availability' | 'pause_reason' | 'quality' | 'quality_criteria' | 'nps' | 'session_nps' | 'wrapup' | 'escalation_reason' | 'deploy'
+type Domain = 'universal' | 'human' | 'ai'
 
 interface LensDef { id: LensId; domain: Domain; primaryKey: string | null; pct: boolean }
 
@@ -42,6 +42,8 @@ const LENSES: LensDef[] = [
   { id: 'nps',             domain: 'universal', primaryKey: 'nps',             pct: false },
   { id: 'wrapup',          domain: 'universal', primaryKey: null,              pct: false },
   { id: 'escalation_reason', domain: 'universal', primaryKey: null,            pct: false },
+  // deploy (Arc 6 Fase 2): qualidade Oficial por versão de skill — só agentes IA.
+  { id: 'deploy',          domain: 'ai',        primaryKey: 'avg_score',       pct: false },
   { id: 'availability',    domain: 'human',     primaryKey: 'occupancy_pct',   pct: true  },
   { id: 'pause_reason',    domain: 'human',     primaryKey: null,              pct: false },
 ]
@@ -80,9 +82,14 @@ interface CompareEntity {
   agent_key: string; label: string; agent_type: string | null
   series: SeriesPoint[]; summary: Record<string, number | null>; missing?: boolean
 }
+interface DeployMarker {
+  deploy_id: string; pool_id: string; skill_id: string; version_label: string | null
+  deployed_at: string; deployed_by?: string | null
+}
 interface CompareResp {
   data: { average: { label: string; n: number; series: SeriesPoint[] } | null; entities: CompareEntity[] }
-  meta: { lens: string; bucket: string; agents_in_scope?: number }
+  meta: { lens: string; bucket: string; agents_in_scope?: number; min_sample?: number; from_dt?: string; to_dt?: string }
+  deploy_markers?: DeployMarker[]   // lente deploy (Arc 6 Fase 2)
   error?: string
 }
 
@@ -130,7 +137,7 @@ function usePerformanceList(tenantId: string, fromDt: string, toDt: string) {
 
 function useCompare(
   tenantId: string, fromDt: string, toDt: string, poolId: string,
-  lens: LensId, entities: string[],
+  lens: LensId, entities: string[], includeAverage = true,
 ) {
   const [resp, setResp] = useState<CompareResp | null>(null)
   const [loading, setLoading] = useState(false)
@@ -140,12 +147,13 @@ function useCompare(
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, lens })
     if (poolId) p.set('pool_id', poolId)
     if (entityCsv) p.set('entities', entityCsv)
+    if (!includeAverage) p.set('include_average', 'false')
     fetch(`/reports/agents/compare?${p}`)
       .then(r => r.json())
       .then((d: CompareResp) => setResp(d))
       .catch(() => setResp(null))
       .finally(() => setLoading(false))
-  }, [tenantId, fromDt, toDt, poolId, lens, entityCsv])
+  }, [tenantId, fromDt, toDt, poolId, lens, entityCsv, includeAverage])
   useEffect(() => { fetch_() }, [fetch_])
   return { resp, loading }
 }
@@ -545,6 +553,152 @@ function QualityCriteriaHeatmap({
   )
 }
 
+// Lente deploy (Arc 6 Fase 2, ancorada no POOL — §11): uma curva de qualidade
+// OFICIAL (avg_score 0–1) por POOL no tempo; cada deploy é um PONTO na cor do pool,
+// na data do deploy (um deploy compartilhado marca cada curva de pool). Sem média.
+// Significância: marca pools cujo N (n_evaluations no período) < min_sample.
+function DeployChart({
+  resp, selected, labelMap, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const markers = (resp.deploy_markers ?? []) as DeployMarker[]
+  const minSample = resp.meta.min_sample ?? 30
+
+  // Eixo DIÁRIO completo (cada dia = um bucket). Bucket sem avaliação fica VAZIO
+  // (gap), nunca zero nem interpolado — a média de um dia sem amostra é desconhecida,
+  // não 0. Dias medidos viram pontos; dias sem dado quebram a linha (honesto).
+  const rows = useMemo(() => {
+    const byDate = new Map<string, Record<string, number | string | null>>()
+    const ensure = (d: string) => {
+      if (!byDate.has(d)) byDate.set(d, { date: d })
+      return byDate.get(d)!
+    }
+    if (resp.data.average) for (const pt of resp.data.average.series) {
+      const v = pt.avg_score; ensure(String(pt.date))['__avg__'] = typeof v === 'number' ? v : null
+    }
+    for (const e of resp.data.entities) for (const pt of e.series) {
+      const v = pt.avg_score; ensure(String(pt.date))[e.agent_key] = typeof v === 'number' ? v : null
+    }
+    // Preenche o intervalo dia-a-dia (from_dt..to_dt do meta) p/ os dias sem amostra
+    // aparecerem como GAP no eixo, em vez de serem omitidos (eixo comprimido esconde
+    // a esparsidade da amostragem). Deploys também caem em dias deste intervalo.
+    const lo = (resp.meta.from_dt || '').slice(0, 10)
+    const hi = (resp.meta.to_dt || '').slice(0, 10)
+    if (lo && hi) {
+      let d = new Date(`${lo}T00:00:00Z`); const end = new Date(`${hi}T00:00:00Z`)
+      for (let i = 0; d <= end && i < 400; i++) {
+        ensure(d.toISOString().slice(0, 10)); d.setUTCDate(d.getUTCDate() + 1)
+      }
+    }
+    return [...byDate.values()].sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  }, [resp])
+
+  // Marcadores de deploy (triângulo): dedupe por (pool, dia); um deploy compartilhado
+  // por vários pools vira um triângulo na cor de cada pool, sobre a curva do pool.
+  // skill + versões ficam no datum p/ o tooltip (não poluem o gráfico).
+  const markerDots = useMemo(() => {
+    const m = new Map<string, { day: string; pool: string; skill: string; versions: string[] }>()
+    for (const mk of markers) {
+      const day = (mk.deployed_at || '').slice(0, 10)
+      if (!day) continue
+      const key = `${mk.pool_id}|${day}`
+      const e = m.get(key) ?? { day, pool: mk.pool_id, skill: mk.skill_id || '', versions: [] }
+      if (mk.version_label && !e.versions.includes(mk.version_label)) e.versions.push(mk.version_label)
+      m.set(key, e)
+    }
+    return [...m.values()]
+  }, [markers])
+  // y do X de deploy: o valor medido NAQUELE dia se existir (senão o último valor
+  // medido antes dele — "qualidade entrando no deploy"). Sem interpolar/inventar
+  // valor em dia sem amostra (coerente com o gap da curva).
+  const yForDeploy = (pool: string, day: string): number => {
+    const e = resp.data.entities.find(x => x.agent_key === pool)
+    let last = 0.9
+    for (const pt of e?.series ?? []) {
+      if (typeof pt.avg_score === 'number' && String(pt.date) <= day) last = pt.avg_score
+    }
+    return last
+  }
+
+  // Pools selecionados com amostra rasa (N < min_sample) — flag de significância.
+  const lowSample = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e && !e.missing)
+    .filter(e => ((e.summary.n_evaluations as number | null) ?? 0) < minSample)
+    .map(e => labelMap[e.agent_key] ?? e.label ?? e.agent_key)
+
+  if (selected.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+      {t('bench.chart.selectForDeploy')}
+    </div>
+  )
+  const hasData = (resp.data.average?.series.length ?? 0) > 0 ||
+    resp.data.entities.some(e => e.series.length > 0)
+  if (!hasData) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+
+  return (
+    <div className="space-y-2">
+      {markerDots.length > 0 && (
+        <p className="text-2xs text-muted-light px-1">
+          {t('bench.deploy.count', { n: markerDots.length })}
+        </p>
+      )}
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={rows} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d: string) => d.slice(5)} />
+          <YAxis tick={{ fontSize: 11 }} domain={[0, 1]} tickFormatter={(v: number) => v.toFixed(1)} />
+          <Tooltip formatter={(v: number) => v?.toFixed?.(2)} />
+          <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
+          {resp.data.average && (
+            <Line type="monotone" dataKey="__avg__" name={labelMap.__avg__}
+              stroke="#111827" strokeWidth={2.5} strokeDasharray="6 4" dot={false} connectNulls={false} />
+          )}
+          {selected.map(k => (
+            // Ponto = dia COM avaliação; reta liga os dias medidos (linear, não suaviza
+            // → não insinua dado entre medições). Dia sem avaliação não vira ponto nem zero.
+            <Line key={k} type="linear" dataKey={k} name={labelMap[k] ?? k}
+              stroke={colorFor(k)} strokeWidth={2} connectNulls={true}
+              dot={{ r: 2.5, fill: colorFor(k), strokeWidth: 0 }} />
+          ))}
+          {/* Deploy = triângulo compacto na cor do pool, SOBRE a curva (distingue do
+              ponto redondo). A versão/skill NÃO ficam no gráfico (não escala com a
+              quantidade) — vão no tooltip nativo (hover no triângulo). */}
+          {markerDots.map(d => {
+            const c = colorFor(d.pool)
+            const tip = `${d.pool} · ${d.skill}${d.versions.length ? ` v${d.versions.join(' → ')}` : ''} · ${d.day}`
+            return (
+              <ReferenceDot key={`${d.pool}|${d.day}`} x={d.day} y={yForDeploy(d.pool, d.day)}
+                ifOverflow="extendDomain"
+                shape={(p: any) => {
+                  if (p?.cx == null || p?.cy == null) return <g />
+                  const s = 5
+                  return (
+                    <g style={{ cursor: 'pointer' }}>
+                      <path d={`M${p.cx},${p.cy - s} L${p.cx + s},${p.cy + s} L${p.cx - s},${p.cy + s} Z`}
+                        fill={c} stroke="#fff" strokeWidth={1} />
+                      <title>{tip}</title>
+                    </g>
+                  )
+                }} />
+            )
+          })}
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="text-2xs text-muted-light px-1">{t('bench.deploy.legend')}</p>
+      {lowSample.length > 0 && (
+        <p className="text-2xs text-warning px-1">
+          {t('bench.deploy.lowSample', { min: minSample, agents: lowSample.join(', ') })}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function LensChart({
   lens, resp, selected, t, escalationLabels,
 }: {
@@ -559,7 +713,7 @@ function LensChart({
   const hasData = (resp.data.average && resp.data.average.series.length > 0) ||
     resp.data.entities.some(e => e.series.length > 0 ||
       ((e.summary.reasons as unknown as unknown[] | undefined)?.length ?? 0) > 0)
-  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria' && lens !== 'escalation_reason') return (
+  if (!hasData && lens !== 'pause_reason' && lens !== 'wrapup' && lens !== 'quality_criteria' && lens !== 'escalation_reason' && lens !== 'deploy') return (
     <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
   )
 
@@ -609,6 +763,9 @@ function LensChart({
       </div>
     )
   }
+  if (lens === 'deploy') return (
+    <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
+  )
   if (lens === 'nps') return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <MetricLine resp={resp} metricKey="nps" fmt="count" selected={selected}
@@ -945,8 +1102,10 @@ export default function AgentsBenchPage() {
   }, [fromDt, toDt, poolId, lens, selected, view])
 
   const lensDef = LENSES.find(l => l.id === lens)!
+  // Lente deploy (§11): a unidade é o POOL — entidades = pool_ids; sem média da frota.
+  const deployLens = lens === 'deploy'
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
-  const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected)
+  const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected, !deployLens)
   const { resp: crossResp, loading: crossLoading } = useCross(tenantId ?? '', fromDt, toDt, poolId, view === 'cross')
   const escalationLabels = useEscalationLabels(tenantId ?? '')
 
@@ -977,7 +1136,9 @@ export default function AgentsBenchPage() {
   const poolOptions = useMemo(() => poolGroups.map(g => g.pool), [poolGroups])
   const shownGroups = poolId ? poolGroups.filter(g => g.pool === poolId) : poolGroups
 
-  const isDisabled = (type: string) => lensDef.domain === 'human' && type !== 'human'
+  const isDisabled = (type: string) =>
+    (lensDef.domain === 'human' && type !== 'human') ||
+    (lensDef.domain === 'ai' && type === 'human')   // deploy: só IA (skills têm deploy)
 
   const toggle = (key: string, disabled: boolean) => {
     if (disabled) return
@@ -1108,28 +1269,36 @@ export default function AgentsBenchPage() {
                         aria-label={t(open ? 'bench.list.collapse' : 'bench.list.expand')}>
                         <span className={`transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
                       </button>
-                      <input type="checkbox" checked={allOn}
-                        ref={el => { if (el) el.indeterminate = !allOn && someOn }}
-                        disabled={eligible.length === 0}
-                        onChange={() => poolToggle(agents)} className="accent-primary" />
+                      {/* Deploy (§11): a entidade é o PRÓPRIO pool — o checkbox seleciona o pool_id.
+                          Nas demais lentes: bulk dos agentes elegíveis do pool. */}
+                      <input type="checkbox"
+                        checked={deployLens ? selected.includes(pool) : allOn}
+                        ref={el => { if (el) el.indeterminate = !deployLens && !allOn && someOn }}
+                        disabled={!deployLens && eligible.length === 0}
+                        onChange={() => deployLens ? toggle(pool, false) : poolToggle(agents)}
+                        className="accent-primary"
+                        style={{ accentColor: deployLens && selected.includes(pool) ? colorFor(pool) : undefined }} />
                       <span className="flex-1 min-w-0 text-xs font-semibold text-dark font-mono truncate">{pool}</span>
-                      <button onClick={() => togglePoolPin(pool)}
-                        title={t('bench.list.pinPoolAvg')} aria-label={t('bench.list.pinPoolAvg')}
-                        className={`text-2xs font-bold px-1.5 py-0.5 rounded border transition-colors ${
-                          selected.includes(poolPinKey(pool))
-                            ? 'border-transparent text-white'
-                            : 'border-border text-muted-light hover:text-dark hover:border-border-strong'
-                        }`}
-                        style={{ background: selected.includes(poolPinKey(pool)) ? colorFor(poolPinKey(pool)) : undefined }}>
-                        μ
-                      </button>
+                      {!deployLens && (
+                        <button onClick={() => togglePoolPin(pool)}
+                          title={t('bench.list.pinPoolAvg')} aria-label={t('bench.list.pinPoolAvg')}
+                          className={`text-2xs font-bold px-1.5 py-0.5 rounded border transition-colors ${
+                            selected.includes(poolPinKey(pool))
+                              ? 'border-transparent text-white'
+                              : 'border-border text-muted-light hover:text-dark hover:border-border-strong'
+                          }`}
+                          style={{ background: selected.includes(poolPinKey(pool)) ? colorFor(poolPinKey(pool)) : undefined }}>
+                          μ
+                        </button>
+                      )}
                       <span className="text-2xs text-muted-light">{agents.length}</span>
                     </div>
                     {/* Agentes do pool */}
                     {open && (
                       <ul>
                         {agents.map(a => {
-                          const disabled = isDisabled(a.type)
+                          // Deploy: agentes viram só referência (a seleção é por pool).
+                          const disabled = deployLens || isDisabled(a.type)
                           const checked = selected.includes(a.key)
                           const resPct = a.sessions ? a.resolved / a.sessions : null
                           return (

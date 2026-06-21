@@ -389,6 +389,47 @@ poolsRouter.get("/:pool_id/mentionable-agents", async (req: Request, res: Respon
 })
 
 // ─────────────────────────────────────────────
+// GET /v1/pools/:pool_id/deployments
+// Timeline de deploys que atingiram este pool (Arc 6 Fase 2 — lente `deploy`
+// ancorada no pool). Um deploy (SkillDeployment) lista vários pools em pool_ids;
+// aqui filtramos os que incluem este pool. Newest-first. Cada entrada carrega
+// skill_id + version → a lente desenha o marcador de versão na curva do pool.
+// ─────────────────────────────────────────────
+poolsRouter.get("/:pool_id/deployments", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const tenantId = _getTenantId(req)
+    const poolId   = req.params["pool_id"]!
+    const limit    = Math.min(parseInt((req.query["limit"] as string) ?? "200", 10), 500)
+
+    const pool = await prisma.pool.findUnique({
+      where: { pool_id_tenant_id: { pool_id: poolId, tenant_id: tenantId } },
+    })
+    if (!pool) return res.status(404).json({ error: "Pool não encontrado" })
+
+    const deployments = await (prisma as any).skillDeployment.findMany({
+      where:   { tenant_id: tenantId, pool_ids: { has: poolId } },
+      orderBy: { deployed_at: "desc" },
+      take:    limit,
+    }) as Array<Record<string, unknown>>
+
+    return res.json({
+      deployments: deployments.map(d => ({
+        id:          d["id"],
+        skill_id:    d["skill_id"],
+        version:     d["version"],
+        deployed_at: d["deployed_at"],
+        deployed_by: d["deployed_by"],
+        pool_ids:    d["pool_ids"],
+        notes:       d["notes"],
+      })),
+      total: deployments.length,
+    })
+  } catch (err) {
+    return next(err)
+  }
+})
+
+// ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
 function _getTenantId(req: Request): string {

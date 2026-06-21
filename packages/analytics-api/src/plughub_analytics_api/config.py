@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # Vazio ou indisponível → degrada graciosamente para a provisionada.
     pricing_api_url: str = ""
 
+    # ── Agent Registry (Arc 6 Fase 2 — lente `deploy` no bench) ───────────────
+    # Origem do deploy timeline (skill_deployments) lido em query-time pela lente
+    # `deploy` de /reports/agents/compare. D1 da spec: REST no agent-registry, sem
+    # tabela/consumer. Indisponível → série sem markers (degrada, nunca 500).
+    agent_registry_url: str = "http://localhost:3300"
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

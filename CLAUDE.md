@@ -60,6 +60,7 @@ plughub/
       delegate-workflow-io.md ← Padrão delegate: workflow delega I/O a agente via suspend/resume
       arc5-segments.md        ← Arc 5 ContactSegment analytics
       arc6-evaluation.md      ← Arc 6 Evaluation platform completo
+      arc-evaluation-metrics-methodology.md ← métricas de avaliação (session_metric.*) + dimensões qualitativas IA + metodologia + roteiro
       arc7-auth.md            ← Arc 7 Auth + ABAC completo
       arc8-agent-availability.md ← Arc 8 disponibilidade e pausas
       arc9-agent-groups.md    ← Arc 9 Agent Groups + Supervisor Scope
@@ -87,6 +88,7 @@ plughub/
       adr-session-replayer.md ← session replayer architecture
       adr-contact-segments.md ← Arc 5 architecture
       adr-instance-bootstrap.md
+      adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
 ```
 
 ### Como adicionar uma nova feature
@@ -707,20 +709,43 @@ O Console é uma **superfície de orquestração**: o operador humano dirige, de
 
 ---
 
-## Arc 6 Fase 2 — Observabilidade por Deploy ⚠️ NÃO IMPLEMENTADO (gap doc×código, T16)
+## Arc 6 Fase 2 — Observabilidade por Deploy ⚠️ entregue ancorado no POOL (§11) — núcleo epoch PENDENTE
 
-> **Correção T16 (2026-06-19):** este arco era marcado ✅ mas **não existe no código** — não há
-> tabela `analytics.deploy_events`, consumer de `registry.changed`/`skill_deployed`, nem os endpoints
-> `deploy-timeline`/`quality-comparison`/`quality-timeseries` (auditoria: grep zero em `analytics-api`).
-> A UI (`AnaliseQualidadePage` Trend/Comparison) existe mas está desativada (`TAB_IDS=['summary']`),
-> apontando para endpoints inexistentes. É **proposta**, registrada em `## Pending` e em `TODO.md`.
+> **Status (P3, 2026-06-20):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`,
+> decisão D3), **ancorada no POOL** (spec §11). Entregue no formato **eixo-tempo + pontos de deploy** (não
+> o bucket por **epoch/versão** §4.1/D4 — esse segue PENDENTE, `## Pending`). "Comparar versão N vs N+1" ainda
+> é leitura via pontos de deploy, não um eixo de versões.
 
-Proposta: comparação de qualidade ancorada em **deploy epochs** (deploys como âncoras temporais
-objetivas) com **dual-slice** (`evaluation_score`/`resolution_rate`/`escalation_rate`/`aht_ms`/`nps`
-+ `statistical_significance`). O T11 (relatório Oficial×Operacional) entregou a base de qualidade
-finalizada (`evaluation_finalized`) **independentemente** desta Fase 2.
+**Âncora = POOL** (par `(pool, skill)` colapsado enquanto 1 skill por pool): `skill_id` é estável (deploy não
+muda o id; `version` é campo à parte; deploy é pool-centric via `PoolSkillSlot`+`SkillDeployment.pool_ids`), e
+**um skill pode rodar em vários pools** → âncora-skill misturaria pools. Curva por pool; um deploy compartilhado
+vira o mesmo marcador em cada curva de pool atingida.
 
-→ See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md) (alvo de design)
+**Implementado (P2 + P3):**
+- **agent-registry**: `GET /v1/skills/:id/deployments` (P2-A) + `GET /v1/pools/:id/deployments` (P3-A — deploys
+  onde pool ∈ `pool_ids`). Header `x-tenant-id`.
+- **analytics-api**: config `agent_registry_url`; `deployments_client` (`fetch_skill_deployments` +
+  `fetch_pool_deployments`, cache `(kind,tenant,id)` 60s, degradação → `[]`, D1). Lente `deploy` em
+  `query_agents_compare` (`_COMPARE_LENSES`, domain `ai`): `_compare_deploy_lens` lê `avg(final_score)` de
+  `evaluation_finalized` (Oficial, D2) **agrupado por `attr.pool_id`** (curva por pool); `_fetch_deploy_markers`
+  usa a timeline do pool, cada marker com `pool_id`+`skill_id`+`version_label`; `meta.min_sample=30`.
+  *(Cuidado CH: `any(attr.agent_type)`, não constante `'ai'` — alias colide com o `WHERE attr.agent_type` e a
+  query falha.)*
+- **platform-ui** `AgentsBenchPage`/`DeployChart`: na lente, entidades = **pools** (checkbox do pool → `pool_id`,
+  cor própria; agentes desabilitados; μ oculto); `include_average=false`. Leitura honesta: eixo diário completo,
+  **bolinha = dia com avaliação** + **reta** (`linear`) entre medições (sem zero/interpolação em dia sem amostra);
+  **deploy = triângulo** na cor do pool sobre a curva, **versão/skill no tooltip** (`<title>` em `ReferenceDot
+  shape`) + **contador** "N deploys" (não cresce com a qtd); flag N<min; estado-vazio "selecione um pool".
+  Cleanup T16: `TimeseriesView`/`ComparisonView` mortas removidas (`MetricSelector` mantido, usado por
+  `AnaliseComparacaoPage`).
+- Demo: analytics-api ganhou `PLUGHUB_AGENT_REGISTRY_URL`. Seed `infra/test/seed_deploy_lens_demo.sh`
+  (usa `flow_id == skill_id` p/ alinhar). Testes: `test_deployments_client.py` (9) + `test_deploy_lens.py` (5).
+
+**Limitações registradas:** `ReferenceDot`/eixo categórico só rende se o dia do deploy é categoria (o front
+injeta); deploy posterior à última avaliação fica no fim da curva (sem dados pós-deploy ainda).
+
+→ See [`docs/arcos/arc6-phase2-observability.md`](docs/arcos/arc6-phase2-observability.md),
+[`docs/product/arc6-phase2-deploy-observability-spec.md`](docs/product/arc6-phase2-deploy-observability-spec.md)
 
 ---
 
@@ -756,6 +781,22 @@ Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicaçã
 
 ---
 
+## Métricas de Avaliação & Metodologia ⚠️ design fechado — implementação PENDENTE
+
+Define **o que o avaliador mede e como** (distinto de revisão/contestação, Arc 13). Duas trilhas.
+
+**Quantitativo (`session_metric.*`)** — catálogo **fechado**, determinístico, sem LLM, **agnóstico de agente** (humano e IA). É o mesmo namespace que os critérios `auto_computed` do formulário consomem via `computation_source` — `auto_computed` **entra na nota** junto com as qualitativas (não é KPI de dashboard à parte). Decisões: **(A)** computa em escopo contato **e** segmento (avaliador usa o do segmento); **(B)** guarda séries brutas (`agent_response_latencies_s`, `inter_message_gaps_s`) p/ perguntas paramétricas; **(C)** `customer_wait_time_s` ≠ `total_silence_s`; **(D)** ausente/não-aplicável = `na` (re-normaliza peso), condicionável por canal; **(E)** computa **lazy no ingest** (só o % amostrado). Saudação = 1ª msg do agente (proxy, sem detecção semântica).
+
+**Qualitativo de IA** — avaliar IA ≠ humano (erros sistemáticos por versão, não episódicos). Dimensões: faithfulness (vs KB / vs ferramenta), tool correctness, policy adherence, abstenção/escalada, safety. **Dois tiers**: transcript-only (já avaliável) × execution-evidence (lacuna). Metodologia (τ-bench, DeepEval, RAGAS): combinar determinístico + rubrica explícita/calibrada com controles de viés; divergência >20–25% vs humano = recalibrar (o loop de calibração do Arc 13 já é esse mecanismo).
+
+**Amostragem de contatos** — hoje stateless/determinística por hash, `%` por campanha. Modelo-alvo: **cota por agente cumulativa por déficit** (cobertura justa, não representatividade), chave humano `(campaign, user_id)` / IA `(campaign, pool_id, skill_id, deploy_version)` — chavear por versão = "reset no deploy" sem reset (não por `agent_type`, eixo aposentado). Pré-requisito: **carimbar `skill_id`+`deploy_version` no `ContactSegment`** (hoje ausente; resolvido do `SkillDeployment` ativo, ancorado no início — conserta também a precisão do Arc 6 Fase 2). Modelo de deploy: `skill_id` estável = identidade do artefato, versão = registro de deploy, `_v{n}` cosmético; binding skill↔pool a unificar (`PoolSkillSlot` autoritativo + append-log). Virada para estado (ADR). **Módulo agnóstico/externo**: viável como **grau-transcript** (sem `mcp.audit`/`pipeline_state`/`usage.events` → tier-2 IA indisponível); exige contrato de ingestão versionado + masking + versão dentro do contato.
+
+**Achados de código** (base do roteiro): `SessionMetricsExtractor`/`fill_auto_computed_criteria` existem mas são **órfãos** (nunca chamados) → `auto_computed` é hoje no-op que distorce pesos; o trace `mcp.audit` **não chega** ao `ReplayContext` → tier-2 inavaliável (dado vive em `mcp_audit_log`, via analytics-api `GET /mcp-calls`; `input/output_snapshot` gated por `AuditPolicy.capture_*`).
+
+→ See [`docs/arcos/arc-evaluation-metrics-methodology.md`](docs/arcos/arc-evaluation-metrics-methodology.md)
+
+---
+
 ## Arc 15 — Canal WebRTC com SFU (LiveKit) ✅
 
 Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (ver § Pending).
@@ -788,18 +829,20 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 ## Pending (Next Iteration)
 
-### Arc 6 Fase 2 — Observabilidade por Deploy *(NÃO implementado — gap doc×código, T16 2026-06-19)*
-- Estava marcado ✅ mas não existe no código. Falta: tabela ClickHouse `analytics.deploy_events`;
-  consumer de `registry.changed`/`skill_deployed` no analytics-api; endpoints `GET /reports/deploy-timeline`,
-  `/quality-comparison` (dual-slice por agente/período/deploy_epoch + `statistical_significance`),
-  `/quality-timeseries` (série + `deploy_markers`). UI já existe parcial e **desativada**
-  (`AnaliseQualidadePage` Trend/Comparison, `MetricSelector`) apontando p/ os endpoints inexistentes —
-  reativar ao construir o backend. Candidato a arco próprio. **Spec de implementação fechada (2026-06-19):**
-  `docs/product/arc6-phase2-deploy-observability-spec.md`. Decisões: **entra como NOVA LENTE `deploy` no
-  board de Agentes** (`/reports/agents/compare?lens=deploy`), não tela/aba nova (consolidação 2026-06-16);
-  deploy timeline via REST do agent-registry; qualidade = `evaluation_finalized`/Oficial; comparação de
-  versão via epochs+N. Chunks P2-A (REST deploys) · P2-B (lente no compare) · P2-C (front + cleanup views mortas).
-  Visão/mockups: `docs/arcos/arc6-phase2-observability.md`.
+### Arc 6 Fase 2 — Observabilidade por Deploy *(1º corte §6 entregue; núcleo epoch PENDENTE — P2, 2026-06-20)*
+- **Entregue (P2-A/B/C):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`, domain
+  `ai`) no **formato 1º corte da §6** — série DIÁRIA de `avg(final_score)` (Oficial) + `deploy_markers` via
+  REST do agent-registry (D1). Ver § "Arc 6 Fase 2" acima.
+- **PENDENTE (núcleo do objetivo — §4.1/D4):** série **por epoch/versão** (bucket `[deploy N, deploy N+1)`,
+  eixo X = versões, ponto = qualidade média da versão, N por versão). Hoje "comparar versão N vs N+1" é
+  leitura manual via markers, não um eixo de versões. Decisão do usuário (2026-06-20): **deixar o 1º corte
+  como está e reavaliar depois**.
+- **PENDENTE (UX desta lente):** a "média dos agentes" (§4.5) + multi-seleção são herdadas do board (D3) e
+  viram ruído numa lente focada em versões de UMA skill — avaliar remover/ocultar a média e focar single-skill
+  quando o epoch entrar.
+- **Não-objetivos (backlog, fora):** período A/B arbitrário, overlay multi-métrica/`agent_event`, C3, NPS,
+  export, tabela `analytics.deploy_events`/consumer (substituídos por D1/REST).
+- Spec: `docs/product/arc6-phase2-deploy-observability-spec.md`. Visão/mockups: `docs/arcos/arc6-phase2-observability.md`.
 
 ### Arc 15 — WebRTC (decisão em aberto)
 - bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado).

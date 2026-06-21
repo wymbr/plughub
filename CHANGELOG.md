@@ -2,6 +2,76 @@
 
 ---
 
+## P3 — Arc 6 Fase 2: lente `deploy` RE-ANCORADA no POOL (spec §11) (2026-06-20)
+
+Após walkthrough com o usuário, a unidade da lente `deploy` passou de skill (`flow_id`) para **pool**
+(spec §11). Motivo: `skill_id` é estável (deploy não muda o id; `version` é campo à parte; deploy é
+pool-centric via `PoolSkillSlot`+`SkillDeployment.pool_ids`) e **um skill pode rodar em vários pools** →
+âncora-skill misturava pools. Validado no browser: curva por pool, ponto de deploy colorido por pool,
+sem média, flag N<30. Núcleo epoch/versão (§4.1) segue diferido (P4).
+
+- **P3-A (agent-registry)** — `GET /v1/pools/:id/deployments`: deploys onde o pool ∈ `pool_ids`
+  (`SkillDeployment`, `pool_ids: { has }`), desc por `deployed_at`, header `x-tenant-id`. Validado por curl.
+- **P3-B (analytics-api)** — `_compare_deploy_lens` agora **agrupa por `attr.pool_id`** (curva por pool);
+  `_fetch_deploy_markers` consome a timeline do **pool** (novo `fetch_pool_deployments`) e cada marker carrega
+  `pool_id`+`skill_id`+`version_label` (deploy compartilhado vira marker em cada curva). `deployments_client`
+  fatorado (`_fetch_deployments` + variantes skill/pool, cache `(kind,tenant,id)`). Test `test_deploy_lens.py`
+  reescrito (14 ✓ no total c/ `test_deployments_client`). **Fix de causa-raiz:** o `'ai' AS agent_type` constante
+  colidia com `WHERE attr.agent_type != 'human'` (alias visível no WHERE do ClickHouse) → query falhava →
+  "No data"; trocado por `any(attr.agent_type)` (padrão da lente `quality`).
+- **P3-C (platform-ui)** — na lente `deploy` a seleção é por **pool** (checkbox do pool → `pool_id` na cor do
+  pool; agentes viram referência desabilitada; pino μ oculto); `include_average=false`; estado-vazio
+  "selecione um pool" (`bench.chart.selectForDeploy`); i18n `bench.domain.ai` reescrito p/ pools. en + pt-BR.
+- **P3-C — refinamentos visuais (iteração com usuário, 2026-06-20):** decisões de leitura honesta da curva
+  e do marcador, validadas no browser:
+  - **Eixo diário completo** (cada dia = bucket). Dia sem avaliação fica **vazio**, nunca **zero** (zero
+    significaria "avaliado=0"; vazio = "sem amostra" — avaliação é amostral). Sem interpolação/fabricação.
+  - **Bolinhas = dias COM avaliação** (pontos de medição reais); **reta** (`type="linear"`, não `monotone`)
+    liga as medições — sem suavização que insinue dado entre pontos.
+  - **Deploy = triângulo** na cor do pool, SOBRE a curva (no valor do dia, ou último valor medido se o deploy
+    caiu em dia sem amostra). Distingue do ponto redondo de medição. Deploy e avaliação são eixos independentes
+    (um deploy pode cair em dia com OU sem avaliação).
+  - **Versão/skill fora do gráfico** → no **tooltip nativo** do triângulo (`<title>` em `ReferenceDot shape`)
+    + **contador** "N deploy(s)" (`bench.deploy.count`) no lugar da régua de chips → o espaço não cresce com a
+    quantidade de deploys. **Legenda** (`bench.deploy.legend`) explica símbolos + "sem ponto = sem avaliação".
+
+---
+
+## P2 — Arc 6 Fase 2: lente `deploy` no board de Agentes (1º corte §6) (2026-06-20)
+
+Observabilidade por deploy entregue como **lente no bench** (decisão D3), no **formato do 1º corte da §6**
+(série DIÁRIA + `deploy_markers`). O núcleo §4.1/D4 (bucket por **epoch/versão**) fica **pendente** por
+decisão do usuário (reavaliar depois) — "comparar versão N vs N+1" hoje é leitura manual via markers, não
+eixo de versões. Registrado como **incompleto** no CLAUDE.md (não é ✅) para não repetir o ✅ falso do T16.
+
+- **P2-A (analytics-api)** — `config.agent_registry_url` (env `PLUGHUB_AGENT_REGISTRY_URL`, default
+  `http://localhost:3300`) + `deployments_client.fetch_skill_deployments(base_url, tenant, skill_id)`:
+  httpx `GET /v1/skills/:id/deployments`, header `x-tenant-id`, cache `(tenant,skill)` 60s, degradação
+  graciosa → `[]` (nunca 500). Decisão D1: sem tabela `analytics.deploy_events`, sem consumer, sem evento.
+  Test `test_deployments_client.py` (9 ✓).
+- **P2-B (analytics-api)** — lente `deploy` em `query_agents_compare` (`_COMPARE_LENSES`, domain `ai`):
+  `_compare_deploy_lens` lê `avg(final_score)` de `evaluation_finalized` (Oficial, D2) com a atribuição
+  por `flow_id` da lente `quality`; série diária + `deploy_markers` (top-level, via `_fetch_deploy_markers`
+  async, filtrados à janela e ordenados) + `meta.min_sample=30`. Filtro domain `ai` (`attr.agent_type != 'human'`).
+  Test `test_deploy_lens.py` (5 ✓). Também corrigidos 2 testes obsoletos do T11 (`TestQueryQualityReport`)
+  que ainda chamavam a assinatura pré-T11 (`pool_id`/`category`/`score`).
+- **P2-C (platform-ui)** — `AgentsBenchPage`: `LENSES += deploy` (domain `ai`), tipos `LensId`/`Domain`,
+  `CompareResp.deploy_markers`/`meta.min_sample`, `isDisabled` p/ `ai`, `DeployChart` (linha `avg_score` 0–1
+  + `ReferenceLine` por dia de deploy, com injeção do dia do marker como categoria p/ o eixo categórico
+  renderizar a vertical + chip-legenda dos deploys + flag N<min). i18n `bench.lens.deploy`/`bench.domain.ai`/
+  `bench.deploy.*` (en + pt-BR). **Cleanup**: `TimeseriesView`/`ComparisonView` mortas removidas de
+  `AnaliseQualidadePage` (apontavam p/ `quality-timeseries`/`quality-comparison` inexistentes) + imports/helpers
+  órfãos; `MetricSelector` mantido (ainda usado por `AnaliseComparacaoPage`).
+- **Demo/infra** — `docker-compose.demo.yml`: analytics-api ganhou `PLUGHUB_AGENT_REGISTRY_URL` (markers).
+  Seed de validação `infra/test/seed_deploy_lens_demo.sh` (segments AI + `evaluation_finalized` + deploy via
+  API, com `flow_id == skill_id` p/ alinhar markers — §8). Validado no browser: série, markers, flag N<30 e
+  domain-gate corretos.
+- **Limitações conhecidas registradas:** (1) markers só alinham com `flow_id == skill_id` (§8); (2) núcleo
+  epoch/versão (§4.1) não entregue; (3) média/multi-seleção herdadas do board são ruído nesta lente — a
+  reavaliar junto com o epoch.
+
+---
+
 ## T16 — Correção de verdade nas docs (✅ falsos, gap Arc 6 Fase 2) (2026-06-19)
 
 Spec §19. **Só docs.** Auditoria de ✅ doc×código após T1–T11.

@@ -162,7 +162,14 @@
       "quality_criteria": "Quality by dimension",
       "nps": "NPS",
       "wrapup": "Wrap-up disposition",
-      "escalation_reason": "Escalation reason"
+      "escalation_reason": "Escalation reason",
+      "deploy": "Deploy (quality)"
+    },
+    "deploy": {
+      "markers": "Deploys:",
+      "count": "{{n}} deploy(s) in the period — hover a triangle for details",
+      "legend": "● day with an evaluation (no point = no evaluation that day) · ▲ deploy (pool color)",
+      "lowSample": "Low sample (N < {{min}}): {{agents}} — read with caution."
     },
     "criteria": {
       "form": "Form: {{form}}",
@@ -176,7 +183,8 @@
     },
     "domain": {
       "universal": "Compares human and AI agents.",
-      "human": "Human agents only — AI rows are disabled in this lens."
+      "human": "Human agents only — AI rows are disabled in this lens.",
+      "ai": "AI pools only — pick pools (one curve each); human rows are disabled."
     },
     "list": {
       "title": "Pools & Agents",
@@ -205,7 +213,8 @@
       "selectForPause": "Select one or more agents in the list to compare pause reasons.",
       "selectForWrapup": "Select one or more agents in the list to compare wrap-up dispositions.",
       "selectForQuality": "Select one or more agents in the list to compare quality by dimension.",
-      "selectForEscalation": "Select one or more agents in the list to compare escalation reasons."
+      "selectForEscalation": "Select one or more agents in the list to compare escalation reasons.",
+      "selectForDeploy": "Select one or more pools to see quality across their deploys."
     },
     "metric": {
       "resolution": "Resolution rate",

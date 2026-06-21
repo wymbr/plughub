@@ -232,48 +232,54 @@ class TestQueryAgentsReport:
 # ── query_quality_report ─────────────────────────────────────────────────────
 
 class TestQueryQualityReport:
-    _COLS = ["event_id", "tenant_id", "session_id", "pool_id",
-             "score", "category", "timestamp"]
-
-    def _count_result(self, n: int) -> MagicMock:
-        return _ch_result(["count()"], [[n]])
+    # T11 — modelo Oficial×Operacional (evaluation_finalized). _fetch_quality faz
+    # DUAS queries: agregação principal (group_key + N + distribuição) + a
+    # distribuição por finalize_reason. Cols batem com os aliases do SELECT.
+    _COLS = ["group_key", "n", "finalized_n", "provisional_n",
+             "avg_score", "score_high", "score_mid", "score_low"]
+    _REASON_COLS = ["reason", "n"]
 
     async def test_returns_required_keys(self):
         client = _make_client(
-            self._count_result(0),
             _ch_result(self._COLS, []),
+            _ch_result(self._REASON_COLS, []),
         )
         result = await query_quality_report(client, DB, TENANT)
         assert "data" in result
         assert "meta" in result
+        assert result["mode"] == "oficial"   # default = invariante (só finalizadas)
 
-    async def test_sentiment_row_mapped(self):
-        ts = datetime(2026, 4, 21, 9, 30, 0)
+    async def test_finalized_row_mapped(self):
         client = _make_client(
-            self._count_result(1),
             _ch_result(self._COLS, [
-                ["ev-sent-001", TENANT, "sess-001",
-                 "retencao_humano", 0.72, "satisfied", ts],
+                ["camp_sac", 10, 10, 0, 0.82, 7, 2, 1],
+            ]),
+            _ch_result(self._REASON_COLS, [
+                ["evaluator", 8], ["review_upheld", 2],
             ]),
         )
-        result = await query_quality_report(client, DB, TENANT)
+        result = await query_quality_report(client, DB, TENANT, group_by="campaign_id")
         row = result["data"][0]
-        assert row["score"]    == 0.72
-        assert row["category"] == "satisfied"
-        assert row["pool_id"]  == "retencao_humano"
-        assert isinstance(row["timestamp"], str)
+        assert row["group_key"]   == "camp_sac"
+        assert row["avg_score"]   == 0.82
+        assert row["finalized_n"] == 10
+        assert result["finalize_reasons"] == {"evaluator": 8, "review_upheld": 2}
+        assert result["meta"]["total_finalized"] == 10
 
     async def test_filters_accepted(self):
         client = _make_client(
-            self._count_result(5),
             _ch_result(self._COLS, []),
+            _ch_result(self._REASON_COLS, []),
         )
         result = await query_quality_report(
             client, DB, TENANT,
-            pool_id="retencao_humano",
-            category="frustrated",
+            mode="operacional",
+            group_by="finalize_reason",
+            campaign_id="camp_sac",
+            finalize_reason="evaluator",
         )
-        assert result["meta"]["total"] == 5
+        assert result["mode"] == "operacional"
+        assert result["group_by"] == "finalize_reason"
 
     async def test_error_returns_empty(self):
         client = MagicMock()

@@ -162,7 +162,14 @@
       "quality_criteria": "Qualidade por dimensão",
       "nps": "NPS",
       "wrapup": "Disposição do wrap-up",
-      "escalation_reason": "Motivo de escalação"
+      "escalation_reason": "Motivo de escalação",
+      "deploy": "Deploy (qualidade)"
+    },
+    "deploy": {
+      "markers": "Deploys:",
+      "count": "{{n}} deploy(s) no período — passe o mouse no triângulo para detalhes",
+      "legend": "● dia com avaliação (sem ponto = sem avaliação no dia) · ▲ deploy (cor do pool)",
+      "lowSample": "Amostra rasa (N < {{min}}): {{agents}} — leia com cautela."
     },
     "criteria": {
       "form": "Formulário: {{form}}",
@@ -176,7 +183,8 @@
     },
     "domain": {
       "universal": "Compara agentes humanos e IA.",
-      "human": "Apenas agentes humanos — linhas de IA ficam desabilitadas nesta lente."
+      "human": "Apenas agentes humanos — linhas de IA ficam desabilitadas nesta lente.",
+      "ai": "Apenas pools IA — selecione pools (uma curva cada); linhas humanas ficam desabilitadas."
     },
     "list": {
       "title": "Pools e Agentes",
@@ -205,7 +213,8 @@
       "selectForPause": "Selecione um ou mais agentes na lista para comparar motivos de pausa.",
       "selectForWrapup": "Selecione um ou mais agentes na lista para comparar disposições do wrap-up.",
       "selectForQuality": "Selecione um ou mais agentes na lista para comparar a qualidade por dimensão.",
-      "selectForEscalation": "Selecione um ou mais agentes na lista para comparar motivos de escalação."
+      "selectForEscalation": "Selecione um ou mais agentes na lista para comparar motivos de escalação.",
+      "selectForDeploy": "Selecione um ou mais pools para ver a qualidade ao longo dos deploys."
     },
     "metric": {
       "resolution": "Taxa de resolução",
