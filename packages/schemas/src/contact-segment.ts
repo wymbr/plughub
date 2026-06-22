@@ -65,6 +65,11 @@ export const ContactSegmentSchema = z.object({
   //   flow_id — AI: the deployed skill the agent ran ("" for humans)
   //   user_id — human: the login user_id ("" for AI)
   flow_id:           z.string().default(""),
+  // deploy_version — AI: versão do skill (deploy) que rodou no segmento, resolvida no
+  // início (do corpo do skill); "" para humanos. Insumo de cota por versão (ADR amostragem),
+  // do núcleo epoch (Arc 6 Fase 2) e do condicionamento por canal no backfill.
+  deploy_version:    z.string().default(""),
+  channel:           z.string().default(""),   // canal da sessão, carimbado no segmento
   user_id:           z.string().default(""),
   user_login:        z.string().default(""),   // human: login/email for display
 
@@ -107,6 +112,7 @@ export const ConversationParticipantEventSchema = z.object({
   agent_type:       z.enum(["ai", "human"]).default("ai"),
   // C1 identity: flow_id (AI, deployed skill) / user_id (human, login). Both optional.
   flow_id:          z.string().nullable().optional(),
+  deploy_version:   z.string().nullable().optional(),   // AI: versão do skill (deploy) que rodou
   user_id:          z.string().nullable().optional(),
   user_login:       z.string().nullable().optional(),
   channel:          z.string().nullable().default(null),

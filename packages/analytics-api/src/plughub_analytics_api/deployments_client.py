@@ -98,3 +98,32 @@ async def fetch_pool_deployments(
         base_url, f"/v1/pools/{pool_id}/deployments",
         tenant_id, ("pool", tenant_id, pool_id), limit,
     )
+
+
+# (tenant_id, skill_id) -> (expires_at, version)
+_version_cache: dict[tuple[str, str], tuple[float, str]] = {}
+
+
+async def fetch_skill_version(base_url: str, tenant_id: str, skill_id: str) -> str:
+    """R9 — versão corrente do skill (GET /v1/skills/{id}.version), cache TTL curto.
+
+    Fallback robusto p/ carimbar `deploy_version` no segmento quando o bridge não o
+    enviou. Degradação graciosa: URL vazia / erro / 404 → "". Cache negativo curto.
+    """
+    if not base_url or not skill_id:
+        return ""
+    key = (tenant_id, skill_id)
+    hit = _version_cache.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    version = ""
+    try:
+        url = f"{base_url.rstrip('/')}/v1/skills/{skill_id}"
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url, headers={"x-tenant-id": tenant_id})
+            resp.raise_for_status()
+            version = str((resp.json() or {}).get("version") or "")
+    except Exception as exc:
+        logger.warning("skill version unavailable %s/%s: %s", tenant_id, skill_id, exc)
+    _version_cache[key] = (time.monotonic() + _TTL_S, version)
+    return version

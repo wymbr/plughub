@@ -2,6 +2,34 @@
 
 ---
 
+## R9 a–c — Carimbo de `deploy_version`/`channel` no segmento (2026-06-22)
+
+Carimba a versão do skill (deploy) no segmento → `analytics.segments`, insumo da cota por versão
+(ADR amostragem), do núcleo epoch (Arc 6 Fase 2) e do condicionamento por canal no backfill.
+`flow_id` já existia (= skill_id deployado).
+
+- **schemas** (`contact-segment.ts`): `deploy_version` no `ContactSegmentSchema` e no
+  `ConversationParticipantEventSchema`; `channel` no segmento (já estava no evento).
+- **orchestrator-bridge**: `_skill_version_cache` populado no `get_skill_flow` (versão do corpo do
+  skill = corrente = a que rodou); `_publish_participant_event` resolve `deploy_version` do cache
+  via `flow_id` (sem tocar call-sites) e aceita `channel`.
+- **analytics-api**: `parse_participant_event` mapeia `deploy_version`/`channel` na linha `segments`;
+  CREATE + `ALTER ... ADD COLUMN IF NOT EXISTS` (runner de migração no boot). Colunas validadas via
+  `DESCRIBE plughub_demo.segments`.
+- **analytics-api (fallback robusto)**: `deployments_client.fetch_skill_version` (GET
+  `/v1/skills/{id}.version`, cache) + enriquecimento no consumer (`conversations.participants` →
+  preenche `deploy_version` do segmento quando o evento traz `flow_id` sem versão). Bridge = exato
+  no início; analytics = versão corrente quando o bridge não envia.
+- **Fix de causa-raiz**: o INSERT de `segments` usa lista fixa (`_SEGMENT_COLS` + `_segment_row`)
+  que não tinha `deploy_version`/`channel` → o valor era descartado na escrita. Adicionadas as
+  colunas na lista e no builder.
+- **Validado**: sessão de IA nova → `analytics.segments` com `deploy_version=1.0`
+  (`skill_atendimento_sac_v1`, `skill_survey_v1`, …).
+- **Pendente**: popular `channel` nos call-sites (~10; param já existe) e R9d (propagar
+  `deploy_version` à evaluation instance + `evaluation_finalized`).
+
+---
+
 ## R1 — SessionMetricsExtractor fiado no ingest (`session_metric.*` + `auto_computed` na nota) (2026-06-22)
 
 Primeiro item de implementação do arco de Métricas de Avaliação

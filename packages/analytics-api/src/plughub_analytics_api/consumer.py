@@ -72,6 +72,7 @@ from .models import (
     parse_pool_occupancy,
 )
 from .segment_enricher import SegmentEnricher
+from .deployments_client import fetch_skill_version
 
 logger = logging.getLogger("plughub.analytics.consumer")
 
@@ -130,6 +131,25 @@ def _inject_cached_channel(rows: list[dict]) -> None:
 # is never dropped.  Cache mirrors _channel_cache (bounded FIFO).
 _session_opened_cache: dict[tuple[str, str], str] = {}
 _SESSION_OPENED_CACHE_MAX = 50_000
+
+
+async def _enrich_participant_deploy_version(rows: list[dict], raw: dict) -> None:
+    """R9 — preenche segments.deploy_version a partir da versão corrente do skill
+    (agent-registry) quando o evento trouxe flow_id mas não deploy_version. No-op
+    quando o bridge já enviou deploy_version (precedência ao valor exato-no-início)."""
+    base = get_settings().agent_registry_url
+    if not base:
+        return
+    tenant_id = raw.get("tenant_id") or ""
+    for row in rows:
+        if row.get("table") != "segments":
+            continue
+        flow_id = row.get("flow_id") or ""
+        if not flow_id or row.get("deploy_version"):
+            continue
+        version = await fetch_skill_version(base, tenant_id, flow_id)
+        if version:
+            row["deploy_version"] = version
 
 
 async def _enrich_signal_session_at(rows: list[dict], store: "AnalyticsStore") -> None:
@@ -422,6 +442,13 @@ async def _process_message(
     # captured_at when the origin session is not resolvable.
     elif topic == "session.signals":
         await _enrich_signal_session_at(rows, store)
+
+    # ── R9: deploy_version do segmento (fallback) ─────────────────────────────
+    # Quando o bridge não enviou deploy_version mas há flow_id (segmento de IA),
+    # resolve a versão corrente do skill no agent-registry (cache curto). Exato
+    # quando o bridge envia; robusto quando não (independe do caminho de carga).
+    elif topic == "conversations.participants":
+        await _enrich_participant_deploy_version(rows, raw)
 
     # ── Arc 8: pause interval Redis state machine ─────────────────────────
     # agent.lifecycle may return action=open (store in Redis) or

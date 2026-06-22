@@ -130,6 +130,7 @@ _RUNTIME_NAMESPACES: frozenset[str] = frozenset({
 
 _agent_type_cache: dict[str, dict] = {}   # agent_type_id → agent type response body
 _skill_flow_cache: dict[str, dict] = {}   # skill_id → flow dict
+_skill_version_cache: dict[str, str] = {} # skill_id → version (R9 — deploy_version do segmento)
 
 
 def _stl() -> int:
@@ -317,6 +318,9 @@ async def get_skill_flow(
         async with http.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
             if resp.status == 200:
                 body = await resp.json()
+                # R9 — cacheia a versão do skill p/ carimbar deploy_version no segmento
+                # (resolvida no início, do corpo do skill = versão corrente = a que rodou).
+                _skill_version_cache[skill_id] = str(body.get("version") or "")
                 flow = body.get("flow")
                 if flow:
                     _skill_flow_cache[skill_id] = flow
@@ -1860,6 +1864,8 @@ async def _publish_participant_event(
     role:           str,        # "primary" | "specialist"
     segment_id:     str = "",   # Arc 5: ContactSegment UUID
     flow_id:        str = "",   # skill-flow deployado que o agente executou (avaliação IA)
+    deploy_version: str = "",   # R9: versão do deploy; se vazio, resolve do cache via flow_id
+    channel:        str = "",   # R9: canal da sessão, carimbado no segmento
     user_login:     str = "",   # C1: login (email) do agente humano — identidade no relatório
     conference_id:  str = "",
     joined_at:      str = "",
@@ -1900,6 +1906,13 @@ async def _publish_participant_event(
         event["conference_id"] = conference_id
     if flow_id:
         event["flow_id"] = flow_id
+        # R9 — deploy_version: usa o passado, senão resolve do cache de versão pelo flow_id
+        # (preenchido quando get_skill_flow buscou o corpo do skill). "" → omitido.
+        _dv = deploy_version or _skill_version_cache.get(flow_id, "")
+        if _dv:
+            event["deploy_version"] = _dv
+    if channel:
+        event["channel"] = channel
     # C1 — human identity by user_id. The human participant_id is `human-{userId}`
     # (instance key written by registerHumanAgent), so the login user_id is derived
     # by stripping the prefix. AI segments use flow_id instead; user_id stays "".

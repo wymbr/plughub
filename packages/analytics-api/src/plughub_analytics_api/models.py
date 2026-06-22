@@ -708,6 +708,8 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "pool_id":           payload.get("pool_id") or "",
         "agent_type_id":     payload.get("agent_type_id") or "",
         "flow_id":           payload.get("flow_id") or "",
+        "deploy_version":    payload.get("deploy_version") or "",   # R9 — versão do deploy (AI)
+        "channel":           payload.get("channel") or "",          # R9 — canal da sessão
         "user_id":           payload.get("user_id") or "",
         "user_login":        payload.get("user_login") or "",
         "instance_id":       payload.get("participant_id") or "",
