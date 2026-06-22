@@ -20,13 +20,28 @@ from typing import Any
 import httpx
 
 from . import db as _db
-from .sampling import should_sample, compute_priority
+from .sampling import should_sample, should_sample_quota, compute_priority
 
 logger = logging.getLogger("plughub.evaluation.backfill")
 
 # Segmentos avaliáveis = janelas de agente (exclui supervisor/evaluator/reviewer), como no
 # fan-out do _sample_on_close (spec §13.2).
 _EVALUABLE_ROLES = {"primary", "specialist"}
+
+
+def _close_order_key(seg: dict[str, Any]) -> tuple:
+    """R12 — chave de ordenação por fechamento do segmento, para reprodutibilidade do
+    déficit (a seleção quota é dependente de ordem; o backfill precisa processar na MESMA
+    ordem temporal do forward). `/reports/segments` não expõe `closed_at` por segmento — o
+    fechamento do segmento é o `ended_at`; fallback `started_at` → `sequence_index` →
+    `segment_id` como desempate determinístico estável. Strings ISO ordenam
+    lexicograficamente = cronologicamente (UTC, mesmo offset)."""
+    ended = seg.get("ended_at") or seg.get("started_at") or ""
+    try:
+        seq = int(seg.get("sequence_index") or 0)
+    except (TypeError, ValueError):
+        seq = 0
+    return (str(ended), seq, str(seg.get("segment_id") or ""))
 
 
 async def fetch_closed_segments(
@@ -86,13 +101,23 @@ async def run_campaign_backfill(
     to_dt: str,
     page_size: int = 200,
     max_segments: int = 5000,
+    redis_client: Any = None,
 ) -> dict[str, Any]:
     """Enumera os segmentos fechados da janela e cria instances `scheduled` (uma por
     segmento amostrado). Idempotente por `(campaign_id, segment_id)` — re-rodar não
-    duplica. Retorna {scanned, created, skipped_pool, skipped_sample, skipped_dup}."""
+    duplica. Retorna {scanned, created, skipped_pool, skipped_sample, skipped_dup}.
+
+    R12 — os segmentos são processados em ordem de fechamento (`ended_at`) para que o
+    modo `quota` (déficit cumulativo, dependente de ordem) produza a MESMA seleção que
+    o forward teria produzido. `redis_client` é o contador de cota compartilhado com o
+    forward (cumulativo entre backfill + tempo-real); ausente → o modo quota degrada para
+    hash determinístico (best-effort, ver `should_sample_quota`)."""
     tenant_id   = campaign["tenant_id"]
     campaign_id = campaign["id"]
-    epid        = campaign.get("evaluation_pool_id") or campaign.get("pool_id")
+    # Filtro de pool = SÓ evaluation_pool_id (alinhado ao forward em main.py e ao
+    # avaliador em router.py:2202). Não cair no pool_id legado de ABAC (evitava o
+    # typo "sac" vs "sac_ia" virar filtro). Vazio = backfill cross-pool.
+    epid        = campaign.get("evaluation_pool_id")
     rules       = campaign.get("sampling_rules") or {}
 
     segments = await fetch_closed_segments(
@@ -100,6 +125,9 @@ async def run_campaign_backfill(
         pool_id=epid, from_dt=from_dt, to_dt=to_dt,
         page_size=page_size, max_segments=max_segments,
     )
+    # R12 — ordem cronológica de fechamento (reprodutibilidade do déficit quota).
+    segments.sort(key=_close_order_key)
+    is_quota = rules.get("mode") == "quota"
 
     # form_version pinado uma vez (versão publicada do form no momento do backfill).
     form_version = await _db.latest_published_version(db_pool, campaign["form_id"], tenant_id)
@@ -127,7 +155,24 @@ async def run_campaign_backfill(
             "duration_s":    (int(dur_ms) / 1000.0) if dur_ms not in (None, "") else 0.0,
         }
         segment_id = seg["segment_id"]
-        if not should_sample(segment_id, meta, rules, counter=base_counter + created):
+        # R12 — modo quota usa o MESMO contador stateful do forward (cumulativo,
+        # dependente de ordem). skill_id/deploy_version/user_id podem faltar no
+        # /reports/segments (pendência R9 do backfill) → fallback de chave:
+        # skill ← agent_type_id; versão ausente → bucket `_nover` (ADR borda).
+        if is_quota:
+            keep = await should_sample_quota(
+                redis_client,
+                tenant_id=tenant_id, campaign_id=campaign_id,
+                target_id=segment_id, session_meta=meta, sampling_rules=rules,
+                evaluated_user_id=(seg.get("user_id") or None),
+                pool_id=seg_pool,
+                skill_id=(seg.get("flow_id") or seg.get("agent_type_id") or None),
+                deploy_version=(seg.get("deploy_version") or None),
+            )
+            if not keep:
+                skipped_sample += 1
+                continue
+        elif not should_sample(segment_id, meta, rules, counter=base_counter + created):
             skipped_sample += 1
             continue
         if await _db.instance_exists_for_segment(db_pool, campaign_id, segment_id, tenant_id):

@@ -148,9 +148,13 @@
       "samplingMode": {
         "all": "Todos",
         "percentage": "% das sessões",
-        "fixed": "A cada N sessões"
+        "fixed": "A cada N sessões",
+        "quota": "Cota por agente"
       },
       "samplingHint": "(0–1, ex: 0.1 = 10%)",
+      "quotaRateHuman": "% Humano",
+      "quotaRateAi": "% IA",
+      "quotaHint": "Cobertura-alvo por agente (0–1). O 1º contato elegível de cada agente é sempre amostrado; IA tipicamente menor (opera 24×7).",
       "reviewerIA": "Reviewer IA",
       "enableAutoReview": "Ativar revisão automática por IA",
       "escalateThreshold": "Escalar para humano quando nota <",
@@ -189,6 +193,8 @@
       "samplingMode": "Modo: {{mode}}",
       "samplingRate": "Taxa: {{rate}}%",
       "samplingEvery": "A cada: {{count}} sessões",
+      "quotaRateHuman": "Cota humano: {{rate}}%",
+      "quotaRateAi": "Cota IA: {{rate}}%",
       "reviewerIA": "Reviewer IA",
       "autoReview": "Auto-revisão: {{enabled|Sim|Não}}",
       "threshold": "Threshold: {{threshold}}",

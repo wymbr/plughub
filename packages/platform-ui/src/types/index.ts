@@ -541,9 +541,12 @@ export interface EvaluationForm {
 }
 
 export interface SamplingRules {
-  mode?:           'all' | 'percentage' | 'fixed'
+  mode?:           'all' | 'percentage' | 'fixed' | 'quota'
   rate?:           number
   every_n?:        number
+  // R11 — cota por agente: % por-agente (humano e IA separados). Usados quando mode='quota'.
+  quota_rate_human?: number
+  quota_rate_ai?:    number
   min_duration_s?: number
   agent_type_ids?: string[]
   pool_ids?:       string[]

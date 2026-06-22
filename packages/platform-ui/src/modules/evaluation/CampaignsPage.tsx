@@ -320,7 +320,10 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
   const calendarOptions = useCalendarOptions(TENANT)
   const isEdit = !!editing
   // Prefill em modo edição (o modal é montado fresco ao abrir).
-  const _sr = (editing?.sampling_rules ?? {}) as { mode?: string; rate?: number; every_n?: number }
+  const _sr = (editing?.sampling_rules ?? {}) as {
+    mode?: string; rate?: number; every_n?: number
+    quota_rate_human?: number; quota_rate_ai?: number
+  }
   const _rr = (editing?.reviewer_rules ?? {}) as { auto_review?: boolean; score_threshold?: number }
   const [name, setName] = useState(editing?.name ?? '')
   const [description, setDescription] = useState(editing?.description ?? '')
@@ -332,8 +335,11 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
   // a parte YYYY-MM-DD. No submit reconverte (start=00:00:00Z, end=23:59:59Z p/ incluir o dia).
   const [periodStart, setPeriodStart] = useState((editing?.period_start ?? '').slice(0, 10))
   const [periodEnd,   setPeriodEnd]   = useState((editing?.period_end ?? '').slice(0, 10))
-  const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed'>((_sr.mode as 'all'|'percentage'|'fixed') || 'percentage')
+  const [samplingMode, setSamplingMode] = useState<'all' | 'percentage' | 'fixed' | 'quota'>((_sr.mode as 'all'|'percentage'|'fixed'|'quota') || 'percentage')
   const [samplingRate, setSamplingRate] = useState(String(_sr.rate ?? _sr.every_n ?? '0.1'))
+  // R11 — cota por agente: % por-agente, humano e IA separados (IA tipicamente menor, opera 24×7).
+  const [quotaRateHuman, setQuotaRateHuman] = useState(String(_sr.quota_rate_human ?? '0.1'))
+  const [quotaRateAi,    setQuotaRateAi]    = useState(String(_sr.quota_rate_ai ?? '0.05'))
   const [autoReview, setAutoReview] = useState(_rr.auto_review ?? true)
   const [scoreThreshold, setScoreThreshold] = useState(String(_rr.score_threshold ?? '7'))
 
@@ -387,6 +393,8 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
             mode: samplingMode,
             rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
             every_n: samplingMode === 'fixed' ? parseInt(samplingRate) : undefined,
+            quota_rate_human: samplingMode === 'quota' ? parseFloat(quotaRateHuman) : undefined,
+            quota_rate_ai:    samplingMode === 'quota' ? parseFloat(quotaRateAi)    : undefined,
           },
           reviewer_rules: {
             auto_review: autoReview,
@@ -424,6 +432,8 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
           mode: samplingMode,
           rate: samplingMode === 'percentage' ? parseFloat(samplingRate) : undefined,
           every_n: samplingMode === 'fixed' ? parseInt(samplingRate) : undefined,
+          quota_rate_human: samplingMode === 'quota' ? parseFloat(quotaRateHuman) : undefined,
+          quota_rate_ai:    samplingMode === 'quota' ? parseFloat(quotaRateAi)    : undefined,
         },
         reviewer_rules: {
           auto_review: autoReview,
@@ -604,8 +614,9 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
                 <option value="all">{t('campaigns.modal.samplingMode.all')}</option>
                 <option value="percentage">{t('campaigns.modal.samplingMode.percentage')}</option>
                 <option value="fixed">{t('campaigns.modal.samplingMode.fixed')}</option>
+                <option value="quota">{t('campaigns.modal.samplingMode.quota')}</option>
               </select>
-              {samplingMode !== 'all' && (
+              {samplingMode !== 'all' && samplingMode !== 'quota' && (
                 <input
                   type="number"
                   min={samplingMode === 'percentage' ? '0.01' : '1'}
@@ -618,6 +629,31 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
               )}
               {samplingMode === 'percentage' && <span className="text-xs text-muted">{t('campaigns.modal.samplingHint')}</span>}
             </div>
+            {samplingMode === 'quota' && (
+              <div className="mt-2">
+                <div className="flex gap-4 items-center">
+                  <label className="flex items-center gap-2 text-sm text-dark">
+                    {t('campaigns.modal.quotaRateHuman')}
+                    <input
+                      type="number" min="0" max="1" step="0.05"
+                      className="w-20 border border-border-strong rounded px-2 py-1 text-sm text-center"
+                      value={quotaRateHuman}
+                      onChange={e => setQuotaRateHuman(e.target.value)}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-dark">
+                    {t('campaigns.modal.quotaRateAi')}
+                    <input
+                      type="number" min="0" max="1" step="0.05"
+                      className="w-20 border border-border-strong rounded px-2 py-1 text-sm text-center"
+                      value={quotaRateAi}
+                      onChange={e => setQuotaRateAi(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <span className="text-xs text-muted">{t('campaigns.modal.quotaHint')}</span>
+              </div>
+            )}
           </div>
 
           {/* Reviewer IA */}
@@ -1160,6 +1196,12 @@ export default function CampaignsPage() {
                   )}
                   {selected.sampling_rules?.every_n !== undefined && (
                     <div>{t('campaigns.detail.samplingEvery', { count: selected.sampling_rules.every_n })}</div>
+                  )}
+                  {selected.sampling_rules?.quota_rate_human !== undefined && (
+                    <div>{t('campaigns.detail.quotaRateHuman', { rate: (selected.sampling_rules.quota_rate_human * 100).toFixed(0) })}</div>
+                  )}
+                  {selected.sampling_rules?.quota_rate_ai !== undefined && (
+                    <div>{t('campaigns.detail.quotaRateAi', { rate: (selected.sampling_rules.quota_rate_ai * 100).toFixed(0) })}</div>
                   )}
                 </div>
               </div>

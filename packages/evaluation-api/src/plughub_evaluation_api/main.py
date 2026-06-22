@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import db as _db
-from .sampling import should_sample, compute_priority
+from .sampling import should_sample, should_sample_quota, compute_priority
 from .router import router, _ingest_from_completed_event
 from .contestation_router import contestation_router
 
@@ -279,18 +279,38 @@ async def _sample_one_target(
     db_pool, campaigns: list, *, tenant_id: str, session_id: str,
     sample_key: str, meta: dict, segment_id: str | None = None,
     evaluated_user_id: str | None = None, closed_at=None,
-    deploy_version: str | None = None,
+    deploy_version: str | None = None, skill_id: str | None = None,
+    redis_client=None,
 ) -> None:
     """Amostra UM alvo (segmento ou sessão-fallback) contra as campanhas ativas."""
     for c in campaigns:
-        epid = c.get("evaluation_pool_id") or c.get("pool_id")
+        # Filtro de pool da amostragem = SÓ evaluation_pool_id (alinhado ao caminho do
+        # avaliador, router.py:2202). Antes caía no pool_id legado (escopo ABAC) quando
+        # evaluation_pool_id vazio — o que deixava um typo no pool_id ("sac" vs "sac_ia")
+        # virar filtro e descartar todos os segmentos em silêncio. evaluation_pool_id
+        # vazio = campanha cross-pool (avalia todos os pools). O create-DTO espelha
+        # pool_id↔evaluation_pool_id; rows legadas são backfilladas (mirror) na migração.
+        epid = c.get("evaluation_pool_id")
         if epid and meta.get("pool_id") != epid:
             continue
         # T17 — janela de dados (forward): descarta sessões fora de [period_start, period_end].
         if not _within_campaign_window(c, closed_at):
             continue
         rules = c.get("sampling_rules") or {}
-        if not should_sample(sample_key, meta, rules, counter=int(c.get("total_instances") or 0)):
+        # R10 — quota mode is stateful (per-agent cumulative deficit, Redis INCR).
+        # The other modes (percentage/fixed/all) stay stateless via should_sample().
+        if rules.get("mode") == "quota":
+            keep = await should_sample_quota(
+                redis_client,
+                tenant_id=tenant_id, campaign_id=c["id"],
+                target_id=(segment_id or session_id), session_meta=meta,
+                sampling_rules=rules, evaluated_user_id=evaluated_user_id,
+                pool_id=meta.get("pool_id"), skill_id=skill_id,
+                deploy_version=deploy_version,
+            )
+            if not keep:
+                continue
+        elif not should_sample(sample_key, meta, rules, counter=int(c.get("total_instances") or 0)):
             continue
         if segment_id is not None:
             if await _db.instance_exists_for_segment(db_pool, c["id"], segment_id, tenant_id):
@@ -344,6 +364,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
                 segment_id=seg["segment_id"], evaluated_user_id=(seg.get("user_id") or None),
                 closed_at=payload.get("closed_at"),
                 deploy_version=(seg.get("deploy_version") or None),
+                skill_id=(seg.get("flow_id") or None), redis_client=redis_client,
             )
         return
 
@@ -358,7 +379,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
     await _sample_one_target(
         db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
         sample_key=session_id, meta=session_meta,
-        closed_at=payload.get("closed_at"),
+        closed_at=payload.get("closed_at"), redis_client=redis_client,
     )
 
 

@@ -2,6 +2,138 @@
 
 ---
 
+## R11 — UI de % por-agente (cota) no editor de campanha (2026-06-22)
+
+Fecha o trio de amostragem (R10/R11/R12). O backend de `%` por-agente já existia (consumido pelo
+R10); R11 adiciona a superfície editável.
+
+**platform-ui** (`modules/evaluation/CampaignsPage.tsx`): o seletor de modo de sampling ganha a
+opção **"Cota por agente"** (`quota`). Quando selecionado, aparecem dois inputs — **% Humano** e
+**% IA** (0–1) — gravados em `sampling_rules.quota_rate_human`/`quota_rate_ai`; o input de taxa
+único (percentage/fixed) é ocultado no modo quota. O painel de detalhe da campanha exibe as duas
+cotas. Hint explícito de que o `%` é **por-agente** e que o 1º contato elegível de cada agente é
+sempre amostrado (IA tipicamente menor, opera 24×7).
+
+**Tipos/contrato:** `SamplingRules` em `types/index.ts` e o Zod `SamplingRulesSchema`
+(`@plughub/schemas`) ganham `mode:"quota"` + `quota_rate_human`/`quota_rate_ai` (0–1, opcionais).
+**i18n:** `samplingMode.quota`, `quotaRateHuman`, `quotaRateAi`, `quotaHint` (modal + detail) em
+en e pt-BR.
+
+---
+
+## R12 — Backfill ordenado + quota-aware na evaluation-api (2026-06-22)
+
+Fecha o ciclo de corretude do R10 no caminho de backfill (`backfill.py::run_campaign_backfill`).
+A seleção quota é **dependente de ordem**; o backfill agora processa os segmentos em ordem
+cronológica de fechamento para reproduzir a mesma seleção que o forward teria feito.
+
+**Ordenação** (`_close_order_key`): `/reports/segments` não expõe `closed_at` por segmento → o
+fechamento é o `ended_at` (fallback `started_at` → `sequence_index` → `segment_id`, desempate
+estável). `segments.sort(key=_close_order_key)` antes do laço — seleção independente da ordem de
+fetch/paginação.
+
+**Quota-aware**: ramo `mode=="quota"` chama `should_sample_quota` com o **mesmo** `redis_client`
+do forward (passado pelo `router.py` via `_redis(request)`) — o contador é cumulativo entre
+backfill e tempo-real, e o set `:seen:` torna o re-run idempotente (não re-amostra nem infla o
+denominador). Modos `percentage`/`fixed`/`all` seguem por `should_sample` (stateless), inalterados.
+
+**Limitação herdada (pendência R9 do backfill):** `/reports/segments` ainda não expõe
+`user_id`/`flow_id`/`deploy_version`, então a chave IA no backfill usa `agent_type_id` como skill
+e cai no bucket `_nover` (sem versão). Fecha quando o endpoint expuser esses campos — alinhado com
+a denormalização já feita no segmento (R9 a–c).
+
+**Teste:** `test_backfill.py` — ordenação determinística (`_close_order_key`), déficit reproduzível
+sob fetch embaralhado (10 contatos @30% → seleção em `ended_at` t=1,4,7), e idempotência de re-run
+(contador não infla).
+
+---
+
+## R10 — Amostragem por cota de agente (déficit cumulativo) na evaluation-api (2026-06-22)
+
+Troca a amostragem stateless por **cota por agente cumulativa por déficit** (ADR
+`adr-evaluation-sampling.md`; metodologia §IV.2). Novo modo `sampling_rules.mode="quota"` — não
+toca `percentage`/`fixed`/`all` (caminho stateless via `should_sample` intacto).
+
+**Mecanismo** (`sampling.py::should_sample_quota`, async/stateful): piso (1º contato elegível de
+cada agente é **sempre** amostrado) + déficit (a cada contato recomputa `sampled/total`; amostra se
+`< x%`). Cumulativo, não diário. Contador = hash Redis `{tenant}:eval:quota:{campaign}:{agent_key}`
+com `HINCRBY total/sampled` atômico (race-safe entre contatos paralelos do mesmo agente). Chave:
+humano `h:{user_id}`; IA `ai:{pool}:{skill}:{deploy_version}` — versão não resolvível cai no
+sentinela `_nover` = bucket `(campaign,pool,skill)` (ADR borda). **Denominador = só elegíveis**:
+`_passes_filters` (extraído de `should_sample`, compartilhado) roda antes de tocar o contador, então
+um contato filtrado não infla `total`. Idempotência: set `:seen:` por `target_id` (segment_id|
+session_id) — redelivery Kafka (offset latest, at-least-once) não dobra contagem nem re-amostra.
+Degradação best-effort: Redis indisponível → cai no hash determinístico na mesma `%` por-agente
+(cobertura nunca some em silêncio).
+
+**Config `%` por agente (R11 backend):** `quota_rate_human` / `quota_rate_ai` no `SamplingRules`
+JSONB, lidas por `quota_rate()` (fallback legado `rate` → default humano 10% / IA 5%). UI na
+CampaignsPage segue pendente (R11).
+
+**Wiring** (`main.py`): `_sample_one_target` ganha `redis_client`+`skill_id`; ramo `mode=="quota"`
+chama `should_sample_quota`; `_sample_on_close` passa `flow_id`(=skill_id) e o `app.state.redis`.
+
+**Trade-off aceito (ADR):** perde idempotência/determinismo do hash → seleção **dependente de
+ordem** (backfill R12 deve ordenar por `closed_at`); o piso infla a taxa efetiva acima de `x%` em
+baixo volume (cobertura > teto de `%`).
+
+**Teste determinístico:** `test_sampling.py::TestShouldSampleQuota` — fake async Redis, 100 contatos
+de um agente IA @10% → seleção exata em t=1,11,21,…,91 (10 amostrados, coverage 10%), + separação
+humano/IA, fallback `_nover`, filtro fora do denominador, idempotência de redelivery, fallback
+Redis-None. Pure-math em `TestQuotaDecide`.
+
+**Demo:** flipar a campanha "Demo SAC — Avaliação Contínua" de `mode:all` para
+`{"mode":"quota","quota_rate_ai":0.3,"min_duration_s":30,"outcome_filter":["resolved"]}` (rodar a
+sessão DEPOIS do rebuild — consumers em offset latest).
+
+---
+
+## Amostragem sac_ia desbloqueada + NPS de fim-de-contato como hook genérico (2026-06-22)
+
+Duas correções no fluxo SAC IA da bancada de avaliação.
+
+**(1) Bug de amostragem (dado).** A campanha "Demo SAC" estava semeada com `pool_id="sac"` (typo de
+`sac_ia`); como `evaluation_pool_id` é vazio, o `_sample_one_target` caía no `pool_id` legado (campo
+de escopo ABAC) e descartava **todo** segmento sac_ia em silêncio (`"sac_ia" != "sac"` → `continue`,
+sem log) — nenhuma `evaluation.instance` gerada apesar de segmento acumulado, `session_closed`
+publicado e `deploy_version` resolvido. Fix: seed corrigido (`pool_id`+`evaluation_pool_id`=`sac_ia`);
+**filtro de amostragem endurecido** para usar SÓ `evaluation_pool_id` (sem fallback ao `pool_id`
+legado) em `main.py`/`backfill.py` (alinha com o avaliador, `router.py:2202`); backfill mirror
+`pool_id→evaluation_pool_id` para rows legadas. Desbloqueou e **validou R9d-1** (`deploy_version=1.0`
+em `evaluation.instances`).
+
+**(2) NPS de fim-de-contato como hook genérico (reenquadramento da §14.2).** O `disparar_survey` no
+caminho `resolvido` do `skill_atendimento_sac_v1` disparava `skill_survey_v1` (survey OUTBOUND,
+delegate inbound_only). Sem identidade/religação no sac_ia (cliente anônimo de webchat), a survey
+ficava suspensa por `timeout_hours:1` → vazava 1 contato `in_progress` por contato resolvido; e, no
+caso comum (cliente presente que resolveu), nunca coletava NPS — assimétrico com o humano, que coleta
+ao vivo na conferência. **Reenquadramento (§14.2, revisão 2026-06-22):** o hook `on_contact_end` é o
+mecanismo **genérico** de NPS de fim-de-contato (segura a sessão via `posatt:customer_active` + roda o
+skill do pool na conferência), válido para **qualquer** pool — humano OU IA. A survey OUTBOUND vira
+**customização de SKILL** para casos especiais (multi-humano), iniciada pelo skill, não pela
+plataforma. Mudanças:
+- **bridge** (`process_routed`, conclusão do primário IA): completude do mecanismo — quando
+  `outcome=resolved` e o pool declara `hooks.on_contact_end`, dispara `fire_pool_hooks("on_contact_end")`
+  + `_hook_timeout_guard` em vez de `_trigger_contact_close` direto. Antes o hook só disparava no
+  caminho com humano. Não é lógica de survey; é o hook genérico passando a cobrir o fim de contato IA.
+- **config** (`tenant_demo.yaml`): pool `sac_ia` ganha `hooks.on_contact_end: [{pool: nps_ia,
+  side: customer, nps_on_disconnect: skip}]` — **reusa o pool `nps_ia`** do humano (já bootstrapado),
+  sem pool novo.
+- **skill** `agente_nps_v1` (skill_nps_v1) ganha step `escolher_grao`: se há
+  `@ctx.session.surveyed_segment_id` (humano) → grão **segment** (como hoje); senão (IA) → grão
+  **session** (`survey_record(grain=session)`). Um pool serve humano e IA. Caminho humano inalterado.
+- **skill** `skill_atendimento_sac_v1`: `disparar_survey` removido; `resolvido` → `finalizar_resolvido`.
+- **mantido como caso especial**: `skill_survey_v1`/`survey_processo_ia`/`survey_collector_ia` (outbound
+  multi-humano), com o gate `verificar_identidade` adicionado (sem `contact_identifier` não suspende —
+  guarda contra vazamento se acionado anonimamente).
+- **docs**: §14.2 revisada (analytics-agents-workbench) + `conference-mechanics.md` § Mudança 23.
+
+**Gotcha de aplicação:** `sac_ia` já existe no DB (seed-if-absent/DB-owned) → a hook nova **não**
+auto-aplica no rebuild; aplicar via `PUT /v1/pools/sac_ia` ou `REGISTRY_SYNC_RECONCILE=true`. `nps_ia`
+já tem instância (reuso, sem pool novo).
+
+---
+
 ## R9 a–c — Carimbo de `deploy_version`/`channel` no segmento (2026-06-22)
 
 Carimba a versão do skill (deploy) no segmento → `analytics.segments`, insumo da cota por versão

@@ -148,9 +148,13 @@
       "samplingMode": {
         "all": "All",
         "percentage": "% of sessions",
-        "fixed": "Every N sessions"
+        "fixed": "Every N sessions",
+        "quota": "Quota per agent"
       },
       "samplingHint": "(0–1, e.g.: 0.1 = 10%)",
+      "quotaRateHuman": "Human %",
+      "quotaRateAi": "AI %",
+      "quotaHint": "Per-agent target coverage (0–1). The first eligible contact of each agent is always sampled; AI is typically lower (runs 24×7).",
       "reviewerIA": "Reviewer IA",
       "enableAutoReview": "Enable automatic review by IA",
       "escalateThreshold": "Escalate to human when score <",
@@ -189,6 +193,8 @@
       "samplingMode": "Mode: {{mode}}",
       "samplingRate": "Rate: {{rate}}%",
       "samplingEvery": "Every: {{count}} sessions",
+      "quotaRateHuman": "Human quota: {{rate}}%",
+      "quotaRateAi": "AI quota: {{rate}}%",
       "reviewerIA": "Reviewer IA",
       "autoReview": "Auto-review: {{enabled|Yes|No}}",
       "threshold": "Threshold: {{threshold}}",

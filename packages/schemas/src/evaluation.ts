@@ -475,11 +475,16 @@ export const SamplingRulesSchema = z.object({
     "percentage",   // N% of sessions matching filters
     "count",        // N sessions per scheduling period
     "targeted",     // only sessions matching explicit filters (no volume cap)
+    "quota",        // R10 — per-agent cumulative deficit quota (fair coverage)
   ]),
   /** 0–100 percentage. Required when mode = "percentage" */
   percentage:       z.number().min(0).max(100).optional(),
   /** Sessions per period. Required when mode = "count" */
   count_per_period: z.number().int().positive().optional(),
+  /** R10/R11 — per-agent target coverage (0–1) when mode = "quota". Human and AI
+   * keyed separately (AI typically lower; runs 24×7). Fallback: legacy rate field. */
+  quota_rate_human: z.number().min(0).max(1).optional(),
+  quota_rate_ai:    z.number().min(0).max(1).optional(),
   /** Optional session attribute filters */
   filters: z.object({
     pools:           z.array(z.string()).optional(),

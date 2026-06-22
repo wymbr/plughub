@@ -1,6 +1,10 @@
 # ADR — Amostragem de Avaliação: Cota por Agente (virada para estado)
 
-> Status: **Aceito (design) · implementação pendente** · 2026-06-20
+> Status: **Aceito · R10 + R12 implementados (modo `quota`)** · 2026-06-20 (design) / 2026-06-22 (R10/R12)
+> Implementação: `evaluation-api/sampling.py::should_sample_quota` + wiring em `main.py`;
+> backfill ordenado por `ended_at` + quota-aware em `backfill.py` (R12, contador compartilhado
+> com o forward); config `%` por-agente (`quota_rate_human`/`quota_rate_ai`) backend pronto
+> (R11 UI pendente). Ver `CHANGELOG.md` (2026-06-22).
 > Relacionado: [`docs/arcos/arc-evaluation-metrics-methodology.md`](../arcos/arc-evaluation-metrics-methodology.md) (Parte IV),
 > [`arc6-evaluation.md`](../arcos/arc6-evaluation.md) (`SamplingRules`),
 > [`arc6-phase2-observability.md`](../arcos/arc6-phase2-observability.md) (âncora-pool/deploy).
@@ -43,7 +47,10 @@ humanos **e** IA; muda o peso e o volume, não o mecanismo.
    filtrado não infla o `total`.
 
 6. **Backfill ordenado por `closed_at`** para reprodutibilidade do déficit (a seleção é
-   dependente de ordem).
+   dependente de ordem). **Implementado (R12):** como `/reports/segments` não expõe
+   `closed_at` por segmento, o backfill ordena por `ended_at` (fechamento do segmento;
+   fallback `started_at`→`sequence_index`→`segment_id`) e usa o **mesmo** contador Redis do
+   forward (cumulativo backfill+tempo-real, idempotente no re-run via `:seen:`).
 
 7. **Semântica do `%`:** passa de "x% de todos os contatos" para "**x% por agente**"; humano e
    IA têm `%` próprios (IA tipicamente menor, opera 24×7). Tornar explícito na config.

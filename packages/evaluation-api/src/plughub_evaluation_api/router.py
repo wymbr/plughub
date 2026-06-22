@@ -1034,6 +1034,7 @@ async def backfill_campaign(
         from_dt=from_dt, to_dt=to_dt,
         page_size=settings.backfill_page_size,
         max_segments=settings.backfill_max_segments,
+        redis_client=_redis(request),  # R12 — contador de cota compartilhado com o forward
     )
 
 
