@@ -272,6 +272,28 @@ problema de `content` × `original_content`.
 
 **Externo:** N/A — contato externo não tem tool trace (tier-2 indisponível, IV.5).
 
+## II.6 Knowledge Base — infraestrutura, ingestão e viés (decisão)
+
+**Infra (decisão): manter pgvector, evoluir por dentro do MCP.** A KB já existe —
+`mcp-server-knowledge` (PostgreSQL + pgvector, embeddings OpenAI `text-embedding-3-small`, tools
+`knowledge_search/upsert/delete`), fiada para o RAG do avaliador (top-5 snippets) e para o loop de
+calibração (Arc 13). Decisão: **não adotar framework de RAG**; manter pgvector (production-grade,
+no-lock-in, já atrás da fronteira MCP) e evoluir o retrieval (hybrid search, rerank, chunking)
+**incremental por dentro do `mcp-server-knowledge`** — o avaliador só faz `search`, então o miolo
+troca sem tocá-lo.
+
+**Viés de KB ≠ problema de ferramenta.** Framework/vector DB não conserta dado errado. O viés de KB
+(avaliador e avaliado compartilham a mesma KB furada) é tratado por **processo**: referência de
+ground-truth do avaliador **curada/separada** da KB do agente + **Estágio 2 (humano cego, §III.4)** +
+loop **`CalibrationNote` → KB**.
+
+**Ingestão (gap → R16).** Hoje a `KnowledgePage` (`/evaluation/knowledge`) só faz CRUD de **snippets
+manuais** (search/add/delete, auto-embedding no upsert); **não há** upload de documento (PDF/docx/html)
+nem import de URL/site. A cauda (embed→upsert) existe; falta a **frente**: extração (parsing/crawl —
+aqui **lib/framework é ok**) → chunking → `knowledge_upsert` por chunk com `source_ref`/`version`/
+`ingested_at` (campos já no schema) + UI "Adicionar fonte" + re-ingestão/refresh + delete-por-fonte.
+**Store/retrieval segue pgvector.**
+
 ---
 
 # PARTE III — Metodologia (LLM-as-judge) & Referências de Mercado
@@ -639,6 +661,7 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético; **relaxar a regex** `^skill_[a-z0-9_]+_v\d+$` → `^skill_[a-z0-9_]+$` (drop `_v\d+`, mantém slug seguro, retrocompat) nos validadores do `PUT`, no `registry_syncer.py` e no `workflow-api` | platform-ui + agent-registry | IV.3 |
 | **R15a** | **Núcleo epoch (query)**: `deploy_version` denormalizado no `evaluation_finalized` (via R9); `lens=deploy&mode=epoch` → série por `(pool, skill)` bucketizada por `deploy_version` (`avg(final_score)`, `n`/versão, ordem `deployed_at`, `min_sample=30`, "N pendentes") | analytics-api | IV.8 |
 | **R15b** | **Núcleo epoch (UI)**: modo epoch single-`(pool,skill)`, eixo X = versões, esconde média + multi-seleção; diário+markers como modo alternativo | platform-ui `AgentsBenchPage`/`DeployChart` | IV.8 |
+| **R16** | **Pipeline de ingestão de KB (documento/URL) + UI**: extração (PDF/docx/html, fetch/crawl — lib/framework) → chunking → `knowledge_upsert` por chunk com `source_ref`/`version`/`ingested_at`; UI "Adicionar fonte" na `KnowledgePage` + re-ingestão/refresh + delete-por-fonte; store/retrieval segue pgvector | mcp-server-knowledge + platform-ui | II.6 |
 
 ---
 
