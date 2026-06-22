@@ -637,7 +637,7 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 
 | # | Item | Onde | Decisão |
 |---|---|---|---|
-| **R1** | Fiar o extractor órfão: chamar `SessionMetricsExtractor.extract()` + `fill_auto_computed_criteria()` + `set_instance_session_metrics()` no `_ingest_core` (lazy) | evaluation-api `router.py` / `_ingest_core` | A, E |
+| **R1** ✅ | Fiar o extractor órfão no `_ingest_core` (lazy): `extract()` + `fill_auto_computed_criteria()` + `set_instance_session_metrics()`. SQL reescrito p/ `session_stream_events` (JSONB; customer=role NULL; duração com fallback MIN/MAX). Escopo-contato; teste `infra/test/test_r1_session_metrics.sh` | evaluation-api `router.py`/`_ingest_core` + extractor | A, E |
 | **R2** | Gate determinístico de canal no `auto_computed`: condição estruturada (molde `sectionApplies`) no `fill_auto_computed_criteria` (hoje ignora `applies_when`) | `session_metrics_extractor.py` | D |
 | **R3** | Persistir as séries (`agent_response_latencies_s`, `inter_message_gaps_s`) no `session_metrics` JSONB | `session_metrics_extractor.py` | B |
 | **R4** | Completar o catálogo I.3 no extractor (faltam derivados p90/median, `max_consecutive_agent_messages`, `step_*`, `required_fields_captured_pct`, sentimento) nos **dois escopos** (contato + segmento) | `session_metrics_extractor.py` | A |

@@ -35,7 +35,8 @@ LLM cost:
   tokens_output_total       — total output tokens
 
 Design notes:
-- Reads from PostgreSQL (transcript_messages / stream tables) and ClickHouse.
+- Reads from PostgreSQL (same `plughub` DB): `session_stream_events` (canonical durable
+  stream, JSONB author/payload/visibility) + `usage_events`. Contact-scope (R1); segment-scope = R4.
 - All metrics are best-effort: missing data → metric is omitted (not 0).
 - Never writes directly to the canonical stream or Redis.
 - Called from /v1/evaluation/ingest after create_result.
@@ -116,37 +117,44 @@ class SessionMetricsExtractor:
         falls back to PostgreSQL stream-persisted data.
         """
         async with self._pg.acquire() as conn:
-            # Try to get session open/close times from stream table
+            # Session open/close times from the canonical durable stream, with a
+            # fallback to the first/last event timestamp when session_opened/closed
+            # are not persisted in the stream (observed in the demo).
             row = await conn.fetchrow(
                 """
                 SELECT
-                    MIN(event_time) FILTER (WHERE event_type = 'session_opened') AS opened_at,
-                    MAX(event_time) FILTER (WHERE event_type = 'session_closed') AS closed_at
-                FROM stream_events
+                    MIN("timestamp") FILTER (WHERE event_type = 'session_opened') AS opened_at,
+                    MAX("timestamp") FILTER (WHERE event_type = 'session_closed') AS closed_at,
+                    MIN("timestamp") AS first_evt,
+                    MAX("timestamp") AS last_evt
+                FROM session_stream_events
                 WHERE session_id = $1 AND tenant_id = $2
                 """,
                 session_id, tenant_id,
             )
 
-            if row and row["opened_at"] and row["closed_at"]:
-                duration = (row["closed_at"] - row["opened_at"]).total_seconds()
-                out["total_session_duration_s"] = round(duration, 2)
+            if row:
+                opened = row["opened_at"] or row["first_evt"]
+                closed = row["closed_at"] or row["last_evt"]
+                if opened and closed and closed > opened:
+                    out["total_session_duration_s"] = round((closed - opened).total_seconds(), 2)
 
-            # First response time: first customer msg → first agent msg
+            # First response time: first customer msg → first agent msg.
+            # Canonical stream: event_type='message', role in author->>'role'.
             timing_row = await conn.fetchrow(
                 """
                 WITH customer_first AS (
-                    SELECT MIN(event_time) AS t
-                    FROM stream_events
+                    SELECT MIN("timestamp") AS t
+                    FROM session_stream_events
                     WHERE session_id = $1 AND tenant_id = $2
-                      AND author_role = 'customer' AND event_type = 'message_sent'
+                      AND author->>'role' IS NULL AND event_type = 'message'
                 ),
                 agent_first AS (
-                    SELECT MIN(event_time) AS t
-                    FROM stream_events
+                    SELECT MIN("timestamp") AS t
+                    FROM session_stream_events
                     WHERE session_id = $1 AND tenant_id = $2
-                      AND author_role IN ('primary', 'specialist')
-                      AND event_type = 'message_sent'
+                      AND author->>'role' IN ('primary', 'specialist')
+                      AND event_type = 'message'
                 )
                 SELECT
                     EXTRACT(EPOCH FROM (agent_first.t - customer_first.t)) AS first_response_s
@@ -171,14 +179,14 @@ class SessionMetricsExtractor:
             rows = await conn.fetch(
                 """
                 SELECT
-                    author_role,
-                    COUNT(*) AS msg_count,
-                    AVG(LENGTH(content)) AS avg_len
-                FROM stream_events
+                    author->>'role'                  AS author_role,
+                    COUNT(*)                         AS msg_count,
+                    AVG(LENGTH(payload->>'content')) AS avg_len
+                FROM session_stream_events
                 WHERE session_id = $1 AND tenant_id = $2
-                  AND event_type = 'message_sent'
-                  AND visibility = 'all'
-                GROUP BY author_role
+                  AND event_type = 'message'
+                  AND visibility = '"all"'::jsonb
+                GROUP BY author->>'role'
                 """,
                 session_id, tenant_id,
             )
@@ -186,7 +194,7 @@ class SessionMetricsExtractor:
             total = 0
             agent_count = 0
             customer_count = 0
-            avg_agent_len: float | None = None
+            agent_len_weighted = 0.0   # Σ(avg_len × count) p/ média ponderada entre roles de agente
 
             for r in rows:
                 role = r["author_role"]
@@ -194,8 +202,10 @@ class SessionMetricsExtractor:
                 total += count
                 if role in ("primary", "specialist"):
                     agent_count += count
-                    avg_agent_len = float(r["avg_len"] or 0)
-                elif role == "customer":
+                    if r["avg_len"] is not None:
+                        agent_len_weighted += float(r["avg_len"]) * count
+                # Cliente não é participante nomeado → author/role nulo no stream.
+                elif role is None or role in ("customer", "caller", "client"):
                     customer_count += count
 
             if total > 0:
@@ -204,8 +214,8 @@ class SessionMetricsExtractor:
                 out["customer_messages"] = customer_count
                 out["agent_message_pct"] = round(agent_count / total * 100, 1)
                 out["customer_message_pct"] = round(customer_count / total * 100, 1)
-                if avg_agent_len is not None:
-                    out["avg_agent_message_length"] = round(avg_agent_len, 1)
+                if agent_count > 0 and agent_len_weighted > 0:
+                    out["avg_agent_message_length"] = round(agent_len_weighted / agent_count, 1)
 
                 # turns = min(agent_msgs, customer_msgs) — a full turn requires both sides
                 out["turns_to_resolution"] = min(agent_count, customer_count)
@@ -219,26 +229,36 @@ class SessionMetricsExtractor:
         out: dict[str, Any],
     ) -> None:
         async with self._pg.acquire() as conn:
-            # agent_done event carries outcome and handoff_reason
+            # Contact-level outcome/close_reason from the session_closed payload.
+            # (agent_done is NOT a canonical stream event — segment-level outcome
+            #  comes from analytics.segments; deferred to R4 segment-scope.)
             row = await conn.fetchrow(
                 """
                 SELECT
-                    content::jsonb ->> 'outcome' AS outcome,
-                    content::jsonb ->> 'handoff_reason' AS handoff_reason
-                FROM stream_events
+                    payload ->> 'outcome'      AS outcome,
+                    payload ->> 'close_reason' AS close_reason
+                FROM session_stream_events
                 WHERE session_id = $1 AND tenant_id = $2
-                  AND event_type = 'agent_done'
-                ORDER BY event_time DESC
+                  AND event_type = 'session_closed'
+                ORDER BY "timestamp" DESC
                 LIMIT 1
                 """,
                 session_id, tenant_id,
             )
             if row:
                 outcome = row["outcome"]
-                handoff_reason = row["handoff_reason"]
-                out["escalated"] = outcome not in (None, "resolved", "abandoned")
-                if handoff_reason:
-                    out["escalation_reason"] = handoff_reason
+                close_reason = row["close_reason"]
+                if outcome:
+                    out["outcome"] = outcome
+                if close_reason:
+                    out["close_reason"] = close_reason
+                # escalated: contact-level heuristic from close_reason/outcome
+                escalated = (close_reason == "agent_transfer") or (
+                    outcome is not None and "escal" in outcome.lower()
+                )
+                out["escalated"] = bool(escalated)
+                if escalated and close_reason:
+                    out["escalation_reason"] = close_reason
 
     # ─── LLM cost metrics ────────────────────────────────────────────────────────
 
@@ -253,6 +273,10 @@ class SessionMetricsExtractor:
         Falls back to ClickHouse if available; otherwise uses PostgreSQL fallback table.
         """
         async with self._pg.acquire() as conn:
+            # usage_events pode não existir (ex.: demo sem usage-aggregator) → guard
+            # silencioso para não poluir o log (a métrica é simplesmente omitida).
+            if await conn.fetchval("SELECT to_regclass('public.usage_events')") is None:
+                return
             row = await conn.fetchrow(
                 """
                 SELECT

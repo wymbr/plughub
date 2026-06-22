@@ -76,6 +76,7 @@ from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
 from . import scoring as _scoring
+from . import session_metrics_extractor as _sme
 from .sampling import (
     should_sample, compute_expires_at, compute_priority, compute_deadline_at,
     campaign_dispatch_open,
@@ -1314,6 +1315,30 @@ async def _ingest_core(pool, producer, body: IngestBody, *, strict_validation: b
     except Exception as exc:
         logger.warning("ingest: form snapshot load failed (non-fatal): %s", exc)
         _form = None
+
+    # ── R1 — session_metric.* (lazy) + preenche critérios auto_computed ───────────
+    # Extrai métricas determinísticas da sessão (escopo-contato) e injeta as respostas
+    # auto_computed em criterion_responses ANTES da agregação, para que entrem na nota.
+    # Best-effort: falha de extração nunca derruba o ingest. (segment-scope = R4.)
+    if _form and body.session_id:
+        try:
+            _metrics = await _sme.SessionMetricsExtractor(pool).extract(
+                session_id=body.session_id,
+                tenant_id=body.tenant_id,
+                segment_id=instance.get("segment_id"),
+            )
+            if _metrics:
+                await _db.set_instance_session_metrics(
+                    pool, body.instance_id, body.tenant_id, _metrics,
+                )
+                body.criterion_responses = _sme.fill_auto_computed_criteria(
+                    body.criterion_responses or [],
+                    _form.get("dimensions", []),
+                    _metrics,
+                )
+        except Exception as exc:
+            logger.warning("ingest: session_metrics extraction failed (non-fatal): %s", exc)
+
     if _form and body.criterion_responses:
         violations = _scoring.validate_criterion_responses(_form, body.criterion_responses)
         if violations:

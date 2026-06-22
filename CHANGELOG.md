@@ -2,6 +2,29 @@
 
 ---
 
+## R1 — SessionMetricsExtractor fiado no ingest (`session_metric.*` + `auto_computed` na nota) (2026-06-22)
+
+Primeiro item de implementação do arco de Métricas de Avaliação
+(`docs/arcos/arc-evaluation-metrics-methodology.md`). O extractor era **código órfão** (nunca
+chamado) → critérios `auto_computed` eram no-op que distorcia pesos.
+
+- **evaluation-api `_ingest_core`**: antes da agregação, chama `SessionMetricsExtractor.extract()`
+  (lazy) → `set_instance_session_metrics()` (persiste `evaluation.instances.session_metrics`) →
+  `fill_auto_computed_criteria()` (injeta os critérios `auto_computed` em `criterion_responses` para
+  entrarem na nota). Best-effort: falha de extração não derruba o ingest.
+- **`session_metrics_extractor.py`**: SQL reescrito do schema imaginado (`stream_events` flat) para o
+  real `session_stream_events` (JSONB): `author->>'role'`, `payload->>'content'`,
+  `visibility='"all"'::jsonb`, coluna `"timestamp"`. **Cliente = `author->>'role'` NULL** (não é
+  participante nomeado). Duração com **fallback** MIN/MAX de evento (o stream do demo não persiste
+  `session_opened/closed`). Outcome/close_reason do payload de `session_closed`. Guard em
+  `usage_events` (pode não existir no demo). Média de tamanho do agente ponderada entre roles.
+- **Escopo-contato** (segment-scope = R4, pois `session_stream_events` não tem `segment_id`).
+- Mesmo banco `plughub` → extractor reusa o pool da evaluation-api.
+- Teste: `infra/test/test_r1_session_metrics.sh` (semeia stream + form com `auto_computed` + ingest;
+  valida `session_metrics` 4/2/2 e `overall=(LLM 6 + auto 10)/2=8`). Verde.
+
+---
+
 ## P3 — Arc 6 Fase 2: lente `deploy` RE-ANCORADA no POOL (spec §11) (2026-06-20)
 
 Após walkthrough com o usuário, a unidade da lente `deploy` passou de skill (`flow_id`) para **pool**
