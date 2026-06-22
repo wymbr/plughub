@@ -272,6 +272,11 @@ DROP TABLE IF EXISTS evaluation.permissions;
 ALTER TABLE evaluation.instances
     ADD COLUMN IF NOT EXISTS session_metrics JSONB;
 
+-- R9d: deploy_version (versão do skill que rodou no segmento avaliado, AI). Insumo da
+-- cota por versão (R10). Resolvido do segmento na amostragem.
+ALTER TABLE evaluation.instances
+    ADD COLUMN IF NOT EXISTS deploy_version TEXT;
+
 -- ── Arc 13 Fase A migrations ──────────────────────────────────────────────────
 
 -- evaluation.campaigns: pre-review and contestation policy fields (Arc 13)
@@ -1244,6 +1249,7 @@ async def create_instance(
     form_version: int = 1,                  # T2 — versão fixada do formulário
     priority: int = 5,
     expires_at: datetime | None = None,
+    deploy_version: str | None = None,      # R9d — versão do skill (AI) do segmento avaliado
 ) -> dict[str, Any]:
     instance_id = _new_id("evinstance_")
     async with pool.acquire() as conn:
@@ -1251,12 +1257,12 @@ async def create_instance(
             """
             INSERT INTO evaluation.instances
                 (id, tenant_id, campaign_id, form_id, session_id, segment_id,
-                 evaluated_user_id, form_version, priority, expires_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                 evaluated_user_id, form_version, priority, expires_at, deploy_version)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             RETURNING *
             """,
             instance_id, tenant_id, campaign_id, form_id, session_id, segment_id,
-            evaluated_user_id, form_version, priority, expires_at,
+            evaluated_user_id, form_version, priority, expires_at, deploy_version,
         )
         # increment campaign counter
         await conn.execute(

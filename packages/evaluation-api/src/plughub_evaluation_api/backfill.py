@@ -138,6 +138,7 @@ async def run_campaign_backfill(
             session_id=seg.get("session_id") or "", segment_id=segment_id,
             evaluated_user_id=(seg.get("user_id") or None),
             form_version=form_version, priority=compute_priority(meta, rules),
+            deploy_version=(seg.get("deploy_version") or None),   # R9d (None até /reports/segments expor)
         )
         created += 1
         logger.info("backfill: instance %s (campaign=%s segment=%s pool=%s)",

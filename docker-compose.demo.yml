@@ -1287,6 +1287,7 @@ services:
       PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
       PLUGHUB_EVALUATION_SESSION_REPLAYER_URL: http://mcp-server-plughub:3100
       PLUGHUB_EVALUATION_ANALYTICS_API_URL:   http://analytics-api:3500
+      PLUGHUB_EVALUATION_AGENT_REGISTRY_URL:  http://agent-registry:3300   # R9d — resolve deploy_version por flow_id
     depends_on:
       postgres:
         condition: service_healthy

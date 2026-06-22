@@ -10,8 +10,10 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from datetime import datetime, timezone
 
+import httpx
 import redis.asyncio as aioredis
 import uvicorn
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -172,6 +174,36 @@ def _segs_key(tenant_id: str, session_id: str) -> str:
     return f"{tenant_id}:eval:segs:{session_id}"
 
 
+_SKILL_VERSION_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
+_SKILL_VERSION_TTL_S = 60.0
+
+
+async def _fetch_skill_version(tenant_id: str, skill_id: str) -> str:
+    """R9d — versão corrente do skill (GET agent-registry /v1/skills/{id}.version),
+    cache TTL curto. Resolve deploy_version do segmento de IA quando o evento do
+    bridge não a trouxe (mismatch de cache / YAML fallback). Degradação → ""."""
+    base = settings.agent_registry_url
+    if not (base and skill_id):
+        return ""
+    key = (tenant_id, skill_id)
+    hit = _SKILL_VERSION_CACHE.get(key)
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    version = ""
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                f"{base.rstrip('/')}/v1/skills/{skill_id}",
+                headers={"x-tenant-id": tenant_id},
+            )
+            resp.raise_for_status()
+            version = str((resp.json() or {}).get("version") or "")
+    except Exception as exc:
+        logger.debug("skill version unavailable %s/%s: %s", tenant_id, skill_id, exc)
+    _SKILL_VERSION_CACHE[key] = (time.monotonic() + _SKILL_VERSION_TTL_S, version)
+    return version
+
+
 async def _on_participant_event(redis_client, msg_value: bytes) -> None:
     """Acumula segmentos de AGENTE (role primary/specialist) por sessão, com a
     identidade do humano (user_id) e o tipo (human/ai). Exclui supervisor/evaluator."""
@@ -195,7 +227,12 @@ async def _on_participant_event(redis_client, msg_value: bytes) -> None:
         "pool_id":              ev.get("pool_id", "") or "",
         "agent_type_id":        ev.get("agent_type_id", "") or "",
         "flow_id":              ev.get("flow_id", "") or "",
+        "deploy_version":       ev.get("deploy_version", "") or "",   # R9d
     }
+    # R9d — fallback robusto: se o evento do bridge não trouxe deploy_version mas há
+    # flow_id (segmento de IA), resolve a versão corrente no agent-registry por flow_id.
+    if rec["flow_id"] and not rec["deploy_version"]:
+        rec["deploy_version"] = await _fetch_skill_version(tenant_id, rec["flow_id"])
     try:
         key = _segs_key(tenant_id, session_id)
         await redis_client.hset(key, seg_id, json.dumps(rec))
@@ -242,6 +279,7 @@ async def _sample_one_target(
     db_pool, campaigns: list, *, tenant_id: str, session_id: str,
     sample_key: str, meta: dict, segment_id: str | None = None,
     evaluated_user_id: str | None = None, closed_at=None,
+    deploy_version: str | None = None,
 ) -> None:
     """Amostra UM alvo (segmento ou sessão-fallback) contra as campanhas ativas."""
     for c in campaigns:
@@ -270,6 +308,7 @@ async def _sample_one_target(
             db_pool, tenant_id=tenant_id, campaign_id=c["id"], form_id=c["form_id"],
             session_id=session_id, segment_id=segment_id,
             evaluated_user_id=evaluated_user_id, form_version=form_version, priority=priority,
+            deploy_version=deploy_version,
         )
         logger.info(
             "sampling: scheduled instance %s (campaign=%s session=%s segment=%s pool=%s)",
@@ -304,6 +343,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
                 sample_key=seg["segment_id"], meta=seg_meta,
                 segment_id=seg["segment_id"], evaluated_user_id=(seg.get("user_id") or None),
                 closed_at=payload.get("closed_at"),
+                deploy_version=(seg.get("deploy_version") or None),
             )
         return
 

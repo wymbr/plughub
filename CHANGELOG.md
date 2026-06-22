@@ -25,8 +25,14 @@ Carimba a versão do skill (deploy) no segmento → `analytics.segments`, insumo
   colunas na lista e no builder.
 - **Validado**: sessão de IA nova → `analytics.segments` com `deploy_version=1.0`
   (`skill_atendimento_sac_v1`, `skill_survey_v1`, …).
-- **Pendente**: popular `channel` nos call-sites (~10; param já existe) e R9d (propagar
-  `deploy_version` à evaluation instance + `evaluation_finalized`).
+- **R9d-1**: `deploy_version` propagado à **evaluation instance**. `_on_participant_event` capta
+  `deploy_version` do evento (já captava `flow_id`); `_sample_one_target`/`_sample_on_close`/backfill
+  repassam; `create_instance` + coluna `evaluation.instances.deploy_version` (migração
+  `ADD COLUMN IF NOT EXISTS`). Insumo do R10 (cota por versão). Para o R15a (epoch), `deploy_version`
+  já está em `analytics.segments` (R9c) → JOIN por `segment_id`; denormalizar em `evaluation_finalized`
+  é opcional.
+- **Pendente**: popular `channel` nos call-sites (~10; param já existe); `deploy_version` no
+  `/reports/segments` (backfill).
 
 ---
 

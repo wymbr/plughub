@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Session Replayer (to fetch ReplayContext)
     session_replayer_url: str = "http://localhost:3300"  # mcp-server-plughub
 
+    # Agent Registry (R9d — resolve deploy_version do skill por flow_id no sampling)
+    agent_registry_url: str = "http://localhost:3300"
+
     # Analytics API (T17-backfill — enumera segmentos persistidos via /reports/segments)
     analytics_api_url: str = "http://localhost:3500"
     backfill_page_size: int    = 200    # paginação do /reports/segments
