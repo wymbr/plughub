@@ -719,6 +719,22 @@ Decisão e mecanismo em [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-s
 
 ---
 
+## Agent-registry — unificar binding skill↔pool (3→1) *(proposta — concern do registry)*
+
+Origem: discussão do doc de avaliação (`docs/arcos/arc-evaluation-metrics-methodology.md` §IV.3),
+scoped-out de lá por ser refactor do agent-registry, não de avaliação.
+
+**Achado**: a associação skill↔pool aparece em **três** lugares no `schema.prisma` — `PoolSkillSlot`
+(slot do pool), `SkillVersionSlot.pool_ids` (previous/current/next) e `SkillDeployment.pool_ids`
+(histórico de deploy). Risco de divergência entre eles.
+
+**Alvo**: uma relação **autoritativa** do binding atual (slot) + o histórico como **append-log** das
+mudanças de slot (o `SkillDeployment` deixaria de precisar do próprio `pool_ids`). **Pré-trabalho**:
+auditar os 3 modelos + todos os readers (routing/alocação no caminho quente, RegistrySyncer, lente
+deploy do Arc 6 Fase 2, `GET /v1/pools/:id/deployments`) antes de cravar o modelo unificado.
+
+---
+
 ## Skill hot-reload via YAML em disco sem restart *(deferred — dev/demo only)*
 
 **Fluxo editor → deploy já funciona**: `POST /v1/skills/:id/deploy` → `publishRegistryChanged` → bridge invalida `_skill_flow_cache` → próxima execução busca conteúdo atualizado do agent-registry. Nenhuma mudança necessária para este caminho.

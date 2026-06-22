@@ -415,7 +415,9 @@ versão até o fim; **aproximada** se re-lê o flow por step (overlap = fração
 ativo para `(pool, skill)`) no `ContactSegment`, ancorado no início do segmento** (registra o que
 de fato rodou — exato por construção, imune ao hot-reload). Propagar para `analytics.segments`,
 para a evaluation instance e para `evaluation_finalized`. Resolve a amostragem por versão **e**
-conserta a precisão do Arc 6 Fase 2 de uma só vez.
+conserta a precisão do Arc 6 Fase 2 de uma só vez. **Carimbar também `channel`** no segmento
+(conhecido no início, da sessão) — destrava o condicionamento por canal (D) também no **backfill**
+(hoje só forward), e alinha com o externo (o `channel` já vem no `QualityContact`).
 
 **Modelo de identidade de versão (racional do esquema de deploy).** O `skill_id` está hoje
 sobrecarregado: a convenção `skill_{nome}_v{n}` põe versão no nome, mas o deploy trata `skill_id`
@@ -627,14 +629,14 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R8c** | **Estágio 2** — curadoria **cega-primeiro** (`%`-gated, SLA): humano re-pontua o form sem ver a IA → reveal + diff por dimensão; nota humana autoritativa no desacordo; reusa workflow de revisão; alimenta divergência + `CalibrationNote` | evaluation-api + `CuradoriaPage` | III.4 |
 | **R8d** | **Revisor heterogêneo** (recomendado): config de campanha modelo revisor ≠ avaliador (preferência outra família); caveat KB documentado | AI Gateway + config campanha | III.4 |
 | **R8e** | **UI em Configurations** dos parâmetros: limiar de divergência (25%), `N` mínimo (30), `%` do Estágio 2, modelo do revisor | platform-ui | III.4 |
-| **R9** | **Carimbar `skill_id` + `deploy_version` no `ContactSegment`** (resolvido do `SkillDeployment` ativo, ancorado no início do segmento); propagar a `analytics.segments` + evaluation instance + `evaluation_finalized` | orchestrator-bridge + schemas + analytics | IV.3 |
+| **R9** | **Carimbar `skill_id` + `deploy_version` + `channel` no `ContactSegment`** (deploy resolvido do `SkillDeployment` ativo, ancorado no início do segmento; `channel` da sessão); propagar a `analytics.segments` + evaluation instance + `evaluation_finalized` | orchestrator-bridge + schemas + analytics | IV.3 |
 | **R10** | Cota por agente cumulativa (déficit) no sampling engine: contador Redis `INCR` atômico; chave humano `(campaign, user_id)` / IA `(campaign, pool_id, skill_id, deploy_version)`; denominador = elegíveis | evaluation-api sampling | IV.2 |
 | **R11** | Config de campanha: `%` **por agente** (humano) + `%` por agente IA (menor); deixar explícito que o `%` é por-agente | evaluation-api + CampaignsPage | IV.2 |
 | **R12** | Backfill ordenado por `closed_at` para reprodutibilidade do déficit | evaluation-api `backfill.py` | IV.2 |
 | **R13a** | **Contrato `QualityContact` (`ingestion_contract_v1`)** + serviço de ingestão A2 (document → emite eventos canônicos; produtor puro, sem acesso a store); masking pré-processador + net no ingest; segmento mínimo; emitir em ordem de `closed_at` — escopo grau-transcript | novo pacote/contrato | IV.5/IV.6/IV.7 |
 | **R13b** | **Consumer interno from-events** (opção Y, gated por `source=external_import`): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` recalculado no `contact_closed`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6/IV.7 |
 | **R13c** | **Mapa de identidade/versão por `source`** no Config API (`external_agent_id → user_id/agent_id` `+ skill_id/deploy_version`); fallback ADR `(campaign, pool, skill)` quando sem versão | config-api + serviço de ingestão | IV.7 |
-| **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético | platform-ui + agent-registry | IV.3 |
+| **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético; **relaxar a regex** `^skill_[a-z0-9_]+_v\d+$` → `^skill_[a-z0-9_]+$` (drop `_v\d+`, mantém slug seguro, retrocompat) nos validadores do `PUT`, no `registry_syncer.py` e no `workflow-api` | platform-ui + agent-registry | IV.3 |
 | **R15a** | **Núcleo epoch (query)**: `deploy_version` denormalizado no `evaluation_finalized` (via R9); `lens=deploy&mode=epoch` → série por `(pool, skill)` bucketizada por `deploy_version` (`avg(final_score)`, `n`/versão, ordem `deployed_at`, `min_sample=30`, "N pendentes") | analytics-api | IV.8 |
 | **R15b** | **Núcleo epoch (UI)**: modo epoch single-`(pool,skill)`, eixo X = versões, esconde média + multi-seleção; diário+markers como modo alternativo | platform-ui `AgentsBenchPage`/`DeployChart` | IV.8 |
 
@@ -642,33 +644,36 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 
 ## Pendências / decisões em aberto
 
-- **Origem de `channel` no backfill** — necessária para condicionamento por canal em sessões
-  históricas (R2 só cobre forward).
+- **Origem de `channel` no backfill** — ✅ fechado: `channel` carimbado no segmento (R9), conhecido
+  no início (da sessão); backfill passa a lê-lo. Alinha com o externo (`channel` no `QualityContact`).
 - **Política LGPD de `output_snapshot`** — ✅ design fechado em §II.5 (fix do masking de output +
   masked+original + reveal campo-mínimo transiente); implementação em R7a–c.
-- **Saudação por step nomeado** — se/quando instrumentar `saudacao` no skill-flow como âncora
-  determinística (hoje proxy = primeira mensagem do agente).
+- **Saudação por step nomeado** — ✅ fechado: o proxy (1ª msg do agente) é o default;
+  `time_to_first_agent_message_s` usa âncora de step nomeado **se a skill tiver** (oportunístico),
+  sem instrumentação obrigatória.
 - **Métrica de divergência avaliador×humano** — ✅ design fechado em §III.4 (Estágio 1 gatilho +
   Estágio 2 curadoria cega-primeiro + revisor heterogêneo); implementação em R8a–e.
 - **Amostragem é virada para estado** — ✅ formalizado em
   [`docs/adr/adr-evaluation-sampling.md`](../adr/adr-evaluation-sampling.md) (contexto, decisão,
   trade-offs, alternativas). Implementação pendente (R9–R12).
-- **Criação/versionamento de skill via UI** → **R14**. O editor YAML (`/agent-flow/editor`)
+- **Criação/versionamento de skill via UI** — ✅ decidido → **R14**. O editor YAML (`/agent-flow/editor`)
   **já é read/write** (edita/cola/salva via `PUT`, deleta, valida) e o deploy associa a pools —
   ao contrário do que se assumiu antes (não é read-only). Faltam, porém: **botão "Novo skill"**
   (criação hoje é implícita — editar `skill_id` + salvar; Save gated por `isModified`, parece
   travado ao só visualizar) e a **disciplina de versão** (`deploy_version` auto, `version` como
   rótulo, reconciliar `409`/`_v2`). Distinto do importador de **contatos** externos (IV.5).
-- **Cleanup binding skill↔pool (2→1)** — tornar `PoolSkillSlot` autoritativo e o histórico um
-  append-log das mudanças de slot (remover `SkillDeployment.pool_ids` redundante). Exige ler o
-  modelo exato do agent-registry antes de cravar.
-- **`_v{n}` cosmético** — se mantido `skill_id` estável, o sufixo de versão no nome deixa de ser
-  fonte de versão; alinhar a convenção de nomenclatura para não induzir erro.
+- **Cleanup binding skill↔pool** — **scope-out deste doc.** Achado: são **3** lugares
+  (`PoolSkillSlot` + `SkillVersionSlot.pool_ids` + `SkillDeployment.pool_ids`), não 2 — refactor do
+  agent-registry, não de avaliação (entrou aqui de tangente pelo carimbo de versão). Registrado em
+  `TODO.md` como concern do agent-registry.
+- **`_v{n}` cosmético** — ✅ fechado: ninguém deriva versão do nome (a regex só **valida** o formato;
+  `version` é campo à parte). Decisão: **relaxar** a regex p/ `^skill_[a-z0-9_]+$` (drop `_v\d+`,
+  slug seguro, retrocompat) — fundido no **R14(d)**.
 - **Fetch do flow (resolvido):** o flow é cacheado por `skill_id` estável no orchestrator-bridge
   (`get_skill_flow`) e invalidado no deploy → sessão que retoma após deploy pode pegar a versão
   nova; `start_time` é aproximado, e o carimbo no início do segmento (R9) é a convenção robusta.
-- **Carga: piso de cobertura × teto de `%`** — em baixo volume o piso (1º contato sempre) eleva
-  a taxa efetiva acima do `%` configurado; decisão consciente de produto.
+- **Carga: piso de cobertura × teto de `%`** — ✅ fechado: aceito por design (cobertura > teto,
+  conforme o ADR); "soft cap" como knob futuro opcional se o custo incomodar.
 - **Núcleo epoch/versão (Arc 6 Fase 2)** — ✅ design fechado em §IV.8 (destravado pelo R9: `GROUP BY
   deploy_version` exato; âncora `(pool,skill)`; UI epoch single-skill). Implementação em R15a/R15b,
   **dependente do R9**. Substitui o plano antigo de `analytics.deploy_events`.
