@@ -1220,5 +1220,46 @@ pool **desse** segmento — a âncora é só o ponto de disparo único, não "o 
 
 ---
 
+### Mudança 23 — `on_contact_end` disparado também no fim de contato de primário IA (2026-06-22)
+
+`on_contact_end` (NPS de fim-de-CONTATO, side=customer — Mudança 13) é o mecanismo **genérico** de
+fim-de-contato: ao disparar, faz `INCR posatt:customer_active` (segura o WS do cliente via
+`_close_contact_layer` adiado) e roda o skill do pool configurado **na conferência**. Até aqui ele só
+era **disparado** no caminho com humano (`process_contact_event` / native-specialist com
+`pending_on_human_end`). Um contato resolvido **só por IA** (ex.: `sac_ia` sem escalar) fecha por
+outro ponto — `process_routed`, conclusão do primário IA (`_part_role=="primary"`) — que chamava
+`_trigger_contact_close()` direto, **sem** dar a chance ao hook.
+
+**Mudança (completude do mecanismo):** nesse ponto, quando o primário IA conclui com
+`outcome=="resolved"` (sinal "cliente presente no fim" do fluxo só-IA) **e** o pool declara
+`hooks.on_contact_end`, o bridge grava o pre-hook context (`close_origin=flow_complete`) e dispara
+`fire_pool_hooks("on_contact_end")` + `_hook_timeout_guard("on_contact_end")` em vez de fechar direto.
+Demais outcomes (failed/abandoned/timeout/escalação) ou pool sem hook → `_trigger_contact_close()`
+como antes. Toda a maquinaria de posatt é a **mesma** da Mudança 13; o fixed-side participant
+(customer) vem de `session:{id}:customer_participant_id`, presente nas sessões IA.
+
+**Não é lógica de survey.** O que o hook faz (NPS in-conference, skip no disconnect, ou até disparar
+um outbound) é decisão do **skill** do pool — customização da instalação. A plataforma só dispara o
+hook e segura a sessão. Princípio: skills são customizáveis, não regra de plataforma.
+
+**Pool reutilizado + grão por contexto.** Usa-se o **mesmo pool `nps_ia`** do humano (já bootstrapado),
+não um pool novo. O skill `skill_nps_v1` ganhou um step `escolher_grao` (choice): se
+`@ctx.session.surveyed_segment_id` existe (humano — carimbado pelo bridge) → grão **segment**
+(atribuível ao agente); senão (contato só-IA, sem segmento humano) → grão **session** (origin = a
+própria sessão). Um pool, dois grãos. Carimbar o segmento do primário IA para habilitar `grain=segment`
+por `deploy_version` no caso IA é evolução futura.
+
+**Config:** `sac_ia.hooks.on_contact_end = [{pool: nps_ia, side: customer, nps_on_disconnect: skip}]`;
+o step `disparar_survey` foi removido do `skill_atendimento_sac_v1` (NPS agora é o hook). A survey
+OUTBOUND (`skill_survey_v1`) permanece como **padrão de skill para caso especial** (fluxo multi-humano),
+iniciada pelo skill, não pela plataforma.
+
+**Aplicação:** o pool `sac_ia` já existe no DB (seed-if-absent/DB-owned) → a hook nova **não**
+auto-aplica no rebuild; aplicar via `PUT /v1/pools/sac_ia` (publica `registry.changed`, hot-reload) ou
+`REGISTRY_SYNC_RECONCILE=true`. `nps_ia` já tem instância (reuso). **Site:**
+`orchestrator-bridge/main.py` `process_routed` (bloco "Primary AI agent complete").
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

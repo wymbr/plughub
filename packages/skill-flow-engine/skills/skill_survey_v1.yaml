@@ -15,9 +15,23 @@ description: |
 classification:
   type: vertical
 
-entry: coletar_nps
+entry: verificar_identidade
 
 steps:
+  # ── Gate de identidade — a survey OUTBOUND/inbound_only só faz sentido com um
+  # contact_identifier para RELIGAR (§14.2: sessão própria que religa à original).
+  # Sem identidade (ex.: cliente anônimo de webchat no sac_ia), não há religação
+  # possível: a survey NÃO suspende (evita o vazamento de sessões pendentes por 1h);
+  # encerra sem sinal. Fluxos que coletam identidade (intake portabilidade etc.)
+  # gravam session.contact_identifier e seguem para o delegate inbound_only normal.
+  - id: verificar_identidade
+    type: choice
+    conditions:
+      - field:    "@ctx.session.contact_identifier"
+        operator: exists
+        next:     coletar_nps
+    default: encerrar
+
   # ── Coleta o NPS do cliente via delegate (sessão-filho channel-aware) ─────────
   # O agente coletor faz notify+menu e chama workflow_resume(payload={nps}).
   # origin_session_id é propagado para o coletor (rastreabilidade/contexto).

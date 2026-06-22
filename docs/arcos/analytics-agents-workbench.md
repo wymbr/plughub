@@ -424,6 +424,23 @@ wrap-up→primary (bridge write-back vs join na leitura) — F1; mecanismo do jo
   `session_id` atual como `origin`. Especialmente útil em fluxos que orquestram **múltiplos agentes
   humanos**: uma pesquisa de `session` no fim, em vez de N de segmento. Um hook de fechamento de pool é
   **fallback** para pools puramente humanos sem fluxo orquestrador. Os dois caem no mesmo substrato.
+
+  > **Revisão 2026-06-22 (separação plataforma × skill).** O enquadramento acima invertia papéis: na
+  > prática o **hook `on_contact_end` é o mecanismo GENÉRICO** de NPS de fim-de-contato (segura a sessão
+  > do cliente via `posatt:customer_active` e roda o skill do pool configurado **na conferência**),
+  > válido para **qualquer** pool — humano OU IA, não "fallback de humano". A **survey OUTBOUND**
+  > (`workflow_trigger` → sub-workflow que religa) é uma **customização de SKILL** para casos
+  > **especiais** (fluxo multi-humano, onde NPS por segmento é inviável; ou cliente ausente que precisa
+  > religar) — **iniciada pelo próprio skill** (do NPS, no ramo de cliente ausente, ou um skill em
+  > `post_human`), **não pela plataforma**. Princípio: skills são customizações da instalação, não
+  > lógica de plataforma; a plataforma só provê os 4 hooks + segurar a sessão + despachar o skill.
+  > Consequência: o `sac_ia` (resolvido só por IA, cliente presente) passa a coletar NPS **ao vivo na
+  > conferência** via `on_contact_end → nps_ia` (mesmo pool do humano; `skill_nps_v1` ramifica o grão —
+  > segment se há `surveyed_segment_id`, senão session), em vez do outbound que não alcançava cliente
+  > anônimo presente. Pré-requisito de plataforma: o bridge passou a
+  > **disparar `on_contact_end` no fim de contato de primário IA** (antes só no caminho com humano) —
+  > completude do mecanismo, não regra de survey (ver `docs/guias/conference-mechanics.md` § Mudança 23).
+  > A escrita segue sendo `survey_record` (caminho único MCP) nos dois modos.
 - **Veículo de captura (revisado)**: **tool MCP dedicada `survey_record`** (não reuso de `agent_event`).
   `origin_session_id`, `grain` e a lista de `signals[{metric,value,value_label?}]` são parâmetros
   estruturados de 1ª classe → sem a checagem de namespace `category[0]==pool` do Arc 12 nem convenção

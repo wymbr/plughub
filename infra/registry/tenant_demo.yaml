@@ -52,6 +52,19 @@ pools:
     description: "Pool IA — atendimento SAC via LLM (Claude)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 480000
+    # NPS de fim-de-contato via hook on_contact_end (mecanismo genérico — o MESMO pool
+    # nps_ia do humano retencao_humano). O bridge segura a sessão do cliente (posatt) e
+    # roda o skill nps_ia (skill_nps_v1) NA conferência; nps_on_disconnect=skip não
+    # oferece se o cliente caiu. O skill ramifica o GRÃO pelo contexto: humano (há
+    # surveyed_segment_id) → grão segment; IA (sem segmento) → grão session — um pool
+    # serve os dois. A survey OUTBOUND (skill_survey_v1) NÃO é usada aqui — fica como
+    # padrão de SKILL para casos especiais (multi-humano). Ver §14.2 de
+    # docs/arcos/analytics-agents-workbench.md.
+    hooks:
+      on_contact_end:
+        - pool: nps_ia
+          side: customer
+          nps_on_disconnect: skip
 
   - pool_id: fila_humano
     agent_kind: ai

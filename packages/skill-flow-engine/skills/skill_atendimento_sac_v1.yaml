@@ -184,27 +184,21 @@ steps:
       - field: "$.pipeline_state.decisao_resolucao"
         operator: eq
         value: "resolvido"
-        next: disparar_survey
+        next: finalizar_resolvido
       - field: "$.pipeline_state.decisao_resolucao"
         operator: eq
         value: "especialista"
         next: avisar_escalada
     default: avisar_escalada
 
-  # ── F10.2b: dispara a pesquisa de sessão no PASSO FINAL do fluxo primário ─────
-  # Delega a um sub-workflow (skill_survey_v1, pool webhook) passando o session_id
-  # atual como origin — a pesquisa grava o sinal contra ESTA sessão via survey_record.
-  # Fire-and-forget: o trigger retorna imediatamente, o fluxo segue p/ complete.
-  - id: disparar_survey
-    type: invoke
-    tool: workflow_trigger
-    input:
-      tenant_id:         "$.tenant_id"
-      skill_id:          "skill_survey_v1"
-      origin_session_id: "$.session_id"
-      customer_id:       "$.customer_id"
-    on_success: finalizar_resolvido
-    on_failure: finalizar_resolvido
+  # ── NPS: hook on_contact_end (mecanismo genérico de fim-de-contato) ───────────
+  # O NPS NÃO é disparado pelo skill: é coletado na conferência pelo hook
+  # on_contact_end (side=customer) declarado no pool sac_ia → pool nps_contato_ia
+  # (agente_nps_contato_v1, grão session). O bridge segura a sessão do cliente até o
+  # NPS concluir e não oferece se o cliente caiu (nps_on_disconnect=skip). Por isso
+  # o caminho `resolvido` segue direto para `finalizar_resolvido`. A survey OUTBOUND
+  # (skill_survey_v1) é padrão de SKILL para casos especiais (multi-humano) — não usada
+  # aqui. Ver §14.2 de docs/arcos/analytics-agents-workbench.md.
 
   # ── Caminho D: Escalada para agente humano ────────────────────────────────────
   # Phase 2: inserir step task (agente_contexto_ia_v1, mode: assist) antes de

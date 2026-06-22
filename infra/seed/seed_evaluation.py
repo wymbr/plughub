@@ -184,7 +184,12 @@ def upsert_campaign(form_id: str) -> str | None:
         "tenant_id":                TENANT_ID,
         "name":                     "Demo SAC — Avaliação Contínua",
         "form_id":                  form_id,
-        "pool_id":                  "sac",
+        # pool AVALIADO (sac_ia). É o filtro de amostragem: _sample_one_target usa
+        # evaluation_pool_id (com fallback ao pool_id legado de ABAC). Enviamos ambos
+        # explícitos e iguais para não depender do espelho pool_id↔evaluation_pool_id
+        # nem deixar o pool_id legado virar filtro com valor errado (era "sac" — typo).
+        "pool_id":                  "sac_ia",
+        "evaluation_pool_id":       "sac_ia",
         "evaluator_pool_id":        "avaliacao_ia",
         "review_workflow_skill_id": "skill_revisao_simples_v1",
         "sampling_rules": {

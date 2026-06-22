@@ -118,8 +118,21 @@ steps:
           confidence: 1.0
           merge: overwrite
           scope: segment
-    on_success: gravar_sinal
-    on_failure: gravar_sinal
+    on_success: escolher_grao
+    on_failure: escolher_grao
+
+  # ── Ramifica o GRÃO pelo contexto (mesmo pool nps_ia serve humano e IA) ───────
+  # Humano: o bridge carimba session.surveyed_segment_id (segmento do humano servido
+  # por este on_human_end/on_contact_end) → grão SEGMENT (atribuível ao agente). IA
+  # (contato resolvido só por IA, ex.: sac_ia): não há segmento humano → o stash fica
+  # ausente → grão SESSION (origin = a própria sessão). Um pool, dois grãos.
+  - id: escolher_grao
+    type: choice
+    conditions:
+      - field:    "@ctx.session.surveyed_segment_id"
+        operator: exists
+        next:     gravar_sinal
+    default: gravar_sinal_sessao
 
   # ── F10.3b (cutover unificado): grava o NPS de SEGMENTO via survey_record ─────
   # Caminho único de escrita (mesmo dos grãos session/journey). A atribuição
@@ -135,6 +148,22 @@ steps:
       grain:             "segment"
       segment_id:        "@ctx.session.surveyed_segment_id"
       agent_key:         "@ctx.session.surveyed_agent_key"
+      signals:
+        - metric: "nps"
+          value: "$.pipeline_state.nps_resposta"
+    on_success: encerrar
+    on_failure: encerrar
+
+  # ── Grão SESSION (contato só-IA, sem segmento humano para atribuir) ──────────
+  # origin = a própria sessão atendida (o hook roda na conferência dela).
+  - id: gravar_sinal_sessao
+    type: invoke
+    tool: survey_record
+    input:
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"
+      grain:             "session"
+      survey_session_id: "$.session_id"
       signals:
         - metric: "nps"
           value: "$.pipeline_state.nps_resposta"

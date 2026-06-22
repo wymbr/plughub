@@ -3202,7 +3202,60 @@ async def process_routed(
         if not conference_id and _ai_outcome not in _escalation_outcomes:
             # G1 fix: freeze AHT at primary AI completion, before any hook agents run.
             await _mark_contact_ended(redis_client, session_id)
-            asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+            # ── on_contact_end no fim de contato de primário IA (completude do hook) ──
+            # O hook on_contact_end (fim-de-CONTATO) é o mecanismo GENÉRICO de
+            # fim-de-contato: segura a sessão do cliente (posatt:customer_active) e roda
+            # o skill do pool configurado NA conferência. Até aqui só era disparado no
+            # caminho com humano (process_contact_event); um contato resolvido SÓ por IA
+            # fechava direto sem dar a chance ao hook. Aqui completamos: quando o
+            # contato encerra com o primário IA e o pool declara hooks.on_contact_end,
+            # disparamos o hook em vez de fechar direto. NÃO é lógica de survey — o que o
+            # hook faz (NPS in-conference, outbound, skip) é decisão do SKILL configurado.
+            # Gate em outcome=resolved: é o sinal "cliente presente no fim" do fluxo só-IA
+            # (em failed/abandoned/timeout o cliente já saiu — fecha direto, como antes).
+            _contact_end_hooks: list = []
+            if _part_role == "primary" and _ai_outcome == "resolved" and http and pool_id and tenant_id:
+                try:
+                    _ce_cfg = await get_pool_config(http, tenant_id, pool_id)
+                    _contact_end_hooks = (
+                        ((_ce_cfg or {}).get("hooks") or {}).get("on_contact_end", []) or []
+                    )
+                except Exception as _ce_exc:
+                    logger.warning(
+                        "on_contact_end lookup failed: session=%s pool=%s — %s",
+                        session_id, pool_id, _ce_exc,
+                    )
+            if _contact_end_hooks:
+                _ce_customer = session_id
+                try:
+                    _ce_meta = await redis_client.get(f"session:{session_id}:meta")
+                    if _ce_meta:
+                        _ce_customer = (json.loads(
+                            _ce_meta if isinstance(_ce_meta, str) else _ce_meta.decode()
+                        ).get("customer_id") or session_id)
+                except Exception:
+                    pass
+                # close_origin=flow_complete: cliente presente (resolveu o fluxo). O skill
+                # de NPS e nps_on_disconnect=skip cuidam do caso de o cliente cair durante.
+                await _write_pre_hook_context(
+                    redis_client, tenant_id, session_id,
+                    close_origin="flow_complete",
+                )
+                asyncio.create_task(fire_pool_hooks(
+                    http=http, redis_client=redis_client,
+                    session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
+                    customer_id=_ce_customer, hook_type="on_contact_end",
+                    human_instance_id="",
+                ))
+                asyncio.create_task(_hook_timeout_guard(
+                    redis_client, session_id, "on_contact_end",
+                ))
+                logger.info(
+                    "on_contact_end hook dispatched (AI primary contact end): "
+                    "session=%s pool=%s n=%d", session_id, pool_id, len(_contact_end_hooks),
+                )
+            else:
+                asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
         # ── Arc 19 Fase B: publish session_suspended to canonical stream ──────
         # Fired for webhook pool sessions only (channel_type: webhook).
