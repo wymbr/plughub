@@ -22,10 +22,10 @@ import { SentimentBandsEditor }     from './components/SentimentBandsEditor'
 
 // ── Tab definition ─────────────────────────────────────────────────────────────
 
-type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'calendar' | 'routing'
+type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'calendar' | 'routing' | 'evaluation'
 
 /** Tabs where the admin token input must be visible */
-const CONFIG_WRITE_TABS: Tab[] = ['routing_timeouts', 'consumer', 'expurgo', 'sentimento']
+const CONFIG_WRITE_TABS: Tab[] = ['routing_timeouts', 'consumer', 'expurgo', 'sentimento', 'evaluation']
 
 /** Namespace tabs: each entry defines the API namespace(s) to render */
 const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> = {
@@ -37,6 +37,8 @@ const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> 
   },
   consumer: { namespaces: [{ ns: 'consumer' }] },
   expurgo:  { namespaces: [{ ns: 'expurgo'  }] },
+  // R8e — namespace `evaluation` editável na UI (limiar de divergência, N mínimo, etc.).
+  evaluation: { namespaces: [{ ns: 'evaluation' }] },
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -62,6 +64,7 @@ export default function ConfigPlataformaPage() {
     { id: 'routing_timeouts', label: t('tabs.routingTimeouts') },
     { id: 'consumer',         label: t('tabs.consumer') },
     { id: 'expurgo',          label: t('tabs.dataRetention') },
+    { id: 'evaluation',       label: t('tabs.evaluation') },
     { id: 'sentimento',       label: t('tabs.sentimento') },
     { id: 'calendar',         label: t('tabs.calendar'),  icon: <Calendar  size={13} aria-hidden="true" /> },
     { id: 'routing',          label: t('tabs.routing'),   icon: <GitBranch size={13} aria-hidden="true" /> },
@@ -133,6 +136,7 @@ export default function ConfigPlataformaPage() {
           const cfg = NS_TABS[tab]
           const descKey = tab === 'routing_timeouts' ? 'routingTimeouts'
                         : tab === 'consumer'          ? 'consumer'
+                        : tab === 'evaluation'        ? 'evaluation'
                         : 'dataRetention'
           return (
             <div className="flex flex-col h-full">

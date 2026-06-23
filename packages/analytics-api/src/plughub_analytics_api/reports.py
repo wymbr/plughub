@@ -1367,6 +1367,17 @@ async def get_evaluator_calibration(
       summary: {total, approved, recalibrated, bias_flagged, calibration_score}
       meta:    {from_dt, to_dt, campaign_id, evaluator_id, skill_version, granularity}
     """
+    # R8b — limiar de divergência + N mínimo do namespace `evaluation` (config-api,
+    # override tenant → global → default 0.25 / 30). Degrada para os defaults se o
+    # config-api estiver fora.
+    from .config import get_settings
+    from .config_client import get_config_value
+    _cfg_url = get_settings().config_api_url
+    threshold = await get_config_value(
+        _cfg_url, tenant_id, "evaluation", "calibration_divergence_threshold", 0.25)
+    min_n = await get_config_value(
+        _cfg_url, tenant_id, "evaluation", "calibration_min_sample_n", 30)
+
     data = await query_evaluator_calibration(
         client        = request.app.state.store.new_client(),
         database      = request.app.state.store._database,
@@ -1377,6 +1388,8 @@ async def get_evaluator_calibration(
         evaluator_id  = evaluator_id,
         skill_version = skill_version,
         granularity   = granularity,
+        divergence_threshold = float(threshold),
+        min_sample_n         = int(min_n),
     )
     return _respond(data, "json", "")
 

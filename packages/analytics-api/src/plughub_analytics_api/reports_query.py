@@ -4750,17 +4750,24 @@ async def query_evaluator_calibration(
     evaluator_id: str | None = None,
     skill_version: str | None = None,
     granularity:   str = "day",   # "day" | "week"
+    divergence_threshold: float = 0.25,   # R8b — limiar (0–1) p/ recalibração recomendada
+    min_sample_n:         int   = 30,     # R8b — N mínimo p/ disparar o sinal
 ) -> dict:
     """
     Calibration score time-series per skill version × time.
 
     calibration_score = approved_count / total_reviewed × 100
 
+    R8b — divergence = 1 − calibration_score/100 (0–1). Cada linha ganha `divergence`
+    e `recalibration_recommended` (= divergence > threshold ∧ total ≥ min_n). É SINAL,
+    não auto-mutação — o humano decide recalibrar.
+
     Returns:
       data:    list of {period, skill_version, evaluator_id, total, approved,
-                        recalibrated, bias_flagged, calibration_score}
-      summary: {total, approved, recalibrated, bias_flagged, calibration_score}
-      meta:    {from_dt, to_dt, campaign_id, evaluator_id, granularity}
+                        recalibrated, bias_flagged, calibration_score,
+                        divergence, recalibration_recommended}
+      summary: {..., recalibration_recommended_count}
+      meta:    {..., divergence_threshold, min_sample_n}
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
@@ -4769,6 +4776,7 @@ async def query_evaluator_calibration(
             _fetch_evaluator_calibration,
             client, database, tenant_id, since, until,
             campaign_id, evaluator_id, skill_version, granularity,
+            divergence_threshold, min_sample_n,
         )
     except Exception as exc:
         logger.warning("query_evaluator_calibration failed tenant=%s: %s", tenant_id, exc)
@@ -4778,6 +4786,31 @@ async def query_evaluator_calibration(
             "meta": {"from_dt": since, "to_dt": until, "campaign_id": campaign_id, "granularity": granularity},
             "error": "data_unavailable",
         }
+
+
+def apply_divergence_flags(
+    rows: list[dict], summary: dict, divergence_threshold: float, min_sample_n: int,
+) -> int:
+    """R8b — anota `divergence` (1 − score/100, 0–1) e `recalibration_recommended`
+    (= divergence > limiar ∧ total ≥ N mínimo) em cada linha; grava o total recomendado
+    no summary. Sinal, não auto-mutação. score=null → divergence=None, flag=False.
+    Pura (sem I/O) — testável isoladamente. Retorna o nº de linhas recomendadas."""
+    recommended_count = 0
+    for row in rows:
+        score = row.get("calibration_score")
+        total = row.get("total") or 0
+        if score is None:
+            row["divergence"] = None
+            row["recalibration_recommended"] = False
+            continue
+        divergence = round(1.0 - (float(score) / 100.0), 4)
+        recommend = divergence > divergence_threshold and total >= min_sample_n
+        row["divergence"] = divergence
+        row["recalibration_recommended"] = recommend
+        if recommend:
+            recommended_count += 1
+    summary["recalibration_recommended_count"] = recommended_count
+    return recommended_count
 
 
 def _fetch_evaluator_calibration(
@@ -4790,6 +4823,8 @@ def _fetch_evaluator_calibration(
     evaluator_id: str | None,
     skill_version: str | None,
     granularity:  str,
+    divergence_threshold: float = 0.25,
+    min_sample_n:         int   = 30,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -4866,6 +4901,8 @@ def _fetch_evaluator_calibration(
         if p is not None and not isinstance(p, str):
             row["period"] = str(p)
 
+    apply_divergence_flags(rows, summary, divergence_threshold, min_sample_n)
+
     return {
         "data":    rows,
         "summary": summary,
@@ -4876,5 +4913,7 @@ def _fetch_evaluator_calibration(
             "evaluator_id": evaluator_id,
             "skill_version": skill_version,
             "granularity":  granularity,
+            "divergence_threshold": divergence_threshold,
+            "min_sample_n":         min_sample_n,
         },
     }

@@ -590,6 +590,21 @@ _SEED: list[tuple[str, str, object, str]] = [
         "10.0 = 10x faster batch replay). "
         "Source: session-replayer/consumer.py (was env REPLAY_SPEED_FACTOR)"
     ),
+    # R8b/R8e — gatilho de divergência avaliador×humano (Estágio 1).
+    (
+        "evaluation", "calibration_divergence_threshold",
+        0.25,
+        "Divergence threshold (0-1) for flagging 'recalibração recomendada' on the "
+        "Calibration Dashboard. divergence = 1 - calibration_score/100; flags when "
+        "divergence > threshold AND sample >= calibration_min_sample_n. Signal only, "
+        "never auto-mutation. Source: analytics-api evaluator-calibration (R8b)"
+    ),
+    (
+        "evaluation", "calibration_min_sample_n",
+        30,
+        "Minimum reviewed-sample size before the divergence flag can fire — prevents "
+        "false positives on small samples. Source: analytics-api evaluator-calibration (R8b)"
+    ),
 
     # ── agent_activity ────────────────────────────────────────────────────────
     # Source: orchestrator-bridge (agent_pause events), Agent Assist UI (PauseReasonModal)

@@ -783,7 +783,12 @@ Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicaçã
 
 ---
 
-## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R9–R12 ✅, demais PENDENTE
+## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R7a/R8a/R8b/R8e/R9–R12 ✅; R7b/R7c fora de escopo (LGPD); demais PENDENTE
+
+> **Limitação assumida (2026-06-23):** faithfulness sobre **valor PII de output de ferramenta** não é
+> suportada — reter o retorno cru (vault R7b) é anti-minimização LGPD sem requisito consentido. R7a
+> mascara+descarta o output (postura alinhada). Reabrir só sob requisito de produto explícito. O cofre
+> que compliance exige é o de **mensagens** (`TokenVault`), que já existe.
 
 Define **o que o avaliador mede e como** (distinto de revisão/contestação, Arc 13). Duas trilhas.
 

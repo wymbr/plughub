@@ -83,7 +83,7 @@ from .sampling import (
 )
 from .sampling_engine import run_curation_sampling
 from .backfill import run_campaign_backfill
-from .prompt_composer import compose_rubric_prompt, DEFAULT_RUBRIC_BODY
+from .prompt_composer import compose_rubric_prompt, DEFAULT_RUBRIC_BODY, with_bias_controls
 
 logger = logging.getLogger("plughub.evaluation.router")
 
@@ -520,11 +520,13 @@ async def effective_rubric_template(
     body (nunca null) — o avaliador nunca fica sem instruções gerais."""
     pool = _pool(request)
     eff = await _db.resolve_rubric(pool, tenant_id, campaign_id=campaign_id)
+    # R8a — anexa os controles de viés ao body efetivo (sempre, mesmo sob override do
+    # tenant), para que o `rubric_instructions` do avaliador os carregue em runtime.
     if eff:
-        return {"body": eff.get("body") or DEFAULT_RUBRIC_BODY,
+        return {"body": with_bias_controls(eff.get("body") or DEFAULT_RUBRIC_BODY),
                 "source": eff.get("source"), "scope": eff.get("scope"),
                 "version": eff.get("version"), "rubric_id": eff.get("rubric_id")}
-    return {"body": DEFAULT_RUBRIC_BODY, "source": "builtin_default",
+    return {"body": with_bias_controls(DEFAULT_RUBRIC_BODY), "source": "builtin_default",
             "scope": None, "version": None, "rubric_id": None}
 
 

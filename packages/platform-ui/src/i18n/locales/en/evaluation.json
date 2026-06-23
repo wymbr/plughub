@@ -322,7 +322,10 @@
       "approved":     "Approved",
       "recalibrated": "Recalibrated",
       "bias":         "Bias",
-      "score":        "Score"
+      "score":        "Score",
+      "recommendation": "Recommendation",
+      "recommendBadge": "Recalibration recommended",
+      "divergence":     "Divergence"
     }
   },
   "curation": {

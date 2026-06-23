@@ -35,6 +35,33 @@ DEFAULT_RUBRIC_BODY = (
     "nota, justifique explicitamente."
 )
 
+# R8a — controles de viés (literatura LLM-as-judge: verbosity, self-enhancement,
+# surface-fluency, authority/emotional). São um piso de qualidade do SISTEMA: sempre
+# aplicados, independem da rubrica do tenant (anexados ao body efetivo em runtime e ao
+# preview), para que o avaliador os receba mesmo quando o tenant sobrepõe a rubrica.
+BIAS_CONTROLS = (
+    "Aplique a TODOS os critérios:\n"
+    "- Verbosity: não premie respostas longas por serem longas; avalie substância, não extensão.\n"
+    "- Self-enhancement: não favoreça respostas por soarem como você as escreveria; julgue pelo "
+    "critério, não pela familiaridade do estilo.\n"
+    "- Surface-fluency: fluência e cortesia não são correção; separe tom polido de conteúdo correto.\n"
+    "- Authority/emotional: tom confiante ou apelo emocional não prova fato; verifique a evidência, "
+    "não a confiança.\n"
+    "- Consistência/posição: trate casos semelhantes com a mesma régua; não ancore na ordem de "
+    "apresentação."
+)
+
+_BIAS_HEADER = "## Controles de viés (obrigatórios)"
+
+
+def with_bias_controls(body: str) -> str:
+    """Anexa os controles de viés ao body da rubrica efetiva (idempotente). Garante que o
+    avaliador sempre os receba, mesmo sob rubrica sobreposta pelo tenant."""
+    base = body or DEFAULT_RUBRIC_BODY
+    if _BIAS_HEADER in base:
+        return base
+    return f"{base}\n\n{_BIAS_HEADER}\n{BIAS_CONTROLS}"
+
 
 def _criterion_id(c: dict[str, Any]) -> str:
     return str(c.get("criterion_id") or c.get("id") or "")
@@ -124,12 +151,14 @@ def compose_rubric_prompt(
 
     sections = {
         "general_instructions": rubric_body or DEFAULT_RUBRIC_BODY,
+        "bias_controls":        BIAS_CONTROLS,  # R8a — sempre presente
         "criteria":             crit_text,
         "calibration_notes":    calib_text,
         "transcript":           transcript_block,
     }
     composed = (
         "## Instruções gerais de avaliação\n" + sections["general_instructions"] + "\n\n"
+        + _BIAS_HEADER + "\n" + sections["bias_controls"] + "\n\n"
         "## Critérios do formulário\n" + sections["criteria"] + "\n\n"
         "## Notas de calibração (curador)\n" + sections["calibration_notes"] + "\n\n"
         "## Transcript do segmento avaliado\n" + sections["transcript"]

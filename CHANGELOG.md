@@ -2,6 +2,35 @@
 
 ---
 
+## R8a + R8b + R8e — Calibração: controles de viés + gatilho de divergência + UI (2026-06-23)
+
+Primeira fatia do R8 (calibração avaliador×humano, sobre Arc 13). Fecha a "peça faltante"
+que o doc nomeia: a métrica de divergência como gatilho de recalibração. Defere R8c (curadoria
+cega) e R8d (revisor heterogêneo).
+
+**R8a — controles de viés na rubrica** (`prompt_composer.py`): `BIAS_CONTROLS` (verbosity,
+self-enhancement, surface-fluency, authority/emotional, consistência/posição) + `with_bias_controls()`
+idempotente. Anexado ao body EFETIVO no endpoint `rubric-templates/effective` (runtime, o avaliador
+sempre os recebe mesmo sob rubrica sobreposta do tenant) e ao `compose_rubric_prompt` (preview).
+
+**R8b — gatilho Estágio 1 (divergência)**: `apply_divergence_flags()` (analytics-api `reports_query.py`,
+pura/testável) anota por linha `divergence = 1 − calibration_score/100` e `recalibration_recommended`
+(= divergence > limiar ∧ total ≥ N mínimo) + `recalibration_recommended_count` no summary. **Sinal, não
+auto-mutação.** O endpoint `/reports/evaluator-calibration` lê limiar/N do config-api (namespace
+`evaluation`, via novo `config_client.py`; degrada p/ defaults 0.25/30). Dashboard (`CalibrationDashboard.tsx`)
+ganha coluna "Recalibração recomendada" (badge + tooltip de divergência); i18n en+pt-BR.
+
+**R8e — UI de config**: aba **Avaliação** na `ConfigPlataformaPage` expõe o namespace `evaluation`
+(editor genérico) — limiar de divergência, N mínimo + demais chaves; fecha de quebra o invariante
+"todo campo de config é editável na UI". Seed config-api: `calibration_divergence_threshold` (0.25),
+`calibration_min_sample_n` (30). Compose demo: `PLUGHUB_CONFIG_API_URL` no analytics-api.
+
+**Testes (puros, sem infra):** `evaluation-api/.../tests/test_prompt_composer_r8a.py` (anexo idempotente,
+preview) + `analytics-api/.../tests/test_calibration_divergence_r8b.py` (flag por limiar/N, score=null→na,
+coerção de config).
+
+---
+
 ## R7a — Masking do output_snapshot na auditoria MCP (fix de vazamento) (2026-06-23)
 
 Fecha um vazamento latente: o `McpInterceptor` gravava o `output_snapshot` **cru**

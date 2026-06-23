@@ -268,6 +268,7 @@ export default function CalibrationDashboard() {
                 <th className="text-right px-4 py-2">{t('calibration.table.recalibrated')}</th>
                 <th className="text-right px-4 py-2">{t('calibration.table.bias')}</th>
                 <th className="text-right px-4 py-2">{t('calibration.table.score')}</th>
+                <th className="text-center px-4 py-2">{t('calibration.table.recommendation')}</th>
               </tr>
             </thead>
             <tbody>
@@ -294,6 +295,20 @@ export default function CalibrationDashboard() {
                     <td className="px-4 py-2 text-right text-red-text">{row.bias_flagged}</td>
                     <td className={`px-4 py-2 text-right ${scoreColor}`}>
                       {score != null ? `${score.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-2 text-center">
+                      {row.recalibration_recommended ? (
+                        <span
+                          className="inline-block px-2 py-0.5 rounded text-xs font-semibold bg-red-bg text-red-text"
+                          title={row.divergence != null
+                            ? `${t('calibration.table.divergence')}: ${(row.divergence * 100).toFixed(1)}%`
+                            : undefined}
+                        >
+                          {t('calibration.table.recommendBadge')}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-light">—</span>
+                      )}
                     </td>
                   </tr>
                 )

@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # tabela/consumer. Indisponível → série sem markers (degrada, nunca 500).
     agent_registry_url: str = "http://localhost:3300"
 
+    # ── Config API (R8b — tuning de calibração em tempo de request) ───────────
+    # Lê settings horizontais do namespace `evaluation` (limiar de divergência,
+    # N mínimo). Vazio ou indisponível → usa os defaults do código (0.25 / 30).
+    config_api_url: str = ""
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

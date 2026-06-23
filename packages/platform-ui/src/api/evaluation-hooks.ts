@@ -1093,6 +1093,9 @@ export interface CalibrationPoint {
   recalibrated:      number
   bias_flagged:      number
   calibration_score: number | null
+  // R8b — divergência (0–1) e flag de recalibração recomendada (sinal, não auto-mutação)
+  divergence?:                 number | null
+  recalibration_recommended?:  boolean
 }
 
 export interface CalibrationSummary {
@@ -1101,6 +1104,7 @@ export interface CalibrationSummary {
   recalibrated:      number
   bias_flagged:      number
   calibration_score: number | null
+  recalibration_recommended_count?: number
 }
 
 export interface CalibrationResult {

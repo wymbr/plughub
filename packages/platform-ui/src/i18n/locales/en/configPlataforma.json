@@ -12,6 +12,7 @@
     "routingTimeouts": "Routing & Timeouts",
     "consumer":        "Consumer Analytics",
     "dataRetention":   "Data Retention",
+    "evaluation":      "Evaluation",
     "sentimento":      "Sentiment",
     "calendar":        "Calendars",
     "routing":         "Routing Skills"
@@ -19,7 +20,8 @@
   "nsDesc": {
     "routingTimeouts": "SLA, snapshot TTL, and component heartbeat TTLs",
     "consumer":        "Kafka consumer settings for analytics-api",
-    "dataRetention":   "Retention periods for recordings and attachments"
+    "dataRetention":   "Retention periods for recordings and attachments",
+    "evaluation":      "Evaluation platform: evaluator pool, replay speed, and calibration divergence trigger (threshold + min sample)"
   },
   "namespace": {
     "title":            "Namespaces",
