@@ -189,6 +189,11 @@ steps:
   #      se uma nota contradiz calibração prévia, justificar explicitamente
   #   6. Calcular overall_score como média ponderada dos critérios avaliados (na=false)
   #   7. Produzir highlights, improvement_points, compliance_flags
+  #   8. Critérios de IA tier-2 (tool correctness / policy adherence): pontuar com
+  #      base em tool_trace (chamadas reais), flow_definition (trajetória esperada)
+  #      e actual_trajectory (pipeline_state.transitions). Se a evidência estiver
+  #      ausente (tool_trace=[] ou actual_trajectory=null), marcar o critério na=true
+  #      (não penalizar o agente por dado indisponível — decisão D).
   - id:         evaluate
     type:       reason
     # T8-B2 — prompt_id é vestigial (o ai-gateway é stateless/genérico e NÃO resolve
@@ -222,6 +227,17 @@ steps:
       sentiment_timeline:  "$.pipeline_state.eval_context.context.sentiment"
       # Participantes (quem era agent, quem era customer)
       participant_summary: "$.pipeline_state.eval_context.participant_summary"
+      # ── R5/R6 — evidência de execução para critérios de IA (tier-2) ──────────
+      # tool_trace: chamadas mcp.tool_call da sessão (tool_name, allowed,
+      #   injection_detected, duration_ms) em ordem cronológica → tool correctness.
+      # flow_definition: trajetória ESPERADA (definição do skill-flow executado).
+      # actual_trajectory: trajetória REAL (pipeline_state.transitions). Comparar
+      #   esperado × real = policy adherence. Pode ser null/[] (→ critério `na`).
+      # Use estas evidências SOMENTE nos critérios que as referenciam (tool
+      # correctness, policy adherence); critérios de transcript ignoram-nas.
+      tool_trace:          "$.pipeline_state.eval_context.tool_trace"
+      flow_definition:     "$.pipeline_state.eval_context.flow_definition"
+      actual_trajectory:   "$.pipeline_state.eval_context.context.pipeline_state"
       # Modo comparativo — o LLM deve comparar replay com produção se true
       comparison_mode:     "$.pipeline_state.eval_context.comparison_mode"
     output_schema:

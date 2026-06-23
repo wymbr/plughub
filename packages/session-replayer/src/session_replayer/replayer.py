@@ -51,12 +51,16 @@ class Replayer:
         evaluator_pool:  str          = "avaliador_qualidade",
         default_speed:   float        = 10.0,
         context_ttl:     int          = REPLAY_CONTEXT_TTL,
+        pipeline_fetcher: Any         = None,
     ) -> None:
         self._redis          = redis_client
         self._hydrator       = hydrator
         self._evaluator_pool = evaluator_pool
         self._default_speed  = default_speed
         self._context_ttl    = context_ttl
+        # R5/B — PipelineStatePersister (durable trajectory fetch). Optional so the
+        # Replayer degrades gracefully when not wired (pipeline_state stays None → na).
+        self._pipeline_fetcher = pipeline_fetcher
 
     async def prepare(
         self,
@@ -101,6 +105,7 @@ class Replayer:
         session_meta  = await self._read_session_meta(session_id, event)
         sentiment     = await self._read_sentiment(session_id)
         participants  = await self._read_participants(session_id)
+        pipeline_state = await self._read_pipeline_state(session_id, tenant_id)
 
         # ── 4. Constrói ReplayContext ─────────────────────────────────────────
         evaluation_id = str(uuid.uuid4())
@@ -121,6 +126,8 @@ class Replayer:
             evaluation_form = evaluation_form,
             campaign_id     = campaign_id,
             instance_id     = instance_id,
+            # R5/B — actual skill-flow trajectory (durable snapshot; None → na)
+            pipeline_state  = pipeline_state,
         )
 
         # ── 5. Persiste ReplayContext no Redis ────────────────────────────────
@@ -317,6 +324,25 @@ class Replayer:
         except Exception:
             pass
         return []
+
+    async def _read_pipeline_state(
+        self,
+        session_id: str,
+        tenant_id:  str,
+    ) -> dict[str, Any] | None:
+        """
+        R5/B — recupera a trajetória REAL do skill-flow (durável → fallback Redis).
+        Best-effort: qualquer falha/ausência devolve None (policy adherence vira na).
+        """
+        if self._pipeline_fetcher is None:
+            return None
+        try:
+            return await self._pipeline_fetcher.fetch(session_id, tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "Replayer: failed to read pipeline_state for %s: %s", session_id, exc
+            )
+            return None
 
     # ─────────────────────────────────────────
     # Utils

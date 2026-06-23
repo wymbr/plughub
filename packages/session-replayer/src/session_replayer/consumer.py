@@ -30,6 +30,7 @@ from .models import EvaluationRequest, SessionClosedEvent
 from .replayer import Replayer, REPLAY_CONTEXT_TTL
 from .stream_hydrator import StreamHydrator, StreamNotAvailableError, HYDRATION_TTL_SECONDS
 from .stream_persister import StreamPersister
+from .pipeline_persister import PipelineStatePersister
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +165,11 @@ class SessionReplayerConsumer:
         )
         await self._producer.start()
 
-        # Garante tabela PostgreSQL
+        # Garante tabelas PostgreSQL
         persister = StreamPersister(self._redis, self._pg_pool)
         await persister.ensure_schema()
+        pipeline_persister = PipelineStatePersister(self._redis, self._pg_pool)
+        await pipeline_persister.ensure_schema()
 
         logger.info("SessionReplayerConsumer: starting consumers")
         await asyncio.gather(
@@ -226,6 +229,19 @@ class SessionReplayerConsumer:
             logger.error("Persister: failed for session %s: %s", event.session_id, exc)
             return
 
+        # R5/B — snapshot durável da trajetória do skill-flow (pipeline_state).
+        # Best-effort e independente do Stream Persister: falha aqui não deve
+        # impedir a persistência do stream (já concluída acima).
+        try:
+            pipeline_persister = PipelineStatePersister(self._redis, self._pg_pool)
+            await pipeline_persister.ensure_schema()
+            await pipeline_persister.persist(event.session_id, event.tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "Persister: pipeline_state snapshot failed for session %s: %s",
+                event.session_id, exc,
+            )
+
         # NOTA (S2.1 — modelo campaign-driven): o Persister NÃO dispara mais
         # `evaluation.requested` no fechamento. Avaliação é dirigida por CAMPANHA:
         # a evaluation-api amostra a sessão (cria EvaluationInstance=scheduled) e um
@@ -273,11 +289,13 @@ class SessionReplayerConsumer:
 
         hydrator = StreamHydrator(self._redis, self._pg_pool, ttl=self._hydration_ttl)
         replayer = Replayer(
-            redis_client   = self._redis,
-            hydrator       = hydrator,
-            evaluator_pool = req.evaluator_pool,
-            default_speed  = req.speed_factor,
-            context_ttl    = self._replay_context_ttl,
+            redis_client     = self._redis,
+            hydrator         = hydrator,
+            evaluator_pool   = req.evaluator_pool,
+            default_speed    = req.speed_factor,
+            context_ttl      = self._replay_context_ttl,
+            # R5/B — durable trajectory fetch for ReplayContext.pipeline_state
+            pipeline_fetcher = PipelineStatePersister(self._redis, self._pg_pool),
         )
 
         # Reconstrói o SessionClosedEvent mínimo necessário para o Replayer

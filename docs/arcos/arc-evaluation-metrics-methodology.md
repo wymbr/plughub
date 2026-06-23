@@ -31,7 +31,7 @@ componentes existem como **código órfão** (definido, não chamado).
 | `SessionMetricsExtractor.extract()`, `compute_auto_criterion_score()`, `fill_auto_computed_criteria()` | `session_metrics_extractor.py` | ⚠️ **órfão — nunca chamado** |
 | Condicionamento de critério `applies_when` + `na_guidance` | `schemas`, `FormsPage.tsx`, `prompt_composer.py` | ✅ existe (resolvido pelo LLM) |
 | `session_meta.channel` no contexto do avaliador | `session-replayer/replayer.py` | ✅ populado (default `webchat`) |
-| Trace de tool-calls (`mcp.audit`) no contexto do avaliador | `session-replayer`, `evaluation_context_get` | ❌ **ausente** |
+| Trace de tool-calls (`mcp.audit`) no contexto do avaliador | `session-replayer`, `evaluation_context_get` | ✅ **fiado (R5)** — `tool_trace` (analytics-api `GET /v1/audit/mcp-calls?session_id`) + `flow_definition` (agent-registry) + `pipeline_state` real (tabela `session_pipeline_state`, R5/B) |
 | `AuditRecord.input_snapshot`/`output_snapshot` | `schemas/audit.ts` | ✅ no schema, gated por `AuditPolicy.capture_input/output` (default false) |
 
 **Consequência prática do órfão:** um critério `auto_computed` adicionado a um formulário hoje
@@ -214,6 +214,11 @@ genérico. Esta parte define o que adicionar.
   aconteceu por baixo do texto.
 
 ## II.4 Enabler do Tier 2 — o trace de ferramenta (3 camadas)
+
+> **Status (2026-06-23): ✅ fiado (R5).** A lacuna de fiação (1, abaixo) foi fechada: `tool_trace`
+> (campos sempre-gravados) + `flow_definition` (esperada) + `pipeline_state` real (durável via
+> `session_pipeline_state`, R5/B) chegam ao avaliador. Restam condicionais à `AuditPolicy`:
+> `input_snapshot` (argument correctness) e `output_snapshot` (faithfulness-vs-ferramenta) → R7.
 
 1. **Lacuna de fiação (principal).** O `ReplayContext` é montado só do stream canônico +
    `session_meta` + sentiment + participants + form + knowledge + calibration. O session-replayer
@@ -641,8 +646,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R2** | Gate determinístico de canal no `auto_computed`: condição estruturada (molde `sectionApplies`) no `fill_auto_computed_criteria` (hoje ignora `applies_when`) | `session_metrics_extractor.py` | D |
 | **R3** | Persistir as séries (`agent_response_latencies_s`, `inter_message_gaps_s`) no `session_metrics` JSONB | `session_metrics_extractor.py` | B |
 | **R4** | Completar o catálogo I.3 no extractor (faltam derivados p90/median, `max_consecutive_agent_messages`, `step_*`, `required_fields_captured_pct`, sentimento) nos **dois escopos** (contato + segmento) | `session_metrics_extractor.py` | A |
-| **R5** | **Tier-2 enabler:** buscar `tool_trace[]` do `mcp_audit_log` (via analytics-api `GET /mcp-calls`) para o `ReplayContext` / `evaluation_context_get` | session-replayer + mcp-server | II.4 |
-| **R6** | Dimensões qualitativas de IA como critérios de 1ª classe: **tool correctness**, **policy adherence** (trajetória `pipeline_state` × skill-flow), **faithfulness-vs-KB** | form templates + skill `agente_avaliacao_v1` | II.2 |
+| **R5** ✅ | **Tier-2 enabler.** (a) analytics-api `GET /v1/audit/mcp-calls` ganha filtro `session_id` (ASC); (b) `evaluation_context_get` devolve `tool_trace` (analytics-api) + `flow_definition` (trajetória esperada, agent-registry `GET /v1/skills/:flow_id`); (c) **R5/B** — `PipelineStatePersister` (session-replayer) snapshota o `pipeline_state` no `session_closed` → tabela durável `session_pipeline_state` (substrato R4); `ReplayContext.pipeline_state` = trajetória REAL (PG→fallback Redis vivo; ausente→`na`). Sem input/output snapshot (isso é R7). Teste `tests/test_pipeline_persister.py` + smoke `infra/test/test_r5_tier2_smoke.sh` | session-replayer + mcp-server + analytics-api | II.4 |
+| **R6** ✅ | Dimensões de IA como critérios `type=score` 1ª classe (fluem ao output-schema via `buildEvaluationOutputSchema`, sem cirurgia): `agente_avaliacao_v1.yaml` passa `tool_trace`/`flow_definition`/`actual_trajectory` ao `reason` e instrui uso + `na`-quando-ausente. Form-semente "Avaliação de IA (tier-2)" via API oficial (`infra/test/seed_ai_eval_form.sh`): tool correctness, policy adherence, faithfulness-vs-KB | skill `agente_avaliacao_v1` + form seed | II.2 |
 | **R7a** | **Fix de segurança + baseline:** aplicar masking ao `output_snapshot` no `McpInterceptor` (hoje cru — vazamento) + `masked_categories`; habilita tool/argument correctness + faithfulness **não-PII**; `capture_output` opt-in por tool, `retention_days` curto p/ PII | sdk `mcp-interceptor.ts` + audit | II.5 |
 | **R7b** | **Faithfulness-PII (tier estendido, deferido):** vault de `output_snapshot` original p/ papéis autorizados + `requires_consent` + retenção limitada | audit/Core + config | II.5 |
 | **R7c** | **Reveal campo-mínimo transiente:** critério declara o campo verificável (`output.*`); reveal escopado just-in-time + auditado; resultado guarda só veredito + evidência mascarada (PII não entra no store de avaliação) | evaluation-api + skill avaliador | II.5 |
@@ -671,6 +676,11 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
   no início (da sessão); backfill passa a lê-lo. Alinha com o externo (`channel` no `QualityContact`).
 - **Política LGPD de `output_snapshot`** — ✅ design fechado em §II.5 (fix do masking de output +
   masked+original + reveal campo-mínimo transiente); implementação em R7a–c.
+- **Durabilidade da trajetória REAL (policy adherence)** — ✅ fechado (B contido, R5/B): o
+  `pipeline_state` só vive no Redis (TTL 24h) e não vai ao stream → snapshot no `session_closed`
+  para a tabela `session_pipeline_state` (session-replayer), em vez de best-effort Redis no
+  eval-time (A). Robusto a eval tardio/backfill; substrato durável reaproveitável pelo R4. Sessões
+  fechadas **antes** do ship seguem sem trajetória → `na` (decisão D). Implementado.
 - **Saudação por step nomeado** — ✅ fechado: o proxy (1ª msg do agente) é o default;
   `time_to_first_agent_message_s` usa âncora de step nomeado **se a skill tiver** (oportunístico),
   sem instrumentação obrigatória.

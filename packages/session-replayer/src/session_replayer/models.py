@@ -84,6 +84,17 @@ class ReplayContext(BaseModel):
     #: EvaluationInstance tracking record ID (Arc 6).
     instance_id:     Optional[str]            = None
 
+    # ── R5/B — actual skill-flow trajectory (policy adherence) ─────────────────
+
+    #: Snapshot durável do pipeline_state capturado no fechamento (PipelineStatePersister).
+    #: Shape: {flow_id, status, current_step_id, transitions[], retry_counters,
+    #: error_context, source}. None quando não houve skill-flow / a trajetória não
+    #: está disponível (eval antes do ship do persister) → o avaliador marca o
+    #: critério de policy adherence como `na` e re-normaliza o peso (decisão D).
+    #: A trajetória ESPERADA (definição do flow) é buscada no agent-registry pelo
+    #: evaluation_context_get a partir de pipeline_state.flow_id.
+    pipeline_state:  Optional[dict[str, Any]] = None
+
 
 # ─────────────────────────────────────────────
 # EvaluationRequest

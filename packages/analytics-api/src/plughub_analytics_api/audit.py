@@ -136,14 +136,29 @@ def _fetch_mcp_calls(
     tenant_id:   str,
     limit:       int,
     masked_only: bool,
+    session_id:  str | None = None,
 ) -> list[dict]:
     """
     Query session_timeline for mcp.tool_call events, extract audit fields from
     the packed JSON payload. Returns records matching the McpCall interface.
 
+    When session_id is provided, results are scoped to that session — this is the
+    path used by the evaluator (R5: tool_trace) to fetch only the calls of the
+    session under evaluation, in chronological order (ASC).
+
     Note: masked_input_fields is not yet persisted (Fase 2 pending).
     All returned rows carry masked_input_fields=[].
     """
+    params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+    session_filter = ""
+    # When scoped to a session, order ASC so the evaluator reads the tool calls in
+    # the order they happened (trajectory evidence); otherwise newest-first.
+    order_clause = "ORDER BY timestamp DESC"
+    if session_id:
+        session_filter = "AND session_id = {session_id:String}"
+        params["session_id"] = session_id
+        order_clause = "ORDER BY timestamp ASC"
+
     result = client.query(
         f"""
         SELECT
@@ -155,10 +170,11 @@ def _fetch_mcp_calls(
         FROM {db}.session_timeline FINAL
         WHERE tenant_id  = {{tenant_id:String}}
           AND event_type = 'mcp.tool_call'
-        ORDER BY timestamp DESC
+          {session_filter}
+        {order_clause}
         LIMIT {{limit:UInt32}}
         """,
-        parameters={"tenant_id": tenant_id, "limit": limit},
+        parameters=params,
     )
 
     rows = []
@@ -192,6 +208,7 @@ def _fetch_mcp_calls(
 async def audit_mcp_calls(
     request:     Request,
     tenant_id:   str  = Query("tenant_demo"),
+    session_id:  str | None = Query(None, description="Scope to one session (R5 tool_trace)."),
     limit:       int  = Query(100, ge=1, le=1000),
     masked_only: bool = Query(False),
     principal:   PoolPrincipal = Depends(optional_pool_principal),
@@ -200,6 +217,9 @@ async def audit_mcp_calls(
     Returns MCP tool call audit records for a tenant.
     Gate: module_config.audit.mcp_calls (ABAC) or analytics_open_access.
     Sourced from session_timeline (event_type = 'mcp.tool_call').
+
+    When session_id is provided, results are scoped to that session and ordered
+    chronologically — the path the evaluator uses to build tool_trace (R5).
     """
     effective_tenant = principal.tenant_id or tenant_id
     store = _store(request)
@@ -207,7 +227,7 @@ async def audit_mcp_calls(
         calls = await asyncio.to_thread(
             _fetch_mcp_calls,
             store.new_client(), store._database,
-            effective_tenant, limit, masked_only,
+            effective_tenant, limit, masked_only, session_id,
         )
         return JSONResponse(content={"calls": calls, "total": len(calls)})
     except Exception as exc:

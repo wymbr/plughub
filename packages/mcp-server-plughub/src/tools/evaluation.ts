@@ -35,6 +35,10 @@ export interface EvaluationDeps {
   skillRegistryUrl: string
   /** URL da evaluation-api para evaluation_lock (Arc 6 v2) */
   evaluationApiUrl?: string
+  /** URL da analytics-api — R5: tool_trace (GET /v1/audit/mcp-calls?session_id) */
+  analyticsApiUrl?: string
+  /** URL do agent-registry — R5: trajetória esperada (GET /v1/skills/:flow_id → flow.steps) */
+  agentRegistryUrl?: string
 }
 
 // ─── Schemas de input ─────────────────────────────────────────────────────────
@@ -676,6 +680,9 @@ const EvaluationLockInputSchema = z.object({
 
 export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps): void {
   const { kafka, postgres, redis, proxyUrl, skillRegistryUrl, evaluationApiUrl } = deps
+  // R5 — tool_trace + expected-trajectory enrichment sources (optional; degrade gracefully).
+  const analyticsApiUrl  = deps.analyticsApiUrl  ?? process.env["ANALYTICS_API_URL"]    ?? "http://localhost:3500"
+  const agentRegistryUrl = deps.agentRegistryUrl ?? process.env["AGENT_REGISTRY_URL"]   ?? "http://localhost:3300"
 
   // ── transcript_get ────────────────────────────────────────────────────────
   server.tool(
@@ -1032,6 +1039,64 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           }
         }
 
+        // ── R5: tool_trace — evidência de execução (tool correctness) ─────────
+        // Busca os mcp.tool_call da sessão (analytics-api, escopo session_id, ordem
+        // cronológica). Campos sempre-gravados: tool_name, allowed, injection_detected,
+        // duration_ms (sem input/output snapshot — isso é R7). Degrada para [].
+        let toolTrace: unknown[] = []
+        if (analyticsApiUrl) {
+          try {
+            const trRes = await fetch(
+              `${analyticsApiUrl}/v1/audit/mcp-calls?tenant_id=${encodeURIComponent(tenant_id)}` +
+              `&session_id=${encodeURIComponent(session_id)}&limit=500`,
+            )
+            if (trRes.ok) {
+              const trData = await trRes.json() as { calls?: unknown[] }
+              toolTrace = trData.calls ?? []
+            }
+          } catch (err) {
+            console.warn("evaluation_context_get: failed to fetch tool_trace", err)
+          }
+        }
+
+        // ── R5: flow_definition — trajetória ESPERADA (policy adherence) ──────
+        // A trajetória REAL já vem em context.pipeline_state (R5/B, session-replayer).
+        // Aqui buscamos a definição do flow executado (flow_id) no agent-registry para
+        // o avaliador comparar esperado × real. Degrada para null.
+        let flowDefinition: unknown = null
+        const pipelineState = context["pipeline_state"]
+        const flowId =
+          pipelineState && typeof pipelineState === "object"
+            ? (pipelineState as Record<string, unknown>)["flow_id"]
+            : undefined
+        if (typeof flowId === "string" && flowId.length > 0 && agentRegistryUrl) {
+          try {
+            const skRes = await fetch(
+              `${agentRegistryUrl}/v1/skills/${encodeURIComponent(flowId)}`,
+              { headers: { "x-tenant-id": tenant_id } },
+            )
+            if (skRes.ok) {
+              const sk = await skRes.json() as Record<string, unknown>
+              // Surface só o necessário p/ comparar trajetória: entry + steps (id/type/edges).
+              flowDefinition = {
+                skill_id: sk["skill_id"] ?? flowId,
+                version:  sk["version"] ?? null,
+                flow:     sk["flow"] ?? null,
+              }
+            }
+          } catch (err) {
+            console.warn("evaluation_context_get: failed to fetch flow_definition", err)
+          }
+        }
+
+        // R5 — diagnóstico (sem PII): o que a evidência de execução trouxe.
+        console.warn(
+          `evaluation_context_get evidence: session=${session_id} ` +
+          `tool_trace=${Array.isArray(toolTrace) ? toolTrace.length : "n/a"} ` +
+          `flow_definition=${flowDefinition ? "present" : "null"} ` +
+          `pipeline_state=${context["pipeline_state"] ? "present" : "absent"}`
+        )
+
         return ok({
           session_id,
           participant_id,
@@ -1046,6 +1111,11 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
           // T8-B2: instruções gerais (rubrica-template efetiva) — fonte do prompt do avaliador
           rubric_instructions: rubricInstructions,
           rubric_source:       rubricSource,
+          // R5: execution evidence for AI tier-2 criteria (tool correctness, policy
+          // adherence). tool_trace = mcp.tool_call da sessão; flow_definition = trajetória
+          // esperada. A trajetória real está em context.pipeline_state.
+          tool_trace:      toolTrace,
+          flow_definition: flowDefinition,
         })
       } catch (e) {
         return handleCaughtError(e)

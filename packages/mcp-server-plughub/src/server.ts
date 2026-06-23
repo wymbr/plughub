@@ -86,6 +86,8 @@ export function createServer(allDeps?: AllDeps): McpServer {
     postgres:         createPostgresClient(),
     proxyUrl:         process.env["MCP_PROXY_URL"]      ?? "http://localhost:7422",
     skillRegistryUrl: process.env["SKILL_REGISTRY_URL"] ?? "http://localhost:3400",
+    analyticsApiUrl:  process.env["ANALYTICS_API_URL"]  ?? "http://localhost:3500",
+    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
   }
 
   const bpmDeps: BpmDeps = { kafka, redis }
@@ -915,6 +917,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
     postgres,
     proxyUrl:         process.env["MCP_PROXY_URL"]      ?? "http://localhost:7422",
     skillRegistryUrl: process.env["SKILL_REGISTRY_URL"] ?? "http://localhost:3400",
+    analyticsApiUrl:  process.env["ANALYTICS_API_URL"]  ?? "http://localhost:3500",
+    agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
   }
 
   // Map sessionId → transport para suportar conexões simultâneas.

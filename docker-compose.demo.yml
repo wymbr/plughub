@@ -584,6 +584,7 @@ services:
       JWT_SECRET: demo_plughub_secret_32chars__
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
+      ANALYTICS_API_URL: http://analytics-api:3500   # R5 — tool_trace via GET /v1/audit/mcp-calls
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800

@@ -541,6 +541,8 @@ Pattern: ensure-before-read with optional Hydrator. Pipeline: `session_closed` �
 
 `ReplayContext` extended for Arc 6: `evaluation_form`, `campaign_context`, `knowledge_snippets` (top-5). **Comparison Mode**: `comparison_turns` with Jaccard similarity (threshold 0.4); `buildComparisonReport()` with divergence_points. `ReplayEvent.delta_ms` preserves original intervals; `speed_factor` scales timing (default 10x batch).
 
+**R5/B — tier-2 de IA (evidência de execução):** no `session_closed`, além do Stream Persister, o **`PipelineStatePersister`** snapshota o `pipeline_state` (transitions) na tabela durável **`session_pipeline_state`** (a trajetória real não vai ao stream e o Redis tem TTL 24h; substrato reaproveitável pelo R4). `ReplayContext.pipeline_state` = trajetória REAL (PG→fallback Redis; ausente→`na`). `evaluation_context_get` injeta `tool_trace` (analytics-api `GET /v1/audit/mcp-calls?session_id`) + `flow_definition` (trajetória esperada, agent-registry `GET /v1/skills/:flow_id`). Sem input/output snapshot (R7).
+
 → See [`docs/arcos/session-replayer.md`](docs/arcos/session-replayer.md), [`docs/adr/adr-session-replayer.md`](docs/adr/adr-session-replayer.md)
 
 ---
@@ -781,7 +783,7 @@ Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicaçã
 
 ---
 
-## Métricas de Avaliação & Metodologia ⚠️ design fechado — implementação PENDENTE
+## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R9–R12 ✅, demais PENDENTE
 
 Define **o que o avaliador mede e como** (distinto de revisão/contestação, Arc 13). Duas trilhas.
 

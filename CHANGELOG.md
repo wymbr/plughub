@@ -2,6 +2,48 @@
 
 ---
 
+## R5 + R6 — Tier-2 de IA: evidência de execução no avaliador (2026-06-23)
+
+Habilita o avaliador a julgar o que a IA **fez** (não só o que disse): tool correctness, policy
+adherence e faithfulness-vs-KB. Escopo limpo, sem depender do R7 (sem input/output snapshot).
+
+**R5 — fiação da evidência ao `ReplayContext`/`evaluation_context_get`:**
+- **analytics-api** (`audit.py`): `GET /v1/audit/mcp-calls` ganha filtro **`session_id`** (ordem
+  cronológica ASC quando escopado) — base do `tool_trace`. Compat mantida (sem `session_id` =
+  escopo tenant, DESC).
+- **mcp-server-plughub** (`tools/evaluation.ts` + `server.ts`): `evaluation_context_get` passa a
+  devolver dois campos irmãos — **`tool_trace`** (mcp.tool_call da sessão via analytics-api) e
+  **`flow_definition`** (trajetória ESPERADA via agent-registry `GET /v1/skills/:flow_id`, resolvido
+  do `pipeline_state.flow_id`). `EvaluationDeps` ganha `analyticsApiUrl`/`agentRegistryUrl`
+  (`ANALYTICS_API_URL`=3500, `AGENT_REGISTRY_URL`=3300). Degrada para `[]`/`null` em erro.
+
+**R5/B — trajetória REAL durável (policy adherence):** o `pipeline_state` (com `transitions[]`) só
+vivia no Redis (TTL 24h) e não vai ao stream → some no eval tardio/backfill. Novo
+**`PipelineStatePersister`** (session-replayer) faz **snapshot no `session_closed`** para a tabela
+PG **`session_pipeline_state`** (upsert idempotente; substrato durável reaproveitável pelo R4).
+`ReplayContext.pipeline_state` lê do PG (fallback Redis vivo); ausente → critério vira `na`
+(decisão D). A ESPERADA vem do agent-registry; o avaliador compara esperado × real.
+
+**R6 — critérios de IA como 1ª classe:** são critérios `type=score` (fluem para o output-schema do
+avaliador via `buildEvaluationOutputSchema`, sem cirurgia de schema). `agente_avaliacao_v1.yaml`
+passa `tool_trace`/`flow_definition`/`actual_trajectory` ao step `reason` e instrui o uso (com `na`
+quando a evidência falta). Form-semente **"Avaliação de IA (tier-2)"** provisionado via API oficial:
+`infra/test/seed_ai_eval_form.sh` (3 critérios com `scoring_guidance` apontando a evidência).
+
+**Verificação (docker-demo, tudo verde):** unit `packages/session-replayer/tests/test_pipeline_persister.py`
+(persist/upsert, fallback PG→Redis, ausência→None); round-trip real R5/B (Redis→persist→PG→fetch
+`source=postgres`); smoke `infra/test/test_r5_tier2_smoke.sh` (filtro `session_id` discrimina + ordem
+ASC, compat DESC); **e2e `infra/test/test_r6_ai_eval_e2e.sh`** — avaliador real pontuou `tool_correctness=10`
+e `policy_adherence=4` (na=false) usando `tool_trace`+`actual_trajectory`×`flow_definition`, `faithfulness_kb=na`
+(sem KB). Log diagnóstico `evaluation_context_get evidence:` confirma a entrega. **Nota operacional:** o flow do
+avaliador é cacheado em memória pela `routing-engine`/`skill-flow-service` — editar o YAML exige `restart`
+desses serviços (ou hot-reload via `registry.changed`); rebuild de imagem não basta.
+
+**Fora de escopo (R7):** argument correctness (`input_snapshot`) e faithfulness-vs-ferramenta
+(`output_snapshot`) seguem pendentes — exigem `capture_input/output` + fix de masking de output.
+
+---
+
 ## R11 — UI de % por-agente (cota) no editor de campanha (2026-06-22)
 
 Fecha o trio de amostragem (R10/R11/R12). O backend de `%` por-agente já existia (consumido pelo
