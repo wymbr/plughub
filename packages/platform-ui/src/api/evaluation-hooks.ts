@@ -166,6 +166,118 @@ export async function createRubricTemplate(
   return r.json()
 }
 
+// ─── R8c — blind-stage curation (re-score sem ver a IA → reveal + diff) ─────────
+
+export interface BlindDimScore { dimension_id: string; score: number }
+
+export interface BlindDimensionDiff {
+  dimension_id: string
+  ai_score:     number | null
+  human_score:  number | null
+  diff:         number | null
+  disagree:     boolean
+}
+
+export interface BlindResult {
+  id:                  string
+  blind_overall_score: number | null
+  blind_by_dimension:  BlindDimScore[]
+  ai_overall_score:    number | null
+  ai_by_dimension:     BlindDimScore[]
+  per_dimension_diffs: BlindDimensionDiff[]
+  created_at:          string
+}
+
+export interface BlindFormCriterion {
+  criterion_id:   string
+  label?:         string
+  name?:          string
+  type?:          string
+  weight?:        number
+  min_score?:     number
+  max_score?:     number
+  choice_scores?: Record<string, number>
+  na_allowed?:    boolean
+  allow_na?:      boolean
+  allows_na?:     boolean
+}
+
+export interface BlindFormDimension {
+  dimension_id: string
+  label?:       string
+  name?:        string
+  weight?:      number
+  criteria?:    BlindFormCriterion[]
+}
+
+export interface BlindContext {
+  review:           CurationReview
+  form:             { name?: string; dimensions?: BlindFormDimension[] } | null
+  result_id:        string | null
+  session_id:       string | null
+  instance_id:      string | null
+  already_rescored: boolean
+  blind_result:     BlindResult | null
+}
+
+export interface BlindCriterionResponse {
+  criterion_id:   string
+  score?:         number
+  boolean_value?: boolean
+  choice_value?:  string
+  text_value?:    string
+  na?:            boolean
+}
+
+export interface BlindRescoreReveal {
+  blind_result:        BlindResult
+  severity_min:        number
+  ai_overall_score:    number | null
+  blind_overall_score: number | null
+  per_dimension_diffs: BlindDimensionDiff[]
+}
+
+/** GET blind-context — form to re-score + transcript pointers, WITHOUT the AI scores. */
+export async function getBlindContext(reviewId: string, tenantId: string): Promise<BlindContext> {
+  const r = await fetch(`${BASE}/curations/${reviewId}/blind-context`, {
+    headers: { 'X-Tenant-ID': tenantId },
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+/** POST blind-rescore — submit the blind responses → reveal AI score + per-dimension diff. */
+export async function blindRescore(
+  reviewId: string,
+  tenantId: string,
+  userId: string,
+  criterionResponses: BlindCriterionResponse[],
+): Promise<BlindRescoreReveal> {
+  const r = await fetch(`${BASE}/curations/${reviewId}/blind-rescore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId },
+    body: JSON.stringify({ criterion_responses: criterionResponses }),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
+/** POST blind-resolve — disagreements → CalibrationNote(s) + calibration.events; resolve the review. */
+export async function blindResolve(
+  reviewId: string,
+  tenantId: string,
+  userId: string,
+  body: { curator_notes?: string; severity?: string; flag_bias?: boolean },
+): Promise<{ review: CurationReview; status: string; disagreements: number; calibration_notes: unknown[] }> {
+  const r = await fetch(`${BASE}/curations/${reviewId}/blind-resolve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
+  return r.json()
+}
+
 export async function updateRubricTemplate(
   rubricId: string, tenantId: string, body: { name?: string; body?: string },
 ): Promise<RubricTemplate> {
@@ -1186,6 +1298,11 @@ export interface CurationReview {
     evaluator_id:  string
     skill_version: string
   } | null
+  // R8c — blind-stage curation
+  mode?:          'standard' | 'blind'
+  deadline_at?:   string | null
+  expired_at?:    string | null
+  skill_version?: string | null
   created_at:  string
   resolved_at: string | null
 }

@@ -480,6 +480,15 @@ async def _run_deadline_scanner(app: FastAPI) -> None:
                 )
                 if res is not None:
                     logger.info("deadline scanner finalized result=%s reason=%s", r["id"], reason)
+
+            # R8c — SLA SOFT da curadoria cega: marca reviews cegas pendentes vencidas
+            # como expiradas (informativo; NÃO altera a avaliação). Idempotente.
+            try:
+                n_expired = await _db.expire_overdue_blind_reviews(pool)
+                if n_expired:
+                    logger.info("deadline scanner: %s blind curation review(s) soft-expired", n_expired)
+            except Exception as exc:
+                logger.error("blind SLA expiry error (non-fatal): %s", exc)
         except Exception as exc:
             logger.error("deadline scanner error: %s", exc)
 

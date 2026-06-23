@@ -157,3 +157,54 @@ def aggregate_scores(
 
     overall = round(ows / ow, 3) if ow > 0 else None
     return overall, by_dimension
+
+
+def compute_dimension_diffs(
+    ai_by_dim: list[dict[str, Any]],
+    human_by_dim: list[dict[str, Any]],
+    severity_min: float,
+) -> list[dict[str, Any]]:
+    """R8c — diff por dimensão entre a nota da IA e a re-pontuação cega do humano.
+
+    Entradas no formato de `aggregate_scores` (`[{dimension_id, score}]`, score 0..10).
+    `diff` é normalizado para 0..1 (`|ai-human|/10`) p/ comparar com `severity_min`
+    (limiar de desacordo). Dimensão presente em só um lado → sem comparação
+    (`diff=None`, `disagree=False`: é `na`, não discordância). União das dimensões,
+    ordem estável (IA primeiro, depois extras do humano).
+    """
+    ai = {d["dimension_id"]: float(d.get("score") or 0.0)
+          for d in ai_by_dim if d.get("dimension_id")}
+    hu = {d["dimension_id"]: float(d.get("score") or 0.0)
+          for d in human_by_dim if d.get("dimension_id")}
+
+    ordered: list[str] = list(ai.keys()) + [d for d in hu if d not in ai]
+
+    out: list[dict[str, Any]] = []
+    for dim in ordered:
+        a_present, h_present = dim in ai, dim in hu
+        a, h = ai.get(dim), hu.get(dim)
+        if a_present and h_present:
+            diff = abs(a - h) / 10.0
+            disagree = diff > severity_min
+        else:
+            diff, disagree = None, False
+        out.append({
+            "dimension_id": dim,
+            "ai_score":     round(a, 3) if a_present else None,
+            "human_score":  round(h, 3) if h_present else None,
+            "diff":         round(diff, 4) if diff is not None else None,
+            "disagree":     disagree,
+        })
+    return out
+
+
+def blind_resolution_status(disagreement_count: int, flag_bias: bool) -> str:
+    """R8c — status terminal da curadoria cega a partir do diff revelado.
+
+    Sem desacordo → ``approved`` (concorda com a IA, nenhuma `CalibrationNote`).
+    Com desacordo → ``recalibrated`` (gera nota[s]) ou ``bias_flagged`` se o curador
+    sinalizar viés (severidade alta). Reusa o domínio de status da `curation_reviews`.
+    """
+    if disagreement_count <= 0:
+        return "approved"
+    return "bias_flagged" if flag_bias else "recalibrated"

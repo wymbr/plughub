@@ -563,6 +563,61 @@ CREATE TABLE IF NOT EXISTS evaluation.rubric_template_versions (
 );
 CREATE INDEX IF NOT EXISTS idx_evrubricversions_tenant
     ON evaluation.rubric_template_versions (tenant_id, rubric_id, version DESC);
+
+-- ── R8c — Curadoria cega-primeiro (Estágio 2, §III.4) ─────────────────────────
+-- A curadoria do avaliador IA ganha um MODO CEGO: o curador re-pontua o MESMO form
+-- sem ver a nota da IA → reveal + diff por dimensão. A nota cega é um ARTEFATO DE
+-- CALIBRAÇÃO — NUNCA altera evaluation.results.final_score nem re-emite
+-- evaluation_finalized (decisão 2026-06-23): corrige avaliações FUTURAS via
+-- CalibrationNote→KB→RAG e alimenta a divergência (R8b), não esta avaliação.
+--   mode          — discrimina a tarefa do curador ('standard' = approve/recalibrate/bias
+--                   por texto livre, fluxo Arc 13; 'blind' = re-pontuação cega R8c).
+--   deadline_at   — SLA SOFT do curador. Expirar = higiene de fila (sem consequência
+--                   para a avaliação), distinto do timeout do revisor de contestação
+--                   (que trava a nota como não-revisada).
+--   expired_at    — carimbo informativo de expiração do SLA soft.
+--   skill_version — versão avaliada (chave de divergência por versão / estratos de amostragem).
+ALTER TABLE evaluation.curation_reviews
+    ADD COLUMN IF NOT EXISTS mode          TEXT NOT NULL DEFAULT 'standard',
+    ADD COLUMN IF NOT EXISTS deadline_at   TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS expired_at    TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS skill_version TEXT;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='curation_reviews_mode_check') THEN
+        ALTER TABLE evaluation.curation_reviews
+            ADD CONSTRAINT curation_reviews_mode_check
+            CHECK (mode IN ('standard','blind'));
+    END IF;
+END $$;
+
+-- Fila do curador filtrada por modo cego + SLA (varredura de expiração soft).
+CREATE INDEX IF NOT EXISTS idx_evcuration_blind_open
+    ON evaluation.curation_reviews (tenant_id, mode, status, deadline_at)
+    WHERE mode = 'blind';
+
+-- Re-pontuação CEGA do curador — 1:1 com a curation_review de mode='blind'.
+-- Guarda APENAS o artefato de calibração: nunca toca o resultado imutável.
+-- O snapshot da nota IA (ai_*) é gravado no REVEAL para diff reproduzível.
+CREATE TABLE IF NOT EXISTS evaluation.curation_result_blinds (
+    id                        TEXT        PRIMARY KEY,           -- "evblind_{uuid}"
+    tenant_id                 TEXT        NOT NULL,
+    curation_review_id        TEXT        NOT NULL REFERENCES evaluation.curation_reviews(id),
+    evaluation_instance_id    TEXT        NOT NULL,
+    campaign_id               TEXT        NOT NULL,
+    curator_id                TEXT        NOT NULL,              -- humano que re-pontuou cego
+    blind_criterion_responses JSONB       NOT NULL DEFAULT '[]', -- respostas do humano (shape de criterion_responses)
+    blind_overall_score       NUMERIC(6,3),                     -- recomputado por scoring.aggregate_scores (0..10)
+    blind_by_dimension        JSONB       NOT NULL DEFAULT '[]', -- [{dimension_id, score}]
+    ai_overall_score          NUMERIC(6,3),                     -- snapshot da nota IA no reveal (0..10)
+    ai_by_dimension           JSONB       NOT NULL DEFAULT '[]', -- snapshot por dimensão da IA (0..10)
+    per_dimension_diffs       JSONB       NOT NULL DEFAULT '[]', -- [{dimension_id, ai_score, human_score, diff, disagree}]
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_blind_per_review UNIQUE (curation_review_id)
+);
+CREATE INDEX IF NOT EXISTS idx_evblind_instance
+    ON evaluation.curation_result_blinds (evaluation_instance_id);
+CREATE INDEX IF NOT EXISTS idx_evblind_campaign
+    ON evaluation.curation_result_blinds (tenant_id, campaign_id, created_at DESC);
 """
 
 
@@ -2061,19 +2116,127 @@ async def create_curation_review(
     tenant_id: str,
     evaluation_instance_id: str,
     trigger: str,
+    mode: str = "standard",
+    deadline_at: Any = None,
+    skill_version: str | None = None,
 ) -> dict[str, Any]:
+    """Cria uma curation_review. `mode='blind'` + `deadline_at`/`skill_version` são
+    o caminho R8c (Estágio 2); o default 'standard' preserva o fluxo Arc 13."""
     review_id = _new_id("evcuration_")
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             INSERT INTO evaluation.curation_reviews
-                (id, tenant_id, evaluation_instance_id, trigger)
-            VALUES ($1,$2,$3,$4)
+                (id, tenant_id, evaluation_instance_id, trigger, mode, deadline_at, skill_version)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
             RETURNING *
             """,
             review_id, tenant_id, evaluation_instance_id, trigger,
+            mode, _parse_ts(deadline_at), skill_version,
         )
     return _row(row)  # type: ignore[return-value]
+
+
+async def count_blind_reviews_for_instance(
+    pool: asyncpg.Pool, tenant_id: str, evaluation_instance_id: str,
+) -> int:
+    """R8c — idempotência: quantas reviews CEGAS já existem p/ esta instância
+    (Kafka redelivery / re-finalize não devem dobrar a fila)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(*) AS c FROM evaluation.curation_reviews
+             WHERE tenant_id=$1 AND evaluation_instance_id=$2 AND mode='blind'
+            """,
+            tenant_id, evaluation_instance_id,
+        )
+    return int(row["c"]) if row else 0
+
+
+async def expire_overdue_blind_reviews(
+    pool: asyncpg.Pool, *, now: Any = None,
+) -> int:
+    """R8c — SLA SOFT: marca reviews CEGAS pendentes com `deadline_at` vencido como
+    expiradas (`expired_at`). Puramente informativo — NÃO toca a avaliação (a nota IA
+    já é final/autoritativa), distinto do timeout do revisor de contestação. Idempotente
+    (só pega `expired_at IS NULL`). Retorna a contagem expirada."""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            UPDATE evaluation.curation_reviews
+               SET expired_at = COALESCE($1::timestamptz, now())
+             WHERE mode = 'blind'
+               AND status = 'pending'
+               AND expired_at IS NULL
+               AND deadline_at IS NOT NULL
+               AND deadline_at < COALESCE($1::timestamptz, now())
+            RETURNING id
+            """,
+            _parse_ts(now),
+        )
+    return len(rows)
+
+
+async def get_curation_review(
+    pool: asyncpg.Pool, review_id: str, tenant_id: str,
+) -> dict[str, Any] | None:
+    """R8c — uma curation_review por id (a `list_*` é p/ a fila; aqui é o detalhe)."""
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.curation_reviews WHERE id=$1 AND tenant_id=$2",
+            review_id, tenant_id,
+        )
+    return _row(row)
+
+
+# ─── R8c — CurationResultBlind (re-pontuação cega) ────────────────────────────
+
+async def create_blind_result(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    curation_review_id: str,
+    evaluation_instance_id: str,
+    campaign_id: str,
+    curator_id: str,
+    blind_criterion_responses: list[dict],
+    blind_overall_score: float | None,
+    blind_by_dimension: list[dict],
+    ai_overall_score: float | None,
+    ai_by_dimension: list[dict],
+    per_dimension_diffs: list[dict],
+) -> dict[str, Any]:
+    """Persiste a re-pontuação CEGA do curador (artefato de calibração). 1:1 com a review
+    (`uq_blind_per_review` → 2ª inserção viola = idempotência checada no router)."""
+    blind_id = _new_id("evblind_")
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO evaluation.curation_result_blinds
+                (id, tenant_id, curation_review_id, evaluation_instance_id, campaign_id,
+                 curator_id, blind_criterion_responses, blind_overall_score, blind_by_dimension,
+                 ai_overall_score, ai_by_dimension, per_dimension_diffs)
+            VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9::jsonb,$10,$11::jsonb,$12::jsonb)
+            RETURNING *
+            """,
+            blind_id, tenant_id, curation_review_id, evaluation_instance_id, campaign_id,
+            curator_id, json.dumps(blind_criterion_responses),
+            blind_overall_score, json.dumps(blind_by_dimension),
+            ai_overall_score, json.dumps(ai_by_dimension), json.dumps(per_dimension_diffs),
+        )
+    return _row(row)  # type: ignore[return-value]
+
+
+async def get_blind_result(
+    pool: asyncpg.Pool, curation_review_id: str, tenant_id: str,
+) -> dict[str, Any] | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM evaluation.curation_result_blinds "
+            "WHERE curation_review_id=$1 AND tenant_id=$2",
+            curation_review_id, tenant_id,
+        )
+    return _row(row)
 
 
 async def resolve_curation_review(

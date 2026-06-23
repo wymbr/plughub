@@ -81,7 +81,7 @@ from .sampling import (
     should_sample, compute_expires_at, compute_priority, compute_deadline_at,
     campaign_dispatch_open,
 )
-from .sampling_engine import run_curation_sampling
+from .sampling_engine import run_curation_and_blind_sampling
 from .backfill import run_campaign_backfill
 from .prompt_composer import compose_rubric_prompt, DEFAULT_RUBRIC_BODY, with_bias_controls
 
@@ -1243,8 +1243,9 @@ async def finalize_evaluation(
     )
 
     if run_curation:
+        # R8c — cadeia Stage-1 → Estágio 2 cego (amostragem 2-estratos) num só task.
         asyncio.create_task(
-            run_curation_sampling(
+            run_curation_and_blind_sampling(
                 pool, instance_id=instance_id, tenant_id=tenant_id,
                 campaign_id=campaign_id,
                 normalized_score=float(normalized_score or final_score or 0),

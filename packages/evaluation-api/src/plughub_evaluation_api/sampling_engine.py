@@ -212,13 +212,16 @@ async def run_curation_sampling(
     tenant_id: str,
     campaign_id: str,
     normalized_score: float,
-) -> None:
+) -> bool:
     """
     Background task triggered after evaluation_finalized for AI agents (Fluxo 2).
 
     Evaluates all enabled CurationSamplingRules for the campaign in priority order.
     If one or more rules match, creates a single CurationReview with a composite
     trigger string (e.g. "score_extremes,random_baseline").
+
+    Returns True if a CurationReview was created (item FLAGGED by Stage-1), else False
+    — consumed by the R8c blind stage to pick the right sampling stratum.
 
     Errors are logged and never raised — this function must never fail the caller.
     """
@@ -228,7 +231,7 @@ async def run_curation_sampling(
         rules = await _db.list_sampling_rules(pool, tenant_id, campaign_id)
         enabled = [r for r in rules if r.get("enabled", True)]
         if not enabled:
-            return
+            return False
 
         triggered: list[str] = []
 
@@ -260,7 +263,7 @@ async def run_curation_sampling(
                 triggered.append(rule_type)
 
         if not triggered:
-            return
+            return False
 
         trigger = ",".join(triggered)
         await _db.create_curation_review(
@@ -273,9 +276,104 @@ async def run_curation_sampling(
             "curation review created: instance=%s campaign=%s trigger=%s",
             instance_id, campaign_id, trigger,
         )
+        return True
 
     except Exception as exc:
         logger.error(
             "curation sampling failed (non-blocking): instance=%s err=%s",
             instance_id, exc,
         )
+        return False
+
+
+# ─── R8c — Estágio 2: amostragem cega (dois estratos) ─────────────────────────
+
+async def run_blind_curation_sampling(
+    pool: asyncpg.Pool,
+    *,
+    instance_id: str,
+    tenant_id: str,
+    campaign_id: str,
+    flagged: bool,
+) -> None:
+    """Cria uma curation_review CEGA (mode='blind') se o item for amostrado.
+
+    Amostragem em DOIS estratos (R8c, §III.4): ``%`` distinto para itens que o Stage-1
+    sinalizou (``flagged``) × não-sinalizados — o estrato não-sinalizado é o que pega o
+    viés de KB compartilhado. Idempotente (não duplica blind p/ a mesma instância). SLA
+    SOFT: grava ``deadline_at`` (expirar = higiene de fila, sem efeito na avaliação).
+
+    Errors are logged and never raised — must never fail the caller.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        from . import db as _db
+        from . import sampling as _sampling
+
+        campaign = await _db.get_campaign(pool, campaign_id, tenant_id)
+        if not campaign:
+            return
+        cfg = _sampling.blind_stage_config(campaign)
+        if not cfg["enabled"]:
+            return
+
+        sampled, stratum = _sampling.blind_decide(flagged, cfg, instance_id)
+        if not sampled:
+            return
+
+        # Idempotência: Kafka redelivery / re-finalize não devem dobrar a fila cega.
+        if await _db.count_blind_reviews_for_instance(pool, tenant_id, instance_id) > 0:
+            return
+
+        # skill_version do segmento avaliado (R9d-1: instances.deploy_version).
+        instance = await _db.get_instance(pool, instance_id, tenant_id)
+        skill_version = (instance or {}).get("deploy_version")
+
+        deadline_at = datetime.now(tz=timezone.utc) + timedelta(hours=int(cfg["sla_hours"]))
+        await _db.create_curation_review(
+            pool,
+            tenant_id=tenant_id,
+            evaluation_instance_id=instance_id,
+            trigger=f"blind_stage:{stratum}",
+            mode="blind",
+            deadline_at=deadline_at,
+            skill_version=skill_version,
+        )
+        logger.info(
+            "blind curation review created: instance=%s campaign=%s stratum=%s ver=%s",
+            instance_id, campaign_id, stratum, skill_version,
+        )
+
+    except Exception as exc:
+        logger.error(
+            "blind curation sampling failed (non-blocking): instance=%s err=%s",
+            instance_id, exc,
+        )
+
+
+async def run_curation_and_blind_sampling(
+    pool: asyncpg.Pool,
+    *,
+    instance_id: str,
+    tenant_id: str,
+    campaign_id: str,
+    normalized_score: float,
+) -> None:
+    """Cadeia Stage-1 → Estágio 2 cego (R8c) num único task de fundo.
+
+    O blind precisa saber se o item foi sinalizado (estrato), então roda DEPOIS do
+    Stage-1 e reusa esse resultado. Ambos best-effort (nunca derrubam o finalize)."""
+    flagged = await run_curation_sampling(
+        pool,
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        campaign_id=campaign_id,
+        normalized_score=normalized_score,
+    )
+    await run_blind_curation_sampling(
+        pool,
+        instance_id=instance_id,
+        tenant_id=tenant_id,
+        campaign_id=campaign_id,
+        flagged=flagged,
+    )

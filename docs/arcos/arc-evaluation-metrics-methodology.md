@@ -366,13 +366,27 @@ compartilhado.
 
 **Detecção — Estágio 2 (curadoria cega-primeiro, `%`-gated, SLA).** Upgrade da curadoria: o humano
 re-pontua o **mesmo form sem ver a nota da IA**; só depois o sistema revela + mostra o diff. Reusa a
-infra de curadoria/contestação (fila, SLA, `review_workflow_skill_id`/`ContestationPolicy`,
-`CuradoriaPage`). Entrega **divergência por dimensão** (dois `EvaluationResult` sobre o mesmo form),
-gera `CalibrationNote` no desacordo (RAG), e **pega o viés de KB** — porque o humano pontua **contra
-a realidade, não contra a KB** (diversidade de modelo não pega isso). `%`=0 desliga; `%`>0 liga.
-**A nota humana é autoritativa no desacordo** (como contestação `revised`): corrige o registro +
-alimenta a divergência por `skill_version` + o gatilho de recalibração; timeout de SLA → vale a nota
-da IA, sinalizada. Eixo de amostragem **distinto** do primário (ADR), chaveado por `skill_version`.
+infra de curadoria (mesma fila do curador / `CuradoriaPage`, `CalibrationNote`, `calibration.events`).
+Entrega **divergência por dimensão** (a re-pontuação cega contra a nota da IA, no mesmo form), gera
+`CalibrationNote` no desacordo (RAG), e **pega o viés de KB** — porque o humano pontua **contra a
+realidade, não contra a KB** (diversidade de modelo não pega isso). `%`=0 desliga; `%`>0 liga.
+
+> **Decisões fechadas (2026-06-23) — amendam o design original:**
+> - **A nota cega NÃO é autoritativa sobre esta avaliação.** É um **artefato de calibração**: nunca
+>   altera `evaluation.results.final_score` nem re-emite `evaluation_finalized` (o registro finalizado
+>   é imutável). Corrige as avaliações **futuras** via `CalibrationNote`→KB→RAG + a divergência por
+>   `skill_version` (R8b). Racional: o objetivo é corrigir o viés **sistemático** (próximas versões),
+>   não reescrever um caso. Mais simples e LGPD-friendly (sem re-finalize/supersede). Storage:
+>   tabela nova `curation_result_blinds` (1:1 com a `curation_review`), **nunca** um 2º `EvaluationResult`
+>   (constraint `uq_result_per_instance`).
+> - **Amostragem em DOIS estratos** no `evaluation_finalized`, **após** o Stage-1 decidir flagged/unflagged:
+>   `blind_stage_sample_pct_flagged` (sobre os sinalizados) + `blind_stage_sample_pct_unflagged` (sobre os
+>   **não** sinalizados — estrato-chave: pega o viés de KB compartilhado que as regras ancoradas não pegam).
+> - **Mesma fila do curador** (`curation_reviews.mode='blind'`), não uma fila paralela.
+> - **SLA SOFT** (`deadline_at`/`expired_at`): expirar = higiene de fila, **sem** consequência para a
+>   avaliação (a nota IA já é final e autoritativa). Distinto do timeout do **revisor de contestação**
+>   (que trava a nota humana como não-revisada). Eixo de amostragem **distinto** do primário (ADR),
+>   chaveado por `skill_version`.
 
 **Simetria dos fluxos.** Humano avaliado: recurso = **contestação** (o avaliado dispara, SLA). IA
 avaliada: o agente **não** contesta (invariante Arc 13) → controle **proativo** = Estágio 2
@@ -660,7 +674,7 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R7c** ❌ **fora de escopo (decisão 2026-06-23)** | Reveal campo-mínimo do output ao avaliador. **Depende do R7b** (sem valor retido, não há o que revelar) → cai junto. Limitação assumida: **faithfulness sobre VALOR PII de output não é suportada**. Coberto permanece (R6): faithfulness-vs-KB, tool correctness, policy adherence | evaluation-api + skill avaliador | II.5 |
 | **R8a** ✅ | Controles de viés na rubrica (`BIAS_CONTROLS`: verbosity, self-enhancement, surface-fluency, authority/emotional, consistência/posição). `with_bias_controls()` idempotente anexa ao body EFETIVO (runtime, sobrevive a override do tenant) + `compose_rubric_prompt` (preview). Teste `test_prompt_composer_r8a.py` | `prompt_composer.py` + `router.py` | III.4 |
 | **R8b** ✅ | **Estágio 1** — `apply_divergence_flags()` (pura): `divergence = 1 − score/100` por linha + `recalibration_recommended` (`>limiar` ∧ `N≥mín`) + count no summary; limiar/N do config-api `evaluation` (via `config_client`, default 0.25/30). Badge no Calibration Dashboard. **Sinal, não auto-mutação.** Teste `test_calibration_divergence_r8b.py` | analytics-api (`reports_query`/`reports`/`config_client`) + config-api seed | III.4 |
-| **R8c** | **Estágio 2** — curadoria **cega-primeiro** (`%`-gated, SLA): humano re-pontua o form sem ver a IA → reveal + diff por dimensão; nota humana autoritativa no desacordo; reusa workflow de revisão; alimenta divergência + `CalibrationNote` | evaluation-api + `CuradoriaPage` | III.4 |
+| **R8c** ✅ | **Estágio 2** — curadoria **cega-primeiro** (`%`-gated 2-estratos, SLA soft): humano re-pontua o form sem ver a IA → reveal + diff por dimensão; nota cega = **artefato de calibração** (não altera `final_score`/`evaluation_finalized`) → alimenta divergência (R8b) + `CalibrationNote`. **Slices:** (1✅) schema `curation_reviews.mode/deadline_at/expired_at/skill_version` + tabela `curation_result_blinds` + `blind_stage_config`; (2✅) amostragem 2-estratos (`blind_decide` + `run_blind_curation_sampling` encadeado pós-Stage-1 no finalize) + scanner SLA soft (`expire_overdue_blind_reviews` no deadline scanner); (3✅) endpoints `blind-context`/`blind-rescore` + `compute_dimension_diffs` (reusa `scoring.aggregate_scores` p/ humano E IA); (4✅) `blind-resolve`: desacordo→`CalibrationNote` por dimensão + KB + `calibration.events` (`blind_resolution_status`); (5✅) UI modo cego em `CuradoriaPage` (drawer 2-painéis: conversa mascarada + form; reveal/diff/resolve) | evaluation-api + `CuradoriaPage` | III.4 |
 | **R8d** ✅ | **Revisor heterogêneo**: `model_profile` fiado do reason step → ai-gateway (`resolveModelProfile`, estático ou `$.`-ref); avaliador fixa `evaluation`; `ContestationPolicy.reviewer_model_profile` (≠ avaliador) + UI CampaignsPage. Caveat KB documentado (descorrelaciona viés de modelo, não de dado). Teste `reason.model-profile.test.ts` | skill-flow-engine + schemas + platform-ui | III.4 |
 | **R8e** ✅ (parcial) | **UI em Configurations**: aba **Avaliação** na `ConfigPlataformaPage` expõe o namespace `evaluation` (editor genérico) — limiar de divergência + N mínimo entregues (fecha o invariante "todo campo editável na UI"). `%` do Estágio 2 e modelo do revisor entram com R8c/R8d | platform-ui | III.4 |
 | **R9 a–c** ✅ | Carimbar `deploy_version`(+`channel`) no segmento → `analytics.segments` (validado: segmentos de IA novos com `deploy_version`). schema (`flow_id`=skill_id; +`deploy_version`/`channel`); bridge popula via `_skill_version_cache`; analytics `parse_participant_event` + DDL/migrate + **`_SEGMENT_COLS`/`_segment_row`** (a lista fixa era a causa do valor sumir) + **fallback** `fetch_skill_version` no consumer (versão corrente quando o bridge não envia). **R9d-1 ✅**: `_on_participant_event` capta `deploy_version` → sampling → `create_instance` → coluna `evaluation.instances.deploy_version` (insumo do R10). **Pendente**: popular `channel` nos call-sites (~10); `deploy_version` no `/reports/segments` (backfill); a denormalização em `evaluation_finalized` é **opcional** (R15a faz JOIN `evaluation_finalized.segment_id`→`segments.deploy_version`, já que R9c carimbou) | orchestrator-bridge + schemas + analytics + evaluation-api | IV.3 |

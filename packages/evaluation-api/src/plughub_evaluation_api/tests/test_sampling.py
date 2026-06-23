@@ -14,7 +14,126 @@ from ..sampling import (
     quota_agent_key,
     quota_rate,
     should_sample_quota,
+    blind_stage_config,
+    blind_decide,
+    _DEFAULT_BLIND_SLA_HOURS,
+    _DEFAULT_BLIND_SEVERITY_MIN,
 )
+
+
+# ─── R8c — blind_decide (two-strata) ──────────────────────────────────────────
+
+class TestBlindDecide:
+    def _cfg(self, **over):
+        base = {
+            "enabled": True,
+            "sample_pct_flagged": 1.0,
+            "sample_pct_unflagged": 1.0,
+            "sla_hours": 48,
+            "severity_min": 0.2,
+        }
+        base.update(over)
+        return base
+
+    def test_disabled_never_samples(self):
+        cfg = self._cfg(enabled=False)
+        assert blind_decide(True, cfg, "i1") == (False, "")
+        assert blind_decide(False, cfg, "i1") == (False, "")
+
+    def test_flagged_uses_flagged_stratum(self):
+        cfg = self._cfg(sample_pct_flagged=1.0, sample_pct_unflagged=0.0)
+        sampled, stratum = blind_decide(True, cfg, "i1")
+        assert sampled is True and stratum == "flagged"
+
+    def test_unflagged_uses_unflagged_stratum(self):
+        cfg = self._cfg(sample_pct_flagged=0.0, sample_pct_unflagged=1.0)
+        sampled, stratum = blind_decide(False, cfg, "i1")
+        assert sampled is True and stratum == "unflagged"
+
+    def test_strata_are_independent(self):
+        # flagged on, unflagged off → flagged sampled, unflagged not.
+        cfg = self._cfg(sample_pct_flagged=1.0, sample_pct_unflagged=0.0)
+        assert blind_decide(True, cfg, "i1")[0] is True
+        assert blind_decide(False, cfg, "i1")[0] is False
+
+    def test_zero_pct_stratum_off_but_stratum_label_kept(self):
+        cfg = self._cfg(sample_pct_unflagged=0.0)
+        sampled, stratum = blind_decide(False, cfg, "i1")
+        assert sampled is False and stratum == "unflagged"
+
+    def test_deterministic_by_instance_id(self):
+        cfg = self._cfg(sample_pct_flagged=0.5)
+        a = blind_decide(True, cfg, "inst_abc")
+        b = blind_decide(True, cfg, "inst_abc")
+        assert a == b
+
+    def test_full_pct_samples_all_instances(self):
+        cfg = self._cfg(sample_pct_unflagged=1.0)
+        assert all(blind_decide(False, cfg, f"i{i}")[0] for i in range(50))
+
+
+# ─── R8c — blind_stage_config ─────────────────────────────────────────────────
+
+class TestBlindStageConfig:
+    def test_absent_policy_disabled_with_defaults(self):
+        cfg = blind_stage_config({})
+        assert cfg["enabled"] is False
+        assert cfg["sample_pct_flagged"] == 0.0
+        assert cfg["sample_pct_unflagged"] == 0.0
+        assert cfg["sla_hours"] == _DEFAULT_BLIND_SLA_HOURS
+        assert cfg["severity_min"] == _DEFAULT_BLIND_SEVERITY_MIN
+
+    def test_enabled_flag_without_pct_stays_disabled(self):
+        # enabled=True but both strata 0 → effectively off (nothing to sample).
+        cfg = blind_stage_config({"contestation_policy": {"blind_stage_enabled": True}})
+        assert cfg["enabled"] is False
+
+    def test_enabled_with_unflagged_pct_only(self):
+        cfg = blind_stage_config({"contestation_policy": {
+            "blind_stage_enabled": True,
+            "blind_stage_sample_pct_unflagged": 0.05,
+        }})
+        assert cfg["enabled"] is True
+        assert cfg["sample_pct_flagged"] == 0.0
+        assert cfg["sample_pct_unflagged"] == 0.05
+
+    def test_pct_clamped_to_unit_interval(self):
+        cfg = blind_stage_config({"contestation_policy": {
+            "blind_stage_enabled": True,
+            "blind_stage_sample_pct_flagged": 1.5,
+            "blind_stage_sample_pct_unflagged": -0.3,
+        }})
+        assert cfg["sample_pct_flagged"] == 1.0
+        assert cfg["sample_pct_unflagged"] == 0.0
+
+    def test_sla_and_severity_overrides(self):
+        cfg = blind_stage_config({"contestation_policy": {
+            "blind_stage_enabled": True,
+            "blind_stage_sample_pct_flagged": 0.2,
+            "blind_stage_sla_hours": 24,
+            "blind_stage_severity_min": 0.3,
+        }})
+        assert cfg["sla_hours"] == 24
+        assert cfg["severity_min"] == 0.3
+
+    def test_invalid_values_fall_back_to_defaults(self):
+        cfg = blind_stage_config({"contestation_policy": {
+            "blind_stage_enabled": True,
+            "blind_stage_sample_pct_flagged": "abc",
+            "blind_stage_sla_hours": "x",
+            "blind_stage_severity_min": None,
+        }})
+        assert cfg["sample_pct_flagged"] == 0.0
+        assert cfg["sla_hours"] == _DEFAULT_BLIND_SLA_HOURS
+        assert cfg["severity_min"] == _DEFAULT_BLIND_SEVERITY_MIN
+
+    def test_nonpositive_sla_falls_back(self):
+        cfg = blind_stage_config({"contestation_policy": {
+            "blind_stage_enabled": True,
+            "blind_stage_sample_pct_flagged": 0.1,
+            "blind_stage_sla_hours": 0,
+        }})
+        assert cfg["sla_hours"] == _DEFAULT_BLIND_SLA_HOURS
 
 
 # ─── _sample_percentage ───────────────────────────────────────────────────────

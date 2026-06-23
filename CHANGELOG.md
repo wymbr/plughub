@@ -2,6 +2,127 @@
 
 ---
 
+## R8c — Curadoria cega-primeiro · Slice 5: UI modo cego (CuradoriaPage) — R8c COMPLETO (2026-06-23)
+
+Quinta e última fatia: a superfície do curador. **R8c completo.**
+
+**CuradoriaPage** (`modules/evaluation/CuradoriaPage.tsx`): reviews `mode='blind'` ganham um badge
+**Cega** (EyeOff) + um único CTA "Pontuar às cegas" (em vez de Approve/Recalibrate/Bias). O
+`BlindScoreDrawer` é **dois painéis**: esquerda = **conversa mascarada** (reusa `useResultTranscript`,
+toggle Segmento/Contato, 🔒); direita = **formulário a pontuar** (dimensions→criteria; inputs por tipo
+score/boolean/choice + N/A) com a **nota da IA escondida**. "Revelar nota da IA" → `blind-rescore` →
+tabela de diff por dimensão (IA × humano, % diff, badge de divergência) + nota geral; "Resolver" →
+`blind-resolve` (severity/flag_bias/notas). Re-abrir review já resolvida mostra o reveal (read-only).
+
+**API** (`api/evaluation-hooks.ts`): `getBlindContext`/`blindRescore`/`blindResolve` + tipos
+(`BlindContext`/`BlindResult`/`BlindDimensionDiff`/…); `CurationReview` ganha `mode/deadline_at/
+expired_at/skill_version`. i18n `curation.blind.*` en+pt-BR (invariante i18n).
+
+**Verificação:** build platform-ui (tsc) verde; QA visual via `infra/test/seed_r8c_blind_review.sh`
+(badge Cega + drawer 2-painéis renderizam; conversa + form + reveal/diff). Limitação herdada: o painel
+de conversa depende de mensagens persistidas em `analytics.messages` (instâncias demo antigas podem
+não ter → "sem mensagens"; alternar Contato).
+
+---
+
+## R8c — Curadoria cega-primeiro · Slice 4: diff → CalibrationNote + calibration.events (2026-06-23)
+
+Quarta fatia: a resolução transforma o desacordo por dimensão em sinal de calibração.
+
+**Endpoint** (`contestation_router.py`): `POST /v1/evaluation/curations/{id}/blind-resolve` — para cada
+dimensão em `disagree`, cria uma `CalibrationNote` (texto auto-composto IA vs humano, nota humana como
+referência), publica no namespace de conhecimento (`origin=blind_curation`, RAG) e emite
+`calibration_note_published`; resolve a review e emite **sempre** `calibration_reviewed`
+(`calibration.events`) — alimenta a divergência R8b por `skill_version`. Status via
+`scoring.blind_resolution_status`: sem desacordo→`approved` (sem nota), com→`recalibrated` (ou
+`bias_flagged` se `flag_bias`). Reusa `create_calibration_note`/`mark_calibration_note_published`/
+`resolve_curation_review`/emitters do Arc 13. Guarda: review não-`pending`→409. **Nunca** toca o
+resultado imutável.
+
+**Teste:** `tests/test_blind_diff.py::TestBlindResolutionStatus` (4 — puro) → 68 passed. Smoke
+`infra/test/test_r8c_blind_resolve.sh`: rescore (3 desacordos) → resolve → `status=recalibrated` + 3
+`CalibrationNote`s persistidas → 409 idempotente → `R8C_RESOLVE_SMOKE_OK`.
+
+---
+
+## R8c — Curadoria cega-primeiro · Slice 3: endpoint re-score + reveal/diff (2026-06-23)
+
+Terceira fatia: o curador re-pontua o form às cegas e o sistema revela a nota da IA + diff.
+
+**Endpoints** (`contestation_router.py`): `GET /v1/evaluation/curations/{id}/blind-context` (form a
+pontuar + ponteiros de transcript, **sem** as notas da IA; se já re-pontuado, devolve o reveal) e
+`POST /v1/evaluation/curations/{id}/blind-rescore` (valida via `validate_criterion_responses`, agrega
+humano E IA pela **mesma** `scoring.aggregate_scores` — form = fonte única → diff apples-to-apples,
+calcula `compute_dimension_diffs` com `severity_min` da campanha, persiste o artefato, devolve reveal).
+Headers: `X-Tenant-ID` + `X-User-ID`. Idempotente (`uq_blind_per_review` → 409).
+
+**Diff puro** (`scoring.py`): `compute_dimension_diffs(ai_by_dim, human_by_dim, severity_min)` →
+`[{dimension_id, ai_score, human_score, diff (|ai-h|/10), disagree (diff>severity)}]`; dimensão presente
+de um só lado = `na` (sem discordância). **DB** (`db.py`): `get_curation_review`, `create_blind_result`,
+`get_blind_result`. A nota cega **nunca** toca o resultado imutável.
+
+**Teste:** `tests/test_blind_diff.py` (8 — puro) → 64 passed. Smoke
+`infra/test/test_r8c_blind_rescore.sh`: context (sem nota IA) → rescore (humano = IA com todos os scores
+−5) → reveal com 3/3 dimensões `disagree=true` → 409 idempotente → `R8C_RESCORE_SMOKE_OK`.
+
+> 11 falhas pré-existentes em `test_router.py` (mock `AsyncMock` incompleto + `app.state.redis` ausente +
+> `422` Pydantic-v2) **confirmadas idênticas no baseline** (`git stash` → 11 failed/35 passed) — alheias ao R8c.
+
+---
+
+## R8c — Curadoria cega-primeiro · Slice 2: amostragem 2-estratos + SLA soft (2026-06-23)
+
+Segunda fatia: o item entra na fila cega no `evaluation_finalized`, **após** o Stage-1.
+
+**Amostragem 2-estratos** (`sampling.py`, puro): `blind_decide(flagged, cfg, instance_id)` escolhe o
+`%` do estrato (sinalizado × não-sinalizado) e aplica o gate determinístico por hash do `instance_id`
+(reproduzível/idempotente). `sampling_engine.py`: `run_curation_sampling` agora **retorna `flagged`**;
+novo `run_blind_curation_sampling` (carrega campanha→`blind_stage_config`, decide, idempotência via
+`count_blind_reviews_for_instance`, `skill_version` de `instances.deploy_version`, cria review
+`mode='blind'` + `deadline_at` SOFT + `trigger=blind_stage:{stratum}`); `run_curation_and_blind_sampling`
+encadeia Stage-1→cego num só task de fundo, fiado no `_finalize_and_emit` (router).
+
+**SLA soft** (`db.py` `expire_overdue_blind_reviews` + `main.py`): o `_run_deadline_scanner` (60s) marca
+reviews cegas pendentes vencidas com `expired_at` — **informativo, status segue `pending`**, sem efeito
+na avaliação (≠ timeout do revisor de contestação). Idempotente.
+
+**Teste:** `tests/test_sampling.py::TestBlindDecide` (7 — puro) → 56 passed. Smoke
+`infra/test/test_r8c_blind_sampling.sh` (host→container): cria 1 review cega (unflagged), idempotente,
+soft-expira mantendo `status=pending` → `R8C_BLIND_SMOKE_OK`.
+
+---
+
+## R8c — Curadoria cega-primeiro · Slice 1: schema + config (2026-06-23)
+
+Primeira fatia do Estágio 2 (curadoria cega, §III.4). **Decisões de escopo fechadas** nesta
+sessão (atualizam o design original): (1) a nota cega é um **artefato de calibração** — NUNCA
+altera `evaluation.results.final_score` nem re-emite `evaluation_finalized`; corrige avaliações
+**futuras** via `CalibrationNote`→KB→RAG + divergência (R8b), não esta. (2) Amostragem em **dois
+estratos** no `evaluation_finalized`, após o Stage-1: `%` sobre itens sinalizados +
+`%` sobre não-sinalizados (o estrato não-sinalizado pega o viés de KB compartilhado). (3) **Mesma
+fila do curador** (`CuradoriaPage`); SLA **soft** (expira = higiene de fila, sem consequência para
+a avaliação — distinto do timeout do revisor de contestação).
+
+**Schema** (`db.py`, DDL idempotente): `evaluation.curation_reviews` ganha `mode`
+(`'standard'|'blind'`, CHECK), `deadline_at`, `expired_at`, `skill_version` + índice parcial
+`idx_evcuration_blind_open`. Nova tabela `evaluation.curation_result_blinds` (1:1 com a review via
+`uq_blind_per_review`): re-pontuação cega do humano (`blind_criterion_responses`,
+`blind_overall_score`, `blind_by_dimension`), snapshot da IA no reveal (`ai_overall_score`,
+`ai_by_dimension`) e `per_dimension_diffs` — **nunca toca o resultado imutável**.
+
+**Config** (`sampling.py`, puro): `blind_stage_config(campaign)` lê de `campaign.contestation_policy`
+(JSONB, sem migração): `blind_stage_enabled`, `blind_stage_sample_pct_flagged`,
+`blind_stage_sample_pct_unflagged`, `blind_stage_sla_hours` (default 48), `blind_stage_severity_min`
+(default 0.20, limiar de desacordo por dimensão). `enabled` exige pelo menos um `%`>0.
+
+**Teste:** `tests/test_sampling.py::TestBlindStageConfig` (7 — puro). Smoke docker-demo: rebuild
+evaluation-api, schema aplicada (tabela + 4 colunas + índices/FK), 49 passed.
+
+> **Dev loop (registrado):** `evaluation-api` **bakeia o source** (sem bind mount) → `build` + `up -d`,
+> não `restart`. `pytest` não está na imagem runtime → `pip install -q pytest pytest-asyncio` ad-hoc.
+
+---
+
 ## R8d — Revisor heterogêneo (modelo do revisor ≠ avaliador) (2026-06-23)
 
 Reduz viés de MODELO descorrelacionando o modelo do revisor AI do avaliador. Achado: o

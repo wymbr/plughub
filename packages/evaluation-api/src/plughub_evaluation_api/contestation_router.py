@@ -39,6 +39,8 @@ from pydantic import BaseModel, Field
 from .config import settings
 from . import db as _db
 from . import kafka_emitter as _kafka
+from . import scoring as _scoring
+from . import sampling as _sampling
 
 logger = logging.getLogger("plughub.evaluation.contestation")
 
@@ -813,6 +815,245 @@ async def resolve_curation(
         "review": review,
         "calibration_note": calibration_note,
         "kb_published": kb_published,
+    }
+
+
+# ─── R8c — Curadoria cega (re-pontuação sem ver a IA) ─────────────────────────
+
+class BlindRescoreBody(BaseModel):
+    """Re-pontuação CEGA do curador: respostas por critério (mesmo shape do avaliador)."""
+    criterion_responses: list[dict] = Field(default_factory=list)
+
+
+async def _load_blind_review_ctx(pool, review_id: str, tenant_id: str) -> dict:
+    """Resolve review(blind) → instance → result → form (versão pinada). Erros HTTP
+    explícitos. NÃO inclui as notas da IA (o caller decide o que expor)."""
+    review = await _db.get_curation_review(pool, review_id, tenant_id)
+    if not review:
+        raise HTTPException(404, detail="curation review not found")
+    if review.get("mode") != "blind":
+        raise HTTPException(400, detail="curation review is not a blind-stage review")
+    instance_id = review.get("evaluation_instance_id") or ""
+    instance = await _db.get_instance(pool, instance_id, tenant_id)
+    if not instance:
+        raise HTTPException(409, detail="evaluation instance not found")
+    result = await _db.get_result_by_instance(pool, instance_id, tenant_id)
+    if not result:
+        raise HTTPException(409, detail="evaluation result not found for instance")
+    form = await _db.get_form_version(
+        pool, result.get("form_id") or "", tenant_id,
+        int(instance.get("form_version") or 1),
+    )
+    if not form:
+        raise HTTPException(409, detail="pinned form version not found")
+    return {"review": review, "instance": instance, "result": result, "form": form}
+
+
+@contestation_router.get("/v1/evaluation/curations/{review_id}/blind-context")
+async def get_blind_context(review_id: str, request: Request) -> dict:
+    """Contexto da tarefa CEGA: o form a re-pontuar + ponteiros p/ o transcript —
+    **sem** as notas da IA (o curador pontua às cegas). Se já houver re-pontuação,
+    devolve o reveal armazenado (re-abrir mostra o diff)."""
+    tenant_id = _get_tenant(request)
+    pool = request.app.state.db_pool
+    ctx = await _load_blind_review_ctx(pool, review_id, tenant_id)
+    blind = await _db.get_blind_result(pool, review_id, tenant_id)
+    return {
+        "review":       ctx["review"],
+        "form":         ctx["form"],                       # dimensions[].criteria[] p/ pontuar
+        "result_id":    ctx["result"].get("id"),           # só p/ buscar transcript (sem notas)
+        "session_id":   ctx["result"].get("session_id"),
+        "instance_id":  ctx["review"].get("evaluation_instance_id"),
+        "already_rescored": blind is not None,
+        "blind_result": blind,                             # reveal+diff se já re-pontuado, senão null
+    }
+
+
+@contestation_router.post("/v1/evaluation/curations/{review_id}/blind-rescore")
+async def blind_rescore(review_id: str, body: BlindRescoreBody, request: Request) -> dict:
+    """Curador submete a re-pontuação CEGA → sistema revela a nota da IA + diff por
+    dimensão. A nota cega é um **artefato de calibração** (NÃO altera `final_score` nem
+    re-emite `evaluation_finalized`). Reusa `scoring.aggregate_scores` (form = fonte única)
+    p/ humano E IA — diff apples-to-apples. Idempotente (`uq_blind_per_review` → 409)."""
+    tenant_id  = _get_tenant(request)
+    curator_id = _get_user(request)
+    pool = request.app.state.db_pool
+
+    ctx = await _load_blind_review_ctx(pool, review_id, tenant_id)
+    review, instance, result, form = ctx["review"], ctx["instance"], ctx["result"], ctx["form"]
+
+    existing = await _db.get_blind_result(pool, review_id, tenant_id)
+    if existing:
+        raise HTTPException(409, detail="blind review already re-scored")
+
+    # Valida as respostas cegas contra o form pinado.
+    violations = _scoring.validate_criterion_responses(form, body.criterion_responses)
+    if violations:
+        raise HTTPException(422, detail={"error": "invalid_criterion_responses", "violations": violations})
+
+    # Agregação humana (cega) e snapshot da IA — MESMA função, MESMO form.
+    blind_overall, blind_by_dim = _scoring.aggregate_scores(form, body.criterion_responses)
+    ai_responses = await _db.list_criterion_responses(pool, result.get("id") or "", tenant_id)
+    ai_overall, ai_by_dim = _scoring.aggregate_scores(form, ai_responses)
+
+    # Limiar de desacordo da campanha (default 0.20).
+    campaign = await _db.get_campaign(pool, review.get("campaign_id") or result.get("campaign_id") or "", tenant_id)
+    severity_min = _sampling.blind_stage_config(campaign or {})["severity_min"]
+    diffs = _scoring.compute_dimension_diffs(ai_by_dim, blind_by_dim, severity_min)
+
+    blind = await _db.create_blind_result(
+        pool,
+        tenant_id=tenant_id,
+        curation_review_id=review_id,
+        evaluation_instance_id=review.get("evaluation_instance_id") or "",
+        campaign_id=review.get("campaign_id") or result.get("campaign_id") or "",
+        curator_id=curator_id,
+        blind_criterion_responses=body.criterion_responses,
+        blind_overall_score=blind_overall,
+        blind_by_dimension=blind_by_dim,
+        ai_overall_score=ai_overall,
+        ai_by_dimension=ai_by_dim,
+        per_dimension_diffs=diffs,
+    )
+    logger.info("blind re-score stored: review=%s by=%s disagreements=%s",
+                review_id, curator_id, sum(1 for d in diffs if d.get("disagree")))
+
+    # Reveal: o curador vê a nota da IA + o diff só DEPOIS de pontuar.
+    return {
+        "blind_result":        blind,
+        "severity_min":        severity_min,
+        "ai_overall_score":    ai_overall,
+        "blind_overall_score": blind_overall,
+        "per_dimension_diffs": diffs,
+    }
+
+
+class BlindResolveBody(BaseModel):
+    """Resolução da curadoria cega após o reveal. `flag_bias` eleva a `bias_flagged`
+    (severidade alta); `severity` aplica-se às notas geradas (default medium)."""
+    curator_notes: str | None = None
+    severity: str = "medium"
+    flag_bias: bool = False
+    evaluator_id: str | None = None   # default: evaluator_agent_id do resultado
+
+
+async def _publish_calibration_note_kb(producer, *, tenant_id: str, note: dict, severity: str) -> bool:
+    """Publica UMA CalibrationNote no namespace de conhecimento (RAG) + emite
+    `calibration_note_published`. Best-effort (não derruba a resolução). Retorna se publicou."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.knowledge_api_url}/v1/knowledge/snippets",
+                json={
+                    "tenant_id":  tenant_id,
+                    "namespace":  f"evaluation:calibration:{note.get('campaign_id', '')}",
+                    "content":    note.get("text", ""),
+                    "source_ref": f"calibration_note:{note['id']}",
+                    "metadata": {
+                        "dimension_id":  note.get("dimension_id", ""),
+                        "evaluator_id":  note.get("evaluator_id", ""),
+                        "skill_version": note.get("skill_version", ""),
+                        "severity":      severity,
+                        "note_id":       note["id"],
+                        "origin":        "blind_curation",  # R8c — distingue do laço Arc 13
+                    },
+                },
+            )
+        return resp.status_code in (200, 201)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("KB publish error (non-blocking): note=%s err=%s", note.get("id"), exc)
+        return False
+
+
+@contestation_router.post("/v1/evaluation/curations/{review_id}/blind-resolve")
+async def blind_resolve(review_id: str, body: BlindResolveBody, request: Request) -> dict:
+    """Resolve a curadoria cega: para cada dimensão em DESACORDO (`disagree`), gera uma
+    `CalibrationNote` (→ KB/RAG + `calibration.events`) e resolve a review. A nota cega é
+    **artefato de calibração** — corrige avaliações FUTURAS, não esta (não toca `final_score`).
+    Sem desacordo → `approved`, sem nota. `flag_bias` → `bias_flagged` (severidade alta)."""
+    tenant_id  = _get_tenant(request)
+    curator_id = _get_user(request)
+    pool     = request.app.state.db_pool
+    producer = request.app.state.kafka_producer
+
+    review = await _db.get_curation_review(pool, review_id, tenant_id)
+    if not review:
+        raise HTTPException(404, detail="curation review not found")
+    if review.get("mode") != "blind":
+        raise HTTPException(400, detail="curation review is not a blind-stage review")
+    if review.get("status") != "pending":
+        raise HTTPException(409, detail=f"review already resolved ({review.get('status')})")
+
+    blind = await _db.get_blind_result(pool, review_id, tenant_id)
+    if not blind:
+        raise HTTPException(409, detail="blind review not re-scored yet")
+
+    instance_id = review.get("evaluation_instance_id") or ""
+    result      = await _db.get_result_by_instance(pool, instance_id, tenant_id)
+    campaign_id = review.get("campaign_id") or (result or {}).get("campaign_id") or ""
+    evaluator_id  = body.evaluator_id or (result or {}).get("evaluator_agent_id") or ""
+    skill_version = review.get("skill_version") or ""
+
+    disagreements = [d for d in (blind.get("per_dimension_diffs") or []) if d.get("disagree")]
+    status = _scoring.blind_resolution_status(len(disagreements), body.flag_bias)
+    note_severity = "high" if body.flag_bias else body.severity
+
+    # Uma CalibrationNote por dimensão em desacordo (a nota humana é a referência).
+    notes: list[dict] = []
+    for d in disagreements:
+        dim = d.get("dimension_id", "")
+        text = (
+            f"Curadoria cega — divergência em '{dim}': IA={d.get('ai_score')} vs "
+            f"humano={d.get('human_score')} (diff={d.get('diff')}, limiar excedido). "
+            f"A nota humana (contra a realidade, não a KB) é a referência."
+        )
+        if body.curator_notes:
+            text += f" Nota do curador: {body.curator_notes}"
+        note = await _db.create_calibration_note(
+            pool,
+            tenant_id=tenant_id, campaign_id=campaign_id, dimension_id=dim,
+            evaluator_id=evaluator_id, skill_version=skill_version,
+            text=text, severity=note_severity,
+        )
+        kb_ok = await _publish_calibration_note_kb(
+            producer, tenant_id=tenant_id, note=note, severity=note_severity,
+        )
+        if kb_ok:
+            await _db.mark_calibration_note_published(pool, note["id"], tenant_id)
+            note["published_to_kb"] = True
+            try:
+                await _kafka.emit_calibration_note_published(
+                    producer, note_id=note["id"], campaign_id=campaign_id,
+                    evaluator_id=evaluator_id, severity=note_severity, tenant_id=tenant_id,
+                )
+            except Exception as exc:
+                logger.error("emit calibration_note_published failed: %s", exc)
+        notes.append(note)
+
+    resolved = await _db.resolve_curation_review(
+        pool, review_id, tenant_id,
+        status=status, curator_id=curator_id, curator_notes=body.curator_notes,
+        calibration_note_id=notes[0]["id"] if notes else None,
+    )
+
+    # calibration.events — sempre (alimenta a divergência R8b por skill_version).
+    try:
+        await _kafka.emit_calibration_reviewed(
+            producer, review_id=review_id, campaign_id=campaign_id,
+            evaluation_instance_id=instance_id, tenant_id=tenant_id,
+            evaluator_id=evaluator_id, skill_version=skill_version,
+            decision=status, calibration_note_id=notes[0]["id"] if notes else None,
+        )
+    except Exception as exc:
+        logger.error("emit calibration_reviewed failed: %s", exc)
+
+    logger.info("blind curation resolved: review=%s status=%s disagreements=%s notes=%s by=%s",
+                review_id, status, len(disagreements), len(notes), curator_id)
+    return {
+        "review":            resolved,
+        "status":            status,
+        "disagreements":     len(disagreements),
+        "calibration_notes": notes,
     }
 
 

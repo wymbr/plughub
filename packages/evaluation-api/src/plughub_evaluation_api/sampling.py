@@ -252,6 +252,84 @@ async def should_sample_quota(
         return _sample_percentage(target_id, rate)
 
 
+# ─── R8c — Blind curation stage (Estágio 2) config ───────────────────────────
+#
+# A curadoria cega-primeiro é amostrada em DOIS estratos independentes no
+# evaluation_finalized, APÓS o Stage-1 (run_curation_sampling) decidir se o item
+# foi sinalizado: `sample_pct_flagged` sobre os itens que o Stage-1 sinalizou e
+# `sample_pct_unflagged` sobre os que NÃO sinalizou — o estrato não-sinalizado é o
+# ponto-chave (pega o viés de KB compartilhado que as regras ancoradas não pegam).
+# Config vive em campaign.contestation_policy (JSONB, sem migração). pct=0 desliga.
+
+_DEFAULT_BLIND_SLA_HOURS = 48
+# Limiar de DESACORDO por dimensão (diff normalizado 0–1). Acima → dimensão conta
+# como divergência e gera CalibrationNote (literatura: 20–25% = gatilho de recalibração).
+_DEFAULT_BLIND_SEVERITY_MIN = 0.20
+
+
+def blind_stage_config(campaign: dict[str, Any]) -> dict[str, Any]:
+    """Lê a configuração da curadoria cega (R8c) de campaign.contestation_policy.
+
+    Retorna um dict normalizado/saneado:
+      enabled              — bool (default False; pcts ambos 0 também desligam de fato)
+      sample_pct_flagged   — 0–1, % do estrato sinalizado pelo Stage-1
+      sample_pct_unflagged — 0–1, % do estrato NÃO sinalizado
+      sla_hours            — int > 0, prazo SOFT do curador
+      severity_min         — 0–1, limiar de desacordo por dimensão
+    """
+    policy = campaign.get("contestation_policy") or {}
+
+    def _pct(key: str) -> float:
+        try:
+            return max(0.0, min(1.0, float(policy.get(key, 0.0))))
+        except (TypeError, ValueError):
+            return 0.0
+
+    pct_flagged = _pct("blind_stage_sample_pct_flagged")
+    pct_unflagged = _pct("blind_stage_sample_pct_unflagged")
+
+    enabled = bool(policy.get("blind_stage_enabled", False)) and (
+        pct_flagged > 0.0 or pct_unflagged > 0.0
+    )
+
+    try:
+        sla_hours = int(policy.get("blind_stage_sla_hours", _DEFAULT_BLIND_SLA_HOURS))
+    except (TypeError, ValueError):
+        sla_hours = _DEFAULT_BLIND_SLA_HOURS
+    if sla_hours <= 0:
+        sla_hours = _DEFAULT_BLIND_SLA_HOURS
+
+    try:
+        severity_min = float(policy.get("blind_stage_severity_min", _DEFAULT_BLIND_SEVERITY_MIN))
+    except (TypeError, ValueError):
+        severity_min = _DEFAULT_BLIND_SEVERITY_MIN
+    severity_min = max(0.0, min(1.0, severity_min))
+
+    return {
+        "enabled": enabled,
+        "sample_pct_flagged": pct_flagged,
+        "sample_pct_unflagged": pct_unflagged,
+        "sla_hours": sla_hours,
+        "severity_min": severity_min,
+    }
+
+
+def blind_decide(flagged: bool, cfg: dict[str, Any], instance_id: str) -> tuple[bool, str]:
+    """Decisão PURA da amostragem cega (R8c, §III.4) — dois estratos.
+
+    Roda APÓS o Stage-1 decidir ``flagged``: escolhe o ``%`` do estrato correspondente
+    (sinalizado × não-sinalizado) e aplica o gate determinístico por hash do
+    ``instance_id`` (reproduzível e idempotente — re-finalize/redelivery decidem igual).
+
+    Retorna ``(sampled, stratum)``; ``stratum`` ∈ {"flagged","unflagged"} (vazio se off).
+    """
+    if not cfg.get("enabled"):
+        return False, ""
+    if flagged:
+        return _sample_percentage(instance_id, cfg["sample_pct_flagged"]), "flagged"
+    return _sample_percentage(instance_id, cfg["sample_pct_unflagged"]), "unflagged"
+
+
 # ─── Deadline calculation ─────────────────────────────────────────────────────
 
 async def compute_expires_at(

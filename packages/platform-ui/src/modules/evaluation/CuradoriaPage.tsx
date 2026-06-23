@@ -6,12 +6,26 @@
  * Shows CurationReview items pending human review of AI evaluator quality.
  * Curator actions: Approve | Recalibrate | Bias Detected
  */
-import React, { useState } from 'react'
-import { RefreshCw, X, Check, AlertTriangle } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { RefreshCw, X, Check, AlertTriangle, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
-import { useCurationQueue, resolveCuration, useCampaigns } from '@/api/evaluation-hooks'
-import type { CurationReview, CurationResolvePayload } from '@/api/evaluation-hooks'
+import {
+  useCurationQueue, resolveCuration, useCampaigns,
+  getBlindContext, blindRescore, blindResolve, useResultTranscript,
+} from '@/api/evaluation-hooks'
+import type {
+  CurationReview, CurationResolvePayload,
+  BlindContext, BlindRescoreReveal, BlindCriterionResponse,
+  BlindFormCriterion, BlindDimensionDiff, TranscriptMessage,
+} from '@/api/evaluation-hooks'
+
+function critLabel(c: BlindFormCriterion): string {
+  return c.label || c.name || c.criterion_id
+}
+function critNaAllowed(c: BlindFormCriterion): boolean {
+  return Boolean(c.na_allowed || c.allow_na || c.allows_na)
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -248,17 +262,366 @@ function RecalibrateDrawer({ review, isBias, onClose, onSubmit }: RecalibrateDra
   )
 }
 
+// ─── BlindScoreDrawer (R8c — re-pontuação cega) ────────────────────────────────
+
+interface BlindScoreDrawerProps {
+  review:     CurationReview
+  tenantId:   string
+  userId:     string
+  onClose:    () => void
+  onResolved: () => void
+}
+
+function diffPct(d: number | null): string {
+  return d == null ? '—' : `${Math.round(d * 100)}%`
+}
+
+function BlindMessage({ m }: { m: TranscriptMessage }) {
+  const isCustomer = (m.author_role ?? '').toLowerCase() === 'customer'
+  return (
+    <div className={`flex ${isCustomer ? 'justify-start' : 'justify-end'}`}>
+      <div className={`max-w-[85%] rounded-lg px-3 py-2 ${isCustomer ? 'bg-surface-alt' : 'bg-primary-light'}`}>
+        <div className="text-[11px] text-muted-light mb-0.5">{m.author_role || m.author_id || '—'}</div>
+        <div className="text-sm text-dark whitespace-pre-wrap break-words">{m.content}</div>
+      </div>
+    </div>
+  )
+}
+
+function BlindScoreDrawer({ review, tenantId, userId, onClose, onResolved }: BlindScoreDrawerProps) {
+  const { t } = useTranslation('evaluation')
+  const { getAccessToken } = useAuth()
+  const [ctx,    setCtx]    = useState<BlindContext | null>(null)
+  const [reveal, setReveal] = useState<BlindRescoreReveal | null>(null)
+  const [resp,   setResp]   = useState<Record<string, BlindCriterionResponse>>({})
+  const [loading, setLoading] = useState(true)
+  const [busy,    setBusy]    = useState(false)
+  const [err,     setErr]     = useState<string | null>(null)
+  const [jwt,     setJwt]     = useState('')
+  const [scope,   setScope]   = useState<'segment' | 'contact'>('segment')
+  // resolve controls
+  const [severity, setSeverity] = useState('medium')
+  const [flagBias, setFlagBias] = useState(false)
+  const [notes,    setNotes]    = useState('')
+
+  useEffect(() => { getAccessToken().then(tok => setJwt(tok ?? '')).catch(() => {}) }, [getAccessToken])
+
+  useEffect(() => {
+    let alive = true
+    getBlindContext(review.id, tenantId)
+      .then(c => {
+        if (!alive) return
+        setCtx(c)
+        if (c.already_rescored && c.blind_result) {
+          setReveal({
+            blind_result:        c.blind_result,
+            severity_min:        0,
+            ai_overall_score:    c.blind_result.ai_overall_score,
+            blind_overall_score: c.blind_result.blind_overall_score,
+            per_dimension_diffs: c.blind_result.per_dimension_diffs,
+          })
+        }
+      })
+      .catch(e => alive && setErr(String(e)))
+      .finally(() => alive && setLoading(false))
+    return () => { alive = false }
+  }, [review.id, tenantId])
+
+  // Conversation (masked) — the curator scores AGAINST this, AI scores hidden.
+  const { data: transcript, loading: tLoading, error: tError } =
+    useResultTranscript(ctx?.result_id ?? null, tenantId, scope, jwt)
+  const messages = transcript?.messages ?? []
+
+  const setCrit = (cid: string, patch: Partial<BlindCriterionResponse>) =>
+    setResp(prev => ({ ...prev, [cid]: { ...prev[cid], ...patch, criterion_id: cid } }))
+
+  const handleRescore = async () => {
+    setBusy(true); setErr(null)
+    try {
+      const responses = Object.values(resp).filter(
+        r => r.na || r.score != null || r.boolean_value != null || r.choice_value != null,
+      )
+      if (responses.length === 0) { setErr(t('curation.blind.errEmpty')); setBusy(false); return }
+      setReveal(await blindRescore(review.id, tenantId, userId, responses))
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleResolve = async () => {
+    setBusy(true); setErr(null)
+    try {
+      await blindResolve(review.id, tenantId, userId, {
+        curator_notes: notes || undefined, severity, flag_bias: flagBias,
+      })
+      onResolved()
+      onClose()
+    } catch (e) {
+      setErr(String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const dims = ctx?.form?.dimensions ?? []
+  const diffs = reveal?.per_dimension_diffs ?? []
+  const disagreements = diffs.filter(d => d.disagree).length
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
+      <div className="relative w-full max-w-5xl bg-white shadow-xl flex flex-col h-full">
+
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b">
+          <div>
+            <h2 className="font-semibold text-dark">
+              <EyeOff className="w-4 h-4 inline mr-1 text-primary" aria-hidden="true" />
+              {reveal ? t('curation.blind.titleReveal') : t('curation.blind.titleScore')}
+            </h2>
+            <p className="text-xs text-muted mt-0.5">{review.evaluation_instance_id}</p>
+          </div>
+          <button onClick={onClose} className="text-muted-light hover:text-muted" aria-label={t('curation.drawer.cancel')}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Two panes: transcript (left) | scoring/diff (right) */}
+        <div className="flex-1 flex min-h-0">
+
+          {/* LEFT — conversation (masked) */}
+          <div className="w-1/2 border-r flex flex-col min-h-0">
+            <div className="flex items-center gap-2 px-3 py-2 border-b bg-surface-muted">
+              <span className="text-sm font-semibold text-dark">{t('curation.blind.conversation')}</span>
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-warning-light text-warning-text">🔒 {t('curation.blind.masked')}</span>
+              <div className="ml-auto flex rounded border border-border-strong overflow-hidden text-xs">
+                {(['segment', 'contact'] as const).map(s => (
+                  <button
+                    key={s}
+                    onClick={() => setScope(s)}
+                    className={`px-2 py-1 transition-colors ${scope === s ? 'bg-primary text-white' : 'bg-white text-muted hover:bg-surface-muted'}`}
+                  >
+                    {t(`curation.blind.scope_${s}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {tLoading && <div className="text-xs text-muted-light text-center py-8">⟳ {t('curation.loading')}</div>}
+              {tError && <div className="text-xs text-red-text bg-red-light border border-red/20 rounded p-2">{String(tError)}</div>}
+              {!tLoading && !tError && messages.length === 0 && (
+                <div className="text-sm text-muted-light text-center py-8">{t('curation.blind.noMessages')}</div>
+              )}
+              {messages.map(m => <BlindMessage key={m.stream_entry_id} m={m} />)}
+            </div>
+          </div>
+
+          {/* RIGHT — scoring (blind) / reveal (diff) */}
+          <div className="w-1/2 flex flex-col min-h-0">
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {loading && <p className="text-sm text-muted-light">{t('curation.loading')}</p>}
+              {err && <p className="text-sm text-red-text">{err}</p>}
+
+              {/* SCORE PHASE — criteria inputs, AI score hidden */}
+              {!loading && !reveal && (
+                <>
+                  <div className="bg-primary-light border border-primary/20 rounded p-3 text-xs text-primary">
+                    {t('curation.blind.scoreHint')}
+                  </div>
+                  {dims.map(dim => (
+                    <div key={dim.dimension_id} className="border rounded-lg p-3 space-y-3">
+                      <div className="text-sm font-semibold text-dark">{dim.label || dim.name || dim.dimension_id}</div>
+                      {(dim.criteria ?? []).map(c => {
+                        const r = resp[c.criterion_id] || { criterion_id: c.criterion_id }
+                        const type = c.type || 'score'
+                        const na = Boolean(r.na)
+                        return (
+                          <div key={c.criterion_id} className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm text-dark">{critLabel(c)}</p>
+                              <p className="text-xs text-muted-light">{c.criterion_id}</p>
+                            </div>
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              {type === 'boolean' && (
+                                <select
+                                  disabled={na}
+                                  className="border rounded px-2 py-1 text-sm disabled:opacity-40"
+                                  value={r.boolean_value == null ? '' : String(r.boolean_value)}
+                                  onChange={e => setCrit(c.criterion_id, { boolean_value: e.target.value === 'true', na: false })}
+                                >
+                                  <option value="">—</option>
+                                  <option value="true">{t('curation.blind.yes')}</option>
+                                  <option value="false">{t('curation.blind.no')}</option>
+                                </select>
+                              )}
+                              {type === 'choice' && (
+                                <select
+                                  disabled={na}
+                                  className="border rounded px-2 py-1 text-sm disabled:opacity-40"
+                                  value={r.choice_value ?? ''}
+                                  onChange={e => setCrit(c.criterion_id, { choice_value: e.target.value, na: false })}
+                                >
+                                  <option value="">—</option>
+                                  {Object.keys(c.choice_scores ?? {}).map(k => <option key={k} value={k}>{k}</option>)}
+                                </select>
+                              )}
+                              {(type === 'score' || type === 'auto_computed') && (
+                                <input
+                                  type="number"
+                                  disabled={na}
+                                  min={c.min_score ?? 0}
+                                  max={c.max_score ?? 10}
+                                  step="0.5"
+                                  className="border rounded px-2 py-1 text-sm w-20 disabled:opacity-40"
+                                  value={r.score ?? ''}
+                                  onChange={e => setCrit(c.criterion_id, { score: e.target.value === '' ? undefined : Number(e.target.value), na: false })}
+                                />
+                              )}
+                              {critNaAllowed(c) && (
+                                <label className="flex items-center gap-1 text-xs text-muted">
+                                  <input type="checkbox" checked={na} onChange={e => setCrit(c.criterion_id, { na: e.target.checked })} />
+                                  {t('curation.blind.na')}
+                                </label>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ))}
+                </>
+              )}
+
+              {/* REVEAL PHASE — AI vs human diff per dimension */}
+              {reveal && (
+                <>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-surface-alt border rounded p-3 text-center">
+                      <div className="text-xs text-muted">{t('curation.blind.aiOverall')}</div>
+                      <div className="text-xl font-bold text-dark">{reveal.ai_overall_score?.toFixed(2) ?? '—'}</div>
+                    </div>
+                    <div className="bg-primary-light border border-primary/20 rounded p-3 text-center">
+                      <div className="text-xs text-primary">{t('curation.blind.humanOverall')}</div>
+                      <div className="text-xl font-bold text-primary">{reveal.blind_overall_score?.toFixed(2) ?? '—'}</div>
+                    </div>
+                  </div>
+
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-xs text-muted border-b">
+                        <th className="text-left py-1">{t('curation.blind.dimension')}</th>
+                        <th className="text-right py-1">{t('curation.blind.ai')}</th>
+                        <th className="text-right py-1">{t('curation.blind.human')}</th>
+                        <th className="text-right py-1">{t('curation.blind.diff')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {diffs.map((d: BlindDimensionDiff) => (
+                        <tr key={d.dimension_id} className={`border-b ${d.disagree ? 'bg-red-light' : ''}`}>
+                          <td className="py-1 text-dark">
+                            {d.dimension_id}
+                            {d.disagree && (
+                              <span className="ml-2 text-xs px-1.5 py-0.5 rounded-full bg-red text-white">
+                                {t('curation.blind.disagree')}
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-1 text-right text-muted">{d.ai_score?.toFixed(1) ?? '—'}</td>
+                          <td className="py-1 text-right text-dark font-medium">{d.human_score?.toFixed(1) ?? '—'}</td>
+                          <td className="py-1 text-right">{diffPct(d.diff)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {review.status === 'pending' ? (
+                    <div className="border-t pt-3 space-y-3">
+                      <p className="text-xs text-muted">
+                        {disagreements > 0
+                          ? t('curation.blind.willRecalibrate', { count: disagreements })
+                          : t('curation.blind.willApprove')}
+                      </p>
+                      {disagreements > 0 && (
+                        <>
+                          <label className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={flagBias} onChange={e => setFlagBias(e.target.checked)} />
+                            {t('curation.blind.flagBias')}
+                          </label>
+                          <select
+                            className="w-full border rounded px-3 py-2 text-sm"
+                            value={severity}
+                            onChange={e => setSeverity(e.target.value)}
+                            disabled={flagBias}
+                          >
+                            <option value="low">{t('curation.drawer.severityLow')}</option>
+                            <option value="medium">{t('curation.drawer.severityMedium')}</option>
+                            <option value="high">{t('curation.drawer.severityHigh')}</option>
+                          </select>
+                          <textarea
+                            className="w-full border rounded px-3 py-2 text-sm resize-none"
+                            rows={2}
+                            value={notes}
+                            onChange={e => setNotes(e.target.value)}
+                            placeholder={t('curation.blind.notesPlaceholder')}
+                          />
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted border-t pt-3">{t('curation.blind.alreadyResolved', { status: review.status })}</p>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t p-4 flex justify-end gap-2">
+          <button onClick={onClose} disabled={busy} className="px-4 py-2 text-sm border rounded hover:bg-surface-muted">
+            {t('curation.drawer.cancel')}
+          </button>
+          {!reveal && !loading && (
+            <button
+              onClick={handleRescore}
+              disabled={busy}
+              className="px-4 py-2 text-sm rounded text-white font-medium bg-primary hover:bg-primary/90 disabled:opacity-40"
+            >
+              {busy ? t('curation.blind.revealing') : t('curation.blind.reveal')}
+            </button>
+          )}
+          {reveal && review.status === 'pending' && (
+            <button
+              onClick={handleResolve}
+              disabled={busy}
+              className="px-4 py-2 text-sm rounded text-white font-medium bg-primary hover:bg-primary/90 disabled:opacity-40"
+            >
+              {busy ? t('curation.blind.resolving') : t('curation.blind.resolve')}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── CurationCard ──────────────────────────────────────────────────────────────
 
 interface CurationCardProps {
   review: CurationReview
+  tenantId: string
+  userId: string
   onResolve: (reviewId: string, payload: CurationResolvePayload) => Promise<void>
+  onReload: () => void
 }
 
-function CurationCard({ review, onResolve }: CurationCardProps) {
+function CurationCard({ review, tenantId, userId, onResolve, onReload }: CurationCardProps) {
   const { t } = useTranslation('evaluation')
-  const [drawer, setDrawer] = useState<'recalibrate' | 'bias' | null>(null)
+  const [drawer, setDrawer] = useState<'recalibrate' | 'bias' | 'blind' | null>(null)
   const [approving, setApproving] = useState(false)
+  const isBlind = review.mode === 'blind'
 
   const handleApprove = async () => {
     setApproving(true)
@@ -277,13 +640,20 @@ function CurationCard({ review, onResolve }: CurationCardProps) {
         <div className="flex items-start justify-between gap-3">
           <div className="space-y-1.5 flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              {triggerBadge(review.trigger)}
+              {isBlind ? (
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-primary-light text-primary inline-flex items-center gap-1">
+                  <EyeOff className="w-3 h-3" aria-hidden="true" />{t('curation.blind.badge')}
+                </span>
+              ) : triggerBadge(review.trigger)}
               {review.campaign_id && (
                 <span className="text-xs text-muted-light truncate">{review.campaign_id}</span>
               )}
+              {isBlind && review.expired_at && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-surface-alt text-muted">{t('curation.blind.expired')}</span>
+              )}
             </div>
             <p className="text-xs text-muted font-mono truncate">{review.evaluation_instance_id}</p>
-            {signal && (
+            {signal && !isBlind && (
               <div className="bg-warning-light border border-warning/20 rounded px-3 py-2 space-y-0.5">
                 <div className="flex items-center gap-1.5 text-xs font-medium text-warning-text">
                   {severityDot(signal.severity)}
@@ -298,30 +668,51 @@ function CurationCard({ review, onResolve }: CurationCardProps) {
           </div>
         </div>
 
-        <div className="flex gap-2 pt-1 border-t">
-          <button
-            onClick={handleApprove}
-            disabled={approving}
-            className="flex-1 py-1.5 text-xs rounded border border-green/30 text-green-text hover:bg-green-light disabled:opacity-50 font-medium transition-colors"
-          >
-            {approving ? t('curation.approving') : <><Check className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.approve')}</>}
-          </button>
-          <button
-            onClick={() => setDrawer('recalibrate')}
-            className="flex-1 py-1.5 text-xs rounded border border-warning/30 text-warning-text hover:bg-warning-light font-medium transition-colors"
-          >
-            <RefreshCw className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.recalibrate')}
-          </button>
-          <button
-            onClick={() => setDrawer('bias')}
-            className="flex-1 py-1.5 text-xs rounded border border-red/30 text-red-text hover:bg-red-light font-medium transition-colors"
-          >
-            <AlertTriangle className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.bias')}
-          </button>
-        </div>
+        {isBlind ? (
+          <div className="flex gap-2 pt-1 border-t">
+            <button
+              onClick={() => setDrawer('blind')}
+              className="flex-1 py-1.5 text-xs rounded border border-primary/30 text-primary hover:bg-primary-light font-medium transition-colors"
+            >
+              <EyeOff className="w-3 h-3 inline mr-1" aria-hidden="true" />
+              {review.status === 'pending' ? t('curation.blind.scoreCta') : t('curation.blind.viewCta')}
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2 pt-1 border-t">
+            <button
+              onClick={handleApprove}
+              disabled={approving}
+              className="flex-1 py-1.5 text-xs rounded border border-green/30 text-green-text hover:bg-green-light disabled:opacity-50 font-medium transition-colors"
+            >
+              {approving ? t('curation.approving') : <><Check className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.approve')}</>}
+            </button>
+            <button
+              onClick={() => setDrawer('recalibrate')}
+              className="flex-1 py-1.5 text-xs rounded border border-warning/30 text-warning-text hover:bg-warning-light font-medium transition-colors"
+            >
+              <RefreshCw className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.recalibrate')}
+            </button>
+            <button
+              onClick={() => setDrawer('bias')}
+              className="flex-1 py-1.5 text-xs rounded border border-red/30 text-red-text hover:bg-red-light font-medium transition-colors"
+            >
+              <AlertTriangle className="w-3 h-3 inline mr-1" aria-hidden="true" />{t('curation.bias')}
+            </button>
+          </div>
+        )}
       </div>
 
-      {drawer && (
+      {drawer === 'blind' && (
+        <BlindScoreDrawer
+          review={review}
+          tenantId={tenantId}
+          userId={userId}
+          onClose={() => setDrawer(null)}
+          onResolved={onReload}
+        />
+      )}
+      {(drawer === 'recalibrate' || drawer === 'bias') && (
         <RecalibrateDrawer
           review={review}
           isBias={drawer === 'bias'}
@@ -444,7 +835,10 @@ export default function CuradoriaPage() {
           <CurationCard
             key={review.id}
             review={review}
+            tenantId={tenantId}
+            userId={userId}
             onResolve={handleResolve}
+            onReload={reload}
           />
         ))}
       </div>
