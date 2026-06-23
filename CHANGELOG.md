@@ -2,6 +2,33 @@
 
 ---
 
+## R7a — Masking do output_snapshot na auditoria MCP (fix de vazamento) (2026-06-23)
+
+Fecha um vazamento latente: o `McpInterceptor` gravava o `output_snapshot` **cru**
+(`capture_output ? result : undefined`) — ligar `capture_output` numa tool que retorna PII
+escrevia PII bruta no `mcp.audit`/ClickHouse, independente de avaliação. Agora o output é
+mascarado por padrão, simétrico ao input (que já redigia campos `@masked`).
+
+**sdk** (`mcp-interceptor.ts`): nova `maskOutputForAudit()` — varre o retorno recursivamente e
+mascara PII em folhas string por **padrão** (regex das `DEFAULT_MASKING_RULES`, substituindo pelo
+`replacement` estático, sem dígitos reais); **preserva conteúdo não-PII** (habilita
+faithfulness-vs-ferramenta sobre fatos não sensíveis). Registra `masked_output_fields` (paths) e
+**une** as categorias detectadas a `data_categories` (flagra PII que a tool não declarou).
+`capture_output` segue **opt-in por tool** (default false).
+
+**schemas** (`audit.ts`): `AuditRecordSchema.masked_output_fields?: string[]` (simétrico a
+`masked_input_fields`).
+
+**Teste:** `packages/sdk/src/__tests__/output-masking.test.ts` (vitest) — CPF/email/cartão/telefone
+mascarados, paths/categorias corretos, não-PII preservado, primitivos/null intactos.
+
+**Deferido (R7b/c + Audit LGPD Fase 2):** faithfulness sobre o **valor** PII (vault + reveal
+campo-mínimo transiente, R7c); enforcement de `retention_days` por tool acompanha o dual-write do
+`mcp_audit_log` (Fase 2). Argument correctness e faithfulness-não-PII já ficam habilitados ao ligar
+`capture_input`/`capture_output` na tool.
+
+---
+
 ## R5 + R6 — Tier-2 de IA: evidência de execução no avaliador (2026-06-23)
 
 Habilita o avaliador a julgar o que a IA **fez** (não só o que disse): tool correctness, policy

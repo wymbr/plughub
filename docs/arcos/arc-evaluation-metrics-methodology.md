@@ -250,6 +250,11 @@ tool + LGPD).
 
 ## II.5 Captura de tool I/O para faithfulness (R7) — masking + LGPD
 
+> **Status (2026-06-23): ✅ R7a (baseline) implementado** — o vazamento do `output_snapshot` foi
+> fechado (`maskOutputForAudit` mascara PII por padrão, simétrico ao input; `masked_output_fields` +
+> categorias detectadas unidas a `data_categories`). Decisões (a)/(c) abaixo (masked+original,
+> faithfulness sobre VALOR PII via vault) seguem **deferidas** em R7b/R7c.
+
 **Achado (assimetria + vazamento latente).** No `McpInterceptor`: o `input_snapshot` redige os
 campos vindos via `@masked` (`_sanitizeSnapshotForAudit` → `[MASKED]` + `masked_input_fields`); o
 `output_snapshot` é `capture_output ? result : undefined` — **resultado cru, sem máscara**. Logo,
@@ -648,7 +653,7 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R4** | Completar o catálogo I.3 no extractor (faltam derivados p90/median, `max_consecutive_agent_messages`, `step_*`, `required_fields_captured_pct`, sentimento) nos **dois escopos** (contato + segmento) | `session_metrics_extractor.py` | A |
 | **R5** ✅ | **Tier-2 enabler.** (a) analytics-api `GET /v1/audit/mcp-calls` ganha filtro `session_id` (ASC); (b) `evaluation_context_get` devolve `tool_trace` (analytics-api) + `flow_definition` (trajetória esperada, agent-registry `GET /v1/skills/:flow_id`); (c) **R5/B** — `PipelineStatePersister` (session-replayer) snapshota o `pipeline_state` no `session_closed` → tabela durável `session_pipeline_state` (substrato R4); `ReplayContext.pipeline_state` = trajetória REAL (PG→fallback Redis vivo; ausente→`na`). Sem input/output snapshot (isso é R7). Teste `tests/test_pipeline_persister.py` + smoke `infra/test/test_r5_tier2_smoke.sh` | session-replayer + mcp-server + analytics-api | II.4 |
 | **R6** ✅ | Dimensões de IA como critérios `type=score` 1ª classe (fluem ao output-schema via `buildEvaluationOutputSchema`, sem cirurgia): `agente_avaliacao_v1.yaml` passa `tool_trace`/`flow_definition`/`actual_trajectory` ao `reason` e instrui uso + `na`-quando-ausente. Form-semente "Avaliação de IA (tier-2)" via API oficial (`infra/test/seed_ai_eval_form.sh`): tool correctness, policy adherence, faithfulness-vs-KB | skill `agente_avaliacao_v1` + form seed | II.2 |
-| **R7a** | **Fix de segurança + baseline:** aplicar masking ao `output_snapshot` no `McpInterceptor` (hoje cru — vazamento) + `masked_categories`; habilita tool/argument correctness + faithfulness **não-PII**; `capture_output` opt-in por tool, `retention_days` curto p/ PII | sdk `mcp-interceptor.ts` + audit | II.5 |
+| **R7a** ✅ | **Fix de segurança + baseline:** `McpInterceptor.maskOutputForAudit()` mascara PII no `output_snapshot` por padrão (regex `DEFAULT_MASKING_RULES`, preserva não-PII), registra `masked_output_fields` e une categorias detectadas a `data_categories`; fecha o vazamento (output cru → mascarado). `capture_output` opt-in por tool (default false); `retention_days` é campo per-tool (enforcement TTL acompanha o dual-write `mcp_audit_log`, Fase 2). Habilita tool/argument correctness + faithfulness **não-PII**. Teste `sdk/src/__tests__/output-masking.test.ts` | sdk `mcp-interceptor.ts` + schemas `audit.ts` | II.5 |
 | **R7b** | **Faithfulness-PII (tier estendido, deferido):** vault de `output_snapshot` original p/ papéis autorizados + `requires_consent` + retenção limitada | audit/Core + config | II.5 |
 | **R7c** | **Reveal campo-mínimo transiente:** critério declara o campo verificável (`output.*`); reveal escopado just-in-time + auditado; resultado guarda só veredito + evidência mascarada (PII não entra no store de avaliação) | evaluation-api + skill avaliador | II.5 |
 | **R8a** | Controles de viés na rubrica (verbosity, self-enhancement, surface-fluency, authority) no `prompt_composer`/rubrica-template | `prompt_composer.py` (T8) | III.4 |

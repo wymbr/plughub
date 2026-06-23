@@ -299,5 +299,13 @@ export const AuditRecordSchema = z.object({
    * Quando todos os inputs são mascarados, input_snapshot = null.
    */
   masked_input_fields: z.array(z.string()).optional(),
+  /**
+   * R7a — simétrico ao input: paths (dot-notation) do output cujo conteúdo continha
+   * PII e foi mascarado antes de persistir o `output_snapshot`. O snapshot NUNCA
+   * carrega o valor cru de PII (fix de vazamento). As categorias detectadas no output
+   * são unidas a `data_categories`. Presente quando capture_output=true e o retorno
+   * da tool casou alguma regra de masking.
+   */
+  masked_output_fields: z.array(z.string()).optional(),
 })
 export type AuditRecord = z.infer<typeof AuditRecordSchema>

@@ -29,10 +29,80 @@
  * Agentes nativos DEVEM usar McpInterceptor em vez de chamar MCP servers diretamente.
  */
 
-import type { AuditRecord, AuditPolicy, AuditContext, ToolContextTags } from "@plughub/schemas"
+import type { AuditRecord, AuditPolicy, AuditContext, ToolContextTags, DataCategory } from "@plughub/schemas"
+import { DEFAULT_MASKING_RULES } from "@plughub/schemas"
 import { AuditKafkaWriter, type AuditKafkaConfig }     from "./infra/audit-kafka"
 import { ContextAccumulator } from "./context-accumulator"
 import type { ContextStore }  from "./context-store"
+
+// ─────────────────────────────────────────────
+// R7a — Output snapshot masking (pattern-based, symmetric to input)
+//
+// Diferente do input (que é mascarado por anotação @masked/token), o retorno da tool
+// não tem anotação — a PII é detectada por PADRÃO (regex das DEFAULT_MASKING_RULES) e
+// substituída pelo `replacement` (placeholder estático, sem dígitos reais). Garante que
+// o valor cru de PII NUNCA chega ao mcp_audit_log. Mantém o texto não-PII intacto para
+// faithfulness-vs-ferramenta sobre fatos não sensíveis.
+// ─────────────────────────────────────────────
+
+const _OUTPUT_MASK_RULES: { re: RegExp; category: DataCategory; replacement: string }[] =
+  DEFAULT_MASKING_RULES.flatMap(r => {
+    try {
+      return [{ re: new RegExp(r.pattern, "g"), category: r.category, replacement: r.replacement }]
+    } catch {
+      return []
+    }
+  })
+
+interface OutputMaskResult {
+  value:      unknown
+  fields:     string[]
+  categories: DataCategory[]
+}
+
+/**
+ * Recursively walks `value`, masking PII in string leaves by pattern. Returns the
+ * masked copy, the dot-notation paths where masking occurred, and the categories
+ * detected. Pure/synchronous — no vault, no I/O. Non-PII content is preserved.
+ * Exported for unit testing (R7a).
+ */
+export function maskOutputForAudit(value: unknown, path = ""): OutputMaskResult {
+  if (typeof value === "string") {
+    let masked = value
+    const categories: DataCategory[] = []
+    for (const rule of _OUTPUT_MASK_RULES) {
+      rule.re.lastIndex = 0
+      if (rule.re.test(masked)) {
+        masked = masked.replace(rule.re, rule.replacement)
+        categories.push(rule.category)
+      }
+    }
+    return categories.length > 0
+      ? { value: masked, fields: [path || "$"], categories }
+      : { value, fields: [], categories: [] }
+  }
+  if (Array.isArray(value)) {
+    const out: unknown[] = []
+    const fields: string[] = []
+    const categories: DataCategory[] = []
+    value.forEach((item, i) => {
+      const r = maskOutputForAudit(item, path ? `${path}[${i}]` : `[${i}]`)
+      out.push(r.value); fields.push(...r.fields); categories.push(...r.categories)
+    })
+    return { value: out, fields, categories }
+  }
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {}
+    const fields: string[] = []
+    const categories: DataCategory[] = []
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      const r = maskOutputForAudit(v, path ? `${path}.${k}` : k)
+      out[k] = r.value; fields.push(...r.fields); categories.push(...r.categories)
+    }
+    return { value: out, fields, categories }
+  }
+  return { value, fields: [], categories: [] }
+}
 
 // ─────────────────────────────────────────────
 // Injection guard (inline — sync with mcp-server-plughub/src/infra/injection_guard.ts)
@@ -435,6 +505,19 @@ export class McpInterceptor {
           ? this._sanitizeSnapshotForAudit(resolvedArgs, maskedInputFields)
           : resolvedArgs)
       : undefined
+    // R7a — o output_snapshot NUNCA é gravado cru: PII detectada por padrão é mascarada
+    // (simétrico ao input). capture_output segue opt-in por tool (default false).
+    let auditOutputSnapshot: unknown = undefined
+    let maskedOutputFields: string[] | undefined = undefined
+    let detectedOutputCategories: DataCategory[] | undefined = undefined
+    if (opts.audit_policy?.capture_output) {
+      const m = maskOutputForAudit(result)
+      auditOutputSnapshot = m.value
+      if (m.fields.length > 0) {
+        maskedOutputFields       = m.fields
+        detectedOutputCategories = Array.from(new Set(m.categories))
+      }
+    }
     this._audit({
       claims, serverName, toolName, permissions,
       allowed:              true,
@@ -442,8 +525,10 @@ export class McpInterceptor {
       duration_ms:          duration,
       opts,
       input_snapshot:       auditInputSnapshot,
-      output_snapshot:      opts.audit_policy?.capture_output ? result : undefined,
+      output_snapshot:      auditOutputSnapshot,
       masked_input_fields:  maskedInputFields.length > 0 ? maskedInputFields : undefined,
+      masked_output_fields: maskedOutputFields,
+      detected_output_categories: detectedOutputCategories,
     })
 
     if (callError !== undefined) throw callError
@@ -465,7 +550,16 @@ export class McpInterceptor {
     input_snapshot:       unknown
     output_snapshot:      unknown
     masked_input_fields?: string[]
+    masked_output_fields?: string[]
+    /** Categorias de PII detectadas e mascaradas no output (R7a) — unidas a data_categories. */
+    detected_output_categories?: DataCategory[]
   }): void {
+    // R7a — data_categories reflete o declarado pela política UNIDO ao detectado no
+    // output (flagra PII inesperada que a tool não declarou). undefined quando vazio.
+    const declaredCategories = params.opts.audit_policy?.data_categories ?? []
+    const dataCategories = Array.from(
+      new Set<DataCategory>([...declaredCategories, ...(params.detected_output_categories ?? [])])
+    )
     const record: AuditRecord = {
       event_type:          "mcp.tool_call",
       timestamp:           new Date().toISOString(),
@@ -479,12 +573,13 @@ export class McpInterceptor {
       injection_detected:  params.injection_detected,
       injection_pattern:   params.injection_pattern,
       duration_ms:         params.duration_ms,
-      data_categories:     params.opts.audit_policy?.data_categories,
+      data_categories:     dataCategories.length > 0 ? dataCategories : undefined,
       input_snapshot:      params.input_snapshot,
       output_snapshot:     params.output_snapshot,
       audit_context:       params.opts.audit_context,
       source:              "in_process",
       masked_input_fields: params.masked_input_fields,
+      masked_output_fields: params.masked_output_fields,
     }
     try {
       this.writer.write(record)
