@@ -33,6 +33,7 @@ export interface SkillFlowEngineConfig {
     session_id:    string
     attempt:       number
     json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
+    model_profile?: string                    // R8d — perfil de modelo (revisor heterogêneo)
   }) => Promise<unknown>
   /**
    * ContextStore unificado — acesso a @ctx.namespace.campo para steps que

@@ -31,6 +31,9 @@ export async function executeReason(
   // T7b — JSON Schema (montado upstream do form), inline ou via json_schema_ref.
   const jsonSchema    = resolveJsonSchema(step, ctx)
   const maxRetries    = step.max_format_retries ?? 1
+  // R8d — perfil de modelo (estático ou `$.pipeline_state.*`). Resolvido p/ habilitar
+  // revisor heterogêneo (família ≠ avaliador) sem hardcode no YAML.
+  const modelProfile  = resolveModelProfile(step, ctx)
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -41,6 +44,7 @@ export async function executeReason(
         session_id:    ctx.sessionId,
         attempt,
         ...(jsonSchema ? { json_schema: jsonSchema } : {}),
+        ...(modelProfile ? { model_profile: modelProfile } : {}),
       })
 
       // T7b — com JSON Schema, o ai-gateway garante o shape via tool-use (validação
@@ -138,6 +142,28 @@ function resolveJsonSchema(
     }
   }
   return undefined
+}
+
+
+/**
+ * R8d — resolve o `model_profile` do reason step. Aceita string estática
+ * ("evaluation") ou referência JSONPath (`$.pipeline_state.*`) resolvida em runtime
+ * (ex.: revisor lê o perfil da config da campanha injetada no pipeline_state). Retorna
+ * undefined quando ausente ou quando a referência não resolve para string → o ai-gateway
+ * cai no default ("balanced").
+ */
+export function resolveModelProfile(
+  step: ReasonStep,
+  ctx:  StepContext,
+): string | undefined {
+  const mp = (step as { model_profile?: string }).model_profile
+  if (!mp) return undefined
+  if (mp.startsWith("$.")) {
+    const evalContext = { pipeline_state: ctx.state.results, session: ctx.sessionContext }
+    const resolved = JSONPath({ path: mp, json: evalContext as object, wrap: false })
+    return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined
+  }
+  return mp
 }
 
 

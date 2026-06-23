@@ -787,6 +787,15 @@ export const ContestationPolicySchema = z.object({
   contestation_roles:      z.array(z.string()).default([]),
   /** Per-round reviewer role mappings (legacy compat) */
   review_roles_by_round:   z.record(z.string(), z.string()).default({}),
+  /**
+   * R8d — AI Gateway model profile for the AI reviewer (pre-review / contestation review).
+   * Recommended ≠ the evaluator's profile ("evaluation") to decorrelate MODEL bias
+   * (verbosity, position, self-enhancement). null/absent → reviewer uses the engine default.
+   * Caveat: descorrelaciona viés de MODELO, não de DADO (KB compartilhada) — não substitui
+   * o check humano cego (R8c). The reviewer skill reads this via
+   * `model_profile: "$.pipeline_state.<ctx>.reviewer_model_profile"`.
+   */
+  reviewer_model_profile:  z.enum(["fast", "balanced", "powerful", "evaluation"]).nullable().optional(),
 })
 export type ContestationPolicy = z.infer<typeof ContestationPolicySchema>
 

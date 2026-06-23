@@ -2,6 +2,31 @@
 
 ---
 
+## R8d — Revisor heterogêneo (modelo do revisor ≠ avaliador) (2026-06-23)
+
+Reduz viés de MODELO descorrelacionando o modelo do revisor AI do avaliador. Achado: o
+`model_profile` do reason step **não era repassado** — avaliador e revisor caíam no default
+`balanced` (mesmo modelo). Agora é fiado ponta a ponta.
+
+**Plumbing** (reusável): `ReasonStep.model_profile?` (`@plughub/schemas`); `reason.ts`
+`resolveModelProfile()` aceita estático ("evaluation") **ou** referência `$.pipeline_state.*`
+(resolvida em runtime → o revisor lê o perfil da config da campanha) e o inclui no payload do
+`aiGatewayCall`; tipos atualizados (`executor.ts`/`engine.ts`/skill-flow-service); o
+skill-flow-service já forwarda via `JSON.stringify(payload)` ao `/v1/reason`. O `ai-gateway` já
+aceita `model_profile` (`ReasonRequest`, default `balanced`; profiles `fast`/`balanced`/`powerful`/
+`evaluation`).
+
+**Heterogeneidade**: o avaliador (`agente_avaliacao_v1`) passa a fixar `model_profile: evaluation`
+(modelo isolado, explícito). Config de campanha `ContestationPolicy.reviewer_model_profile`
+(`fast|balanced|powerful|evaluation`, ≠ avaliador) + UI na `CampaignsPage` (dropdown + hint) +
+i18n en/pt-BR. **Caveat documentado**: descorrelaciona viés de MODELO, não de DADO (KB
+compartilhada) — não substitui o check humano cego (R8c).
+
+**Teste:** `skill-flow-engine/src/steps/reason.model-profile.test.ts` (vitest) — estático, `$.`-ref,
+não-resolve→undefined, ausente→undefined.
+
+---
+
 ## R8a + R8b + R8e — Calibração: controles de viés + gatilho de divergência + UI (2026-06-23)
 
 Primeira fatia do R8 (calibração avaliador×humano, sobre Arc 13). Fecha a "peça faltante"

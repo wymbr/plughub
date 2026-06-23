@@ -783,7 +783,7 @@ Dois fluxos por tipo de agente avaliado. **Humano**: revisor AI pré-publicaçã
 
 ---
 
-## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R7a/R8a/R8b/R8e/R9–R12 ✅; R7b/R7c fora de escopo (LGPD); demais PENDENTE
+## Métricas de Avaliação & Metodologia ⚠️ design fechado — R1/R5/R6/R7a/R8a/R8b/R8d/R8e/R9–R12 ✅; R7b/R7c fora de escopo (LGPD); R8c PENDENTE; demais PENDENTE
 
 > **Limitação assumida (2026-06-23):** faithfulness sobre **valor PII de output de ferramenta** não é
 > suportada — reter o retorno cru (vault R7b) é anti-minimização LGPD sem requisito consentido. R7a

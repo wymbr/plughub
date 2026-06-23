@@ -204,6 +204,9 @@ steps:
     # nativo no ai-gateway (T7b-1). Quando presente, o engine pula a validação estática
     # local; o output_schema abaixo permanece como fallback (será removido no T7b-3).
     json_schema_ref: "$.pipeline_state.eval_context.evaluation_output_schema"
+    # R8d — avaliador fixado no perfil `evaluation` (modelo isolado). O revisor heterogêneo
+    # deve usar um perfil DIFERENTE (família ≠ avaliador) — config da campanha (reviewer_model_profile).
+    model_profile: evaluation
     input:
       # T8-B2 — instruções gerais de avaliação (rubrica-template efetiva: override pub. da
       # campanha → default pub. do tenant → built-in). Como pontuar, citar evidência, N/A,

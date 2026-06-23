@@ -269,6 +269,11 @@ export const ReasonStepSchema = z.object({
   // (o ai-gateway valida recursivamente). `output_schema` permanece como fallback.
   json_schema:        z.record(z.unknown()).optional(),
   json_schema_ref:    z.string().optional(),
+  // R8d — perfil de modelo do AI Gateway para este reason (fast|balanced|powerful|
+  // evaluation). Estático ("evaluation") ou referência `$.pipeline_state.*` resolvida em
+  // runtime (ex.: revisor heterogêneo lê o perfil da config da campanha). Ausente → o
+  // ai-gateway usa o default ("balanced"). Habilita revisor com família ≠ avaliador.
+  model_profile:      z.string().optional(),
   output_as:          z.string(),
   max_format_retries: z.number().int().min(0).max(3).default(1),
   /**

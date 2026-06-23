@@ -348,6 +348,7 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
     max_rounds?: number; contest_deadline_hours?: number; review_deadline_hours?: number
     auto_lock_on_timeout?: boolean; reviewer_type?: string; use_business_hours?: boolean
     pre_review_enabled?: boolean; pre_review_agent_pool?: string | null
+    reviewer_model_profile?: string | null
   }
   const [workflowSkillId, setWorkflowSkillId] = useState(editing?.review_workflow_skill_id ?? 'skill_revisao_simples_v1')
   const [enableContestation, setEnableContestation] = useState(!!editing?.contestation_policy)
@@ -360,6 +361,8 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
   const [useBusinessHours, setUseBusinessHours] = useState(_cp.use_business_hours ?? false)
   const [preReviewEnabled, setPreReviewEnabled] = useState(_cp.pre_review_enabled ?? false)
   const [preReviewPool, setPreReviewPool] = useState(_cp.pre_review_agent_pool ?? '')
+  // R8d — perfil de modelo do revisor (≠ avaliador, descorrelaciona viés de modelo)
+  const [reviewerModelProfile, setReviewerModelProfile] = useState<string>(_cp.reviewer_model_profile ?? '')
 
   // Arc 13 — curation sampling rules
   const [curationRules, setCurationRules] = useState<Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[]>(
@@ -410,6 +413,7 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
             use_business_hours:     useBusinessHours || undefined,
             pre_review_enabled:     preReviewEnabled || undefined,
             pre_review_agent_pool:  preReviewEnabled ? preReviewPool || null : undefined,
+            reviewer_model_profile: reviewerModelProfile || undefined,
           } : undefined,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any, adminToken)
@@ -712,6 +716,26 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
                         <option key={v} value={v}>{t(`campaigns.reviewerTypes.${v}`, v)}</option>
                       ))}
                     </select>
+                  </div>
+                )}
+
+                {/* R8d — reviewer model profile (≠ avaliador, descorrelaciona viés de modelo) */}
+                {isArc13Skill && (
+                  <div>
+                    <label className="block text-xs font-semibold text-muted mb-1">
+                      {t('campaigns.modal.reviewerModelProfile')}
+                    </label>
+                    <select
+                      className="w-full border border-border-strong rounded px-2 py-1 text-sm bg-white"
+                      value={reviewerModelProfile}
+                      onChange={e => setReviewerModelProfile(e.target.value)}
+                    >
+                      <option value="">{t('campaigns.modal.reviewerModelDefault')}</option>
+                      {['fast', 'balanced', 'powerful', 'evaluation'].map(p => (
+                        <option key={p} value={p}>{p}</option>
+                      ))}
+                    </select>
+                    <p className="text-2xs text-muted-light mt-1">{t('campaigns.modal.reviewerModelHint')}</p>
                   </div>
                 )}
 
