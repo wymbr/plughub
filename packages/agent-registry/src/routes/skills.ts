@@ -49,7 +49,8 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
     })
     if (existing) {
       return res.status(409).json({
-        error: "skill_id já registrado — crie uma nova versão (ex: _v2)",
+        error: "skill_id já existe — edite/atualize o skill (PUT) ou escolha outro nome. " +
+               "Versões nascem no deploy, não renomeando o skill.",
       })
     }
 
@@ -58,7 +59,7 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         skill_id:         body.skill_id,
         tenant_id:        tenantId,
         name:             body.name,
-        version:          body.version,
+        version:          body.version ?? "",   // rótulo livre opcional; "" quando ausente (coluna NOT NULL)
         description:      body.description,
         classification:   body.classification,
         instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,
@@ -173,7 +174,7 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
 
     const _upsertUpdate = {
       name:             body.name,
-      version:          body.version,
+      version:          body.version ?? "",   // rótulo livre opcional; "" quando ausente (coluna NOT NULL)
       description:      body.description,
       classification:   body.classification,
       instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,

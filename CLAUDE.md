@@ -437,7 +437,7 @@ All cross-package Kafka events have Zod schemas in `@plughub/schemas`:
 ## Naming Conventions
 
 ```
-skill_id:       skill_{name}_v{n}      →  skill_portabilidade_telco_v2
+skill_id:       skill_{slug} (estável)  →  skill_portabilidade_telco   (sem versão no id; versão é do DEPLOY, ver docs/product/skill-versioning-deploy-spec.md; `_v\d+` legado ainda válido)
 agent_type_id:  {name}_v{n}            →  agente_retencao_v1
 pool_id:        snake_case no version  →  retencao_humano
 mcp_server:     mcp-server-{name}      →  mcp-server-crm

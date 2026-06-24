@@ -67,9 +67,9 @@ from typing import Any
 import aiohttp
 import yaml
 
-# Skill IDs must follow the canonical format defined in SkillSchema:
-#   skill_{name}_v{n}   e.g. skill_copilot_sac_v1
-_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+_v\d+$")
+# Skill IDs are stable slugs defined in SkillSchema (Skill Versioning Fase A):
+#   skill_{slug}   e.g. skill_copilot_sac   (legacy skill_{name}_v{n} still matches the slug)
+_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+$")
 
 logger = logging.getLogger("plughub.registry-syncer")
 

@@ -2,6 +2,26 @@
 
 ---
 
+## Skill Versioning · Fase A — skill_id estável + version opcional (2026-06-24)
+
+Primeira fase do arco Skill Versioning & Deploy (`docs/product/skill-versioning-deploy-spec.md`):
+desacopla a identidade do skill da versão. `skill_id` passa a ser um **slug estável** (`^skill_[a-z0-9_]+$`,
+sem exigir `_v\d+` — legados seguem válidos por casarem o slug); o campo `version` vira **opcional**
+(rótulo livre, nunca identidade — versão é do DEPLOY do pool).
+
+- **schemas** (`skill.ts`): regex `skill_id` relaxada; `version` `z.string().optional()` (era required
+  `^\d+\.\d+$`). Testes `skill.test.ts` atualizados (id sem `_v` aceito + retrocompat `_v` + version
+  opcional). **99/99 verde.**
+- **workflow-api** + **orchestrator-bridge/registry_syncer**: `_SKILL_ID_RE` relaxada idem.
+- **agent-registry** (`skills.ts`): 409 reescrito ("edite/atualize ou outro nome — versões nascem no
+  deploy"); create/PUT default `version ?? ""` (coluna NOT NULL). Validado: PUT `skill_teste_estavel`
+  (sem `_v`, sem `version`) passa a validação de id/version.
+- **CLAUDE.md**: convenção de `skill_id` atualizada (slug estável).
+
+Não toca runtime/analytics (Fases B/C). `version_policy`/`exact_version` seguem vestigiais.
+
+---
+
 ## Arc 6 Fase 2 · micro-fatia 1b — Cobertura do epoch: provisória + pendentes (Opção II) (2026-06-24)
 
 Fecha a pendência do núcleo epoch (R15a/R15b): o ponto de cada versão mostrava só a média

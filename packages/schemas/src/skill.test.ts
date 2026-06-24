@@ -51,16 +51,29 @@ describe("SkillRegistrationSchema", () => {
     expect(r1.success).toBe(r2.success)
   })
 
-  it("skill_id deve seguir a convenção skill_{nome}_v{n}", () => {
+  it("skill_id deve ser slug estável skill_{slug} (sem exigir _v{n})", () => {
+    // prefixo skill_ obrigatório
     expect(() =>
       SkillRegistrationSchema.parse({ ...baseSkill, skill_id: "portabilidade_telco_v2" })
     ).toThrow()
-    expect(() =>
-      SkillRegistrationSchema.parse({ ...baseSkill, skill_id: "skill_portabilidade_telco" })
-    ).toThrow()
+    // sem sufixo de versão agora é VÁLIDO (id estável — Skill Versioning Fase A)
+    expect(
+      SkillRegistrationSchema.safeParse({ ...baseSkill, skill_id: "skill_portabilidade_telco" }).success
+    ).toBe(true)
+    // ids _v{n} legados seguem válidos (retrocompat)
+    expect(
+      SkillRegistrationSchema.safeParse({ ...baseSkill, skill_id: "skill_portabilidade_telco_v2" }).success
+    ).toBe(true)
+    // slug seguro: maiúsculas rejeitadas
     expect(() =>
       SkillRegistrationSchema.parse({ ...baseSkill, skill_id: "Skill_portabilidade_v1" })
     ).toThrow()
+  })
+
+  it("version é opcional (rótulo livre, não identidade)", () => {
+    const { version: _v, ...noVersion } = baseSkill
+    expect(SkillRegistrationSchema.safeParse(noVersion).success).toBe(true)
+    expect(SkillRegistrationSchema.safeParse({ ...baseSkill, version: "beta" }).success).toBe(true)
   })
 
   it("valida skill com tools e interface", () => {

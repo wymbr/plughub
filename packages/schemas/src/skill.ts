@@ -972,9 +972,13 @@ export type SkillFlow = z.infer<typeof SkillFlowSchema>
 export const VersionPolicySchema = z.enum(["stable", "latest", "exact"])
 
 export const SkillSchema = z.object({
-  skill_id:    z.string().regex(/^skill_[a-z0-9_]+_v\d+$/, "Formato: skill_{nome}_v{n}"),
+  // skill_id estável: nome único, slug seguro, SEM sufixo de versão. Versão é do
+  // DEPLOY (do pool), não do skill (ver docs/product/skill-versioning-deploy-spec.md).
+  // `_v\d+` segue válido por retrocompat (casa o slug). Skill Versioning, Fase A.
+  skill_id:    z.string().regex(/^skill_[a-z0-9_]+$/, "Formato: skill_{slug} (a-z, 0-9, _)"),
   name:        z.string(),
-  version:     z.string().regex(/^\d+\.\d+$/, "Formato: major.minor"),
+  // version: rótulo livre opcional (display), nunca identidade. Não é mais major.minor.
+  version:     z.string().optional(),
   description: z.string(),
 
   classification: SkillClassificationSchema,

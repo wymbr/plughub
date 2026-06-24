@@ -121,7 +121,7 @@ class TriggerRequest(BaseModel):
     metadata:          dict = Field(default_factory=dict)
 
 
-_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+_v\d+$")
+_SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+$")  # id estável (Skill Versioning Fase A); _v\d+ legado casa o slug
 
 
 async def _resolve_flow_definition(
