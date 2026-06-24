@@ -38,13 +38,17 @@ function _formatSlot(row: Record<string, unknown> | null, slot: string) {
   return { ...rest, slot, set: true }
 }
 
-/** Fetch skill flow snapshot from the registry (used when developer omits yaml_snapshot) */
+/** Fetch skill flow snapshot from the registry (used when developer omits yaml_snapshot).
+ *  Skill Versioning Fase B/P1: o candidato é o RASCUNHO (`flow_draft`), com fallback
+ *  para `flow` (produção/biblioteca). Assim o set-next captura a edição do editor,
+ *  e o promote leva esse conteúdo para o slot `current` que o bridge executa. */
 async function _fetchSkillSnapshot(skillId: string, tenantId: string): Promise<unknown | null> {
   try {
     const skill = await prisma.skill.findUnique({
       where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
     })
-    return (skill as unknown as Record<string, unknown>)?.["flow"] ?? null
+    const rec = skill as unknown as Record<string, unknown> | null
+    return (rec?.["flow_draft"] ?? rec?.["flow"]) ?? null
   } catch {
     return null
   }

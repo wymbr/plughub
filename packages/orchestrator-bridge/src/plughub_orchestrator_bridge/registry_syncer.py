@@ -464,10 +464,16 @@ class RegistrySyncer:
         payload:  dict,
         report:   SyncReport,
     ) -> None:
-        """PUT /v1/skills/{skill_id} — upsert semantics (create or update)."""
+        """PUT /v1/skills/{skill_id} — upsert semantics (create or update).
+
+        Skill Versioning Fase B: o syncer é canal de DEPLOY (skills são código) →
+        publica direto em PRODUÇÃO (`x-skill-publish: true`), não em rascunho. Sem
+        o header, o PUT gravaria só `flow_draft` e os skills seedados não rodariam.
+        """
         url = f"{self._registry_url}/v1/skills/{skill_id}"
+        publish_headers = {**headers, "x-skill-publish": "true"}
         try:
-            async with http.put(url, headers=headers, json=payload,
+            async with http.put(url, headers=publish_headers, json=payload,
                                 timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status in (200, 201):
                     action = "created" if resp.status == 201 else "updated"

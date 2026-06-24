@@ -132,7 +132,8 @@ model Skill {
   evaluation         Json?
   knowledge_domains  String[] @default([])
   compatibility      Json?
-  flow               Json?   // presente apenas para type: orchestrator
+  flow               Json?   // PRODUÇÃO: o que o bridge executa. Só o DEPLOY escreve aqui (Skill Versioning Fase B).
+  flow_draft         Json?   // RASCUNHO: working copy do editor. PUT escreve aqui; deploy copia draft→flow. Não vaza p/ produção.
   delegation_input   Json?   // DelegationSchema — typed fields shown in DelegarTarefaDrawer
 
   /// Deploy lifecycle: "draft" (saved but not in production) | "published" (deployed to at least one pool)

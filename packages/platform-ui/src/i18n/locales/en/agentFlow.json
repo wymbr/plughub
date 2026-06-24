@@ -5,6 +5,7 @@
     "newSkill":           "New skill (unsaved)",
     "newSkillId":         "Skill ID (e.g. skill_sac)",
     "saveHintView":       "Edit to enable Save",
+    "unpublishedDraft":   "Draft not deployed",
     "save":               "⌘S Save",
     "saving":             "Saving…",
     "saved":              "Saved",

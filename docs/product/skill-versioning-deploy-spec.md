@@ -21,7 +21,7 @@ campo do skill.
 | Conceito | O que é | Onde vive |
 |---|---|---|
 | **Skill-flow** | conteúdo editável, **nome único** (`skill_id`, sem `_v`, sem `version` como identidade) | editor = biblioteca de rascunhos |
-| **Rascunho** | working copy do editor (decisão **P2**) — editar nunca toca produção | campo `flow_draft` / slot `próximo` |
+| **Rascunho** | working copy do editor — editar nunca toca produção | campo `flow_draft` |
 | **Deploy** | bind de um snapshot de skill-flow → pool, **agendado**; promove no horário (calendário existente) | `PoolSkillSlot` + `SkillDeployment` |
 | **Versão** | um **deploy = uma versão do POOL** (identidade = `deployed_at`; `flow_id` = qual skill rodou) | carimbo `segments.deploy_version` |
 | **Produção** | o pool roda seu slot `corrente`; **só o deploy escreve** no campo que o bridge lê | bridge |
@@ -33,9 +33,13 @@ linhas de versão independentes (casa com o N:1 e a "curva por pool" do epoch). 
 
 ### Decisões fechadas
 
-- **P2 (anti-vazamento):** o editor salva num **rascunho**; só o **deploy** copia rascunho → o campo
-  de produção que o bridge lê. Bridge e hot-reload **intactos**. (Preterido P1 = bridge ler o snapshot
-  do `corrente` — mais correto, mas mexe no runtime/invariante.)
+- **P1 (anti-vazamento) — DECISÃO REVISADA (2026-06-24):** o editor salva num **rascunho** (`flow_draft`)
+  e o **bridge passa a executar o snapshot do slot `current` do POOL** (não o `skill.flow` vivo). A
+  revisão veio da descoberta de que o deploy real é **por pool** (slots `next→current→previous`), o que
+  torna o P2 (produção global em `skill.flow`) incoerente: promover num pool vazaria para todos os pools
+  que compartilham o skill. P1 é fiel ao "versão = deploy do pool" e unifica os dois mecanismos.
+  **Fallback seguro:** pool sem slot `current` roda o `skill.flow` publicado (retrocompat — nada quebra).
+  (Preterido P2 = bridge ler `skill.flow` global; só funciona com uma produção por skill, não por pool.)
 - **Versão ancorada no POOL.** Identidade = `deployed_at` do deploy ativo do pool. O `flow_id` do
   segmento registra qual skill. (Preterido: versão do skill.)
 - **`skill_id` estável e único** (sem `_v\d+`); **`version` deixa de ser identidade** (vira rótulo
@@ -68,8 +72,13 @@ Conclusão: **nada roteia/executa por `skill.version`** (o runtime resolve por `
   (`schemas/skill.ts`, `workflow-api/router.py`, `registry_syncer.py`); `version` → opcional no Zod;
   reescrever o `409` (id estável, não "_v2"). Retrocompat: ids `_v1` seguem válidos. *(= R14d)*
   **Verificação:** `PUT /v1/skills/skill_teste` (sem `_v`) → 201.
-- **Fase B — anti-vazamento (P2).** Campo `flow_draft` no `Skill` (ou usar slot `próximo`); `PUT`
-  passa a escrever **`flow_draft`** (não `flow`); o **deploy** copia `flow_draft → flow` (produção).
+- **Fase B — anti-vazamento (P1) ✅ (2026-06-24).** Campo `flow_draft` no `Skill`; **editor** `PUT`
+  escreve `flow_draft` (produção intacta); canal **sync/deploy** (`x-skill-publish:true`, RegistrySyncer)
+  escreve produção. O **bridge** (`get_pool_current_flow`) executa o snapshot do slot `current` do pool,
+  com **fallback** para `skill.flow` (pools não migrados). Slot `set-next` captura `flow_draft ?? flow`.
+  Cache por pool invalidado no `registry.changed(pool)`. Editor mostra "rascunho não publicado". Verificado:
+  editor cria skill com produção vazia (não vaza); skill IA (`skill_wrapup_v1`) executa normal (fallback).
+  *(Plano original previa P2/`skill.flow` — revisado para P1 ao descobrir o deploy por-pool.)*
   Editor: salvar = rascunho; ação de deploy/publicar explícita. Bridge intacto (lê `flow`).
   **Verificação:** editar um skill publicado **não** muda o que roda até deployar.
 - **Fase C — versão = deploy.** O deploy grava `current_deploy_at` (timestamp) no skill/slot do pool;

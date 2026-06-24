@@ -2,6 +2,32 @@
 
 ---
 
+## Skill Versioning · Fase B — anti-vazamento edição→produção (P1) (2026-06-24)
+
+Corta o vazamento "salvar = produção": editar no editor não pode mais alterar o que roda em produção.
+Decisão **revisada para P1** ao descobrir que o deploy real é **por pool** (slots `next→current→previous`),
+o que tornava o P2 (`skill.flow` global) incoerente (promover num pool vazaria para todos os pools que
+compartilham o skill). Spec: `docs/product/skill-versioning-deploy-spec.md` §4.
+
+- **agent-registry**: `Skill.flow_draft` (rascunho, via `prisma db push`). PUT do **editor** escreve
+  `flow_draft` (NUNCA `flow`/`flow_model`); canal **sync/deploy** (`x-skill-publish:true`) escreve
+  produção (`flow`+`flow_model`, limpa draft). `POST :id/deploy` promove `flow_draft→flow`. Pool-slots
+  `_fetchSkillSnapshot` captura `flow_draft ?? flow` (o set-next pega a edição). `_formatSkill` expõe
+  `unpublished_draft`.
+- **orchestrator-bridge**: **produção = snapshot do slot `current` do POOL**. `get_pool_current_flow`
+  (`GET /v1/pools/:id/slots`→`current.yaml_snapshot`, cache por pool); `resolve_flow_for_agent` prefere o
+  slot do pool, **fallback** `skill.flow` (retrocompat — pools não migrados seguem rodando); `pool_id`
+  propagado na ativação; cache invalidado no `registry.changed(pool)` (promote/rollback). `registry_syncer`
+  publica via `x-skill-publish`.
+- **platform-ui**: editor carrega o rascunho (`flow_draft ?? flow`) + badge "rascunho não publicado".
+
+Verificado: editor cria skill com **produção vazia** (`flow=null`, `flow_draft` set, `deploy_status=draft`)
+→ não vaza; syncer publica produção dos skills existentes (sem regressão); skill IA `skill_wrapup_v1`
+executa normal (`outcome=resolved`) via fallback. Versão do segmento segue resolvida do skill (fallback
+analytics) — vira id-do-deploy na Fase C.
+
+---
+
 ## Skill Versioning · Fase D — affordances do editor (Novo skill + Save) (2026-06-24)
 
 Fecha o R14(a/b) dentro do arco Skill Versioning. Criação de skill agora é descobrível e o Save

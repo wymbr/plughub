@@ -68,8 +68,10 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         evaluation:       body.evaluation   ?? Prisma.DbNull,
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
-        flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-        flow_model:       _computeFlowModel(body.flow),
+        // Skill Versioning Fase B: criação grava RASCUNHO; produção (flow) só pelo deploy.
+        flow:             Prisma.DbNull,
+        flow_draft:       body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        flow_model:       "agent",   // produção ainda vazia; flow_model é setado no deploy
         delegation_input: (body as any).delegation_input != null
           ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
           : Prisma.DbNull,
@@ -172,6 +174,18 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       }
     }
 
+    // Skill Versioning Fase B: dois canais de escrita.
+    //  - EDITOR (default): salvar = RASCUNHO → escreve `flow_draft`; NUNCA toca `flow`
+    //    (produção) nem `flow_model`. Só o deploy promove draft→flow.
+    //  - SYNC/DEPLOY (`x-skill-publish: true`, usado pelo RegistrySyncer — skills são
+    //    código): escreve PRODUÇÃO direto (`flow` + `flow_model`), limpa o draft.
+    const publish  = req.headers["x-skill-publish"] === "true"
+    const flowJson = body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull
+
+    const _flowFields = publish
+      ? { flow: flowJson, flow_draft: Prisma.DbNull, flow_model: _computeFlowModel(body.flow) }
+      : { flow_draft: flowJson }
+
     const _upsertUpdate = {
       name:             body.name,
       version:          body.version ?? "",   // rótulo livre opcional; "" quando ausente (coluna NOT NULL)
@@ -183,19 +197,20 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       evaluation:       body.evaluation   ?? Prisma.DbNull,
       knowledge_domains: body.knowledge_domains ?? [],
       compatibility:    body.compatibility ?? Prisma.DbNull,
-      flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-      flow_model:       _computeFlowModel(body.flow),
+      ..._flowFields,
       delegation_input: (body as any).delegation_input != null
         ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
         : Prisma.DbNull,
       status:           "active",
-      // deploy_status intentionally NOT updated on save — only the deploy action changes it
+      ...(publish ? { deploy_status: "published" } : {}),
     }
     const _upsertCreate = {
       ..._upsertUpdate,
       skill_id:      skillId,
       tenant_id:     tenantId,
-      deploy_status: "draft",   // new skills always start as drafts — field added in migration 20260430000000
+      // editor-create: produção vazia até o deploy. sync-create: já vem em _flowFields.
+      ...(publish ? {} : { flow: Prisma.DbNull, flow_model: "agent" }),
+      deploy_status: publish ? "published" : "draft",
       created_by:    _getUserId(req),
     }
     const skill = await prisma.skill.upsert({
@@ -250,7 +265,11 @@ function _getUserId(req: Request): string {
 }
 function _formatSkill(skill: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, interface_schema, ...rest } = skill
-  return { ...rest, interface: interface_schema }
+  // Skill Versioning Fase B: expõe `flow` (produção) + `flow_draft` (rascunho) e um
+  // flag de conveniência p/ a UI. O bridge segue lendo `flow` (produção) — NUNCA o draft.
+  const draft = rest["flow_draft"]
+  const unpublished_draft = draft != null && JSON.stringify(draft) !== JSON.stringify(rest["flow"] ?? null)
+  return { ...rest, interface: interface_schema, unpublished_draft }
   // delegation_input is forwarded as-is via ...rest
 }
 
@@ -300,22 +319,31 @@ skillsRouter.post("/:skill_id/deploy", async (req: Request, res: Response, next:
 
     const now = new Date()
 
-    // Mark skill as published and record deployment in a transaction
+    // Skill Versioning Fase B: o deploy é o ÚNICO a escrever produção. Promove
+    // RASCUNHO → PRODUÇÃO (flow_draft → flow), limpa o draft (sem pendência) e
+    // recomputa flow_model do que foi efetivamente deployado. Snapshot = o flow
+    // deployado. O bridge lê `flow` (produção) → hot-reload pega o conteúdo novo.
+    const skillRec      = skill as unknown as Record<string, unknown>
+    const deployedFlow  = (skillRec["flow_draft"] ?? skillRec["flow"]) ?? null
+
     const [updatedSkill, deployment] = await prisma.$transaction([
       prisma.skill.update({
         where: { skill_id_tenant_id: { skill_id: skillId, tenant_id: tenantId } },
         data: {
+          flow:          (deployedFlow ?? Prisma.DbNull) as unknown as Prisma.InputJsonValue,
+          flow_draft:    Prisma.DbNull,            // draft promovido → sem pendência
+          flow_model:    _computeFlowModel(deployedFlow),
           deploy_status: "published",
           published_at:  now,
-        } as any,  // deploy_status/published_at are new fields — Prisma client not yet regenerated
+        } as any,  // deploy_status/published_at/flow_draft — Prisma client regenerated on build
       }),
       (prisma as any).skillDeployment.create({
         data: {
           skill_id:      skillId,
           tenant_id:     tenantId,
-          version:       (skill as unknown as Record<string, unknown>)["version"] as string,
+          version:       (skillRec["version"] as string) ?? "",
           pool_ids,
-          yaml_snapshot: ((skill as unknown as Record<string, unknown>)["flow"] ?? null) as unknown as Prisma.InputJsonValue,
+          yaml_snapshot: (deployedFlow ?? null) as unknown as Prisma.InputJsonValue,
           deployed_by:   userId,
           deployed_at:   now,
           notes:         notes ?? null,

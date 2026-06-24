@@ -131,6 +131,9 @@ _RUNTIME_NAMESPACES: frozenset[str] = frozenset({
 _agent_type_cache: dict[str, dict] = {}   # agent_type_id → agent type response body
 _skill_flow_cache: dict[str, dict] = {}   # skill_id → flow dict
 _skill_version_cache: dict[str, str] = {} # skill_id → version (R9 — deploy_version do segmento)
+# Skill Versioning Fase B/P1: produção = snapshot do slot `current` do POOL (não o
+# skill.flow vivo). pool_id → (skill_id, flow). Invalidado no registry.changed(pool).
+_pool_flow_cache: dict[str, tuple[str, dict]] = {}
 
 
 def _stl() -> int:
@@ -338,6 +341,49 @@ async def get_skill_flow(
     return None
 
 
+async def get_pool_current_flow(
+    http: aiohttp.ClientSession,
+    tenant_id: str,
+    pool_id: str,
+) -> tuple[str, dict] | None:
+    """
+    Skill Versioning Fase B/P1 — PRODUÇÃO = snapshot do slot `current` do POOL.
+
+    Resolve o flow que o pool de fato deve executar lendo o slot `current`
+    (`GET /v1/pools/{pool}/slots`), em vez do `skill.flow` vivo. Garante que
+    edições no editor (que escrevem `flow_draft`) NÃO vazem para produção — só o
+    deploy (set-next → promote) preenche o `current`. Retorna `(skill_id, flow)`
+    ou None quando o pool não tem `current` configurado (→ caller faz fallback p/
+    o caminho por skill_id). Cacheia por pool_id; invalidado no registry.changed(pool).
+    """
+    if not pool_id:
+        return None
+    if pool_id in _pool_flow_cache:
+        return _pool_flow_cache[pool_id]
+
+    url = f"{AGENT_REGISTRY_URL}/v1/pools/{pool_id}/slots"
+    headers = {"x-tenant-id": tenant_id}
+    try:
+        async with http.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            if resp.status != 200:
+                return None
+            body    = await resp.json()
+            current = (body.get("slots") or {}).get("current") or {}
+            if not current.get("set"):
+                return None
+            skill_id = str(current.get("skill_id") or "")
+            flow     = current.get("yaml_snapshot")
+            if skill_id and isinstance(flow, dict) and flow:
+                # R9/Fase C: a versão carimbada no segmento segue resolvida do skill
+                # (analytics tem fallback fetch_skill_version); vira id-do-deploy na Fase C.
+                _pool_flow_cache[pool_id] = (skill_id, flow)
+                return skill_id, flow
+            return None
+    except Exception as exc:
+        logger.warning("Pool slots unreachable (%s): %s", url, exc)
+        return None
+
+
 def _load_yaml_fallback(agent_type_id: str) -> dict | None:
     """
     Dev fallback: load SKILLS_DIR/{agent_type_id}.yaml when Agent Registry
@@ -362,15 +408,23 @@ async def resolve_flow_for_agent(
     tenant_id: str,
     agent_type_id: str,
     skills: list[dict],
+    pool_id: str = "",
 ) -> tuple[str, dict] | None:
     """
-    Given the skills[] list from an agent type, resolve the flow to execute.
-    Returns (skill_id, flow_dict) or None if no executable flow is found.
+    Resolve the flow to execute. Returns (skill_id, flow_dict) or None.
 
-    Resolution order:
-      1. First skill in skills[] with a flow in Agent Registry
+    Resolution order (Skill Versioning Fase B/P1):
+      0. POOL: snapshot do slot `current` do pool (PRODUÇÃO real — o deploy é por pool).
+         É a fonte autoritativa; só cai p/ os passos abaixo se o pool não tiver `current`
+         (retrocompat: pools ainda não migrados ao slot rodam o skill.flow publicado).
+      1. First skill in skills[] with a flow in Agent Registry (skill.flow publicado)
       2. YAML fallback in SKILLS_DIR
     """
+    # 0. Pool current slot (produção por-pool) — preferencial.
+    pool_flow = await get_pool_current_flow(http, tenant_id, pool_id)
+    if pool_flow:
+        return pool_flow
+
     # Try each skill in declaration order
     for skill_ref in skills:
         skill_id = skill_ref.get("skill_id", "")
@@ -404,6 +458,7 @@ async def activate_native_agent(
     segment_id: str = "",
     webhook_pool: bool = False,
     resume_context: dict | None = None,
+    pool_id: str = "",
 ) -> dict:
     """
     Activate a plughub-native orchestrator agent by calling skill-flow-service.
@@ -417,7 +472,7 @@ async def activate_native_agent(
     conference_id, when non-empty, is included in session_context so the AI
     agent knows it is operating under human supervision in a conference.
     """
-    resolved = await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills)
+    resolved = await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills, pool_id)
     if resolved is None:
         logger.error(
             "No executable flow found for agent_type_id=%s (tenant=%s) — "
@@ -2964,6 +3019,7 @@ async def process_routed(
             conference_id=conference_id,
             segment_id=_part_seg_id,
             webhook_pool=_is_webhook_pool,
+            pool_id=pool_id,
         )
 
         # ── Conference: notify the human agent that the AI has completed ──────
@@ -7272,6 +7328,12 @@ async def _dispatch_once(
                 logger.info("Skill flow cache invalidated: skill_id=%s", entity_id)
             else:
                 logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
+        elif entity_type == "pool":
+            # Skill Versioning P1: promote/rollback publica registry.changed(pool) →
+            # invalida o snapshot do slot `current` p/ a próxima ativação pegar o novo.
+            if entity_id in _pool_flow_cache:
+                del _pool_flow_cache[entity_id]
+                logger.info("Pool flow cache invalidated: pool_id=%s", entity_id)
         bootstrap.request_refresh()
     elif topic == TOPIC_CONFIG_CHANGED:
         await _handle_config_changed(payload, bootstrap, http)

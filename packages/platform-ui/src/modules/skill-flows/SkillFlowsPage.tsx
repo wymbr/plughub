@@ -460,6 +460,8 @@ const SkillFlowsPage: React.FC = () => {
   // isNew: skill em autoria, ainda não salvo. Habilita o Save mesmo sem isModified
   // (o template em branco tem savedValue == editorValue → Save pareceria travado).
   const [isNew,       setIsNew]       = useState(true)
+  // unpublishedDraft: o skill tem rascunho salvo ainda não publicado (Fase B).
+  const [unpublishedDraft, setUnpublishedDraft] = useState(false)
 
   const isModified = editorValue !== savedValue
   const canSave    = statusKind !== 'saving' && (isModified || isNew)
@@ -474,9 +476,14 @@ const SkillFlowsPage: React.FC = () => {
       const data = await apiFetchRaw(`/v1/skills/${encodeURIComponent(skillId)}`, {
         headers: operatorHeaders(tenantId),
       })
-      const yamlText = skillToYaml(data)
+      // Skill Versioning Fase B: o editor edita o RASCUNHO. Mostra `flow_draft ?? flow`
+      // como `flow` e omite os campos de controle (flow_draft/unpublished_draft).
+      const { flow_draft, unpublished_draft, flow, ...restData } = data as Record<string, unknown>
+      const working = { ...restData, flow: (flow_draft ?? flow) ?? undefined }
+      const yamlText = skillToYaml(working)
       setEditorValue(yamlText)
       setSavedValue(yamlText)
+      setUnpublishedDraft(Boolean(unpublished_draft))
       setStatusKind('idle')
       setStatusMsg(t('editor.status.loaded', { id: skillId }))
     } catch (e: unknown) {
@@ -502,6 +509,7 @@ const SkillFlowsPage: React.FC = () => {
     setSavedValue(BLANK_TEMPLATE)
     setConfirmDel(false)
     setIsNew(true)
+    setUnpublishedDraft(false)
     setStatusKind('idle')
     setStatusMsg(t('editor.status.newSkillStatus'))
   }
@@ -533,6 +541,7 @@ const SkillFlowsPage: React.FC = () => {
       setSavedValue(editorValue)
       setSelectedId(skillId)
       setIsNew(false)               // skill agora existe → sai do modo "novo"
+      setUnpublishedDraft(true)     // salvar grava rascunho → pendente de deploy (Fase B)
       setStatusKind('saved')
       setStatusMsg(t('editor.status.saved', { id: skillId }))
       void refreshList()
@@ -625,9 +634,16 @@ const SkillFlowsPage: React.FC = () => {
         </button>
 
         {selectedId ? (
-          <span className="text-xs text-muted font-mono">
-            {selectedId}
-            {isModified && <span className="text-warning ml-1">●</span>}
+          <span className="text-xs text-muted font-mono flex items-center gap-2">
+            <span>
+              {selectedId}
+              {isModified && <span className="text-warning ml-1">●</span>}
+            </span>
+            {unpublishedDraft && !isModified && (
+              <span className="text-2xs font-sans font-semibold px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/30">
+                {t('editor.unpublishedDraft')}
+              </span>
+            )}
           </span>
         ) : isNew && (
           <span className="text-xs text-primary font-mono">{t('editor.newSkill')}</span>
