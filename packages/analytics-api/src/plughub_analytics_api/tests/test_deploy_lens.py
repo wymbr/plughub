@@ -291,6 +291,26 @@ async def test_epoch_attaches_provisional_and_pending():
 
 
 @pytest.mark.asyncio
+async def test_epoch_fase_c_timestamp_version_maps_to_label():
+    # Fase C: deploy_version carimbado = set_at (timestamp) = SkillDeployment.deployed_at.
+    # O epoch casa por timestamp → deployed_at = a própria versão; rótulo = version_label.
+    ts = "2026-06-20T16:17:06Z"
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["sac_ia", "ai", "sac_ia", "skill_sac", ts, 20, 0.81, "2026-06-20 17:00:00"],
+    ]))
+    deploys = [{"deploy_id": "d1", "skill_id": "skill_sac", "version_label": "3.0", "deployed_at": ts}]
+    with _patch_deploys(deploys), _patch_eval_url(""):
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch", entities=["sac_ia"],
+            from_dt="2026-06-01", to_dt="2026-06-30",
+        )
+    pt = result["data"]["entities"][0]["series"][0]
+    assert pt["version"] == ts                # identidade = set_at
+    assert pt["deployed_at"] == ts            # a versão É o deployed_at
+    assert pt["version_label"] == "3.0"       # rótulo (skill.version) do SkillDeployment
+
+
+@pytest.mark.asyncio
 async def test_epoch_no_overlay_when_eval_api_unset():
     # evaluation_api_url vazio (default) → epoch só com a curva finalizada, sem overlay.
     client = _make_client(_ch_result(_EPOCH_COLS, [

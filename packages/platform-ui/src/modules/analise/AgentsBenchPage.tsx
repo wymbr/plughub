@@ -80,7 +80,8 @@ interface PerfRow {
 interface SeriesPoint {
   date?: string; n?: number
   // epoch (deploy mode=epoch, R15b): ponto por versão em vez de por dia
-  version?: string; skill_id?: string; deployed_at?: string | null; first_seen?: string
+  // version = identidade (Fase C: set_at do deploy); version_label = rótulo de display
+  version?: string; version_label?: string; skill_id?: string; deployed_at?: string | null; first_seen?: string
   // overlay de cobertura (micro-fatia 1b): provisória + backlog por versão
   provisional_avg?: number | null; provisional_n?: number; pending_n?: number
   [k: string]: number | string | null | undefined
@@ -729,7 +730,9 @@ function DeployEpochChart({
       const xKey = xKeyOf(p)
       const order = String(p.deployed_at ?? p.first_seen ?? '')
       const ex = m.get(xKey)
-      if (!ex) m.set(xKey, { xKey, label: String(p.version ?? ''), order })
+      // Fase C: rótulo de display = version_label (skill.version) quando houver;
+      // senão a própria versão (timestamp do deploy / rótulo legado).
+      if (!ex) m.set(xKey, { xKey, label: String(p.version_label ?? p.version ?? ''), order })
       else if (order && (!ex.order || order < ex.order)) ex.order = order
     }
     return [...m.values()].sort((a, b) =>

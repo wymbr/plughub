@@ -2,6 +2,30 @@
 
 ---
 
+## Skill Versioning · Fase C — versão = deploy (C-full) (2026-06-24)
+
+A identidade de versão (analytics/epoch) deixa de ser o `skill.version` manual e passa a ser o
+**deploy** — automático, por-pool, por-evento. Escopo C-full (o promote unifica slot + append-log).
+Spec: `docs/product/skill-versioning-deploy-spec.md` §4.
+
+- **agent-registry** (`pool-slots.ts` promote): o promote **É o deploy** → grava um `SkillDeployment`
+  (`deployed_at = set_at` do slot, `version` = rótulo `skill.version`, `pool_ids=[pool]`,
+  `yaml_snapshot`, `notes:"promote"`) além de setar o slot `current`. Dá ao epoch o rótulo + markers e
+  unifica os dois mecanismos. Validado: promote em `demo_ia` criou o `SkillDeployment` (deployed_at = momento).
+- **orchestrator-bridge**: carimba `segments.deploy_version = set_at` do slot `current` (cache
+  `_pool_deploy_version_cache` por pool, invalidado no `registry.changed(pool)`); fallback `skill.version`
+  (pools não migrados). A identidade casa com `SkillDeployment.deployed_at`.
+- **analytics-api** (`_attach_epoch_deploy_order`): casa o ponto-versão por **`deployed_at`** (Fase C:
+  `deploy_version`=set_at) **e** por rótulo (legado `skill.version`), expõe `version_label` p/ display.
+  `_norm_ts` (precisão segundos). +1 teste (`test_epoch_fase_c_timestamp_version_maps_to_label`). **11/11.**
+- **platform-ui** (`DeployEpochChart`): eixo usa `version_label` (rótulo); timestamp no tooltip. Dois
+  promotes do mesmo rótulo = dois pontos, desambiguados pela data.
+
+Transição: dados legados (deploy_version = "1.0"/"2.0") seguem renderizando por rótulo; deploys novos
+(via promote) usam o timestamp. `SkillVersionSlot` + `version_policy` vestigiais → Fase E.
+
+---
+
 ## Skill Versioning · Fase B — anti-vazamento edição→produção (P1) (2026-06-24)
 
 Corta o vazamento "salvar = produção": editar no editor não pode mais alterar o que roda em produção.

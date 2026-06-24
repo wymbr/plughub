@@ -309,7 +309,9 @@ Kubernetes-style reconciliation controller in `orchestrator-bridge/instance_boot
 
 **RegistrySyncer** runs before Bootstrap: upserts pools+agent_types from `infra/registry/*.yaml`; prunes stale (`REGISTRY_SYNC_PRUNE=true`). Skill sync: PUTs `skill-flow-engine/skills/*.yaml` before pools (slug `^skill_[a-z0-9_]+$`, **publica produção via `x-skill-publish:true`** — Skill Versioning Fase B). Instance IDs: `{agent_type_id}-{n+1:03d}`. Human agents NOT managed by Bootstrap. Seed no longer writes Redis keys.
 
-**Execução = produção, não a edição (Skill Versioning Fase B/P1):** o bridge executa o **snapshot do slot `current` do POOL** (`get_pool_current_flow`, cache por pool, invalidado no `registry.changed(pool)` do promote/rollback), com **fallback** para `skill.flow` (pools não migrados). O editor (`PUT /v1/skills`) escreve **`skill.flow_draft`** (rascunho) — **não vaza para produção**; só o deploy (set-next→promote, ou `x-skill-publish`) preenche o que roda. Versão = deploy do pool (Fase C). Ver `docs/product/skill-versioning-deploy-spec.md`.
+**Execução = produção, não a edição (Skill Versioning Fase B/P1):** o bridge executa o **snapshot do slot `current` do POOL** (`get_pool_current_flow`, cache por pool, invalidado no `registry.changed(pool)` do promote/rollback), com **fallback** para `skill.flow` (pools não migrados). O editor (`PUT /v1/skills`) escreve **`skill.flow_draft`** (rascunho) — **não vaza para produção**; só o deploy (set-next→promote, ou `x-skill-publish`) preenche o que roda.
+
+**Versão = deploy do pool (Skill Versioning Fase C):** identidade de versão = **`set_at` do slot `current`** (momento do promote), carimbada em `segments.deploy_version` pelo bridge (cache `_pool_deploy_version_cache`, fallback `skill.version`). O **promote grava um `SkillDeployment`** (`deployed_at=set_at`, `version`=rótulo `skill.version`) — append-log que o epoch usa p/ rótulo+markers; o analytics casa por `deployed_at`. `skill.version` deixou de ser identidade (vira rótulo). Ver `docs/product/skill-versioning-deploy-spec.md`.
 
 → See [`docs/arcos/instance-bootstrap.md`](docs/arcos/instance-bootstrap.md)
 

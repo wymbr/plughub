@@ -81,10 +81,13 @@ Conclusão: **nada roteia/executa por `skill.version`** (o runtime resolve por `
   *(Plano original previa P2/`skill.flow` — revisado para P1 ao descobrir o deploy por-pool.)*
   Editor: salvar = rascunho; ação de deploy/publicar explícita. Bridge intacto (lê `flow`).
   **Verificação:** editar um skill publicado **não** muda o que roda até deployar.
-- **Fase C — versão = deploy.** O deploy grava `current_deploy_at` (timestamp) no skill/slot do pool;
-  bridge carimba **isso** em `segments.deploy_version` (em vez de `skill.version`); evaluation-api e
-  analytics idem; `SkillDeployment.version` ← identidade do deploy; markers/epoch usam a identidade.
-  **Verificação:** dois deploys do mesmo skill, sem editar `version`, → duas versões no epoch.
+- **Fase C — versão = deploy (C-full) ✅ (2026-06-24).** Identidade = **`set_at` do slot `current`**
+  (momento do promote). O **promote grava um `SkillDeployment`** (`deployed_at=set_at`, `version`=rótulo,
+  `pool_ids=[pool]`) — unifica slot + append-log. O **bridge** carimba `segments.deploy_version = set_at`
+  (cache por pool; fallback `skill.version`); instâncias herdam (cobertura 1b consistente). **analytics**
+  casa por `deployed_at` (Fase C) **e** por rótulo (legado), expõe `version_label`. **UI** mostra
+  rótulo+data no eixo, timestamp no tooltip. Verificado: promote cria `SkillDeployment` (deployed_at =
+  momento); testes 11/11. Transição: dados legados seguem por rótulo.
 - **Fase D — affordances UI.** Botão "Novo skill" + Save habilitado para skill novo (flag `isNew`) +
   hint quando desabilitado. i18n. *(= R14a/b)*
 - **Fase E — cleanup (opcional).** Aposentar `SkillVersionSlot`; remover/neutralizar `version_policy`

@@ -134,6 +134,9 @@ _skill_version_cache: dict[str, str] = {} # skill_id → version (R9 — deploy_
 # Skill Versioning Fase B/P1: produção = snapshot do slot `current` do POOL (não o
 # skill.flow vivo). pool_id → (skill_id, flow). Invalidado no registry.changed(pool).
 _pool_flow_cache: dict[str, tuple[str, dict]] = {}
+# Skill Versioning Fase C: identidade da VERSÃO = `set_at` do slot `current` (momento
+# do promote). pool_id → set_at (ISO). Carimbado em segments.deploy_version.
+_pool_deploy_version_cache: dict[str, str] = {}
 
 
 def _stl() -> int:
@@ -374,8 +377,12 @@ async def get_pool_current_flow(
             skill_id = str(current.get("skill_id") or "")
             flow     = current.get("yaml_snapshot")
             if skill_id and isinstance(flow, dict) and flow:
-                # R9/Fase C: a versão carimbada no segmento segue resolvida do skill
-                # (analytics tem fallback fetch_skill_version); vira id-do-deploy na Fase C.
+                # Fase C: identidade da versão = `set_at` do slot (momento do promote).
+                # Cacheado por pool e carimbado em segments.deploy_version (em vez de
+                # skill.version). Casa com SkillDeployment.deployed_at no epoch.
+                set_at = str(current.get("set_at") or "")
+                if set_at:
+                    _pool_deploy_version_cache[pool_id] = set_at
                 _pool_flow_cache[pool_id] = (skill_id, flow)
                 return skill_id, flow
             return None
@@ -1961,9 +1968,13 @@ async def _publish_participant_event(
         event["conference_id"] = conference_id
     if flow_id:
         event["flow_id"] = flow_id
-        # R9 — deploy_version: usa o passado, senão resolve do cache de versão pelo flow_id
-        # (preenchido quando get_skill_flow buscou o corpo do skill). "" → omitido.
-        _dv = deploy_version or _skill_version_cache.get(flow_id, "")
+        # deploy_version (Fase C): identidade = `set_at` do slot `current` do pool
+        # (momento do promote), cacheado por pool em get_pool_current_flow. Prioridade:
+        # explícito → set_at do pool (novo, casa com SkillDeployment.deployed_at) →
+        # skill.version (fallback legado, pools não migrados ao slot). "" → omitido.
+        _dv = (deploy_version
+               or _pool_deploy_version_cache.get(pool_id, "")
+               or _skill_version_cache.get(flow_id, ""))
         if _dv:
             event["deploy_version"] = _dv
     if channel:
@@ -7329,11 +7340,13 @@ async def _dispatch_once(
             else:
                 logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
         elif entity_type == "pool":
-            # Skill Versioning P1: promote/rollback publica registry.changed(pool) →
-            # invalida o snapshot do slot `current` p/ a próxima ativação pegar o novo.
+            # Skill Versioning P1/C: promote/rollback publica registry.changed(pool) →
+            # invalida o snapshot do slot `current` E a identidade de versão (set_at)
+            # p/ a próxima ativação pegar o novo deploy.
             if entity_id in _pool_flow_cache:
                 del _pool_flow_cache[entity_id]
                 logger.info("Pool flow cache invalidated: pool_id=%s", entity_id)
+            _pool_deploy_version_cache.pop(entity_id, None)
         bootstrap.request_refresh()
     elif topic == TOPIC_CONFIG_CHANGED:
         await _handle_config_changed(payload, bootstrap, http)

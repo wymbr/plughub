@@ -1944,21 +1944,30 @@ async def query_agents_compare(
     return result
 
 
+def _norm_ts(s: str) -> str:
+    """Normaliza um timestamp ISO p/ casar set_at × deployed_at (precisão segundos)."""
+    return (s or "")[:19].replace(" ", "T")
+
+
 async def _attach_epoch_deploy_order(result: dict, tenant_id: str) -> dict:
-    """Epoch (R15a, Arc 6 Fase 2 §IV.8): para cada ponto-versão da série de cada
-    pool, anexa `deployed_at` resolvido do agent-registry pela chave
-    (`skill_id`, `version_label`) e **reordena a série por deployed_at**
-    (fallback `first_seen` quando o registry não tem o deploy). União multi-pool:
-    cada curva ordena pelos seus pontos; o eixo X (montado na UI) é a união por
-    deployed_at. Degradação: registry fora → ordena só por `first_seen`."""
+    """Epoch (R15a/Fase C): anexa `deployed_at` + `version_label` (rótulo de display)
+    a cada ponto-versão e **reordena por deployed_at** (fallback `first_seen`).
+
+    Dois esquemas de chave convivem (transição):
+      - **Fase C** (atual): `deploy_version` carimbado = `set_at` do slot (timestamp) =
+        `SkillDeployment.deployed_at`. Casa por timestamp → `deployed_at` = a própria
+        versão; `version_label` = `SkillDeployment.version` (rótulo skill.version).
+      - **Legado**: `deploy_version` = `skill.version` ("2.0"); casa por
+        (`skill_id`, `version_label`) → `deployed_at` do registry; rótulo = a própria versão.
+    Degradação: registry fora → ordena por `first_seen`, rótulo = a versão crua."""
     from .config import get_settings
     from .deployments_client import fetch_pool_deployments
 
     base_url = get_settings().agent_registry_url
     entities = result.get("data", {}).get("entities", [])
 
-    # (skill_id, version_label) -> deployed_at — buscado por pool selecionado.
-    dep_map: dict[tuple[str, str], str] = {}
+    by_label:    dict[tuple[str, str], str] = {}   # legado: (skill, label) -> deployed_at
+    by_deployed: dict[str, str] = {}               # Fase C: norm(deployed_at) -> version_label
     for ent in entities:
         pool_id = ent.get("agent_key") or ""
         if not pool_id or pool_id.startswith(_POOL_ENTITY_PREFIX):
@@ -1966,14 +1975,24 @@ async def _attach_epoch_deploy_order(result: dict, tenant_id: str) -> dict:
         for d in await fetch_pool_deployments(base_url, tenant_id, pool_id):
             ver = d.get("version_label") or ""
             at  = d.get("deployed_at") or ""
+            if at:
+                by_deployed.setdefault(_norm_ts(at), ver)
             if ver and at:
-                dep_map.setdefault((d.get("skill_id") or "", ver), at)
+                by_label.setdefault((d.get("skill_id") or "", ver), at)
 
     for ent in entities:
         series = ent.get("series", [])
         for pt in series:
-            pt["deployed_at"] = dep_map.get(
-                (pt.get("skill_id", ""), pt.get("version", "")))
+            version = pt.get("version", "") or ""
+            # Fase C: a versão é o set_at (timestamp) e É o deployed_at.
+            label = by_deployed.get(_norm_ts(version))
+            if label is not None:
+                pt["deployed_at"]   = version
+                pt["version_label"] = label or version
+            else:
+                # legado: casa por rótulo; o rótulo é a própria versão.
+                pt["deployed_at"]   = by_label.get((pt.get("skill_id", ""), version))
+                pt["version_label"] = version
         series.sort(key=lambda p: (
             p.get("deployed_at") or p.get("first_seen") or "",
             p.get("version") or ""))

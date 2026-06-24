@@ -255,6 +255,35 @@ poolSlotsRouter.post("/promote", async (req: Request, res: Response, next: NextF
       })
     })
 
+    // Skill Versioning Fase C: o promote É o deploy → registra um SkillDeployment
+    // (append-log) com deployed_at = set_at (now). A identidade da versão é o `now`
+    // (carimbado pelo bridge em segments.deploy_version via slot.set_at); `version`
+    // guarda o RÓTULO (skill.version) para o display do epoch (rótulo + data).
+    const promotedSkillId = (nextSlot["skill_id"] as string) || ""
+    if (promotedSkillId) {
+      let versionLabel = ""
+      try {
+        const sk = await prisma.skill.findUnique({
+          where: { skill_id_tenant_id: { skill_id: promotedSkillId, tenant_id: tenantId } },
+        })
+        versionLabel = ((sk as unknown as Record<string, unknown>)?.["version"] as string) || ""
+      } catch { /* sem rótulo → epoch cai para a data do deploy */ }
+      try {
+        await (prisma as any).skillDeployment.create({
+          data: {
+            skill_id:      promotedSkillId,
+            tenant_id:     tenantId,
+            version:       versionLabel,
+            pool_ids:      [poolId],
+            yaml_snapshot: (nextSlot["yaml_snapshot"] ?? null) as Prisma.InputJsonValue,
+            deployed_by:   userId,
+            deployed_at:   now,
+            notes:         "promote",
+          },
+        })
+      } catch { /* não-fatal: o deploy já foi efetivado pelos slots */ }
+    }
+
     await publishRegistryChanged(tenantId, "pool", poolId, "updated")
 
     const updated = await (prisma as any).poolSkillSlot.findMany({
