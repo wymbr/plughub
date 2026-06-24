@@ -2,6 +2,73 @@
 
 ---
 
+## Arc 6 Fase 2 · micro-fatia 1b — Cobertura do epoch: provisória + pendentes (Opção II) (2026-06-24)
+
+Fecha a pendência do núcleo epoch (R15a/R15b): o ponto de cada versão mostrava só a média
+**finalizada**, sem dizer se o número estava assentado. Decisão (Opção II): exibir, por versão, a
+nota **provisória** (só avaliações já pontuadas) + o **backlog** (instâncias amostradas não
+finalizadas) — convergência = sinal de confiança. Fonte exata por versão = `evaluation.instances`
+(Postgres, `deploy_version` do R9d), que o ClickHouse não tem.
+
+**Fatia A — backend.** evaluation-api: `db.deploy_coverage()` + `GET /v1/evaluation/reports/deploy-coverage`
+→ por `(pool, deploy_version)`: `pending_n` (status ∈ scheduled/assigned/in_progress/under_review/
+contested), `provisional_n`/`provisional_avg` (`results.normalized_score` 0–1, **só pontuadas**),
+filtro janela (`instances.created_at`, parse→datetime UTC; asyncpg exige datetime em timestamptz) +
+pool. Pool = `COALESCE(c.evaluation_pool_id, c.pool_id)`. analytics-api: `coverage_client` (config
+`evaluation_api_url`, cache 60s, degradação→`[]`) + `_attach_epoch_coverage` anexa
+`provisional_avg/_n` + `pending_n` a cada ponto-versão do epoch (match por `(pool, versão)`). compose:
+`PLUGHUB_EVALUATION_API_URL` no analytics-api. Testes `test_deploy_lens.py` +2 (overlay anexa; url
+vazia→sem overlay). **10/10 verde**; endpoint validado com dado real (sac_ia v1.0: provisional 0.656).
+
+**Fatia B — UI.** `DeployEpochChart`: linha **tracejada provisória** por pool (mesma cor, sobreposta à
+finalizada sólida) + selo **"Pendentes de fechamento · <pool> v<versão> +N"** sob o gráfico; tooltip
+enriquecido (oficial + provisória + pendentes + data de deploy). i18n `bench.deploy.{tipFinal,
+tipProvisional,tipPending,pending}` + legenda en+pt-BR. Build (tsc) verde; QA via seed (8×v2.0
+`in_progress` → "+8 pending"; v1.0 com provisória 0.66 sob a finalizada 0.73).
+
+**Seed:** `infra/test/seed_epoch_demo.sh` estendido — além das finalizadas (ClickHouse), insere
+instâncias pendentes da v2.0 no Postgres (reusa campanha existente do pool, idempotente). **Arc 6 Fase 2
+completo** (sem pendências).
+
+---
+
+## R15a + R15b — Núcleo epoch/versão do Arc 6 Fase 2 (lente deploy `mode=epoch`) (2026-06-24)
+
+Destravado pelo R9 (carimbo `deploy_version` no segmento). A lente `deploy` ganha um **modo
+epoch**: série de qualidade OFICIAL bucketizada por **`deploy_version`** (eixo X = versões), em vez
+de por dia. Decisões fechadas em `arc-evaluation-metrics-methodology.md` §IV.8.
+
+**R15a — query** (`analytics-api`): novo parâmetro `mode=daily|epoch` em `query_agents_compare` +
+rota `GET /reports/agents/compare` (epoch só na lente deploy; demais ignoram). `_compare_deploy_epoch_lens`:
+JOIN **exato** `evaluation_finalized.segment_id → segments.segment_id` (sem inferência por timeline —
+o R9 carimbou `deploy_version` no segmento), `GROUP BY pool_id, flow_id, deploy_version`,
+`avg(final_score)` (Oficial) + `n` + `min(timestamp)` (`first_seen`, proxy de ordenação). Camada async
+`_attach_epoch_deploy_order` resolve `deployed_at` por `(skill_id, version_label)` do agent-registry
+(`fetch_pool_deployments`) e **reordena a série por deployed_at** (fallback `first_seen` em degradação).
+Domain ai (`agent_type != 'human'`), só segmentos com versão carimbada (`deploy_version != ''`).
+`meta.mode=epoch`, `min_sample=30`. Sem média da frota no epoch (forçado). Testes: `test_deploy_lens.py`
++3 (epoch: agrupamento por versão + ordem por deployed_at + meta; multi-pool união uma-curva-por-pool;
+degradação registry → fallback first_seen). **8/8 verde.**
+
+**R15b — UI** (`platform-ui` `AgentsBenchPage`): toggle **Diário ↔ Por versão** (só na lente deploy;
+estado `deployMode` + sync URL `mode=epoch`). `DeployEpochChart`: eixo X = versões (chave `skill|versão`,
+rótulo = versão), uma curva por pool, **multi-pool = união ordenada por deployed_at** (pools que
+compartilham skill alinham na mesma versão; skills distintas ocupam pontos próprios). Tooltip custom
+(versão + valor + `n` + data de deploy). Esconde a média da frota; flag N<min_sample reaproveitada.
+`useCompare` propaga `mode`. i18n `bench.deploy.{modeLabel,modeDaily,modeEpoch,epochLegend,tipN}` en+pt-BR.
+Modo diário+markers permanece como visão alternativa (1º corte).
+
+**Verificação:** R15a `test_deploy_lens.py` 8/8 verde; build platform-ui (tsc) verde; QA visual via
+`infra/test/seed_epoch_demo.sh` (6×v1.0 + 6×v2.0 de `skill_atendimento_sac_v1`/`sac_ia` com
+`deploy_version` carimbado) — o epoch renderiza dois pontos de versão, ordenados pelo `deployed_at`
+real do agent-registry (confirmado via API: v2.0 deployed 06-17 < v1.0 deployed 06-20 → v2.0 à
+esquerda, priorizando `deployed_at` sobre o fallback `first_seen`), tooltip n+data, aviso N<min_sample.
+
+**Decisão adiada (micro-fatia 1b):** indicador "N pendentes de fechamento" (lag de finalização) — a
+série epoch entrega avg+n por versão; o contador de pendentes entra depois (fonte a definir).
+
+---
+
 ## R8c — Curadoria cega-primeiro · Slice 5: UI modo cego (CuradoriaPage) — R8c COMPLETO (2026-06-23)
 
 Quinta e última fatia: a superfície do curador. **R8c completo.**

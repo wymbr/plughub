@@ -169,7 +169,16 @@
       "markers": "Deploys:",
       "count": "{{n}} deploy(s) no período — passe o mouse no triângulo para detalhes",
       "legend": "● dia com avaliação (sem ponto = sem avaliação no dia) · ▲ deploy (cor do pool)",
-      "lowSample": "Amostra rasa (N < {{min}}): {{agents}} — leia com cautela."
+      "lowSample": "Amostra rasa (N < {{min}}): {{agents}} — leia com cautela.",
+      "modeLabel": "Visão",
+      "modeDaily": "Diário",
+      "modeEpoch": "Por versão",
+      "epochLegend": "● qualidade oficial por versão (sólida) · ┄ provisória, ainda fechando (tracejada) · eixo X = versões, ordenadas pela data de deploy",
+      "tipN": "n={{n}}",
+      "tipFinal": "oficial",
+      "tipProvisional": "provisória",
+      "tipPending": "{{n}} pendentes",
+      "pending": "Pendentes de fechamento · {{items}}"
     },
     "criteria": {
       "form": "Formulário: {{form}}",

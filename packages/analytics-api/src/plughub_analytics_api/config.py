@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # N mínimo). Vazio ou indisponível → usa os defaults do código (0.25 / 30).
     config_api_url: str = ""
 
+    # ── Evaluation API (micro-fatia 1b — cobertura/pendentes do epoch) ────────
+    # Origem da nota PROVISÓRIA + backlog (instâncias amostradas não finalizadas)
+    # por (pool, deploy_version), lida em query-time pela lente `deploy&mode=epoch`.
+    # Indisponível → epoch sem overlay provisório/pendentes (degrada, nunca 500).
+    evaluation_api_url: str = ""
+
     # ── Open access (demo / dev) ──────────────────────────────────────────
     # When True, all protected endpoints return an admin principal without
     # requiring a Bearer token. NEVER enable in production.

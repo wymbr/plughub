@@ -1873,6 +1873,7 @@ async def query_agents_compare(
     to_dt:     str | None = None,
     *,
     lens:            str = "resolution",
+    mode:            str = "daily",
     pool_id:         str | None = None,
     entities:        list[str] | None = None,
     include_average: bool = True,
@@ -1890,6 +1891,11 @@ async def query_agents_compare(
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
 
+    # epoch (R15a) só faz sentido na lente deploy; demais lentes ignoram `mode`.
+    epoch = lens == "deploy" and mode == "epoch"
+    if epoch:
+        include_average = False   # epoch é single-(pool,skill); sem média da frota
+
     if lens not in _COMPARE_LENSES:
         pending = lens in _COMPARE_LENSES_PENDING
         return {
@@ -1903,7 +1909,7 @@ async def query_agents_compare(
     try:
         result = await asyncio.to_thread(
             _fetch_agents_compare, client, database, tenant_id, since, until,
-            lens, pool_id, entities or [], include_average,
+            lens, mode, pool_id, entities or [], include_average,
             accessible_pools, supervised_agent_types,
         )
     except Exception as exc:
@@ -1914,17 +1920,96 @@ async def query_agents_compare(
             "error": "data_unavailable",
         }
 
-    # ── deploy lens (ancorada no POOL, §11): anexa deploy_markers por pool ───────
+    # ── deploy lens (ancorada no POOL, §11) ─────────────────────────────────────
     # As entidades desta lente SÃO pool_ids (o front seleciona pools). Degradação
-    # graciosa: registry fora → markers vazios, série intacta (nunca 500).
-    if lens == "deploy":
+    # graciosa: registry fora → markers/ordem vazios, série intacta (nunca 500).
+    if epoch:
+        # epoch (R15a): eixo X = versões; anexa deployed_at por (skill, versão) e
+        # reordena a série por deployed_at (fallback first_seen). Sem markers.
+        await _attach_epoch_deploy_order(result, tenant_id)
+        # micro-fatia 1b (Opção II): overlay de nota provisória + pendentes por
+        # versão, da evaluation-api. Degrada graciosamente (API fora → sem overlay).
+        await _attach_epoch_coverage(result, tenant_id, since, until)
+        result["meta"]["mode"] = "epoch"
+        result["meta"]["min_sample"] = _DEPLOY_MIN_SAMPLE
+    elif lens == "deploy":
         pool_ids = [e for e in (entities or [])
                     if e and not e.startswith(_POOL_ENTITY_PREFIX)]
         result["deploy_markers"] = await _fetch_deploy_markers(
             tenant_id, pool_ids, since, until,
         )
+        result["meta"]["mode"] = "daily"
         result["meta"]["min_sample"] = _DEPLOY_MIN_SAMPLE
 
+    return result
+
+
+async def _attach_epoch_deploy_order(result: dict, tenant_id: str) -> dict:
+    """Epoch (R15a, Arc 6 Fase 2 §IV.8): para cada ponto-versão da série de cada
+    pool, anexa `deployed_at` resolvido do agent-registry pela chave
+    (`skill_id`, `version_label`) e **reordena a série por deployed_at**
+    (fallback `first_seen` quando o registry não tem o deploy). União multi-pool:
+    cada curva ordena pelos seus pontos; o eixo X (montado na UI) é a união por
+    deployed_at. Degradação: registry fora → ordena só por `first_seen`."""
+    from .config import get_settings
+    from .deployments_client import fetch_pool_deployments
+
+    base_url = get_settings().agent_registry_url
+    entities = result.get("data", {}).get("entities", [])
+
+    # (skill_id, version_label) -> deployed_at — buscado por pool selecionado.
+    dep_map: dict[tuple[str, str], str] = {}
+    for ent in entities:
+        pool_id = ent.get("agent_key") or ""
+        if not pool_id or pool_id.startswith(_POOL_ENTITY_PREFIX):
+            continue
+        for d in await fetch_pool_deployments(base_url, tenant_id, pool_id):
+            ver = d.get("version_label") or ""
+            at  = d.get("deployed_at") or ""
+            if ver and at:
+                dep_map.setdefault((d.get("skill_id") or "", ver), at)
+
+    for ent in entities:
+        series = ent.get("series", [])
+        for pt in series:
+            pt["deployed_at"] = dep_map.get(
+                (pt.get("skill_id", ""), pt.get("version", "")))
+        series.sort(key=lambda p: (
+            p.get("deployed_at") or p.get("first_seen") or "",
+            p.get("version") or ""))
+        ent["series"] = series
+    return result
+
+
+async def _attach_epoch_coverage(
+    result: dict, tenant_id: str, since: str, until: str,
+) -> dict:
+    """Epoch overlay (Arc 6 Fase 2, micro-fatia 1b — Opção II): para cada ponto-versão,
+    anexa `provisional_avg`/`provisional_n` (nota provisória, só pontuadas) e `pending_n`
+    (instâncias amostradas não finalizadas) buscados da evaluation-api por `(pool, versão)`.
+    A curva finalizada permanece do ClickHouse (exata); este overlay é o dado que o
+    ClickHouse não tem por versão. Degradação: evaluation-api fora → sem overlay (campos
+    ausentes; a UI cai p/ só-finalizada)."""
+    from .config import get_settings
+    from .coverage_client import fetch_deploy_coverage
+
+    base_url = get_settings().evaluation_api_url
+    if not base_url:
+        return result   # não configurado → epoch só com a curva finalizada
+    entities = result.get("data", {}).get("entities", [])
+    for ent in entities:
+        pool_id = ent.get("agent_key") or ""
+        if not pool_id or pool_id.startswith(_POOL_ENTITY_PREFIX):
+            continue
+        cov = await fetch_deploy_coverage(base_url, tenant_id, pool_id, since, until)
+        by_ver = {c.get("deploy_version"): c for c in cov}
+        for pt in ent.get("series", []):
+            c = by_ver.get(pt.get("version"))
+            if not c:
+                continue
+            pt["provisional_avg"] = c.get("provisional_avg")
+            pt["provisional_n"]   = c.get("provisional_n")
+            pt["pending_n"]       = c.get("pending_n")
     return result
 
 
@@ -1936,6 +2021,7 @@ def _per_agent_for_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     lens: str, pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    mode: str = "daily",
 ) -> tuple[dict, list[str]]:
     """Computa per_agent + metric_keys para a lente/escopo dados.
 
@@ -1991,11 +2077,19 @@ def _per_agent_for_lens(
         )
         metric_keys = []  # distribuição por motivo vive no summary.reasons[] (como pause_reason)
     elif lens == "deploy":
-        per_agent = _compare_deploy_lens(
-            client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
-        )
-        metric_keys = ["avg_score"]  # qualidade Oficial; markers vêm no envelope (async)
+        if mode == "epoch":
+            # epoch (R15a): série por deploy_version (não por dia), via JOIN
+            # evaluation_finalized→segments (deploy_version carimbado, R9).
+            per_agent = _compare_deploy_epoch_lens(
+                client, db, tenant_id, since, until, pool_id,
+                accessible_pools, supervised_agent_types,
+            )
+        else:
+            per_agent = _compare_deploy_lens(
+                client, db, tenant_id, since, until, pool_id,
+                accessible_pools, supervised_agent_types,
+            )
+        metric_keys = ["avg_score"]  # qualidade Oficial; markers/ordem vêm no envelope (async)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
@@ -2065,12 +2159,12 @@ def _aggregate_pool_summary(per_agent: dict) -> dict:
 def _fetch_agents_compare(
     client: Any, db: str, tenant_id: str,
     since: str, until: str,
-    lens: str, pool_id: str | None, entities: list[str], include_average: bool,
+    lens: str, mode: str, pool_id: str | None, entities: list[str], include_average: bool,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
 ) -> dict:
     per_agent, metric_keys = _per_agent_for_lens(
         client, db, tenant_id, since, until, lens, pool_id,
-        accessible_pools, supervised_agent_types,
+        accessible_pools, supervised_agent_types, mode,
     )
 
     # ── Média dos agentes (aritmética por bucket; gap ≠ zero) ────────────────
@@ -2092,7 +2186,7 @@ def _fetch_agents_compare(
             if pid not in pool_cache:
                 pool_cache[pid], _ = _per_agent_for_lens(
                     client, db, tenant_id, since, until, lens, pid,
-                    accessible_pools, supervised_agent_types,
+                    accessible_pools, supervised_agent_types, mode,
                 )
             pa = pool_cache[pid]
             out_entities.append({
@@ -2804,6 +2898,106 @@ def _compare_deploy_lens(
         score = float(r["avg_score"]) if r["avg_score"] is not None else None
         a["buckets"][r["bucket"]] = {
             "date": r["bucket"], "avg_score": round(score, 4) if score is not None else None, "n": n,
+        }
+        a["_n"] += n
+        if score is not None:
+            a["_score_sum"] += score * n
+    for a in per_agent.values():
+        n = a.pop("_n")
+        ssum = a.pop("_score_sum")
+        a["summary"] = {
+            "n_evaluations": n,
+            "avg_score":     round(ssum / n, 4) if n else None,
+        }
+    return per_agent
+
+
+def _compare_deploy_epoch_lens(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None,
+    accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+) -> dict:
+    """
+    deploy / **modo epoch** (Arc 6 Fase 2 §IV.8, R15a) — destravado pelo R9.
+
+    Diferente do modo diário: a série de cada pool é bucketizada por
+    **`deploy_version`** (não por dia). A versão vem do **carimbo R9 no segmento**
+    (`segments.deploy_version`), via JOIN exato `evaluation_finalized.segment_id`
+    → `segments.segment_id` — sem inferência por timeline de deploy (que erra no
+    overlap de hot-deploy). `skill_id` = `segments.flow_id` (a skill que de fato
+    rodou); pool↔skill é N:1, então o pool identifica a skill, mas carimbamos o
+    `skill_id` no ponto p/ a chave de eixo (skill|versão) alinhar curvas que
+    compartilham skill e desambiguar rótulos de versão entre skills distintas.
+
+    Cada ponto = uma versão: `avg(final_score)` (Oficial), `n` (significância,
+    `min_sample` no envelope), `first_seen` (= `min(timestamp)` da avaliação, proxy
+    de ordenação quando o agent-registry não tem o deploy). O `deployed_at` real e
+    a ordenação final por ele são anexados na camada async (`_attach_epoch_deploy_order`).
+    Domain ai: `segments.agent_type != 'human'`; só segmentos com versão carimbada
+    (`deploy_version != ''`).
+    """
+    fin_conditions = [
+        "tenant_id = {tenant_id:String}",
+        f"timestamp >= '{since}'",
+        f"timestamp <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    seg_conditions = [
+        "tenant_id = {tenant_id:String}",
+        "agent_type != 'human'",   # domain ai — pools humanos não têm deploy de skill
+        "deploy_version != ''",    # só segmentos com versão carimbada (R9)
+    ]
+    if pool_id:
+        seg_conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    if accessible_pools is not None:
+        if not _apply_pool_scope(seg_conditions, accessible_pools):
+            return {}
+
+    # agent_key = pool_id (curva por pool); bucket = deploy_version.
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT
+            seg.pool_id          AS agent_key,
+            any(seg.agent_type)  AS agent_type,
+            seg.pool_id          AS label,
+            seg.flow_id          AS skill_id,
+            seg.deploy_version   AS version,
+            count()              AS n,
+            avg(fin.final_score) AS avg_score,
+            toString(min(fin.timestamp)) AS first_seen
+        FROM (
+            SELECT segment_id, final_score, timestamp
+            FROM {db}.evaluation_finalized FINAL
+            WHERE {" AND ".join(fin_conditions)}
+        ) AS fin
+        JOIN (
+            SELECT segment_id, pool_id, flow_id, deploy_version, agent_type
+            FROM {db}.segments FINAL
+            WHERE {" AND ".join(seg_conditions)}
+        ) AS seg ON fin.segment_id = seg.segment_id
+        GROUP BY seg.pool_id, seg.flow_id, seg.deploy_version
+        ORDER BY agent_key, first_seen
+    """, parameters=params))
+
+    per_agent: dict = {}
+    for r in rows:
+        a = per_agent.setdefault(r["agent_key"], {
+            "agent_type": r["agent_type"], "label": r["label"],
+            "buckets": {}, "_n": 0, "_score_sum": 0.0,
+        })
+        n = int(r["n"] or 0)
+        score = float(r["avg_score"]) if r["avg_score"] is not None else None
+        skill = r["skill_id"] or ""
+        version = r["version"] or ""
+        # chave de bucket = skill|versão (desambigua versões entre skills distintas;
+        # alinha curvas que compartilham skill). A ordenação final é por deployed_at.
+        a["buckets"][f"{skill}|{version}"] = {
+            "version":    version,
+            "skill_id":   skill,
+            "avg_score":  round(score, 4) if score is not None else None,
+            "n":          n,
+            "first_seen": r["first_seen"] or "",
+            "deployed_at": None,   # preenchido na camada async (agent-registry)
         }
         a["_n"] += n
         if score is not None:

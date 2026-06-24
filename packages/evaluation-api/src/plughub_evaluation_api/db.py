@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -2738,6 +2738,81 @@ async def campaign_summaries(
             slot(r["campaign_id"])["sla_overdue"] = int(r["n"])
 
     return out
+
+
+# Status de instância que ainda NÃO produziram nota oficial (fechamento pendente):
+#   - amostrado/sem avaliar:  scheduled, assigned, in_progress  (backlog da IA)
+#   - provisório, em revisão: under_review, contested           (lag humano)
+# Terminais que NÃO contam como pendente: completed/reviewed/locked (finalizados),
+# skipped (thin-session), expired/error (mortos — nunca vão finalizar).
+_PENDING_INSTANCE_STATUSES = (
+    "scheduled", "assigned", "in_progress", "under_review", "contested",
+)
+
+
+def _parse_dt(s: str | None) -> datetime | None:
+    """Aceita 'YYYY-MM-DD' ou 'YYYY-MM-DD HH:MM:SS' (ou ISO com Z) → datetime UTC.
+    asyncpg exige objeto datetime para colunas timestamptz (não aceita str)."""
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        dt = datetime.strptime(s[:10], "%Y-%m-%d")
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+async def deploy_coverage(
+    pool: asyncpg.Pool, tenant_id: str, *,
+    pool_id: str | None = None, from_dt: str | None = None, to_dt: str | None = None,
+) -> list[dict[str, Any]]:
+    """Cobertura por `(pool, deploy_version)` p/ o overlay do epoch (Arc 6 Fase 2,
+    micro-fatia 1b). Insumo da Opção II: nota PROVISÓRIA (só avaliações já pontuadas)
+    + backlog (instâncias amostradas não finalizadas) por versão.
+
+    - `provisional_avg` = AVG(results.normalized_score 0–1) das instâncias com nota;
+      `provisional_n` = quantas têm nota. **Só pontuadas** (decisão: não estima o
+      universo amostrado).
+    - `pending_n` = instâncias amostradas ainda não finalizadas (status ∈
+      `_PENDING_INSTANCE_STATUSES`). É o "N pendentes de fechamento".
+    Pool = `COALESCE(c.evaluation_pool_id, c.pool_id)` (pool avaliado). Janela por
+    `instances.created_at` (alinha à janela do gráfico). Só versão carimbada (R9d)."""
+    args: list[Any] = [tenant_id]
+    cond = "i.tenant_id = $1 AND i.deploy_version IS NOT NULL AND i.deploy_version <> ''"
+    dt_from, dt_to = _parse_dt(from_dt), _parse_dt(to_dt)
+    if dt_from:
+        args.append(dt_from); cond += f" AND i.created_at >= ${len(args)}"
+    if dt_to:
+        args.append(dt_to);   cond += f" AND i.created_at <  ${len(args)}"
+    if pool_id:
+        args.append(pool_id)
+        cond += f" AND COALESCE(c.evaluation_pool_id, c.pool_id) = ${len(args)}"
+
+    pending_list = ", ".join(f"'{s}'" for s in _PENDING_INSTANCE_STATUSES)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(f"""
+            SELECT
+                COALESCE(c.evaluation_pool_id, c.pool_id) AS pool_id,
+                i.deploy_version                          AS deploy_version,
+                COUNT(*) FILTER (WHERE i.status IN ({pending_list}))        AS pending_n,
+                COUNT(r.normalized_score)                                   AS provisional_n,
+                AVG(r.normalized_score)::float                             AS provisional_avg
+            FROM evaluation.instances i
+            JOIN evaluation.campaigns c ON c.id = i.campaign_id
+            LEFT JOIN evaluation.results r ON r.instance_id = i.id
+            WHERE {cond}
+            GROUP BY 1, 2
+        """, *args)
+    return [
+        {
+            "pool_id":         r["pool_id"],
+            "deploy_version":  r["deploy_version"],
+            "pending_n":       int(r["pending_n"] or 0),
+            "provisional_n":   int(r["provisional_n"] or 0),
+            "provisional_avg": round(r["provisional_avg"], 4) if r["provisional_avg"] is not None else None,
+        }
+        for r in rows
+    ]
 
 
 # ─── Pool factory ─────────────────────────────────────────────────────────────

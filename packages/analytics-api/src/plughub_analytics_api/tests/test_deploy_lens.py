@@ -49,6 +49,26 @@ def _patch_deploys(deploys):
     )
 
 
+def _patch_coverage(coverage):
+    """Patcha o cliente de cobertura (evaluation-api) usado por _attach_epoch_coverage."""
+    return patch(
+        "plughub_analytics_api.coverage_client.fetch_deploy_coverage",
+        new=AsyncMock(return_value=coverage),
+    )
+
+
+class _FakeSettings:
+    def __init__(self, eval_url: str = "http://eval-api"):
+        self.evaluation_api_url = eval_url
+        self.agent_registry_url = "http://agent-registry"
+
+
+def _patch_eval_url(eval_url: str = "http://eval-api"):
+    """Liga/desliga o overlay de cobertura no epoch via settings.evaluation_api_url."""
+    return patch("plughub_analytics_api.config.get_settings",
+                 return_value=_FakeSettings(eval_url))
+
+
 # ─── lente registrada ─────────────────────────────────────────────────────────
 
 def test_deploy_is_registered_lens():
@@ -146,3 +166,140 @@ async def test_deploy_skips_pool_pseudo_entities_for_markers():
             from_dt="2026-06-01", to_dt="2026-06-30",
         )
     fake.assert_not_called()
+
+
+# ─── modo epoch (R15a, §IV.8) — série por deploy_version ──────────────────────
+
+# colunas do SQL epoch (JOIN evaluation_finalized → segments por deploy_version)
+_EPOCH_COLS = ["agent_key", "agent_type", "label", "skill_id", "version",
+               "n", "avg_score", "first_seen"]
+
+
+@pytest.mark.asyncio
+async def test_epoch_groups_by_version_and_orders_by_deployed_at():
+    # duas versões da mesma skill num pool → dois pontos no eixo de versões.
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "1.0", 40, 0.80, "2026-06-01 10:00:00"],
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "2.0", 12, 0.88, "2026-06-19 09:00:00"],
+    ]))
+    deploys = [
+        {"deploy_id": "d2", "skill_id": "skill_sac", "version_label": "2.0",
+         "deployed_at": "2026-06-19T08:00:00Z"},
+        {"deploy_id": "d1", "skill_id": "skill_sac", "version_label": "1.0",
+         "deployed_at": "2026-05-01T08:00:00Z"},
+    ]
+    with _patch_deploys(deploys), _patch_eval_url(""):
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch", entities=["sac_ia"],
+            from_dt="2026-06-01", to_dt="2026-06-30",
+        )
+
+    sql = client.query.call_args_list[-1][0][0]
+    assert "evaluation_finalized" in sql               # modo Oficial (invariante)
+    assert "final_score" in sql
+    assert "deploy_version" in sql                      # bucket por versão (R9)
+    assert "fin.segment_id = seg.segment_id" in sql     # JOIN exato pelo carimbo
+    assert "agent_type != 'human'" in sql               # domain ai
+    assert "GROUP BY seg.pool_id, seg.flow_id, seg.deploy_version" in sql
+
+    ent = result["data"]["entities"][0]
+    assert ent["agent_key"] == "sac_ia"
+    assert ent["summary"]["n_evaluations"] == 52        # 40 + 12
+    # ordenado por deployed_at: 1.0 (mai) antes de 2.0 (jun)
+    assert [p["version"] for p in ent["series"]] == ["1.0", "2.0"]
+    assert ent["series"][0]["deployed_at"].startswith("2026-05-01")
+    assert ent["series"][1]["deployed_at"].startswith("2026-06-19")
+    assert ent["series"][0]["avg_score"] == pytest.approx(0.80)
+    assert ent["series"][0]["n"] == 40
+    assert ent["series"][0]["skill_id"] == "skill_sac"
+
+    assert result["meta"]["mode"] == "epoch"
+    assert result["meta"]["min_sample"] == _DEPLOY_MIN_SAMPLE == 30
+    assert result["data"]["average"] is None            # epoch não tem média da frota
+    assert "deploy_markers" not in result               # markers são do modo diário
+
+
+@pytest.mark.asyncio
+async def test_epoch_multi_pool_one_curve_each():
+    # dois pools, cada um sua curva; união dos pontos ordenada por deployed_at.
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["pool_a", "ai", "pool_a", "skill_x", "1.0", 30, 0.90, "2026-06-05 00:00:00"],
+        ["pool_b", "ai", "pool_b", "skill_y", "1.0", 25, 0.70, "2026-06-08 00:00:00"],
+    ]))
+    deploys = [
+        {"deploy_id": "da", "skill_id": "skill_x", "version_label": "1.0",
+         "deployed_at": "2026-06-04T00:00:00Z"},
+        {"deploy_id": "db", "skill_id": "skill_y", "version_label": "1.0",
+         "deployed_at": "2026-06-07T00:00:00Z"},
+    ]
+    with _patch_deploys(deploys), _patch_eval_url(""):
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch",
+            entities=["pool_a", "pool_b"],
+            from_dt="2026-06-01", to_dt="2026-06-30",
+        )
+    keys = sorted(e["agent_key"] for e in result["data"]["entities"])
+    assert keys == ["pool_a", "pool_b"]                 # uma curva por pool
+    for e in result["data"]["entities"]:
+        assert len(e["series"]) == 1
+        assert e["series"][0]["deployed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_epoch_degrades_when_registry_down():
+    # registry fora → deployed_at None, ordena por first_seen (série intacta).
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "2.0", 12, 0.88, "2026-06-19 09:00:00"],
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "1.0", 40, 0.80, "2026-06-01 10:00:00"],
+    ]))
+    with _patch_deploys([]), _patch_eval_url(""):
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch", entities=["sac_ia"],
+            from_dt="2026-06-01", to_dt="2026-06-30",
+        )
+    ent = result["data"]["entities"][0]
+    assert all(p["deployed_at"] is None for p in ent["series"])
+    # fallback first_seen: 1.0 (jun-01) antes de 2.0 (jun-19)
+    assert [p["version"] for p in ent["series"]] == ["1.0", "2.0"]
+    assert ent["summary"]["n_evaluations"] == 52
+
+
+# ─── overlay de cobertura (micro-fatia 1b, Opção II) ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_epoch_attaches_provisional_and_pending():
+    # cada ponto-versão ganha provisional_avg/_n + pending_n da evaluation-api.
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "1.0", 40, 0.80, "2026-06-18 10:00:00"],
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "2.0", 12, 0.88, "2026-06-19 09:00:00"],
+    ]))
+    coverage = [
+        {"pool_id": "sac_ia", "deploy_version": "1.0", "pending_n": 3,  "provisional_n": 43, "provisional_avg": 0.79},
+        {"pool_id": "sac_ia", "deploy_version": "2.0", "pending_n": 40, "provisional_n": 15, "provisional_avg": 0.86},
+    ]
+    with _patch_deploys([]), _patch_coverage(coverage), _patch_eval_url():
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch", entities=["sac_ia"],
+            from_dt="2026-06-17", to_dt="2026-06-30",
+        )
+    series = {p["version"]: p for p in result["data"]["entities"][0]["series"]}
+    assert series["1.0"]["pending_n"] == 3
+    assert series["1.0"]["provisional_n"] == 43
+    assert series["1.0"]["provisional_avg"] == pytest.approx(0.79)
+    assert series["2.0"]["pending_n"] == 40              # backlog grande na versão nova
+    assert series["2.0"]["provisional_avg"] == pytest.approx(0.86)
+
+
+@pytest.mark.asyncio
+async def test_epoch_no_overlay_when_eval_api_unset():
+    # evaluation_api_url vazio (default) → epoch só com a curva finalizada, sem overlay.
+    client = _make_client(_ch_result(_EPOCH_COLS, [
+        ["sac_ia", "ai", "sac_ia", "skill_sac", "1.0", 40, 0.80, "2026-06-18 10:00:00"],
+    ]))
+    with _patch_deploys([]), _patch_eval_url(""):         # url vazia → sem overlay
+        result = await query_agents_compare(
+            client, DB, TENANT, lens="deploy", mode="epoch", entities=["sac_ia"],
+            from_dt="2026-06-17", to_dt="2026-06-30",
+        )
+    pt = result["data"]["entities"][0]["series"][0]
+    assert "pending_n" not in pt                          # overlay ausente, degrada limpo

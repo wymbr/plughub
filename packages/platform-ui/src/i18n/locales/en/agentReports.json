@@ -169,7 +169,16 @@
       "markers": "Deploys:",
       "count": "{{n}} deploy(s) in the period — hover a triangle for details",
       "legend": "● day with an evaluation (no point = no evaluation that day) · ▲ deploy (pool color)",
-      "lowSample": "Low sample (N < {{min}}): {{agents}} — read with caution."
+      "lowSample": "Low sample (N < {{min}}): {{agents}} — read with caution.",
+      "modeLabel": "View",
+      "modeDaily": "Daily",
+      "modeEpoch": "By version",
+      "epochLegend": "● official quality per version (solid) · ┄ provisional, still finalizing (dashed) · X-axis = versions, ordered by deploy date",
+      "tipN": "n={{n}}",
+      "tipFinal": "official",
+      "tipProvisional": "provisional",
+      "tipPending": "{{n}} pending",
+      "pending": "Pending finalization · {{items}}"
     },
     "criteria": {
       "form": "Form: {{form}}",

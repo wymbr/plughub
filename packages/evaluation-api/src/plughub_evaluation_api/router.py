@@ -1054,6 +1054,22 @@ async def campaign_summary(
     return {"tenant_id": tenant_id, "summaries": summaries}
 
 
+@router.get("/v1/evaluation/reports/deploy-coverage")
+async def deploy_coverage(
+    request: Request, tenant_id: str,
+    pool_id: str | None = None, from_dt: str | None = None, to_dt: str | None = None,
+) -> dict:
+    """Cobertura por `(pool, deploy_version)` p/ o overlay do epoch (Arc 6 Fase 2,
+    micro-fatia 1b): nota PROVISÓRIA (só pontuadas) + `pending_n` (instâncias
+    amostradas não finalizadas). Consumido em query-time pela analytics-api
+    (`coverage_client`). Filtro por janela (`instances.created_at`) + pool."""
+    pool = _pool(request)
+    coverage = await _db.deploy_coverage(
+        pool, tenant_id, pool_id=pool_id, from_dt=from_dt, to_dt=to_dt,
+    )
+    return {"tenant_id": tenant_id, "coverage": coverage}
+
+
 @router.get("/v1/evaluation/instances/{instance_id}")
 async def get_instance(instance_id: str, tenant_id: str, request: Request) -> dict:
     pool = _pool(request)

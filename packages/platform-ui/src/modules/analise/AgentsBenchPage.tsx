@@ -77,7 +77,14 @@ interface PerfRow {
   escalation_rate: number
 }
 
-interface SeriesPoint { date: string; n?: number; [k: string]: number | string | undefined }
+interface SeriesPoint {
+  date?: string; n?: number
+  // epoch (deploy mode=epoch, R15b): ponto por versão em vez de por dia
+  version?: string; skill_id?: string; deployed_at?: string | null; first_seen?: string
+  // overlay de cobertura (micro-fatia 1b): provisória + backlog por versão
+  provisional_avg?: number | null; provisional_n?: number; pending_n?: number
+  [k: string]: number | string | null | undefined
+}
 interface CompareEntity {
   agent_key: string; label: string; agent_type: string | null
   series: SeriesPoint[]; summary: Record<string, number | null>; missing?: boolean
@@ -88,7 +95,7 @@ interface DeployMarker {
 }
 interface CompareResp {
   data: { average: { label: string; n: number; series: SeriesPoint[] } | null; entities: CompareEntity[] }
-  meta: { lens: string; bucket: string; agents_in_scope?: number; min_sample?: number; from_dt?: string; to_dt?: string }
+  meta: { lens: string; bucket: string; mode?: string; agents_in_scope?: number; min_sample?: number; from_dt?: string; to_dt?: string }
   deploy_markers?: DeployMarker[]   // lente deploy (Arc 6 Fase 2)
   error?: string
 }
@@ -137,7 +144,7 @@ function usePerformanceList(tenantId: string, fromDt: string, toDt: string) {
 
 function useCompare(
   tenantId: string, fromDt: string, toDt: string, poolId: string,
-  lens: LensId, entities: string[], includeAverage = true,
+  lens: LensId, entities: string[], includeAverage = true, mode = 'daily',
 ) {
   const [resp, setResp] = useState<CompareResp | null>(null)
   const [loading, setLoading] = useState(false)
@@ -148,12 +155,13 @@ function useCompare(
     if (poolId) p.set('pool_id', poolId)
     if (entityCsv) p.set('entities', entityCsv)
     if (!includeAverage) p.set('include_average', 'false')
+    if (mode !== 'daily') p.set('mode', mode)
     fetch(`/reports/agents/compare?${p}`)
       .then(r => r.json())
       .then((d: CompareResp) => setResp(d))
       .catch(() => setResp(null))
       .finally(() => setLoading(false))
-  }, [tenantId, fromDt, toDt, poolId, lens, entityCsv, includeAverage])
+  }, [tenantId, fromDt, toDt, poolId, lens, entityCsv, includeAverage, mode])
   useEffect(() => { fetch_() }, [fetch_])
   return { resp, loading }
 }
@@ -699,6 +707,152 @@ function DeployChart({
   )
 }
 
+// Lente deploy — modo EPOCH (Arc 6 Fase 2 §IV.8, R15b): eixo X = VERSÕES (não
+// dias); cada pool é uma curva; o ponto é a qualidade média OFICIAL daquela
+// versão. Multi-pool é união por deployed_at: pools que compartilham a skill
+// alinham na mesma versão, pools de skills distintas ocupam seus próprios pontos
+// (chave de eixo = skill|versão, rótulo = versão). Sem média da frota.
+function DeployEpochChart({
+  resp, selected, labelMap, t,
+}: {
+  resp: CompareResp; selected: string[]; labelMap: Record<string, string>
+  t: (k: string, o?: Record<string, unknown>) => string
+}) {
+  const minSample = resp.meta.min_sample ?? 30
+  const xKeyOf = (p: SeriesPoint) => `${p.skill_id ?? ''}|${p.version ?? ''}`
+
+  // Eixo X = união de (skill|versão) de todos os pools selecionados, ordenada por
+  // deployed_at (fallback first_seen). Rótulo exibido = versão.
+  const xs = useMemo(() => {
+    const m = new Map<string, { xKey: string; label: string; order: string }>()
+    for (const e of resp.data.entities) for (const p of e.series) {
+      const xKey = xKeyOf(p)
+      const order = String(p.deployed_at ?? p.first_seen ?? '')
+      const ex = m.get(xKey)
+      if (!ex) m.set(xKey, { xKey, label: String(p.version ?? ''), order })
+      else if (order && (!ex.order || order < ex.order)) ex.order = order
+    }
+    return [...m.values()].sort((a, b) =>
+      (a.order || '').localeCompare(b.order || '') || a.label.localeCompare(b.label))
+  }, [resp])
+
+  // Linhas do gráfico: uma por xKey; por pool guardamos a FINALIZADA (`<pool>`), a
+  // PROVISÓRIA (`<pool>__prov`, micro-fatia 1b) e metadados (n, deployed_at, provN,
+  // pending) em `<pool>__meta` para o tooltip. null = gap (pool sem dado na versão).
+  const rows = useMemo(() => xs.map(x => {
+    const row: Record<string, number | string | null | { n?: number; dep?: string | null; provN?: number; pending?: number }> = {
+      xKey: x.xKey, label: x.label,
+    }
+    for (const e of resp.data.entities) {
+      const p = e.series.find(pt => xKeyOf(pt) === x.xKey)
+      row[e.agent_key] = p && typeof p.avg_score === 'number' ? p.avg_score : null
+      const prov = p?.provisional_avg
+      row[`${e.agent_key}__prov`] = typeof prov === 'number' ? prov : null
+      row[`${e.agent_key}__meta`] = p ? {
+        n: p.n as number | undefined, dep: p.deployed_at ?? null,
+        provN: p.provisional_n as number | undefined, pending: p.pending_n as number | undefined,
+      } : null
+    }
+    return row
+  }), [xs, resp])
+
+  // Versões com pendentes de fechamento (backlog) — selo textual sob o gráfico.
+  const pendingNotes = useMemo(() => {
+    const out: string[] = []
+    for (const x of xs) for (const e of resp.data.entities) {
+      const p = e.series.find(pt => xKeyOf(pt) === x.xKey)
+      const pend = p?.pending_n
+      if (typeof pend === 'number' && pend > 0)
+        out.push(`${labelMap[e.agent_key] ?? e.agent_key} v${x.label} +${pend}`)
+    }
+    return out
+  }, [xs, resp, labelMap])
+
+  const lowSample = selected
+    .map(k => resp.data.entities.find(e => e.agent_key === k))
+    .filter((e): e is CompareEntity => !!e && !e.missing)
+    .filter(e => ((e.summary.n_evaluations as number | null) ?? 0) < minSample)
+    .map(e => labelMap[e.agent_key] ?? e.label ?? e.agent_key)
+
+  if (selected.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light text-center px-6">
+      {t('bench.chart.selectForDeploy')}
+    </div>
+  )
+  if (xs.length === 0) return (
+    <div className="h-52 flex items-center justify-center text-sm text-muted-light">{t('bench.chart.noData')}</div>
+  )
+
+  const EpochTooltip = ({ active, payload, label }: {
+    active?: boolean; label?: string
+    payload?: { dataKey: string; value: number | null; color: string; payload: Record<string, unknown> }[]
+  }) => {
+    if (!active || !payload?.length) return null
+    // só as séries FINALIZADAS (uma por pool); a provisória/pendentes saem do meta.
+    const finals = payload.filter(p => !p.dataKey.endsWith('__meta') && !p.dataKey.endsWith('__prov'))
+    return (
+      <div className="bg-white border border-border rounded shadow px-2 py-1 text-2xs space-y-0.5">
+        <div className="font-bold text-dark">v{label}</div>
+        {finals.map(p => {
+          const meta = p.payload[`${p.dataKey}__meta`] as
+            { n?: number; dep?: string | null; provN?: number; pending?: number } | null
+          const prov = p.payload[`${p.dataKey}__prov`]
+          return (
+            <div key={p.dataKey} style={{ color: p.color }}>
+              <span className="font-semibold">{labelMap[p.dataKey] ?? p.dataKey}</span>
+              {' · '}{t('bench.deploy.tipFinal')}: {typeof p.value === 'number' ? p.value.toFixed(2) : '—'}
+              {meta?.n != null ? ` (${t('bench.deploy.tipN', { n: meta.n })})` : ''}
+              {typeof prov === 'number'
+                ? ` · ${t('bench.deploy.tipProvisional')}: ${prov.toFixed(2)}${meta?.provN != null ? ` (${t('bench.deploy.tipN', { n: meta.provN })})` : ''}` : ''}
+              {meta?.pending ? ` · ${t('bench.deploy.tipPending', { n: meta.pending })}` : ''}
+              {meta?.dep ? ` · ${String(meta.dep).slice(0, 10)}` : ''}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={rows} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#E5E7EB" />
+          <XAxis dataKey="label" tick={{ fontSize: 11 }}
+            tickFormatter={(v: string) => `v${v}`} />
+          <YAxis tick={{ fontSize: 11 }} domain={[0, 1]} tickFormatter={(v: number) => v.toFixed(1)} />
+          <Tooltip content={<EpochTooltip />} />
+          <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }}
+            payload={selected.map(k => ({ value: labelMap[k] ?? k, type: 'line', color: colorFor(k), id: k }))} />
+          {selected.map(k => (
+            <Line key={k} type="linear" dataKey={k} name={labelMap[k] ?? k}
+              stroke={colorFor(k)} strokeWidth={2} connectNulls={true}
+              dot={{ r: 3, fill: colorFor(k), strokeWidth: 0 }} legendType="none" />
+          ))}
+          {/* Provisória (micro-fatia 1b): mesma cor, TRACEJADA, sem legenda própria
+              (para IA tende a coincidir com a finalizada — gap = ainda não fechado). */}
+          {selected.map(k => (
+            <Line key={`${k}__prov`} type="linear" dataKey={`${k}__prov`} name={`${labelMap[k] ?? k} · prov`}
+              stroke={colorFor(k)} strokeWidth={1.5} strokeDasharray="5 3" connectNulls={true}
+              dot={{ r: 2, fill: colorFor(k), strokeWidth: 0 }} legendType="none" />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+      <p className="text-2xs text-muted-light px-1">{t('bench.deploy.epochLegend')}</p>
+      {pendingNotes.length > 0 && (
+        <p className="text-2xs text-warning px-1">
+          {t('bench.deploy.pending', { items: pendingNotes.join(' · ') })}
+        </p>
+      )}
+      {lowSample.length > 0 && (
+        <p className="text-2xs text-warning px-1">
+          {t('bench.deploy.lowSample', { min: minSample, agents: lowSample.join(', ') })}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function LensChart({
   lens, resp, selected, t, escalationLabels,
 }: {
@@ -764,7 +918,9 @@ function LensChart({
     )
   }
   if (lens === 'deploy') return (
-    <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
+    resp.meta.mode === 'epoch'
+      ? <DeployEpochChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
+      : <DeployChart resp={resp} selected={selected} labelMap={labelMap} t={t} />
   )
   if (lens === 'nps') return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1085,6 +1241,8 @@ export default function AgentsBenchPage() {
   const [selected, setSelected] = useState<string[]>(
     (sp.get('sel') || '').split(',').filter(Boolean))
   const [view, setView] = useState<'lenses' | 'cross'>(sp.get('view') === 'cross' ? 'cross' : 'lenses')
+  // Modo da lente deploy (R15b): diário (markers) × epoch (por versão).
+  const [deployMode, setDeployMode] = useState<'daily' | 'epoch'>(sp.get('mode') === 'epoch' ? 'epoch' : 'daily')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detail, setDetail] = useState<{ key: string; label: string; type: string } | null>(null)
 
@@ -1097,15 +1255,18 @@ export default function AgentsBenchPage() {
     if (lens !== 'resolution') next.set('lens', lens)
     if (selected.length) next.set('sel', selected.join(','))
     if (view === 'cross') next.set('view', view)
+    if (lens === 'deploy' && deployMode === 'epoch') next.set('mode', 'epoch')
     setSp(next, { replace: true })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fromDt, toDt, poolId, lens, selected, view])
+  }, [fromDt, toDt, poolId, lens, selected, view, deployMode])
 
   const lensDef = LENSES.find(l => l.id === lens)!
   // Lente deploy (§11): a unidade é o POOL — entidades = pool_ids; sem média da frota.
   const deployLens = lens === 'deploy'
   const { rows: perfRows, loading: listLoading } = usePerformanceList(tenantId ?? '', fromDt, toDt)
-  const { resp, loading: chartLoading } = useCompare(tenantId ?? '', fromDt, toDt, poolId, lens, selected, !deployLens)
+  const { resp, loading: chartLoading } = useCompare(
+    tenantId ?? '', fromDt, toDt, poolId, lens, selected, !deployLens,
+    deployLens ? deployMode : 'daily')
   const { resp: crossResp, loading: crossLoading } = useCross(tenantId ?? '', fromDt, toDt, poolId, view === 'cross')
   const escalationLabels = useEscalationLabels(tenantId ?? '')
 
@@ -1367,7 +1528,22 @@ export default function AgentsBenchPage() {
                   <p className="text-xs font-semibold text-muted uppercase tracking-wide">
                     {t(`bench.lens.${lens}`)}
                   </p>
-                  {resp?.data.average && (
+                  {deployLens ? (
+                    // Toggle Diário ↔ Versão (R15b) — só na lente deploy.
+                    <div className="inline-flex items-center gap-1.5">
+                      <span className="text-2xs text-muted-light">{t('bench.deploy.modeLabel')}</span>
+                      <div className="inline-flex rounded-lg border border-border overflow-hidden bg-white">
+                        {(['daily', 'epoch'] as const).map(m => (
+                          <button key={m} onClick={() => setDeployMode(m)}
+                            className={`px-2.5 py-1 text-2xs font-medium transition-colors ${
+                              deployMode === m ? 'bg-primary text-white' : 'text-muted hover:text-dark hover:bg-surface-muted'
+                            }`}>
+                            {t(`bench.deploy.mode${m === 'daily' ? 'Daily' : 'Epoch'}`)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : resp?.data.average && (
                     <span className="text-2xs text-muted-light">{t('bench.n', { n: resp.data.average.n })}</span>
                   )}
                 </div>

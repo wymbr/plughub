@@ -901,6 +901,7 @@ services:
       PLUGHUB_PRICING_API_URL:     http://pricing-api:3900   # Fase 2 Pools — teto configurado do total (fallback gracioso p/ provisionada)
       PLUGHUB_AGENT_REGISTRY_URL:  http://agent-registry:3300   # Arc 6 Fase 2 — lente deploy lê skill_deployments (markers); indisponível → série sem markers
       PLUGHUB_CONFIG_API_URL:      http://config-api:3600   # R8b — limiar de divergência + N mínimo (namespace evaluation)
+      PLUGHUB_EVALUATION_API_URL:  http://evaluation-api:3400   # micro-fatia 1b — epoch overlay (provisória + pendentes por versão); indisponível → epoch só finalizada
     depends_on:
       redis:
         condition: service_healthy

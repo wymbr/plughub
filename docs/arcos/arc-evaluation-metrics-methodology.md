@@ -1,6 +1,6 @@
 # Arc — Métricas de Avaliação & Metodologia de Qualidade (Quantitativo + Qualitativo IA)
 
-> Última atualização: 2026-06-20 · Estado: **design fechado, implementação pendente**
+> Última atualização: 2026-06-24 · Estado: **design fechado; R1–R12 + R15a/R15b + micro-fatia 1b ✅ (Arc 6 Fase 2 COMPLETO), R13/R14/R16 pendentes**
 > Escopo: domínio canônico de métricas de sessão (`session_metric.*`), dimensões
 > qualitativas específicas de avaliação de agentes **IA**, metodologia (LLM-as-judge) com
 > referências de mercado, **amostragem de contatos (cota por agente + versão)**, módulo
@@ -634,26 +634,36 @@ estado por sessão). Hydrator/Replayer leem transparente.
 3. **`delta_ms` recalculado na finalização** (`contact_closed`), helper compartilhado com o
    Persister — confirmado.
 
-## IV.8 Núcleo epoch/versão (Arc 6 Fase 2) — destravado pelo R9
+## IV.8 Núcleo epoch/versão (Arc 6 Fase 2) — ✅ entregue (R15a+R15b, 2026-06-24)
 
 Pendência herdada: a lente `deploy` entregue (P3) é **diária + markers**; o núcleo §4.1/D4 (série
 por **epoch/versão**, eixo X = versões, ponto = qualidade média da versão) ficou pendente porque a
 atribuição de versão era **inferida pela timeline de deploys** (errada no overlap de hot-deploy). O
-**R9** (carimbo `deploy_version` no segmento → `evaluation_finalized`) torna isso um **`GROUP BY
-deploy_version` exato** — e mais simples que a timeline-bucket que o D4 imaginava.
+**R9** (carimbo `deploy_version` no segmento) torna isso um **`GROUP BY deploy_version` exato** — e
+mais simples que a timeline-bucket que o D4 imaginava.
 
-Decisões (fechadas):
-- **Âncora = `(pool, skill)`**, X = `deploy_version` (coerente com a âncora-pool entregue + a chave
-  do R9).
-- **`deploy_version` denormalizado no `evaluation_finalized`** (query sem join; o `segment_id` já
-  está lá como alternativa de join).
-- **Query** `lens=deploy&mode=epoch`: ponto = `avg(final_score)` por versão, `n` por versão,
-  ordenado por `deployed_at`, `min_sample=30`, indicador de **"N pendentes de fechamento"** (lag de
-  finalização — sobretudo no fluxo humano).
-- **UI epoch:** foco single-`(pool,skill)`, **esconde a média dos agentes + multi-seleção**; o modo
-  diário+markers (1º corte) permanece como visão alternativa.
-- **Dependência dura: R9.** Substitui o plano antigo de tabela/consumer `analytics.deploy_events`
-  (já preterido por D1/REST). Roadmap: R15a (query epoch) + R15b (UI epoch).
+Decisões (fechadas) — **como implementado:**
+- **Âncora = pool** (não `(pool,skill)`): a relação pool↔skill é **N:1** (cada pool roda 1 skill; uma
+  skill roda em N pools), então o pool já identifica a skill. O `skill_id` é carimbado no ponto
+  (chave de eixo `skill|versão`) só p/ alinhar curvas que compartilham skill e desambiguar rótulos de
+  versão entre skills distintas. X = `deploy_version`.
+- **JOIN exato, sem denormalizar** (revisão da decisão original): em vez de copiar `deploy_version`
+  p/ `evaluation_finalized`, a query faz `JOIN evaluation_finalized.segment_id → segments.segment_id`
+  e lê `segments.deploy_version`/`flow_id` (carimbo R9). Menos escrita, mesma exatidão.
+- **Query** `lens=deploy&mode=epoch`: ponto = `avg(final_score)` Oficial por versão, `n` por versão,
+  ordenado por **`deployed_at`** (agent-registry; fallback `first_seen=min(timestamp)`), `min_sample=30`.
+- **Cobertura (micro-fatia 1b — Opção II ✅):** overlay por versão de **nota provisória** (só avaliações já
+  pontuadas, `results.normalized_score`) + **`pending_n`** (instâncias amostradas não finalizadas), da
+  **evaluation-api** (`GET /v1/evaluation/reports/deploy-coverage` por `(pool, deploy_version)` — fonte exata,
+  o ClickHouse não tem versão no provisório). analytics-api anexa via `coverage_client` (degrada gracioso). UI:
+  linha tracejada provisória + selo "pendentes +N". Decisão: a convergência provisória↔finalizada é o sinal
+  ("assentado" vs "ainda se movendo"); para IA elas quase coincidem (finalize imediato) e o que move é o backlog.
+- **UI epoch:** **esconde a média dos agentes**; **multi-pool permitido** (decisão revisada com o
+  usuário 2026-06-24 — uma curva por pool), eixo X = **união das versões ordenada por deployed_at**
+  (pools que compartilham skill alinham na mesma versão; skills distintas ocupam pontos próprios). O
+  modo diário+markers (1º corte) permanece como visão alternativa (toggle).
+- **Dependência dura: R9.** Substituiu o plano antigo de tabela/consumer `analytics.deploy_events`
+  (preterido por D1/REST).
 
 ---
 
@@ -685,8 +695,9 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
 | **R13b** | **Consumer interno from-events** (opção Y, gated por `source=external_import`): reconstrói `session_stream_events` a partir dos eventos (append por `message_sent`, idempotente por `event_id`, `delta_ms` recalculado no `contact_closed`, `original_content=null`), **compartilhando a construção de linha** com o Persister vivo | session-replayer (ou novo consumer) | IV.6/IV.7 |
 | **R13c** | **Mapa de identidade/versão por `source`** no Config API (`external_agent_id → user_id/agent_id` `+ skill_id/deploy_version`); fallback ADR `(campaign, pool, skill)` quando sem versão | config-api + serviço de ingestão | IV.7 |
 | **R14** | **Affordances de criação + disciplina de versão no editor de skill** (a edição em si já existe). Achado: `/agent-flow/editor` (`SkillFlowsPage`) é editor YAML Monaco **read/write** — edita/cola, `PUT /v1/skills` (upsert), deleta, valida ao vivo; `/agent-flow/deploy` associa a pools (`POST /:id/deploy` → snapshot `SkillDeployment`). Gaps reais de UX/regra: (a) **não há botão "Novo skill"** — a criação só existe no estado inicial em branco (`skill_novo_v1`) ou após Delete; criar um `skill_id` é implícito (editar o campo `skill_id` + salvar), não-descobrível; (b) **Save é gated por `isModified`** (só habilita após editar) — parece "sempre desabilitado" ao apenas visualizar; (c) `deploy` deve atribuir **`deploy_version` automático** do histórico `SkillDeployment` (hoje `version` é texto livre, manual) e tratar o `version` do YAML como **rótulo**; (d) **reconciliar `409`/`_v2`** do `POST` com `skill_id` estável + `_v{n}` cosmético; **relaxar a regex** `^skill_[a-z0-9_]+_v\d+$` → `^skill_[a-z0-9_]+$` (drop `_v\d+`, mantém slug seguro, retrocompat) nos validadores do `PUT`, no `registry_syncer.py` e no `workflow-api` | platform-ui + agent-registry | IV.3 |
-| **R15a** | **Núcleo epoch (query)**: `deploy_version` denormalizado no `evaluation_finalized` (via R9); `lens=deploy&mode=epoch` → série por `(pool, skill)` bucketizada por `deploy_version` (`avg(final_score)`, `n`/versão, ordem `deployed_at`, `min_sample=30`, "N pendentes") | analytics-api | IV.8 |
-| **R15b** | **Núcleo epoch (UI)**: modo epoch single-`(pool,skill)`, eixo X = versões, esconde média + multi-seleção; diário+markers como modo alternativo | platform-ui `AgentsBenchPage`/`DeployChart` | IV.8 |
+| **R15a** ✅ | **Núcleo epoch (query)**: `mode=daily\|epoch` em `query_agents_compare`+rota. `_compare_deploy_epoch_lens` faz JOIN **exato** `evaluation_finalized.segment_id`→`segments` (sem denormalizar em `evaluation_finalized` — o carimbo R9 no segmento basta), `GROUP BY pool_id,flow_id,deploy_version`, `avg(final_score)` Oficial + `n` + `first_seen`. `_attach_epoch_deploy_order` (async) resolve `deployed_at` por `(skill,version)` do agent-registry e **reordena por deployed_at** (fallback `first_seen`). `meta.mode=epoch`, `min_sample=30`, sem média. Teste `test_deploy_lens.py` +3 (8/8). | analytics-api | IV.8 |
+| **R15b** ✅ | **Núcleo epoch (UI)**: toggle Diário↔Por versão (só lens deploy, `deployMode`+URL); `DeployEpochChart` eixo X=versões (`skill\|versão`), **uma curva por pool**, multi-pool = **união por deployed_at** (decisão: sempre permite; pools que compartilham skill alinham), tooltip custom (versão+n+data), esconde média. `useCompare` propaga `mode`. i18n en+pt-BR. Diário+markers = visão alternativa | platform-ui `AgentsBenchPage` | IV.8 |
+| **1b** ✅ | **Cobertura do epoch (Opção II)**: evaluation-api `db.deploy_coverage` + `GET /v1/evaluation/reports/deploy-coverage` (por `(pool,deploy_version)`: `provisional_avg/_n` só pontuadas + `pending_n` status-based; filtro janela `created_at`+pool). analytics-api `coverage_client` + `_attach_epoch_coverage` (config `evaluation_api_url`, degrada→sem overlay). UI: linha tracejada provisória + selo "pendentes +N" + tooltip. Testes +2 (10/10). Seed `seed_epoch_demo.sh` (instâncias pendentes PG) | evaluation-api + analytics-api + platform-ui | IV.8 |
 | **R16** | **Pipeline de ingestão de KB (documento/URL) + UI**: extração (PDF/docx/html, fetch/crawl — lib/framework) → chunking → `knowledge_upsert` por chunk com `source_ref`/`version`/`ingested_at`; UI "Adicionar fonte" na `KnowledgePage` + re-ingestão/refresh + delete-por-fonte; store/retrieval segue pgvector | mcp-server-knowledge + platform-ui | II.6 |
 
 ---
@@ -732,6 +743,8 @@ Ordenado por custo/benefício. Cada item é fiação concreta sobre código exis
   nova; `start_time` é aproximado, e o carimbo no início do segmento (R9) é a convenção robusta.
 - **Carga: piso de cobertura × teto de `%`** — ✅ fechado: aceito por design (cobertura > teto,
   conforme o ADR); "soft cap" como knob futuro opcional se o custo incomodar.
-- **Núcleo epoch/versão (Arc 6 Fase 2)** — ✅ design fechado em §IV.8 (destravado pelo R9: `GROUP BY
-  deploy_version` exato; âncora `(pool,skill)`; UI epoch single-skill). Implementação em R15a/R15b,
-  **dependente do R9**. Substitui o plano antigo de `analytics.deploy_events`.
+- **Núcleo epoch/versão (Arc 6 Fase 2)** — ✅ **COMPLETO (R15a+R15b+1b, 2026-06-24)**. `mode=epoch` na
+  lente deploy: `JOIN evaluation_finalized.segment_id→segments` (carimbo R9, sem denormalizar),
+  `GROUP BY pool/skill/deploy_version`, ordem `deployed_at`. Âncora = **pool** (pool↔skill N:1);
+  multi-pool permitido (uma curva por pool, união por deployed_at). **Micro-fatia 1b (Opção II)**:
+  overlay provisória+pendentes por versão da evaluation-api (`deploy-coverage`). Detalhe em §IV.8.

@@ -713,12 +713,16 @@ O Console é uma **superfície de orquestração**: o operador humano dirige, de
 
 ---
 
-## Arc 6 Fase 2 — Observabilidade por Deploy ⚠️ entregue ancorado no POOL (§11) — núcleo epoch PENDENTE
+## Arc 6 Fase 2 — Observabilidade por Deploy ✅ (diário+markers P3 + epoch/versão R15a/R15b + cobertura 1b)
 
-> **Status (P3, 2026-06-20):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`,
-> decisão D3), **ancorada no POOL** (spec §11). Entregue no formato **eixo-tempo + pontos de deploy** (não
-> o bucket por **epoch/versão** §4.1/D4 — esse segue PENDENTE, `## Pending`). "Comparar versão N vs N+1" ainda
-> é leitura via pontos de deploy, não um eixo de versões.
+> **Status (completo, 2026-06-24):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`,
+> decisão D3), **ancorada no POOL** (spec §11), com **dois modos** via `&mode=daily|epoch` (toggle Diário↔
+> Por versão na UI): **diário+markers** (1º corte §6) e **epoch/versão** (§4.1/D4 — eixo X = versões). O epoch
+> faz `JOIN evaluation_finalized.segment_id→segments` (carimbo `deploy_version` do R9, sem denormalizar),
+> `GROUP BY pool/skill/deploy_version`, ordem `deployed_at` (fallback `first_seen`), `min_sample=30`, multi-pool
+> = uma curva por pool (união por deployed_at). **Micro-fatia 1b ✅**: overlay de **nota provisória** (linha
+> tracejada) + **pendentes de fechamento** por versão, da evaluation-api (`GET /v1/evaluation/reports/deploy-coverage`
+> via `coverage_client`, degradação graciosa). Detalhe em `docs/arcos/arc-evaluation-metrics-methodology.md` §IV.8.
 
 **Âncora = POOL** (par `(pool, skill)` colapsado enquanto 1 skill por pool): `skill_id` é estável (deploy não
 muda o id; `version` é campo à parte; deploy é pool-centric via `PoolSkillSlot`+`SkillDeployment.pool_ids`), e
@@ -838,19 +842,16 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 
 ## Pending (Next Iteration)
 
-### Arc 6 Fase 2 — Observabilidade por Deploy *(1º corte §6 entregue; núcleo epoch PENDENTE — P2, 2026-06-20)*
-- **Entregue (P2-A/B/C):** lente `deploy` no board de Agentes (`/reports/agents/compare?lens=deploy`, domain
-  `ai`) no **formato 1º corte da §6** — série DIÁRIA de `avg(final_score)` (Oficial) + `deploy_markers` via
-  REST do agent-registry (D1). Ver § "Arc 6 Fase 2" acima.
-- **PENDENTE (núcleo do objetivo — §4.1/D4):** série **por epoch/versão** (bucket `[deploy N, deploy N+1)`,
-  eixo X = versões, ponto = qualidade média da versão, N por versão). Hoje "comparar versão N vs N+1" é
-  leitura manual via markers, não um eixo de versões. **Design fechado (2026-06-21)** em
-  `docs/arcos/arc-evaluation-metrics-methodology.md` §IV.8: destravado pelo carimbo de versão (R9) →
-  `GROUP BY deploy_version` exato (não mais inferência por timeline); âncora `(pool,skill)`; UI epoch
-  single-skill esconde média+multi-seleção. Implementação em R15a/R15b, dependente do R9.
-- **PENDENTE (UX desta lente):** a "média dos agentes" (§4.5) + multi-seleção são herdadas do board (D3) e
-  viram ruído numa lente focada em versões de UMA skill — avaliar remover/ocultar a média e focar single-skill
-  quando o epoch entrar.
+### Arc 6 Fase 2 — Observabilidade por Deploy ✅ COMPLETO *(diário+markers + epoch/versão + cobertura 1b)*
+- **Entregue (P2/P3):** lente `deploy`, modo **diário+markers** (série DIÁRIA `avg(final_score)` Oficial +
+  `deploy_markers` via REST do agent-registry, D1).
+- **Entregue (R15a/R15b):** modo **epoch/versão** (`&mode=epoch`) — eixo X = versões, `JOIN
+  evaluation_finalized.segment_id→segments` (R9), `GROUP BY pool/skill/deploy_version`, ordem `deployed_at`
+  (fallback `first_seen`), multi-pool = uma curva por pool (união), esconde média. Toggle na UI.
+- **Entregue (micro-fatia 1b — Opção II):** overlay de **nota provisória** (só pontuadas, linha tracejada) +
+  **pendentes de fechamento** (`pending_n`) por versão, da evaluation-api (`GET /v1/evaluation/reports/
+  deploy-coverage` → `coverage_client` → `_attach_epoch_coverage`). Convergência provisória↔finalizada =
+  sinal de confiança. Degrada gracioso (evaluation-api fora → só finalizada).
 - **Não-objetivos (backlog, fora):** período A/B arbitrário, overlay multi-métrica/`agent_event`, C3, NPS,
   export, tabela `analytics.deploy_events`/consumer (substituídos por D1/REST).
 - Spec: `docs/product/arc6-phase2-deploy-observability-spec.md`. Visão/mockups: `docs/arcos/arc6-phase2-observability.md`.
