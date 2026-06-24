@@ -4,6 +4,27 @@
 
 ---
 
+## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(concern, 2026-06-24)*
+
+**Achado** (durante Skill Versioning Fase E): o CMD do `agent-registry` roda
+`prisma db push --accept-data-loss` no **boot**, no schema **`public`** do `plughub_demo`. Como vários
+serviços compartilham esse banco e algumas tabelas vivem em `public` **sem** estar no schema Prisma do
+agent-registry (ex.: **`session_stream_events`** — stream durável p/ replay/R5/B), o `db push` as
+considera "extras" e as **dropa a cada restart** do agent-registry (`--accept-data-loss` aceita a perda).
+Observado: `• You are about to drop the session_stream_events table, which is not empty (18 rows)`.
+
+**Impacto**: perda do histórico de stream/replay a cada restart do agent-registry (dados de sessões
+anteriores). Não afeta o board de qualidade (epoch/coverage lêem ClickHouse + `evaluation.instances`),
+mas é um footgun real de **DB compartilhado**.
+
+**Correção candidata** (escolher): (a) trocar `db push --accept-data-loss` por **migrations versionadas**
+(`prisma migrate deploy`) que só tocam tabelas do próprio serviço; ou (b) mover tabelas compartilhadas
+para **schemas Postgres nomeados por serviço** (ex. `replay.session_stream_events`) para o `db push` do
+`public` não as enxergar; ou (c) isolar o agent-registry num schema Postgres próprio. Investigar o dono
+de `session_stream_events` (session-replayer? Stream Persister) antes de mover.
+
+---
+
 ## Webhook pools — throttle de downstream: enforcement no routing *(deferred)*
 
 Re-validação 2026-06-04 (ver `CHANGELOG.md`): o default 500 **já não existia** no código
