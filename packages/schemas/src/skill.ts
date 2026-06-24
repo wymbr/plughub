@@ -1056,6 +1056,10 @@ export type SkillRegistration = Skill
 
 export const SkillRefSchema = z.object({
   skill_id:       z.string(),
+  // @deprecated (Skill Versioning Fase E): version_policy/exact_version são
+  // VESTIGIAIS — não há resolução por versão em runtime (skill resolve por skill_id;
+  // versão = deploy do pool, ver docs/product/skill-versioning-deploy-spec.md).
+  // Mantidos por retrocompat (SDK/agent_type declaram); ignorados na execução.
   version_policy: VersionPolicySchema.default("stable"),
   exact_version:  z.string().optional(),
 }).refine(

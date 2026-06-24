@@ -2,6 +2,31 @@
 
 ---
 
+## Skill Versioning · Fase E — cleanup (2026-06-24)
+
+Higiene final do arco — sem mudança de comportamento.
+
+- **`SkillVersionSlot` aposentado**: o ciclo de 3 slots POR SKILL (Task #31) era duplicação do
+  `PoolSkillSlot` (autoritativo, por-pool) e estava órfão (nenhuma UI/serviço usava — confirmado via
+  grep TS+Python). Removido: rota `skillSlotsRouter` desmontada (`app.ts`), model + relação
+  `Skill.version_slots` removidos do schema (`db push` dropa `skill_version_slots`), `skill-slots.ts`
+  vira stub. O `SkillSlot` enum permanece (usado por `PoolSkillSlot`). Deploy segue pool-centric
+  (`/v1/pools/:id/slots` + `SkillDeployment`). Verificado: per-skill slots → 404; pool slots → 200.
+- **`version_policy`/`exact_version` depreciados** (`SkillRefSchema`): vestigiais (não há resolução por
+  versão em runtime). Mantidos por retrocompat (SDK/agent_type declaram), marcados `@deprecated`.
+
+**Arco Skill Versioning & Deploy COMPLETO** (A→D→B→C→E): `skill_id` slug estável + `version` rótulo;
+editor "Novo skill"/Save; anti-vazamento (editor=rascunho, produção=slot `current` do pool, P1);
+versão = deploy (`set_at`, promote grava `SkillDeployment`); cleanup. Spec:
+`docs/product/skill-versioning-deploy-spec.md`.
+
+> **Achado pré-existente (fora do arco):** o `prisma db push --accept-data-loss` do agent-registry roda
+> no boot no schema `public` do `plughub_demo` e clobbera tabelas de OUTROS serviços ali (ex.:
+> `session_stream_events`, stream durável/R5). Footgun de DB compartilhado — a cada restart do
+> agent-registry. Não afeta este arco; registrar como concern de infra.
+
+---
+
 ## Skill Versioning · Fase C — versão = deploy (C-full) (2026-06-24)
 
 A identidade de versão (analytics/epoch) deixa de ser o `skill.version` manual e passa a ser o

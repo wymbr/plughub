@@ -10,7 +10,8 @@ import { skillsRouter }           from "./routes/skills"
 import { instancesRouter }        from "./routes/instances"
 import { channelsRouter }         from "./routes/channels"
 import { channelEndpointsRouter } from "./routes/channel-endpoints"
-import { skillSlotsRouter }       from "./routes/skill-slots"
+// Skill Versioning Fase E: per-skill SkillVersionSlot aposentado (duplicação do
+// PoolSkillSlot, autoritativo). Rota desmontada; model removido do schema.
 import { poolSlotsRouter }        from "./routes/pool-slots"
 import { operationalRouter }      from "./routes/operational"
 
@@ -36,7 +37,6 @@ app.use(express.json())
 app.use("/v1/pools",              poolsRouter)
 app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes: /slots, /slots/next, /promote, /rollback
 app.use("/v1/skills",             skillsRouter)
-app.use("/v1/skills/:skill_id",   skillSlotsRouter)   // slots sub-routes: /slots, /slots/:slot, /promote, /rollback
 app.use("/v1/instances",          instancesRouter)
 app.use("/v1/channels",           channelsRouter)
 app.use("/v1/channel-endpoints",  channelEndpointsRouter)

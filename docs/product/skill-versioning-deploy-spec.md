@@ -88,13 +88,19 @@ Conclusão: **nada roteia/executa por `skill.version`** (o runtime resolve por `
   casa por `deployed_at` (Fase C) **e** por rótulo (legado), expõe `version_label`. **UI** mostra
   rótulo+data no eixo, timestamp no tooltip. Verificado: promote cria `SkillDeployment` (deployed_at =
   momento); testes 11/11. Transição: dados legados seguem por rótulo.
-- **Fase D — affordances UI.** Botão "Novo skill" + Save habilitado para skill novo (flag `isNew`) +
+- **Fase D — affordances UI ✅.** Botão "Novo skill" + Save habilitado para skill novo (flag `isNew`) +
   hint quando desabilitado. i18n. *(= R14a/b)*
-- **Fase E — cleanup (opcional).** Aposentar `SkillVersionSlot`; remover/neutralizar `version_policy`
-  vestigial; ajustar display do `version` (rótulo). Migração/limpeza de YAMLs.
+- **Fase E — cleanup ✅ (2026-06-24).** `SkillVersionSlot` aposentado (órfão — rota desmontada, model +
+  relação `Skill.version_slots` removidos, `db push` dropa a tabela; `SkillSlot` enum mantido p/
+  `PoolSkillSlot`). `version_policy`/`exact_version` marcados `@deprecated` (vestigiais, mantidos p/
+  retrocompat SDK). Verificado: per-skill slots → 404; pool slots → 200.
 
-Ordem sugerida: **A → D** (baixo risco, valor imediato) **→ B → C → E**. B e C são acoplados (depois
-que o deploy é o único a escrever produção, "versão = deploy" é natural).
+**ARCO COMPLETO (A→D→B→C→E, 2026-06-24).** Modelo "editor livre × versão = deploy do pool" implementado
+e verificado no docker-demo.
+
+> Achado pré-existente (fora do arco): o `db push --accept-data-loss` do agent-registry clobbera tabelas
+> de outros serviços no schema `public` do `plughub_demo` (ex. `session_stream_events`) a cada boot.
+> Footgun de DB compartilhado — concern de infra separado.
 
 ## 5. Reaproveitamento (o que já existe)
 
