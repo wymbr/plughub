@@ -2,6 +2,23 @@
 
 ---
 
+## Skill Versioning · Fase D — affordances do editor (Novo skill + Save) (2026-06-24)
+
+Fecha o R14(a/b) dentro do arco Skill Versioning. Criação de skill agora é descobrível e o Save
+deixa de "parecer travado".
+
+- **SkillFlowsPage**: botão **"+ Novo skill"** (limpa seleção, carrega template, marca `isNew`); estado
+  `isNew` + `canSave = !saving && (isModified || isNew)` habilita o Save no template em branco (antes
+  `savedValue==editorValue` → Save parecia desabilitado). Hint "Edite para habilitar o Salvar" quando
+  desabilitado (skill existente sem alteração). `isNew` resetado em select/save/delete. `BLANK_TEMPLATE`
+  atualizado: `skill_id: skill_novo` (slug estável), **sem `version`** (opcional desde a Fase A).
+- **i18n** `agentFlow` en+pt-BR: `editor.new`, `editor.newSkill` (badge "não salvo"), `editor.saveHintView`.
+
+Verificado visualmente: botão + badge + Save habilitado no modo novo; Save desabilitado+hint ao só
+visualizar. Não toca runtime/analytics.
+
+---
+
 ## Skill Versioning · Fase A — skill_id estável + version opcional (2026-06-24)
 
 Primeira fase do arco Skill Versioning & Deploy (`docs/product/skill-versioning-deploy-spec.md`):

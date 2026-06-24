@@ -35,9 +35,9 @@ import type { Skill } from '@/types'
 // ── Blank template ──────────────────────────────────────────────────────────
 
 const BLANK_TEMPLATE = `# New Skill — fill in the required fields below
-skill_id: skill_novo_v1
+# skill_id: nome único e estável (slug), sem versão. Versão é do deploy.
+skill_id: skill_novo
 name: "New Skill"
-version: "1.0"
 description: "Describe what this skill does."
 
 # Optional: visual grouping in the editor sidebar (not a physical path)
@@ -457,8 +457,12 @@ const SkillFlowsPage: React.FC = () => {
   const [statusMsg,   setStatusMsg]   = useState(() => t('editor.status.idle'))
   const [search,      setSearch]      = useState('')
   const [confirmDel,  setConfirmDel]  = useState(false)
+  // isNew: skill em autoria, ainda não salvo. Habilita o Save mesmo sem isModified
+  // (o template em branco tem savedValue == editorValue → Save pareceria travado).
+  const [isNew,       setIsNew]       = useState(true)
 
   const isModified = editorValue !== savedValue
+  const canSave    = statusKind !== 'saving' && (isModified || isNew)
   const editorRef  = useRef<unknown>(null)
 
   // ── Load skill ─────────────────────────────────────────────────────────────
@@ -482,9 +486,24 @@ const SkillFlowsPage: React.FC = () => {
   }, [tenantId, t])
 
   function selectSkill(skillId: string) {
-    if (isModified && !confirm(t('editor.discardConfirm'))) return
+    if ((isModified || isNew) && editorValue !== BLANK_TEMPLATE && !confirm(t('editor.discardConfirm'))) return
+    setIsNew(false)
     setSelectedId(skillId)
     void loadSkill(skillId)
+  }
+
+  // ── Novo skill ───────────────────────────────────────────────────────────
+  // Começa a autoria de um skill novo: limpa a seleção, carrega o template e
+  // marca isNew (habilita o Save). Descobrível (botão), não-implícito.
+  function handleNew() {
+    if ((isModified || isNew) && editorValue !== BLANK_TEMPLATE && !confirm(t('editor.discardConfirm'))) return
+    setSelectedId(null)
+    setEditorValue(BLANK_TEMPLATE)
+    setSavedValue(BLANK_TEMPLATE)
+    setConfirmDel(false)
+    setIsNew(true)
+    setStatusKind('idle')
+    setStatusMsg(t('editor.status.newSkillStatus'))
   }
 
   // ── Save ───────────────────────────────────────────────────────────────────
@@ -513,6 +532,7 @@ const SkillFlowsPage: React.FC = () => {
       })
       setSavedValue(editorValue)
       setSelectedId(skillId)
+      setIsNew(false)               // skill agora existe → sai do modo "novo"
       setStatusKind('saved')
       setStatusMsg(t('editor.status.saved', { id: skillId }))
       void refreshList()
@@ -538,6 +558,7 @@ const SkillFlowsPage: React.FC = () => {
       setEditorValue(BLANK_TEMPLATE)
       setSavedValue(BLANK_TEMPLATE)
       setConfirmDel(false)
+      setIsNew(true)                // volta ao template em branco = novo skill
       setStatusKind('idle')
       setStatusMsg(t('editor.status.deleted'))
       void refreshList()
@@ -596,11 +617,20 @@ const SkillFlowsPage: React.FC = () => {
       {/* ── Page header ─────────────────────────────────────────────────── */}
       <div className="h-11 shrink-0 bg-white border-b border-border flex items-center px-4 gap-4">
 
-        {selectedId && (
+        <button
+          onClick={handleNew}
+          className="px-3 py-1 text-xs font-semibold rounded border border-primary/40 text-primary hover:bg-primary/5 transition-colors"
+        >
+          + {t('editor.new')}
+        </button>
+
+        {selectedId ? (
           <span className="text-xs text-muted font-mono">
             {selectedId}
             {isModified && <span className="text-warning ml-1">●</span>}
           </span>
+        ) : isNew && (
+          <span className="text-xs text-primary font-mono">{t('editor.newSkill')}</span>
         )}
 
         <div className="flex-1" />
@@ -644,9 +674,13 @@ const SkillFlowsPage: React.FC = () => {
             )
           )}
 
+          {!canSave && selectedId && !isModified && (
+            <span className="text-2xs text-muted-light hidden lg:block">{t('editor.saveHintView')}</span>
+          )}
           <button
             onClick={() => void handleSave()}
-            disabled={statusKind === 'saving' || !isModified}
+            disabled={!canSave}
+            title={!canSave ? t('editor.saveHintView') : undefined}
             className="px-4 py-1 text-xs font-bold rounded bg-primary text-white hover:bg-primary/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {statusKind === 'saving' ? t('editor.saving') : t('editor.save')}

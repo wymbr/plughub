@@ -1,8 +1,10 @@
 {
   "editor": {
     "title":              "Agent Flow Editor",
-    "newSkill":           "New Skill",
-    "newSkillId":         "Skill ID (e.g. skill_sac_v1)",
+    "new":                "New skill",
+    "newSkill":           "New skill (unsaved)",
+    "newSkillId":         "Skill ID (e.g. skill_sac)",
+    "saveHintView":       "Edit to enable Save",
     "save":               "⌘S Save",
     "saving":             "Saving…",
     "saved":              "Saved",
