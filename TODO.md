@@ -4,6 +4,39 @@
 
 ---
 
+## Arco — Isolamento do substrato de avaliação por `origin` *(kickoff, 2026-06-25)*
+
+> **Direção fechada no ADR** [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
+> (Status: proposto). Resolve o concern §9(c) do Quality Ingest: reavaliação/importação misturam com
+> produção no substrato compartilhado. **Premissa decidida:** o fix é um discriminador de procedência
+> **por-sessão (`origin`)**, não pool (pool é proxy-furado; ver "Alternativas" do ADR, incl. o contrafactual
+> de pools separados). Começar sessão NOVA com Opus; ler CLAUDE.md + o ADR; fatiar por passo com
+> verificação (build + smoke) a cada um.
+
+**Plano de migração (do ADR — ordem de fatiamento):**
+
+1. **DDL/schemas** — coluna `origin String DEFAULT 'live'` em `analytics.sessions/segments/messages` (CH,
+   aditivo) e `session_stream_events` (PG, aditivo). Sem backfill (default cobre o legado/vivo).
+2. **analytics-api consumer** — derivar `origin` do `source` do evento (`external_import`→import,
+   `internal:reeval`→reeval, demais→live) e persistir nas linhas.
+3. **session-replayer (consumer Y)** — gravar `origin` nas linhas de `session_stream_events`.
+4. **analytics-api report layer** — helper único de filtro com default `origin='live'` (garantia de
+   correção; relatórios de qualidade/curadoria parametrizam a origem). Teste cobrindo o default.
+5. **evaluation-api sampling** — filtro **opcional** de `origin` na campanha (produção mira `live`;
+   reavaliação mira `reeval`) → elimina cross-fire sem pool dedicado.
+6. **platform-ui** — seletor de **origem** (default "Produção/live"; incluir import/reeval é ação
+   explícita); pool multiselect dentro da origem escolhida.
+7. **(fase 2, opcional)** partição CH `PARTITION BY (toYYYYMM(date), origin)` em tabelas novas/migração
+   versionada (lifecycle/LGPD; **não** in-place); campo `pool.origin_class: production|import|review`
+   (default production), **ortogonal a `agent_kind`**, como atalho/validador p/ pools dedicados + eixo de
+   agrupamento na UI.
+
+**Invariantes a respeitar:** `origin` é a verdade universal por-sessão (cobre pool compartilhado do R13d);
+o default no backend é a garantia (UI só espelha); **não** estender `pool.agent_kind` (governa C_ai/C_human
++ pool-misto). R13d segue re-emitindo; zero-cópia (instância sobre o `session_id` original) fica como evolução.
+
+---
+
 ## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(concern, 2026-06-24)*
 
 **Achado** (durante Skill Versioning Fase E): o CMD do `agent-registry` roda
