@@ -1310,6 +1310,36 @@ services:
     networks:
       - plughub-demo
 
+  # ─── quality-ingest (R13a — pluggable contact-history reader) ──────────────
+  #   Open ingestion_event_v1 endpoint (anti-corruption boundary). Pure producer
+  #   of internal canonical events — reuses the existing analytics + sampling
+  #   pipeline. POST http://localhost:3850/v1/ingest/events  (header X-Tenant-ID).
+  quality-ingest:
+    build:
+      context: packages/quality-ingest
+      dockerfile: Dockerfile
+    ports:
+      - "3850:3850"
+    environment:
+      PLUGHUB_QUALITY_INGEST_KAFKA_BROKERS:  kafka:29092
+      PLUGHUB_QUALITY_INGEST_CONFIG_API_URL: http://config-api:3600   # R13c — source_map
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+      config-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3850/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
   # ─── mcp-server-knowledge (Arc 6 — RAG knowledge base) ──────────────────
   mcp-server-knowledge:
     build:

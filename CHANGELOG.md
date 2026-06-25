@@ -2,6 +2,76 @@
 
 ---
 
+## Quality Ingest · R13c — mapa identidade/pool/versão por `source` (2026-06-25)
+
+Traduz ids EXTERNOS (pool/agente) → INTERNOS antes de emitir os eventos canônicos, para que
+analytics, sampling e consumer Y só vejam identidades internas. Spec: `docs/arcos/quality-ingest.md` §6.
+
+- **config-api**: namespace `quality_ingest`, key `source_map` (seed-if-absent, default `{}`). Um JSON
+  keyed por `source`: `{pools: {ext→int}, agents: {ext_id→{kind, user_id | skill_id+deploy_version}}}`.
+- **quality-ingest**: `SourceMapClient` (`GET /config/quality_ingest/source_map?tenant_id=`, cache TTL 60s/tenant,
+  degradação graciosa → `{}` = pass-through). O `mapper` aplica a tradução **antes da emissão**: `pool_id`
+  traduzido (carimbado também no close via segmento primário), humano → `user_id`, IA → `flow_id`+`deploy_version`;
+  `agent_type_id` deixa de carregar o `external_agent_id` (sem vazamento). Pass-through quando não mapeado.
+  Wiring: setting `config_api_url` + dep `httpx`; compose `PLUGHUB_QUALITY_INGEST_CONFIG_API_URL` + depends_on config-api.
+- **Testes**: 4 unit de tradução (pool/humano/IA/pass-through) no `test_mapper.py`; smoke
+  `smoke_quality_ingest_sourcemap.sh` (PUT do map em tenant fresco → ids externos viram internos em
+  `analytics.segments` + sampling dispara sob campanha que mira o pool interno).
+
+---
+
+## Quality Ingest · R13b — consumer Y (stream durável p/ importados) (2026-06-25)
+
+Fecha o ReplayContext p/ contatos importados: reconstrói o stream durável
+`session_stream_events` (PG) a partir dos eventos canônicos, sem depender do stream Redis
+(inexistente p/ importados). Spec: `docs/arcos/quality-ingest.md` §4.
+
+- **session-replayer / `StreamPersister` refatorado**: extraídos `insert_records()` (ÚNICO ponto de
+  escrita da tabela, idempotente por `event_id`) + `recompute_deltas()` (janela `LAG` por timestamp,
+  ordem-independente). `persist()` (Persister vivo) passou a usá-los → mesmo escritor, **zero drift**.
+- **`ImportStreamConsumer` (consumer Y)** (`import_stream_consumer.py`, grupo `session-replayer-import`,
+  `earliest`): consome `conversations.events` + `conversations.participants`, **gated `source=external_import`**
+  (tráfego vivo ignorado), mapeia 1:1 ao vocabulário de stream interno (`contact_open→session_opened`,
+  `message_sent→message`, `contact_closed→session_closed`, `participant_*`) e grava via `insert_records`.
+  `delta_ms` finalizado no fechamento por `recompute_deltas`; `original_content=null` (cego por construção);
+  `author.role` `customer` preservado, `agent→primary`. Wired como 3º task no `SessionReplayerConsumer`.
+  Convive com o Persister vivo (que vira no-op p/ importados — Redis vazio). Hydrator→Replayer produzem
+  ReplayContext.events idêntico ao interno.
+- **Testes**: 10 unit (mapper + handler, standalone/pytest); smoke `smoke_quality_ingest.sh` §4b
+  (`session_stream_events` message/open/close rows p/ a sessão importada + `original_content` NULL).
+
+> **Residual registrado** (§9): `session_meta`/`participants`/`sentiment` do ReplayContext ainda caem em
+> default p/ importados (Replayer os lê do Redis, ausente); o transcript — núcleo da avaliação — fica completo.
+> Correlação por-requisição do quality-ingest segue aberta (R13b não a muda; consumer Y é ordem-independente).
+
+---
+
+## Quality Ingest · R13a-1 + R13a-2 — leitor de histórico plugável (2026-06-24)
+
+Interface aberta de eventos (anti-corrupção) que faz históricos **externos** (CCaaS) e a
+**reavaliação interna** entrarem no MESMO pipeline de avaliação (sampling → ReplayContext →
+avaliador → analytics), sem o importador tocar a infra interna. Spec: `docs/arcos/quality-ingest.md`.
+
+- **R13a-1 — schemas `ingestion_event_v1`** (`@plughub/schemas`): família discriminada (`contact.opened`,
+  `participant.joined`, `message.sent`, `participant.left`, `contact.closed`) com mandatório/opcional do §3,
+  vocabulário próprio do módulo (decoupled dos enums internos), `deriveIngestionEventId` p/ idempotência.
+  Exportada no `index.ts`. 39 testes (vitest) + typecheck OK.
+- **R13a-2 — `packages/quality-ingest/`** (Python FastAPI, porta 3850, produtor puro): endpoint aberto
+  `POST /v1/ingest/events` (header `X-Tenant-ID`); **masking net-pass** (port de `DEFAULT_MASKING_RULES`);
+  `session_id`/`segment_id` determinísticos (idempotentes); **mapper** correlaciona o stream por
+  `external_contact_id` e emite os eventos canônicos internos que os consumers já entendem —
+  `conversations.events` (contact_open/message_sent/contact_closed), `conversations.participants`
+  (campo `type` underscore), `agent.lifecycle` `agent_done`, e `conversations.session_closed`
+  (dispara sampling). Carimba `pool_id` do segmento primário no close e `source:"external_import"`
+  (gate do consumer Y / R13b). 23 testes (pytest) + smoke `infra/test/smoke_quality_ingest.sh`
+  (contato externo → ClickHouse sessions/messages/segments + evaluation.instance agendada sob campanha).
+
+> **Decisões fechadas:** interface = stream de eventos (não lote); **pool é a unidade** (eventos carimbam
+> `pool_id`, não `campaign_id`); tier-2 de IA indisponível p/ externo. **Limitação registrada:** correlação
+> por contato é por-requisição (durabilidade cross-request = reconstrução de stream do R13b).
+
+---
+
 ## Skill Versioning · Fase E — cleanup (2026-06-24)
 
 Higiene final do arco — sem mudança de comportamento.

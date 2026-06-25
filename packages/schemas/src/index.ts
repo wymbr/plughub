@@ -709,3 +709,34 @@ export type {
   ReasonStepContextTags,
   ContextGapsReport,
 } from "./context-store"
+
+// ── Quality Ingest — ingestion_event_v1 (R13a) ───────────────────────────────
+export {
+  INGESTION_EVENT_SCHEMA_VERSION,
+  IngestionAgentKindSchema,
+  IngestionAuthorRoleSchema,
+  IngestionContentTypeSchema,
+  IngestionVisibilitySchema,
+  IngestionSegmentRoleSchema,
+  IngestionContactOpenedSchema,
+  IngestionParticipantJoinedSchema,
+  IngestionMessageSentSchema,
+  IngestionParticipantLeftSchema,
+  IngestionContactClosedSchema,
+  IngestionEventSchema,
+  deriveIngestionEventId,
+} from "./ingestion-event"
+
+export type {
+  IngestionAgentKind,
+  IngestionAuthorRole,
+  IngestionContentType,
+  IngestionVisibility,
+  IngestionSegmentRole,
+  IngestionContactOpened,
+  IngestionParticipantJoined,
+  IngestionMessageSent,
+  IngestionParticipantLeft,
+  IngestionContactClosed,
+  IngestionEvent,
+} from "./ingestion-event"

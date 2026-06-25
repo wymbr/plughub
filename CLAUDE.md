@@ -247,6 +247,7 @@ plughub/
     pricing-api/                 ← Capacity-based billing, invoice — port 3900
     auth-api/                    ← Auth, JWT, ABAC — port 3200
     evaluation-api/              ← Quality evaluation platform (Arc 6) — port 3400
+    quality-ingest/              ← Pluggable contact-history reader (R13a) — port 3850
     mcp-server-knowledge/        ← Vector knowledge base for RAG agents
     platform-ui/                 ← All operator-facing UI (React + Vite)
 ```
@@ -270,6 +271,7 @@ plughub/
 | pricing-api | Python | Python 3.11+ | FastAPI + asyncpg + openpyxl — port 3900 |
 | auth-api | Python | Python 3.11+ | FastAPI + asyncpg + bcrypt + python-jose — port 3200 |
 | evaluation-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3400 |
+| quality-ingest | Python | Python 3.11+ | FastAPI + aiokafka (pure producer) — port 3850 |
 | platform-ui | TypeScript | Node 20+ / Vite | React 18, Tailwind, i18n |
 
 ## Package Dependencies
@@ -814,6 +816,31 @@ Define **o que o avaliador mede e como** (distinto de revisão/contestação, Ar
 
 ---
 
+## Quality Ingest — leitor de histórico plugável (R13a) ⚠️ R13a-1/R13a-2/R13b/R13c ✅; R13d pendente
+
+Módulo anti-corrupção que faz históricos **externos** (CCaaS) e a **reavaliação interna** entrarem no
+MESMO pipeline de avaliação (sampling → ReplayContext → avaliador → analytics), sem o importador tocar a
+infra interna. **Interface = stream de eventos** `ingestion_event_v1` (não lote); **pool é a unidade**
+(eventos carimbam `pool_id`, não `campaign_id`); tier-2 de IA indisponível p/ externo (grau-transcript).
+
+`packages/quality-ingest/` (Python FastAPI, porta 3850, **produtor puro**) expõe `POST /v1/ingest/events`
+(header `X-Tenant-ID`), roda masking net-pass, deriva `session_id`/`segment_id` determinísticos
+(idempotência), e **mapeia 1:1** o stream → eventos canônicos internos que os consumers já entendem:
+`conversations.events` (contact_open/message_sent/contact_closed), `conversations.participants` (campo
+`type` underscore), `agent.lifecycle` `agent_done`, e `conversations.session_closed` (dispara sampling).
+Toda emissão leva `source:"external_import"` (gate do consumer Y; nunca `channel_gateway`).
+Schemas em `@plughub/schemas/ingestion-event.ts` (R13a-1). **Consumer Y ✅ (R13b)**:
+`ImportStreamConsumer` (session-replayer) reconstrói `session_stream_events` (PG) dos eventos canônicos
+gated `source=external_import`, via o `StreamPersister.insert_records`/`recompute_deltas` (mesmo escritor do
+Persister vivo, sem drift) → Hydrator/Replayer dão um ReplayContext.events igual ao interno. **Mapa por
+source ✅ (R13c)**: namespace `quality_ingest.source_map` (Config API); o `SourceMapClient` resolve e o
+mapper traduz ext→int (pool, humano→`user_id`, IA→`skill_id`+`deploy_version`) **antes** de emitir
+(pass-through se não mapeado). **Pendente:** R13d (exportador interno).
+
+→ See [`docs/arcos/quality-ingest.md`](docs/arcos/quality-ingest.md)
+
+---
+
 ## Arc 15 — Canal WebRTC com SFU (LiveKit) ✅
 
 Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (ver § Pending).
@@ -874,6 +901,10 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 - **Fase 3** *(deferred)*: `user_access` logs — topic Kafka `user_access.events` em auth-api + ClickHouse.
 - **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
+
+### Quality Ingest — fases pendentes (R13a-1/R13a-2/R13b/R13c ✅)
+- **R13d** *(deferred)*: exportador interno (histórico ClickHouse/`session_stream_events` → mesmos eventos `ingestion_event_v1` pela mesma porta) — fecha a reavaliação interna.
+- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest segue aberta (R13b não a muda — consumer Y é ordem-independente); (c) reuso do pool original na reavaliação interna a avaliar.
 
 ### Business in Any Media — processo channel-abstract + framework de loja *(proposta)*
 - Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.

@@ -31,6 +31,7 @@ from .replayer import Replayer, REPLAY_CONTEXT_TTL
 from .stream_hydrator import StreamHydrator, StreamNotAvailableError, HYDRATION_TTL_SECONDS
 from .stream_persister import StreamPersister
 from .pipeline_persister import PipelineStatePersister
+from .import_stream_consumer import ImportStreamConsumer
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,7 @@ class SessionReplayerConsumer:
         self._redis:            aioredis.Redis    | None = None
         self._pg_pool:          asyncpg.Pool      | None = None
         self._producer:         AIOKafkaProducer  | None = None
+        self._import_consumer:  ImportStreamConsumer | None = None
         self._hydration_ttl:    int = HYDRATION_TTL_SECONDS
         self._replay_context_ttl: int = REPLAY_CONTEXT_TTL
 
@@ -171,13 +173,22 @@ class SessionReplayerConsumer:
         pipeline_persister = PipelineStatePersister(self._redis, self._pg_pool)
         await pipeline_persister.ensure_schema()
 
+        # R13b — consumer Y: rebuilds session_stream_events for IMPORTED contacts from
+        # the canonical events (gated source=external_import), sharing the Persister's
+        # writer. Closes the ReplayContext gap for imported sessions (no Redis stream).
+        import_consumer = ImportStreamConsumer(self._kafka_brokers, persister)
+        self._import_consumer = import_consumer
+
         logger.info("SessionReplayerConsumer: starting consumers")
         await asyncio.gather(
             self._run_persister_consumer(),
             self._run_replayer_consumer(),
+            import_consumer.run(),
         )
 
     async def stop(self) -> None:
+        if self._import_consumer:
+            await self._import_consumer.stop()
         if self._producer:
             await self._producer.stop()
         if self._redis:

@@ -19,6 +19,7 @@ Namespaces:
   agent_activity     — Agent pause/resume reasons (Arc 8)
   evaluation         — Evaluation platform defaults
   dashboards         — Dashboard template management
+  quality_ingest     — Per-source identity/pool/version map (R13c)
 
 Note: 'quota' namespace removed. Per-tenant limits ({tenant}:quota:*) are written
   directly by the pricing integration when a plan is activated — not seeded here.
@@ -676,6 +677,32 @@ _SEED: list[tuple[str, str, object, str]] = [
         20,
         "Maximum number of cards allowed per dashboard template. "
         "Prevents performance issues from overly large dashboards."
+    ),
+
+    # ── quality_ingest ──────────────────────────────────────────────────────────
+    # Source: packages/quality-ingest (R13c). Per-`source` identity/pool/version map.
+    # The importer/exporter sends ITS OWN external ids; quality-ingest translates them
+    # to internal ids BEFORE emitting the canonical events (so analytics, sampling and
+    # consumer Y all see internal identities). One key holds all sources:
+    #   {
+    #     "<source>": {                       # e.g. "ccaas:genesys"
+    #       "pools":  {"<external_pool>": "<internal_pool_id>"},
+    #       "agents": {
+    #         "<external_agent_id>": {"kind":"human","user_id":"wang@..."},
+    #         "<external_agent_id>": {"kind":"ai","skill_id":"skill_x","deploy_version":"v3"}
+    #       }
+    #     }
+    #   }
+    # Unmapped source/pool/agent → pass-through (the event's own pool_id/skill_id/
+    # external_agent_id is used). Default empty = pure pass-through (R13a-2 behaviour).
+    (
+        "quality_ingest", "source_map",
+        {},
+        "Per-source identity/pool/version map for the quality-ingest module (R13c). "
+        "Keyed by `source` (e.g. 'ccaas:genesys'); each entry has `pools` "
+        "(external_pool→internal pool_id) and `agents` (external_agent_id→{kind, "
+        "user_id | skill_id+deploy_version}). Applied before emitting canonical events. "
+        "Empty / unmapped = pass-through. Source: quality-ingest/config_client.py, mapper.py"
     ),
 ]
 

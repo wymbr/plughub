@@ -106,16 +106,36 @@ class StreamPersister:
         if not records:
             return 0
 
-        # Calcula delta_ms entre eventos consecutivos
-        for i, rec in enumerate(records):
-            if i == 0:
-                rec["delta_ms"] = 0.0
-            else:
-                prev_ts = records[i - 1]["timestamp"]
-                curr_ts = rec["timestamp"]
-                delta = (curr_ts - prev_ts).total_seconds() * 1000
-                rec["delta_ms"] = max(0.0, delta)
+        # Insert (delta_ms recomputed authoritatively by SQL below) — shared path.
+        inserted = await self.insert_records(session_id, tenant_id, records)
+        await self.recompute_deltas(session_id, tenant_id)
 
+        logger.info(
+            "StreamPersister: persisted %d/%d events for session %s",
+            inserted, len(records), session_id
+        )
+        return inserted
+
+    # ─────────────────────────────────────────
+    # Shared row builder (Persister vivo + consumer Y de importação — R13b)
+    # ─────────────────────────────────────────
+
+    async def insert_records(
+        self,
+        session_id: str,
+        tenant_id:  str,
+        records:    list[dict[str, Any]],
+    ) -> int:
+        """Insert stream records into session_stream_events (idempotent por event_id).
+
+        ÚNICO ponto de escrita da tabela — usado tanto pelo Persister vivo (a partir
+        do stream Redis) quanto pelo consumer Y de importação (a partir dos eventos
+        canônicos), garantindo a mesma linha sem drift. `delta_ms` aqui é o valor que
+        veio no record (0 p/ o consumer Y); a verdade temporal é fixada por
+        recompute_deltas() e, na leitura, recomputada pelo Replayer.
+        """
+        if not records:
+            return 0
         async with self._pg.acquire() as conn:
             inserted = 0
             for rec in records:
@@ -133,21 +153,43 @@ class StreamPersister:
                     rec["event_id"],
                     rec["event_type"],
                     rec["timestamp"],
-                    json.dumps(rec["author"])           if rec["author"]           else None,
-                    json.dumps(rec["visibility"])       if rec["visibility"]       else None,
-                    json.dumps(rec["payload"]),
-                    json.dumps(rec["original_content"]) if rec["original_content"] else None,
-                    rec["masked_categories"],
-                    rec["delta_ms"],
+                    json.dumps(rec["author"])           if rec.get("author")           else None,
+                    json.dumps(rec["visibility"])       if rec.get("visibility")       else None,
+                    json.dumps(rec.get("payload", {})),
+                    json.dumps(rec["original_content"]) if rec.get("original_content") else None,
+                    rec.get("masked_categories") or [],
+                    rec.get("delta_ms", 0.0),
                 )
                 if result == "INSERT 0 1":
                     inserted += 1
-
-        logger.info(
-            "StreamPersister: persisted %d/%d events for session %s",
-            inserted, len(records), session_id
-        )
         return inserted
+
+    async def recompute_deltas(self, session_id: str, tenant_id: str) -> None:
+        """Recompute delta_ms across the session in chronological order (window LAG).
+
+        Order-independent finalization: late/out-of-order inserts (consumer Y consumes
+        multiple topics/partitions) are corrected here. The Replayer also recomputes
+        delta on read, so this is for at-rest consistency.
+        """
+        async with self._pg.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE session_stream_events s
+                   SET delta_ms = COALESCE(GREATEST(d.delta, 0), 0)
+                  FROM (
+                    SELECT id,
+                           EXTRACT(EPOCH FROM (
+                             timestamp - LAG(timestamp) OVER (ORDER BY timestamp ASC, id ASC)
+                           )) * 1000 AS delta
+                      FROM session_stream_events
+                     WHERE tenant_id = $1 AND session_id = $2
+                  ) d
+                 WHERE s.id = d.id
+                   AND s.tenant_id = $1 AND s.session_id = $2
+                """,
+                tenant_id,
+                session_id,
+            )
 
     # ─────────────────────────────────────────
     # Helpers
