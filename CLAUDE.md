@@ -91,6 +91,7 @@ plughub/
       adr-contact-segments.md ← Arc 5 architecture
       adr-instance-bootstrap.md
       adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
+      adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; proposto)
 ```
 
 ### Como adicionar uma nova feature
@@ -908,7 +909,7 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
 
 ### Quality Ingest — arco COMPLETO (R13a–R13d ✅); concerns abertos
-- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest (pool_id degrada se um contato vier partido entre POSTs); (c) reavaliação interna (R13d) reusa o pool original → mistura com tráfego vivo se a campanha mira o mesmo pool — mitigável via `source_map` (R13c) p/ `internal:reeval` → pool dedicado.
+- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest (pool_id degrada se um contato vier partido entre POSTs); (c) reavaliação/importação misturam com produção no substrato compartilhado — **direção fechada (ADR proposto, impl. pendente)**: discriminador `origin` por-sessão + filtro default no backend + partição CH por origem; `pool.origin_class` opcional p/ pools dedicados. Ver [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md).
 
 ### Business in Any Media — processo channel-abstract + framework de loja *(proposta)*
 - Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.
