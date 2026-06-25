@@ -2,6 +2,29 @@
 
 ---
 
+## S2.4 — motor de review por workflow APOSENTADO (decisão 2026-06-25) — só docs/anotações
+
+Decisão de arquitetura, não bug. O contest→review→finalize **canônico já existe** no **Arc 13 REST**
+(`contestation_router`: `file_contestation` → `submit_review` → `finalize_evaluation`, que emite
+`evaluation_finalized` — fonte única dos relatórios de qualidade). O "motor por workflow" do Arc 6
+(`campaign.review_workflow_skill_id` / `skill_revisao_treplica_v1` + `agente_revisor_v1`) é **paralelo e
+inerte em produção**: nada no backend o dispara (config morta lida só pela UI; único trigger = e2e cenário
+28, opt-in `--workflow-review`, fora da suíte default 01–18), e o consumer reativo de `workflow.events`
+termina em `lock_result` (NÃO finaliza). Decisão: **Arc 13 é o contrato único; o motor por workflow é
+legado/superseded.**
+
+- **Distinção preservada:** isto aposenta só o **uso** que o módulo de avaliação fazia do workflow como motor
+  de review — NÃO o motor genérico (skill-flow-engine + workflow-api + `workflow.events`), que segue como infra
+  do PlugHub usada por outras frentes.
+- **Anotações de legado:** CLAUDE.md (§ Arc 6 "Workflow as review motor"), `docs/arcos/arc6-evaluation.md`
+  (banner na seção), `evaluation-api/main.py` (`_on_workflow_event` docstring), e o cabeçalho do cenário e2e 28.
+- **Validado:** cenário 28 não está deprecated, mas é opt-in e fora da suíte default → aposentar não quebra a
+  regressão padrão.
+- **Follow-up opcional (remoção física):** consumer reativo, coluna/seletor `review_workflow_skill_id`, skills
+  `skill_revisao_*`/`agente_revisor_v1`, cenário 28 — slice próprio (raio de teste no 28).
+
+---
+
 ## Recon + re-validação G-FIN/G-TIMEOUT (2026-06-25) — só validação/docs
 
 Recon do shakedown do Arc 13 (TODO §"Shakedown pós-submit") contra o código atual: **G-FIN e G-TIMEOUT já

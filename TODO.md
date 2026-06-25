@@ -1093,10 +1093,16 @@ pool hooks genéricos (sem campo dedicado).
 - **G-TIMEOUT — ✅ RESOLVIDO (T4, 2026-06-19; validado 2026-06-25)**: `_run_deadline_scanner` (background,
   60s) varre `list_expired_results` (`result_state IN open|under_review` com `deadline_at` vencido) e finaliza
   via `finalize_evaluation` → `timeout_contestation`(`uncontested`) / `timeout_review`. Smoke E2E verde.
-- **G-S2.4 — motor de review (workflow) não amarrado ao resultado** *(= S2.4)*: a contestação NÃO dispara
-  automaticamente um revisor AI; `submit_review` é manual (POST). O `skill_revisao_treplica_v1`/`review_workflow_skill_id`
-  não está ligado ao ciclo de vida do resultado; o consumer de `workflow.*` só seta `action_required`/`deadline_at`
-  (suspended) e `lock` (completed). Ligar o workflow ao contest→review→finalize.
+- **G-S2.4 — motor de review por workflow ✅ RESOLVIDO POR DECISÃO (2026-06-25): APOSENTADO.** Não é bug, é
+  bifurcação: o contest→review→finalize **canônico já existe** no Arc 13 REST (`contestation_router` →
+  `finalize_evaluation`, emite `evaluation_finalized`). O motor por workflow (`review_workflow_skill_id`/
+  `skill_revisao_treplica_v1`) é paralelo e **inerte** (nada no backend o dispara — config morta lida só pela
+  UI; único trigger = e2e cenário 28, opt-in, fora da suíte default; termina em `lock`, não finaliza). Decisão:
+  Arc 13 é o contrato único; o motor por workflow vira **legado/superseded** (doc + anotações de legado no
+  consumer reativo, no doc Arc 6 e no cenário 28). NÃO toca o motor genérico (skill-flow/workflow-api).
+  **Follow-up opcional (remoção física da cola específica):** consumer reativo `workflow.events` na
+  evaluation-api, coluna/seletor `review_workflow_skill_id`, skills `skill_revisao_*`/`agente_revisor_v1`,
+  cenário 28. Deixado para um slice próprio (raio de teste no cenário 28).
 - **G-PROBE — endpoints contest/review sem auth ABAC** *(verificar/segurança)*: `file_contestation`/`submit_review`
   confiam só em headers `X-Tenant-ID`/`X-User-Id`/`X-Author-Type`, sem validar JWT/ABAC nem `available_actions`
   server-side (a checagem ABAC vive no `list_results`, não no endpoint de escrita). Revisar antes de produção.

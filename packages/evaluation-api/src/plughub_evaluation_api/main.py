@@ -42,6 +42,14 @@ async def _on_workflow_event(db_pool: _db.asyncpg.Pool, msg_value: bytes) -> Non
 
     workflow.suspended → set action_required, current_round, deadline_at, resume_token
     workflow.completed → lock result with appropriate lock_reason
+
+    LEGADO / Arc 6 "Workflow as review motor" — SUPERSEDED pelo Arc 13 (decisão 2026-06-25, S2.4).
+    O contrato canônico de contest→review→finalize é REST (contestation_router →
+    finalize_evaluation, que emite evaluation_finalized). Este consumer é apenas REATIVO e
+    INERTE em produção: nada no backend dispara o review workflow (review_workflow_skill_id é
+    config morta; só o e2e cenário 28 dá trigger). Termina em `lock` (NÃO finaliza) — por isso
+    NÃO deve ser o caminho de qualidade. Mantido por compat com o cenário 28; remoção física é
+    follow-up opcional. Só age em eventos que carregam result_id no context.
     """
     try:
         event = json.loads(msg_value)

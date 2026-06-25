@@ -2,6 +2,14 @@
  * 28_evaluation_workflow_cycle.ts
  * Scenario 28: Arc 6 v2 — Workflow Motor for Contestation/Review Cycle
  *
+ * ⚠️ LEGADO / SUPERSEDED (decisão 2026-06-25, S2.4): o contrato canônico de
+ * contest→review→finalize é o Arc 13 REST (contestation_router → finalize_evaluation,
+ * que emite evaluation_finalized). Este cenário exercita o MOTOR POR WORKFLOW, aposentado
+ * como contrato — é opt-in (--workflow-review), fora da suíte default (01–18), e termina
+ * em `lock` (não finaliza). Mantido só como documentação viva do motor legado; não
+ * representa o caminho de qualidade em produção. Ver docs/arcos/arc6-evaluation.md
+ * "Workflow como Motor… — LEGADO".
+ *
  * Validates the full multi-round review/contestation cycle driven by Arc 4
  * Workflow API as state machine motor:
  *

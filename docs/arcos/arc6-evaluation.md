@@ -878,7 +878,21 @@ if not locked and action_required == "contestation" and "contest" in perms → [
 
 **Defesa em profundidade**: a UI desabilita botões com base em `available_actions`, mas o endpoint de submit repete a verificação de permissão no servidor. O servidor nunca confia no estado calculado pelo cliente.
 
-## Workflow como Motor de Contestação/Revisão
+## Workflow como Motor de Contestação/Revisão — ⚠️ LEGADO / SUPERSEDED (decisão 2026-06-25, S2.4)
+
+> **Aposentado como contrato.** O ciclo canônico de contest→review→finalize é o **Arc 13 REST**
+> (`contestation_router`: `file_contestation` → `submit_review` → `finalize_evaluation`, que **emite
+> `evaluation_finalized`** — a fonte única dos relatórios de qualidade). O motor por workflow abaixo é
+> **paralelo e inerte em produção**: nada no backend dispara o review workflow (`review_workflow_skill_id`
+> é só config armazenada, lida pela UI; o único trigger é o **harness e2e cenário 28**, opt-in via
+> `--workflow-review`, fora da suíte default 01–18). A evaluation-api apenas **reage** a `workflow.events`
+> (suspended → `action_required`/`resume_token`; completed/timeout → `lock_result`, **NÃO finaliza**), então
+> resultados revisados por ele ficariam locked-mas-invisíveis — motivo de não usá-lo como caminho de qualidade.
+>
+> **Distinção importante:** isto NÃO aposenta o motor genérico (skill-flow-engine + workflow-api +
+> `workflow.events`), que é infra do PlugHub usada por outras frentes. Aposenta-se só o **uso** que o módulo
+> de avaliação fazia dele. Remoção física da cola específica (consumer reativo, coluna/seletor
+> `review_workflow_skill_id`, skills `skill_revisao_*`/`agente_revisor_v1`, cenário 28) = follow-up opcional.
 
 O ciclo de revisão/contestação é executado pelo Workflow API (Arc 4) como motor de estado. O YAML da skill define quantos rounds existem, timeouts e alçadas — sem lógica hardcoded no evaluation-api. Mudar o ciclo de um cliente = atualizar um YAML via `PUT /v1/skills/{id}`.
 
