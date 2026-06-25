@@ -2,6 +2,25 @@
 
 ---
 
+## Recon + re-validação G-FIN/G-TIMEOUT (2026-06-25) — só validação/docs
+
+Recon do shakedown do Arc 13 (TODO §"Shakedown pós-submit") contra o código atual: **G-FIN e G-TIMEOUT já
+estavam resolvidos** pelos T1–T11 (2026-06-19), depois das notas do shakedown (2026-06-17) — caso recorrente
+de "TODO atrás do código". `finalize_evaluation` é o ponto único (idempotente) que grava `final_score` +
+emite `evaluation_finalized`, chamado por todos os caminhos terminais (ingest IA, ai_review, `submit_review`
+humano, deadline scanner); `_run_deadline_scanner` (60s) wired no startup.
+
+- **Validação E2E**: novo smoke `infra/test/smoke_eval_finalize_timeout.sh` — reabre um resultado finalizado
+  como vencido (`open`, `deadline_at` no passado) e confirma que o scanner o re-finaliza
+  (`timeout_contestation`/`uncontested`, `final_score`+`finalized_at` gravados) + evento `evaluation_finalized`
+  no ClickHouse. Verde (finaliza em ~40s). Prova G-TIMEOUT e o núcleo de finalização compartilhado com G-FIN.
+- **Docs**: TODO §Shakedown atualizado — G-FIN/G-TIMEOUT marcados ✅ RESOLVIDOS (ref. T3/T4/T11); nota
+  "Confirmado ao vivo 2026-06-17" marcada obsoleta. **Gaps remanescentes (abertos)**: G-S2.4 (motor de review
+  por workflow finaliza, hoje só `lock_result`), G-PROBE (auth ABAC nos endpoints de escrita), G-UI (grants
+  ABAC `evaluation.revisar`/`contestar` p/ as ações surgirem na tela).
+
+---
+
 ## Isolamento do substrato de avaliação por `origin` — ARCO COMPLETO (2026-06-25)
 
 Resolve o concern §9(c) do Quality Ingest (reavaliação/importação misturavam com produção no substrato

@@ -1077,25 +1077,22 @@ pool hooks genéricos (sem campo dedicado).
 
 ### Shakedown pós-submit Arc 13 (2026-06-17) — gaps descobertos
 
-> O Arc 13 está marcado "completo (A–H)" nos docs, mas o pós-submit nunca rodou com resultado de avaliador
-> **real** (só com o seeder sintético, que usa o ramo **ai_agent**/auto_finalized via `/ingest` direto). Com o
-> avaliador real agora persistindo (S2.2), o shakedown achou gaps análogos ao da S2.2 — "docs dizem completo,
-> código não". **Causa comum: o fluxo HUMANO nunca chega a `evaluation_finalized`.**
+> **Status (recon 2026-06-25): G-FIN e G-TIMEOUT ✅ RESOLVIDOS pelos T1–T11 (2026-06-19), depois deste
+> shakedown.** O `finalize_evaluation` virou o **ponto único** que grava `final_score` + emite
+> `evaluation_finalized`, chamado por TODOS os caminhos terminais (ingest IA, ai_review, `submit_review`
+> humano e o deadline scanner); o `_run_deadline_scanner` (60s) está wired no startup. Validado E2E em
+> 2026-06-25 (`infra/test/smoke_eval_finalize_timeout.sh`): resultado vencido → scanner finaliza
+> (`timeout_contestation`/`uncontested`, `final_score` gravado) + evento no ClickHouse `evaluation_finalized`.
+> Detalhe: CHANGELOG T11-A+B / T3 / T4. **Restam abertos só G-S2.4, G-PROBE e G-UI.**
 
-- **G-FIN — avaliação de agente humano nunca emite `evaluation_finalized`** *(crítico)*: `emit_evaluation_finalized`/
-  `finalize_result` só são chamados no ramo **ai_agent** do `ingest_result` (router.py). No fluxo humano nenhum
-  caminho finaliza: (a) `submit_review` (contestation_router) chega a `closed_upheld`/`closed_revised`/
-  `closed_max_rounds` mas **não emite** `evaluation_finalized` nem grava `final_score`; (b) o consumer de
-  `workflow.completed` só faz `lock_result` (≠ finalize). Como o invariante do Arc 13 é "só `evaluation_finalized`
-  conta pros relatórios de qualidade" (Arc 6 Fase 2 filtra `type='evaluation_finalized'`), **avaliações humanas reais
-  ficam invisíveis aos relatórios canônicos**. Fix: emitir `evaluation_finalized` + `finalize_result` nos estados
-  terminais do fluxo humano (manual e via workflow).
-- **G-TIMEOUT — sem scanner de deadline de contestação** *(crítico, caso comum)*: o caso comum é o avaliado **não
-  contestar**. O state machine prevê `[contest_deadline expirado] → timeout_contestation → evaluation_finalized`, mas
-  **não existe scanner** na evaluation-api (os únicos `create_task` são os 3 consumers: workflow/sampling/ingest). Sem
-  ele, um resultado humano fica em `contestation_open` **para sempre** → nunca finaliza → nunca entra nos relatórios.
-  Fix: background scanner (como o timeout scanner do workflow-api) que finaliza `contestation_open`/`under_review`
-  vencidos (`deadline_at`/`contest_deadline_hours`) → `timeout_contestation`/`timeout_review` → `evaluation_finalized`.
+- **G-FIN — ✅ RESOLVIDO (T3, 2026-06-19; validado 2026-06-25)**: `finalize_evaluation` é o emissor único
+  (idempotente) e o `submit_review` (humano) o chama nos estados terminais (`closed_upheld`/`closed_revised`/
+  `closed_max_rounds`), gravando `final_score` + emitindo `evaluation_finalized`. Avaliações humanas reais
+  passam a contar nos relatórios canônicos. *(Resíduo: o caminho via **workflow** — `workflow.completed` →
+  só `lock_result` — segue não-finalizante; isso é o G-S2.4 abaixo, não o G-FIN.)*
+- **G-TIMEOUT — ✅ RESOLVIDO (T4, 2026-06-19; validado 2026-06-25)**: `_run_deadline_scanner` (background,
+  60s) varre `list_expired_results` (`result_state IN open|under_review` com `deadline_at` vencido) e finaliza
+  via `finalize_evaluation` → `timeout_contestation`(`uncontested`) / `timeout_review`. Smoke E2E verde.
 - **G-S2.4 — motor de review (workflow) não amarrado ao resultado** *(= S2.4)*: a contestação NÃO dispara
   automaticamente um revisor AI; `submit_review` é manual (POST). O `skill_revisao_treplica_v1`/`review_workflow_skill_id`
   não está ligado ao ciclo de vida do resultado; o consumer de `workflow.*` só seta `action_required`/`deadline_at`
@@ -1117,9 +1114,11 @@ pool hooks genéricos (sem campo dedicado).
   código, idem gated por ABAC); fila de revisão do supervisor ("Awaiting my action" depende de `available_actions`);
   timeline de `ContestationThread` no drill-down; páginas **Curation**/**Calibration** (Arc 13 Fase H) — existem mas
   nunca validadas com dado real (só seeder).
-- **Confirmado ao vivo (2026-06-17)**: probe contest→review→`closed_upheld` fechou em estado terminal **sem**
-  `evaluation_finalized` (`eval_status` seguiu "submitted", `finalized_at`/`final_score` null) → **G-FIN comprovado**.
-- **Próximo**: exercitar Fluxo 2 (curadoria/`calibration_signal`→CalibrationNote→KB), que só rodou via seeder.
+- ~~**Confirmado ao vivo (2026-06-17)**: probe contest→review→`closed_upheld` sem `evaluation_finalized`~~ →
+  **obsoleto: corrigido pelos T1–T11** (finalize_evaluation no submit_review). Re-validado 2026-06-25 (smoke).
+- **Próximo (gaps remanescentes)**: G-UI (grants ABAC p/ as ações surgirem), G-S2.4 (motor de review por
+  workflow finalizar, não só `lock`), G-PROBE (auth ABAC nos endpoints de escrita); e exercitar Fluxo 2
+  (curadoria/`calibration_signal`→CalibrationNote→KB), que só rodou via seeder.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**
 - **A — specialist-return (pré-requisito da F4)**: um conference specialist (ex.: `auth_form_ia` via @mention)
