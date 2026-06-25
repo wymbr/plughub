@@ -33,9 +33,17 @@ function adminHeaders(token?: string): Record<string, string> {
   return h
 }
 
+/** Bearer-JWT headers for grant-first ABAC endpoints (Quality "human config").
+ *  Pass the session access token; sent as `Authorization: Bearer <token>`. */
+function bearerHeaders(token?: string): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) h['Authorization'] = `Bearer ${token}`
+  return h
+}
+
 // ── Forms ─────────────────────────────────────────────────────────────────────
 
-export function useForms(tenantId: string) {
+export function useForms(tenantId: string, accessToken?: string) {
   const [forms, setForms] = useState<EvaluationForm[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -43,7 +51,9 @@ export function useForms(tenantId: string) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch(`${BASE}/forms?tenant_id=${tenantId}`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/forms?tenant_id=${tenantId}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       const raw: EvaluationForm[] = Array.isArray(d) ? d : (d?.forms ?? d?.data ?? d?.items ?? [])
@@ -61,7 +71,7 @@ export function useForms(tenantId: string) {
     } finally {
       setLoading(false)
     }
-  }, [tenantId])
+  }, [tenantId, accessToken])
 
   useEffect(() => { load() }, [load])
 
@@ -71,7 +81,7 @@ export function useForms(tenantId: string) {
 export async function createForm(tenantId: string, body: Partial<EvaluationForm>, token?: string) {
   const r = await fetch(`${BASE}/forms`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify({ ...body, tenant_id: tenantId }),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -81,7 +91,7 @@ export async function createForm(tenantId: string, body: Partial<EvaluationForm>
 export async function updateForm(formId: string, body: Partial<EvaluationForm>, token?: string) {
   const r = await fetch(`${BASE}/forms/${formId}`, {
     method: 'PATCH',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -91,7 +101,7 @@ export async function updateForm(formId: string, body: Partial<EvaluationForm>, 
 export async function deleteForm(formId: string, token?: string) {
   const r = await fetch(`${BASE}/forms/${formId}`, {
     method: 'DELETE',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
 }
@@ -128,7 +138,7 @@ export interface RubricPreviewResult {
   calibration_notes_count: number
 }
 
-export function useRubricTemplates(tenantId: string, campaignId?: string) {
+export function useRubricTemplates(tenantId: string, campaignId?: string, accessToken?: string) {
   const [templates, setTemplates] = useState<RubricTemplate[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -137,7 +147,9 @@ export function useRubricTemplates(tenantId: string, campaignId?: string) {
     setLoading(true)
     try {
       const q = campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ''
-      const r = await fetch(`${BASE}/rubric-templates?tenant_id=${tenantId}${q}`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/rubric-templates?tenant_id=${tenantId}${q}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setTemplates(d?.rubric_templates ?? [])
@@ -147,7 +159,7 @@ export function useRubricTemplates(tenantId: string, campaignId?: string) {
     } finally {
       setLoading(false)
     }
-  }, [tenantId, campaignId])
+  }, [tenantId, campaignId, accessToken])
 
   useEffect(() => { if (tenantId) load() }, [load, tenantId])
   return { templates, loading, error, reload: load }
@@ -156,10 +168,11 @@ export function useRubricTemplates(tenantId: string, campaignId?: string) {
 export async function createRubricTemplate(
   tenantId: string,
   body: { scope: 'tenant' | 'campaign'; campaign_id?: string; name?: string; body?: string },
+  token?: string,
 ): Promise<RubricTemplate> {
   const r = await fetch(`${BASE}/rubric-templates`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: bearerHeaders(token),
     body: JSON.stringify({ ...body, tenant_id: tenantId }),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -289,20 +302,21 @@ export async function blindResolve(
 
 export async function updateRubricTemplate(
   rubricId: string, tenantId: string, body: { name?: string; body?: string },
+  token?: string,
 ): Promise<RubricTemplate> {
   const r = await fetch(`${BASE}/rubric-templates/${rubricId}?tenant_id=${tenantId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: bearerHeaders(token),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
 
-export async function publishRubricTemplate(rubricId: string, tenantId: string): Promise<RubricTemplate> {
+export async function publishRubricTemplate(rubricId: string, tenantId: string, token?: string): Promise<RubricTemplate> {
   const r = await fetch(`${BASE}/rubric-templates/${rubricId}/publish?tenant_id=${tenantId}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: bearerHeaders(token),
     body: JSON.stringify({}),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -408,14 +422,16 @@ export function useCampaignSummaries(tenantId: string, pollMs = 0) {
 
 // ── Campaigns ─────────────────────────────────────────────────────────────────
 
-export function useCampaigns(tenantId: string, pollMs = 0) {
+export function useCampaigns(tenantId: string, pollMs = 0, accessToken?: string) {
   const [campaigns, setCampaigns] = useState<EvaluationCampaign[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`${BASE}/campaigns?tenant_id=${tenantId}`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/campaigns?tenant_id=${tenantId}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setCampaigns(Array.isArray(d) ? d : (d?.campaigns ?? d?.data ?? d?.items ?? []))
@@ -425,7 +441,7 @@ export function useCampaigns(tenantId: string, pollMs = 0) {
     } finally {
       setLoading(false)
     }
-  }, [tenantId])
+  }, [tenantId, accessToken])
 
   useEffect(() => {
     load()
@@ -441,7 +457,7 @@ export function useCampaigns(tenantId: string, pollMs = 0) {
 export async function createCampaign(body: Partial<EvaluationCampaign>, token?: string) {
   const r = await fetch(`${BASE}/campaigns`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -451,7 +467,7 @@ export async function createCampaign(body: Partial<EvaluationCampaign>, token?: 
 export async function pauseCampaign(campaignId: string, token?: string) {
   const r = await fetch(`${BASE}/campaigns/${campaignId}/pause`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json() as Promise<EvaluationCampaign>
@@ -460,7 +476,7 @@ export async function pauseCampaign(campaignId: string, token?: string) {
 export async function updateCampaign(campaignId: string, tenantId: string, body: Partial<EvaluationCampaign>, token?: string) {
   const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
     method: 'PUT',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -470,7 +486,7 @@ export async function updateCampaign(campaignId: string, tenantId: string, body:
 export async function deleteCampaign(campaignId: string, tenantId: string, token?: string) {
   const r = await fetch(`${BASE}/campaigns/${campaignId}?tenant_id=${encodeURIComponent(tenantId)}`, {
     method: 'DELETE',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
   })
   if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
 }
@@ -517,7 +533,7 @@ export async function dispatchCampaign(
 export async function resumeCampaign(campaignId: string, token?: string) {
   const r = await fetch(`${BASE}/campaigns/${campaignId}/resume`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   return r.json() as Promise<EvaluationCampaign>

@@ -178,6 +178,28 @@ def _check_abac_permission(
     return True
 
 
+def _require_evaluation_field(
+    request: Request,
+    field: str,
+    *,
+    write: bool,
+    pool_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Grant-first ABAC gate for the human-facing Quality config (forms/campaigns/rubric).
+
+    Decodes the Bearer JWT and requires module_config.evaluation.{field} with at least
+    read_only (GET) or read_write (mutations). Grant-first: an empty/absent module_config
+    is denied (min_access is always set), matching the strict nav gating. Raises 403 on
+    insufficient grant.
+    """
+    jwt_payload = _decode_jwt(request)
+    min_access = "read_write" if write else "read_only"
+    if not _check_abac_permission(jwt_payload, field, pool_id, min_access=min_access):
+        raise HTTPException(status_code=403, detail=f"forbidden: requires evaluation.{field} ({min_access})")
+    return jwt_payload
+
+
 # ─── DB / infra accessors ─────────────────────────────────────────────────────
 
 def _pool(request: Request) -> asyncpg.Pool:
@@ -400,6 +422,10 @@ async def list_forms(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
+    # NOTE (G-PROBE fase 1): leitura de LISTA fica aberta — é read compartilhado por
+    # várias telas Quality (Avaliações/Calibração/Curadoria/Reports mapeiam id→nome).
+    # A *view* é barrada pelo route guard; mutações são gateadas. Fechar a lista (gate
+    # "qualquer acesso evaluation" + Bearer em todos os consumidores) é fase 2.
     pool = _pool(request)
     rows = await _db.list_forms(pool, tenant_id, status=status, limit=limit, offset=offset)
     rows = [_expose_form_id(r) for r in rows]
@@ -408,6 +434,7 @@ async def list_forms(
 
 @router.post("/v1/evaluation/forms", status_code=201)
 async def create_form(body: FormCreate, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     row = await _db.create_form(pool, **body.model_dump())
     return _expose_form_id(row)
@@ -424,6 +451,7 @@ async def get_form(form_id: str, tenant_id: str, request: Request) -> dict:
 
 @router.put("/v1/evaluation/forms/{form_id}")
 async def update_form(form_id: str, tenant_id: str, body: FormUpdate, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_form(pool, form_id, tenant_id, **updates)
@@ -434,6 +462,7 @@ async def update_form(form_id: str, tenant_id: str, body: FormUpdate, request: R
 
 @router.delete("/v1/evaluation/forms/{form_id}", status_code=204)
 async def delete_form(form_id: str, tenant_id: str, request: Request) -> None:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     # Soft-delete via archive
     row = await _db.update_form(pool, form_id, tenant_id, status="archived")
@@ -450,6 +479,7 @@ class FormPublish(BaseModel):
 @router.post("/v1/evaluation/forms/{form_id}/publish")
 async def publish_form(form_id: str, tenant_id: str, body: FormPublish, request: Request) -> dict:
     """Publica a versão corrente do form: snapshot imutável em form_versions + deploy_status=published."""
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     row = await _db.publish_form(pool, form_id, tenant_id, published_by=body.published_by)
     if not row:
@@ -501,6 +531,7 @@ class RubricPublish(BaseModel):
 async def list_rubric_templates(
     request: Request, tenant_id: str, campaign_id: str | None = None,
 ) -> dict:
+    # leitura de LISTA aberta (read compartilhado) — ver nota em list_forms. Fase 2 fecha.
     pool = _pool(request)
     rows = await _db.list_rubric_templates(pool, tenant_id, campaign_id=campaign_id)
     return {"tenant_id": tenant_id, "rubric_templates": rows, "count": len(rows)}
@@ -508,6 +539,7 @@ async def list_rubric_templates(
 
 @router.post("/v1/evaluation/rubric-templates", status_code=201)
 async def create_rubric_template(body: RubricCreate, request: Request) -> dict:
+    _require_evaluation_field(request, "gerir_rubrica", write=True)
     pool = _pool(request)
     try:
         row = await _db.create_rubric_template(pool, **body.model_dump())
@@ -562,6 +594,7 @@ async def get_rubric_template(rubric_id: str, tenant_id: str, request: Request) 
 async def update_rubric_template(
     rubric_id: str, tenant_id: str, body: RubricUpdate, request: Request,
 ) -> dict:
+    _require_evaluation_field(request, "gerir_rubrica", write=True)
     pool = _pool(request)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_rubric_template(pool, rubric_id, tenant_id, updates)
@@ -576,6 +609,7 @@ async def publish_rubric_template(
 ) -> dict:
     """Publica a rubrica corrente: snapshot imutável em rubric_template_versions +
     deploy_status=published. (Deploy epoch p/ comparação antes/depois entra no chunk D.)"""
+    _require_evaluation_field(request, "gerir_rubrica", write=True)
     pool = _pool(request)
     row = await _db.publish_rubric_template(pool, rubric_id, tenant_id, published_by=body.published_by)
     if not row:
@@ -723,6 +757,7 @@ async def list_campaigns(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
+    # leitura de LISTA aberta (read compartilhado) — ver nota em list_forms. Fase 2 fecha.
     pool = _pool(request)
     rows = await _db.list_campaigns(
         pool, tenant_id,
@@ -738,6 +773,7 @@ async def list_campaigns(
 
 @router.post("/v1/evaluation/campaigns", status_code=201)
 async def create_campaign(body: CampaignCreate, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     # Validate form exists
     form = await _db.get_form(pool, body.form_id, body.tenant_id)
@@ -784,6 +820,7 @@ async def get_campaign(campaign_id: str, tenant_id: str, request: Request) -> di
 
 @router.put("/v1/evaluation/campaigns/{campaign_id}")
 async def update_campaign(campaign_id: str, tenant_id: str, body: CampaignUpdate, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_campaign(pool, campaign_id, tenant_id, **updates)
@@ -794,6 +831,7 @@ async def update_campaign(campaign_id: str, tenant_id: str, body: CampaignUpdate
 
 @router.post("/v1/evaluation/campaigns/{campaign_id}/pause")
 async def pause_campaign(campaign_id: str, tenant_id: str, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     row = await _db.update_campaign(pool, campaign_id, tenant_id, status="paused")
     if not row:
@@ -803,6 +841,7 @@ async def pause_campaign(campaign_id: str, tenant_id: str, request: Request) -> 
 
 @router.post("/v1/evaluation/campaigns/{campaign_id}/resume")
 async def resume_campaign(campaign_id: str, tenant_id: str, request: Request) -> dict:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     row = await _db.update_campaign(pool, campaign_id, tenant_id, status="active")
     if not row:
@@ -812,6 +851,7 @@ async def resume_campaign(campaign_id: str, tenant_id: str, request: Request) ->
 
 @router.delete("/v1/evaluation/campaigns/{campaign_id}", status_code=204)
 async def delete_campaign(campaign_id: str, tenant_id: str, request: Request) -> None:
+    _require_evaluation_field(request, "formularios", write=True)
     pool = _pool(request)
     ok = await _db.delete_campaign(pool, campaign_id, tenant_id)
     if not ok:

@@ -1,5 +1,8 @@
 {
   "title": "Evaluations",
+  "guard": {
+    "noAccess": "You don't have permission to access this module."
+  },
   "tabs": {
     "forms":      "Forms",
     "campaigns":  "Campaigns",

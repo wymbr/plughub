@@ -149,7 +149,8 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
 interface CreateModalProps {
   onClose: () => void
   onCreated: () => void
-  adminToken: string
+  adminToken: string          // admin-only endpoints (X-Admin-Token): curation rules
+  accessToken?: string        // grant-first ABAC (Bearer JWT): campaign CRUD
   editing?: EvaluationCampaign | null   // null/undefined = criar; objeto = editar (PUT)
 }
 
@@ -312,10 +313,10 @@ function CurationSamplingRulesEditor({
   )
 }
 
-function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalProps) {
+function CreateModal({ onClose, onCreated, adminToken, accessToken, editing }: CreateModalProps) {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
-  const { forms } = useForms(TENANT)
+  const { forms } = useForms(TENANT, accessToken)
   const poolOptions     = usePoolOptions(TENANT)
   const calendarOptions = useCalendarOptions(TENANT)
   const isEdit = !!editing
@@ -416,7 +417,7 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
             reviewer_model_profile: reviewerModelProfile || undefined,
           } : undefined,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any, adminToken)
+        } as any, accessToken)
         onCreated()
         return
       }
@@ -454,7 +455,7 @@ function CreateModal({ onClose, onCreated, adminToken, editing }: CreateModalPro
           pre_review_enabled:     preReviewEnabled || undefined,
           pre_review_agent_pool:  preReviewEnabled ? preReviewPool || null : undefined,
         } : undefined,
-      }, adminToken)
+      }, accessToken)
 
       // Save curation sampling rules if Arc 13 and enabled
       if (isArc13Skill && showCurationRules && campaign?.campaign_id) {
@@ -998,9 +999,12 @@ function CurationSamplingRulesDetailPanel({
 
 export default function CampaignsPage() {
   const { t } = useTranslation('evaluation')
-  const { tenantId: TENANT } = useAuth()
+  const { tenantId: TENANT, session } = useAuth()
+  // Vestigial admin token — still used by the admin-only synthetic/dispatch/curation
+  // endpoints (X-Admin-Token). Campaign CRUD is now grant-first via session JWT.
   const [adminToken, setAdminToken] = useState('')
-  const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000)
+  const accessToken = session?.accessToken
+  const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000, accessToken)
   const [selected, setSelected] = useState<EvaluationCampaign | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [editingCampaign, setEditingCampaign] = useState<EvaluationCampaign | null>(null)
@@ -1018,8 +1022,8 @@ export default function CampaignsPage() {
   const toggleStatus = async (c: EvaluationCampaign) => {
     setActionError(null)
     try {
-      if (c.status === 'active') await pauseCampaign(c.campaign_id, adminToken)
-      else await resumeCampaign(c.campaign_id, adminToken)
+      if (c.status === 'active') await pauseCampaign(c.campaign_id, accessToken)
+      else await resumeCampaign(c.campaign_id, accessToken)
       reload()
     } catch (e) {
       setActionError(String(e))
@@ -1058,7 +1062,7 @@ export default function CampaignsPage() {
     if (!window.confirm(`Excluir a campanha "${c.name}" e TODAS as suas avaliações? Ação irreversível.`)) return
     setActionError(null)
     try {
-      await deleteCampaign(c.campaign_id, TENANT, adminToken)
+      await deleteCampaign(c.campaign_id, TENANT, accessToken)
       setSelected(null)
       reload()
     } catch (e) {
@@ -1380,6 +1384,7 @@ export default function CampaignsPage() {
             ? `edit-${editingCampaign.campaign_id}-${(editingCampaign as { updated_at?: string }).updated_at ?? ''}`
             : 'new'}
           adminToken={adminToken}
+          accessToken={accessToken}
           editing={editingCampaign}
           onClose={() => { setShowCreate(false); setEditingCampaign(null) }}
           onCreated={() => { setShowCreate(false); setEditingCampaign(null); reload() }}

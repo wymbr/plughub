@@ -318,7 +318,7 @@ function DimensionEditor({ dim, onChange, onDelete }: DimensionEditorProps) {
 
 interface FormDetailProps {
   form:          EvaluationForm | null
-  adminToken:    string
+  accessToken?:  string        // session Bearer JWT — grant-first ABAC on the API
   onSaved:       () => void
   onNew:         () => void
   onDirtyChange: (dirty: boolean) => void
@@ -326,7 +326,7 @@ interface FormDetailProps {
   triggerNew:    number       // increment to programmatically trigger startNew()
 }
 
-function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel, triggerNew }: FormDetailProps) {
+function FormDetail({ form, accessToken, onSaved, onNew, onDirtyChange, onCancel, triggerNew }: FormDetailProps) {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const [editing, setEditing] = useState<WForm | null>(null)
@@ -395,9 +395,9 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel,
     try {
       const payload = workingToApi(editing)
       if (!editing.form_id || editing.form_id === '') {
-        await createForm(TENANT, payload, adminToken)
+        await createForm(TENANT, payload, accessToken)
       } else {
-        await updateForm(editing.form_id, payload, adminToken)
+        await updateForm(editing.form_id, payload, accessToken)
       }
       markClean()
       onSaved()
@@ -413,7 +413,7 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel,
     if (!confirm(t('forms.detail.archiveConfirm'))) return
     setSaving(true)
     try {
-      await deleteForm(editing.form_id, adminToken)
+      await deleteForm(editing.form_id, accessToken)
       markClean()
       onSaved()
     } catch (e) {
@@ -613,9 +613,8 @@ function FormDetail({ form, adminToken, onSaved, onNew, onDirtyChange, onCancel,
 
 export default function FormsPage() {
   const { t } = useTranslation('evaluation')
-  const { tenantId: TENANT } = useAuth()
-  const [adminToken, setAdminToken] = useState('')
-  const { forms, loading, reload }  = useForms(TENANT)
+  const { tenantId: TENANT, session } = useAuth()
+  const { forms, loading, reload }  = useForms(TENANT, session?.accessToken)
   const [selected, setSelected]     = useState<EvaluationForm | null>(null)
   const [isDirty,  setIsDirty]      = useState(false)
   const [triggerNew, setTriggerNew] = useState(0)
@@ -654,16 +653,9 @@ export default function FormsPage() {
       {/* Sidebar */}
       <aside className="w-72 border-r flex flex-col bg-surface-muted">
         <div className="p-3 border-b flex gap-2">
-          <input
-            className="flex-1 border border-border-strong rounded px-2 py-1 text-xs"
-            type="password"
-            placeholder={t('forms.sidebar.adminToken')}
-            value={adminToken}
-            onChange={e => setAdminToken(e.target.value)}
-          />
           <button
             onClick={handleNewFormRequest}
-            className="bg-primary text-white text-xs px-2 py-1 rounded hover:bg-primary-dark"
+            className="flex-1 bg-primary text-white text-xs px-2 py-1 rounded hover:bg-primary-dark"
           >
             {t('forms.detail.newBtn')}
           </button>
@@ -696,7 +688,7 @@ export default function FormsPage() {
       {/* Detail */}
       <FormDetail
         form={selected}
-        adminToken={adminToken}
+        accessToken={session?.accessToken}
         onSaved={() => { reload(); setSelected(null); setIsDirty(false) }}
         onNew={() => setSelected(null)}
         onDirtyChange={setIsDirty}

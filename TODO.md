@@ -29,6 +29,37 @@ e não-particionada). Enquanto esse requisito não existir, fica como backlog.
 
 ---
 
+## G-PROBE — Auth ABAC/serviço nos endpoints do Quality (evaluation-api)
+
+**Fase 1 ✅ (config humana, 2026-06-25):** mutações de forms/campaigns/rubric gateadas por
+`_require_evaluation_field` (grant-first, deny em config vazio; forms/campaigns→`formularios`,
+rubric→`gerir_rubrica`, read_write). Route guard `RequireEvalAccess` em todas as rotas de evaluation
+(espelha o nav strict, sem bypass). Bearer JWT (de `session.accessToken`) nas mutações + hooks de lista
+no platform-ui. Detalhe em `CHANGELOG.md`.
+
+**Listas abertas (decisão fase 1):** `list_forms/campaigns/rubric` ficaram **sem gate** — são read
+compartilhado (Avaliações/Calibração/Curadoria/Reports mapeiam id→nome com `report`/`revisar`/`curar`,
+não `formularios`; gateá-las quebraria essas telas). GET-by-id/resolve/effective também abertos
+(runtime: session-replayer lê `forms/{id}`, mcp-server lê `rubric-templates/effective`).
+
+**Fase 2 — PENDENTE (credencial de serviço + fechar leituras):**
+- `X-Service-Token` nos endpoints de agente/sistema hoje abertos ou em `_require_admin`:
+  `submit_pre_review`, `submit_ai_review`, `publish_calibration_note`, `ingest`, `claim_instance`,
+  `dispatch*`, `dispatch_scan`, `backfill`, `expire/skip/mark-error`, `seed/flush-synthetic`. Wiring da
+  credencial nos callers (orchestrator-bridge/agentes/workers/seed/e2e).
+- Fechar as LEITURAS de lista com gate "qualquer acesso evaluation" (any-of dos campos) + Bearer em
+  todos os consumidores de lista (Avaliações/Calibração/Curadoria/Reports).
+- Remover o input de admin-token da `CampaignsPage` quando dispatch/seed/flush/sampling-rule migrarem
+  para a credencial de serviço.
+
+**Rot pré-existente (separado do G-PROBE, não bloqueia):** `evaluation-api/tests/test_router.py` tem
+11 testes quebrados **independentes do gate** (classes TestInstances/Ingest/Results/Contestations):
+mocks não cobrem `set_contestation_state`/`get_campaign`/`lock_result` (chamadas novas Arc 13),
+`app.state.redis` ausente no app de teste, payload de review desatualizado (422), `expire_instance`
+sem `x-admin-token` (container tem `admin_token` setado). Atualizar os mocks ao contrato evoluído.
+
+---
+
 ## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(concern, 2026-06-24)*
 
 **Achado** (durante Skill Versioning Fase E): o CMD do `agent-registry` roda

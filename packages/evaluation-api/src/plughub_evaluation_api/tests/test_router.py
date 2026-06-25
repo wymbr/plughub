@@ -20,11 +20,25 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from typing import Any
 
+import jwt as pyjwt
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient, ASGITransport
 
 from ..router import router
+from ..config import settings
+
+# Bearer JWT com os grants ABAC da config humana (G-PROBE fase 1): forms/campaigns
+# exigem evaluation.formularios; rubric exige evaluation.gerir_rubrica. Os testes de
+# forms/campanhas passam este header nos endpoints gateados (list + mutações).
+_EVAL_TOKEN = pyjwt.encode(
+    {"sub": "u_test", "module_config": {"evaluation": {
+        "formularios": {"access": "read_write", "scope": []},
+        "gerir_rubrica": {"access": "read_write", "scope": []},
+    }}},
+    settings.jwt_secret, algorithm="HS256",
+)
+_AUTH = {"Authorization": f"Bearer {_EVAL_TOKEN}"}
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -149,7 +163,7 @@ class TestForms:
         db = MagicMock()
         with patch("plughub_evaluation_api.router._db.list_forms", new=AsyncMock(return_value=[_make_form()])):
             async with await _client(self._app(db)) as c:
-                resp = await c.get("/v1/evaluation/forms?tenant_id=t1")
+                resp = await c.get("/v1/evaluation/forms?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 200
         data = resp.json()
         assert data["count"] == 1
@@ -160,7 +174,7 @@ class TestForms:
         form = _make_form()
         with patch("plughub_evaluation_api.router._db.create_form", new=AsyncMock(return_value=form)):
             async with await _client(self._app(MagicMock())) as c:
-                resp = await c.post("/v1/evaluation/forms", json={
+                resp = await c.post("/v1/evaluation/forms", headers=_AUTH, json={
                     "tenant_id": "t1", "name": "Test Form"
                 })
         assert resp.status_code == 201
@@ -186,7 +200,7 @@ class TestForms:
         updated["name"] = "Updated"
         with patch("plughub_evaluation_api.router._db.update_form", new=AsyncMock(return_value=updated)):
             async with await _client(self._app(MagicMock())) as c:
-                resp = await c.put("/v1/evaluation/forms/evform_abc?tenant_id=t1", json={"name": "Updated"})
+                resp = await c.put("/v1/evaluation/forms/evform_abc?tenant_id=t1", headers=_AUTH, json={"name": "Updated"})
         assert resp.status_code == 200
         assert resp.json()["name"] == "Updated"
 
@@ -196,14 +210,14 @@ class TestForms:
         archived["status"] = "archived"
         with patch("plughub_evaluation_api.router._db.update_form", new=AsyncMock(return_value=archived)):
             async with await _client(self._app(MagicMock())) as c:
-                resp = await c.delete("/v1/evaluation/forms/evform_abc?tenant_id=t1")
+                resp = await c.delete("/v1/evaluation/forms/evform_abc?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 204
 
     @pytest.mark.asyncio
     async def test_delete_form_not_found(self):
         with patch("plughub_evaluation_api.router._db.update_form", new=AsyncMock(return_value=None)):
             async with await _client(self._app(MagicMock())) as c:
-                resp = await c.delete("/v1/evaluation/forms/evform_missing?tenant_id=t1")
+                resp = await c.delete("/v1/evaluation/forms/evform_missing?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
@@ -212,12 +226,68 @@ class TestForms:
         form["dimensions"] = [{"id": "dim_1", "name": "Quality", "weight": 0.5, "criteria": []}]
         with patch("plughub_evaluation_api.router._db.create_form", new=AsyncMock(return_value=form)):
             async with await _client(self._app(MagicMock())) as c:
-                resp = await c.post("/v1/evaluation/forms", json={
+                resp = await c.post("/v1/evaluation/forms", headers=_AUTH, json={
                     "tenant_id": "t1", "name": "Form with dims",
                     "dimensions": [{"id": "dim_1", "name": "Quality", "weight": 0.5, "criteria": []}],
                 })
         assert resp.status_code == 201
         assert len(resp.json()["dimensions"]) == 1
+
+
+class TestConfigAbacGate:
+    """G-PROBE fase 1 — gate ABAC grant-first na config humana (forms/campaigns/rubric)."""
+
+    @staticmethod
+    def _tok(**fields: str) -> dict:
+        cfg = {f: {"access": acc, "scope": []} for f, acc in fields.items()}
+        t = pyjwt.encode({"sub": "u", "module_config": {"evaluation": cfg}},
+                         settings.jwt_secret, algorithm="HS256")
+        return {"Authorization": f"Bearer {t}"}
+
+    @pytest.mark.asyncio
+    async def test_list_forms_open_no_token_200(self):
+        # Fase 1: LISTA é read compartilhado → aberta (sem Bearer).
+        with patch("plughub_evaluation_api.router._db.list_forms", new=AsyncMock(return_value=[])):
+            async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+                resp = await c.get("/v1/evaluation/forms?tenant_id=t1")
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_create_form_no_token_401(self):
+        async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+            resp = await c.post("/v1/evaluation/forms", json={"tenant_id": "t1", "name": "X"})
+        assert resp.status_code == 401  # mutação exige Bearer
+
+    @pytest.mark.asyncio
+    async def test_create_form_without_grant_403(self):
+        async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+            resp = await c.post("/v1/evaluation/forms", headers=self._tok(report="read_only"),
+                                json={"tenant_id": "t1", "name": "X"})
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_create_form_readonly_grant_403(self):
+        # read_only NÃO satisfaz mutação (read_write)
+        async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+            resp = await c.post("/v1/evaluation/forms", headers=self._tok(formularios="read_only"),
+                                json={"tenant_id": "t1", "name": "X"})
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_create_form_readwrite_grant_ok(self):
+        with patch("plughub_evaluation_api.router._db.create_form", new=AsyncMock(return_value=_make_form())):
+            async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+                resp = await c.post("/v1/evaluation/forms", headers=self._tok(formularios="read_write"),
+                                    json={"tenant_id": "t1", "name": "X"})
+        assert resp.status_code == 201
+
+    @pytest.mark.asyncio
+    async def test_create_rubric_wrong_field_403(self):
+        # rubric exige gerir_rubrica; formularios não serve
+        async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
+            resp = await c.post("/v1/evaluation/rubric-templates", headers=self._tok(formularios="read_write"),
+                                json={"tenant_id": "t1", "name": "X"})
+        assert resp.status_code == 403
 
 
 class TestCampaigns:
@@ -227,7 +297,7 @@ class TestCampaigns:
         with patch("plughub_evaluation_api.router._db.get_form", new=AsyncMock(return_value=_make_form())), \
              patch("plughub_evaluation_api.router._db.create_campaign", new=AsyncMock(return_value=camp)):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
-                resp = await c.post("/v1/evaluation/campaigns", json={
+                resp = await c.post("/v1/evaluation/campaigns", headers=_AUTH, json={
                     "tenant_id": "t1", "name": "Test Campaign",
                     "form_id": "evform_abc", "pool_id": "sac_ia",
                 })
@@ -238,7 +308,7 @@ class TestCampaigns:
     async def test_create_campaign_form_not_found(self):
         with patch("plughub_evaluation_api.router._db.get_form", new=AsyncMock(return_value=None)):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
-                resp = await c.post("/v1/evaluation/campaigns", json={
+                resp = await c.post("/v1/evaluation/campaigns", headers=_AUTH, json={
                     "tenant_id": "t1", "name": "Bad Campaign",
                     "form_id": "evform_missing", "pool_id": "sac_ia",
                 })
@@ -248,7 +318,7 @@ class TestCampaigns:
     async def test_list_campaigns(self):
         with patch("plughub_evaluation_api.router._db.list_campaigns", new=AsyncMock(return_value=[_make_campaign()])):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
-                resp = await c.get("/v1/evaluation/campaigns?tenant_id=t1")
+                resp = await c.get("/v1/evaluation/campaigns?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 200
         assert resp.json()["count"] == 1
 
@@ -264,7 +334,7 @@ class TestCampaigns:
         paused = _make_campaign(status="paused")
         with patch("plughub_evaluation_api.router._db.update_campaign", new=AsyncMock(return_value=paused)):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
-                resp = await c.post("/v1/evaluation/campaigns/evcampaign_abc/pause?tenant_id=t1")
+                resp = await c.post("/v1/evaluation/campaigns/evcampaign_abc/pause?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 200
         assert resp.json()["status"] == "paused"
 
@@ -273,7 +343,7 @@ class TestCampaigns:
         active = _make_campaign(status="active")
         with patch("plughub_evaluation_api.router._db.update_campaign", new=AsyncMock(return_value=active)):
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
-                resp = await c.post("/v1/evaluation/campaigns/evcampaign_abc/resume?tenant_id=t1")
+                resp = await c.post("/v1/evaluation/campaigns/evcampaign_abc/resume?tenant_id=t1", headers=_AUTH)
         assert resp.status_code == 200
         assert resp.json()["status"] == "active"
 
@@ -285,6 +355,7 @@ class TestCampaigns:
             async with await _client(_app_with_mocks(MagicMock(), AsyncMock())) as c:
                 resp = await c.put(
                     "/v1/evaluation/campaigns/evcampaign_abc?tenant_id=t1",
+                    headers=_AUTH,
                     json={"sampling_rules": {"mode": "fixed", "every_n": 3}},
                 )
         assert resp.status_code == 200

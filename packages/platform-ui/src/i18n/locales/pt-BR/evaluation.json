@@ -1,5 +1,8 @@
 {
   "title": "Avaliações",
+  "guard": {
+    "noAccess": "Sem permissão para acessar este módulo."
+  },
   "tabs": {
     "forms":      "Formulários",
     "campaigns":  "Campanhas",

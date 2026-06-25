@@ -3,6 +3,7 @@ import { RouteObject, Navigate } from 'react-router-dom'
 import Shell from '@/shell/Shell'
 import LoginPage from '@/auth/LoginPage'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
+import { RequireEvalAccess } from '@/auth/RequireEvalAccess'
 import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
@@ -113,16 +114,17 @@ export const routes: RouteObject[] = [
       { path: 'reports',    element: <Navigate to="/analise/sessions" replace /> },
 
       // ── Evaluation ────────────────────────────────────────────────
-      { path: 'evaluation/forms',        element: <FormsPage /> },
-      { path: 'evaluation/campaigns',    element: <EvalCampaignsPage /> },
-      { path: 'evaluation/knowledge',    element: <KnowledgePage /> },
-      { path: 'evaluation/evaluations',  element: <AvaliacoesPage /> },
-      { path: 'evaluation/evaluations/:campaignId/:resultId', element: <EvaluationDetailPage /> },
+      // Grant-first ABAC route guards mirror Sidebar.tsx (strict: no admin bypass).
+      { path: 'evaluation/forms',        element: <RequireEvalAccess field="formularios"><FormsPage /></RequireEvalAccess> },
+      { path: 'evaluation/campaigns',    element: <RequireEvalAccess field="formularios"><EvalCampaignsPage /></RequireEvalAccess> },
+      { path: 'evaluation/knowledge',    element: <RequireEvalAccess field="formularios"><KnowledgePage /></RequireEvalAccess> },
+      { path: 'evaluation/evaluations',  element: <RequireEvalAccess anyOf={['report', 'revisar', 'contestar']}><AvaliacoesPage /></RequireEvalAccess> },
+      { path: 'evaluation/evaluations/:campaignId/:resultId', element: <RequireEvalAccess anyOf={['report', 'revisar', 'contestar']}><EvaluationDetailPage /></RequireEvalAccess> },
       { path: 'evaluation/avaliacoes',   element: <Navigate to="/evaluation/evaluations" replace /> },
       { path: 'evaluation/reports',      element: <EvalReportsPage /> },
-      { path: 'evaluation/calibration', element: <CalibrationDashboard /> },
-      { path: 'evaluation/curadoria',   element: <CuradoriaPage /> },
-      { path: 'evaluation/rubric',      element: <RubricPage /> },
+      { path: 'evaluation/calibration', element: <RequireEvalAccess anyOf={['curar', 'report']}><CalibrationDashboard /></RequireEvalAccess> },
+      { path: 'evaluation/curadoria',   element: <RequireEvalAccess field="curar"><CuradoriaPage /></RequireEvalAccess> },
+      { path: 'evaluation/rubric',      element: <RequireEvalAccess field="gerir_rubrica"><RubricPage /></RequireEvalAccess> },
 
       // ── Configuration ─────────────────────────────────────────────
       { path: 'config/resources',  element: <ConfigRecursosIndex /> },

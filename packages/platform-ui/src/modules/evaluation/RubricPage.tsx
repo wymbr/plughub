@@ -20,6 +20,7 @@ export default function RubricPage() {
   const { t } = useTranslation('evaluation')
   const { session } = useAuth()
   const tenantId = session?.tenantId ?? ''
+  const accessToken = session?.accessToken
 
   const [scope, setScope] = useState<'tenant' | 'campaign'>('tenant')
   const [campaignId, setCampaignId] = useState('')
@@ -31,10 +32,10 @@ export default function RubricPage() {
   const [msg, setMsg] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const { forms } = useForms(tenantId)
-  const { campaigns } = useCampaigns(tenantId)
+  const { forms } = useForms(tenantId, accessToken)
+  const { campaigns } = useCampaigns(tenantId, 0, accessToken)
   const activeCampaign = scope === 'campaign' ? campaignId : undefined
-  const { templates, loading, reload } = useRubricTemplates(tenantId, activeCampaign)
+  const { templates, loading, reload } = useRubricTemplates(tenantId, activeCampaign, accessToken)
 
   const current: RubricTemplate | undefined = useMemo(() => {
     if (scope === 'tenant') return templates.find(t => t.scope === 'tenant')
@@ -57,11 +58,11 @@ export default function RubricPage() {
     setBusy(true)
     try {
       if (current) {
-        await updateRubricTemplate(current.id, tenantId, { name, body })
+        await updateRubricTemplate(current.id, tenantId, { name, body }, accessToken)
       } else {
         await createRubricTemplate(tenantId, {
           scope, campaign_id: scope === 'campaign' ? campaignId : undefined, name, body,
-        })
+        }, accessToken)
       }
       await reload()
       flash(t('rubric.saved', { defaultValue: 'Rascunho salvo.' }))
@@ -72,8 +73,8 @@ export default function RubricPage() {
     if (!current) { flash(t('rubric.saveFirst', { defaultValue: 'Salve antes de publicar.' })); return }
     setBusy(true)
     try {
-      await updateRubricTemplate(current.id, tenantId, { name, body }) // garante o body atual
-      await publishRubricTemplate(current.id, tenantId)
+      await updateRubricTemplate(current.id, tenantId, { name, body }, accessToken) // garante o body atual
+      await publishRubricTemplate(current.id, tenantId, accessToken)
       await reload(); await reloadVersions()
       flash(t('rubric.published', { defaultValue: 'Publicado (versão congelada).' }))
     } catch (e) { flash(String(e)) } finally { setBusy(false) }
