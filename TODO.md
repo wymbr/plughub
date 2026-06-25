@@ -1103,9 +1103,37 @@ pool hooks genéricos (sem campo dedicado).
   **Follow-up opcional (remoção física da cola específica):** consumer reativo `workflow.events` na
   evaluation-api, coluna/seletor `review_workflow_skill_id`, skills `skill_revisao_*`/`agente_revisor_v1`,
   cenário 28. Deixado para um slice próprio (raio de teste no cenário 28).
-- **G-PROBE — endpoints contest/review sem auth ABAC** *(verificar/segurança)*: `file_contestation`/`submit_review`
-  confiam só em headers `X-Tenant-ID`/`X-User-Id`/`X-Author-Type`, sem validar JWT/ABAC nem `available_actions`
-  server-side (a checagem ABAC vive no `list_results`, não no endpoint de escrita). Revisar antes de produção.
+- **G-PROBE — auth dos endpoints de escrita Arc 13** *(segurança; DESENHADO 2026-06-25, impl. pendente)*.
+  **Recon corrigiu o diagnóstico** (o bullet antigo estava stale): os endpoints **avaliado-facing já estão
+  gated** — `file_contestation` e `submit_review` chamam `_decode_jwt` + `_check_abac_permission`
+  (`contestar*`/`revisar*` por round; UI manda `Bearer JWT`); `submit_ai_review` usa `_require_admin`. O gap
+  real é **curadoria/calibração/config header-only** (aceitam qualquer `X-Tenant-ID`/`X-User-ID`, sem
+  JWT/ABAC/admin): `resolve_curation`, `blind_rescore`, `blind_resolve`, `submit_pre_review`,
+  `publish_calibration_note`, `create/update/delete_sampling_rule`.
+  **Callers reais:** `blind_*`/`resolve_curation` → `CuradoriaPage` (humano, header-only hoje);
+  `submit_pre_review` → tool MCP `evaluation_pre_review_submit` (**agente/sistema**, header-only hoje);
+  `submit_ai_review` → gate T12 (**agente/sistema**, `_require_admin`); `seed/flush-synthetic` → tooling
+  dev/demo (botão admin). `sampling_rule`/`calibration_note` POST não são chamados pela UI.
+
+  **DESENHO FINAL FECHADO (2026-06-25) — princípio: quality = ABAC puro p/ usuário; admin token só p/
+  serviço/infra (domínio configuration).**
+  - **Surface de USUÁRIO do quality → ABAC, admin token REMOVIDO.** Novo campo **`curar`** no módulo
+    evaluation (`modules.yaml`: `none|read_only|read_write`, `scopable: pool`) gateia `resolve_curation`/
+    `blind_rescore`/`blind_resolve` (write=read_write; GET `get_blind_context`/`list_curations`=read_only) via
+    `_decode_jwt`+`_check_abac_permission('curar', pool)`. `sampling_rule` CRUD → reusa `formularios`; Rubric/
+    Prompt → `gerir_rubrica` (já existe); review/contest → `revisar`/`contestar` (já existe). Concedido pela
+    tela de Access (não é role; é feature por-usuário), escopo por pool.
+  - **Endpoints de AGENTE/SISTEMA → credencial de serviço (M2M), NÃO role do quality.** `pre-review`/`ai-review`
+    (+ `seed/flush`) mantêm token de serviço (admin token relabeled "service credential", domínio infra/
+    configuration). Não viola "quality sem admin" — é máquina-a-máquina. Bônus: `pre-review`, hoje aberto,
+    passa a exigir credencial (hardening).
+  - **UI**: `CuradoriaPage` (e Campaigns/Rubric onde virar ABAC) passam a mandar `Bearer JWT` (já têm
+    `useAuth.accessToken`); deixam de mandar admin token onde virou ABAC.
+  - **Calibration (leitura)** aberta/`report`; escrita (`publish_calibration_note`) é serviço (vem do
+    `blind_resolve`, server-side).
+  - **Verificação**: smoke 403 sem grant `curar` / 200 com grant; endpoints de serviço 401 sem token.
+  - **Seed**: grants concedidos pela tela (como no G-UI) — opcional semear um curador demo em `seed_auth.py`.
+  Impl. pendente: slice próprio de "auth do módulo quality" (catálogo + endpoints + UI Bearer + smoke).
 - **G-UI — UI de review/contestação humana existe mas não surfaça** *(crítico p/ uso; confirmado por screenshot 2026-06-17)*:
   `AvaliacoesPage` (`/evaluation/evaluations`, roteada + no nav Quality) lista resultados, mas a coluna **Actions vem
   "—" para todos** (inclusive o resultado real). Os painéis `HumanReviewPanel`/`DimensionContestPanel13`/`ReviewPanel`/
