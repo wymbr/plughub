@@ -1,6 +1,6 @@
 # Quality Ingest — leitor de histórico plugável (interno ↔ externo) para avaliação
 
-> Estado: **R13a-1 + R13a-2 + R13b + R13c implementados; R13d pendente**. Última atualização: 2026-06-25.
+> Estado: **R13a–R13d implementados (arco completo)**. Última atualização: 2026-06-25.
 > Complementa `docs/arcos/arc-evaluation-metrics-methodology.md` §IV.5–IV.7 (aterra e revisa o
 > contrato A2 → **interface de eventos**) e `docs/arcos/arc6-evaluation.md` (plataforma de avaliação).
 
@@ -121,6 +121,24 @@ Lê contatos do histórico da plataforma (ClickHouse/`session_stream_events`) e 
 **Preferência (decisão): reusa o `pool_id` original** do contato (consequências — mistura com tráfego vivo,
 campanha amostrando ambos — **a avaliar depois**; alternativa = pool de revisão dedicado).
 
+**Implementado ✅ R13d** (`packages/quality-export/`, FastAPI porta 3852, deps só `httpx`): leitor
+**ClickHouse-only** — a tabela `messages` já tem o transcript mascarado (`original_content` nunca sai), e
+`segments`/`sessions` têm os metadados. `POST /v1/export/sessions {tenant_id, session_ids, source?}` lê
+`sessions`+`segments`+`messages` (`FINAL`), reconstrói `ingestion_event_v1` (o **inverso** do mapper:
+`sessions→contact.opened/closed`, `segments→participant.joined/left` filtrando `primary`/`specialist`,
+`messages→message.sent` com `author_role` revertido `customer`/`agent`/`system`) e faz **POST na mesma porta**
+do quality-ingest. `external_contact_id = session_id` original → o mapper deriva um **novo** `session_id` de
+reavaliação (sem colisão com o original). Pool original reusado: `source="internal:reeval"` sem `source_map`
+→ pass-through. **Pool de revisão dedicado sai de graça do R13c**: basta cadastrar um `source_map` para
+`internal:reeval` mapeando os pools originais → o pool de revisão (sem mecanismo novo). É um **cliente do
+contrato** (não toca infra de eventos interna; só lê histórico e re-emite). Sessão sem `closed_at` → não
+exporta (incompleta). *(unit: 9 testes do builder puro + round-trip pelo mapper do quality-ingest; smoke
+`infra/test/smoke_quality_export.sh` — import → export → re-eval com pool/transcript originais + sampling)*
+
+**Concern (registrado §9):** a reavaliação cria linhas de analytics novas (session_id de reavaliação) sob o
+**pool original** — mistura com tráfego vivo se a campanha mira o mesmo pool. Mitigação disponível sem código:
+`source_map` p/ `internal:reeval` → pool dedicado.
+
 ## 8. Fatiamento
 
 - **R13a-1 ✅** — schemas `ingestion_event_v1` (família de eventos externos) em `@plughub/schemas` + validação.
@@ -134,7 +152,8 @@ campanha amostrando ambos — **a avaliar depois**; alternativa = pool de revis�
 - **R13c ✅** — mapa de identidade/pool/versão por `source` (Config API namespace `quality_ingest.source_map`).
   *(unit: casos de tradução pool/humano/IA/pass-through em `quality-ingest/tests/test_mapper.py`; smoke
   `smoke_quality_ingest_sourcemap.sh` — PUT do map, ids externos → internos em `analytics.segments` + sampling)*
-- **R13d** — exportador interno (histórico → eventos → mesma interface) — fecha a reavaliação interna.
+- **R13d ✅** — exportador interno (`packages/quality-export/`, ClickHouse-only → `ingestion_event_v1` pela
+  mesma porta) — fecha a reavaliação interna. *(unit: 9 testes + round-trip; smoke `smoke_quality_export.sh`)*
 
 ## 8.1 Implementação R13a (entregue)
 
@@ -179,8 +198,11 @@ ordenadas por fase no batch inteiro → todo `participant_joined` precede qualqu
   carimbado no `contact.closed`/`session_closed` pelo quality-ingest **degrada** p/ `""` se o `participant.joined`
   veio noutro request (o sampling por pool então não casa). Continua aberto: durabilizar o estado por-contato do
   quality-ingest (ex.: Redis/PG chaveado por `session_id` determinístico) — ou exigir contato completo por POST.
-- **Reuso do pool original na reavaliação interna** — preferência registrada; avaliar depois a mistura
-  tráfego-vivo × reavaliação histórica no mesmo pool (campanha amostrando os dois; possível dupla contagem).
+- **Reuso do pool original na reavaliação interna (R13d em efeito)** — o exportador reusa o `pool_id`
+  original; a reavaliação gera linhas de analytics novas (session_id de reavaliação) sob esse pool →
+  mistura com tráfego vivo se a campanha mira o mesmo pool (possível dupla contagem). **Mitigação sem
+  código**: `source_map` (R13c) p/ `internal:reeval` mapeando os pools originais → um pool de revisão
+  dedicado. Avaliar se vira o default.
 - **Tier-2 indisponível p/ externo** — assumido (sem `mcp.audit`/`pipeline_state`).
 - **Completude por contato** — depende do remetente enviar `contact.closed`; contatos parciais não avaliam.
 - **Pool deve existir** — `pool_id` (interno ou mapeado de external) precisa existir como pool p/ campanhas

@@ -248,6 +248,7 @@ plughub/
     auth-api/                    ← Auth, JWT, ABAC — port 3200
     evaluation-api/              ← Quality evaluation platform (Arc 6) — port 3400
     quality-ingest/              ← Pluggable contact-history reader (R13a) — port 3850
+    quality-export/              ← Internal history → re-evaluation (R13d) — port 3852
     mcp-server-knowledge/        ← Vector knowledge base for RAG agents
     platform-ui/                 ← All operator-facing UI (React + Vite)
 ```
@@ -272,6 +273,7 @@ plughub/
 | auth-api | Python | Python 3.11+ | FastAPI + asyncpg + bcrypt + python-jose — port 3200 |
 | evaluation-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3400 |
 | quality-ingest | Python | Python 3.11+ | FastAPI + aiokafka (pure producer) — port 3850 |
+| quality-export | Python | Python 3.11+ | FastAPI + httpx (ClickHouse-only reader) — port 3852 |
 | platform-ui | TypeScript | Node 20+ / Vite | React 18, Tailwind, i18n |
 
 ## Package Dependencies
@@ -816,7 +818,7 @@ Define **o que o avaliador mede e como** (distinto de revisão/contestação, Ar
 
 ---
 
-## Quality Ingest — leitor de histórico plugável (R13a) ⚠️ R13a-1/R13a-2/R13b/R13c ✅; R13d pendente
+## Quality Ingest — leitor de histórico plugável (R13a–R13d) ✅ arco completo
 
 Módulo anti-corrupção que faz históricos **externos** (CCaaS) e a **reavaliação interna** entrarem no
 MESMO pipeline de avaliação (sampling → ReplayContext → avaliador → analytics), sem o importador tocar a
@@ -835,7 +837,10 @@ gated `source=external_import`, via o `StreamPersister.insert_records`/`recomput
 Persister vivo, sem drift) → Hydrator/Replayer dão um ReplayContext.events igual ao interno. **Mapa por
 source ✅ (R13c)**: namespace `quality_ingest.source_map` (Config API); o `SourceMapClient` resolve e o
 mapper traduz ext→int (pool, humano→`user_id`, IA→`skill_id`+`deploy_version`) **antes** de emitir
-(pass-through se não mapeado). **Pendente:** R13d (exportador interno).
+(pass-through se não mapeado). **Exportador interno ✅ (R13d)**: `packages/quality-export/` (ClickHouse-only,
+porta 3852) lê `sessions`+`segments`+`messages` (`FINAL`) e re-emite `ingestion_event_v1` pela mesma porta
+do quality-ingest (inverso do mapper) — `external_contact_id`=session_id original → novo session_id de
+reavaliação. Reusa o pool original; pool dedicado sai do `source_map` (R13c) sem código novo.
 
 → See [`docs/arcos/quality-ingest.md`](docs/arcos/quality-ingest.md)
 
@@ -902,9 +907,8 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 - **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
 
-### Quality Ingest — fases pendentes (R13a-1/R13a-2/R13b/R13c ✅)
-- **R13d** *(deferred)*: exportador interno (histórico ClickHouse/`session_stream_events` → mesmos eventos `ingestion_event_v1` pela mesma porta) — fecha a reavaliação interna.
-- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest segue aberta (R13b não a muda — consumer Y é ordem-independente); (c) reuso do pool original na reavaliação interna a avaliar.
+### Quality Ingest — arco COMPLETO (R13a–R13d ✅); concerns abertos
+- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest (pool_id degrada se um contato vier partido entre POSTs); (c) reavaliação interna (R13d) reusa o pool original → mistura com tráfego vivo se a campanha mira o mesmo pool — mitigável via `source_map` (R13c) p/ `internal:reeval` → pool dedicado.
 
 ### Business in Any Media — processo channel-abstract + framework de loja *(proposta)*
 - Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.

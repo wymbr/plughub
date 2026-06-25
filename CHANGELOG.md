@@ -2,6 +2,31 @@
 
 ---
 
+## Quality Ingest · R13d — exportador interno (reavaliação) — ARCO COMPLETO (2026-06-25)
+
+Fecha a reavaliação interna: lê o histórico da própria plataforma e o re-emite pela MESMA porta
+do importador externo, sem código de avaliação divergente. Spec: `docs/arcos/quality-ingest.md` §7.
+
+- **`packages/quality-export/`** (FastAPI:3852, deps só `httpx`, **ClickHouse-only**): a tabela `messages`
+  já tem o transcript mascarado (`original_content` nunca sai); `segments`/`sessions` têm os metadados.
+  `POST /v1/export/sessions {tenant_id, session_ids, source?}` lê `sessions`+`segments`+`messages` (`FINAL`),
+  reconstrói `ingestion_event_v1` (**inverso do mapper**: sessions→contact.opened/closed, segments→
+  participant.joined/left filtrando primary/specialist, messages→message.sent com author_role revertido) e
+  faz POST no quality-ingest. `external_contact_id`=session_id original → novo session_id de reavaliação
+  (sem colisão). É **cliente do contrato** (lê histórico, não toca infra de eventos interna).
+- **Pool**: reusa o original (`source="internal:reeval"`, sem source_map → pass-through). Pool de revisão
+  dedicado sai **de graça do R13c** (cadastrar source_map p/ `internal:reeval`). Compose: serviço
+  `quality-export` (CH + quality-ingest deps).
+- **Testes**: 9 unit do builder puro + round-trip pelo mapper do quality-ingest; smoke
+  `smoke_quality_export.sh` (import → export → re-eval com pool/transcript originais + sampling).
+
+**Arco Quality Ingest COMPLETO (R13a–R13d):** contrato `ingestion_event_v1` → módulo produtor →
+consumer Y (stream durável) → mapa por source → exportador interno. Externos (CCaaS) e o próprio histórico
+entram no MESMO pipeline de avaliação. Concern aberto (§9): mistura tráfego-vivo × reavaliação no pool
+original (mitigável via source_map → pool dedicado).
+
+---
+
 ## Quality Ingest · R13c — mapa identidade/pool/versão por `source` (2026-06-25)
 
 Traduz ids EXTERNOS (pool/agente) → INTERNOS antes de emitir os eventos canônicos, para que

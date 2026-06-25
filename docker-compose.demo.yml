@@ -1340,6 +1340,37 @@ services:
     networks:
       - plughub-demo
 
+  # ─── quality-export (R13d — internal history → re-evaluation) ───────────────
+  #   Reads ClickHouse session history and re-emits ingestion_event_v1 through the
+  #   quality-ingest contract. POST http://localhost:3852/v1/export/sessions
+  #   {tenant_id, session_ids, source?}. Reuses original pool (§7).
+  quality-export:
+    build:
+      context: packages/quality-export
+      dockerfile: Dockerfile
+    ports:
+      - "3852:3852"
+    environment:
+      PLUGHUB_QUALITY_EXPORT_CLICKHOUSE_URL:      http://clickhouse:8123
+      PLUGHUB_QUALITY_EXPORT_CLICKHOUSE_DB:       plughub_demo
+      PLUGHUB_QUALITY_EXPORT_CLICKHOUSE_USER:     plughub
+      PLUGHUB_QUALITY_EXPORT_CLICKHOUSE_PASSWORD: plughub
+      PLUGHUB_QUALITY_EXPORT_QUALITY_INGEST_URL:  http://quality-ingest:3850
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      quality-ingest:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3852/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
   # ─── mcp-server-knowledge (Arc 6 — RAG knowledge base) ──────────────────
   mcp-server-knowledge:
     build:

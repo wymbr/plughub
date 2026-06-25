@@ -1,0 +1,32 @@
+[project]
+name            = "plughub-quality-export"
+version         = "1.0.0"
+description     = "PlugHub Platform — Quality Export (R13d): internal history reader → re-emits ingestion_event_v1 for re-evaluation"
+requires-python = ">=3.10"
+dependencies    = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+plughub-quality-export = "plughub_quality_export.main:run"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths    = ["src/plughub_quality_export/tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/plughub_quality_export"]
