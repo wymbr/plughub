@@ -35,6 +35,28 @@ def _gen_id() -> str:
     return str(uuid.uuid4())
 
 
+# ─── Quality substrate isolation (ADR adr-quality-substrate-isolation) ─────────
+
+def origin_from_source(source: Any) -> str:
+    """Deriva a procedência por-sessão (`origin`) a partir do `source` que os
+    eventos canônicos já carregam. Eixo de isolamento do substrato de avaliação:
+
+      external_import (quality-ingest)  → import
+      internal:reeval (quality-export)  → reeval
+      qualquer outro / vazio            → live   (channel_gateway, bridge,
+                                                   routing_engine = tráfego vivo)
+
+    Default `live` torna a derivação forward-compatible: eventos sem `source`
+    e todo o tráfego de produção caem em `live` sem backfill.
+    """
+    s = source.strip() if isinstance(source, str) else ""
+    if s == "external_import":
+        return "import"
+    if s == "internal:reeval":
+        return "reeval"
+    return "live"
+
+
 # ─── conversations.inbound ────────────────────────────────────────────────────
 
 def parse_inbound(payload: dict[str, Any]) -> dict | None:
@@ -88,6 +110,8 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         # Arc 19: webhook workflow sessions carry origin_session_id linking back to the
         # intake agent session that triggered them via workflow_trigger MCP tool.
         "origin_session_id": payload.get("origin_session_id") or None,
+        # Substrate isolation: procedência derivada do source (live|import|reeval).
+        "origin":       origin_from_source(payload.get("source")),
     }
 
 
@@ -129,6 +153,7 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
             "opened_at":     routed_at,
             "timestamp":     routed_at,
             "sla_target_ms": sla_target_ms,
+            "origin":        origin_from_source(payload.get("source")),
         },
         # agent_events — routing entry
         {
@@ -177,6 +202,7 @@ def parse_queued(payload: dict[str, Any]) -> list[dict] | None:
             "pool_id":    pool_id,
             "opened_at":  queued_at,
             "timestamp":  queued_at,
+            "origin":     origin_from_source(payload.get("source")),
         },
         {
             "table":           "queue_events",
@@ -224,6 +250,7 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "customer_id": payload.get("customer_id") or payload.get("contact_id"),
                 "opened_at":   payload.get("started_at") or payload.get("timestamp") or _now(),
                 "timestamp":   payload.get("started_at") or payload.get("timestamp") or _now(),
+                "origin":      origin_from_source(payload.get("source")),
             }
         ]
 
@@ -274,6 +301,7 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 # sobrevive no ReplacingMergeTree — sem isso o valor gravado
                 # pelo parse_routed é substituído por NULL.
                 "sla_target_ms":  payload.get("sla_target_ms"),
+                "origin":         origin_from_source(payload.get("source")),
             }
         ]
 
@@ -289,6 +317,7 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "opened_at":  payload.get("timestamp") or _now(),
                 "timestamp":  payload.get("timestamp") or _now(),
                 "status":     "suspended",
+                "origin":     origin_from_source(payload.get("source")),
             }
         ]
 
@@ -306,6 +335,7 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "visibility":   payload.get("visibility") or "all",
                 "content":      payload.get("content"),
                 "timestamp":    payload.get("timestamp") or _now(),
+                "origin":       origin_from_source(payload.get("source")),
             }
         ]
 
@@ -728,6 +758,8 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "issue_status":      payload.get("issue_status") or None,
         "escalation_reason": payload.get("escalation_reason") or None,
         "timestamp":         payload.get("timestamp") or _now(),
+        # Substrate isolation: procedência derivada do source (live|import|reeval).
+        "origin":            origin_from_source(payload.get("source")),
     }
 
     return [participation_row, segment_row]

@@ -16,9 +16,57 @@ from ..sampling import (
     should_sample_quota,
     blind_stage_config,
     blind_decide,
+    origin_from_source,
+    _allowed_origins,
     _DEFAULT_BLIND_SLA_HOURS,
     _DEFAULT_BLIND_SEVERITY_MIN,
 )
+
+
+# ─── Substrate isolation (ADR) — origin filter no sampling ────────────────────
+
+class TestOriginFromSource:
+    def test_mapping(self):
+        assert origin_from_source("external_import") == "import"
+        assert origin_from_source("internal:reeval") == "reeval"
+        assert origin_from_source("channel_gateway") == "live"
+        assert origin_from_source("") == "live"
+        assert origin_from_source(None) == "live"
+
+
+class TestAllowedOrigins:
+    def test_default_live(self):
+        assert _allowed_origins({}) == {"live"}
+
+    def test_explicit_str(self):
+        assert _allowed_origins({"origin": "reeval"}) == {"reeval"}
+
+    def test_list(self):
+        assert _allowed_origins({"origin": ["live", "import"]}) == {"live", "import"}
+
+    def test_invalid_falls_back_to_live(self):
+        assert _allowed_origins({"origin": "bogus"}) == {"live"}
+        assert _allowed_origins({"origin": []}) == {"live"}
+
+
+class TestPassesFiltersOrigin:
+    def test_live_session_default_campaign_passes(self):
+        # campanha sem origin (produção) + sessão live → passa
+        assert _passes_filters({"origin": "live"}, {}) is True
+
+    def test_session_without_origin_treated_as_live(self):
+        assert _passes_filters({}, {}) is True
+
+    def test_reeval_session_default_campaign_blocked(self):
+        # campanha de produção (default live) NÃO pega sessão de reavaliação
+        assert _passes_filters({"origin": "reeval"}, {}) is False
+
+    def test_reeval_session_reeval_campaign_passes(self):
+        assert _passes_filters({"origin": "reeval"}, {"origin": "reeval"}) is True
+
+    def test_live_session_reeval_campaign_blocked(self):
+        # campanha de reavaliação NÃO pega tráfego vivo → sem cross-fire
+        assert _passes_filters({"origin": "live"}, {"origin": "reeval"}) is False
 
 
 # ─── R8c — blind_decide (two-strata) ──────────────────────────────────────────

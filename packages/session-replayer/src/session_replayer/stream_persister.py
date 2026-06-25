@@ -59,6 +59,12 @@ CREATE TABLE IF NOT EXISTS session_stream_events (
 );
 CREATE INDEX IF NOT EXISTS idx_sse_session ON session_stream_events (tenant_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_sse_ts      ON session_stream_events (session_id, timestamp);
+
+-- Quality substrate isolation (ADR adr-quality-substrate-isolation) — passo 1.
+-- origin = procedência do contato: live | import | reeval. Aditivo, default 'live'
+-- (cobre legado/vivo sem backfill). Persistido pelo consumer Y (passo 3); o filtro
+-- default 'live' no report layer (passo 4) é a garantia de correção.
+ALTER TABLE session_stream_events ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'live';
 """
 
 
@@ -144,8 +150,8 @@ class StreamPersister:
                     INSERT INTO session_stream_events
                         (tenant_id, session_id, event_id, event_type, timestamp,
                          author, visibility, payload, original_content,
-                         masked_categories, delta_ms)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+                         masked_categories, delta_ms, origin)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
                     ON CONFLICT (tenant_id, session_id, event_id) DO NOTHING
                     """,
                     tenant_id,
@@ -159,6 +165,10 @@ class StreamPersister:
                     json.dumps(rec["original_content"]) if rec.get("original_content") else None,
                     rec.get("masked_categories") or [],
                     rec.get("delta_ms", 0.0),
+                    # Substrate isolation (ADR): procedência da linha. O Persister vivo
+                    # não carimba (→ default 'live'); o consumer Y de importação carimba
+                    # 'import' (e 'reeval' quando a porta de reavaliação for admitida).
+                    rec.get("origin") or "live",
                 )
                 if result == "INSERT 0 1":
                     inserted += 1

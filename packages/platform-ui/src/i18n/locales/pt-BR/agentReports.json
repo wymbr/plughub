@@ -1,5 +1,12 @@
 {
   "title": "Relatórios de Agentes",
+  "origin": {
+    "label": "Origem",
+    "live": "Produção",
+    "import": "Importação",
+    "reeval": "Reavaliação",
+    "hint": "Substrato de qualidade (ADR): Produção é o tráfego vivo; Importação e Reavaliação ficam isoladas."
+  },
   "pools": {
     "title": "Relatórios de Pools",
     "subtabs": { "volume": "Volume", "queue": "Fila", "capacity": "Capacidade", "sla": "SLA" },

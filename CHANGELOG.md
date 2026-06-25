@@ -2,6 +2,49 @@
 
 ---
 
+## Isolamento do substrato de avaliação por `origin` — ARCO COMPLETO (2026-06-25)
+
+Resolve o concern §9(c) do Quality Ingest (reavaliação/importação misturavam com produção no substrato
+compartilhado). Direção e racional em [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
+(Status: **Aceito — implementado**). Discriminador de procedência **por-sessão** (`origin`: `live|import|reeval`,
+default `live`), sem duplicar o substrato vivo nem segundo banco. Validado E2E (`infra/test/smoke_origin_reeval.sh`):
+reavaliação re-emitida surge isolada como `reeval`; produção (`live`) intacta.
+
+- **Passo 1 — coluna `origin` (DDL aditivo)**: `origin String DEFAULT 'live'` nas tabelas CH
+  `analytics.sessions/segments/messages` (migrations idempotentes em `clickhouse.py`) e PG `session_stream_events`
+  (`stream_persister.py`). Sem backfill (default cobre legado/vivo). Distinta de `origin_session_id` (Arc 19).
+- **Passo 2 — analytics-api consumer**: `models.origin_from_source(source)` (`external_import`→import,
+  `internal:reeval`→reeval, demais→live) carimba `origin` nas linhas de sessions/segments/messages; row-builders
+  + `_*_COLS` em `clickhouse.py`.
+- **Passo 3 — session-replayer consumer Y**: `insert_records` grava `origin` (default `live` no Persister vivo);
+  `ImportStreamConsumer` deriva o `origin` do source e reconstrói o stream de **ambos** import e reeval (gate
+  `_REBUILD_SOURCES`).
+- **Passo 4 + 4b — report layer**: helper único `_apply_origin_scope(conditions, origin='live')` em
+  `reports_query.py`; filtro **default `live`** (garantia de correção / defense-in-depth) nas funções de
+  substrato (sessions, segments, agent performance/daily, session complexity, pools volume/queue) **e na bancada**
+  (compare/cross + atribuição `_session_agent_attribution_sql` + todas as lentes que leem segments). Override
+  programático via kwarg `origin`.
+- **Passo 5 — evaluation-api sampling**: `_allowed_origins` (filtro **opcional**, default `{'live'}`) no
+  `_passes_filters` (cobre `should_sample` + `should_sample_quota`); `_sample_on_close` carimba o `origin` do
+  evento no `meta`. Campanha de produção mira `live`; reavaliação seta `origin:"reeval"` em `sampling_rules`
+  (JSONB, sem schema novo) → fim do cross-fire.
+- **Passo 6 — endpoints (+ UI reservada)**: `origin` como query-param validado (`^(live|import|reeval)$`,
+  default `live`) em 9 endpoints `/reports/*`. **Decisão de UX (2026-06-25):** o seletor de origem **NÃO** é
+  exibido nas telas de Analytics operacionais (Sessions/Pools/Agents) — origem é contexto de qualidade, não
+  dropdown operacional, e a re-emissão é detalhe de implementação. Toda a UI operacional mostra **produção**
+  (default do backend). O componente `OriginSelector` + i18n `origin.*` (en/pt-BR) e o campo opcional
+  `ContactFilters.origin` ficam **reservados** para uma futura superfície de qualidade contextual (onde a
+  origem é o contexto em que o usuário já está, não uma escolha ad hoc).
+- **Fix de rótulo (mapper quality-ingest + gate consumer Y)**: o mapper achatava todo source no marker global
+  (reeval virava import). Corrigido: preserva `internal:reeval`, normaliza sources externos (ex. `ccaas:genesys`)
+  ao marker de importação; consumer Y reconstrói stream de ambos.
+- **Testes**: `_apply_origin_scope`/derivação/stamping no report layer (test_reports + test_consumer),
+  sampling origin (test_sampling), consumer Y reeval (test_import_stream_consumer), mapper (test_mapper).
+- **Não-objetivos (fase 2, backlog)**: partição CH `PARTITION BY (toYYYYMM(date), origin)` (exige migração
+  versionada, não in-place) + campo `pool.origin_class` (ortogonal a `agent_kind`).
+
+---
+
 ## Quality Ingest · R13d — exportador interno (reavaliação) — ARCO COMPLETO (2026-06-25)
 
 Fecha a reavaliação interna: lê o histórico da própria plataforma e o re-emite pela MESMA porta

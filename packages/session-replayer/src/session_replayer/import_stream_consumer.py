@@ -38,6 +38,27 @@ from .stream_persister import StreamPersister
 logger = logging.getLogger(__name__)
 
 IMPORT_SOURCE_MARKER = "external_import"
+REEVAL_SOURCE_MARKER = "internal:reeval"
+# Fontes cujo stream NÃO existe no Redis vivo e precisa ser reconstruído no PG a
+# partir dos eventos canônicos: importação externa (CCaaS) e reavaliação interna
+# (quality-export). Ambas alimentam o ReplayContext do avaliador. A origem (import
+# vs reeval) é derivada do source por _origin_from_source e carimbada na linha.
+_REBUILD_SOURCES = frozenset({IMPORT_SOURCE_MARKER, REEVAL_SOURCE_MARKER})
+
+
+def _origin_from_source(source: Any) -> str:
+    """Quality substrate isolation (ADR adr-quality-substrate-isolation) — deriva a
+    procedência por-sessão do `source` do evento canônico:
+      external_import → import | internal:reeval → reeval | demais/ausente → live.
+    Espelha a derivação da analytics-api (models.origin_from_source) no caminho do
+    stream durável. Hoje o gate de consumo admite só `external_import` (→ import);
+    a derivação fica pronta para quando a porta de reavaliação for admitida."""
+    s = source.strip() if isinstance(source, str) else ""
+    if s == "external_import":
+        return "import"
+    if s == "internal:reeval":
+        return "reeval"
+    return "live"
 
 # Topics carrying the canonical events the mapper understands.
 TOPIC_EVENTS = "conversations.events"
@@ -63,7 +84,7 @@ def canonical_event_to_record(topic: str, payload: dict[str, Any]) -> dict[str, 
     mapped event type. The record shape matches what StreamPersister.insert_records and
     the Hydrator/Replayer read path expect.
     """
-    if payload.get("source") != IMPORT_SOURCE_MARKER:
+    if payload.get("source") not in _REBUILD_SOURCES:
         return None
 
     session_id = payload.get("session_id")
@@ -189,8 +210,8 @@ class ImportStreamConsumer:
         )
         await self._consumer.start()
         logger.info(
-            "ImportStreamConsumer (Y) started — topics=[%s, %s] gated source=%s",
-            TOPIC_EVENTS, TOPIC_PARTICIPANTS, IMPORT_SOURCE_MARKER,
+            "ImportStreamConsumer (Y) started — topics=[%s, %s] gated sources=%s",
+            TOPIC_EVENTS, TOPIC_PARTICIPANTS, sorted(_REBUILD_SOURCES),
         )
         try:
             async for msg in self._consumer:
@@ -213,6 +234,9 @@ class ImportStreamConsumer:
         tenant_id  = payload.get("tenant_id")
         if not session_id or not tenant_id:
             return
+        # Substrate isolation (ADR): carimba a procedência derivada do source. O gate
+        # acima admite só external_import → 'import'; mantém-se a derivação genérica.
+        rec["origin"] = _origin_from_source(payload.get("source"))
         await self._persister.insert_records(session_id, tenant_id, [rec])
         # Finalize delta_ms when the closing event arrives (best-effort; Replayer also
         # recomputes on read, so late/out-of-order messages stay correct in the context).

@@ -1,6 +1,7 @@
 # ADR: Isolamento do substrato de avaliação por `origin` (híbrido)
 
-**Status:** Proposto — direção fechada, implementação pendente
+**Status:** Aceito — implementado (2026-06-25). Passos 1–6 + fix de rótulo concluídos; ver `CHANGELOG.md`.
+Fase 2 (partição CH por origem + `pool.origin_class`) permanece backlog.
 **Data:** 2026-06-25
 **Componentes:** `packages/analytics-api`, `packages/evaluation-api`, `packages/session-replayer`, `packages/quality-ingest`, `packages/quality-export`, `packages/schemas`, `packages/platform-ui`
 **Relacionado:** `docs/arcos/quality-ingest.md` (R13a–R13d, §9 concerns), Arc 6 Fase 2 (epochs ancorados em pool)
@@ -173,4 +174,22 @@ opt-in caso o módulo precise mesmo ser vendido/implantado isolado.
 6. **platform-ui**: seletor de origem (default Produção), pool dentro da origem.
 7. **(opcional, fase 2)** partição CH por origem em tabelas novas/migração; `pool.origin_class`.
 
-Nenhum item acima é implementado por este ADR — ele apenas fecha a direção e o racional.
+**Implementado (2026-06-25):** passos 1–6 + fix de rótulo do mapper (quality-ingest preserva
+`internal:reeval` e normaliza sources externos ao marker; consumer Y reconstrói stream de ambos).
+Validado E2E por `infra/test/smoke_origin_reeval.sh`. Detalhe por passo em `CHANGELOG.md`.
+
+**Fase 2 (item 7) — ADIADA por decisão (2026-06-25), não enterrada.** A fase 2 (partição CH
+`PARTITION BY (…, origin)` + `pool.origin_class`) é **governança/lifecycle, não correção**: a separação
+dos dados já é garantida pelo filtro de leitura default `live` (item 2) + sampling — a partição não altera
+isso. Como não há importação externa real e a reavaliação tem volume mínimo, o custo/benefício não fecha.
+**Gatilho que a reativa:** importação externa real com obrigação de **retenção/erasure própria** (LGPD —
+dado de terceiro com prazo distinto, ou direito ao esquecimento escopo `import`/`reeval`), onde só a
+separação **física** permite `DROP PARTITION` barato (mutation `ALTER … DELETE` é pesada e não-particionada).
+Detalhe e gatilho registrados em `TODO.md`.
+
+**Revisão de UX do item 4 (2026-06-25):** o seletor de origem **não** é exibido nas telas de Analytics
+operacionais (Sessions/Pools/Agents). Motivo: a re-emissão é detalhe de implementação e a distinção
+import/reeval é contexto de qualidade (produzido por uma ação deliberada — importar/reavaliar — e olhado
+num fluxo de revisão), não uma escolha ad hoc num dashboard operacional. A correção não depende da UI (o
+default `live` no backend é a garantia). O `OriginSelector`/i18n e o query-param ficam reservados para uma
+superfície de qualidade contextual futura, onde a origem é o contexto em que o usuário já está.

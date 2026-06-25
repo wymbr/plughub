@@ -24,6 +24,7 @@ sys.path.insert(0, str(_SRC))
 from session_replayer.import_stream_consumer import (  # noqa: E402
     ImportStreamConsumer,
     canonical_event_to_record,
+    _origin_from_source,
 )
 
 TENANT = "tenant_demo"
@@ -164,6 +165,45 @@ async def test_handle_skips_non_import():
     assert fake.inserted == []
 
 
+# ── substrate isolation (ADR): origin stamping ────────────────────────────────────
+
+def test_origin_from_source_mapping():
+    assert _origin_from_source("external_import") == "import"
+    assert _origin_from_source("internal:reeval") == "reeval"
+    assert _origin_from_source("channel_gateway") == "live"
+    assert _origin_from_source("") == "live"
+    assert _origin_from_source(None) == "live"
+
+
+async def test_handle_stamps_origin_import():
+    fake = _FakePersister()
+    c = ImportStreamConsumer("brokers", fake)  # type: ignore[arg-type]
+    await c._handle("conversations.events",
+        _evt(event_type="message_sent", timestamp="2026-06-24T12:00:10Z",
+             author_role="customer", content="oi", message_id="m1"))
+    assert len(fake.inserted) == 1
+    assert fake.inserted[0]["origin"] == "import"   # gated external_import → import
+
+
+def test_gate_accepts_reeval():
+    # reavaliação interna (quality-export) também reconstrói o stream (ReplayContext).
+    rec = canonical_event_to_record("conversations.events",
+        _evt(event_type="contact_open", channel="webchat", source="internal:reeval"))
+    assert rec is not None
+    assert rec["event_type"] == "session_opened"
+
+
+async def test_handle_stamps_origin_reeval():
+    fake = _FakePersister()
+    c = ImportStreamConsumer("brokers", fake)  # type: ignore[arg-type]
+    await c._handle("conversations.events",
+        _evt(event_type="message_sent", source="internal:reeval",
+             timestamp="2026-06-24T12:00:10Z", author_role="customer",
+             content="oi", message_id="m1"))
+    assert len(fake.inserted) == 1
+    assert fake.inserted[0]["origin"] == "reeval"   # internal:reeval → reeval
+
+
 # ── Runner ───────────────────────────────────────────────────────────────────────
 
 def _main() -> int:
@@ -172,8 +212,12 @@ def _main() -> int:
         test_contact_open_maps_session_opened, test_message_customer_role_and_content,
         test_message_agent_role_mapped_to_primary, test_contact_closed_maps_session_closed,
         test_participant_joined_and_left, test_event_ids_are_stable,
+        test_origin_from_source_mapping, test_gate_accepts_reeval,
     ]
-    async_tests = [test_handle_inserts_and_recomputes_on_close, test_handle_skips_non_import]
+    async_tests = [
+        test_handle_inserts_and_recomputes_on_close, test_handle_skips_non_import,
+        test_handle_stamps_origin_import, test_handle_stamps_origin_reeval,
+    ]
     failed = 0
     for t in sync_tests:
         try:

@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import db as _db
-from .sampling import should_sample, should_sample_quota, compute_priority
+from .sampling import should_sample, should_sample_quota, compute_priority, origin_from_source
 from .router import router, _ingest_from_completed_event
 from .contestation_router import contestation_router
 
@@ -348,6 +348,11 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
     if not campaigns:
         return
 
+    # Substrate isolation (ADR): procedência da sessão derivada do source do evento
+    # (external_import→import, internal:reeval→reeval, demais→live). Carimbada no meta
+    # → o filtro opcional de origin da campanha (default live) elimina o cross-fire.
+    origin = origin_from_source(payload.get("source"))
+
     segments = await _read_session_segments(redis_client, tenant_id, session_id)
     if segments:
         for seg in segments:
@@ -357,6 +362,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
                 "outcome":       payload.get("outcome"),
                 "agent_type_id": seg.get("agent_type_id"),
                 "duration_s":    _duration_s(payload.get("started_at"), payload.get("closed_at")),
+                "origin":        origin,
             }
             await _sample_one_target(
                 db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,
@@ -375,6 +381,7 @@ async def _sample_on_close(db_pool: _db.asyncpg.Pool, redis_client, payload: dic
         "outcome":       payload.get("outcome"),
         "agent_type_id": payload.get("agent_type_id"),
         "duration_s":    _duration_s(payload.get("started_at"), payload.get("closed_at")),
+        "origin":        origin,
     }
     await _sample_one_target(
         db_pool, campaigns, tenant_id=tenant_id, session_id=session_id,

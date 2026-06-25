@@ -16,6 +16,9 @@ export interface ContactFilters {
   insightTags:     string
   /** Arc 19: filter by session status (active | suspended | closed) */
   status?:         string
+  /** Substrate isolation (ADR): origem do substrato (live=produção default | import | reeval).
+   *  Usado só pelas telas de Analytics; ausente no Console (= produção). */
+  origin?:         'live' | 'import' | 'reeval'
 }
 
 export interface ContactRow {

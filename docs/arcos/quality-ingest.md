@@ -135,9 +135,11 @@ contrato** (não toca infra de eventos interna; só lê histórico e re-emite). 
 exporta (incompleta). *(unit: 9 testes do builder puro + round-trip pelo mapper do quality-ingest; smoke
 `infra/test/smoke_quality_export.sh` — import → export → re-eval com pool/transcript originais + sampling)*
 
-**Concern (registrado §9):** a reavaliação cria linhas de analytics novas (session_id de reavaliação) sob o
-**pool original** — mistura com tráfego vivo se a campanha mira o mesmo pool. Mitigação disponível sem código:
-`source_map` p/ `internal:reeval` → pool dedicado.
+**Concern (registrado §9) — ✅ RESOLVIDO (2026-06-25):** a reavaliação criava linhas de analytics novas
+(session_id de reavaliação) sob o **pool original**, misturando com tráfego vivo. Resolvido pelo isolamento
+por `origin` (ADR `adr-quality-substrate-isolation`): substrato carimba `origin=reeval`, report layer e
+sampling filtram `live` por default. Reuso de pool tornou-se inócuo; `source_map`→pool dedicado segue como
+opção, não requisito.
 
 ## 8. Fatiamento
 
@@ -198,11 +200,13 @@ ordenadas por fase no batch inteiro → todo `participant_joined` precede qualqu
   carimbado no `contact.closed`/`session_closed` pelo quality-ingest **degrada** p/ `""` se o `participant.joined`
   veio noutro request (o sampling por pool então não casa). Continua aberto: durabilizar o estado por-contato do
   quality-ingest (ex.: Redis/PG chaveado por `session_id` determinístico) — ou exigir contato completo por POST.
-- **Reuso do pool original na reavaliação interna (R13d em efeito)** — o exportador reusa o `pool_id`
-  original; a reavaliação gera linhas de analytics novas (session_id de reavaliação) sob esse pool →
-  mistura com tráfego vivo se a campanha mira o mesmo pool (possível dupla contagem). **Mitigação sem
-  código**: `source_map` (R13c) p/ `internal:reeval` mapeando os pools originais → um pool de revisão
-  dedicado. Avaliar se vira o default.
+- **Reuso do pool original na reavaliação interna (R13d em efeito)** — ✅ **RESOLVIDO (2026-06-25)** pelo
+  arco de isolamento por `origin` (ADR `adr-quality-substrate-isolation`, ver CHANGELOG): a reavaliação carimba
+  `origin=reeval` no substrato (derivado do `source=internal:reeval`); o report layer filtra `origin='live'`
+  por default (produção não conta a reavaliação, mesmo no pool reusado) e o sampling tem filtro opcional de
+  `origin` por campanha (produção mira `live`; reavaliação seta `reeval`) → sem dupla contagem nem cross-fire.
+  O reuso de `pool_id` virou **inócuo** (o eixo de isolamento é a origem, não o pool). `source_map`→pool
+  dedicado (R13c) continua disponível como opção, não mais necessário.
 - **Tier-2 indisponível p/ externo** — assumido (sem `mcp.audit`/`pipeline_state`).
 - **Completude por contato** — depende do remetente enviar `contact.closed`; contatos parciais não avaliam.
 - **Pool deve existir** — `pool_id` (interno ou mapeado de external) precisa existir como pool p/ campanhas

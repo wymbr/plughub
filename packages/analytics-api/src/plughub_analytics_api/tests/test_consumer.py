@@ -26,6 +26,7 @@ from ..models import (
     parse_evaluation_event,
     parse_session_signal_event,
     _normalize_signal_value,
+    origin_from_source,
 )
 from ..consumer import _write_row, _enrich_signal_session_at, _session_opened_cache
 
@@ -1241,3 +1242,68 @@ class TestSignalSessionAtEnrichment:
         await _enrich_signal_session_at(self._rows(), store)
         # segunda chamada serve do cache → lookup só uma vez.
         store.lookup_session_opened_at.assert_awaited_once()
+
+
+# ── Quality substrate isolation (ADR) — origin derivation + stamping ───────────
+
+class TestOriginFromSource:
+    def test_external_import_maps_to_import(self):
+        assert origin_from_source("external_import") == "import"
+
+    def test_internal_reeval_maps_to_reeval(self):
+        assert origin_from_source("internal:reeval") == "reeval"
+
+    @pytest.mark.parametrize("src", [
+        "channel_gateway", "bridge:conference", "routing_engine",
+        "webhook_trigger", "", None, 123, "anything_else",
+    ])
+    def test_live_default(self, src):
+        # Qualquer source de produção (ou ausente/inválido) → live (forward-compatible).
+        assert origin_from_source(src) == "live"
+
+
+class TestParsersStampOrigin:
+    def test_inbound_stamps_origin(self):
+        # tráfego vivo (sem source) → live
+        row = parse_inbound({"session_id": SESSION, "tenant_id": TENANT, "channel": "webchat"})
+        assert row["origin"] == "live"
+
+    def test_inbound_import_source(self):
+        row = parse_inbound({
+            "session_id": SESSION, "tenant_id": TENANT,
+            "channel": "webchat", "source": "external_import",
+        })
+        assert row["origin"] == "import"
+
+    def test_contact_open_reeval_source(self):
+        rows = parse_conversations_event({
+            "event_type": "contact_open", "session_id": SESSION,
+            "tenant_id": TENANT, "source": "internal:reeval",
+        })
+        assert rows[0]["table"] == "sessions"
+        assert rows[0]["origin"] == "reeval"
+
+    def test_message_sent_stamps_origin(self):
+        rows = parse_conversations_event({
+            "event_type": "message_sent", "session_id": SESSION,
+            "tenant_id": TENANT, "content": "oi", "source": "external_import",
+        })
+        assert rows[0]["table"] == "messages"
+        assert rows[0]["origin"] == "import"
+
+    def test_segment_stamps_origin(self):
+        rows = parse_participant_event({
+            "type": "participant_joined", "session_id": SESSION,
+            "tenant_id": TENANT, "participant_id": "p1",
+            "source": "external_import",
+        })
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg["origin"] == "import"
+
+    def test_segment_live_default(self):
+        rows = parse_participant_event({
+            "type": "participant_joined", "session_id": SESSION,
+            "tenant_id": TENANT, "participant_id": "p1",
+        })
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg["origin"] == "live"

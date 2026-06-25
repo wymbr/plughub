@@ -252,6 +252,25 @@ _DDL_SESSIONS_MIGRATE_ORIGIN = (
     " ADD COLUMN IF NOT EXISTS origin_session_id Nullable(String) DEFAULT NULL"
 )
 
+# Quality substrate isolation (ADR adr-quality-substrate-isolation) — passo 1.
+# `origin` = procedência do contato no substrato de avaliação: live | import | reeval.
+# Aditivo, default 'live' → cobre legado e tráfego vivo sem backfill. Distinto de
+# `origin_session_id` (Arc 19, link webhook→intake). Derivado do `source` do evento
+# e persistido pelo consumer (passo 2); o filtro default `origin='live'` (passo 4)
+# é a garantia de correção dos relatórios de produção.
+_DDL_SESSIONS_MIGRATE_ORIGIN_CLASS = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS origin String DEFAULT 'live'"
+)
+_DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS = (
+    "ALTER TABLE {db}.segments"
+    " ADD COLUMN IF NOT EXISTS origin String DEFAULT 'live'"
+)
+_DDL_MESSAGES_MIGRATE_ORIGIN_CLASS = (
+    "ALTER TABLE {db}.messages"
+    " ADD COLUMN IF NOT EXISTS origin String DEFAULT 'live'"
+)
+
 _DDL_COLLECT_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.collect_events
 (
@@ -890,6 +909,10 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
     _DDL_SEGMENTS_DROP_NPS,               # item 5: DROP nps_score (vestigial → session_signal)
     _DDL_SEGMENTS_MIGRATE_ESCALATION,     # F7: escalation_reason normalizado por segmento
+    # Quality substrate isolation (ADR) — passo 1: origin (live|import|reeval) no substrato.
+    _DDL_SESSIONS_MIGRATE_ORIGIN_CLASS,
+    _DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS,
+    _DDL_MESSAGES_MIGRATE_ORIGIN_CLASS,
 ]
 
 
@@ -977,6 +1000,8 @@ class AnalyticsStore:
         # SLA do pool no momento do atendimento — a coluna existia (migration)
         # mas nunca entrava no INSERT (chave descartada pelo _session_row).
         "sla_target_ms",
+        # Substrate isolation (ADR): origin (live|import|reeval).
+        "origin",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -1015,6 +1040,7 @@ class AnalyticsStore:
     _MESSAGE_COLS = [
         "message_id", "tenant_id", "session_id", "author_id", "author_role",
         "channel", "content_type", "visibility", "content", "timestamp", "date",
+        "origin",   # substrate isolation (ADR)
     ]
 
     async def insert_message(self, row: dict) -> None:
@@ -1155,6 +1181,7 @@ class AnalyticsStore:
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status",
         "escalation_reason", "conference_id", "date",
+        "origin",   # substrate isolation (ADR)
     ]
 
     async def upsert_segment(self, row: dict) -> None:
@@ -1579,6 +1606,8 @@ def _session_row(d: dict) -> list:
         # parse_contact_closed (close row precisa repetir o valor: no
         # ReplacingMergeTree a última escrita substitui a linha inteira).
         d.get("sla_target_ms"),
+        # Substrate isolation (ADR): origin não-nullable, default 'live'.
+        d.get("origin") or "live",
     ]
 
 
@@ -1636,6 +1665,7 @@ def _message_row(d: dict) -> list:
         content,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
+        d.get("origin") or "live",   # substrate isolation (ADR)
     ]
 
 
@@ -1770,6 +1800,7 @@ def _segment_row(d: dict) -> list:
         d.get("escalation_reason") or None,
         d.get("conference_id") or None,
         _today_utc(ts),
+        d.get("origin") or "live",   # substrate isolation (ADR)
     ]
 
 

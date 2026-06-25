@@ -18,6 +18,7 @@ import pytest
 
 from ..reports_query import (
     _apply_pool_scope,
+    _apply_origin_scope,
     _clamp_page_size,
     _to_csv,
     query_agent_availability,
@@ -1066,6 +1067,100 @@ class TestApplyPoolScope:
         assert "'sac'" in clause
         assert "'retencao'" in clause
         assert "'billing'" in clause
+
+
+# ── Substrate isolation (ADR adr-quality-substrate-isolation) — origin filter ──
+
+class TestApplyOriginScope:
+    """Unit tests for the _apply_origin_scope helper (pure, no async)."""
+
+    def test_default_live(self):
+        conds: list = []
+        _apply_origin_scope(conds)
+        assert conds == ["origin IN ('live')"]
+
+    def test_explicit_reeval(self):
+        conds: list = []
+        _apply_origin_scope(conds, "reeval")
+        assert conds == ["origin IN ('reeval')"]
+
+    def test_list_of_origins(self):
+        conds: list = []
+        _apply_origin_scope(conds, ["live", "import"])
+        assert conds[0] == "origin IN ('live', 'import')"
+
+    def test_invalid_falls_back_to_live(self):
+        conds: list = []
+        _apply_origin_scope(conds, "bogus")
+        assert conds == ["origin IN ('live')"]
+
+    def test_empty_list_falls_back_to_live(self):
+        conds: list = []
+        _apply_origin_scope(conds, [])
+        assert conds == ["origin IN ('live')"]
+
+    def test_alias_prefix(self):
+        conds: list = []
+        _apply_origin_scope(conds, "live", alias="s.")
+        assert conds == ["s.origin IN ('live')"]
+
+
+class TestOriginScopeInReports:
+    """Default origin='live' reaches the generated SQL; override changes it."""
+
+    _SEG_COLS = [
+        "segment_id", "session_id", "tenant_id", "participant_id", "pool_id",
+        "agent_type_id", "flow_id", "user_id", "user_login", "instance_id",
+        "role", "agent_type", "parent_segment_id", "sequence_index",
+        "started_at", "ended_at", "duration_ms", "outcome", "close_reason",
+        "handoff_reason", "issue_status", "conference_id",
+    ]
+
+    async def test_segments_default_is_live(self):
+        client = _make_client(_ch_result(["count()"], [[0]]), _ch_result(self._SEG_COLS, []))
+        await query_segments_report(client, DB, TENANT)
+        for call in client.query.call_args_list:
+            assert "origin IN ('live')" in call[0][0]
+
+    async def test_segments_override_reeval(self):
+        client = _make_client(_ch_result(["count()"], [[0]]), _ch_result(self._SEG_COLS, []))
+        await query_segments_report(client, DB, TENANT, origin="reeval")
+        for call in client.query.call_args_list:
+            assert "origin IN ('reeval')" in call[0][0]
+            assert "origin IN ('live')" not in call[0][0]
+
+
+class TestOriginScopeInBench:
+    """Substrate isolation reaches the bench (compare/cross) — default live, override works."""
+
+    _CMP_COLS = ["agent_key", "agent_type", "label", "bucket",
+                 "sessions", "resolved", "escalated", "aht_ms"]
+
+    async def test_compare_resolution_default_live(self):
+        client = _make_client(_ch_result(self._CMP_COLS, []))
+        await query_agents_compare(client, DB, TENANT, lens="resolution", include_average=False)
+        joined = " ".join(c[0][0] for c in client.query.call_args_list)
+        assert "origin IN ('live')" in joined
+
+    async def test_compare_resolution_override_reeval(self):
+        client = _make_client(_ch_result(self._CMP_COLS, []))
+        await query_agents_compare(client, DB, TENANT, lens="resolution",
+                                   include_average=False, origin="reeval")
+        joined = " ".join(c[0][0] for c in client.query.call_args_list)
+        assert "origin IN ('reeval')" in joined
+        assert "origin IN ('live')" not in joined
+
+    async def test_cross_default_live(self):
+        seg_cols  = ["agent_key", "agent_type", "label", "sessions", "resolved", "escalated"]
+        nps_cols  = ["agent_key", "nps_n", "nps_sum", "promoters", "detractors"]
+        eval_cols = ["agent_key", "n_evals", "avg_score"]
+        client = _make_client(
+            _ch_result(seg_cols, []), _ch_result(nps_cols, []), _ch_result(eval_cols, []),
+        )
+        await query_agents_cross(client, DB, TENANT)
+        joined = " ".join(c[0][0] for c in client.query.call_args_list)
+        # segments aggregate + NPS join + attribution all carry the live filter
+        assert "origin IN ('live')" in joined
 
 
 class TestPoolScopedSessionsReport:

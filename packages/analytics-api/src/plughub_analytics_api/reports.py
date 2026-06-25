@@ -117,6 +117,7 @@ async def report_sessions(
     ani:              Optional[str] = Query(None,   description="Filter by ANI/source identifier (partial match)"),
     dnis:             Optional[str] = Query(None,   description="Filter by DNIS/destination identifier (partial match)"),
     status:           Optional[str] = Query(None,   description="Filter by session status (active|suspended|closed) — Arc 19"),
+    origin:           str           = Query("live",  pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     page:             int           = Query(1,       ge=1),
     page_size:        int           = Query(100,     ge=1),
     format:           str           = Query("json",  pattern="^(json|csv)$"),
@@ -150,6 +151,7 @@ async def report_sessions(
         ani              = ani,
         dnis             = dnis,
         status           = status,
+        origin           = origin,
         page      = page,
         page_size = ps,
     )
@@ -464,6 +466,7 @@ async def get_segments_report(
     agent_type_id:  str | None    = None,
     role:           str | None    = None,
     outcome:        str | None    = None,
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     page:           int           = 1,
     page_size:      int           = 100,
     format:         str | None    = None,
@@ -500,6 +503,7 @@ async def get_segments_report(
         agent_type_id    = agent_type_id,
         role             = role,
         outcome          = outcome,
+        origin           = origin,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
         page      = page,
@@ -519,6 +523,7 @@ async def get_agent_performance_report(
     pool_id:        str | None    = None,
     agent_type_id:  str | None    = None,
     role:           str | None    = None,
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     format:         str | None    = None,
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
@@ -549,6 +554,7 @@ async def get_agent_performance_report(
         pool_id          = pool_id,
         agent_type_id    = agent_type_id,
         role                   = role,
+        origin                 = origin,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
     )
@@ -683,6 +689,8 @@ async def get_agents_compare(
     entities:        Optional[str]  = Query(None,
                                             description="agent_keys separados por vírgula (vazio = só a média do escopo)"),
     include_average: bool           = Query(True),
+    origin:          str            = Query("live", pattern="^(live|import|reeval)$",
+                                            description="Substrate origin (ADR): live=produção (default), import, reeval"),
     pool_principal:  PoolPrincipal  = Depends(optional_pool_principal),
 ) -> Response:
     """
@@ -706,6 +714,7 @@ async def get_agents_compare(
         pool_id    = pool_id,
         entities   = entity_list,
         include_average = include_average,
+        origin                 = origin,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
     )
@@ -722,6 +731,8 @@ async def get_agents_cross(
     from_dt:        Optional[str]  = Query(None),
     to_dt:          Optional[str]  = Query(None),
     pool_id:        Optional[str]  = Query(None),
+    origin:         str            = Query("live", pattern="^(live|import|reeval)$",
+                                           description="Substrate origin (ADR): live=produção (default), import, reeval"),
     pool_principal: PoolPrincipal  = Depends(optional_pool_principal),
 ) -> Response:
     """
@@ -736,6 +747,7 @@ async def get_agents_cross(
         from_dt    = from_dt,
         to_dt      = to_dt,
         pool_id    = pool_id,
+        origin                 = origin,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
     )
@@ -875,6 +887,7 @@ async def get_agent_performance_daily(
     to_dt:          Optional[str] = Query(None,   description="End date (YYYY-MM-DD or ISO8601); default: today"),
     pool_id:        Optional[str] = Query(None,   description="Filter by pool_id"),
     agent_type_id:  Optional[str] = Query(None,   description="Filter by agent_type_id"),
+    origin:         str           = Query("live",  pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     format:         str           = Query("json",  pattern="^(json|csv)$"),
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
@@ -903,6 +916,7 @@ async def get_agent_performance_daily(
         to_dt     = to_dt,
         pool_id          = pool_id,
         agent_type_id          = agent_type_id,
+        origin                 = origin,
         accessible_pools       = pool_principal.accessible_pools,
         supervised_agent_types = pool_principal.supervised_agent_types,
     )
@@ -919,6 +933,7 @@ async def get_session_complexity(
     to_dt:          Optional[str] = Query(None,   description="ISO8601 end (default: now)"),
     pool_id:        Optional[str] = Query(None,   description="Filter sessions by originating pool_id"),
     min_handoffs:   int           = Query(0,       ge=0, description="Minimum handoff_count to include"),
+    origin:         str           = Query("live",  pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     page:           int           = Query(1,       ge=1),
     page_size:      int           = Query(100,     ge=1),
     format:         str           = Query("json",  pattern="^(json|csv)$"),
@@ -950,6 +965,7 @@ async def get_session_complexity(
         to_dt     = to_dt,
         pool_id          = pool_id,
         min_handoffs     = min_handoffs,
+        origin           = origin,
         accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
@@ -1051,6 +1067,7 @@ async def get_pools_volume(
     pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
     channel:        Optional[str] = Query(None, description="Filter by channel"),
     bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
@@ -1067,6 +1084,7 @@ async def get_pools_volume(
         pool_id          = pool_id,
         channel          = channel,
         bucket           = bucket,
+        origin           = origin,
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "pools_volume.csv")
@@ -1080,6 +1098,7 @@ async def get_pools_queue(
     to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
     pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
     bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
@@ -1096,6 +1115,7 @@ async def get_pools_queue(
         to_dt            = to_dt,
         pool_id          = pool_id,
         bucket           = bucket,
+        origin           = origin,
         accessible_pools = pool_principal.accessible_pools,
     )
     return _respond(data, "json", "pools_queue.csv")

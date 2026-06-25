@@ -39,6 +39,36 @@ import httpx
 logger = logging.getLogger("plughub.evaluation.sampling")
 
 
+# ─── Quality substrate isolation (ADR adr-quality-substrate-isolation) ────────
+
+_VALID_ORIGINS = {"live", "import", "reeval"}
+
+
+def origin_from_source(source: Any) -> str:
+    """Deriva a procedência por-sessão do `source` do evento (espelha a analytics-api):
+    external_import→import, internal:reeval→reeval, demais/ausente→live."""
+    s = source.strip() if isinstance(source, str) else ""
+    if s == "external_import":
+        return "import"
+    if s == "internal:reeval":
+        return "reeval"
+    return "live"
+
+
+def _allowed_origins(sampling_rules: dict[str, Any]) -> set[str]:
+    """Origens que a campanha amostra. **Filtro opcional, default `{'live'}`**: uma
+    campanha sem `origin` configurado mira só produção (elimina o cross-fire por
+    default — concern §9c do Quality Ingest). Reavaliação/importação miram
+    explicitamente `reeval`/`import` (str ou lista). Valores inválidos são
+    descartados; vazio → `{'live'}` (nunca irrestrito)."""
+    raw = sampling_rules.get("origin")
+    if raw is None:
+        return {"live"}
+    vals = [raw] if isinstance(raw, str) else list(raw)
+    allowed = {v for v in vals if v in _VALID_ORIGINS}
+    return allowed or {"live"}
+
+
 # ─── Should sample? ───────────────────────────────────────────────────────────
 
 def should_sample(
@@ -117,6 +147,12 @@ def _passes_filters(session_meta: dict[str, Any], sampling_rules: dict[str, Any]
 
     outcomes = sampling_rules.get("outcome_filter") or []
     if outcomes and session_meta.get("outcome") not in outcomes:
+        return False
+
+    # Substrate isolation (ADR): default 'live' nos dois lados — campanha sem origin
+    # mira produção; sessão sem origin é tratada como live. Reavaliação/importação
+    # miram reeval/import e só pegam suas próprias sessões → sem cross-fire.
+    if session_meta.get("origin", "live") not in _allowed_origins(sampling_rules):
         return False
 
     return True

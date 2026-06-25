@@ -191,6 +191,33 @@ def _apply_pool_scope(
     return True
 
 
+# Quality substrate isolation (ADR adr-quality-substrate-isolation) — domínio de origin.
+_VALID_ORIGINS = {"live", "import", "reeval"}
+
+
+def _apply_origin_scope(
+    conditions: list[str],
+    origin: "str | list[str]" = "live",
+    alias: str = "",
+) -> None:
+    """Substrate isolation (ADR) — mutates *conditions* in-place to add an
+    `origin IN (...)` filter on the substrate tables (sessions/segments/messages).
+
+    Default `origin='live'` is the correctness guarantee: any caller that does NOT
+    explicitly ask for another origin sees ONLY production. Quality/curation reports
+    pass `import`/`reeval` explicitly. Values are a controlled enum → safe to inline
+    as string literals (same posture as pool/agent scope). Invalid values are dropped;
+    an empty/all-invalid selection falls back to ['live'] (never unrestricted).
+
+    alias: column prefix for queries that alias the table (e.g. "s." → "s.origin").
+    """
+    origins = [origin] if isinstance(origin, str) else list(origin)
+    origins = [o for o in origins if o in _VALID_ORIGINS] or ["live"]
+    col = f"{alias}origin" if alias else "origin"
+    lst = ", ".join(f"'{o}'" for o in origins)
+    conditions.append(f"{col} IN ({lst})")
+
+
 # ─── /reports/sessions ────────────────────────────────────────────────────────
 
 async def query_sessions_report(
@@ -213,6 +240,7 @@ async def query_sessions_report(
     ani:                    str | None       = None,
     dnis:                   str | None       = None,
     status:                 str | None       = None,
+    origin:                 "str | list[str]" = "live",
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -228,7 +256,7 @@ async def query_sessions_report(
             channel, outcome, close_reason, pool_id, session_id,
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
-            ani, dnis, status,
+            ani, dnis, status, origin,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -246,6 +274,7 @@ def _fetch_sessions(
     page: int, page_size: int,
     ani: str | None = None, dnis: str | None = None,
     status: str | None = None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
@@ -345,6 +374,9 @@ def _fetch_sessions(
         else:
             conditions.append("s.status = {status:String}")
         params["status"] = status
+
+    # Substrate isolation (ADR): default 'live' (produção); UI/quality passam outra origem.
+    _apply_origin_scope(conditions, origin, alias="s.")
 
     where = " AND ".join(conditions)
 
@@ -1189,6 +1221,7 @@ async def query_segments_report(
     outcome:                str | None       = None,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -1203,6 +1236,7 @@ async def query_segments_report(
             _fetch_segments, client, database, tenant_id, since, until,
             session_id, pool_id, agent_type_id, role, outcome,
             accessible_pools, supervised_agent_types, page, page_size,
+            origin,
         )
     except Exception as exc:
         logger.warning("query_segments_report failed tenant=%s: %s", tenant_id, exc)
@@ -1218,6 +1252,7 @@ def _fetch_segments(
     accessible_pools: list[str] | None,
     supervised_agent_types: list[str] | None,
     page: int, page_size: int,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -1243,6 +1278,7 @@ def _fetch_segments(
         params["outcome"] = outcome
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     where  = " AND ".join(conditions)
     offset = (page - 1) * page_size
@@ -1287,6 +1323,7 @@ async def query_agent_performance_report(
     role:                   str | None       = None,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     """
     Aggregate performance metrics per (agent_type_id, pool_id, role).
@@ -1314,6 +1351,7 @@ async def query_agent_performance_report(
             _fetch_agent_performance,
             client, database, tenant_id, since, until,
             pool_id, agent_type_id, role, accessible_pools, supervised_agent_types,
+            origin,
         )
     except Exception as exc:
         logger.warning(
@@ -1333,6 +1371,7 @@ def _fetch_agent_performance(
     role:            str | None,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -1355,6 +1394,7 @@ def _fetch_agent_performance(
         params["role"] = role
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     where = " AND ".join(conditions)
 
@@ -1442,7 +1482,7 @@ async def query_evaluations_report(
         return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
 
 
-def _session_agent_attribution_sql(db: str) -> str:
+def _session_agent_attribution_sql(db: str, origin: "str | list[str]" = "live") -> str:
     """
     F2 (bancada de agentes — analytics-agents-workbench.md §13): atribuição de
     sessão → agente avaliado. Último segmento PRIMARY não-sintético da sessão
@@ -1457,6 +1497,11 @@ def _session_agent_attribution_sql(db: str) -> str:
     # WHERE agent_type != 'system' faz o filtro resolver para o agregado.
     # Por isso o filtro vive num subquery interno (só colunas reais) e a
     # agregação usa nomes internos não-colidentes (sak/sat/spid/sul).
+    # Substrate isolation (ADR): a atribuição lê segments → filtra por origem
+    # (default 'live'); centraliza o filtro p/ as lentes quality/deploy/session_nps.
+    _oc: list[str] = []
+    _apply_origin_scope(_oc, origin)
+    origin_clause = _oc[0]
     return f"""
         SELECT
             session_id,
@@ -1480,6 +1525,7 @@ def _session_agent_attribution_sql(db: str) -> str:
             WHERE tenant_id = {{tenant_id:String}}
               AND role = 'primary'
               AND agent_type != 'system'
+              AND {origin_clause}
         )
         GROUP BY session_id
     """
@@ -1879,6 +1925,7 @@ async def query_agents_compare(
     include_average: bool = True,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     """
     Bancada de comparação (F3): devolve séries por entidade (agent_key) + a
@@ -1910,7 +1957,7 @@ async def query_agents_compare(
         result = await asyncio.to_thread(
             _fetch_agents_compare, client, database, tenant_id, since, until,
             lens, mode, pool_id, entities or [], include_average,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
     except Exception as exc:
         logger.warning("query_agents_compare failed tenant=%s lens=%s: %s", tenant_id, lens, exc)
@@ -2041,16 +2088,20 @@ def _per_agent_for_lens(
     lens: str, pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
     mode: str = "daily",
+    origin: "str | list[str]" = "live",
 ) -> tuple[dict, list[str]]:
     """Computa per_agent + metric_keys para a lente/escopo dados.
 
     per_agent[agent_key] = {"agent_type", "label", "buckets": {date: point}, "summary"}.
     Fatorado da F3 para ser reusado pela pseudo-entidade de média do pool (F9).
+
+    Substrate isolation (ADR): `origin` (default 'live') é repassado a cada lens helper
+    e aplicado aos blocos que leem segments/sessions — a bancada viva exclui import/reeval.
     """
     if lens in ("resolution", "sessions_aht"):
         per_agent = _compare_segments_lens(
             client, db, tenant_id, since, until, lens, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = (
             ["resolution_rate", "escalation_rate"] if lens == "resolution"
@@ -2059,7 +2110,7 @@ def _per_agent_for_lens(
     elif lens in ("availability", "pause_reason"):
         per_agent = _compare_availability_lens(
             client, db, tenant_id, since, until, lens, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = (
             ["logged_ms", "available_ms", "paused_ms", "busy_ms",
@@ -2068,31 +2119,31 @@ def _per_agent_for_lens(
     elif lens == "nps":
         per_agent = _compare_nps_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = ["avg_nps", "nps"]
     elif lens == "session_nps":
         per_agent = _compare_session_nps_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = ["avg_nps", "nps"]
     elif lens == "wrapup":
         per_agent = _compare_wrapup_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = []  # distribuição por disposição vive no summary (como pause_reason)
     elif lens == "quality_criteria":
         per_agent = _compare_quality_criteria_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = []  # nota por dimensão vive no summary.dimensions[] (como wrapup)
     elif lens == "escalation_reason":
         per_agent = _compare_escalation_reason_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = []  # distribuição por motivo vive no summary.reasons[] (como pause_reason)
     elif lens == "deploy":
@@ -2101,18 +2152,18 @@ def _per_agent_for_lens(
             # evaluation_finalized→segments (deploy_version carimbado, R9).
             per_agent = _compare_deploy_epoch_lens(
                 client, db, tenant_id, since, until, pool_id,
-                accessible_pools, supervised_agent_types,
+                accessible_pools, supervised_agent_types, origin,
             )
         else:
             per_agent = _compare_deploy_lens(
                 client, db, tenant_id, since, until, pool_id,
-                accessible_pools, supervised_agent_types,
+                accessible_pools, supervised_agent_types, origin,
             )
         metric_keys = ["avg_score"]  # qualidade Oficial; markers/ordem vêm no envelope (async)
     else:  # quality
         per_agent = _compare_quality_lens(
             client, db, tenant_id, since, until, pool_id,
-            accessible_pools, supervised_agent_types,
+            accessible_pools, supervised_agent_types, origin,
         )
         metric_keys = ["avg_score"]
     return per_agent, metric_keys
@@ -2180,10 +2231,11 @@ def _fetch_agents_compare(
     since: str, until: str,
     lens: str, mode: str, pool_id: str | None, entities: list[str], include_average: bool,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     per_agent, metric_keys = _per_agent_for_lens(
         client, db, tenant_id, since, until, lens, pool_id,
-        accessible_pools, supervised_agent_types, mode,
+        accessible_pools, supervised_agent_types, mode, origin,
     )
 
     # ── Média dos agentes (aritmética por bucket; gap ≠ zero) ────────────────
@@ -2205,7 +2257,7 @@ def _fetch_agents_compare(
             if pid not in pool_cache:
                 pool_cache[pid], _ = _per_agent_for_lens(
                     client, db, tenant_id, since, until, lens, pid,
-                    accessible_pools, supervised_agent_types, mode,
+                    accessible_pools, supervised_agent_types, mode, origin,
                 )
             pa = pool_cache[pid]
             out_entities.append({
@@ -2248,6 +2300,7 @@ def _compare_segments_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     lens: str, pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """resolution + sessions_aht — fonte: segments (primary, não-sintético)."""
     conditions = [
@@ -2263,6 +2316,7 @@ def _compare_segments_lens(
         params["pool_id"] = pool_id
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2333,6 +2387,7 @@ def _compare_nps_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     nps (F10.3b cutover) — fonte: session_signal (grain='segment', metric='nps'),
@@ -2361,6 +2416,7 @@ def _compare_nps_lens(
         params["pool_id"] = pool_id
     _apply_pool_scope(seg_conditions, accessible_pools)
     _apply_agent_scope(seg_conditions, supervised_agent_types)
+    _apply_origin_scope(seg_conditions, origin)   # substrate isolation (ADR): junção só de segmentos live
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2424,6 +2480,7 @@ def _compare_session_nps_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",   # aceito p/ dispatch uniforme; ver nota abaixo
 ) -> dict:
     """
     session_nps (F10.3a) — voz do cliente no grão SESSION, cruzada ao agente que
@@ -2451,7 +2508,11 @@ def _compare_session_nps_lens(
             outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
         else:
             return {}
-    attr_sql = _session_agent_attribution_sql(db)
+    # Substrate isolation (ADR): a fonte é session_signal grain=session (sem coluna
+    # origin) ⋈ atribuição por segments (SQL compartilhado, que filtra por origem).
+    # NPS de sessão só existe p/ tráfego live na prática; passamos origin p/ honrar
+    # override e manter a atribuição consistente com as demais lentes.
+    attr_sql = _session_agent_attribution_sql(db, origin)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2505,6 +2566,7 @@ def _compare_wrapup_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     wrapup — fonte: segments (outcome normalizado + issue_status cru, F1/F5).
@@ -2526,6 +2588,7 @@ def _compare_wrapup_lens(
         params["pool_id"] = pool_id
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2573,6 +2636,7 @@ def _compare_escalation_reason_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     escalation_reason (F7) — fonte: segments.escalation_reason (id normalizado).
@@ -2597,6 +2661,7 @@ def _compare_escalation_reason_lens(
         params["pool_id"] = pool_id
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2644,10 +2709,13 @@ def _compare_availability_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     lens: str, pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     availability + pause_reason — fonte: agent_login_intervals + agent_pause_intervals
     (+ busy de segments). Domínio HUMANO (§4 do spec): instance LIKE 'human-%'.
+    Substrate isolation: login/pause não têm coluna origin (não são substrato e import
+    não os gera); o filtro `origin` aplica-se só ao bloco busy (segments).
     agent_key = user_id. Denominadores fixos (§5): pause% = paused/logged;
     available% implícito; occupancy% = busy/(logged − paused).
     """
@@ -2703,6 +2771,7 @@ def _compare_availability_lens(
     if pool_id:
         busy_conditions.append("pool_id = {pool_id:String}")
     _apply_pool_scope(busy_conditions, accessible_pools)
+    _apply_origin_scope(busy_conditions, origin)   # substrate isolation (ADR): busy só de segments live
     busy_rows = _rows_to_dicts(client.query(f"""
         SELECT
             concat('human-', user_id)      AS instance_id,
@@ -2777,6 +2846,7 @@ def _compare_quality_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     quality — fonte: evaluation_results × atribuição (F2). Bucketiza pela data da
@@ -2799,7 +2869,7 @@ def _compare_quality_lens(
             outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
         else:
             return {}
-    attr_sql = _session_agent_attribution_sql(db)
+    attr_sql = _session_agent_attribution_sql(db, origin)   # substrate isolation (ADR)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -2856,6 +2926,7 @@ def _compare_deploy_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     deploy (Arc 6 Fase 2 — ancorada no POOL, spec §11) — fonte: evaluation_finalized
@@ -2886,7 +2957,7 @@ def _compare_deploy_lens(
             outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
         else:
             return {}
-    attr_sql = _session_agent_attribution_sql(db)
+    attr_sql = _session_agent_attribution_sql(db, origin)   # substrate isolation (ADR)
 
     # agent_key = pool_id: a entidade desta lente é o POOL (curva por pool).
     rows = _rows_to_dicts(client.query(f"""
@@ -2935,6 +3006,7 @@ def _compare_deploy_epoch_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     deploy / **modo epoch** (Arc 6 Fase 2 §IV.8, R15a) — destravado pelo R9.
@@ -2972,6 +3044,7 @@ def _compare_deploy_epoch_lens(
     if accessible_pools is not None:
         if not _apply_pool_scope(seg_conditions, accessible_pools):
             return {}
+    _apply_origin_scope(seg_conditions, origin)   # substrate isolation (ADR)
 
     # agent_key = pool_id (curva por pool); bucket = deploy_version.
     rows = _rows_to_dicts(client.query(f"""
@@ -3035,6 +3108,7 @@ def _compare_quality_criteria_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     """
     quality_criteria (F8) — fonte: evaluation_dimension_scores × atribuição (F2).
@@ -3059,7 +3133,7 @@ def _compare_quality_criteria_lens(
             outer += [s.replace("pool_id", "attr.pool_id") for s in scope]
         else:
             return {}
-    attr_sql = _session_agent_attribution_sql(db)
+    attr_sql = _session_agent_attribution_sql(db, origin)   # substrate isolation (ADR)
 
     rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -3117,13 +3191,14 @@ async def query_agents_cross(
     pool_id:                str | None       = None,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     try:
         return await asyncio.to_thread(
             _fetch_agents_cross, client, database, tenant_id, since, until,
-            pool_id, accessible_pools, supervised_agent_types,
+            pool_id, accessible_pools, supervised_agent_types, origin,
         )
     except Exception as exc:
         logger.warning("query_agents_cross failed tenant=%s: %s", tenant_id, exc)
@@ -3134,6 +3209,7 @@ def _fetch_agents_cross(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,
     accessible_pools: list[str] | None, supervised_agent_types: list[str] | None,
+    origin: "str | list[str]" = "live",
 ) -> dict:
     # ── Agregado de segments por agente (resolução, escalação, NPS) ──────────
     seg_conditions = [
@@ -3149,6 +3225,7 @@ def _fetch_agents_cross(
         params["pool_id"] = pool_id
     _apply_pool_scope(seg_conditions, accessible_pools)
     _apply_agent_scope(seg_conditions, supervised_agent_types)
+    _apply_origin_scope(seg_conditions, origin)   # substrate isolation (ADR): seg_rows + NPS join
 
     seg_rows = _rows_to_dicts(client.query(f"""
         SELECT
@@ -3213,7 +3290,7 @@ def _fetch_agents_cross(
     nps_by_key = {r["agent_key"]: r for r in nps_rows if r.get("agent_key")}
 
     # ── Agregado de qualidade por agente (via atribuição, por session_at) ────
-    attr_sql = _session_agent_attribution_sql(db)
+    attr_sql = _session_agent_attribution_sql(db, origin)   # substrate isolation (ADR)
     eval_outer = ["1 = 1", f"attr.session_started_at >= '{since}'", f"attr.session_started_at < '{until}'"]
     if pool_id:
         eval_outer.append("attr.pool_id = {pool_id:String}")
@@ -3281,6 +3358,7 @@ async def query_agent_performance_daily(
     agent_type_id:          str | None       = None,
     accessible_pools:       list[str] | None = None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     """
     Returns daily pre-aggregated performance metrics from the mv_agent_performance_daily
@@ -3312,6 +3390,7 @@ async def query_agent_performance_daily(
             _fetch_agent_performance_daily,
             client, database, tenant_id, since_date, until_date,
             pool_id, agent_type_id, accessible_pools, supervised_agent_types,
+            origin,
         )
     except Exception as exc:
         logger.warning("query_agent_performance_daily failed tenant=%s: %s", tenant_id, exc)
@@ -3328,6 +3407,7 @@ def _fetch_agent_performance_daily(
     agent_type_id:   str | None,
     accessible_pools:       list[str] | None,
     supervised_agent_types: list[str] | None = None,
+    origin:                 "str | list[str]" = "live",
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -3345,6 +3425,7 @@ def _fetch_agent_performance_daily(
         params["agent_type_id"] = agent_type_id
     _apply_pool_scope(conditions, accessible_pools)
     _apply_agent_scope(conditions, supervised_agent_types)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR)
 
     where = " AND ".join(conditions)
 
@@ -3413,6 +3494,7 @@ async def query_session_complexity(
     pool_id:          str | None       = None,
     min_handoffs:     int              = 0,
     accessible_pools: list[str] | None = None,
+    origin:           "str | list[str]" = "live",
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -3445,6 +3527,7 @@ async def query_session_complexity(
             _fetch_session_complexity,
             client, database, tenant_id, since, until,
             pool_id, min_handoffs, accessible_pools, page, page_size,
+            origin,
         )
     except Exception as exc:
         logger.warning("query_session_complexity failed tenant=%s: %s", tenant_id, exc)
@@ -3462,6 +3545,7 @@ def _fetch_session_complexity(
     accessible_pools: list[str] | None,
     page:            int,
     page_size:       int,
+    origin:          "str | list[str]" = "live",
 ) -> dict:
     offset = (page - 1) * page_size
 
@@ -3479,6 +3563,7 @@ def _fetch_session_complexity(
     if accessible_pools:
         pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
         sess_conditions.append(f"s.pool_id IN ({pool_list})")
+    _apply_origin_scope(sess_conditions, origin, alias="s.")   # substrate isolation (ADR)
 
     sess_where = " AND ".join(sess_conditions)
 
@@ -3878,6 +3963,7 @@ async def query_pools_volume(
     channel:          str | None = None,
     bucket:           str | None = None,
     accessible_pools: list[str] | None = None,
+    origin:           "str | list[str]" = "live",
 ) -> dict:
     """
     Volume de contatos por (bucket, pool, canal, endpoint=DNIS) a partir de `sessions`.
@@ -3897,6 +3983,7 @@ async def query_pools_volume(
     try:
         return await asyncio.to_thread(
             _fetch_pools_volume, client, database, tenant_id, since, until, pool_id, channel, bkt, accessible_pools,
+            origin,
         )
     except Exception as exc:
         logger.warning("query_pools_volume failed tenant=%s: %s", tenant_id, exc)
@@ -3913,6 +4000,7 @@ def _fetch_pools_volume(
     channel:          str | None,
     bucket:           str,
     accessible_pools: list[str] | None,
+    origin:           "str | list[str]" = "live",
 ) -> dict:
     bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
     conditions = [
@@ -3928,6 +4016,7 @@ def _fetch_pools_volume(
         conditions.append("channel = {channel:String}")
         params["channel"] = channel
     _apply_pool_scope(conditions, accessible_pools)
+    _apply_origin_scope(conditions, origin)   # substrate isolation (ADR); rej_where herda
     where = " AND ".join(conditions)
 
     def _iso(v: Any) -> str:
@@ -4018,6 +4107,7 @@ async def query_pools_queue(
     pool_id:          str | None = None,
     bucket:           str | None = None,
     accessible_pools: list[str] | None = None,
+    origin:           "str | list[str]" = "live",
 ) -> dict:
     """
     Fase D (queue-attended-model) — fila + SLA derivados dos `segments`:
@@ -4037,6 +4127,7 @@ async def query_pools_queue(
     try:
         return await asyncio.to_thread(
             _fetch_pools_queue, client, database, tenant_id, since, until, pool_id, bkt, accessible_pools,
+            origin,
         )
     except Exception as exc:
         logger.warning("query_pools_queue failed tenant=%s: %s", tenant_id, exc)
@@ -4052,6 +4143,7 @@ def _fetch_pools_queue(
     pool_id:          str | None,
     bucket:           str,
     accessible_pools: list[str] | None,
+    origin:           "str | list[str]" = "live",
 ) -> dict:
     bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
 
@@ -4064,6 +4156,8 @@ def _fetch_pools_queue(
         s_conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
     _apply_pool_scope(s_conditions, accessible_pools)
+    # Substrate isolation (ADR): filtra sessões por origem; segments entram via JOIN.
+    _apply_origin_scope(s_conditions, origin)
     s_where = " AND ".join(s_conditions)
 
     # Queue-events side (tamanho de fila, disponíveis) — keyed on timestamp.

@@ -1,5 +1,12 @@
 {
   "title": "Agent Reports",
+  "origin": {
+    "label": "Origin",
+    "live": "Production",
+    "import": "Imported",
+    "reeval": "Re-evaluation",
+    "hint": "Quality substrate (ADR): Production is live traffic; Imported and Re-evaluation are isolated."
+  },
   "pools": {
     "title": "Pool Reports",
     "subtabs": { "volume": "Volume", "queue": "Queue", "capacity": "Capacity", "sla": "SLA" },

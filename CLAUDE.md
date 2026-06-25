@@ -91,7 +91,7 @@ plughub/
       adr-contact-segments.md ← Arc 5 architecture
       adr-instance-bootstrap.md
       adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
-      adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; proposto)
+      adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
 ```
 
 ### Como adicionar uma nova feature
@@ -909,7 +909,10 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 - **Fase 5** *(deferred)*: `config_snapshot` — read-only do namespace `masking` do Config API para DPO.
 
 ### Quality Ingest — arco COMPLETO (R13a–R13d ✅); concerns abertos
-- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest (pool_id degrada se um contato vier partido entre POSTs); (c) reavaliação/importação misturam com produção no substrato compartilhado — **direção fechada (ADR proposto, impl. pendente)**: discriminador `origin` por-sessão + filtro default no backend + partição CH por origem; `pool.origin_class` opcional p/ pools dedicados. Ver [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md).
+- **Concerns** (ver `docs/arcos/quality-ingest.md` §9): (a) ReplayContext `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest (pool_id degrada se um contato vier partido entre POSTs); (c) ✅ **RESOLVIDO** (2026-06-25, ver CHANGELOG + § abaixo) — discriminador `origin` por-sessão + filtro default `live` no report layer/sampling. Resta só a fase 2 (partição CH por origem + `pool.origin_class`).
+
+### Isolamento do substrato por `origin` ✅ (resolve §9c do Quality Ingest)
+Discriminador de procedência **por-sessão** `origin: live|import|reeval` (default `live`) nas tabelas de substrato (`analytics.sessions/segments/messages` + PG `session_stream_events`), derivado do `source` do evento (`external_import`→import, `internal:reeval`→reeval). **Garantia de correção = filtro default `live`** no report layer da analytics-api (`_apply_origin_scope`, todas as funções de substrato + bancada) e no sampling da evaluation-api (`_passes_filters`, default `{'live'}`; campanha de reavaliação seta `origin` em `sampling_rules`). Endpoints `/reports/*` expõem query-param `origin`; a UI operacional de Analytics mostra **sempre produção** (seletor de origem NÃO exibido — decisão UX: origem é contexto de qualidade, não dropdown operacional; re-emissão é detalhe de implementação). `OriginSelector`+i18n e `ContactFilters.origin` ficam reservados p/ superfície de qualidade contextual futura. **Invariantes**: `origin` é a verdade universal por-sessão (cobre pool compartilhado do R13d, que segue re-emitindo); o default no backend é a garantia (UI espelha); **não** estender `pool.agent_kind`. Fase 2 (partição CH `PARTITION BY (…, origin)` + `pool.origin_class`) **ADIADA por decisão (2026-06-25)** — é governança/lifecycle, não correção (o filtro default já isola); gatilho de reativação = importação externa real com retenção/erasure própria (LGPD). → [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md) (Aceito — implementado; fase 2 adiada).
 
 ### Business in Any Media — processo channel-abstract + framework de loja *(proposta)*
 - Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.

@@ -614,6 +614,8 @@ export default function AnalisePoolsPage() {
   // registry (sem mudar o analytics) — queue_config ⇒ atendida (IA licenciada);
   // pool humano sem ⇒ fila de sistema (gratuita); pool IA ⇒ sem fila.
   const [queueTiers, setQueueTiers] = useState<Record<string, 'attended' | 'system' | 'none'>>({})
+  // Opções do combo de pool — reaproveita o mesmo GET /v1/pools dos tiers.
+  const [poolOptions, setPoolOptions] = useState<string[]>([])
   useEffect(() => {
     if (!tenantId) return
     let cancelled = false
@@ -627,6 +629,7 @@ export default function AnalisePoolsPage() {
             : p.agent_kind === 'human' ? 'system' : 'none'
         }
         setQueueTiers(map)
+        setPoolOptions([...new Set((d.pools ?? []).map(p => p.pool_id).filter(Boolean))].sort())
       })
       .catch(() => { /* coluna mostra '—' */ })
     return () => { cancelled = true }
@@ -693,12 +696,18 @@ export default function AnalisePoolsPage() {
         <span className="text-xs text-muted">{t('pools.filter.to')}</span>
         <input type="date" value={toDt} onChange={e => setToDt(e.target.value)}
           className="text-sm border border-border rounded px-2 py-1" />
-        <input type="text" value={poolId} onChange={e => setPoolId(e.target.value)}
-          placeholder={t('pools.filter.allPools')}
-          className="text-sm border border-border rounded px-2 py-1 w-44" />
-        <input type="text" value={channel} onChange={e => setChannel(e.target.value)}
-          placeholder={t('pools.filter.allChannels')}
-          className="text-sm border border-border rounded px-2 py-1 w-36" />
+        <select value={poolId} onChange={e => setPoolId(e.target.value)}
+          className="text-sm border border-border rounded px-2 py-1 w-44 bg-white">
+          <option value="">{t('pools.filter.allPools')}</option>
+          {poolOptions.map(p => <option key={p} value={p}>{p}</option>)}
+        </select>
+        <select value={channel} onChange={e => setChannel(e.target.value)}
+          className="text-sm border border-border rounded px-2 py-1 w-36 bg-white">
+          <option value="">{t('pools.filter.allChannels')}</option>
+          {['webchat', 'whatsapp', 'voice', 'email', 'sms', 'webhook'].map(c => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
         {volume && (
           <span className="ml-auto text-sm text-muted">
             {t('pools.kpi.contacts')}: <strong className="text-dark">{volume.totals.contacts}</strong>
