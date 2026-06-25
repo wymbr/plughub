@@ -9,7 +9,10 @@ Mais o gate de leitura `_can_view_transcript` (qualquer campo do módulo evaluat
 """
 from __future__ import annotations
 
-from ..router import _compute_available_actions, _can_view_transcript, _compute_result_scope
+from ..router import (
+    _compute_available_actions, _can_view_transcript, _compute_result_scope,
+    _check_abac_permission,
+)
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────────
@@ -160,3 +163,47 @@ def test_scope_non_admin_passes_accessible_pools():
     jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": ["p9"], "supervised_user_ids": []}
     users, pools = _compute_result_scope(jwt)
     assert users == ["u_op"] and pools == ["p9"]
+
+
+# ─── Slice auth quality — _check_abac_permission min_access (curar) ────────────
+
+def test_curar_none_denied():
+    assert _check_abac_permission(_jwt("u", curar="none"), "curar") is False
+
+
+def test_curar_read_write_passes_write():
+    jwt = _jwt("u", curar="read_write")
+    assert _check_abac_permission(jwt, "curar", None, min_access="read_write") is True
+
+
+def test_curar_read_only_denied_for_write():
+    # leitura concedida NÃO satisfaz endpoint de escrita (read_write).
+    jwt = _jwt("u", curar="read_only")
+    assert _check_abac_permission(jwt, "curar", None, min_access="read_write") is False
+
+
+def test_curar_read_only_passes_read():
+    jwt = _jwt("u", curar="read_only")
+    assert _check_abac_permission(jwt, "curar", None, min_access="read_only") is True
+
+
+def test_min_access_none_keeps_legacy_behavior():
+    # sem min_access, qualquer não-'none' passa (comportamento legado p/ revisar/contestar).
+    assert _check_abac_permission(_jwt("u", revisar="read_only"), "revisar") is True
+
+
+def test_legacy_token_no_module_config_grant_first_denied():
+    # grant-first: endpoint com min_access (curar) NÃO degrada — config vazio = sem grant = nega.
+    assert _check_abac_permission({"sub": "u"}, "curar", None, min_access="read_write") is False
+
+
+def test_legacy_token_no_module_config_legacy_field_allowed():
+    # legado: campo sem min_access (revisar/contestar) mantém degradação graciosa.
+    assert _check_abac_permission({"sub": "u"}, "revisar") is True
+
+
+def test_curar_scope_pool_match_and_mismatch():
+    jwt = {"sub": "u", "module_config": {"evaluation": {
+        "curar": {"access": "read_write", "scope": ["pool:retencao_humano"]}}}}
+    assert _check_abac_permission(jwt, "curar", "retencao_humano", min_access="read_write") is True
+    assert _check_abac_permission(jwt, "curar", "outro_pool", min_access="read_write") is False

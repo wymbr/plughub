@@ -307,8 +307,9 @@ function BlindScoreDrawer({ review, tenantId, userId, onClose, onResolved }: Bli
   useEffect(() => { getAccessToken().then(tok => setJwt(tok ?? '')).catch(() => {}) }, [getAccessToken])
 
   useEffect(() => {
+    if (!jwt) return            // espera o Bearer (ABAC curar) antes de buscar
     let alive = true
-    getBlindContext(review.id, tenantId)
+    getBlindContext(review.id, tenantId, jwt)
       .then(c => {
         if (!alive) return
         setCtx(c)
@@ -325,7 +326,7 @@ function BlindScoreDrawer({ review, tenantId, userId, onClose, onResolved }: Bli
       .catch(e => alive && setErr(String(e)))
       .finally(() => alive && setLoading(false))
     return () => { alive = false }
-  }, [review.id, tenantId])
+  }, [review.id, tenantId, jwt])
 
   // Conversation (masked) — the curator scores AGAINST this, AI scores hidden.
   const { data: transcript, loading: tLoading, error: tError } =
@@ -342,7 +343,7 @@ function BlindScoreDrawer({ review, tenantId, userId, onClose, onResolved }: Bli
         r => r.na || r.score != null || r.boolean_value != null || r.choice_value != null,
       )
       if (responses.length === 0) { setErr(t('curation.blind.errEmpty')); setBusy(false); return }
-      setReveal(await blindRescore(review.id, tenantId, userId, responses))
+      setReveal(await blindRescore(review.id, tenantId, userId, responses, jwt))
     } catch (e) {
       setErr(String(e))
     } finally {
@@ -355,7 +356,7 @@ function BlindScoreDrawer({ review, tenantId, userId, onClose, onResolved }: Bli
     try {
       await blindResolve(review.id, tenantId, userId, {
         curator_notes: notes || undefined, severity, flag_bias: flagBias,
-      })
+      }, jwt)
       onResolved()
       onClose()
     } catch (e) {
@@ -731,6 +732,7 @@ export default function CuradoriaPage() {
   const { session } = useAuth()
   const tenantId = session?.tenantId ?? ''
   const userId   = session?.userId   ?? ''
+  const jwt      = session?.accessToken ?? ''   // ABAC curar (Bearer)
 
   const [campaignFilter, setCampaignFilter] = useState('')
   const [statusFilter,   setStatusFilter]   = useState('pending')
@@ -744,12 +746,13 @@ export default function CuradoriaPage() {
       limit:       100,
     },
     15_000,  // poll every 15s
+    jwt,
   )
 
   const pendingCount = reviews.filter(r => r.status === 'pending').length
 
   const handleResolve = async (reviewId: string, payload: CurationResolvePayload) => {
-    await resolveCuration(reviewId, tenantId, userId, payload)
+    await resolveCuration(reviewId, tenantId, userId, payload, jwt)
     reload()
   }
 
@@ -820,7 +823,9 @@ export default function CuradoriaPage() {
       )}
 
       {error && (
-        <div className="bg-red-light border border-red/30 text-red-text rounded p-3 text-sm">{error}</div>
+        <div className="bg-red-light border border-red/30 text-red-text rounded p-3 text-sm">
+          {String(error).includes('403') ? t('curation.noPermission') : error}
+        </div>
       )}
 
       {!loading && reviews.length === 0 && !error && (

@@ -128,25 +128,44 @@ def _decode_jwt_optional(request: Request) -> dict[str, Any] | None:
         return None
 
 
-def _check_abac_permission(jwt_payload: dict[str, Any], field: str, pool_id: str | None = None) -> bool:
+_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+
+
+def _check_abac_permission(
+    jwt_payload: dict[str, Any],
+    field: str,
+    pool_id: str | None = None,
+    min_access: str | None = None,
+) -> bool:
     """
     Check ABAC permission from module_config JWT claim.
 
     field:   'revisar'   → can the caller perform human review?
              'contestar' → can the caller file a contestation?
+             'curar'     → can the caller curate/calibrate evaluations?
     pool_id: if the campaign is scoped to a pool, pass it to enforce scope.
+    min_access: optional minimum access level required ('read_only' | 'read_write').
+             When None (default) any non-'none' grant passes (legacy behavior).
+             When set, the grant's access rank must be >= the required rank — so a
+             read_only grant does NOT satisfy a read_write write endpoint.
 
-    Graceful degradation: if module_config is absent (legacy token) → allow.
+    Graceful degradation: if module_config is absent (legacy token) → allow,
+            EXCEPT for grant-first endpoints (min_access set): there an empty config
+            means "no grant" → deny (consistent with the strict nav gating).
     Scope: if scope list is empty → global access → allow.
             if scope list is non-empty → pool_id must be in the list.
     """
     module_config = jwt_payload.get("module_config", {})
     if not module_config:
-        # Legacy token with no module_config → no ABAC restriction
-        return True
+        # Legacy token with no module_config:
+        #  - legacy callers (min_access None) → degrade to allow (back-compat)
+        #  - grant-first callers (min_access set, e.g. curar) → deny (no grant)
+        return min_access is None
     field_config = module_config.get("evaluation", {}).get(field, {})
     access = field_config.get("access", "none")
     if access == "none":
+        return False
+    if min_access is not None and _ACCESS_RANK.get(access, 0) < _ACCESS_RANK.get(min_access, 0):
         return False
     scope: list[str] = field_config.get("scope", [])
     if not scope:

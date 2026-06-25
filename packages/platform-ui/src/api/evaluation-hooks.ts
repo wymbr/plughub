@@ -237,41 +237,50 @@ export interface BlindRescoreReveal {
   per_dimension_diffs: BlindDimensionDiff[]
 }
 
-/** GET blind-context — form to re-score + transcript pointers, WITHOUT the AI scores. */
-export async function getBlindContext(reviewId: string, tenantId: string): Promise<BlindContext> {
-  const r = await fetch(`${BASE}/curations/${reviewId}/blind-context`, {
-    headers: { 'X-Tenant-ID': tenantId },
-  })
+/** GET blind-context — form to re-score + transcript pointers, WITHOUT the AI scores.
+ *  ABAC: requires `curar` (read_only) → pass accessToken (Bearer JWT). */
+export async function getBlindContext(reviewId: string, tenantId: string, accessToken?: string): Promise<BlindContext> {
+  const headers: Record<string, string> = { 'X-Tenant-ID': tenantId }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+  const r = await fetch(`${BASE}/curations/${reviewId}/blind-context`, { headers })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
 
-/** POST blind-rescore — submit the blind responses → reveal AI score + per-dimension diff. */
+/** POST blind-rescore — submit the blind responses → reveal AI score + per-dimension diff.
+ *  ABAC: requires `curar` (read_write) → pass accessToken (Bearer JWT). */
 export async function blindRescore(
   reviewId: string,
   tenantId: string,
   userId: string,
   criterionResponses: BlindCriterionResponse[],
+  accessToken?: string,
 ): Promise<BlindRescoreReveal> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
   const r = await fetch(`${BASE}/curations/${reviewId}/blind-rescore`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId },
+    headers,
     body: JSON.stringify({ criterion_responses: criterionResponses }),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
 
-/** POST blind-resolve — disagreements → CalibrationNote(s) + calibration.events; resolve the review. */
+/** POST blind-resolve — disagreements → CalibrationNote(s) + calibration.events; resolve the review.
+ *  ABAC: requires `curar` (read_write) → pass accessToken (Bearer JWT). */
 export async function blindResolve(
   reviewId: string,
   tenantId: string,
   userId: string,
   body: { curator_notes?: string; severity?: string; flag_bias?: boolean },
+  accessToken?: string,
 ): Promise<{ review: CurationReview; status: string; disagreements: number; calibration_notes: unknown[] }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
   const r = await fetch(`${BASE}/curations/${reviewId}/blind-resolve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Tenant-ID': tenantId, 'X-User-ID': userId },
+    headers,
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -1326,6 +1335,7 @@ export function useCurationQueue(
   tenantId: string,
   opts: { status?: string; campaign_id?: string; limit?: number } = {},
   pollMs = 0,
+  accessToken?: string,
 ) {
   const [reviews, setReviews] = useState<CurationReview[]>([])
   const [total,   setTotal]   = useState(0)
@@ -1339,9 +1349,9 @@ export function useCurationQueue(
       if (opts.status)      q.set('status',      opts.status)
       if (opts.campaign_id) q.set('campaign_id', opts.campaign_id)
       if (opts.limit)       q.set('limit',       String(opts.limit))
-      const r = await fetch(`${BASE}/curations?${q}`, {
-        headers: { 'X-Tenant-ID': tenantId },
-      })
+      const headers: Record<string, string> = { 'X-Tenant-ID': tenantId }
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/curations?${q}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setReviews(d.reviews ?? [])
@@ -1352,7 +1362,7 @@ export function useCurationQueue(
     } finally {
       setLoading(false)
     }
-  }, [tenantId, opts.status, opts.campaign_id, opts.limit])
+  }, [tenantId, opts.status, opts.campaign_id, opts.limit, accessToken])
 
   useEffect(() => {
     load()
@@ -1371,14 +1381,17 @@ export async function resolveCuration(
   tenantId: string,
   userId: string,
   body: CurationResolvePayload,
+  accessToken?: string,
 ): Promise<{ review: CurationReview; calibration_note: unknown; kb_published: boolean }> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Tenant-ID':  tenantId,
+    'X-User-ID':    userId,
+  }
+  if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
   const r = await fetch(`${BASE}/curations/${reviewId}/resolve`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Tenant-ID':  tenantId,
-      'X-User-ID':    userId,
-    },
+    headers,
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)

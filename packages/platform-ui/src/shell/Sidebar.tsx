@@ -17,7 +17,11 @@ interface NavItem {
   href: string
   icon: LucideIcon
   roles?: string[]
-  abac?: { module: string; field: string }
+  // strict: quando true, NÃO há bypass de admin/supervisor — o item é gateado pelo
+  // grant ABAC mesmo para admin (usar quando a API correspondente enforça ABAC sem
+  // admin token, ex.: curadoria/`curar`). Default (false) mantém o bypass de admin.
+  // anyOf: visível se o usuário tiver QUALQUER um dos campos (OR); senão usa `field`.
+  abac?: { module: string; field?: string; anyOf?: string[]; strict?: boolean }
   children?: NavItem[]
 }
 
@@ -87,14 +91,18 @@ const Sidebar: React.FC = () => {
       href: '#',
       icon: ClipboardCheck,
       roles: ['operator', 'supervisor', 'admin', 'business'],
+      // Quality nav é grant-first (strict-ABAC): cada item é gateado pelo grant ABAC,
+      // sem `roles` e sem bypass de admin/supervisor — o menu reflete exatamente as
+      // permissões concedidas pela tela de Acesso. Exceção: Knowledge (sem campo ABAC
+      // próprio — KB é admin-only por role).
       children: [
-        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: FileCheck,    roles: ['admin'],                           abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: List,         roles: ['supervisor', 'admin'],             abac: { module: 'evaluation', field: 'formularios' } },
-        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: BookOpen,     roles: ['admin'] },
-        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      roles: ['operator', 'supervisor', 'admin'] },
-        { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        roles: ['supervisor', 'admin'] },
-        { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       roles: ['supervisor', 'admin'] },
-        { label: t('nav.eval.rubric'),      href: '/evaluation/rubric',      icon: FileCheck,    roles: ['admin'],                           abac: { module: 'evaluation', field: 'gerir_rubrica' } },
+        { label: t('nav.eval.forms'),       href: '/evaluation/forms',       icon: FileCheck,    abac: { module: 'evaluation', field: 'formularios', strict: true } },
+        { label: t('nav.eval.campaigns'),   href: '/evaluation/campaigns',   icon: List,         abac: { module: 'evaluation', field: 'formularios', strict: true } },
+        { label: t('nav.eval.knowledge'),   href: '/evaluation/knowledge',   icon: BookOpen,     abac: { module: 'evaluation', field: 'formularios', strict: true } },
+        { label: t('nav.eval.evaluations'), href: '/evaluation/evaluations', icon: Archive,      abac: { module: 'evaluation', anyOf: ['report', 'revisar', 'contestar'], strict: true } },
+        { label: t('nav.eval.calibration'), href: '/evaluation/calibration', icon: Ruler,        abac: { module: 'evaluation', anyOf: ['curar', 'report'], strict: true } },
+        { label: t('nav.eval.curadoria'),   href: '/evaluation/curadoria',   icon: Search,       abac: { module: 'evaluation', field: 'curar', strict: true } },
+        { label: t('nav.eval.rubric'),      href: '/evaluation/rubric',      icon: FileCheck,    abac: { module: 'evaluation', field: 'gerir_rubrica', strict: true } },
       ]
     },
 
@@ -157,15 +165,29 @@ const Sidebar: React.FC = () => {
 
   function passesAbac(item: NavItem): boolean {
     if (!item.abac) return true
-    if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
-    // admin / supervisor bypass ABAC
-    if (['admin', 'supervisor'].includes(session?.role ?? '')) return true
-    return perms.can(item.abac.module, item.abac.field)
+    const strict = item.abac.strict === true
+    // Degradação graciosa (config vazio/legado → libera) e bypass de admin/supervisor
+    // valem APENAS para itens NÃO-strict. Itens strict são grant-first: exigem o grant
+    // mesmo com config vazio e mesmo para admin (igual à API que enforça ABAC).
+    if (!strict) {
+      if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
+      if (['admin', 'supervisor'].includes(session?.role ?? '')) return true
+    }
+    const { module, field, anyOf } = item.abac
+    if (anyOf && anyOf.length > 0) return anyOf.some(f => perms.can(module, f))
+    return field ? perms.can(module, field) : true
   }
 
-  const filteredItems = navItems.filter(item =>
-    (!item.roles || item.roles.includes(session?.role || '')) && passesAbac(item)
-  )
+  const childVisible = (child: NavItem) =>
+    (!child.roles || child.roles.includes(session?.role || '')) && passesAbac(child)
+  const visibleChildrenOf = (item: NavItem) => item.children?.filter(childVisible) ?? []
+
+  const filteredItems = navItems.filter(item => {
+    if (!((!item.roles || item.roles.includes(session?.role || '')) && passesAbac(item))) return false
+    // grupo sem nenhum filho visível → esconde o cabeçalho do grupo
+    if (item.children && item.children.length > 0) return visibleChildrenOf(item).length > 0
+    return true
+  })
 
   // ── Collapsed: icon-only strip ─────────────────────────────────────────────
   if (collapsed) {
@@ -175,7 +197,7 @@ const Sidebar: React.FC = () => {
           {filteredItems.map(item => {
             const key = item.navKey ?? item.href
             const href = item.href === '#'
-              ? (item.children?.[0]?.href ?? '#')
+              ? (visibleChildrenOf(item)[0]?.href ?? '#')
               : item.href
             const active = item.href === '#'
               ? item.children?.some(c => isActive(c.href))
@@ -217,6 +239,8 @@ const Sidebar: React.FC = () => {
     const hasChildren = item.children && item.children.length > 0
 
     if (hasChildren) {
+      const shownChildren = visibleChildrenOf(item)
+      if (shownChildren.length === 0) return null
       const groupKey   = item.navKey ?? item.href
       const isExpanded = expandedGroups.includes(groupKey)
       const panelId    = `nav-panel-${groupKey}`
@@ -246,12 +270,7 @@ const Sidebar: React.FC = () => {
             hidden={!isExpanded}
             className={isExpanded ? "border-t border-white/10 mt-1 pt-1" : ""}
           >
-            {item.children
-              ?.filter(child =>
-                (!child.roles || child.roles.includes(session?.role || '')) &&
-                passesAbac(child)
-              )
-              .map(child => renderNavItem(child, depth + 1))}
+            {shownChildren.map(child => renderNavItem(child, depth + 1))}
           </div>
         </div>
       )

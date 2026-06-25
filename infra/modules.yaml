@@ -58,6 +58,15 @@ modules:
         scopable: true
         scope_type: pool
         default: none
+      # Slice auth quality (2026-06-25): curadoria + calibração (Arc 13 Fase H).
+      # read_only = ver fila/contexto cego; read_write = re-pontuar, resolver, flag de viés.
+      # Não tem rounds (≠ revisar/contestar). Concedido pela tela de Access, escopo por pool.
+      curar:
+        label: Curar e calibrar avaliações
+        domain: [none, read_only, read_write]
+        scopable: true
+        scope_type: pool
+        default: none
       report:
         label: Visualizar relatórios de qualidade
         domain: [none, read_only]

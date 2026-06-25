@@ -335,6 +335,7 @@
     "title":        "Evaluation Curation",
     "subtitle":     "AI evaluator quality review — calibration feedback loop",
     "refresh":      "↻ Refresh",
+    "noPermission": "You don't have the curation permission ('curar'). Ask an admin to grant it under Access → Quality.",
     "kpi": {
       "pending":     "Pending",
       "totalLoaded": "Total loaded",

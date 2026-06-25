@@ -213,6 +213,31 @@ def _require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="admin token required")
 
 
+async def _curation_pool_id(db_pool, review_id: str, tenant_id: str) -> str | None:
+    """ABAC scope (curar) — resolve o pool da curation review via sua campanha.
+    None se não resolver (campanha cross-pool / não achada) → o check aceita any-scope."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT c.pool_id
+            FROM evaluation.curation_reviews cr
+            JOIN evaluation.instances i ON i.id = cr.evaluation_instance_id
+            JOIN evaluation.campaigns  c ON c.id = i.campaign_id
+            WHERE cr.id = $1 AND cr.tenant_id = $2
+            """,
+            review_id, tenant_id,
+        )
+    return (row["pool_id"] if row and row["pool_id"] else None)
+
+
+def _require_curar(request: Request, *, write: bool) -> dict:
+    """Gate ABAC de curadoria: exige Bearer JWT + grant `curar` no module_config.
+    write=True exige read_write; leitura exige read_only. Devolve o jwt_payload.
+    O escopo por pool é checado pelo caller (que resolve o pool da review)."""
+    from .router import _decode_jwt  # local import: evita ciclo
+    return _decode_jwt(request)
+
+
 # 5a — campo ABAC por round (cada um concede um round; perfil combina o que precisar).
 def _contest_field(round_n: int) -> str:
     return {1: "contestar", 2: "contestar_replica", 3: "contestar_treplica"}.get(round_n, "contestar_treplica")
@@ -657,7 +682,11 @@ async def list_curations(
     offset: int = 0,
 ) -> dict:
     """List curation reviews — the curator queue."""
+    from .router import _check_abac_permission  # local import: evita ciclo
     tenant_id = _get_tenant(request)
+    jwt_payload = _require_curar(request, write=False)
+    if not _check_abac_permission(jwt_payload, "curar", None, min_access="read_only"):
+        raise HTTPException(status_code=403, detail="caller lacks 'curar' permission")
     reviews = await _db.list_curation_reviews(
         request.app.state.db_pool,
         tenant_id,
@@ -681,8 +710,14 @@ async def resolve_curation(
     - recalibrated  → create CalibrationNote, publish to KB (async)
     - bias_flagged  → create CalibrationNote with severity=high, publish to KB
     """
+    from .router import _check_abac_permission  # local import: evita ciclo
     tenant_id = _get_tenant(request)
-    curator_id = _get_user(request)
+    jwt_payload = _require_curar(request, write=True)
+    curator_id = jwt_payload.get("sub", "")
+    # ABAC curar (read_write), escopo por pool da review.
+    _pool_id = await _curation_pool_id(request.app.state.db_pool, review_id, tenant_id)
+    if not _check_abac_permission(jwt_payload, "curar", _pool_id, min_access="read_write"):
+        raise HTTPException(status_code=403, detail="caller lacks 'curar' permission for this pool")
 
     if body.status not in ("approved", "recalibrated", "bias_flagged"):
         raise HTTPException(status_code=400, detail="status must be approved, recalibrated, or bias_flagged")
@@ -854,8 +889,13 @@ async def get_blind_context(review_id: str, request: Request) -> dict:
     """Contexto da tarefa CEGA: o form a re-pontuar + ponteiros p/ o transcript —
     **sem** as notas da IA (o curador pontua às cegas). Se já houver re-pontuação,
     devolve o reveal armazenado (re-abrir mostra o diff)."""
+    from .router import _check_abac_permission  # local import: evita ciclo
     tenant_id = _get_tenant(request)
+    jwt_payload = _require_curar(request, write=False)
     pool = request.app.state.db_pool
+    _pool_id = await _curation_pool_id(pool, review_id, tenant_id)
+    if not _check_abac_permission(jwt_payload, "curar", _pool_id, min_access="read_only"):
+        raise HTTPException(status_code=403, detail="caller lacks 'curar' permission for this pool")
     ctx = await _load_blind_review_ctx(pool, review_id, tenant_id)
     blind = await _db.get_blind_result(pool, review_id, tenant_id)
     return {
@@ -875,9 +915,14 @@ async def blind_rescore(review_id: str, body: BlindRescoreBody, request: Request
     dimensão. A nota cega é um **artefato de calibração** (NÃO altera `final_score` nem
     re-emite `evaluation_finalized`). Reusa `scoring.aggregate_scores` (form = fonte única)
     p/ humano E IA — diff apples-to-apples. Idempotente (`uq_blind_per_review` → 409)."""
+    from .router import _check_abac_permission  # local import: evita ciclo
     tenant_id  = _get_tenant(request)
-    curator_id = _get_user(request)
+    jwt_payload = _require_curar(request, write=True)
+    curator_id = jwt_payload.get("sub", "")
     pool = request.app.state.db_pool
+    _pool_id = await _curation_pool_id(pool, review_id, tenant_id)
+    if not _check_abac_permission(jwt_payload, "curar", _pool_id, min_access="read_write"):
+        raise HTTPException(status_code=403, detail="caller lacks 'curar' permission for this pool")
 
     ctx = await _load_blind_review_ctx(pool, review_id, tenant_id)
     review, instance, result, form = ctx["review"], ctx["instance"], ctx["result"], ctx["form"]
@@ -971,10 +1016,15 @@ async def blind_resolve(review_id: str, body: BlindResolveBody, request: Request
     `CalibrationNote` (→ KB/RAG + `calibration.events`) e resolve a review. A nota cega é
     **artefato de calibração** — corrige avaliações FUTURAS, não esta (não toca `final_score`).
     Sem desacordo → `approved`, sem nota. `flag_bias` → `bias_flagged` (severidade alta)."""
+    from .router import _check_abac_permission  # local import: evita ciclo
     tenant_id  = _get_tenant(request)
-    curator_id = _get_user(request)
+    jwt_payload = _require_curar(request, write=True)
+    curator_id = jwt_payload.get("sub", "")
     pool     = request.app.state.db_pool
     producer = request.app.state.kafka_producer
+    _pool_id = await _curation_pool_id(pool, review_id, tenant_id)
+    if not _check_abac_permission(jwt_payload, "curar", _pool_id, min_access="read_write"):
+        raise HTTPException(status_code=403, detail="caller lacks 'curar' permission for this pool")
 
     review = await _db.get_curation_review(pool, review_id, tenant_id)
     if not review:

@@ -335,6 +335,7 @@
     "title":        "Curadoria de Avaliações",
     "subtitle":     "Revisão da qualidade do avaliador AI — feedback loop de calibração",
     "refresh":      "↻ Atualizar",
+    "noPermission": "Você não tem a permissão de curadoria ('curar'). Peça a um admin para conceder em Acesso → Avaliação de Qualidade.",
     "kpi": {
       "pending":     "Pendente",
       "totalLoaded": "Total carregado",
