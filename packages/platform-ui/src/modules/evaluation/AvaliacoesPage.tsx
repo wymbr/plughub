@@ -258,11 +258,11 @@ export function ReviewPanel({
   onDone:     () => void
 }) {
   const { t } = useTranslation('evaluation')
-  const { tenantId: TENANT } = useAuth()
+  const { tenantId: TENANT, session } = useAuth()
   const [decision, setDecision] = useState<'approved' | 'adjusted_approved' | 'rejected'>('approved')
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState<string | null>(null)
-  const { contestations } = useContestations(TENANT, result.result_id)
+  const { contestations } = useContestations(TENANT, result.result_id, session?.accessToken)
 
   // Per-criterion review notes — criterion_id → note text
   const [crNotes, setCrNotes] = useState<Record<string, string>>({})

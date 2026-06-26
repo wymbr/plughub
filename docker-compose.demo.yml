@@ -585,6 +585,8 @@ services:
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       ANALYTICS_API_URL: http://analytics-api:3500   # R5 — tool_trace via GET /v1/audit/mcp-calls
+      EVALUATION_API_URL: http://evaluation-api:3400   # G-PROBE fase 2 — base p/ pre-review
+      PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
@@ -1285,6 +1287,7 @@ services:
       PLUGHUB_EVALUATION_REDIS_URL:           redis://redis:6379
       PLUGHUB_EVALUATION_KAFKA_BROKERS:       kafka:29092
       PLUGHUB_EVALUATION_ADMIN_TOKEN:         changeme_eval_admin_token_demo
+      PLUGHUB_EVALUATION_SERVICE_TOKEN:       changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço (sistema/agente/e2e)
       PLUGHUB_EVALUATION_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
       PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800

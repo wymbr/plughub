@@ -495,9 +495,11 @@ export async function deleteCampaign(campaignId: string, tenantId: string, token
 export async function seedSyntheticEvaluations(
   tenantId: string, campaignId: string, count: number, token?: string,
 ): Promise<{ results_created: number; nps_signals_emitted: number; requested: number }> {
+  // G-PROBE fase 2 — endpoint de ops agora gateado (serviço OU Bearer+ABAC formularios:rw);
+  // a UI usa o Bearer do operador (token = session.accessToken), sem segredo no frontend.
   const r = await fetch(`${BASE}/admin/seed-synthetic`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify({ tenant_id: tenantId, campaign_id: campaignId, count }),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
@@ -509,11 +511,12 @@ export async function flushSyntheticEvaluations(
   tenantId: string, token?: string,
 ): Promise<{ pg: unknown; ch: unknown }> {
   const q = `?tenant_id=${encodeURIComponent(tenantId)}`
-  const pgRes = await fetch(`${BASE}/admin/flush-synthetic${q}`, { method: 'POST', headers: adminHeaders(token) })
+  // G-PROBE fase 2 — flush da evaluation-api gateado (serviço OU Bearer+ABAC); a UI usa Bearer.
+  const pgRes = await fetch(`${BASE}/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
   if (!pgRes.ok) throw new Error(`evaluation flush HTTP ${pgRes.status}: ${await pgRes.text()}`)
   const pg = await pgRes.json()
-  // analytics-api é alcançado pelo proxy "/reports" → 3500
-  const chRes = await fetch(`/reports/admin/flush-synthetic${q}`, { method: 'POST', headers: adminHeaders(token) })
+  // analytics-api é alcançado pelo proxy "/reports" → 3500 (open-access no demo; Bearer ignorado)
+  const chRes = await fetch(`/reports/admin/flush-synthetic${q}`, { method: 'POST', headers: bearerHeaders(token) })
   const ch = chRes.ok ? await chRes.json() : { error: `HTTP ${chRes.status}` }
   return { pg, ch }
 }
@@ -522,9 +525,10 @@ export async function flushSyntheticEvaluations(
 export async function dispatchCampaign(
   campaignId: string, tenantId: string, token?: string,
 ): Promise<{ campaign_id: string; dispatched: number; evaluator_pool: string }> {
+  // G-PROBE fase 2 — dispatch gateado (serviço OU Bearer+ABAC formularios:rw); a UI usa Bearer.
   const r = await fetch(
     `${BASE}/campaigns/${campaignId}/dispatch?tenant_id=${encodeURIComponent(tenantId)}`,
-    { method: 'POST', headers: adminHeaders(token) },
+    { method: 'POST', headers: bearerHeaders(token) },
   )
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
@@ -541,7 +545,7 @@ export async function resumeCampaign(campaignId: string, token?: string) {
 
 // ── Instances ─────────────────────────────────────────────────────────────────
 
-export function useInstances(campaignId: string, status?: string, pollMs = 0) {
+export function useInstances(campaignId: string, status?: string, pollMs = 0, accessToken?: string) {
   const [instances, setInstances] = useState<EvaluationInstance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -549,7 +553,9 @@ export function useInstances(campaignId: string, status?: string, pollMs = 0) {
   const load = useCallback(async () => {
     try {
       const qs = [`campaign_id=${campaignId}`, status ? `status=${status}` : ''].filter(Boolean).join('&')
-      const r = await fetch(`${BASE}/instances?${qs}`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/instances?${qs}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setInstances(Array.isArray(d) ? d : (d?.instances ?? d?.data ?? d?.items ?? []))
@@ -559,7 +565,7 @@ export function useInstances(campaignId: string, status?: string, pollMs = 0) {
     } finally {
       setLoading(false)
     }
-  }, [campaignId, status])
+  }, [campaignId, status, accessToken])
 
   useEffect(() => {
     load()
@@ -752,7 +758,7 @@ export function useResultTranscript(
 
 // ── Contestations ─────────────────────────────────────────────────────────────
 
-export function useContestations(tenantId: string, resultId?: string) {
+export function useContestations(tenantId: string, resultId?: string, accessToken?: string) {
   const [contestations, setContestations] = useState<EvaluationContestation[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -760,14 +766,16 @@ export function useContestations(tenantId: string, resultId?: string) {
     try {
       const params = new URLSearchParams({ tenant_id: tenantId })
       if (resultId) params.set('result_id', resultId)
-      const r = await fetch(`${BASE}/contestations?${params}`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/contestations?${params}`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setContestations(Array.isArray(d) ? d : (d?.contestations ?? d?.data ?? d?.items ?? []))
     } catch { /* silent */ } finally {
       setLoading(false)
     }
-  }, [tenantId, resultId])
+  }, [tenantId, resultId, accessToken])
 
   useEffect(() => { load() }, [load])
   return { contestations, loading, reload: load }
@@ -995,7 +1003,7 @@ export async function submitDimensionContestation(
 // ── Arc 13 — CurationSamplingRules ───────────────────────────────────────────
 
 /** Fetch curation sampling rules for a campaign. */
-export function useCurationSamplingRules(campaignId: string | null) {
+export function useCurationSamplingRules(campaignId: string | null, accessToken?: string) {
   const [rules, setRules] = useState<CurationSamplingRule[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1004,7 +1012,9 @@ export function useCurationSamplingRules(campaignId: string | null) {
     if (!campaignId) return
     setLoading(true)
     try {
-      const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`)
+      const headers: Record<string, string> = {}
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`
+      const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, { headers })
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const d = await r.json()
       setRules(Array.isArray(d) ? d : (d?.rules ?? d?.data ?? []))
@@ -1014,13 +1024,14 @@ export function useCurationSamplingRules(campaignId: string | null) {
     } finally {
       setLoading(false)
     }
-  }, [campaignId])
+  }, [campaignId, accessToken])
 
   useEffect(() => { load() }, [load])
   return { rules, loading, error, reload: load }
 }
 
-/** Save (full replace) curation sampling rules for a campaign. */
+/** Save (full replace) curation sampling rules for a campaign.
+ *  G-PROBE fase 2 — token = session.accessToken (Bearer), gate via ABAC formularios:rw. */
 export async function saveCurationSamplingRules(
   campaignId: string,
   rules: Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[],
@@ -1028,7 +1039,7 @@ export async function saveCurationSamplingRules(
 ): Promise<CurationSamplingRule[]> {
   const r = await fetch(`${BASE}/campaigns/${campaignId}/sampling-rules`, {
     method: 'PUT',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify({ rules: rules.map(rule => ({ ...rule, campaign_id: campaignId })) }),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)

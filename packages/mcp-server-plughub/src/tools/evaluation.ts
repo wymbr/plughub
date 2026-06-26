@@ -39,6 +39,8 @@ export interface EvaluationDeps {
   analyticsApiUrl?: string
   /** URL do agent-registry — R5: trajetória esperada (GET /v1/skills/:flow_id → flow.steps) */
   agentRegistryUrl?: string
+  /** G-PROBE fase 2 — credencial de serviço (X-Service-Token) p/ endpoints de sistema da evaluation-api */
+  serviceToken?: string
 }
 
 // ─── Schemas de input ─────────────────────────────────────────────────────────
@@ -683,6 +685,9 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
   // R5 — tool_trace + expected-trajectory enrichment sources (optional; degrade gracefully).
   const analyticsApiUrl  = deps.analyticsApiUrl  ?? process.env["ANALYTICS_API_URL"]    ?? "http://localhost:3500"
   const agentRegistryUrl = deps.agentRegistryUrl ?? process.env["AGENT_REGISTRY_URL"]   ?? "http://localhost:3300"
+  // G-PROBE fase 2 — credencial de serviço para os endpoints de sistema/agente da
+  // evaluation-api (ex.: pre-review). Lida do env; header omitido quando vazia (demo).
+  const evalServiceToken = deps.serviceToken ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? ""
 
   // ── transcript_get ────────────────────────────────────────────────────────
   server.tool(
@@ -1416,7 +1421,7 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
         const { session_token, instance_id, dimension_reviews, calibration_signal } = parsed
 
         const { tenant_id } = verifySessionToken(session_token)
-        const apiBase = evaluationApiUrl ?? "http://localhost:3400"
+        const apiBase = evaluationApiUrl ?? process.env["EVALUATION_API_URL"] ?? "http://localhost:3400"
 
         // Extrai agent_type_id do revisor para registrar como author_id
         let reviewer_agent_id = "pre_reviewer_unknown"
@@ -1444,6 +1449,8 @@ export function registerEvaluationTools(server: McpServer, deps: EvaluationDeps)
             headers: {
               "Content-Type": "application/json",
               "X-Tenant-ID":  tenant_id,
+              // G-PROBE fase 2 — credencial de serviço (omitida quando não configurada).
+              ...(evalServiceToken ? { "X-Service-Token": evalServiceToken } : {}),
             },
             body: JSON.stringify(body),
           }

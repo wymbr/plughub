@@ -2,6 +2,86 @@
 
 ---
 
+## G-PROBE fase 2 (cleanup UI, 2026-06-26) — admin-token removido + Bearer nas listas
+
+Fecha o cleanup de UI do G-PROBE: a `CampaignsPage` não tem mais o input de admin-token (todas as ações de
+ops já usam o Bearer do operador via `_require_service_or_eval_write`), e os consumidores de lista que ainda
+não mandavam Bearer passam a mandar.
+
+- **`CampaignsPage.tsx`**: removidos `adminToken` state, o `<input type=password>` do sidebar e a prop
+  `adminToken` de `CreateModal`/`CurationSamplingRulesDetailPanel`. As curation rules
+  (`saveCurationSamplingRules`) agora usam `accessToken` (Bearer). i18n `campaigns.sidebar.adminTokenPlaceholder`
+  removido de en + pt-BR (a chave `filters.adminTokenPlaceholder`, ainda usada na AvaliaçõesPage, permanece).
+- **`evaluation-hooks.ts`**: `saveCurationSamplingRules` → `bearerHeaders`; `useCurationSamplingRules`,
+  `useInstances`, `useContestations` ganham `accessToken?` opcional e mandam `Authorization: Bearer` quando
+  presente (forms/campaigns/rubric/results/curations já mandavam). Degradação graciosa do gate any-of cobre
+  chamadas sem token.
+- **`AvaliacoesPage.tsx`**: `useContestations(TENANT, result_id, session?.accessToken)`.
+- **Nota**: `saveCurationSamplingRules` faz `PUT /campaigns/{id}/sampling-rules` (coleção), que NÃO existe no
+  backend (rotas são POST + PUT/DELETE por `{rule_id}`) → 405 pré-existente, fora do escopo do G-PROBE; o
+  header trocou p/ Bearer por consistência.
+
+---
+
+## G-PROBE fase 2 (slice caller-wiring, 2026-06-26) — credencial de serviço ENFORCED no demo
+
+Ativa a credencial de serviço do slice backend, wirando os callers e provisionando o token no demo.
+
+- **Provisionamento**: `PLUGHUB_EVALUATION_SERVICE_TOKEN=changeme_eval_service_token_demo` no
+  `docker-compose.demo.yml` para `evaluation-api` e `mcp-server-plughub` (+ `EVALUATION_API_URL` no
+  mcp-server, que faltava). Com o token setado, `_require_service`/`_require_service_or_eval_write` passam a
+  ENFORÇAR no demo.
+- **Backend caller**: `mcp-server-plughub` `evaluation_pre_review_submit` envia `X-Service-Token` (lido de
+  `PLUGHUB_EVALUATION_SERVICE_TOKEN`, header omitido quando vazio) + fallback `EVALUATION_API_URL` p/ o base.
+  É o ÚNICO caller HTTP backend de endpoint service-gated — o avaliador real publica `evaluation.completed`
+  por **Kafka** (não HTTP `/ingest`), e os scanners de dispatch chamam a função internamente (não o endpoint).
+- **UI bridge** (`platform-ui/evaluation-hooks.ts` + `CampaignsPage.tsx`): `seedSyntheticEvaluations`,
+  `flushSyntheticEvaluations`, `dispatchCampaign` passam a enviar o **Bearer do operador**
+  (`session.accessToken`) em vez de `X-Admin-Token` → `_require_service_or_eval_write` aceita via ABAC
+  `formularios:rw` (sem segredo no frontend). O input de admin-token da `CampaignsPage` fica vestigial
+  (remoção = cleanup UI, follow-up).
+- **Smoke**: `infra/test/smoke_gprobe_service_auth.sh` — login admin (Bearer) + service token; assере os 3
+  gates: `/dispatch/scan` (401 sem token / 200 com X-Service-Token / 401 com X-Admin-Token = sem fallback);
+  `/campaigns/{id}/dispatch` (401 sem cred / 200 service / 200 Bearer); `/forms` (200 anônimo / 200 Bearer /
+  403 Bearer sem grant evaluation, JWT mintado no container).
+- **Achado registrado (TODO §G-PROBE)**: os ~15 e2e legados de eval já estavam **vermelhos pela Fase 1**
+  (criam form/campanha sem Bearer; `create_form/create_campaign` exigem `formularios:rw`) — repair (Bearer no
+  setup + `X-Service-Token` nos calls gated) fica como follow-up; o smoke dedicado cobre o G-PROBE no intervalo.
+
+---
+
+## G-PROBE fase 2 (slice backend, 2026-06-26) — credencial de serviço + leituras de lista fechadas
+
+Fecha o gap de auth dos endpoints de **sistema/agente** da evaluation-api (header-only `X-Tenant-ID`/
+`X-User-ID` ou `_require_admin`, sem JWT\ABAC) com uma **credencial de serviço** strict, e fecha as
+**leituras de lista** compartilhadas com gate any-of. Decisões da sessão: gate de serviço **strict** (sem
+fallback p/ admin-token); UI usa **Bearer+ABAC** (sem segredo no frontend); **slice backend-first** (só
+evaluation-api — wiring dos callers + migração da UI ficam p/ slices seguintes).
+
+- **`config.service_token`** (env `PLUGHUB_EVALUATION_SERVICE_TOKEN`, default vazio = no-op/demo aberto,
+  espelha `admin_token`).
+- **`_require_service`** (strict `X-Service-Token`) nos endpoints puramente sistema/agente:
+  `ingest`, `instances/claim`, `instances/{id}/expire|skip|mark-error`, `dispatch/scan` (router);
+  `instances/{id}/pre-review`, `instances/{id}/ai-review`, `calibration-notes/{id}/publish`
+  (contestation_router). Os que estavam em `_require_admin` migraram p/ serviço.
+- **`_require_service_or_eval_write`** (serviço OU Bearer+ABAC `evaluation.formularios` read_write) nas ações
+  de **ops disparáveis pela UI**: `campaigns/{id}/dispatch`, `campaigns/{id}/backfill`, `admin/seed-synthetic`,
+  `admin/flush-synthetic` (router); `campaigns/{id}/sampling-rules` create/update/delete (contestation_router).
+- **`_require_any_evaluation`** (any-of dos campos `evaluation`, Bearer opcional, degradação graciosa:
+  sem token/legado/admin → permite; JWT com `module_config` sem nenhum grant evaluation → 403) nas
+  **leituras de lista** compartilhadas: `list_forms`, `list_campaigns`, `list_rubric_templates`,
+  `list_instances`, `list_contestations` (router); `list_calibration_notes`, `list_sampling_rules`
+  (contestation_router). `_can_view_transcript` refatorado p/ reusar `_has_any_evaluation_access` (mesma semântica).
+- **Testes**: `tests/test_gprobe_phase2.py` (funções puras, sem DB) — `_require_service` (strict, no-op quando
+  vazio, sem fallback de admin), `_require_service_or_eval_write` (serviço × Bearer rw × read_only/outro campo),
+  `_has_any_evaluation_access`/`_require_any_evaluation` (any-of + degradação).
+- **Postura demo**: `service_token` fica **não-provisionado** neste slice → gates de serviço no-op (demo segue
+  funcional, sem quebra de UI). Provisionar o token + wiring (orchestrator-bridge/agentes/workers/seed/e2e) +
+  migrar CampaignsPage p/ Bearer (remover input de admin-token) = follow-up.
+- **`contestation_router._require_admin` removido** (sem uso após a migração de `ai-review` p/ serviço).
+
+---
+
 ## S2.4 — motor de review por workflow APOSENTADO (decisão 2026-06-25) — só docs/anotações
 
 Decisão de arquitetura, não bug. O contest→review→finalize **canônico já existe** no **Arc 13 REST**

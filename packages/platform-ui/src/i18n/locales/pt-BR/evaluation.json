@@ -126,7 +126,6 @@
       "completed": "Concluída"
     },
     "sidebar": {
-      "adminTokenPlaceholder": "Token admin",
       "newButton": "+ Nova",
       "loading": "Carregando…",
       "noCampaigns": "Nenhuma campanha encontrada"

@@ -206,13 +206,6 @@ def _get_user(request: Request) -> str:
     return user_id
 
 
-def _require_admin(request: Request) -> None:
-    token = request.headers.get("X-Admin-Token") or request.headers.get("x-admin-token")
-    from .config import settings
-    if token != settings.admin_token:
-        raise HTTPException(status_code=403, detail="admin token required")
-
-
 async def _curation_pool_id(db_pool, review_id: str, tenant_id: str) -> str | None:
     """ABAC scope (curar) — resolve o pool da curation review via sua campanha.
     None se não resolver (campanha cross-pool / não achada) → o check aceita any-scope."""
@@ -544,6 +537,8 @@ async def submit_pre_review(
     author_type=pre_reviewer_ai, round=1 (same round as evaluator).
     Optionally includes calibration_signal → triggers CurationReview creation.
     """
+    from .router import _require_service  # local import: evita ciclo
+    _require_service(request)  # G-PROBE fase 2 — pre_reviewer_ai (sistema)
     tenant_id = _get_tenant(request)
     agent_id = _get_user(request)
 
@@ -620,8 +615,9 @@ async def submit_ai_review(instance_id: str, body: AiReviewBody, request: Reques
     de faixa ∨ sem nota). O revisor IA (sistema) opcionalmente ajusta a nota e PUBLICA:
     avaliado IA → finalize(auto_ai); avaliado humano → contestation_open (abre janela).
     Timeout técnico do gate (stall → publica sem ajuste) é follow-up."""
+    from .router import _require_service  # local import: evita ciclo
     tenant_id = _get_tenant(request)
-    _require_admin(request)  # revisor IA = sistema
+    _require_service(request)  # G-PROBE fase 2 — revisor IA = sistema
     pool = request.app.state.db_pool
     producer = request.app.state.kafka_producer
 
@@ -1119,6 +1115,8 @@ async def list_calibration_notes(
     offset: int = 0,
 ) -> dict:
     """List calibration notes — the evaluator calibration history."""
+    from .router import _require_any_evaluation  # local import: evita ciclo
+    _require_any_evaluation(request)  # G-PROBE fase 2 — read compartilhado de lista
     tenant_id = _get_tenant(request)
     notes = await _db.list_calibration_notes(
         request.app.state.db_pool,
@@ -1142,6 +1140,8 @@ async def publish_calibration_note(
     Called after successful ingest into mcp-server-knowledge.
     Emits calibration_note_published Kafka event.
     """
+    from .router import _require_service  # local import: evita ciclo
+    _require_service(request)  # G-PROBE fase 2 — sistema (após ingest no KB)
     tenant_id = _get_tenant(request)
     note = await _db.mark_calibration_note_published(
         request.app.state.db_pool,
@@ -1174,6 +1174,8 @@ async def list_sampling_rules(
     request: Request,
 ) -> dict:
     """List curation sampling rules for a campaign."""
+    from .router import _require_any_evaluation  # local import: evita ciclo
+    _require_any_evaluation(request)  # G-PROBE fase 2 — read compartilhado de lista
     tenant_id = _get_tenant(request)
     rules = await _db.list_sampling_rules(
         request.app.state.db_pool,
@@ -1190,6 +1192,8 @@ async def create_sampling_rule(
     request: Request,
 ) -> dict:
     """Create a curation sampling rule for a campaign."""
+    from .router import _require_service_or_eval_write  # local import: evita ciclo
+    _require_service_or_eval_write(request)  # G-PROBE fase 2 — UI (Bearer+ABAC) ou serviço
     tenant_id = _get_tenant(request)
     rule = await _db.create_sampling_rule(
         request.app.state.db_pool,
@@ -1211,6 +1215,8 @@ async def update_sampling_rule(
     request: Request,
 ) -> dict:
     """Update a curation sampling rule."""
+    from .router import _require_service_or_eval_write  # local import: evita ciclo
+    _require_service_or_eval_write(request)  # G-PROBE fase 2 — UI (Bearer+ABAC) ou serviço
     tenant_id = _get_tenant(request)
     updates = body.model_dump(exclude_none=True)
     rule = await _db.update_sampling_rule(
@@ -1231,6 +1237,8 @@ async def delete_sampling_rule(
     request: Request,
 ) -> dict:
     """Delete a curation sampling rule."""
+    from .router import _require_service_or_eval_write  # local import: evita ciclo
+    _require_service_or_eval_write(request)  # G-PROBE fase 2 — UI (Bearer+ABAC) ou serviço
     tenant_id = _get_tenant(request)
     deleted = await _db.delete_sampling_rule(
         request.app.state.db_pool,

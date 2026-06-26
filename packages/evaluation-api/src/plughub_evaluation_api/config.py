@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     kafka_brokers: str = "localhost:9092"
     admin_token: str = ""
+    # G-PROBE fase 2 — credencial de serviço (backend↔backend / agente / worker / e2e)
+    # para os endpoints de sistema (ingest/claim/dispatch/seed/...). Strict X-Service-Token;
+    # vazio = no-op (postura demo aberta, espelha admin_token). env
+    # PLUGHUB_EVALUATION_SERVICE_TOKEN. NÃO é segredo de frontend — a UI usa Bearer+ABAC.
+    service_token: str = ""
 
     # Kafka topics
     evaluation_topic: str = "evaluation.events"

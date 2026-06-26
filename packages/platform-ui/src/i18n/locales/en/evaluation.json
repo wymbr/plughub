@@ -126,7 +126,6 @@
       "completed": "Completed"
     },
     "sidebar": {
-      "adminTokenPlaceholder": "Admin token",
       "newButton": "+ New",
       "loading": "Loading…",
       "noCampaigns": "No campaigns found"

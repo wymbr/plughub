@@ -200,6 +200,73 @@ def _require_evaluation_field(
     return jwt_payload
 
 
+# ─── G-PROBE fase 2 — credencial de serviço + leitura "qualquer acesso evaluation" ──
+
+def _require_service(request: Request) -> None:
+    """Gate STRICT de credencial de serviço (X-Service-Token) para endpoints de
+    sistema/agente/worker (ingest, claim, pre-review/ai-review, publish-calibration,
+    expire/skip/mark-error, dispatch/scan). Sem fallback p/ admin (decisão: token de
+    serviço only). `service_token` vazio = no-op (postura demo aberta, espelha
+    `_require_admin`). 401 em token ausente/errado quando configurado."""
+    if not settings.service_token:
+        return
+    token = request.headers.get("x-service-token", "")
+    if token != settings.service_token:
+        raise HTTPException(status_code=401, detail="service credential required")
+
+
+def _require_service_or_eval_write(
+    request: Request, *, field: str = "formularios", pool_id: str | None = None,
+) -> None:
+    """Gate p/ ações de ops disparáveis TANTO por backend (scanner/seed/e2e) QUANTO
+    pela UI: aceita X-Service-Token de serviço OU Bearer JWT com grant ABAC
+    `evaluation.{field}` em read_write (a UI opera com o JWT do operador, sem segredo
+    no frontend — decisão Q2). `service_token` vazio = no-op (demo). Quando o serviço
+    está configurado e o header de serviço não casa, exige o Bearer+ABAC."""
+    if not settings.service_token:
+        return
+    if request.headers.get("x-service-token", "") == settings.service_token:
+        return
+    # Sem credencial de serviço → exige Bearer + ABAC de escrita (caminho da UI).
+    jwt_payload = _decode_jwt(request)
+    if not _check_abac_permission(jwt_payload, field, pool_id, min_access="read_write"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"forbidden: requires service token or evaluation.{field} (read_write)",
+        )
+
+
+def _has_any_evaluation_access(jwt_payload: dict[str, Any] | None) -> bool:
+    """Any-of dos campos do módulo `evaluation`: QUALQUER grant != none habilita a
+    leitura compartilhada (listas de forms/campaigns/rubric/etc. que telas distintas
+    consomem p/ mapear id→nome). Degradação graciosa (postura demo, igual a
+    `_can_view_transcript`): sem token / `module_config` vazio / role admin → permitido;
+    `module_config` presente SEM nenhum grant evaluation → negado."""
+    if not jwt_payload:
+        return True
+    if "admin" in (jwt_payload.get("roles") or []):
+        return True
+    module_config = jwt_payload.get("module_config", {})
+    if not module_config:
+        return True
+    eval_cfg = module_config.get("evaluation", {})
+    if not isinstance(eval_cfg, dict):
+        return False
+    return any(
+        isinstance(fc, dict) and fc.get("access", "none") != "none"
+        for fc in eval_cfg.values()
+    )
+
+
+def _require_any_evaluation(request: Request) -> None:
+    """G-PROBE fase 2 — fecha as LEITURAS de lista com "qualquer acesso evaluation".
+    Bearer opcional (degrada p/ permitir quando ausente/legado); nega só um JWT com
+    `module_config` que não concede nenhum campo de `evaluation`."""
+    jwt_payload = _decode_jwt_optional(request)
+    if not _has_any_evaluation_access(jwt_payload):
+        raise HTTPException(status_code=403, detail="forbidden: requires any evaluation module access")
+
+
 # ─── DB / infra accessors ─────────────────────────────────────────────────────
 
 def _pool(request: Request) -> asyncpg.Pool:
@@ -314,19 +381,9 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
     ações vêm de `available_actions`). Generaliza sobre os campos (o módulo usa `report`
     como leitura, além de `revisar`/`contestar`/round-variants/`formularios`/`gerir_rubrica`)
     — não enumera nomes. Graceful degradation: token legado/anônimo ou `module_config`
-    vazio → permitido (endpoints de avaliação são abertos por tenant; conteúdo mascarado, D3)."""
-    if not jwt_payload:
-        return True
-    module_config = jwt_payload.get("module_config", {})
-    if not module_config:
-        return True  # legado / admin sem module_config → degradação permissiva
-    eval_cfg = module_config.get("evaluation", {})
-    if not isinstance(eval_cfg, dict):
-        return False
-    for field_cfg in eval_cfg.values():
-        if isinstance(field_cfg, dict) and field_cfg.get("access", "none") != "none":
-            return True
-    return False
+    vazio → permitido (endpoints de avaliação são abertos por tenant; conteúdo mascarado, D3).
+    Mesma semântica any-of de `_has_any_evaluation_access` (G-PROBE fase 2)."""
+    return _has_any_evaluation_access(jwt_payload)
 
 
 def _compute_result_scope(
@@ -422,10 +479,10 @@ async def list_forms(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    # NOTE (G-PROBE fase 1): leitura de LISTA fica aberta — é read compartilhado por
-    # várias telas Quality (Avaliações/Calibração/Curadoria/Reports mapeiam id→nome).
-    # A *view* é barrada pelo route guard; mutações são gateadas. Fechar a lista (gate
-    # "qualquer acesso evaluation" + Bearer em todos os consumidores) é fase 2.
+    # G-PROBE fase 2 — read compartilhado (Avaliações/Calibração/Curadoria/Reports mapeiam
+    # id→nome): fechado com gate any-of "qualquer acesso evaluation" (Bearer opcional;
+    # degrada p/ permitir sem token/legado; nega só JWT sem nenhum grant evaluation).
+    _require_any_evaluation(request)
     pool = _pool(request)
     rows = await _db.list_forms(pool, tenant_id, status=status, limit=limit, offset=offset)
     rows = [_expose_form_id(r) for r in rows]
@@ -531,7 +588,7 @@ class RubricPublish(BaseModel):
 async def list_rubric_templates(
     request: Request, tenant_id: str, campaign_id: str | None = None,
 ) -> dict:
-    # leitura de LISTA aberta (read compartilhado) — ver nota em list_forms. Fase 2 fecha.
+    _require_any_evaluation(request)  # G-PROBE fase 2 — ver nota em list_forms
     pool = _pool(request)
     rows = await _db.list_rubric_templates(pool, tenant_id, campaign_id=campaign_id)
     return {"tenant_id": tenant_id, "rubric_templates": rows, "count": len(rows)}
@@ -757,7 +814,7 @@ async def list_campaigns(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
-    # leitura de LISTA aberta (read compartilhado) — ver nota em list_forms. Fase 2 fecha.
+    _require_any_evaluation(request)  # G-PROBE fase 2 — ver nota em list_forms
     pool = _pool(request)
     rows = await _db.list_campaigns(
         pool, tenant_id,
@@ -885,6 +942,7 @@ async def list_instances(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
+    _require_any_evaluation(request)  # G-PROBE fase 2 — read compartilhado de lista
     pool = _pool(request)
     rows = await _db.list_instances(pool, tenant_id, campaign_id=campaign_id,
                                      status=status, session_id=session_id,
@@ -940,7 +998,8 @@ async def dispatch_campaign(
     (fallback: global default). Instances stay `scheduled` so the evaluator can claim them.
     Used by the "Rodar agora" button and (later) the windowed dispatcher.
     """
-    _require_admin(request)
+    # G-PROBE fase 2 — ação de ops disparável pela UI (Bearer+ABAC) ou backend (serviço).
+    _require_service_or_eval_write(request)
     pool = _pool(request)
     producer = _kafka_producer(request)
 
@@ -1033,7 +1092,7 @@ async def dispatch_scan(
     """T15 — roda UMA passada do dispatcher windowed sob demanda (ops + testes), com a
     mesma lógica do scanner de fundo. Sem `campaign_id` → varre as campanhas ativas do
     tenant; com `campaign_id` → só ela. Idempotente (cooldown via `dispatched_at`)."""
-    _require_admin(request)
+    _require_service(request)  # G-PROBE fase 2 — ops/scanner (sistema)
     pool = _pool(request)
     producer = _kafka_producer(request)
 
@@ -1068,8 +1127,9 @@ async def backfill_campaign(
     de dados da campanha (`[period_start, period_end]`, por `analytics.segments`) e cria as
     instances por segmento (mesma amostragem do forward; idempotente por
     `(campaign_id, segment_id)`). As instances nascem `scheduled` → despachadas pelo T15.
-    Exige `period_start` (a janela de dados); `period_end` nulo → até agora. Admin-token."""
-    _require_admin(request)
+    Exige `period_start` (a janela de dados); `period_end` nulo → até agora.
+    G-PROBE fase 2 — UI (Bearer+ABAC) ou backend (serviço)."""
+    _require_service_or_eval_write(request)
     pool = _pool(request)
 
     campaign = await _db.get_campaign(pool, campaign_id, tenant_id)
@@ -1140,6 +1200,7 @@ async def get_instance(instance_id: str, tenant_id: str, request: Request) -> di
 
 @router.post("/v1/evaluation/instances/claim")
 async def claim_instance(body: InstanceClaim, request: Request) -> dict:
+    _require_service(request)  # G-PROBE fase 2 — avaliador (agente) reivindica
     pool = _pool(request)
     producer = _kafka_producer(request)
     row = await _db.claim_next_instance(
@@ -1162,7 +1223,7 @@ async def claim_instance(body: InstanceClaim, request: Request) -> dict:
 
 @router.post("/v1/evaluation/instances/{instance_id}/expire", status_code=204)
 async def expire_instance(instance_id: str, tenant_id: str, request: Request) -> None:
-    _require_admin(request)
+    _require_service(request)  # G-PROBE fase 2 — ops/scanner (sistema)
     pool = _pool(request)
     producer = _kafka_producer(request)
     row = await _db.update_instance_status(pool, instance_id, tenant_id, "expired")
@@ -1199,7 +1260,7 @@ class InstanceErrorBody(BaseModel):
 async def skip_instance(instance_id: str, tenant_id: str, body: InstanceSkipBody, request: Request) -> dict:
     """Marca a instance como `skipped` (thin-session). Não cria result, não submete.
     Guardado: só a partir de estado não-terminal."""
-    _require_admin(request)
+    _require_service(request)  # G-PROBE fase 2 — ops (sistema)
     pool = _pool(request)
     inst = await _db.get_instance(pool, instance_id, tenant_id)
     if not inst:
@@ -1215,7 +1276,7 @@ async def skip_instance(instance_id: str, tenant_id: str, body: InstanceSkipBody
 async def mark_instance_error(instance_id: str, tenant_id: str, body: InstanceErrorBody, request: Request) -> dict:
     """Marca a instance como `error` (falha do avaliador). A classificação
     recuperável→retry vs irrecuperável→error_rejected é a T12 (ai_review)."""
-    _require_admin(request)
+    _require_service(request)  # G-PROBE fase 2 — ops (sistema)
     pool = _pool(request)
     inst = await _db.get_instance(pool, instance_id, tenant_id)
     if not inst:
@@ -1255,6 +1316,7 @@ class IngestBody(BaseModel):
 
 @router.post("/v1/evaluation/ingest", status_code=201)
 async def ingest_result(body: IngestBody, request: Request) -> dict:
+    _require_service(request)  # G-PROBE fase 2 — agente/worker via evaluation_submit
     pool = _pool(request)
     producer = _kafka_producer(request)
     return await _ingest_core(pool, producer, body)
@@ -1713,6 +1775,7 @@ async def seed_synthetic(body: SeedSyntheticBody, request: Request) -> dict:
     MESMO caminho de uma avaliação real (cria instance + ingest_result), validando
     o módulo de qualidade em VOLUME sem depender do agente LLM nem de massa real.
     Opcionalmente injeta sinais de NPS sintéticos (grão session)."""
+    _require_service_or_eval_write(request)  # G-PROBE fase 2 — UI (Bearer+ABAC) ou serviço
     pool = _pool(request)
     producer = _kafka_producer(request)
 
@@ -1824,6 +1887,7 @@ async def seed_synthetic(body: SeedSyntheticBody, request: Request) -> dict:
 async def flush_synthetic(tenant_id: str, request: Request) -> dict:
     """Apaga a massa sintética (session_id LIKE 'synthetic_%') do Postgres da
     evaluation-api. O ClickHouse é limpo pelo endpoint equivalente da analytics-api."""
+    _require_service_or_eval_write(request)  # G-PROBE fase 2 — UI (Bearer+ABAC) ou serviço
     pool = _pool(request)
     deleted = await _db.flush_synthetic(pool, tenant_id)
     return {"tenant_id": tenant_id, "deleted": deleted}
@@ -2138,6 +2202,7 @@ async def list_contestations(
     limit: int = 50,
     offset: int = 0,
 ) -> dict:
+    _require_any_evaluation(request)  # G-PROBE fase 2 — read compartilhado de lista
     pool = _pool(request)
     rows = await _db.list_contestations(pool, tenant_id, status=status, limit=limit, offset=offset)
     return {"tenant_id": tenant_id, "contestations": rows, "count": len(rows)}

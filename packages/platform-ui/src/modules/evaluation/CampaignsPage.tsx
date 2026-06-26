@@ -149,8 +149,7 @@ function ReportPanel({ campaignId }: { campaignId: string }) {
 interface CreateModalProps {
   onClose: () => void
   onCreated: () => void
-  adminToken: string          // admin-only endpoints (X-Admin-Token): curation rules
-  accessToken?: string        // grant-first ABAC (Bearer JWT): campaign CRUD
+  accessToken?: string        // grant-first ABAC (Bearer JWT): campaign CRUD + curation rules
   editing?: EvaluationCampaign | null   // null/undefined = criar; objeto = editar (PUT)
 }
 
@@ -313,7 +312,7 @@ function CurationSamplingRulesEditor({
   )
 }
 
-function CreateModal({ onClose, onCreated, adminToken, accessToken, editing }: CreateModalProps) {
+function CreateModal({ onClose, onCreated, accessToken, editing }: CreateModalProps) {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
   const { forms } = useForms(TENANT, accessToken)
@@ -459,7 +458,7 @@ function CreateModal({ onClose, onCreated, adminToken, accessToken, editing }: C
 
       // Save curation sampling rules if Arc 13 and enabled
       if (isArc13Skill && showCurationRules && campaign?.campaign_id) {
-        await saveCurationSamplingRules(campaign.campaign_id, curationRules, adminToken).catch(() => {})
+        await saveCurationSamplingRules(campaign.campaign_id, curationRules, accessToken).catch(() => {})
       }
 
       onCreated()
@@ -892,13 +891,13 @@ function CreateModal({ onClose, onCreated, adminToken, accessToken, editing }: C
 
 function CurationSamplingRulesDetailPanel({
   campaignId,
-  adminToken,
+  accessToken,
 }: {
   campaignId: string
-  adminToken: string
+  accessToken?: string
 }) {
   const { t } = useTranslation('evaluation')
-  const { rules: loadedRules, loading, reload } = useCurationSamplingRules(campaignId)
+  const { rules: loadedRules, loading, reload } = useCurationSamplingRules(campaignId, accessToken)
   const [rules, setRules] = useState<Omit<CurationSamplingRule, 'campaign_id' | 'rule_id'>[]>([])
   const [editing, setEditing] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -914,7 +913,7 @@ function CurationSamplingRulesDetailPanel({
   const save = async () => {
     setSaving(true); setError(null)
     try {
-      await saveCurationSamplingRules(campaignId, rules, adminToken)
+      await saveCurationSamplingRules(campaignId, rules, accessToken)
       await reload()
       setEditing(false)
     } catch (e) {
@@ -1000,9 +999,8 @@ function CurationSamplingRulesDetailPanel({
 export default function CampaignsPage() {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT, session } = useAuth()
-  // Vestigial admin token — still used by the admin-only synthetic/dispatch/curation
-  // endpoints (X-Admin-Token). Campaign CRUD is now grant-first via session JWT.
-  const [adminToken, setAdminToken] = useState('')
+  // G-PROBE fase 2 (cleanup): o input de admin-token foi removido — todas as ações de
+  // ops (seed/flush/dispatch/curation rules) usam o Bearer do operador (session JWT).
   const accessToken = session?.accessToken
   const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000, accessToken)
   const [selected, setSelected] = useState<EvaluationCampaign | null>(null)
@@ -1036,7 +1034,7 @@ export default function CampaignsPage() {
   const handleSeed = async (c: EvaluationCampaign, count: number) => {
     setSeeding(true); setSeedMsg(null); setActionError(null)
     try {
-      const res = await seedSyntheticEvaluations(TENANT, c.campaign_id, count, adminToken)
+      const res = await seedSyntheticEvaluations(TENANT, c.campaign_id, count, accessToken)
       setSeedMsg(`${res.results_created} avaliações + ${res.nps_signals_emitted} NPS gerados`)
       reload()
     } catch (e) {
@@ -1049,7 +1047,7 @@ export default function CampaignsPage() {
     if (!window.confirm('Limpar TODA a massa sintética (avaliações + NPS de teste)?')) return
     setSeeding(true); setSeedMsg(null); setActionError(null)
     try {
-      await flushSyntheticEvaluations(TENANT, adminToken)
+      await flushSyntheticEvaluations(TENANT, accessToken)
       setSeedMsg('Dados de teste limpos (Postgres + ClickHouse).')
       reload()
     } catch (e) {
@@ -1072,7 +1070,7 @@ export default function CampaignsPage() {
   const handleDispatch = async (c: EvaluationCampaign) => {
     setSeeding(true); setSeedMsg(null); setActionError(null)
     try {
-      const res = await dispatchCampaign(c.campaign_id, TENANT, adminToken)
+      const res = await dispatchCampaign(c.campaign_id, TENANT, accessToken)
       setSeedMsg(`${res.dispatched} avaliação(ões) despachada(s) → pool ${res.evaluator_pool}`)
     } catch (e) {
       setActionError(String(e))
@@ -1085,14 +1083,7 @@ export default function CampaignsPage() {
     <div className="flex h-full">
       {/* Sidebar */}
       <aside className="w-80 border-r flex flex-col bg-surface-muted">
-        <div className="p-3 border-b flex gap-2">
-          <input
-            className="flex-1 border border-border-strong rounded px-2 py-1 text-xs"
-            type="password"
-            placeholder={t('campaigns.sidebar.adminTokenPlaceholder')}
-            value={adminToken}
-            onChange={e => setAdminToken(e.target.value)}
-          />
+        <div className="p-3 border-b flex justify-end">
           <button
             onClick={() => setShowCreate(true)}
             className="bg-primary text-white text-xs px-2 py-1 rounded hover:bg-primary-dark"
@@ -1360,7 +1351,7 @@ export default function CampaignsPage() {
             {selected.review_workflow_skill_id === 'skill_revisao_treplica_v1' && (
               <CurationSamplingRulesDetailPanel
                 campaignId={selected.campaign_id}
-                adminToken={adminToken}
+                accessToken={accessToken}
               />
             )}
           </div>
@@ -1383,7 +1374,6 @@ export default function CampaignsPage() {
           key={editingCampaign
             ? `edit-${editingCampaign.campaign_id}-${(editingCampaign as { updated_at?: string }).updated_at ?? ''}`
             : 'new'}
-          adminToken={adminToken}
           accessToken={accessToken}
           editing={editingCampaign}
           onClose={() => { setShowCreate(false); setEditingCampaign(null) }}

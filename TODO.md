@@ -42,15 +42,53 @@ compartilhado (Avaliações/Calibração/Curadoria/Reports mapeiam id→nome com
 não `formularios`; gateá-las quebraria essas telas). GET-by-id/resolve/effective também abertos
 (runtime: session-replayer lê `forms/{id}`, mcp-server lê `rubric-templates/effective`).
 
-**Fase 2 — PENDENTE (credencial de serviço + fechar leituras):**
-- `X-Service-Token` nos endpoints de agente/sistema hoje abertos ou em `_require_admin`:
-  `submit_pre_review`, `submit_ai_review`, `publish_calibration_note`, `ingest`, `claim_instance`,
-  `dispatch*`, `dispatch_scan`, `backfill`, `expire/skip/mark-error`, `seed/flush-synthetic`. Wiring da
-  credencial nos callers (orchestrator-bridge/agentes/workers/seed/e2e).
-- Fechar as LEITURAS de lista com gate "qualquer acesso evaluation" (any-of dos campos) + Bearer em
-  todos os consumidores de lista (Avaliações/Calibração/Curadoria/Reports).
-- Remover o input de admin-token da `CampaignsPage` quando dispatch/seed/flush/sampling-rule migrarem
-  para a credencial de serviço.
+**Fase 2 — slice backend ✅ (2026-06-26); wiring + UI PENDENTES.** Decisões da sessão: gate de serviço
+**strict** (sem fallback admin-token); UI usa **Bearer+ABAC** (sem segredo no frontend); slice backend-first.
+
+- ✅ **`_require_service`** (strict `X-Service-Token`, `config.service_token` env
+  `PLUGHUB_EVALUATION_SERVICE_TOKEN`, vazio = no-op/demo) em: `ingest`, `claim_instance`,
+  `expire/skip/mark-error`, `dispatch_scan`, `submit_pre_review`, `submit_ai_review`,
+  `publish_calibration_note`.
+- ✅ **`_require_service_or_eval_write`** (serviço OU Bearer+ABAC `formularios:rw`) nas ações de ops
+  disparáveis pela UI: `dispatch_campaign`, `backfill`, `seed/flush-synthetic`, `sampling-rules` CUD.
+- ✅ **`_require_any_evaluation`** (any-of, degradação graciosa) nas LEITURAS de lista: forms, campaigns,
+  rubric-templates, instances, contestations, calibration-notes, sampling-rules.
+- ✅ Testes `tests/test_gprobe_phase2.py` (funções puras). Ver CHANGELOG.
+
+**Slice caller-wiring ✅ (2026-06-26):**
+- ✅ **Provisionado** `PLUGHUB_EVALUATION_SERVICE_TOKEN` no `docker-compose.demo.yml` (evaluation-api +
+  mcp-server-plughub; valor demo `changeme_eval_service_token_demo`). Gates de serviço agora ENFORCED no demo.
+- ✅ **mcp-server** `evaluation_pre_review_submit` envia `X-Service-Token` (env; `EVALUATION_API_URL` também
+  provisionado p/ o container). Único caller HTTP backend de endpoint service-gated (o avaliador real publica
+  por Kafka, não por HTTP `/ingest`; os scanners chamam a função direto, não o endpoint).
+- ✅ **UI bridge**: `seed/flush/dispatch` da `CampaignsPage` passam o Bearer do operador (`session.accessToken`)
+  → `_require_service_or_eval_write` aceita via ABAC. Input de admin-token vira vestigial (remoção = cleanup UI).
+- ✅ **Smoke** `infra/test/smoke_gprobe_service_auth.sh` valida os 3 gates (service strict / dual / any-of).
+
+**Follow-ups restantes:**
+- ⏳ **Repair dos ~15 e2e legados de eval** (`test_t7a/t9*/t10*/t12/t13/t14/t15/t17/r1/r6/t7b2`): **já vermelhos
+  pela Fase 1** (criam form/campanha SEM Bearer; `create_form/create_campaign` exigem `formularios:rw`) —
+  precisam de (a) Bearer mintado p/ o setup E (b) `X-Service-Token` nos calls G-PROBE-gated (ingest/dispatch/
+  scan/backfill/ai-review/skip/mark-error/sampling-rules). Dívida pré-existente da Fase 1; smoke dedicado cobre
+  o G-PROBE no intervalo.
+- ✅ **Cleanup UI** (2026-06-26): input de admin-token removido da `CampaignsPage` (state/input/props +
+  i18n `campaigns.sidebar.adminTokenPlaceholder` en/pt); `saveCurationSamplingRules`/`useCurationSamplingRules`
+  passam o Bearer do operador. Bearer explícito nos consumidores de lista que faltavam (`useInstances`,
+  `useContestations`, `useCurationSamplingRules`); forms/campaigns/rubric/results/curations já tinham. Ver CHANGELOG.
+
+**Pendente — admin-token boxes platform-wide → Bearer+ABAC (FORA do escopo G-PROBE, não bloqueia):**
+G-PROBE cobriu só o módulo Quality (evaluation-api). O MESMO anti-padrão (caixa de texto de admin-token na UI,
+em vez de autorizar pelo JWT do operador + ABAC) persiste em outras telas, cada uma gateando um serviço
+diferente pelo seu admin-token. Migrar cada uma é um "mini-G-PROBE" por serviço (gatear endpoints em
+Bearer+ABAC + remover a caixa). Inventário:
+- `config/access` (`AccessPage`) → **auth-api** (users/ABAC); campo ABAC `config.users`. *(reportado: a página
+  só revela a lista de usuários após digitar o admin-token; deveria reagir ao login de admin via `config.users`.)*
+- `config/groups` (`GroupsPage`) → **auth-api** (agent groups); `config.users`.
+- `config/platform` (`ConfigPlataformaPage`) → **config-api** (platform_config); `config.*`.
+- `config/resources → Skills` (`SkillsPage`, `competencySkills`) → **agent-registry** (skills); `skill_flows`.
+- `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
+  `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
+Decisão (2026-06-26): não estava no escopo original; deixado como iniciativa futura (sequenciável por serviço).
 
 **Rot pré-existente (separado do G-PROBE, não bloqueia):** `evaluation-api/tests/test_router.py` tem
 11 testes quebrados **independentes do gate** (classes TestInstances/Ingest/Results/Contestations):
