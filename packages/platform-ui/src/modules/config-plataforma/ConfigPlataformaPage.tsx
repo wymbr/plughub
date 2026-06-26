@@ -13,7 +13,7 @@
  */
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Calendar, GitBranch, Eye, EyeOff, Check } from 'lucide-react'
+import { Settings, Calendar, GitBranch } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { NamespacePanel }          from './components/NamespaceEditor'
 import { CalendarManager }          from './components/CalendarManager'
@@ -23,9 +23,6 @@ import { SentimentBandsEditor }     from './components/SentimentBandsEditor'
 // ── Tab definition ─────────────────────────────────────────────────────────────
 
 type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'calendar' | 'routing' | 'evaluation'
-
-/** Tabs where the admin token input must be visible */
-const CONFIG_WRITE_TABS: Tab[] = ['routing_timeouts', 'consumer', 'expurgo', 'sentimento', 'evaluation']
 
 /** Namespace tabs: each entry defines the API namespace(s) to render */
 const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> = {
@@ -45,20 +42,19 @@ const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> 
 
 export default function ConfigPlataformaPage() {
   const { t } = useTranslation('configPlataforma')
-  const { tenantId } = useAuth()
+  // G-PROBE platform-wide: as escritas de config usam o Bearer do operador (session JWT)
+  // + ABAC `config.plataforma` — sem caixa de admin-token.
+  const { tenantId, session } = useAuth()
+  const accessToken = session?.accessToken ?? ''
   const orgId = tenantId
 
   const [tab,        setTab]        = useState<Tab>('routing_timeouts')
-  const [adminToken, setAdminToken] = useState('')
-  const [showToken,  setShowToken]  = useState(false)
   const [editingKey, setEditingKey] = useState<string | null>(null)
 
   const handleTabChange = (next: Tab) => {
     setTab(next)
     setEditingKey(null)
   }
-
-  const needsAdminToken = CONFIG_WRITE_TABS.includes(tab)
 
   const tabs: { id: Tab; label: string; icon?: React.ReactNode }[] = [
     { id: 'routing_timeouts', label: t('tabs.routingTimeouts') },
@@ -83,31 +79,6 @@ export default function ConfigPlataformaPage() {
           <p className="text-xs text-muted mt-0.5">{t('description')}</p>
         </div>
 
-        {/* Admin token — only when the active tab needs write access */}
-        {needsAdminToken && (
-          <div className="flex items-center gap-2">
-            <label className="text-xs text-muted shrink-0">{t('adminTokenLabel')}</label>
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={adminToken}
-              onChange={e => setAdminToken(e.target.value)}
-              placeholder={t('adminTokenPlaceholder')}
-              className="w-44 text-xs font-mono px-2.5 py-1.5 border border-border-strong rounded focus:outline-none focus:ring-1 focus:ring-primary bg-white"
-            />
-            <button
-              onClick={() => setShowToken(v => !v)}
-              className="text-muted hover:text-dark transition-colors"
-              title={showToken ? t('hideToken') : t('showToken')}
-            >
-              {showToken ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
-            </button>
-            {adminToken && (
-              <span className="text-xs text-green font-semibold flex items-center gap-1">
-                <Check size={11} aria-hidden="true" /> {t('tokenSet')}
-              </span>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ── Tab bar ──────────────────────────────────────────────────────────── */}
@@ -160,7 +131,7 @@ export default function ConfigPlataformaPage() {
                     nsId={ns}
                     sectionLabel={cfg.namespaces.length > 1 ? label : undefined}
                     tenantId={tenantId}
-                    adminToken={adminToken}
+                    accessToken={accessToken}
                     editingKey={editingKey}
                     setEditingKey={setEditingKey}
                   />
@@ -172,7 +143,7 @@ export default function ConfigPlataformaPage() {
 
         {/* ── Sentimento ──────────────────────────────────────────────────────── */}
         {tab === 'sentimento' && (
-          <SentimentBandsEditor tenantId={tenantId} adminToken={adminToken} />
+          <SentimentBandsEditor tenantId={tenantId} accessToken={accessToken} />
         )}
 
         {/* ── Calendários ─────────────────────────────────────────────────────── */}
@@ -182,7 +153,7 @@ export default function ConfigPlataformaPage() {
 
         {/* ── Roteamento ──────────────────────────────────────────────────────── */}
         {tab === 'routing' && (
-          <RoutingSkillsManager tenantId={tenantId} adminToken={adminToken} />
+          <RoutingSkillsManager tenantId={tenantId} accessToken={accessToken} />
         )}
 
       </div>

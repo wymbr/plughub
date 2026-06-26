@@ -933,6 +933,7 @@ services:
       PLUGHUB_CONFIG_DATABASE_URL:  postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_CONFIG_REDIS_URL:     redis://redis:6379
       PLUGHUB_CONFIG_ADMIN_TOKEN:   demo_config_admin_token
+      PLUGHUB_CONFIG_JWT_SECRET:    changeme_auth_jwt_secret_demo_32c   # G-PROBE — valida Bearer+ABAC (mesmo segredo da auth-api)
       PLUGHUB_CONFIG_KAFKA_BROKERS: kafka:29092
     depends_on:
       kafka:

@@ -83,9 +83,10 @@ const EMPTY_CONTEXT_CONFIG: ContextMaskingConfig = {
 
 export default function MaskingPage() {
   const { t } = useTranslation('masking')
-  const { tenantId }   = useAuth()
-  const [adminToken,   setAdminToken]   = useState('')
-  const [showToken,    setShowToken]    = useState(false)
+  // G-PROBE platform-wide: escritas usam o Bearer do operador + ABAC `config.masking` —
+  // sem caixa de admin-token. `adminToken` mantém o nome (=accessToken) p/ diff mínimo.
+  const { tenantId, session } = useAuth()
+  const adminToken = session?.accessToken ?? ''
   const [saving,       setSaving]       = useState<string | null>(null)
   const [toast,        setToast]        = useState<{ msg: string; ok: boolean } | null>(null)
 
@@ -117,7 +118,7 @@ export default function MaskingPage() {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
     setSaving(key)
     try {
-      await putConfig('audit_policy', key, value, tenantId, adminToken)
+      await putConfig('audit_policy', key, value, tenantId, '', adminToken)
       reload()
       showToast(t('toast.keySaved', { key }), true)
     } catch (e) {
@@ -132,7 +133,7 @@ export default function MaskingPage() {
     const key = `rule.${category}`
     setSaving(key)
     try {
-      await putConfig('masking', key, rule, tenantId, adminToken)
+      await putConfig('masking', key, rule, tenantId, '', adminToken)
       reloadMasking()
       showToast(t('toast.keySaved', { key }), true)
     } catch (e) {
@@ -160,7 +161,7 @@ export default function MaskingPage() {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
     setSaving('context_rules')
     try {
-      await putConfig('masking', 'context_rules', config, tenantId, adminToken)
+      await putConfig('masking', 'context_rules', config, tenantId, '', adminToken)
       reloadMasking()
       showToast('Regras de ContextStore salvas com sucesso', true)
     } catch (e) {
@@ -202,21 +203,6 @@ export default function MaskingPage() {
             <p style={{ margin: '4px 0 0', fontSize: 13, color: '#64748b' }}>
               {t('header.description')}
             </p>
-          </div>
-          {/* Admin token */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <label style={{ fontSize: 12, color: '#64748b' }}>{t('header.adminToken')}:</label>
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={adminToken}
-              onChange={e => setAdminToken(e.target.value)}
-              placeholder={t('header.tokenPlaceholder')}
-              style={inputStyle}
-            />
-            <button style={iconBtn} onClick={() => setShowToken(v => !v)}>
-              {showToken ? '🙈' : '👁'}
-            </button>
-            {adminToken && <Check size={13} style={{ color: '#22c55e' }} aria-hidden="true" />}
           </div>
         </div>
       </div>
@@ -556,10 +542,6 @@ function RetentionEditor({ value, onSave, saving }: {
 const inputStyle: React.CSSProperties = {
   background: '#0f172a', border: '1px solid #334155', borderRadius: 6,
   color: '#e2e8f0', fontSize: 12, padding: '4px 10px', outline: 'none',
-}
-
-const iconBtn: React.CSSProperties = {
-  background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 14, padding: '0 4px',
 }
 
 const saveBtnStyle: React.CSSProperties = {

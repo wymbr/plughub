@@ -15,7 +15,7 @@ const DOMAIN_PRESETS = ['[0-1]', '[0-3]', '[0-5]', '[0-9]', '[0-10]']
 
 interface Props {
   tenantId:   string
-  adminToken: string
+  accessToken: string
 }
 
 interface SkillEntry {
@@ -23,7 +23,7 @@ interface SkillEntry {
   domain: string
 }
 
-export function RoutingSkillsManager({ tenantId, adminToken }: Props) {
+export function RoutingSkillsManager({ tenantId, accessToken }: Props) {
   const { t } = useTranslation('configPlataforma')
   const { entries, loading, error, reload } = useNamespace(tenantId, 'competency_skills')
 
@@ -69,10 +69,10 @@ export function RoutingSkillsManager({ tenantId, adminToken }: Props) {
     if (!/^\[[\d]+-[\d]+\]$/.test(domain) && !/^\[\d+\]$/.test(domain)) {
       setFormError(t('routingSkills.domainFormat')); return
     }
-    if (!adminToken) { setFormError(t('routingSkills.adminRequired')); return }
+    if (!accessToken) { setFormError(t('routingSkills.adminRequired')); return }
     setSaving(true); setFormError('')
     try {
-      await putConfig('competency_skills', key, { domain }, tenantId, adminToken)
+      await putConfig('competency_skills', key, { domain }, tenantId, '', accessToken)
       reload(); closeForm()
     } catch (e) {
       setFormError(e instanceof Error ? e.message : t('routingSkills.saveFailed'))
@@ -80,10 +80,10 @@ export function RoutingSkillsManager({ tenantId, adminToken }: Props) {
   }
 
   async function handleDelete(key: string) {
-    if (!adminToken) { setFormError(t('routingSkills.adminRequiredShort')); return }
+    if (!accessToken) { setFormError(t('routingSkills.adminRequiredShort')); return }
     setDeleting(key)
     try {
-      await deleteConfig('competency_skills', key, tenantId, adminToken)
+      await deleteConfig('competency_skills', key, tenantId, '', accessToken)
       reload(); setConfirmDel(null)
     } catch { /* stale */ }
     finally { setDeleting(null) }
@@ -106,7 +106,7 @@ export function RoutingSkillsManager({ tenantId, adminToken }: Props) {
       </div>
 
       {/* Admin warning */}
-      {!adminToken && (
+      {!accessToken && (
         <div className="mb-3 px-3 py-2 rounded border border-warning/40 bg-warning/10 text-xs text-warning font-medium">
           {t('routingSkills.adminWarning')}
         </div>

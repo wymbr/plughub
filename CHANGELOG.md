@@ -2,6 +2,31 @@
 
 ---
 
+## G-PROBE platform-wide — slice config-api (2026-06-26): Platform + Masking → Bearer+ABAC
+
+Segunda fatia da migração platform-wide. O endpoint de ESCRITA da config-api
+(`PUT/DELETE /config/{namespace}/{key}`) é **genérico e compartilhado** por ~7 telas (cada uma num
+namespace). Gate **DUAL** (decisão da sessão, por ser endpoint compartilhado): aceita `X-Admin-Token`
+(telas ainda não migradas) **OU** Bearer + ABAC `config.{campo}` mapeado por namespace.
+
+- **config-api** (`router.py`): `_require_config_write(namespace)` substitui `_require_admin` no PUT/DELETE.
+  Mapa namespace→campo: `masking`/`audit_policy`→`config.masking`; `webchat`/`sms`/`whatsapp`/`voice`/`webrtc`
+  →`config.canais`; **default→`config.plataforma`** (Platform é o editor catch-all). Verificação HS256 em
+  **stdlib** (`hmac`/`hashlib`, sem dep nova) com `config.jwt_secret` (env `PLUGHUB_CONFIG_JWT_SECRET`, =
+  segredo da auth-api). Preserva a postura original (`admin_token` vazio = auth desabilitada).
+- **compose**: `PLUGHUB_CONFIG_JWT_SECRET=changeme_auth_jwt_secret_demo_32c` na config-api.
+- **platform-ui** `config-hooks.ts`: `putConfig`/`deleteConfig` ganham `accessToken?` opcional → mandam
+  `Authorization: Bearer` quando presente, senão `X-Admin-Token` (não-quebra os outros ~5 consumidores).
+- **Platform** (`ConfigPlataformaPage` + `NamespaceEditor`/`SentimentBandsEditor`/`RoutingSkillsManager`) e
+  **Masking** (`MaskingPage`): caixa de admin-token removida; escritas passam o `session.accessToken` na
+  posição Bearer. Demais telas de config (Channels, Billing, Dashboards, Skills) seguem em admin-token até
+  suas fatias (dual cobre).
+- **Smoke** `infra/test/smoke_config_write_auth.sh`: admin-token 200/401; Bearer plataforma 200 em namespace
+  default e 403 em masking (campo errado); Bearer masking 200 em masking/audit_policy e 403 em default; sem
+  grant 403; sem credencial 401. Limpa as chaves de teste.
+
+---
+
 ## G-PROBE platform-wide — slice auth-api (2026-06-26): admin-token → Bearer+ABAC `config.usuarios`
 
 Primeira fatia da migração platform-wide do anti-padrão "caixa de admin-token na UI" para autorização pelo

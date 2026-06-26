@@ -77,14 +77,14 @@ function EditRow({
   entryKey,
   entry,
   tenantId,
-  adminToken,
+  accessToken,
   onCancel,
   onSaved,
 }: {
   entryKey:   string
   entry:      ConfigEntry
   tenantId:   string
-  adminToken: string
+  accessToken: string
   onCancel:   () => void
   onSaved:    () => void
 }) {
@@ -105,7 +105,7 @@ function EditRow({
     try { parsed = JSON.parse(raw) }
     catch { setJsonError(t('namespace.jsonInvalidSave')); return }
 
-    if (!adminToken) { setJsonError(t('namespace.adminRequired')); return }
+    if (!accessToken) { setJsonError(t('namespace.adminRequired')); return }
     setSaving(true); setJsonError(null)
     try {
       await putConfig(
@@ -113,7 +113,8 @@ function EditRow({
         entryKey,
         parsed,
         scope === 'global' ? null : tenantId,
-        adminToken,
+        '',           // admin-token slot (não usado — UI migrada para Bearer)
+        accessToken,  // Bearer do operador
       )
       onSaved()
     } catch (e) {
@@ -121,7 +122,7 @@ function EditRow({
     } finally {
       setSaving(false)
     }
-  }, [raw, scope, tenantId, adminToken, entry, entryKey, onSaved])
+  }, [raw, scope, tenantId, accessToken, entry, entryKey, onSaved])
 
   const rows = Math.min(10, raw.split('\n').length + 1)
 
@@ -160,7 +161,7 @@ function EditRow({
       <div className="flex gap-2">
         <button
           onClick={handleSave}
-          disabled={saving || !!jsonError || !adminToken}
+          disabled={saving || !!jsonError || !accessToken}
           className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
           {saving ? t('namespace.saving') : t('namespace.save')}
@@ -171,7 +172,7 @@ function EditRow({
         >
           {t('namespace.cancel')}
         </button>
-        {!adminToken && (
+        {!accessToken && (
           <span className="text-xs text-warning self-center">
             {t('namespace.adminRequiredHint')}
           </span>
@@ -187,7 +188,7 @@ function ConfigRow({
   entryKey,
   entry,
   tenantId,
-  adminToken,
+  accessToken,
   isEditing,
   onEdit,
   onCancelEdit,
@@ -197,7 +198,7 @@ function ConfigRow({
   entryKey:     string
   entry:        ConfigEntry
   tenantId:     string
-  adminToken:   string
+  accessToken:   string
   isEditing:    boolean
   onEdit:       () => void
   onCancelEdit: () => void
@@ -212,10 +213,10 @@ function ConfigRow({
     if (!window.confirm(t('namespace.resetConfirm', { key: entryKey }))) return
     setDeleting(true)
     try {
-      await deleteConfig(entry.namespace ?? '', entryKey, tenantId, adminToken)
+      await deleteConfig(entry.namespace ?? '', entryKey, tenantId, '', accessToken)
       onDeleted()
     } catch { setDeleting(false) }
-  }, [entry, entryKey, tenantId, adminToken, onDeleted])
+  }, [entry, entryKey, tenantId, accessToken, onDeleted])
 
   return (
     <div className={`flex items-start gap-4 px-5 py-3 border-b border-border ${
@@ -240,7 +241,7 @@ function ConfigRow({
           entryKey={entryKey}
           entry={entry}
           tenantId={tenantId}
-          adminToken={adminToken}
+          accessToken={accessToken}
           onCancel={onCancelEdit}
           onSaved={() => { onCancelEdit(); onSaved() }}
         />
@@ -257,7 +258,7 @@ function ConfigRow({
             >
               {t('namespace.edit')}
             </button>
-            {override && adminToken && (
+            {override && accessToken && (
               <button
                 onClick={handleDelete}
                 disabled={deleting}
@@ -277,18 +278,18 @@ function ConfigRow({
 
 interface Props {
   tenantId:   string
-  adminToken: string
+  accessToken: string
 }
 
 // ── NamespacePanel — single namespace view ─────────────────────────────────────
 
 export function NamespacePanel({
-  nsId, sectionLabel, tenantId, adminToken, editingKey, setEditingKey,
+  nsId, sectionLabel, tenantId, accessToken, editingKey, setEditingKey,
 }: {
   nsId:         string
   sectionLabel?: string
   tenantId:     string
-  adminToken:   string
+  accessToken:   string
   editingKey:   string | null
   setEditingKey: (k: string | null) => void
 }) {
@@ -322,7 +323,7 @@ export function NamespacePanel({
           entryKey={key}
           entry={entries[key]}
           tenantId={tenantId}
-          adminToken={adminToken}
+          accessToken={accessToken}
           isEditing={editingKey === `${nsId}:${key}`}
           onEdit={() => setEditingKey(`${nsId}:${key}`)}
           onCancelEdit={() => setEditingKey(null)}
@@ -336,7 +337,7 @@ export function NamespacePanel({
 
 // ── NamespaceEditor ───────────────────────────────────────────────────────────
 
-export function NamespaceEditor({ tenantId, adminToken }: Props) {
+export function NamespaceEditor({ tenantId, accessToken }: Props) {
   const { t } = useTranslation('configPlataforma')
   const [selectedId, setSelectedId] = useState(NAMESPACES[0].id)
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -394,7 +395,7 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
                   nsId={nsId}
                   sectionLabel={ns.sections?.find(s => s.ns === nsId)?.label ?? nsId}
                   tenantId={tenantId}
-                  adminToken={adminToken}
+                  accessToken={accessToken}
                   editingKey={editingKey}
                   setEditingKey={setEditingKey}
                 />
@@ -403,7 +404,7 @@ export function NamespaceEditor({ tenantId, adminToken }: Props) {
               <NamespacePanel
                 nsId={ns.id}
                 tenantId={tenantId}
-                adminToken={adminToken}
+                accessToken={accessToken}
                 editingKey={editingKey}
                 setEditingKey={setEditingKey}
               />

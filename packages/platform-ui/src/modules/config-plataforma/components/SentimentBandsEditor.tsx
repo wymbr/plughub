@@ -74,10 +74,10 @@ function validateBands(bands: SentimentBand[]): string | null {
 
 interface Props {
   tenantId:   string
-  adminToken: string
+  accessToken: string
 }
 
-export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
+export function SentimentBandsEditor({ tenantId, accessToken }: Props) {
   const { t } = useTranslation('configPlataforma')
   const { entries, loading, error, reload } = useNamespace(tenantId, 'sentiment')
   const [bands,   setBands]   = useState<SentimentBand[]>(DEFAULT_BANDS)
@@ -137,12 +137,12 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
   const handleSave = useCallback(async () => {
     const err = validateBands(bands)
     if (err) { setSaveErr(err); return }
-    if (!adminToken) { setSaveErr(t('sentimentBands.adminRequired')); return }
+    if (!accessToken) { setSaveErr(t('sentimentBands.adminRequired')); return }
 
     const sorted = [...bands].sort((a, b) => a.min - b.min).map((b, i) => ({ ...b, level: i + 1 }))
     setSaving(true); setSaveErr(null)
     try {
-      await putConfig('sentiment', 'bands', { bands: sorted }, null, adminToken)
+      await putConfig('sentiment', 'bands', { bands: sorted }, null, '', accessToken)
       setBands(sorted)
       setDirty(false)
       reload()
@@ -151,7 +151,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
     } finally {
       setSaving(false)
     }
-  }, [bands, adminToken, reload])
+  }, [bands, accessToken, reload])
 
   const handleReset = useCallback(() => {
     setBands(DEFAULT_BANDS)
@@ -250,7 +250,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
       <div className="flex gap-2">
         <button
           onClick={handleSave}
-          disabled={saving || !!validationError || !adminToken || !dirty}
+          disabled={saving || !!validationError || !accessToken || !dirty}
           className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white disabled:opacity-40 hover:bg-primary-dark transition-colors"
         >
           {saving ? t('namespace.saving') : t('namespace.save')}
@@ -261,7 +261,7 @@ export function SentimentBandsEditor({ tenantId, adminToken }: Props) {
         >
           ↺ Restaurar padrões
         </button>
-        {!adminToken && (
+        {!accessToken && (
           <span className="text-xs text-warning self-center">{t('namespace.adminRequiredHint')}</span>
         )}
       </div>

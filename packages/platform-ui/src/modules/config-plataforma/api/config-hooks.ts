@@ -159,18 +159,27 @@ export function useMultiNamespace(tenantId: string, namespaceIds: string[]): {
 
 // ─── putConfig ────────────────────────────────────────────────────────────────
 
+// G-PROBE platform-wide: config-api aceita Bearer+ABAC (telas migradas) OU X-Admin-Token
+// (legado). Quando `accessToken` é passado, manda `Authorization: Bearer`; senão cai no
+// admin-token (compat com as telas ainda não migradas).
+function _writeHeaders(adminToken: string, accessToken?: string): Record<string, string> {
+  if (accessToken) return { 'Authorization': `Bearer ${accessToken}` }
+  return adminToken ? { 'X-Admin-Token': adminToken } : {}
+}
+
 export async function putConfig(
-  ns:         string,
-  key:        string,
-  value:      unknown,
-  tenantId:   string | null,
-  adminToken: string,
+  ns:          string,
+  key:         string,
+  value:       unknown,
+  tenantId:    string | null,
+  adminToken:  string,
+  accessToken?: string,
 ): Promise<void> {
   const res = await fetch(`/config/${ns}/${key}`, {
     method:  'PUT',
     headers: {
       'Content-Type': 'application/json',
-      ...(adminToken ? { 'X-Admin-Token': adminToken } : {}),
+      ..._writeHeaders(adminToken, accessToken),
     },
     body: JSON.stringify({ value, tenant_id: tenantId || null }),
   })
@@ -183,16 +192,17 @@ export async function putConfig(
 // ─── deleteConfig ─────────────────────────────────────────────────────────────
 
 export async function deleteConfig(
-  ns:         string,
-  key:        string,
-  tenantId:   string | null,
-  adminToken: string,
+  ns:          string,
+  key:         string,
+  tenantId:    string | null,
+  adminToken:  string,
+  accessToken?: string,
 ): Promise<void> {
   const params = new URLSearchParams()
   if (tenantId) params.set('tenant_id', tenantId)
   const res = await fetch(`/config/${ns}/${key}?${params.toString()}`, {
     method:  'DELETE',
-    headers: adminToken ? { 'X-Admin-Token': adminToken } : {},
+    headers: _writeHeaders(adminToken, accessToken),
   })
   if (!res.ok) {
     const body = await safeJson<{ detail?: string }>(res).catch(() => ({}))

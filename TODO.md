@@ -86,11 +86,21 @@ Bearer+ABAC + remover a caixa). Inventário:
   de bootstrap, UI usa session Bearer (listas carregam no login — conserta o bug reportado). Smoke
   `smoke_config_usuarios_auth.sh`. Ver CHANGELOG. *(Follow-up: `auth-api/tests/test_router.py` em X-Admin-Token
   → refresh; envs `*_AUTH_ADMIN_TOKEN` vestigiais → cleanup.)*
-- ⏳ `config/platform` (`ConfigPlataformaPage`) → **config-api** (platform_config); campo `config.plataforma`.
+- ✅ `config/platform` (`ConfigPlataformaPage`) + `config/masking` (`MaskingPage`) → **config-api** — slice
+  CONCLUÍDO (2026-06-26): gate DUAL (admin-token OU Bearer+ABAC mapeado por namespace; default→`plataforma`,
+  masking/audit_policy→`masking`); `putConfig/deleteConfig` com Bearer opcional; caixas removidas das 2 telas.
+  Smoke `smoke_config_write_auth.sh`. Demais telas de config (Channels/Billing/Dashboards) seguem em admin-token
+  (dual cobre) até suas fatias. Ver CHANGELOG.
 - ⏳ `config/resources → Skills` (`SkillsPage`, `competencySkills`) → **agent-registry** (skills); `config.resources`.
+- ⏳ Demais telas de config-api ainda em admin-token (mesmo gate dual, só falta migrar a UI): `config/channels`
+  (webchat/webhook → `config.canais`), `config/billing` (pricing), `config/dashboards`.
+- ⏳ `evaluation/knowledge` (`KnowledgeBasePage`) → **mcp-server-knowledge** (porta 3401, snippets RAG); fatia
+  própria — campo ABAC a decidir (`config.resources` ou um campo de conhecimento/evaluation).
 - ⏳ `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
   `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
-Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão).
+Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão). Inventário
+completo das telas com caixa de admin-token: access, groups (✅ auth-api), platform, masking (config-api),
+resources/skills (agent-registry), knowledge (mcp-server-knowledge), avaliações/adjudicate (evaluation-api legado).
 
 **Rot pré-existente (separado do G-PROBE, não bloqueia):** `evaluation-api/tests/test_router.py` tem
 11 testes quebrados **independentes do gate** (classes TestInstances/Ingest/Results/Contestations):

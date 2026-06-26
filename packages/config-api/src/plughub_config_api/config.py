@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Leave empty to disable auth (internal-only deployments).
     admin_token: str = ""
 
+    # G-PROBE platform-wide: além do admin-token, mutações aceitam Bearer (JWT de sessão
+    # emitido pela auth-api) + ABAC `config.{plataforma|masking|...}`. Mesmo segredo HS256
+    # da auth-api (env PLUGHUB_CONFIG_JWT_SECRET). Vazio → caminho Bearer indisponível.
+    jwt_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

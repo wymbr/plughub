@@ -29,7 +29,12 @@ Read endpoints are unauthenticated (internal service — network-level access co
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -41,25 +46,85 @@ logger = logging.getLogger("plughub.config.router")
 router = APIRouter(prefix="/config")
 
 
-# ─── auth dependency for mutations ───────────────────────────────────────────
+# ─── auth dependency for mutations (admin-token OR Bearer+ABAC) ───────────────
+# G-PROBE platform-wide: o endpoint de escrita é genérico (`/{namespace}/{key}`) e
+# compartilhado por várias telas. Cada namespace mapeia a um campo ABAC `config.*`.
+# Gate DUAL (transição): admin-token (telas ainda não migradas) OU Bearer + ABAC do
+# campo do namespace (telas migradas: Platform→`plataforma`, Masking→`masking`).
 
-async def _require_admin(
+_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+
+# namespaces de canais (telas ainda em admin-token) → campo `canais` (path Bearer correto,
+# inativo até a migração de Channels). masking → `masking`. Default (Platform é o editor
+# catch-all de config de plataforma) → `plataforma`.
+_NS_FIELD_OVERRIDES = {
+    "masking":      "masking",
+    "audit_policy": "masking",   # MaskingPage edita masking + audit_policy → mesmo campo
+    "webchat":  "canais", "sms": "canais", "whatsapp": "canais", "voice": "canais", "webrtc": "canais",
+}
+
+
+def _ns_field(namespace: str) -> str:
+    return _NS_FIELD_OVERRIDES.get(namespace, "plataforma")
+
+
+def _b64url_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _verify_hs256(token: str, secret: str) -> dict[str, Any]:
+    try:
+        h, p, sig = token.split(".")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="malformed token")
+    expected = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=401, detail="invalid token signature")
+    payload = json.loads(_b64url_decode(p))
+    if payload.get("exp") and int(payload["exp"]) < int(time.time()):
+        raise HTTPException(status_code=401, detail="token expired")
+    return payload
+
+
+def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
+    mc = claims.get("module_config") or {}
+    fc = (mc.get("config") or {}).get(field) or {}
+    access = fc.get("access", "none")
+    if access == "none":
+        return False
+    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
+
+
+async def _require_config_write(
+    namespace: str,
     request: Request,
     x_admin_token: Optional[str] = Header(default=None),
     admin_token: Optional[str] = Query(default=None, alias="admin_token"),
 ) -> None:
-    """Simple static token guard for write operations.
+    """Write guard: admin-token (back-compat) OR Bearer + ABAC `config.{ns_field}` (read_write).
 
-    Accepts the admin token via X-Admin-Token header OR ?admin_token=... query param.
-    The query-param fallback ensures DELETE requests work even when reverse proxies
-    drop custom request headers.
+    Preserva a postura original: admin_token vazio = auth desabilitada (internal-only).
     """
     from .config import get_settings
     settings = get_settings()
     expected = getattr(settings, "admin_token", None)
+    if not expected:
+        return  # auth desabilitada (deploy interno) — comportamento original preservado
     token = x_admin_token or admin_token
-    if expected and token != expected:
-        raise HTTPException(status_code=401, detail="Invalid X-Admin-Token")
+    if token == expected:
+        return  # admin-token válido (telas legadas / seed / sistema)
+    # Caminho Bearer+ABAC (telas migradas): exige JWT válido + campo do namespace.
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing admin token or Bearer")
+    if not getattr(settings, "jwt_secret", ""):
+        raise HTTPException(status_code=503, detail="jwt secret not configured")
+    claims = _verify_hs256(auth[len("Bearer "):], settings.jwt_secret)
+    field = _ns_field(namespace)
+    if not _check_config_field(claims, field, "read_write"):
+        raise HTTPException(status_code=403, detail=f"forbidden: requires config.{field} (read_write)")
 
 
 # ─── request models ──────────────────────────────────────────────────────────
@@ -142,7 +207,7 @@ async def list_all(
 
 # ─── PUT /config/{namespace}/{key} ───────────────────────────────────────────
 
-@router.put("/{namespace}/{key}", dependencies=[Depends(_require_admin)])
+@router.put("/{namespace}/{key}", dependencies=[Depends(_require_config_write)])
 async def put_config(
     namespace: str,
     key:       str,
@@ -185,7 +250,7 @@ async def put_config(
 
 # ─── DELETE /config/{namespace}/{key} ────────────────────────────────────────
 
-@router.delete("/{namespace}/{key}", dependencies=[Depends(_require_admin)])
+@router.delete("/{namespace}/{key}", dependencies=[Depends(_require_config_write)])
 async def delete_config(
     namespace: str,
     key:       str,
