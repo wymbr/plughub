@@ -296,11 +296,9 @@ function CapacityTab({ tenantId }: { tenantId: string }) {
 interface SidebarProps {
   resources:    InstallationResource[]
   loading:      boolean
-  adminToken:   string
-  onAdminToken: (v: string) => void
 }
 
-function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: SidebarProps) {
+function ResourceSidebar({ resources, loading }: SidebarProps) {
   const { t } = useTranslation('billing')
   const base    = resources.filter(r => r.pool_type === 'base')
   const reserve = resources.filter(r => r.pool_type === 'reserve')
@@ -361,19 +359,6 @@ function ResourceSidebar({ resources, loading, adminToken, onAdminToken }: Sideb
           </>
         )}
       </div>
-
-      {/* Admin Token input */}
-      <div className="border-t border-lightGray px-3 py-3 shrink-0">
-        <label className="block text-xs font-semibold text-gray mb-1">{t('resources.adminToken')}</label>
-        <input
-          type="password"
-          value={adminToken}
-          onChange={e => onAdminToken(e.target.value)}
-          placeholder={t('resources.adminToken')}
-          className="w-full px-2 py-1.5 text-xs border border-lightGray rounded focus:outline-none focus:border-secondary bg-white text-dark placeholder-gray/50"
-        />
-        <p className="text-xs text-gray/60 mt-1">{t('resources.adminTokenHint')}</p>
-      </div>
     </div>
   )
 }
@@ -409,7 +394,7 @@ function InvoiceTab({ invoice, loading, error, tenantId, adminToken, onRefresh }
       const action = group.active ? 'deactivate' : 'activate'
       const res = await fetch(
         `/v1/pricing/reserve/${encodeURIComponent(tenantId)}/${encodeURIComponent(group.pool_id)}/${action}`,
-        { method: 'POST', headers: { 'X-Admin-Token': adminToken } }
+        { method: 'POST', headers: { 'Authorization': `Bearer ${adminToken}` } }
       )
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { detail?: string }
@@ -665,10 +650,12 @@ type BillingTab = 'invoice' | 'consumption' | 'capacity'
 
 const BillingPage: React.FC = () => {
   const { t } = useTranslation('billing')
-  const { tenantId } = useAuth()
+  // G-PROBE platform-wide: ações de pricing usam o Bearer do operador + ABAC
+  // `config.plataforma` — sem caixa de admin-token.
+  const { tenantId, session } = useAuth()
+  const adminToken = session?.accessToken ?? ''
 
   const [activeTab,  setActiveTab]  = useState<BillingTab>('invoice')
-  const [adminToken, setAdminToken] = useState('')
 
   const { invoice, loading: loadingInvoice, error: errorInvoice, refresh: refreshInvoice } =
     useInvoice(tenantId)
@@ -689,8 +676,6 @@ const BillingPage: React.FC = () => {
         <ResourceSidebar
           resources={resources}
           loading={loadingRes}
-          adminToken={adminToken}
-          onAdminToken={setAdminToken}
         />
 
         {/* Right area */}

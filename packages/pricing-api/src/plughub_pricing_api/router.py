@@ -16,9 +16,14 @@ Endpoints:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
+import time
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -46,12 +51,59 @@ def get_redis(request: Request):
     return getattr(request.app.state, "redis", None)
 
 
+# G-PROBE platform-wide: write gate DUAL — admin-token (seed/sistema) OU Bearer + ABAC
+# `config.plataforma` (UI; billing/pricing tratado como config de plataforma). Verificação
+# HS256 em stdlib (sem dep nova), com o mesmo jwt_secret da auth-api.
+
+_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+
+
+def _b64url_decode(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def _verify_hs256(token: str, secret: str) -> dict[str, Any]:
+    try:
+        h, p, sig = token.split(".")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="malformed token")
+    expected = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+    ).rstrip(b"=").decode()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=401, detail="invalid token signature")
+    payload = json.loads(_b64url_decode(p))
+    if payload.get("exp") and int(payload["exp"]) < int(time.time()):
+        raise HTTPException(status_code=401, detail="token expired")
+    return payload
+
+
+def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
+    fc = (claims.get("module_config") or {}).get("config", {}).get(field) or {}
+    access = fc.get("access", "none")
+    if access == "none":
+        return False
+    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
+
+
 def require_admin(
-    x_admin_token: Annotated[str | None, Header(alias="X-Admin-Token")] = None,
+    request: Request,
     settings: Settings = Depends(get_settings),
 ) -> None:
-    if settings.admin_token and x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=403, detail="Invalid admin token")
+    expected = settings.admin_token
+    if not expected:
+        return  # auth desabilitada (deploy interno)
+    x_admin = request.headers.get("X-Admin-Token") or request.headers.get("x-admin-token")
+    if x_admin == expected:
+        return  # admin-token (seed_pricing / sistema)
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=403, detail="missing admin token or Bearer")
+    if not getattr(settings, "jwt_secret", ""):
+        raise HTTPException(status_code=503, detail="jwt secret not configured")
+    claims = _verify_hs256(auth[len("Bearer "):], settings.jwt_secret)
+    if not _check_config_field(claims, "plataforma", "read_write"):
+        raise HTTPException(status_code=403, detail="forbidden: requires config.plataforma (read_write)")
 
 
 # ─── Invoice ──────────────────────────────────────────────────────────────────

@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # ── Admin auth (same pattern as config-api) ────────────────────────────────
     admin_token: str = ""
 
+    # G-PROBE platform-wide: mutações aceitam Bearer (JWT de sessão) + ABAC
+    # `config.plataforma` além do admin-token. Mesmo segredo HS256 da auth-api.
+    jwt_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

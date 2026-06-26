@@ -92,10 +92,25 @@ Bearer+ABAC + remover a caixa). Inventário:
   Smoke `smoke_config_write_auth.sh`. Demais telas de config (Channels/Billing/Dashboards) seguem em admin-token
   (dual cobre) até suas fatias. Ver CHANGELOG.
 - ⏳ `config/resources → Skills` (`SkillsPage`, `competencySkills`) → **agent-registry** (skills); `config.resources`.
-- ⏳ Demais telas de config-api ainda em admin-token (mesmo gate dual, só falta migrar a UI): `config/channels`
-  (webchat/webhook → `config.canais`), `config/billing` (pricing), `config/dashboards`.
-- ⏳ `evaluation/knowledge` (`KnowledgeBasePage`) → **mcp-server-knowledge** (porta 3401, snippets RAG); fatia
-  própria — campo ABAC a decidir (`config.resources` ou um campo de conhecimento/evaluation).
+- ✅ `config/channels` (`WebChatConfigPage` + `WebhookConfigPage`) → **config-api** `config.canais` — slice
+  CONCLUÍDO (2026-06-26): backend já dual; add `webhook`→`canais` no mapa; caixas removidas, escritas via Bearer.
+  Smoke estendido (§4). Ver CHANGELOG.
+- ✅ `config/billing` (`BillingPage`) → **pricing-api** (NÃO era config-api — usa `/v1/pricing/*`) — slice
+  CONCLUÍDO (2026-06-26): gate DUAL na pricing-api (admin-token OU Bearer+ABAC **`config.plataforma`** — decisão:
+  reusa config.plataforma, sem campo billing novo; o módulo `billing` só tem `visualizar`/read). `jwt_secret` +
+  `PLUGHUB_PRICING_JWT_SECRET`. Caixa removida; reserve activate/deactivate via Bearer. Smoke
+  `smoke_pricing_write_auth.sh`. Ver CHANGELOG.
+- ⏳ `config/dashboards` (`DashboardsPage`) — **pulado por decisão (2026-06-26)**; retomar quando priorizado.
+- ⏳ `evaluation/knowledge` (`KnowledgePage`) → **NÃO é box-removal** (recon 2026-06-26). Achado: o
+  add/delete chama `POST/DELETE /v1/knowledge/snippets` (com a caixa como `X-Admin-Token`); o proxy do Vite
+  manda `^/v1/knowledge` → **evaluation-api:3400**, mas a evaluation-api **não define** rotas `/v1/knowledge/*`
+  (só monta `router`+`contestation_router`, que apenas *chamam* a mcp-server-knowledge como cliente). Ou seja:
+  a página aponta p/ rotas inexistentes na evaluation-api (provável 404 em search/add) — está **morta/incompleta**,
+  não ABAC-pronta. O store real é a **mcp-server-knowledge** (porta 3401, X-Admin-Token próprio, sem ABAC),
+  escrita server-side pelo fluxo de curadoria/calibração. **Fatia de wiring** (não remoção de caixa): 1º confirmar
+  se a página funciona hoje; depois (a) adicionar CRUD de knowledge ABAC-gated na evaluation-api (proxy →
+  mcp-server-knowledge, campo p.ex. `gerir_rubrica`) e repontar a página, OU (b) gatear a mcp-server-knowledge
+  em Bearer+ABAC. Caixa deixada como está por ora.
 - ⏳ `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
   `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
 Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão). Inventário

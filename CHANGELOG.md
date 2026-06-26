@@ -2,6 +2,39 @@
 
 ---
 
+## G-PROBE platform-wide — Billing/pricing-api (2026-06-26): admin-token → Bearer+ABAC `config.plataforma`
+
+Quarta fatia. A `BillingPage` NÃO usava config-api — escreve na **pricing-api** (`/v1/pricing/*`). Migrada para
+gate DUAL. Como o módulo ABAC `billing` só tem `visualizar` (leitura), as mutações reusam **`config.plataforma`**
+(read_write) — billing tratado como config de plataforma (decisão da sessão, sem campo billing novo nem re-seed).
+
+- **pricing-api** (`router.py`): `require_admin` reescrito p/ DUAL — admin-token (`seed_pricing`/sistema) OU
+  Bearer + ABAC `config.plataforma` (read_write); verificação HS256 em stdlib + `config.jwt_secret`
+  (`PLUGHUB_PRICING_JWT_SECRET`). Gateia upsert/delete de resources + activate/deactivate de reservas. Postura
+  original preservada (`admin_token` vazio = auth desabilitada).
+- **compose**: `PLUGHUB_PRICING_JWT_SECRET=changeme_auth_jwt_secret_demo_32c` na pricing-api.
+- **platform-ui** `BillingPage`: caixa de admin-token removida (state + input do `ResourceSidebar` + props); o
+  toggle de reserva manda `Authorization: Bearer` (session token) em vez de `X-Admin-Token`.
+- **Smoke** `smoke_pricing_write_auth.sh`: POST resources — sem credencial 403, Bearer read_only 403,
+  X-Admin-Token 200, Bearer `config.plataforma:rw` 200 (tenant descartável, limpa no fim).
+
+---
+
+## G-PROBE platform-wide — Channels (2026-06-26): WebChat + Webhook → Bearer+ABAC `config.canais`
+
+Terceira fatia (UI-only — o gate dual da config-api já existia). As duas telas de Channels que escrevem config
+(`WebChatConfigPage` namespace `webchat`, `WebhookConfigPage` namespace `webhook`) saem do X-Admin-Token.
+
+- **config-api** (`router.py`): `webhook` adicionado ao mapa de namespaces de canais (→ `config.canais`;
+  `webchat` já estava).
+- **platform-ui** `WebChatConfigPage` + `WebhookConfigPage`: caixa de admin-token removida (substituída por
+  uma barra de status/reload); `putConfig` passa o `session.accessToken` na posição Bearer. Edição autorizada
+  pelo login + ABAC `config.canais`.
+- **Smoke** `smoke_config_write_auth.sh` §4: Bearer canais:rw → 200 em webchat/webhook; Bearer plataforma
+  (campo errado) → 403.
+
+---
+
 ## G-PROBE platform-wide — slice config-api (2026-06-26): Platform + Masking → Bearer+ABAC
 
 Segunda fatia da migração platform-wide. O endpoint de ESCRITA da config-api

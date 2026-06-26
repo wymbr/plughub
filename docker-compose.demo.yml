@@ -1044,6 +1044,7 @@ services:
       PLUGHUB_PRICING_DATABASE_URL:    postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_PRICING_CONFIG_API_URL:  http://config-api:3600
       PLUGHUB_PRICING_ADMIN_TOKEN:     demo_pricing_admin_token
+      PLUGHUB_PRICING_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c   # G-PROBE — Bearer+ABAC config.plataforma
       PLUGHUB_PRICING_REDIS_URL:       redis://redis:6379   # quota sync — {t}:quota:max_concurrent_sessions
     depends_on:
       postgres:
