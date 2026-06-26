@@ -551,6 +551,11 @@ services:
       DATABASE_URL:   postgresql://plughub:plughub@postgres:5432/plughub_demo
       PORT:           "3300"
       JWT_SECRET:     demo_plughub_secret_32chars__
+      # G-PROBE platform-wide: gate dual das mutações de config (pools/skills/channels/
+      # channel-endpoints). PLUGHUB_JWT_SECRET valida o Bearer da UI (= segredo da auth-api);
+      # AGENT_REGISTRY_SERVICE_TOKEN é a credencial dos callers internos (RegistrySyncer/deploy).
+      PLUGHUB_JWT_SECRET:           changeme_auth_jwt_secret_demo_32c
+      AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
       KAFKA_BROKERS:  kafka:29092
       REDIS_URL:      redis://redis:6379
       CONFIG_API_URL: http://config-api:3600   # item 7a — teto do buffer (queue_max_total)
@@ -587,6 +592,7 @@ services:
       ANALYTICS_API_URL: http://analytics-api:3500   # R5 — tool_trace via GET /v1/audit/mcp-calls
       EVALUATION_API_URL: http://evaluation-api:3400   # G-PROBE fase 2 — base p/ pre-review
       PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço
+      AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — skill_deploy (deploy.ts)
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
@@ -1259,6 +1265,7 @@ services:
       REDIS_URL:            redis://redis:6379
       SKILL_FLOW_URL:       http://skill-flow-service:3460
       AGENT_REGISTRY_URL:   http://agent-registry:3300
+      AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — RegistrySyncer
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry
       SKILLS_DIR:           /skills

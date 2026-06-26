@@ -97,11 +97,15 @@ export function registerDeployTools(server: McpServer, deps: DeployDeps): void {
           tenant_id:   tenantId,
         }
 
+        // G-PROBE platform-wide: o agent-registry gateia POST /v1/skills/:id/deploy;
+        // este caller (workflow) usa a credencial de serviço (env; omitida se vazia).
+        const svcToken = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
         const res = await fetch(url, {
           method:  "POST",
           headers: {
             "Content-Type": "application/json",
             "x-tenant-id":  tenantId,
+            ...(svcToken ? { "x-service-token": svcToken } : {}),
           },
           body: JSON.stringify(body),
         })

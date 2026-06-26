@@ -8,6 +8,9 @@ export const config = {
   host:          process.env["HOST"]                  ?? "0.0.0.0",
   database_url:  process.env["DATABASE_URL"]          ?? "",
   jwt_secret:    process.env["PLUGHUB_JWT_SECRET"]    ?? "",
+  // G-PROBE platform-wide: credencial de serviço p/ callers internos (RegistrySyncer);
+  // a UI usa Bearer+ABAC config.resources. Ambos vazios = gate no-op (postura atual).
+  service_token: process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? "",
   node_env:      process.env["NODE_ENV"]              ?? "development",
   kafka_brokers: process.env["KAFKA_BROKERS"]         ?? "localhost:9092",
   kafka_topic_registry: process.env["KAFKA_TOPIC_REGISTRY"] ?? "agent.registry.events",

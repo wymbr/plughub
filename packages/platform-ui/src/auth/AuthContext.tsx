@@ -29,6 +29,7 @@ import React, {
 import { ModuleConfig, Session, UserRole } from '@/types'
 import { apiLogin, apiRefresh, apiLogout, AuthApiError } from '@/api/auth'
 import { makePermissions, Permissions } from '@/lib/permissions'
+import { setAccessToken } from '@/auth/token-store'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -104,6 +105,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const [isInitializing, setIsInitializing] = useState(true)
   const refreshTimerRef                 = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refreshingRef                   = useRef<Promise<Session | null> | null>(null)
+
+  // G-PROBE platform-wide: espelha o access token num holder de módulo p/ módulos
+  // não-React (ex.: api/registry.ts) mandarem Authorization: Bearer fora de hook.
+  useEffect(() => { setAccessToken(session?.accessToken ?? null) }, [session])
 
   // ── Build Session from token response ───────────────────────────────────────
 

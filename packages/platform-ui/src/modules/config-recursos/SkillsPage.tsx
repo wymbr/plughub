@@ -96,7 +96,9 @@ const SkillsPage: React.FC = () => {
   const { entries, loading, error: loadError, reload } = useNamespace(tenantId, NS)
   const sortedKeys = Object.keys(entries).sort()
 
-  const [adminToken, setAdminToken] = useState('')
+  // G-PROBE platform-wide: escritas usam o Bearer do operador + ABAC `config.plataforma`
+  // (namespace competency_skills → default) — sem caixa de admin-token.
+  const adminToken = session?.accessToken ?? ''
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editDomain, setEditDomain] = useState(5)
 
@@ -129,7 +131,7 @@ const SkillsPage: React.FC = () => {
     if (!adminToken) { setOpError(t('competencySkills.adminRequired')); return }
     setSaving(true); setOpError(null)
     try {
-      await putConfig(NS, key, { domain: newDomain }, null, adminToken)
+      await putConfig(NS, key, { domain: newDomain }, null, '', adminToken)
       reload()
       setIsAdding(false)
     } catch (e) {
@@ -150,7 +152,7 @@ const SkillsPage: React.FC = () => {
     if (!adminToken) { setOpError(t('competencySkills.adminRequired')); return }
     setSaving(true); setOpError(null)
     try {
-      await putConfig(NS, key, { domain: editDomain }, null, adminToken)
+      await putConfig(NS, key, { domain: editDomain }, null, '', adminToken)
       reload()
       setEditingKey(null)
     } catch (e) {
@@ -165,7 +167,7 @@ const SkillsPage: React.FC = () => {
     if (!window.confirm(t('competencySkills.confirmDelete', { key }))) return
     setDeletingKey(key); setOpError(null)
     try {
-      await deleteConfig(NS, key, null, adminToken)
+      await deleteConfig(NS, key, null, '', adminToken)
       reload()
     } catch (e) {
       setOpError(String(e))
@@ -188,21 +190,6 @@ const SkillsPage: React.FC = () => {
 
       {/* Controls row */}
       <div className="flex items-center gap-3 flex-wrap">
-        <label className="text-xs font-semibold text-muted shrink-0">
-          {t('competencySkills.adminToken')}
-        </label>
-        <input
-          type="password"
-          value={adminToken}
-          onChange={e => setAdminToken(e.target.value)}
-          placeholder={t('competencySkills.adminTokenPlaceholder')}
-          className="w-52 text-xs font-mono px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary bg-white"
-        />
-        {!adminToken && (
-          <span className="text-xs text-warning">
-            {t('competencySkills.adminTokenWarning')}
-          </span>
-        )}
         <button
           onClick={handleAddStart}
           disabled={isAdding}

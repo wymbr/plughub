@@ -7,6 +7,8 @@ import {
   ChannelEndpointChannel,
 } from '@/types'
 
+import { getAccessToken } from '@/auth/token-store'
+
 const getBaseUrl = () => {
   return import.meta.env.VITE_REGISTRY_URL || 'http://localhost:3300'
 }
@@ -16,9 +18,18 @@ interface ListResponse<T> {
   total: number
 }
 
+// G-PROBE platform-wide: o agent-registry gateia as mutações de config (pools/skills/
+// channels/channel-endpoints) em Bearer+ABAC `config.resources`. Anexa o Bearer do
+// operador (do token-store) quando presente; GETs são abertos (header ignorado).
+const bearer = (): Record<string, string> => {
+  const t = getAccessToken()
+  return t ? { Authorization: `Bearer ${t}` } : {}
+}
+
 const headers = (tenantId: string) => ({
   'Content-Type': 'application/json',
-  'x-tenant-id': tenantId
+  'x-tenant-id': tenantId,
+  ...bearer(),
 })
 
 // Headers for routes that also require a user identity (e.g. channels, human-agent actions)
@@ -26,6 +37,7 @@ const operatorHeaders = (tenantId: string) => ({
   'Content-Type': 'application/json',
   'x-tenant-id': tenantId,
   'x-user-id': 'operator',
+  ...bearer(),
 })
 
 // Pools

@@ -14,6 +14,7 @@ import { channelEndpointsRouter } from "./routes/channel-endpoints"
 // PoolSkillSlot, autoritativo). Rota desmontada; model removido do schema.
 import { poolSlotsRouter }        from "./routes/pool-slots"
 import { operationalRouter }      from "./routes/operational"
+import { requireResourceWrite }   from "./middleware/require-resource-write"
 
 export const app = express()
 
@@ -34,12 +35,17 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json())
 
 // ── Rotas ──────────────────────────────────
-app.use("/v1/pools",              poolsRouter)
-app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes: /slots, /slots/next, /promote, /rollback
-app.use("/v1/skills",             skillsRouter)
+// G-PROBE platform-wide: gate DUAL (service-token OU Bearer+ABAC config.resources) nas
+// MUTAÇÕES dos routers de config que a UI (PoolsPage/registry.ts) edita diretamente.
+// GET aberto (o middleware deixa passar). FORA do gate por ora (runtime/deploy interno,
+// cadeia de callers maior): instances, operational e pool-slots (promote/rollback do
+// Fluxo→Deploy, mediado por mcp-server) — fatia própria.
+app.use("/v1/pools",              requireResourceWrite, poolsRouter)
+app.use("/v1/pools/:pool_id",     poolSlotsRouter)   // slots sub-routes (deploy) — não gateado nesta fatia
+app.use("/v1/skills",             requireResourceWrite, skillsRouter)
 app.use("/v1/instances",          instancesRouter)
-app.use("/v1/channels",           channelsRouter)
-app.use("/v1/channel-endpoints",  channelEndpointsRouter)
+app.use("/v1/channels",           requireResourceWrite, channelsRouter)
+app.use("/v1/channel-endpoints",  requireResourceWrite, channelEndpointsRouter)
 app.use("/v1/operational",        operationalRouter)
 
 // ── Healthcheck ────────────────────────────

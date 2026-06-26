@@ -214,6 +214,11 @@ class RegistrySyncer:
 
         report  = SyncReport(tenant_id=tenant_id)
         headers = {"x-tenant-id": tenant_id, "x-user-id": "registry-syncer"}
+        # G-PROBE platform-wide: credencial de serviço p/ as mutações gateadas do
+        # agent-registry (pools/skills/channel-endpoints/slots). Omitida se não configurada.
+        _svc = os.environ.get("AGENT_REGISTRY_SERVICE_TOKEN", "")
+        if _svc:
+            headers["x-service-token"] = _svc
 
         # ── Sync skills FIRST (agent types reference skill_ids) ───────────
         await self._sync_skills(http, headers, report)

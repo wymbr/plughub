@@ -2,6 +2,34 @@
 
 ---
 
+## G-PROBE platform-wide — Skills + agent-registry (2026-06-26)
+
+Duas fatias. **(1) SkillsPage** (config/resources → Skills): NÃO era agent-registry — escreve config-api
+namespace `competency_skills` (→ default `config.plataforma`, já coberto pelo gate dual da config-api). UI-only:
+caixa removida, escritas via Bearer. **(2) agent-registry** — fecha o gap real: as mutações de config estavam
+**sem auth** (`registry.ts` mandava só `x-tenant-id`).
+
+- **agent-registry** (`middleware/require-resource-write.ts`): gate DUAL nos routers de config **pools/skills/
+  channels/channel-endpoints** (montados com o middleware em `app.ts`). GET/HEAD/OPTIONS abertos; mutação exige
+  `X-Service-Token` (callers internos) OU Bearer + ABAC `config.resources` (read_write). Verificação HS256 em
+  **stdlib `crypto`** (sem dep). No-op quando `service_token` e `jwt_secret` vazios (postura atual preservada).
+  `config.ts` ganha `service_token`. **Fora do gate de propósito** (cadeia maior): `pool-slots` (deploy),
+  `instances`, `operational`.
+- **Callers internos wirados**: `registry_syncer.py` (RegistrySyncer — pools/skills/channel-endpoints/slots do
+  YAML no bootstrap) e `deploy.ts` (`skill_deploy`, POST /v1/skills/:id/deploy) mandam `x-service-token` (env,
+  omitido se vazio).
+- **UI**: novo `auth/token-store.ts` (holder de módulo do access token, espelhado pelo AuthContext via
+  `useEffect`); `api/registry.ts` anexa `Authorization: Bearer` (do store) em todas as chamadas — destrava
+  Bearer fora de hook. `SkillsPage` (config-recursos) perde a caixa de admin-token.
+- **compose**: `PLUGHUB_JWT_SECRET` (= segredo auth-api, valida o Bearer da UI) + `AGENT_REGISTRY_SERVICE_TOKEN`
+  na agent-registry; `AGENT_REGISTRY_SERVICE_TOKEN` na orchestrator-bridge e mcp-server-plughub.
+- **Smoke** `smoke_agent_registry_write_auth.sh`: DELETE skill — sem cred 401, Bearer read_only/sem-grant 403,
+  X-Service-Token e Bearer resources:rw passam o gate (404 not-found), GET lista aberto 200.
+- **Residual**: ferramentas CLI de import (`sdk/cli/import.ts`, `gitagent/import.ts`) mutam `/v1/skills` sem
+  token (dev/CI) — passar `x-service-token` se usadas contra registry gateado.
+
+---
+
 ## G-PROBE platform-wide — Billing/pricing-api (2026-06-26): admin-token → Bearer+ABAC `config.plataforma`
 
 Quarta fatia. A `BillingPage` NÃO usava config-api — escreve na **pricing-api** (`/v1/pricing/*`). Migrada para
