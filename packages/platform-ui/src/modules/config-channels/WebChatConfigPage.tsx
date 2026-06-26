@@ -33,11 +33,12 @@ const DEFAULTS: WebChatConfig = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const WebChatConfigPage: React.FC = () => {
-  const { tenantId } = useAuth()
+  // G-PROBE platform-wide: escritas usam o Bearer do operador + ABAC `config.canais` —
+  // sem caixa de admin-token (`adminToken` = access token, nome mantido p/ diff mínimo).
+  const { tenantId, session } = useAuth()
   const { entries, loading, error, reload } = useNamespace(tenantId, 'webchat')
 
-  const [adminToken, setAdminToken] = useState('')
-  const [showToken,  setShowToken]  = useState(false)
+  const adminToken = session?.accessToken ?? ''
   const [cfg,        setCfg]        = useState<WebChatConfig>(DEFAULTS)
   const [dirty,      setDirty]      = useState(false)
   const [saving,     setSaving]     = useState<string | null>(null)
@@ -68,7 +69,7 @@ const WebChatConfigPage: React.FC = () => {
     if (!adminToken) { setSaveErr('Admin token required'); return }
     setSaving(key); setSaveErr(null)
     try {
-      await putConfig('webchat', key, cfg[key], null, adminToken)
+      await putConfig('webchat', key, cfg[key], null, '', adminToken)
       setDirty(false)
       reload()
     } catch (e) {
@@ -83,9 +84,9 @@ const WebChatConfigPage: React.FC = () => {
     setSaving('all'); setSaveErr(null)
     try {
       await Promise.all([
-        putConfig('webchat', 'auth_timeout_s',         cfg.auth_timeout_s,         null, adminToken),
-        putConfig('webchat', 'attachment_expiry_days', cfg.attachment_expiry_days, null, adminToken),
-        putConfig('webchat', 'upload_limits_mb',       cfg.upload_limits_mb,       null, adminToken),
+        putConfig('webchat', 'auth_timeout_s',         cfg.auth_timeout_s,         null, '', adminToken),
+        putConfig('webchat', 'attachment_expiry_days', cfg.attachment_expiry_days, null, '', adminToken),
+        putConfig('webchat', 'upload_limits_mb',       cfg.upload_limits_mb,       null, '', adminToken),
       ])
       setDirty(false)
       reload()
@@ -107,26 +108,11 @@ const WebChatConfigPage: React.FC = () => {
   return (
     <div className="max-w-2xl space-y-6">
 
-      {/* Admin token */}
-      <div className="flex items-center gap-3 p-3 bg-surface-muted border border-border rounded-lg">
-        <label className="text-xs font-medium text-muted shrink-0">Admin Token</label>
-        <input
-          type={showToken ? 'text' : 'password'}
-          value={adminToken}
-          onChange={e => setAdminToken(e.target.value)}
-          placeholder="Token to enable editing"
-          className="flex-1 text-xs px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
-        />
-        <button
-          onClick={() => setShowToken(v => !v)}
-          className="text-muted-light hover:text-muted text-sm"
-        >{showToken ? '🙈' : '👁'}</button>
-        {adminToken && <span className="text-xs text-green-text font-semibold shrink-0">✓ active</span>}
-        <div className="flex items-center gap-2 ml-auto">
-          {loading && <Spinner />}
-          {error && <span className="text-xs text-red-text">⚠ {error}</span>}
-          <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
-        </div>
+      {/* Status / reload (G-PROBE: edição autorizada pelo login + ABAC config.canais) */}
+      <div className="flex items-center gap-2 justify-end">
+        {loading && <Spinner />}
+        {error && <span className="text-xs text-red-text">⚠ {error}</span>}
+        <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
       </div>
 
       {/* ── 1. Authentication ── */}

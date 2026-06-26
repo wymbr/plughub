@@ -39,11 +39,12 @@ const DEFAULTS: WebhookConfig = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const WebhookConfigPage: React.FC = () => {
-  const { tenantId } = useAuth()
+  // G-PROBE platform-wide: escritas usam o Bearer do operador + ABAC `config.canais` —
+  // sem caixa de admin-token (`adminToken` = access token, nome mantido p/ diff mínimo).
+  const { tenantId, session } = useAuth()
   const { entries, loading, error, reload } = useNamespace(tenantId, 'webhook')
 
-  const [adminToken,   setAdminToken]   = useState('')
-  const [showToken,    setShowToken]    = useState(false)
+  const adminToken = session?.accessToken ?? ''
   const [cfg,          setCfg]          = useState<WebhookConfig>(DEFAULTS)
   const [dirty,        setDirty]        = useState(false)
   const [saving,       setSaving]       = useState<string | null>(null)
@@ -88,12 +89,12 @@ const WebhookConfigPage: React.FC = () => {
     setSaving('all'); setSaveErr(null)
     try {
       await Promise.all([
-        putConfig('webhook', 'hmac_enabled',       cfg.hmac_enabled,       null, adminToken),
-        putConfig('webhook', 'hmac_algorithm',     cfg.hmac_algorithm,     null, adminToken),
-        putConfig('webhook', 'hmac_header',        cfg.hmac_header,        null, adminToken),
-        putConfig('webhook', 'ip_allowlist',       cfg.ip_allowlist,       null, adminToken),
-        putConfig('webhook', 'request_timeout_ms', cfg.request_timeout_ms, null, adminToken),
-        putConfig('webhook', 'response_window_ms', cfg.response_window_ms, null, adminToken),
+        putConfig('webhook', 'hmac_enabled',       cfg.hmac_enabled,       null, '', adminToken),
+        putConfig('webhook', 'hmac_algorithm',     cfg.hmac_algorithm,     null, '', adminToken),
+        putConfig('webhook', 'hmac_header',        cfg.hmac_header,        null, '', adminToken),
+        putConfig('webhook', 'ip_allowlist',       cfg.ip_allowlist,       null, '', adminToken),
+        putConfig('webhook', 'request_timeout_ms', cfg.request_timeout_ms, null, '', adminToken),
+        putConfig('webhook', 'response_window_ms', cfg.response_window_ms, null, '', adminToken),
       ])
       setDirty(false)
       reload()
@@ -118,26 +119,11 @@ const WebhookConfigPage: React.FC = () => {
   return (
     <div className="max-w-2xl space-y-6">
 
-      {/* Admin token */}
-      <div className="flex items-center gap-3 p-3 bg-surface-muted border border-border rounded-lg">
-        <label className="text-xs font-medium text-muted shrink-0">Admin Token</label>
-        <input
-          type={showToken ? 'text' : 'password'}
-          value={adminToken}
-          onChange={e => setAdminToken(e.target.value)}
-          placeholder="Token to enable editing"
-          className="flex-1 text-xs px-2 py-1.5 border border-border-strong rounded focus:outline-none focus:border-primary"
-        />
-        <button
-          onClick={() => setShowToken(v => !v)}
-          className="text-muted-light hover:text-muted text-sm"
-        >{showToken ? '🙈' : '👁'}</button>
-        {adminToken && <span className="text-xs text-green-text font-semibold shrink-0">✓ active</span>}
-        <div className="flex items-center gap-2 ml-auto">
-          {loading && <Spinner />}
-          {error && <span className="text-xs text-red-text">⚠ {error}</span>}
-          <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
-        </div>
+      {/* Status / reload (G-PROBE: edição autorizada pelo login + ABAC config.canais) */}
+      <div className="flex items-center gap-2 justify-end">
+        {loading && <Spinner />}
+        {error && <span className="text-xs text-red-text">⚠ {error}</span>}
+        <button onClick={reload} className="text-xs text-secondary hover:text-primary">↻</button>
       </div>
 
       {/* ── 1. HMAC Signature Verification ── */}

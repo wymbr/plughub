@@ -60,7 +60,7 @@ _ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
 _NS_FIELD_OVERRIDES = {
     "masking":      "masking",
     "audit_policy": "masking",   # MaskingPage edita masking + audit_policy → mesmo campo
-    "webchat":  "canais", "sms": "canais", "whatsapp": "canais", "voice": "canais", "webrtc": "canais",
+    "webchat":  "canais", "webhook": "canais", "sms": "canais", "whatsapp": "canais", "voice": "canais", "webrtc": "canais",
 }
 
 

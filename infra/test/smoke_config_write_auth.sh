@@ -49,8 +49,9 @@ for i in $(seq 1 30); do $CURL "$CFG/config?tenant_id=$TENANT" >/dev/null 2>&1 &
 echo "══ mint tokens (plataforma / masking / sem grant) ══"
 TOK_PLAT=$(mint '{"config":{"plataforma":{"access":"read_write","scope":[]}}}')
 TOK_MASK=$(mint '{"config":{"masking":{"access":"read_write","scope":[]}}}')
+TOK_CAN=$(mint '{"config":{"canais":{"access":"read_write","scope":[]}}}')
 TOK_NONE=$(mint '{"contacts":{"operacao":{"access":"read_write","scope":[]}}}')
-[ -n "$TOK_PLAT" ] && [ -n "$TOK_MASK" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
+[ -n "$TOK_PLAT" ] && [ -n "$TOK_MASK" ] && [ -n "$TOK_CAN" ] && [ -n "$TOK_NONE" ] || { echo "  ✗ mint falhou"; exit 1; }
 echo "  ✓ tokens mintados"
 
 echo "══ 1. back-compat: X-Admin-Token ══"
@@ -68,8 +69,13 @@ assert "Bearer masking:rw (masking) → 200"      200 "$(put masking smoke_gprob
 assert "Bearer masking:rw (audit_policy) → 200" 200 "$(put audit_policy smoke_gprobe -H "Authorization: Bearer $TOK_MASK")"
 assert "Bearer plataforma (campo errado) → 403" 403 "$(put masking smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
 
+echo "══ 4. Channels (namespace webchat/webhook → config.canais) ══"
+assert "Bearer canais:rw (webchat) → 200"       200 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
+assert "Bearer canais:rw (webhook) → 200"       200 "$(put webhook smoke_gprobe -H "Authorization: Bearer $TOK_CAN")"
+assert "Bearer plataforma (campo errado) → 403" 403 "$(put webchat smoke_gprobe -H "Authorization: Bearer $TOK_PLAT")"
+
 echo "══ cleanup (remove as chaves de teste via admin-token) ══"
-for nk in "routing/smoke_gprobe" "masking/smoke_gprobe" "audit_policy/smoke_gprobe"; do
+for nk in "routing/smoke_gprobe" "masking/smoke_gprobe" "audit_policy/smoke_gprobe" "webchat/smoke_gprobe" "webhook/smoke_gprobe"; do
   $CURL -X DELETE "$CFG/config/$nk?tenant_id=$TENANT&admin_token=$ADMIN" >/dev/null 2>&1
 done
 
