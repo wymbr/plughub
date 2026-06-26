@@ -2,6 +2,33 @@
 
 ---
 
+## G-PROBE platform-wide — slice auth-api (2026-06-26): admin-token → Bearer+ABAC `config.usuarios`
+
+Primeira fatia da migração platform-wide do anti-padrão "caixa de admin-token na UI" para autorização pelo
+JWT do operador + ABAC. **auth-api** (gestão de usuários/permissões/grupos) deixa de aceitar `X-Admin-Token`
+e passa a exigir **Bearer + ABAC `config.usuarios`** (STRICT, sem fallback de admin-token; decisão da sessão).
+
+- **auth-api** (`router.py` + `groups_router.py`): novo gate `_require_config_usuarios(write)` (decode do
+  Bearer via `_bearer_claims` + `_check_config_field` em `module_config.config.usuarios`); GET → `read_only`,
+  mutações → `read_write` (grant-first, ausência = 403). Todos os `Depends(_require_admin)` substituídos;
+  `_require_admin` (e o caminho X-Admin-Token) **removido** dos dois routers. `groups_router` importa o gate de
+  `router`.
+- **seed_auth.py**: bootstrap não usa mais `X-Admin-Token` — **minta um Bearer HS256 de bootstrap** (stdlib
+  `hmac`/`hashlib`, sem pyjwt) com `config.usuarios:read_write`, assinado com `AUTH_JWT_SECRET` (default =
+  `changeme_auth_jwt_secret_demo_32c`, bate com o `PLUGHUB_AUTH_JWT_SECRET` da auth-api). Resolve o
+  chicken-and-egg do bootstrap sob strict.
+- **platform-ui** `AccessPage` + `GroupsPage`: removida a caixa de admin-token; `authHeaders` envia
+  `Authorization: Bearer` (token = `session.accessToken`); as listas (users/groups) **passam a carregar no
+  login** (antes só após digitar o token — bug reportado). `Check` mantido (usado noutro ponto).
+- **Smoke** `infra/test/smoke_config_usuarios_auth.sh`: minta Bearer rw/ro/sem-grant no container; assере
+  GET 401(sem)/200(ro,rw)/403(sem grant)/401(X-Admin-Token sem fallback); POST 403(ro)/201(rw); grupos idem.
+- **Follow-ups**: (a) `auth-api/tests/test_router.py` usa X-Admin-Token → quebrado pelo strict (refresh = TODO,
+  análogo ao test_router do evaluation-api); (b) `PLUGHUB_AUTH_ADMIN_TOKEN`/`AUTH_ADMIN_TOKEN` no compose viram
+  vestigiais (cleanup); (c) demais telas (config-api Platform, agent-registry Skills, Avaliações/adjudicate)
+  seguem no TODO platform-wide.
+
+---
+
 ## G-PROBE fase 2 (cleanup UI, 2026-06-26) — admin-token removido + Bearer nas listas
 
 Fecha o cleanup de UI do G-PROBE: a `CampaignsPage` não tem mais o input de admin-token (todas as ações de

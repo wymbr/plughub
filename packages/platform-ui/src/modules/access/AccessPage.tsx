@@ -69,9 +69,11 @@ interface PermTemplate {
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
-function authHeaders(adminToken: string): HeadersInit {
+// G-PROBE platform-wide: auth-api passou a exigir Bearer+ABAC `config.usuarios`
+// (strict, sem X-Admin-Token). `token` aqui é o access token da sessão.
+function authHeaders(token: string): HeadersInit {
   const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (adminToken) h['X-Admin-Token'] = adminToken
+  if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
@@ -1105,17 +1107,14 @@ export default function AccessPage() {
   const grantedBy = currentUser?.email ?? currentUser?.userId ?? 'admin'
 
   const [activeTab,   setActiveTab]   = useState<PageTab>('users')
-  const [adminToken,  setAdminToken]  = useState('')
-  const [tokenSaved,  setTokenSaved]  = useState(false)
+  // G-PROBE platform-wide: a página autoriza pelo Bearer do operador (session JWT) +
+  // ABAC `config.usuarios` — sem caixa de admin-token. O token threadado abaixo é o
+  // access token da sessão (nome `adminToken` mantido só p/ minimizar o diff).
+  const adminToken = session?.accessToken ?? ''
 
   const { users, loading, error, reload } = useUsers(tenantId, adminToken)
   const { pools } = usePools(tenantId)
   const { modules } = useModules(adminToken)
-
-  function saveToken() {
-    setTokenSaved(true); void reload()
-    setTimeout(() => setTokenSaved(false), 2000)
-  }
 
   type LucideIcon = React.FC<{ className?: string }>
   const tabs: { id: PageTab; label: string; Icon: LucideIcon }[] = [
@@ -1131,20 +1130,6 @@ export default function AccessPage() {
         <div>
           <h1 className="text-xl font-bold text-dark">{t('title')}</h1>
           <p className="text-sm text-muted mt-0.5">{t('pageSubtitle')}</p>
-        </div>
-        {/* Admin token — optional */}
-        <div className="flex items-center gap-2">
-          <input type="password" value={adminToken}
-            onChange={e => { setAdminToken(e.target.value); setTokenSaved(false) }}
-            onKeyDown={e => { if (e.key === 'Enter') saveToken() }}
-            placeholder={t('adminTokenPlaceholder')}
-            className="border border-border-strong rounded-lg px-3 py-1.5 text-xs w-52 focus:outline-none focus:ring-2 focus:ring-primary/40" />
-          {adminToken && (
-            <button onClick={saveToken}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${tokenSaved ? 'bg-green-light text-green-text' : 'bg-primary text-white hover:bg-primary/90'}`}>
-              {tokenSaved ? <Check className="w-3.5 h-3.5 inline" aria-hidden="true" /> : t('adminTokenApply')}
-            </button>
-          )}
         </div>
       </div>
 

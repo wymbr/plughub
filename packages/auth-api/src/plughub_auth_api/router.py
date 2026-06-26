@@ -59,16 +59,38 @@ def _settings() -> Settings:
     return get_settings()
 
 
-def _require_admin(
-    x_admin_token: Annotated[str | None, Header()] = None,
-    settings: Settings = Depends(_settings),
-) -> None:
-    # Deny all admin requests when PLUGHUB_AUTH_ADMIN_TOKEN is not configured.
-    # An empty token would bypass auth entirely — fail closed instead.
-    if not settings.admin_token:
-        raise HTTPException(status_code=503, detail="Admin token not configured")
-    if x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=401, detail="Invalid admin token")
+# ─── ABAC gate (admin-token → Bearer+ABAC config.usuarios) ─────────────────────
+# G-PROBE platform-wide (2026-06-26): gestão de usuários/permissões/grupos deixa de
+# usar X-Admin-Token e passa a autorizar pelo JWT do operador + ABAC `config.usuarios`
+# (read_only p/ GET, read_write p/ mutação). Strict: sem fallback de admin-token.
+# O bootstrap (seed_auth) minta um Bearer próprio assinado com o jwt_secret.
+
+_ACCESS_RANK = {"none": 0, "read_only": 1, "write_only": 1, "read_write": 2}
+
+
+def _check_config_field(claims: dict[str, Any], field: str, min_access: str) -> bool:
+    """ABAC: `module_config.config.{field}` >= min_access. Grant-first (ausência = deny)."""
+    mc = claims.get("module_config") or {}
+    fc = (mc.get("config") or {}).get(field) or {}
+    access = fc.get("access", "none")
+    if access == "none":
+        return False
+    return _ACCESS_RANK.get(access, 0) >= _ACCESS_RANK.get(min_access, 0)
+
+
+def _require_config_usuarios(write: bool):
+    """Dependency factory: exige Bearer + ABAC `config.usuarios` (read_only|read_write)."""
+    async def _dep(request: Request, settings: Settings = Depends(_settings)) -> dict[str, Any]:
+        claims = await _bearer_claims(request, settings)
+        need = "read_write" if write else "read_only"
+        if not _check_config_field(claims, "usuarios", need):
+            raise HTTPException(status_code=403, detail=f"forbidden: requires config.usuarios ({need})")
+        return claims
+    return _dep
+
+
+_USUARIOS_READ = _require_config_usuarios(write=False)
+_USUARIOS_WRITE = _require_config_usuarios(write=True)
 
 
 def _user_to_response(row: dict[str, Any]) -> UserResponse:
@@ -234,7 +256,7 @@ async def me(request: Request) -> MeResponse:
 # ─── User management (admin) ──────────────────────────────────────────────────
 
 @router.post("/users", response_model=UserResponse, status_code=201,
-             dependencies=[Depends(_require_admin)])
+             dependencies=[Depends(_USUARIOS_WRITE)])
 async def create_user(body: CreateUserRequest, request: Request) -> UserResponse:
     pool = _get_pool(request)
     # Verifica se e-mail já existe
@@ -256,7 +278,7 @@ async def create_user(body: CreateUserRequest, request: Request) -> UserResponse
 
 
 @router.get("/users", response_model=list[UserResponse],
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def list_users(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -269,7 +291,7 @@ async def list_users(
 
 
 @router.get("/users/{user_id}", response_model=UserResponse,
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def get_user(user_id: str, request: Request) -> UserResponse:
     pool = _get_pool(request)
     row = await db_mod.get_user_by_id(pool, user_id)
@@ -279,7 +301,7 @@ async def get_user(user_id: str, request: Request) -> UserResponse:
 
 
 @router.patch("/users/{user_id}", response_model=UserResponse,
-              dependencies=[Depends(_require_admin)])
+              dependencies=[Depends(_USUARIOS_WRITE)])
 async def update_user(
     user_id: str,
     body: UpdateUserRequest,
@@ -306,7 +328,7 @@ async def update_user(
 
 
 @router.delete("/users/{user_id}", status_code=204,
-               dependencies=[Depends(_require_admin)])
+               dependencies=[Depends(_USUARIOS_WRITE)])
 async def delete_user(user_id: str, request: Request) -> None:
     pool = _get_pool(request)
     deleted = await db_mod.delete_user(pool, user_id)
@@ -332,7 +354,7 @@ def _perm_to_response(row: dict[str, Any]) -> PermissionResponse:
 
 
 @router.post("/permissions", response_model=PermissionResponse, status_code=201,
-             dependencies=[Depends(_require_admin)])
+             dependencies=[Depends(_USUARIOS_WRITE)])
 async def grant_permission(body: GrantPermissionRequest, request: Request) -> PermissionResponse:
     """Concede permissão a um usuário. Idempotente (ON CONFLICT UPDATE)."""
     pool = _get_pool(request)
@@ -350,7 +372,7 @@ async def grant_permission(body: GrantPermissionRequest, request: Request) -> Pe
 
 
 @router.get("/permissions", response_model=list[PermissionResponse],
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def list_permissions(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -363,7 +385,7 @@ async def list_permissions(
 
 
 @router.delete("/permissions/{permission_id}", status_code=204,
-               dependencies=[Depends(_require_admin)])
+               dependencies=[Depends(_USUARIOS_WRITE)])
 async def revoke_permission(permission_id: str, request: Request) -> None:
     pool = _get_pool(request)
     revoked = await perms_mod.revoke_permission(pool, permission_id)
@@ -413,7 +435,7 @@ def _tmpl_to_response(row: dict[str, Any]) -> TemplateResponse:
 
 
 @router.post("/templates", response_model=TemplateResponse, status_code=201,
-             dependencies=[Depends(_require_admin)])
+             dependencies=[Depends(_USUARIOS_WRITE)])
 async def create_template(body: CreateTemplateRequest, request: Request) -> TemplateResponse:
     pool = _get_pool(request)
     perms_list = [p.model_dump() for p in body.permissions]
@@ -428,7 +450,7 @@ async def create_template(body: CreateTemplateRequest, request: Request) -> Temp
 
 
 @router.get("/templates", response_model=list[TemplateResponse],
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def list_templates(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -439,7 +461,7 @@ async def list_templates(
 
 
 @router.get("/templates/{template_id}", response_model=TemplateResponse,
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def get_template(template_id: str, request: Request) -> TemplateResponse:
     pool = _get_pool(request)
     row = await perms_mod.get_template(pool, template_id)
@@ -449,7 +471,7 @@ async def get_template(template_id: str, request: Request) -> TemplateResponse:
 
 
 @router.patch("/templates/{template_id}", response_model=TemplateResponse,
-              dependencies=[Depends(_require_admin)])
+              dependencies=[Depends(_USUARIOS_WRITE)])
 async def update_template(
     template_id: str,
     body: UpdateTemplateRequest,
@@ -468,7 +490,7 @@ async def update_template(
 
 
 @router.delete("/templates/{template_id}", status_code=204,
-               dependencies=[Depends(_require_admin)])
+               dependencies=[Depends(_USUARIOS_WRITE)])
 async def delete_template(template_id: str, request: Request) -> None:
     pool = _get_pool(request)
     deleted = await perms_mod.delete_template(pool, template_id)
@@ -477,7 +499,7 @@ async def delete_template(template_id: str, request: Request) -> None:
 
 
 @router.post("/templates/{template_id}/apply", response_model=list[PermissionResponse],
-             dependencies=[Depends(_require_admin)])
+             dependencies=[Depends(_USUARIOS_WRITE)])
 async def apply_template(
     template_id: str,
     body: ApplyTemplateRequest,
@@ -562,7 +584,7 @@ async def get_module(module_id: str, request: Request) -> dict:
 
 
 @router.post("/modules", response_model=dict, status_code=201,
-             dependencies=[Depends(_require_admin)])
+             dependencies=[Depends(_USUARIOS_WRITE)])
 async def register_module(body: dict, request: Request) -> dict:
     """
     Registra ou atualiza um módulo (upsert por module_id).
@@ -587,7 +609,7 @@ async def register_module(body: dict, request: Request) -> dict:
 
 
 @router.patch("/modules/{module_id}/active", response_model=dict,
-              dependencies=[Depends(_require_admin)])
+              dependencies=[Depends(_USUARIOS_WRITE)])
 async def set_module_active(module_id: str, request: Request, active: bool = True) -> dict:
     pool = _get_pool(request)
     ok = await db_mod.set_module_active(pool, module_id, active)
@@ -616,7 +638,7 @@ async def set_module_active(module_id: str, request: Request, active: bool = Tru
 
 
 @router.get("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_READ)])
 async def get_user_module_config(user_id: str, request: Request) -> dict:
     """Retorna o module_config completo do usuário."""
     pool = _get_pool(request)
@@ -629,7 +651,7 @@ async def get_user_module_config(user_id: str, request: Request) -> dict:
 
 
 @router.put("/users/{user_id}/module-config", response_model=dict,
-            dependencies=[Depends(_require_admin)])
+            dependencies=[Depends(_USUARIOS_WRITE)])
 async def set_user_module_config(user_id: str, body: dict, request: Request) -> dict:
     """
     Substitui todo o module_config do usuário.
@@ -671,7 +693,7 @@ async def set_user_module_config(user_id: str, body: dict, request: Request) -> 
 
 
 @router.patch("/users/{user_id}/module-config/{module_id}", response_model=dict,
-              dependencies=[Depends(_require_admin)])
+              dependencies=[Depends(_USUARIOS_WRITE)])
 async def patch_user_module_config(
     user_id: str,
     module_id: str,

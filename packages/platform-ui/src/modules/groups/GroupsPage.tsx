@@ -69,8 +69,12 @@ const TIMEZONES = ['UTC', 'America/Sao_Paulo', 'America/New_York', 'Europe/Londo
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
+// G-PROBE platform-wide: auth-api exige Bearer+ABAC `config.usuarios` (strict, sem
+// X-Admin-Token). `token` aqui é o access token da sessão.
 function adminHeaders(token: string): HeadersInit {
-  return { 'Content-Type': 'application/json', 'X-Admin-Token': token }
+  return token
+    ? { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+    : { 'Content-Type': 'application/json' }
 }
 
 async function apiFetch<T>(url: string, token: string, init?: RequestInit): Promise<T> {
@@ -94,8 +98,9 @@ export default function GroupsPage() {
 
   const tenantId = session?.tenantId ?? 'tenant_demo'
 
-  const [adminToken,  setAdminToken]  = useState('')
-  const [tokenSaved,  setTokenSaved]  = useState(false)
+  // G-PROBE platform-wide: autoriza pelo Bearer do operador (session JWT) + ABAC
+  // config.usuarios — sem caixa de admin-token (nome `adminToken` mantido p/ diff mínimo).
+  const adminToken = session?.accessToken ?? ''
 
   const [groups,  setGroups]  = useState<Group[]>([])
   const [loading, setLoading] = useState(false)
@@ -188,12 +193,6 @@ export default function GroupsPage() {
     }
   }
 
-  function saveToken() {
-    setTokenSaved(true)
-    void loadGroups()
-    setTimeout(() => setTokenSaved(false), 2000)
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -205,24 +204,6 @@ export default function GroupsPage() {
           <p className="text-sm text-muted mt-0.5">{t('subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <input
-            type="password"
-            value={adminToken}
-            onChange={e => { setAdminToken(e.target.value); setTokenSaved(false) }}
-            onKeyDown={e => { if (e.key === 'Enter') saveToken() }}
-            placeholder={t('adminTokenPlaceholder')}
-            className="border border-border-strong rounded-lg px-3 py-1.5 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-primary/50"
-          />
-          {adminToken && (
-            <button
-              onClick={saveToken}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-                tokenSaved ? 'bg-green-light text-green-text' : 'bg-primary text-white hover:bg-primary-dark'
-              }`}
-            >
-              {tokenSaved ? <Check className="w-3.5 h-3.5 inline" aria-hidden="true" /> : t('adminTokenApply')}
-            </button>
-          )}
           {adminToken && (
             <button
               onClick={() => setNewGroupOpen(true)}

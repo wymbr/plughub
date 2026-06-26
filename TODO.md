@@ -81,14 +81,16 @@ G-PROBE cobriu só o módulo Quality (evaluation-api). O MESMO anti-padrão (cai
 em vez de autorizar pelo JWT do operador + ABAC) persiste em outras telas, cada uma gateando um serviço
 diferente pelo seu admin-token. Migrar cada uma é um "mini-G-PROBE" por serviço (gatear endpoints em
 Bearer+ABAC + remover a caixa). Inventário:
-- `config/access` (`AccessPage`) → **auth-api** (users/ABAC); campo ABAC `config.users`. *(reportado: a página
-  só revela a lista de usuários após digitar o admin-token; deveria reagir ao login de admin via `config.users`.)*
-- `config/groups` (`GroupsPage`) → **auth-api** (agent groups); `config.users`.
-- `config/platform` (`ConfigPlataformaPage`) → **config-api** (platform_config); `config.*`.
-- `config/resources → Skills` (`SkillsPage`, `competencySkills`) → **agent-registry** (skills); `skill_flows`.
-- `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
+- ✅ **`config/access` (`AccessPage`) + `config/groups` (`GroupsPage`) → auth-api** (`config.usuarios`) — slice
+  CONCLUÍDO (2026-06-26): gate strict Bearer+ABAC na auth-api (router + groups_router), seed_auth minta Bearer
+  de bootstrap, UI usa session Bearer (listas carregam no login — conserta o bug reportado). Smoke
+  `smoke_config_usuarios_auth.sh`. Ver CHANGELOG. *(Follow-up: `auth-api/tests/test_router.py` em X-Admin-Token
+  → refresh; envs `*_AUTH_ADMIN_TOKEN` vestigiais → cleanup.)*
+- ⏳ `config/platform` (`ConfigPlataformaPage`) → **config-api** (platform_config); campo `config.plataforma`.
+- ⏳ `config/resources → Skills` (`SkillsPage`, `competencySkills`) → **agent-registry** (skills); `config.resources`.
+- ⏳ `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
   `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
-Decisão (2026-06-26): não estava no escopo original; deixado como iniciativa futura (sequenciável por serviço).
+Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão).
 
 **Rot pré-existente (separado do G-PROBE, não bloqueia):** `evaluation-api/tests/test_router.py` tem
 11 testes quebrados **independentes do gate** (classes TestInstances/Ingest/Results/Contestations):

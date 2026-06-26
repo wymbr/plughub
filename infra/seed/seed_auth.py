@@ -21,10 +21,15 @@ Usuários criados:
         contacts.visualizar   = read_only
 
 Uso:
-  AUTH_API_URL=http://auth-api:3200 AUTH_ADMIN_TOKEN=<token> python seed_auth.py
+  AUTH_API_URL=http://auth-api:3200 AUTH_JWT_SECRET=<jwt_secret> python seed_auth.py
+  (o seed minta um Bearer de bootstrap com config.usuarios:read_write; o jwt_secret
+   precisa bater com o PLUGHUB_AUTH_JWT_SECRET da auth-api.)
 """
 
 import json
+import base64
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -33,9 +38,37 @@ import urllib.error
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 AUTH_URL     = os.environ.get("AUTH_API_URL",   "http://auth-api:3200")
-ADMIN_TOKEN  = os.environ.get("AUTH_ADMIN_TOKEN", "changeme_auth_admin_token_demo")
 TENANT_ID    = os.environ.get("TENANT_ID",       "tenant_demo")
 MAX_WAIT_S   = int(os.environ.get("SEED_MAX_WAIT", "120"))
+# G-PROBE platform-wide: auth-api deixou de aceitar X-Admin-Token nas rotas de gestão
+# (strict Bearer+ABAC `config.usuarios`). O bootstrap minta um Bearer próprio assinado
+# com o MESMO jwt_secret que a auth-api valida (HS256) — sem dependência externa.
+JWT_SECRET   = os.environ.get("AUTH_JWT_SECRET", "changeme_auth_jwt_secret_demo_32c")
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _mint_bootstrap_jwt() -> str:
+    """JWT HS256 de bootstrap com `config.usuarios:read_write` (stdlib, sem pyjwt/jose)."""
+    now = int(time.time())
+    header  = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "sub":           "seed_bootstrap",
+        "tenant_id":     TENANT_ID,
+        "roles":         ["admin"],
+        "module_config": {"config": {"usuarios": {"access": "read_write", "scope": []}}},
+        "iat":           now,
+        "exp":           now + 3600,
+    }
+    h = _b64url(json.dumps(header,  separators=(",", ":")).encode())
+    p = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    sig = hmac.new(JWT_SECRET.encode(), f"{h}.{p}".encode(), hashlib.sha256).digest()
+    return f"{h}.{p}.{_b64url(sig)}"
+
+
+BOOTSTRAP_JWT = _mint_bootstrap_jwt()
 
 
 def log(msg):  print(f"[auth-seed]  {msg}", flush=True)
@@ -51,7 +84,7 @@ def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
         url, data=data, method=method,
         headers={
             "Content-Type":  "application/json",
-            "X-Admin-Token": ADMIN_TOKEN,
+            "Authorization": f"Bearer {BOOTSTRAP_JWT}",
         },
     )
     try:

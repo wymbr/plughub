@@ -40,6 +40,9 @@ from pydantic import BaseModel
 
 from . import db as db_mod
 from .config import Settings, get_settings
+# G-PROBE platform-wide: grupos autorizam pelo JWT do operador + ABAC `config.usuarios`
+# (mesmo gate de users/permissions); sem fallback de admin-token.
+from .router import _USUARIOS_READ, _USUARIOS_WRITE
 
 logger = logging.getLogger("plughub.auth_api.groups")
 
@@ -54,16 +57,6 @@ def _get_pool(request: Request) -> asyncpg.Pool:
 
 def _settings() -> Settings:
     return get_settings()
-
-
-def _require_admin(
-    x_admin_token: Annotated[str | None, Header()] = None,
-    settings: Settings = Depends(_settings),
-) -> None:
-    if not settings.admin_token:
-        raise HTTPException(status_code=503, detail="Admin token not configured")
-    if x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=401, detail="Invalid admin token")
 
 
 def _serialize_group(row: dict[str, Any]) -> dict[str, Any]:
@@ -134,7 +127,7 @@ class UpdateShiftRequest(BaseModel):
 # ─── Group CRUD ───────────────────────────────────────────────────────────────
 
 @groups_router.get("", response_model=list[dict],
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def list_groups(
     request: Request,
     tenant_id: str = "tenant_demo",
@@ -145,7 +138,7 @@ async def list_groups(
 
 
 @groups_router.post("", response_model=dict, status_code=201,
-                    dependencies=[Depends(_require_admin)])
+                    dependencies=[Depends(_USUARIOS_WRITE)])
 async def create_group(body: CreateGroupRequest, request: Request) -> dict:
     pool = _get_pool(request)
     row = await db_mod.create_group(
@@ -158,7 +151,7 @@ async def create_group(body: CreateGroupRequest, request: Request) -> dict:
 
 
 @groups_router.get("/{group_id}", response_model=dict,
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def get_group(group_id: str, request: Request) -> dict:
     pool = _get_pool(request)
     row = await db_mod.get_group(pool, group_id)
@@ -185,7 +178,7 @@ def _serialize_member(row: dict[str, Any]) -> dict[str, Any]:
 
 
 @groups_router.put("/{group_id}", response_model=dict,
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_WRITE)])
 async def update_group(
     group_id: str,
     body: UpdateGroupRequest,
@@ -199,7 +192,7 @@ async def update_group(
 
 
 @groups_router.delete("/{group_id}", status_code=204,
-                      dependencies=[Depends(_require_admin)])
+                      dependencies=[Depends(_USUARIOS_WRITE)])
 async def delete_group(group_id: str, request: Request) -> None:
     pool = _get_pool(request)
     deleted = await db_mod.delete_group(pool, group_id)
@@ -210,7 +203,7 @@ async def delete_group(group_id: str, request: Request) -> None:
 # ─── Members ──────────────────────────────────────────────────────────────────
 
 @groups_router.get("/{group_id}/members", response_model=list[dict],
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def list_members(group_id: str, request: Request) -> list[dict]:
     pool = _get_pool(request)
     rows = await db_mod.list_group_members(pool, group_id)
@@ -218,7 +211,7 @@ async def list_members(group_id: str, request: Request) -> list[dict]:
 
 
 @groups_router.post("/{group_id}/members", response_model=dict, status_code=201,
-                    dependencies=[Depends(_require_admin)])
+                    dependencies=[Depends(_USUARIOS_WRITE)])
 async def add_member(
     group_id: str,
     body: AddMemberRequest,
@@ -230,7 +223,7 @@ async def add_member(
 
 
 @groups_router.delete("/{group_id}/members/{agent_type_id}", status_code=204,
-                      dependencies=[Depends(_require_admin)])
+                      dependencies=[Depends(_USUARIOS_WRITE)])
 async def remove_member(
     group_id: str,
     agent_type_id: str,
@@ -243,7 +236,7 @@ async def remove_member(
 # ─── Users ────────────────────────────────────────────────────────────────────
 
 @groups_router.get("/{group_id}/users", response_model=list[dict],
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def list_users(group_id: str, request: Request) -> list[dict]:
     pool = _get_pool(request)
     rows = await db_mod.list_group_users(pool, group_id)
@@ -251,7 +244,7 @@ async def list_users(group_id: str, request: Request) -> list[dict]:
 
 
 @groups_router.post("/{group_id}/users", response_model=dict, status_code=201,
-                    dependencies=[Depends(_require_admin)])
+                    dependencies=[Depends(_USUARIOS_WRITE)])
 async def add_user(
     group_id: str,
     body: AddUserRequest,
@@ -263,7 +256,7 @@ async def add_user(
 
 
 @groups_router.delete("/{group_id}/users/{user_id}", status_code=204,
-                      dependencies=[Depends(_require_admin)])
+                      dependencies=[Depends(_USUARIOS_WRITE)])
 async def remove_user(
     group_id: str,
     user_id: str,
@@ -276,7 +269,7 @@ async def remove_user(
 # ─── Supervisors ──────────────────────────────────────────────────────────────
 
 @groups_router.get("/{group_id}/supervisors", response_model=list[dict],
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def list_supervisors(group_id: str, request: Request) -> list[dict]:
     pool = _get_pool(request)
     rows = await db_mod.list_group_supervisors(pool, group_id)
@@ -284,7 +277,7 @@ async def list_supervisors(group_id: str, request: Request) -> list[dict]:
 
 
 @groups_router.post("/{group_id}/supervisors", response_model=dict, status_code=201,
-                    dependencies=[Depends(_require_admin)])
+                    dependencies=[Depends(_USUARIOS_WRITE)])
 async def add_supervisor(
     group_id: str,
     body: AddSupervisorRequest,
@@ -296,7 +289,7 @@ async def add_supervisor(
 
 
 @groups_router.delete("/{group_id}/supervisors/{user_id}", status_code=204,
-                      dependencies=[Depends(_require_admin)])
+                      dependencies=[Depends(_USUARIOS_WRITE)])
 async def remove_supervisor(
     group_id: str,
     user_id: str,
@@ -309,14 +302,14 @@ async def remove_supervisor(
 # ─── Shifts ───────────────────────────────────────────────────────────────────
 
 @groups_router.get("/{group_id}/shifts", response_model=list[dict],
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_READ)])
 async def list_shifts(group_id: str, request: Request) -> list[dict]:
     pool = _get_pool(request)
     return await db_mod.list_group_shifts(pool, group_id)
 
 
 @groups_router.post("/{group_id}/shifts", response_model=dict, status_code=201,
-                    dependencies=[Depends(_require_admin)])
+                    dependencies=[Depends(_USUARIOS_WRITE)])
 async def create_shift(
     group_id: str,
     body: CreateShiftRequest,
@@ -336,7 +329,7 @@ async def create_shift(
 
 
 @groups_router.put("/{group_id}/shifts/{shift_id}", response_model=dict,
-                   dependencies=[Depends(_require_admin)])
+                   dependencies=[Depends(_USUARIOS_WRITE)])
 async def update_shift(
     group_id: str,
     shift_id: str,
@@ -359,7 +352,7 @@ async def update_shift(
 
 
 @groups_router.delete("/{group_id}/shifts/{shift_id}", status_code=204,
-                      dependencies=[Depends(_require_admin)])
+                      dependencies=[Depends(_USUARIOS_WRITE)])
 async def delete_shift(
     group_id: str,
     shift_id: str,
