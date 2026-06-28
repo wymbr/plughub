@@ -2,6 +2,24 @@
 
 ---
 
+## Calendários — Dias Especiais (horário em feriado) + flush nas Exceções (2026-06-28)
+
+Follow-ups do lote de calendários (specs: `docs/product/special-days-with-hours-spec.md`).
+
+- **#1 — flush nas Exceções:** `ExceptionsEditor` virou forwardRef com `flushPending()`; o submit do calendário
+  commita o add-row de exceção digitado antes de salvar (mesmo fix do holiday editor — digitar+Save sem "+").
+- **#2 — Dias Especiais (Special Days):** o conjunto de feriados agora permite **horário custom** por dia, não
+  só "fechado o dia todo". **Achado:** schema (`HolidaySchema.override_slots`), engine (`_resolve_date` já
+  aplica override) e persistência (JSONB) **já suportavam** — só faltava a UI. `HolidaysEditor` ganhou o toggle
+  **fechado o dia todo / horário custom** + editor de intervalos (reusa o padrão do `ExceptionsEditor`);
+  `override_slots` na interface local + `pendingEntry/flushPending`; linha mostra horário ou "fechado".
+  Rótulos visíveis renomeados para **"Dias Especiais / Special Days"** + subtítulo mencionando feriados
+  (código `holiday*`/schema/rotas/engine **inalterados** — contrato estável). `override_slots: null` ≡ feriado
+  fechado (retrocompat, sem migração). i18n en+pt-BR (`tabs.holidaySets`, `holidaySet.*`, `calendar.holidaySets`,
+  `addInterval`, `noHolidaySets`, `goToHolidaySets`); strings hardcoded PT do form convertidas para `t()`.
+
+---
+
 ## Calendários — consolidação de UI + disparo de avaliação por calendário (2026-06-28)
 
 Fecha os dois itens de calendário (spec: `docs/product/calendar-consolidation-and-trigger.md`).

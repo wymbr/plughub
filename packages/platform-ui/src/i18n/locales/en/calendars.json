@@ -1,9 +1,9 @@
 {
   "title": "Calendars",
-  "description": "Manage business hours, holidays, and associations by pool or channel.",
+  "description": "Manage business hours, special days, and associations by pool or channel.",
   "tabs": {
     "calendars":     "Calendars",
-    "holidaySets":   "Holiday Sets",
+    "holidaySets":   "Special Days",
     "associations":  "Associations"
   },
   "days": {
@@ -22,13 +22,13 @@
     "workflow": "Workflow"
   },
   "calendar": {
-    "info":         "Define calendars with weekly hours and linked holidays.",
+    "info":         "Define calendars with weekly hours and linked special days.",
     "new":          "New Calendar",
     "edit":         "Edit",
     "editTitle":    "Edit: {{name}}",
     "cloneFrom":     "Start from an existing calendar",
     "cloneFromNone": "Start blank",
-    "cloneHint":     "Copies the weekly schedule and exceptions as a snapshot; holiday sets stay linked as shared references.",
+    "cloneHint":     "Copies the weekly schedule and exceptions as a snapshot; special-day sets stay linked as shared references.",
     "cloneNamePrefix": "Copy of {{name}}",
     "name":         "Name *",
     "namePlaceholder": "e.g., Business Support",
@@ -36,7 +36,9 @@
     "descPlaceholder": "Optional",
     "timezone":     "Timezone",
     "schedule":     "Weekly Schedule",
-    "holidaySets":  "Holiday Sets",
+    "holidaySets":  "Special-Day Sets",
+    "noHolidaySets": "No special-day sets created yet.",
+    "goToHolidaySets": "Create in the Special Days tab →",
     "save":         "Save",
     "create":       "Create",
     "saving":       "Saving…",
@@ -46,14 +48,14 @@
     "noItemsDesc":  "Create the first calendar to define business hours.",
     "noSchedule":   "No schedule defined",
     "closed":       "Closed",
-    "holidaySetsLabel": "{{count}} holiday set",
-    "holidaySetsLabelPlural": "{{count}} holiday sets",
-    "holidayConflict": "{{count}} date(s) overlap across selected holiday sets",
+    "holidaySetsLabel": "{{count}} special-day set(s)",
+    "holidaySetsLabelPlural": "{{count}} special-day sets",
+    "holidayConflict": "{{count}} date(s) overlap across selected special-day sets",
     "holidayConflictHint": "Last entry wins. Use association-level exceptions to override specific dates."
   },
   "holidaySet": {
-    "info":        "Holiday date sets that can be linked to calendars.",
-    "new":         "New Holiday Set",
+    "info":        "Reusable sets of special days — holidays (closed all day) or days with custom hours — that you link to calendars.",
+    "new":         "New Special-Day Set",
     "edit":        "Edit",
     "editTitle":   "Edit: {{name}}",
     "name":        "Name *",
@@ -62,24 +64,25 @@
     "descPlaceholder": "Optional",
     "year":        "Year",
     "yearPlaceholder": "2025",
-    "holidays":    "Holidays",
-    "addHoliday":  "Add holiday",
+    "holidays":    "Special days",
+    "addHoliday":  "Add special day",
     "date":        "Date",
-    "holidayName": "Holiday name",
-    "holidayNamePlaceholder": "Holiday name",
+    "holidayName": "Day name",
+    "holidayNamePlaceholder": "Day name (e.g. Christmas)",
     "recurringLabel": "Repeat every year",
     "everyYear": "every year",
     "oneOff": "one-off",
-    "toggleRecurring": "Toggle: repeat every year (MM-DD) or a single dated holiday (YYYY-MM-DD)",
-    "noHolidays":  "No holidays in this set.",
+    "toggleRecurring": "Toggle: repeat every year (MM-DD) or a single dated day (YYYY-MM-DD)",
+    "addInterval": "interval",
+    "noHolidays":  "No special days in this set.",
     "save":        "Save",
     "create":      "Create",
     "saving":      "Saving…",
     "cancel":      "Cancel",
     "delete":      "Delete",
-    "noItems":     "No holiday sets",
-    "noItemsDesc": "Create a set to mark holidays for your calendar.",
-    "holidayCount": "{{count}} holidays"
+    "noItems":     "No special-day sets",
+    "noItemsDesc": "Create a set to mark holidays or special-hours days for your calendars.",
+    "holidayCount": "{{count}} special days"
   },
   "association": {
     "info":       "Link a calendar to a pool, tenant, channel, or workflow to set operating hours.",
@@ -110,6 +113,6 @@
   "messages": {
     "deleteConfirm": "Delete {{label}}? This action cannot be undone.",
     "until":        "until",
-    "noHolidaysAdded": "No holidays added"
+    "noHolidaysAdded": "No special days added"
   }
 }

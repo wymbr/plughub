@@ -1,9 +1,9 @@
 {
   "title": "Calendários",
-  "description": "Gerencie horários de operação, feriados e associações por pool ou canal.",
+  "description": "Gerencie horários de operação, dias especiais e associações por pool ou canal.",
   "tabs": {
     "calendars":     "Calendários",
-    "holidaySets":   "Feriados",
+    "holidaySets":   "Dias Especiais",
     "associations":  "Associações"
   },
   "days": {
@@ -22,13 +22,13 @@
     "workflow": "Workflow"
   },
   "calendar": {
-    "info":         "Defina calendários com horários semanais e feriados vinculados.",
+    "info":         "Defina calendários com horários semanais e dias especiais vinculados.",
     "new":          "Novo Calendário",
     "edit":         "Editar",
     "editTitle":    "Editar: {{name}}",
     "cloneFrom":     "Começar a partir de um calendário existente",
     "cloneFromNone": "Começar em branco",
-    "cloneHint":     "Copia o horário semanal e as exceções como um snapshot; os conjuntos de feriados continuam vinculados como referências compartilhadas.",
+    "cloneHint":     "Copia o horário semanal e as exceções como um snapshot; os conjuntos de dias especiais continuam vinculados como referências compartilhadas.",
     "cloneNamePrefix": "Cópia de {{name}}",
     "name":         "Nome *",
     "namePlaceholder": "ex: Atendimento Comercial",
@@ -36,7 +36,9 @@
     "descPlaceholder": "Opcional",
     "timezone":     "Fuso horário",
     "schedule":     "Horário Semanal",
-    "holidaySets":  "Conjuntos de Feriados",
+    "holidaySets":  "Conjuntos de Dias Especiais",
+    "noHolidaySets": "Nenhum conjunto de dias especiais cadastrado.",
+    "goToHolidaySets": "Criar na aba Dias Especiais →",
     "save":         "Salvar",
     "create":       "Criar",
     "saving":       "Salvando…",
@@ -46,14 +48,14 @@
     "noItemsDesc":  "Crie o primeiro calendário para definir horários de atendimento.",
     "noSchedule":   "Sem horário definido",
     "closed":       "Fechado",
-    "holidaySetsLabel": "{{count}} conj. feriados",
-    "holidaySetsLabelPlural": "{{count}} conj. feriados",
+    "holidaySetsLabel": "{{count}} conj. dias especiais",
+    "holidaySetsLabelPlural": "{{count}} conj. dias especiais",
     "holidayConflict": "{{count}} data(s) duplicada(s) entre os conjuntos selecionados",
     "holidayConflictHint": "O último cadastro prevalece. Use exceções no pool para sobrescrever datas específicas."
   },
   "holidaySet": {
-    "info":        "Conjuntos de datas de feriado vinculáveis a calendários.",
-    "new":         "Novo Conjunto de Feriados",
+    "info":        "Conjuntos reutilizáveis de dias especiais — feriados (fechado o dia todo) ou dias com horário especial — vinculáveis a calendários.",
+    "new":         "Novo Conjunto de Dias Especiais",
     "edit":        "Editar",
     "editTitle":   "Editar: {{name}}",
     "name":        "Nome *",
@@ -62,24 +64,25 @@
     "descPlaceholder": "Opcional",
     "year":        "Ano",
     "yearPlaceholder": "2025",
-    "holidays":    "Feriados",
-    "addHoliday":  "Adicionar feriado",
+    "holidays":    "Dias especiais",
+    "addHoliday":  "Adicionar dia especial",
     "date":        "Data",
-    "holidayName": "Nome do feriado",
-    "holidayNamePlaceholder": "Nome do feriado",
+    "holidayName": "Nome do dia",
+    "holidayNamePlaceholder": "Nome do dia (ex: Natal)",
     "recurringLabel": "Repete todo ano",
     "everyYear": "todo ano",
     "oneOff": "data única",
-    "toggleRecurring": "Alternar: repete todo ano (MM-DD) ou feriado em data única (YYYY-MM-DD)",
-    "noHolidays":  "Nenhum feriado neste conjunto.",
+    "toggleRecurring": "Alternar: repete todo ano (MM-DD) ou data única (YYYY-MM-DD)",
+    "addInterval": "intervalo",
+    "noHolidays":  "Nenhum dia especial neste conjunto.",
     "save":        "Salvar",
     "create":      "Criar",
     "saving":      "Salvando…",
     "cancel":      "Cancelar",
     "delete":      "Excluir",
-    "noItems":     "Nenhum conjunto de feriados",
-    "noItemsDesc": "Crie um conjunto para marcar os feriados do seu calendário.",
-    "holidayCount": "{{count}} feriados"
+    "noItems":     "Nenhum conjunto de dias especiais",
+    "noItemsDesc": "Crie um conjunto para marcar feriados ou dias de horário especial dos seus calendários.",
+    "holidayCount": "{{count}} dias especiais"
   },
   "association": {
     "info":       "Vincule um calendário a um pool, tenant, canal ou workflow para definir horários de operação.",
@@ -110,6 +113,6 @@
   "messages": {
     "deleteConfirm": "Excluir {{label}}? Esta ação não pode ser desfeita.",
     "until":        "até",
-    "noHolidaysAdded": "Nenhum feriado adicionado"
+    "noHolidaysAdded": "Nenhum dia especial adicionado"
   }
 }
