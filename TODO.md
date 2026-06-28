@@ -115,7 +115,10 @@ Bearer+ABAC + remover a caixa). Inventário:
   reusa config.plataforma, sem campo billing novo; o módulo `billing` só tem `visualizar`/read). `jwt_secret` +
   `PLUGHUB_PRICING_JWT_SECRET`. Caixa removida; reserve activate/deactivate via Bearer. Smoke
   `smoke_pricing_write_auth.sh`. Ver CHANGELOG.
-- ⏳ `config/dashboards` (`DashboardsPage`) — **pulado por decisão (2026-06-26)**; retomar quando priorizado.
+- ✅ `config/dashboards` (`DashboardsPage`) → **config-api** namespace `dashboards` (→ default `config.plataforma`)
+  — slice UI-only CONCLUÍDA (2026-06-26): `dashboard-hooks` (configGet/Put/Delete/List) mandam Bearer via
+  token-store; caixa de admin-token (+ localStorage `plughub_admin_token`) removida. Backend já coberto pelo gate
+  dual da config-api. Ver CHANGELOG.
 - ✅ `evaluation/knowledge` (`KnowledgePage`) — **fatia de wiring CONCLUÍDA (2026-06-26)**. Recon confirmou que a
   página estava **morta**: `/v1/knowledge/*` não existia em lugar nenhum (proxy ia p/ eval-api:3400 sem rotas;
   mcp-server-knowledge só tinha `/admin/*` + MCP tools). Construído o **surface REST** na mcp-server-knowledge
@@ -124,8 +127,9 @@ Bearer+ABAC + remover a caixa). Inventário:
   search / read_write p/ snippets). Proxy Vite `^/v1/knowledge` → **3401**. Publish de CalibrationNote da
   evaluation-api passa `X-Service-Token` (conserta o KB vetorial do Arc 13, que silenciava em 404). UI usa Bearer
   (token-store) e perde a caixa. Smoke `smoke_knowledge_rest_auth.sh`. Ver CHANGELOG.
-- ⏳ `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
-  `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
+- ✅ `Avaliações` filters (`AvaliacoesPage`) — caixa de admin-token removida (2026-06-26); a adjudicação Arc6
+  **legada** usa o Bearer do operador (`adjudicateContestation` → `bearerHeaders`). *Resíduo:* a **retirada
+  física** do endpoint/UI `adjudicate` segue junto da limpeza do motor Arc6 legado (não bloqueia).
 Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão). Inventário
 completo das telas com caixa de admin-token: access, groups (✅ auth-api), platform, masking (config-api),
 resources/skills (agent-registry), knowledge (mcp-server-knowledge), avaliações/adjudicate (evaluation-api legado).
@@ -1071,6 +1075,18 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
     **Frente 1 / Pull — encerrada (F1 + F2 + polish).**
 
 ## Frente 2 — Avaliação campaign-driven (shakedown E2E)
+
+> **STATUS (revisão 2026-06-26): efetivamente CONCLUÍDA — não é pendência de faxina.** O pipeline
+> campaign-driven (S1/S2.1/S2.Q1) e a **consolidação Quality** estão ✅: as abas Trend/Comparison da página
+> Quality foram removidas e **toda a comparação de qualidade vive no bench (Analytics→Agents)** + Quality
+> Summary. A lente `deploy` (Arc 6 Fase 2) **P2 ✅ + P3 ✅** (ancorada no pool, validada no browser); o caminho
+> do avaliador real foi validado (2026-06-17). **Só restam, ambos DIFERIDOS por decisão do usuário, não-cleanup:**
+> (a) **P4** — eixo X por epoch/versão (hoje é tempo + markers); (b) ~~disparo do avaliador real pelo calendário~~
+> **DESTRAVADO (2026-06-28)** — o combo de calendário da campanha estava vazio (422: faltava `organization_id` no
+> GET; ver `docs/product/calendar-consolidation-and-trigger.md`). Combo corrigido → `evaluation_calendar_id`
+> selecionável; o backend (`compute_expires_at` + dispatcher windowed T15) já respeitava a janela. (c) nits do
+> bench (denominador do quality score, janela/período). Reabrir só se a observabilidade por deploy/versão virar
+> requisito.
 
 Decisão de arquitetura: avaliação é **sempre dirigida por campanha**, nunca pelo fechamento inline (modelo antigo,
 removido). Janela de despacho = **calendário da campanha** (`evaluation_calendar_id`, sem campo novo); throttle =

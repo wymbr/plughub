@@ -6,23 +6,24 @@
  *   consumer         — analytics-api Kafka consumer settings
  *   expurgo          — data retention periods
  *   sentimento       — SentimentBandsEditor (numeric bands)
- *   calendar         — holiday sets + calendar CRUD (calendar-api port 3700)
  *   routing          — RoutingSkillsManager (competency skills)
+ *
+ * Calendars/holiday sets live in their own module (/config/calendars, CalendarsPage);
+ * this page no longer renders calendar CRUD (was a redundant, mis-scoped duplicate).
  *
  * Admin token (for config mutations) is shown only on tabs that need write access.
  */
 import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Calendar, GitBranch } from 'lucide-react'
+import { Settings, GitBranch } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { NamespacePanel }          from './components/NamespaceEditor'
-import { CalendarManager }          from './components/CalendarManager'
 import { RoutingSkillsManager }     from './components/RoutingSkillsManager'
 import { SentimentBandsEditor }     from './components/SentimentBandsEditor'
 
 // ── Tab definition ─────────────────────────────────────────────────────────────
 
-type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'calendar' | 'routing' | 'evaluation'
+type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'routing' | 'evaluation'
 
 /** Namespace tabs: each entry defines the API namespace(s) to render */
 const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> = {
@@ -46,7 +47,6 @@ export default function ConfigPlataformaPage() {
   // + ABAC `config.plataforma` — sem caixa de admin-token.
   const { tenantId, session } = useAuth()
   const accessToken = session?.accessToken ?? ''
-  const orgId = tenantId
 
   const [tab,        setTab]        = useState<Tab>('routing_timeouts')
   const [editingKey, setEditingKey] = useState<string | null>(null)
@@ -62,7 +62,6 @@ export default function ConfigPlataformaPage() {
     { id: 'expurgo',          label: t('tabs.dataRetention') },
     { id: 'evaluation',       label: t('tabs.evaluation') },
     { id: 'sentimento',       label: t('tabs.sentimento') },
-    { id: 'calendar',         label: t('tabs.calendar'),  icon: <Calendar  size={13} aria-hidden="true" /> },
     { id: 'routing',          label: t('tabs.routing'),   icon: <GitBranch size={13} aria-hidden="true" /> },
   ]
 
@@ -144,11 +143,6 @@ export default function ConfigPlataformaPage() {
         {/* ── Sentimento ──────────────────────────────────────────────────────── */}
         {tab === 'sentimento' && (
           <SentimentBandsEditor tenantId={tenantId} accessToken={accessToken} />
-        )}
-
-        {/* ── Calendários ─────────────────────────────────────────────────────── */}
-        {tab === 'calendar' && (
-          <CalendarManager orgId={orgId} tenantId={tenantId} />
         )}
 
         {/* ── Roteamento ──────────────────────────────────────────────────────── */}

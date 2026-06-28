@@ -1479,7 +1479,9 @@ export default function AvaliacoesPage() {
   const { t } = useTranslation('evaluation')
   const { session, getAccessToken, tenantId: TENANT, currentUser } = useAuth()
   const [jwtToken, setJwtToken]       = useState('')
-  const [adminToken, setAdminToken]   = useState('')
+  // G-PROBE platform-wide: a adjudicação (Arc6 legado) usa o Bearer do operador — sem
+  // caixa de admin-token. (Retirada física do adjudicate segue com a limpeza do Arc6.)
+  const adminToken = session?.accessToken ?? ''
   const [selected, setSelected]       = useState<EvaluationResultWithActions | null>(null)
 
   // T9-A2 — nível via URL: ?campaign= vazio → nível 1 (campanhas); setado → nível 2 escopado.
@@ -1586,15 +1588,6 @@ export default function AvaliacoesPage() {
         </select>
 
         <div className="flex-1" />
-
-        {/* Token admin (for adjudication) */}
-        <input
-          type="password"
-          value={adminToken}
-          onChange={e => setAdminToken(e.target.value)}
-          placeholder={t('filters.adminTokenPlaceholder')}
-          className="border border-border-strong rounded px-2 py-1 text-xs w-44"
-        />
 
         {jwtToken
           ? <span className="text-xs text-green-text">✓ {t('filters.authenticated')}</span>

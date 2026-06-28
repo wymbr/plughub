@@ -11,6 +11,7 @@
  */
 import { useEffect, useState } from 'react'
 import type { DashboardCard, DashboardTemplate, NewDashboardCard } from '@/types'
+import { getAccessToken } from '@/auth/token-store'
 
 type AnyDashboardCard = DashboardCard | NewDashboardCard
 
@@ -18,21 +19,20 @@ type AnyDashboardCard = DashboardCard | NewDashboardCard
 
 const CONFIG_BASE = '/config'    // proxied to config-api (port 3600)
 
-/**
- * Strip characters outside the ISO-8859-1 range (0x00–0xFF) from a string
- * before it is used as an HTTP header value.  Browsers throw a TypeError if a
- * header value contains a code point above 0xFF (e.g. a zero-width space or
- * an accented character accidentally pasted into the admin-token field).
- */
-function asHeaderValue(s: string): string {
-  return s.replace(/[^\x00-\xFF]/g, '')
+// G-PROBE platform-wide: config-api gateia as mutações em Bearer+ABAC (dashboards →
+// namespace `dashboards` → default `config.plataforma`). Manda o Bearer do operador
+// (do token-store); o param `adminToken` ficou vestigial (ignorado). GETs abertos.
+function cfgHeaders(json = false): Record<string, string> {
+  const h: Record<string, string> = {}
+  if (json) h['Content-Type'] = 'application/json'
+  const t = getAccessToken()
+  if (t) h['Authorization'] = `Bearer ${t}`
+  return h
 }
 
-async function configGet(namespace: string, key: string, adminToken?: string, tenantId?: string): Promise<unknown> {
-  const headers: Record<string, string> = {}
-  if (adminToken) headers['X-Admin-Token'] = asHeaderValue(adminToken)
+async function configGet(namespace: string, key: string, _adminToken?: string, tenantId?: string): Promise<unknown> {
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers })
+  const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, { headers: cfgHeaders() })
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`Config GET ${namespace}/${key}: HTTP ${res.status}`)
   const json = await res.json()
@@ -44,43 +44,32 @@ async function configPut(
   namespace: string,
   key: string,
   value: unknown,
-  adminToken: string,
+  _adminToken: string,
   tenantId?: string,
 ): Promise<void> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Admin-Token': asHeaderValue(adminToken),
-  }
   const body: Record<string, unknown> = { value }
   if (tenantId) body.tenant_id = tenantId
   const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}`, {
     method: 'PUT',
-    headers,
+    headers: cfgHeaders(true),
     body: JSON.stringify(body),
   })
-  if (res.status === 401) throw new Error(`Config PUT ${namespace}/${key}: HTTP 401 — admin token inválido. Verifique o valor de PLUGHUB_CONFIG_ADMIN_TOKEN e corrija o campo no topo da página.`)
+  if (res.status === 401 || res.status === 403) throw new Error(`Config PUT ${namespace}/${key}: HTTP ${res.status} — sem permissão (requer config.plataforma; faça login como admin).`)
   if (!res.ok) throw new Error(`Config PUT ${namespace}/${key}: HTTP ${res.status}`)
 }
 
-async function configDelete(namespace: string, key: string, adminToken: string, tenantId?: string): Promise<void> {
-  // Build query params — include admin_token as fallback in case the reverse proxy
-  // strips custom request headers for DELETE requests
-  const qp = new URLSearchParams()
-  if (tenantId) qp.set('tenant_id', tenantId)
-  if (adminToken) qp.set('admin_token', adminToken)
-  const params = qp.toString() ? `?${qp.toString()}` : ''
+async function configDelete(namespace: string, key: string, _adminToken: string, tenantId?: string): Promise<void> {
+  const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
   const res = await fetch(`${CONFIG_BASE}/${namespace}/${key}${params}`, {
     method: 'DELETE',
-    headers: { 'X-Admin-Token': asHeaderValue(adminToken) },
+    headers: cfgHeaders(),
   })
   if (!res.ok && res.status !== 404) throw new Error(`Config DELETE: HTTP ${res.status}`)
 }
 
-async function configListNamespace(namespace: string, adminToken?: string, tenantId?: string): Promise<Record<string, unknown>> {
-  const headers: Record<string, string> = {}
-  if (adminToken) headers['X-Admin-Token'] = asHeaderValue(adminToken)
+async function configListNamespace(namespace: string, _adminToken?: string, tenantId?: string): Promise<Record<string, unknown>> {
   const params = tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''
-  const res = await fetch(`${CONFIG_BASE}/${namespace}${params}`, { headers })
+  const res = await fetch(`${CONFIG_BASE}/${namespace}${params}`, { headers: cfgHeaders() })
   if (!res.ok) throw new Error(`Config list ${namespace}: HTTP ${res.status}`)
   const json = await res.json()
   // Config API returns { tenant_id, namespace, entries: {...} } — unwrap entries

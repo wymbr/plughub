@@ -157,16 +157,10 @@ export default function DashboardsPage() {
   const isAdmin  = session?.role === 'admin' || session?.role === 'developer'
   const userId   = currentUser?.userId ?? 'anonymous'
 
-  // Admin token — stored locally (never in JWT)
-  const [adminToken, setAdminToken] = useState(() =>
-    localStorage.getItem('plughub_admin_token') ?? ''
-  )
-  const saveAdminToken = (raw: string) => {
-    // Strip non-ISO-8859-1 characters so the value is always safe as an HTTP header
-    const safe = raw.replace(/[^\x00-\xFF]/g, '')
-    setAdminToken(safe)
-    localStorage.setItem('plughub_admin_token', safe)
-  }
+  // G-PROBE platform-wide: as escritas de template usam o Bearer do operador + ABAC
+  // `config.plataforma` (via token-store) — sem caixa de admin-token. `adminToken`
+  // (= access token) é mantido só p/ os guards/props existentes (hooks já usam o Bearer).
+  const adminToken = session?.accessToken ?? ''
 
   // Template list (admin sidebar)
   const { templates, loading: tmplLoading, reload: reloadTemplates } = useTemplates(tenantId, adminToken)
@@ -374,16 +368,6 @@ export default function DashboardsPage() {
             >
               {saving ? t('saving') : t('saveTemplate')}
             </button>
-          )}
-          {/* Admin token input */}
-          {isAdmin && (
-            <input
-              type="password"
-              value={adminToken}
-              onChange={e => saveAdminToken(e.target.value)}
-              placeholder="PLUGHUB_CONFIG_ADMIN_TOKEN"
-              className="text-xs border border-border rounded px-2 py-1.5 w-32 focus:outline-none focus:ring-1 focus:ring-primary"
-            />
           )}
         </div>
       </div>

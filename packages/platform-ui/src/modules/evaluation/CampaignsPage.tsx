@@ -47,14 +47,19 @@ function usePoolOptions(tenantId: string) {
 
 interface CalendarOption { id: string; name: string }
 
+// organization_id is the owning scope above tenant (installation → organization → tenant);
+// calendars live at org level and are optionally narrowed by tenant. The list endpoint
+// REQUIRES organization_id, so it must be passed alongside tenant_id (never tenant-as-org).
+const CALENDAR_ORG_ID = import.meta.env.VITE_CALENDAR_ORG_ID ?? 'org-default'
+
 function useCalendarOptions(tenantId: string) {
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   useEffect(() => {
     if (!tenantId) return
-    fetch(`/v1/calendars?tenant_id=${encodeURIComponent(tenantId)}`)
-      .then(r => r.ok ? r.json() : Promise.reject())
+    fetch(`/v1/calendars?organization_id=${encodeURIComponent(CALENDAR_ORG_ID)}&tenant_id=${encodeURIComponent(tenantId)}`)
+      .then(r => r.ok ? r.json() : Promise.reject(new Error(`calendars ${r.status}`)))
       .then(rows => setCalendars(Array.isArray(rows) ? rows : []))
-      .catch(() => setCalendars([]))
+      .catch(err => { console.error('[CampaignsPage] failed to load calendars', err); setCalendars([]) })
   }, [tenantId])
   return calendars
 }
@@ -1003,6 +1008,9 @@ export default function CampaignsPage() {
   // ops (seed/flush/dispatch/curation rules) usam o Bearer do operador (session JWT).
   const accessToken = session?.accessToken
   const { campaigns, loading, reload } = useCampaigns(TENANT, 30_000, accessToken)
+  const calendarOptions = useCalendarOptions(TENANT)
+  const calendarName = (id?: string) =>
+    (id && calendarOptions.find(c => c.id === id)?.name) || id || ''
   const [selected, setSelected] = useState<EvaluationCampaign | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [editingCampaign, setEditingCampaign] = useState<EvaluationCampaign | null>(null)
@@ -1282,8 +1290,8 @@ export default function CampaignsPage() {
               <div className="bg-white border rounded p-3">
                 <div className="text-xs font-semibold text-muted mb-2">{t('campaigns.detail.evaluationCalendar')}</div>
                 {selected.evaluation_calendar_id ? (
-                  <div className="font-mono text-xs bg-surface-muted border rounded px-2 py-1 break-all text-dark">
-                    {selected.evaluation_calendar_id}
+                  <div className="text-xs bg-surface-muted border rounded px-2 py-1 text-dark">
+                    {calendarName(selected.evaluation_calendar_id)}
                   </div>
                 ) : (
                   <div className="text-xs text-muted-light italic">{t('campaigns.detail.noCalendar')}</div>

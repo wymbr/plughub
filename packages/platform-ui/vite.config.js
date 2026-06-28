@@ -12,7 +12,7 @@ export default defineConfig({
         port: 5174,
         proxy: {
             '^/auth': {
-                target: 'http://localhost:3200',
+                target: 'http://localhost:3202',
                 changeOrigin: true
             },
             '^/api': {
@@ -29,6 +29,10 @@ export default defineConfig({
                 target: 'http://localhost:3800',
                 changeOrigin: true
             },
+            '^/v1/journeys': {
+                target: 'http://localhost:3800',
+                changeOrigin: true
+            },
             '^/v1/(calendars|holiday-sets|associations|engine)': {
                 target: 'http://localhost:3700',
                 changeOrigin: true
@@ -42,7 +46,11 @@ export default defineConfig({
                 changeOrigin: true
             },
             '^/v1/knowledge': {
-                target: 'http://localhost:3400',
+                target: 'http://localhost:3401', // mcp-server-knowledge (era 3400/eval-api, que não serve /v1/knowledge)
+                changeOrigin: true
+            },
+            '^/v1/audit': {
+                target: 'http://localhost:3500',
                 changeOrigin: true
             },
             '^/v1': {

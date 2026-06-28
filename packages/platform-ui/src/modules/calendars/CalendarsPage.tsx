@@ -10,7 +10,7 @@
  * Backend: calendar-api (port 3700) proxied via Vite under /v1/
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -308,7 +308,15 @@ interface HolidaysEditorProps {
   onChange: (h: HolidayEntry[]) => void
 }
 
-function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
+/** Imperative handle so the parent form can commit a half-typed add-row on Save
+ *  (users often type a date+name and click Save without pressing "+"). */
+export interface HolidaysEditorHandle {
+  /** Commit any pending add-row input and return the resulting holidays array. */
+  flushPending: () => HolidayEntry[]
+}
+
+const HolidaysEditor = forwardRef<HolidaysEditorHandle, HolidaysEditorProps>(
+  function HolidaysEditor({ holidays, onChange }, ref) {
   const { t } = useTranslation('calendars')
   const [newDate,      setNewDate]      = useState('')
   const [newName,      setNewName]      = useState('')
@@ -316,36 +324,74 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
 
   const isRecurring = (date: string) => /^\d{2}-\d{2}$/.test(date) // "MM-DD" format
 
-  const add = () => {
-    if (!newDate || !newName.trim()) return
+  /** Build the entry for the current add-row, or null if incomplete. */
+  const pendingEntry = (): HolidayEntry | null => {
+    if (!newDate || !newName.trim()) return null
     // If recurring: store only "MM-DD"; otherwise full "YYYY-MM-DD"
     const dateValue = recurring ? newDate.slice(5) : newDate
-    onChange([...holidays, { date: dateValue, name: newName.trim() }])
+    return { date: dateValue, name: newName.trim() }
+  }
+
+  const add = () => {
+    const entry = pendingEntry()
+    if (!entry) return
+    onChange([...holidays, entry])
     setNewDate('')
     setNewName('')
     setRecurring(false)
   }
 
+  useImperativeHandle(ref, () => ({
+    flushPending: () => {
+      const entry = pendingEntry()
+      if (!entry) return holidays
+      const next = [...holidays, entry]
+      onChange(next)
+      setNewDate('')
+      setNewName('')
+      setRecurring(false)
+      return next
+    },
+  }), [holidays, newDate, newName, recurring])
+
   const remove = (i: number) => onChange(holidays.filter((_, idx) => idx !== i))
+
+  /** Toggle a row between recurring (MM-DD) and a dated (YYYY-MM-DD) holiday.
+   *  MM-DD → prefix the current year; YYYY-MM-DD → strip the year. */
+  const toggleRecurring = (i: number) => onChange(holidays.map((h, idx) => {
+    if (idx !== i) return h
+    if (isRecurring(h.date)) return { ...h, date: `${new Date().getFullYear()}-${h.date}` }
+    return { ...h, date: h.date.slice(5) }
+  }))
 
   return (
     <div className="space-y-3">
-      <div className="max-h-40 overflow-y-auto space-y-1">
+      <div className="space-y-1">
         {holidays.length === 0 && (
           <p className="text-xs text-muted-light italic">{t('messages.noHolidaysAdded')}</p>
         )}
-        {holidays.map((h, i) => (
+        {holidays.map((h, i) => {
+          const recur = isRecurring(h.date)
+          return (
           <div key={i} className="flex items-center gap-2 px-2 py-1 bg-surface-muted rounded text-sm">
-            <span className="text-muted font-mono text-xs w-20 flex-shrink-0">{h.date}</span>
-            {isRecurring(h.date) && (
-              <span className="text-2xs bg-primary-light text-primary px-1.5 py-0 rounded-full flex-shrink-0">
-                ↺
-              </span>
-            )}
+            <span className="text-muted font-mono text-xs w-24 flex-shrink-0 whitespace-nowrap">{h.date}</span>
+            <button
+              type="button"
+              onClick={() => toggleRecurring(i)}
+              title={t('holidaySet.toggleRecurring')}
+              className={`text-2xs px-1.5 py-0 rounded-full flex-shrink-0 transition-colors ${
+                recur
+                  ? 'bg-primary-light text-primary'
+                  : 'bg-surface-muted text-muted-light border border-border hover:text-primary'
+              }`}
+            >
+              {recur ? `↺ ${t('holidaySet.everyYear')}` : t('holidaySet.oneOff')}
+            </button>
             <span className="flex-1 text-dark truncate">{h.name}</span>
             <button onClick={() => remove(i)} className="text-red hover:text-red-text text-xs flex-shrink-0">✕</button>
           </div>
-        ))}
+          )
+        })}
       </div>
       <div className="space-y-2">
         <div className="flex gap-2">
@@ -385,7 +431,7 @@ function HolidaysEditor({ holidays, onChange }: HolidaysEditorProps) {
       </div>
     </div>
   )
-}
+})
 
 // ── Exceptions editor ─────────────────────────────────────────────────────────
 
@@ -572,6 +618,10 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
   const [fSched,      setFSched]      = useState<WeeklyDaySchedule[]>([])
   const [fHsIds,      setFHsIds]      = useState<string[]>([])
   const [fExceptions, setFExceptions] = useState<ExceptionEntry[]>([])
+  // Clone-from-existing: seeds a NEW calendar from an existing one. Weekly schedule /
+  // exceptions are copied as a snapshot (independent thereafter); holiday_set_ids are
+  // copied as references (still live links to the shared holiday sets).
+  const [cloneFromId, setCloneFromId] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -592,7 +642,23 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
     setEditing(null)
     setFName(''); setFDesc(''); setFTz('America/Sao_Paulo')
     setFAlwaysOpen(false); setFSched([]); setFHsIds([]); setFExceptions([])
+    setCloneFromId('')
     setShowForm(true)
+  }
+
+  /** Seed the create form from an existing calendar (schedule/exceptions = snapshot copy;
+   *  holiday_set_ids = copied references to the shared holiday sets). */
+  const applyClone = (id: string) => {
+    setCloneFromId(id)
+    if (!id) return
+    const src = calendars.find(c => c.id === id)
+    if (!src) return
+    setFTz(src.timezone)
+    setFAlwaysOpen(src.always_open ?? false)
+    setFSched(structuredClone(src.weekly_schedule ?? []))
+    setFHsIds([...(src.holiday_set_ids ?? [])])
+    setFExceptions(structuredClone(src.exceptions ?? []))
+    setFName(prev => prev.trim() ? prev : t('calendar.cloneNamePrefix', { name: src.name }))
   }
 
   const openEdit = (c: CalendarObj) => {
@@ -751,6 +817,20 @@ function CalendarsTab({ holidaySets, onGoToHolidaySets }: CalendarsTabProps) {
       {showForm && (
         <Modal title={editing ? t('calendar.editTitle', { name: editing.name }) : t('calendar.new')} onClose={() => setShowForm(false)}>
           <form onSubmit={submit} className="space-y-4">
+            {!editing && calendars.length > 0 && (
+              <div className="px-3 py-2.5 bg-surface-muted rounded-lg border border-border">
+                <label className="block text-xs font-medium text-dark mb-1">{t('calendar.cloneFrom')}</label>
+                <select
+                  value={cloneFromId}
+                  onChange={e => applyClone(e.target.value)}
+                  className="w-full text-sm border border-border-strong rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  <option value="">{t('calendar.cloneFromNone')}</option>
+                  {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <p className="text-xs text-muted-light mt-1">{t('calendar.cloneHint')}</p>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-dark mb-1">{t('calendar.name')}</label>
               <input
@@ -913,6 +993,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
   const [fDesc,     setFDesc]     = useState('')
   const [fYear,     setFYear]     = useState<string>('')
   const [fHols,     setFHols]     = useState<HolidayEntry[]>([])
+  const holEditorRef = useRef<HolidaysEditorHandle>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -948,13 +1029,15 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
     e.preventDefault()
     setSaving(true)
     try {
+      // Commit any half-typed add-row (user clicked Save without pressing "+").
+      const finalHols = holEditorRef.current?.flushPending() ?? fHols
       const body = {
         organization_id: ORG_ID,
         tenant_id:       tenantId,
         name:            fName,
         description:     fDesc,
         year:            fYear ? parseInt(fYear, 10) : null,
-        holidays:        fHols,
+        holidays:        finalHols,
       }
       if (editing) {
         await calApi.updateHolidaySet(editing.id, body)
@@ -1103,7 +1186,7 @@ function HolidaysTab({ onSetsChange }: HolidaysTabProps) {
             </div>
             <div>
               <label className="block text-xs font-medium text-dark mb-2">{t('holidaySet.holidays')}</label>
-              <HolidaysEditor holidays={fHols} onChange={setFHols} />
+              <HolidaysEditor ref={holEditorRef} holidays={fHols} onChange={setFHols} />
             </div>
             <div className="flex gap-2 justify-end pt-2 border-t border-border">
               <button type="button" onClick={() => setShowForm(false)}

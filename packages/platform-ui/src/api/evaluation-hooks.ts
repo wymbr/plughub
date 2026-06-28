@@ -29,12 +29,6 @@ import { getAccessToken } from '@/auth/token-store'
 const BASE = '/v1/evaluation'
 const KN_BASE = '/v1/knowledge'
 
-function adminHeaders(token?: string): Record<string, string> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (token) h['X-Admin-Token'] = token
-  return h
-}
-
 /** Bearer-JWT headers for grant-first ABAC endpoints (Quality "human config").
  *  Pass the session access token; sent as `Authorization: Bearer <token>`. */
 function bearerHeaders(token?: string): Record<string, string> {
@@ -811,9 +805,11 @@ export async function adjudicateContestation(
   body: { decision: 'accepted' | 'rejected'; adjudicator: string; adjudication_notes?: string },
   token?: string,
 ) {
+  // G-PROBE platform-wide: adjudicação (Arc6 legado) usa o Bearer do operador (token =
+  // session.accessToken) em vez de X-Admin-Token.
   const r = await fetch(`${BASE}/contestations/${contestationId}/adjudicate`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: bearerHeaders(token),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)

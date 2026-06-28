@@ -2,6 +2,54 @@
 
 ---
 
+## Calendários — consolidação de UI + disparo de avaliação por calendário (2026-06-28)
+
+Fecha os dois itens de calendário (spec: `docs/product/calendar-consolidation-and-trigger.md`).
+
+- **Item 1 — disparo por calendário (combo da campanha):** `useCalendarOptions` (`CampaignsPage`) chamava
+  `GET /v1/calendars?tenant_id=…` **sem `organization_id`** → 422 → `.catch` engolia → combo vazio. Agora passa
+  `organization_id` (de `VITE_CALENDAR_ORG_ID ?? 'org-default'`) **+** `tenant_id`, e loga o erro em vez de
+  engolir. `evaluation_calendar_id` volta a ser selecionável; backend (`compute_expires_at` + dispatcher
+  windowed T15) já respeitava a janela.
+- **Item 2 — consolidação de UI:** removida por completo a seção de calendários do `configurations/platform`
+  (`CalendarManager` — sub-abas Calendars + Holiday List — era CRUD redundante e mal-escopado, usava `tenant_id`
+  no slot de `organization_id`). Fonte única passa a ser `/config/calendars` (`CalendarsPage`: Calendários +
+  Feriados + Associações). `CalendarManager.tsx` + `config-plataforma/api/calendar-hooks.ts` ficaram órfãos
+  (a remover via `git rm`).
+- **Clone-from-existing:** no modal de Novo Calendário, seletor "começar a partir de [calendário ▾]" copia
+  `weekly_schedule` + `exceptions` como **snapshot** e `holiday_set_ids` como **referências vivas** aos holiday
+  sets compartilhados (sem backend novo). i18n `calendar.clone*` (en + pt-BR).
+- **Modelo confirmado:** escopo é `installation_id → organization_id → tenant_id`; `tenant_id` segue universal,
+  `organization_id` é o dono acima do tenant (não trocar um pelo outro), site/cluster = `installation_id`.
+  Holiday set já era referência viva (engine resolve por id na avaliação); `weekly_schedule` é inline por calendário.
+- **Holiday editor (CalendarsPage) — 3 fixes:** (1) **perda de feriado no Save** — o add-row (data+nome) só
+  entrava na lista ao clicar `+`; clicar Save direto descartava o digitado. Agora `HolidaysEditor` expõe
+  `flushPending()` (forwardRef/useImperativeHandle) e o submit commita o campo pendente antes de salvar.
+  (2) **recorrente** — badge clicável por linha alterna `one-off` (YYYY-MM-DD) ↔ `↺ todo ano` (MM-DD), exibindo
+  recorrentes sem ano. (3) **lista cortava em ~3** — removido o scroll interno (`max-h`); o corpo do modal rola,
+  nenhuma linha some; coluna de data `w-24 whitespace-nowrap`. i18n `holidaySet.everyYear/oneOff/toggleRecurring`.
+
+---
+
+## G-PROBE platform-wide — Dashboards + Avaliações (2026-06-26): últimas caixas de admin-token
+
+Fecha as caixas de admin-token restantes da frente (UI-only — gates de backend já existiam).
+
+- **Dashboards** (`DashboardsPage` + `dashboard-hooks.ts`): os templates são config-api namespace `dashboards`
+  (→ default `config.plataforma`, já coberto pelo gate dual). `configGet/Put/Delete/List` passam a mandar
+  `Authorization: Bearer` (token-store) em vez de `X-Admin-Token`; caixa de admin-token + `localStorage
+  plughub_admin_token` removidos.
+- **Avaliações** (`AvaliacoesPage` + `evaluation-hooks.ts`): removida a caixa de admin-token do filtro; a
+  adjudicação Arc6 **legada** (`adjudicateContestation`) usa o Bearer do operador (`bearerHeaders`). `adminHeaders`
+  ficou sem uso e foi removido de `evaluation-hooks`. *(Retirada física do `adjudicate` segue com a limpeza do
+  motor Arc6 legado.)*
+- **Verificação Frente 2 / dashboard de quality (não era pendência):** recon confirmou que a observabilidade de
+  qualidade já foi **consolidada** no bench (Analytics→Agents) + Quality Summary (abas Trend/Comparison removidas
+  em 2026-06-16; lente `deploy` P2+P3 ✅). Só restam itens **diferidos por decisão** (P4 eixo epoch/versão; disparo
+  do avaliador real por calendário; nits do bench). TODO §Frente 2 ganhou banner de STATUS.
+
+---
+
 ## Knowledge Base — surface REST construído + gate ABAC (2026-06-26)
 
 A `KnowledgePage` (`/evaluation/knowledge`) estava **morta**: chamava `/v1/knowledge/{search,snippets}` que
