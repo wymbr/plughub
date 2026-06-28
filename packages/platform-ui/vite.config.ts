@@ -47,7 +47,7 @@ export default defineConfig({
         changeOrigin: true
       },
       '^/v1/knowledge': {
-        target: 'http://localhost:3400',
+        target: 'http://localhost:3401',   // mcp-server-knowledge (era 3400/eval-api, que não serve /v1/knowledge)
         changeOrigin: true
       },
       '^/v1/audit': {

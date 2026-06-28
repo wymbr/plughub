@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     # Knowledge API (mcp-server-knowledge — Arc 13 Fase H CalibrationNote publish)
     knowledge_api_url: str = "http://localhost:3401"
+    # G-PROBE platform-wide: credencial de serviço p/ o publish gateado em /v1/knowledge/snippets
+    knowledge_service_token: str = ""
 
     # JWT secret for reviewer/contestation identity (HS256)
     jwt_secret: str = "changeme_evaluation_jwt_secret"

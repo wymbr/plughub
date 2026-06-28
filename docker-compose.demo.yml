@@ -1297,6 +1297,7 @@ services:
       PLUGHUB_EVALUATION_KAFKA_BROKERS:       kafka:29092
       PLUGHUB_EVALUATION_ADMIN_TOKEN:         changeme_eval_admin_token_demo
       PLUGHUB_EVALUATION_SERVICE_TOKEN:       changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço (sistema/agente/e2e)
+      PLUGHUB_EVALUATION_KNOWLEDGE_SERVICE_TOKEN: changeme_knowledge_service_token_demo   # G-PROBE — publish de CalibrationNote no KB gateado
       PLUGHUB_EVALUATION_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       PLUGHUB_EVALUATION_CALENDAR_API_URL:    http://calendar-api:3700
       PLUGHUB_EVALUATION_WORKFLOW_API_URL:    http://workflow-api:3800
@@ -1394,6 +1395,10 @@ services:
       PORT:             "3401"
       DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
       ADMIN_TOKEN:      changeme_knowledge_admin_token_demo
+      # G-PROBE platform-wide: gate dual do REST /v1/knowledge. PLUGHUB_JWT_SECRET valida o
+      # Bearer da UI (= segredo auth-api); KNOWLEDGE_SERVICE_TOKEN é o caller interno (eval-api).
+      PLUGHUB_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c
+      KNOWLEDGE_SERVICE_TOKEN: changeme_knowledge_service_token_demo
       # EMBEDDING_PROVIDER: openai       # descomente para habilitar embeddings reais
       # OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     depends_on:

@@ -116,16 +116,14 @@ Bearer+ABAC + remover a caixa). Inventário:
   `PLUGHUB_PRICING_JWT_SECRET`. Caixa removida; reserve activate/deactivate via Bearer. Smoke
   `smoke_pricing_write_auth.sh`. Ver CHANGELOG.
 - ⏳ `config/dashboards` (`DashboardsPage`) — **pulado por decisão (2026-06-26)**; retomar quando priorizado.
-- ⏳ `evaluation/knowledge` (`KnowledgePage`) → **NÃO é box-removal** (recon 2026-06-26). Achado: o
-  add/delete chama `POST/DELETE /v1/knowledge/snippets` (com a caixa como `X-Admin-Token`); o proxy do Vite
-  manda `^/v1/knowledge` → **evaluation-api:3400**, mas a evaluation-api **não define** rotas `/v1/knowledge/*`
-  (só monta `router`+`contestation_router`, que apenas *chamam* a mcp-server-knowledge como cliente). Ou seja:
-  a página aponta p/ rotas inexistentes na evaluation-api (provável 404 em search/add) — está **morta/incompleta**,
-  não ABAC-pronta. O store real é a **mcp-server-knowledge** (porta 3401, X-Admin-Token próprio, sem ABAC),
-  escrita server-side pelo fluxo de curadoria/calibração. **Fatia de wiring** (não remoção de caixa): 1º confirmar
-  se a página funciona hoje; depois (a) adicionar CRUD de knowledge ABAC-gated na evaluation-api (proxy →
-  mcp-server-knowledge, campo p.ex. `gerir_rubrica`) e repontar a página, OU (b) gatear a mcp-server-knowledge
-  em Bearer+ABAC. Caixa deixada como está por ora.
+- ✅ `evaluation/knowledge` (`KnowledgePage`) — **fatia de wiring CONCLUÍDA (2026-06-26)**. Recon confirmou que a
+  página estava **morta**: `/v1/knowledge/*` não existia em lugar nenhum (proxy ia p/ eval-api:3400 sem rotas;
+  mcp-server-knowledge só tinha `/admin/*` + MCP tools). Construído o **surface REST** na mcp-server-knowledge
+  (`routes/knowledge.ts`: GET `/v1/knowledge/search`, POST/DELETE `/v1/knowledge/snippets`, reusando `db.ts`),
+  gate DUAL (`require-knowledge-access.ts`: X-Service-Token OU Bearer+ABAC `evaluation.gerir_rubrica`, read p/
+  search / read_write p/ snippets). Proxy Vite `^/v1/knowledge` → **3401**. Publish de CalibrationNote da
+  evaluation-api passa `X-Service-Token` (conserta o KB vetorial do Arc 13, que silenciava em 404). UI usa Bearer
+  (token-store) e perde a caixa. Smoke `smoke_knowledge_rest_auth.sh`. Ver CHANGELOG.
 - ⏳ `Avaliações` filters (`AvaliacoesPage`, `filters.adminTokenPlaceholder`) → **evaluation-api** path Arc6
   `adjudicate` **deprecated** (5d) — remover junto com a limpeza física do motor Arc6 legado.
 Decisão (2026-06-26): sequenciável por serviço; auth-api foi a 1ª fatia (strict, decisão da sessão). Inventário

@@ -49,7 +49,7 @@ export type KnowledgeDeps = {
 
 // ─── Embedding helper ─────────────────────────────────────────────────────────
 
-async function embedText(
+export async function embedText(
   text: string,
   config: KnowledgeConfig
 ): Promise<number[] | null> {

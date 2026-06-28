@@ -2,6 +2,31 @@
 
 ---
 
+## Knowledge Base — surface REST construído + gate ABAC (2026-06-26)
+
+A `KnowledgePage` (`/evaluation/knowledge`) estava **morta**: chamava `/v1/knowledge/{search,snippets}` que
+**não existia em lugar nenhum** (proxy Vite ia p/ eval-api:3400, que não define essas rotas; a
+mcp-server-knowledge só servia `/admin/*` + MCP tools). A caixa de admin-token alimentava um caminho 404.
+Esta fatia **constrói o surface REST** que faltava, gateado, e conserta de quebra o publish do KB vetorial.
+
+- **mcp-server-knowledge** (`routes/knowledge.ts`): novo REST `GET /v1/knowledge/search`,
+  `POST/DELETE /v1/knowledge/snippets`, reusando os helpers de `db.ts` (mesma lógica das MCP tools;
+  `embedText` exportado de `tools.ts`). Gate DUAL (`middleware/require-knowledge-access.ts`, HS256 stdlib
+  `crypto`): `X-Service-Token` (caller interno) OU Bearer + ABAC `evaluation.gerir_rubrica` (read p/ search,
+  read_write p/ snippets). No-op quando `KNOWLEDGE_SERVICE_TOKEN` e `PLUGHUB_JWT_SECRET` vazios.
+- **Proxy** (`vite.config.ts`): `^/v1/knowledge` corrigido de `3400` → **`3401`** (mcp-server-knowledge).
+- **evaluation-api**: o publish de CalibrationNote no KB (`contestation_router`, 2 pontos) passa a mandar
+  `X-Service-Token` (`_kb_headers()` + `config.knowledge_service_token`) — **conserta o KB vetorial do Arc 13**,
+  que vinha falhando silenciosamente em 404 (a entrega primária ao avaliador via Postgres já funcionava).
+- **UI**: `searchKnowledge`/`upsertSnippet`/`deleteSnippet` mandam `Authorization: Bearer` via `auth/token-store`;
+  `KnowledgePage` perde a caixa de admin-token. A página passa a funcionar (search/add/delete reais).
+- **compose**: `PLUGHUB_JWT_SECRET` + `KNOWLEDGE_SERVICE_TOKEN` na mcp-server-knowledge;
+  `PLUGHUB_EVALUATION_KNOWLEDGE_SERVICE_TOKEN` na evaluation-api.
+- **Smoke** `smoke_knowledge_rest_auth.sh`: search 401(sem)/200(ro)/403(sem grant); snippets POST 401/403(ro)/
+  pass(rw)/pass(service-token); cleanup.
+
+---
+
 ## G-PROBE platform-wide — Skills + agent-registry (2026-06-26)
 
 Duas fatias. **(1) SkillsPage** (config/resources → Skills): NÃO era agent-registry — escreve config-api

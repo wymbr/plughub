@@ -91,7 +91,6 @@ function SnippetCard({
 export default function KnowledgePage() {
   const { t } = useTranslation('evaluation')
   const { tenantId: TENANT } = useAuth()
-  const [adminToken, setAdminToken] = useState('')
   const [namespace, setNamespace] = useState(NAMESPACES[0])
   const [customNs, setCustomNs] = useState('')
   const [query, setQuery] = useState('')
@@ -131,7 +130,7 @@ export default function KnowledgePage() {
         namespace: effectiveNs,
         content: newContent.trim(),
         source_ref: newSourceRef.trim() || undefined,
-      }, adminToken)
+      })
       setNewContent('')
       setNewSourceRef('')
       setShowAdd(false)
@@ -146,7 +145,7 @@ export default function KnowledgePage() {
 
   const doDelete = async (snippetId: string) => {
     try {
-      await deleteSnippet(snippetId, adminToken)
+      await deleteSnippet(snippetId)
       setSnippets(prev => prev.filter(s => s.snippet_id !== snippetId))
     } catch (e) {
       setError(String(e))
@@ -204,22 +203,13 @@ export default function KnowledgePage() {
           </div>
 
           <div className="flex flex-col gap-1">
-            <label className="block text-xs text-muted">{t('knowledge.adminToken')}</label>
-            <div className="flex gap-2">
-              <input
-                type="password"
-                className="border border-border-strong rounded px-2 py-1.5 text-sm w-32"
-                placeholder="Token"
-                value={adminToken}
-                onChange={e => setAdminToken(e.target.value)}
-              />
-              <button
-                onClick={() => setShowAdd(v => !v)}
-                className="bg-green text-white text-sm px-3 py-1.5 rounded hover:bg-green-text"
-              >
-                {t('knowledge.addSnippet')}
-              </button>
-            </div>
+            <label className="block text-xs text-muted">&nbsp;</label>
+            <button
+              onClick={() => setShowAdd(v => !v)}
+              className="bg-green text-white text-sm px-3 py-1.5 rounded hover:bg-green-text"
+            >
+              {t('knowledge.addSnippet')}
+            </button>
           </div>
         </div>
 

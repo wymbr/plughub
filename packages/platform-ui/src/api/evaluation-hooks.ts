@@ -24,6 +24,8 @@ import type {
   CurationSamplingRule,
 } from '@/types'
 
+import { getAccessToken } from '@/auth/token-store'
+
 const BASE = '/v1/evaluation'
 const KN_BASE = '/v1/knowledge'
 
@@ -857,6 +859,17 @@ export function useAgentReport(tenantId: string, poolId?: string) {
 
 // ── Knowledge Base ─────────────────────────────────────────────────────────────
 
+// G-PROBE platform-wide: o surface /v1/knowledge (mcp-server-knowledge) é gateado em
+// Bearer+ABAC evaluation.gerir_rubrica. Anexa o Bearer do operador (do token-store);
+// a busca por tenant_id é GET gateado por leitura.
+function knHeaders(json = true): Record<string, string> {
+  const h: Record<string, string> = {}
+  if (json) h['Content-Type'] = 'application/json'
+  const t = getAccessToken()
+  if (t) h['Authorization'] = `Bearer ${t}`
+  return h
+}
+
 export async function searchKnowledge(
   tenantId: string,
   query: string,
@@ -865,7 +878,7 @@ export async function searchKnowledge(
 ): Promise<KnowledgeSnippet[]> {
   const params = new URLSearchParams({ tenant_id: tenantId, query, top_k: String(topK) })
   if (namespace) params.set('namespace', namespace)
-  const r = await fetch(`${KN_BASE}/search?${params}`)
+  const r = await fetch(`${KN_BASE}/search?${params}`, { headers: knHeaders(false) })
   if (!r.ok) return []
   const data = await r.json()
   return (data.results ?? data) as KnowledgeSnippet[]
@@ -873,21 +886,20 @@ export async function searchKnowledge(
 
 export async function upsertSnippet(
   body: { tenant_id: string; namespace: string; content: string; source_ref?: string; metadata?: Record<string, unknown> },
-  token?: string,
 ): Promise<KnowledgeSnippet> {
   const r = await fetch(`${KN_BASE}/snippets`, {
     method: 'POST',
-    headers: adminHeaders(token),
+    headers: knHeaders(),
     body: JSON.stringify(body),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`)
   return r.json()
 }
 
-export async function deleteSnippet(snippetId: string, token?: string): Promise<void> {
+export async function deleteSnippet(snippetId: string): Promise<void> {
   const r = await fetch(`${KN_BASE}/snippets/${snippetId}`, {
     method: 'DELETE',
-    headers: adminHeaders(token),
+    headers: knHeaders(false),
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
 }

@@ -47,6 +47,12 @@ logger = logging.getLogger("plughub.evaluation.contestation")
 contestation_router = APIRouter()
 
 
+def _kb_headers() -> dict[str, str]:
+    """G-PROBE — credencial de serviço p/ o publish no /v1/knowledge/snippets gateado."""
+    tok = settings.knowledge_service_token
+    return {"X-Service-Token": tok} if tok else {}
+
+
 # ─── Pydantic request models ──────────────────────────────────────────────────
 
 class EvidenceEntryBody(BaseModel):
@@ -774,6 +780,7 @@ async def resolve_curation(
             async with httpx.AsyncClient(timeout=10.0) as client:
                 kb_resp = await client.post(
                     f"{settings.knowledge_api_url}/v1/knowledge/snippets",
+                    headers=_kb_headers(),   # G-PROBE — credencial de serviço (gate /v1/knowledge)
                     json={
                         "tenant_id":  tenant_id,
                         "namespace":  f"evaluation:calibration:{calibration_note.get('campaign_id', '')}",
@@ -985,6 +992,7 @@ async def _publish_calibration_note_kb(producer, *, tenant_id: str, note: dict, 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{settings.knowledge_api_url}/v1/knowledge/snippets",
+                headers=_kb_headers(),   # G-PROBE — credencial de serviço (gate /v1/knowledge)
                 json={
                     "tenant_id":  tenant_id,
                     "namespace":  f"evaluation:calibration:{note.get('campaign_id', '')}",

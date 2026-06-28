@@ -35,6 +35,7 @@ import { Pool }               from "pg"
 import { ensureSchema, createPool } from "./db.js"
 import { registerKnowledgeTools, type KnowledgeConfig } from "./tools.js"
 import { createAdminRouter } from "./admin.js"
+import { createKnowledgeRouter } from "./routes/knowledge.js"
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -45,6 +46,11 @@ const EMBEDDING_MODEL    = process.env["EMBEDDING_MODEL"] ?? "text-embedding-3-s
 const EMBEDDING_DIM      = parseInt(process.env["EMBEDDING_DIM"] ?? "1536", 10)
 const ADMIN_TOKEN        = process.env["ADMIN_TOKEN"] ?? ""
 const PORT               = parseInt(process.env["PORT"] ?? "3200", 10)
+// G-PROBE platform-wide: gate dual do surface REST /v1/knowledge. PLUGHUB_JWT_SECRET
+// valida o Bearer da UI (= segredo da auth-api); KNOWLEDGE_SERVICE_TOKEN é a credencial
+// do caller interno (publish de CalibrationNote da evaluation-api). Ambos vazios = no-op.
+const JWT_SECRET             = process.env["PLUGHUB_JWT_SECRET"]     ?? ""
+const KNOWLEDGE_SERVICE_TOKEN = process.env["KNOWLEDGE_SERVICE_TOKEN"] ?? ""
 
 const knowledgeConfig: KnowledgeConfig = {
   embeddingProvider: EMBEDDING_PROVIDER,
@@ -117,6 +123,12 @@ async function main(): Promise<void> {
     console.error("[mcp-server-knowledge] Schema init failed:", err)
     process.exit(1)
   }
+
+  // Knowledge REST surface (search + snippet CRUD) — montado aqui, após o pool existir.
+  app.use(createKnowledgeRouter(pool, knowledgeConfig, {
+    serviceToken: KNOWLEDGE_SERVICE_TOKEN,
+    jwtSecret:    JWT_SECRET,
+  }))
 
   // Wire pool into admin router after pool is created
   // (app.use above captures a reference that is now initialized)
