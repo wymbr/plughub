@@ -7,6 +7,22 @@
     "users": "Users",
     "templates": "Templates"
   },
+  "permForm": {
+    "access": {
+      "none": "No access",
+      "read_only": "View only",
+      "write_only": "Write only",
+      "read_write": "View and edit"
+    },
+    "scopeLabel": "Scope by {{type}}",
+    "scopeGlobalHint": "(empty = global access)",
+    "scopePlaceholder": "e.g., {{type}}:retention, {{type}}:support",
+    "typePool": "pool",
+    "typeCampaign": "campaign",
+    "fieldsCount": "{{count}} permissions",
+    "activeCount": "{{count}} active",
+    "noModules": "No modules with configurable permissions found."
+  },
   "users": {
     "title": "Users",
     "create": "New User",

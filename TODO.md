@@ -4,6 +4,67 @@
 
 ---
 
+## Flow — step de expressão sandboxed (NÃO eval cru) *(decisão de design, 2026-06-28)*
+
+**Necessidade**: valores computados / lógica mais rica em flows (ex.: o loop p/ ler o form JSON de pesquisa de
+satisfação; condições derivadas além de JSONPath em `choice`). **Ideia descartada**: um step que roda
+**JavaScript livre (`eval`)** com acesso ao ContextStore — quebra invariantes (Redis só via routing/skill-flow,
+MCP audit, masking/LGPD, isolamento de tenant) e abre RCE/exfiltração/loop infinito.
+
+**Recomendado**: **step de expressão sandboxed, read-only**:
+- avaliador de expressão **restrito** (estilo CEL/jsonlogic), **puro e determinístico**, **sem I/O nem rede**,
+  com limite de CPU/tempo; lê `@ctx.*` (respeitando escopo/visibility), **não** escreve direto no Redis;
+- saída tipada gravada via os mecanismos já existentes (`context_tags`/output), nunca acesso bruto ao store;
+- cobre a maioria dos "flows complexos" sem o buraco de segurança do eval.
+- **Casos específicos já têm caminho seguro**: pesquisa de satisfação → form JSON interpreter + menu dinâmico
+  (decisão B do ADR de surveys); lógica que não cabe em expressão → step `reason` (AI Gateway + `output_schema`).
+- **Código de verdade** (Turing-completo) só no **SDK/agente nativo** (runtime controlado, já auditado), nunca
+  como step de flow.
+
+Invariante a preservar: nenhum step de flow executa código arbitrário do tenant com acesso ao runtime interno.
+*(discussão; sem implementação)*
+
+---
+
+## Agent Principal — identidade de máquina p/ agentes IA *(spec, 2026-06-28)*
+
+Identidade de máquina (`subject_type:"agent"`) p/ agentes nativos e externos se autenticarem, distinta das
+roles humanas; capability vem do `agent_type` (registry), auth-api só emite/rota credencial; audit por
+`principal_id`. Nativo = auto-provisionado, **sem UI**; externo = cadastro + secret (API/CLI; UI enxuta na F3).
+Fases F1–F4. **Spec**: `docs/product/agent-principal-identity-spec.md`. *(discussão; não implementado)*
+
+---
+
+## Dashboards — cobertura de catálogo *(spec, 2026-06-28)*
+
+O sistema composável (estilo Grafana) **já existe** (Dashboard #35/Arc 16: DisplayTool registry, grid,
+Add Card 3-passos, runtime filters, `/reports/display/*`). Falta só **cobertura**: expor no `ENDPOINT_CATALOG`
+os relatórios ainda ausentes (segmentos/complexidade, disponibilidade, Fila/SLA, Pools/Infra, qualidade/
+calibração, surveys, performance diária) via o contrato existente (endpoint display reusa relatório + entrada
+no catálogo + `compatible_tools`). **Decisão: NÃO** construir datasource/query-builder genérico (dado interno).
+Novos tools (heatmap/gauge/leaderboard) só sob demanda. Opcional: templates default por role.
+**Spec**: `docs/product/dashboard-catalog-coverage-spec.md`. *(discussão; não implementado)*
+
+---
+
+## Access ↔ Groups — associar usuário a grupo pela tela do usuário *(2026-06-28)*
+
+Em `Configurations/Access`, ao definir/editar um usuário, **não há como associá-lo a um grupo** de usuários
+(definido em `Configurations/Groups`). Hoje a associação só existe **pelo lado do grupo** (GroupsPage → abas
+Members/Supervisors). Falta o caminho inverso, pela tela do usuário.
+
+- **Por que importa**: o scoping de supervisor (Arc 9) depende de o usuário ser **supervisor de um grupo**
+  (`agent_group_supervisors`) → JWT `supervised_groups`/`supervised_agent_types` → filtro row-level na
+  analytics-api. Para "limitar um supervisor a ver só os dados do grupo dele", hoje é preciso ir à GroupsPage;
+  o natural é poder fazer ao editar o usuário.
+- **Escopo provável (UI + wiring, sem backend novo)**: adicionar uma seção "Grupos" no drawer do usuário
+  (AccessPage) espelhando `agent_group_users` (membro) e `agent_group_supervisors` (supervisor), consumindo os
+  endpoints de sub-recurso já existentes do `groups_router` (auth-api, Arc 9). Backend de grupos já tem CRUD.
+- **Atenção**: scope de supervisor é **denormalizado no JWT no login** (`resolve_supervisor_scope`) →
+  mudança de grupo só reflete no próximo token (re-login/refresh). Documentar isso na UI.
+
+---
+
 ## Isolamento do substrato por `origin` — ✅ ARCO COMPLETO (2026-06-25) — resta fase 2
 
 Passos 1–6 + fix de rótulo concluídos e validados E2E (`infra/test/smoke_origin_reeval.sh`); detalhe em

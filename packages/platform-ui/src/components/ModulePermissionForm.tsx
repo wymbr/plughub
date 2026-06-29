@@ -18,6 +18,7 @@
  */
 
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { ModuleConfig, ModuleFieldConfig, PermissionAccess } from '@/types'
 
 // ── Types para o schema do módulo ─────────────────────────────────────────────
@@ -39,15 +40,6 @@ export interface ModuleSchema {
   permission_schema: Record<string, ModuleFieldSchema>
 }
 
-// ── Labels de acesso para o usuário final ─────────────────────────────────────
-
-const ACCESS_LABELS: Record<PermissionAccess, string> = {
-  none:       'Sem acesso',
-  read_only:  'Somente visualizar',
-  write_only: 'Somente escrever',
-  read_write: 'Visualizar e editar',
-}
-
 // ── ScopeInput ────────────────────────────────────────────────────────────────
 
 function ScopeInput({
@@ -61,7 +53,9 @@ function ScopeInput({
   onChange: (s: string[]) => void
   disabled: boolean
 }) {
+  const { t } = useTranslation('access')
   const [draft, setDraft] = useState(value.join(', '))
+  const typeLabel = t(scopeType === 'pool' ? 'permForm.typePool' : 'permForm.typeCampaign')
 
   const handleBlur = () => {
     const parsed = draft
@@ -76,14 +70,14 @@ function ScopeInput({
   return (
     <div className="mt-1">
       <label className="text-xs text-muted block mb-0.5">
-        Escopo por {scopeType === 'pool' ? 'pool' : 'campanha'}{' '}
-        <span className="text-muted-light">(vazio = acesso global)</span>
+        {t('permForm.scopeLabel', { type: typeLabel })}{' '}
+        <span className="text-muted-light">{t('permForm.scopeGlobalHint')}</span>
       </label>
       <input
         type="text"
         disabled={disabled}
         className="w-full text-xs border border-border-strong rounded px-2 py-1 disabled:bg-surface-muted disabled:text-muted-light"
-        placeholder={`Ex: ${scopeType}:retencao_humano, ${scopeType}:sac`}
+        placeholder={t('permForm.scopePlaceholder', { type: scopeType })}
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={handleBlur}
@@ -127,6 +121,7 @@ function FieldRow({
   onChange: (next: ModuleFieldConfig) => void
   readOnly: boolean
 }) {
+  const { t } = useTranslation('access')
   const showScope = schema.scopable && fieldConfig.access !== 'none'
 
   return (
@@ -144,7 +139,7 @@ function FieldRow({
             onChange={e => onChange({ ...fieldConfig, access: e.target.value as PermissionAccess })}
           >
             {schema.domain.map(d => (
-              <option key={d} value={d}>{ACCESS_LABELS[d] ?? d}</option>
+              <option key={d} value={d}>{t(`permForm.access.${d}`)}</option>
             ))}
           </select>
         </div>
@@ -176,6 +171,7 @@ function ModuleSection({
   onChange: (next: Record<string, ModuleFieldConfig>) => void
   readOnly: boolean
 }) {
+  const { t } = useTranslation('access')
   const [open, setOpen] = useState(false)
   const fields = Object.entries(mod.permission_schema)
   if (fields.length === 0) return null
@@ -193,11 +189,11 @@ function ModuleSection({
         <span className="text-lg">{mod.icon}</span>
         <div className="flex-1">
           <div className="text-sm font-semibold text-dark">{mod.label}</div>
-          <div className="text-xs text-muted-light">{fields.length} permissões</div>
+          <div className="text-xs text-muted-light">{t('permForm.fieldsCount', { count: fields.length })}</div>
         </div>
         {configured > 0 && (
           <span className="bg-primary-light text-primary text-xs px-2 py-0.5 rounded-full font-medium">
-            {configured} ativo{configured > 1 ? 's' : ''}
+            {t('permForm.activeCount', { count: configured })}
           </span>
         )}
         <span className="text-muted-light text-xs ml-2">{open ? '▲' : '▼'}</span>
@@ -248,12 +244,13 @@ export function ModulePermissionForm({
   readOnly = false,
   className = '',
 }: ModulePermissionFormProps) {
+  const { t } = useTranslation('access')
   const active = modules.filter(m => m.active && Object.keys(m.permission_schema).length > 0)
 
   if (active.length === 0) {
     return (
       <div className={`text-sm text-muted-light text-center py-8 ${className}`}>
-        Nenhum módulo com permissões configuráveis encontrado.
+        {t('permForm.noModules')}
       </div>
     )
   }

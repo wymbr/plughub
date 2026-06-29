@@ -248,6 +248,16 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
   const [err,     setErr]     = useState<string | null>(null)
   const backdropRef = useRef<HTMLDivElement>(null)
 
+  // The user list/detail response does NOT include module_config — it lives behind a
+  // dedicated endpoint. Hydrate the ABAC form on edit so assigned permissions show up
+  // (otherwise every field falsely renders as "no access").
+  useEffect(() => {
+    if (!user?.id) return
+    apiFetch<ModuleConfig>(`/auth/users/${user.id}/module-config`, adminToken)
+      .then(cfg => setModuleConfig(cfg ?? {}))
+      .catch(() => { /* keep current (empty) config on failure */ })
+  }, [user?.id, adminToken])
+
   function togglePool(poolId: string) {
     setSelectedPools(prev => {
       const next = new Set(prev)

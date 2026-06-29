@@ -7,6 +7,22 @@
     "users": "Usuários",
     "templates": "Templates"
   },
+  "permForm": {
+    "access": {
+      "none": "Sem acesso",
+      "read_only": "Somente visualizar",
+      "write_only": "Somente escrever",
+      "read_write": "Visualizar e editar"
+    },
+    "scopeLabel": "Escopo por {{type}}",
+    "scopeGlobalHint": "(vazio = acesso global)",
+    "scopePlaceholder": "Ex: {{type}}:retencao_humano, {{type}}:sac",
+    "typePool": "pool",
+    "typeCampaign": "campanha",
+    "fieldsCount": "{{count}} permissões",
+    "activeCount": "{{count}} ativo(s)",
+    "noModules": "Nenhum módulo com permissões configuráveis encontrado."
+  },
   "users": {
     "title": "Usuários",
     "create": "Novo Usuário",

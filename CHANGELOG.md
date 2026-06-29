@@ -2,6 +2,18 @@
 
 ---
 
+## BUG fix — Access (ABAC): permissões agora carregam na UI + i18n (2026-06-28)
+
+- **Load**: o modal de edição de usuário (`AccessPage`/`UserModal`) abria com **todas as permissões em
+  "Sem acesso"**. Causa: `UserResponse` (GET `/auth/users` e `/users/{id}`) **não inclui `module_config`** →
+  o front recebia `undefined` → form vazio. Fix cirúrgico no front: o modal busca
+  `GET /auth/users/{id}/module-config` na edição (`useEffect`) e hidrata o `ModulePermissionForm`. Sem mexer
+  no backend nem na forma do JWT.
+- **i18n**: `ModulePermissionForm` tinha labels **fixos em PT** (`ACCESS_LABELS`, "Escopo por…",
+  "permissões", "ativo(s)", empty-state). Migrados para `t()` no namespace `access` (`permForm.*`, en+pt-BR).
+
+---
+
 ## Calendários — Dias Especiais (horário em feriado) + flush nas Exceções (2026-06-28)
 
 Follow-ups do lote de calendários (specs: `docs/product/special-days-with-hours-spec.md`).
