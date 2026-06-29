@@ -1,5 +1,7 @@
 {
   "title":         "Dashboard Templates",
+  "home.loading":  "Loading your dashboard…",
+  "home.empty":    "No dashboard configured yet. An admin can set one up in Configuration → Dashboards.",
   "noTemplate":    "No template selected.",
   "selectTemplate":"Select a template from the sidebar to view the dashboard.",
   "editMode":      "Edit mode",

@@ -51,12 +51,49 @@ Avaliar caso a caso. Candidatos plausíveis: **heatmap** (disponibilidade por ho
 (ranking de agentes), **gauge** (SLA vs alvo). Cada novo tool segue o contrato `DisplayTool` (componente front,
 zero backend) — adicionar só sob demanda real, não especulativo.
 
-## 5. Melhoria opcional: dashboards padrão por role
-Hoje o admin cria templates manualmente. Opcional: **templates default por role** (operator/supervisor/admin)
-semeados (seed-if-absent), para o usuário já abrir com um painel útil. Respeita o scope ABAC/`accessible_pools`
-e `supervised_*` já aplicados nos endpoints. Fora do escopo mínimo; vale se a adoção pedir.
+## 5. Modelo de consumo — Home + allowlist por role (decidido 2026-06-28)
 
-## 6. Invariantes (do módulo, preservados)
+> Separa **construir** (admin, em Config) de **consumir** (usuário, no Home). Resolve "onde o usuário acessa
+> dashboards customizados". A infra de **layout pessoal por usuário** já existe
+> (`dashboards/layout:{tenant}:{user}` = `[{id,x,y,w,h}]`) + react-grid-layout — então o custo é baixo.
+
+### 5.1 Papéis
+- **Admin (Config → Dashboards)** define, por role, **(a)** a **allowlist** de componentes liberados e
+  **(b)** um **starter default** (subconjunto já arrumado, p/ o primeiro acesso não vir vazio). Só isso —
+  não monta o painel de cada usuário.
+- **Usuário (Home)** escolhe **quais** componentes (dentro da allowlist) e **arruma o layout**; salvo como
+  layout pessoal. Primeiro acesso = herda o starter da role.
+- **Monitor/Analytics** inalterados — visões profundas/ao vivo; os cards do Home dão **deep-link** pra elas.
+
+### 5.2 Onde mora
+- **Home** (`/` → `HomePage`, visível a todas as roles) **renderiza o dashboard do usuário**. Hoje a
+  `DashboardsPage` (o builder) está só em `Config → Dashboards` atrás de `config.platform` (≈ admin) — o
+  **consumo precisa ser destravado no Home p/ todas as roles** (o builder continua gated em Config).
+- **Escopo automático**: a allowlist controla **o quê**; ABAC/`accessible_pools`/`supervised_*` (aplicados no
+  endpoint `/reports/display/*`) controlam **quais dados**. Dois usuários, mesmo card, dados diferentes.
+
+### 5.3 Armazenamento (Config API namespace `dashboards`)
+- `role_catalog:{role}` (novo) → `{ allowed: string[] /* catalog ids */, starter: DashboardCard[] }`.
+- `layout:{tenant}:{user}` (já existe) → seleção + posições do usuário.
+- **Reconcile no load** (única lógica nova de robustez): o layout do usuário é **filtrado contra a allowlist
+  atual** — card cujo componente saiu da allowlist é silenciosamente descartado; componente novo fica
+  disponível no picker (não auto-adicionado). Sem migração.
+
+### 5.4 Por que híbrido (starter + liberdade), não fixo nem vazio
+Starter resolve o "primeiro acesso vazio"; a liberdade dentro da allowlist resolve "usuário preso a um painel
+que não serve". Custo extra vs. starter puro = só o **picker restrito** + o **reconcile** — ambos baratos.
+
+## 6. Fases
+- **F1 — Cobertura de catálogo** (§3): plugar relatórios faltantes como `/reports/display/*` + entradas no
+  catálogo, incrementalmente (1–2 por vez). Independe das demais.
+- **F2 — Consumo no Home**: `HomePage` passa a renderizar o dashboard do usuário (reusa `DashboardsPage`
+  viewer); destravar visualização p/ todas as roles (builder segue em Config/admin).
+- **F3 — Allowlist + starter por role**: `role_catalog:{role}` no Config API + UI de admin (em Config →
+  Dashboards) p/ definir allowed/starter; reconcile no load.
+- **F4 — Picker do usuário**: "adicionar/remover card" no Home restrito à allowlist da role; layout pessoal.
+- **F5 (opcional) — novos tools** (§4) sob demanda (heatmap/gauge/leaderboard).
+
+## 7. Invariantes (do módulo, preservados)
 - Display Tool é **sempre** componente front; backend nunca retorna tool id.
 - Endpoint `/reports/display/*` **reusa** relatório existente — não duplica lógica de query.
 - Param `fixed` nunca sobrescrito por filtro global; `global_filters: []` válido.
@@ -64,7 +101,7 @@ e `supervised_*` já aplicados nos endpoints. Fora do escopo mínimo; vale se a 
   herda; nunca expor dado fora do escopo do principal.
 - Inglês no código; PT só em i18n.
 
-## 7. Fora de escopo
+## 8. Fora de escopo
 - Datasource genérico / query-builder (SQL/PromQL livre) — decisão explícita de NÃO fazer.
 - Alerting estilo Grafana (thresholds → notificação) — arco próprio se um dia for requisito.
 - Export/embedding de painel.

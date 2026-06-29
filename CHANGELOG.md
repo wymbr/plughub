@@ -2,6 +2,23 @@
 
 ---
 
+## Dashboards F2 — consumo no Home (view-only, todas as roles) (2026-06-28)
+
+Primeira fatia do modelo de consumo (spec `docs/product/dashboard-catalog-coverage-spec.md`).
+
+- **`DashboardView.tsx`** (novo): renderer **view-only** do dashboard — reusa o Display Tool registry
+  (`CardRenderer`) + `FilterBar` + react-grid-layout, **sem** chrome de builder (sidebar/edit/add). Resolve o
+  template via `module_config.dashboard.default_template_id` → fallback 1º template; aplica layout pessoal se
+  existir; `isDraggable/isResizable=false` (personalização é F3/F4). Estado vazio + loading com i18n
+  (`dashboards.home.*`).
+- **`HomePage`**: deixa de ser landing estática e passa a renderizar `<DashboardView/>` (welcome sensível à
+  role + dashboard). Visível a **todas as roles** — leituras de config (`GET /config/...`) são abertas (só
+  writes são gated), e o escopo dos dados é aplicado nos endpoints `/reports/display/*`. O builder segue em
+  Config → Dashboards (admin).
+- Sem mudança de backend. Próximas fatias: F3 (allowlist + starter por role) e F4 (picker do usuário).
+
+---
+
 ## Access ↔ Groups — associação pela tela do usuário + grupo genérico de usuários (2026-06-28)
 
 Generaliza o grupo (Arc 9) para "grupo de usuários" com **member/owner**, e permite associar pelos dois lados.

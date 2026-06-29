@@ -38,11 +38,14 @@ Fases F1–F4. **Spec**: `docs/product/agent-principal-identity-spec.md`. *(disc
 ## Dashboards — cobertura de catálogo *(spec, 2026-06-28)*
 
 O sistema composável (estilo Grafana) **já existe** (Dashboard #35/Arc 16: DisplayTool registry, grid,
-Add Card 3-passos, runtime filters, `/reports/display/*`). Falta só **cobertura**: expor no `ENDPOINT_CATALOG`
-os relatórios ainda ausentes (segmentos/complexidade, disponibilidade, Fila/SLA, Pools/Infra, qualidade/
-calibração, surveys, performance diária) via o contrato existente (endpoint display reusa relatório + entrada
-no catálogo + `compatible_tools`). **Decisão: NÃO** construir datasource/query-builder genérico (dado interno).
-Novos tools (heatmap/gauge/leaderboard) só sob demanda. Opcional: templates default por role.
+Add Card 3-passos, runtime filters, `/reports/display/*`). Fases (spec): **F1 cobertura** — expor no
+`ENDPOINT_CATALOG` os relatórios ausentes (segmentos/complexidade, disponibilidade, Fila/SLA, Pools/Infra,
+qualidade/calibração, surveys, performance diária) via o contrato existente; **F2 consumo no Home** — `HomePage`
+renderiza o dashboard do usuário (destravar p/ todas as roles; builder segue em Config/admin); **F3 allowlist +
+starter por role** (`role_catalog:{role}` no Config API: admin define componentes liberados + layout starter;
+reconcile no load); **F4 picker do usuário** (escolhe/arruma dentro da allowlist; layout pessoal já existe).
+Escopo de dados sempre via ABAC/`accessible_pools`/`supervised_*` no endpoint. **Decisão: NÃO** construir
+datasource/query-builder genérico (dado interno); novos tools (heatmap/gauge/leaderboard) só sob demanda.
 **Spec**: `docs/product/dashboard-catalog-coverage-spec.md`. *(discussão; não implementado)*
 
 ---
