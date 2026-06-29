@@ -109,7 +109,7 @@ export default function GroupsPage() {
   // Drawer state
   const [drawerGroup,  setDrawerGroup]  = useState<GroupDetail | null>(null)
   const [drawerOpen,   setDrawerOpen]   = useState(false)
-  const [drawerTab,    setDrawerTab]    = useState<'info' | 'members' | 'supervisors' | 'shifts'>('info')
+  const [drawerTab,    setDrawerTab]    = useState<'info' | 'members' | 'owners' | 'agents' | 'shifts'>('info')
   const [drawerLoading, setDrawerLoading] = useState(false)
 
   // New group form
@@ -248,10 +248,10 @@ export default function GroupsPage() {
                 </div>
                 <div className="flex items-center gap-4 text-sm text-muted">
                   {g.member_count != null && (
-                    <span>{g.member_count} {t('members').toLowerCase()}</span>
+                    <span>{g.member_count} {t('tab.agents').toLowerCase()}</span>
                   )}
                   {g.supervisor_count != null && (
-                    <span>{g.supervisor_count} {t('supervisors').toLowerCase()}</span>
+                    <span>{g.supervisor_count} {t('tab.owners').toLowerCase()}</span>
                   )}
                   <span className="text-border-strong">›</span>
                 </div>
@@ -306,6 +306,7 @@ export default function GroupsPage() {
           loading={drawerLoading}
           tab={drawerTab}
           onTabChange={setDrawerTab}
+          tenantId={tenantId}
           adminToken={adminToken}
           onClose={closeDrawer}
           onDelete={deleteGroup}
@@ -323,11 +324,14 @@ export default function GroupsPage() {
 
 // ── GroupDrawer ────────────────────────────────────────────────────────────────
 
+type DrawerTab = 'info' | 'members' | 'owners' | 'agents' | 'shifts'
+
 interface DrawerProps {
   group:       GroupDetail | null
   loading:     boolean
-  tab:         'info' | 'members' | 'supervisors' | 'shifts'
-  onTabChange: (tab: 'info' | 'members' | 'supervisors' | 'shifts') => void
+  tab:         DrawerTab
+  onTabChange: (tab: DrawerTab) => void
+  tenantId:    string
   adminToken:  string
   onClose:     () => void
   onDelete:    (id: string) => void
@@ -335,7 +339,7 @@ interface DrawerProps {
   t:           (key: string, opts?: Record<string, unknown>) => string
 }
 
-function GroupDrawer({ group, loading, tab, onTabChange, adminToken, onClose, onDelete, onRefresh, t }: DrawerProps) {
+function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, onClose, onDelete, onRefresh, t }: DrawerProps) {
   return (
     <div className="fixed inset-0 z-40 flex">
       {/* Backdrop */}
@@ -363,7 +367,7 @@ function GroupDrawer({ group, loading, tab, onTabChange, adminToken, onClose, on
 
         {/* Tabs */}
         <div className="border-b border-border px-6 flex gap-1">
-          {(['info', 'members', 'supervisors', 'shifts'] as const).map(tabKey => (
+          {(['info', 'members', 'owners', 'agents', 'shifts'] as const).map(tabKey => (
             <button
               key={tabKey}
               onClick={() => onTabChange(tabKey)}
@@ -384,10 +388,11 @@ function GroupDrawer({ group, loading, tab, onTabChange, adminToken, onClose, on
             <div className="flex justify-center py-16"><Spinner /></div>
           ) : !group ? null : (
             <>
-              {tab === 'info'        && <InfoTab        group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'members'     && <MembersTab     group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'supervisors' && <SupervisorsTab group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'shifts'      && <ShiftsTab      group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'info'    && <InfoTab   group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'members' && <GroupUserChecklist kind="users"       group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'owners'  && <GroupUserChecklist kind="supervisors" group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'agents'  && <AgentsTab group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
+              {tab === 'shifts'  && <ShiftsTab group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
             </>
           )}
         </div>
@@ -458,9 +463,86 @@ function InfoTab({ group, adminToken, onRefresh, t }: {
   )
 }
 
-// ── MembersTab ────────────────────────────────────────────────────────────────
+// ── GroupUserChecklist (Members = users, Owners = supervisors) ──────────────────
 
-function MembersTab({ group, adminToken, onRefresh, t }: {
+type UserLite = { id: string | number; name?: string; email?: string }
+
+function GroupUserChecklist({ kind, group, tenantId, adminToken, onRefresh, t }: {
+  kind: 'users' | 'supervisors'
+  group: GroupDetail; tenantId: string; adminToken: string
+  onRefresh: (id: string) => Promise<void>
+  t: (k: string, opts?: Record<string, unknown>) => string
+}) {
+  const [allUsers, setAllUsers] = useState<{ id: string; name: string; email: string }[]>([])
+  const [busy,     setBusy]     = useState<string | null>(null)
+  const [search,   setSearch]   = useState('')
+
+  useEffect(() => {
+    apiFetch<UserLite[] | { users?: UserLite[] }>(`/auth/users?tenant_id=${encodeURIComponent(tenantId)}`, adminToken)
+      .then(d => {
+        const arr = Array.isArray(d) ? d : (d.users ?? [])
+        setAllUsers(arr.map(u => ({ id: String(u.id), name: u.name ?? '', email: u.email ?? '' })))
+      })
+      .catch(() => { /* user list optional */ })
+  }, [tenantId, adminToken])
+
+  const current  = kind === 'users' ? group.users : group.supervisors
+  const selected = new Set(current.map(u => u.user_id ?? u.id ?? ''))
+  const hintKey  = kind === 'users' ? 'membersHint' : 'ownersHint'
+  const emptyKey = kind === 'users' ? 'noMembers'   : 'noOwners'
+
+  const toggle = async (uid: string) => {
+    setBusy(uid)
+    try {
+      if (selected.has(uid)) {
+        await apiFetch(`/auth/v1/groups/${group.group_id}/${kind}/${uid}`, adminToken, { method: 'DELETE' })
+      } else {
+        await apiFetch(`/auth/v1/groups/${group.group_id}/${kind}`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: uid }) })
+      }
+      await onRefresh(group.group_id)
+    } finally { setBusy(null) }
+  }
+
+  const q = search.trim().toLowerCase()
+  const filtered = q ? allUsers.filter(u => u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)) : allUsers
+
+  return (
+    <div className="p-6 space-y-3">
+      <p className="text-sm text-muted">{t(hintKey)}</p>
+      <input
+        className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+        placeholder={t('searchUsers')}
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+      />
+      {allUsers.length === 0 ? (
+        <p className="text-sm text-muted-light text-center py-4">{t(emptyKey)}</p>
+      ) : (
+        <div className="divide-y divide-border border border-border rounded-lg max-h-80 overflow-y-auto">
+          {filtered.map(u => (
+            <label key={u.id} className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-surface-muted">
+              <input
+                type="checkbox"
+                checked={selected.has(u.id)}
+                disabled={busy === u.id}
+                onChange={() => toggle(u.id)}
+                className="rounded border-border-strong text-primary focus:ring-primary/40"
+              />
+              <span className="flex-1 min-w-0">
+                <span className="text-sm text-dark">{u.name || u.email || u.id}</span>
+                {u.name && u.email && <span className="block text-xs text-muted-light">{u.email}</span>}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── AgentsTab (agent_type members — drives AI supervised scope) ─────────────────
+
+function AgentsTab({ group, adminToken, onRefresh, t }: {
   group: GroupDetail; adminToken: string; onRefresh: (id: string) => Promise<void>
   t: (k: string) => string
 }) {
@@ -490,20 +572,20 @@ function MembersTab({ group, adminToken, onRefresh, t }: {
 
   return (
     <div className="p-6 space-y-4">
-      <p className="text-sm text-muted">{t('membersHint')}</p>
+      <p className="text-sm text-muted">{t('agentsHint')}</p>
 
       {/* Add form */}
       <div className="flex gap-2 items-center">
         <input
           className="flex-1 border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-          placeholder={t('memberAgentTypeId')}
+          placeholder={t('agentTypeIdPlaceholder')}
           value={agentTypeId}
           onChange={e => setAgentTypeId(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && add()}
         />
         <label className="flex items-center gap-1.5 text-sm text-muted whitespace-nowrap">
           <input type="checkbox" checked={isHuman} onChange={e => setIsHuman(e.target.checked)} className="rounded" />
-          {t('memberIsHuman')}
+          {t('agentIsHuman')}
         </label>
         <button
           onClick={add}
@@ -516,7 +598,7 @@ function MembersTab({ group, adminToken, onRefresh, t }: {
 
       {/* List */}
       {group.members.length === 0 ? (
-        <p className="text-sm text-muted-light text-center py-4">{t('noMembers')}</p>
+        <p className="text-sm text-muted-light text-center py-4">{t('noAgents')}</p>
       ) : (
         <div className="divide-y divide-border border border-border rounded-lg">
           {group.members.map(m => (
@@ -535,84 +617,6 @@ function MembersTab({ group, adminToken, onRefresh, t }: {
               </button>
             </div>
           ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── SupervisorsTab ────────────────────────────────────────────────────────────
-
-function SupervisorsTab({ group, adminToken, onRefresh, t }: {
-  group: GroupDetail; adminToken: string; onRefresh: (id: string) => Promise<void>
-  t: (k: string) => string
-}) {
-  const [userId,  setUserId]  = useState('')
-  const [adding,  setAdding]  = useState(false)
-
-  const add = async () => {
-    if (!userId.trim()) return
-    setAdding(true)
-    try {
-      await apiFetch(`/auth/v1/groups/${group.group_id}/supervisors`, adminToken, {
-        method: 'POST',
-        body: JSON.stringify({ user_id: userId.trim() }),
-      })
-      setUserId('')
-      await onRefresh(group.group_id)
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  const remove = async (uid: string) => {
-    await apiFetch(`/auth/v1/groups/${group.group_id}/supervisors/${uid}`, adminToken, { method: 'DELETE' })
-    await onRefresh(group.group_id)
-  }
-
-  return (
-    <div className="p-6 space-y-4">
-      <p className="text-sm text-muted">{t('supervisorsHint')}</p>
-
-      <div className="flex gap-2">
-        <input
-          className="flex-1 border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-          placeholder={t('supervisorUserId')}
-          value={userId}
-          onChange={e => setUserId(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && add()}
-        />
-        <button
-          onClick={add}
-          disabled={adding || !userId.trim()}
-          className="px-3 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-dark disabled:opacity-50"
-        >
-          {t('add')}
-        </button>
-      </div>
-
-      {group.supervisors.length === 0 ? (
-        <p className="text-sm text-muted-light text-center py-4">{t('noSupervisors')}</p>
-      ) : (
-        <div className="divide-y divide-border border border-border rounded-lg">
-          {group.supervisors.map(s => {
-            const uid = s.user_id ?? s.id ?? ''
-            return (
-              <div key={uid} className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <p className="text-sm text-dark">{s.name ?? s.email ?? uid}</p>
-                  {s.email && s.name && <p className="text-xs text-muted-light">{s.email}</p>}
-                  <p className="text-xs text-muted-light font-mono">{uid}</p>
-                </div>
-                <button
-                  onClick={() => remove(uid)}
-                  className="text-xs text-red hover:text-red-text"
-                >
-                  {t('remove')}
-                </button>
-              </div>
-            )
-          })}
         </div>
       )}
     </div>

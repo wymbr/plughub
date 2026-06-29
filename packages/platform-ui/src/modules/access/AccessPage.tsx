@@ -258,6 +258,63 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
       .catch(() => { /* keep current (empty) config on failure */ })
   }, [user?.id, adminToken])
 
+  // ── Group association (Arc 9) ────────────────────────────────────────────────
+  // Group membership/supervision is stored group-side (no reverse endpoint), so we
+  // list groups and probe each group's detail to learn this user's current state.
+  const [allGroups,        setAllGroups]        = useState<{ group_id: string; name: string }[]>([])
+  const [memberGroups,     setMemberGroups]     = useState<Set<string>>(new Set())
+  const [supervisorGroups, setSupervisorGroups] = useState<Set<string>>(new Set())
+  const initialGroupsRef = useRef<{ member: Set<string>; supervisor: Set<string> }>({ member: new Set(), supervisor: new Set() })
+
+  useEffect(() => {
+    let cancelled = false
+    type GUser = { user_id?: string; id?: string }
+    apiFetch<{ group_id: string; name: string }[]>(
+      `/auth/v1/groups?tenant_id=${encodeURIComponent(tenantId)}`, adminToken,
+    )
+      .then(async groups => {
+        const list = groups ?? []
+        if (!cancelled) setAllGroups(list.map(g => ({ group_id: g.group_id, name: g.name })))
+        if (!user?.id) return
+        const mem = new Set<string>(); const sup = new Set<string>()
+        const has = (arr?: GUser[]) => (arr ?? []).some(u => u.user_id === user.id || u.id === user.id)
+        await Promise.all(list.map(async g => {
+          const d = await apiFetch<{ users?: GUser[]; supervisors?: GUser[] }>(`/auth/v1/groups/${g.group_id}`, adminToken)
+          if (has(d.users)) mem.add(g.group_id)
+          if (has(d.supervisors)) sup.add(g.group_id)
+        }))
+        if (cancelled) return
+        setMemberGroups(new Set(mem)); setSupervisorGroups(new Set(sup))
+        initialGroupsRef.current = { member: new Set(mem), supervisor: new Set(sup) }
+      })
+      .catch(() => { /* groups optional */ })
+    return () => { cancelled = true }
+  }, [user?.id, adminToken, tenantId])
+
+  function toggleGroup(kind: 'member' | 'supervisor', gid: string) {
+    const setter = kind === 'member' ? setMemberGroups : setSupervisorGroups
+    setter(prev => {
+      const next = new Set(prev)
+      next.has(gid) ? next.delete(gid) : next.add(gid)
+      return next
+    })
+  }
+
+  // Diff desired vs initial group state and apply via the group-side endpoints.
+  async function applyGroupChanges(userId: string) {
+    const init = initialGroupsRef.current
+    const tasks: Promise<unknown>[] = []
+    for (const gid of memberGroups) if (!init.member.has(gid))
+      tasks.push(apiFetch(`/auth/v1/groups/${gid}/users`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
+    for (const gid of init.member) if (!memberGroups.has(gid))
+      tasks.push(apiFetch(`/auth/v1/groups/${gid}/users/${userId}`, adminToken, { method: 'DELETE' }))
+    for (const gid of supervisorGroups) if (!init.supervisor.has(gid))
+      tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors`, adminToken, { method: 'POST', body: JSON.stringify({ user_id: userId }) }))
+    for (const gid of init.supervisor) if (!supervisorGroups.has(gid))
+      tasks.push(apiFetch(`/auth/v1/groups/${gid}/supervisors/${userId}`, adminToken, { method: 'DELETE' }))
+    await Promise.all(tasks)
+  }
+
   function togglePool(poolId: string) {
     setSelectedPools(prev => {
       const next = new Set(prev)
@@ -280,6 +337,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
         await apiFetch(`/auth/users/${user!.id}/module-config`, adminToken, {
           method: 'PUT', body: JSON.stringify(moduleConfig),
         })
+        await applyGroupChanges(user!.id)
       } else {
         const body: CreateUserInput = { tenant_id: tenantId, email, name, password, roles, accessible_pools: accessiblePools, max_concurrent_sessions: maxConcurrentSessions }
         const created = await apiFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
@@ -289,6 +347,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
             method: 'PUT', body: JSON.stringify(moduleConfig),
           })
         }
+        await applyGroupChanges(created.id)
       }
       onSaved(); onClose()
     } catch (ex) { setErr(String(ex)) }
@@ -420,6 +479,42 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
               <p className="text-xs text-muted-light mt-1">
                 {t('users.permissionsDescription')}
               </p>
+            </div>
+          )}
+
+          {/* Group association (Arc 9) */}
+          {allGroups.length > 0 && (
+            <div>
+              <label className="text-sm font-medium text-dark">{t('users.groupsSection')}</label>
+              <div className="border border-border rounded-lg divide-y divide-border mt-2">
+                <div className="flex items-center px-3 py-1.5 bg-surface-muted text-2xs font-semibold text-muted-light uppercase tracking-wide">
+                  <span className="flex-1">{t('users.group')}</span>
+                  <span className="w-20 text-center">{t('users.colMember')}</span>
+                  <span className="w-20 text-center">{t('users.colSupervisor')}</span>
+                </div>
+                {allGroups.map(g => (
+                  <div key={g.group_id} className="flex items-center px-3 py-2 text-sm">
+                    <span className="flex-1 text-dark truncate">{g.name}</span>
+                    <span className="w-20 flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={memberGroups.has(g.group_id)}
+                        onChange={() => toggleGroup('member', g.group_id)}
+                        className="rounded border-border-strong text-primary focus:ring-primary/40"
+                      />
+                    </span>
+                    <span className="w-20 flex justify-center">
+                      <input
+                        type="checkbox"
+                        checked={supervisorGroups.has(g.group_id)}
+                        onChange={() => toggleGroup('supervisor', g.group_id)}
+                        className="rounded border-border-strong text-primary focus:ring-primary/40"
+                      />
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-light mt-1">{t('users.groupsHint')}</p>
             </div>
           )}
 

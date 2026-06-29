@@ -33,6 +33,19 @@
     "password": "Senha",
     "passwordNew": "Senha (para novos usuários)",
     "passwordOptional": "Senha (deixe em branco para manter a atual)",
+    "newPassword": "Nova senha",
+    "passwordBlank": "Deixe em branco para manter a atual",
+    "passwordMin8": "Mínimo de 8 caracteres",
+    "fullName": "Nome completo",
+    "emailPlaceholder": "nome@empresa.com",
+    "poolsNone": "Nenhum selecionado",
+    "selectAll": "Selecionar todos",
+    "deselectAll": "Desmarcar todos",
+    "noPoolsConfigured": "Nenhum pool configurado.",
+    "poolsDescription": "Restringe a quais pools este usuário tem acesso aos dados. Vazio = todos os pools.",
+    "permissionsDescription": "Permissões ABAC granulares por módulo.",
+    "saveChanges": "Salvar alterações",
+    "createUser": "Criar usuário",
     "role": "Papéis",
     "pools": "Pools Acessíveis",
     "status": "Status",
@@ -53,7 +66,12 @@
     "loading": "Carregando usuários…",
     "permissions": "Permissões de Módulo",
     "maxConcurrentSessions": "Sessões Simultâneas Máximas",
-    "maxConcurrentSessionsDescription": "Número máximo de contatos simultâneos que este agente pode atender."
+    "maxConcurrentSessionsDescription": "Número máximo de contatos simultâneos que este agente pode atender.",
+    "groupsSection": "Grupos",
+    "group": "Grupo",
+    "colMember": "Membro",
+    "colSupervisor": "Owner",
+    "groupsHint": "Membro ou owner do grupo. O escopo de dados do owner passa a valer no próximo login do usuário."
   },
   "roles": {
     "operator": "Operator",
@@ -113,7 +131,10 @@
     "cancel": "Cancelar",
     "delete": "Excluir",
     "confirm": "Confirmar exclusão?",
-    "edit": "Editar"
+    "edit": "Editar",
+    "status": "Status",
+    "saving": "Salvando…",
+    "applying": "Aplicando…"
   },
   "errors": {
     "selectRole": "Por favor, selecione pelo menos um papel.",

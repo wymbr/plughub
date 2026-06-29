@@ -33,6 +33,19 @@
     "password": "Password",
     "passwordNew": "Password (for new users)",
     "passwordOptional": "Password (leave empty to keep current)",
+    "newPassword": "New password",
+    "passwordBlank": "Leave blank to keep current",
+    "passwordMin8": "At least 8 characters",
+    "fullName": "Full name",
+    "emailPlaceholder": "name@company.com",
+    "poolsNone": "None selected",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "noPoolsConfigured": "No pools configured.",
+    "poolsDescription": "Restricts which pools' data this user can access. Empty = all pools.",
+    "permissionsDescription": "Fine-grained ABAC permissions per module.",
+    "saveChanges": "Save changes",
+    "createUser": "Create user",
     "role": "Roles",
     "pools": "Accessible Pools",
     "status": "Status",
@@ -53,7 +66,12 @@
     "loading": "Loading users…",
     "permissions": "Module Permissions",
     "maxConcurrentSessions": "Max Concurrent Sessions",
-    "maxConcurrentSessionsDescription": "Maximum number of simultaneous contacts this agent can handle."
+    "maxConcurrentSessionsDescription": "Maximum number of simultaneous contacts this agent can handle.",
+    "groupsSection": "Groups",
+    "group": "Group",
+    "colMember": "Member",
+    "colSupervisor": "Owner",
+    "groupsHint": "Member or owner of the group. Owner data scope is applied on the user's next login."
   },
   "roles": {
     "operator": "Operator",
@@ -113,7 +131,10 @@
     "cancel": "Cancel",
     "delete": "Delete",
     "confirm": "Confirm delete?",
-    "edit": "Edit"
+    "edit": "Edit",
+    "status": "Status",
+    "saving": "Saving…",
+    "applying": "Applying…"
   },
   "errors": {
     "selectRole": "Please select at least one role.",

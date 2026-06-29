@@ -2,6 +2,26 @@
 
 ---
 
+## Access ↔ Groups — associação pela tela do usuário + grupo genérico de usuários (2026-06-28)
+
+Generaliza o grupo (Arc 9) para "grupo de usuários" com **member/owner**, e permite associar pelos dois lados.
+
+- **AccessPage** (`/config/access`): nova seção **Grupos** no modal do usuário — colunas **Membro** (→
+  `agent_group_users`) e **Owner** (→ `agent_group_supervisors`). Diff aplicado no Save; como não há rota
+  reversa "grupos do usuário", o modal sonda o detalhe de cada grupo (N+1, ok p/ poucos grupos). Hint avisa
+  que o escopo de owner vale no próximo login (denormalizado no JWT).
+- **GroupsPage** (`/config/groups`): abas reorganizadas **Info · Members · Owners · Agents · Shifts**.
+  `Members` agora = **usuários** (`agent_group_users`) via **checklist com busca**; `Owners` (era
+  "Supervisors") = checklist de usuários; `Agents` (era "Members") mantém os `agent_type_ids` (escopo de IA
+  preservado — `supervised_agent_types`). Componente genérico `GroupUserChecklist` (kind users|supervisors).
+  Renames só em i18n (en+pt); código `supervisor`/`members`/rotas estável.
+- **i18n fixes (mesma área)**: chaves cruas do modal New/Edit User resolvidas — `users.fullName`,
+  `emailPlaceholder`, `newPassword`, `passwordBlank`, `passwordMin8`, `poolsNone`, `selectAll`,
+  `deselectAll`, `noPoolsConfigured`, `poolsDescription`, `permissionsDescription`, `saveChanges`,
+  `createUser`, e `form.status`/`saving`/`applying` (en+pt-BR).
+
+---
+
 ## BUG fix — Access (ABAC): permissões agora carregam na UI + i18n (2026-06-28)
 
 - **Load**: o modal de edição de usuário (`AccessPage`/`UserModal`) abria com **todas as permissões em

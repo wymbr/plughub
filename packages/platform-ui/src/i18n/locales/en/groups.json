@@ -7,13 +7,10 @@
   "noAdminToken": "Admin token required. Please log in with an admin account.",
   "adminTokenPlaceholder": "Admin token (to enable editing)",
   "adminTokenApply": "Apply",
-  "members": "Members",
-  "supervisors": "Supervisors",
-  "shifts": "Shifts",
-
   "tab.info": "Info",
   "tab.members": "Members",
-  "tab.supervisors": "Supervisors",
+  "tab.owners": "Owners",
+  "tab.agents": "Agents",
   "tab.shifts": "Shifts",
 
   "fieldName": "Group name",
@@ -32,14 +29,17 @@
   "remove": "Remove",
   "delete": "Delete group",
 
-  "membersHint": "Add agent_type_ids that belong to this group. Mark as Human for human agent queues.",
-  "memberAgentTypeId": "agent_type_id (e.g. agente_retencao_v1)",
-  "memberIsHuman": "Human",
-  "noMembers": "No members yet.",
+  "membersHint": "Users that belong to this group. Owners can see these members' data in their scope.",
+  "noMembers": "No member users yet.",
+  "searchUsers": "Search users by name or email…",
 
-  "supervisorsHint": "Supervisors are users who can see sessions for this group's agents in their scope.",
-  "supervisorUserId": "user_id (UUID)",
-  "noSupervisors": "No supervisors yet.",
+  "ownersHint": "Owners are users who manage this group and can see its members' and agents' data.",
+  "noOwners": "No owners yet.",
+
+  "agentsHint": "AI agent types in this group's scope. Owners can see these agents' sessions.",
+  "agentTypeIdPlaceholder": "agent_type_id (e.g. agente_retencao_v1)",
+  "agentIsHuman": "Human",
+  "noAgents": "No agents yet.",
 
   "shiftsHint": "Shifts define when a supervisor is active. If no shifts are set, the supervisor is always active.",
   "addShift": "Add Shift",

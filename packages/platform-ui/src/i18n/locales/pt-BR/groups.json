@@ -7,13 +7,10 @@
   "noAdminToken": "Token de administrador necessário. Faça login com uma conta admin.",
   "adminTokenPlaceholder": "Admin token (para habilitar edição)",
   "adminTokenApply": "Aplicar",
-  "members": "Membros",
-  "supervisors": "Supervisores",
-  "shifts": "Turnos",
-
   "tab.info": "Info",
   "tab.members": "Membros",
-  "tab.supervisors": "Supervisores",
+  "tab.owners": "Owners",
+  "tab.agents": "Agentes",
   "tab.shifts": "Turnos",
 
   "fieldName": "Nome do grupo",
@@ -32,14 +29,17 @@
   "remove": "Remover",
   "delete": "Excluir grupo",
 
-  "membersHint": "Adicione agent_type_ids que pertencem a este grupo. Marque como Humano para filas de agentes humanos.",
-  "memberAgentTypeId": "agent_type_id (ex: agente_retencao_v1)",
-  "memberIsHuman": "Humano",
-  "noMembers": "Nenhum membro ainda.",
+  "membersHint": "Usuários que pertencem a este grupo. Os owners enxergam os dados destes membros no seu escopo.",
+  "noMembers": "Nenhum usuário membro ainda.",
+  "searchUsers": "Buscar usuários por nome ou e-mail…",
 
-  "supervisorsHint": "Supervisores são usuários que podem ver sessões dos agentes deste grupo em seu escopo.",
-  "supervisorUserId": "user_id (UUID)",
-  "noSupervisors": "Nenhum supervisor ainda.",
+  "ownersHint": "Owners são usuários que gerenciam este grupo e enxergam os dados dos seus membros e agentes.",
+  "noOwners": "Nenhum owner ainda.",
+
+  "agentsHint": "Tipos de agente de IA no escopo deste grupo. Os owners enxergam as sessões destes agentes.",
+  "agentTypeIdPlaceholder": "agent_type_id (ex: agente_retencao_v1)",
+  "agentIsHuman": "Humano",
+  "noAgents": "Nenhum agente ainda.",
 
   "shiftsHint": "Turnos definem quando um supervisor está ativo. Se não houver turnos, o supervisor está sempre ativo.",
   "addShift": "Adicionar Turno",
