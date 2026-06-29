@@ -24,6 +24,7 @@ import 'react-resizable/css/styles.css'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import { AddCardModal } from '@/dashboard/AddCardModal'
+import { RoleDefaultsModal } from '@/modules/dashboards/RoleDefaultsModal'
 import { CardRenderer } from '@/dashboard/CardRenderer'
 import { FilterBar } from '@/dashboard/FilterBar'
 import { FilterConfigPanel } from '@/dashboard/FilterConfigPanel'
@@ -249,6 +250,7 @@ export default function DashboardsPage() {
   // Modals
   const [showAddCard,     setShowAddCard]     = useState(false)
   const [showNewTemplate, setShowNewTemplate] = useState(false)
+  const [showRoleDefaults, setShowRoleDefaults] = useState(false)
   const [saving, setSaving] = useState(false)
 
   // ── Grid layout sync ────────────────────────────────────────────────────────
@@ -350,6 +352,14 @@ export default function DashboardsPage() {
               }`}
             >
               {editMode ? t('exitEdit') : t('editMode')}
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => setShowRoleDefaults(true)}
+              className="text-xs px-3 py-1.5 rounded border border-border text-muted hover:bg-surface-muted transition-colors"
+            >
+              {t('roleDefaults.button')}
             </button>
           )}
           {editMode && (
@@ -497,6 +507,7 @@ export default function DashboardsPage() {
                     </span>
                     {editMode && (
                       <button
+                        onMouseDown={e => e.stopPropagation()}
                         onClick={() => removeCard(card.id)}
                         className="text-muted-light hover:text-red text-sm leading-none ml-2 flex-shrink-0"
                         title={t('deleteCardTitle')}
@@ -538,6 +549,14 @@ export default function DashboardsPage() {
             setShowNewTemplate(false)
           }}
           onClose={() => setShowNewTemplate(false)}
+        />
+      )}
+      {showRoleDefaults && (
+        <RoleDefaultsModal
+          tenantId={tenantId}
+          adminToken={adminToken}
+          templates={templates}
+          onClose={() => setShowRoleDefaults(false)}
         />
       )}
     </div>

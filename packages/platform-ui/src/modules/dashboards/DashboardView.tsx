@@ -19,18 +19,35 @@ import { CardRenderer } from '@/dashboard/CardRenderer'
 import { FilterBar } from '@/dashboard/FilterBar'
 import {
   loadPersonalLayout,
+  loadRoleCatalog,
   useDefaultTemplateId,
   useTemplate,
   useTemplates,
+  type RoleCatalog,
 } from '@/api/dashboard-hooks'
+import { ENDPOINT_CATALOG } from '@/dashboard/catalog'
 import type { DashboardCard, GlobalFilter, TimeseriesCardConfig } from '@/types'
 
 const COLS = 12
+const CATALOG_BY_ENDPOINT = new Map(ENDPOINT_CATALOG.map(e => [e.endpoint, e.id]))
 
 function cardTitle(card: DashboardCard): string {
   if ('title' in card && (card as { title?: string }).title) return (card as { title: string }).title
   const cfg = (card as { config?: TimeseriesCardConfig }).config
   return cfg?.title ?? (card as { type?: string }).type ?? ''
+}
+
+/** Drop cards whose catalog entry is not in the role's allowlist.
+ *  Empty/absent allowlist = no restriction; unknown/legacy cards are kept. */
+function reconcileCards(cards: DashboardCard[], allowed: string[] | null): DashboardCard[] {
+  if (!allowed || allowed.length === 0) return cards
+  return cards.filter(c => {
+    const ep = (c as { query?: { endpoint?: string } }).query?.endpoint
+    if (!ep) return true
+    const id = CATALOG_BY_ENDPOINT.get(ep)
+    if (!id) return true
+    return allowed.includes(id)
+  })
 }
 
 export default function DashboardView() {
@@ -40,15 +57,31 @@ export default function DashboardView() {
   const userId     = session?.userId ?? ''
   const adminToken = session?.accessToken ?? ''
 
+  const role = session?.role ?? ''
   const { templates, loading: tmplLoading } = useTemplates(tenantId, adminToken)
   const defaultTemplateId = useDefaultTemplateId(session?.moduleConfig)
 
+  // Per-role allowlist + starter (undefined = still loading)
+  const [roleCatalog, setRoleCatalog] = useState<RoleCatalog | null | undefined>(undefined)
+  useEffect(() => {
+    if (!tenantId || !role) { setRoleCatalog(null); return }
+    let cancelled = false
+    loadRoleCatalog(tenantId, role)
+      .then(rc => { if (!cancelled) setRoleCatalog(rc) })
+      .catch(() => { if (!cancelled) setRoleCatalog(null) })
+    return () => { cancelled = true }
+  }, [tenantId, role])
+
+  // Resolution: role starter → module default → first template (wait for role catalog).
   const [activeTemplateId, setActiveTemplateId] = useState<string | null>(null)
   useEffect(() => {
     if (activeTemplateId) return
-    if (defaultTemplateId) setActiveTemplateId(defaultTemplateId)
-    else if (templates.length > 0) setActiveTemplateId(templates[0].template_id)
-  }, [defaultTemplateId, templates, activeTemplateId])
+    if (roleCatalog === undefined) return
+    const starter = roleCatalog?.starter_template_id
+    if (starter) { setActiveTemplateId(starter); return }
+    if (defaultTemplateId) { setActiveTemplateId(defaultTemplateId); return }
+    if (templates.length > 0) setActiveTemplateId(templates[0].template_id)
+  }, [roleCatalog, defaultTemplateId, templates, activeTemplateId])
 
   const { template, loading: tLoading } = useTemplate(activeTemplateId, adminToken, tenantId)
 
@@ -87,9 +120,10 @@ export default function DashboardView() {
     setRuntimeFilters(d)
   }
 
-  const layout: Layout[] = cards.map(c => ({ i: c.id, x: c.x, y: c.y, w: c.w, h: c.h }))
-  const loading = tmplLoading || tLoading
-  const empty   = !loading && (!template || cards.length === 0)
+  const visibleCards = reconcileCards(cards, roleCatalog?.allowed ?? null)
+  const layout: Layout[] = visibleCards.map(c => ({ i: c.id, x: c.x, y: c.y, w: c.w, h: c.h }))
+  const loading = tmplLoading || tLoading || roleCatalog === undefined
+  const empty   = !loading && (!template || visibleCards.length === 0)
 
   return (
     <div ref={gridRef}>
@@ -121,7 +155,7 @@ export default function DashboardView() {
           compactType="vertical"
           margin={[12, 12]}
         >
-          {cards.map(card => (
+          {visibleCards.map(card => (
             <div
               key={card.id}
               className="bg-white rounded-lg border border-border shadow-sm overflow-hidden flex flex-col"

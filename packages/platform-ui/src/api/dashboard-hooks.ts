@@ -161,6 +161,45 @@ export async function loadPersonalLayout(
   }
 }
 
+// ─── Role catalog (F3: allowlist + starter per role) ──────────────────────────
+//
+// Per-role config stored under "role_catalog:{role}":
+//   { allowed: string[] /* catalog entry ids */, starter_template_id: string | null }
+// `allowed` constrains what a user may add (F4 picker) and reconciles existing cards;
+// `starter_template_id` is the default dashboard a role lands on (before personal layout).
+
+export interface RoleCatalog {
+  allowed:             string[]
+  starter_template_id: string | null
+}
+
+function roleCatalogKey(role: string): string {
+  return `role_catalog:${role}`
+}
+
+export async function loadRoleCatalog(tenantId: string, role: string): Promise<RoleCatalog | null> {
+  try {
+    const raw = await configGet('dashboards', roleCatalogKey(role), undefined, tenantId)
+    if (!raw || typeof raw !== 'object') return null
+    const r = raw as Partial<RoleCatalog>
+    return {
+      allowed:             Array.isArray(r.allowed) ? r.allowed.filter(x => typeof x === 'string') : [],
+      starter_template_id: typeof r.starter_template_id === 'string' ? r.starter_template_id : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+export async function saveRoleCatalog(
+  tenantId: string,
+  role: string,
+  catalog: RoleCatalog,
+  adminToken?: string,
+): Promise<void> {
+  await configPut('dashboards', roleCatalogKey(role), catalog, adminToken ?? '', tenantId)
+}
+
 // ─── React hooks ──────────────────────────────────────────────────────────────
 
 interface TemplateListState {

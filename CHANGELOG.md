@@ -2,6 +2,22 @@
 
 ---
 
+## Dashboards F3 — allowlist + starter por role (2026-06-28)
+
+- **Storage** (`dashboard-hooks`): `role_catalog:{role}` = `{ allowed: string[] (catalog ids), starter_template_id }`
+  no Config API namespace `dashboards`; `load/saveRoleCatalog`.
+- **DashboardView**: resolução passa a ser **starter da role → default do `module_config` → 1º template**;
+  **reconcile** filtra cards fora da allowlist (vazia/ausente = sem restrição; cards legados/desconhecidos
+  mantidos).
+- **Admin** (Config → Dashboards): botão **"Padrões por papel"** → `RoleDefaultsModal` p/ definir, por role,
+  o template starter + a allowlist (checklist do `ENDPOINT_CATALOG`). Salva no `role_catalog`.
+- **Fixes pegados no teste**: (a) **remoção de card** no builder — o `×` era engolido pelo drag do
+  react-grid-layout; `onMouseDown stopPropagation` no botão resolve. (b) **labels do catálogo em PT no EN** —
+  as chaves `catalog.{id}.label` (já referenciadas pelo `AddCardModal` com fallback) nunca existiam; adicionadas
+  (en+pt) → `AddCardModal` e `RoleDefaultsModal` agora respeitam o idioma.
+
+---
+
 ## Dashboards F2 — consumo no Home (view-only, todas as roles) (2026-06-28)
 
 Primeira fatia do modelo de consumo (spec `docs/product/dashboard-catalog-coverage-spec.md`).
