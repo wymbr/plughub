@@ -1099,7 +1099,7 @@ export function DimensionContestPanel13({
                     <textarea
                       className={`w-full border rounded px-3 py-2 text-sm resize-none ${tooFew ? 'border-red/30' : 'border-contested/30'}`}
                       rows={3}
-                      placeholder={t('contest.justificationPlaceholder')}
+                      placeholder={t('contest.dimensionJustificationPlaceholder')}
                       value={s.reason}
                       onChange={e => setSel(prev => ({
                         ...prev,
@@ -1211,7 +1211,7 @@ function DetailPanel({
           </div>
         </div>
         <ScorePill score={result.overall_score} />
-        <StatusBadge status={result.eval_status} t={t} />
+        <ResultStateBadge r={result} t={t} />
         {result.locked && <span title={t('detail.locked')}>🔒</span>}
         {result.campaign_id && (
           <button

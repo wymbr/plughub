@@ -1310,6 +1310,9 @@ pool hooks genéricos (sem campo dedicado).
   `submit_ai_review` → gate T12 (**agente/sistema**, `_require_admin`); `seed/flush-synthetic` → tooling
   dev/demo (botão admin). `sampling_rule`/`calibration_note` POST não são chamados pela UI.
 
+  > **Nota (2026-07-01)**: a perna agente/sistema deste item foi re-roteada para o **Agent Principal**
+  > (identidade de máquina genérica), não mais um token de serviço ad-hoc — ver decisão no detalhe abaixo.
+
   **DESENHO FINAL FECHADO (2026-06-25) — princípio: quality = ABAC puro p/ usuário; admin token só p/
   serviço/infra (domínio configuration).**
   - **Surface de USUÁRIO do quality → ABAC, admin token REMOVIDO.** Novo campo **`curar`** no módulo
@@ -1328,25 +1331,89 @@ pool hooks genéricos (sem campo dedicado).
     `blind_resolve`, server-side).
   - **Verificação**: smoke 403 sem grant `curar` / 200 com grant; endpoints de serviço 401 sem token.
   - **Seed**: grants concedidos pela tela (como no G-UI) — opcional semear um curador demo em `seed_auth.py`.
-  Impl. pendente: slice próprio de "auth do módulo quality" (catálogo + endpoints + UI Bearer + smoke).
-- **G-UI — UI de review/contestação humana existe mas não surfaça** *(crítico p/ uso; confirmado por screenshot 2026-06-17)*:
-  `AvaliacoesPage` (`/evaluation/evaluations`, roteada + no nav Quality) lista resultados, mas a coluna **Actions vem
-  "—" para todos** (inclusive o resultado real). Os painéis `HumanReviewPanel`/`DimensionContestPanel13`/`ReviewPanel`/
-  `ContestPanel` (drill-down) só renderizam quando `result.available_actions` inclui `review`/`contest` — e esse campo é
-  computado **server-side por ABAC** (`evaluation.revisar`/`contestar`); os usuários demo (Admin incluso) não têm esses
-  grants no `module_config` → as ações nunca aparecem. Some-se: (a) a tela exibe `eval_status` ("Submitted"), **não** o
-  `contestation_state` (nosso `closed_upheld` aparece como "Submitted"); (b) coluna Date "—"; (c) sem `evaluation_finalized`
-  (G-FIN) o status nunca evolui. A página ainda é **híbrida de 2 contratos** (Arc 6 `/contestations`+`reviewResult` e
-  Arc 13 `/instances/.../contest|review|threads`). Trabalho: provisionar os grants ABAC dos papéis (revisor/avaliado),
-  unificar no contrato Arc 13, surfaçar `contestation_state`/threads/`finalized`, e validar E2E.
+
+  **DECISÃO (2026-07-01): a perna "AGENTE/SISTEMA" deste item NÃO será resolvida como credencial de serviço
+  ad-hoc (token único compartilhado).** Em vez disso, será resolvida de forma genérica pelo item **Agent
+  Principal — identidade de máquina p/ agentes IA** (`subject_type:"agent"`, ver seção própria neste arquivo):
+  cada agente/serviço chamador de `pre-review`/`ai-review`/`seed-flush` passa a ter **principal_id próprio**
+  (não um token único), com capability derivada do `agent_type` e audit por `principal_id`. Isso substitui o
+  "service credential" único como o mecanismo de auth desses endpoints — o gate em si (exigir credencial em vez
+  de header aberto) continua necessário, só que a **identidade por trás da credencial** vem do Agent Principal,
+  não de um relabel do admin-token. A perna de **usuário humano** (`curar` ABAC) segue como desenhado acima,
+  não é afetada por esta decisão.
+  Impl. pendente: (a) perna humana `curar` — slice próprio (catálogo + endpoints + UI Bearer + smoke);
+  (b) perna agente/sistema — depende do Agent Principal (F1–F4) estar implementado antes de gatear
+  `pre-review`/`ai-review`/`seed-flush` por `principal_id`.
+- **G-UI — UI de review/contestação humana existe mas não surfaça** *(bullet ORIGINAL de 2026-06-17, stale —
+  recon 2026-07-01 encontrou a maior parte já corrigida)* — **✅ VALIDADO E2E AO VIVO (2026-07-01)**: operator
+  contestou uma avaliação `open` (badge virou "Under review (r1)"); supervisor revisou por dimensão
+  (`HumanReviewPanel`, upheld/revised com score override) e o resultado finalizou como `closed_revised`
+  (nota da dimensão ajustada 0.0→9.0). Ciclo contest→review→finalize confirmado funcional na UI real, não só
+  via smoke/API. Ver detalhe abaixo.
+
+  **Recon 2026-07-01 — o que já estava resolvido (nenhuma ação nova):**
+  - `infra/seed/seed_auth.py` **já concede** `evaluation.revisar` (read_write) a `supervisor@plughub.local` e
+    `evaluation.contestar` (read_write) a `operator@plughub.local`. O achado original ("os usuários demo, Admin
+    incluso, não têm grants") só é verdade para o **Admin** — que não é o papel certo para revisar/contestar de
+    qualquer forma. Testar com `supervisor@`/`operator@`, não com Admin.
+  - A tabela principal da `AvaliacoesPage` **já usa `ResultStateBadge`** (T9-A1) — mostra `result_state`+round+
+    `finalize_reason` real (`closed_upheld` etc.), não `eval_status` genérico.
+  - A coluna **Date já é populada** (`finalized_at` quando finalizado, `deadline_at` quando há ação pendente,
+    senão `created_at` + tempo decorrido no estado) — não é mais "—".
+  - `available_actions` é computado **server-side** por `_compute_available_actions` (router.py), função pura
+    com suíte própria (`tests/test_available_actions.py`, T10) cobrindo result_state+round+posse.
+  - Timeline de `ContestationThread` **já renderiza** no drill-down (`DimensionThreadCard`, dentro do
+    `DetailPanel`) quando a instance tem threads Arc 13.
+  - `evaluation_finalized` (G-FIN) já dispara pelo `submit_review`/`finalize_evaluation` — o status evolui.
+
+  **Corrigido nesta sessão (2026-07-01)**: o cabeçalho do `DetailPanel` (drill-down) ainda usava
+  `<StatusBadge status={result.eval_status}>` (mostrava "Submitted" genérico) em vez do `ResultStateBadge`
+  canônico já usado na tabela — inconsistência real, agora alinhada. Arquivo:
+  `packages/platform-ui/src/modules/evaluation/AvaliacoesPage.tsx`.
+
+  **✅ Validado ao vivo (2026-07-01)**: com o fix de dado da campanha (`pool_id` alinhado a
+  `evaluation_pool_id`, ver bug acima) + uma linha `open` com `evaluated_user_id` = UUID real do operator, o
+  botão Contest apareceu corretamente para `operator@plughub.local` no drill-down (`DimensionContestPanel13`).
+  A unificação Arc 6×Arc 13 (o código ainda tem os dois caminhos — `isArc13` decide qual painel renderizar)
+  segue como compat intencional, não bug.
+
+  **i18n — chaves do Arc 13 nunca foram adicionadas ✅ CORRIGIDO (2026-07-01)**: `DimensionContestPanel13`/
+  `HumanReviewPanel` usavam `contest.dimensionList`/`minWords`/`wordsRemaining`/`noDimensions` e
+  `review.dimensionDecisions`/`uphold`/`revise`/`newScore`/`justification`/`minWords`/
+  `justificationPlaceholder`/`allFieldsRequired`/`noContestedDimensions`/`cancel`/`submitDimensionReview` —
+  nenhuma dessas chaves existia em `en/evaluation.json`/`pt-BR/evaluation.json` (só as do Arc 6 por-critério),
+  então apareciam cruas na tela (violava o i18n Invariant do CLAUDE.md). Adicionadas nos dois locales.
+  **Falta**: confirmar o fluxo de Review (login como `admin@plughub.local` após o operator contestar) e
+  rebuildar `platform-ui` para essas chaves entrarem em produção.
 - **Superfícies a confirmar/faltando**: avaliado **acompanhar/contestar as próprias avaliações** (self-view existe no
   código, idem gated por ABAC); fila de revisão do supervisor ("Awaiting my action" depende de `available_actions`);
   timeline de `ContestationThread` no drill-down; páginas **Curation**/**Calibration** (Arc 13 Fase H) — existem mas
   nunca validadas com dado real (só seeder).
+
+  **BUG REAL encontrado ao vivo (2026-07-01) — self-view quebra por `pool_id` administrativo divergente do
+  operacional.** `_compute_result_scope` (router.py) filtra linhas de `evaluation.results` por
+  `evaluated_user_ids` **E** `accessible_pools` do JWT em **AND** (`list_results`/`db.py`: usa `c.pool_id` da
+  campanha, não `c.evaluation_pool_id`). Isso significa que mesmo a pessoa dona da avaliação (`evaluated_user_id
+  == jwt.sub`) só a enxerga se o `pool_id` **administrativo** da campanha estiver no `accessible_pools` dela —
+  quando o `pool_id` da campanha diverge do `evaluation_pool_id` (pool operacional real onde o agente
+  trabalhou), o próprio avaliado fica bloqueado de ver/contestar sua avaliação. Reproduzido na campanha demo
+  `teste_demo` (`pool_id='teste_demo'`, um pool dummy, vs `evaluation_pool_id='retencao_humano'`, o pool real);
+  `operator@plughub.local` tem `accessible_pools=[retencao_humano, humanoxxx]` e **é** o `evaluated_user_id` de
+  uma avaliação real dessa campanha, mas via API viu 0 resultados até alinharmos `pool_id`. O código já documenta
+  a intenção de espelhar os dois campos ("mesmo pool") quando só um é setado no create — aqui divergiam (dado
+  legado/de teste, anterior à fatia S1 que passou a espelhar no create).
+  **Fix de dado recomendado no demo (ainda não confirmado como aplicado)**: `UPDATE evaluation.campaigns SET
+  pool_id='retencao_humano' WHERE id='evcampaign_8ce82c4110d24d5a903d270649f7519f'` (alinhar ao
+  `evaluation_pool_id`) — desbloqueia self-view do operator/admin nessa campanha sem mexer em código.
+  **Fix de código pendente (não aplicado ainda, discutir prioridade)**: `_compute_result_scope`/`list_results`
+  deveriam tratar posse (self, `evaluated_user_id == sub`) como **independente** do `accessible_pools`
+  administrativo — ver sua própria avaliação para contestar não deveria depender de ter acesso ao pool que
+  administra a campanha. Hoje a interseção (AND) dos dois eixos é cega a esse caso.
 - ~~**Confirmado ao vivo (2026-06-17)**: probe contest→review→`closed_upheld` sem `evaluation_finalized`~~ →
   **obsoleto: corrigido pelos T1–T11** (finalize_evaluation no submit_review). Re-validado 2026-06-25 (smoke).
-- **Próximo (gaps remanescentes)**: G-UI (grants ABAC p/ as ações surgirem), G-S2.4 (motor de review por
-  workflow finalizar, não só `lock`), G-PROBE (auth ABAC nos endpoints de escrita); e exercitar Fluxo 2
+- **Próximo (gaps remanescentes)**: G-UI (só falta validação ao vivo pós-fix de 2026-07-01, ver acima),
+  G-S2.4 (aposentado por decisão — ver acima, não bloqueia), G-PROBE (perna humana `curar` — slice de auth
+  própria; perna agente/sistema — depende do Agent Principal); e exercitar Fluxo 2
   (curadoria/`calibration_signal`→CalibrationNote→KB), que só rodou via seeder.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**

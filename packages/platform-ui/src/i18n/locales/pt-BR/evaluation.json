@@ -556,7 +556,18 @@
     "noteRequired": "Adicione ao menos uma nota de revisão para ajuste/rejeição",
     "noteOptional": "Nota opcional",
     "saving": "Salvando…",
-    "submitReview": "Enviar Revisão"
+    "submitReview": "Enviar Revisão",
+    "dimensionDecisions": "Decisões por Dimensão",
+    "uphold": "Manter",
+    "revise": "Revisar nota",
+    "newScore": "Nova nota",
+    "justification": "Justificativa",
+    "minWords": "palavras mín",
+    "justificationPlaceholder": "Explique sua decisão (mín. 20 palavras)…",
+    "allFieldsRequired": "Toda decisão exige justificativa (e nova nota, se for revisar)",
+    "noContestedDimensions": "Nenhuma dimensão contestada",
+    "cancel": "Cancelar",
+    "submitDimensionReview": "Enviar Revisão"
   },
   "contest": {
     "title": "Contestar",
@@ -574,7 +585,12 @@
     },
     "cancel": "Cancelar",
     "submit": "Enviar Contestação ({{count}})",
-    "submitting": "Enviando…"
+    "submitting": "Enviando…",
+    "noDimensions": "Nenhuma dimensão contestável",
+    "dimensionList": "Dimensões para contestar",
+    "minWords": "palavras mín",
+    "wordsRemaining": "{{count}} palavra(s) restante(s)",
+    "dimensionJustificationPlaceholder": "Explique sua discordância (mín. 10 palavras)…"
   },
   "reports": {
     "title":       "Relatórios de Avaliação",

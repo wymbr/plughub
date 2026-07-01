@@ -556,7 +556,18 @@
     "noteRequired": "Add at least one review note for adjustment/rejection",
     "noteOptional": "Optional note",
     "saving": "Saving…",
-    "submitReview": "Submit Review"
+    "submitReview": "Submit Review",
+    "dimensionDecisions": "Dimension Decisions",
+    "uphold": "Uphold",
+    "revise": "Revise",
+    "newScore": "New score",
+    "justification": "Justification",
+    "minWords": "words min",
+    "justificationPlaceholder": "Explain your decision (min 20 words)…",
+    "allFieldsRequired": "All decisions require a justification (and a new score when revising)",
+    "noContestedDimensions": "No contested dimensions",
+    "cancel": "Cancel",
+    "submitDimensionReview": "Submit Review"
   },
   "contest": {
     "title": "Contest",
@@ -574,7 +585,12 @@
     },
     "cancel": "Cancel",
     "submit": "Submit Contestation ({{count}})",
-    "submitting": "Submitting…"
+    "submitting": "Submitting…",
+    "noDimensions": "No contestable dimensions",
+    "dimensionList": "Dimensions to contest",
+    "minWords": "words min",
+    "wordsRemaining": "{{count}} more word(s) required",
+    "dimensionJustificationPlaceholder": "Explain your disagreement (min 10 words)…"
   },
   "reports": {
     "title":       "Evaluation Reports",
