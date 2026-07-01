@@ -128,15 +128,6 @@ CREATE TABLE IF NOT EXISTS auth.agent_groups (
 )
 """
 
-DDL_AGENT_GROUP_MEMBERS = """
-CREATE TABLE IF NOT EXISTS auth.agent_group_members (
-    group_id      UUID    NOT NULL REFERENCES auth.agent_groups(group_id) ON DELETE CASCADE,
-    agent_type_id TEXT    NOT NULL,
-    is_human      BOOLEAN NOT NULL DEFAULT false,
-    PRIMARY KEY (group_id, agent_type_id)
-)
-"""
-
 DDL_AGENT_GROUP_USERS = """
 CREATE TABLE IF NOT EXISTS auth.agent_group_users (
     group_id UUID NOT NULL REFERENCES auth.agent_groups(group_id) ON DELETE CASCADE,
@@ -150,19 +141,6 @@ CREATE TABLE IF NOT EXISTS auth.agent_group_supervisors (
     group_id UUID NOT NULL REFERENCES auth.agent_groups(group_id) ON DELETE CASCADE,
     user_id  UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
     PRIMARY KEY (group_id, user_id)
-)
-"""
-
-DDL_AGENT_GROUP_SHIFTS = """
-CREATE TABLE IF NOT EXISTS auth.agent_group_shifts (
-    shift_id           UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-    group_id           UUID    NOT NULL REFERENCES auth.agent_groups(group_id) ON DELETE CASCADE,
-    supervisor_user_id UUID    NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    days_of_week       INT[]   NOT NULL DEFAULT '{}',
-    time_start         TIME    NOT NULL,
-    time_end           TIME    NOT NULL,
-    timezone           TEXT    NOT NULL DEFAULT 'UTC',
-    active             BOOLEAN NOT NULL DEFAULT true
 )
 """
 
@@ -184,12 +162,12 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
             await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
             await conn.execute(DDL_MIGRATE_ABAC_MASCARAMENTO)
-            # Arc 9 — Agent Groups
+            # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
+            # docs/arcos/arc9-agent-groups.md; tables may still exist physically
+            # in older DBs, just no longer created/read/written by this service)
             await conn.execute(DDL_AGENT_GROUPS)
-            await conn.execute(DDL_AGENT_GROUP_MEMBERS)
             await conn.execute(DDL_AGENT_GROUP_USERS)
             await conn.execute(DDL_AGENT_GROUP_SUPERVISORS)
-            await conn.execute(DDL_AGENT_GROUP_SHIFTS)
             await conn.execute(DDL_AGENT_GROUPS_IDX_TENANT)
     logger.info("auth schema ensured")
 
@@ -620,10 +598,10 @@ async def list_groups(
     rows = await pool.fetch(
         """
         SELECT g.group_id, g.tenant_id, g.name, g.description, g.created_at, g.updated_at,
-               COUNT(DISTINCT m.agent_type_id) AS member_count,
-               COUNT(DISTINCT s.user_id)        AS supervisor_count
+               COUNT(DISTINCT m.user_id) AS member_count,
+               COUNT(DISTINCT s.user_id) AS supervisor_count
         FROM auth.agent_groups AS g
-        LEFT JOIN auth.agent_group_members    AS m ON m.group_id = g.group_id
+        LEFT JOIN auth.agent_group_users       AS m ON m.group_id = g.group_id
         LEFT JOIN auth.agent_group_supervisors AS s ON s.group_id = g.group_id
         WHERE g.tenant_id = $1
         GROUP BY g.group_id, g.tenant_id, g.name, g.description, g.created_at, g.updated_at
@@ -676,49 +654,6 @@ async def delete_group(pool: asyncpg.Pool, group_id: str) -> bool:
         uuid.UUID(group_id),
     )
     return result.endswith("1")
-
-
-# ── Group members ──────────────────────────────────────────────────────────────
-
-async def add_group_member(
-    pool: asyncpg.Pool,
-    group_id: str,
-    agent_type_id: str,
-    is_human: bool = False,
-) -> dict[str, Any]:
-    row = await pool.fetchrow(
-        """
-        INSERT INTO auth.agent_group_members (group_id, agent_type_id, is_human)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (group_id, agent_type_id) DO UPDATE SET is_human = EXCLUDED.is_human
-        RETURNING group_id, agent_type_id, is_human
-        """,
-        uuid.UUID(group_id), agent_type_id, is_human,
-    )
-    return dict(row)
-
-
-async def remove_group_member(
-    pool: asyncpg.Pool,
-    group_id: str,
-    agent_type_id: str,
-) -> bool:
-    result = await pool.execute(
-        "DELETE FROM auth.agent_group_members WHERE group_id = $1 AND agent_type_id = $2",
-        uuid.UUID(group_id), agent_type_id,
-    )
-    return result.endswith("1")
-
-
-async def list_group_members(
-    pool: asyncpg.Pool,
-    group_id: str,
-) -> list[dict[str, Any]]:
-    rows = await pool.fetch(
-        "SELECT group_id, agent_type_id, is_human FROM auth.agent_group_members WHERE group_id = $1 ORDER BY agent_type_id",
-        uuid.UUID(group_id),
-    )
-    return [dict(r) for r in rows]
 
 
 # ── Group users (human agents) ─────────────────────────────────────────────────
@@ -817,204 +752,50 @@ async def list_group_supervisors(
     return [dict(r) for r in rows]
 
 
-# ── Group shifts ───────────────────────────────────────────────────────────────
-
-async def create_group_shift(
-    pool: asyncpg.Pool,
-    group_id: str,
-    supervisor_user_id: str,
-    days_of_week: list[int],
-    time_start: str,
-    time_end: str,
-    timezone: str = "UTC",
-    active: bool = True,
-) -> dict[str, Any]:
-    row = await pool.fetchrow(
-        """
-        INSERT INTO auth.agent_group_shifts
-            (group_id, supervisor_user_id, days_of_week, time_start, time_end, timezone, active)
-        VALUES ($1, $2, $3, $4::time, $5::time, $6, $7)
-        RETURNING shift_id, group_id, supervisor_user_id, days_of_week,
-                  time_start, time_end, timezone, active
-        """,
-        uuid.UUID(group_id), uuid.UUID(supervisor_user_id),
-        days_of_week, time_start, time_end, timezone, active,
-    )
-    return _serialize_shift(dict(row))
-
-
-async def update_group_shift(
-    pool: asyncpg.Pool,
-    shift_id: str,
-    *,
-    supervisor_user_id: str | None = None,
-    days_of_week: list[int] | None = None,
-    time_start: str | None = None,
-    time_end: str | None = None,
-    timezone: str | None = None,
-    active: bool | None = None,
-) -> dict[str, Any] | None:
-    sets, params = [], []
-    i = 1
-    if supervisor_user_id is not None:
-        sets.append(f"supervisor_user_id = ${i}"); params.append(uuid.UUID(supervisor_user_id)); i += 1
-    if days_of_week is not None:
-        sets.append(f"days_of_week = ${i}"); params.append(days_of_week); i += 1
-    if time_start is not None:
-        sets.append(f"time_start = ${i}::time"); params.append(time_start); i += 1
-    if time_end is not None:
-        sets.append(f"time_end = ${i}::time"); params.append(time_end); i += 1
-    if timezone is not None:
-        sets.append(f"timezone = ${i}"); params.append(timezone); i += 1
-    if active is not None:
-        sets.append(f"active = ${i}"); params.append(active); i += 1
-    if not sets:
-        row = await pool.fetchrow(
-            "SELECT * FROM auth.agent_group_shifts WHERE shift_id = $1",
-            uuid.UUID(shift_id),
-        )
-        return _serialize_shift(dict(row)) if row else None
-    params.append(uuid.UUID(shift_id))
-    row = await pool.fetchrow(
-        f"UPDATE auth.agent_group_shifts SET {', '.join(sets)} WHERE shift_id = ${i} "
-        f"RETURNING shift_id, group_id, supervisor_user_id, days_of_week, time_start, time_end, timezone, active",
-        *params,
-    )
-    return _serialize_shift(dict(row)) if row else None
-
-
-async def delete_group_shift(pool: asyncpg.Pool, shift_id: str) -> bool:
-    result = await pool.execute(
-        "DELETE FROM auth.agent_group_shifts WHERE shift_id = $1",
-        uuid.UUID(shift_id),
-    )
-    return result.endswith("1")
-
-
-async def list_group_shifts(
-    pool: asyncpg.Pool,
-    group_id: str,
-) -> list[dict[str, Any]]:
-    rows = await pool.fetch(
-        "SELECT shift_id, group_id, supervisor_user_id, days_of_week, time_start, time_end, timezone, active "
-        "FROM auth.agent_group_shifts WHERE group_id = $1 ORDER BY time_start",
-        uuid.UUID(group_id),
-    )
-    return [_serialize_shift(dict(r)) for r in rows]
-
-
-def _serialize_shift(row: dict[str, Any]) -> dict[str, Any]:
-    """Serialize TIME columns to HH:MM:SS strings for JSON safety."""
-    import datetime as _dt
-    for key in ("time_start", "time_end"):
-        v = row.get(key)
-        if isinstance(v, _dt.time):
-            row[key] = v.strftime("%H:%M:%S")
-    for key in ("group_id", "shift_id", "supervisor_user_id"):
-        if key in row and row[key] is not None:
-            row[key] = str(row[key])
-    return row
-
-
 # ── Supervisor scope resolution (called at login/refresh) ─────────────────────
 
 async def resolve_supervisor_scope(
     pool: asyncpg.Pool,
     user_id: str,
     role: str,
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str]]:
     """
-    Returns (supervised_groups, supervised_agent_types, supervised_user_ids).
+    Returns (supervised_groups, supervised_user_ids).
 
-    Algorithm (per spec):
+    Algorithm:
       1. Find all groups where user is a supervisor.
-      2. For each group: if shifts exist for this user → include only if a shift is
-         currently active (day_of_week match + time window in shift.timezone).
-         If no shifts exist for this user in the group → always include.
-      3. Expand included groups → agent_type_ids (members) and user_ids (group users).
-      4. Admin role always gets [] (no restriction).
-    """
-    import datetime as _dt
-    import zoneinfo
+      2. Expand those groups → user_ids (group members).
+      3. Admin role always gets [] (no restriction).
 
+    Note (2026-07-02): shift-based time-windowing and the agent_type_id
+    expansion (Arc 9 original design) were removed — see
+    docs/arcos/arc9-agent-groups.md. Differing shift needs are now modeled as
+    separate groups instead of per-member time windows, and Pool.agent_kind
+    is the single source of truth for human/AI typing (previously duplicated,
+    unvalidated, in agent_group_members). Supervisor scope is membership-only;
+    pool-level row scoping is handled separately by `accessible_pools` (Arc 7).
+    """
     if role == "admin":
-        return [], [], []
+        return [], []
 
     uid = uuid.UUID(user_id)
-    # Step 1: groups supervised by this user
     sup_rows = await pool.fetch(
         "SELECT group_id FROM auth.agent_group_supervisors WHERE user_id = $1",
         uid,
     )
     if not sup_rows:
-        return [], [], []
+        return [], []
 
-    now_utc = _dt.datetime.now(_dt.timezone.utc)
-    active_group_ids: list[uuid.UUID] = []
+    group_ids = [row["group_id"] for row in sup_rows]
 
-    for row in sup_rows:
-        gid = row["group_id"]
-        # Check if this group has shifts for this user
-        shift_rows = await pool.fetch(
-            """
-            SELECT days_of_week, time_start, time_end, timezone
-            FROM auth.agent_group_shifts
-            WHERE group_id = $1 AND supervisor_user_id = $2 AND active = true
-            """,
-            gid, uid,
-        )
-        if not shift_rows:
-            # No shifts for this user in this group → always active
-            active_group_ids.append(gid)
-            continue
-        # Check if any shift is currently active
-        is_active = False
-        for s in shift_rows:
-            try:
-                tz = zoneinfo.ZoneInfo(s["timezone"] or "UTC")
-            except Exception:
-                tz = _dt.timezone.utc
-            now_local = now_utc.astimezone(tz)
-            dow = now_local.weekday()  # 0=Mon…6=Sun; spec uses 0=Sun…6=Sat
-            # Convert spec convention (0=Sun) to Python (0=Mon)
-            spec_dow = (dow + 1) % 7
-            if spec_dow not in (s["days_of_week"] or []):
-                continue
-            ts = s["time_start"]
-            te = s["time_end"]
-            now_t = now_local.time().replace(tzinfo=None)
-            if isinstance(ts, _dt.time):
-                ts = ts.replace(tzinfo=None)
-            if isinstance(te, _dt.time):
-                te = te.replace(tzinfo=None)
-            if ts <= now_t <= te:
-                is_active = True
-                break
-        if is_active:
-            active_group_ids.append(gid)
-
-    if not active_group_ids:
-        # Supervisor has groups configured but none are active right now.
-        # Return non-empty lists with a sentinel that matches nothing to avoid
-        # the "empty list = no restriction" branch; use a dummy value.
-        return ["__no_active_shift__"], ["__no_active_shift__"], ["__no_active_shift__"]
-
-    # Step 3: expand agent_types
-    member_rows = await pool.fetch(
-        "SELECT DISTINCT agent_type_id FROM auth.agent_group_members WHERE group_id = ANY($1::uuid[])",
-        active_group_ids,
-    )
-    agent_types = [r["agent_type_id"] for r in member_rows]
-
-    # Step 4: expand user_ids
     user_rows = await pool.fetch(
         "SELECT DISTINCT user_id FROM auth.agent_group_users WHERE group_id = ANY($1::uuid[])",
-        active_group_ids,
+        group_ids,
     )
     user_ids = [str(r["user_id"]) for r in user_rows]
 
-    group_ids_str = [str(g) for g in active_group_ids]
-    return group_ids_str, agent_types, user_ids
+    group_ids_str = [str(g) for g in group_ids]
+    return group_ids_str, user_ids
 
 
 # ─── Seed ─────────────────────────────────────────────────────────────────────

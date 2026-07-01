@@ -2,8 +2,13 @@
 groups_router.py
 Arc 9 — Agent Groups & Supervisor Scope
 
-CRUD for AgentGroup entities and their members/supervisors/shifts.
+CRUD for AgentGroup entities and their users (members) / supervisors.
 All endpoints are admin-authenticated (X-Admin-Token header).
+
+Note (2026-07-02): the agent_type "members" and "shifts" sub-resources were
+removed — see docs/arcos/arc9-agent-groups.md. Human/AI typing is owned by
+Pool.agent_kind (was duplicated/unvalidated here); differing shift needs are
+now modeled as separate groups instead of per-member time windows.
 
 Routes:
   GET    /auth/v1/groups                             — list groups for tenant
@@ -12,10 +17,6 @@ Routes:
   PUT    /auth/v1/groups/{group_id}                  — update group name/description
   DELETE /auth/v1/groups/{group_id}                  — delete group
 
-  GET    /auth/v1/groups/{group_id}/members          — list agent_type members
-  POST   /auth/v1/groups/{group_id}/members          — add member
-  DELETE /auth/v1/groups/{group_id}/members/{agent_type_id} — remove member
-
   GET    /auth/v1/groups/{group_id}/users            — list human agent users
   POST   /auth/v1/groups/{group_id}/users            — add user
   DELETE /auth/v1/groups/{group_id}/users/{user_id}  — remove user
@@ -23,11 +24,6 @@ Routes:
   GET    /auth/v1/groups/{group_id}/supervisors      — list supervisors
   POST   /auth/v1/groups/{group_id}/supervisors      — add supervisor
   DELETE /auth/v1/groups/{group_id}/supervisors/{user_id} — remove supervisor
-
-  GET    /auth/v1/groups/{group_id}/shifts           — list shifts
-  POST   /auth/v1/groups/{group_id}/shifts           — create shift
-  PUT    /auth/v1/groups/{group_id}/shifts/{shift_id} — update shift
-  DELETE /auth/v1/groups/{group_id}/shifts/{shift_id} — delete shift
 """
 from __future__ import annotations
 
@@ -93,35 +89,12 @@ class UpdateGroupRequest(BaseModel):
     description: str | None = None
 
 
-class AddMemberRequest(BaseModel):
-    agent_type_id: str
-    is_human:      bool = False
-
-
 class AddUserRequest(BaseModel):
     user_id: str
 
 
 class AddSupervisorRequest(BaseModel):
     user_id: str
-
-
-class CreateShiftRequest(BaseModel):
-    supervisor_user_id: str
-    days_of_week:       list[int]
-    time_start:         str        # HH:MM or HH:MM:SS
-    time_end:           str
-    timezone:           str = "UTC"
-    active:             bool = True
-
-
-class UpdateShiftRequest(BaseModel):
-    supervisor_user_id: str | None = None
-    days_of_week:       list[int] | None = None
-    time_start:         str | None = None
-    time_end:           str | None = None
-    timezone:           str | None = None
-    active:             bool | None = None
 
 
 # ─── Group CRUD ───────────────────────────────────────────────────────────────
@@ -157,23 +130,12 @@ async def get_group(group_id: str, request: Request) -> dict:
     row = await db_mod.get_group(pool, group_id)
     if not row:
         raise HTTPException(status_code=404, detail="Group not found")
-    # Enrich with members, users, supervisors, shifts
-    members   = await db_mod.list_group_members(pool, group_id)
+    # Enrich with users (members) and supervisors
     users     = await db_mod.list_group_users(pool, group_id)
     supers    = await db_mod.list_group_supervisors(pool, group_id)
-    shifts    = await db_mod.list_group_shifts(pool, group_id)
     result = _serialize_group(row)
-    result["members"]     = [_serialize_member(m) for m in members]
     result["users"]       = [_serialize_user(u) for u in users]
     result["supervisors"] = [_serialize_user(s) for s in supers]
-    result["shifts"]      = shifts
-    return result
-
-
-def _serialize_member(row: dict[str, Any]) -> dict[str, Any]:
-    result = dict(row)
-    if "group_id" in result and result["group_id"] is not None:
-        result["group_id"] = str(result["group_id"])
     return result
 
 
@@ -198,39 +160,6 @@ async def delete_group(group_id: str, request: Request) -> None:
     deleted = await db_mod.delete_group(pool, group_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Group not found")
-
-
-# ─── Members ──────────────────────────────────────────────────────────────────
-
-@groups_router.get("/{group_id}/members", response_model=list[dict],
-                   dependencies=[Depends(_USUARIOS_READ)])
-async def list_members(group_id: str, request: Request) -> list[dict]:
-    pool = _get_pool(request)
-    rows = await db_mod.list_group_members(pool, group_id)
-    return [_serialize_member(r) for r in rows]
-
-
-@groups_router.post("/{group_id}/members", response_model=dict, status_code=201,
-                    dependencies=[Depends(_USUARIOS_WRITE)])
-async def add_member(
-    group_id: str,
-    body: AddMemberRequest,
-    request: Request,
-) -> dict:
-    pool = _get_pool(request)
-    row = await db_mod.add_group_member(pool, group_id, body.agent_type_id, body.is_human)
-    return _serialize_member(row)
-
-
-@groups_router.delete("/{group_id}/members/{agent_type_id}", status_code=204,
-                      dependencies=[Depends(_USUARIOS_WRITE)])
-async def remove_member(
-    group_id: str,
-    agent_type_id: str,
-    request: Request,
-) -> None:
-    pool = _get_pool(request)
-    await db_mod.remove_group_member(pool, group_id, agent_type_id)
 
 
 # ─── Users ────────────────────────────────────────────────────────────────────
@@ -297,66 +226,3 @@ async def remove_supervisor(
 ) -> None:
     pool = _get_pool(request)
     await db_mod.remove_group_supervisor(pool, group_id, user_id)
-
-
-# ─── Shifts ───────────────────────────────────────────────────────────────────
-
-@groups_router.get("/{group_id}/shifts", response_model=list[dict],
-                   dependencies=[Depends(_USUARIOS_READ)])
-async def list_shifts(group_id: str, request: Request) -> list[dict]:
-    pool = _get_pool(request)
-    return await db_mod.list_group_shifts(pool, group_id)
-
-
-@groups_router.post("/{group_id}/shifts", response_model=dict, status_code=201,
-                    dependencies=[Depends(_USUARIOS_WRITE)])
-async def create_shift(
-    group_id: str,
-    body: CreateShiftRequest,
-    request: Request,
-) -> dict:
-    pool = _get_pool(request)
-    return await db_mod.create_group_shift(
-        pool,
-        group_id=group_id,
-        supervisor_user_id=body.supervisor_user_id,
-        days_of_week=body.days_of_week,
-        time_start=body.time_start,
-        time_end=body.time_end,
-        timezone=body.timezone,
-        active=body.active,
-    )
-
-
-@groups_router.put("/{group_id}/shifts/{shift_id}", response_model=dict,
-                   dependencies=[Depends(_USUARIOS_WRITE)])
-async def update_shift(
-    group_id: str,
-    shift_id: str,
-    body: UpdateShiftRequest,
-    request: Request,
-) -> dict:
-    pool = _get_pool(request)
-    row = await db_mod.update_group_shift(
-        pool, shift_id,
-        supervisor_user_id=body.supervisor_user_id,
-        days_of_week=body.days_of_week,
-        time_start=body.time_start,
-        time_end=body.time_end,
-        timezone=body.timezone,
-        active=body.active,
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Shift not found")
-    return row
-
-
-@groups_router.delete("/{group_id}/shifts/{shift_id}", status_code=204,
-                      dependencies=[Depends(_USUARIOS_WRITE)])
-async def delete_shift(
-    group_id: str,
-    shift_id: str,
-    request: Request,
-) -> None:
-    pool = _get_pool(request)
-    await db_mod.delete_group_shift(pool, shift_id)

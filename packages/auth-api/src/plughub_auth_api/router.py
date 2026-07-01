@@ -118,7 +118,7 @@ async def _make_token_response(
     module_config: dict[str, Any] = user.get("module_config") or {}
     role: str = (list(user["roles"]) or ["operator"])[0]
     # Arc 9 — resolve supervisor scope at token generation time
-    sup_groups, sup_agent_types, sup_user_ids = await db_mod.resolve_supervisor_scope(
+    sup_groups, sup_user_ids = await db_mod.resolve_supervisor_scope(
         pool, str(user["id"]), role,
     )
     access = create_access_token(
@@ -131,7 +131,6 @@ async def _make_token_response(
         settings=settings,
         module_config=module_config,
         supervised_groups=sup_groups,
-        supervised_agent_types=sup_agent_types,
         supervised_user_ids=sup_user_ids,
         max_concurrent_sessions=int(user.get("max_concurrent_sessions", 3)),
     )

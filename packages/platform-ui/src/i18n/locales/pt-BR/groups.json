@@ -10,8 +10,6 @@
   "tab.info": "Info",
   "tab.members": "Membros",
   "tab.owners": "Owners",
-  "tab.agents": "Agentes",
-  "tab.shifts": "Turnos",
 
   "fieldName": "Nome do grupo",
   "fieldNamePlaceholder": "ex: Equipe Retenção",
@@ -33,22 +31,6 @@
   "noMembers": "Nenhum usuário membro ainda.",
   "searchUsers": "Buscar usuários por nome ou e-mail…",
 
-  "ownersHint": "Owners são usuários que gerenciam este grupo e enxergam os dados dos seus membros e agentes.",
-  "noOwners": "Nenhum owner ainda.",
-
-  "agentsHint": "Tipos de agente de IA no escopo deste grupo. Os owners enxergam as sessões destes agentes.",
-  "agentTypeIdPlaceholder": "agent_type_id (ex: agente_retencao_v1)",
-  "agentIsHuman": "Humano",
-  "noAgents": "Nenhum agente ainda.",
-
-  "shiftsHint": "Turnos definem quando um supervisor está ativo. Se não houver turnos, o supervisor está sempre ativo.",
-  "addShift": "Adicionar Turno",
-  "shiftSupervisorId": "user_id do supervisor",
-  "shiftDays": "Dias ativos",
-  "shiftStart": "Início",
-  "shiftEnd": "Fim",
-  "shiftTimezone": "Fuso horário",
-  "shiftActive": "Ativo",
-  "shiftInactive": "Inativo",
-  "noShifts": "Nenhum turno configurado. Supervisores sem turnos estão sempre ativos."
+  "ownersHint": "Owners são usuários que gerenciam este grupo e enxergam os dados dos seus membros.",
+  "noOwners": "Nenhum owner ainda."
 }

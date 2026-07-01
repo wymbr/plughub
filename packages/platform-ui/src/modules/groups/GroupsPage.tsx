@@ -4,13 +4,21 @@
  * Arc 9 — Agent Groups & Supervisor Scope
  *
  * Manages AgentGroup entities: create/edit/delete groups, configure
- * members (agent_type_ids), supervisors (users), and shifts (time windows).
+ * members (users) and supervisors (users).
  *
  * Drawer tabs per group:
  *   Info        — name + description
- *   Members     — agent_type_id list (is_human flag)
+ *   Members     — human user list
  *   Supervisors — user list
- *   Shifts      — time-window definitions per supervisor
+ *
+ * Note (2026-07-02): the "Agents" (agent_type_id membership) and "Shifts"
+ * (per-supervisor time windows) tabs were removed. Human/AI typing already
+ * lives on Pool.agent_kind (Config > Resources > Pools) — duplicating it
+ * here via free-text agent_type_id was an unvalidated second source of
+ * truth. Differing shift needs are modeled as separate groups instead of
+ * per-member time windows. Group membership is also editable directly from
+ * the user's own form in Configuration > Access, so no separate reference
+ * is needed here either. See docs/arcos/arc9-agent-groups.md.
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -32,16 +40,8 @@ interface Group {
 }
 
 interface GroupDetail extends Group {
-  members:     GroupMember[]
   users:       GroupUser[]
   supervisors: GroupUser[]
-  shifts:      GroupShift[]
-}
-
-interface GroupMember {
-  group_id:      string
-  agent_type_id: string
-  is_human:      boolean
 }
 
 interface GroupUser {
@@ -50,22 +50,6 @@ interface GroupUser {
   email?:  string
   name?:   string
 }
-
-interface GroupShift {
-  shift_id:           string
-  group_id:           string
-  supervisor_user_id: string
-  days_of_week:       number[]
-  time_start:         string
-  time_end:           string
-  timezone:           string
-  active:             boolean
-}
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const TIMEZONES = ['UTC', 'America/Sao_Paulo', 'America/New_York', 'Europe/London', 'Asia/Tokyo']
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -109,7 +93,7 @@ export default function GroupsPage() {
   // Drawer state
   const [drawerGroup,  setDrawerGroup]  = useState<GroupDetail | null>(null)
   const [drawerOpen,   setDrawerOpen]   = useState(false)
-  const [drawerTab,    setDrawerTab]    = useState<'info' | 'members' | 'owners' | 'agents' | 'shifts'>('info')
+  const [drawerTab,    setDrawerTab]    = useState<'info' | 'members' | 'owners'>('info')
   const [drawerLoading, setDrawerLoading] = useState(false)
 
   // New group form
@@ -248,7 +232,7 @@ export default function GroupsPage() {
                 </div>
                 <div className="flex items-center gap-4 text-sm text-muted">
                   {g.member_count != null && (
-                    <span>{g.member_count} {t('tab.agents').toLowerCase()}</span>
+                    <span>{g.member_count} {t('tab.members').toLowerCase()}</span>
                   )}
                   {g.supervisor_count != null && (
                     <span>{g.supervisor_count} {t('tab.owners').toLowerCase()}</span>
@@ -324,7 +308,7 @@ export default function GroupsPage() {
 
 // ── GroupDrawer ────────────────────────────────────────────────────────────────
 
-type DrawerTab = 'info' | 'members' | 'owners' | 'agents' | 'shifts'
+type DrawerTab = 'info' | 'members' | 'owners'
 
 interface DrawerProps {
   group:       GroupDetail | null
@@ -367,7 +351,7 @@ function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, o
 
         {/* Tabs */}
         <div className="border-b border-border px-6 flex gap-1">
-          {(['info', 'members', 'owners', 'agents', 'shifts'] as const).map(tabKey => (
+          {(['info', 'members', 'owners'] as const).map(tabKey => (
             <button
               key={tabKey}
               onClick={() => onTabChange(tabKey)}
@@ -391,8 +375,6 @@ function GroupDrawer({ group, loading, tab, onTabChange, tenantId, adminToken, o
               {tab === 'info'    && <InfoTab   group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
               {tab === 'members' && <GroupUserChecklist kind="users"       group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
               {tab === 'owners'  && <GroupUserChecklist kind="supervisors" group={group} tenantId={tenantId} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'agents'  && <AgentsTab group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
-              {tab === 'shifts'  && <ShiftsTab group={group} adminToken={adminToken} onRefresh={onRefresh} t={t} />}
             </>
           )}
         </div>
@@ -540,278 +522,3 @@ function GroupUserChecklist({ kind, group, tenantId, adminToken, onRefresh, t }:
   )
 }
 
-// ── AgentsTab (agent_type members — drives AI supervised scope) ─────────────────
-
-function AgentsTab({ group, adminToken, onRefresh, t }: {
-  group: GroupDetail; adminToken: string; onRefresh: (id: string) => Promise<void>
-  t: (k: string) => string
-}) {
-  const [agentTypeId, setAgentTypeId] = useState('')
-  const [isHuman,     setIsHuman]     = useState(false)
-  const [adding,      setAdding]      = useState(false)
-
-  const add = async () => {
-    if (!agentTypeId.trim()) return
-    setAdding(true)
-    try {
-      await apiFetch(`/auth/v1/groups/${group.group_id}/members`, adminToken, {
-        method: 'POST',
-        body: JSON.stringify({ agent_type_id: agentTypeId.trim(), is_human: isHuman }),
-      })
-      setAgentTypeId(''); setIsHuman(false)
-      await onRefresh(group.group_id)
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  const remove = async (agentTypeId: string) => {
-    await apiFetch(`/auth/v1/groups/${group.group_id}/members/${encodeURIComponent(agentTypeId)}`, adminToken, { method: 'DELETE' })
-    await onRefresh(group.group_id)
-  }
-
-  return (
-    <div className="p-6 space-y-4">
-      <p className="text-sm text-muted">{t('agentsHint')}</p>
-
-      {/* Add form */}
-      <div className="flex gap-2 items-center">
-        <input
-          className="flex-1 border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-          placeholder={t('agentTypeIdPlaceholder')}
-          value={agentTypeId}
-          onChange={e => setAgentTypeId(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && add()}
-        />
-        <label className="flex items-center gap-1.5 text-sm text-muted whitespace-nowrap">
-          <input type="checkbox" checked={isHuman} onChange={e => setIsHuman(e.target.checked)} className="rounded" />
-          {t('agentIsHuman')}
-        </label>
-        <button
-          onClick={add}
-          disabled={adding || !agentTypeId.trim()}
-          className="px-3 py-2 bg-primary text-white text-sm rounded-lg hover:bg-primary-dark disabled:opacity-50 whitespace-nowrap"
-        >
-          {t('add')}
-        </button>
-      </div>
-
-      {/* List */}
-      {group.members.length === 0 ? (
-        <p className="text-sm text-muted-light text-center py-4">{t('noAgents')}</p>
-      ) : (
-        <div className="divide-y divide-border border border-border rounded-lg">
-          {group.members.map(m => (
-            <div key={m.agent_type_id} className="flex items-center justify-between px-4 py-3">
-              <div>
-                <span className="text-sm font-mono text-dark">{m.agent_type_id}</span>
-                {m.is_human && (
-                  <span className="ml-2 text-xs bg-warning-light text-warning-text px-1.5 py-0.5 rounded">human</span>
-                )}
-              </div>
-              <button
-                onClick={() => remove(m.agent_type_id)}
-                className="text-xs text-red hover:text-red-text"
-              >
-                {t('remove')}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── ShiftsTab ─────────────────────────────────────────────────────────────────
-
-const EMPTY_SHIFT = {
-  supervisor_user_id: '',
-  days_of_week: [1, 2, 3, 4, 5] as number[],
-  time_start: '08:00',
-  time_end: '18:00',
-  timezone: 'UTC',
-  active: true,
-}
-
-function ShiftsTab({ group, adminToken, onRefresh, t }: {
-  group: GroupDetail; adminToken: string; onRefresh: (id: string) => Promise<void>
-  t: (k: string) => string
-}) {
-  const [form,    setForm]    = useState({ ...EMPTY_SHIFT })
-  const [adding,  setAdding]  = useState(false)
-  const [showAdd, setShowAdd] = useState(false)
-
-  const toggleDay = (dow: number) => {
-    setForm(f => ({
-      ...f,
-      days_of_week: f.days_of_week.includes(dow)
-        ? f.days_of_week.filter(d => d !== dow)
-        : [...f.days_of_week, dow].sort(),
-    }))
-  }
-
-  const add = async () => {
-    if (!form.supervisor_user_id.trim()) return
-    setAdding(true)
-    try {
-      await apiFetch(`/auth/v1/groups/${group.group_id}/shifts`, adminToken, {
-        method: 'POST',
-        body: JSON.stringify(form),
-      })
-      setForm({ ...EMPTY_SHIFT }); setShowAdd(false)
-      await onRefresh(group.group_id)
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  const remove = async (shiftId: string) => {
-    await apiFetch(`/auth/v1/groups/${group.group_id}/shifts/${shiftId}`, adminToken, { method: 'DELETE' })
-    await onRefresh(group.group_id)
-  }
-
-  const toggleActive = async (shift: GroupShift) => {
-    await apiFetch(`/auth/v1/groups/${group.group_id}/shifts/${shift.shift_id}`, adminToken, {
-      method: 'PUT',
-      body: JSON.stringify({ active: !shift.active }),
-    })
-    await onRefresh(group.group_id)
-  }
-
-  return (
-    <div className="p-6 space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted">{t('shiftsHint')}</p>
-        <button
-          onClick={() => setShowAdd(s => !s)}
-          className="text-sm text-primary hover:text-primary-dark"
-        >
-          {showAdd ? t('cancel') : `+ ${t('addShift')}`}
-        </button>
-      </div>
-
-      {/* Add shift form */}
-      {showAdd && (
-        <div className="border border-border rounded-lg p-4 space-y-3 bg-surface-muted">
-          <div>
-            <label className="block text-xs font-medium text-muted mb-1">{t('shiftSupervisorId')}</label>
-            <input
-              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              placeholder="user-uuid"
-              value={form.supervisor_user_id}
-              onChange={e => setForm(f => ({ ...f, supervisor_user_id: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-muted mb-1">{t('shiftDays')}</label>
-            <div className="flex gap-1">
-              {DAY_LABELS.map((lbl, dow) => (
-                <button
-                  key={dow}
-                  onClick={() => toggleDay(dow)}
-                  className={`w-9 h-9 rounded text-xs font-medium transition-colors ${
-                    form.days_of_week.includes(dow)
-                      ? 'bg-primary text-white'
-                      : 'bg-white border border-border-strong text-muted hover:border-primary/40'
-                  }`}
-                >
-                  {lbl}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-muted mb-1">{t('shiftStart')}</label>
-              <input
-                type="time"
-                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                value={form.time_start}
-                onChange={e => setForm(f => ({ ...f, time_start: e.target.value }))}
-              />
-            </div>
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-muted mb-1">{t('shiftEnd')}</label>
-              <input
-                type="time"
-                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                value={form.time_end}
-                onChange={e => setForm(f => ({ ...f, time_end: e.target.value }))}
-              />
-            </div>
-            <div className="flex-1">
-              <label className="block text-xs font-medium text-muted mb-1">{t('shiftTimezone')}</label>
-              <select
-                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                value={form.timezone}
-                onChange={e => setForm(f => ({ ...f, timezone: e.target.value }))}
-              >
-                {TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
-              </select>
-            </div>
-          </div>
-          <button
-            onClick={add}
-            disabled={adding || !form.supervisor_user_id.trim()}
-            className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg hover:bg-primary-dark disabled:opacity-50 transition-colors"
-          >
-            {adding ? t('saving') : t('addShift')}
-          </button>
-        </div>
-      )}
-
-      {/* Shifts list */}
-      {group.shifts.length === 0 && !showAdd ? (
-        <p className="text-sm text-muted-light text-center py-4">{t('noShifts')}</p>
-      ) : (
-        <div className="space-y-2">
-          {group.shifts.map(s => (
-            <div key={s.shift_id} className="border border-border rounded-lg px-4 py-3">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm font-mono text-dark text-xs">{s.supervisor_user_id}</p>
-                  <div className="flex gap-1">
-                    {DAY_LABELS.map((lbl, dow) => (
-                      <span
-                        key={dow}
-                        className={`text-xs px-1.5 py-0.5 rounded ${
-                          s.days_of_week.includes(dow)
-                            ? 'bg-primary-light text-primary'
-                            : 'bg-surface-alt text-muted-light'
-                        }`}
-                      >
-                        {lbl}
-                      </span>
-                    ))}
-                  </div>
-                  <p className="text-xs text-muted">
-                    {s.time_start} – {s.time_end} <span className="text-muted-light">({s.timezone})</span>
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => toggleActive(s)}
-                    className={`text-xs px-2 py-1 rounded-full font-medium transition-colors ${
-                      s.active
-                        ? 'bg-green-light text-green-text hover:bg-green/20'
-                        : 'bg-surface-alt text-muted hover:bg-border'
-                    }`}
-                  >
-                    {s.active ? t('shiftActive') : t('shiftInactive')}
-                  </button>
-                  <button
-                    onClick={() => remove(s.shift_id)}
-                    className="text-xs text-red hover:text-red-text transition-colors"
-                  >
-                    {t('remove')}
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}

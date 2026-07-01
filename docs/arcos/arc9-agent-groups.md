@@ -1,8 +1,20 @@
 # Arc 9 — Agent Groups & Supervisor Scope
 
-> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Arc 9 implementado
+> Última atualização: 2026-07-02 · Estado: Arc 19 · Status: Arc 9 implementado (Members/Shifts removidos)
 
-> **Arc 9 implementado** — `GroupsPage` (`/config/groups`), `groups_router.py` (CRUD de grupos + sub-recursos), claims JWT (`supervised_groups`, `supervised_agent_types`, `supervised_user_ids`) e os filtros de escopo em analytics-api estão em produção. Supervisor com grupos ativos mas sem nenhum membro recebe o sentinela `["__no_active_shift__"]` em `supervised_agent_types` — isso impede que a lista vazia seja interpretada como "sem restrição" (que é a semântica para admin). Este documento descreve o desenho original; o estado vigente está consolidado no CLAUDE.md § Arc 9.
+> **Arc 9 implementado** — `GroupsPage` (`/config/groups`), `groups_router.py` (CRUD de grupos + sub-recursos), claims JWT (`supervised_groups`, `supervised_user_ids`) e os filtros de escopo em analytics-api estão em produção. Este documento descreve o desenho original; o estado vigente está consolidado no CLAUDE.md § Arc 9.
+>
+> **⚠️ Remoção (2026-07-02) — sub-recursos "Agents" (`AgentGroupMember`) e "Shifts" (`AgentGroupShift`) removidos.**
+> Motivo: (1) `AgentGroupMember.is_human` era uma segunda fonte de verdade não-validada para humano/IA,
+> digitada como texto livre na UI (`agent_type_id`) sem referência à entidade real — `Pool.agent_kind` já é a
+> fonte canônica (Config > Resources > Pools). (2) Turnos diferentes (`AgentGroupShift`) agora são modelados
+> como **grupos diferentes**, não como janelas de horário por membro dentro de um único grupo — simplifica o
+> modelo sem perder a capacidade (basta criar "Equipe SAC Manhã" e "Equipe SAC Tarde" como grupos distintos).
+> (3) A associação grupo↔usuário já é editável direto no formulário do usuário em `Configuration > Access`
+> (seção "Group association"), então a aba Members do Group não precisa de referência cruzada. Ver §
+> "Remoção de Members/Shifts" abaixo para o estado atual e o impacto em `supervised_agent_types`. As seções
+> a seguir (Entidades, JWT, Impacto por Serviço) descrevem o desenho **original** — mantidas como histórico,
+> não refletem mais o código.
 
 ## Problema
 
@@ -260,3 +272,35 @@ Sem slug — grupos são entidades de gestão sem semântica de routing
 **Dependências:** Arc 7 (auth-api, JWT structure) deve estar estável antes de implementar.
 
 **O que NÃO muda:** core de roteamento, estrutura de sessão, pools, Kafka topics, Redis keys.
+
+---
+
+## Remoção de Members/Shifts (2026-07-02) — estado atual
+
+**Entidades removidas do código** (tabelas físicas podem seguir existindo em bancos antigos — não houve
+`DROP TABLE`, só `ensure_schema()` parou de criá-las/lê-las/escrevê-las):
+- `AgentGroupMember` (`agent_group_members`) — endpoints `POST/DELETE /v1/groups/{id}/members` removidos;
+  `db.add_group_member`/`remove_group_member`/`list_group_members` removidos.
+- `AgentGroupShift` (`agent_group_shifts`) — endpoints `GET/POST/PUT/DELETE /v1/groups/{id}/shifts*`
+  removidos; `db.create_group_shift`/`update_group_shift`/`delete_group_shift`/`list_group_shifts`
+  removidos.
+
+**`resolve_supervisor_scope()`** simplificado — agora `(user_id, role) → (supervised_groups, supervised_user_ids)`
+(era uma tupla de 3, `supervised_agent_types` incluído). Sem expansão de `agent_type_id`, sem gate de janela
+de horário — grupo supervisionado é sempre ativo enquanto o usuário for supervisor dele.
+
+**JWT** — claim `supervised_agent_types` deixou de ser emitido. `analytics-api` (`pool_auth.py`) já lia esse
+claim via `payload.get("supervised_agent_types", [])` com fallback `[]` → segue funcionando sem mudança,
+tratando a ausência como "sem restrição" (mesma semântica de admin). `_apply_agent_scope`/
+`_agent_scope_session_join` em `reports_query.py` continuam existindo no código (não removidos) mas nunca
+mais recebem uma lista não-vazia — viram no-op permanente. `accessible_pools` (Arc 7) continua aplicando
+seu próprio filtro por pool nos mesmos endpoints, em paralelo — a camada de escopo por pool não foi afetada.
+
+**GroupsPage** (`platform-ui`) — drawer com 3 abas apenas: Info, Members (`agent_group_users`, humanos),
+Owners (`agent_group_supervisors`). `member_count` na listagem agora conta `agent_group_users` (era
+`agent_group_members`).
+
+**Consequência prática:** `supervised_agent_types` não filtra mais nada — supervisores enxergam todos os
+agent_types dentro dos pools que já têm acesso via `accessible_pools`. Quem precisar restringir visibilidade
+por turno/horário deve criar grupos separados (ex.: "Equipe SAC Manhã" / "Equipe SAC Tarde") em vez de
+configurar shifts dentro de um único grupo.

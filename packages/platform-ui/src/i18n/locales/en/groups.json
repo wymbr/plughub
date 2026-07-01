@@ -10,8 +10,6 @@
   "tab.info": "Info",
   "tab.members": "Members",
   "tab.owners": "Owners",
-  "tab.agents": "Agents",
-  "tab.shifts": "Shifts",
 
   "fieldName": "Group name",
   "fieldNamePlaceholder": "e.g. Retention Team",
@@ -33,22 +31,6 @@
   "noMembers": "No member users yet.",
   "searchUsers": "Search users by name or email…",
 
-  "ownersHint": "Owners are users who manage this group and can see its members' and agents' data.",
-  "noOwners": "No owners yet.",
-
-  "agentsHint": "AI agent types in this group's scope. Owners can see these agents' sessions.",
-  "agentTypeIdPlaceholder": "agent_type_id (e.g. agente_retencao_v1)",
-  "agentIsHuman": "Human",
-  "noAgents": "No agents yet.",
-
-  "shiftsHint": "Shifts define when a supervisor is active. If no shifts are set, the supervisor is always active.",
-  "addShift": "Add Shift",
-  "shiftSupervisorId": "Supervisor user_id",
-  "shiftDays": "Active days",
-  "shiftStart": "Start",
-  "shiftEnd": "End",
-  "shiftTimezone": "Timezone",
-  "shiftActive": "Active",
-  "shiftInactive": "Inactive",
-  "noShifts": "No shifts configured. Supervisors without shifts are always active."
+  "ownersHint": "Owners are users who manage this group and can see its members' data.",
+  "noOwners": "No owners yet."
 }

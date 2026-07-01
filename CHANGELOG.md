@@ -2,6 +2,51 @@
 
 ---
 
+## Groups — remoção das abas Agents/Shifts (Arc 9) (2026-07-01)
+
+Removidas por decisão arquitetural: Agents duplicava Members (dupla fonte de verdade com `Pool.agent_kind`,
+que já é o campo canônico humano/AI); Shifts deveria ser modelado como Groups distintos, não como sub-recurso.
+
+- **auth-api**: removidas tabelas `agent_group_members`/`agent_group_shifts` + CRUD; `resolve_supervisor_scope()`
+  simplificado de 3-tupla para 2-tupla (sem shift-gating/expansão por agent_type); `supervised_agent_types`
+  removido do JWT (claim permanentemente ausente — `accessible_pools` já escopa os mesmos endpoints por pool,
+  independente).
+- **platform-ui**: `GroupsPage.tsx` — drawer reduzido a 3 abas (Info/Members/Owners); i18n órfão removido.
+- **Consequência aceita**: `PoolPrincipal.supervised_agent_types`/`_apply_agent_scope` em analytics-api
+  tornam-se no-op permanente (tratam ausente como "sem restrição") — não removido do código, documentado como
+  tal.
+- Docs: `docs/arcos/arc9-agent-groups.md` (banner de remoção + novo estado); `CLAUDE.md` § Arc 9 reescrita.
+
+---
+
+## AI Gateway — LLM Accounts Catalog (contas configuráveis via Configuration) (2026-07-01)
+
+Suporte a múltiplas contas de LLM geridas pelo Configuration (não só por env var fixa), com pools associáveis
+a contas preferidas e fallback. Segue a Single Source Invariant: só a API key é segredo (env var); o resto
+fica no config-api.
+
+- **config-api**: novo namespace `llm_accounts` (genérico, sem código de backend dedicado) — `provider`,
+  `display_name`, `rpm_limit`, `tpm_limit`, `active` por id de conta.
+- **ai-gateway**: `llm_accounts_catalog.py` (novo) — `load_llm_accounts_catalog()` busca o namespace no boot,
+  resolve a API key via convenção `PLUGHUB_LLM_ACCOUNT_<ID>_API_KEY`, substitui a construção de
+  `providers`/`accounts` quando o catálogo retorna resultados; degrada graciosamente para
+  `PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` se config-api estiver fora. **Fix concomitante**:
+  `ReasonEngine` (`/v1/reason`) não tinha suporte a múltiplas contas (diferente de `/v1/inference`) — agora
+  aceita `providers`/`account_selector` e seleciona conta em `process()`/`_process_tool_use()`.
+- **agent-registry**: `Pool.llm_account_ids: string[]` (`PoolRegistrationSchema`) — contas preferidas em
+  ordem de preferência; migration `20260702000000_pool_llm_account_ids`.
+- **routing-engine**: `_write_pool_context()` escreve `session.pool.llm_account_ids[]` no ContextStore após
+  cada roteamento.
+- **skill-flow-engine**: step `reason` resolve `session.pool.llm_account_ids` via `resolvePreferredConfigIds()`
+  e repassa como `preferred_config_ids` no `InferenceRequest`/`ReasonRequest`.
+- **platform-ui**: `LlmAccountsPage.tsx` (nova aba Resources → LLM Accounts) — CRUD do catálogo, mostra o
+  nome esperado da env var; `PoolsPage.tsx` — seção "LLM Accounts preferidas" no drawer de edição do pool
+  (lista ordenável reusando `PoolListEditor`).
+- Docs: `docs/arcos/ai-gateway.md` § LLM Accounts Catalog (nova); `CLAUDE.md` § AI Gateway — Multi-Account
+  Rotation atualizada.
+
+---
+
 ## Dashboards F1 — cards Fila/SLA + Volume por Canal + i18n de título/colunas (2026-06-28)
 
 - **+2 cards** (molde F1): `fmt_pools_queue` (by_pool → TableData: pool/contatos/fila/abandono/espera/SLA) via

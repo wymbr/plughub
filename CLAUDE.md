@@ -628,6 +628,8 @@ ClickHouse tables: `analytics.segments` (`ReplacingMergeTree` ORDER BY `(tenant_
 
 Config: `PLUGHUB_ANTHROPIC_API_KEYS=sk-1,sk-2,sk-3` (multi-key activates AccountSelector). `PLUGHUB_OPENAI_API_KEYS` optional fallback. Model profiles: `realtime` (Sonnet → gpt-4o), `balanced` (Haiku → gpt-4o-mini), `evaluation` (Haiku — isolated from realtime). Config API namespace `ai_gateway`: `account_rotation_enabled`, `throttle_retry_after_s`, `evaluation_model`.
 
+**LLM Accounts Catalog (2026-07-01)**: config-api namespace `llm_accounts` (platform-ui: Resources → LLM Accounts) stores non-secret account metadata (`provider`, `display_name`, `rpm_limit`, `tpm_limit`, `active`) per catalog id; the API key itself stays exclusively in env var `PLUGHUB_LLM_ACCOUNT_<ID_UPPER_SNAKE>_API_KEY` on ai-gateway (naming-convention binding, no stored env-var-name field). ai-gateway loads the catalog at boot (`load_llm_accounts_catalog()`), falling back gracefully to the legacy `PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` construction if config-api is unreachable. `Pool.llm_account_ids: string[]` (preference order) is written to ContextStore as `session.pool.llm_account_ids[]` by Routing Engine, read by the skill-flow-engine `reason` step, and forwarded as `preferred_config_ids` to `AccountSelector.pick()` — same fallback semantics as the pre-existing evaluation-campaign usage. `ReasonEngine` (`/v1/reason`) was upgraded to be account-aware as part of this change (it previously had no multi-account support, unlike `/v1/inference`).
+
 → See [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
 
 ---
@@ -700,15 +702,17 @@ Nav groups (navKey): Home 🏠, Console 🖥️ (contacts.operacao), Monitor �
 
 ## Arc 9 — Agent Groups & Supervisor Scope
 
-`AgentGroup` is a people-management entity, orthogonal to Pool (Pool = routing; Group = org chart). Tables in `auth` schema: `agent_groups`, `agent_group_members` (agent_type_id + is_human), `agent_group_users`, `agent_group_supervisors`, `agent_group_shifts` (days_of_week[], time_start/end TIME, timezone).
+`AgentGroup` is a people-management entity, orthogonal to Pool (Pool = routing; Group = org chart). Tables in `auth` schema: `agent_groups`, `agent_group_users`, `agent_group_supervisors`.
 
-**Login/refresh denormalization**: `resolve_supervisor_scope(pool, user_id, role)` in auth-api computes active groups at JWT issue time via shift resolution (spec DOW 0=Sun; Python `weekday()` converted via `(dow+1)%7`). JWT carries `supervised_groups[]`, `supervised_agent_types[]`, `supervised_user_ids[]`. Admin role → `([], [], [])` = no restriction. Supervisor with active groups but no members → `["__no_active_shift__"]` sentinel (prevents empty=unrestricted misinterpretation).
+**Members/Shifts removed (2026-07-02)**: `agent_group_members` (agent_type_id + is_human) and `agent_group_shifts` (days_of_week[], time_start/end TIME, timezone) were removed — `is_human` was an unvalidated second source of truth for human/AI typing (`Pool.agent_kind` is canonical); differing shift needs are now modeled as separate groups, not per-member time windows. Tables may still exist physically in older DBs — code no longer creates/reads/writes them.
 
-**analytics-api scope filtering**: `PoolPrincipal.supervised_agent_types` (None = unrestricted, list = filter). `_apply_agent_scope()` for segments/performance/availability (direct WHERE). `_agent_scope_session_join()` for sessions (LEFT JOIN on segments FINAL — sessions table has no agent_type_id column). All 5 report endpoints pass `supervised_agent_types` to query functions.
+**Login/refresh denormalization**: `resolve_supervisor_scope(pool, user_id, role)` in auth-api returns `(supervised_groups, supervised_user_ids)` — membership-only, no shift gating, no agent_type expansion. JWT carries `supervised_groups[]`, `supervised_user_ids[]`. Admin role → `([], [])` = no restriction.
 
-**auth-api REST** (`/v1/groups`, admin-token): full CRUD for groups + sub-resources (members, users, supervisors, shifts). `groups_router.py` registered in `main.py`.
+**analytics-api scope filtering**: `supervised_agent_types` claim is no longer emitted by auth-api. `PoolPrincipal.supervised_agent_types` / `_apply_agent_scope()` / `_agent_scope_session_join()` still exist in code (not removed) but `payload.get("supervised_agent_types", [])` now always resolves to `None` → permanent no-op. `accessible_pools` (Arc 7) still applies its own pool-level filter on the same endpoints, unaffected.
 
-**platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 4 tabs (Info, Members, Supervisors, Shifts). Nav entry added to Configuração group. i18n namespace `groups` (en + pt-BR). `Session.supervisedAgentTypes` + `CurrentUser.supervisedAgentTypes` added to auth layer. Monitor Heatmap filtered by `accessiblePools`; Agents/Instances tabs filtered by `supervisedAgentTypes` (client-side, transparent). Console already scoped via `accessiblePools` in `AgentAssistContext.fetchPools`.
+**auth-api REST** (`/v1/groups`, Bearer + ABAC `config.usuarios`): CRUD for groups + `users` (members) + `supervisors` sub-resources only.
+
+**platform-ui**: `GroupsPage` at `/config/groups` (roles: admin, ABAC `config.users`). List + side drawer with 3 tabs (Info, Members, Owners). i18n namespace `groups` (en + pt-BR). Group↔user association is also editable directly from the user's own form in `Configuration > Access` (section "Group association", Member/Supervisor checkboxes per group) — no cross-reference needed from the Group side for that. Monitor Heatmap filtered by `accessiblePools` only (`supervisedAgentTypes` client-side filter is now always `[]` = unrestricted, degrades gracefully).
 
 → See [`docs/arcos/arc9-agent-groups.md`](docs/arcos/arc9-agent-groups.md)
 
