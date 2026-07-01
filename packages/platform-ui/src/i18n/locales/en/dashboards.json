@@ -29,6 +29,7 @@
     "outcome-distribution":    { "label": "Outcome Distribution" },
     "pool-status":             { "label": "Pool Status" },
     "agent-performance":       { "label": "Agent Performance" },
+    "agent-availability":      { "label": "Agent Availability" },
     "kpi-sessions":            { "label": "KPI: Total Sessions" },
     "kpi-resolution":          { "label": "KPI: Resolution Rate" },
     "kpi-score":               { "label": "KPI: Average Score" },

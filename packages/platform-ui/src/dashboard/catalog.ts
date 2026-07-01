@@ -140,6 +140,20 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     ],
   },
   {
+    id:               'agent-availability',
+    endpoint:         '/reports/display/agent-availability',
+    label:            'Disponibilidade de Agentes',
+    icon:             '🟢',
+    description:      'Pausas de agentes humanos por instância / pool / dia (Arc 8)',
+    compatible_tools: ['table'],
+    default_tool:     'table',
+    defaultW:         12,
+    defaultH:         5,
+    configurable_params: [
+      { key: 'pool_id', label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
+    ],
+  },
+  {
     id:               'kpi-sessions',
     endpoint:         '/reports/display/kpi-sessions',
     label:            'KPI: Total de Sessões',

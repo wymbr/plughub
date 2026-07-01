@@ -38,6 +38,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from .display_formatters import (
+    fmt_agent_availability,
     fmt_agent_event_summary,
     fmt_agent_event_timeseries,
     fmt_agent_performance,
@@ -214,6 +215,31 @@ async def display_agent_performance(
     """Per-agent resolution and escalation rates — compatible with table."""
     store = request.app.state.store
     data  = await fmt_agent_performance(
+        client           = store.new_client(),
+        database         = store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_,
+        to_dt            = to,
+        pool_id          = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/agent-availability ─────────────────────────────────
+
+@router.get("/agent-availability")
+async def display_agent_availability(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_:          Optional[str] = Query(None,  alias="from", description="Period start"),
+    to:             Optional[str] = Query(None,  description="Period end"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Human agent pauses per instance/pool/day (Arc 8) — compatible with table."""
+    store = request.app.state.store
+    data  = await fmt_agent_availability(
         client           = store.new_client(),
         database         = store._database,
         tenant_id        = tenant_id,

@@ -2,6 +2,20 @@
 
 ---
 
+## Dashboards F1 — cobertura de catálogo: card "Disponibilidade de Agentes" (2026-06-28)
+
+Primeiro card da cobertura incremental (molde da F1). Reusa o relatório existente do Arc 8.
+
+- **analytics-api**: `fmt_agent_availability` (`display_formatters.py`) reusa `query_agent_availability` e
+  formata como **TableData** (agente/pool/dia/pausas/pausado-min); rota `GET /reports/display/agent-availability`
+  (`display.py`, mesmo padrão + `optional_pool_principal` p/ scope).
+- **platform-ui**: entrada `agent-availability` no `ENDPOINT_CATALOG` (tool `table`); i18n
+  `catalog.agent-availability.label` (en+pt). Aparece no Add card / Role defaults / Home como qualquer card.
+- **Molde F1** validado: novo relatório = formatter + endpoint + entrada no catálogo + i18n label. Próximos
+  (Fila/SLA, Pools/Infra, qualidade/calibração, performance diária, surveys) seguem o mesmo.
+
+---
+
 ## Infra fix — agent-registry em banco próprio (para de dropar config no build) (2026-06-28)
 
 **Bug (reproduzido):** o container `agent-registry` roda `prisma db push --accept-data-loss` no boot;

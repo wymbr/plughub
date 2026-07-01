@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .query import get_pool_snapshots
-from .reports_query import query_agent_performance_report
+from .reports_query import query_agent_availability, query_agent_performance_report
 from .timeseries_query import (
     query_handle_time_timeseries,
     query_score_timeseries,
@@ -404,6 +404,49 @@ async def fmt_agent_performance(
             "avg_duration_ms": f"{int(avg_ms):,} ms" if avg_ms else "-",
             "resolution_rate": f"{float(r.get('resolution_rate', 0)) * 100:.1f}%",
             "escalation_rate": f"{float(r.get('escalation_rate', 0)) * 100:.1f}%",
+        })
+
+    return {"columns": columns, "rows": rows}
+
+
+async def fmt_agent_availability(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns TableData — human agent pauses per instance / pool / day (Arc 8)."""
+    result = await query_agent_availability(
+        client           = client,
+        database         = database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        pool_id          = pool_id,
+        accessible_pools = accessible_pools,
+    )
+    raw = result.get("data", [])
+
+    columns = [
+        {"key": "agent",      "label": "Agente",        "sortable": True},
+        {"key": "pool",       "label": "Pool",          "sortable": True},
+        {"key": "date",       "label": "Dia",           "sortable": True},
+        {"key": "pauses",     "label": "Pausas",        "sortable": True, "align": "right"},
+        {"key": "paused_min", "label": "Pausado (min)", "sortable": True, "align": "right"},
+    ]
+
+    rows = []
+    for r in raw:
+        ms = r.get("total_pause_ms") or 0
+        rows.append({
+            "agent":      r.get("agent_type_id") or r.get("instance_id") or "-",
+            "pool":       r.get("pool_id", "-"),
+            "date":       str(r.get("period_date", "")),
+            "pauses":     int(r.get("total_pauses", 0)),
+            "paused_min": f"{(ms / 60000):.1f}",
         })
 
     return {"columns": columns, "rows": rows}
