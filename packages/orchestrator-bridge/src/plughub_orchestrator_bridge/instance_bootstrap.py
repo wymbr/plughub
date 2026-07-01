@@ -1087,7 +1087,7 @@ def _pool_config_diverged(existing: dict, desired: dict) -> bool:
         "agent_kind", "dispatch_mode", "session_reservation",
         "max_concurrent_sessions", "queue_config", "webhook_skill_id",
         "hooks", "supervisor_config", "calendar_id", "context_visibility",
-        "agent_groups",
+        "agent_groups", "llm_account_ids",
     }
     for key in MANAGED:
         if existing.get(key) != desired.get(key):

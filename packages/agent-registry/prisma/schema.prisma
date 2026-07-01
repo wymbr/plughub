@@ -44,6 +44,9 @@ model Pool {
   queue_config           Json?
   mentionable_pools      Json?   // Record<alias, pool_id> — @mention routing config
   agent_groups              String[] @default([]) // Agent group IDs this pool belongs to (Arc 9)
+  // Preferred LLM Account ids (config-api namespace `llm_accounts`), preference order —
+  // see PoolRegistrationSchema.llm_account_ids (@plughub/schemas) for full semantics.
+  llm_account_ids        String[] @default([])
   hooks                  Json?   // PoolHooks — on_human_start, on_human_end, post_human
   calendar_id            String? // Reference to calendar-api calendar UUID (display cache)
   context_visibility     Json?   // { operator_namespaces: string[] } — ContextoTab namespace filter

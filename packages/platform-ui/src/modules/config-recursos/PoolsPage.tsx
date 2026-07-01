@@ -31,6 +31,7 @@ import Spinner from '@/components/ui/Spinner'
 
 interface CalendarOption { id: string; name: string }
 interface CompetencySkill { key: string; domain: number }
+interface LlmAccountOption { id: string; provider: string; display_name: string; active: boolean }
 
 interface TimeInterval { open: string; close: string }
 interface ExceptionEntry {
@@ -464,6 +465,7 @@ const PoolsPage: React.FC = () => {
   const [skillFlows, setSkillFlows] = useState<Array<{ skill_id: string; name: string }>>([])
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
+  const [llmAccountOptions, setLlmAccountOptions] = useState<LlmAccountOption[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isOpen,    setIsOpen]    = useState(false)
   const [editingPool, setEditingPool] = useState<Pool | null>(null)
@@ -496,6 +498,8 @@ const PoolsPage: React.FC = () => {
     escalation_pools:            [] as string[],
     // @mention specialists (mentionable_pools) as an editable alias→pool list
     mention_pools:               [] as MentionEntry[],
+    // LLM Accounts preferidas por este pool, em ordem de preferência.
+    llm_account_ids:             [] as string[],
   })
 
   // ── data loading ─────────────────────────────────────────────────────────────
@@ -555,6 +559,29 @@ const PoolsPage: React.FC = () => {
     } catch { /* stale ok */ }
   }, [session])
 
+  const loadLlmAccounts = useCallback(async () => {
+    if (!session) return
+    try {
+      const res = await fetch(
+        `/config/llm_accounts?tenant_id=${encodeURIComponent(session.tenantId)}`
+      )
+      if (res.ok) {
+        const data = await res.json() as { entries?: Record<string, unknown> }
+        const raw = data.entries ?? {}
+        const options: LlmAccountOption[] = Object.entries(raw).map(([id, v]) => {
+          const val = (typeof v === 'object' && v !== null) ? v as Record<string, unknown> : {}
+          return {
+            id,
+            provider:     typeof val.provider === 'string' ? val.provider : 'anthropic',
+            display_name: typeof val.display_name === 'string' ? val.display_name : id,
+            active:       val.active !== false,
+          }
+        })
+        setLlmAccountOptions(options.sort((a, b) => a.id.localeCompare(b.id)))
+      }
+    } catch { /* stale ok */ }
+  }, [session])
+
   const loadPools = useCallback(async () => {
     if (!session) return
     setIsLoading(true)
@@ -584,7 +611,8 @@ const PoolsPage: React.FC = () => {
     void loadCalendars()
     void loadCompetencySkills()
     void loadSkillFlows()
-  }, [loadPools, loadCalendars, loadCompetencySkills, loadSkillFlows])
+    void loadLlmAccounts()
+  }, [loadPools, loadCalendars, loadCompetencySkills, loadSkillFlows, loadLlmAccounts])
 
   // ── form helpers ──────────────────────────────────────────────────────────────
 
@@ -620,6 +648,7 @@ const PoolsPage: React.FC = () => {
       queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
       escalation_pools: [], mention_pools: [],
+      llm_account_ids: [],
     })
     setCalExceptions([])
     setError('')
@@ -652,6 +681,7 @@ const PoolsPage: React.FC = () => {
       mention_pools: Object.entries(pool.mentionable_pools ?? {}).map(
         ([alias, p]) => ({ alias, pool: p }),
       ),
+      llm_account_ids: pool.llm_account_ids ?? [],
     })
     setCalExceptions([])  // will be loaded async below
     setError('')
@@ -781,6 +811,10 @@ const PoolsPage: React.FC = () => {
         // @mention specialists: send when present; send {} to clear; else omit.
         ...(Object.keys(cleanMentions).length > 0 ? { mentionable_pools: cleanMentions }
           : (hadMentions ? { mentionable_pools: {} } : {})),
+        // Preferred LLM Accounts (config-api namespace `llm_accounts`), preference
+        // order. Send when present; send [] to clear when previously set; else omit.
+        ...(formData.llm_account_ids.length > 0 ? { llm_account_ids: formData.llm_account_ids }
+          : ((editingPool?.llm_account_ids?.length ?? 0) > 0 ? { llm_account_ids: [] } : {})),
       }
       if (editingPool) {
         await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)
@@ -906,6 +940,16 @@ const PoolsPage: React.FC = () => {
         ? `${p.pool_id} — ${p.deployed_skill_id}`
         : p.pool_id,
     }))
+
+  // LLM Account options for the preferred-accounts combo. Inactive accounts are
+  // still shown (so a previously-selected-but-now-inactive id remains visible)
+  // but flagged in the label.
+  const llmAccountComboOptions: PoolOption[] = llmAccountOptions.map(a => ({
+    value: a.id,
+    label: a.active
+      ? `${a.id} — ${a.display_name} (${a.provider})`
+      : `${a.id} — ${a.display_name} (${a.provider}) — ${t('pools.llmAccounts.inactive')}`,
+  }))
 
   const setHookSlot = (slot: keyof PoolHooks, entries: PoolHookEntry[]) =>
     setFormData(prev => ({ ...prev, hooks: { ...prev.hooks, [slot]: entries } }))
@@ -1174,6 +1218,25 @@ const PoolsPage: React.FC = () => {
               onChange={e => setFormData(prev => ({ ...prev, mention_pools: e }))}
               poolOptions={poolComboOptions}
             />
+          </div>
+
+          {/* ── LLM Accounts preferidas (llm_account_ids, ordem de preferência) ── */}
+          <div className="border-t border-border pt-4">
+            <div className="mb-2">
+              <p className="text-sm font-semibold text-dark">{t('pools.llmAccounts.label')}</p>
+              <p className="text-xs text-gray mt-0.5">{t('pools.llmAccounts.hint')}</p>
+            </div>
+            <PoolListEditor
+              values={formData.llm_account_ids}
+              onChange={v => setFormData(prev => ({ ...prev, llm_account_ids: v }))}
+              poolOptions={llmAccountComboOptions}
+              addLabel={t('pools.llmAccounts.add')}
+              noneLabel={t('pools.llmAccounts.none')}
+              selectLabel={t('pools.llmAccounts.selectAccount')}
+            />
+            {llmAccountOptions.length === 0 && (
+              <p className="text-xs text-gray mt-1">{t('pools.llmAccounts.noAccounts')}</p>
+            )}
           </div>
 
           {/* ── Calendar ──────────────────────────────────────────────────────── */}

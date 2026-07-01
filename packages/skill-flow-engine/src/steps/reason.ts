@@ -34,6 +34,10 @@ export async function executeReason(
   // R8d — perfil de modelo (estático ou `$.pipeline_state.*`). Resolvido p/ habilitar
   // revisor heterogêneo (família ≠ avaliador) sem hardcode no YAML.
   const modelProfile  = resolveModelProfile(step, ctx)
+  // LLM Accounts — lista de contas preferidas do pool (session.pool.llm_account_ids,
+  // escrita pelo Routing Engine em _write_pool_context). Ausente/vazio = sem
+  // restrição (AccountSelector usa o pool inteiro de contas do provider).
+  const preferredConfigIds = await resolvePreferredConfigIds(ctx)
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
@@ -45,6 +49,7 @@ export async function executeReason(
         attempt,
         ...(jsonSchema ? { json_schema: jsonSchema } : {}),
         ...(modelProfile ? { model_profile: modelProfile } : {}),
+        ...(preferredConfigIds && preferredConfigIds.length > 0 ? { preferred_config_ids: preferredConfigIds } : {}),
       })
 
       // T7b — com JSON Schema, o ai-gateway garante o shape via tool-use (validação
@@ -164,6 +169,26 @@ export function resolveModelProfile(
     return typeof resolved === "string" && resolved.length > 0 ? resolved : undefined
   }
   return mp
+}
+
+
+/**
+ * LLM Accounts — resolve `session.pool.llm_account_ids` do ContextStore (escrito
+ * pelo Routing Engine em `_write_pool_context` após cada alocação). Retorna
+ * undefined quando ausente/ContextStore não disponível — o ai-gateway cai no
+ * comportamento sem restrição (pool inteiro de contas do provider).
+ */
+async function resolvePreferredConfigIds(ctx: StepContext): Promise<string[] | undefined> {
+  if (!ctx.contextStore) return undefined
+  try {
+    const value = await ctx.contextStore.getValue(ctx.sessionId, "session.pool.llm_account_ids")
+    if (Array.isArray(value) && value.every(v => typeof v === "string") && value.length > 0) {
+      return value as string[]
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
 }
 
 

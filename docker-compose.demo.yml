@@ -676,6 +676,10 @@ services:
       PLUGHUB_PORT: "3200"
       PLUGHUB_WORKERS: "1"
       PLUGHUB_ANTHROPIC_API_KEY: ${PLUGHUB_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-}}
+      # LLM Accounts — catalog fetch (namespace llm_accounts); graceful fallback to
+      # PLUGHUB_ANTHROPIC_API_KEY above when the catalog is empty/unreachable.
+      PLUGHUB_CONFIG_API_URL: http://config-api:3600
+      PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
       redis:
         condition: service_healthy

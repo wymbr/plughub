@@ -101,6 +101,10 @@ class ReasonRequest(BaseModel):
     # NÃO monta nada — só repassa o schema. Ausente → caminho flat (compat).
     json_schema:   dict[str, Any] | None = None
     model_profile: ModelProfile = Field(default="balanced")
+    # LLM Accounts — preferred account ids for this call (config-api namespace
+    # `llm_accounts`). Populated from session.pool.llm_account_ids by the
+    # skill-flow-engine `reason` step. Empty = no preference (normal rotation).
+    preferred_config_ids: list[str] = Field(default_factory=list)
     # Injected by the engine — controls format retry
     attempt:       int          = Field(default=0, ge=0)
 

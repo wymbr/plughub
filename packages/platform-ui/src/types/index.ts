@@ -157,6 +157,8 @@ export interface Pool {
   mentionable_pools?: Record<string, string> | null
   /** IDs dos Agent Groups (Arc 9) a que o pool pertence. */
   agent_groups?: string[]
+  /** LLM Accounts (config-api namespace `llm_accounts`) preferidas por este pool, em ordem. */
+  llm_account_ids?: string[]
   /** Amostragem + template do avaliador (Arc 6). */
   evaluation?: PoolEvaluationConfig | null
   /** ID explícito do template de avaliação. */
@@ -187,6 +189,7 @@ interface PoolGapFields {
   supervisor_config?: PoolSupervisorConfig | null
   mentionable_pools?: Record<string, string> | null
   agent_groups?: string[]
+  llm_account_ids?: string[]
   evaluation?: PoolEvaluationConfig | null
   evaluation_template_id?: string | null
   context_visibility?: { operator_namespaces: string[] } | null

@@ -24,10 +24,11 @@ from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-from .account_selector  import AccountSelector, LLMAccount
-from .cache             import SemanticCache
-from .config            import get_settings
-from .inference         import InferenceEngine
+from .account_selector      import AccountSelector, LLMAccount
+from .cache                 import SemanticCache
+from .config                import get_settings
+from .inference              import InferenceEngine
+from .llm_accounts_catalog  import load_llm_accounts_catalog
 from .models     import (
     TurnRequest, TurnResponse,
     ReasonRequest, ReasonResponse,
@@ -119,6 +120,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             LLMAccount(provider="openai", api_key=openai_keys[0]).provider_key
         ]
 
+    # LLM Accounts — Config API catalog (namespace `llm_accounts`) takes over when
+    # non-empty: replaces the legacy positional PLUGHUB_ANTHROPIC_API_KEYS/CONFIG_IDS
+    # mechanism above with explicit account ids resolved from PLUGHUB_LLM_ACCOUNT_
+    # <ID>_API_KEY env vars. Graceful — catalog unreachable/empty keeps the legacy
+    # accounts/providers built above untouched.
+    try:
+        catalog_accounts = await load_llm_accounts_catalog(
+            settings.config_api_url, settings.tenant_id,
+        )
+    except Exception as exc:
+        logger.warning("llm_accounts catalog load failed — using legacy env accounts: %s", exc)
+        catalog_accounts = []
+
+    if catalog_accounts:
+        providers = {}
+        accounts  = []
+        for cat_acc in catalog_accounts:
+            acc = LLMAccount(
+                provider=cat_acc.provider,
+                api_key=cat_acc.api_key,
+                rpm_limit=cat_acc.rpm_limit,
+                tpm_limit=cat_acc.tpm_limit,
+                config_id=cat_acc.account_id,
+            )
+            provider_instance = (
+                AnthropicProvider(api_key=cat_acc.api_key) if cat_acc.provider == "anthropic"
+                else OpenAIProvider(api_key=cat_acc.api_key)
+            )
+            providers[acc.provider_key] = provider_instance
+            accounts.append(acc)
+        # "anthropic"/"openai" aliases → first catalog account of that provider
+        # (backward compat for /v1/turn and the legacy ReasonEngine fallback).
+        for alias in ("anthropic", "openai"):
+            first = next((a for a in accounts if a.provider == alias), None)
+            if first is not None:
+                providers[alias] = providers[first.provider_key]
+        logger.info(
+            "llm_accounts catalog: %d account(s) loaded (%s) — legacy env mechanism overridden",
+            len(accounts), ", ".join(a.config_id for a in accounts),
+        )
+
     # AccountSelector — load balances across all registered keys.
     # None when no accounts are configured (unit test / local dev without keys).
     account_selector = AccountSelector(redis, accounts) if accounts else None
@@ -155,6 +197,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         provider=_legacy_provider,
         model_profiles=settings.model_profiles,
         max_tokens=settings.inference_max_tokens,
+        # LLM Accounts — enables preferred_config_ids account selection for
+        # reason steps (previously hardcoded to the single legacy alias above).
+        providers=providers,
+        account_selector=account_selector,
     )
     app.state.session_mgr = session_mgr
 

@@ -4,6 +4,7 @@
     "pools": "Pools",
     "agentTypes": "Tipos de Agente",
     "skills": "Skills",
+    "llmAccounts": "Contas de LLM",
     "instances": "Instâncias",
     "channels": "Canais",
     "humanAgents": "Agentes Humanos"
@@ -111,6 +112,15 @@
       "aliasPlaceholder": "ex.: copilot",
       "selectPool": "— Selecione um pool —"
     },
+    "llmAccounts": {
+      "label": "LLM Accounts preferidas",
+      "hint": "Contas de LLM (Recursos → LLM Accounts) preferidas por este pool, em ordem de preferência. O ai-gateway escolhe a conta menos carregada entre estas; se nenhuma estiver disponível, cai pro pool completo de contas do provider. Vazio = sem restrição.",
+      "add": "+ Adicionar conta",
+      "none": "Nenhuma conta preferida — usa o pool completo de contas.",
+      "selectAccount": "— Selecione uma conta —",
+      "noAccounts": "Nenhuma LLM Account cadastrada. Configure em Recursos → LLM Accounts.",
+      "inactive": "inativa"
+    },
     "routingFixed": {
       "label": "Pesos de Roteamento — Fixos",
       "hint": "Importância de cada competency skill neste pool. Defina 0 para ignorar a skill no roteamento.",
@@ -160,6 +170,24 @@
       "7": "Avançado",
       "8": "Avançado",
       "9": "Especialista"
+    }
+  },
+  "llmAccounts": {
+    "infoBanner": "Contas de LLM são referenciadas por id a partir dos Pools (Resources > Pools) para direcionar o raciocínio de IA a uma conta/cota específica, com fallback gracioso. A API key nunca é armazenada aqui — configure como variável de ambiente no ai-gateway.",
+    "newAccount": "+ Nova Conta",
+    "keyPlaceholder": "ex: realtime_primary",
+    "displayNamePlaceholder": "Nome de exibição",
+    "empty": "Nenhuma conta de LLM cadastrada.",
+    "active": "Ativa",
+    "inactive": "inativa",
+    "keyRequired": "ID da conta é obrigatório",
+    "keyInvalid": "ID: apenas letras minúsculas, dígitos e _",
+    "keyExists": "ID de conta \"{{key}}\" já existe",
+    "confirmDelete": "Remover conta de LLM \"{{key}}\"?",
+    "columns": {
+      "id": "ID da Conta",
+      "config": "Configuração",
+      "actions": "Ações"
     }
   },
   "agentTypes": {

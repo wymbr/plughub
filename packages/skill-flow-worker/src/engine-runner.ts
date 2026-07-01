@@ -194,6 +194,7 @@ export class EngineRunner {
     session_id:    string
     attempt:       number
     json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
+    preferred_config_ids?: string[]          // LLM Accounts — session.pool.llm_account_ids
   }): Promise<unknown> {
     const url = `${this.settings.aiGatewayUrl}/v1/reason`
 
@@ -207,6 +208,7 @@ export class EngineRunner {
         output_schema: payload.output_schema,
         attempt:       payload.attempt,
         ...(payload.json_schema ? { json_schema: payload.json_schema } : {}),
+        ...(payload.preferred_config_ids ? { preferred_config_ids: payload.preferred_config_ids } : {}),
       }),
     })
 

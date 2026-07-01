@@ -249,6 +249,19 @@ export const PoolRegistrationSchema = z.object({
    */
   agent_groups:           z.array(z.string()).optional(),
   /**
+   * LLM Accounts (config-api namespace `llm_accounts`) preferidas por este pool,
+   * em ordem de preferência — não é uma cadeia estrita: o AccountSelector do
+   * ai-gateway escolhe a conta menos carregada dentro desta lista, e só cai pro
+   * pool completo de contas do provider se todas as preferidas estiverem
+   * indisponíveis (nunca falha só pelo filtro de preferência).
+   * Vazio/ausente = sem restrição (usa o pool inteiro de contas do provider,
+   * comportamento anterior à existência deste campo).
+   * Escrito no ContextStore como session.pool.llm_account_ids[] após cada
+   * roteamento; o step `reason` do skill-flow-engine o repassa como
+   * `preferred_config_ids` no InferenceRequest ao ai-gateway.
+   */
+  llm_account_ids:        z.array(z.string()).optional(),
+  /**
    * @deprecated Usar `hooks.on_human_start` com pool explícito.
    * skill_id do Co-pilot associado a esta fila.
    */

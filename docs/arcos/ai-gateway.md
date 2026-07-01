@@ -1,6 +1,6 @@
 # AI Gateway — LLM Inference & Multi-Account Rotation
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-07-01 · Estado: Arc 16 + LLM Accounts Catalog
 >
 > Full reference for AI Gateway architecture, multi-account rotation, model profiles, and sentiment emission.
 > See CLAUDE.md for architectural summary.
@@ -57,6 +57,81 @@ Single key = AccountSelector disabled, direct call.
 | `account_rotation_enabled` | `true` | Toggle rotation without restart |
 | `throttle_retry_after_s` | `60` | TTL for throttle sentinel key |
 | `evaluation_model` | `"claude-haiku-4-5"` | Model used by evaluation agents (isolated) |
+
+---
+
+## LLM Accounts Catalog — Configuration-driven accounts (2026-07-01)
+
+Extends the env-only `PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` mechanism above with a
+**Configuration-managed catalog** so operators can create named LLM accounts, assign each an id, and
+bind pools to preferred accounts — without touching env vars per account. Follows the platform's
+**Single Source Invariant**: only the API key itself is a secret (env var); everything else
+(provider, display name, rpm/tpm limits, active flag) lives in config-api and is UI-editable.
+
+### Entity: LLM Account
+
+Stored in config-api namespace **`llm_accounts`** (`GET/PUT/DELETE /config/llm_accounts/{id}`), one
+entry per account id:
+```json
+{
+  "provider":     "anthropic" | "openai",
+  "display_name": "Conta Principal",
+  "rpm_limit":    50,
+  "tpm_limit":    100000,
+  "active":       true
+}
+```
+The API key is **never stored here**. It lives in the env var
+`PLUGHUB_LLM_ACCOUNT_<ID_UPPER_SNAKE>_API_KEY` on the ai-gateway container only (e.g. account id
+`conta_principal` → `PLUGHUB_LLM_ACCOUNT_CONTA_PRINCIPAL_API_KEY`). This naming convention removes the
+need for a stored/free-typed env-var-name field, avoiding typo/mismatch risk between config-api and env.
+
+**platform-ui**: `LlmAccountsPage.tsx` (Resources → LLM Accounts tab) — CRUD over the catalog,
+displays the expected env var name per account so operators know what to set.
+
+### Boot-time loading — `llm_accounts_catalog.py`
+
+`load_llm_accounts_catalog()` (new module) fetches the whole `llm_accounts` namespace from config-api
+at ai-gateway startup (`PLUGHUB_CONFIG_API_URL`, `PLUGHUB_TENANT_ID`), and for each **active** entry
+whose env var is set, builds an `LLMAccount` with `config_id = <catalog id>`. If the catalog fetch
+fails or returns nothing, `main.py` falls back unchanged to the legacy
+`PLUGHUB_ANTHROPIC_API_KEYS`/`PLUGHUB_OPENAI_API_KEYS` construction — **graceful degradation**, ai-gateway
+never fails to boot because config-api is unreachable. An entry with no matching env var is skipped
+with a warning, never blocks boot.
+
+### Pool → LLM Account binding — `preferred_config_ids`
+
+`Pool.llm_account_ids: string[]` (agent-registry, `PoolRegistrationSchema`) lists the catalog ids a
+pool prefers, in preference order (not a strict chain). Wiring, end to end:
+
+```
+Pool.llm_account_ids (agent-registry)
+  → Routing Engine _write_pool_context() writes session.pool.llm_account_ids[] to ContextStore
+    → skill-flow-engine `reason` step reads it (resolvePreferredConfigIds()) and sets
+      ReasonRequest.preferred_config_ids
+        → ai-gateway ReasonEngine._select_provider() calls
+          AccountSelector.pick(provider, preferred_config_ids=...)
+```
+
+`AccountSelector.pick()` already supported `preferred_config_ids` (previously wired only for
+evaluation campaigns) — it picks the least-loaded account **within** the preferred set, and only
+falls through to the full provider pool if every preferred account is unavailable. Empty/absent
+`llm_account_ids` = no restriction (unchanged legacy behavior).
+
+**`ReasonEngine` upgrade**: prior to this change, `/v1/reason` (used by every skill-flow `reason`
+step) was hardcoded to a single legacy provider and had **no** multi-account support, unlike
+`/v1/inference`'s `InferenceEngine`. `ReasonEngine` now accepts `providers`/`account_selector` and
+calls `_select_provider()` in both `process()` and `_process_tool_use()` — without this fix,
+`preferred_config_ids` would have been a no-op for all `reason` steps.
+
+### What is NOT in scope
+
+- No UI-side "test connection" / key validation flow — operators verify by checking ai-gateway logs
+  after setting the env var and restarting.
+- No per-account cost tracking (billing remains capacity-based, see Pricing Module).
+- No hot-reload of API keys — changing/adding an env var still requires an ai-gateway restart
+  (only the non-secret catalog fields are hot-editable via config-api; `config.changed` is not
+  currently consumed by ai-gateway to re-fetch the catalog mid-run).
 
 ---
 

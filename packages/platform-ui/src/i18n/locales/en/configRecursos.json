@@ -4,6 +4,7 @@
     "pools": "Pools",
     "agentTypes": "Agent Types",
     "skills": "Skills",
+    "llmAccounts": "LLM Accounts",
     "instances": "Instances",
     "channels": "Channels",
     "humanAgents": "Human Agents"
@@ -111,6 +112,15 @@
       "aliasPlaceholder": "e.g. copilot",
       "selectPool": "— Select a pool —"
     },
+    "llmAccounts": {
+      "label": "Preferred LLM Accounts",
+      "hint": "LLM accounts (Resources → LLM Accounts) this pool prefers, in preference order. The ai-gateway picks the least-loaded account among these; if none are available it falls back to the full account pool for the provider. Empty = no restriction.",
+      "add": "+ Add account",
+      "none": "No preferred accounts — uses the full account pool.",
+      "selectAccount": "— Select an account —",
+      "noAccounts": "No LLM accounts registered. Configure in Resources → LLM Accounts.",
+      "inactive": "inactive"
+    },
     "routingFixed": {
       "label": "Routing Weights — Fixed",
       "hint": "Importance of each competency skill in this pool. Set to 0 to ignore the skill in routing.",
@@ -160,6 +170,24 @@
       "7": "Advanced",
       "8": "Advanced",
       "9": "Expert"
+    }
+  },
+  "llmAccounts": {
+    "infoBanner": "LLM Accounts are referenced by id from Pools (Resources > Pools) to steer AI reasoning to a specific quota/account, with graceful fallback. The API key itself is never stored here — set it as an environment variable on ai-gateway.",
+    "newAccount": "+ New Account",
+    "keyPlaceholder": "e.g. realtime_primary",
+    "displayNamePlaceholder": "Display name",
+    "empty": "No LLM accounts registered.",
+    "active": "Active",
+    "inactive": "inactive",
+    "keyRequired": "Account id required",
+    "keyInvalid": "Id: lowercase letters, digits and _ only",
+    "keyExists": "Account id \"{{key}}\" already exists",
+    "confirmDelete": "Remove LLM account \"{{key}}\"?",
+    "columns": {
+      "id": "Account ID",
+      "config": "Configuration",
+      "actions": "Actions"
     }
   },
   "agentTypes": {

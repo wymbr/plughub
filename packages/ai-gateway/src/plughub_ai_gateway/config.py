@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     kafka_brokers: str = "kafka:9092"
     gateway_id:    str = "ai-gateway"
 
+    # LLM Accounts — Config API catalog (namespace `llm_accounts`). Graceful:
+    # unreachable/empty → falls back to the legacy PLUGHUB_ANTHROPIC_API_KEYS[/CONFIG_IDS]
+    # mechanism, see llm_accounts_catalog.py.
+    config_api_url: str = "http://localhost:3600"
+    tenant_id:      str = "tenant_demo"
+
     def get_anthropic_keys(self) -> list[str]:
         """Returns list of Anthropic API keys. Prefers anthropic_api_keys (comma-separated)."""
         raw = self.anthropic_api_keys.strip() or self.anthropic_api_key.strip()

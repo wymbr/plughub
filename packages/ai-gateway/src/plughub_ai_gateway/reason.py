@@ -11,12 +11,16 @@ Uses LLMProvider interface — never calls the Anthropic SDK directly.
 
 from __future__ import annotations
 import json
+import logging
 import re
 import time
 from typing import Any
 
+from .account_selector import AccountSelector
 from .models    import ReasonRequest, ReasonResponse, OutputFieldSchema
 from .providers import LLMProvider
+
+logger = logging.getLogger("plughub.ai_gateway.reason")
 
 
 _SYSTEM_REASON = """You are a structured decision component.
@@ -41,13 +45,54 @@ class ReasonEngine:
         provider: LLMProvider,
         model_profiles: dict[str, Any],
         max_tokens: int = 4096,
+        providers: dict[str, LLMProvider] | None = None,
+        account_selector: AccountSelector | None = None,
     ) -> None:
+        # `provider` stays the fallback/default (legacy "anthropic" alias) — used
+        # when no AccountSelector is configured, or as last resort.
         self._provider       = provider
         self._model_profiles = model_profiles
         # Teto de tokens da saída estruturada. 1024 (antigo, hardcoded) truncava a
         # rubrica de avaliação (N critérios × observações) → JSON inválido. É teto:
         # respostas curtas do realtime não mudam.
         self._max_tokens     = max_tokens
+        # LLM Accounts — full provider registry + selector, mirrors InferenceEngine.
+        # None when multi-account rotation isn't configured (single-key dev/test) —
+        # every call falls back to `self._provider` unconditionally.
+        self._providers        = providers or {}
+        self._account_selector = account_selector
+
+    async def _select_provider(
+        self,
+        profile_provider:      str,
+        preferred_config_ids:  list[str],
+    ) -> tuple[LLMProvider, str | None]:
+        """
+        Picks the LLMProvider instance for this call. Mirrors step 1 of
+        InferenceEngine._call_with_fallback() (account selection), without the
+        throttle-and-retry state machine — reason steps are structured-output
+        calls, not conversational turns; a failed call surfaces to the skill
+        flow's own catch/retry step instead.
+
+        Returns (provider, provider_key). provider_key is None when the legacy
+        single-provider fallback was used (no AccountSelector configured, or
+        selection failed) — caller uses it only for `record_usage`.
+        """
+        if self._account_selector is not None:
+            provider_key = await self._account_selector.pick(
+                profile_provider,
+                preferred_config_ids=preferred_config_ids or [],
+            )
+            if provider_key is not None:
+                provider = self._providers.get(provider_key)
+                if provider is not None:
+                    return provider, provider_key
+                logger.error(
+                    "ReasonEngine: AccountSelector picked %s but no matching provider instance",
+                    provider_key,
+                )
+        # No selector, selection failed, or no matching instance — legacy alias.
+        return self._provider, None
 
     async def process(self, req: ReasonRequest) -> ReasonResponse:
         profile = self._model_profiles.get(req.model_profile)
@@ -75,7 +120,10 @@ class ReasonEngine:
                 f"Ensure the JSON exactly matches the schema above."
             )
 
-        llm_resp = await self._provider.call(
+        provider, provider_key = await self._select_provider(
+            profile.provider, req.preferred_config_ids,
+        )
+        llm_resp = await provider.call(
             messages=[
                 {"role": "system",    "content": _SYSTEM_REASON},
                 {"role": "user",      "content": user_prompt},
@@ -84,6 +132,12 @@ class ReasonEngine:
             model_id=profile.model_id,
             max_tokens=self._max_tokens,
         )
+        usage = llm_resp.raw.get("usage", {})
+        if provider_key is not None and self._account_selector is not None:
+            await self._account_selector.record_usage(
+                provider_key,
+                tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+            )
 
         latency_ms = int((time.monotonic() - start) * 1000)
         raw_text   = llm_resp.content
@@ -96,8 +150,6 @@ class ReasonEngine:
 
         # Validate against output_schema
         _validate_schema(parsed, req.output_schema)
-
-        usage = llm_resp.raw.get("usage", {})
 
         return ReasonResponse(
             session_id    = req.session_id,
@@ -124,6 +176,10 @@ class ReasonEngine:
             f"Call `{_TOOL_NAME}` with the structured result."
         )
 
+        provider, provider_key = await self._select_provider(
+            profile.provider, req.preferred_config_ids,
+        )
+
         parsed: dict[str, Any] | None = None
         last_errors: list[str] | None = None
         correction = ""
@@ -131,7 +187,7 @@ class ReasonEngine:
         attempts = 0
         for _ in range(_TOOL_USE_MAX_ATTEMPTS):
             attempts += 1
-            llm_resp = await self._provider.call(
+            llm_resp = await provider.call(
                 messages=[
                     {"role": "system", "content": _SYSTEM_TOOL},
                     {"role": "user",   "content": base_user + correction},
@@ -163,6 +219,11 @@ class ReasonEngine:
 
         latency_ms = int((time.monotonic() - start) * 1000)
         usage = (llm_resp.raw or {}).get("usage", {}) if llm_resp else {}
+        if provider_key is not None and self._account_selector is not None:
+            await self._account_selector.record_usage(
+                provider_key,
+                tokens=usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
+            )
         return ReasonResponse(
             session_id    = req.session_id,
             result        = parsed,

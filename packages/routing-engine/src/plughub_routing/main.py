@@ -1023,8 +1023,8 @@ async def _write_pool_context(
     """
     Writes session.pool.* entries to the ContextStore Redis hash so skill-flows
     can reference @ctx.session.pool.id, @ctx.session.pool.channels,
-    @ctx.session.pool.mentionable_pools, and @ctx.session.pool.max_reply_time_ms
-    without querying the agent-registry.
+    @ctx.session.pool.mentionable_pools, @ctx.session.pool.max_reply_time_ms, and
+    @ctx.session.pool.llm_account_ids without querying the agent-registry.
 
     Reads pool_config from the routing engine's own Redis cache
     ({tenant_id}:pool_config:{pool_id}) to avoid an additional I/O path.
@@ -1047,6 +1047,7 @@ async def _write_pool_context(
         mentionable_pools: dict | None = None
         agent_groups:      list[str]   = []
         max_reply_time_ms: int | None  = None
+        llm_account_ids:   list[str]   = []
         raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
         if raw:
             pool_cfg          = json.loads(raw)
@@ -1054,6 +1055,7 @@ async def _write_pool_context(
             mentionable_pools = pool_cfg.get("mentionable_pools") or None
             agent_groups      = pool_cfg.get("agent_groups") or []
             max_reply_time_ms = pool_cfg.get("max_reply_time_ms") or None
+            llm_account_ids   = pool_cfg.get("llm_account_ids") or []
 
         def _entry(value: object) -> str:
             return json.dumps({
@@ -1074,6 +1076,8 @@ async def _write_pool_context(
             mapping["session.pool.agent_groups"] = _entry(agent_groups)
         if max_reply_time_ms is not None:
             mapping["session.pool.max_reply_time_ms"] = _entry(max_reply_time_ms)
+        if llm_account_ids:
+            mapping["session.pool.llm_account_ids"] = _entry(llm_account_ids)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         # EXPIRE with NX: only sets TTL if no TTL is currently on the key,
