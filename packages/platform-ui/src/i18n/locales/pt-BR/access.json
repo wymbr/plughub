@@ -39,6 +39,7 @@
     "fullName": "Nome completo",
     "emailPlaceholder": "nome@empresa.com",
     "poolsNone": "Nenhum selecionado",
+    "poolsSelected": "{{count}} selecionado(s)",
     "selectAll": "Selecionar todos",
     "deselectAll": "Desmarcar todos",
     "noPoolsConfigured": "Nenhum pool configurado.",

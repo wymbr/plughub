@@ -231,6 +231,18 @@ para **schemas Postgres nomeados por serviço** (ex. `replay.session_stream_even
 `public` não as enxergar; ou (c) isolar o agent-registry num schema Postgres próprio. Investigar o dono
 de `session_stream_events` (session-replayer? Stream Persister) antes de mover.
 
+**Incidente observado ao vivo (2026-07-01) — a mitigação do DB dedicado não protege os dados DO PRÓPRIO
+agent-registry.** Rebuild do `agent-registry` (motivo não relacionado a esta sessão) rodou `db push
+--accept-data-loss` contra `plughub_registry` e zerou as tabelas `pools`/`skills` (0 linhas). Como o
+`RegistrySyncer` (orchestrator-bridge) só roda no boot dele — e ele não tinha reiniciado desde antes do
+wipe — ninguém reseedou automaticamente até um `docker compose restart orchestrator-bridge` manual.
+**Reseed-if-absent funcionou bem** para os 20 pools + 26 skills declarados em
+`infra/registry/tenant_demo.yaml` — mas **dois pools criados via UI fora do YAML** (`humanoxxx`,
+`teste_demo`) **se perderam de vez** (o syncer só semeia o que está no YAML). Implicação prática: **todo
+pool/skill que precisa sobreviver a um rebuild do agent-registry tem que estar declarado no YAML** — criar
+via `+ New Pool` na UI é conveniente mas frágil neste ambiente. Reforça a prioridade do follow-up (a)
+`prisma migrate deploy` — eliminaria o wipe na raiz, não só mitigaria o alcance dele.
+
 ---
 
 ## Webhook pools — throttle de downstream: enforcement no routing *(deferred)*
