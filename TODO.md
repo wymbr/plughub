@@ -206,7 +206,13 @@ sem `x-admin-token` (container tem `admin_token` setado). Atualizar os mocks ao 
 
 ---
 
-## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(concern, 2026-06-24)*
+## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(✅ MITIGADO 2026-06-28 — DB dedicado)*
+
+> **Correção aplicada (opção c):** `agent-registry.DATABASE_URL` → **`plughub_registry`** (banco próprio) no
+> `docker-compose.demo.yml` + init `infra/demo/initdb/00_create_registry_db.sql`. O `db push --accept-data-loss`
+> agora só afeta o banco dele; `plughub_demo` (config-api `platform_config`, auth, calendar, `session_stream_events`
+> …) fica intacto. Confirmado o bug (recriar agent-registry dropava `platform_config`) e o fix. Ver CHANGELOG.
+> **Follow-up opcional:** migrar de `db push` para `prisma migrate deploy` (opção a) como higiene de longo prazo.
 
 **Achado** (durante Skill Versioning Fase E): o CMD do `agent-registry` roda
 `prisma db push --accept-data-loss` no **boot**, no schema **`public`** do `plughub_demo`. Como vários

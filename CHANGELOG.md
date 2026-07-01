@@ -2,6 +2,33 @@
 
 ---
 
+## Infra fix — agent-registry em banco próprio (para de dropar config no build) (2026-06-28)
+
+**Bug (reproduzido):** o container `agent-registry` roda `prisma db push --accept-data-loss` no boot;
+como compartilhava o `plughub_demo` com os demais serviços, o push **DROPava** tabelas do schema `public`
+fora do Prisma dele — em especial `platform_config` (config-api). Como o Docker **bake** rebuilda/recria
+todos os serviços a cada `up --build`, **todo build dropava a config** (templates de dashboard, role_catalog,
+etc.). Confirmado: recriar só o agent-registry → `relation "public.platform_config" does not exist`.
+
+**Fix:** `agent-registry.DATABASE_URL` → **`plughub_registry`** (banco dedicado). O `db push` agora só afeta o
+banco dele; `plughub_demo` (config, auth, calendar, …) fica intacto. Init script
+`infra/demo/initdb/00_create_registry_db.sql` cria o DB em volumes novos; volume existente cria manualmente
+(`CREATE DATABASE plughub_registry`). Nenhum outro serviço lê tabelas do agent-registry direto do banco (usam
+a API 3300/Kafka), então a migração é segura. Bônus: pools/skills editados na UI agora são duráveis (antes
+eram dropados a cada build). **Workaround até aplicar:** `up -d --build --no-deps platform-ui` (não recria o
+agent-registry).
+
+## Dashboards F4 — personalização no Home (allowlist + layout pessoal) (2026-06-28)
+
+- **`DashboardView`** vira personalizável: modo **Customize** (todas as roles) — drag/resize, **×** remove card,
+  **Add component** (dropdown restrito à allowlist da role), **Reset to default** (volta ao starter), **Done**
+  salva o layout pessoal (`layout:{tenant}:{user}` no config-api).
+- **Modelo de resolução**: layout pessoal (se houver) → starter da role → default do módulo → 1º template;
+  `reconcileCards` filtra cards fora da allowlist. Load/save do layout pessoal via config-api (com Bearer).
+- i18n `home.customize/done/saving/reset/addComponent/removeCard` (en+pt). Validado admin/operator/supervisor.
+
+---
+
 ## Dashboards F3 — allowlist + starter por role (2026-06-28)
 
 - **Storage** (`dashboard-hooks`): `role_catalog:{role}` = `{ allowed: string[] (catalog ids), starter_template_id }`

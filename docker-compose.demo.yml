@@ -548,7 +548,11 @@ services:
     ports:
       - "3300:3300"
     environment:
-      DATABASE_URL:   postgresql://plughub:plughub@postgres:5432/plughub_demo
+      # ISOLADO em banco próprio: o agent-registry roda `prisma db push --accept-data-loss`
+      # no boot, que DROPA tabelas do schema public fora do seu Prisma (config-api
+      # platform_config, auth, calendar, …). Apontá-lo a um DB dedicado impede o clobber
+      # do plughub_demo. (Ver TODO: agent-registry db push clobbera tabelas de outros serviços.)
+      DATABASE_URL:   postgresql://plughub:plughub@postgres:5432/plughub_registry
       PORT:           "3300"
       JWT_SECRET:     demo_plughub_secret_32chars__
       # G-PROBE platform-wide: gate dual das mutações de config (pools/skills/channels/
