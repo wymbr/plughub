@@ -243,6 +243,18 @@ pool/skill que precisa sobreviver a um rebuild do agent-registry tem que estar d
 via `+ New Pool` na UI é conveniente mas frágil neste ambiente. Reforça a prioridade do follow-up (a)
 `prisma migrate deploy` — eliminaria o wipe na raiz, não só mitigaria o alcance dele.
 
+**Decisão (2026-07-01) — separar "fresh install" de "restart/reconcile normal".** O `db push
+--accept-data-loss` no CMD de boot do agent-registry não distingue os dois casos: hoje **todo** restart com
+rebuild se comporta como instalação nova (aceita perda silenciosamente), mesmo quando a intenção era só
+subir a imagem atualizada preservando dados. Correção proposta: dois caminhos explícitos —
+(1) **instalação nova** (`FRESH_INSTALL=true` ou script `infra/scripts/fresh-install.sh`): roda `db push
+--accept-data-loss` de propósito, documentado como destrutivo, só usado quando solicitado explicitamente;
+(2) **boot normal** (default): usa `prisma migrate deploy` (não-destrutivo, só aplica migrations
+versionadas) — nunca dropa tabela existente por divergência de schema. Mesmo raciocínio do follow-up (a)
+acima, mas agora com o gatilho explícito de intenção como requisito, não só a troca de comando. Enquanto
+não implementado: **qualquer pool/skill criado via UI fora do YAML deve ser considerado efêmero** neste
+ambiente demo — ou se adiciona ao YAML declarativo, ou se aceita que não sobrevive a um rebuild.
+
 ---
 
 ## Webhook pools — throttle de downstream: enforcement no routing *(deferred)*
