@@ -27,20 +27,14 @@ import {
   useTemplates,
   type RoleCatalog,
 } from '@/api/dashboard-hooks'
-import { ENDPOINT_CATALOG, type EndpointDescriptor } from '@/dashboard/catalog'
-import type { DashboardCard, GlobalFilter, TimeseriesCardConfig } from '@/types'
+import { ENDPOINT_CATALOG, resolveCardTitle, type EndpointDescriptor } from '@/dashboard/catalog'
+import type { DashboardCard, GlobalFilter } from '@/types'
 
 const COLS = 12
 const CATALOG_BY_ENDPOINT = new Map(ENDPOINT_CATALOG.map(e => [e.endpoint, e.id]))
 
 function uuid(): string {
   return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2)
-}
-
-function cardTitle(card: DashboardCard): string {
-  if ('title' in card && (card as { title?: string }).title) return (card as { title: string }).title
-  const cfg = (card as { config?: TimeseriesCardConfig }).config
-  return cfg?.title ?? (card as { type?: string }).type ?? ''
 }
 
 /** Drop cards whose catalog entry is not in the role's allowlist.
@@ -252,7 +246,7 @@ export default function DashboardView() {
               className="bg-white rounded-lg border border-border shadow-sm overflow-hidden flex flex-col"
             >
               <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-surface-muted flex-shrink-0">
-                <span className="text-xs font-medium text-muted truncate">{cardTitle(card)}</span>
+                <span className="text-xs font-medium text-muted truncate">{resolveCardTitle(card, t)}</span>
                 {editing && (
                   <button
                     onMouseDown={e => e.stopPropagation()}

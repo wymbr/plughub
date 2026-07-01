@@ -42,6 +42,8 @@ from .display_formatters import (
     fmt_agent_event_summary,
     fmt_agent_event_timeseries,
     fmt_agent_performance,
+    fmt_pools_queue,
+    fmt_volume_by_channel,
     fmt_evaluation_score,
     fmt_handle_time,
     fmt_kpi_resolution,
@@ -240,6 +242,56 @@ async def display_agent_availability(
     """Human agent pauses per instance/pool/day (Arc 8) — compatible with table."""
     store = request.app.state.store
     data  = await fmt_agent_availability(
+        client           = store.new_client(),
+        database         = store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_,
+        to_dt            = to,
+        pool_id          = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/pools-queue ────────────────────────────────────────
+
+@router.get("/pools-queue")
+async def display_pools_queue(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_:          Optional[str] = Query(None,  alias="from", description="Period start"),
+    to:             Optional[str] = Query(None,  description="Period end"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Queue + SLA aggregated per pool (queue-attended model) — compatible with table."""
+    store = request.app.state.store
+    data  = await fmt_pools_queue(
+        client           = store.new_client(),
+        database         = store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_,
+        to_dt            = to,
+        pool_id          = pool_id,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return JSONResponse(content=data)
+
+
+# ─── GET /reports/display/volume-by-channel ──────────────────────────────────
+
+@router.get("/volume-by-channel")
+async def display_volume_by_channel(
+    request:        Request,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    from_:          Optional[str] = Query(None,  alias="from", description="Period start"),
+    to:             Optional[str] = Query(None,  description="Period end"),
+    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> JSONResponse:
+    """Contact volume split by channel — compatible with donut."""
+    store = request.app.state.store
+    data  = await fmt_volume_by_channel(
         client           = store.new_client(),
         database         = store._database,
         tenant_id        = tenant_id,

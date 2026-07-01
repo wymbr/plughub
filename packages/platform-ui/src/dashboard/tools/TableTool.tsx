@@ -6,6 +6,7 @@
  * data shape: TableData
  */
 import React, { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { DisplayToolProps, TableData } from './types'
 
 function Skeleton() {
@@ -30,6 +31,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
   loading,
   error,
 }) => {
+  const { t } = useTranslation('dashboards')
   const [sortKey, setSortKey]   = useState<string | null>(null)
   const [sortAsc, setSortAsc]   = useState(true)
 
@@ -76,7 +78,7 @@ export const TableTool: React.FC<DisplayToolProps<TableData>> = ({
                     col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'
                   } ${col.sortable ? 'cursor-pointer select-none hover:text-dark' : ''}`}
                 >
-                  {col.label}
+                  {t(`displayCols.${col.key}`, { defaultValue: col.label })}
                   {col.sortable && sortKey === col.key && (
                     <span className="ml-1 text-primary">{sortAsc ? '↑' : '↓'}</span>
                   )}

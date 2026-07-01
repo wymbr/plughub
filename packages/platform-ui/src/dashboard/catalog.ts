@@ -154,6 +154,34 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
     ],
   },
   {
+    id:               'pools-queue',
+    endpoint:         '/reports/display/pools-queue',
+    label:            'Fila / SLA por Pool',
+    icon:             '⏳',
+    description:      'Contatos, fila, abandono e atingimento de SLA por pool',
+    compatible_tools: ['table'],
+    default_tool:     'table',
+    defaultW:         12,
+    defaultH:         5,
+    configurable_params: [
+      { key: 'pool_id', label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
+    ],
+  },
+  {
+    id:               'volume-by-channel',
+    endpoint:         '/reports/display/volume-by-channel',
+    label:            'Volume por Canal',
+    icon:             '📨',
+    description:      'Distribuição de contatos por canal',
+    compatible_tools: ['donut'],
+    default_tool:     'donut',
+    defaultW:         4,
+    defaultH:         3,
+    configurable_params: [
+      { key: 'pool_id', label: 'Pool (fixo)', placeholder: 'Ex: retencao_humano', optional: true },
+    ],
+  },
+  {
     id:               'kpi-sessions',
     endpoint:         '/reports/display/kpi-sessions',
     label:            'KPI: Total de Sessões',
@@ -311,4 +339,37 @@ export const ENDPOINT_CATALOG: EndpointDescriptor[] = [
 /** Lookup an endpoint by ID. */
 export function getEndpoint(id: string): EndpointDescriptor | undefined {
   return ENDPOINT_CATALOG.find(e => e.id === id)
+}
+
+/** Resolve the catalog id for a card's query endpoint (new-format cards). */
+export function catalogIdForEndpoint(endpoint?: string): string | undefined {
+  if (!endpoint) return undefined
+  return ENDPOINT_CATALOG.find(e => e.endpoint === endpoint)?.id
+}
+
+type TFunc = (key: string, opts?: Record<string, unknown>) => string
+
+/**
+ * Display title for a dashboard card, locale-aware.
+ * Cards store a `title` string that was baked in whatever language was active at
+ * creation time. If that stored title still matches the catalog label (in EN or
+ * pt-BR — i.e. the user never renamed it), re-translate it to the current locale.
+ * A genuinely custom title is preserved as-is.
+ */
+export function resolveCardTitle(
+  card: { title?: string; query?: { endpoint?: string }; config?: { title?: string }; type?: string },
+  t: TFunc,
+): string {
+  const stored = (card.title ?? '').trim()
+  const id = catalogIdForEndpoint(card.query?.endpoint)
+  if (id) {
+    const key = `catalog.${id}.label`
+    const cur = t(key)
+    const en  = t(key, { lng: 'en' })
+    const pt  = t(key, { lng: 'pt-BR' })
+    const entry = getEndpoint(id)
+    if (!stored || stored === en || stored === pt || (entry && stored === entry.label)) return cur
+    return stored
+  }
+  return stored || card.config?.title || card.type || ''
 }

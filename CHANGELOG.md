@@ -2,6 +2,20 @@
 
 ---
 
+## Dashboards F1 — cards Fila/SLA + Volume por Canal + i18n de título/colunas (2026-06-28)
+
+- **+2 cards** (molde F1): `fmt_pools_queue` (by_pool → TableData: pool/contatos/fila/abandono/espera/SLA) via
+  `GET /reports/display/pools-queue`; `fmt_volume_by_channel` (by_channel → DonutData) via
+  `GET /reports/display/volume-by-channel`. Entradas `pools-queue`/`volume-by-channel` no `ENDPOINT_CATALOG`
+  + `catalog.*.label` (en+pt). Reusa `query_pools_queue`/`query_pools_volume` (scope aplicado no endpoint).
+- **Fix i18n do card inserido**: o título ficava "assado" no idioma de criação e as colunas da table vinham do
+  backend em idioma misto. Agora: `resolveCardTitle(card, t)` (em `catalog.ts`) re-traduz o label do catálogo em
+  tempo de render (detecta o baked em EN/pt-BR, preserva título custom) — usado em `DashboardView` e
+  `DashboardsPage`; `TableTool` traduz cabeçalhos por `col.key` via dicionário `displayCols` (en+pt) com
+  fallback ao label do backend. Catálogo agora com 19 cards.
+
+---
+
 ## Dashboards F1 — cobertura de catálogo: card "Disponibilidade de Agentes" (2026-06-28)
 
 Primeiro card da cobertura incremental (molde da F1). Reusa o relatório existente do Arc 8.

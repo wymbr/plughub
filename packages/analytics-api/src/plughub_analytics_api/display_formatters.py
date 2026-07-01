@@ -27,7 +27,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .query import get_pool_snapshots
-from .reports_query import query_agent_availability, query_agent_performance_report
+from .reports_query import (
+    query_agent_availability,
+    query_agent_performance_report,
+    query_pools_queue,
+    query_pools_volume,
+)
 from .timeseries_query import (
     query_handle_time_timeseries,
     query_score_timeseries,
@@ -450,6 +455,70 @@ async def fmt_agent_availability(
         })
 
     return {"columns": columns, "rows": rows}
+
+
+async def fmt_pools_queue(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns TableData — queue + SLA aggregated per pool (queue-attended model)."""
+    result = await query_pools_queue(
+        client, database, tenant_id, from_dt, to_dt,
+        pool_id=pool_id, accessible_pools=accessible_pools,
+    )
+    by_pool = (result.get("data") or {}).get("by_pool", [])
+
+    columns = [
+        {"key": "pool_id",      "label": "Pool",         "sortable": True},
+        {"key": "contacts",     "label": "Contatos",     "sortable": True, "align": "right"},
+        {"key": "queued",       "label": "Enfileirados", "sortable": True, "align": "right"},
+        {"key": "abandoned",    "label": "Abandonos",    "sortable": True, "align": "right"},
+        {"key": "abandon_rate", "label": "Abandono %",   "sortable": True, "align": "right"},
+        {"key": "avg_wait",     "label": "Espera Média", "sortable": True, "align": "right"},
+        {"key": "p95_wait",     "label": "Espera P95",   "sortable": True, "align": "right"},
+        {"key": "sla",          "label": "SLA %",        "sortable": True, "align": "right"},
+    ]
+
+    rows = []
+    for r in by_pool:
+        att = r.get("sla_attainment")
+        rows.append({
+            "pool_id":      r.get("pool_id", "-"),
+            "contacts":     int(r.get("contacts", 0)),
+            "queued":       int(r.get("queued", 0)),
+            "abandoned":    int(r.get("abandoned", 0)),
+            "abandon_rate": f"{float(r.get('abandon_rate', 0)) * 100:.1f}%",
+            "avg_wait":     f"{int(r.get('avg_wait_ms', 0) or 0):,} ms",
+            "p95_wait":     f"{int(r.get('p95_wait_ms', 0) or 0):,} ms",
+            "sla":          f"{att * 100:.1f}%" if att is not None else "—",
+        })
+
+    return {"columns": columns, "rows": rows}
+
+
+async def fmt_volume_by_channel(
+    client:           Any,
+    database:         str,
+    tenant_id:        str,
+    from_dt:          str | None,
+    to_dt:            str | None,
+    pool_id:          str | None,
+    accessible_pools: list[str] | None,
+) -> dict:
+    """Returns DonutData — contact volume split by channel."""
+    result = await query_pools_volume(
+        client, database, tenant_id, from_dt, to_dt,
+        pool_id=pool_id, accessible_pools=accessible_pools,
+    )
+    by_channel = (result.get("data") or {}).get("by_channel", [])
+    labels = [str(r.get("channel") or "—") for r in by_channel]
+    values = [int(r.get("contacts", 0)) for r in by_channel]
+    return {"labels": labels, "values": values, "total": sum(values)}
 
 
 # ─── KPI helpers ──────────────────────────────────────────────────────────────

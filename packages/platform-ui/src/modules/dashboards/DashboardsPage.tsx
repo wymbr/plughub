@@ -26,6 +26,7 @@ import { useAuth } from '@/auth/useAuth'
 import { AddCardModal } from '@/dashboard/AddCardModal'
 import { RoleDefaultsModal } from '@/modules/dashboards/RoleDefaultsModal'
 import { CardRenderer } from '@/dashboard/CardRenderer'
+import { resolveCardTitle } from '@/dashboard/catalog'
 import { FilterBar } from '@/dashboard/FilterBar'
 import { FilterConfigPanel } from '@/dashboard/FilterConfigPanel'
 import {
@@ -42,7 +43,6 @@ import type {
   DashboardTemplate,
   GlobalFilter,
   NewDashboardCard,
-  TimeseriesCardConfig,
 } from '@/types'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -501,9 +501,7 @@ export default function DashboardsPage() {
                   {/* Card header — always show title; delete button only in edit mode */}
                   <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-surface-muted flex-shrink-0">
                     <span className="text-xs font-medium text-muted truncate">
-                      {'title' in card
-                        ? (card as { title: string }).title
-                        : ((card.config as TimeseriesCardConfig).title ?? card.type)}
+                      {resolveCardTitle(card, t)}
                     </span>
                     {editMode && (
                       <button
