@@ -155,7 +155,9 @@ async def lifespan(app: FastAPI):
         producer = _producer,
         redis    = _redis,
         settings = settings,
+        db_pool  = db_pool,     # Identity Resolver Slice 2 — durable PG store
     )
+    await _webhook_adapter.ensure_identity_schema()
 
     _channel_adapters = {
         "webchat":  WebchatChannelAdapter(registry=_registry),
@@ -716,6 +718,15 @@ class WebhookDelegateConferenceRequest(BaseModel):
     context:       dict[str, str] = {}
     timeout_hours: float = 1.0
 
+class IdentityAnchor(BaseModel):
+    kind:  str   # phone | email | cpf | princ | dev
+    value: str
+
+class IdentityResolveRequest(BaseModel):
+    tenant_id: str
+    anchors:   list[IdentityAnchor]
+    provision: bool = True
+
 
 @app.post("/v1/channels/webhook/delegate-conference", status_code=201)
 async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) -> dict:
@@ -773,6 +784,39 @@ async def webhook_delegate(body: WebhookDelegateRequest) -> dict:
         timeout_hours     = body.timeout_hours,
     )
     return {"session_id": child_session_id}
+
+
+# ── Identity Resolver (Fase A · Slice 1) ───────────────────────────────────────
+# Declared BEFORE the greedy /{skill_id} and /pending/{contact_identifier} routes.
+# PII travels only on the loopback body; hashing is server-side (never in the URL).
+
+@app.post("/v1/channels/webhook/identity/resolve", status_code=200)
+async def webhook_identity_resolve(body: IdentityResolveRequest) -> dict:
+    """
+    Lookup 1 — resolve/provision a native customer_id from identity anchors.
+    Returns { customer_id, status, matched_by, confidence }.
+    """
+    if _webhook_adapter is None:
+        return {"customer_id": "", "status": "none", "matched_by": "none", "confidence": 0.0}
+    return await _webhook_adapter.resolve_customer(
+        tenant_id = body.tenant_id,
+        anchors   = [a.model_dump() for a in body.anchors],
+        provision = body.provision,
+    )
+
+
+@app.get("/v1/channels/webhook/pending/by-customer/{customer_id}", status_code=200)
+async def webhook_pending_by_customer(customer_id: str, tenant_id: str) -> dict:
+    """
+    Lookup 2 — pending workflows registered under a resolved customer_id.
+    Returns { found, count, pendings[] }.
+    """
+    if _webhook_adapter is None:
+        return {"found": False, "count": 0, "pendings": []}
+    return await _webhook_adapter.find_pending_by_customer(
+        tenant_id   = tenant_id,
+        customer_id = customer_id,
+    )
 
 
 @app.post("/v1/channels/webhook/{skill_id}", status_code=201)

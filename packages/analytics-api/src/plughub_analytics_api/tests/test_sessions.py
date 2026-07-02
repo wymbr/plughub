@@ -29,9 +29,11 @@ from plughub_analytics_api.sessions import (
     _classify,
     _fetch_active_sessions,
     _fetch_customer_history,
+    _make_snippet,
     _overlay_sentiment,
     _parse_entry,
     _safe_json,
+    _search_customer_history,
     router,
 )
 
@@ -552,6 +554,154 @@ class TestCustomerHistoryEndpoint:
         data = resp.json()
         assert len(data) == 3
         assert {r["session_id"] for r in data} == {"sess_A", "sess_B", "sess_C"}
+
+
+# ─── TestCustomerHistorySearch (H2) ───────────────────────────────────────────
+
+class TestMakeSnippet:
+    def test_windows_around_match(self):
+        content = "o cliente reclamou muito da cobranca indevida no cartao de credito hoje"
+        snip = _make_snippet(content, "cobranca", radius=10)
+        assert "cobranca" in snip
+        assert snip.startswith("…") and snip.endswith("…")
+
+    def test_case_insensitive(self):
+        assert "COBRANCA" in _make_snippet("erro na COBRANCA aqui", "cobranca", radius=5)
+
+    def test_no_match_returns_head(self):
+        # term not literally present (e.g. matched via a different message) → head, no crash
+        snip = _make_snippet("mensagem curta", "inexistente")
+        assert snip.startswith("mensagem")
+
+    def test_empty_content(self):
+        assert _make_snippet("", "x") == ""
+
+
+class TestSearchCustomerHistory:
+    def _client(self, rows):
+        client = MagicMock()
+        result = MagicMock()
+        result.result_rows = rows
+        client.query.return_value = result
+        return client
+
+    def _row(self, session_id, content, opened=None):
+        opened = opened or datetime(2024, 5, 1, 10, 0, 0, tzinfo=timezone.utc)
+        return (session_id, opened, "webchat", "resolved", "pool_a", content,
+                datetime(2024, 5, 1, 10, 1, 0, tzinfo=timezone.utc))
+
+    def test_collapses_to_one_hit_per_session(self):
+        rows = [
+            self._row("sess_A", "primeira cobranca"),
+            self._row("sess_A", "segunda cobranca no mesmo contato"),
+            self._row("sess_B", "outra cobranca"),
+        ]
+        hits = _search_customer_history(
+            self._client(rows), "analytics", "t", "cust_1", "cobranca",
+            None, None, None, None, None, 20, 0,
+        )
+        assert [h["session_id"] for h in hits] == ["sess_A", "sess_B"]
+        # score = number of matching messages per session
+        assert hits[0]["score"] == 2
+        assert hits[1]["score"] == 1
+        assert "cobranca" in hits[0]["snippet"]
+        assert hits[0]["channel"] == "webchat"
+        assert hits[0]["outcome"] == "resolved"
+        assert hits[0]["pool_id"] == "pool_a"
+
+    def test_pagination_over_sessions(self):
+        rows = [self._row(f"sess_{i}", "cobranca") for i in range(5)]
+        hits = _search_customer_history(
+            self._client(rows), "analytics", "t", "cust_1", "cobranca",
+            None, None, None, None, None, 2, 1,
+        )
+        assert [h["session_id"] for h in hits] == ["sess_1", "sess_2"]
+
+    def test_filters_added_to_params(self):
+        client = self._client([])
+        _search_customer_history(
+            client, "analytics", "t", "cust_1", "erro",
+            "2024-01-01", "2024-12-31", "voice", "escalated", "pool_x", 20, 0,
+        )
+        _sql, kwargs = client.query.call_args
+        params = kwargs["parameters"]
+        assert params["channel"]  == "voice"
+        assert params["outcome"]  == "escalated"
+        assert params["pool"]     == "pool_x"
+        assert params["date_from"] == "2024-01-01"
+        assert params["date_to"]   == "2024-12-31"
+        assert params["q"]         == "erro"
+        sql = client.query.call_args[0][0]
+        assert "positionCaseInsensitiveUTF8" in sql
+        # never touches the unmasked column
+        assert "original_content" not in sql
+
+    def test_empty_result(self):
+        hits = _search_customer_history(
+            self._client([]), "analytics", "t", "cust_1", "nada",
+            None, None, None, None, None, 20, 0,
+        )
+        assert hits == []
+
+
+class TestSearchEndpoint:
+    def _make_app(self, ch_rows=None, raise_exc=None):
+        app = FastAPI()
+        app.include_router(router)
+        store = MagicMock()
+        store._client   = MagicMock()
+        store._database = "analytics"
+        store.new_client.return_value = store._client
+        if raise_exc:
+            store._client.query.side_effect = raise_exc
+        elif ch_rows is not None:
+            result = MagicMock()
+            result.result_rows = ch_rows
+            store._client.query.return_value = result
+        app.state.store = store
+        app.state.redis = MagicMock()
+        return app
+
+    def _row(self, session_id="sess_1", content="cobranca indevida"):
+        return (session_id, datetime(2024, 5, 1, 10, 0, 0, tzinfo=timezone.utc),
+                "webchat", "resolved", "pool_a", content,
+                datetime(2024, 5, 1, 10, 1, 0, tzinfo=timezone.utc))
+
+    def test_returns_hits(self):
+        app = self._make_app(ch_rows=[self._row()])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_1/search?tenant_id=t&q=cobranca")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["session_id"] == "sess_1"
+        assert "cobranca" in data[0]["snippet"]
+
+    def test_missing_q_returns_422(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_1/search?tenant_id=t")
+        assert resp.status_code == 422
+
+    def test_missing_tenant_returns_422(self):
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_1/search?q=x")
+        assert resp.status_code == 422
+
+    def test_graceful_on_ch_failure(self):
+        app = self._make_app(raise_exc=RuntimeError("ClickHouse down"))
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_1/search?tenant_id=t&q=cobranca")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_does_not_shadow_history_route(self):
+        # /customer/{id} (list) still works alongside /customer/{id}/search
+        app = self._make_app(ch_rows=[])
+        with TestClient(app) as client:
+            resp = client.get("/sessions/customer/cust_1?tenant_id=t")
+        assert resp.status_code == 200
 
 
 # ─── TestStreamClickHouseFallback ────────────────────────────────────────────

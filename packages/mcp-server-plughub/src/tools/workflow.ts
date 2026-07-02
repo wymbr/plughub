@@ -274,13 +274,19 @@ export function registerWorkflowTools(
   server.tool(
     "pending_workflow_get",
     "Check whether the customer has an active pending workflow awaiting their confirmation. " +
-    "Call this after collecting the customer contact_identifier. " +
-    "If found=true, present a menu so the customer can continue their existing process. " +
-    "Use the returned resume_token with workflow_resume to continue or cancel.",
+    "Preferred: pass anchors[] (phone/email/cpf/princ) collected during intake — the Identity " +
+    "Resolver maps them to a native customer_id and finds pendings across channels. " +
+    "Legacy: pass a single contact_identifier. " +
+    "If found=true, present a menu so the customer can continue; use resume_token with workflow_resume.",
     {
-      contact_identifier: z.string().min(1).describe(
-        "Customer phone number or email collected during intake. " +
-        "Used as the lookup key for pending workflows."
+      anchors: z.array(z.object({
+        kind:  z.enum(["phone", "email", "cpf", "princ", "dev"]),
+        value: z.string().min(1),
+      })).optional().describe(
+        "Identity anchors collected during intake (preferred). Cross-channel resolution."
+      ),
+      contact_identifier: z.string().optional().describe(
+        "LEGACY single lookup key (phone/email). Treated as one inferred phone anchor."
       ),
       tenant_id: z.string().min(1).describe(
         "Tenant ID. In skill-flow YAML use $.tenant_id."
@@ -288,7 +294,11 @@ export function registerWorkflowTools(
     } as any,
     withGuard("pending_workflow_get", async (input: Record<string, unknown>) => {
       const parsed = z.object({
-        contact_identifier: z.string().min(1),
+        anchors: z.array(z.object({
+          kind:  z.enum(["phone", "email", "cpf", "princ", "dev"]),
+          value: z.string().min(1),
+        })).optional(),
+        contact_identifier: z.string().optional(),
         tenant_id:          z.string().min(1),
       }).safeParse(input)
 
@@ -302,31 +312,122 @@ export function registerWorkflowTools(
         }
       }
 
-      const { contact_identifier, tenant_id } = parsed.data
-      const url = `${deps.channelGatewayUrl}/v1/channels/webhook/pending/${encodeURIComponent(contact_identifier)}?tenant_id=${encodeURIComponent(tenant_id)}`
+      const { anchors, contact_identifier, tenant_id } = parsed.data
 
+      // Preferred path: anchors → Identity Resolver (Lookup 1 → Lookup 2, cross-channel).
+      if (anchors && anchors.length > 0) {
+        try {
+          const rRes = await fetch(`${deps.channelGatewayUrl}/v1/channels/webhook/identity/resolve`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json" },
+            body:    JSON.stringify({ tenant_id, anchors, provision: false }),
+          })
+          if (!rRes.ok) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
+          }
+          const ref = await rRes.json() as { customer_id: string; status: string }
+          if (!ref.customer_id) {
+            return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, count: 0 }) }] }
+          }
+          const pRes = await fetch(
+            `${deps.channelGatewayUrl}/v1/channels/webhook/pending/by-customer/${encodeURIComponent(ref.customer_id)}?tenant_id=${encodeURIComponent(tenant_id)}`,
+          )
+          const pdata = pRes.ok
+            ? await pRes.json() as { found: boolean; count: number; pendings: unknown[] }
+            : { found: false, count: 0, pendings: [] }
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ customer_id: ref.customer_id, ...pdata }) }],
+          }
+        } catch {
+          return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
+        }
+      }
+
+      // Legacy path: single contact_identifier → old by-handle endpoint.
+      if (!contact_identifier) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: "invalid_input", message: "provide anchors[] or contact_identifier",
+          }) }],
+        }
+      }
+      const url = `${deps.channelGatewayUrl}/v1/channels/webhook/pending/${encodeURIComponent(contact_identifier)}?tenant_id=${encodeURIComponent(tenant_id)}`
       let res: Response
       try {
         res = await fetch(url)
       } catch (err) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }],
-        }
+        return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
       }
-
       if (!res.ok) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
+      }
+      const data = await res.json() as { found: boolean; resume_token?: string; context?: Record<string, string> }
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+    }),
+  )
+
+  // ── customer_resolve ─────────────────────────────────────────────────────────
+  //
+  // Identity-only resolution (no pendings). Resolves/provisions a native
+  // customer_id from anchors — used to key history, memory, or to stamp identity
+  // before delegating. PII travels only on the loopback body; hashing is
+  // server-side in the channel-gateway.
+  //
+  // Returns: { customer_id, status, matched_by, confidence }
+
+  server.tool(
+    "customer_resolve",
+    "Resolve (or provision) the native customer_id from identity anchors (phone/email/cpf/princ). " +
+    "Use to identify the customer before loading history or delegating. " +
+    "provision=true creates an ephemeral prospect when no match exists.",
+    {
+      anchors: z.array(z.object({
+        kind:  z.enum(["phone", "email", "cpf", "princ", "dev"]),
+        value: z.string().min(1),
+      })).min(1).describe("Identity anchors collected during intake."),
+      tenant_id: z.string().min(1).describe("Tenant ID. In skill-flow YAML use $.tenant_id."),
+      provision: z.boolean().optional().describe("Create an ephemeral prospect if no match (default true)."),
+    } as any,
+    withGuard("customer_resolve", async (input: Record<string, unknown>) => {
+      const parsed = z.object({
+        anchors: z.array(z.object({
+          kind:  z.enum(["phone", "email", "cpf", "princ", "dev"]),
+          value: z.string().min(1),
+        })).min(1),
+        tenant_id: z.string().min(1),
+        provision: z.boolean().optional(),
+      }).safeParse(input)
+
+      if (!parsed.success) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }],
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({
+            error: "invalid_input", message: parsed.error.message,
+          }) }],
         }
       }
 
-      const data = await res.json() as { found: boolean; resume_token?: string; context?: Record<string, string> }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify(data),
-        }],
+      const { anchors, tenant_id, provision } = parsed.data
+      try {
+        const res = await fetch(`${deps.channelGatewayUrl}/v1/channels/webhook/identity/resolve`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({ tenant_id, anchors, provision: provision ?? true }),
+        })
+        if (!res.ok) {
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: JSON.stringify({ error: `resolve_failed_http_${res.status}` }) }],
+          }
+        }
+        const data = await res.json()
+        return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+      } catch (err) {
+        return {
+          isError: true,
+          content: [{ type: "text" as const, text: JSON.stringify({ error: "resolve_unreachable" }) }],
+        }
       }
     }),
   )

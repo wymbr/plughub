@@ -2,6 +2,182 @@
 
 ---
 
+## Resolvedor de Identidade — Fase A · Slice 4 (ponte ao histórico) + Fase A completa (2026-07-02)
+
+Conserta na raiz o erro `contact_id`-como-`customer_id`: o `sessions.customer_id` (analytics) passa a
+refletir o **customer_id nativo** resolvido, reconectando o arco H (H1/H2/H3) à identidade real. Fecha a
+**Fase A** do Resolvedor de Identidade (Slices 1–4).
+
+- **`orchestrator-bridge/main.py`** — helper `_resolve_close_customer_id(redis, tenant, session, fallback)`:
+  lê `caller.customer_id` (ContextEntry) do ctx hash `{t}:ctx:{session}` e devolve o nativo, ou o `fallback`
+  (contact_id efêmero) quando ausente/inválido. `_close_contact_layer` chama-o para **sobrescrever**
+  `_customer_id_close` — a linha de fechamento é a autoritativa no ReplacingMergeTree do analytics (o bridge
+  é o único escritor da close row, `models.py` `contact_closed`), então `sessions.customer_id` vira o nativo.
+  Best-effort: qualquer erro → fallback (nunca bloqueia o close).
+- **`platform-ui/AgentAssistPage.tsx`** — a `HistoricoTab` passa a chavear pelo `caller.customer_id` do
+  snapshot do ContextStore (`supervisorState.customer_context.context_snapshot`), com fallback `contactId` —
+  a lista/busca ao vivo resolvem para o cliente real.
+
+**Validação** — 6 unit tests `tests/test_close_customer_id.py` (nativo / fallback ausente / valor vazio /
+JSON malformado / bytes+valor cru / sem tenant), verdes. *(Nota: 2 testes pré-existentes de
+`test_webhook_bridge.py` — `test_resume_publishes_agent_ready_and_agent_done` e
+`test_process_inbound_does_not_call_resume_handler_for_customer_msg` — falham por dívida anterior não
+relacionada: mock de producer que retorna None em `asyncio.create_task`, e referência à função removida
+`forward_inbound_to_active_agent`. Não tocam `_close_contact_layer`.)*
+
+**Escopo (honesto):** a plataforma **propaga** o `customer_id` nativo quando ele já está resolvido no
+ContextStore. **Quem escreve** `caller.customer_id` nativo (intake chamando `customer_resolve`, ou o step CRM
+`resolve` gravando o nativo em vez do id de CRM) é **wiring de fluxo — Fase B**. Sem CRM no demo, a validação
+end-to-end no browser depende desse wiring.
+
+---
+
+## Resolvedor de Identidade — Fase A · Slice 2 (durabilidade PG) (2026-07-02)
+
+Torna a identidade **durável** (sobrevive ao TTL do Redis) — o cadastro mínimo interno passa a ter cofre em
+Postgres, sem virar CRM. Reusa o pool asyncpg que o channel-gateway já cria para os attachments (sem
+dependência nova). Ver `docs/product/identity-resolver-fase-a-plano.md` §2/§3.
+
+- **`identity/index.py`** — `IdentityIndex` ganhou `db_pool` opcional (None → comportamento Redis-only do
+  Slice 1): `ensure_schema` (cria `CREATE SCHEMA IF NOT EXISTS identity` + tabelas `customers`,
+  `customer_secondary_keys`, `customer_external_refs`, `customer_merges` — idempotente, **raw asyncpg, não
+  Prisma**, respeitando o invariante `db push`); `promote_to_durable` (upsert em `customers` +
+  `customer_secondary_keys` reusando o `customer_id` nativo, chaves **hasheadas**); e **fallback Redis→PG** em
+  `resolve_or_provision` — miss no índice Redis → `_pg_resolve` por `(kind, value_hash)` → **reidrata** o
+  índice Redis e devolve `matched_by="durable"`.
+- **`adapters/webhook.py`** — adapter recebe `db_pool`; `ensure_identity_schema()` chamado no startup;
+  **promoção no gatilho concreto** (§5 da spec): logo após `write_pending` no `_open_child_session` (uma
+  pendência registrada precisa sobreviver à janela efêmera).
+- **`main.py`** — passa o pool asyncpg existente ao `WebhookAdapter` e chama `ensure_identity_schema` no
+  startup.
+
+**LGPD:** o PG guarda **só hashes** (`value_hash`), nunca a PII crua; teste inspeciona que o telefone não
+aparece em `value_hash`. Schema `identity` separado de `auth` (cliente final ≠ usuário de plataforma).
+
+**Validação** — 3 unit tests novos (`TestDurability`: promoção + fallback com fake PG pool + reidratação;
+sem-pool sem-fallback; promote/ensure no-op sem pool) → 19 no total em `tests/test_identity_index.py`; smoke
+`infra/test/test_identity_resolver_slice2.sh` (delegate dispara promoção → `identity.customers` +
+`secondary_keys` populados → apaga o índice Redis → resolve por email e phone ainda acha via PG
+`matched_by="durable"` + reidrata; LGPD sem PII no PG). Tudo verde.
+
+**Limitação registrada:** `external_refs`/`merges` têm DDL mas só são populados na Fase B (identidade
+progressiva + merge de clientes).
+
+---
+
+## Resolvedor de Identidade — Fase A · Slice 1 (Redis-only) (2026-07-02)
+
+Primeira fatia do **cadastro mínimo interno de cliente** (sem CRM) que renasce o papel identidade↔fluxo-
+pendente da Journey (removida no Arc 19 Fase F) — ver `docs/product/identity-resolver-nivel-b-spec.md` e o
+plano `docs/product/identity-resolver-fase-a-plano.md`. Motivação de fundo: `contact_id`-como-`customer_id`
+é um erro; sem identidade estável não há histórico unificado nem retomada cross-canal. Slice 1 entrega o
+mecanismo (Redis-only, sem PG ainda) e a **retomada cross-canal demoável**.
+
+- **`packages/channel-gateway/.../identity/`** (módulo coeso, co-localizado por reuso do prior art
+  `pending_workflow`): `normalize.py` (normalização por tipo phone/email/cpf/princ + `hash_anchor` =
+  `sha256(salt+normalizado)`) e `index.py` (`IdentityIndex`): **Lookup 1** `resolve_or_provision`
+  (`{t}:identity:{kind}:{hash}`→`customer_id`; provisiona prospect efêmero `cus_…` quando ausente;
+  desambiguação por confiança princ>cpf>email>phone; `ambiguous` em colisão de confiança igual) e **Lookup 2**
+  `write/find/consume_pending` (`{t}:pending_by_customer:{customer_id}` HASH; `find` poda pendências cujo
+  `resume_token` saiu de `{t}:resume_tokens`).
+- **`adapters/webhook.py`**: `_open_child_session` faz **dual-write** (chave legada `pending_workflow:{contact_id}`
+  + `pending_by_customer:{customer_id}`), flag-gated (`PLUGHUB_IDENTITY_RESOLVER_ENABLED`), best-effort;
+  `_anchors_from_context` deriva âncoras do context; métodos `resolve_customer`/`find_pending_by_customer`.
+- **`main.py`**: `POST /v1/channels/webhook/identity/resolve` + `GET /v1/channels/webhook/pending/by-customer/{id}`
+  (declarados antes das rotas greedy `/{skill_id}` e `/pending/{contact_identifier}`).
+- **`mcp-server-plughub/src/tools/workflow.ts`**: tool nova `customer_resolve`; `pending_workflow_get` estendida
+  com `anchors[]` (Lookup 1→Lookup 2 cross-canal), mantendo `contact_identifier` legado. `workflow_resume`
+  inalterada.
+- **Config/env**: namespace `identity` no config-api (`prospect_ttl_s`, `resolution_index_ttl_s`, `system_trust`);
+  **salt em env** `PLUGHUB_IDENTITY_SALT` (correção de invariante: salt é segredo, não config-api). Env no
+  compose demo do channel-gateway.
+
+**LGPD:** índice de resolução **nunca guarda PII em claro** (âncoras normalizadas + hasheadas com salt por
+tenant); tenant isolation nas chaves; teste inspeciona que phone/email não aparecem em `{t}:identity:*`.
+
+**Validação** — 16 unit tests (`tests/test_identity_index.py`, stub Redis in-memory: normalize/hash
+determinístico+salt, provision, cross-âncora, tenant isolation, ambiguous, confiança, pendências + stale) +
+smoke `infra/test/test_identity_resolver_slice1.sh` (resolve/provision → cross-canal por email e phone →
+pendência por cliente → retomada por outro canal → stale → sem PII no índice). Tudo verde.
+
+**Limitação registrada:** identidade progressiva (anexar âncora nova a cliente existente em match parcial) e
+durabilidade PG ficam para Slice 2 / Fase B.
+
+---
+
+## Customer History H2 — busca no histórico do cliente (backend) (2026-07-02)
+
+Fecha a fase **H2** de `docs/arcos/customer-contact-history.md`: endpoint de busca por termo dentro dos
+atendimentos passados de um cliente ("o cliente já reclamou de cobrança antes?"). Backend apenas — a UI
+(caixa de busca + filtros na `HistoricoTab`) é a H3.
+
+- **`packages/analytics-api/src/plughub_analytics_api/sessions.py`** — `GET /sessions/customer/{id}/search`
+  (`customer_history_search` + `_search_customer_history` + helpers `_iso`/`_make_snippet`). Query:
+  ClickHouse `messages` JOIN `(sessions FINAL)`, escopo `tenant_id + customer_id`, só sessões fechadas,
+  `positionCaseInsensitiveUTF8(m.content, {q})` (substring case-insensitive), filtros estruturados
+  `from`/`to` (via `parseDateTimeBestEffort`), `channel`/`outcome`/`pool`; colapsa em **1 hit por sessão**
+  (ordem `opened_at` DESC, consistente com a lista) → `{ session_id, opened_at, channel, outcome, pool_id,
+  snippet, score }`; `score` = nº de mensagens que casaram; `limit`/`offset` paginam **sessões**. Graceful
+  em falha (200 `[]`).
+
+**Decisão de arquitetura (diverge do doc §5 original, registrada):** buscar sobre **ClickHouse**
+(`messages`+`sessions`) em vez do Postgres `session_stream_events`. Motivos: (a) **LGPD por construção** —
+`analytics.messages` não tem coluna `original_content` (o Postgres a tem ao lado do texto mascarado → risco);
+(b) `sessions.customer_id` dá escopo por cliente sem join cross-store; (c) colocado com H1/transcrição e já
+alcançável pelo proxy. Custo: sem stemming (substring). Postgres+`GIN(tsvector)` fica p/ escala (H5).
+
+**LGPD:** indexa e devolve **só conteúdo MASKED** (`messages.content`); `original_content` não existe na
+tabela — nunca lido nem exposto; sem `audit_access_log` (mesma postura do H1). Teste unitário faz assert de
+que a string `original_content` **não** aparece no SQL.
+
+**Validação** — 13 unit tests novos em `tests/test_sessions.py` (`TestMakeSnippet`, `TestSearchCustomerHistory`,
+`TestSearchEndpoint`: snippet/janela, collapse por sessão, paginação, filtros→params, 422 sem `q`/tenant,
+graceful, no-shadow da rota da lista) + smoke `infra/test/test_h2_customer_history_search.sh` (seed 2 sessões
++ mensagens; valida score por sessão, ordem `opened_at` DESC, case-insensitive, filtros channel/outcome,
+termo inexistente=0, e o proxy `/analytics` no :5174). Tudo verde.
+
+---
+
+## Customer History H1 — drill lista → transcrição na HistoricoTab (2026-07-02)
+
+Fecha a fase **H1** de `docs/arcos/customer-contact-history.md`: no Agent Assist (platform-ui), expandir
+um contato na aba **Histórico** agora carrega **inline** a transcrição MASKED daquele atendimento anterior
+(clicar na linha já abre; fetch lazy na primeira expansão). Resolve "ver o atendimento que originou a
+pesquisa/contato" reusando o endpoint de transcrição que já existia.
+
+Recon revelou que o "só falta wiring" tinha um pré-requisito de infra: o **platform-ui (:5174) nunca teve
+proxy `/analytics/*`** (só o legado `agent-assist-ui` :5173 tinha). Por isso, no app canônico, tanto a lista
+de contatos quanto a transcrição eram **inalcançáveis** (a lista degradava silenciosamente para vazio). O fix
+adiciona o proxy — que conserta a lista pré-existente **e** habilita o drill.
+
+- **`packages/platform-ui/Dockerfile`** (nginx) + **`vite.config.ts`** — nova rota `/analytics/*` →
+  `analytics-api:3500` com strip do prefixo (espelha o legado). Alcança `/sessions/customer/{id}` e
+  `/v1/transcript/sessions/{id}` sem colidir com o catch-all `/v1` → agent-registry.
+- **`src/modules/agent-assist/hooks/useSessionTranscript.ts`** (novo) — fetch lazy de
+  `GET /analytics/v1/transcript/sessions/{id}?scope=contact`, degradação graciosa, cancelamento.
+- **`src/modules/agent-assist/types.ts`** — `TranscriptMessage` + `SessionTranscriptResult`.
+- **`src/modules/agent-assist/components/tabs/HistoricoTab.tsx`** — `TranscriptView`/`TranscriptBubble`
+  inline na linha expandida (bolhas compactas, `max-h-64` rolável, estados loading/erro/vazio, estilo de
+  nota interna `agents_only`, aviso "conteúdo mascarado (LGPD)").
+- **i18n** `agentAssist.json` (en + pt-BR) — 5 chaves `historico.*` (transcriptTitle, loadingTranscript,
+  transcriptError, noMessages, maskedNote).
+
+**LGPD:** masked-by-construction — `analytics.messages` não tem coluna `original_content`, então o drill
+não expõe original e **não** requer `audit_access_log` (postura §8 do doc). O endpoint impõe só tenant
+isolation; conteúdo mascarado = baixa sensibilidade (D3).
+
+**Correção de doc:** o prefixo real do router é `/v1/transcript` (o doc dizia `/transcript`); path do drill =
+`/analytics/v1/transcript/sessions/{id}`.
+
+**Validação** — `infra/test/test_h1_customer_history_drill.sh` (novo), 7/7 verde: (A) transcrição MASKED
+direto no :3500 (3 msgs semeadas, token e `agents_only` preservados); (B) **novo proxy** `/analytics/*` no
+:5174 (transcrição + lista chegam ao analytics-api, não à SPA); (C) drill com dado real descoberto no demo
+(customer real → lista traz a sessão → transcrição MASKED com 11 msgs). Render visual no browser pendente de
+sessão com contato identificado cujo id resolva ao `sessions.customer_id` (limitação de identidade, §7 do doc
+— fora do escopo de H1).
+
+---
+
 ## G-PROBE — perna humana `curar` (curadoria/calibração) fechada: seed + smoke (2026-07-02)
 
 Fecha o item "G-PROBE (perna humana `curar`)" do TODO. Recon encontrou o desenho fechado em 2026-06-25

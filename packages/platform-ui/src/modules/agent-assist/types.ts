@@ -390,6 +390,30 @@ export interface ContactHistoryEntry {
   close_reason: string | null;
 }
 
+// ── Session transcript (drill-down from history — H1) ─────────────────────────
+//
+// Shape returned by analytics-api GET /v1/transcript/sessions/{id}. Content is
+// MASKED by construction (analytics.messages has no original_content column), so
+// this is LGPD-safe to render for any agent in the Agent Assist panel.
+
+export interface TranscriptMessage {
+  stream_entry_id: string;
+  event_type:      string;
+  author_id:       string | null;
+  author_role:     string | null;
+  visibility:      string;
+  /** Masked content — never the unmasked original. */
+  content:         string;
+  created_at:      string;
+}
+
+export interface SessionTranscriptResult {
+  session_id: string;
+  scope:      string;
+  messages:   TranscriptMessage[];
+  masked:     boolean;
+}
+
 // ── Close modal ───────────────────────────────────────────────────────────────
 
 export interface ClosePayload {

@@ -1527,6 +1527,38 @@ async def _mark_contact_ended(
     return now
 
 
+async def _resolve_close_customer_id(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+    fallback:     str,
+) -> str:
+    """
+    Identity Resolver Slice 4 — resolve the customer_id to stamp on the sessions
+    close row. Prefers the native `caller.customer_id` from the ContextStore
+    (written by the intake/resolve step once identity is resolved); falls back to
+    `fallback` (the ephemeral contact_id from session meta) when absent.
+
+    The ctx field is a ContextEntry JSON blob ({value, confidence, ...}); we read
+    only its `value`. Best-effort: any error → fallback (never blocks close).
+    """
+    if not tenant_id or not session_id:
+        return fallback
+    try:
+        raw = await redis_client.hget(f"{tenant_id}:ctx:{session_id}", "caller.customer_id")
+        if not raw:
+            return fallback
+        entry = json.loads(raw if isinstance(raw, str) else raw.decode())
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        value = str(value).strip() if value is not None else ""
+        return value or fallback
+    except Exception as exc:
+        logger.debug(
+            "_resolve_close_customer_id: fallback for session=%s — %s", session_id, exc,
+        )
+        return fallback
+
+
 async def _close_contact_layer(
     redis_client: aioredis.Redis,
     session_id:   str,
@@ -1624,6 +1656,17 @@ async def _close_contact_layer(
         _started_at_close  = meta.get("started_at", "") if meta else ""
         _customer_id_close = meta.get("customer_id", "") if meta else ""
         _channel_close     = meta.get("channel", "webchat") if meta else "webchat"
+
+        # Identity Resolver Fase A · Slice 4 — stamp the resolved NATIVE customer_id
+        # onto the authoritative sessions-close row. Until identity is resolved,
+        # customer_id is the ephemeral contact_id (channel handle) set at session
+        # open; once the intake/resolve step writes caller.customer_id (native),
+        # past closed contacts must unify under it so history/search key on the
+        # real customer. Overwrite here (ReplacingMergeTree close row wins);
+        # fallback to the meta contact_id when unresolved.
+        _customer_id_close = await _resolve_close_customer_id(
+            redis_client, tenant_id, session_id, _customer_id_close,
+        )
 
         # SLA do pool no fechamento: a linha de close é a que sobrevive no
         # ReplacingMergeTree do analytics — repetir o sla_target_ms aqui evita

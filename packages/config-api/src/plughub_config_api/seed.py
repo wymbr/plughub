@@ -53,6 +53,26 @@ logger = logging.getLogger("plughub.config.seed")
 
 _SEED: list[tuple[str, str, object, str]] = [
 
+    # ── identity (Resolvedor de Identidade — Nível b, Fase A) ───────────────────
+    # Tuning só; o salt de hashing é SEGREDO e vive em env (PLUGHUB_IDENTITY_SALT),
+    # nunca aqui. TTLs deslizantes do andar efêmero (Redis). system_trust pesa a
+    # confiança por sistema externo na desambiguação/merge (fase B+).
+    (
+        "identity", "prospect_ttl_s", 2592000,
+        "TTL (segundos) do prospect efêmero no Redis (andar não-durável). "
+        "Default 30d, deslizante. Promoção ao PG por gatilho concreto (Slice 2).",
+    ),
+    (
+        "identity", "resolution_index_ttl_s", 2592000,
+        "TTL (segundos) das entradas do índice de resolução {t}:identity:{kind}:{hash}. "
+        "Default 30d.",
+    ),
+    (
+        "identity", "system_trust", {},
+        "Peso de confiança por sistema externo (ex.: {\"crm_salesforce\":0.95}). "
+        "Usado na desambiguação do Lookup 1 e no merge (fase B+). Vazio no v1.",
+    ),
+
     # ── sentiment ─────────────────────────────────────────────────────────────
     # Source: ai-gateway/sentiment_emitter.py (_classify function)
     (

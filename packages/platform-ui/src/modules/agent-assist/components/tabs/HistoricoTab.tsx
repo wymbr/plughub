@@ -3,7 +3,8 @@
  * Shows the customer's last N closed sessions from analytics-api.
  *
  * Each session row shows: date, channel icon, duration, outcome badge, close_reason.
- * Clicking a row expands it to show pool_id and session_id for reference.
+ * Clicking a row expands it to show pool_id/session_id and lazily loads the MASKED
+ * transcript of that past contact inline (Customer History H1 — drill-down).
  *
  * Note (Arc 19 Fase F): "Processos em aberto" (Open Journeys) section removed —
  * Journey entity eliminated. Session history remains unchanged.
@@ -12,8 +13,9 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Timer, User } from "lucide-react";
-import { ContactHistoryEntry } from "../../types";
+import { ContactHistoryEntry, TranscriptMessage } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
+import { useSessionTranscript } from "../../hooks/useSessionTranscript";
 
 interface HistoricoTabProps {
   customerId:  string | null;
@@ -60,6 +62,18 @@ function formatDuration(ms: number | null): string {
   return `${hours}h${mins > 0 ? ` ${mins}m` : ""}`;
 }
 
+function formatTime(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    return new Date(iso).toLocaleTimeString(undefined, {
+      hour:   "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
 function OutcomeBadge({ outcome }: { outcome: string | null }): JSX.Element {
   const { t } = useTranslation('agentAssist');
   const colorMap: Record<string, string> = {
@@ -78,6 +92,79 @@ function OutcomeBadge({ outcome }: { outcome: string | null }): JSX.Element {
     </span>
   );
 }
+
+// ── Transcript drill-down (H1) ────────────────────────────────────────────────
+
+const TranscriptBubble: React.FC<{ msg: TranscriptMessage }> = ({ msg }) => {
+  const isCustomer = msg.author_role === "customer";
+  const isInternal = msg.visibility === "agents_only";
+  const role       = msg.author_role || "—";
+  return (
+    <div className={`flex flex-col ${isCustomer ? "items-start" : "items-end"}`}>
+      <div
+        className={`max-w-[85%] rounded-lg px-2.5 py-1.5 text-2xs leading-snug ${
+          isInternal
+            ? "bg-warning-light text-warning-text border border-dashed border-warning/40"
+            : isCustomer
+              ? "bg-surface-alt text-dark"
+              : "bg-primary/10 text-dark"
+        }`}
+      >
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className="text-2xs font-semibold uppercase tracking-wide text-muted-light">
+            {role}
+          </span>
+          <span className="text-2xs text-muted-light">{formatTime(msg.created_at)}</span>
+        </div>
+        <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+      </div>
+    </div>
+  );
+};
+
+const TranscriptView: React.FC<{ sessionId: string }> = ({ sessionId }) => {
+  const { t } = useTranslation('agentAssist');
+  const { messages, loading, error } = useSessionTranscript(sessionId);
+
+  return (
+    <div className="mt-2 pt-2 border-t border-border">
+      <div className="text-2xs font-semibold uppercase tracking-wide text-muted-light mb-1.5">
+        {t('historico.transcriptTitle')}
+      </div>
+
+      {loading && (
+        <div className="text-2xs text-muted-light animate-pulse py-2">
+          {t('historico.loadingTranscript')}
+        </div>
+      )}
+
+      {error && (
+        <div className="text-2xs text-red-text bg-red-light border border-red/30 rounded p-1.5">
+          {t('historico.transcriptError', { error })}
+        </div>
+      )}
+
+      {!loading && !error && messages.length === 0 && (
+        <div className="text-2xs text-muted-light py-2">
+          {t('historico.noMessages')}
+        </div>
+      )}
+
+      {messages.length > 0 && (
+        <>
+          <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
+            {messages.map((m) => (
+              <TranscriptBubble key={m.stream_entry_id} msg={m} />
+            ))}
+          </div>
+          <div className="text-2xs text-muted-light mt-1.5 italic">
+            {t('historico.maskedNote')}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 // ── Entry row ─────────────────────────────────────────────────────────────────
 
@@ -134,6 +221,9 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
           <div className="font-mono text-2xs text-muted-light truncate">
             {entry.session_id}
           </div>
+
+          {/* Drill-down: masked transcript loaded lazily on expand (H1) */}
+          <TranscriptView sessionId={entry.session_id} />
         </div>
       )}
     </div>

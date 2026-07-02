@@ -4,6 +4,20 @@
 
 ---
 
+## Resolvedor de Identidade — próximos passos (Fase A ✅ Slices 1–4; falta Slice 3 + Fase B) *(2026-07-02)*
+
+**Estado:** Fase A completa e validada (ver `CHANGELOG.md` § Slices 1/2/4 e `docs/product/identity-resolver-fase-a-plano.md`). Cadastro mínimo interno sem CRM: índice Redis + durabilidade PG (`schema identity`) + retomada cross-canal + `sessions.customer_id` = nativo no fechamento (conserta `contact_id`-como-`customer_id`, reconecta H1/H2/H3).
+
+**Próximo (recomendado — desbloqueia o valor no demo):**
+- **Wiring do intake para escrever `caller.customer_id` NATIVO** (Fase B, mas é o gargalo prático). Hoje o Slice 4 propaga o nativo *se ele existir* no ContextStore; **nada o escreve** no demo (não há CRM). Fazer um fluxo de intake (ex.: adaptar `agente_portabilidade_intake_v1`) chamar a tool `customer_resolve` com as âncoras coletadas e gravar o `customer_id` retornado em `caller.customer_id` (via `context_tags.outputs`). Só então a lista/busca de histórico unificam de verdade num contato ao vivo, e dá pra validar H1/H2/H3 no browser end-to-end.
+- **Slice 3** — campos `customer_resumable`/`resume_policy` no step `delegate` (schema `skills.ts` + propagação no engine até o callback `persistDelegate` — **verificar** se o engine repassa campos novos) + `session_resumed` com `resume_origin: same_channel|token|identity`. Ver plano §2 Slice 3 + spec §6/§11.
+- **Fase B** — identidade progressiva (anexar âncora nova a cliente existente em match parcial — hoje retorna o existente sem indexar as novas), `external_refs` (CRM id → `external_refs`, não como chave), merge de clientes. Spec §5/§12.
+- **Consolidar `caller.customer_id = nativo` no step CRM `resolve`** (`agente_contexto_ia_v1.yaml`): hoje o `buscar_crm` grava `caller.customer_id` com o id do CRM; no modelo novo o nativo é a chave e o CRM vai p/ `external_refs`. Spec §13.8-5 / §3 nota de migração.
+
+**Dívida colateral (não bloqueia):** 2 testes pré-existentes de `packages/orchestrator-bridge/.../tests/test_webhook_bridge.py` falham por drift anterior, **sem relação com identidade**: `test_resume_publishes_agent_ready_and_agent_done` (mock de producer retorna `None` em `asyncio.create_task`) e `test_process_inbound_does_not_call_resume_handler_for_customer_msg` (referencia a função removida `forward_inbound_to_active_agent`). Corrigir = atualizar o mock p/ retornar coroutine e realinhar o 2º teste ao nome atual do handler de inbound.
+
+---
+
 ## evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente *(achado ao vivo, 2026-07-02)*
 
 Encontrado ao validar o fix de self-view (ver `CHANGELOG.md` § "evaluation-api — bug self-view..."): rodando

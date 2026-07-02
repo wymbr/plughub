@@ -13,6 +13,12 @@ Routes:
       Returns session_id, channel, pool_id, opened_at, closed_at, duration_ms,
       outcome, close_reason for each past contact.
 
+  GET /sessions/customer/{customer_id}/search?tenant_id=xxx&q=term&...
+      Customer History H2 — keyword search over the customer's closed contacts,
+      matching MASKED message content only (LGPD-safe by construction). One hit
+      per session with a masked snippet + match count. Filters: from/to/channel/
+      outcome/pool; paginated by limit/offset.
+
   GET /sessions/{session_id}/stream?tenant_id=xxx
       SSE stream of the Redis session stream (session:{id}:stream).
       First event type "history" delivers all existing entries.
@@ -266,6 +272,160 @@ def _fetch_customer_history(
             "close_reason": close_reason,
         })
     return rows
+
+
+# ─── GET /sessions/customer/{customer_id}/search ─────────────────────────────
+#
+# Customer History H2 — keyword search over a customer's past contacts.
+# Matches the MASKED message content only (analytics.messages has no
+# original_content column), so this is LGPD-safe by construction — same posture
+# as the transcript drill (H1): no unmasked exposure, no audit_access_log.
+# Substring match (positionCaseInsensitiveUTF8), one hit per session with a
+# representative masked snippet + match count (score). Filters mirror the list.
+
+_SEARCH_DEFAULT_LIMIT = 20
+_SEARCH_MAX_LIMIT     = 100
+_SEARCH_SCAN_CAP      = 2_000   # max matching messages scanned before collapsing
+_SNIPPET_RADIUS       = 60      # chars of context on each side of the match
+
+
+def _iso(val: Any) -> str | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        if val.tzinfo is None:
+            val = val.replace(tzinfo=timezone.utc)
+        return val.isoformat()
+    return str(val)
+
+
+def _make_snippet(content: str, term: str, radius: int = _SNIPPET_RADIUS) -> str:
+    """Window of masked content around the first case-insensitive match of `term`."""
+    if not content:
+        return ""
+    idx = content.lower().find(term.lower())
+    if idx < 0:
+        head = content[: radius * 2].strip()
+        return head + ("…" if len(content) > radius * 2 else "")
+    start = max(0, idx - radius)
+    end   = min(len(content), idx + len(term) + radius)
+    snippet = content[start:end].strip()
+    if start > 0:
+        snippet = "…" + snippet
+    if end < len(content):
+        snippet = snippet + "…"
+    return snippet
+
+
+@router.get("/customer/{customer_id}/search")
+async def customer_history_search(
+    customer_id: str,
+    request:     Request,
+    tenant_id:   str = Query(..., description="Tenant identifier"),
+    q:           str = Query(..., min_length=1, description="Free-text term (masked content)"),
+    date_from:   str | None = Query(None, alias="from", description="Lower bound on opened_at (ISO)"),
+    date_to:     str | None = Query(None, alias="to",   description="Upper bound on opened_at (ISO)"),
+    channel:     str | None = Query(None, description="Filter by channel"),
+    outcome:     str | None = Query(None, description="Filter by outcome"),
+    pool:        str | None = Query(None, description="Filter by pool_id"),
+    limit:       int = Query(_SEARCH_DEFAULT_LIMIT, ge=1, le=_SEARCH_MAX_LIMIT),
+    offset:      int = Query(0, ge=0),
+) -> JSONResponse:
+    """
+    Keyword search over a customer's closed contacts. Returns one hit per session:
+      { session_id, opened_at, channel, outcome, pool_id, snippet, score }
+    `snippet` and the search index are MASKED content only — the original is never
+    read (the column does not exist in analytics.messages). Graceful on failure.
+    """
+    store = request.app.state.store
+    try:
+        hits = await asyncio.to_thread(
+            _search_customer_history,
+            store.new_client(), store._database, tenant_id, customer_id,
+            q, date_from, date_to, channel, outcome, pool, limit, offset,
+        )
+        return JSONResponse(content=hits)
+    except Exception as exc:
+        logger.warning(
+            "customer_history_search failed tenant=%s customer=%s q=%r: %s",
+            tenant_id, customer_id, q, exc,
+        )
+        return JSONResponse(content=[], status_code=200)
+
+
+def _search_customer_history(
+    client: Any, db: str, tenant_id: str, customer_id: str, q: str,
+    date_from: str | None, date_to: str | None,
+    channel: str | None, outcome: str | None, pool: str | None,
+    limit: int, offset: int,
+) -> list[dict]:
+    """
+    Scan matching MASKED messages for a customer's closed sessions, then collapse
+    to one hit per session (most recent first). LIMIT/OFFSET paginate sessions,
+    not raw message matches.
+    """
+    where = [
+        "s.tenant_id   = {tenant_id:String}",
+        "s.customer_id = {customer_id:String}",
+        "s.closed_at IS NOT NULL",
+        "m.content IS NOT NULL",
+        "positionCaseInsensitiveUTF8(m.content, {q:String}) > 0",
+    ]
+    params: dict[str, Any] = {
+        "tenant_id": tenant_id, "customer_id": customer_id, "q": q,
+    }
+    if channel:
+        where.append("s.channel = {channel:String}");  params["channel"] = channel
+    if outcome:
+        where.append("s.outcome = {outcome:String}");  params["outcome"] = outcome
+    if pool:
+        where.append("s.pool_id = {pool:String}");     params["pool"] = pool
+    if date_from:
+        where.append("s.opened_at >= parseDateTimeBestEffort({date_from:String})")
+        params["date_from"] = date_from
+    if date_to:
+        where.append("s.opened_at <= parseDateTimeBestEffort({date_to:String})")
+        params["date_to"] = date_to
+
+    result = client.query(
+        f"""
+        SELECT
+            m.session_id,
+            s.opened_at,
+            s.channel,
+            s.outcome,
+            s.pool_id,
+            m.content,
+            m.timestamp
+        FROM {db}.messages AS m
+        INNER JOIN (SELECT * FROM {db}.sessions FINAL) AS s
+            ON m.session_id = s.session_id AND m.tenant_id = s.tenant_id
+        WHERE {' AND '.join(where)}
+        ORDER BY s.opened_at DESC, m.timestamp ASC
+        LIMIT {_SEARCH_SCAN_CAP}
+        """,
+        parameters=params,
+    )
+
+    by_session: dict[str, dict] = {}
+    order: list[str] = []
+    for r in result.result_rows:
+        session_id, opened_at, channel_v, outcome_v, pool_id, content, _ts = r
+        if session_id not in by_session:
+            order.append(session_id)
+            by_session[session_id] = {
+                "session_id": session_id,
+                "opened_at":  _iso(opened_at),
+                "channel":    channel_v,
+                "outcome":    outcome_v,
+                "pool_id":    pool_id,
+                "snippet":    _make_snippet(str(content or ""), q),
+                "score":      0,
+            }
+        by_session[session_id]["score"] += 1
+
+    hits = [by_session[s] for s in order]
+    return hits[offset : offset + limit]
 
 
 # ─── GET /sessions/{session_id}/stream ───────────────────────────────────────

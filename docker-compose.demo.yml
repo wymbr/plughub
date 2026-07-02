@@ -1123,6 +1123,9 @@ services:
       PLUGHUB_KAFKA_BROKERS:              kafka:29092
       PLUGHUB_REDIS_URL:                  redis://redis:6379
       PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!
+      # Identity Resolver (Fase A · Slice 1). Salt is a SECRET → env only.
+      PLUGHUB_IDENTITY_RESOLVER_ENABLED:  "true"
+      PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo
       PLUGHUB_CONFIG_API_URL:             http://config-api:3600
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +

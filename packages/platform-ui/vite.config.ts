@@ -26,6 +26,12 @@ export default defineConfig({
         ws: true,
         rewrite: (path: string) => path.replace(/^\/agent-ws/, '/agent/ws'),
       },
+      '^/analytics': {
+        // agent-assist customer history + transcript → analytics-api (prefix stripped)
+        target: 'http://localhost:3500',
+        changeOrigin: true,
+        rewrite: (path: string) => path.replace(/^\/analytics/, ''),
+      },
       '^/v1/workflow': {
         target: 'http://localhost:3800',
         changeOrigin: true

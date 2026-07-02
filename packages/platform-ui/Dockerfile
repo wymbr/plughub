@@ -61,6 +61,20 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # analytics-api (agent-assist customer history + transcript)\n\
+    # /analytics/* → analytics-api:3500/*  (prefix stripped, mirrors legacy agent-assist-ui).\n\
+    # Reaches /sessions/customer/{id} and /v1/transcript/sessions/{id} without colliding\n\
+    # with the generic /v1 → agent-registry rule below.\n\
+    location ~ ^/analytics/ {\n\
+        set $up_analytics_aa http://analytics-api:3500;\n\
+        rewrite ^/analytics(/.*)$ $1 break;\n\
+        proxy_pass         $up_analytics_aa;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # workflow-api (/v1/workflow and /v1/journeys) — must come before generic /v1 rule\n\
     location ~ ^/v1/workflow(/|$) {\n\
         set $up_workflow http://workflow-api:3800;\n\

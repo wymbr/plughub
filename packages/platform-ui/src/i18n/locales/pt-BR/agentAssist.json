@@ -320,6 +320,11 @@
     "pool":              "Pool",
     "channel":           "Canal",
     "closedAt":          "Encerrado",
+    "transcriptTitle":   "Transcrição",
+    "loadingTranscript": "Carregando transcrição…",
+    "transcriptError":   "Erro ao carregar transcrição: {{error}}",
+    "noMessages":        "Sem mensagens neste contato.",
+    "maskedNote":        "Conteúdo mascarado (LGPD).",
     "outcome": {
       "resolved":  "Resolvido",
       "escalated": "Escalado",

@@ -784,7 +784,13 @@ export const AgentAssistPage: React.FC = () => {
             <RightPanel
               activeTab={activeTab}
               supervisorState={selected ? (selected.supervisorState ?? null) : previewSupervisorState}
-              customerId={selected?.contactId ?? null}
+              /* Identity Resolver Slice 4 — key history/search on the resolved NATIVE
+                 caller.customer_id (from the ContextStore snapshot) so past contacts
+                 unify under the real customer; fall back to the ephemeral contactId. */
+              customerId={(() => {
+                const v = selected?.supervisorState?.customer_context?.context_snapshot?.["caller.customer_id"]?.value
+                return (typeof v === "string" && v.trim()) ? v : (selected?.contactId ?? null)
+              })()}
               tenantId={session?.tenantId}
               sessionId={selected?.sessionId ?? previewSessionId}
               sessionMessages={selected ? selected.messages : previewMessages}

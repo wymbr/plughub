@@ -65,9 +65,18 @@ Tudo rola para o cliente via a coluna `sessions.customer_id` já existente.
 GET /analytics/sessions/customer/{customer_id}?tenant_id&limit=20
     → ContactHistoryEntry[] (opened_at, channel, duration_ms, outcome, close_reason, pool_id, session_id)
 
-GET /analytics/transcript/sessions/{session_id}?tenant_id
-    → mensagens da sessão (por janela de segmento), conteúdo MASKED
+GET /analytics/v1/transcript/sessions/{session_id}?tenant_id&scope=contact
+    → { session_id, scope, messages[], masked } — conteúdo MASKED
+      (o router real é /v1/transcript; scope=contact devolve a sessão inteira,
+       sem janela de segmento)
 ```
+
+> **Nota de roteamento (validado 2026-07-02):** o prefixo real do router é `/v1/transcript`
+> (não `/transcript`). O drill do platform-ui chama `/analytics/v1/transcript/sessions/{id}`;
+> o proxy `/analytics/*` → analytics-api (com strip do prefixo) foi **adicionado ao platform-ui**
+> (nginx no `Dockerfile` + `vite.config.ts`), espelhando o legado `agent-assist-ui`. Antes disso
+> o platform-ui (:5174) não tinha rota `/analytics`, então tanto a lista quanto a transcrição
+> eram inalcançáveis nesse app (degradavam para vazio) — o proxy conserta ambos.
 
 ### 4.2 Novo — busca
 
@@ -100,13 +109,24 @@ colunas da lista; o `q` é o diferencial (busca textual).
 - **ClickHouse `session_timeline`** (Arc 5): timeline enriquecida por sessão/segmento — alternativa para
   filtros/agregação, menos indicada para full-text livre.
 
-**Decisão (recomendada):** full-text sobre o **store persistido de mensagens** (Postgres `sessions_stream`),
-filtrando por `customer_id` (join com `sessions` por `session_id`), devolvendo sessões + snippets; filtros
-estruturados (data/canal/outcome/pool) aplicados na mesma query. Índice `GIN(tsvector)` para escala; `ILIKE`
-aceitável no v1.
+**Decisão implementada (v1, 2026-07-02 — diverge da recomendação original):** busca sobre **ClickHouse
+`messages` JOIN `sessions FINAL`** na **analytics-api**, não sobre o Postgres `session_stream_events`.
+Motivos: (a) **LGPD por construção** — `analytics.messages` **não tem** coluna `original_content` (o
+Postgres `session_stream_events` **tem** `original_content` ao lado do texto mascarado → superfície de risco
+desnecessária); (b) `sessions.customer_id` dá o **escopo por cliente** sem join cross-store; (c) fica
+**colocado** com a lista (H1) e a transcrição, e já **alcançável** pelo proxy `/sessions`/`/analytics`.
+Match = **substring case-insensitive** (`positionCaseInsensitiveUTF8`) — sem stemming, suficiente p/ o v1;
+filtros estruturados (from/to/channel/outcome/pool) vêm de `sessions`; resultado = **1 hit por sessão** com
+snippet mascarado + `score` (nº de mensagens que casaram). O Postgres `sessions_stream` + `GIN(tsvector)`
+(full-text tokenizado real) fica reservado p/ **escala futura (H5)**.
 
-**Regra de ouro:** a busca indexa o **conteúdo MASKED** (o que está no stream). O original só é resolvido sob
-autorização (§8) — a busca **não** indexa nem expõe `original_content`.
+**Regra de ouro:** a busca indexa e devolve **apenas conteúdo MASKED** (`messages.content`). O
+`original_content` **não existe** nessa tabela — a busca nunca o lê nem o expõe; sem `audit_access_log`
+(mesma postura do H1).
+
+**Endpoint (implementado):** `GET /sessions/customer/{customer_id}/search` na analytics-api (`sessions.py`),
+alcançável em `/analytics/sessions/customer/{id}/search`. Query-params: `q` (obrigatório), `from`/`to`
+(ISO, via `parseDateTimeBestEffort`), `channel`/`outcome`/`pool`, `limit`/`offset` (paginam **sessões**).
 
 ---
 
@@ -156,8 +176,8 @@ Transcrição e busca expõem **conteúdo de conversa** → **acesso controlado*
 
 | Fase | Escopo | Entrega validável |
 |---|---|---|
-| **H1 — Drill lista → transcrição** | ligar `HistoricoTab` ao `GET /transcript/sessions/{id}` (painel/inline) + ACL/masking + (se exigido) `audit_access_log` | abrir um contato anterior da lista e ler a transcrição MASKED; LGPD respeitado |
-| **H2 — Busca (backend)** | endpoint `GET /sessions/customer/{id}/search` (full-text sobre `sessions_stream` + filtros + snippets), tenant/cliente isolation, masking | `curl` com `q` retorna sessões + snippets do cliente |
+| **H1 — Drill lista → transcrição** ✅ | `HistoricoTab` (platform-ui) liga ao `GET /v1/transcript/sessions/{id}?scope=contact` via `useSessionTranscript`; expandir a linha carrega a transcrição MASKED inline (lazy). Proxy `/analytics/*` adicionado ao platform-ui (nginx+vite). Masking por construção (`analytics.messages` sem `original_content`) → sem exposição de original, sem `audit_access_log`. | ✅ abrir um contato anterior e ler a transcrição MASKED; LGPD respeitado |
+| **H2 — Busca (backend)** ✅ | endpoint `GET /sessions/customer/{id}/search` — **decisão v1: ClickHouse `messages` JOIN `sessions`** (não `sessions_stream`), substring `positionCaseInsensitiveUTF8`, 1 hit/sessão (ordem `opened_at` DESC) + snippet mascarado + score, filtros from/to/channel/outcome/pool, tenant/cliente isolation, masked-by-construction | ✅ 13 unit tests + smoke `test_h2_customer_history_search.sh` (score/filtros/case-insensitive/proxy) |
 | **H3 — Busca (UI)** | caixa de busca + filtros na `HistoricoTab` (data/canal/outcome/pool), clique no hit → drill (H1); i18n | buscar termo no atendimento e abrir o contato achado |
 | **H4 — Destaque no briefing de retorno** | no contexto de `customer-surveys.md` §19: destacar `origin_session_id` + resultado do survey no topo da tab | briefing mostra o contato de origem em primeiro |
 | **H5 (futuro)** | visão por cliente fora do atendimento (página analytics); índice `GIN(tsvector)` para escala | supervisão consulta histórico/busca de um cliente |

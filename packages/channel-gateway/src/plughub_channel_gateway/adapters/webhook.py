@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -52,6 +53,7 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
 from ..config import Settings
+from ..identity import IdentityIndex, PendingEntry
 from .base import ChannelAdapter
 
 logger = logging.getLogger("plughub.channel-gateway.webhook")
@@ -81,10 +83,30 @@ class WebhookAdapter(ChannelAdapter):
         producer: AIOKafkaProducer,
         redis:    aioredis.Redis,
         settings: Settings,
+        db_pool:  Any = None,
     ) -> None:
         self._producer = producer
         self._redis    = redis
         self._settings = settings
+
+        # Identity Resolver (Fase A) — co-located module. Redis index (Slice 1) +
+        # optional PG durability (Slice 2, reuses the gateway's asyncpg pool).
+        # Flag-gated so the legacy pending_workflow path is unaffected when off.
+        # Salt is a SECRET → env only (PLUGHUB_IDENTITY_SALT); TTLs are tuning.
+        self._identity_enabled = os.getenv("PLUGHUB_IDENTITY_RESOLVER_ENABLED", "true").lower() in ("1", "true", "yes")
+        salt = os.getenv("PLUGHUB_IDENTITY_SALT", "plughub_identity_demo_salt")
+        self._identity = IdentityIndex(
+            redis=redis,
+            salt=salt,
+            prospect_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_PROSPECT_TTL_S", "2592000")),
+            resolution_index_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_INDEX_TTL_S", "2592000")),
+            db_pool=db_pool,
+        )
+
+    async def ensure_identity_schema(self) -> None:
+        """Create the PG `identity` schema/tables (idempotent). Called at startup."""
+        if self._identity_enabled:
+            await self._identity.ensure_schema()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Trigger — create a new webhook session
@@ -502,7 +524,95 @@ class WebhookAdapter(ChannelAdapter):
             except Exception as _e:
                 logger.warning("webhook delegate: could not write pending_workflow key: %s", _e)
 
+        # ── Identity Resolver dual-write (Fase A · Slice 1) ───────────────────
+        # Generalize the pending lookup: resolve/provision a native customer_id
+        # from the context anchors and register the pending under it, so a
+        # reconnect from ANOTHER channel (different handle resolving to the same
+        # customer) finds it. Additive to the legacy contact_id key above;
+        # flag-gated and best-effort (never breaks the delegate path).
+        if self._identity_enabled:
+            try:
+                anchors = self._anchors_from_context(context)
+                if anchors:
+                    ref = await self._identity.resolve_or_provision(tenant_id, anchors, provision=True)
+                    if ref.customer_id:
+                        await self._identity.write_pending(
+                            tenant_id, ref.customer_id,
+                            PendingEntry(
+                                session_id=origin_session_id,
+                                customer_id=ref.customer_id,
+                                resume_token=resume_token,
+                                pool=pool_id,
+                                skill_id=context.get("skill_id"),
+                                intent=context.get("intent"),
+                            ),
+                            ttl_s=ttl_s,
+                        )
+                        # Concrete trigger (§5): a registered pending must survive the
+                        # ephemeral window → promote the customer to the durable PG store.
+                        await self._identity.promote_to_durable(tenant_id, ref.customer_id, anchors)
+                        logger.info(
+                            "identity: pending_by_customer written customer=%s session=%s matched_by=%s",
+                            ref.customer_id, origin_session_id, ref.matched_by,
+                        )
+            except Exception as _e:
+                logger.warning("identity: dual-write failed (non-fatal): %s", _e)
+
         return child_session_id
+
+    @staticmethod
+    def _anchors_from_context(context: dict[str, Any]) -> list[dict[str, str]]:
+        """
+        Extract identity anchors from a delegate context. Explicit typed hints
+        (phone/email/cpf/princ) win; otherwise a bare contact_identifier is
+        treated as a phone (the common intake case).
+        """
+        anchors: list[dict[str, str]] = []
+        for kind in ("phone", "email", "cpf", "princ"):
+            val = context.get(kind) or context.get(f"session.{kind}")
+            if val:
+                anchors.append({"kind": kind, "value": str(val)})
+        if not anchors:
+            ci = context.get("contact_identifier") or context.get("session.contact_identifier")
+            if ci:
+                anchors.append({"kind": "phone", "value": str(ci)})
+        return anchors
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Identity Resolver — public methods for HTTP endpoints (Fase A · Slice 1)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def resolve_customer(
+        self, tenant_id: str, anchors: list[dict[str, str]], provision: bool = True,
+    ) -> dict:
+        """Lookup 1 — resolve/provision a customer_id from anchors."""
+        ref = await self._identity.resolve_or_provision(tenant_id, anchors, provision=provision)
+        return {
+            "customer_id": ref.customer_id,
+            "status":      ref.status,
+            "matched_by":  ref.matched_by,
+            "confidence":  ref.confidence,
+        }
+
+    async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
+        """Lookup 2 — pending workflows for a resolved customer_id."""
+        pendings = await self._identity.find_pending(tenant_id, customer_id)
+        return {
+            "found": len(pendings) > 0,
+            "count": len(pendings),
+            "pendings": [
+                {
+                    "session_id":      p.session_id,
+                    "resume_token":    p.resume_token,
+                    "pool":            p.pool,
+                    "skill_id":        p.skill_id,
+                    "intent":          p.intent,
+                    "suspended_at":    p.suspended_at,
+                    "context_preview": p.context_preview,
+                }
+                for p in pendings
+            ],
+        }
 
     # ──────────────────────────────────────────────────────────────────────────
     # Pending workflow lookup (customer reconnect)
