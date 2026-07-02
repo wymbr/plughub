@@ -304,3 +304,52 @@ Owners (`agent_group_supervisors`). `member_count` na listagem agora conta `agen
 agent_types dentro dos pools que já têm acesso via `accessible_pools`. Quem precisar restringir visibilidade
 por turno/horário deve criar grupos separados (ex.: "Equipe SAC Manhã" / "Equipe SAC Tarde") em vez de
 configurar shifts dentro de um único grupo.
+
+---
+
+## Associação Group ↔ User pela tela do usuário (2026-06-28)
+
+Além da associação pelo lado do grupo (`GroupsPage`), a `AccessPage` (`/config/access`) tem uma seção
+**Grupos** no modal do usuário com colunas **Membro** (→ `agent_group_users`) e **Owner** (→
+`agent_group_supervisors`). Como não existe rota reversa "grupos do usuário", o modal sonda o detalhe
+de cada grupo (`GET /v1/groups/{id}`) para descobrir o estado atual; o diff é aplicado no Save via os
+mesmos endpoints de sub-recurso do `groups_router`. Escopo de owner é denormalizado no JWT no
+login/refresh — mudança de grupo só reflete no próximo token, e a UI avisa isso.
+
+---
+
+## Escopo de visibilidade — Pool × Group é interseção de filtros independentes, não correlação
+
+**Único consumidor real de `supervised_user_ids` hoje: `evaluation-api`** (`_compute_result_scope` /
+`list_results`), para restringir **de quem** um supervisor pode ver resultados de avaliação de
+qualidade. A query aplica dois `WHERE` com `AND`:
+
+```sql
+WHERE r.tenant_id = $1
+  AND r.evaluated_user_id = ANY($evaluated_user_ids)   -- QUEM (via grupo supervisionado)
+  AND c.pool_id = ANY($accessible_pools)                -- QUAL POOL (Arc 7)
+```
+
+**Isto É uma interseção de linhas — mas NÃO é uma correlação pool↔grupo.** Os dois filtros são
+resolvidos de forma totalmente independente e não se conhecem:
+
+- `evaluated_user_ids` = achatamento de **todos os `user_ids`** de **todos os grupos** onde o supervisor
+  é `owner` (`agent_group_supervisors` → expande `agent_group_users`). Não carrega "este usuário está
+  aqui por causa do grupo X" — é só uma lista flat de pessoas supervisionadas.
+- `accessible_pools` filtra pela coluna `pool_id` da campanha/sessão, sem nenhuma referência a Group.
+- **`AgentGroup` não tem (nem nunca teve) um campo de Pool** — é órfão de pool por desenho (ver
+  "Grupos vs Pools — Tabela Comparativa" acima: "um agente pode estar em grupo A e atender pool X, Y,
+  Z"). Não existe no schema um jeito de dizer "esta avaliação/sessão pertence ao grupo g_a".
+
+**Consequência**: se um supervisor é `owner` de **múltiplos grupos** (ex.: `g_a` e `g_b`) e tem
+`accessible_pools` com mais de um pool, ele enxerga o usuário supervisionado por **inteiro** dentro de
+todos os pools a que tem acesso — não há como restringir "só a parte do trabalho desse usuário que caiu
+sob o grupo g_a especificamente". Group escopa **quem** é visível; Pool escopa **onde**; não existe hoje
+um terceiro filtro que amarre os dois por item de trabalho.
+
+**Por que isto não é uma falha de segurança**: `accessible_pools` é a fronteira dura, **sempre aplicada
+independente de role** — inclusive para admin (`role=admin` zera o filtro de `evaluated_user_ids`, mas
+`accessible_pools` continua restringindo se setado). Group nunca amplia visibilidade além do que o pool
+já permite; ele só restringe **quem**, dentro da fronteira que o pool já define. O gap de granularidade
+(grupo não sub-filtra dentro do pool) só vira relevante se Group um dia passar a ter significado
+por-pool — hoje ele é deliberadamente órfão de pool, então a imprecisão é esperada, não um bug.
