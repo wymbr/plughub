@@ -1595,6 +1595,9 @@ async def list_results(
     # T10-C — visibilidade (escopo de linha): None = sem filtro; lista = restringe.
     evaluated_user_ids: list[str] | None = None,   # posse: result.evaluated_user_id ∈ lista
     accessible_pools:   list[str] | None = None,    # Arc 7: campaign.pool_id ∈ lista
+    # Bug fix 2026-07-02: quando setado, a posse (evaluated_user_id == self_user_id) é
+    # SEMPRE visível, independente de accessible_pools — ver `_compute_result_scope`.
+    self_user_id:       str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -1629,11 +1632,31 @@ async def list_results(
         args.append(pool_id)
         cond += f" {cond_prefix} c.pool_id=${len(args)}"
 
-    # T10-C — escopo de visibilidade (filtro de linha; nunca amplia)
+    # T10-C — escopo de visibilidade (filtro de linha; nunca amplia).
+    # Bug fix 2026-07-02: posse (evaluated_user_id == self_user_id) é SEMPRE visível para o
+    # dono, independente de accessible_pools — o pool ADMINISTRATIVO da campanha (c.pool_id)
+    # pode divergir do pool OPERACIONAL real onde o agente trabalhou; a interseção AND cega
+    # não deveria bloquear alguém de ver a própria avaliação por causa dessa divergência.
+    # accessible_pools continua restringindo a visibilidade de OUTRAS pessoas supervisionadas.
     if evaluated_user_ids is not None:
-        args.append(evaluated_user_ids)
-        cond += f" {cond_prefix} {rp}evaluated_user_id = ANY(${len(args)})"
-    if accessible_pools:
+        if self_user_id and accessible_pools:
+            args.append(self_user_id)
+            self_idx = len(args)
+            args.append(evaluated_user_ids)
+            eu_idx = len(args)
+            args.append(accessible_pools)
+            ap_idx = len(args)
+            cond += (
+                f" {cond_prefix} ({rp}evaluated_user_id = ${self_idx}"
+                f" OR ({rp}evaluated_user_id = ANY(${eu_idx}) AND c.pool_id = ANY(${ap_idx})))"
+            )
+        else:
+            args.append(evaluated_user_ids)
+            cond += f" {cond_prefix} {rp}evaluated_user_id = ANY(${len(args)})"
+            if accessible_pools:
+                args.append(accessible_pools)
+                cond += f" {cond_prefix} c.pool_id = ANY(${len(args)})"
+    elif accessible_pools:
         args.append(accessible_pools)
         cond += f" {cond_prefix} c.pool_id = ANY(${len(args)})"
 

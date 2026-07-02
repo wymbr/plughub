@@ -388,30 +388,39 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
 
 def _compute_result_scope(
     jwt_payload: dict[str, Any] | None,
-) -> tuple[list[str] | None, list[str] | None]:
+) -> tuple[list[str] | None, list[str] | None, str | None]:
     """T10-C — escopo de VISIBILIDADE (filtro de linha) a partir do JWT (spec §17.2).
-    Retorna `(evaluated_user_ids, accessible_pools)`; `None` = sem filtro naquele eixo.
+    Retorna `(evaluated_user_ids, accessible_pools, self_user_id)`; `None` = sem filtro naquele eixo.
 
     Fronteira dura por role (role+Grupo+pool = visibilidade; ABAC = ação):
-      - sem token → (None, None): endpoints de avaliação são abertos por tenant (posture demo).
-      - admin → (None, accessible): vê todas as pessoas; `accessible_pools` ainda restringe se setado.
+      - sem token → (None, None, None): endpoints de avaliação são abertos por tenant (posture demo).
+      - admin → (None, accessible, None): vê todas as pessoas; `accessible_pools` ainda restringe se setado.
       - não-admin → `evaluated_user_ids = supervised_user_ids ∪ {sub}`
         (atendente sem Grupo = só os próprios; supervisor = pessoas do(s) Grupo(s) Arc 9 + os próprios).
 
     `accessible_pools` (Arc 7): `[]` = todos; não-vazio = filtro adicional de linha.
+
+    `self_user_id` (bug fix 2026-07-02, ver CHANGELOG "self-view..."): a **posse** de um resultado
+    (`evaluated_user_id == sub`) é SEMPRE visível para o dono, independente de `accessible_pools` —
+    ver a própria avaliação para contestar não deveria depender de ter acesso administrativo ao pool
+    *da campanha* (que pode legitimamente divergir do pool operacional real onde o agente trabalhou;
+    reproduzido ao vivo com a interseção AND cega a esse caso). `accessible_pools` continua
+    restringindo a visibilidade de OUTRAS pessoas supervisionadas (Arc 9 Group). `None` para admin —
+    admin já não tem restrição de posse nenhuma, o eixo self não se aplica.
+
     Nota: escopo por `supervised_agent_types` (avaliações de AGENTES AI por tipo) fica DIFERIDO — o
     result não carrega `agent_type_id` (exigiria join/enriquecimento); a posse humana é o escopo novo."""
     if not jwt_payload:
-        return None, None
+        return None, None, None
     accessible = (jwt_payload.get("accessible_pools") or []) or None
     roles = jwt_payload.get("roles") or []
     if "admin" in roles:
-        return None, accessible
+        return None, accessible, None
     sub = jwt_payload.get("sub")
     supervised = jwt_payload.get("supervised_user_ids") or []
     allowed = [u for u in {*supervised, sub} if u]
     # não-admin sempre escopado; se (impossível) sem sub, sentinela que não casa nada.
-    return (allowed or ["__no_self__"]), accessible
+    return (allowed or ["__no_self__"]), accessible, sub
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
@@ -1928,7 +1937,7 @@ async def list_results(
     jwt_payload = _decode_jwt_optional(request)
 
     # T10-C — visibilidade: escopo de linha por role+Grupo+pool (nunca amplia; ABAC = ação).
-    evaluated_user_ids, accessible_pools = _compute_result_scope(jwt_payload)
+    evaluated_user_ids, accessible_pools, self_user_id = _compute_result_scope(jwt_payload)
 
     rows = await _db.list_results(
         db_pool, tenant_id,
@@ -1941,6 +1950,7 @@ async def list_results(
         locked=locked,
         evaluated_user_ids=evaluated_user_ids,
         accessible_pools=accessible_pools,
+        self_user_id=self_user_id,
         limit=limit,
         offset=offset,
     )

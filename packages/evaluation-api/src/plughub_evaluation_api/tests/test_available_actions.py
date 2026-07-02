@@ -132,37 +132,55 @@ def test_view_with_no_evaluation_access_denied():
 # ─── T10-C — _compute_result_scope (visibilidade) ─────────────────────────────
 
 def test_scope_no_jwt_unrestricted():
-    assert _compute_result_scope(None) == (None, None)
+    assert _compute_result_scope(None) == (None, None, None)
 
 
 def test_scope_admin_unrestricted():
     jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": []}
-    assert _compute_result_scope(jwt) == (None, None)
+    assert _compute_result_scope(jwt) == (None, None, None)
 
 
 def test_scope_admin_with_accessible_pools():
     jwt = {"sub": "u_admin", "roles": ["admin"], "accessible_pools": ["p1", "p2"]}
-    users, pools = _compute_result_scope(jwt)
-    assert users is None and pools == ["p1", "p2"]
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert users is None and pools == ["p1", "p2"] and self_id is None
 
 
 def test_scope_atendente_only_self():
     jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": [], "supervised_user_ids": []}
-    users, pools = _compute_result_scope(jwt)
-    assert users == ["u_op"] and pools is None
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert users == ["u_op"] and pools is None and self_id == "u_op"
 
 
 def test_scope_supervisor_group_plus_self():
     jwt = {"sub": "u_sup", "roles": ["supervisor"], "accessible_pools": [],
            "supervised_user_ids": ["u_a", "u_b"]}
-    users, _ = _compute_result_scope(jwt)
+    users, _, self_id = _compute_result_scope(jwt)
     assert set(users) == {"u_sup", "u_a", "u_b"}
+    assert self_id == "u_sup"
 
 
 def test_scope_non_admin_passes_accessible_pools():
     jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": ["p9"], "supervised_user_ids": []}
-    users, pools = _compute_result_scope(jwt)
-    assert users == ["u_op"] and pools == ["p9"]
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert users == ["u_op"] and pools == ["p9"] and self_id == "u_op"
+
+
+# ─── Bug fix 2026-07-02 — posse é sempre visível, independente de accessible_pools ──
+
+def test_scope_self_view_bypasses_pool_mismatch():
+    """Regression: campanha com pool_id administrativo != evaluation_pool_id (pool
+    operacional real) não deveria bloquear o próprio avaliado de ver seu resultado.
+    O eixo self_user_id existe justamente para permitir esse bypass na camada SQL
+    (list_results) — aqui só garantimos que o valor certo é retornado do JWT."""
+    jwt = {"sub": "u_op", "roles": ["operator"], "accessible_pools": ["retencao_humano"],
+           "supervised_user_ids": []}
+    users, pools, self_id = _compute_result_scope(jwt)
+    assert self_id == "u_op"
+    assert users == ["u_op"]
+    assert pools == ["retencao_humano"]
+    # A garantia real (SQL bypassa accessible_pools quando evaluated_user_id == self_id)
+    # é exercitada em test_router.py / db.py — este teste cobre só a extração do JWT.
 
 
 # ─── Slice auth quality — _check_abac_permission min_access (curar) ────────────
