@@ -10,6 +10,7 @@ Usuários criados:
       module_config (campos do catálogo infra/modules.yaml):
         evaluation.revisar    = read_write
         evaluation.report     = read_only
+        evaluation.curar      = read_write  (G-PROBE perna humana, 2026-07-02 — curadoria/calibração)
         contacts.visualizar   = read_only
         contacts.exportar     = read_write
         billing.visualizar    = read_only
@@ -171,6 +172,7 @@ DEMO_USERS = [
             "evaluation": {
                 "revisar": {"access": "read_write", "scope": []},  # revisa/decide
                 "report":  {"access": "read_only",  "scope": []},  # relatórios de qualidade
+                "curar":   {"access": "read_write", "scope": []},  # G-PROBE 2026-07-02: curadoria/calibração
             },
             "contacts": {
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios

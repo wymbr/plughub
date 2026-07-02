@@ -4,6 +4,33 @@
 
 ---
 
+## evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente *(achado ao vivo, 2026-07-02)*
+
+Encontrado ao validar o fix de self-view (ver `CHANGELOG.md` § "evaluation-api — bug self-view..."): rodando
+a suíte local (`pytest`, Python 3.12.3, `pytest-9.1.1`) — ambiente mais novo que o usado da última vez que os
+`.pyc` cacheados foram gerados (Python 3.10) — **10 de 83 testes falham**, todos em `test_router.py`, **nenhum
+relacionado à mudança de self-view** (confirmado por leitura: os testes que tocam `_compute_result_scope`/
+`list_results` — seção T10-C de `test_available_actions.py` + o novo teste de regressão — passam 100%).
+Três causas raiz distintas, todas pré-existentes:
+
+1. **`AsyncMock.keys() returned a non-iterable` (7 casos)** — `_row()` em `db.py` faz `dict(record)` sobre o
+   retorno de `fetchrow()` de um `MagicMock()` fake; a versão mais nova da lib `mock` (stdlib do Python 3.12)
+   trata isso diferente. Afeta `TestIngest` (4 casos, via `_db.set_contestation_state`) e `TestResults` (
+   `test_list_results` via `_db.get_campaign` — chamada pré-existente no handler pra montar
+   `available_actions`, nunca mockada pelo teste; `test_lock_result` via `_db.lock_result`).
+2. **`422` em vez de `200`/`400` (2 casos)** — `test_review_result`, `test_review_invalid_outcome`: o schema
+   de validação do endpoint `/review` evoluiu desde que os testes foram escritos.
+3. **`'State' object has no attribute 'redis'` (2 casos)** — `TestContestations::test_create_contestation` e
+   `test_cannot_contest_locked_result`: o endpoint legado de contestação (`/v1/evaluation/contestations`)
+   passou a exigir `request.app.state.redis`; a fixture `_app_with_mocks` não seta isso.
+
+**Não bloqueia** nenhum trabalho corrente — documentado aqui só pra não perder o achado. Corrigir exige (1)
+atualizar `_row`/os testes pra funcionar com o mock mais novo (ou fixar versão de `mock`/pytest do projeto),
+(2) alinhar `test_review_*` ao schema atual do endpoint, (3) a fixture `_app_with_mocks` setar `state.redis`
+(`AsyncMock()`) por padrão.
+
+---
+
 ## Flow — step de expressão sandboxed (NÃO eval cru) *(decisão de design, 2026-06-28)*
 
 **Necessidade**: valores computados / lógica mais rica em flows (ex.: o loop p/ ler o form JSON de pesquisa de
@@ -47,24 +74,6 @@ reconcile no load); **F4 picker do usuário** (escolhe/arruma dentro da allowlis
 Escopo de dados sempre via ABAC/`accessible_pools`/`supervised_*` no endpoint. **Decisão: NÃO** construir
 datasource/query-builder genérico (dado interno); novos tools (heatmap/gauge/leaderboard) só sob demanda.
 **Spec**: `docs/product/dashboard-catalog-coverage-spec.md`. *(discussão; não implementado)*
-
----
-
-## Access ↔ Groups — associar usuário a grupo pela tela do usuário *(2026-06-28)*
-
-Em `Configurations/Access`, ao definir/editar um usuário, **não há como associá-lo a um grupo** de usuários
-(definido em `Configurations/Groups`). Hoje a associação só existe **pelo lado do grupo** (GroupsPage → abas
-Members/Supervisors). Falta o caminho inverso, pela tela do usuário.
-
-- **Por que importa**: o scoping de supervisor (Arc 9) depende de o usuário ser **supervisor de um grupo**
-  (`agent_group_supervisors`) → JWT `supervised_groups`/`supervised_agent_types` → filtro row-level na
-  analytics-api. Para "limitar um supervisor a ver só os dados do grupo dele", hoje é preciso ir à GroupsPage;
-  o natural é poder fazer ao editar o usuário.
-- **Escopo provável (UI + wiring, sem backend novo)**: adicionar uma seção "Grupos" no drawer do usuário
-  (AccessPage) espelhando `agent_group_users` (membro) e `agent_group_supervisors` (supervisor), consumindo os
-  endpoints de sub-recurso já existentes do `groups_router` (auth-api, Arc 9). Backend de grupos já tem CRUD.
-- **Atenção**: scope de supervisor é **denormalizado no JWT no login** (`resolve_supervisor_scope`) →
-  mudança de grupo só reflete no próximo token (re-login/refresh). Documentar isso na UI.
 
 ---
 
@@ -203,57 +212,6 @@ resources/skills (agent-registry), knowledge (mcp-server-knowledge), avaliaçõe
 mocks não cobrem `set_contestation_state`/`get_campaign`/`lock_result` (chamadas novas Arc 13),
 `app.state.redis` ausente no app de teste, payload de review desatualizado (422), `expire_instance`
 sem `x-admin-token` (container tem `admin_token` setado). Atualizar os mocks ao contrato evoluído.
-
----
-
-## Infra — agent-registry `db push` clobbera tabelas de outros serviços *(✅ MITIGADO 2026-06-28 — DB dedicado)*
-
-> **Correção aplicada (opção c):** `agent-registry.DATABASE_URL` → **`plughub_registry`** (banco próprio) no
-> `docker-compose.demo.yml` + init `infra/demo/initdb/00_create_registry_db.sql`. O `db push --accept-data-loss`
-> agora só afeta o banco dele; `plughub_demo` (config-api `platform_config`, auth, calendar, `session_stream_events`
-> …) fica intacto. Confirmado o bug (recriar agent-registry dropava `platform_config`) e o fix. Ver CHANGELOG.
-> **Follow-up opcional:** migrar de `db push` para `prisma migrate deploy` (opção a) como higiene de longo prazo.
-
-**Achado** (durante Skill Versioning Fase E): o CMD do `agent-registry` roda
-`prisma db push --accept-data-loss` no **boot**, no schema **`public`** do `plughub_demo`. Como vários
-serviços compartilham esse banco e algumas tabelas vivem em `public` **sem** estar no schema Prisma do
-agent-registry (ex.: **`session_stream_events`** — stream durável p/ replay/R5/B), o `db push` as
-considera "extras" e as **dropa a cada restart** do agent-registry (`--accept-data-loss` aceita a perda).
-Observado: `• You are about to drop the session_stream_events table, which is not empty (18 rows)`.
-
-**Impacto**: perda do histórico de stream/replay a cada restart do agent-registry (dados de sessões
-anteriores). Não afeta o board de qualidade (epoch/coverage lêem ClickHouse + `evaluation.instances`),
-mas é um footgun real de **DB compartilhado**.
-
-**Correção candidata** (escolher): (a) trocar `db push --accept-data-loss` por **migrations versionadas**
-(`prisma migrate deploy`) que só tocam tabelas do próprio serviço; ou (b) mover tabelas compartilhadas
-para **schemas Postgres nomeados por serviço** (ex. `replay.session_stream_events`) para o `db push` do
-`public` não as enxergar; ou (c) isolar o agent-registry num schema Postgres próprio. Investigar o dono
-de `session_stream_events` (session-replayer? Stream Persister) antes de mover.
-
-**Incidente observado ao vivo (2026-07-01) — a mitigação do DB dedicado não protege os dados DO PRÓPRIO
-agent-registry.** Rebuild do `agent-registry` (motivo não relacionado a esta sessão) rodou `db push
---accept-data-loss` contra `plughub_registry` e zerou as tabelas `pools`/`skills` (0 linhas). Como o
-`RegistrySyncer` (orchestrator-bridge) só roda no boot dele — e ele não tinha reiniciado desde antes do
-wipe — ninguém reseedou automaticamente até um `docker compose restart orchestrator-bridge` manual.
-**Reseed-if-absent funcionou bem** para os 20 pools + 26 skills declarados em
-`infra/registry/tenant_demo.yaml` — mas **dois pools criados via UI fora do YAML** (`humanoxxx`,
-`teste_demo`) **se perderam de vez** (o syncer só semeia o que está no YAML). Implicação prática: **todo
-pool/skill que precisa sobreviver a um rebuild do agent-registry tem que estar declarado no YAML** — criar
-via `+ New Pool` na UI é conveniente mas frágil neste ambiente. Reforça a prioridade do follow-up (a)
-`prisma migrate deploy` — eliminaria o wipe na raiz, não só mitigaria o alcance dele.
-
-**Decisão (2026-07-01) — separar "fresh install" de "restart/reconcile normal".** O `db push
---accept-data-loss` no CMD de boot do agent-registry não distingue os dois casos: hoje **todo** restart com
-rebuild se comporta como instalação nova (aceita perda silenciosamente), mesmo quando a intenção era só
-subir a imagem atualizada preservando dados. Correção proposta: dois caminhos explícitos —
-(1) **instalação nova** (`FRESH_INSTALL=true` ou script `infra/scripts/fresh-install.sh`): roda `db push
---accept-data-loss` de propósito, documentado como destrutivo, só usado quando solicitado explicitamente;
-(2) **boot normal** (default): usa `prisma migrate deploy` (não-destrutivo, só aplica migrations
-versionadas) — nunca dropa tabela existente por divergência de schema. Mesmo raciocínio do follow-up (a)
-acima, mas agora com o gatilho explícito de intenção como requisito, não só a troca de comando. Enquanto
-não implementado: **qualquer pool/skill criado via UI fora do YAML deve ser considerado efêmero** neste
-ambiente demo — ou se adiciona ao YAML declarativo, ou se aceita que não sobrevive a um rebuild.
 
 ---
 
@@ -595,7 +553,12 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
         `{tenant}:config:sms|whatsapp|voice:*` + `webchat:jwt_secret` são **secrets exemptos** (sem writer;
         env-first; documentado). 3a: guard `config_cache_direct_read` (falha em leitura direta de
         `plughub:cfg:*` fora do config-api; 0 ofensores). Ver CHANGELOG.
-  - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs)
+  - [ ] **F3** Bootstrap idempotente único (substitui `infra/seed/*.py` + YAML-fonte; só via APIs).
+        **Nota (2026-07-02)**: distinto do fix de DDL do agent-registry (`db push` → `migrate deploy`
+        auto-detectado, ver CHANGELOG "agent-registry — bootstrap seguro") — aquele resolveu o **schema**
+        (risco vivo, já causou perda de dados 2x); esta F3 é sobre a **camada de seed data**
+        (`infra/seed/*.py` dispersos), que já é seed-if-absent em todos os stores (sem bug vivo, arquitetural,
+        baixa urgência — ver `docs/arcos/config-consolidation.md` §9).
   - [ ] **F4** Política de env vars (segurança) — inventário final
   - **Transfer (8.1/8.2)** acima é a primeira fatia concreta da F2-pools (escalation_pools).
   **Nota técnica F10.3 — contexto de atribuição para `survey_record(grain=segment)` (recon 2026-06-10):**
@@ -949,15 +912,17 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 
 ---
 
-## F11 — Pesquisa multi-grão outbound *(planejamento)*
+## F11 — Pesquisa multi-grão outbound → superseded pelo módulo Customer Surveys
 
-A avaliação do cliente é **outbound** e pode rodar em **até 3 grãos** (`session_signal`: `journey | session |
-segment`), configurável por fluxo: avaliar a journey inteira, cada contato, e cada segmento em cada contato.
-Base parcial na F10.2b (`survey_collector_ia`/`survey_reconnect_ia` + `survey_record grain=segment`). **Falta o
-planejamento da orquestração**: quando/como cada grão dispara (1 ao fim do contato/journey + N por segmento,
-diferidas, `captured_at≠session_at`). Arco de **evaluation**, separado do G7 (ciclo de vida). O F5 inline (grão
-segmento) está ✅ concluído; a riqueza "N sinais por agente" mora aqui, não no inline. Ver
-`docs/arcos/g7-segment-contact-decoupling.md` §5.
+> **Consolidado (2026-07-02):** o planejamento de orquestração que este item pedia ("quando/como cada
+> grão dispara") está **fechado** em [`docs/arcos/customer-surveys.md`](docs/arcos/customer-surveys.md)
+> §5 (gatilho decidido no skill, não na plataforma) + §12 (plano de fases S1–S11). O **S11** daquele
+> plano é exatamente o "NPS/PMF relacional agendado + grão journey E2E" que este F11 apontava como
+> pendência. Não há mais planejamento em aberto aqui — o que resta é **implementação** das fases S1–S11
+> (nenhuma iniciada). Ver também `CLAUDE.md` § Pending → "Customer Surveys" e "Histórico de contatos do
+> cliente" (capacidade transversal, §20 do mesmo doc, spec própria em `docs/arcos/customer-contact-
+> history.md`). F5 inline (grão segmento) segue ✅ concluído — a riqueza "N sinais por agente" mora no
+> módulo Surveys (grãos outbound), não no inline.
 
 ---
 
@@ -1242,14 +1207,30 @@ pool hooks genéricos (sem campo dedicado).
     ainda manual). Diferido por decisão do usuário ("deixar e reavaliar").
 - **Nits do bench (diferido)**:
   - **Quality score geral diluído** — KPI "Quality score 0.00 (N evals)" do drill-down e a curva da lente quality
-    saem baixos/zero, enquanto as **dimensões** (radar) estão corretas. Causa provável: o agregado geral
-    média/zero-fill **por sessões/dias sem avaliação** (102 sessões × 36 evals → ~0.25), ao passo que a cross-cut
-    usa `avg(overall_score)` só sobre evals. Fix = alinhar o denominador (média só sobre avaliações) no
-    lens/drill-down de qualidade (analytics-api `reports_query.py`).
+    saem baixos/zero, enquanto as **dimensões** (radar) estão corretas.
+    **Investigado ao vivo por leitura de código (2026-07-02), NÃO fechado — hipótese original refutada**: a
+    causa provável original ("agregado geral com zero-fill por sessão sem avaliação, divide por sessões em vez
+    de evals") **não se sustenta** em `analytics-api/reports_query.py` — tanto `_fetch_agents_cross` (cross-cut,
+    correto) quanto `_compare_quality_lens` (lente `quality`, usada no drill-down) calculam a média
+    exclusivamente sobre `evaluation_results` via INNER JOIN de atribuição; nenhum dos dois faz zero-fill por
+    sessão sem avaliação. Achado real (mas não confirmado como causa): `_compare_quality_lens` filtra o
+    período pelo `timestamp` da própria avaliação (quando foi pontuada), enquanto `_fetch_agents_cross` filtra
+    por `attr.session_started_at` (data da sessão) — o docstring da lente afirma bucketizar "pela data da
+    sessão (regra de ouro §7)" mas o filtro de janela não segue essa regra, então evals de sessões fora do
+    range selecionado podem entrar (ou sair) da agregação. **Mas essa mesma divergência de filtro existe
+    IGUALMENTE em `_compare_quality_criteria_lens`** (dimensões/radar), que o próprio nit diz estar correto —
+    enfraquece a hipótese do filtro como causa única. **Requer reprodução ao vivo com dado real** (range +
+    valores exatos de Quality/N evals/Sessions no drill-down vs. a linha do mesmo agente na tabela principal
+    do bench) para fechar o diagnóstico — não fazer fix especulativo sem isso.
   - **Janela/período inconsistente** *(hipótese do usuário)* — KPI, lente e tabela de dimensão podem usar
-    períodos diferentes; e o **default do range é estranho** (volta alguns dias em vez de hoje/vazio). Revisar:
-    (a) garantir que todos os cálculos usem o MESMO período selecionado; (b) default mais previsível (hoje, ou
-    vazio = tudo). Vale para o bench e para o Summary de Quality.
+    períodos diferentes; e o **default do range é estranho** (volta alguns dias em vez de hoje/vazio).
+    **Nota (2026-07-02)**: o default backend (`_default_from`/`_default_to`, 7 dias) e o default frontend
+    (`DEFAULT_FILTERS` em `contacts/types.ts`, `iso7dAgo()`/`isoToday()`) já **concordam entre si** — 7 dias
+    em ambos, não são valores diferentes. `DEFAULT_FILTERS` é importado do módulo `contacts`, reaproveitado
+    sem customização para o contexto do bench — pode explicar a sensação de "default estranho" (UX, não bug
+    de inconsistência de valores). Revisar: (a) confirmar se os 3 (KPI/lente/tabela) realmente usam períodos
+    diferentes no mesmo request (não confirmado ainda); (b) considerar default próprio do bench se 7 dias não
+    fizer sentido pro caso de uso.
   - NPS por agente parece alto. Pequeno.
 - ~~**S2.2**~~ ✅ 2026-06-16 (ver CHANGELOG) — `evaluator_pool` por campanha (SELECT/UI) + dispatcher `POST /campaigns/{id}/dispatch`
   ("Rodar agora") emitindo `evaluation.requested` por instância scheduled + Replayer carregando o form no ReplayContext.
@@ -1365,7 +1346,17 @@ pool hooks genéricos (sem campo dedicado).
   de header aberto) continua necessário, só que a **identidade por trás da credencial** vem do Agent Principal,
   não de um relabel do admin-token. A perna de **usuário humano** (`curar` ABAC) segue como desenhado acima,
   não é afetada por esta decisão.
-  Impl. pendente: (a) perna humana `curar` — slice próprio (catálogo + endpoints + UI Bearer + smoke);
+  **Perna humana `curar` — ✅ RESOLVIDA (2026-07-02).** Recon encontrou o desenho já implementado quase
+  por completo (código de sessão anterior, não registrado como concluído aqui): catálogo `curar` em
+  `infra/modules.yaml` (scopable: pool); `contestation_router.py` já gateava `list_curations`/
+  `resolve_curation`/`get_blind_context`/`blind_rescore`/`blind_resolve` via `_require_curar` (Bearer) +
+  `_check_abac_permission('curar', pool_id, min_access=...)`; `CuradoriaPage` já mandava Bearer
+  (`useAuth`), não admin-token. Faltava só: **seed de grant demo** (`supervisor@plughub.local` ganhou
+  `evaluation.curar=read_write` em `seed_auth.py` — sem isso ninguém no demo tinha o grant, a tela ficava
+  403 por padrão) e **smoke de verificação** (`infra/test/smoke_gprobe_curar_auth.sh` — 401 sem Bearer,
+  403 sem grant, 403 read_only tentando escrever, 200/404 com grant correto, provando que o ABAC passa
+  antes do lookup no banco). Testes unitários (`test_curar_*` em `test_available_actions.py`) já
+  cobriam `_check_abac_permission` isoladamente.
   (b) perna agente/sistema — depende do Agent Principal (F1–F4) estar implementado antes de gatear
   `pre-review`/`ai-review`/`seed-flush` por `principal_id`.
 - **G-UI — UI de review/contestação humana existe mas não surfaça** *(bullet ORIGINAL de 2026-06-17, stale —
@@ -1414,30 +1405,14 @@ pool hooks genéricos (sem campo dedicado).
   timeline de `ContestationThread` no drill-down; páginas **Curation**/**Calibration** (Arc 13 Fase H) — existem mas
   nunca validadas com dado real (só seeder).
 
-  **BUG REAL encontrado ao vivo (2026-07-01) — self-view quebra por `pool_id` administrativo divergente do
-  operacional.** `_compute_result_scope` (router.py) filtra linhas de `evaluation.results` por
-  `evaluated_user_ids` **E** `accessible_pools` do JWT em **AND** (`list_results`/`db.py`: usa `c.pool_id` da
-  campanha, não `c.evaluation_pool_id`). Isso significa que mesmo a pessoa dona da avaliação (`evaluated_user_id
-  == jwt.sub`) só a enxerga se o `pool_id` **administrativo** da campanha estiver no `accessible_pools` dela —
-  quando o `pool_id` da campanha diverge do `evaluation_pool_id` (pool operacional real onde o agente
-  trabalhou), o próprio avaliado fica bloqueado de ver/contestar sua avaliação. Reproduzido na campanha demo
-  `teste_demo` (`pool_id='teste_demo'`, um pool dummy, vs `evaluation_pool_id='retencao_humano'`, o pool real);
-  `operator@plughub.local` tem `accessible_pools=[retencao_humano, humanoxxx]` e **é** o `evaluated_user_id` de
-  uma avaliação real dessa campanha, mas via API viu 0 resultados até alinharmos `pool_id`. O código já documenta
-  a intenção de espelhar os dois campos ("mesmo pool") quando só um é setado no create — aqui divergiam (dado
-  legado/de teste, anterior à fatia S1 que passou a espelhar no create).
-  **Fix de dado recomendado no demo (ainda não confirmado como aplicado)**: `UPDATE evaluation.campaigns SET
-  pool_id='retencao_humano' WHERE id='evcampaign_8ce82c4110d24d5a903d270649f7519f'` (alinhar ao
-  `evaluation_pool_id`) — desbloqueia self-view do operator/admin nessa campanha sem mexer em código.
-  **Fix de código pendente (não aplicado ainda, discutir prioridade)**: `_compute_result_scope`/`list_results`
-  deveriam tratar posse (self, `evaluated_user_id == sub`) como **independente** do `accessible_pools`
-  administrativo — ver sua própria avaliação para contestar não deveria depender de ter acesso ao pool que
-  administra a campanha. Hoje a interseção (AND) dos dois eixos é cega a esse caso.
+  **Bug self-view ✅ CORRIGIDO (2026-07-02)** — `_compute_result_scope`/`list_results` bloqueavam o próprio
+  avaliado quando o `pool_id` administrativo da campanha divergia do pool operacional real. Fix + detalhe
+  completo em `CHANGELOG.md` § "evaluation-api — bug self-view...".
 - ~~**Confirmado ao vivo (2026-06-17)**: probe contest→review→`closed_upheld` sem `evaluation_finalized`~~ →
   **obsoleto: corrigido pelos T1–T11** (finalize_evaluation no submit_review). Re-validado 2026-06-25 (smoke).
 - **Próximo (gaps remanescentes)**: G-UI (só falta validação ao vivo pós-fix de 2026-07-01, ver acima),
-  G-S2.4 (aposentado por decisão — ver acima, não bloqueia), G-PROBE (perna humana `curar` — slice de auth
-  própria; perna agente/sistema — depende do Agent Principal); e exercitar Fluxo 2
+  G-S2.4 (aposentado por decisão — ver acima, não bloqueia), G-PROBE (perna humana `curar` ✅ resolvida
+  2026-07-02, ver acima; perna agente/sistema — depende do Agent Principal); e exercitar Fluxo 2
   (curadoria/`calibration_signal`→CalibrationNote→KB), que só rodou via seeder.
 
 **Achados pré-existentes (registrados durante a F1.0 — NÃO causados por ela; F1.0 é inerte):**

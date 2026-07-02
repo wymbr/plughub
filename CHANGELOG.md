@@ -2,6 +2,118 @@
 
 ---
 
+## G-PROBE — perna humana `curar` (curadoria/calibração) fechada: seed + smoke (2026-07-02)
+
+Fecha o item "G-PROBE (perna humana `curar`)" do TODO. Recon encontrou o desenho fechado em 2026-06-25
+já implementado quase por completo por uma sessão anterior, sem ter sido registrado como concluído:
+catálogo `curar` (`none|read_only|read_write`, `scopable: pool`) já em `infra/modules.yaml`;
+`packages/evaluation-api/src/plughub_evaluation_api/contestation_router.py` já gateava os 5 endpoints de
+curadoria (`list_curations`, `resolve_curation`, `get_blind_context`, `blind_rescore`, `blind_resolve`)
+via `_require_curar` (exige Bearer JWT) + `_check_abac_permission('curar', pool_id, min_access=...)` —
+leitura exige `read_only`, escrita exige `read_write`, escopo por pool resolvido via
+`_curation_pool_id` (join review→instance→campaign); `CuradoriaPage.tsx` (platform-ui) já mandava o
+Bearer do operador (`useAuth().session.accessToken`), sem caixa de admin-token. Testes unitários
+`test_curar_*` (`test_available_actions.py`) já cobriam `_check_abac_permission` isoladamente.
+
+Faltava só o que impedia validar/usar a feature de ponta a ponta:
+
+- **`infra/seed/seed_auth.py`** — `supervisor@plughub.local` ganhou `evaluation.curar = read_write`
+  (`scope: []`). Sem isso nenhum usuário demo tinha o grant e `CuradoriaPage` ficava 403 por padrão.
+- **`infra/test/smoke_gprobe_curar_auth.sh`** (novo) — mesmo padrão de `smoke_gprobe_service_auth.sh`
+  (mint de JWT HS256 dentro do container evaluation-api, mesmo `jwt_secret` que a API valida). Valida:
+  `GET /curations` sem Bearer → 401; sem grant `curar` → 403; com `curar=read_only` → 200;
+  `POST /curations/{id}/resolve` com `read_only` (insuficiente p/ escrita) → 403; com `read_write` e
+  review inexistente → 404 (prova que o ABAC passou antes do lookup no banco, já que o gate roda primeiro
+  em ambos os endpoints); mesma prova de ordem para `GET /curations/{id}/blind-context`.
+
+**Perna agente/sistema deste item** (pre-review/ai-review/seed-flush) permanece re-roteada para depender
+do **Agent Principal** (identidade de máquina, F1–F4, não implementado) — decisão de 2026-07-01, ver TODO.md.
+
+---
+
+## evaluation-api — bug self-view: pool administrativo da campanha divergente bloqueava o próprio avaliado (2026-07-02)
+
+Resolve o "BUG REAL encontrado ao vivo (2026-07-01)" do TODO: quando `campaign.pool_id` (administrativo,
+usado só para escopo/relatório) diverge do pool operacional real onde o agente atendeu, o filtro de
+visibilidade de `list_results` (T10-C, interseção AND cega de `evaluated_user_id ∈ supervised_user_ids`
+com `campaign.pool_id ∈ accessible_pools`) bloqueava o próprio avaliado de ver (e portanto contestar) o
+seu resultado — a posse do resultado (`evaluated_user_id == sub`) nunca deveria depender de acesso
+administrativo de pool.
+
+- **`packages/evaluation-api/src/plughub_evaluation_api/router.py`** — `_compute_result_scope` passa a
+  retornar uma 3-tupla `(evaluated_user_ids, accessible_pools, self_user_id)`; `self_user_id` = `sub` do
+  JWT para não-admin, `None` para admin/sem-token (admin já não tem restrição de posse). `list_results`
+  (GET handler) repassa `self_user_id` para `_db.list_results`. `get_result` (item único) não precisou de
+  mudança — não tinha filtro de linha algum (só `result_id` imprevisível + ABAC via `available_actions`).
+- **`packages/evaluation-api/src/plughub_evaluation_api/db.py`** — `list_results` ganhou parâmetro
+  `self_user_id: str | None = None`. Quando setado junto com `accessible_pools`, o filtro SQL vira
+  `evaluated_user_id = self_user_id OR (evaluated_user_id = ANY(supervised) AND c.pool_id = ANY(accessible))`
+  — a posse bypassa o filtro de pool; a visibilidade de outras pessoas supervisionadas continua exigindo a
+  interseção AND normal (Arc 9 Group × Arc 7 accessible_pools, ver `docs/arcos/arc9-agent-groups.md` § Escopo
+  de visibilidade). `use_join` já garantia o alias `c.` sempre que `accessible_pools` é truthy — sem mudança
+  necessária ali.
+- **Testes**: `test_available_actions.py` (seção T10-C) atualizados para a 3-tupla + novo teste de regressão
+  `test_scope_self_view_bypasses_pool_mismatch`. `test_router.py::test_list_results` mocka `_db.list_results`
+  inteiro — sem impacto (parâmetro novo é opcional).
+- **Hygiene de dado (opcional, não bloqueante para o fix)**: a campanha demo específica que expôs o bug
+  (`evcampaign_8ce82c4110d24d5a903d270649f7519f`, `pool_id` administrativo divergente de
+  `retencao_humano`) pode ainda valer a pena corrigir via `UPDATE evaluation.campaigns SET
+  pool_id='retencao_humano' WHERE id='evcampaign_8ce82c4110d24d5a903d270649f7519f'` — o fix de código torna
+  isso não-bloqueante para self-view, mas `pool_id` também é usado por outros escopos (supervisor/admin
+  não-self), então alinhar o dado continua sendo boa higiene.
+
+---
+
+## agent-registry — bootstrap seguro (substitui `db push --accept-data-loss` no boot) (2026-07-02)
+
+Resolve o risco vivo documentado no TODO ("agent-registry `db push` clobbera tabelas") — já causou perda
+real de `pools`/`skills` duas vezes (rebuild com `db push --accept-data-loss` recriando o que divergia do
+`schema.prisma`). Achado: o projeto já tinha 25 migrações versionadas em `prisma/migrations/` (voltando a
+`20260408121021_init`), nunca aplicadas via `prisma migrate deploy` — só `db push` rodava no boot,
+ignorando esse histórico.
+
+- **`packages/agent-registry/scripts/bootstrap-db.js`** (novo) — substitui o `db push` no `CMD` do
+  Dockerfile. Auto-detecta o estado do banco via `to_regclass` (sem depender de flag manual): (1)
+  `_prisma_migrations` existe → `migrate deploy` normal (só pendentes); (2) não existe mas a tabela `pools`
+  existe (banco legado, criado por `db push`) → baseline uma vez (`migrate resolve --applied` para cada
+  migração já refletida no schema, sem executar DDL) + `migrate deploy`; (3) banco vazio (instalação nova
+  de verdade) → `migrate deploy` aplica tudo do zero, sem risco. Nunca dropa tabela existente por
+  divergência de schema em nenhum dos três caminhos.
+- **Caminho destrutivo explícito preservado** — `FRESH_INSTALL=true` no env do container roda o antigo
+  `db push --accept-data-loss` de propósito (mesmo script, branch isolado), para reset de dev/instalação
+  intencional. **`infra/scripts/fresh-install.sh`** (novo) — wrapper de confirmação via
+  `docker compose run -e FRESH_INSTALL=true`, reusando o mesmo código (sem duplicar o caminho destrutivo).
+- **`package.json`**: novo script `db:bootstrap` (`node scripts/bootstrap-db.js`).
+- Resolve a decisão registrada no TODO (2026-07-01) "separar fresh install de restart/reconcile normal" —
+  a auto-detecção elimina a necessidade de um operador lembrar de setar a flag corretamente no caso comum
+  (boot normal), já que o script deduz o estado certo sozinho.
+- **Fora de escopo desta fatia** (item F3 separado, sem bug vivo, ver TODO.md § Frente 3): consolidar
+  `infra/seed/*.py` numa orquestração única via API — isso é sobre a camada de **seed data**, já
+  seed-if-absent em todos os stores; este fix é só sobre **schema DDL** do agent-registry, que era o único
+  serviço com um mecanismo destrutivo no boot.
+
+**Incidente ao vivo pós-deploy (2026-07-02) — a v1 do baseline tinha um bug real, corrigido no mesmo dia.**
+A primeira versão do script baseava o caminho "banco legado" **sem verificar** — confiava que, se a tabela
+`pools` existisse, todas as migrações já estavam refletidas. Essa suposição era falsa neste caso: a migração
+`pool_llm_account_ids` (criada mais cedo no mesmo dia) tinha sido adicionada ao `schema.prisma`, mas o `db
+push` antigo não tinha efetivamente aplicado a coluna no banco antes do container trocar pro script novo. O
+baseline marcou `--applied` mesmo assim (bookkeeping puro, sem DDL) → `migrate deploy` acreditou que estava
+tudo em dia → toda query em `pools` (`GET`/`POST /v1/pools`, `operational.js`) passou a falhar em runtime com
+`column "llm_account_ids" does not exist` → o `RegistrySyncer` (orchestrator-bridge) tentou re-semear os pools
+no restart seguinte e todo `POST` retornou 500 → pools zerados de verdade (skills sobreviveram, pois não
+tinham divergência de schema). **Recuperação**: `prisma db execute --file <migration>/migration.sql` aplicou
+o `ALTER TABLE` real (a tentativa inicial de `migrate resolve --rolled-back` falhou com `P3012` — esse flag só
+vale para migração marcada como falha, não como aplicada-mas-incorreta); `migrate deploy` confirmou limpo
+depois; restart do `agent-registry` + `orchestrator-bridge` re-semeou os 20 pools do YAML.
+**Fix (mesmo dia)**: `hasSchemaDrift()` — `prisma migrate diff --from-url $DATABASE_URL --to-schema-datamodel
+schema.prisma --exit-code` — roda **antes** de confiar no baseline; se houver drift real, fecha o gap com um
+`db push` guardado (mesmo mecanismo que este banco sempre usou, agora só uma vez, verificado, não a cada
+boot) antes de baselinar. **Checagem final de sanidade** (mesmo `hasSchemaDrift()`) roda incondicionalmente
+antes do script terminar com sucesso, em qualquer um dos 4 caminhos — se o schema ainda divergir por qualquer
+motivo, o script falha alto (`exit 1`, container não sobe) em vez de servir 500 silenciosamente.
+
+---
+
 ## Groups — remoção das abas Agents/Shifts (Arc 9) (2026-07-01)
 
 Removidas por decisão arquitetural: Agents duplicava Members (dupla fonte de verdade com `Pool.agent_kind`,
