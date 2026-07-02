@@ -39,4 +39,4 @@ WORKDIR /app/packages/agent-registry
 
 EXPOSE 3300
 
-CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node dist/index.js"]
+CMD ["sh", "-c", "node scripts/bootstrap-db.js && node dist/index.js"]

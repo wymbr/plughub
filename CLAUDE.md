@@ -508,6 +508,7 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
 - **Never leave deferred phases undocumented** — every unimplemented phase MUST be registered in `## Pending`
 - Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui
 - **Never derive or duplicate participant identity into a wider-scope field** — participant identity is a single-source fact in the ContextStore at the correct scope (`session.*` contact-level, `segment.{segId}.*` segment-level). A per-segment fact (e.g. which human a wrap-up hook serves → `segment.{segId}.served_human_participant_id`) MUST NOT live in a session-global field read by multiple components (collapses in multi-human). See [`docs/adr/adr-participant-identity-single-source.md`](docs/adr/adr-participant-identity-single-source.md)
+- **Never run `prisma db push --accept-data-loss` as part of normal agent-registry boot** — it diffs the live schema and drops whatever diverges (has caused real data loss twice). Normal boot always runs `packages/agent-registry/scripts/bootstrap-db.js` (auto-detects fresh/legacy/migrated DB state, only ever applies `prisma migrate deploy`). The destructive path only runs when `FRESH_INSTALL=true` is set on purpose (`infra/scripts/fresh-install.sh`)
 
 ## SDK CLI
 
