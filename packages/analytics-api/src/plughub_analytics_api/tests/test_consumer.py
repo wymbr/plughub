@@ -125,6 +125,24 @@ class TestParseRouted:
     def test_returns_none_without_session_id(self):
         assert parse_routed({"tenant_id": TENANT, "result": {}}) is None
 
+    def test_conference_routing_skips_sessions_row(self):
+        # Hook/specialist routings (conference_id set) are segment-level and must
+        # NOT write the contact-level sessions row — otherwise a wrap-up routing
+        # arriving after contact_closed re-opens the session (no-version
+        # ReplacingMergeTree, last-inserted-wins) and clobbers the contact pool.
+        payload = self._payload()
+        payload["result"]["conference_id"] = "conf-xyz"
+        rows = parse_routed(payload)
+        assert rows is not None
+        tables = {r["table"] for r in rows}
+        assert tables == {"agent_events"}
+        assert all(r["table"] != "sessions" for r in rows)
+
+    def test_primary_routing_still_writes_sessions_row(self):
+        # No conference_id (primary allocation) → sessions row present.
+        rows = parse_routed(self._payload())
+        assert any(r["table"] == "sessions" for r in rows)
+
 
 # ── parse_queued ──────────────────────────────────────────────────────────────
 
@@ -148,6 +166,16 @@ class TestParseQueued:
         qe = next(r for r in rows if r["table"] == "queue_events")
         assert qe["event_type"] == "queued"
         assert qe["pool_id"] == POOL
+
+    def test_conference_queued_skips_sessions_row(self):
+        # Same rationale as parse_routed: a conference/hook agent queued must not
+        # touch the contact-level sessions row.
+        payload = self._payload()
+        payload["result"]["conference_id"] = "conf-xyz"
+        rows = parse_queued(payload)
+        assert rows is not None
+        tables = {r["table"] for r in rows}
+        assert tables == {"queue_events"}
 
 
 # ── parse_conversations_event ─────────────────────────────────────────────────

@@ -2,6 +2,44 @@
 
 ---
 
+## Bugfix — sessão presa em `active` no customer-disconnect com NPS `nps_on_disconnect=skip` (2026-07-03)
+
+Corrige assimetria entre os caminhos `agent_done` e `client_disconnect` no fechamento da **camada de
+contato**. Quando o **cliente** encerrava e o único hook de cliente do pool era o NPS com
+`nps_on_disconnect=skip`, a entrada era pulada dentro de `fire_pool_hooks`, `posatt:customer_active`
+nunca era incrementado e **`_close_contact_layer()` nunca era chamado** → a sessão ficava `active` por
+até 180s, até o `_hook_timeout_guard` force-close (degradado) — o contador `hook_pending:on_contact_end`
+havia sido armado de forma órfã por `len(hook_list)`. O caminho `agent_done` já fechava correto (guard
+`_has_customer_hooks`). Segmentos fechavam (via `_destroy_conference`), só a camada de contato não.
+
+- **`orchestrator-bridge/main.py` · `fire_pool_hooks`** — `close_origin` lido **uma vez**
+  (`_close_origin_val`); `hook_pending:{hook_type}` passa a ser dimensionado pelas entradas que
+  **realmente serão disparadas** (`_entry_will_dispatch`), e não é armado quando esse total é 0. Skip
+  por-entrada usa o mesmo valor (sem contador órfão). Byte-equivalente no `agent_done`.
+- **`orchestrator-bridge/main.py` · `process_contact_event` (client_disconnect)** — computa
+  `_cs_customer_will_run`; se nenhum hook de cliente vai rodar, fecha a camada de contato
+  **imediatamente** (`_close_contact_layer`, ou `_trigger_contact_close` quando também não há segmento
+  agent-side) — espelha o guard do `agent_done`. Disparo de `on_contact_end` + guard passam a ser gated
+  por `_cs_customer_will_run`. Decisão de **transporte**, não de negócio; idempotência preservada (NX).
+
+**Segunda causa (analytics-api) — reabertura pela linha de `sessions` do routing do hook.** Após o fix do
+bridge, os logs mostraram o `_close_contact_layer` fechando certo, mas a sessão voltava a `active`. A tabela
+`analytics.sessions` é `ReplacingMergeTree()` sem coluna de versão (last-inserted-wins). `parse_routed`/
+`parse_queued` escreviam uma linha de `sessions` (pool + `closed_at=NULL`) para **todo** routing, inclusive o
+do agente de hook (wrap-up). Com o fechamento agora imediato, o `contact_closed` sai ANTES do wrap-up rotear
+→ a linha `routed(wrapup_ia, closed_at=NULL)` entra depois do close → reabre a sessão (active, pool=hook).
+
+- **`analytics-api/models.py`** — `parse_routed` e `parse_queued` **pulam a linha de `sessions`** quando
+  `result.conference_id` está presente. Routing de hook/especialista é fato de segmento (rastreado em
+  `conversations.participants → segments`), não do contato; só o primário (sem `conference_id`) escreve a
+  linha de `sessions`. Corrige a reabertura e o pool exibido errado. Testes: `test_consumer.py`
+  (`test_conference_routing_skips_sessions_row`, `test_primary_routing_still_writes_sessions_row`,
+  `test_conference_queued_skips_sessions_row`).
+
+Doc: `docs/guias/conference-mechanics.md` § Histórico — Mudança 24 (bridge + analytics-api).
+
+---
+
 ## Resolvedor de Identidade — Fase A · Slice 4 (ponte ao histórico) + Fase A completa (2026-07-02)
 
 Conserta na raiz o erro `contact_id`-como-`customer_id`: o `sessions.customer_id` (analytics) passa a

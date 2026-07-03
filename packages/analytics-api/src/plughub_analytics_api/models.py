@@ -133,29 +133,48 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
     instance_id = result.get("instance_id") or ""
     routed_at  = payload.get("routed_at") or _now()
     sla_target_ms = result.get("sla_target_ms")  # None when pool has no SLA or not yet propagated
+    conference_id = result.get("conference_id")
 
-    rows: list[dict] = [
-        # sessions — update with pool_id and sla_target_ms.
-        # NOTE: channel="" here because ConversationRoutedEvent (Zod schema) does not carry
-        # channel — the Routing Engine only knows pool/agent. Writing channel="" will REPLACE
-        # the parse_inbound row's channel="webchat" in ReplacingMergeTree (last-write-wins,
-        # no partial merge). The query layer in reports_query.py compensates by using a
-        # COALESCE subquery to recover the effective channel from any historical row,
-        # and by allowing closed_at IS NULL rows through the channel filter.
-        # Do NOT change channel="" to channel=payload.get("channel","") here without also
-        # updating ConversationRoutedEventSchema to carry the channel field.
-        {
-            "table":         "sessions",
-            "session_id":    session_id,
-            "tenant_id":     tenant_id,
-            "channel":       "",
-            "pool_id":       pool_id,
-            "opened_at":     routed_at,
-            "timestamp":     routed_at,
-            "sla_target_ms": sla_target_ms,
-            "origin":        origin_from_source(payload.get("source")),
-        },
-        # agent_events — routing entry
+    rows: list[dict] = []
+
+    # Conference/hook routings (wrap-up, NPS, invited specialists) carry a
+    # conference_id — they are SEGMENT-level facts, tracked via
+    # conversations.participants → segments. They must NOT write the
+    # contact-level `sessions` row: doing so (a) overwrites the contact's real
+    # pool_id with the specialist pool (e.g. wrapup_ia), and (b) — critically —
+    # inserts a row with closed_at=NULL that, when it arrives AFTER
+    # contact_closed in the no-version ReplacingMergeTree (last-inserted-wins),
+    # RE-OPENS an already-closed session. This happens whenever a hook agent
+    # routes after the contact layer was closed (e.g. customer-disconnect wrap-up
+    # dispatched right after _close_contact_layer). Only the primary allocation
+    # (no conference_id) owns the sessions row.
+    if not conference_id:
+        rows.append(
+            # sessions — update with pool_id and sla_target_ms.
+            # NOTE: channel="" here because ConversationRoutedEvent (Zod schema) does not carry
+            # channel — the Routing Engine only knows pool/agent. Writing channel="" will REPLACE
+            # the parse_inbound row's channel="webchat" in ReplacingMergeTree (last-write-wins,
+            # no partial merge). The query layer in reports_query.py compensates by using a
+            # COALESCE subquery to recover the effective channel from any historical row,
+            # and by allowing closed_at IS NULL rows through the channel filter.
+            # Do NOT change channel="" to channel=payload.get("channel","") here without also
+            # updating ConversationRoutedEventSchema to carry the channel field.
+            {
+                "table":         "sessions",
+                "session_id":    session_id,
+                "tenant_id":     tenant_id,
+                "channel":       "",
+                "pool_id":       pool_id,
+                "opened_at":     routed_at,
+                "timestamp":     routed_at,
+                "sla_target_ms": sla_target_ms,
+                "origin":        origin_from_source(payload.get("source")),
+            }
+        )
+
+    # agent_events — routing entry (segment-level; emitted for all routings,
+    # including conference/hook agents).
+    rows.append(
         {
             "table":        "agent_events",
             "event_id":     _gen_id(),
@@ -170,8 +189,8 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
             "handle_time_ms": None,
             "routing_mode": result.get("routing_mode"),
             "timestamp":    routed_at,
-        },
-    ]
+        }
+    )
     return rows
 
 
@@ -191,19 +210,29 @@ def parse_queued(payload: dict[str, Any]) -> list[dict] | None:
     result   = payload.get("result") or {}
     pool_id  = result.get("pool_id") or ""
     queued_at = payload.get("routed_at") or _now()
+    conference_id = result.get("conference_id")
 
-    rows: list[dict] = [
-        # sessions — update with pool_id (queued). Same channel="" caveat as parse_routed.
-        {
-            "table":      "sessions",
-            "session_id": session_id,
-            "tenant_id":  tenant_id,
-            "channel":    "",
-            "pool_id":    pool_id,
-            "opened_at":  queued_at,
-            "timestamp":  queued_at,
-            "origin":     origin_from_source(payload.get("source")),
-        },
+    rows: list[dict] = []
+
+    # Same rationale as parse_routed: a conference/hook agent that gets queued is
+    # a segment-level fact and must not touch the contact-level sessions row
+    # (would clobber pool_id and can re-open a closed session).
+    if not conference_id:
+        rows.append(
+            # sessions — update with pool_id (queued). Same channel="" caveat as parse_routed.
+            {
+                "table":      "sessions",
+                "session_id": session_id,
+                "tenant_id":  tenant_id,
+                "channel":    "",
+                "pool_id":    pool_id,
+                "opened_at":  queued_at,
+                "timestamp":  queued_at,
+                "origin":     origin_from_source(payload.get("source")),
+            }
+        )
+
+    rows.append(
         {
             "table":           "queue_events",
             "event_id":        _gen_id(),
@@ -215,8 +244,8 @@ def parse_queued(payload: dict[str, Any]) -> list[dict] | None:
             "estimated_wait_ms": None,
             "available_agents":  None,
             "timestamp":       queued_at,
-        },
-    ]
+        }
+    )
     return rows
 
 

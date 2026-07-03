@@ -1020,6 +1020,33 @@ async def fire_pool_hooks(
     except Exception:
         pass
 
+    # ── close_origin (lido UMA vez) ──────────────────────────────────────────
+    # Necessário tanto para dimensionar o contador de conclusão (hooks de cliente
+    # pulados NÃO podem inflá-lo — senão o contato fica preso em `active` até o
+    # safety net de 180s force-close) quanto para o skip por-entrada abaixo.
+    _close_origin_val = ""
+    try:
+        _co_raw0 = await redis_client.hget(
+            f"{tenant_id}:ctx:{session_id}", "session.close_origin"
+        )
+        if _co_raw0:
+            _co0 = json.loads(_co_raw0 if isinstance(_co_raw0, str) else _co_raw0.decode())
+            _close_origin_val = str((_co0 or {}).get("value", "") or "")
+    except Exception:
+        pass
+
+    def _entry_will_dispatch(_e) -> bool:
+        """Reproduz os predicados de skip do loop abaixo para dimensionar o
+        contador. Uma entrada NÃO é disparada quando falta 'pool' ou quando é
+        um hook de cliente com nps_on_disconnect=skip numa queda do cliente."""
+        if not isinstance(_e, dict) or not _e.get("pool"):
+            return False
+        _s   = _e.get("side", "agent") or "agent"
+        _nod = _e.get("nps_on_disconnect", "timeout") or "timeout"
+        if _s == "customer" and _nod == "skip" and _close_origin_val == "customer_disconnect":
+            return False
+        return True
+
     # For on_human_end and post_human hooks: track completion so the bridge knows when ALL hook
     # agents have finished and can then trigger the full contact close.
     # Counter key: session:{id}:hook_pending:{hook_type}   (TTL 4h)
@@ -1027,18 +1054,24 @@ async def fire_pool_hooks(
     # When process_routed detects a conference agent completing that has a hook_conf
     # key, it decrements the counter. When it hits 0 → _trigger_contact_close() (for post_human)
     # or checks for post_human hooks (for on_human_end).
+    # Bugfix: o contador é dimensionado pelas entradas que REALMENTE serão
+    # disparadas (não por len(hook_list)); entradas puladas (nps_on_disconnect=
+    # skip em customer_disconnect) deixariam um contador órfão que só zerava no
+    # force-close de 180s, mantendo a sessão `active` nesse intervalo.
     if hook_type in ("on_human_end", "post_human", "on_contact_end") and hook_list:
-        try:
-            await redis_client.setex(
-                f"session:{session_id}:hook_pending:{hook_type}",
-                14400,
-                str(len(hook_list)),
-            )
-        except Exception as exc:
-            logger.warning(
-                "fire_pool_hooks: could not set pending counter: session=%s — %s",
-                session_id, exc,
-            )
+        _dispatch_n = sum(1 for _e in hook_list if _entry_will_dispatch(_e))
+        if _dispatch_n > 0:
+            try:
+                await redis_client.setex(
+                    f"session:{session_id}:hook_pending:{hook_type}",
+                    14400,
+                    str(_dispatch_n),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "fire_pool_hooks: could not set pending counter: session=%s — %s",
+                    session_id, exc,
+                )
 
     # ── F5 (grão segmento): segmento humano que ESTE on_human_end serve ───────
     # pool_id é o pool do humano que encerrou. Lê o registro human_seg:{pool}
@@ -1165,29 +1198,20 @@ async def fire_pool_hooks(
             continue
 
         # Arc 14 Fase D: skip customer-side hooks when nps_on_disconnect="skip"
-        # and the client already disconnected.
-        if hook_side == "customer" and nps_on_disconnect == "skip":
-            try:
-                _co_raw = await redis_client.hget(
-                    f"{tenant_id}:ctx:{session_id}", "session.close_origin"
-                )
-                if _co_raw:
-                    _co_entry    = json.loads(
-                        _co_raw if isinstance(_co_raw, str) else _co_raw.decode()
-                    )
-                    _close_origin = _co_entry.get("value", "")
-                    if _close_origin == "customer_disconnect":
-                        logger.info(
-                            "fire_pool_hooks: NPS hook skipped (nps_on_disconnect=skip, "
-                            "customer_disconnect): session=%s pool=%s",
-                            session_id, target_pool,
-                        )
-                        continue
-            except Exception as _nd_exc:
-                logger.warning(
-                    "fire_pool_hooks: could not check nps_on_disconnect: session=%s — %s",
-                    session_id, _nd_exc,
-                )
+        # and the client already disconnected. close_origin foi lido uma vez acima
+        # (_close_origin_val) e é o MESMO valor usado para dimensionar o contador —
+        # mantém skip e contagem coerentes (sem contador órfão).
+        if (
+            hook_side == "customer"
+            and nps_on_disconnect == "skip"
+            and _close_origin_val == "customer_disconnect"
+        ):
+            logger.info(
+                "fire_pool_hooks: NPS hook skipped (nps_on_disconnect=skip, "
+                "customer_disconnect): session=%s pool=%s",
+                session_id, target_pool,
+            )
+            continue
 
         conference_id = str(uuid.uuid4())
 
@@ -4996,6 +5020,43 @@ async def process_contact_event(
                             human_instance_id=_last_human_instance_id,
                             customer_participant_id=_cs_meta.get("customer_participant_id") if _cs_meta else None,
                         )
+                        # ── Fechamento determinístico da camada de contato ───────
+                        # Decisão de TRANSPORTE (não de negócio): nesta queda do
+                        # cliente, algum hook de cliente vai REALMENTE rodar? Entries
+                        # side=customer com nps_on_disconnect=skip são puladas — se
+                        # NENHUM hook de cliente roda, ninguém dispara
+                        # _close_contact_layer() (posatt:customer_active nunca zera) e
+                        # a sessão fica presa em `active` até o safety net de 180s.
+                        # Espelha o guard do caminho agent_done: fecha a camada de
+                        # contato já. _close_contact_layer é idempotente (NX).
+                        _cs_customer_will_run = any(
+                            isinstance(e, dict)
+                            and (e.get("side", "agent") or "agent") == "customer"
+                            and (e.get("nps_on_disconnect", "timeout") or "timeout") != "skip"
+                            for e in (list(_cs_on_contact_end) + list(_cs_on_human_end))
+                        )
+                        if not _cs_customer_will_run:
+                            # Se algum segmento agent-side ainda vai rodar (wrap-up
+                            # on_human_end ou peers segment_wrapup), fecha SÓ a camada
+                            # de contato agora; o _destroy_conference vem quando o
+                            # último posatt/peer conclui (paridade com agent_done).
+                            # Se NENHUM segmento agent-side roda, ninguém destruiria a
+                            # conferência → usa o teardown completo (close + destroy).
+                            _cs_agent_side_will_run = bool(_cs_on_human_end) or bool(_cs_peers)
+                            if _cs_agent_side_will_run:
+                                asyncio.create_task(
+                                    _close_contact_layer(redis_client, session_id)
+                                )
+                            else:
+                                asyncio.create_task(
+                                    _trigger_contact_close(redis_client, session_id)
+                                )
+                            logger.info(
+                                "customer_disconnect: no customer-side hook will run "
+                                "(all skipped/absent) — closing contact now "
+                                "(agent_side_segments=%s): session=%s pool=%s",
+                                _cs_agent_side_will_run, session_id, _cs_pool_id,
+                            )
                         if _cs_on_human_end:
                             asyncio.create_task(fire_pool_hooks(
                                 http=http, redis_client=redis_client,
@@ -5009,9 +5070,11 @@ async def process_contact_event(
                             asyncio.create_task(_hook_timeout_guard(
                                 redis_client, session_id, "on_human_end",
                             ))
-                        # NPS de fim-de-contato. Em customer_disconnect, entries com
-                        # nps_on_disconnect=skip são puladas dentro de fire_pool_hooks.
-                        if _cs_on_contact_end:
+                        # NPS de fim-de-contato. Só dispara se ao menos uma entrada
+                        # de cliente for realmente rodar nesta queda (_cs_customer_
+                        # will_run); quando todas são skip, não há o que disparar e o
+                        # fechamento já foi feito acima — evita contador/guard órfãos.
+                        if _cs_on_contact_end and _cs_customer_will_run:
                             asyncio.create_task(fire_pool_hooks(
                                 http=http, redis_client=redis_client,
                                 session_id=session_id,

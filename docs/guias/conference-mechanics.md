@@ -1261,5 +1261,71 @@ auto-aplica no rebuild; aplicar via `PUT /v1/pools/sac_ia` (publica `registry.ch
 
 ---
 
+### Mudança 24 — sessão presa em `active` no customer-disconnect quando o único hook de cliente é `nps_on_disconnect=skip` (2026-07-03)
+
+**Sintoma.** Quando o **cliente** (webchat) encerra o contato, o wrap-up (`on_human_end`,
+side=agent) roda e completa, os dois segmentos aparecem `closed` no drill-down, **mas a sessão
+permanece `active`** por até `_HOOK_TIMEOUT_S=180s` — só então o safety net force-close a fecha
+(via `_hook_timeout_guard`, com `logger.warning`). No fim pelo **agente** o fechamento é limpo e
+imediato. Config do pico: `retencao_humano.hooks` = `on_human_end→wrapup_ia (Agent)` +
+`on_contact_end→nps_ia (Customer, nps_on_disconnect=skip)`.
+
+**Causa raiz — assimetria entre os dois caminhos de fechamento.** O fechamento da **camada de
+contato** (`active→closed`, publica `conversations.session_closed`) é feito **exclusivamente** por
+`_close_contact_layer()`. O `_destroy_conference()` só derruba os **segmentos** — por isso os
+segmentos fechavam e a sessão não.
+
+- Caminho **`agent_done`** (correto): computa `_has_customer_hooks` e, se **nenhum** hook de cliente
+  vai rodar, chama `_close_contact_layer()` **imediatamente** (espelho em `main.py` ~5760). Como o
+  cliente não caiu, `nps_on_disconnect=skip` não se aplica e o NPS roda → fecha via
+  `posatt:customer_active→0`.
+- Caminho **`client_disconnect`** (bug): disparava `on_human_end` + `on_contact_end` **sem** o guard
+  `_has_customer_hooks` e **sem** nenhuma chamada a `_close_contact_layer()`. Dentro de
+  `fire_pool_hooks`, a entrada do NPS (`side=customer` + `nps_on_disconnect=skip` +
+  `close_origin=customer_disconnect`) é **pulada** → `posatt:customer_active` nunca é incrementado →
+  o `DECR→0` que dispara `_close_contact_layer()` **nunca ocorre**. Agravante: o contador
+  `hook_pending:on_contact_end` era armado **incondicionalmente** por `len(hook_list)` (antes do
+  loop de skip) → ficava **órfão** em 1 e só o guard de 180s o zerava (era o único a fechar a sessão,
+  de forma degradada). Não era o skill-flow de NPS "não tratando o cenário" — com `skip` o NPS
+  **nem é instanciado**; a decisão é do bridge.
+
+**Correção (transporte, não regra de negócio) — dois pontos complementares:**
+
+1. **`fire_pool_hooks` — contador sem órfão.** `close_origin` é lido **uma vez** no topo
+   (`_close_origin_val`); o `hook_pending:{hook_type}` passa a ser dimensionado pelas entradas que
+   **realmente serão disparadas** (`_entry_will_dispatch`, que reproduz os predicados de skip), e
+   não é armado quando esse total é 0. O skip por-entrada do loop usa o mesmo `_close_origin_val`
+   (skip e contagem coerentes). Beneficia todos os callers; o caminho `agent_done` fica
+   byte-equivalente (nada é pulado quando `close_origin≠customer_disconnect`).
+
+2. **Caminho `client_disconnect` — fechamento determinístico.** Após `_write_pre_hook_context`,
+   computa-se `_cs_customer_will_run` (existe alguma entrada `side=customer` que NÃO é
+   `nps_on_disconnect=skip` nesta queda?). Se **não**, chama `_close_contact_layer()`
+   **imediatamente** — espelhando o guard do `agent_done`. O disparo de `on_contact_end` (e seu
+   `_hook_timeout_guard`) passa a ser **gated** por `_cs_customer_will_run` (evita dispatch/guard
+   órfãos quando tudo é skip). Casos: **tudo skip** → sem dispatch, fecha já; **misto** → dispara os
+   que rodam, fecha via `posatt:customer_active→0`; **sem hook de cliente** → fecha já. Idempotência
+   preservada (`_close_contact_layer` tem guard NX `contact_close_fired`; convive com o fan-out de
+   peers e com o guard de 180s como rede).
+
+**Sites:** `orchestrator-bridge/main.py` — `fire_pool_hooks` (arming do contador + skip por-entrada)
+e `process_contact_event` (bloco de dispatch de hooks no `client_disconnect`).
+
+**Segunda causa (analytics-api) — reabertura da sessão pelo routing do hook.** Após o fix do bridge,
+os logs confirmaram que o `_close_contact_layer` fecha corretamente (`contact_closed` publicado), mas a
+sessão voltava a `active`. Motivo: a tabela `analytics.sessions` é `ReplacingMergeTree()` **sem coluna
+de versão** (last-inserted-wins, assume ordem causal do Kafka). O `parse_routed`/`parse_queued`
+escreviam uma linha de `sessions` (pool + `closed_at=NULL`) para **todo** routing — inclusive o do
+agente de hook (wrap-up `pool=wrapup_ia`). Com o fechamento agora **imediato**, o `contact_closed` é
+publicado ANTES do wrap-up rotear; a linha `routed(wrapup_ia, closed_at=NULL)` entra **depois** da linha
+de close → reabre a sessão (status `active`, pool exibido = pool do hook). O caminho `agent_done` não
+sofria porque lá o close é o último evento (após NPS/posatt). **Correção:** `parse_routed`/`parse_queued`
+**não escrevem a linha de `sessions`** quando `result.conference_id` está presente — routing de hook/
+especialista é fato de **segmento** (já rastreado em `conversations.participants → segments`), nunca do
+contato. Só a alocação do **primário** (sem `conference_id`) é dona da linha de `sessions`. Corrige também
+o pool exibido em qualquer cenário de hook. Site: `analytics-api/models.py`.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*
