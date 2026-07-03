@@ -476,6 +476,9 @@ app.post("/execute", async (req: Request, res: Response) => {
             step_id:      params.step_id,   // parent's real delegate step id (resume matching)
             context:      params.context,
             timeout_hours: params.timeout_hours,
+            // Identity Resolver (nível b) — gate the pending_by_customer dual-write.
+            customer_resumable: params.customer_resumable ?? false,
+            resume_policy:      params.resume_policy ?? "offer",
           }),
         },
       )

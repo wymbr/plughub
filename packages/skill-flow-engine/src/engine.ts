@@ -94,14 +94,18 @@ export interface SkillFlowEngineConfig {
    * If absent, the delegate step falls back to on_timeout (config error).
    */
   persistDelegate?: (params: {
-    tenant_id:         string
-    session_id:        string   // parent (workflow) session
-    step_id:           string
-    resume_token:      string
-    pool:              string
-    context:           Record<string, string>
-    timeout_hours:     number
-    origin_session_id: string
+    tenant_id:          string
+    session_id:         string   // parent (workflow) session
+    step_id:            string
+    resume_token:       string
+    pool:               string
+    context:            Record<string, string>
+    timeout_hours:      number
+    origin_session_id:  string
+    /** Identity Resolver (nível b) — index pending under native customer_id for cross-channel resume. */
+    customer_resumable?: boolean
+    /** How a discovered cross-channel pending is offered on reconnect. */
+    resume_policy?:      "offer" | "auto"
   }) => Promise<{ child_session_id: string }>
 
   /**
@@ -127,6 +131,10 @@ export interface SkillFlowEngineConfig {
     business_hours: boolean
     calendar_id?:   string
     campaign_id?:   string
+    /** Identity Resolver (nível b) — index pending under native customer_id for cross-channel resume. */
+    customer_resumable?: boolean
+    /** How a discovered cross-channel pending is offered on reconnect. */
+    resume_policy?:      "offer" | "auto"
   }) => Promise<{ send_at: string; expires_at: string }>
 }
 

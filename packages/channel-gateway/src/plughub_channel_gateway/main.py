@@ -707,6 +707,9 @@ class WebhookDelegateRequest(BaseModel):
     resume_token:      str
     context:           dict[str, str] = {}
     timeout_hours:     float = 24.0
+    # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
+    customer_resumable: bool = False
+    resume_policy:      str  = "offer"   # offer | auto
 
 class WebhookDelegateConferenceRequest(BaseModel):
     tenant_id:     str
@@ -717,6 +720,9 @@ class WebhookDelegateConferenceRequest(BaseModel):
     step_id:       str = "" # parent's delegate step id — used to build the resume_token value
     context:       dict[str, str] = {}
     timeout_hours: float = 1.0
+    # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
+    customer_resumable: bool = False
+    resume_policy:      str  = "offer"   # offer | auto
 
 class IdentityAnchor(BaseModel):
     kind:  str   # phone | email | cpf | princ | dev
@@ -744,14 +750,16 @@ async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) ->
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
     session_id = await _webhook_adapter.handle_delegate_conference(
-        tenant_id     = body.tenant_id,
-        pool_id       = body.pool_id,
-        session_id    = body.session_id,
-        customer_id   = body.customer_id,
-        resume_token  = body.resume_token,
-        step_id       = body.step_id,
-        context       = body.context,
-        timeout_hours = body.timeout_hours,
+        tenant_id          = body.tenant_id,
+        pool_id            = body.pool_id,
+        session_id         = body.session_id,
+        customer_id        = body.customer_id,
+        resume_token       = body.resume_token,
+        step_id            = body.step_id,
+        context            = body.context,
+        timeout_hours      = body.timeout_hours,
+        customer_resumable = body.customer_resumable,
+        resume_policy      = body.resume_policy,
     )
     return {"session_id": session_id}
 
@@ -775,13 +783,15 @@ async def webhook_delegate(body: WebhookDelegateRequest) -> dict:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
     child_session_id = await _webhook_adapter.handle_delegate(
-        tenant_id         = body.tenant_id,
-        pool_id           = body.pool_id,
-        customer_id       = body.customer_id,
-        origin_session_id = body.origin_session_id,
-        resume_token      = body.resume_token,
-        context           = body.context,
-        timeout_hours     = body.timeout_hours,
+        tenant_id          = body.tenant_id,
+        pool_id            = body.pool_id,
+        customer_id        = body.customer_id,
+        origin_session_id  = body.origin_session_id,
+        resume_token       = body.resume_token,
+        context            = body.context,
+        timeout_hours      = body.timeout_hours,
+        customer_resumable = body.customer_resumable,
+        resume_policy      = body.resume_policy,
     )
     return {"session_id": child_session_id}
 

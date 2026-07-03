@@ -144,6 +144,9 @@ export async function executeCollect(
       business_hours: step.business_hours,
       ...(step.calendar_id ? { calendar_id: step.calendar_id } : {}),
       ...(step.campaign_id ? { campaign_id: step.campaign_id } : {}),
+      // Identity Resolver (nível b) — forward retomada policy.
+      customer_resumable: step.customer_resumable,
+      resume_policy:      step.resume_policy,
     })
     sendAt    = result.send_at
     expiresAt = result.expires_at

@@ -54,11 +54,23 @@ Regra de migração: raw asyncpg `CREATE ... IF NOT EXISTS` (não Prisma) — **
 > `write_pending`. Fallback devolve `matched_by="durable"` e reidrata o índice Redis. `external_refs`/`merges`
 > criados (DDL) mas populados só na Fase B.
 
-### Slice 3 — Campos no `delegate` + política + `session_resumed`
-`customer_resumable?`/`resume_policy?` no `delegate` (e `collect`) em `schemas/src/skill.ts`; propagação pelo
-engine até o callback `persistDelegate` (**risco: verificar propagação de campos novos**); `offer`/`auto`;
-`session_resumed` com `resume_origin: same_channel|token|identity`; guardrail de perfil.
-`task.target {skill_id}→{pool}` (delegate-spec §7) é decisão relacionada mas **fora** da Fase A.
+### Slice 3 — Campos no `delegate` + política + `session_resumed` ✅ (2026-07-03)
+`customer_resumable` (default `false`) + `resume_policy` (`offer|auto`, default `offer`) no `delegate` e
+`collect` (`schemas/src/skill.ts`). **Risco confirmado e tratado:** os executores (`executeDelegate`/
+`executeCollect`) montam o objeto de params do callback **explicitamente** — o wiring genérico do engine
+(`engine.ts`, spread `...params` tipado por `StepContext`) não dropa, mas os call sites dropariam; os campos
+foram adicionados nos dois call sites + nos tipos `persistDelegate`/`persistCollect` (executor.ts + engine.ts)
++ no `persistDelegateFn` do skill-flow-service. **channel-gateway:** a dual-write `pending_by_customer` (antes
+incondicional quando identity on) agora é **gated em `customer_resumable`** em `handle_delegate` **e**
+`handle_delegate_conference` (esta última não tinha dual-write — adicionada, gated); `resume_policy` →
+`PendingEntry.policy`. **`session_resumed`** ganha `resume_origin` (`same_channel|token|identity`) no payload
+do stream e no evento `conversations.inbound` (routing-engine `extra="ignore"`, seguro); **só `token` wirado**
+(default) — `same_channel`/`identity` pertencem ao caminho de reconexão-oferta da Fase B (§7). **Guardrail de
+perfil:** os campos só existem nos schemas de `delegate`/`collect`; o `discriminatedUnion` do Zod descarta se
+colados num `suspend`. Demo: `skill_portabilidade_demo_v1` (`notificar_e_confirmar`) seta
+`customer_resumable: true`. Testes: `schemas/src/skill.slice3.test.ts` (6), `skill-flow-engine/src/steps/
+delegate.slice3.test.ts` (2), `test_webhook_adapter.py` (+4: resume_origin default/explícito, dual-write
+gated skip/carry-policy). `task.target {skill_id}→{pool}` (delegate-spec §7) segue **fora** da Fase A.
 
 ### Slice 4 — Ponte de volta ao histórico (`caller.customer_id = nativo`) ✅ (2026-07-02)
 Formalmente Fase B (§13.8-5), puxado para o fim da Fase A: o `customer_id` da sessão (analytics) passa a

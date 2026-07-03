@@ -168,6 +168,10 @@ export async function executeDelegate(
         timeout_hours:     step.timeout_hours,
         origin_session_id: (ctx.sessionContext["origin_session_id"] as string | undefined)
                            ?? ctx.sessionId,  // propagate root or self as root
+        // Identity Resolver (nível b) — forward retomada policy so the
+        // channel-gateway gates the pending_by_customer dual-write.
+        customer_resumable: step.customer_resumable,
+        resume_policy:      step.resume_policy,
       })
       child_session_id = result.child_session_id
     } catch (err) {

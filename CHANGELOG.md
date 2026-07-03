@@ -2,6 +2,41 @@
 
 ---
 
+## Identity Resolver (nível b) — Fase A · Slice 3: `customer_resumable`/`resume_policy` + `resume_origin` (2026-07-03)
+
+Declara a política de retomada channel-abstract na **delegação** (spec §6) e gata a indexação cross-canal.
+
+- **`schemas/src/skill.ts`** — campos opcionais `customer_resumable` (`z.boolean().default(false)`) e
+  `resume_policy` (`z.enum(["offer","auto"]).default("offer")`) no step **`delegate`** (inline no
+  `FlowStepSchema`) e no **`CollectStepSchema`**. Defaults preservam 100% do comportamento legado.
+- **Propagação (risco "engine dropa campos" tratado):** os executores montam o objeto do callback
+  **explicitamente**, então os campos foram adicionados em (a) `steps/delegate.ts` e `steps/collect.ts`
+  (call sites — o ponto de drop), (b) tipos `persistDelegate`/`persistCollect` em `executor.ts` + `engine.ts`,
+  (c) `persistDelegateFn` do `e2e-tests/services/skill-flow-service`. O wiring genérico do engine já faz
+  spread `...params` tipado por `StepContext` — não dropa por si.
+- **channel-gateway** — `WebhookDelegate{,Conference}Request` + rotas passam os campos;
+  `handle_delegate` e `handle_delegate_conference` agora **gatam a dual-write `pending_by_customer`
+  (+`promote_to_durable`) em `customer_resumable`** (antes incondicional quando identity on); `resume_policy`
+  viaja no `PendingEntry.policy`. `handle_delegate_conference` não tinha dual-write — adicionada, gated.
+- **`session_resumed` ganha `resume_origin`** (`same_channel|token|identity`) no payload do stream e no evento
+  `conversations.inbound`. `handle_resume` recebe `resume_origin: str = "token"`; **só `token` é wirado**
+  (endpoint de resume + timeout scanner). `same_channel`/`identity` ficam para o caminho de reconexão-oferta
+  da Fase B (§7). Routing-engine `ConversationInboundEvent` usa `extra="ignore"` → campo novo é seguro.
+- **Guardrail de perfil** = colocação no schema: os campos só existem em `delegate`/`collect`; o
+  `discriminatedUnion` do Zod descarta se colados num `suspend` (spec §1.2).
+- **Demo** — `skill_portabilidade_demo_v1` (`notificar_e_confirmar`, o delegate que suspende aguardando o
+  retorno do cliente) seta `customer_resumable: true` + `resume_policy: offer` p/ manter a retomada
+  cross-canal sob o gate.
+- **Testes (verdes):** `schemas/src/skill.slice3.test.ts` (6 — defaults, enum inválido, guardrail suspend);
+  `skill-flow-engine/src/steps/delegate.slice3.test.ts` (2 — propagação ao callback);
+  `test_webhook_adapter.py` (+4 — `resume_origin` default/explícito, dual-write gated skip/carry-policy).
+  Também corrigidas 2 asserts stale pré-existentes (`test_handle_resume_*` esperavam igualdade exata do
+  payload, quebrada desde que a Fase E.3 injeta `source:"external"`). Suítes: 26 / 144 / 145 passando.
+- **Fora do slice:** wiring `persistCollect` no `skill-flow-worker` legado (collect cross-canal não está no
+  demo — plumbing schema/engine pronto); `task.target {skill_id}→{pool}` (delegate-spec §7, Fase B).
+
+---
+
 ## Identity Resolver (nível b) — Fase B slice: wiring do intake escreve `caller.customer_id` nativo (2026-07-03)
 
 Fecha o gargalo prático da Fase A: o `agente_portabilidade_intake_v1` agora **resolve/provisiona o

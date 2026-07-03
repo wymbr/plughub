@@ -224,7 +224,9 @@ async def test_handle_resume_publishes_kafka_event(adapter, mock_redis, mock_pro
     assert event["session_id"]   == SESSION_ID
     assert event["resume_token"] == RESUME_TOKEN
     assert event["step_id"]      == STEP_ID
-    assert event["payload"]      == {"decision": "approved"}
+    # payload carries the caller decision plus the injected resume source (Fase E.3).
+    assert event["payload"]["decision"] == "approved"
+    assert event["payload"]["source"]   == "external"
 
 
 # ── handle_resume — Fase B (stream events) ───────────────────────────────────
@@ -257,7 +259,76 @@ async def test_handle_resume_writes_session_resumed_to_stream(adapter, mock_redi
     payload_obj = json.loads(fields["payload"])
     assert payload_obj["step_id"]      == STEP_ID
     assert payload_obj["resume_token"] == RESUME_TOKEN
-    assert payload_obj["payload"]      == {"result": "ok"}
+    # payload carries the caller data plus the injected resume source (Fase E.3).
+    assert payload_obj["payload"]["result"] == "ok"
+    assert payload_obj["payload"]["source"] == "external"
+
+
+# ── Slice 3 — resume_origin (Identity Resolver nível b §11) ───────────────────
+
+@pytest.mark.asyncio
+async def test_handle_resume_defaults_resume_origin_token(adapter, mock_redis, mock_producer):
+    """resume_origin defaults to 'token' in both the stream and Kafka events."""
+    mock_redis.hget.return_value = VALID_TOKEN_VALUE
+    await adapter.handle_resume(resume_token=RESUME_TOKEN, tenant_id=TENANT_ID)
+
+    # Kafka conversations.inbound event
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["resume_origin"] == "token"
+
+    # Canonical stream payload
+    stream_payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
+    assert stream_payload["resume_origin"] == "token"
+
+
+@pytest.mark.asyncio
+async def test_handle_resume_forwards_explicit_resume_origin(adapter, mock_redis, mock_producer):
+    """An explicit resume_origin (Fase B reconnect paths) flows to both events."""
+    mock_redis.hget.return_value = VALID_TOKEN_VALUE
+    await adapter.handle_resume(
+        resume_token  = RESUME_TOKEN,
+        tenant_id     = TENANT_ID,
+        resume_origin = "identity",
+    )
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["resume_origin"] == "identity"
+    stream_payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
+    assert stream_payload["resume_origin"] == "identity"
+
+
+# ── Slice 3 — identity dual-write gated on customer_resumable (spec §6) ────────
+
+@pytest.mark.asyncio
+async def test_handle_delegate_skips_dual_write_when_not_resumable(adapter):
+    """customer_resumable=False → no pending_by_customer registration."""
+    adapter._identity_enabled = True
+    adapter._identity = AsyncMock()
+    await adapter.handle_delegate(
+        tenant_id="t", pool_id="p", customer_id="c", origin_session_id="s",
+        resume_token=RESUME_TOKEN, context={"contact_identifier": "+5511999"},
+        timeout_hours=24, customer_resumable=False,
+    )
+    adapter._identity.write_pending.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_delegate_dual_write_when_resumable_carries_policy(adapter):
+    """customer_resumable=True → pending registered with the resume_policy."""
+    adapter._identity_enabled = True
+    identity = AsyncMock()
+    identity.resolve_or_provision = AsyncMock(
+        return_value=MagicMock(customer_id="cus_1", matched_by="provisioned"),
+    )
+    adapter._identity = identity
+    await adapter.handle_delegate(
+        tenant_id="t", pool_id="p", customer_id="c", origin_session_id="s",
+        resume_token=RESUME_TOKEN, context={"contact_identifier": "+5511999"},
+        timeout_hours=24, customer_resumable=True, resume_policy="auto",
+    )
+    identity.write_pending.assert_called_once()
+    entry = identity.write_pending.call_args[0][2]
+    assert entry.policy == "auto"
+    identity.promote_to_durable.assert_called_once()
 
 
 @pytest.mark.asyncio

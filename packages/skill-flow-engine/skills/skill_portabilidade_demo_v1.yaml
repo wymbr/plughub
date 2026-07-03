@@ -82,6 +82,11 @@ steps:
   - id: notificar_e_confirmar
     type: delegate
     pool: portabilidade_confirmacao
+    # Identity Resolver (nível b) — o workflow suspende aguardando o RETORNO do
+    # cliente; indexa a pendência sob o customer_id nativo para retomada
+    # channel-abstract (reconecta de qualquer canal). offer = default anti-enumeração.
+    customer_resumable: true
+    resume_policy: offer
     context:
       contact_identifier:   "@ctx.session.contact_identifier"
       numero_atual:          "@ctx.session.numero_atual"

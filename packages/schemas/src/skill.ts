@@ -516,6 +516,18 @@ export const CollectStepSchema = z.object({
   // ── Campaign grouping (optional) ──
   campaign_id:    z.string().optional(),
 
+  // ── Identity Resolver (nível b) — retomada channel-abstract ──
+  /**
+   * When true, the pending collect is indexed under the resolved native
+   * customer_id (pending_by_customer) for cross-channel resume, not just the
+   * opaque collect/resume token. Default false = token-only (legacy).
+   * Implies the in-flow identification gate. See
+   * docs/product/identity-resolver-nivel-b-spec.md §6.
+   */
+  customer_resumable: z.boolean().default(false),
+  /** How a discovered cross-channel pending is offered on reconnect. */
+  resume_policy:  z.enum(["offer", "auto"]).default("offer"),
+
   // ── Output ──
   /** Key under which the response is stored in pipeline_state.results */
   output_as: z.string(),
@@ -896,6 +908,23 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     timeout_hours:  z.number().positive().default(24),
     business_hours: z.boolean().default(false),
     calendar_id:    z.string().uuid().optional(),
+    /**
+     * Identity Resolver (nível b) — retomada channel-abstract.
+     * When true, the pending delegate is indexed under the resolved native
+     * customer_id (pending_by_customer) so the customer can resume it from
+     * ANY channel (cross-channel), not just via the opaque resume_token.
+     * Default false = token-only pending (legacy behavior).
+     * Implies the in-flow identification gate (durable anchor) — wired in the
+     * flow before this step, never enforced by the schema. See
+     * docs/product/identity-resolver-nivel-b-spec.md §6.
+     */
+    customer_resumable: z.boolean().default(false),
+    /**
+     * How a discovered cross-channel pending is offered on reconnect.
+     * "offer" = ask the customer before resuming (default, anti-enumeration);
+     * "auto"  = resume without asking. Only meaningful when customer_resumable.
+     */
+    resume_policy:  z.enum(["offer", "auto"]).default("offer"),
     /** Next step when agent calls workflow_resume with decision=input|approved. */
     on_resume:      z.object({ next: z.string() }),
     /** Next step when agent calls workflow_resume with decision=rejected. */
