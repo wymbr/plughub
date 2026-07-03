@@ -2,6 +2,38 @@
 
 ---
 
+## Identity Resolver (nível b) — Fase B slice: wiring do intake escreve `caller.customer_id` nativo (2026-07-03)
+
+Fecha o gargalo prático da Fase A: o `agente_portabilidade_intake_v1` agora **resolve/provisiona o
+`customer_id` nativo** e o grava em `caller.customer_id`, dando ao bridge (Slice 4) o que propagar para
+`sessions.customer_id`. Sem isto, o Slice 4 só tinha o fallback `contact_id` no demo (não havia CRM que
+escrevesse o nativo).
+
+- **`skill-flow-engine/skills/agente_portabilidade_intake_v1.yaml`** — após `coletar_contato` e **antes**
+  de qualquer ramificação (`verificar_pendencia`), inseridos: `detectar_kind_contato` (choice `contains
+  "@"` → email/phone), `resolver_identidade_email|phone` (invoke `customer_resolve`, âncoras
+  `numero_atual:phone` + `contact_identifier:phone|email`, `provision:true`, `output_as: identidade`) e
+  `escrever_caller_id` (invoke `context_set` `caller.customer_id = $.pipeline_state.identidade.customer_id`,
+  confidence 1.0, agents_only). Ambas as branches de resolve caem para `verificar_pendencia` no `on_failure`
+  → resolver nunca bloqueia o intake. Posição pré-ramificação garante o carimbo em todos os caminhos
+  (inclusive continuar/cancelar pendência).
+- **Mecânica reusada:** `context_set` grava a ContextEntry `{value,confidence,source,visibility,updated_at}`
+  em `{tenant}:ctx:{session}` — exatamente o que `_resolve_close_customer_id` (bridge) lê no fechamento.
+  `customer_resolve` já existia na imagem do mcp-server (Slice 1); `resolveInputValue` resolve o array
+  `anchors` aninhado; o engine desembrulha o envelope MCP em objeto (`identidade.customer_id`).
+- **Deploy (nota operacional):** editar YAML de skill + restart **não** basta para pool migrado a
+  `PoolSkillSlot` — o bridge executa o snapshot do slot `current`. Publicação exigiu `set-next` +
+  `promote` (`/v1/pools/portabilidade_ia/slots/{next}` + `/promote`, header `x-service-token`). O
+  RegistrySyncer publicou `skill.flow` mas não re-snapshotou o slot.
+
+**Validação (demo, webchat):** dois intakes com o mesmo `numero_atual` (`11999999999`) fecharam ambos sob
+o **mesmo** `cus_f384c8f1e99b495cb1a0b7ce` em `sessions.customer_id` (antes: `cliente-demo-…`) — prova o
+carimbo nativo (Slice 4 e2e) e a unificação cross-contato (base de H1/H2/H3) num só passo.
+
+Docs: `docs/product/identity-resolver-fase-a-plano.md` (§2 Slice 4 + Falta), `identity-resolver-nivel-b-spec.md`.
+
+---
+
 ## Bugfix — sessão presa em `active` no customer-disconnect com NPS `nps_on_disconnect=skip` (2026-07-03)
 
 Corrige assimetria entre os caminhos `agent_done` e `client_disconnect` no fechamento da **camada de

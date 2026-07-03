@@ -72,8 +72,12 @@ refletir o **nativo** → conserta o erro `contact_id` e reconecta H1/H2/H3.
 > nativo em vez do id de CRM) é wiring de fluxo — Fase B. Sem CRM no demo, a validação end-to-end no browser
 > depende desse wiring.
 
-**Fase A completa** (Slices 1–4). Falta a Fase B (identidade progressiva, `external_refs`, merge, e o wiring
-do intake/`resolve` para escrever `caller.customer_id` nativo).
+**Fase A completa** (Slices 1–4). **Wiring do intake ✅ (2026-07-03):** `agente_portabilidade_intake_v1`
+chama `customer_resolve` (âncoras `numero_atual`+`contact_identifier`) e grava `caller.customer_id` nativo
+via `context_set` antes da ramificação de pendência — o Slice 4 agora tem o nativo para propagar. Validado
+no demo (webchat): dois intakes com o mesmo número fecham sob o mesmo `cus_…`. Nota de deploy: pool migrado
+a slot exigiu `set-next`+`promote` (edição de YAML+restart não re-snapshota o `current`). Falta a Fase B
+(identidade progressiva, `external_refs`, merge, e o wiring do step CRM `resolve` quando houver retaguarda).
 
 ## 3. Slice 1 — detalhamento
 

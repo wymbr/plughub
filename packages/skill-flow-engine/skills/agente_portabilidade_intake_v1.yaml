@@ -24,6 +24,8 @@
 #   1. saudacao            — notify: boas-vindas ao fluxo de portabilidade
 #   2. coletar_numero      — menu text: número atual a ser portado
 #   3. coletar_operadora   — menu list: operadora de destino
+#   3b. detectar_kind_contato / resolver_identidade_* / escrever_caller_id
+#       — resolve customer_id nativo (customer_resolve) e grava caller.customer_id
 #   4. confirmar_dados     — notify: exibe dados coletados
 #   5. escrever_numero     — invoke context_set: session.numero_atual
 #   6. escrever_operadora  — invoke context_set: session.operadora_destino
@@ -103,10 +105,79 @@ steps:
     interaction: text
     output_as: contact_identifier
     timeout_s: 180
-    on_success: verificar_pendencia    # ← agora vai para verificação antes de confirmar
+    on_success: detectar_kind_contato  # ← resolve a identidade antes da verificação de pendência
     on_failure: avisar_timeout
     on_timeout: avisar_timeout
     on_disconnect: finalizar_timeout
+
+  # ── Etapa 3b2: resolver identidade nativa (customer_id) ──────────────────────
+  # Objetivo (Identity Resolver — nível b, wiring do intake): antes de qualquer
+  # ramificação, resolver/provisionar o customer_id NATIVO a partir das âncoras
+  # coletadas e gravá-lo em caller.customer_id no ContextStore. No fechamento, o
+  # bridge (Slice 4) lê caller.customer_id e o carimba em sessions.customer_id —
+  # unificando H1/H2/H3 num contato ao vivo.
+  #
+  # Âncoras: numero_atual (sempre phone, determinístico) + contact_identifier
+  # (phone OU email; kind detectado abaixo). Ambas indexadas ao mesmo customer_id
+  # → reconectar por qualquer uma resolve o mesmo cliente.
+  #
+  # Detecção de kind do contact_identifier: presença de "@" ⇒ email; senão phone.
+  - id: detectar_kind_contato
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.contact_identifier"
+        operator: contains
+        value:    "@"
+        next:     resolver_identidade_email
+    default: resolver_identidade_phone
+
+  # ── Resolve com contact_identifier como EMAIL ────────────────────────────────
+  - id: resolver_identidade_email
+    type: invoke
+    tool: customer_resolve
+    input:
+      tenant_id: "$.tenant_id"
+      provision: true
+      anchors:
+        - kind: phone
+          value: "$.pipeline_state.numero_atual"
+        - kind: email
+          value: "$.pipeline_state.contact_identifier"
+    output_as: identidade
+    on_success: escrever_caller_id
+    on_failure: verificar_pendencia    # resolve falhou → segue sem carimbar (não bloqueia intake)
+
+  # ── Resolve com contact_identifier como PHONE ────────────────────────────────
+  - id: resolver_identidade_phone
+    type: invoke
+    tool: customer_resolve
+    input:
+      tenant_id: "$.tenant_id"
+      provision: true
+      anchors:
+        - kind: phone
+          value: "$.pipeline_state.numero_atual"
+        - kind: phone
+          value: "$.pipeline_state.contact_identifier"
+    output_as: identidade
+    on_success: escrever_caller_id
+    on_failure: verificar_pendencia
+
+  # ── Gravar caller.customer_id (nativo) no ContextStore ───────────────────────
+  # Mesma mecânica dos escrever_* (context_set → {tenant}:ctx:{session}); é a
+  # tag exata que o bridge lê no fechamento (_resolve_close_customer_id).
+  - id: escrever_caller_id
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag: "caller.customer_id"
+      value: "$.pipeline_state.identidade.customer_id"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: verificar_pendencia
+    on_failure: verificar_pendencia    # já resolvido; não bloquear a coleta se a escrita falhar
 
   # ── Etapa 3c: verificar pendência para este contato ──────────────────────────
   # Checa no Redis se já existe um processo pendente aguardando confirmação
