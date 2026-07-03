@@ -560,6 +560,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
+                                context_preview=self._pending_context_preview(context),
                             ),
                             ttl_s=ttl_s,
                         )
@@ -574,6 +575,24 @@ class WebhookAdapter(ChannelAdapter):
                 logger.warning("identity: dual-write failed (non-fatal): %s", _e)
 
         return child_session_id
+
+    @staticmethod
+    def _pending_context_preview(context: dict[str, Any]) -> dict[str, str]:
+        """
+        Build a minimal, PII-conscious preview for the pending entry — shown to
+        the customer in the cross-channel reconnect offer. operadora_destino is
+        non-secret (kept in clear); numero_atual is a phone (masked to the last
+        4 digits, e.g. ***4321). Absent keys are simply omitted.
+        """
+        preview: dict[str, str] = {}
+        operadora = context.get("operadora_destino") or context.get("session.operadora_destino")
+        if operadora:
+            preview["operadora_destino"] = str(operadora)
+        numero = context.get("numero_atual") or context.get("session.numero_atual")
+        if numero:
+            digits = "".join(ch for ch in str(numero) if ch.isdigit())
+            preview["numero_atual"] = ("***" + digits[-4:]) if len(digits) >= 4 else "***"
+        return preview
 
     @staticmethod
     def _anchors_from_context(context: dict[str, Any]) -> list[dict[str, str]]:
@@ -610,11 +629,20 @@ class WebhookAdapter(ChannelAdapter):
         }
 
     async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
-        """Lookup 2 — pending workflows for a resolved customer_id."""
+        """Lookup 2 — pending workflows for a resolved customer_id.
+
+        Returns the full pendings[] plus, for reconnect ergonomics, a FLATTENED
+        view of the first pending at the top level (found/resume_token/pool/
+        context/policy) — shape-compatible with the legacy get_pending_workflow
+        response so the intake flow reads `pendencia.resume_token` /
+        `pendencia.context.*` / `pendencia.policy` without JSONPath array indexing.
+        `context` is derived from the pending's context_preview (masked at write).
+        """
         pendings = await self._identity.find_pending(tenant_id, customer_id)
-        return {
-            "found": len(pendings) > 0,
-            "count": len(pendings),
+        result: dict[str, Any] = {
+            "found":       len(pendings) > 0,
+            "count":       len(pendings),
+            "customer_id": customer_id,
             "pendings": [
                 {
                     "session_id":      p.session_id,
@@ -622,12 +650,22 @@ class WebhookAdapter(ChannelAdapter):
                     "pool":            p.pool,
                     "skill_id":        p.skill_id,
                     "intent":          p.intent,
+                    "policy":          p.policy,
                     "suspended_at":    p.suspended_at,
                     "context_preview": p.context_preview,
                 }
                 for p in pendings
             ],
         }
+        if pendings:
+            first = pendings[0]
+            result.update({
+                "resume_token": first.resume_token,
+                "pool":         first.pool,
+                "policy":       first.policy,
+                "context":      first.context_preview,
+            })
+        return result
 
     # ──────────────────────────────────────────────────────────────────────────
     # Pending workflow lookup (customer reconnect)
@@ -844,6 +882,7 @@ class WebhookAdapter(ChannelAdapter):
                                 skill_id=context.get("skill_id"),
                                 intent=context.get("intent"),
                                 policy=resume_policy,
+                                context_preview=self._pending_context_preview(context),
                             ),
                             ttl_s=ttl_s,
                         )

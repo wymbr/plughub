@@ -43,6 +43,7 @@ import pytest
 
 from plughub_channel_gateway.adapters.webhook import WebhookAdapter
 from plughub_channel_gateway.config import Settings
+from plughub_channel_gateway.identity import PendingEntry
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -454,6 +455,88 @@ async def test_get_status_reads_correct_key(adapter, mock_redis):
     mock_redis.get.assert_called_once_with(
         f"{TENANT_ID}:session:{SESSION_ID}:status"
     )
+
+
+# ── Identity Resolver nível b — Thread A (cross-channel reconnect) ────────────
+
+def test_pending_context_preview_masks_numero_keeps_operadora():
+    """numero_atual (phone/PII) masked to last 4; operadora_destino kept clear."""
+    preview = WebhookAdapter._pending_context_preview({
+        "numero_atual":      "11988887777",
+        "operadora_destino": "VIVO",
+        "contact_identifier": "nao@entra.com",   # not part of the preview
+    })
+    assert preview == {"operadora_destino": "VIVO", "numero_atual": "***7777"}
+
+
+def test_pending_context_preview_handles_session_prefix_and_short():
+    preview = WebhookAdapter._pending_context_preview({
+        "session.numero_atual": "12",             # < 4 digits → fully masked
+    })
+    assert preview == {"numero_atual": "***"}
+
+
+def test_pending_context_preview_empty_when_absent():
+    assert WebhookAdapter._pending_context_preview({"foo": "bar"}) == {}
+
+
+@pytest.mark.asyncio
+async def test_find_pending_by_customer_flattens_first_with_policy_and_context(adapter):
+    """Lookup 2 response flattens the first pending (resume_token/pool/policy/context)."""
+    adapter._identity = AsyncMock()
+    adapter._identity.find_pending = AsyncMock(return_value=[
+        PendingEntry(
+            session_id="sid-B",
+            customer_id="cus_1",
+            resume_token="tok-abc",
+            pool="portabilidade_confirmacao",
+            skill_id=None,
+            policy="offer",
+            context_preview={"operadora_destino": "VIVO", "numero_atual": "***7777"},
+        ),
+    ])
+
+    out = await adapter.find_pending_by_customer(TENANT_ID, "cus_1")
+
+    assert out["found"] is True
+    assert out["count"] == 1
+    assert out["customer_id"] == "cus_1"
+    # flattened first-pending view (legacy-shape compatible)
+    assert out["resume_token"] == "tok-abc"
+    assert out["pool"] == "portabilidade_confirmacao"
+    assert out["policy"] == "offer"
+    assert out["context"] == {"operadora_destino": "VIVO", "numero_atual": "***7777"}
+    # full list still present, each carrying policy
+    assert out["pendings"][0]["policy"] == "offer"
+
+
+@pytest.mark.asyncio
+async def test_find_pending_by_customer_empty_has_no_flattened_fields(adapter):
+    adapter._identity = AsyncMock()
+    adapter._identity.find_pending = AsyncMock(return_value=[])
+
+    out = await adapter.find_pending_by_customer(TENANT_ID, "cus_none")
+
+    assert out["found"] is False
+    assert out["count"] == 0
+    assert "resume_token" not in out
+    assert "context" not in out
+
+
+@pytest.mark.asyncio
+async def test_handle_resume_endpoint_style_identity_origin(adapter, mock_redis, mock_producer):
+    """resume_origin='identity' (as the cross-channel reconnect passes) reaches both events."""
+    mock_redis.hget.return_value = VALID_TOKEN_VALUE
+    await adapter.handle_resume(
+        resume_token  = RESUME_TOKEN,
+        tenant_id     = TENANT_ID,
+        payload       = {"decision": "input", "source": "agent"},
+        resume_origin = "identity",
+    )
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["resume_origin"] == "identity"
+    stream_payload = json.loads(mock_redis.xadd.call_args[0][1]["payload"])
+    assert stream_payload["resume_origin"] == "identity"
 
 
 # ── Outbound no-ops ───────────────────────────────────────────────────────────

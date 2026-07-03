@@ -2,6 +2,40 @@
 
 ---
 
+## Identity Resolver (nível b) — Fase B slice: reconexão-oferta por identidade (cross-canal) (2026-07-03)
+
+Primeira fatia da Fase B: a retomada deixa de depender do `contact_identifier` exato (intra-canal de fato)
+e passa a resolver a pendência pelo **customer_id nativo** via anchors — reconecta por qualquer âncora que
+resolva ao mesmo cliente. Consome a `pending_by_customer` que o Slice 3 já cria (gated em `customer_resumable`).
+
+- **channel-gateway `find_pending_by_customer`** — inclui `policy` por pendência e **achata a primeira**
+  pendência no topo (`found`/`resume_token`/`pool`/`context`/`policy`) → shape compatível com o legado
+  `get_pending_workflow`, então o intake lê `pendencia.resume_token`/`.context.*`/`.policy` sem indexar
+  array em JSONPath. `pendings[]` + `customer_id` seguem para multi-pendência futura.
+- **Dual-write `context_preview` mascarado** (`handle_delegate_conference` + `handle_delegate`) — helper
+  `_pending_context_preview`: `operadora_destino` em claro (não-secreto), `numero_atual` mascarado nos
+  últimos 4 (`***4321`). É o que a oferta cross-canal exibe (spec §10 — preview mascarado).
+- **Intake `agente_portabilidade_intake_v1`** — `verificar_pendencia` usa `anchors:[{phone: numero_atual}]`
+  (cross-canal). Novo `choice avaliar_politica_retomada`: `policy=auto`→`retomar_processo` direto;
+  `offer` (default anti-enumeração)→`menu_continuidade`. `retomar_processo`/`cancelar_processo` levam
+  `resume_origin: "identity"`.
+- **`resume_origin=identity` fim-a-fim** — tool MCP `workflow_resume` ganha `resume_origin` (loose+validado:
+  só `same_channel|token|identity` viaja; ausente/inválido→omitido→`token`, para não quebrar o caminho normal
+  de confirmação). `WebhookResumeRequest`/endpoint `webhook_resume` repassam ao `handle_resume` (param do
+  Slice 3). O intake grava `session.resume_origin` no specialist (via delegate context); o
+  `agente_confirmacao_portabilidade_v1` lê `@ctx.session.resume_origin` em `confirmar_e_resumir`/
+  `retornar_sessao_pai`. `same_channel` (continuidade intra-canal, platform-level) fica p/ depois.
+- **Testes** — `test_webhook_adapter.py` (+6: `_pending_context_preview` mascara/omite; `find_pending_by_customer`
+  achata+policy+context / vazio sem flatten; `handle_resume` origin=identity). Suíte channel-gateway verde.
+- **Validado no demo** — reconexão via webchat (número + contato) acha a pendência cross-canal, mostra a
+  oferta com número mascarado (`***6666`) e o menu (offer). Deploy: rebuild channel-gateway + mcp-server-plughub,
+  restart orchestrator-bridge (re-sync YAML), promote `portabilidade_ia` + `portabilidade_confirmacao`.
+- **Fora do slice (resto da Fase B):** identidade progressiva + `external_refs` + merge + wiring do step CRM
+  `resolve`; `resume_origin=same_channel` (resolvedor de inbound platform-level); `persistCollect` no
+  skill-flow-worker legado.
+
+---
+
 ## Identity Resolver (nível b) — Fase A · Slice 3: `customer_resumable`/`resume_policy` + `resume_origin` (2026-07-03)
 
 Declara a política de retomada channel-abstract na **delegação** (spec §6) e gata a indexação cross-canal.

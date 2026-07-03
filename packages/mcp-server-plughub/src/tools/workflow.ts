@@ -190,12 +190,22 @@ export function registerWorkflowTools(
       payload: z.record(z.unknown()).optional().describe(
         "Data collected by the agent. Merged into the delegate step output in workflow pipeline_state."
       ),
+      resume_origin: z.string().optional().describe(
+        "Identity Resolver (nível b) — how the customer returned: same_channel|token|identity. " +
+        "'identity' when resuming a pending discovered via cross-channel identity lookup. In " +
+        "skill-flow YAML pass @ctx.session.resume_origin; absent/unresolved/invalid → 'token'."
+      ),
     } as any,
     withGuard("workflow_resume", async (input: Record<string, unknown>) => {
       const parsed = z.object({
-        resume_token: z.string().min(1),
-        decision:     z.enum(["input", "approved", "rejected", "timeout"]),
-        payload:      z.record(z.unknown()).optional(),
+        resume_token:  z.string().min(1),
+        decision:      z.enum(["input", "approved", "rejected", "timeout"]),
+        payload:       z.record(z.unknown()).optional(),
+        // Loose on purpose: a skill may pass @ctx.session.resume_origin that
+        // resolves to undefined/empty on non-reconnect paths — tolerate it and
+        // fall back to "token" rather than failing the resume with a validation
+        // error (which would break the normal confirmation flow).
+        resume_origin: z.string().optional(),
       }).safeParse(input)
 
       if (!parsed.success) {
@@ -208,7 +218,13 @@ export function registerWorkflowTools(
         }
       }
 
-      const { resume_token, decision, payload } = parsed.data
+      const { resume_token, decision, payload, resume_origin } = parsed.data
+      // Only forward a recognised origin; anything else (undefined/""/garbage
+      // from an unresolved @ctx ref) is dropped → endpoint defaults to "token".
+      const validOrigin =
+        resume_origin && ["same_channel", "token", "identity"].includes(resume_origin)
+          ? resume_origin
+          : undefined
 
       // POST to channel-gateway webhook resume endpoint
       const url = `${deps.channelGatewayUrl}/v1/channels/webhook/resume/${encodeURIComponent(resume_token)}`
@@ -223,6 +239,9 @@ export function registerWorkflowTools(
             // delegate). Um source explícito no payload do chamador prevalece
             // (ex.: intake cancelar → "customer_reconnect").
             payload:   { decision, source: "agent", ...(payload ?? {}) },
+            // Identity Resolver (nível b) — top-level axis distinct from payload.source.
+            // Omitted when the caller didn't set it → endpoint defaults to "token".
+            ...(validOrigin ? { resume_origin: validOrigin } : {}),
           }),
         })
       } catch (err) {

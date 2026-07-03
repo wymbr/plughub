@@ -698,6 +698,10 @@ class WebhookTriggerRequest(BaseModel):
 class WebhookResumeRequest(BaseModel):
     tenant_id: str
     payload:   dict | None = None
+    # Identity Resolver (nível b §11) — how the customer returned: same_channel|token|identity.
+    # Default "token" (explicit resume_token path). "identity" set by the cross-channel
+    # reconnect-offer flow so session_resumed carries the provenance.
+    resume_origin: str = "token"
 
 class WebhookDelegateRequest(BaseModel):
     tenant_id:         str
@@ -871,9 +875,10 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest) -> dict:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
     session_id = await _webhook_adapter.handle_resume(
-        resume_token = resume_token,
-        tenant_id    = body.tenant_id,
-        payload      = body.payload,
+        resume_token  = resume_token,
+        tenant_id     = body.tenant_id,
+        payload       = body.payload,
+        resume_origin = body.resume_origin,
     )
     if session_id is None:
         raise HTTPException(

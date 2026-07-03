@@ -179,16 +179,22 @@ steps:
     on_success: verificar_pendencia
     on_failure: verificar_pendencia    # já resolvido; não bloquear a coleta se a escrita falhar
 
-  # ── Etapa 3c: verificar pendência para este contato ──────────────────────────
-  # Checa no Redis se já existe um processo pendente aguardando confirmação
-  # do cliente com este contato (portabilidade aprovada pela operadora).
-  # Resultado em $.pipeline_state.pendencia.found (true/false).
+  # ── Etapa 3c: verificar pendência para este cliente (cross-canal) ────────────
+  # Identity Resolver (nível b, Fase B): usa anchors[] em vez de contact_identifier
+  # → o tool resolve o customer_id nativo (Lookup 1) e busca pendências indexadas
+  # sob ele (Lookup 2, pending_by_customer). Assim uma pendência criada num canal
+  # é encontrada ao reconectar por outro, desde que uma âncora resolva ao mesmo
+  # cliente. numero_atual é a âncora estável (telefone determinístico, sempre
+  # coletado). Resposta achatada: pendencia.found / .resume_token / .policy /
+  # .context.{numero_atual(mascarado),operadora_destino}.
   - id: verificar_pendencia
     type: invoke
     tool: pending_workflow_get
     input:
-      contact_identifier: "$.pipeline_state.contact_identifier"
-      tenant_id:          "$.tenant_id"
+      tenant_id: "$.tenant_id"
+      anchors:
+        - kind: phone
+          value: "$.pipeline_state.numero_atual"
     output_as: pendencia
     on_success: avaliar_pendencia
     on_failure: confirmar_dados    # fallback: prossegue normalmente se a tool falhar
@@ -200,8 +206,21 @@ steps:
       - field:    "$.pipeline_state.pendencia.found"
         operator: eq
         value:    true
-        next:     menu_continuidade
+        next:     avaliar_politica_retomada
     default: confirmar_dados     # sem pendência → fluxo normal
+
+  # ── Etapa 3d2: política de retomada (offer | auto) ───────────────────────────
+  # A política é declarada na delegação (customer_resumable/resume_policy do
+  # step delegate) e viaja no PendingEntry.policy. "auto" retoma sem perguntar;
+  # "offer" (default anti-enumeração) apresenta o menu de continuidade.
+  - id: avaliar_politica_retomada
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.pendencia.policy"
+        operator: eq
+        value:    "auto"
+        next:     retomar_processo
+    default: menu_continuidade   # offer → pergunta ao cliente
 
   # ── Etapa 3e: menu de continuidade (pendência encontrada) ────────────────────
   # Informa o cliente que há um processo de portabilidade pendente e pergunta
@@ -253,6 +272,10 @@ steps:
       numero_atual:          "$.pipeline_state.pendencia.context.numero_atual"
       operadora_destino:     "$.pipeline_state.pendencia.context.operadora_destino"
       customer_present:      "true"   # cliente conectado neste reconnect → specialist faz I/O
+      # Identity Resolver (nível b §11): a retomada foi descoberta por identidade
+      # cross-canal. O specialist lê @ctx.session.resume_origin e o repassa ao
+      # workflow_resume → session_resumed(Session B) carimba resume_origin=identity.
+      resume_origin:         "identity"
     timeout_hours: 1
     on_resume:
       next: finalizar       # specialist concluiu (via resume)
@@ -267,8 +290,9 @@ steps:
     type: invoke
     tool: workflow_resume
     input:
-      resume_token: "$.pipeline_state.pendencia.resume_token"
-      decision:     "rejected"
+      resume_token:  "$.pipeline_state.pendencia.resume_token"
+      decision:      "rejected"
+      resume_origin: "identity"   # cross-canal (nível b §11)
       payload:
         source:   "customer_reconnect"
         resposta: "cancelar"

@@ -102,6 +102,11 @@ steps:
     input:
       resume_token: "@ctx.session.workflow_resume_token"
       decision: "input"
+      # Identity Resolver (nível b §11): repassa a procedência da retomada. Só
+      # está presente quando este specialist foi acionado pelo reconnect por
+      # identidade (intake grava session.resume_origin=identity). Ausente no
+      # caminho normal → o tool ignora e cai em "token".
+      resume_origin: "@ctx.session.resume_origin"
       payload:
         resposta: "$.pipeline_state.resposta_cliente"
         confirmado: "$.pipeline_state.resposta_cliente == 'confirmar'"
@@ -130,6 +135,7 @@ steps:
     input:
       resume_token: "@ctx.session.delegate_resume_token"
       decision: "input"
+      resume_origin: "@ctx.session.resume_origin"   # nível b §11 (ausente → "token")
     on_success: finalizar
     on_failure: finalizar
 
