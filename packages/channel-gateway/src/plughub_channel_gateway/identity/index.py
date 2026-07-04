@@ -22,7 +22,12 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
-from .normalize import hash_anchor, kind_confidence, normalize_anchor
+from .normalize import (
+    anchor_rank_score,
+    hash_anchor,
+    kind_confidence,
+    normalize_anchor,
+)
 
 logger = logging.getLogger("plughub.channel-gateway.identity")
 
@@ -36,12 +41,46 @@ def _new_customer_id() -> str:
     return "cus_" + uuid.uuid4().hex[:24]
 
 
+def _encode_index(customer_id: str, verification_class: str) -> str:
+    """Valor do índice Redis {t}:identity:{kind}:{hash} → JSON {cid, vc}."""
+    return json.dumps({"cid": customer_id, "vc": verification_class})
+
+
+def _decode_index(raw: str | bytes | None) -> tuple[str, str] | None:
+    """
+    Leitor TOLERANTE do índice: aceita o JSON novo {cid, vc} e a string pura
+    legada (Slice 1/2), que é tratada como classe 'claimed'. Retorna (cid, vc)
+    ou None quando ausente.
+    """
+    if raw is None:
+        return None
+    s = raw.decode() if isinstance(raw, bytes) else raw
+    s = s.strip()
+    if not s:
+        return None
+    if s.startswith("{"):
+        try:
+            d = json.loads(s)
+            cid = d.get("cid", "")
+            if cid:
+                return cid, d.get("vc", "claimed")
+            return None
+        except Exception:
+            return None
+    # string pura legada → customer_id claimed
+    return s, "claimed"
+
+
 @dataclass
 class CustomerRef:
     customer_id: str
     status:      str            # prospect | identified
-    matched_by:  str            # existing | provisioned | ambiguous | none
+    matched_by:  str            # existing | provisioned | ambiguous | durable | none
     confidence:  float
+    # Classe de verificação da âncora vencedora (posse de canal). "none" quando
+    # não resolveu. A plataforma respeita isso por padrão no gate de retomada
+    # sensível (Fase 3): cross-canal de customer_resumable exige 'possessed'.
+    verification_class: str = "none"   # claimed | possessed | none
 
 
 @dataclass
@@ -117,9 +156,12 @@ class IdentityIndex:
         do seu tipo; vence a maior confiança. Empate entre customer_ids diferentes
         na maior confiança → matched_by="ambiguous" (o fluxo decide 'ask').
         """
-        # candidatos: customer_id → melhor confiança observada
-        candidates: dict[str, float] = {}
+        # candidatos: customer_id → (melhor score de ranking, kind_confidence,
+        # verification_class) da âncora que melhor pontuou para esse cliente.
+        candidates: dict[str, tuple[float, float, str]] = {}
         valid_anchors: list[tuple[str, str, str]] = []   # (kind, value_hash, normalized-not-stored)
+        # âncoras que NÃO estavam indexadas (candidatas à identidade progressiva).
+        miss_anchors: list[tuple[str, str]] = []          # (kind, value_hash)
 
         for a in anchors:
             kind  = a.get("kind", "")
@@ -129,35 +171,61 @@ class IdentityIndex:
             except ValueError:
                 continue
             valid_anchors.append((kind, vh, ""))
-            cid = await self._redis.get(self._identity_key(tenant_id, kind, vh))
-            if cid:
-                cid_s = cid.decode() if isinstance(cid, bytes) else cid
-                conf  = kind_confidence(kind)
-                if cid_s not in candidates or conf > candidates[cid_s]:
-                    candidates[cid_s] = conf
+            hit = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
+            if hit:
+                cid_s, vc = hit
+                score = anchor_rank_score(kind, vc)
+                if cid_s not in candidates or score > candidates[cid_s][0]:
+                    candidates[cid_s] = (score, kind_confidence(kind), vc)
+            else:
+                miss_anchors.append((kind, vh))
 
         if candidates:
-            top_conf = max(candidates.values())
-            winners  = [cid for cid, c in candidates.items() if c == top_conf]
+            top_score = max(s for (s, _c, _v) in candidates.values())
+            winners   = [cid for cid, (s, _c, _v) in candidates.items() if s == top_score]
             if len(winners) == 1:
-                return CustomerRef(winners[0], status="identified",
-                                   matched_by="existing", confidence=top_conf)
-            # colisão real: mesma confiança, ids diferentes
-            return CustomerRef(winners[0], status="identified",
-                               matched_by="ambiguous", confidence=top_conf)
+                winner = winners[0]
+                _score, conf, vc = candidates[winner]
+                # ── Identidade progressiva: anexa as âncoras que eram MISS ao
+                # vencedor, como `claimed` (não-verificada — foi só apresentada
+                # junto). Âncoras que apontam a OUTRO cliente NÃO são tocadas
+                # (território de merge, Fase C). Efeito: reconectar com
+                # phone+email indexa o email → depois o email sozinho resolve.
+                for (kind, vh) in miss_anchors:
+                    await self._redis.set(
+                        self._identity_key(tenant_id, kind, vh),
+                        _encode_index(winner, "claimed"),
+                        ex=self._index_ttl_s,
+                    )
+                return CustomerRef(winner, status="identified",
+                                   matched_by="existing", confidence=conf,
+                                   verification_class=vc)
+            # colisão real: mesmo top-score, ids diferentes → ambíguo (fluxo 'ask').
+            # Não anexa misses sob ambiguidade.
+            w = winners[0]
+            _s, conf, vc = candidates[w]
+            return CustomerRef(w, status="identified",
+                               matched_by="ambiguous", confidence=conf,
+                               verification_class=vc)
 
         # Redis miss → fallback ao cadastro durável (Slice 2): um cliente já
         # promovido ao PG pode ter saído do índice Redis (TTL/cold). Reidrata o
         # índice quando acha, para os próximos lookups voltarem a ser O(1) no Redis.
         pg_hit = await self._pg_resolve(tenant_id, valid_anchors)
         if pg_hit:
-            customer_id, conf = pg_hit
+            customer_id, conf, vc = pg_hit
+            # Reidrata o índice Redis preservando a classe durável de cada âncora
+            # (uma reidratação não deve rebaixar um `possessed` a `claimed`).
             for (kind, vh, _n) in valid_anchors:
+                rows_vc = await self._pg_key_class(tenant_id, kind, vh)
                 await self._redis.set(
-                    self._identity_key(tenant_id, kind, vh), customer_id, ex=self._index_ttl_s,
+                    self._identity_key(tenant_id, kind, vh),
+                    _encode_index(customer_id, rows_vc or "claimed"),
+                    ex=self._index_ttl_s,
                 )
             return CustomerRef(customer_id, status="identified",
-                               matched_by="durable", confidence=conf)
+                               matched_by="durable", confidence=conf,
+                               verification_class=vc)
 
         if not provision:
             return CustomerRef("", status="none", matched_by="none", confidence=0.0)
@@ -177,12 +245,13 @@ class IdentityIndex:
         for (kind, vh, _n) in valid_anchors:
             await self._redis.set(
                 self._identity_key(tenant_id, kind, vh),
-                customer_id,
+                _encode_index(customer_id, "claimed"),   # provisionada = não-verificada
                 ex=self._index_ttl_s,
             )
         conf = max((kind_confidence(k) for (k, _vh, _n) in valid_anchors), default=0.0)
         return CustomerRef(customer_id, status="prospect",
-                           matched_by="provisioned", confidence=conf)
+                           matched_by="provisioned", confidence=conf,
+                           verification_class="claimed")
 
     # ── Lookup 2 — pendências por cliente ──────────────────────────────────────
 
@@ -240,16 +309,18 @@ class IdentityIndex:
 
     async def _pg_resolve(
         self, tenant_id: str, valid_anchors: list[tuple[str, str, str]],
-    ) -> tuple[str, float] | None:
-        """Lookup 1 no PG durável: (kind, value_hash) → (customer_id, confidence)."""
+    ) -> tuple[str, float, str] | None:
+        """Lookup 1 no PG durável: âncoras → (customer_id, confidence, verification_class).
+        Ranqueia por score classe-aware (possessed vence claimed)."""
         if self._db is None or not valid_anchors:
             return None
-        best: tuple[str, float] | None = None
+        best: tuple[str, float, str] | None = None
+        best_score = -1.0
         async with self._db.acquire() as conn:
             for (kind, vh, _n) in valid_anchors:
                 row = await conn.fetchrow(
                     """
-                    SELECT customer_id, confidence
+                    SELECT customer_id, confidence, verification_class
                       FROM identity.customer_secondary_keys
                      WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3
                      LIMIT 1
@@ -257,19 +328,95 @@ class IdentityIndex:
                     tenant_id, kind, vh,
                 )
                 if row:
-                    conf = float(row["confidence"] or kind_confidence(kind))
-                    if best is None or conf > best[1]:
-                        best = (row["customer_id"], conf)
+                    vc    = row["verification_class"] or "claimed"
+                    conf  = float(row["confidence"] or kind_confidence(kind))
+                    score = anchor_rank_score(kind, vc)
+                    if score > best_score:
+                        best_score = score
+                        best = (row["customer_id"], conf, vc)
         return best
+
+    async def _pg_key_class(self, tenant_id: str, kind: str, value_hash: str) -> str | None:
+        """Classe de verificação durável de uma chave (para não rebaixar no reidratar)."""
+        if self._db is None:
+            return None
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT verification_class FROM identity.customer_secondary_keys
+                 WHERE tenant_id = $1 AND kind = $2 AND value_hash = $3 LIMIT 1
+                """,
+                tenant_id, kind, value_hash,
+            )
+        return (row["verification_class"] if row else None)
+
+    async def attach_anchor(
+        self, tenant_id: str, customer_id: str, kind: str, value: str,
+        verification_class: str = "claimed", persist_durable: bool = False,
+    ) -> bool:
+        """
+        Identidade progressiva — anexa/atualiza UMA âncora a um cliente existente.
+        Sempre atualiza o índice Redis (classe embutida). Quando `persist_durable`
+        (ex.: pós-OTP `possessed`, ou cliente já identificado), grava/atualiza a
+        chave no PG e garante a linha `customers`. Nunca rebaixa uma classe já
+        `possessed` para `claimed`. Retorna False se a âncora for inválida.
+        """
+        if not customer_id:
+            return False
+        try:
+            vh = hash_anchor(self._salt, kind, value)
+        except ValueError:
+            return False
+
+        # não rebaixa: se o índice já tem possessed e chega claimed, mantém possessed.
+        existing = _decode_index(await self._redis.get(self._identity_key(tenant_id, kind, vh)))
+        eff_vc = verification_class
+        if existing and existing[0] == customer_id and existing[1] == "possessed" and verification_class != "possessed":
+            eff_vc = "possessed"
+
+        await self._redis.set(
+            self._identity_key(tenant_id, kind, vh),
+            _encode_index(customer_id, eff_vc),
+            ex=self._index_ttl_s,
+        )
+        if persist_durable and self._db is not None:
+            conf = kind_confidence(kind)
+            async with self._db.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO identity.customers (customer_id, tenant_id, status)
+                    VALUES ($1, $2, 'identified')
+                    ON CONFLICT (customer_id) DO UPDATE SET updated_at = NOW()
+                    """,
+                    customer_id, tenant_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO identity.customer_secondary_keys
+                        (tenant_id, kind, value_hash, customer_id, confidence, verification_class, verified_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'possessed' THEN NOW() ELSE NULL END)
+                    ON CONFLICT (tenant_id, kind, value_hash)
+                        DO UPDATE SET customer_id = EXCLUDED.customer_id,
+                                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
+                                      verification_class = CASE
+                                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
+                                          ELSE EXCLUDED.verification_class END,
+                                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at)
+                    """,
+                    tenant_id, kind, vh, customer_id, conf, eff_vc,
+                )
+        return True
 
     async def promote_to_durable(
         self, tenant_id: str, customer_id: str, anchors: list[dict[str, str]],
-        status: str = "prospect",
+        status: str = "prospect", verification_class: str = "claimed",
     ) -> None:
         """
         Promove um cliente efêmero ao PG (gatilho concreto — ex.: registro de
         pendência). Upsert idempotente reusando o mesmo customer_id nativo, e
-        grava as chaves secundárias hasheadas. No-op sem db_pool.
+        grava as chaves secundárias hasheadas com a classe de verificação
+        (default `claimed` — promoção por pendência não prova posse). Nunca
+        rebaixa uma chave já `possessed`. No-op sem db_pool.
         """
         if self._db is None or not customer_id:
             return
@@ -294,15 +441,20 @@ class IdentityIndex:
                 await conn.execute(
                     """
                     INSERT INTO identity.customer_secondary_keys
-                        (tenant_id, kind, value_hash, customer_id, confidence)
-                    VALUES ($1, $2, $3, $4, $5)
+                        (tenant_id, kind, value_hash, customer_id, confidence, verification_class, verified_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, CASE WHEN $6 = 'possessed' THEN NOW() ELSE NULL END)
                     ON CONFLICT (tenant_id, kind, value_hash)
                         DO UPDATE SET customer_id = EXCLUDED.customer_id,
-                                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence)
+                                      confidence  = GREATEST(identity.customer_secondary_keys.confidence, EXCLUDED.confidence),
+                                      verification_class = CASE
+                                          WHEN identity.customer_secondary_keys.verification_class = 'possessed' THEN 'possessed'
+                                          ELSE EXCLUDED.verification_class END,
+                                      verified_at = COALESCE(identity.customer_secondary_keys.verified_at, EXCLUDED.verified_at)
                     """,
-                    tenant_id, kind, vh, customer_id, conf,
+                    tenant_id, kind, vh, customer_id, conf, verification_class,
                 )
-        logger.info("IdentityIndex: promoted customer=%s to durable (keys=%d)", customer_id, len(rows))
+        logger.info("IdentityIndex: promoted customer=%s to durable (keys=%d, vc=%s)",
+                    customer_id, len(rows), verification_class)
 
 
 _IDENTITY_SCHEMA_DDL = """
@@ -320,16 +472,20 @@ CREATE TABLE IF NOT EXISTS identity.customers (
 CREATE INDEX IF NOT EXISTS idx_identity_customers_tenant ON identity.customers (tenant_id);
 
 CREATE TABLE IF NOT EXISTS identity.customer_secondary_keys (
-    tenant_id    TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    value_hash   TEXT NOT NULL,
-    customer_id  TEXT NOT NULL,
-    confidence   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    verified_at  TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tenant_id          TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    value_hash         TEXT NOT NULL,
+    customer_id        TEXT NOT NULL,
+    confidence         DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    verification_class TEXT NOT NULL DEFAULT 'claimed',   -- claimed | possessed
+    verified_at        TIMESTAMPTZ,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tenant_id, kind, value_hash)
 );
 CREATE INDEX IF NOT EXISTS idx_identity_seckeys_customer ON identity.customer_secondary_keys (customer_id);
+-- Migração tolerante p/ DBs do Slice 2 (tabela sem a coluna):
+ALTER TABLE identity.customer_secondary_keys
+    ADD COLUMN IF NOT EXISTS verification_class TEXT NOT NULL DEFAULT 'claimed';
 
 CREATE TABLE IF NOT EXISTS identity.customer_external_refs (
     tenant_id    TEXT NOT NULL,

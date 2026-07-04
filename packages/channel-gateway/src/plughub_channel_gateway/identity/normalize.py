@@ -74,3 +74,21 @@ def hash_anchor(salt: str, kind: str, value: str) -> str:
 def kind_confidence(kind: str) -> float:
     """Peso de confiança do tipo de âncora (0..1). Desconhecido → 0.5."""
     return KIND_CONFIDENCE.get(kind, 0.5)
+
+
+# ── Verification class — posse de canal (OTP) vs alegação (digitada) ────────────
+# claimed  = cliente afirmou/digitou (não verificada) — grau de "origem/fraca".
+# possessed = provada por OTP (posse do canal) — confiável para retomada sensível.
+VERIFICATION_CLASSES = ("claimed", "possessed")
+
+# Bônus de ranking para âncora verificada. Alto o suficiente para que QUALQUER
+# âncora `possessed` supere QUALQUER âncora `claimed` na desambiguação do Lookup 1
+# (possessed phone 0.70+1.0=1.70 > claimed cpf 0.90). Só afeta ordenação; a
+# CustomerRef.confidence exposta continua sendo o kind_confidence (0..1).
+POSSESSED_RANK_BONUS = 1.0
+
+
+def anchor_rank_score(kind: str, verification_class: str) -> float:
+    """Score interno de desambiguação = kind_confidence + bônus se possessed."""
+    base = kind_confidence(kind)
+    return base + (POSSESSED_RANK_BONUS if verification_class == "possessed" else 0.0)

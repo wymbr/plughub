@@ -622,10 +622,11 @@ class WebhookAdapter(ChannelAdapter):
         """Lookup 1 — resolve/provision a customer_id from anchors."""
         ref = await self._identity.resolve_or_provision(tenant_id, anchors, provision=provision)
         return {
-            "customer_id": ref.customer_id,
-            "status":      ref.status,
-            "matched_by":  ref.matched_by,
-            "confidence":  ref.confidence,
+            "customer_id":        ref.customer_id,
+            "status":             ref.status,
+            "matched_by":         ref.matched_by,
+            "confidence":         ref.confidence,
+            "verification_class": ref.verification_class,
         }
 
     async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
