@@ -407,6 +407,31 @@ class IdentityIndex:
                 )
         return True
 
+    async def update_attributes(
+        self, tenant_id: str, customer_id: str, attributes: dict[str, Any],
+    ) -> bool:
+        """
+        Enriquecimento durável — merge (shallow) de atributos NÃO-SENSÍVEIS /
+        MASCARADOS no cadastro (`customers.attributes` JSONB). Garante a linha do
+        cliente. O contrato de "não-sensível" é do chamador (fluxo) — aqui só
+        persiste. No-op sem db_pool ou sem atributos. Retorna True se gravou.
+        """
+        if self._db is None or not customer_id or not attributes:
+            return False
+        async with self._db.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO identity.customers (customer_id, tenant_id, attributes)
+                VALUES ($1, $2, $3::jsonb)
+                ON CONFLICT (customer_id)
+                    DO UPDATE SET attributes = identity.customers.attributes || EXCLUDED.attributes,
+                                  updated_at = NOW()
+                """,
+                customer_id, tenant_id, json.dumps(attributes),
+            )
+        logger.info("IdentityIndex: attributes merged customer=%s keys=%d", customer_id, len(attributes))
+        return True
+
     async def promote_to_durable(
         self, tenant_id: str, customer_id: str, anchors: list[dict[str, str]],
         status: str = "prospect", verification_class: str = "claimed",

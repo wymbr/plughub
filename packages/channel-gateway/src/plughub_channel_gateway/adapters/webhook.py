@@ -53,7 +53,7 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
 from ..config import Settings
-from ..identity import IdentityIndex, PendingEntry
+from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
 logger = logging.getLogger("plughub.channel-gateway.webhook")
@@ -101,6 +101,20 @@ class WebhookAdapter(ChannelAdapter):
             prospect_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_PROSPECT_TTL_S", "2592000")),
             resolution_index_ttl_s=int(os.getenv("PLUGHUB_IDENTITY_INDEX_TTL_S", "2592000")),
             db_pool=db_pool,
+        )
+
+        # OTP de posse de canal (Fase 2) — step-up componível, acionado pelo fluxo.
+        # Entrega mockada no demo: PLUGHUB_OTP_DEV_RETURN_CODE=true loga+retorna o
+        # código (default true no demo, DEVE ser false em produção).
+        self._otp = OtpService(
+            redis=redis,
+            salt=salt,
+            ttl_s=int(os.getenv("PLUGHUB_OTP_TTL_S", "300")),
+            max_attempts=int(os.getenv("PLUGHUB_OTP_MAX_ATTEMPTS", "5")),
+            rl_window_s=int(os.getenv("PLUGHUB_OTP_RL_WINDOW_S", "900")),
+            rl_max=int(os.getenv("PLUGHUB_OTP_RL_MAX", "3")),
+            code_digits=int(os.getenv("PLUGHUB_OTP_CODE_DIGITS", "6")),
+            dev_return_code=os.getenv("PLUGHUB_OTP_DEV_RETURN_CODE", "true").lower() in ("1", "true", "yes"),
         )
 
     async def ensure_identity_schema(self) -> None:
@@ -628,6 +642,49 @@ class WebhookAdapter(ChannelAdapter):
             "confidence":         ref.confidence,
             "verification_class": ref.verification_class,
         }
+
+    # ── OTP de posse de canal (Fase 2) ─────────────────────────────────────────
+
+    async def otp_challenge(self, tenant_id: str, kind: str, value: str) -> dict:
+        """Emite um desafio de posse para a âncora (kind, value)."""
+        return await self._otp.challenge(tenant_id, kind, value)
+
+    async def otp_verify(
+        self, tenant_id: str, customer_id: str, kind: str, value: str, code: str,
+    ) -> dict:
+        """
+        Confere o OTP. No sucesso, promove a âncora a `possessed` (única via de
+        posse) e a torna durável no cadastro do `customer_id`. É o ponto onde
+        "posse provada" vira "identidade confiável".
+        """
+        res = await self._otp.verify(tenant_id, kind, value, code)
+        if res.get("verified") and customer_id:
+            await self._identity.attach_anchor(
+                tenant_id, customer_id, kind, value,
+                verification_class="possessed", persist_durable=True,
+            )
+            res["verification_class"] = "possessed"
+        return res
+
+    async def attach_customer_key(
+        self, tenant_id: str, customer_id: str, kind: str, value: str,
+    ) -> dict:
+        """
+        Enriquecimento — anexa uma âncora ao cliente como `claimed` (não-verificada).
+        `possessed` NUNCA sai daqui: exige OTP (invariante possessed ⟺ verificado).
+        """
+        ok = await self._identity.attach_anchor(
+            tenant_id, customer_id, kind, value,
+            verification_class="claimed", persist_durable=False,
+        )
+        return {"attached": ok, "verification_class": "claimed"}
+
+    async def update_customer_attributes(
+        self, tenant_id: str, customer_id: str, attributes: dict,
+    ) -> dict:
+        """Enriquecimento — merge de atributos mascarados/não-sensíveis no cadastro."""
+        ok = await self._identity.update_attributes(tenant_id, customer_id, attributes)
+        return {"updated": ok}
 
     async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
         """Lookup 2 — pending workflows for a resolved customer_id.

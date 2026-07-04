@@ -737,6 +737,31 @@ class IdentityResolveRequest(BaseModel):
     anchors:   list[IdentityAnchor]
     provision: bool = True
 
+# ── OTP + enrichment (Fase 2) ───────────────────────────────────────────────────
+
+class OtpChallengeRequest(BaseModel):
+    tenant_id: str
+    kind:      str   # phone | email | cpf | princ | dev
+    value:     str
+
+class OtpVerifyRequest(BaseModel):
+    tenant_id:   str
+    customer_id: str
+    kind:        str
+    value:       str
+    code:        str
+
+class IdentityAttachKeyRequest(BaseModel):
+    tenant_id:   str
+    customer_id: str
+    kind:        str
+    value:       str
+
+class IdentityAttributesRequest(BaseModel):
+    tenant_id:   str
+    customer_id: str
+    attributes:  dict
+
 
 @app.post("/v1/channels/webhook/delegate-conference", status_code=201)
 async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) -> dict:
@@ -830,6 +855,44 @@ async def webhook_pending_by_customer(customer_id: str, tenant_id: str) -> dict:
     return await _webhook_adapter.find_pending_by_customer(
         tenant_id   = tenant_id,
         customer_id = customer_id,
+    )
+
+
+@app.post("/v1/channels/webhook/identity/otp/challenge", status_code=200)
+async def webhook_otp_challenge(body: OtpChallengeRequest) -> dict:
+    """OTP de posse — emite um desafio para a âncora. Entrega mockada no demo."""
+    if _webhook_adapter is None:
+        return {"sent": False, "reason": "adapter_unavailable"}
+    return await _webhook_adapter.otp_challenge(body.tenant_id, body.kind, body.value)
+
+
+@app.post("/v1/channels/webhook/identity/otp/verify", status_code=200)
+async def webhook_otp_verify(body: OtpVerifyRequest) -> dict:
+    """OTP de posse — confere o código; sucesso promove a âncora a possessed."""
+    if _webhook_adapter is None:
+        return {"verified": False, "reason": "adapter_unavailable"}
+    return await _webhook_adapter.otp_verify(
+        body.tenant_id, body.customer_id, body.kind, body.value, body.code,
+    )
+
+
+@app.post("/v1/channels/webhook/identity/key/attach", status_code=200)
+async def webhook_identity_attach_key(body: IdentityAttachKeyRequest) -> dict:
+    """Enriquecimento — anexa uma âncora como claimed (possessed só via OTP)."""
+    if _webhook_adapter is None:
+        return {"attached": False}
+    return await _webhook_adapter.attach_customer_key(
+        body.tenant_id, body.customer_id, body.kind, body.value,
+    )
+
+
+@app.post("/v1/channels/webhook/identity/attributes", status_code=200)
+async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
+    """Enriquecimento — merge de atributos mascarados/não-sensíveis no cadastro."""
+    if _webhook_adapter is None:
+        return {"updated": False}
+    return await _webhook_adapter.update_customer_attributes(
+        body.tenant_id, body.customer_id, body.attributes,
     )
 
 

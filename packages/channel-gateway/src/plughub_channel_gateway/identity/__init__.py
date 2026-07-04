@@ -10,11 +10,13 @@ Ver docs/product/identity-resolver-fase-a-plano.md e identity-resolver-nivel-b-s
 """
 from .index import CustomerRef, IdentityIndex, PendingEntry
 from .normalize import ANCHOR_KINDS, hash_anchor, normalize_anchor
+from .otp import OtpService
 
 __all__ = [
     "IdentityIndex",
     "CustomerRef",
     "PendingEntry",
+    "OtpService",
     "normalize_anchor",
     "hash_anchor",
     "ANCHOR_KINDS",

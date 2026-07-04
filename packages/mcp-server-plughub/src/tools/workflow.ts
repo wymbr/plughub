@@ -450,4 +450,108 @@ export function registerWorkflowTools(
       }
     }),
   )
+
+  // ── OTP + enrichment (Identity Resolver nível b, Fase 2) ──────────────────────
+  // Step-up de POSSE de canal, componível e OPCIONAL — o fluxo aciona conforme a
+  // necessidade de negócio. Verificar é escolha do fluxo; confiar é consequência
+  // (a âncora só vira `possessed` — confiável para retomada sensível — via OTP).
+
+  const _kindSchema = z.enum(["phone", "email", "cpf", "princ", "dev"])
+
+  async function _postIdentity(path: string, body: unknown, errKey: string) {
+    try {
+      const res = await fetch(`${deps.channelGatewayUrl}${path}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(body),
+      })
+      if (!res.ok) {
+        return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_http_${res.status}` }) }] }
+      }
+      return { content: [{ type: "text" as const, text: JSON.stringify(await res.json()) }] }
+    } catch {
+      return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_unreachable` }) }] }
+    }
+  }
+
+  server.tool(
+    "otp_challenge",
+    "OTP de posse de canal (step-up OPCIONAL). Emite um código para a âncora " +
+    "(phone/email/…) para provar que o cliente controla aquele canal. Acione quando " +
+    "o negócio exigir maior confiança (ex.: antes de habilitar retomada cross-canal " +
+    "de um processo sensível). Entrega mockada no demo (código no dev_code/log).",
+    {
+      tenant_id: z.string().min(1).describe("Tenant ID. Em skill-flow use $.tenant_id."),
+      kind:      _kindSchema.describe("Tipo da âncora do canal a verificar."),
+      value:     z.string().min(1).describe("Valor da âncora (telefone/e-mail/…)."),
+    } as any,
+    withGuard("otp_challenge", async (input: Record<string, unknown>) => {
+      const p = z.object({ tenant_id: z.string().min(1), kind: _kindSchema, value: z.string().min(1) }).safeParse(input)
+      if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
+      return _postIdentity("/v1/channels/webhook/identity/otp/challenge", p.data, "otp_challenge_failed")
+    }),
+  )
+
+  server.tool(
+    "otp_verify",
+    "OTP de posse — confere o código informado pelo cliente. No sucesso, a âncora " +
+    "vira `possessed` (verificada) e durável no cadastro do customer_id — é a ÚNICA " +
+    "forma de uma âncora virar confiável para ações sensíveis.",
+    {
+      tenant_id:   z.string().min(1).describe("Tenant ID."),
+      customer_id: z.string().min(1).describe("customer_id nativo (customer_resolve)."),
+      kind:        _kindSchema,
+      value:       z.string().min(1),
+      code:        z.string().min(1).describe("Código informado pelo cliente."),
+    } as any,
+    withGuard("otp_verify", async (input: Record<string, unknown>) => {
+      const p = z.object({
+        tenant_id: z.string().min(1), customer_id: z.string().min(1),
+        kind: _kindSchema, value: z.string().min(1), code: z.string().min(1),
+      }).safeParse(input)
+      if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
+      return _postIdentity("/v1/channels/webhook/identity/otp/verify", p.data, "otp_verify_failed")
+    }),
+  )
+
+  server.tool(
+    "customer_attach_key",
+    "Enriquecimento da base de clientes — anexa uma âncora (phone/email/…) ao " +
+    "customer_id como `claimed` (não-verificada). Para tornar a chave confiável " +
+    "(`possessed`), use otp_challenge/otp_verify — esta tool NUNCA marca posse.",
+    {
+      tenant_id:   z.string().min(1).describe("Tenant ID."),
+      customer_id: z.string().min(1).describe("customer_id nativo."),
+      kind:        _kindSchema,
+      value:       z.string().min(1),
+    } as any,
+    withGuard("customer_attach_key", async (input: Record<string, unknown>) => {
+      const p = z.object({
+        tenant_id: z.string().min(1), customer_id: z.string().min(1),
+        kind: _kindSchema, value: z.string().min(1),
+      }).safeParse(input)
+      if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
+      return _postIdentity("/v1/channels/webhook/identity/key/attach", p.data, "attach_key_failed")
+    }),
+  )
+
+  server.tool(
+    "customer_update_attributes",
+    "Enriquecimento da base — faz merge de atributos MASCARADOS/NÃO-SENSÍVEIS de " +
+    "identificação no cadastro do cliente (customers.attributes). Nunca perfil " +
+    "completo, credencial ou dado sensível — isso vive no CRM do tenant.",
+    {
+      tenant_id:   z.string().min(1).describe("Tenant ID."),
+      customer_id: z.string().min(1).describe("customer_id nativo."),
+      attributes:  z.record(z.unknown()).describe("Pares chave→valor (mascarados/não-sensíveis)."),
+    } as any,
+    withGuard("customer_update_attributes", async (input: Record<string, unknown>) => {
+      const p = z.object({
+        tenant_id: z.string().min(1), customer_id: z.string().min(1),
+        attributes: z.record(z.unknown()),
+      }).safeParse(input)
+      if (!p.success) return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "invalid_input", message: p.error.message }) }] }
+      return _postIdentity("/v1/channels/webhook/identity/attributes", p.data, "attributes_failed")
+    }),
+  )
 }

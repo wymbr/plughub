@@ -56,7 +56,14 @@ class FakeConn:
 
     async def execute(self, sql: str, *args):
         s = " ".join(sql.split())
-        if "INSERT INTO identity.customers" in s:
+        if "INSERT INTO identity.customers" in s and "attributes" in s:
+            # update_attributes upsert: ($1 cid, $2 tenant, $3 attributes json)
+            import json as _json
+            cid, tenant, attrs = args[0], args[1], _json.loads(args[2])
+            row = self.state["customers"].setdefault(
+                cid, {"tenant_id": tenant, "status": "prospect", "attributes": {}})
+            row.setdefault("attributes", {}).update(attrs)
+        elif "INSERT INTO identity.customers" in s:
             # promote_to_durable passes status as $3; attach_anchor hardcodes
             # 'identified' in SQL (only 2 bind args) → default when absent.
             cid, tenant = args[0], args[1]
@@ -295,6 +302,22 @@ class TestDurability:
         key = ("t", "email", hash_anchor(SALT, "email", "v@x.com"))
         assert pg.state["secondary_keys"][key]["verification_class"] == "possessed"
         assert "cus_a" in pg.state["customers"]
+
+    async def test_update_attributes_merges_when_pool(self):
+        pg = FakePGPool()
+        idx = IdentityIndex(FakeRedis(), SALT, db_pool=pg)
+        assert await idx.update_attributes("t", "cus_z", {"nome_mascarado": "J***"}) is True
+        assert await idx.update_attributes("t", "cus_z", {"segmento": "premium"}) is True
+        assert pg.state["customers"]["cus_z"]["attributes"] == {
+            "nome_mascarado": "J***", "segmento": "premium",
+        }
+
+    async def test_update_attributes_noop_without_pool_or_empty(self):
+        idx = IdentityIndex(FakeRedis(), SALT, db_pool=None)
+        assert await idx.update_attributes("t", "cus_z", {"a": 1}) is False
+        pg = FakePGPool()
+        idx2 = IdentityIndex(FakeRedis(), SALT, db_pool=pg)
+        assert await idx2.update_attributes("t", "cus_z", {}) is False
 
 
 # ── Fase 1 — identidade progressiva + verification_class ───────────────────────
