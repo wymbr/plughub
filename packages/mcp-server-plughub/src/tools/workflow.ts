@@ -344,9 +344,23 @@ export function registerWorkflowTools(
           if (!rRes.ok) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ found: false }) }] }
           }
-          const ref = await rRes.json() as { customer_id: string; status: string }
+          const ref = await rRes.json() as { customer_id: string; status: string; verification_class?: string }
           if (!ref.customer_id) {
             return { content: [{ type: "text" as const, text: JSON.stringify({ found: false, count: 0 }) }] }
+          }
+          // ── Safe-default gate (Identity Resolver nível b, Fase 3) ──────────────
+          // Retomada cross-canal (pending_by_customer) só é ACIONÁVEL quando a
+          // âncora resolvente é `possessed` (posse provada por OTP). Com âncora
+          // apenas `claimed`, NÃO revelamos se há pendência (anti-enumeração) e
+          // devolvemos verification_required — o fluxo pode oferecer OTP e
+          // re-consultar. É garantia de plataforma: o resume_token nunca sai daqui
+          // sem posse. Ver docs/adr/adr-identity-channel-possession.md.
+          if (ref.verification_class !== "possessed") {
+            return { content: [{ type: "text" as const, text: JSON.stringify({
+              found: false, count: 0,
+              customer_id: ref.customer_id,
+              verification_required: true,
+            }) }] }
           }
           const pRes = await fetch(
             `${deps.channelGatewayUrl}/v1/channels/webhook/pending/by-customer/${encodeURIComponent(ref.customer_id)}?tenant_id=${encodeURIComponent(tenant_id)}`,
@@ -466,11 +480,11 @@ export function registerWorkflowTools(
         body:    JSON.stringify(body),
       })
       if (!res.ok) {
-        return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_http_${res.status}` }) }] }
+        return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_http_${res.status}` }) }] }
       }
       return { content: [{ type: "text" as const, text: JSON.stringify(await res.json()) }] }
     } catch {
-      return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_unreachable` }) }] }
+      return { isError: true as const, content: [{ type: "text" as const, text: JSON.stringify({ error: `${errKey}_unreachable` }) }] }
     }
   }
 

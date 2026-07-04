@@ -2,6 +2,45 @@
 
 ---
 
+## Identity Resolver (nível b) — Fase B: identidade progressiva + posse de canal (OTP) + gate seguro (2026-07-04)
+
+Capacidade de identificação em três fases (commits separados). Fecha o cross-canal do Thread A com
+segurança: âncoras se acumulam progressivamente, o OTP prova posse do canal, e a retomada cross-canal
+sensível exige posse provada. **Merge e external_refs seguem adiados (Fase C / quando houver CRM).**
+ADR: `docs/adr/adr-identity-channel-possession.md` (plataforma = autoridade de posse de canal, emenda ao
+princípio 7/§4.4).
+
+**Fase 1 — progressiva + `verification_class`:** `resolve_or_provision`, num hit não-ambíguo, anexa as
+âncoras que eram *miss* ao vencedor como `claimed` → reconectar com phone+email indexa o email; depois o
+email sozinho resolve o mesmo cliente. `verification_class` (`claimed|possessed`) no índice Redis (valor
+JSON `{cid,vc}`, leitor tolerante — string legada = claimed) e no PG (`customer_secondary_keys`, coluna
+via `ALTER IF NOT EXISTS`). Confiança de desambiguação = `f(kind, classe)` (`anchor_rank_score`: qualquer
+possessed supera qualquer claimed). `attach_anchor` primitivo (nunca rebaixa possessed); `CustomerRef`/
+`resolve_customer` expõem a classe.
+
+**Fase 2 — OTP como serviço + enriquecimento:** `identity/otp.py` `OtpService` (agnóstico de identidade —
+prova posse de `(kind,value)`): `challenge` (código 6 díg só-hash, TTL 300s, rate-limit anti-enumeração) +
+`verify` (tentativas, one-shot). Entrega **mockada** gated por `PLUGHUB_OTP_DEV_RETURN_CODE` (código no log
+WARNING + `dev_code`; **nunca** em produção). `WebhookAdapter.otp_verify` OK → `attach_anchor(possessed,
+durable)` — **única via para possessed**. `customer_attach_key` só escreve `claimed` (invariante
+possessed⟺verificado). `IdentityIndex.update_attributes` (merge JSONB em `customers.attributes`). Tools MCP
+`otp_challenge`/`otp_verify`/`customer_attach_key`/`customer_update_attributes` + 4 endpoints.
+
+**Fase 3 — gate seguro + demo:** **default de plataforma** — retomada cross-canal de `customer_resumable`
+exige âncora `possessed`. `pending_workflow_get` (anchors) não devolve `resume_token`/contexto quando a
+resolução é só `claimed`; devolve `verification_required` **sem revelar se há pendência** (anti-enumeração).
+Intake (`agente_portabilidade_intake_v1`): `avaliar_resolucao` → `oferecer_verificacao` (menu Sim/Não,
+proativo com recusa, wording neutro) → `otp_challenge` → `pedir_codigo` → `otp_verify` → re-consulta
+`pending_workflow_get` (agora possessed) → `avaliar_pendencia`. Recusa/falha → atendimento novo.
+
+**Testes:** `test_identity_index.py` (+progressiva, classe, tolerante, no-downgrade, update_attributes),
+`test_otp.py` (challenge/verify/tentativas/rate-limit/dev-gate/código-nunca-claro + verify→possessed). Suíte
+channel-gateway 38 verde. **Deploy:** channel-gateway + mcp-server-plughub, restart orchestrator-bridge
+(re-sync intake YAML), re-promote `portabilidade_ia`. **Mudança de UX:** o cross-canal do Thread A agora
+inclui o passo de OTP (o ponto da feature).
+
+---
+
 ## Identity Resolver (nível b) — Fase B slice: reconexão-oferta por identidade (cross-canal) (2026-07-03)
 
 Primeira fatia da Fase B: a retomada deixa de depender do `contact_identifier` exato (intra-canal de fato)
