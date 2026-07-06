@@ -262,6 +262,10 @@ function resolveJsonPathRef(ref: string, ctx: StepContext): unknown {
     const evalContext = {
       pipeline_state: ctx.state.results,
       session:        ctx.sessionContext,
+      // Dialog primitive §17.3-1 — deploy-time skill params from the slot's
+      // config_json, accessible as $.config.* (e.g. $.config.form_id).
+      // Own namespace, does not collide with session.*.
+      config:         ctx.config ?? {},
       // Always-available built-in fields — accessible as $.session_id, $.tenant_id etc.
       // Useful in invoke steps that need the current session or tenant identifier
       // without requiring the caller to put them in sessionContext explicitly.

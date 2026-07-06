@@ -44,6 +44,7 @@ import AnaliseProcessosPage from '@/modules/analise/AnaliseProcessosPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
+import DialogFormsPage from '@/modules/dialog-forms/DialogFormsPage'
 
 export const routes: RouteObject[] = [
   {
@@ -133,6 +134,7 @@ export const routes: RouteObject[] = [
       { path: 'config/channels',   element: <ConfigChannelsIndex /> },
       { path: 'config/canais',     element: <Navigate to="/config/channels" replace /> },
       { path: 'config/masking',    element: <MaskingPage /> },
+      { path: 'config/dialog-forms', element: <DialogFormsPage /> },
       { path: 'config/billing',    element: <BillingPage /> },
       { path: 'config/agent-reports', element: <Navigate to="/analise/agents"    replace /> },
       { path: 'config/access',     element: <AccessPage /> },

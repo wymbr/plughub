@@ -71,6 +71,18 @@ import yaml
 #   skill_{slug}   e.g. skill_copilot_sac   (legacy skill_{name}_v{n} still matches the slug)
 _SKILL_ID_RE = re.compile(r"^skill_[a-z0-9_]+$")
 
+# ── Teardown-hook safety guard (dialog-primitive follow-up, 2026-07-06) ─────────
+# A pool hook (on_contact_end/on_human_end/post_human) runs its target skill as a
+# conference specialist DURING contact/segment teardown. The bridge holds the
+# contact open and watches the hook agent's outcome to decide when to close. A step
+# that SUSPENDS the flow (delegate/suspend/collect) makes the bridge treat the hook
+# as "done" → it closes the contact BEFORE the I/O renders (silent footgun — no
+# error today). Teardown-hook skills must do I/O INLINE (form_get + menu), never via
+# a suspending step. This guard turns the footgun into a loud config ERROR at sync.
+# See docs/product/dialog-primitive-and-runner-design.md.
+_TEARDOWN_HOOK_KEYS   = ("on_contact_end", "on_human_end", "post_human")
+_SUSPENDING_STEP_TYPES = frozenset({"delegate", "suspend", "collect"})
+
 logger = logging.getLogger("plughub.registry-syncer")
 
 
@@ -111,6 +123,7 @@ class SyncReport:
     deploy_slots_set:       int = 0   # Fase 3c — PoolSkillSlot.current promoted from YAML
     deploy_slots_skipped:   int = 0   # already matching desired skill+capacity
     deploy_slots_errors:    int = 0
+    hook_violations:        int = 0   # teardown-hook guard: suspending step in a hook-target skill
     errors:                 list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -124,6 +137,7 @@ class SyncReport:
             f"skills(upserted={self.skills_upserted} skip={self.skills_skipped} err={self.skills_errors}) "
             f"deploy_slots(set={self.deploy_slots_set} skip={self.deploy_slots_skipped} "
             f"err={self.deploy_slots_errors})"
+            + (f" hook_violations={self.hook_violations}" if self.hook_violations else "")
         )
 
 
@@ -223,6 +237,9 @@ class RegistrySyncer:
         # ── Sync skills FIRST (agent types reference skill_ids) ───────────
         await self._sync_skills(http, headers, report)
 
+        # ── Teardown-hook safety guard (read-only; loud ERROR on violation) ──
+        self._validate_teardown_hooks(cfg, report)
+
         # ── Sync journey types (pools reference them) ──────────────────
         for jt in cfg.get("journey_types", []):
             await self._sync_journey_type(http, headers, jt, report)
@@ -248,6 +265,85 @@ class RegistrySyncer:
         await self._sync_deploy_slots_from_pools(http, headers, cfg.get("pools", []), report)
 
         return report
+
+    # ── Teardown-hook safety guard ──────────────────────────────────────────────
+
+    def _load_skill_steps(self) -> dict[str, list]:
+        """skill_id → flow.steps, read from SKILLS_DIR (for hook-safety validation)."""
+        out: dict[str, list] = {}
+        if not self._skills_dir:
+            return out
+        skills_path = Path(self._skills_dir)
+        if not skills_path.exists():
+            return out
+        for yaml_file in sorted(skills_path.glob("*.yaml")):
+            try:
+                raw = yaml.safe_load(yaml_file.read_text())
+            except Exception:
+                continue
+            if not isinstance(raw, dict):
+                continue
+            sid   = raw.get("id", "")
+            steps = raw.get("steps")
+            if sid and isinstance(steps, list):
+                out[str(sid)] = steps
+        return out
+
+    def _validate_teardown_hooks(self, cfg: dict, report: SyncReport) -> None:
+        """
+        Guard: a skill deployed to a pool that is the TARGET of a teardown hook
+        (on_contact_end/on_human_end/post_human) must NOT contain a suspending step
+        (delegate/suspend/collect) — the bridge would close the contact before the
+        I/O renders. Logs a loud config ERROR naming the offending wiring. Read-only
+        and fail-open (does not block startup, consistent with the syncer's policy;
+        the cross-reference is the correct signal, not the skill's own profile).
+        """
+        pools = cfg.get("pools", []) or []
+
+        # pool_id → deployed skill_id (deploy.skill_id, fallback skill_id/webhook_skill_id).
+        pool_skill: dict[str, str] = {}
+        for p in pools:
+            pid = p.get("pool_id")
+            if not pid:
+                continue
+            sid = (p.get("deploy") or {}).get("skill_id") or p.get("skill_id") or p.get("webhook_skill_id")
+            if sid:
+                pool_skill[str(pid)] = str(sid)
+
+        skill_steps = self._load_skill_steps()
+
+        for p in pools:
+            hooking_pool = p.get("pool_id", "?")
+            hooks = p.get("hooks") or {}
+            if not isinstance(hooks, dict):
+                continue
+            for hook_key in _TEARDOWN_HOOK_KEYS:
+                for entry in hooks.get(hook_key, []) or []:
+                    target_pool = entry.get("pool") if isinstance(entry, dict) else None
+                    if not target_pool:
+                        continue
+                    target_skill = pool_skill.get(str(target_pool))
+                    if not target_skill:
+                        continue  # target pool not declared in this YAML → skip (lenient)
+                    steps = skill_steps.get(target_skill)
+                    if not isinstance(steps, list):
+                        continue  # skill flow unavailable (YAML fallback / no id) → skip
+                    bad = [
+                        (s.get("id", "?"), s.get("type"))
+                        for s in steps
+                        if isinstance(s, dict) and s.get("type") in _SUSPENDING_STEP_TYPES
+                    ]
+                    if bad:
+                        report.hook_violations += 1
+                        detail = ", ".join(f"{sid}:{stype}" for sid, stype in bad)
+                        logger.error(
+                            "RegistrySyncer: CONFIG ERROR — pool '%s' declares hook '%s' → pool "
+                            "'%s' (skill '%s'), but that skill has SUSPENDING step(s) [%s]. Teardown "
+                            "hooks cannot suspend (delegate/suspend/collect): the bridge closes the "
+                            "contact before the I/O renders. Do the I/O INLINE (form_get + menu). "
+                            "See docs/product/dialog-primitive-and-runner-design.md.",
+                            hooking_pool, hook_key, target_pool, target_skill, detail,
+                        )
 
     # ── Deploy-slot sync (Fase 3c) ──────────────────────────────────────────────
 

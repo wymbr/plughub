@@ -247,19 +247,25 @@ steps:
       kind:      phone
       value:     "$.pipeline_state.numero_atual"
     output_as: otp_chal
-    on_success: pedir_codigo_otp
+    on_success: coletar_codigo_dialog
     on_failure: confirmar_dados    # OTP indisponível → segue como novo
 
-  - id: pedir_codigo_otp
-    type: menu
-    prompt: "Enviamos um código de 6 dígitos para o seu número por SMS. Digite o código para confirmar:"
-    interaction: text
-    output_as: codigo_otp
-    timeout_s: 180
-    on_success: verificar_codigo_otp
-    on_failure: confirmar_dados
-    on_timeout: confirmar_dados
-    on_disconnect: finalizar_timeout
+  # ── Etapa 3c4b: coleta do código via dialog-runner (dialog primitive) ─────────
+  # Delega a coleta do código ao skill_dialog_runner_v1 (Tier-3), que renderiza o
+  # DialogForm `dialog_otp_possession` (conteúdo versionado) e devolve o que o
+  # cliente DIGITOU. O código GERADO nunca passa pelo runner (costura de segredo):
+  # challenge/verify ficam aqui (OtpService). O runner resume o delegate com o
+  # payload → $.pipeline_state.coletar_codigo_dialog.code.
+  - id: coletar_codigo_dialog
+    type: delegate
+    pool: dialog_runner
+    context:
+      dialog_form_id: "dialog_otp_possession"
+    timeout_hours: 1
+    on_resume:
+      next: verificar_codigo_otp
+    on_timeout:
+      next: confirmar_dados
 
   - id: verificar_codigo_otp
     type: invoke
@@ -269,7 +275,7 @@ steps:
       customer_id: "@ctx.caller.customer_id"
       kind:        phone
       value:       "$.pipeline_state.numero_atual"
-      code:        "$.pipeline_state.codigo_otp"
+      code:        "$.pipeline_state.coletar_codigo_dialog.value"
     output_as: otp_res
     on_success: avaliar_verificacao
     on_failure: confirmar_dados

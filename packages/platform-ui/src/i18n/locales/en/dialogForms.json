@@ -1,0 +1,47 @@
+{
+  "title": "Dialog Forms",
+  "new": "New",
+  "loading": "Loading…",
+  "empty": "No forms yet.",
+  "selectOrNew": "Select a form or create a new one.",
+  "nodes": "Dialog nodes",
+  "node": {
+    "statement": "Statement",
+    "question": "Question"
+  },
+  "field": {
+    "formId": "Form ID",
+    "name": "Name",
+    "defaultLocale": "Default locale",
+    "tags": "Tags",
+    "text": "Text",
+    "prompt": "Prompt",
+    "interaction": "Interaction",
+    "outputKey": "Output key",
+    "metric": "Metric (capture)",
+    "visibility": "Visibility",
+    "numeric": "Numeric",
+    "min": "Min",
+    "max": "Max",
+    "options": "Options",
+    "option": "Option",
+    "label": "Label"
+  },
+  "vis": {
+    "all": "Everyone",
+    "customer": "Customer only",
+    "agentsOnly": "Agents only"
+  },
+  "action": {
+    "saveDraft": "Save draft",
+    "publish": "Publish"
+  },
+  "msg": {
+    "saved": "Draft saved.",
+    "published": "Published."
+  },
+  "err": {
+    "formIdRequired": "Form ID is required.",
+    "nodesRequired": "Add at least one node."
+  }
+}

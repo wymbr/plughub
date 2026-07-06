@@ -18,6 +18,15 @@ class Settings(BaseSettings):
     kafka_topic_inbound:        str = "conversations.inbound"
     kafka_topic_outbound:       str = "conversations.outbound"
     kafka_topic_events:         str = "conversations.events"
+    # Session signals (survey web vehicle → analytics.session_signal). Same topic
+    # survey_record (mcp-server) publishes to — the web submit reuses the trail.
+    kafka_topic_signals:        str = "session.signals"
+
+    # Dialog primitive — dialog-api (form store) URL. The survey web vehicle
+    # snapshots the published DialogForm at token creation. PLUGHUB_DIALOG_API_URL.
+    dialog_api_url:             str = "http://localhost:3760"
+    # Survey web token TTL (seconds). Default 7 days.
+    survey_web_ttl_s:           int = 604800
 
     # Redis
     redis_url:                  str = "redis://localhost:6379"

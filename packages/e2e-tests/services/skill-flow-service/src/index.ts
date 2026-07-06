@@ -325,6 +325,7 @@ app.post("/execute", async (req: Request, res: Response) => {
     skill_id,
     flow,
     session_context,
+    config,
     instance_id,
     pipeline_session_id,
     segment_id,
@@ -337,6 +338,8 @@ app.post("/execute", async (req: Request, res: Response) => {
     skill_id:        string
     flow:            SkillFlow
     session_context: Record<string, unknown>
+    /** Dialog primitive §17.3-1 — slot config_json → engine $.config.* */
+    config?:         Record<string, unknown>
     /** Routing Engine instance_id — stored in execution lock for crash detection. */
     instance_id?:    string
     /** When set, used for pipeline_state key and execution lock instead of session_id.
@@ -512,6 +515,7 @@ app.post("/execute", async (req: Request, res: Response) => {
       skillId:        skill_id,
       flow,
       sessionContext: session_context ?? {},
+      ...(config ? { config } : {}),
       instanceId:     instance_id,
       segmentId:      segment_id,
       // Use pipeline_session_id for lock/state isolation when provided

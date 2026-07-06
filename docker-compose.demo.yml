@@ -600,6 +600,7 @@ services:
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
+      DIALOG_API_URL: http://dialog-api:3760   # dialog primitive — form_get (survey + OTP)
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
@@ -1126,6 +1127,7 @@ services:
       # Identity Resolver (Fase A · Slice 1). Salt is a SECRET → env only.
       PLUGHUB_IDENTITY_RESOLVER_ENABLED:  "true"
       PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo
+      PLUGHUB_DIALOG_API_URL:             http://dialog-api:3760   # survey web vehicle — snapshot do DialogForm
       PLUGHUB_CONFIG_API_URL:             http://config-api:3600
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +
@@ -1182,6 +1184,27 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3700/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  dialog-api:
+    build:
+      context: .
+      dockerfile: packages/dialog-api/Dockerfile
+    ports:
+      - "3760:3760"
+    environment:
+      PLUGHUB_DIALOG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3760/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

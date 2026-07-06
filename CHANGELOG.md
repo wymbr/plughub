@@ -2,6 +2,185 @@
 
 ---
 
+## Primitivo de diálogo — veículo web (`/survey/:token`) (2026-07-06)
+
+Segundo veículo do primitivo (§9.2/§19): um link tokenizado leva a uma **página pública** que renderiza o
+**mesmo `DialogForm`** (buscado do dialog-api) como `<form>` web e grava pela **mesma trilha confiável**
+(`session.signals`, idêntico ao `survey_record`). Prova a tese "conteúdo agnóstico de veículo": o `DialogForm`
+serve chat (runner conversacional), inline (hook), **e** página web — todos escrevendo o mesmo sinal. Validado
+no demo (form CSAT+CES → página → submit → `session.signals`).
+
+**Entregue (channel-gateway):**
+- **`survey_web.py`** — `SurveyWebService` (`create`/`get`/`submit`) + `SURVEY_PAGE_HTML` (página self-contained,
+  sem build). `create` congela o form publicado (snapshot, pina a versão) num token Redis; `submit` monta os
+  `signals` das perguntas com `capture.metric` + valor numérico e publica `session.signals`.
+- **Endpoints** (`main.py`): `POST /v1/survey/web/create`, `GET /v1/survey/web/{token}`,
+  `POST /v1/survey/web/{token}/submit`, `GET /survey/{token}` (HTML). `config.py`: `dialog_api_url` +
+  `kafka_topic_signals` + `survey_web_ttl_s`. Compose: `PLUGHUB_DIALOG_API_URL` no channel-gateway.
+
+**Fora de escopo (trilha própria):** a **entrega real** do link (provedor SMS/e-mail) — o `create` devolve o
+`path`; no demo abre-se manual. Verbatim (open_text) não vira signal (só numéricas).
+
+---
+
+## Primitivo de diálogo — step `loop` (N perguntas sequenciais) (2026-07-06)
+
+3ª extensão de engine da Fatia 2: um step `loop` que caminha uma sub-flow (body) sobre um array, uma iteração
+por elemento — habilita survey multi-pergunta **sequencial** em canal pobre (uma pergunta por turno), que o
+`interaction=form` (multi-field num payload) não cobre. Validado no demo: 2 perguntas (CSAT + CES) caminhadas
+em sequência → `survey_record` com os 2 sinais (`csat`, `ces`).
+
+**Entregue:**
+- **Schema** (`FlowStepSchema`): step `loop` (`over`/`item_as`/`index_as`/`body`/`collect`/`results_as`/
+  `on_complete`/`max_iterations`) + tipo `LoopStep`.
+- **Engine** (`steps/loop.ts`): modelado no padrão cíclico do `receive` (contador em `pipeline_state`
+  `_loop_idx_{id}`). Expõe o elemento atual num **path FIXO** (`item_as`) a cada iteração — **sem índice
+  variável em ref** (contorna a limitação do jsonpath-plus). Acumula `{value, output_key?, metric?}` (pareado
+  do item) em `results_as`; ao esgotar o array → `on_complete`. Limpa sentinels `:__notified__` a cada volta.
+- **Engine** (`engine.ts`): `_getSuccessors` reconhece `body`/`on_complete`; `validateFlow` aceita `loop` como
+  ciclo guardado (o `menu` do body também guarda — bloqueia por input a cada iteração).
+- **`form_get`**: `render.questions` (array por-pergunta: prompt/interaction/options/output_key/capture/
+  visibility) para o loop iterar.
+- **Consumidor real**: `dialog_survey_multi_v1` (seed, 2 perguntas numéricas) + `skill_survey_multi_v1`
+  (`form_get → loop → survey_record`) + pool `survey_multi_ia` (webchat direto) + opção no `webchat-test.html`.
+
+**Nota:** o loop paga a limitação do §17.2 (sem contador/índice variável) reusando o contador do `receive` e
+expondo o item num path fixo — sem tocar o resolver de refs. Cobre o caso sequencial; `retry.max_attempts`
+pleno por pergunta (contador de tentativas) segue como refinamento sobre o mesmo mecanismo.
+
+---
+
+## Primitivo de diálogo — Editor (form-builder) no platform-ui (2026-07-06)
+
+Fecha a dívida do repo "todo campo de config é UI-editável; YAML/arquivo-only é dívida" — os DialogForms
+deixam de nascer só por script de seed. Página em `/config/dialog-forms` (grupo Configuração, ABAC
+`config.platform`), consumindo o `dialog-api` via proxy `/v1/dialog`. Validado no demo: lista os forms
+semeados, cria/edita nós (statements + questions com prompt/interaction/options/output_key/capture/validation/
+visibilidade), publica, e o form editado é servido pelo `form_get`/runner.
+
+**Entregue (platform-ui):**
+- **Proxy `/v1/dialog` → dialog-api:3760** no `Dockerfile` (nginx, antes do catch-all `^/v1`) + `vite.config.ts` (dev).
+- **`src/api/dialog-hooks.ts`** — `useDialogForms`/`getDialogForm`/`createDialogForm`/`updateDialogForm`/
+  `publishDialogForm` (fetch custom, header `X-Tenant-ID`); tipos `DialogForm` locais (decoplado de `@plughub/schemas`).
+- **`src/modules/dialog-forms/DialogFormsPage.tsx`** — lista + editor de nós + Salvar rascunho/Publicar.
+- Rota `config/dialog-forms`; nav em Configuração (ícone MessageSquare); namespace i18n `dialogForms` (en+pt-BR) +
+  `nav.dialogForms` no shell.
+
+**Escopo MVP (deliberado):** edição em **locale único** (`LocalizedText` como string; multi-locale = follow-up);
+sem preview embutido; visibilidade via dropdown (Todos / Só o cliente / Só agentes). Writes abertos no demo
+(dialog-api `admin_token` vazio); auth/ABAC no write da API = follow-up.
+
+---
+
+## Primitivo de diálogo — Fatia 2b: NPS por botões + interação/visibilidade dinâmicas (2026-07-06)
+
+Estende o primitivo para o NPS **ativo** (hook `on_contact_end`): botões 0-10 customer-only. Validado no demo
+(NPS de fim-de-contato + survey reconnect + OTP por simetria).
+
+**Entregue:**
+- **Engine §17.4 — interação/visibilidade dinâmicas:** `MenuStepSchema.interaction` e `.visibility` viram
+  união `enum|array | ref` (`$.`/`@ctx.`); `menu.ts` resolve o ref (`resolveDynamicValue`) antes de renderizar.
+  Só strings com prefixo `$.`/`@ctx.` são ref; literais passam direto.
+- **form_get render nativo (single-question):** `buildRender` expõe `interaction`/`prompt`/`options`/
+  `output_key`/`visibility` da 1ª pergunta (statements dobrados no prompt), além do render `form`/`fields`
+  legado. O runner passa a usar a **interação NATIVA** da pergunta (text→input, button/list→botões — o webchat
+  já renderiza), alinhado ao §17.4 ("1 pergunta = 1 menu com options dinâmicas").
+- **Contrato uniforme `{value}`:** o runner devolve `payload = { value: <escalar coletado> }` (antes era o mapa
+  `{output_key: valor}` de `interaction=form`). Consumidores leem `$.pipeline_state.<delegate>.value` — OTP
+  (`agente_portabilidade_intake_v1`) e survey (`agente_survey_reconnect_v1`) atualizados de `.code`/`.nps` → `.value`.
+- **`dialog_nps_buttons`** (seed) — NPS 0-10 `interaction=list`, `visibility: [@ctx.session.customer_participant_id]`.
+
+**Achado de arquitetura (importante):** **hooks de `on_contact_end` NÃO podem delegar ao runner.** Delegar
+suspende o hook agent, e o bridge trata `suspended` como hook concluído → **fecha o contato** antes de o runner
+renderizar (o sinal de session-closing desbloqueia o menu do runner na hora). Validado nos logs. Portanto o
+NPS ativo (`agente_nps_v1`) consome o primitivo de **conteúdo INLINE** (`form_get` + menu dinâmico com
+interação/visibilidade do form), **sem** delegate/suspend — bloqueia e segura o posatt como o NPS antigo. O
+**runner-especialista** serve chamadores que **podem suspender** (OTP intake, survey reconnect); hooks usam inline.
+Ambos compartilham o `DialogForm` + `form_get` + o menu dinâmico.
+
+**Follow-ups registrados (demo-infra + refinamentos, NÃO o primitivo):**
+- **Vazamento de instância** no `portabilidade_ia`: o delegate-wait do OTP deixa uma sessão fantasma no tracking
+  do bridge → a instância nasce/persiste `busy/current_sessions=1` mesmo com ocupância (SCARD) 0; resets no Redis
+  não seguram (o bridge reescreve o snapshot). Precisa de reset do estado in-memory do bridge / fix do sync
+  reconcile×routing-registry. Bloqueou o teste e2e do OTP (validado por simetria via survey).
+- **Timeout dinâmico:** o runner usa `timeout_s` estático (180); o `timeout_s` do form (ex.: NPS 30) não é lido.
+  Deferido (mesma extensão-padrão de `$.`/`@ctx.` ref).
+
+---
+
+## Primitivo de diálogo — Fatia 2 (parcial): adoção pelo survey (2º consumidor) (2026-07-06)
+
+O survey passa a ser o **2º consumidor** do primitivo de diálogo (o OTP foi o 1º), validando a generalidade:
+o mesmo `dialog_runner` + `form_get` + `DialogForm` que servem o OTP agora servem a coleta de NPS. Validado
+no demo (veículo conversacional): reconexão → runner renderiza o form de NPS → cliente responde → o survey
+workflow grava via `survey_record`.
+
+**Entregue:**
+- **`dialog_nps_v1`** (DialogForm, seed `infra/test/seed_dialog_nps_form.sh`) — agradecimento (statement) +
+  pergunta NPS (`interaction: text`, `output_key: nps`, `capture.metric: nps`, `validation {numeric,0..10}`).
+- **`agente_survey_reconnect_v1`** — `retomar_survey` passa a delegar ao **`dialog_runner`** (context
+  `dialog_form_id: dialog_nps_v1`) em vez do collector bespoke `survey_collector_ia`; novo step `resumir_survey`
+  retoma o survey workflow (`skill_survey_v1`) com `{nps}` cru → `gravar_pesquisa` faz o `survey_record`
+  (domínio). O collector segue **só** para o *defer* (cria o pending), inalterado.
+
+**Decisão de arquitetura:** delegate de **nível único** (reconnect→runner). Aninhar o runner dentro do collector
+foi **rejeitado** — colidiria o `session.delegate_resume_token` (campo session-scoped) com o duplo-resume do
+collector (anti-padrão "single-source" do CLAUDE.md). O reconnect faz o resume do survey workflow explicitamente
+(`workflow_resume` com o `pendencia.resume_token`), então o runner só resume seu delegador imediato.
+
+**Escopo v1 (deliberado):** a pergunta de NPS usa **campo de texto** (o runner força `interaction=form`). NPS
+por **botões/lista** (choice) exigiria campos `choice` com opções no render+adapter — deferido. O NPS **ativo**
+do demo (`skill_nps_v1`, hook `on_contact_end`, in-conference, customer-only, botões) **não** foi migrado: exige
+**visibilidade dinâmica** (customer-only) + **campos choice** no runner — frente maior, registrada como pendente.
+
+**Veículo web (link SMS/e-mail → `/survey/:token`):** confirmado como **frente à parte** (o "veículo link web"
+do §9.2 + outbound do §19) — o mesmo `DialogForm` seria renderizado como página pública em vez de chat (conteúdo
+agnóstico de veículo). Não construído.
+
+**Deferido (Fatia 2 restante):** loop no engine (N perguntas sequenciais + retry pleno); `channel_policy: elect`;
+editor (form-builder); plumbing `$.config` bridge→slot; NPS por choice/visibilidade dinâmica; veículo web.
+
+---
+
+## Primitivo de diálogo genérico + dialog-runner — Fatia 1 (2026-07-06)
+
+Primeira fatia do primitivo de diálogo scriptado compartilhado por survey + OTP (ADR
+`docs/adr/adr-otp-workflow-and-dialog-primitive.md`; desenho `docs/product/dialog-primitive-and-runner-design.md`).
+Validado ponta-a-ponta no demo: o intake de portabilidade delega a coleta do código de OTP a um dialog-runner
+Tier-3 que renderiza um `DialogForm` versionado e devolve o input cru — o código **gerado** nunca passa pelo
+runner (costura de segredo intacta; `OtpService`/`otp_verify` seguem no intake).
+
+**Entregue:**
+- **`@plughub/schemas/dialog.ts`** — `DialogFormSchema` (script linear de nodes `statement`/`question`,
+  versionado draft/published, i18n `LocalizedText` embutido, `capture`/`validation` declarativos,
+  `resolveLocalizedText`). Sem controle no JSON (branching é do skill — invariante das 4 costuras).
+- **Engine §17.3-1 (`$.config.*`)** — `StepContext.config` exposto no `evalContext` (`interpolate.ts`),
+  threading `run→_execute→_buildContext`, passthrough `config` no `skill-flow-service /execute`.
+- **Engine §17.3-2 (menu dinâmico)** — `MenuStepSchema.options/fields` viram união `array | string(ref)`;
+  `menu.ts` resolve o ref via `resolveInputValue` (`resolveMenuArray`) antes de montar o payload.
+- **`packages/dialog-api`** (novo, porta 3760, schema `dialog.forms`) — store fino versionado (CRUD +
+  publish), espelhando o versionamento da `EvaluationForm`. Serviço no `docker-compose.demo.yml`.
+- **`form_get`** (tool MCP fina, `mcp-server-plughub/tools/dialog.ts`) — resolve o form no dialog-api e
+  normaliza num bloco `render` single-turn (`menu_prompt` das leading statements, `fields` por pergunta,
+  `statement_after`, `captures` domínio-cego) que o runner consome direto.
+- **`skill_dialog_runner_v1`** (pool `dialog_runner`) — Tier-3 genérico: `form_get → menu(interaction=form,
+  fields dinâmicos) → workflow_resume(payload=answers) → complete`. Devolve cru; nunca verifica/registra.
+- **OTP (consumidor de validação)** — `agente_portabilidade_intake_v1` substitui o menu inline de código por
+  `delegate` ao `dialog_runner` (`context.dialog_form_id=dialog_otp_possession`); lê
+  `$.pipeline_state.coletar_codigo_dialog.code` no `otp_verify`. Seed `infra/test/seed_dialog_otp_form.sh`.
+
+**Decisão as-built:** binding do `form_id` ao runner = **contexto de delegate** (`@ctx.session.dialog_form_id`,
+padrão `delegate-workflow-io`), não `$.config`. O hook `$.config.*` foi construído e o passthrough do launcher
+está pronto, mas o plumbing bridge→`PoolSkillSlot.config_json` (deploy-por-slot do survey) fica p/ Fatia 2.
+**Gotcha operacional:** o `MenuStepSchema` virou união → o `agent-registry` (valida o skill no PUT do
+RegistrySyncer) precisou de rebuild junto com `mcp-server-plughub`/`skill-flow-service`; sem isso o
+`skill_dialog_runner_v1` era rejeitado (422 `fields: expected array`). Pool migrado a slot exige `set-next`+`promote`.
+
+**Deferido (Fatia 2):** retry de formato (contador no engine) + loop sobre N perguntas; `channel_policy: elect`;
+editor no platform-ui; adoção pelo survey. Ver `docs/product/dialog-primitive-and-runner-design.md` §6.1.
+
+---
+
 ## Identity Resolver (nível b) — Fase B: identidade progressiva + posse de canal (OTP) + gate seguro (2026-07-04)
 
 Capacidade de identificação em três fases (commits separados). Fecha o cross-canal do Thread A com

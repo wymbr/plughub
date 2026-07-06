@@ -1,0 +1,244 @@
+/**
+ * dialog.ts
+ * Generic scripted-dialog form schema — the shared "content" layer for the
+ * dialog primitive (survey + OTP). See docs/product/dialog-primitive-and-runner-design.md
+ * and docs/adr/adr-otp-workflow-and-dialog-primitive.md.
+ *
+ * A DialogForm is DATA owned by the tenant: a versioned (draft/published),
+ * i18n, LINEAR script of nodes that a Tier-3 dialog-runner presents to the
+ * customer. It carries NO control flow (branching lives in the calling skill —
+ * the four-seam invariant) and NO channel-specific rendering (the Channel
+ * Gateway adapter owns that).
+ *
+ * Two node kinds:
+ *   statement — no response; rendered as `notify`.
+ *   question  — captures customer input; rendered as `menu` (dynamic options/fields).
+ *
+ * Retry lives on the SAME surface but only for FORMAT validation (required /
+ * numeric / pattern). Semantic retry (wrong OTP code, "is this a detractor")
+ * is CONTROL — the calling workflow decides and re-delegates.
+ */
+
+import { z } from "zod"
+
+// ─────────────────────────────────────────────
+// i18n — embedded locale map (D-I18N)
+// ─────────────────────────────────────────────
+
+/** BCP-47-ish locale code, e.g. "pt-BR", "en". */
+export const LocaleCodeSchema = z.string().min(2)
+export type LocaleCode = z.infer<typeof LocaleCodeSchema>
+
+/**
+ * Localized text: either a bare string (single-locale) or a { locale: text }
+ * map. Resolution order: map[session_locale] ?? map[default_locale] ?? first.
+ * The form is tenant data, so translations travel inside the JSON — never in
+ * platform-ui locale files (which are code).
+ */
+export const LocalizedTextSchema = z.union([
+  z.string(),
+  z.record(z.string(), z.string()),
+])
+export type LocalizedText = z.infer<typeof LocalizedTextSchema>
+
+// ─────────────────────────────────────────────
+// Format-level validation (NOT semantic)
+// ─────────────────────────────────────────────
+
+/**
+ * Format-only validation on a scalar answer/field. Enables the retry-on-same-
+ * surface affordance. Semantic checks (correct OTP code, business rules) are
+ * never expressed here — those are control, owned by the calling skill.
+ */
+export const DialogValidationSchema = z
+  .object({
+    numeric:    z.boolean().optional(),
+    pattern:    z.string().optional(), // regex, format only
+    min_length: z.number().int().nonnegative().optional(),
+    max_length: z.number().int().nonnegative().optional(),
+    min:        z.number().optional(),
+    max:        z.number().optional(),
+  })
+  .optional()
+export type DialogValidation = z.infer<typeof DialogValidationSchema>
+
+// ─────────────────────────────────────────────
+// Declarative capture binding (survey domain)
+// ─────────────────────────────────────────────
+
+/**
+ * Declarative binding echoed back to the domain (e.g. survey) so it can build
+ * `survey_record` signals from the raw answers WITHOUT re-fetching the form.
+ * This is DATA, not logic — it never drives branching. Absent capture on a
+ * free-text question ⇒ verbatim/open_text (the domain routes it to its sink).
+ */
+export const DialogCaptureSchema = z
+  .object({
+    /** Signal metric key, snake_case (e.g. "csat", "nps"). */
+    metric: z
+      .string()
+      .regex(/^[a-z0-9_]+$/, { message: "metric must be snake_case (a-z0-9_)" })
+      .optional(),
+    /** Fixed machine value for this option/field (e.g. button "4" → score 4). */
+    value: z.union([z.number(), z.string()]).optional(),
+  })
+  .optional()
+export type DialogCapture = z.infer<typeof DialogCaptureSchema>
+
+// ─────────────────────────────────────────────
+// Options / fields
+// ─────────────────────────────────────────────
+
+export const DialogOptionSchema = z.object({
+  id:      z.string().min(1),
+  label:   LocalizedTextSchema,
+  /** Machine value returned to the runner; defaults to `id` when absent. */
+  value:   z.string().optional(),
+  capture: DialogCaptureSchema,
+})
+export type DialogOption = z.infer<typeof DialogOptionSchema>
+
+export const DialogFieldSchema = z.object({
+  id:         z.string().min(1),
+  label:      LocalizedTextSchema,
+  /** Channel-agnostic field type, e.g. "text" | "number". Adapter maps to UI. */
+  type:       z.string().min(1),
+  required:   z.boolean().default(false),
+  /**
+   * When true this field is masked: its value never appears in the runner's raw
+   * return (masked-input invariant) — it stays in the in-memory masked scope.
+   */
+  masked:     z.boolean().optional(),
+  validation: DialogValidationSchema,
+  capture:    DialogCaptureSchema,
+})
+export type DialogField = z.infer<typeof DialogFieldSchema>
+
+// ─────────────────────────────────────────────
+// Visibility (mirrors MenuStep.visibility)
+// ─────────────────────────────────────────────
+
+/**
+ * Prompt/statement visibility. "all" (default) / "agents_only", or an explicit
+ * participant_id array (may contain @ctx.* refs resolved by the runner).
+ */
+export const DialogVisibilitySchema = z.union([
+  z.enum(["all", "agents_only"]),
+  z.array(z.string().min(1)).min(1),
+])
+export type DialogVisibility = z.infer<typeof DialogVisibilitySchema>
+
+// ─────────────────────────────────────────────
+// Nodes — discriminated union on `kind`
+// ─────────────────────────────────────────────
+
+/** Statement node — no response; rendered as `notify`. */
+export const StatementNodeSchema = z.object({
+  id:         z.string().min(1),
+  kind:       z.literal("statement"),
+  text:       LocalizedTextSchema,
+  visibility: DialogVisibilitySchema.optional(),
+})
+export type StatementNode = z.infer<typeof StatementNodeSchema>
+
+export const DialogInteractionSchema = z.enum([
+  "text",
+  "button",
+  "list",
+  "checklist",
+  "form",
+])
+export type DialogInteraction = z.infer<typeof DialogInteractionSchema>
+
+/**
+ * Retry affordance on the same surface — FORMAT failures only. `max_attempts`
+ * is honored fully in slice 2 (needs the engine counter); slice-1 runners treat
+ * it as "one reprompt".
+ */
+export const DialogRetrySchema = z
+  .object({
+    reprompt:     LocalizedTextSchema,
+    max_attempts: z.number().int().min(1).default(2),
+  })
+  .optional()
+export type DialogRetry = z.infer<typeof DialogRetrySchema>
+
+/** Question node — captures customer input; rendered as `menu`. */
+export const QuestionNodeSchema = z.object({
+  id:          z.string().min(1),
+  kind:        z.literal("question"),
+  prompt:      LocalizedTextSchema,
+  interaction: DialogInteractionSchema.default("text"),
+  options:     z.array(DialogOptionSchema).optional(),
+  fields:      z.array(DialogFieldSchema).optional(),
+  masked:      z.boolean().optional(),
+  /** Key under which the raw answer lands in the runner's return `answers`. */
+  output_key:  z.string().min(1),
+  /** Question-level capture (single-answer questions). */
+  capture:     DialogCaptureSchema,
+  /** Format validation (scalar questions). */
+  validation:  DialogValidationSchema,
+  retry:       DialogRetrySchema,
+  visibility:  DialogVisibilitySchema.optional(),
+  timeout_s:   z.number().int().min(-1).default(300),
+})
+export type QuestionNode = z.infer<typeof QuestionNodeSchema>
+
+export const DialogNodeSchema = z.discriminatedUnion("kind", [
+  StatementNodeSchema,
+  QuestionNodeSchema,
+])
+export type DialogNode = z.infer<typeof DialogNodeSchema>
+
+// ─────────────────────────────────────────────
+// DialogForm — versioned, i18n, linear script
+// ─────────────────────────────────────────────
+
+export const DialogFormStatusSchema = z.enum(["draft", "published"])
+export type DialogFormStatus = z.infer<typeof DialogFormStatusSchema>
+
+/**
+ * DialogForm — the reusable, versioned dialog script. Stored canonically in
+ * dialog-api; resolved at runtime via the generic `form_get` MCP tool.
+ *
+ * `nodes` order IS the flow — there is deliberately no conditional `next`
+ * (branching = control, owned by the calling skill). `tags` is non-semantic,
+ * used only to group forms into editor views (e.g. "survey", "otp").
+ */
+export const DialogFormSchema = z.object({
+  form_id:        z.string().min(1),
+  tenant_id:      z.string().min(1),
+  name:           z.string().min(1),
+  description:    z.string().optional(),
+  status:         DialogFormStatusSchema.default("draft"),
+  /** Monotonic version counter — incremented on each structural change. */
+  version:        z.number().int().positive().default(1),
+  default_locale: LocaleCodeSchema,
+  locales:        z.array(LocaleCodeSchema).min(1),
+  nodes:          z.array(DialogNodeSchema).min(1),
+  tags:           z.array(z.string()).default([]),
+  created_at:     z.string().datetime(),
+  updated_at:     z.string().datetime(),
+})
+export type DialogForm = z.infer<typeof DialogFormSchema>
+
+// ─────────────────────────────────────────────
+// Runtime helpers (single source of truth)
+// ─────────────────────────────────────────────
+
+/**
+ * Resolve a LocalizedText to a plain string. Order: map[locale] ??
+ * map[defaultLocale] ?? first available value. A bare string resolves to itself.
+ * Kept here so the runner, the editor preview and any renderer resolve identically.
+ */
+export function resolveLocalizedText(
+  text: LocalizedText,
+  locale?: string,
+  defaultLocale?: string,
+): string {
+  if (typeof text === "string") return text
+  if (locale && text[locale] !== undefined) return text[locale]
+  if (defaultLocale && text[defaultLocale] !== undefined) return text[defaultLocale]
+  const first = Object.values(text)[0]
+  return first ?? ""
+}

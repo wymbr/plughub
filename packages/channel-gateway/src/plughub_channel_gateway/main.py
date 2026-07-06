@@ -41,6 +41,7 @@ from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
+from .survey_web import SurveyWebService, SURVEY_PAGE_HTML
 
 logger = logging.getLogger("plughub.channel-gateway")
 
@@ -57,6 +58,7 @@ _email_adapter:      EmailAdapter                         | None = None
 _voice_adapter:      VoiceAdapter                         | None = None
 _webrtc_adapter:     WebRTCAdapter                        | None = None
 _webhook_adapter:    WebhookAdapter                       | None = None
+_survey_web:         SurveyWebService                     | None = None
 
 
 def _create_attachment_store(
@@ -113,6 +115,16 @@ async def lifespan(app: FastAPI):
         ttl         = settings.session_ttl_seconds,
     )
     _context = ContextReader(redis=_redis)
+
+    # Survey web vehicle (dialog primitive §9.2/§19): tokenized public survey page.
+    global _survey_web
+    _survey_web = SurveyWebService(
+        redis          = _redis,
+        producer       = _producer,
+        dialog_api_url = settings.dialog_api_url,
+        signals_topic  = settings.kafka_topic_signals,
+        ttl_s          = settings.survey_web_ttl_s,
+    )
 
     # PostgreSQL pool for attachment metadata
     db_pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10)
@@ -894,6 +906,56 @@ async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
     return await _webhook_adapter.update_customer_attributes(
         body.tenant_id, body.customer_id, body.attributes,
     )
+
+
+# ── Survey web vehicle (dialog primitive §9.2/§19) ────────────────────────────
+# Link tokenizado → página pública /survey/{token} que renderiza o MESMO
+# DialogForm e grava pela MESMA trilha (session.signals). Prefixos /v1/survey e
+# /survey não colidem com o catch-all /v1/channels/webhook/{skill_id} abaixo.
+
+@app.post("/v1/survey/web/create", status_code=201)
+async def survey_web_create(request: Request) -> dict:
+    """Cria um token de survey web (congela o form publicado do dialog-api)."""
+    if _survey_web is None:
+        raise HTTPException(status_code=503, detail="Survey web not initialised")
+    body      = await request.json()
+    tenant_id = body.get("tenant_id") or get_settings().tenant_id
+    form_id   = body.get("form_id")
+    if not form_id:
+        raise HTTPException(status_code=400, detail="form_id required")
+    try:
+        return await _survey_web.create(
+            tenant_id, form_id,
+            body.get("origin_session_id", ""), body.get("customer_key", ""),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"dialog-api error: {exc}")
+
+
+@app.get("/v1/survey/web/{token}", status_code=200)
+async def survey_web_get(token: str) -> dict:
+    """Resolve o token → o form + status (consumido pela página pública)."""
+    if _survey_web is None:
+        raise HTTPException(status_code=503, detail="Survey web not initialised")
+    rec = await _survey_web.get(token)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="survey not found")
+    return {"form": rec.get("form"), "status": rec.get("status")}
+
+
+@app.post("/v1/survey/web/{token}/submit", status_code=200)
+async def survey_web_submit(token: str, request: Request) -> dict:
+    if _survey_web is None:
+        raise HTTPException(status_code=503, detail="Survey web not initialised")
+    body = await request.json()
+    return await _survey_web.submit(token, body.get("answers") or {})
+
+
+@app.get("/survey/{token}")
+async def survey_web_page(token: str):
+    """Página pública do survey (mesmo DialogForm, veículo web)."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=SURVEY_PAGE_HTML)
 
 
 @app.post("/v1/channels/webhook/{skill_id}", status_code=201)

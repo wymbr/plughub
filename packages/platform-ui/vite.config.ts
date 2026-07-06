@@ -60,6 +60,11 @@ export default defineConfig({
         target: 'http://localhost:3500',
         changeOrigin: true
       },
+      '^/v1/dialog': {
+        // dialog-api — DialogForm store (dialog primitive editor). Before generic /v1.
+        target: 'http://localhost:3760',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
         changeOrigin: true

@@ -1,0 +1,245 @@
+"""
+survey_web.py — Veículo WEB do survey (dialog primitive, §9.2/§19).
+
+Segundo veículo do primitivo de diálogo: um link tokenizado (entregue por
+SMS/e-mail — entrega real é trilha à parte) leva a uma página pública
+`/survey/{token}` que renderiza o **mesmo** DialogForm (buscado do dialog-api) e
+grava pela **mesma** trilha confiável (evento `session.signals`, idêntico ao que
+o `survey_record` publica). O conteúdo (DialogForm) é agnóstico de veículo: o
+runner o renderiza como chat; aqui vira uma página `<form>`.
+
+Snapshot: o form publicado é congelado no create (pina a versão). Store = Redis
+(`survey_web:token:{token}`), TTL configurável.
+"""
+from __future__ import annotations
+
+import json
+import secrets
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+import redis.asyncio as aioredis
+from aiokafka import AIOKafkaProducer
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ── Public survey page (self-contained; renders any DialogForm) ───────────────
+# Reads the token from the URL, fetches the frozen form, renders statements +
+# questions, and submits answers. Same DialogForm content as the chat runner —
+# here it becomes a <form> page. No build step: plain HTML/JS.
+SURVEY_PAGE_HTML = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pesquisa</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f1f5f9;
+         margin:0; padding:24px; color:#0f172a; }
+  .card { max-width:560px; margin:24px auto; background:#fff; border-radius:16px;
+          box-shadow:0 4px 20px rgba(0,0,0,.08); padding:24px; }
+  h1 { font-size:18px; margin:0 0 16px; color:#1B4F8A; }
+  .stmt { margin:12px 0; color:#334155; line-height:1.5; }
+  .q { margin:20px 0; }
+  .q-prompt { font-weight:600; margin-bottom:8px; }
+  .opts { display:flex; flex-wrap:wrap; gap:8px; }
+  .opt { border:1px solid #cbd5e1; border-radius:10px; padding:8px 14px; cursor:pointer; background:#fff; }
+  .opt.sel { background:#1B4F8A; color:#fff; border-color:#1B4F8A; }
+  input[type=text], input[type=number], textarea {
+    width:100%; border:1px solid #cbd5e1; border-radius:10px; padding:10px; font-size:15px; }
+  button.submit { margin-top:20px; background:#1B4F8A; color:#fff; border:none; border-radius:10px;
+                  padding:12px 20px; font-size:15px; cursor:pointer; width:100%; }
+  button.submit:disabled { opacity:.5; cursor:not-allowed; }
+  .done, .err { text-align:center; padding:20px; }
+  .done { color:#059669; } .err { color:#DC2626; }
+</style>
+</head>
+<body>
+<div class="card" id="root"><div class="stmt">Carregando…</div></div>
+<script>
+(function () {
+  var token = location.pathname.split('/').filter(Boolean).pop();
+  var root  = document.getElementById('root');
+  var answers = {};
+
+  function lt(t, dl) {
+    if (t == null) return '';
+    if (typeof t === 'string') return t;
+    return t[dl] || Object.values(t)[0] || '';
+  }
+  function esc(s){ var d=document.createElement('div'); d.textContent=s==null?'':String(s); return d.innerHTML; }
+
+  function render(form) {
+    var dl = form.default_locale || 'pt-BR';
+    var h = '<h1>' + esc(form.name || 'Pesquisa') + '</h1>';
+    (form.nodes || []).forEach(function (node) {
+      if (node.kind === 'statement') {
+        h += '<div class="stmt">' + esc(lt(node.text, dl)) + '</div>';
+        return;
+      }
+      var ok = node.output_key;
+      h += '<div class="q" data-ok="' + esc(ok) + '">';
+      h += '<div class="q-prompt">' + esc(lt(node.prompt, dl)) + '</div>';
+      var it = node.interaction;
+      if (it === 'button' || it === 'list' || it === 'checklist') {
+        h += '<div class="opts">';
+        (node.options || []).forEach(function (o) {
+          var val = o.value != null ? o.value : o.id;
+          h += '<div class="opt" data-ok="' + esc(ok) + '" data-val="' + esc(val) + '">' + esc(lt(o.label, dl)) + '</div>';
+        });
+        h += '</div>';
+      } else {
+        h += '<input type="text" data-input="' + esc(ok) + '" />';
+      }
+      h += '</div>';
+    });
+    h += '<button class="submit" id="submit-btn">Enviar</button>';
+    root.innerHTML = h;
+
+    root.querySelectorAll('.opt').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var ok = el.getAttribute('data-ok');
+        answers[ok] = el.getAttribute('data-val');
+        root.querySelectorAll('.opt[data-ok="' + ok + '"]').forEach(function (e2) { e2.classList.remove('sel'); });
+        el.classList.add('sel');
+      });
+    });
+    root.querySelectorAll('input[data-input]').forEach(function (el) {
+      el.addEventListener('input', function () { answers[el.getAttribute('data-input')] = el.value; });
+    });
+    document.getElementById('submit-btn').addEventListener('click', submit);
+  }
+
+  function submit() {
+    var btn = document.getElementById('submit-btn');
+    btn.disabled = true;
+    fetch('/v1/survey/web/' + encodeURIComponent(token) + '/submit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: answers })
+    }).then(function (r) { return r.json(); }).then(function (res) {
+      if (res && res.ok) root.innerHTML = '<div class="done">✅ Obrigado! Sua resposta foi registrada.</div>';
+      else root.innerHTML = '<div class="err">Não foi possível registrar. ' + esc((res && res.reason) || '') + '</div>';
+    }).catch(function () { root.innerHTML = '<div class="err">Erro de rede.</div>'; });
+  }
+
+  fetch('/v1/survey/web/' + encodeURIComponent(token))
+    .then(function (r) { if (!r.ok) throw new Error('not found'); return r.json(); })
+    .then(function (data) {
+      if (data.status && data.status !== 'open') { root.innerHTML = '<div class="done">Esta pesquisa já foi respondida. Obrigado!</div>'; return; }
+      render(data.form || {});
+    })
+    .catch(function () { root.innerHTML = '<div class="err">Pesquisa não encontrada ou expirada.</div>'; });
+})();
+</script>
+</body>
+</html>
+"""
+
+
+class SurveyWebService:
+    def __init__(
+        self,
+        redis:         aioredis.Redis,
+        producer:      AIOKafkaProducer,
+        dialog_api_url: str,
+        signals_topic: str,
+        ttl_s:         int = 604800,
+    ) -> None:
+        self._redis    = redis
+        self._producer = producer
+        self._dialog   = dialog_api_url.rstrip("/")
+        self._topic    = signals_topic
+        self._ttl      = ttl_s
+
+    def _key(self, token: str) -> str:
+        return f"survey_web:token:{token}"
+
+    async def create(
+        self,
+        tenant_id:         str,
+        form_id:           str,
+        origin_session_id: str = "",
+        customer_key:      str = "",
+    ) -> dict[str, Any]:
+        """Congela o form publicado num token. Retorna {token, path}."""
+        async with httpx.AsyncClient(timeout=5) as c:
+            r = await c.get(
+                f"{self._dialog}/v1/dialog/forms/{form_id}",
+                params={"status": "published"},
+                headers={"X-Tenant-ID": tenant_id},
+            )
+            r.raise_for_status()
+            form = r.json()
+
+        token  = secrets.token_urlsafe(24)
+        record = {
+            "tenant_id":         tenant_id,
+            "form_id":           form_id,
+            "form":              form,
+            "origin_session_id": origin_session_id,
+            "customer_key":      customer_key,
+            "status":            "open",
+            "created_at":        _now_iso(),
+        }
+        await self._redis.set(self._key(token), json.dumps(record), ex=self._ttl)
+        return {"token": token, "path": f"/survey/{token}"}
+
+    async def get(self, token: str) -> dict[str, Any] | None:
+        raw = await self._redis.get(self._key(token))
+        return json.loads(raw) if raw else None
+
+    async def submit(self, token: str, answers: dict[str, Any]) -> dict[str, Any]:
+        """
+        Grava as respostas: monta signals das perguntas com capture.metric + valor
+        numérico e publica um `session.signals` (mesma trilha do survey_record).
+        Idempotente por status (open → submitted).
+        """
+        raw = await self._redis.get(self._key(token))
+        if not raw:
+            return {"ok": False, "reason": "not_found"}
+        rec = json.loads(raw)
+        if rec.get("status") != "open":
+            return {"ok": False, "reason": "already_submitted"}
+
+        form = rec.get("form") or {}
+        signals: list[dict[str, Any]] = []
+        for node in form.get("nodes", []):
+            if not isinstance(node, dict) or node.get("kind") != "question":
+                continue
+            metric = (node.get("capture") or {}).get("metric")
+            if not metric:
+                continue
+            val = answers.get(node.get("output_key"))
+            if val is None or val == "":
+                continue
+            try:
+                num = float(val)
+            except (TypeError, ValueError):
+                continue  # não-numérica (open_text) → verbatim, não signal
+            signals.append({"metric": metric, "value": num})
+
+        if signals:
+            event = {
+                "event_id":          str(uuid.uuid4()),
+                "tenant_id":         rec["tenant_id"],
+                "origin_session_id": rec.get("origin_session_id") or token,
+                "grain":             "session",
+                "segment_id":        None,
+                "agent_key":         "",
+                "survey_session_id": None,
+                "pool_id":           "",
+                "signals":           signals,
+                "captured_at":       _now_iso(),
+            }
+            await self._producer.send(self._topic, value=json.dumps(event).encode("utf-8"))
+
+        rec["status"]       = "submitted"
+        rec["submitted_at"] = _now_iso()
+        await self._redis.set(self._key(token), json.dumps(rec), ex=self._ttl)
+        return {"ok": True, "signals_recorded": len(signals)}

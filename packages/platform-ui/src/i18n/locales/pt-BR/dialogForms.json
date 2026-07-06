@@ -1,0 +1,47 @@
+{
+  "title": "Formulários de Diálogo",
+  "new": "Novo",
+  "loading": "Carregando…",
+  "empty": "Nenhum formulário ainda.",
+  "selectOrNew": "Selecione um formulário ou crie um novo.",
+  "nodes": "Nós do diálogo",
+  "node": {
+    "statement": "Fala",
+    "question": "Pergunta"
+  },
+  "field": {
+    "formId": "ID do formulário",
+    "name": "Nome",
+    "defaultLocale": "Locale padrão",
+    "tags": "Tags",
+    "text": "Texto",
+    "prompt": "Pergunta",
+    "interaction": "Interação",
+    "outputKey": "Chave de saída",
+    "metric": "Métrica (capture)",
+    "visibility": "Visibilidade",
+    "numeric": "Numérico",
+    "min": "Mín",
+    "max": "Máx",
+    "options": "Opções",
+    "option": "Opção",
+    "label": "Rótulo"
+  },
+  "vis": {
+    "all": "Todos",
+    "customer": "Só o cliente",
+    "agentsOnly": "Só agentes"
+  },
+  "action": {
+    "saveDraft": "Salvar rascunho",
+    "publish": "Publicar"
+  },
+  "msg": {
+    "saved": "Rascunho salvo.",
+    "published": "Publicado."
+  },
+  "err": {
+    "formIdRequired": "Informe o ID do formulário.",
+    "nodesRequired": "Adicione ao menos um nó."
+  }
+}

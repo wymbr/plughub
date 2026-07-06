@@ -164,6 +164,8 @@ function _getSuccessors(step: SkillFlow["steps"][number]): string[] {
     "on_message", "on_timeout", "on_disconnect", "on_max_iterations",
     "on_exhausted", "on_invite", "on_escalate",
     "on_response", "on_resume", "on_reject",
+    // loop step — body (loop entry) + on_complete (exit)
+    "body", "on_complete",
     // choice step — default branch (2026-06-04: era ponto cego, ciclos via
     // choice escapavam da validação)
     "default",
@@ -271,6 +273,9 @@ export function validateFlow(flow: SkillFlow): void {
         if (t === "receive" && s!["max_iterations"] !== undefined) return true
         if (t === "menu") return true
         if (t === "suspend" || t === "collect") return true
+        // loop — bounded by the array length + max_iterations cap (the body's
+        // menu also blocks on input each iteration).
+        if (t === "loop") return true
         return false
       })
       if (!guarded) {
@@ -350,6 +355,12 @@ export class SkillFlowEngine {
     flow:              SkillFlow
     sessionContext:    Record<string, unknown>
     /**
+     * Dialog primitive §17.3-1 — deploy-time skill parameters from the
+     * PoolSkillSlot.config_json of the running skill, exposed to the flow as
+     * `$.config.*`. Optional; empty when the launcher provides no slot config.
+     */
+    config?:           Record<string, unknown>
+    /**
      * Identificador da instância do Routing Engine alocada para esta execução.
      * Armazenado no execution lock para que:
      *   1. O crash detector saiba que o engine ainda está vivo para esta sessão.
@@ -377,6 +388,7 @@ export class SkillFlowEngine {
     journeyId?:        string
   }): Promise<RunResult> {
     const { tenantId, sessionId, customerId, skillId, flow, sessionContext } = params
+    const config            = params.config
     const instanceId        = params.instanceId        ?? "unknown"
     const pipelineSessionId = params.pipelineSessionId ?? sessionId
     const resumeContext     = params.resumeContext
@@ -402,6 +414,7 @@ export class SkillFlowEngine {
     try {
       return await this._execute({
         tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId,
+        ...(config ? { config } : {}),
         ...(resumeContext ? { resumeContext } : {}),
         ...(segmentId ? { segmentId } : {}),
         ...(journeyId ? { journeyId } : {}),
@@ -424,12 +437,13 @@ export class SkillFlowEngine {
     skillId:           string
     flow:              SkillFlow
     sessionContext:    Record<string, unknown>
+    config?:           Record<string, unknown>
     instanceId:        string
     resumeContext?:    ResumeContext
     segmentId?:        string
     journeyId?:        string
   }): Promise<RunResult> {
-    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, instanceId, resumeContext, segmentId, journeyId } = params
+    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, config, instanceId, resumeContext, segmentId, journeyId } = params
 
     // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
     let state = await this.stateManager.get(tenantId, pipelineSessionId)
@@ -488,7 +502,7 @@ export class SkillFlowEngine {
       // pipelineSessionId → usado para state/lock
       const ctx = this._buildContext(
         tenantId, sessionId, pipelineSessionId, customerId, sessionContext, state, stepMap, instanceId,
-        maskedScope, transactionOnFailure ?? null, resumeContext, segmentId, journeyId,
+        maskedScope, transactionOnFailure ?? null, resumeContext, segmentId, journeyId, config,
       )
 
       // Executar step
@@ -624,6 +638,7 @@ export class SkillFlowEngine {
     resumeContext?:       ResumeContext,
     segmentId?:           string,
     journeyId?:           string,
+    config?:              Record<string, unknown>,
   ): StepContext {
     const self = this
 
@@ -632,6 +647,7 @@ export class SkillFlowEngine {
       sessionId,         // used by notify/menu/MCP calls — always the comms session
       customerId,
       sessionContext,
+      ...(config ? { config } : {}),
       state,
       redis: self.config.redis,
       instanceId,

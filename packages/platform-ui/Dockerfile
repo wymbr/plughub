@@ -144,6 +144,16 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # dialog-api (DialogForm store — dialog primitive editor) — before generic /v1\n\
+    location ~ ^/v1/dialog(/|$) {\n\
+        set $up_dialog http://dialog-api:3760;\n\
+        proxy_pass         $up_dialog;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # agent-registry — generic /v1 catch-all\n\
     location ~ ^/v1(/|$) {\n\
         set $up_registry http://agent-registry:3300;\n\

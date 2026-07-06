@@ -28,6 +28,7 @@ import { executeEndTransaction }   from "./steps/end-transaction"
 import { executeResolve }          from "./steps/resolve"
 import { executeReceive }          from "./steps/receive"
 import { executeDelegate }         from "./steps/delegate"
+import { executeLoop }             from "./steps/loop"
 
 // ─────────────────────────────────────────────
 // Tipos de contexto e resultado de step
@@ -49,6 +50,13 @@ export interface StepContext {
   journeyId?:     string
   customerId:     string
   sessionContext: Record<string, unknown>
+  /**
+   * Dialog primitive §17.3-1 — deploy-time skill parameters from the
+   * PoolSkillSlot.config_json of the running skill, exposed to the flow as
+   * `$.config.*` (e.g. `$.config.form_id`). Injected by the launcher; empty
+   * when the caller provides no slot config. Namespace isolated from session.*.
+   */
+  config?:        Record<string, unknown>
   state:          PipelineState
 
   /** Redis client — used by menu step for BLPOP (awaiting customer reply) */
@@ -269,6 +277,7 @@ export async function executeStep(
     case "resolve":           return executeResolve(step, ctx)
     case "receive":           return executeReceive(step, ctx)
     case "delegate":          return executeDelegate(step, ctx)
+    case "loop":              return executeLoop(step, ctx)
     default:
       // TypeScript garante exhaustiveness via discriminated union
       throw new Error(`Tipo de step desconhecido: ${(step as FlowStep).type}`)

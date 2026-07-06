@@ -364,6 +364,7 @@ export type {
   DelegationInput,
   SuspendStep,
   DelegateStep,
+  LoopStep,
 } from "./skill"
 
 // ── Usage Metering ───────────────────────────
@@ -682,6 +683,42 @@ export type {
   SurveyRecordInput,
   SessionSignalEvent,
 } from "./survey"
+
+// ── Dialog primitive — generic scripted-dialog form (survey + OTP) ────────────
+export {
+  LocaleCodeSchema,
+  LocalizedTextSchema,
+  DialogValidationSchema,
+  DialogCaptureSchema,
+  DialogOptionSchema,
+  DialogFieldSchema,
+  DialogVisibilitySchema,
+  StatementNodeSchema,
+  DialogInteractionSchema,
+  DialogRetrySchema,
+  QuestionNodeSchema,
+  DialogNodeSchema,
+  DialogFormStatusSchema,
+  DialogFormSchema,
+  resolveLocalizedText,
+} from "./dialog"
+
+export type {
+  LocaleCode,
+  LocalizedText,
+  DialogValidation,
+  DialogCapture,
+  DialogOption,
+  DialogField,
+  DialogVisibility,
+  StatementNode,
+  DialogInteraction,
+  DialogRetry,
+  QuestionNode,
+  DialogNode,
+  DialogFormStatus,
+  DialogForm,
+} from "./dialog"
 
 // ── ContextStore — unified contact context store ──────────────────────────────
 export {

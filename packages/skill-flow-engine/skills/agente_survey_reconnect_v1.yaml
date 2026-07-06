@@ -54,22 +54,38 @@ steps:
         next:     retomar_survey
     default: sem_pendencia
 
-  # ── Retoma a survey: delega ao coletor com o resume_token da pendência ───────
-  # workflow_resume_token = pendencia.resume_token (token do delegate da survey).
-  # customer_present=true → o coletor faz o I/O de NPS nesta sessão reconectada.
+  # ── Retoma a survey: delega a COLETA ao dialog-runner genérico (dialog primitive) ─
+  # Fatia 2 — o survey vira o 2º consumidor do primitivo (como o OTP). O runner
+  # renderiza o DialogForm `dialog_nps_v1` (conteúdo versionado) nesta sessão
+  # reconectada e devolve o NPS CRU em $.pipeline_state.retomar_survey.nps. Domínio-
+  # cego: o runner não grava nada; o survey_record fica no survey workflow (abaixo).
+  # Delegate de nível único (reconnect→runner) — sem aninhamento, sem colisão de
+  # session.delegate_resume_token (o antigo coletor fazia duplo-resume).
   - id: retomar_survey
     type: delegate
-    pool: survey_collector_ia
+    pool: dialog_runner
     context:
-      workflow_resume_token: "$.pipeline_state.pendencia.resume_token"
-      customer_present:      "true"
+      dialog_form_id: "dialog_nps_v1"
     timeout_hours: 1
     on_resume:
-      next: finalizar
-    on_reject:
-      next: finalizar
+      next: resumir_survey
     on_timeout:
       next: finalizar
+
+  # ── Retoma o survey workflow com o NPS coletado (domínio faz survey_record) ────
+  # pendencia.resume_token = token do delegate `coletar_nps` da survey (que ficou
+  # suspenso via o defer do coletor). Retomá-lo → skill_survey_v1.gravar_pesquisa,
+  # que lê $.pipeline_state.coletar_nps.nps (= o payload {nps} enviado aqui).
+  - id: resumir_survey
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "$.pipeline_state.pendencia.resume_token"
+      decision: "input"
+      payload:
+        nps: "$.pipeline_state.retomar_survey.value"
+    on_success: finalizar
+    on_failure: finalizar
 
   - id: sem_pendencia
     type: notify

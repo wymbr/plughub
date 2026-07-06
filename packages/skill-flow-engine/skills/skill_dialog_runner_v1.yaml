@@ -1,0 +1,112 @@
+# skill_dialog_runner_v1.yaml
+# Tier-3 generic dialog-runner (dialog primitive — survey + OTP).
+# Spec: docs/product/dialog-primitive-and-runner-design.md (Artefato 2),
+#       docs/adr/adr-otp-workflow-and-dialog-primitive.md.
+#
+# Pool: dialog_runner
+# Invoked by: delegate() from a business workflow/skill (e.g. the OTP step-up in
+#             agente_portabilidade_intake_v1). Runs as a conference specialist in
+#             the caller's session (a segment, never a standalone session).
+#
+# Receives via ContextStore (written by the delegate step):
+#   session.dialog_form_id        — which DialogForm to render
+#   session.delegate_resume_token — token to resume the caller's delegate step
+#
+# Contract (the four seams):
+#   CONTENT  — the DialogForm JSON (loaded via form_get). No control here.
+#   CONTROL  — the calling workflow decides what to do with the answers (verify /
+#              record). This runner only COLLECTS and RETURNS raw input.
+#   CHANNEL  — this runner renders on the caller's session (v1 = channel_policy
+#              "session"). Cross-channel reach is the caller's collect (Arc 19).
+#   SECRET   — the runner never generates/sees the OTP code; it only carries what
+#              the CUSTOMER typed back to the caller (integrity: it never fabricates).
+#
+# v1 scope (§3.3): N leading statements + 1 collecting turn (interaction=form).
+# Multiple sequential questions (loop over N) = slice 2 (needs an engine iterator).
+#
+# Flow:
+#   carregar_form  — invoke form_get → $.pipeline_state.dialog.render
+#   coletar        — menu (interaction=form, dynamic prompt/fields from the form)
+#   retornar       — invoke workflow_resume(delegate_resume_token, payload=answers)
+#   retornar_falha — invoke workflow_resume(decision=timeout) on any failure
+#   finalizar      — complete
+
+id: skill_dialog_runner_v1
+name: "Dialog Runner v1 (generic scripted dialog)"
+version: "1.0"
+description: |
+  Generic Tier-3 dialog-runner shared by survey and OTP. Loads a versioned
+  DialogForm via form_get, renders it as a single collecting turn (statements +
+  one form of question-fields), collects the customer's raw input, and returns it
+  to the delegating workflow via workflow_resume. Domain-blind: never interprets
+  the answer, never verifies, never records.
+classification:
+  type: horizontal
+  domain: dialog
+
+entry: carregar_form
+
+steps:
+
+  # ── 1. Load the DialogForm (content) ─────────────────────────────────────────
+  # form_id comes from the delegate context (@ctx.session.dialog_form_id).
+  # form_get returns { form, render } where render is the single-turn view:
+  #   render.menu_prompt (leading statements), render.fields (per-question),
+  #   render.statement_after, render.captures (domain-blind echo).
+  - id: carregar_form
+    type: invoke
+    tool: form_get
+    input:
+      form_id:   "@ctx.session.dialog_form_id"
+      tenant_id: "$.tenant_id"
+    output_as: dialog
+    on_success: coletar
+    on_failure: retornar_falha
+
+  # ── 2. Collect the customer's input (channel) ────────────────────────────────
+  # §17.4 single-question NATIVE render: interaction/options/visibility come from
+  # the form's question (dynamic — engine §17.4). text → typed input; button/list →
+  # native option buttons (the Channel Gateway adapter already renders these). The
+  # scalar answer (option id, or typed text) lands in $.pipeline_state.answers.
+  - id: coletar
+    type: menu
+    prompt: "{{$.pipeline_state.dialog.render.prompt}}"
+    interaction: "$.pipeline_state.dialog.render.interaction"
+    options: "$.pipeline_state.dialog.render.options"
+    visibility: "$.pipeline_state.dialog.render.visibility"
+    output_as: answers
+    timeout_s: 180
+    on_success: retornar
+    on_failure: retornar_falha
+    on_timeout: retornar_falha
+    on_disconnect: retornar_falha
+
+  # ── 3. Return the raw answer to the caller (control stays with the caller) ────
+  # Uniform contract: payload.value = the collected scalar. The caller's delegate
+  # step resumes with output_value = payload, so the answer lands in the caller's
+  # $.pipeline_state.<delegate_step>.value. verify/record happen there (domain).
+  - id: retornar
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.delegate_resume_token"
+      decision: "input"
+      payload:
+        value: "$.pipeline_state.answers"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── 3b. Failure/timeout — resume the caller so it never hangs ────────────────
+  - id: retornar_falha
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token: "@ctx.session.delegate_resume_token"
+      decision: "timeout"
+    on_success: finalizar
+    on_failure: finalizar
+
+  # ── 4. End the specialist segment ────────────────────────────────────────────
+  - id: finalizar
+    type: complete
+    outcome: resolved

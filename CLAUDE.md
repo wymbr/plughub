@@ -357,7 +357,7 @@ TTL: same as session TTL
 Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → frustrated | [-1.0,-0.6] → angry
 ```
 
-## Skill Flow — Thirteen Step Types
+## Skill Flow — Fourteen Step Types
 
 | Type | Does | Interacts with |
 |---|---|---|
@@ -375,6 +375,7 @@ Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → fr
 | `resolve` | Inline context accumulation (5-phase pipeline) | ContextStore + AI Gateway |
 | `begin_transaction` / `end_transaction` | Masked input atomic block | in-memory only |
 | `receive` | Suspends awaiting next stream message from any participant (no prompt sent to channel) | Redis BLPOP on `receive:result:{sid}:{iid}` |
+| `loop` | Walks a body sub-flow over an array (N sequential turns); item at fixed `item_as` (no variable index), accumulates `collect` into `results_as` | pipeline_state (counter `_loop_idx_{id}`) |
 
 `menu` interaction modes: `text`, `button` (≤3 WhatsApp), `list`, `checklist`, `form`. Fallback for unsupported channels in Channel Gateway adapter only.
 
@@ -879,6 +880,68 @@ Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na 
 **6 fases**: A ✅ (WebhookAdapter + channel type), B ✅ (status suspended + TTL Redis), C ✅ (orchestrator-bridge: skill-flow como agente nativo), D ✅ (workflow-api deprecation), E ✅ (Monitor/Analytics unificados), F ✅ (Journey entity elimination — 2026-05-28). **Arc 19 completo.**
 
 → See [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md)
+
+---
+
+## Dialog Primitive — Scripted-Dialog Runner (survey + OTP) — Fatia 1 + 2b ✅
+
+Primitivo de "interação scriptada delegada" compartilhado por survey e OTP (ADR
+`docs/adr/adr-otp-workflow-and-dialog-primitive.md`). **Quatro costuras inegociáveis:** conteúdo (DialogForm
+JSON) × controle (skill/workflow chamador) × canal (runner Tier-3) × **segredo** (`OtpService`). O código do OTP
+**nunca** passa pela mão de um agente/runner — gerar/enviar/verificar ficam no serviço confiável; o runner só
+carrega o que o **cliente** digitou (vale p/ survey: resposta é do cliente, não fabricada — integridade do dado).
+
+**DialogForm** (`@plughub/schemas/dialog.ts`): script **linear** de nodes `statement` (→ notify) e `question`
+(→ menu), versionado (draft/published), i18n embutido (`LocalizedText = string | {locale: texto}`), `capture`
+(binding declarativo de métrica p/ survey) e `validation` (formato). **Sem `next` condicional** — branching é do
+skill, nunca no JSON (senão vira linguagem em JSON). Store canônico: **`dialog-api`** (porta 3760, schema
+`dialog.forms`, CRUD + publish). Tool MCP **`form_get`** resolve o form publicado + normaliza num bloco `render`
+single-turn (menu_prompt / fields / statement_after / captures).
+
+**dialog-runner** (`skill_dialog_runner_v1`, pool `dialog_runner`, perfil `agent`): invocado via `delegate()`
+(roda como conference specialist na sessão do chamador). v1 = N statements + **1 turno de coleta**, render
+**nativo single-question** (§17.4): usa a **interação da pergunta** (text→input, button/list→botões — o webchat
+já renderiza). **Contrato uniforme:** devolve `payload = { value: <escalar> }`; o domínio lê
+`$.pipeline_state.<delegate>.value` e faz verify/record (não unificar — vira `if` gigante). Binding as-built do
+`form_id` = **contexto de delegate** (`@ctx.session.dialog_form_id`).
+
+**DOIS veículos (achado 2b):** o runner-especialista serve chamadores que **podem suspender** (OTP intake,
+survey reconnect). **Hooks de `on_contact_end` NÃO podem delegar** — delegar suspende o hook agent e o bridge
+trata `suspended` como hook concluído → fecha o contato antes de renderizar. Logo o NPS **ativo** (`agente_nps_v1`)
+consome o primitivo de **conteúdo INLINE** (`form_get` + menu dinâmico), sem delegate/suspend. Ambos veículos
+compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
+
+**Engine (extensões):** §17.3 — `$.config.*` (slot config_json → runtime; deploy-por-slot pendente) +
+`menu.options/fields` união `array | ref`. §17.4 — `menu.interaction` e `menu.visibility` união `enum|array | ref`
+(`$.`/`@ctx.`), resolvidas por `resolveDynamicValue` em `menu.ts`; `form_get` expõe o render nativo. **Invariante
+de build:** o `MenuStepSchema` mudou → **todo serviço TS que valida skills (`agent-registry`) + o engine
+(`skill-flow-service`) + `mcp-server` devem ser rebuildados** junto, senão o `agent-registry` rejeita o ref (422).
+
+**Consumidores:** OTP (Fatia 1) · **survey NPS reconnect** (`agente_survey_reconnect_v1` delega ao runner, form
+`dialog_nps_v1` texto; `skill_survey_v1` faz `survey_record`) · **NPS ativo de fim-de-contato** (`agente_nps_v1`,
+hook `on_contact_end`, **inline**, form `dialog_nps_buttons` botões 0-10 customer-only). Delegate de nível único
+(aninhar no collector = colisão de `session.delegate_resume_token`, rejeitado).
+
+**Editor ✅:** `/config/dialog-forms` (platform-ui, grupo Configuração) — cria/edita/publica DialogForms via
+`dialog-api` (proxy `/v1/dialog`). Fecha a dívida "form = dado do tenant, UI-editável". MVP locale único.
+
+**Loop ✅:** step `loop` (N perguntas sequenciais em canal pobre) — `dialog_survey_multi_v1` +
+`skill_survey_multi_v1` (pool `survey_multi_ia`). Item atual em path fixo (sem índice variável), contador tipo
+`receive`, guardado pelo `menu` do body.
+
+**Veículo web ✅:** página pública `GET /survey/{token}` (channel-gateway, `survey_web.py`) renderiza o **mesmo**
+`DialogForm` como `<form>` e grava via `session.signals` (mesma trilha do `survey_record`). Snapshot do form no
+`create` (token Redis). **Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web. Entrega
+real do link (SMS/e-mail) = trilha à parte.
+
+**Fatia 2 (pendente):** `retry.max_attempts` pleno por pergunta (contador de tentativas sobre o mesmo
+mecanismo); `channel_policy: elect`; plumbing `$.config` bridge→slot; timeout dinâmico do runner; multi-locale +
+preview no editor; entrega real do link web (provedor SMS/e-mail). **Follow-up de demo-infra:** vazamento de
+instância no `portabilidade_ia` (delegate-wait do OTP deixa sessão fantasma no tracking do bridge → instância
+nasce `busy`; reset no Redis não segura).
+
+→ See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
+[`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)
 
 ---
 

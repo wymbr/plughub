@@ -189,6 +189,18 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 86400000  # 24h em ms
 
+  - pool_id: dialog_runner
+    agent_kind: ai
+    deploy: { skill_id: skill_dialog_runner_v1, max_concurrent_sessions: 10 }
+    # Dialog primitive (survey + OTP): pool do dialog-runner Tier-3 genérico.
+    # Acionado por delegate() de um workflow/skill negocial (ex.: o step-up de OTP
+    # em agente_portabilidade_intake_v1). Recebe session.dialog_form_id via context,
+    # renderiza o DialogForm (form_get) e devolve o input cru via workflow_resume.
+    # Domínio-cego: nunca verifica nem registra (verify/record ficam no chamador).
+    description: "Pool do dialog-runner genérico (dialog primitive — survey + OTP)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 600000  # 10 min
+
   - pool_id: survey_processo_ia
     agent_kind: ai
     # max_concurrent baixo: survey é rápido/fire-and-forget. A governança de
@@ -225,6 +237,16 @@ pools:
     # retomar uma pesquisa pendente. Faz pending_workflow_get e delega ao coletor.
     # Conecte o webchat de teste a este pool para responder o NPS real.
     description: "Pool de reconexão do survey (inbound_only) — cliente retoma pesquisa pendente"
+    channel_types: [webchat]
+    sla_target_ms: 300000  # 5 min
+
+  - pool_id: survey_multi_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_survey_multi_v1, max_concurrent_sessions: 5 }
+    # Dialog primitive (loop): survey de N perguntas SEQUENCIAIS. Consumidor real do
+    # step `loop` — caminha render.questions uma por turno (canal pobre), acumula
+    # {metric,value} e grava num survey_record. Conecte o webchat de teste direto.
+    description: "Pool do survey multi-pergunta (loop — N perguntas sequenciais)"
     channel_types: [webchat]
     sla_target_ms: 300000  # 5 min
 

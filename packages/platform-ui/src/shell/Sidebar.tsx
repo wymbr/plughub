@@ -6,7 +6,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe,
+  Lock, Users, Globe, MessageSquare,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -145,6 +145,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
+        { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },
         { label: t('nav.access'),        href: '/config/access',        icon: Lock,            abac: { module: 'config', field: 'users'     } },
         { label: t('nav.groups'),        href: '/config/groups',        icon: Users,           abac: { module: 'config', field: 'users'     } },

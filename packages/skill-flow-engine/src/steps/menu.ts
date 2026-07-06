@@ -26,9 +26,48 @@
 
 import type { MenuStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
-import { interpolate, resolveVisibility } from "../interpolate"
+import { interpolate, resolveVisibility, resolveInputValue } from "../interpolate"
 import { computeMaskedFieldIds, isFieldMasked } from "../masking-policy"
 import { redisKeys } from "../redis-keys"
+
+// ── Dialog primitive §17.3-2 — dynamic options/fields ─────────────────────────
+// options/fields may be a static array OR a string reference (e.g.
+// "$.pipeline_state.dialog_form.nodes.0.options") resolved at runtime from a
+// DialogForm loaded via form_get. Resolve to a concrete array before rendering;
+// the resolved shape is identical to the static path.
+type MenuOption = { id: string; label: string }
+type MenuField  = { id: string; label: string; type: string; required?: boolean; masked?: boolean }
+
+async function resolveMenuArray<T>(
+  value:        unknown,
+  ctx:          StepContext,
+  contextStore: StepContext["contextStore"],
+): Promise<T[]> {
+  if (Array.isArray(value)) return value as T[]
+  if (typeof value === "string") {
+    const resolved = await resolveInputValue(value, ctx, contextStore)
+    return Array.isArray(resolved) ? (resolved as T[]) : []
+  }
+  return []
+}
+
+// ── Dialog primitive §17.4 — dynamic interaction/visibility ───────────────────
+// interaction and visibility may be a literal (enum / array) OR a string ref
+// ($.pipeline_state.* / @ctx.*) resolved at runtime from a DialogForm's render.
+// Only `$.`/`@ctx.` strings are treated as refs — enum literals like "text",
+// "all", "agents_only" pass through unchanged.
+const REF_PREFIX = /^(\$\.|@ctx\.)/
+
+async function resolveDynamicValue(
+  value:        unknown,
+  ctx:          StepContext,
+  contextStore: StepContext["contextStore"],
+): Promise<unknown> {
+  if (typeof value === "string" && REF_PREFIX.test(value)) {
+    return resolveInputValue(value, ctx, contextStore)
+  }
+  return value
+}
 
 export async function executeMenu(
   step: MenuStep,
@@ -38,13 +77,26 @@ export async function executeMenu(
   //    Interpola {{$.pipeline_state.*}} antes de enviar — permite que o prompt
   //    use valores calculados em steps anteriores (ex: pergunta gerada por reason).
   const resolvedPrompt = await interpolate(step.prompt, ctx, ctx.contextStore)
-  const resolvedVisibility = await resolveVisibility(step.visibility ?? "all", ctx, ctx.contextStore)
+  // §17.4 — interaction/visibility may be a runtime ref; resolve before use.
+  const rawInteraction = await resolveDynamicValue(step.interaction, ctx, ctx.contextStore)
+  const resolvedInteraction = (typeof rawInteraction === "string" && rawInteraction.length > 0)
+    ? rawInteraction
+    : "text"
+  const rawVisibility = await resolveDynamicValue(step.visibility ?? "all", ctx, ctx.contextStore)
+  const resolvedVisibility = await resolveVisibility(
+    rawVisibility as Parameters<typeof resolveVisibility>[0],
+    ctx,
+    ctx.contextStore,
+  )
+  // §17.3-2 — resolve options/fields (static array or runtime ref) to concrete arrays.
+  const resolvedOptions = await resolveMenuArray<MenuOption>(step.options, ctx, ctx.contextStore)
+  const resolvedFields  = await resolveMenuArray<MenuField>(step.fields, ctx, ctx.contextStore)
   // Computa a lista de IDs mascarados usando a política centralizada.
   // Declarado fora do try para que waitingMeta (abaixo) possa referenciá-lo.
   // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
   // campo implícito — permite que o webchat renderize <input type="password"> quando masked=true.
   const implicitFieldId = step.output_as ?? step.id
-  const maskedFieldIds  = computeMaskedFieldIds(step.masked, step.fields, implicitFieldId)
+  const maskedFieldIds  = computeMaskedFieldIds(step.masked, resolvedFields, implicitFieldId)
 
   try {
     // Sempre inclui o objeto menu para todas as interações.
@@ -60,9 +112,9 @@ export async function executeMenu(
       ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
       ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
       menu: {
-        interaction:   step.interaction,
-        options:       step.options ?? [],
-        fields:        step.fields  ?? [],
+        interaction:   resolvedInteraction,
+        options:       resolvedOptions,
+        fields:        resolvedFields,
         masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
       },
     })
@@ -238,7 +290,7 @@ export async function executeMenu(
     //   field.masked === false → campo NÃO mascarado, mesmo que step.masked=true
     //   step.masked === true   → todos os campos sem field.masked explícito são mascarados
     const stepMasked = step.masked === true
-    const hasFieldDefs = step.fields && step.fields.length > 0
+    const hasFieldDefs = resolvedFields.length > 0
 
     if (!stepMasked && !hasFieldDefs) {
       // Caminho rápido: nenhum mascaramento configurado
@@ -255,7 +307,7 @@ export async function executeMenu(
 
     // Parse da resposta do cliente (pode ser JSON para form, string para outros)
     let responseMap: Record<string, string>
-    if (step.interaction === "form") {
+    if (resolvedInteraction === "form") {
       try {
         const parsed = JSON.parse(value) as unknown
         responseMap = typeof parsed === "object" && parsed !== null
@@ -277,7 +329,7 @@ export async function executeMenu(
     const nonMaskedOutput: Record<string, string> = {}
 
     for (const [fieldId, fieldValue] of Object.entries(responseMap)) {
-      const fieldDef = step.fields?.find(f => f.id === fieldId)
+      const fieldDef = resolvedFields.find(f => f.id === fieldId)
       // Campos não declarados em step.fields herdam step.masked (tratados como undefined)
       const syntheticField = fieldDef ?? { id: fieldId }
 
@@ -295,8 +347,8 @@ export async function executeMenu(
     // Para interações não-form, o scalar mascarado era a única saída → nada a persistir
     // Para form, pode haver mix de mascarados e não-mascarados
     const outputValue =
-      step.interaction === "form" && hasNonMasked ? nonMaskedOutput
-      : step.interaction !== "form" && hasNonMasked ? nonMaskedOutput[step.output_as ?? step.id]
+      resolvedInteraction === "form" && hasNonMasked ? nonMaskedOutput
+      : resolvedInteraction !== "form" && hasNonMasked ? nonMaskedOutput[step.output_as ?? step.id]
       : undefined
 
     const successResult: StepResult = {

@@ -1,0 +1,89 @@
+# skill_survey_multi_v1.yaml
+# Survey de N perguntas SEQUENCIAIS via o step `loop` (dialog primitive Fatia 2).
+# Consumidor real do loop: caminha render.questions uma pergunta por turno (canal
+# pobre), acumula {metric,value} e grava tudo num survey_record.
+#
+# Pool: survey_multi_ia (webchat) — conecte o webchat de teste direto a ele.
+#
+# Fluxo:
+#   carregar_form  — form_get → $.pipeline_state.dialog.render.questions (array)
+#   perguntas      — loop sobre o array; expõe a pergunta atual em q_atual; body=coletar
+#   coletar        — menu dinâmico (interaction/options/visibility de q_atual); volta ao loop
+#   gravar         — survey_record(signals = respostas acumuladas)
+#   agradecer/encerrar
+
+id: skill_survey_multi_v1
+name: "Survey multi-pergunta v1 (loop)"
+version: "1.0"
+description: |
+  Survey de N perguntas sequenciais via o step loop. Carrega um DialogForm
+  (form_get), caminha render.questions uma por turno, acumula {metric,value} e
+  grava tudo num survey_record. Prova o loop no engine ancorado num consumidor real.
+classification:
+  type: orchestrator
+  domain: quality
+
+entry: carregar_form
+
+steps:
+  - id: carregar_form
+    type: invoke
+    tool: form_get
+    input:
+      form_id:   "dialog_survey_multi_v1"
+      tenant_id: "$.tenant_id"
+    output_as: dialog
+    on_success: perguntas
+    on_failure: encerrar
+
+  # ── Loop: caminha render.questions, uma pergunta por iteração ────────────────
+  # Expõe a pergunta atual em $.pipeline_state.q_atual (path FIXO — sem índice
+  # variável). O body (coletar) volta para cá; o loop acumula {metric,value} em
+  # `respostas` e, ao esgotar, vai para `gravar`.
+  - id: perguntas
+    type: loop
+    over: "$.pipeline_state.dialog.render.questions"
+    item_as: "q_atual"
+    index_as: "q_idx"
+    body: coletar
+    collect: "resp"
+    results_as: "respostas"
+    on_complete: gravar
+    max_iterations: 20
+
+  # ── Body: renderiza a pergunta atual (dinâmica) e coleta; volta ao loop ──────
+  - id: coletar
+    type: menu
+    prompt: "{{$.pipeline_state.q_atual.prompt}}"
+    interaction: "$.pipeline_state.q_atual.interaction"
+    options: "$.pipeline_state.q_atual.options"
+    visibility: "$.pipeline_state.q_atual.visibility"
+    output_as: resp
+    timeout_s: 300
+    on_success: perguntas
+    on_failure: encerrar
+    on_timeout: encerrar
+    on_disconnect: encerrar
+
+  # ── Grava todos os sinais coletados (respostas = [{metric,value}, …]) ────────
+  - id: gravar
+    type: invoke
+    tool: survey_record
+    input:
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"
+      grain:             "session"
+      survey_session_id: "$.session_id"
+      signals:           "$.pipeline_state.respostas"
+    on_success: agradecer
+    on_failure: agradecer
+
+  - id: agradecer
+    type: notify
+    message: "Obrigado! Suas respostas foram registradas. 🙏"
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar
+    type: complete
+    outcome: resolved

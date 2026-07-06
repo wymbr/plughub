@@ -40,6 +40,8 @@ import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 import { registerWorkflowTools }    from "./tools/workflow"
 import type { WorkflowDeps }        from "./tools/workflow"
+import { registerDialogTools }      from "./tools/dialog"
+import type { DialogDeps }          from "./tools/dialog"
 import jwt                         from "jsonwebtoken"
 import { createRedisClient, keys } from "./infra/redis"
 import { createKafkaProducer }     from "./infra/kafka"
@@ -131,6 +133,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
+  const dialogDeps: DialogDeps = {
+    dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
+    tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   // Registrar todas as tools
   registerBpmTools(server, bpmDeps)
   registerRuntimeTools(server, runtimeDeps)
@@ -146,6 +153,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerAgentEventTools(server, agentEventDeps)
   registerSurveyTools(server, surveyDeps)
   registerWorkflowTools(server, workflowDeps)
+  registerDialogTools(server, dialogDeps)
 
   return server
 }
@@ -963,6 +971,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
+    registerDialogTools(mcpServer, {
+      dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
+      tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
 
     transports.set(transport.sessionId, transport)

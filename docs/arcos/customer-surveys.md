@@ -835,6 +835,16 @@ Preview do formulário num webchat de teste (reusa o caminho `webchat-test.html`
 > (skill = código/mecanismo; formulário = dado), deixa **um único** skill e dá deploy formal ao
 > **formulário**. Custo: mudança de engine delimitada (§17.3) — **aprovada** (2026-06-23).
 
+> **Status de implementação (2026-07-06):** o interpretador genérico (B) foi **construído** como o
+> **primitivo de diálogo** compartilhado com o OTP — `DialogForm` (`@plughub/schemas/dialog.ts`), store
+> `dialog-api`, tool `form_get` (não `survey_form_get`), e o **`skill_dialog_runner_v1`** (Tier-3, pool
+> `dialog_runner`). As 2 extensões de engine do §17.3 (`$.config.*` + `menu.options/fields` dinâmicos) estão
+> no engine. O survey **adotou** o runner na coleta de NPS via reconexão: `agente_survey_reconnect_v1` delega
+> ao `dialog_runner` (form `dialog_nps_v1`) e o `skill_survey_v1` faz o `survey_record`. **Pendente:** NPS por
+> **choice/botões** + **`menu.visibility` dinâmico** (para migrar o NPS ativo `skill_nps_v1` do hook
+> `on_contact_end`, customer-only); loop sobre N perguntas; editor; deploy-por-slot (`$.config` bridge→slot);
+> veículo web (§9.2/§19). Ver `docs/product/dialog-primitive-and-runner-design.md` e `CHANGELOG.md` §2026-07-06.
+
 ### 17.1 A proposta
 
 Um único `skill_survey_runner_v1` (interpretador), fixo; a UI só produz o **form JSON**. O binding

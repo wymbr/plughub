@@ -75,9 +75,71 @@ fabricada por IA (integridade do dado; mesmo princípio, aposta diferente).
 - **Item 1 (entrega real, adiado até termos canais):** vira o `collect` do especialista (D1) — provedor SMS/e-mail,
   seleção de canal pelo especialista, envio por canal ≠ sessão (posse forte). Retomar quando houver os canais.
 
-**Próximos artefatos (quando sair do papel):** schema do **form/dialog JSON** genérico + contrato do
-**dialog-runner** (o Tier-3 compartilhado por survey+OTP). Migração faseável: o OTP tool-based atual segue
-funcionando durante a transição.
+**Desenho ✅ (2026-07-06):** os 2 artefatos travados em `docs/product/dialog-primitive-and-runner-design.md`
+(schema do form/dialog JSON + contrato do dialog-runner), com as 6 bifurcações decididas (store dedicado,
+runner devolve cru, i18n embutido, render v1 estagiado, etc.).
+
+**Fatia 1 ✅ (2026-07-06):** primitivo v1 implementado e validado no demo (ver `CHANGELOG.md` §
+2026-07-06). `@plughub/schemas/dialog.ts`; `dialog-api` (porta 3760) + `form_get`; extensões de engine
+§17.3-1 (`$.config.*`) e §17.3-2 (menu `options/fields` dinâmicos); `skill_dialog_runner_v1` (pool
+`dialog_runner`); OTP como consumidor de validação (intake delega a coleta do código ao runner; `OtpService`/
+`otp_verify` seguem no intake — segredo intacto). **Binding as-built = contexto de delegate
+(`@ctx.session.dialog_form_id`)**, não `$.config` (o hook `$.config` foi construído, deploy-por-slot fica p/ Fatia 2).
+
+**Fatia 2 — adoção pelo survey ✅ (2026-07-06, parcial):** o survey vira o 2º consumidor (ver `CHANGELOG.md`).
+`dialog_nps_v1` (form NPS texto) + `agente_survey_reconnect_v1` delega ao `dialog_runner` + `skill_survey_v1`
+faz o `survey_record`. Delegate de nível único (reconnect→runner; aninhar no collector = colisão de
+`session.delegate_resume_token`, rejeitado). Validado no veículo conversacional.
+
+**Fatia 2b — NPS botões + interação/visibilidade dinâmicas ✅ (2026-07-06):** engine §17.4 (`menu.interaction`
+e `menu.visibility` união `enum|array|ref`); `form_get` render nativo single-question; runner com contrato
+uniforme `payload={value}` (OTP/survey atualizados p/ `.value`); `dialog_nps_buttons` (botões 0-10 customer-only).
+**NPS ativo migrado** (`agente_nps_v1`, hook `on_contact_end`) — mas **inline** (form_get + menu dinâmico), NÃO
+via runner: *achado* — hooks de fim-de-contato não podem delegar (suspend = hook concluído → contato fecha antes
+de renderizar). Runner serve chamadores que podem suspender; hooks usam inline. Validado: NPS botões + survey
+reconnect (`{value}`) + OTP por simetria. Ver `CHANGELOG.md` §2026-07-06.
+
+**Fatia 2 — editor (form-builder) ✅ (2026-07-06):** `/config/dialog-forms` no platform-ui (grupo Configuração,
+ABAC `config.platform`) consumindo o `dialog-api` (proxy `/v1/dialog` no nginx+vite). Lista + editor de nós +
+publish. Fecha a dívida "form = dado do tenant, UI-editável". Ver `CHANGELOG.md` §2026-07-06. MVP: locale único,
+sem preview, writes abertos no demo.
+
+**Fatia 2 — loop no engine ✅ (2026-07-06):** step `loop` (N perguntas sequenciais em canal pobre). Modelado no
+contador do `receive` (`_loop_idx_{id}`), item atual em path FIXO (sem índice variável em ref), acumula
+`{metric,value}`, guardado pelo `menu` do body + `max_iterations`. Consumidor real: `dialog_survey_multi_v1` +
+`skill_survey_multi_v1` (pool `survey_multi_ia`, webchat direto). Validado (csat+ces no `survey_record`). Ver
+`CHANGELOG.md` §2026-07-06.
+
+**Fatia 2 (restante, pendente):**
+- **`retry.max_attempts` pleno por pergunta** (contador de tentativas de formato sobre o mecanismo do loop);
+- **timeout dinâmico do runner** (hoje `timeout_s` estático 180; o do form não é lido) — mesma extensão de ref;
+- **`channel_policy: elect`** (runner apresenta menu de canal, reach cross-canal);
+- **editor: multi-locale + preview + auth no write** (MVP é locale único, sem preview, writes abertos);
+- **plumbing `$.config` bridge→`PoolSkillSlot.config_json`** (deploy-por-slot);
+- **entrega real do link web** (provedor SMS/e-mail): o veículo web já está feito ✅ (`GET /survey/{token}`
+  renderiza o mesmo `DialogForm` e grava via `session.signals`, snapshot no `create`); falta só a **entrega
+  outbound** do link — mesma trilha do "item 1" do OTP (provedor externo). §9.2/§19 de customer-surveys.
+
+**Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
+(`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR
+loud nomeando pool→hook→pool-alvo→skill→step. Config atual passa limpa (nps_ia/wrapup inline). Avaliação:
+hoje um `delegate`/`suspend`/
+`collect` num skill amarrado a hook de fim-de-contato passa sem erro e vira bug silencioso (o bridge trata
+`suspended` como hook concluído → fecha o contato antes de renderizar). **Achado da avaliação:** o sinal certo
+NÃO é `classification` (só categoriza + regra "orchestrator precisa de flow") nem o `execution_model`
+(derivado por `_computeFlowModel` de `suspend`/`collect`; furos: não inclui `delegate`, e é do skill não do
+contexto de hook — skills de hook são legitimamente "agent", e OTP/survey "agent" legitimamente delegam). O
+sinal correto é o **cross-reference `PoolHooks.on_contact_end/on_human_end/post_human` → pool-alvo → skill
+deployado**. **Guard proposto:** na validação de deploy/sync (agent-registry/RegistrySyncer), rejeitar quando o
+flow do skill de um pool-alvo de hook contiver step que suspende (`delegate`/`suspend`/`collect`) — reusar a
+varredura do `_computeFlowModel` **estendida com `delegate`**. Erro explícito de config em vez de footgun.
+Alternativa: flag declarado (`classification.execution_context`), menos robusto (depende do autor). Tarefa #17.
+
+**Follow-ups de demo-infra (NÃO o primitivo):**
+- **Vazamento de instância no `portabilidade_ia`:** o delegate-wait do OTP deixa sessão fantasma no tracking do
+  bridge → a instância nasce/persiste `busy`/`current_sessions=1` com ocupância (SCARD) 0; reset no Redis não
+  segura (o bridge reescreve o snapshot). Fix = sync reconcile×routing-registry / reset do estado in-memory do
+  bridge. Bloqueou o e2e do OTP (validado por simetria via survey).
 
 ---
 

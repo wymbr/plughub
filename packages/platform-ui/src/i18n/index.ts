@@ -24,6 +24,7 @@ import groupsPtBr from './locales/pt-BR/groups.json'
 import auditPtBr from './locales/pt-BR/audit.json'
 import channelsPtBr from './locales/pt-BR/channels.json'
 import webrtcPtBr from './locales/pt-BR/webrtc.json'
+import dialogFormsPtBr from './locales/pt-BR/dialogForms.json'
 
 // en
 import commonEn from './locales/en/common.json'
@@ -48,6 +49,7 @@ import groupsEn from './locales/en/groups.json'
 import auditEn from './locales/en/audit.json'
 import channelsEn from './locales/en/channels.json'
 import webrtcEn from './locales/en/webrtc.json'
+import dialogFormsEn from './locales/en/dialogForms.json'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -74,6 +76,7 @@ i18n.use(initReactI18next).init({
       audit:           auditPtBr,
       channels:        channelsPtBr,
       webrtc:          webrtcPtBr,
+      dialogForms:     dialogFormsPtBr,
     },
     en: {
       common:          commonEn,
@@ -98,6 +101,7 @@ i18n.use(initReactI18next).init({
       audit:           auditEn,
       channels:        channelsEn,
       webrtc:          webrtcEn,
+      dialogForms:     dialogFormsEn,
     }
   },
   lng: 'en',
@@ -107,7 +111,7 @@ i18n.use(initReactI18next).init({
     'contacts', 'billing', 'evaluation', 'access', 'masking',
     'agentAssist', 'agentReports', 'workflows', 'agentFlow',
     'calendars', 'service', 'campaigns', 'configPlataforma',
-    'dashboards', 'home', 'groups', 'audit', 'channels', 'webrtc',
+    'dashboards', 'home', 'groups', 'audit', 'channels', 'webrtc', 'dialogForms',
   ],
   defaultNS: 'common',
   interpolation: {

@@ -353,12 +353,29 @@ export const MenuStepSchema = z.object({
   type:        z.literal("menu"),
   /** Prompt enviado ao cliente antes de aguardar a resposta */
   prompt:      z.string().min(1),
-  interaction: z.enum(["text", "button", "list", "checklist", "form"]).default("text"),
-  /** Opções de interação (button/list/checklist) */
-  options:     z.array(z.object({
-    id:    z.string(),
-    label: z.string(),
-  })).optional(),
+  /**
+   * Modo de interação. União enum | ref (dialog primitive §17.4): quando string
+   * com prefixo `$.`/`@ctx.`, é uma referência resolvida em runtime (ex.: a
+   * interação vinda de um DialogForm via form_get). Literais do enum passam direto.
+   */
+  interaction: z.union([
+    z.enum(["text", "button", "list", "checklist", "form"]),
+    z.string().regex(/^(\$\.|@ctx\.)/, "interaction deve ser um valor do enum ou um ref $./@ctx."),
+  ]).default("text"),
+  /**
+   * Opções de interação (button/list/checklist).
+   * União estático | ref (dialog primitive §17.3-2): quando string, é uma
+   * referência ($.pipeline_state.* / @ctx.*) resolvida em runtime pelo executor
+   * do menu (ex.: options carregadas de um DialogForm via form_get). O valor
+   * resolvido deve ser um array de { id, label }.
+   */
+  options:     z.union([
+    z.array(z.object({
+      id:    z.string(),
+      label: z.string(),
+    })),
+    z.string(),
+  ]).optional(),
   /**
    * Quando true, todos os campos deste step são mascarados.
    * Pode ser sobrescrito por campo individual (field-level tem precedência).
@@ -374,19 +391,27 @@ export const MenuStepSchema = z.object({
    * (ex.: co-pilot), que sem a flag acordava com qualquer mensagem do primary.
    */
   standby: z.boolean().optional(),
-  /** Campos de formulário (form) */
-  fields: z.array(z.object({
-    id:       z.string(),
-    label:    z.string(),
-    type:     z.string(),
-    required: z.boolean().default(false),
-    /**
-     * Quando true, este campo específico é mascarado — mesmo que masked=false no step.
-     * Quando false, este campo NÃO é mascarado — mesmo que masked=true no step.
-     * (field-level tem precedência sobre step-level)
-     */
-    masked:   z.boolean().optional(),
-  })).optional(),
+  /**
+   * Campos de formulário (form).
+   * União estático | ref (dialog primitive §17.3-2): quando string, é uma
+   * referência resolvida em runtime (fields carregados de um DialogForm). O
+   * valor resolvido deve ser um array de field objects com o mesmo shape.
+   */
+  fields: z.union([
+    z.array(z.object({
+      id:       z.string(),
+      label:    z.string(),
+      type:     z.string(),
+      required: z.boolean().default(false),
+      /**
+       * Quando true, este campo específico é mascarado — mesmo que masked=false no step.
+       * Quando false, este campo NÃO é mascarado — mesmo que masked=true no step.
+       * (field-level tem precedência sobre step-level)
+       */
+      masked:   z.boolean().optional(),
+    })),
+    z.string(),
+  ]).optional(),
   /** Chave para armazenar a resposta do cliente em pipeline_state.results */
   output_as: z.string().optional(),
   /**
@@ -400,6 +425,9 @@ export const MenuStepSchema = z.object({
   visibility: z.union([
     z.enum(["all", "agents_only"]),
     z.array(z.string().min(1)).min(1),
+    // Dialog primitive §17.4 — ref ($.*) resolvido em runtime para enum|array
+    // (ex.: a visibilidade vinda de um DialogForm via form_get).
+    z.string().regex(/^\$\./, "visibility deve ser enum, array ou um ref $."),
   ]).optional(),
   /**
    * Tempo limite para aguardar a resposta (segundos).
@@ -932,6 +960,40 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     /** Next step when timeout_hours elapses without a resume. */
     on_timeout:     z.object({ next: z.string() }),
   }),
+
+  // ── loop — iterate a sub-flow (body) over an array (dialog primitive Fatia 2) ──
+  // Walks N elements sequentially: exposes the current element at a FIXED
+  // pipeline_state key (item_as) each iteration — no variable array index needed
+  // in refs. The body reads $.pipeline_state.<item_as>.*, does one turn of I/O
+  // (typically a menu), and transitions back to this loop step (on_success:
+  // <loop id>). The loop accumulates the body's answer (collect) into an array
+  // (results_as) and, when the array is exhausted, transitions to on_complete.
+  // Guarded cycle: the body's menu blocks on input each iteration (validateFlow);
+  // max_iterations is a hard safety cap.
+  z.object({
+    type:           z.literal("loop"),
+    id:             z.string(),
+    /** Ref ($.pipeline_state.* / @ctx.*) resolving to the array to iterate. */
+    over:           z.string().min(1),
+    /** pipeline_state key where the current element is written each iteration. */
+    item_as:        z.string().min(1),
+    /** Optional pipeline_state key for the current 0-based index. */
+    index_as:       z.string().optional(),
+    /** Entry step id of the loop body (must transition back to this loop's id). */
+    body:           z.string().min(1),
+    /**
+     * Optional: the body's output key to accumulate. Each iteration appends
+     * { value, output_key?, metric? } (output_key/metric taken from the item)
+     * to the results array.
+     */
+    collect:        z.string().optional(),
+    /** pipeline_state key where the accumulated results array is written. */
+    results_as:     z.string().min(1),
+    /** Step to run after the last element (or an empty array). */
+    on_complete:    z.string().min(1),
+    /** Hard safety cap on iterations. */
+    max_iterations: z.number().int().positive().default(100),
+  }),
 ])
 export type FlowStep = z.infer<typeof FlowStepSchema>
 
@@ -950,6 +1012,8 @@ export type MenuStep      = z.infer<typeof MenuStepSchema>
 export type SuspendStep          = Extract<FlowStep, { type: "suspend" }>
 // delegate step (inline schema in FlowStepSchema discriminated union)
 export type DelegateStep         = Extract<FlowStep, { type: "delegate" }>
+// loop step (inline schema in FlowStepSchema discriminated union)
+export type LoopStep             = Extract<FlowStep, { type: "loop" }>
 // Arc 4 extension — collect step
 // CollectStep type already exported above
 // Masked input — transaction steps already exported above (BeginTransactionStep, EndTransactionStep)
