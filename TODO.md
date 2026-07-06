@@ -33,6 +33,54 @@
 
 ---
 
+## OTP produção + primitivo de diálogo genérico (survey + OTP) — decisão ADR *(2026-07-06)*
+
+**Estado:** OTP Fase B **implementado** (tool-based) — identidade progressiva + `verification_class` +
+`OtpService` (challenge/verify, rate-limit, entrega mockada) + gate seguro (retomada cross-canal exige
+`possessed`). Ver `CHANGELOG.md` § 2026-07-04 e `docs/adr/adr-identity-channel-possession.md`. É um **MVP**;
+o desenho de produção foi travado num ADR (Proposto) e supersede o "mini-spec de otp_challenge/otp_verify"
+que a seção de identidade acima listava como próximo artefato.
+
+**Decisão (ADR Proposto — `docs/adr/adr-otp-workflow-and-dialog-primitive.md`):**
+- **D1 — OTP é workflow negocial + especialistas de canal** (padrão `delegate-workflow-io`, Arc 19): workflow
+  channel-abstract (gerar→enviar→coletar→verificar) exposto como **step-up reusável** (qualquer fluxo delega,
+  recebe `{verified}`); especialista Tier-3 dono do **canal + coleta da resposta**; entrega real (item 1) vira
+  o `collect`/outbound do especialista; caminho leve quando âncora == canal da sessão.
+- **D2 — primitivo de diálogo genérico** (construir antes, ancorado em 2 consumidores): reenquadrar o
+  interpretador/editor de survey como **script/dialog-builder** (statements sem resposta + retry na mesma
+  superfície, além de perguntas); form/dialog **JSON versionado** + i18n + `form_get` genérico; home neutra
+  (não `/config/surveys`); reusa as 2 extensões de engine do §17.3 (`$.config.*` + `menu.options/fields`
+  dinâmicos). Atualizar o spec de survey (§17/§19) para consumir.
+- **D3 — tela de OTP em Configurations** (config-api namespace `identity`/`otp`): comportamento (TTL,
+  tentativas, rate-limit, canais de posse) + **bindings** (`form_id` dos prompts, `template_id` de entrega).
+  Texto vive na biblioteca de diálogo; a tela referencia ids.
+
+**Costuras (invariantes):** conteúdo (dado/JSON) × controle (skill/workflow) × canal (especialista) × **segredo**
+(serviço confiável). **Inegociável:** o código do OTP **nunca** passa pela mão de um agente — gerar/enviar/
+verificar ficam no `OtpService`/channel-gateway (envio direto ao canal); o especialista (pode ser IA) só
+orquestra canal e carrega o que o **cliente** digitou.
+
+**Reuso pelo survey:** OTP e survey são a mesma família — "interação scriptada delegada". O `skill_survey_runner_v1`
+e o especialista de coleta do OTP **convergem para um "dialog-runner" genérico** (Tier-3: renderiza `form_id`,
+coleta input cru, devolve), parametrizado por `(form_id, política de canal, sink)`. O outbound do survey (§19,
+já usa `collect`) = o mesmo mecanismo de especialista do OTP. **Não unificar** o result-handling (verify × record)
+nem a costura de segredo. Guardrail análogo: no survey a resposta tem que ser input real do cliente, não
+fabricada por IA (integridade do dado; mesmo princípio, aposta diferente).
+
+**Gaps de produção do OTP, agrupados nas trilhas:**
+- **Trilha A (primitivo de diálogo):** textos/i18n dos prompts (item 3) + retry na mesma superfície (parte do 4).
+- **Trilha B (config-api):** tuning numérico env-only → namespace `identity`/`otp` UI-editável (item 2).
+- **Trilha C (backend/segurança):** auditoria de challenge/verify (item 5, Kafka/`mcp.audit`); OTP como step-up
+  genérico (item 6 — resolvido por D1); lockout crescente (item 7); teste de unidade do adapter/endpoints (item 8).
+- **Item 1 (entrega real, adiado até termos canais):** vira o `collect` do especialista (D1) — provedor SMS/e-mail,
+  seleção de canal pelo especialista, envio por canal ≠ sessão (posse forte). Retomar quando houver os canais.
+
+**Próximos artefatos (quando sair do papel):** schema do **form/dialog JSON** genérico + contrato do
+**dialog-runner** (o Tier-3 compartilhado por survey+OTP). Migração faseável: o OTP tool-based atual segue
+funcionando durante a transição.
+
+---
+
 ## evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente *(achado ao vivo, 2026-07-02)*
 
 Encontrado ao validar o fix de self-view (ver `CHANGELOG.md` § "evaluation-api — bug self-view..."): rodando
