@@ -3,7 +3,7 @@
  * Locks the answer→score mapping + dimension composition that survey_record uses.
  */
 import { describe, it, expect } from "vitest"
-import { composeSurveySignals, scoreOfAnswer } from "./survey"
+import { composeSurveySignals, scoreOfAnswer, answersToMap } from "./survey"
 import type { DialogForm } from "@plughub/schemas"
 
 // Minimal DialogForm builder — composeSurveySignals only reads nodes + dimensions.
@@ -94,6 +94,39 @@ describe("composeSurveySignals", () => {
     expect(signals).toContainEqual({ metric: "csat", value: 4 })
     expect(signals).toContainEqual({ metric: "nps", value: 8 })
     expect(signals).toHaveLength(2)
+  })
+
+  it("composes from the loop accumulator array (via answersToMap)", () => {
+    const f = form(
+      [
+        q("atendimento", { dimension_id: "csat", weight: 2 }),
+        q("resolucao",   { dimension_id: "csat", weight: 1 }),
+      ],
+      [CSAT],
+    )
+    // The loop step accumulates [{ value, output_key, metric? }]; the tool maps it.
+    const loopAcc = [
+      { value: "5", output_key: "atendimento", metric: undefined },
+      { value: "3", output_key: "resolucao",   metric: undefined },
+    ] as Array<{ output_key: string; value: string | number | null }>
+    // weighted mean on 1–5: (5*2 + 3*1)/3 = 13/3 ≈ 4.333
+    const signals = composeSurveySignals(f, answersToMap(loopAcc))
+    expect(signals).toHaveLength(1)
+    expect(signals[0]!.metric).toBe("csat")
+    expect(signals[0]!.value).toBeCloseTo(13 / 3, 6)
+  })
+})
+
+describe("answersToMap", () => {
+  it("maps the loop array to a keyed record (last wins)", () => {
+    expect(answersToMap([
+      { output_key: "a", value: "1" },
+      { output_key: "b", value: "2" },
+      { output_key: "a", value: "9" },
+    ])).toEqual({ a: "9", b: "2" })
+  })
+  it("passes a record through unchanged", () => {
+    expect(answersToMap({ a: "1", b: null })).toEqual({ a: "1", b: null })
   })
 })
 

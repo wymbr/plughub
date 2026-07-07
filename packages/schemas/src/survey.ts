@@ -78,11 +78,23 @@ export const SurveyRecordInputSchema = z.object({
   /** DialogForm to compose against (mode b). Requires `answers`. */
   form_id: z.string().optional(),
   /**
-   * Raw answers keyed by question `output_key` (mode b). `null` = skipped/NA
-   * (re-normalizes the dimension). The tool maps each answer to a numeric score
-   * (option `capture.value` or the raw numeric) and composes via `composeScore`.
+   * Raw answers for mode b. Either a map keyed by question `output_key`, or the
+   * ARRAY the `loop` step accumulates ([{output_key, value, …}]) — the tool
+   * normalizes both to a map. `null` = skipped/NA (re-normalizes the dimension).
+   * The tool maps each answer to a numeric score (option `capture.value` or the
+   * raw numeric) and composes via `composeScore`.
    */
-  answers: z.record(z.string(), z.union([z.string(), z.number(), z.null()])).optional(),
+  answers: z
+    .union([
+      z.record(z.string(), z.union([z.string(), z.number(), z.null()])),
+      z.array(
+        z.object({
+          output_key: z.string(),
+          value:      z.union([z.string(), z.number(), z.null()]),
+        }),
+      ),
+    ])
+    .optional(),
   // Obrigatório quando grain='segment' (validado no handler — manter z.object puro
   // para preservar .shape usado no registro da tool MCP).
   segment_id: z.string().optional(),

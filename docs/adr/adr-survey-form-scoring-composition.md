@@ -1,9 +1,10 @@
 # ADR: Composição de nota em surveys — dimension + perguntas ponderadas, primitivo de pontuação compartilhado
 
-**Status:** Aceito + parcialmente implementado (2026-07-07). Decisões #1/#2 resolvidas; **schema**
-(`scoring.ts` + `DialogForm.dimensions`) e **runtime** (`survey_record` compõe via `composeScore`) prontos e
-testados. Pendentes: **editor** com dimension e **wiring dos skills** de survey (passar `form_id`+`answers`).
-**Data:** 2026-07-07 · **Atualizado:** 2026-07-07 (schema + runtime do `survey_record`)
+**Status:** Aceito + implementado (2026-07-07). Decisões #1/#2 resolvidas; **schema** (`scoring.ts` +
+`DialogForm.dimensions`), **runtime** (`survey_record` compõe via `composeScore`) e **wiring E2E**
+(`skill_survey_multi_v1` loop → compose; form CSAT composto) prontos e **validados ao vivo** no webchat
+(atendimento=5, resolução=3 → `csat`≈4.33 + `nps`). Pendente: **editor** de dialog-forms com UI de dimension.
+**Data:** 2026-07-07 · **Atualizado:** 2026-07-07 (schema + runtime + wiring E2E)
 **Componentes:** `packages/schemas` (novo `scoring.ts` compartilhado + extensão de `dialog.ts`), `packages/dialog-api`
 (store canônico do `survey_definition` = `DialogForm`+dimensions — D8), `mcp-server-plughub` (`survey_record` compõe —
 D9), `packages/analytics-api` (roll-up populacional — inalterado), `packages/platform-ui` (editor de forms com dimension).

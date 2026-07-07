@@ -2,6 +2,29 @@
 
 ---
 
+## Survey — wiring E2E da composição (loop → compose) + form composto (2026-07-07)
+
+Fecha o encanamento da composição de nota (segue a entrega schema+runtime abaixo) e **valida ao vivo** no
+webchat. O `skill_survey_multi_v1` (step `loop`) passou a gravar via compose e um form CSAT composto prova a
+média ponderada ponta a ponta.
+
+- **`answers` aceita o array do loop:** `SurveyRecordInput.answers` virou union `record | array<{output_key,
+  value}>` — o formato que o step `loop` já acumula (`[{value, output_key, metric?}]`). O `survey_record`
+  normaliza array→mapa (`answersToMap`, last-wins) antes de compor. 3 testes novos.
+- **`skill_survey_multi_v1` grava via compose:** o step `gravar` passa `form_id` + `answers=$.pipeline_state.
+  respostas` em vez de `signals[]`. Retrocompat: form sem dimensions → mesmos sinais legado.
+- **`dialog-api` persiste `dimensions`:** `FormUpsert` (Pydantic) ganhou `dimensions` (opaco ao store, servido
+  as-is) — sem isso o campo era descartado no upsert.
+- **Seed do form composto** (`seed_dialog_survey_multi_form.sh`): `dialog_survey_multi_v1` = dimension `csat`
+  (escala 1–5, `weighted_mean`) com atendimento (peso 2) + resolução (peso 1) + `nps` standalone.
+- **Validação ao vivo:** atendimento=5, resolução=3, nps=10 → `survey_record` publicou **2 sinais** (`csat`≈4.33
+  ponderado + `nps`=10). Deploy: rebuild mcp-server/dialog-api + re-seed + `set-next`/`promote` do pool
+  `survey_multi_ia`.
+
+**Pendente:** editor de dialog-forms com a UI de dimension (o form composto hoje entra via seed/JSON).
+
+---
+
 ## Survey — composição de nota multi-pergunta (dimensions) — schema + runtime (2026-07-07)
 
 Instrumentos de survey (CSAT/NPS…) passam a poder ser **compostos por várias perguntas** com média ponderada,

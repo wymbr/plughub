@@ -9,7 +9,7 @@
 #   carregar_form  — form_get → $.pipeline_state.dialog.render.questions (array)
 #   perguntas      — loop sobre o array; expõe a pergunta atual em q_atual; body=coletar
 #   coletar        — menu dinâmico (interaction/options/visibility de q_atual); volta ao loop
-#   gravar         — survey_record(signals = respostas acumuladas)
+#   gravar         — survey_record(form_id + answers=respostas) → composição server-side
 #   agradecer/encerrar
 
 id: skill_survey_multi_v1
@@ -68,7 +68,12 @@ steps:
     on_timeout: encerrar
     on_disconnect: encerrar
 
-  # ── Grava todos os sinais coletados (respostas = [{metric,value}, …]) ────────
+  # ── Grava via COMPOSIÇÃO server-side (ADR §D9) ────────────────────────────────
+  # respostas = [{value, output_key, metric?}] (o loop pareia cada resposta com o
+  # output_key da pergunta). Passamos form_id + answers=respostas; o survey_record
+  # busca o DialogForm, compõe as dimensions (média ponderada + re-normalização de
+  # NA) num sinal por dimension e emite os capture.metric legados como sinal single.
+  # Retrocompat: form sem dimensions → mesmos sinais de antes.
   - id: gravar
     type: invoke
     tool: survey_record
@@ -77,7 +82,8 @@ steps:
       origin_session_id: "$.session_id"
       grain:             "session"
       survey_session_id: "$.session_id"
-      signals:           "$.pipeline_state.respostas"
+      form_id:           "dialog_survey_multi_v1"
+      answers:           "$.pipeline_state.respostas"
     on_success: agradecer
     on_failure: agradecer
 

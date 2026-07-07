@@ -49,6 +49,23 @@ export interface SurveyDeps {
 type RawAnswer = string | number | null
 
 /**
+ * Normalize the `answers` input to a map keyed by output_key. Accepts either a
+ * map (mode b direct) or the ARRAY the `loop` step accumulates
+ * ([{output_key, value, …}]) — so the existing loop survey skill can feed the
+ * compose path by passing its accumulator as-is. Array duplicates: last wins.
+ */
+export function answersToMap(
+  answers: Record<string, RawAnswer> | Array<{ output_key: string; value: RawAnswer }>,
+): Record<string, RawAnswer> {
+  if (!Array.isArray(answers)) return answers
+  const map: Record<string, RawAnswer> = {}
+  for (const e of answers) {
+    if (e && typeof e.output_key === "string") map[e.output_key] = e.value ?? null
+  }
+  return map
+}
+
+/**
  * Resolve one question's raw answer to a numeric score, or null (NA / skipped /
  * unmapped). For option questions the answer is the option's `value ?? id`
  * (see form_get's buildRender); the score is the option's `capture.value` when
@@ -199,7 +216,7 @@ export function registerSurveyTools(
           } catch (fe) {
             return mcpError("dialog_api_error", `Could not load form '${form_id}': ${String(fe)}`)
           }
-          finalSignals = composeSurveySignals(form, answers)
+          finalSignals = composeSurveySignals(form, answersToMap(answers))
           if (finalSignals.length === 0) {
             return mcpError(
               "validation_error",

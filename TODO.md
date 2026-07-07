@@ -148,19 +148,20 @@ multi-locale, mas a usabilidade e a completude de campos precisam de uma passada
 - **Base:** contrato canônico continua o `DialogFormSchema` (`@plughub/schemas/dialog.ts`); nada de lógica de
   controle no editor (as 4 costuras seguem valendo). Spec do primitivo: `docs/product/dialog-primitive-and-runner-design.md`.
 
-### Composição de nota em survey — dimension + perguntas ponderadas *(desenho travado 2026-07-07; ADR)*
+### Composição de nota em survey — dimension + perguntas ponderadas ✅ schema+runtime+E2E (2026-07-07)
 
-Instrumentos compostos (CSAT/NPS multi-pergunta) não cabem no `capture.metric` por-pergunta do `DialogForm`.
-Desenho fechado em [`docs/adr/adr-survey-form-scoring-composition.md`](docs/adr/adr-survey-form-scoring-composition.md):
-camada `dimension` (instrumento) agrupa perguntas; **escala + método de agregação na dimension** (perguntas
-herdam); `weighted_mean` único (peso default 1 = média aritmética) com **re-normalização em NA**; **dimensions
-paralelas** (cada uma emite seu sinal, ≠ composite único do Quality); per-respondente no domínio survey,
-populacional no analytics; **primitivo de pontuação compartilhado** (`@plughub/schemas/scoring.ts`) importado por
-survey e `EvaluationForm`, sem fundir os envelopes. Compat: `capture.metric` = dimension 1-item peso 1.
-**Decisões em aberto antes do schema:** (1) store canônico do `survey_definition` — estender `DialogForm`
-(dialog-api) **ou** entidade na evaluation-api; (2) onde roda a agregação per-respondente (`survey_record` vs
-skill); (3) composite de form opcional (health score) — adiado; (4) `survey_question` reutilizável — fora do 1º
-corte. *(discussão; sem implementação)*
+Implementado (ver CHANGELOG + [`docs/adr/adr-survey-form-scoring-composition.md`](docs/adr/adr-survey-form-scoring-composition.md)):
+`@plughub/schemas/scoring.ts` (`composeScore`, weighted_mean + re-normalização de NA) + `DialogForm.dimensions`
+(escala+agregação na dimension, perguntas herdam) + `survey_record` compõe (`form_id`+`answers`, aceita o array
+do loop via `answersToMap`) + `skill_survey_multi_v1` grava via compose + form CSAT composto (seed). **Validado
+ao vivo** no webchat: atendimento=5, resolução=3 → `csat`≈4.33 ponderado + `nps`=10 (2 sinais). Store = dialog-api
+(D8); agregação no `survey_record` (D9); dimensions paralelas (≠ composite do Quality). Compat: `capture.metric`
+legado = dimension 1-item.
+
+**Falta:** (1) **editor de dialog-forms com UI de dimension** — hoje o form composto entra via seed/JSON (é a
+peça concreta que se junta à revisão de UX do editor, acima); (2) composite de form opcional / health score —
+`DialogDimension.weight` reservado, adiado; (3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do
+`scoring.ts` pelo `EvaluationForm` (retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
 
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR

@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
 #
-# seed_dialog_survey_multi_form.sh — Dialog primitive (loop): survey MULTI-pergunta.
+# seed_dialog_survey_multi_form.sh — Dialog primitive: survey com DIMENSION COMPOSTA.
 #
-# Form `dialog_survey_multi_v1` — N perguntas numéricas (CSAT + CES), consumidas
-# SEQUENCIALMENTE pelo step `loop` (skill_survey_multi_v1). Prova o loop no engine:
-# o runner caminha uma pergunta por vez (canal pobre), acumula {metric,value} e
-# grava tudo num survey_record. Cada pergunta tem capture.metric (obrigatório p/
-# o survey_record) e valor numérico.
+# Form `dialog_survey_multi_v1` — prova a composição de nota multi-pergunta
+# (ADR adr-survey-form-scoring-composition.md):
+#   - dimension `csat` (escala 1–5, weighted_mean) composta por DUAS perguntas
+#     (atendimento peso 2, resolução peso 1) → UM sinal `csat` ponderado;
+#   - `nps` standalone (0–10, capture.metric legado) → sinal single.
+# Consumido pelo `skill_survey_multi_v1` (step loop → survey_record com
+# form_id+answers=respostas; a composição roda server-side no survey_record).
 #
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_survey_multi_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl, jq (jq não é usado; só curl).
 set -euo pipefail
 
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
@@ -23,19 +25,27 @@ echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
 read -r -d '' BODY <<'JSON' || true
 {
   "form_id": "dialog_survey_multi_v1",
-  "name": "Survey multi-pergunta (CSAT + CES)",
-  "description": "Duas perguntas numéricas sequenciais — consumidas pelo step loop (uma por turno).",
+  "name": "Survey composto — CSAT (2 perguntas) + NPS",
+  "description": "CSAT composto por atendimento (peso 2) e resolução (peso 1) numa dimension ponderada; NPS standalone. Composição server-side no survey_record.",
   "default_locale": "pt-BR",
   "locales": ["pt-BR"],
-  "tags": ["survey", "multi"],
+  "tags": ["survey", "multi", "composed"],
+  "dimensions": [
+    {
+      "dimension_id": "csat",
+      "label": { "pt-BR": "Satisfação (CSAT)" },
+      "scale": { "min": 1, "max": 5 },
+      "aggregation": "weighted_mean"
+    }
+  ],
   "nodes": [
     {
-      "id": "q_csat",
+      "id": "q_atend",
       "kind": "question",
-      "prompt": { "pt-BR": "De 1 a 5, quão satisfeito você ficou com o atendimento?" },
+      "prompt": { "pt-BR": "De 1 a 5, quão satisfeito você ficou com o ATENDIMENTO?" },
       "interaction": "button",
-      "output_key": "csat",
-      "capture": { "metric": "csat" },
+      "output_key": "atendimento",
+      "capture": { "dimension_id": "csat", "weight": 2 },
       "options": [
         { "id": "1", "label": { "pt-BR": "1" } },
         { "id": "2", "label": { "pt-BR": "2" } },
@@ -45,34 +55,40 @@ read -r -d '' BODY <<'JSON' || true
       ]
     },
     {
-      "id": "q_ces",
+      "id": "q_resol",
       "kind": "question",
-      "prompt": { "pt-BR": "De 1 a 7, quão fácil foi resolver seu problema?" },
-      "interaction": "list",
-      "output_key": "ces",
-      "capture": { "metric": "ces" },
+      "prompt": { "pt-BR": "De 1 a 5, quão satisfeito você ficou com a RESOLUÇÃO do seu problema?" },
+      "interaction": "button",
+      "output_key": "resolucao",
+      "capture": { "dimension_id": "csat", "weight": 1 },
       "options": [
         { "id": "1", "label": { "pt-BR": "1" } },
         { "id": "2", "label": { "pt-BR": "2" } },
         { "id": "3", "label": { "pt-BR": "3" } },
         { "id": "4", "label": { "pt-BR": "4" } },
-        { "id": "5", "label": { "pt-BR": "5" } },
-        { "id": "6", "label": { "pt-BR": "6" } },
-        { "id": "7", "label": { "pt-BR": "7" } }
+        { "id": "5", "label": { "pt-BR": "5" } }
       ]
     },
     {
-      "id": "q_tenure",
+      "id": "q_nps",
       "kind": "question",
-      "prompt": { "pt-BR": "Há quantos anos você é nosso cliente? (digite um número de 0 a 99)" },
-      "interaction": "text",
-      "output_key": "tenure_years",
-      "capture": { "metric": "tenure_years" },
-      "validation": { "numeric": true, "min": 0, "max": 99 },
-      "retry": {
-        "reprompt": { "pt-BR": "Valor inválido. Digite apenas um número inteiro de 0 a 99." },
-        "max_attempts": 3
-      }
+      "prompt": { "pt-BR": "De 0 a 10, quanto você recomendaria nossa empresa a um amigo?" },
+      "interaction": "list",
+      "output_key": "nps",
+      "capture": { "metric": "nps" },
+      "options": [
+        { "id": "0",  "label": { "pt-BR": "0" } },
+        { "id": "1",  "label": { "pt-BR": "1" } },
+        { "id": "2",  "label": { "pt-BR": "2" } },
+        { "id": "3",  "label": { "pt-BR": "3" } },
+        { "id": "4",  "label": { "pt-BR": "4" } },
+        { "id": "5",  "label": { "pt-BR": "5" } },
+        { "id": "6",  "label": { "pt-BR": "6" } },
+        { "id": "7",  "label": { "pt-BR": "7" } },
+        { "id": "8",  "label": { "pt-BR": "8" } },
+        { "id": "9",  "label": { "pt-BR": "9" } },
+        { "id": "10", "label": { "pt-BR": "10" } }
+      ]
     }
   ]
 }
@@ -86,3 +102,7 @@ echo "✓ DialogForm criado (draft): ${FORM_ID}"
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms/${FORM_ID}/publish" \
   -H "X-Tenant-ID: ${TENANT}" >/dev/null
 echo "✓ DialogForm publicado: ${FORM_ID}"
+
+echo
+echo "Composição esperada (exemplo): atendimento=5, resolucao=3 →"
+echo "  csat = weighted_mean([5·2, 3·1]) = (10+3)/3 ≈ 4.33 ; nps = valor cru (0–10)."

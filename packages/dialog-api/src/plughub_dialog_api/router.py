@@ -59,6 +59,11 @@ class FormUpsert(BaseModel):
     default_locale: str
     locales:        list[str] = Field(min_length=1)
     nodes:          list[dict[str, Any]] = Field(min_length=1)
+    # Composed instruments (survey_definition layer). Opaque to the store — the
+    # canonical validator is the Zod DialogFormSchema on the TS side; here it is
+    # persisted+served as-is so form_get / survey_record can compose. Default []
+    # keeps plain dialogs (OTP) and legacy per-question-metric surveys unchanged.
+    dimensions:     list[dict[str, Any]] = []
     tags:           list[str] = []
 
     def to_doc(self) -> dict[str, Any]:
@@ -68,6 +73,7 @@ class FormUpsert(BaseModel):
             "default_locale": self.default_locale,
             "locales":        self.locales,
             "nodes":          self.nodes,
+            "dimensions":     self.dimensions,
             "tags":           self.tags,
         }
         if self.description is not None:
