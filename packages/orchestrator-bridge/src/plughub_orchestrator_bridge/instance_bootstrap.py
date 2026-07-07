@@ -490,12 +490,21 @@ class InstanceBootstrap:
             try:
                 raw = await self._redis.get(key)
                 if not raw:
-                    # Instância expirou — restaura (pode ter tido gap de TTL)
+                    # Instância expirou — restaura como DESIRED=ready. Bootstrap só
+                    # afirma PRESENÇA desejada; ocupância runtime (busy/
+                    # current_sessions) é fato do routing/bridge, NUNCA do estado
+                    # desejado. Ressuscitar busy aqui (o payload em memória pode
+                    # carregar um busy envenenado por um fantasma anterior) recria o
+                    # ghost — normalizamos para ready/0.
                     payload_clean = {
                         k: v for k, v in payload.items()
                         if k not in ("draining", "pending_update")
                     }
+                    payload_clean["status"] = "ready"
+                    payload_clean["state"]  = "ready"
+                    payload_clean["current_sessions"] = 0
                     await self._write_instance(tenant_id, iid, payload_clean)
+                    self._registered[iid] = payload_clean
                     continue
 
                 current = json.loads(raw)
@@ -511,8 +520,41 @@ class InstanceBootstrap:
                         await self._redis.expire(key, _INSTANCE_TTL_S)
                     continue
 
+                # ── Stale-busy ghost heal (PRECEDE draining-not/pending_update) ──
+                # A busy mirror whose occupancy SET is empty (SCARD==0) is never a
+                # live session (delegate→suspend gap that dropped the SCARD but left
+                # the mirror busy, or crash recovery). SCARD is the routing-engine
+                # source of truth — NOT pool active_count, which leaks when a
+                # conference shares the session_id (serving-pool DECR skipped). This
+                # MUST run BEFORE the pending_update short-circuit below: the ghost
+                # carries pending_update=true and would otherwise be shielded from
+                # the heal forever (the actual bug seen with dialog_runner-001).
+                # Healing also updates the in-memory desired copy so the next tick
+                # does not re-clobber Redis with the stale busy.
+                if status == "busy":
+                    occ = int(await self._redis.scard(
+                        f"{tenant_id}:instance:{iid}:sessions"
+                    ))
+                    if occ == 0:
+                        clean = {
+                            k: v for k, v in payload.items()
+                            if k not in ("draining", "pending_update")
+                        }
+                        clean["status"] = "ready"
+                        clean["state"]  = "ready"
+                        clean["current_sessions"] = 0
+                        await self._write_instance(tenant_id, iid, clean)
+                        self._registered[iid] = clean
+                        logger.warning(
+                            "bootstrap heartbeat: self-healed stale-busy instance "
+                            "%s (SCARD=0, pending_update=%s)",
+                            iid, current.get("pending_update", False),
+                        )
+                        continue
+
                 if current.get("pending_update"):
-                    # Update pendente — aplica se voltou a ready
+                    # Update pendente — aplica se voltou a ready (busy aqui = sessão
+                    # viva, SCARD>0, pois o ghost já foi curado acima).
                     if status not in ("busy", "paused"):
                         clean = {
                             k: v for k, v in payload.items()
@@ -526,44 +568,19 @@ class InstanceBootstrap:
                         await self._redis.expire(key, _INSTANCE_TTL_S)
                     continue
 
-                # Caminho normal: renova TTL ou restaura como ready
+                # Caminho normal: renova TTL (busy vivo/paused) ou reescreve ready.
                 if status in ("busy", "paused"):
-                    # Self-heal: if the instance is marked busy/paused but all of
-                    # its pools show active_count=0, the sessions are stale (e.g.
-                    # crash recovery — sessions ended without agent_done).
-                    # Reset to ready so routing can use this instance again.
-                    if status == "busy":
-                        current_sessions = current.get("current_sessions", 0)
-                        if current_sessions > 0:
-                            instance_pools = payload.get("pools") or current.get("pools") or []
-                            all_pools_idle = True
-                            for _pool in instance_pools:
-                                raw_count = await self._redis.get(
-                                    f"{tenant_id}:pool:{_pool}:active_count"
-                                )
-                                if raw_count and int(raw_count) > 0:
-                                    all_pools_idle = False
-                                    break
-                            if all_pools_idle and instance_pools:
-                                # Stale-busy: reset to ready
-                                clean = {
-                                    k: v for k, v in payload.items()
-                                    if k not in ("draining", "pending_update")
-                                }
-                                clean["status"] = "ready"
-                                clean["state"]  = "ready"
-                                clean["current_sessions"] = 0
-                                await self._write_instance(tenant_id, iid, clean)
-                                self._registered[iid] = clean
-                                logger.warning(
-                                    "bootstrap heartbeat: self-healed stale-busy "
-                                    "instance %s (active_count=0 on all pools=%s)",
-                                    iid, instance_pools,
-                                )
-                                continue
                     await self._redis.expire(key, _INSTANCE_TTL_S)
                 else:
-                    await self._write_instance(tenant_id, iid, payload)
+                    # Redis=ready. NUNCA empurrar busy do estado desejado em memória
+                    # (que pode estar poluído por um ghost anterior): normaliza para
+                    # ready/0 e corrige a cópia em memória, cortando a oscilação
+                    # heal↔clobber.
+                    norm = {**payload, "status": "ready", "state": "ready"}
+                    if int(norm.get("current_sessions", 0) or 0) > 0:
+                        norm["current_sessions"] = 0
+                    await self._write_instance(tenant_id, iid, norm)
+                    self._registered[iid] = norm
 
             except Exception as exc:
                 logger.warning("Heartbeat tick failed for %s: %s", iid, exc)
@@ -673,15 +690,28 @@ class InstanceBootstrap:
         instance_key = f"{tenant_id}:instance:{instance_id}"
 
         # Guard: if the existing Redis key shows a live session, don't overwrite it.
+        # Truth = SCARD of the routing-engine occupancy SET, NOT the mirror status:
+        # a busy mirror with SCARD==0 is a stale-busy ghost (e.g. delegate→suspend
+        # gap, or a crash where the session ended without agent_done) and MUST be
+        # allowed to overwrite to ready — otherwise the ghost is preserved forever
+        # (this is what defeated the previous self-heal, which routed through here).
+        # `paused` is always preserved (a legitimate operator state, SCARD may be 0).
         existing_raw = await self._redis.get(instance_key)
         if existing_raw:
             try:
                 existing = json.loads(existing_raw)
-                if existing.get("status") in ("busy", "paused"):
+                _status = existing.get("status")
+                _preserve = _status == "paused"
+                if _status == "busy":
+                    _occ = int(await self._redis.scard(
+                        f"{tenant_id}:instance:{instance_id}:sessions"
+                    ))
+                    _preserve = _occ > 0
+                if _preserve:
                     logger.warning(
-                        "Bootstrap: instance %s is %s — marking pending_update "
+                        "Bootstrap: instance %s is %s (live) — marking pending_update "
                         "instead of overwrite to preserve live session",
-                        instance_id, existing["status"],
+                        instance_id, _status,
                     )
                     patch = {**existing, "pending_update": True}
                     await self._redis.set(
@@ -690,6 +720,11 @@ class InstanceBootstrap:
                         ex=_INSTANCE_TTL_S,
                     )
                     return
+                if _status == "busy":
+                    logger.warning(
+                        "Bootstrap: instance %s is busy but SCARD=0 (stale-busy ghost) "
+                        "— overwriting to ready", instance_id,
+                    )
             except (json.JSONDecodeError, KeyError):
                 pass  # Corrupt state — safe to overwrite
 

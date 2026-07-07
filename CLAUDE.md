@@ -941,9 +941,8 @@ na mesma superfície em falha de FORMATO (numeric/pattern/faixa/comprimento), ho
 `on_failure`. Só escalar; timeout/desconexão/@mention não são retry. Semântica (código OTP) segue no chamador.
 
 **Fatia 2 (pendente):** `channel_policy: elect`; plumbing `$.config` bridge→slot; timeout dinâmico do runner;
-multi-locale + preview no editor; entrega real do link web (provedor SMS/e-mail). **Follow-up de demo-infra:**
-vazamento de instância no `portabilidade_ia` (delegate-wait do OTP deixa sessão fantasma no tracking do bridge →
-instância nasce `busy`; reset no Redis não segura).
+multi-locale + preview no editor; entrega real do link web (provedor SMS/e-mail). *(Vazamento de instância do
+delegate→suspend do OTP resolvido 2026-07-07 — ver CHANGELOG + `docs/arcos/session-conference-lifecycle.md`.)*
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
 [`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)

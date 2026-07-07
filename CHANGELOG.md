@@ -2,6 +2,46 @@
 
 ---
 
+## Vazamento de instância no delegate→suspend — corrigido (2026-07-07)
+
+Fecha o follow-up de demo-infra "vazamento de instância no `portabilidade_ia`" (e generaliza p/ qualquer
+`delegate`/`suspend` de agente nativo). **Sintoma:** o intake (`agente_portabilidade_intake_v1`) fazia
+`delegate` ao runner OTP e suspendia; o snapshot do runner (`dialog_runner-001`) ficava
+`status:busy, current_sessions:1` com **SCARD real = 0** (fantasma) e o routing enfileirava "no agents
+available" no próximo `delegate`, travando o fluxo OTP no webchat. Validado ao vivo: pós-fix o
+`Routed → dialog_runner-001` aloca (sem `Queued`) e o release fecha limpo (`current_sessions=0→0 state=ready`).
+
+**Causa-raiz (duas contabilidades + dois furos de espelho):** routing-engine conta ocupância ABSOLUTA
+(`SCARD({tenant}:instance:{iid}:sessions)`, fonte de verdade); o bridge mantinha um espelho RELATIVO
+(`max(0, snapshot-1)`) que divergia. (A) **Gap A** — o restore do espelho era gated em `native_snapshot`
+presente; quando a chave `{tenant}:instance:{iid}` (TTL 30s) expirava durante o delegate→OTP→suspend, o
+restore era pulado mas o `agent_done` disparava mesmo assim (SREM → SCARD 0), deixando o espelho preso em
+`busy/1`. (B) O **self-heal do bootstrap** comparava `pool active_count` (que vaza quando a conferência
+compartilha `session_id`) e, pior, era **engolido pela guarda de `_write_instance`** (recusava busy→ready) e
+**blindado pelo short-circuit de `pending_update`** no heartbeat — o fantasma nunca era curado. (C) O heartbeat
+**reescrevia `busy` a partir do estado desejado em memória** (`_registered`), envenenado por um fantasma
+pré-fix, clobberando o `ready` recém-escrito.
+
+**Entregue (`orchestrator-bridge`):**
+- **`main.py`** — helper `_release_native_instance_snapshot()` sempre aterrissa o espelho em `ready`
+  (reconstrói snapshot mínimo quando a chave expirou); usado nos 3 restore blocks que liam o snapshot de TTL
+  curto (`process_routed` nativo + YAML-fallback, `_handle_webhook_session_resumed`). Fecha o Gap A.
+- **`instance_bootstrap.py`** — guarda de `_write_instance` **SCARD-aware** (só preserva `busy` via
+  `pending_update` se `SCARD>0`; `busy` com `SCARD 0` = fantasma → sobrescreve ready); self-heal do heartbeat
+  ancorado em `SCARD==0` e **movido para antes** dos short-circuits de `draining`/`pending_update`; heartbeat
+  **nunca empurra `busy` do estado desejado** (normaliza ready/0 no restore-de-expirada e no caminho normal,
+  corrigindo a cópia em memória → corta a oscilação heal↔clobber). `paused` nunca é auto-curado.
+- **Testes** — `TestHeartbeatSelfHeal` (cura do ghost com `pending_update`; preserva busy com sessão viva) +
+  `test_write_instance_overwrites_stale_busy_ghost`; ajuste do teste de guarda p/ a semântica SCARD.
+
+**Invariante reforçada:** `SCARD({tenant}:instance:{iid}:sessions)` é a única fonte de verdade de ocupância;
+o espelho do bridge e o estado desejado do bootstrap **convergem para ela**, nunca a sobrescrevem com `busy`.
+**Limitação conhecida:** o self-heal libera a instância p/ roteamento NOVO mas não republica `agent_ready` no
+Kafka — uma fila já enfileirada não é redrenada no instante da cura (item aberto se necessário). Doc:
+[`docs/arcos/session-conference-lifecycle.md`](docs/arcos/session-conference-lifecycle.md) § delegate→suspend.
+
+---
+
 ## Primitivo de diálogo — editor multi-locale (`/config/dialog-forms`) (2026-07-07)
 
 O editor de DialogForms passou de single-locale (texto editado como string pura) para **multi-locale**: um

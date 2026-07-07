@@ -1,8 +1,31 @@
 # Session & Conference Lifecycle — Three-Layer Model
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-07-07 · Estado: Arc 16
 > Design reference for the orchestrator-bridge session lifecycle.
 > Covers the three-layer model and the gap history.
+
+---
+
+## Status — delegate→suspend instance leak resolved (2026-07-07)
+
+Um agente nativo que faz `delegate`/`suspend` (ex.: intake OTP delegando ao `dialog_runner`) deixava a
+instância do alvo presa como **fantasma**: snapshot `{tenant}:instance:{iid}` = `busy/current_sessions:1`
+mas o SET de ocupância `{tenant}:instance:{iid}:sessions` (SCARD) = **0**. O routing (que lê SCARD como
+verdade absoluta) enfileirava "no agents available" no próximo `delegate`, travando o fluxo.
+
+**Fonte de verdade = `SCARD({tenant}:instance:{iid}:sessions)`.** O espelho relativo do bridge
+(`max(0, snapshot-1)`) e o estado desejado em memória do bootstrap (`_registered`) **convergem para ela** e
+nunca a sobrescrevem com `busy`. Três correções (orchestrator-bridge):
+
+| # | Furo | Correção |
+|---|---|---|
+| A | Restore do espelho gated em `native_snapshot`; chave de TTL 30s expira no delegate→OTP→suspend → restore pulado mas `agent_done` dispara (SREM → SCARD 0) → espelho preso `busy/1` | `_release_native_instance_snapshot()` sempre escreve `ready` (reconstrói snapshot mínimo se a chave sumiu); usado nos 3 restore blocks (`process_routed` nativo + YAML, resume webhook) |
+| B | Self-heal comparava `pool active_count` (vaza na conferência que compartilha `session_id`); era engolido pela guarda de `_write_instance` (recusa busy→ready) e blindado pelo short-circuit de `pending_update` | Guarda de `_write_instance` **SCARD-aware** (preserva busy só se SCARD>0); self-heal do heartbeat ancorado em `SCARD==0` e **movido para antes** de `draining`/`pending_update` |
+| C | Heartbeat reescrevia `busy` do estado desejado em memória (envenenado por fantasma pré-fix), clobberando o `ready` recém-escrito | Heartbeat **nunca empurra `busy` do estado desejado** — normaliza `ready/0` no restore-de-expirada e no caminho normal, corrigindo `_registered` (corta a oscilação heal↔clobber) |
+
+`paused` nunca é auto-curado (estado legítimo de operador). **Limitação conhecida:** o self-heal libera a
+instância p/ roteamento novo mas não republica `agent_ready` no Kafka — uma fila já enfileirada não é
+redrenada no instante da cura. Ver `CHANGELOG.md` § "Vazamento de instância no delegate→suspend".
 
 ---
 

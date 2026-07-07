@@ -2386,6 +2386,68 @@ async def activate_external_mcp_agent(
             )
 
 
+# ── Native instance mirror release (gap-A fix) ────────────────────────────────
+
+async def _release_native_instance_snapshot(
+    redis_client: aioredis.Redis,
+    tenant_id: str,
+    instance_id: str,
+    pool_id: str,
+    agent_type_id: str,
+    native_snapshot: dict | None,
+) -> None:
+    """Land the bridge's instance mirror at status=ready after a native agent
+    releases a session (natural completion, escalation, OR suspend).
+
+    Gap-A fix (delegate→suspend instance leak): the previous inline restore was
+    gated on `native_snapshot` being present. The snapshot key
+    ({tenant}:instance:{iid}) is refreshed at routing time with a 30s TTL; when a
+    flow runs long (e.g. delegate→OTP→suspend) the key expires, so the read at
+    activation time returned None and the restore was skipped — while agent_done
+    still fired (SREM → SCARD 0), leaving the mirror stuck at busy/1 (the ghost
+    the bootstrap then re-creates on restart). We now ALWAYS write a ready
+    snapshot, reconstructing a minimal one when the prior snapshot is gone, so the
+    mirror can never be left busy after the vaga was released. SCARD (the
+    routing-engine occupancy SET) remains the source of truth; the bootstrap
+    self-heal reconciles any residual drift against it.
+    """
+    if not instance_id:
+        return
+    try:
+        snap = dict(native_snapshot) if native_snapshot else {}
+        prev = int(snap.get("current_sessions", 1) or 1)
+        snap["current_sessions"] = max(0, prev - 1)
+        snap["status"] = "ready"
+        snap.setdefault("state", "ready")
+        if agent_type_id:
+            snap.setdefault("agent_type_id", agent_type_id)
+        if pool_id:
+            snap["pools"] = snap.get("pools") or [pool_id]
+        snap.setdefault("execution_model", "stateless")
+        snap.setdefault(
+            "max_concurrent_sessions", snap.get("max_concurrent", 1) or 1
+        )
+        await redis_client.set(
+            f"{tenant_id}:instance:{instance_id}",
+            json.dumps(snap),
+            ex=3600,
+        )
+        if pool_id:
+            await redis_client.sadd(
+                f"{tenant_id}:pool:{pool_id}:instances", instance_id
+            )
+        logger.info(
+            "AI instance mirror released to ready: tenant=%s instance=%s pool=%s "
+            "(had_snapshot=%s)",
+            tenant_id, instance_id, pool_id, bool(native_snapshot),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not release AI instance mirror: tenant=%s instance=%s — %s",
+            tenant_id, instance_id, exc,
+        )
+
+
 # ── Process conversations.routed ──────────────────────────────────────────────
 
 async def process_routed(
@@ -2559,30 +2621,13 @@ async def process_routed(
             # Restore instance after skill flow completes (mirrors plughub-native path).
             # process_contact_event skips immediate restore for completing instances;
             # this is now the authoritative restore path.
-            if yaml_instance_id and yaml_snapshot:
-                try:
-                    yaml_snapshot["current_sessions"] = max(
-                        0, int(yaml_snapshot.get("current_sessions", 1)) - 1
-                    )
-                    yaml_snapshot["status"] = "ready"
-                    await redis_client.set(
-                        f"{tenant_id}:instance:{yaml_instance_id}",
-                        json.dumps(yaml_snapshot),
-                        ex=3600,
-                    )
-                    if pool_id:
-                        await redis_client.sadd(
-                            f"{tenant_id}:pool:{pool_id}:instances", yaml_instance_id
-                        )
-                    logger.info(
-                        "YAML fallback: AI instance restored: tenant=%s instance=%s pool=%s",
-                        tenant_id, yaml_instance_id, pool_id,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "YAML fallback: could not restore AI instance: session=%s — %s",
-                        session_id, exc,
-                    )
+            # Gap-A fix: always land the mirror at ready (incl. when yaml_snapshot is
+            # None), so a delegate→suspend that expired the snapshot cannot leave the
+            # mirror busy after agent_done drops the SCARD.
+            await _release_native_instance_snapshot(
+                redis_client, tenant_id, yaml_instance_id, pool_id,
+                agent_type_id, yaml_snapshot,
+            )
 
             # Notify routing-engine to decrement the pool's busy counter.
             # For YAML-fallback agents the bridge manages lifecycle via direct Redis
@@ -3140,30 +3185,13 @@ async def process_routed(
 
         # Restore instance with a long TTL so the next contact can be routed.
         # Stateless AI agents are always available after serving a session.
-        if native_instance_id and native_snapshot:
-            try:
-                native_snapshot["current_sessions"] = max(
-                    0, int(native_snapshot.get("current_sessions", 1)) - 1
-                )
-                native_snapshot["status"] = "ready"
-                await redis_client.set(
-                    f"{tenant_id}:instance:{native_instance_id}",
-                    json.dumps(native_snapshot),
-                    ex=3600,
-                )
-                if pool_id:
-                    await redis_client.sadd(
-                        f"{tenant_id}:pool:{pool_id}:instances", native_instance_id
-                    )
-                logger.info(
-                    "AI agent instance restored to ready: tenant=%s instance=%s pool=%s",
-                    tenant_id, native_instance_id, pool_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Could not restore AI agent instance: tenant=%s instance=%s — %s",
-                    tenant_id, native_instance_id, exc,
-                )
+        # Gap-A fix: always land the mirror at ready — even when native_snapshot
+        # is None (snapshot key expired mid-flow, e.g. delegate→OTP→suspend) — so
+        # the mirror is never left busy after agent_done drops the SCARD.
+        await _release_native_instance_snapshot(
+            redis_client, tenant_id, native_instance_id, pool_id,
+            agent_type_id, native_snapshot,
+        )
 
         # Notify routing-engine of the instance transition:
         #   1. agent_ready  — triggers _drain_queue_for_agent() so queued contacts
@@ -6460,32 +6488,16 @@ async def _handle_webhook_session_resumed(
         await _mark_contact_ended(redis_client, session_id)
         asyncio.create_task(_trigger_contact_close(redis_client, session_id))
 
-    # Restore instance to pool (mirrors process_routed post-activation lifecycle)
-    if instance_id and native_snapshot:
-        try:
-            native_snapshot["current_sessions"] = max(
-                0, int(native_snapshot.get("current_sessions", 1)) - 1
-            )
-            native_snapshot["status"] = "ready"
-            await redis_client.set(
-                f"{tenant_id}:instance:{instance_id}",
-                json.dumps(native_snapshot),
-                ex=3600,
-            )
-            if pool_id:
-                await redis_client.sadd(
-                    f"{tenant_id}:pool:{pool_id}:instances", instance_id
-                )
-            logger.info(
-                "AI agent instance restored after webhook resume: "
-                "tenant=%s instance=%s pool=%s",
-                tenant_id, instance_id, pool_id,
-            )
-        except Exception as exc:
-            logger.warning(
-                "Could not restore AI agent instance after resume: session=%s — %s",
-                session_id, exc,
-            )
+    # Restore instance to pool (mirrors process_routed post-activation lifecycle).
+    # Gap-A fix: always land the mirror at ready, even when native_snapshot is None
+    # (the resume window can itself hit another suspend and the snapshot may have
+    # expired), so the mirror is never left busy after agent_done drops the SCARD.
+    # Runs unconditionally (incl. re-suspend) because agent_done is published
+    # unconditionally just below — the vaga is released either way (Arc 19).
+    await _release_native_instance_snapshot(
+        redis_client, tenant_id, instance_id, pool_id,
+        agent_type_id, native_snapshot,
+    )
 
     # Publish agent_ready + agent_done for routing-engine capacity tracking
     if _kafka_producer and instance_id:

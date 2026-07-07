@@ -148,40 +148,6 @@ multi-locale, mas a usabilidade e a completude de campos precisam de uma passada
 - **Base:** contrato canônico continua o `DialogFormSchema` (`@plughub/schemas/dialog.ts`); nada de lógica de
   controle no editor (as 4 costuras seguem valendo). Spec do primitivo: `docs/product/dialog-primitive-and-runner-design.md`.
 
-### Vazamento de instância no delegate→suspend (`portabilidade_ia`) *(diagnosticado 2026-07-07; fix pendente)*
-
-**Sintoma:** intake (`agente_portabilidade_intake_v1`, pool `portabilidade_ia`) faz `delegate` ao runner OTP e
-suspende; o snapshot da instância fica `status:busy, current_sessions:1` com **SCARD real = 0**. No restart o
-bridge re-cria a instância `busy` (fantasma). Deletar a chave no Redis não segura.
-
-**Causa-raiz (mapa; arquivos em `orchestrator-bridge/.../main.py`, `.../instance_bootstrap.py`,
-`routing-engine/.../registry.py`):**
-- **Duas contabilidades de `current_sessions`:** routing-engine = ABSOLUTO (`SCARD(:sessions)`,
-  `registry.py:242-247`, aplicado em `mark_busy:772` e `remove_conversation:474-480`); bridge = RELATIVO
-  (`max(0, snapshot-1)`, `main.py:3145`/`6466`/`2564`/`7091`). Só coincidem se o SET `:sessions` for liberado no
-  mesmo instante que o bridge reescreve o snapshot.
-- **Assimetria no suspend:** em `process_routed`, entre `activate_native_agent` (`main.py:3091`) e o restore
-  (`:3143`) **não há guarda de outcome** — o restore roda p/ `suspended` também, e `agent_done` é publicado
-  **incondicionalmente** (`:3205`) → `remove_conversation`→`release_instance` faz SREM (SCARD→0). O bloco
-  `if _ai_outcome=="suspended"` (`:3398-3473`) **não toca `current_sessions`** (só grava status suspended). Verdade
-  e espelho só coincidem em 0.
-- **Gaps que deixam o espelho em `busy/1`:** (A) restore pulado quando `native_snapshot=None` (guarda `... and
-  native_snapshot` em `:3143`/`:6464`; leitura da chave `{tenant}:instance:{iid}` com TTL 30s em `:2671`/`:6371`)
-  → decremento silenciosamente pulado; (B) o **resume bypassa o routing-engine** (`_handle_webhook_session_resumed`,
-  `:6289/6298`) — re-ativa a instância sem `claim_instance`/`mark_busy`, `:sessions` nunca repovoado, espelho≠SCARD.
-- **Restart perpetua:** `_scan_instances_from_redis` (`instance_bootstrap.py:717`) carrega o snapshot `busy`;
-  `_write_instance` **recusa** sobrescrever busy→ready (`:676-692`); `_heartbeat_tick` recria da cópia em memória
-  (`:498`/`:566`); e o **self-heal só cura quando `active_count==0` em todos os pools** (`:530-563`, olha
-  `active_count`, NÃO o `SCARD(:sessions)`) — e o `active_count[portabilidade_ia]` fica vazado pela conferência
-  compartilhando `session_id` (delete-guardado do serving-pool pulado, `registry.py:510-528`/`730-758`).
-
-**Direção de correção (a decidir na retomada):** (a) tratar `suspended` como **retenção da vaga** — no bridge, não
-publicar `agent_done`/decremento no caminho suspended (ou re-`claim` no resume via routing-engine em vez de
-bypass); (b) fazer o **self-heal do bootstrap comparar contra `SCARD(:sessions)`** (fonte de verdade) em vez de
-`active_count`. Avaliar impacto no Arc 19 (webhook suspend/resume legítimo) antes de mexer.
-
----
-
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR
 loud nomeando pool→hook→pool-alvo→skill→step. Config atual passa limpa (nps_ia/wrapup inline). Avaliação:
@@ -196,12 +162,6 @@ deployado**. **Guard proposto:** na validação de deploy/sync (agent-registry/R
 flow do skill de um pool-alvo de hook contiver step que suspende (`delegate`/`suspend`/`collect`) — reusar a
 varredura do `_computeFlowModel` **estendida com `delegate`**. Erro explícito de config em vez de footgun.
 Alternativa: flag declarado (`classification.execution_context`), menos robusto (depende do autor). Tarefa #17.
-
-**Follow-ups de demo-infra (NÃO o primitivo):**
-- **Vazamento de instância no `portabilidade_ia`:** o delegate-wait do OTP deixa sessão fantasma no tracking do
-  bridge → a instância nasce/persiste `busy`/`current_sessions=1` com ocupância (SCARD) 0; reset no Redis não
-  segura (o bridge reescreve o snapshot). Fix = sync reconcile×routing-registry / reset do estado in-memory do
-  bridge. Bloqueou o e2e do OTP (validado por simetria via survey).
 
 ---
 
