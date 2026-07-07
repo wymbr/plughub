@@ -126,7 +126,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
 
   const agentEventDeps: AgentEventDeps = { redis, kafka }
 
-  const surveyDeps: SurveyDeps = { kafka }
+  const surveyDeps: SurveyDeps = {
+    kafka,
+    dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
+    tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
 
   const workflowDeps: WorkflowDeps = {
     channelGatewayUrl: process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
@@ -967,7 +971,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerAgentEventTools(mcpServer, { redis, kafka })
-    registerSurveyTools(mcpServer, { kafka })
+    registerSurveyTools(mcpServer, {
+      kafka,
+      dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
+      tenantId:     process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",

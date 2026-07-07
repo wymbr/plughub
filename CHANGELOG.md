@@ -2,6 +2,33 @@
 
 ---
 
+## Survey — composição de nota multi-pergunta (dimensions) — schema + runtime (2026-07-07)
+
+Instrumentos de survey (CSAT/NPS…) passam a poder ser **compostos por várias perguntas** com média ponderada,
+em vez do `capture.metric` por-pergunta. Desenho: `docs/adr/adr-survey-form-scoring-composition.md`. Esta entrega
+cobre **schema + runtime** (editor com dimension e wiring dos skills de survey ficam pendentes).
+
+**Primitivo compartilhado (`@plughub/schemas/scoring.ts`):** `ScoreScale`, `ScoreAggregation`
+(`weighted_mean`|`min`) e `composeScore()` determinístico — normaliza cada item por escala, média ponderada com
+**re-normalização de NA**, remapeia para a escala do grupo. Fonte única da matemática (survey_record + futuro
+EvaluationForm). 7 testes vitest.
+
+**`DialogForm` estendido (aditivo, retrocompat):** `DialogDimension` (instrumento: `dimension_id`, `scale`,
+`aggregation`, `weight?` reservado p/ composite futuro); `DialogCapture` ganhou `dimension_id?` + `weight?`
+(mantém `metric?` legado e `value?`); `DialogForm.dimensions[]` (default `[]`). `capture.metric` legado = dimension
+1-item.
+
+**Runtime — `survey_record` compõe (ADR §D9):** `SurveyRecordInput` aceita `form_id` + `answers` (respostas
+cruas por `output_key`) além de `signals[]`; o tool busca o `DialogForm` na dialog-api e compõe server-side via
+`composeSurveySignals` (função pura, mcp-server): por dimension agrupa perguntas (`capture.dimension_id`), mapeia
+resposta→score (`option.capture.value` ou numérico cru), `composeScore` → **um sinal por dimension** paralelo;
+legado `capture.metric` → sinal single. Runner burro, YAML declarativo, analytics inalterado. 10 testes vitest.
+
+**Docs reconciliados:** `customer-surveys.md` §17 e `CLAUDE.md` — o `survey_definition` é `DialogForm`+dimensions
+na **dialog-api** (supersede a nota "evaluation-api"/`survey_form_get`).
+
+---
+
 ## Vazamento de instância no delegate→suspend — corrigido (2026-07-07)
 
 Fecha o follow-up de demo-infra "vazamento de instância no `portabilidade_ia`" (e generaliza p/ qualquer

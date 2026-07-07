@@ -69,7 +69,20 @@ export const SurveyRecordInputSchema = z.object({
   tenant_id: z.string().min(1),
   origin_session_id: z.string().min(1),
   grain: SignalGrainSchema,
-  signals: z.array(SurveySignalSchema).min(1).max(20),
+  // Two ways to supply the metrics (validated in the handler — schema stays a
+  // plain z.object so `.shape` works for the MCP tool registration):
+  //   (a) explicit `signals[]` (legacy / already-composed), OR
+  //   (b) `form_id` + `answers` → the tool composes per-respondent signals
+  //       server-side via the DialogForm dimensions (ADR §D9). One of the two.
+  signals: z.array(SurveySignalSchema).min(1).max(20).optional(),
+  /** DialogForm to compose against (mode b). Requires `answers`. */
+  form_id: z.string().optional(),
+  /**
+   * Raw answers keyed by question `output_key` (mode b). `null` = skipped/NA
+   * (re-normalizes the dimension). The tool maps each answer to a numeric score
+   * (option `capture.value` or the raw numeric) and composes via `composeScore`.
+   */
+  answers: z.record(z.string(), z.union([z.string(), z.number(), z.null()])).optional(),
   // Obrigatório quando grain='segment' (validado no handler — manter z.object puro
   // para preservar .shape usado no registro da tool MCP).
   segment_id: z.string().optional(),

@@ -1,12 +1,12 @@
 # ADR: Composição de nota em surveys — dimension + perguntas ponderadas, primitivo de pontuação compartilhado
 
-**Status:** Proposto (desenho travado 2026-07-07; implementação pendente). Store canônico do `survey_definition`
-deliberadamente EM ABERTO (ver § Decisões em aberto).
-**Data:** 2026-07-07
-**Componentes:** `packages/schemas` (novo `scoring.ts` compartilhado + extensão de `dialog.ts`/survey),
-`packages/dialog-api` **ou** `packages/evaluation-api` (store — a decidir), domínio survey no
-`packages/skill-flow-engine`/`mcp-server-plughub` (`survey_record`), `packages/analytics-api` (roll-up
-populacional — inalterado), `packages/platform-ui` (editor de forms).
+**Status:** Aceito + parcialmente implementado (2026-07-07). Decisões #1/#2 resolvidas; **schema**
+(`scoring.ts` + `DialogForm.dimensions`) e **runtime** (`survey_record` compõe via `composeScore`) prontos e
+testados. Pendentes: **editor** com dimension e **wiring dos skills** de survey (passar `form_id`+`answers`).
+**Data:** 2026-07-07 · **Atualizado:** 2026-07-07 (schema + runtime do `survey_record`)
+**Componentes:** `packages/schemas` (novo `scoring.ts` compartilhado + extensão de `dialog.ts`), `packages/dialog-api`
+(store canônico do `survey_definition` = `DialogForm`+dimensions — D8), `mcp-server-plughub` (`survey_record` compõe —
+D9), `packages/analytics-api` (roll-up populacional — inalterado), `packages/platform-ui` (editor de forms com dimension).
 **Relacionado:** `docs/adr/adr-otp-workflow-and-dialog-primitive.md` (primitivo de diálogo, D2/D3),
 `docs/arcos/customer-surveys.md` (§16/§17 interpretador+editor; `survey_definition` composto de `survey_question`),
 `packages/schemas/src/dialog.ts` (`DialogForm`/`DialogCapture`), `packages/schemas/src/evaluation.ts`
@@ -101,18 +101,34 @@ legado.
 - **Single-source**: o roll-up populacional permanece só no analytics; o valor per-respondente é derivado uma vez
   no domínio survey. Sem duplicação de fórmula.
 
+## Decisões resolvidas (2026-07-07)
+
+### D8 — Store canônico = estender o `DialogForm` na dialog-api
+
+Resolvida a favor da **Opção A**. O `survey_definition` **é** um `DialogForm` com a camada de composição
+(dimensions) acoplada — conteúdo voltado ao cliente, renderizado pelo runner via `form_get`. Reusa runner,
+`form_get` e o editor; evita segundo store + passo de compile. Não viola o single-source "forms→evaluation-api":
+esse invariante rege as **forms de qualidade** (rubrica de avaliador); conteúdo de diálogo é outro domínio, já
+da dialog-api. A unificação com o Quality é o primitivo `scoring.ts` (D6), não o store. Custo: diverge da letra
+da spec de surveys (§16/§17 dizia evaluation-api, anterior ao dialog primitive as-built) → reconciliar a
+`customer-surveys.md`.
+
+### D9 — Agregação per-respondente roda no `survey_record` (server-side)
+
+O `survey_record` passa a aceitar `form_id` + respostas cruas e **compõe** os sinais per-respondente server-side
+(no mcp-server), aplicando o `composeScore` determinístico de `scoring.ts`. Mantém o runner burro, o YAML
+declarativo (nada de matemática em step de flow — respeita "sem eval em step") e o analytics inalterado (roll-up
+populacional read-time). O contrato atual (`signals[]` explícito) permanece válido para o caminho legado.
+
 ## Decisões em aberto
 
-1. **Store canônico do `survey_definition`** — estender o `DialogForm` na dialog-api (reusa runner/editor/
-   `form_get`, diverge da letra da spec de surveys) **ou** entidade própria na evaluation-api (fiel ao single-source
-   "forms→evaluation-api", duplica store/editor). Bloqueia o schema físico.
-2. **Onde roda a agregação per-respondente** — no skill de survey (deriva antes) ou dentro do `survey_record`
-   (passa a aceitar a definição + respostas cruas e deriva os sinais). Preferência inicial: `survey_record`
-   (mantém runner e analytics como estão).
-3. **Composite de form opcional** (health score) — roll-up por cima das dimensions paralelas; adiado até haver
-   requisito.
-4. **`survey_question` reutilizável** (biblioteca compartilhada entre definitions, prevista na spec de surveys) —
+1. **Composite de form opcional** (health score) — roll-up por cima das dimensions paralelas; adiado até haver
+   requisito. (`DialogDimension.weight` já reservado para isso.)
+2. **`survey_question` reutilizável** (biblioteca compartilhada entre definitions, prevista na spec de surveys) —
    ortogonal ao modelo de composição; fora do 1º corte.
+3. **Adoção do `scoring.ts` pelo `EvaluationForm`** — o primitivo é compartilhável (D6), mas retrofit do Quality
+   é mudança separada e mais arriscada (evaluation-api em produção); feito depois, mapeando `weighted_average`→
+   `weighted_mean` e `min_score`→`min`.
 
 ## Consequências
 

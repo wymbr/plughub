@@ -684,12 +684,26 @@ export type {
   SessionSignalEvent,
 } from "./survey"
 
+// ── Scoring — shared score-composition primitive (survey dimensions + Quality) ─
+export {
+  ScoreScaleSchema,
+  ScoreAggregationSchema,
+  composeScore,
+} from "./scoring"
+
+export type {
+  ScoreScale,
+  ScoreAggregation,
+  ScoredItem,
+} from "./scoring"
+
 // ── Dialog primitive — generic scripted-dialog form (survey + OTP) ────────────
 export {
   LocaleCodeSchema,
   LocalizedTextSchema,
   DialogValidationSchema,
   DialogCaptureSchema,
+  DialogDimensionSchema,
   DialogOptionSchema,
   DialogFieldSchema,
   DialogVisibilitySchema,
@@ -708,6 +722,7 @@ export type {
   LocalizedText,
   DialogValidation,
   DialogCapture,
+  DialogDimension,
   DialogOption,
   DialogField,
   DialogVisibility,

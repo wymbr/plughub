@@ -20,6 +20,7 @@
  */
 
 import { z } from "zod"
+import { ScoreScaleSchema, ScoreAggregationSchema } from "./scoring"
 
 // ─────────────────────────────────────────────
 // i18n — embedded locale map (D-I18N)
@@ -71,19 +72,68 @@ export type DialogValidation = z.infer<typeof DialogValidationSchema>
  * `survey_record` signals from the raw answers WITHOUT re-fetching the form.
  * This is DATA, not logic — it never drives branching. Absent capture on a
  * free-text question ⇒ verbatim/open_text (the domain routes it to its sink).
+ *
+ * Two ways a question contributes to a signal (ADR §D1/§D7):
+ *   - `metric` (legacy) — a STANDALONE single-question metric = its own 1-item
+ *     dimension. Kept for backward-compat with existing forms.
+ *   - `dimension_id` (composition) — the question contributes to a declared
+ *     `DialogForm.dimensions[]` entry; `weight` is its weight WITHIN that
+ *     dimension (default 1). The dimension owns the scale + aggregation; the
+ *     domain (`survey_record`) composes the per-respondent value via
+ *     `composeScore`. Use one OR the other, not both.
  */
 export const DialogCaptureSchema = z
   .object({
-    /** Signal metric key, snake_case (e.g. "csat", "nps"). */
+    /** Signal metric key, snake_case (e.g. "csat", "nps"). Legacy standalone. */
     metric: z
       .string()
       .regex(/^[a-z0-9_]+$/, { message: "metric must be snake_case (a-z0-9_)" })
       .optional(),
+    /** Dimension this question feeds (must match a `DialogForm.dimensions[].dimension_id`). */
+    dimension_id: z
+      .string()
+      .regex(/^[a-z0-9_]+$/, { message: "dimension_id must be snake_case (a-z0-9_)" })
+      .optional(),
+    /** Weight of this question WITHIN its dimension (relative; normalized at compose). Default 1. */
+    weight: z.number().min(0).optional(),
     /** Fixed machine value for this option/field (e.g. button "4" → score 4). */
     value: z.union([z.number(), z.string()]).optional(),
   })
   .optional()
 export type DialogCapture = z.infer<typeof DialogCaptureSchema>
+
+// ─────────────────────────────────────────────
+// Dimension — composed instrument (survey_definition layer)
+// ─────────────────────────────────────────────
+
+/**
+ * DialogDimension — a survey INSTRUMENT (csat, nps, ces, …) that groups
+ * questions and composes ONE per-respondent value. The promotion of the legacy
+ * per-question `capture.metric` (ADR §D1). Homogeneous by design: the `scale` is
+ * declared once here and INHERITED by member questions (options only carry the
+ * value mapping, validated against this range). Dimensions are PARALLEL — each
+ * emits its own signal (`metric = dimension_id`); they do NOT roll up into a
+ * single form composite (unlike a Quality form). See ADR §D2/§D4/§D5.
+ */
+export const DialogDimensionSchema = z.object({
+  /** Instrument id = the emitted signal metric key, snake_case (e.g. "csat"). */
+  dimension_id: z
+    .string()
+    .regex(/^[a-z0-9_]+$/, { message: "dimension_id must be snake_case (a-z0-9_)" }),
+  /** Optional human label (editor/reporting). */
+  label: LocalizedTextSchema.optional(),
+  /** Numeric scale of the instrument, inherited by member questions (e.g. 1–5). */
+  scale: ScoreScaleSchema,
+  /** How member questions compose the per-respondent value. Default weighted mean. */
+  aggregation: ScoreAggregationSchema.default("weighted_mean"),
+  /**
+   * Reserved for an OPTIONAL future form-level composite (health score) — a
+   * roll-up over the parallel dimensions. Unused while dimensions stay parallel
+   * (the default). See ADR § Decisões em aberto #1.
+   */
+  weight: z.number().min(0).optional(),
+})
+export type DialogDimension = z.infer<typeof DialogDimensionSchema>
 
 // ─────────────────────────────────────────────
 // Options / fields
@@ -216,6 +266,12 @@ export const DialogFormSchema = z.object({
   default_locale: LocaleCodeSchema,
   locales:        z.array(LocaleCodeSchema).min(1),
   nodes:          z.array(DialogNodeSchema).min(1),
+  /**
+   * Composed instruments (survey_definition layer). Empty for a plain dialog
+   * (OTP) or a legacy per-question-`metric` survey. When present, questions bind
+   * via `capture.dimension_id` and the domain composes one signal per dimension.
+   */
+  dimensions:     z.array(DialogDimensionSchema).default([]),
   tags:           z.array(z.string()).default([]),
   created_at:     z.string().datetime(),
   updated_at:     z.string().datetime(),

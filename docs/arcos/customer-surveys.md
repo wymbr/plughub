@@ -412,6 +412,16 @@ Todo campo UI-editável (invariante de configuração do repo). i18n en + pt-BR.
 ganha draft/published na evaluation-api e é lido em runtime por um único interpretador**
 (`skill_survey_runner_v1`) — aproximação **B decidida** (§17); o compile-to-skill (§16) é a alternativa.
 
+> **SUPERSEDED — store + composição (2026-07-07, `docs/adr/adr-survey-form-scoring-composition.md`):** o
+> `survey_definition` **não** é entidade própria na evaluation-api; ele é um **`DialogForm`+dimensions na
+> dialog-api** (D8), lido via `form_get` genérico (não `survey_form_get`) e renderizado pelo dialog-runner
+> as-built. A **composição de nota multi-pergunta** (que esta spec previa via `survey_question` reutilizáveis)
+> é feita pela camada **`dimension`** do `DialogForm`: dimension (instrumento) agrupa perguntas com
+> **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de
+> NA; **dimensions paralelas** (um sinal por dimension). O `survey_record` **compõe** server-side (D9) via o
+> primitivo compartilhado `@plughub/schemas/scoring.ts`. As referências a "evaluation-api"/`survey_form_get`
+> abaixo (§16/§17) ficam como histórico da decisão original.
+
 ---
 
 ## 10. Integração com a bancada 360°
