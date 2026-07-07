@@ -443,9 +443,14 @@ Fecha os itens antes deferidos (§6.1) e formaliza o achado dos **dois veículos
   Snapshot do form no `create` (token Redis, TTL). **Três superfícies, um conteúdo:** chat (runner),
   inline (hook), página web. Validado: web-test → `session.signals` → ClickHouse (`csat`/`ces`).
 
-**Deferido residual (Fatia 2):** entrega real do link web (provedor SMS/e-mail); `retry.max_attempts` pleno
-por pergunta; timeout dinâmico do runner; `channel_policy: elect`; plumbing `$.config` bridge→slot;
-multi-locale + preview + auth no editor. Follow-up de demo-infra: vazamento de instância no `portabilidade_ia`.
+- **Retry por formato ✅ (2026-07-07)** — `MenuStep.validation`+`retry` (união objeto|ref); o `menu` faz
+  reprompt na mesma superfície em falha de FORMATO (numeric/pattern/faixa/comprimento), honra `max_attempts`,
+  esgota→`on_failure`. Só escalar; timeout/desconexão/@mention não são retry; semântica (código OTP) segue
+  no chamador. `form_get` expõe validation/retry no render; runner + loop consumer passam os refs.
+
+**Deferido residual (Fatia 2):** entrega real do link web (provedor SMS/e-mail); timeout dinâmico do runner;
+`channel_policy: elect`; plumbing `$.config` bridge→slot; multi-locale + preview + auth no editor.
+Follow-up de demo-infra: vazamento de instância no `portabilidade_ia`.
 
 ## 7. Pontos a validar em runtime (quando implementar)
 

@@ -60,6 +60,19 @@ read -r -d '' BODY <<'JSON' || true
         { "id": "6", "label": { "pt-BR": "6" } },
         { "id": "7", "label": { "pt-BR": "7" } }
       ]
+    },
+    {
+      "id": "q_tenure",
+      "kind": "question",
+      "prompt": { "pt-BR": "Há quantos anos você é nosso cliente? (digite um número de 0 a 99)" },
+      "interaction": "text",
+      "output_key": "tenure_years",
+      "capture": { "metric": "tenure_years" },
+      "validation": { "numeric": true, "min": 0, "max": 99 },
+      "retry": {
+        "reprompt": { "pt-BR": "Valor inválido. Digite apenas um número inteiro de 0 a 99." },
+        "max_attempts": 3
+      }
     }
   ]
 }

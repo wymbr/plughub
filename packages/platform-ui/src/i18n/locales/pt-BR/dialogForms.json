@@ -32,6 +32,14 @@
     "customer": "Só o cliente",
     "agentsOnly": "Só agentes"
   },
+  "locale": {
+    "editing": "Idioma em edição:",
+    "default": "padrão",
+    "add": "Idioma",
+    "addPlaceholder": "ex.: en",
+    "remove": "Remover idioma",
+    "untranslated": "Sem tradução neste idioma"
+  },
   "action": {
     "saveDraft": "Salvar rascunho",
     "publish": "Publicar"

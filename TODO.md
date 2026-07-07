@@ -110,15 +110,77 @@ contador do `receive` (`_loop_idx_{id}`), item atual em path FIXO (sem índice v
 `skill_survey_multi_v1` (pool `survey_multi_ia`, webchat direto). Validado (csat+ces no `survey_record`). Ver
 `CHANGELOG.md` §2026-07-06.
 
+**Retry por formato ✅ (2026-07-07):** `MenuStep.validation`+`retry` (união objeto|ref); `menu.ts` faz reprompt
+na mesma superfície em falha de FORMATO, honra `max_attempts`, esgota→`on_failure`. `form_get` expõe
+validation/retry no render; runner + loop consumer passam os refs. Validado (`abc`/`200`→reprompt, `15`→ok).
+Ver CHANGELOG (inclui a nota de deploy: rebuild `--no-cache` dos consumidores do schema + re-snapshot do slot
+via `set-next`+`promote` com auth `x-service-token`).
+
 **Fatia 2 (restante, pendente):**
-- **`retry.max_attempts` pleno por pergunta** (contador de tentativas de formato sobre o mecanismo do loop);
 - **timeout dinâmico do runner** (hoje `timeout_s` estático 180; o do form não é lido) — mesma extensão de ref;
 - **`channel_policy: elect`** (runner apresenta menu de canal, reach cross-canal);
-- **editor: multi-locale + preview + auth no write** (MVP é locale único, sem preview, writes abertos);
+- **editor multi-locale ✅ (2026-07-07):** LocaleBar (chips add/remove/selecionar idioma em edição), `setLt`
+  preserva o mapa `{locale}` (string pura = só o default_locale), indicador "sem tradução" por nó, save garante
+  `default_locale ∈ locales[]`. Aplica a text/prompt/labels. Refinamentos de editor → ver **"Revisão do editor de
+  diálogos"** abaixo;
 - **plumbing `$.config` bridge→`PoolSkillSlot.config_json`** (deploy-por-slot);
 - **entrega real do link web** (provedor SMS/e-mail): o veículo web já está feito ✅ (`GET /survey/{token}`
   renderiza o mesmo `DialogForm` e grava via `session.signals`, snapshot no `create`); falta só a **entrega
   outbound** do link — mesma trilha do "item 1" do OTP (provedor externo). §9.2/§19 de customer-surveys.
+
+### Revisão do editor de diálogos (UX + completude) — `/config/dialog-forms` *(item dedicado)*
+
+O editor (`DialogFormsPage.tsx`) é um MVP **funcional mas denso** — cria/edita/publica DialogForms e já suporta
+multi-locale, mas a usabilidade e a completude de campos precisam de uma passada dedicada. Escopo proposto:
+
+- **Layout / densidade:** nós **colapsáveis** (hoje tudo expandido = parede de campos); resumo por nó (tipo +
+  1ª linha do prompt) quando colapsado; reordenar por drag em vez de setas.
+- **Agrupamento:** separar visualmente **validação**, **retry** e **opções** (hoje soltos no card da pergunta);
+  esconder validação/retry para interações que não são texto (button/list não têm formato a validar).
+- **Multi-locale:** avaliar **edição lado-a-lado** dos idiomas (em vez de troca por chip); **progresso de
+  tradução por idioma** ("N de M nós traduzidos") como indicador estável, em vez do ponto âmbar por-nó que
+  "pisca" ao digitar/apagar (o ponto funciona, mas oscila); **preview** do que o cliente vê por canal/idioma.
+- **Completude de campos:** campo **`retry.reprompt`** (`LocalizedText`, hoje não editável no editor — só via
+  seed/JSON) + `retry.max_attempts`; `min_length`/`max_length`/`pattern` da validação; `masked` por campo;
+  `timeout_s` da pergunta; `interaction=form` com múltiplos `fields`.
+- **Segurança/robustez:** **auth no write** (hoje writes abertos — gate ABAC `config.*`); validação client-side
+  (form_id slug, output_key único, metric snake_case) com mensagens claras; confirmação ao descartar rascunho.
+- **Base:** contrato canônico continua o `DialogFormSchema` (`@plughub/schemas/dialog.ts`); nada de lógica de
+  controle no editor (as 4 costuras seguem valendo). Spec do primitivo: `docs/product/dialog-primitive-and-runner-design.md`.
+
+### Vazamento de instância no delegate→suspend (`portabilidade_ia`) *(diagnosticado 2026-07-07; fix pendente)*
+
+**Sintoma:** intake (`agente_portabilidade_intake_v1`, pool `portabilidade_ia`) faz `delegate` ao runner OTP e
+suspende; o snapshot da instância fica `status:busy, current_sessions:1` com **SCARD real = 0**. No restart o
+bridge re-cria a instância `busy` (fantasma). Deletar a chave no Redis não segura.
+
+**Causa-raiz (mapa; arquivos em `orchestrator-bridge/.../main.py`, `.../instance_bootstrap.py`,
+`routing-engine/.../registry.py`):**
+- **Duas contabilidades de `current_sessions`:** routing-engine = ABSOLUTO (`SCARD(:sessions)`,
+  `registry.py:242-247`, aplicado em `mark_busy:772` e `remove_conversation:474-480`); bridge = RELATIVO
+  (`max(0, snapshot-1)`, `main.py:3145`/`6466`/`2564`/`7091`). Só coincidem se o SET `:sessions` for liberado no
+  mesmo instante que o bridge reescreve o snapshot.
+- **Assimetria no suspend:** em `process_routed`, entre `activate_native_agent` (`main.py:3091`) e o restore
+  (`:3143`) **não há guarda de outcome** — o restore roda p/ `suspended` também, e `agent_done` é publicado
+  **incondicionalmente** (`:3205`) → `remove_conversation`→`release_instance` faz SREM (SCARD→0). O bloco
+  `if _ai_outcome=="suspended"` (`:3398-3473`) **não toca `current_sessions`** (só grava status suspended). Verdade
+  e espelho só coincidem em 0.
+- **Gaps que deixam o espelho em `busy/1`:** (A) restore pulado quando `native_snapshot=None` (guarda `... and
+  native_snapshot` em `:3143`/`:6464`; leitura da chave `{tenant}:instance:{iid}` com TTL 30s em `:2671`/`:6371`)
+  → decremento silenciosamente pulado; (B) o **resume bypassa o routing-engine** (`_handle_webhook_session_resumed`,
+  `:6289/6298`) — re-ativa a instância sem `claim_instance`/`mark_busy`, `:sessions` nunca repovoado, espelho≠SCARD.
+- **Restart perpetua:** `_scan_instances_from_redis` (`instance_bootstrap.py:717`) carrega o snapshot `busy`;
+  `_write_instance` **recusa** sobrescrever busy→ready (`:676-692`); `_heartbeat_tick` recria da cópia em memória
+  (`:498`/`:566`); e o **self-heal só cura quando `active_count==0` em todos os pools** (`:530-563`, olha
+  `active_count`, NÃO o `SCARD(:sessions)`) — e o `active_count[portabilidade_ia]` fica vazado pela conferência
+  compartilhando `session_id` (delete-guardado do serving-pool pulado, `registry.py:510-528`/`730-758`).
+
+**Direção de correção (a decidir na retomada):** (a) tratar `suspended` como **retenção da vaga** — no bridge, não
+publicar `agent_done`/decremento no caminho suspended (ou re-`claim` no resume via routing-engine em vez de
+bypass); (b) fazer o **self-heal do bootstrap comparar contra `SCARD(:sessions)`** (fonte de verdade) em vez de
+`active_count`. Avaliar impacto no Arc 19 (webhook suspend/resume legítimo) antes de mexer.
+
+---
 
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR

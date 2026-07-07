@@ -74,6 +74,10 @@ steps:
     interaction: "$.pipeline_state.dialog.render.interaction"
     options: "$.pipeline_state.dialog.render.options"
     visibility: "$.pipeline_state.dialog.render.visibility"
+    # Retry na mesma superfície: validação de FORMATO + reprompt vindos do DialogForm
+    # (undefined quando a pergunta não declara → sem retry, uma única tentativa).
+    validation: "$.pipeline_state.dialog.render.validation"
+    retry: "$.pipeline_state.dialog.render.retry"
     output_as: answers
     timeout_s: 180
     on_success: retornar

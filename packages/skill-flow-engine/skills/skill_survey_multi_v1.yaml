@@ -58,6 +58,9 @@ steps:
     interaction: "$.pipeline_state.q_atual.interaction"
     options: "$.pipeline_state.q_atual.options"
     visibility: "$.pipeline_state.q_atual.visibility"
+    # Retry por pergunta: validação de formato + reprompt da pergunta atual.
+    validation: "$.pipeline_state.q_atual.validation"
+    retry: "$.pipeline_state.q_atual.retry"
     output_as: resp
     timeout_s: 300
     on_success: perguntas

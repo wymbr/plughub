@@ -415,6 +415,38 @@ export const MenuStepSchema = z.object({
   /** Chave para armazenar a resposta do cliente em pipeline_state.results */
   output_as: z.string().optional(),
   /**
+   * Validação de FORMATO da resposta escalar (dialog primitive — retry).
+   * Somente formato (numeric/pattern/comprimento/faixa) — NUNCA semântica (código
+   * OTP correto, regra de negócio) que é controle do chamador. União objeto | ref
+   * ($./@ctx.) — o ref traz a validation vinda de um DialogForm via form_get.
+   * Aplicada apenas a interações escalares (não `form`).
+   */
+  validation: z.union([
+    z.object({
+      numeric:    z.boolean().optional(),
+      pattern:    z.string().optional(),
+      min_length: z.number().int().nonnegative().optional(),
+      max_length: z.number().int().nonnegative().optional(),
+      min:        z.number().optional(),
+      max:        z.number().optional(),
+    }),
+    z.string().regex(/^(\$\.|@ctx\.)/, "validation deve ser um objeto ou um ref $./@ctx."),
+  ]).optional(),
+  /**
+   * Reprompt na MESMA superfície quando a validação de formato falha (dialog
+   * primitive — retry). `max_attempts` conta as tentativas totais de coleta; ao
+   * esgotar sem formato válido, o step segue por on_failure. União objeto | ref.
+   * Ausente ⇒ sem retry (uma única tentativa). Reprompt NÃO cobre timeout/
+   * desconexão (esses seguem on_timeout/on_disconnect direto).
+   */
+  retry: z.union([
+    z.object({
+      reprompt:     z.string().min(1),
+      max_attempts: z.number().int().min(1).default(2),
+    }),
+    z.string().regex(/^(\$\.|@ctx\.)/, "retry deve ser um objeto ou um ref $./@ctx."),
+  ]).optional(),
+  /**
    * Visibilidade do prompt enviado antes de aguardar a resposta.
    *   "all"             → prompt entregue ao cliente e a todos os agentes (padrão quando ausente)
    *   "agents_only"     → prompt entregue somente aos agentes; o cliente não vê o prompt.

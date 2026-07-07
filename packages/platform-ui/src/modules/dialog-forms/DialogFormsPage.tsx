@@ -30,10 +30,42 @@ import {
 
 // ── LocalizedText / visibility helpers (single-locale MVP) ────────────────────
 
-function ltToStr(t: LocalizedText | undefined, locale: string): string {
+function ltToStr(t: LocalizedText | undefined, locale: string, defaultLocale: string): string {
   if (t == null) return ''
-  if (typeof t === 'string') return t
-  return t[locale] ?? Object.values(t)[0] ?? ''
+  // A bare string is the text for the DEFAULT locale only — editing any other
+  // locale shows it as untranslated (empty), so translations can be added.
+  if (typeof t === 'string') return locale === defaultLocale ? t : ''
+  return t[locale] ?? ''
+}
+
+/**
+ * Write `value` into `current` at `locale`, preserving other locales. Normalizes
+ * a bare string to a { defaultLocale: text } map first. Collapses back to a bare
+ * string when only the default locale remains (keeps single-locale forms clean /
+ * backward-compatible with the seeds). Empty value removes that locale's entry.
+ */
+function setLt(
+  current: LocalizedText | undefined,
+  locale: string,
+  value: string,
+  defaultLocale: string,
+): LocalizedText {
+  let map: Record<string, string> = {}
+  if (typeof current === 'string') map[defaultLocale] = current
+  else if (current) map = { ...current }
+  if (value === '') delete map[locale]
+  else map[locale] = value
+  const keys = Object.keys(map)
+  if (keys.length === 0) return ''
+  if (keys.length === 1 && keys[0] === defaultLocale) return map[defaultLocale]!
+  return map
+}
+
+/** True when this LocalizedText has no entry for `locale` (untranslated). */
+function ltMissing(t: LocalizedText | undefined, locale: string, defaultLocale: string): boolean {
+  if (t == null) return true
+  if (typeof t === 'string') return locale !== defaultLocale
+  return t[locale] === undefined || t[locale] === ''
 }
 
 type VisSelect = 'all' | 'agents_only' | 'customer'
@@ -79,6 +111,13 @@ const DialogFormsPage: React.FC = () => {
   const [isNew, setIsNew]     = useState(false)
   const [busy, setBusy]       = useState(false)
   const [msg, setMsg]         = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  // Which locale the editor is currently editing (multi-locale). Resets to the
+  // form's default_locale whenever a different form is opened.
+  const [editLocale, setEditLocale] = useState('pt-BR')
+  useEffect(() => {
+    if (draft) setEditLocale(draft.default_locale || 'pt-BR')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.form_id])
 
   const openNew = () => { setDraft(emptyForm('pt-BR')); setIsNew(true); setMsg(null) }
 
@@ -94,6 +133,21 @@ const DialogFormsPage: React.FC = () => {
 
   const patch = (p: Partial<DialogForm>) => setDraft(d => (d ? { ...d, ...p } : d))
   const setNodes = (nodes: DialogNode[]) => patch({ nodes })
+
+  // ── Locale management (multi-locale) ──────────────────────────────────────
+  const localeList = draft ? (draft.locales?.length ? draft.locales : [draft.default_locale]) : []
+  const addLocale = (loc: string) => {
+    if (!draft) return
+    const l = loc.trim()
+    if (!l || localeList.includes(l)) return
+    patch({ locales: [...localeList, l] })
+    setEditLocale(l)
+  }
+  const removeLocale = (loc: string) => {
+    if (!draft || loc === draft.default_locale) return
+    patch({ locales: localeList.filter(x => x !== loc) })
+    if (editLocale === loc) setEditLocale(draft.default_locale)
+  }
 
   const addNode = (n: DialogNode) => draft && setNodes([...draft.nodes, n])
   const updateNode = (idx: number, n: DialogNode) => {
@@ -120,7 +174,8 @@ const DialogFormsPage: React.FC = () => {
       name: draft.name,
       description: draft.description,
       default_locale: draft.default_locale || 'pt-BR',
-      locales: draft.locales?.length ? draft.locales : [draft.default_locale || 'pt-BR'],
+      // default_locale must always be part of locales[]
+      locales: Array.from(new Set([draft.default_locale || 'pt-BR', ...(draft.locales ?? [])])),
       nodes: draft.nodes,
       tags: draft.tags ?? [],
     }
@@ -206,6 +261,16 @@ const DialogFormsPage: React.FC = () => {
               </label>
             </div>
 
+            {/* locale bar (multi-locale) */}
+            <LocaleBar
+              locales={localeList}
+              defaultLocale={draft.default_locale}
+              editLocale={editLocale}
+              onSelect={setEditLocale}
+              onAdd={addLocale}
+              onRemove={removeLocale}
+            />
+
             {/* nodes */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
@@ -219,7 +284,7 @@ const DialogFormsPage: React.FC = () => {
 
               {draft.nodes.map((node, idx) => (
                 <NodeCard key={node.id} node={node} idx={idx} total={draft.nodes.length}
-                  locale={draft.default_locale}
+                  locale={editLocale} defaultLocale={draft.default_locale}
                   onChange={n => updateNode(idx, n)}
                   onRemove={() => removeNode(idx)}
                   onMove={dir => moveNode(idx, dir)} />
@@ -256,20 +321,28 @@ interface NodeCardProps {
   idx: number
   total: number
   locale: string
+  defaultLocale: string
   onChange: (n: DialogNode) => void
   onRemove: () => void
   onMove: (dir: -1 | 1) => void
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, idx, total, locale, onChange, onRemove, onMove }) => {
+const NodeCard: React.FC<NodeCardProps> = ({ node, idx, total, locale, defaultLocale, onChange, onRemove, onMove }) => {
   const { t } = useTranslation('dialogForms')
   const isQ = node.kind === 'question'
+  const primaryText = node.kind === 'statement' ? node.text : node.prompt
+  const untranslated = locale !== defaultLocale && ltMissing(primaryText, locale, defaultLocale)
   return (
     <div className="border rounded-lg p-3 bg-gray-50 space-y-2">
       <div className="flex items-center gap-2">
         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded ${isQ ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-600'}`}>
           {isQ ? t('node.question') : t('node.statement')}
         </span>
+        {untranslated && (
+          <span className="text-[10px] text-amber-600 flex items-center gap-1" title={t('locale.untranslated')}>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" /> {locale}
+          </span>
+        )}
         <input value={node.id} onChange={e => onChange({ ...node, id: e.target.value })}
           className="text-xs border rounded px-2 py-0.5 w-40 bg-white" />
         <div className="flex-1" />
@@ -279,24 +352,24 @@ const NodeCard: React.FC<NodeCardProps> = ({ node, idx, total, locale, onChange,
       </div>
 
       {node.kind === 'statement' && (
-        <StatementEditor node={node} locale={locale} onChange={onChange} />
+        <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} onChange={onChange} />
       )}
       {node.kind === 'question' && (
-        <QuestionEditor node={node} locale={locale} onChange={onChange} />
+        <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} onChange={onChange} />
       )}
     </div>
   )
 }
 
-const StatementEditor: React.FC<{ node: StatementNode; locale: string; onChange: (n: DialogNode) => void }> =
-({ node, locale, onChange }) => {
+const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLocale: string; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, onChange }) => {
   const { t } = useTranslation('dialogForms')
   return (
   <div className="space-y-2">
     <label className="block text-xs text-gray-600">
       {t('field.text')}
-      <textarea value={ltToStr(node.text, locale)} rows={2}
-        onChange={e => onChange({ ...node, text: e.target.value })}
+      <textarea value={ltToStr(node.text, locale, defaultLocale)} rows={2}
+        onChange={e => onChange({ ...node, text: setLt(node.text, locale, e.target.value, defaultLocale) })}
         className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
     </label>
     <VisibilityRow value={node.visibility}
@@ -305,16 +378,16 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; onChange:
   )
 }
 
-const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; onChange: (n: DialogNode) => void }> =
-({ node, locale, onChange }) => {
+const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, onChange }) => {
   const { t } = useTranslation('dialogForms')
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
     <div className="space-y-2">
       <label className="block text-xs text-gray-600">
         {t('field.prompt')}
-        <textarea value={ltToStr(node.prompt, locale)} rows={2}
-          onChange={e => onChange({ ...node, prompt: e.target.value })}
+        <textarea value={ltToStr(node.prompt, locale, defaultLocale)} rows={2}
+          onChange={e => onChange({ ...node, prompt: setLt(node.prompt, locale, e.target.value, defaultLocale) })}
           className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
       </label>
       <div className="grid grid-cols-3 gap-2">
@@ -372,8 +445,8 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; onChange: (
               <input value={opt.id} placeholder="id"
                 onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i], id: e.target.value }; setOptions(o) }}
                 className="w-24 border rounded px-2 py-0.5 text-xs bg-white" />
-              <input value={ltToStr(opt.label, locale)} placeholder={t('field.label')}
-                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i], label: e.target.value }; setOptions(o) }}
+              <input value={ltToStr(opt.label, locale, defaultLocale)} placeholder={t('field.label')}
+                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i], label: setLt(o[i]!.label, locale, e.target.value, defaultLocale) }; setOptions(o) }}
                 className="flex-1 border rounded px-2 py-0.5 text-xs bg-white" />
               <button onClick={() => setOptions((node.options ?? []).filter((_, k) => k !== i))}
                 className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
@@ -398,6 +471,45 @@ const VisibilityRow: React.FC<{ value: DialogVisibility | undefined; onChange: (
       <option value="agents_only">{t('vis.agentsOnly')}</option>
     </select>
   </label>
+  )
+}
+
+// ── Locale bar (multi-locale) ───────────────────────────────────────────────
+
+const LocaleBar: React.FC<{
+  locales:       string[]
+  defaultLocale: string
+  editLocale:    string
+  onSelect:      (l: string) => void
+  onAdd:         (l: string) => void
+  onRemove:      (l: string) => void
+}> = ({ locales, defaultLocale, editLocale, onSelect, onAdd, onRemove }) => {
+  const { t } = useTranslation('dialogForms')
+  const [adding, setAdding] = useState('')
+  const commit = () => { onAdd(adding); setAdding('') }
+  return (
+    <div className="flex items-center flex-wrap gap-2 border rounded-lg bg-gray-50 px-3 py-2">
+      <span className="text-xs text-gray-500">{t('locale.editing')}</span>
+      {locales.map(l => (
+        <span key={l}
+          className={`inline-flex items-center gap-1 text-xs rounded px-2 py-0.5 border cursor-pointer ${
+            l === editLocale ? 'bg-blue-700 text-white border-blue-700' : 'bg-white text-gray-700 hover:bg-gray-100'
+          }`}>
+          <button onClick={() => onSelect(l)}>{l}{l === defaultLocale ? ` · ${t('locale.default')}` : ''}</button>
+          {l !== defaultLocale && (
+            <button onClick={() => onRemove(l)}
+              className={l === editLocale ? 'text-blue-100 hover:text-white' : 'text-gray-400 hover:text-red-600'}
+              title={t('locale.remove')}>×</button>
+          )}
+        </span>
+      ))}
+      <input value={adding} onChange={e => setAdding(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit() } }}
+        placeholder={t('locale.addPlaceholder')}
+        className="w-24 border rounded px-2 py-0.5 text-xs bg-white" />
+      <button onClick={commit} disabled={!adding.trim()}
+        className="text-xs border px-2 py-0.5 rounded hover:bg-white disabled:opacity-40">+ {t('locale.add')}</button>
+    </div>
   )
 }
 

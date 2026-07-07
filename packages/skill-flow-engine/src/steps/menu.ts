@@ -69,6 +69,51 @@ async function resolveDynamicValue(
   return value
 }
 
+// ── Dialog primitive — retry on format failure ────────────────────────────────
+// validation/retry may be a literal object OR a $./@ctx. ref (from a DialogForm
+// render). Format-only (numeric/pattern/length/range) — never semantic. Applied
+// to the scalar answer of non-`form` interactions; `form` (multi-field) is skipped.
+interface MenuValidation {
+  numeric?:    boolean
+  pattern?:    string
+  min_length?: number
+  max_length?: number
+  min?:        number
+  max?:        number
+}
+interface MenuRetry { reprompt: string; max_attempts: number }
+
+async function resolveObjectRef<T>(
+  value:        unknown,
+  ctx:          StepContext,
+  contextStore: StepContext["contextStore"],
+): Promise<T | undefined> {
+  if (value == null) return undefined
+  const resolved =
+    typeof value === "string" && REF_PREFIX.test(value)
+      ? await resolveInputValue(value, ctx, contextStore)
+      : value
+  return resolved && typeof resolved === "object" ? (resolved as T) : undefined
+}
+
+/** True when the scalar answer satisfies the format validation. Empty rules ⇒ pass. */
+function validateFormat(value: string, v: MenuValidation): boolean {
+  const s = value ?? ""
+  if (v.numeric && (s.trim() === "" || Number.isNaN(Number(s)))) return false
+  if (v.pattern) {
+    try { if (!new RegExp(v.pattern).test(s)) return false } catch { /* invalid regex → skip */ }
+  }
+  if (v.min_length !== undefined && s.length < v.min_length) return false
+  if (v.max_length !== undefined && s.length > v.max_length) return false
+  if (v.min !== undefined || v.max !== undefined) {
+    const n = Number(s)
+    if (Number.isNaN(n)) return false
+    if (v.min !== undefined && n < v.min) return false
+    if (v.max !== undefined && n > v.max) return false
+  }
+  return true
+}
+
 export async function executeMenu(
   step: MenuStep,
   ctx:  StepContext
@@ -91,6 +136,16 @@ export async function executeMenu(
   // §17.3-2 — resolve options/fields (static array or runtime ref) to concrete arrays.
   const resolvedOptions = await resolveMenuArray<MenuOption>(step.options, ctx, ctx.contextStore)
   const resolvedFields  = await resolveMenuArray<MenuField>(step.fields, ctx, ctx.contextStore)
+  // Retry — resolve format validation + reprompt (literal or ref). Absent ⇒ no retry.
+  const resolvedValidation = await resolveObjectRef<MenuValidation>(step.validation, ctx, ctx.contextStore)
+  const resolvedRetry      = await resolveObjectRef<MenuRetry>(step.retry, ctx, ctx.contextStore)
+  const maxAttempts =
+    resolvedRetry && typeof resolvedRetry.max_attempts === "number" && resolvedRetry.max_attempts >= 1
+      ? resolvedRetry.max_attempts
+      : 1
+  // Retry only makes sense for scalar answers with a validation rule.
+  const retryEnabled =
+    maxAttempts > 1 && !!resolvedValidation && resolvedInteraction !== "form"
   // Computa a lista de IDs mascarados usando a política centralizada.
   // Declarado fora do try para que waitingMeta (abaixo) possa referenciá-lo.
   // Para interações sem fields[] (text, button, list), usa o output_as/step.id como
@@ -230,57 +285,107 @@ export async function executeMenu(
   //    Para menus infinitos, on_disconnect é a saída natural quando a sessão expira.
   try {
     const blpopTimeout = isInfinite ? 0 : timeoutSec
-    const result = await ctx.redis.blpop([resultKey, closedKey], blpopTimeout)
+    let value: string
+    let attempt = 0
 
-    if (result === null) {
-      // Timeout — nenhuma resposta e nenhuma desconexão dentro de timeout_s
-      // (result === null nunca ocorre quando timeout_s = 0 / BLPOP com timeout 0)
-      return {
-        next_step_id:      step.on_timeout ?? step.on_failure,
-        transition_reason: "on_failure",
-      }
-    }
-
-    const [key, value] = result
-
-    if (key === closedKey) {
-      // Cliente desconectou durante a espera
-      return {
-        next_step_id:      step.on_disconnect ?? step.on_failure,
-        transition_reason: "on_failure",
-      }
-    }
-
-    // ── @mention command interrupts ─────────────────────────────────────────
-    // The mention_command_dispatch BPM tool may LPUSH a special JSON payload to
-    // menu:result:{sessionId} to interrupt a blocked menu step:
-    //   { "_mention_trigger_step": "step_id" }  — jump to a specific step
-    //   { "_mention_terminate": true }           — agent should exit the conference
-    //
-    // These interrupts are injected only by the orchestrator bridge, never by clients.
-    if (key === resultKey) {
-      try {
-        const parsed = JSON.parse(value) as Record<string, unknown>
-        if (typeof parsed["_mention_trigger_step"] === "string") {
-          // trigger_step: jump to the declared step
-          return {
-            next_step_id:      parsed["_mention_trigger_step"],
-            transition_reason: "on_success",
-          }
+    // ── Retry loop (dialog primitive) ───────────────────────────────────────
+    // Repete SOMENTE quando o cliente respondeu com formato inválido (reprompt na
+    // mesma superfície). Timeout, desconexão e interrupts de @mention saem direto.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      attempt++
+      // Renova o lock antes de re-esperar (retries podem somar mais que timeout_s).
+      if (attempt > 1 && ctx.renewLock) {
+        const stillHeld = await ctx.renewLock(timeoutSec + 60)
+        if (!stillHeld) {
+          return { next_step_id: step.on_failure, transition_reason: "on_failure" }
         }
-        if (parsed["_mention_terminate"] === true) {
-          // terminate_self: return on_failure so the engine cleans up
-          return {
-            next_step_id:      step.on_failure,
-            transition_reason: "on_failure",
-          }
-        }
-      } catch {
-        // Not a JSON object — normal string response from the client; fall through
       }
+
+      const result = await ctx.redis.blpop([resultKey, closedKey], blpopTimeout)
+
+      if (result === null) {
+        // Timeout — nenhuma resposta e nenhuma desconexão dentro de timeout_s
+        // (result === null nunca ocorre quando timeout_s = 0 / BLPOP com timeout 0)
+        return {
+          next_step_id:      step.on_timeout ?? step.on_failure,
+          transition_reason: "on_failure",
+        }
+      }
+
+      const [key, raw] = result
+
+      if (key === closedKey) {
+        // Cliente desconectou durante a espera
+        return {
+          next_step_id:      step.on_disconnect ?? step.on_failure,
+          transition_reason: "on_failure",
+        }
+      }
+
+      // ── @mention command interrupts ───────────────────────────────────────
+      // The mention_command_dispatch BPM tool may LPUSH a special JSON payload to
+      // menu:result:{sessionId} to interrupt a blocked menu step:
+      //   { "_mention_trigger_step": "step_id" }  — jump to a specific step
+      //   { "_mention_terminate": true }           — agent should exit the conference
+      //
+      // These interrupts are injected only by the orchestrator bridge, never by clients.
+      if (key === resultKey) {
+        try {
+          const parsed = JSON.parse(raw) as Record<string, unknown>
+          if (typeof parsed["_mention_trigger_step"] === "string") {
+            // trigger_step: jump to the declared step
+            return {
+              next_step_id:      parsed["_mention_trigger_step"],
+              transition_reason: "on_success",
+            }
+          }
+          if (parsed["_mention_terminate"] === true) {
+            // terminate_self: return on_failure so the engine cleans up
+            return {
+              next_step_id:      step.on_failure,
+              transition_reason: "on_failure",
+            }
+          }
+        } catch {
+          // Not a JSON object — normal string response from the client; fall through
+        }
+      }
+
+      // Cliente respondeu com `raw`. Gate de retry: formato apenas, escalar.
+      if (retryEnabled && resolvedValidation && !validateFormat(raw, resolvedValidation)) {
+        if (attempt >= maxAttempts) {
+          // Formato nunca satisfeito dentro de max_attempts → falha (chamador decide).
+          return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+        }
+        // Reprompt na mesma superfície e espera de novo.
+        try {
+          await ctx.mcpCall("notification_send", {
+            session_id: ctx.sessionId,
+            message:    resolvedRetry!.reprompt,
+            channel:    "session",
+            visibility: resolvedVisibility,
+            ...(ctx.segmentId ? { segment_id: ctx.segmentId } : {}),
+            ...(ctx.instanceId ? { instance_id: ctx.instanceId } : {}),
+            menu: {
+              interaction:   resolvedInteraction,
+              options:       resolvedOptions,
+              fields:        resolvedFields,
+              masked_fields: maskedFieldIds.length > 0 ? maskedFieldIds : undefined,
+            },
+          })
+        } catch {
+          return { next_step_id: step.on_failure, transition_reason: "on_failure" }
+        }
+        continue
+      }
+
+      // Formato ok (ou sem validação) — sai do loop com o valor coletado.
+      value = raw
+      break
     }
 
-    // key === resultKey — cliente respondeu
+    // cliente respondeu
     // ── Masked input handling ───────────────────────────────────────────
     // Se o step ou algum de seus campos têm masked:true, os valores sensíveis
     // devem ir para ctx.maskedScope — nunca para pipeline_state.results.

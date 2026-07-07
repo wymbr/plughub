@@ -923,7 +923,9 @@ hook `on_contact_end`, **inline**, form `dialog_nps_buttons` botões 0-10 custom
 (aninhar no collector = colisão de `session.delegate_resume_token`, rejeitado).
 
 **Editor ✅:** `/config/dialog-forms` (platform-ui, grupo Configuração) — cria/edita/publica DialogForms via
-`dialog-api` (proxy `/v1/dialog`). Fecha a dívida "form = dado do tenant, UI-editável". MVP locale único.
+`dialog-api` (proxy `/v1/dialog`). Fecha a dívida "form = dado do tenant, UI-editável". **Multi-locale ✅**
+(LocaleBar + `setLt`/`ltToStr` sobre `LocalizedText`; string pura = só o `default_locale`; indicador
+"sem tradução" por nó). Refinamentos de UX/completude → `TODO.md` § "Revisão do editor de diálogos".
 
 **Loop ✅:** step `loop` (N perguntas sequenciais em canal pobre) — `dialog_survey_multi_v1` +
 `skill_survey_multi_v1` (pool `survey_multi_ia`). Item atual em path fixo (sem índice variável), contador tipo
@@ -934,11 +936,14 @@ hook `on_contact_end`, **inline**, form `dialog_nps_buttons` botões 0-10 custom
 `create` (token Redis). **Três superfícies, um conteúdo:** chat (runner) · inline (hook) · página web. Entrega
 real do link (SMS/e-mail) = trilha à parte.
 
-**Fatia 2 (pendente):** `retry.max_attempts` pleno por pergunta (contador de tentativas sobre o mesmo
-mecanismo); `channel_policy: elect`; plumbing `$.config` bridge→slot; timeout dinâmico do runner; multi-locale +
-preview no editor; entrega real do link web (provedor SMS/e-mail). **Follow-up de demo-infra:** vazamento de
-instância no `portabilidade_ia` (delegate-wait do OTP deixa sessão fantasma no tracking do bridge → instância
-nasce `busy`; reset no Redis não segura).
+**Retry por formato ✅:** `MenuStep` ganhou `validation`+`retry` (união objeto|ref); o step `menu` faz reprompt
+na mesma superfície em falha de FORMATO (numeric/pattern/faixa/comprimento), honra `max_attempts`, esgota→
+`on_failure`. Só escalar; timeout/desconexão/@mention não são retry. Semântica (código OTP) segue no chamador.
+
+**Fatia 2 (pendente):** `channel_policy: elect`; plumbing `$.config` bridge→slot; timeout dinâmico do runner;
+multi-locale + preview no editor; entrega real do link web (provedor SMS/e-mail). **Follow-up de demo-infra:**
+vazamento de instância no `portabilidade_ia` (delegate-wait do OTP deixa sessão fantasma no tracking do bridge →
+instância nasce `busy`; reset no Redis não segura).
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
 [`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)

@@ -42,6 +42,8 @@ interface RenderField {
   id: string; label: string; type: string; required: boolean; masked: boolean
 }
 interface RenderOption { id: string; label: string }
+// Retry affordance flattened for the menu step: reprompt localized, counter fixed.
+interface RenderRetry { reprompt: string; max_attempts: number }
 interface RenderQuestion {
   prompt:      string
   interaction: string
@@ -49,6 +51,8 @@ interface RenderQuestion {
   output_key:  string
   capture:     unknown
   visibility:  unknown
+  validation:  unknown               // format-only validation (numeric/pattern/…) or undefined
+  retry:       RenderRetry | undefined  // reprompt (localized) + max_attempts, or undefined
 }
 interface DialogRender {
   // §17.4 — single-question NATIVE view (the v1 render the runner uses):
@@ -57,6 +61,8 @@ interface DialogRender {
   options:     RenderOption[]         // the question's options (localized labels), for button/list
   output_key:  string                 // where the raw answer keys (domain reads payload.value)
   visibility:  unknown                // the question's visibility (enum|array with @ctx refs) or "all"
+  validation:  unknown                // the question's format validation, or undefined
+  retry:       RenderRetry | undefined // the question's retry (reprompt localized + max_attempts)
   // Fatia 2 loop view: one entry per question (walked sequentially by a `loop` step).
   questions:       RenderQuestion[]
   // Legacy/multi-field view (interaction=form): one field per question.
@@ -64,6 +70,15 @@ interface DialogRender {
   fields:          RenderField[]
   statement_after: string
   captures:        Record<string, unknown>
+}
+
+// Flatten a question's retry (LocalizedText reprompt → string) for the menu step.
+function flattenRetry(q: QuestionNode, locale: string | undefined, dl: string): RenderRetry | undefined {
+  if (!q.retry) return undefined
+  return {
+    reprompt:     resolveLocalizedText(q.retry.reprompt, locale, dl),
+    max_attempts: q.retry.max_attempts,
+  }
 }
 
 function buildRender(form: DialogForm, locale?: string): DialogRender {
@@ -100,6 +115,8 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
         output_key:  node.output_key,
         capture:     node.capture ?? {},
         visibility:  node.visibility ?? "all",
+        validation:  node.validation,
+        retry:       flattenRetry(node, locale, dl),
       })
       captures[node.output_key] = node.capture ?? {}
     }
@@ -120,6 +137,8 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
     options,
     output_key:  q?.output_key ?? "value",
     visibility:  q?.visibility ?? "all",
+    validation:  q?.validation,
+    retry:       q ? flattenRetry(q, locale, dl) : undefined,
     questions,
     menu_prompt: before.join("\n\n") || qPrompt,
     fields,

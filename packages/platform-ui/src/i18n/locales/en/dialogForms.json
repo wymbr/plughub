@@ -32,6 +32,14 @@
     "customer": "Customer only",
     "agentsOnly": "Agents only"
   },
+  "locale": {
+    "editing": "Editing language:",
+    "default": "default",
+    "add": "Language",
+    "addPlaceholder": "e.g. en",
+    "remove": "Remove language",
+    "untranslated": "No translation for this language"
+  },
   "action": {
     "saveDraft": "Save draft",
     "publish": "Publish"

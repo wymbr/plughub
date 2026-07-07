@@ -2,6 +2,60 @@
 
 ---
 
+## Primitivo de diálogo — editor multi-locale (`/config/dialog-forms`) (2026-07-07)
+
+O editor de DialogForms passou de single-locale (texto editado como string pura) para **multi-locale**: um
+form pode carregar traduções embutidas (`LocalizedText = {locale: texto}`) editáveis pela UI. Fecha a lacuna
+"forms multi-idioma só via seed/JSON". Validado: `nodes[].prompt` grava `{"pt-BR":…,"en":…}` e `locales`
+carrega os dois; trocar de idioma preserva os demais.
+
+**Entregue (`DialogFormsPage.tsx` + i18n):**
+- **LocaleBar** — chips por idioma (do `locales[]`), clique seleciona o **idioma em edição**, `+ Idioma`
+  adiciona, `×` remove (menos o `default_locale`, que fica marcado).
+- **`setLt`** — grava o valor no idioma em edição preservando os demais; converte string↔mapa e **colapsa**
+  para string pura quando só o `default_locale` resta (mantém os seeds single-locale limpos).
+- **`ltToStr(t, locale, defaultLocale)`** — uma **string pura pertence só ao `default_locale`**; editando outro
+  idioma o campo aparece vazio (untranslated). Corrige o bug de o texto default "reaparecer" ao limpar o campo
+  de outro idioma (o colapso para string era exibido em qualquer idioma).
+- **Indicador "sem tradução"** — ponto âmbar + código do idioma no cabeçalho do nó quando o texto principal
+  falta no idioma em edição; save garante `default_locale ∈ locales[]`. Aplica a `text`/`prompt`/`labels`.
+
+**Follow-up (item dedicado no TODO — "Revisão do editor de diálogos"):** passada de UX (nós colapsáveis,
+agrupar validação/retry/opções, edição lado-a-lado, preview, progresso de tradução estável), campo
+`retry.reprompt` no editor, e auth ABAC no write.
+
+---
+
+## Primitivo de diálogo — retry por formato no menu (`validation`+`retry`) (2026-07-07)
+
+Fecha o item de Fatia 2 "`retry.max_attempts` pleno por pergunta". O reprompt acontece na **mesma
+superfície** (o step `menu`), só para falha de **FORMATO** (numeric/pattern/comprimento/faixa) — nunca
+semântica (código OTP correto, regra de negócio), que segue sendo controle do chamador. Validado no demo:
+`abc` → reprompt; `200` (fora de 0–99) → reprompt; `15` → aceito.
+
+**Entregue:**
+- **`schemas/skill.ts`** — `MenuStep` ganhou `validation` (numeric/pattern/min/max/min_length/max_length) +
+  `retry` (reprompt + `max_attempts`), cada um união **objeto | ref** (`$.`/`@ctx.`).
+- **`mcp-server/tools/dialog.ts`** — `form_get`/`buildRender` expõe `validation`+`retry` na view
+  single-question e em cada `questions[]` (loop); `flattenRetry` resolve o reprompt i18n → string.
+- **`skill-flow-engine/steps/menu.ts`** — o BLPOP virou **loop de retry**: valida o escalar após a resposta;
+  formato inválido + tentativas restantes → reenvia o `reprompt` e re-bloqueia (renova o lock a cada volta);
+  esgotou `max_attempts` → `on_failure`. Só escalar (`interaction !== "form"`); timeout/desconexão/@mention
+  saem direto (não são retry). `resolveObjectRef` resolve validation/retry ref|literal; `validateFormat`
+  é o gate determinístico.
+- **`skill_dialog_runner_v1.yaml`** + **`skill_survey_multi_v1.yaml`** — o `coletar` passa
+  `validation`/`retry` do render (runner) / da pergunta atual `q_atual` (loop). Seed do survey_multi ganhou
+  uma 3ª pergunta de **texto** com validação numérica 0–99 + retry (prova o reprompt).
+
+**Nota de deploy (aprendida na verificação):** mudar `MenuStepSchema` exige rebuild de **schemas +
+agent-registry + mcp-server-plughub + skill-flow-service** (`--no-cache` se a layer do schemas estiver
+cacheada — o Zod do agent-registry **descarta** campos desconhecidos silenciosamente, então schema velho
+= `validation:null`). Pool slotado (`PoolSkillSlot`) executa o **snapshot do slot `current`**, não o
+`skill.flow` — após editar a skill é preciso **`PUT /v1/pools/:id/slots/next` + `POST …/promote`** (auth por
+header **`x-service-token`**+`x-user-id`, não `Authorization: Bearer`) para re-snapshotar o que o bridge roda.
+
+---
+
 ## Primitivo de diálogo — veículo web (`/survey/:token`) (2026-07-06)
 
 Segundo veículo do primitivo (§9.2/§19): um link tokenizado leva a uma **página pública** que renderiza o
