@@ -23,7 +23,7 @@ import { SentimentBandsEditor }     from './components/SentimentBandsEditor'
 
 // ── Tab definition ─────────────────────────────────────────────────────────────
 
-type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'routing' | 'evaluation'
+type Tab = 'routing_timeouts' | 'consumer' | 'expurgo' | 'sentimento' | 'routing' | 'evaluation' | 'survey'
 
 /** Namespace tabs: each entry defines the API namespace(s) to render */
 const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> = {
@@ -37,6 +37,9 @@ const NS_TABS: Record<string, { namespaces: { ns: string; label?: string }[] }> 
   expurgo:  { namespaces: [{ ns: 'expurgo'  }] },
   // R8e — namespace `evaluation` editável na UI (limiar de divergência, N mínimo, etc.).
   evaluation: { namespaces: [{ ns: 'evaluation' }] },
+  // Survey — catálogo de instrumentos (chave `instruments`: CSAT/NPS/CES/PMF/FCR +
+  // escala/agregação) lido pelo editor de dialog-forms.
+  survey: { namespaces: [{ ns: 'survey' }] },
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -61,6 +64,7 @@ export default function ConfigPlataformaPage() {
     { id: 'consumer',         label: t('tabs.consumer') },
     { id: 'expurgo',          label: t('tabs.dataRetention') },
     { id: 'evaluation',       label: t('tabs.evaluation') },
+    { id: 'survey',           label: t('tabs.survey') },
     { id: 'sentimento',       label: t('tabs.sentimento') },
     { id: 'routing',          label: t('tabs.routing'),   icon: <GitBranch size={13} aria-hidden="true" /> },
   ]
@@ -107,6 +111,7 @@ export default function ConfigPlataformaPage() {
           const descKey = tab === 'routing_timeouts' ? 'routingTimeouts'
                         : tab === 'consumer'          ? 'consumer'
                         : tab === 'evaluation'        ? 'evaluation'
+                        : tab === 'survey'            ? 'survey'
                         : 'dataRetention'
           return (
             <div className="flex flex-col h-full">

@@ -611,6 +611,27 @@ _SEED: list[tuple[str, str, object, str]] = [
         "10.0 = 10x faster batch replay). "
         "Source: session-replayer/consumer.py (was env REPLAY_SPEED_FACTOR)"
     ),
+
+    # ── survey ────────────────────────────────────────────────────────────────────
+    # Instrument catalog (spec §domain: CSAT/NPS/CES/PMF/FCR; OTP is not a survey
+    # instrument). Each entry: id (= the metric key / dimension_id / emitted signal),
+    # label, canonical default scale, default aggregation. Read by the platform-ui
+    # dialog-form editor to drive the instrument type picker + default scale; the
+    # editor falls back to built-in defaults when config-api is unreachable.
+    # Tenant-editable via Config → Platform → Surveys.
+    # Source: platform-ui/modules/dialog-forms/DialogFormsPage.tsx (resolveInstruments)
+    (
+        "survey", "instruments",
+        [
+            {"id": "csat", "label": "CSAT", "scale": {"min": 1, "max": 5},  "aggregation": "weighted_mean"},
+            {"id": "nps",  "label": "NPS",  "scale": {"min": 0, "max": 10}, "aggregation": "weighted_mean"},
+            {"id": "ces",  "label": "CES",  "scale": {"min": 1, "max": 7},  "aggregation": "weighted_mean"},
+            {"id": "pmf",  "label": "PMF",  "scale": {"min": 1, "max": 3},  "aggregation": "weighted_mean"},
+            {"id": "fcr",  "label": "FCR",  "scale": {"min": 0, "max": 1},  "aggregation": "weighted_mean"},
+        ],
+        "Survey instrument catalog: id (metric key = emitted signal), label, default "
+        "scale and aggregation. Drives the dialog-form editor instrument picker."
+    ),
     # R8b/R8e — gatilho de divergência avaliador×humano (Estágio 1).
     (
         "evaluation", "calibration_divergence_threshold",

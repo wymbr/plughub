@@ -13,6 +13,7 @@
     "consumer":        "Consumer Analytics",
     "dataRetention":   "Data Retention",
     "evaluation":      "Evaluation",
+    "survey":          "Surveys",
     "sentimento":      "Sentiment",
     "calendar":        "Calendars",
     "routing":         "Routing Skills"
@@ -21,7 +22,8 @@
     "routingTimeouts": "SLA, snapshot TTL, and component heartbeat TTLs",
     "consumer":        "Kafka consumer settings for analytics-api",
     "dataRetention":   "Retention periods for recordings and attachments",
-    "evaluation":      "Evaluation platform: evaluator pool, replay speed, and calibration divergence trigger (threshold + min sample)"
+    "evaluation":      "Evaluation platform: evaluator pool, replay speed, and calibration divergence trigger (threshold + min sample)",
+    "survey":          "Survey instrument catalog (key `instruments`): CSAT/NPS/CES/PMF/FCR with scale and aggregation, read by the dialog-form editor"
   },
   "namespace": {
     "title":            "Namespaces",

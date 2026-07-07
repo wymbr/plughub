@@ -27,6 +27,36 @@
     "option": "Option",
     "label": "Label"
   },
+  "dimensions": {
+    "title": "Instruments",
+    "hint": "CSAT · NPS · CES · PMF · FCR",
+    "add": "Instrument",
+    "empty": "No instruments — questions record standalone metrics.",
+    "pickType": "Type…",
+    "custom": "Custom",
+    "labelPlaceholder": "Label (e.g. Satisfaction)",
+    "scale": "Scale",
+    "aggregation": "Aggregation",
+    "members": "{{count}} question(s)"
+  },
+  "scoring": {
+    "label": "Scoring",
+    "none": "none (verbatim)",
+    "legacyMetric": "standalone metric",
+    "weight": "weight",
+    "ofDimension": "of {{dim}}"
+  },
+  "blocks": {
+    "title": "Blocks",
+    "add": "block",
+    "empty": "No blocks — add an instrument or a dialog block."
+  },
+  "block": {
+    "dialog": "Dialog",
+    "dialogHint": "no scoring — statements, verbatim, OTP",
+    "weightsAdjust": "equal weights · adjust",
+    "weightsHide": "hide weights"
+  },
   "vis": {
     "all": "Everyone",
     "customer": "Customer only",

@@ -63,6 +63,16 @@ export const DialogValidationSchema = z
   .optional()
 export type DialogValidation = z.infer<typeof DialogValidationSchema>
 
+/** Channel-agnostic response format for a question. Adapter maps to the UI. */
+export const DialogInteractionSchema = z.enum([
+  "text",
+  "button",
+  "list",
+  "checklist",
+  "form",
+])
+export type DialogInteraction = z.infer<typeof DialogInteractionSchema>
+
 // ─────────────────────────────────────────────
 // Declarative capture binding (survey domain)
 // ─────────────────────────────────────────────
@@ -127,6 +137,19 @@ export const DialogDimensionSchema = z.object({
   /** How member questions compose the per-respondent value. Default weighted mean. */
   aggregation: ScoreAggregationSchema.default("weighted_mean"),
   /**
+   * Instrument-level render, inherited by member questions (a scored instrument
+   * is homogeneous). The editor MATERIALIZES this into each scored question's
+   * `interaction`+`options` on save, so the runtime keeps reading them per-node.
+   * Optional — absent means the questions carry their own render (legacy forms).
+   */
+  interaction: DialogInteractionSchema.optional(),
+  /**
+   * Optional anchor label per scale point (length = scale.max − scale.min + 1),
+   * e.g. ["péssimo", …, "ótimo"]. Materialized as the option labels; absent =
+   * the numeric value is the label.
+   */
+  anchors: z.array(LocalizedTextSchema).optional(),
+  /**
    * Reserved for an OPTIONAL future form-level composite (health score) — a
    * roll-up over the parallel dimensions. Unused while dimensions stay parallel
    * (the default). See ADR § Decisões em aberto #1.
@@ -190,15 +213,6 @@ export const StatementNodeSchema = z.object({
   visibility: DialogVisibilitySchema.optional(),
 })
 export type StatementNode = z.infer<typeof StatementNodeSchema>
-
-export const DialogInteractionSchema = z.enum([
-  "text",
-  "button",
-  "list",
-  "checklist",
-  "form",
-])
-export type DialogInteraction = z.infer<typeof DialogInteractionSchema>
 
 /**
  * Retry affordance on the same surface — FORMAT failures only. `max_attempts`

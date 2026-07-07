@@ -13,6 +13,7 @@
     "consumer":        "Consumer Analytics",
     "dataRetention":   "Retenção de Dados",
     "evaluation":      "Avaliação",
+    "survey":          "Pesquisas",
     "sentimento":      "Sentimento",
     "calendar":        "Calendários",
     "routing":         "Roteamento"
@@ -21,7 +22,8 @@
     "routingTimeouts": "SLA, TTL de snapshots e TTLs de heartbeat dos componentes",
     "consumer":        "Configurações do consumer Kafka da analytics-api",
     "dataRetention":   "Períodos de retenção de gravações e anexos",
-    "evaluation":      "Plataforma de avaliação: pool avaliador, velocidade de replay e gatilho de divergência de calibração (limiar + amostra mínima)"
+    "evaluation":      "Plataforma de avaliação: pool avaliador, velocidade de replay e gatilho de divergência de calibração (limiar + amostra mínima)",
+    "survey":          "Catálogo de instrumentos de pesquisa (chave `instruments`): CSAT/NPS/CES/PMF/FCR com escala e agregação, lido pelo editor de formulários de diálogo"
   },
   "namespace": {
     "title":            "Namespaces",

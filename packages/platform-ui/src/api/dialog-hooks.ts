@@ -24,8 +24,40 @@ export interface DialogValidation {
 }
 
 export interface DialogCapture {
+  /** Legacy standalone metric (its own 1-item dimension). */
   metric?: string
+  /** Contributes to a declared DialogForm.dimensions[] entry. */
+  dimension_id?: string
+  /** Weight within its dimension (relative; re-normalized at compose). Default 1. */
+  weight?: number
+  /** Fixed machine value for an option/field (e.g. button "4" → score 4). */
   value?: number | string
+}
+
+/** Numeric scale of an instrument (inherited by member questions). */
+export interface ScoreScale {
+  min?: number
+  max: number
+}
+
+export type ScoreAggregation = 'weighted_mean' | 'min'
+
+/**
+ * A survey instrument (csat, nps, …) composed of one or more questions.
+ * The dimension owns the scale + aggregation; questions bind via
+ * capture.dimension_id + capture.weight. See adr-survey-form-scoring-composition.
+ */
+export interface DialogDimension {
+  dimension_id: string
+  label?: LocalizedText
+  scale: ScoreScale
+  aggregation?: ScoreAggregation
+  /** Instrument-level render, inherited by member questions (materialized on save). */
+  interaction?: DialogInteraction
+  /** Anchor label per scale point (length = max−min+1); absent = numeric label. */
+  anchors?: LocalizedText[]
+  /** Reserved for a future form-level composite (health score). */
+  weight?: number
 }
 
 export interface DialogOption {
@@ -84,6 +116,8 @@ export interface DialogForm {
   default_locale: string
   locales: string[]
   nodes: DialogNode[]
+  /** Composed instruments (survey_definition layer). Empty for plain dialogs. */
+  dimensions?: DialogDimension[]
   tags?: string[]
   created_at?: string
   updated_at?: string
@@ -92,7 +126,7 @@ export interface DialogForm {
 /** Fields the store accepts on create/update (the rest is server-owned). */
 export type DialogFormUpsert = Pick<
   DialogForm,
-  'form_id' | 'name' | 'description' | 'default_locale' | 'locales' | 'nodes' | 'tags'
+  'form_id' | 'name' | 'description' | 'default_locale' | 'locales' | 'nodes' | 'dimensions' | 'tags'
 >
 
 function headers(tenantId: string): Record<string, string> {

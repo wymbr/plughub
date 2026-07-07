@@ -27,6 +27,36 @@
     "option": "Opção",
     "label": "Rótulo"
   },
+  "dimensions": {
+    "title": "Instrumentos",
+    "hint": "CSAT · NPS · CES · PMF · FCR",
+    "add": "Instrumento",
+    "empty": "Nenhum instrumento — perguntas gravam métricas avulsas.",
+    "pickType": "Tipo…",
+    "custom": "Personalizado",
+    "labelPlaceholder": "Rótulo (ex.: Satisfação)",
+    "scale": "Escala",
+    "aggregation": "Agregação",
+    "members": "{{count}} pergunta(s)"
+  },
+  "scoring": {
+    "label": "Pontuação",
+    "none": "nenhum (verbatim)",
+    "legacyMetric": "métrica avulsa",
+    "weight": "peso",
+    "ofDimension": "de {{dim}}"
+  },
+  "blocks": {
+    "title": "Blocos",
+    "add": "bloco",
+    "empty": "Nenhum bloco — adicione um instrumento ou um bloco de diálogo."
+  },
+  "block": {
+    "dialog": "Diálogo",
+    "dialogHint": "sem pontuação — falas, verbatim, OTP",
+    "weightsAdjust": "pesos iguais · ajustar",
+    "weightsHide": "ocultar pesos"
+  },
   "vis": {
     "all": "Todos",
     "customer": "Só o cliente",
@@ -50,6 +80,7 @@
   },
   "err": {
     "formIdRequired": "Informe o ID do formulário.",
-    "nodesRequired": "Adicione ao menos um nó."
+    "nodesRequired": "Adicione ao menos um nó.",
+    "instrumentType": "Todo bloco de instrumento precisa de um tipo (CSAT/NPS/…) ou chave personalizada."
   }
 }
