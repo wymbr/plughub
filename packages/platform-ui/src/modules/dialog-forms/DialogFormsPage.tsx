@@ -71,7 +71,7 @@ function selectToVis(s: VisSelect): DialogVisibility | undefined {
 }
 
 const INTERACTIONS: DialogInteraction[] = ['text', 'button', 'list', 'checklist', 'form']
-const HAS_OPTIONS = (i: DialogInteraction) => i === 'button' || i === 'list' || i === 'checklist'
+const HAS_OPTIONS = (i?: DialogInteraction) => i === 'button' || i === 'list' || i === 'checklist'
 
 let _seq = 0
 const nid = (p: string) => `${p}_${Date.now().toString(36)}${(_seq++).toString(36)}`
@@ -268,13 +268,20 @@ const DialogFormsPage: React.FC = () => {
               </label>
               <label className="text-xs text-gray-600">
                 {t('field.defaultLocale')}
-                <input value={draft.default_locale} onChange={e => patch({ default_locale: e.target.value })}
-                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+                <select value={draft.default_locale} onChange={e => patch({ default_locale: e.target.value })}
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white">
+                  {localeList.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
               </label>
               <label className="text-xs text-gray-600">
                 {t('field.tags')}
                 <input value={(draft.tags ?? []).join(', ')}
                   onChange={e => patch({ tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+                  className="mt-1 w-full border rounded px-2 py-1 text-sm" />
+              </label>
+              <label className="text-xs text-gray-600 col-span-2">
+                {t('field.description')}
+                <input value={draft.description ?? ''} onChange={e => patch({ description: e.target.value || undefined })}
                   className="mt-1 w-full border rounded px-2 py-1 text-sm" />
               </label>
             </div>
@@ -380,6 +387,16 @@ const BlockCard: React.FC<BlockCardProps> = ({
   const updateDim = (p: Partial<NonNullable<typeof dim>>) => {
     if (dim) onChange({ kind: 'instrument', dim: { ...dim, ...p }, nodes: block.nodes })
   }
+  const [showAnchors, setShowAnchors] = useState(false)
+  const scalePoints = dim
+    ? Array.from({ length: Math.max(0, dim.scale.max - (dim.scale.min ?? 0) + 1) }, (_, k) => (dim.scale.min ?? 0) + k)
+    : []
+  const setAnchor = (i: number, val: string) => {
+    if (!dim) return
+    const arr: LocalizedText[] = scalePoints.map((_, k) => dim.anchors?.[k] ?? '')
+    arr[i] = setLt(dim.anchors?.[i], locale, val, defaultLocale)
+    updateDim({ anchors: arr })
+  }
 
   // Weight %, computed within the block
   const qs = block.nodes.filter((n): n is QuestionNode => n.kind === 'question')
@@ -422,6 +439,12 @@ const BlockCard: React.FC<BlockCardProps> = ({
               className="border rounded px-1 py-0.5 text-xs bg-white">
               {AGGREGATIONS.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
+            <span className="text-xs text-gray-500">{t('field.interaction')}</span>
+            <select value={dim!.interaction ?? 'button'}
+              onChange={e => updateDim({ interaction: e.target.value as DialogInteraction })}
+              className="border rounded px-1 py-0.5 text-xs bg-white">
+              {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
           </>
         ) : (
           <span className="flex-1 text-xs text-gray-400">{t('block.dialogHint')}</span>
@@ -431,11 +454,32 @@ const BlockCard: React.FC<BlockCardProps> = ({
         <button onClick={onRemove} className="text-red-400 hover:text-red-600"><Trash2 size={15} /></button>
       </div>
 
+      {/* anchors (scale-point labels) — instrument with option-based render */}
+      {isInstrument && dim!.interaction && HAS_OPTIONS(dim!.interaction) && (
+        <div className="pl-2 text-xs text-gray-600">
+          <button onClick={() => setShowAnchors(s => !s)} className="text-gray-500 hover:text-gray-800">
+            {showAnchors ? '−' : '+'} {t('block.anchors')}
+          </button>
+          {showAnchors && (
+            <div className="flex flex-wrap gap-2 mt-1">
+              {scalePoints.map((v, i) => (
+                <div key={v} className="flex items-center gap-1">
+                  <span className="text-gray-400 w-4 text-right">{v}</span>
+                  <input value={ltToStr(dim!.anchors?.[i], locale, defaultLocale)} placeholder={String(v)}
+                    onChange={e => setAnchor(i, e.target.value)}
+                    className="w-24 border rounded px-1 py-0.5 bg-white" />
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* nodes */}
       <div className="space-y-1.5 pl-2 border-l-2 border-gray-100">
         {block.nodes.map((node, i) => (
           <NodeRow key={node.id} node={node} first={i === 0} last={i === block.nodes.length - 1}
-            locale={locale} defaultLocale={defaultLocale}
+            locale={locale} defaultLocale={defaultLocale} scored={isInstrument}
             expanded={expanded.has(node.id)} onToggle={() => onToggleExpand(node.id)}
             showWeight={isInstrument && adjust} pct={node.kind === 'question' ? pctOf(node) : 0}
             onChange={n => updateNode(i, n)} onRemove={() => removeNode(i)} onMove={dir => moveNode(i, dir)} />
@@ -460,10 +504,10 @@ const BlockCard: React.FC<BlockCardProps> = ({
 // ── Node row (collapsed summary + expandable editor) ────────────────────────────
 
 const NodeRow: React.FC<{
-  node: DialogNode; first: boolean; last: boolean; locale: string; defaultLocale: string
+  node: DialogNode; first: boolean; last: boolean; locale: string; defaultLocale: string; scored: boolean
   expanded: boolean; onToggle: () => void; showWeight: boolean; pct: number
   onChange: (n: DialogNode) => void; onRemove: () => void; onMove: (dir: -1 | 1) => void
-}> = ({ node, first, last, locale, defaultLocale, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
+}> = ({ node, first, last, locale, defaultLocale, scored, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
   const { t } = useTranslation('dialogForms')
   const isQ = node.kind === 'question'
   const summary = ltToStr(node.kind === 'question' ? node.prompt : node.text, locale, defaultLocale)
@@ -495,7 +539,7 @@ const NodeRow: React.FC<{
         <div className="px-3 pb-2">
           {node.kind === 'statement'
             ? <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} onChange={onChange} />
-            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} onChange={onChange} />}
+            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} onChange={onChange} />}
         </div>
       )}
     </div>
@@ -518,8 +562,8 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
   )
 }
 
-const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; onChange: (n: DialogNode) => void }> =
-({ node, locale, defaultLocale, onChange }) => {
+const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, scored, onChange }) => {
   const { t } = useTranslation('dialogForms')
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
@@ -531,14 +575,18 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
           className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
       </label>
       <div className="grid grid-cols-2 gap-2">
-        <label className="text-xs text-gray-600">
-          {t('field.interaction')}
-          <select value={node.interaction}
-            onChange={e => onChange({ ...node, interaction: e.target.value as DialogInteraction })}
-            className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white">
-            {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
-          </select>
-        </label>
+        {scored ? (
+          <div className="text-xs text-gray-400 flex items-end pb-1">{t('scoring.renderInherited')}</div>
+        ) : (
+          <label className="text-xs text-gray-600">
+            {t('field.interaction')}
+            <select value={node.interaction}
+              onChange={e => onChange({ ...node, interaction: e.target.value as DialogInteraction })}
+              className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white">
+              {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </label>
+        )}
         <label className="text-xs text-gray-600">
           {t('field.outputKey')}
           <input value={node.output_key} onChange={e => onChange({ ...node, output_key: e.target.value })}
@@ -548,25 +596,65 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
 
       <VisibilityRow value={node.visibility} onChange={v => onChange({ ...node, visibility: v })} />
 
-      {node.interaction === 'text' && (
-        <div className="flex items-center gap-3 text-xs text-gray-600">
+      {!scored && (
+        <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
           <label className="flex items-center gap-1">
-            <input type="checkbox" checked={!!node.validation?.numeric}
-              onChange={e => onChange({ ...node, validation: { ...node.validation, numeric: e.target.checked || undefined } })} />
-            {t('field.numeric')}
+            <input type="checkbox" checked={!!node.masked}
+              onChange={e => onChange({ ...node, masked: e.target.checked || undefined })} />
+            {t('field.masked')}
           </label>
-          <label className="flex items-center gap-1">{t('field.min')}
-            <input type="number" value={node.validation?.min ?? ''} className="w-16 border rounded px-1 py-0.5 bg-white"
-              onChange={e => onChange({ ...node, validation: { ...node.validation, min: e.target.value === '' ? undefined : Number(e.target.value) } })} />
-          </label>
-          <label className="flex items-center gap-1">{t('field.max')}
-            <input type="number" value={node.validation?.max ?? ''} className="w-16 border rounded px-1 py-0.5 bg-white"
-              onChange={e => onChange({ ...node, validation: { ...node.validation, max: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+          <label className="flex items-center gap-1">{t('field.timeout')}
+            <input type="number" value={node.timeout_s ?? ''} className="w-16 border rounded px-1 py-0.5 bg-white"
+              onChange={e => onChange({ ...node, timeout_s: e.target.value === '' ? undefined : Number(e.target.value) })} />
           </label>
         </div>
       )}
 
-      {HAS_OPTIONS(node.interaction) && (
+      {!scored && node.interaction === 'text' && (
+        <div className="space-y-1.5 border-t pt-2">
+          <div className="flex items-center gap-3 text-xs text-gray-600 flex-wrap">
+            <label className="flex items-center gap-1">
+              <input type="checkbox" checked={!!node.validation?.numeric}
+                onChange={e => onChange({ ...node, validation: { ...node.validation, numeric: e.target.checked || undefined } })} />
+              {t('field.numeric')}
+            </label>
+            <label className="flex items-center gap-1">{t('field.min')}
+              <input type="number" value={node.validation?.min ?? ''} className="w-14 border rounded px-1 py-0.5 bg-white"
+                onChange={e => onChange({ ...node, validation: { ...node.validation, min: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+            </label>
+            <label className="flex items-center gap-1">{t('field.max')}
+              <input type="number" value={node.validation?.max ?? ''} className="w-14 border rounded px-1 py-0.5 bg-white"
+                onChange={e => onChange({ ...node, validation: { ...node.validation, max: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+            </label>
+            <label className="flex items-center gap-1">{t('field.minLength')}
+              <input type="number" value={node.validation?.min_length ?? ''} className="w-14 border rounded px-1 py-0.5 bg-white"
+                onChange={e => onChange({ ...node, validation: { ...node.validation, min_length: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+            </label>
+            <label className="flex items-center gap-1">{t('field.maxLength')}
+              <input type="number" value={node.validation?.max_length ?? ''} className="w-14 border rounded px-1 py-0.5 bg-white"
+                onChange={e => onChange({ ...node, validation: { ...node.validation, max_length: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+            </label>
+          </div>
+          <label className="flex items-center gap-1 text-xs text-gray-600">{t('field.pattern')}
+            <input value={node.validation?.pattern ?? ''} placeholder="^[0-9]{6}$"
+              onChange={e => onChange({ ...node, validation: { ...node.validation, pattern: e.target.value || undefined } })}
+              className="flex-1 border rounded px-2 py-0.5 bg-white font-mono" />
+          </label>
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <span>{t('field.retry')}</span>
+            <input value={ltToStr(node.retry?.reprompt, locale, defaultLocale)} placeholder={t('field.repromptPlaceholder')}
+              onChange={e => onChange({ ...node, retry: e.target.value
+                ? { reprompt: setLt(node.retry?.reprompt, locale, e.target.value, defaultLocale), max_attempts: node.retry?.max_attempts }
+                : undefined })}
+              className="flex-1 border rounded px-2 py-0.5 bg-white" />
+            <span>{t('field.maxAttempts')}</span>
+            <input type="number" min={1} value={node.retry?.max_attempts ?? ''} className="w-14 border rounded px-1 py-0.5 bg-white"
+              onChange={e => onChange({ ...node, retry: { reprompt: node.retry?.reprompt ?? '', max_attempts: e.target.value === '' ? undefined : Number(e.target.value) } })} />
+          </div>
+        </div>
+      )}
+
+      {!scored && HAS_OPTIONS(node.interaction) && (
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-gray-600">{t('field.options')}</span>
@@ -581,6 +669,9 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
               <input value={ltToStr(opt.label, locale, defaultLocale)} placeholder={t('field.label')}
                 onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i]!, label: setLt(o[i]!.label, locale, e.target.value, defaultLocale) }; setOptions(o) }}
                 className="flex-1 border rounded px-2 py-0.5 text-xs bg-white" />
+              <input value={opt.value ?? ''} placeholder={t('field.value')}
+                onChange={e => { const o = (node.options ?? []).slice(); o[i] = { ...o[i]!, value: e.target.value || undefined }; setOptions(o) }}
+                className="w-16 border rounded px-2 py-0.5 text-xs bg-white" />
               <button onClick={() => setOptions((node.options ?? []).filter((_, k) => k !== i))}
                 className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
             </div>

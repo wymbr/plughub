@@ -25,7 +25,17 @@
     "max": "Máx",
     "options": "Opções",
     "option": "Opção",
-    "label": "Rótulo"
+    "label": "Rótulo",
+    "value": "Valor",
+    "description": "Descrição",
+    "masked": "Mascarado",
+    "timeout": "Timeout (s)",
+    "minLength": "Mín. car.",
+    "maxLength": "Máx. car.",
+    "pattern": "Padrão (regex)",
+    "retry": "Reprompt",
+    "repromptPlaceholder": "Valor inválido, tente de novo",
+    "maxAttempts": "Tentativas"
   },
   "dimensions": {
     "title": "Instrumentos",
@@ -44,7 +54,8 @@
     "none": "nenhum (verbatim)",
     "legacyMetric": "métrica avulsa",
     "weight": "peso",
-    "ofDimension": "de {{dim}}"
+    "ofDimension": "de {{dim}}",
+    "renderInherited": "formato herdado do instrumento"
   },
   "blocks": {
     "title": "Blocos",
@@ -55,7 +66,8 @@
     "dialog": "Diálogo",
     "dialogHint": "sem pontuação — falas, verbatim, OTP",
     "weightsAdjust": "pesos iguais · ajustar",
-    "weightsHide": "ocultar pesos"
+    "weightsHide": "ocultar pesos",
+    "anchors": "rótulos da escala"
   },
   "vis": {
     "all": "Todos",

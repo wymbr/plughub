@@ -128,25 +128,20 @@ via `set-next`+`promote` com auth `x-service-token`).
   renderiza o mesmo `DialogForm` e grava via `session.signals`, snapshot no `create`); falta só a **entrega
   outbound** do link — mesma trilha do "item 1" do OTP (provedor externo). §9.2/§19 de customer-surveys.
 
-### Revisão do editor de diálogos (UX + completude) — `/config/dialog-forms` *(item dedicado)*
+### Revisão do editor de diálogos (UX + completude) — `/config/dialog-forms` ✅ parcial (2026-07-07)
 
-O editor (`DialogFormsPage.tsx`) é um MVP **funcional mas denso** — cria/edita/publica DialogForms e já suporta
-multi-locale, mas a usabilidade e a completude de campos precisam de uma passada dedicada. Escopo proposto:
+Reformado para o **modelo de blocos** (instrumento pontuado vs. Diálogo sem nota) — ver CHANGELOG
+"Editor de dialog-forms por blocos". **Feito:** nós colapsáveis; completude toda (`retry` reprompt+max_attempts,
+`min_length`/`max_length`/`pattern`, `masked`, `timeout_s`, `value` por opção); validação/opções escondidas em
+pergunta pontuada (herda do instrumento) e nos blocos de Diálogo aparecem por-pergunta; `description` +
+`default_locale` como select; catálogo de instrumentos em config-api.
 
-- **Layout / densidade:** nós **colapsáveis** (hoje tudo expandido = parede de campos); resumo por nó (tipo +
-  1ª linha do prompt) quando colapsado; reordenar por drag em vez de setas.
-- **Agrupamento:** separar visualmente **validação**, **retry** e **opções** (hoje soltos no card da pergunta);
-  esconder validação/retry para interações que não são texto (button/list não têm formato a validar).
-- **Multi-locale:** avaliar **edição lado-a-lado** dos idiomas (em vez de troca por chip); **progresso de
-  tradução por idioma** ("N de M nós traduzidos") como indicador estável, em vez do ponto âmbar por-nó que
-  "pisca" ao digitar/apagar (o ponto funciona, mas oscila); **preview** do que o cliente vê por canal/idioma.
-- **Completude de campos:** campo **`retry.reprompt`** (`LocalizedText`, hoje não editável no editor — só via
-  seed/JSON) + `retry.max_attempts`; `min_length`/`max_length`/`pattern` da validação; `masked` por campo;
-  `timeout_s` da pergunta; `interaction=form` com múltiplos `fields`.
-- **Segurança/robustez:** **auth no write** (hoje writes abertos — gate ABAC `config.*`); validação client-side
-  (form_id slug, output_key único, metric snake_case) com mensagens claras; confirmação ao descartar rascunho.
-- **Base:** contrato canônico continua o `DialogFormSchema` (`@plughub/schemas/dialog.ts`); nada de lógica de
-  controle no editor (as 4 costuras seguem valendo). Spec do primitivo: `docs/product/dialog-primitive-and-runner-design.md`.
+**Falta (2ª passada):** reordenar por **drag** (hoje setas ↑↓); **edição de locale lado-a-lado** + **progresso de
+tradução** estável + **preview** do que o cliente vê; **auth no write** (gate ABAC `config.*` — hoje aberto);
+**validação client-side** com mensagens (form_id slug, output_key único, dimension_id snake_case); **confirmação
+ao descartar rascunho** (dirty/blocker); `interaction=form` com múltiplos `fields`. Base: `DialogFormSchema`
+(`@plughub/schemas/dialog.ts`); nada de controle no editor (as 4 costuras valem). Spec:
+`docs/product/dialog-primitive-and-runner-design.md`.
 
 ### Composição de nota em survey — dimension + perguntas ponderadas ✅ schema+runtime+E2E (2026-07-07)
 
@@ -158,8 +153,8 @@ ao vivo** no webchat: atendimento=5, resolução=3 → `csat`≈4.33 ponderado +
 (D8); agregação no `survey_record` (D9); dimensions paralelas (≠ composite do Quality). Compat: `capture.metric`
 legado = dimension 1-item.
 
-**Falta:** (1) **editor de dialog-forms com UI de dimension** — hoje o form composto entra via seed/JSON (é a
-peça concreta que se junta à revisão de UX do editor, acima); (2) composite de form opcional / health score —
+**Falta:** (1) **editor de dialog-forms com UI de dimension** ✅ (2026-07-07 — modelo de blocos, ver CHANGELOG +
+o item "Revisão do editor de diálogos" acima); (2) composite de form opcional / health score —
 `DialogDimension.weight` reservado, adiado; (3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do
 `scoring.ts` pelo `EvaluationForm` (retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
 

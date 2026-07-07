@@ -2,6 +2,36 @@
 
 ---
 
+## Editor de dialog-forms por blocos — reforma completa (2026-07-07)
+
+Reforma do `/config/dialog-forms` (`DialogFormsPage.tsx`) para o modelo de **blocos**, fechando a UI de
+dimension + a completude de campos (o item "Revisão do editor de diálogos" + a peça que faltava da composição
+de survey). Editor + config; o runtime não muda.
+
+**Modelo de blocos:** o form é uma sequência de blocos; cada bloco é um **instrumento pontuado**
+(CSAT/NPS/CES/PMF/FCR ou personalizado) ou um **Diálogo sem nota** (falas, verbatim, OTP). A associação
+pergunta→instrumento é o **aninhamento** (não há linha de pontuação por pergunta). Projeção pura
+`dialog-blocks.ts` (`buildBlocks`/`flattenBlocks`): agrupa `nodes[]` contíguos por `dimension_id` na carga,
+achata na gravação; contiguidade por instrumento; runtime idêntico (composição é form-wide por `dimension_id`).
+
+**Instrumento (cabeçalho do bloco):** tipo, label i18n, escala, agregação, **interaction** e **rótulos de
+âncora** por ponto da escala. As perguntas do bloco viram **só-prompt** (formato herdado); na gravação o
+`interaction`+`options` são **materializados** da escala+âncoras em cada nó (o `buildBlocks` infere o
+`interaction` de forms antigos). Peso **implícito-igual** com "ajustar pesos" revelando os %.
+
+**Catálogo de instrumentos em config-api** (namespace `survey`, key `instruments`; seed CSAT/NPS/CES/PMF/FCR +
+escala/agregação); o editor lê via `useNamespace` com **fallback** nos built-in; editável em
+**Config → Plataforma → Surveys** (aba genérica de namespace).
+
+**Completude (blocos de Diálogo):** `masked`, `timeout_s`, validação `pattern`/`min_length`/`max_length` (além
+de numeric/min/max), `retry` (reprompt + max_attempts), `value` por opção; + `description` do form e
+`default_locale` como select. Nós **colapsáveis** (chevron → editor).
+
+**Schema:** `DialogDimension` ganhou `interaction`/`anchors` (`@plughub/schemas` + tipo local do platform-ui);
+`DialogInteractionSchema` movido para antes do uso. i18n en/pt-BR (`dialogForms` + `configPlataforma`).
+
+---
+
 ## Survey — wiring E2E da composição (loop → compose) + form composto (2026-07-07)
 
 Fecha o encanamento da composição de nota (segue a entrega schema+runtime abaixo) e **valida ao vivo** no

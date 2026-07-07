@@ -25,7 +25,17 @@
     "max": "Max",
     "options": "Options",
     "option": "Option",
-    "label": "Label"
+    "label": "Label",
+    "value": "Value",
+    "description": "Description",
+    "masked": "Masked",
+    "timeout": "Timeout (s)",
+    "minLength": "Min len",
+    "maxLength": "Max len",
+    "pattern": "Pattern (regex)",
+    "retry": "Reprompt",
+    "repromptPlaceholder": "Invalid, try again",
+    "maxAttempts": "Attempts"
   },
   "dimensions": {
     "title": "Instruments",
@@ -44,7 +54,8 @@
     "none": "none (verbatim)",
     "legacyMetric": "standalone metric",
     "weight": "weight",
-    "ofDimension": "of {{dim}}"
+    "ofDimension": "of {{dim}}",
+    "renderInherited": "render inherited from the instrument"
   },
   "blocks": {
     "title": "Blocks",
@@ -55,7 +66,8 @@
     "dialog": "Dialog",
     "dialogHint": "no scoring — statements, verbatim, OTP",
     "weightsAdjust": "equal weights · adjust",
-    "weightsHide": "hide weights"
+    "weightsHide": "hide weights",
+    "anchors": "scale labels"
   },
   "vis": {
     "all": "Everyone",

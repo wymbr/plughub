@@ -15,9 +15,25 @@
  * rebuilds `dimensions[]`. Instrument-level interaction/options materialization
  * is Checkpoint B.
  */
-import type { DialogForm, DialogNode, DialogDimension } from '@/api/dialog-hooks'
+import type {
+  DialogForm, DialogNode, DialogDimension, QuestionNode, DialogOption, DialogInteraction,
+} from '@/api/dialog-hooks'
 
 export const DIALOG_KEY = '__dialog__'
+
+const HAS_OPTIONS = (i: DialogInteraction) => i === 'button' || i === 'list' || i === 'checklist'
+
+/** Derive the option list of a scored instrument from its scale + anchor labels
+ *  (one option per scale point; value = the numeric score). */
+export function deriveOptions(dim: DialogDimension): DialogOption[] {
+  const min = dim.scale.min ?? 0
+  const opts: DialogOption[] = []
+  for (let v = min; v <= dim.scale.max; v++) {
+    const anchor = dim.anchors?.[v - min]
+    opts.push({ id: String(v), value: String(v), label: anchor ?? String(v), capture: { value: v } })
+  }
+  return opts
+}
 
 export interface InstrumentBlock { kind: 'instrument'; dim: DialogDimension; nodes: DialogNode[] }
 export interface DialogBlock { kind: 'dialog'; nodes: DialogNode[] }
@@ -59,11 +75,20 @@ export function buildBlocks(form: DialogForm): Block[] {
     else runs.push({ key, nodes: [nodes[i]!] })
   }
 
-  const blocks: Block[] = runs.map(run =>
-    run.key === DIALOG_KEY
-      ? { kind: 'dialog', nodes: run.nodes }
-      : { kind: 'instrument', dim: dimById.get(run.key)!, nodes: run.nodes },
-  )
+  const blocks: Block[] = runs.map(run => {
+    if (run.key === DIALOG_KEY) return { kind: 'dialog', nodes: run.nodes }
+    let dim = dimById.get(run.key)!
+    // Migration: infer the instrument-level interaction from its questions when
+    // unset (older forms carry it per-question), so the editor can present the
+    // question as prompt-only and the header owns the render.
+    if (dim.interaction === undefined) {
+      const set = new Set(
+        run.nodes.filter((n): n is QuestionNode => n.kind === 'question').map(q => q.interaction),
+      )
+      if (set.size === 1) dim = { ...dim, interaction: [...set][0] }
+    }
+    return { kind: 'instrument', dim, nodes: run.nodes }
+  })
 
   const present = new Set(
     blocks.filter((b): b is InstrumentBlock => b.kind === 'instrument').map(b => b.dim.dimension_id),
@@ -86,12 +111,21 @@ export function flattenBlocks(blocks: Block[]): { nodes: DialogNode[]; dimension
 
   for (const block of blocks) {
     if (block.kind === 'instrument') {
-      const id = block.dim.dimension_id
-      if (id && !seen.has(id)) { dimensions.push(block.dim); seen.add(id) }
+      const dim = block.dim
+      const id = dim.dimension_id
+      if (id && !seen.has(id)) { dimensions.push(dim); seen.add(id) }
       for (const n of block.nodes) {
         if (n.kind === 'question') {
           const weight = n.capture?.weight
-          nodes.push({ ...n, capture: { dimension_id: id, ...(weight != null ? { weight } : {}) } })
+          const q: QuestionNode = { ...n, capture: { dimension_id: id, ...(weight != null ? { weight } : {}) } }
+          // Materialize the instrument-level render into the node (runtime reads
+          // interaction/options per-node). Options are derived from scale+anchors.
+          if (dim.interaction) {
+            q.interaction = dim.interaction
+            if (HAS_OPTIONS(dim.interaction)) q.options = deriveOptions(dim)
+            else delete (q as { options?: unknown }).options
+          }
+          nodes.push(q)
         } else {
           nodes.push(n)
         }
