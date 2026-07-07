@@ -92,6 +92,7 @@ plughub/
       adr-instance-bootstrap.md
       adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
       adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
+      adr-survey-form-scoring-composition.md ← composição de nota em survey (dimension+perguntas ponderadas; primitivo `scoring.ts` compartilhado c/ Quality) — proposto
 ```
 
 ### Como adicionar uma nova feature

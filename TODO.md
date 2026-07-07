@@ -148,6 +148,20 @@ multi-locale, mas a usabilidade e a completude de campos precisam de uma passada
 - **Base:** contrato canônico continua o `DialogFormSchema` (`@plughub/schemas/dialog.ts`); nada de lógica de
   controle no editor (as 4 costuras seguem valendo). Spec do primitivo: `docs/product/dialog-primitive-and-runner-design.md`.
 
+### Composição de nota em survey — dimension + perguntas ponderadas *(desenho travado 2026-07-07; ADR)*
+
+Instrumentos compostos (CSAT/NPS multi-pergunta) não cabem no `capture.metric` por-pergunta do `DialogForm`.
+Desenho fechado em [`docs/adr/adr-survey-form-scoring-composition.md`](docs/adr/adr-survey-form-scoring-composition.md):
+camada `dimension` (instrumento) agrupa perguntas; **escala + método de agregação na dimension** (perguntas
+herdam); `weighted_mean` único (peso default 1 = média aritmética) com **re-normalização em NA**; **dimensions
+paralelas** (cada uma emite seu sinal, ≠ composite único do Quality); per-respondente no domínio survey,
+populacional no analytics; **primitivo de pontuação compartilhado** (`@plughub/schemas/scoring.ts`) importado por
+survey e `EvaluationForm`, sem fundir os envelopes. Compat: `capture.metric` = dimension 1-item peso 1.
+**Decisões em aberto antes do schema:** (1) store canônico do `survey_definition` — estender `DialogForm`
+(dialog-api) **ou** entidade na evaluation-api; (2) onde roda a agregação per-respondente (`survey_record` vs
+skill); (3) composite de form opcional (health score) — adiado; (4) `survey_question` reutilizável — fora do 1º
+corte. *(discussão; sem implementação)*
+
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR
 loud nomeando pool→hook→pool-alvo→skill→step. Config atual passa limpa (nps_ia/wrapup inline). Avaliação:
