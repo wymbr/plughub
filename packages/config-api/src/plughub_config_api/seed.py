@@ -632,6 +632,22 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Survey instrument catalog: id (metric key = emitted signal), label, default "
         "scale and aggregation. Drives the dialog-form editor instrument picker."
     ),
+    # Survey web-link delivery — pluggable provider selection (channel-gateway
+    # survey_web.SurveyLinkDelivery). default_provider/routes pick the provider per
+    # `kind` (sms/email/…); "webhook" POSTs the link to the tenant's own gateway at
+    # webhook.url. NON-SECRET only: the webhook auth token stays in env
+    # (PLUGHUB_SURVEY_LINK_WEBHOOK_TOKEN). Default = mock (dev log / no real send).
+    (
+        "survey", "link_delivery",
+        {
+            "default_provider": "mock",
+            "routes": {},                # e.g. {"sms": "webhook", "email": "webhook"}
+            "webhook": {"url": ""},       # tenant SMS/e-mail gateway endpoint
+        },
+        "Survey web-link delivery config: default_provider + per-kind routes + "
+        "webhook.url (vendor-neutral). Secret (auth token) lives in env, not here. "
+        "Source: channel-gateway survey_web.SurveyLinkDelivery."
+    ),
     # R8b/R8e — gatilho de divergência avaliador×humano (Estágio 1).
     (
         "evaluation", "calibration_divergence_threshold",

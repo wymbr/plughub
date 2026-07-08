@@ -19,7 +19,7 @@ import os
 import secrets
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, Protocol
 
 import httpx
 import redis.asyncio as aioredis
@@ -32,12 +32,29 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class SurveyLinkDelivery:
-    """Pluggable delivery of the survey link (SMS/e-mail). The mock LOGS the link
-    (gated by PLUGHUB_SURVEY_LINK_DEV_LOG, default on in demo); a real provider is
-    a drop-in that overrides `send`. Delivery is DECOUPLED from token creation so
-    the outbound trigger (§19) can re-send the same link. Real SMS/e-mail
-    integration é trilha à parte (mesmo item 1 do OTP)."""
+# ── Link delivery: pluggable provider layer ───────────────────────────────────
+# Delivers the survey link (SMS/e-mail) via a provider selected per `kind` from
+# per-tenant config (config-api namespace `survey`, key `link_delivery`). Two
+# providers ship: `mock` (dev log / no-op, default) and `webhook` (vendor-neutral
+# — POSTs to the tenant's own SMS/e-mail gateway). No vendor SDK is hardcoded
+# (no-lock-in). Secrets stay in env; the non-secret routing/URL lives in config.
+# Delivery is DECOUPLED from token creation so the outbound trigger (§19) can
+# (re)send.
+
+
+class LinkDeliveryProvider(Protocol):
+    """A concrete channel that actually sends the link. Returns a result dict
+    with at least `delivered: bool` and `provider: str`."""
+    name: str
+
+    async def send(self, kind: str, address: str, url: str, tenant_id: str) -> dict[str, Any]: ...
+
+
+class MockProvider:
+    """Default/fallback provider — logs the link (gated by PLUGHUB_SURVEY_LINK_DEV_LOG)
+    and reports success without actually sending. Keeps the demo flowing with no
+    external dependency."""
+    name = "mock"
 
     def __init__(self, dev_log: bool | None = None) -> None:
         self._dev_log = (
@@ -45,17 +62,125 @@ class SurveyLinkDelivery:
             else os.getenv("PLUGHUB_SURVEY_LINK_DEV_LOG", "true").lower() in ("1", "true", "yes")
         )
 
-    async def send(self, kind: str, address: str, url: str) -> dict[str, Any]:
-        # ── Real provider (SMS/e-mail) plugs in HERE ──────────────────────────
-        # Until a channel provider is wired, fall back to the dev log / no-op.
+    async def send(self, kind: str, address: str, url: str, tenant_id: str) -> dict[str, Any]:
         if self._dev_log:
             logger.warning(
-                "[SURVEY-LINK-DEV] kind=%s address=%s url=%s (entrega mockada — "
-                "wire a provider real p/ produção)", kind, address, url,
+                "[SURVEY-LINK-DEV] tenant=%s kind=%s address=%s url=%s (entrega mockada)",
+                tenant_id, kind, address, url,
             )
             return {"delivered": True, "provider": "mock", "url": url}
-        logger.info("[SURVEY-LINK] kind=%s address=%s (entrega real pendente — sem provider)", kind, address)
-        return {"delivered": False, "provider": None, "reason": "no_provider"}
+        return {"delivered": False, "provider": "mock", "reason": "dev_log_off"}
+
+
+# httpx client factory type — injectable so tests can supply a mock transport.
+ClientFactory = Callable[[], httpx.AsyncClient]
+
+
+class WebhookProvider:
+    """Vendor-neutral real provider: POSTs {kind, address, url, tenant_id} to a
+    tenant-configured HTTP endpoint (their own SMS/e-mail gateway sits behind it).
+    Auth via a bearer token kept in env (secret), never in config."""
+    name = "webhook"
+
+    def __init__(self, url: str, token: str = "", client_factory: ClientFactory | None = None) -> None:
+        self._url = url
+        self._token = token
+        self._client_factory = client_factory or (lambda: httpx.AsyncClient(timeout=5))
+
+    async def send(self, kind: str, address: str, url: str, tenant_id: str) -> dict[str, Any]:
+        payload = {"kind": kind, "address": address, "url": url, "tenant_id": tenant_id}
+        headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+        try:
+            async with self._client_factory() as client:
+                resp = await client.post(self._url, json=payload, headers=headers)
+            if 200 <= resp.status_code < 300:
+                return {"delivered": True, "provider": "webhook", "status": resp.status_code}
+            logger.warning(
+                "[SURVEY-LINK] webhook HTTP %d tenant=%s kind=%s", resp.status_code, tenant_id, kind,
+            )
+            return {"delivered": False, "provider": "webhook", "status": resp.status_code, "reason": "http_error"}
+        except Exception as exc:  # noqa: BLE001 — network/timeout must not break the flow
+            logger.warning("[SURVEY-LINK] webhook transport error tenant=%s: %s", tenant_id, exc)
+            return {"delivered": False, "provider": "webhook", "reason": "transport_error"}
+
+
+# Injectable async fetcher (tenant_id) -> link_delivery config dict — for tests.
+ConfigFetch = Callable[[str], Awaitable[dict[str, Any]]]
+
+
+class SurveyLinkDelivery:
+    """Router over the providers. Resolves the per-tenant `survey.link_delivery`
+    config (config-api HTTP, cached), then picks a provider per `kind`
+    (`routes[kind]` → `default_provider` → `mock`). Unknown provider or missing
+    webhook URL degrades to the mock — delivery never breaks the survey flow.
+
+    link_delivery config shape (config-api namespace `survey`, key `link_delivery`):
+        { "default_provider": "mock"|"webhook",
+          "routes":  { "sms": "webhook", "email": "webhook" },
+          "webhook": { "url": "https://tenant-gateway/notify" } }
+    The webhook auth token is NOT here — it comes from env
+    (PLUGHUB_SURVEY_LINK_WEBHOOK_TOKEN), per the config/secret split.
+    """
+
+    def __init__(
+        self,
+        config_api_url: str = "",
+        webhook_token:  str = "",
+        config_fetch:   ConfigFetch | None = None,
+        mock_dev_log:   bool | None = None,
+        client_factory: ClientFactory | None = None,
+    ) -> None:
+        self._config_api_url = config_api_url.rstrip("/")
+        self._webhook_token = webhook_token or os.getenv("PLUGHUB_SURVEY_LINK_WEBHOOK_TOKEN", "")
+        self._config_fetch = config_fetch
+        self._client_factory = client_factory
+        self._mock = MockProvider(dev_log=mock_dev_log)
+        self._cache: dict[str, dict[str, Any]] = {}   # tenant_id → link_delivery config
+
+    def invalidate(self, tenant_id: str | None = None) -> None:
+        """Drop cached config on config.changed(survey). All tenants if None."""
+        if tenant_id:
+            self._cache.pop(tenant_id, None)
+        else:
+            self._cache.clear()
+
+    async def _resolve_config(self, tenant_id: str) -> dict[str, Any]:
+        if tenant_id in self._cache:
+            return self._cache[tenant_id]
+        cfg: dict[str, Any] = {}
+        try:
+            if self._config_fetch is not None:
+                cfg = await self._config_fetch(tenant_id) or {}
+            elif self._config_api_url:
+                async with httpx.AsyncClient(timeout=3) as client:
+                    resp = await client.get(
+                        f"{self._config_api_url}/config/survey", params={"tenant_id": tenant_id},
+                    )
+                if resp.status_code == 200:
+                    body = resp.json()
+                    entries = body.get("entries") or body
+                    raw = entries.get("link_delivery") if isinstance(entries, dict) else None
+                    value = raw["value"] if isinstance(raw, dict) and "value" in raw else raw
+                    cfg = value if isinstance(value, dict) else {}
+        except Exception as exc:  # noqa: BLE001 — config-api down → mock fallback
+            logger.warning("survey link_delivery config fetch failed (%s) — mock fallback", exc)
+        self._cache[tenant_id] = cfg
+        return cfg
+
+    async def send(self, kind: str, address: str, url: str, tenant_id: str = "") -> dict[str, Any]:
+        cfg = await self._resolve_config(tenant_id)
+        routes = cfg.get("routes") or {}
+        provider_name = routes.get(kind) or cfg.get("default_provider") or "mock"
+        if provider_name == "webhook":
+            webhook_url = (cfg.get("webhook") or {}).get("url") or ""
+            if webhook_url:
+                return await WebhookProvider(
+                    webhook_url, self._webhook_token, self._client_factory,
+                ).send(kind, address, url, tenant_id)
+            logger.warning(
+                "survey link_delivery: 'webhook' selected but no webhook.url configured — mock fallback",
+            )
+        return await self._mock.send(kind, address, url, tenant_id)
 
 
 # ── Public survey page (self-contained; renders any DialogForm) ───────────────
@@ -225,6 +350,11 @@ class SurveyWebService:
         self._base_url = base_url.rstrip("/")
         self._delivery = delivery or SurveyLinkDelivery()
 
+    def invalidate_delivery_config(self, tenant_id: str | None = None) -> None:
+        """Called on config.changed(survey) — drops the delivery layer's cached
+        per-tenant link_delivery config so the next send re-reads config-api."""
+        self._delivery.invalidate(tenant_id)
+
     def _key(self, token: str) -> str:
         return f"survey_web:token:{token}"
 
@@ -232,10 +362,10 @@ class SurveyWebService:
         path = f"/survey/{token}"
         return f"{self._base_url}{path}" if self._base_url else path
 
-    async def deliver(self, token: str, kind: str, address: str) -> dict[str, Any]:
+    async def deliver(self, token: str, kind: str, address: str, tenant_id: str = "") -> dict[str, Any]:
         """Envia o link de um token existente via a camada plugável de entrega
         (SMS/e-mail). Desacoplado do create → o gatilho outbound (§19) reenvia."""
-        return await self._delivery.send(kind, address, self._link(token))
+        return await self._delivery.send(kind, address, self._link(token), tenant_id)
 
     async def create(
         self,
@@ -270,7 +400,7 @@ class SurveyWebService:
         await self._redis.set(self._key(token), json.dumps(record), ex=self._ttl)
         result: dict[str, Any] = {"token": token, "path": f"/survey/{token}"}
         if deliver_kind and deliver_address:
-            result["delivery"] = await self.deliver(token, deliver_kind, deliver_address)
+            result["delivery"] = await self.deliver(token, deliver_kind, deliver_address, tenant_id)
         return result
 
     async def get(self, token: str) -> dict[str, Any] | None:

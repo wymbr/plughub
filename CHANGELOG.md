@@ -2,6 +2,36 @@
 
 ---
 
+## Survey web-link — camada de providers plugável (webhook vendor-neutro, 2026-07-08)
+
+Evolui a entrega do link de survey de um mock único para uma **camada de providers** production-ready,
+testável sem canal real. Fecha o resíduo "provider real" da frente de survey (só resta o tenant apontar o
+gateway dele).
+
+**survey_web.py:** `SurveyLinkDelivery` deixou de ser monolítico e virou um **roteador** sobre
+`LinkDeliveryProvider` (Protocol). Providers: `MockProvider` (log dev, default/fallback) e `WebhookProvider`
+**vendor-neutro** — `POST {kind,address,url,tenant_id}` a um endpoint HTTP que o tenant configura (o gateway
+SMS/e-mail dele fica atrás; nenhum SDK de vendor hardcoded = no-lock-in). O roteador resolve o config
+`survey.link_delivery` por tenant (config-api HTTP, cacheado) e escolhe o provider por `kind`
+(`routes[kind]` → `default_provider` → `mock`); provider desconhecido ou `webhook.url` ausente → mock (a
+entrega nunca quebra o fluxo). `deliver()`/`create()` passam `tenant_id`.
+
+**Split config/segredo (invariantes):** o não-secreto (`default_provider`, `routes`, `webhook.url`) vem do
+config-api (namespace `survey`, key `link_delivery` — seed default adicionado); o segredo (token de auth do
+webhook) fica **só em env** (`PLUGHUB_SURVEY_LINK_WEBHOOK_TOKEN`).
+
+**main.py:** constrói o delivery configurado (`config_api_url`) e invalida o cache no `config.changed(survey)`
+(namespace novo no consumer, ao lado de `webchat`).
+
+**Testes:** `test_survey_link_delivery.py` (10) — `WebhookProvider` (corpo do POST + header de auth + 2xx/
+http_error/transport_error) e o roteador (routing por kind, default_provider, fallback sem url, cache +
+invalidação, mock dev-log off). Tudo offline (httpx fake + config injetado).
+
+**Pendente (sem código):** o tenant setar `webhook.url` + token. UI dedicada p/ `link_delivery` e um
+`SmtpProvider` nativo de e-mail = follow-ups.
+
+---
+
 ## Skill deploy — plumbing runtime do config_json → `$.config.*` (fatia 1, 2026-07-08)
 
 Fecha a cadeia `interface_schema → PoolSkillSlot.config_json → $.config.* → runtime`: agora o `config_json` do

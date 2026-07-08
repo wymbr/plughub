@@ -41,7 +41,7 @@ from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
-from .survey_web import SurveyWebService, SURVEY_PAGE_HTML
+from .survey_web import SurveyWebService, SurveyLinkDelivery, SURVEY_PAGE_HTML
 
 logger = logging.getLogger("plughub.channel-gateway")
 
@@ -118,6 +118,9 @@ async def lifespan(app: FastAPI):
 
     # Survey web vehicle (dialog primitive §9.2/§19): tokenized public survey page.
     global _survey_web
+    # Link delivery: per-tenant provider selection from config-api (survey.link_delivery);
+    # webhook auth secret from env. Defaults to mock (dev log) when unconfigured.
+    _survey_delivery = SurveyLinkDelivery(config_api_url=settings.config_api_url)
     _survey_web = SurveyWebService(
         redis          = _redis,
         producer       = _producer,
@@ -126,6 +129,7 @@ async def lifespan(app: FastAPI):
         ttl_s          = settings.survey_web_ttl_s,
         # Público base URL para o link (SMS/e-mail); vazio = caminho relativo.
         base_url       = getattr(settings, "survey_web_base_url", "") or "",
+        delivery       = _survey_delivery,
     )
 
     # PostgreSQL pool for attachment metadata
@@ -336,12 +340,17 @@ async def lifespan(app: FastAPI):
             async for msg in consumer:
                 try:
                     event = _json.loads(msg.value)
-                    if event.get("namespace") == "webchat":
+                    namespace = event.get("namespace")
+                    if namespace == "webchat":
                         await webchat_config.reload(settings.config_api_url, settings.tenant_id)
                         logger.info(
                             "config.changed: webchat namespace reloaded (key=%s)",
                             event.get("key"),
                         )
+                    elif namespace == "survey" and _survey_web is not None:
+                        # link_delivery config changed → drop the cached provider config.
+                        _survey_web.invalidate_delivery_config()
+                        logger.info("config.changed: survey link_delivery cache invalidated (key=%s)", event.get("key"))
                 except Exception as exc:
                     logger.warning("config.changed consumer error: %s", exc)
         finally:

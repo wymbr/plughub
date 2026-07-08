@@ -138,10 +138,16 @@ via `set-next`+`promote` com auth `x-service-token`).
   (set-next+promote): sem isso `form_get` falha (contrato do skill parametrizado). Typo de `source` NÃO tratado
   no deploy (por decisão); lint no publish = item opcional futuro. Worker legado (`skill-flow-worker`) fora de
   escopo (Arc 19 o deprecou; survey roda como agente nativo via bridge).
-- **entrega real do link web** (provedor SMS/e-mail): o veículo web ✅ + a **camada plugável de entrega ✅**
-  (2026-07-08 — `SurveyLinkDelivery` mock que loga o link, `deliver()`/`create(deliver_kind,address)`, endpoint
-  wirado). **Falta só o provider real** (SMS/e-mail) — mesma trilha do "item 1" do OTP (provedor externo).
-  §9.2/§19 de customer-surveys.
+- **entrega real do link web** ✅ (2026-07-08, provider layer): veículo web + camada de providers plugável.
+  `SurveyLinkDelivery` virou **roteador** sobre `LinkDeliveryProvider` (protocol): `MockProvider` (dev log,
+  default/fallback) + `WebhookProvider` **vendor-neutro** (POST `{kind,address,url,tenant_id}` ao gateway do
+  próprio tenant, sem SDK de vendor = no-lock-in). Seleção por `kind` a partir do config-api
+  (`survey.link_delivery`: `default_provider`/`routes`/`webhook.url`), segredo (token) em env
+  (`PLUGHUB_SURVEY_LINK_WEBHOOK_TOKEN`); fallback gracioso p/ mock. Cache por tenant + invalidação no
+  `config.changed(survey)`. Seed default + 10 testes (router + webhook httpx mock). **Falta só operacional
+  (sem código):** o tenant apontar `webhook.url` pro gateway SMS/e-mail dele + setar o token. Um `SmtpProvider`
+  nativo p/ e-mail é opção futura (webhook já cobre via gateway do tenant). Superfície de UI dedicada p/
+  `link_delivery` = follow-up (hoje editável como config genérica). §9.2/§19 de customer-surveys.
 
 ### Revisão do editor de diálogos (UX + completude) — `/config/dialog-forms` ✅ parcial (2026-07-07)
 
