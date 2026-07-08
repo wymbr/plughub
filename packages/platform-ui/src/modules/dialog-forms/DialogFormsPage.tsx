@@ -199,6 +199,16 @@ const DialogFormsPage: React.FC = () => {
     const { nodes, dimensions } = flattenBlocks(blocks)
     if (nodes.length === 0) { setMsg({ kind: 'err', text: t('err.nodesRequired') }); return }
     if (dimensions.some(d => !d.dimension_id)) { setMsg({ kind: 'err', text: t('err.instrumentType') }); return }
+    // ask_when forward-reference: a guard's field must be a PRIOR question's output_key.
+    {
+      const seen = new Set<string>()
+      for (const nd of nodes) {
+        if (nd.ask_when && !seen.has(nd.ask_when.field)) {
+          setMsg({ kind: 'err', text: t('err.askWhenRef', { field: nd.ask_when.field }) }); return
+        }
+        if (nd.kind === 'question') seen.add(nd.output_key)
+      }
+    }
     setBusy(true); setMsg(null)
     const body = {
       form_id: draft.form_id.trim(),
@@ -208,6 +218,7 @@ const DialogFormsPage: React.FC = () => {
       locales: Array.from(new Set([draft.default_locale || 'pt-BR', ...(draft.locales ?? [])])),
       nodes,
       dimensions,
+      composite: draft.composite,
       tags: draft.tags ?? [],
     }
     try {
@@ -299,6 +310,23 @@ const DialogFormsPage: React.FC = () => {
               </label>
             </div>
 
+            {/* composite (health score) */}
+            <div className="flex items-center gap-2 text-xs text-gray-600">
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={!!draft.composite}
+                  onChange={e => patch({ composite: e.target.checked ? { metric: draft.composite?.metric || 'health' } : undefined })} />
+                {t('composite.label')}
+              </label>
+              {draft.composite && (
+                <>
+                  <input value={draft.composite.metric} placeholder="health"
+                    onChange={e => patch({ composite: { metric: e.target.value } })}
+                    className="w-32 border rounded px-2 py-0.5 bg-white font-mono" />
+                  <span className="text-gray-400">{t('composite.hint')}</span>
+                </>
+              )}
+            </div>
+
             <LocaleBar locales={localeList} defaultLocale={draft.default_locale} editLocale={editLocale}
               onSelect={setEditLocale} onAdd={addLocale} onRemove={removeLocale} />
 
@@ -315,7 +343,7 @@ const DialogFormsPage: React.FC = () => {
               {blocks.map((block, idx) => (
                 <BlockCard key={idx} block={block} idx={idx} total={blocks.length}
                   instruments={instruments} locale={editLocale} defaultLocale={draft.default_locale}
-                  priorKeys={priorKeys}
+                  priorKeys={priorKeys} compositeOn={!!draft.composite}
                   expanded={expanded} onToggleExpand={toggleExpand}
                   adjust={adjust.has(idx)} onToggleAdjust={() => toggleAdjust(idx)}
                   onChange={b => updateBlock(idx, b)} onRemove={() => removeBlock(idx)}
@@ -346,6 +374,19 @@ const DialogFormsPage: React.FC = () => {
   )
 }
 
+// ── ask_when helpers (block-level guard = the guard all nodes share) ────────────
+
+function guardsEqual(a?: AskWhen, b?: AskWhen): boolean {
+  if (!a || !b) return a === b
+  return a.field === b.field && a.op === b.op && JSON.stringify(a.value) === JSON.stringify(b.value)
+}
+/** The guard shared by ALL nodes of a block (the block-level guard), or undefined. */
+function commonGuard(nodes: DialogNode[]): AskWhen | undefined {
+  const first = nodes[0]?.ask_when
+  if (!first) return undefined
+  return nodes.every(n => guardsEqual(n.ask_when, first)) ? first : undefined
+}
+
 // ── Block card ──────────────────────────────────────────────────────────────────
 
 interface BlockCardProps {
@@ -356,6 +397,7 @@ interface BlockCardProps {
   locale: string
   defaultLocale: string
   priorKeys: Record<string, string[]>
+  compositeOn: boolean
   expanded: Set<string>
   onToggleExpand: (id: string) => void
   adjust: boolean
@@ -366,7 +408,7 @@ interface BlockCardProps {
 }
 
 const BlockCard: React.FC<BlockCardProps> = ({
-  block, idx, total, instruments, locale, defaultLocale, priorKeys, expanded, onToggleExpand,
+  block, idx, total, instruments, locale, defaultLocale, priorKeys, compositeOn, expanded, onToggleExpand,
   adjust, onToggleAdjust, onChange, onRemove, onMove,
 }) => {
   const { t } = useTranslation('dialogForms')
@@ -421,6 +463,15 @@ const BlockCard: React.FC<BlockCardProps> = ({
   const typeValue = !isInstrument ? DIALOG_TYPE : (isCustom ? CUSTOM_TYPE : dim!.dimension_id)
   const accent = isInstrument ? 'border-l-blue-400' : 'border-l-gray-300'
 
+  // Block-level ask_when guard = the guard all nodes share (fan-out on set). Its
+  // field references questions BEFORE the block (the first node's prior keys).
+  const blockPriorKeys = block.nodes[0] ? (priorKeys[block.nodes[0].id] ?? []) : []
+  const blockGuard = commonGuard(block.nodes)
+  const setBlockGuard = (g: AskWhen | undefined) => setNodes(block.nodes.map(n => {
+    if (g) return { ...n, ask_when: g }
+    const copy = { ...n }; delete (copy as { ask_when?: unknown }).ask_when; return copy
+  }))
+
   return (
     <div className={`border rounded-lg bg-white border-l-4 ${accent} p-3 space-y-2`}>
       {/* header */}
@@ -460,6 +511,14 @@ const BlockCard: React.FC<BlockCardProps> = ({
               className="border rounded px-1 py-0.5 text-xs bg-white">
               {INTERACTIONS.map(i => <option key={i} value={i}>{i}</option>)}
             </select>
+            {compositeOn && (
+              <span className="flex items-center gap-1 text-xs text-gray-500">
+                {t('composite.weight')}
+                <input type="number" min={0} value={dim!.weight ?? 1}
+                  onChange={e => updateDim({ weight: e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)) })}
+                  className="w-12 border rounded px-1 py-0.5 text-center bg-white" />
+              </span>
+            )}
           </>
         ) : (
           <span className="flex-1 text-xs text-gray-400">{t('block.dialogHint')}</span>
@@ -501,6 +560,11 @@ const BlockCard: React.FC<BlockCardProps> = ({
             onChange={n => updateNode(i, n)} onRemove={() => removeNode(i)} onMove={dir => moveNode(i, dir)} />
         ))}
       </div>
+
+      {/* block-level guard (fans out to all nodes) */}
+      {block.nodes.length > 0 && blockPriorKeys.length > 0 && (
+        <AskWhenRow guard={blockGuard} priorKeys={blockPriorKeys} onSet={setBlockGuard} labelKey="askWhen.blockLabel" />
+      )}
 
       {/* footer */}
       <div className="flex items-center gap-2 text-xs text-gray-500 pt-1">
@@ -575,7 +639,7 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
           className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
       </label>
       <VisibilityRow value={node.visibility} onChange={v => onChange({ ...node, visibility: v })} />
-      <AskWhenRow node={node} priorKeys={priorKeys} onChange={onChange} />
+      <AskWhenRow guard={node.ask_when} priorKeys={priorKeys} onSet={g => onChange({ ...node, ask_when: g })} />
     </div>
   )
 }
@@ -697,7 +761,7 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
         </div>
       )}
 
-      <AskWhenRow node={node} priorKeys={priorKeys} onChange={onChange} />
+      <AskWhenRow guard={node.ask_when} priorKeys={priorKeys} onSet={g => onChange({ ...node, ask_when: g })} />
     </div>
   )
 }
@@ -715,21 +779,20 @@ function awValueToStr(v: AskWhen['value'] | undefined): string {
   return v === undefined ? '' : String(v)
 }
 
-const AskWhenRow: React.FC<{ node: DialogNode; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
-({ node, priorKeys, onChange }) => {
+const AskWhenRow: React.FC<{ guard?: AskWhen; priorKeys: string[]; onSet: (g: AskWhen | undefined) => void; labelKey?: string }> =
+({ guard: g, priorKeys, onSet, labelKey }) => {
   const { t } = useTranslation('dialogForms')
-  const g = node.ask_when
   if (!g && priorKeys.length === 0) return null   // nothing to reference yet
   const set = (patch: Partial<AskWhen>) => {
     const base: AskWhen = g ?? { field: priorKeys[0] ?? '', op: 'lt', value: 0 }
-    onChange({ ...node, ask_when: { ...base, ...patch } })
+    onSet({ ...base, ...patch })
   }
   return (
     <div className="flex items-center gap-2 flex-wrap text-xs text-gray-600 border-t pt-2">
       <label className="flex items-center gap-1">
         <input type="checkbox" checked={!!g}
-          onChange={e => onChange({ ...node, ask_when: e.target.checked ? { field: priorKeys[0] ?? '', op: 'lt', value: 0 } : undefined })} />
-        {t('askWhen.label')}
+          onChange={e => onSet(e.target.checked ? { field: priorKeys[0] ?? '', op: 'lt', value: 0 } : undefined)} />
+        {t(labelKey ?? 'askWhen.label')}
       </label>
       {g && (
         <>

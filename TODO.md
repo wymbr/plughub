@@ -124,9 +124,10 @@ via `set-next`+`promote` com auth `x-service-token`).
   `default_locale ∈ locales[]`. Aplica a text/prompt/labels. Refinamentos de editor → ver **"Revisão do editor de
   diálogos"** abaixo;
 - **plumbing `$.config` bridge→`PoolSkillSlot.config_json`** (deploy-por-slot);
-- **entrega real do link web** (provedor SMS/e-mail): o veículo web já está feito ✅ (`GET /survey/{token}`
-  renderiza o mesmo `DialogForm` e grava via `session.signals`, snapshot no `create`); falta só a **entrega
-  outbound** do link — mesma trilha do "item 1" do OTP (provedor externo). §9.2/§19 de customer-surveys.
+- **entrega real do link web** (provedor SMS/e-mail): o veículo web ✅ + a **camada plugável de entrega ✅**
+  (2026-07-08 — `SurveyLinkDelivery` mock que loga o link, `deliver()`/`create(deliver_kind,address)`, endpoint
+  wirado). **Falta só o provider real** (SMS/e-mail) — mesma trilha do "item 1" do OTP (provedor externo).
+  §9.2/§19 de customer-surveys.
 
 ### Revisão do editor de diálogos (UX + completude) — `/config/dialog-forms` ✅ parcial (2026-07-07)
 
@@ -154,9 +155,10 @@ ao vivo** no webchat: atendimento=5, resolução=3 → `csat`≈4.33 ponderado +
 legado = dimension 1-item.
 
 **Falta:** (1) **editor de dialog-forms com UI de dimension** ✅ (2026-07-07 — modelo de blocos, ver CHANGELOG +
-o item "Revisão do editor de diálogos" acima); (2) composite de form opcional / health score —
-`DialogDimension.weight` reservado, adiado; (3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do
-`scoring.ts` pelo `EvaluationForm` (retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
+o item "Revisão do editor de diálogos" acima); (2) composite de form / health score ✅ (2026-07-08 —
+`DialogForm.composite`, roll-up 0–100 no `survey_record`, editor com toggle + peso por dimension);
+(3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do `scoring.ts` pelo `EvaluationForm`
+(retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
 
 ### Skip-logic condicional em DialogForm — guarda `ask_when` ✅ (2026-07-08)
 
@@ -164,10 +166,9 @@ Implementado nas 4 fases (ver CHANGELOG + [`docs/adr/adr-dialog-conditional-skip
 guarda **declarativa** `ask_when {field, op, value}` em statement/question; `evaluateAskWhen` puro +
 `askWhenForwardRefErrors` (só-para-trás) no `@plughub/schemas`; step `loop` pula item falso; `survey_web.py`
 espelha em JS (show/hide reativo); editor com a linha "only ask if…". **Validado ao vivo** (`atendimento < 3`
-pergunta/pula o follow-up; pulada = NA, `signals=2` nos dois casos). **Falta (nice-to-have):** guarda **por-bloco**
-como sugar no editor (hoje é por-nó — o "follow-up section" se faz repetindo a guarda nas perguntas do bloco);
-UX do `in` com multi-valor mais rica; validação de forward-ref exibida no editor (o helper existe, falta o gate
-visual). Decisão de borda confirmada: `field` não respondido ⇒ guarda falsa (skip).
+pergunta/pula o follow-up; pulada = NA, `signals=2` nos dois casos). **Completado 2026-07-08:** guarda
+**por-bloco** (fan-out no editor — "only ask this block if…"), `in` multi-valor (vírgula), validação de
+forward-ref bloqueando o save. Decisão de borda confirmada: `field` não respondido ⇒ guarda falsa (skip).
 
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR

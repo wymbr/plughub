@@ -71,8 +71,14 @@
   },
   "askWhen": {
     "label": "only ask if",
+    "blockLabel": "only ask this block if",
     "value": "value",
     "valueList": "values, comma-separated"
+  },
+  "composite": {
+    "label": "Health score (composite)",
+    "hint": "weighted roll-up of the dimensions (0–100)",
+    "weight": "weight"
   },
   "vis": {
     "all": "Everyone",
@@ -97,6 +103,8 @@
   },
   "err": {
     "formIdRequired": "Form ID is required.",
-    "nodesRequired": "Add at least one node."
+    "nodesRequired": "Add at least one node.",
+    "instrumentType": "Every instrument block needs a type (CSAT/NPS/…) or a custom key.",
+    "askWhenRef": "The \"only ask if\" guard references \"{{field}}\", which is not a prior question."
   }
 }

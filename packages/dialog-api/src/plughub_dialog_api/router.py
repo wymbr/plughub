@@ -64,6 +64,8 @@ class FormUpsert(BaseModel):
     # persisted+served as-is so form_get / survey_record can compose. Default []
     # keeps plain dialogs (OTP) and legacy per-question-metric surveys unchanged.
     dimensions:     list[dict[str, Any]] = []
+    # Optional form-level composite (health score); opaque to the store.
+    composite:      dict[str, Any] | None = None
     tags:           list[str] = []
 
     def to_doc(self) -> dict[str, Any]:
@@ -78,6 +80,8 @@ class FormUpsert(BaseModel):
         }
         if self.description is not None:
             doc["description"] = self.description
+        if self.composite is not None:
+            doc["composite"] = self.composite
         return doc
 
 

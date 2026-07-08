@@ -124,6 +124,8 @@ async def lifespan(app: FastAPI):
         dialog_api_url = settings.dialog_api_url,
         signals_topic  = settings.kafka_topic_signals,
         ttl_s          = settings.survey_web_ttl_s,
+        # Público base URL para o link (SMS/e-mail); vazio = caminho relativo.
+        base_url       = getattr(settings, "survey_web_base_url", "") or "",
     )
 
     # PostgreSQL pool for attachment metadata
@@ -927,6 +929,8 @@ async def survey_web_create(request: Request) -> dict:
         return await _survey_web.create(
             tenant_id, form_id,
             body.get("origin_session_id", ""), body.get("customer_key", ""),
+            # Entrega opcional do link (camada plugável — mock/dev por ora).
+            body.get("deliver_kind", ""), body.get("deliver_address", ""),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"dialog-api error: {exc}")

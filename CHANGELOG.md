@@ -2,6 +2,30 @@
 
 ---
 
+## Survey — resíduos: ask_when por-bloco, composite/health score, entrega plugável (2026-07-08)
+
+Fecha três resíduos da frente de survey.
+
+**ask_when — guarda por-bloco + validação na UI:** `AskWhenRow` refatorado p/ `(guard, onSet)`, reusado num
+controle **por-bloco** no `BlockCard` ("only ask this block if…") que **fan-out** a guarda a todos os nós do
+bloco (deriva a guarda comum na carga; some quando os nós divergem) — o caso "seção de follow-up inteira
+condicional" sem repetir por pergunta. `save()` valida **forward-reference** (`field` deve ser `output_key`
+anterior) e bloqueia com mensagem. Corrigida a chave i18n `err.instrumentType` que faltava no `en`.
+
+**Composite / health score:** `DialogForm.composite? { metric }` (`@plughub/schemas` + tipo local +
+`FormUpsert` da dialog-api). `composeSurveySignals` faz, após os sinais por dimension, um **roll-up ponderado**
+das dimensions (cada uma normalizada pela sua escala, peso = `DialogDimension.weight`) num sinal extra na escala
+**0–100**. Editor: toggle "Health score" + métrica no metadata + campo de peso por dimension no cabeçalho do
+instrumento (quando ligado). Opcional/aditivo — ausente = dimensions puramente paralelas.
+
+**Entrega do link web — camada plugável:** `SurveyLinkDelivery` (channel-gateway) com impl **mock** que loga o
+link (`[SURVEY-LINK-DEV]`, gated por `PLUGHUB_SURVEY_LINK_DEV_LOG`) e um ponto de extensão pro provider real
+(SMS/e-mail — trilha à parte, mesmo item 1 do OTP). `SurveyWebService.deliver(token, kind, address)` +
+`base_url` p/ o link absoluto; `create()` entrega opcionalmente (`deliver_kind`/`deliver_address`), wirado no
+endpoint `/v1/survey/web/create`. Desacoplado do create → o gatilho outbound (§19) reenvia.
+
+---
+
 ## Skip-logic condicional em DialogForm — guarda `ask_when` (2026-07-08)
 
 Perguntas de follow-up condicionais sem quebrar o invariante "form = conteúdo linear, controle é do skill" — ver

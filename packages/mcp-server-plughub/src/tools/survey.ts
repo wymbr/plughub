@@ -28,6 +28,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { SurveyRecordInputSchema, composeScore } from "@plughub/schemas"
 import type {
   DialogForm,
+  DialogDimension,
   QuestionNode,
   ScoredItem,
   SurveySignal,
@@ -102,6 +103,7 @@ export function composeSurveySignals(
     (n): n is QuestionNode => n.kind === "question",
   )
   const signals: SurveySignal[] = []
+  const dimVals: Array<{ dim: DialogDimension; value: number }> = []
 
   // (1) Declared dimensions — compose member questions into one signal.
   for (const dim of form.dimensions ?? []) {
@@ -115,7 +117,7 @@ export function composeSurveySignals(
     })
     const scale = { min: dim.scale?.min ?? 0, max: dim.scale.max }
     const value = composeScore(items, dim.aggregation, scale)
-    if (value !== null) signals.push({ metric: dim.dimension_id, value })
+    if (value !== null) { signals.push({ metric: dim.dimension_id, value }); dimVals.push({ dim, value }) }
   }
 
   // (2) Legacy standalone metrics — one signal per question (no dimension).
@@ -124,6 +126,18 @@ export function composeSurveySignals(
     if (!metric || q.capture?.dimension_id) continue
     const score = scoreOfAnswer(q, answers[q.output_key])
     if (score !== null) signals.push({ metric, value: score })
+  }
+
+  // (3) Optional form-level composite (health score) — weighted roll-up over the
+  // dimensions, each normalized by its own scale, emitted on a 0–100 scale.
+  if (form.composite?.metric && dimVals.length > 0) {
+    const items: ScoredItem[] = dimVals.map(({ dim, value }) => {
+      const scale = { min: dim.scale?.min ?? 0, max: dim.scale.max }
+      const w = dim.weight
+      return w === undefined ? { score: value, scale } : { score: value, weight: w, scale }
+    })
+    const composite = composeScore(items, "weighted_mean", { min: 0, max: 100 })
+    if (composite !== null) signals.push({ metric: form.composite.metric, value: composite })
   }
 
   return signals

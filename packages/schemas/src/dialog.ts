@@ -318,6 +318,14 @@ export const DialogFormSchema = z.object({
    * via `capture.dimension_id` and the domain composes one signal per dimension.
    */
   dimensions:     z.array(DialogDimensionSchema).default([]),
+  /**
+   * OPTIONAL form-level composite (health score) — a weighted roll-up OVER the
+   * parallel dimensions into ONE extra signal. Each dimension contributes its
+   * per-respondent value (normalized by its scale) weighted by
+   * `DialogDimension.weight`; the composite is emitted on a 0–100 scale under
+   * `metric`. Absent = dimensions stay purely parallel (the default).
+   */
+  composite:      z.object({ metric: z.string().regex(/^[a-z0-9_]+$/) }).optional(),
   tags:           z.array(z.string()).default([]),
   created_at:     z.string().datetime(),
   updated_at:     z.string().datetime(),

@@ -71,8 +71,14 @@
   },
   "askWhen": {
     "label": "só perguntar se",
+    "blockLabel": "só perguntar este bloco se",
     "value": "valor",
     "valueList": "valores, separados por vírgula"
+  },
+  "composite": {
+    "label": "Health score (composto)",
+    "hint": "roll-up ponderado das dimensions (0–100)",
+    "weight": "peso"
   },
   "vis": {
     "all": "Todos",
@@ -98,6 +104,7 @@
   "err": {
     "formIdRequired": "Informe o ID do formulário.",
     "nodesRequired": "Adicione ao menos um nó.",
-    "instrumentType": "Todo bloco de instrumento precisa de um tipo (CSAT/NPS/…) ou chave personalizada."
+    "instrumentType": "Todo bloco de instrumento precisa de um tipo (CSAT/NPS/…) ou chave personalizada.",
+    "askWhenRef": "A guarda \"só perguntar se\" referencia \"{{field}}\", que não é uma pergunta anterior."
   }
 }

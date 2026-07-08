@@ -14,6 +14,8 @@ Snapshot: o form publicado é congelado no create (pina a versão). Store = Redi
 from __future__ import annotations
 
 import json
+import logging
+import os
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -23,9 +25,37 @@ import httpx
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
+logger = logging.getLogger("plughub.survey-web")
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+class SurveyLinkDelivery:
+    """Pluggable delivery of the survey link (SMS/e-mail). The mock LOGS the link
+    (gated by PLUGHUB_SURVEY_LINK_DEV_LOG, default on in demo); a real provider is
+    a drop-in that overrides `send`. Delivery is DECOUPLED from token creation so
+    the outbound trigger (§19) can re-send the same link. Real SMS/e-mail
+    integration é trilha à parte (mesmo item 1 do OTP)."""
+
+    def __init__(self, dev_log: bool | None = None) -> None:
+        self._dev_log = (
+            dev_log if dev_log is not None
+            else os.getenv("PLUGHUB_SURVEY_LINK_DEV_LOG", "true").lower() in ("1", "true", "yes")
+        )
+
+    async def send(self, kind: str, address: str, url: str) -> dict[str, Any]:
+        # ── Real provider (SMS/e-mail) plugs in HERE ──────────────────────────
+        # Until a channel provider is wired, fall back to the dev log / no-op.
+        if self._dev_log:
+            logger.warning(
+                "[SURVEY-LINK-DEV] kind=%s address=%s url=%s (entrega mockada — "
+                "wire a provider real p/ produção)", kind, address, url,
+            )
+            return {"delivered": True, "provider": "mock", "url": url}
+        logger.info("[SURVEY-LINK] kind=%s address=%s (entrega real pendente — sem provider)", kind, address)
+        return {"delivered": False, "provider": None, "reason": "no_provider"}
 
 
 # ── Public survey page (self-contained; renders any DialogForm) ───────────────
@@ -184,15 +214,28 @@ class SurveyWebService:
         dialog_api_url: str,
         signals_topic: str,
         ttl_s:         int = 604800,
+        base_url:      str = "",
+        delivery:      SurveyLinkDelivery | None = None,
     ) -> None:
         self._redis    = redis
         self._producer = producer
         self._dialog   = dialog_api_url.rstrip("/")
         self._topic    = signals_topic
         self._ttl      = ttl_s
+        self._base_url = base_url.rstrip("/")
+        self._delivery = delivery or SurveyLinkDelivery()
 
     def _key(self, token: str) -> str:
         return f"survey_web:token:{token}"
+
+    def _link(self, token: str) -> str:
+        path = f"/survey/{token}"
+        return f"{self._base_url}{path}" if self._base_url else path
+
+    async def deliver(self, token: str, kind: str, address: str) -> dict[str, Any]:
+        """Envia o link de um token existente via a camada plugável de entrega
+        (SMS/e-mail). Desacoplado do create → o gatilho outbound (§19) reenvia."""
+        return await self._delivery.send(kind, address, self._link(token))
 
     async def create(
         self,
@@ -200,8 +243,11 @@ class SurveyWebService:
         form_id:           str,
         origin_session_id: str = "",
         customer_key:      str = "",
+        deliver_kind:      str = "",
+        deliver_address:   str = "",
     ) -> dict[str, Any]:
-        """Congela o form publicado num token. Retorna {token, path}."""
+        """Congela o form publicado num token. Retorna {token, path[, delivery]}.
+        Se deliver_kind+deliver_address vierem, entrega o link (camada plugável)."""
         async with httpx.AsyncClient(timeout=5) as c:
             r = await c.get(
                 f"{self._dialog}/v1/dialog/forms/{form_id}",
@@ -222,7 +268,10 @@ class SurveyWebService:
             "created_at":        _now_iso(),
         }
         await self._redis.set(self._key(token), json.dumps(record), ex=self._ttl)
-        return {"token": token, "path": f"/survey/{token}"}
+        result: dict[str, Any] = {"token": token, "path": f"/survey/{token}"}
+        if deliver_kind and deliver_address:
+            result["delivery"] = await self.deliver(token, deliver_kind, deliver_address)
+        return result
 
     async def get(self, token: str) -> dict[str, Any] | None:
         raw = await self._redis.get(self._key(token))

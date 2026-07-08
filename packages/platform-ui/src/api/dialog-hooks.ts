@@ -129,6 +129,8 @@ export interface DialogForm {
   nodes: DialogNode[]
   /** Composed instruments (survey_definition layer). Empty for plain dialogs. */
   dimensions?: DialogDimension[]
+  /** Optional form-level composite (health score) rolled up over the dimensions. */
+  composite?: { metric: string }
   tags?: string[]
   created_at?: string
   updated_at?: string
@@ -137,7 +139,7 @@ export interface DialogForm {
 /** Fields the store accepts on create/update (the rest is server-owned). */
 export type DialogFormUpsert = Pick<
   DialogForm,
-  'form_id' | 'name' | 'description' | 'default_locale' | 'locales' | 'nodes' | 'dimensions' | 'tags'
+  'form_id' | 'name' | 'description' | 'default_locale' | 'locales' | 'nodes' | 'dimensions' | 'composite' | 'tags'
 >
 
 function headers(tenantId: string): Record<string, string> {
