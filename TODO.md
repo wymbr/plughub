@@ -4,6 +4,70 @@
 
 ---
 
+## Journey (retorno) — modelo de 3 níveis *(design fechado 2026-07-08, pré-código)*
+
+**Contexto:** o modelo de 3 níveis (N3 negocial `workflow` / N2 acesso a canais / N1 I/O — perfis `agent`) faz
+voltar a necessidade de amarrar vários contatos a um processo de longa duração. A entidade `Journey` (Arc 10) foi
+removida no Arc 19 Fase F (dualidade contact/workflow; "rastreabilidade via `parent_session_id`, sem entidade").
+O retorno é **como lente + camada mínima de alias**, não como entidade.
+
+**Decisão (D1.5):** journey = componente conexa de sessões sob (proveniência ∪ alias), identificada pela **raiz
+canônica** valorada em `session_id`. Descartado D1 puro (não resolve cenário 2-unify nem 3-inbound — proveniência
+é imutável) e D2 (entidade — reintroduz o que o Arc 19 removeu). Insight: sem merge, `journey_id=session_id` é só
+`origin_session_id` replicado; o merge/alias é a única coisa que a derivação por proveniência não expressa.
+
+**Invariantes:**
+- `root_session_id` imutável, **nunca null** (param propagado no `delegate`/`collect`/`task` = do chamador; senão
+  auto-mint = `self`). Propagação é de plataforma (injetada como o `origin_session_id`), não campo de fluxo.
+- Fonte de verdade = `root_session_id` + `journey_aliases`; `sessions.journey_id` = **cache** eventualmente
+  consistente (refresh no merge; reads não dependem dele em v1 — resolve por union-find).
+- Merge sempre **novo→antigo** (ordem total por `started_at`,`session_id`) ⇒ floresta sem ciclo, sem cycle-guard.
+- `journey.merges` = topic de **1 tipo**; proibido reviver entidade/lifecycle/merge-split/`journey.events` (9 tipos).
+- Mantém `origin_session_id` (1 salto, desenha o `SessionTrace`) **E** `root_session_id` (raiz transitiva, agrupa).
+
+**Fases:**
+
+| Fase | Entrega | Depende de |
+|---|---|---|
+| J1 | `root_session_id` (schemas + CH + nascimento + propagação automática); `journey_id` cache=root no open. Cenários 1 e 2-com-journey. | — |
+| J2 | `/reports/journeys` (proveniência-only) + Vista Processos + drill 3 níveis + filtro "significativa". | J1 |
+| J3 | `journey_merge` tool + `journey.merges` + `journey_aliases` + union-find + refresh de cache + `PendingEntry.root_session_id`. Cenários 3 e 2-unify. | J1, J2 |
+| J4 | Avaliação N3: `session_signal` grain=`journey` + métricas de processo. | J2 |
+| J5 | `@ctx.journey.*` reaceso; i18n; ABAC; guard de invariantes. | J3, J4 |
+
+J1+J2 já entregam journey por proveniência (o essencial do D1); J3 adiciona o que a proveniência não dá.
+
+**Decisões resolvidas (design §9):** sobrevivente = mais antiga; cache eventualmente consistente; manter os dois
+campos; propagação = do chamador; `@ctx.journey.*` reaceso; filtro "significativa" = **default de UX** (as vistas
+Sessions `session→[segments]` e Processos `journey→[sessions→[segments]]` diferem por profundidade de drill — não
+redundância).
+
+**Riscos:** refresh de cache re-emite N linhas em merges de journeys grandes (raro; medir; cache lazy se preciso);
+`/reports/journeys` carrega union-find por request (alias table pequena; materializar em `journey_id` se medir exigir).
+
+**Docs:** design `docs/product/journey-retorno-modelo-3-niveis-design.md` · spec
+`docs/product/journey-3-niveis-implementation-spec.md` · diagrama `docs/product/journey-3-cenarios-unionfind.svg`.
+
+---
+
+## Saneamento `docs/kafka-eventos.md` → Arc 19 *(dívida de doc, 2026-07-08)*
+
+O doc está marcado "Estado: Arc 16" e descreve como **atuais** artefatos removidos no Arc 19 Fase F. Corrigir:
+
+- `journey.events` (9 tipos) + `JourneyEventSchema`/`journey.ts` → marcar como **legado removido** (feito
+  parcialmente 2026-07-08; falta a seção de detalhe do tópico, se houver âncora `#journeyevents`).
+- `workflow.events` + `WorkflowInstance` + endpoints lifecycle do `workflow-api` → removidos/410 no Arc 19
+  (workflow = canal `webhook`); atualizar produtor/consumidor e o texto.
+- `skill-flow-worker` como consumidor → subsumido pelo `orchestrator-bridge`.
+- Cabeçalho "Estado: Arc 16" → Arc 19; refletir modelo unificado (`session_id` persistente, status `suspended`,
+  `origin_session_id`, e futuramente `root_session_id`/`journey.merges`).
+- Adicionar tópicos vivos que faltam (`session.signals`, `calibration.events` se ausente, etc.).
+
+**Método:** cross-check contra `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` (DDLs reais) e
+`CLAUDE.md § Kafka Topics` (que já está correto e serve de gabarito). Baixo risco, alta clareza — chore de doc.
+
+---
+
 ## Resolvedor de Identidade — próximos passos (Fase A ✅ Slices 1–4; falta Slice 3 + Fase B) *(2026-07-02)*
 
 **Estado:** Fase A completa e validada (ver `CHANGELOG.md` § Slices 1/2/4 e `docs/product/identity-resolver-fase-a-plano.md`). Cadastro mínimo interno sem CRM: índice Redis + durabilidade PG (`schema identity`) + retomada cross-canal + `sessions.customer_id` = nativo no fechamento (conserta `contact_id`-como-`customer_id`, reconecta H1/H2/H3).

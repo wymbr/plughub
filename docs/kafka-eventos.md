@@ -24,7 +24,8 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
 | `workflow.events` | `WorkflowEventSchema` | `workflow.ts` |
 | `collect.events` | `CollectEventSchema` | `workflow.ts` |
-| `journey.events` | `JourneyEventSchema` | `journey.ts` |
+| `journey.events` | `JourneyEventSchema` | `journey.ts` | *(Arc 10 — removido no Arc 19 Fase F)* |
+| `journey.merges` *(Journey retorno — design)* | `JourneyMergedEventSchema` | `journey-merges.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
@@ -58,6 +59,7 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | [`calibration.events`](#calibrationevents) | evaluation-api | analytics-api → ClickHouse | Eventos de calibração de avaliadores (Arc 13) |
 | [`workflow.events`](#workflowevents) | workflow-api | skill-flow-worker, analytics-api | Lifecycle de WorkflowInstance |
 | [`collect.events`](#collectevents) | workflow-api | channel-gateway, analytics-api | Step `collect` — contato outbound assíncrono |
+| `journey.merges` *(Journey retorno — design, pré-código)* | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse | Aresta de merge de journey (novo→antigo); **1 tipo** — distinto do `journey.events` (9 tipos) removido no Arc 19. Ver `docs/product/journey-3-niveis-implementation-spec.md` |
 | [`journey.events`](#journeyevents) | workflow-api | analytics-api → ClickHouse | Lifecycle de jornada multi-sessão (Arc 10/16) |
 | [`usage.events`](#usageevents) | core, ai-gateway, channel-gateway | usage-aggregator | Metering por dimensão de consumo |
 | [`agent.events`](#agentevents) | mcp-server-plughub (tool `agent_event`) | analytics-api → ClickHouse | KPIs de negócio publicados por agentes (Arc 12) |
