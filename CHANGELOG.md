@@ -2,6 +2,17 @@
 
 ---
 
+## Dev hygiene — typecheck do agent-registry + testes do injection_guard (2026-07-08)
+
+Dívida pré-existente sem relação com features. **agent-registry**: os 4 erros de `tsc` (`redis.ts` "Cannot find
+module 'ioredis'" + `operational.ts` `poolId`/`sid` sem tipo) eram **puramente `ioredis` não instalado no
+working-copy** (declarado em `package.json`, ausente no `node_modules`); `npm install` restaura os tipos e os 4
+somem em cascata — sem mudança de código. **mcp-server** `injection_guard.test.ts`: os 2 testes l33tspeak/unicode
+casavam `.toThrow(/INJECTION_DETECTED/)` contra a **mensagem** (que é o texto descritivo), mas `INJECTION_DETECTED`
+é o **`.code`** do erro — realinhados a checar `err.code` (convenção do teste vizinho). 25/25 verdes.
+
+---
+
 ## Config params — lint de `source` no publish + timeout dinâmico do dialog-runner (2026-07-08)
 
 Dois hardenings pequenos na frente de config-params/dialog.
