@@ -139,6 +139,14 @@ export async function executeMenu(
   // Retry — resolve format validation + reprompt (literal or ref). Absent ⇒ no retry.
   const resolvedValidation = await resolveObjectRef<MenuValidation>(step.validation, ctx, ctx.contextStore)
   const resolvedRetry      = await resolveObjectRef<MenuRetry>(step.retry, ctx, ctx.contextStore)
+  // §21 — timeout_s may be a literal number OR a $./@ctx. ref (e.g. a DialogForm's
+  // render.timeout_s). Resolve to a number; fall back to 300 on anything unusable.
+  const rawTimeout = await resolveDynamicValue(step.timeout_s, ctx, ctx.contextStore)
+  const resolvedTimeoutS = typeof rawTimeout === "number"
+    ? rawTimeout
+    : (typeof rawTimeout === "string" && rawTimeout.trim() !== "" && Number.isFinite(Number(rawTimeout)))
+      ? Number(rawTimeout)
+      : 300
   const maxAttempts =
     resolvedRetry && typeof resolvedRetry.max_attempts === "number" && resolvedRetry.max_attempts >= 1
       ? resolvedRetry.max_attempts
@@ -188,8 +196,8 @@ export async function executeMenu(
   //    Nesse caso usamos o TTL máximo de sessão (14400s = 4h) como limite superior
   //    para waitingKey e execution lock — suficiente para cobrir qualquer sessão ativa.
   // timeout_s === 0 or -1 both mean "block indefinitely" (spec §4.7: -1 = block indefinitely)
-  const isInfinite  = step.timeout_s === 0 || step.timeout_s === -1
-  const timeoutSec  = isInfinite ? 14400 : (step.timeout_s ?? 300)
+  const isInfinite  = resolvedTimeoutS === 0 || resolvedTimeoutS === -1
+  const timeoutSec  = isInfinite ? 14400 : resolvedTimeoutS
   const resultKey   = redisKeys.menuResult(ctx.sessionId, ctx.instanceId)
   const closedKey   = redisKeys.sessionClosed(ctx.sessionId)
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)

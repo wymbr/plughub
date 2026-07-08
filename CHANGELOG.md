@@ -2,6 +2,26 @@
 
 ---
 
+## Config params — lint de `source` no publish + timeout dinâmico do dialog-runner (2026-07-08)
+
+Dois hardenings pequenos na frente de config-params/dialog.
+
+**Lint de `source` (agent-registry):** `configParamSourceWarnings` avisa — **não-bloqueante** — quando um
+`config_param` declara um `source` fora do conjunto conhecido (`dialogforms`/`pools`/`skills`), no PUT/POST de
+`/v1/skills` (o momento de authoring). Emite no log + campo `config_param_warnings` na resposta. Pega o typo
+(`dialogfroms`) sem fechar o schema — `source` segue `z.string()` aberto, então uma UI defasada não vira erro
+(forward-compat). Constante espelha o `CONFIG_PARAM_SOURCES` do platform-ui.
+
+**Timeout dinâmico do dialog-runner:** o `skill_dialog_runner_v1` usava `timeout_s: 180` estático, ignorando o
+timeout do form. O `DialogForm` já tinha `timeout_s` por pergunta (default 300) — agora: `form_get` expõe
+`render.timeout_s`; `MenuStep.timeout_s` virou união `number | ref` ($./@ctx.); o engine (`menu.ts`) resolve o
+ref → número (fallback 300) via `resolveDynamicValue`, mesmo padrão do §17.4; o runner lê
+`$.pipeline_state.dialog.render.timeout_s`. Único leitor de `menu.timeout_s` é o `menu.ts` (blast radius contido).
+Rebuild: schemas → mcp-server + skill-flow-engine + agent-registry (o `MenuStepSchema` mudou). schemas 165 ✓,
+mcp-server typecheck ✓, skill-flow-engine typecheck + 145 testes ✓.
+
+---
+
 ## Survey web-link — camada de providers plugável (webhook vendor-neutro, 2026-07-08)
 
 Evolui a entrega do link de survey de um mock único para uma **camada de providers** production-ready,

@@ -13,6 +13,32 @@ import { CreateSkillSchema, UpdateSkillSchema, validateMaskedBlock } from "../va
 import { publishRegistryChanged } from "../infra/kafka"
 import { config } from "../config"
 
+// ── Config-param `source` lint (advisory, non-blocking) ──────────────────────
+// A config_param's `source` is an OPEN string interpreted only by the deploy UI
+// (known values → combo; unknown → text input). A typo therefore degrades
+// silently at deploy. We catch it at PUBLISH (the authoring moment): unknown
+// sources emit a non-blocking warning (logged + returned as `config_param_warnings`)
+// so the author sees it without the schema having to reject an open field — a
+// stale UI could legitimately not know a newer source, so we never hard-fail.
+// Keep in sync with platform-ui AgentFlowDeployPage CONFIG_PARAM_SOURCES.
+const KNOWN_CONFIG_PARAM_SOURCES = new Set(["dialogforms", "pools", "skills"])
+
+function configParamSourceWarnings(
+  params: ReadonlyArray<{ key?: string | undefined; source?: string | undefined }> | undefined,
+): string[] {
+  const warnings: string[] = []
+  for (const p of params ?? []) {
+    if (p.source && !KNOWN_CONFIG_PARAM_SOURCES.has(p.source)) {
+      warnings.push(
+        `config_param "${p.key ?? "?"}" declares unknown source "${p.source}" — ` +
+        `the deploy UI will fall back to a text input (possible typo; known sources: ` +
+        `${[...KNOWN_CONFIG_PARAM_SOURCES].join(", ")})`,
+      )
+    }
+  }
+  return warnings
+}
+
 export const skillsRouter = Router()
 
 // ─────────────────────────────────────────────
@@ -80,7 +106,12 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
       } as any,
     })
 
-    return res.status(201).json(_formatSkill(skill))
+    const warnings = configParamSourceWarnings(body.config_params)
+    for (const w of warnings) console.warn(`[skills] ${body.skill_id}: ${w}`)
+    return res.status(201).json({
+      ..._formatSkill(skill),
+      ...(warnings.length ? { config_param_warnings: warnings } : {}),
+    })
   } catch (err) {
     return next(err)
   }
@@ -224,7 +255,12 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
     // Notify orchestrator-bridge to invalidate its skill cache for this skill_id
     await publishRegistryChanged(tenantId, "skill", skillId, "updated")
 
-    return res.json(_formatSkill(skill))
+    const warnings = configParamSourceWarnings(body.config_params)
+    for (const w of warnings) console.warn(`[skills] ${skillId}: ${w}`)
+    return res.json({
+      ..._formatSkill(skill),
+      ...(warnings.length ? { config_param_warnings: warnings } : {}),
+    })
   } catch (err) {
     return next(err)
   }

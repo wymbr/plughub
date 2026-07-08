@@ -117,7 +117,9 @@ Ver CHANGELOG (inclui a nota de deploy: rebuild `--no-cache` dos consumidores do
 via `set-next`+`promote` com auth `x-service-token`).
 
 **Fatia 2 (restante, pendente):**
-- **timeout dinâmico do runner** (hoje `timeout_s` estático 180; o do form não é lido) — mesma extensão de ref;
+- **timeout dinâmico do runner ✅ (2026-07-08):** o `DialogForm` já tinha `timeout_s` por pergunta; agora o
+  `form_get` expõe `render.timeout_s`, o `MenuStep.timeout_s` aceita `number | ref` ($./@ctx.), o engine
+  (`menu.ts`) resolve o ref → número (fallback 300), e o runner usa `$.pipeline_state.dialog.render.timeout_s`;
 - **`channel_policy: elect`** (runner apresenta menu de canal, reach cross-canal);
 - **editor multi-locale ✅ (2026-07-07):** LocaleBar (chips add/remove/selecionar idioma em edição), `setLt`
   preserva o mapa `{locale}` (string pura = só o default_locale), indicador "sem tradução" por nó, save garante
@@ -136,8 +138,10 @@ via `set-next`+`promote` com auth `x-service-token`).
   resolvia `$.config.*` (§17.3-1). `skill_survey_multi_v1` trocou os 2 literais `form_id` por `$.config.form_id`
   → **survey virou skill-único parametrizado por deploy.** **Exige deploy por slot** com `config_json.form_id`
   (set-next+promote): sem isso `form_get` falha (contrato do skill parametrizado). Typo de `source` NÃO tratado
-  no deploy (por decisão); lint no publish = item opcional futuro. Worker legado (`skill-flow-worker`) fora de
-  escopo (Arc 19 o deprecou; survey roda como agente nativo via bridge).
+  no deploy (por decisão); **lint no publish ✅ (2026-07-08)** — agent-registry `configParamSourceWarnings`
+  avisa (não-bloqueante, `config_param_warnings` na resposta do PUT/POST + log) quando um config_param declara
+  `source` fora do conjunto conhecido; pega o typo no authoring sem fechar o schema (UI defasada não vira erro).
+  Worker legado (`skill-flow-worker`) fora de escopo (Arc 19 o deprecou; survey roda como agente nativo via bridge).
 - **entrega real do link web** ✅ (2026-07-08, provider layer): veículo web + camada de providers plugável.
   `SurveyLinkDelivery` virou **roteador** sobre `LinkDeliveryProvider` (protocol): `MockProvider` (dev log,
   default/fallback) + `WebhookProvider` **vendor-neutro** (POST `{kind,address,url,tenant_id}` ao gateway do

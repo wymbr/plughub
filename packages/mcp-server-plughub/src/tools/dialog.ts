@@ -64,6 +64,7 @@ interface DialogRender {
   visibility:  unknown                // the question's visibility (enum|array with @ctx refs) or "all"
   validation:  unknown                // the question's format validation, or undefined
   retry:       RenderRetry | undefined // the question's retry (reprompt localized + max_attempts)
+  timeout_s:   number                 // §21 — the question's timeout (s); menu step reads via ref
   // Fatia 2 loop view: one entry per question (walked sequentially by a `loop` step).
   questions:       RenderQuestion[]
   // Legacy/multi-field view (interaction=form): one field per question.
@@ -141,6 +142,9 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
     visibility:  q?.visibility ?? "all",
     validation:  q?.validation,
     retry:       q ? flattenRetry(q, locale, dl) : undefined,
+    // §21 — the question's timeout (form JSON is raw-cast, not Zod-parsed, so the
+    // schema default isn't applied here → fall back to 300, matching the schema).
+    timeout_s:   (q && typeof q.timeout_s === "number") ? q.timeout_s : 300,
     questions,
     menu_prompt: before.join("\n\n") || qPrompt,
     fields,

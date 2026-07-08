@@ -499,8 +499,14 @@ export const MenuStepSchema = z.object({
    *  >0  → bloqueia N segundos
    *  -1  → bloqueia indefinidamente
    * Default: 300
+   *
+   * Dialog primitive §21 — pode ser um literal OU um ref ($./@ctx.) resolvido em
+   * runtime (ex.: o timeout vindo de um DialogForm via form_get → render.timeout_s).
    */
-  timeout_s:     z.number().int().min(-1).default(300),
+  timeout_s:     z.union([
+    z.number().int().min(-1),
+    z.string().regex(/^(\$\.|@ctx\.)/, "timeout_s deve ser número ou um ref $./@ctx."),
+  ]).default(300),
   on_success:    z.string(),
   on_failure:    z.string(),
   /** Step para timeout — usa on_failure se não especificado */

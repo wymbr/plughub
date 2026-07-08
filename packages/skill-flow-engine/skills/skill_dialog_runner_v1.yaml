@@ -79,7 +79,9 @@ steps:
     validation: "$.pipeline_state.dialog.render.validation"
     retry: "$.pipeline_state.dialog.render.retry"
     output_as: answers
-    timeout_s: 180
+    # §21 — timeout dinâmico: lê o timeout da pergunta do DialogForm (render.timeout_s),
+    # em vez do 180 estático. Ausente no form → 300 (default do schema/render).
+    timeout_s: "$.pipeline_state.dialog.render.timeout_s"
     on_success: retornar
     on_failure: retornar_falha
     on_timeout: retornar_falha
