@@ -70,6 +70,14 @@ read -r -d '' BODY <<'JSON' || true
       ]
     },
     {
+      "id": "q_motivo",
+      "kind": "question",
+      "prompt": { "pt-BR": "Poxa, o que faltou no atendimento? Conta pra gente melhorar." },
+      "interaction": "text",
+      "output_key": "motivo",
+      "ask_when": { "field": "atendimento", "op": "lt", "value": 3 }
+    },
+    {
       "id": "q_nps",
       "kind": "question",
       "prompt": { "pt-BR": "De 0 a 10, quanto você recomendaria nossa empresa a um amigo?" },

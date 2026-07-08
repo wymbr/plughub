@@ -709,12 +709,16 @@ export {
   DialogVisibilitySchema,
   StatementNodeSchema,
   DialogInteractionSchema,
+  AskWhenOpSchema,
+  AskWhenSchema,
   DialogRetrySchema,
   QuestionNodeSchema,
   DialogNodeSchema,
   DialogFormStatusSchema,
   DialogFormSchema,
   resolveLocalizedText,
+  evaluateAskWhen,
+  askWhenForwardRefErrors,
 } from "./dialog"
 
 export type {
@@ -728,6 +732,8 @@ export type {
   DialogVisibility,
   StatementNode,
   DialogInteraction,
+  AskWhenOp,
+  AskWhen,
   DialogRetry,
   QuestionNode,
   DialogNode,

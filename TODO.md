@@ -158,18 +158,16 @@ o item "Revisão do editor de diálogos" acima); (2) composite de form opcional 
 `DialogDimension.weight` reservado, adiado; (3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do
 `scoring.ts` pelo `EvaluationForm` (retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
 
-### Skip-logic condicional em DialogForm — guarda `ask_when` *(desenho travado 2026-07-08; ADR)*
+### Skip-logic condicional em DialogForm — guarda `ask_when` ✅ (2026-07-08)
 
-Perguntas de follow-up condicionais (skip-logic) sem quebrar o invariante "form = conteúdo linear, controle é do
-skill". Desenho fechado em [`docs/adr/adr-dialog-conditional-skip-logic.md`](docs/adr/adr-dialog-conditional-skip-logic.md):
-guarda **declarativa** `ask_when` em nó/bloco (não comando imperativo "test on"); expressão `{field, op, value}`
-(`field` = `output_key` anterior; `op` ∈ lt/lte/gt/gte/eq/ne/in) reusando o vocabulário do `ChoiceStep`,
-sandboxed (sem eval, sem side-effect, referência só-para-trás). Runner (`loop`) pula item falso; página web
-avalia a mesma condição em JS (avaliador puro compartilhado). Pulada = NA = re-normalizada pelo `composeScore`
-(nada novo no cálculo). Controle de verdade (delegar/escalar) segue no skill. **Fases:** (1) schema `ask_when`
-+ validação de forward-reference; (2) avaliador puro compartilhado + step `loop`; (3) veículo web; (4) UX do
-editor (construtor da guarda — junto da 2ª passada do editor). Decisões em aberto no ADR: `field` de pergunta
-não respondida (proposta: guarda falsa), checklist/multi-valor no `in`. *(discussão; sem implementação)*
+Implementado nas 4 fases (ver CHANGELOG + [`docs/adr/adr-dialog-conditional-skip-logic.md`](docs/adr/adr-dialog-conditional-skip-logic.md)):
+guarda **declarativa** `ask_when {field, op, value}` em statement/question; `evaluateAskWhen` puro +
+`askWhenForwardRefErrors` (só-para-trás) no `@plughub/schemas`; step `loop` pula item falso; `survey_web.py`
+espelha em JS (show/hide reativo); editor com a linha "only ask if…". **Validado ao vivo** (`atendimento < 3`
+pergunta/pula o follow-up; pulada = NA, `signals=2` nos dois casos). **Falta (nice-to-have):** guarda **por-bloco**
+como sugar no editor (hoje é por-nó — o "follow-up section" se faz repetindo a guarda nas perguntas do bloco);
+UX do `in` com multi-valor mais rica; validação de forward-ref exibida no editor (o helper existe, falta o gate
+visual). Decisão de borda confirmada: `field` não respondido ⇒ guarda falsa (skip).
 
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR

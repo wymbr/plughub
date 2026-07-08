@@ -53,6 +53,7 @@ interface RenderQuestion {
   visibility:  unknown
   validation:  unknown               // format-only validation (numeric/pattern/…) or undefined
   retry:       RenderRetry | undefined  // reprompt (localized) + max_attempts, or undefined
+  ask_when:    unknown               // declarative skip-logic guard { field, op, value } or undefined
 }
 interface DialogRender {
   // §17.4 — single-question NATIVE view (the v1 render the runner uses):
@@ -117,6 +118,7 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
         visibility:  node.visibility ?? "all",
         validation:  node.validation,
         retry:       flattenRetry(node, locale, dl),
+        ask_when:    node.ask_when,
       })
       captures[node.output_key] = node.capture ?? {}
     }

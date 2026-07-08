@@ -79,11 +79,21 @@ export interface DialogField {
 
 export type DialogVisibility = 'all' | 'agents_only' | string[]
 
+export type AskWhenOp = 'lt' | 'lte' | 'gt' | 'gte' | 'eq' | 'ne' | 'in'
+
+/** Declarative skip-logic guard (references a prior question's output_key). */
+export interface AskWhen {
+  field: string
+  op: AskWhenOp
+  value: number | string | boolean | Array<number | string>
+}
+
 export interface StatementNode {
   id: string
   kind: 'statement'
   text: LocalizedText
   visibility?: DialogVisibility
+  ask_when?: AskWhen
 }
 
 export type DialogInteraction = 'text' | 'button' | 'list' | 'checklist' | 'form'
@@ -102,6 +112,7 @@ export interface QuestionNode {
   retry?: { reprompt: LocalizedText; max_attempts?: number }
   visibility?: DialogVisibility
   timeout_s?: number
+  ask_when?: AskWhen
 }
 
 export type DialogNode = StatementNode | QuestionNode

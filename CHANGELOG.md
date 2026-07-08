@@ -2,6 +2,34 @@
 
 ---
 
+## Skip-logic condicional em DialogForm — guarda `ask_when` (2026-07-08)
+
+Perguntas de follow-up condicionais sem quebrar o invariante "form = conteúdo linear, controle é do skill" — ver
+`docs/adr/adr-dialog-conditional-skip-logic.md`. **Guarda declarativa** `ask_when` num nó (não comando imperativo
+"test on"): o runner permanece linear e apenas **pula** o nó cuja guarda for falsa. **Validado ao vivo** no
+webchat: `q_motivo` (`ask_when: atendimento < 3`) é perguntado quando atendimento=2 e **pulado** quando
+atendimento=5; pulada = ausente em `answers` = NA na composição (`signals=2` nos dois casos).
+
+**Schema (`@plughub/schemas/dialog.ts`):** `AskWhen { field, op(lt/lte/gt/gte/eq/ne/in), value }`; `ask_when?`
+em statement/question. `evaluateAskWhen(guard, answers)` puro (ausente ⇒ skip) — fonte única da semântica.
+`askWhenForwardRefErrors(form)` valida referência **só-para-trás** por `output_key`. Testes vitest (9).
+
+**Runtime (chat):** `buildRender` (mcp-server) inclui `ask_when` em `render.questions`; o step `loop`
+(skill-flow-engine) avalia `evaluateAskWhen` contra o acumulador e **avança sobre itens falsos** (não expõe nem
+coleta). Item pulado nunca vira sinal.
+
+**Veículo web (`survey_web.py`):** a página `/survey/{token}` embute um avaliador JS que **espelha** o
+`evaluateAskWhen` e mostra/esconde perguntas reativamente ao responder; pergunta escondida tem a resposta
+limpa (NA no submit).
+
+**Editor (`DialogFormsPage`):** linha "only ask if [pergunta anterior ▾] [op ▾] [valor]" por nó, oferecendo só
+`output_keys` **anteriores** (backward-only); `in` aceita lista separada por vírgula. i18n en/pt-BR.
+
+**A linha:** guarda no form = *qual conteúdo mostrar*; agir (delegar/escalar/tool) segue no `choice`/`escalate`
+do skill-flow. Retrocompatível: `ask_when` ausente = comportamento atual.
+
+---
+
 ## Editor de dialog-forms por blocos — reforma completa (2026-07-07)
 
 Reforma do `/config/dialog-forms` (`DialogFormsPage.tsx`) para o modelo de **blocos**, fechando a UI de

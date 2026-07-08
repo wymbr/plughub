@@ -69,6 +69,11 @@
     "weightsHide": "ocultar pesos",
     "anchors": "rótulos da escala"
   },
+  "askWhen": {
+    "label": "só perguntar se",
+    "value": "valor",
+    "valueList": "valores, separados por vírgula"
+  },
   "vis": {
     "all": "Todos",
     "customer": "Só o cliente",

@@ -34,6 +34,8 @@ import {
   type DialogVisibility,
   type DialogInteraction,
   type ScoreAggregation,
+  type AskWhen,
+  type AskWhenOp,
 } from '@/api/dialog-hooks'
 import { type Block, buildBlocks, flattenBlocks } from './dialog-blocks'
 
@@ -180,6 +182,17 @@ const DialogFormsPage: React.FC = () => {
     const n = new Set(s); n.has(idx) ? n.delete(idx) : n.add(idx); return n
   })
 
+  // Prior question output_keys per node — the backward-only references an
+  // `ask_when` guard may point at (walks the flattened block order).
+  const priorKeys: Record<string, string[]> = {}
+  {
+    const seen: string[] = []
+    for (const b of blocks) for (const nd of b.nodes) {
+      priorKeys[nd.id] = seen.slice()
+      if (nd.kind === 'question') seen.push(nd.output_key)
+    }
+  }
+
   const save = async (publish: boolean) => {
     if (!draft) return
     if (!draft.form_id.trim()) { setMsg({ kind: 'err', text: t('err.formIdRequired') }); return }
@@ -302,6 +315,7 @@ const DialogFormsPage: React.FC = () => {
               {blocks.map((block, idx) => (
                 <BlockCard key={idx} block={block} idx={idx} total={blocks.length}
                   instruments={instruments} locale={editLocale} defaultLocale={draft.default_locale}
+                  priorKeys={priorKeys}
                   expanded={expanded} onToggleExpand={toggleExpand}
                   adjust={adjust.has(idx)} onToggleAdjust={() => toggleAdjust(idx)}
                   onChange={b => updateBlock(idx, b)} onRemove={() => removeBlock(idx)}
@@ -341,6 +355,7 @@ interface BlockCardProps {
   instruments: Instrument[]
   locale: string
   defaultLocale: string
+  priorKeys: Record<string, string[]>
   expanded: Set<string>
   onToggleExpand: (id: string) => void
   adjust: boolean
@@ -351,7 +366,7 @@ interface BlockCardProps {
 }
 
 const BlockCard: React.FC<BlockCardProps> = ({
-  block, idx, total, instruments, locale, defaultLocale, expanded, onToggleExpand,
+  block, idx, total, instruments, locale, defaultLocale, priorKeys, expanded, onToggleExpand,
   adjust, onToggleAdjust, onChange, onRemove, onMove,
 }) => {
   const { t } = useTranslation('dialogForms')
@@ -480,6 +495,7 @@ const BlockCard: React.FC<BlockCardProps> = ({
         {block.nodes.map((node, i) => (
           <NodeRow key={node.id} node={node} first={i === 0} last={i === block.nodes.length - 1}
             locale={locale} defaultLocale={defaultLocale} scored={isInstrument}
+            priorKeys={priorKeys[node.id] ?? []}
             expanded={expanded.has(node.id)} onToggle={() => onToggleExpand(node.id)}
             showWeight={isInstrument && adjust} pct={node.kind === 'question' ? pctOf(node) : 0}
             onChange={n => updateNode(i, n)} onRemove={() => removeNode(i)} onMove={dir => moveNode(i, dir)} />
@@ -505,9 +521,10 @@ const BlockCard: React.FC<BlockCardProps> = ({
 
 const NodeRow: React.FC<{
   node: DialogNode; first: boolean; last: boolean; locale: string; defaultLocale: string; scored: boolean
+  priorKeys: string[]
   expanded: boolean; onToggle: () => void; showWeight: boolean; pct: number
   onChange: (n: DialogNode) => void; onRemove: () => void; onMove: (dir: -1 | 1) => void
-}> = ({ node, first, last, locale, defaultLocale, scored, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
+}> = ({ node, first, last, locale, defaultLocale, scored, priorKeys, expanded, onToggle, showWeight, pct, onChange, onRemove, onMove }) => {
   const { t } = useTranslation('dialogForms')
   const isQ = node.kind === 'question'
   const summary = ltToStr(node.kind === 'question' ? node.prompt : node.text, locale, defaultLocale)
@@ -538,16 +555,16 @@ const NodeRow: React.FC<{
       {expanded && (
         <div className="px-3 pb-2">
           {node.kind === 'statement'
-            ? <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} onChange={onChange} />
-            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} onChange={onChange} />}
+            ? <StatementEditor node={node} locale={locale} defaultLocale={defaultLocale} priorKeys={priorKeys} onChange={onChange} />
+            : <QuestionEditor node={node} locale={locale} defaultLocale={defaultLocale} scored={scored} priorKeys={priorKeys} onChange={onChange} />}
         </div>
       )}
     </div>
   )
 }
 
-const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLocale: string; onChange: (n: DialogNode) => void }> =
-({ node, locale, defaultLocale, onChange }) => {
+const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLocale: string; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, priorKeys, onChange }) => {
   const { t } = useTranslation('dialogForms')
   return (
     <div className="space-y-2">
@@ -558,12 +575,13 @@ const StatementEditor: React.FC<{ node: StatementNode; locale: string; defaultLo
           className="mt-1 w-full border rounded px-2 py-1 text-sm bg-white" />
       </label>
       <VisibilityRow value={node.visibility} onChange={v => onChange({ ...node, visibility: v })} />
+      <AskWhenRow node={node} priorKeys={priorKeys} onChange={onChange} />
     </div>
   )
 }
 
-const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; onChange: (n: DialogNode) => void }> =
-({ node, locale, defaultLocale, scored, onChange }) => {
+const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLocale: string; scored?: boolean; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
+({ node, locale, defaultLocale, scored, priorKeys, onChange }) => {
   const { t } = useTranslation('dialogForms')
   const setOptions = (options: DialogOption[]) => onChange({ ...node, options })
   return (
@@ -677,6 +695,57 @@ const QuestionEditor: React.FC<{ node: QuestionNode; locale: string; defaultLoca
             </div>
           ))}
         </div>
+      )}
+
+      <AskWhenRow node={node} priorKeys={priorKeys} onChange={onChange} />
+    </div>
+  )
+}
+
+// ── ask_when guard builder (conditional skip-logic) ─────────────────────────────
+
+const AW_OPS: AskWhenOp[] = ['lt', 'lte', 'gt', 'gte', 'eq', 'ne', 'in']
+const isNum = (s: string) => /^-?\d+(\.\d+)?$/.test(s.trim())
+function parseAwValue(op: AskWhenOp, raw: string): AskWhen['value'] {
+  if (op === 'in') return raw.split(',').map(s => s.trim()).filter(Boolean).map(s => (isNum(s) ? Number(s) : s))
+  return isNum(raw) ? Number(raw) : raw
+}
+function awValueToStr(v: AskWhen['value'] | undefined): string {
+  if (Array.isArray(v)) return v.join(', ')
+  return v === undefined ? '' : String(v)
+}
+
+const AskWhenRow: React.FC<{ node: DialogNode; priorKeys: string[]; onChange: (n: DialogNode) => void }> =
+({ node, priorKeys, onChange }) => {
+  const { t } = useTranslation('dialogForms')
+  const g = node.ask_when
+  if (!g && priorKeys.length === 0) return null   // nothing to reference yet
+  const set = (patch: Partial<AskWhen>) => {
+    const base: AskWhen = g ?? { field: priorKeys[0] ?? '', op: 'lt', value: 0 }
+    onChange({ ...node, ask_when: { ...base, ...patch } })
+  }
+  return (
+    <div className="flex items-center gap-2 flex-wrap text-xs text-gray-600 border-t pt-2">
+      <label className="flex items-center gap-1">
+        <input type="checkbox" checked={!!g}
+          onChange={e => onChange({ ...node, ask_when: e.target.checked ? { field: priorKeys[0] ?? '', op: 'lt', value: 0 } : undefined })} />
+        {t('askWhen.label')}
+      </label>
+      {g && (
+        <>
+          <select value={g.field} onChange={e => set({ field: e.target.value })}
+            className="border rounded px-1 py-0.5 bg-white">
+            {priorKeys.map(k => <option key={k} value={k}>{k}</option>)}
+            {!priorKeys.includes(g.field) && <option value={g.field}>{g.field || '—'}</option>}
+          </select>
+          <select value={g.op} onChange={e => set({ op: e.target.value as AskWhenOp })}
+            className="border rounded px-1 py-0.5 bg-white">
+            {AW_OPS.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <input value={awValueToStr(g.value)} placeholder={g.op === 'in' ? t('askWhen.valueList') : t('askWhen.value')}
+            onChange={e => set({ value: parseAwValue(g.op, e.target.value) })}
+            className="w-28 border rounded px-2 py-0.5 bg-white" />
+        </>
       )}
     </div>
   )

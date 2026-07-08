@@ -22,6 +22,7 @@
  */
 
 import type { LoopStep } from "@plughub/schemas"
+import { evaluateAskWhen } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
 import { resolveInputValue } from "../interpolate"
 
@@ -64,8 +65,25 @@ export async function executeLoop(
     acc = [...acc, entry]
   }
 
+  // ── Skip-logic condicional (ask_when) ────────────────────────────────────────
+  // Antes de expor o elemento atual, avança sobre os itens cuja guarda `ask_when`
+  // for FALSA (declarativa, ADR adr-dialog-conditional-skip-logic). Item pulado
+  // não é exposto nem coletado (fica NA na composição, re-normalizado). As
+  // respostas até aqui vêm do acumulador (output_key → value).
+  const answered: Record<string, unknown> = {}
+  for (const e of acc) {
+    if (e.output_key !== undefined && e.output_key !== null) answered[String(e.output_key)] = e.value
+  }
+  let curIdx = idx
+  while (curIdx < n && curIdx < cap) {
+    const it = items[curIdx] as { ask_when?: unknown } | undefined
+    const guard = it && typeof it === "object" ? it.ask_when : undefined
+    if (evaluateAskWhen(guard as never, answered)) break
+    curIdx++
+  }
+
   // ── Terminação: array esgotado ou teto atingido ─────────────────────────────
-  if (idx >= n || idx >= cap) {
+  if (curIdx >= n || curIdx >= cap) {
     const cleaned: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(results)) {
       if (k === idxKey || k === startedKey || k === accKey) continue
@@ -83,9 +101,9 @@ export async function executeLoop(
     if (k.endsWith(":__notified__")) continue
     next[k] = v
   }
-  next[step.item_as] = items[idx]
-  if (step.index_as) next[step.index_as] = idx
-  next[idxKey]     = idx + 1
+  next[step.item_as] = items[curIdx]
+  if (step.index_as) next[step.index_as] = curIdx
+  next[idxKey]     = curIdx + 1
   next[startedKey] = true
   next[accKey]     = acc
   await ctx.saveState({ ...ctx.state, results: next })

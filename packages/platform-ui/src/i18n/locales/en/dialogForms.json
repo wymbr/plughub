@@ -69,6 +69,11 @@
     "weightsHide": "hide weights",
     "anchors": "scale labels"
   },
+  "askWhen": {
+    "label": "only ask if",
+    "value": "value",
+    "valueList": "values, comma-separated"
+  },
   "vis": {
     "all": "Everyone",
     "customer": "Customer only",

@@ -67,6 +67,36 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
   var token = location.pathname.split('/').filter(Boolean).pop();
   var root  = document.getElementById('root');
   var answers = {};
+  var guards  = {};   // nodeIndex -> ask_when guard
+  var nodeOk  = {};   // nodeIndex -> output_key (for clearing skipped answers)
+
+  // Mirror of @plughub/schemas evaluateAskWhen (adr-dialog-conditional-skip-logic).
+  function awNum(x){ return typeof x === 'number' ? x : Number(x); }
+  function awEq(a, b){ var na = awNum(a), nb = awNum(b); if (isFinite(na) && isFinite(nb)) return na === nb; return String(a) === String(b); }
+  function awEval(g){
+    if (!g) return true;
+    var a = answers[g.field];
+    if (a === undefined || a === null || a === '') return false;
+    switch (g.op) {
+      case 'lt':  return awNum(a) <  awNum(g.value);
+      case 'lte': return awNum(a) <= awNum(g.value);
+      case 'gt':  return awNum(a) >  awNum(g.value);
+      case 'gte': return awNum(a) >= awNum(g.value);
+      case 'eq':  return awEq(a, g.value);
+      case 'ne':  return !awEq(a, g.value);
+      case 'in':  return Array.isArray(g.value) && g.value.some(function (v) { return awEq(a, v); });
+      default:    return false;
+    }
+  }
+  function refresh(){
+    Object.keys(guards).forEach(function (i) {
+      var el = root.querySelector('[data-node="' + i + '"]');
+      if (!el) return;
+      var show = awEval(guards[i]);
+      el.style.display = show ? '' : 'none';
+      if (!show && nodeOk[i]) delete answers[nodeOk[i]];   // skipped ⇒ NA on submit
+    });
+  }
 
   function lt(t, dl) {
     if (t == null) return '';
@@ -78,13 +108,15 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
   function render(form) {
     var dl = form.default_locale || 'pt-BR';
     var h = '<h1>' + esc(form.name || 'Pesquisa') + '</h1>';
-    (form.nodes || []).forEach(function (node) {
+    (form.nodes || []).forEach(function (node, i) {
+      if (node.ask_when) guards[i] = node.ask_when;
       if (node.kind === 'statement') {
-        h += '<div class="stmt">' + esc(lt(node.text, dl)) + '</div>';
+        h += '<div class="stmt" data-node="' + i + '">' + esc(lt(node.text, dl)) + '</div>';
         return;
       }
       var ok = node.output_key;
-      h += '<div class="q" data-ok="' + esc(ok) + '">';
+      nodeOk[i] = ok;
+      h += '<div class="q" data-node="' + i + '" data-ok="' + esc(ok) + '">';
       h += '<div class="q-prompt">' + esc(lt(node.prompt, dl)) + '</div>';
       var it = node.interaction;
       if (it === 'button' || it === 'list' || it === 'checklist') {
@@ -108,12 +140,14 @@ SURVEY_PAGE_HTML = """<!DOCTYPE html>
         answers[ok] = el.getAttribute('data-val');
         root.querySelectorAll('.opt[data-ok="' + ok + '"]').forEach(function (e2) { e2.classList.remove('sel'); });
         el.classList.add('sel');
+        refresh();
       });
     });
     root.querySelectorAll('input[data-input]').forEach(function (el) {
-      el.addEventListener('input', function () { answers[el.getAttribute('data-input')] = el.value; });
+      el.addEventListener('input', function () { answers[el.getAttribute('data-input')] = el.value; refresh(); });
     });
     document.getElementById('submit-btn').addEventListener('click', submit);
+    refresh();
   }
 
   function submit() {

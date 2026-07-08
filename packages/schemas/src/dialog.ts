@@ -74,6 +74,34 @@ export const DialogInteractionSchema = z.enum([
 export type DialogInteraction = z.infer<typeof DialogInteractionSchema>
 
 // ─────────────────────────────────────────────
+// Conditional skip-logic — declarative guard (ADR adr-dialog-conditional-skip-logic)
+// ─────────────────────────────────────────────
+
+/** Comparison operators for an `ask_when` guard. */
+export const AskWhenOpSchema = z.enum(["lt", "lte", "gt", "gte", "eq", "ne", "in"])
+export type AskWhenOp = z.infer<typeof AskWhenOpSchema>
+
+/**
+ * AskWhen — a DECLARATIVE skip-logic guard on a node (not control flow). The node
+ * is presented only when the guard passes. `field` references a PRIOR question's
+ * `output_key` (never a mutable "response"); `value` is a scalar (or a list for
+ * `in`). Bounded and side-effect-free (sandboxed-expression principle) — the
+ * runner stays linear and just SKIPS a node whose guard is false. Absent guard =
+ * always present. Real control (delegate/escalate/tool) stays in the skill.
+ */
+export const AskWhenSchema = z.object({
+  field: z.string().min(1),
+  op:    AskWhenOpSchema,
+  value: z.union([
+    z.number(),
+    z.string(),
+    z.boolean(),
+    z.array(z.union([z.number(), z.string()])),
+  ]),
+})
+export type AskWhen = z.infer<typeof AskWhenSchema>
+
+// ─────────────────────────────────────────────
 // Declarative capture binding (survey domain)
 // ─────────────────────────────────────────────
 
@@ -211,6 +239,8 @@ export const StatementNodeSchema = z.object({
   kind:       z.literal("statement"),
   text:       LocalizedTextSchema,
   visibility: DialogVisibilitySchema.optional(),
+  /** Declarative skip-logic guard (references a prior question's output_key). */
+  ask_when:   AskWhenSchema.optional(),
 })
 export type StatementNode = z.infer<typeof StatementNodeSchema>
 
@@ -245,6 +275,8 @@ export const QuestionNodeSchema = z.object({
   retry:       DialogRetrySchema,
   visibility:  DialogVisibilitySchema.optional(),
   timeout_s:   z.number().int().min(-1).default(300),
+  /** Declarative skip-logic guard (references a prior question's output_key). */
+  ask_when:    AskWhenSchema.optional(),
 })
 export type QuestionNode = z.infer<typeof QuestionNodeSchema>
 
@@ -311,4 +343,65 @@ export function resolveLocalizedText(
   if (defaultLocale && text[defaultLocale] !== undefined) return text[defaultLocale]
   const first = Object.values(text)[0]
   return first ?? ""
+}
+
+// ─────────────────────────────────────────────
+// ask_when — pure evaluator + forward-reference validation
+// ─────────────────────────────────────────────
+
+function _num(x: unknown): number {
+  return typeof x === "number" ? x : Number(x)
+}
+
+/** eq/ne semantics: numeric compare when both coerce to a finite number, else string. */
+function _eq(a: unknown, b: unknown): boolean {
+  const na = _num(a), nb = _num(b)
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na === nb
+  return String(a) === String(b)
+}
+
+/**
+ * evaluateAskWhen — should the node be PRESENTED? Pure, deterministic, no I/O.
+ * No guard ⇒ true (present). Referenced answer absent/empty ⇒ false (skip —
+ * ADR § Decisões em aberto #1). Single source of truth for the engine; the web
+ * vehicle mirrors these semantics in JS.
+ */
+export function evaluateAskWhen(
+  guard: AskWhen | undefined,
+  answers: Record<string, unknown>,
+): boolean {
+  if (!guard) return true
+  const a = answers[guard.field]
+  if (a === undefined || a === null || a === "") return false
+  const { op, value } = guard
+  switch (op) {
+    case "lt":  return _num(a) <  _num(value)
+    case "lte": return _num(a) <= _num(value)
+    case "gt":  return _num(a) >  _num(value)
+    case "gte": return _num(a) >= _num(value)
+    case "eq":  return _eq(a, value)
+    case "ne":  return !_eq(a, value)
+    case "in":  return Array.isArray(value) && value.some(v => _eq(a, v))
+    default:    return false
+  }
+}
+
+/**
+ * askWhenForwardRefErrors — an `ask_when.field` MUST reference a question that
+ * appears EARLIER in the linear node order (a prior answer). Returns the
+ * offending { node_id, field } pairs (forward or unknown reference). Used by the
+ * editor (client-side) and deploy/sync validation.
+ */
+export function askWhenForwardRefErrors(
+  form: Pick<DialogForm, "nodes">,
+): Array<{ node_id: string; field: string }> {
+  const errors: Array<{ node_id: string; field: string }> = []
+  const seen = new Set<string>()
+  for (const node of form.nodes ?? []) {
+    if (node.ask_when && !seen.has(node.ask_when.field)) {
+      errors.push({ node_id: node.id, field: node.ask_when.field })
+    }
+    if (node.kind === "question") seen.add(node.output_key)
+  }
+  return errors
 }

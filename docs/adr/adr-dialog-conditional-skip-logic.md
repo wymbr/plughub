@@ -1,6 +1,7 @@
 # ADR: Skip-logic condicional em DialogForm — guarda declarativa `ask_when` (não control-flow)
 
-**Status:** Proposto (desenho travado 2026-07-08; implementação pendente).
+**Status:** Aceito + implementado (2026-07-08). Fases 1–4 (schema+avaliador, runtime/loop, veículo web, editor)
+prontas e **validadas ao vivo** no webchat (guarda `atendimento < 3` pergunta/pula o follow-up). Ver CHANGELOG.
 **Data:** 2026-07-08
 **Componentes:** `packages/schemas` (`dialog.ts` — guarda no nó/bloco), `packages/skill-flow-engine` (step `loop`
 + avaliador de guarda), `packages/channel-gateway` (`survey_web.py` — mesma guarda em JS), `mcp-server-plughub`
