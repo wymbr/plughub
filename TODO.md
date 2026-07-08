@@ -124,7 +124,11 @@ via `set-next`+`promote` com auth `x-service-token`).
 - **timeout dinâmico do runner ✅ (2026-07-08):** o `DialogForm` já tinha `timeout_s` por pergunta; agora o
   `form_get` expõe `render.timeout_s`, o `MenuStep.timeout_s` aceita `number | ref` ($./@ctx.), o engine
   (`menu.ts`) resolve o ref → número (fallback 300), e o runner usa `$.pipeline_state.dialog.render.timeout_s`;
-- **`channel_policy: elect`** (runner apresenta menu de canal, reach cross-canal);
+- ~~**`channel_policy: elect`** (runner apresenta menu de canal, reach cross-canal)~~ — **decisão C (2026-07-08):
+  adiado.** A eleição de canal já é alcançável hoje como uma `question` do form que o workflow lê e age; o `elect`
+  de 1ª classe (runner dispara o re-dispatch sozinho) conflita com a segregação de perfil (reach = `collect`,
+  exclusivo de `workflow`; runner é `agent`) e não tem consumidor concreto ainda. Reabrir quando houver um fluxo
+  que exija o runner ELE MESMO re-despachar cross-canal (aí decidir A escopado vs B pleno);
 - **editor multi-locale ✅ (2026-07-07):** LocaleBar (chips add/remove/selecionar idioma em edição), `setLt`
   preserva o mapa `{locale}` (string pura = só o default_locale), indicador "sem tradução" por nó, save garante
   `default_locale ∈ locales[]`. Aplica a text/prompt/labels. Refinamentos de editor → ver **"Revisão do editor de
