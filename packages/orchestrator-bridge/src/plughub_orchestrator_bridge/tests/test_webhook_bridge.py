@@ -269,7 +269,9 @@ async def test_resume_re_adds_instance_to_pool_set(mock_redis, mock_http):
 async def test_resume_publishes_agent_ready_and_agent_done(mock_redis, mock_http):
     mock_redis.get.side_effect = [VALID_META, INSTANCE_SNAPSHOT]
     mock_producer  = MagicMock()
-    mock_producer.send = MagicMock(return_value=None)
+    # agent_ready/agent_done are published via asyncio.create_task(producer.send(...)),
+    # so send() must return an awaitable — AsyncMock yields a fresh coroutine per call.
+    mock_producer.send = AsyncMock()
 
     with (
         patch.object(bridge_mod, "activate_native_agent", new_callable=AsyncMock,
@@ -344,12 +346,19 @@ async def test_process_inbound_does_not_call_resume_handler_for_customer_msg(moc
         "author":     {"type": "customer", "id": CUSTOMER},
         "content":    {"type": "text", "text": "hello"},
     }
+    # A human agent is present → process_inbound delivers straight to it and skips
+    # the 3s "no agent waiting" retry loop (keeps the routing test fast + quiet).
+    mock_redis.get.return_value = "human_agent_1"
+    # hgetall → real empty dict (no menu/receive waiters) so the `if raw:` branches
+    # are skipped; a bare AsyncMock would return a truthy MagicMock and leak a
+    # never-awaited mock coroutine into the dict comprehensions.
+    mock_redis.hgetall.return_value = {}
     with patch.object(bridge_mod, "_handle_webhook_session_resumed",
                       new_callable=AsyncMock) as mock_handler:
-        # process_inbound will try real processing; patch out the downstream calls
-        with patch.object(bridge_mod, "forward_inbound_to_active_agent",
-                          new_callable=AsyncMock):
-            await bridge_mod.process_inbound(customer_msg, mock_redis, mock_http)
+        # Customer inbound delivers inline via mock_redis (pub/sub / LPUSH / stream);
+        # there is no single `forward_inbound_to_active_agent` to patch anymore — the
+        # mock_redis fixture absorbs every downstream write, so let it run through.
+        await bridge_mod.process_inbound(customer_msg, mock_redis, mock_http)
 
     mock_handler.assert_not_called()
 

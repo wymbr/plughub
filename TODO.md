@@ -29,7 +29,11 @@
 
 **Sequência:** o wiring de intake (gargalo) está ✅. OTP é independente do Slice 3 mas complementar — Slice 3 define o campo `resume_policy`, OTP dá a prova que deixa `auto` disparar com segurança. Config no namespace `identity` (tamanho, TTL, máx-tentativas, rate-limit). **Próximo artefato:** mini-spec de `otp_challenge`/`otp_verify` (contrato das tools, chaves Redis, config, fluxo anti-enumeração, emenda ao princípio 7/§4.4) — criticar antes de codar. Ver spec §4.4 (dois momentos), §5, §6/§8 (gate no delegate), princípio 7.
 
-**Dívida colateral (não bloqueia):** 2 testes pré-existentes de `packages/orchestrator-bridge/.../tests/test_webhook_bridge.py` falham por drift anterior, **sem relação com identidade**: `test_resume_publishes_agent_ready_and_agent_done` (mock de producer retorna `None` em `asyncio.create_task`) e `test_process_inbound_does_not_call_resume_handler_for_customer_msg` (referencia a função removida `forward_inbound_to_active_agent`). Corrigir = atualizar o mock p/ retornar coroutine e realinhar o 2º teste ao nome atual do handler de inbound.
+**Dívida colateral ✅ (2026-07-08):** os 2 testes pré-existentes de `test_webhook_bridge.py` (drift anterior, sem
+relação com identidade) foram corrigidos — `test_resume_publishes_agent_ready_and_agent_done` usa `AsyncMock` no
+`producer.send` (awaitable p/ o `create_task`); `test_process_inbound_does_not_call_resume_handler_for_customer_msg`
+deixa o `process_inbound` correr contra o `mock_redis` (a função `forward_inbound_to_active_agent` não existe mais),
+com `get`/`hgetall` configurados p/ pular o retry-loop e não vazar coroutine. 17/17 verdes. Ver `CHANGELOG.md`.
 
 ---
 

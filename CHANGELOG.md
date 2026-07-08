@@ -10,6 +10,12 @@ working-copy** (declarado em `package.json`, ausente no `node_modules`); `npm in
 somem em cascata — sem mudança de código. **mcp-server** `injection_guard.test.ts`: os 2 testes l33tspeak/unicode
 casavam `.toThrow(/INJECTION_DETECTED/)` contra a **mensagem** (que é o texto descritivo), mas `INJECTION_DETECTED`
 é o **`.code`** do erro — realinhados a checar `err.code` (convenção do teste vizinho). 25/25 verdes.
+**orchestrator-bridge** `test_webhook_bridge.py` (2 falhas antigas): `test_resume_publishes_agent_ready_and_agent_done`
+mockava `producer.send` com `MagicMock(return_value=None)`, mas o publish é `asyncio.create_task(producer.send(...))`
+→ precisa de awaitable (`AsyncMock`); `test_process_inbound_does_not_call_resume_handler_for_customer_msg`
+patcheava `forward_inbound_to_active_agent` (removida) → substituído por deixar o `process_inbound` correr contra o
+`mock_redis` (entrega inline via pub/sub/LPUSH/stream), com `get`/`hgetall` configurados p/ pular o retry-loop de
+3s e não vazar coroutine de mock. 17/17 verdes, 0.24s, sem warnings. Nenhuma mudança de código de produção.
 
 ---
 
