@@ -158,6 +158,19 @@ o item "Revisão do editor de diálogos" acima); (2) composite de form opcional 
 `DialogDimension.weight` reservado, adiado; (3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do
 `scoring.ts` pelo `EvaluationForm` (retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
 
+### Skip-logic condicional em DialogForm — guarda `ask_when` *(desenho travado 2026-07-08; ADR)*
+
+Perguntas de follow-up condicionais (skip-logic) sem quebrar o invariante "form = conteúdo linear, controle é do
+skill". Desenho fechado em [`docs/adr/adr-dialog-conditional-skip-logic.md`](docs/adr/adr-dialog-conditional-skip-logic.md):
+guarda **declarativa** `ask_when` em nó/bloco (não comando imperativo "test on"); expressão `{field, op, value}`
+(`field` = `output_key` anterior; `op` ∈ lt/lte/gt/gte/eq/ne/in) reusando o vocabulário do `ChoiceStep`,
+sandboxed (sem eval, sem side-effect, referência só-para-trás). Runner (`loop`) pula item falso; página web
+avalia a mesma condição em JS (avaliador puro compartilhado). Pulada = NA = re-normalizada pelo `composeScore`
+(nada novo no cálculo). Controle de verdade (delegar/escalar) segue no skill. **Fases:** (1) schema `ask_when`
++ validação de forward-reference; (2) avaliador puro compartilhado + step `loop`; (3) veículo web; (4) UX do
+editor (construtor da guarda — junto da 2ª passada do editor). Decisões em aberto no ADR: `field` de pergunta
+não respondida (proposta: guarda falsa), checklist/multi-valor no `in`. *(discussão; sem implementação)*
+
 **Guard: proibir suspend em skills de hook de teardown ✅ (2026-07-06):** implementado no `registry_syncer.py`
 (`_validate_teardown_hooks` + `_load_skill_steps`, chamado após o sync de skills). Read-only, fail-open, ERROR
 loud nomeando pool→hook→pool-alvo→skill→step. Config atual passa limpa (nps_ia/wrapup inline). Avaliação:
