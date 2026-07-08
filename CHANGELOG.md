@@ -2,6 +2,26 @@
 
 ---
 
+## EvaluationForm — composição alinhada ao primitivo scoring.ts (#23, 2026-07-08)
+
+Unifica a **semântica** de composição de nota entre survey (`scoring.ts`, TS) e Quality
+(`evaluation-api/scoring.py`, Python). Como são linguagens diferentes, não há reuso literal de módulo — a
+unificação é "um spec, duas implementações fiéis" (decisão A), com teste de paridade garantindo que concordam.
+
+**Achado (bug latente):** o `scoring.py` **ignorava** `dimension.aggregation` (`weighted_average | min_score`) e
+`form.scoring_method` (`weighted_average | simple_average`) — sempre fazia média ponderada. Quem escolhia
+`min_score`/`simple_average` na UI não via efeito.
+
+**Fix:** `aggregate_scores` reescrito com um kernel `_compose(items, method)` que **espelha o `composeScore`** do
+`scoring.ts` (sobre itens já normalizados a 0..10: `weighted_mean` = Σv·w/Σw, `min` = pior membro ignorando peso,
+Σw==0 → 0, vazio → None). Agora honra `aggregation` (critérios→dimensão) e `scoring_method` (dimensões→composite,
+`simple_average` = pesos iguais). O caso default (weighted/weighted) é **idêntico** à implementação anterior
+(lock de regressão no teste). A mudança de comportamento é **corretiva** (passa a respeitar a config que a UI já
+oferecia). `test_scoring.py`: 13 testes (kernel de paridade + form-driven + regressão). NA/text seguem excluídos
+com re-normalização de peso.
+
+---
+
 ## Dev hygiene — typecheck do agent-registry + testes do injection_guard (2026-07-08)
 
 Dívida pré-existente sem relação com features. **agent-registry**: os 4 erros de `tsc` (`redis.ts` "Cannot find

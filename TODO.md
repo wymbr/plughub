@@ -185,8 +185,11 @@ legado = dimension 1-item.
 **Falta:** (1) **editor de dialog-forms com UI de dimension** ✅ (2026-07-07 — modelo de blocos, ver CHANGELOG +
 o item "Revisão do editor de diálogos" acima); (2) composite de form / health score ✅ (2026-07-08 —
 `DialogForm.composite`, roll-up 0–100 no `survey_record`, editor com toggle + peso por dimension);
-(3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do `scoring.ts` pelo `EvaluationForm`
-(retrofit do Quality: `weighted_average`→`weighted_mean`, `min_score`→`min`).
+(3) `survey_question` reutilizável — fora do 1º corte; (4) adoção do `scoring.ts` pelo `EvaluationForm` ✅
+(2026-07-08): fronteira TS/Python → não é reuso de módulo, é **alinhamento de semântica** (decisão A). O
+`scoring.py` (`aggregate_scores`) ganhou o kernel `_compose` espelhando o `composeScore`, passa a honrar
+`aggregation` (`weighted_average`→`weighted_mean`, `min_score`→`min`) e `scoring_method` (`simple_average`=pesos
+iguais) — conserta o bug latente de ignorá-los; default idêntico; `test_scoring.py` com paridade+regressão.
 
 ### Skip-logic condicional em DialogForm — guarda `ask_when` ✅ (2026-07-08)
 

@@ -109,23 +109,51 @@ def _criterion_value_0_10(crit: dict[str, Any], resp: dict[str, Any]) -> float |
     return None if s is None else _to_0_10(float(s), max_score)
 
 
+def _compose(items: list[tuple[float, float]], method: str) -> float | None:
+    """Composição determinística — porte fiel do primitivo `scoring.ts`
+    (`@plughub/schemas`, `composeScore`) para itens JÁ normalizados na escala do
+    grupo 0..10 (unit↔0..10 vira no-op, então operar direto em 0..10 é equivalente
+    a `composeScore` com `groupScale {0,10}`; sobre esses valores as duas
+    implementações produzem números idênticos — ver test_scoring.py).
+
+    items = [(value_0_10, weight)] apenas dos membros VIVOS (não-NA).
+      method "min"           → o pior membro (ignora peso, como o composeScore).
+      method "weighted_mean" → Σ(v·w)/Σw; Σw==0 → 0.0 (idem composeScore).
+    Retorna None quando não há membro vivo (o chamador descarta o sinal)."""
+    if not items:
+        return None
+    if method == "min":
+        return min(v for v, _ in items)
+    wsum = sum(w for _, w in items)
+    if wsum == 0:
+        return 0.0
+    return sum(v * w for v, w in items) / wsum
+
+
 def aggregate_scores(
     form: dict[str, Any], responses: list[dict[str, Any]]
 ) -> tuple[float | None, list[dict[str, Any]]]:
-    """Recomputa a nota bottom-up pelos pesos do form.
+    """Recomputa a nota bottom-up pelos pesos do form, honrando as opções de
+    agregação (alinhado ao primitivo `scoring.ts`, D9):
 
-    Retorna `(overall_score 0..10 | None, [{dimension_id, score}])`. `na`/`text` são
-    excluídos e os pesos são re-normalizados entre os critérios aplicáveis. `None` quando
-    não há nenhum critério pontuável (ex.: só text/na) — chamador faz fallback.
+      • critérios → dimensão: `dimension.aggregation` ∈ {weighted_average (→ weighted_mean),
+        min_score (→ min)}.
+      • dimensões → composite: `form.scoring_method` ∈ {weighted_average (pondera pelo
+        peso da dimensão), simple_average (pesos iguais)}.
+
+    `na`/`text` são excluídos e os pesos re-normalizados entre os aplicáveis. Retorna
+    `(overall 0..10 | None, [{dimension_id, score}])`; `None` quando não há critério
+    pontuável (só text/na) — chamador faz fallback. O caso default
+    (weighted_average/weighted_average) é idêntico à implementação anterior.
     """
     resp_by = {r.get("criterion_id"): r for r in responses if r.get("criterion_id")}
-    # acumula por dimensão
-    acc: dict[str, dict[str, float]] = {}
+
+    # 1. Membros vivos (value_0_10, weight) por dimensão. Chave = `_dimension_id`
+    #    (preserva o override de dimensão do critério, como antes).
+    buckets: dict[str, list[tuple[float, float]]] = {}
     for c in _iter_criteria(form):
         cid = c.get("criterion_id")
-        if not cid:
-            continue
-        if (c.get("type") or "score") == "text":
+        if not cid or (c.get("type") or "score") == "text":
             continue
         r = resp_by.get(cid)
         if not r or r.get("na"):
@@ -134,29 +162,35 @@ def aggregate_scores(
         if val is None:
             continue
         w = float(c.get("weight") or 1)
-        d = acc.setdefault(c.get("_dimension_id") or "default", {"ws": 0.0, "w": 0.0})
-        d["ws"] += val * w
-        d["w"] += w
+        buckets.setdefault(c.get("_dimension_id") or "default", []).append((val, w))
 
-    dim_weight = {
-        d.get("dimension_id"): float(d.get("weight") or 1)
+    # 2. Metadados por dimensão (peso + método), indexados por dimension_id.
+    dim_meta = {
+        d.get("dimension_id"): {
+            "weight": float(d.get("weight") or 1),
+            "aggregation": d.get("aggregation") or "weighted_average",
+        }
         for d in (form.get("dimensions") or [])
         if isinstance(d, dict)
     }
 
+    # 3. Compõe cada dimensão pelo seu método; coleta (dim_score, dim_weight) p/ o topo.
     by_dimension: list[dict[str, Any]] = []
-    ows = ow = 0.0
-    for dim_id, agg in acc.items():
-        if agg["w"] == 0:
+    dim_items: list[tuple[float, float]] = []
+    for dim_id, members in buckets.items():
+        meta = dim_meta.get(dim_id) or {"weight": 1.0, "aggregation": "weighted_average"}
+        method = "min" if meta["aggregation"] == "min_score" else "weighted_mean"
+        ds = _compose(members, method)
+        if ds is None:
             continue
-        ds = agg["ws"] / agg["w"]
         by_dimension.append({"dimension_id": dim_id, "score": round(ds, 3)})
-        dw = dim_weight.get(dim_id, 1.0)
-        ows += ds * dw
-        ow += dw
+        dim_items.append((ds, float(meta["weight"])))
 
-    overall = round(ows / ow, 3) if ow > 0 else None
-    return overall, by_dimension
+    # 4. Composite: simple_average = pesos iguais; senão pondera pelo peso da dimensão.
+    if (form.get("scoring_method") or "weighted_average") == "simple_average":
+        dim_items = [(v, 1.0) for v, _ in dim_items]
+    overall = _compose(dim_items, "weighted_mean")
+    return (round(overall, 3) if overall is not None else None), by_dimension
 
 
 def compute_dimension_diffs(
