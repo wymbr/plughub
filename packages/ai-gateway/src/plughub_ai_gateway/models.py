@@ -21,7 +21,10 @@ CallType = Literal[
     "free",
 ]
 
-ModelProfile = Literal["fast", "balanced", "powerful"]
+# "evaluation" is an intended, isolated profile (see config.model_profiles) that
+# callers pass to avoid competing with realtime agents. It must be accepted at the
+# request boundary too — omitting it here makes Pydantic 422 before the mapping runs.
+ModelProfile = Literal["fast", "balanced", "powerful", "evaluation"]
 
 
 class ConversationMessage(BaseModel):
