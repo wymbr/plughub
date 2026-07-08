@@ -2,6 +2,31 @@
 
 ---
 
+## Skill deploy — plumbing runtime do config_json → `$.config.*` (fatia 1, 2026-07-08)
+
+Fecha a cadeia `interface_schema → PoolSkillSlot.config_json → $.config.* → runtime`: agora o `config_json` do
+slot chega ao flow em execução. Com a fatia 2 (declaração + UI) já entregue, isto torna **um skill parametrizado
+por deploy** possível — o survey deixa de exigir um skill-flow por DialogForm.
+
+**orchestrator-bridge:** `get_pool_current_flow` (que já lia o slot `current` para o snapshot do flow) passa a
+capturar o `config_json` do MESMO slot num cache por pool (`_pool_config_cache`), invalidado em lockstep com
+`_pool_flow_cache` no `registry.changed(pool)`. `activate_native_agent` injeta esse config no payload do
+`/execute` como `config` (só quando não-vazio; fallback skill.flow/YAML = sem config). Os call sites de fila e
+webhook-resume passaram a encaminhar `pool_id` para o config valer também nesses caminhos.
+
+**skill-flow-service:** nenhuma mudança — o `/execute` já aceitava `config` e o repassava a `engine.run` →
+`interpolate` expõe `$.config.*` (§17.3-1, dialog primitive; já estava pronto = "Peça 1b").
+
+**survey:** `skill_survey_multi_v1.yaml` trocou os 2 literais `form_id: "dialog_survey_multi_v1"` por
+`$.config.form_id` (steps `carregar_form` e `gravar`). **Passa a exigir deploy por slot** com
+`config_json.form_id` preenchido (set-next → promote na UI de Flow › Deploy) — sem isso o `form_get` falha, que é
+o contrato correto de um skill parametrizado.
+
+**Testes:** `test_config_params_plumbing.py` (bridge) — captura do config_json no slot (2) + injeção no payload
+do `/execute` (2, incl. omissão quando vazio).
+
+---
+
 ## Skill deploy — parâmetros de config declarativos + combos de sistema na UI (fatia 2, 2026-07-08)
 
 Destrava "um skill parametrizado por deploy" em vez de "um skill por variação". A parametrização já existia

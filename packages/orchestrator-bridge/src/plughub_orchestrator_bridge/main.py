@@ -137,6 +137,11 @@ _pool_flow_cache: dict[str, tuple[str, dict]] = {}
 # Skill Versioning Fase C: identidade da VERSÃO = `set_at` do slot `current` (momento
 # do promote). pool_id → set_at (ISO). Carimbado em segments.deploy_version.
 _pool_deploy_version_cache: dict[str, str] = {}
+# Config params por deploy (fatia 1): config_json do slot `current` do pool → injetado
+# no launch como `$.config.*`. pool_id → config_json (dict). Populado por
+# get_pool_current_flow (mesma leitura do slot) e invalidado junto com _pool_flow_cache
+# no registry.changed(pool). Entrada presente ⟺ o pool rodou pelo slot (path de produção).
+_pool_config_cache: dict[str, dict] = {}
 
 
 def _stl() -> int:
@@ -383,6 +388,11 @@ async def get_pool_current_flow(
                 set_at = str(current.get("set_at") or "")
                 if set_at:
                     _pool_deploy_version_cache[pool_id] = set_at
+                # Fatia 1: config params do deploy — o config_json do MESMO slot vira
+                # `$.config.*` no launch (injetado em activate_native_agent). Presença
+                # da entrada ⟺ o pool rodou pelo slot; ausente = fallback sem config.
+                cfg = current.get("config_json")
+                _pool_config_cache[pool_id] = cfg if isinstance(cfg, dict) else {}
                 _pool_flow_cache[pool_id] = (skill_id, flow)
                 return skill_id, flow
             return None
@@ -525,6 +535,13 @@ async def activate_native_agent(
         "instance_id":     instance_id,   # stored in execution lock by the engine
         "session_context": session_context,
     }
+    # Fatia 1: config params por deploy — o config_json do slot `current` do pool
+    # (populado no cache por resolve_flow_for_agent → get_pool_current_flow, acima)
+    # é injetado como `config` → resolvido no engine como `$.config.*`. Só quando o
+    # flow veio do slot (path de produção) e há config; fallback (skill.flow/YAML) = sem config.
+    pool_config = _pool_config_cache.get(pool_id, {}) if pool_id else {}
+    if pool_config:
+        payload["config"] = pool_config
     # segment_id for segment-scoped ContextStore writes (scope: segment in YAML).
     # Allows parallel agents (NPS + wrap-up) to isolate their data per participation.
     if segment_id:
@@ -4117,6 +4134,7 @@ async def process_queued(
         instance_id="",   # queue agents don't hold a routing slot
         extra_context={"pool_id": pool_id},
         segment_id=_q_seg_id,
+        pool_id=pool_id,   # fatia 1: allow $.config from the queue pool's slot
     )
 
     # ── Fase C: close the queue segment (wait window) ─────────────────────────
@@ -6463,6 +6481,7 @@ async def _handle_webhook_session_resumed(
         instance_id=instance_id,
         webhook_pool=True,
         resume_context=resume_context,
+        pool_id=pool_id,   # fatia 1: $.config persists across suspend/resume for webhook skills
     )
 
     _ai_outcome = (agent_result or {}).get("outcome", "")
@@ -7465,6 +7484,7 @@ async def _dispatch_once(
                 del _pool_flow_cache[entity_id]
                 logger.info("Pool flow cache invalidated: pool_id=%s", entity_id)
             _pool_deploy_version_cache.pop(entity_id, None)
+            _pool_config_cache.pop(entity_id, None)  # fatia 1: config_json do slot segue o flow
         bootstrap.request_refresh()
     elif topic == TOPIC_CONFIG_CHANGED:
         await _handle_config_changed(payload, bootstrap, http)

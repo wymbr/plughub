@@ -23,10 +23,11 @@ classification:
   type: orchestrator
   domain: quality
 
-# Deploy-time params (fatia 2). Declaração-only por enquanto: a UI de Flow › Deploy
-# renderiza o combo de dialogforms e grava o valor em PoolSkillSlot.config_json, mas
-# os steps abaixo ainda usam o form_id literal — a resolução `$.config.form_id` em
-# runtime depende do plumbing bridge→slot (fatia 1). Até lá o combo é ilustrativo.
+# Deploy-time params (fatias 1+2). A UI de Flow › Deploy renderiza o combo de
+# dialogforms e grava o valor em PoolSkillSlot.config_json; o bridge injeta esse
+# config_json como `$.config.*` no launch (fatia 1), e os steps abaixo resolvem
+# `$.config.form_id`. IMPORTANTE: este skill agora EXIGE deploy por slot com
+# config_json.form_id preenchido (set-next + promote) — sem isso, form_get falha.
 config_params:
   - key: form_id
     type: string
@@ -42,7 +43,7 @@ steps:
     type: invoke
     tool: form_get
     input:
-      form_id:   "dialog_survey_multi_v1"
+      form_id:   "$.config.form_id"   # fatia 1: parametrizado por deploy (PoolSkillSlot.config_json)
       tenant_id: "$.tenant_id"
     output_as: dialog
     on_success: perguntas
@@ -94,7 +95,7 @@ steps:
       origin_session_id: "$.session_id"
       grain:             "session"
       survey_session_id: "$.session_id"
-      form_id:           "dialog_survey_multi_v1"
+      form_id:           "$.config.form_id"   # fatia 1: mesmo form do deploy (grava o que foi renderizado)
       answers:           "$.pipeline_state.respostas"
     on_success: agradecer
     on_failure: agradecer

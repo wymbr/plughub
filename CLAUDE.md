@@ -913,7 +913,9 @@ trata `suspended` como hook concluído → fecha o contato antes de renderizar. 
 consome o primitivo de **conteúdo INLINE** (`form_get` + menu dinâmico), sem delegate/suspend. Ambos veículos
 compartilham `DialogForm` + `form_get` + menu dinâmico; só divergem em suspender-ou-não.
 
-**Engine (extensões):** §17.3 — `$.config.*` (slot config_json → runtime; deploy-por-slot pendente) +
+**Engine (extensões):** §17.3 — `$.config.*` (slot config_json → runtime; **plumbing bridge→slot ✅ 2026-07-08** —
+`config_params` declarativo no skill + UI de deploy + bridge injeta `PoolSkillSlot.config_json` no `/execute`; skill
+parametrizado por deploy, ex. `skill_survey_multi_v1` usa `$.config.form_id`) +
 `menu.options/fields` união `array | ref`. §17.4 — `menu.interaction` e `menu.visibility` união `enum|array | ref`
 (`$.`/`@ctx.`), resolvidas por `resolveDynamicValue` em `menu.ts`; `form_get` expõe o render nativo. **Invariante
 de build:** o `MenuStepSchema` mudou → **todo serviço TS que valida skills (`agent-registry`) + o engine
@@ -942,7 +944,7 @@ real do link (SMS/e-mail) = trilha à parte.
 na mesma superfície em falha de FORMATO (numeric/pattern/faixa/comprimento), honra `max_attempts`, esgota→
 `on_failure`. Só escalar; timeout/desconexão/@mention não são retry. Semântica (código OTP) segue no chamador.
 
-**Fatia 2 (pendente):** `channel_policy: elect`; plumbing `$.config` bridge→slot; timeout dinâmico do runner;
+**Fatia 2 (pendente):** `channel_policy: elect`; ~~plumbing `$.config` bridge→slot~~ (✅ 2026-07-08); timeout dinâmico do runner;
 multi-locale + preview no editor; entrega real do link web (provedor SMS/e-mail). *(Vazamento de instância do
 delegate→suspend do OTP resolvido 2026-07-07 — ver CHANGELOG + `docs/arcos/session-conference-lifecycle.md`.)*
 

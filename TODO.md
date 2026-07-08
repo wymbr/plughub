@@ -129,11 +129,15 @@ via `set-next`+`promote` com auth `x-service-token`).
   Flow › Deploy** (`ConfigForm` lê `config_params`; `source` conhecido = combo populado por endpoint
   [`dialogforms`/`pools`/`skills`], `options` = select estático, senão input por `type`; source desconhecido
   degrada p/ texto — interpretação é 100% da UI, engine só vê `$.config.<key>` literal). `skill_survey_multi_v1`
-  ganhou `config_params: [form_id source=dialogforms]` **declaração-only** (combo aparece; steps ainda literais).
-  **Falta o plumbing runtime (fatia 1):** bridge (`activate_native_agent`) + worker lerem `PoolSkillSlot.config_json`
-  do slot e injetarem como `config` no `/execute` → só então `$.config.form_id` resolve e o survey vira skill-único.
-  Typo de `source` NÃO tratado no deploy (por decisão — seria falso-positivo com UI defasada); lint no publish é
-  item opcional futuro.
+  ganhou `config_params: [form_id source=dialogforms]`.
+- **config params — plumbing runtime ✅ (fatia 1, 2026-07-08):** o bridge lê o `config_json` do slot `current`
+  (`get_pool_current_flow` → `_pool_config_cache`, invalidado no `registry.changed(pool)`) e injeta como `config`
+  no `/execute` (`activate_native_agent`; também nos call sites de fila e webhook-resume). O skill-flow-service já
+  resolvia `$.config.*` (§17.3-1). `skill_survey_multi_v1` trocou os 2 literais `form_id` por `$.config.form_id`
+  → **survey virou skill-único parametrizado por deploy.** **Exige deploy por slot** com `config_json.form_id`
+  (set-next+promote): sem isso `form_get` falha (contrato do skill parametrizado). Typo de `source` NÃO tratado
+  no deploy (por decisão); lint no publish = item opcional futuro. Worker legado (`skill-flow-worker`) fora de
+  escopo (Arc 19 o deprecou; survey roda como agente nativo via bridge).
 - **entrega real do link web** (provedor SMS/e-mail): o veículo web ✅ + a **camada plugável de entrega ✅**
   (2026-07-08 — `SurveyLinkDelivery` mock que loga o link, `deliver()`/`create(deliver_kind,address)`, endpoint
   wirado). **Falta só o provider real** (SMS/e-mail) — mesma trilha do "item 1" do OTP (provedor externo).
