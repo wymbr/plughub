@@ -49,6 +49,38 @@ export const SkillInterfaceSchema = z.object({
 })
 
 // ─────────────────────────────────────────────
+// Config params — parâmetros de deploy do skill
+// ─────────────────────────────────────────────
+
+/**
+ * Declara os campos de configuração que um skill precisa receber por DEPLOY.
+ * Autorado no topo do skill (junto do flow); o valor escolhido no deploy é
+ * gravado em `PoolSkillSlot.config_json` e exposto ao runtime como `$.config.<key>`.
+ *
+ * `source` é um HINT aberto (string) interpretado APENAS pela UI de deploy —
+ * quando reconhecido (ex.: "dialogforms", "pools", "skills") a UI renderiza um
+ * combo populado por um endpoint de lista; quando desconhecido, cai em input de
+ * texto (degradação graciosa, forward-compat: skill/schema podem liderar a UI).
+ * O engine nunca lê `source`: em runtime `$.config.<key>` é sempre um literal.
+ */
+export const SkillConfigParamSchema = z.object({
+  key:         z.string().regex(/^[a-z][a-z0-9_]*$/),   // identificador inglês
+  type:        z.enum(["string", "number", "boolean"]).default("string"),
+  label:       z.string().optional(),                    // texto de exibição (dado do skill)
+  description: z.string().optional(),
+  required:    z.boolean().default(false),
+  default:     z.unknown().optional(),
+  source:      z.string().optional(),                    // hint de origem — só a UI interpreta
+  options:     z.array(z.object({
+    value: z.string(),
+    label: z.string().optional(),
+  })).optional(),                                        // enum estático (sem source de sistema)
+  min:         z.number().optional(),                    // type === "number"
+  max:         z.number().optional(),
+})
+export type SkillConfigParam = z.infer<typeof SkillConfigParamSchema>
+
+// ─────────────────────────────────────────────
 // Evaluation
 // ─────────────────────────────────────────────
 
@@ -1120,6 +1152,7 @@ export const SkillSchema = z.object({
 
   tools:      z.array(SkillToolSchema).default([]),
   interface:  SkillInterfaceSchema.optional(),
+  config_params: z.array(SkillConfigParamSchema).optional(),  // parâmetros de deploy → $.config.*
   evaluation: SkillEvaluationSchema.optional(),
 
   knowledge_domains: z.array(z.string()).default([]),

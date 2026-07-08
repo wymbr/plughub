@@ -23,6 +23,18 @@ classification:
   type: orchestrator
   domain: quality
 
+# Deploy-time params (fatia 2). Declaração-only por enquanto: a UI de Flow › Deploy
+# renderiza o combo de dialogforms e grava o valor em PoolSkillSlot.config_json, mas
+# os steps abaixo ainda usam o form_id literal — a resolução `$.config.form_id` em
+# runtime depende do plumbing bridge→slot (fatia 1). Até lá o combo é ilustrativo.
+config_params:
+  - key: form_id
+    type: string
+    label: "Formulário do survey"
+    description: "DialogForm executado por este deploy"
+    required: true
+    source: dialogforms
+
 entry: carregar_form
 
 steps:

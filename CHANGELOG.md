@@ -2,6 +2,37 @@
 
 ---
 
+## Skill deploy — parâmetros de config declarativos + combos de sistema na UI (fatia 2, 2026-07-08)
+
+Destrava "um skill parametrizado por deploy" em vez de "um skill por variação". A parametrização já existia
+meio-caminho (`PoolSkillSlot.config_json` + `$.config.*` no engine); faltava o skill **declarar** quais campos
+precisa e a UI de deploy montar o formulário a partir disso. Esta fatia entrega a declaração + a UI; o plumbing
+runtime (bridge/worker lerem o slot e injetarem `config` no `/execute`) é a fatia 1, ainda pendente.
+
+**Contrato (`@plughub/schemas`):** novo `SkillConfigParamSchema` (`key` [ident. inglês] `/type` [string|number|
+boolean] `/label/description/required/default/source/options/min/max`) + campo `config_params?: SkillConfigParam[]`
+no `SkillSchema`. Decisão: `source` é **`z.string()` aberto** — o schema não valida contra um conjunto fechado;
+adicionar origem nova é mudança só de UI (forward-compat). Export + 5 testes (`skill-config-params.test.ts`).
+
+**agent-registry:** coluna `config_params Json?` no `Skill` (Prisma; `bootstrap-db` aplica aditivo no restart),
+passthrough no create/update de `skills.ts` (`CreateSkillSchema = SkillSchema` valida sozinho; `_formatSkill`
+devolve via `...rest`). RegistrySyncer encaminha `config_params` do YAML (whitelist, ao lado de `delegation_input`).
+
+**platform-ui (`AgentFlowDeployPage`):** `ConfigForm` ganhou o caminho canônico `config_params` (novo
+`ConfigParamsForm`) mantendo o legado `interface.properties` como fallback. Para cada param: `source` conhecido +
+opções carregadas → **combo**; `options` estáticos → select; senão input por `type`; **source desconhecido degrada
+p/ texto** (silencioso, por decisão — tratar seria falso-positivo com UI defasada). O parent busca dialogforms e
+monta `sourceOptions` (`dialogforms`/`pools`/`skills`) — o **único** lugar que interpreta `source`; o engine só vê
+`$.config.<key>` literal. Defaults e "copy from current" passam a usar as chaves de `config_params`.
+
+**Demo:** `skill_survey_multi_v1.yaml` ganhou `config_params: [form_id, source=dialogforms]` **declaração-only**
+(o combo aparece no deploy e grava em `config_json`, mas os steps seguem com `form_id` literal até a fatia 1).
+
+Typecheck: schemas 165 ✓, platform-ui ✓, agent-registry ✓ (após `prisma generate`; 4 erros restantes são
+pré-existentes em `redis.ts`/`operational.ts`, fora do escopo). Fatia 1 (plumbing bridge→slot) registrada em TODO.
+
+---
+
 ## Survey — resíduos: ask_when por-bloco, composite/health score, entrega plugável (2026-07-08)
 
 Fecha três resíduos da frente de survey.

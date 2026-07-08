@@ -301,6 +301,7 @@ export {
   SkillClassificationSchema,
   SkillToolSchema,
   SkillInterfaceSchema,
+  SkillConfigParamSchema,
   SkillEvaluationSchema,
   TaskStepSchema,
   ChoiceStepSchema,
@@ -335,6 +336,7 @@ export {
 export type {
   SkillType,
   SkillTool,
+  SkillConfigParam,
   FlowStep,
   SkillFlow,
   Skill,

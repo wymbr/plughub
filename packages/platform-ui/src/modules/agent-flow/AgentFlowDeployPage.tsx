@@ -42,12 +42,30 @@ interface Skill {
   flow_model?:      'agent' | 'workflow'
   folder?:          string
   interface?:       InterfaceSchema | null
+  /** Deploy-time config params (canonical). Drives the deploy form; falls back to `interface.properties`. */
+  config_params?:   ConfigParam[] | null
 }
 
 interface InterfaceSchema {
   type?:       string
   properties?: Record<string, FieldSchema>
   required?:   string[]
+}
+
+// SkillConfigParam mirror (see @plughub/schemas). `source` is an open string:
+// known values render a system combo; unknown → text input (graceful fallback).
+interface ConfigParamOption { value: string; label?: string }
+interface ConfigParam {
+  key:          string
+  type?:        'string' | 'number' | 'boolean'
+  label?:       string
+  description?: string
+  required?:    boolean
+  default?:     unknown
+  source?:      string
+  options?:     ConfigParamOption[]
+  min?:         number
+  max?:         number
 }
 
 interface FieldSchema {
@@ -96,6 +114,21 @@ async function apiFetchSkills(tenantId: string, token?: string | null): Promise<
   const body = await res.json()
   return Array.isArray(body) ? body : (body.skills ?? body.data ?? [])
 }
+
+/** Dialog forms — for the `source: "dialogforms"` config-param combo. */
+async function apiFetchDialogForms(tenantId: string, token?: string | null): Promise<Array<{ form_id: string; name?: string }>> {
+  const res = await fetch('/v1/dialog/forms', { headers: _h(tenantId, token) })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const body = await res.json()
+  return Array.isArray(body) ? body : (body.forms ?? body.data ?? [])
+}
+
+// ── System sources (config-param combos) ─────────────────────────────────────────
+// A config param's `source` hint is interpreted ONLY by the deploy UI: the parent
+// builds a `sourceOptions` map keyed by the known sources (dialogforms/pools/skills)
+// and ConfigForm renders a combo when it finds options for a param's source. An
+// unknown source is not an error — the field degrades to a plain text input
+// (forward-compat: a newer skill/schema may declare a source this build doesn't know).
 
 async function apiFetchSlots(poolId: string, tenantId: string, token?: string | null): Promise<SlotsResponse> {
   const res = await fetch(`/v1/pools/${poolId}/slots`, { headers: _h(tenantId, token) })
@@ -159,16 +192,140 @@ function _inputStyle(readOnly: boolean): React.CSSProperties {
 // ── Config form ───────────────────────────────────────────────────────────────
 
 interface ConfigFormProps {
-  schema:     InterfaceSchema | null | undefined
-  values:     Record<string, unknown>
-  onChange:   (key: string, value: unknown) => void
-  readOnly:   boolean
-  newFields?: Set<string>
+  schema:        InterfaceSchema | null | undefined
+  params?:       ConfigParam[] | null
+  sourceOptions?: Record<string, ConfigParamOption[]>
+  values:        Record<string, unknown>
+  onChange:      (key: string, value: unknown) => void
+  readOnly:      boolean
+  newFields?:    Set<string>
 }
 
-function ConfigForm({ schema, values, onChange, readOnly, newFields }: ConfigFormProps) {
+/**
+ * Canonical renderer: one field per `config_params` descriptor.
+ * `source` known + options loaded → combo; static `options` → select; otherwise
+ * an input by `type`. Unknown source silently degrades to a text input.
+ */
+function ConfigParamsForm({
+  params, sourceOptions, values, onChange, readOnly, newFields,
+}: {
+  params: ConfigParam[]
+  sourceOptions: Record<string, ConfigParamOption[]>
+  values: Record<string, unknown>
+  onChange: (key: string, value: unknown) => void
+  readOnly: boolean
+  newFields?: Set<string>
+}) {
   const { t } = useTranslation('agentFlow')
 
+  return (
+    <div className="flex flex-col gap-2.5">
+      {params.map(param => {
+        const key   = param.key
+        const value = values[key]
+        const isNew = newFields?.has(key)
+        const comboOptions = param.source ? sourceOptions[param.source] : undefined
+        const useCombo     = Array.isArray(comboOptions) && comboOptions.length > 0
+        const staticOptions = param.options
+
+        return (
+          <div key={key}>
+            <div className="flex items-center gap-1.5 mb-1">
+              <label className="text-xs font-medium text-muted">
+                {param.label ?? key}
+                {param.required && <span className="text-red ml-0.5">*</span>}
+              </label>
+              {isNew && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/20">
+                  {t('deploy.newField')}
+                </span>
+              )}
+              {param.description && (
+                <span className="text-xs text-muted-light ml-1">— {param.description}</span>
+              )}
+            </div>
+
+            {useCombo ? (
+              <select
+                value={String(value ?? '')}
+                disabled={readOnly}
+                onChange={e => onChange(key, e.target.value)}
+                style={_inputStyle(readOnly)}
+              >
+                <option value="">{t('deploy.selectOption')}</option>
+                {comboOptions!.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label ?? opt.value}</option>
+                ))}
+              </select>
+            ) : staticOptions && staticOptions.length > 0 ? (
+              <select
+                value={String(value ?? '')}
+                disabled={readOnly}
+                onChange={e => onChange(key, e.target.value)}
+                style={_inputStyle(readOnly)}
+              >
+                <option value="">{t('deploy.selectOption')}</option>
+                {staticOptions.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label ?? opt.value}</option>
+                ))}
+              </select>
+            ) : param.type === 'boolean' ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(value)}
+                  disabled={readOnly}
+                  onChange={e => onChange(key, e.target.checked)}
+                  className="accent-primary w-3.5 h-3.5"
+                />
+                <span className={`text-xs ${readOnly ? 'text-muted' : 'text-muted-light'}`}>
+                  {Boolean(value) ? 'true' : 'false'}
+                </span>
+              </div>
+            ) : param.type === 'number' ? (
+              <input
+                type="number"
+                value={value != null ? String(value) : ''}
+                disabled={readOnly}
+                min={param.min}
+                max={param.max}
+                onChange={e => onChange(key, parseFloat(e.target.value))}
+                style={_inputStyle(readOnly)}
+              />
+            ) : (
+              <input
+                type="text"
+                value={value != null ? String(value) : ''}
+                disabled={readOnly}
+                onChange={e => onChange(key, e.target.value)}
+                style={_inputStyle(readOnly)}
+              />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ConfigForm({ schema, params, sourceOptions, values, onChange, readOnly, newFields }: ConfigFormProps) {
+  const { t } = useTranslation('agentFlow')
+
+  // Canonical path — config_params drives the form.
+  if (params && params.length > 0) {
+    return (
+      <ConfigParamsForm
+        params={params}
+        sourceOptions={sourceOptions ?? {}}
+        values={values}
+        onChange={onChange}
+        readOnly={readOnly}
+        newFields={newFields}
+      />
+    )
+  }
+
+  // Legacy fallback — interface.properties (kept for skills without config_params).
   if (!schema?.properties || Object.keys(schema.properties).length === 0) {
     return (
       <p className="text-xs text-muted italic py-2">{t('deploy.noConfigParams')}</p>
@@ -387,19 +544,20 @@ function groupSkillsForSelect(skills: Skill[], agentLabel: string, workflowLabel
 // ── Next slot editor modal ────────────────────────────────────────────────────
 
 interface NextSlotEditorProps {
-  poolId:       string
-  tenantId:     string
-  skills:       Skill[]
-  currentSlot:  SlotData
-  existingNext: SlotData
-  onSave:       (payload: { skill_id: string; config_json: Record<string, unknown> }) => Promise<void>
-  onClose:      () => void
-  saving:       boolean
-  saveError:    string | null
+  poolId:        string
+  tenantId:      string
+  skills:        Skill[]
+  sourceOptions: Record<string, ConfigParamOption[]>
+  currentSlot:   SlotData
+  existingNext:  SlotData
+  onSave:        (payload: { skill_id: string; config_json: Record<string, unknown> }) => Promise<void>
+  onClose:       () => void
+  saving:        boolean
+  saveError:     string | null
 }
 
 function NextSlotEditor({
-  skills, currentSlot, existingNext, onSave, onClose, saving, saveError,
+  skills, sourceOptions, currentSlot, existingNext, onSave, onClose, saving, saveError,
 }: NextSlotEditorProps) {
   const { t } = useTranslation('agentFlow')
   const [selectedSkillId,       setSelectedSkillId]       = useState<string>(existingNext.skill_id ?? '')
@@ -415,30 +573,38 @@ function NextSlotEditor({
 
   const selectedSkill = skills.find(s => s.skill_id === selectedSkillId) ?? null
   const schema        = selectedSkill?.interface ?? null
+  const params        = selectedSkill?.config_params ?? null
+
+  /** Config field keys the selected skill declares — config_params first, else legacy properties. */
+  const configKeysOf = (sk: Skill | null | undefined): string[] => {
+    if (sk?.config_params && sk.config_params.length > 0) return sk.config_params.map(p => p.key)
+    return Object.keys(sk?.interface?.properties ?? {})
+  }
 
   const handleSkillChange = (skillId: string) => {
     setSelectedSkillId(skillId)
     setNewFields(new Set())
     const sk = skills.find(s => s.skill_id === skillId)
-    if (sk?.interface?.properties) {
-      const defaults: Record<string, unknown> = {}
+    const defaults: Record<string, unknown> = {}
+    if (sk?.config_params && sk.config_params.length > 0) {
+      for (const p of sk.config_params) {
+        defaults[p.key] = p.default ?? (p.type === 'boolean' ? false : p.type === 'number' ? 0 : '')
+      }
+    } else if (sk?.interface?.properties) {
       for (const [key, field] of Object.entries(sk.interface.properties)) {
         defaults[key] = field.default ?? (field.type === 'boolean' ? false : field.type === 'integer' || field.type === 'number' ? 0 : '')
       }
-      setConfigValues(defaults)
-    } else {
-      setConfigValues({})
     }
+    setConfigValues(defaults)
   }
 
   const handleCopyFromCurrent = () => {
     if (!currentSlot.set || !currentSlot.config_json) return
-    const schemaProps   = schema?.properties ?? {}
     const currentConfig = currentSlot.config_json
     const merged: Record<string, unknown> = { ...configValues }
     const detected = new Set<string>()
 
-    for (const key of Object.keys(schemaProps)) {
+    for (const key of configKeysOf(selectedSkill)) {
       if (key in currentConfig) {
         merged[key] = currentConfig[key]
       } else {
@@ -545,6 +711,8 @@ function NextSlotEditor({
 
             <ConfigForm
               schema={schema}
+              params={params}
+              sourceOptions={sourceOptions}
               values={configValues}
               onChange={handleFieldChange}
               readOnly={false}
@@ -662,6 +830,7 @@ export default function AgentFlowDeployPage() {
 
   const [pools,        setPools]        = useState<Pool[]>([])
   const [skills,       setSkills]       = useState<Skill[]>([])
+  const [dialogForms,  setDialogForms]  = useState<Array<{ form_id: string; name?: string }>>([])
   const [filter,       setFilter]       = useState('')
   const [selected,     setSelected]     = useState<Pool | null>(null)
   const [slots,        setSlots]        = useState<SlotsResponse | null>(null)
@@ -684,12 +853,14 @@ export default function AgentFlowDeployPage() {
     ;(async () => {
       try {
         const token = await getAccessToken()
-        const [pl, sk] = await Promise.all([
+        const [pl, sk, df] = await Promise.all([
           apiFetchPools(tenantId, token),
           apiFetchSkills(tenantId, token),
+          apiFetchDialogForms(tenantId, token).catch(() => []),  // combos degrade gracefully if dialog-api is down
         ])
         setPools(pl)
         setSkills(sk)
+        setDialogForms(df)
       } catch (e) {
         setPageError(e instanceof Error ? e.message : String(e))
       } finally {
@@ -946,6 +1117,11 @@ export default function AgentFlowDeployPage() {
           poolId={selected.pool_id}
           tenantId={tenantId}
           skills={skills}
+          sourceOptions={{
+            dialogforms: dialogForms.map(f => ({ value: f.form_id, label: f.name ? `${f.form_id} — ${f.name}` : f.form_id })),
+            pools:       pools.map(p => ({ value: p.pool_id, label: p.pool_id })),
+            skills:      skills.map(s => ({ value: s.skill_id, label: s.name ? `${s.skill_id} — ${s.name}` : s.skill_id })),
+          }}
           currentSlot={slots.slots.current}
           existingNext={slots.slots.next}
           onSave={handleSaveNext}

@@ -555,6 +555,11 @@ class RegistrySyncer:
             if raw.get("delegation_input"):
                 payload["delegation_input"] = raw["delegation_input"]
 
+            # config_params — deploy-time params rendered in the Flow › Deploy form
+            # (→ PoolSkillSlot.config_json → $.config.*). Declared at the skill top-level.
+            if raw.get("config_params"):
+                payload["config_params"] = raw["config_params"]
+
             await self._upsert_skill(http, headers, skill_id, payload, report)
 
     async def _upsert_skill(

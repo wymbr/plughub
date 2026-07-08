@@ -123,7 +123,17 @@ via `set-next`+`promote` com auth `x-service-token`).
   preserva o mapa `{locale}` (string pura = só o default_locale), indicador "sem tradução" por nó, save garante
   `default_locale ∈ locales[]`. Aplica a text/prompt/labels. Refinamentos de editor → ver **"Revisão do editor de
   diálogos"** abaixo;
-- **plumbing `$.config` bridge→`PoolSkillSlot.config_json`** (deploy-por-slot);
+- **config params por deploy — declaração + UI ✅ (2026-07-08):** `SkillConfigParam[]` (`@plughub/schemas`:
+  `key/type/label/description/required/default/source/options/min/max`) declarado no topo do skill →
+  coluna `config_params` no agent-registry (passthrough na rota + forward no RegistrySyncer) → **UI de
+  Flow › Deploy** (`ConfigForm` lê `config_params`; `source` conhecido = combo populado por endpoint
+  [`dialogforms`/`pools`/`skills`], `options` = select estático, senão input por `type`; source desconhecido
+  degrada p/ texto — interpretação é 100% da UI, engine só vê `$.config.<key>` literal). `skill_survey_multi_v1`
+  ganhou `config_params: [form_id source=dialogforms]` **declaração-only** (combo aparece; steps ainda literais).
+  **Falta o plumbing runtime (fatia 1):** bridge (`activate_native_agent`) + worker lerem `PoolSkillSlot.config_json`
+  do slot e injetarem como `config` no `/execute` → só então `$.config.form_id` resolve e o survey vira skill-único.
+  Typo de `source` NÃO tratado no deploy (por decisão — seria falso-positivo com UI defasada); lint no publish é
+  item opcional futuro.
 - **entrega real do link web** (provedor SMS/e-mail): o veículo web ✅ + a **camada plugável de entrega ✅**
   (2026-07-08 — `SurveyLinkDelivery` mock que loga o link, `deliver()`/`create(deliver_kind,address)`, endpoint
   wirado). **Falta só o provider real** (SMS/e-mail) — mesma trilha do "item 1" do OTP (provedor externo).
