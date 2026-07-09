@@ -277,6 +277,27 @@ Casos de uso esperados para `post_human`:
 
 ---
 
+## Família N3 (processo/journey) — `on_process_end` *(design, Journey J4 — não implementado)*
+
+Os hooks acima são todos de nível **contato** (rodam na conferência, com o cliente conectado). O Journey J4
+propõe uma **nova família de nível N3 (processo)**, começando por **`on_process_end`**, declarada no `PoolHooks`
+do **pool `webhook`** (o processo).
+
+**Diferença estrutural inegociável:** `on_process_end` **não é inline**. No fim do processo N3 (a sessão de
+workflow atinge `complete`) o cliente **não está conectado** — o workflow é headless e rodou assíncrono. Então o
+hook **agenda um survey OUTBOUND** (trilha `customer-surveys.md` §19: `collect`/Arc 19, link web, caixa no
+Console), **não** dispara um `conversations.inbound` com `conference_id` como os hooks de contato.
+
+Contrato resumido: gatilho = workflow N3 `complete`; **outcome-aware** (`resolved`/`failed`/`timeout` — pesquisa
+só em ciclo fechado); resultado → `session_signal grain=journey` chaveado na **raiz canônica** (J3) + `customer_id`
+da journey. **Dedup em merge:** agendamento idempotente por raiz canônica + quarentena anti-fadiga
+(`survey_eligibility_check`) para não pesquisar o cliente duas vezes sobre o mesmo processo após um `journey_merge`.
+
+Detalhe de design: `docs/product/journey-3-niveis-implementation-spec.md` §6.1. `on_process_start` /
+`on_process_suspend|resume` ficam fora deste corte (possível futuro).
+
+---
+
 ## Implementação — referência de código
 
 | Arquivo | Função |

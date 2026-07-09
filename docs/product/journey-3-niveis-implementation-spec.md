@@ -173,6 +173,43 @@ folhas clicáveis → transcrição (reusa H1/H2 de `customer-contact-history`).
 (`root_session_id`) ∪ merge (`journey_aliases`). Default de UX "journey significativa"
 (`session_count>1` OU workflow N3 OU fundida) só reduz volume.
 
+### 6.1 — Gatilho do sinal N3: hook de pool `on_process_end` (design J4)
+
+O `session_signal grain=journey` (§6(b) N3) precisa de um **produtor**: o que dispara a pesquisa de journey
+end-to-end? Resposta = um **novo hook de pool de nível N3, `on_process_end`**, na config do **pool `webhook`**
+(o processo). Isto **estende** a família de hooks existente (`on_human_start`/`on_human_end`/`on_contact_end`/
+`post_human`, todos de nível **contato**) com uma família de nível **processo/N3**.
+
+**Distinção inegociável — `on_process_end` NÃO é inline como os hooks de contato.** Os hooks de contato disparam
+um `conversations.inbound` sintético **com `conference_id`** e rodam o agente *dentro da conferência, com o cliente
+conectado* (o `on_human_end` segura o WebSocket até o NPS terminar). No fim do processo N3 o cliente **não está
+presente**: a sessão de workflow é headless e rodou assíncrona (suspend/resume de horas/dias). Logo o
+`on_process_end` **agenda um survey OUTBOUND** (a trilha de `customer-surveys.md` §19: `collect`/Arc 19, link web,
+ou caixa no Console) — não injeta agente em conferência.
+
+**Contrato do `on_process_end`:**
+- **Gatilho:** a sessão de workflow N3 (pool `webhook`) atinge `complete` (evento concreto — journey NÃO tem
+  lifecycle governado, então "fim de processo" = workflow-complete é a âncora correta).
+- **Escopo/config:** declarado no `PoolHooks` do **pool webhook**; só faz sentido para `channel_type: webhook`.
+- **Outcome-aware:** carrega o desfecho do processo (`resolved`/`failed`/`timeout`) — como o `on_contact_end` lê
+  `contact_outcome` — para pesquisar só em ciclo fechado e escalar/recuperar nos demais. Pré-req de plataforma:
+  carimbar `process_outcome` no ContextStore pré-hook (análogo ao `contact_outcome`).
+- **Chaveamento:** o survey resultante grava `session_signal grain=journey` na **raiz canônica** (J3) e no
+  `customer_id` da journey (resolvido via J1/identidade), **não** no `session_id` do workflow. Fecha o loop N3.
+
+**Invariante de dedup em merge (J3) — NÃO é um agente, é regra do agendador:** se a journey A já foi pesquisada/
+agendada e depois faz `journey_merge` na B, o cliente seria pesquisado **duas vezes sobre o mesmo processo**. O
+agendamento de `on_process_end` deve ser **idempotente por raiz canônica** e passar pela **quarentena anti-fadiga**
+do `customer-surveys` (`survey_eligibility_check`). Chavear pela canônica (não pelo workflow) já cobre o caso
+comum; a quarentena cobre o resto.
+
+**Fora do escopo desta adição** (registrado como possível futuro, não decidido): `on_process_start` (seed de
+`@ctx.journey.*`, SLA do processo, confirmação de recebimento) e `on_process_suspend/resume` (nudges de CX em
+espera longa — que o flow também resolve com `notify`/`collect`). Milestone/step-level **não** vira hook de pool.
+
+→ Referência cruzada: `docs/guias/pool-hooks.md` (nova família N3), `docs/arcos/customer-surveys.md` §19
+(outbound + quarentena).
+
 ---
 
 ## 7. Fases
@@ -182,7 +219,7 @@ folhas clicáveis → transcrição (reusa H1/H2 de `customer-contact-history`).
 | **J1 — Espinha de proveniência ✅ (2026-07-09)** | `root_session_id` (schemas + ClickHouse + nascimento + propagação automática). `journey_id` cache = `root` no open. Cobre cenários 1 e 2-com-journey. Ver CHANGELOG. | — |
 | **J2 — Endpoint + Vista Processos (proveniência-only) ✅ (2026-07-09)** | `/reports/journeys` agregando por `root_session_id` (sem alias ainda); `root_session_id` no `/reports/sessions` (drill); Vista Processos (`AnaliseJourneysPage`, repurpose de `/analise/processos`) + drill 3 níveis + toggle "significativa". Só Analytics. Ver CHANGELOG. | J1 |
 | **J3 — Merge/alias ✅ (2026-07-09)** | `journey_merge` tool + `journey.merges` + `journey_aliases` + resolução union-find (via `transform()`; cache `journey_id` **diferido** — reads por union-find, sem refresh). `PendingEntry.root_session_id`. Cenário 2-unify validado E2E; cenário 3 pipeline pronto (falta o skill disparar). Ver CHANGELOG. | J1, J2 |
-| **J4 — Avaliação N3** | `session_signal` grain=`journey`; métricas de processo em `/reports/journeys`; `@ctx.journey.*` reaceso. | J2 |
+| **J4 — Avaliação N3** | `session_signal` grain=`journey`; métricas de processo em `/reports/journeys`; **hook de pool `on_process_end`** (§6.1) como gatilho do survey de journey (outbound, outcome-aware, chaveado no canônico; dedup por raiz + quarentena); `@ctx.journey.*` reaceso. | J2, J3 |
 | **J5 — Contexto compartilhado & polish** | `@ctx.journey.*` alimentado; i18n; ABAC; guard de invariantes. | J3, J4 |
 
 J1+J2 já entregam journey por proveniência (o essencial do D1); J3 adiciona o que a proveniência não dá.
