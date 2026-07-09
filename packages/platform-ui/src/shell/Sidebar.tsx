@@ -115,6 +115,7 @@ const Sidebar: React.FC = () => {
       roles: ['supervisor', 'admin', 'business'],
       children: [
         { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: FileText,      abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.processos'), href: '/analise/processos', icon: GitBranch,     abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: Users,         abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.pools'),     href: '/analise/pools',     icon: Package,       abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },

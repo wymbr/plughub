@@ -417,6 +417,15 @@ export type {
   PlatformConfig,
 } from "./platform"
 
+// ── Journey J3 — merge edge (topic journey.merges) ─────────
+export {
+  JourneyMergedEventSchema,
+} from "./journey-merges"
+
+export type {
+  JourneyMergedEvent,
+} from "./journey-merges"
+
 // ── Calendar ─────────────────────────────────
 export {
   DayOfWeekSchema,

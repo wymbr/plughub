@@ -110,6 +110,11 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         # Arc 19: webhook workflow sessions carry origin_session_id linking back to the
         # intake agent session that triggered them via workflow_trigger MCP tool.
         "origin_session_id": payload.get("origin_session_id") or None,
+        # Journey J1: root_session_id = raiz TRANSITIVA da proveniência (propagada do
+        # chamador pela plataforma; ausente → self). journey_id = cache = root no
+        # nascimento. Ambos nunca null (fallback session_id).
+        "root_session_id": payload.get("root_session_id") or session_id,
+        "journey_id":      payload.get("root_session_id") or session_id,
         # Substrate isolation: procedência derivada do source (live|import|reeval).
         "origin":       origin_from_source(payload.get("source")),
     }
@@ -279,6 +284,9 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "customer_id": payload.get("customer_id") or payload.get("contact_id"),
                 "opened_at":   payload.get("started_at") or payload.get("timestamp") or _now(),
                 "timestamp":   payload.get("started_at") or payload.get("timestamp") or _now(),
+                # Journey J1: root propagado (ausente → self).
+                "root_session_id": payload.get("root_session_id") or session_id,
+                "journey_id":      payload.get("root_session_id") or session_id,
                 "origin":      origin_from_source(payload.get("source")),
             }
         ]
@@ -330,6 +338,12 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 # sobrevive no ReplacingMergeTree — sem isso o valor gravado
                 # pelo parse_routed é substituído por NULL.
                 "sla_target_ms":  payload.get("sla_target_ms"),
+                # Journey J1: MESMO motivo do sla — a linha de fechamento (bridge, único
+                # writer de close) é a que sobrevive; precisa repetir o root propagado,
+                # senão o _session_row cai no DEFAULT session_id e a raiz da FILHA some.
+                # O bridge carimba root_session_id neste evento (_close_contact_layer).
+                "root_session_id": payload.get("root_session_id") or session_id,
+                "journey_id":      payload.get("root_session_id") or session_id,
                 "origin":         origin_from_source(payload.get("source")),
             }
         ]
@@ -346,6 +360,9 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "opened_at":  payload.get("timestamp") or _now(),
                 "timestamp":  payload.get("timestamp") or _now(),
                 "status":     "suspended",
+                # Journey J1: repetir root p/ não reverter no ReplacingMergeTree.
+                "root_session_id": payload.get("root_session_id") or session_id,
+                "journey_id":      payload.get("root_session_id") or session_id,
                 "origin":     origin_from_source(payload.get("source")),
             }
         ]
@@ -1167,6 +1184,33 @@ def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
 
 
 # ─── calibration.events (Arc 13) ─────────────────────────────────────────────
+
+def parse_journey_merged(payload: dict[str, Any]) -> dict | None:
+    """
+    Journey J3 — maps journey.merges topic → journey_aliases table.
+
+    Grava a aresta de merge source_root (journey NOVA, absorvida) → canonical_root
+    (journey ANTIGA, sobrevivente). Ordem novo→antigo é enforçada pela tool
+    journey_merge; a resolução canônica (union-find) roda no read layer. Self-merge
+    (source == canonical) é no-op. active=1 (revert seria active=0, não wirado em v1).
+    """
+    tenant_id      = payload.get("tenant_id")
+    source_root    = payload.get("source_root")
+    canonical_root = payload.get("canonical_root")
+    if not tenant_id or not source_root or not canonical_root:
+        return None
+    if source_root == canonical_root:
+        return None
+    return {
+        "table":          "journey_aliases",
+        "tenant_id":      tenant_id,
+        "source_root":    source_root,
+        "canonical_root": canonical_root,
+        "merged_at":      payload.get("merged_at") or _now(),
+        "actor":          payload.get("actor", "") or "",
+        "active":         1,
+    }
+
 
 def parse_calibration_event(payload: dict[str, Any]) -> dict | None:
     """

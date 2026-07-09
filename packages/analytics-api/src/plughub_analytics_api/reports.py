@@ -58,6 +58,7 @@ from .reports_query import (
     query_events,
     query_session_complexity,
     query_sessions_report,
+    query_journeys_report,
     query_usage_report,
     query_workflow_summary,
     query_workflows_report,
@@ -111,6 +112,7 @@ async def report_sessions(
     close_reason:     Optional[str] = Query(None,   description="Filter by close_reason"),
     pool_id:          Optional[str] = Query(None,   description="Filter by pool_id"),
     session_id:       Optional[str] = Query(None,   description="Filter by exact session_id"),
+    root_session_id:  Optional[str] = Query(None,   description="Journey J2 drill: all member sessions of a journey (root)"),
     agent_id:         Optional[str] = Query(None,   description="Filter by agent participant_id (any segment)"),
     insight_category: Optional[str] = Query(None,   description="Filter: sessions with this insight category"),
     insight_tags:     Optional[str] = Query(None,   description="Comma-separated insight tags (AND logic)"),
@@ -143,6 +145,7 @@ async def report_sessions(
         close_reason     = close_reason,
         pool_id          = pool_id,
         session_id       = session_id,
+        root_session_id  = root_session_id,
         agent_id         = agent_id,
         insight_category = insight_category,
         insight_tags     = tags_list,
@@ -1249,9 +1252,50 @@ async def get_workflow_summary(
     return JSONResponse(content=data)
 
 
-# GET /reports/journeys — REMOVED (Arc 19 Fase F)
-# Journey entity superseded by Arc 19 unified session model.
-# See CHANGELOG.md for history (Arcs 10, 16, 17).
+# ─── GET /reports/journeys (Journey J2 — proveniência-only) ──────────────────
+# Reintroduz o endpoint removido no Arc 19 Fase F — agora como LENTE por
+# proveniência (agrupa analytics.sessions por root_session_id), NÃO como a entidade
+# Journey do Arc 10. Sem alias/merge (isso é J3). Drill:
+#   /reports/sessions?root_session_id=<journey_id>  → sessões-membro
+#   /reports/segments?session_id=<id>               → segmentos
+
+@router.get("/journeys")
+async def report_journeys(
+    request:          Request,
+    tenant_id:        str           = Query(...,   description="Tenant identifier"),
+    from_dt:          Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
+    to_dt:            Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
+    channel:          Optional[str] = Query(None,  description="Filter: journeys com sessão-membro neste canal"),
+    pool_id:          Optional[str] = Query(None,  description="Filter: journeys com um segmento neste pool"),
+    significant_only: bool          = Query(True,  description="Esconde journeys de 1 sessão sem workflow (default de UX)"),
+    origin:           str           = Query("live", pattern="^(live|import|reeval)$"),
+    page:             int           = Query(1,     ge=1),
+    page_size:        int           = Query(100,   ge=1),
+    format:           str           = Query("json", pattern="^(json|csv)$"),
+    pool_principal:   PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Lista de journeys (J2, proveniência-only): agrupa `sessions` por `root_session_id`.
+    Colunas: journey_id, session_count, started_at, last_activity_at, channels[],
+             pool_ids[], open_count, significant. ABAC via accessible_pools
+             (journey aparece se ≥1 sessão-membro é visível).
+    """
+    ps = _clamp_page_size(page_size, format == "csv")
+    data = await query_journeys_report(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        from_dt          = from_dt,
+        to_dt            = to_dt,
+        channel          = channel,
+        pool_id          = pool_id,
+        significant_only = significant_only,
+        accessible_pools = pool_principal.accessible_pools,
+        origin           = origin,
+        page             = page,
+        page_size        = ps,
+    )
+    return _respond(data, format, f"journeys_{_today_label()}.csv")
 
 
 # ─── GET /reports/agent-events/series ────────────────────────────────────────

@@ -1600,6 +1600,41 @@ async def _resolve_close_customer_id(
         return fallback
 
 
+async def _resolve_close_root_session_id(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+) -> str:
+    """
+    Journey J1 — resolve the root_session_id to stamp on the sessions close row.
+
+    The sessions table is a ReplacingMergeTree and the close row (this writer) is
+    the one that survives; it MUST carry the transitive root, otherwise the
+    analytics _session_row falls back to DEFAULT session_id and a CHILD session's
+    root is lost after close. Reads `session.root_session_id` from the ContextStore
+    (seeded by channel-gateway on trigger/delegate; for native agent sessions it is
+    seeded here too — see the open path). Fallback = session_id (own root).
+    Best-effort: any error → session_id (never blocks close).
+    """
+    if not tenant_id or not session_id:
+        return session_id
+    try:
+        raw = await redis_client.hget(
+            f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+        )
+        if not raw:
+            return session_id
+        entry = json.loads(raw if isinstance(raw, str) else raw.decode())
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        value = str(value).strip() if value is not None else ""
+        return value or session_id
+    except Exception as exc:
+        logger.debug(
+            "_resolve_close_root_session_id: fallback for session=%s — %s", session_id, exc,
+        )
+        return session_id
+
+
 async def _close_contact_layer(
     redis_client: aioredis.Redis,
     session_id:   str,
@@ -1709,6 +1744,11 @@ async def _close_contact_layer(
             redis_client, tenant_id, session_id, _customer_id_close,
         )
 
+        # Journey J1: stamp the transitive root on the surviving close row.
+        _root_close = await _resolve_close_root_session_id(
+            redis_client, tenant_id, session_id,
+        )
+
         # SLA do pool no fechamento: a linha de close é a que sobrevive no
         # ReplacingMergeTree do analytics — repetir o sla_target_ms aqui evita
         # que o valor do parse_routed seja substituído por NULL.
@@ -1810,6 +1850,7 @@ async def _close_contact_layer(
                 "customer_id":  _customer_id_close,
                 "channel":      _channel_close,
                 "sla_target_ms": _sla_close,
+                "root_session_id": _root_close,   # Journey J1 (survives ReplacingMergeTree)
             }).encode("utf-8"),
         )
         logger.info(

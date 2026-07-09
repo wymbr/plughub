@@ -56,6 +56,12 @@ const SessionOpenedPayloadSchema = z.object({
   destination: z.string(),
   gateway_id:  z.string(),
   metadata:    z.record(z.unknown()).default({}),
+  // Journey J1 — raiz TRANSITIVA da árvore de proveniência (agrupa N sessões de um
+  // processo). Propagada pela plataforma (como o origin_session_id); ausente ⇒ a
+  // sessão é sua própria raiz. Optional AQUI porque quem escreve session_opened (Core)
+  // pode omiti-lo em legado; a garantia "nunca null" é da camada de dados
+  // (analytics.sessions.root_session_id DEFAULT session_id + parse_inbound `or session_id`).
+  root_session_id: z.string().optional(),
 })
 
 const SessionClosedPayloadSchema = z.object({

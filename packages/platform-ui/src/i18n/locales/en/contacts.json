@@ -1,4 +1,26 @@
 {
+  "journeys": {
+    "noTenant": "No tenant",
+    "refresh": "Refresh",
+    "error": "Failed to load processes",
+    "empty": "No processes in range",
+    "totalCount": "{{count}} processes",
+    "breadcrumb": "Processes",
+    "memberCount": "{{count}} sessions",
+    "rootBadge": "root",
+    "filters": { "from": "From", "significantOnly": "Significant only" },
+    "columns": {
+      "journey": "Process (root)", "sessions": "Sessions", "channels": "Channels",
+      "started": "Started", "duration": "Duration", "open": "Open"
+    },
+    "sessions": {
+      "empty": "No sessions",
+      "columns": {
+        "session": "Session", "channel": "Channel", "status": "Status",
+        "opened": "Opened", "segments": "Segs", "outcome": "Outcome"
+      }
+    }
+  },
   "title": "Contacts",
   "noTenantSelected": "No tenant selected.",
   "tabs": {

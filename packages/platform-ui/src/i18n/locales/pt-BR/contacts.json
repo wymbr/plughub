@@ -1,4 +1,26 @@
 {
+  "journeys": {
+    "noTenant": "Sem tenant",
+    "refresh": "Atualizar",
+    "error": "Erro ao carregar processos",
+    "empty": "Nenhum processo no período",
+    "totalCount": "{{count}} processos",
+    "breadcrumb": "Processos",
+    "memberCount": "{{count}} sessões",
+    "rootBadge": "raiz",
+    "filters": { "from": "De", "significantOnly": "Só significativas" },
+    "columns": {
+      "journey": "Processo (raiz)", "sessions": "Sessões", "channels": "Canais",
+      "started": "Início", "duration": "Duração", "open": "Abertas"
+    },
+    "sessions": {
+      "empty": "Sem sessões",
+      "columns": {
+        "session": "Sessão", "channel": "Canal", "status": "Status",
+        "opened": "Aberta", "segments": "Segs", "outcome": "Desfecho"
+      }
+    }
+  },
   "title": "Contatos",
   "noTenantSelected": "Nenhum tenant selecionado.",
   "tabs": {

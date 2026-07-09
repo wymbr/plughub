@@ -523,7 +523,7 @@ services:
           workflow.events
           calendar.events
           collect.events
-          journey.events
+          journey.merges
           agent.events
           session.signals
           calibration.events

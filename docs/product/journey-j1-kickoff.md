@@ -24,10 +24,18 @@ automática top-down + `journey_id` como cache = `root` no nascimento. **Cobre o
 
 ## Arquivos a tocar (ordem sugerida)
 
-1. **`packages/schemas/src/stream.ts`** — declara `origin_session_id` e o `session_opened`/`ConversationInbound`.
-   Espelhar `root_session_id: z.string()` (**não-nullable**) ao lado de `origin_session_id`. Named exports
-   explícitos (nunca `export *`). *(Conferir também `workflow.ts`/`survey.ts` — só se referenciarem o schema de
-   sessão; provavelmente não precisam mudar no J1.)*
+1. **`packages/schemas/src/stream.ts`** — home Zod canônica do payload de sessão: `StreamPayloads.session_opened`
+   → **`SessionOpenedPayloadSchema`**. Adicionar `root_session_id: z.string()` (**não-nullable**) a esse payload.
+   Named exports explícitos (nunca `export *`).
+   > ⚠️ **Realidade do código (não perca tempo procurando):** `origin_session_id` **não** está no `stream.ts` nem
+   > há um `ConversationInboundEvent` em Zod. O `SessionOpenedPayloadSchema` **não** carrega `origin_session_id`
+   > hoje — `root_session_id` é campo **novo**, não "espelho". O `origin_session_id` de schema vive só no
+   > `workflow.ts::WorkflowInstanceSchema` (caminho **legado** do workflow-api). O `origin_session_id` que chega
+   > na **linha `analytics.sessions`** trafega como **dict** (webhook.py monta o inbound → `models.py::parse_inbound`
+   > lê `payload.get("origin_session_id")`), sem contrato Zod. Portanto a mudança em `@plughub/schemas` no J1 é
+   > pequena (1 campo no `SessionOpenedPayloadSchema`); o grosso do J1 é plumbing de dict em Python (itens 2, 3, 5).
+   > Só tocar `workflow.ts` se o trigger legado do workflow-api também precisar carregar a raiz (provavelmente
+   > **fora** do escopo webhook/bridge do J1).
 2. **`packages/channel-gateway/.../adapters/webhook.py`** — `handle_trigger` e `handle_delegate` já setam
    `origin_session_id` (star topology). Adicionar `root_session_id`: no inbound sem param → `self`; em
    delegação/collect → herdar o `root_session_id` do chamador (mesma mecânica do `origin_session_id`). Escrever
@@ -47,9 +55,11 @@ automática top-down + `journey_id` como cache = `root` no nascimento. **Cobre o
 ## Build / rebuild (WSL)
 
 Mudança em `@plughub/schemas` ⇒ rebuildar os consumidores TS **juntos** (invariante do `CLAUDE.md`): `schemas`
-→ `sdk`, `mcp-server-plughub`, `skill-flow-engine`, `agent-registry`. Serviços Python (channel-gateway,
-orchestrator-bridge, analytics-api) leem o evento como JSON — sem dependência de compile —, mas conferir se há
-mirror Pydantic do schema de sessão que precise do campo.
+→ `sdk`, `mcp-server-plughub`, `skill-flow-engine`, `agent-registry`. Os serviços Python (channel-gateway,
+orchestrator-bridge, analytics-api) leem o evento como **dict JSON** — sem dependência de compile e **sem mirror
+Pydantic** do schema de sessão —, então o plumbing Python (itens 2/3/5) é independente do rebuild TS e pode ir
+primeiro. No demo: `build <svc> && up -d --force-recreate <svc>` (source bakeado); YAML de skill é mount ro, mas
+pool migrado a slot exige `set-next`+`promote` (não aplicável ao J1, que não mexe em skill).
 
 ## Verificação (rodar no WSL)
 

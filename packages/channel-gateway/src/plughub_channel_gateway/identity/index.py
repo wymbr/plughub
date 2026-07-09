@@ -95,6 +95,10 @@ class PendingEntry:
     policy:          str = "offer"          # offer | auto
     intent:          str | None = None
     context_preview: dict[str, Any] = field(default_factory=dict)
+    # Journey J3 — raiz canônica da journey da sessão pendente (workflow em espera).
+    # O intake que reconecta lê isto (via pending_workflow_get) para comandar o
+    # journey_merge (unificar a journey do novo contato com a do processo pendente).
+    root_session_id: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

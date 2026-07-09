@@ -36,6 +36,7 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
+import { registerJourneyTools }     from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 import { registerWorkflowTools }    from "./tools/workflow"
@@ -155,6 +156,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerDeployTools(server, deployDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
+  registerJourneyTools(server, agentEventDeps)
   registerSurveyTools(server, surveyDeps)
   registerWorkflowTools(server, workflowDeps)
   registerDialogTools(server, dialogDeps)
@@ -971,6 +973,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerAgentEventTools(mcpServer, { redis, kafka })
+    registerJourneyTools(mcpServer, { redis, kafka })
     registerSurveyTools(mcpServer, {
       kafka,
       dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://localhost:3760",

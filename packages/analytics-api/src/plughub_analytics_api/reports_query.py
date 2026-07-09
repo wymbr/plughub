@@ -115,6 +115,73 @@ def _meta(page: int, page_size: int, total: int, from_dt: str, to_dt: str) -> di
     }
 
 
+# ─── Journey J3 — resolução canônica (union-find sobre journey_aliases) ────────
+
+def _journey_resolved_map(client: Any, db: str, tenant_id: str) -> dict[str, str]:
+    """
+    Journey J3 — lê `journey_aliases` active=1 e devolve `{root_local → raiz_canônica}`
+    (union-find com path compression + cycle guard). Só raízes que têm aresta entram
+    no mapa; as demais resolvem para si mesmas. A ordem novo→antigo da tool torna
+    ciclo improvável, mas o guard (`seen`) garante terminação de qualquer forma.
+    Tabela pequena; degradação graciosa (erro → mapa vazio = comportamento J2).
+    """
+    try:
+        res = client.query(
+            f"SELECT source_root, canonical_root FROM {db}.journey_aliases FINAL "
+            "WHERE tenant_id = {tenant_id:String} AND active = 1",
+            parameters={"tenant_id": tenant_id},
+        )
+        edges = list(res.result_rows)
+    except Exception:
+        return {}
+
+    parent: dict[str, str] = {}
+    for src, canon in edges:
+        if src and canon and str(src) != str(canon):
+            parent[str(src)] = str(canon)
+
+    resolved: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        path: list[str] = []
+        seen: set[str] = set()
+        cur = x
+        while cur in parent and cur not in seen:
+            seen.add(cur)
+            path.append(cur)
+            cur = parent[cur]
+        for node in path:
+            resolved[node] = cur
+        return cur
+
+    for node in list(parent.keys()):
+        find(node)
+    return resolved
+
+
+def _journey_group_expr(resolved: dict[str, str], col: str = "s.root_session_id") -> str:
+    """
+    SQL que mapeia `col` (root) → raiz canônica via `transform` (1 salto, pois
+    `resolved` já é totalmente resolvido). Sem aliases → identidade (o próprio col).
+    Valores são UUIDs da nossa própria tabela (não input do usuário) — inline seguro.
+    """
+    if not resolved:
+        return col
+    keys = ", ".join(f"'{k}'" for k in resolved.keys())
+    vals = ", ".join(f"'{v}'" for v in resolved.values())
+    return f"transform({col}, [{keys}], [{vals}], {col})"
+
+
+def _journey_member_roots(resolved: dict[str, str], root: str) -> set[str]:
+    """Conjunto de raízes locais que resolvem à MESMA journey canônica de `root`
+    (para o drill: WHERE root_session_id IN membros). Inclui a própria e a canônica."""
+    canonical = resolved.get(root, root)
+    members = {r for r, c in resolved.items() if c == canonical}
+    members.add(canonical)
+    members.add(root)
+    return members
+
+
 def _apply_agent_scope(
     conditions: list[str],
     supervised_agent_types: "list[str] | None",
@@ -232,6 +299,7 @@ async def query_sessions_report(
     close_reason:           str | None       = None,
     pool_id:                str | None       = None,
     session_id:             str | None       = None,
+    root_session_id:        str | None       = None,
     agent_id:               str | None       = None,
     insight_category:       str | None       = None,
     insight_tags:           list[str] | None = None,
@@ -256,7 +324,7 @@ async def query_sessions_report(
             channel, outcome, close_reason, pool_id, session_id,
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
-            ani, dnis, status, origin,
+            ani, dnis, status, origin, root_session_id,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -275,6 +343,7 @@ def _fetch_sessions(
     ani: str | None = None, dnis: str | None = None,
     status: str | None = None,
     origin: "str | list[str]" = "live",
+    root_session_id: str | None = None,
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
@@ -296,6 +365,15 @@ def _fetch_sessions(
     if session_id:
         conditions.append("s.session_id = {session_id:String}")
         params["session_id"] = session_id
+    # Journey J2/J3 drill — sessões-membro de uma journey. Em J3, o root pedido pode
+    # ser a raiz canônica de um merge: expande para TODAS as raízes locais que
+    # resolvem à mesma journey (union-find sobre journey_aliases). Sem merges → só a
+    # própria raiz (comportamento J2).
+    if root_session_id:
+        _resolved = _journey_resolved_map(client, db, tenant_id)
+        _members = _journey_member_roots(_resolved, root_session_id)
+        _member_list = ", ".join(f"'{m}'" for m in _members)
+        conditions.append(f"s.root_session_id IN ({_member_list})")
     if channel:
         # For active sessions parse_routed may have set channel='' — include them by also
         # checking non-FINAL rows. For closed sessions s.channel is authoritative.
@@ -490,7 +568,8 @@ def _fetch_sessions(
             __ANI_DNIS__,
             COALESCE(_sc.cnt, 0) AS segment_count,
             COALESCE(s.status, 'closed') AS status,
-            s.origin_session_id
+            s.origin_session_id,
+            s.root_session_id
         FROM {db}.sessions AS s FINAL
         {_joins}
         WHERE {where}
@@ -519,7 +598,8 @@ def _fetch_sessions(
                     s.wait_time_ms, s.handle_time_ms,
                     NULL AS ani, NULL AS dnis, 0 AS segment_count,
                     COALESCE(s.status, 'closed') AS status,
-                    s.origin_session_id
+                    s.origin_session_id,
+                    s.root_session_id
                 FROM {db}.sessions AS s FINAL
                 {_agent_join}
                 WHERE {where}
@@ -527,6 +607,124 @@ def _fetch_sessions(
                 LIMIT {page_size} OFFSET {offset}
             """, parameters=params)
 
+    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/journeys (Journey J2 — proveniência-only) ───────────────────────
+
+async def query_journeys_report(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    channel:          str | None       = None,
+    pool_id:          str | None       = None,
+    significant_only: bool             = True,
+    accessible_pools: list[str] | None = None,
+    origin:           "str | list[str]" = "live",
+    page:      int = 1,
+    page_size: int = 100,
+) -> dict:
+    """
+    Journey list (J2 — proveniência-only): agrupa `analytics.sessions` por
+    `root_session_id` (a raiz canônica local). SEM alias/merge (isso é J3) — cada
+    grupo é uma árvore de proveniência. Uma journey aparece se ≥1 sessão-membro casa
+    os filtros (janela/pool/origin); os agregados refletem os membros na janela.
+    `significant_only` (default de UX) esconde journeys de 1 sessão sem workflow:
+    mantém `count>1` OU que tenha canal `webhook` (processo N3).
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_journeys, client, database, tenant_id, since, until,
+            channel, pool_id, significant_only, accessible_pools, origin,
+            page, page_size,
+        )
+    except Exception as exc:
+        logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+
+
+def _fetch_journeys(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    channel: str | None, pool_id: str | None, significant_only: bool,
+    accessible_pools: list[str] | None, origin: "str | list[str]",
+    page: int, page_size: int,
+) -> dict:
+    conditions = [
+        "s.tenant_id = {tenant_id:String}",
+        f"s.opened_at >= '{since}'",
+        f"s.opened_at < '{until}'",
+        # Exclui sessões-hook sintéticas fechadas (mesma regra do _fetch_sessions).
+        "(s.channel != '' OR s.closed_at IS NULL)",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+
+    if channel:
+        conditions.append("s.channel = {channel:String}")
+        params["channel"] = channel
+    if pool_id:
+        conditions.append(
+            f"s.session_id IN (SELECT session_id FROM {db}.segments FINAL"
+            " WHERE tenant_id = {tenant_id:String} AND pool_id = {pool_id:String})"
+        )
+        params["pool_id"] = pool_id
+    # Pool-scope ABAC (Arc 7c) — inclui pool_id='' (sessão ainda não roteada).
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
+
+    _apply_origin_scope(conditions, origin, alias="s.")
+    where = " AND ".join(conditions)
+
+    # Journey J3 — agrupa pela raiz CANÔNICA (root resolvido via journey_aliases).
+    # Sem merges → identidade (comportamento J2). O transform já usa o mapa
+    # totalmente resolvido (union-find), então 1 salto basta.
+    resolved = _journey_resolved_map(client, db, tenant_id)
+    jexpr    = _journey_group_expr(resolved)
+
+    # A "significância" é um filtro de grupo → HAVING.
+    having = ""
+    if significant_only:
+        having = "HAVING (count() > 1 OR has(groupUniqArray(s.channel), 'webhook'))"
+
+    # total = número de journeys (grupos canônicos) que passam o HAVING.
+    total = _count(
+        client,
+        f"""SELECT count() FROM (
+            SELECT {jexpr} AS journey_id
+            FROM {db}.sessions AS s FINAL
+            WHERE {where}
+            GROUP BY journey_id
+            {having}
+        )""",
+        params,
+    )
+
+    offset = (page - 1) * page_size
+    sql = f"""
+        SELECT
+            {jexpr} AS journey_id,
+            count() AS session_count,
+            min(s.opened_at) AS started_at,
+            max(COALESCE(s.closed_at, s.opened_at)) AS last_activity_at,
+            arrayFilter(x -> x != '', groupUniqArray(s.channel)) AS channels,
+            arrayFilter(x -> x != '', groupUniqArray(s.pool_id)) AS pool_ids,
+            countIf(COALESCE(s.status, 'closed') != 'closed') AS open_count,
+            (count() > 1 OR has(groupUniqArray(s.channel), 'webhook')) AS significant
+        FROM {db}.sessions AS s FINAL
+        WHERE {where}
+        GROUP BY journey_id
+        {having}
+        ORDER BY started_at DESC
+        LIMIT {page_size} OFFSET {offset}
+    """
+    result = client.query(sql, parameters=params)
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
 

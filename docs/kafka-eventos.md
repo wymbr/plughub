@@ -1,9 +1,23 @@
 # PlugHub — Tópicos Kafka e Schemas de Eventos
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-07-09 · Estado: Arc 19 (modelo unificado de sessão)
 > Broker padrão: `localhost:9092` (configurável via `PLUGHUB_KAFKA_BROKERS`)
 > Formato: JSON — `value_serializer = json.dumps().encode("utf-8")`
 > Chave de partição: `session_id` quando disponível (garante ordem por sessão)
+>
+> **Modelo unificado (Arc 19).** Workflow deixou de ser uma entidade/lifecycle próprio e virou o canal
+> `webhook` da channel-gateway: o `session_id` é o identificador persistente por toda a execução (inclusive
+> ciclos de suspend/resume), o status `suspended` foi adicionado ao domínio de sessão, e o skill-flow roda
+> como **agente nativo via `orchestrator-bridge`**. Consequências para este documento:
+> - **`journey.events` (9 tipos, Arc 10) — REMOVIDO** no Arc 19 Fase F (a tabela ClickHouse `journey_events`
+>   não existe mais). O agrupamento multi-sessão volta como **lente + alias** (topic `journey.merges`, 1 tipo,
+>   design/pré-código — ver Journey retorno).
+> - **`workflow.events` / `collect.events` — legado do `workflow-api`.** Os tópicos, o serviço `workflow-api`,
+>   o consumer `skill-flow-worker` e as tabelas `workflow_events`/`collect_events` **continuam fisicamente
+>   presentes e ativos** (compat), mas NÃO fazem parte do caminho unificado — no modelo Arc 19 o workflow
+>   executa como canal `webhook` via `orchestrator-bridge`. Tratar como caminho legado, não como o contrato atual.
+> - Rastreabilidade multi-sessão usa `origin_session_id` (1 salto, Arc 19) e — futuramente — `root_session_id`
+>   (raiz transitiva, Journey J1).
 
 ---
 
@@ -24,8 +38,8 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | `agent.lifecycle` | `AgentLifecycleEventSchema` | `platform-events.ts` |
 | `workflow.events` | `WorkflowEventSchema` | `workflow.ts` |
 | `collect.events` | `CollectEventSchema` | `workflow.ts` |
-| `journey.events` | `JourneyEventSchema` | `journey.ts` | *(Arc 10 — removido no Arc 19 Fase F)* |
-| `journey.merges` *(Journey retorno — design)* | `JourneyMergedEventSchema` | `journey-merges.ts` |
+| ~~`journey.events`~~ | ~~`JourneyEventSchema` / `journey.ts`~~ | **Removido (Arc 19 Fase F)** — tabela `journey_events` não existe mais |
+| `journey.merges` *(Journey J3 ✅)* | `JourneyMergedEventSchema` | `journey-merges.ts` |
 | `usage.events` | `UsageEventSchema` | `usage.ts` |
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
@@ -57,18 +71,20 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | [`sentiment.updated`](#sentimentupdated) | ai-gateway | analytics-api | Atualização de sentimento da sessão |
 | [`evaluation.events`](#evaluationevents) | evaluation-api | analytics-api → ClickHouse | Eventos do ciclo de avaliação de qualidade |
 | [`calibration.events`](#calibrationevents) | evaluation-api | analytics-api → ClickHouse | Eventos de calibração de avaliadores (Arc 13) |
-| [`workflow.events`](#workflowevents) | workflow-api | skill-flow-worker, analytics-api | Lifecycle de WorkflowInstance |
-| [`collect.events`](#collectevents) | workflow-api | channel-gateway, analytics-api | Step `collect` — contato outbound assíncrono |
-| `journey.merges` *(Journey retorno — design, pré-código)* | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse | Aresta de merge de journey (novo→antigo); **1 tipo** — distinto do `journey.events` (9 tipos) removido no Arc 19. Ver `docs/product/journey-3-niveis-implementation-spec.md` |
-| [`journey.events`](#journeyevents) | workflow-api | analytics-api → ClickHouse | Lifecycle de jornada multi-sessão (Arc 10/16) |
+| [`workflow.events`](#workflowevents) *(legado workflow-api)* | workflow-api | skill-flow-worker, analytics-api | Lifecycle de `WorkflowInstance` — **caminho legado**, fora do modelo unificado (Arc 19) |
+| [`collect.events`](#collectevents) *(legado workflow-api)* | workflow-api | channel-gateway, analytics-api | Step `collect` — contato outbound assíncrono (caminho legado do workflow-api) |
+| [`session.signals`](#sessionsignals) | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse | Voz do cliente/agente (CSAT/NPS/CES…) — grão contato/segmento/jornada |
+| [`journey.merges`](#journeymerges) *(Journey J3 ✅)* | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` | Aresta de merge de journey (novo→antigo); **1 tipo** — distinto do `journey.events` (9 tipos) removido no Arc 19. Ver `docs/product/journey-3-niveis-implementation-spec.md` |
 | [`usage.events`](#usageevents) | core, ai-gateway, channel-gateway | usage-aggregator | Metering por dimensão de consumo |
 | [`agent.events`](#agentevents) | mcp-server-plughub (tool `agent_event`) | analytics-api → ClickHouse | KPIs de negócio publicados por agentes (Arc 12) |
 | [`events.dead_letter`](#eventsdead_letter) | skill-flow-worker, analytics-api, orchestrator-bridge | ops / monitoring | Eventos não processáveis (dead letter) |
 
-> **Nomes obsoletos.** Versões anteriores deste documento citavam `conversations.events`
+> **Nomes obsoletos / removidos.** Versões anteriores deste documento citavam `conversations.events`
 > (substituído por `conversations.session_opened` / `conversations.session_closed` +
 > `agent.done`) e `agent.registry.events` (substituído por `registry.changed`). Esses
-> nomes não existem mais — use os tópicos atuais da tabela acima.
+> nomes não existem mais — use os tópicos atuais da tabela acima. **`journey.events`** (9 tipos,
+> `JourneyEventSchema`) foi **removido no Arc 19 Fase F** junto da entidade Journey e da tabela
+> ClickHouse `journey_events`; não confundir com `journey.merges` (topic novo de 1 tipo, ainda em design).
 
 ---
 
@@ -408,65 +424,101 @@ O `AuditRecord` inclui `server_name`, `tool_name`, `allowed`, `injection_detecte
 
 ## `workflow.events`
 
+> **Legado (`workflow-api`).** No modelo unificado (Arc 19) o workflow é o canal `webhook` da channel-gateway
+> e o skill-flow roda como agente nativo via `orchestrator-bridge` — não há mais `WorkflowInstance` como
+> entidade de primeira classe no caminho novo. Este tópico, o `workflow-api`, o consumer `skill-flow-worker`
+> e a tabela ClickHouse `workflow_events` **permanecem fisicamente presentes e ativos** por compatibilidade,
+> mas descrevem o caminho antigo, não o contrato atual.
+
 **Propósito**: Lifecycle de `WorkflowInstance` (Arc 4) — `trigger`, `suspend`, `resume`, `complete`, `fail`, `cancel`, `timed_out`.
 
 **Produtor**: `workflow-api`
 
-**Consumidores**: `skill-flow-worker` (executa SkillFlow para instâncias de workflow), `analytics-api`
+**Consumidores**: `skill-flow-worker` (executa SkillFlow para instâncias de workflow — ainda subscrito ao
+tópico), `analytics-api` → tabela ClickHouse `workflow_events`
 
 **Schema Zod**: `WorkflowEventSchema` (`workflow.ts`)
-
-A partir do Arc 16, os eventos `emit_*` carregam `journey_id` quando a instância pertence a uma Journey.
 
 ---
 
 ## `collect.events`
 
+> **Legado (`workflow-api`).** Mesmo enquadramento de `workflow.events`: pertence ao caminho antigo do
+> `workflow-api`. No modelo unificado (Arc 19) o `collect` é step exclusivo de workflows executados como
+> canal `webhook`. Tópico e tabela ClickHouse `collect_events` permanecem ativos por compatibilidade.
+
 **Propósito**: Eventos do step `collect` — contato outbound assíncrono multicanal que suspende o workflow até a resposta do cliente.
 
 **Produtor**: `workflow-api`
 
-**Consumidores**: `channel-gateway` (filtra `collect.requested` para despachar o contato), `analytics-api`
+**Consumidores**: `channel-gateway` (filtra `collect.requested` para despachar o contato), `analytics-api` → tabela ClickHouse `collect_events`
 
 **Schema Zod**: `CollectEventSchema` (`workflow.ts`)
 
-A partir do Arc 16 (Fase D), o despacho usa a matriz de capacidades de canal (`requires: [text|audio|video|file_upload|masked_input|rich_menu]`) quando o canal não é explícito.
+O despacho usa a matriz de capacidades de canal (`requires: [text|audio|video|file_upload|masked_input|rich_menu]`) quando o canal não é explícito.
 
 ---
 
-## `journey.events`
+## `journey.events` — **REMOVIDO (Arc 19 Fase F)**
 
-> Status: **Implementado** (Arc 10, estendido no Arc 16).
+> Status: **removido.** O tópico `journey.events` (9 tipos), o `JourneyEventSchema`/`journey.ts` e a tabela
+> ClickHouse `journey_events` foram **eliminados no Arc 19 Fase F** junto com a entidade Journey (a dualidade
+> contact/workflow foi colapsada no modelo unificado). Nada produz nem consome este tópico.
 
-**Propósito**: Lifecycle de jornada multi-sessão — a unidade de serviço que transcende a sessão e agrupa todos os contatos de um mesmo processo de atendimento.
+O agrupamento multi-sessão retorna como **lente + camada mínima de alias**, não como entidade:
+- **`origin_session_id`** (Arc 19) — 1 salto de proveniência, já em produção (`sessions.origin_session_id`).
+- **`root_session_id`** (Journey J1, pré-código) — raiz transitiva que agrupa a árvore de proveniência.
+- **`journey.merges`** (topic novo de **1 tipo**, Journey J3 ✅) — arestas de merge (novo→antigo); ver seção abaixo.
 
-**Produtor**: `workflow-api`
+Ver `docs/product/journey-3-niveis-implementation-spec.md` e a seção Journey (retorno) do `TODO.md`.
 
-**Consumidor**: `analytics-api` → tabela ClickHouse `journey_events`
+---
 
-**Schema Zod**: `JourneyEventSchema` (`journey.ts`)
+## `journey.merges`
 
-**Chave de partição**: `journey_id`
+> Status: **Implementado** (Journey J3). Topic de **1 tipo** (`journey_merged`) — NÃO confundir com o
+> `journey.events` de 9 tipos removido no Arc 19.
 
-### Tipos de evento
+**Propósito**: Aresta de merge/alias entre duas journeys — liga a raiz mais NOVA (`source_root`, absorvida) à
+mais ANTIGA (`canonical_root`, sobrevivente). Ordem novo→antigo ⇒ floresta sem ciclo. NUNCA reescreve o
+`root_session_id` das sessões — só grava a aresta; a resolução canônica (union-find) roda no read layer da
+analytics-api.
 
-São **9 tipos**, todos em `snake_case`:
+**Produtor**: `mcp-server-plughub` (tool `journey_merge`, auditada pelo McpInterceptor)
 
-| Evento | Quando |
-|---|---|
-| `journey_started` | Journey criada (via `journey_start`, `@journey:<skill_id>`, flag `creates_journey: true` ou botão do Console) |
-| `journey_session_linked` | Sessão vinculada à journey (collect session ou `journey_link_session`) |
-| `journey_suspended` | Journey suspensa aguardando sinal externo |
-| `journey_resumed` | Journey retomada |
-| `journey_completed` | Journey concluída com sucesso |
-| `journey_failed` | Journey encerrada por falha |
-| `journey_cancelled` | Journey cancelada |
-| `journey_merged` | Duas journeys mescladas (`journey_merge`) |
-| `journey_split` | Sessões collect extraídas para uma nova journey (`journey_split`) |
+**Consumidor**: `analytics-api` → tabela ClickHouse `journey_aliases` (`ReplacingMergeTree` por
+`(tenant_id, source_root)`); a lente `/reports/journeys` agrupa pela raiz canônica e o drill
+`/reports/sessions?root_session_id=` expande o canônico para o conjunto de raízes-membro.
 
-> O `journey_session_linked` é enriquecido (Fase D.5) com `current_step`, `session_outcome`,
-> `session_started_at` e `session_ended_at`. Regra de interseção: `sessions.journey_id`
-> é preenchido apenas em collect sessions, nunca na origin session.
+**Schema Zod**: `JourneyMergedEventSchema` (`journey-merges.ts`)
+
+```json
+{
+  "event_id":       "uuid",
+  "tenant_id":      "string",
+  "source_root":    "session_id (raiz nova, absorvida)",
+  "canonical_root": "session_id (raiz antiga, sobrevivente)",
+  "merged_at":      "ISO datetime",
+  "actor":          "string (skill_id / instance_id / participant)"
+}
+```
+
+---
+
+## `session.signals`
+
+**Propósito**: Sinais de "voz do cliente/agente" — resultado de pesquisas de satisfação (CSAT/NPS/CES/PMF/FCR)
+e afins. Store único de sinais na bancada analítica (F10), com grão contato/segmento e — quando aplicável —
+jornada.
+
+**Produtor**: `mcp-server-plughub` (tool `survey_record`)
+
+**Consumidor**: `analytics-api` → tabela ClickHouse `session_signal`
+
+**Schema Zod**: `SessionSignalEventSchema` (`survey.ts`)
+
+O evento carrega `origin_session_id`/`journey_id` (religa à sessão original em surveys diferidos) e é
+bucketizado por `session_at` (regra de ouro da bancada — timing do ato × diferido não altera o bucket).
 
 ---
 
@@ -539,16 +591,24 @@ O `category` é hierárquico em dot notation (`pool_id.skill_id.metric_key`); o 
 3. routing-engine     ← rules.escalation.events         (novo pool de destino)
 ```
 
-## Fluxo de Eventos — Jornada Multi-sessão
+## Fluxo de Eventos — Workflow como canal `webhook` (Arc 19, modelo unificado)
 
 ```
-1. [primeiro contato]
-   workflow-api       → journey.events (journey_started)
-2. [step collect contata o cliente em outro canal]
-   workflow-api       → collect.events (collect.requested)
-   channel-gateway    ← collect.events                  (despacho por capacidade de canal)
-3. [cliente responde — nova sessão filha criada]
-   workflow-api       → journey.events (journey_session_linked)
-4. [jornada conclui]
-   workflow-api       → journey.events (journey_completed)
+1. [trigger externo no endpoint webhook]
+   channel-gateway    → conversations.inbound           (WebhookAdapter cria a sessão)
+2. core               → conversations.session_opened
+3. routing-engine     → conversations.routed            (aloca instância skill-flow do pool webhook)
+4. [step suspend: sessão persiste com status `suspended` e TTL estendido no Redis]
+   orchestrator-bridge→ agent.lifecycle (agent_ready)   (segmento fecha, instância volta ao pool)
+5. [resume via POST .../webhook/resume/{token}]
+   channel-gateway    → conversations.inbound           (nova alocação → novo segmento)
+6. orchestrator-bridge→ agent.done                       (fluxo conclui)
+7. core               → conversations.session_closed
 ```
+
+> O `session_id` é o identificador persistente por toda a execução — inclusive múltiplos ciclos de
+> suspend/resume. Não há mais `journey.events`; a proveniência entre sessões usa `origin_session_id`.
+
+> **Nota (legado).** O caminho antigo do `workflow-api` (`workflow.events` → `skill-flow-worker`,
+> `collect.events`) ainda existe fisicamente e emite os fluxos descritos nas seções acima, mas não é o
+> caminho do modelo unificado.

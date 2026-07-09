@@ -2,6 +2,70 @@
 
 ---
 
+## Journey J3 — merge/alias (`journey_merge` + `journey.merges` + union-find) (2026-07-09)
+
+Terceira fase: o que a proveniência (J1/J2) sozinha não expressa — **unificar duas journeys** (cenário 2-unify) e o cenário inbound-null→pending→merge (cenário 3). Merge = **aresta de alias** (nunca reescreve `root_session_id`), resolvido por **union-find na leitura**. Sem reviver a entidade Journey (Arc 10). Validado E2E no demo: publicando `journey.merges(source=9f8a4d1e, canonical=5092cbdf)`, a journey de 3 sessões colapsou na mais antiga → `session_count 1→4` e o drill do canônico passou a listar as 4 sessões-membro das duas árvores.
+
+**Componentes:**
+- **schemas** — `JourneyMergedEventSchema` (`journey-merges.ts`, topic `journey.merges`, 1 tipo): `{event_id, tenant_id, source_root (nova/absorvida), canonical_root (antiga/sobrevivente), merged_at, actor}`. Exportado no index.
+- **mcp-server-plughub** — tool **`journey_merge(source_root, canonical_root)`** (`tools/journey.ts`, reintroduz o nome removido no Arc 19 SEM entidade): resolve tenant+actor do JWT, **default survivor = mais antiga** (lê `started_at` do `session:{root}:meta`; swap se o canonical do chamador for o mais novo; senão confia no fluxo), publica `journey.merges`, validado por `JourneyMergedEventSchema`. Auditado pelo McpInterceptor; role gate via permissões do JWT. Registrado nos 2 sites do `server.ts`.
+- **analytics-api** — tabela `journey_aliases` (`ReplacingMergeTree` por `(tenant, source_root)`, `active`) + DDL/insert/row-builder; consumer `journey.merges` → `parse_journey_merged` → `journey_aliases`; **resolução union-find** (`_journey_resolved_map`, path compression + cycle guard, degradação graciosa) aplicada ao `/reports/journeys` (`GROUP BY` pela raiz canônica via `transform()` do ClickHouse — pagina no SQL, sem post-merge) e ao drill `/reports/sessions?root_session_id=` (expande canônico → conjunto de raízes-membro).
+- **channel-gateway** — `PendingEntry.root_session_id` (dataclass, retrocompatível) + populado nas dual-writes `pending_by_customer` (delegate/conference, com a raiz do chamador) + exposto na view `find_pending_by_customer` (o intake lê para comandar o merge na reconexão — cenário 3).
+- **infra** — `journey.merges` no `kafka-init` (substitui `journey.events` legado).
+
+**Decisões (spec-aligned):** sobrevivente = mais antiga (default; fluxo pode nomear); **cache `sessions.journey_id` DIFERIDO** — reads resolvem por union-find, o cache não é reescrito no merge (§10 permite; sem re-emit de linhas). Cycle guard no union-find garante terminação mesmo se a ordem novo→antigo falhar.
+
+**Testes:** `test_journey_merge.py` (13 — union-find cadeia/aresta/ciclo/tenant/erro + group_expr + member_roots + parse_journey_merged) + `test_journeys_report.py` atualizado (query de aliases no `_fetch_journeys`). 19 verdes. E2E cenário 2-unify validado.
+
+**Fora do escopo J3 (wiring de demo/skill, não core):** o disparo real do `journey_merge` na reconexão (cenário 3 fim-a-fim) exige um skill chamar a tool — o pipeline (tool + `PendingEntry.root_session_id` + resolução) está pronto; falta só o flow.
+
+→ Spec: `docs/product/journey-3-niveis-implementation-spec.md` §2.3/§3.3/§3.4/§7.
+
+---
+
+## Journey J2 — Vista Processos (`/reports/journeys` + drill 3 níveis) (2026-07-09)
+
+Segunda fase do retorno de Journey: a **lente por proveniência** sobre o `root_session_id` do J1. Backend + UI, validado E2E no demo (a journey `9f8a4d1e…` da cadeia W1→W2→W3 aparece com `session_count=3`).
+
+**J2a — backend (analytics-api):**
+- `GET /reports/journeys` — agrega `analytics.sessions` por `root_session_id` (proveniência-only, **sem** alias/merge — isso é J3). Colunas: `journey_id`, `session_count`, `started_at`, `last_activity_at`, `channels[]`, `pool_ids[]`, `open_count`, `significant`. Filtros: janela, `channel`, `pool_id`, `significant_only` (default de UX — `HAVING count>1 OR has(channels,'webhook')`), `origin`. ABAC via `accessible_pools` (journey aparece se ≥1 sessão-membro é visível). `query_journeys_report`/`_fetch_journeys` em `reports_query.py`.
+- Filtro `root_session_id` no `GET /reports/sessions` (+ `query_sessions_report`) para o **drill** (sessões-membro de uma journey); expõe `root_session_id` no SELECT.
+- Testes: `test_journeys_report.py` (4 — short-circuit ABAC, agregação+HAVING, sem-HAVING, fail-soft). Validado por curl.
+
+**J2b — UI (platform-ui, decisão: só Analytics):**
+- Vista Processos em **`AnaliseJourneysPage`** (drill 3 níveis por URL-param): L1 lista de journeys (`/reports/journeys`) → L2 sessões-membro (`/reports/sessions?root_session_id=`, raiz destacada) → L3 `SessionTranscript`. Filtros de data + toggle "Só significativas".
+- **Repurpose de `/analise/processos`**: a rota apontava para a lista de `WorkflowInstance` (legado `workflow-api`, deprecado no Arc 19); agora renderiza a journey view. `AnaliseProcessosPage.tsx` fica no disco, não roteada.
+- **Nav**: item "Processos" (ícone `GitBranch`, ABAC `contacts/visualizar`) re-adicionado ao submenu Analytics no `Sidebar.tsx`, após "Sessões" (o Arc 19 o havia removido; a chave i18n `nav.analise.processos` já existia em en+pt-BR). A tela deixou de depender de link direto.
+- i18n `journeys.*` em en + pt-BR (`contacts` namespace).
+
+**Notas:** `Duration=0s`/`pool_ids=[]` em algumas journeys de teste são artefatos dos dados sintéticos (sessões que fecharam em `no_resource` antes de rotear, ou abriram no mesmo instante) — não bug. Canal `—` em sessões suspended na L2 é o clobber de `channel` do ReplacingMergeTree para sessões ativas (conhecido, fora do escopo J2). Drill L3 usa transcrição (a granularidade "segmento" fica no próprio transcript / refinamento).
+
+→ Spec: `docs/product/journey-3-niveis-implementation-spec.md` §6/§7.
+
+---
+
+## Journey J1 — espinha de proveniência (`root_session_id`) (2026-07-09)
+
+Primeira fase do retorno de Journey (modelo de 3 níveis, design em `docs/product/journey-3-niveis-implementation-spec.md`): **`root_session_id`** em toda sessão — raiz **transitiva** da árvore de proveniência (agrupa N sessões de um processo), distinta de `origin_session_id` (1 salto). Imutável, nunca null; propagação **de plataforma** (injetada, não campo de fluxo). `journey_id` nasce como **cache = root** (nunca fonte de verdade em v1). **Sem** merge/alias (J3) e **sem** entidade Journey (removida no Arc 19). Validado E2E no demo (`infra/test/smoke_journey_root.sh`): cadeia W1→W2→W3 onde **W3 tem `origin=W2` mas `root=W1`** (transitividade).
+
+**Achados que corrigiram premissas da spec (verificados no código):**
+- **`sessions.journey_id` não existia** — a spec §2.2 assumia coluna dormente em `clickhouse.py:600` (que é de outra tabela). Foi criada por **migração nova** (`_DDL_SESSIONS_MIGRATE_JOURNEY`), não reaproveitada.
+- **`origin_session_id` é no-op latente** — a coluna existe (migração Arc 19) e `parse_inbound` a popula no dict, mas `_SESSION_COLS`/`_session_row` **omitem** o campo → nunca chega à tabela (por isso aparece sempre `NULL` nos relatórios). **Não corrigido** (fora do escopo J1); registrado para follow-up.
+
+**Decisão de arquitetura (persistência da raiz):** `sessions` é `ReplacingMergeTree` (a última escrita substitui a **linha inteira**), e vários produtores escrevem a linha sem conhecer a raiz — `conversations.routed`/`queued` (routing-engine não a conhece), `session_suspended` e caminhos de `contact_closed`/abandono. Repetir o root em todos esses eventos exigiria tocar o routing-engine + todo evento do bridge, e ainda seria frágil. **Escolhido** um ponto **central** no consumer do analytics: `_enrich_session_root` lê a raiz **autoritativa do ContextStore** (`{tenant}:ctx:{sid}` → `session.root_session_id`, semeada pelo channel-gateway no trigger/delegate) e sobrescreve o self-fallback do parser em **toda** escrita de linha `sessions`. Cobre todos os writers, usa a fonte de verdade, dispensa mexer no routing-engine. Fail-soft: ctx ausente (sessão top-level não-semeada) → mantém self (correto).
+
+**Arquivos:**
+- `packages/schemas/src/stream.ts` — `root_session_id?` (optional) em `SessionOpenedPayloadSchema` (contrato; garantia de não-null é da camada de dados).
+- `packages/analytics-api/.../clickhouse.py` — migrações `root_session_id`/`journey_id` (`String DEFAULT session_id`), ambas em `_SESSION_COLS` + `_session_row`.
+- `packages/analytics-api/.../models.py` — `parse_inbound` + `contact_open`/`contact_closed`/`session_suspended` setam/repetem root (fallback self).
+- `packages/analytics-api/.../consumer.py` — **`_enrich_session_root`** (ponto central, ContextStore autoritativo).
+- `packages/channel-gateway/.../adapters/webhook.py` — `_read_ctx_root`/`_ctx_entry`; `handle_trigger` (param `root_session_id`, resolve explícito→origin-ctx→self, semeia ctx + evento), `handle_delegate` (filha herda root transitivo do chamador), `handle_resume` (preserva no re-open).
+- `packages/orchestrator-bridge/.../main.py` — `_resolve_close_root_session_id` + carimbo no `contact_closed`.
+
+**Notas de comportamento:** o `delegate` do demo roda o alvo como **especialista de conferência dentro do chamador** (compartilha sessão/raiz — não cria linha `sessions` filha), então a propagação para linha separada é exercida pelo caminho `handle_trigger`+`origin_session_id` (cenário 2). O `handle_delegate` (filha separada) está wirado mas não é o caminho primário do delegate atual. Sem mudança no skill-flow-engine: a resolução da raiz é centralizada na fronteira de nascimento do channel-gateway (invariante: toda sessão não-raiz é semeada; sessão não-semeada é raiz top-level, onde self está correto).
+
+---
+
 ## EvaluationForm — composição alinhada ao primitivo scoring.ts (#23, 2026-07-08)
 
 Unifica a **semântica** de composição de nota entre survey (`scoring.ts`, TS) e Quality

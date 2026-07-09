@@ -252,6 +252,21 @@ _DDL_SESSIONS_MIGRATE_ORIGIN = (
     " ADD COLUMN IF NOT EXISTS origin_session_id Nullable(String) DEFAULT NULL"
 )
 
+# Journey J1: root_session_id — raiz TRANSITIVA da árvore de proveniência (agrupa
+# N sessões de um mesmo processo). Distinto de origin_session_id (1 salto). Nunca
+# null: DEFAULT session_id garante que legado e sessões-raiz apontem para si mesmas;
+# sessões-filha carregam a raiz propagada do chamador (webhook.py/bridge/engine).
+# journey_id = CACHE eventualmente consistente da raiz canônica (= root no nascimento;
+# refrescado no merge em J3). NUNCA é fonte de verdade — reads resolvem por union-find.
+_DDL_SESSIONS_MIGRATE_ROOT = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS root_session_id String DEFAULT session_id"
+)
+_DDL_SESSIONS_MIGRATE_JOURNEY = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS journey_id String DEFAULT session_id"
+)
+
 # Quality substrate isolation (ADR adr-quality-substrate-isolation) — passo 1.
 # `origin` = procedência do contato no substrato de avaliação: live | import | reeval.
 # Aditivo, default 'live' → cobre legado e tráfego vivo sem backfill. Distinto de
@@ -858,9 +873,31 @@ FROM {db}.mv_segment_summary
 GROUP BY tenant_id, session_id
 """
 
+# Journey J3 — journey_aliases: arestas de merge (source_root NOVO → canonical_root
+# ANTIGO). Fonte de verdade das uniões; a resolução canônica (union-find) roda no
+# read layer da analytics-api (Python), não em CTE recursiva no ClickHouse.
+# `active=0` = merge revertido. ReplacingMergeTree por (tenant, source_root) — uma
+# aresta por raiz-fonte (o último merge vence).
+_DDL_JOURNEY_ALIASES = """
+CREATE TABLE IF NOT EXISTS {db}.journey_aliases
+(
+    tenant_id       String,
+    source_root     String,
+    canonical_root  String,
+    merged_at       DateTime64(3, 'UTC'),
+    actor           String DEFAULT '',
+    active          UInt8 DEFAULT 1,
+    _ingested_at    DateTime64(3, 'UTC') DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(_ingested_at)
+PARTITION BY toYYYYMM(merged_at)
+ORDER BY (tenant_id, source_root)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_SESSIONS,
+    _DDL_JOURNEY_ALIASES,
     _DDL_QUEUE_EVENTS,
     _DDL_AGENT_EVENTS,
     _DDL_MESSAGES,
@@ -902,6 +939,8 @@ _MIGRATIONS = [
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
     _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
     _DDL_SESSIONS_MIGRATE_ORIGIN,         # Arc 19: origin_session_id (webhook → intake link)
+    _DDL_SESSIONS_MIGRATE_ROOT,           # Journey J1: root_session_id (raiz transitiva da proveniência)
+    _DDL_SESSIONS_MIGRATE_JOURNEY,        # Journey J1: journey_id (cache = root no nascimento)
     _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
     _DDL_SEGMENTS_MIGRATE_DEPLOY_VERSION, # R9: deploy_version (versão do skill, AI) por segmento
     _DDL_SEGMENTS_MIGRATE_CHANNEL,        # R9: channel da sessão por segmento
@@ -1002,6 +1041,12 @@ class AnalyticsStore:
         "sla_target_ms",
         # Substrate isolation (ADR): origin (live|import|reeval).
         "origin",
+        # Journey J1: raiz transitiva da proveniência (agrupa) + cache journey_id.
+        # Como o sessions é ReplacingMergeTree (linha inteira substituída), TODO
+        # writer de linha precisa repetir o root p/ ele sobreviver ao fechamento —
+        # _session_row cai no DEFAULT session_id quando ausente (raiz = self).
+        "root_session_id",
+        "journey_id",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -1424,6 +1469,21 @@ class AnalyticsStore:
             self._SESSION_SIGNAL_COLS,
         )
 
+    # journey_aliases (Journey J3 — arestas de merge novo→antigo)
+
+    _JOURNEY_ALIAS_COLS = [
+        "tenant_id", "source_root", "canonical_root", "merged_at", "actor", "active",
+    ]
+
+    async def insert_journey_alias(self, row: dict) -> None:
+        """Insert a journey merge edge (topic journey.merges → journey_aliases, J3)."""
+        await asyncio.to_thread(
+            self._insert,
+            "journey_aliases",
+            [_journey_alias_row(row)],
+            self._JOURNEY_ALIAS_COLS,
+        )
+
     # calibration_events (Arc 13)
 
     _CALIBRATION_EVENT_COLS = [
@@ -1608,6 +1668,13 @@ def _session_row(d: dict) -> list:
         d.get("sla_target_ms"),
         # Substrate isolation (ADR): origin não-nullable, default 'live'.
         d.get("origin") or "live",
+        # Journey J1: root (raiz transitiva) — fallback = self (session_id) quando o
+        # writer não carrega a raiz. Writers que têm a raiz (parse_inbound/close) a
+        # repetem para sobreviver ao ReplacingMergeTree; routed/queued caem no self
+        # (transitório até a linha de fechamento, que carrega o valor propagado).
+        d.get("root_session_id") or d.get("session_id") or "",
+        # journey_id: cache = root no nascimento (nunca fonte de verdade).
+        d.get("journey_id") or d.get("root_session_id") or d.get("session_id") or "",
     ]
 
 
@@ -2109,6 +2176,18 @@ def _session_signal_row(d: dict) -> list:
         d.get("origin_session_id") or None,
         d.get("journey_id") or None,
         _today_utc(session_at),
+    ]
+
+
+def _journey_alias_row(d: dict) -> list:
+    """Row builder for journey_aliases table (Journey J3 — merge edge novo→antigo)."""
+    return [
+        d.get("tenant_id", "") or "",
+        d.get("source_root", "") or "",
+        d.get("canonical_root", "") or "",
+        _parse_dt(d.get("merged_at")) or datetime.utcnow(),
+        d.get("actor", "") or "",
+        int(d.get("active", 1)),
     ]
 
 

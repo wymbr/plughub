@@ -29,9 +29,9 @@ canônica** valorada em `session_id`. Descartado D1 puro (não resolve cenário 
 
 | Fase | Entrega | Depende de |
 |---|---|---|
-| J1 | `root_session_id` (schemas + CH + nascimento + propagação automática); `journey_id` cache=root no open. Cenários 1 e 2-com-journey. | — |
-| J2 | `/reports/journeys` (proveniência-only) + Vista Processos + drill 3 níveis + filtro "significativa". | J1 |
-| J3 | `journey_merge` tool + `journey.merges` + `journey_aliases` + union-find + refresh de cache + `PendingEntry.root_session_id`. Cenários 3 e 2-unify. | J1, J2 |
+| J1 ✅ (2026-07-09, ver CHANGELOG) | `root_session_id` (schemas + CH + nascimento + propagação automática); `journey_id` cache=root no open. Cenários 1 e 2-com-journey. Persistência da raiz via **enrichment central no consumer** (lê ContextStore autoritativo — não repete root em cada evento nem toca routing-engine). Validado E2E (`infra/test/smoke_journey_root.sh`, transitividade W3 origin=W2/root=W1). | — |
+| J2 ✅ (2026-07-09, ver CHANGELOG) | `/reports/journeys` (proveniência-only) + filtro `root_session_id` no `/reports/sessions` (drill) + Vista Processos (`AnaliseJourneysPage`, repurpose de `/analise/processos`) + drill 3 níveis + toggle "significativa". Só Analytics (Monitor fica p/ depois). | J1 |
+| J3 ✅ (2026-07-09, ver CHANGELOG) | `journey_merge` tool + `journey.merges` + `journey_aliases` + union-find (resolução na leitura via `transform()`; cache `journey_id` **diferido**, não refresh — reads por union-find) + `PendingEntry.root_session_id`. Cenário 2-unify validado E2E; cenário 3 = pipeline pronto, falta o skill disparar a tool. | J1, J2 |
 | J4 | Avaliação N3: `session_signal` grain=`journey` + métricas de processo. | J2 |
 | J5 | `@ctx.journey.*` reaceso; i18n; ABAC; guard de invariantes. | J3, J4 |
 

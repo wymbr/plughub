@@ -69,6 +69,7 @@ from .models import (
     parse_agent_business_event,
     parse_session_signal_event,
     parse_calibration_event,
+    parse_journey_merged,
     parse_pool_occupancy,
 )
 from .segment_enricher import SegmentEnricher
@@ -118,6 +119,40 @@ def _inject_cached_channel(rows: list[dict]) -> None:
             # Restore origin_session_id if missing
             if not row.get("origin_session_id") and cached_origin:
                 row["origin_session_id"] = cached_origin
+
+
+async def _enrich_session_root(row: dict, redis: object) -> None:
+    """
+    Journey J1 — set a sessions row's root_session_id (+ journey_id cache) from the
+    AUTHORITATIVE ContextStore value (session.root_session_id), when present.
+
+    sessions is a ReplacingMergeTree (whole-row replace). Several events that write a
+    sessions row — conversations.routed/queued, session_suspended, contact_closed via
+    abandon paths — do NOT carry the propagated root, so the parser falls back to
+    session_id (self) and clobbers a CHILD session's transitive root. channel-gateway
+    seeds session.root_session_id in the ContextStore on trigger/delegate; read it here
+    so EVERY sessions write preserves the correct root (single central point, covers all
+    writers, uses the source of truth). Fail-soft: missing/broken entry leaves the
+    parser's value (self) untouched — correct for genuine top-level roots.
+    """
+    tenant_id  = row.get("tenant_id")
+    session_id = row.get("session_id")
+    if not tenant_id or not session_id:
+        return
+    try:
+        raw = await redis.hget(  # type: ignore[union-attr]
+            f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+        )
+        if not raw:
+            return
+        entry = json.loads(raw if isinstance(raw, str) else raw.decode())
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        value = str(value).strip() if value is not None else ""
+        if value:
+            row["root_session_id"] = value
+            row["journey_id"]      = value
+    except Exception as exc:
+        logger.debug("root enrich failed session=%s: %s", session_id, exc)
 
 
 # ── F11: session_at enrichment for session.signals ────────────────────────────
@@ -196,6 +231,7 @@ _TOPICS = [
     "agent.events",
     "session.signals",
     "calibration.events",
+    "journey.merges",
     "pool.occupancy",
 ]
 
@@ -219,6 +255,7 @@ _PARSERS = {
     "agent.events":               parse_agent_business_event,
     "session.signals":            parse_session_signal_event,
     "calibration.events":         parse_calibration_event,
+    "journey.merges":             parse_journey_merged,
     "pool.occupancy":             parse_pool_occupancy,
 }
 
@@ -468,6 +505,15 @@ async def _process_message(
             else:
                 resolved.append(row)
         rows = resolved
+
+    # ── Journey J1: authoritative root_session_id from ContextStore ───────────
+    # Overrides the parser's self-fallback so routed/queued/suspended/closed writes
+    # don't clobber a child's transitive root (sessions is ReplacingMergeTree — the
+    # whole row is replaced by the last write).
+    if redis is not None:
+        for row in rows:
+            if row.get("table") == "sessions":
+                await _enrich_session_root(row, redis)
 
     for row in rows:
         await _write_row(store, row, topic, offset)
@@ -873,6 +919,8 @@ async def _write_row(
             await store.insert_calibration_event(row)
         elif table == "pool_occupancy_peaks":
             await store.upsert_pool_occupancy_peak(row)
+        elif table == "journey_aliases":
+            await store.insert_journey_alias(row)
         else:
             logger.warning("Unknown table=%s from topic=%s offset=%s", table, topic, offset)
     except Exception as exc:

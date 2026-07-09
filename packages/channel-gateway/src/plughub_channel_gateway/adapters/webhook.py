@@ -122,6 +122,40 @@ class WebhookAdapter(ChannelAdapter):
         if self._identity_enabled:
             await self._identity.ensure_schema()
 
+    async def _read_ctx_root(self, tenant_id: str, session_id: str | None) -> str | None:
+        """
+        Journey J1: read `session.root_session_id` from a session's ContextStore.
+
+        Returns the raw value, or None when absent/unreadable. Used to inherit the
+        caller's TRANSITIVE root when spawning a child session (trigger-from-session
+        / delegate): child.root = caller.root, not caller.session_id. Fail-soft — a
+        missing/broken entry falls back to the caller resolving root = self upstream.
+        """
+        if not session_id:
+            return None
+        try:
+            raw = await self._redis.hget(
+                f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+            )
+            if not raw:
+                return None
+            entry = json.loads(raw)
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            return str(val) if val else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ctx_entry(value: str, source: str, now_iso: str) -> str:
+        """JSON-encode a ContextStore entry (confidence 1.0, agents_only)."""
+        return json.dumps({
+            "value":      value,
+            "confidence": 1.0,
+            "source":     source,
+            "visibility": "agents_only",
+            "updated_at": now_iso,
+        })
+
     # ──────────────────────────────────────────────────────────────────────────
     # Trigger — create a new webhook session
     # ──────────────────────────────────────────────────────────────────────────
@@ -134,6 +168,7 @@ class WebhookAdapter(ChannelAdapter):
         metadata:          dict[str, Any] | None = None,
         customer_id:       str | None = None,
         origin_session_id: str | None = None,
+        root_session_id:   str | None = None,
         context:           dict[str, Any] | None = None,
     ) -> str:
         """
@@ -158,6 +193,18 @@ class WebhookAdapter(ChannelAdapter):
         session_id  = str(uuid.uuid4())
         customer_id = customer_id or f"sys:{trigger_type}:{uuid.uuid4().hex[:8]}"
 
+        # Journey J1: resolve the transitive root. Explicit param wins; else inherit
+        # the caller's root (trigger-from-session); else this session is its own root.
+        if root_session_id:
+            resolved_root = root_session_id
+        elif origin_session_id:
+            resolved_root = (
+                await self._read_ctx_root(tenant_id, origin_session_id)
+                or origin_session_id
+            )
+        else:
+            resolved_root = session_id
+
         now_str = datetime.now(timezone.utc).isoformat()
         event = {
             "event_id":          str(uuid.uuid4()),
@@ -170,6 +217,7 @@ class WebhookAdapter(ChannelAdapter):
             "trigger_type":      trigger_type,
             "metadata":          metadata or {},
             "origin_session_id": origin_session_id,
+            "root_session_id":   resolved_root,   # Journey J1
             "timestamp":         now_str,
             # Arc 19: required by ConversationInboundEvent schema in routing-engine.
             # For webhook sessions there is no prior wait time — started_at == trigger time.
@@ -187,6 +235,12 @@ class WebhookAdapter(ChannelAdapter):
         ctx_key   = f"{tenant_id}:ctx:{session_id}"
         now_iso   = datetime.now(timezone.utc).isoformat()
         ctx_writes: dict[str, str] = {}
+
+        # Journey J1: root is never null — always seed session.root_session_id so
+        # any child spawned from THIS session inherits the transitive root.
+        ctx_writes["session.root_session_id"] = self._ctx_entry(
+            resolved_root, "webhook_trigger", now_iso
+        )
 
         if origin_session_id:
             ctx_writes["session.origin_session_id"] = json.dumps({
@@ -330,6 +384,11 @@ class WebhookAdapter(ChannelAdapter):
         except Exception:
             pass
 
+        # Journey J1: a resume re-publishes conversations.inbound for the SAME session,
+        # so parse_inbound would reset root to self. Preserve the session's own root
+        # (read from its ContextStore; fallback self) to keep a resumed CHILD grouped.
+        resume_root = await self._read_ctx_root(tenant_id, session_id) or session_id
+
         # Publish session_resumed to the canonical stream via conversations.inbound
         # The Core / orchestrator-bridge will handle re-allocation.
         event = {
@@ -343,6 +402,7 @@ class WebhookAdapter(ChannelAdapter):
             "resume_origin": resume_origin,
             "step_id":       step_id,
             "payload":       payload or {},
+            "root_session_id": resume_root,   # Journey J1: preserve on re-open
             "timestamp":     now_iso,
             # Arc 19: required by ConversationInboundEvent schema in routing-engine.
             # On resume, elapsed_ms could reflect the suspend duration, but the
@@ -463,9 +523,19 @@ class WebhookAdapter(ChannelAdapter):
         child_session_id = str(uuid.uuid4())
         now_iso = datetime.now(timezone.utc).isoformat()
 
+        # Journey J1: child inherits the caller's TRANSITIVE root (not origin, which
+        # is 1-hop). Read the caller's session.root_session_id; fallback = origin
+        # (caller treated as its own root when it predates J1 / has no entry).
+        caller_root = await self._read_ctx_root(tenant_id, origin_session_id) or origin_session_id
+
         # ── Seed ContextStore before publishing to Kafka ─────────────────────
         ctx_key = f"{tenant_id}:ctx:{child_session_id}"
         ctx_writes: dict[str, str] = {}
+
+        # Journey J1: seed child root so a grandchild delegate inherits it too.
+        ctx_writes["session.root_session_id"] = self._ctx_entry(
+            caller_root, "delegate_step", now_iso
+        )
 
         # Always write workflow_resume_token so the agent can call workflow_resume
         ctx_writes["session.workflow_resume_token"] = json.dumps({
@@ -516,6 +586,7 @@ class WebhookAdapter(ChannelAdapter):
             "trigger_type":      "delegate",
             "metadata":          {},
             "origin_session_id": origin_session_id,
+            "root_session_id":   caller_root,   # Journey J1: transitive root
             "timestamp":         now_iso,
             "started_at":        now_iso,
         }
@@ -575,6 +646,7 @@ class WebhookAdapter(ChannelAdapter):
                                 intent=context.get("intent"),
                                 policy=resume_policy,
                                 context_preview=self._pending_context_preview(context),
+                                root_session_id=caller_root,   # Journey J3
                             ),
                             ttl_s=ttl_s,
                         )
@@ -711,6 +783,7 @@ class WebhookAdapter(ChannelAdapter):
                     "policy":          p.policy,
                     "suspended_at":    p.suspended_at,
                     "context_preview": p.context_preview,
+                    "root_session_id": p.root_session_id,   # Journey J3
                 }
                 for p in pendings
             ],
@@ -718,10 +791,11 @@ class WebhookAdapter(ChannelAdapter):
         if pendings:
             first = pendings[0]
             result.update({
-                "resume_token": first.resume_token,
-                "pool":         first.pool,
-                "policy":       first.policy,
-                "context":      first.context_preview,
+                "resume_token":    first.resume_token,
+                "pool":            first.pool,
+                "policy":          first.policy,
+                "context":         first.context_preview,
+                "root_session_id": first.root_session_id,   # Journey J3 (merge target)
             })
         return result
 
@@ -930,6 +1004,8 @@ class WebhookAdapter(ChannelAdapter):
                 if anchors:
                     ref = await self._identity.resolve_or_provision(tenant_id, anchors, provision=True)
                     if ref.customer_id:
+                        # Journey J3: raiz canônica do parent (o especialista roda dentro dele).
+                        _conf_root = await self._read_ctx_root(tenant_id, session_id) or session_id
                         await self._identity.write_pending(
                             tenant_id, ref.customer_id,
                             PendingEntry(
@@ -941,6 +1017,7 @@ class WebhookAdapter(ChannelAdapter):
                                 intent=context.get("intent"),
                                 policy=resume_policy,
                                 context_preview=self._pending_context_preview(context),
+                                root_session_id=_conf_root,   # Journey J3
                             ),
                             ttl_s=ttl_s,
                         )

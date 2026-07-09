@@ -179,13 +179,31 @@ folhas clicáveis → transcrição (reusa H1/H2 de `customer-contact-history`).
 
 | Fase | Entrega | Depende de |
 |---|---|---|
-| **J1 — Espinha de proveniência** | `root_session_id` (schemas + ClickHouse + nascimento + propagação automática). `journey_id` cache = `root` no open. Cobre cenários 1 e 2-com-journey. | — |
-| **J2 — Endpoint + Vista Processos (proveniência-only)** | `/reports/journeys` agregando por `root_session_id` (sem alias ainda); aba Processos + drill 3 níveis; filtro "significativa". | J1 |
-| **J3 — Merge/alias** | `journey_merge` tool + `journey.merges` + `journey_aliases` + resolução union-find + refresh de cache. Cobre cenário 3 e 2-unify. `PendingEntry.root_session_id`. | J1, J2 |
+| **J1 — Espinha de proveniência ✅ (2026-07-09)** | `root_session_id` (schemas + ClickHouse + nascimento + propagação automática). `journey_id` cache = `root` no open. Cobre cenários 1 e 2-com-journey. Ver CHANGELOG. | — |
+| **J2 — Endpoint + Vista Processos (proveniência-only) ✅ (2026-07-09)** | `/reports/journeys` agregando por `root_session_id` (sem alias ainda); `root_session_id` no `/reports/sessions` (drill); Vista Processos (`AnaliseJourneysPage`, repurpose de `/analise/processos`) + drill 3 níveis + toggle "significativa". Só Analytics. Ver CHANGELOG. | J1 |
+| **J3 — Merge/alias ✅ (2026-07-09)** | `journey_merge` tool + `journey.merges` + `journey_aliases` + resolução union-find (via `transform()`; cache `journey_id` **diferido** — reads por union-find, sem refresh). `PendingEntry.root_session_id`. Cenário 2-unify validado E2E; cenário 3 pipeline pronto (falta o skill disparar). Ver CHANGELOG. | J1, J2 |
 | **J4 — Avaliação N3** | `session_signal` grain=`journey`; métricas de processo em `/reports/journeys`; `@ctx.journey.*` reaceso. | J2 |
 | **J5 — Contexto compartilhado & polish** | `@ctx.journey.*` alimentado; i18n; ABAC; guard de invariantes. | J3, J4 |
 
 J1+J2 já entregam journey por proveniência (o essencial do D1); J3 adiciona o que a proveniência não dá.
+
+### As-built J1 (correções à spec — ler antes de J2/J3)
+
+- **`sessions.journey_id` NÃO existia** (§2.2 assumia coluna dormente em `clickhouse.py:600`, que é de outra
+  tabela). Foi **criada** por migração nova (`_DDL_SESSIONS_MIGRATE_JOURNEY`, `String DEFAULT session_id`).
+- **`origin_session_id` é no-op latente**: a coluna existe e `parse_inbound` a popula no dict, mas
+  `_SESSION_COLS`/`_session_row` **omitem** o campo → nunca chega à tabela (aparece `NULL`). Não corrigido no J1.
+  Se J2 precisar de `origin_session_id` na tabela, wirar o campo no INSERT primeiro.
+- **Persistência da raiz = enrichment central no consumer, NÃO repeat-por-evento.** `sessions` é
+  `ReplacingMergeTree` (substitui a linha inteira) e writers como `conversations.routed`/`queued`,
+  `session_suspended` e caminhos de abandono **não carregam** a raiz → clobram para self. A solução escolhida é
+  `_enrich_session_root` no consumer (`consumer.py`): lê a raiz **autoritativa do ContextStore**
+  (`{tenant}:ctx:{sid}` → `session.root_session_id`, semeada pelo channel-gateway) e sobrescreve em toda escrita
+  de linha `sessions`. **Não** foi tocado o routing-engine, e o repeat nos parsers/bridge fica como fallback
+  (ctx expirado). J3 (merge) deve refrescar o cache pela mesma via ou por reescrita das linhas afetadas.
+- **Delegate do demo = especialista de conferência** (roda dentro do chamador, sem linha `sessions` filha). A
+  propagação para sessão separada é exercida por `handle_trigger`+`origin_session_id` (cenário 2). `handle_delegate`
+  (filha separada) está wirado mas não é o caminho primário do delegate atual.
 
 ---
 

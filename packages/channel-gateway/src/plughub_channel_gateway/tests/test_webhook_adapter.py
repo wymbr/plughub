@@ -166,6 +166,69 @@ async def test_handle_trigger_generates_sys_customer_id_when_absent(adapter, moc
     assert event["customer_id"].startswith("sys:api:")
 
 
+# ── handle_trigger — Journey J1 (root_session_id propagation) ─────────────────
+
+def _root_ctx_entry(value: str) -> str:
+    return json.dumps({
+        "value": value, "confidence": 1.0, "source": "webhook_trigger",
+        "visibility": "agents_only", "updated_at": "2026-07-09T00:00:00Z",
+    })
+
+
+@pytest.mark.asyncio
+async def test_trigger_root_defaults_to_self_without_origin(adapter, mock_producer):
+    """Top-level trigger (no origin) → the session is its own root."""
+    session_id = await adapter.handle_trigger(skill_id=SKILL_ID, tenant_id=TENANT_ID)
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["root_session_id"] == session_id
+
+
+@pytest.mark.asyncio
+async def test_trigger_root_inherits_transitive_root_from_origin_ctx(adapter, mock_redis, mock_producer):
+    """origin's ctx carries root=W1 → child inherits W1 (transitive), not the origin id."""
+    mock_redis.hget = AsyncMock(return_value=_root_ctx_entry("W1-root"))
+    await adapter.handle_trigger(
+        skill_id=SKILL_ID, tenant_id=TENANT_ID, origin_session_id="W2-origin",
+    )
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["root_session_id"] == "W1-root"
+    mock_redis.hget.assert_awaited_with(f"{TENANT_ID}:ctx:W2-origin", "session.root_session_id")
+
+
+@pytest.mark.asyncio
+async def test_trigger_root_falls_back_to_origin_when_ctx_unseeded(adapter, mock_redis, mock_producer):
+    """origin has no seeded root (top-level caller) → child root = the origin itself."""
+    mock_redis.hget = AsyncMock(return_value=None)
+    await adapter.handle_trigger(
+        skill_id=SKILL_ID, tenant_id=TENANT_ID, origin_session_id="W1-top",
+    )
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["root_session_id"] == "W1-top"
+
+
+@pytest.mark.asyncio
+async def test_trigger_explicit_root_param_wins(adapter, mock_redis, mock_producer):
+    """Explicit root_session_id param overrides origin-ctx resolution."""
+    mock_redis.hget = AsyncMock(return_value=_root_ctx_entry("ignored"))
+    await adapter.handle_trigger(
+        skill_id=SKILL_ID, tenant_id=TENANT_ID,
+        origin_session_id="W2", root_session_id="explicit-root",
+    )
+    event = json.loads(mock_producer.send_and_wait.call_args[1]["value"])
+    assert event["root_session_id"] == "explicit-root"
+
+
+@pytest.mark.asyncio
+async def test_trigger_seeds_ctx_root(adapter, mock_redis, mock_producer):
+    """The new session's ContextStore is seeded with session.root_session_id = self,
+    so any child spawned from it inherits the transitive root."""
+    session_id = await adapter.handle_trigger(skill_id=SKILL_ID, tenant_id=TENANT_ID)
+    assert mock_redis.hset.await_args_list, "expected an hset for ctx seeding"
+    mapping = mock_redis.hset.await_args_list[0].kwargs["mapping"]
+    assert "session.root_session_id" in mapping
+    assert json.loads(mapping["session.root_session_id"])["value"] == session_id
+
+
 # ── handle_resume — Fase A (token resolution) ─────────────────────────────────
 
 @pytest.mark.asyncio

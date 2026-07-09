@@ -40,7 +40,7 @@ import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
 import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
 import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
 import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
-import AnaliseProcessosPage from '@/modules/analise/AnaliseProcessosPage'
+import AnaliseJourneysPage  from '@/modules/analise/AnaliseJourneysPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
@@ -101,8 +101,9 @@ export const routes: RouteObject[] = [
       { path: 'analise/agents-legacy', element: <AnaliseAgentesPage /> },
       { path: 'analise/pools',     element: <AnalisePoolsPage   /> },
       { path: 'analise/events',    element: <EventsPage         /> },
-      // Analytics/Processes → Workflow Instances list (drill-down to sessions)
-      { path: 'analise/processos', element: <AnaliseProcessosPage /> },
+      // Analytics/Processos → Journey view (J2): agrupa sessions por root_session_id
+      // (proveniência), drill journey → sessão-membro → transcrição.
+      { path: 'analise/processos', element: <AnaliseJourneysPage /> },
       { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
