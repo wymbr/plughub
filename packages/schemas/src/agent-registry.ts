@@ -166,6 +166,17 @@ export const PoolHooksSchema = z.object({
    */
   on_contact_end:  z.array(PoolHookEntrySchema).default([]),
   post_human:      z.array(PoolHookEntrySchema).default([]),
+  /**
+   * Journey J4 — hook de fim-de-PROCESSO/N3: dispara quando a sessão de workflow
+   * (pool webhook) atinge `complete` com desfecho terminal. Mecanismo GENÉRICO
+   * (como os demais hooks) — dispara os agentes configurados; usos típicos: survey
+   * de journey end-to-end, QA do processo, write-back no CRM, notificação a
+   * supervisor. Contexto do processo (raiz canônica, customer_id, process_outcome)
+   * é carimbado no ContextStore pré-hook. Diferente dos hooks de contato, o cliente
+   * NÃO está inline aqui (workflow headless) — agentes que precisam falar com o
+   * cliente (ex. survey) usam o veículo OUTBOUND. Ver spec §6.1 + docs/guias/pool-hooks.md.
+   */
+  on_process_end:  z.array(PoolHookEntrySchema).default([]),
 })
 export type PoolHooks = z.infer<typeof PoolHooksSchema>
 

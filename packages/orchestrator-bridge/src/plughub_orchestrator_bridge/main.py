@@ -1075,7 +1075,7 @@ async def fire_pool_hooks(
     # disparadas (não por len(hook_list)); entradas puladas (nps_on_disconnect=
     # skip em customer_disconnect) deixariam um contador órfão que só zerava no
     # force-close de 180s, mantendo a sessão `active` nesse intervalo.
-    if hook_type in ("on_human_end", "post_human", "on_contact_end") and hook_list:
+    if hook_type in ("on_human_end", "post_human", "on_contact_end", "on_process_end") and hook_list:
         _dispatch_n = sum(1 for _e in hook_list if _entry_will_dispatch(_e))
         if _dispatch_n > 0:
             try:
@@ -1281,7 +1281,7 @@ async def fire_pool_hooks(
         # where origin_pool is the pool the human agent belongs to (used for wrap_up_pending
         # cleanup in process_routed so it can derive human-{origin_pool} instance_id).
         # Backward compat: parse uses split(":", 3) and defaults missing parts gracefully.
-        if hook_type in ("on_human_end", "post_human", "on_human_start", "segment_wrapup", "on_contact_end"):
+        if hook_type in ("on_human_end", "post_human", "on_human_start", "segment_wrapup", "on_contact_end", "on_process_end"):
             try:
                 # F5: 5º campo = segment_id do humano que este on_human_end serve
                 # (vazio p/ post_human/on_human_start). Parse com split(":", 4).
@@ -1307,8 +1307,8 @@ async def fire_pool_hooks(
         # G7 Fase 3b: on_contact_end (NPS, side=customer) arma posatt:active +
         # posatt:customer_active — fim-de-CONTATO: gatilha _close_contact_layer (WS) e
         # participa do _destroy_conference.
-        if hook_type in ("on_human_end", "post_human", "segment_wrapup", "on_contact_end"):
-            if hook_type in ("on_human_end", "post_human", "on_contact_end"):
+        if hook_type in ("on_human_end", "post_human", "segment_wrapup", "on_contact_end", "on_process_end"):
+            if hook_type in ("on_human_end", "post_human", "on_contact_end", "on_process_end"):
                 try:
                     await redis_client.incr(f"session:{session_id}:posatt:active")
                     await redis_client.expire(f"session:{session_id}:posatt:active", 14400)
@@ -3434,18 +3434,25 @@ async def process_routed(
             # Gate em outcome=resolved: é o sinal "cliente presente no fim" do fluxo só-IA
             # (em failed/abandoned/timeout o cliente já saiu — fecha direto, como antes).
             _contact_end_hooks: list = []
-            if _part_role == "primary" and _ai_outcome == "resolved" and http and pool_id and tenant_id:
+            _process_end_hooks: list = []
+            if _part_role == "primary" and http and pool_id and tenant_id:
                 try:
-                    _ce_cfg = await get_pool_config(http, tenant_id, pool_id)
-                    _contact_end_hooks = (
-                        ((_ce_cfg or {}).get("hooks") or {}).get("on_contact_end", []) or []
-                    )
+                    _ce_cfg    = await get_pool_config(http, tenant_id, pool_id)
+                    _hooks_cfg = ((_ce_cfg or {}).get("hooks") or {})
+                    # on_contact_end: cliente presente no fim (só em resolved).
+                    if _ai_outcome == "resolved":
+                        _contact_end_hooks = _hooks_cfg.get("on_contact_end", []) or []
+                    # Journey J4 on_process_end: fim de PROCESSO/N3 (workflow webhook).
+                    # Mecanismo GENÉRICO — dispara em QUALQUER desfecho terminal (o agente
+                    # decide via process_outcome); cliente NÃO precisa estar inline (agentes
+                    # de survey usam veículo outbound). Só relevante p/ pools webhook (N3).
+                    _process_end_hooks = _hooks_cfg.get("on_process_end", []) or []
                 except Exception as _ce_exc:
                     logger.warning(
-                        "on_contact_end lookup failed: session=%s pool=%s — %s",
+                        "contact/process-end hook lookup failed: session=%s pool=%s — %s",
                         session_id, pool_id, _ce_exc,
                     )
-            if _contact_end_hooks:
+            if _contact_end_hooks or _process_end_hooks:
                 _ce_customer = session_id
                 try:
                     _ce_meta = await redis_client.get(f"session:{session_id}:meta")
@@ -3455,24 +3462,50 @@ async def process_routed(
                         ).get("customer_id") or session_id)
                 except Exception:
                     pass
-                # close_origin=flow_complete: cliente presente (resolveu o fluxo). O skill
-                # de NPS e nps_on_disconnect=skip cuidam do caso de o cliente cair durante.
                 await _write_pre_hook_context(
                     redis_client, tenant_id, session_id,
                     close_origin="flow_complete",
                 )
-                asyncio.create_task(fire_pool_hooks(
-                    http=http, redis_client=redis_client,
-                    session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
-                    customer_id=_ce_customer, hook_type="on_contact_end",
-                    human_instance_id="",
-                ))
-                asyncio.create_task(_hook_timeout_guard(
-                    redis_client, session_id, "on_contact_end",
-                ))
+                if _contact_end_hooks:
+                    asyncio.create_task(fire_pool_hooks(
+                        http=http, redis_client=redis_client,
+                        session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
+                        customer_id=_ce_customer, hook_type="on_contact_end",
+                        human_instance_id="",
+                    ))
+                    asyncio.create_task(_hook_timeout_guard(
+                        redis_client, session_id, "on_contact_end",
+                    ))
+                if _process_end_hooks:
+                    # Journey J4 — carimba process_outcome no ctx pré-hook. A raiz canônica
+                    # já está em session.root_session_id (J1) e o customer_id nativo em
+                    # caller.customer_id — o agente de survey lê ambos p/ gravar grain=journey.
+                    try:
+                        await redis_client.hset(
+                            f"{tenant_id}:ctx:{session_id}", "session.process_outcome",
+                            json.dumps({
+                                "value":      _ai_outcome,
+                                "confidence": 1.0,
+                                "source":     "bridge:pre_hook",
+                                "visibility": "agents_only",
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            }),
+                        )
+                    except Exception:
+                        pass
+                    asyncio.create_task(fire_pool_hooks(
+                        http=http, redis_client=redis_client,
+                        session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
+                        customer_id=_ce_customer, hook_type="on_process_end",
+                        human_instance_id="",
+                    ))
+                    asyncio.create_task(_hook_timeout_guard(
+                        redis_client, session_id, "on_process_end",
+                    ))
                 logger.info(
-                    "on_contact_end hook dispatched (AI primary contact end): "
-                    "session=%s pool=%s n=%d", session_id, pool_id, len(_contact_end_hooks),
+                    "contact/process-end hooks dispatched (AI primary): session=%s pool=%s "
+                    "on_contact_end=%d on_process_end=%d outcome=%s",
+                    session_id, pool_id, len(_contact_end_hooks), len(_process_end_hooks), _ai_outcome,
                 )
             else:
                 asyncio.create_task(_trigger_contact_close(redis_client, session_id))
