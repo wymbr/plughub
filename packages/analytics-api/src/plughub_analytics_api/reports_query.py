@@ -716,7 +716,12 @@ def _fetch_journeys(
             arrayFilter(x -> x != '', groupUniqArray(s.channel)) AS channels,
             arrayFilter(x -> x != '', groupUniqArray(s.pool_id)) AS pool_ids,
             countIf(COALESCE(s.status, 'closed') != 'closed') AS open_count,
-            (count() > 1 OR has(groupUniqArray(s.channel), 'webhook')) AS significant
+            (count() > 1 OR has(groupUniqArray(s.channel), 'webhook')) AS significant,
+            -- J4: desfecho do processo = outcome da sessão mais recente da journey.
+            argMaxIf(s.outcome, s.opened_at, s.outcome IS NOT NULL AND s.outcome != '') AS business_outcome,
+            -- J4: duração do processo (v1 = wall-clock min→max; refino "exclui suspenso
+            -- via SUM(segment.duration_ms)" fica p/ iteração).
+            toInt64(dateDiff('millisecond', min(s.opened_at), max(COALESCE(s.closed_at, s.opened_at)))) AS business_duration_ms
         FROM {db}.sessions AS s FINAL
         WHERE {where}
         GROUP BY journey_id
@@ -725,7 +730,53 @@ def _fetch_journeys(
         LIMIT {page_size} OFFSET {offset}
     """
     result = client.query(sql, parameters=params)
-    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+    rows = _rows_to_dicts(result)
+
+    # J4 — sinal de qualidade N3: agrega session_signal grain=journey pela raiz
+    # CANÔNICA (mesmo transform do union-find sobre origin_session_id). Bounded à
+    # página (HAVING journey_id IN ...). Degrada gracioso (sem sinais → zeros/None).
+    _attach_journey_signals(client, db, tenant_id, resolved, rows)
+
+    return {"data": rows, "meta": _meta(page, page_size, total, since, until)}
+
+
+def _attach_journey_signals(
+    client: Any, db: str, tenant_id: str, resolved: dict[str, str], rows: list[dict],
+) -> None:
+    """J4 — anexa signal_count + médias (nps/csat/ces) por journey às linhas do report.
+    Os sinais grain=journey são chaveados por origin_session_id; resolvemos ao canônico
+    com o MESMO mapa union-find e agregamos por journey canônica."""
+    for r in rows:
+        r["signal_count"] = 0
+        r["nps_avg"] = r["csat_avg"] = r["ces_avg"] = None
+    ids = [r["journey_id"] for r in rows if r.get("journey_id")]
+    if not ids:
+        return
+    sig_expr = _journey_group_expr(resolved, col="ss.origin_session_id")
+    id_list = ", ".join(f"'{j}'" for j in ids)
+    sql = f"""
+        SELECT
+            {sig_expr} AS journey_id,
+            count() AS signal_count,
+            if(countIf(metric = 'nps')  > 0, round(avgIf(value_num, metric = 'nps'),  2), NULL) AS nps_avg,
+            if(countIf(metric = 'csat') > 0, round(avgIf(value_num, metric = 'csat'), 2), NULL) AS csat_avg,
+            if(countIf(metric = 'ces')  > 0, round(avgIf(value_num, metric = 'ces'),  2), NULL) AS ces_avg
+        FROM {db}.session_signal AS ss FINAL
+        WHERE ss.tenant_id = {{tenant_id:String}} AND ss.grain = 'journey'
+        GROUP BY journey_id
+        HAVING journey_id IN ({id_list})
+    """
+    try:
+        res = client.query(sql, parameters={"tenant_id": tenant_id})
+    except Exception as exc:
+        logger.debug("journey signal aggregation failed tenant=%s: %s", tenant_id, exc)
+        return
+    by_id = {row[0]: row for row in res.result_rows}
+    for r in rows:
+        s = by_id.get(r["journey_id"])
+        if s:
+            r["signal_count"] = int(s[1])
+            r["nps_avg"], r["csat_avg"], r["ces_avg"] = s[2], s[3], s[4]
 
 
 # ─── /reports/contact-insights ────────────────────────────────────────────────

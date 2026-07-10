@@ -21,14 +21,21 @@ import { SessionTranscript } from '@/modules/service/components/SessionTranscrip
 // ── Types ───────────────────────────────────────────────────────────────────
 
 interface JourneyRow {
-  journey_id:       string
-  session_count:    number
-  started_at:       string
-  last_activity_at: string
-  channels:         string[]
-  pool_ids:         string[]
-  open_count:       number
-  significant:      number
+  journey_id:           string
+  session_count:        number
+  started_at:           string
+  last_activity_at:     string
+  channels:             string[]
+  pool_ids:             string[]
+  open_count:           number
+  significant:          number
+  // J4 — métricas de processo + sinal de qualidade N3
+  business_outcome?:    string | null
+  business_duration_ms?: number | null
+  signal_count?:        number
+  nps_avg?:             number | null
+  csat_avg?:            number | null
+  ces_avg?:             number | null
 }
 
 interface MemberSession {
@@ -67,6 +74,14 @@ function fmtDuration(from: string, to?: string | null): string {
 function truncateId(id: string | undefined | null): string {
   if (!id) return '—'
   return id.length > 16 ? `…${id.slice(-12)}` : id
+}
+
+// J4 — cor do badge de desfecho do processo (business_outcome).
+function outcomeCls(o: string): string {
+  if (o === 'resolved') return 'bg-green-light text-green border-green/30'
+  if (o === 'failed' || o === 'no_resource') return 'bg-red-light text-red border-red/30'
+  if (o === 'timeout' || o === 'escalated') return 'bg-warning-light text-warning border-warning/30'
+  return 'bg-surface-alt text-muted border-border'
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -173,6 +188,8 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
                 <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.channels', { defaultValue: 'Canais' })}</th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.started', { defaultValue: 'Início' })}</th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.duration', { defaultValue: 'Duração' })}</th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.outcome', { defaultValue: 'Desfecho' })}</th>
+                <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.nps', { defaultValue: 'NPS' })}</th>
                 <th className="px-3 py-2.5 text-left text-muted font-medium">{t('journeys.columns.open', { defaultValue: 'Abertas' })}</th>
               </tr>
             </thead>
@@ -196,6 +213,22 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
                   </td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDate(j.started_at)}</td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDuration(j.started_at, j.last_activity_at)}</td>
+                  <td className="px-3 py-2.5">
+                    {j.business_outcome
+                      ? <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)}`}>
+                          {j.business_outcome}
+                        </span>
+                      : <span className="text-border-strong">—</span>}
+                  </td>
+                  <td className="px-3 py-2.5 whitespace-nowrap">
+                    {j.nps_avg != null
+                      ? <span className="text-dark font-medium">{j.nps_avg}
+                          <span className="ml-1 text-muted-light font-normal">({j.signal_count ?? 0})</span>
+                        </span>
+                      : (j.signal_count
+                          ? <span className="text-muted-light">({j.signal_count})</span>
+                          : <span className="text-border-strong">—</span>)}
+                  </td>
                   <td className="px-3 py-2.5 text-muted-light">{j.open_count > 0 ? j.open_count : '—'}</td>
                 </tr>
               ))}

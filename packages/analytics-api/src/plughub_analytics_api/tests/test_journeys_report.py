@@ -33,6 +33,12 @@ def _no_aliases() -> "_FakeResult":
     return _FakeResult(["source_root", "canonical_root"], [])
 
 
+# J4 — _fetch_journeys agrega session_signal grain=journey numa query extra
+# (_attach_journey_signals). Os testes com rows prefixam um resultado de sinais vazio.
+def _no_signals() -> "_FakeResult":
+    return _FakeResult(["journey_id", "signal_count", "nps_avg", "csat_avg", "ces_avg"], [])
+
+
 @pytest.mark.asyncio
 async def test_short_circuits_without_pool_access():
     client = MagicMock()
@@ -54,7 +60,7 @@ async def test_aggregates_by_root_with_having_when_significant_only():
           ["webhook"], ["portabilidade_processo_ia"], 1, 1)],
     )
     client = MagicMock()
-    client.query.side_effect = [_no_aliases(), count_res, rows_res]
+    client.query.side_effect = [_no_aliases(), count_res, rows_res, _no_signals()]
 
     out = await query_journeys_report(client, "db", "t", significant_only=True)
 
@@ -77,9 +83,16 @@ async def test_no_having_when_significant_only_false():
         _no_aliases(),
         _FakeResult(["count()"], [(1,)]),
         _FakeResult(["journey_id", "session_count"], [("W1", 1)]),
+        _no_signals(),
     ]
     await query_journeys_report(client, "db", "t", significant_only=False)
-    assert "HAVING" not in _executed_sql(client)
+    # A query de sinais (J4) usa HAVING journey_id IN (...) — a checagem é só sobre a
+    # agregação de journeys (queries que NÃO tocam session_signal).
+    non_signal = " ".join(
+        str(c.args[0]) for c in client.query.call_args_list
+        if "session_signal" not in str(c.args[0])
+    )
+    assert "HAVING" not in non_signal
 
 
 @pytest.mark.asyncio
@@ -89,3 +102,35 @@ async def test_returns_error_dict_on_client_failure():
     out = await query_journeys_report(client, "db", "t")
     assert out["data"] == []
     assert out.get("error") == "data_unavailable"
+
+
+# ── _attach_journey_signals (J4 — sinal de qualidade N3) ──────────────────────
+
+def test_attach_journey_signals_merges_by_journey():
+    from plughub_analytics_api.reports_query import _attach_journey_signals
+    client = MagicMock()
+    client.query.return_value = _FakeResult(
+        ["journey_id", "signal_count", "nps_avg", "csat_avg", "ces_avg"],
+        [("J1", 3, 8.5, None, None)],
+    )
+    rows = [{"journey_id": "J1"}, {"journey_id": "J2"}]
+    _attach_journey_signals(client, "db", "t", {}, rows)
+    assert rows[0]["signal_count"] == 3 and rows[0]["nps_avg"] == 8.5
+    # journey sem sinal → defaults
+    assert rows[1]["signal_count"] == 0 and rows[1]["nps_avg"] is None
+
+
+def test_attach_journey_signals_noop_without_rows():
+    from plughub_analytics_api.reports_query import _attach_journey_signals
+    client = MagicMock()
+    _attach_journey_signals(client, "db", "t", {}, [])
+    client.query.assert_not_called()
+
+
+def test_attach_journey_signals_failsoft():
+    from plughub_analytics_api.reports_query import _attach_journey_signals
+    client = MagicMock()
+    client.query.side_effect = RuntimeError("clickhouse down")
+    rows = [{"journey_id": "J1"}]
+    _attach_journey_signals(client, "db", "t", {}, rows)
+    assert rows[0]["signal_count"] == 0  # não levanta; aplica defaults

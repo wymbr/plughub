@@ -11,7 +11,8 @@
     "filters": { "from": "From", "significantOnly": "Significant only" },
     "columns": {
       "journey": "Process (root)", "sessions": "Sessions", "channels": "Channels",
-      "started": "Started", "duration": "Duration", "open": "Open"
+      "started": "Started", "duration": "Duration", "open": "Open",
+      "outcome": "Outcome", "nps": "NPS"
     },
     "sessions": {
       "empty": "No sessions",

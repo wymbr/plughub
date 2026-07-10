@@ -2,6 +2,23 @@
 
 ---
 
+## Journey J4a — avaliação N3: métricas de processo + sinal de qualidade no /reports/journeys (2026-07-10)
+
+Lado de leitura do J4 (analytics-only). O `/reports/journeys` (J2/J3) ganhou métricas de **processo** e o **sinal de qualidade N3**:
+- `business_outcome` — desfecho do processo (`argMaxIf(outcome, opened_at)` — outcome da sessão mais recente da journey).
+- `business_duration_ms` — duração do processo (v1 = wall-clock `min(opened)→max(closed)`; refino "exclui suspenso via `SUM(segment.duration_ms)`" fica p/ iteração).
+- **`signal_count` + `nps_avg`/`csat_avg`/`ces_avg`** — agrega `session_signal grain=journey` pela raiz **canônica** (mesmo `transform()` union-find do J3 aplicado a `origin_session_id`), via 2ª query bounded à página (`_attach_journey_signals`, degradação graciosa). É o produto que o §6.1 (`on_process_end`, J4b) vai alimentar.
+
+Validado E2E: semeando `session.signals grain=journey` (NPS=9) na journey canônica, o report passou a `signal_count:1, nps_avg:9`. Testes: `test_journeys_report.py` (+3 de `_attach_journey_signals`; mocks ajustados p/ a query extra). 22 verdes.
+
+**UI (Vista Processos):** `AnaliseJourneysPage` ganhou as colunas **Desfecho** (badge colorido do `business_outcome`) e **NPS** (`nps_avg` + `signal_count`). i18n en+pt-BR.
+
+**Pendente no J4:** J4b (hook `on_process_end` como produtor — §6.1, reusa DialogForm/veículo outbound existente); `business_duration` por segmento (exclui suspenso); funnel por step.
+
+→ Spec §6/§6.1/§7.
+
+---
+
 ## Journey J3 — merge/alias (`journey_merge` + `journey.merges` + union-find) (2026-07-09)
 
 Terceira fase: o que a proveniência (J1/J2) sozinha não expressa — **unificar duas journeys** (cenário 2-unify) e o cenário inbound-null→pending→merge (cenário 3). Merge = **aresta de alias** (nunca reescreve `root_session_id`), resolvido por **union-find na leitura**. Sem reviver a entidade Journey (Arc 10). Validado E2E no demo: publicando `journey.merges(source=9f8a4d1e, canonical=5092cbdf)`, a journey de 3 sessões colapsou na mais antiga → `session_count 1→4` e o drill do canônico passou a listar as 4 sessões-membro das duas árvores.

@@ -11,7 +11,8 @@
     "filters": { "from": "De", "significantOnly": "Só significativas" },
     "columns": {
       "journey": "Processo (raiz)", "sessions": "Sessões", "channels": "Canais",
-      "started": "Início", "duration": "Duração", "open": "Abertas"
+      "started": "Início", "duration": "Duração", "open": "Abertas",
+      "outcome": "Desfecho", "nps": "NPS"
     },
     "sessions": {
       "empty": "Sem sessões",
