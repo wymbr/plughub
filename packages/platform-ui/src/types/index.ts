@@ -110,6 +110,8 @@ export interface PoolHooks {
   /** G7 Fase 3: hook de fim-de-CONTATO (NPS/pesquisa, side=customer), 1× por contato. */
   on_contact_end: PoolHookEntry[]
   post_human:     PoolHookEntry[]
+  /** Journey J4: hook de fim-de-PROCESSO/N3 (pool webhook atinge complete). Genérico. */
+  on_process_end: PoolHookEntry[]
 }
 
 /**

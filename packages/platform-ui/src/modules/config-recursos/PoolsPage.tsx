@@ -150,7 +150,7 @@ function PoolExceptionsEditor({
 // The stored reference is a pool_id (stable across skill-flow version changes);
 // the option label surfaces the pool's currently deployed skill as a visual hint.
 
-const EMPTY_HOOKS: PoolHooks = { on_human_start: [], on_human_end: [], on_contact_end: [], post_human: [] }
+const EMPTY_HOOKS: PoolHooks = { on_human_start: [], on_human_end: [], on_contact_end: [], post_human: [], on_process_end: [] }
 
 interface PoolOption { value: string; label: string }
 
@@ -441,6 +441,7 @@ const CHANNEL_OPTIONS = [
   { value: 'instagram', label: 'Instagram' },
   { value: 'telegram',  label: 'Telegram'  },
   { value: 'webrtc',    label: 'WebRTC'    },
+  { value: 'webhook',   label: 'Webhook'   },
 ]
 
 const PoolsPage: React.FC = () => {
@@ -676,6 +677,7 @@ const PoolsPage: React.FC = () => {
         on_human_end:   pool.hooks?.on_human_end   ?? [],
         on_contact_end: pool.hooks?.on_contact_end ?? [],
         post_human:     pool.hooks?.post_human     ?? [],
+        on_process_end: pool.hooks?.on_process_end ?? [],
       },
       escalation_pools: pool.supervisor_config?.escalation_pools ?? [],
       mention_pools: Object.entries(pool.mentionable_pools ?? {}).map(
@@ -740,17 +742,20 @@ const PoolsPage: React.FC = () => {
         on_human_end:   formData.hooks.on_human_end.filter(h => h.pool),
         on_contact_end: formData.hooks.on_contact_end.filter(h => h.pool),
         post_human:     formData.hooks.post_human.filter(h => h.pool),
+        on_process_end: formData.hooks.on_process_end.filter(h => h.pool),
       }
       const hasHooks =
         cleanHooks.on_human_start.length > 0 ||
         cleanHooks.on_human_end.length > 0 ||
         cleanHooks.on_contact_end.length > 0 ||
-        cleanHooks.post_human.length > 0
+        cleanHooks.post_human.length > 0 ||
+        cleanHooks.on_process_end.length > 0
       const hadHooks = !!(editingPool?.hooks && (
         (editingPool.hooks.on_human_start?.length ?? 0) > 0 ||
         (editingPool.hooks.on_human_end?.length ?? 0) > 0 ||
         (editingPool.hooks.on_contact_end?.length ?? 0) > 0 ||
-        (editingPool.hooks.post_human?.length ?? 0) > 0
+        (editingPool.hooks.post_human?.length ?? 0) > 0 ||
+        (editingPool.hooks.on_process_end?.length ?? 0) > 0
       ))
 
       // Transfer destinations → supervisor_config.escalation_pools. Merge-safe:
@@ -1185,6 +1190,15 @@ const PoolsPage: React.FC = () => {
                 <HookListEditor
                   entries={formData.hooks.post_human}
                   onChange={e => setHookSlot('post_human', e)}
+                  poolOptions={poolComboOptions}
+                />
+              </div>
+              <div>
+                <p className="text-xs font-medium text-dark">{t('pools.hooks.onProcessEnd', { defaultValue: 'Quando o processo (N3) termina' })}</p>
+                <p className="text-2xs text-muted-light mb-1">{t('pools.hooks.onProcessEndHint', { defaultValue: 'Fim do workflow/processo (pool webhook). Ex.: survey de journey, QA do processo. Só pools webhook.' })}</p>
+                <HookListEditor
+                  entries={formData.hooks.on_process_end}
+                  onChange={e => setHookSlot('on_process_end', e)}
                   poolOptions={poolComboOptions}
                 />
               </div>

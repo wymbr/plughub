@@ -84,6 +84,8 @@
       "onContactEndHint": "e.g. NPS / satisfaction survey (customer side). Fires once per contact.",
       "postHuman": "After the end hooks",
       "postHumanHint": "e.g. quality agent, automatic summary.",
+      "onProcessEnd": "When the process (N3) ends",
+      "onProcessEndHint": "End of the workflow/process (webhook pool reaches complete). e.g. end-to-end journey survey, process QA. Only meaningful for webhook pools.",
       "pool": "Specialist pool",
       "selectPool": "— Select a pool —",
       "side": "Side",

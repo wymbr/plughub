@@ -940,6 +940,7 @@ async def survey_web_create(request: Request) -> dict:
             body.get("origin_session_id", ""), body.get("customer_key", ""),
             # Entrega opcional do link (camada plugável — mock/dev por ora).
             body.get("deliver_kind", ""), body.get("deliver_address", ""),
+            grain=body.get("grain", "session"),   # Journey J4
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"dialog-api error: {exc}")
@@ -971,14 +972,66 @@ async def survey_web_page(token: str):
     return HTMLResponse(content=SURVEY_PAGE_HTML)
 
 
+@app.post("/channel/webhook/{slug}", status_code=201)
+async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest) -> dict:
+    """
+    External webhook endpoint trigger (channel-endpoint model, like webchat).
+
+    The `slug` is a stable channel endpoint configured in
+    config/channels/webhook (a ChannelEndpoint record: slug → pool). It resolves
+    to a POOL, and the pool runs whatever skill is currently DEPLOYED to it — so
+    the public URL stays stable across skill versions (no skill_id in the URL).
+
+    This is the recommended external entry point. The internal, skill_id-keyed
+    path (POST /v1/channels/webhook/{skill_id}, used by workflow_trigger) is kept
+    for backward compatibility and internal intake flows.
+
+    Returns: { session_id }
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    settings  = get_settings()
+    tenant_id = body.tenant_id or settings.tenant_id
+    pool_id: str | None = None
+    if settings.agent_registry_url:
+        pool_id = await resolve_pool(
+            channel            = "webhook",
+            identifier         = slug,
+            tenant_id          = tenant_id,
+            agent_registry_url = settings.agent_registry_url,
+            cache_ttl_s        = settings.endpoint_cache_ttl_s,
+        )
+    if not pool_id:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No webhook endpoint '{slug}' configured for this tenant",
+        )
+
+    session_id = await _webhook_adapter.handle_trigger(
+        skill_id           = "",            # pool-driven: runs the pool's deployed skill
+        tenant_id          = tenant_id,
+        trigger_type       = body.trigger_type,
+        metadata           = body.metadata,
+        customer_id        = body.customer_id,
+        origin_session_id  = body.origin_session_id,
+        context            = body.context,
+        pool_id            = pool_id,        # direct pool assignment (stable-URL path)
+    )
+    return {"session_id": session_id}
+
+
 @app.post("/v1/channels/webhook/{skill_id}", status_code=201)
 async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
     """
-    Trigger a new webhook workflow session.
+    Trigger a new webhook workflow session (internal, skill_id-keyed path).
 
     The skill_id is the endpoint identifier (analogous to a WA number or voice DIN).
     The routing engine resolves the pool that owns this skill_id and allocates
     a skill-flow instance to execute the workflow.
+
+    For external, version-stable endpoints prefer POST /channel/webhook/{slug}
+    (channel-endpoint model). This path stays for workflow_trigger / intake flows.
 
     Returns: { session_id }
     """

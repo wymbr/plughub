@@ -1129,6 +1129,11 @@ services:
       PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo
       PLUGHUB_DIALOG_API_URL:             http://dialog-api:3760   # survey web vehicle — snapshot do DialogForm
       PLUGHUB_CONFIG_API_URL:             http://config-api:3600
+      # Channel-endpoint resolution (slug→pool) for webchat/voice/webrtc/webhook.
+      # Without this the default (localhost:3000) points at the container itself →
+      # resolve_pool always fails. Webchat/voice fall back to identifier=pool_id;
+      # the webhook slug endpoint has no fallback and 404s. Arc 19.
+      PLUGHUB_AGENT_REGISTRY_URL:         http://agent-registry:3300
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +
       # invalidação config.changed. Os envs PLUGHUB_WS_AUTH_TIMEOUT_S /

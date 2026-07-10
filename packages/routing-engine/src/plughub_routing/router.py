@@ -93,6 +93,12 @@ class Router:
                 ]
                 if matched:
                     pools = matched
+                elif any(getattr(p, "webhook_skill_id", None) for p in pools):
+                    # Regime multi-pool determinístico: veio um skill_id mas NENHUM pool
+                    # webhook o declara → REJEITA (não misroteia para um pool alheio).
+                    # pools=[] cai no no_resource/queued abaixo. O fallback não-filtrado
+                    # fica só para o legado single-pool (nenhum pool declara webhook_skill_id).
+                    pools = []
 
         if not pools:
             return self._build_queued_result(event, now)

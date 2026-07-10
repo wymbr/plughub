@@ -170,11 +170,19 @@ class WebhookAdapter(ChannelAdapter):
         origin_session_id: str | None = None,
         root_session_id:   str | None = None,
         context:           dict[str, Any] | None = None,
+        pool_id:           str | None = None,
     ) -> str:
         """
         Create a new webhook session for the given skill_id.
 
         The skill_id acts as the "phone number" / "DNIS" for the webhook pool.
+
+        pool_id: Arc 19 (webhook channel endpoint) — when set, the routing engine
+          assigns this pool DIRECTLY (the "expected path": the channel entry point
+          declares the service pool). The pool runs whatever skill is currently
+          DEPLOYED to it, so the endpoint URL stays stable across skill versions.
+          This is the external slug→pool trigger. When None, the routing engine
+          resolves the pool via skill_id (the internal workflow_trigger path).
         The customer_id is the "ANI" — optional, defaults to a generated UUID
         when the trigger is not customer-initiated (e.g. scheduled, api).
 
@@ -211,7 +219,10 @@ class WebhookAdapter(ChannelAdapter):
             "session_id":        session_id,
             "tenant_id":         tenant_id,
             "channel":           "webhook",
-            "pool_id":           None,        # routing engine resolves pool via skill_id
+            # When pool_id is set (external slug→pool endpoint), the routing engine
+            # assigns it directly and runs the pool's DEPLOYED skill (stable URL).
+            # When None, routing resolves the pool via skill_id (internal trigger).
+            "pool_id":           pool_id,
             "skill_id":          skill_id,    # DNIS for webhook channel — routing key
             "customer_id":       customer_id,
             "trigger_type":      trigger_type,

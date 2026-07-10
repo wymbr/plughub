@@ -84,6 +84,8 @@
       "onContactEndHint": "Ex.: NPS / pesquisa de satisfação (lado cliente). Dispara 1× por contato.",
       "postHuman": "Após os hooks de encerramento",
       "postHumanHint": "Ex.: agente de qualidade, resumo automático.",
+      "onProcessEnd": "Ao encerrar o processo (N3)",
+      "onProcessEndHint": "Fim do workflow/processo (pool webhook atinge complete). Ex.: survey de journey end-to-end, QA do processo. Só faz sentido em pools webhook.",
       "pool": "Pool especialista",
       "selectPool": "— Selecione um pool —",
       "side": "Lado",

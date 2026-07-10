@@ -77,9 +77,29 @@ Novo adapter em `channel-gateway/adapters/webhook.py`, seguindo o mesmo padrão 
 
 ### Endpoints
 
+Dois caminhos de trigger, por modelo de endereçamento:
+
+**Externo — por endpoint de canal (RECOMENDADO, URL estável):**
+
+```
+POST /channel/webhook/{slug}
+  Corpo: { tenant_id, trigger_type, metadata?, customer_id?, origin_session_id?, context? }
+  Resolve slug → pool via ChannelEndpoint (channel="webhook", como webchat/whatsapp).
+  O pool executa o skill CORRENTEMENTE DEPLOYADO → a URL pública não muda
+  entre versões do skill (não há skill_id na URL). Publica conversations.inbound
+  com pool_id direto (caminho "esperado" do router: o entry point declara o pool).
+  404 se não há endpoint configurado. Retorna session_id.
+  Config: Configuração → Canais → Webhook → Endpoints (slug → pool).
+```
+
+**Interno — por skill_id (workflow_trigger / intake):**
+
 ```
 POST /v1/channels/webhook/{skill_id}
   Corpo: { tenant_id, trigger_type, metadata?, customer_id? }
+  skill_id = DNIS; routing resolve o pool via pool.webhook_skill_id.
+  Mantido para workflow_trigger e fluxos de intake internos. NÃO exposto no
+  editor de pool (webhook_skill_id é campo backend/correlação interna).
   Cria sessão, publica conversations.inbound, retorna session_id
 
 POST /v1/channels/webhook/resume/{resume_token}
