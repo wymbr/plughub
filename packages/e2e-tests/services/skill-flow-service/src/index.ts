@@ -498,6 +498,58 @@ app.post("/execute", async (req: Request, res: Response) => {
       return { child_session_id: data.session_id }   // = parent session_id (segment)
     }
 
+  // Journey J4c — persistCollect callback. Unlike the legacy skill-flow-worker
+  // (which posts to the now-deprecated workflow-api), the Arc 19 stack routes the
+  // collect through the channel-gateway N2 handler: it resolves the channel from the
+  // customer's reachability + the declarative channel_policy (N3 never names the
+  // channel), creates the child contact session (inherits root → journey member),
+  // and delivers. The workflow suspends until collect.responded resumes it.
+  const persistCollectFn: SkillFlowEngineConfig["persistCollect"] | undefined =
+    async (params) => {
+      const resp = await fetch(
+        `${CHANNEL_GATEWAY_URL}/v1/channels/webhook/collect`,
+        {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify({
+            tenant_id:      params.tenant_id,
+            session_id:     params.session_id,   // caller (N3) session — root inherited from its ctx
+            customer_id,
+            step_id:        params.step_id,
+            collect_token:  params.collect_token,
+            target:         params.target,
+            ...(params.channel        ? { channel:        params.channel }        : {}),
+            ...(params.requires       ? { requires:       params.requires }       : {}),
+            ...(params.channel_policy ? { channel_policy: params.channel_policy } : {}),
+            ...(params.dialog_form_id ? { dialog_form_id: params.dialog_form_id } : {}),
+            interaction:    params.interaction,
+            prompt:         params.prompt,
+            ...(params.options ? { options: params.options } : {}),
+            ...(params.fields  ? { fields:  params.fields }  : {}),
+            ...(params.scheduled_at ? { scheduled_at: params.scheduled_at } : {}),
+            ...(params.delay_hours !== undefined ? { delay_hours: params.delay_hours } : {}),
+            timeout_hours:  params.timeout_hours,
+            business_hours: params.business_hours,
+            ...(params.calendar_id ? { calendar_id: params.calendar_id } : {}),
+            ...(params.campaign_id ? { campaign_id: params.campaign_id } : {}),
+            ...(params.customer_resumable !== undefined ? { customer_resumable: params.customer_resumable } : {}),
+            ...(params.resume_policy ? { resume_policy: params.resume_policy } : {}),
+          }),
+        },
+      )
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "(unreadable)")
+        throw new Error(
+          `[skill-flow-service] persistCollect: channel-gateway ${resp.status}: ${body}`,
+        )
+      }
+      const data = await resp.json() as { send_at: string; expires_at: string }
+      console.log(
+        `[skill-flow-service] persistCollect: session=${params.session_id} step=${params.step_id} token=${params.collect_token}`,
+      )
+      return { send_at: data.send_at, expires_at: data.expires_at }
+    }
+
   const engine = new SkillFlowEngine({
     redis:        dedicatedRedis,
     mcpCall,
@@ -505,6 +557,7 @@ app.post("/execute", async (req: Request, res: Response) => {
     contextStore,
     ...(persistSuspendWebhookFn ? { persistSuspendWebhook: persistSuspendWebhookFn } : {}),
     ...(persistDelegateFn       ? { persistDelegate:       persistDelegateFn }       : {}),
+    ...(persistCollectFn        ? { persistCollect:        persistCollectFn }        : {}),
   })
 
   try {

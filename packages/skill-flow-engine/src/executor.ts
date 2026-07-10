@@ -167,6 +167,15 @@ export interface StepContext {
     collect_token:  string
     target:         { type: string; id: string }
     channel?:       string   // optional — channel-gateway selects by requires[] when absent
+    /** Arc 16 capability requirements (channel must be a superset). */
+    requires?:      string[]
+    /** Journey J4c — declarative channel policy (N2 input); N3 never names the channel. */
+    channel_policy?: {
+      allowed_channels?: string[]
+      preferred_order?:  string[]
+      exclude?:          string[]
+      urgency?:          "low" | "normal" | "high"
+    }
     interaction:    string
     prompt:         string
     options?:       Array<{ id: string; label: string }>
@@ -177,6 +186,8 @@ export interface StepContext {
     business_hours: boolean
     calendar_id?:   string
     campaign_id?:   string
+    /** Journey J4c — DialogForm rendered on engagement (survey collect). */
+    dialog_form_id?: string
     /** Identity Resolver (nível b) — index pending under native customer_id for cross-channel resume. */
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */

@@ -53,6 +53,7 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
 from ..config import Settings
+from ..endpoint_resolver import resolve_pool   # Journey J4c — survey pool resolution
 from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
@@ -672,6 +673,156 @@ class WebhookAdapter(ChannelAdapter):
                 logger.warning("identity: dual-write failed (non-fatal): %s", _e)
 
         return child_session_id
+
+    # ── Journey J4c — collect handler (N2 resolver + routed child session) ────
+    async def _reachable_channels(
+        self, tenant_id: str, customer_id: str,
+    ) -> list[str]:
+        """
+        Reachability slot (N2 input). Which channels can the platform reach this
+        customer on? v1 = best-effort empty (the "web" survey surface needs no
+        address and is added by the caller as universal fallback). Future: query
+        the Identity Resolver secondary_keys (phone→sms, email→email). This is a
+        cross-cutting fact — it never depends on which process is asking.
+        """
+        # TODO(J4c fase 2): consult Identity Resolver reachable keys.
+        return []
+
+    async def _negotiate_channel(
+        self,
+        tenant_id:      str,
+        customer_id:    str,
+        channel_policy: dict[str, Any] | None,
+    ) -> str:
+        """
+        Journey J4c — N2 channel resolver. **PROCESS-AGNOSTIC**: this must NEVER
+        branch on skill_id / campaign_id or any process identity (enforced by the
+        invariant guard). Inputs, all cross-cutting:
+          - reachability (Identity Resolver — slot)
+          - consent (slot — empty v1)
+          - tenant policy (slot — empty v1)
+          - the DECLARATIVE `channel_policy` from N3 (allowed/preferred/exclude)
+        N3 declares intent; N2 decides the channel.
+        """
+        policy    = channel_policy or {}
+        allowed   = policy.get("allowed_channels") or []
+        exclude   = set(policy.get("exclude") or [])
+        preferred = policy.get("preferred_order") or []
+
+        reachable = await self._reachable_channels(tenant_id, customer_id)
+        # Candidate set: the process whitelist if declared, else reachable ∪ web
+        # (universal self-service fallback). Minus the process exclude list.
+        base       = allowed if allowed else (reachable + ["web"])
+        candidates = [c for c in base if c not in exclude]
+
+        for c in preferred:               # honour N3's preference order first
+            if c in candidates:
+                return c
+        return candidates[0] if candidates else "web"
+
+    async def handle_collect(
+        self,
+        *,
+        tenant_id:          str,
+        session_id:         str,               # caller (N3 workflow) session
+        customer_id:        str,
+        step_id:            str,
+        collect_token:      str,
+        target:             dict[str, Any],
+        interaction:        str,
+        prompt:             str,
+        agent_registry_url: str = "",
+        endpoint_cache_ttl_s: int = 30,
+        channel:            str | None = None,
+        requires:           list[str] | None = None,
+        channel_policy:     dict[str, Any] | None = None,
+        options:            list[dict[str, Any]] | None = None,
+        fields:             list[dict[str, Any]] | None = None,
+        dialog_form_id:     str = "",
+        timeout_hours:      float = 48.0,
+        campaign_id:        str = "",
+    ) -> dict[str, Any]:
+        """
+        N2 handler for a `collect` step (Journey J4c) — LAZY. Delivers the survey
+        invitation link and SUSPENDS; it does NOT create a session or allocate any
+        resource. The child contact session is created only when the customer
+        engages (opens the link) — see GET /survey/{collect_token} (J4c-3):
+
+          1. Negotiate the channel (N2 resolver — process-agnostic).
+          2. Resolve the survey POOL for that channel (ChannelEndpoint) — stored on
+             the pending so the click can route the inbound to it.
+          3. Store the collect pending ({tenant}:collect:{collect_token}) with the
+             caller-workflow resume mapping (caller_session/step_id), the inherited
+             transitive root, the survey pool, form_id and negotiated channel.
+          4. Deliver the invitation link `/survey/{collect_token}` (mock/dev).
+          5. Return send_at/expires_at → the workflow suspends. No click by the
+             deadline → nothing was allocated (only a pending key that expires).
+
+        On click, a STANDARD inbound is created (routed → tenant quota + pool
+        max_concurrent_sessions + Core `sessions` metering enforced only for real
+        engagements) and the dialog_runner renders the DialogForm live (customer
+        present). N3 stays channel-agnostic (sets `channel_policy`, never a channel).
+        Returns { send_at, expires_at, link }.
+        """
+        now_dt  = datetime.now(timezone.utc)
+        now_iso = now_dt.isoformat()
+
+        # Journey J1: the (future) child inherits the caller's TRANSITIVE root.
+        caller_root = await self._read_ctx_root(tenant_id, session_id) or session_id
+
+        # ── N2: negotiate the channel (explicit `channel` only for fixed transport) ──
+        negotiated = channel or await self._negotiate_channel(
+            tenant_id, customer_id, channel_policy,
+        )
+
+        # ── Resolve the survey pool for the negotiated channel (ChannelEndpoint) ──
+        # Segmentation/capacity live on the POOL. A tenant configures
+        # ChannelEndpoint(channel=<negotiated>, identifier="default") → survey pool.
+        pool_id = ""
+        if agent_registry_url:
+            pool_id = await resolve_pool(
+                channel            = negotiated,
+                identifier         = "default",
+                tenant_id          = tenant_id,
+                agent_registry_url = agent_registry_url,
+                cache_ttl_s        = endpoint_cache_ttl_s,
+            ) or ""
+        if not pool_id:
+            raise ValueError(
+                f"no survey pool configured for channel '{negotiated}' "
+                f"(expected ChannelEndpoint channel='{negotiated}' identifier='default')"
+            )
+
+        # ── LAZY: store the collect pending — NO session until the customer clicks ──
+        ttl_s = int(timeout_hours * 3600) + 3600
+        await self._redis.set(
+            f"{tenant_id}:collect:{collect_token}",
+            json.dumps({
+                "caller_session_id": session_id,     # N3 workflow to resume on completion
+                "step_id":           step_id,
+                "root_session_id":   caller_root,    # journey membership for the inbound
+                "pool_id":           pool_id,        # survey pool for the click inbound
+                "channel":           negotiated,
+                "form_id":           dialog_form_id, # DialogForm the runner will render
+                "customer_id":       customer_id,
+                "tenant_id":         tenant_id,
+                "status":            "pending",
+                "created_at":        now_iso,
+            }),
+            ex=ttl_s,
+        )
+
+        # ── Deliver the invitation link (mock/dev). The collect_token IS the token. ──
+        # TODO(J4c fase 2): real SMS/email delivery via the negotiated channel provider.
+        link = f"/survey/{collect_token}"
+        logger.info(
+            "webhook collect (lazy): token=%s channel=%s pool=%s root=%s link=%s "
+            "— suspended, no session/resource until click",
+            collect_token, negotiated, pool_id, caller_root, link,
+        )
+
+        expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
+        return {"send_at": now_iso, "expires_at": expires_at, "link": link}
 
     @staticmethod
     def _pending_context_preview(context: dict[str, Any]) -> dict[str, str]:

@@ -534,6 +534,31 @@ export const ChannelCapabilitySchema = z.enum([
 export type ChannelCapability = z.infer<typeof ChannelCapabilitySchema>
 
 /**
+ * Journey J4c — Declarative channel-selection policy (N2 input).
+ *
+ * The N3 process (survey workflow) declares its channel INTENT as data; it never
+ * names the resolved channel. The N2 resolver (persistCollect handler in
+ * channel-gateway) combines this with cross-cutting facts it owns — reachability
+ * (Identity Resolver), consent, tenant policy — to pick the actual channel.
+ *
+ * Invariant: N3 emits `channel_policy` (declarative); it must NOT set the fixed
+ * `channel` field for outbound-to-customer collects (that would be N3 choosing the
+ * channel = business-logic leak into N2). See
+ * docs/product/journey-j4c-survey-collect-spec.md.
+ */
+export const CollectChannelPolicySchema = z.object({
+  /** Whitelist of channels the process allows (e.g. ["sms","email","web"]). */
+  allowed_channels: z.array(z.string()).optional(),
+  /** Preference order among the reachable ∩ allowed set. */
+  preferred_order:  z.array(z.string()).optional(),
+  /** Channels the process forbids. */
+  exclude:          z.array(z.string()).optional(),
+  /** Process-declared urgency (an input to the resolver, not a channel). */
+  urgency:          z.enum(["low", "normal", "high"]).default("normal"),
+})
+export type CollectChannelPolicy = z.infer<typeof CollectChannelPolicySchema>
+
+/**
  * Target for a collect step — who to contact.
  */
 export const CollectTargetSchema = z.object({
@@ -586,6 +611,13 @@ export const CollectStepSchema = z.object({
    */
   requires: z.array(ChannelCapabilitySchema).optional(),
 
+  /**
+   * Journey J4c — Declarative channel policy (N2 input). Preferred over the fixed
+   * `channel` field for outbound-to-customer collects: N3 declares intent, the
+   * channel-gateway resolver picks the channel. Keeps N3 channel-agnostic.
+   */
+  channel_policy: CollectChannelPolicySchema.optional(),
+
   // ── What to collect ──
   interaction: z.enum(["text", "button", "form"]).default("text"),
   prompt:      z.string().min(1),
@@ -613,6 +645,14 @@ export const CollectStepSchema = z.object({
 
   // ── Campaign grouping (optional) ──
   campaign_id:    z.string().optional(),
+
+  /**
+   * Journey J4c — DialogForm to render on engagement (survey collect). The N2
+   * handler stores it on the collect pending; the survey pool's dialog_runner
+   * reads it (@ctx.session.dialog_form_id) to render the form live when the
+   * customer opens the link. Config-driven single interpreter — no bespoke skill.
+   */
+  dialog_form_id: z.string().optional(),
 
   // ── Identity Resolver (nível b) — retomada channel-abstract ──
   /**

@@ -134,6 +134,10 @@ export async function executeCollect(
       collect_token:  collectToken,
       target:         step.target,
       ...(step.channel    ? { channel:     step.channel }    : {}),
+      ...(step.requires       ? { requires:       step.requires }       : {}),
+      // Journey J4c — declarative channel policy (N2 input); N3 stays channel-agnostic.
+      ...(step.channel_policy ? { channel_policy: step.channel_policy } : {}),
+      ...(step.dialog_form_id ? { dialog_form_id: step.dialog_form_id } : {}),
       interaction:    step.interaction,
       prompt:         step.prompt,
       ...(step.options    ? { options:      step.options }    : {}),

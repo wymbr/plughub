@@ -848,6 +848,52 @@ async def webhook_delegate(body: WebhookDelegateRequest) -> dict:
     return {"session_id": child_session_id}
 
 
+@app.post("/v1/channels/webhook/collect", status_code=201)
+async def webhook_collect(request: Request) -> dict:
+    """
+    Journey J4c — N2 collect handler. Called by the skill-flow-service persistCollect
+    callback when a `collect` step fires. Negotiates the channel (process-agnostic),
+    resolves the survey pool, and creates a ROUTED child contact session (journey
+    member N1) — so tenant concurrency quota, pool max_concurrent_sessions and Core
+    `sessions` metering are all enforced on admission.
+
+    Declared BEFORE the greedy /{skill_id} route. Returns { send_at, expires_at }.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    settings = get_settings()
+    body     = await request.json()
+    tenant_id = body.get("tenant_id") or settings.tenant_id
+    if not body.get("session_id") or not body.get("collect_token") or not body.get("step_id"):
+        raise HTTPException(status_code=400, detail="session_id, step_id and collect_token required")
+
+    try:
+        result = await _webhook_adapter.handle_collect(
+            tenant_id            = tenant_id,
+            session_id           = body["session_id"],
+            customer_id          = body.get("customer_id") or "",
+            step_id              = body["step_id"],
+            collect_token        = body["collect_token"],
+            target               = body.get("target") or {},
+            interaction          = body.get("interaction") or "text",
+            prompt               = body.get("prompt") or "",
+            agent_registry_url   = settings.agent_registry_url,
+            endpoint_cache_ttl_s = settings.endpoint_cache_ttl_s,
+            channel              = body.get("channel"),
+            requires             = body.get("requires"),
+            channel_policy       = body.get("channel_policy"),
+            options              = body.get("options"),
+            fields               = body.get("fields"),
+            dialog_form_id       = body.get("dialog_form_id") or "",
+            timeout_hours        = float(body.get("timeout_hours") or 48),
+            campaign_id          = body.get("campaign_id") or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"send_at": result["send_at"], "expires_at": result["expires_at"]}
+
+
 # ── Identity Resolver (Fase A · Slice 1) ───────────────────────────────────────
 # Declared BEFORE the greedy /{skill_id} and /pending/{contact_identifier} routes.
 # PII travels only on the loopback body; hashing is server-side (never in the URL).
