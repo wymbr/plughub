@@ -94,6 +94,7 @@ plughub/
       adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
       adr-survey-form-scoring-composition.md ← composição de nota em survey (dimension+perguntas ponderadas; primitivo `scoring.ts` compartilhado c/ Quality) — proposto
       adr-dialog-conditional-skip-logic.md ← skip-logic condicional em DialogForm (guarda declarativa `ask_when`, não control-flow) — proposto
+      adr-outbound-survey-as-collect-contact.md ← survey web outbound = contato via `collect` (canal survey/web), membro N1 da journey; sinal solto vira legado/anônimo (Journey J4c) — proposto
 ```
 
 ### Como adicionar uma nova feature
