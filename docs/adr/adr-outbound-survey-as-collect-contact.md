@@ -3,6 +3,9 @@
 **Status:** Proposto (2026-07-10). Motiva a fatia **J4c** (`TODO.md` § Journey).
 O veículo web atual (`survey_link_create` + página tokenizada + `session.signals`) fica
 como **legado / caminho do sinal anônimo** até J4c.
+**Spec de implementação:** `docs/product/journey-j4c-survey-collect-spec.md` (modelo 3
+camadas N3/N2/N1; contrato `channel_policy` declarativo; N2 = resolvedor de canal único e
+cego ao processo com guard de invariante; `persistCollect` × `persistDelegate`).
 **Data:** 2026-07-10
 **Componentes:** `packages/channel-gateway` (adapter de canal + `survey_web.py`),
 `packages/skill-flow-engine` (step `collect`), `packages/mcp-server-plughub`
