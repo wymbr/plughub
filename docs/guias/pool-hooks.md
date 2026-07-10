@@ -18,6 +18,17 @@ O mecanismo reutiliza 100% da infraestrutura existente de conferência e `@menti
 o bridge simplesmente publica um `ConversationInboundEvent` sintético com `conference_id`,
 e o Routing Engine o trata como qualquer outra alocação.
 
+> **Invariante — pertença à journey (Journey J1–J4).** Como o inbound do hook carrega
+> `conference_id`, o agente roda como especialista **DENTRO da sessão existente** —
+> `parse_inbound`/`parse_routed` pulam eventos com `conference_id` e **não criam sessão
+> nova** (a participação vira segmento). Logo o agente de hook (qualquer hook, inclusive
+> `on_process_end`) **não forma journey nova**: é segmento da sessão que já pertence à
+> journey (mesmo `root_session_id`). O que o hook *cria* também fica na journey: filho
+> (`delegate`/`collect`) ou novo processo (`workflow_trigger`) herda a raiz transitiva
+> pela propagação do J1; sinal de survey usa `origin_session_id = raiz canônica` +
+> `grain=journey`. Ponto de atenção: o agente que cria algo deve ler a raiz do ctx (o
+> caminho de plataforma propaga sozinho).
+
 ---
 
 ## Hooks disponíveis

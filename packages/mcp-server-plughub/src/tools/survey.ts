@@ -43,6 +43,8 @@ export interface SurveyDeps {
   dialogApiUrl: string
   /** Default tenant when the input omits one (compose fetch header). */
   tenantId: string
+  /** channel-gateway base URL — for creating outbound survey links (Journey J4). */
+  channelGatewayUrl: string
 }
 
 // ─── Server-side signal composition (ADR §D9) ─────────────────────────────────
@@ -184,7 +186,66 @@ export function registerSurveyTools(
   server: McpServer,
   deps:   SurveyDeps,
 ): void {
-  const { kafka, dialogApiUrl, tenantId: defaultTenantId } = deps
+  const { kafka, dialogApiUrl, tenantId: defaultTenantId, channelGatewayUrl } = deps
+
+  // ── survey_link_create (Journey J4 — veículo outbound) ────────────────────────
+  // Optional string fields tolerate null: an unresolved @ctx.* invoke input
+  // resolves to null (getValue returns null for a missing tag), and z.string()
+  // .default("") only covers `undefined`, not `null`. Coerce null → "" so a
+  // missing customer_key/delivery field never fails validation and silently
+  // routes the invoke to on_failure. origin_session_id stays strict (min 1) —
+  // the J1 root is always present.
+  const optStr = () => z.string().nullish().transform((v) => v ?? "")
+  const SurveyLinkCreateInputSchema = z.object({
+    tenant_id:         z.string().nullish().transform((v) => v ?? undefined),
+    form_id:           z.string().min(1),
+    /** Sessão pesquisada = chave do sinal. Para grain='journey', a RAIZ canônica. */
+    origin_session_id: z.string().min(1),
+    customer_key:      optStr(),
+    grain:             z.enum(["segment", "session", "workflow", "journey"]).default("session"),
+    deliver_kind:      optStr(),
+    deliver_address:   optStr(),
+  })
+
+  server.tool(
+    "survey_link_create",
+    "Journey J4 — create an OUTBOUND survey web link (snapshots a published DialogForm) " +
+    "keyed to origin_session_id at the given grain (e.g. 'journey' for an end-to-end N3 " +
+    "process survey, keyed to the CANONICAL journey root). Optionally delivers the link. " +
+    "The customer's later submission records session.signals at that grain — the response " +
+    "is the CUSTOMER's, never fabricated. Used by an on_process_end hook agent.",
+    SurveyLinkCreateInputSchema.shape as any,
+    async (input: Record<string, unknown>) => {
+      try {
+        const p = SurveyLinkCreateInputSchema.parse(input)
+        const tenant_id = p.tenant_id || defaultTenantId
+        const res = await fetch(`${channelGatewayUrl}/v1/survey/web/create`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tenant_id,
+            form_id:           p.form_id,
+            origin_session_id: p.origin_session_id,
+            customer_key:      p.customer_key,
+            grain:             p.grain,
+            deliver_kind:      p.deliver_kind,
+            deliver_address:   p.deliver_address,
+          }),
+        })
+        if (!res.ok) {
+          const text = await res.text().catch(() => "")
+          return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "create_failed", status: res.status, body: text }) }] }
+        }
+        const data = await res.json()
+        return { content: [{ type: "text" as const, text: JSON.stringify(data) }] }
+      } catch (e) {
+        if (e instanceof z.ZodError) {
+          return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "validation_error", message: e.errors.map(er => er.message).join("; ") }) }] }
+        }
+        return { isError: true, content: [{ type: "text" as const, text: JSON.stringify({ error: "internal_error", message: String(e) }) }] }
+      }
+    },
+  )
 
   // ── survey_record ───────────────────────────────────────────────────────────
   server.tool(

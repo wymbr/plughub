@@ -375,9 +375,12 @@ class SurveyWebService:
         customer_key:      str = "",
         deliver_kind:      str = "",
         deliver_address:   str = "",
+        grain:             str = "session",
     ) -> dict[str, Any]:
         """Congela o form publicado num token. Retorna {token, path[, delivery]}.
-        Se deliver_kind+deliver_address vierem, entrega o link (camada plugável)."""
+        Se deliver_kind+deliver_address vierem, entrega o link (camada plugável).
+        `grain` (Journey J4): grão do sinal gravado no submit — `session` (default) ou
+        `journey` (survey de processo N3, chaveado na raiz canônica via origin_session_id)."""
         async with httpx.AsyncClient(timeout=5) as c:
             r = await c.get(
                 f"{self._dialog}/v1/dialog/forms/{form_id}",
@@ -394,6 +397,7 @@ class SurveyWebService:
             "form":              form,
             "origin_session_id": origin_session_id,
             "customer_key":      customer_key,
+            "grain":             grain or "session",   # Journey J4
             "status":            "open",
             "created_at":        _now_iso(),
         }
@@ -442,7 +446,7 @@ class SurveyWebService:
                 "event_id":          str(uuid.uuid4()),
                 "tenant_id":         rec["tenant_id"],
                 "origin_session_id": rec.get("origin_session_id") or token,
-                "grain":             "session",
+                "grain":             rec.get("grain") or "session",   # Journey J4
                 "segment_id":        None,
                 "agent_key":         "",
                 "survey_session_id": None,

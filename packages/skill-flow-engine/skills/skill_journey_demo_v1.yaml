@@ -1,0 +1,15 @@
+id: skill_journey_demo_v1
+name: Journey Demo Process (N3)
+version: "1.0"
+description: |
+  Journey J4 — processo N3 MÍNIMO para exercitar o hook on_process_end de ponta a
+  ponta. Completa `resolved` já no trigger (sem suspend/delegate), então o bridge
+  dispara o on_process_end do pool imediatamente. Só para demo/E2E.
+classification:
+  type: vertical
+entry: concluir
+steps:
+  - id: concluir
+    type: complete
+    outcome: resolved
+    issue_status: done

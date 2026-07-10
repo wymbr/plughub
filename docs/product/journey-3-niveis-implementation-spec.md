@@ -203,6 +203,17 @@ agendamento de `on_process_end` deve ser **idempotente por raiz canônica** e pa
 do `customer-surveys` (`survey_eligibility_check`). Chavear pela canônica (não pelo workflow) já cobre o caso
 comum; a quarentena cobre o resto.
 
+**Invariante — pertença à journey (vale para TODOS os hooks, inclusive `on_process_end`):** o agente de um hook
+roda como **especialista de conferência DENTRO da sessão existente** (o `fire_pool_hooks` publica um
+`conversations.inbound` sintético **com `conference_id`**, e `parse_inbound`/`parse_routed` **pulam** eventos com
+`conference_id` — não criam linha `sessions`). Como a pertença à journey é um fato de **sessão** (`root_session_id`
+por sessão), o agente de hook **não forma journey nova** — é um segmento da sessão que já é membro da journey.
+E o que o hook *cria* fica atado à mesma raiz: (a) filho via `delegate`/`collect` ou novo processo via
+`workflow_trigger` → herda a raiz transitiva pela propagação do **J1** (resolvida do ctx do chamador); (b) o sinal
+do survey → `origin_session_id = @ctx.session.root_session_id` (raiz canônica) + `grain=journey`. Único ponto de
+atenção: o agente que cria algo deve **ler a raiz do ctx** (o caminho de plataforma delegate/trigger propaga
+sozinho; só quebraria se um agente contornasse a plataforma).
+
 **Fora do escopo desta adição** (registrado como possível futuro, não decidido): `on_process_start` (seed de
 `@ctx.journey.*`, SLA do processo, confirmação de recebimento) e `on_process_suspend/resume` (nudges de CX em
 espera longa — que o flow também resolve com `notify`/`collect`). Milestone/step-level **não** vira hook de pool.
