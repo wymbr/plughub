@@ -65,12 +65,32 @@ CREATE TABLE IF NOT EXISTS {db}.sessions
     outcome        Nullable(String),
     wait_time_ms   Nullable(Int64),
     handle_time_ms Nullable(Int64),
-    date           Date
+    date           Date,
+    row_version    DateTime64(3, 'UTC') DEFAULT coalesce(closed_at, opened_at)
 )
-ENGINE = ReplacingMergeTree()
+ENGINE = ReplacingMergeTree(row_version)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id)
 """
+
+# ── row_version — por que existe (bug 2026-07-13) ─────────────────────────────
+# A tabela era ReplacingMergeTree() SEM coluna de versão, apostando que "a última
+# linha inserida vence" + a ordem do Kafka. A premissa é FALSA: o consumer lê de
+# MÚLTIPLOS tópicos (conversations.inbound / .routed / .events / …) e o Kafka só
+# ordena DENTRO de uma partição, nunca ENTRE tópicos. Resultado: uma linha
+# `routed` (status=active) inserida DEPOIS do `contact_closed` vencia a dedup e
+# APAGAVA o fechamento (closed_at → NULL), corrompendo open_count/TMA/SLA.
+# Reproduzido no J4c: resume → close em ~14ms; a linha de close existia na tabela
+# mas o FINAL devolvia a `active`.
+#
+# Com ReplacingMergeTree(row_version), vence o EVENTO mais recente, não a inserção
+# mais recente. row_version = timestamp do próprio evento (ver _session_row):
+# o close carrega `ended_at`, que é por definição o instante final da vida da
+# sessão → sempre >= qualquer routed/queued/suspend anterior.
+#
+# O DEFAULT coalesce(closed_at, opened_at) serve ao REBUILD: nas linhas antigas
+# (que não têm row_version gravado) ele faz a linha de close — a única com
+# closed_at — vencer a de abertura, reparando o histórico.
 
 # Forward-compatible migration for tables that already exist without customer_id.
 # ClickHouse ADD COLUMN IF NOT EXISTS is idempotent.
@@ -1013,7 +1033,80 @@ class AnalyticsStore:
                 self._client.command(ddl.format(db=self._database))
             except Exception as exc:
                 logger.warning("Migration skipped (already applied?): %s — %s", ddl[:60], exc)
+        # Structural migration — needs a rebuild (ClickHouse cannot ALTER the engine).
+        self._migrate_sessions_row_version()
         logger.info("ClickHouse schema ensured (database=%s)", self._database)
+
+    def _migrate_sessions_row_version(self) -> None:
+        """
+        Bug fix (2026-07-13) — `contact_closed` silently lost to a ReplacingMergeTree race.
+
+        `sessions` was ReplacingMergeTree() with NO version column, relying on
+        "last inserted row wins" + Kafka ordering. That premise is false: the
+        consumer reads MULTIPLE topics (conversations.inbound/.routed/.events/…)
+        and Kafka only orders WITHIN a partition, never ACROSS topics. So a
+        `routed` row (status=active) inserted AFTER `contact_closed` won the dedup
+        and erased the close (closed_at → NULL), corrupting open_count/AHT/SLA.
+
+        Fix: ReplacingMergeTree(row_version), where row_version is the EVENT's
+        timestamp — so the newest EVENT wins regardless of insert order.
+
+        ClickHouse cannot ALTER the engine, so an existing table is REBUILT. The
+        rebuild also REPAIRS history: the `row_version` DEFAULT is
+        coalesce(closed_at, opened_at), so the close row (the only one carrying
+        closed_at) beats the open/routed rows for the same session.
+
+        Idempotent: no-op once the engine already carries the version column.
+        """
+        db = self._database
+        try:
+            engine = self._client.command(
+                f"SELECT engine_full FROM system.tables "
+                f"WHERE database = '{db}' AND name = 'sessions'"
+            )
+        except Exception as exc:                       # table not there yet → fresh DDL already correct
+            logger.warning("sessions row_version migration: cannot read engine — %s", exc)
+            return
+
+        engine_str = str(engine or "")
+        if not engine_str:
+            return
+        if "row_version" in engine_str:
+            return                                     # already migrated
+
+        logger.warning(
+            "sessions: rebuilding to ReplacingMergeTree(row_version) — the versionless "
+            "engine was losing contact_closed rows to cross-topic insert races"
+        )
+        try:
+            # 1. Add the column to the OLD table. The DEFAULT is computed per row, so
+            #    historical rows get a version that makes the close row win.
+            self._client.command(
+                f"ALTER TABLE {db}.sessions ADD COLUMN IF NOT EXISTS "
+                f"row_version DateTime64(3, 'UTC') DEFAULT coalesce(closed_at, opened_at)"
+            )
+            # 2. New table: same structure, versioned engine.
+            self._client.command(f"DROP TABLE IF EXISTS {db}.sessions_rv")
+            self._client.command(
+                f"CREATE TABLE {db}.sessions_rv AS {db}.sessions "
+                f"ENGINE = ReplacingMergeTree(row_version) "
+                f"PARTITION BY toYYYYMM(date) ORDER BY (tenant_id, session_id)"
+            )
+            # 3. Copy EVERY row (not FINAL — the new engine dedupes correctly by version).
+            self._client.command(
+                f"INSERT INTO {db}.sessions_rv SELECT * FROM {db}.sessions"
+            )
+            # 4. Atomic swap, then drop the old table.
+            self._client.command(
+                f"RENAME TABLE {db}.sessions TO {db}.sessions_pre_rv, "
+                f"{db}.sessions_rv TO {db}.sessions"
+            )
+            self._client.command(f"DROP TABLE IF EXISTS {db}.sessions_pre_rv")
+            logger.info("sessions: rebuilt with ReplacingMergeTree(row_version) — history repaired")
+        except Exception as exc:
+            logger.error(
+                "sessions row_version rebuild FAILED — closes may still be lost: %s", exc
+            )
 
     async def ensure_schema_async(self) -> None:
         await asyncio.to_thread(self.ensure_schema)
@@ -1047,6 +1140,10 @@ class AnalyticsStore:
         # _session_row cai no DEFAULT session_id quando ausente (raiz = self).
         "root_session_id",
         "journey_id",
+        # Versão do ReplacingMergeTree — timestamp do EVENTO (não da inserção).
+        # Sem isso, um `routed` inserido depois de um `contact_closed` (tópicos
+        # diferentes = sem ordem garantida no Kafka) apagava o fechamento.
+        "row_version",
     ]
 
     async def upsert_session(self, row: dict) -> None:
@@ -1675,6 +1772,23 @@ def _session_row(d: dict) -> list:
         d.get("root_session_id") or d.get("session_id") or "",
         # journey_id: cache = root no nascimento (nunca fonte de verdade).
         d.get("journey_id") or d.get("root_session_id") or d.get("session_id") or "",
+        # ── row_version (versão do ReplacingMergeTree) ────────────────────────
+        # Timestamp do EVENTO, nunca da inserção — é isso que torna a dedup
+        # determinística mesmo com eventos chegando fora de ordem de tópicos
+        # diferentes (o Kafka não ordena entre tópicos).
+        #
+        # Ordem de preferência:
+        #   closed_at/ended_at  — o fechamento é, por definição, o instante final
+        #                         da vida da sessão → sempre vence routed/queued/
+        #                         suspend anteriores, mesmo se inserido antes deles.
+        #   timestamp           — evento intermediário (routed, queued, suspended).
+        #   opened_at/started_at— abertura.
+        # Fallback utcnow() só para writers legados sem nenhum timestamp.
+        _parse_dt(
+            d.get("closed_at") or d.get("ended_at")
+            or d.get("timestamp")
+            or d.get("opened_at") or d.get("started_at")
+        ) or datetime.utcnow(),
     ]
 
 

@@ -50,6 +50,52 @@ redundância).
 **Docs:** design `docs/product/journey-retorno-modelo-3-niveis-design.md` · spec
 `docs/product/journey-3-niveis-implementation-spec.md` · diagrama `docs/product/journey-3-cenarios-unionfind.svg`.
 
+---
+
+## ✅ Analytics — `contact_closed` perdido por corrida no ReplacingMergeTree *(bug CORRIGIDO 2026-07-13)*
+
+> **Corrigido:** `sessions` migrada para `ReplacingMergeTree(row_version)`, com
+> `row_version` = timestamp do **evento** (não da inserção). O `contact_closed` carrega `ended_at` —
+> por definição o instante final da sessão — então vence sempre, independente da ordem de inserção
+> entre tópicos. Migração faz **rebuild** (ClickHouse não faz ALTER de engine) e **repara o histórico**
+> via `DEFAULT coalesce(closed_at, opened_at)`. Validado: E2E novo fecha as 3 sessões (`open_count: 0`).
+> **Polimento pendente:** sessões que passaram por suspend/resume fecham com `outcome: suspended`
+> em vez de `resolved` (o `status` fecha correto; só o `outcome` do evento de close está errado).
+
+**Sintoma:** sessões fechadas pelo bridge continuam `active` no ClickHouse (`closed_at NULL`),
+corrompendo `open_count`, TMA, SLA e duração. Reproduzido no E2E do J4c: das 3 sessões da journey,
+o bridge publicou `contact_closed` para todas (logs comprovam), mas nenhuma fechou em `sessions`.
+
+**Causa raiz.** `clickhouse.py` (§Design decisions) assume: *"No explicit version column […]
+Deduplication keeps the LAST inserted row per ORDER BY key. **Kafka ordering** [garante a ordem]."*
+Mas o consumer lê de **múltiplos tópicos** (`conversations.inbound`, `conversations.routed`,
+`conversations.events`, …) e o Kafka só garante ordem **dentro de uma partição**, não **entre tópicos**.
+Então uma linha `routed` (status=active) inserida **depois** do `contact_closed` **vence a
+deduplicação** e apaga o fechamento:
+
+```
+16:56:29,365  conversations.routed   (re-alocação do resume) → status=active
+16:56:29,379  conversations.events   (contact_closed)        → status=closed   ← perdido
+```
+
+Evidência: `d33d4a89` tem as DUAS linhas gravadas; `SELECT … FINAL` devolve a `active`.
+`939154af` e a raiz perderam a linha de close no merge (sobrou só a `active`, com `opened_at`
+carimbado no instante do **resume**).
+
+**Não é bug do J4c** — é pré-existente. O J4c apenas o tornou reproduzível: o `collect` faz
+resume→close numa rajada de ~14ms, enquanto antes o intervalo entre roteamento e fechamento era
+grande o bastante para mascarar a corrida. **Qualquer** sessão com re-roteamento próximo do
+fechamento (transfer, re-queue, resume) está exposta.
+
+**Correção:** coluna de versão não-nula (`row_version DateTime64(3)` = timestamp do evento) +
+`ReplacingMergeTree(row_version)` → o evento mais recente vence deterministicamente, independente da
+ordem de inserção entre tópicos. Migração de schema + carimbo do `row_version` em todos os writers de
+`sessions` (`parse_inbound`, `parse_routed`, `parse_queued`, `parse_conversations_event`,
+`session_suspended`). Revisar os workarounds de `COALESCE`/`channel=""` que existem hoje só para
+mitigar esse mesmo problema.
+
+---
+
 ### Follow-ups abertos pelo J4c (achados durante o E2E, 2026-07-13)
 
 1. **Armadilha de deploy — ordem obrigatória `YAML → restart do bridge (publica) → set-next → promote`.**
