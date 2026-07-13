@@ -182,7 +182,11 @@ export const listChannels = async (tenantId: string): Promise<ListResponse<Gatew
     headers: operatorHeaders(tenantId)
   })
   if (!response.ok) throw new Error('Failed to fetch channels')
-  return response.json()
+  const data = await response.json()
+  // API returns { channels: [...], total: n } — normalise to ListResponse like
+  // listPools does. Without this the callers read `.items` (undefined) and the
+  // integrations list renders empty even though the records exist.
+  return { items: data.channels ?? data.items ?? [], total: data.total ?? 0 }
 }
 
 export const createChannel = async (data: CreateGatewayConfigInput, tenantId: string): Promise<GatewayConfig> => {

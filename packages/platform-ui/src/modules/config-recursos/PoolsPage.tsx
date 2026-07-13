@@ -485,6 +485,8 @@ const PoolsPage: React.FC = () => {
     dispatch_mode:     'push' as 'push' | 'pull',
     session_reservation:         null as number | null,
     channel_types:     [] as string[],
+    // Arc 19 — INTERNAL workflow_trigger correlation key (not the public URL).
+    webhook_skill_id:  '' as string,
     sla_target_ms:     30000,
     max_reply_time_ms:           null as number | null,
     calendar_id:                 '',
@@ -643,7 +645,7 @@ const PoolsPage: React.FC = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', session_reservation: null,
-      channel_types: [], sla_target_ms: 30000,
+      channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_skill_id: '', queue_max_wait_s: null,
@@ -665,6 +667,7 @@ const PoolsPage: React.FC = () => {
       dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
       session_reservation:         pool.session_reservation ?? null,
       channel_types:     pool.channel_types,
+      webhook_skill_id:  pool.webhook_skill_id ?? '',
       sla_target_ms:     pool.sla_target_ms,
       max_reply_time_ms:           pool.max_reply_time_ms ?? null,
       calendar_id:                 pool.calendar_id || '',
@@ -780,6 +783,9 @@ const PoolsPage: React.FC = () => {
       const payload = {
         description:       formData.description,
         channel_types:     formData.channel_types,
+        // Arc 19 — internal workflow_trigger key (public URLs come from ChannelEndpoints).
+        ...(formData.channel_types.includes('webhook') && formData.webhook_skill_id.trim()
+          ? { webhook_skill_id: formData.webhook_skill_id.trim() } : {}),
         sla_target_ms:     formData.sla_target_ms,
         // Type & capacity. agent_kind: send only when explicitly set ('' leaves the
         // registry backfill to infer). session_reservation: number to set, null to clear.
@@ -1038,6 +1044,23 @@ const PoolsPage: React.FC = () => {
                 </label>
               ))}
             </div>
+            {formData.channel_types.includes('webhook') && (
+              <div className="mt-3">
+                <label className="text-xs font-medium text-dark block">
+                  {t('pools.fields.webhookSkillId', { defaultValue: 'Workflow trigger skill (internal)' })}
+                </label>
+                <p className="text-2xs text-muted-light mb-1">
+                  {t('pools.fields.webhookSkillIdHint', { defaultValue: 'Interno: correlaciona workflow_trigger / POST /v1/channels/webhook/{skill_id} a este pool. NÃO é a URL pública — endpoints externos ficam em Canais → Webhook (slug → pool), que é estável entre versões do skill.' })}
+                </p>
+                <input
+                  type="text"
+                  value={formData.webhook_skill_id}
+                  onChange={e => setFormData(prev => ({ ...prev, webhook_skill_id: e.target.value }))}
+                  placeholder="skill_meu_workflow_v1"
+                  className="w-full text-sm border border-border-strong rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+              </div>
+            )}
           </div>
 
           {/* ── SLA ───────────────────────────────────────────────────────────── */}

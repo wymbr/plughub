@@ -17,6 +17,8 @@
       "description": "Description",
       "type": "Type",
       "channelTypes": "Channels",
+      "webhookSkillId": "Workflow trigger skill (internal)",
+      "webhookSkillIdHint": "Internal: correlates workflow_trigger / POST /v1/channels/webhook/{skill_id} to this pool. NOT the public URL — external endpoints live in Channels → Webhook (slug → pool) and stay stable across skill versions.",
       "slaTargetMs": "SLA (ms)",
       "status": "Status",
       "calendar": "Calendar",

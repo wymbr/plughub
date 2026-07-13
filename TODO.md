@@ -34,7 +34,7 @@ canônica** valorada em `session_id`. Descartado D1 puro (não resolve cenário 
 | J3 ✅ (2026-07-09, ver CHANGELOG) | `journey_merge` tool + `journey.merges` + `journey_aliases` + union-find (resolução na leitura via `transform()`; cache `journey_id` **diferido**, não refresh — reads por union-find) + `PendingEntry.root_session_id`. Cenário 2-unify validado E2E; cenário 3 = pipeline pronto, falta o skill disparar a tool. | J1, J2 |
 | J4a ✅ (2026-07-10, ver CHANGELOG) | Leitura N3: `session_signal` grain=`journey` + métricas de processo (`business_outcome`, `business_duration_ms`, `signal_count`, `nps_avg`/`csat_avg`/`ces_avg`) no `/reports/journeys` + colunas Outcome/NPS na Vista Processos. | J2 |
 | J4b ✅ (2026-07-10, ver CHANGELOG) | Hook **genérico** `on_process_end` (dispara em desfecho terminal, carimba `session.process_outcome`; mecanismo igual aos outros hooks, survey é 1 consumidor). Agente `skill_journey_survey_v1` cria survey OUTBOUND (`survey_link_create`, form `dialog_nps_buttons`) grain=journey keyed na raiz. Validado E2E via trigger slug→pool (`/channel/webhook/{slug}`). | J4a |
-| **J4c** (pendente — spec `docs/product/journey-j4c-survey-collect-spec.md`, ADR `adr-outbound-survey-as-collect-contact.md`) | **Survey outbound = contato via `collect` (Arc 19 suspend/resume), não sinal solto.** Modelo 3 camadas: **N3** (workflow de survey, **channel-agnostic**, faz `collect`+suspende) → **N2** (handler `persistCollect` = resolvedor de canal **único e cego ao processo**: alcançabilidade via Resolvedor de Identidade + `channel_policy` declarativo de N3 + consentimento/política como slots plugáveis) → **N1** (sessão-filho **roteada** a um pool de survey, herda `root`→membro da journey). **Opção A + criação LAZY (decidida 2026-07-10):** separa o assíncrono (esperar o cliente) do síncrono (o survey). **(1)** `collect` = convite: N2 **entrega o link + guarda pending, suspende — zero sessão/recurso/metering** até o clique (sem clique→timeout→nada alocado). **(2)** clique com token válido = **inbound PADRÃO** (cliente presente), roteado ao pool de survey → Routing admite (cota + `max_concurrent_sessions`) + Core metera — **limites só no engajamento real**; `dialog_runner` (agente único, DialogForm por config) renderiza **ao vivo** (síncrono → `menu` funciona, e o princípio "agente único interpreta o form" sobrevive). **(3)** fim do survey → `session_closed` + sinal grain=journey no close + `collect.responded`→resume N3 (collect resolve **no fim**). Resolve a regra de perfil (`menu`≠`suspend` no mesmo skill) e o custo de capacidade do assíncrono. "delega"≠step `delegate()` (é inbound, sessão própria). **Segmentação/billing por pool** (sem canal-classe novo, sem carve-out — capacity-based; `max_concurrent_sessions` = botão de volume). Trabalho central: **wirar `persistCollect`** (hoje só `persistDelegate`; `collect` cai em wall-clock). `survey_link_create` = legado/anônimo. **Invariantes:** N3 nunca nomeia canal (só `channel_policy`); N2 nunca ramifica por `skill_id`/`campaign_id` (guard de CI estilo `check_config_invariants.py`); escolha de canal = concern reutilizável. Fatias J4c-1..5. Demo = web+mock; SMS/e-mail/consent/policy = slots futuros por config. | J4b |
+| **J4c ✅** (2026-07-13, validado E2E — spec `docs/product/journey-j4c-survey-collect-spec.md`, ADR `adr-outbound-survey-as-collect-contact.md`) | **Survey outbound = contato via `collect` (Arc 19 suspend/resume), não sinal solto.** Modelo 3 camadas: **N3** (workflow de survey, **channel-agnostic**, faz `collect`+suspende) → **N2** (handler `persistCollect` = resolvedor de canal **único e cego ao processo**: alcançabilidade via Resolvedor de Identidade + `channel_policy` declarativo de N3 + consentimento/política como slots plugáveis) → **N1** (sessão-filho **roteada** a um pool de survey, herda `root`→membro da journey). **Opção A + criação LAZY (decidida 2026-07-10):** separa o assíncrono (esperar o cliente) do síncrono (o survey). **(1)** `collect` = convite: N2 **entrega o link + guarda pending, suspende — zero sessão/recurso/metering** até o clique (sem clique→timeout→nada alocado). **(2)** clique com token válido = **inbound PADRÃO** (cliente presente), roteado ao pool de survey → Routing admite (cota + `max_concurrent_sessions`) + Core metera — **limites só no engajamento real**; `dialog_runner` (agente único, DialogForm por config) renderiza **ao vivo** (síncrono → `menu` funciona, e o princípio "agente único interpreta o form" sobrevive). **(3)** fim do survey → `session_closed` + sinal grain=journey no close + `collect.responded`→resume N3 (collect resolve **no fim**). Resolve a regra de perfil (`menu`≠`suspend` no mesmo skill) e o custo de capacidade do assíncrono. "delega"≠step `delegate()` (é inbound, sessão própria). **Segmentação/billing por pool** (sem canal-classe novo, sem carve-out — capacity-based; `max_concurrent_sessions` = botão de volume). Trabalho central: **wirar `persistCollect`** (hoje só `persistDelegate`; `collect` cai em wall-clock). `survey_link_create` = legado/anônimo. **Invariantes:** N3 nunca nomeia canal (só `channel_policy`); N2 nunca ramifica por `skill_id`/`campaign_id` (guard de CI estilo `check_config_invariants.py`); escolha de canal = concern reutilizável. Fatias J4c-1..5. Demo = web+mock; SMS/e-mail/consent/policy = slots futuros por config. | J4b |
 | J5 | `@ctx.journey.*` reaceso; i18n; ABAC; guard de invariantes. | J3, J4 |
 
 J1+J2 já entregam journey por proveniência (o essencial do D1); J3 adiciona o que a proveniência não dá.
@@ -49,6 +49,30 @@ redundância).
 
 **Docs:** design `docs/product/journey-retorno-modelo-3-niveis-design.md` · spec
 `docs/product/journey-3-niveis-implementation-spec.md` · diagrama `docs/product/journey-3-cenarios-unionfind.svg`.
+
+### Follow-ups abertos pelo J4c (achados durante o E2E, 2026-07-13)
+
+1. **Armadilha de deploy — ordem obrigatória `YAML → restart do bridge (publica) → set-next → promote`.**
+   O bridge executa o **snapshot do slot `current` do pool**, não o YAML. O `RegistrySyncer` (boot do
+   orchestrator-bridge) é quem publica o YAML em `skill.flow`; o `promote` congela **o que está publicado
+   naquele instante**. Promover antes do republish **re-congela a versão anterior em silêncio** — nada na UI
+   avisa, e o sintoma é "editei o skill e nada mudou". Custou ~3 iterações no E2E do J4c.
+   → **Ação:** documentar em `docs/product/skill-versioning-deploy-spec.md` e, idealmente, a UI de Deploy
+   mostrar o **hash/updated_at do `skill.flow` publicado** ao lado do slot, para o operador ver que está
+   promovendo uma versão velha.
+
+2. **Redundância de config: canal declarado no pool E num `ChannelEndpoint` separado.**
+   O resolvedor N2 (`handle_collect`) faz `resolve_pool(channel, identifier="default")` contra a tabela de
+   `ChannelEndpoint`, cuja coluna `channel` é **independente** dos `channel_types` do pool. Resultado: o
+   operador precisa declarar o canal **duas vezes**, em lugares diferentes, e um endpoint criado na aba errada
+   falha com 409 sem relação óbvia com a causa.
+   → **Ação (simplificação):** o N2 deveria resolver o pool **por capacidade** — pool cujo `channel_types`
+   contém o canal negociado e cujo skill deployado é o runner de survey — eliminando o `ChannelEndpoint`
+   dedicado e um passo inteiro de config.
+
+3. **Bug corrigido:** `listChannels` (platform-ui `api/registry.ts`) devolvia o JSON cru (`{channels: […]}`)
+   enquanto os callers liam `.items` → a lista de integrações de canal renderizava **sempre vazia**, mesmo com
+   os registros persistidos. Normalizado (`data.channels ?? data.items`), como o `listPools` já fazia.
 
 ---
 
