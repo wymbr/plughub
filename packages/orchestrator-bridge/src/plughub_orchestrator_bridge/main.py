@@ -6676,6 +6676,28 @@ async def _handle_webhook_session_resumed(
         flow_id=(((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or "",
     ))
 
+    # ── Outcome de SESSÃO: a janela de resume é o último segmento primary ──────
+    # `_close_contact_layer` deriva o outcome da sessão do marcador
+    # `session:{id}:last_outcome` (o segmento é a fonte única; a sessão é derivada).
+    # `process_routed` grava esse marcador ao fim de cada ativação primary — mas o
+    # resume roda por AQUI, e não gravava. Consequência: sobrevivia o `suspended`
+    # da janela PRÉ-suspend, e a sessão fechava como `suspended` mesmo tendo
+    # resolvido — o que fazia o `business_outcome` da journey mentir.
+    # Espelha process_routed (mesmo marcador, mesmo TTL, agent_kind=ai). Um re-suspend
+    # regrava "suspended", que é o estado correto nesse caso.
+    if _ai_outcome:
+        try:
+            await redis_client.setex(
+                f"session:{session_id}:last_outcome",
+                604800,
+                json.dumps({"outcome": _ai_outcome, "agent_kind": "ai"}),
+            )
+        except Exception as _lo_exc:
+            logger.warning(
+                "Could not write last_outcome on resume: session=%s — %s",
+                session_id, _lo_exc,
+            )
+
     # "suspended" = flow hit another suspend step; session persists in Redis.
     # Any other terminal outcome closes the session.
     if _ai_outcome != "suspended":

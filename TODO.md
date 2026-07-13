@@ -201,6 +201,16 @@ diferente).
    enquanto os callers liam `.items` → a lista de integrações de canal renderizava **sempre vazia**, mesmo com
    os registros persistidos. Normalizado (`data.channels ?? data.items`), como o `listPools` já fazia.
 
+4. ✅ **RESOLVIDO (2026-07-13, ver CHANGELOG) — sessão de suspend/resume fechava com `outcome: suspended`.**
+   O `_close_contact_layer` deriva o outcome da SESSÃO do marcador `session:{id}:last_outcome` (o segmento é a
+   fonte única; a sessão é derivada). O `process_routed` grava esse marcador ao fim de cada ativação primary —
+   mas o **resume roda por outro caminho** (`handle_resume`), que publicava o segmento com o outcome correto e
+   **não regravava o marcador**. Sobrevivia o `suspended` da janela PRÉ-suspend, e a sessão fechava como
+   `suspended` mesmo tendo resolvido → o `business_outcome` da journey mentia. Espelhada a escrita do
+   `process_routed` (mesmo marcador/TTL, `agent_kind: ai`); um re-suspend regrava `suspended`, que é o estado
+   correto nesse caso. Validado E2E: journeys respondidas depois do fix fecham `resolved` (as anteriores
+   seguem com o carimbo errado na história).
+
 ---
 
 ## Saneamento `docs/kafka-eventos.md` → Arc 19 *(dívida de doc, 2026-07-08)*

@@ -30,6 +30,12 @@ Primo do bug de `row_version` corrigido no mesmo dia — mesmo sintoma (sessão 
 
 Corrigido em dois níveis: o **bridge** passou a repetir a identidade no evento `session_suspended` (como o `contact_closed` já fazia); e, estruturalmente, o `_channel_cache` da **analytics-api** (que já existia, mas só para `channel`+`origin` e só no tópico `routed` — o remendo pontual de um problema geral) virou **`_session_identity_cache`**: aprende a identidade de qualquer linha que a traga e reinjeta nas que não trazem, em todos os tópicos. Preenche só o que está vazio; `opened_at` mantém sempre o mais antigo conhecido; campos de **estado** (`status`, `outcome`, `closed_at`) ficam de fora de propósito — a linha nova tem o direito de sobrescrevê-los.
 
+### Bug: sessão de suspend/resume fechava com `outcome: suspended`
+
+`_close_contact_layer` deriva o outcome da **sessão** do marcador `session:{id}:last_outcome` (o segmento é a fonte única; a sessão é derivada). O `process_routed` grava esse marcador ao fim de cada ativação primary — mas o **resume roda por outro caminho** (`handle_resume`), que publicava o segmento com o outcome correto e **não regravava o marcador**. Sobrevivia o `suspended` da janela pré-suspend, e a sessão fechava como `suspended` mesmo tendo resolvido — o que fazia o `business_outcome` da journey mentir. Espelhada a escrita do `process_routed` (mesmo marcador, mesmo TTL, `agent_kind: ai`); um re-suspend regrava `suspended`, que é o estado correto nesse caso.
+
+Validado E2E: journeys respondidas depois do fix fecham `business_outcome: resolved` (`2b559656` nps 3.0, `8025005c` nps 5.0); as anteriores seguem com o carimbo errado gravado na história.
+
 **O padrão dos três bugs de `sessions` deste dia** (`row_version`, hook `side=agent`, escrita parcial): todos vinham de tratar um `ReplacingMergeTree` como se fizesse merge por coluna. Ele substitui a linha inteira. Quem escreve em `sessions` ou manda a linha completa, ou é reidratado antes da escrita — a cache de identidade agora garante o segundo caso num ponto central, em vez de exigir disciplina de cada produtor.
 
 ---
