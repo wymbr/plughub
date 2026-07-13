@@ -149,6 +149,20 @@ def _stl() -> int:
     return int(session_config.get("orchestrator_session_ttl_s", 14_400))
 
 
+def _live_flow_fallback_enabled() -> bool:
+    """
+    Escape hatch para o fallback LEGADO de resolução de flow (ver resolve_flow_for_agent).
+
+    Default **false**: produção roda exclusivamente o snapshot do slot `current` do pool.
+    `ALLOW_LIVE_FLOW_FALLBACK=true` volta a permitir que um pool sem slot execute a
+    definição VIVA (`skill.flow` ou o YAML em disco) — o que faz edições do skill vazarem
+    para produção sem passar por deploy. Só para dev/retrocompat.
+    """
+    return os.getenv("ALLOW_LIVE_FLOW_FALLBACK", "false").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # Kafka producer — initialised in run(), used by fire_pool_hooks().
 # None until run() starts; hooks silently skip if producer not ready.
 _kafka_producer: AIOKafkaProducer | None = None
@@ -430,19 +444,41 @@ async def resolve_flow_for_agent(
     """
     Resolve the flow to execute. Returns (skill_id, flow_dict) or None.
 
-    Resolution order (Skill Versioning Fase B/P1):
-      0. POOL: snapshot do slot `current` do pool (PRODUÇÃO real — o deploy é por pool).
-         É a fonte autoritativa; só cai p/ os passos abaixo se o pool não tiver `current`
-         (retrocompat: pools ainda não migrados ao slot rodam o skill.flow publicado).
-      1. First skill in skills[] with a flow in Agent Registry (skill.flow publicado)
-      2. YAML fallback in SKILLS_DIR
+    **PRODUÇÃO = snapshot do slot `current` do POOL. Ponto.** (mudança 2026-07-13)
+
+    Os fallbacks para o `skill.flow` VIVO e para o YAML em disco eram um caminho de
+    VAZAMENTO: um pool sem slot executava a definição viva, então qualquer edição do
+    skill (editor ou arquivo) ia direto para produção sem passar por deploy — exatamente
+    o que o modelo de slots existe para impedir. Pior: o vazamento era silencioso, e a
+    ausência de slot (pool criado na UI e nunca deployado) é justamente o caso em que o
+    operador NÃO espera nada rodando.
+
+    Agora, sem slot `current`, o agente **não roda** e o log diz o que fazer. O
+    comportamento antigo volta com `ALLOW_LIVE_FLOW_FALLBACK=true` (dev/retrocompat).
     """
-    # 0. Pool current slot (produção por-pool) — preferencial.
+    # 0. Pool current slot — a ÚNICA fonte de produção.
     pool_flow = await get_pool_current_flow(http, tenant_id, pool_id)
     if pool_flow:
         return pool_flow
 
-    # Try each skill in declaration order
+    if not _live_flow_fallback_enabled():
+        logger.error(
+            "pool=%s agent_type=%s: NENHUM slot `current` — agente NÃO será executado. "
+            "Produção roda apenas o snapshot do deploy. Vá em Flow → Deploy, selecione "
+            "este pool, configure o slot Next e clique Promote. "
+            "(ALLOW_LIVE_FLOW_FALLBACK=true restaura o fallback legado, que executa a "
+            "definição VIVA e faz edições vazarem para produção.)",
+            pool_id, agent_type_id,
+        )
+        return None
+
+    logger.warning(
+        "pool=%s: sem slot `current` — caindo no FALLBACK LEGADO (definição viva). "
+        "Edições do skill vazam para produção sem deploy. Deploy este pool para corrigir.",
+        pool_id,
+    )
+
+    # 1. skill.flow publicado (LEGADO — definição viva, não é snapshot de deploy)
     for skill_ref in skills:
         skill_id = skill_ref.get("skill_id", "")
         if not skill_id:
@@ -451,7 +487,7 @@ async def resolve_flow_for_agent(
         if flow:
             return skill_id, flow
 
-    # No skill had a flow in the registry — try YAML fallback
+    # 2. YAML em disco (LEGADO — nem sequer passa pelo registry)
     flow = _load_yaml_fallback(agent_type_id)
     if flow:
         return agent_type_id, flow  # use agent_type_id as skill_id in fallback

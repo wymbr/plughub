@@ -42,8 +42,15 @@ Precedence (config-consolidation — seed-if-absent / DB-owned, DEFAULT):
   capacity, …) survive restarts/rebuilds. The YAML only SEEDS a fresh/empty
   registry. Set REGISTRY_SYNC_RECONCILE=true for the legacy dev/GitOps behaviour
   where the YAML re-applies its config over existing rows on every startup.
-  (Applies to pools and deploy-slots; skills still upsert — they are code, not
-  tenant-editable config.)
+
+  Applies to pools, deploy-slots AND **skills** (changed 2026-07-13). Skills used
+  to be an unconditional upsert ("they are code, not tenant config"), but that
+  premise contradicted the existence of the Skills editor: the upsert carried
+  `x-skill-publish: true`, which makes the registry write
+  `{ flow: <yaml>, flow_draft: DbNull }` — so **every bridge boot overwrote
+  production AND WIPED the editor's draft**, silently destroying UI work. Either
+  the file owns the skill (and the editor is a lie) or the DB owns it. We chose
+  DB-owned, like pools: the YAML seeds, the editor is authoritative.
 
 Prune (REGISTRY_SYNC_PRUNE=true, default):
   After upsert, list all agent_types in the registry for the tenant.
@@ -570,13 +577,40 @@ class RegistrySyncer:
         payload:  dict,
         report:   SyncReport,
     ) -> None:
-        """PUT /v1/skills/{skill_id} — upsert semantics (create or update).
+        """
+        SEED-IF-ABSENT (2026-07-13) — o YAML apenas SEMEIA um skill inexistente;
+        uma vez criado, o **DB é a fonte de verdade** e o syncer NÃO sobrescreve.
+        Mesma regra que os pools já seguem (provisioning precedence).
 
-        Skill Versioning Fase B: o syncer é canal de DEPLOY (skills são código) →
-        publica direto em PRODUÇÃO (`x-skill-publish: true`), não em rascunho. Sem
-        o header, o PUT gravaria só `flow_draft` e os skills seedados não rodariam.
+        **Por que mudou (bug de perda de dados).** Antes isto era um upsert
+        incondicional com `x-skill-publish: true`, e esse header faz o agent-registry
+        gravar `{ flow: <yaml>, flow_draft: DbNull }`. Ou seja: **a cada boot do
+        bridge, o YAML sobrescrevia a produção E APAGAVA o rascunho do editor.**
+        Qualquer edição feita na UI era destruída silenciosamente no próximo restart
+        — o editor não era só inócuo, ele perdia trabalho.
+
+        `REGISTRY_SYNC_RECONCILE=true` restaura o comportamento legado (o YAML vence)
+        para dev/GitOps/CI, igual aos pools.
         """
         url = f"{self._registry_url}/v1/skills/{skill_id}"
+
+        # Seed-if-absent: existe no DB e não estamos em reconcile → não toca.
+        if not _reconcile_enabled():
+            try:
+                async with http.get(url, headers=headers,
+                                    timeout=aiohttp.ClientTimeout(total=10)) as probe:
+                    if probe.status == 200:
+                        logger.debug(
+                            "  skill %s exists — DB-owned (seed-if-absent), skipping", skill_id,
+                        )
+                        report.skills_skipped += 1
+                        return
+            except Exception as exc:   # probe falhou → segue para o PUT (seed)
+                logger.debug("  skill %s: existence probe failed (%s) — seeding", skill_id, exc)
+
+        # Cria (seed) ou, em reconcile, re-aplica o YAML por cima.
+        # `x-skill-publish: true` publica direto em produção: o skill semeado precisa
+        # rodar, e no seed não há rascunho de ninguém para preservar.
         publish_headers = {**headers, "x-skill-publish": "true"}
         try:
             async with http.put(url, headers=publish_headers, json=payload,
