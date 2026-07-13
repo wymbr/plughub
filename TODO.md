@@ -98,14 +98,33 @@ mitigar esse mesmo problema.
 
 ### Follow-ups abertos pelo J4c (achados durante o E2E, 2026-07-13)
 
-1. **Armadilha de deploy — ordem obrigatória `YAML → restart do bridge (publica) → set-next → promote`.**
-   O bridge executa o **snapshot do slot `current` do pool**, não o YAML. O `RegistrySyncer` (boot do
-   orchestrator-bridge) é quem publica o YAML em `skill.flow`; o `promote` congela **o que está publicado
-   naquele instante**. Promover antes do republish **re-congela a versão anterior em silêncio** — nada na UI
-   avisa, e o sintoma é "editei o skill e nada mudou". Custou ~3 iterações no E2E do J4c.
-   → **Ação:** documentar em `docs/product/skill-versioning-deploy-spec.md` e, idealmente, a UI de Deploy
-   mostrar o **hash/updated_at do `skill.flow` publicado** ao lado do slot, para o operador ver que está
-   promovendo uma versão velha.
+1. ✅ **RESOLVIDO (2026-07-13) — virou o redesenho do modelo de deploy (D1–D4).** A armadilha ("promovi e
+   rodou a versão velha") era só o sintoma visível. Investigando, achamos uma **incoerência de fundo** e uma
+   **cadeia de 4 bugs que se escondiam mutuamente**:
+
+   - O CLAUDE.md afirmava *"skills seguem upsert (são código)"* — **arquivo é a verdade** — **e** existia um
+     editor de skills na UI — **banco é a verdade**. Não podiam ser ambas.
+   - O `RegistrySyncer` publicava com `x-skill-publish: true`, que grava `{ flow, flow_draft: null }` → **a
+     cada boot do bridge o rascunho do editor era APAGADO**. Perda silenciosa de trabalho.
+   - Mas ninguém percebia, porque **o editor nunca conseguiu salvar**: o `PUT /v1/skills` voltava **401** (o
+     `SkillFlowsPage` tinha um `operatorHeaders` local que não anexava o Bearer).
+   - Removido o 401, apareceu o **round-trip quebrado**: o editor devolvia no PUT os campos gerenciados pelo
+     servidor e os `null` de campos opcionais (que o `SkillSchema` rejeita — aceita *ausente*, não `null`).
+   - E o erro disso aparecia na tela como **`[object Object]`**, escondendo a causa.
+
+   **O `draft` existia para proteger uma produção que ninguém conseguia alterar pela UI** — um remendo
+   defendendo uma porta trancada.
+
+   **Modelo novo (decidido com o usuário): uma definição editável + cópia imutável no deploy.**
+   | Antes | Agora |
+   |---|---|
+   | editar skill → rascunho, **apagado no próximo boot** | grava a **definição**; sobrevive a restart (skills = *seed-if-absent*, como pools) |
+   | pool sem deploy → rodava a **definição viva** (vazamento silencioso) | **não roda**; log diz o que fazer (`ALLOW_LIVE_FLOW_FALLBACK=true` restaura o legado) |
+   | promover congelava "o publicado naquele instante" | congela a **definição atual**; a UI avisa **"⚠ alterações não implantadas"** (`definição.updated_at` × `slot.set_at`) |
+   | YAML sobrescrevia tudo a cada boot | YAML **semeia** DB vazio (`REGISTRY_SYNC_RECONCILE=true` p/ GitOps) |
+
+   **Cleanup pendente:** dropar `flow_draft` / `deploy_status` do schema Prisma e o endpoint
+   `/skills/:id/deploy` (ficaram órfãos; deixados para depois de o modelo novo rodar).
 
 2. **Redundância de config: canal declarado no pool E num `ChannelEndpoint` separado.**
    O resolvedor N2 (`handle_collect`) faz `resolve_pool(channel, identifier="default")` contra a tabela de

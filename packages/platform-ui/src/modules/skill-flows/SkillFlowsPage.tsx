@@ -29,6 +29,7 @@ import Editor from '@monaco-editor/react'
 import * as yaml from 'js-yaml'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { getAccessToken } from '@/auth/token-store'
 import Spinner from '@/components/ui/Spinner'
 import type { Skill } from '@/types'
 
@@ -114,17 +115,47 @@ function yamlToJson(text: string): ParseResult {
   }
 }
 
-const operatorHeaders = (tenantId: string) => ({
-  'Content-Type': 'application/json',
-  'x-tenant-id': tenantId,
-  'x-user-id': 'operator',
-})
+// G-PROBE: o agent-registry gateia as MUTAÇÕES de config (skills/pools/canais) em
+// Bearer + ABAC. Este helper não anexava o Authorization, então todo `PUT /v1/skills`
+// do editor voltava **401** — ou seja, o editor de skills nunca conseguiu salvar.
+// (Pools e canais funcionavam porque usam `api/registry.ts`, que já anexa o Bearer.)
+// GETs seguem abertos; o header é ignorado neles.
+const operatorHeaders = (tenantId: string) => {
+  const token = getAccessToken()
+  return {
+    'Content-Type': 'application/json',
+    'x-tenant-id': tenantId,
+    'x-user-id': 'operator',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+/** Turns a validation payload into something a human can act on.
+ *  Antes isto fazia `String(body.detail)` — e quando o servidor devolvia um array de
+ *  erros Zod, o operador via literalmente "[object Object],[object Object],…", sem a
+ *  menor pista de qual campo estava errado. */
+function _formatApiError(body: Record<string, unknown>, status: number): string {
+  const detail = body["detail"] ?? body["details"] ?? body["error"]
+  if (typeof detail === "string") return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        const o = e as Record<string, unknown>
+        const path = Array.isArray(o["path"]) ? (o["path"] as unknown[]).join(".") : ""
+        const msg  = (o["message"] as string) ?? JSON.stringify(o)
+        return path ? `${path}: ${msg}` : msg
+      })
+      .join(" · ")
+  }
+  if (detail && typeof detail === "object") return JSON.stringify(detail)
+  return `HTTP ${status}`
+}
 
 async function apiFetchRaw(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
   const res = await fetch(url, init)
   if (!res.ok) {
-    const body = await res.json().catch(() => ({})) as { detail?: string; error?: string }
-    throw new Error(body.detail ?? body.error ?? `HTTP ${res.status}`)
+    const body = await res.json().catch(() => ({})) as Record<string, unknown>
+    throw new Error(_formatApiError(body, res.status))
   }
   return res.json() as Promise<Record<string, unknown>>
 }
@@ -460,8 +491,6 @@ const SkillFlowsPage: React.FC = () => {
   // isNew: skill em autoria, ainda não salvo. Habilita o Save mesmo sem isModified
   // (o template em branco tem savedValue == editorValue → Save pareceria travado).
   const [isNew,       setIsNew]       = useState(true)
-  // unpublishedDraft: o skill tem rascunho salvo ainda não publicado (Fase B).
-  const [unpublishedDraft, setUnpublishedDraft] = useState(false)
 
   const isModified = editorValue !== savedValue
   const canSave    = statusKind !== 'saving' && (isModified || isNew)
@@ -476,14 +505,31 @@ const SkillFlowsPage: React.FC = () => {
       const data = await apiFetchRaw(`/v1/skills/${encodeURIComponent(skillId)}`, {
         headers: operatorHeaders(tenantId),
       })
-      // Skill Versioning Fase B: o editor edita o RASCUNHO. Mostra `flow_draft ?? flow`
-      // como `flow` e omite os campos de controle (flow_draft/unpublished_draft).
-      const { flow_draft, unpublished_draft, flow, ...restData } = data as Record<string, unknown>
-      const working = { ...restData, flow: (flow_draft ?? flow) ?? undefined }
+      // O editor edita a DEFINIÇÃO (`flow`). Não há mais rascunho.
+      //
+      // Dois saneamentos no round-trip GET → YAML → PUT, que estava quebrado por
+      // construção (nunca notado porque o save voltava 401 e nem chegava ao servidor):
+      //
+      //  1. Campos gerenciados pelo SERVIDOR não são editáveis e não devem aparecer no
+      //     YAML — só poluem e voltam no PUT (created_at, deploy_status, flow_model…).
+      //  2. Campos opcionais vêm como `null` do banco. O `SkillSchema` aceita
+      //     *ausente* (optional) mas NÃO `null` — então devolver `instruction: null`,
+      //     `interface: null`, etc. fazia o PUT falhar com um erro por campo nulo.
+      //     Omitir os nulos é equivalente (campo não setado) e mantém o YAML limpo.
+      const {
+        flow_draft, unpublished_draft, flow,
+        id, tenant_id, status, created_by, created_at, updated_at,
+        deploy_status, published_at, flow_model,
+        ...restData
+      } = data as Record<string, unknown>
+
+      const working = Object.fromEntries(
+        Object.entries({ ...restData, flow: (flow ?? flow_draft) ?? undefined })
+          .filter(([, v]) => v !== null && v !== undefined),
+      )
       const yamlText = skillToYaml(working)
       setEditorValue(yamlText)
       setSavedValue(yamlText)
-      setUnpublishedDraft(Boolean(unpublished_draft))
       setStatusKind('idle')
       setStatusMsg(t('editor.status.loaded', { id: skillId }))
     } catch (e: unknown) {
@@ -509,7 +555,6 @@ const SkillFlowsPage: React.FC = () => {
     setSavedValue(BLANK_TEMPLATE)
     setConfirmDel(false)
     setIsNew(true)
-    setUnpublishedDraft(false)
     setStatusKind('idle')
     setStatusMsg(t('editor.status.newSkillStatus'))
   }
@@ -541,7 +586,6 @@ const SkillFlowsPage: React.FC = () => {
       setSavedValue(editorValue)
       setSelectedId(skillId)
       setIsNew(false)               // skill agora existe → sai do modo "novo"
-      setUnpublishedDraft(true)     // salvar grava rascunho → pendente de deploy (Fase B)
       setStatusKind('saved')
       setStatusMsg(t('editor.status.saved', { id: skillId }))
       void refreshList()
@@ -639,11 +683,12 @@ const SkillFlowsPage: React.FC = () => {
               {selectedId}
               {isModified && <span className="text-warning ml-1">●</span>}
             </span>
-            {unpublishedDraft && !isModified && (
-              <span className="text-2xs font-sans font-semibold px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/30">
-                {t('editor.unpublishedDraft')}
-              </span>
-            )}
+            {/* Badge "rascunho não publicado" REMOVIDO (2026-07-13).
+                Não há mais rascunho — o editor grava a definição. E "não implantado"
+                é uma pergunta POR POOL: o mesmo skill pode estar deployado em N pools,
+                cada um com um snapshot diferente. O editor não tem como responder isso
+                sem mentir. Quem responde é a tela de Deploy, comparando o `updated_at`
+                da definição com o `set_at` do slot de CADA pool. */}
           </span>
         ) : isNew && (
           <span className="text-xs text-primary font-mono">{t('editor.newSkill')}</span>
