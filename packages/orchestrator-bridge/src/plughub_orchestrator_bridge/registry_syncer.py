@@ -399,13 +399,19 @@ class RegistrySyncer:
         report:         SyncReport,
     ) -> None:
         slots_url = f"{self._registry_url}/v1/pools/{pool_id}/slots"
+        # Config do slot que já está em produção. O YAML declara APENAS
+        # `max_concurrent_sessions`; todo o resto do config_json (ex.: `channel_policy`,
+        # que é regra de negócio do tenant e só existe na UI) é DB-owned. Ao re-semear um
+        # slot inexecutável preservamos essa config — senão a cura do snapshot cobraria o
+        # preço de apagar o deploy-config do operador.
+        existing_cfg: dict = {}
         try:
             # Idempotency + seed-if-absent precedence:
-            #   - current matches the YAML → skip;
-            #   - current is SET but differs → it was edited in the UI (capacity);
+            #   - current matches the YAML (e é executável) → skip;
+            #   - current is SET, executável e differs → it was edited in the UI (capacity);
             #     under seed-if-absent (default) the slot is DB-owned → skip (do
             #     NOT overwrite). REGISTRY_SYNC_RECONCILE=true re-applies the YAML.
-            #   - current is UNSET → seed from YAML (fresh DB).
+            #   - current is UNSET, ou SET com snapshot nulo (quebrado) → seed from YAML.
             async with http.get(
                 slots_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
             ) as resp:
@@ -413,15 +419,24 @@ class RegistrySyncer:
                     body = await resp.json()
                     current = (body.get("slots") or {}).get("current") or {}
                     cfg = current.get("config_json") or {}
+                    if isinstance(cfg, dict):
+                        existing_cfg = dict(cfg)
+                    # `yaml_snapshot` faz parte do critério de "em dia": um slot com
+                    # snapshot nulo está SET e bate skill+capacidade, mas é inexecutável
+                    # (o bridge roda o snapshot, não o skill_id). Sem esta condição, um
+                    # slot quebrado é dado como bom para sempre e nunca se auto-cura.
+                    _snapshot = current.get("yaml_snapshot")
+                    _runnable = isinstance(_snapshot, dict) and bool(_snapshot)
                     _matches = (
                         current.get("set")
+                        and _runnable
                         and current.get("skill_id") == skill_id
                         and int(cfg.get("max_concurrent_sessions") or 0) == max_concurrent
                     )
                     if _matches:
                         report.deploy_slots_skipped += 1
                         return
-                    if current.get("set") and not _reconcile_enabled():
+                    if current.get("set") and _runnable and not _reconcile_enabled():
                         logger.debug(
                             "  deploy slot pool=%s set & differs — DB-owned "
                             "(seed-if-absent), skipping reconcile", pool_id,
@@ -433,7 +448,9 @@ class RegistrySyncer:
             next_url = f"{slots_url}/next"
             payload = {
                 "skill_id":    skill_id,
-                "config_json": {"max_concurrent_sessions": max_concurrent},
+                # Preserva a config DB-owned (channel_policy & cia) e só (re)afirma o
+                # que o YAML de fato declara.
+                "config_json": {**existing_cfg, "max_concurrent_sessions": max_concurrent},
             }
             async with http.put(
                 next_url, headers=headers, json=payload,
@@ -594,17 +611,30 @@ class RegistrySyncer:
         """
         url = f"{self._registry_url}/v1/skills/{skill_id}"
 
-        # Seed-if-absent: existe no DB e não estamos em reconcile → não toca.
+        # Seed-if-absent: existe no DB **com definição** e não estamos em reconcile → não toca.
+        #
+        # "Existe" ≠ "está semeado". Uma linha pode existir com `flow` NULO (skill criado
+        # por um caminho que não gravava produção, ou PUT que falhou depois de escrever a
+        # metadata). Pular essa linha torna o buraco PERMANENTE: o syncer nunca mais a
+        # preenche, o set-next congela `yaml_snapshot: null`, e o bridge reporta "pool sem
+        # slot" para um pool que TEM slot. O critério é a presença da DEFINIÇÃO, não da linha.
         if not _reconcile_enabled():
             try:
                 async with http.get(url, headers=headers,
                                     timeout=aiohttp.ClientTimeout(total=10)) as probe:
                     if probe.status == 200:
-                        logger.debug(
-                            "  skill %s exists — DB-owned (seed-if-absent), skipping", skill_id,
+                        body = await _safe_json(probe) or {}
+                        if isinstance(body.get("flow"), dict) and body["flow"]:
+                            logger.debug(
+                                "  skill %s exists — DB-owned (seed-if-absent), skipping", skill_id,
+                            )
+                            report.skills_skipped += 1
+                            return
+                        logger.warning(
+                            "  skill %s existe mas SEM definição (flow nulo) — re-semeando do YAML. "
+                            "Um skill sem flow não pode ser deployado: o slot congelaria um "
+                            "snapshot nulo.", skill_id,
                         )
-                        report.skills_skipped += 1
-                        return
             except Exception as exc:   # probe falhou → segue para o PUT (seed)
                 logger.debug("  skill %s: existence probe failed (%s) — seeding", skill_id, exc)
 

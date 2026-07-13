@@ -147,6 +147,19 @@ poolSlotsRouter.put("/slots/:slot", async (req: Request, res: Response, next: Ne
       ? yaml_snapshot
       : await _fetchSkillSnapshot(skill_id, tenantId)
 
+    // Um slot SEM snapshot é inexecutável: o bridge roda exclusivamente o snapshot do
+    // slot `current`, então promovê-lo produz um pool que parece deployado e não roda
+    // nada — e o erro sai lá na ponta como "pool sem slot", que é o diagnóstico errado.
+    // Falhar aqui, onde a causa está visível (o skill não tem definição).
+    if (snapshot == null) {
+      return res.status(422).json({
+        error: "skill_sem_definicao",
+        message:
+          `O skill '${skill_id}' não tem definição (flow) gravada — não há o que congelar no slot. ` +
+          `Salve o fluxo no editor (ou deixe o RegistrySyncer semeá-lo do YAML) antes de fazer o deploy.`,
+      })
+    }
+
     const row = await (prisma as any).poolSkillSlot.upsert({
       where:  { pool_id_tenant_id_slot: { pool_id: poolId, tenant_id: tenantId, slot: "next" } },
       update: {

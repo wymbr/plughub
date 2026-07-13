@@ -28,7 +28,7 @@
 import { randomUUID }     from "crypto"
 import type { CollectStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
-import { resolveInputMap } from "../interpolate"
+import { resolveInputMap, resolveInputValue } from "../interpolate"
 
 export async function executeCollect(
   step: CollectStep,
@@ -138,14 +138,23 @@ export async function executeCollect(
       ctx.contextStore,
     )) as unknown as { type: string; id: string }
 
+    // Journey J4c — a channel_policy costuma vir por REFERÊNCIA (`"$.config.channel_policy"`),
+    // porque canal↔pool é config de negócio injetada no deploy (config_json do slot), não
+    // conteúdo do skill. resolveInputValue devolve o objeto quando é ref; passa direto quando
+    // já é objeto literal.
+    const resolvedChannelPolicy = step.channel_policy !== undefined
+      ? await resolveInputValue(step.channel_policy, ctx, ctx.contextStore)
+      : undefined
+
     const result = await ctx.persistCollect({
       step_id:        step.id,
       collect_token:  collectToken,
       target:         resolvedTarget,
       ...(step.channel    ? { channel:     step.channel }    : {}),
       ...(step.requires       ? { requires:       step.requires }       : {}),
-      // Journey J4c — declarative channel policy (N2 input); N3 stays channel-agnostic.
-      ...(step.channel_policy ? { channel_policy: step.channel_policy } : {}),
+      ...(resolvedChannelPolicy
+        ? { channel_policy: resolvedChannelPolicy as Record<string, unknown> }
+        : {}),
       ...(step.dialog_form_id ? { dialog_form_id: step.dialog_form_id } : {}),
       interaction:    step.interaction,
       prompt:         step.prompt,

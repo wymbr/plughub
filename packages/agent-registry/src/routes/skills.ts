@@ -95,13 +95,24 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         evaluation:       body.evaluation   ?? Prisma.DbNull,
         knowledge_domains: body.knowledge_domains ?? [],
         compatibility:    body.compatibility ?? Prisma.DbNull,
-        // Skill Versioning Fase B: criação grava RASCUNHO; produção (flow) só pelo deploy.
-        flow:             Prisma.DbNull,
-        flow_draft:       body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-        flow_model:       "agent",   // produção ainda vazia; flow_model é setado no deploy
+        // UMA definição, sem rascunho (2026-07-13) — igual ao PUT. O create GRAVA a
+        // definição em `flow`; não existe mais o par flow/flow_draft.
+        //
+        // Antes (Fase B) isto gravava `flow: null` + `flow_draft: <def>`, apostando que
+        // o deploy promoveria draft→flow. Com produção rodando o SNAPSHOT DO SLOT, o
+        // `flow` é a definição-fonte que o set-next congela — deixá-lo nulo criava um
+        // skill **sem definição publicável**: o slot congelava `yaml_snapshot: null`,
+        // e o bridge reportava "pool sem slot" para um pool que tinha slot.
+        flow:             body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+        flow_draft:       Prisma.DbNull,                    // conceito morto — sempre limpo
+        flow_model:       _computeFlowModel(body.flow),
         delegation_input: (body as any).delegation_input != null
           ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
           : Prisma.DbNull,
+        // Vestigial (igual ao PUT): não há mais draft/published — a definição é a
+        // definição, e o que roda é o snapshot do slot. Fica "published" para não
+        // deixar a coluna divergir entre os dois caminhos de escrita.
+        deploy_status:    "published",
         created_by:       createdBy,
       } as any,
     })

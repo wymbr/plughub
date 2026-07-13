@@ -36,6 +36,25 @@ description: |
 classification:
   type: vertical
 
+# ── Config de DEPLOY (config_json do slot → $.config.*) ──────────────────────
+# Canal e pool que atendem a pesquisa são **regra de negócio do tenant**, não do
+# skill nem do core. Por isso entram como config injetada no deploy: o mesmo skill
+# genérico serve um tenant que pesquisa por webchat e outro que pesquisa por SMS,
+# sem nenhuma linha diferente.
+#
+# As CHAVES do mapa `channels` são os canais permitidos; os VALORES, o pool que
+# atende cada um. O resolvedor N2 negocia entre as chaves (alcançabilidade,
+# consentimento, preferência) e lê o pool no valor.
+config_params:
+  - key: channel_policy
+    type: object
+    required: true
+    label: "Política de canal do survey (canal → pool)"
+    description: >
+      Ex.: { "channels": { "webchat": "survey_web_ia" }, "preferred_order": ["webchat"] }.
+      As chaves de `channels` são os canais por onde a pesquisa pode sair; o valor é o
+      pool que atende aquele canal.
+
 entry: pesquisar
 
 steps:
@@ -46,8 +65,9 @@ steps:
     target:
       type: customer
       id: "@ctx.caller.customer_id"
-    channel_policy:
-      preferred_order: ["webchat"]   # declarativo — o resolvedor N2 decide de fato
+    # O skill NÃO nomeia canal nem pool — ele nem tem onde escrever "webchat".
+    # A política vem do deploy, por referência.
+    channel_policy: "$.config.channel_policy"
     dialog_form_id: "dialog_nps_buttons"
     interaction: "form"
     prompt: "Pesquisa de satisfação"

@@ -2,6 +2,30 @@
 
 ---
 
+## J4c follow-up item 2 — canal/pool do survey vem do DEPLOY, não do core (2026-07-13)
+
+O resolvedor N2 do `collect` deixou de depender de um `ChannelEndpoint` global e passa a ler o par **canal → pool** do `config_json` do slot do skill N3 (`$.config.channel_policy`). Regra de negócio do tenant ("quem atende a pesquisa, por onde") vira **config de deploy** do skill, não conhecimento do core: o mesmo `skill_survey_journey_v1` serve um tenant que pesquisa por webchat e outro por SMS sem uma linha diferente. `SkillConfigParamSchema.type` ganhou `"object"` (a policy é um mapa) e a tela de Deploy renderiza `JsonParamInput` para esses params. O `ChannelEndpoint webchat/default` do demo foi removido.
+
+Validado E2E: trigger `n3-demo` → pending do collect nasce com `pool_id: survey_web_ia`, `channel: webchat` (ambos vindos do deploy) e `root_session_id` = a sessão do processo.
+
+### Três bugs de deploy corrigidos no caminho (todos do modelo D1–D4)
+
+1. **`resolve_flow_for_agent` sem `pool_id` em dois call sites** (orchestrator-bridge): o YAML-fallback e o `@mention` chamavam o resolver sem o pool — que com `skills=[]` é a única chave para achar o slot `current`. Antes do D1 isso caía silenciosamente no `skill.flow` vivo (o pool era ignorado e `$.config.*` nunca chegava a esses agentes); depois do D1 o agente simplesmente não executava, com um erro enganoso de `pool=` vazio. O D1 não criou o bug — expôs um que já estava lá.
+2. **`POST /v1/skills` ainda gravava `flow: null` + `flow_draft`** (agent-registry): sobra da Fase B que o D3 não alcançou. Skill criado por esse caminho nascia **sem definição publicável** → o set-next congelava `yaml_snapshot: null` → o bridge reportava "pool sem slot" para um pool que *tinha* slot. Create agora grava a definição em `flow`, igual ao PUT.
+3. **"Existe" tratado como "está semeado"** (RegistrySyncer, D2): o probe do seed-if-absent olhava só a presença da *linha*, não da *definição*. Uma linha com `flow` nulo era pulada para sempre — o buraco virava permanente. O critério passou a ser a presença do `flow`; idem no `_ensure_deploy_slot`, que considerava um slot com snapshot nulo "em dia". A re-semeadura **preserva o `config_json` DB-owned** (o YAML só declara `max_concurrent_sessions`; `channel_policy` é da UI).
+
+Defesa em profundidade: `PUT /slots/next` agora **rejeita (422)** congelar um snapshot nulo, falhando onde a causa é visível ("o skill não tem definição") em vez de produzir um slot que parece deployado e não roda nada.
+
+### Bug: sessão com hooks só `side=agent` nunca fechava a camada de contato
+
+Com hooks, o teardown é diferido e cada camada tem gatilho próprio: camada 1 (`_close_contact_layer` → publica `contact_closed`) dispara quando `posatt:customer_active` zera; camada 3 (`_destroy_conference`) quando `posatt:active` zera. Só que `posatt:customer_active` é incrementado **apenas** por hooks `side=customer` — então um pool cujos hooks são todos `side=agent` (o caso do `on_process_end`: o survey sai por veículo **outbound**, não inline) nunca incrementa o contador, ele nunca zera, e **a camada 1 nunca fecha**. A sessão do processo ficava `active` para sempre, corrompendo `open_count`/TMA/SLA. Agravante: o `close_fired` gravado pelo `_destroy_conference` fazia o `session_watchdog` considerá-la já fechada, então nem a rede de segurança pegava.
+
+O caminho humano (`agent_done` → `on_human_end`) já tinha a guarda `if not _has_customer_hooks: _close_contact_layer(...)`; o ramo do **AI primary** não. Espelhada. Validado: sessão N3 fecha `resolved` sem depender do clique no survey, e a sessão do workflow segue `suspended` (correto — o `collect` espera sem alocar recurso).
+
+Primo do bug de `row_version` corrigido no mesmo dia — mesmo sintoma (sessão eternamente `active`), causas opostas: lá a linha de close era **fisicamente apagada** no merge; aqui ela **nunca foi emitida**. Corrigir o primeiro tornou o segundo visível.
+
+---
+
 ## Journey J4a — avaliação N3: métricas de processo + sinal de qualidade no /reports/journeys (2026-07-10)
 
 Lado de leitura do J4 (analytics-only). O `/reports/journeys` (J2/J3) ganhou métricas de **processo** e o **sinal de qualidade N3**:

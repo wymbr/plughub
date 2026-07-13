@@ -96,6 +96,30 @@ mitigar esse mesmo problema.
 
 ---
 
+### Bug: sessão com hook `side=agent` NUNCA fecha a camada 1 (achado 2026-07-13) — corrigido, a validar
+
+**Sintoma:** a sessão do processo (N3, pool webhook) fica `closed_at NULL` / `status NULL` para sempre no
+ClickHouse. Reproduzido no E2E do item 2: das 3 sessões da journey, as duas sem hook fecharam; a raiz (que
+dispara `on_process_end`) não.
+
+**Causa.** Com hooks, o teardown é **diferido** e cada camada tem gatilho próprio: a camada 1
+(`_close_contact_layer` → publica `contact_closed`) dispara quando `posatt:customer_active` zera; a camada 3
+(`_destroy_conference`) quando `posatt:active` zera. Mas `posatt:customer_active` só é **incrementado** por
+hooks `side=customer`. Um pool cujos hooks são todos `side=agent` — que é o caso do `on_process_end`, porque o
+survey sai por veículo **outbound**, não inline — nunca incrementa o contador, logo ele nunca zera, logo a
+camada 1 **nunca fecha**. O caminho humano (`agent_done` → `on_human_end`) já tinha a guarda
+(`if not _has_customer_hooks: _close_contact_layer(...)`); o ramo do **AI primary** não.
+
+**Agravante:** `_destroy_conference` grava `session:{id}:close_fired`, e o `session_watchdog` usa a ausência
+dessa chave como critério de órfã — então a rede de segurança **também** não pega. A sessão fica aberta
+indefinidamente, corrompendo `open_count`, TMA, SLA e duração (mesmo efeito do bug de `row_version`, causa
+diferente).
+
+**Fix:** espelhada a guarda do caminho humano no ramo do AI primary (`main.py`, dispatch de
+`on_contact_end`/`on_process_end`). NPS inline (`on_contact_end`, side=customer) segue fechando pelo contador.
+
+---
+
 ### Follow-ups abertos pelo J4c (achados durante o E2E, 2026-07-13)
 
 1. ✅ **RESOLVIDO (2026-07-13) — virou o redesenho do modelo de deploy (D1–D4).** A armadilha ("promovi e
@@ -126,14 +150,22 @@ mitigar esse mesmo problema.
    **Cleanup pendente:** dropar `flow_draft` / `deploy_status` do schema Prisma e o endpoint
    `/skills/:id/deploy` (ficaram órfãos; deixados para depois de o modelo novo rodar).
 
-2. **Redundância de config: canal declarado no pool E num `ChannelEndpoint` separado.**
-   O resolvedor N2 (`handle_collect`) faz `resolve_pool(channel, identifier="default")` contra a tabela de
-   `ChannelEndpoint`, cuja coluna `channel` é **independente** dos `channel_types` do pool. Resultado: o
-   operador precisa declarar o canal **duas vezes**, em lugares diferentes, e um endpoint criado na aba errada
-   falha com 409 sem relação óbvia com a causa.
-   → **Ação (simplificação):** o N2 deveria resolver o pool **por capacidade** — pool cujo `channel_types`
-   contém o canal negociado e cujo skill deployado é o runner de survey — eliminando o `ChannelEndpoint`
-   dedicado e um passo inteiro de config.
+2. ✅ **RESOLVIDO (2026-07-13, ver CHANGELOG) — canal→pool vem do DEPLOY do skill N3.**
+   Era: o N2 (`handle_collect`) resolvia o pool via `ChannelEndpoint` global (`resolve_pool(channel,
+   "default")`), cuja coluna `channel` é independente dos `channel_types` do pool → o operador declarava o
+   canal duas vezes e um endpoint na aba errada dava 409 sem relação óbvia com a causa.
+   Agora: **decisão do usuário** — "o próprio skill-flow N2 recebe por configuração quais canais e pools usar,
+   pois isso varia por negócio, não é problema do core". O par canal→pool vive no `config_json` do slot
+   (`$.config.channel_policy`, mapa `{canal: pool}`); `SkillConfigParamSchema.type` ganhou `"object"` e a tela
+   de Deploy renderiza `JsonParamInput`. `ChannelEndpoint` dedicado eliminado do caminho de survey.
+   Validado E2E: pending nasce com `pool_id`/`channel` vindos do deploy.
+
+   **Achado no caminho (3 bugs de deploy, ver CHANGELOG):** `resolve_flow_for_agent` era chamado **sem
+   `pool_id`** em 2 call sites (YAML-fallback e @mention) — antes do D1 caía no `skill.flow` vivo e ninguém
+   via; `POST /v1/skills` ainda gravava `flow: null` + `flow_draft` (sobra da Fase B que o D3 não alcançou),
+   parindo skills sem definição publicável; e o seed-if-absent do D2 confundia **linha existente** com
+   **skill semeado**, tornando o buraco permanente. `PUT /slots/next` agora rejeita (422) congelar snapshot
+   nulo.
 
 3. **Bug corrigido:** `listChannels` (platform-ui `api/registry.ts`) devolvia o JSON cru (`{channels: […]}`)
    enquanto os callers liam `.items` → a lista de integrações de canal renderizava **sempre vazia**, mesmo com

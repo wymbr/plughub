@@ -461,6 +461,19 @@ async def resolve_flow_for_agent(
     if pool_flow:
         return pool_flow
 
+    # Pool AUSENTE ≠ pool SEM DEPLOY. Sem `pool_id` não há sequer o que resolver:
+    # isso é bug de CALL SITE (alguém esqueceu de propagar o pool), não falta de
+    # deploy — e mandar o operador "promover o slot" seria mandá-lo consertar o
+    # que não está quebrado. Erro separado para não confundir os dois diagnósticos.
+    if not pool_id and not _live_flow_fallback_enabled():
+        logger.error(
+            "agent_type=%s: resolve_flow_for_agent chamado SEM pool_id — não há slot a "
+            "resolver e o agente NÃO será executado. Isto é um bug de call site no bridge "
+            "(o pool precisa ser propagado até aqui), não um problema de deploy do tenant.",
+            agent_type_id,
+        )
+        return None
+
     if not _live_flow_fallback_enabled():
         logger.error(
             "pool=%s agent_type=%s: NENHUM slot `current` — agente NÃO será executado. "
@@ -2698,6 +2711,12 @@ async def process_routed(
                 # (by instance_id, since no segment_id is generated here) instead of
                 # silently keying on session_id puro and colliding with a peer hook.
                 conference_id=conference_id,
+                # Skill Versioning: `skills=[]` faz o resolver ir DIRETO ao slot
+                # `current` do pool (produção). Sem `pool_id` não há slot para
+                # resolver — o agente não executa e o erro sai com `pool=` vazio.
+                # O pool está em escopo (usado no snapshot acima) e é obrigatório
+                # aqui, além de ser o que habilita `$.config.*` (config_json do slot).
+                pool_id=pool_id,
             )
 
             # Skill flow ended naturally — clear the completing marker so that any
@@ -2924,8 +2943,13 @@ async def process_routed(
         # skill_id so it can look up mention_commands from the YAML and push the
         # appropriate signal to menu:result:{session_id}.
         if conference_id and pool_id:
-            # Resolve skill_id early (same logic used inside activate_native_agent)
-            resolved_for_mention = await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills)
+            # Resolve skill_id early (same logic used inside activate_native_agent).
+            # `pool_id` DEVE ser passado: sem ele o resolver não acha o slot `current`
+            # do pool (produção) e devolve None — o que, além de perder o skill_id do
+            # @mention, dispara o erro de "pool sem slot" com pool vazio.
+            resolved_for_mention = await resolve_flow_for_agent(
+                http, tenant_id, agent_type_id, skills, pool_id,
+            )
             mention_skill_id = resolved_for_mention[0] if resolved_for_mention else agent_type_id
             try:
                 await redis_client.setex(
@@ -3538,10 +3562,30 @@ async def process_routed(
                     asyncio.create_task(_hook_timeout_guard(
                         redis_client, session_id, "on_process_end",
                     ))
+                # ── Camada 1 (contato) × camada 3 (conferência): não colapsar ─────
+                # Com hooks, o teardown é DIFERIDO — mas cada camada tem seu gatilho:
+                #   • camada 1 (`_close_contact_layer`, publica `contact_closed`) dispara
+                #     quando `posatt:customer_active` zera (último hook DE CLIENTE termina);
+                #   • camada 3 (`_destroy_conference`) dispara quando `posatt:active` zera.
+                # Se NENHUM hook fala com o cliente, `posatt:customer_active` nunca é
+                # incrementado → nunca zera → **a camada 1 nunca fecha**: o contato fica
+                # eternamente `active` no analytics (corrompendo open_count/TMA/SLA), e o
+                # `close_fired` que o `_destroy_conference` grava ainda faz o
+                # `session_watchdog` considerar a sessão já fechada — a rede de segurança
+                # não pega. `on_process_end` é `side=agent` por natureza (o survey sai por
+                # veículo OUTBOUND, não inline), então cai exatamente aqui.
+                # Espelha a mesma guarda do caminho humano (`agent_done` → on_human_end).
+                _has_customer_hooks = bool(_contact_end_hooks) or any(
+                    (e.get("side", "agent") if isinstance(e, dict) else "agent") == "customer"
+                    for e in _process_end_hooks
+                )
+                if not _has_customer_hooks:
+                    asyncio.create_task(_close_contact_layer(redis_client, session_id))
                 logger.info(
                     "contact/process-end hooks dispatched (AI primary): session=%s pool=%s "
-                    "on_contact_end=%d on_process_end=%d outcome=%s",
-                    session_id, pool_id, len(_contact_end_hooks), len(_process_end_hooks), _ai_outcome,
+                    "on_contact_end=%d on_process_end=%d outcome=%s customer_hooks=%s",
+                    session_id, pool_id, len(_contact_end_hooks), len(_process_end_hooks),
+                    _ai_outcome, _has_customer_hooks,
                 )
             else:
                 asyncio.create_task(_trigger_contact_close(redis_client, session_id))

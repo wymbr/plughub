@@ -174,7 +174,8 @@ export interface StepContext {
     // `string[] | undefined`, and exactOptionalPropertyTypes rejects assigning that
     // to a plain optional `string[]`.
     channel_policy?: {
-      allowed_channels?: string[] | undefined
+      /** canal → pool que atende. As chaves são os canais permitidos. */
+      channels?:         Record<string, string> | undefined
       preferred_order?:  string[] | undefined
       exclude?:          string[] | undefined
       urgency?:          "low" | "normal" | "high" | undefined

@@ -44,9 +44,9 @@ interface Skill {
   interface?:       InterfaceSchema | null
   /** Deploy-time config params (canonical). Drives the deploy form; falls back to `interface.properties`. */
   config_params?:   ConfigParam[] | null
-  /** Quando a DEFINIÇÃO foi salva pela última vez. Comparado com o `set_at` do slot
-   *  `current` para revelar "salvo mas não implantado" — sem isso o operador promove
-   *  às cegas e pode congelar uma versão velha sem nenhum aviso. */
+  /** A DEFINIÇÃO viva. Comparada com o `yaml_snapshot` do slot para detectar
+   *  "salvo mas não implantado" — ver `_isStale`. */
+  flow?:            unknown
   updated_at?:      string
 }
 
@@ -61,7 +61,8 @@ interface InterfaceSchema {
 interface ConfigParamOption { value: string; label?: string }
 interface ConfigParam {
   key:          string
-  type?:        'string' | 'number' | 'boolean'
+  /** `object`: config de deploy estruturada (ex.: o mapa canal→pool do channel_policy). */
+  type?:        'string' | 'number' | 'boolean' | 'object'
   label?:       string
   description?: string
   required?:    boolean
@@ -210,6 +211,87 @@ interface ConfigFormProps {
  * `source` known + options loaded → combo; static `options` → select; otherwise
  * an input by `type`. Unknown source silently degrades to a text input.
  */
+/**
+ * Serialização CANÔNICA (chaves ordenadas) para comparar a definição viva com o
+ * snapshot deployado. Um `JSON.stringify` simples é sensível à ordem das chaves —
+ * duas serializações da MESMA definição podem diferir só na ordem, o que geraria um
+ * "alterações não implantadas" fantasma. Comparar conteúdo de verdade exige canonizar.
+ */
+function _canon(v: unknown): string {
+  const norm = (x: unknown): unknown => {
+    if (Array.isArray(x)) return x.map(norm)
+    if (x && typeof x === 'object') {
+      return Object.keys(x as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, k) => {
+          acc[k] = norm((x as Record<string, unknown>)[k])
+          return acc
+        }, {})
+    }
+    return x
+  }
+  return JSON.stringify(norm(v))
+}
+
+/**
+ * Editor de um parâmetro de deploy do tipo `object` — config de negócio estruturada
+ * (o primeiro caso é o mapa `canal → pool` do `channel_policy` do collect).
+ *
+ * Mantém o texto digitado em estado local para não reformatar o JSON a cada tecla, e
+ * só propaga quando faz parse. JSON inválido não vira `undefined` silencioso: mostra o
+ * erro e bloqueia — falha silenciosa em config é como se perde uma tarde de debug.
+ */
+function JsonParamInput({
+  value, readOnly, onChange,
+}: {
+  value:    unknown
+  readOnly: boolean
+  onChange: (v: unknown) => void
+}) {
+  const [text, setText] = useState(() =>
+    value == null ? '' : JSON.stringify(value, null, 2),
+  )
+  const [error, setError] = useState<string | null>(null)
+
+  // Reflete mudanças externas (ex.: "Copy from Current") sem sobrescrever o que o
+  // usuário está digitando.
+  useEffect(() => {
+    const next = value == null ? '' : JSON.stringify(value, null, 2)
+    setText(prev => {
+      try {
+        if (prev.trim() && JSON.stringify(JSON.parse(prev)) === JSON.stringify(value)) return prev
+      } catch { /* prev inválido → substitui */ }
+      return next
+    })
+  }, [value])
+
+  function handle(raw: string) {
+    setText(raw)
+    if (!raw.trim()) { setError(null); onChange(undefined); return }
+    try {
+      onChange(JSON.parse(raw))
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'JSON inválido')
+    }
+  }
+
+  return (
+    <div>
+      <textarea
+        value={text}
+        disabled={readOnly}
+        onChange={e => handle(e.target.value)}
+        rows={6}
+        spellCheck={false}
+        placeholder={'{\n  "channels": { "webchat": "survey_web_ia" },\n  "preferred_order": ["webchat"]\n}'}
+        style={{ ..._inputStyle(readOnly), fontFamily: 'ui-monospace, monospace', fontSize: 12, resize: 'vertical' }}
+      />
+      {error && <div className="text-[11px] text-red-text mt-0.5">⚠ {error}</div>}
+    </div>
+  )
+}
+
 function ConfigParamsForm({
   params, sourceOptions, values, onChange, readOnly, newFields,
 }: {
@@ -295,6 +377,14 @@ function ConfigParamsForm({
                 max={param.max}
                 onChange={e => onChange(key, parseFloat(e.target.value))}
                 style={_inputStyle(readOnly)}
+              />
+            ) : param.type === 'object' ? (
+              /* Config de deploy ESTRUTURADA (ex.: o mapa canal→pool do channel_policy).
+                 Nem toda regra de negócio cabe num escalar. */
+              <JsonParamInput
+                value={value}
+                readOnly={readOnly}
+                onChange={v => onChange(key, v)}
               />
             ) : (
               <input
@@ -437,16 +527,19 @@ function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
   const color      = SLOT_COLOR[slotName] ?? '#94a3b8'
   const isEditable = slotName === 'next'
 
-  // "Salvo mas não implantado": a DEFINIÇÃO do skill foi editada DEPOIS do snapshot
-  // que está em produção. Sem esse aviso o operador promove às cegas — foi exatamente
-  // assim que congelamos uma versão velha 3 vezes seguidas no E2E do J4c, sem que nada
-  // na tela indicasse que o que rodava não era o que estava salvo.
+  // "Salvo mas não implantado": a DEFINIÇÃO viva difere do snapshot em produção.
+  //
+  // Compara CONTEÚDO, não timestamp. A primeira versão usava `updated_at > set_at`, e
+  // isso deu falso positivo em TODOS os pools: o `updated_at` é bumpado por QUALQUER
+  // escrita na linha — e o RegistrySyncer fazia upsert de todos os skills a cada boot
+  // (antes do D2), então todo skill tinha `updated_at` recente sem ter mudado nada.
+  // "A linha foi escrita" ≠ "a definição mudou". Comparar o conteúdo é imune a isso.
   const stale =
     slotName === 'current' &&
     data.set &&
-    !!skill?.updated_at &&
-    !!data.set_at &&
-    new Date(skill.updated_at).getTime() > new Date(data.set_at).getTime()
+    skill?.flow != null &&
+    data.yaml_snapshot != null &&
+    _canon(skill.flow) !== _canon(data.yaml_snapshot)
 
   return (
     <div

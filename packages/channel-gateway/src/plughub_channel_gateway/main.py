@@ -884,8 +884,6 @@ async def webhook_collect(request: Request) -> dict:
             target               = body.get("target") or {},
             interaction          = body.get("interaction") or "text",
             prompt               = body.get("prompt") or "",
-            agent_registry_url   = settings.agent_registry_url,
-            endpoint_cache_ttl_s = settings.endpoint_cache_ttl_s,
             channel              = body.get("channel"),
             requires             = body.get("requires"),
             channel_policy       = body.get("channel_policy"),

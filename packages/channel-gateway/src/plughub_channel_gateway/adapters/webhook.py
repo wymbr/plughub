@@ -55,7 +55,6 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
 from ..config import Settings
-from ..endpoint_resolver import resolve_pool   # Journey J4c — survey pool resolution
 from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
@@ -695,35 +694,57 @@ class WebhookAdapter(ChannelAdapter):
         tenant_id:      str,
         customer_id:    str,
         channel_policy: dict[str, Any] | None,
-    ) -> str:
+    ) -> tuple[str, str]:
         """
-        Journey J4c — N2 channel resolver. **PROCESS-AGNOSTIC**: this must NEVER
-        branch on skill_id / campaign_id or any process identity (enforced by the
-        invariant guard). Inputs, all cross-cutting:
-          - reachability (Identity Resolver — slot)
-          - consent (slot — empty v1)
-          - tenant policy (slot — empty v1)
-          - the DECLARATIVE `channel_policy` from N3 (allowed/preferred/exclude)
-        N3 declares intent; N2 decides the channel.
+        Journey J4c — resolvedor N2. Devolve **(canal, pool)**.
+
+        **CEGO AO PROCESSO**: nunca ramifica por `skill_id`/`campaign_id` nem por
+        qualquer identidade de processo — repare que a assinatura sequer os recebe,
+        então o invariante é estrutural, não uma convenção.
+
+        Inputs, todos cross-cutting:
+          - alcançabilidade (Resolvedor de Identidade — slot)
+          - consentimento (slot — vazio v1)
+          - política do tenant (slot — vazio v1)
+          - o `channel_policy` DECLARATIVO, que é **config de negócio injetada no
+            deploy** (`config_json` do slot → `$.config.*`), não conteúdo do skill.
+
+        O mapa `channels` (canal → pool) é a peça central: suas CHAVES são os canais
+        permitidos e seus VALORES, o pool que atende cada um. Antes o pool vinha de
+        `ChannelEndpoint(channel, identifier="default")` — uma constante mágica no
+        core, que ainda por cima só permitia UM pool de collect por canal. Quem atende
+        varia por negócio: é config, não é problema do core.
         """
         policy    = channel_policy or {}
-        allowed   = policy.get("allowed_channels") or []
+        channels  = policy.get("channels") or {}
         exclude   = set(policy.get("exclude") or [])
         preferred = policy.get("preferred_order") or []
 
-        reachable = await self._reachable_channels(tenant_id, customer_id)
-        # Candidate set: the process whitelist if declared, else reachable ∪ webchat.
-        # `webchat` is the universal self-service fallback — it needs no address (the
-        # tokenized survey link IS the entry point) and it is the transport the survey
-        # page actually speaks, so the pool's channel_types and the ChannelEndpoint
-        # used to resolve the survey pool line up. Minus the process exclude list.
-        base       = allowed if allowed else (reachable + ["webchat"])
-        candidates = [c for c in base if c not in exclude]
+        if not channels:
+            raise ValueError(
+                "collect sem `channel_policy.channels` (mapa canal→pool). Esse mapa é "
+                "config de negócio e deve ser injetado no deploy do skill "
+                "(config_json do slot → $.config.channel_policy)."
+            )
 
-        for c in preferred:               # honour N3's preference order first
-            if c in candidates:
-                return c
-        return candidates[0] if candidates else "webchat"
+        reachable = await self._reachable_channels(tenant_id, customer_id)
+
+        # Candidatos = canais do mapa − exclude. Se soubermos a alcançabilidade do
+        # cliente, ela filtra; `webchat` é o fallback universal (não exige endereço —
+        # o próprio link tokenizado é o ponto de entrada).
+        allowed = [c for c in channels.keys() if c not in exclude]
+        if reachable:
+            narrowed = [c for c in allowed if c in reachable or c == "webchat"]
+            if narrowed:
+                allowed = narrowed
+        if not allowed:
+            raise ValueError(
+                f"nenhum canal elegível: mapa={list(channels)} exclude={sorted(exclude)} "
+                f"alcançáveis={reachable}"
+            )
+
+        chosen = next((c for c in preferred if c in allowed), allowed[0])
+        return chosen, channels[chosen]
 
     async def handle_collect(
         self,
@@ -736,8 +757,6 @@ class WebhookAdapter(ChannelAdapter):
         target:             dict[str, Any],
         interaction:        str,
         prompt:             str,
-        agent_registry_url: str = "",
-        endpoint_cache_ttl_s: int = 30,
         channel:            str | None = None,
         requires:           list[str] | None = None,
         channel_policy:     dict[str, Any] | None = None,
@@ -775,27 +794,19 @@ class WebhookAdapter(ChannelAdapter):
         # Journey J1: the (future) child inherits the caller's TRANSITIVE root.
         caller_root = await self._read_ctx_root(tenant_id, session_id) or session_id
 
-        # ── N2: negotiate the channel (explicit `channel` only for fixed transport) ──
-        negotiated = channel or await self._negotiate_channel(
-            tenant_id, customer_id, channel_policy,
-        )
-
-        # ── Resolve the survey pool for the negotiated channel (ChannelEndpoint) ──
-        # Segmentation/capacity live on the POOL. A tenant configures
-        # ChannelEndpoint(channel=<negotiated>, identifier="default") → survey pool.
-        pool_id = ""
-        if agent_registry_url:
-            pool_id = await resolve_pool(
-                channel            = negotiated,
-                identifier         = "default",
-                tenant_id          = tenant_id,
-                agent_registry_url = agent_registry_url,
-                cache_ttl_s        = endpoint_cache_ttl_s,
-            ) or ""
-        if not pool_id:
-            raise ValueError(
-                f"no survey pool configured for channel '{negotiated}' "
-                f"(expected ChannelEndpoint channel='{negotiated}' identifier='default')"
+        # ── N2: negocia canal E pool a partir do mapa de negócio (config de deploy) ──
+        # O `channel` fixo só existe para transporte realmente fixo (collect interno a
+        # um sistema); para outbound-ao-cliente ele seria N3 escolhendo o canal.
+        if channel:
+            pool_from_map = ((channel_policy or {}).get("channels") or {}).get(channel)
+            if not pool_from_map:
+                raise ValueError(
+                    f"`channel` fixo '{channel}' não está no mapa channel_policy.channels"
+                )
+            negotiated, pool_id = channel, pool_from_map
+        else:
+            negotiated, pool_id = await self._negotiate_channel(
+                tenant_id, customer_id, channel_policy,
             )
 
         # ── LAZY: store the collect pending — NO session until the customer clicks ──

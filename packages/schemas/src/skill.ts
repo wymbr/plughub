@@ -65,7 +65,14 @@ export const SkillInterfaceSchema = z.object({
  */
 export const SkillConfigParamSchema = z.object({
   key:         z.string().regex(/^[a-z][a-z0-9_]*$/),   // identificador inglês
-  type:        z.enum(["string", "number", "boolean"]).default("string"),
+  /**
+   * `object` (2026-07-13): config de deploy ESTRUTURADA. Até aqui toda config de
+   * deploy era escalar (`form_id`, `max_attempts`), mas há regras de negócio que não
+   * cabem num escalar — o primeiro caso é o mapa `canal → pool` do `channel_policy`
+   * do collect (J4c): quais canais a pesquisa pode usar e qual pool atende cada um.
+   * A UI de deploy renderiza `object` como um editor de JSON.
+   */
+  type:        z.enum(["string", "number", "boolean", "object"]).default("string"),
   label:       z.string().optional(),                    // texto de exibição (dado do skill)
   description: z.string().optional(),
   required:    z.boolean().default(false),
@@ -547,13 +554,27 @@ export type ChannelCapability = z.infer<typeof ChannelCapabilitySchema>
  * docs/product/journey-j4c-survey-collect-spec.md.
  */
 export const CollectChannelPolicySchema = z.object({
-  /** Whitelist of channels the process allows (e.g. ["sms","email","web"]). */
-  allowed_channels: z.array(z.string()).optional(),
-  /** Preference order among the reachable ∩ allowed set. */
+  /**
+   * Canal → pool que atende aquele canal. **É a config de negócio do tenant**, e as
+   * CHAVES são os canais permitidos (não há `allowed_channels` separado — seria uma
+   * segunda declaração da mesma coisa). Ex.:
+   *   { webchat: "survey_web_ia", sms: "survey_sms_ia" }
+   *
+   * O resolvedor N2 negocia ENTRE as chaves (∩ alcançabilidade ∩ consentimento −
+   * exclude, honrando preferred_order) e lê o pool no valor. Ele recebe o mapa como
+   * DADO — continua sem saber que processo o está chamando.
+   *
+   * Isto substitui a resolução por `ChannelEndpoint(channel, identifier="default")`,
+   * que era uma constante mágica no core e só permitia UM pool de collect por canal.
+   * Quem atende varia por negócio, então é config — injetada no deploy
+   * (`PoolSkillSlot.config_json` → `$.config.*`), nunca adivinhada pelo core.
+   */
+  channels:         z.record(z.string()).optional(),
+  /** Ordem de preferência entre os canais alcançáveis ∩ permitidos. */
   preferred_order:  z.array(z.string()).optional(),
-  /** Channels the process forbids. */
+  /** Canais que o processo proíbe. */
   exclude:          z.array(z.string()).optional(),
-  /** Process-declared urgency (an input to the resolver, not a channel). */
+  /** Urgência declarada pelo processo (input do resolvedor, não um canal). */
   urgency:          z.enum(["low", "normal", "high"]).default("normal"),
 })
 export type CollectChannelPolicy = z.infer<typeof CollectChannelPolicySchema>
@@ -612,11 +633,15 @@ export const CollectStepSchema = z.object({
   requires: z.array(ChannelCapabilitySchema).optional(),
 
   /**
-   * Journey J4c — Declarative channel policy (N2 input). Preferred over the fixed
-   * `channel` field for outbound-to-customer collects: N3 declares intent, the
-   * channel-gateway resolver picks the channel. Keeps N3 channel-agnostic.
+   * Journey J4c — política de canal (input do N2). Preferida ao campo fixo `channel`
+   * em collects outbound-ao-cliente: N3 declara intenção, o resolvedor escolhe o canal.
+   *
+   * União `objeto | ref`: normalmente vem por **referência** (`"$.config.channel_policy"`),
+   * porque canal e pool são **config de negócio do tenant**, injetada no deploy
+   * (`PoolSkillSlot.config_json`) — não pertencem ao skill. Assim o skill continua
+   * genérico e channel-agnostic: ele nem tem onde escrever "webchat".
    */
-  channel_policy: CollectChannelPolicySchema.optional(),
+  channel_policy: z.union([CollectChannelPolicySchema, z.string()]).optional(),
 
   // ── What to collect ──
   interaction: z.enum(["text", "button", "form"]).default("text"),
