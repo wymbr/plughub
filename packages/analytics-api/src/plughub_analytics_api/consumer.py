@@ -77,48 +77,81 @@ from .deployments_client import fetch_skill_version
 
 logger = logging.getLogger("plughub.analytics.consumer")
 
-# ── Channel cache ─────────────────────────────────────────────────────────────
-# conversations.inbound carries channel ('webhook', 'webchat', etc.).
-# conversations.routed does NOT carry channel (routing engine only knows pool/agent)
-# so parse_routed writes channel='' which REPLACES the inbound row in
-# ReplacingMergeTree, losing the channel.  The recovery subquery in
-# reports_query.py compensates, but only before ClickHouse merges rows.
+# ── Session identity cache ────────────────────────────────────────────────────
+# `sessions` é ReplacingMergeTree de LINHA INTEIRA: a versão mais nova SUBSTITUI a
+# anterior — não há merge por coluna. Mas os eventos que escrevem `sessions` são
+# PARCIAIS por natureza: cada produtor só conhece a sua fatia.
+#   • conversations.inbound  → channel, customer_id, opened_at (sem pool: ainda não roteou)
+#   • conversations.routed   → pool_id  (routing só conhece pool/agente → channel='')
+#   • conversations.queued   → pool_id  (idem)
+#   • session_suspended      → status   (bridge)
+#   • contact_closed         → linha completa (relê o meta) ← por isso o bug era invisível
+# Cada escrita parcial **apaga** o que a anterior sabia. O `contact_closed` cura tudo
+# no fim, então nada aparecia nos relatórios… até existir uma sessão que **não fecha**
+# (workflow `suspended` esperando um `collect` por 48h): aí a última linha é a parcial,
+# e ela fica sem canal, sem cliente e sem pool durante toda a espera.
 #
-# Solution: cache session_id→channel when parse_inbound fires; inject it back
-# into the parse_routed sessions row before writing to ClickHouse.
-# Key: (tenant_id, session_id) → channel string.  FIFO eviction at _CHANNEL_CACHE_MAX.
-_channel_cache: dict[tuple[str, str], str] = {}
-_CHANNEL_CACHE_MAX = 50_000
+# Solução (um ponto central, cobre todos os escritores): aprender a identidade da sessão
+# de qualquer linha que a traga e reinjetá-la nas linhas que não a trazem, ANTES da
+# escrita. Só preenche o que está vazio — nunca sobrescreve um valor que o produtor sabe.
+# Exceção: `opened_at` mantém sempre o MAIS ANTIGO conhecido (a abertura não se move; o
+# `routed`/`suspended` carimbavam o instante do próprio evento e adiantavam o nascimento
+# da sessão, encurtando TMA/duração).
+#
+# Key: (tenant_id, session_id) → dict dos campos. FIFO eviction em _SESSION_CACHE_MAX.
+_session_identity_cache: dict[tuple[str, str], dict] = {}
+_SESSION_CACHE_MAX = 50_000
+
+# Campos de IDENTIDADE — fatos que não mudam durante a vida da sessão. `status`,
+# `outcome`, `closed_at` etc. ficam de fora de propósito: são ESTADO, e estado a
+# linha nova tem o direito de sobrescrever.
+_IDENTITY_FIELDS = ("channel", "customer_id", "pool_id", "origin_session_id")
 
 
-def _cache_inbound_channel(payload: dict) -> None:
-    """Store channel + origin_session_id for a session when conversations.inbound fires."""
-    session_id        = payload.get("session_id")
-    tenant_id         = payload.get("tenant_id")
-    channel           = payload.get("channel", "")
-    origin_session_id = payload.get("origin_session_id") or None
-    if session_id and tenant_id and (channel or origin_session_id):
-        key = (tenant_id, session_id)
-        if len(_channel_cache) >= _CHANNEL_CACHE_MAX:
-            _channel_cache.pop(next(iter(_channel_cache)))
-        _channel_cache[key] = (channel, origin_session_id)
-
-
-def _inject_cached_channel(rows: list[dict]) -> None:
-    """For parse_routed rows: restore channel + origin_session_id from cache."""
+def _learn_session_identity(rows: list[dict]) -> None:
+    """Memoriza a identidade de uma sessão a partir de qualquer linha que a traga."""
     for row in rows:
-        if row.get("table") == "sessions":
-            key    = (row.get("tenant_id", ""), row.get("session_id", ""))
-            cached = _channel_cache.get(key)
-            if not cached:
-                continue
-            cached_channel, cached_origin = cached
-            # Restore channel if parse_routed wrote ''
-            if not row.get("channel", "") and cached_channel:
-                row["channel"] = cached_channel
-            # Restore origin_session_id if missing
-            if not row.get("origin_session_id") and cached_origin:
-                row["origin_session_id"] = cached_origin
+        if row.get("table") != "sessions":
+            continue
+        tenant_id  = row.get("tenant_id") or ""
+        session_id = row.get("session_id") or ""
+        if not tenant_id or not session_id:
+            continue
+        key = (tenant_id, session_id)
+        entry = _session_identity_cache.get(key)
+        if entry is None:
+            if len(_session_identity_cache) >= _SESSION_CACHE_MAX:
+                _session_identity_cache.pop(next(iter(_session_identity_cache)))
+            entry = {}
+            _session_identity_cache[key] = entry
+        for field in _IDENTITY_FIELDS:
+            value = row.get(field)
+            if value:                     # "" e None não ensinam nada
+                entry[field] = value
+        opened_at = row.get("opened_at")
+        if opened_at and (not entry.get("opened_at") or str(opened_at) < str(entry["opened_at"])):
+            entry["opened_at"] = opened_at
+
+
+def _inject_session_identity(rows: list[dict]) -> None:
+    """Reidrata as linhas de `sessions` que chegaram sem identidade."""
+    for row in rows:
+        if row.get("table") != "sessions":
+            continue
+        entry = _session_identity_cache.get(
+            (row.get("tenant_id") or "", row.get("session_id") or "")
+        )
+        if not entry:
+            continue
+        for field in _IDENTITY_FIELDS:
+            if not row.get(field) and entry.get(field):
+                row[field] = entry[field]
+        # A abertura é imutável: vence sempre a mais antiga conhecida.
+        cached_open = entry.get("opened_at")
+        if cached_open and (
+            not row.get("opened_at") or str(cached_open) < str(row["opened_at"])
+        ):
+            row["opened_at"] = cached_open
 
 
 async def _enrich_session_root(row: dict, redis: object) -> None:
@@ -163,7 +196,7 @@ async def _enrich_session_root(row: dict, redis: object) -> None:
 # analytics.sessions.opened_at keyed by origin_session_id and overwrite session_at;
 # date (partition) and TTL follow automatically in the row builder.
 # Fallback (origin not in sessions yet / lookup error): keep captured_at — the row
-# is never dropped.  Cache mirrors _channel_cache (bounded FIFO).
+# is never dropped.  Cache mirrors _session_identity_cache (bounded FIFO).
 _session_opened_cache: dict[tuple[str, str], str] = {}
 _SESSION_OPENED_CACHE_MAX = 50_000
 
@@ -464,20 +497,22 @@ async def _process_message(
     # Normalise to a list so routed/queued can return multiple rows
     rows = result if isinstance(result, list) else [result]
 
-    # ── Channel preservation across parse_routed ──────────────────────────
-    # parse_inbound carries channel ('webhook', 'webchat', …); populate cache.
-    # parse_routed writes channel='' (routing event has no channel field);
-    # restore from cache so ReplacingMergeTree keeps the original channel.
-    if topic == "conversations.inbound":
-        _cache_inbound_channel(raw)
-    elif topic == "conversations.routed":
-        _inject_cached_channel(rows)
+    # ── Identidade da sessão preservada entre escritas parciais ───────────────
+    # `sessions` é ReplacingMergeTree (linha inteira). Todo escritor é parcial:
+    # inbound sabe canal/cliente, routed/queued sabem o pool, suspended sabe só o
+    # status — e cada um apaga o que o anterior sabia. Aprender de quem traz e
+    # reinjetar em quem não traz, para TODOS os tópicos (não só `routed`, que era o
+    # único coberto: por isso a sessão `suspended`, que nunca recebe a linha completa
+    # do `contact_closed`, ficava sem canal/cliente/pool durante toda a espera).
+    # Ordem importa: aprender ANTES de injetar cobre a linha que traz o dado novo.
+    _learn_session_identity(rows)
+    _inject_session_identity(rows)
 
     # ── F11: bucketize survey signals by the ORIGINAL session's date ──────────
     # Resolves session_at from analytics.sessions.opened_at (origin_session_id);
     # corrects deferred surveys where captured_at ≠ session_at. No-op fallback to
     # captured_at when the origin session is not resolvable.
-    elif topic == "session.signals":
+    if topic == "session.signals":
         await _enrich_signal_session_at(rows, store)
 
     # ── R9: deploy_version do segmento (fallback) ─────────────────────────────

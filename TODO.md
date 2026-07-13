@@ -96,6 +96,36 @@ mitigar esse mesmo problema.
 
 ---
 
+### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — corrigido, a validar
+
+**Sintoma:** a sessão do workflow (`37324d63`, `status: suspended`) ficou com `pool_id` **vazio** no ClickHouse,
+embora o roteamento tivesse registrado `pool=survey_journey_wf`.
+
+**Causa (classe de bug, não caso isolado).** `sessions` é `ReplacingMergeTree` de **linha inteira** — a versão
+mais nova SUBSTITUI a anterior, sem merge por coluna. Mas **todo** escritor é parcial: `inbound` sabe
+canal/cliente (ainda não roteou → sem pool); `routed`/`queued` sabem o pool (routing não conhece canal →
+escrevem `channel=''`); `session_suspended` sabia só o `status`. Cada escrita **apaga** o que a anterior sabia.
+Ninguém percebeu porque o `contact_closed` monta a linha **completa** (relê o `session:{id}:meta`) e **cura
+tudo no fim** — então o dano só existia entre o roteamento e o fechamento. Bastou existir uma sessão que
+**não fecha** (workflow `suspended` esperando um `collect` por até 48h) para o defeito ficar permanente e
+visível. `opened_at` sofria o mesmo: `routed`/`suspended` carimbavam o instante do próprio evento,
+**adiantando o nascimento** da sessão e encurtando TMA/duração.
+
+**Fix (dois níveis):**
+- **bridge** — o evento `session_suspended` passou a repetir a identidade (`pool_id`, `channel`, `customer_id`,
+  `opened_at` do meta), como o `contact_closed` já fazia.
+- **analytics-api (estrutural)** — o `_channel_cache` (que já existia, mas só para `channel`+`origin` e só no
+  tópico `routed`) virou **`_session_identity_cache`**: aprende a identidade de qualquer linha que a traga e
+  reinjeta nas que não trazem, em **todos** os tópicos. Só preenche vazio (nunca sobrescreve o que o produtor
+  sabe); `opened_at` mantém sempre o mais antigo conhecido. Campos de **estado** (`status`, `outcome`,
+  `closed_at`) ficam de fora de propósito — a linha nova tem o direito de sobrescrevê-los.
+
+**Terceiro primo do mesmo dia:** o bug de `row_version` (linha de close fisicamente apagada no merge) e o de
+hooks `side=agent` (linha de close nunca emitida). Os três produzem métricas erradas em `sessions`; os três
+vinham de tratar um `ReplacingMergeTree` como se fizesse merge por coluna.
+
+---
+
 ### Bug: sessão com hook `side=agent` NUNCA fecha a camada 1 (achado 2026-07-13) — corrigido, a validar
 
 **Sintoma:** a sessão do processo (N3, pool webhook) fica `closed_at NULL` / `status NULL` para sempre no

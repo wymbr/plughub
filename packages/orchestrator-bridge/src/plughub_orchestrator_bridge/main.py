@@ -3645,14 +3645,35 @@ async def process_routed(
                 if _kafka_producer is not None and tenant_id:
                     try:
                         _susp_now = datetime.now(timezone.utc).isoformat()
+                        # `sessions` é ReplacingMergeTree de LINHA INTEIRA: a última versão
+                        # SUBSTITUI a anterior, não faz merge de colunas. Um evento parcial
+                        # (só status) chega com row_version mais novo que o do `routed` e
+                        # **apaga** pool_id/channel/customer_id/opened_at da linha. Por isso
+                        # todo escritor de `sessions` precisa mandar a linha COMPLETA — o
+                        # `contact_closed` já faz isso (relê o meta); o suspend não fazia.
+                        _susp_meta: dict = {}
+                        try:
+                            _raw_sm = await redis_client.get(f"session:{session_id}:meta")
+                            if _raw_sm:
+                                _susp_meta = json.loads(
+                                    _raw_sm if isinstance(_raw_sm, str) else _raw_sm.decode()
+                                )
+                        except Exception:
+                            pass
                         await _kafka_producer.send_and_wait(
                             TOPIC_EVENTS,
                             json.dumps({
-                                "event_type": "session_suspended",
-                                "session_id": session_id,
-                                "tenant_id":  tenant_id,
-                                "step_id":    _susp_step_id,
-                                "timestamp":  _susp_now,
+                                "event_type":  "session_suspended",
+                                "session_id":  session_id,
+                                "tenant_id":   tenant_id,
+                                "step_id":     _susp_step_id,
+                                "timestamp":   _susp_now,
+                                # Identidade da sessão — preserva o que o `routed` gravou.
+                                "pool_id":     _susp_meta.get("pool_id") or pool_id or "",
+                                "channel":     _susp_meta.get("channel") or "",
+                                "customer_id": _susp_meta.get("contact_id") or customer_id or "",
+                                # `opened_at` é a ABERTURA, não o instante do suspend.
+                                "opened_at":   _susp_meta.get("started_at") or "",
                             }).encode("utf-8"),
                         )
                     except Exception as _ke:

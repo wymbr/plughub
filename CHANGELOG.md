@@ -24,6 +24,14 @@ O caminho humano (`agent_done` → `on_human_end`) já tinha a guarda `if not _h
 
 Primo do bug de `row_version` corrigido no mesmo dia — mesmo sintoma (sessão eternamente `active`), causas opostas: lá a linha de close era **fisicamente apagada** no merge; aqui ela **nunca foi emitida**. Corrigir o primeiro tornou o segundo visível.
 
+### Bug: escrita parcial em `sessions` apagava a identidade da sessão
+
+`sessions` é `ReplacingMergeTree` de **linha inteira** — a versão nova substitui a anterior, sem merge por coluna. Mas todo escritor é parcial: `inbound` sabe canal/cliente (ainda não roteou → sem pool), `routed`/`queued` sabem o pool (routing não conhece canal → escrevem `channel=''`), `session_suspended` sabia só o `status`. Cada escrita apagava o que a anterior sabia. Ficou invisível por anos porque o `contact_closed` monta a linha **completa** (relê o `session:{id}:meta`) e cura tudo no fim — o dano só existia entre roteamento e fechamento. Bastou existir uma sessão que **não fecha** (workflow `suspended` esperando um `collect` por até 48h) para o defeito virar permanente: ela ficava sem `pool_id`, sem `channel` e sem `customer_id` durante toda a espera. `opened_at` sofria o mesmo — `routed`/`suspended` carimbavam o instante do próprio evento, adiantando o nascimento da sessão e encurtando TMA/duração.
+
+Corrigido em dois níveis: o **bridge** passou a repetir a identidade no evento `session_suspended` (como o `contact_closed` já fazia); e, estruturalmente, o `_channel_cache` da **analytics-api** (que já existia, mas só para `channel`+`origin` e só no tópico `routed` — o remendo pontual de um problema geral) virou **`_session_identity_cache`**: aprende a identidade de qualquer linha que a traga e reinjeta nas que não trazem, em todos os tópicos. Preenche só o que está vazio; `opened_at` mantém sempre o mais antigo conhecido; campos de **estado** (`status`, `outcome`, `closed_at`) ficam de fora de propósito — a linha nova tem o direito de sobrescrevê-los.
+
+**O padrão dos três bugs de `sessions` deste dia** (`row_version`, hook `side=agent`, escrita parcial): todos vinham de tratar um `ReplacingMergeTree` como se fizesse merge por coluna. Ele substitui a linha inteira. Quem escreve em `sessions` ou manda a linha completa, ou é reidratado antes da escrita — a cache de identidade agora garante o segundo caso num ponto central, em vez de exigir disciplina de cada produtor.
+
 ---
 
 ## Journey J4a — avaliação N3: métricas de processo + sinal de qualidade no /reports/journeys (2026-07-10)

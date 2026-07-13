@@ -352,14 +352,27 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
     # The orchestrator-bridge publishes this to conversations.events after writing
     # the event to the canonical Redis stream, so analytics can track it in ClickHouse.
     if event_type == "session_suspended":
+        # `sessions` é ReplacingMergeTree de LINHA INTEIRA — a versão mais nova SUBSTITUI
+        # a anterior, não faz merge por coluna. Uma linha parcial (só `status`) tem
+        # row_version mais novo que o do `routed` e **apaga** pool_id/channel/customer_id.
+        # Por isso o bridge repete a identidade da sessão neste evento e nós a mapeamos
+        # (mesma razão pela qual o root já era repetido aqui — o problema era mais amplo
+        # do que o root).
+        #
+        # `opened_at` é a ABERTURA da sessão, não o instante do suspend: carimbar o
+        # timestamp do suspend aqui reescrevia a abertura e corrompia TMA/duração.
+        # Fallback para o timestamp só existe para eventos legados sem `opened_at`.
         return [
             {
                 "table":      "sessions",
                 "session_id": session_id,
                 "tenant_id":  tenant_id,
-                "opened_at":  payload.get("timestamp") or _now(),
+                "opened_at":  payload.get("opened_at") or payload.get("timestamp") or _now(),
                 "timestamp":  payload.get("timestamp") or _now(),
                 "status":     "suspended",
+                "pool_id":     payload.get("pool_id") or None,
+                "channel":     payload.get("channel") or None,
+                "customer_id": payload.get("customer_id") or None,
                 # Journey J1: repetir root p/ não reverter no ReplacingMergeTree.
                 "root_session_id": payload.get("root_session_id") or session_id,
                 "journey_id":      payload.get("root_session_id") or session_id,
