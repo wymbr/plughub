@@ -31,16 +31,27 @@ steps:
         next:     criar_survey_journey
     default: encerrar
 
-  # Cria o survey OUTBOUND grain=journey, chaveado na raiz canônica da journey.
+  # J4c — dispara o WORKFLOW de survey (que é quem faz o `collect`).
+  #
+  # Por que não `collect` aqui: este skill roda como HOOK AGENT (especialista na
+  # sessão do processo, perfil agent). Hook agent NÃO pode suspender — o `collect`
+  # suspende, e o bridge trata `suspended` como hook concluído → fecharia o contato
+  # N3 antes de o cliente responder, e o resume falharia depois (mesma limitação
+  # já conhecida dos hooks de on_contact_end com delegate). Além disso, perfil agent
+  # proíbe `collect`.
+  #
+  # Então o hook só DISPARA um workflow de survey (sessão webhook própria, perfil
+  # workflow) que pode suspender de verdade. `origin_session_id` propaga a RAIZ →
+  # o workflow de survey (e o contato de survey que ele cria) são membros da MESMA
+  # journey. Fire-and-forget: o hook completa na hora e o contato N3 fecha normal.
   - id: criar_survey_journey
     type: invoke
-    tool: survey_link_create
+    tool: workflow_trigger
     input:
+      skill_id:          "skill_survey_journey_v1"
       tenant_id:         "$.tenant_id"
-      form_id:           "dialog_nps_buttons"
-      origin_session_id: "@ctx.session.root_session_id"   # raiz canônica = chave da journey
-      customer_key:      "@ctx.caller.customer_id"
-      grain:             "journey"
+      origin_session_id: "$.session_id"     # herda a raiz canônica da journey
+      trigger_type:      "task"
     on_success: encerrar
     on_failure: encerrar
 

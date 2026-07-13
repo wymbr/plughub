@@ -28,6 +28,7 @@
 import { randomUUID }     from "crypto"
 import type { CollectStep } from "@plughub/schemas"
 import type { StepContext, StepResult } from "../executor"
+import { resolveInputMap } from "../interpolate"
 
 export async function executeCollect(
   step: CollectStep,
@@ -129,10 +130,18 @@ export async function executeCollect(
     sendAt    = ctx.state.results[sendAtKey]    as string
     expiresAt = ctx.state.results[expiresKey]   as string
   } else if (ctx.persistCollect) {
+    // Resolve $.* / @ctx.* references in the target (e.g. id: "@ctx.caller.customer_id").
+    // Without this the raw reference string would be forwarded verbatim.
+    const resolvedTarget = (await resolveInputMap(
+      step.target as unknown as Record<string, unknown>,
+      ctx,
+      ctx.contextStore,
+    )) as unknown as { type: string; id: string }
+
     const result = await ctx.persistCollect({
       step_id:        step.id,
       collect_token:  collectToken,
-      target:         step.target,
+      target:         resolvedTarget,
       ...(step.channel    ? { channel:     step.channel }    : {}),
       ...(step.requires       ? { requires:       step.requires }       : {}),
       // Journey J4c — declarative channel policy (N2 input); N3 stays channel-agnostic.

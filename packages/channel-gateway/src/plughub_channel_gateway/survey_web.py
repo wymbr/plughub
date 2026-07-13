@@ -183,7 +183,168 @@ class SurveyLinkDelivery:
         return await self._mock.send(kind, address, url, tenant_id)
 
 
+# ── Journey J4c — collect-based survey page (minimal webchat client) ──────────
+# The customer opened the invitation link → the session was just created (routed
+# inbound to the survey pool). This page connects as a NORMAL webchat client
+# (pre-bound by a JWT carrying session_id) and lets the survey pool's dialog_runner
+# render the DialogForm live via `interaction.request` / `menu.submit`.
+#
+# Why a webchat client and not a standalone <form>: the survey is now a first-class
+# routed contact (journey member N1, quota + max_concurrent_sessions + metering all
+# enforced on admission). Reusing the webchat transport means ZERO new adapter — the
+# single generic runner interprets the config-driven DialogForm, as everywhere else.
+SURVEY_COLLECT_PAGE_HTML = """<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pesquisa</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f1f5f9;
+         margin:0; padding:24px; color:#0f172a; }
+  .card { max-width:560px; margin:24px auto; background:#fff; border-radius:16px;
+          box-shadow:0 4px 20px rgba(0,0,0,.08); padding:24px; }
+  h1 { font-size:18px; margin:0 0 16px; color:#1B4F8A; }
+  .muted { color:#64748b; font-size:13px; }
+  .prompt { font-weight:600; margin:16px 0 12px; line-height:1.5; }
+  .opts { display:flex; flex-wrap:wrap; gap:8px; }
+  .opt { padding:10px 14px; border:1px solid #cbd5e1; border-radius:10px; background:#fff;
+         cursor:pointer; font-size:14px; }
+  .opt:hover { border-color:#1B4F8A; color:#1B4F8A; }
+  .fld { margin:12px 0; }
+  .fld label { display:block; font-size:13px; color:#334155; margin-bottom:4px; }
+  .fld input { width:100%; padding:10px; border:1px solid #cbd5e1; border-radius:8px; font-size:14px; }
+  button.send { margin-top:16px; width:100%; padding:12px; border:0; border-radius:10px;
+                background:#1B4F8A; color:#fff; font-size:15px; font-weight:600; cursor:pointer; }
+  .done { text-align:center; padding:24px 0; font-size:16px; color:#059669; font-weight:600; }
+  .err  { color:#DC2626; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Pesquisa</h1>
+  <div id="status" class="muted">Conectando…</div>
+  <div id="body"></div>
+  <div id="done" class="done" style="display:none">Obrigado pela sua resposta! 🙏</div>
+</div>
+<script>
+  var BOOT = __SURVEY_BOOTSTRAP__;
+  var statusEl = document.getElementById('status');
+  var bodyEl   = document.getElementById('body');
+  var doneEl   = document.getElementById('done');
+  var answered = false;
+
+  var proto = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+  var ws = new WebSocket(proto + location.host + '/ws/chat/' + encodeURIComponent(BOOT.pool_id));
+
+  function finish() {
+    answered = true;
+    bodyEl.innerHTML = '';
+    statusEl.style.display = 'none';
+    doneEl.style.display = 'block';
+  }
+
+  function submit(menu, result) {
+    ws.send(JSON.stringify({
+      type: 'menu.submit', menu_id: menu.menu_id,
+      interaction: menu.interaction, result: result
+    }));
+    finish();
+  }
+
+  function render(menu) {
+    statusEl.style.display = 'none';
+    bodyEl.innerHTML = '';
+    var p = document.createElement('div');
+    p.className = 'prompt';
+    p.textContent = menu.prompt || '';
+    bodyEl.appendChild(p);
+
+    // button / list / checklist → option chips
+    if (menu.options && menu.options.length) {
+      var wrap = document.createElement('div');
+      wrap.className = 'opts';
+      menu.options.forEach(function (o) {
+        var b = document.createElement('button');
+        b.className = 'opt';
+        b.textContent = o.label || o.id;
+        b.onclick = function () { submit(menu, o.id); };
+        wrap.appendChild(b);
+      });
+      bodyEl.appendChild(wrap);
+      return;
+    }
+
+    // form → fields
+    if (menu.fields && menu.fields.length) {
+      var inputs = {};
+      menu.fields.forEach(function (f) {
+        var d = document.createElement('div'); d.className = 'fld';
+        var l = document.createElement('label'); l.textContent = f.label || f.id;
+        var i = document.createElement('input');
+        i.type = (menu.masked_fields || []).indexOf(f.id) >= 0 ? 'password' : 'text';
+        d.appendChild(l); d.appendChild(i); bodyEl.appendChild(d);
+        inputs[f.id] = i;
+      });
+      var btn = document.createElement('button');
+      btn.className = 'send'; btn.textContent = 'Enviar';
+      btn.onclick = function () {
+        var res = {};
+        Object.keys(inputs).forEach(function (k) { res[k] = inputs[k].value; });
+        submit(menu, res);
+      };
+      bodyEl.appendChild(btn);
+      return;
+    }
+
+    // free text
+    var d2 = document.createElement('div'); d2.className = 'fld';
+    var i2 = document.createElement('input'); i2.type = 'text';
+    d2.appendChild(i2); bodyEl.appendChild(d2);
+    var b2 = document.createElement('button');
+    b2.className = 'send'; b2.textContent = 'Enviar';
+    b2.onclick = function () { submit(menu, i2.value); };
+    bodyEl.appendChild(b2);
+  }
+
+  ws.onmessage = function (ev) {
+    var m;
+    try { m = JSON.parse(ev.data); } catch (e) { return; }
+    switch (m.type) {
+      case 'conn.hello':
+        ws.send(JSON.stringify({ type: 'conn.authenticate', token: BOOT.jwt }));
+        break;
+      case 'conn.authenticated':
+        statusEl.textContent = 'Carregando a pesquisa…';
+        break;
+      case 'interaction.request':
+        render(m);
+        break;
+      case 'conn.session_closed':
+      case 'conn.session_ended':
+        if (!answered) finish();
+        break;
+      case 'conn.error':
+        statusEl.className = 'err';
+        statusEl.textContent = 'Não foi possível abrir a pesquisa (' + (m.code || 'erro') + ').';
+        break;
+    }
+  };
+  ws.onerror = function () {
+    if (!answered) { statusEl.className = 'err'; statusEl.textContent = 'Falha de conexão.'; }
+  };
+  ws.onclose = function () { if (answered) return; };
+</script>
+</body>
+</html>
+"""
+
+
 # ── Public survey page (self-contained; renders any DialogForm) ───────────────
+# LEGACY / anonymous vehicle (J4b): signal-only, no session. Kept for surveys with
+# no known root/customer (unsolicited feedback). The collect-based flow above is
+# the one that produces a journey-member contact.
 # Reads the token from the URL, fetches the frozen form, renders statements +
 # questions, and submits answers. Same DialogForm content as the chat runner —
 # here it becomes a <form> page. No build step: plain HTML/JS.

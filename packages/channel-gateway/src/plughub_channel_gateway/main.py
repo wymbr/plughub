@@ -8,6 +8,7 @@ Spec: PlugHub v24.0 section 3.5 / channel-gateway-webchat.md
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -41,7 +42,12 @@ from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
-from .survey_web import SurveyWebService, SurveyLinkDelivery, SURVEY_PAGE_HTML
+from .survey_web import (
+    SurveyWebService,
+    SurveyLinkDelivery,
+    SURVEY_PAGE_HTML,
+    SURVEY_COLLECT_PAGE_HTML,   # Journey J4c — collect-based survey (webchat client)
+)
 
 logger = logging.getLogger("plughub.channel-gateway")
 
@@ -1013,8 +1019,40 @@ async def survey_web_submit(token: str, request: Request) -> dict:
 
 @app.get("/survey/{token}")
 async def survey_web_page(token: str):
-    """Página pública do survey (mesmo DialogForm, veículo web)."""
+    """
+    Public survey surface — two vehicles behind one URL.
+
+    **Journey J4c (collect):** when the token is a COLLECT pending, the first open is
+    the ENGAGEMENT: the routed inbound survey session is created right here (the
+    customer is present), so tenant quota + the survey pool's max_concurrent_sessions
+    + Core `sessions` metering apply — to real engagements only, never to un-clicked
+    invitations. This page then connects as a normal webchat client and the survey
+    pool's dialog_runner renders the DialogForm live (single generic interpreter,
+    config-driven by form_id). Journey membership comes from the root seeded in the
+    ctx before the inbound (J1 consumer enrichment).
+
+    **Legacy / anonymous (J4b):** any other token → the standalone form page that only
+    records a signal (no session). Kept for unsolicited surveys with no known root.
+    """
     from fastapi.responses import HTMLResponse
+
+    settings = get_settings()
+    if _webhook_adapter is not None:
+        try:
+            engaged = await _webhook_adapter.handle_collect_engage(
+                tenant_id          = settings.tenant_id,
+                collect_token      = token,
+                jwt_secret_default = settings.jwt_secret,
+            )
+        except Exception as exc:  # noqa: BLE001 — never 500 a public page
+            logger.warning("survey collect engage failed (token=%s): %s", token, exc)
+            engaged = None
+        if engaged:
+            boot = json.dumps({"jwt": engaged["jwt"], "pool_id": engaged["pool_id"]})
+            return HTMLResponse(
+                content=SURVEY_COLLECT_PAGE_HTML.replace("__SURVEY_BOOTSTRAP__", boot)
+            )
+
     return HTMLResponse(content=SURVEY_PAGE_HTML)
 
 

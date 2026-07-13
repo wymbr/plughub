@@ -45,10 +45,12 @@ import json
 import logging
 import os
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import jwt as pyjwt          # Journey J4c — mint the webchat JWT that pre-binds the survey session
 import redis.asyncio as aioredis
 from aiokafka import AIOKafkaProducer
 
@@ -710,15 +712,18 @@ class WebhookAdapter(ChannelAdapter):
         preferred = policy.get("preferred_order") or []
 
         reachable = await self._reachable_channels(tenant_id, customer_id)
-        # Candidate set: the process whitelist if declared, else reachable ∪ web
-        # (universal self-service fallback). Minus the process exclude list.
-        base       = allowed if allowed else (reachable + ["web"])
+        # Candidate set: the process whitelist if declared, else reachable ∪ webchat.
+        # `webchat` is the universal self-service fallback — it needs no address (the
+        # tokenized survey link IS the entry point) and it is the transport the survey
+        # page actually speaks, so the pool's channel_types and the ChannelEndpoint
+        # used to resolve the survey pool line up. Minus the process exclude list.
+        base       = allowed if allowed else (reachable + ["webchat"])
         candidates = [c for c in base if c not in exclude]
 
         for c in preferred:               # honour N3's preference order first
             if c in candidates:
                 return c
-        return candidates[0] if candidates else "web"
+        return candidates[0] if candidates else "webchat"
 
     async def handle_collect(
         self,
@@ -794,7 +799,8 @@ class WebhookAdapter(ChannelAdapter):
             )
 
         # ── LAZY: store the collect pending — NO session until the customer clicks ──
-        ttl_s = int(timeout_hours * 3600) + 3600
+        ttl_s      = int(timeout_hours * 3600) + 3600
+        expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
         await self._redis.set(
             f"{tenant_id}:collect:{collect_token}",
             json.dumps({
@@ -808,9 +814,26 @@ class WebhookAdapter(ChannelAdapter):
                 "tenant_id":         tenant_id,
                 "status":            "pending",
                 "created_at":        now_iso,
+                "expires_at":        expires_at,
             }),
             ex=ttl_s,
         )
+
+        # ── Resume: the collect_token DOUBLES AS the resume_token ─────────────
+        # Reuses the existing webhook resume machinery end-to-end: handle_resume()
+        # does HGET on {tenant}:resume_tokens → "{session_id}:{step_id}:{expires_at}"
+        # and resumes the suspended caller with resumeContext{step_id, input, payload}.
+        # So the survey runner just calls workflow_resume(collect_token, answers) at
+        # the end — no new topic, no new consumer.
+        await self._redis.hset(
+            f"{tenant_id}:resume_tokens",
+            collect_token,
+            f"{session_id}:{step_id}:{expires_at}",
+        )
+        try:
+            await self._redis.expire(f"{tenant_id}:resume_tokens", ttl_s)
+        except Exception:   # non-fatal — hash shared across sessions
+            pass
 
         # ── Deliver the invitation link (mock/dev). The collect_token IS the token. ──
         # TODO(J4c fase 2): real SMS/email delivery via the negotiated channel provider.
@@ -821,8 +844,122 @@ class WebhookAdapter(ChannelAdapter):
             collect_token, negotiated, pool_id, caller_root, link,
         )
 
-        expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
         return {"send_at": now_iso, "expires_at": expires_at, "link": link}
+
+    async def handle_collect_engage(
+        self,
+        *,
+        tenant_id:          str,
+        collect_token:      str,
+        jwt_secret_default: str,
+        session_ttl_s:      int = 4 * 3600,
+    ) -> dict[str, Any] | None:
+        """
+        Journey J4c — the customer ENGAGED (opened the survey link). **This is the
+        only place a session is created**: until now the collect was suspended with
+        zero resource. The customer is present, so the survey is SYNCHRONOUS and the
+        dialog_runner can render the DialogForm live (agent profile: `menu` works).
+
+        Mechanism — reuses the whole existing webchat path, zero new adapter:
+          • Pre-seed the session ContextStore. The analytics consumer's J1 root
+            enrichment reads `session.root_session_id` from the ctx (not the event),
+            so seeding it BEFORE the inbound makes the session a journey member N1
+            by construction. `collect_token` + `dialog_form_id` are read by the runner.
+          • Mint a webchat JWT carrying `session_id` — the webchat adapter honours
+            that claim, so the page connects as a NORMAL webchat client and the
+            existing inbound → Routing (quota + max_concurrent_sessions) → Core
+            (`sessions` metering) path runs untouched. Limits apply to real
+            engagements only.
+
+        Idempotent: re-opening the link reuses the same survey session.
+        Returns { jwt, pool_id, session_id, form_id } or None if unknown/expired.
+        """
+        raw = await self._redis.get(f"{tenant_id}:collect:{collect_token}")
+        if not raw:
+            return None
+        pending = json.loads(raw if isinstance(raw, str) else raw.decode())
+
+        now_iso    = datetime.now(timezone.utc).isoformat()
+        session_id = pending.get("survey_session_id") or ""
+
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            ctx_key    = f"{tenant_id}:ctx:{session_id}"
+            ctx_writes: dict[str, str] = {
+                # Journey J1: root BEFORE the inbound → consumer enrichment stamps it.
+                "session.root_session_id": self._ctx_entry(
+                    pending.get("root_session_id") or session_id, "collect_engage", now_iso,
+                ),
+                "session.origin_session_id": json.dumps({
+                    "value": pending.get("caller_session_id") or "", "confidence": 1.0,
+                    "source": "collect_engage", "visibility": "agents_only",
+                    "updated_at": now_iso,
+                }),
+                # The runner resumes N3 with this at the end (workflow_resume).
+                "session.workflow_resume_token": json.dumps({
+                    "value": collect_token, "confidence": 1.0, "source": "collect_engage",
+                    "visibility": "agents_only", "updated_at": now_iso,
+                }),
+                "session.collect_token": json.dumps({
+                    "value": collect_token, "confidence": 1.0, "source": "collect_engage",
+                    "visibility": "agents_only", "updated_at": now_iso,
+                }),
+            }
+            if pending.get("form_id"):
+                # Dialog primitive binding — the single generic runner reads this.
+                ctx_writes["session.dialog_form_id"] = json.dumps({
+                    "value": pending["form_id"], "confidence": 1.0,
+                    "source": "collect_engage", "visibility": "agents_only",
+                    "updated_at": now_iso,
+                })
+            await self._redis.hset(ctx_key, mapping=ctx_writes)
+            await self._redis.expire(ctx_key, session_ttl_s)
+
+            pending["survey_session_id"] = session_id
+            pending["status"]            = "engaged"
+            pending["engaged_at"]        = now_iso
+            try:
+                await self._redis.set(
+                    f"{tenant_id}:collect:{collect_token}",
+                    json.dumps(pending), keepttl=True,
+                )
+            except TypeError:   # older redis-py without keepttl
+                await self._redis.set(
+                    f"{tenant_id}:collect:{collect_token}",
+                    json.dumps(pending), ex=session_ttl_s,
+                )
+            logger.info(
+                "collect engaged: token=%s survey_session=%s pool=%s root=%s "
+                "— session created ONLY now (customer present)",
+                collect_token, session_id, pending.get("pool_id"),
+                pending.get("root_session_id"),
+            )
+
+        # ── Mint the webchat JWT (pre-binds session_id) ───────────────────────
+        secret = jwt_secret_default
+        try:
+            per_tenant = await self._redis.get(f"{tenant_id}:config:webchat:jwt_secret")
+            if per_tenant:
+                secret = per_tenant if isinstance(per_tenant, str) else per_tenant.decode()
+        except Exception:   # non-fatal — fall back to the default secret
+            pass
+
+        token = pyjwt.encode(
+            {
+                "sub":        pending.get("customer_id") or session_id,
+                "session_id": session_id,
+                "tenant_id":  tenant_id,
+                "exp":        int(time.time()) + session_ttl_s,
+            },
+            secret,
+            algorithm="HS256",
+        )
+        return {
+            "jwt":        token if isinstance(token, str) else token.decode(),
+            "pool_id":    pending.get("pool_id") or "",
+            "session_id": session_id,
+            "form_id":    pending.get("form_id") or "",
+        }
 
     @staticmethod
     def _pending_context_preview(context: dict[str, Any]) -> dict[str, str]:

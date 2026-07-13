@@ -124,11 +124,14 @@ export interface SkillFlowEngineConfig {
     /** Arc 16 capability requirements (channel must be a superset). */
     requires?:      string[]
     /** Journey J4c — declarative channel policy (N2 input); N3 never names the channel. */
+    // `| undefined` on each member: the Zod-inferred CollectStep type carries
+    // `string[] | undefined`, and exactOptionalPropertyTypes rejects assigning that
+    // to a plain optional `string[]`.
     channel_policy?: {
-      allowed_channels?: string[]
-      preferred_order?:  string[]
-      exclude?:          string[]
-      urgency?:          "low" | "normal" | "high"
+      allowed_channels?: string[] | undefined
+      preferred_order?:  string[] | undefined
+      exclude?:          string[] | undefined
+      urgency?:          "low" | "normal" | "high" | undefined
     }
     interaction:    string
     prompt:         string

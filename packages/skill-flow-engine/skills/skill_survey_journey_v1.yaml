@@ -1,0 +1,72 @@
+# skill_survey_journey_v1.yaml
+# Journey J4c — WORKFLOW de survey de processo (perfil workflow, canal webhook).
+# Spec: docs/product/journey-j4c-survey-collect-spec.md
+#
+# Disparado (fire-and-forget) pelo hook `on_process_end` via workflow_trigger, com
+# origin_session_id = a sessão do processo → herda a RAIZ canônica, então este
+# workflow e o contato de survey que ele gera são membros da MESMA journey.
+#
+# É AQUI que o `collect` vive (e não no hook agent): perfil workflow permite
+# `collect`/`suspend`; perfil agent (hook) não — e um hook que suspende seria
+# tratado como concluído pelo bridge, fechando o contato antes da resposta.
+#
+# Modelo (decisão 2026-07-10):
+#   • LAZY — o collect entrega o link do survey e SUSPENDE. Zero sessão, zero
+#     recurso, zero metering enquanto espera. Sem clique até o timeout → nada foi
+#     alocado (só a chave pending expira).
+#   • CLIQUE — abrir o link cria um CONTATO inbound padrão (membro N1 da journey)
+#     no pool de survey; o cliente está PRESENTE, então o survey é SÍNCRONO e o
+#     runner genérico (skill_survey_collect_v1) renderiza o DialogForm ao vivo.
+#     Cota + max_concurrent_sessions + metering incidem só no engajamento real.
+#   • FIM — o runner grava o sinal grain=journey (raiz) e retoma este collect.
+#
+# N3 é CHANNEL-AGNOSTIC: declara `channel_policy` (intenção) e NUNCA nomeia o canal.
+# Quem decide é o resolvedor N2 (handler do persistCollect), a partir de
+# alcançabilidade + consentimento + política do tenant + esta policy. Nomear
+# `channel` aqui seria vazar a decisão de N2 para N3.
+
+id: skill_survey_journey_v1
+name: "Survey de Journey v1 (J4c — collect outbound)"
+version: "1.0"
+description: |
+  Workflow de pesquisa de fim-de-processo (N3). Faz um `collect` outbound
+  channel-agnostic: entrega o convite e suspende sem alocar recurso. O contato de
+  survey só nasce se o cliente engajar. O collect resolve NO FIM (respostas), então
+  o workflow sabe se a pesquisa foi respondida ou abandonada.
+classification:
+  type: vertical
+
+entry: pesquisar
+
+steps:
+
+  # ── collect outbound — convite + espera assíncrona SEM recurso ──────────────
+  - id: pesquisar
+    type: collect
+    target:
+      type: customer
+      id: "@ctx.caller.customer_id"
+    channel_policy:
+      preferred_order: ["webchat"]   # declarativo — o resolvedor N2 decide de fato
+    dialog_form_id: "dialog_nps_buttons"
+    interaction: "form"
+    prompt: "Pesquisa de satisfação"
+    timeout_hours: 48
+    business_hours: false
+    output_as: survey_result
+    on_response:
+      next: respondida
+    on_timeout:
+      next: sem_resposta
+
+  # ── cliente respondeu (o sinal grain=journey já foi gravado pelo runner) ────
+  - id: respondida
+    type: complete
+    outcome: resolved
+    issue_status: survey_answered
+
+  # ── não engajou até o deadline — nada foi alocado ───────────────────────────
+  - id: sem_resposta
+    type: complete
+    outcome: resolved
+    issue_status: survey_not_answered
