@@ -44,6 +44,10 @@ interface Skill {
   interface?:       InterfaceSchema | null
   /** Deploy-time config params (canonical). Drives the deploy form; falls back to `interface.properties`. */
   config_params?:   ConfigParam[] | null
+  /** Quando a DEFINIÇÃO foi salva pela última vez. Comparado com o `set_at` do slot
+   *  `current` para revelar "salvo mas não implantado" — sem isso o operador promove
+   *  às cegas e pode congelar uma versão velha sem nenhum aviso. */
+  updated_at?:      string
 }
 
 interface InterfaceSchema {
@@ -433,6 +437,17 @@ function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
   const color      = SLOT_COLOR[slotName] ?? '#94a3b8'
   const isEditable = slotName === 'next'
 
+  // "Salvo mas não implantado": a DEFINIÇÃO do skill foi editada DEPOIS do snapshot
+  // que está em produção. Sem esse aviso o operador promove às cegas — foi exatamente
+  // assim que congelamos uma versão velha 3 vezes seguidas no E2E do J4c, sem que nada
+  // na tela indicasse que o que rodava não era o que estava salvo.
+  const stale =
+    slotName === 'current' &&
+    data.set &&
+    !!skill?.updated_at &&
+    !!data.set_at &&
+    new Date(skill.updated_at).getTime() > new Date(data.set_at).getTime()
+
   return (
     <div
       className="bg-white rounded-lg border border-border flex flex-col gap-2.5 p-4 min-h-[180px]"
@@ -497,6 +512,22 @@ function SlotCard({ slotName, data, skill, onEdit }: SlotCardProps) {
           {data.set_at && (
             <div className="text-muted-light text-[10px] mt-1">
               {t('deploy.setAt', { user: data.set_by ?? '?', date: fmtDateShort(data.set_at) })}
+            </div>
+          )}
+
+          {/* Salvo mas não implantado — a definição mudou depois deste snapshot */}
+          {stale && (
+            <div className="mt-2 rounded border border-warning/40 bg-warning-light px-2 py-1.5">
+              <div className="text-[11px] font-semibold text-warning-text">
+                {t('deploy.staleTitle', { defaultValue: '⚠ Alterações não implantadas' })}
+              </div>
+              <div className="text-[10px] text-warning-text mt-0.5 leading-snug">
+                {t('deploy.staleHint', {
+                  defaultValue:
+                    'A definição foi salva em {{saved}}, depois deste deploy. Produção continua rodando o snapshot acima. Configure o slot Next e promova para publicar.',
+                  saved: fmtDateShort(skill?.updated_at),
+                })}
+              </div>
             </div>
           )}
         </div>

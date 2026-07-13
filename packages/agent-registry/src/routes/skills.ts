@@ -206,17 +206,28 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       }
     }
 
-    // Skill Versioning Fase B: dois canais de escrita.
-    //  - EDITOR (default): salvar = RASCUNHO → escreve `flow_draft`; NUNCA toca `flow`
-    //    (produção) nem `flow_model`. Só o deploy promove draft→flow.
-    //  - SYNC/DEPLOY (`x-skill-publish: true`, usado pelo RegistrySyncer — skills são
-    //    código): escreve PRODUÇÃO direto (`flow` + `flow_model`), limpa o draft.
-    const publish  = req.headers["x-skill-publish"] === "true"
+    // ── UMA definição, sem rascunho (2026-07-13) ─────────────────────────────
+    // Antes havia dois canais: o editor gravava `flow_draft` e o sync/deploy gravava
+    // `flow` (produção). Esse desenho tinha DOIS defeitos:
+    //   (a) o RegistrySyncer publicava com `x-skill-publish`, o que gravava
+    //       `{ flow, flow_draft: null }` → a cada boot do bridge o rascunho do editor
+    //       era APAGADO. O editor perdia trabalho silenciosamente.
+    //   (b) o draft só existia para impedir que edições vazassem para produção —
+    //       mas produção agora roda EXCLUSIVAMENTE o snapshot do slot do pool
+    //       (fallback legado removido no bridge), então não há o que vazar.
+    //
+    // Modelo atual: **uma definição editável** (`flow`, com `updated_at`) + **cópia
+    // imutável no deploy** (snapshot do slot). Salvar NÃO afeta o que roda; só o
+    // deploy (set-next → promote) muda produção. É o modelo arquivo-fonte × artefato.
+    //
+    // `x-skill-publish` vira no-op (mantido só para não quebrar chamadores antigos).
     const flowJson = body.flow != null ? (body.flow as unknown as Prisma.InputJsonValue) : Prisma.DbNull
 
-    const _flowFields = publish
-      ? { flow: flowJson, flow_draft: Prisma.DbNull, flow_model: _computeFlowModel(body.flow) }
-      : { flow_draft: flowJson }
+    const _flowFields = {
+      flow:       flowJson,
+      flow_draft: Prisma.DbNull,                    // conceito morto — sempre limpo
+      flow_model: _computeFlowModel(body.flow),
+    }
 
     const _upsertUpdate = {
       name:             body.name,
@@ -235,15 +246,14 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
         ? ((body as any).delegation_input as unknown as Prisma.InputJsonValue)
         : Prisma.DbNull,
       status:           "active",
-      ...(publish ? { deploy_status: "published" } : {}),
+      // Vestigial: não há mais draft/published — a definição é a definição.
+      deploy_status:    "published",
     }
     const _upsertCreate = {
       ..._upsertUpdate,
       skill_id:      skillId,
       tenant_id:     tenantId,
-      // editor-create: produção vazia até o deploy. sync-create: já vem em _flowFields.
-      ...(publish ? {} : { flow: Prisma.DbNull, flow_model: "agent" }),
-      deploy_status: publish ? "published" : "draft",
+      deploy_status: "published",
       created_by:    _getUserId(req),
     }
     const skill = await prisma.skill.upsert({
@@ -303,11 +313,14 @@ function _getUserId(req: Request): string {
 }
 function _formatSkill(skill: Record<string, unknown>): Record<string, unknown> {
   const { id: _id, interface_schema, ...rest } = skill
-  // Skill Versioning Fase B: expõe `flow` (produção) + `flow_draft` (rascunho) e um
-  // flag de conveniência p/ a UI. O bridge segue lendo `flow` (produção) — NUNCA o draft.
-  const draft = rest["flow_draft"]
-  const unpublished_draft = draft != null && JSON.stringify(draft) !== JSON.stringify(rest["flow"] ?? null)
-  return { ...rest, interface: interface_schema, unpublished_draft }
+  // UMA definição, sem rascunho (2026-07-13). `flow` É a definição; salvar não muda o
+  // que roda (produção = snapshot do slot do pool). `updated_at` é o timestamp que a
+  // tela de Deploy compara com o `set_at` do slot para dizer "salvo mas não implantado"
+  // — o que substitui o antigo flag `unpublished_draft`.
+  //
+  // `unpublished_draft` fica exposto como sempre-false por retrocompat com a UI antiga,
+  // até o cleanup do schema (drop de flow_draft/deploy_status).
+  return { ...rest, interface: interface_schema, unpublished_draft: false }
   // delegation_input is forwarded as-is via ...rest
 }
 
