@@ -901,6 +901,43 @@ async def webhook_collect(request: Request) -> dict:
     return {"send_at": result["send_at"], "expires_at": result["expires_at"]}
 
 
+@app.post("/v1/channels/webhook/pool/{pool_id}", status_code=201)
+async def webhook_trigger_by_pool(pool_id: str, request: Request) -> dict:
+    """
+    S4 — Trigger endereçado por POOL (canônico).
+
+    **O pool é a unidade endereçável; skill + config são detalhe INTERNO do seu deploy**
+    (slot `current` + `config_json`). Endereçar por `skill_id` reabre a pergunta que o
+    modelo de slots existe para fechar — "qual config está rodando?" —, porque o mesmo
+    skill pode estar deployado em N pools com configs diferentes (é o desenho do survey:
+    um `skill_survey_outbound_v1` em três pools, um por grão). Nesse regime a resolução
+    por skill é AMBÍGUA e o router escolheria um pool por score, em silêncio.
+
+    Com `pool_id`, o routing engine atribui o pool DIRETO e o bridge executa o snapshot
+    do slot `current` daquele pool. Sem DNIS, sem resolução, sem ambiguidade.
+
+    Declarada ANTES da rota greedy /{skill_id}. Retorna { session_id }.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    settings = get_settings()
+    body     = await request.json()
+
+    session_id = await _webhook_adapter.handle_trigger(
+        skill_id          = "",            # endereço é o pool — o skill vem do slot
+        pool_id           = pool_id,
+        tenant_id         = body.get("tenant_id") or settings.tenant_id,
+        trigger_type      = body.get("trigger_type") or "task",
+        metadata          = body.get("metadata"),
+        customer_id       = body.get("customer_id"),
+        origin_session_id = body.get("origin_session_id"),
+        root_session_id   = body.get("root_session_id"),
+        context           = body.get("context"),
+    )
+    return {"session_id": session_id}
+
+
 # ── Identity Resolver (Fase A · Slice 1) ───────────────────────────────────────
 # Declared BEFORE the greedy /{skill_id} and /pending/{contact_identifier} routes.
 # PII travels only on the loopback body; hashing is server-side (never in the URL).

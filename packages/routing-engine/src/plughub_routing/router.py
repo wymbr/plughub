@@ -91,7 +91,22 @@ class Router:
                     p for p in pools
                     if getattr(p, "webhook_skill_id", None) == event.skill_id
                 ]
-                if matched:
+                if len(matched) > 1:
+                    # S4 — endereço AMBÍGUO: o mesmo skill está deployado em N pools
+                    # (regime legítimo — é o desenho do survey: um skill outbound em três
+                    # pools, um por grão, cada um com `config_json` diferente). Escolher
+                    # por score seria rodar um deploy que o chamador não pediu, em
+                    # silêncio. O endereço canônico é o POOL (`pool_id` no evento).
+                    logger.error(
+                        "Webhook endpoint AMBÍGUO: skill_id=%s casa %d pools (%s) — "
+                        "sessão %s NÃO será roteada. O endereço canônico é o POOL: use "
+                        "workflow_trigger(pool_id=...) / POST /v1/channels/webhook/pool/{pool_id}. "
+                        "skill_id só é endereço enquanto UM pool o declara.",
+                        event.skill_id, len(matched),
+                        ",".join(p.pool_id for p in matched), event.session_id,
+                    )
+                    pools = []
+                elif matched:
                     pools = matched
                 elif any(getattr(p, "webhook_skill_id", None) for p in pools):
                     # Regime multi-pool determinístico: veio um skill_id mas NENHUM pool

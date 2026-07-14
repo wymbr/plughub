@@ -34,6 +34,26 @@ description: |
 classification:
   type: vertical
 
+# ── Config de DEPLOY (config_json do slot → $.config.*) ──────────────────────
+# S4 — o GRÃO deixa de ser config deste skill e passa a ser uma propriedade do POOL de
+# survey escolhido: cada pool outbound é um deploy do MESMO `skill_survey_outbound_v1`
+# com um `grain` diferente. Então o operador configura UMA coisa só — qual pool disparar
+# — e o grão vem junto, sem duas telas dizendo coisas que precisam concordar.
+#
+# É a aplicação do invariante: **o pool é a unidade endereçável; skill + config são
+# detalhe interno do deploy do pool.** Endereçar por skill_id reabriria "qual config está
+# rodando?", que é exatamente o que o modelo de slots fecha.
+config_params:
+  - key: outbound_pool
+    type: string
+    required: true
+    label: "Pool de survey a disparar"
+    description: >
+      Pool webhook que roda o workflow outbound (o `collect`). Cada pool de survey é um
+      deploy do mesmo skill com um GRÃO diferente — ex.: `survey_journey_wf` (journey),
+      `survey_session_wf` (session), `survey_segment_wf` (segment). Escolher o pool é
+      escolher o grão.
+
 entry: avaliar_desfecho
 
 steps:
@@ -81,7 +101,9 @@ steps:
     type: invoke
     tool: workflow_trigger
     input:
-      skill_id:          "skill_survey_outbound_v1"
+      # S4 — endereça o POOL, nunca o skill. O pool roda o skill do seu slot `current`
+      # com o `config_json` daquele slot; qual grão se pesquisa é uma propriedade DO POOL.
+      pool_id:           "$.config.outbound_pool"
       tenant_id:         "$.tenant_id"
       origin_session_id: "$.session_id"     # herda a raiz canônica da journey
       trigger_type:      "task"

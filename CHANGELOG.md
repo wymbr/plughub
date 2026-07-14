@@ -75,6 +75,35 @@ agent-registry velho gravaria o flow sem o `signal_grain`, sem erro. (b) **Custo
 desenvolvimento a partir do arquivo exige `REGISTRY_SYNC_RECONCILE=true`, agora exposto no
 `docker-compose.demo.yml`.
 
+**S4 — o POOL é a unidade endereçável, nunca o `skill_id`** (invariante novo no CLAUDE.md).
+
+Pedido do usuário: *"hooks em geral devem acionar somente pools e nunca skill_id, justamente por causa da
+configuração dos skills, que precisa estar num único local para não gerar dúvida sobre o que está rodando
+e com que configuração."* Isso conserta um **vazamento do modelo**, não só o survey: o `workflow_trigger`
+por `skill_id` sempre foi a exceção ao Arc 19 ("pool webhook = endpoint"), e só funcionava porque havia um
+pool por skill. Endereçar por skill reabre a pergunta que o modelo de slots existe para fechar — *"qual
+config está rodando?"*.
+
+- **`workflow_trigger`** ganhou `pool_id` (canônico; vence sobre `skill_id`, agora legado) → nova rota
+  `POST /v1/channels/webhook/pool/{pool_id}` (antes da greedy `/{skill_id}`). O mecanismo já existia: o
+  `handle_trigger` **já aceitava `pool_id`** e o evento inbound já o honrava (era assim que o slug→pool
+  externo funcionava). Faltava só a tool poder endereçar por pool.
+- **Guard no router**: `skill_id` casando **>1** pool webhook = endereço **ambíguo** → `pools = []` +
+  ERROR nomeando os candidatos. Antes ele escolhia por score, em silêncio — rodaria um deploy que o
+  chamador não pediu. `skill_id` só é endereço enquanto **um** pool o declara.
+- **`skill_survey_trigger_v1`** ganhou `config_param` **`outbound_pool`**: o operador escolhe o pool de
+  survey na tela de Deploy do gatilho e **o grão vem junto** — cada pool outbound é um deploy do MESMO
+  `skill_survey_outbound_v1` com `grain` diferente. Some a assimetria "grão numa tela, política em outra".
+
+Validado E2E com três pools (`survey_journey_wf` / `survey_session_wf` / `survey_segment_wf`) rodando o
+mesmo skill: trocar **um campo** no deploy do gatilho (`outbound_pool: survey_segment_wf`) fez o routing ir
+para aquele pool e o sinal nascer `grain=segment` com `segment_id`+`agent_key` — zero `AMBÍGUO`, zero skill
+novo, zero código.
+
+**Efeito colateral revelador:** o guard de capacidade (`deployViolation`) recusou o terceiro pool
+(`contracted: 310, declared_total: 312`). O custo do modelo "um pool por grão" passou a ser **visível e
+contratual** — antes, três grãos num pool só escondiam a concorrência.
+
 **Nota operacional:** `docker cp` sobrevive a `restart`, **não a `up -d`** (que recria o container a
 partir da imagem). Mudança em código Python de serviço = `build`, não `cp` — um `up -d` fez o bridge
 voltar à imagem antiga no meio do S2 e os hooks pararam de disparar.

@@ -186,6 +186,30 @@ YAML diverge da definição no DB e não vai ser aplicado, em vez de pular em si
 dos defaults do Zod**, então o DB legitimamente tem mais chaves; igualdade acusaria drift em todo skill
 a cada boot, que é o falso positivo do D4 com outra roupa ("foi escrito" ≠ "mudou").
 
+**S4 ✅ — o POOL é a unidade endereçável, nunca o `skill_id`** (invariante no CLAUDE.md).
+
+Motivação do usuário: *"hooks em geral devem acionar somente pools e nunca skill_id, justamente por causa
+da configuração dos skills, que precisa estar num único local para não gerar dúvida sobre o que está
+rodando e com que configuração."* Correto — e conserta um **vazamento do modelo**, não só o survey: o
+`workflow_trigger` por `skill_id` sempre foi a exceção ao Arc 19 ("pool webhook = endpoint"), e só
+funcionava porque havia um pool por skill.
+
+- **`workflow_trigger`** ganhou `pool_id` (canônico; vence sobre `skill_id`, que vira legado) → nova rota
+  `POST /v1/channels/webhook/pool/{pool_id}` na channel-gateway (declarada antes da greedy `/{skill_id}`).
+  O mecanismo já existia — o `handle_trigger` **já aceitava `pool_id`** e o evento inbound já o honrava
+  (foi assim que fizemos o slug→pool). Faltava só a tool poder endereçar por pool.
+- **Guard no router**: `skill_id` que casa **>1** pool webhook = endereço **ambíguo** → `pools = []` +
+  ERROR explicando. Antes ele escolhia por score, em silêncio — rodaria um deploy que o chamador não
+  pediu. `skill_id` só é endereço enquanto **um** pool o declara.
+- **`skill_survey_trigger_v1`** ganhou `config_param` **`outbound_pool`**: o operador escolhe o pool de
+  survey na tela de Deploy do gatilho, e **o grão vem junto** — porque cada pool outbound é um deploy do
+  MESMO `skill_survey_outbound_v1` com `grain` diferente. Some a assimetria "grão numa tela, política em
+  outra": tudo que responde *"como pesquisamos"* fica no deploy do gatilho.
+- **Demo**: três pools outbound (`survey_journey_wf`, `survey_session_wf`, `survey_segment_wf`).
+
+**Nota:** a política de escolha do segmento continua no YAML do gatilho (é política, e política mora no
+skill). Torná-la `config_param` exigiria dupla indireção (`@ctx.{{$.config.tag}}`), que o engine não faz.
+
 ---
 
 ### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — corrigido, a validar

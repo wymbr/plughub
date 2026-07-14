@@ -190,6 +190,15 @@ system_error         — unrecoverable error
 - **Agents never access backend systems directly** — only via authorised MCP Servers
 - **All domain MCP calls are intercepted** — native agents via `McpInterceptor` (in-process); external agents via proxy sidecar on localhost:7422. No MCP call reaches a domain server without permission validation, injection guard, and audit.
 - **`insight.historico.*` persists via Kafka, never direct PostgreSQL write**
+- **O POOL é a unidade endereçável — nunca o `skill_id`.** Hooks de pool, `workflow_trigger`,
+  endpoints de canal e qualquer disparo apontam para um **pool**; o skill e sua config são detalhe
+  **interno** do deploy do pool (slot `current` + `config_json`). Endereçar por skill reabre a pergunta
+  que o modelo de slots existe para fechar — *"qual config está rodando?"* —, porque o mesmo skill pode
+  estar deployado em N pools com configs diferentes (regime legítimo: um `skill_survey_outbound_v1` em
+  três pools, um por grão de sinal). Nesse regime a resolução por skill é **ambígua**, e escolher por
+  score seria rodar um deploy que o chamador não pediu, em silêncio — o router **rejeita**
+  (`Webhook endpoint AMBÍGUO`). `skill_id` sobrevive só como endereço legado, válido enquanto **um
+  único** pool o declara.
 
 ---
 

@@ -231,16 +231,20 @@ class WebhookAdapter(ChannelAdapter):
         pool_id:           str | None = None,
     ) -> str:
         """
-        Create a new webhook session for the given skill_id.
+        Create a new webhook session.
 
-        The skill_id acts as the "phone number" / "DNIS" for the webhook pool.
+        **S4 — o endereço canônico é o POOL** (`pool_id`); `skill_id` é legado.
 
-        pool_id: Arc 19 (webhook channel endpoint) — when set, the routing engine
-          assigns this pool DIRECTLY (the "expected path": the channel entry point
-          declares the service pool). The pool runs whatever skill is currently
-          DEPLOYED to it, so the endpoint URL stays stable across skill versions.
-          This is the external slug→pool trigger. When None, the routing engine
-          resolves the pool via skill_id (the internal workflow_trigger path).
+        pool_id: quando set, o routing engine atribui este pool DIRETO, e o pool roda o
+          skill do seu slot `current` COM O CONFIG daquele slot. O endereço fica estável
+          entre versões do skill, e não há ambiguidade quando o MESMO skill está deployado
+          em N pools com configs diferentes (o desenho do survey: um `skill_survey_
+          outbound_v1` em três pools, um por grão). `skill_id` pode vir vazio aqui.
+
+        skill_id (LEGADO): funciona como "DNIS" do canal webhook — o router o casa contra
+          o `webhook_skill_id` de cada pool. **Só é endereço enquanto UM pool o declara**;
+          com N pools o router rejeita (não escolhe por score, não misroteia em silêncio).
+
         The customer_id is the "ANI" — optional, defaults to a generated UUID
         when the trigger is not customer-initiated (e.g. scheduled, api).
 

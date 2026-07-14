@@ -42,9 +42,27 @@ const WorkflowTriggerInputSchema = z.object({
     "Tenant ID. In skill-flow YAML use $.tenant_id (built-in reference)."
   ),
 
-  skill_id: z.string().min(1).describe(
-    "Skill ID of the webhook workflow to trigger " +
-    "(e.g. 'skill_portabilidade_demo_v1'). Must be registered in a webhook pool."
+  /**
+   * S4 — **O POOL É A UNIDADE ENDEREÇÁVEL.** Skill + config são detalhe INTERNO do
+   * deploy do pool (slot `current` + `config_json`), não um endereço.
+   *
+   * Endereçar por `skill_id` reabre a pergunta que o modelo de slots existe para
+   * fechar — "qual config está rodando?" —, porque o MESMO skill pode estar deployado
+   * em N pools com configs diferentes (é exatamente o desenho do survey: um
+   * `skill_survey_outbound_v1` em três pools, um por grão). Nesse regime a resolução
+   * por skill é AMBÍGUA, e o router escolheria um por score, em silêncio.
+   *
+   * `pool_id` vence sobre `skill_id`. `skill_id` fica como legado (um pool por skill).
+   */
+  pool_id: z.string().optional().describe(
+    "Webhook POOL to trigger (canonical address). The pool runs whatever skill its " +
+    "`current` deploy slot holds, with that slot's config. Preferred over skill_id: " +
+    "the same skill may be deployed in several pools with different configs."
+  ),
+
+  skill_id: z.string().optional().describe(
+    "LEGACY address: skill of the webhook workflow (e.g. 'skill_portabilidade_demo_v1'). " +
+    "Only unambiguous while exactly one webhook pool declares it. Prefer pool_id."
   ),
 
   origin_session_id: z.string().optional().describe(
@@ -88,8 +106,20 @@ export function registerWorkflowTools(
           isError: true,
         }
       }
-      const { tenant_id, skill_id, origin_session_id, context_json, customer_id } = parsed.data
-      console.log("[workflow_trigger] parsed ok tenant=%s skill=%s origin=%s", tenant_id, skill_id, origin_session_id)
+      const { tenant_id, pool_id, skill_id, origin_session_id, context_json, customer_id } = parsed.data
+      console.log(
+        "[workflow_trigger] parsed ok tenant=%s pool=%s skill=%s origin=%s",
+        tenant_id, pool_id ?? "-", skill_id ?? "-", origin_session_id,
+      )
+
+      // S4: um endereço é obrigatório, e o POOL é o canônico.
+      if (!pool_id && !skill_id) {
+        return {
+          content: [{ type: "text" as const, text:
+            "workflow_trigger exige `pool_id` (canônico) ou `skill_id` (legado)." }],
+          isError: true,
+        }
+      }
 
       // ── Parse context_json ────────────────────────────────────────────────
       let context: Record<string, string> = {}
@@ -105,7 +135,12 @@ export function registerWorkflowTools(
       }
 
       // ── POST to channel-gateway trigger endpoint ───────────────────────────
-      const url  = `${deps.channelGatewayUrl}/v1/channels/webhook/${encodeURIComponent(skill_id)}`
+      // S4: pool vence sobre skill. A rota /pool/{id} roteia DIRETO ao pool, que roda o
+      // skill do seu slot `current` com o config daquele slot — sem resolução por skill,
+      // que é ambígua quando o mesmo skill está deployado em N pools.
+      const url = pool_id
+        ? `${deps.channelGatewayUrl}/v1/channels/webhook/pool/${encodeURIComponent(pool_id)}`
+        : `${deps.channelGatewayUrl}/v1/channels/webhook/${encodeURIComponent(skill_id!)}`
       console.log("[workflow_trigger] POST %s body=%j", url, { tenant_id, trigger_type: "task", origin_session_id })
       const body = {
         tenant_id,
