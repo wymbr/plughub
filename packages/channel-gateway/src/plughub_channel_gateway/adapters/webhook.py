@@ -229,6 +229,7 @@ class WebhookAdapter(ChannelAdapter):
         root_session_id:   str | None = None,
         context:           dict[str, Any] | None = None,
         pool_id:           str | None = None,
+        journey:           str = "inherit",
     ) -> str:
         """
         Create a new webhook session.
@@ -258,14 +259,33 @@ class WebhookAdapter(ChannelAdapter):
           can read them from step 1 via @ctx.* resolution.
           Example: {"session.numero_atual": "11999999999"}
 
+        journey (T3): "inherit" (default) — a sessão entra na journey do chamador;
+          "new" — ela inicia a PRÓPRIA journey (raiz = ela mesma), mantendo
+          `origin_session_id` apontando para o pai. Proveniência atravessa a fronteira;
+          pertença não. Use quando o cliente pediu algo SEM RELAÇÃO com o processo atual.
+
         Returns the new session_id.
         """
         session_id  = str(uuid.uuid4())
         customer_id = customer_id or f"sys:{trigger_type}:{uuid.uuid4().hex[:8]}"
 
-        # Journey J1: resolve the transitive root. Explicit param wins; else inherit
-        # the caller's root (trigger-from-session); else this session is its own root.
-        if root_session_id:
+        # ── T3: PROVENIÊNCIA ≠ PERTENÇA ─────────────────────────────────────────
+        #
+        # `origin_session_id` (quem me criou) e `root_session_id` (de que processo faço
+        # parte) eram a MESMA aresta: a raiz era herdada INCONDICIONALMENTE do chamador.
+        # Mas nem toda filha continua o processo do pai — se o cliente pede algo SEM
+        # RELAÇÃO no meio de um atendimento, o processo novo era engolido pela journey do
+        # antigo, e não havia como dizer "isto é outra coisa".
+        #
+        # `journey="new"` corta a PERTENÇA (a sessão nasce como sua própria raiz) e
+        # PRESERVA a PROVENIÊNCIA (`origin_session_id` segue apontando para o pai, logo
+        # abaixo, no evento). Resultado: duas journeys — e o fio que as liga.
+        #
+        # Simétrico ao `journey_merge`: `new` corta no nascimento, `merge` une depois.
+        # Não há split retroativo (união não tem inverso) ⇒ na dúvida, corte.
+        if journey == "new":
+            resolved_root = session_id
+        elif root_session_id:
             resolved_root = root_session_id
         elif origin_session_id:
             resolved_root = (

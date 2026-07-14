@@ -70,6 +70,38 @@ const WorkflowTriggerInputSchema = z.object({
     "session ContextStore for traceability. In skill-flow YAML use $.session_id."
   ),
 
+  /**
+   * T3 — **Proveniência ≠ pertença.**
+   *
+   * Hoje a raiz (`root_session_id`, "de que processo faço parte") é herdada
+   * INCONDICIONALMENTE do chamador. Mas nem toda filha continua o processo do pai: se,
+   * dentro de um atendimento, o cliente pede algo **sem relação**, o processo novo era
+   * engolido pela journey do antigo — e não havia como dizer "isto é outra coisa".
+   *
+   * `journey: "new"` faz a sessão nascer como **sua própria raiz** (journey nova, com
+   * `@ctx.journey.*` próprio, desfecho próprio, linha própria na Vista Processos) — **mas
+   * `origin_session_id` continua apontando para o pai**, então o fio de proveniência
+   * sobrevive e atravessa a fronteira. Duas journeys, e o fio que as liga.
+   *
+   * Quem decide é o **skill**, não a plataforma: é conhecimento de negócio ("o cliente
+   * pediu outra coisa"), e a plataforma não tem como inferir.
+   *
+   * Simétrico ao `journey_merge`: **`new` corta no nascimento; `merge` une depois.** Os
+   * dois compõem — cortou cedo demais e era o mesmo assunto? O merge une. Mas **não há
+   * split retroativo** (união não tem inverso), o que empurra o desenho para
+   * *"na dúvida, corte"*.
+   *
+   * Só existe aqui, e não em `delegate`/`collect`: aqueles são o processo **estendendo a
+   * mão** (delegar I/O, contatar o cliente) — parte do processo chamador por definição.
+   * Um skill que quer começar outra coisa **dispara um workflow**.
+   */
+  journey: z.enum(["inherit", "new"]).optional().describe(
+    "inherit (default): the new session joins the caller's journey. " +
+    "new: it starts its OWN journey (root = self), while origin_session_id still points " +
+    "back to the caller — provenance crosses the boundary, membership does not. Use when " +
+    "the customer asked for something unrelated to the current process."
+  ),
+
   context_json: z.string().optional().describe(
     "JSON-encoded ContextStore seed entries {tag: value} for the new session. " +
     "Written before routing so workflow step 1 can read them via @ctx.*. " +
@@ -106,10 +138,12 @@ export function registerWorkflowTools(
           isError: true,
         }
       }
-      const { tenant_id, pool_id, skill_id, origin_session_id, context_json, customer_id } = parsed.data
+      const {
+        tenant_id, pool_id, skill_id, origin_session_id, context_json, customer_id, journey,
+      } = parsed.data
       console.log(
-        "[workflow_trigger] parsed ok tenant=%s pool=%s skill=%s origin=%s",
-        tenant_id, pool_id ?? "-", skill_id ?? "-", origin_session_id,
+        "[workflow_trigger] parsed ok tenant=%s pool=%s skill=%s origin=%s journey=%s",
+        tenant_id, pool_id ?? "-", skill_id ?? "-", origin_session_id, journey ?? "inherit",
       )
 
       // S4: um endereço é obrigatório, e o POOL é o canônico.
@@ -147,6 +181,9 @@ export function registerWorkflowTools(
         trigger_type:      "task",
         origin_session_id: origin_session_id ?? null,
         customer_id:       customer_id ?? null,
+        // T3: pertença. `new` = a sessão nasce como sua PRÓPRIA raiz (journey nova);
+        // `origin_session_id` (acima) segue apontando para o pai de qualquer forma.
+        journey:           journey ?? "inherit",
         context,
       }
 

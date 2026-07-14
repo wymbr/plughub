@@ -28,7 +28,21 @@ Raiz ainda aberta → sem outcome → `NULL`, e a UI marca o desfecho como **pro
 
 **Não é retroativo:** sessões já gravadas seguem com `origin_session_id` nulo. A árvore só existe para o tráfego novo.
 
-**Pendente (spec §9):** T3 (`journey: inherit|new` — corte declarativo), T4 (rótulo da aresta), T5 (UI em árvore + prefixo `PRC-`), T6 (rastro forense).
+### T3 — `journey: inherit | new` (corte declarativo)
+
+A raiz (`root_session_id`, *"de que processo faço parte"*) era herdada **incondicionalmente** do chamador. Mas nem toda filha continua o processo do pai: se, no meio de um atendimento, o cliente pede algo **sem relação**, o processo novo era **engolido pela journey do antigo**, e não havia como dizer "isto é outra coisa".
+
+`workflow_trigger` ganhou **`journey: inherit | new`** (default `inherit`). Com `new`, a sessão nasce como **sua própria raiz** (journey nova, `@ctx.journey.*` próprio, desfecho próprio, linha própria na Vista Processos) — **mas `origin_session_id` continua apontando para o pai**. **Proveniência atravessa a fronteira; pertença não.** Duas journeys, e o fio que as liga.
+
+Quem decide é o **skill**: é conhecimento de negócio, e a plataforma não tem como inferir.
+
+**Só no `workflow_trigger`** — correção de escopo ao rascunho da spec, que também listava `delegate`/`collect`. Aqueles são o processo **estendendo a mão** (delegar I/O; contatar o cliente): parte do processo chamador **por definição**. Um skill que quer começar outra coisa **dispara um workflow**. Oferecer `journey: new` ali seria uma opção sem significado — e opções sem significado são as que se usam errado.
+
+**Simetria:** `new` corta **no nascimento**; `journey_merge` une **depois**. Os dois compõem. Mas **não há split retroativo** (união não tem inverso) ⇒ *na dúvida, corte*.
+
+Validado E2E com a **mesma chamada, um campo de diferença**: `inherit` → `root = a do pai`; `new` → `root = ela mesma`, `origin = o pai`. No relatório, a journey nova aparece separada (`session_count: 1`) em vez de somada ao pai.
+
+**Pendente (spec §9):** T4 (rótulo da aresta), T5 (UI em árvore + prefixo `PRC-`), T6 (rastro forense).
 
 ---
 

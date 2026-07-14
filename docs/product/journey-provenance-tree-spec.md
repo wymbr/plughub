@@ -98,8 +98,8 @@ Hoje o novo processo é **engolido pela journey A**. Não há como dizer "isto �
 
 ### A solução: corte declarativo no nascimento
 
-O disparo (`workflow_trigger` / `delegate` / `collect`) ganha um parâmetro
-**`journey: inherit | new`** (default `inherit`). Com `new`:
+O **`workflow_trigger`** ganha um parâmetro **`journey: inherit | new`** (default
+`inherit`). Com `new`:
 
 - a filha nasce com `root_session_id = ela mesma` → **journey B**, com seu próprio
   `@ctx.journey.*`, seu próprio desfecho, sua própria linha na Vista Processos;
@@ -109,6 +109,13 @@ O disparo (`workflow_trigger` / `delegate` / `collect`) ganha um parâmetro
 **Quem decide é o skill, não a plataforma.** É conhecimento de negócio ("o cliente pediu
 outra coisa"); a plataforma não tem como inferir. Mesma filosofia do grão do survey (S2) e
 da escolha do segmento (S3): **política mora no skill**.
+
+**Só no `workflow_trigger`** — e não em `delegate`/`collect` (correção de escopo ao
+rascunho desta spec). Um `delegate` ou um `collect` são o processo **estendendo a mão** (o
+workflow delegando I/O; o processo contatando o cliente): são parte do processo chamador
+**por definição**. Um skill que quer começar outra coisa **dispara um workflow**. Oferecer
+`journey: new` ali seria uma opção sem significado — e opções sem significado são as que se
+usam errado.
 
 ### A simetria — e o que ela NÃO fecha
 

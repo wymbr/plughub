@@ -723,6 +723,11 @@ class WebhookTriggerRequest(BaseModel):
     customer_id:       str | None = None
     origin_session_id: str | None = None    # Arc 19: session that triggered this workflow
     context:           dict | None = None   # Arc 19: seed ContextStore entries {tag: value}
+    # T3 — PERTENÇA (distinta da proveniência, que é o origin_session_id acima).
+    # "inherit" (default): entra na journey do chamador.
+    # "new": inicia a PRÓPRIA journey (raiz = ela mesma), mantendo o fio de proveniência.
+    # Use quando o cliente pediu algo SEM RELAÇÃO com o processo em curso.
+    journey:           str = "inherit"
 
 class WebhookResumeRequest(BaseModel):
     tenant_id: str
@@ -934,6 +939,9 @@ async def webhook_trigger_by_pool(pool_id: str, request: Request) -> dict:
         origin_session_id = body.get("origin_session_id"),
         root_session_id   = body.get("root_session_id"),
         context           = body.get("context"),
+        # T3: pertença — "new" faz a sessão nascer como sua própria raiz (journey nova),
+        # sem apagar a proveniência (origin_session_id segue apontando para o pai).
+        journey           = body.get("journey") or "inherit",
     )
     return {"session_id": session_id}
 
@@ -1168,6 +1176,7 @@ async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
         customer_id        = body.customer_id,
         origin_session_id  = body.origin_session_id,
         context            = body.context,
+        journey            = body.journey,   # T3: inherit | new
     )
     return {"session_id": session_id}
 
