@@ -202,6 +202,46 @@ system_error         — unrecoverable error
 
 ---
 
+## Postura de Engenharia — invariantes de MÉTODO
+
+> Não são regras de arquitetura, e sim de como implementar, depurar e questionar. Ganharam seção
+> própria porque um dia inteiro de bugs (2026-07-14) nasceu de violá-las: quase todo defeito estava
+> escondido atrás de um valor **plausível**, e cada correção só revelava o próximo por remover um
+> anestésico. Ver CHANGELOG (arco T + J5) para os casos.
+
+- **Degradação NUNCA é silenciosa.** `except: pass`, fallback mudo, tier de recuperação que engole o
+  motivo, default que "conserta" um campo ausente — cada um troca uma falha barulhenta por uma mentira
+  tranquila. Se um caminho degrada, ele **loga por que** degradou. *Um fallback que esconde o motivo do
+  fallback não é resiliência — é cegueira.* (Casos: fallback do `skill.flow`; seed-if-absent pulando
+  mudo; os 3 tiers do `/reports/sessions`.)
+
+- **Um valor plausível esconde bugs; um valor ausente os denuncia.** `Segs: 0`, `"Resolvido"`, "algum
+  flow rodando" — nenhum grita, e por isso passam. Foi um campo **faltando** (`spawn_reason`) que expôs
+  um endpoint que nunca rodava sua query real. Ao depurar, desconfie primeiro do dado que parece
+  razoável, não do que parece errado.
+
+- **"Foi escrito" ≠ "mudou"; "existe" ≠ "está pronto".** Confundir presença com conteúdo custou 3
+  diagnósticos: `updated_at` bumped a cada boot (D4), linha de skill sem `flow` (D2), slot com
+  `yaml_snapshot` nulo. Compare **conteúdo** (canonicalizado, por contenção quando há defaults), não a
+  existência da linha nem o timestamp de escrita.
+
+- **`ReplacingMergeTree` substitui a LINHA INTEIRA — não faz merge por coluna.** Todo writer de
+  `sessions` ou manda a linha completa, ou é reidratado antes da escrita (cache de identidade no
+  consumer + carimbo no close, que é a linha sobrevivente). Três bugs de `sessions` num dia só vieram
+  disto. Vale para qualquer tabela RMT nova.
+
+- **Quando a spec e o código discordam, desconfie dos DOIS.** O merge lia um `started_at` que metade dos
+  canais não escrevia; a resposta certa não foi fazer o timestamp funcionar, foi ver que a aciclicidade
+  **nunca deveria depender de relógio** (união de componentes disjuntas). O teste não verifica só a
+  implementação — ele descobre que a especificação pedia a coisa errada. Corrigir a spec é resultado
+  válido, não desvio.
+
+- **`docker cp` sobrevive a `restart`, não a `up -d`.** `up -d` recria o container a partir da imagem.
+  Mudança em código de serviço = `build`, nunca `cp` (que é só atalho de iteração efêmera). Um `up -d`
+  no meio de uma validação faz o serviço voltar à imagem antiga e os testes "regridem" sem motivo.
+
+---
+
 ## Configuration — Single Source Invariants
 
 > Regras permanentes. O código ainda tem violações herdadas em burn-down (`docs/arcos/config-consolidation.md`),
