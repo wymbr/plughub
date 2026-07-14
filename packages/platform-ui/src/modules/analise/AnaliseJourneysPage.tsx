@@ -90,11 +90,40 @@ const STATUS_COLORS: Record<string, string> = {
   closed:    'bg-surface-alt text-muted border-border',
 }
 
-function StatusBadge({ status }: { status: string }) {
+// ── J5b: rótulos dos ENUMS vindos do backend ────────────────────────────────
+//
+// `status`, `outcome`, `business_outcome` e `channels` chegam da analytics-api como
+// valores CRUS (`resolved`, `suspended`, `webhook`, …) e eram renderizados assim — o
+// operador via inglês técnico mesmo em pt-BR. As chaves da moldura (títulos, colunas)
+// já passavam por `t()`; o que faltava eram os valores.
+//
+// `defaultValue: raw` é deliberado: um enum novo no backend aparece com o valor cru em
+// vez de quebrar a tela ou mostrar a chave i18n. Degrada, não falha.
+//
+// `t` entra por PARÂMETRO — a regra do projeto proíbe `useTranslation` fora de um
+// componente/hook, e estes helpers são chamados de dentro do render.
+type TFunc = (key: string, opts?: Record<string, unknown>) => string
+
+/** Status da sessão — reusa `sessions.status.*`, que já existia no namespace. */
+function statusLabel(t: TFunc, status: string): string {
+  return status ? t(`sessions.status.${status}`, { defaultValue: status }) : '—'
+}
+
+function outcomeLabel(t: TFunc, outcome: string): string {
+  return outcome ? t(`enums.outcome.${outcome}`, { defaultValue: outcome }) : '—'
+}
+
+function channelsLabel(t: TFunc, channels: string[] | undefined): string {
+  const list = (channels ?? []).map(c => t(`enums.channel.${c}`, { defaultValue: c }))
+  return list.length > 0 ? list.join(', ') : '—'
+}
+
+function StatusBadge({ t, status }: { t: TFunc; status: string }) {
   const cls = STATUS_COLORS[status] ?? 'bg-surface-alt text-muted border-border'
   return (
-    <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${cls}`}>
-      {status || '—'}
+    <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${cls}`}
+      title={status}>
+      {statusLabel(t, status)}
     </span>
   )
 }
@@ -208,15 +237,16 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
                       {j.session_count}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5 text-muted-light">
-                    {(j.channels ?? []).join(', ') || '—'}
+                  <td className="px-3 py-2.5 text-muted-light" title={(j.channels ?? []).join(', ')}>
+                    {channelsLabel(t, j.channels)}
                   </td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDate(j.started_at)}</td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDuration(j.started_at, j.last_activity_at)}</td>
                   <td className="px-3 py-2.5">
                     {j.business_outcome
-                      ? <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)}`}>
-                          {j.business_outcome}
+                      ? <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)}`}
+                          title={j.business_outcome}>
+                          {outcomeLabel(t, j.business_outcome)}
                         </span>
                       : <span className="text-border-strong">—</span>}
                   </td>
@@ -303,11 +333,17 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession }:
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2.5 text-muted-light">{s.channel || '—'}</td>
-                  <td className="px-3 py-2.5"><StatusBadge status={s.status} /></td>
+                  <td className="px-3 py-2.5 text-muted-light" title={s.channel}>
+                    {s.channel ? t(`enums.channel.${s.channel}`, { defaultValue: s.channel }) : '—'}
+                  </td>
+                  <td className="px-3 py-2.5"><StatusBadge t={t} status={s.status} /></td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDate(s.opened_at)}</td>
                   <td className="px-3 py-2.5 text-muted-light">{s.segment_count || 0}</td>
-                  <td className="px-3 py-2.5 text-muted-light">{s.outcome || <span className="text-border-strong">—</span>}</td>
+                  <td className="px-3 py-2.5 text-muted-light" title={s.outcome ?? ''}>
+                    {s.outcome
+                      ? outcomeLabel(t, s.outcome)
+                      : <span className="text-border-strong">—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

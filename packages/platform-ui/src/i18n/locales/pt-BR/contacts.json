@@ -1,4 +1,28 @@
 {
+  "enums": {
+    "outcome": {
+      "resolved":        "Resolvido",
+      "escalated":       "Escalado",
+      "escalated_human": "Escalado (humano)",
+      "failed":          "Falhou",
+      "timeout":         "Timeout",
+      "abandoned":       "Abandonado",
+      "suspended":       "Suspenso",
+      "cancelled":       "Cancelado",
+      "no_resource":     "Sem recurso"
+    },
+    "channel": {
+      "webchat":   "WebChat",
+      "whatsapp":  "WhatsApp",
+      "voice":     "Voz",
+      "email":     "E-mail",
+      "sms":       "SMS",
+      "instagram": "Instagram",
+      "telegram":  "Telegram",
+      "webrtc":    "WebRTC",
+      "webhook":   "Webhook"
+    }
+  },
   "journeys": {
     "noTenant": "Sem tenant",
     "refresh": "Atualizar",
