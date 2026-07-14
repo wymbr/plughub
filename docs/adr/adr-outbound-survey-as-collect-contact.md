@@ -12,9 +12,15 @@ cego ao processo com guard de invariante; `persistCollect` × `persistDelegate`)
 (`survey_link_create`), `packages/orchestrator-bridge` (hook `on_process_end`),
 `packages/analytics-api` (`session.signals`, `/reports/journeys`)
 **Relacionado:** Arc 19 (modelo unificado de sessão; `collect`/suspend-resume),
-Journey J4b (hook `on_process_end` + `skill_journey_survey_v1`),
+Journey J4b (hook `on_process_end`),
 `docs/arcos/customer-surveys.md` §19 (retorno outbound via collect),
 `docs/product/journey-3-niveis-implementation-spec.md`
+
+> **Nota de nomeação (2026-07-14).** Os nomes de skill citados no *Contexto* abaixo são os
+> da época (J4b). Os skills foram renomeados por **papel**: `skill_survey_trigger_v1`
+> (gatilho/hook), `skill_survey_outbound_v1` (workflow com o `collect`) e
+> `skill_survey_runner_v1` (renderiza + grava o sinal). Ver
+> `docs/product/journey-j4c-survey-collect-spec.md`.
 
 ---
 

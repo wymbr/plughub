@@ -124,6 +124,22 @@ class WebhookAdapter(ChannelAdapter):
         if self._identity_enabled:
             await self._identity.ensure_schema()
 
+    async def _read_ctx_tag(
+        self, tenant_id: str, session_id: str | None, tag: str
+    ) -> str | None:
+        """Read a single ContextStore tag of a session. Fail-soft → None."""
+        if not session_id:
+            return None
+        try:
+            raw = await self._redis.hget(f"{tenant_id}:ctx:{session_id}", tag)
+            if not raw:
+                return None
+            entry = json.loads(raw)
+            val = entry.get("value") if isinstance(entry, dict) else entry
+            return str(val) if val else None
+        except Exception:
+            return None
+
     async def _read_ctx_root(self, tenant_id: str, session_id: str | None) -> str | None:
         """
         Journey J1: read `session.root_session_id` from a session's ContextStore.
@@ -133,19 +149,55 @@ class WebhookAdapter(ChannelAdapter):
         / delegate): child.root = caller.root, not caller.session_id. Fail-soft — a
         missing/broken entry falls back to the caller resolving root = self upstream.
         """
-        if not session_id:
-            return None
-        try:
-            raw = await self._redis.hget(
-                f"{tenant_id}:ctx:{session_id}", "session.root_session_id"
+        return await self._read_ctx_tag(tenant_id, session_id, "session.root_session_id")
+
+    async def _resolve_signal_target(
+        self,
+        tenant_id:   str,
+        session_id:  str,          # caller (workflow) session
+        caller_root: str,
+        grain:       str,
+    ) -> str:
+        """
+        S2 — traduz o GRÃO do sinal na CHAVE contra a qual ele será gravado.
+
+        Isto NÃO é regra de negócio no core: é a definição de o que cada grão SIGNIFICA
+        no modelo de sessão da plataforma (a mesma natureza de `root_session_id`). O que
+        é regra de negócio — pesquisar a journey ou a sessão — fica no `config_json` do
+        deploy; aqui só se resolve o que a plataforma já sabe:
+
+          journey  → a raiz canônica da journey        (caller.session.root_session_id)
+          session  → a sessão de origem pesquisada     (caller.session.origin_session_id,
+                     i.e. a sessão que disparou o workflow de survey)
+          workflow → o próprio workflow                (a sessão chamadora)
+
+        `segment` é REJEITADO aqui de propósito: `survey_record` exige `segment_id`, que o
+        workflow outbound não conhece (ele foi disparado por um hook de fim de sessão, não
+        de segmento). Suportá-lo exige o gatilho carimbar o segmento — outra fatia. Falhar
+        alto é melhor do que gravar o sinal na chave errada.
+        """
+        if grain == "journey":
+            return caller_root
+        if grain == "workflow":
+            return session_id
+        if grain == "session":
+            origin = await self._read_ctx_tag(
+                tenant_id, session_id, "session.origin_session_id"
             )
-            if not raw:
-                return None
-            entry = json.loads(raw)
-            val = entry.get("value") if isinstance(entry, dict) else entry
-            return str(val) if val else None
-        except Exception:
-            return None
+            if not origin:
+                raise ValueError(
+                    "signal_grain='session' exige que o workflow tenha uma sessão de "
+                    "origem (session.origin_session_id) — este collect não foi disparado "
+                    "a partir de uma sessão."
+                )
+            return origin
+        if grain == "segment":
+            raise ValueError(
+                "signal_grain='segment' não é suportado no collect outbound: "
+                "survey_record exige `segment_id`, que o workflow não conhece. "
+                "Um survey de segmento precisa que o gatilho carimbe o segmento."
+            )
+        raise ValueError(f"signal_grain desconhecido: '{grain}'")
 
     @staticmethod
     def _ctx_entry(value: str, source: str, now_iso: str) -> str:
@@ -763,6 +815,7 @@ class WebhookAdapter(ChannelAdapter):
         options:            list[dict[str, Any]] | None = None,
         fields:             list[dict[str, Any]] | None = None,
         dialog_form_id:     str = "",
+        signal_grain:       str = "journey",
         timeout_hours:      float = 48.0,
         campaign_id:        str = "",
     ) -> dict[str, Any]:
@@ -809,6 +862,16 @@ class WebhookAdapter(ChannelAdapter):
                 tenant_id, customer_id, channel_policy,
             )
 
+        # ── S2: grão → CHAVE do sinal ─────────────────────────────────────────
+        # Resolvido AQUI (e não no runner) porque a tradução grão→chave é semântica do
+        # modelo de sessão, e só o chamador tem o contexto (raiz, sessão de origem). O
+        # runner recebe o alvo pronto pelo ctx e continua 100% genérico — sem grão nem
+        # métrica hardcoded. Falha alto em grão inválido/insuportável: gravar o sinal na
+        # chave errada é pior do que não gravar (contamina o relatório em silêncio).
+        signal_target_id = await self._resolve_signal_target(
+            tenant_id, session_id, caller_root, signal_grain,
+        )
+
         # ── LAZY: store the collect pending — NO session until the customer clicks ──
         ttl_s      = int(timeout_hours * 3600) + 3600
         expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
@@ -821,6 +884,8 @@ class WebhookAdapter(ChannelAdapter):
                 "pool_id":           pool_id,        # survey pool for the click inbound
                 "channel":           negotiated,
                 "form_id":           dialog_form_id, # DialogForm the runner will render
+                "signal_grain":      signal_grain,      # S2 — grão do sinal (config do deploy)
+                "signal_target_id":  signal_target_id,  # S2 — chave já resolvida p/ o runner
                 "customer_id":       customer_id,
                 "tenant_id":         tenant_id,
                 "status":            "pending",
@@ -923,6 +988,19 @@ class WebhookAdapter(ChannelAdapter):
                     "source": "collect_engage", "visibility": "agents_only",
                     "updated_at": now_iso,
                 })
+            # S2 — grão + chave do sinal, já resolvidos no handle_collect. O runner lê
+            # ambos daqui: ele não sabe (nem precisa saber) que grão está pesquisando.
+            # Retrocompat: pendings criados antes do S2 não têm os campos → default
+            # journey / raiz, que é exatamente o que eles faziam hardcoded.
+            ctx_writes["session.survey_grain"] = self._ctx_entry(
+                pending.get("signal_grain") or "journey", "collect_engage", now_iso,
+            )
+            ctx_writes["session.survey_target_id"] = self._ctx_entry(
+                pending.get("signal_target_id")
+                or pending.get("root_session_id")
+                or session_id,
+                "collect_engage", now_iso,
+            )
             await self._redis.hset(ctx_key, mapping=ctx_writes)
             await self._redis.expire(ctx_key, session_ttl_s)
 

@@ -522,6 +522,9 @@ app.post("/execute", async (req: Request, res: Response) => {
             ...(params.requires       ? { requires:       params.requires }       : {}),
             ...(params.channel_policy ? { channel_policy: params.channel_policy } : {}),
             ...(params.dialog_form_id ? { dialog_form_id: params.dialog_form_id } : {}),
+            // S2 — grão do sinal já resolvido ($.config.grain → valor). O N2 traduz
+            // grão → chave e semeia no ctx da sessão de survey; o runner lê de lá.
+            ...(params.signal_grain   ? { signal_grain:   params.signal_grain }   : {}),
             interaction:    params.interaction,
             prompt:         params.prompt,
             ...(params.options ? { options: params.options } : {}),

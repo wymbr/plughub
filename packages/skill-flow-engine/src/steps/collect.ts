@@ -146,6 +146,27 @@ export async function executeCollect(
       ? await resolveInputValue(step.channel_policy, ctx, ctx.contextStore)
       : undefined
 
+    // S2 — o GRÃO do sinal também costuma vir por referência (`"$.config.grain"`):
+    // grão é parâmetro de deploy, não conteúdo do skill. Assim o mesmo workflow
+    // outbound pesquisa a journey num deploy e a sessão em outro.
+    //
+    // Guard: um `$.config.grain` AUSENTE resolve para null/undefined (é assim que refs
+    // não resolvidos se comportam) — e aí o campo simplesmente não é enviado, e o N2
+    // aplica o default `journey`. O `startsWith` protege do caso patológico em que um
+    // ref chega inalterado: mandar a string "$.config.grain" como grão faria o N2
+    // rejeitar o collect inteiro. Melhor cair no default do que falhar por um campo
+    // opcional.
+    const _rawGrain = step.signal_grain !== undefined
+      ? await resolveInputValue(step.signal_grain, ctx, ctx.contextStore)
+      : undefined
+    const resolvedSignalGrain =
+      typeof _rawGrain === "string" &&
+      _rawGrain.length > 0 &&
+      !_rawGrain.startsWith("$.") &&
+      !_rawGrain.startsWith("@")
+        ? _rawGrain
+        : undefined
+
     const result = await ctx.persistCollect({
       step_id:        step.id,
       collect_token:  collectToken,
@@ -156,6 +177,7 @@ export async function executeCollect(
         ? { channel_policy: resolvedChannelPolicy as Record<string, unknown> }
         : {}),
       ...(step.dialog_form_id ? { dialog_form_id: step.dialog_form_id } : {}),
+      ...(resolvedSignalGrain ? { signal_grain: resolvedSignalGrain } : {}),
       interaction:    step.interaction,
       prompt:         step.prompt,
       ...(step.options    ? { options:      step.options }    : {}),

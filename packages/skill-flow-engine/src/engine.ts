@@ -146,6 +146,8 @@ export interface SkillFlowEngineConfig {
     campaign_id?:   string
     /** Journey J4c — DialogForm rendered on engagement (survey collect). */
     dialog_form_id?: string
+    /** S2 — grão do sinal, já resolvido (journey | session | workflow | segment). */
+    signal_grain?:  string
     /** Identity Resolver (nível b) — index pending under native customer_id for cross-channel resume. */
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */

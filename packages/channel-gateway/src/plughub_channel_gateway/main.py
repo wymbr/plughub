@@ -890,6 +890,9 @@ async def webhook_collect(request: Request) -> dict:
             options              = body.get("options"),
             fields               = body.get("fields"),
             dialog_form_id       = body.get("dialog_form_id") or "",
+            # S2 — grão do sinal (config do deploy). Default `journey` = o que os
+            # collects pré-S2 faziam hardcoded no runner.
+            signal_grain         = body.get("signal_grain") or "journey",
             timeout_hours        = float(body.get("timeout_hours") or 48),
             campaign_id          = body.get("campaign_id") or "",
         )

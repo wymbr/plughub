@@ -1,0 +1,84 @@
+# skill_survey_trigger_v1.yaml
+# Survey — GATILHO (hook agent). Era `skill_journey_survey_v1` (renomeado 2026-07-14).
+#
+# Nomeação por PAPEL, não por grão. Os três skills de survey são:
+#   • skill_survey_trigger_v1   — GATILHO: consome o hook de fim (`on_process_end`,
+#     `on_contact_end`, …), decide SE pesquisa, e dispara o workflow outbound.
+#   • skill_survey_outbound_v1  — WORKFLOW: faz o `collect` e suspende esperando o clique.
+#   • skill_survey_runner_v1    — RUNNER: renderiza o DialogForm ao vivo e grava o sinal.
+#
+# Por que papel e não grão (journey/session/segment): grão e papel são eixos
+# ORTOGONAIS. Nomear pelo grão duplicaria a cadeia inteira (3 papéis × N grãos) para
+# diferenças que são de CONFIG — e ainda deixaria ambíguo qual dos dois skills de grão
+# journey é o gatilho e qual é o workflow (foi exatamente a colisão
+# `journey_survey` × `survey_journey` que custou um diagnóstico errado).
+# O grão é PARÂMETRO (ver S2: `$.config.grain`), não uma família de skills.
+
+id: skill_survey_trigger_v1
+name: Survey Trigger (hook de fim)
+version: "1.0"
+description: |
+  Agente CONSUMIDOR do hook de fim (hoje `on_process_end`, fim de PROCESSO/N3).
+  Decide se pesquisa e dispara o WORKFLOW de survey outbound, que é quem contata o
+  cliente. Fire-and-forget: o hook completa na hora e o contato de origem fecha normal.
+
+  Princípios (spec §6.1):
+    - NÃO renderiza inline: no fim do processo o cliente não está conectado
+      (workflow headless) → o contato ativo sai pelo veículo outbound (`collect`).
+      A resposta é do CLIENTE, nunca fabricada.
+    - Outcome-aware: só pesquisa em ciclo fechado (`resolved`). O MECANISMO (hook) é
+      genérico e dispara em qualquer desfecho terminal; a DECISÃO é do agente.
+    - Pertença à journey: roda como especialista NA sessão de origem, e propaga
+      `origin_session_id` → o workflow e o contato de survey herdam a raiz canônica (J1).
+
+classification:
+  type: vertical
+
+entry: avaliar_desfecho
+
+steps:
+  # Outcome-aware: só pesquisa em ciclo fechado.
+  #
+  # Duas condições porque a TAG depende do hook que disparou (`process_outcome` para
+  # `on_process_end`, `contact_outcome` para `on_contact_end`) — só uma delas existe
+  # em cada disparo. Não é branching de negócio: é o mesmo teste sobre a tag que o
+  # hook daquele grão carimbou. (Um `field` vindo de `$.config` exigiria dupla
+  # indireção — o `field` é um path, não um valor —, o que o engine não faz.)
+  - id: avaliar_desfecho
+    type: choice
+    conditions:
+      - field:    "@ctx.session.process_outcome"
+        operator: eq
+        value:    "resolved"
+        next:     disparar_survey
+      - field:    "@ctx.session.contact_outcome"
+        operator: eq
+        value:    "resolved"
+        next:     disparar_survey
+    default: encerrar
+
+  # Dispara o WORKFLOW de survey (que é quem faz o `collect`).
+  #
+  # Por que não `collect` aqui: este skill roda como HOOK AGENT (especialista na sessão
+  # de origem, perfil agent). Hook agent NÃO pode suspender — o `collect` suspende, e o
+  # bridge trata `suspended` como hook concluído → fecharia o contato de origem antes de
+  # o cliente responder, e o resume falharia depois. Além disso, perfil agent proíbe
+  # `collect`. Daí a separação gatilho (agent) × workflow (webhook).
+  #
+  # `origin_session_id` propaga a RAIZ → o workflow de survey (e o contato de survey que
+  # ele cria) são membros da MESMA journey.
+  - id: disparar_survey
+    type: invoke
+    tool: workflow_trigger
+    input:
+      skill_id:          "skill_survey_outbound_v1"
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"     # herda a raiz canônica da journey
+      trigger_type:      "task"
+    on_success: encerrar
+    on_failure: encerrar
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+    issue_status: survey_scheduled

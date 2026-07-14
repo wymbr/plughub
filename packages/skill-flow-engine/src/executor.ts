@@ -192,6 +192,12 @@ export interface StepContext {
     campaign_id?:   string
     /** Journey J4c — DialogForm rendered on engagement (survey collect). */
     dialog_form_id?: string
+    /**
+     * S2 — grão do sinal (journey | session | workflow | segment). Já RESOLVIDO
+     * (o step aceita `"$.config.grain"`; aqui chega o valor). O handler N2 traduz
+     * grão → chave do sinal e a semeia no ctx da sessão de survey.
+     */
+    signal_grain?:  string
     /** Identity Resolver (nível b) — index pending under native customer_id for cross-channel resume. */
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */

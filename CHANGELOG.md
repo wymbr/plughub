@@ -2,6 +2,49 @@
 
 ---
 
+## Survey — nomeação por PAPEL + grão como parâmetro de deploy (S1 + S2) (2026-07-14)
+
+**Decisão de eixo.** Os skills de survey passam a ser nomeados pelo **papel**, e o **grão**
+(journey/session/segment) vira **parâmetro de deploy**, não uma família de skills. Papel e grão são
+eixos **ortogonais**: nomear pelo grão duplicaria a cadeia inteira (gatilho × workflow × runner, vezes
+N grãos) para diferenças que são de config — e deixaria ambíguo qual dos dois skills de grão *journey*
+é o gatilho e qual é o workflow (foi exatamente a colisão `journey_survey` × `survey_journey` que
+custou um diagnóstico errado no J4c). O que o operador vê como "survey de journey" vs "survey de
+sessão" é o **nome do pool**, não o `skill_id`.
+
+**S1 — rename:** `skill_journey_survey_v1` → **`skill_survey_trigger_v1`** (gatilho: consome o hook de
+fim, decide *se* pesquisa, dispara o workflow); `skill_survey_journey_v1` → **`skill_survey_outbound_v1`**
+(workflow: faz o `collect` e suspende); `skill_survey_collect_v1` → **`skill_survey_runner_v1`** (runner:
+renderiza o DialogForm ao vivo, grava o sinal, retoma o workflow). O gatilho ficou agnóstico de grão
+(testa `process_outcome` **ou** `contact_outcome` — só uma das tags existe por disparo).
+
+**S2 — grão em config:** `CollectStepSchema.signal_grain` (união `enum | ref`, reusando
+`SignalGrainSchema` de `survey.ts`), propagado por `persistCollect` → skill-flow-service →
+channel-gateway. O workflow declara `signal_grain: "$.config.grain"`. **A tradução grão→chave é do N2**
+(`_resolve_signal_target`), porque só o chamador tem o contexto: `journey` → raiz canônica; `session` →
+`session.origin_session_id` do chamador; `workflow` → a própria sessão. Isso não é regra de negócio no
+core — é a definição de o que cada grão *significa* no modelo de sessão (mesma natureza de
+`root_session_id`); o que é negócio (*qual* grão) fica no `config_json`. **`segment` é rejeitado alto**:
+`survey_record` exige `segment_id`, que o workflow outbound não conhece — gravar o sinal na chave errada
+contamina o relatório em silêncio. O gateway semeia `session.survey_grain` + `session.survey_target_id`
+no ctx da sessão de survey; o runner lê ambos → **zero grão e zero métrica hardcoded**. Retrocompat:
+pending sem os campos → default `journey`/raiz.
+
+Validado E2E: sinal gravado com `grain=journey` lido do ctx (nps 10, chaveado na raiz); trocando **só o
+`config_json`** para `"grain":"session"`, o pending nasce com `signal_grain: "session"` — mesmo skill,
+zero código. *(Ressalva: no demo a sessão do processo É a raiz, então os dois grãos resolvem para o mesmo
+id; o caminho de código difere, os valores coincidem. A distinção de valor só aparece numa journey com
+múltiplas sessões.)*
+
+**Duas armadilhas registradas.** (a) `CollectStepSchema` mudou ⇒ agent-registry, skill-flow-service e o
+engine rebuildam **juntos**: `z.object()` descarta chave desconhecida **em silêncio**, então um
+agent-registry velho gravaria o flow sem o `signal_grain`, sem erro. (b) **Custo do D2**: com
+*seed-if-absent*, editar um `skill_*.yaml` já semeado **não propaga** — o DB é a verdade. O loop de
+desenvolvimento a partir do arquivo exige `REGISTRY_SYNC_RECONCILE=true`, agora exposto no
+`docker-compose.demo.yml`.
+
+---
+
 ## J4c follow-up item 2 — canal/pool do survey vem do DEPLOY, não do core (2026-07-13)
 
 O resolvedor N2 do `collect` deixou de depender de um `ChannelEndpoint` global e passa a ler o par **canal → pool** do `config_json` do slot do skill N3 (`$.config.channel_policy`). Regra de negócio do tenant ("quem atende a pesquisa, por onde") vira **config de deploy** do skill, não conhecimento do core: o mesmo `skill_survey_journey_v1` serve um tenant que pesquisa por webchat e outro por SMS sem uma linha diferente. `SkillConfigParamSchema.type` ganhou `"object"` (a policy é um mapa) e a tela de Deploy renderiza `JsonParamInput` para esses params. O `ChannelEndpoint webchat/default` do demo foi removido.

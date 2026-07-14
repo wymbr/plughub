@@ -1,10 +1,25 @@
 # Journey J4c — Survey outbound como contato via `collect` (spec de implementação)
 
-**Status:** Desenho fechado (2026-07-10), pré-código. Motiva a fatia J4c (`TODO.md`).
+**Status:** Implementado (2026-07-13). Motiva a fatia J4c (`TODO.md`).
 **ADR base:** `docs/adr/adr-outbound-survey-as-collect-contact.md`
 **Relacionado:** Arc 19 (`collect`/suspend-resume, modelo unificado de sessão),
 Resolvedor de Identidade (Fase A/B — `secondary_keys` + `verification_class`),
-Journey J4b (`on_process_end` + `skill_journey_survey_v1`), `docs/arcos/customer-surveys.md` §19.
+Journey J4b (`on_process_end`), `docs/arcos/customer-surveys.md` §19.
+
+> **Nomeação dos skills (rename 2026-07-14).** Os três skills de survey são nomeados pelo
+> **papel**, não pelo grão — grão e papel são eixos ortogonais, e nomear pelo grão
+> duplicaria a cadeia inteira (3 papéis × N grãos) além de deixar ambíguo qual dos dois
+> skills de grão *journey* é o gatilho e qual é o workflow:
+>
+> | skill | papel | era |
+> |---|---|---|
+> | `skill_survey_trigger_v1` | **gatilho** — consome o hook de fim, decide *se* pesquisa, dispara o workflow | `skill_journey_survey_v1` |
+> | `skill_survey_outbound_v1` | **workflow** — faz o `collect`, suspende esperando o clique | `skill_survey_journey_v1` |
+> | `skill_survey_runner_v1` | **runner** — renderiza o DialogForm ao vivo, grava o sinal, retoma o workflow | `skill_survey_collect_v1` |
+>
+> O **grão** (journey/session/segment) é **parâmetro**, não família de skills — ver S2 no
+> `TODO.md`. Enquanto ele não for config, o runner ainda carrega `grain: "journey"`
+> hardcoded (o único ponto não-genérico dele).
 
 ---
 
@@ -167,7 +182,7 @@ journey a que se atar → sinal solto, sem sessão). O survey de processo (N3, c
 | **J4c-1** | Contrato: `channel_policy` no `CollectStep` (schemas); `persistCollect` wired no skill-flow-service (hoje só `persistDelegate`). | — |
 | **J4c-2** | **N2**: handler `persistCollect` na channel-gateway = resolvedor único. Cria sessão-filho (herda root, carimba pool), negocia canal (alcançabilidade via Resolvedor de Identidade + `channel_policy`; consentimento/política = slots vazios), entrega. Guard de invariante. | web + entrega mock; SMS/e-mail = config futura |
 | **J4c-3** | **N1 + superfície**: `/survey/{token}` atada ao `child_session_id`; submit fecha a sessão-filho + emite sinal no close + publica `collect.responded`. | — |
-| **J4c-4** | **Resume + agente**: `collect.responded` → resume de N3 via channel-gateway (como `handle_resume`); `skill_journey_survey_v1` migra de `survey_link_create` p/ `collect` (com `channel_policy`); `survey_link_create` = legado/anônimo. | — |
+| **J4c-4** | **Resume + agente**: `collect.responded` → resume de N3 via channel-gateway (como `handle_resume`); o survey migra de `survey_link_create` p/ `collect` (com `channel_policy`) — as-built, o `collect` ficou no **workflow** (`skill_survey_outbound_v1`), porque o hook agent não pode suspender; `survey_link_create` = legado/anônimo. | — |
 | **J4c-5** | **E2E**: trigger → processo → hook → survey aparece como **sessão-membro N1** no drill da journey, com NPS; provar N3 channel-agnostic (nenhum canal no skill). | — |
 
 ---

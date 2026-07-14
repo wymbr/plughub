@@ -1308,6 +1308,16 @@ services:
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry
       SKILLS_DIR:           /skills
+      # Provisioning precedence (config-consolidation). Default (vazio) = seed-if-absent:
+      # o YAML só semeia DB vazio; depois o DB é a verdade e o syncer NÃO sobrescreve —
+      # é o que faz a edição da UI sobreviver ao restart.
+      #
+      # Consequência (mordeu no S2): **editar um skill_*.yaml já semeado não propaga**.
+      # Para o loop de desenvolvimento a partir do arquivo, suba com o YAML vencendo:
+      #     REGISTRY_SYNC_RECONCILE=true docker compose -f docker-compose.demo.yml up -d orchestrator-bridge
+      # e volte ao default depois (um `up -d` sem a var). Em reconcile o YAML re-aplica
+      # skills, pools e deploy-slots por cima do DB — inclusive por cima de edições da UI.
+      REGISTRY_SYNC_RECONCILE: ${REGISTRY_SYNC_RECONCILE:-}
     depends_on:
       kafka:
         condition: service_healthy

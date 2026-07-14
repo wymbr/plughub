@@ -10,6 +10,7 @@
 
 import { z } from "zod"
 import { ToolContextTagsSchema, ReasonStepContextTagsSchema, SkillRequiredContextSchema, ContextTagScopeSchema } from "./context-store"
+import { SignalGrainSchema } from "./survey"
 
 // ─────────────────────────────────────────────
 // Classificação da skill
@@ -678,6 +679,32 @@ export const CollectStepSchema = z.object({
    * customer opens the link. Config-driven single interpreter — no bespoke skill.
    */
   dialog_form_id: z.string().optional(),
+
+  /**
+   * S2 — GRÃO do sinal que a pesquisa vai gravar (`journey` | `session` | `workflow`
+   * | `segment`). O grão é **parâmetro**, não uma família de skills: papel e grão são
+   * eixos ortogonais, e nomear skills pelo grão duplicaria a cadeia inteira (gatilho ×
+   * workflow × runner, vezes N grãos) para diferenças que são de config.
+   *
+   * União `enum | ref`: normalmente vem por **referência** (`"$.config.grain"`), do
+   * `config_json` do slot — assim um mesmo `skill_survey_outbound_v1` pesquisa a journey
+   * num deploy e a sessão em outro, sem uma linha diferente.
+   *
+   * O que o grão significa em termos de CHAVE do sinal é semântica do **modelo de
+   * sessão** (não regra de negócio), então quem a resolve é o handler N2:
+   *   journey  → a raiz canônica          (session.root_session_id)
+   *   session  → a sessão de origem       (session.origin_session_id do chamador)
+   *   workflow → o próprio workflow       (a sessão chamadora)
+   *   segment  → NÃO suportado por aqui   — `survey_record` exige `segment_id`, que o
+   *              workflow outbound não conhece; um survey de segmento precisa que o
+   *              gatilho carimbe o segmento, o que é outra fatia.
+   * O alvo resolvido viaja no pending e é semeado no ctx da sessão de survey
+   * (`session.survey_grain` + `session.survey_target_id`), de onde o runner o lê —
+   * mantendo o runner 100% genérico (zero métrica e zero grão hardcoded).
+   *
+   * Default `journey` (retrocompat: pendings sem grão são de journey).
+   */
+  signal_grain: z.union([SignalGrainSchema, z.string()]).optional(),
 
   // ── Identity Resolver (nível b) — retomada channel-abstract ──
   /**

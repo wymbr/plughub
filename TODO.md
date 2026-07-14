@@ -96,6 +96,69 @@ mitigar esse mesmo problema.
 
 ---
 
+### Survey — nomeação por PAPEL + grão em config (S1 ✅ / S2 pendente, 2026-07-14)
+
+**Decisão de eixo.** Os skills de survey são nomeados pelo **papel**, e o **grão**
+(journey/session/segment) é **parâmetro de deploy**, não uma família de skills. Grão e papel
+são eixos **ortogonais**: nomear pelo grão duplicaria a cadeia inteira (3 papéis × N grãos)
+para diferenças que são de config — e deixaria ambíguo qual dos dois skills de grão *journey*
+é o gatilho e qual é o workflow (foi exatamente a colisão `journey_survey` × `survey_journey`
+que custou um diagnóstico errado no J4c). O que o operador vê como "survey de journey" vs
+"survey de sessão" é o **nome do pool**, não o `skill_id`.
+
+**S1 ✅ — rename puro (sem mudança de comportamento):**
+
+| papel | skill | era |
+|---|---|---|
+| **gatilho** — consome o hook de fim, decide *se* pesquisa, dispara o workflow | `skill_survey_trigger_v1` | `skill_journey_survey_v1` |
+| **workflow** — faz o `collect`, suspende esperando o clique | `skill_survey_outbound_v1` | `skill_survey_journey_v1` |
+| **runner** — renderiza o DialogForm ao vivo, grava o sinal, retoma o workflow | `skill_survey_runner_v1` | `skill_survey_collect_v1` |
+
+O gatilho ficou agnóstico de grão (testa `process_outcome` **ou** `contact_outcome` — só uma
+das tags existe por disparo; um `field` vindo de `$.config` exigiria dupla indireção, que o
+engine não faz).
+
+**Custo operacional do rename (os pools são DB-owned, criados pela UI — não há bloco `deploy:`
+em `infra/registry`):** `skill_id` é a identidade, então os YAMLs novos **semeiam skills novos**
+e os slots dos pools continuam apontando para os antigos. Exige, por pool: `set-next` + `promote`
+com o id novo, atualizar o `webhook_skill_id` do pool `survey_journey_wf`, e apagar os 3 skills
+órfãos.
+
+**S2 ✅ — grão vira config (não skill).** O runner tinha `grain: "journey"` **hardcoded** — o único
+ponto não-genérico de um skill que se descreve como domain-blind. Agora:
+
+- `CollectStepSchema.signal_grain` (união `enum | ref`, reusa `SignalGrainSchema` de `survey.ts` —
+  sem redefinir o enum), propagado por `persistCollect` → skill-flow-service → channel-gateway.
+- `skill_survey_outbound_v1` declara `signal_grain: "$.config.grain"` + `config_param` `grain`.
+- **A tradução grão→chave é do N2** (`_resolve_signal_target`), porque só o chamador tem o contexto:
+  `journey` → raiz canônica; `session` → `session.origin_session_id` do chamador; `workflow` → a
+  própria sessão. Isso NÃO é regra de negócio no core — é a definição de o que cada grão *significa*
+  no modelo de sessão (mesma natureza de `root_session_id`). O que é negócio (*qual* grão) fica no
+  `config_json` do deploy.
+- **`segment` é rejeitado alto**: `survey_record` exige `segment_id`, que o workflow outbound não
+  conhece (foi disparado por um hook de fim de sessão, não de segmento). Gravar o sinal na chave
+  errada contamina o relatório em silêncio — melhor falhar.
+- O gateway semeia `session.survey_grain` + `session.survey_target_id` no ctx da sessão de survey; o
+  runner lê ambos → **zero grão e zero métrica no skill**. Survey de sessão = novo **deploy**.
+- Retrocompat: pending sem os campos → default `journey`/raiz, que é o que faziam hardcoded.
+
+**Armadilha de build:** `CollectStepSchema` mudou ⇒ **agent-registry, skill-flow-service e o engine
+rebuildam juntos**. `z.object()` **descarta** chave desconhecida em silêncio — um agent-registry
+velho gravaria o flow **sem** `signal_grain`, sem erro nenhum.
+
+**Armadilha de DX (custo do D2, achada no S2):** com *seed-if-absent*, **editar um `skill_*.yaml` já
+semeado NÃO propaga** — o DB é a verdade e o syncer não sobrescreve (é justamente o que faz a edição
+da UI sobreviver ao restart). O loop "edito o arquivo, reinicio o bridge" morreu junto. O caminho é o
+`REGISTRY_SYNC_RECONCILE=true`, agora exposto no `docker-compose.demo.yml`:
+`REGISTRY_SYNC_RECONCILE=true docker compose -f docker-compose.demo.yml up -d orchestrator-bridge`
+(e voltar ao default depois). Vale um aviso no log quando um YAML difere do DB semeado — hoje o
+silêncio faz parecer que a edição funcionou.
+
+**Falta (fatia futura):** survey de **segmento** — exige o gatilho carimbar o `segment_id` do
+segmento pesquisado e propagá-lo até o `survey_record`.
+
+---
+
 ### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — corrigido, a validar
 
 **Sintoma:** a sessão do workflow (`37324d63`, `status: suspended`) ficou com `pool_id` **vazio** no ClickHouse,
