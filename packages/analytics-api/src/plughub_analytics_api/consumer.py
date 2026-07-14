@@ -105,7 +105,13 @@ _SESSION_CACHE_MAX = 50_000
 # Campos de IDENTIDADE — fatos que não mudam durante a vida da sessão. `status`,
 # `outcome`, `closed_at` etc. ficam de fora de propósito: são ESTADO, e estado a
 # linha nova tem o direito de sobrescrever.
-_IDENTITY_FIELDS = ("channel", "customer_id", "pool_id", "origin_session_id")
+#
+# T1/T4: `origin_session_id` (quem me criou) e `spawn_reason` (por que existo) são
+# imutáveis por natureza — nascem com a sessão e não mudam. Entram aqui para que uma
+# escrita parcial (routed/queued/suspended) não os apague.
+_IDENTITY_FIELDS = (
+    "channel", "customer_id", "pool_id", "origin_session_id", "spawn_reason",
+)
 
 
 def _learn_session_identity(rows: list[dict]) -> None:

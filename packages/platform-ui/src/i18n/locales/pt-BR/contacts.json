@@ -34,6 +34,12 @@
     "rootBadge": "raiz",
     "provisional": "provisório",
     "provisionalHint": "Provisório: o processo ainda tem sessões abertas",
+    "spawnedProcess": "originou o processo",
+    "spawn": {
+      "trigger":  "disparo",
+      "delegate": "delegação",
+      "collect":  "contato"
+    },
     "filters": { "from": "De", "significantOnly": "Só significativas" },
     "columns": {
       "journey": "Processo (raiz)", "sessions": "Sessões", "channels": "Canais",

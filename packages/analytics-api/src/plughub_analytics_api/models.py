@@ -110,6 +110,9 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
         # Arc 19: webhook workflow sessions carry origin_session_id linking back to the
         # intake agent session that triggered them via workflow_trigger MCP tool.
         "origin_session_id": payload.get("origin_session_id") or None,
+        # Journey T4: rótulo da aresta — POR QUE esta sessão existe (trigger|delegate|
+        # collect). NULL numa sessão de topo (iniciada pelo cliente).
+        "spawn_reason": payload.get("spawn_reason") or None,
         # Journey J1: root_session_id = raiz TRANSITIVA da proveniência (propagada do
         # chamador pela plataforma; ausente → self). journey_id = cache = root no
         # nascimento. Ambos nunca null (fallback session_id).
@@ -325,11 +328,12 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "channel":        payload.get("channel", ""),
                 "pool_id":        payload.get("pool_id") or "",
                 "customer_id":    payload.get("customer_id") or payload.get("contact_id"),
-                # Journey T1: a linha de close é a SOBREVIVENTE no ReplacingMergeTree —
-                # tem de repetir a aresta de proveniência, ou o fechamento a apaga.
-                # O bridge a carimba lendo `session.origin_session_id` do ctx (durável),
-                # em vez de depender da cache em memória do consumer.
+                # Journey T1/T4: a linha de close é a SOBREVIVENTE no ReplacingMergeTree —
+                # tem de repetir a aresta de proveniência E o seu rótulo, ou o fechamento
+                # os apaga. O bridge os carimba lendo o ctx (durável), em vez de depender
+                # da cache em memória do consumer.
                 "origin_session_id": payload.get("origin_session_id") or None,
+                "spawn_reason":      payload.get("spawn_reason") or None,
                 "opened_at":      started_at or ended_at,
                 "closed_at":      ended_at,
                 # Fase A (queue-attended-model): business close_reason takes priority;

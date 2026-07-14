@@ -272,6 +272,20 @@ _DDL_SESSIONS_MIGRATE_ORIGIN = (
     " ADD COLUMN IF NOT EXISTS origin_session_id Nullable(String) DEFAULT NULL"
 )
 
+# Journey T4: spawn_reason — o RÓTULO da aresta de proveniência: *por que* esta sessão
+# existe. `origin_session_id` (T1) diz QUEM me criou; este diz COMO/POR QUÊ.
+#
+# É o que torna a árvore LEGÍVEL: sem o rótulo, o operador vê a hierarquia mas não sabe
+# por que cada filho está ali. Com ele, a cadeia conta a história numa olhada:
+#   processo —trigger→ workflow de survey —collect→ contato de survey
+#
+# Valores: trigger (workflow_trigger) | delegate | collect | NULL (sessão de topo:
+# iniciada pelo cliente — ninguém a "criou", ela é a raiz da árvore).
+_DDL_SESSIONS_MIGRATE_SPAWN = (
+    "ALTER TABLE {db}.sessions"
+    " ADD COLUMN IF NOT EXISTS spawn_reason Nullable(String) DEFAULT NULL"
+)
+
 # Journey J1: root_session_id — raiz TRANSITIVA da árvore de proveniência (agrupa
 # N sessões de um mesmo processo). Distinto de origin_session_id (1 salto). Nunca
 # null: DEFAULT session_id garante que legado e sessões-raiz apontem para si mesmas;
@@ -959,6 +973,7 @@ _MIGRATIONS = [
     _ALTER_WORKFLOW_EVENTS_POOL_ID,       # Add pool_id to workflow_events
     _DDL_SESSIONS_MIGRATE_STATUS,         # Arc 19: session status (active|suspended|closed)
     _DDL_SESSIONS_MIGRATE_ORIGIN,         # Arc 19: origin_session_id (webhook → intake link)
+    _DDL_SESSIONS_MIGRATE_SPAWN,          # Journey T4: spawn_reason (rótulo da aresta)
     _DDL_SESSIONS_MIGRATE_ROOT,           # Journey J1: root_session_id (raiz transitiva da proveniência)
     _DDL_SESSIONS_MIGRATE_JOURNEY,        # Journey J1: journey_id (cache = root no nascimento)
     _DDL_SEGMENTS_MIGRATE_FLOW,           # Relatórios: flow_id (skill deployado) por segmento
@@ -1148,6 +1163,9 @@ class AnalyticsStore:
         # transitiva (pertença). Separá-los é o que permite um filho pertencer a OUTRA
         # journey e ainda assim manter o fio de quem o criou (ver `journey: new`, T3).
         "origin_session_id",
+        # Journey T4: rótulo da aresta — POR QUE esta sessão existe (trigger|delegate|
+        # collect). NULL = sessão de topo (o cliente a iniciou; ninguém a criou).
+        "spawn_reason",
         # Journey J1: raiz transitiva da proveniência (agrupa) + cache journey_id.
         # Como o sessions é ReplacingMergeTree (linha inteira substituída), TODO
         # writer de linha precisa repetir o root p/ ele sobreviver ao fechamento —
@@ -1785,6 +1803,8 @@ def _session_row(d: dict) -> list:
         # `_inject_session_identity` (consumer) o reinjeta nas linhas parciais — o campo
         # já estava em `_IDENTITY_FIELDS`, esperando por este INSERT que nunca vinha.
         d.get("origin_session_id") or None,
+        # Journey T4: rótulo da aresta. NULL numa sessão de topo.
+        d.get("spawn_reason") or None,
         # Journey J1: root (raiz transitiva) — fallback = self (session_id) quando o
         # writer não carrega a raiz. Writers que têm a raiz (parse_inbound/close) a
         # repetem para sobreviver ao ReplacingMergeTree; routed/queued caem no self

@@ -34,6 +34,12 @@
     "rootBadge": "root",
     "provisional": "provisional",
     "provisionalHint": "Provisional: the process still has open sessions",
+    "spawnedProcess": "spawned process",
+    "spawn": {
+      "trigger":  "trigger",
+      "delegate": "delegate",
+      "collect":  "collect"
+    },
     "filters": { "from": "From", "significantOnly": "Significant only" },
     "columns": {
       "journey": "Process (root)", "sessions": "Sessions", "channels": "Channels",

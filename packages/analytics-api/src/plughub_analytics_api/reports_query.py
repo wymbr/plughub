@@ -300,6 +300,11 @@ async def query_sessions_report(
     pool_id:                str | None       = None,
     session_id:             str | None       = None,
     root_session_id:        str | None       = None,
+    # Journey T5: sessões que NASCERAM desta journey mas pertencem a OUTRA — as arestas
+    # que atravessam a fronteira (`journey: new`). É o que permite à Vista Processos
+    # mostrar "este atendimento originou o processo X" sem expandir a subárvore de X
+    # (expandir desfaria o corte que o operador pediu).
+    spawned_from_root:      str | None       = None,
     agent_id:               str | None       = None,
     insight_category:       str | None       = None,
     insight_tags:           list[str] | None = None,
@@ -324,7 +329,7 @@ async def query_sessions_report(
             channel, outcome, close_reason, pool_id, session_id,
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
-            ani, dnis, status, origin, root_session_id,
+            ani, dnis, status, origin, root_session_id, spawned_from_root,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -344,6 +349,7 @@ def _fetch_sessions(
     status: str | None = None,
     origin: "str | list[str]" = "live",
     root_session_id: str | None = None,
+    spawned_from_root: str | None = None,
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
@@ -374,6 +380,25 @@ def _fetch_sessions(
         _members = _journey_member_roots(_resolved, root_session_id)
         _member_list = ", ".join(f"'{m}'" for m in _members)
         conditions.append(f"s.root_session_id IN ({_member_list})")
+    # Journey T5 — as arestas que ATRAVESSAM a fronteira: sessões cujo PAI é desta journey
+    # mas que pertencem a OUTRA (nasceram com `journey: new`). Proveniência atravessa,
+    # pertença não — e é justamente esse par que a Vista Processos precisa para mostrar
+    # "este atendimento originou o processo X" sem expandir a subárvore de X (expandir
+    # desfaria o corte que o operador pediu ao usar `journey: new`).
+    #
+    # A subquery pega os session_id da journey; o `NOT IN` exclui quem continua nela.
+    if spawned_from_root:
+        _resolved_sp   = _journey_resolved_map(client, db, tenant_id)
+        _members_sp    = _journey_member_roots(_resolved_sp, spawned_from_root)
+        _member_list_sp = ", ".join(f"'{m}'" for m in _members_sp)
+        conditions.append(
+            f"""s.origin_session_id IN (
+                    SELECT session_id FROM {db}.sessions FINAL
+                    WHERE tenant_id = {{tenant_id:String}}
+                      AND root_session_id IN ({_member_list_sp})
+                )
+                AND s.root_session_id NOT IN ({_member_list_sp})"""
+        )
     if channel:
         # For active sessions parse_routed may have set channel='' — include them by also
         # checking non-FINAL rows. For closed sessions s.channel is authoritative.
@@ -568,7 +593,11 @@ def _fetch_sessions(
             __ANI_DNIS__,
             COALESCE(_sc.cnt, 0) AS segment_count,
             COALESCE(s.status, 'closed') AS status,
+            -- Journey T1/T4: a ARESTA (quem me criou) e o seu RÓTULO (por quê).
+            -- É com estes dois que a UI monta a árvore: sem o pai, tudo vira irmão;
+            -- sem o rótulo, vê-se a hierarquia mas não por que cada filho existe.
             s.origin_session_id,
+            s.spawn_reason,
             s.root_session_id
         FROM {db}.sessions AS s FINAL
         {_joins}

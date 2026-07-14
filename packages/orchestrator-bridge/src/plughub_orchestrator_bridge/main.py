@@ -1957,6 +1957,13 @@ async def _close_contact_layer(
         _origin_close = await _read_ctx_value(
             redis_client, tenant_id, session_id, "session.origin_session_id",
         )
+        # Journey T4: o RÓTULO da aresta (trigger|delegate|collect) — por que esta sessão
+        # existe. Mesma razão do origin: a linha de close sobrevive e tem de repetir o
+        # fato, senão o apaga. Crítico para a sessão de survey, que nasce pelo WEBCHAT (o
+        # adapter não sabe que veio de um `collect`) — o rótulo só existe no ctx.
+        _spawn_close = await _read_ctx_value(
+            redis_client, tenant_id, session_id, "session.spawn_reason",
+        )
 
         # SLA do pool no fechamento: a linha de close é a que sobrevive no
         # ReplacingMergeTree do analytics — repetir o sla_target_ms aqui evita
@@ -2062,6 +2069,8 @@ async def _close_contact_layer(
                 "root_session_id": _root_close,   # Journey J1 (survives ReplacingMergeTree)
                 # Journey T1: aresta de proveniência (1 salto). None = sessão de topo.
                 "origin_session_id": _origin_close,
+                # Journey T4: rótulo da aresta (trigger|delegate|collect).
+                "spawn_reason": _spawn_close,
             }).encode("utf-8"),
         )
         logger.info(

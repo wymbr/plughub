@@ -42,7 +42,32 @@ Quem decide é o **skill**: é conhecimento de negócio, e a plataforma não tem
 
 Validado E2E com a **mesma chamada, um campo de diferença**: `inherit` → `root = a do pai`; `new` → `root = ela mesma`, `origin = o pai`. No relatório, a journey nova aparece separada (`session_count: 1`) em vez de somada ao pai.
 
-**Pendente (spec §9):** T4 (rótulo da aresta), T5 (UI em árvore + prefixo `PRC-`), T6 (rastro forense).
+### T4 — `spawn_reason`: o rótulo da aresta
+
+`origin_session_id` (T1) diz **quem** me criou; `spawn_reason` diz **por quê**: `trigger` | `delegate` | `collect` | `NULL` (sessão de topo — o cliente a iniciou; ninguém a "criou": ela **é** a raiz da árvore).
+
+É o que torna a árvore **legível**: sem o rótulo, o operador vê a hierarquia mas não sabe por que cada filho está ali. Com ele, a cadeia conta a história numa olhada: *processo —trigger→ workflow de survey —collect→ contato de survey.*
+
+O rótulo é semeado no ctx por quem cria (trigger/delegate no channel-gateway; **collect no `engage`** — a sessão de survey nasce pelo **webchat**, e o adapter de webchat não sabe que ela veio de um `collect`), e o **bridge o carimba na linha de close** — mesma razão do `origin_session_id`: no `ReplacingMergeTree` a linha de fechamento é a **sobrevivente**. Entrou também em `_IDENTITY_FIELDS` (é fato imutável da sessão).
+
+### T5 — a UI vira árvore, e as arestas que cruzam viram links
+
+- **L2 da Vista Processos = árvore** (indentação por `origin_session_id`, rótulo `spawn_reason` por nó). Guard de ciclo no builder; nós órfãos (dado pré-T1, sem aresta) sobem ao topo em vez de sumirem — **dado antigo aparece achatado, não desaparece**.
+- **Arestas que atravessam a fronteira** (`journey: new`) viram **marcadores com link, nunca expansões**. Novo filtro `spawned_from_root` no `/reports/sessions`: sessões cujo **pai** é desta journey mas cujo **root** é outro. Expandir a subárvore traria outra journey para dentro desta, **desfazendo o corte que o operador pediu** — e a árvore completa (todas as criações, transitivamente) **não tem fronteira**, logo não é mensurável. *A journey se MEDE; a árvore completa se RASTREIA.* O grafo inteiro se **percorre** navegando pelos links; nenhuma tela precisa renderizá-lo.
+- **Prefixo `PRC-`** no id da journey. A journey é identificada pela raiz canônica — o `journey_id` **é** um `session_id` (correto no modelo, como um branch do git é identificado por um hash de commit). Mas exibir o UUID cru, idêntico ao da sessão, convidava à confusão *"o processo é a mesma coisa que a sessão?"*. Conserta a **apresentação** sem tocar no modelo: nada de entidade Journey (Arc 10), nada de id cunhado, nada a sincronizar.
+
+Validado E2E — árvore de **profundidade 3** com os três rótulos, mais o corte:
+
+```
+f0abcee0  processo             (raiz, sem pai)
+└── 1860e0f4  survey outbound   [trigger]   ← pai: o processo
+    └── 03265354  contato survey [collect]  ← pai: o WORKFLOW, não o processo
+30409f75  (journey: new)        [trigger]   ← origin = o processo, root = ele mesmo
+```
+
+O `origin` do contato de survey aponta para o **workflow**, não para o processo: se apontasse para o processo, seria uma estrela de irmãos — que é exatamente o que a tela mostrava antes.
+
+**Pendente (spec §9):** T6 (rastro forense — a cadeia completa a partir de uma sessão, atravessando journeys).
 
 ---
 

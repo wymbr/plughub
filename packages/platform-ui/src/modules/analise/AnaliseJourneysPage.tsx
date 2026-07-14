@@ -49,6 +49,54 @@ interface MemberSession {
   close_reason:    string | null
   segment_count:   number
   root_session_id: string
+  // T1/T4 — a ARESTA (quem me criou) e o seu RÓTULO (por quê).
+  origin_session_id: string | null
+  spawn_reason:      string | null   // trigger | delegate | collect | null (topo)
+}
+
+// ── T5: árvore de proveniência ───────────────────────────────────────────────
+//
+// A sessão é um NÓ RECURSIVO (pode gerar outras sessões); a journey é a ÁRVORE. A lista
+// plana escondia isso — e escondia porque a aresta (`origin_session_id`) nem chegava à
+// tabela (T1). Com ela, a hierarquia se monta sozinha.
+//
+// Um nó cujo pai NÃO está no conjunto é raiz LOCAL (a raiz da journey, ou um órfão de
+// dados antigos — a árvore não é retroativa). Renderizar órfãos no topo, em vez de
+// escondê-los, é deliberado: dado antigo aparece achatado, não some.
+interface TreeNode { session: MemberSession; children: TreeNode[]; depth: number }
+
+function buildTree(rows: MemberSession[]): TreeNode[] {
+  const byId = new Map(rows.map(s => [s.session_id, s]))
+  const childrenOf = new Map<string, MemberSession[]>()
+  const roots: MemberSession[] = []
+
+  for (const s of rows) {
+    const parent = s.origin_session_id
+    if (parent && byId.has(parent)) {
+      const list = childrenOf.get(parent) ?? []
+      list.push(s)
+      childrenOf.set(parent, list)
+    } else {
+      roots.push(s)          // raiz da journey, ou órfão (dado pré-T1)
+    }
+  }
+
+  // Guard de ciclo: dado corrompido não pode travar o render.
+  const seen = new Set<string>()
+  const walk = (s: MemberSession, depth: number): TreeNode => {
+    seen.add(s.session_id)
+    const kids = (childrenOf.get(s.session_id) ?? [])
+      .filter(k => !seen.has(k.session_id))
+      .sort((a, b) => a.opened_at.localeCompare(b.opened_at))
+    return { session: s, depth, children: kids.map(k => walk(k, depth + 1)) }
+  }
+  return roots
+    .sort((a, b) => a.opened_at.localeCompare(b.opened_at))
+    .map(r => walk(r, 0))
+}
+
+function flattenTree(nodes: TreeNode[]): TreeNode[] {
+  return nodes.flatMap(n => [n, ...flattenTree(n.children)])
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -74,6 +122,22 @@ function fmtDuration(from: string, to?: string | null): string {
 function truncateId(id: string | undefined | null): string {
   if (!id) return '—'
   return id.length > 16 ? `…${id.slice(-12)}` : id
+}
+
+/**
+ * T5 — rótulo da journey com prefixo.
+ *
+ * A journey é identificada pela RAIZ CANÔNICA, ou seja, o `journey_id` **é** um
+ * `session_id`. Isso é correto no modelo (como um branch do git é identificado por um
+ * hash de commit), mas exibir o UUID cru, idêntico ao da sessão, convida exatamente à
+ * confusão "o processo é a mesma coisa que a sessão?".
+ *
+ * O prefixo conserta a APRESENTAÇÃO sem tocar no modelo — nada de entidade Journey
+ * (Arc 10), nada de id cunhado, nada para sincronizar.
+ */
+function journeyLabel(id: string | undefined | null): string {
+  if (!id) return '—'
+  return `PRC-${id.slice(0, 8)}`
 }
 
 // J4 — cor do badge de desfecho do processo (business_outcome).
@@ -229,7 +293,7 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
                   <td className="px-3 py-2.5 font-mono text-primary" title={j.journey_id}>
                     <span className="inline-flex items-center gap-1.5">
                       <GitBranch className="w-3.5 h-3.5 opacity-60" aria-hidden="true" />
-                      {truncateId(j.journey_id)}
+                      {journeyLabel(j.journey_id)}
                     </span>
                   </td>
                   <td className="px-3 py-2.5">
@@ -285,24 +349,52 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
 
 // ── Level 2: member sessions of a journey ───────────────────────────────────
 
-function JourneySessions({ tenantId, root, onBack, onSelectSession }:
-  { tenantId: string; root: string; onBack: () => void; onSelectSession: (sid: string) => void }) {
+function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJourney }:
+  { tenantId: string; root: string; onBack: () => void; onSelectSession: (sid: string) => void;
+    onSelectJourney: (root: string) => void }) {
   const { t } = useTranslation('contacts')
   const [rows, setRows] = useState<MemberSession[]>([])
+  // T5 — filhos que NASCERAM desta journey mas pertencem a OUTRA (`journey: new`).
+  // NÃO expandem: viram links. Expandir desfaria o corte que o operador pediu — e a
+  // árvore completa (todas as criações, transitivamente) não tem fronteira, logo não é
+  // mensurável. A journey se MEDE; a árvore completa se RASTREIA.
+  const [spawned, setSpawned] = useState<MemberSession[]>([])
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     if (!tenantId || !root) return
     let cancelled = false
     setLoading(true)
-    const q = new URLSearchParams({ tenant_id: tenantId, root_session_id: root, page_size: '200' })
-    fetch(`/reports/sessions?${q.toString()}`)
-      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
-      .then(d => { if (!cancelled) setRows(d.data ?? []) })
-      .catch(() => { if (!cancelled) setRows([]) })
+
+    const members = fetch(`/reports/sessions?${new URLSearchParams({
+      tenant_id: tenantId, root_session_id: root, page_size: '200',
+    })}`).then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+
+    const crossing = fetch(`/reports/sessions?${new URLSearchParams({
+      tenant_id: tenantId, spawned_from_root: root, page_size: '50',
+    })}`).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
+
+    Promise.all([members, crossing])
+      .then(([m, c]) => {
+        if (cancelled) return
+        setRows(m.data ?? [])
+        setSpawned(c.data ?? [])
+      })
+      .catch(() => { if (!cancelled) { setRows([]); setSpawned([]) } })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [tenantId, root])
+
+  const tree = buildTree(rows)
+  const nodes = flattenTree(tree)
+  // Arestas cruzando, agrupadas pelo PAI — para pendurar o marcador na linha certa.
+  const crossingByParent = new Map<string, MemberSession[]>()
+  for (const s of spawned) {
+    if (!s.origin_session_id) continue
+    const list = crossingByParent.get(s.origin_session_id) ?? []
+    list.push(s)
+    crossingByParent.set(s.origin_session_id, list)
+  }
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -312,7 +404,7 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession }:
           {t('journeys.breadcrumb', { defaultValue: 'Processos' })}
         </button>
         <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
-        <span className="text-dark font-medium font-mono" title={root}>{truncateId(root)}</span>
+        <span className="text-dark font-medium font-mono" title={root}>{journeyLabel(root)}</span>
         <span className="ml-1 text-muted-light">· {t('journeys.memberCount', { count: rows.length, defaultValue: `${rows.length} sessões` })}</span>
       </div>
 
@@ -334,12 +426,27 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession }:
               </tr>
             </thead>
             <tbody>
-              {rows.map(s => (
-                <tr key={s.session_id} onClick={() => onSelectSession(s.session_id)}
+              {nodes.map(({ session: s, depth }) => (
+                <React.Fragment key={s.session_id}>
+                <tr onClick={() => onSelectSession(s.session_id)}
                   className={`border-t border-border hover:bg-surface-muted transition-colors cursor-pointer ${
                     s.session_id === root ? 'bg-primary-light/30' : ''}`}>
                   <td className="px-3 py-2.5 font-mono text-dark" title={s.session_id}>
-                    {truncateId(s.session_id)}
+                    {/* T5 — indentação = profundidade na árvore de proveniência.
+                        O rótulo (T4) diz POR QUE o filho existe: sem ele, vê-se a
+                        hierarquia mas não o motivo de cada nó estar ali. */}
+                    <span style={{ paddingLeft: `${depth * 16}px` }} className="inline-flex items-center gap-1.5">
+                      {depth > 0 && (
+                        <span className="text-border-strong select-none" aria-hidden="true">└─</span>
+                      )}
+                      {truncateId(s.session_id)}
+                      {depth > 0 && s.spawn_reason && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-surface-alt text-muted border border-border"
+                          title={s.spawn_reason}>
+                          {t(`journeys.spawn.${s.spawn_reason}`, { defaultValue: s.spawn_reason })}
+                        </span>
+                      )}
+                    </span>
                     {s.session_id === root && (
                       <span className="ml-1.5 text-[10px] text-primary uppercase tracking-wide">
                         {t('journeys.rootBadge', { defaultValue: 'raiz' })}
@@ -358,6 +465,34 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession }:
                       : <span className="text-border-strong">—</span>}
                   </td>
                 </tr>
+
+                {/* T5 — ARESTAS QUE ATRAVESSAM A FRONTEIRA (`journey: new`).
+                    Este atendimento originou OUTRO processo. Vira um LINK, nunca uma
+                    expansão: expandir traria a subárvore de outra journey para dentro
+                    desta, desfazendo o corte que o operador pediu — e a árvore completa
+                    (todas as criações, transitivamente) não tem fronteira, logo não é
+                    mensurável. Percorre-se navegando; não se encara de uma vez. */}
+                {(crossingByParent.get(s.session_id) ?? []).map(child => (
+                  <tr key={`x-${child.session_id}`}
+                    onClick={e => { e.stopPropagation(); onSelectJourney(child.root_session_id) }}
+                    className="border-t border-border/50 bg-surface-muted/40 hover:bg-surface-muted cursor-pointer">
+                    <td colSpan={6} className="px-3 py-1.5">
+                      <span style={{ paddingLeft: `${(depth + 1) * 16}px` }}
+                        className="inline-flex items-center gap-1.5 text-[11px] text-muted">
+                        <span className="text-border-strong select-none" aria-hidden="true">└─</span>
+                        <span>↗</span>
+                        <span>{t('journeys.spawnedProcess', { defaultValue: 'originou o processo' })}</span>
+                        <span className="font-mono text-primary">{journeyLabel(child.root_session_id)}</span>
+                        {child.spawn_reason && (
+                          <span className="text-[10px] px-1 py-0.5 rounded bg-white text-muted border border-border">
+                            {t(`journeys.spawn.${child.spawn_reason}`, { defaultValue: child.spawn_reason })}
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -407,6 +542,9 @@ export default function AnaliseJourneysPage() {
         root={root}
         onBack={() => setSearchParams({})}
         onSelectSession={sid => setSearchParams({ journey: root, session: sid })}
+        // T5: navegar para a journey vizinha (a que nasceu daqui com `journey: new`).
+        // O grafo completo é PERCORRIDO por links, não renderizado de uma vez.
+        onSelectJourney={r => setSearchParams({ journey: r })}
       />
     )
   }

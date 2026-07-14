@@ -311,6 +311,9 @@ class WebhookAdapter(ChannelAdapter):
             "metadata":          metadata or {},
             "origin_session_id": origin_session_id,
             "root_session_id":   resolved_root,   # Journey J1
+            # Journey T4: rótulo da aresta. Só quando HÁ aresta — uma sessão de topo
+            # (sem chamador) não foi "criada" por ninguém: ela é a raiz da árvore.
+            "spawn_reason":      "trigger" if origin_session_id else None,
             "timestamp":         now_str,
             # Arc 19: required by ConversationInboundEvent schema in routing-engine.
             # For webhook sessions there is no prior wait time — started_at == trigger time.
@@ -343,6 +346,11 @@ class WebhookAdapter(ChannelAdapter):
                 "visibility": "agents_only",
                 "updated_at": now_iso,
             })
+            # Journey T4: rótulo da aresta no ctx — o bridge o relê para carimbar a linha
+            # de close (a sobrevivente no ReplacingMergeTree). Só existe quando há aresta.
+            ctx_writes["session.spawn_reason"] = self._ctx_entry(
+                "trigger", "webhook_trigger", now_iso,
+            )
 
         for tag, value in (context or {}).items():
             ctx_writes[tag] = json.dumps({
@@ -647,6 +655,10 @@ class WebhookAdapter(ChannelAdapter):
             "visibility": "agents_only",
             "updated_at": now_iso,
         })
+        # Journey T4: rótulo da aresta — este filho existe porque um workflow delegou I/O.
+        ctx_writes["session.spawn_reason"] = self._ctx_entry(
+            "delegate", "delegate_step", now_iso,
+        )
 
         # Write caller-provided context entries with session. prefix
         for key, value in context.items():
@@ -680,6 +692,7 @@ class WebhookAdapter(ChannelAdapter):
             "metadata":          {},
             "origin_session_id": origin_session_id,
             "root_session_id":   caller_root,   # Journey J1: transitive root
+            "spawn_reason":      "delegate",    # Journey T4: rótulo da aresta
             "timestamp":         now_iso,
             "started_at":        now_iso,
         }
@@ -1022,6 +1035,11 @@ class WebhookAdapter(ChannelAdapter):
                     "source": "collect_engage", "visibility": "agents_only",
                     "updated_at": now_iso,
                 }),
+                # Journey T4: rótulo da aresta. Esta sessão nasce pelo WEBCHAT (o cliente
+                # abriu o link), e o adapter de webchat não sabe que ela veio de um
+                # `collect` — então o rótulo tem de ser semeado AQUI, antes do inbound.
+                # O bridge o relê do ctx para carimbar a linha de close.
+                "session.spawn_reason": self._ctx_entry("collect", "collect_engage", now_iso),
                 # The runner resumes N3 with this at the end (workflow_resume).
                 "session.workflow_resume_token": json.dumps({
                     "value": collect_token, "confidence": 1.0, "source": "collect_engage",
