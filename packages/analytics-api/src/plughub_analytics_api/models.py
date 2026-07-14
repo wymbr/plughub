@@ -325,6 +325,11 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "channel":        payload.get("channel", ""),
                 "pool_id":        payload.get("pool_id") or "",
                 "customer_id":    payload.get("customer_id") or payload.get("contact_id"),
+                # Journey T1: a linha de close é a SOBREVIVENTE no ReplacingMergeTree —
+                # tem de repetir a aresta de proveniência, ou o fechamento a apaga.
+                # O bridge a carimba lendo `session.origin_session_id` do ctx (durável),
+                # em vez de depender da cache em memória do consumer.
+                "origin_session_id": payload.get("origin_session_id") or None,
                 "opened_at":      started_at or ended_at,
                 "closed_at":      ended_at,
                 # Fase A (queue-attended-model): business close_reason takes priority;

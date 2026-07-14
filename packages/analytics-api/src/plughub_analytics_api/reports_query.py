@@ -717,8 +717,30 @@ def _fetch_journeys(
             arrayFilter(x -> x != '', groupUniqArray(s.pool_id)) AS pool_ids,
             countIf(COALESCE(s.status, 'closed') != 'closed') AS open_count,
             (count() > 1 OR has(groupUniqArray(s.channel), 'webhook')) AS significant,
-            -- J4: desfecho do processo = outcome da sessão mais recente da journey.
-            argMaxIf(s.outcome, s.opened_at, s.outcome IS NOT NULL AND s.outcome != '') AS business_outcome,
+            -- T2: desfecho do processo = o outcome da RAIZ (a sessão que É o processo).
+            --
+            -- Era `argMaxIf(outcome, opened_at, outcome != '')` = "a sessão mais
+            -- recentemente ABERTA que tenha outcome". Numa journey de survey, quem abre
+            -- por último é o CONTATO DE SURVEY — então o "desfecho do processo" exibido
+            -- era, na prática, o desfecho da PESQUISA. Um survey que falhasse faria a tela
+            -- declarar que o processo de negócio falhou. Um contato auxiliar decidindo o
+            -- desfecho do processo é a inversão que o modelo de níveis existe para impedir.
+            --
+            -- A regra correta cai da estrutura: sessão é NÓ, journey é ÁRVORE ⇒ cada nó
+            -- tem seu outcome, e o do PROCESSO é o da RAIZ. Filho nunca sobrescreve pai.
+            --
+            -- `s.session_id = {jexpr}` isola a raiz CANÔNICA: para a linha dela,
+            -- root_session_id = ela mesma → jexpr = session_id. Após um merge, os membros
+            -- da árvore absorvida (inclusive a raiz antiga) resolvem para a canônica e não
+            -- casam — ou seja, o desfecho passa a ser o da journey sobrevivente, que é
+            -- exatamente o que "sobreviver" significa.
+            --
+            -- Raiz ainda aberta → sem outcome → NULL. É honesto: o processo não concluiu.
+            -- (A UI marca como PROVISÓRIO quando open_count > 0.)
+            argMaxIf(
+                s.outcome, s.opened_at,
+                s.session_id = {jexpr} AND s.outcome IS NOT NULL AND s.outcome != ''
+            ) AS business_outcome,
             -- J4: duração do processo (v1 = wall-clock min→max; refino "exclui suspenso
             -- via SUM(segment.duration_ms)" fica p/ iteração).
             toInt64(dateDiff('millisecond', min(s.opened_at), max(COALESCE(s.closed_at, s.opened_at)))) AS business_duration_ms

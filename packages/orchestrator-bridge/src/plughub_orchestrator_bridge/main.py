@@ -1714,6 +1714,27 @@ async def _resolve_close_customer_id(
         return fallback
 
 
+async def _read_ctx_value(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+    tag:          str,
+) -> str | None:
+    """Lê UMA tag do ContextStore da sessão. Fail-soft → None (nunca bloqueia o caller)."""
+    if not tenant_id or not session_id:
+        return None
+    try:
+        raw = await redis_client.hget(f"{tenant_id}:ctx:{session_id}", tag)
+        if not raw:
+            return None
+        entry = json.loads(raw if isinstance(raw, str) else raw.decode())
+        value = entry.get("value") if isinstance(entry, dict) else entry
+        value = str(value).strip() if value is not None else ""
+        return value or None
+    except Exception:
+        return None
+
+
 async def _resolve_close_root_session_id(
     redis_client: aioredis.Redis,
     tenant_id:    str,
@@ -1924,6 +1945,19 @@ async def _close_contact_layer(
             redis_client, tenant_id, session_id,
         )
 
+        # Journey T1: stamp the PROVENANCE EDGE (origin_session_id, 1 salto) na linha de
+        # close — pelo mesmo motivo do root: a linha de fechamento é a que SOBREVIVE no
+        # ReplacingMergeTree, e um writer que não repete um campo o apaga.
+        #
+        # A analytics tem uma cache de identidade que reinjeta o campo nas linhas
+        # parciais, mas ela vive na MEMÓRIA do consumer: um restart entre o inbound e o
+        # fechamento perderia a aresta em silêncio. O ctx é durável; a cache é
+        # conveniência. Ausente = sessão de topo (ninguém a criou) — que é a leitura
+        # correta: raiz de árvore não tem pai.
+        _origin_close = await _read_ctx_value(
+            redis_client, tenant_id, session_id, "session.origin_session_id",
+        )
+
         # SLA do pool no fechamento: a linha de close é a que sobrevive no
         # ReplacingMergeTree do analytics — repetir o sla_target_ms aqui evita
         # que o valor do parse_routed seja substituído por NULL.
@@ -2026,6 +2060,8 @@ async def _close_contact_layer(
                 "channel":      _channel_close,
                 "sla_target_ms": _sla_close,
                 "root_session_id": _root_close,   # Journey J1 (survives ReplacingMergeTree)
+                # Journey T1: aresta de proveniência (1 salto). None = sessão de topo.
+                "origin_session_id": _origin_close,
             }).encode("utf-8"),
         )
         logger.info(

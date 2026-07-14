@@ -1134,6 +1134,20 @@ class AnalyticsStore:
         "sla_target_ms",
         # Substrate isolation (ADR): origin (live|import|reeval).
         "origin",
+        # Journey T1: origin_session_id = a ARESTA pai→filho (1 salto) — quem me criou.
+        #
+        # A coluna existia (migration Arc 19) e o `parse_inbound` a populava no dict, mas
+        # ela NUNCA entrava aqui: era descartada no INSERT e ficava sempre NULL. Ou seja,
+        # o modelo falava em ÁRVORE de proveniência e só persistia a RAIZ ACHATADA —
+        # sabia-se quais sessões eram da journey, perdia-se **quem gerou quem**. Por isso
+        # a Vista Processos listava as sessões como irmãs: a hierarquia era jogada fora na
+        # escrita, não por decisão de UI. (A spec do J1 já anotava isso como "no-op
+        # latente" — este é o conserto.)
+        #
+        # Distinto do `root_session_id`: origin = 1 salto (proveniência); root = raiz
+        # transitiva (pertença). Separá-los é o que permite um filho pertencer a OUTRA
+        # journey e ainda assim manter o fio de quem o criou (ver `journey: new`, T3).
+        "origin_session_id",
         # Journey J1: raiz transitiva da proveniência (agrupa) + cache journey_id.
         # Como o sessions é ReplacingMergeTree (linha inteira substituída), TODO
         # writer de linha precisa repetir o root p/ ele sobreviver ao fechamento —
@@ -1765,6 +1779,12 @@ def _session_row(d: dict) -> list:
         d.get("sla_target_ms"),
         # Substrate isolation (ADR): origin não-nullable, default 'live'.
         d.get("origin") or "live",
+        # Journey T1: origin_session_id — a aresta pai→filho (1 salto). NULL numa sessão
+        # de topo (ninguém a criou), que é a leitura correta: raiz de árvore não tem pai.
+        #
+        # `_inject_session_identity` (consumer) o reinjeta nas linhas parciais — o campo
+        # já estava em `_IDENTITY_FIELDS`, esperando por este INSERT que nunca vinha.
+        d.get("origin_session_id") or None,
         # Journey J1: root (raiz transitiva) — fallback = self (session_id) quando o
         # writer não carrega a raiz. Writers que têm a raiz (parse_inbound/close) a
         # repetem para sobreviver ao ReplacingMergeTree; routed/queued caem no self

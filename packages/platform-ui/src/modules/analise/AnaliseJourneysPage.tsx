@@ -242,11 +242,24 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
                   </td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDate(j.started_at)}</td>
                   <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDuration(j.started_at, j.last_activity_at)}</td>
+                  {/* T2 — o desfecho é o da RAIZ (o processo), não o da última sessão
+                      aberta (que numa journey de survey seria o da PESQUISA).
+                      Enquanto houver sessão aberta ele é PROVISÓRIO: antes, a tela dizia
+                      "Resolvido" e "Abertas: 1" ao mesmo tempo — uma contradição. */}
                   <td className="px-3 py-2.5">
                     {j.business_outcome
-                      ? <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)}`}
-                          title={j.business_outcome}>
-                          {outcomeLabel(t, j.business_outcome)}
+                      ? <span className="inline-flex items-center gap-1">
+                          <span className={`inline-block text-xs px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)} ${j.open_count > 0 ? 'opacity-60 border-dashed' : ''}`}
+                            title={j.open_count > 0
+                              ? t('journeys.provisionalHint', { defaultValue: 'Provisório: o processo ainda tem sessões abertas' })
+                              : j.business_outcome}>
+                            {outcomeLabel(t, j.business_outcome)}
+                          </span>
+                          {j.open_count > 0 && (
+                            <span className="text-[10px] text-muted-light italic">
+                              {t('journeys.provisional', { defaultValue: 'provisório' })}
+                            </span>
+                          )}
                         </span>
                       : <span className="text-border-strong">—</span>}
                   </td>

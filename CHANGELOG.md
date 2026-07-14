@@ -2,6 +2,36 @@
 
 ---
 
+## Journey T1+T2 — aresta de proveniência persistida + desfecho do processo (2026-07-14)
+
+Nasceu de um achado do usuário na Vista Processos: journey exibida como `Resolvido` tendo uma sessão-membro ainda `suspended`. Spec: [`docs/product/journey-provenance-tree-spec.md`](docs/product/journey-provenance-tree-spec.md).
+
+### T1 — `origin_session_id` nunca era persistido
+
+A coluna existia (migration Arc 19) e o `parse_inbound` a populava no dict, mas o **`_SESSION_COLS` não a incluía no INSERT** — era descartada e ficava sempre `NULL`. O `SELECT` do `/reports/sessions` até já a trazia; o valor é que nunca chegava.
+
+Consequência: **o modelo falava em árvore de proveniência e só persistia a raiz achatada.** Sabia-se *quais* sessões eram da journey; perdia-se **quem gerou quem**. A UI listava as sessões como irmãs não por decisão de design — a hierarquia era jogada fora na escrita. (A spec do J1 já anotava isso no *as-built* como "no-op latente".)
+
+Além do INSERT, o **bridge passou a carimbar `origin_session_id` na linha de close** (lendo `session.origin_session_id` do ctx). Mesma lição do `root_session_id`: no `ReplacingMergeTree` a linha de fechamento é a **sobrevivente**, e um writer que não repete um campo o apaga. A cache de identidade do consumer o reinjetaria, mas ela vive em **memória** — um restart entre o inbound e o close perderia a aresta em silêncio. O ctx é durável; a cache é conveniência.
+
+Validado: sessão do processo com `origin_session_id` NULL (é raiz — raiz de árvore não tem pai) e a sessão-filha apontando para ela.
+
+### T2 — o desfecho do processo era o da PESQUISA
+
+`business_outcome` era `argMaxIf(outcome, opened_at, outcome != '')` = *"o outcome da sessão mais recentemente ABERTA que tenha um"*. Numa journey de survey, quem abre por último é o **contato de survey** — então o "desfecho do processo" exibido era, na prática, **o desfecho da pesquisa**. Passava despercebido porque todas fechavam `resolved`; mas um survey que falhasse faria a tela declarar que **o processo de negócio falhou**. Um contato auxiliar decidindo o desfecho do processo é a inversão que o modelo de níveis existe para impedir.
+
+A regra correta cai da estrutura (**sessão é NÓ, journey é ÁRVORE**): cada nó tem seu outcome, e o do **processo é o da RAIZ**. Filho nunca sobrescreve pai. Implementado com `s.session_id = {jexpr}` — que isola a raiz **canônica**: após um merge, os membros da árvore absorvida (inclusive a raiz antiga) resolvem para a canônica e não casam, ou seja, o desfecho passa a ser o da journey sobrevivente, que é o que "sobreviver" significa.
+
+Raiz ainda aberta → sem outcome → `NULL`, e a UI marca o desfecho como **provisório** (tracejado + rótulo) enquanto `open_count > 0`. Antes a tela dizia `Resolvido` e `Abertas: 1` ao mesmo tempo.
+
+**⚠️ Os números mudaram, e isso é a correção.** Journeys que exibiam `suspended` (o estado do *workflow de survey*) agora exibem `—`: as raízes delas nunca receberam linha de close (dados anteriores ao fix do hook `side=agent`). A tela deixou de afirmar um desfecho que ninguém declarou.
+
+**Não é retroativo:** sessões já gravadas seguem com `origin_session_id` nulo. A árvore só existe para o tráfego novo.
+
+**Pendente (spec §9):** T3 (`journey: inherit|new` — corte declarativo), T4 (rótulo da aresta), T5 (UI em árvore + prefixo `PRC-`), T6 (rastro forense).
+
+---
+
 ## Journey J5a — `@ctx.journey.*` vivo + merge acíclico por construção (2026-07-14)
 
 O levantamento do J5 achou duas peças que **existiam, pareciam funcionar e estavam quebradas em silêncio**.

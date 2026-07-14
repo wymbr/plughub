@@ -32,6 +32,8 @@
     "breadcrumb": "Processes",
     "memberCount": "{{count}} sessions",
     "rootBadge": "root",
+    "provisional": "provisional",
+    "provisionalHint": "Provisional: the process still has open sessions",
     "filters": { "from": "From", "significantOnly": "Significant only" },
     "columns": {
       "journey": "Process (root)", "sessions": "Sessions", "channels": "Channels",

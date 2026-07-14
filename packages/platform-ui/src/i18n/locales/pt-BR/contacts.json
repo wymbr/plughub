@@ -32,6 +32,8 @@
     "breadcrumb": "Processos",
     "memberCount": "{{count}} sessões",
     "rootBadge": "raiz",
+    "provisional": "provisório",
+    "provisionalHint": "Provisório: o processo ainda tem sessões abertas",
     "filters": { "from": "De", "significantOnly": "Só significativas" },
     "columns": {
       "journey": "Processo (raiz)", "sessions": "Sessões", "channels": "Canais",
