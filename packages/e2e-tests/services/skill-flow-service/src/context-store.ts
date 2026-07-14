@@ -40,13 +40,26 @@ import type {
   ContextMergeStrategy,
 } from "@plughub/schemas"
 
-// ── namespaces que vivem no hash de longa duração ─────────────────────────────
-
+// ── namespaces que vivem no hash de longa duração (do CLIENTE) ────────────────
+//
+// Atenção: este prefixo decide DUAS coisas — o TTL **e a chave** (roteia para
+// `customerKey` quando há `customerId`). Por isso `journey.` NÃO entra aqui: precisa de
+// TTL longo mas continua no hash da JOURNEY (`{tenant}:ctx:journey:{id}`, via o sessionId
+// virtual `journey:{id}`). Misturar mandaria o contexto do processo para o hash do cliente.
 const LONG_TTL_PREFIXES = ["insight.historico", "pricing"]
+
+/**
+ * J5a-1 — o contexto do processo (`journey.*`) vive tanto quanto o processo, não quanto uma
+ * sessão. Sem isto herdaria SESSION_TTL_S (4h) e evaporaria entre dois contatos da mesma
+ * journey — exatamente o caso de uso que o namespace existe para atender (a doc prometia
+ * 30 dias; o código dava 4 horas).
+ */
+const JOURNEY_TTL_PREFIX = "journey."
 
 // ── TTLs padrão ───────────────────────────────────────────────────────────────
 
 const SESSION_TTL_S  = 4 * 60 * 60        // 4h
+const JOURNEY_TTL_S  = 30 * 24 * 60 * 60  // 30d — vida do processo, não da sessão
 const LONG_TTL_S     = 90 * 24 * 60 * 60  // 90d
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -56,6 +69,8 @@ export interface ContextStoreConfig {
   tenantId: string
   /** Sobrescreve TTL do hash de sessão (segundos). Default: SESSION_TTL_S */
   sessionTtlS?: number
+  /** Sobrescreve TTL do hash da journey (segundos). Default: JOURNEY_TTL_S (30d) */
+  journeyTtlS?: number
   /** Sobrescreve TTL do hash de longa duração (segundos). Default: LONG_TTL_S */
   longTtlS?: number
 }
@@ -66,12 +81,14 @@ export class ContextStore {
   private readonly redis:      RedisClient
   private readonly tenantId:   string
   private readonly sessionTtl: number
+  private readonly journeyTtl: number
   private readonly longTtl:    number
 
   constructor(config: ContextStoreConfig) {
     this.redis      = config.redis
     this.tenantId   = config.tenantId
     this.sessionTtl = config.sessionTtlS ?? SESSION_TTL_S
+    this.journeyTtl = config.journeyTtlS ?? JOURNEY_TTL_S
     this.longTtl    = config.longTtlS    ?? LONG_TTL_S
   }
 
@@ -87,6 +104,18 @@ export class ContextStore {
 
   private isLongTtl(tag: string): boolean {
     return LONG_TTL_PREFIXES.some(p => tag.startsWith(p))
+  }
+
+  /** Tag do processo (`journey.*`): TTL longo, mas no hash da JOURNEY — nunca no do cliente. */
+  private isJourneyTag(tag: string): boolean {
+    return tag.startsWith(JOURNEY_TTL_PREFIX)
+  }
+
+  /** TTL efetivo da tag. Ordem: cliente (longo) → journey (processo) → sessão. */
+  private ttlFor(tag: string, override?: number): number {
+    if (this.isLongTtl(tag))    return this.longTtl
+    if (this.isJourneyTag(tag)) return this.journeyTtl
+    return override ?? this.sessionTtl
   }
 
   // ── set ─────────────────────────────────────────────────────────────────────
@@ -111,7 +140,7 @@ export class ContextStore {
       ? this.customerKey(customerId)
       : this.sessionKey(sessionId)
 
-    const ttl = this.isLongTtl(tag) ? this.longTtl : (entry.ttl_override_s ?? this.sessionTtl)
+    const ttl = this.ttlFor(tag, entry.ttl_override_s)
     const now = new Date().toISOString()
 
     // Lê valor existente para aplicar merge strategy

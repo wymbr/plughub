@@ -595,6 +595,19 @@ async def activate_native_agent(
     # Allows parallel agents (NPS + wrap-up) to isolate their data per participation.
     if segment_id:
         payload["segment_id"] = segment_id
+    # ── J5a-1: journey_id → habilita `@ctx.journey.*` (contexto compartilhado do processo)
+    #
+    # O engine JÁ roteia `journey.*` para `{tenant}:ctx:journey:{journeyId}` (interpolate.ts,
+    # context-accumulator-util.ts) — mas ninguém nunca passou o `journeyId`. Resultado: o
+    # namespace era CÓDIGO MORTO que falhava em SILÊNCIO: `@ctx.journey.pedido` resolvia
+    # contra o hash da SESSÃO, sem erro. (O `engine-runner.ts` que a doc dizia alimentá-lo
+    # morreu junto com o skill-flow-worker no Arc 19; a doc nunca foi corrigida.)
+    #
+    # Usamos a raiz CANÔNICA (proveniência + find no mapa de aliases), não a de proveniência:
+    # se duas journeys foram unidas, os dois braços têm de ler a MESMA caixa.
+    _journey_id = await _resolve_journey_root(redis_client, tenant_id, session_id)
+    if _journey_id:
+        payload["journey_id"] = _journey_id
     # Arc 19: webhook pool sessions wire persistSuspendWebhook in skill-flow-service.
     if webhook_pool:
         payload["webhook_pool"] = True
@@ -1734,6 +1747,67 @@ async def _resolve_close_root_session_id(
             "_resolve_close_root_session_id: fallback for session=%s — %s", session_id, exc,
         )
         return session_id
+
+
+# Teto de saltos no find(). A floresta é rasa (path compression); o teto existe só para
+# que dado corrompido não vire loop infinito no CAMINHO QUENTE (toda ativação de agente).
+_MAX_ALIAS_DEPTH = 32
+
+
+async def _resolve_journey_root(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    session_id:   str,
+) -> str:
+    """
+    Journey J5 — a raiz CANÔNICA da journey desta sessão (o `journeyId` do engine).
+
+    Duas etapas, e a segunda é o que faz o `@ctx.journey.*` sobreviver a um merge:
+      1. raiz de PROVENIÊNCIA — `session.root_session_id` do ctx (fallback: a própria sessão);
+      2. raiz CANÔNICA — `find()` no mapa de aliases (`{tenant}:journey:aliases`, espelho
+         que a tool `journey_merge` mantém). Sem isto, duas journeys unidas continuariam
+         com DOIS hashes de contexto: os agentes de cada braço leriam caixas diferentes, e o
+         "contexto compartilhado do processo" não seria compartilhado justamente quando o
+         processo passou a ser um só.
+
+    A mesma resolução que o produtor usa (`resolveJourneyRoot` em tools/journey.ts) — a
+    definição de "qual journey é esta" precisa ser UMA, ou o merge parte o contexto.
+
+    Best-effort: qualquer erro → a raiz de proveniência (nunca bloqueia a ativação).
+    """
+    if not tenant_id or not session_id:
+        return session_id
+
+    root = await _resolve_close_root_session_id(redis_client, tenant_id, session_id)
+
+    try:
+        key  = f"{tenant_id}:journey:aliases"
+        path: list[str] = []
+        cur  = root
+        for _ in range(_MAX_ALIAS_DEPTH):
+            nxt = await redis_client.hget(key, cur)
+            if not nxt:
+                break
+            nxt = nxt if isinstance(nxt, str) else nxt.decode()
+            if nxt == cur:
+                break
+            path.append(cur)
+            cur = nxt
+
+        # Path compression — encurta a cadeia para o próximo leitor (o caminho é quente).
+        if len(path) > 1:
+            pipe = redis_client.pipeline()
+            for node in path:
+                if node != cur:
+                    pipe.hset(key, node, cur)
+            await pipe.execute()
+        return cur
+    except Exception as exc:
+        logger.debug(
+            "_resolve_journey_root: alias resolution failed session=%s — %s (using provenance root)",
+            session_id, exc,
+        )
+        return root
 
 
 async def _close_contact_layer(

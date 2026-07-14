@@ -329,6 +329,7 @@ app.post("/execute", async (req: Request, res: Response) => {
     instance_id,
     pipeline_session_id,
     segment_id,
+    journey_id,
     webhook_pool,
     resume_context,
   } = req.body as {
@@ -347,6 +348,14 @@ app.post("/execute", async (req: Request, res: Response) => {
     pipeline_session_id?: string
     /** Segment UUID for segment-scoped ContextStore writes (scope: segment in YAML). */
     segment_id?:     string
+    /**
+     * J5a-1 — raiz CANÔNICA da journey. Habilita o namespace `@ctx.journey.*` (contexto
+     * compartilhado do processo, `{tenant}:ctx:journey:{journeyId}`). O engine já roteava
+     * `journey.*` para lá; ninguém passava o id, então o namespace era código morto que
+     * resolvia contra o hash da SESSÃO, em silêncio. Resolvido pelo bridge (proveniência
+     * + find no mapa de aliases) para que um merge não parta o contexto em dois.
+     */
+    journey_id?:     string
     /**
      * Arc 19 — When true, this is a webhook pool session.
      * The engine wires persistSuspendWebhook to extend Redis TTLs and write
@@ -574,6 +583,8 @@ app.post("/execute", async (req: Request, res: Response) => {
       ...(config ? { config } : {}),
       instanceId:     instance_id,
       segmentId:      segment_id,
+      // J5a-1: habilita `@ctx.journey.*` (contexto compartilhado do processo).
+      ...(journey_id ? { journeyId: journey_id } : {}),
       // Use pipeline_session_id for lock/state isolation when provided
       // (conference specialists). sessionId is still used for message delivery.
       pipelineSessionId: pipeline_session_id,

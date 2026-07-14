@@ -2,6 +2,38 @@
 
 ---
 
+## Journey J5a — `@ctx.journey.*` vivo + merge acíclico por construção (2026-07-14)
+
+O levantamento do J5 achou duas peças que **existiam, pareciam funcionar e estavam quebradas em silêncio**.
+
+### `@ctx.journey.*` era código morto que lia a caixa errada
+
+O roteamento existia de ponta a ponta (`interpolate.ts`, `context-accumulator-util.ts` → `{tenant}:ctx:journey:{id}`), mas **ninguém nunca passou o `journeyId`**. Logo `ctx.journeyId` era sempre `undefined`, as duas guardas eram sempre falsas, e um `@ctx.journey.numero_pedido` (que o `skill_atendimento_reembolso_v1.yaml` usa!) resolvia **contra o hash da SESSÃO** — sem erro, sem log. O `engine-runner.ts` que a doc dizia alimentá-lo **não existe**: morreu com o `skill-flow-worker` no Arc 19, e a doc nunca foi corrigida.
+
+Fix: o **bridge** resolve a raiz **canônica** (proveniência + `find()` no mapa de aliases) e envia `journey_id` no `/execute`; o **skill-flow-service** repassa como `journeyId` ao `engine.run()`. Usa-se a raiz canônica (e não a de proveniência) para que **um merge não parta o contexto em dois**: os dois braços da journey unida precisam ler a mesma caixa.
+
+**TTL (bug adjacente):** `journey.` não estava em `LONG_TTL_PREFIXES`, então o hash da journey herdaria `SESSION_TTL_S` = **4h** — e evaporaria entre dois contatos da mesma journey, que é exatamente o caso de uso do namespace (a doc prometia 30 dias). Corrigido com um TTL **próprio** (`JOURNEY_TTL_S`, 30d), e não entrando em `LONG_TTL_PREFIXES` — esse prefixo decide *duas* coisas (TTL **e chave**), e usá-lo mandaria o contexto do processo para o hash do **cliente**.
+
+Validado E2E com escritor e leitor em **sessões diferentes** da mesma journey: o processo escreve `journey.origin_process_session` (via `context_tags.outputs`, único caminho que passa pelo acumulador que conhece o `journeyId`); o workflow outbound — outra sessão — lê e ecoa o mesmo valor. TTL medido: 2591667s. **Controle negativo:** a tag NÃO aparece no hash da sessão do processo — foi para a caixa da journey.
+
+### O merge não garantia ordem na origem — agora é acíclico por construção
+
+O produtor só barrava self-merge. A ordem novo→antigo era best-effort via `readStartedAt()`, que lia `session:{root}:meta.started_at` — campo que o adapter **webchat** escreve e o **webhook não** (confirmado no Redis). Como as raízes de journey **são** sessões webhook, o swap **nunca rodava**: o chamador sempre decidia o sobrevivente. O guard de ciclo vivia só na **leitura** (union-find da analytics) — isto é, *tolerava* o dado inconsistente em vez de impedi-lo.
+
+Fix estrutural: o produtor mantém o mapa de aliases também no Redis (`{tenant}:journey:aliases`), resolve **os dois roots até a raiz da componente** (`find` + path compression + teto de profundidade) e grava a aresta **raiz→raiz**. Raízes iguais ⇒ no-op idempotente. Raízes diferentes ⇒ componentes **disjuntas** ⇒ a aresta **não pode fechar ciclo**. A aciclicidade deixou de depender de relógio; "sobrevivente = mais antiga" voltou a ser **política** (best-effort), não invariante — e sua fonte de idade passou a ser o **stream canônico** (`session:{id}:stream`, cujo ID de entrada É o timestamp em ms), que existe em **todo** canal.
+
+O merge também **migra o `@ctx.journey.*`** da componente absorvida para a canônica: sem isso, unir duas journeys as casaria no relatório e as divorciaria no contexto.
+
+**Testes:** `journey.test.ts` (12) — o primeiro teste do `journey_merge`, que estava inteiramente descoberto. Cobre a aresta raiz→raiz, o merge **encadeado** que a v1 deixava fechar ciclo, união de componentes, no-op idempotente, self-merge, a política de idade, o guard de profundidade e a migração de contexto.
+
+*(Nota: o `mcp-server-plughub` **tinha** testes — 162 em 9 arquivos. O levantamento inicial afirmou "zero" e eu repeti sem verificar; o que não existia era cobertura do `journey_merge`.)*
+
+**Pendente do J5:** J5b (i18n dos enums vindos do backend — `status`, `business_outcome`, `outcome`, `channels` são renderizados crus na Vista Processos, embora o dicionário exista em `workflows.json`). ABAC fica como item **app-wide**: o backend já filtra por `accessible_pools`; na UI o gate está só no Sidebar — mas isso vale para **todas** as páginas de `analise/`, não só Journeys, e consertar uma só seria cosmético.
+
+**Débito de demo:** os steps `marcar_journey` (em `skill_journey_demo_v1`) e `ler_journey_ctx` (em `skill_survey_outbound_v1`) existem só para provar o contexto compartilhado — remover quando houver um consumidor real de `@ctx.journey.*`.
+
+---
+
 ## Survey — nomeação por PAPEL + grão como parâmetro de deploy (S1 + S2) (2026-07-14)
 
 **Decisão de eixo.** Os skills de survey passam a ser nomeados pelo **papel**, e o **grão**

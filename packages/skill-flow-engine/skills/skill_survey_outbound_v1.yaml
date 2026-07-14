@@ -70,9 +70,34 @@ config_params:
       contexto do chamador. `segment` NÃO é suportado por aqui (survey_record exige
       segment_id, que o workflow outbound não conhece).
 
-entry: pesquisar
+entry: ler_journey_ctx
 
 steps:
+
+  # ── J5a-1 (demo/E2E): LÊ o contexto compartilhado do processo ───────────────
+  #
+  # Esta sessão é OUTRA (webhook próprio), mas da MESMA journey que o processo. Se o
+  # `@ctx.journey.*` estiver funcionando, `journey.origin_process_session` — escrito pelo
+  # `skill_journey_demo_v1` na SESSÃO DELE — é legível aqui. Ecoamos o valor numa tag de
+  # sessão para poder observá-lo no Redis sem instrumentar nada.
+  #
+  # Se o roteamento de journey estiver quebrado, o `@ctx.journey.*` resolve para null, o
+  # `value` (string|number|boolean) rejeita, o invoke falha e a tag de eco NÃO existe —
+  # o teste falha de forma VISÍVEL, em vez de silenciosamente ler a caixa errada (que era
+  # exatamente o defeito: o namespace lia o hash da sessão sem nunca reclamar).
+  #
+  # Passo de demo — remover quando houver um consumidor real de `@ctx.journey.*`.
+  - id: ler_journey_ctx
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "session.journey_echo"
+      value:      "@ctx.journey.origin_process_session"
+    output_as: journey_echo
+    on_success: pesquisar
+    on_failure: pesquisar     # a pesquisa não pode depender da demo de contexto
 
   # ── collect outbound — convite + espera assíncrona SEM recurso ──────────────
   - id: pesquisar
