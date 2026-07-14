@@ -67,6 +67,16 @@ steps:
   #
   # `origin_session_id` propaga a RAIZ → o workflow de survey (e o contato de survey que
   # ele cria) são membros da MESMA journey.
+  #
+  # ── ESCOLHA DO SEGMENTO (política, para survey de grão `segment`) ────────────
+  # QUAL segmento pesquisar é decisão de negócio — mora AQUI, no skill, não no core.
+  # A plataforma só EXPÕE os fatos no ctx pré-hook (`session.last_primary_segment_id`,
+  # `session.last_primary_agent_key`, escritos pelo bridge); o gatilho escolhe e propaga.
+  #
+  # Default de produto: o ÚLTIMO segmento primary — quem de fato fechou o atendimento.
+  # Um tenant que queira outro critério (o primeiro, o de um pool específico, …) muda
+  # ESTAS duas linhas — sem tocar em plataforma. Com grão != segment estas tags são
+  # ignoradas pelo N2 (e o runner as vê como null, que o schema tolera).
   - id: disparar_survey
     type: invoke
     tool: workflow_trigger
@@ -75,6 +85,12 @@ steps:
       tenant_id:         "$.tenant_id"
       origin_session_id: "$.session_id"     # herda a raiz canônica da journey
       trigger_type:      "task"
+      # `context_json` é uma STRING JSON (não um mapa) — o `{{...}}` é interpolado pelo
+      # engine antes da chamada. Semeia o ctx da sessão do workflow ANTES do routing, então
+      # o `collect` (step 1) já lê as tags.
+      context_json: >-
+        {"session.survey_segment_id": "{{@ctx.session.last_primary_segment_id}}",
+         "session.survey_agent_key": "{{@ctx.session.last_primary_agent_key}}"}
     on_success: encerrar
     on_failure: encerrar
 

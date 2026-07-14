@@ -154,8 +154,37 @@ da UI sobreviver ao restart). O loop "edito o arquivo, reinicio o bridge" morreu
 (e voltar ao default depois). Vale um aviso no log quando um YAML difere do DB semeado — hoje o
 silêncio faz parecer que a edição funcionou.
 
-**Falta (fatia futura):** survey de **segmento** — exige o gatilho carimbar o `segment_id` do
-segmento pesquisado e propagá-lo até o `survey_record`.
+**S3 ✅ — survey de segmento (grão `segment`).** Decisão de produto (usuário): o gatilho é o de
+**fim de contato** (não `on_human_end`, que dispararia a pesquisa com o contato ainda aberto em caso de
+transferência), e o **segmento é configurável**, com default = **último segmento primary** (quem fechou
+o atendimento).
+
+Princípio: **QUAL segmento pesquisar é política, e política mora no skill.** A plataforma só **expõe os
+fatos**; quem escolhe é o gatilho.
+- **bridge** (`_write_pre_hook_context`): carimba `session.last_primary_segment_id` +
+  `session.last_primary_agent_key` (`user_login` humano | `agent_type_id` IA). São fatos de **sessão**
+  (existe exatamente um "último"), então não ferem o ADR de identidade — o que colapsa em multi-humano
+  é um fato *por-segmento* num campo global (ex.: "qual humano este wrap-up serve": há N wrap-ups).
+- **gatilho** (`skill_survey_trigger_v1`): propaga a escolha via `context_json` do `workflow_trigger`
+  (string JSON com `{{...}}`). Trocar o critério = editar **duas linhas do YAML**, sem tocar em
+  plataforma.
+- **N2**: `segment` resolve a mesma chave que `session` (a sessão que CONTÉM o segmento); o que os
+  separa é o `segment_id` + `agent_key` que acompanham o sinal. Falha alto se o gatilho não escolheu.
+- **runner**: repassa `segment_id`/`agent_key` — continua sem saber de grão.
+- **schema**: `SurveyRecordInputSchema.segment_id`/`agent_key` viraram **`.nullish()`** — o runner é UM
+  só para todos os grãos, então sempre passa os campos, e num grão ≠ segment a ref resolve para `null`.
+  `.optional()` aceita *ausente*, não `null`, e rejeitaria a chamada inteira: **é o mesmo bug do
+  `survey_link_create` do J4b** (`customer_key: z.string().default("")` vs `null`), que falhava em
+  silêncio porque a tool devolve `isError` e o `invoke` segue por `on_failure` sem log.
+- **guard**: `_read_ctx_tag` normaliza `"null"`/`"undefined"`/`""` → `None`. Uma tag semeada por
+  `context_json` cujo ref não resolveu vira a **string** `"null"`, que é truthy em Python e passaria por
+  qualquer `if not value`.
+
+**Aviso de drift no seed-if-absent ✅** (custo do D2, achado no S2): o syncer agora **avisa** quando o
+YAML diverge da definição no DB e não vai ser aplicado, em vez de pular em silêncio. Compara por
+**contenção** (o YAML está contido no DB?), não por igualdade — o agent-registry grava o flow **depois
+dos defaults do Zod**, então o DB legitimamente tem mais chaves; igualdade acusaria drift em todo skill
+a cada boot, que é o falso positivo do D4 com outra roupa ("foi escrito" ≠ "mudou").
 
 ---
 

@@ -36,12 +36,48 @@ zero código. *(Ressalva: no demo a sessão do processo É a raiz, então os doi
 id; o caminho de código difere, os valores coincidem. A distinção de valor só aparece numa journey com
 múltiplas sessões.)*
 
+**S3 — survey de segmento (grão `segment`).** Decisão de produto: o gatilho é o de **fim de contato**
+(não `on_human_end`, que dispararia a pesquisa com o contato ainda aberto numa transferência — o cliente
+receberia um NPS no meio do atendimento), e o **segmento é configurável**, com default = **último
+segmento primary** (quem fechou o atendimento).
+
+Princípio: **QUAL segmento pesquisar é política, e política mora no skill.** A plataforma só **expõe os
+fatos**. O bridge carimba `session.last_primary_segment_id` + `session.last_primary_agent_key` no ctx
+pré-hook (fatos de **sessão** — existe exatamente um "último" —, então não ferem o ADR de identidade: o
+que colapsa em multi-humano é um fato *por-segmento* num campo global, como "qual humano este wrap-up
+serve", onde há N wrap-ups). O gatilho escolhe e propaga via `context_json` do `workflow_trigger`;
+trocar o critério = editar **duas linhas do YAML**. O N2 resolve `segment` para a mesma chave que
+`session` (a sessão que contém o segmento) — o que os separa é o `segment_id` + `agent_key` que
+acompanham o sinal. O runner repassa os dois e segue sem saber de grão.
+
+`SurveyRecordInputSchema.segment_id`/`agent_key` viraram **`.nullish()`**: o runner é UM só para todos
+os grãos, então sempre passa os campos, e num grão ≠ segment a ref resolve para `null`. `.optional()`
+aceita *ausente*, não `null` — **é o mesmo bug do `survey_link_create` do J4b** (`customer_key:
+z.string().default("")` vs `null`), que falhava em silêncio porque a tool devolve `isError` e o `invoke`
+segue por `on_failure` sem log. E `_read_ctx_tag` passou a normalizar `"null"`/`"undefined"` → `None`:
+uma tag semeada por `context_json` (string JSON com `{{...}}`) cujo ref não resolveu vira a **string**
+`"null"`, truthy em Python.
+
+Validado E2E: `grain=journey` (não-regressão, com `segment_id`/`agent_key` viajando como null) e
+`grain=segment` (`segment_id: 288cb4f1…`, `agent_key: skill_journey_demo_v1`, nps 8) — trocando **só o
+`config_json`**. Três grãos, zero skills novos.
+
+**Aviso de drift no seed-if-absent.** O syncer agora **avisa** quando o YAML diverge da definição no DB e
+não será aplicado, em vez de pular em silêncio (foi o silêncio que fez suspeitar do Zod antes do syncer,
+no S2). Compara por **contenção** (o YAML está contido no DB?), não igualdade — o agent-registry grava o
+flow depois dos **defaults do Zod**, então o DB legitimamente tem mais chaves; igualdade acusaria drift
+em todo skill a cada boot, que é o falso positivo do D4 com outra roupa ("foi escrito" ≠ "mudou").
+
 **Duas armadilhas registradas.** (a) `CollectStepSchema` mudou ⇒ agent-registry, skill-flow-service e o
 engine rebuildam **juntos**: `z.object()` descarta chave desconhecida **em silêncio**, então um
 agent-registry velho gravaria o flow sem o `signal_grain`, sem erro. (b) **Custo do D2**: com
 *seed-if-absent*, editar um `skill_*.yaml` já semeado **não propaga** — o DB é a verdade. O loop de
 desenvolvimento a partir do arquivo exige `REGISTRY_SYNC_RECONCILE=true`, agora exposto no
 `docker-compose.demo.yml`.
+
+**Nota operacional:** `docker cp` sobrevive a `restart`, **não a `up -d`** (que recria o container a
+partir da imagem). Mudança em código Python de serviço = `build`, não `cp` — um `up -d` fez o bridge
+voltar à imagem antiga no meio do S2 e os hooks pararam de disparar.
 
 ---
 

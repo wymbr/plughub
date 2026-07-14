@@ -93,6 +93,37 @@ _SUSPENDING_STEP_TYPES = frozenset({"delegate", "suspend", "collect"})
 logger = logging.getLogger("plughub.registry-syncer")
 
 
+def _contained_in(subset: object, superset: object) -> bool:
+    """
+    Todo campo de `subset` existe e é igual em `superset`? (chaves EXTRA no superset são OK)
+
+    Por que contenção e não igualdade: o agent-registry grava o flow **depois de o Zod
+    aplicar defaults** (`interaction: "text"`, `timeout_hours: 48`, `urgency: "normal"`,
+    …). O DB, portanto, tem legitimamente MAIS chaves que o YAML. Comparar por igualdade
+    acusaria drift em todo skill a cada boot — que é exatamente o falso positivo do D4
+    ("a linha foi escrita" ≠ "o conteúdo mudou"), só que com outra roupa.
+    """
+    if isinstance(subset, dict):
+        if not isinstance(superset, dict):
+            return False
+        return all(
+            k in superset and _contained_in(v, superset[k])
+            for k, v in subset.items()
+        )
+    if isinstance(subset, list):
+        if not isinstance(superset, list) or len(subset) != len(superset):
+            return False
+        return all(_contained_in(a, b) for a, b in zip(subset, superset))
+    return subset == superset
+
+
+def _flow_differs(db_flow: object, yaml_flow: object) -> bool:
+    """O YAML diz algo que o DB não diz? (defaults do Zod no DB não contam como drift)"""
+    if not isinstance(db_flow, dict) or not isinstance(yaml_flow, dict):
+        return False   # sem base de comparação → não alarma
+    return not _contained_in(yaml_flow, db_flow)
+
+
 def _reconcile_enabled() -> bool:
     """
     Provisioning precedence (config-consolidation):
@@ -625,9 +656,24 @@ class RegistrySyncer:
                     if probe.status == 200:
                         body = await _safe_json(probe) or {}
                         if isinstance(body.get("flow"), dict) and body["flow"]:
-                            logger.debug(
-                                "  skill %s exists — DB-owned (seed-if-absent), skipping", skill_id,
-                            )
+                            # DRIFT: o arquivo foi editado, mas o DB é a verdade — a edição
+                            # NÃO vai para lugar nenhum. Sem este aviso o pulo é SILENCIOSO,
+                            # e "editei o YAML e reiniciei o bridge" parece ter funcionado
+                            # (custou um diagnóstico errado no S2: suspeitei do Zod antes de
+                            # suspeitar do syncer). O seed-if-absent continua certo — o que
+                            # estava errado era ele ser mudo.
+                            if _flow_differs(body.get("flow"), payload.get("flow")):
+                                logger.warning(
+                                    "  skill %s: o YAML DIFERE da definição no DB e NÃO será "
+                                    "aplicado — o DB é a fonte de verdade (seed-if-absent). "
+                                    "Para o YAML vencer, suba com REGISTRY_SYNC_RECONCILE=true.",
+                                    skill_id,
+                                )
+                            else:
+                                logger.debug(
+                                    "  skill %s exists — DB-owned (seed-if-absent), skipping",
+                                    skill_id,
+                                )
                             report.skills_skipped += 1
                             return
                         logger.warning(

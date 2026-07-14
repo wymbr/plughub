@@ -913,10 +913,62 @@ async def _write_pre_hook_context(
                 ctx_key, "session.human_agent_participant_id", entry_human,
             )
 
+        # 4. Fatos do ÚLTIMO SEGMENTO PRIMARY — insumo para survey de grão `segment`.
+        #
+        # A plataforma só EXPÕE o fato; QUAL segmento pesquisar é política, e política
+        # mora no skill (o gatilho escolhe e propaga via context_json). O default de
+        # produto é "o último segmento primary" — quem fechou o atendimento.
+        #
+        # Por que aqui pode ser campo de SESSÃO sem ferir o ADR de identidade
+        # (adr-participant-identity-single-source): o que colapsa em multi-humano é um
+        # fato POR-SEGMENTO escrito num campo global (ex.: "qual humano este wrap-up
+        # serve" — há N wrap-ups, um por humano). "O último segmento primary DESTA
+        # sessão" é, por definição, um fato de sessão: existe exatamente um.
+        _last_seg = await redis_client.get(f"session:{session_id}:primary_segment")
+        if _last_seg:
+            _seg_str = _last_seg if isinstance(_last_seg, str) else _last_seg.decode()
+            await redis_client.hset(
+                ctx_key,
+                "session.last_primary_segment_id",
+                json.dumps({
+                    "value":      _seg_str,
+                    "confidence": 1.0,
+                    "source":     "bridge:pre_hook",
+                    "visibility": "agents_only",
+                    "updated_at": now_iso,
+                }),
+            )
+
+        # agent_key — atribuição do sinal de segmento: user_login (humano) ou
+        # agent_type_id/skill (IA). Lido do meta da sessão, que o process_routed mantém.
+        try:
+            _raw_meta = await redis_client.get(f"session:{session_id}:meta")
+            if _raw_meta:
+                _meta = json.loads(
+                    _raw_meta if isinstance(_raw_meta, str) else _raw_meta.decode()
+                )
+                _agent_key = _meta.get("user_login") or _meta.get("agent_type_id") or ""
+                if _agent_key:
+                    await redis_client.hset(
+                        ctx_key,
+                        "session.last_primary_agent_key",
+                        json.dumps({
+                            "value":      _agent_key,
+                            "confidence": 1.0,
+                            "source":     "bridge:pre_hook",
+                            "visibility": "agents_only",
+                            "updated_at": now_iso,
+                        }),
+                    )
+        except Exception:
+            pass
+
         await redis_client.expire(ctx_key, _stl())
         logger.info(
-            "pre_hook context written: session=%s close_origin=%s cust_pid=%s human_pid=%s",
+            "pre_hook context written: session=%s close_origin=%s cust_pid=%s human_pid=%s "
+            "last_seg=%s",
             session_id, close_origin, bool(cust_pid), human_instance_id or "none",
+            bool(_last_seg),
         )
     except Exception as exc:
         logger.warning(

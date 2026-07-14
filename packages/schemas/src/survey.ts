@@ -97,8 +97,17 @@ export const SurveyRecordInputSchema = z.object({
     .optional(),
   // Obrigatório quando grain='segment' (validado no handler — manter z.object puro
   // para preservar .shape usado no registro da tool MCP).
-  segment_id: z.string().optional(),
-  agent_key: z.string().optional(),
+  //
+  // `.nullish()` e NÃO `.optional()`: o runner de survey é UM só para todos os grãos,
+  // então ele sempre passa `segment_id`/`agent_key` — e num grão que não é `segment` a
+  // ref `@ctx.session.survey_segment_id` resolve para **null** (é assim que um @ctx
+  // ausente se comporta). `.optional()` aceita *ausente*, não `null`, e rejeitaria a
+  // chamada inteira. Foi exatamente essa a causa do `survey_link_create` que falhava em
+  // silêncio no J4b (`customer_key: z.string().default("")` vs `null`) — o mesmo erro,
+  // duas vezes, custa caro porque a tool devolve isError e o `invoke` segue por
+  // `on_failure` sem log.
+  segment_id: z.string().nullish().transform(v => v ?? undefined),
+  agent_key: z.string().nullish().transform(v => v ?? undefined),
   survey_session_id: z.string().optional(),
   pool_id: z.string().optional(),
 })

@@ -124,6 +124,12 @@ class WebhookAdapter(ChannelAdapter):
         if self._identity_enabled:
             await self._identity.ensure_schema()
 
+    # Valores que significam "não tem", mas chegam como TEXTO. Uma tag semeada por
+    # `context_json` (string JSON com `{{...}}`) cujo ref não resolveu vira a string
+    # literal "null"/"undefined" — que é truthy em Python e passaria por qualquer
+    # `if not value`. Normalizar aqui, num ponto só, em vez de em cada leitor.
+    _CTX_EMPTY = {"", "null", "none", "undefined"}
+
     async def _read_ctx_tag(
         self, tenant_id: str, session_id: str | None, tag: str
     ) -> str | None:
@@ -136,7 +142,10 @@ class WebhookAdapter(ChannelAdapter):
                 return None
             entry = json.loads(raw)
             val = entry.get("value") if isinstance(entry, dict) else entry
-            return str(val) if val else None
+            if val is None:
+                return None
+            text = str(val).strip()
+            return text if text.lower() not in self._CTX_EMPTY else None
         except Exception:
             return None
 
@@ -170,33 +179,28 @@ class WebhookAdapter(ChannelAdapter):
           session  → a sessão de origem pesquisada     (caller.session.origin_session_id,
                      i.e. a sessão que disparou o workflow de survey)
           workflow → o próprio workflow                (a sessão chamadora)
+          segment  → a sessão QUE CONTÉM o segmento    (também a de origem — o
+                     `segment_id` viaja à parte, em `session.survey_segment_id`)
 
-        `segment` é REJEITADO aqui de propósito: `survey_record` exige `segment_id`, que o
-        workflow outbound não conhece (ele foi disparado por um hook de fim de sessão, não
-        de segmento). Suportá-lo exige o gatilho carimbar o segmento — outra fatia. Falhar
-        alto é melhor do que gravar o sinal na chave errada.
+        Note que `segment` e `session` resolvem para a MESMA sessão-chave: o que os separa
+        não é a chave, é o `segment_id` + `agent_key` que acompanham o sinal (é assim que
+        `session_signal` modela atribuição por agente).
         """
         if grain == "journey":
             return caller_root
         if grain == "workflow":
             return session_id
-        if grain == "session":
+        if grain in ("session", "segment"):
             origin = await self._read_ctx_tag(
                 tenant_id, session_id, "session.origin_session_id"
             )
             if not origin:
                 raise ValueError(
-                    "signal_grain='session' exige que o workflow tenha uma sessão de "
+                    f"signal_grain='{grain}' exige que o workflow tenha uma sessão de "
                     "origem (session.origin_session_id) — este collect não foi disparado "
                     "a partir de uma sessão."
                 )
             return origin
-        if grain == "segment":
-            raise ValueError(
-                "signal_grain='segment' não é suportado no collect outbound: "
-                "survey_record exige `segment_id`, que o workflow não conhece. "
-                "Um survey de segmento precisa que o gatilho carimbe o segmento."
-            )
         raise ValueError(f"signal_grain desconhecido: '{grain}'")
 
     @staticmethod
@@ -872,6 +876,27 @@ class WebhookAdapter(ChannelAdapter):
             tenant_id, session_id, caller_root, signal_grain,
         )
 
+        # Atribuição por segmento — quem ESCOLHE o segmento é o GATILHO (política mora no
+        # skill; ele propaga a escolha via `context_json` do workflow_trigger). O core só
+        # expõe os fatos (`session.last_primary_segment_id` etc., escritos pelo bridge no
+        # ctx pré-hook) e transporta a escolha. Default de produto = último segmento
+        # primary, mas isso está no YAML do gatilho, não aqui.
+        signal_segment_id = ""
+        signal_agent_key  = ""
+        if signal_grain == "segment":
+            signal_segment_id = await self._read_ctx_tag(
+                tenant_id, session_id, "session.survey_segment_id",
+            ) or ""
+            signal_agent_key = await self._read_ctx_tag(
+                tenant_id, session_id, "session.survey_agent_key",
+            ) or ""
+            if not signal_segment_id:
+                raise ValueError(
+                    "signal_grain='segment' exige `session.survey_segment_id` no ctx do "
+                    "workflow — o gatilho deve escolher o segmento e propagá-lo no "
+                    "context_json do workflow_trigger (a escolha é política do skill)."
+                )
+
         # ── LAZY: store the collect pending — NO session until the customer clicks ──
         ttl_s      = int(timeout_hours * 3600) + 3600
         expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
@@ -886,6 +911,8 @@ class WebhookAdapter(ChannelAdapter):
                 "form_id":           dialog_form_id, # DialogForm the runner will render
                 "signal_grain":      signal_grain,      # S2 — grão do sinal (config do deploy)
                 "signal_target_id":  signal_target_id,  # S2 — chave já resolvida p/ o runner
+                "signal_segment_id": signal_segment_id, # S3 — atribuição (grain=segment)
+                "signal_agent_key":  signal_agent_key,  # S3 — atribuição (grain=segment)
                 "customer_id":       customer_id,
                 "tenant_id":         tenant_id,
                 "status":            "pending",
@@ -1001,6 +1028,18 @@ class WebhookAdapter(ChannelAdapter):
                 or session_id,
                 "collect_engage", now_iso,
             )
+            # S3 — atribuição por segmento. Só existe quando grain=segment; nos outros
+            # grãos a tag fica AUSENTE e a ref `@ctx.session.survey_segment_id` do runner
+            # resolve para null — por isso `segment_id`/`agent_key` são `.nullish()` no
+            # SurveyRecordInputSchema (o runner é um só para todos os grãos).
+            if pending.get("signal_segment_id"):
+                ctx_writes["session.survey_segment_id"] = self._ctx_entry(
+                    pending["signal_segment_id"], "collect_engage", now_iso,
+                )
+            if pending.get("signal_agent_key"):
+                ctx_writes["session.survey_agent_key"] = self._ctx_entry(
+                    pending["signal_agent_key"], "collect_engage", now_iso,
+                )
             await self._redis.hset(ctx_key, mapping=ctx_writes)
             await self._redis.expire(ctx_key, session_ttl_s)
 

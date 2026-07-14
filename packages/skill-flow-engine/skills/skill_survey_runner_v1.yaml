@@ -92,6 +92,10 @@ steps:
       tenant_id:         "$.tenant_id"
       origin_session_id: "@ctx.session.survey_target_id"
       grain:             "@ctx.session.survey_grain"
+      # Atribuição por segmento (só populados quando grain=segment; nos demais grãos as
+      # tags não existem e a ref resolve para null — `.nullish()` no schema tolera).
+      segment_id:        "@ctx.session.survey_segment_id"
+      agent_key:         "@ctx.session.survey_agent_key"
       survey_session_id: "$.session_id"
       form_id:           "@ctx.session.dialog_form_id"
       answers:
