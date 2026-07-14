@@ -67,6 +67,25 @@ f0abcee0  processo             (raiz, sem pai)
 
 O `origin` do contato de survey aponta para o **workflow**, não para o processo: se apontasse para o processo, seria uma estrela de irmãos — que é exatamente o que a tela mostrava antes.
 
+### Bug (achado pelo T4, mas MUITO maior que ele): `/reports/sessions` NUNCA rodou sua query principal
+
+O `spawn_reason` chegava `null` à UI mesmo estando correto no ClickHouse. A causa não era o T4 — era o endpoint.
+
+Os quatro JOINs de recuperação do `/reports/sessions` davam ao alias do agregado **o mesmo nome da coluna que o próprio `WHERE` filtra**:
+
+```sql
+SELECT session_id, anyIf(channel, channel != '') AS channel   -- alias "channel"
+FROM sessions WHERE tenant_id = … AND channel != ''           -- resolve para o ALIAS
+```
+
+O ClickHouse resolve o `channel` do `WHERE` para o **alias** (o agregado) e recusa: `Code 184 ILLEGAL_AGGREGATION`. Isso derrubava os **tiers 1 e 2 sempre** — e como o fallback era **mudo** (`except Exception: pass`), o endpoint respondia **200** pelo **tier 3** (bare minimum), com `segment_count: 0` fixo e colunas ausentes.
+
+**O `Segs: 0` que aparecia em todas as telas nunca foi um zero.** Era coluna que a query não trazia. Só descobrimos porque o `spawn_reason` era uma coluna que o tier 3 **não tinha** — e um campo *faltando* é visível, enquanto um `0` *plausível* não é. O bug se escondia atrás de um valor que parecia razoável.
+
+Corrigido o alias-shadowing (sufixo `_v`), e **a mudez do fallback**: cada tier agora loga por que caiu. *Um fallback que esconde o motivo do fallback não é resiliência — é cegueira.* (Terceira degradação silenciosa do mesmo arco: o `skill.flow` vazando para produção, o seed-if-absent pulando em silêncio, e agora o tier 3.)
+
+**E o fallback mascarava um SEGUNDO bug**, que só apareceu quando o primeiro foi corrigido: **com JOINs**, o ClickHouse qualifica o nome da coluna de saída (`s.session_id`, não `session_id`), e o mapeador de linhas — que casa por **nome** — devolvia `null`. No tier 3 (sem JOIN) o nome saía limpo, então nunca aparecia. Toda coluna do SELECT rico leva agora **alias explícito**: o nome de saída passa a ser decisão nossa, não efeito colateral do plano de query.
+
 **Pendente (spec §9):** T6 (rastro forense — a cadeia completa a partir de uma sessão, atravessando journeys).
 
 ---

@@ -510,17 +510,26 @@ def _fetch_sessions(
     #   Tier 3: bare sessions query          (segments/agent_events tables absent)
 
     # Arc 9: prepend agent scope JOIN (empty string when no restriction)
+    #
+    # ⚠️ NUNCA dê ao alias do agregado o MESMO NOME da coluna que o `WHERE` filtra.
+    # O ClickHouse resolve a referência do WHERE para o ALIAS (o agregado) e recusa com
+    # `Code 184 ILLEGAL_AGGREGATION`. Escrever
+    #     SELECT anyIf(channel, channel != '') AS channel ... WHERE channel != ''
+    # derrubava os tiers 1 e 2 **sempre** — e, como o fallback era MUDO, o endpoint
+    # respondia 200 pelo tier 3 (bare), com `segment_count: 0` fixo e colunas ausentes.
+    # O "Segs: 0" que aparecia em todas as telas nunca foi um zero: era coluna que a
+    # query não trazia. Por isso os aliases abaixo são sufixados (`_v`).
     _joins = f"""{_agent_join}
         -- channel recovery: any non-empty channel row for this session
         LEFT JOIN (
-            SELECT session_id, anyIf(channel, channel != '') AS channel
+            SELECT session_id, anyIf(channel, channel != '') AS channel_v
             FROM {db}.sessions
             WHERE tenant_id = {{tenant_id:String}} AND channel != ''
             GROUP BY session_id
         ) AS _ch ON _ch.session_id = s.session_id
         -- pool_id recovery: earliest primary-segment pool for this session
         LEFT JOIN (
-            SELECT session_id, argMin(pool_id, started_at) AS pool_id
+            SELECT session_id, argMin(pool_id, started_at) AS pool_v
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
               AND (parent_segment_id IS NULL OR parent_segment_id = '')
@@ -529,7 +538,7 @@ def _fetch_sessions(
         ) AS _pool ON _pool.session_id = s.session_id
         -- outcome recovery: most-recent closed segment outcome
         LEFT JOIN (
-            SELECT session_id, argMax(outcome, ended_at) AS outcome
+            SELECT session_id, argMax(outcome, ended_at) AS outcome_v
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
               AND outcome IS NOT NULL AND outcome != ''
@@ -537,7 +546,7 @@ def _fetch_sessions(
         ) AS _seg_out ON _seg_out.session_id = s.session_id
         -- outcome fallback: most-recent agent_done outcome
         LEFT JOIN (
-            SELECT session_id, argMax(outcome, timestamp) AS outcome
+            SELECT session_id, argMax(outcome, timestamp) AS outcome_v
             FROM {db}.agent_events FINAL
             WHERE tenant_id = {{tenant_id:String}}
               AND event_type = 'agent_done'
@@ -563,24 +572,29 @@ def _fetch_sessions(
 
     # Use __ANI_DNIS__ placeholder instead of str.format() to avoid conflicts
     # with ClickHouse's own {param:Type} syntax inside _joins.
+    # ⚠️ COM JOINs o ClickHouse qualifica o nome da coluna de saída (`s.session_id`, e não
+    # `session_id`), e o mapeador de linhas — que casa por NOME — devolve null. No tier 3
+    # (sem JOIN) o nome saía limpo, então o problema nunca aparecia ali. Por isso TODA
+    # coluna aqui leva alias explícito: o nome de saída passa a ser uma decisão nossa, não
+    # um efeito colateral do plano de query.
     _rich_sql = f"""
         SELECT
-            s.session_id,
-            s.tenant_id,
-            COALESCE(NULLIF(s.channel,  ''), _ch.channel)     AS channel,
-            COALESCE(NULLIF(s.pool_id,  ''), _pool.pool_id)   AS pool_id,
-            s.customer_id,
-            s.opened_at,
-            s.closed_at,
-            s.close_reason,
-            COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome, _ae_out.outcome) AS outcome,
-            s.wait_time_ms,
+            s.session_id AS session_id,
+            s.tenant_id  AS tenant_id,
+            COALESCE(NULLIF(s.channel,  ''), _ch.channel_v)   AS channel,
+            COALESCE(NULLIF(s.pool_id,  ''), _pool.pool_v)    AS pool_id,
+            s.customer_id  AS customer_id,
+            s.opened_at    AS opened_at,
+            s.closed_at    AS closed_at,
+            s.close_reason AS close_reason,
+            COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome_v, _ae_out.outcome_v) AS outcome,
+            s.wait_time_ms AS wait_time_ms,
             -- Fase E.2: webhook duration = tempo decorrido total do processo
             -- (closed_at − início do primeiro segmento). Usa first_started_at porque o
             -- opened_at é re-carimbado a cada resume. Inclui as esperas (suspends) — é a
             -- duração real do caso. Demais canais mantêm handle_time_ms / wall-clock.
             if(
-                COALESCE(NULLIF(s.channel, ''), _ch.channel) = 'webhook',
+                COALESCE(NULLIF(s.channel, ''), _ch.channel_v) = 'webhook',
                 if(s.closed_at IS NOT NULL AND _segdur.first_started_at IS NOT NULL,
                    toInt64(dateDiff('millisecond', _segdur.first_started_at, s.closed_at)),
                    NULL),
@@ -596,29 +610,45 @@ def _fetch_sessions(
             -- Journey T1/T4: a ARESTA (quem me criou) e o seu RÓTULO (por quê).
             -- É com estes dois que a UI monta a árvore: sem o pai, tudo vira irmão;
             -- sem o rótulo, vê-se a hierarquia mas não por que cada filho existe.
-            s.origin_session_id,
-            s.spawn_reason,
-            s.root_session_id
+            s.origin_session_id AS origin_session_id,
+            s.spawn_reason      AS spawn_reason,
+            s.root_session_id   AS root_session_id
         FROM {db}.sessions AS s FINAL
         {_joins}
         WHERE {where}
         ORDER BY s.opened_at DESC
         LIMIT {page_size} OFFSET {offset}"""
 
+    # ── Degradação por tiers — que NÃO pode ser muda ──────────────────────────
+    # Os `except Exception` silenciosos aqui já custaram caro: o tier 1 falhava, a query
+    # caía no tier 3 (bare minimum) e o endpoint respondia 200 com `segment_count: 0` e
+    # colunas ausentes — parecendo funcionar. Foi assim que o `spawn_reason` (T4) chegou
+    # nulo à UI mesmo estando correto no ClickHouse.
+    #
+    # Um fallback que esconde o motivo do fallback não é resiliência: é cegueira.
     try:
         # Tier 1: ANI/DNIS columns present
         result = client.query(
-            _rich_sql.replace("__ANI_DNIS__", "s.ani, s.dnis"),
+            _rich_sql.replace("__ANI_DNIS__", "s.ani AS ani, s.dnis AS dnis"),
             parameters=params,
         )
-    except Exception:
+    except Exception as _t1_exc:
+        logger.warning(
+            "sessions tier-1 query failed (falling back to tier-2, sem ANI/DNIS): %s",
+            _t1_exc,
+        )
         try:
             # Tier 2: ANI/DNIS columns not yet migrated
             result = client.query(
                 _rich_sql.replace("__ANI_DNIS__", "NULL AS ani, NULL AS dnis"),
                 parameters=params,
             )
-        except Exception:
+        except Exception as _t2_exc:
+            logger.warning(
+                "sessions tier-2 query failed (falling back to tier-3, BARE: sem "
+                "segment_count, sem duração de webhook): %s",
+                _t2_exc,
+            )
             # Tier 3: segments / agent_events tables absent — bare minimum
             result = client.query(f"""
                 SELECT
@@ -627,7 +657,10 @@ def _fetch_sessions(
                     s.wait_time_ms, s.handle_time_ms,
                     NULL AS ani, NULL AS dnis, 0 AS segment_count,
                     COALESCE(s.status, 'closed') AS status,
+                    -- Journey T1/T4: a árvore tem de sobreviver ao modo degradado — sem
+                    -- estes dois a UI perde a hierarquia e o motivo de cada nó existir.
                     s.origin_session_id,
+                    s.spawn_reason,
                     s.root_session_id
                 FROM {db}.sessions AS s FINAL
                 {_agent_join}
