@@ -368,7 +368,7 @@ export interface PipelineTransition {
 }
 
 /** Right panel tabs: Ações · Contexto · Histórico (AcoesTab replaces AgentesTab) */
-export type ActiveTab = "acoes" | "contexto" | "historico";
+export type ActiveTab = "acoes" | "cliente" | "contexto" | "historico";
 
 export interface Toast {
   id: string;

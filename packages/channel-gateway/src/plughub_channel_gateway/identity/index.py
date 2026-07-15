@@ -436,6 +436,49 @@ class IdentityIndex:
         logger.info("IdentityIndex: attributes merged customer=%s keys=%d", customer_id, len(attributes))
         return True
 
+    async def search_customers(
+        self, tenant_id: str, q: str, limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """
+        Busca manual de cadastro (C1a — Cliente 360): por `customer_id` exato OU
+        nome (`attributes->>'nome'`/`'name'` ILIKE). NÃO busca por âncora (telefone/
+        email) — âncora exata resolve via `resolve_or_provision` (hash), não por
+        texto no PG. Retorna [{customer_id, status, attributes}]. No-op sem db_pool.
+        """
+        q = (q or "").strip()
+        if self._db is None or not q:
+            return []
+        like = f"%{q}%"
+        async with self._db.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT customer_id, status, attributes
+                  FROM identity.customers
+                 WHERE tenant_id = $1
+                   AND status <> 'merged'
+                   AND (customer_id = $2
+                        OR attributes->>'nome' ILIKE $3
+                        OR attributes->>'name' ILIKE $3)
+                 ORDER BY updated_at DESC
+                 LIMIT $4
+                """,
+                tenant_id, q, like, limit,
+            )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            attrs = r["attributes"]
+            if isinstance(attrs, str):
+                try:
+                    attrs = json.loads(attrs)
+                except Exception:
+                    attrs = {}
+            out.append({
+                "customer_id": r["customer_id"],
+                "status":      r["status"],
+                "attributes":  attrs or {},
+            })
+        return out
+
     async def promote_to_durable(
         self, tenant_id: str, customer_id: str, anchors: list[dict[str, str]],
         status: str = "prospect", verification_class: str = "claimed",

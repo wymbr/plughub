@@ -2,6 +2,20 @@
 
 ---
 
+## Cliente 360 — C1a: cadastro manual (aba Cliente no Console) (2026-07-15)
+
+Fecha o C1a da proposta Cliente 360 (ADR `docs/adr/adr-customer-360-two-surfaces.md` §D3, spec §7): quando a identificação automática **falha** ou **erra**, o operador busca/cria/vincula o cadastro manualmente. Reusa o Resolvedor de Identidade (Fase A/B); o net-new é a **busca** + a superfície.
+
+**Backend** (channel-gateway): `IdentityIndex.search_customers` (query `identity.customers` por `customer_id` exato OU nome em `attributes->>'nome'/'name'` ILIKE) + método no adapter + endpoint `GET /v1/channels/webhook/identity/customers/search`. `resolve`(provision)/`key/attach`/`attributes` já existiam. Proxy `/v1/channels` → channel-gateway:8010 adicionado (vite.config.ts + nginx do Dockerfile, antes do genérico `/v1`).
+
+**UI** (platform-ui): nova aba **Cliente** (`ClienteTab`) no Console — `ActiveTab` ganhou `"cliente"` (tab bar Ações·Cliente·Contexto·Histórico). Mostra o **status de identificação** (identificado `customer_id` × não-identificado quando `customerId === contactId`); **busca** (nome/customer_id) com resultados; **Vincular** (grava `caller.customer_id` via `POST /api/inject-context` → o supervisor_state re-chaveia Histórico/360 no próximo poll); **Criar cadastro** (provision via `/identity/resolve` + nome via `/identity/attributes` + vincular). i18n `cliente.*` + `rightTab.cliente` (en+pt-BR). Seed: `identity.customers` (cus_demo_maria/joão) p/ a busca.
+
+**Dois fixes no vínculo (durante a validação):** (1) **write-permission** — `POST /api/inject-context` rejeitava o operador escrevendo `caller.*` (403 `forbidden_namespace`); adicionado `OPERATOR_WRITABLE_TAGS = ["caller.customer_id"]` (análogo write do `operator_allow_tags` read — id interno, não PII; resto de `caller.*` segue restrito). Mensagem de erro específica **"Sem permissão para associar o cliente"** (`cliente.noPermission`) quando 403, distinta da falha genérica — deixa claro que não foi bug. (2) **UI stale** — o Link gravava certo em Redis (verde "Linked") mas o selo "current" não migrava: o prop `customerId` vem do `supervisor_state`, e o `useSupervisorState` só refetcha em evento WS, nunca após o clique. Fix: `ClienteTab.onLinked → refreshSupervisorState()` (plumbado via `RightPanel.onCustomerLinked` ← `AgentAssistPage`) dispara o refetch no vínculo/criação bem-sucedidos → "current" migra na hora. A busca sempre foi fresh (não era cache).
+
+**Validado E2E**: aba Cliente mostra identificação; busca acha por nome; criar cadastro cria em `identity.customers` e vincula à sessão; **vincular move o "current" na hora** (antes/click/refresh/re-click validados). **Fora do v1 (Fase C)**: merge de cadastros + `external_refs` (CRM). O `identificar_demo` (demo-only) pode ser removido agora que o cadastro manual existe.
+
+---
+
 ## Cliente 360 — HJ (jornadas no Histórico) + navegação bidirecional sessão↔journey (2026-07-15)
 
 Continua o Cliente 360 (após H3): o Histórico do Console agora **distingue processo de contato** e navega entre os dois. ADR `docs/adr/adr-customer-360-two-surfaces.md` (§D2), spec `docs/arcos/customer-contact-history.md` (§4.3/§9 HJ).

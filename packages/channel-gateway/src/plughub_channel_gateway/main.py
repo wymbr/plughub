@@ -1017,6 +1017,18 @@ async def webhook_identity_attributes(body: IdentityAttributesRequest) -> dict:
     )
 
 
+@app.get("/v1/channels/webhook/identity/customers/search", status_code=200)
+async def webhook_identity_customers_search(tenant_id: str, q: str, limit: int = 20) -> dict:
+    """
+    Cadastro manual (C1a — Cliente 360): busca de clientes por `customer_id` exato
+    ou nome (`attributes`). NÃO por âncora (telefone/email exata resolve via
+    /identity/resolve). Retorna { count, results: [{customer_id, status, attributes}] }.
+    """
+    if _webhook_adapter is None:
+        return {"count": 0, "results": []}
+    return await _webhook_adapter.search_customers(tenant_id=tenant_id, q=q, limit=limit)
+
+
 # ── Survey web vehicle (dialog primitive §9.2/§19) ────────────────────────────
 # Link tokenizado → página pública /survey/{token} que renderiza o MESMO
 # DialogForm e grava pela MESMA trilha (session.signals). Prefixos /v1/survey e

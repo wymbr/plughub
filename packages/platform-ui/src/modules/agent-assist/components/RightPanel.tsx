@@ -17,6 +17,7 @@ import {
   SupervisorState,
 } from "../types";
 import { AcoesTab }    from "./tabs/AcoesTab";
+import { ClienteTab }  from "./tabs/ClienteTab";
 import { ContextoTab }  from "./tabs/ContextoTab";
 import { HistoricoTab } from "./tabs/HistoricoTab";
 import { useAuth }      from "../../../auth/useAuth";
@@ -25,6 +26,9 @@ interface RightPanelProps {
   activeTab:                ActiveTab;
   supervisorState:          SupervisorState | null;
   customerId:               string | null;
+  /** Ephemeral per-contact id — used by ClienteTab to detect "not identified"
+   *  (customerId falls back to contactId when caller.customer_id is unresolved). */
+  contactId?:               string | null;
   tenantId?:                string | null;
   /** Session ID forwarded to ContextoTab for manual tag writes */
   sessionId?:               string | null;
@@ -37,12 +41,15 @@ interface RightPanelProps {
   onAddSpecialist:          (alias: string, instruction: string, visibility: "all" | "agents_only") => void;
   sessionClosed:            boolean;
   onTerminateSegment?:      (instanceId: string) => void;
+  /** Refresh do supervisor_state após vínculo de cliente (ClienteTab) */
+  onCustomerLinked?:        () => void;
 }
 
 export const RightPanel: React.FC<RightPanelProps> = ({
   activeTab,
   supervisorState,
   customerId,
+  contactId,
   tenantId,
   sessionId,
   sessionMessages = [],
@@ -53,6 +60,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
   onAddSpecialist,
   sessionClosed,
   onTerminateSegment,
+  onCustomerLinked,
 }) => {
   const { t } = useTranslation('agentAssist');
   const { currentUser } = useAuth();
@@ -75,6 +83,16 @@ export const RightPanel: React.FC<RightPanelProps> = ({
       {/* min-h-0 é obrigatório: sem ele o flex-1 cresce com o conteúdo (min-height:auto)
           e o overflow-y-auto das abas (ex.: Contexto com muitos campos) não rola. */}
       <div className="flex-1 min-h-0 overflow-hidden relative">
+
+        {activeTab === "cliente" && (
+          <ClienteTab
+            customerId={customerId}
+            contactId={contactId ?? null}
+            sessionId={sessionId}
+            tenantId={tenantId}
+            onLinked={onCustomerLinked}
+          />
+        )}
 
         {activeTab === "acoes" && (
           <AcoesTab

@@ -535,6 +535,7 @@ export const AgentAssistPage: React.FC = () => {
   // Right panel tab labels (console-acoes-tab: "agentes" → "acoes")
   const rightTabLabels: Record<string, string> = {
     acoes:     t("rightTab.acoes",    { defaultValue: "Ações"    }),
+    cliente:   t("rightTab.cliente",  { defaultValue: "Cliente"  }),
     contexto:  t("rightTab.contexto"),
     historico: t("rightTab.historico", { defaultValue: "Histórico" }),
   };
@@ -616,7 +617,7 @@ export const AgentAssistPage: React.FC = () => {
 
           {/* Right-panel tab bar: Agentes · Contexto · Histórico */}
           <div className="w-[280px] flex-shrink-0 border-l border-border flex bg-surface-muted">
-            {(["acoes", "contexto", "historico"] as ActiveTab[]).map((id) => (
+            {(["acoes", "cliente", "contexto", "historico"] as ActiveTab[]).map((id) => (
               <button
                 key={id}
                 onClick={() => setActiveTab(id)}
@@ -791,6 +792,9 @@ export const AgentAssistPage: React.FC = () => {
                 const v = selected?.supervisorState?.customer_context?.context_snapshot?.["caller.customer_id"]?.value
                 return (typeof v === "string" && v.trim()) ? v : (selected?.contactId ?? null)
               })()}
+              /* Ephemeral contact id — ClienteTab compares to customerId to detect
+                 "not identified" (customerId falls back to contactId when unresolved). */
+              contactId={selected?.contactId ?? null}
               tenantId={session?.tenantId}
               sessionId={selected?.sessionId ?? previewSessionId}
               sessionMessages={selected ? selected.messages : previewMessages}
@@ -801,6 +805,7 @@ export const AgentAssistPage: React.FC = () => {
               mentionableAgents={mentionableAgents}
               onAddSpecialist={handleAddSpecialist}
               sessionClosed={selected?.sessionClosed ?? false}
+              onCustomerLinked={refreshSupervisorState}
             />
           </div>
 

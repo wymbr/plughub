@@ -154,6 +154,16 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # channel-gateway — identity resolver REST (Cliente 360 cadastro manual). Before generic /v1.\n\
+    location ~ ^/v1/channels(/|$) {\n\
+        set $up_channel_id http://channel-gateway:8010;\n\
+        proxy_pass         $up_channel_id;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # agent-registry — generic /v1 catch-all\n\
     location ~ ^/v1(/|$) {\n\
         set $up_registry http://agent-registry:3300;\n\

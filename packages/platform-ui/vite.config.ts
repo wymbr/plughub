@@ -65,6 +65,11 @@ export default defineConfig({
         target: 'http://localhost:3760',
         changeOrigin: true
       },
+      '^/v1/channels': {
+        // channel-gateway — identity resolver REST (Cliente 360 cadastro manual). Before generic /v1.
+        target: 'http://localhost:8010',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
         changeOrigin: true

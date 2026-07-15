@@ -1227,6 +1227,11 @@ class WebhookAdapter(ChannelAdapter):
         ok = await self._identity.update_attributes(tenant_id, customer_id, attributes)
         return {"updated": ok}
 
+    async def search_customers(self, tenant_id: str, q: str, limit: int = 20) -> dict:
+        """Busca manual de cadastro (C1a) — por customer_id exato ou nome."""
+        results = await self._identity.search_customers(tenant_id, q, limit)
+        return {"count": len(results), "results": results}
+
     async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
         """Lookup 2 — pending workflows for a resolved customer_id.
 

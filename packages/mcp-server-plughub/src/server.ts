@@ -1322,14 +1322,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
       return
     }
 
-    // Phase 2 — namespace write permission by role
+    // Phase 2 — namespace write permission by role.
     const writeRole = (payload["role"] as string) ?? "operator"
     const writeNs   = (key as string).split(".")[0] ?? ""
     const OPERATOR_WRITABLE_NS = ["agent", "service"]
-    if (writeRole === "operator" && !OPERATOR_WRITABLE_NS.includes(writeNs)) {
+    // Exact tags the operator may WRITE beyond the namespaces above — the write-side
+    // analog of context_visibility.operator_allow_tags (read). caller.customer_id é a
+    // AÇÃO DE IDENTIFICAÇÃO/VÍNCULO (Cliente 360 C1a: corrigir/vincular o cliente),
+    // um id interno (não PII); o resto de caller.* (cpf/nome/…) segue restrito.
+    const OPERATOR_WRITABLE_TAGS = ["caller.customer_id"]
+    if (writeRole === "operator" && !OPERATOR_WRITABLE_NS.includes(writeNs) && !OPERATOR_WRITABLE_TAGS.includes(key as string)) {
       res.status(403).json({
         error:   "forbidden_namespace",
-        message: `Role 'operator' cannot write to namespace '${writeNs}'. Allowed: ${OPERATOR_WRITABLE_NS.join(", ")}.`,
+        message: `Role 'operator' cannot write to '${key}'. Allowed namespaces: ${OPERATOR_WRITABLE_NS.join(", ")}; allowed tags: ${OPERATOR_WRITABLE_TAGS.join(", ")}.`,
       })
       return
     }

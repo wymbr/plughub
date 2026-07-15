@@ -50,6 +50,16 @@ $CH -q "INSERT INTO ${DB}.sessions
   ('$TENANT','proc_hist_root','webhook','portabilidade_processo_ia','$CID','proc_hist_root','2026-07-12 09:00:00',NULL,NULL,'suspended',''),
   ('$TENANT','proc_hist_child','webchat','retencao_humano','$CID','proc_hist_root','2026-07-12 09:05:00','2026-07-12 09:20:00','resolved','closed','agent_hangup')"
 
+echo "2c) Semeando clientes no cadastro (identity.customers, PG) — p/ a busca do C1a ..."
+# O identity.customers é separado do ClickHouse; a aba Cliente busca aqui. Schema criado
+# pelo channel-gateway no boot (ensure_schema). ON CONFLICT p/ re-rodar.
+$COMPOSE exec -T postgres psql -U plughub -d plughub_demo -v ON_ERROR_STOP=0 -c \
+  "INSERT INTO identity.customers (customer_id, tenant_id, status, attributes) VALUES
+     ('$CID','$TENANT','identified','{\"nome\": \"Maria Demo\"}'),
+     ('cus_demo_joao','$TENANT','prospect','{\"nome\": \"João Teste\"}')
+   ON CONFLICT (customer_id) DO UPDATE SET attributes = identity.customers.attributes || EXCLUDED.attributes;" \
+  < /dev/null 2>&1 | tail -1 || echo "   (identity schema ausente? channel-gateway no ar?)"
+
 echo "3) Conferência (sessões fechadas do cliente):"
 $CH -q "SELECT session_id, channel, outcome, opened_at, closed_at
         FROM ${DB}.sessions FINAL
