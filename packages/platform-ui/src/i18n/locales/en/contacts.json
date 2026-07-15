@@ -52,6 +52,20 @@
         "session": "Session", "channel": "Channel", "status": "Status",
         "opened": "Opened", "segments": "Segs", "outcome": "Outcome"
       }
+    },
+    "trace": {
+      "open": "Trace",
+      "title": "Provenance trace",
+      "subtitle": "What this session generated — and where it came from — across process boundaries",
+      "loading": "Loading trace…",
+      "empty": "No provenance recorded for this session",
+      "focus": "focus",
+      "boundary": "other process",
+      "recenter": "Center the trace here",
+      "openJourney": "Open process",
+      "close": "Close",
+      "nodeCount": "{{count}} sessions",
+      "truncated": "Trace truncated (limit reached)"
     }
   },
   "title": "Contacts",

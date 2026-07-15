@@ -390,6 +390,21 @@ export interface ContactHistoryEntry {
   close_reason: string | null;
 }
 
+// ── Customer history search (H3) ──────────────────────────────────────────────
+//
+// One hit per session, from analytics-api GET /sessions/customer/{id}/search.
+// `snippet` is MASKED content only (analytics.messages has no original_content);
+// `score` = number of matching messages in the session.
+export interface SearchHit {
+  session_id: string;
+  opened_at:  string | null;
+  channel:    string;
+  outcome:    string | null;
+  pool_id:    string;
+  snippet:    string;
+  score:      number;
+}
+
 // ── Session transcript (drill-down from history — H1) ─────────────────────────
 //
 // Shape returned by analytics-api GET /v1/transcript/sessions/{id}. Content is

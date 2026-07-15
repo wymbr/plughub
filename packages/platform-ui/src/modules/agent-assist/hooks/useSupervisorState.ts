@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { SupervisorState, WsServerEvent } from "../types";
+import { getAccessToken } from "../../../auth/token-store";
 
 const API_BASE = "/api";
 
@@ -21,7 +22,14 @@ export function useSupervisorState(
     if (!sessionId || fetchingRef.current) return;
     fetchingRef.current = true;
     try {
-      const res = await fetch(`${API_BASE}/supervisor_state/${sessionId}`);
+      // The mcp-server /api/supervisor_state route requires a JWT (requireJwtRole).
+      // Without the Bearer token it returns 401 → customer_context (and thus the
+      // resolved caller.customer_id / context_snapshot) never reaches the console,
+      // which surfaced as "customer not identified" even with the tag in ContextStore.
+      const token = getAccessToken();
+      const res = await fetch(`${API_BASE}/supervisor_state/${sessionId}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         const data = (await res.json()) as SupervisorState;
         setState(data);

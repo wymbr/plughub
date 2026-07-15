@@ -39,59 +39,15 @@ canônica** valorada em `session_id`. Descartado D1 puro (não resolve cenário 
 | J5b ✅ (2026-07-14) | i18n dos **enums** na Vista Processos. `status`/`outcome`/`business_outcome`/`channels` chegavam crus da analytics-api e eram renderizados assim (o operador via inglês técnico em pt-BR); a moldura já passava por `t()`, faltavam os **valores**. Reusa `sessions.status.*` (já existia no namespace) e adiciona `enums.outcome.*` + `enums.channel.*` (en+pt-BR) — não duplica dicionário. `defaultValue: <valor cru>` em todos: enum novo no backend degrada para o valor cru em vez de quebrar a tela. `t` passa por **parâmetro** nos helpers (a regra proíbe `useTranslation` fora de componente). `title` guarda o valor cru para debug. | J5a |
 | — (app-wide, fora do Journey) | **Guard de rota ABAC**: nenhuma página de `analise/` tem gate próprio — só o Sidebar. Deep-link contorna a UI (o dado segue filtrado por `accessible_pools` no backend). Consertar só a de Journeys seria cosmético; é um item do app. | — |
 
-### Journey — Árvore de proveniência (T1–T6) *(proposta, 2026-07-14)*
+### Journey — Árvore de proveniência (T1–T6) ✅ COMPLETA (2026-07-14/15)
 
-Nasceu de um achado do usuário na Vista Processos: journey exibida como `Resolvido` com uma sessão-membro
-ainda `suspended`. Investigando, dois problemas — um de exibição e um **estrutural**:
-
-- **`origin_session_id` NUNCA é persistido.** A coluna existe, o `parse_inbound` a popula no dict, e o
-  `_SESSION_COLS` **não a inclui no INSERT** (`clickhouse.py:1127`) → sempre `NULL`. O modelo fala em
-  árvore de proveniência mas só persiste a **raiz achatada**: sabe-se quais sessões são da journey,
-  perdeu-se **quem gerou quem**. (A spec do J1 já registrava como *"no-op latente"*.)
-- **Qualquer sessão-membro sequestra o desfecho do processo.** `argMaxIf(outcome, opened_at, …)` pega a
-  mais recentemente ABERTA com outcome — que numa journey de survey é o **contato de survey**. Um survey
-  que falhe fará a tela declarar que o **processo** falhou.
-
-**Reenquadramento:** N1/N2/N3 são **papéis numa cadeia**, não camadas da plataforma. Os níveis reais são
-**segmento → sessão (RECURSIVA: um nó que pode gerar outros nós) → journey (a componente conexa)**. Daí:
-*cada nó tem seu outcome; o desfecho do processo é o da RAIZ* — um filho nunca sobrescreve o pai.
-
-**Proveniência ≠ pertença:** `origin_session_id` responde "quem me criou" (sempre, mesmo cruzando a
-fronteira); `root_session_id` responde "de que processo faço parte" (herda por default, **reseta com
-`journey: new`**). Isso resolve o cenário "o cliente pediu algo sem relação → deve virar outro processo".
-Simétrico ao merge: **`journey: new` corta no nascimento; `journey_merge` une depois**. Os dois compõem —
-mas **não existe split retroativo** (união não tem inverso), o que empurra para *"na dúvida, corte"*.
-
-**Exibição:** a journey é a unidade que se **mede** (tem fronteira); a árvore completa é a que se
-**rastreia** (não tem). Vista Processos mostra **só a subárvore da journey**; arestas que cruzam viram
-**links, não expansões** (senão a UI desfaz o corte que o operador pediu). Rastro forense é superfície
-separada.
-
-**Identidade:** journey segue identificada pela **raiz canônica** (valorada num `session_id`) — cunhar id
-opaco não compra estabilidade (num merge uma identidade morre de qualquer jeito) e traria de volta a
-**entidade** do Arc 10. Só a **apresentação** muda: prefixo `PRC-…`. Gatilho para reabrir: journey que
-precise existir **antes da primeira sessão** ou carregar **atributos próprios**.
-
-**Fatias:** T1 persistir `origin_session_id` (destrava tudo) → T2 desfecho da raiz + provisório → T3
-`journey: inherit|new` → T4 rótulo da aresta → T5 UI em árvore + prefixo `PRC-` → T6 rastro forense.
-
-⚠️ **T2 muda números já exibidos** (o desfecho de journeys existentes deixa de ser o da última sessão
-aberta e passa a ser o da raiz). É correção, mas quebra comparação com prints anteriores — anunciar.
-
-→ Spec: [`docs/product/journey-provenance-tree-spec.md`](docs/product/journey-provenance-tree-spec.md)
-
-J1+J2 já entregam journey por proveniência (o essencial do D1); J3 adiciona o que a proveniência não dá.
-
-**Decisões resolvidas (design §9):** sobrevivente = mais antiga; cache eventualmente consistente; manter os dois
-campos; propagação = do chamador; `@ctx.journey.*` reaceso; filtro "significativa" = **default de UX** (as vistas
-Sessions `session→[segments]` e Processos `journey→[sessions→[segments]]` diferem por profundidade de drill — não
-redundância).
-
-**Riscos:** refresh de cache re-emite N linhas em merges de journeys grandes (raro; medir; cache lazy se preciso);
-`/reports/journeys` carrega union-find por request (alias table pequena; materializar em `journey_id` se medir exigir).
-
-**Docs:** design `docs/product/journey-retorno-modelo-3-niveis-design.md` · spec
-`docs/product/journey-3-niveis-implementation-spec.md` · diagrama `docs/product/journey-3-cenarios-unionfind.svg`.
+Toda a árvore de proveniência entregue e validada — movida para `CHANGELOG.md` (entradas **"Journey T1–T5"**
+e **"Journey T6"**): T1 persistir `origin_session_id` · T2 desfecho = raiz (+ provisório) · T3 `journey:
+inherit|new` · T4 `spawn_reason` · T5 UI em árvore + prefixo `PRC-` · T6 rastro forense bidirecional
+(`GET /reports/sessions/{id}/trace` + `TraceDrawer`). Bug colateral fechado no caminho: `/reports/sessions`
+nunca rodava a query principal (alias-shadowing → fallback mudo pelo tier 3). Design/decisões e não-objetivos
+na spec `docs/product/journey-provenance-tree-spec.md` (§9). ⚠️ T2 mudou números já exibidos (desfecho passou
+a ser o da raiz) — correção, quebra comparação com prints anteriores.
 
 ---
 
@@ -255,7 +211,7 @@ skill). Torná-la `config_param` exigiria dupla indireção (`@ctx.{{$.config.ta
 
 ---
 
-### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — corrigido, a validar
+### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — ✅ VALIDADO 2026-07-15 (ver CHANGELOG)
 
 **Sintoma:** a sessão do workflow (`37324d63`, `status: suspended`) ficou com `pool_id` **vazio** no ClickHouse,
 embora o roteamento tivesse registrado `pool=survey_journey_wf`.
@@ -285,7 +241,7 @@ vinham de tratar um `ReplacingMergeTree` como se fizesse merge por coluna.
 
 ---
 
-### Bug: sessão com hook `side=agent` NUNCA fecha a camada 1 (achado 2026-07-13) — corrigido, a validar
+### Bug: sessão com hook `side=agent` NUNCA fecha a camada 1 (achado 2026-07-13) — ✅ VALIDADO 2026-07-15 (ver CHANGELOG)
 
 **Sintoma:** a sessão do processo (N3, pool webhook) fica `closed_at NULL` / `status NULL` para sempre no
 ClickHouse. Reproduzido no E2E do item 2: das 3 sessões da journey, as duas sem hook fecharam; a raiz (que

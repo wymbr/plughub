@@ -155,6 +155,13 @@ export const ContextMaskingConfigSchema = z.object({
    * Conservative deployments may set "hidden".
    */
   default_unmatched_operator: ContextMaskingTypeSchema.default("plain"),
+  /**
+   * Roles treated as "supervisor" category for masking (bypass the namespace
+   * gate, see PII plain). Config-driven so "who is elevated" is UI-editable and
+   * not fixed in code. Any role NOT in this list is treated as "operator".
+   * Default preserves the previous hardcoded behavior.
+   */
+  supervisor_roles: z.array(z.string()).default(["supervisor", "admin", "evaluator", "reviewer"]),
 })
 export type ContextMaskingConfig = z.infer<typeof ContextMaskingConfigSchema>
 
@@ -176,8 +183,12 @@ export type ContextMaskingConfig = z.infer<typeof ContextMaskingConfigSchema>
  */
 export const DEFAULT_CONTEXT_MASKING_CONFIG: ContextMaskingConfig = {
   default_unmatched_operator: "plain",
+  supervisor_roles: ["supervisor", "admin", "evaluator", "reviewer"],
   rules: [
     // ── exact rules (highest specificity) ──────────────────────────────────
+    // caller.customer_id — internal reference id (not PII); plain so operators can
+    // identify the customer / load history / 360 (exact beats the caller.* catch-all).
+    { pattern: "caller.customer_id",      role: "operator",   type: "plain",        label: "ID interno do cliente (não-PII)" },
     { pattern: "caller.cpf",              role: "operator",   type: "last_2",       label: "CPF do cliente" },
     { pattern: "caller.cnpj",             role: "operator",   type: "last_2",       label: "CNPJ do cliente" },
     { pattern: "caller.telefone",         role: "operator",   type: "last_4",       label: "Telefone do cliente" },

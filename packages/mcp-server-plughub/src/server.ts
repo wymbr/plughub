@@ -680,6 +680,10 @@ function requireJwtRole(
 
 /** Namespaces visible to operator by default (conservative). Overridden per-pool. */
 const DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]
+// Platform default for context_visibility.operator_allow_tags — exact tags an
+// operator sees regardless of namespace. caller.customer_id is an internal id (not
+// PII) the operator needs to identify the customer (C1/H4). Overridable per pool.
+const DEFAULT_OPERATOR_ALLOW_TAGS = ["caller.customer_id"]
 
 // ── ContextMaskingConfig in-process cache ─────────────────────────────────────
 // TTL 60s — short enough to pick up Config API changes, long enough to be safe
@@ -773,9 +777,7 @@ function resolveContextMaskingRule(
   config: ContextMaskingConfig,
 ): import("@plughub/schemas").ContextMaskingRule | null {
   const callerCategory: "operator" | "supervisor" =
-    ["supervisor", "admin", "evaluator", "reviewer"].includes(callerRole)
-      ? "supervisor"
-      : "operator"
+    config.supervisor_roles.includes(callerRole) ? "supervisor" : "operator"
 
   let bestRule: import("@plughub/schemas").ContextMaskingRule | null = null
   let bestScore = -1
@@ -853,10 +855,12 @@ async function applyContextMaskingDynamic(
   rawHash:      Record<string, string>,
   role:         string,
   allowedNs:    string[],
+  allowTags:    string[],
   tenantId:     string,
 ): Promise<Record<string, unknown>> {
-  const isSupervisor = ["supervisor", "admin", "evaluator", "reviewer"].includes(role)
   const config       = await getContextMaskingConfig(tenantId)
+  // "Who is a supervisor" is config-driven (masking config), not fixed in code.
+  const isSupervisor = config.supervisor_roles.includes(role)
   const result: Record<string, unknown> = {}
 
   for (const [tag, raw] of Object.entries(rawHash)) {
@@ -868,6 +872,17 @@ async function applyContextMaskingDynamic(
 
     // agent.* — always removed (per-participant visibility, resolved elsewhere)
     if (ns === "agent") continue
+
+    // operator_allow_tags (config-driven, per pool: context_visibility.operator_allow_tags)
+    // — exact tags the operator sees PLAIN, bypassing the namespace gate AND masking
+    // rules. For internal reference ids the operator needs that are NOT PII — e.g.
+    // "caller.customer_id" to identify the customer / load history / 360 (C1/H4).
+    // Self-contained (no need to also add a masking rule); PII fields (caller.cpf/…)
+    // are NOT listed here and stay gated + masked.
+    if (!isSupervisor && allowTags.includes(tag)) {
+      result[tag] = entry
+      continue
+    }
 
     // Namespace gate — operator sees only allowedNs namespaces
     if (!isSupervisor && !allowedNs.includes(ns)) continue
@@ -1075,8 +1090,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
         } catch { /* non-fatal */ }
       }
 
-      // Read pool context_visibility — determines which namespaces operator can see
+      // Read pool context_visibility — determines which namespaces + exact tags the
+      // operator can see (config-driven per pool; defaults when unset).
       let operatorNamespaces = DEFAULT_OPERATOR_NAMESPACES
+      let operatorAllowTags  = DEFAULT_OPERATOR_ALLOW_TAGS
       if (tenantId && poolId) {
         try {
           const cfgRaw = await redis.get(`${tenantId}:pool_config:${poolId}`)
@@ -1085,6 +1102,9 @@ export async function startServer(config: ServerConfig): Promise<void> {
             const cv  = cfg["context_visibility"] as Record<string, unknown> | undefined
             if (Array.isArray(cv?.["operator_namespaces"])) {
               operatorNamespaces = cv["operator_namespaces"] as string[]
+            }
+            if (Array.isArray(cv?.["operator_allow_tags"])) {
+              operatorAllowTags = cv["operator_allow_tags"] as string[]
             }
           }
         } catch { /* non-fatal — use default */ }
@@ -1098,7 +1118,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         try {
           const hash = await redis.hgetall(`${tenantId}:ctx:${sessionId}`)
           if (hash && Object.keys(hash).length > 0) {
-            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, tenantId)
+            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, operatorAllowTags, tenantId)
           }
         } catch { /* non-fatal */ }
       }

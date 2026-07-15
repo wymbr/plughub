@@ -13,7 +13,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, GitBranch, FileText } from 'lucide-react'
+import { ChevronRight, GitBranch, FileText, Route, X } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
@@ -97,6 +97,70 @@ function buildTree(rows: MemberSession[]): TreeNode[] {
 
 function flattenTree(nodes: TreeNode[]): TreeNode[] {
   return nodes.flatMap(n => [n, ...flattenTree(n.children)])
+}
+
+// ── T6: rastro forense (proveniência bidirecional) ───────────────────────────
+//
+// A Vista Processos MEDE uma journey (tem fronteira); o rastro PERCORRE o grafo
+// (sem fronteira — ninguém mede). Vem do endpoint bidirecional: ancestrais (sobe
+// por origin_session_id) + descendentes (BFS) EM VOLTA de uma sessão, atravessando
+// fronteiras de journey. Cada nó cuja journey canônica difere da do foco é marcado
+// `journey_boundary` — a fronteira que o `journey: new` cria, exibida como link.
+interface TraceApiNode {
+  session_id:        string
+  origin_session_id: string | null
+  spawn_reason:      string | null
+  root_session_id:   string
+  journey_id:        string
+  channel:           string
+  pool_id:           string
+  status:            string
+  outcome:           string | null
+  opened_at:         string
+  closed_at:         string | null
+  depth:             number        // relativo ao foco: <0 ancestral, 0 foco, >0 descendente
+  is_focus:          boolean
+  journey_boundary:  boolean
+}
+interface TraceResp {
+  focus_session_id: string
+  focus_journey_id: string | null
+  focus:            TraceApiNode | null
+  nodes:            TraceApiNode[]
+  meta:             { node_count: number; truncated: boolean }
+}
+interface TraceTreeNode { node: TraceApiNode; children: TraceTreeNode[]; depth: number }
+
+// Monta a árvore por origin_session_id (a cadeia sobe em linha, desce em árvore). A
+// profundidade AQUI é a posição no render (a partir do nó de topo), não o `depth`
+// relativo ao foco do backend — o topo é o ancestral mais alto do conjunto.
+function buildTraceTree(nodes: TraceApiNode[]): TraceTreeNode[] {
+  const byId = new Map(nodes.map(n => [n.session_id, n]))
+  const childrenOf = new Map<string, TraceApiNode[]>()
+  const roots: TraceApiNode[] = []
+  for (const n of nodes) {
+    const parent = n.origin_session_id
+    if (parent && byId.has(parent)) {
+      const list = childrenOf.get(parent) ?? []
+      list.push(n); childrenOf.set(parent, list)
+    } else {
+      roots.push(n)   // topo do conjunto (pai fora do rastro ou raiz de topo)
+    }
+  }
+  const seen = new Set<string>()
+  const walk = (n: TraceApiNode, depth: number): TraceTreeNode => {
+    seen.add(n.session_id)
+    const kids = (childrenOf.get(n.session_id) ?? [])
+      .filter(k => !seen.has(k.session_id))
+      .sort((a, b) => a.opened_at.localeCompare(b.opened_at))
+    return { node: n, depth, children: kids.map(k => walk(k, depth + 1)) }
+  }
+  return roots
+    .sort((a, b) => a.opened_at.localeCompare(b.opened_at))
+    .map(r => walk(r, 0))
+}
+function flattenTraceTree(nodes: TraceTreeNode[]): TraceTreeNode[] {
+  return nodes.flatMap(n => [n, ...flattenTraceTree(n.children)])
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -360,6 +424,8 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
   // mensurável. A journey se MEDE; a árvore completa se RASTREIA.
   const [spawned, setSpawned] = useState<MemberSession[]>([])
   const [loading, setLoading] = useState(false)
+  // T6 — sessão cujo rastro forense está aberto (drawer). null = fechado.
+  const [traceFor, setTraceFor] = useState<string | null>(null)
 
   useEffect(() => {
     if (!tenantId || !root) return
@@ -429,7 +495,7 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
               {nodes.map(({ session: s, depth }) => (
                 <React.Fragment key={s.session_id}>
                 <tr onClick={() => onSelectSession(s.session_id)}
-                  className={`border-t border-border hover:bg-surface-muted transition-colors cursor-pointer ${
+                  className={`group border-t border-border hover:bg-surface-muted transition-colors cursor-pointer ${
                     s.session_id === root ? 'bg-primary-light/30' : ''}`}>
                   <td className="px-3 py-2.5 font-mono text-dark" title={s.session_id}>
                     {/* T5 — indentação = profundidade na árvore de proveniência.
@@ -452,6 +518,13 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
                         {t('journeys.rootBadge', { defaultValue: 'raiz' })}
                       </span>
                     )}
+                    {/* T6 — abre o rastro forense (proveniência bidirecional) desta sessão. */}
+                    <button
+                      onClick={e => { e.stopPropagation(); setTraceFor(s.session_id) }}
+                      title={t('journeys.trace.open', { defaultValue: 'Rastro' })}
+                      className="ml-2 inline-flex items-center align-middle text-muted-light hover:text-primary transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100">
+                      <Route className="w-3.5 h-3.5" aria-hidden="true" />
+                    </button>
                   </td>
                   <td className="px-3 py-2.5 text-muted-light" title={s.channel}>
                     {s.channel ? t(`enums.channel.${s.channel}`, { defaultValue: s.channel }) : '—'}
@@ -497,6 +570,161 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
             </tbody>
           </table>
         )}
+      </div>
+
+      {traceFor && (
+        <TraceDrawer
+          tenantId={tenantId}
+          initialFocus={traceFor}
+          onClose={() => setTraceFor(null)}
+          onOpenJourney={r => { setTraceFor(null); onSelectJourney(r) }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ── T6: rastro forense — drawer ──────────────────────────────────────────────
+//
+// Abre a partir de uma sessão na Vista Processos: a cadeia de proveniência em
+// volta dela, ATRAVESSANDO fronteiras de journey. O foco é re-centrável (clicar
+// num nó re-ancora o rastro nele → percorre-se o grafo por navegação, §6 da
+// spec: "percorre-se navegando pelos links; nenhuma tela precisa renderizá-lo").
+// O selo da journey de um nó de fronteira leva à Vista Processos daquela journey.
+function TraceDrawer({ tenantId, initialFocus, onClose, onOpenJourney }:
+  { tenantId: string; initialFocus: string; onClose: () => void; onOpenJourney: (root: string) => void }) {
+  const { t } = useTranslation('contacts')
+  const [focus, setFocus]     = useState(initialFocus)
+  const [resp, setResp]       = useState<TraceResp | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!tenantId || !focus) return
+    let cancelled = false
+    setLoading(true)
+    fetch(`/reports/sessions/${encodeURIComponent(focus)}/trace?${new URLSearchParams({ tenant_id: tenantId })}`)
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(d => { if (!cancelled) setResp(d) })
+      .catch(() => { if (!cancelled) setResp(null) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [tenantId, focus])
+
+  const flat = resp ? flattenTraceTree(buildTraceTree(resp.nodes)) : []
+
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true">
+      <div className="absolute inset-0 bg-dark/30" onClick={onClose} aria-hidden="true" />
+      <div className="relative w-full max-w-2xl h-full bg-white shadow-xl flex flex-col animate-in slide-in-from-right">
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 py-3 border-b border-border flex-shrink-0">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-sm font-medium text-dark">
+              <Route className="w-4 h-4 text-primary" aria-hidden="true" />
+              {t('journeys.trace.title', { defaultValue: 'Rastro de proveniência' })}
+            </div>
+            <p className="text-xs text-muted-light mt-0.5 pr-4">
+              {t('journeys.trace.subtitle', { defaultValue: 'O que esta sessão gerou — e de onde veio — atravessando fronteiras de processo' })}
+            </p>
+          </div>
+          <button onClick={onClose} title={t('journeys.trace.close', { defaultValue: 'Fechar' })}
+            className="text-muted-light hover:text-dark transition-colors flex-shrink-0 -mr-1">
+            <X className="w-4 h-4" aria-hidden="true" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-auto px-3 py-3">
+          {loading ? (
+            <div className="flex items-center gap-2 text-muted-light text-xs py-8 px-2">
+              <Spinner /> {t('journeys.trace.loading', { defaultValue: 'Carregando rastro…' })}
+            </div>
+          ) : !resp || resp.nodes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-light gap-2">
+              <Route className="w-9 h-9 opacity-30" aria-hidden="true" />
+              <span className="text-xs">{t('journeys.trace.empty', { defaultValue: 'Sem proveniência registrada para esta sessão' })}</span>
+            </div>
+          ) : (
+            <>
+              {resp.meta?.truncated && (
+                <div className="text-[11px] text-warning bg-warning-light border border-warning/30 rounded px-2 py-1 mb-2">
+                  {t('journeys.trace.truncated', { defaultValue: 'Rastro truncado (limite atingido)' })}
+                </div>
+              )}
+              <ul className="space-y-0.5">
+                {flat.map(({ node: n, depth }) => (
+                  <li key={n.session_id}>
+                    <div
+                      className={`group flex items-center gap-2 rounded px-2 py-1.5 border ${
+                        n.is_focus
+                          ? 'bg-primary-light/40 border-primary/30'
+                          : n.journey_boundary
+                            ? 'bg-surface-muted/60 border-dashed border-border'
+                            : 'border-transparent hover:bg-surface-muted'
+                      }`}
+                      style={{ marginLeft: `${depth * 18}px` }}
+                    >
+                      {depth > 0 && (
+                        <span className="text-border-strong select-none text-xs" aria-hidden="true">└─</span>
+                      )}
+                      {/* Clicar no id RE-CENTRA o rastro neste nó (percorrer o grafo). */}
+                      <button
+                        onClick={() => { if (n.session_id !== focus) setFocus(n.session_id) }}
+                        title={n.session_id === focus
+                          ? n.session_id
+                          : t('journeys.trace.recenter', { defaultValue: 'Centralizar o rastro aqui' })}
+                        className="font-mono text-xs text-dark hover:text-primary transition-colors truncate">
+                        {truncateId(n.session_id)}
+                      </button>
+
+                      {n.is_focus && (
+                        <span className="text-[10px] text-primary uppercase tracking-wide flex-shrink-0">
+                          {t('journeys.trace.focus', { defaultValue: 'foco' })}
+                        </span>
+                      )}
+
+                      {/* Rótulo da aresta (T4) — por que este nó existe. */}
+                      {n.spawn_reason && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-surface-alt text-muted border border-border flex-shrink-0"
+                          title={n.spawn_reason}>
+                          {t(`journeys.spawn.${n.spawn_reason}`, { defaultValue: n.spawn_reason })}
+                        </span>
+                      )}
+
+                      {n.channel && (
+                        <span className="text-[11px] text-muted-light flex-shrink-0" title={n.channel}>
+                          {t(`enums.channel.${n.channel}`, { defaultValue: n.channel })}
+                        </span>
+                      )}
+                      <StatusBadge t={t} status={n.status} />
+
+                      <span className="flex-1" />
+
+                      {/* Fronteira de journey → selo PRC- que LEVA àquela journey. */}
+                      {n.journey_boundary ? (
+                        <button
+                          onClick={() => onOpenJourney(n.journey_id)}
+                          title={t('journeys.trace.openJourney', { defaultValue: 'Abrir processo' })}
+                          className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border border-accent/40 bg-accent/5 text-accent hover:bg-accent/10 transition-colors flex-shrink-0">
+                          <span aria-hidden="true">↗</span>
+                          {journeyLabel(n.journey_id)}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-mono text-muted-light flex-shrink-0" title={n.journey_id}>
+                          {journeyLabel(n.journey_id)}
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <div className="text-[11px] text-muted-light mt-3 px-2">
+                {t('journeys.trace.nodeCount', { count: resp.meta?.node_count ?? resp.nodes.length,
+                   defaultValue: `${resp.nodes.length} sessões` })}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

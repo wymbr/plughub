@@ -491,6 +491,7 @@ const PoolsPage: React.FC = () => {
     max_reply_time_ms:           null as number | null,
     calendar_id:                 '',
     context_visibility_ns:       '' as string,   // comma-separated operator_namespaces
+    context_visibility_allow_tags: '' as string,  // comma-separated operator_allow_tags (exact tags visible plain)
     routing_weights:             { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
     // Queue treatment (queue-attended-model, skill-first): flow de fila + teto
     queue_skill_id:              '',
@@ -646,7 +647,7 @@ const PoolsPage: React.FC = () => {
     setFormData({
       pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', session_reservation: null,
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
-      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '',
+      max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
       queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
@@ -672,6 +673,7 @@ const PoolsPage: React.FC = () => {
       max_reply_time_ms:           pool.max_reply_time_ms ?? null,
       calendar_id:                 pool.calendar_id || '',
       context_visibility_ns:       (pool.context_visibility?.operator_namespaces ?? []).join(', '),
+      context_visibility_allow_tags: (pool.context_visibility?.operator_allow_tags ?? []).join(', '),
       routing_weights:             buildDefaultWeights(pool),
       queue_skill_id:              pool.queue_config?.skill_id ?? '',
       queue_max_wait_s:            pool.queue_config?.max_wait_s ?? null,
@@ -801,7 +803,12 @@ const PoolsPage: React.FC = () => {
           ? { calendar_id: formData.calendar_id }
           : (editingPool?.calendar_id ? { calendar_id: null } : {})),
         ...(formData.context_visibility_ns.trim()
-          ? { context_visibility: { operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean) } }
+          ? { context_visibility: {
+              operator_namespaces: formData.context_visibility_ns.split(',').map(s => s.trim()).filter(Boolean),
+              ...(formData.context_visibility_allow_tags.trim()
+                ? { operator_allow_tags: formData.context_visibility_allow_tags.split(',').map(s => s.trim()).filter(Boolean) }
+                : {}),
+            } }
           : {}),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
@@ -1313,6 +1320,14 @@ const PoolsPage: React.FC = () => {
               placeholder="service, journey, session"
               value={formData.context_visibility_ns}
               onChange={e => setFormData({ ...formData, context_visibility_ns: e.target.value })}
+              className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+            <p className="text-xs text-gray mt-2 mb-1">{t('pools.contextVisibility.allowTagsHint')}</p>
+            <input
+              type="text"
+              placeholder="caller.customer_id"
+              value={formData.context_visibility_allow_tags}
+              onChange={e => setFormData({ ...formData, context_visibility_allow_tags: e.target.value })}
               className="w-full border border-border rounded px-3 py-1.5 text-sm text-dark focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>

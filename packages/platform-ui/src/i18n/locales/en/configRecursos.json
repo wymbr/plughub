@@ -55,7 +55,8 @@
     },
     "contextVisibility": {
       "label": "Context Store Visibility",
-      "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included."
+      "hint": "Namespaces visible to the operator in the Context tab. Separate with commas. Default: service, journey, session. PII namespaces (caller, account, history) appear masked when included.",
+      "allowTagsHint": "Exact tags the operator always sees (plain), even outside the namespaces above — for internal reference ids that are not PII (e.g. caller.customer_id, needed to identify the customer / load history). Comma-separated. Default: caller.customer_id."
     },
     "typeCapacity": {
       "label": "Type & Capacity",

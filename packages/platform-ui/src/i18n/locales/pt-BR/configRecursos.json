@@ -55,7 +55,8 @@
     },
     "contextVisibility": {
       "label": "Visibilidade do Context Store",
-      "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos."
+      "hint": "Namespaces visíveis ao operator na aba Contexto. Separe por vírgula. Padrão: service, journey, session. Namespaces PII (caller, account, history) aparecem mascarados quando incluídos.",
+      "allowTagsHint": "Tags exatas que o operador sempre vê (em claro), mesmo fora dos namespaces acima — para ids internos de referência que não são PII (ex.: caller.customer_id, necessário p/ identificar o cliente / carregar histórico). Separe por vírgula. Padrão: caller.customer_id."
     },
     "typeCapacity": {
       "label": "Tipo & Capacidade",

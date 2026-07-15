@@ -59,6 +59,7 @@ from .reports_query import (
     query_session_complexity,
     query_sessions_report,
     query_journeys_report,
+    query_session_trace,
     query_usage_report,
     query_workflow_summary,
     query_workflows_report,
@@ -1298,6 +1299,42 @@ async def report_journeys(
         page_size        = ps,
     )
     return _respond(data, format, f"journeys_{_today_label()}.csv")
+
+
+# ─── GET /reports/sessions/{session_id}/trace (Journey T6 — rastro forense) ───
+# Rastro de proveniência BIDIRECIONAL a partir de uma sessão: ancestrais (sobe por
+# origin_session_id) + descendentes (BFS), ATRAVESSANDO fronteiras de journey. É a
+# superfície de RASTREIO (§6 da spec) — distinta da Vista Processos, que MEDE uma
+# journey. Cada nó cuja journey canônica difere da do foco vem com `journey_boundary`
+# (a fronteira que o `journey: new` cria); a UI a exibe como link, não expansão.
+
+@router.get("/sessions/{session_id}/trace")
+async def report_session_trace(
+    request:        Request,
+    session_id:     str,
+    tenant_id:      str           = Query(...,   description="Tenant identifier"),
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$"),
+    max_depth:      int           = Query(25,    ge=1, le=100),
+    max_nodes:      int           = Query(200,   ge=1, le=1000),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Árvore de proveniência em volta de `session_id`. Retorna `focus`, `nodes[]`
+    (com `depth` relativo ao foco: <0 ancestral, 0 foco, >0 descendente),
+    `journey_id` canônico + `journey_boundary` por nó, e `focus_journey_id`.
+    ABAC via accessible_pools (nós fora do escopo são omitidos).
+    """
+    data = await query_session_trace(
+        client           = request.app.state.store.new_client(),
+        database         = request.app.state.store._database,
+        tenant_id        = tenant_id,
+        focus_session_id = session_id,
+        accessible_pools = pool_principal.accessible_pools,
+        origin           = origin,
+        max_depth        = max_depth,
+        max_nodes        = max_nodes,
+    )
+    return _respond(data, "json", "")
 
 
 # ─── GET /reports/agent-events/series ────────────────────────────────────────

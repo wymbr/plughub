@@ -52,6 +52,20 @@
         "session": "Sessão", "channel": "Canal", "status": "Status",
         "opened": "Aberta", "segments": "Segs", "outcome": "Desfecho"
       }
+    },
+    "trace": {
+      "open": "Rastro",
+      "title": "Rastro de proveniência",
+      "subtitle": "O que esta sessão gerou — e de onde veio — atravessando fronteiras de processo",
+      "loading": "Carregando rastro…",
+      "empty": "Sem proveniência registrada para esta sessão",
+      "focus": "foco",
+      "boundary": "outro processo",
+      "recenter": "Centralizar o rastro aqui",
+      "openJourney": "Abrir processo",
+      "close": "Fechar",
+      "nodeCount": "{{count}} sessões",
+      "truncated": "Rastro truncado (limite atingido)"
     }
   },
   "title": "Contatos",

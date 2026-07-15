@@ -863,6 +863,161 @@ def _attach_journey_signals(
             r["nps_avg"], r["csat_avg"], r["ces_avg"] = s[2], s[3], s[4]
 
 
+# ─── Journey T6 — rastro forense (proveniência bidirecional) ──────────────────
+# "O que aconteceu a partir daqui": a cadeia de proveniência EM VOLTA de uma
+# sessão — ancestrais (subindo por origin_session_id até a raiz de topo) +
+# descendentes (BFS por origin_session_id), ATRAVESSANDO fronteiras de journey.
+#
+# Diferente da Vista Processos (§6 da spec: MEDE uma journey, tem fronteira), o
+# rastro PERCORRE o grafo inteiro — sem fronteira, ninguém mede. Só descendentes
+# do FOCO entram (a cadeia sobe em linha, desce em árvore); irmãos do foco não
+# são expandidos, senão a árvore balooneia. Cada nó cuja journey canônica difere
+# da do foco é marcado `journey_boundary` (a fronteira que o `journey: new` cria).
+
+_TRACE_COLS = (
+    "s.session_id, s.origin_session_id, s.spawn_reason, s.root_session_id, "
+    "s.channel, s.pool_id, s.status, s.outcome, s.opened_at, s.closed_at"
+)
+
+
+async def query_session_trace(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    focus_session_id: str,
+    *,
+    accessible_pools: list[str] | None = None,
+    origin:    "str | list[str]"       = "live",
+    max_depth: int = 25,
+    max_nodes: int = 200,
+) -> dict:
+    """Journey T6 — rastro forense bidirecional a partir de `focus_session_id`.
+    Degradação graciosa (erro/foco inexistente → foco None + nós vazios)."""
+    empty = {
+        "focus_session_id": focus_session_id, "focus_journey_id": None,
+        "focus": None, "nodes": [],
+        "meta": {"node_count": 0, "max_depth": max_depth, "max_nodes": max_nodes, "truncated": False},
+    }
+    if accessible_pools is not None and not accessible_pools:
+        return empty
+    try:
+        return await asyncio.to_thread(
+            _fetch_session_trace, client, database, tenant_id, focus_session_id,
+            accessible_pools, origin, max_depth, max_nodes,
+        )
+    except Exception as exc:
+        logger.warning("query_session_trace failed tenant=%s sid=%s: %s", tenant_id, focus_session_id, exc)
+        return {**empty, "error": "data_unavailable"}
+
+
+def _trace_base_conditions(
+    tenant_id: str, accessible_pools: list[str] | None, origin: "str | list[str]",
+) -> list[str]:
+    conditions = ["s.tenant_id = {tenant_id:String}"]
+    # ABAC pool-scope (Arc 7c) — inclui pool_id='' (sessão ainda não roteada).
+    # Nós fora do escopo simplesmente não aparecem no rastro (pode partir a cadeia;
+    # aceitável — o mesmo recorte de todos os /reports).
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
+    _apply_origin_scope(conditions, origin, alias="s.")
+    return conditions
+
+
+def _fetch_trace_rows(
+    client: Any, db: str, base_conditions: list[str], extra: str, params: dict,
+) -> list[dict]:
+    where = " AND ".join(base_conditions + [extra])
+    sql = f"SELECT {_TRACE_COLS} FROM {db}.sessions AS s FINAL WHERE {where}"
+    return _rows_to_dicts(client.query(sql, parameters=params))
+
+
+def _is_no_parent(v: Any) -> bool:
+    """origin_session_id ausente = raiz de topo (NULL, '' ou o zero-uuid legado)."""
+    if not v:
+        return True
+    s = str(v)
+    return s in ("", "0", "00000000-0000-0000-0000-000000000000")
+
+
+def _fetch_session_trace(
+    client: Any, db: str, tenant_id: str, focus_id: str,
+    accessible_pools: list[str] | None, origin: "str | list[str]",
+    max_depth: int, max_nodes: int,
+) -> dict:
+    base   = _trace_base_conditions(tenant_id, accessible_pools, origin)
+    params = {"tenant_id": tenant_id}
+    resolved = _journey_resolved_map(client, db, tenant_id)
+
+    def canon(root: Any) -> Any:
+        return resolved.get(str(root), str(root)) if root else root
+
+    focus_rows = _fetch_trace_rows(client, db, base, f"s.session_id = '{focus_id}'", params)
+    if not focus_rows:
+        return {
+            "focus_session_id": focus_id, "focus_journey_id": None,
+            "focus": None, "nodes": [],
+            "meta": {"node_count": 0, "max_depth": max_depth, "max_nodes": max_nodes, "truncated": False},
+        }
+    focus = focus_rows[0]
+    focus["depth"] = 0
+    focus_journey = canon(focus.get("root_session_id"))
+
+    nodes: dict[str, dict] = {focus_id: focus}
+    truncated = False
+
+    # ── sobe: ancestrais em CADEIA (cada nó tem exatamente 1 origem) ──
+    cur   = focus.get("origin_session_id")
+    depth = 0
+    while (not _is_no_parent(cur) and str(cur) not in nodes
+           and depth > -max_depth and len(nodes) < max_nodes):
+        rows = _fetch_trace_rows(client, db, base, f"s.session_id = '{cur}'", params)
+        if not rows:
+            break
+        depth -= 1
+        r = rows[0]
+        r["depth"] = depth
+        nodes[str(cur)] = r
+        cur = r.get("origin_session_id")
+
+    # ── desce: descendentes do FOCO em BFS (árvore) ──
+    frontier = [focus_id]
+    depth    = 0
+    while frontier and depth < max_depth and len(nodes) < max_nodes:
+        depth += 1
+        in_list = ", ".join(f"'{sid}'" for sid in frontier)
+        rows = _fetch_trace_rows(client, db, base, f"s.origin_session_id IN ({in_list})", params)
+        next_frontier: list[str] = []
+        for r in rows:
+            sid = str(r["session_id"])
+            if sid in nodes:
+                continue
+            if len(nodes) >= max_nodes:
+                truncated = True
+                break
+            r["depth"] = depth
+            nodes[sid] = r
+            next_frontier.append(sid)
+        frontier = next_frontier
+
+    out: list[dict] = []
+    for sid, r in nodes.items():
+        jid = canon(r.get("root_session_id"))
+        r["journey_id"]       = jid
+        r["is_focus"]         = (sid == focus_id)
+        r["journey_boundary"] = (jid != focus_journey)
+        out.append(r)
+    out.sort(key=lambda x: (x.get("depth", 0), x.get("opened_at") or ""))
+
+    return {
+        "focus_session_id": focus_id,
+        "focus_journey_id": focus_journey,
+        "focus": focus,
+        "nodes": out,
+        "meta": {"node_count": len(out), "max_depth": max_depth, "max_nodes": max_nodes, "truncated": truncated},
+    }
+
+
 # ─── /reports/contact-insights ────────────────────────────────────────────────
 
 async def query_contact_insights_report(

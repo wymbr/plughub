@@ -329,6 +329,23 @@
       "resolved":  "Resolved",
       "escalated": "Escalated",
       "abandoned":  "Abandoned"
+    },
+    "search": {
+      "placeholder":  "Search this customer's contacts…",
+      "clear":        "Clear search",
+      "filters":      "Filters",
+      "from":         "From",
+      "to":           "To",
+      "allChannels":  "All channels",
+      "allOutcomes":  "All outcomes",
+      "searching":    "Searching…",
+      "error":        "Search failed: {{error}}",
+      "noResults":    "No contacts matched.",
+      "resultCount_one":   "{{count}} contact found",
+      "resultCount_other": "{{count}} contacts found",
+      "matches_one":       "{{count}} match",
+      "matches_other":     "{{count}} matches",
+      "noSnippet":    "(match in metadata)"
     }
   },
 

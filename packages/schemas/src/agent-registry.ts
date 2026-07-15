@@ -320,6 +320,15 @@ export const PoolRegistrationSchema = z.object({
    */
   context_visibility:     z.object({
     operator_namespaces: z.array(z.string()).min(1),
+    /**
+     * Exact ContextStore tags the operator may see even when their namespace is
+     * NOT in operator_namespaces — for internal reference ids that enable the
+     * operator's job without being PII (e.g. "caller.customer_id" for customer
+     * identification / history / 360). PII stays gated + masked by rules.
+     * Config-driven per pool (was a hardcoded allow-list). Falls back to a
+     * platform default when omitted.
+     */
+    operator_allow_tags: z.array(z.string()).optional(),
   }).optional(),
 })
 export type PoolRegistration = z.infer<typeof PoolRegistrationSchema>

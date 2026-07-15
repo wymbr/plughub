@@ -452,6 +452,7 @@ _SEED: list[tuple[str, str, object, str]] = [
         {
             "default_unmatched_operator": "plain",
             "rules": [
+                {"pattern": "caller.customer_id",      "role": "operator",   "type": "plain",        "label": "ID interno do cliente (não-PII, necessário p/ identificação/histórico)"},
                 {"pattern": "caller.cpf",              "role": "operator",   "type": "last_2",       "label": "CPF do cliente"},
                 {"pattern": "caller.cnpj",             "role": "operator",   "type": "last_2",       "label": "CNPJ do cliente"},
                 {"pattern": "caller.telefone",         "role": "operator",   "type": "last_4",       "label": "Telefone do cliente"},
@@ -463,6 +464,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                 {"pattern": "account.*",               "role": "operator",   "type": "financial",    "label": "Dados da conta — catch-all (campos não mapeados)"},
                 {"pattern": "*",                       "role": "supervisor", "type": "plain",        "label": "Supervisor e admin veem todos os campos sem máscara"},
             ],
+            "supervisor_roles": ["supervisor", "admin", "evaluator", "reviewer"],
         },
         "ContextStore field-level masking rules (per tag × role). Global default; "
         "tenant overrides set via the Masking page. Consumed by mcp-server via "

@@ -420,11 +420,12 @@ interface CtxFieldRowProps {
 
 const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry, t }) => {
   const isMasked = entry.masked === true;
+  const isObject = entry.value !== null && entry.value !== undefined && typeof entry.value === "object";
   const displayValue =
     entry.value === null || entry.value === undefined
       ? "—"
-      : typeof entry.value === "object"
-      ? JSON.stringify(entry.value)
+      : isObject
+      ? JSON.stringify(entry.value, null, 2)
       : String(entry.value);
 
   return (
@@ -433,9 +434,17 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry, t }) => {
         {tagLabel(tag, t)}
       </span>
       <div className="flex-1 min-w-0">
-        <span className={`text-sm font-medium break-all ${isMasked ? "text-muted-light font-mono tracking-wider" : "text-dark"}`}>
-          {displayValue}
-        </span>
+        {isObject ? (
+          // Object values (e.g. session.pool.mentionable_pools) — pretty + scrollable
+          // so they don't overflow the narrow panel.
+          <pre className="text-2xs font-mono text-dark bg-surface-alt rounded px-1.5 py-1 max-h-28 overflow-auto whitespace-pre-wrap break-all">
+            {displayValue}
+          </pre>
+        ) : (
+          <span className={`text-sm font-medium break-all ${isMasked ? "text-muted-light font-mono tracking-wider" : "text-dark"}`}>
+            {displayValue}
+          </span>
+        )}
         <div className="flex gap-1.5 mt-0.5 flex-wrap">
           {isMasked ? (
             <span className="text-2xs px-1.5 py-0.5 rounded-full font-semibold bg-warning-light text-warning-text border border-warning/30">

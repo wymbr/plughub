@@ -1,6 +1,6 @@
 # Journey — Árvore de proveniência: pertença, desfecho e exibição
 
-**Status:** Proposta (2026-07-14), pré-código.
+**Status:** ✅ Implementada — T1–T5 (2026-07-14) + T6 (2026-07-15). Ver `CHANGELOG.md`.
 **Motivador:** achado do usuário na Vista Processos — uma journey exibida como `Resolvido`
 tendo uma sessão-membro ainda `suspended`.
 **Relacionado:** `journey-retorno-modelo-3-niveis-design.md` (modelo D1.5),
@@ -265,7 +265,7 @@ colateral de querer um id mais bonito.
 | **T3** | **`journey: inherit \| new`** no `workflow_trigger`/`delegate`/`collect` (schemas + channel-gateway + engine). Reseta a raiz, preserva a proveniência. | T1 |
 | **T4** | **Rótulo da aresta** — persistir o que criou o filho (`trigger`/`delegate`/`collect`; o `trigger_type` já viaja no evento). É o que torna a árvore legível. | T1 |
 | **T5** | **UI: L2 vira árvore** (indentação por `origin_session_id`) + **marcadores de aresta cruzando** (link, não expande) + **prefixo `PRC-`** no id da journey. | T1, T4 |
-| **T6** | **Rastro forense** — cadeia completa a partir de uma sessão, atravessando journeys, com rótulos de aresta e fronteiras marcadas. Superfície separada. | T4 |
+| **T6 ✅** | **Rastro forense** — cadeia **bidirecional** (ancestrais + descendentes) a partir de uma sessão, atravessando journeys, com rótulos de aresta e fronteiras marcadas. `GET /reports/sessions/{id}/trace` + `TraceDrawer` na Vista Processos (entrada por linha na L2). "Cadeia sobe, árvore desce": irmãos do foco não expandem. | T4 |
 
 Ordem recomendada: **T1 → T2** (pequenos, corrigem o defeito visível) → **T3** → **T4 + T5**
 → T6.

@@ -329,6 +329,23 @@
       "resolved":  "Resolvido",
       "escalated": "Escalado",
       "abandoned":  "Abandonado"
+    },
+    "search": {
+      "placeholder":  "Buscar nos contatos deste cliente…",
+      "clear":        "Limpar busca",
+      "filters":      "Filtros",
+      "from":         "De",
+      "to":           "Até",
+      "allChannels":  "Todos os canais",
+      "allOutcomes":  "Todos os desfechos",
+      "searching":    "Buscando…",
+      "error":        "Falha na busca: {{error}}",
+      "noResults":    "Nenhum contato encontrado.",
+      "resultCount_one":   "{{count}} contato encontrado",
+      "resultCount_other": "{{count}} contatos encontrados",
+      "matches_one":       "{{count}} ocorrência",
+      "matches_other":     "{{count}} ocorrências",
+      "noSnippet":    "(ocorrência em metadados)"
     }
   },
   "delegar": {

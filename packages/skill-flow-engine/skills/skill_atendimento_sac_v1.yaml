@@ -54,9 +54,30 @@ classification:
   type: orchestrator
   domain: customer_service
 
-entry: saudacao
+entry: identificar_demo
 
 steps:
+
+  # ── Etapa 0 (DEMO): identificação incondicional ───────────────────────────────
+  # O webchat de demo não traz âncora (telefone/email), então o contato chegaria SEM
+  # caller.customer_id e a aba Histórico/360 mostraria "cliente não identificado".
+  # Para exercitar Histórico/H3/360 forçamos o cliente semeado por
+  # infra/test/seed_customer_history_demo.sh (customer_id=cus_demo_maria). caller.* é
+  # session-scoped e propaga por toda a sessão/escalações (inclusive p/ retencao_humano);
+  # no fechamento o Slice 4 carimba sessions.customer_id com este nativo.
+  # ⚠️ DEMO ONLY — remover quando o cadastro manual (C1a) / Resolvedor de Identidade
+  #    fizer a identificação real. Não é comportamento de produção.
+  - id: identificar_demo
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "caller.customer_id"
+      value:      "cus_demo_maria"
+    output_as: _ident_demo
+    on_success: saudacao
+    on_failure: saudacao
 
   # ── Etapa 1: saudação ─────────────────────────────────────────────────────────
   - id: saudacao

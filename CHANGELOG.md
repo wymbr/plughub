@@ -2,9 +2,72 @@
 
 ---
 
-## Journey T1+T2 — aresta de proveniência persistida + desfecho do processo (2026-07-14)
+## Customer History H3 (busca na UI) + visibilidade de contexto config-driven (2026-07-15)
 
-Nasceu de um achado do usuário na Vista Processos: journey exibida como `Resolvido` tendo uma sessão-membro ainda `suspended`. Spec: [`docs/product/journey-provenance-tree-spec.md`](docs/product/journey-provenance-tree-spec.md).
+Fechou o **H3** (busca no histórico do cliente na `HistoricoTab`) validado E2E, e no caminho desenterrou/corrigiu **3 gaps de plataforma** que impediam a identificação do cliente no Console. Spec: `docs/arcos/customer-contact-history.md` (§6/§7/§9) + ADR `docs/adr/adr-customer-360-two-surfaces.md`.
+
+**H3 — busca na UI.** `useCustomerSearch` (debounce, filtros from/to/channel/outcome, degradação graciosa) + `SearchHitRow` (snippet mascarado + contagem) na `HistoricoTab`; hit → drill da transcrição (reusa `TranscriptView` do H1). Backend H2 (`GET /sessions/customer/{id}/search`) já existia. i18n `historico.search.*` en+pt-BR. Validado com cliente semeado.
+
+**3 bugs/gaps de plataforma (sem eles a identificação não chega ao Console):**
+1. **`useSupervisorState` não enviava `Authorization`** → `/api/supervisor_state/:id` (`requireJwtRole`) respondia **401** → `customer_context`/`context_snapshot` (e sentiment/insights) nunca chegavam (falha silenciosa `if (res.ok)`). Fix: anexa `Bearer getAccessToken()`. Bug pré-existente.
+2. **Masking escondia `caller.customer_id` do operador** — a *namespace gate* (`applyContextMaskingDynamic`) só liberava `["service","session"]`, e `caller` ficava de fora (roda **antes** das regras). Tornado **config-driven** (crítica do usuário: nada fixo em código): `context_visibility.operator_allow_tags` (campo NOVO por pool, default de plataforma `["caller.customer_id"]` — tags exatas que o operador vê **plain**, bypassando gate+masking; PII de `caller.*` segue gated+mascarada). Editável em Config › Resources › Pools.
+3. **Critério de viewer role era hardcoded** (`["supervisor","admin","evaluator","reviewer"]` em 2 pontos) → movido pro masking config como **`supervisor_roles`** (editável na tela de Masking). Default preserva o comportamento. Regra exata `caller.customer_id → operator → plain` semeada (redundante com allow_tags-plain, correta p/ pools que colocam `caller` nos namespaces).
+
+**Refino de UI.** `ContextoTab`: valores-objeto (ex.: `session.pool.mentionable_pools`) agora renderizam pretty + scrolláveis (`max-h` + overflow), não estouram o painel.
+
+**Tooling de demo.** `infra/test/seed_customer_history_demo.sh` (cliente `cus_demo_maria` + 3 contatos fechados + mensagens pesquisáveis). Identificação forçada no webchat via passo `identificar_demo` em `skill_atendimento_sac_v1` (**DEMO ONLY** — remover no C1a / Resolvedor de Identidade real).
+
+**Escopo.** Backend fully config-driven (schemas `supervisor_roles` + `operator_allow_tags`; mcp-server lê de config; config-api seed; UI Pools + Masking). Deferido: **HJ** (jornadas em aberto no Histórico — separa `PRC-` de contatos) e **C1** (aba Cliente: cadastro manual + 360).
+
+---
+
+## Bugs de fechamento de sessão (13/07) — VALIDADOS E2E (2026-07-15)
+
+Os dois fixes de 2026-07-13 que estavam "corrigido, a validar" foram confirmados num único E2E, disparando o processo de survey outbound (cadeia N3→N2 do T5). Smoke novo: `infra/test/smoke_close_bugs_20260713.sh` (parametrizado pelo endpoint do processo; poll até a raiz fechar + asserções sobre `sessions FINAL`).
+
+**Cenário** — trigger `POST /v1/channels/webhook/pool/journey_demo_processo` → duas linhas na journey:
+
+| sessão | papel | pool_id | status | outcome | prova |
+|---|---|---|---|---|---|
+| `70af4b92` | processo (raiz, dispara `on_process_end` side=agent) | `journey_demo_processo` | **closed** | resolved | **Bug B** — a raiz com hook side=agent **fechou** (antes: `closed_at NULL` p/ sempre) |
+| `7a0e2931` | survey outbound (`suspended`, `origin`=raiz, `spawn_reason: trigger`) | `survey_journey_wf` | suspended | — | **Bug A** — a sessão suspensa manteve o `pool_id` (antes: apagado pela escrita parcial do `session_suspended`) |
+
+`open_count: 1` = o survey legitimamente suspenso esperando o clique do link. Ambas as asserções PASS.
+
+**Bug A** (escrita parcial apaga identidade): fix = bridge repete a identidade no `session_suspended` + analytics-api `_session_identity_cache` reinjeta em todos os tópicos. **Bug B** (hook side=agent não fecha camada 1): fix = guarda do caminho humano (`if not _has_customer_hooks: _close_contact_layer`) espelhada no ramo do AI primary.
+
+**Lição de harness (S4):** endereçar um **pool** webhook exige o prefixo `pool/` — sem ele a rota greedy `/{skill_id}` engole o segmento e trata o pool como skill_id, que não casa nenhum pool → `allocated: False, pool_id: None`, sessão fecha `failed` sem rotear. Um primeiro run com o pool passado como slug cru mascarou isso (raiz `failed`, `pool_id` vazio, sem sessão-filha); com `pool/` roteou nas instâncias que já estavam no ar. *(O follow-up #4 — outcome `suspended` após resume — segue ✅ validado à parte; exige completar o survey, fora deste smoke.)*
+
+---
+
+## Journey T6 — rastro forense (proveniência bidirecional) (2026-07-15)
+
+Fecha a árvore de proveniência (T1–T5 ✅ 2026-07-14). A Vista Processos **MEDE** uma journey (tem fronteira: mensurável); o rastro **PERCORRE** o grafo em volta de uma sessão (sem fronteira — ninguém mede). Superfície separada, como a spec §6/§9 pedia. Spec: [`docs/product/journey-provenance-tree-spec.md`](docs/product/journey-provenance-tree-spec.md).
+
+**Decisões de escopo (usuário):** walk **bidirecional** (ancestrais + descendentes) e entrada **pela Vista Processos** (botão de rastro por linha na L2).
+
+### Backend — `GET /reports/sessions/{session_id}/trace` (analytics-api)
+
+`query_session_trace`/`_fetch_session_trace` em `reports_query.py`. **Bidirecional a partir do foco**: sobe a cadeia de ancestrais por `origin_session_id` (a proveniência é 1:1 → cadeia) e desce em BFS pelos descendentes por `origin_session_id` (árvore), **atravessando fronteiras de journey**. Bounded (`max_depth`/`max_nodes`, com flag `truncated`). Resolve a raiz **canônica** via o mesmo `_journey_resolved_map` (union-find do J3), então um merge não faz um nó parecer de outra journey. Cada nó vem com `depth` relativo ao foco (`<0` ancestral, `0` foco, `>0` descendente), `is_focus`, `journey_id` canônico e `journey_boundary` (journey do nó ≠ a do foco — a fronteira que o `journey: new` cria). ABAC via `accessible_pools`; degradação graciosa (erro/foco inexistente → foco `None` + nós vazios). Rota em `reports.py` (`_respond` json).
+
+**Design "cadeia sobe, árvore desce":** só descendentes do FOCO entram — irmãos do foco NÃO expandem, senão a árvore balooneia. Consequência observável (validada): focar num nó do meio mostra a linhagem dele acima + a subárvore dele abaixo, mas **não** os irmãos; um irmão de fronteira (`journey: new`) só aparece quando o foco é o **pai comum**. É o mesmo princípio da Vista Processos (§6): o grafo inteiro se **percorre** navegando, não se **encara** de uma vez.
+
+### UI — `TraceDrawer` (platform-ui, `AnaliseJourneysPage.tsx`)
+
+Botão de rastro (ícone `Route`) por linha na L2 → drawer com a árvore montada por `origin_session_id` (`buildTraceTree`, guard de ciclo). **Foco destacado**, **rótulo `spawn_reason`** por aresta (T4), **selo `PRC-`** por nó — nos nós de **fronteira** o selo é clicável e leva à Vista Processos daquela journey (`onOpenJourney`); nos demais é texto. **Re-centragem**: clicar num nó re-ancora o rastro nele (percorrer o grafo por navegação, §6). i18n `journeys.trace.*` (en + pt-BR). Flag `truncated` exibida.
+
+### Validação
+
+- **Unit** (`tests/test_session_trace.py`, 5/5 ✓): short-circuit ABAC, foco inexistente, walk bidirecional c/ boundary, fail-soft, boundary neutralizado por merge/alias.
+- **E2E** (demo, journey `f0abcee0` da cadeia T5): curl no foco=raiz devolve os 4 nós com `30409f75` marcado `journey_boundary: true` (o corte do `journey: new`) e `03265354` [`collect`] em `depth 2`; drawer no foco=workflow mostra ancestral(raiz)+foco+descendente(collect) na mesma journey — os dois recortes coerentes com o design "cadeia/árvore".
+
+**Não-objetivo mantido (§8):** renderizar a árvore completa numa tela — é rastro, não painel; percorre-se por navegação.
+
+---
+
+## Journey T1–T5 — árvore de proveniência: aresta persistida, desfecho da raiz, corte, rótulo e UI (2026-07-14)
+
+Nasceu de um achado do usuário na Vista Processos: journey exibida como `Resolvido` tendo uma sessão-membro ainda `suspended`. Spec: [`docs/product/journey-provenance-tree-spec.md`](docs/product/journey-provenance-tree-spec.md). **Cobre T1 (persistir `origin_session_id`), T2 (desfecho = raiz), T3 (`journey: inherit|new`), T4 (`spawn_reason`) e T5 (UI em árvore + `PRC-`).** O T6 (rastro forense) tem entrada própria acima.
 
 ### T1 — `origin_session_id` nunca era persistido
 

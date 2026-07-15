@@ -167,7 +167,7 @@ export interface Pool {
   evaluation_template_id?: string | null
   calendar_id?: string
   /** ContextoTab namespace visibility config. Null = use platform default. */
-  context_visibility?: { operator_namespaces: string[] } | null
+  context_visibility?: { operator_namespaces: string[]; operator_allow_tags?: string[] } | null
   routing_skills?: string[]
   routing_expression?: RoutingExpression
   routing_weights?: RoutingWeights
@@ -194,7 +194,7 @@ interface PoolGapFields {
   llm_account_ids?: string[]
   evaluation?: PoolEvaluationConfig | null
   evaluation_template_id?: string | null
-  context_visibility?: { operator_namespaces: string[] } | null
+  context_visibility?: { operator_namespaces: string[]; operator_allow_tags?: string[] } | null
 }
 
 export interface CreatePoolInput extends PoolGapFields {

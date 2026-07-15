@@ -60,7 +60,11 @@ interface ContextMaskingRule {
 interface ContextMaskingConfig {
   rules:                       ContextMaskingRule[]
   default_unmatched_operator:  ContextMaskingType
+  /** Roles treated as "supervisor" (bypass namespace gate, see PII plain). */
+  supervisor_roles?:           string[]
 }
+
+const DEFAULT_SUPERVISOR_ROLES = ['supervisor', 'admin', 'evaluator', 'reviewer']
 
 const MASKING_TYPE_INFO: Record<ContextMaskingType, { label: string; sample: string }> = {
   plain:        { label: 'Visível (sem máscara)',  sample: '11.222.333-45' },
@@ -77,6 +81,7 @@ const MASKING_TYPE_INFO: Record<ContextMaskingType, { label: string; sample: str
 const EMPTY_CONTEXT_CONFIG: ContextMaskingConfig = {
   rules: [],
   default_unmatched_operator: 'plain',
+  supervisor_roles: DEFAULT_SUPERVISOR_ROLES,
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -610,6 +615,7 @@ function ContextRulesSection({
 }) {
   const [rules,       setRules]       = useState<ContextMaskingRule[]>(config.rules)
   const [defaultType, setDefaultType] = useState<ContextMaskingType>(config.default_unmatched_operator)
+  const [supRoles,    setSupRoles]    = useState<string>((config.supervisor_roles ?? DEFAULT_SUPERVISOR_ROLES).join(', '))
   const [editIndex,   setEditIndex]   = useState<number | null>(null)
   const [editDraft,   setEditDraft]   = useState<ContextMaskingRule>(EMPTY_RULE)
   const [newDraft,    setNewDraft]    = useState<ContextMaskingRule>(EMPTY_RULE)
@@ -619,7 +625,10 @@ function ContextRulesSection({
   React.useEffect(() => {
     setRules(config.rules)
     setDefaultType(config.default_unmatched_operator)
+    setSupRoles((config.supervisor_roles ?? DEFAULT_SUPERVISOR_ROLES).join(', '))
   }, [config])
+
+  const supRolesArr = supRoles.split(',').map(s => s.trim()).filter(Boolean)
 
   function startEdit(index: number) {
     setEditIndex(index)
@@ -650,12 +659,13 @@ function ContextRulesSection({
   }
 
   function handleSave() {
-    onSave({ rules, default_unmatched_operator: defaultType })
+    onSave({ rules, default_unmatched_operator: defaultType, supervisor_roles: supRolesArr })
   }
 
   const hasChanges =
     defaultType !== config.default_unmatched_operator ||
-    JSON.stringify(rules) !== JSON.stringify(config.rules)
+    JSON.stringify(rules) !== JSON.stringify(config.rules) ||
+    JSON.stringify(supRolesArr) !== JSON.stringify(config.supervisor_roles ?? DEFAULT_SUPERVISOR_ROLES)
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -814,6 +824,27 @@ function ContextRulesSection({
             <option key={t} value={t}>{MASKING_TYPE_INFO[t].label} — {MASKING_TYPE_INFO[t].sample}</option>
           ))}
         </select>
+      </div>
+
+      {/* Supervisor roles — who bypasses the namespace gate and sees PII plain */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16,
+        padding: '12px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b',
+      }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#e2e8f0' }}>Roles tratados como supervisor</div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+            Estes roles ignoram a namespace gate e veem os campos <code style={{ color: '#94a3b8' }}>plain</code>.
+            Qualquer role fora da lista é tratado como <code style={{ color: '#94a3b8' }}>operator</code>. Separe por vírgula.
+          </div>
+        </div>
+        <input
+          type="text"
+          value={supRoles}
+          onChange={e => setSupRoles(e.target.value)}
+          placeholder="supervisor, admin, evaluator, reviewer"
+          style={{ ...selectStyle, minWidth: 260 }}
+        />
       </div>
 
       {/* Save */}
