@@ -346,6 +346,13 @@
       "matches_one":       "{{count}} ocorrência",
       "matches_other":     "{{count}} ocorrências",
       "noSnippet":    "(ocorrência em metadados)"
+    },
+    "journeys": {
+      "title":    "Processos em aberto",
+      "open":     "em aberto",
+      "openHint": "Abrir o processo no Analytics (Processos / rastro)",
+      "sessions_one":   "{{count}} sessão",
+      "sessions_other": "{{count}} sessões"
     }
   },
   "delegar": {

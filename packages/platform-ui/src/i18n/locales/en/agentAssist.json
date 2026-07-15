@@ -346,6 +346,13 @@
       "matches_one":       "{{count}} match",
       "matches_other":     "{{count}} matches",
       "noSnippet":    "(match in metadata)"
+    },
+    "journeys": {
+      "title":    "Open processes",
+      "open":     "open",
+      "openHint": "Open the process in Analytics (Processes / trace)",
+      "sessions_one":   "{{count}} session",
+      "sessions_other": "{{count}} sessions"
     }
   },
 

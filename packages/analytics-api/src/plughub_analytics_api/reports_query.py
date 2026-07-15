@@ -683,6 +683,7 @@ async def query_journeys_report(
     *,
     channel:          str | None       = None,
     pool_id:          str | None       = None,
+    customer_id:      str | None       = None,
     significant_only: bool             = True,
     accessible_pools: list[str] | None = None,
     origin:           "str | list[str]" = "live",
@@ -693,9 +694,10 @@ async def query_journeys_report(
     Journey list (J2 — proveniência-only): agrupa `analytics.sessions` por
     `root_session_id` (a raiz canônica local). SEM alias/merge (isso é J3) — cada
     grupo é uma árvore de proveniência. Uma journey aparece se ≥1 sessão-membro casa
-    os filtros (janela/pool/origin); os agregados refletem os membros na janela.
+    os filtros (janela/pool/customer/origin); os agregados refletem os membros na janela.
     `significant_only` (default de UX) esconde journeys de 1 sessão sem workflow:
     mantém `count>1` OU que tenha canal `webhook` (processo N3).
+    `customer_id` (Cliente 360 / HJ — ADR §D2): journeys com ≥1 sessão-membro do cliente.
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
@@ -704,7 +706,7 @@ async def query_journeys_report(
     try:
         return await asyncio.to_thread(
             _fetch_journeys, client, database, tenant_id, since, until,
-            channel, pool_id, significant_only, accessible_pools, origin,
+            channel, pool_id, customer_id, significant_only, accessible_pools, origin,
             page, page_size,
         )
     except Exception as exc:
@@ -714,7 +716,8 @@ async def query_journeys_report(
 
 def _fetch_journeys(
     client: Any, db: str, tenant_id: str, since: str, until: str,
-    channel: str | None, pool_id: str | None, significant_only: bool,
+    channel: str | None, pool_id: str | None, customer_id: str | None,
+    significant_only: bool,
     accessible_pools: list[str] | None, origin: "str | list[str]",
     page: int, page_size: int,
 ) -> dict:
@@ -736,6 +739,17 @@ def _fetch_journeys(
             " WHERE tenant_id = {tenant_id:String} AND pool_id = {pool_id:String})"
         )
         params["pool_id"] = pool_id
+    # Cliente 360 / HJ (ADR §D2): journeys com ≥1 sessão-membro do cliente. Filtra pelas
+    # RAÍZES onde o cliente aparece (não pelo customer_id direto) — assim inclui TODOS os
+    # membros dessas journeys (session_count correto), não só as sessões do cliente. A
+    # raiz canônica (union-find/merge) é resolvida no GROUP BY externo; sob merge o filtro
+    # é levemente conservador (aceitável no v1).
+    if customer_id:
+        conditions.append(
+            f"s.root_session_id IN (SELECT root_session_id FROM {db}.sessions FINAL"
+            " WHERE tenant_id = {tenant_id:String} AND customer_id = {customer_id:String})"
+        )
+        params["customer_id"] = customer_id
     # Pool-scope ABAC (Arc 7c) — inclui pool_id='' (sessão ainda não roteada).
     if accessible_pools:
         pool_list = ", ".join(f"'{p}'" for p in accessible_pools)

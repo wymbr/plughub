@@ -226,7 +226,8 @@ def _fetch_customer_history(
             closed_at,
             handle_time_ms,
             outcome,
-            close_reason
+            close_reason,
+            root_session_id
         FROM {db}.sessions FINAL
         WHERE tenant_id   = {{tenant_id:String}}
           AND customer_id = {{customer_id:String}}
@@ -237,7 +238,7 @@ def _fetch_customer_history(
 
     rows = []
     for r in result.result_rows:
-        session_id, channel, pool_id, opened_at, closed_at, handle_time_ms, outcome, close_reason = r
+        session_id, channel, pool_id, opened_at, closed_at, handle_time_ms, outcome, close_reason, root_session_id = r
 
         def _dt(val: Any) -> str | None:
             if val is None:
@@ -270,6 +271,10 @@ def _fetch_customer_history(
             "duration_ms":  duration_ms,
             "outcome":      outcome,
             "close_reason": close_reason,
+            # HJ / bidirectional nav: the process (journey) this contact belongs to.
+            # When != session_id the contact is a member of a multi-session process →
+            # the UI shows a PRC- link to its Vista Processos.
+            "root_session_id": root_session_id,
         })
     return rows
 

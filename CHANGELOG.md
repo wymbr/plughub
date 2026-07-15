@@ -2,6 +2,18 @@
 
 ---
 
+## Cliente 360 — HJ (jornadas no Histórico) + navegação bidirecional sessão↔journey (2026-07-15)
+
+Continua o Cliente 360 (após H3): o Histórico do Console agora **distingue processo de contato** e navega entre os dois. ADR `docs/adr/adr-customer-360-two-surfaces.md` (§D2), spec `docs/arcos/customer-contact-history.md` (§4.3/§9 HJ).
+
+**HJ — jornadas em aberto no Histórico.** Nova seção **"Processos em aberto"** no topo da `HistoricoTab` (hook `useCustomerJourneys` → `/reports/journeys?customer_id=`), com chips `PRC-…` que **linkam pra Vista Processos/rastro T6** (`/analise/processos?journey=`). Só journeys **significativas** (multi-sessão/webhook) aparecem — contatos avulsos ficam na lista "Contatos anteriores". Resolve a ambiguidade "isto é processo ou sessão?". Backend: filtro **`customer_id`** no `query_journeys_report` (filtrando pelas **raízes** onde o cliente aparece → `session_count` correto).
+
+**Navegação bidirecional sessão→journey.** Cada contato que é **membro de um processo** (`root_session_id ≠ session_id`) ganha um chip **`↗ PRC-…`** que leva à sua journey. Contato avulso não mostra (mantém a distinção). Backend: `root_session_id` no `GET /sessions/customer/{id}`. As duas superfícies (seção geral + link por contato) coexistem: a seção cobre processos ativos **sem** contato fechado visível; o link cobre a proveniência de um contato específico.
+
+**Refino da aba Contexto.** (a) Valores-objeto (ex.: `session.pool.mentionable_pools`) renderizam como **lista chave→valor** em vez de JSON cru. (b) **Bug de scroll corrigido**: a raiz da `ContextoTab` era `flex flex-col` e os cards encolhiam (`flex-shrink:1`) fazendo o `overflow-hidden` de cada card **cortar o conteúdo** em vez de o painel rolar — trocado por bloco `space-y` + `absolute inset-0 overflow-y-auto` (fill confiável dentro do `RightPanel` relative; `min-h-0` no flex-1). Agora rola e mostra todos os campos. `break-words` no valor (sem quebra char-a-char no painel estreito).
+
+---
+
 ## Customer History H3 (busca na UI) + visibilidade de contexto config-driven (2026-07-15)
 
 Fechou o **H3** (busca no histórico do cliente na `HistoricoTab`) validado E2E, e no caminho desenterrou/corrigiu **3 gaps de plataforma** que impediam a identificação do cliente no Console. Spec: `docs/arcos/customer-contact-history.md` (§6/§7/§9) + ADR `docs/adr/adr-customer-360-two-surfaces.md`.

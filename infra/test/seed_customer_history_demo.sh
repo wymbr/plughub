@@ -41,6 +41,15 @@ $CH -q "INSERT INTO ${DB}.messages
   ('mh5','$TENANT','sess_hist_003','cust','customer','webchat','text','all','Minha internet está muito lenta desde ontem à noite','2026-07-10 09:16:00','2026-07-10'),
   ('mh6','$TENANT','sess_hist_003','ag','agent','webchat','text','all','Vou abrir um chamado técnico para a sua conexão de internet','2026-07-10 09:17:00','2026-07-10')"
 
+echo "2b) Inserindo uma JORNADA (processo) EM ABERTO do cliente — 2 sessões sob a mesma raiz ..."
+# root aberto (webhook, suspenso) + filho fechado → journey significativa (count>1) com
+# open_count=1 → aparece na seção "Processos em aberto" da HistoricoTab (HJ). Distinta dos
+# contatos avulsos acima (que ficam na lista de contatos).
+$CH -q "INSERT INTO ${DB}.sessions
+  (tenant_id, session_id, channel, pool_id, customer_id, root_session_id, opened_at, closed_at, outcome, status, close_reason) VALUES
+  ('$TENANT','proc_hist_root','webhook','portabilidade_processo_ia','$CID','proc_hist_root','2026-07-12 09:00:00',NULL,NULL,'suspended',''),
+  ('$TENANT','proc_hist_child','webchat','retencao_humano','$CID','proc_hist_root','2026-07-12 09:05:00','2026-07-12 09:20:00','resolved','closed','agent_hangup')"
+
 echo "3) Conferência (sessões fechadas do cliente):"
 $CH -q "SELECT session_id, channel, outcome, opened_at, closed_at
         FROM ${DB}.sessions FINAL

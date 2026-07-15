@@ -429,17 +429,33 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry, t }) => {
       : String(entry.value);
 
   return (
-    <div className="flex items-start gap-2 py-1.5 border-b border-border last:border-0">
-      <span className="text-xs text-muted w-32 shrink-0 pt-0.5 capitalize">
+    <div className={`py-1.5 border-b border-border last:border-0 ${isObject ? "" : "flex items-start gap-2"}`}>
+      <span className={`text-xs text-muted capitalize ${isObject ? "block mb-0.5" : "w-32 shrink-0 pt-0.5"}`}>
         {tagLabel(tag, t)}
       </span>
-      <div className="flex-1 min-w-0">
+      <div className={isObject ? "" : "flex-1 min-w-0"}>
         {isObject ? (
-          // Object values (e.g. session.pool.mentionable_pools) — pretty + scrollable
-          // so they don't overflow the narrow panel.
-          <pre className="text-2xs font-mono text-dark bg-surface-alt rounded px-1.5 py-1 max-h-28 overflow-auto whitespace-pre-wrap break-all">
-            {displayValue}
-          </pre>
+          Array.isArray(entry.value) ? (
+            <span className="text-sm font-medium text-dark break-words">
+              {(entry.value as unknown[]).map((v) => String(v)).join(", ") || "—"}
+            </span>
+          ) : (
+            // Object → key→value list em LARGURA TOTAL, sem wrap: scroll HORIZONTAL
+            // (o valor fica na linha, como uma folha de árvore) em vez de quebrar
+            // char-a-char no painel estreito.
+            <div className="overflow-x-auto">
+              <div className="flex flex-col gap-0.5 w-max min-w-full">
+                {Object.entries(entry.value as Record<string, unknown>).map(([k, v]) => (
+                  <div key={k} className="flex items-baseline gap-2 text-xs leading-tight whitespace-nowrap">
+                    <span className="text-muted-light font-mono">{k}</span>
+                    <span className="text-dark font-medium">
+                      {v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
         ) : (
           <span className={`text-sm font-medium break-all ${isMasked ? "text-muted-light font-mono tracking-wider" : "text-dark"}`}>
             {displayValue}
@@ -610,7 +626,7 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
   } = context;
 
   return (
-    <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
+    <div className="absolute inset-0 p-3 overflow-y-auto space-y-4">
 
       {/* ── 0. Intent + Flags (from supervisorState, migrated from EstadoTab) ── */}
       {supervisorState && (

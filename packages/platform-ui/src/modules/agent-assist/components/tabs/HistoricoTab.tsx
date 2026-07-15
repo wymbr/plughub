@@ -11,11 +11,13 @@
  */
 
 import React, { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Timer, User, Search, SlidersHorizontal, X } from "lucide-react";
+import { Timer, User, Search, SlidersHorizontal, X, GitBranch } from "lucide-react";
 import { ContactHistoryEntry, SearchHit, TranscriptMessage } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
 import { useCustomerSearch, SearchFilters } from "../../hooks/useCustomerSearch";
+import { useCustomerJourneys } from "../../hooks/useCustomerJourneys";
 import { useSessionTranscript } from "../../hooks/useSessionTranscript";
 
 interface HistoricoTabProps {
@@ -171,7 +173,10 @@ const TranscriptView: React.FC<{ sessionId: string }> = ({ sessionId }) => {
 
 const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
   const { t } = useTranslation('agentAssist');
+  const navigate = useNavigate();
   const [expanded, setExpanded] = useState(false);
+  // Bidirectional nav: this contact belongs to a multi-session process → link to it.
+  const partOfProcess = !!entry.root_session_id && entry.root_session_id !== entry.session_id;
 
   return (
     <div className="border border-border rounded-lg overflow-hidden">
@@ -190,10 +195,19 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
               {formatDate(entry.opened_at)}
             </span>
           </div>
-          <div className="text-xs text-muted-light mt-0.5 flex gap-2">
+          <div className="text-xs text-muted-light mt-0.5 flex gap-2 items-center">
             <span className="inline-flex items-center gap-0.5"><Timer className="w-3 h-3" aria-hidden="true" />{formatDuration(entry.duration_ms)}</span>
             {entry.close_reason && (
               <span className="truncate">{entry.close_reason}</span>
+            )}
+            {partOfProcess && (
+              <span
+                onClick={(e) => { e.stopPropagation(); navigate(`/analise/processos?journey=${encodeURIComponent(entry.root_session_id!)}`); }}
+                title={t('historico.journeys.openHint')}
+                className="inline-flex items-center gap-0.5 text-primary hover:underline cursor-pointer font-mono shrink-0"
+              >
+                <GitBranch className="w-3 h-3" aria-hidden="true" />{journeyLabel(entry.root_session_id!)}
+              </span>
             )}
           </div>
         </div>
@@ -272,6 +286,56 @@ const SearchHitRow: React.FC<{ hit: SearchHit }> = ({ hit }) => {
           <TranscriptView sessionId={hit.session_id} />
         </div>
       )}
+    </div>
+  );
+};
+
+// ── Cliente 360 / HJ: jornadas (processos) em aberto do cliente ───────────────
+// Distingue um PROCESSO (PRC-…, uma árvore de sessões) de um CONTATO individual
+// (uma sessão). Os chips linkam pra Vista Processos / rastro T6 (Analytics).
+// Só PROCESSOS reais (significant: multi-sessão / webhook) aparecem aqui — contatos
+// avulsos ficam na lista "Contatos anteriores" abaixo.
+function journeyLabel(id: string): string {
+  return `PRC-${id.slice(0, 8)}`;
+}
+
+const JourneysSection: React.FC<{ customerId: string | null }> = ({ customerId }) => {
+  const { t } = useTranslation('agentAssist');
+  const navigate = useNavigate();
+  const { journeys } = useCustomerJourneys(customerId);
+
+  const open = journeys.filter(j => j.open_count > 0);
+  if (open.length === 0) return null;
+
+  return (
+    <div className="mb-3">
+      <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+        <GitBranch className="w-3.5 h-3.5" aria-hidden="true" />
+        {t('historico.journeys.title')}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {open.map(j => (
+          <button
+            key={j.journey_id}
+            onClick={() => navigate(`/analise/processos?journey=${encodeURIComponent(j.journey_id)}`)}
+            title={t('historico.journeys.openHint')}
+            className="text-left border border-primary/20 bg-primary-light/30 rounded-lg px-3 py-2 hover:bg-primary-light/50 transition-colors"
+          >
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono text-xs text-primary font-medium">{journeyLabel(j.journey_id)}</span>
+              <span className="text-2xs px-1.5 py-0.5 rounded-full bg-warning-light text-warning-text font-medium">
+                {t('historico.journeys.open')}
+              </span>
+              <span className="flex-1" />
+              <span className="text-muted-light text-xs" aria-hidden="true">↗</span>
+            </div>
+            <div className="text-2xs text-muted-light mt-0.5">
+              {t('historico.journeys.sessions', { count: j.session_count })}
+              {j.channels?.length ? ` · ${j.channels.join(', ')}` : ''}
+            </div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 };
@@ -420,8 +484,11 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId }) => {
           </>
         ) : (
           <>
+            {/* HJ — jornadas (processos) em aberto do cliente, distintas dos contatos */}
+            <JourneysSection customerId={customerId} />
+
             {loading && entries.length === 0 && (
-              <div className="flex items-center justify-center h-full">
+              <div className="flex items-center justify-center py-8">
                 <span className="text-sm text-muted-light animate-pulse">
                   {t('historico.loadingHistory')}
                 </span>

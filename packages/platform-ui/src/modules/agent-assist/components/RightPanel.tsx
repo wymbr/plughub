@@ -72,7 +72,9 @@ export const RightPanel: React.FC<RightPanelProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-50 overflow-hidden">
-      <div className="flex-1 overflow-hidden relative">
+      {/* min-h-0 é obrigatório: sem ele o flex-1 cresce com o conteúdo (min-height:auto)
+          e o overflow-y-auto das abas (ex.: Contexto com muitos campos) não rola. */}
+      <div className="flex-1 min-h-0 overflow-hidden relative">
 
         {activeTab === "acoes" && (
           <AcoesTab

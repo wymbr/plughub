@@ -388,6 +388,9 @@ export interface ContactHistoryEntry {
   duration_ms:  number | null;
   outcome:      string | null;
   close_reason: string | null;
+  /** Process (journey) this contact belongs to. != session_id ⇒ member of a
+   *  multi-session process → UI shows a PRC- link (bidirectional nav). */
+  root_session_id?: string | null;
 }
 
 // ── Customer history search (H3) ──────────────────────────────────────────────
