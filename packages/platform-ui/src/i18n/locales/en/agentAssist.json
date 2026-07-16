@@ -248,6 +248,16 @@
       "noSurveys":    "No survey responses."
     }
   },
+  "approval": {
+    "tag":          "Approval task",
+    "title":        "Approval",
+    "fields":       "Details",
+    "yes":          "Yes",
+    "noPermission": "You can view this task but not decide (approvals.decide required).",
+    "noView":       "You do not have permission to view this approval task (approvals.operacao required).",
+    "release":      "Return to queue",
+    "resolved":     "Decision recorded. The workflow will continue."
+  },
   "empty": {
     "activatePool":      "Activate a pool in the header to become available.",
     "waitingForContact": "Waiting for next contact…"

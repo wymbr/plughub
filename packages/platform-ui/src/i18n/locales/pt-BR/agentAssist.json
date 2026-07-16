@@ -248,6 +248,16 @@
       "noSurveys":    "Sem respostas de pesquisa."
     }
   },
+  "approval": {
+    "tag":          "Tarefa de aprovação",
+    "title":        "Aprovação",
+    "fields":       "Detalhes",
+    "yes":          "Sim",
+    "noPermission": "Você pode ver esta tarefa, mas não decidir (requer approvals.decide).",
+    "noView":       "Você não tem permissão para ver esta tarefa de aprovação (requer approvals.operacao).",
+    "release":      "Devolver à fila",
+    "resolved":     "Decisão registrada. O workflow vai continuar."
+  },
   "empty": {
     "activatePool":      "Ative um pool no cabeçalho para ficar disponível.",
     "waitingForContact": "Aguardando próximo atendimento…"

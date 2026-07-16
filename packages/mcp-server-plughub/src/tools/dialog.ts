@@ -40,6 +40,10 @@ const FormGetInputSchema = z.object({
 
 interface RenderField {
   id: string; label: string; type: string; required: boolean; masked: boolean
+  // Approval (ADR adr-human-approval-workflow-step): pre-filled editable value +
+  // per-field options (select). Absent for plain capture-only survey fields.
+  value?:   string | number | boolean
+  options?: RenderOption[]
 }
 interface RenderOption { id: string; label: string }
 // Retry affordance flattened for the menu step: reprompt localized, counter fixed.
@@ -100,13 +104,36 @@ function buildRender(form: DialogForm, locale?: string): DialogRender {
     } else {
       seenQuestion = true
       if (!firstQuestion) firstQuestion = node
-      fields.push({
-        id:       node.output_key,
-        label:    resolveLocalizedText(node.prompt, locale, dl),
-        type:     node.interaction === "text" ? "text" : "choice",
-        required: true,
-        masked:   node.masked === true,
-      })
+      // Multi-field form (interaction: "form", approval "form padrão"): emit each
+      // declared field with its own type/value/options. Otherwise the question is a
+      // single scalar answer → one field keyed by output_key (survey/OTP behavior).
+      if (node.fields && node.fields.length) {
+        for (const f of node.fields) {
+          const rf: RenderField = {
+            id:       f.id,
+            label:    resolveLocalizedText(f.label, locale, dl),
+            type:     f.type,
+            required: f.required ?? false,
+            masked:   f.masked === true,
+          }
+          if (f.value !== undefined) rf.value = f.value
+          if (f.options && f.options.length) {
+            rf.options = f.options.map(o => ({
+              id:    o.value ?? o.id,
+              label: resolveLocalizedText(o.label, locale, dl),
+            }))
+          }
+          fields.push(rf)
+        }
+      } else {
+        fields.push({
+          id:       node.output_key,
+          label:    resolveLocalizedText(node.prompt, locale, dl),
+          type:     node.interaction === "text" ? "text" : "choice",
+          required: true,
+          masked:   node.masked === true,
+        })
+      }
       questions.push({
         prompt:      resolveLocalizedText(node.prompt, locale, dl),
         interaction: node.interaction,

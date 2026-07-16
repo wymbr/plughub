@@ -2,6 +2,24 @@
 
 ---
 
+## Aprovação humana como passo de workflow — v1 A1–A4 (2026-07-16)
+
+Implementa o núcleo da fila de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md`), caso âncora = **gate de promoção de deploy**. Reusa 100% da máquina de contato/pull existente — sem concorrência nova, sem primitiva nova (o `delegate`/`workflow_resume` já entregam o retorno em `$.pipeline_state.<delegate>`).
+
+**A4 (ABAC)** — módulo `approvals` (`operacao` = ver/reivindicar; `decide` = decidir) em `infra/modules.yaml`; upsert no startup do auth-api; renderiza registry-driven em Config › Access.
+
+**A1 (conteúdo = DialogForm)** — achado: `DialogField.type` já é string aberta e `interaction:"form"`+`fields[]` já modela form multi-campo, então tipos money/date/bool/select são suporte de renderer, não schema. Adição real: `DialogField.value` (pré-preenchido editável) + `DialogField.options` (select por campo) em `@plughub/schemas/dialog.ts`; `form_get` (mcp-server `tools/dialog.ts`) passou a **expandir os `fields[]`** de uma pergunta `form` com `type/value/options` (antes colapsava num campo só). Validado E2E no store (round-trip dialog-api preserva `value`/`type`, inclusive `bool value:"false"`).
+
+**A2 (pacote + workflow + rota)** — pools `aprovacao_deploy` (humano, `dispatch_mode: pull`) + `gate_promocao_ia` (webhook) em `tenant_demo.yaml`; workflow `skill_gate_promocao_v1` (webhook: `invoke context_set` → `delegate` ao pool de aprovação com `context:{title,summary,dialog_form_id,decisions}` → `choice` sobre `$.pipeline_state.aprovar.choice` → promove/recusa; só steps do perfil workflow); seed `seed_dialog_promocao_deploy_form.sh` (form `dialog_promocao_deploy` com campos `nota`/`notificar_equipe`). `delegate.context` é escrito no ContextStore do filho com prefixo `session.*`.
+
+**A3 (renderer no inbox, responsivo)** — `ApprovalPanel` (platform-ui): lê o pacote do `context_snapshot` (`session.summary/decisions/dialog_form_id/workflow_resume_token`), busca os campos editáveis do DialogForm (`/v1/dialog`), renderiza resumo read-only + campos tipados (text/bool/select/date/money) pré-preenchidos + botões de decisão (bounded, do workflow); ao decidir, `POST /v1/channels/webhook/resume/{token}` com `payload:{decision:"input",source:"operator",choice,edits}` → o workflow roteia. Gated por ABAC `approvals.decide` (sem = read-only). Wired no `AgentAssistPage` (renderiza no lugar da conversa quando `isApprovalSnapshot`). Layout responsivo (`max-w-2xl`, mobile-friendly). i18n `approval.*` en+pt-BR.
+
+**Validado E2E (2026-07-16):** trigger webhook → `delegate` parqueia a tarefa na fila pull `aprovacao_deploy` → operador loga no pool → Pull → `ApprovalPanel` renderiza o pacote (resumo + `nota`/`notificar_equipe` editáveis) → **Aprovar/Recusar** retoma o workflow e roteia (`choice`) → tarefa some; **Return to queue** (action bar) faz release → tarefa volta ao inbox (~poll 4s). Ajustes feitos durante a validação: (1) chave do token as-built = `session.delegate_resume_token` (o delegate rodou pelo caminho `delegate_conference`) — `ApprovalPanel` lê ela com fallback p/ `workflow_resume_token`; (2) gate de **ver** por `approvals.operacao` (o inbox pull é genérico e não conhece o ABAC de aprovação — a superfície enforça); (3) **campos ABAC `approvals` não-scopable** — pool vem de `accessible_pools`, não de `scope[]` por campo (evita duplicar a dimensão de pool; ADR §D4); (4) **"Return to queue"** movido pro action bar (release via `/api/work_queue/release`), disponível mesmo sem `operacao` (soltar tarefa reivindicada); (5) pool `gate_promocao_ia` deployado com `max_concurrent_sessions: 2` (tenant demo tem capacidade apertada — `declared > contracted`; deploy via `set-next`+`promote` + bump de C no Redis).
+
+**Pendente v1:** A5 (auditoria de decisão/edições). **Follow-ups:** Context/History trazendo a journey do workflow por `root_session_id` (aprovação de workflow raramente tem `customer_id`); gate de servibilidade do pool de aprovação pelo ABAC `approvals` (fechar o claim genérico); refresh imediato do inbox pós-release. **Adiado (ADR):** omnichannel/Modo B; weight-ordering; rework rate; auto-aprovação (pool IA); promote real (invoke de deploy no `efetuar_promocao`, hoje `complete`).
+
+---
+
 ## Customer History — H5: lente Analytics do Cliente 360 (`/analise/customers`) (2026-07-16)
 
 Fecha o **H5** (spec `docs/arcos/customer-contact-history.md` §9; ADR `adr-customer-360-two-surfaces.md` — "uma verdade, duas lentes"): a **lente Analytics** do Cliente 360 — visão retrospectiva/supervisão do cliente **fora** do atendimento ao vivo. Escopo escolhido: **explorer completo**; índice GIN(tsvector) **adiado** (backlog).

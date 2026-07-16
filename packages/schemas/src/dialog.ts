@@ -202,9 +202,24 @@ export type DialogOption = z.infer<typeof DialogOptionSchema>
 export const DialogFieldSchema = z.object({
   id:         z.string().min(1),
   label:      LocalizedTextSchema,
-  /** Channel-agnostic field type, e.g. "text" | "number". Adapter maps to UI. */
+  /**
+   * Channel-agnostic field type. Deliberately an OPEN string ("adapter maps to
+   * UI") — recognized by the renderers: "text" | "number" | "money" | "date" |
+   * "bool" | "select". Approval (ADR adr-human-approval-workflow-step) uses the
+   * richer types; the survey/OTP runners degrade unknown types to text.
+   */
   type:       z.string().min(1),
   required:   z.boolean().default(false),
+  /**
+   * Pre-filled value the human may EDIT (approval form_ext). A bare scalar as a
+   * string (the adapter parses per `type` — e.g. "1240.00" for money, "true" for
+   * bool). Absent = empty/capture-only field (survey questions). The edited value
+   * travels back in the delegate return `payload.edits` (audited, ADR §D7).
+   */
+  value:      z.union([z.string(), z.number(), z.boolean()]).optional(),
+  /** Option list for a "select"/"checklist" FIELD (per-field, distinct from the
+   *  question-level `options`). Absent for scalar field types. */
+  options:    z.array(DialogOptionSchema).optional(),
   /**
    * When true this field is masked: its value never appears in the runner's raw
    * return (masked-input invariant) — it stays in the in-memory masked scope.

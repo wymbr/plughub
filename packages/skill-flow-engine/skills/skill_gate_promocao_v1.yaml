@@ -1,0 +1,84 @@
+id: skill_gate_promocao_v1
+name: Gate de Promoção de Deploy
+version: "1.0"
+description: |
+  Gate de aprovação humana para promover um deploy de skill homolog→prod
+  (ADR docs/adr/adr-human-approval-workflow-step.md — caso âncora A2).
+
+  Workflow webhook (Arc 19): monta o PACOTE de aprovação e delega ao pool
+  `aprovacao_deploy` (dispatch pull). Um aprovador LOGADO reivindica a tarefa no
+  inbox do Console (Modo A), vê o pacote (contexto read-only + DialogForm de campos
+  editáveis + decisões) e decide. A decisão volta pelo RETORNO do delegate
+  (workflow_resume payload → $.pipeline_state.aprovar) e o WORKFLOW roteia com um
+  `choice` — o aprovador nunca escolhe o passo, só a decisão (invariante do ADR).
+
+  DEMO: os dados da promoção (skill/versão) são fixos aqui; em produção viriam do
+  payload do trigger. O efeito real da promoção (set-next/promote no agent-registry)
+  entraria como um `invoke` em `efetuar_promocao` — por ora o desfecho é `complete`.
+
+  Perfil workflow (webhook): usa apenas invoke/delegate/choice/complete (menu/notify
+  são proibidos neste perfil — Arc 19).
+classification:
+  type: vertical
+
+entry: montar_pacote
+
+steps:
+  # ── Etapa 1: monta o contexto read-only do pacote ────────────────────────────
+  # O que o aprovador vê como "resumo". Em produção = payload do trigger.
+  - id: montar_pacote
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "approval.summary"
+      value:      "Promover skill_atendimento_sac_v1 (v2) do pool sac_ia: homologação → produção."
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: aprovar
+    on_failure: aprovar
+
+  # ── Etapa 2: delega a aprovação ao pool pull ─────────────────────────────────
+  # O pacote channel-abstract entregue ao inbox: título + resumo (read-only) +
+  # dialog_form_id (campos editáveis, DialogForm) + decisions (bounded, definidas
+  # AQUI pelo workflow). O aprovador decide → payload { choice, edits } cai em
+  # $.pipeline_state.aprovar (decision=input → on_resume).
+  - id: aprovar
+    type: delegate
+    pool: aprovacao_deploy
+    context:
+      title:          "Aprovação de promoção de deploy"
+      summary:        "@ctx.approval.summary"
+      dialog_form_id: "dialog_promocao_deploy"
+      decisions:      '[{"id":"aprovar","label":"Aprovar e promover"},{"id":"recusar","label":"Recusar"}]'
+    timeout_hours: 24
+    business_hours: false
+    on_resume:
+      next: rotear_decisao        # decision=input → o humano decidiu
+    on_timeout:
+      next: encerrar_timeout      # SLA estourou
+
+  # ── Etapa 3: o WORKFLOW roteia sobre a escolha capturada ─────────────────────
+  - id: rotear_decisao
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.aprovar.choice"
+        operator: eq
+        value:    aprovar
+        next:     efetuar_promocao
+    default: encerrar_recusado
+
+  # ── Desfechos ────────────────────────────────────────────────────────────────
+  # DEMO: o promote real (invoke de tool de deploy no agent-registry) entra aqui.
+  - id: efetuar_promocao
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_recusado
+    type: complete
+    outcome: failed
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: failed

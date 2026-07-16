@@ -253,3 +253,29 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+
+  # ── Aprovações (fila de trabalho humano) ──────────────────────────────────────
+  # ADR docs/adr/adr-human-approval-workflow-step.md. Aprovação = passo de workflow
+  # (delegate/collect a um pool pull); o aprovador é um agente logado que trata a fila.
+  # operacao = ver/reivindicar a tarefa; decide = a decisão que roteia o workflow.
+  #
+  # NÃO-scopable de propósito: o recorte de POOL vem de `accessible_pools` (dimensão
+  # separada), NÃO de um scope[] por campo — para aprovação as duas colapsam
+  # ("quais pools posso aprovar" = ter a capacidade E o pool ∈ accessible_pools).
+  # O enforcement é pool-agnóstico na capacidade (ApprovalPanel) + accessible_pools
+  # no inbox pull. Evita pedir/duplicar a lista de pools em dois lugares.
+  - module_id: approvals
+    label: Aprovações
+    icon: "✅"
+    nav_path: /approvals
+    permission_schema:
+      operacao:
+        label: Ver e reivindicar tarefas de aprovação
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      decide:
+        label: Decidir (aprovar / recusar / encaminhar)
+        domain: [none, read_write]
+        scopable: false
+        default: none

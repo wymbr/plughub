@@ -73,6 +73,30 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
 
+  # Aprovação (ADR adr-human-approval-workflow-step) — pool HUMANO em dispatch pull.
+  # O workflow delega uma tarefa de aprovação (pacote = DialogForm + decisões); um
+  # aprovador logado a reivindica no inbox do Console (Modo A) e decide → o retorno
+  # (workflow_resume payload) cai em $.pipeline_state.<delegate> e o workflow roteia.
+  - pool_id: aprovacao_deploy
+    agent_kind: human
+    dispatch_mode: pull
+    description: "Pool de aprovadores — gate de promoção de deploy (homolog→prod)"
+    channel_types: [webchat]
+    sla_target_ms: 86400000
+
+  # Pool webhook que RODA o workflow do gate de promoção (skill_gate_promocao_v1).
+  # Disparado por POST no endpoint webhook; delega a aprovação ao aprovacao_deploy.
+  - pool_id: gate_promocao_ia
+    agent_kind: ai
+    # Gate de aprovação = baixo volume; 2 instâncias bastam. (Tenant demo tem
+    # capacidade apertada — declared já > contracted; ver nota de validação.)
+    deploy: { skill_id: skill_gate_promocao_v1, max_concurrent_sessions: 2 }
+    description: "Pool webhook — gate de promoção de deploy (ADR aprovação)"
+    channel_types: [webhook]
+    skill_id: skill_gate_promocao_v1
+    webhook_skill_id: skill_gate_promocao_v1
+    sla_target_ms: 86400000
+
   - pool_id: retencao_humano
     # Capacity-governance item 2: tipagem explícita — pool humano (queue_config
     # exige human; logins contam contra C_human). Pools IA declaram agent_kind: ai.

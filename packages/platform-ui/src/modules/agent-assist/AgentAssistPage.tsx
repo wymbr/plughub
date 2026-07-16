@@ -40,6 +40,7 @@ import { useMentionableAgents }     from "./hooks/useMentionableAgents";
 import { Header }              from "./components/Header";
 import { ActionBar }           from "./components/ActionBar";
 import { ChatArea }            from "./components/ChatArea";
+import { ApprovalPanel, isApprovalSnapshot } from "./components/ApprovalPanel";
 import { AgentInput }          from "./components/AgentInput";
 import { PauseReasonModal }    from "./components/PauseReasonModal";
 import { RightPanel }          from "./components/RightPanel";
@@ -526,6 +527,25 @@ export const AgentAssistPage: React.FC = () => {
     ? (selected?.messages ?? [])
     : (selected?.messages ?? []).filter(m => messageMatchesFilter(m, filterKey));
 
+  // Aprovação (A3) — o contato reivindicado carrega o pacote no context_snapshot.
+  const approvalSnapshot = selected?.supervisorState?.customer_context?.context_snapshot ?? null;
+  const isApprovalContact = isApprovalSnapshot(approvalSnapshot as never);
+  const approvalPoolId = ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined) ?? "";
+
+  // Devolver à fila (release) — ação do action bar de aprovação (desistir sem decidir).
+  const handleReleaseApproval = useCallback(async () => {
+    if (!selected) return;
+    const instanceId = session?.userId ? `human-${session.userId}` : "";
+    try {
+      await fetch(`/api/work_queue/release/${encodeURIComponent(selected.sessionId)}`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ pool_id: approvalPoolId, instance_id: instanceId }),
+      });
+    } catch { /* non-fatal */ }
+    setSelectedSessionId(null);
+  }, [selected, approvalPoolId, session, setSelectedSessionId]);
+
   // AI participants from supervisor state
   const aiParticipants = supervisorState?.ai_participants ?? [];
 
@@ -601,6 +621,24 @@ export const AgentAssistPage: React.FC = () => {
                   className="rounded border border-border px-2.5 py-1.5 text-xs text-muted hover:text-dark"
                 >
                   {t("common.close", { defaultValue: "Fechar" })}
+                </button>
+              </div>
+            ) : (selected && isApprovalContact) ? (
+              /* Action bar de aprovação — sem Transfer/Hang up; só "Devolver à fila" (desistir). */
+              <div className="flex items-center gap-2 px-4 w-full">
+                <span className="text-2xs font-semibold text-primary uppercase tracking-wide">
+                  {t("approval.tag", { defaultValue: "Approval task" })}
+                </span>
+                <span className="text-xs text-muted truncate">
+                  {(approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.title"]?.value as string ?? ""}
+                </span>
+                <div className="flex-1" />
+                <button
+                  type="button"
+                  onClick={handleReleaseApproval}
+                  className="rounded border border-border px-3 py-1.5 text-xs text-muted hover:text-dark hover:border-primary/40 transition-colors"
+                >
+                  {t("approval.release", { defaultValue: "Return to queue" })}
                 </button>
               </div>
             ) : (
@@ -697,6 +735,14 @@ export const AgentAssistPage: React.FC = () => {
                   </>
                 )}
               </div>
+            ) : selected && isApprovalContact ? (
+              /* Aprovação (A3) — renderiza o pacote no lugar da conversa */
+              <ApprovalPanel
+                sessionId={selected.sessionId}
+                tenantId={session?.tenantId ?? ""}
+                snapshot={approvalSnapshot as never}
+                onResolved={refreshSupervisorState}
+              />
             ) : selected ? (
               <>
                 {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}
