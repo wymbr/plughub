@@ -516,6 +516,18 @@
       }
     }
   },
+  "customers": {
+    "title":             "Customers",
+    "subtitle":          "Retrospective 360 view",
+    "noTenant":          "No tenant in session. Please log in again.",
+    "searchPlaceholder": "Name or customer_id…",
+    "search":            "Search",
+    "noResults":         "No customer found.",
+    "noName":            "(no name)",
+    "empty":             "Search a customer to see their 360 view.",
+    "selected":          "Customer",
+    "clear":             "Clear selection"
+  },
   "sessions": {
     "allTypes":    "All types",
     "allStatuses": "All statuses",

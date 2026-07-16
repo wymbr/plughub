@@ -2,6 +2,18 @@
 
 ---
 
+## Customer History — H5: lente Analytics do Cliente 360 (`/analise/customers`) (2026-07-16)
+
+Fecha o **H5** (spec `docs/arcos/customer-contact-history.md` §9; ADR `adr-customer-360-two-surfaces.md` — "uma verdade, duas lentes"): a **lente Analytics** do Cliente 360 — visão retrospectiva/supervisão do cliente **fora** do atendimento ao vivo. Escopo escolhido: **explorer completo**; índice GIN(tsvector) **adiado** (backlog).
+
+**Nova página** `AnaliseClientesPage` em `/analise/customers` (grupo Analytics, ABAC `contacts.visualizar`): **seletor de cliente** (busca por nome/`customer_id` via `/identity/customers/search` — mesmo endpoint do C1a; dropdown de resultados) → ao escolher, mostra lado a lado a **ficha** (`Customer360Card`: contatos + quality Oficial + survey) e o **Histórico** (`HistoricoTab`: jornadas em aberto + contatos anteriores + busca de mensagens H2/H3 + drill de transcrição MASKED H1). Deep-link `?customer=<id>` pré-seleciona e a seleção sincroniza na URL (compartilhável). Reuso **100%** dos endpoints já construídos — nenhum backend novo.
+
+**Reuso de componentes**: o `Customer360Card` foi **extraído** de `ClienteTab.tsx` para `agent-assist/components/Customer360Card.tsx` (exportado, self-contained via `useCustomer360`) — Console e Analytics compartilham o mesmo card. `HistoricoTab` já era keyable por `customerId`; os chips de jornada continuam linkando pra Vista Processos/rastro T6. i18n `contacts.customers.*` + `nav.analise.customers` (en+pt-BR). Nada de backend/teste novo (reuso).
+
+**Fecha o Customer History no v1**: H1 (drill) · H2 (busca backend) · H3 (busca UI) · HJ (jornadas) · H4-geral (contexto) · C1a (cadastro) · C1b (360) · **H5 (lente Analytics)**. Backlog: GIN(tsvector) para escala de busca (segue ClickHouse substring); H4-survey (bloqueado no briefing de retorno).
+
+---
+
 ## Cliente 360 — C1b: 360 agregado na aba Cliente (2026-07-16)
 
 Fecha o **C1b** da proposta Cliente 360 (ADR `docs/adr/adr-customer-360-two-surfaces.md` §D4, spec `docs/arcos/customer-contact-history.md` §9): a aba **Cliente** do Console agora mostra, quando o cliente está identificado, um **card 360 agregado por `customer_id`** — qualidade + voz do cliente + resumo de contatos.

@@ -6,7 +6,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare,
+  Lock, Users, Globe, MessageSquare, UserSearch,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -120,6 +120,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.pools'),     href: '/analise/pools',     icon: Package,       abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
+        { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },
       ]
     },
 

@@ -1484,6 +1484,16 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > history.md`). F5 inline (grão segmento) segue ✅ concluído — a riqueza "N sinais por agente" mora no
 > módulo Surveys (grãos outbound), não no inline.
 
+### Histórico de contatos do cliente — backlog pós-H5
+> O arco Customer History está **completo no v1** (H1–H5 + C1a/C1b ✅ — ver `CHANGELOG.md` e
+> `docs/arcos/customer-contact-history.md` §9). Resta:
+- **Busca full-text `GIN(tsvector)` (escala)** *(adiado no H5)* — a busca de mensagens (H2) usa hoje
+  ClickHouse substring (`positionCaseInsensitiveUTF8`), suficiente no volume atual. Para escala, migrar
+  para full-text tokenizado real (índice `GIN(tsvector)` no Postgres `session_stream_events`, ou skip-index
+  ClickHouse). É otimização, não correção — a busca funciona. Gatilho: latência/volume medidos.
+- **H4-survey** *(bloqueado)* — origem+resultado do survey no **briefing de retorno** (`customer-surveys.md`
+  §19), que ainda não existe.
+
 ---
 
 ## Scheduler central de timers *(diferido — ADR aceito)*

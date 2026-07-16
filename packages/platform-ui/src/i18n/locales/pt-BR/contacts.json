@@ -516,6 +516,18 @@
       }
     }
   },
+  "customers": {
+    "title":             "Clientes",
+    "subtitle":          "Visão 360 retrospectiva",
+    "noTenant":          "Sem tenant na sessão. Faça login novamente.",
+    "searchPlaceholder": "Nome ou customer_id…",
+    "search":            "Buscar",
+    "noResults":         "Nenhum cliente encontrado.",
+    "noName":            "(sem nome)",
+    "empty":             "Busque um cliente para ver a visão 360.",
+    "selected":          "Cliente",
+    "clear":             "Limpar seleção"
+  },
   "sessions": {
     "allTypes":    "Todos os tipos",
     "allStatuses": "Todos os status",
