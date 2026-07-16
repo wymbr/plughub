@@ -2211,6 +2211,124 @@ def _fetch_evaluations_summary(
     }
 
 
+# ─── /reports/customers/{id}/360 — Cliente 360 (C1b, ADR §D4) ─────────────────
+
+async def query_customer_360(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    customer_id: str,
+    *,
+    origin: "str | list[str]" = "live",
+) -> dict:
+    """Cliente 360 agregado por `customer_id` (ADR `adr-customer-360-two-surfaces.md` §D4).
+
+    Junta três leituras sobre o MESMO cliente, cada uma fail-soft e independente:
+      - contacts: resumo de `sessions` (total/resolvidos/abertos/canais/último contato);
+      - quality:  `evaluation_finalized` (modo Oficial — o invariante de qualidade),
+                  join às sessões do cliente por `session_id`;
+      - surveys:  `session_signal` (voz do cliente — NPS/CSAT/…), por métrica.
+
+    Nem `evaluation_finalized` nem `session_signal` carregam `customer_id` — ambos têm
+    `session_id`, então o vínculo é sempre via subquery no conjunto de sessões do cliente.
+    `origin='live'` por default (isolamento de substrato) — a superfície é operacional.
+    """
+    try:
+        return await asyncio.to_thread(
+            _fetch_customer_360, client, database, tenant_id, customer_id, origin,
+        )
+    except Exception as exc:
+        logger.warning("query_customer_360 failed tenant=%s customer=%s: %s",
+                       tenant_id, customer_id, exc)
+        return {"customer_id": customer_id, "contacts": None, "quality": None,
+                "surveys": [], "error": "data_unavailable"}
+
+
+def _fetch_customer_360(
+    client: Any, db: str, tenant_id: str, customer_id: str,
+    origin: "str | list[str]",
+) -> dict:
+    params = {"tenant_id": tenant_id, "customer_id": customer_id}
+
+    # Conjunto de sessões do cliente (origin-scoped) — reusado como subquery nos joins.
+    sess_conds = [
+        "tenant_id = {tenant_id:String}",
+        "customer_id = {customer_id:String}",
+    ]
+    _apply_origin_scope(sess_conds, origin)
+    sessions_subquery = (
+        f"SELECT session_id FROM {db}.sessions FINAL WHERE {' AND '.join(sess_conds)}"
+    )
+
+    # ── contacts ──────────────────────────────────────────────────────────────
+    contacts: dict | None = None
+    try:
+        r = client.query(f"""
+            SELECT
+                count()                                          AS total,
+                countIf(outcome = 'resolved')                    AS resolved,
+                countIf(COALESCE(status, 'closed') != 'closed')  AS open_count,
+                arrayFilter(x -> x != '', groupUniqArray(channel)) AS channels,
+                max(opened_at)                                   AS last_contact_at
+            FROM {db}.sessions FINAL
+            WHERE {' AND '.join(sess_conds)}
+              AND (channel != '' OR closed_at IS NULL)
+        """, parameters=params)
+        rows = _rows_to_dicts(r)
+        contacts = rows[0] if rows else None
+    except Exception as exc:
+        logger.warning("customer_360 contacts failed: %s", exc)
+
+    # ── quality (evaluation_finalized — Oficial) ────────────────────────────────
+    quality: dict | None = None
+    try:
+        r = client.query(f"""
+            SELECT
+                count()                                AS count,
+                round(avg(final_score), 4)             AS avg_score,
+                round(min(final_score), 4)             AS min_score,
+                round(max(final_score), 4)             AS max_score,
+                argMax(final_score, timestamp)         AS latest_score,
+                max(timestamp)                         AS latest_at
+            FROM {db}.evaluation_finalized FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND session_id IN ({sessions_subquery})
+        """, parameters=params)
+        rows = _rows_to_dicts(r)
+        # count=0 ⇒ sem avaliações finalizadas p/ o cliente (mantém None, não "0 vazio").
+        quality = rows[0] if rows and rows[0].get("count") else None
+    except Exception as exc:
+        logger.warning("customer_360 quality failed: %s", exc)
+
+    # ── surveys (session_signal — voz do cliente, por métrica) ──────────────────
+    surveys: list[dict] = []
+    try:
+        r = client.query(f"""
+            SELECT
+                metric,
+                count()                                AS count,
+                round(avg(value_num), 4)               AS avg_value,
+                argMax(value_num, captured_at)         AS latest_value,
+                argMax(value_label, captured_at)       AS latest_label,
+                max(captured_at)                       AS latest_at
+            FROM {db}.session_signal FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND session_id IN ({sessions_subquery})
+            GROUP BY metric
+            ORDER BY metric
+        """, parameters=params)
+        surveys = _rows_to_dicts(r)
+    except Exception as exc:
+        logger.warning("customer_360 surveys failed: %s", exc)
+
+    return {
+        "customer_id": customer_id,
+        "contacts":    contacts,
+        "quality":     quality,
+        "surveys":     surveys,
+    }
+
+
 # ─── /reports/quality — T11: Oficial × Operacional (§17.3) ────────────────────
 
 _QUALITY_GROUPS = {"campaign_id", "finalize_reason", "segment_id", "form_version",

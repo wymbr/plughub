@@ -229,7 +229,24 @@
     "creating":        "Criando…",
     "createError":     "Falha ao criar o cadastro.",
     "created":         "Cadastro criado e vinculado ({{id}}).",
-    "cancel":          "Cancelar"
+    "cancel":          "Cancelar",
+    "s360": {
+      "title":        "Visão 360",
+      "loading":      "Carregando 360…",
+      "contacts":     "Contatos",
+      "total":        "no total",
+      "resolved":     "resolvidos",
+      "open":         "em aberto",
+      "last":         "último",
+      "none":         "Sem contatos.",
+      "quality":      "Qualidade (oficial)",
+      "avg":          "média",
+      "evaluations":  "avaliações",
+      "latest":       "última",
+      "noQuality":    "Sem avaliações finalizadas.",
+      "surveys":      "Voz do cliente",
+      "noSurveys":    "Sem respostas de pesquisa."
+    }
   },
   "empty": {
     "activatePool":      "Ative um pool no cabeçalho para ficar disponível.",

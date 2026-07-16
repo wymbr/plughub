@@ -59,6 +59,7 @@ from .reports_query import (
     query_session_complexity,
     query_sessions_report,
     query_journeys_report,
+    query_customer_360,
     query_session_trace,
     query_usage_report,
     query_workflow_summary,
@@ -1301,6 +1302,30 @@ async def report_journeys(
         page_size        = ps,
     )
     return _respond(data, format, f"journeys_{_today_label()}.csv")
+
+
+# ─── GET /reports/customers/{customer_id}/360 (Cliente 360 — C1b, ADR §D4) ────
+# Agregado por cliente: contatos + quality (evaluation_finalized, Oficial) + surveys
+# (session_signal). Superfície do Console (aba Cliente); origin=live por default.
+
+@router.get("/customers/{customer_id}/360")
+async def report_customer_360(
+    request:     Request,
+    customer_id: str,
+    tenant_id:   str = Query(..., description="Tenant identifier"),
+    origin:      str = Query("live", pattern="^(live|import|reeval)$"),
+) -> Response:
+    """360 agregado do cliente: resumo de contatos, qualidade (modo Oficial —
+    `evaluation_finalized`) e voz do cliente (`session_signal`), tudo vinculado por
+    `session_id` ao conjunto de sessões do `customer_id`. Fail-soft por bloco."""
+    data = await query_customer_360(
+        client      = request.app.state.store.new_client(),
+        database    = request.app.state.store._database,
+        tenant_id   = tenant_id,
+        customer_id = customer_id,
+        origin      = origin,
+    )
+    return _respond(data, "json", "")
 
 
 # ─── GET /reports/sessions/{session_id}/trace (Journey T6 — rastro forense) ───

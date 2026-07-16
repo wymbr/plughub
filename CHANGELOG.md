@@ -2,6 +2,16 @@
 
 ---
 
+## Cliente 360 — C1b: 360 agregado na aba Cliente (2026-07-16)
+
+Fecha o **C1b** da proposta Cliente 360 (ADR `docs/adr/adr-customer-360-two-surfaces.md` §D4, spec `docs/arcos/customer-contact-history.md` §9): a aba **Cliente** do Console agora mostra, quando o cliente está identificado, um **card 360 agregado por `customer_id`** — qualidade + voz do cliente + resumo de contatos.
+
+**Backend** (analytics-api): `query_customer_360`/`_fetch_customer_360` (`reports_query.py`) + `GET /reports/customers/{customer_id}/360?tenant_id&origin`. Três leituras fail-soft e independentes, todas vinculadas por `session_id` ao **conjunto de sessões do cliente** (subquery `sessions FINAL WHERE customer_id`, `origin='live'` por default — isolamento de substrato): **contacts** (`sessions` → total/resolvidos/abertos/canais/último), **quality** (`evaluation_finalized`, modo **Oficial** — o invariante; avg/latest/count), **surveys** (`session_signal`, por métrica → último valor/label + média + N). Nenhuma das duas tabelas de sinal carrega `customer_id` (só `session_id`), daí o join sempre via subquery. **Guarda do zero plausível**: quality com `count=0` retorna `None` (não bloco vazio). Testes: `test_customer_360.py` (4 — shape, zero-guard, fail-soft, origin-scope).
+
+**UI** (platform-ui): `useCustomer360` (hook, proxy `/reports`, fail-soft) + `Customer360Card` na `ClienteTab` — renderizado só quando `identified`. Três blocos (Contatos/Qualidade oficial/Voz do cliente) com ícones, score como %, degradação graciosa por bloco ("sem avaliações finalizadas" / "sem respostas"). i18n `cliente.s360.*` (en+pt-BR). Jornadas seguem **só no Histórico** (HJ) — o card 360 não as duplica (ADR: "Cliente linka").
+
+---
+
 ## Cliente 360 — C1a: cadastro manual (aba Cliente no Console) (2026-07-15)
 
 Fecha o C1a da proposta Cliente 360 (ADR `docs/adr/adr-customer-360-two-surfaces.md` §D3, spec §7): quando a identificação automática **falha** ou **erra**, o operador busca/cria/vincula o cadastro manualmente. Reusa o Resolvedor de Identidade (Fase A/B); o net-new é a **busca** + a superfície.

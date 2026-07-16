@@ -229,7 +229,24 @@
     "creating":        "Creating…",
     "createError":     "Failed to create the record.",
     "created":         "Record created and linked ({{id}}).",
-    "cancel":          "Cancel"
+    "cancel":          "Cancel",
+    "s360": {
+      "title":        "360 view",
+      "loading":      "Loading 360…",
+      "contacts":     "Contacts",
+      "total":        "total",
+      "resolved":     "resolved",
+      "open":         "open",
+      "last":         "last",
+      "none":         "No contacts.",
+      "quality":      "Quality (official)",
+      "avg":          "avg",
+      "evaluations":  "evaluations",
+      "latest":       "latest",
+      "noQuality":    "No finalized evaluations.",
+      "surveys":      "Voice of customer",
+      "noSurveys":    "No survey responses."
+    }
   },
   "empty": {
     "activatePool":      "Activate a pool in the header to become available.",
