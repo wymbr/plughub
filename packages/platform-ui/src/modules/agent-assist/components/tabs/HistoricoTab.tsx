@@ -18,11 +18,15 @@ import { ContactHistoryEntry, SearchHit, TranscriptMessage } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
 import { useCustomerSearch, SearchFilters } from "../../hooks/useCustomerSearch";
 import { useCustomerJourneys } from "../../hooks/useCustomerJourneys";
+import { useSessionTrace, TraceNode } from "../../hooks/useSessionTrace";
 import { useSessionTranscript } from "../../hooks/useSessionTranscript";
 
 interface HistoricoTabProps {
   customerId:  string | null;
   tenantId?:   string | null;   // retained for API compatibility — unused after Arc 19 Fase F
+  /** Sessão atual — quando presente e membro de uma journey, mostra a seção Processo
+   *  (útil p/ contatos de workflow/aprovação que não têm customer_id). */
+  sessionId?:  string | null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -340,9 +344,70 @@ const JourneysSection: React.FC<{ customerId: string | null }> = ({ customerId }
   );
 };
 
+// ── ProcessSection (follow-up a) ──────────────────────────────────────────────
+// Para um contato que é membro de uma JOURNEY (ex.: tarefa de aprovação de workflow,
+// que raramente tem customer_id), mostra as sessões do PROCESSO via o rastro T6
+// (proveniência em volta desta sessão). Link pra Vista Processos. Só aparece quando
+// há mais de uma sessão (processo real, não sessão avulsa).
+const ProcessSection: React.FC<{ sessionId: string | null }> = ({ sessionId }) => {
+  const { t } = useTranslation('agentAssist');
+  const navigate = useNavigate();
+  const { trace } = useSessionTrace(sessionId);
+
+  const nodes = trace?.nodes ?? [];
+  if (nodes.length <= 1) return null;   // sessão avulsa → não é "processo"
+
+  const journeyId = trace?.focus_journey_id ?? trace?.focus?.root_session_id ?? null;
+  const label = (n: TraceNode) => n.pool_id || n.channel || n.session_id.slice(0, 8);
+
+  return (
+    <div className="mb-3">
+      <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+        <GitBranch className="w-3.5 h-3.5" aria-hidden="true" />
+        {t('historico.process.title', { defaultValue: 'Process' })}
+        {journeyId && (
+          <button
+            onClick={() => navigate(`/analise/processos?journey=${encodeURIComponent(journeyId)}`)}
+            title={t('historico.process.openHint', { defaultValue: 'Open in Process view' })}
+            className="ml-auto font-mono text-2xs text-primary hover:text-primary-dark"
+          >
+            {journeyLabel(journeyId)} ↗
+          </button>
+        )}
+      </div>
+      <div className="flex flex-col gap-1">
+        {nodes.map(n => {
+          const isFocus = n.depth === 0;
+          return (
+            <div
+              key={n.session_id}
+              className={`rounded-lg px-3 py-1.5 border text-xs ${
+                isFocus ? "border-primary/40 bg-primary-light/30" : "border-border"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="font-medium text-dark truncate">{label(n)}</span>
+                {isFocus && <span className="text-2xs px-1.5 py-0.5 rounded-full bg-primary text-white">{t('historico.process.thisSession', { defaultValue: 'this task' })}</span>}
+                <span className="flex-1" />
+                {n.outcome && <span className="text-2xs text-muted-light">{n.outcome}</span>}
+              </div>
+              <div className="text-2xs text-muted-light mt-0.5 flex items-center gap-1.5">
+                <span className="font-mono">{n.session_id.slice(0, 8)}</span>
+                {n.channel && <span>· {n.channel}</span>}
+                {n.spawn_reason && <span>· {n.spawn_reason}</span>}
+                {n.journey_boundary && <span className="text-warning-text">· {t('historico.process.boundary', { defaultValue: 'other process' })}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ── HistoricoTab ──────────────────────────────────────────────────────────────
 
-export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId }) => {
+export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, sessionId }) => {
   const { t } = useTranslation('agentAssist');
   const { entries, loading, error, refetch } = useCustomerHistory(customerId);
 
@@ -484,6 +549,8 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId }) => {
           </>
         ) : (
           <>
+            {/* Follow-up (a) — o PROCESSO desta sessão (workflow/aprovação sem customer_id) */}
+            <ProcessSection sessionId={sessionId ?? null} />
             {/* HJ — jornadas (processos) em aberto do cliente, distintas dos contatos */}
             <JourneysSection customerId={customerId} />
 

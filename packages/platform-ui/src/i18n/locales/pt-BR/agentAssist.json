@@ -405,6 +405,12 @@
       "openHint": "Abrir o processo no Analytics (Processos / rastro)",
       "sessions_one":   "{{count}} sessão",
       "sessions_other": "{{count}} sessões"
+    },
+    "process": {
+      "title":       "Processo",
+      "openHint":    "Abrir na Vista Processos",
+      "thisSession": "esta tarefa",
+      "boundary":    "outro processo"
     }
   },
   "delegar": {

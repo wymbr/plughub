@@ -532,19 +532,34 @@ export const AgentAssistPage: React.FC = () => {
   const isApprovalContact = isApprovalSnapshot(approvalSnapshot as never);
   const approvalPoolId = ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined) ?? "";
 
+  // Tira a tarefa de aprovação do atendimento do agente: remove do mapa (para o
+  // timer + limpa a lista) e deseleciona. No RELEASE é obrigatório (a sessão persiste
+  // re-enfileirada, sem evento de fechamento); no DECIDIR dá feedback imediato (o WS
+  // de fechamento também chegaria, mas depois). Idempotente.
+  const dropApprovalContact = useCallback((sid: string) => {
+    setContacts(prev => {
+      if (!prev.has(sid)) return prev;
+      const next = new Map(prev);
+      next.delete(sid);
+      return next;
+    });
+    setSelectedSessionId(null);
+  }, [setContacts, setSelectedSessionId]);
+
   // Devolver à fila (release) — ação do action bar de aprovação (desistir sem decidir).
   const handleReleaseApproval = useCallback(async () => {
     if (!selected) return;
+    const sid = selected.sessionId;
     const instanceId = session?.userId ? `human-${session.userId}` : "";
     try {
-      await fetch(`/api/work_queue/release/${encodeURIComponent(selected.sessionId)}`, {
+      await fetch(`/api/work_queue/release/${encodeURIComponent(sid)}`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ pool_id: approvalPoolId, instance_id: instanceId }),
       });
     } catch { /* non-fatal */ }
-    setSelectedSessionId(null);
-  }, [selected, approvalPoolId, session, setSelectedSessionId]);
+    dropApprovalContact(sid);
+  }, [selected, approvalPoolId, session, dropApprovalContact]);
 
   // AI participants from supervisor state
   const aiParticipants = supervisorState?.ai_participants ?? [];

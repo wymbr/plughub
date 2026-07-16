@@ -122,6 +122,7 @@ export const RightPanel: React.FC<RightPanelProps> = ({
           <HistoricoTab
             customerId={customerId}
             tenantId={tenantId}
+            sessionId={sessionId}
           />
         )}
 

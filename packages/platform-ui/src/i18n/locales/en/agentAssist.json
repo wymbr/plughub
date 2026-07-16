@@ -405,6 +405,12 @@
       "openHint": "Open the process in Analytics (Processes / trace)",
       "sessions_one":   "{{count}} session",
       "sessions_other": "{{count}} sessions"
+    },
+    "process": {
+      "title":       "Process",
+      "openHint":    "Open in Process view",
+      "thisSession": "this task",
+      "boundary":    "other process"
     }
   },
 
