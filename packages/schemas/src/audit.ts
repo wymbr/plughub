@@ -51,6 +51,30 @@ export const AuditContextSchema = z.object({
 export type AuditContext = z.infer<typeof AuditContextSchema>
 
 // ─────────────────────────────────────────────
+// Discriminadores de principal e confiança
+// (ADR docs/adr/adr-human-approval-workflow-step.md §9.5)
+// ─────────────────────────────────────────────
+
+/**
+ * PrincipalType — TIPO do autor de uma ação auditável, discriminador ortogonal
+ * ao id do principal. Cada tipo vive na sua fonte nativa (single-source):
+ *   human  → usuário (auth-api, login/JWT)
+ *   agent  → agente IA (agent-registry, credencial de instância)
+ *   system → sistema externo (credencial de webhook registrada; NUNCA um user)
+ */
+export const PrincipalTypeSchema = z.enum(["human", "agent", "system"])
+export type PrincipalType = z.infer<typeof PrincipalTypeSchema>
+
+/**
+ * VerificationClass — grau de confiança na identidade do autor no momento da ação.
+ *   claimed   → identificador asseverado (ex.: âncora/ANI, token bearer)
+ *   possessed → posse provada (humano: sessão autenticada viva; máquina: assinatura/mTLS)
+ * Mesmo eixo do OTP de posse de canal (adr-identity-channel-possession).
+ */
+export const VerificationClassSchema = z.enum(["claimed", "possessed"])
+export type VerificationClass = z.infer<typeof VerificationClassSchema>
+
+// ─────────────────────────────────────────────
 // Mascaramento de dados sensíveis
 // ─────────────────────────────────────────────
 

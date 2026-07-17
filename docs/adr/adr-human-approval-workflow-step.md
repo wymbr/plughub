@@ -205,4 +205,125 @@ Todas as arestas achadas na validação são o MESMO subsistema (fila pull × se
 | **P2b — claims da UI enviam `conference_id`** | os **dois** call sites (`PullInboxPanel.handlePull` + `AgentAssistPage.claimPreviewContact` do preview) enviam `conference_id`; `platform-ui` é imagem buildada → exige `build --no-cache`. | claim pela UI gera occupant `session::conf`; re-claim re-anexa | ✅ (E2E UI: claim→return→re-claim→aprovar OK) |
 | **P3 — timer `first_queued`** | `first_queued` NX no `add_queued_contact` + `listQueue`/`PullInboxPanel.ageOf` ancoram nele (fallback `queued_at_ms`). Score da fila segue em `queued_at_ms` (fairness = opcional, deferido). | display: idade = espera total, preservada no re-enfileiramento | ✅ (E2E: score +344s, idade segue 6m8s) |
 | **P4 — refresh imediato pós-release** | ~~inbox atualiza na hora após release~~ **ADIADO** — achado: `work_task_release` devolve `requeued:false` (o JSON `queue_contact` é deletado quando o contato é roteado no claim — kafka_listener/main.py); o contato só reaparece ~4s depois por um **fallback assíncrono**. Frontend não tem o que mostrar na hora. Requer backend (preservar o JSON no claim p/ o release re-enfileirar síncrono). Frontend já pronto (`refreshSignal`+bump) + `cache:no-store` no fetch (fila = tempo-real, evita 304 stale). | UX | adiado (backend) |
-| **A5 — auditoria** | trilha de decisão/edições (o item pendente do v1). | audit E2E | pendente |
+| **A5 — auditoria** | trilha de decisão/edições (o item pendente do v1). **Design fechado → §9; implementado → §10.** | audit E2E | ✅ (E2E 2026-07-17) |
+
+---
+
+## 9. A5 — Modelo de auditoria de decisão (design fechado, 2026-07-17)
+
+> Convergência de uma discussão de design. O ponto de partida (prompt de passagem) propunha um novo
+> `StreamEventType` "approval_decision" escrito via `writeStreamEntry` numa rota do mcp-server. A investigação
+> reenquadrou o problema e fechou um modelo **mais barato e mais reusável**, ancorado em três achados de código.
+
+### 9.1 Achados que ancoram o modelo
+
+- **A decisão contorna o stream hoje.** `ApprovalPanel.decide()` faz `POST /v1/channels/webhook/resume/{token}`
+  (REST, **sem** `Authorization`) com `payload:{decision,source:"operator",choice,edits}`. Não passa por
+  `writeStreamEntry`, não vira mensagem — logo **não** aparece em transcript/HistoricoTab. O modelo mental
+  "decisão = troca de mensagens de canal interno" **não** é o estado atual; é o que a escrita no stream cria.
+- **O resume do webhook JÁ escreve no stream.** `handle_resume` (`webhook.py`) faz `xadd` em
+  `session:{id}:stream` com `type:"session_resumed"`, `visibility:"agents_only"` e o `payload` da decisão dentro.
+  Ou seja o **conteúdo já aterrissa** — mas mal-autorado (`author_id:"webhook_adapter"`, `author_role:"system"`),
+  sem masking e como evento de ciclo de vida, não como mensagem legível.
+- **O "quem" é descartado.** O endpoint de resume é identity-blind. A identidade verificada do aprovador só
+  existe no **claim** (`work_task_claim` carregou JWT → humano vira participante/especialista da sessão-filho).
+
+### 9.2 Decisões (A5)
+
+- **D-A5.1 — Store = stream canônico; forma = `message` (agents_only) + bloco de metadados de aprovação.**
+  A decisão é uma **mensagem** no stream (aparece na narrativa/HistoricoTab, reusa o masking `content`/
+  `original_content`), com um bloco estruturado no payload: `{choice, edits:[{field,before,after}],
+  principal_type, decided_by, verification_class, threshold_in_force, attachments_viewed, decided_at}`. **Não** se
+  adiciona valor ao `StreamEventTypeSchema` (evita rebuild de todos os consumidores TS) — a estrutura vive no
+  payload da mensagem. `principal_type` (`human`|`agent`|`system`) torna "quem decidiu" legível como o TIPO de
+  principal, ao lado do id (`decided_by`) e da classe de confiança — ver §9.5.
+- **D-A5.2 — Autoria = identidade resolvida com CLASSE DE CONFIANÇA (simetria com o cliente).** Identificar o
+  autor é como identificar o cliente por âncora/ANI: um identificador que o chamador passa, resolvido pela mesma
+  entidade (o webhook adapter já hospeda o Identity Resolver) a um id + `verification_class` (`claimed`|
+  `possessed`, o mesmo modelo do OTP de posse). A assimetria real não é "JWT vs não" — é o **uso** da identidade:
+  para o aprovador ela é **autoridade + não-repúdio**, então uma decisão que importa exige grau `possessed`,
+  exatamente como uma ação sensível do cliente exige OTP.
+- **D-A5.3 — Console passa o JWT do aprovador no header do resume → grau `possessed`.** O header **é** a prova de
+  posse (identidade lastreada por sessão autenticada viva). É **aditivo**, não substitui o `resume_token`
+  (`resume_token`=capacidade "posso retomar este workflow?"; JWT=identidade "quem sou"). Header ausente → caminho
+  externo (credencial/`system`, `claimed`). O ingress **verifica server-side** (decode HS256 local + `auth_jwt_secret`),
+  reforça ABAC `approvals.decide` + `accessible_pools`, e **cruza com o claim** (`caller == claimant`, defende
+  contra `resume_token` vazado). A atribuição mais forte é o **claim** (JWT-authed, exclusivo); o header deixa o
+  ingress **ligar a decisão ao claimant verificado**.
+- **D-A5.4 — Locus de escrita = webhook adapter, no resume interno.** No mesmo ponto onde já escreve
+  `session_resumed` e onde agora verifica o JWT, o adapter grava a mensagem de auditoria e **injeta a identidade
+  resolvida no escopo do SEGMENTO** do aprovador (invariante single-source de identidade de participante — nunca
+  campo session-global). Masking dos campos sensíveis de `edits` via `content`/`original_content`. O **antes** do
+  diff é capturado no submit (pré-preenchimento do form), não só o **depois**.
+- **D-A5.5 — Gate de confiança no WORKFLOW, declarado pelo autor.** Mecanismo/confiança = plataforma; **limiar =
+  negócio = autor**. O limiar vive no **passo do workflow** (`delegate`/`collect`/`choice`), **não** no DialogForm
+  (preserva o invariante D3: form=conteúdo, workflow=controle). **Default seguro (inegociável):** ausência ⇒ exige
+  `possessed`; rebaixar para `claimed` é escolha **explícita e auditável** (postura "degradação nunca é
+  silenciosa"). O gate é um `choice` normal sobre o `verification_class` resolvido; o step-up (re-desafio OTP) reusa
+  o `OtpService` existente. O **limiar-em-vigor** é gravado no registro (com a `deploy_version` do workflow) para o
+  gate ser auditável.
+
+### 9.3 Unificação externa × interna
+
+Um ingress (resume do webhook), dois regimes de atribuição — só muda **a quem** a auditoria atribui:
+
+| | Autor | `verification_class` | Ingress |
+|---|---|---|---|
+| **Externo** (`suspend`/sistema) | credencial webhook (endpoint id) | `claimed`/system | resume token-authed; o `system`-authored de hoje já é honesto — falta carimbar o endpoint + mascarar |
+| **Interno** (`collect`/`delegate`/humano) | usuário aprovador (do JWT), ligado ao claim | `possessed` (Console logado) | resume + `Authorization: Bearer`; adapter verifica + injeta no escopo do segmento |
+
+`collect`/`delegate` capturam o aprovador como participante (via claim) → habilitam a injeção verificada; um
+`suspend` puro interno **não** captura ninguém e recairia em identidade client-asserted (evitar para aprovação).
+
+### 9.4 Nota de arquitetura
+
+Isto torna o endpoint de resume do webhook **auth-aware no caso interno** (canal token/máquina passando a
+verificar JWT humano + ABAC). Aceito, desde que **deliberado**: o handler ramifica explicitamente — header
+presente → verifica + atribui + gate; ausente → caminho externo de sempre. Não um verify silencioso no meio do
+fluxo de canal.
+
+### 9.5 Taxonomia de principal — `principal_type` (discriminador, não fusão de registros)
+
+O autor de uma decisão pode ser de **três tipos**, cada um na sua **fonte nativa** (invariante single-source —
+identidade não se duplica; cada principal vive na sua fonte). O rastro carrega um **discriminador**
+`principal_type` no autor; **não** se funde tudo numa tabela de "usuário".
+
+| Principal | Registro nativo | Auth / posse | `principal_type` |
+|---|---|---|---|
+| **Humano** (operador/aprovador) | auth-api (users + ABAC) | login/JWT → `possessed` | `human` |
+| **Agente IA** (inclui auto-aprovação, D4) | agent-registry (agent_type/instance) | credencial de instância (JWT + permissions) | `agent` |
+| **Sistema externo** (cliente de webhook) | **webhook registrado** (`plughub_wh_*`, Arc 4 CRUD) — **não** um user | token bearer (→ assinatura HMAC/mTLS p/ `possessed`) | `system` |
+
+**Decisão sobre clientes externos:** cliente externo de webhook = **credencial de webhook nomeada**, NÃO um usuário
+humano com login. Login/refresh/silent-reauth são afordâncias humanas; uma máquina porta credencial. Cada cliente
+= um webhook registrado (id/nome/escopo por pool — "o POOL é a unidade endereçável"), e a auditoria atribui **àquele
+webhook** (fecha o "falta carimbar o endpoint" da §9.3), com `verification_class: claimed`. O análogo de máquina
+para `possessed` (não-repúdio de aprovação externa) é **assinatura de requisição** (HMAC por-cliente / mTLS), não
+login — estende o eixo `claimed`/`possessed` para sistemas sem quebrar o modelo. `Pool.agent_kind` segue canônico
+para a tipagem humano/IA (não reintroduzir segunda fonte de verdade).
+
+---
+
+## 10. As-built (implementado + validado E2E 2026-07-17)
+
+Fatias A5.1–A5.6 no CHANGELOG (2026-07-17). Desvios/decisões que emergiram da implementação:
+
+- **Verificação de JWT de usuário no channel-gateway (novo).** O canal não autenticava usuário do auth-api;
+  criado `auth.py` reusável (`verify_user_jwt`/`abac_can`/`pool_in_scope`/`accessible_pools`/`bearer_from_header`)
+  + env `PLUGHUB_AUTH_JWT_SECRET` **padronizada** (mesmo nome/segredo da analytics-api; adotável por outros módulos).
+- **Bypass de elevados.** admin/supervisor bypassam ABAC `approvals.decide` **e** pool-scope (autoridade global;
+  contas elevadas não carregam `module_config` por campo; e o pool-scope já é exercido no inbox/claim — re-exigir
+  no resume criava assimetria claim↔resume). Operador comum segue barrado por capacidade + pool.
+- **caller==claimant via árbitro.** Novo endpoint de leitura `POST /v1/work_queue/holder` (routing-engine) devolve
+  o `instance_id` da claim lease; o ingress exige match + `instance==human-{sub}` (auth-api assina `sub=user_id`;
+  Console usa `human-{userId}` → casam). Lease de TTL curto ausente **não** bloqueia (instance/identity + posse do
+  token seguram). Respeita o invariante do árbitro único (o gateway não lê o Redis do routing direto).
+- **Leitura sobre a stream, não ClickHouse.** A `message` de decisão vive na stream (Redis vivo / PG no close) e
+  não é replicada ao ClickHouse (o transcript/HistoricoTab é ClickHouse) → `GET /api/approval_audit/:sessionId`
+  (mcp-server, XRANGE, gate `approvals.operacao`) alimenta a nova seção da HistoricoTab.
+- **Masking.** Net-pass de PII (CPF/cartão/e-mail/telefone) nos valores de `edits` no channel-gateway (o mecanismo
+  primário field-level do DialogForm `masked` não chega ao servidor).
+
+**Pendências menores (não-bloqueantes):** `segment_id` do aprovador carimbado pelo bridge (hoje `""` no v1);
+leitura PG (sessão fechada) no endpoint de auditoria (hoje só Redis vivo); `attachments_viewed` populado quando o
+viewer de anexos renderizar refs.

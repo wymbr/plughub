@@ -52,6 +52,10 @@ steps:
       summary:        "@ctx.approval.summary"
       dialog_form_id: "dialog_promocao_deploy"
       decisions:      '[{"id":"aprovar","label":"Aprovar e promover"},{"id":"recusar","label":"Recusar"}]'
+      # A5.5 — limiar de confiança do AUTOR declarado pelo passo (default seguro do
+      # A5.4 = possessed). handle_delegate grava como session.approval_threshold; o A5.4
+      # o carimba em threshold_in_force. Promoção a produção exige posse verificada.
+      approval_threshold: "possessed"
     timeout_hours: 24
     business_hours: false
     on_resume:
@@ -63,6 +67,13 @@ steps:
   - id: rotear_decisao
     type: choice
     conditions:
+      # A5.5 — GATE de confiança (author-declared): sob limiar `possessed`, uma decisão
+      # apenas `claimed` (ex.: resume externo/sem JWT verificado) é recusada por segurança,
+      # mesmo que a escolha seja "aprovar". Avaliado ANTES da escolha (primeira condição).
+      - field:    "$.pipeline_state.aprovar.verification_class"
+        operator: eq
+        value:    claimed
+        next:     encerrar_nao_verificado
       - field:    "$.pipeline_state.aprovar.choice"
         operator: eq
         value:    aprovar
@@ -76,6 +87,11 @@ steps:
     outcome: resolved
 
   - id: encerrar_recusado
+    type: complete
+    outcome: failed
+
+  # A5.5 — decisão sob limiar não atingido (claimed < possessed): recusa segura.
+  - id: encerrar_nao_verificado
     type: complete
     outcome: failed
 

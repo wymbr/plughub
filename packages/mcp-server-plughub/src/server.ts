@@ -1033,6 +1033,55 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // These endpoints are consumed by agent-assist-ui via Vite proxy /api → :3100
 
   // GET /supervisor_state/:sessionId
+  // A5.6 — trilha de decisão de aprovação (lê a STREAM canônica; o ClickHouse não é
+  // alimentado pela stream). Gated por ABAC approvals.operacao (admin/supervisor
+  // bypassam). Live = Redis XRANGE; fallback PG (sessão fechada) = follow-up.
+  app.get("/api/approval_audit/:sessionId", async (req: Request, res: Response) => {
+    let payload: Record<string, unknown>
+    try {
+      payload = verifyJwtPayload(req.headers.authorization)
+    } catch {
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+    const role = (payload["role"] ?? (payload["roles"] as string[] | undefined)?.[0]) as string | undefined
+    const mc   = (payload["module_config"] ?? {}) as Record<string, Record<string, { access?: string }>>
+    const access = mc["approvals"]?.["operacao"]?.access ?? "none"
+    const ORDER: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
+    const canView = role === "admin" || role === "supervisor" || (ORDER[access] ?? 0) >= 1
+    if (!canView) {
+      res.status(403).json({ error: "Missing approvals.operacao" })
+      return
+    }
+
+    const sessionId = req.params.sessionId
+    try {
+      const entries = (await redis.xrange(`session:${sessionId}:stream`, "-", "+")) as [string, string[]][]
+      const decisions: unknown[] = []
+      for (const [entryId, fields] of entries) {
+        const rec: Record<string, string> = {}
+        for (let i = 0; i + 1 < fields.length; i += 2) {
+          const k = fields[i]
+          if (k !== undefined) rec[k] = fields[i + 1] ?? ""
+        }
+        if (rec["type"] !== "message") continue
+        let p: { approval?: unknown }
+        try { p = JSON.parse(rec["payload"] ?? "{}") } catch { continue }
+        if (!p?.approval) continue
+        decisions.push({
+          entry_id:    entryId,
+          author_id:   rec["author_id"] ?? null,
+          author_role: rec["author_role"] ?? null,
+          timestamp:   rec["timestamp"] ?? null,
+          approval:    p.approval,
+        })
+      }
+      res.json({ session_id: sessionId, count: decisions.length, decisions })
+    } catch (err) {
+      res.status(500).json({ error: String(err) })
+    }
+  })
+
   app.get("/api/supervisor_state/:sessionId", async (req: Request, res: Response) => {
     const payload = requireJwtRole(req.headers.authorization, ["operator", "supervisor", "admin", "developer"], res)
     if (!payload) return

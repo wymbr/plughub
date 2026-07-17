@@ -10,10 +10,11 @@
  * Journey entity eliminated. Session history remains unchanged.
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Timer, User, Search, SlidersHorizontal, X, GitBranch } from "lucide-react";
+import { Timer, User, Search, SlidersHorizontal, X, GitBranch, ShieldCheck } from "lucide-react";
+import { useAuth } from "../../../../auth/useAuth";
 import { ContactHistoryEntry, SearchHit, TranscriptMessage } from "../../types";
 import { useCustomerHistory } from "../../hooks/useCustomerHistory";
 import { useCustomerSearch, SearchFilters } from "../../hooks/useCustomerSearch";
@@ -405,6 +406,113 @@ const ProcessSection: React.FC<{ sessionId: string | null }> = ({ sessionId }) =
   );
 };
 
+// ── ApprovalAuditSection (A5.6) ───────────────────────────────────────────────
+// Trilha append-only das decisões de aprovação desta sessão, lida da STREAM canônica
+// via mcp-server (GET /api/approval_audit/:sessionId — ClickHouse não é alimentado pela
+// stream). Gated no backend por ABAC approvals.operacao; some quando vazio/sem acesso.
+
+interface ApprovalFieldEditView { field: string; before: string | null; after: string | null }
+interface ApprovalDecisionMetaView {
+  choice: string;
+  edits?: ApprovalFieldEditView[];
+  principal_type: string;
+  decided_by: string;
+  verification_class: string;
+  threshold_in_force?: string;
+  attachments_viewed?: string[];
+  decided_at: string;
+}
+interface ApprovalDecisionView {
+  entry_id: string;
+  author_id: string | null;
+  author_role: string | null;
+  timestamp: string | null;
+  approval: ApprovalDecisionMetaView;
+}
+
+const ApprovalAuditSection: React.FC<{ sessionId: string | null }> = ({ sessionId }) => {
+  const { t } = useTranslation('agentAssist');
+  const { getAccessToken } = useAuth();
+  const [decisions, setDecisions] = useState<ApprovalDecisionView[]>([]);
+
+  useEffect(() => {
+    if (!sessionId) { setDecisions([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await getAccessToken();
+        const res = await fetch(`/api/approval_audit/${encodeURIComponent(sessionId)}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) { if (!cancelled) setDecisions([]); return; }
+        const data = await res.json();
+        if (!cancelled) setDecisions(Array.isArray(data.decisions) ? data.decisions : []);
+      } catch { if (!cancelled) setDecisions([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionId, getAccessToken]);
+
+  if (!sessionId || decisions.length === 0) return null;
+
+  return (
+    <div className="mb-3">
+      <div className="text-xs font-semibold text-muted uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+        <ShieldCheck className="w-3.5 h-3.5" aria-hidden="true" />
+        {t('historico.approval.title', { defaultValue: 'Approval decisions' })}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {decisions.map((d) => {
+          const a = d.approval;
+          const changed = (a.edits ?? []).filter((e) => e.before !== e.after);
+          const belowThreshold = !!a.threshold_in_force && a.verification_class !== a.threshold_in_force;
+          return (
+            <div key={d.entry_id} className="border border-border rounded-lg px-3 py-2 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="px-1.5 py-0.5 rounded text-2xs font-medium bg-primary/10 text-primary">{a.choice}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-2xs font-medium ${
+                  a.verification_class === 'possessed' ? 'bg-green-light text-green-text' : 'bg-warning-light text-warning-text'
+                }`}>
+                  {t(`historico.approval.class.${a.verification_class}`, { defaultValue: a.verification_class })}
+                </span>
+                {belowThreshold && (
+                  <span className="text-2xs text-warning-text">
+                    {t('historico.approval.required', { defaultValue: 'required' })}: {a.threshold_in_force}
+                  </span>
+                )}
+              </div>
+              <div className="text-2xs text-muted-light mt-1 flex items-center gap-1.5 flex-wrap">
+                <span>{t(`historico.approval.principal.${a.principal_type}`, { defaultValue: a.principal_type })}</span>
+                <span className="font-mono truncate">{a.decided_by || '—'}</span>
+                <span>· {formatDate(a.decided_at)}</span>
+              </div>
+              {changed.length > 0 && (
+                <div className="mt-1.5 pt-1.5 border-t border-border space-y-0.5">
+                  <div className="text-2xs font-semibold text-muted-light uppercase tracking-wide">
+                    {t('historico.approval.edits', { defaultValue: 'Edits' })}
+                  </div>
+                  {changed.map((e, i) => (
+                    <div key={i} className="text-2xs text-muted flex items-center gap-1 flex-wrap">
+                      <span className="font-medium">{e.field}:</span>
+                      <span className="line-through text-muted-light">{e.before ?? '∅'}</span>
+                      <span aria-hidden>→</span>
+                      <span className="text-dark">{e.after ?? '∅'}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(a.attachments_viewed?.length ?? 0) > 0 && (
+                <div className="text-2xs text-muted-light mt-1">
+                  {t('historico.approval.attachmentsViewed', { defaultValue: 'Attachments viewed' })}: {a.attachments_viewed!.length}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // ── HistoricoTab ──────────────────────────────────────────────────────────────
 
 export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, sessionId }) => {
@@ -549,6 +657,8 @@ export const HistoricoTab: React.FC<HistoricoTabProps> = ({ customerId, sessionI
           </>
         ) : (
           <>
+            {/* A5.6 — trilha de decisões de aprovação desta sessão (stream canônica) */}
+            <ApprovalAuditSection sessionId={sessionId ?? null} />
             {/* Follow-up (a) — o PROCESSO desta sessão (workflow/aprovação sem customer_id) */}
             <ProcessSection sessionId={sessionId ?? null} />
             {/* HJ — jornadas (processos) em aberto do cliente, distintas dos contatos */}

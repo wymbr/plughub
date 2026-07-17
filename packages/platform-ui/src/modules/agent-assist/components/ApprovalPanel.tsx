@@ -33,6 +33,10 @@ interface FormField {
 interface ApprovalPanelProps {
   sessionId: string
   tenantId:  string
+  /** A5 — pool da task de aprovação (chave da claim lease p/ o check caller==claimant). */
+  poolId?:   string
+  /** A5 — instance_id deste console (`human-{userId}`) = o claimant; verificado no ingress. */
+  instanceId?: string
   /** context_snapshot from supervisorState.customer_context — the package lives here. */
   snapshot:  Snapshot
   /** Called after a successful resume so the parent can drop the resolved contact. */
@@ -64,9 +68,9 @@ function locStr(x: unknown, fallback: string): string {
   return fallback
 }
 
-export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ sessionId, tenantId, snapshot, onResolved }) => {
+export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ sessionId, tenantId, poolId, instanceId, snapshot, onResolved }) => {
   const { t } = useTranslation("agentAssist")
-  const { perms } = useAuth()
+  const { perms, getAccessToken } = useAuth()
   const canView   = perms.can("approvals", "operacao")
   const canDecide = perms.can("approvals", "decide")
 
@@ -81,11 +85,13 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ sessionId, tenantI
     try { return JSON.parse(raw) as Decision[] } catch { return [] }
   }, [snapshot])
 
-  const [fields, setFields] = useState<FormField[]>([])
-  const [edits,  setEdits]  = useState<Record<string, string>>({})
-  const [busy,   setBusy]   = useState<string | null>(null)
-  const [done,   setDone]   = useState(false)
-  const [error,  setError]  = useState<string | null>(null)
+  const [fields,   setFields]   = useState<FormField[]>([])
+  const [edits,    setEdits]    = useState<Record<string, string>>({})
+  // A5 — snapshot do pré-preenchimento (o "antes" do diff auditado antes→depois).
+  const [baseline, setBaseline] = useState<Record<string, string>>({})
+  const [busy,     setBusy]     = useState<string | null>(null)
+  const [done,     setDone]     = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
 
   // Load the editable fields of the DialogForm (the "form" question node).
   useEffect(() => {
@@ -104,6 +110,8 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ sessionId, tenantI
         const init: Record<string, string> = {}
         for (const f of fs) if (f.value !== undefined) init[f.id] = String(f.value)
         setEdits(init)
+        // A5 — guarda o pré-preenchimento como baseline imutável do diff.
+        setBaseline(init)
       })
       .catch(() => { if (!cancelled) setFields([]) })
     return () => { cancelled = true }
@@ -113,13 +121,39 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ sessionId, tenantI
     if (!resumeToken || !canDecide) return
     setBusy(choice); setError(null)
     try {
+      // A5 — diff explícito antes→depois de cada campo do pacote (baseline = pré-preenchimento).
+      // O webhook adapter monta ApprovalDecisionMeta.edits a partir daqui; o workflow segue
+      // roteando por payload.choice e pode aplicar o after-map `edits` (inalterado).
+      const fieldEdits = fields.map(f => ({
+        field:  f.id,
+        before: baseline[f.id] ?? null,
+        after:  edits[f.id] ?? null,
+      }))
+      // A5 — JWT do aprovador → atribuição grau `possessed`, verificada server-side no ingress
+      // (assinatura + ABAC approvals.decide + caller==claimant). Ausente → `claimed`.
+      const token = await getAccessToken()
       const res = await fetch(`/v1/channels/webhook/resume/${encodeURIComponent(resumeToken)}`, {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           tenant_id: tenantId,
+          // A5 — claimant binding: pool_id + instance_id (=`human-{userId}`) deixam o ingress
+          // ler a claim lease (tenant,pool,session→instance) e exigir caller==claimant.
+          pool_id:     poolId,
+          instance_id: instanceId,
           // decision "input" → on_resume; the WORKFLOW routes on payload.choice.
-          payload: { decision: "input", source: "operator", choice, edits },
+          payload: {
+            decision: "input",
+            source:   "operator",
+            choice,
+            edits,                     // after-map (uso funcional do workflow — inalterado)
+            field_edits: fieldEdits,   // A5 auditoria: antes→depois por campo
+            // TODO(A5.6): popular quando o viewer de anexos renderizar refs; [] até lá.
+            attachments_viewed: [],
+          },
         }),
       })
       if (!res.ok) { setError(`HTTP ${res.status}`); setBusy(null); return }

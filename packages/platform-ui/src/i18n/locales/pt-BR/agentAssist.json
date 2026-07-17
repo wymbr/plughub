@@ -411,6 +411,21 @@
       "openHint":    "Abrir na Vista Processos",
       "thisSession": "esta tarefa",
       "boundary":    "outro processo"
+    },
+    "approval": {
+      "title":             "Decisões de aprovação",
+      "required":          "exigido",
+      "edits":             "Edições",
+      "attachmentsViewed": "Anexos visualizados",
+      "class": {
+        "possessed": "posse verificada",
+        "claimed":   "não verificado"
+      },
+      "principal": {
+        "human":  "humano",
+        "agent":  "agente IA",
+        "system": "sistema"
+      }
     }
   },
   "delegar": {

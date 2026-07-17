@@ -1124,6 +1124,13 @@ services:
       PLUGHUB_KAFKA_BROKERS:              kafka:29092
       PLUGHUB_REDIS_URL:                  redis://redis:6379
       PLUGHUB_JWT_SECRET:                 changeme_32chars_webchat_secret!
+      # A5 — segredo do auth-api (= PLUGHUB_AUTH_JWT_SECRET do auth-api) p/ verificar o
+      # JWT do aprovador no resume interno → grau possessed + ABAC. Sem isto, a decisão
+      # é registrada como claimed (e o gate de limiar possessed a recusa).
+      PLUGHUB_AUTH_JWT_SECRET:            changeme_auth_jwt_secret_demo_32c
+      # A5 — routing HTTP API (holder da claim lease p/ caller==claimant). Degrada
+      # gracioso se indisponível (lease de TTL curto ausente não bloqueia).
+      PLUGHUB_ROUTING_ENGINE_URL:         http://routing-engine:3550
       # Identity Resolver (Fase A · Slice 1). Salt is a SECRET → env only.
       PLUGHUB_IDENTITY_RESOLVER_ENABLED:  "true"
       PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo

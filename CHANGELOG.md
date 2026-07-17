@@ -2,6 +2,23 @@
 
 ---
 
+## Aprovação — A5: auditoria de decisão/edições (trilha na stream canônica) (2026-07-17)
+
+Fecha o último item do v1 de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md` §8/§9/§10). A decisão vira um evento `message` (`agents_only`) na **stream canônica**, com um bloco estruturado `ApprovalDecisionMeta` no payload — autoria verificada + diff de edições + classe de confiança. **Sem** novo `StreamEventType` (a estrutura vive no payload de `message` → sem rebuild de todos os consumidores TS). Leitura por endpoint sobre a stream (o ClickHouse **não** é alimentado pela stream).
+
+- **A5.1 schema** (`@plughub/schemas`): `ApprovalDecisionMetaSchema` (`choice`, `edits[{field,before,after}]`, `principal_type`, `decided_by`, `verification_class`, `threshold_in_force`, `attachments_viewed`, `deploy_version?`, `decided_at`) + `ApprovalFieldEditSchema` no payload de `message`; `PrincipalTypeSchema`/`VerificationClassSchema` reusáveis em `audit.ts`.
+- **A5.2 Console** (`ApprovalPanel`): envia `Authorization: Bearer <jwt>` + `field_edits` (diff antes→depois via baseline do pré-preenchimento) + `pool_id`/`instance_id` (=`human-{userId}`) no resume.
+- **A5.3 ingress** (channel-gateway): `handle_resume` verifica o JWT do aprovador (novo `auth.py` reusável, `PLUGHUB_AUTH_JWT_SECRET`), ABAC `approvals.decide` + pool-scope (ambos com bypass admin/supervisor), e caller==claimant (`instance==human-{sub}` + holder da claim lease via **novo endpoint do árbitro** `POST /v1/work_queue/holder`). Header ausente/segredo não-wirado → externo/`claimed`.
+- **A5.4 escrita** (channel-gateway): grava o `message` `agents_only` autorado pelo aprovador (ou credencial externa) no escopo do segmento; masking net-pass de PII nos `edits`.
+- **A5.5 gate** (channel-gateway + skill): `verification_class` viaja no payload do resume → `choice` do workflow gateia; limiar declarado no context do delegate (`approval_threshold`, default seguro `possessed` no A5.4); skill âncora `skill_gate_promocao_v1` recusa `claimed` sob limiar `possessed`.
+- **A5.6 leitura** (mcp-server + platform-ui): `GET /api/approval_audit/:sessionId` (XRANGE da stream, gate `approvals.operacao`); seção "Decisões de aprovação" na `HistoricoTab` + i18n en/pt-BR.
+
+**Validado E2E (2026-07-17):** promoção de deploy no Console (admin logado → claim → Aprovar) → decisão gravada com `principal_type=human`, `verification_class=possessed`, `decided_by=<user_id>`, `threshold_in_force=possessed`, diff `nota: null→…` + `notificar_equipe: false→true`; possessed atinge o limiar → roteia p/ `efetuar_promocao` (resolved).
+
+**Achados/as-built (ADR §10):** (a) o `channel-gateway` não verificava JWT de usuário — novo `auth.py` + `PLUGHUB_AUTH_JWT_SECRET` (padronizado com analytics-api); (b) admin/supervisor bypassam ABAC decide **e** pool-scope (autoridade global; o pool-scope já é exercido no inbox/claim → evita assimetria claim↔resume); (c) caller==claimant via holder da lease no árbitro + `instance==human-{sub}` (auth-api assina `sub=user_id`; Console usa `human-{userId}` → casam); (d) a decisão vive na stream (Redis vivo / PG no close), não no ClickHouse/transcript → leitura por endpoint dedicado.
+
+---
+
 ## Fila pull — P3: idade preservada no re-enfileiramento (`first_queued`) (2026-07-17)
 
 Item **P3** do pass de aprovação-conferência (ADR `docs/adr/adr-human-approval-workflow-step.md` §8). O inbox pull calculava a idade do contato a partir de `queued_at_ms` (o score do sorted set), que é **reordenado a cada re-enfileiramento** (devolução via `work_task_release`, re-rota no drain) → a espera exibida **zerava** quando uma tarefa voltava à fila. Fix: carimbar o **primeiro** enqueue e ancorar a idade nele.

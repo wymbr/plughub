@@ -69,6 +69,22 @@ class Settings(BaseSettings):
     # JWT HS256 secret used to validate customer tokens.
     # In production, override via PLUGHUB_JWT_SECRET env var.
     jwt_secret:                 str = "changeme_32chars_webchat_secret!"
+
+    # ── Auth-api USER JWT (module_config ABAC) — standardized name ────────────
+    # Must match PLUGHUB_AUTH_JWT_SECRET used by auth-api (same var analytics-api
+    # consumes). Used to verify the approver's JWT on internal approval resume (A5)
+    # → possessed-grade attribution + ABAC approvals.decide. Empty = internal
+    # verification disabled (resume falls back to the external/claimed path).
+    auth_jwt_secret:            str = ""
+
+    # ── Routing Engine HTTP API (Frente 1 pull) ───────────────────────────────
+    # Used to read the claim-lease holder for the A5 caller==claimant check on the
+    # internal approval resume (the arbiter owns the lease — the gateway never reads
+    # the routing Redis directly). Port = ROUTING_HTTP_PORT on the routing-engine
+    # (default 3550). Set via PLUGHUB_ROUTING_ENGINE_URL.
+    routing_engine_url:         str = "http://routing-engine:3550"
+    # Admin token for the routing HTTP API (matches ROUTING_ADMIN_TOKEN on that side).
+    routing_admin_token:        str = ""
     # How long the server waits for conn.authenticate after conn.hello.
     ws_auth_timeout_s:          int = 30
 

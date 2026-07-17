@@ -767,6 +767,8 @@ export const AgentAssistPage: React.FC = () => {
               <ApprovalPanel
                 sessionId={selected.sessionId}
                 tenantId={session?.tenantId ?? ""}
+                poolId={approvalPoolId}
+                instanceId={session?.userId ? `human-${session.userId}` : ""}
                 snapshot={approvalSnapshot as never}
                 onResolved={refreshSupervisorState}
               />

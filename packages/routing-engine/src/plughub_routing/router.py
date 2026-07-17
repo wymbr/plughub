@@ -575,6 +575,27 @@ class Router:
         # Config API namespace `routing` (cache routing_config); default 180.
         return int(routing_config.get("claim_lease_s", 180))
 
+    async def work_task_holder(
+        self,
+        tenant_id:  str,
+        pool_id:    str,
+        session_id: str,
+    ) -> dict:
+        """
+        A5 — leitura da lease do claim (holder) pelo ÁRBITRO. O ingress de aprovação
+        (channel-gateway) usa isto para o check caller==claimant no resume interno, sem
+        ler o Redis do routing direto (invariante do árbitro único). Retorna
+        {found, instance_id?, claimed_at?}.
+        """
+        lease = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
+        if not lease:
+            return {"found": False}
+        return {
+            "found":       True,
+            "instance_id": lease.get("instance_id"),
+            "claimed_at":  lease.get("claimed_at"),
+        }
+
     async def work_task_claim(
         self,
         tenant_id:     str,

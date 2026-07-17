@@ -8,7 +8,7 @@
 import { z } from "zod"
 import { SessionIdSchema, ParticipantRoleSchema, ChannelSchema, MediumTypeSchema } from "./common"
 import { MessageContentSchema, MessageVisibilitySchema } from "./message"
-import { DataCategorySchema } from "./audit"
+import { DataCategorySchema, PrincipalTypeSchema, VerificationClassSchema } from "./audit"
 import { CustomerIdentitySchema, ParticipantSchema, SentimentEntrySchema } from "./session"
 
 // ─────────────────────────────────────────────
@@ -97,6 +97,50 @@ const ChannelTransitionedPayloadSchema = z.object({
   reason:        z.string().optional(),
 })
 
+// ─────────────────────────────────────────────
+// A5 — Aprovação: bloco de auditoria de decisão no payload de `message`
+// (ADR docs/adr/adr-human-approval-workflow-step.md §9). NÃO é StreamEventType
+// novo — a decisão é uma mensagem agents_only e o rastro estruturado vive aqui,
+// reusando transcript/HistoricoTab + masking content/original_content.
+// ─────────────────────────────────────────────
+
+/** Edição de um campo do pacote de aprovação: valor ANTES (pré-preenchido) → DEPOIS. */
+export const ApprovalFieldEditSchema = z.object({
+  field:  z.string(),
+  /** Valor antes da edição (pré-preenchimento do form). null = campo ausente/vazio. */
+  before: z.string().nullable(),
+  /** Valor após a edição. null = limpo. Campos sensíveis chegam já mascarados. */
+  after:  z.string().nullable(),
+})
+export type ApprovalFieldEdit = z.infer<typeof ApprovalFieldEditSchema>
+
+/**
+ * ApprovalDecisionMeta — rastro append-only da decisão de aprovação (A5).
+ * Anexado a um evento `message` com visibility "agents_only" e autor = o aprovador
+ * (participante), injetado no escopo do segmento. Ver ADR §9 (D-A5.1 + §9.5).
+ */
+export const ApprovalDecisionMetaSchema = z.object({
+  /** Decisão escolhida (id da opção `decisions[]`) — o ROTEAMENTO fica no `choice` do workflow. */
+  choice:             z.string(),
+  /** Diff antes→depois das edições de campo do pacote. */
+  edits:              z.array(ApprovalFieldEditSchema).default([]),
+  /** Tipo do principal que decidiu (human|agent|system). */
+  principal_type:     PrincipalTypeSchema,
+  /** Id do principal na sua fonte nativa (user_id | instance_id | webhook credential id). */
+  decided_by:         z.string(),
+  /** Grau de confiança OBTIDO na identidade do autor. */
+  verification_class: VerificationClassSchema,
+  /** Grau MÍNIMO exigido pelo passo de aprovação (default seguro = possessed). */
+  threshold_in_force: VerificationClassSchema,
+  /** Refs de anexo que o aprovador visualizou (registro de acesso). */
+  attachments_viewed: z.array(z.string()).default([]),
+  /** Versão do deploy do workflow em vigor (auditar o gate) — ausente p/ fluxos não migrados. */
+  deploy_version:     z.string().optional(),
+  /** Momento da decisão (ISO-8601 UTC). */
+  decided_at:         z.string().datetime(),
+})
+export type ApprovalDecisionMeta = z.infer<typeof ApprovalDecisionMetaSchema>
+
 const MessagePayloadSchema = z.object({
   content:              MessageContentSchema,
   /** Conteúdo mascarado entregue aos agentes */
@@ -104,6 +148,11 @@ const MessagePayloadSchema = z.object({
   original_content:     MessageContentSchema.optional(), // LGPD: apenas roles autorizados
   masked:               z.boolean().default(false),
   masked_categories:    z.array(DataCategorySchema).default([]),
+  /**
+   * A5 — presente APENAS quando esta mensagem é uma DECISÃO de aprovação
+   * (agents_only). Ausente em mensagens normais. Ver ApprovalDecisionMetaSchema.
+   */
+  approval:             ApprovalDecisionMetaSchema.optional(),
 })
 
 const InteractionRequestPayloadSchema = z.object({

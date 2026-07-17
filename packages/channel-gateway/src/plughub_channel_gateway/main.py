@@ -37,6 +37,7 @@ from .channel_capability_registry import (
     select_channel,
 )
 from .config import get_settings, Settings
+from .auth import verify_user_jwt, abac_can, pool_in_scope, accessible_pools, bearer_from_header
 from .context_reader import ContextReader
 from .endpoint_resolver import resolve_pool
 from .outbound_consumer import OutboundConsumer
@@ -736,6 +737,12 @@ class WebhookResumeRequest(BaseModel):
     # Default "token" (explicit resume_token path). "identity" set by the cross-channel
     # reconnect-offer flow so session_resumed carries the provenance.
     resume_origin: str = "token"
+    # A5 — claimant binding for INTERNAL approval resume. The Console sends the pool of
+    # the approval task + its instance_id (`human-{userId}`); the ingress reads the claim
+    # lease (via the routing arbiter) and requires caller==claimant. Absent for external/
+    # system resumes (which stay on the credential/claimed path).
+    pool_id:     str | None = None
+    instance_id: str | None = None
 
 class WebhookDelegateRequest(BaseModel):
     tenant_id:         str
@@ -1193,8 +1200,71 @@ async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
     return {"session_id": session_id}
 
 
+def _resolve_approver_principal(request: Request, body: WebhookResumeRequest) -> dict | None:
+    """
+    A5 — resolve o principal AUTOR do resume + classe de confiança, a partir do header.
+
+    Header `Authorization: Bearer <jwt>` válido → aprovador HUMANO (possessed): verifica
+    assinatura (auth_jwt_secret) + ABAC approvals.decide + accessible_pools + a
+    auto-consistência instance==human-{sub}. O check de POSSE do claim (o caller detém a
+    lease) é feito no handle_resume via o árbitro (precisa do session_id). Ausente → None:
+    caminho externo/sistema (claimed), inalterado. Falha de verificação → HTTPException 403
+    (atribuir a decisão a quem não é o autor é pior que não atribuir).
+    """
+    token = bearer_from_header(request.headers.get("Authorization"))
+    if not token:
+        return None  # external / system path (claimed) — unchanged
+
+    settings = get_settings()
+    if not settings.auth_jwt_secret:
+        # Verificação desabilitada (segredo não wirado) → NÃO bloqueia e NÃO finge
+        # possessed: cai no caminho externo (claimed), com aviso (degradação não-silenciosa).
+        logging.getLogger(__name__).warning(
+            "A5: PLUGHUB_AUTH_JWT_SECRET não configurado — token do aprovador NÃO "
+            "verificado; resume tratado como externo/claimed",
+        )
+        return None
+    _log = logging.getLogger(__name__)
+    payload = verify_user_jwt(token, settings.auth_jwt_secret)
+    if payload is None:
+        _log.warning("A5 403 invalid_token: JWT não verificou com auth_jwt_secret (segredo não bate com o auth-api?)")
+        raise HTTPException(status_code=403, detail="approval: invalid or expired approver token")
+    if payload.get("tenant_id") and payload["tenant_id"] != body.tenant_id:
+        _log.warning("A5 403 tenant_mismatch: jwt=%s body=%s", payload.get("tenant_id"), body.tenant_id)
+        raise HTTPException(status_code=403, detail="approval: tenant mismatch")
+    # ABAC approvals.decide — admin/supervisor bypassam por role (mesma semântica do
+    # passesAbac da plataforma; contas elevadas não carregam module_config por campo).
+    roles = payload.get("roles")
+    roles = roles if isinstance(roles, list) else []
+    is_elevated = ("admin" in roles) or ("supervisor" in roles)
+    # Elevados (admin/supervisor) têm autoridade sobre todos os pools e não carregam
+    # module_config por campo → bypassam ABAC decide E pool-scope (o pool-scope já foi
+    # exercido no inbox/claim; re-exigir aqui cria assimetria claim↔resume). Operador
+    # comum segue barrado por capacidade + pool.
+    if not is_elevated:
+        if not abac_can(payload, "approvals", "decide", "write_only"):
+            _log.warning("A5 403 abac: roles=%s sem approvals.decide", roles)
+            raise HTTPException(status_code=403, detail="approval: missing approvals.decide")
+        if body.pool_id and not pool_in_scope(payload, body.pool_id):
+            _log.warning("A5 403 pool_scope: pool=%s accessible_pools=%s", body.pool_id, accessible_pools(payload))
+            raise HTTPException(status_code=403, detail="approval: pool not accessible")
+
+    sub = str(payload.get("sub") or "")
+    # Auto-consistência: a instância que o Console envia deve pertencer ao usuário do JWT.
+    if body.instance_id and body.instance_id != f"human-{sub}":
+        _log.warning("A5 403 instance_mismatch: instance_id=%s esperado=human-%s", body.instance_id, sub)
+        raise HTTPException(status_code=403, detail="approval: instance/identity mismatch")
+    _log.info("A5 approver OK: sub=%s roles=%s pool=%s instance=%s", sub, roles, body.pool_id, body.instance_id)
+
+    return {
+        "principal_type":     "human",
+        "decided_by":         sub,
+        "verification_class": "possessed",
+    }
+
+
 @app.post("/v1/channels/webhook/resume/{resume_token}", status_code=200)
-async def webhook_resume(resume_token: str, body: WebhookResumeRequest) -> dict:
+async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request: Request) -> dict:
     """
     Resume a suspended webhook session using the resume_token generated at suspend time.
 
@@ -1202,18 +1272,31 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest) -> dict:
     After resume, the routing engine reallocates a skill-flow instance to continue
     the workflow from the step that suspended.
 
+    A5 — when an `Authorization: Bearer` header is present, the caller is a HUMAN
+    approver: the principal is verified (JWT + ABAC + claimant) and threaded into
+    handle_resume so the decision is authored/audited as the approver. Absent header
+    → external/system (claimed), unchanged.
+
     Returns: { session_id }
-    Raises 404 if the token is unknown or expired.
+    Raises 404 if the token is unknown/expired; 403 if approver verification fails.
     """
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
-    session_id = await _webhook_adapter.handle_resume(
-        resume_token  = resume_token,
-        tenant_id     = body.tenant_id,
-        payload       = body.payload,
-        resume_origin = body.resume_origin,
-    )
+    approver = _resolve_approver_principal(request, body)
+
+    try:
+        session_id = await _webhook_adapter.handle_resume(
+            resume_token      = resume_token,
+            tenant_id         = body.tenant_id,
+            payload           = body.payload,
+            resume_origin     = body.resume_origin,
+            approver          = approver,
+            claim_pool_id     = body.pool_id,
+            claim_instance_id = body.instance_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
     if session_id is None:
         raise HTTPException(
             status_code=404,

@@ -44,6 +44,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -59,6 +60,32 @@ from ..identity import IdentityIndex, OtpService, PendingEntry
 from .base import ChannelAdapter
 
 logger = logging.getLogger("plughub.channel-gateway.webhook")
+
+# A5.4 — masking net-pass de PII em valores de edição de aprovação (defesa em
+# profundidade; o mecanismo primário é o `masked` field-level do DialogForm, que
+# nem chega ao servidor). Mesmos alvos das DEFAULT_MASKING_RULES: CPF, cartão,
+# e-mail, telefone BR. Nunca gravar PII crua na stream/log.
+_PII_MASKERS: list[tuple[re.Pattern, Any]] = [
+    (re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
+     lambda m: "***.***.***-" + m.group(0)[-2:]),
+    (re.compile(r"\b(?:\d[ -]?){13,16}\b"),
+     lambda m: "**** " + re.sub(r"\D", "", m.group(0))[-4:]),
+    (re.compile(r"\b[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
+     lambda m: "***@" + m.group(0).split("@")[-1]),
+    (re.compile(r"\b(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
+     lambda m: "***" + re.sub(r"\D", "", m.group(0))[-4:]),
+]
+
+
+def _mask_pii(value: Any) -> str | None:
+    """Mascara PII formatada num valor (net-pass). None permanece None."""
+    if value is None:
+        return None
+    s = str(value)
+    for pat, repl in _PII_MASKERS:
+        s = pat.sub(repl, s)
+    return s
+
 
 # Trigger types understood by the webhook adapter
 TriggerType = Literal["api", "webhook", "task", "scheduled", "yaml_auto"]
@@ -380,12 +407,149 @@ class WebhookAdapter(ChannelAdapter):
     # Resume — wake a suspended session
     # ──────────────────────────────────────────────────────────────────────────
 
+    async def _routing_lease_holder(
+        self, tenant_id: str, pool_id: str, session_id: str,
+    ) -> dict | None:
+        """
+        A5 — consulta o holder da claim lease no ÁRBITRO (routing HTTP API), em vez de
+        ler o Redis do routing direto (invariante do árbitro único). Retorna
+        {instance_id, claimed_at} quando há lease; None (degradação graciosa) caso
+        contrário ou em falha de rede.
+        """
+        if not pool_id:
+            return None
+        import httpx
+        base = (getattr(self._settings, "routing_engine_url", "") or "").rstrip("/")
+        if not base:
+            return None
+        headers: dict[str, str] = {}
+        tok = getattr(self._settings, "routing_admin_token", "")
+        if tok:
+            headers["X-Admin-Token"] = tok
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.post(
+                    f"{base}/v1/work_queue/holder",
+                    json={"tenant_id": tenant_id, "pool_id": pool_id, "session_id": session_id},
+                    headers=headers,
+                )
+            if r.status_code != 200:
+                logger.warning("A5 lease holder lookup HTTP %s", r.status_code)
+                return None
+            data = r.json()
+            return data if data.get("found") else None
+        except Exception as exc:
+            logger.warning("A5 lease holder lookup failed: %s", exc)
+            return None
+
+    async def _write_approval_decision(
+        self,
+        tenant_id:         str,
+        session_id:        str,
+        payload:           dict[str, Any],
+        approver:          dict[str, Any] | None,
+        claim_instance_id: str | None,
+    ) -> None:
+        """
+        A5.4 — grava a DECISÃO de aprovação como evento `message` (agents_only) na stream
+        canônica, com o bloco ApprovalDecisionMeta no payload. Autor = o aprovador
+        (internal/possessed) ou a credencial externa (system/claimed). Valores de `edits`
+        mascarados (net-pass). Best-effort: falha não interrompe o resume.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if approver:
+            principal_type = str(approver.get("principal_type", "human"))
+            decided_by     = str(approver.get("decided_by", ""))
+            verification   = str(approver.get("verification_class", "possessed"))
+            author_id      = claim_instance_id or (f"human-{decided_by}" if decided_by else "approver")
+            author_role    = "specialist"
+        else:
+            principal_type = "system"
+            decided_by     = str(payload.get("source") or "external")
+            verification   = "claimed"
+            author_id      = "webhook_adapter"
+            author_role    = "system"
+
+        # threshold_in_force — declarado pelo passo de aprovação do workflow (A5.5, via
+        # ctx tag session.approval_threshold). Default SEGURO = possessed na ausência.
+        threshold = await self._read_ctx_tag(
+            tenant_id, session_id, "session.approval_threshold"
+        ) or "possessed"
+        deploy_version = await self._read_ctx_tag(
+            tenant_id, session_id, "session.deploy_version"
+        )
+        # Escopo do segmento do aprovador (single-source). Ausente → "" (v1); o bridge
+        # pode carimbar session.approval_segment_id ao anexar o humano (refinamento).
+        segment_id = await self._read_ctx_tag(
+            tenant_id, session_id, "session.approval_segment_id"
+        ) or ""
+
+        raw_edits = payload.get("field_edits") or []
+        edits: list[dict[str, Any]] = []
+        for e in raw_edits:
+            if isinstance(e, dict):
+                edits.append({
+                    "field":  str(e.get("field", "")),
+                    "before": _mask_pii(e.get("before")),
+                    "after":  _mask_pii(e.get("after")),
+                })
+
+        attachments = payload.get("attachments_viewed")
+        attachments = [str(a) for a in attachments] if isinstance(attachments, list) else []
+        choice = str(payload.get("choice") or "")
+
+        approval_block: dict[str, Any] = {
+            "choice":             choice,
+            "edits":              edits,
+            "principal_type":     principal_type,
+            "decided_by":         decided_by,
+            "verification_class": verification,
+            "threshold_in_force": threshold,
+            "attachments_viewed": attachments,
+            "decided_at":         now_iso,
+        }
+        if deploy_version:
+            approval_block["deploy_version"] = deploy_version
+
+        message_payload = {
+            "content":           {"type": "text", "text": f"Aprovação: {choice}", "metadata": {}},
+            "masked":            True,
+            "masked_categories": [],
+            "approval":          approval_block,
+        }
+
+        try:
+            await self._redis.xadd(
+                f"session:{session_id}:stream",
+                {
+                    "event_id":    str(uuid.uuid4()),
+                    "type":        "message",
+                    "timestamp":   now_iso,
+                    "author_id":   author_id,
+                    "author_role": author_role,
+                    "visibility":  json.dumps("agents_only"),
+                    "segment_id":  segment_id,
+                    "payload":     json.dumps(message_payload),
+                },
+                maxlen=1000,
+            )
+            logger.info(
+                "A5.4: approval decision recorded session=%s choice=%s principal=%s class=%s",
+                session_id, choice, principal_type, verification,
+            )
+        except Exception as exc:
+            logger.warning("A5.4: could not write approval decision message: %s", exc)
+
     async def handle_resume(
         self,
         resume_token:  str,
         tenant_id:     str,
         payload:       dict[str, Any] | None = None,
         resume_origin: str = "token",
+        approver:          dict[str, Any] | None = None,
+        claim_pool_id:     str | None = None,
+        claim_instance_id: str | None = None,
     ) -> str | None:
         """
         Resolve a resume_token to a session_id and publish a session_resumed event.
@@ -429,6 +593,42 @@ class WebhookAdapter(ChannelAdapter):
         session_id = parts[0]
         step_id    = parts[1]
 
+        # ── A5 — caller==claimant (apenas no caminho do aprovador interno) ──────
+        # A instância do aprovador precisa DETER a claim lease desta sessão. Leitura
+        # via o ÁRBITRO (nunca o Redis do routing direto). Found+mismatch = forja →
+        # PermissionError (rota → 403). Lease ausente = claim de TTL curto pode ter
+        # expirado enquanto o humano ainda detém a sessão → não bloqueia (instance==
+        # human-{sub} + posse do resume_token já amarram o caller).
+        if approver is not None and claim_instance_id:
+            holder  = await self._routing_lease_holder(
+                tenant_id, claim_pool_id or "", session_id,
+            )
+            held_by = (holder or {}).get("instance_id")
+            if held_by and held_by != claim_instance_id:
+                raise PermissionError(
+                    "approval: caller does not hold the claim on this session"
+                )
+            if held_by is None:
+                logger.info(
+                    "A5: claim lease absent for session=%s (short-TTL); relying on "
+                    "instance/identity match", session_id,
+                )
+
+        # A5.5 — expõe a classe de confiança do AUTOR no payload do resume, para o
+        # `choice` do workflow gatear ($.pipeline_state.<delegate>.verification_class
+        # contra o limiar declarado no passo). Só em resumes de aprovação; sem approver
+        # (externo/sistema) → claimed. O limiar (session.approval_threshold) é convenção
+        # de autoria no context do delegate; o default seguro (possessed) mora no A5.4.
+        if approver is not None or isinstance(payload.get("field_edits"), list):
+            payload.setdefault(
+                "verification_class",
+                approver.get("verification_class", "possessed") if approver else "claimed",
+            )
+            payload.setdefault(
+                "principal_type",
+                approver.get("principal_type", "human") if approver else "system",
+            )
+
         now_iso = datetime.now(timezone.utc).isoformat()
 
         # ── Arc 19 Fase B: write session_resumed to canonical stream ─────────
@@ -466,6 +666,15 @@ class WebhookAdapter(ChannelAdapter):
             logger.warning(
                 "Could not write session_resumed to stream: session=%s — %s",
                 session_id, _exc,
+            )
+
+        # ── A5.4 — audita a DECISÃO de aprovação como `message` agents_only ──────
+        # Só quando o resume carrega uma decisão de aprovação (field_edits presente —
+        # enviado pelo ApprovalPanel). Autor = aprovador (possessed) ou credencial
+        # externa (claimed). Best-effort: não interrompe o resume.
+        if isinstance(payload.get("field_edits"), list):
+            await self._write_approval_decision(
+                tenant_id, session_id, payload, approver, claim_instance_id,
             )
 
         # Resolve the session's REAL channel + pool — a resume must NOT redefine them.

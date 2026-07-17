@@ -36,6 +36,8 @@ export {
   DataCategorySchema,
   AuditPolicySchema,
   AuditContextSchema,
+  PrincipalTypeSchema,
+  VerificationClassSchema,
   MaskingRuleSchema,
   MaskingConfigSchema,
   MaskedResultSchema,
@@ -53,6 +55,8 @@ export type {
   DataCategory,
   AuditPolicy,
   AuditContext,
+  PrincipalType,
+  VerificationClass,
   MaskingRule,
   MaskingConfig,
   MaskedResult,
@@ -110,12 +114,17 @@ export {
   StreamAuthorSchema,
   StreamEventSchema,
   StreamPayloads,
+  // A5 — approval decision audit block on the `message` payload
+  ApprovalFieldEditSchema,
+  ApprovalDecisionMetaSchema,
 } from "./stream"
 
 export type {
   StreamEventType,
   StreamAuthor,
   StreamEvent,
+  ApprovalFieldEdit,
+  ApprovalDecisionMeta,
 } from "./stream"
 
 // ── v2: Channel Gateway ──────────────────────

@@ -411,6 +411,21 @@
       "openHint":    "Open in Process view",
       "thisSession": "this task",
       "boundary":    "other process"
+    },
+    "approval": {
+      "title":             "Approval decisions",
+      "required":          "required",
+      "edits":             "Edits",
+      "attachmentsViewed": "Attachments viewed",
+      "class": {
+        "possessed": "verified possession",
+        "claimed":   "unverified"
+      },
+      "principal": {
+        "human":  "human",
+        "agent":  "AI agent",
+        "system": "system"
+      }
     }
   },
 

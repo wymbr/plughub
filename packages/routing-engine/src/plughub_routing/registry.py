@@ -983,6 +983,19 @@ class InstanceRegistry:
         """Frente 1 (pull): remove a lease do claim (release/auto-release)."""
         await self._redis.delete(_claim_lease_key(tenant_id, pool_id, session_id))
 
+    async def read_claim_lease(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> dict | None:
+        """Frente 1 (pull) / A5: lê a lease do claim (holder). None se ausente/expirada."""
+        raw = await self._redis.get(_claim_lease_key(tenant_id, pool_id, session_id))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw if isinstance(raw, str) else raw.decode())
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     async def get_full_queued_contact(
         self, tenant_id: str, session_id: str
     ) -> dict | None:
