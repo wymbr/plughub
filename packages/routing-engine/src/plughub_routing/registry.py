@@ -31,6 +31,7 @@ import redis.asyncio as aioredis
 
 from .models import AgentInstance, InstanceMeta, PoolConfig, QueuedContact, RoutingExpression
 from .config import get_settings
+from .mute_queue import first_queued_key, _TTL_S as _FIRST_QUEUED_TTL_S
 
 logger = logging.getLogger("plughub.routing.registry")
 
@@ -894,6 +895,19 @@ class InstanceRegistry:
             _queue_contact_key(tenant_id, session_id),
             json.dumps(contact_data),
             ex=ttl,
+        )
+        # P3 — wall-clock da PRIMEIRA vez na fila (NX: re-enfileiramentos — ex.:
+        # devolução via work_task_release, re-rota no drain — NÃO sobrescrevem).
+        # O score do sorted set (queued_at_ms) é reordenado no re-enqueue; este
+        # carimbo preserva a espera REAL do contato para o display do inbox
+        # (listQueue lê e cai em queued_at_ms se ausente/expirado). Mesmo padrão/
+        # chave da fila muda (mute_queue.mark_mute_queued). TTL 7d; UUID por sessão
+        # → sem colisão, limpeza por TTL (não precisa delete no claim/resolve).
+        await self._redis.set(
+            first_queued_key(tenant_id, session_id),
+            str(int(queued_at_ms)),
+            nx=True,
+            ex=_FIRST_QUEUED_TTL_S,
         )
         # Patch queue_length in the pool snapshot in-place so the Monitor
         # tile reflects the new queue position immediately, without waiting

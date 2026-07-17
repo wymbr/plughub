@@ -23,6 +23,9 @@ interface QueueContact {
   summary:      string | null
   queued_at_ms: number | null
   age_ms:       number | null
+  // P3 — primeiro enqueue (preservado no re-enfileiramento). A idade exibida
+  // deriva dele; queued_at_ms reseta na devolução à fila e mentiria a espera.
+  first_queued_ms: number | null
   // Bug B fix: carried back from the queued contact so the claim attaches the
   // human to the caller's conference (not as a bare primary). Null/"" = none.
   conference_id: string | null
@@ -49,6 +52,9 @@ interface PullInboxPanelProps {
   onPreviewInvalid?: () => void
   /** Intervalo de polling em ms (default 4000). */
   pollMs?:      number
+  /** P4 — bump deste número força um refresh imediato (ex.: logo após um
+   * release/"Return to queue", sem esperar o próximo poll). */
+  refreshSignal?: number
 }
 
 function fmtAge(ms: number | null): string {
@@ -71,6 +77,7 @@ function slaColor(ageMs: number | null, slaMs: number | null | undefined): strin
 export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   pullPools, instanceId, poolSla, claimDisabled, claimDisabledReason,
   onClaimed, onPreview, previewSessionId, onPreviewInvalid, pollMs = 4000,
+  refreshSignal,
 }) => {
   const { t } = useTranslation("agentAssist")
   const [contacts, setContacts] = useState<QueueContact[]>([])
@@ -97,7 +104,10 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
     if (pullPools.length === 0) { setContacts([]); return }
     try {
       const url = `/api/work_queue/list?pools=${encodeURIComponent(pullPools.join(","))}`
-      const res = await fetch(url)
+      // Fila é estado tempo-real; o Express gera ETag no res.json() e o browser
+      // devolve 304 (corpo em cache) — o que faz o refresh imediato pós-release
+      // (P4) ler a lista velha. no-store força 200 com dados frescos sempre.
+      const res = await fetch(url, { cache: "no-store" })
       if (!res.ok) { setError(`HTTP ${res.status}`); return }
       const data = await res.json() as { contacts?: QueueContact[] }
       setContacts(data.contacts ?? [])
@@ -113,6 +123,14 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
     return () => clearInterval(id)
   }, [refresh, pollMs])
 
+  // P4 — refresh imediato quando o pai sinaliza (ex.: pós-release), sem esperar
+  // o poll. Ignora o mount inicial (o efeito de poll acima já faz o 1º fetch).
+  const didMountRef = useRef(false)
+  useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return }
+    refresh()
+  }, [refreshSignal, refresh])
+
   // Auto-clear do preview: se o contato previewado SAIU da fila (estava e não
   // está mais — claim de outro agente ou timeout), avisa o pai para limpar.
   const prevIdsRef = useRef<Set<string>>(new Set())
@@ -125,7 +143,10 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   }, [contacts, previewSessionId, onPreviewInvalid])
 
   const ageOf = useCallback((c: QueueContact): number | null => {
-    if (c.queued_at_ms != null) return Math.max(0, nowMs - c.queued_at_ms)
+    // P3 — espera REAL = desde o primeiro enqueue (preservado no re-enfileiramento);
+    // queued_at_ms reseta na devolução à fila, então só serve de fallback.
+    const base = c.first_queued_ms ?? c.queued_at_ms
+    if (base != null) return Math.max(0, nowMs - base)
     return c.age_ms
   }, [nowMs])
 

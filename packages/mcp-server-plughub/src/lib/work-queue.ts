@@ -20,6 +20,9 @@ export interface QueueContact {
   summary:      string | null
   queued_at_ms: number | null
   age_ms:       number | null
+  // P3 — epoch ms do PRIMEIRO enqueue (preservado através de re-enfileiramentos).
+  // A idade (age_ms) é derivada dele quando presente; senão cai em queued_at_ms.
+  first_queued_ms: number | null
   // Bug B fix: the delegate step enqueues the approval work-item WITH a
   // conference_id (the conference the caller opened on the session). The claim
   // MUST carry it back so work_task_claim attaches the human as the conference
@@ -49,7 +52,15 @@ export async function listQueue(
         const raw = await redis.get(keys.queueContact(tenantId, session_id))
         if (raw) contact = JSON.parse(raw)
       } catch { /* ignore */ }
+      // P3 — a idade real vem do primeiro enqueue (preservado no re-enfileiramento);
+      // fallback para o score do sorted set (queued_at_ms, reordenado no re-enqueue).
+      let firstQueuedMs = 0
+      try {
+        const fq = await redis.get(keys.firstQueued(tenantId, session_id))
+        if (fq) firstQueuedMs = Number(fq) || 0
+      } catch { /* ignore */ }
       const queuedAtMs = Number(contact?.["queued_at_ms"]) || 0
+      const ageBaseMs  = firstQueuedMs || queuedAtMs
       out.push({
         session_id,
         pool_id,
@@ -57,7 +68,8 @@ export async function listQueue(
         channel:      (contact?.["channel"] as string) ?? null,
         summary:      (contact?.["summary"] as string) ?? (contact?.["title"] as string) ?? null,
         queued_at_ms: queuedAtMs || null,
-        age_ms:       queuedAtMs ? Math.max(nowMs - queuedAtMs, 0) : null,
+        age_ms:       ageBaseMs ? Math.max(nowMs - ageBaseMs, 0) : null,
+        first_queued_ms: firstQueuedMs || null,
         conference_id: (contact?.["conference_id"] as string) ?? null,
       })
     }

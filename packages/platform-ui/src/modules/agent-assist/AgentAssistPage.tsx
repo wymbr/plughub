@@ -181,6 +181,8 @@ export const AgentAssistPage: React.FC = () => {
   // occupant is "{session}::" and the re-claim (return-to-queue) hits the bridge
   // dedup and never re-attaches.
   const [previewConferenceId, setPreviewConferenceId] = useState<string>("");
+  // P4 — bump força o PullInboxPanel a refazer o fetch na hora (ex.: pós-release).
+  const [inboxRefreshSignal, setInboxRefreshSignal] = useState<number>(0);
   const [previewMessages,  setPreviewMessages]  = useState<ChatMessage[]>([]);
   const { state: previewSupervisorState } = useSupervisorState(previewSessionId, lastWsEvent);
 
@@ -567,6 +569,7 @@ export const AgentAssistPage: React.FC = () => {
       });
     } catch { /* non-fatal */ }
     dropApprovalContact(sid);
+    setInboxRefreshSignal((n) => n + 1);   // P4 — inbox mostra a tarefa devolvida na hora
   }, [selected, approvalPoolId, session, dropApprovalContact]);
 
   // AI participants from supervisor state
@@ -733,6 +736,7 @@ export const AgentAssistPage: React.FC = () => {
                     previewSessionId={previewSessionId}
                     onPreview={handlePreviewQueueContact}
                     onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); setPreviewConferenceId(""); }}
+                    refreshSignal={inboxRefreshSignal}
                     onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
                   />
                 </div>

@@ -48,6 +48,11 @@ export const keys = {
   queueContact: (tenantId: string, sessionId: string) =>
     `${tenantId}:queue_contact:${sessionId}`,
 
+  /** P3 — epoch ms do PRIMEIRO enqueue (NX+TTL, escrito pelo Routing Engine);
+   * preserva a espera real do contato através de re-enfileiramentos. */
+  firstQueued: (tenantId: string, sessionId: string) =>
+    `${tenantId}:queue:first_queued:${sessionId}`,
+
   /** Frente 1 (pull): lease do claim — {instance_id, claimed_at} */
   claimLease: (tenantId: string, poolId: string, sessionId: string) =>
     `${tenantId}:pool:${poolId}:claim:${sessionId}`,

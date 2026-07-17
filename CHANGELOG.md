@@ -2,6 +2,18 @@
 
 ---
 
+## Fila pull — P3: idade preservada no re-enfileiramento (`first_queued`) (2026-07-17)
+
+Item **P3** do pass de aprovação-conferência (ADR `docs/adr/adr-human-approval-workflow-step.md` §8). O inbox pull calculava a idade do contato a partir de `queued_at_ms` (o score do sorted set), que é **reordenado a cada re-enfileiramento** (devolução via `work_task_release`, re-rota no drain) → a espera exibida **zerava** quando uma tarefa voltava à fila. Fix: carimbar o **primeiro** enqueue e ancorar a idade nele.
+
+- `routing-engine/registry.py` `add_queued_contact`: `SET {t}:queue:first_queued:{sid}` **NX**+TTL 7d (reusa `first_queued_key` + `_TTL_S` do `mute_queue` — mesma chave/semântica da fila muda; NX ⇒ re-enfileiramentos não sobrescrevem). Limpeza por TTL (UUID por sessão, sem colisão).
+- `mcp-server-plughub`: `keys.firstQueued` (infra/redis) + `listQueue` lê o carimbo, deriva `age_ms` dele (fallback `queued_at_ms`) e devolve `first_queued_ms`.
+- `platform-ui/PullInboxPanel`: `QueueContact.first_queued_ms` + `ageOf` ancora nele (`first_queued_ms ?? queued_at_ms`) — o cliente recomputava de `queued_at_ms`, que era exatamente o valor que resetava.
+
+**Validado (2026-07-17):** idade cresce continuamente através de claim→return (47s→1m14s); e no teste decisivo, forçando `ZADD` com score novo (+344s) o `first_queued` fica intacto e o inbox segue mostrando **6m8s** (ancorado no primeiro enqueue), sem cair a ~0. **Deixado fora (opcional no ADR):** usar `first_queued` no **score** da fila p/ fairness — o scorer segue em `queued_at_ms`.
+
+---
+
 ## Aprovação-conferência (pull) — fix P1+P2: propagação do `conference_id` no claim (2026-07-17)
 
 Fecha os itens abertos da validação de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md` §7/§8, **P1** vaza capacidade + **P2** re-claim não re-anexa). **Causa-raiz única** (a hipótese original de occupant-mismatch estava **falseada** — `release_instance` libera por prefixo `{session}::`, que casaria): o **`conference_id` era descartado em toda a cadeia de claim do pull**, então o aprovador humano era anexado como *primary* (fora da conferência do `delegate`). Isso quebrava (a) a re-anexação no re-claim — `conversations.routed` sem conf cai no dedup do bridge (`session:{id}:human_agent` persiste no return-to-queue) — e (b) o release no resolve: sem ser especialista de conferência, o teardown do resume não emitia o agent_done do humano → a vaga nunca soltava (`{t}:instance:human-…:sessions` acumulava +1/aprovação).
