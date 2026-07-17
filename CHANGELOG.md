@@ -2,6 +2,21 @@
 
 ---
 
+## Aprovação-conferência (pull) — fix P1+P2: propagação do `conference_id` no claim (2026-07-17)
+
+Fecha os itens abertos da validação de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md` §7/§8, **P1** vaza capacidade + **P2** re-claim não re-anexa). **Causa-raiz única** (a hipótese original de occupant-mismatch estava **falseada** — `release_instance` libera por prefixo `{session}::`, que casaria): o **`conference_id` era descartado em toda a cadeia de claim do pull**, então o aprovador humano era anexado como *primary* (fora da conferência do `delegate`). Isso quebrava (a) a re-anexação no re-claim — `conversations.routed` sem conf cai no dedup do bridge (`session:{id}:human_agent` persiste no return-to-queue) — e (b) o release no resolve: sem ser especialista de conferência, o teardown do resume não emitia o agent_done do humano → a vaga nunca soltava (`{t}:instance:human-…:sessions` acumulava +1/aprovação).
+
+**Fix (um só, 4 pontos):** propagar `conference_id` do queue contact → claim → routed:
+- `mcp-server-plughub/lib/work-queue.ts`: `QueueContact.conference_id` + populado do JSON em `listQueue` (a rota `/api/work_queue/claim` já repassava `body.conference_id`).
+- `routing-engine/router.py` `work_task_claim`: `RoutingResult` passou a carregar `conference_id or None` + `channel_identity` (o occupant já reservava com conf via `claim_instance`; faltava o evento `conversations.routed`).
+- `platform-ui`: **os dois** call sites de claim passaram a enviar `conference_id` — `PullInboxPanel.handlePull` (botão "Pull" da linha) **e** `AgentAssistPage.claimPreviewContact` (botão "Claim (Pull)" do preview central), threadeado via novo estado `previewConferenceId` + `onPreview(session,pool,conf)`.
+
+**Efeito:** o humano vira especialista de conferência → o `conversations.routed` com conf é isento do dedup do bridge (re-anexa no re-claim, **P2**) → o teardown do resolve emite `remove_conversation` na instância humana e libera a vaga (**P1**). **Bug A (release explícito no resolve) descartado — desnecessário.**
+
+**Validado (2026-07-17):** occupant vira `session::conf`; gate P1 batido por API (3 ciclos claim→decide, `SCARD=0`); E2E completo pela UI (linha → preview → **Claim** → **Return to queue** → **re-claim re-anexa** → **Aprovar** → `SCARD` vazio). **Nota de deploy:** `platform-ui` é imagem buildada (sem HMR) — mudança de UI exige `docker compose build --no-cache platform-ui`. **Restante do pass (ADR §8):** P3 (`first_queued`), P4 (refresh imediato pós-release), A5 (auditoria de decisão/edições).
+
+---
+
 ## Aprovação humana como passo de workflow — v1 A1–A4 (2026-07-16)
 
 Implementa o núcleo da fila de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md`), caso âncora = **gate de promoção de deploy**. Reusa 100% da máquina de contato/pull existente — sem concorrência nova, sem primitiva nova (o `delegate`/`workflow_resume` já entregam o retorno em `$.pipeline_state.<delegate>`).

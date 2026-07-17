@@ -23,6 +23,9 @@ interface QueueContact {
   summary:      string | null
   queued_at_ms: number | null
   age_ms:       number | null
+  // Bug B fix: carried back from the queued contact so the claim attaches the
+  // human to the caller's conference (not as a bare primary). Null/"" = none.
+  conference_id: string | null
 }
 
 interface PullInboxPanelProps {
@@ -39,7 +42,7 @@ interface PullInboxPanelProps {
   /** Chamado após um claim bem-sucedido (sessionId) — ex.: selecionar na lista. */
   onClaimed?:   (sessionId: string) => void
   /** F2b-2b — clicar na linha abre o preview read-only (sem claim). */
-  onPreview?:   (sessionId: string, poolId: string) => void
+  onPreview?:   (sessionId: string, poolId: string, conferenceId: string) => void
   /** Sessão em preview no momento (highlight da linha). */
   previewSessionId?: string | null
   /** F2b-2b-2 — a sessão em preview saiu da fila (claim de outro / timeout). */
@@ -132,7 +135,13 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
       const res = await fetch(`/api/work_queue/claim/${encodeURIComponent(c.session_id)}`, {
         method:  "POST",
         headers: { "content-type": "application/json" },
-        body:    JSON.stringify({ pool_id: c.pool_id, instance_id: instanceId }),
+        body:    JSON.stringify({
+          pool_id:       c.pool_id,
+          instance_id:   instanceId,
+          // Bug B fix: forward the conference the caller opened so the routed
+          // event attaches the human as the conference participant.
+          conference_id: c.conference_id ?? "",
+        }),
       })
       const result = await res.json() as { claimed?: boolean; reason?: string }
       if (result.claimed) {
@@ -208,7 +217,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                         >
                           <button
                             type="button"
-                            onClick={() => onPreview?.(c.session_id, c.pool_id)}
+                            onClick={() => onPreview?.(c.session_id, c.pool_id, c.conference_id ?? "")}
                             className="min-w-0 flex-1 text-left"
                             title={t("pullInbox.previewHint", { defaultValue: "Ver contexto antes de atender" })}
                           >

@@ -20,6 +20,13 @@ export interface QueueContact {
   summary:      string | null
   queued_at_ms: number | null
   age_ms:       number | null
+  // Bug B fix: the delegate step enqueues the approval work-item WITH a
+  // conference_id (the conference the caller opened on the session). The claim
+  // MUST carry it back so work_task_claim attaches the human as the conference
+  // participant (not a bare primary) — otherwise the occupant becomes
+  // "{session}::" (empty conf), the routed event omits the conference, and the
+  // Console cannot (re-)attach the package. Empty string = non-conference contact.
+  conference_id: string | null
 }
 
 export async function listQueue(
@@ -51,6 +58,7 @@ export async function listQueue(
         summary:      (contact?.["summary"] as string) ?? (contact?.["title"] as string) ?? null,
         queued_at_ms: queuedAtMs || null,
         age_ms:       queuedAtMs ? Math.max(nowMs - queuedAtMs, 0) : null,
+        conference_id: (contact?.["conference_id"] as string) ?? null,
       })
     }
   }

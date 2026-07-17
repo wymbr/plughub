@@ -181,16 +181,28 @@ próximos instanciamentos do mesmo mecanismo.
 ## 7. Itens abertos achados na validação (2026-07-16)
 
 - **Tempo de espera preservado no re-enfileiramento** *(com A5)*: o display do inbox usa `queued_at_ms` (resetado no release). O padrão certo já existe (`{t}:queue:first_queued:{sid}` NX+TTL da mute_queue). Fix baixo: setar `first_queued` NX no `add_queued_contact` (routing-engine) + `listQueue` (mcp-server) lê ele p/ a idade (fallback `queued_at_ms`) — sem mudança de frontend. Decisão relacionada: usar `first_queued` também no **score** da fila = fairness (tarefa devolvida não perde a posição).
-- **Release→re-claim de aprovação-conferência perde o contato + vaza capacidade** *(bug, investigar)*: uma tarefa de aprovação devolvida à fila, ao ser re-reivindicada, sai da fila mas **não re-anexa** no Console (nada é exibido); e o **release NÃO libera a capacidade** do agente — observado 3 slots presos em `{t}:instance:human-…:sessions` (SCARD=3) após 3 ciclos, esgotando a capacidade → "No capacity available". Causa provável: a sessão é servida como conferência (`delegate_conference`); o `claim_instance` reserva com occupant `session_id::conference_id`, e o release tenta liberar só `session_id` → **não casa** → vaza. O re-claim também não re-publica `conversation.assigned` p/ a sessão já-ativa. **Reset de emergência:** `DEL {t}:instance:human-*:sessions`.
+- **Release→re-claim de aprovação-conferência perde o contato + vaza capacidade** *(RESOLVIDO 2026-07-17)*: uma tarefa de aprovação devolvida à fila, ao ser re-reivindicada, saía da fila mas **não re-anexava** no Console; e o resolve **não liberava a capacidade** do agente (observado SCARD=3 após 3 ciclos → "No capacity available").
+  - **Hipótese inicial FALSEADA:** occupant `session::conf` vs release por `session` → "não casa". Errada: `release_instance` (`_RELEASE_INSTANCE_LUA`) libera **por prefixo `{session}::`**, que casa com `{session}::{conf}`. Além disso o occupant observado tinha **conf VAZIO** (`session::`), não `session::conf`.
+  - **Causa-raiz real (uma só):** o **`conference_id` era descartado em toda a cadeia de claim** — `listQueue`/`QueueContact` (mcp-server) não expunha o campo; o `PullInboxPanel` não o enviava; e `work_task_claim` montava o `RoutingResult` **sem** `conference_id`. Resultado: occupant `session::` (vazio) e `conversations.routed` sem conf → o humano era anexado como **primary**, fora da conferência do delegate. Isso quebrava a re-anexação (P2, o `conversations.routed` sem conf cai no dedup do bridge) **e** o release no resolve (P1: sem ser especialista de conferência, o teardown do resume não emitia o agent_done do humano → a vaga nunca soltava).
+  - **Fix:** propagar `conference_id` nos 3 pontos (`listQueue` → `PullInboxPanel.handlePull` → `RoutingResult` de `work_task_claim`). Com o humano corretamente anexado como especialista, o teardown do resolve emite `remove_conversation` na instância humana → libera a vaga (release por-prefixo). **Um fix fecha P1 e P2** (a unificação "mesmo subsistema" prevista no §8). Validado por E2E via API: occupant vira `session::conf`, e 3 ciclos claim→decide deixam `SCARD=0` (sem vazar). **Pendência residual:** o bundle Vite do Console precisa entrar em vigor para os claims da UI carregarem `conference_id` (backend validado por curl; UI em burn-down).
+  - **Reset de emergência:** `DEL {t}:instance:human-*:sessions` + `DEL {t}:pool:aprovacao_deploy:queue`.
 
 ## 8. Pass focado — Release / Conference Lifecycle (com A5)
 
 Todas as arestas achadas na validação são o MESMO subsistema (fila pull × sessão de conferência suspensa). Resolver juntas, com teste próprio, não em patches isolados:
 
-| Item | Entrega | Gate |
-|---|---|---|
-| **P1 — release libera capacidade** | o release do pull chama `release_instance` com o **mesmo occupant** do claim (incl. `conference_id`); idempotente. | E2E: claim→release→`SCARD`==0; N ciclos sem vazar |
-| **P2 — re-claim re-anexa** | re-claim de sessão de conferência suspensa re-publica `conversation.assigned` (ou equivalente) → o Console re-monta o contato + ApprovalPanel. | E2E: release→re-claim mostra o pacote de novo |
-| **P3 — timer `first_queued`** | `first_queued` NX no `add_queued_contact` + `listQueue` lê ele p/ a idade (fallback `queued_at_ms`); opcional no score (fairness). | display: idade = espera total, preservada no re-enfileiramento |
-| **P4 — refresh imediato pós-release** | o inbox atualiza na hora após release (sem esperar o poll de 4s). | UX |
-| **A5 — auditoria** | trilha de decisão/edições (o item pendente do v1). | audit E2E |
+> **Achado da validação (2026-07-17):** P1 e P2 tinham a **mesma** causa-raiz — o `conference_id`
+> descartado na cadeia de claim (ver §7). **Um único fix** (propagar `conference_id` em `listQueue` →
+> `PullInboxPanel` → `RoutingResult` de `work_task_claim`) fecha os dois: o humano passa a ser anexado
+> como especialista de conferência, o `conversations.routed` com conf re-anexa (P2) e o teardown do
+> resolve emite `remove_conversation` na instância humana → libera a vaga (P1). Bug A (release explícito
+> no resolve) descartado — desnecessário. Gate batido: 3 ciclos claim→decide com `SCARD=0`.
+
+| Item | Entrega | Gate | Status |
+|---|---|---|---|
+| **P1 — release libera capacidade** | ~~release do pull com o mesmo occupant~~ **causa real:** propagar `conference_id` no claim → humano vira especialista → teardown do resolve libera a vaga. | claim→decide→`SCARD`==0; N ciclos sem vazar | ✅ (backend; 3 ciclos `SCARD=0`) |
+| **P2 — re-claim re-anexa** | mesma correção do `conference_id`: `conversations.routed` com conf isenta do dedup do bridge e re-publica o assign → Console re-monta o pacote. | release→re-claim mostra o pacote de novo | ✅ (backend; auto-anexo com conf) |
+| **P2b — claims da UI enviam `conference_id`** | os **dois** call sites (`PullInboxPanel.handlePull` + `AgentAssistPage.claimPreviewContact` do preview) enviam `conference_id`; `platform-ui` é imagem buildada → exige `build --no-cache`. | claim pela UI gera occupant `session::conf`; re-claim re-anexa | ✅ (E2E UI: claim→return→re-claim→aprovar OK) |
+| **P3 — timer `first_queued`** | `first_queued` NX no `add_queued_contact` + `listQueue` lê ele p/ a idade (fallback `queued_at_ms`); opcional no score (fairness). | display: idade = espera total, preservada no re-enfileiramento | pendente |
+| **P4 — refresh imediato pós-release** | o inbox atualiza na hora após release (sem esperar o poll de 4s). | UX | pendente |
+| **A5 — auditoria** | trilha de decisão/edições (o item pendente do v1). | audit E2E | pendente |

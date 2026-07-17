@@ -639,11 +639,19 @@ class Router:
             )
 
         # 6 — publica conversations.routed (reusa todo o downstream)
+        # Bug B fix: propagate the conference the caller opened (carried in the
+        # queued contact and passed by the claimer) so the bridge attaches the
+        # human as the conference PARTICIPANT of the suspended delegate — not a
+        # bare primary. Without this the routed event omits the conference, the
+        # occupant is "{session}::" (empty conf), and the Console cannot
+        # (re-)attach the approval package on claim/re-claim (P2).
         result = RoutingResult(
             session_id=session_id, tenant_id=tenant_id, allocated=True,
             instance_id=instance_id, agent_type_id=inst.agent_type_id,
             pool_id=pool_id, routing_mode="supervised",
             allocated_site=self._local_site, routed_at=now,
+            conference_id=conference_id or None,
+            channel_identity=contact.get("channel_identity"),
         )
         if self._producer:
             await self._producer.send(

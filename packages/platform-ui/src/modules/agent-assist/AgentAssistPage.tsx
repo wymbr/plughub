@@ -175,6 +175,12 @@ export const AgentAssistPage: React.FC = () => {
   // (ou sair do preview) o anterior é descartado (D2).
   const [previewSessionId, setPreviewSessionId] = useState<string | null>(null);
   const [previewPoolId,    setPreviewPoolId]    = useState<string | null>(null);
+  // Bug B fix: the queued approval carries a conference_id (the conference the
+  // caller opened). The preview claim MUST forward it so the human attaches as
+  // the conference participant — otherwise the routed event omits the conf, the
+  // occupant is "{session}::" and the re-claim (return-to-queue) hits the bridge
+  // dedup and never re-attaches.
+  const [previewConferenceId, setPreviewConferenceId] = useState<string>("");
   const [previewMessages,  setPreviewMessages]  = useState<ChatMessage[]>([]);
   const { state: previewSupervisorState } = useSupervisorState(previewSessionId, lastWsEvent);
 
@@ -193,24 +199,26 @@ export const AgentAssistPage: React.FC = () => {
     return () => { alive = false; clearInterval(id); };
   }, [previewSessionId]);
 
-  const handlePreviewQueueContact = useCallback((sessionId: string, poolId: string) => {
+  const handlePreviewQueueContact = useCallback((sessionId: string, poolId: string, conferenceId: string) => {
     setSelectedSessionId(null);   // sai do atendimento focado → centro mostra o preview
     setPreviewSessionId(sessionId);
     setPreviewPoolId(poolId);
+    setPreviewConferenceId(conferenceId);
   }, [setSelectedSessionId]);
 
-  const claimPreviewContact = useCallback(async (sessionId: string, poolId: string) => {
+  const claimPreviewContact = useCallback(async (sessionId: string, poolId: string, conferenceId: string) => {
     const instanceId = session?.userId ? `human-${session.userId}` : "";
     try {
       const res = await fetch(`/api/work_queue/claim/${encodeURIComponent(sessionId)}`, {
         method:  "POST",
         headers: { "content-type": "application/json" },
-        body:    JSON.stringify({ pool_id: poolId, instance_id: instanceId }),
+        body:    JSON.stringify({ pool_id: poolId, instance_id: instanceId, conference_id: conferenceId }),
       });
       const result = await res.json() as { claimed?: boolean; reason?: string };
       if (result.claimed) {
         setPreviewSessionId(null);
         setPreviewPoolId(null);
+        setPreviewConferenceId("");
         setSelectedSessionId(sessionId);   // o WS conversation.assigned anexa o contato real
       } else {
         addToast(t(`pullInbox.claimReason.${result.reason ?? "failed"}`, { defaultValue: result.reason ?? "" }), "error");
@@ -625,14 +633,14 @@ export const AgentAssistPage: React.FC = () => {
                   type="button"
                   disabled={atCapacity}
                   title={atCapacity ? t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" }) : undefined}
-                  onClick={() => { if (previewSessionId) claimPreviewContact(previewSessionId, previewPoolId ?? ""); }}
+                  onClick={() => { if (previewSessionId) claimPreviewContact(previewSessionId, previewPoolId ?? "", previewConferenceId); }}
                   className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-primary/90 disabled:opacity-50"
                 >
                   {t("pullInbox.claim", { defaultValue: "Atender (Pull)" })}
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
+                  onClick={() => { setPreviewSessionId(null); setPreviewPoolId(null); setPreviewConferenceId(""); }}
                   className="rounded border border-border px-2.5 py-1.5 text-xs text-muted hover:text-dark"
                 >
                   {t("common.close", { defaultValue: "Fechar" })}
@@ -724,7 +732,7 @@ export const AgentAssistPage: React.FC = () => {
                     claimDisabledReason={t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" })}
                     previewSessionId={previewSessionId}
                     onPreview={handlePreviewQueueContact}
-                    onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); }}
+                    onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); setPreviewConferenceId(""); }}
                     onClaimed={(sid) => { setPreviewSessionId(null); setSelectedSessionId(sid); }}
                   />
                 </div>
