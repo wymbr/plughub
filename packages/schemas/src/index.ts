@@ -820,3 +820,46 @@ export type {
   IngestionContactClosed,
   IngestionEvent,
 } from "./ingestion-event"
+
+// ── Scheduler / Agenda (scheduler-api — fire a pool via webhook at a time) ────
+export {
+  FireTimeSchema,
+  FrequencySchema,
+  BusinessDayPolicySchema,
+  MonthOverflowSchema,
+  MisfirePolicySchema,
+  MonthDaySchema,
+  MonthByDateSchema,
+  MonthByPositionSchema,
+  MonthBySchema,
+  RecurrenceRuleSchema,
+  AgendaValiditySchema,
+  OnceScheduleSchema,
+  RecurringScheduleSchema,
+  AgendaScheduleSchema,
+  AgendaStatusSchema,
+  AgendaSchema,
+  DispatchResultSchema,
+  AgendaDispatchSchema,
+  CreateAgendaSchema,
+  UpdateAgendaSchema,
+} from "./scheduler"
+
+export type {
+  FireTime,
+  Frequency,
+  BusinessDayPolicy,
+  MonthOverflow,
+  MisfirePolicy,
+  MonthDay,
+  MonthBy,
+  RecurrenceRule,
+  AgendaValidity,
+  AgendaSchedule,
+  AgendaStatus,
+  Agenda,
+  DispatchResult,
+  AgendaDispatch,
+  CreateAgenda,
+  UpdateAgenda,
+} from "./scheduler"

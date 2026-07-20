@@ -2,6 +2,19 @@
 
 ---
 
+## Scheduler / Agenda — Fase 1: substrato + avaliador + disparo webhook→pool (2026-07-20)
+
+Novo serviço **`scheduler-api`** (FastAPI + asyncpg + Redis, porta **3650**) — a **Agenda** como recurso genérico e domain-agnostic que, num *quando/modo* configurado, **aciona um pool via webhook** (Arc 19). Status da agenda = *acionou o pool ou não*; execução é da sessão disparada (por referência, drill-through — nunca espelhada). Spec: `docs/product/scheduler-agenda-spec.md`. Eleva o ADR de timers (`docs/adr/adr-timer-scheduler.md`) de substrato efêmero para agendas de 1ª classe.
+
+- **Schema** (`@plughub/schemas/scheduler.ts`): `Agenda` (validity + `schedule` union `once|recurring`, `RecurrenceRule` frequency/interval/weekdays/`month_by` by-date|by-position/`times[]`/`business_day_policy`/`month_overflow`, `misfire_policy`, status), `AgendaDispatch` (ledger `dispatched|failed|skipped` + refs de sessão), Create/Update inputs. Reusa `DayOfWeekSchema` do calendar; `FireTime` (instante) distinto de `TimeSlot` (intervalo).
+- **Camada 2 (Postgres, fonte de verdade):** schema `scheduler`, tabelas `agendas` + `agenda_dispatches`; CRUD + lifecycle (pause/resume/cancel) REST tenant-scoped (`X-Tenant-ID`); ledger por `GET /v1/agendas/{id}/dispatches`.
+- **Camada 1 (Redis, substrato de timer):** sorted-set global `scheduler:timers` (member = agenda_id UUID; tenant no hash) + poller único (`ZRANGEBYSCORE`, intervalo 15s) + re-hidratação no boot. Arm/disarm reconciliado no create/update/pause/resume/cancel/delete.
+- **Avaliador de recorrência** (`evaluator.py`): calcula só a **próxima** ocorrência (estado limitado; validity.ends_at = parada). `business_day_policy` no nível do DIA mantendo o horário (`shift_next/previous` move o dia inteiro; `only_business_days` pula), consultando o calendar-api. **Novos endpoints by-calendar_id no calendar-api** (`/v1/engine/is-open-calendar` + `/next-open-slot-calendar`, wrappers finos reusando o engine — engine segue a única autoridade do "quando"). Degradação graciosa e barulhenta (calendar fora → dia fireable, logado).
+- **Disparo** (`dispatcher.py`, fire callback): `POST /v1/channels/webhook/pool/{id}` (Arc 19) → captura `session_id` (dispatched) ou motivo (failed; sem retry no v1) no ledger → avança (recorrente: recomputa + re-arma; `once`/exhausted: `completed` + disarm). **Nota as-built:** a channel-gateway devolve 201+session_id mesmo p/ pool inexistente (cria a sessão, routing resolve depois) → `dispatched` = "gateway criou sessão", admissão/capacidade aparecem no ciclo da sessão.
+- **Validado E2E:** recorrência (weekly seg/qua → qua 12:00Z; monthly última sexta → 31/07; daily), shift por calendário (quarta fechada → quinta), disparo real (session_id no ledger + agenda `completed`), **re-arme recorrente** (daily dispara → `next` avança pro dia seguinte, status segue `active`, 1 dispatch), re-hidratação no boot (5 timers). Decisões §7 fechadas (pin de versão descartado, sem retry, overlap permitido, porta 3650 + HTTP síncrono, misfire default). **Pendente: Fase 2 (consumidor deploy = promote agendado) e Fase 3 (UI `/config/schedules` + Monitor).**
+
+---
+
 ## Aprovação — A5: auditoria de decisão/edições (trilha na stream canônica) (2026-07-17)
 
 Fecha o último item do v1 de aprovação (ADR `docs/adr/adr-human-approval-workflow-step.md` §8/§9/§10). A decisão vira um evento `message` (`agents_only`) na **stream canônica**, com um bloco estruturado `ApprovalDecisionMeta` no payload — autoria verificada + diff de edições + classe de confiança. **Sem** novo `StreamEventType` (a estrutura vive no payload de `message` → sem rebuild de todos os consumidores TS). Leitura por endpoint sobre a stream (o ClickHouse **não** é alimentado pela stream).

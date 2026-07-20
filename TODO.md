@@ -1496,10 +1496,37 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 
 ---
 
-## Scheduler central de timers *(diferido — ADR aceito)*
+## Scheduler / Agenda — `scheduler-api` *(Fase 1 ✅ 2026-07-20; Fases 2–3 pendentes)*
+
+> **Fase 1 CONCLUÍDA e validada E2E (2026-07-20, ver CHANGELOG):** `scheduler-api` (porta 3650) —
+> Camada 1 (Redis sorted-set + poller + re-hidratação), Camada 2 (Postgres `agendas`+`agenda_dispatches`),
+> CRUD/lifecycle REST, avaliador de recorrência (daily/weekly/monthly by-date|by-position, `times[]`,
+> `month_overflow`), `business_day_policy` via endpoints by-calendar_id novos no calendar-api (validado
+> shift quarta-fechada→quinta), e disparo webhook→pool (Arc 19) com ledger + re-arme recorrente + complete
+> em `once`/exhausted. **Pendente: Fase 2 (consumidor deploy) e Fase 3 (UI `/config/schedules` + Monitor).**
+
+**Elevação do ADR de timers:** de substrato de disparo efêmero para **agendas de primeira classe**
+(duráveis, observáveis, operáveis). Serviço novo `scheduler-api`; agenda = recurso genérico que, num
+*quando/modo* (1x / recorrente dia-semana-mês, `times[]` no dia, `business_day_policy` via calendar),
+**aciona um pool via webhook** (Arc 19); status da agenda = *acionou o pool ou não* (execução é da sessão,
+por referência/drill-through). Reuso-chave: `calendar_id` traz semana/feriados/exceções/timezone (a agenda
+não remodela feriado); `DayOfWeekSchema` importado; `WeeklyEditor`/Modal reaproveitados na UI. Âncora =
+promote agendado (Fase 2, corpo do job = pool cujo skill faz `invoke promote` c/ `on_failure` + pin de
+versão). Fases: **1** core scheduler-api (Camada 1 sorted-set + Camada 2 Postgres + disparo webhook + ledger)
+· **2** consumidor deploy · **3** UI `/config/schedules` + Monitor (ops reagendar/cancelar/pausar/disparar-já).
+Fora do 1º arco: **4** outbound/campanhas; migração dos timers legados.
+→ Spec: [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md) · ADR:
+[`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md).
+
+**Decisões §7 FECHADAS (2026-07-20):** pin de versão **descartado** (agenda endereça pool, não skill — versão é
+do pool; promote = "vira o `next` vigente em T"; pin só na composição aprovação+agendamento, e lá é do domínio
+de aprovação); sem retry de dispatch no v1 (grava `failed` + Monitor); overlap permitido; porta 3650 + HTTP
+síncrono; `misfire` default `skip`/`fire_late`. Pré-código para Fase 1.
+
+### Migração dos timers legados *(follow-up — antigo "Scheduler central de timers")*
 
 Consolidar os timers espalhados (timeout de suspend/delegate no channel-gateway,
-`_hook_timeout_guard` no bridge, timeout de `collect`) num módulo único de scheduling:
+`_hook_timeout_guard` no bridge, timeout de `collect`) no substrato do scheduler-api:
 sorted-set de deadlines (`ZADD`/`ZRANGEBYSCORE`) + poller único + evento `timer.fired`
 com os donos reagindo; calendar-api permanece o engine de prazo (calcula o *quando*, não
 dispara). Primeiro corte funcional já existe (`run_timeout_scanner` no channel-gateway).
@@ -1507,19 +1534,22 @@ Decisão e mecanismo em [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-s
 
 ---
 
-## Agent-registry — unificar binding skill↔pool (3→1) *(proposta — concern do registry)*
+## Agent-registry — unificar binding skill↔pool (2→1) *(proposta — concern do registry)*
 
 Origem: discussão do doc de avaliação (`docs/arcos/arc-evaluation-metrics-methodology.md` §IV.3),
 scoped-out de lá por ser refactor do agent-registry, não de avaliação.
 
-**Achado**: a associação skill↔pool aparece em **três** lugares no `schema.prisma` — `PoolSkillSlot`
-(slot do pool), `SkillVersionSlot.pool_ids` (previous/current/next) e `SkillDeployment.pool_ids`
-(histórico de deploy). Risco de divergência entre eles.
+**Achado (revisado 2026-07-20):** a associação skill↔pool aparecia em **três** lugares no `schema.prisma`, mas
+o `SkillVersionSlot.pool_ids` (3-slot POR skill) **já foi aposentado** (Skill Versioning Fase E, 2026-06-24 — o
+modelo virou pool-cêntrico; `db push` dropou `skill_version_slots`). Hoje sobram **dois**: `PoolSkillSlot`
+(slot do pool — binding vivo, autoritativo) e `SkillDeployment.pool_ids` (histórico de deploy). Risco de
+divergência entre eles.
 
-**Alvo**: uma relação **autoritativa** do binding atual (slot) + o histórico como **append-log** das
-mudanças de slot (o `SkillDeployment` deixaria de precisar do próprio `pool_ids`). **Pré-trabalho**:
-auditar os 3 modelos + todos os readers (routing/alocação no caminho quente, RegistrySyncer, lente
-deploy do Arc 6 Fase 2, `GET /v1/pools/:id/deployments`) antes de cravar o modelo unificado.
+**Alvo**: `PoolSkillSlot` como relação **autoritativa** do binding atual + o histórico como **append-log** das
+mudanças de slot (o `SkillDeployment` deixaria de precisar do próprio `pool_ids`, derivável do contexto).
+**Pré-trabalho**: auditar os readers de `pool_ids` (routing/alocação no caminho quente, RegistrySyncer, lente
+deploy do Arc 6 Fase 2, `GET /v1/pools/:id/deployments`) antes de dropar o campo. Escopo menor do que o "3→1"
+original sugeria.
 
 ---
 
@@ -1638,7 +1668,13 @@ Descritivo técnico-funcional consolidado (com a seção de roadmap §20.7): [`d
 
 ---
 
-## Fila de trabalho humano / dispatch pull + inbox no Console *(proposta — não implementado)*
+## Fila de trabalho humano / dispatch pull + inbox no Console *(✅ v1 CONCLUÍDO — pull core F1+F2 + Aprovação A1–A5 validados E2E; resta só A6 pós-v1)*
+
+> **Status (2026-07-17):** **Pull core (F1+F2)** e **Aprovação humana como passo de workflow (A1–A5)**
+> **concluídos e validados E2E** (ver `CHANGELOG.md` §§ "Aprovação humana… A1–A4" 2026-07-16, "Aprovação —
+> A5" 2026-07-17, "Aprovação-conferência (pull) P1+P2/P3" 2026-07-17). Caso âncora = gate de promoção de
+> deploy (homolog→prod), com decisão auditada + gate por `verification_class`.
+> **Resta apenas A6 (pós-v1, ADR §6)** e os não-objetivos v1 — listados no fim desta seção.
 
 Modo de despacho **pull** genérico no Routing Engine (operador puxa da fila) + inbox no Console, tendo a **fila de aprovação** como primeira especialização (revisão de processo montado por IA num passo anterior). Especificações em `docs/product/`:
 
@@ -1704,6 +1740,14 @@ F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atô
   - **F2b-2b-4 ✅ (2026-06-16)** — divisória arrastável entre contatos e fila pull: `flexBasis` da área de
     contatos controlado por drag (clamp 15–85%), persistido em `localStorage` (`plughub_pull_split_pct`).
     **Frente 1 / Pull — encerrada (F1 + F2 + polish).**
+
+**Resta (A6 — pós-v1, ADR §6 `adr-human-approval-workflow-step.md`):** quatro-olhos (2 aprovadores);
+reatribuição por supervisor (= conferência padrão); notificações/SLA na inbox; **rework rate**
+(Bancada/Arc 6); **auto-aprovação** (pool IA). **Não-objetivos v1 (adiados por decisão):** omnichannel/
+Modo B (D6); weight-ordering (F6); **promote real** (invoke de deploy no `efetuar_promocao`, hoje
+`complete`). **Follow-ups menores (CHANGELOG A5):** Context/History trazendo a journey do workflow por
+`root_session_id` (aprovação raramente tem `customer_id`); gate de servibilidade do pool de aprovação
+pelo ABAC `approvals` (fechar o claim genérico); refresh imediato do inbox pós-release.
 
 ## Frente 2 — Avaliação campaign-driven (shakedown E2E)
 

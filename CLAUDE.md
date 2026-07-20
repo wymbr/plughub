@@ -297,6 +297,7 @@ plughub/
     rules-engine/                ← Post-routing event evaluation
     channel-gateway/             ← Channel adapters and inbound normalisation
     calendar-api/                ← Calendar engine + CRUD REST (Arc 4) — port 3700
+    scheduler-api/               ← Agenda/scheduler: fire a pool via webhook at a time — port 3650
     workflow-api/                ← Workflow instance lifecycle (Arc 4) — port 3800
     skill-flow-worker/           ← Kafka consumer, runs SkillFlow for workflow instances
     pricing-api/                 ← Capacity-based billing, invoice — port 3900
@@ -321,6 +322,7 @@ plughub/
 | routing-engine | Python | Python 3.11+ | Redis + Kafka |
 | rules-engine | Python | Python 3.11+ | Redis + ClickHouse |
 | calendar-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3700 |
+| scheduler-api | Python | Python 3.11+ | FastAPI + asyncpg + Redis — port 3650 |
 | workflow-api | Python | Python 3.11+ | FastAPI + asyncpg — port 3800 |
 | skill-flow-worker | TypeScript | Node 20+ | Kafka consumer + SkillFlowEngine bridge |
 | channel-gateway | Python | Python 3.11+ | FastAPI + aiokafka + channel adapters |
@@ -1004,6 +1006,26 @@ delegate→suspend do OTP resolvido 2026-07-07 — ver CHANGELOG + `docs/arcos/s
 
 → See [`docs/product/dialog-primitive-and-runner-design.md`](docs/product/dialog-primitive-and-runner-design.md),
 [`docs/adr/adr-otp-workflow-and-dialog-primitive.md`](docs/adr/adr-otp-workflow-and-dialog-primitive.md)
+
+---
+
+## Scheduler / Agenda — `scheduler-api` (Fase 1 ✅)
+
+Serviço `scheduler-api` (porta 3650). Uma **Agenda** é um recurso **domain-agnostic** que, num *quando/modo*
+(1x / recorrente daily-weekly-monthly, `times[]` no dia), **aciona um POOL via webhook** (Arc 19,
+`POST /v1/channels/webhook/pool/{id}`) — nunca um skill (invariante S4). Duas camadas: **Camada 1** (Redis
+sorted-set `scheduler:timers` + poller único 15s + re-hidratação no boot); **Camada 2** (Postgres schema
+`scheduler`: `agendas` + `agenda_dispatches`, fonte de verdade). Invariantes: o scheduler **não** reimplementa
+o "quando" — `business_day_policy` consulta o **calendar-api** (endpoints by-calendar_id `is-open-calendar`/
+`next-open-slot-calendar`; o engine segue a única autoridade); **status da agenda = "acionou o pool ou não"**,
+execução é da sessão (ref `session_id` no ledger, drill-through, nunca espelhada); `dispatched` = gateway criou
+sessão (admissão/capacidade aparecem no ciclo da sessão); sem retry no v1 (`failed` gravado + Monitor).
+Recorrência calcula só a **próxima** ocorrência e re-arma no disparo; `once`/exhausted → `completed`.
+**Pendente: Fase 2** (consumidor deploy = promote agendado, corpo = pool cujo skill faz `invoke promote`);
+**Fase 3** (UI `/config/schedules` + Monitor com reagendar/cancelar/pausar/disparar-já).
+
+→ See [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md),
+[`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md)
 
 ---
 

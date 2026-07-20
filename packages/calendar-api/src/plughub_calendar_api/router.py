@@ -410,6 +410,77 @@ async def engine_next_open_slot(
     }
 
 
+# ── Engine — direct by calendar_id (no association) ───────────────────────────
+# Used by scheduler-api: an Agenda references a calendar_id directly (not via an
+# entity association). Thin wrappers that build a single-calendar assoc list and
+# reuse the same engine functions — the engine stays the sole "when" authority.
+
+async def _load_engine_data_by_calendar(
+    pool, calendar_id: str
+) -> tuple[list[dict] | None, dict[str, list]]:
+    try:
+        cal = await db_get_calendar(pool, calendar_id)
+    except ValueError:
+        # Non-UUID id → treat as not found (clean 404, not a 500).
+        cal = None
+    if not cal:
+        return None, {}
+    assoc = {
+        "assoc_id":        "direct",
+        "operator":        "UNION",
+        "priority":        1,
+        "calendar_id":     cal["id"],
+        "timezone":        cal["timezone"],
+        "always_open":     cal["always_open"],
+        "weekly_schedule": cal["weekly_schedule"],
+        "holiday_set_ids": cal["holiday_set_ids"],
+        "exceptions":      cal["exceptions"],
+    }
+    hs_rows = await db_get_holidays_for_sets(pool, cal["holiday_set_ids"])
+    merged: list[dict] = []
+    for hs in hs_rows:
+        merged.extend(hs["holidays"])
+    return [assoc], {cal["id"]: merged}
+
+
+@router.get("/v1/engine/is-open-calendar")
+async def engine_is_open_calendar(
+    calendar_id: str, at: str | None = None, pool=Depends(_pool),
+) -> dict[str, Any]:
+    at_dt: datetime | None = None
+    if at:
+        at_dt = datetime.fromisoformat(at)
+        if at_dt.tzinfo is None:
+            at_dt = pytz.UTC.localize(at_dt)
+    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id)
+    if assocs is None:
+        raise HTTPException(404, "calendar not found")
+    status = get_open_status(assocs, hols, at_dt)
+    evaluated_at = (at_dt or datetime.utcnow().replace(tzinfo=pytz.UTC)).isoformat()
+    return {
+        "status":       status,
+        "open":         status == "open",
+        "evaluated_at": evaluated_at,
+        "calendar_id":  calendar_id,
+    }
+
+
+@router.get("/v1/engine/next-open-slot-calendar")
+async def engine_next_open_slot_calendar(
+    calendar_id: str, after: str | None = None, pool=Depends(_pool),
+) -> dict[str, Any]:
+    after_dt: datetime | None = None
+    if after:
+        after_dt = datetime.fromisoformat(after)
+        if after_dt.tzinfo is None:
+            after_dt = pytz.UTC.localize(after_dt)
+    assocs, hols = await _load_engine_data_by_calendar(pool, calendar_id)
+    if assocs is None:
+        raise HTTPException(404, "calendar not found")
+    nxt = next_open_slot(assocs, hols, after_dt)
+    return {"next_open": nxt.isoformat() if nxt else None, "calendar_id": calendar_id}
+
+
 class AddBusinessDurationRequest(BaseModel):
     tenant_id:   str
     entity_type: str
