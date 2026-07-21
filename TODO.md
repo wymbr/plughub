@@ -1527,7 +1527,9 @@ não remodela feriado); `DayOfWeekSchema` importado; `WeeklyEditor`/Modal reapro
 promote agendado (Fase 2, corpo do job = pool cujo skill faz `invoke promote` c/ `on_failure` + pin de
 versão). Fases: **1** core scheduler-api (Camada 1 sorted-set + Camada 2 Postgres + disparo webhook + ledger)
 · **2** consumidor deploy · **3** UI `/config/schedules` + Monitor (ops reagendar/cancelar/pausar/disparar-já).
-Fora do 1º arco: **4** outbound/campanhas; migração dos timers legados.
+Fora do 1º arco: **4** outbound/campanhas (**design fechado** — substrato genérico mailing+campaign+governança de
+contato; scheduler = cadência, diff zero: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md));
+migração dos timers legados.
 → Spec: [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md) · ADR:
 [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md).
 

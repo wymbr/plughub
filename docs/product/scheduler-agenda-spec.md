@@ -201,7 +201,8 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. Smoke `infra/t
 
 ### Fora do primeiro arco (follow-ups)
 - **Fase 4 — outbound (campanhas/survey):** 2º consumidor recorrente; prova a abstração; liga ao outbound do
-  Customer Surveys.
+  Customer Surveys. **Desenho fechado** em [`outbound-mailing-campaign-design.md`](outbound-mailing-campaign-design.md)
+  — substrato genérico `mailing`+`campaign`+governança de contato; o scheduler é a cadência (diff zero no scheduler).
 - **Migração dos timers legados (ADR §60–71):** dobrar `run_timeout_scanner` (channel-gateway),
   `_hook_timeout_guard` (bridge) e timeout de `collect` no substrato. Arriscado, não-bloqueante.
 
