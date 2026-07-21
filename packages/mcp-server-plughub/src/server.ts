@@ -32,6 +32,8 @@ import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
 import type { DeployDeps }          from "./tools/deploy"
+import { registerOutboundTools }    from "./tools/outbound"
+import type { OutboundDeps }        from "./tools/outbound"
 import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
@@ -120,6 +122,11 @@ export function createServer(allDeps?: AllDeps): McpServer {
     tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
   }
 
+  const outboundDeps: OutboundDeps = {
+    mailingApiUrl: process.env["MAILING_API_URL"]  ?? "http://localhost:3660",
+    tenantId:      process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  }
+
   const calendarDeps: CalendarDeps = {
     calendarApiUrl: process.env["CALENDAR_API_URL"] ?? "http://localhost:3700",
     tenantId:       process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
@@ -155,6 +162,7 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerWorkQueueTools(server, workQueueDeps)
   registerDelegationTools(server, delegationDeps)
   registerDeployTools(server, deployDeps)
+  registerOutboundTools(server, outboundDeps)
   registerCalendarTools(server, calendarDeps)
   registerAgentEventTools(server, agentEventDeps)
   registerJourneyTools(server, agentEventDeps)
@@ -983,6 +991,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerDeployTools(mcpServer, {
       agentRegistryUrl: process.env["AGENT_REGISTRY_URL"] ?? "http://localhost:3300",
       tenantId:         process.env["PLUGHUB_TENANT_ID"]  ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    })
+    registerOutboundTools(mcpServer, {
+      mailingApiUrl: process.env["MAILING_API_URL"]  ?? "http://mailing-api:3660",
+      tenantId:      process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerCalendarTools(mcpServer, {
       calendarApiUrl: process.env["CALENDAR_API_URL"] ?? "http://localhost:3700",

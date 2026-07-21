@@ -1503,6 +1503,13 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > operacao}` grant-first, sem role default nem bypass de admin (D2). Proxy `/v1/agendas`→3650 (Vite+nginx).
 > Smoke `infra/test/smoke_scheduler_fire_now.sh`. **Scheduler completo (Fases 1–3).** Follow-ups abaixo
 > (Fase 4 outbound + migração dos timers legados) permanecem opcionais.
+> **Fase 4 (outbound) — módulo Outbound: Fase 1 ✅ validada E2E; Fase 2 ✅ validada via API** (2026-07-21).
+> **Fase 1:** substrato `mailing`+`campaign`+`delivery` (`mailing-api` :3660, schema `outbound`) + tools MCP
+> `outbound` + demo drenado por agenda com diff zero. `smoke_outbound_fase1.sh` verde. Destravou fix de engine
+> (`loop.ts` `:__invoked__`). **Fase 2:** governança de contato — `contact_log`/`contact_policy`/
+> `contact_eligibility_check` (fadiga; substitui `survey_eligibility_check`) + `mailing_unsubscribe`. Motor
+> validado via API (`smoke_outbound_fase2.sh`). Ver `docs/arcos/outbound.md`. **Pendente: Fase 2b (fiar no skill)
+> + Fases 3–5.**
 
 > **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
 > (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill

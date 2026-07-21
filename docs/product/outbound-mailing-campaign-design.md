@@ -131,7 +131,8 @@ mailing_unsubscribe(customer_id | anchor, channel?='all')
 contact_eligibility_check(customer_id, channel, campaign_id, at=now)
     -> { allowed, reason, retry_after? }
     # motor AGNÓSTICO: consulta cadastro (opt-out/preferência) + contact_log×policy (fadiga) + calendar (janela).
-    # aplica cada regra só se configurada. survey_eligibility_check vira wrapper fino disto (ou some).
+    # aplica cada regra só se configurada. **survey_eligibility_check NÃO existe** (decisão 2026-07-21):
+    # o survey chama contact_eligibility_check DIRETO — o genérico SUBSTITUI, não é wrapper.
 
 # REUSO (já existe — grupo `operational`): pool_status_get / queue_context_get / system_availability_check
 #   -> { available, queue_length, sla_target_ms, ... } do snapshot do routing-engine.
@@ -196,6 +197,10 @@ Survey tem **política própria** (form DialogForm, `grain`, janela de quarenten
   a journey se auto-reporta "terminei", sem evento novo no core.
 
 A janela de quarentena do survey é um `contact_policy` no escopo daquela campanha — não um campo especial.
+O motor de elegibilidade é **um só e genérico**: **não haverá `survey_eligibility_check`** (decisão 2026-07-21).
+Quando o módulo de survey for implementado (após o outbound), ele consome `contact_eligibility_check` direto; a
+"quarentena por cliente × tipo de instrumento" (`customer-surveys.md` §6) vira uma `contact_policy` com `scope`
+por-campanha/tipo — o ledger de fadiga passa a ser o `contact_log` genérico, não um `survey_quarantine` próprio.
 
 ---
 
@@ -217,6 +222,12 @@ A janela de quarentena do survey é um `contact_policy` no escopo daquela campan
 - **(b) Retry:** por campanha (`campaign.retry {max_attempts, backoff}` + `delivery.attempts`).
 - **(c) Eligibility/quarentena agnóstica:** motor de contato genérico (fato `contact_log` × regra `contact_policy`
   × decisão `contact_eligibility_check`); survey é um chamador com janela própria. Fadiga é cross-campanha.
+- **(e) `contact_eligibility_check` SUBSTITUI `survey_eligibility_check` (2026-07-21):** o motor de elegibilidade é
+  único e genérico; **não haverá tool/ledger de elegibilidade específico de survey**. O survey (a implementar
+  **depois** do outbound) é um chamador do motor genérico — sua quarentena por tipo de instrumento vira
+  `contact_policy` de escopo próprio, e o estado de fadiga vive no `contact_log`, não num `survey_quarantine`.
+  Reconciliação a executar na **Fase 2** (governança de contato). Sequência fixada: **outbound primeiro, survey
+  depois.**
 - **(d) Restrições da campanha = pipeline de portões**, cada um reuso, cada um "aplica se configurado":
   período (agenda), janela de contato (calendar), canal (channel_policy+resolver), recursos (`pool_status_get`),
   fadiga (motor c), preferência (cadastro). **Precedência:** opt-out > regra de campanha > preferência soft.

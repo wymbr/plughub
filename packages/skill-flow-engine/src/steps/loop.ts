@@ -95,10 +95,18 @@ export async function executeLoop(
   }
 
   // ── Expõe o elemento atual, avança, entra no body ───────────────────────────
-  // Limpa sentinels :__notified__ para que notify no body re-execute a cada volta.
+  // Limpa os sentinels de conclusão de step a cada volta, para que o body
+  // RE-EXECUTE por iteração (senão o step é pulado a partir da 2ª volta):
+  //   :__notified__ — notify (já era limpo);
+  //   :__invoked__  — invoke: o sentinel "completed" faz o invoke retornar o
+  //                   resultado cacheado sem re-chamar a tool. Sem limpar, um
+  //                   invoke no body do loop só executa na 1ª iteração (bug:
+  //                   drena N, mas só contabiliza 1). Cada iteração é uma chamada
+  //                   lógica distinta (item diferente) → re-executar é o correto.
   const next: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(results)) {
     if (k.endsWith(":__notified__")) continue
+    if (k.endsWith(":__invoked__"))  continue
     next[k] = v
   }
   next[step.item_as] = items[curIdx]

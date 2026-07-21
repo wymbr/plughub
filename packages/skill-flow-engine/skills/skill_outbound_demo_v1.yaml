@@ -1,0 +1,90 @@
+# skill_outbound_demo_v1.yaml
+# Outbound Fase 1 — skill DEMO do substrato (perfil workflow, canal webhook).
+# Spec: docs/product/outbound-fase1-implementation-spec.md
+#
+# Prova a abstração mailing → campaign → drain → claim → delivery, com DIFF ZERO no
+# scheduler: uma Agenda dispara este pool webhook (POST /v1/channels/webhook/pool/
+# outbound_demo) com payload { campaign_id }, que o dispatcher entrega como context →
+# @ctx.campaign_id. O skill drena um lote (claim atômico no mailing-api), percorre as
+# entradas e registra o resultado de cada entrega.
+#
+# ESCOPO DO DEMO: valida o SUBSTRATO (audiência → campanha → drain/claim → contabilidade
+# de entrega). O envio real por canal (collect) é a CAMADA DO CONSUMIDOR — o survey
+# outbound (skill_survey_outbound_v1) já faz o collect; o substrato genérico só entrega a
+# entrada drenada ao skill. Aqui marcamos `contacted` = "o skill outbound processou a
+# entrada"; um consumidor real trocaria o body do loop por um collect e marcaria
+# responded/failed conforme a resposta.
+#
+# Perfil workflow (webhook): usa só invoke + loop + complete — nada de menu/notify.
+# O ciclo do loop é guardado pelo próprio step `loop` (bounded por array + max_iterations,
+# engine.validateFlow).
+
+id: skill_outbound_demo_v1
+name: "Outbound Demo (drena + contabiliza entregas)"
+version: "1.0"
+description: |
+  Skill demo do substrato outbound (Fase 1). Lê campaign_id do payload da agenda,
+  drena um lote do mailing da campanha (campaign_drain — claim atômico), percorre as
+  entradas com o step loop e registra cada entrega via campaign_delivery_result.
+  Prova a abstração com diff zero no scheduler.
+classification:
+  type: vertical
+
+entry: drenar
+
+steps:
+
+  # ── Drena um lote da campanha (claim atômico — sem drain duplo entre ticks) ──
+  # campaign_id vem do payload da agenda: { campaign_id } → context → @ctx.campaign_id
+  # (mesmo caminho do deploy_promote agendado, que lê @ctx.target_pool).
+  - id: drenar
+    type: invoke
+    tool: campaign_drain
+    input:
+      campaign_id: "@ctx.campaign_id"
+      tenant_id:   "$.tenant_id"
+    output_as: lote
+    on_success: percorrer
+    on_failure: encerrar_vazio
+
+  # ── Percorre o lote drenado; body registra a entrega; volta ao loop ─────────
+  # over vazio (nada a drenar) → on_complete direto (encerrar). Item atual em
+  # $.pipeline_state.alvo (path fixo, sem índice variável).
+  - id: percorrer
+    type: loop
+    over: "$.pipeline_state.lote.drained"
+    item_as: "alvo"
+    index_as: "idx"
+    body: registrar
+    collect: "r"
+    results_as: "resultados"
+    on_complete: encerrar
+    max_iterations: 500
+
+  # ── Registra o resultado da entrega e volta ao loop ─────────────────────────
+  # session_id = a sessão outbound desta execução (drill-through). Um consumidor
+  # real faria o collect ANTES daqui e marcaria responded/failed pela resposta.
+  - id: registrar
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "$.pipeline_state.alvo.delivery_id"
+      result:      "contacted"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: r
+    on_success: percorrer
+    on_failure: percorrer   # falha de contabilidade de UMA entrega não trava o lote
+
+  # ── Lote processado ─────────────────────────────────────────────────────────
+  - id: encerrar
+    type: complete
+    outcome: resolved
+    issue_status: outbound_batch_processed
+
+  # ── Drain falhou (mailing-api indisponível / campanha inexistente) ──────────
+  # on_failure do drain: NÃO silencioso — a sessão fecha com issue_status próprio.
+  - id: encerrar_vazio
+    type: complete
+    outcome: resolved
+    issue_status: outbound_drain_failed

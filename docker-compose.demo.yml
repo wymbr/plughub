@@ -601,6 +601,7 @@ services:
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
       DIALOG_API_URL: http://dialog-api:3760   # dialog primitive — form_get (survey + OTP)
+      MAILING_API_URL: http://mailing-api:3660   # outbound Fase 1 — mailing_add/campaign_drain/campaign_delivery_result
       CONFIG_API_URL: http://config-api:3600   # masking context_rules via HTTP (config-http-propagation arc)
       PLUGHUB_TENANT_ID: tenant_demo
     depends_on:
@@ -1223,6 +1224,27 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3650/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: on-failure
+    networks:
+      - plughub-demo
+
+  mailing-api:
+    build:
+      context: .
+      dockerfile: packages/mailing-api/Dockerfile
+    ports:
+      - "3660:3660"
+    environment:
+      PLUGHUB_MAILING_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3660/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10

@@ -1041,6 +1041,41 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler co
 
 ---
 
+## Outbound — Mailing + Campaign + Delivery (Fase 1 ✅ E2E; Fase 2 governança ✅ validada via API)
+
+Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
+(orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
+consumidor (S11 agendado), não o dono.** Invariantes: metadado da entrada **opaco** (contrato produtor↔consumidor);
+**membership (`mailing_entries`) ≠ suppression (`campaign_deliveries`)**; entrada = `(pessoa, contexto)`.
+
+**`mailing-api`** (Python FastAPI + asyncpg, porta **3660**, schema PG `outbound`): store canônico do domínio
+(one-source). CRUD mailings/campaigns + `mailing_add` (upsert por `dedup_key`) + **drain** (`FOR UPDATE SKIP
+LOCKED` + claim atômico em `campaign_deliveries`) + `POST /v1/deliveries/{id}/result`. Tools MCP grupo `outbound`
+(`mailing_add`/`campaign_drain`/`campaign_delivery_result`) = wrappers finos, `isError` em não-2xx, auditados. O
+skill outbound **drena via MCP** (agentes nunca tocam DB); **pacing = a agenda recorrente** (tick drena ≤
+`batch_size`). Idempotência: `UNIQUE(campaign_id, mailing_entry_id)` + retry por `campaign.retry.max_attempts`.
+Demo: pool webhook `outbound_demo` + `skill_outbound_demo_v1` (drena → `loop` → `campaign_delivery_result`), agenda
+dispara com **diff zero** no scheduler (`@ctx.campaign_id` do payload). Gate `infra/test/smoke_outbound_fase1.sh`
+✅ (2026-07-21). A validação destravou um fix de engine: `loop.ts` não limpava o sentinel `:__invoked__` → invoke
+no body do loop só rodava a 1ª iteração (agora limpo, simétrico ao `:__notified__`).
+**Decisão (2026-07-21):** o `contact_eligibility_check` (Fase 2) **substitui** o `survey_eligibility_check` — motor
+de elegibilidade único e genérico; survey depois. UI (mailings/campaigns) = dívida da fatia 1b.
+
+**Fase 2 — governança de contato ✅ (validada via API):** motor **agnóstico** de fadiga no schema `outbound` —
+`contact_log` (fato: customer×channel×campaign×contacted_at) + `contact_policy` (regra em camadas tenant/campaign:
+`frequency_caps`/`quarantine_after`/`channel_caps`; janela `24h|7d|60m|30s`|seg) + `contact_eligibility_check`
+(decisão: avalia a policy efetiva — campanha sobre tenant — contra o log; `claim=true` grava o fato na mesma
+transação, janela começa no envio; `reason` sempre nomeia a regra). `mailing_unsubscribe` = supressão mailing-scoped
+(`entry.status='unsubscribed'`). Tools MCP `contact_eligibility_check`/`mailing_unsubscribe`; endpoints
+`/v1/contact-policies`, `/v1/contact/eligibility`, `/v1/unsubscribe`. Validação **via API** (`smoke_outbound_fase2.sh`).
+Opt-out global (do_not_contact no cadastro), janela de calendário e preferência soft = Fase 3.
+
+→ See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
+[`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),
+[`docs/product/outbound-fase1-implementation-spec.md`](docs/product/outbound-fase1-implementation-spec.md)
+
+---
+
 ## Pending (Next Iteration)
 
 ### Arc 6 Fase 2 — Observabilidade por Deploy ✅ COMPLETO *(diário+markers + epoch/versão + cobertura 1b)*
@@ -1099,21 +1134,19 @@ Discriminador de procedência **por-sessão** `origin: live|import|reeval` (defa
 - **Reconciliação de store (2026-07-07, ADR `adr-survey-form-scoring-composition.md`):** a nota original "form JSON versionado na **evaluation-api** + `survey_form_get`" é **superseded** — o `survey_definition` é um **`DialogForm`+dimensions na dialog-api** (D8; o dialog primitive as-built usa dialog-api + `form_get`). Composição de nota: camada `dimension` (instrumento) agrupa perguntas com **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de NA, **dimensions paralelas** (um sinal por dimension, ≠ composite único do Quality); `survey_record` **compõe** server-side (D9) via o primitivo compartilhado `@plughub/schemas/scoring.ts` (`composeScore`). Schema escrito; runtime + editor com dimension pendentes.
 - Spec: `docs/arcos/customer-surveys.md`.
 
-### Outbound — Mailing / Campaign / Contact Governance *(design)*
-- Substrato de **outbound genérico** que a Scheduler Fase 4 e o outbound do Customer Surveys (§19) consomem —
-  **survey é o primeiro consumidor, não o dono**. Três entidades: **mailing** (audiência reutilizável = pessoa +
-  canais + **metadado OPACO**, contrato produtor↔consumidor; alimentado por skills em hooks de lifecycle ou por
-  importador anti-corrupção), **campaign** (orquestrador fino: pool outbound + cadência via agenda + canal +
-  governança + `selection` que fatia o mailing), e **governança de contato agnóstica** (fato `contact_log` × regra
-  `contact_policy` × decisão `contact_eligibility_check` — fadiga cross-campanha; o `survey_eligibility_check` vira
-  wrapper). Invariantes: **membership × suppression** (`mailing_entries` × `campaign_deliveries`), entrada =
-  `(pessoa, contexto)`, precedência **opt-out > regra de campanha > preferência soft**, core genérico (domínio em
-  skills). Decisão de contatar = **pipeline de portões**, cada um reuso e "aplica se configurado": período (agenda),
-  janela de contato (calendar-api), canal (channel_policy+resolver), recursos (`pool_status_get` do routing-engine +
-  back-pressure da agenda), fadiga (motor), preferência (cadastro de cliente). `journey_complete` que faltava = o
-  skill do processo chama `mailing_add` no seu passo `complete`. Fases 1–5 (substrato mínimo → governança → portões
-  → importador → survey outbound e2e). Schema PG `outbound` + serviço `mailing-api` (padrão scheduler-api/dialog-api).
-- Design: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md).
+### Outbound — Fases 2b–5 *(Fases 1 ✅ E2E e 2 ✅ a validar — ver seção ativa acima)*
+- **Fase 2b — fiar no skill:** gate `contact_eligibility_check` por entrada no loop do skill outbound
+  (`contacted` × `skipped_ineligible`) + smoke cross-campanha. (Motor da Fase 2 já pronto e agnóstico —
+  `contact_eligibility_check` SUBSTITUI `survey_eligibility_check`.)
+- **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
+  `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
+  possessed-only), preferência (cadastro de cliente).
+- **Fase 4 — importador** anti-corrupção (CSV/xlsx → `mailing_add`, padrão quality-ingest).
+- **Fase 5 — survey outbound e2e:** `journey_complete` = o skill do processo chama `mailing_add` no `complete`;
+  `survey_record`→`session_signal`; pertença à journey via `journey_merge` (metadata.origin_session_id).
+- **UI (fatia 1b):** telas de mailings/campaigns/deliveries no platform-ui (dívida da invariante "UI-editable").
+- Design: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md);
+  arco: [`docs/arcos/outbound.md`](docs/arcos/outbound.md).
 
 ### Histórico de contatos do cliente — capacidade transversal *(spec — §20 de customer-surveys.md)*
 - Útil a **qualquer atendimento** (não só survey). **Já existe**: lista por `customer_id` (`GET /analytics/sessions/customer/{id}`, ClickHouse `sessions.customer_id` = `customer_key`) + `HistoricoTab`/`useCustomerHistory` no Agent Assist; transcrição por sessão (`GET /analytics/v1/transcript/sessions/{id}`). **H1 drill lista→transcrição ✅** (2026-07-02, CHANGELOG): `HistoricoTab` liga ao endpoint via `useSessionTranscript` (masked-by-construction, sem `audit_access_log`); exigiu adicionar o proxy `/analytics/*` ao platform-ui (nginx+vite) — o app canônico não o tinha, então lista+transcrição eram inalcançáveis. **H2 busca (backend) ✅** (2026-07-02, CHANGELOG): `GET /sessions/customer/{id}/search` — **decisão v1 = ClickHouse `messages` JOIN `sessions`** (não `sessions_stream`; masked-by-construction, escopo `customer_id`, colocado), substring `positionCaseInsensitiveUTF8`, 1 hit/sessão + snippet mascarado + score, filtros from/to/channel/outcome/pool. **Proposta fechada (2026-07-15, `docs/adr/adr-customer-360-two-surfaces.md`): Cliente 360 em duas lentes** — Console (ao vivo) × Analytics (retrospectivo) sobre os mesmos dados (`customer_id`), com o **Journey fechado** (T1–T6). **Mapa das 4 abas do Console (D1):** **Contexto** (afirmado — ContextStore da sessão, o que persiste é config de pool), **Histórico** (reatribuído — **jornadas em aberto** re-introduzidas + contatos + busca), **Cliente** (NOVA — cadastro manual + 360), **Ações** (inalterada). Jornadas vivem **só no Histórico**; Cliente **linka**. (D2) "jornadas do cliente" = **filtro `customer_id`+`open` no `/reports/journeys`** (reuso). (D3) **cadastro manual** na aba Cliente, v1 = buscar/criar/atacar âncora (reusa Resolvedor Fase A/B; net-new = `GET /identity/customers/search`; merge/`external_refs` = Fase C). (D4) **360 agregado** por `customer_id`: **quality** (Arc 6) + **survey** (`session_signal`) + resumo contatos/jornadas. **Falta**: H3 (busca UI, backend pronto); HJ (jornadas no Histórico); H4-geral (contexto de jornada); C1a (cadastro) + C1b (360); H4-survey **bloqueado** (briefing de retorno não construído); H5 (Analytics por cliente + `GIN`). **Spec**: `docs/arcos/customer-contact-history.md` (H1–H5/HJ/C1).
