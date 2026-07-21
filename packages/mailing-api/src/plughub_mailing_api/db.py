@@ -428,13 +428,14 @@ async def db_create_campaign(pool: asyncpg.Pool, tenant_id: str, data: dict) -> 
         """
         INSERT INTO outbound.campaigns
             (tenant_id, name, mailing_id, pool_id, selection, channel_policy,
-             transactional, batch_size, retry, agenda_id, status)
-        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9::jsonb,$10,$11)
+             contact_calendar_id, transactional, batch_size, retry, agenda_id, status)
+        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12)
         RETURNING *
         """,
         tenant_id, data["name"], UUID(data["mailing_id"]), data["pool_id"],
         json.dumps(data["selection"]) if data.get("selection") is not None else None,
         json.dumps(data.get("channel_policy", {})),
+        data.get("contact_calendar_id"),
         data.get("transactional", False), data.get("batch_size", 50),
         json.dumps(data.get("retry", {})),
         UUID(data["agenda_id"]) if data.get("agenda_id") else None,
@@ -447,16 +448,17 @@ async def db_update_campaign(pool: asyncpg.Pool, tenant_id: str, id: str, data: 
     row = await pool.fetchrow(
         """
         UPDATE outbound.campaigns
-        SET name           = COALESCE($3, name),
-            pool_id        = COALESCE($4, pool_id),
-            selection      = COALESCE($5::jsonb, selection),
-            channel_policy = COALESCE($6::jsonb, channel_policy),
-            transactional  = COALESCE($7, transactional),
-            batch_size     = COALESCE($8, batch_size),
-            retry          = COALESCE($9::jsonb, retry),
-            agenda_id      = COALESCE($10, agenda_id),
-            status         = COALESCE($11, status),
-            updated_at     = now()
+        SET name                = COALESCE($3, name),
+            pool_id             = COALESCE($4, pool_id),
+            selection           = COALESCE($5::jsonb, selection),
+            channel_policy      = COALESCE($6::jsonb, channel_policy),
+            transactional       = COALESCE($7, transactional),
+            batch_size          = COALESCE($8, batch_size),
+            retry               = COALESCE($9::jsonb, retry),
+            agenda_id           = COALESCE($10, agenda_id),
+            status              = COALESCE($11, status),
+            contact_calendar_id = COALESCE($12, contact_calendar_id),
+            updated_at          = now()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
         """,
@@ -468,6 +470,7 @@ async def db_update_campaign(pool: asyncpg.Pool, tenant_id: str, id: str, data: 
         json.dumps(data["retry"]) if "retry" in data else None,
         UUID(data["agenda_id"]) if data.get("agenda_id") else None,
         data.get("status"),
+        data.get("contact_calendar_id"),
     )
     return _row_to_campaign(row) if row else None
 
@@ -750,19 +753,40 @@ async def _count_contacts(
 
 
 async def db_contact_eligibility(
-    pool: asyncpg.Pool, tenant_id: str, req: dict,
+    pool: asyncpg.Pool, tenant_id: str, req: dict, calendar: Any = None,
 ) -> dict:
-    """Evaluate the effective contact policy against contact_log and, when allowed and
-    claim=true, write a contact_log fact (the window starts at SEND). One transaction.
+    """Evaluate the eligibility of an outbound contact and, when allowed and claim=true,
+    write a contact_log fact (the window starts at SEND).
 
-    Precedence within this engine: quarantine → frequency_caps → channel_caps. Any
-    cap hit denies. No policy configured → allowed. Never silent: the machine `reason`
-    always says which rule denied."""
+    Precedence: contact window (calendar, Fase 3a) → quarantine → frequency_caps →
+    channel_caps. Any gate denies (no claim). No config → allowed. Never silent: the
+    machine `reason` always names the gate that denied."""
     customer_id = req["customer_id"]
     channel     = req["channel"]
     campaign_id = req.get("campaign_id")
     claim       = req.get("claim", True)
     at: datetime = req.get("at") or datetime.now(timezone.utc)
+
+    # ── Portão de janela de contato (Fase 3a) — antes de tudo, fora da transação ──
+    # A campanha aponta um calendar_id; o calendar-api é a única autoridade do "quando".
+    # Fechado/feriado → nega `outside_window` (sem claim); `retry_after` = até o próximo
+    # horário. Erro do calendar / sem calendar → degrada para ABERTO (barulhento no log,
+    # como o scheduler) — uma checagem perdida não bloqueia um contato em silêncio.
+    if campaign_id and calendar is not None:
+        cal_id = await pool.fetchval(
+            "SELECT contact_calendar_id FROM outbound.campaigns "
+            "WHERE id = $1 AND tenant_id = $2",
+            UUID(campaign_id), tenant_id,
+        )
+        if cal_id:
+            status = await calendar.is_open_status(cal_id, at)
+            if status in ("closed", "holiday"):
+                retry_after = None
+                nxt = await calendar.next_open_slot(cal_id, at)
+                if nxt is not None:
+                    retry_after = max(0, int((nxt - at).total_seconds()))
+                return {"allowed": False, "reason": "outside_window",
+                        "retry_after": retry_after, "claimed": False}
 
     async with pool.acquire() as conn:
         async with conn.transaction():

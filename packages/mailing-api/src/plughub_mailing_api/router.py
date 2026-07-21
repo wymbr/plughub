@@ -85,27 +85,29 @@ class AddEntryBody(BaseModel):
 
 
 class CreateCampaignBody(BaseModel):
-    name:           str
-    mailing_id:     str
-    pool_id:        str
-    selection:      dict[str, Any] | None = None
-    channel_policy: dict[str, Any] = Field(default_factory=dict)
-    transactional:  bool = False
-    batch_size:     int = 50
-    retry:          dict[str, Any] = Field(default_factory=dict)
-    agenda_id:      str | None = None
+    name:                str
+    mailing_id:          str
+    pool_id:             str
+    selection:           dict[str, Any] | None = None
+    channel_policy:      dict[str, Any] = Field(default_factory=dict)
+    contact_calendar_id: str | None = None
+    transactional:       bool = False
+    batch_size:          int = 50
+    retry:               dict[str, Any] = Field(default_factory=dict)
+    agenda_id:           str | None = None
 
 
 class UpdateCampaignBody(BaseModel):
-    name:           str | None = None
-    pool_id:        str | None = None
-    selection:      dict[str, Any] | None = None
-    channel_policy: dict[str, Any] | None = None
-    transactional:  bool | None = None
-    batch_size:     int | None = None
-    retry:          dict[str, Any] | None = None
-    agenda_id:      str | None = None
-    status:         str | None = None   # active | paused | completed | archived
+    name:                str | None = None
+    pool_id:             str | None = None
+    selection:           dict[str, Any] | None = None
+    channel_policy:      dict[str, Any] | None = None
+    contact_calendar_id: str | None = None
+    transactional:       bool | None = None
+    batch_size:          int | None = None
+    retry:               dict[str, Any] | None = None
+    agenda_id:           str | None = None
+    status:              str | None = None   # active | paused | completed | archived
 
 
 class DrainBody(BaseModel):
@@ -391,7 +393,8 @@ async def contact_eligibility(
 ) -> dict:
     tenant = _tenant(x_tenant_id)
     req = body.model_dump(exclude_none=True)   # keep `at` as datetime (not json mode)
-    return await db_contact_eligibility(_pool(request), tenant, req)
+    calendar = getattr(request.app.state, "calendar", None)
+    return await db_contact_eligibility(_pool(request), tenant, req, calendar)
 
 
 @router.post("/v1/unsubscribe")

@@ -19,6 +19,7 @@ import asyncpg
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
+from .calendar_client import CalendarClient
 from .config import get_settings
 from .db import ensure_schema
 from .router import router as mailing_router
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     app.state.pool     = pool
     app.state.settings = settings
+    app.state.calendar = CalendarClient(settings.calendar_api_url)
     yield
     await pool.close()
 

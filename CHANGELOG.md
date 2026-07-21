@@ -2,6 +2,18 @@
 
 ---
 
+## Outbound — Fase 3a: portão de janela de contato (calendar) ✅ validado via API (2026-07-21)
+
+Primeiro portão da Fase 3 no `contact_eligibility_check`. **Desenho fechado da Fase 3** persistido em `docs/arcos/outbound.md` (§ "Fase 3 — portões (desenho fechado)"): dos quatro portões, só **calendar (3a)** e **opt-out (3b)** são build novo (elegibilidade); **capacidade** = routing `allocate-or-queue` + `queue_config.max_wait_s` (config, sem código — o `collect` cria o contato roteado) e **canal** = reuso de `collect.channel_policy` — ambos fecham na Fase 5. Pacing é **por-canal**: `reactive` (sem consulta) para baixa latência; `look_ahead` (consulta `pool_status_get` + taxa de conexão) para o **discador de voz** (Fase 5+).
+
+- **`@plughub/schemas/outbound.ts`**: `contact_calendar_id` em `Create/UpdateCampaign`; `reason` documenta `outside_window`.
+- **`mailing-api`**: novo `calendar_client.py` (client fino do calendar-api `is-open-calendar`/`next-open-slot-calendar`, degradação **graciosa e barulhenta** → trata como ABERTO em erro, simétrico ao scheduler). `config.calendar_api_url` (+ dep `httpx`; env `PLUGHUB_MAILING_CALENDAR_API_URL` no compose). `db_contact_eligibility` ganha o portão **antes** dos caps de fadiga e **fora da transação**: se a campanha tem `contact_calendar_id`, chama `is_open`; `closed`/`holiday` → `{allowed:false, reason:"outside_window", retry_after=next_open, claimed:false}` (sem claim). `db_create/update_campaign` persistem `contact_calendar_id` (coluna já existia no DDL da Fase 1).
+- **Smoke** `infra/test/smoke_outbound_fase3a.sh` (via API): cria calendário sempre-fechado (`weekly_schedule:[]`) → campanha com `contact_calendar_id` → eligibility `outside_window` (sem claim); regressão sem calendar → permitido.
+- **Validação (2026-07-21):** `smoke_outbound_fase3a.sh` verde — calendário sempre-fechado → `{allowed:false, reason:"outside_window", claimed:false}`; sem calendar → `{allowed:true, claimed:true}`.
+- **Deploy:** `build mailing-api && up -d --force-recreate mailing-api` (nova dep httpx + calendar client).
+
+---
+
 ## Outbound — Fase 2b: gate de fadiga no skill (fluxo real) ✅ validado E2E (2026-07-21)
 
 Fia o `contact_eligibility_check` (Fase 2) **dentro** do skill outbound — a governança deixa de ser só API e passa a rodar no fluxo real (agenda → webhook → skill).

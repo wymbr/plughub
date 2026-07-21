@@ -196,28 +196,31 @@ export const AddEntryResultSchema = z.object({
 export type AddEntryResult = z.infer<typeof AddEntryResultSchema>
 
 export const CreateCampaignSchema = z.object({
-  name:           z.string().min(1),
-  mailing_id:     z.string(),
-  pool_id:        z.string(),
-  selection:      z.record(z.unknown()).nullable().optional(),
-  channel_policy: ChannelPolicySchema.optional(),
-  transactional:  z.boolean().optional(),
-  batch_size:     z.number().int().min(1).optional(),
-  retry:          CampaignRetrySchema.optional(),
-  agenda_id:      z.string().nullable().optional(),
+  name:                z.string().min(1),
+  mailing_id:          z.string(),
+  pool_id:             z.string(),
+  selection:           z.record(z.unknown()).nullable().optional(),
+  channel_policy:      ChannelPolicySchema.optional(),
+  // Fase 3a — contact window: calendar-api calendar id. null = no window gate.
+  contact_calendar_id: z.string().nullable().optional(),
+  transactional:       z.boolean().optional(),
+  batch_size:          z.number().int().min(1).optional(),
+  retry:               CampaignRetrySchema.optional(),
+  agenda_id:           z.string().nullable().optional(),
 })
 export type CreateCampaign = z.infer<typeof CreateCampaignSchema>
 
 export const UpdateCampaignSchema = z.object({
-  name:           z.string().min(1).optional(),
-  pool_id:        z.string().optional(),
-  selection:      z.record(z.unknown()).nullable().optional(),
-  channel_policy: ChannelPolicySchema.optional(),
-  transactional:  z.boolean().optional(),
-  batch_size:     z.number().int().min(1).optional(),
-  retry:          CampaignRetrySchema.optional(),
-  agenda_id:      z.string().nullable().optional(),
-  status:         CampaignStatusSchema.optional(),
+  name:                z.string().min(1).optional(),
+  pool_id:             z.string().optional(),
+  selection:           z.record(z.unknown()).nullable().optional(),
+  channel_policy:      ChannelPolicySchema.optional(),
+  contact_calendar_id: z.string().nullable().optional(),
+  transactional:       z.boolean().optional(),
+  batch_size:          z.number().int().min(1).optional(),
+  retry:               CampaignRetrySchema.optional(),
+  agenda_id:           z.string().nullable().optional(),
+  status:              CampaignStatusSchema.optional(),
 })
 export type UpdateCampaign = z.infer<typeof UpdateCampaignSchema>
 
@@ -346,8 +349,8 @@ export type EligibilityRequest = z.infer<typeof EligibilityRequestSchema>
 
 export const EligibilityResultSchema = z.object({
   allowed:     z.boolean(),
-  // Machine reason when denied: "frequency_cap" | "quarantine" | "channel_cap" |
-  // "unsubscribed". null/absent when allowed.
+  // Machine reason when denied: "outside_window" (Fase 3a) | "quarantine" |
+  // "frequency_cap" | "channel_cap" | "opt_out" (Fase 3b). null/absent when allowed.
   reason:      z.string().nullable().default(null),
   // Seconds until the blocking window frees up (best-effort), when denied.
   retry_after: z.number().int().nullable().default(null),

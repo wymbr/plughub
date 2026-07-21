@@ -1041,7 +1041,7 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler co
 
 ---
 
-## Outbound — Mailing + Campaign + Delivery (Fase 1 ✅ E2E; Fase 2 ✅ API; Fase 2b gate-no-skill ✅ E2E)
+## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3a janela ✅ via API)
 
 Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
 (orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
@@ -1074,6 +1074,15 @@ o gate roda **dentro** do `skill_outbound_demo_v1` (loop → `verificar_elegibil
 **Deploy do skill editado num pool com slot:** republicar `skill.flow`/reconcile NÃO basta (o bridge roda o
 snapshot do slot `current`) — re-snapshotar via `PUT /slots/next` → `POST /promote` (com `x-service-token`), que
 publica `registry.changed(pool)` e invalida o cache do bridge.
+
+**Fase 3 — portões (desenho fechado):** só **3a (janela/calendar)** + **3b (opt-out `do_not_contact`)** são build
+novo, no `contact_eligibility_check`. **Capacidade** = routing `allocate-or-queue` + `pool.queue_config.max_wait_s`
+(config, sem código — o `collect` cria o contato roteado); **canal** = reuso de `collect.channel_policy` (channels/
+preferred_order/exclude) — ambos fecham na Fase 5. Pacing **por-canal**: `reactive` (sem consulta) p/ baixa latência;
+`look_ahead` (consulta `pool_status_get` + taxa de conexão) p/ o **discador de voz** (Fase 5+). **Fase 3a ✅ via
+API:** `db_contact_eligibility` consulta `campaign.contact_calendar_id` → calendar-api `is_open` (antes dos caps,
+fora da transação); fechado → `outside_window` sem claim; erro do calendar → degrada p/ ABERTO. Smoke
+`smoke_outbound_fase3a.sh`. Ver `docs/arcos/outbound.md`.
 
 → See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
 [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),

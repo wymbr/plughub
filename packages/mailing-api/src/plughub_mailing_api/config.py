@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     # PostgreSQL (shared plughub DB, schema=outbound — canonical store of the domain)
     database_url: str = "postgresql://plughub:plughub@postgres:5432/plughub"
 
+    # calendar-api: contact-window gate (Fase 3a) — is-open by calendar_id. The engine
+    # never re-models "when/open"; it asks calendar-api.
+    calendar_api_url: str = "http://calendar-api:3700"
+
     # Installation context (static per deployment)
     installation_id: str = "install-local"
     organization_id: str = "org-default"

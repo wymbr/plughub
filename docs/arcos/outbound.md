@@ -1,7 +1,7 @@
 # Outbound — Mailing + Campaign + Delivery (arco)
 
-> **Status:** Fase 1 **✅ E2E**; Fase 2 (governança) **✅ via API**; Fase 2b (gate no skill) **✅ E2E**
-> (`smoke_outbound_fase2b.sh`) — 2026-07-21. Fases 3–5 pendentes.
+> **Status:** Fase 1 **✅ E2E**; Fase 2 **✅ via API**; Fase 2b **✅ E2E**; Fase 3a (janela/calendar) **✅ via API**
+> (`smoke_outbound_fase3a.sh`) — 2026-07-21. Fase 3b (opt-out) + Fases 4–5 pendentes.
 > Design fechado: [`../product/outbound-mailing-campaign-design.md`](../product/outbound-mailing-campaign-design.md).
 > Spec de implementação da Fase 1: [`../product/outbound-fase1-implementation-spec.md`](../product/outbound-fase1-implementation-spec.md).
 > Contexto: o módulo Outbound é a **Fase 4 (opcional) do arco Scheduler** (cadência com diff zero).
@@ -88,6 +88,39 @@ data type"; e `datetime` faltando no import do `router.py` sob `from __future__ 
 **Fora da Fase 2** (Fase 3): opt-out **global** (`do_not_contact` no cadastro do cliente), janela de calendário
 (`is_open`), preferência soft (canal/horário), pacing por `pool_status_get`.
 
+## Fase 3 — portões (desenho fechado, 2026-07-21)
+
+O `contact_eligibility_check` é o **ponto de decisão unificado** (a Fase 2 já fez a fadiga). Dos quatro "portões"
+do design (§6), **dois são código novo no outbound** (elegibilidade) e **dois colapsam em subsistemas que já
+existem** (routing/collect) — viram configuração, não build.
+
+| Portão | Natureza | Como fecha |
+|---|---|---|
+| **Janela de contato** | elegibilidade (tempo) | **3a ✅ via API** — `contact_eligibility_check` resolve `campaign.contact_calendar_id` → `calendar-api is_open`; fechado → `outside_window` (sem claim) + `retry_after` até abrir. Aplica só se configurado. Degrada gracioso→ABERTO em erro do calendar. Smoke `smoke_outbound_fase3a.sh`. |
+| **Opt-out global** | elegibilidade (veto) | **3b** — `contact_eligibility_check` consulta o cadastro do cliente (`do_not_contact` por canal/total); maior precedência (veta salvo `campaign.transactional`). Depende do Resolvedor de Identidade. |
+| **Capacidade** | routing | **config, sem código** — não se consulta para reservar; **cria-se o contato roteado** (o `collect`) e o `Router.route()` **aloca-ou-enfileira** (invariante "árbitro único"). Teto de espera = `pool.queue_config.max_wait_s` (`min 0`, default 1800; `0` = falha rápido). Estourou → `close_reason=max_wait_exceeded`. Throttle grosso = `campaign.batch_size` por tick da agenda. |
+| **Canal** | collect | **reuso, sem código** — `collect.channel_policy` **já** aceita `{channels: {canal→pool}, exclude, preferred_order}`; a campanha passa a sua `channel_policy` ao `collect`; o **N2** (`_negotiate_channel`, cego ao processo) resolve `(canal, pool)`. Falta só `_reachable_channels` sair do stub (consultar o resolver p/ `possessed_only`) — é do channel-gateway, Fase 5. |
+
+**O `collect` unifica capacidade + canal:** ele cria a **sessão-filho de contato** no `(canal, pool)` negociado →
+esse contato entra no `Router.route()` → aloca-ou-enfileira. Ou seja, **seleção de canal (N2) + alocação de
+recurso (routing) num passo só**. Nada disso é build novo no outbound — o outbound só **passa** `channel_policy` +
+`customer_id`; capacidade e canal fecham na **Fase 5** (quando houver `collect` real).
+
+**Pacing é por-canal, não global — dois regimes** (`campaign.pacing.mode`):
+- **`reactive`** (default; baixa latência: webchat/whatsapp/`collect`): **sem consulta** — dispara e o routing
+  aloca-ou-enfileira (`max_wait_s`). Simples e previsível.
+- **`look_ahead`** (alta latência: **discador de voz** — progressivo/preditivo): a **consulta de disponibilidade
+  volta a ser necessária** — não para reservar, mas como **input de pacing e critério de início**. Setup de voz é
+  caro (alocar tronco, rede, discar, tocar, detectar): discar 1:1 deixa o agente ocioso durante o setup; discar
+  demais gera **abandono** (regulado). Então consulta-se `pool_status_get` (`available`/`queue_length`) — + **taxa
+  de conexão** (histórico) e **alvo de abandono** no preditivo — para calcular *quantos discar à frente* e *se
+  começa*. `session_reservation`/`max_session_total` (schema do pool) são o gancho de reserva. Eventos de
+  disponibilidade = otimização futura do preditivo apertado (o poll do snapshot é o piso). **Desenho fechado
+  agora; construído junto com o canal de voz outbound (Fase 5+, "discador = dependência futura", §19).**
+
+**Escopo da Fase 3 (agora):** só **3a (calendar)** + **3b (opt-out)** — portões de elegibilidade, ortogonais a
+routing/collect. Capacidade e canal são config/reuso que fecham na Fase 5.
+
 ## Consumidor: Customer Surveys (S11) — decisões de fronteira
 
 O survey (a implementar **depois** do outbound) é cliente do **caminho batelado/agendado** (NPS/PMF relacional).
@@ -107,8 +140,9 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 
 ## Pendente (próximas fases)
 
-- **Fase 3** — portões: janela de contato (calendar `is_open`), capacidade/pacing (`pool_status_get`), preferência
-  do cadastro; `channel_policy` possessed-only.
+- **Fase 3a ✅ via API** (calendar `is_open` no eligibility). **Fase 3b** — opt-out `do_not_contact` (cadastro do
+  cliente) no `contact_eligibility_check`. Capacidade (routing `max_wait_s`) e canal (`collect.channel_policy`) NÃO
+  são build novo — fecham na Fase 5. Pacing `look_ahead` (discador) = desenho fechado, Fase 5+.
 - **Fase 4** — importador anti-corrupção (CSV/xlsx → `mailing_add`).
 - **Fase 5** — survey outbound e2e (`journey_complete` no `complete` do processo; `survey_record`→`session_signal`).
 - **UI (fatia 1b)** — telas de mailings/campaigns/deliveries no platform-ui.
