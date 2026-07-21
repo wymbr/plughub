@@ -2,6 +2,18 @@
 
 ---
 
+## Outbound — Fase 2b: gate de fadiga no skill (fluxo real) ✅ validado E2E (2026-07-21)
+
+Fia o `contact_eligibility_check` (Fase 2) **dentro** do skill outbound — a governança deixa de ser só API e passa a rodar no fluxo real (agenda → webhook → skill).
+
+- **`skill_outbound_demo_v1.yaml`**: o body do loop virou um sub-flow — `verificar_elegibilidade` (`invoke contact_eligibility_check` com `customer_id`/`channel` da entrada, `campaign_id` de `@ctx`, `claim=true`) → `decidir` (`choice` em `elig.allowed`) → `registrar_ok` (`contacted`) | `registrar_skip` (`skipped_ineligible`) → volta ao loop. Motor indisponível → `on_failure` conservador (skip, nunca silencioso). Depende do fix do `:__invoked__` (invoke re-executa por entrada).
+- **`seed_outbound_demo.sh`**: `metadata.channel="webchat"` (o skill lê `$.pipeline_state.alvo.metadata.channel`).
+- **Smoke** `infra/test/smoke_outbound_fase2b.sh`: policy (cap 24h max 1) → campanha A contata cliente X (`contacted`, grava contact_log) → campanha B, **mesmo X**, barrada pelo gate → `skipped_ineligible`. Prova fadiga **cross-campanha no fluxo real**.
+- **Validação (2026-07-21):** `smoke_outbound_fase2b.sh` verde — campanha A → `contacted` (grava contact_log); campanha B, mesmo cliente → `skipped_ineligible`.
+- **Deploy + LIÇÃO (pool com slot):** cadeia `mcp-server-plughub` → `skill-flow-service` → `orchestrator-bridge`. **Editar o skill de um pool com `PoolSkillSlot` NÃO propaga só republicando `skill.flow`** — o bridge executa o **snapshot do slot `current`** (`had_snapshot=True`), e nem o `REGISTRY_SYNC_RECONCILE=true` (que atualiza `skill.flow`/upsert) nem o `registry.changed(skill)` re-snapshotam o slot. É preciso **re-snapshotar o slot**: `PUT /v1/pools/{id}/slots/next {skill_id, config_json}` (auto-busca o `skill.flow` atual como snapshot) → `POST /v1/pools/{id}/promote` — **ambos exigem `x-service-token`** (`AGENT_REGISTRY_SERVICE_TOKEN`). O `promote` publica `registry.changed(pool)` que invalida o cache de flow do bridge. Diagnóstico do sintoma: `GET /v1/skills/:id` mostra `HAS_GATE` (skill.flow novo) mas a execução usa o flow velho, e não há `POST /v1/contact/eligibility` do skill (172.20.0.29) nos logs da mailing-api — a pista foi `GET /v1/pools/:id/slots` → `current.yaml_snapshot` sem o gate.
+
+---
+
 ## Outbound — Fase 2: governança de contato (fadiga + unsubscribe) ✅ validado via API (2026-07-21)
 
 Motor **agnóstico** de fadiga (fato × regra × decisão) no schema `outbound`. Escopo aprovado com o usuário: **motor validado via API** (skill wiring = fatia 2b); **inclui `mailing_unsubscribe`**; opt-out global (cadastro), janela de calendário e preferência soft ficam para a Fase 3. Fecha a decisão de fronteira: **`contact_eligibility_check` substitui `survey_eligibility_check`** (motor único; survey será um chamador).

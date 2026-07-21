@@ -1,7 +1,7 @@
 # Outbound — Mailing + Campaign + Delivery (arco)
 
-> **Status:** Fase 1 **✅ validada E2E** (`smoke_outbound_fase1.sh`); Fase 2 (governança) **✅ validada via API**
-> (`smoke_outbound_fase2.sh`) — 2026-07-21. Fase 2b (fiar no skill) + Fases 3–5 pendentes.
+> **Status:** Fase 1 **✅ E2E**; Fase 2 (governança) **✅ via API**; Fase 2b (gate no skill) **✅ E2E**
+> (`smoke_outbound_fase2b.sh`) — 2026-07-21. Fases 3–5 pendentes.
 > Design fechado: [`../product/outbound-mailing-campaign-design.md`](../product/outbound-mailing-campaign-design.md).
 > Spec de implementação da Fase 1: [`../product/outbound-fase1-implementation-spec.md`](../product/outbound-fase1-implementation-spec.md).
 > Contexto: o módulo Outbound é a **Fase 4 (opcional) do arco Scheduler** (cadência com diff zero).
@@ -75,8 +75,14 @@ Motor **agnóstico** de fadiga. Três peças no schema `outbound` + duas tools:
 Tools MCP (`tools/outbound.ts`): `contact_eligibility_check`, `mailing_unsubscribe` — wrappers finos, `isError` em
 não-2xx, auditados. Endpoints REST: `POST/GET/PATCH/DELETE /v1/contact-policies`, `POST /v1/contact/eligibility`,
 `POST /v1/unsubscribe`. Validação (Fase 2, decisão): **motor via API** (`smoke_outbound_fase2.sh` ✅ — 2 checks no
-mesmo cliente/janela → 2º negado por `frequency_cap` + `retry_after`; unsubscribe → drain exclui). Fiar no skill
-demo = fatia 2b. *(Achados na validação: `$n` não-referenciado no count por-ramo — Postgres "could not determine
+mesmo cliente/janela → 2º negado por `frequency_cap` + `retry_after`; unsubscribe → drain exclui). **Fase 2b ✅
+E2E:** o gate roda **dentro** do `skill_outbound_demo_v1` (loop → `verificar_elegibilidade` → `decidir` →
+`registrar_ok`|`registrar_skip`), provado por `smoke_outbound_fase2b.sh` (fadiga cross-campanha no fluxo real).
+**Lição de deploy (pool com slot):** editar o skill NÃO propaga só republicando `skill.flow`/reconcile — o bridge
+roda o **snapshot do slot `current`**; é preciso `PUT /v1/pools/{id}/slots/next {skill_id}` (auto-snapshot do
+`skill.flow`) → `POST /promote` (ambos com `x-service-token`), que publica `registry.changed(pool)` e invalida o
+cache do bridge.
+*(Achados na validação da Fase 2: `$n` não-referenciado no count por-ramo — Postgres "could not determine
 data type"; e `datetime` faltando no import do `router.py` sob `from __future__ import annotations`.)*
 
 **Fora da Fase 2** (Fase 3): opt-out **global** (`do_not_contact` no cadastro do cliente), janela de calendário
@@ -101,8 +107,6 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 
 ## Pendente (próximas fases)
 
-- **Fase 2b** — fiar `contact_eligibility_check` no skill outbound (gate por entrada no loop: `contacted` ×
-  `skipped_ineligible`) + smoke cross-campanha.
 - **Fase 3** — portões: janela de contato (calendar `is_open`), capacidade/pacing (`pool_status_get`), preferência
   do cadastro; `channel_policy` possessed-only.
 - **Fase 4** — importador anti-corrupção (CSV/xlsx → `mailing_add`).

@@ -27,7 +27,7 @@ for i in 1 2 3; do
   curl -s -X POST "$MA/v1/mailings/$MAILING/entries" "${ts[@]}" -H 'content-type: application/json' -d "{
     \"customer_id\":\"cus_demo_$i\",
     \"contacts\":{\"webchat\":\"demo-$i\"},
-    \"metadata\":{\"target\":\"cus_demo_$i\",\"mensagem\":\"Olá, cliente $i\",\"grain\":\"session\"},
+    \"metadata\":{\"target\":\"cus_demo_$i\",\"mensagem\":\"Olá, cliente $i\",\"grain\":\"session\",\"channel\":\"webchat\"},
     \"source\":\"seed:outbound_demo\"
   }" >/dev/null
 done

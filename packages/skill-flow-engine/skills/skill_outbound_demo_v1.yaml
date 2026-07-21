@@ -9,11 +9,11 @@
 # entradas e registra o resultado de cada entrega.
 #
 # ESCOPO DO DEMO: valida o SUBSTRATO (audiência → campanha → drain/claim → contabilidade
-# de entrega). O envio real por canal (collect) é a CAMADA DO CONSUMIDOR — o survey
-# outbound (skill_survey_outbound_v1) já faz o collect; o substrato genérico só entrega a
-# entrada drenada ao skill. Aqui marcamos `contacted` = "o skill outbound processou a
-# entrada"; um consumidor real trocaria o body do loop por um collect e marcaria
-# responded/failed conforme a resposta.
+# de entrega) + a GOVERNANÇA (Fase 2b): antes de contabilizar, cada entrada passa pelo
+# gate `contact_eligibility_check` (fadiga cross-campanha; claim reserva a janela). Elegível
+# → `contacted`; inelegível → `skipped_ineligible`. O envio real por canal (collect) é a
+# CAMADA DO CONSUMIDOR — o survey outbound já faz o collect; aqui `contacted` = "o skill
+# processou a entrada". Um consumidor real trocaria o body por collect + responded/failed.
 #
 # Perfil workflow (webhook): usa só invoke + loop + complete — nada de menu/notify.
 # O ciclo do loop é guardado pelo próprio step `loop` (bounded por array + max_iterations,
@@ -47,24 +47,52 @@ steps:
     on_success: percorrer
     on_failure: encerrar_vazio
 
-  # ── Percorre o lote drenado; body registra a entrega; volta ao loop ─────────
+  # ── Percorre o lote drenado; body = gate de elegibilidade + registro ─────────
   # over vazio (nada a drenar) → on_complete direto (encerrar). Item atual em
-  # $.pipeline_state.alvo (path fixo, sem índice variável).
+  # $.pipeline_state.alvo (path fixo, sem índice variável). O body sub-flow é
+  # verificar_elegibilidade → decidir → registrar_ok|registrar_skip → percorrer.
   - id: percorrer
     type: loop
     over: "$.pipeline_state.lote.drained"
     item_as: "alvo"
     index_as: "idx"
-    body: registrar
+    body: verificar_elegibilidade
     collect: "r"
     results_as: "resultados"
     on_complete: encerrar
     max_iterations: 500
 
-  # ── Registra o resultado da entrega e volta ao loop ─────────────────────────
+  # ── Fase 2b: gate de fadiga (governança de contato) ─────────────────────────
+  # Motor AGNÓSTICO: avalia a policy efetiva (campanha sobre tenant) contra o
+  # contact_log; claim=true reserva a janela (grava o fato) quando permitido. O fix
+  # do loop (:__invoked__) garante que este invoke re-executa por entrada.
+  - id: verificar_elegibilidade
+    type: invoke
+    tool: contact_eligibility_check
+    input:
+      customer_id: "$.pipeline_state.alvo.customer_id"
+      channel:     "$.pipeline_state.alvo.metadata.channel"
+      campaign_id: "@ctx.campaign_id"
+      claim:       true
+      tenant_id:   "$.tenant_id"
+    output_as: elig
+    on_success: decidir
+    # Motor indisponível → conservador: NÃO contata, marca skip (nunca silencioso).
+    on_failure: registrar_skip
+
+  - id: decidir
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.elig.allowed"
+        operator: eq
+        value: true
+        next: registrar_ok
+    default: registrar_skip
+
+  # ── Elegível: registra contacted e volta ao loop ────────────────────────────
   # session_id = a sessão outbound desta execução (drill-through). Um consumidor
   # real faria o collect ANTES daqui e marcaria responded/failed pela resposta.
-  - id: registrar
+  - id: registrar_ok
     type: invoke
     tool: campaign_delivery_result
     input:
@@ -75,6 +103,19 @@ steps:
     output_as: r
     on_success: percorrer
     on_failure: percorrer   # falha de contabilidade de UMA entrega não trava o lote
+
+  # ── Inelegível (fadiga/quarentena): registra skipped_ineligible ─────────────
+  - id: registrar_skip
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "$.pipeline_state.alvo.delivery_id"
+      result:      "skipped_ineligible"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: r
+    on_success: percorrer
+    on_failure: percorrer
 
   # ── Lote processado ─────────────────────────────────────────────────────────
   - id: encerrar

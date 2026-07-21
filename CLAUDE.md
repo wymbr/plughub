@@ -1041,7 +1041,7 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler co
 
 ---
 
-## Outbound — Mailing + Campaign + Delivery (Fase 1 ✅ E2E; Fase 2 governança ✅ validada via API)
+## Outbound — Mailing + Campaign + Delivery (Fase 1 ✅ E2E; Fase 2 ✅ API; Fase 2b gate-no-skill ✅ E2E)
 
 Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
 (orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
@@ -1068,7 +1068,12 @@ de elegibilidade único e genérico; survey depois. UI (mailings/campaigns) = d�
 transação, janela começa no envio; `reason` sempre nomeia a regra). `mailing_unsubscribe` = supressão mailing-scoped
 (`entry.status='unsubscribed'`). Tools MCP `contact_eligibility_check`/`mailing_unsubscribe`; endpoints
 `/v1/contact-policies`, `/v1/contact/eligibility`, `/v1/unsubscribe`. Validação **via API** (`smoke_outbound_fase2.sh`).
-Opt-out global (do_not_contact no cadastro), janela de calendário e preferência soft = Fase 3.
+Opt-out global (do_not_contact no cadastro), janela de calendário e preferência soft = Fase 3. **Fase 2b ✅ E2E:**
+o gate roda **dentro** do `skill_outbound_demo_v1` (loop → `verificar_elegibilidade`(claim) → `choice` →
+`contacted`|`skipped_ineligible`); smoke `smoke_outbound_fase2b.sh` (fadiga cross-campanha no fluxo real).
+**Deploy do skill editado num pool com slot:** republicar `skill.flow`/reconcile NÃO basta (o bridge roda o
+snapshot do slot `current`) — re-snapshotar via `PUT /slots/next` → `POST /promote` (com `x-service-token`), que
+publica `registry.changed(pool)` e invalida o cache do bridge.
 
 → See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
 [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),
@@ -1134,10 +1139,7 @@ Discriminador de procedência **por-sessão** `origin: live|import|reeval` (defa
 - **Reconciliação de store (2026-07-07, ADR `adr-survey-form-scoring-composition.md`):** a nota original "form JSON versionado na **evaluation-api** + `survey_form_get`" é **superseded** — o `survey_definition` é um **`DialogForm`+dimensions na dialog-api** (D8; o dialog primitive as-built usa dialog-api + `form_get`). Composição de nota: camada `dimension` (instrumento) agrupa perguntas com **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de NA, **dimensions paralelas** (um sinal por dimension, ≠ composite único do Quality); `survey_record` **compõe** server-side (D9) via o primitivo compartilhado `@plughub/schemas/scoring.ts` (`composeScore`). Schema escrito; runtime + editor com dimension pendentes.
 - Spec: `docs/arcos/customer-surveys.md`.
 
-### Outbound — Fases 2b–5 *(Fases 1 ✅ E2E e 2 ✅ a validar — ver seção ativa acima)*
-- **Fase 2b — fiar no skill:** gate `contact_eligibility_check` por entrada no loop do skill outbound
-  (`contacted` × `skipped_ineligible`) + smoke cross-campanha. (Motor da Fase 2 já pronto e agnóstico —
-  `contact_eligibility_check` SUBSTITUI `survey_eligibility_check`.)
+### Outbound — Fases 3–5 *(Fase 1 ✅ E2E, Fase 2 ✅ API, Fase 2b ✅ a validar — ver seção ativa acima)*
 - **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
   `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
   possessed-only), preferência (cadastro de cliente).

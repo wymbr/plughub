@@ -1508,8 +1508,10 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > `outbound` + demo drenado por agenda com diff zero. `smoke_outbound_fase1.sh` verde. Destravou fix de engine
 > (`loop.ts` `:__invoked__`). **Fase 2:** governança de contato — `contact_log`/`contact_policy`/
 > `contact_eligibility_check` (fadiga; substitui `survey_eligibility_check`) + `mailing_unsubscribe`. Motor
-> validado via API (`smoke_outbound_fase2.sh`). Ver `docs/arcos/outbound.md`. **Pendente: Fase 2b (fiar no skill)
-> + Fases 3–5.**
+> validado via API (`smoke_outbound_fase2.sh`). **Fase 2b ✅ E2E:** gate fiado no skill
+> (`smoke_outbound_fase2b.sh`, fadiga cross-campanha no fluxo real). Lição: editar skill de pool com slot exige
+> re-snapshot (`PUT /slots/next`→`POST /promote` com service token), não só reconcile. Ver `docs/arcos/outbound.md`.
+> **Pendente: Fases 3–5.**
 
 > **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
 > (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill
