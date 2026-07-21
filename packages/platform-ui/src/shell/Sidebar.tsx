@@ -6,7 +6,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare, UserSearch,
+  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -68,6 +68,8 @@ const Sidebar: React.FC = () => {
         { label: t('nav.monitor.agents'),    href: '/contacts/agents',   icon: Users,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.pools'),     href: '/contacts/pools',    icon: Waves,     abac: { module: 'contacts',   field: 'operacao' } },
         { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
+        // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.operacao (D2).
+        { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao', strict: true } },
       ]
     },
 
@@ -146,6 +148,8 @@ const Sidebar: React.FC = () => {
         { label: t('nav.platform'),      href: '/config/platform',      icon: Tv2,             abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'platform'  } },
+        // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.configurar (D2).
+        { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar', strict: true } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
         { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },

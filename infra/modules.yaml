@@ -279,3 +279,24 @@ modules:
         domain: [none, read_write]
         scopable: false
         default: none
+
+  # ── Agendas (Scheduler) ───────────────────────────────────────────────────────
+  # Scheduler Fase 3. Grant-first (strict, sem bypass de admin): a nav /config/schedules
+  # e a aba Agendas do Monitor só aparecem para quem recebe o campo explicitamente na
+  # tela de Acesso — sem role default (decisão D2). `configurar` = criar/editar agendas
+  # (autoria); `operacao` = ver/operar o Monitor (disparar-já, pausar/retomar, cancelar).
+  - module_id: scheduler
+    label: Agendas
+    icon: "⏰"
+    nav_path: /config/schedules
+    permission_schema:
+      configurar:
+        label: Criar e editar agendas
+        domain: [none, read_write]
+        scopable: false
+        default: none
+      operacao:
+        label: Operar agendas no Monitor (disparar, pausar, cancelar)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none

@@ -97,6 +97,19 @@ pools:
     webhook_skill_id: skill_gate_promocao_v1
     sla_target_ms: 86400000
 
+  # Pool webhook que EFETIVA promoção de deploy agendada (Scheduler Fase 2).
+  # Disparado por uma Agenda (POST /v1/channels/webhook/pool/deploy_promote_ia); o
+  # skill lê o pool-alvo do payload da agenda (@ctx.target_pool) e chama pool_promote.
+  # Corpo síncrono, baixo volume — 1 instância basta.
+  - pool_id: deploy_promote_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_deploy_promote_v1, max_concurrent_sessions: 1 }
+    description: "Pool webhook — promoção de deploy agendada (Scheduler Fase 2)"
+    channel_types: [webhook]
+    skill_id: skill_deploy_promote_v1
+    webhook_skill_id: skill_deploy_promote_v1
+    sla_target_ms: 86400000
+
   - pool_id: retencao_humano
     # Capacity-governance item 2: tipagem explícita — pool humano (queue_config
     # exige human; logins contam contra C_human). Pools IA declaram agent_kind: ai.

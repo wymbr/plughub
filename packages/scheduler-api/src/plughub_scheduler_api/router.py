@@ -291,6 +291,34 @@ async def cancel_agenda(
     return await _set_status(request, _tenant(x_tenant_id), agenda_id, "cancelled")
 
 
+@router.post("/v1/agendas/{agenda_id}/fire")
+async def fire_agenda(
+    agenda_id: str, request: Request, x_tenant_id: str | None = Header(default=None),
+) -> dict:
+    """Fase 3 — 'disparar agora'. Força um disparo imediato do pool da agenda,
+    sem consumir/recalcular a recorrência (a próxima ocorrência armada segue intacta).
+    Grava um AgendaDispatch (scheduled_for = now).
+
+    Só agendas VIVAS (active/paused) podem ser disparadas manualmente: disparar uma
+    agenda terminal (completed/expired/cancelled) ressuscitaria algo concluído e ainda
+    produziria dispatch numa agenda 'completed' — incoerente. 'disparar agora' é override
+    de execução de instância viva, não reabertura de agenda encerrada."""
+    tenant = _tenant(x_tenant_id)
+    agenda = await db_get_agenda(_pool(request), tenant, agenda_id)
+    if not agenda:
+        raise HTTPException(status_code=404, detail="Agenda not found")
+    if agenda.get("status") not in ("active", "paused"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Agenda '{agenda.get('status')}' não pode ser disparada (só active/paused)",
+        )
+    dispatcher = getattr(request.app.state, "dispatcher", None)
+    if dispatcher is None:
+        raise HTTPException(status_code=503, detail="Dispatcher not initialised")
+    dispatch = await dispatcher.fire_manual(agenda)
+    return {"agenda_id": agenda_id, "dispatch": dispatch}
+
+
 # ── Dispatch ledger ───────────────────────────────────────────────────────────
 
 @router.get("/v1/agendas/{agenda_id}/dispatches")

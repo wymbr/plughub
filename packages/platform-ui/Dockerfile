@@ -164,6 +164,16 @@ RUN printf 'server {\n\
         proxy_read_timeout 60s;\n\
     }\n\
 \n\
+    # scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1.\n\
+    location ~ ^/v1/agendas(/|$) {\n\
+        set $up_scheduler http://scheduler-api:3650;\n\
+        proxy_pass         $up_scheduler;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
+    }\n\
+\n\
     # agent-registry — generic /v1 catch-all\n\
     location ~ ^/v1(/|$) {\n\
         set $up_registry http://agent-registry:3300;\n\
@@ -180,7 +190,7 @@ RUN printf 'server {\n\
     # like /config/masking/context_rules (2 segments) fall through to the proxy below.\n\
     # (`masking` is both a page name and a config-api namespace, so the old\n\
     #  ^/config/masking(/|$) wrongly captured PUT /config/masking/context_rules → 405.)\n\
-    location ~ ^/config/(access|billing|platform|masking|recursos|resources|channels|canais|groups|calendars)/?$ {\n\
+    location ~ ^/config/(access|billing|platform|masking|recursos|resources|channels|canais|groups|calendars|schedules)/?$ {\n\
         try_files $uri $uri/ /index.html;\n\
     }\n\
 \n\

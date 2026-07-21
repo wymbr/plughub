@@ -70,6 +70,11 @@ export default defineConfig({
         target: 'http://localhost:8010',
         changeOrigin: true
       },
+      '^/v1/agendas': {
+        // scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1 (→ agent-registry).
+        target: 'http://localhost:3650',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
         changeOrigin: true

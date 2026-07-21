@@ -158,21 +158,46 @@ disparo webhook→pool com captura da resposta (AgendaDispatch) · re-arme de re
 **Gate:** criar agenda via REST (once + recurring) contra um pool webhook sintético → sessão admitida, ledger
 gravado, próxima ocorrência calculada; caso `only_business_days`/feriado → `skipped`; caso 5xx → `failed`.
 
-### Fase 2 — Consumidor deploy (promote agendado)
-Corpo do job = pool webhook cujo skill faz `invoke POST /v1/pools/:id/promote` **com `on_failure`** (409 de
-capacidade / `next` vazio não some). Autora-se uma Agenda apontando esse pool, `payload = { target_pool,
-action: "promote" }` — **sem versão** (ver §7: pin descartado; promote = "vira o `next` vigente em T", concern
-do pool). **Gate:** agenda dispara em T → promove o slot `next` do pool-alvo → `SkillDeployment` gravado; `next`
-vazio ou falha de capacidade vira `AgendaDispatch.failed` com motivo, sem promover em silêncio.
+### Fase 2 — Consumidor deploy (promote agendado) ✅ (2026-07-21)
+Corpo do job = pool webhook cujo skill faz `invoke <promote>` **com `on_failure`** (409 de capacidade / `next`
+vazio não some). Autora-se uma Agenda apontando esse pool, `payload = { target_pool, action: "promote" }` —
+**sem versão** (ver §7: pin descartado; promote = "vira o `next` vigente em T", concern do pool).
 
-### Fase 3 — UI (autoria + Monitor)
-- **`/config/schedules`** (grupo Configuração, ABAC `scheduler.configurar`): lista + drawer de criação/edição
-  reusando os padrões do CalendarsPage; **seletor de pool filtrado a `channel_types ∋ webhook`** (avisa se vazio);
-  editor de `rule` (frequency/weekdays/monthly/times/business_day_policy) + `validity` + `calendar_id` + payload
-  (JsonParamInput). Rota/navKey em inglês, rótulo "Agendas" só no pt-BR.
-- **Monitor** (aba nova): agendas vivas + régua de disparos (AgendaDispatch com link pra sessão) + operações
-  **disparar agora / reagendar próxima ocorrência / pausar-retomar / cancelar**. Config define a *política*;
-  Monitor opera as *instâncias vivas* (não duplicar reagendamento nos dois).
+**As-built:** `invoke` alcança o promote por uma **tool MCP `pool_promote`** (não HTTP arbitrário) —
+`mcp-server-plughub/tools/deploy.ts`, wrapper de `POST /v1/pools/:id/promote`, auditada pelo `McpInterceptor`.
+Skill `skill_deploy_promote_v1` (perfil workflow) lê o alvo de `@ctx.target_pool` (o payload da agenda vira tags
+do ContextStore no trigger). Pool `deploy_promote_ia` (`infra/registry/tenant_demo.yaml`).
+
+**Correção da camada (importante):** o `next` vazio → `pool_promote` devolve `isError` → o skill-flow-service
+lança → o `invoke` roteia `on_failure` → `complete(failed)`. Isso torna **a SESSÃO** `failed` (o slot fica
+intacto — nada em silêncio). O **`AgendaDispatch` continua `dispatched`** (a channel-gateway devolveu
+201+session_id, §2): a falha do promote é da **execução da sessão** e se observa por **drill-through** (`session_id`
+no ledger), não espelhada no `AgendaDispatch.failed` (este só marca falha do POST do webhook — 5xx/unreachable).
+O que o gate exige e prova permanece: **nenhuma promoção silenciosa**.
+
+**Gate:** `infra/test/smoke_scheduled_promote.sh` — (A) `next` encenado → agenda once no passado dispara →
+`current` vira o ex-next + `SkillDeployment`; (B) `next` vazio → 409 → sessão `failed`, slot inalterado.
+
+### Fase 3 — UI (autoria + Monitor) ✅ (2026-07-21)
+- **`/config/schedules`** (`SchedulesPage`, grupo Configuração): lista + drawer CRUD (molde CalendarsPage);
+  seletor de pool filtrado a `channel_types ∋ webhook` (avisa se vazio); editor de `rule` (frequency/interval/
+  weekdays/monthly by-date|by-position/`times[]`/business_day_policy/month_overflow) + `validity` + `timezone` +
+  `calendar_id` (reusa calendar-api) + `payload` (JSON validado). Rota/navKey em inglês, rótulo "Agendas" só no pt-BR.
+- **Monitor › Agendas** (`SchedulesMonitorPage`, `/monitor/schedules`, aba junto de Sessions/Pools/Agents/Events —
+  D1): agendas vivas + régua de `AgendaDispatch` (lazy no expand) com **drill-through** pra sessão
+  (`/analise/sessions?session_id=…`) + ops **disparar agora / pausar-retomar / cancelar** + **filtro** (busca
+  nome/pool + chips de status com contagem, client-side). **Reagendar = editar a schedule na autoria** (PATCH
+  recalcula `next_fire_at`) — D4; o Monitor não duplica a edição de política. **`disparar agora` só em agendas
+  VIVAS** (`active`/`paused`) — botão oculto em terminal e `POST /fire` rejeita não-vivas com 409 (não re-dispara
+  algo encerrado). Follow-up UX opcional (não bloqueante): filtro "próximo disparo" (hoje/7d/30d) na lista +
+  range de datas na régua.
+
+**As-built (decisões travadas):** **D1** aba no Monitor unificado; **D2** ABAC `scheduler.{configurar,operacao}`
+grant-first, **sem role default nem bypass de admin** (só quem recebe o campo em Acesso vê as telas; o seed
+concede ao admin demo explicitamente); **D3** pool só-webhook (filtro rígido); **D4** reagendar via PATCH.
+Endpoint novo: `POST /v1/agendas/{id}/fire` (`Dispatcher.fire_manual` — disparo imediato, **não** consome a
+recorrência; cancelada→409). Proxy `/v1/agendas`→3650 (Vite `vite.config.ts` + nginx `platform-ui/Dockerfile`).
+Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. Smoke `infra/test/smoke_scheduler_fire_now.sh`.
 
 ### Fora do primeiro arco (follow-ups)
 - **Fase 4 — outbound (campanhas/survey):** 2º consumidor recorrente; prova a abstração; liga ao outbound do

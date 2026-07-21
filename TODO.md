@@ -1496,7 +1496,20 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 
 ---
 
-## Scheduler / Agenda — `scheduler-api` *(Fase 1 ✅ 2026-07-20; Fases 2–3 pendentes)*
+## Scheduler / Agenda — `scheduler-api` *(Fase 1 ✅ 2026-07-20; Fase 2 ✅ · Fase 3 ✅ 2026-07-21 — ARCO COMPLETO)*
+
+> **Fase 3 CONCLUÍDA (2026-07-21, ver CHANGELOG):** UI (autoria `/config/schedules` + Monitor › Agendas) +
+> endpoint `POST /v1/agendas/{id}/fire` (disparo manual sem consumir a recorrência). ABAC `scheduler.{configurar,
+> operacao}` grant-first, sem role default nem bypass de admin (D2). Proxy `/v1/agendas`→3650 (Vite+nginx).
+> Smoke `infra/test/smoke_scheduler_fire_now.sh`. **Scheduler completo (Fases 1–3).** Follow-ups abaixo
+> (Fase 4 outbound + migração dos timers legados) permanecem opcionais.
+
+> **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
+> (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill
+> `skill_deploy_promote_v1` (perfil workflow, `invoke pool_promote` lendo `@ctx.target_pool` do payload da
+> agenda); pool webhook `deploy_promote_ia`; gate `infra/test/smoke_scheduled_promote.sh` (next encenado →
+> promove + SkillDeployment; next vazio → 409 → sessão failed, slot intacto). Sem pin (S4), um caminho de
+> promote, sem retry.
 
 > **Fase 1 CONCLUÍDA e validada E2E (2026-07-20, ver CHANGELOG):** `scheduler-api` (porta 3650) —
 > Camada 1 (Redis sorted-set + poller + re-hidratação), Camada 2 (Postgres `agendas`+`agenda_dispatches`),

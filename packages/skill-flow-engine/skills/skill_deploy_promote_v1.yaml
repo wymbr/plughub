@@ -1,0 +1,53 @@
+id: skill_deploy_promote_v1
+name: Promoção de Deploy Agendada
+version: "1.0"
+description: |
+  Corpo do job de uma Agenda de deploy (Scheduler Fase 2). Quando a agenda dispara
+  o pool webhook, este workflow EFETIVA a promoção do pool-alvo chamando o único
+  caminho de promote do agent-registry (POST /v1/pools/:id/promote) via a tool MCP
+  `pool_promote` — next→current→previous, grava SkillDeployment, revalida capacidade.
+
+  O scheduler é domain-agnostic: entrega o payload da agenda como `context` do trigger
+  (webhook.py grava cada chave no ContextStore). Este skill lê o pool-alvo de
+  `@ctx.target_pool` — o payload da agenda é `{ target_pool, action: "promote" }`.
+  Uma única Agenda + este pool promovem QUALQUER pool: o alvo vem do payload, não do
+  skill (invariante S4 — endereça-se o pool, nunca a versão).
+
+  Promote = "vira o `next` vigente em T" (pin descartado, spec §7): quem encenou o
+  `next` é o dono do que vai ao ar. `next` vazio em T → 409 → o `pool_promote`
+  devolve isError → o `invoke` roteia `on_failure` → complete(failed). O dispatcher
+  do scheduler grava `AgendaDispatch.failed` pelo ciclo da sessão (drill-through) —
+  a promoção NÃO acontece em silêncio, e falha nenhuma some (degradação nunca muda).
+
+  Perfil workflow (webhook, Arc 19): usa apenas invoke/choice/complete
+  (menu/notify/suspend proibidos ou desnecessários neste corpo síncrono).
+classification:
+  type: vertical
+
+entry: efetuar_promocao
+
+steps:
+  # ── Efetiva a promoção do pool-alvo ──────────────────────────────────────────
+  # `pool_promote` é o wrapper auditado do POST /v1/pools/:id/promote. Alvo lido do
+  # payload da agenda (@ctx.target_pool); tenant do próprio contexto do trigger.
+  - id: efetuar_promocao
+    type: invoke
+    tool: pool_promote
+    input:
+      target_pool_id: "@ctx.target_pool"
+      tenant_id:      "$.tenant_id"
+      promoted_by:    "scheduler:deploy_promote"
+    output_as: promote_result
+    on_success: encerrar_ok
+    on_failure: encerrar_falha
+
+  # ── Desfechos ────────────────────────────────────────────────────────────────
+  - id: encerrar_ok
+    type: complete
+    outcome: resolved
+
+  # `next` vazio (409) / capacidade (422) / pool inexistente (404) / rede →
+  # pool_promote isError → aqui. O ledger do scheduler grava failed com o motivo.
+  - id: encerrar_falha
+    type: complete
+    outcome: failed

@@ -64,6 +64,34 @@ class Dispatcher:
             agenda["id"], result, session_id, error,
         )
 
+    async def fire_manual(self, agenda: dict) -> dict:
+        """Fase 3 — 'disparar agora': força um disparo imediato do pool da agenda.
+
+        Difere do on_fire por NÃO avançar a recorrência: um disparo manual não
+        consome nem recalcula a próxima ocorrência (a política de recorrência é da
+        Config; o Monitor só empurra um disparo extra). Grava um AgendaDispatch com
+        scheduled_for = now (marca o disparo sob demanda). Reusa o mesmo caminho de
+        webhook/ledger — dispatched só quando volta session_id; senão failed com o
+        motivo (sem retry, degradação nunca silenciosa)."""
+        tenant = agenda["tenant_id"]
+        now = datetime.now(timezone.utc)
+        result, session_id, root_session_id, error = await self._trigger_webhook(agenda)
+        row = await db_insert_dispatch(self.pool, tenant, {
+            "agenda_id":       agenda["id"],
+            "scheduled_for":   now,
+            "fired_at":        now,
+            "result":          result,
+            "session_id":      session_id,
+            "root_session_id": root_session_id,
+            "error":           error,
+        })
+        await db_update_agenda_runtime(self.pool, agenda["id"], last_fired_at=now)
+        logger.info(
+            "agenda=%s MANUAL fire result=%s session=%s error=%s",
+            agenda["id"], result, session_id, error,
+        )
+        return row
+
     async def _trigger_webhook(self, agenda: dict):
         """Returns (result, session_id, root_session_id, error)."""
         pool_id = agenda["target_pool_id"]

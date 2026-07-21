@@ -12,6 +12,8 @@ import MaskingPage from '@/modules/masking/MaskingPage'
 import WorkflowEditorPage   from '@/modules/workflows/WorkflowEditorPage'
 import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
+import SchedulesPage from '@/modules/schedules/SchedulesPage'
+import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import FlowMonitorPage      from '@/modules/agent-flow/FlowMonitorPage'
@@ -72,6 +74,8 @@ export const routes: RouteObject[] = [
       { path: 'contacts/pools',    element: <PoolsPage    /> },
       { path: 'contacts/events',   element: <EventsPage   /> },
       { path: 'flow/monitor',      element: <FlowMonitorPage     /> },
+      // Monitor/Agendas → live schedules + dispatch ledger (Scheduler Fase 3)
+      { path: 'monitor/schedules', element: <SchedulesMonitorPage /> },
       // Monitor/Processes → KPI dashboard (completion rates, failure analysis)
       { path: 'flow/processos',    element: <ProcessosPage      /> },
       // Legacy redirects
@@ -145,6 +149,7 @@ export const routes: RouteObject[] = [
       { path: 'config/groups',     element: <GroupsPage /> },
       { path: 'audit',             element: <AuditPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
+      { path: 'config/schedules',  element: <SchedulesPage /> },
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 
       { path: 'business',  element: <Navigate to="/" replace /> },

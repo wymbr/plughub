@@ -164,6 +164,80 @@ def set_module_config(user_id: str, config: dict):
 #  catálogo → 422 → demo users ficavam sem ABAC.)
 DEMO_USERS = [
     {
+        # Admin demo — module_config EXPLÍCITO e COMPLETO (superusuário).
+        #
+        # Porquê completo (e não só `scheduler`): o auth-api (e outros serviços) tratam
+        # "module_config vazio" como legado e LIBERAM tudo (degradação graciosa). Dar ao
+        # admin um config PARCIAL (ex.: só scheduler) desliga essa degradação e o admin
+        # passa a ser negado em tudo que não listou — ex.: 403 `config.usuarios` na tela
+        # Access. Um admin explícito lista todos os campos do catálogo (infra/modules.yaml),
+        # incluindo o novo módulo `scheduler` (Fase 3, D2 — grant individual, não role
+        # default). Campos com domínio só read_only ficam em read_only (senão 422 no PUT).
+        "email":    "admin@plughub.local",
+        "name":     "Demo Admin",
+        "password": "changeme_admin",
+        "roles":    ["admin", "developer"],
+        "module_config": {
+            "evaluation": {
+                "contestar":          {"access": "read_write", "scope": []},
+                "revisar":            {"access": "read_write", "scope": []},
+                "contestar_replica":  {"access": "read_write", "scope": []},
+                "contestar_treplica": {"access": "read_write", "scope": []},
+                "revisar_replica":    {"access": "read_write", "scope": []},
+                "revisar_treplica":   {"access": "read_write", "scope": []},
+                "curar":              {"access": "read_write", "scope": []},
+                "report":             {"access": "read_only",  "scope": []},
+                "formularios":        {"access": "read_write", "scope": []},
+                "gerir_rubrica":      {"access": "read_write", "scope": []},
+            },
+            "contacts": {
+                "operacao":   {"access": "read_write", "scope": []},
+                "visualizar": {"access": "read_only",  "scope": []},
+                "exportar":   {"access": "read_write", "scope": []},
+            },
+            "workflows": {
+                "operacao":       {"access": "read_write", "scope": []},
+                "visualizar":     {"access": "read_only",  "scope": []},
+                "cancelar":       {"access": "read_write", "scope": []},
+                "webhooks":       {"access": "read_write", "scope": []},
+                "journey_read":   {"access": "read_only",  "scope": []},
+                "journey_resume": {"access": "read_write", "scope": []},
+            },
+            "campaigns": {
+                "visualizar": {"access": "read_only",  "scope": []},
+                "gerenciar":  {"access": "read_write", "scope": []},
+            },
+            "agent_assist": {
+                "atender":       {"access": "read_write", "scope": []},
+                "supervisionar": {"access": "read_write", "scope": []},
+            },
+            "billing": {
+                "visualizar": {"access": "read_only",  "scope": []},
+                "gerenciar":  {"access": "read_write", "scope": []},
+            },
+            "config": {
+                "plataforma": {"access": "read_write", "scope": []},
+                "resources":  {"access": "read_write", "scope": []},
+                "canais":     {"access": "read_write", "scope": []},
+                "usuarios":   {"access": "read_write", "scope": []},
+                "masking":    {"access": "read_write", "scope": []},
+            },
+            "skill_flows": {
+                "operacao":   {"access": "read_write", "scope": []},
+                "visualizar": {"access": "read_only",  "scope": []},
+                "editar":     {"access": "read_write", "scope": []},
+            },
+            "approvals": {
+                "operacao": {"access": "read_write", "scope": []},
+                "decide":   {"access": "read_write", "scope": []},
+            },
+            "scheduler": {
+                "configurar": {"access": "read_write", "scope": []},  # autoria de agendas
+                "operacao":   {"access": "read_write", "scope": []},  # Monitor: disparar/pausar/cancelar
+            },
+        },
+    },
+    {
         "email":    "supervisor@plughub.local",
         "name":     "Demo Supervisor",
         "password": "changeme_supervisor",

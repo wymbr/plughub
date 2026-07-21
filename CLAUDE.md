@@ -1009,7 +1009,7 @@ delegate→suspend do OTP resolvido 2026-07-07 — ver CHANGELOG + `docs/arcos/s
 
 ---
 
-## Scheduler / Agenda — `scheduler-api` (Fase 1 ✅)
+## Scheduler / Agenda — `scheduler-api` (Fase 1 ✅ · Fase 2 ✅ · Fase 3 ✅)
 
 Serviço `scheduler-api` (porta 3650). Uma **Agenda** é um recurso **domain-agnostic** que, num *quando/modo*
 (1x / recorrente daily-weekly-monthly, `times[]` no dia), **aciona um POOL via webhook** (Arc 19,
@@ -1021,8 +1021,20 @@ o "quando" — `business_day_policy` consulta o **calendar-api** (endpoints by-c
 execução é da sessão (ref `session_id` no ledger, drill-through, nunca espelhada); `dispatched` = gateway criou
 sessão (admissão/capacidade aparecem no ciclo da sessão); sem retry no v1 (`failed` gravado + Monitor).
 Recorrência calcula só a **próxima** ocorrência e re-arma no disparo; `once`/exhausted → `completed`.
-**Pendente: Fase 2** (consumidor deploy = promote agendado, corpo = pool cujo skill faz `invoke promote`);
-**Fase 3** (UI `/config/schedules` + Monitor com reagendar/cancelar/pausar/disparar-já).
+**Fase 2 ✅ (promote agendado):** o corpo do job = pool webhook `deploy_promote_ia` (skill `skill_deploy_promote_v1`,
+perfil workflow) que faz `invoke pool_promote` lendo o pool-alvo do **payload da agenda** (`@ctx.target_pool`;
+payload = `{ target_pool, action }`). `pool_promote` (tool em `mcp-server-plughub/tools/deploy.ts`) é o wrapper
+auditado do **único** caminho de promote (`POST /v1/pools/:id/promote`); **não-2xx (409 `next` vazio / 422
+capacidade) → `isError` → `on_failure`** (o 409 não some, promoção nenhuma em silêncio). Endereça **pool**, nunca
+skill/versão (S4; **sem pin**). A falha do promote vive no **ciclo da sessão** (drill-through), não no
+`AgendaDispatch` (a gateway devolve 201+session_id). Gate `infra/test/smoke_scheduled_promote.sh`.
+**Fase 3 ✅ (UI + fire-now):** `POST /v1/agendas/{id}/fire` (`Dispatcher.fire_manual` — disparo imediato sem
+consumir a recorrência; cancelada→409). platform-ui **`/config/schedules`** (autoria: CRUD + editor de rule/
+validity/calendar/payload, seletor de pool só-webhook) e **Monitor › Agendas** (`/monitor/schedules`: régua de
+`AgendaDispatch` + drill pra sessão + disparar/pausar/retomar/cancelar; reagendar = editar na autoria).
+Proxy `/v1/agendas`→3650 (Vite+nginx). **ABAC `scheduler.{configurar,operacao}`** grant-first, **sem role
+default nem bypass de admin** (D2 — só quem recebe o campo em Acesso vê as telas; seed concede ao admin demo).
+Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler completo (Fases 1–3).**
 
 → See [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md),
 [`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md)
