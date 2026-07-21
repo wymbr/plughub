@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS outbound.campaigns (
     mailing_id          UUID        NOT NULL REFERENCES outbound.mailings(id),
     pool_id             TEXT        NOT NULL,
     selection           JSONB,
+    ordering            JSONB       NOT NULL DEFAULT '[]',
     channel_policy      JSONB       NOT NULL DEFAULT '{}',
     contact_calendar_id TEXT,
     contact_policy_id   UUID,
@@ -173,6 +175,11 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(_DDL_ENTRIES)
             await conn.execute(_DDL_ENTRIES_IDX)
             await conn.execute(_DDL_CAMPAIGNS)
+            # Idempotent add for DBs created before the ordering column existed.
+            await conn.execute(
+                "ALTER TABLE outbound.campaigns "
+                "ADD COLUMN IF NOT EXISTS ordering JSONB NOT NULL DEFAULT '[]'"
+            )
             await conn.execute(_DDL_CAMPAIGNS_IDX)
             await conn.execute(_DDL_DELIVERIES)
             await conn.execute(_DDL_DELIVERIES_IDX)
@@ -235,6 +242,7 @@ def _row_to_campaign(row: asyncpg.Record) -> dict[str, Any]:
         "mailing_id":          str(row["mailing_id"]),
         "pool_id":             row["pool_id"],
         "selection":           _jl(row["selection"]),
+        "ordering":            _jl(row["ordering"]) or [],
         "channel_policy":      _jl(row["channel_policy"]) or {},
         "contact_calendar_id": row["contact_calendar_id"],
         "contact_policy_id":   str(row["contact_policy_id"]) if row["contact_policy_id"] else None,
@@ -427,13 +435,14 @@ async def db_create_campaign(pool: asyncpg.Pool, tenant_id: str, data: dict) -> 
     row = await pool.fetchrow(
         """
         INSERT INTO outbound.campaigns
-            (tenant_id, name, mailing_id, pool_id, selection, channel_policy,
+            (tenant_id, name, mailing_id, pool_id, selection, ordering, channel_policy,
              contact_calendar_id, transactional, batch_size, retry, agenda_id, status)
-        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10::jsonb,$11,$12)
+        VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8,$9,$10,$11::jsonb,$12,$13)
         RETURNING *
         """,
         tenant_id, data["name"], UUID(data["mailing_id"]), data["pool_id"],
         json.dumps(data["selection"]) if data.get("selection") is not None else None,
+        json.dumps(data.get("ordering", [])),
         json.dumps(data.get("channel_policy", {})),
         data.get("contact_calendar_id"),
         data.get("transactional", False), data.get("batch_size", 50),
@@ -458,6 +467,7 @@ async def db_update_campaign(pool: asyncpg.Pool, tenant_id: str, id: str, data: 
             agenda_id           = COALESCE($10, agenda_id),
             status              = COALESCE($11, status),
             contact_calendar_id = COALESCE($12, contact_calendar_id),
+            ordering            = COALESCE($13::jsonb, ordering),
             updated_at          = now()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -471,13 +481,45 @@ async def db_update_campaign(pool: asyncpg.Pool, tenant_id: str, id: str, data: 
         UUID(data["agenda_id"]) if data.get("agenda_id") else None,
         data.get("status"),
         data.get("contact_calendar_id"),
+        json.dumps(data["ordering"]) if "ordering" in data else None,
     )
     return _row_to_campaign(row) if row else None
 
 
 # ── Drain (claim a batch) + delivery result ───────────────────────────────────
 
-_DRAIN_SQL = """
+# Declarative ordering — path sanitized to a safe token so it can be interpolated
+# into the metadata accessor (never user quotes). added_at is always the final
+# tiebreaker (determinism). `{order_by}` is substituted from campaign.ordering.
+_ORDER_PATH_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
+
+def _build_order_by(ordering: Any) -> str:
+    """Build the ORDER BY expression list (no 'ORDER BY' prefix) from campaign.ordering.
+    Alias is `e` (outbound.mailing_entries). Invalid/unsafe paths are skipped. Numeric
+    ordering is guarded (non-numeric → NULL → NULLS LAST) to never error on bad data."""
+    parts: list[str] = []
+    for o in ordering or []:
+        if not isinstance(o, dict):
+            continue
+        path = o.get("path")
+        if not path or not _ORDER_PATH_RE.match(str(path)):
+            logger.warning("campaign.ordering: unsafe/invalid path %r skipped", path)
+            continue
+        direction = "DESC" if str(o.get("dir", "asc")).lower() == "desc" else "ASC"
+        if str(o.get("type", "text")).lower() == "number":
+            expr = (
+                f"(CASE WHEN e.metadata->>'{path}' ~ '^-?[0-9]+(\\.[0-9]+)?$' "
+                f"THEN (e.metadata->>'{path}')::numeric END)"
+            )
+        else:
+            expr = f"(e.metadata->>'{path}')"
+        parts.append(f"{expr} {direction} NULLS LAST")
+    parts.append("e.added_at ASC")   # guaranteed final tiebreaker
+    return ", ".join(parts)
+
+
+_DRAIN_SQL_TMPL = """
 WITH cand AS (
   SELECT e.id
   FROM outbound.mailing_entries e
@@ -491,7 +533,7 @@ WITH cand AS (
       WHERE d.campaign_id = $1 AND d.mailing_entry_id = e.id
         AND (d.result <> 'failed' OR d.attempts >= $5)
     )
-  ORDER BY e.added_at
+  ORDER BY {order_by}
   LIMIT $3
   FOR UPDATE OF e SKIP LOCKED
 )
@@ -524,18 +566,26 @@ async def db_drain_campaign(
     mailing_id  = UUID(campaign["mailing_id"])
     campaign_id = UUID(campaign["id"])
 
+    # Declarative ordering (campaign.ordering) drives which entries the LIMIT picks AND
+    # the order of the returned batch. Same clause in both queries (alias `e`).
+    order_by  = _build_order_by(campaign.get("ordering"))
+    drain_sql = _DRAIN_SQL_TMPL.replace("{order_by}", order_by)
+
     async with pool.acquire() as conn:
         async with conn.transaction():
             claimed = await conn.fetch(
-                _DRAIN_SQL,
+                drain_sql,
                 campaign_id, tenant_id, eff_limit, selection_j, max_attempts, mailing_id,
             )
             if not claimed:
                 return []
             by_entry = {r["entry_id"]: str(r["delivery_id"]) for r in claimed}
+            # The INSERT...RETURNING order is not guaranteed — re-fetch the claimed
+            # entries with the SAME ordering so `drained[]` is in priority order.
             entries = await conn.fetch(
-                "SELECT id, customer_id, contacts, metadata "
-                "FROM outbound.mailing_entries WHERE id = ANY($1::uuid[])",
+                f"SELECT e.id, e.customer_id, e.contacts, e.metadata "
+                f"FROM outbound.mailing_entries e WHERE e.id = ANY($1::uuid[]) "
+                f"ORDER BY {order_by}",
                 list(by_entry.keys()),
             )
 

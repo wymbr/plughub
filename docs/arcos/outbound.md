@@ -121,6 +121,73 @@ recurso (routing) num passo só**. Nada disso é build novo no outbound — o ou
 **Escopo da Fase 3 (agora):** só **3a (calendar)** + **3b (opt-out)** — portões de elegibilidade, ortogonais a
 routing/collect. Capacidade e canal são config/reuso que fecham na Fase 5.
 
+## Execução paralela (fan-out) — desenho fechado (Fase 5)
+
+Hoje o `skill_outbound_demo_v1` processa o lote **inline** num `loop` (sequencial). Para **paralelizar** os
+contatos, o unit de paralelismo é a **sessão**, não o step — e o mecanismo é **fan-out**, não `delegate`.
+
+**Por que não `delegate`/`collect`:** ambos **suspendem** a sessão (`delegate.ts` → `__suspended__`; `collect`
+idem) e são **nível único** (um `session.delegate_resume_token` por sessão — concorrentes colidem). Num loop,
+delegam/coletam **um de cada vez** → sequencial. Uma sessão é single-threaded.
+
+**Mecanismo de paralelismo — `workflow_trigger` (fire-and-forget):** é uma **tool MCP** (`mcp-server-plughub/
+tools/workflow.ts`), chamada de qualquer skill pelo passo **`invoke`** (não é step type nem SDK-only). Cria uma
+sessão webhook nova (`pool_id`|`skill_id`, `customer_id`, `origin_session_id`, `journey`, `context_json`), devolve
+`{workflow_session_id}` e **a sessão chamadora CONTINUA** (não espera). É o mesmo mecanismo do gatilho de survey.
+
+**Decomposição dispatcher/worker:**
+```
+sessão-dispatcher (1 por tick da agenda):
+  drenar (campaign_drain — claim do lote)        → drained[N]
+  loop: invoke workflow_trigger(pool=worker,      → dispara N sessões INDEPENDENTES
+        customer_id, context={delivery_id,...})     (NÃO espera cada uma)
+  complete                                         → termina sem bloquear
+sessão-worker (1 por contato, em PARALELO):
+  eligibility → collect/contato → campaign_delivery_result
+```
+
+**Grau de paralelismo = capacidade do pool worker** (`max_concurrent_sessions`) + o routing `allocate-or-queue`
+(`queue_config.max_wait_s`): disparar mais workers que instâncias → o excedente **enfileira** (bounded por
+`max_wait_s`) — a "aloca-ou-enfileira" da Fase 3, agora automática por-sessão. **Pacing = `campaign.batch_size`**
+por tick (quantos o dispatcher espalha; varia por campanha, já que é campo da campanha). Cada worker marca a sua
+própria `delivery` — o dispatcher não acompanha resultado.
+
+**Accounting — duas variantes:** (a) o dispatcher drena+claima o lote e passa `delivery_id` no `context` de cada
+worker (explícito); (b) o dispatcher só dispara K workers e **cada worker drena `limit=1`** (claima o seu —
+auto-pacing). Ambas válidas; (a) casa melhor com a contabilidade por-entrada.
+
+**Push vs. pull:** o pull (worker chama `campaign_drain`) permanece a fronteira de reserva/claim (invariante
+"agentes só via MCP"); o fan-out é uma **camada de distribuição por cima**, não substitui o pull. Um discador
+preditivo (push da próxima chamada ao agente livre) seria essa camada com pacing `look_ahead`.
+
+## Ordenação e seleção do lote (no claim) — desenho fechado + backend ✅
+
+> **Backend ✅ via API (`smoke_outbound_ordering.sh`):** `campaign.ordering` (`[{path,dir,type}]`) traduzido em
+> `ORDER BY` no drain (`_build_order_by`: path sanitizado, `type=number` com cast guardado, `added_at` desempate).
+> UI (lista de campos) = fatia 1b.
+
+O claim **é** a seleção — ordenação e corte de lote moram na **própria query do drain** (não num passo à parte:
+`FOR UPDATE SKIP LOCKED` + ordem têm que ser atômicos). Três peças query-side, **duas já existem**:
+
+- `campaign.selection` (existe) — predicado sobre `metadata` → **fatia** o mailing (`WHERE e.metadata @> selection`).
+- `campaign.batch_size` (existe) — teto por tick → `LIMIT` (varia por campanha, resolve "tamanho do lote").
+- **`campaign.ordering` (NOVO)** — sort **declarativo** → `ORDER BY`. Lista ordenada de `{path, dir}` (a ordem da
+  lista = precedência); o backend **sempre** anexa `added_at` como último desempate (determinismo). Ex.:
+  `[{path:"priority", dir:"desc"}]` → `ORDER BY (e.metadata->>'priority')::int DESC NULLS LAST, e.added_at`.
+
+**Opacidade (exceção controlada):** o `metadata` continua **opaco por padrão**; `ordering`/`selection` são
+**janelas declaradas pela campanha** (que conhece o `metadata_contract`) — a plataforma lê **só os paths nomeados**,
+nunca assume schema. Opt-in por-campanha, não interpretação geral.
+
+**Índice:** `ORDER BY (metadata->>'x')` não usa o índice atual — em volume pede um **índice de expressão** por path
+(`CREATE INDEX … ON mailing_entries (mailing_id, ((metadata->>'x')))`), criado sob demanda. Demo/pequeno = seq scan.
+
+**UI (fatia 1b):** editor "lista de campos" reordenável — cada linha `{campo, direção}`, precedência = ordem da
+lista. Campo = **path livre** (metadata opaco → sem dropdown; o autor conhece o contrato) + `added_at` embutido e
+como fallback final garantido. `metadata_contract` versionado futuro → autocomplete dos paths.
+
+**Cota-por-segmento** (`ROW_NUMBER() OVER (PARTITION BY metadata->>'seg')`) = refinamento posterior, fora do 1º corte.
+
 ## Consumidor: Customer Surveys (S11) — decisões de fronteira
 
 O survey (a implementar **depois** do outbound) é cliente do **caminho batelado/agendado** (NPS/PMF relacional).

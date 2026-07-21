@@ -2,6 +2,19 @@
 
 ---
 
+## Outbound — Ordenação declarativa do drain (campaign.ordering) ✅ validado via API (2026-07-21)
+
+Backend da ordenação do lote resolvida **no claim** (a query do drain), sobre os paths do `metadata` que a campanha nomeia. Desenho fechado em `docs/arcos/outbound.md` (§ "Ordenação e seleção do lote"). UI = fatia 1b.
+
+- **`@plughub/schemas`**: `CampaignOrderField` (`{path: [a-zA-Z0-9_]+, dir: asc|desc, type: text|number}`) + `CampaignOrdering` (lista); `ordering` em `Campaign`/`Create`/`Update`.
+- **`mailing-api`**: coluna `outbound.campaigns.ordering JSONB` (DDL + `ALTER … ADD COLUMN IF NOT EXISTS` idempotente p/ DBs da Fase 1). `_build_order_by` traduz `ordering` → `ORDER BY` com **path sanitizado** (token seguro interpolado no `metadata->>'path'`, sem aspas do usuário), `type=number` com **cast guardado** (regex → non-numeric vira NULL, `NULLS LAST`), e **`added_at` sempre como desempate final** (determinismo). O drain usa a MESMA cláusula no CTE (define quais o `LIMIT` pega) e no re-fetch das entradas claimadas (o `drained[]` volta em ordem — a ordem do `INSERT…RETURNING` não é garantida). `[]` = FIFO por `added_at` (comportamento anterior). Campos endereçáveis na inserção **sem mudança**: vivem no `entry.metadata` (blob opaco) que o `mailing_add` já aceita.
+- **Opacidade preservada:** a plataforma lê só os paths que a campanha declara (opt-in por-campanha); metadata segue opaco por padrão. Índice de expressão por path = sob demanda em volume.
+- **Smoke** `infra/test/smoke_outbound_ordering.sh` (via API): entries priority 1/5/3 → campanha `ordering desc number` drena `5,3,1`; campanha sem ordering drena FIFO `1,5,3`.
+- **Validação (2026-07-21):** `smoke_outbound_ordering.sh` verde — `ordering desc number` drena `5,3,1`; sem ordering FIFO `1,5,3`. Regressão Fase 1/2 OK (nova coluna não afeta os demais).
+- **Deploy:** `build @plughub/schemas` (usado pela UI futura); `build mailing-api && up -d --force-recreate mailing-api` (nova coluna + `_build_order_by`).
+
+---
+
 ## Outbound — Fase 3b: portão de opt-out global (do_not_contact) ✅ validado via API (2026-07-21)
 
 Segundo (e último) portão de elegibilidade da Fase 3 — **fecha a precedência** (opt-out no topo). O opt-out global vive no **cadastro do cliente** (Resolvedor de Identidade), não no outbound.

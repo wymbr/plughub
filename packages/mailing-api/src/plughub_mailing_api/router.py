@@ -84,11 +84,18 @@ class AddEntryBody(BaseModel):
     ttl_seconds: int | None = None
 
 
+class OrderField(BaseModel):
+    path: str
+    dir:  str = "asc"    # asc | desc
+    type: str = "text"   # text | number
+
+
 class CreateCampaignBody(BaseModel):
     name:                str
     mailing_id:          str
     pool_id:             str
     selection:           dict[str, Any] | None = None
+    ordering:            list[OrderField] = Field(default_factory=list)
     channel_policy:      dict[str, Any] = Field(default_factory=dict)
     contact_calendar_id: str | None = None
     transactional:       bool = False
@@ -101,6 +108,7 @@ class UpdateCampaignBody(BaseModel):
     name:                str | None = None
     pool_id:             str | None = None
     selection:           dict[str, Any] | None = None
+    ordering:            list[OrderField] | None = None
     channel_policy:      dict[str, Any] | None = None
     contact_calendar_id: str | None = None
     transactional:       bool | None = None

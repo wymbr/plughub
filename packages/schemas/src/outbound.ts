@@ -86,6 +86,26 @@ export const ChannelPolicySchema = z.object({
 }).passthrough()
 export type ChannelPolicy = z.infer<typeof ChannelPolicySchema>
 
+// Declarative drain ordering over entry.metadata paths (+ added_at tiebreaker,
+// always appended server-side). `path` is a single-level metadata key (safe token —
+// the platform reads only the paths the campaign names; metadata stays opaque). `type`
+// selects text (default) or numeric ordering (guarded cast, non-numeric → NULLS LAST).
+export const OrderDirSchema = z.enum(["asc", "desc"])
+export type OrderDir = z.infer<typeof OrderDirSchema>
+
+export const OrderFieldTypeSchema = z.enum(["text", "number"])
+export type OrderFieldType = z.infer<typeof OrderFieldTypeSchema>
+
+export const CampaignOrderFieldSchema = z.object({
+  path: z.string().regex(/^[a-zA-Z0-9_]+$/, "single-level metadata key ([a-zA-Z0-9_])"),
+  dir:  OrderDirSchema.default("asc"),
+  type: OrderFieldTypeSchema.default("text"),
+})
+export type CampaignOrderField = z.infer<typeof CampaignOrderFieldSchema>
+
+export const CampaignOrderingSchema = z.array(CampaignOrderFieldSchema)
+export type CampaignOrdering = z.infer<typeof CampaignOrderingSchema>
+
 // Per-campaign retry over a delivery (drain re-picks a failed delivery until attempts
 // reach max_attempts). Fase 1 wires max_attempts into the drain SQL.
 export const CampaignRetrySchema = z.object({
@@ -103,6 +123,8 @@ export const CampaignSchema = z.object({
   pool_id:             z.string(),
   // Predicate over entry.metadata (slices a shared mailing). null = whole mailing.
   selection:           z.record(z.unknown()).nullable().default(null),
+  // Declarative drain ordering over entry.metadata (+ added_at tiebreaker). [] = FIFO.
+  ordering:            CampaignOrderingSchema.default([]),
   channel_policy:      ChannelPolicySchema.default({}),
   // Fase 3 — contact window via calendar-api.
   contact_calendar_id: z.string().nullable().default(null),
@@ -200,6 +222,7 @@ export const CreateCampaignSchema = z.object({
   mailing_id:          z.string(),
   pool_id:             z.string(),
   selection:           z.record(z.unknown()).nullable().optional(),
+  ordering:            CampaignOrderingSchema.optional(),
   channel_policy:      ChannelPolicySchema.optional(),
   // Fase 3a — contact window: calendar-api calendar id. null = no window gate.
   contact_calendar_id: z.string().nullable().optional(),
@@ -214,6 +237,7 @@ export const UpdateCampaignSchema = z.object({
   name:                z.string().min(1).optional(),
   pool_id:             z.string().optional(),
   selection:           z.record(z.unknown()).nullable().optional(),
+  ordering:            CampaignOrderingSchema.optional(),
   channel_policy:      ChannelPolicySchema.optional(),
   contact_calendar_id: z.string().nullable().optional(),
   transactional:       z.boolean().optional(),
