@@ -72,8 +72,10 @@ const EligibilityInputSchema = z.object({
 
 const UnsubscribeInputSchema = z.object({
   customer_id: z.string().min(1),
-  mailing_id:  z.string().optional(),   // omit = all of the customer's mailings
-  channel:     z.string().optional(),
+  // "mailing" (default) → entry.status='unsubscribed'; "global" → cadastro do_not_contact.
+  scope:       z.enum(["mailing", "global"]).optional(),
+  mailing_id:  z.string().optional(),   // mailing scope: omit = all of the customer's mailings
+  channel:     z.string().optional(),   // global scope: omit/'all' = full; a channel = per-channel
   tenant_id:   z.string().optional(),
 })
 
@@ -304,9 +306,10 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
   // ── mailing_unsubscribe ──────────────────────────────────────────────────────
   server.tool(
     "mailing_unsubscribe",
-    "Mailing-scoped suppression: flip a customer's entries to 'unsubscribed' (the drain " +
-    "excludes non-active entries). mailing_id omitted = all of the customer's mailings. " +
-    "Global (do_not_contact) opt-out via the customer registry is Fase 3.",
+    "Suppression. scope 'mailing' (default): flip a customer's entries to 'unsubscribed' " +
+    "(the drain excludes non-active; mailing_id omitted = all mailings). scope 'global': " +
+    "write do_not_contact in the customer cadastro (channel omitted/'all' = full opt-out; " +
+    "a channel = per-channel) — a veto enforced by the opt_out gate at eligibility.",
     UnsubscribeInputSchema.shape as any,
     async (rawInput: Record<string, unknown>) => {
       let input: z.infer<typeof UnsubscribeInputSchema>
@@ -322,6 +325,7 @@ export function registerOutboundTools(server: McpServer, deps: OutboundDeps): vo
 
       const tenantId = input.tenant_id ?? defaultTenantId
       const body: Record<string, unknown> = { customer_id: input.customer_id }
+      if (input.scope !== undefined)      body["scope"]      = input.scope
       if (input.mailing_id !== undefined) body["mailing_id"] = input.mailing_id
       if (input.channel !== undefined)    body["channel"]    = input.channel
 

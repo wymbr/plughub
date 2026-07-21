@@ -359,13 +359,17 @@ export const EligibilityResultSchema = z.object({
 })
 export type EligibilityResult = z.infer<typeof EligibilityResultSchema>
 
-// mailing_unsubscribe — mailing-scoped suppression (entry.status='unsubscribed').
-// customer_id is required; mailing_id optional (omit = all mailings of the customer).
+// mailing_unsubscribe — suppression. scope 'mailing' (default) flips entry.status;
+// scope 'global' (Fase 3b) writes do_not_contact in the customer cadastro (identity).
+export const UnsubscribeScopeSchema = z.enum(["mailing", "global"])
+export type UnsubscribeScope = z.infer<typeof UnsubscribeScopeSchema>
+
 export const UnsubscribeInputSchema = z.object({
   customer_id: z.string(),
+  scope:       UnsubscribeScopeSchema.default("mailing"),
+  // mailing scope: omit = all mailings of the customer.
   mailing_id:  z.string().nullable().optional(),
-  // Informational for Fase 2 (entries are not channel-specific); reserved for the
-  // global (do_not_contact) opt-out in Fase 3.
+  // global scope: omit/'all' = full opt-out; a channel = per-channel opt-out.
   channel:     z.string().nullable().optional(),
 })
 export type UnsubscribeInput = z.infer<typeof UnsubscribeInputSchema>

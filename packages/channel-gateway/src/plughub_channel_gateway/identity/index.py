@@ -479,6 +479,37 @@ class IdentityIndex:
             })
         return out
 
+    async def get_customer(
+        self, tenant_id: str, customer_id: str,
+    ) -> dict[str, Any] | None:
+        """
+        Leitura durável de UM cliente por customer_id exato (cadastro §11). Retorna
+        {customer_id, status, attributes} ou None (ausente / sem db_pool). Usado pelo
+        outbound (Fase 3b) para consultar `attributes.do_not_contact` (opt-out global).
+        Não resolve âncora nem provisiona — é read puro.
+        """
+        if self._db is None or not customer_id:
+            return None
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT customer_id, status, attributes FROM identity.customers "
+                "WHERE customer_id = $1 AND tenant_id = $2 AND status <> 'merged'",
+                customer_id, tenant_id,
+            )
+        if not row:
+            return None
+        attrs = row["attributes"]
+        if isinstance(attrs, str):
+            try:
+                attrs = json.loads(attrs)
+            except Exception:
+                attrs = {}
+        return {
+            "customer_id": row["customer_id"],
+            "status":      row["status"],
+            "attributes":  attrs or {},
+        }
+
     async def promote_to_durable(
         self, tenant_id: str, customer_id: str, anchors: list[dict[str, str]],
         status: str = "prospect", verification_class: str = "claimed",

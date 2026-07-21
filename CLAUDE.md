@@ -1041,7 +1041,7 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler co
 
 ---
 
-## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3a janela ✅ via API)
+## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3 elegibilidade ✅ [3a+3b])
 
 Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
 (orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
@@ -1082,7 +1082,11 @@ preferred_order/exclude) — ambos fecham na Fase 5. Pacing **por-canal**: `reac
 `look_ahead` (consulta `pool_status_get` + taxa de conexão) p/ o **discador de voz** (Fase 5+). **Fase 3a ✅ via
 API:** `db_contact_eligibility` consulta `campaign.contact_calendar_id` → calendar-api `is_open` (antes dos caps,
 fora da transação); fechado → `outside_window` sem claim; erro do calendar → degrada p/ ABERTO. Smoke
-`smoke_outbound_fase3a.sh`. Ver `docs/arcos/outbound.md`.
+`smoke_outbound_fase3a.sh`. **Fase 3b ✅ via API (opt-out global):** `do_not_contact` (`{all?, channels?}`) vive
+no cadastro (`identity.customers.attributes`), lido via channel-gateway `GET …/identity/customers/{id}`; o
+eligibility veta `opt_out` de **MAIOR precedência** (antes de calendar/fadiga) salvo `campaign.transactional`;
+`mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento. Smoke `smoke_outbound_fase3b.sh`.
+Ver `docs/arcos/outbound.md`.
 
 → See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
 [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),

@@ -1240,7 +1240,8 @@ services:
       - "3660:3660"
     environment:
       PLUGHUB_MAILING_DATABASE_URL:     postgresql://plughub:plughub@postgres:5432/plughub_demo
-      PLUGHUB_MAILING_CALENDAR_API_URL: http://calendar-api:3700   # Fase 3a — portão de janela de contato
+      PLUGHUB_MAILING_CALENDAR_API_URL: http://calendar-api:3700     # Fase 3a — portão de janela de contato
+      PLUGHUB_MAILING_IDENTITY_API_URL: http://channel-gateway:8010  # Fase 3b — opt-out global (do_not_contact)
     depends_on:
       postgres:
         condition: service_healthy

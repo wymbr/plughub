@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # never re-models "when/open"; it asks calendar-api.
     calendar_api_url: str = "http://calendar-api:3700"
 
+    # channel-gateway Identity Resolver: opt-out global gate (Fase 3b). The customer
+    # cadastro is the single source of `do_not_contact`; outbound reads/writes it here.
+    identity_api_url: str = "http://channel-gateway:8010"
+
     # Installation context (static per deployment)
     installation_id: str = "install-local"
     organization_id: str = "org-default"

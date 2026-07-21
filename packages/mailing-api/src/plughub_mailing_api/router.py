@@ -337,6 +337,7 @@ class UnsubscribeBody(BaseModel):
     customer_id: str
     mailing_id:  str | None = None
     channel:     str | None = None
+    scope:       str = "mailing"   # mailing | global (global → cadastro do_not_contact)
 
 
 @router.post("/v1/contact-policies", status_code=201)
@@ -394,7 +395,8 @@ async def contact_eligibility(
     tenant = _tenant(x_tenant_id)
     req = body.model_dump(exclude_none=True)   # keep `at` as datetime (not json mode)
     calendar = getattr(request.app.state, "calendar", None)
-    return await db_contact_eligibility(_pool(request), tenant, req, calendar)
+    identity = getattr(request.app.state, "identity", None)
+    return await db_contact_eligibility(_pool(request), tenant, req, calendar, identity)
 
 
 @router.post("/v1/unsubscribe")
@@ -403,4 +405,5 @@ async def unsubscribe(
     x_tenant_id: str | None = Header(default=None),
 ) -> dict:
     tenant = _tenant(x_tenant_id)
-    return await db_unsubscribe(_pool(request), tenant, body.model_dump(exclude_none=True))
+    identity = getattr(request.app.state, "identity", None)
+    return await db_unsubscribe(_pool(request), tenant, body.model_dump(exclude_none=True), identity)

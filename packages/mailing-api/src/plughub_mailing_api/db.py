@@ -753,40 +753,58 @@ async def _count_contacts(
 
 
 async def db_contact_eligibility(
-    pool: asyncpg.Pool, tenant_id: str, req: dict, calendar: Any = None,
+    pool: asyncpg.Pool, tenant_id: str, req: dict,
+    calendar: Any = None, identity: Any = None,
 ) -> dict:
     """Evaluate the eligibility of an outbound contact and, when allowed and claim=true,
     write a contact_log fact (the window starts at SEND).
 
-    Precedence: contact window (calendar, Fase 3a) → quarantine → frequency_caps →
-    channel_caps. Any gate denies (no claim). No config → allowed. Never silent: the
-    machine `reason` always names the gate that denied."""
+    Precedence (design §6): opt-out global (Fase 3b) → contact window (calendar, Fase 3a)
+    → quarantine → frequency_caps → channel_caps. Any gate denies (no claim). No config →
+    allowed. Never silent: the machine `reason` always names the gate that denied."""
     customer_id = req["customer_id"]
     channel     = req["channel"]
     campaign_id = req.get("campaign_id")
     claim       = req.get("claim", True)
     at: datetime = req.get("at") or datetime.now(timezone.utc)
 
-    # ── Portão de janela de contato (Fase 3a) — antes de tudo, fora da transação ──
+    # Campaign attrs used by the gates (contact_calendar_id, transactional).
+    cal_id: str | None = None
+    transactional = False
+    if campaign_id:
+        crow = await pool.fetchrow(
+            "SELECT contact_calendar_id, transactional FROM outbound.campaigns "
+            "WHERE id = $1 AND tenant_id = $2",
+            UUID(campaign_id), tenant_id,
+        )
+        if crow:
+            cal_id        = crow["contact_calendar_id"]
+            transactional = bool(crow["transactional"])
+
+    # ── Portão de opt-out GLOBAL (Fase 3b) — MAIOR precedência, fora da transação ──
+    # O `do_not_contact` vive no cadastro do cliente (Resolvedor de Identidade). Veto
+    # ABSOLUTO por canal ou total — salvo campanha `transactional` (notificação legal/
+    # obrigatória). Erro/ausência no cadastro → degrada para NÃO opted-out (barulhento).
+    if identity is not None and not transactional:
+        dnc = await identity.get_do_not_contact(tenant_id, customer_id)
+        if dnc and (dnc.get("all") is True or channel in (dnc.get("channels") or [])):
+            return {"allowed": False, "reason": "opt_out",
+                    "retry_after": None, "claimed": False}
+
+    # ── Portão de janela de contato (Fase 3a) — fora da transação ────────────────
     # A campanha aponta um calendar_id; o calendar-api é a única autoridade do "quando".
     # Fechado/feriado → nega `outside_window` (sem claim); `retry_after` = até o próximo
     # horário. Erro do calendar / sem calendar → degrada para ABERTO (barulhento no log,
     # como o scheduler) — uma checagem perdida não bloqueia um contato em silêncio.
-    if campaign_id and calendar is not None:
-        cal_id = await pool.fetchval(
-            "SELECT contact_calendar_id FROM outbound.campaigns "
-            "WHERE id = $1 AND tenant_id = $2",
-            UUID(campaign_id), tenant_id,
-        )
-        if cal_id:
-            status = await calendar.is_open_status(cal_id, at)
-            if status in ("closed", "holiday"):
-                retry_after = None
-                nxt = await calendar.next_open_slot(cal_id, at)
-                if nxt is not None:
-                    retry_after = max(0, int((nxt - at).total_seconds()))
-                return {"allowed": False, "reason": "outside_window",
-                        "retry_after": retry_after, "claimed": False}
+    if cal_id and calendar is not None:
+        status = await calendar.is_open_status(cal_id, at)
+        if status in ("closed", "holiday"):
+            retry_after = None
+            nxt = await calendar.next_open_slot(cal_id, at)
+            if nxt is not None:
+                retry_after = max(0, int((nxt - at).total_seconds()))
+            return {"allowed": False, "reason": "outside_window",
+                    "retry_after": retry_after, "claimed": False}
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -849,12 +867,26 @@ async def db_contact_eligibility(
     return {"allowed": allowed, "reason": reason, "retry_after": retry_after, "claimed": claimed}
 
 
-async def db_unsubscribe(pool: asyncpg.Pool, tenant_id: str, data: dict) -> dict:
-    """Mailing-scoped suppression: flip a customer's entries to 'unsubscribed' (the
-    drain already excludes non-active). mailing_id omitted = all of the customer's
-    mailings. Global (do_not_contact) opt-out is Fase 3."""
+async def db_unsubscribe(
+    pool: asyncpg.Pool, tenant_id: str, data: dict, identity: Any = None,
+) -> dict:
+    """Suppression. Two scopes:
+      - `mailing` (default): flip a customer's entries to 'unsubscribed' (the drain
+        excludes non-active). mailing_id omitted = all of the customer's mailings.
+      - `global` (Fase 3b): write `do_not_contact` in the customer cadastro (via the
+        Identity Resolver) — a veto enforced by the opt_out gate at eligibility. channel
+        omitted/'all' → {all:true}; a specific channel → {channels:[channel]}.
+    """
     customer_id = data["customer_id"]
     mailing_id  = data.get("mailing_id")
+    channel     = data.get("channel")
+    scope       = data.get("scope", "mailing")
+
+    if scope == "global":
+        dnc = {"all": True} if (not channel or channel == "all") else {"channels": [channel]}
+        ok = await identity.set_do_not_contact(tenant_id, customer_id, dnc) if identity else False
+        return {"scope": "global", "do_not_contact": dnc, "do_not_contact_set": ok}
+
     if mailing_id:
         result = await pool.execute(
             "UPDATE outbound.mailing_entries SET status = 'unsubscribed', updated_at = now() "
@@ -872,4 +904,4 @@ async def db_unsubscribe(pool: asyncpg.Pool, tenant_id: str, data: dict) -> dict
         n = int(result.split()[-1])
     except (ValueError, IndexError):
         n = 0
-    return {"unsubscribed": n}
+    return {"scope": "mailing", "unsubscribed": n}

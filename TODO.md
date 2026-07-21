@@ -1512,8 +1512,10 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > (`smoke_outbound_fase2b.sh`, fadiga cross-campanha no fluxo real). Lição: editar skill de pool com slot exige
 > re-snapshot (`PUT /slots/next`→`POST /promote` com service token), não só reconcile. **Fase 3 — desenho fechado**
 > (só 3a calendar + 3b opt-out são build; capacidade=routing/max_wait e canal=collect fecham na Fase 5; pacing
-> look_ahead=discador Fase 5+). **Fase 3a ⚠️ a validar:** janela de contato via calendar-api no eligibility
-> (`smoke_outbound_fase3a.sh`). Ver `docs/arcos/outbound.md`. **Pendente: 3b + Fases 4–5.**
+> look_ahead=discador Fase 5+). **Fase 3a ✅ via API** (janela via calendar-api, `smoke_outbound_fase3a.sh`).
+> **Fase 3b ⚠️ a validar:** opt-out global `do_not_contact` no cadastro (identity), veto de maior precedência no
+> eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve (`smoke_outbound_fase3b.sh`). Ver
+> `docs/arcos/outbound.md`. **Pendente: Fases 4–5.**
 
 > **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
 > (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill

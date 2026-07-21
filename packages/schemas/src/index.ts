@@ -898,6 +898,7 @@ export {
   UpdateContactPolicySchema,
   EligibilityRequestSchema,
   EligibilityResultSchema,
+  UnsubscribeScopeSchema,
   UnsubscribeInputSchema,
   UnsubscribeResultSchema,
 } from "./outbound"
@@ -935,6 +936,7 @@ export type {
   UpdateContactPolicy,
   EligibilityRequest,
   EligibilityResult,
+  UnsubscribeScope,
   UnsubscribeInput,
   UnsubscribeResult,
 } from "./outbound"

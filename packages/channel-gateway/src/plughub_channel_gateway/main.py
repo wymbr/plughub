@@ -1036,6 +1036,22 @@ async def webhook_identity_customers_search(tenant_id: str, q: str, limit: int =
     return await _webhook_adapter.search_customers(tenant_id=tenant_id, q=q, limit=limit)
 
 
+@app.get("/v1/channels/webhook/identity/customers/{customer_id}", status_code=200)
+async def webhook_identity_customer_get(customer_id: str, tenant_id: str) -> dict:
+    """
+    Read puro de um cliente por id (cadastro §11). Usado pelo outbound (Fase 3b) para
+    consultar `attributes.do_not_contact` (opt-out global). 404 quando ausente — o
+    chamador trata como "sem opt-out". Declarado APÓS /customers/search (literal vence
+    o path-param na resolução do Starlette).
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Identity resolver not available")
+    cust = await _webhook_adapter.get_customer(tenant_id, customer_id)
+    if cust is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+    return cust
+
+
 # ── Survey web vehicle (dialog primitive §9.2/§19) ────────────────────────────
 # Link tokenizado → página pública /survey/{token} que renderiza o MESMO
 # DialogForm e grava pela MESMA trilha (session.signals). Prefixos /v1/survey e

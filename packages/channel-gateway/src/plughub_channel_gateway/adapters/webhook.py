@@ -1441,6 +1441,11 @@ class WebhookAdapter(ChannelAdapter):
         results = await self._identity.search_customers(tenant_id, q, limit)
         return {"count": len(results), "results": results}
 
+    async def get_customer(self, tenant_id: str, customer_id: str) -> dict | None:
+        """Read puro de um cliente por id (cadastro §11). Usado pelo outbound (Fase 3b)
+        para consultar `attributes.do_not_contact` (opt-out global)."""
+        return await self._identity.get_customer(tenant_id, customer_id)
+
     async def find_pending_by_customer(self, tenant_id: str, customer_id: str) -> dict:
         """Lookup 2 — pending workflows for a resolved customer_id.
 

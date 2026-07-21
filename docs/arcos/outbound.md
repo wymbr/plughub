@@ -1,7 +1,7 @@
 # Outbound — Mailing + Campaign + Delivery (arco)
 
-> **Status:** Fase 1 **✅ E2E**; Fase 2 **✅ via API**; Fase 2b **✅ E2E**; Fase 3a (janela/calendar) **✅ via API**
-> (`smoke_outbound_fase3a.sh`) — 2026-07-21. Fase 3b (opt-out) + Fases 4–5 pendentes.
+> **Status:** Fase 1 **✅ E2E**; Fase 2 **✅ API**; Fase 2b **✅ E2E**; Fase 3 (elegibilidade: 3a janela + 3b
+> opt-out) **✅ API** (`smoke_outbound_fase3a.sh`/`3b.sh`) — 2026-07-21. Fases 4–5 pendentes.
 > Design fechado: [`../product/outbound-mailing-campaign-design.md`](../product/outbound-mailing-campaign-design.md).
 > Spec de implementação da Fase 1: [`../product/outbound-fase1-implementation-spec.md`](../product/outbound-fase1-implementation-spec.md).
 > Contexto: o módulo Outbound é a **Fase 4 (opcional) do arco Scheduler** (cadência com diff zero).
@@ -97,7 +97,7 @@ existem** (routing/collect) — viram configuração, não build.
 | Portão | Natureza | Como fecha |
 |---|---|---|
 | **Janela de contato** | elegibilidade (tempo) | **3a ✅ via API** — `contact_eligibility_check` resolve `campaign.contact_calendar_id` → `calendar-api is_open`; fechado → `outside_window` (sem claim) + `retry_after` até abrir. Aplica só se configurado. Degrada gracioso→ABERTO em erro do calendar. Smoke `smoke_outbound_fase3a.sh`. |
-| **Opt-out global** | elegibilidade (veto) | **3b** — `contact_eligibility_check` consulta o cadastro do cliente (`do_not_contact` por canal/total); maior precedência (veta salvo `campaign.transactional`). Depende do Resolvedor de Identidade. |
+| **Opt-out global** | elegibilidade (veto) | **3b ✅ via API** — `contact_eligibility_check` consulta o cadastro (`identity.customers.attributes.do_not_contact` `{all?, channels?}`) via channel-gateway `GET …/identity/customers/{id}`; **maior precedência** (antes de calendar/fadiga), veta `opt_out` salvo `campaign.transactional`. `mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento em erro. Smoke `smoke_outbound_fase3b.sh`. |
 | **Capacidade** | routing | **config, sem código** — não se consulta para reservar; **cria-se o contato roteado** (o `collect`) e o `Router.route()` **aloca-ou-enfileira** (invariante "árbitro único"). Teto de espera = `pool.queue_config.max_wait_s` (`min 0`, default 1800; `0` = falha rápido). Estourou → `close_reason=max_wait_exceeded`. Throttle grosso = `campaign.batch_size` por tick da agenda. |
 | **Canal** | collect | **reuso, sem código** — `collect.channel_policy` **já** aceita `{channels: {canal→pool}, exclude, preferred_order}`; a campanha passa a sua `channel_policy` ao `collect`; o **N2** (`_negotiate_channel`, cego ao processo) resolve `(canal, pool)`. Falta só `_reachable_channels` sair do stub (consultar o resolver p/ `possessed_only`) — é do channel-gateway, Fase 5. |
 
@@ -140,9 +140,9 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 
 ## Pendente (próximas fases)
 
-- **Fase 3a ✅ via API** (calendar `is_open` no eligibility). **Fase 3b** — opt-out `do_not_contact` (cadastro do
-  cliente) no `contact_eligibility_check`. Capacidade (routing `max_wait_s`) e canal (`collect.channel_policy`) NÃO
-  são build novo — fecham na Fase 5. Pacing `look_ahead` (discador) = desenho fechado, Fase 5+.
+- **Fase 3 de elegibilidade ✅** (3a calendar + 3b opt-out `do_not_contact`). Capacidade (routing `max_wait_s`) e
+  canal (`collect.channel_policy`) NÃO são build novo — fecham na Fase 5. Pacing `look_ahead` (discador) = desenho
+  fechado, Fase 5+.
 - **Fase 4** — importador anti-corrupção (CSV/xlsx → `mailing_add`).
 - **Fase 5** — survey outbound e2e (`journey_complete` no `complete` do processo; `survey_record`→`session_signal`).
 - **UI (fatia 1b)** — telas de mailings/campaigns/deliveries no platform-ui.

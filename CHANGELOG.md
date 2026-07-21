@@ -2,6 +2,21 @@
 
 ---
 
+## Outbound — Fase 3b: portão de opt-out global (do_not_contact) ✅ validado via API (2026-07-21)
+
+Segundo (e último) portão de elegibilidade da Fase 3 — **fecha a precedência** (opt-out no topo). O opt-out global vive no **cadastro do cliente** (Resolvedor de Identidade), não no outbound.
+
+- **`channel-gateway`**: `IdentityIndex.get_customer(tenant, customer_id)` (read puro de `identity.customers`: status+attributes) + `WebhookAdapter.get_customer` + endpoint **`GET /v1/channels/webhook/identity/customers/{customer_id}?tenant_id=`** (404 → sem cadastro; declarado após `/customers/search` para o literal vencer o path-param).
+- **`mailing-api`**: `identity_client.py` (httpx — `get_do_not_contact` + `set_do_not_contact` via `identity/attributes`; degradação **graciosa e barulhenta** → trata como NÃO opted-out em erro). `config.identity_api_url`. `db_contact_eligibility` ganha o portão **`opt_out` de MAIOR precedência** (antes de calendar e fadiga, fora da transação): lê `do_not_contact` (`{all?, channels?}`); `all` ou `channel ∈ channels` → `{allowed:false, reason:"opt_out", claimed:false}` — **salvo `campaign.transactional`** (busca `transactional` junto de `contact_calendar_id`). `mailing_unsubscribe` ganha **`scope: global`** → grava `do_not_contact` no cadastro (channel omitido/'all' = total; um canal = por-canal). `scope: mailing` (default) = comportamento anterior (entry.status).
+- **`@plughub/schemas`**: `UnsubscribeScope` (`mailing`|`global`) + `scope` no `UnsubscribeInput`; `reason` documenta `opt_out`. Tool MCP `mailing_unsubscribe` ganha `scope`.
+- **Decisão (degradação):** ler o cadastro falhou → **degrada para ALLOW** + log barulhento (consistente com os outros portões; continuidade operacional). Consent-strict (bloquear em outage) = config futura.
+- **Smoke** `infra/test/smoke_outbound_fase3b.sh` (via API): `unsubscribe scope=global` grava do_not_contact → eligibility `opt_out` (sem claim); campanha `transactional` → `allowed` (fura o veto).
+- **Validação (2026-07-21):** `smoke_outbound_fase3b.sh` verde — `unsubscribe scope=global` → `{do_not_contact_set:true}`; eligibility comum → `{allowed:false, reason:"opt_out", claimed:false}`; campanha `transactional` → `{allowed:true}`.
+- **Deploy:** `build channel-gateway && up -d --force-recreate channel-gateway` (endpoint novo) + `build mailing-api && up -d --force-recreate mailing-api`. Tool no skill (opcional): rebuild mcp-server + cadeia.
+- **Fase 3 de elegibilidade completa** (3a janela + 3b opt-out). Capacidade e canal = config/reuso do routing/collect (Fase 5); pacing `look_ahead`/discador = Fase 5+ (desenho fechado em `docs/arcos/outbound.md`).
+
+---
+
 ## Outbound — Fase 3a: portão de janela de contato (calendar) ✅ validado via API (2026-07-21)
 
 Primeiro portão da Fase 3 no `contact_eligibility_check`. **Desenho fechado da Fase 3** persistido em `docs/arcos/outbound.md` (§ "Fase 3 — portões (desenho fechado)"): dos quatro portões, só **calendar (3a)** e **opt-out (3b)** são build novo (elegibilidade); **capacidade** = routing `allocate-or-queue` + `queue_config.max_wait_s` (config, sem código — o `collect` cria o contato roteado) e **canal** = reuso de `collect.channel_policy` — ambos fecham na Fase 5. Pacing é **por-canal**: `reactive` (sem consulta) para baixa latência; `look_ahead` (consulta `pool_status_get` + taxa de conexão) para o **discador de voz** (Fase 5+).
