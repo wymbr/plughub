@@ -272,6 +272,34 @@ Princípios:
 
 ---
 
+## Padrão sugerido — briefing de journey para quem entra no meio
+
+**Objetivo:** dar a um agente (IA ou humano) que assume o atendimento em **qualquer ponto** do processo o fio
+do que já aconteceu, sem reconstruir nada. A tentação é fazer cada step "tracear" tudo em `journey.*`; **evite**
+— isso incha um hash durável de 30d, transforma-o num log paralelo e duplica o que o stream/segments/`mcp.audit`
+já registram (fonte única). `journey.*` é para **estado do processo**; trace/histórico é o **substrato**.
+
+Forma recomendada:
+
+- **Estado curado no `journey.*`** — padronize um punhado de chaves de alto valor, não um dump por-step:
+  - `journey.objetivo` — o que o processo quer alcançar (escrito por N3 no início).
+  - `journey.etapa_atual` — onde está agora (atualizado nas transições de etapa).
+  - `journey.milestones` — append **só nas fronteiras** (fim de segmento / mudança de etapa), com teto — nunca a
+    cada step.
+  - `journey.resumo` — opcional; **um** campo de texto legível mantido por um step `reason` que **condensa**
+    (não um append cru).
+- **Histórico completo vem do substrato** — o "o que aconteceu passo-a-passo" já é `session:{id}:stream` +
+  `ContactSegment` + analytics (ordenado, mascarado, fonte única). A entrada de um humano já é o briefing de
+  `on_human_start`/copilot; o ganho é esse briefing **costurar o cabeçalho `journey.*` + o drill de histórico
+  existente**, em vez de um trace novo por step.
+- **Padronização por convenção, não por step** — o conjunto pequeno de chaves-padrão acima + escrita em
+  milestone (via hook de fim de segmento) dá uniformidade sem o ruído (e o custo de prompt) de um trace integral.
+
+Em uma linha: guarde no `journey.*` **o que o processo quer e onde está**; deixe **o que aconteceu** com o
+stream/segments; faça o briefing de quem entra unir os dois.
+
+---
+
 ## Referências de código
 
 | Componente | Arquivo | Responsabilidade |
