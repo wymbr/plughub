@@ -6,7 +6,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock,
+  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -150,6 +150,8 @@ const Sidebar: React.FC = () => {
         { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'platform'  } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.configurar (D2).
         { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar', strict: true } },
+        // Outbound (fatia 1b) — grant-first (strict): visível só com outbound.configurar.
+        { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar', strict: true } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
         { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'platform'  } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },

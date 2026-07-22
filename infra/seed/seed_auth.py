@@ -235,6 +235,10 @@ DEMO_USERS = [
                 "configurar": {"access": "read_write", "scope": []},  # autoria de agendas
                 "operacao":   {"access": "read_write", "scope": []},  # Monitor: disparar/pausar/cancelar
             },
+            "outbound": {
+                "configurar": {"access": "read_write", "scope": []},  # mailings + campanhas + import
+                "operacao":   {"access": "read_write", "scope": []},  # monitor de entregas
+            },
         },
     },
     {

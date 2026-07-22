@@ -1,0 +1,125 @@
+{
+  "restricted": "Você não tem acesso ao módulo Outbound.",
+  "title": "Outbound",
+  "info": "Audiências (mailings), campanhas e entregas do contato ativo.",
+  "tabs": {
+    "mailings": "Mailings",
+    "campaigns": "Campanhas",
+    "deliveries": "Entregas"
+  },
+  "actions": {
+    "cancel": "Cancelar",
+    "edit": "Editar",
+    "delete": "Excluir",
+    "save": "Salvar",
+    "create": "Criar",
+    "saving": "Salvando…"
+  },
+  "errors": {
+    "loadFailed": "Falha ao carregar.",
+    "saveFailed": "Falha ao salvar"
+  },
+  "mailing": {
+    "new": "Novo mailing",
+    "empty": { "title": "Nenhum mailing", "desc": "Crie um mailing (audiência) para começar." },
+    "dedup": "Dedup",
+    "hasColumnMap": "column_map",
+    "import": "Importar",
+    "importNeedsColumnMap": "Configure o column_map para importar arquivo.",
+    "importFailed": "Falha na importação",
+    "importReport": "Relatório de importação",
+    "entries": "Entradas",
+    "entryCount_one": "{{count}} entrada",
+    "entryCount_other": "{{count}} entradas",
+    "noEntries": "Sem entradas.",
+    "name": "Nome",
+    "description": "Descrição",
+    "ttl": "TTL das entradas (s)",
+    "ttlHint": "Retenção padrão das entradas em segundos (vazio = persistente).",
+    "contract": "Contrato de metadata",
+    "contractHint": "Rótulo do contrato produtor↔consumidor (documental).",
+    "columnMap": "Mapa de colunas (importação)",
+    "columnMapHint": "Como o importador fatia as colunas do arquivo. O metadata segue opaco em runtime.",
+    "confirmDelete": "Excluir o mailing \"{{name}}\"?",
+    "cm": {
+      "idColumn": "Coluna do customer_id",
+      "idColumnHint": "Coluna com o id nativo (opcional; senão resolve por âncoras).",
+      "anchors": "Âncoras (tipo → coluna)",
+      "column": "coluna",
+      "addAnchor": "âncora",
+      "contacts": "Contatos (canal → coluna)",
+      "addContact": "contato",
+      "metadataColumns": "Colunas de metadata",
+      "metadataColumnsHint": "Colunas que viram metadata (vazio = todas as restantes)."
+    },
+    "entry": {
+      "customer": "Cliente",
+      "contacts": "Contatos",
+      "status": "Status",
+      "source": "Origem"
+    },
+    "report": {
+      "total": "Total",
+      "added": "Inseridas",
+      "deduped": "Dedupadas",
+      "resolved": "Resolvidas",
+      "unresolved": "Não resolvidas",
+      "rejected": "Rejeitadas",
+      "line": "Linha"
+    }
+  },
+  "campaign": {
+    "new": "Nova campanha",
+    "empty": { "title": "Nenhuma campanha", "desc": "Crie uma campanha sobre um mailing." },
+    "name": "Nome",
+    "mailing": "Mailing",
+    "mailingLocked": "O mailing é imutável após a criação (as entregas o referenciam).",
+    "filter": {
+      "visible": "Exceto arquivadas",
+      "all": "Todas"
+    },
+    "pool": "Pool (webhook)",
+    "poolHint": "Pool outbound cujo skill contata (endereça o POOL).",
+    "noWebhookPools": "Nenhum pool webhook disponível.",
+    "batch": "Lote",
+    "maxAttempts": "Tentativas máx.",
+    "calendar": "Janela (calendário)",
+    "calendarNone": "Sem janela",
+    "transactional": "Transacional (fura opt-out)",
+    "status": "Status",
+    "jsonInvalid": "JSON inválido em selection/channel_policy.",
+    "ordering": "Ordenação do lote",
+    "orderingHint": "Precedência = ordem da lista. O backend anexa added_at como desempate final.",
+    "order": {
+      "path": "path do metadata",
+      "add": "campo",
+      "tiebreaker": "added_at é sempre o último desempate (determinismo)."
+    },
+    "selection": "Seleção (predicado sobre metadata)",
+    "selectionHint": "JSON opcional que fatia o mailing (WHERE metadata @> selection).",
+    "channelPolicy": "Política de canal",
+    "channelPolicyHint": "JSON: { channels: {canal→pool}, preferred_order, exclude }."
+  },
+  "delivery": {
+    "pickCampaign": "Selecione uma campanha",
+    "reload": "Recarregar",
+    "tokenHint": "Token de survey (não é uma sessão) — sem drill.",
+    "empty": { "title": "Sem entregas", "desc": "Esta campanha ainda não tem entregas." },
+    "col": {
+      "result": "Resultado",
+      "attempts": "Tentativas",
+      "session": "Sessão",
+      "contactedAt": "Contatado em",
+      "error": "Erro"
+    },
+    "result": {
+      "claimed": "Reservada",
+      "pending": "Pendente",
+      "contacted": "Contatada",
+      "responded": "Respondida",
+      "failed": "Falhou",
+      "skipped_ineligible": "Inelegível",
+      "suppressed": "Suprimida"
+    }
+  }
+}

@@ -1529,7 +1529,10 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > metadata) e NÃO o collect (que chavearia pela raiz do dispatcher). `eligibility → survey_link_create → contacted(token)`;
 > submit em `/survey/{token}/submit` → `session.signals`. Closure = sinal+contacted (responded por-delivery = refinamento;
 > skill de processo que auto-alimenta a mailing = refinamento). `smoke_outbound_fase5b.sh`. **Arco Outbound COMPLETO
-> (1–5).** Ver `docs/arcos/outbound.md`.
+> (1–5).** **UI fatia 1b ✅ (2026-07-22):** módulo `outbound` no platform-ui (`/config/outbound`, abas Mailings/
+> Campaigns/Deliveries + editores de `column_map` e `ordering` + import; ABAC `outbound.{configurar,operacao}`, proxy
+> `/v1/(mailings|campaigns)`→3660) — fecha a invariante "UI-editable". **Módulo Outbound completo (backend + UI).**
+> Ver `docs/arcos/outbound.md`.
 
 > **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
 > (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill

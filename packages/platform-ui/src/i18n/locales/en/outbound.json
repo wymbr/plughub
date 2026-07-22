@@ -1,0 +1,125 @@
+{
+  "restricted": "You don't have access to the Outbound module.",
+  "title": "Outbound",
+  "info": "Audiences (mailings), campaigns and deliveries for active contact.",
+  "tabs": {
+    "mailings": "Mailings",
+    "campaigns": "Campaigns",
+    "deliveries": "Deliveries"
+  },
+  "actions": {
+    "cancel": "Cancel",
+    "edit": "Edit",
+    "delete": "Delete",
+    "save": "Save",
+    "create": "Create",
+    "saving": "Saving…"
+  },
+  "errors": {
+    "loadFailed": "Failed to load.",
+    "saveFailed": "Failed to save"
+  },
+  "mailing": {
+    "new": "New mailing",
+    "empty": { "title": "No mailings", "desc": "Create a mailing (audience) to start." },
+    "dedup": "Dedup",
+    "hasColumnMap": "column_map",
+    "import": "Import",
+    "importNeedsColumnMap": "Configure the column_map to import a file.",
+    "importFailed": "Import failed",
+    "importReport": "Import report",
+    "entries": "Entries",
+    "entryCount_one": "{{count}} entry",
+    "entryCount_other": "{{count}} entries",
+    "noEntries": "No entries.",
+    "name": "Name",
+    "description": "Description",
+    "ttl": "Entry TTL (s)",
+    "ttlHint": "Default entry retention in seconds (empty = persistent).",
+    "contract": "Metadata contract",
+    "contractHint": "Producer↔consumer contract label (documentation).",
+    "columnMap": "Column map (import)",
+    "columnMapHint": "How the importer slices file columns. metadata stays opaque at runtime.",
+    "confirmDelete": "Delete mailing \"{{name}}\"?",
+    "cm": {
+      "idColumn": "customer_id column",
+      "idColumnHint": "Column with the native id (optional; else resolved from anchors).",
+      "anchors": "Anchors (kind → column)",
+      "column": "column",
+      "addAnchor": "anchor",
+      "contacts": "Contacts (channel → column)",
+      "addContact": "contact",
+      "metadataColumns": "Metadata columns",
+      "metadataColumnsHint": "Columns that become metadata (empty = all remaining)."
+    },
+    "entry": {
+      "customer": "Customer",
+      "contacts": "Contacts",
+      "status": "Status",
+      "source": "Source"
+    },
+    "report": {
+      "total": "Total",
+      "added": "Added",
+      "deduped": "Deduped",
+      "resolved": "Resolved",
+      "unresolved": "Unresolved",
+      "rejected": "Rejected",
+      "line": "Line"
+    }
+  },
+  "campaign": {
+    "new": "New campaign",
+    "empty": { "title": "No campaigns", "desc": "Create a campaign over a mailing." },
+    "name": "Name",
+    "mailing": "Mailing",
+    "mailingLocked": "Mailing is immutable after creation (deliveries reference it).",
+    "filter": {
+      "visible": "Except archived",
+      "all": "All"
+    },
+    "pool": "Pool (webhook)",
+    "poolHint": "Outbound pool whose skill contacts (addresses the POOL).",
+    "noWebhookPools": "No webhook pools available.",
+    "batch": "Batch",
+    "maxAttempts": "Max attempts",
+    "calendar": "Window (calendar)",
+    "calendarNone": "No window",
+    "transactional": "Transactional (bypass opt-out)",
+    "status": "Status",
+    "jsonInvalid": "Invalid JSON in selection/channel_policy.",
+    "ordering": "Batch ordering",
+    "orderingHint": "Precedence = list order. The backend appends added_at as the final tiebreaker.",
+    "order": {
+      "path": "metadata path",
+      "add": "field",
+      "tiebreaker": "added_at is always the final tiebreaker (determinism)."
+    },
+    "selection": "Selection (predicate over metadata)",
+    "selectionHint": "Optional JSON that slices the mailing (WHERE metadata @> selection).",
+    "channelPolicy": "Channel policy",
+    "channelPolicyHint": "JSON: { channels: {channel→pool}, preferred_order, exclude }."
+  },
+  "delivery": {
+    "pickCampaign": "Pick a campaign",
+    "reload": "Reload",
+    "tokenHint": "Survey token (not a session) — no drill.",
+    "empty": { "title": "No deliveries", "desc": "This campaign has no deliveries yet." },
+    "col": {
+      "result": "Result",
+      "attempts": "Attempts",
+      "session": "Session",
+      "contactedAt": "Contacted at",
+      "error": "Error"
+    },
+    "result": {
+      "claimed": "Claimed",
+      "pending": "Pending",
+      "contacted": "Contacted",
+      "responded": "Responded",
+      "failed": "Failed",
+      "skipped_ineligible": "Ineligible",
+      "suppressed": "Suppressed"
+    }
+  }
+}

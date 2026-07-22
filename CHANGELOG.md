@@ -2,6 +2,19 @@
 
 ---
 
+## Outbound — UI fatia 1b: módulo outbound no platform-ui ✅ (2026-07-22)
+
+Fecha a dívida da invariante "UI-editable" (mailings/campaigns são config de tenant → exigem tela). Módulo novo `packages/platform-ui/src/modules/outbound/`, rota **`/config/outbound`**, **página única com abas**. Backend 100% reuso (mailing-api :3660).
+
+- **Páginas**: `OutboundPage` (shell com abas + gate ABAC), `MailingsTab` (CRUD + **editor de `column_map`** + **importar arquivo** `POST /import` + ver entries), `CampaignsTab` (CRUD + **editor de `ordering`** reordenável ▲▼, `{path,dir,type}`, precedência = ordem), `DeliveriesTab` (monitor read-only por campanha). Helpers em `_ui.tsx`; `api.ts` (cliente REST + tipos espelhando `@plughub/schemas/outbound.ts`).
+- **Proxy**: `/v1/(mailings|campaigns)` → `mailing-api:3660` — no `vite.config.ts` (dev) e no `Dockerfile` nginx (antes do catch-all `/v1`), + `outbound` na allowlist de rotas SPA `/config/*`.
+- **i18n**: namespace `outbound` (en + pt-BR) registrado em `i18n/index.ts`; `nav.outbound` no `shell.json` (en+pt).
+- **ABAC**: módulo novo `outbound.{configurar,operacao}` em `infra/modules.yaml` (grant-first strict, sem bypass de admin — D2); nav gated por `outbound.configurar` no `Sidebar.tsx` (ícone `Send`); rota em `routes.tsx`; grant ao admin demo em `infra/seed/seed_auth.py` (senão o admin fica negado — `module_config` parcial desliga a degradação graciosa).
+- **Deploy**: `build platform-ui && up -d --force-recreate platform-ui` (Dockerfile nginx mudou → rebuild). Grant ABAC ao admin: re-seed `auth-seed` OU editar `module_config` do usuário em Configuração › Acesso.
+- **Módulo Outbound completo**: backend (Fases 1–5) + UI (1b).
+
+---
+
 ## Outbound — Fase 5b: survey outbound e2e via substrato de campanha ✅ validado (2026-07-22)
 
 Conecta o survey ao substrato de mailing/campaign — o survey deixa de sair só por hook per-sessão (J4b) e passa pelo caminho **batelado/governado** (fadiga/ordering/retry). Arco Outbound **completo (1–5)**. Detalhe em `docs/arcos/outbound.md` (§ "Survey outbound e2e (5b)").

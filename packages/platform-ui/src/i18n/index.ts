@@ -26,6 +26,7 @@ import channelsPtBr from './locales/pt-BR/channels.json'
 import webrtcPtBr from './locales/pt-BR/webrtc.json'
 import dialogFormsPtBr from './locales/pt-BR/dialogForms.json'
 import schedulerPtBr from './locales/pt-BR/scheduler.json'
+import outboundPtBr from './locales/pt-BR/outbound.json'
 
 // en
 import commonEn from './locales/en/common.json'
@@ -52,6 +53,7 @@ import channelsEn from './locales/en/channels.json'
 import webrtcEn from './locales/en/webrtc.json'
 import dialogFormsEn from './locales/en/dialogForms.json'
 import schedulerEn from './locales/en/scheduler.json'
+import outboundEn from './locales/en/outbound.json'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -80,6 +82,7 @@ i18n.use(initReactI18next).init({
       webrtc:          webrtcPtBr,
       dialogForms:     dialogFormsPtBr,
       scheduler:       schedulerPtBr,
+      outbound:        outboundPtBr,
     },
     en: {
       common:          commonEn,
@@ -106,6 +109,7 @@ i18n.use(initReactI18next).init({
       webrtc:          webrtcEn,
       dialogForms:     dialogFormsEn,
       scheduler:       schedulerEn,
+      outbound:        outboundEn,
     }
   },
   lng: 'en',

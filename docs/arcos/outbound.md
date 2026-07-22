@@ -282,7 +282,31 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 - **Agentes só via MCP** — o skill drena via `campaign_drain`, nunca SQL direto.
 - **POOL é a unidade endereçável** — `campaign.pool_id` / `agenda.target_pool_id`; nunca skill.
 - **Degradação nunca silenciosa** — tools retornam `isError`; `collect` falho → `failed` com motivo.
-- **UI-editable** ⚠️ dívida: mailing/campaign são config de tenant → exigem tela (fatia 1b; Fase 1 é backend).
+- **UI-editable** ✅ (fatia 1b): módulo `outbound` no platform-ui (`/config/outbound`) — mailings/campaigns/deliveries editáveis por tela + editores de `column_map` e `ordering`.
+
+## UI — fatia 1b ✅ (módulo outbound no platform-ui)
+
+Fecha a dívida da invariante "UI-editable". Módulo `packages/platform-ui/src/modules/outbound/`, rota
+**`/config/outbound`**, **página única com abas** (Mailings | Campaigns | Deliveries). Backend 100% reuso
+(mailing-api :3660 via proxy `/v1/mailings` + `/v1/campaigns`).
+
+- **Mailings** — CRUD (name, description, dedup_policy, metadata_contract, entry_ttl) + **editor de `column_map`**
+  (customer_id_column, anchors[{kind,column}], contacts{canal→coluna}, metadata_columns) + **importar arquivo**
+  (`POST /import`, botão gated por `column_map` presente — fecha a Fase 4 na UI) + ver entries.
+- **Campaigns** — CRUD (mailing, pool webhook, selection JSON, channel_policy JSON, batch_size, max_attempts,
+  calendar, transactional, status) + **editor de `ordering`** reordenável (`{path, dir, type}`, precedência = ordem
+  da lista, ▲▼; nota do `added_at` como desempate final embutido no backend).
+- **Deliveries** — monitor read-only por campanha (result pill, attempts, session_id/token, contacted_at, error).
+
+**Wiring:** proxy `/v1/(mailings|campaigns)` → 3660 (vite `vite.config.ts` + nginx `Dockerfile`, antes do catch-all
+`/v1`; `outbound` na allowlist SPA); namespace i18n `outbound` (en+pt) + `nav.outbound` no `shell`; **ABAC** módulo
+novo `outbound.{configurar,operacao}` (`infra/modules.yaml`), grant-first strict (nav só com `outbound.configurar`,
+sem bypass de admin — D2), concedido ao admin demo em `infra/seed/seed_auth.py`. Rota em `routes.tsx`, item de nav
+em `Sidebar.tsx` (ícone `Send`).
+
+**Deploy:** `build platform-ui && up -d --force-recreate platform-ui` (Dockerfile nginx mudou → rebuild, não só
+restart). O grant ABAC ao admin exige re-seed do auth (`auth-seed`) OU editar o `module_config` do usuário em
+Configuração › Acesso.
 
 ## Pendente (próximas fases)
 
@@ -292,5 +316,5 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 - **Fase 4 ✅ API** — importador anti-corrupção (CSV/xlsx → `mailing_add`) em duas camadas (batch ingest público +
   adaptador de arquivo). Ver seção "Fase 4" acima. `smoke_outbound_fase4.sh`.
 - **Fase 5a ✅** — fan-out dispatcher/worker (`workflow_trigger`), collect lazy sob decisão B. `smoke_outbound_fase5a.sh`.
-- **Fase 5b ✅** — survey outbound e2e via substrato de campanha (`survey_link_create` keyed ao origin → `/survey/submit` → `session.signals`). `smoke_outbound_fase5b.sh`. Refinamentos: `responded` por-delivery; skill de processo que auto-alimenta a mailing no `complete`.
+- **Fase 5b ✅** — survey outbound e2e via substrato de campanha (`survey_link_create` keyed ao origin → `/survey/submit` → `session.signals`). `smoke_outbound_fase5b.sh`. Refinamentos: `responded` por-delivery; skill de processo que auto-alimenta a mailing no `complete`; **campo próprio p/ o token de survey** (hoje o worker de survey sobrecarrega `campaign_deliveries.session_id` com o token → o drill de sessão na aba Entregas só linka entregas de contato ativo, UUID; survey fica texto).
 - **UI (fatia 1b)** — telas de mailings/campaigns/deliveries no platform-ui.

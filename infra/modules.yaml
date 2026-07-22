@@ -300,3 +300,24 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
+
+  # ── Outbound (mailings + campanhas + entregas) ────────────────────────────────
+  # Módulo Outbound (fatia 1b). Grant-first (strict, sem bypass de admin): a nav
+  # /config/outbound só aparece para quem recebe o campo explicitamente em Acesso (D2).
+  # `configurar` = criar/editar mailings e campanhas + importar arquivo (autoria);
+  # `operacao` = ver/monitorar entregas (reservado p/ split monitor futuro).
+  - module_id: outbound
+    label: Outbound
+    icon: "📣"
+    nav_path: /config/outbound
+    permission_schema:
+      configurar:
+        label: Criar e editar mailings e campanhas
+        domain: [none, read_write]
+        scopable: false
+        default: none
+      operacao:
+        label: Monitorar entregas
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none

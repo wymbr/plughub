@@ -1197,7 +1197,9 @@ Discriminador de procedência **por-sessão** `origin: live|import|reeval` (defa
   `/survey/submit` → `session.signals`. Skills `skill_outbound_survey_{dispatch,worker}_v1`, pools homônimos; `smoke_outbound_fase5b.sh`.
 - **Refinamentos 5b (backlog):** `responded` por-delivery (submit → `campaign_delivery_result`); skill de processo que
   auto-alimenta a mailing no `complete` (journey_complete real, hoje seed direto); pertença à journey via `journey_merge` (metadata.origin_session_id).
-- **UI (fatia 1b):** telas de mailings/campaigns/deliveries no platform-ui (dívida da invariante "UI-editable").
+- **UI (fatia 1b) ✅** (2026-07-22): módulo `outbound` no platform-ui (`/config/outbound`, página com abas
+  Mailings/Campaigns/Deliveries + editores de `column_map` e `ordering` + import). ABAC `outbound.{configurar,operacao}`,
+  proxy `/v1/(mailings|campaigns)`→3660. Fecha a invariante "UI-editable".
 - Design: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md);
   arco: [`docs/arcos/outbound.md`](docs/arcos/outbound.md).
 

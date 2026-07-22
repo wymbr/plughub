@@ -285,11 +285,25 @@ def _row_to_delivery(row: asyncpg.Record) -> dict[str, Any]:
 # ── Mailings — CRUD ───────────────────────────────────────────────────────────
 
 async def db_list_mailings(pool: asyncpg.Pool, tenant_id: str) -> list[dict]:
+    # entry_count (active entries) surfaced on the list so the UI shows the size
+    # without an N+1 per-card fetch.
     rows = await pool.fetch(
-        "SELECT * FROM outbound.mailings WHERE tenant_id = $1 ORDER BY created_at DESC",
+        """
+        SELECT m.*,
+               (SELECT count(*) FROM outbound.mailing_entries e
+                WHERE e.mailing_id = m.id AND e.status = 'active') AS entry_count
+        FROM outbound.mailings m
+        WHERE m.tenant_id = $1
+        ORDER BY m.created_at DESC
+        """,
         tenant_id,
     )
-    return [_row_to_mailing(r) for r in rows]
+    out = []
+    for r in rows:
+        d = _row_to_mailing(r)
+        d["entry_count"] = int(r["entry_count"] or 0)
+        out.append(d)
+    return out
 
 
 async def db_get_mailing(pool: asyncpg.Pool, tenant_id: str, id: str) -> dict | None:

@@ -75,6 +75,11 @@ export default defineConfig({
         target: 'http://localhost:3650',
         changeOrigin: true
       },
+      '^/v1/(mailings|campaigns)': {
+        // mailing-api — Outbound (fatia 1b). Before generic /v1 (→ agent-registry).
+        target: 'http://localhost:3660',
+        changeOrigin: true
+      },
       '^/v1': {
         target: 'http://localhost:3300',
         changeOrigin: true

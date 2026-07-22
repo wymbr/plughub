@@ -14,6 +14,7 @@ import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
+import OutboundPage from '@/modules/outbound/OutboundPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
 import FlowMonitorPage      from '@/modules/agent-flow/FlowMonitorPage'
@@ -150,6 +151,7 @@ export const routes: RouteObject[] = [
       { path: 'audit',             element: <AuditPage /> },
       { path: 'config/calendars',  element: <CalendarsPage /> },
       { path: 'config/schedules',  element: <SchedulesPage /> },
+      { path: 'config/outbound',   element: <OutboundPage /> },
       { path: 'workflow/triggers', element: <WorkflowCalendarPage /> },
 
       { path: 'business',  element: <Navigate to="/" replace /> },
