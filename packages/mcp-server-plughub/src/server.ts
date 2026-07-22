@@ -38,7 +38,7 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
-import { registerJourneyTools }     from "./tools/journey"
+import { registerJourneyTools, writeContextTag } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 import { registerWorkflowTools }    from "./tools/workflow"
@@ -1383,8 +1383,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
       return
     }
 
-    // Phase 2 — namespace write permission by role.
-    const writeRole = (payload["role"] as string) ?? "operator"
+    // Phase 2 — namespace write permission by role. Resolve role igual ao requireJwtRole
+    // (claim `role` OU primeiro de `roles[]`) — senão um JWT que use `roles[]` (admin/
+    // supervisor) cai no default "operator" e é barrado até de namespaces permitidos.
+    const writeRole = ((payload["role"] ?? (payload["roles"] as string[] | undefined)?.[0]) as string) ?? "operator"
     const writeNs   = (key as string).split(".")[0] ?? ""
     const OPERATOR_WRITABLE_NS = ["agent", "service"]
     // Exact tags the operator may WRITE beyond the namespaces above — the write-side
@@ -1416,8 +1418,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
         visibility: "agents_only",
         updated_at: new Date().toISOString(),
       }
-      await redis.hset(`${tenantId}:ctx:${sessionId}`, key, JSON.stringify(entry))
-      res.json({ ok: true, key, session_id: sessionId, tenant_id: tenantId })
+      // J5a — mesmo roteamento do context_set: journey.* → hash do processo (raiz
+      // canônica, TTL 30d), demais tags → hash da sessão. Injetar `journey.*` na sessão
+      // faria o contexto do processo evaporar em 4h e não ser visto pelos outros contatos.
+      const routed = await writeContextTag(redis, tenantId, sessionId as string, key as string, JSON.stringify(entry))
+      res.json({ ok: true, key, session_id: sessionId, tenant_id: tenantId, scope: routed.scope, journey_root: routed.journeyRoot })
     } catch {
       res.status(500).json({ error: "inject_failed" })
     }

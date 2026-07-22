@@ -130,6 +130,49 @@ export async function resolveJourneyRoot(
 }
 
 /**
+ * J5a — roteamento de escrita de UMA tag de contexto.
+ *
+ * Uma tag `journey.*` NÃO pertence ao hash da sessão: pertence ao PROCESSO, que vive
+ * além da sessão (TTL 30d) e é compartilhado por N contatos da mesma journey. Toda escrita
+ * imperativa (`context_set` do skill-flow, `/api/inject-context` do supervisor) tem de rotear
+ * por AQUI — senão a tag cai no hash da sessão, evapora em 4h e não é vista pelos outros
+ * contatos, quebrando o `@ctx.journey.*` que a leitura (interpolate) já resolve.
+ *
+ * Resolve a raiz canônica pela MESMA via que o bridge e o `journey_merge`: raiz de
+ * proveniência = `session.root_session_id` do ctx (o que o bridge carimba; fallback = a
+ * própria sessão) → `resolveJourneyRoot` (find da componente na floresta de aliases).
+ * `entryJson` já vem serializado — este helper só decide a CHAVE e o TTL, nunca o conteúdo.
+ */
+export async function writeContextTag(
+  redis:     RedisClient,
+  tenantId:  string,
+  sessionId: string,
+  tag:       string,
+  entryJson: string,
+): Promise<{ scope: "journey" | "session"; journeyRoot?: string }> {
+  if (tag.startsWith("journey.")) {
+    let provenanceRoot = sessionId
+    try {
+      const raw = await redis.hget(`${tenantId}:ctx:${sessionId}`, "session.root_session_id")
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.value) provenanceRoot = String(parsed.value)
+      }
+    } catch { /* fallback: raiz de proveniência = a própria sessão */ }
+
+    const canonicalRoot = await resolveJourneyRoot(redis, tenantId, provenanceRoot)
+    const key = journeyCtxKey(tenantId, canonicalRoot)
+    await redis.hset(key, tag, entryJson)
+    // TTL do processo (30d) — igual ao migrateJourneyContext do merge.
+    await redis.expire(key, 30 * 24 * 3600)
+    return { scope: "journey", journeyRoot: canonicalRoot }
+  }
+
+  await redis.hset(`${tenantId}:ctx:${sessionId}`, tag, entryJson)
+  return { scope: "session" }
+}
+
+/**
  * Idade (ms epoch) de uma raiz. Fonte primária: o ID da PRIMEIRA entrada do stream
  * canônico (`session:{id}:stream`), que no Redis Streams é o timestamp em ms.
  *

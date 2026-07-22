@@ -2,6 +2,18 @@
 
 ---
 
+## Journey J5a — `@ctx.journey.*` (contexto compartilhado do processo): escrita imperativa journey-aware ✅ (2026-07-22)
+
+O contexto compartilhado da journey já funcionava nos caminhos **automáticos**: a **leitura** (`interpolate.ts` resolve `@ctx.journey.*` via `journey:{journeyId}` quando o bridge injeta o `journeyId`), a **escrita por `context_tags`** do engine (`context-accumulator-util.ts` roteia tags `journey.` para `{t}:ctx:journey:{id}`) e a **migração no merge** (`journey_merge` → `migrateJourneyContext`: a raiz canônica vence em colisão, origem é apagada, TTL 30d). O gap era a **escrita IMPERATIVA**: `context_set` (tool invocada por steps `invoke` do skill-flow) e `POST /api/inject-context` (supervisor no Console) gravavam **raw** no hash da sessão — uma tag `journey.*` caía em `{t}:ctx:{session}`, evaporava no TTL de sessão (4h) e não era vista pelos outros contatos da journey.
+
+- **Helper único `writeContextTag`** (`mcp-server-plughub/src/tools/journey.ts`): decide a CHAVE + TTL de uma escrita de tag (não o conteúdo — recebe o JSON já serializado). `journey.*` → `{t}:ctx:journey:{raiz canônica}` (TTL 30d); demais → `{t}:ctx:{session}`. A raiz canônica é resolvida pela **mesma via do bridge e do `journey_merge`** (single source do "qual journey é esta"): raiz de proveniência = `session.root_session_id` do ctx (fallback = a própria sessão) → `resolveJourneyRoot` (find union-find na floresta de aliases). Sem isto o contexto se partiria no merge.
+- **Dois call sites** passam a rotear por ele: `context_set` (`tools/session.ts`) e `/api/inject-context/:sessionId` (`server.ts`) — este último é o análogo operacional (supervisor injeta contexto) e tinha o mesmo bug. Ambos retornam `scope: journey|session` + `journey_root`.
+- **Sem nova dependência**: não importa `@plughub/sdk` (o grafo diz `mcp-server ← schemas`); reusa `resolveJourneyRoot`/`journeyCtxKey` que o `journey_merge` já exporta e usa. Sem ciclo de import (journey.ts não importa session.ts).
+- **Migração no merge (J5b)** confirmada já wired (`journey_merge` L306). **Smoke** `infra/test/smoke_journey_context.sh`: cenário hermético (S2 →prov S1 →alias S0) prova que `journey.pedido_id` injetado em S2 cai na **raiz canônica S0** (proveniência + union-find), não vaza pro hash da sessão, tags `session.*` continuam na sessão, e o hash da journey ganha TTL ~30d.
+- **Deploy:** `build mcp-server-plughub && up -d --force-recreate mcp-server-plughub` (mudança só no mcp-server).
+
+---
+
 ## Customer Voice — Fatia 1: lente genérica (grain × metric) + overlay SLA + carimbo de escala ✅ validado (2026-07-22)
 
 Validação: `/analise/customer-voice` renderiza NPS nos 3 grãos com valores distintos (segment 65.3/72 · journey 13.3/15 · session −28.6/49) + overlay SLA. Prova a leitura genérica ponta-a-ponta (grão × instrumento, roll-up do catálogo).

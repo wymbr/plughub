@@ -38,6 +38,7 @@ import { TokenVault }         from "../lib/token-vault"
 import { emitMessageSent }    from "../lib/usage-emitter"
 import { parseMentions }      from "../lib/mention-parser"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
+import { writeContextTag } from "./journey"
 
 // ─── Dependências injetadas ───────────────────────────────────────────────────
 
@@ -896,9 +897,11 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
   })
   server.tool(
     "context_set",
-    "Grava uma tag no ContextStore da sessão ({tenant}:ctx:{session}). " +
+    "Grava uma tag no ContextStore. Tags de sessão vão para {tenant}:ctx:{session}; " +
+    "tags journey.* vão para o hash do PROCESSO ({tenant}:ctx:journey:{raiz canônica}, TTL 30d), " +
+    "para que o contexto compartilhado sobreviva entre contatos da mesma journey. " +
     "Usado por steps invoke do skill-flow para persistir decisões da aplicação " +
-    "(ex: session.confirmation_channel). Passe session_id e tenant_id ($.session_id / $.tenant_id).",
+    "(ex: session.confirmation_channel, journey.pedido_id). Passe session_id e tenant_id.",
     ContextSetInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
@@ -911,8 +914,11 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           visibility: visibility ?? "agents_only",
           updated_at: new Date().toISOString(),
         })
-        await (redis as any).hset(`${tenant_id}:ctx:${session_id}`, tag, entry)
-        return ok({ set: true, tag, session_id })
+
+        // J5a — roteamento journey.* → hash do processo (raiz canônica, TTL 30d);
+        // demais tags → hash da sessão. Lógica única em writeContextTag (journey.ts).
+        const routed = await writeContextTag(redis, tenant_id, session_id, tag, entry)
+        return ok({ set: true, tag, scope: routed.scope, journey_root: routed.journeyRoot, session_id })
       } catch (e) {
         return handleCaughtError(e)
       }
