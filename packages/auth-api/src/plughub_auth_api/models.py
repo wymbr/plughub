@@ -132,13 +132,15 @@ class CreateTemplateRequest(BaseModel):
     tenant_id: str
     name: str
     description: str = ""
-    permissions: list[PermissionEntry] = []
+    # Fase 1 (preset copy-on-create): snapshot rico do cadastro de usuário
+    # {role, module_config, accessible_pools, max_concurrent_sessions}.
+    config: dict = {}
 
 
 class UpdateTemplateRequest(BaseModel):
     name: str | None = None
     description: str | None = None
-    permissions: list[PermissionEntry] | None = None
+    config: dict | None = None
 
 
 class TemplateResponse(BaseModel):
@@ -146,7 +148,7 @@ class TemplateResponse(BaseModel):
     tenant_id: str
     name: str
     description: str
-    permissions: list[dict]
+    config: dict
     created_at: str
     updated_at: str
 

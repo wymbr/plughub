@@ -188,7 +188,7 @@ function ModuleSection({
       >
         <span className="text-lg">{mod.icon}</span>
         <div className="flex-1">
-          <div className="text-sm font-semibold text-dark">{mod.label}</div>
+          <div className="text-sm font-semibold text-dark">{t(`moduleNames.${mod.module_id}`, { defaultValue: mod.label })}</div>
           <div className="text-xs text-muted-light">{t('permForm.fieldsCount', { count: fields.length })}</div>
         </div>
         {configured > 0 && (

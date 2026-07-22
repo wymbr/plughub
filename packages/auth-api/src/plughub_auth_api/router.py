@@ -419,15 +419,15 @@ async def resolve_permission(
 
 def _tmpl_to_response(row: dict[str, Any]) -> TemplateResponse:
     import json as _json
-    perms = row["permissions"]
-    if isinstance(perms, str):
-        perms = _json.loads(perms)
+    cfg = row.get("config")
+    if isinstance(cfg, str):
+        cfg = _json.loads(cfg)
     return TemplateResponse(
         id=str(row["id"]),
         tenant_id=row["tenant_id"],
         name=row["name"],
         description=row.get("description", ""),
-        permissions=perms if isinstance(perms, list) else [],
+        config=cfg if isinstance(cfg, dict) else {},
         created_at=row["created_at"].isoformat() if hasattr(row.get("created_at"), "isoformat") else str(row.get("created_at", "")),
         updated_at=row["updated_at"].isoformat() if hasattr(row.get("updated_at"), "isoformat") else str(row.get("updated_at", "")),
     )
@@ -437,13 +437,12 @@ def _tmpl_to_response(row: dict[str, Any]) -> TemplateResponse:
              dependencies=[Depends(_USUARIOS_WRITE)])
 async def create_template(body: CreateTemplateRequest, request: Request) -> TemplateResponse:
     pool = _get_pool(request)
-    perms_list = [p.model_dump() for p in body.permissions]
     row = await perms_mod.create_template(
         pool,
         tenant_id=body.tenant_id,
         name=body.name,
         description=body.description,
-        permissions=perms_list,
+        config=body.config,
     )
     return _tmpl_to_response(row)
 
@@ -480,10 +479,9 @@ async def update_template(
     existing = await perms_mod.get_template(pool, template_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Template not found")
-    perms_list = [p.model_dump() for p in body.permissions] if body.permissions is not None else None
     row = await perms_mod.update_template(
         pool, template_id,
-        name=body.name, description=body.description, permissions=perms_list,
+        name=body.name, description=body.description, config=body.config,
     )
     return _tmpl_to_response(row)
 

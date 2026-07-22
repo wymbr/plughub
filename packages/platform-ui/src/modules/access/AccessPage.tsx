@@ -34,35 +34,23 @@ const ROLE_LABELS: Record<RoleKey, string> = {
   business:   'Business',
 }
 
-const MODULES = [
-  { id: 'analytics',   label: 'Analytics'     },
-  { id: 'evaluation',  label: 'Avaliação'      },
-  { id: 'billing',     label: 'Faturamento'    },
-  { id: 'config',      label: 'Configuração'   },
-  { id: 'registry',    label: 'Recursos'       },
-  { id: 'skill_flows', label: 'Skill Flows'    },
-  { id: 'campaigns',   label: 'Campanhas'      },
-  { id: 'workflows',   label: 'Workflows'      },
-] as const
-
-const ACTIONS = [
-  { id: 'view',  label: 'Visualizar' },
-  { id: 'edit',  label: 'Editar'     },
-  { id: 'admin', label: 'Admin'      },
-] as const
-
-type ModuleId = typeof MODULES[number]['id']
-type ActionId = typeof ACTIONS[number]['id']
-
-// A template permission entry (scope is set at apply time, not in the template)
-interface PermEntry { module: ModuleId; action: ActionId }
+// Fase 1 — preset copy-on-create: um template guarda um SNAPSHOT do cadastro de usuário
+// (role + module_config ABAC rico + accessible_pools + max_concurrent_sessions). Ao
+// criar um usuário, o template PRÉ-PREENCHE o form (cópia); não há vínculo vivo nem
+// propagação (isso é a Fase 2). Reusa o mesmo ModulePermissionForm do form de usuário.
+interface TemplateConfig {
+  role?:                    string
+  module_config?:           ModuleConfig
+  accessible_pools?:        string[]
+  max_concurrent_sessions?: number
+}
 
 interface PermTemplate {
   id:          string
   tenant_id:   string
   name:        string
   description: string
-  permissions: PermEntry[]
+  config:      TemplateConfig
   created_at:  string
   updated_at:  string
 }
@@ -126,11 +114,13 @@ function useTemplates(tenantId: string, adminToken: string) {
     if (!tenantId || !adminToken) return
     setLoading(true); setError(null)
     try {
-      const data = await apiFetch<{ templates: PermTemplate[] }>(
+      // auth-api returns a plain array (response_model=list[TemplateResponse]).
+      const data = await apiFetch<PermTemplate[] | { templates: PermTemplate[] }>(
         `/auth/templates?tenant_id=${encodeURIComponent(tenantId)}`,
         adminToken,
       )
-      setTemplates(Array.isArray(data.templates) ? data.templates : [])
+      const arr = Array.isArray(data) ? data : (data.templates ?? [])
+      setTemplates(arr)
     } catch (err) { setError(String(err)) }
     finally { setLoading(false) }
   }, [tenantId, adminToken])
@@ -227,13 +217,28 @@ interface UserModalProps {
   user:           PlatformUser | null
   availablePools: Pool[]
   modules:        ModuleSchema[]
+  templates:      PermTemplate[]
   onClose:        () => void
   onSaved:        () => void
 }
 
-function UserModal({ tenantId, adminToken, user, availablePools, modules, onClose, onSaved }: UserModalProps) {
+function UserModal({ tenantId, adminToken, user, availablePools, modules, templates, onClose, onSaved }: UserModalProps) {
   const { t } = useTranslation('access')
   const isEdit = user !== null
+  const [templateId, setTemplateId] = useState('')
+
+  // Copy-on-create: applying a template pre-fills the form from its snapshot. No live
+  // link — the admin can tweak freely afterwards (any edit is just a normal user).
+  function applyTemplate(id: string) {
+    setTemplateId(id)
+    const tpl = templates.find(x => x.id === id)
+    if (!tpl) return
+    const c = tpl.config ?? {}
+    if (c.role) setRoles([c.role])
+    setModuleConfig(c.module_config ?? {})
+    setSelectedPools(new Set(c.accessible_pools ?? []))
+    if (c.max_concurrent_sessions) setMaxConcurrentSessions(c.max_concurrent_sessions)
+  }
   const [name,         setName]         = useState(user?.name ?? '')
   const [email,        setEmail]        = useState(user?.email ?? '')
   const [password,     setPassword]     = useState('')
@@ -365,6 +370,17 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
           <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">&times;</button>
         </div>
         <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4 overflow-y-auto flex-1">
+          {!isEdit && templates.length > 0 && (
+            <div className="bg-surface-muted border border-border rounded-lg p-3">
+              <label className="block text-sm font-medium text-dark mb-1">{t('users.template')}</label>
+              <select value={templateId} onChange={e => applyTemplate(e.target.value)}
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
+                <option value="">{t('users.templateNone')}</option>
+                {templates.map(tpl => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
+              </select>
+              <p className="text-xs text-muted-light mt-1">{t('users.templateHint')}</p>
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-dark mb-1">{t('users.name')}</label>
             <input type="text" value={name} onChange={e => setName(e.target.value)} required
@@ -545,216 +561,51 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, onClos
   )
 }
 
-// ── ApplyTemplateModal ────────────────────────────────────────────────────────
-
-interface ApplyModalProps {
-  template:       PermTemplate
-  users:          PlatformUser[]
-  availablePools: Pool[]
-  adminToken:     string
-  tenantId:       string
-  grantedBy:      string
-  onClose:        () => void
-  onApplied:      () => void
-}
-
-function ApplyTemplateModal({ template, users, availablePools, adminToken, tenantId, grantedBy, onClose, onApplied }: ApplyModalProps) {
-  const { t } = useTranslation('access')
-  const [userId,    setUserId]    = useState('')
-  const [scopeType, setScopeType] = useState<'global' | 'pool'>('global')
-  const [poolId,    setPoolId]    = useState('')
-  const [applying,  setApplying]  = useState(false)
-  const [err,       setErr]       = useState<string | null>(null)
-  const backdropRef = useRef<HTMLDivElement>(null)
-
-  async function handleApply(e: React.FormEvent) {
-    e.preventDefault()
-    if (!userId) { setErr(t('errors.selectUser')); return }
-    if (scopeType === 'pool' && !poolId.trim()) { setErr(t('errors.poolId')); return }
-    setApplying(true); setErr(null)
-    try {
-      const body: Record<string, unknown> = { tenant_id: tenantId, user_id: userId, granted_by: grantedBy }
-      if (scopeType === 'pool') body.scope_override = { scope_type: 'pool', scope_id: poolId.trim() }
-      else body.scope_override = { scope_type: 'global', scope_id: null }
-      await apiFetch(`/auth/templates/${template.id}/apply`, adminToken, { method: 'POST', body: JSON.stringify(body) })
-      onApplied(); onClose()
-    } catch (ex) { setErr(String(ex)) }
-    finally { setApplying(false) }
-  }
-
-  const selectedUser = users.find(u => u.id === userId)
-
-  return (
-    <div ref={backdropRef} className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
-      onClick={e => { if (e.target === backdropRef.current) onClose() }}>
-      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div>
-            <h2 className="text-lg font-semibold text-dark">{t('templates.applyModal.title')}</h2>
-            <p className="text-sm text-muted mt-0.5">{template.name}</p>
-          </div>
-          <button onClick={onClose} className="text-muted-light hover:text-muted text-xl leading-none">&times;</button>
-        </div>
-
-        <form onSubmit={handleApply} className="px-6 py-5 space-y-5">
-          {/* User select */}
-          <div>
-            <label className="block text-sm font-medium text-dark mb-1">{t('templates.applyModal.user')}</label>
-            <select value={userId} onChange={e => setUserId(e.target.value)}
-              className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
-              <option value="">— {t('templates.applyModal.selectUser')} —</option>
-              {users.filter(u => u.active).map(u => (
-                <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
-              ))}
-            </select>
-            {selectedUser && (
-              <div className="mt-2 flex flex-wrap gap-1">
-                {selectedUser.roles.map(r => <RoleBadge key={r} role={r} />)}
-                {selectedUser.accessible_pools.length > 0
-                  ? selectedUser.accessible_pools.map(p => (
-                    <span key={p} className="text-xs bg-surface-alt text-muted px-1.5 py-0.5 rounded font-mono">{p}</span>
-                  ))
-                  : <span className="text-xs text-muted-light italic">{t('templates.applyModal.allPools')}</span>
-                }
-              </div>
-            )}
-          </div>
-
-          {/* Scope */}
-          <div>
-            <label className="block text-sm font-medium text-dark mb-2">{t('templates.applyModal.scope')}</label>
-            <p className="text-xs text-muted-light mb-3">{t('templates.applyModal.scopeDescription')}</p>
-            <div className="space-y-2">
-              <label className="flex items-start gap-3 cursor-pointer group">
-                <input type="radio" name="scope" value="global" checked={scopeType === 'global'}
-                  onChange={() => setScopeType('global')}
-                  className="mt-0.5 accent-primary" />
-                <div>
-                  <span className="text-sm font-medium text-dark">{t('templates.applyModal.scopeGlobal')}</span>
-                  <p className="text-xs text-muted-light mt-0.5">{t('templates.applyModal.scopeGlobalDescription')}</p>
-                </div>
-              </label>
-              <label className="flex items-start gap-3 cursor-pointer group">
-                <input type="radio" name="scope" value="pool" checked={scopeType === 'pool'}
-                  onChange={() => setScopeType('pool')}
-                  className="mt-0.5 accent-primary" />
-                <div className="flex-1">
-                  <span className="text-sm font-medium text-dark">{t('templates.applyModal.scopePool')}</span>
-                  <p className="text-xs text-muted-light mt-0.5">{t('templates.applyModal.scopePoolDescription')}</p>
-                  {scopeType === 'pool' && (
-                    availablePools.length > 0 ? (
-                      <select value={poolId} onChange={e => setPoolId(e.target.value)}
-                        className="mt-2 w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white font-mono">
-                        <option value="">— {t('templates.applyModal.selectPool')} —</option>
-                        {availablePools.map(p => (
-                          <option key={p.pool_id} value={p.pool_id}>
-                            {p.pool_id}{p.description ? ` — ${p.description}` : ''}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input type="text" value={poolId} onChange={e => setPoolId(e.target.value)}
-                        placeholder={t('templates.applyModal.poolIdPlaceholder')}
-                        className="mt-2 w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 font-mono" />
-                    )
-                  )}
-                </div>
-              </label>
-            </div>
-          </div>
-
-          {/* Preview */}
-          <div className="bg-surface-muted rounded-lg p-3 border border-border">
-            <p className="text-xs font-semibold text-muted uppercase tracking-wider mb-2">{t('templates.applyModal.preview')}</p>
-            <div className="flex flex-wrap gap-1">
-              {template.permissions.map((p, i) => (
-                <span key={i} className="text-xs bg-white border border-border text-dark px-2 py-0.5 rounded font-mono">
-                  {p.module}:{p.action}
-                  {scopeType === 'pool' && poolId ? ` @${poolId}` : ' @global'}
-                </span>
-              ))}
-              {template.permissions.length === 0 && <span className="text-xs text-muted-light italic">{t('templates.applyModal.noPermissions')}</span>}
-            </div>
-          </div>
-
-          {err && <p className="text-sm text-red-text bg-red-light border border-red/30 rounded-lg px-3 py-2">{err}</p>}
-
-          <div className="flex justify-end gap-3 pt-1">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 text-sm text-muted border border-border-strong rounded-lg hover:bg-surface-muted transition-colors">
-              {t('form.cancel')}
-            </button>
-            <button type="submit" disabled={applying}
-              className="px-5 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">
-              {applying ? t('form.applying') : t('templates.applyModal.confirm')}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}
-
-// ── TemplateEditor ────────────────────────────────────────────────────────────
+// ── TemplateEditor (Fase 1 — preset copy-on-create) ──────────────────────────
 
 interface TemplateEditorProps {
   tenantId:       string
   adminToken:     string
   availablePools: Pool[]
-  users:          PlatformUser[]
-  grantedBy:      string
+  modules:        ModuleSchema[]
   template:       PermTemplate | null   // null = create mode
   onSaved:        () => void
   onDeleted?:     () => void
 }
 
-function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy, template, onSaved, onDeleted }: TemplateEditorProps) {
+function TemplateEditor({ tenantId, adminToken, availablePools, modules, template, onSaved, onDeleted }: TemplateEditorProps) {
   const { t } = useTranslation('access')
   const isEdit = template !== null
+  const cfg0 = template?.config ?? {}
 
-  // Parse initial permissions into a Set of "module:action" strings for easy toggle
-  const initPerms = new Set((template?.permissions ?? []).map(p => `${p.module}:${p.action}`))
-
-  const [name,        setName]        = useState(template?.name ?? '')
-  const [description, setDescription] = useState(template?.description ?? '')
-  const [perms,       setPerms]       = useState<Set<string>>(initPerms)
-  const [saving,      setSaving]      = useState(false)
-  const [delStage,    setDelStage]    = useState(0)
-  const [err,         setErr]         = useState<string | null>(null)
-  const [applyModal,  setApplyModal]  = useState(false)
-  const [successMsg,  setSuccessMsg]  = useState<string | null>(null)
+  const [name,         setName]         = useState(template?.name ?? '')
+  const [description,  setDescription]  = useState(template?.description ?? '')
+  const [role,         setRole]         = useState<string>(cfg0.role ?? 'operator')
+  const [moduleConfig, setModuleConfig] = useState<ModuleConfig>(cfg0.module_config ?? {})
+  const [selectedPools,setSelectedPools]= useState<Set<string>>(new Set(cfg0.accessible_pools ?? []))
+  const [maxConcurrent,setMaxConcurrent]= useState(cfg0.max_concurrent_sessions ?? 3)
+  const [saving,       setSaving]       = useState(false)
+  const [delStage,     setDelStage]     = useState(0)
+  const [err,          setErr]          = useState<string | null>(null)
+  const [successMsg,   setSuccessMsg]   = useState<string | null>(null)
 
   // Reset when template changes
   useEffect(() => {
+    const c = template?.config ?? {}
     setName(template?.name ?? '')
     setDescription(template?.description ?? '')
-    setPerms(new Set((template?.permissions ?? []).map(p => `${p.module}:${p.action}`)))
+    setRole(c.role ?? 'operator')
+    setModuleConfig(c.module_config ?? {})
+    setSelectedPools(new Set(c.accessible_pools ?? []))
+    setMaxConcurrent(c.max_concurrent_sessions ?? 3)
     setErr(null); setDelStage(0); setSuccessMsg(null)
   }, [template?.id])
 
-  function togglePerm(mod: string, action: string) {
-    const key = `${mod}:${action}`
-    setPerms(prev => {
+  function togglePool(poolId: string) {
+    setSelectedPools(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      next.has(poolId) ? next.delete(poolId) : next.add(poolId)
       return next
-    })
-  }
-
-  function toggleModule(mod: string) {
-    const allActions = ACTIONS.map(a => `${mod}:${a.id}`)
-    const allSelected = allActions.every(k => perms.has(k))
-    setPerms(prev => {
-      const next = new Set(prev)
-      allActions.forEach(k => allSelected ? next.delete(k) : next.add(k))
-      return next
-    })
-  }
-
-  function buildPermissions(): PermEntry[] {
-    return Array.from(perms).map(k => {
-      const [module, action] = k.split(':')
-      return { module: module as ModuleId, action: action as ActionId }
     })
   }
 
@@ -763,12 +614,15 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
     if (!name.trim()) { setErr(t('errors.templateName')); return }
     setSaving(true); setErr(null); setSuccessMsg(null)
     try {
-      const body = { tenant_id: tenantId, name: name.trim(), description: description.trim(), permissions: buildPermissions() }
-      if (isEdit) {
-        await apiFetch(`/auth/templates/${template!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
-      } else {
-        await apiFetch('/auth/templates', adminToken, { method: 'POST', body: JSON.stringify(body) })
+      const config: TemplateConfig = {
+        role,
+        module_config: moduleConfig,
+        accessible_pools: Array.from(selectedPools),
+        max_concurrent_sessions: maxConcurrent,
       }
+      const body = { tenant_id: tenantId, name: name.trim(), description: description.trim(), config }
+      if (isEdit) await apiFetch(`/auth/templates/${template!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
+      else        await apiFetch('/auth/templates', adminToken, { method: 'POST', body: JSON.stringify(body) })
       setSuccessMsg(isEdit ? t('messages.templateSaved') : t('messages.templateCreated'))
       onSaved()
     } catch (ex) { setErr(String(ex)) }
@@ -785,7 +639,7 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
     } catch (ex) { setErr(String(ex)) }
   }
 
-  const permCount = perms.size
+  const allSelected = availablePools.length > 0 && availablePools.every(p => selectedPools.has(p.pool_id))
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -793,33 +647,20 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
         {/* Header */}
         <div className="px-6 py-4 border-b border-border bg-white sticky top-0 z-10 flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-dark">
-              {isEdit ? template.name : t('templates.newTemplate')}
-            </h2>
-            <p className="text-xs text-muted-light mt-0.5">{t('templates.permissionsSelected', { count: permCount })}</p>
+            <h2 className="text-base font-semibold text-dark">{isEdit ? template.name : t('templates.newTemplate')}</h2>
+            <p className="text-xs text-muted-light mt-0.5">{t('templates.presetHint')}</p>
           </div>
           <div className="flex items-center gap-2">
-            {isEdit && (
-              <>
-                <button type="button" onClick={() => setApplyModal(true)}
-                  className="px-3 py-1.5 text-xs font-medium text-primary border border-primary rounded-lg hover:bg-primary/5 transition-colors">
-                  ↗ {t('templates.apply')}
-                </button>
-                {delStage === 0 && (
-                  <button type="button" onClick={() => setDelStage(1)}
-                    className="px-3 py-1.5 text-xs text-red border border-red/30 rounded-lg hover:bg-red-light transition-colors">
-                    {t('form.delete')}
-                  </button>
-                )}
-                {delStage === 1 && (
-                  <span className="flex items-center gap-1">
-                    <button type="button" onClick={handleDelete}
-                      className="text-xs font-semibold text-red-text hover:text-red-text/80">{t('templates.confirmDelete')}</button>
-                    <span className="text-border-strong text-xs">|</span>
-                    <button type="button" onClick={() => setDelStage(0)} className="text-xs text-muted-light hover:text-muted">{t('form.cancel')}</button>
-                  </span>
-                )}
-              </>
+            {isEdit && delStage === 0 && (
+              <button type="button" onClick={() => setDelStage(1)}
+                className="px-3 py-1.5 text-xs text-red border border-red/30 rounded-lg hover:bg-red-light transition-colors">{t('form.delete')}</button>
+            )}
+            {isEdit && delStage === 1 && (
+              <span className="flex items-center gap-1">
+                <button type="button" onClick={handleDelete} className="text-xs font-semibold text-red-text hover:text-red-text/80">{t('templates.confirmDelete')}</button>
+                <span className="text-border-strong text-xs">|</span>
+                <button type="button" onClick={() => setDelStage(0)} className="text-xs text-muted-light hover:text-muted">{t('form.cancel')}</button>
+              </span>
             )}
             <button type="submit" disabled={saving}
               className="px-4 py-1.5 text-xs font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 transition-colors">
@@ -828,16 +669,16 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
           </div>
         </div>
 
-        <div className="px-6 py-5 space-y-6">
+        <div className="px-6 py-5 space-y-5 max-w-2xl">
           {/* Name + description */}
           <div className="grid grid-cols-2 gap-4">
-            <div className="col-span-2 sm:col-span-1">
+            <div>
               <label className="block text-sm font-medium text-dark mb-1">{t('templates.name')}</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)} required
                 placeholder={t('templates.namePlaceholder')}
                 className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
-            <div className="col-span-2 sm:col-span-1">
+            <div>
               <label className="block text-sm font-medium text-dark mb-1">{t('templates.description')}</label>
               <input type="text" value={description} onChange={e => setDescription(e.target.value)}
                 placeholder={t('templates.descriptionPlaceholder')}
@@ -845,66 +686,66 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
             </div>
           </div>
 
-          {/* Permission matrix */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <label className="text-sm font-medium text-dark">{t('templates.permissions')}</label>
-              <button type="button" onClick={() => {
-                if (perms.size > 0) setPerms(new Set())
-                else setPerms(new Set(MODULES.flatMap(m => ACTIONS.map(a => `${m.id}:${a.id}`))))
-              }} className="text-xs text-muted-light hover:text-muted transition-colors">
-                {perms.size > 0 ? t('templates.clearAll') : t('templates.selectAll')}
-              </button>
+          {/* Role + max concurrent */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-dark mb-1">{t('users.role')}</label>
+              <select value={role} onChange={e => setRole(e.target.value)}
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 bg-white">
+                {ALL_ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+              </select>
             </div>
-            <div className="border border-border rounded-xl overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-surface-muted border-b border-border">
-                  <tr>
-                    <th className="text-left text-xs font-semibold text-muted uppercase tracking-wider px-4 py-2.5 w-44">{t('templates.module')}</th>
-                    {ACTIONS.map(a => (
-                      <th key={a.id} className="text-center text-xs font-semibold text-muted uppercase tracking-wider px-3 py-2.5">
-                        {a.label}
-                      </th>
-                    ))}
-                    <th className="text-center text-xs font-semibold text-muted uppercase tracking-wider px-3 py-2.5">{t('templates.all')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border bg-white">
-                  {MODULES.map(mod => {
-                    const allSelected = ACTIONS.every(a => perms.has(`${mod.id}:${a.id}`))
-                    const someSelected = ACTIONS.some(a => perms.has(`${mod.id}:${a.id}`))
-                    return (
-                      <tr key={mod.id} className="hover:bg-surface-muted transition-colors">
-                        <td className="px-4 py-2.5">
-                          <span className="text-sm font-medium text-dark">{mod.label}</span>
-                          <span className="ml-2 text-xs text-muted-light font-mono">{mod.id}</span>
-                        </td>
-                        {ACTIONS.map(a => {
-                          const key = `${mod.id}:${a.id}`
-                          const checked = perms.has(key)
-                          return (
-                            <td key={a.id} className="text-center px-3 py-2.5">
-                              <input type="checkbox" checked={checked}
-                                onChange={() => togglePerm(mod.id, a.id)}
-                                className="w-4 h-4 rounded accent-primary cursor-pointer" />
-                            </td>
-                          )
-                        })}
-                        <td className="text-center px-3 py-2.5">
-                          <input type="checkbox" checked={allSelected} ref={el => { if (el) el.indeterminate = someSelected && !allSelected }}
-                            onChange={() => toggleModule(mod.id)}
-                            className="w-4 h-4 rounded accent-primary cursor-pointer" />
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
+            <div>
+              <label className="block text-sm font-medium text-dark mb-1">{t('users.maxConcurrentSessions')}</label>
+              <input type="number" min={1} max={50} value={maxConcurrent}
+                onChange={e => setMaxConcurrent(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-full border border-border-strong rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
-            <p className="text-xs text-muted-light mt-2">
-              {t('templates.permissionsDescription')}
-            </p>
           </div>
+
+          {/* Pools */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-sm font-medium text-dark">{t('users.pools')}
+                <span className="ml-1.5 text-xs font-normal text-muted-light">
+                  {selectedPools.size === 0 ? t('users.poolsNone') : t('users.poolsSelected', { count: selectedPools.size })}
+                </span>
+              </label>
+              {availablePools.length > 0 && (
+                <button type="button" onClick={() => setSelectedPools(allSelected ? new Set() : new Set(availablePools.map(p => p.pool_id)))}
+                  className="text-xs text-muted-light hover:text-muted transition-colors">{allSelected ? t('users.deselectAll') : t('users.selectAll')}</button>
+              )}
+            </div>
+            {availablePools.length === 0 ? (
+              <div className="border border-border rounded-lg px-3 py-2 text-xs text-muted-light italic bg-surface-muted">{t('users.noPoolsConfigured')}</div>
+            ) : (
+              <div className="border border-border rounded-lg divide-y divide-border max-h-40 overflow-y-auto">
+                {availablePools.map(pool => {
+                  const checked = selectedPools.has(pool.pool_id)
+                  return (
+                    <label key={pool.pool_id} className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-surface-muted ${checked ? 'bg-primary/5' : ''}`}>
+                      <input type="checkbox" checked={checked} onChange={() => togglePool(pool.pool_id)} className="w-4 h-4 rounded accent-primary" />
+                      <span className="text-sm font-mono text-dark truncate">{pool.pool_id}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+            <p className="text-xs text-muted-light mt-1">{t('users.poolsDescription')}</p>
+          </div>
+
+          {/* ABAC module permissions (reuses the user form editor) */}
+          {modules.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-dark">{t('users.permissions')}</label>
+                <span className="text-xs text-muted-light">ABAC</span>
+              </div>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <ModulePermissionForm modules={modules} value={moduleConfig} onChange={setModuleConfig} readOnly={false} />
+              </div>
+            </div>
+          )}
 
           {successMsg && (
             <p className="inline-flex items-center gap-1.5 text-sm text-green-text bg-green-light border border-green/30 rounded-lg px-4 py-2"><Check className="w-3.5 h-3.5" aria-hidden="true" />{successMsg}</p>
@@ -914,16 +755,6 @@ function TemplateEditor({ tenantId, adminToken, availablePools, users, grantedBy
           )}
         </div>
       </form>
-
-      {/* Apply modal */}
-      {applyModal && template && (
-        <ApplyTemplateModal
-          template={template} users={users} availablePools={availablePools}
-          adminToken={adminToken} tenantId={tenantId} grantedBy={grantedBy}
-          onClose={() => setApplyModal(false)}
-          onApplied={() => { setSuccessMsg(t('messages.templateApplied')) }}
-        />
-      )}
     </div>
   )
 }
@@ -935,13 +766,14 @@ interface UsersPaneProps {
   adminToken:     string
   availablePools: Pool[]
   modules:        ModuleSchema[]
+  templates:      PermTemplate[]
   users:          PlatformUser[]
   loading:        boolean
   error:          string | null
   reload:         () => void
 }
 
-function UsersPane({ tenantId, adminToken, availablePools, modules, users, loading, error, reload }: UsersPaneProps) {
+function UsersPane({ tenantId, adminToken, availablePools, modules, templates, users, loading, error, reload }: UsersPaneProps) {
   const { t } = useTranslation('access')
   const [search,       setSearch]       = useState('')
   const [roleFilter,   setRoleFilter]   = useState('all')
@@ -1102,7 +934,7 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, users, loadi
 
       {modalUser !== undefined && (
         <UserModal tenantId={tenantId} adminToken={adminToken} user={modalUser}
-          availablePools={availablePools} modules={modules}
+          availablePools={availablePools} modules={modules} templates={templates}
           onClose={() => setModalUser(undefined)} onSaved={reload} />
       )}
     </div>
@@ -1115,13 +947,15 @@ interface TemplatesPaneProps {
   tenantId:       string
   adminToken:     string
   availablePools: Pool[]
-  users:          PlatformUser[]
-  grantedBy:      string
+  modules:        ModuleSchema[]
+  templates:      PermTemplate[]
+  loading:        boolean
+  error:          string | null
+  reload:         () => void
 }
 
-function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy }: TemplatesPaneProps) {
+function TemplatesPane({ tenantId, adminToken, availablePools, modules, templates, loading, error, reload }: TemplatesPaneProps) {
   const { t } = useTranslation('access')
-  const { templates, loading, error, reload } = useTemplates(tenantId, adminToken)
   const [selected, setSelected]   = useState<PermTemplate | null | undefined>(undefined)
   // undefined = nothing selected; null = create mode; PermTemplate = edit mode
 
@@ -1165,7 +999,7 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
                     <p className={`text-sm font-medium ${isActive ? 'text-primary' : 'text-dark'}`}>{template.name}</p>
                     {template.description && <p className="text-xs text-muted-light mt-0.5 truncate">{template.description}</p>}
                     <p className="text-xs text-muted-light mt-1">
-                      {t('templates.permissionCount', { count: template.permissions.length })}
+                      {(template.config?.role ?? '—')} · {t('templates.moduleCount', { count: Object.keys(template.config?.module_config ?? {}).length })}
                     </p>
                   </button>
                 )
@@ -1192,7 +1026,7 @@ function TemplatesPane({ tenantId, adminToken, availablePools, users, grantedBy 
         <TemplateEditor
           key={selected?.id ?? 'new'}
           tenantId={tenantId} adminToken={adminToken}
-          users={users} availablePools={availablePools} grantedBy={grantedBy}
+          availablePools={availablePools} modules={modules}
           template={selected}
           onSaved={handleSaved}
           onDeleted={handleDeleted}
@@ -1208,8 +1042,7 @@ type PageTab = 'users' | 'templates'
 
 export default function AccessPage() {
   const { t } = useTranslation('access')
-  const { session, tenantId, currentUser } = useAuth()
-  const grantedBy = currentUser?.email ?? currentUser?.userId ?? 'admin'
+  const { session, tenantId } = useAuth()
 
   const [activeTab,   setActiveTab]   = useState<PageTab>('users')
   // G-PROBE platform-wide: a página autoriza pelo Bearer do operador (session JWT) +
@@ -1220,6 +1053,9 @@ export default function AccessPage() {
   const { users, loading, error, reload } = useUsers(tenantId, adminToken)
   const { pools } = usePools(tenantId)
   const { modules } = useModules(adminToken)
+  // Single source: templates shared by the Templates tab (list + save/reload) AND the
+  // create-user modal (preset selector). Creating one refreshes both.
+  const { templates, loading: tplLoading, error: tplError, reload: reloadTemplates } = useTemplates(tenantId, adminToken)
 
   type LucideIcon = React.FC<{ className?: string }>
   const tabs: { id: PageTab; label: string; Icon: LucideIcon }[] = [
@@ -1255,12 +1091,13 @@ export default function AccessPage() {
       <div className="flex-1 overflow-hidden flex">
         {activeTab === 'users' && (
           <UsersPane tenantId={tenantId} adminToken={adminToken}
-            availablePools={pools} modules={modules}
+            availablePools={pools} modules={modules} templates={templates}
             users={users} loading={loading} error={error} reload={reload} />
         )}
         {activeTab === 'templates' && (
           <TemplatesPane tenantId={tenantId} adminToken={adminToken}
-            availablePools={pools} users={users} grantedBy={grantedBy} />
+            availablePools={pools} modules={modules}
+            templates={templates} loading={tplLoading} error={tplError} reload={reloadTemplates} />
         )}
       </div>
     </div>

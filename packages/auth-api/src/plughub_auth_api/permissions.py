@@ -82,6 +82,13 @@ async def ensure_permissions_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_PERMISSIONS_UNIQ)
             await conn.execute(DDL_PERMISSIONS_IDX)
             await conn.execute(DDL_TEMPLATES)
+            # Fase 1 (presets copy-on-create): o template guarda um SNAPSHOT rico do
+            # cadastro de usuário (role + module_config ABAC + accessible_pools +
+            # max_concurrent_sessions), não a matriz plana {module,action} legada.
+            await conn.execute(
+                "ALTER TABLE auth.permission_templates "
+                "ADD COLUMN IF NOT EXISTS config JSONB NOT NULL DEFAULT '{}'"
+            )
     logger.info("platform_permissions schema ensured")
 
 
@@ -220,15 +227,17 @@ async def create_template(
     tenant_id: str,
     name: str,
     description: str,
-    permissions: list[dict[str, Any]],
+    config: dict[str, Any],
 ) -> dict[str, Any]:
+    # `config` = preset rico {role, module_config, accessible_pools,
+    # max_concurrent_sessions}. `permissions` (coluna legada) fica vazia.
     row = await pool.fetchrow(
         """
-        INSERT INTO auth.permission_templates (tenant_id, name, description, permissions)
+        INSERT INTO auth.permission_templates (tenant_id, name, description, config)
         VALUES ($1, $2, $3, $4::jsonb)
         RETURNING *
         """,
-        tenant_id, name, description, json.dumps(permissions),
+        tenant_id, name, description, json.dumps(config),
     )
     return dict(row)
 
@@ -258,7 +267,7 @@ async def update_template(
     *,
     name: str | None = None,
     description: str | None = None,
-    permissions: list[dict[str, Any]] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     sets = []
     params: list[Any] = []
@@ -268,8 +277,8 @@ async def update_template(
         sets.append(f"name = ${i}"); params.append(name); i += 1
     if description is not None:
         sets.append(f"description = ${i}"); params.append(description); i += 1
-    if permissions is not None:
-        sets.append(f"permissions = ${i}::jsonb"); params.append(json.dumps(permissions)); i += 1
+    if config is not None:
+        sets.append(f"config = ${i}::jsonb"); params.append(json.dumps(config)); i += 1
 
     if not sets:
         return await get_template(pool, template_id)
