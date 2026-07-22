@@ -1,0 +1,20 @@
+{
+  "restricted": "Você não tem acesso a este relatório.",
+  "title": "Voz do Cliente",
+  "info": "Qualidade percebida (survey) por grão, com o KPI operacional SLA sobreposto no mesmo eixo.",
+  "instrument": "Instrumento",
+  "grain": "Grão",
+  "grains": {
+    "segment": "Segmento (agente)",
+    "session": "Sessão (contato)",
+    "journey": "Jornada (processo)"
+  },
+  "sla": "SLA (aderência %)",
+  "nResponses_one": "{{count}} resposta",
+  "nResponses_other": "{{count}} respostas",
+  "overlayNote": "Leitura descritiva: justapõe o que o cliente sentiu com a aderência de SLA. Não conclui causa.",
+  "empty": {
+    "title": "Sem sinais",
+    "desc": "Nenhuma resposta de survey para este grão/instrumento no período."
+  }
+}

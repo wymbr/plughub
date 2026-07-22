@@ -1183,6 +1183,10 @@ def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
         # value_label explícito do produtor prevalece sobre a normalização.
         value_label = sig.get("value_label") or norm_label
 
+        # Customer Voice: escala carimbada pelo produtor (snapshot imutável da
+        # DialogDimension). Ausente → NULL (roll-up cai no default do catálogo).
+        scale = sig.get("scale") if isinstance(sig.get("scale"), dict) else None
+
         rows.append({
             "table":             "session_signal",
             "signal_id":         f"{base_event}:{idx}",
@@ -1196,6 +1200,8 @@ def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
             "metric":            metric,
             "value_num":         norm_value,
             "value_label":       value_label,
+            "scale_min":         scale.get("min") if scale else None,
+            "scale_max":         scale.get("max") if scale else None,
             "session_at":        captured_at,  # no-ato: mesmo dia; diferido (≠) → F11 enrichment
             "captured_at":       captured_at,
             "origin_session_id": origin_id,

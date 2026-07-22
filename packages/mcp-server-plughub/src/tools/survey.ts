@@ -119,7 +119,9 @@ export function composeSurveySignals(
     })
     const scale = { min: dim.scale?.min ?? 0, max: dim.scale.max }
     const value = composeScore(items, dim.aggregation, scale)
-    if (value !== null) { signals.push({ metric: dim.dimension_id, value }); dimVals.push({ dim, value }) }
+    // Carimba a escala do instrumento no sinal (snapshot imutável — habilita top-box
+    // no analytics sem depender de reler o form, que é editável).
+    if (value !== null) { signals.push({ metric: dim.dimension_id, value, scale }); dimVals.push({ dim, value }) }
   }
 
   // (2) Legacy standalone metrics — one signal per question (no dimension).
@@ -139,7 +141,7 @@ export function composeSurveySignals(
       return w === undefined ? { score: value, scale } : { score: value, weight: w, scale }
     })
     const composite = composeScore(items, "weighted_mean", { min: 0, max: 100 })
-    if (composite !== null) signals.push({ metric: form.composite.metric, value: composite })
+    if (composite !== null) signals.push({ metric: form.composite.metric, value: composite, scale: { min: 0, max: 100 } })
   }
 
   return signals

@@ -49,6 +49,14 @@ export const SurveySignalSchema = z.object({
   }),
   value: z.coerce.number().finite({ message: "value must be a finite number" }),
   value_label: z.string().max(64).optional(),
+  // Snapshot IMUTÁVEL da escala do instrumento (da DialogDimension) no momento da
+  // resposta — carimbado no sinal, NUNCA resolvido por form_id na leitura (o form é
+  // editável; a escala de uma resposta passada é a que valia quando ela foi dada).
+  // Habilita roll-ups dependentes de escala (top-box) sem reescrever histórico.
+  scale: z.object({
+    min: z.number(),
+    max: z.number(),
+  }).optional(),
 })
 export type SurveySignal = z.infer<typeof SurveySignalSchema>
 

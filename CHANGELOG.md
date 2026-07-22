@@ -2,6 +2,23 @@
 
 ---
 
+## Customer Voice — Fatia 1: lente genérica (grain × metric) + overlay SLA + carimbo de escala ✅ validado (2026-07-22)
+
+Validação: `/analise/customer-voice` renderiza NPS nos 3 grãos com valores distintos (segment 65.3/72 · journey 13.3/15 · session −28.6/49) + overlay SLA. Prova a leitura genérica ponta-a-ponta (grão × instrumento, roll-up do catálogo).
+
+
+Reenquadra o **J4** como a fatia **journey** de uma camada genérica de "voz do cliente": a `session_signal` já é uniforme `(grain, metric, value_num)`, então a leitura é **parametrizada** (grão × instrumento), não hard-coded por lente. Superfície única "Voz do Cliente"; J4 (journey) e Cliente 360 viram consumidores da mesma base. Só instrumentos **sem interpretação** primeiro (NPS índice, avg, SLA % dentro do alvo).
+
+- **Carimbo de escala IMUTÁVEL no sinal (não `form_id`):** o form é editável → resolver a escala por `form_id` na leitura reescreveria histórico. Então a escala é **snapshot** no momento da resposta. `@plughub/schemas` `SurveySignal.scale {min,max}` (opcional); `composeSurveySignals` (mcp-server `survey.ts`) carimba `dim.scale` em cada sinal (+ composite 0-100); `session_signal` ganha `scale_min/scale_max` (DDL + migração `ALTER … ADD COLUMN IF NOT EXISTS`); o parser (`models.py`) grava. Habilita top-box/%alvo exatos depois, sem reprocessar.
+- **Catálogo de métricas source-aware** (`reports_query.py` `CV_INSTRUMENTS`): `metric → {source: survey|operational, rollup, label, higher_is_better, grains}`. NPS→índice (%prom≥9 − %detr≤6); CSAT/CES/PMF/FCR→avg (agnóstico de escala); SLA→% dentro do alvo (`wait_time_ms ≤ sla_target_ms`). O roll-up populacional vive no analytics (o form define escala+composição por-respondente, não a estatística entre respondentes).
+- **Query genérica** `query_customer_voice(grain, metric, período)` sobre `session_signal FINAL` (série diária por `session_at`, roll-up do catálogo) + `_cv_sla_series` sobre `sessions` (overlay SLA no mesmo eixo). grain=journey: 1 survey por processo → agrupar por dia basta (sem union-find na série). Escopo por `pool_id` via `_apply_pool_scope`.
+- **Endpoints** (`reports.py`): `GET /reports/customer-voice?grain&metric&from_dt&to_dt&pool_id` (série + overlay + summary) + `GET /reports/customer-voice/instruments` (catálogo p/ a UI).
+- **Frontend**: `modules/analise/CustomerVoicePage.tsx` (`/analise/customer-voice`) — seletor **grão × instrumento** (do catálogo) + gráfico SVG de **overlay** (linha survey + linha SLA, cada uma normalizada à sua faixa). Nav em Analytics (`nav.analise.customerVoice`, ícone `MessageSquare`, ABAC `contacts.visualizar`), rota, namespace i18n `customerVoice` (en+pt). Leitura **descritiva** (justapõe percebido × objetivo; não conclui causa — nota na UI).
+- **Cresce:** outros instrumentos (via módulo de survey), outros KPIs operacionais **um por vez** (só os sem interpretação — AHT/resolução/qualidade avaliada ficam de fora até a definição acordar), correlação por-entidade (scatter) depois. J4 (journey) e Cliente 360 já consomem a mesma base.
+- **Deploy:** `build @plughub/schemas` → `build mcp-server-plughub analytics-api platform-ui && up -d --force-recreate` (o `ALTER` do session_signal roda no boot do analytics-api).
+
+---
+
 ## Outbound — UI fatia 1b: módulo outbound no platform-ui ✅ (2026-07-22)
 
 Fecha a dívida da invariante "UI-editable" (mailings/campaigns são config de tenant → exigem tela). Módulo novo `packages/platform-ui/src/modules/outbound/`, rota **`/config/outbound`**, **página única com abas**. Backend 100% reuso (mailing-api :3660).

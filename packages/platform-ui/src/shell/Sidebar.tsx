@@ -123,6 +123,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
         { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },
+        { label: t('nav.analise.customerVoice'), href: '/analise/customer-voice', icon: MessageSquare, abac: { module: 'contacts', field: 'visualizar' } },
       ]
     },
 

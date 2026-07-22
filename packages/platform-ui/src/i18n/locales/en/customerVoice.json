@@ -1,0 +1,20 @@
+{
+  "restricted": "You don't have access to this report.",
+  "title": "Customer Voice",
+  "info": "Perceived quality (survey) by grain, with the operational SLA KPI overlaid on the same axis.",
+  "instrument": "Instrument",
+  "grain": "Grain",
+  "grains": {
+    "segment": "Segment (agent)",
+    "session": "Session (contact)",
+    "journey": "Journey (process)"
+  },
+  "sla": "SLA (attainment %)",
+  "nResponses_one": "{{count}} response",
+  "nResponses_other": "{{count}} responses",
+  "overlayNote": "Descriptive read: juxtaposes what the customer felt with SLA attainment. It does not infer causation.",
+  "empty": {
+    "title": "No signals",
+    "desc": "No survey responses for this grain/instrument in the period."
+  }
+}

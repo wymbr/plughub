@@ -46,6 +46,7 @@ import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
 import AnaliseJourneysPage  from '@/modules/analise/AnaliseJourneysPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import AnaliseClientesPage  from '@/modules/analise/AnaliseClientesPage'
+import CustomerVoicePage    from '@/modules/analise/CustomerVoicePage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
 import DialogFormsPage from '@/modules/dialog-forms/DialogFormsPage'
@@ -113,6 +114,7 @@ export const routes: RouteObject[] = [
       { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
       // Customer History H5 — lente Analytics do Cliente 360 (busca + 360 + histórico).
       { path: 'analise/customers', element: <AnaliseClientesPage /> },
+      { path: 'analise/customer-voice', element: <CustomerVoicePage /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
       { path: 'analise/agentes',   element: <Navigate to="/analise/agents"   replace /> },

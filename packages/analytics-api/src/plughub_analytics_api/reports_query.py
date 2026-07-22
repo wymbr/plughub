@@ -3003,6 +3003,130 @@ def _compare_segments_lens(
     return per_agent
 
 
+# ── Customer Voice (Fatia 1) — lente genérica (grain × metric) + overlay SLA ──────
+# O session_signal já é uniforme (grain, metric, value_num, scale carimbada). Aqui a
+# leitura GENÉRICA: escolhe grão + instrumento, aplica o roll-up do catálogo, e sobrepõe
+# o KPI operacional SLA (aderência %) no mesmo eixo diário. `source` por métrica no
+# catálogo (survey | operational). Só instrumentos SEM interpretação primeiro (NPS índice,
+# avg, SLA % dentro do alvo); top-box/%alvo entram com a escala carimbada / polaridade.
+CV_INSTRUMENTS: dict[str, dict] = {
+    "nps":  {"source": "survey",      "rollup": "nps", "label": "NPS",            "higher_is_better": True,  "grains": ["segment", "session", "journey"]},
+    "csat": {"source": "survey",      "rollup": "avg", "label": "CSAT",           "higher_is_better": True,  "grains": ["segment", "session", "journey"]},
+    "ces":  {"source": "survey",      "rollup": "avg", "label": "CES",            "higher_is_better": False, "grains": ["segment", "session", "journey"]},
+    "pmf":  {"source": "survey",      "rollup": "avg", "label": "PMF",            "higher_is_better": True,  "grains": ["session", "journey"]},
+    "fcr":  {"source": "survey",      "rollup": "avg", "label": "FCR (percebido)", "higher_is_better": True, "grains": ["session", "journey"]},
+    "sla":  {"source": "operational", "rollup": "sla_pct", "label": "SLA (aderência)", "higher_is_better": True, "grains": ["segment", "session", "journey"]},
+}
+_CV_GRAINS = ("segment", "session", "journey")
+
+
+def _cv_sla_series(
+    client: Any, db: str, tenant_id: str, since: str, until: str,
+    pool_id: str | None, accessible_pools: list[str] | None,
+) -> list[dict]:
+    """Aderência de SLA diária (% de contatos elegíveis dentro do alvo). KPI objetivo,
+    sem interpretação: wait_time_ms ≤ sla_target_ms. Overlay no mesmo eixo do survey."""
+    conds = [
+        "tenant_id = {tenant_id:String}",
+        f"opened_at >= '{since}'",
+        f"opened_at <  '{until}'",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conds.append("pool_id = {pool_id:String}"); params["pool_id"] = pool_id
+    _apply_pool_scope(conds, accessible_pools)
+    rows = _rows_to_dicts(client.query(f"""
+        SELECT toString(toDate(opened_at)) AS date,
+               countIf(sla_target_ms > 0)                                          AS eligible,
+               countIf(sla_target_ms > 0 AND coalesce(wait_time_ms, 0) <= sla_target_ms) AS within_sla
+        FROM {db}.sessions FINAL
+        WHERE {" AND ".join(conds)}
+        GROUP BY toDate(opened_at) ORDER BY date
+    """, parameters=params))
+    out: list[dict] = []
+    for r in rows:
+        elig = int(r.get("eligible") or 0)
+        out.append({"date": r["date"], "n": elig,
+                    "value": round(int(r.get("within_sla") or 0) / elig * 100, 1) if elig else None})
+    return out
+
+
+def query_customer_voice(
+    client: Any, db: str, tenant_id: str, grain: str, metric: str, since: str, until: str,
+    pool_id: str | None = None, accessible_pools: list[str] | None = None,
+) -> dict:
+    """Lente genérica: série diária do instrumento (roll-up do catálogo) no grão pedido +
+    overlay de SLA. grain=journey: cada sinal já é uma journey (1 survey por processo) →
+    agrupar por dia basta (sem union-find para a série)."""
+    inst = CV_INSTRUMENTS.get(metric)
+    if inst is None:
+        raise ValueError(f"unknown metric '{metric}'")
+    if grain not in _CV_GRAINS:
+        raise ValueError(f"unknown grain '{grain}'")
+
+    series: list[dict] = []
+    summary: dict = {"value": None, "n": 0}
+
+    if inst["source"] == "survey":
+        conds = [
+            "tenant_id = {tenant_id:String}",
+            f"session_at >= '{since}'",
+            f"session_at <  '{until}'",
+            "grain = {grain:String}",
+            "metric = {metric:String}",
+            "value_num IS NOT NULL",
+        ]
+        params = {"tenant_id": tenant_id, "grain": grain, "metric": metric}
+        if pool_id:
+            conds.append("pool_id = {pool_id:String}"); params["pool_id"] = pool_id
+        _apply_pool_scope(conds, accessible_pools)
+        rows = _rows_to_dicts(client.query(f"""
+            SELECT toString(toDate(session_at)) AS date,
+                   count()                 AS n,
+                   avg(value_num)          AS avg_value,
+                   countIf(value_num >= 9) AS promoters,
+                   countIf(value_num <= 6) AS detractors
+            FROM {db}.session_signal FINAL
+            WHERE {" AND ".join(conds)}
+            GROUP BY toDate(session_at) ORDER BY date
+        """, parameters=params))
+        tot_n = tot_prom = tot_det = 0
+        tot_sum = 0.0
+        for r in rows:
+            n = int(r["n"] or 0)
+            avg_v = float(r["avg_value"]) if r["avg_value"] is not None else None
+            prom = int(r["promoters"] or 0)
+            det = int(r["detractors"] or 0)
+            if inst["rollup"] == "nps":
+                val = round((prom - det) / n * 100, 1) if n else None
+            else:  # avg
+                val = round(avg_v, 2) if avg_v is not None else None
+            series.append({"date": r["date"], "n": n, "value": val})
+            tot_n += n; tot_prom += prom; tot_det += det; tot_sum += (avg_v or 0) * n
+        if tot_n:
+            summary["n"] = tot_n
+            summary["value"] = (round((tot_prom - tot_det) / tot_n * 100, 1)
+                                if inst["rollup"] == "nps" else round(tot_sum / tot_n, 2))
+    elif metric == "sla":
+        series = _cv_sla_series(client, db, tenant_id, since, until, pool_id, accessible_pools)
+        wsum = sum((s["value"] or 0) * s["n"] for s in series)
+        n = sum(s["n"] for s in series if s["value"] is not None)
+        summary = {"n": n, "value": round(wsum / n, 1) if n else None}
+
+    # Overlay operacional (descritivo) no mesmo eixo — omitido quando a própria métrica é SLA.
+    overlay: dict = {}
+    if metric != "sla":
+        overlay["sla"] = _cv_sla_series(client, db, tenant_id, since, until, pool_id, accessible_pools)
+
+    return {
+        "metric": metric, "grain": grain,
+        "instrument": {"label": inst["label"], "rollup": inst["rollup"],
+                       "source": inst["source"], "higher_is_better": inst["higher_is_better"]},
+        "series": series, "overlay": overlay, "summary": summary,
+        "meta": {"from_dt": since, "to_dt": until},
+    }
+
+
 def _compare_nps_lens(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None,

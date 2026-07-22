@@ -60,6 +60,8 @@ from .reports_query import (
     query_sessions_report,
     query_journeys_report,
     query_customer_360,
+    query_customer_voice,
+    CV_INSTRUMENTS,
     query_session_trace,
     query_usage_report,
     query_workflow_summary,
@@ -727,6 +729,47 @@ async def get_agents_compare(
     )
     status = 400 if data.get("error") in ("invalid_lens", "lens_not_available") else 200
     return JSONResponse(content=data, status_code=status)
+
+
+# ─── Customer Voice (Fatia 1) — lente genérica grain × metric + overlay SLA ──────
+
+@router.get("/customer-voice/instruments")
+async def get_customer_voice_instruments() -> Response:
+    """Catálogo de instrumentos: métrica → {source, rollup, grãos suportados, label}.
+    A UI usa isto para montar os seletores (grão × instrumento)."""
+    return JSONResponse(content={"instruments": CV_INSTRUMENTS}, status_code=200)
+
+
+@router.get("/customer-voice")
+async def get_customer_voice(
+    request:        Request,
+    tenant_id:      str            = Query(...),
+    grain:          str            = Query("journey", description="segment | session | journey"),
+    metric:         str            = Query("nps",     description="nps | csat | ces | pmf | fcr | sla"),
+    from_dt:        Optional[str]  = Query(None),
+    to_dt:          Optional[str]  = Query(None),
+    pool_id:        Optional[str]  = Query(None),
+    pool_principal: PoolPrincipal  = Depends(optional_pool_principal),
+) -> Response:
+    """Voz do Cliente: série diária do instrumento (roll-up do catálogo) no grão pedido +
+    overlay de SLA no mesmo eixo. Fonte: session_signal (survey) + sessions (SLA)."""
+    since = from_dt or "2000-01-01"
+    until = to_dt or "2100-01-01"
+    try:
+        data = query_customer_voice(
+            client           = request.app.state.store.new_client(),
+            db               = request.app.state.store._database,
+            tenant_id        = tenant_id,
+            grain            = grain,
+            metric           = metric,
+            since            = since,
+            until            = until,
+            pool_id          = pool_id,
+            accessible_pools = pool_principal.accessible_pools,
+        )
+    except ValueError as e:
+        return JSONResponse(content={"error": str(e)}, status_code=400)
+    return JSONResponse(content=data, status_code=200)
 
 
 # ─── GET /reports/agents/cross — F6 cruzamentos (§8) ─────────────────────────

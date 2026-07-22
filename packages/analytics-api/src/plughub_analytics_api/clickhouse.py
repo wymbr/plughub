@@ -692,6 +692,8 @@ CREATE TABLE IF NOT EXISTS {db}.session_signal
     metric             String,
     value_num          Nullable(Float64),
     value_label        Nullable(String),
+    scale_min          Nullable(Float64),
+    scale_max          Nullable(Float64),
     session_at         DateTime64(3, 'UTC'),
     captured_at        DateTime64(3, 'UTC'),
     origin_session_id  Nullable(String),
@@ -703,6 +705,15 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, grain, segment_id, metric)
 TTL toDateTime(session_at) + INTERVAL 2 YEAR
 """
+
+# Customer Voice (Fatia 1): escala IMUTÁVEL do instrumento carimbada no sinal (da
+# DialogDimension no momento da resposta). Habilita roll-ups dependentes de escala
+# (top-box) sem reler o form (editável). NULL = sinal sem escala (legado/sem dimensão).
+_DDL_SESSION_SIGNAL_MIGRATE_SCALE = (
+    "ALTER TABLE {db}.session_signal"
+    " ADD COLUMN IF NOT EXISTS scale_min Nullable(Float64) DEFAULT NULL,"
+    " ADD COLUMN IF NOT EXISTS scale_max Nullable(Float64) DEFAULT NULL"
+)
 
 # ── Arc 8: agent_pause_intervals — one row per pause interval per human agent.
 # ReplacingMergeTree on (tenant_id, instance_id, paused_at): the close row
@@ -987,6 +998,7 @@ _MIGRATIONS = [
     _DDL_SESSIONS_MIGRATE_ORIGIN_CLASS,
     _DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS,
     _DDL_MESSAGES_MIGRATE_ORIGIN_CLASS,
+    _DDL_SESSION_SIGNAL_MIGRATE_SCALE,    # Customer Voice: escala carimbada no sinal (top-box)
 ]
 
 
@@ -1586,6 +1598,7 @@ class AnalyticsStore:
     _SESSION_SIGNAL_COLS = [
         "signal_id", "tenant_id", "session_id", "grain", "segment_id", "agent_key",
         "pool_id", "source", "metric", "value_num", "value_label",
+        "scale_min", "scale_max",
         "session_at", "captured_at", "origin_session_id", "journey_id", "date",
     ]
 
@@ -2325,6 +2338,8 @@ def _session_signal_row(d: dict) -> list:
         d.get("metric", "") or "",
         float(value_num) if value_num is not None else None,
         d.get("value_label") or None,
+        float(d["scale_min"]) if d.get("scale_min") is not None else None,
+        float(d["scale_max"]) if d.get("scale_max") is not None else None,
         _parse_dt(session_at) or datetime.utcnow(),
         _parse_dt(captured_at) or datetime.utcnow(),
         d.get("origin_session_id") or None,
