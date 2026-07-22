@@ -1,0 +1,172 @@
+# skill_outbound_worker_v1.yaml
+# Outbound Fase 5a — WORKER do fan-out (perfil workflow, canal webhook).
+# Spec: docs/arcos/outbound.md (§ "Execução paralela (fan-out)")
+#
+# 1 por contato, disparado pelo dispatcher (skill_outbound_dispatch_v1) via
+# workflow_trigger. Lê delivery_id / customer_id / canal do ctx (semeados pelo
+# dispatcher no context_json). Fluxo:
+#   eligibility(claim) → choice
+#     • elegível  → registra `contacted` → collect (LAZY: entrega o convite e SUSPENDE
+#                    até resposta/timeout — a MESMA máquina do survey, decisão B) →
+#                    resposta → `responded`; timeout → `failed`.
+#     • inelegível → `skipped_ineligible`.
+#
+# Decisão B (2026-07-22): o contato usa o `collect` LAZY que já existe (entrega convite,
+# suspende, sessão-filho só nasce no engajamento). Funcionalmente idêntico ao "roteado
+# ativo" para todo canal cujo engajamento é ADIÁVEL (link/mensagem); o ativo só é forçado
+# na voz-com-agente (connect síncrono não-adiável), que está fora deste corte.
+#
+# channel_policy é INLINE aqui porque é skill DEMO — a policy real (canal→pool) é config
+# de negócio do tenant e o survey a injeta por deploy ($.config.channel_policy). Perfil
+# workflow: invoke + choice + collect + complete (sem menu/notify).
+
+id: skill_outbound_worker_v1
+name: "Outbound Worker (elegibilidade + collect + entrega)"
+version: "1.0"
+description: |
+  Worker do fan-out outbound (Fase 5a), 1 por contato em paralelo. Passa pelo gate de
+  fadiga (contact_eligibility_check, claim reserva a janela); elegível → registra
+  `contacted` e faz o collect (lazy) esperando resposta/timeout; inelegível →
+  `skipped_ineligible`. Resposta → `responded`; timeout → `failed`.
+classification:
+  type: vertical
+
+entry: verificar_elegibilidade
+
+steps:
+
+  # ── Gate de fadiga (governança de contato) — mesmo motor da Fase 2 ───────────
+  # customer_id / canal / campaign vêm do ctx semeado pelo dispatcher.
+  - id: verificar_elegibilidade
+    type: invoke
+    tool: contact_eligibility_check
+    input:
+      customer_id: "@ctx.session.customer_id"
+      channel:     "@ctx.session.contact_channel"
+      campaign_id: "@ctx.session.campaign_id"
+      claim:       true
+      tenant_id:   "$.tenant_id"
+    output_as: elig
+    on_success: decidir
+    # Motor indisponível → conservador: marca failed (nunca silencioso).
+    on_failure: registrar_failed
+
+  - id: decidir
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.elig.allowed"
+        operator: eq
+        value: true
+        next: registrar_contacted
+    default: registrar_skip
+
+  # ── Elegível: registra `contacted` (alcançamos o cliente) ANTES do collect ───
+  # A ordem (contacted → collect) torna o fan-out observável de forma síncrona: a
+  # delivery vai claimed→contacted assim que o worker roda, sem depender do engajamento.
+  - id: registrar_contacted
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "contacted"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rc
+    on_success: contatar
+    on_failure: contatar
+
+  # ── collect LAZY: entrega o convite e SUSPENDE (sem alocar recurso até engajar) ──
+  # channel_policy inline (demo): canal→pool. O N2 (_negotiate_channel) resolve o par
+  # sem saber que processo pede. Sessão-filho de contato só nasce se o cliente engajar.
+  - id: contatar
+    type: collect
+    target:
+      type: customer
+      id: "@ctx.session.customer_id"
+    channel_policy:
+      channels:
+        webchat: dialog_runner
+      preferred_order: [webchat]
+    interaction: "text"
+    prompt: "Contato outbound"
+    timeout_hours: 48
+    business_hours: false
+    output_as: contato
+    on_response:
+      next: registrar_responded
+    on_timeout:
+      next: registrar_timeout
+
+  # ── Cliente respondeu ────────────────────────────────────────────────────────
+  - id: registrar_responded
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "responded"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rr
+    on_success: encerrar_ok
+    on_failure: encerrar_ok
+
+  # ── Não engajou até o deadline ───────────────────────────────────────────────
+  - id: registrar_timeout
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "failed"
+      error:       "collect_timeout"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rt
+    on_success: encerrar_timeout
+    on_failure: encerrar_timeout
+
+  # ── Inelegível (fadiga/quarentena) ───────────────────────────────────────────
+  - id: registrar_skip
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "skipped_ineligible"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rs
+    on_success: encerrar_skip
+    on_failure: encerrar_skip
+
+  # ── Erro no gate de elegibilidade ────────────────────────────────────────────
+  - id: registrar_failed
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "failed"
+      error:       "eligibility_error"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rf
+    on_success: encerrar_failed
+    on_failure: encerrar_failed
+
+  - id: encerrar_ok
+    type: complete
+    outcome: resolved
+    issue_status: outbound_responded
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: resolved
+    issue_status: outbound_not_answered
+
+  - id: encerrar_skip
+    type: complete
+    outcome: resolved
+    issue_status: outbound_skipped_ineligible
+
+  - id: encerrar_failed
+    type: complete
+    outcome: resolved
+    issue_status: outbound_failed

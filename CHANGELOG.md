@@ -2,6 +2,52 @@
 
 ---
 
+## Outbound — Fase 5b: survey outbound e2e via substrato de campanha ✅ validado (2026-07-22)
+
+Conecta o survey ao substrato de mailing/campaign — o survey deixa de sair só por hook per-sessão (J4b) e passa pelo caminho **batelado/governado** (fadiga/ordering/retry). Arco Outbound **completo (1–5)**. Detalhe em `docs/arcos/outbound.md` (§ "Survey outbound e2e (5b)").
+
+- **`skill_outbound_survey_dispatch_v1`** (pool `outbound_survey_dispatch`): drena a campanha de survey → fan-out ao `outbound_survey_worker` via `workflow_trigger`, **repassando o contrato de metadata do survey** (`origin_session_id`/`grain`/`form_id`/`customer_key`) no `context_json`. Dispatcher próprio (não generaliza o da 5a) porque é quem conhece o contrato — mantém o da 5a congelado (sem risco de interpolar path de metadata ausente).
+- **`skill_outbound_survey_worker_v1`** (pool `outbound_survey_worker`, 1 por contato): `eligibility(claim) → choice → [elegível: survey_link_create(form_id/origin/grain/customer_key) → campaign_delivery_result(contacted, session_id=token) → complete] | [inelegível: skipped_ineligible]`. Link fail → failed.
+- **Veículo = link web, origin EXPLÍCITO (não o collect):** `survey_link_create` congela o DialogForm publicado num token keyed a `origin_session_id`+grão **da metadata**. O `collect` chavearia o sinal pela **raiz da sessão chamadora** (a do dispatcher no fan-out) → errada p/ o survey do processo. A submissão em `/survey/{token}/submit` publica `session.signals` no origin/grão (mesma trilha do `survey_record`). O worker **não suspende** — a resposta é do CLIENTE, async, nunca fabricada.
+- **Closure = sinal + `contacted`** (decisão 2026-07-22): a delivery guarda o token (drill); `responded` por-delivery (submit → `campaign_delivery_result`) = refinamento. **journey_complete** (skill de processo que faz `mailing_add` no `complete`) = seed direto no smoke; o auto-alimentar real é o passo seguinte.
+- **Registry**: pools `outbound_survey_dispatch` (2) + `outbound_survey_worker` (3) em `infra/registry/tenant_demo.yaml`. Reusa `survey_link_create` + `/survey/web/*` (J4) + `dialog_nps_buttons` (form).
+- **Smoke** `infra/test/smoke_outbound_fase5b.sh`: semeia o form → survey mailing + N=2 entries (metadata origin/grain/form) → campanha(pool=outbound_survey_dispatch) + agenda fire → poll deliveries `contacted` (token guardado) → `POST /survey/web/{token}/submit {nps:9}` → `signals_recorded>0` por token.
+- **Deploy:** skills + registry são mounts ro → `restart skill-flow-service orchestrator-bridge` (upsert skills + seed pools novos). Sem rebuild.
+- **Validação (2026-07-22):** `smoke_outbound_fase5b.sh` verde — `contacted=2`, 2× `signals_recorded=1` (2 surveys criados pelo substrato de campanha → submissão → `session.signals`).
+- **Gate de capacidade (achado no deploy):** o deploy do slot rejeita `422 deployViolation` se `Σ concorrência declarada > C` (`{t}:quota:max_concurrent_sessions`). Os 4 pools de outbound (5a+5b) empurraram o demo além do C=310 → `outbound_survey_worker` 422'ou (o dispatcher, menor, coube). **Não é bug — é governança de capacidade** (a validação recusou super-comprometer o contratado). Fix: `seed_pricing.py` ai_agent 300→400 (C 310→410); em ambiente vivo `POST /v1/pricing/resources` **seta** a quantidade do tipo (upsert, não soma); survey_worker reduzido 5→3 (higiene — demo N pequeno). Lição: pools de demo declaram concorrência modesta.
+
+---
+
+## Outbound — Fase 5a: fan-out dispatcher/worker (workflow_trigger) ✅ validado (2026-07-22)
+
+O loop inline sequencial da Fase 1 virou **dispatcher + worker** — paralelismo por SESSÃO via `workflow_trigger` (fire-and-forget), não por step. Substrato genérico; survey (5b) é o 1º consumidor. Detalhe em `docs/arcos/outbound.md` (§ "Fan-out (5a)").
+
+- **`skill_outbound_dispatch_v1`** (pool `outbound_dispatch`, perfil workflow, disparado pela agenda com `{campaign_id}`): `drenar (campaign_drain — claim atômico) → loop{ workflow_trigger(pool=outbound_worker, customer_id, context_json={delivery_id,customer_id,channel,campaign_id}) } → complete`. **Fire-and-forget** — não espera os workers. `context_json` interpola `{{$.pipeline_state.alvo.*}}` (interpolate.ts) e semeia o ctx do worker antes do routing.
+- **`skill_outbound_worker_v1`** (pool `outbound_worker`, perfil workflow, 1 por contato em paralelo): `eligibility(claim) → choice → [elegível: campaign_delivery_result(contacted) → collect(lazy) → resposta: responded | timeout: failed] | [inelegível: skipped_ineligible]`. Lê `delivery_id`/`customer_id`/canal do ctx (semeado pelo dispatcher). `channel_policy` **inline** (skill DEMO — a policy real é config de deploy do survey).
+- **Contabilidade variante (a):** o dispatcher drena+claima o lote (delivery=`claimed`) e passa o `delivery_id` a cada worker; o worker atualiza a sua própria delivery. **Paralelismo** = `outbound_worker.max_concurrent_sessions` + allocate-or-queue (excedente enfileira).
+- **Decisão B (lazy = ativo, exceto voz):** o worker reusa o `collect` **lazy** existente (entrega convite + suspende; sessão-filho só no engajamento). Funcionalmente idêntico ao "roteado ativo" para todo canal com engajamento **adiável** (o clique/resposta é o sinal que aloca) — o ativo-síncrono só é forçado na voz-com-agente (connect não-adiável), que entra depois como pacing `look_ahead`, não como reserva. Por isso **não** se construiu um caminho ativo genérico.
+- **Registry**: pools `outbound_dispatch` (max_concurrent 2) + `outbound_worker` (max_concurrent 5 = grau de paralelismo) em `infra/registry/tenant_demo.yaml`.
+- **Smoke** `infra/test/smoke_outbound_fase5a.sh`: mailing + N=3 entries (clientes distintos) + campanha(pool=outbound_dispatch) + agenda fire → poll deliveries → N `contacted` (só ocorre se os N workers rodaram em paralelo; se o fan-out falhasse, ficariam em `claimed`).
+- **Deploy:** skills + registry são mounts ro → `restart skill-flow-service orchestrator-bridge` (RegistrySyncer faz upsert das skills + seed-if-absent dos pools novos). Sem rebuild (tools e `handle_collect` já existiam). Pool JÁ existente com slot: `PUT /slots/next`→`POST /promote`.
+- **Validação (2026-07-22):** `smoke_outbound_fase5a.sh` verde — 3 entries → `deliveries=3, contacted=3` (dispatcher drenou+claimou 3, espalhou 3 workers em paralelo, cada um `claimed→contacted`). **5b** (cola survey: DialogForm no engajamento + `survey_record` + `journey_complete`) pendente.
+
+---
+
+## Outbound — Fase 4: importador de arquivo (CSV/xlsx) em duas camadas ✅ validado via API (2026-07-22)
+
+Adaptador anti-corrupção (padrão quality-ingest) construído em **duas camadas** no `mailing-api` (mesmo serviço, seam limpo). Decisões fechadas em discussão (2026-07-22): síncrono com teto · `column_map` na config do mailing · rejeita-linha-e-continua · **REST puro** (importador não é agente) · Camada A **pública agora** (reuso futuro por outros formatos). Detalhe em `docs/arcos/outbound.md` (§ "Fase 4").
+
+- **Camada A — ingestão em lote, agnóstica de formato** (`importer.batch_ingest` + `POST /v1/mailings/{id}/entries/batch`, público). Recebe linhas normalizadas (`{customer_id?, anchors?:[{kind,value}], contacts?, metadata, dedup_key?}`) → resolve `customer_id` (id nativo, senão `anchors`→Identity `resolve()`; miss → cru, conta `unresolved`) → **valida** (sem contato **nem** `customer_id` = inalcançável → `rejected`, única razão nesta camada) → `db_add_entry` (upsert por `dedup_key`). Devolve `{total, added, deduped, resolved, unresolved, rejected:[{index, reason}]}`. **Nunca vê uma coluna.**
+- **Camada B — adaptador de arquivo** (`importer.parse_file` + `POST /v1/mailings/{id}/import`, multipart). Lê o **`column_map` do mailing**, faz parse CSV (sniff `,`/`;`, encoding tolerante) / xlsx (`openpyxl`), monta as rows da Camada A e delega. **Síncrono com teto** (`config.import_max_rows=5000` → 413). Remapeia `rejected.index`→**nº de linha** de origem, carimba `source="import:{import_id}"`, 400 se o mailing não tem `column_map`.
+- **`column_map` (config de PARSING no mailing):** `{customer_id_column?, anchors:[{kind,column}], contacts:{canal→coluna}, metadata_columns?}` (`metadata_columns` ausente = todas as colunas restantes viram `metadata`). Única coisa que a plataforma lê do arquivo; `metadata` segue **opaco em runtime**.
+- **`identity_client.resolve(tenant, anchors, provision=True)`** via `POST /v1/channels/webhook/identity/resolve` → `customer_id|None` (degrada barulhento → `None`, guarda cru; nunca aborta o lote).
+- **`@plughub/schemas/outbound.ts`**: `ColumnMap`(+anchor), `column_map` em `Mailing`/`Create`/`Update`; `IngestRow`/`BatchIngestRequest`/`IngestReport`/`ImportReport`. **`mailing-api`**: coluna `outbound.mailings.column_map JSONB` (DDL + `ALTER … ADD IF NOT EXISTS` idempotente); `column_map` no create/update/row. Deps novas: `openpyxl`+`python-multipart`.
+- **Smoke** `infra/test/smoke_outbound_fase4.sh` (via API): mailing c/ `column_map` → import CSV (3 inseridas, linha 5 inalcançável rejeitada com nº) → re-import (deduped=3) → `entries` (3 active) → Camada A direta (`/entries/batch`, 1 válida + 1 rejeitada).
+- **Validação (2026-07-22):** `smoke_outbound_fase4.sh` verde — import `{total:4, added:3, resolved:1, rejected:[{row:5}]}` (âncora-only resolveu `customer_id` pelo Identity Resolver); re-import `{added:0, deduped:3}`; Camada A direta `{total:2, added:1, rejected:[{index:1}]}`.
+- **Deploy:** `build @plughub/schemas` (UI/tools futuros); `build mailing-api && up -d --force-recreate mailing-api` (nova coluna + módulo `importer` + deps). Sem tool MCP nova (REST puro).
+
+---
+
 ## Outbound — Ordenação declarativa do drain (campaign.ordering) ✅ validado via API (2026-07-21)
 
 Backend da ordenação do lote resolvida **no claim** (a query do drain), sobre os paths do `metadata` que a campanha nomeia. Desenho fechado em `docs/arcos/outbound.md` (§ "Ordenação e seleção do lote"). UI = fatia 1b.

@@ -3,12 +3,12 @@
 seed_pricing.py — Recursos contratados do demo (capacity-governance item 6).
 
 Configura installation_resources do tenant_demo coerentes com os deploys do
-tenant_demo.yaml (Σ declarada = 280 IA) + margem:
+tenant_demo.yaml (Σ declarada cresceu com os arcos — outbound fan-out/survey etc.) + margem:
 
-  ai_agent     × 300  (base)  — cobre os 280 declarados + pools de teste
+  ai_agent     × 400  (base)  — cobre os deploys acumulados dos arcos + margem
   human_agent  ×  10  (base)  — logins humanos concorrentes do demo
 
-C resultante = 310 → quota {t}:quota:max_concurrent_sessions gravada pelo
+C resultante = 410 → quota {t}:quota:max_concurrent_sessions gravada pelo
 quota sync do pricing-api (item 1); saldo positivo no Billing/Capacidade.
 
 IDEMPOTENTE E NÃO-DESTRUTIVO: se o tenant já tem QUALQUER resource configurado,
@@ -32,7 +32,7 @@ TENANT_ID    = os.environ.get("TENANT_ID",           "tenant_demo")
 MAX_WAIT_S   = int(os.environ.get("SEED_MAX_WAIT", "120"))
 
 RESOURCES = [
-    {"resource_type": "ai_agent",    "quantity": 300, "pool_type": "base",
+    {"resource_type": "ai_agent",    "quantity": 400, "pool_type": "base",
      "label": "Agentes IA (deploys do demo + margem)"},
     {"resource_type": "human_agent", "quantity": 10,  "pool_type": "base",
      "label": "Agentes humanos concorrentes"},

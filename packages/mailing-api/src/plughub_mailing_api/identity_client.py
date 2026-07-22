@@ -26,6 +26,31 @@ class IdentityClient:
         self.base_url = base_url.rstrip("/")
         self.timeout_s = timeout_s
 
+    async def resolve(
+        self, tenant_id: str, anchors: list[dict], provision: bool = True,
+    ) -> str | None:
+        """Fase 4 — resolve/provision a native customer_id from identity anchors
+        (`[{kind, value}]`) via Lookup 1. Returns the customer_id or None (no anchors,
+        no match, or error → the importer stores the entry raw with customer_id=null).
+        Degradation is graceful and LOUD (logged) — a resolve miss never blocks import."""
+        if not anchors:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_s) as client:
+                r = await client.post(
+                    f"{self.base_url}/v1/channels/webhook/identity/resolve",
+                    json={"tenant_id": tenant_id, "anchors": anchors, "provision": provision},
+                )
+            r.raise_for_status()
+            cid = (r.json() or {}).get("customer_id")
+            return cid or None
+        except Exception as exc:
+            logger.warning(
+                "identity resolve failed (anchors=%d) — storing raw (customer_id=null): %s",
+                len(anchors), exc,
+            )
+            return None
+
     async def get_do_not_contact(self, tenant_id: str, customer_id: str) -> dict | None:
         """Returns the customer's `do_not_contact` attribute ({all?, channels?}) or
         None (no customer / not set / error → treated as NOT opted-out)."""

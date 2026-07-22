@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # cadastro is the single source of `do_not_contact`; outbound reads/writes it here.
     identity_api_url: str = "http://channel-gateway:8010"
 
+    # Fase 4 — file import: cap on data rows per synchronous import (413 above it).
+    import_max_rows: int = 5000
+
     # Installation context (static per deployment)
     installation_id: str = "install-local"
     organization_id: str = "org-default"

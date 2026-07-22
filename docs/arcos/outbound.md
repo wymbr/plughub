@@ -1,7 +1,16 @@
 # Outbound — Mailing + Campaign + Delivery (arco)
 
 > **Status:** Fase 1 **✅ E2E**; Fase 2 **✅ API**; Fase 2b **✅ E2E**; Fase 3 (elegibilidade: 3a janela + 3b
-> opt-out) **✅ API** (`smoke_outbound_fase3a.sh`/`3b.sh`) — 2026-07-21. Fases 4–5 pendentes.
+> opt-out) **✅ API** (`smoke_outbound_fase3a.sh`/`3b.sh`) — 2026-07-21. **Fase 4 (importador de arquivo) ✅
+> validado via API** (`smoke_outbound_fase4.sh` — 2026-07-22). **Fase 5a (fan-out dispatcher/worker) ✅ validado**
+> (`smoke_outbound_fase5a.sh` — 2026-07-22: `deliveries=3, contacted=3`). **Fase 5b (survey outbound e2e) ✅ validado**
+> (`smoke_outbound_fase5b.sh` — 2026-07-22: `contacted=2`, 2× `signals_recorded=1`). **Arco Outbound completo (1–5).**
+>
+> **Nota de capacidade (deploy 5a/5b):** os pools novos declaram concorrência contra o C contratado do tenant
+> (`{t}:quota:max_concurrent_sessions`); o deploy do slot **rejeita** (`422 deployViolation`) se `Σ declarada > C`
+> — não é bug, é governança. Os 4 pools de outbound empurraram o demo além do C=310 → o survey_worker 422'ou.
+> Fix: C elevado p/ 410 (`seed_pricing.py` ai_agent 400; em ambiente vivo `POST /v1/pricing/resources` **seta** o
+> tipo, não soma) + survey_worker reduzido a 3. Pools de demo devem declarar concorrência modesta.
 > Design fechado: [`../product/outbound-mailing-campaign-design.md`](../product/outbound-mailing-campaign-design.md).
 > Spec de implementação da Fase 1: [`../product/outbound-fase1-implementation-spec.md`](../product/outbound-fase1-implementation-spec.md).
 > Contexto: o módulo Outbound é a **Fase 4 (opcional) do arco Scheduler** (cadência com diff zero).
@@ -121,6 +130,76 @@ recurso (routing) num passo só**. Nada disso é build novo no outbound — o ou
 **Escopo da Fase 3 (agora):** só **3a (calendar)** + **3b (opt-out)** — portões de elegibilidade, ortogonais a
 routing/collect. Capacidade e canal são config/reuso que fecham na Fase 5.
 
+## Fase 4 — importador de arquivo (CSV/xlsx) em DUAS camadas ✅ API
+
+Adaptador anti-corrupção (padrão quality-ingest): lê arquivo → normaliza → `mailing_add`. Construído em
+**duas camadas** dentro do `mailing-api` (mesmo serviço, seam limpo), decisão 2026-07-22:
+
+- **Camada A — ingestão em lote, agnóstica de formato** (`importer.batch_ingest` + `POST /v1/mailings/{id}/
+  entries/batch`, público). Recebe **linhas já normalizadas** (`{customer_id?, anchors?:[{kind,value}],
+  contacts?, metadata, dedup_key?}`) e faz a semântica de domínio: resolve `customer_id` (id nativo ou
+  `anchors`→Identity Resolver `resolve()`; miss → guarda cru, conta `unresolved`), **valida** (linha sem
+  contato **nem** `customer_id` = inalcançável → `rejected`, única razão de rejeição nesta camada), `db_add_entry`
+  (upsert por `dedup_key`). Devolve `{total, added, deduped, resolved, unresolved, rejected:[{index, reason}]}`.
+  **Nunca vê uma coluna** — é o seam reusável por qualquer formato/fonte futura (JSON, Sheets, SFTP, sync API).
+- **Camada B — adaptador de arquivo** (`importer.parse_file` + `POST /v1/mailings/{id}/import`, multipart). Lê o
+  **`column_map` do mailing**, faz parse CSV/xlsx (sniff de `,`/`;`; encoding tolerante; `openpyxl` p/ xlsx),
+  monta as rows da Camada A e delega. **Síncrono com teto** (`PLUGHUB_MAILING_IMPORT_MAX_ROWS`, default 5000 →
+  413). Remapeia `rejected.index`→**nº de linha** de origem e carimba `source="import:{import_id}"`.
+
+**`column_map` (config de PARSING no mailing, não de ingestão):** `{customer_id_column?, anchors:[{kind,column}],
+contacts:{canal→coluna}, metadata_columns?}`. `metadata_columns` ausente = todas as colunas restantes (não
+consumidas por id/âncora/contato) viram `metadata`. É a **única** coisa que a plataforma lê do arquivo; o
+`metadata` segue **opaco em runtime** (o mapa só diz como fatiar as colunas na importação). Fica no mailing mas é
+lido só pela Camada B.
+
+**Decisões (2026-07-22):** síncrono com teto (não job) · `column_map` na config do mailing (não no payload) ·
+rejeita-linha-e-continua (nunca aborta o arquivo) · **REST puro** (o importador não é agente — sem tool MCP) ·
+Camada A **exposta pública agora** (custo pequeno, reuso futuro por outros formatos). Import sem cliente resolvido
+→ `customer_id=null` cru, retentável depois (decisão (a) do design). Gate `infra/test/smoke_outbound_fase4.sh`.
+
+## Fan-out (5a) ✅ — dispatcher/worker via `workflow_trigger`
+
+> **Implementado (2026-07-22, `smoke_outbound_fase5a.sh`):** o loop inline sequencial da Fase 1 virou
+> **dispatcher + worker**. `skill_outbound_dispatch_v1` (pool `outbound_dispatch`, disparado pela agenda):
+> `drenar (campaign_drain, claim) → loop{ workflow_trigger(pool=outbound_worker, customer_id, context_json=
+> {delivery_id, customer_id, channel, campaign_id}) } → complete` — **fire-and-forget, não espera**.
+> `skill_outbound_worker_v1` (pool `outbound_worker`, 1 por contato em paralelo): `eligibility(claim) → choice
+> → [elegível: contacted → collect(lazy) → responded|failed] | [inelegível: skipped_ineligible]`. Contabilidade
+> **variante (a)**: o dispatcher claima e passa `delivery_id`; o worker atualiza a sua delivery. Paralelismo =
+> `outbound_worker.max_concurrent_sessions` + allocate-or-queue. `context_json` interpola `{{$.pipeline_state.*}}`
+> (interpolate.ts). O smoke prova N deliveries `claimed→contacted` (só ocorre se os workers rodaram).
+
+**Decisão B (2026-07-22) — collect lazy = collect ativo, exceto voz:** o worker usa o `collect` **lazy** que já
+existe (entrega convite + suspende; sessão-filho só no engajamento). Funcionalmente idêntico ao "roteado ativo"
+para todo canal cujo **instante de engajamento é adiável** (link/mensagem): o próprio clique/resposta é o sinal
+que aloca o recurso — ninguém segura agente esperando. O ativo-síncrono só é **forçado** na voz-com-agente (o
+"alô" é síncrono e não-adiável → exige capacidade pronta no instante do connect), e mesmo lá o discador é
+**pacing de perna barata à frente do pool** (não segurar o agente caro). Por isso não se construiu um caminho
+ativo genérico: o lazy é o primitivo canônico; a voz entra depois como pacing (`look_ahead`), não como reserva.
+
+## Survey outbound e2e (5b) ✅
+
+> **Implementado (2026-07-22, `smoke_outbound_fase5b.sh`):** conecta o survey ao substrato de mailing/campaign.
+> O processo, no `complete`, faz `mailing_add` (o "journey_complete") numa mailing de survey com
+> `metadata = {origin_session_id, grain, form_id, customer_key}`; uma campanha+agenda drena; o
+> `skill_outbound_survey_dispatch_v1` (pool `outbound_survey_dispatch`) faz fan-out ao
+> `skill_outbound_survey_worker_v1` (pool `outbound_survey_worker`), repassando a metadata de survey.
+
+**Veículo = link web, origin EXPLÍCITO (não o collect).** O worker de survey usa `survey_link_create` (congela o
+DialogForm publicado num token, keyed a `origin_session_id` + grão **da metadata**), **não** o `collect` — porque
+o collect chaveia o sinal pela **raiz da sessão chamadora**, que no fan-out é a do dispatcher (desconexo do
+processo). Com o link web, o `origin_session_id` do processo viaja explícito na metadata → a submissão em
+`/survey/{token}/submit` publica `session.signals` **no origin/grão certos** (mesma trilha do `survey_record`). O
+worker **não suspende** (o link é fire-and-return); a resposta é do CLIENTE, async, nunca fabricada.
+
+**Worker:** `eligibility(claim) → choice → [elegível: survey_link_create → campaign_delivery_result(contacted,
+guarda o token na delivery) → complete] | [inelegível: skipped_ineligible]`. **Closure = sinal + `contacted`**
+(decisão 2026-07-22): a delivery guarda o token (drill); o `responded` por-delivery (submit →
+`campaign_delivery_result`) é refinamento. **journey_complete:** seed direto no smoke (o skill de processo que
+auto-alimenta a mailing no `complete` é o passo real, fora do 1º corte). Dispatcher de survey **próprio** (não
+generaliza o da 5a) porque é quem conhece o contrato de metadata do survey — mantém o da 5a congelado.
+
 ## Execução paralela (fan-out) — desenho fechado (Fase 5)
 
 Hoje o `skill_outbound_demo_v1` processa o lote **inline** num `loop` (sequencial). Para **paralelizar** os
@@ -210,6 +289,8 @@ elegibilidade único e genérico, sem tool/ledger de survey; a quarentena por ti
 - **Fase 3 de elegibilidade ✅** (3a calendar + 3b opt-out `do_not_contact`). Capacidade (routing `max_wait_s`) e
   canal (`collect.channel_policy`) NÃO são build novo — fecham na Fase 5. Pacing `look_ahead` (discador) = desenho
   fechado, Fase 5+.
-- **Fase 4** — importador anti-corrupção (CSV/xlsx → `mailing_add`).
-- **Fase 5** — survey outbound e2e (`journey_complete` no `complete` do processo; `survey_record`→`session_signal`).
+- **Fase 4 ✅ API** — importador anti-corrupção (CSV/xlsx → `mailing_add`) em duas camadas (batch ingest público +
+  adaptador de arquivo). Ver seção "Fase 4" acima. `smoke_outbound_fase4.sh`.
+- **Fase 5a ✅** — fan-out dispatcher/worker (`workflow_trigger`), collect lazy sob decisão B. `smoke_outbound_fase5a.sh`.
+- **Fase 5b ✅** — survey outbound e2e via substrato de campanha (`survey_link_create` keyed ao origin → `/survey/submit` → `session.signals`). `smoke_outbound_fase5b.sh`. Refinamentos: `responded` por-delivery; skill de processo que auto-alimenta a mailing no `complete`.
 - **UI (fatia 1b)** — telas de mailings/campaigns/deliveries no platform-ui.

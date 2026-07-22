@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS outbound.mailings (
                                   CHECK (dedup_policy IN ('customer','customer_context','none')),
     metadata_contract TEXT,
     entry_ttl_seconds INTEGER,
+    column_map        JSONB,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 )
@@ -171,6 +172,11 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
         async with conn.transaction():
             await conn.execute(_DDL_SCHEMA)
             await conn.execute(_DDL_MAILINGS)
+            # Idempotent add for DBs created before the column_map column (Fase 4).
+            await conn.execute(
+                "ALTER TABLE outbound.mailings "
+                "ADD COLUMN IF NOT EXISTS column_map JSONB"
+            )
             await conn.execute(_DDL_MAILINGS_IDX)
             await conn.execute(_DDL_ENTRIES)
             await conn.execute(_DDL_ENTRIES_IDX)
@@ -212,6 +218,7 @@ def _row_to_mailing(row: asyncpg.Record) -> dict[str, Any]:
         "dedup_policy":      row["dedup_policy"],
         "metadata_contract": row["metadata_contract"],
         "entry_ttl_seconds": row["entry_ttl_seconds"],
+        "column_map":        _jl(row["column_map"]),
         "created_at":        _iso(row["created_at"]),
         "updated_at":        _iso(row["updated_at"]),
     }
@@ -297,14 +304,16 @@ async def db_create_mailing(pool: asyncpg.Pool, tenant_id: str, data: dict) -> d
     row = await pool.fetchrow(
         """
         INSERT INTO outbound.mailings
-            (tenant_id, name, description, dedup_policy, metadata_contract, entry_ttl_seconds)
-        VALUES ($1,$2,$3,$4,$5,$6)
+            (tenant_id, name, description, dedup_policy, metadata_contract,
+             entry_ttl_seconds, column_map)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb)
         RETURNING *
         """,
         tenant_id,
         data["name"], data.get("description"),
         data.get("dedup_policy", "customer_context"),
         data.get("metadata_contract"), data.get("entry_ttl_seconds"),
+        json.dumps(data["column_map"]) if data.get("column_map") is not None else None,
     )
     return _row_to_mailing(row)
 
@@ -318,6 +327,7 @@ async def db_update_mailing(pool: asyncpg.Pool, tenant_id: str, id: str, data: d
             dedup_policy      = COALESCE($5, dedup_policy),
             metadata_contract = COALESCE($6, metadata_contract),
             entry_ttl_seconds = COALESCE($7, entry_ttl_seconds),
+            column_map        = COALESCE($8::jsonb, column_map),
             updated_at        = now()
         WHERE id = $1 AND tenant_id = $2
         RETURNING *
@@ -326,6 +336,7 @@ async def db_update_mailing(pool: asyncpg.Pool, tenant_id: str, id: str, data: d
         data.get("name"), data.get("description"),
         data.get("dedup_policy"), data.get("metadata_contract"),
         data.get("entry_ttl_seconds"),
+        json.dumps(data["column_map"]) if data.get("column_map") is not None else None,
     )
     return _row_to_mailing(row) if row else None
 

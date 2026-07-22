@@ -25,6 +25,29 @@ import { z } from "zod"
 export const DedupPolicySchema = z.enum(["customer", "customer_context", "none"])
 export type DedupPolicy = z.infer<typeof DedupPolicySchema>
 
+// ── Column map (Fase 4 — file import PARSING config) ──────────────────────────
+// The ONLY thing the platform reads from an imported file. Lives on the mailing but
+// is a parsing artifact: the file adapter (Camada B) reads it to turn columns into
+// normalized ingest rows; the batch-ingest layer (Camada A) never sees a column.
+// metadata stays opaque at runtime — this only says how to slice columns at import.
+export const ColumnMapAnchorSchema = z.object({
+  kind:   z.string(),   // identity anchor kind: 'phone' | 'email' | 'cpf' | ...
+  column: z.string(),   // file column holding the anchor value
+})
+export type ColumnMapAnchor = z.infer<typeof ColumnMapAnchorSchema>
+
+export const ColumnMapSchema = z.object({
+  // Optional: a column already holding the native customer_id (skips resolve).
+  customer_id_column: z.string().nullable().default(null),
+  // Anchors → resolve customer_id via the Identity Resolver when no native id.
+  anchors:            z.array(ColumnMapAnchorSchema).default([]),
+  // channel → column: the addressable endpoints (entry.contacts).
+  contacts:           z.record(z.string()).default({}),
+  // Columns → entry.metadata. Absent/empty = all remaining (non-mapped) columns.
+  metadata_columns:   z.array(z.string()).optional(),
+})
+export type ColumnMap = z.infer<typeof ColumnMapSchema>
+
 export const MailingSchema = z.object({
   id:                z.string(),
   tenant_id:         z.string(),
@@ -36,6 +59,8 @@ export const MailingSchema = z.object({
   metadata_contract: z.string().nullable().default(null),
   // Default retention of entries (null = persistent).
   entry_ttl_seconds: z.number().int().positive().nullable().default(null),
+  // Fase 4 — file import parsing config (null = no import configured).
+  column_map:        ColumnMapSchema.nullable().default(null),
   created_at:        z.string().datetime(),
   updated_at:        z.string().datetime(),
 })
@@ -187,6 +212,7 @@ export const CreateMailingSchema = z.object({
   dedup_policy:      DedupPolicySchema.optional(),
   metadata_contract: z.string().optional(),
   entry_ttl_seconds: z.number().int().positive().optional(),
+  column_map:        ColumnMapSchema.optional(),
 })
 export type CreateMailing = z.infer<typeof CreateMailingSchema>
 
@@ -196,6 +222,7 @@ export const UpdateMailingSchema = z.object({
   dedup_policy:      DedupPolicySchema.optional(),
   metadata_contract: z.string().nullable().optional(),
   entry_ttl_seconds: z.number().int().positive().nullable().optional(),
+  column_map:        ColumnMapSchema.nullable().optional(),
 })
 export type UpdateMailing = z.infer<typeof UpdateMailingSchema>
 
@@ -216,6 +243,73 @@ export const AddEntryResultSchema = z.object({
   deduped:  z.boolean(),   // true = an existing entry was updated (upsert hit)
 })
 export type AddEntryResult = z.infer<typeof AddEntryResultSchema>
+
+// ── Batch ingest (Fase 4 — Camada A, format-agnostic) ─────────────────────────
+// Normalized rows in → resolve + validate + upsert (mailing_add) + report out. The
+// file adapter (Camada B) is one producer; any future format (JSON, Sheets, SFTP)
+// feeds the same contract. `anchors` resolve the customer_id when no native id.
+
+export const IngestAnchorSchema = z.object({
+  kind:  z.string(),   // 'phone' | 'email' | 'cpf' | ...
+  value: z.string(),
+})
+export type IngestAnchor = z.infer<typeof IngestAnchorSchema>
+
+export const IngestRowSchema = z.object({
+  customer_id: z.string().nullable().optional(),
+  // Resolve to a native customer_id when customer_id is absent (Identity Resolver).
+  anchors:     z.array(IngestAnchorSchema).optional(),
+  contacts:    EntryContactsSchema.optional(),
+  metadata:    z.record(z.unknown()).default({}),
+  dedup_key:   z.string().optional(),
+})
+export type IngestRow = z.infer<typeof IngestRowSchema>
+
+export const BatchIngestRequestSchema = z.object({
+  rows:    z.array(IngestRowSchema),
+  // Resolve anchors → customer_id (default true). false = store raw (customer_id null).
+  resolve: z.boolean().default(true),
+  // Provenance stamp on every entry (e.g. "import:{id}" | "sync:crm"). Default null.
+  source:  z.string().optional(),
+})
+export type BatchIngestRequest = z.infer<typeof BatchIngestRequestSchema>
+
+// A rejected row (validation only — a row with no reachable contact nor customer_id).
+// index = position in the submitted rows[]; the file adapter remaps it to a line no.
+export const IngestRejectSchema = z.object({
+  index:  z.number().int(),
+  reason: z.string(),
+})
+export type IngestReject = z.infer<typeof IngestRejectSchema>
+
+export const IngestReportSchema = z.object({
+  total:      z.number().int(),   // rows submitted
+  added:      z.number().int(),   // new entries inserted
+  deduped:    z.number().int(),   // upsert hits (existing entry updated)
+  resolved:   z.number().int(),   // rows whose customer_id was resolved from anchors
+  unresolved: z.number().int(),   // rows with anchors that failed to resolve (stored raw)
+  rejected:   z.array(IngestRejectSchema).default([]),
+})
+export type IngestReport = z.infer<typeof IngestReportSchema>
+
+// The file import report (Camera B) — the batch report with `rejected.index` remapped
+// to source line numbers + the import id (source = "import:{import_id}").
+export const ImportRejectSchema = z.object({
+  row:    z.number().int(),   // 1-based source line (header = line 1)
+  reason: z.string(),
+})
+export type ImportReject = z.infer<typeof ImportRejectSchema>
+
+export const ImportReportSchema = z.object({
+  import_id:  z.string(),
+  total:      z.number().int(),
+  added:      z.number().int(),
+  deduped:    z.number().int(),
+  resolved:   z.number().int(),
+  unresolved: z.number().int(),
+  rejected:   z.array(ImportRejectSchema).default([]),
+})
+export type ImportReport = z.infer<typeof ImportReportSchema>
 
 export const CreateCampaignSchema = z.object({
   name:                z.string().min(1),

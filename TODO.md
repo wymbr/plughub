@@ -1514,8 +1514,22 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 > (só 3a calendar + 3b opt-out são build; capacidade=routing/max_wait e canal=collect fecham na Fase 5; pacing
 > look_ahead=discador Fase 5+). **Fase 3a ✅ via API** (janela via calendar-api, `smoke_outbound_fase3a.sh`).
 > **Fase 3b ⚠️ a validar:** opt-out global `do_not_contact` no cadastro (identity), veto de maior precedência no
-> eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve (`smoke_outbound_fase3b.sh`). Ver
-> `docs/arcos/outbound.md`. **Pendente: Fases 4–5.**
+> eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve (`smoke_outbound_fase3b.sh`).
+> **Fase 4 ✅ via API (2026-07-22):** importador de arquivo em **duas camadas** no `mailing-api` (REST puro) —
+> Camada A `batch_ingest`/`POST …/entries/batch` (agnóstica de formato: resolve+valida+upsert+relatório) + Camada B
+> `parse_file`/`POST …/import` (CSV/xlsx via `column_map` do mailing, síncrono com teto, rejeita-linha-e-continua).
+> `column_map` = config de parsing no mailing; `identity_client.resolve`; deps `openpyxl`+`python-multipart`.
+> `smoke_outbound_fase4.sh`. **Fase 5a ✅ (2026-07-22):** fan-out **dispatcher/worker** via `workflow_trigger`
+> (fire-and-forget) — `skill_outbound_dispatch_v1` (drena+claima → dispara N workers passando `delivery_id`) +
+> `skill_outbound_worker_v1` (1 por contato: eligibility → contacted → collect lazy → responded|failed), pools
+> `outbound_dispatch`/`outbound_worker`. Decisão B: collect lazy = ativo p/ canal adiável (só voz força ativo-
+> síncrono, fora do corte). `smoke_outbound_fase5a.sh` (N deliveries claimed→contacted).
+> **Fase 5b ✅ (2026-07-22):** survey outbound e2e via substrato de campanha — `skill_outbound_survey_dispatch_v1` +
+> `skill_outbound_survey_worker_v1` (pools homônimos). Veículo = **link web** (`survey_link_create`, origin EXPLÍCITO da
+> metadata) e NÃO o collect (que chavearia pela raiz do dispatcher). `eligibility → survey_link_create → contacted(token)`;
+> submit em `/survey/{token}/submit` → `session.signals`. Closure = sinal+contacted (responded por-delivery = refinamento;
+> skill de processo que auto-alimenta a mailing = refinamento). `smoke_outbound_fase5b.sh`. **Arco Outbound COMPLETO
+> (1–5).** Ver `docs/arcos/outbound.md`.
 
 > **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
 > (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill

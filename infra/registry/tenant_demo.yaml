@@ -123,6 +123,53 @@ pools:
     webhook_skill_id: skill_outbound_demo_v1
     sla_target_ms: 3600000  # 1h em ms
 
+  # Fase 5a — fan-out. O DISPATCHER (disparado por Agenda com payload {campaign_id})
+  # drena o lote e dispara um WORKER independente por entrada via workflow_trigger
+  # (fire-and-forget). Paralelismo = max_concurrent_sessions do pool worker + allocate-
+  # or-queue (o excedente enfileira). Substrato genérico — survey (5b) é o 1º consumidor.
+  - pool_id: outbound_dispatch
+    agent_kind: ai
+    deploy: { skill_id: skill_outbound_dispatch_v1, max_concurrent_sessions: 2 }
+    description: "Pool webhook — outbound dispatcher (drena campanha → fan-out workers). Fase 5a."
+    channel_types: [webhook]
+    skill_id: skill_outbound_dispatch_v1
+    webhook_skill_id: skill_outbound_dispatch_v1
+    sla_target_ms: 3600000  # 1h em ms
+
+  - pool_id: outbound_worker
+    agent_kind: ai
+    # max_concurrent = grau de paralelismo do fan-out. Disparar mais que isso → o
+    # excedente enfileira (allocate-or-queue), bounded por queue_config/max_wait.
+    deploy: { skill_id: skill_outbound_worker_v1, max_concurrent_sessions: 5 }
+    description: "Pool webhook — outbound worker (1 por contato: eligibility → collect → delivery). Fase 5a."
+    channel_types: [webhook]
+    skill_id: skill_outbound_worker_v1
+    webhook_skill_id: skill_outbound_worker_v1
+    sla_target_ms: 3600000  # 1h em ms
+
+  # Fase 5b — survey outbound via substrato de campanha. O processo, no `complete`, faz
+  # mailing_add (journey_complete) com metadata {origin_session_id, grain, form_id}; uma
+  # campanha+agenda drena; o survey worker cria o link web (survey_link_create) keyed ao
+  # origin do processo. Substrato genérico da 5a; survey é o 1º consumidor.
+  - pool_id: outbound_survey_dispatch
+    agent_kind: ai
+    deploy: { skill_id: skill_outbound_survey_dispatch_v1, max_concurrent_sessions: 2 }
+    description: "Pool webhook — survey dispatcher (drena campanha de survey → fan-out). Fase 5b."
+    channel_types: [webhook]
+    skill_id: skill_outbound_survey_dispatch_v1
+    webhook_skill_id: skill_outbound_survey_dispatch_v1
+    sla_target_ms: 3600000  # 1h em ms
+
+  - pool_id: outbound_survey_worker
+    agent_kind: ai
+    # concorrência modesta (demo): o fan-out N é pequeno e C do tenant é apertada.
+    deploy: { skill_id: skill_outbound_survey_worker_v1, max_concurrent_sessions: 3 }
+    description: "Pool webhook — survey worker (1 por contato: eligibility → survey_link_create → delivery). Fase 5b."
+    channel_types: [webhook]
+    skill_id: skill_outbound_survey_worker_v1
+    webhook_skill_id: skill_outbound_survey_worker_v1
+    sla_target_ms: 3600000  # 1h em ms
+
   - pool_id: retencao_humano
     # Capacity-governance item 2: tipagem explícita — pool humano (queue_config
     # exige human; logins contam contra C_human). Pools IA declaram agent_kind: ai.

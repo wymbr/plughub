@@ -1,0 +1,85 @@
+# skill_outbound_survey_dispatch_v1.yaml
+# Outbound Fase 5b — DISPATCHER de SURVEY (perfil workflow, canal webhook).
+# Spec: docs/arcos/outbound.md (§ "Survey outbound e2e (5b)")
+#
+# Igual ao dispatcher genérico da 5a (drena um lote da campanha e dispara N workers via
+# workflow_trigger, fire-and-forget), mas:
+#   • aponta o fan-out ao pool `outbound_survey_worker`;
+#   • REPASSA o contrato de metadata do survey (origin_session_id / grain / form_id /
+#     customer_key) para o worker via context_json.
+#
+# Por que um dispatcher próprio (e não generalizar o da 5a): o dispatcher é quem conhece
+# o CONTRATO da metadata que vai repassar. O da 5a repassa campos genéricos; este repassa
+# os do survey. Mantém o da 5a congelado (sem risco de interpolar path de metadata
+# ausente) e o contrato produtor↔consumidor explícito. Em produção o par (worker_pool +
+# campos repassados) poderia virar config de deploy de um dispatcher único.
+
+id: skill_outbound_survey_dispatch_v1
+name: "Outbound Survey Dispatch (drena + fan-out survey workers)"
+version: "1.0"
+description: |
+  Dispatcher do survey outbound (Fase 5b). Lê campaign_id do payload da agenda, drena o
+  lote da campanha de survey (campaign_drain — claim atômico) e dispara um survey worker
+  por entrada (workflow_trigger, fire-and-forget), repassando origin_session_id / grain /
+  form_id / customer_key da metadata. Não espera os workers.
+classification:
+  type: vertical
+
+entry: drenar
+
+steps:
+
+  - id: drenar
+    type: invoke
+    tool: campaign_drain
+    input:
+      campaign_id: "@ctx.campaign_id"
+      tenant_id:   "$.tenant_id"
+    output_as: lote
+    on_success: percorrer
+    on_failure: encerrar_vazio
+
+  - id: percorrer
+    type: loop
+    over: "$.pipeline_state.lote.drained"
+    item_as: "alvo"
+    index_as: "idx"
+    body: disparar_worker
+    collect: "r"
+    results_as: "disparos"
+    on_complete: encerrar
+    max_iterations: 500
+
+  # ── Dispara o survey worker (fire-and-forget), repassando o contrato de survey ──
+  # A metadata da entrada (produzida pelo `mailing_add` do processo) carrega
+  # origin_session_id (a sessão/raiz pesquisada), grain, form_id e customer_key.
+  - id: disparar_worker
+    type: invoke
+    tool: workflow_trigger
+    input:
+      pool_id:           "outbound_survey_worker"
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"
+      customer_id:       "$.pipeline_state.alvo.customer_id"
+      context_json: >-
+        {"session.delivery_id": "{{$.pipeline_state.alvo.delivery_id}}",
+         "session.customer_id": "{{$.pipeline_state.alvo.customer_id}}",
+         "session.contact_channel": "{{$.pipeline_state.alvo.metadata.channel}}",
+         "session.campaign_id": "{{@ctx.campaign_id}}",
+         "session.survey_origin": "{{$.pipeline_state.alvo.metadata.origin_session_id}}",
+         "session.survey_grain": "{{$.pipeline_state.alvo.metadata.grain}}",
+         "session.survey_form_id": "{{$.pipeline_state.alvo.metadata.form_id}}",
+         "session.survey_customer_key": "{{$.pipeline_state.alvo.metadata.customer_key}}"}
+    output_as: r
+    on_success: percorrer
+    on_failure: percorrer
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+    issue_status: outbound_survey_dispatch_done
+
+  - id: encerrar_vazio
+    type: complete
+    outcome: resolved
+    issue_status: outbound_drain_failed

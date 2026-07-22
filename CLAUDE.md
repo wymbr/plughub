@@ -1041,7 +1041,7 @@ Cliente/tipos em `modules/schedules/api.ts`; i18n ns `scheduler`. **Scheduler co
 
 ---
 
-## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3 elegibilidade ✅ [3a+3b])
+## Outbound — Mailing + Campaign + Delivery (Fases 1 ✅ / 2 ✅ / 2b ✅ / 3 ✅ [3a+3b] / 4 importador ✅ / 5a fan-out ✅ / 5b survey e2e ✅)
 
 Substrato **genérico** de contato ativo (Fase 4 do arco Scheduler): `mailing` (audiência) + `campaign`
 (orquestrador fino, endereça **POOL** — S4) + `campaign_delivery` (estado por-campanha). **Survey é o 1º
@@ -1086,7 +1086,40 @@ fora da transação); fechado → `outside_window` sem claim; erro do calendar �
 no cadastro (`identity.customers.attributes`), lido via channel-gateway `GET …/identity/customers/{id}`; o
 eligibility veta `opt_out` de **MAIOR precedência** (antes de calendar/fadiga) salvo `campaign.transactional`;
 `mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento. Smoke `smoke_outbound_fase3b.sh`.
-Ver `docs/arcos/outbound.md`.
+
+**Fase 4 — importador de arquivo ✅ API (2026-07-22):** adaptador anti-corrupção em **DUAS camadas** no
+`mailing-api`, REST puro (importador não é agente): **Camada A** (`batch_ingest` + `POST /v1/mailings/{id}/
+entries/batch`, público, agnóstico de formato) recebe linhas normalizadas → resolve `customer_id` (id nativo ou
+`anchors`→Identity `resolve()`) → valida (sem contato nem id = `rejected`) → `db_add_entry` → relatório
+`{total,added,deduped,resolved,unresolved,rejected}`; **Camada B** (`parse_file` + `POST /v1/mailings/{id}/import`,
+multipart) lê o **`column_map` do mailing** (`{customer_id_column?, anchors:[{kind,column}], contacts:{canal→col},
+metadata_columns?}` — config de PARSING, `metadata` segue opaco em runtime), faz parse CSV/xlsx **síncrono com
+teto** (`PLUGHUB_MAILING_IMPORT_MAX_ROWS=5000`→413), remapeia rejeição→nº de linha, carimba `source=import:{id}`.
+Rejeita-linha-e-continua (nunca aborta). Camada A pública = seam reusável por formatos futuros. Deps novas:
+`openpyxl`+`python-multipart`. Smoke `smoke_outbound_fase4.sh`. Ver `docs/arcos/outbound.md`.
+
+**Fase 5a — fan-out dispatcher/worker ✅ (2026-07-22):** o loop inline sequencial da Fase 1 virou **dispatcher +
+worker** via `workflow_trigger` (fire-and-forget). `skill_outbound_dispatch_v1` (pool `outbound_dispatch`,
+disparado pela agenda): `drenar(campaign_drain, claim) → loop{ workflow_trigger(pool=outbound_worker, customer_id,
+context_json={delivery_id,customer_id,channel,campaign_id}) } → complete`, **não espera**. `skill_outbound_worker_v1`
+(pool `outbound_worker`, 1 por contato em paralelo): `eligibility(claim) → choice → [elegível: contacted →
+collect(lazy) → responded|failed] | [inelegível: skipped_ineligible]`. Contabilidade variante (a): dispatcher
+claima + passa `delivery_id`. Paralelismo = `outbound_worker.max_concurrent` + allocate-or-queue. **Decisão B:**
+usa o `collect` LAZY existente — funcionalmente = ativo p/ todo canal com engajamento **adiável** (link/mensagem);
+o ativo-síncrono só é forçado na voz-com-agente (fora do corte; entra como pacing `look_ahead`, não reserva).
+Smoke `smoke_outbound_fase5a.sh` (N deliveries `claimed→contacted`).
+
+**Fase 5b — survey outbound e2e ✅ (2026-07-22):** conecta o survey ao substrato de campanha. O processo faz
+`mailing_add` no `complete` (journey_complete) com `metadata={origin_session_id,grain,form_id,customer_key}`;
+campanha+agenda drena; `skill_outbound_survey_dispatch_v1` (pool `outbound_survey_dispatch`) faz fan-out ao
+`skill_outbound_survey_worker_v1` (pool `outbound_survey_worker`). **Veículo = link web** (`survey_link_create`,
+que recebe `origin_session_id` EXPLÍCITO da metadata) e **não** o `collect` — o collect chavearia o sinal pela raiz
+da sessão chamadora (a do dispatcher no fan-out), errada p/ o survey do processo. Worker: `eligibility(claim) →
+survey_link_create → campaign_delivery_result(contacted, guarda token) → complete`. A submissão em
+`/survey/{token}/submit` publica `session.signals` no origin/grão (mesma trilha do `survey_record`). Closure =
+sinal + `contacted` (token na delivery p/ drill; `responded` por-delivery = refinamento). Dispatcher de survey
+próprio (conhece o contrato de metadata; mantém o da 5a congelado). Smoke `smoke_outbound_fase5b.sh`. **Arco
+Outbound completo (1–5).**
 
 → See [`docs/arcos/outbound.md`](docs/arcos/outbound.md),
 [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md),
@@ -1152,13 +1185,18 @@ Discriminador de procedência **por-sessão** `origin: live|import|reeval` (defa
 - **Reconciliação de store (2026-07-07, ADR `adr-survey-form-scoring-composition.md`):** a nota original "form JSON versionado na **evaluation-api** + `survey_form_get`" é **superseded** — o `survey_definition` é um **`DialogForm`+dimensions na dialog-api** (D8; o dialog primitive as-built usa dialog-api + `form_get`). Composição de nota: camada `dimension` (instrumento) agrupa perguntas com **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de NA, **dimensions paralelas** (um sinal por dimension, ≠ composite único do Quality); `survey_record` **compõe** server-side (D9) via o primitivo compartilhado `@plughub/schemas/scoring.ts` (`composeScore`). Schema escrito; runtime + editor com dimension pendentes.
 - Spec: `docs/arcos/customer-surveys.md`.
 
-### Outbound — Fases 3–5 *(Fase 1 ✅ E2E, Fase 2 ✅ API, Fase 2b ✅ a validar — ver seção ativa acima)*
+### Outbound — arco COMPLETO (Fases 1–5 ✅) *(ver seção ativa acima; refinamentos abaixo)*
 - **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
   `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
   possessed-only), preferência (cadastro de cliente).
-- **Fase 4 — importador** anti-corrupção (CSV/xlsx → `mailing_add`, padrão quality-ingest).
-- **Fase 5 — survey outbound e2e:** `journey_complete` = o skill do processo chama `mailing_add` no `complete`;
-  `survey_record`→`session_signal`; pertença à journey via `journey_merge` (metadata.origin_session_id).
+- **Fase 4 — importador** anti-corrupção (CSV/xlsx → `mailing_add`, padrão quality-ingest) **✅ API** (2026-07-22)
+  — duas camadas (batch ingest público + adaptador de arquivo); `column_map` no mailing; `smoke_outbound_fase4.sh`.
+- **Fase 5a — fan-out ✅** (2026-07-22): dispatcher/worker via `workflow_trigger` (skills `skill_outbound_dispatch_v1`/
+  `skill_outbound_worker_v1`, pools `outbound_dispatch`/`outbound_worker`); collect lazy sob decisão B; `smoke_outbound_fase5a.sh`.
+- **Fase 5b — survey outbound e2e ✅** (2026-07-22): substrato de campanha → `survey_link_create` (origin explícito) →
+  `/survey/submit` → `session.signals`. Skills `skill_outbound_survey_{dispatch,worker}_v1`, pools homônimos; `smoke_outbound_fase5b.sh`.
+- **Refinamentos 5b (backlog):** `responded` por-delivery (submit → `campaign_delivery_result`); skill de processo que
+  auto-alimenta a mailing no `complete` (journey_complete real, hoje seed direto); pertença à journey via `journey_merge` (metadata.origin_session_id).
 - **UI (fatia 1b):** telas de mailings/campaigns/deliveries no platform-ui (dívida da invariante "UI-editable").
 - Design: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md);
   arco: [`docs/arcos/outbound.md`](docs/arcos/outbound.md).

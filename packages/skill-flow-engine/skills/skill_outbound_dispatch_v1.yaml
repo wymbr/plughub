@@ -1,0 +1,92 @@
+# skill_outbound_dispatch_v1.yaml
+# Outbound Fase 5a — DISPATCHER do fan-out (perfil workflow, canal webhook).
+# Spec: docs/arcos/outbound.md (§ "Execução paralela (fan-out)")
+#
+# Uma Agenda dispara este pool (POST /v1/channels/webhook/pool/outbound_dispatch) com
+# payload { campaign_id } → @ctx.campaign_id (mesmo caminho do outbound_demo da Fase 1).
+# O dispatcher DRENA um lote (campaign_drain — claim atômico) e, para CADA entrada,
+# dispara um WORKER independente via workflow_trigger (fire-and-forget) — e NÃO espera.
+#
+# Por que fan-out e não loop inline (como o demo da Fase 1): delegate/collect SUSPENDEM
+# a sessão e são nível único (um resume_token por sessão) → um loop inline contataria um
+# de cada vez (sequencial). Cada worker é a SUA PRÓPRIA sessão → contatos em PARALELO,
+# sem colisão de nível único. Grau de paralelismo = capacidade do pool worker +
+# allocate-or-queue (o excedente enfileira).
+#
+# Contabilidade (variante a): o DISPATCHER drena+claima o lote (delivery=claimed) e passa
+# o `delivery_id` no context de cada worker; o worker atualiza a sua própria delivery.
+#
+# Perfil workflow (webhook): usa só invoke + loop + complete — nada de menu/notify.
+
+id: skill_outbound_dispatch_v1
+name: "Outbound Dispatch (drena + fan-out workers)"
+version: "1.0"
+description: |
+  Dispatcher do fan-out outbound (Fase 5a). Lê campaign_id do payload da agenda, drena
+  um lote do mailing da campanha (campaign_drain — claim atômico) e dispara um worker
+  independente por entrada (workflow_trigger, fire-and-forget), passando delivery_id +
+  customer_id + canal no context. Não espera os workers; termina assim que espalha o lote.
+classification:
+  type: vertical
+
+entry: drenar
+
+steps:
+
+  # ── Drena um lote da campanha (claim atômico — sem drain duplo entre ticks) ──
+  - id: drenar
+    type: invoke
+    tool: campaign_drain
+    input:
+      campaign_id: "@ctx.campaign_id"
+      tenant_id:   "$.tenant_id"
+    output_as: lote
+    on_success: percorrer
+    on_failure: encerrar_vazio
+
+  # ── Percorre o lote drenado; body = dispara UM worker por entrada ────────────
+  # Item atual em $.pipeline_state.alvo (path fixo). O invoke do body é fire-and-forget
+  # (workflow_trigger devolve na hora e a sessão-worker roda independente).
+  - id: percorrer
+    type: loop
+    over: "$.pipeline_state.lote.drained"
+    item_as: "alvo"
+    index_as: "idx"
+    body: disparar_worker
+    collect: "r"
+    results_as: "disparos"
+    on_complete: encerrar
+    max_iterations: 500
+
+  # ── Dispara o worker (fire-and-forget) — endereça o POOL (S4), passa delivery_id ──
+  # context_json é uma STRING JSON; o engine interpola {{...}} (interpolate.ts suporta
+  # {{$.pipeline_state.*}} e {{@ctx.*}}) ANTES da chamada e semeia o ctx do worker antes
+  # do routing — o worker (step 1) já lê @ctx.session.delivery_id etc.
+  - id: disparar_worker
+    type: invoke
+    tool: workflow_trigger
+    input:
+      pool_id:           "outbound_worker"
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"
+      customer_id:       "$.pipeline_state.alvo.customer_id"
+      context_json: >-
+        {"session.delivery_id": "{{$.pipeline_state.alvo.delivery_id}}",
+         "session.customer_id": "{{$.pipeline_state.alvo.customer_id}}",
+         "session.contact_channel": "{{$.pipeline_state.alvo.metadata.channel}}",
+         "session.campaign_id": "{{@ctx.campaign_id}}"}
+    output_as: r
+    on_success: percorrer
+    on_failure: percorrer   # falha ao disparar UM worker não trava o lote
+
+  # ── Lote espalhado ──────────────────────────────────────────────────────────
+  - id: encerrar
+    type: complete
+    outcome: resolved
+    issue_status: outbound_dispatch_done
+
+  # ── Drain falhou (mailing-api indisponível / campanha inexistente) ──────────
+  - id: encerrar_vazio
+    type: complete
+    outcome: resolved
+    issue_status: outbound_drain_failed

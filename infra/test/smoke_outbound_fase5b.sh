@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Outbound Fase 5b — SURVEY outbound via substrato de campanha (e2e).
+#
+# Conecta o survey ao substrato de mailing/campaign: uma mailing de survey (metadata =
+# {origin_session_id, grain, form_id}) é drenada por uma campanha+agenda; o survey worker
+# cria o link web (survey_link_create) keyed ao ORIGIN do processo (não à sessão do
+# dispatcher — por isso o veículo web, com origin explícito). A submissão do cliente na
+# página grava session.signals no origin+grão. Closure: sinal + `contacted` (o token fica
+# na delivery p/ drill; responded por-delivery é refinamento).
+#
+# Prova: N deliveries → contacted (token guardado) → submit em /survey/web/{token}/submit
+# → signals_recorded>0 (o dado do survey é do CLIENTE, gravado pela mesma trilha do
+# survey_record).
+#
+# Requer: skills novas (survey_dispatch/worker) publicadas; dialog-api (:3760), o form
+# dialog_nps_buttons publicado (o smoke semeia), channel-gateway (:8010).
+# Uso (raiz do repo, demo no ar):  bash infra/test/smoke_outbound_fase5b.sh
+set -euo pipefail
+
+TENANT="tenant_demo"
+MA="http://localhost:3660"
+SC="http://localhost:3650"
+CGW="http://localhost:8010"
+DIALOG="http://localhost:3760"
+ts=(-H "X-Tenant-ID: $TENANT")
+jqid() { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
+STAMP=$(date +%s)
+N=2
+FORM="dialog_nps_buttons"
+
+echo "0) garante o DialogForm '$FORM' publicado (idempotente) ..."
+DIALOG_API="$DIALOG" TENANT="$TENANT" bash infra/test/seed_dialog_nps_buttons_form.sh >/dev/null 2>&1 \
+  || echo "   (form provavelmente já existe — seguindo)"
+
+echo "1) survey mailing + $N entries (metadata origin/grain/form; clientes distintos) ..."
+M=$(curl -s -X POST "$MA/v1/mailings" "${ts[@]}" -H 'content-type: application/json' \
+      -d "{\"name\":\"5b survey $STAMP\",\"dedup_policy\":\"customer\",\"metadata_contract\":\"survey_context_v1\"}" | jqid)
+[ -n "$M" ] || { echo "FALHA: mailing sem id"; exit 1; }
+for i in $(seq 1 $N); do
+  CUS="cus_5b_${STAMP}_$i"
+  ORIG="sess_proc_${STAMP}_$i"      # a sessão/raiz do processo pesquisado (chave do sinal)
+  curl -s -X POST "$MA/v1/mailings/$M/entries" "${ts[@]}" -H 'content-type: application/json' -d "{
+    \"customer_id\":\"$CUS\",\"contacts\":{\"webchat\":\"w$i\"},
+    \"metadata\":{\"channel\":\"webchat\",\"origin_session_id\":\"$ORIG\",\"grain\":\"journey\",
+                  \"form_id\":\"$FORM\",\"customer_key\":\"$CUS\"}
+  }" >/dev/null
+done
+
+echo "2) campanha (pool = outbound_survey_dispatch) + agenda fire ..."
+C=$(curl -s -X POST "$MA/v1/campaigns" "${ts[@]}" -H 'content-type: application/json' \
+     -d "{\"name\":\"5b camp\",\"mailing_id\":\"$M\",\"pool_id\":\"outbound_survey_dispatch\",\"batch_size\":50}" | jqid)
+[ -n "$C" ] || { echo "FALHA: campanha sem id"; exit 1; }
+AG=$(curl -s -X POST "$SC/v1/agendas" "${ts[@]}" -H 'content-type: application/json' -d "{
+  \"name\":\"5b\",\"target_pool_id\":\"outbound_survey_dispatch\",\"payload\":{\"campaign_id\":\"$C\"},
+  \"validity\":{\"starts_at\":\"2026-07-21T00:00:00Z\"},
+  \"schedule\":{\"mode\":\"once\",\"fire_at\":\"2030-01-01T09:00:00Z\"}
+}" | jqid)
+[ -n "$AG" ] || { echo "FALHA: agenda sem id"; exit 1; }
+curl -s -X POST "$SC/v1/agendas/$AG/fire" "${ts[@]}" >/dev/null
+
+echo "3) poll deliveries → esperado $N contacted (survey workers criaram o link) ..."
+count_contacted() {
+  curl -s "$MA/v1/campaigns/$C/deliveries" "${ts[@]}" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin)['deliveries'];print(sum(1 for x in d if x['result']=='contacted'))"
+}
+CONTACTED=0
+for _ in $(seq 1 20); do
+  sleep 3
+  CONTACTED=$(count_contacted)
+  [ "$CONTACTED" = "$N" ] && break
+done
+echo "   contacted=$CONTACTED (esperado $N)"
+[ "$CONTACTED" = "$N" ] || { echo "FALHA: os $N survey workers deveriam criar o link e marcar contacted (só $CONTACTED)"; exit 1; }
+
+echo "4) tokens guardados nas deliveries → submit em /survey/web/{token}/submit (NPS=9) ..."
+TOKENS=$(curl -s "$MA/v1/campaigns/$C/deliveries" "${ts[@]}" \
+  | python3 -c "import sys,json;d=json.load(sys.stdin)['deliveries'];print('\n'.join(x['session_id'] for x in d if x['result']=='contacted' and x.get('session_id')))")
+[ -n "$TOKENS" ] || { echo "FALHA: nenhuma delivery guardou o token do survey"; exit 1; }
+NSUB=0
+for T in $TOKENS; do
+  R=$(curl -s -X POST "$CGW/v1/survey/web/$T/submit" -H 'content-type: application/json' -d '{"answers":{"nps":"9"}}')
+  SR=$(echo "$R" | python3 -c "import sys,json;r=json.load(sys.stdin);print(r.get('signals_recorded',0) if r.get('ok') else -1)")
+  echo "   token=${T:0:10}… signals_recorded=$SR"
+  [ "$SR" -ge 1 ] && NSUB=$((NSUB+1))
+done
+[ "$NSUB" = "$N" ] || { echo "FALHA: esperado $N submits com signal gravado (só $NSUB)"; exit 1; }
+echo "   PASS: $N surveys criados pelo substrato de campanha e $N sinais gravados (session.signals) no origin/grão."
+
+echo "5) Limpeza ..."
+curl -s -X POST "$SC/v1/agendas/$AG/cancel" "${ts[@]}" >/dev/null || true
+echo "GATE outbound Fase 5b — OK."

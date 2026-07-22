@@ -16,10 +16,17 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from .importer import (
+    ImportParseError,
+    RowCapExceeded,
+    batch_ingest,
+    parse_file,
+)
 from .db import (
     db_add_entry,
     db_contact_eligibility,
@@ -65,6 +72,7 @@ class CreateMailingBody(BaseModel):
     dedup_policy:      str | None = None   # customer | customer_context | none
     metadata_contract: str | None = None
     entry_ttl_seconds: int | None = None
+    column_map:        dict[str, Any] | None = None   # Fase 4 — import parsing config
 
 
 class UpdateMailingBody(BaseModel):
@@ -73,6 +81,7 @@ class UpdateMailingBody(BaseModel):
     dedup_policy:      str | None = None
     metadata_contract: str | None = None
     entry_ttl_seconds: int | None = None
+    column_map:        dict[str, Any] | None = None
 
 
 class AddEntryBody(BaseModel):
@@ -207,6 +216,84 @@ async def list_entries(
     tenant = _tenant(x_tenant_id)
     items = await db_list_entries(_pool(request), tenant, mailing_id, status)
     return {"entries": items, "total": len(items)}
+
+
+# ── Fase 4 — Camada A: batch ingest (format-agnostic) ─────────────────────────
+
+class IngestRowBody(BaseModel):
+    customer_id: str | None = None
+    anchors:     list[dict[str, str]] = Field(default_factory=list)   # [{kind, value}]
+    contacts:    dict[str, str] = Field(default_factory=dict)
+    metadata:    dict[str, Any] = Field(default_factory=dict)
+    dedup_key:   str | None = None
+
+
+class BatchIngestBody(BaseModel):
+    rows:    list[IngestRowBody]
+    resolve: bool = True
+    source:  str | None = None
+
+
+@router.post("/v1/mailings/{mailing_id}/entries/batch")
+async def batch_ingest_entries(
+    mailing_id: str, body: BatchIngestBody, request: Request,
+    x_tenant_id: str | None = Header(default=None),
+) -> dict:
+    """Camada A — ingest normalized rows (resolve + validate + upsert + report).
+    Format-agnostic: the file importer is one producer; any future source posts here."""
+    tenant = _tenant(x_tenant_id)
+    mailing = await db_get_mailing(_pool(request), tenant, mailing_id)
+    if not mailing:
+        raise HTTPException(status_code=404, detail="Mailing not found")
+    identity = getattr(request.app.state, "identity", None)
+    rows = [r.model_dump() for r in body.rows]
+    return await batch_ingest(
+        _pool(request), tenant, mailing, rows, identity, body.resolve, body.source,
+    )
+
+
+# ── Fase 4 — Camada B: file import (CSV/xlsx → column_map → Camada A) ──────────
+
+@router.post("/v1/mailings/{mailing_id}/import")
+async def import_file(
+    mailing_id: str, request: Request,
+    file: UploadFile = File(...),
+    x_tenant_id: str | None = Header(default=None),
+) -> dict:
+    """Camada B — parse a CSV/xlsx via the mailing's column_map into ingest rows, then
+    hand off to Camada A. Synchronous with a row cap. Rejected rows are reported with
+    their source line number (never abort the whole file)."""
+    tenant = _tenant(x_tenant_id)
+    mailing = await db_get_mailing(_pool(request), tenant, mailing_id)
+    if not mailing:
+        raise HTTPException(status_code=404, detail="Mailing not found")
+    column_map = mailing.get("column_map")
+    if not column_map:
+        raise HTTPException(
+            status_code=400,
+            detail="mailing has no column_map configured — set it before importing",
+        )
+    content = await file.read()
+    settings = request.app.state.settings
+    max_rows = getattr(settings, "import_max_rows", 5000)
+    try:
+        rows, lines = parse_file(file.filename or "", content, column_map, max_rows)
+    except RowCapExceeded as exc:
+        raise HTTPException(status_code=413, detail=str(exc))
+    except ImportParseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    import_id = uuid4().hex[:16]
+    identity = getattr(request.app.state, "identity", None)
+    report = await batch_ingest(
+        _pool(request), tenant, mailing, rows, identity, True, f"import:{import_id}",
+    )
+    # Remap batch rejections (row index) → source line numbers for the file report.
+    report["rejected"] = [
+        {"row": lines[r["index"]], "reason": r["reason"]} for r in report["rejected"]
+    ]
+    report["import_id"] = import_id
+    return report
 
 
 # ── Campaigns — CRUD ──────────────────────────────────────────────────────────

@@ -1,0 +1,129 @@
+# skill_outbound_survey_worker_v1.yaml
+# Outbound Fase 5b — WORKER de SURVEY (perfil workflow, canal webhook).
+# Spec: docs/arcos/outbound.md (§ "Survey outbound e2e (5b)")
+#
+# 1 por contato, disparado pelo dispatcher de survey. Cria a pesquisa outbound por
+# entrada, keyed ao PROCESSO pesquisado. Diferente do worker genérico da 5a:
+#   • usa o VEÍCULO WEB (`survey_link_create`) — que recebe `origin_session_id`
+#     EXPLÍCITO da metadata → o sinal atacha à raiz/sessão certa. (O `collect` chavearia
+#     pela raiz da sessão chamadora, que no fan-out é a do dispatcher, não a do processo.)
+#   • NÃO suspende: o link é fire-and-return; a resposta chega async pela página
+#     `/survey/{token}` → `submit` publica `session.signals` no origin+grão (mesma trilha
+#     do survey_record). A resposta é do CLIENTE, nunca fabricada.
+#
+# Fluxo: eligibility(claim) → choice
+#   • elegível  → survey_link_create(form_id/origin/grain/customer_key) → registra
+#                 `contacted` guardando o token na delivery → complete.
+#   • inelegível → `skipped_ineligible`.
+#
+# Closure (decisão 2026-07-22): sinal + `contacted`. A delivery guarda o token (drill);
+# o `responded` por-delivery (submit → campaign_delivery_result) é refinamento futuro.
+
+id: skill_outbound_survey_worker_v1
+name: "Outbound Survey Worker (elegibilidade + cria link web)"
+version: "1.0"
+description: |
+  Worker de survey outbound (Fase 5b), 1 por contato em paralelo. Passa pelo gate de
+  fadiga; elegível → cria o link web da pesquisa (survey_link_create) keyed ao
+  origin_session_id do processo e ao grão da metadata, e registra `contacted` guardando o
+  token na delivery. A submissão do cliente na página grava o `session.signals`.
+classification:
+  type: vertical
+
+entry: verificar_elegibilidade
+
+steps:
+
+  # ── Gate de fadiga (governança de contato) — mesmo motor da Fase 2 ───────────
+  - id: verificar_elegibilidade
+    type: invoke
+    tool: contact_eligibility_check
+    input:
+      customer_id: "@ctx.session.customer_id"
+      channel:     "@ctx.session.contact_channel"
+      campaign_id: "@ctx.session.campaign_id"
+      claim:       true
+      tenant_id:   "$.tenant_id"
+    output_as: elig
+    on_success: decidir
+    on_failure: registrar_failed
+
+  - id: decidir
+    type: choice
+    conditions:
+      - field: "$.pipeline_state.elig.allowed"
+        operator: eq
+        value: true
+        next: criar_link
+    default: registrar_skip
+
+  # ── Cria o link web da pesquisa — origin EXPLÍCITO (chaveamento correto) ──────
+  # survey_link_create congela o DialogForm publicado num token, keyed a origin+grão.
+  # Não entrega (deliver_* omitidos) — o transporte real (SMS/e-mail) é trilha à parte.
+  - id: criar_link
+    type: invoke
+    tool: survey_link_create
+    input:
+      form_id:           "@ctx.session.survey_form_id"
+      origin_session_id: "@ctx.session.survey_origin"
+      grain:             "@ctx.session.survey_grain"
+      customer_key:      "@ctx.session.survey_customer_key"
+      tenant_id:         "$.tenant_id"
+    output_as: linkres
+    on_success: registrar_contacted
+    on_failure: registrar_failed
+
+  # ── Registra `contacted` guardando o token na delivery (drill-through) ───────
+  - id: registrar_contacted
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "contacted"
+      session_id:  "$.pipeline_state.linkres.token"
+      tenant_id:   "$.tenant_id"
+    output_as: rc
+    on_success: encerrar_ok
+    on_failure: encerrar_ok
+
+  # ── Inelegível (fadiga/quarentena) ───────────────────────────────────────────
+  - id: registrar_skip
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "skipped_ineligible"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rs
+    on_success: encerrar_skip
+    on_failure: encerrar_skip
+
+  # ── Erro (gate ou criação do link) ───────────────────────────────────────────
+  - id: registrar_failed
+    type: invoke
+    tool: campaign_delivery_result
+    input:
+      delivery_id: "@ctx.session.delivery_id"
+      result:      "failed"
+      error:       "survey_link_or_eligibility_error"
+      session_id:  "$.session_id"
+      tenant_id:   "$.tenant_id"
+    output_as: rf
+    on_success: encerrar_failed
+    on_failure: encerrar_failed
+
+  - id: encerrar_ok
+    type: complete
+    outcome: resolved
+    issue_status: outbound_survey_created
+
+  - id: encerrar_skip
+    type: complete
+    outcome: resolved
+    issue_status: outbound_skipped_ineligible
+
+  - id: encerrar_failed
+    type: complete
+    outcome: resolved
+    issue_status: outbound_failed
