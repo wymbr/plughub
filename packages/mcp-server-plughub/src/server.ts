@@ -139,6 +139,8 @@ export function createServer(allDeps?: AllDeps): McpServer {
     dialogApiUrl:      process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
     tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? process.env["CHANNEL_GATEWAY_HTTP_URL"] ?? "http://localhost:8010",
+    evaluationApiUrl:  process.env["EVALUATION_API_URL"] ?? "http://localhost:3400",
+    evaluationServiceToken: process.env["EVALUATION_SERVICE_TOKEN"] ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? "",
   }
 
   const workflowDeps: WorkflowDeps = {
@@ -1007,6 +1009,8 @@ export async function startServer(config: ServerConfig): Promise<void> {
       dialogApiUrl:      process.env["DIALOG_API_URL"] ?? "http://localhost:3760",
       tenantId:          process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
+      evaluationApiUrl:  process.env["EVALUATION_API_URL"] ?? "http://evaluation-api:3400",
+      evaluationServiceToken: process.env["EVALUATION_SERVICE_TOKEN"] ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? "",
     })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",

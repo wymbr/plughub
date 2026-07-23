@@ -684,6 +684,7 @@ async def query_journeys_report(
     channel:          str | None       = None,
     pool_id:          str | None       = None,
     customer_id:      str | None       = None,
+    root_session_id:  str | None       = None,
     significant_only: bool             = True,
     accessible_pools: list[str] | None = None,
     origin:           "str | list[str]" = "live",
@@ -706,8 +707,8 @@ async def query_journeys_report(
     try:
         return await asyncio.to_thread(
             _fetch_journeys, client, database, tenant_id, since, until,
-            channel, pool_id, customer_id, significant_only, accessible_pools, origin,
-            page, page_size,
+            channel, pool_id, customer_id, root_session_id, significant_only,
+            accessible_pools, origin, page, page_size,
         )
     except Exception as exc:
         logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
@@ -717,18 +718,40 @@ async def query_journeys_report(
 def _fetch_journeys(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     channel: str | None, pool_id: str | None, customer_id: str | None,
+    root_session_id: str | None,
     significant_only: bool,
     accessible_pools: list[str] | None, origin: "str | list[str]",
     page: int, page_size: int,
 ) -> dict:
+    # Journey J3 — mapa union-find (raiz→canônica). Computado CEDO porque a Fatia 2
+    # (fetch de UMA journey por deep-link ao L2) resolve o root pedido ao canônico e
+    # filtra os membros por ele.
+    resolved = _journey_resolved_map(client, db, tenant_id)
+    jexpr    = _journey_group_expr(resolved)
+
     conditions = [
         "s.tenant_id = {tenant_id:String}",
-        f"s.opened_at >= '{since}'",
-        f"s.opened_at < '{until}'",
         # Exclui sessões-hook sintéticas fechadas (mesma regra do _fetch_sessions).
         "(s.channel != '' OR s.closed_at IS NULL)",
     ]
     params: dict = {"tenant_id": tenant_id}
+
+    # Fatia 2 — fetch DIRECIONADO de uma journey (o L2 abre por URL sem a JourneyRow
+    # do L1). Resolve o root ao canônico, restringe aos membros (todos os roots que
+    # mapeiam ao canônico) e IGNORA a janela de data + `significant_only` — o operador
+    # abriu ESTA journey de propósito, mesmo fora do período/1-sessão.
+    canonical: str | None = None
+    if root_session_id:
+        canonical = resolved.get(root_session_id, root_session_id)
+        member_roots = sorted({canonical, root_session_id} | {
+            src for src, canon in resolved.items() if canon == canonical
+        })
+        conditions.append("s.root_session_id IN {jroots:Array(String)}")
+        params["jroots"] = member_roots
+        params["jcanon"] = canonical
+    else:
+        conditions.append(f"s.opened_at >= '{since}'")
+        conditions.append(f"s.opened_at < '{until}'")
 
     if channel:
         conditions.append("s.channel = {channel:String}")
@@ -758,16 +781,18 @@ def _fetch_journeys(
     _apply_origin_scope(conditions, origin, alias="s.")
     where = " AND ".join(conditions)
 
-    # Journey J3 — agrupa pela raiz CANÔNICA (root resolvido via journey_aliases).
-    # Sem merges → identidade (comportamento J2). O transform já usa o mapa
-    # totalmente resolvido (union-find), então 1 salto basta.
-    resolved = _journey_resolved_map(client, db, tenant_id)
-    jexpr    = _journey_group_expr(resolved)
+    # `resolved`/`jexpr` já computados no topo (agrupam pela raiz CANÔNICA via
+    # journey_aliases; sem merges → identidade J2; o transform usa o mapa totalmente
+    # resolvido, 1 salto basta).
 
-    # A "significância" é um filtro de grupo → HAVING.
-    having = ""
-    if significant_only:
-        having = "HAVING (count() > 1 OR has(groupUniqArray(s.channel), 'webhook'))"
+    # Filtros de grupo → HAVING. A "significância" é UX (não se aplica ao fetch
+    # direcionado); o filtro por journey canônica é da Fatia 2 (deep-link).
+    having_conds: list[str] = []
+    if significant_only and not root_session_id:
+        having_conds.append("(count() > 1 OR has(groupUniqArray(s.channel), 'webhook'))")
+    if root_session_id:
+        having_conds.append("journey_id = {jcanon:String}")
+    having = ("HAVING " + " AND ".join(having_conds)) if having_conds else ""
 
     # total = número de journeys (grupos canônicos) que passam o HAVING.
     total = _count(

@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
 import EmptyState from '@/components/ui/EmptyState'
@@ -113,7 +114,7 @@ export default function CustomerVoicePage() {
     if (!tenantId) return
     setLoading(true)
     const p = new URLSearchParams({ tenant_id: tenantId, grain, metric })
-    fetch(`/reports/customer-voice?${p}`)
+    apiFetch(`/reports/customer-voice?${p}`)
       .then(r => r.json())
       .then((d: CVResp) => setData(d))
       .catch(() => setData(null))

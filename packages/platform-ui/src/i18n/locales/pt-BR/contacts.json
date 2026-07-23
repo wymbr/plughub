@@ -21,6 +21,50 @@
       "telegram":  "Telegram",
       "webrtc":    "WebRTC",
       "webhook":   "Webhook"
+    },
+    "grain": {
+      "session":  "Sessão",
+      "segment":  "Segmento",
+      "workflow": "Workflow",
+      "journey":  "Processo"
+    }
+  },
+  "surveys": {
+    "noTenant": "Sem tenant",
+    "refresh": "Atualizar",
+    "error": "Erro ao carregar respostas",
+    "empty": "Nenhuma resposta no período",
+    "totalCount": "{{count}} respostas",
+    "hasVerbatim": "sim",
+    "filters": {
+      "from": "De",
+      "allTypes": "Todos os tipos",
+      "allGrains": "Todos os grãos",
+      "poolPlaceholder": "Pool…",
+      "allPools": "Todos os pools do domínio",
+      "noPools": "Nenhum pool no domínio",
+      "poolCount": "{{count}} pools"
+    },
+    "columns": {
+      "respondedAt": "Respondida",
+      "signals": "Sinais",
+      "grain": "Grão",
+      "pool": "Pool",
+      "customer": "Cliente",
+      "verbatim": "Verbatim",
+      "type": "Formulário",
+      "channel": "Canal"
+    },
+    "detail": {
+      "title": "Resposta de pesquisa",
+      "close": "Fechar",
+      "signals": "Sinais",
+      "verbatim": "Texto aberto (verbatim)",
+      "noVerbatim": "Sem texto aberto",
+      "agent": "Agente",
+      "respondedAt": "Respondida",
+      "sessionAt": "Sessão em",
+      "openSession": "Abrir processo/sessão de origem"
     }
   },
   "journeys": {
@@ -39,6 +83,13 @@
       "trigger":  "disparo",
       "delegate": "delegação",
       "collect":  "contato"
+    },
+    "signal": {
+      "title":    "Sinal do processo",
+      "outcome":  "Desfecho",
+      "duration": "Duração",
+      "count":    "{{count}} sinais",
+      "none":     "Sem sinais de pesquisa"
     },
     "filters": { "from": "De", "significantOnly": "Só significativas" },
     "columns": {

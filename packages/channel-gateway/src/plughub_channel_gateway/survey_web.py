@@ -502,6 +502,8 @@ class SurveyWebService:
         ttl_s:         int = 604800,
         base_url:      str = "",
         delivery:      SurveyLinkDelivery | None = None,
+        evaluation_api_url:       str = "",
+        evaluation_service_token: str = "",
     ) -> None:
         self._redis    = redis
         self._producer = producer
@@ -510,6 +512,9 @@ class SurveyWebService:
         self._ttl      = ttl_s
         self._base_url = base_url.rstrip("/")
         self._delivery = delivery or SurveyLinkDelivery()
+        # S8/S9 — store operacional (evaluation-api). Vazio → degrada p/ emit-only.
+        self._eval_url   = evaluation_api_url.rstrip("/")
+        self._eval_token = evaluation_service_token
 
     def invalidate_delivery_config(self, tenant_id: str | None = None) -> None:
         """Called on config.changed(survey) — drops the delivery layer's cached
@@ -586,21 +591,59 @@ class SurveyWebService:
             return {"ok": False, "reason": "already_submitted"}
 
         form = rec.get("form") or {}
-        signals: list[dict[str, Any]] = []
+        signals:   list[dict[str, Any]] = []
+        verbatims: list[dict[str, Any]] = []
         for node in form.get("nodes", []):
             if not isinstance(node, dict) or node.get("kind") != "question":
                 continue
-            metric = (node.get("capture") or {}).get("metric")
-            if not metric:
-                continue
-            val = answers.get(node.get("output_key"))
+            okey = node.get("output_key")
+            val = answers.get(okey)
             if val is None or val == "":
                 continue
+            metric = (node.get("capture") or {}).get("metric")
+            if metric:
+                try:
+                    signals.append({"metric": metric, "value": float(val)})
+                    continue
+                except (TypeError, ValueError):
+                    pass  # métrica com resposta não-numérica → cai p/ verbatim
+            # Sem métrica (ou métrica não-numérica) = TEXTO ABERTO. Antes era DESCARTADO
+            # (`continue`); agora vira verbatim LGPD no store operacional — NUNCA no
+            # session.signals (analítico numérico).
+            verbatims.append({"question_id": okey, "text": str(val)})
+
+        captured_at = _now_iso()
+
+        # Persist-first (ADR adr-survey-response-store): grava a resposta operacional
+        # (inclui verbatim) ANTES de emitir o sinal. Falha → não emite, token fica
+        # 'open' p/ retry. Idempotência = o TOKEN (single-use). Sem eval_url → emit-only.
+        if (signals or verbatims) and self._eval_url:
             try:
-                num = float(val)
-            except (TypeError, ValueError):
-                continue  # não-numérica (open_text) → verbatim, não signal
-            signals.append({"metric": metric, "value": num})
+                headers = {"Content-Type": "application/json"}
+                if self._eval_token:
+                    headers["X-Service-Token"] = self._eval_token
+                async with httpx.AsyncClient(timeout=5) as c:
+                    pr = await c.post(
+                        f"{self._eval_url}/v1/evaluation/survey/responses",
+                        headers=headers,
+                        json={
+                            "tenant_id":         rec["tenant_id"],
+                            "idempotency_key":   token,
+                            "grain":             rec.get("grain") or "session",
+                            "survey_id":         rec.get("form_id"),
+                            "origin_session_id": rec.get("origin_session_id") or token,
+                            "customer_key":      rec.get("customer_key") or None,
+                            "channel":           "web",
+                            "signals":           signals,
+                            "verbatims":         verbatims,
+                            "response_channel":  "web",
+                            "captured_at":       captured_at,
+                        },
+                    )
+                    pr.raise_for_status()
+            except Exception as exc:
+                logger.warning("survey_web persist failed token=%s: %s", token, exc)
+                return {"ok": False, "reason": "persist_failed", "error": str(exc)}
 
         if signals:
             event = {
@@ -613,11 +656,11 @@ class SurveyWebService:
                 "survey_session_id": None,
                 "pool_id":           "",
                 "signals":           signals,
-                "captured_at":       _now_iso(),
+                "captured_at":       captured_at,
             }
             await self._producer.send(self._topic, value=json.dumps(event).encode("utf-8"))
 
         rec["status"]       = "submitted"
         rec["submitted_at"] = _now_iso()
         await self._redis.set(self._key(token), json.dumps(rec), ex=self._ttl)
-        return {"ok": True, "signals_recorded": len(signals)}
+        return {"ok": True, "signals_recorded": len(signals), "verbatims_recorded": len(verbatims)}

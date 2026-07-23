@@ -1136,6 +1136,8 @@ services:
       PLUGHUB_IDENTITY_RESOLVER_ENABLED:  "true"
       PLUGHUB_IDENTITY_SALT:              changeme_identity_salt_demo
       PLUGHUB_DIALOG_API_URL:             http://dialog-api:3760   # survey web vehicle — snapshot do DialogForm
+      PLUGHUB_EVALUATION_API_URL:         http://evaluation-api:3400   # survey response store (S8/S9) — persist-first
+      PLUGHUB_EVALUATION_SERVICE_TOKEN:   changeme_eval_service_token_demo   # _require_service da evaluation-api
       PLUGHUB_CONFIG_API_URL:             http://config-api:3600
       # Channel-endpoint resolution (slug→pool) for webchat/voice/webrtc/webhook.
       # Without this the default (localhost:3000) points at the container itself →

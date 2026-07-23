@@ -3,7 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
 import { useTranslation } from 'react-i18next'
 import {
-  Home, Monitor, Radio, GitBranch, ClipboardCheck, BarChart2, Settings, Search,
+  Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
   Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send,
@@ -124,6 +124,7 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.quality'),   href: '/analise/quality',   icon: ClipboardCheck, abac: { module: 'evaluation', field: 'report'     } },
         { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.customerVoice'), href: '/analise/customer-voice', icon: MessageSquare, abac: { module: 'contacts', field: 'visualizar' } },
+        { label: t('nav.analise.surveys'), href: '/analise/surveys', icon: ClipboardList, abac: { module: 'evaluation', field: 'report' } },
       ]
     },
 

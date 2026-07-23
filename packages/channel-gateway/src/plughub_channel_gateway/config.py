@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     dialog_api_url:             str = "http://localhost:3760"
     # Survey web token TTL (seconds). Default 7 days.
     survey_web_ttl_s:           int = 604800
+    # Survey response store (S8/S9) — evaluation-api persiste a resposta operacional
+    # (verbatim/áudio LGPD) ANTES de emitir o session.signals. Default = nome de serviço
+    # docker (demo); PLUGHUB_EVALUATION_API_URL sobrescreve. Token de serviço opcional
+    # (evaluation-api usa _require_service, no-op quando vazio no demo).
+    evaluation_api_url:         str = "http://evaluation-api:3400"
+    evaluation_service_token:   str = ""
 
     # Redis
     redis_url:                  str = "redis://localhost:6379"

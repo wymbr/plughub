@@ -2,6 +2,95 @@
 
 ---
 
+## Segurança — Pool-scoping em relatórios: Fases A (analise) + C + E ✅ (2026-07-23)
+
+Arco de segurança levantado pelo usuário: relatórios/monitores devem respeitar o **domínio de pools**
+(`accessible_pools`, Arc 7c). Estava **inerte** — a UI não mandava o `Authorization: Bearer`, então o backend
+degradava para "irrestrito" (vê todos os pools). Detalhe e fases restantes (B, D) em `TODO.md` § "Arco de
+Segurança — Pool-scoping em relatórios".
+
+- **Fase A — token flui (parcial: módulo `analise`)**: helper `platform-ui/src/api/apiFetch.ts` (anexa
+  `Authorization: Bearer` do token em memória, se houver e não já setado; **explícito, não monkey-patch do
+  `window.fetch`** — que vazaria token em auth/refresh/CDN). **8 arquivos de `src/modules/analise/`** migrados
+  `fetch`→`apiFetch` (survey, journeys, customer-voice, agentes, pools, agents-bench, metric-selector,
+  comparação). Ativa o pool-scoping em toda a superfície Analytics (o backend já reintersecta quando o token
+  chega). **Falta**: varrer `src/modules/monitor/`.
+- **Fase E — filtro de pool = combo do DOMÍNIO (survey)**: componente reusável
+  `platform-ui/src/components/ui/PoolMultiSelect.tsx` (checkbox dropdown) + `AnaliseSurveysPage` troca a caixa
+  de texto por multi-select populado com `listPools ∩ currentUser.accessiblePools` (vazio = admin → todos).
+  Endpoint `GET /v1/evaluation/survey/responses` passa a aceitar `pool_ids[]` (mantém `pool_id` legado) e
+  **REINTERSECTA com o domínio no backend** (`domain = accessible_pools` do JWT; filtro fora do domínio →
+  `{data:[], total:0}`; sem filtro → todo o domínio). Invariante: a UI é conveniência, a fronteira é o backend.
+  i18n `surveys.filters.{allPools,noPools,poolCount}` (en/pt).
+- **Fase C — política de pool vazio: DECIDIDA strict (sem código)**: `pool_id` vazio = só irrestrito/admin vê
+  (a query `pool_id IN (domain)` já exclui vazio p/ restrito). Respeita o domínio — resposta sem pool não
+  pertence a domínio nenhum; over-expor a todos (escape hatch) seria mais inseguro. Consequência aceita: um
+  usuário restrito não vê respostas do veículo web (pool vazio) até a **Fase B** carimbar o pool na escrita.
+- **Confirmado (Q1 do usuário)**: o domínio = bloco "Accessible Pools" em Configuration > Access
+  (`AccessPage` → `user.accessible_pools` auth-api → claim `accessible_pools` no JWT; **vazio = todos**).
+- **Bug de corrida ACHADO no teste com usuário restrito + CORRIGIDO** (`AuthContext.tsx`): o token-store é
+  in-memory (não localStorage) e era populado por um `useEffect([session])` — que dispara **depois** do
+  `load()` da página (React roda effects filho→pai). Na 1ª carga/reload, `getAccessToken()` era `null` → o
+  `apiFetch` não anexava o Bearer → o backend fazia **fail-open** (`domain=None` → lista irrestrita). O combo
+  acertava (vem do `currentUser` persistido), a lista não — sintoma exato relatado. **Fix:** setar o token
+  **imperativamente** (`setAccessToken(...)`, atribuição síncrona ao módulo) em todo `setSession` (login,
+  silent re-auth, refresh, logout), garantindo o holder preenchido ANTES do commit que monta a página. Serve
+  TODAS as páginas migradas de uma vez. `[session]` effect mantido como backup.
+- **Validado E2E com usuário restrito** (2026-07-23): admin restrito a `retencao_humano`/`aprovacao_deploy`
+  passou a ver **só** as respostas desses pools — antes 8 (todas `pool_s8_*`/pool vazio, fora do domínio),
+  após o fix **1** (a semeada em `retencao_humano`); as fora do domínio sumiram. Confirma scoping ponta a
+  ponta (token → decode → `pool_id IN (domain)`) + a decisão C (pool fora do domínio/vazio não aparece p/
+  restrito). `smoke_survey_response_read.sh` verde. **Deploy**: `build evaluation-api platform-ui && up -d`.
+
+**Próximo passo do arco: Fase B** (carimbar o pool da sessão pesquisada na escrita — dá completude ao scoping
+do survey) → depois varrer monitor (A) + aplicar `PoolMultiSelect` a agentes/contatos (E) + auditar rotas sem
+`optional_pool_principal` (D).
+
+---
+
+## Survey — S8: navegador de respostas (`/analise/surveys`) ✅ validado (2026-07-23)
+
+Superfície de **inspeção qualitativa individual** — resposta-a-resposta com verbatim — complementar à agregação da bancada/Voz do Cliente. Consome o store per-response construído no arco anterior. Corte: página completa (lista+filtros+detalhe), gate ABAC evaluation. Áudio/transcrição (S9) e re-endereçar (S10) fora.
+
+- **evaluation-api**: `db.list_survey_responses` (JOIN `survey_response`+`survey_instance`, filtros dinâmicos parametrizados período/grão/pool/`survey_id`/`metric` [via `signals @> …::jsonb`], pool-scope por `accessible_pools`, ordem `responded_at DESC`, paginação) + `GET /v1/evaluation/survey/responses` gateado por `_require_any_evaluation` (degrada sem JWT no demo; `accessible_pools` do JWT restringe linha).
+- **platform-ui**: `AnaliseSurveysPage.tsx` (`/analise/surveys`) — barra de filtros (período/tipo/grão/pool), tabela por resposta (respondida, sinais em chips, grão, pool, cliente, indicador de verbatim) + **drawer de detalhe** (sinais, **texto aberto/verbatim** LGPD, metadados, link "abrir processo/sessão de origem" → drill de processos). Rota + nav (grupo Analytics, ícone `ClipboardList`, ABAC `evaluation/report`) + i18n `surveys.*` + `enums.grain.*` (en/pt).
+- **Bug do 1º render (corrigido)**: o limite superior `to_dt` date-only caía à **meia-noite** → respostas de HOJE ficavam de fora (tela vazia apesar do backend ter os dados). Fix = `to_dt` inclusivo do dia inteiro (`+1 dia` quando date-only), espelhando `_ch_fmt(upper=True)` do analytics. O smoke ganhou o passo que reproduz o caso da UI (from=hoje-30, to=hoje).
+- **Validado**: `infra/test/smoke_survey_response_read.sh` verde (total, filtros metric/grain/data, verbatim na leitura) + tela `/analise/surveys` exibindo 5 respostas com chips de sinal, grão e o drawer com o verbatim.
+- **Deploy**: `build evaluation-api platform-ui && up -d --force-recreate` (o fix do `to_dt` = só evaluation-api).
+
+**Aberto (não bloqueia S8)**: S9 (analista IA de verbatim + áudio/transcript via `attachment_store`) · S10 (retorno outbound). Guard de rota ABAC da página = o Item 3 app-wide já registrado (nav-gated + backend enforça; não é dívida nova).
+
+---
+
+## Survey response store (S8/S9) — captura de verbatim + persist-first ✅ validado (2026-07-23)
+
+Store operacional POR-RESPOSTA que S8 (navegador de respostas) e S9 (analista de verbatim) exigiam e que **não existia** — o texto aberto era **descartado** no submit web (`float()` ou pula) e o único rastro durável era o `session_signal` numérico (ClickHouse). Decisão em [`docs/adr/adr-survey-response-store.md`](docs/adr/adr-survey-response-store.md) (Opção A, escopo mínimo, host evaluation-api); contrato em [`docs/product/survey-response-store-implementation-spec.md`](docs/product/survey-response-store-implementation-spec.md). §7.2 podado: definições=DialogForm (dialog-api), quarentena=`contact_policy` (mailing-api) — aqui só instância+resposta.
+
+- **evaluation-api**: schema PG `survey` (`survey_instance` + `survey_response` com `open_text`/`verbatims`/`audio_ref`/`transcript_ref`) aplicado no `ensure_schema` do boot (`_SURVEY_DDL`); `persist_survey_response` (transação: upsert instância por `(tenant_id, idempotency_key)` → insert resposta por `instance_id`, ambos `ON CONFLICT DO NOTHING`); endpoint `POST /v1/evaluation/survey/responses` (`_require_service`, `tenant_id` no corpo, **201 criado / 200 replay** idempotente).
+- **mcp-server (`survey_record`)**: persiste na evaluation-api **antes** de emitir `session.signals` (falha → `mcpError`, não emite); `idempotency_key` = hash composto `rec:{tenant}:{origin}:{grain}:{segment}:{form}:{minuto}`; envia `X-Service-Token`.
+- **channel-gateway (`survey_web.submit`)**: o `continue` que **descartava** texto aberto virou captura — pergunta sem `capture.metric` (ou métrica não-numérica) vira `verbatims[]` no store operacional, **nunca** no `session.signals`; persist-first com `X-Service-Token`; config `evaluation_api_url`/`evaluation_service_token`.
+- **Invariante persist-first** (espelha `_ingest_core`): grava PG antes de emitir o sinal analítico — evita sinal no ClickHouse sem a resposta correspondente. Replay idempotente é não-fatal (200) — retry após falha parcial não quebra. Verbatim/áudio são LGPD-controlados: vivem SÓ no store operacional.
+- **Descoberta no caminho**: o demo seta `PLUGHUB_EVALUATION_SERVICE_TOKEN`, então `_require_service` NÃO é no-op — os dois callers passaram a enviar o header (senão 401). Consequência: os fluxos de survey existentes (J4b/J4c/5b) agora dependem da evaluation-api de pé (persist-first, falha barulhenta — intencional).
+- **Validado**: `infra/test/smoke_survey_response_store.sh` verde — submit com `motivo` texto → `verbatims_recorded=1` + linha `survey.survey_response` com o verbatim; endpoint 201→200 (replay), 1 instância. Compose: `PLUGHUB_EVALUATION_{API_URL,SERVICE_TOKEN}` no channel-gateway (mcp-server já tinha o token).
+- **Deploy**: `build evaluation-api mcp-server-plughub channel-gateway && up -d --force-recreate` (esperar `healthy` antes do smoke).
+
+**Desbloqueia S8** (navegador de respostas): a resposta individual com verbatim agora existe no PG. **Aberto**: endpoint de LEITURA de S8 (`GET …/survey/responses` por tipo/pool/período, auth ABAC) + wiring de áudio/transcript (S9).
+
+---
+
+## Journey — sinal N3 no drill da Vista Processos (Item 1, Fatias 1+2) ✅ validado (2026-07-23)
+
+O sinal N3 do processo (desfecho da raiz + NPS/CSAT/CES da pesquisa grão=journey) já vinha do `/reports/journeys` mas só aparecia na LISTA (L1) e na Voz do Cliente — nunca DENTRO do drill. E `csat_avg`/`ces_avg` chegavam no tipo `JourneyRow` mas **nenhum JSX os lia**. Gap puro de UI: o backend (`_attach_journey_signals`) já entregava tudo por journey, pool-scoped e resolvido por merge.
+
+- **Fatia 1 (UI-only, fluxo por clique):** painel **PROCESS SIGNAL** no cabeçalho do L2 (`JourneySessions` em `AnaliseJourneysPage.tsx`) — desfecho (com marca "provisório" se `open_count>0`), duração, NPS/CSAT/CES e `signal_count`; branch "sem sinais de pesquisa" quando não há survey. A `JourneyRow` selecionada sobe ao estado do `AnaliseJourneysPage` (`selectedJourney`) e desce como prop; navegar a uma journey vizinha (crossing-link/trace) **limpa** o painel (não mostra dado da journey errada). Fecha o "csat/ces nunca renderizados". Helper `fmtDurationMs`. i18n `journeys.signal.*` (en+pt-BR).
+- **Fatia 2 (robustez de deep-link):** `root_session_id` opcional em `query_journeys_report`/`_fetch_journeys` + endpoint `/reports/journeys`. Quando setado: **resolve o root ao canônico** (union-find), restringe aos membros (`s.root_session_id IN {jroots}`, todos os roots que mapeiam ao canônico) e **ignora janela de data + `significant_only`** (o operador abriu ESTA journey de propósito). Reusa `_attach_journey_signals` → o sinal N3 vem junto. `_journey_resolved_map`/`jexpr` movidos ao topo da função p/ o filtro de membros reusá-los (sem custo extra). O `JourneySessions` rebusca a própria `JourneyRow` via `/reports/journeys?root_session_id=` quando aberto por URL (prop `journey` ausente); render usa `journey ?? fetchedJourney`.
+- **Validado:** deep-link direto ao L2 (`?journey=ec2293c1-…`, sem passar pelo L1) exibe o painel PROCESS SIGNAL (`Outcome Resolved · Duration 10s · No survey signals` — journey webhook sem pesquisa). Fluxo por clique idem. NPS/CSAT/CES populam quando a journey tem sinal grão=journey (fluxo survey outbound, ex. `smoke_outbound_fase5b.sh`).
+- **Deploy:** `build analytics-api platform-ui && up -d --force-recreate analytics-api platform-ui`.
+
+**Limitação registrada:** o fetch direcionado varre `sessions` filtrando pela lista de roots-membros — barato no volume atual; medir se houver journeys com milhares de sessões sob merge.
+
+---
+
 ## Journey J5a — `@ctx.journey.*` (contexto compartilhado do processo): escrita imperativa journey-aware ✅ (2026-07-22)
 
 O contexto compartilhado da journey já funcionava nos caminhos **automáticos**: a **leitura** (`interpolate.ts` resolve `@ctx.journey.*` via `journey:{journeyId}` quando o bridge injeta o `journeyId`), a **escrita por `context_tags`** do engine (`context-accumulator-util.ts` roteia tags `journey.` para `{t}:ctx:journey:{id}`) e a **migração no merge** (`journey_merge` → `migrateJourneyContext`: a raiz canônica vence em colisão, origem é apagada, TTL 30d). O gap era a **escrita IMPERATIVA**: `context_set` (tool invocada por steps `invoke` do skill-flow) e `POST /api/inject-context` (supervisor no Console) gravavam **raw** no hash da sessão — uma tag `journey.*` caía em `{t}:ctx:{session}`, evaporava no TTL de sessão (4h) e não era vista pelos outros contatos da journey.

@@ -13,6 +13,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { ChevronRight, GitBranch, FileText, Route, X } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
@@ -175,13 +176,15 @@ function fmtDate(iso: string | null | undefined): string {
   try { return new Date(iso).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) }
   catch { return iso }
 }
-function fmtDuration(from: string, to?: string | null): string {
-  if (!from || !to) return '—'
-  const ms = new Date(to).getTime() - new Date(from).getTime()
-  if (ms < 0) return '—'
+function fmtDurationMs(ms: number | null | undefined): string {
+  if (ms == null || ms < 0) return '—'
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   const m = Math.floor(ms / 60_000); const s = Math.round((ms % 60_000) / 1000)
   return s > 0 ? `${m}m ${s}s` : `${m}m`
+}
+function fmtDuration(from: string, to?: string | null): string {
+  if (!from || !to) return '—'
+  return fmtDurationMs(new Date(to).getTime() - new Date(from).getTime())
 }
 function truncateId(id: string | undefined | null): string {
   if (!id) return '—'
@@ -258,7 +261,7 @@ function StatusBadge({ t, status }: { t: TFunc; status: string }) {
 
 // ── Level 1: journeys list ──────────────────────────────────────────────────
 
-function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (root: string) => void }) {
+function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (j: JourneyRow) => void }) {
   const { t } = useTranslation('contacts')
   const [fromDt,     setFromDt]     = useState(iso30DaysAgo)
   const [toDt,       setToDt]       = useState(isoToday)
@@ -278,7 +281,7 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
       significant_only: String(significant),
       page_size: '200',
     })
-    fetch(`/reports/journeys?${q.toString()}`)
+    apiFetch(`/reports/journeys?${q.toString()}`)
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(d => { setRows(d.data ?? []); setTotal(d.meta?.total ?? (d.data?.length ?? 0)) })
       .catch(e => setError(String(e)))
@@ -352,7 +355,7 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
             </thead>
             <tbody>
               {rows.map(j => (
-                <tr key={j.journey_id} onClick={() => onSelect(j.journey_id)}
+                <tr key={j.journey_id} onClick={() => onSelect(j)}
                   className="border-t border-border hover:bg-surface-muted transition-colors cursor-pointer">
                   <td className="px-3 py-2.5 font-mono text-primary" title={j.journey_id}>
                     <span className="inline-flex items-center gap-1.5">
@@ -411,10 +414,64 @@ function JourneysList({ tenantId, onSelect }: { tenantId: string; onSelect: (roo
   )
 }
 
+// ── J4 / Item 1: painel de sinal N3 (o processo como um todo) ────────────────
+//
+// O sinal N3 — desfecho do processo (raiz) + NPS/CSAT/CES da pesquisa grão=journey —
+// já vinha do /reports/journeys, mas só aparecia na LISTA (L1) e na Voz do Cliente,
+// nunca DENTRO do drill. Aqui ele fica pendurado no cabeçalho do L2, sobre a mesma
+// JourneyRow que a lista já carregou (fluxo por clique). `csat_avg`/`ces_avg` passam
+// a ser renderizados — antes chegavam no tipo mas nenhum JSX os lia.
+function SignalStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span className="text-muted-light">{label}</span>
+      <span className="text-dark font-medium">{value}</span>
+    </span>
+  )
+}
+
+function JourneySignalPanel({ t, j }: { t: TFunc; j: JourneyRow }) {
+  const hasSignal = j.nps_avg != null || j.csat_avg != null || j.ces_avg != null || (j.signal_count ?? 0) > 0
+  // Nada a mostrar (nem desfecho, nem duração, nem sinal) → não polui o cabeçalho.
+  if (!j.business_outcome && j.business_duration_ms == null && !hasSignal) return null
+  return (
+    <div className="bg-white border-b border-border px-5 py-2 flex items-center gap-4 flex-wrap text-xs flex-shrink-0">
+      <span className="text-[10px] uppercase tracking-wide text-muted font-medium">
+        {t('journeys.signal.title', { defaultValue: 'Sinal do processo' })}
+      </span>
+      {j.business_outcome && (
+        <span className="inline-flex items-center gap-1">
+          <span className="text-muted-light">{t('journeys.signal.outcome', { defaultValue: 'Desfecho' })}</span>
+          <span className={`inline-block px-2 py-0.5 rounded border font-medium ${outcomeCls(j.business_outcome)} ${j.open_count > 0 ? 'opacity-60 border-dashed' : ''}`}
+            title={j.open_count > 0
+              ? t('journeys.provisionalHint', { defaultValue: 'Provisório: o processo ainda tem sessões abertas' })
+              : j.business_outcome}>
+            {outcomeLabel(t, j.business_outcome)}
+          </span>
+          {j.open_count > 0 && (
+            <span className="text-[10px] text-muted-light italic">{t('journeys.provisional', { defaultValue: 'provisório' })}</span>
+          )}
+        </span>
+      )}
+      {j.business_duration_ms != null && (
+        <SignalStat label={t('journeys.signal.duration', { defaultValue: 'Duração' })} value={fmtDurationMs(j.business_duration_ms)} />
+      )}
+      {j.nps_avg  != null && <SignalStat label="NPS"  value={j.nps_avg} />}
+      {j.csat_avg != null && <SignalStat label="CSAT" value={j.csat_avg} />}
+      {j.ces_avg  != null && <SignalStat label="CES"  value={j.ces_avg} />}
+      <span className="text-muted-light">
+        {(j.signal_count ?? 0) > 0
+          ? t('journeys.signal.count', { count: j.signal_count ?? 0, defaultValue: `${j.signal_count ?? 0} sinais` })
+          : t('journeys.signal.none', { defaultValue: 'Sem sinais de pesquisa' })}
+      </span>
+    </div>
+  )
+}
+
 // ── Level 2: member sessions of a journey ───────────────────────────────────
 
-function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJourney }:
-  { tenantId: string; root: string; onBack: () => void; onSelectSession: (sid: string) => void;
+function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onSelectJourney }:
+  { tenantId: string; root: string; journey?: JourneyRow | null; onBack: () => void; onSelectSession: (sid: string) => void;
     onSelectJourney: (root: string) => void }) {
   const { t } = useTranslation('contacts')
   const [rows, setRows] = useState<MemberSession[]>([])
@@ -426,17 +483,33 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
   const [loading, setLoading] = useState(false)
   // T6 — sessão cujo rastro forense está aberto (drawer). null = fechado.
   const [traceFor, setTraceFor] = useState<string | null>(null)
+  // Item 1 / Fatia 2 — deep-link ao L2: a JourneyRow não veio do L1. Rebusca a própria
+  // linha via /reports/journeys?root_session_id= (fetch direcionado, resolve canônico,
+  // ignora janela+significant). Se o L1 já passou a `journey`, não busca nada.
+  const [fetchedJourney, setFetchedJourney] = useState<JourneyRow | null>(null)
+  useEffect(() => {
+    if (journey || !tenantId || !root) { setFetchedJourney(null); return }
+    let cancelled = false
+    apiFetch(`/reports/journeys?${new URLSearchParams({
+      tenant_id: tenantId, root_session_id: root, significant_only: 'false', page_size: '1',
+    })}`)
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(d => { if (!cancelled) setFetchedJourney(d.data?.[0] ?? null) })
+      .catch(() => { if (!cancelled) setFetchedJourney(null) })
+    return () => { cancelled = true }
+  }, [journey, tenantId, root])
+  const shownJourney = journey ?? fetchedJourney
 
   useEffect(() => {
     if (!tenantId || !root) return
     let cancelled = false
     setLoading(true)
 
-    const members = fetch(`/reports/sessions?${new URLSearchParams({
+    const members = apiFetch(`/reports/sessions?${new URLSearchParams({
       tenant_id: tenantId, root_session_id: root, page_size: '200',
     })}`).then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
 
-    const crossing = fetch(`/reports/sessions?${new URLSearchParams({
+    const crossing = apiFetch(`/reports/sessions?${new URLSearchParams({
       tenant_id: tenantId, spawned_from_root: root, page_size: '50',
     })}`).then(r => r.ok ? r.json() : { data: [] }).catch(() => ({ data: [] }))
 
@@ -473,6 +546,9 @@ function JourneySessions({ tenantId, root, onBack, onSelectSession, onSelectJour
         <span className="text-dark font-medium font-mono" title={root}>{journeyLabel(root)}</span>
         <span className="ml-1 text-muted-light">· {t('journeys.memberCount', { count: rows.length, defaultValue: `${rows.length} sessões` })}</span>
       </div>
+
+      {/* Item 1 — sinal N3 do processo. Vem do L1 (clique) ou é rebuscado no deep-link (Fatia 2). */}
+      {shownJourney && <JourneySignalPanel t={t} j={shownJourney} />}
 
       <div className="flex-1 overflow-auto px-5 py-4">
         {loading ? (
@@ -602,7 +678,7 @@ function TraceDrawer({ tenantId, initialFocus, onClose, onOpenJourney }:
     if (!tenantId || !focus) return
     let cancelled = false
     setLoading(true)
-    fetch(`/reports/sessions/${encodeURIComponent(focus)}/trace?${new URLSearchParams({ tenant_id: tenantId })}`)
+    apiFetch(`/reports/sessions/${encodeURIComponent(focus)}/trace?${new URLSearchParams({ tenant_id: tenantId })}`)
       .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
       .then(d => { if (!cancelled) setResp(d) })
       .catch(() => { if (!cancelled) setResp(null) })
@@ -736,6 +812,10 @@ export default function AnaliseJourneysPage() {
   const { tenantId } = useAuth()
   const { t } = useTranslation('contacts')
   const [searchParams, setSearchParams] = useSearchParams()
+  // Item 1 — a JourneyRow selecionada no L1, para o painel de sinal N3 do L2 sem
+  // re-fetch. Deep-link direto ao L2 (sem passar pelo L1) fica null → painel oculto
+  // (Fatia 2 = filtro root no /reports/journeys resolveria isso).
+  const [selectedJourney, setSelectedJourney] = useState<JourneyRow | null>(null)
 
   const root      = searchParams.get('journey')
   const sessionId = searchParams.get('session')
@@ -768,11 +848,14 @@ export default function AnaliseJourneysPage() {
       <JourneySessions
         tenantId={tenantId}
         root={root}
+        journey={selectedJourney}
         onBack={() => setSearchParams({})}
         onSelectSession={sid => setSearchParams({ journey: root, session: sid })}
         // T5: navegar para a journey vizinha (a que nasceu daqui com `journey: new`).
-        // O grafo completo é PERCORRIDO por links, não renderizado de uma vez.
-        onSelectJourney={r => setSearchParams({ journey: r })}
+        // O grafo completo é PERCORRIDO por links, não renderizado de uma vez. A linha
+        // dessa journey vizinha não está em memória → limpa o painel (não mostra dado
+        // da journey errada); reaparece se vier de um clique no L1.
+        onSelectJourney={r => { setSelectedJourney(null); setSearchParams({ journey: r }) }}
       />
     )
   }
@@ -780,7 +863,8 @@ export default function AnaliseJourneysPage() {
   // L1 — journeys list
   return (
     <div className="flex flex-col h-full overflow-hidden bg-surface-muted">
-      <JourneysList tenantId={tenantId} onSelect={r => setSearchParams({ journey: r })} />
+      <JourneysList tenantId={tenantId}
+        onSelect={row => { setSelectedJourney(row); setSearchParams({ journey: row.journey_id }) }} />
     </div>
   )
 }

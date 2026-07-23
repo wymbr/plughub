@@ -15,6 +15,7 @@
  * bar per slice.
  */
 import React, { useState } from 'react'
+import { apiFetch } from '@/api/apiFetch'
 import {
   Bar,
   BarChart,
@@ -373,7 +374,7 @@ export default function AnaliseComparacaoPage() {
       .filter(k => k.startsWith('agent_event:'))
       .forEach(k => params.append('metrics[]', k))
 
-    const res = await fetch(`/reports/quality-metrics?${params.toString()}`)
+    const res = await apiFetch(`/reports/quality-metrics?${params.toString()}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.json()
   }

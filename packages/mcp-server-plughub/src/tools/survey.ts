@@ -45,6 +45,10 @@ export interface SurveyDeps {
   tenantId: string
   /** channel-gateway base URL — for creating outbound survey links (Journey J4). */
   channelGatewayUrl: string
+  /** evaluation-api base URL — persiste a resposta operacional (S8/S9) antes de emitir. */
+  evaluationApiUrl: string
+  /** X-Service-Token da evaluation-api (_require_service). Vazio = sem header (demo aberto). */
+  evaluationServiceToken?: string
 }
 
 // ─── Server-side signal composition (ADR §D9) ─────────────────────────────────
@@ -188,7 +192,8 @@ export function registerSurveyTools(
   server: McpServer,
   deps:   SurveyDeps,
 ): void {
-  const { kafka, dialogApiUrl, tenantId: defaultTenantId, channelGatewayUrl } = deps
+  const { kafka, dialogApiUrl, tenantId: defaultTenantId, channelGatewayUrl,
+          evaluationApiUrl, evaluationServiceToken } = deps
 
   // ── survey_link_create (Journey J4 — veículo outbound) ────────────────────────
   // Optional string fields tolerate null: an unresolved @ctx.* invoke input
@@ -323,6 +328,44 @@ export function registerSurveyTools(
           pool_id:           pool_id ?? "",
           signals:           finalSignals,
           captured_at,
+        }
+
+        // Persist-first (ADR adr-survey-response-store): grava a resposta operacional
+        // ANTES de emitir o sinal analítico. Falha aqui → NÃO emite (evita sinal no
+        // ClickHouse sem a resposta correspondente). Idempotência = hash composto
+        // (sem token nesta via), truncado ao minuto p/ tolerar retry sem colar
+        // pesquisas legítimas distintas.
+        const effTenant = tenant_id || defaultTenantId
+        const idempotency_key =
+          `rec:${effTenant}:${origin_session_id}:${grain}:${segment_id ?? ""}:${form_id ?? ""}:${captured_at.slice(0, 16)}`
+        try {
+          const pres = await fetch(`${evaluationApiUrl}/v1/evaluation/survey/responses`, {
+            method:  "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(evaluationServiceToken ? { "X-Service-Token": evaluationServiceToken } : {}),
+            },
+            body: JSON.stringify({
+              tenant_id:         effTenant,
+              idempotency_key,
+              grain,
+              survey_id:         form_id ?? null,
+              origin_session_id,
+              segment_id:        segment_id ?? null,
+              agent_key:         agent_key ?? "",
+              pool_id:           pool_id ?? "",
+              survey_session_id: survey_session_id ?? null,
+              signals:           finalSignals,
+              response_channel:  "conference",
+              captured_at,
+            }),
+          })
+          if (!pres.ok) {
+            const text = await pres.text().catch(() => "")
+            return mcpError("persist_failed", `survey response persist failed (${pres.status}): ${text}`)
+          }
+        } catch (persistErr) {
+          return mcpError("persist_error", `survey response persist error: ${String(persistErr)}`)
         }
 
         try {

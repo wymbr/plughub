@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { useAuth } from '@/auth/useAuth'
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -134,7 +135,7 @@ function usePerformanceList(tenantId: string, fromDt: string, toDt: string) {
   useEffect(() => {
     setLoading(true)
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
-    fetch(`/reports/agents/performance?${p}`)
+    apiFetch(`/reports/agents/performance?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: PerfRow[] }) => setRows(d.data ?? []))
       .catch(() => setRows([]))
@@ -157,7 +158,7 @@ function useCompare(
     if (entityCsv) p.set('entities', entityCsv)
     if (!includeAverage) p.set('include_average', 'false')
     if (mode !== 'daily') p.set('mode', mode)
-    fetch(`/reports/agents/compare?${p}`)
+    apiFetch(`/reports/agents/compare?${p}`)
       .then(r => r.json())
       .then((d: CompareResp) => setResp(d))
       .catch(() => setResp(null))
@@ -207,7 +208,7 @@ function useCross(tenantId: string, fromDt: string, toDt: string, poolId: string
     setLoading(true)
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
     if (poolId) p.set('pool_id', poolId)
-    fetch(`/reports/agents/cross?${p}`)
+    apiFetch(`/reports/agents/cross?${p}`)
       .then(r => r.json())
       .then((d: CrossResp) => setResp(d))
       .catch(() => setResp(null))
@@ -984,7 +985,7 @@ function AgentDetail({
         tenant_id: tenantId, from_dt: fromDt, to_dt: toDt,
         lens: l, entities: agentKey, include_average: 'false',
       })
-      return fetch(`/reports/agents/compare?${p}`)
+      return apiFetch(`/reports/agents/compare?${p}`)
         .then(r => r.json())
         .then((d: CompareResp) => [l, d.data?.entities?.[0] ?? null] as [LensId, CompareEntity | null])
         .catch(() => [l, null] as [LensId, CompareEntity | null])

@@ -557,6 +557,55 @@ Ordem honra "espinha → gatilho → governança → captura → leitura → aç
 outcome(skill) → quarentena → web/link → bancada → form-builder → navegador → analista IA → retorno outbound.
 O **histórico de contatos do cliente** (§20) é transversal (qualquer atendimento) — arco próprio, fora desta fila.
 
+### 12.1 — Estado as-built (levantamento 2026-07-23)
+
+> Cruzamento das fases S1–S11 contra o código real (busca em `packages/` + `infra/registry`). **Achado
+> central:** boa parte do módulo foi entregue **por substituição** — os primitivos genéricos (dialog-api,
+> `contact_eligibility_check`, `session_signal` no ClickHouse) cobrem o que o plano original pedia como
+> entidades dedicadas de survey (schema PG `survey`, `survey_definition`, `survey_eligibility_check`,
+> `/config/surveys`). Por isso o estado real diverge do papel: várias fases estão **feitas-por-substituição**,
+> não feitas-como-especificadas.
+
+| Fase | Estado | Evidência / gap |
+|---|---|---|
+| **S1** Normalização dos 5 instrumentos | 🟡 Parcial | `parse_session_signal_event` (analytics-api `models.py`) normaliza só **NPS/CSAT** (scale+label via `_normalize_signal_value`/`_signal_source_for_metric`); **CES/PMF/FCR caem em `customer_survey` sem label** (escala é pass-through do produtor). Falta normalização por instrumento no consumer. |
+| **S2** Runner genérico + `survey_definition` | 🟢 Feito (substituição) | Skills `skill_survey_runner_v1`/`outbound`/`trigger` + `skill_dialog_runner_v1` (skill-flow-engine); **dialog-api (3760)** com CRUD DialogForm; `composeScore` (`schemas/scoring.ts`). `survey_definition` **dobrado em DialogForm+dimensions**, sem entidade própria. *Ressalva:* trio renomeado ainda não é pool no `tenant_demo.yaml` (registry usa o conjunto antigo). |
+| **S3** Gatilho decidido no skill | 🟢 Feito | `_write_pre_hook_context` (orchestrator-bridge `main.py`) carimba `process_outcome`/`contact_outcome`/`last_primary_segment_id`; `choice` do `skill_survey_trigger_v1` lê e decide. |
+| **S4** Quarentena | 🟢 Feito (superseded) | `survey_eligibility_check` **não existe em código** — substituído pelo `contact_eligibility_check` genérico (mailing-api `db_contact_eligibility`, ordem opt_out→janela→quarentena→caps). Sem tabela `survey_quarantine`; usa schema `outbound`. |
+| **S5** Interface web + link | 🟢 Feito | `survey_web.py` (channel-gateway): `GET /survey/{token}`, `POST /v1/survey/web/{token}/submit` → `session.signals`; tool `survey_link_create`. *Desvio:* token é `token_urlsafe(24)`, **não SHA-256**; single-use por `status`, não por hash. |
+| **S6** Bancada lente cliente | 🟡 Parcial | Lente `customer_voice` (grão × instrumento, 5 metrics + overlay SLA) **feita** — `reports_query.py` (`CV_INSTRUMENTS`/`query_customer_voice`/`_cv_sla_series`) + `CustomerVoicePage.tsx`. Falta a **view consolidada "Visão do cliente"** (cross-cut com divergências §8/§10); a máquina de divergência existente (`apply_divergence_flags`, `query_agents_cross`) é do domínio de calibração e não alimenta essa lente. |
+| **S7** Form-builder | 🟡 Parcial | Editor `/config/dialog-forms` (`DialogFormsPage.tsx`) robusto: blocos, dimensions, `ask_when`, publish, locale add/remove. Falta: **drag reorder** (só ↑↓), **locale lado-a-lado + preview**, **ABAC no write** (só `X-Admin-Token`), **biblioteca reutilizável `survey_question`** (perguntas inline). |
+| **S8** Navegador de respostas | 🟢 Feito (2026-07-23, ver CHANGELOG) | `/analise/surveys` (`AnaliseSurveysPage`): lista por-resposta + filtros (período/tipo/grão/pool) + drawer com sinais e **verbatim**; `GET /v1/evaluation/survey/responses` (ABAC evaluation). Áudio/transcrição = S9. |
+| **S9** Analista IA de verbatims | 🔴 Não iniciado | `agente_survey_analyst_v1` / pool `survey_analyst_ia` só em docs. Nenhum skill/pool/consumer de classificação. |
+| **S10** Retorno outbound + caixa de ações | 🔴 Não iniciado | `retorno_survey_humano` só em docs. Inbox pull genérica existe (`PullInboxPanel`/`dispatch_mode`), sem wiring de survey-return. |
+| **S11** NPS/PMF relacional agendado | 🔴 Não iniciado | Só o `scheduler-api` genérico. Nenhuma tarefa relacional (90/180d) contra base de cliente. |
+
+**Fundação (§7.2) — 🔴 não existe:** o schema operacional PG `survey` (question/definition/instance/response/
+quarantine) **não tem DDL/migration** em lugar nenhum. Hoje o survey persiste **analiticamente** como
+`session_signal` (ClickHouse) + estado operacional no primitivo de diálogo (dialog-api). **Não há store PG
+operacional de survey** — é o gargalo que trava S8/S9 (não existe a resposta individual com verbatim, só o
+sinal agregado).
+
+**Próximos passos — eixo "fechar parciais primeiro" (decidido 2026-07-23):**
+
+1. **S1** — normalizar CES/PMF/FCR no `parse_session_signal_event` (source + label band por instrumento; hoje
+   caem cru em `customer_survey`). Menor esforço, tapa distorção silenciosa no relatório.
+2. **S7** (refinos) — biblioteca `survey_question` reutilizável, ABAC no write do editor, drag reorder,
+   locale lado-a-lado + preview.
+3. **S6** (fechar) — view consolidada "Visão do cliente" (cross-cut multi-métrica + divergências §8/§10)
+   sobre a base que a lente `customer_voice` já expõe.
+4. **Higiene S2** — deployar o trio renomeado (`skill_survey_runner_v1`/`outbound`/`trigger`) como pools no
+   `tenant_demo.yaml` (hoje o registry roda o conjunto antigo).
+5. **Store per-response** (destravava S8/S9) — ✅ **FEITO E VALIDADO (2026-07-23, ver CHANGELOG)**
+   [`adr-survey-response-store.md`](../adr/adr-survey-response-store.md) +
+   [`survey-response-store-implementation-spec.md`](../product/survey-response-store-implementation-spec.md):
+   schema PG `survey` (`survey_instance`+`survey_response` com `open_text`/`verbatims`/`audio_ref`) na
+   evaluation-api; endpoint idempotente; `survey_record` + `survey_web.submit` persist-first (este último
+   **captura verbatim**, fechando o descarte). Smoke verde. **S8 desbloqueado.**
+6. **S8** (navegador de respostas) ✅ **FEITO (2026-07-23)**. Restante do loop captura→leitura→ação:
+   **S9** (analista IA de verbatim + áudio/transcript) → **S10** (retorno outbound) → **S11** (relacional
+   agendado).
+
 ---
 
 ## 13. Fora de escopo (referência) — Health Score e cadastro de cliente

@@ -12,6 +12,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import { useAuth } from '@/auth/useAuth'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -97,7 +98,7 @@ function useAgentPerformance(
     })
     if (filters.poolId)  p.set('pool_id',       filters.poolId)
     if (filters.agentId) p.set('agent_type_id', filters.agentId)
-    fetch(`/reports/agents/performance?${p}`)
+    apiFetch(`/reports/agents/performance?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: PerformanceRow[] }) => setRows(d.data ?? []))
       .catch(() => setError('error'))
@@ -124,7 +125,7 @@ function useAgentPerformanceDaily(
     })
     if (filters.poolId)  p.set('pool_id',       filters.poolId)
     if (filters.agentId) p.set('agent_type_id', filters.agentId)
-    fetch(`/reports/agent-performance/daily?${p}`)
+    apiFetch(`/reports/agent-performance/daily?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: PerformanceDailyRow[] }) => setRows(d.data ?? []))
       .catch(() => setRows([]))

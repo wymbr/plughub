@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -621,9 +621,62 @@ CREATE INDEX IF NOT EXISTS idx_evblind_campaign
 """
 
 
+# ─── Survey response store (schema `survey`) — ADR adr-survey-response-store ────
+# Store operacional POR-RESPOSTA (verbatim/áudio LGPD) que S8/S9 exigem e o
+# ClickHouse (session_signal, numérico/agregado) não comporta. Schema PG dedicado,
+# aditivo idempotente (mesma convenção do _DDL). §7.2 podado: definições=DialogForm
+# (dialog-api), quarentena=contact_policy (mailing-api) — aqui só instância+resposta.
+_SURVEY_DDL = """
+CREATE SCHEMA IF NOT EXISTS survey;
+
+CREATE TABLE IF NOT EXISTS survey.survey_instance (
+  instance_id        TEXT PRIMARY KEY,
+  tenant_id          TEXT NOT NULL,
+  idempotency_key    TEXT NOT NULL,
+  survey_id          TEXT,
+  origin_session_id  TEXT,
+  grain              TEXT NOT NULL,
+  segment_id         TEXT,
+  agent_key          TEXT,
+  pool_id            TEXT,
+  customer_key       TEXT,
+  channel            TEXT,
+  survey_session_id  TEXT,
+  status             TEXT NOT NULL DEFAULT 'responded',
+  session_at         TIMESTAMPTZ,
+  responded_at       TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_survey_instance_idem UNIQUE (tenant_id, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS ix_survey_instance_customer
+  ON survey.survey_instance (tenant_id, customer_key);
+CREATE INDEX IF NOT EXISTS ix_survey_instance_origin
+  ON survey.survey_instance (tenant_id, origin_session_id);
+
+CREATE TABLE IF NOT EXISTS survey.survey_response (
+  response_id      TEXT PRIMARY KEY,
+  instance_id      TEXT NOT NULL
+                     REFERENCES survey.survey_instance(instance_id) ON DELETE CASCADE,
+  tenant_id        TEXT NOT NULL,
+  signals          JSONB NOT NULL DEFAULT '[]',
+  open_text        TEXT,
+  verbatims        JSONB NOT NULL DEFAULT '[]',
+  audio_ref        TEXT,
+  transcript_ref   TEXT,
+  response_channel TEXT,
+  responded_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_survey_response_instance UNIQUE (instance_id)
+);
+CREATE INDEX IF NOT EXISTS ix_survey_response_tenant
+  ON survey.survey_response (tenant_id, responded_at);
+"""
+
+
 async def ensure_schema(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(_DDL)
+        await conn.execute(_SURVEY_DDL)
     logger.info("evaluation schema ensured")
 
 
@@ -663,6 +716,145 @@ def _parse_ts(v: Any) -> Any:
         return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+# ─── Survey response store — persistência por-resposta (S8/S9) ──────────────────
+
+async def persist_survey_response(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    idempotency_key: str,
+    grain: str,
+    survey_id: str | None = None,
+    origin_session_id: str | None = None,
+    segment_id: str | None = None,
+    agent_key: str | None = None,
+    pool_id: str | None = None,
+    customer_key: str | None = None,
+    channel: str | None = None,
+    survey_session_id: str | None = None,
+    signals: list[dict] | None = None,
+    open_text: str | None = None,
+    verbatims: list[dict] | None = None,
+    audio_ref: str | None = None,
+    transcript_ref: str | None = None,
+    response_channel: str | None = None,
+    session_at: Any = None,
+    responded_at: Any = None,
+) -> dict[str, Any]:
+    """Persiste a resposta operacional por-resposta (verbatim/áudio LGPD — vivem SÓ
+    aqui, nunca no session_signal analítico). Idempotente: instância por
+    (tenant_id, idempotency_key), resposta por (instance_id). Replay = created:false,
+    sem duplicar. Transação: instância upsert → resposta insert."""
+    instance_id = _new_id("svi_")
+    response_id = _new_id("svr_")
+    _session_at = _parse_ts(session_at)
+    _responded_at = _parse_ts(responded_at)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            inst = await conn.fetchrow(
+                """
+                INSERT INTO survey.survey_instance
+                    (instance_id, tenant_id, idempotency_key, survey_id, origin_session_id,
+                     grain, segment_id, agent_key, pool_id, customer_key, channel,
+                     survey_session_id, status, session_at, responded_at)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'responded',
+                        COALESCE($13, now()), COALESCE($14, now()))
+                ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+                RETURNING instance_id
+                """,
+                instance_id, tenant_id, idempotency_key, survey_id, origin_session_id,
+                grain, segment_id, agent_key, pool_id, customer_key, channel,
+                survey_session_id, _session_at, _responded_at,
+            )
+            if inst is None:  # já existia → replay idempotente
+                inst = await conn.fetchrow(
+                    "SELECT instance_id FROM survey.survey_instance"
+                    " WHERE tenant_id = $1 AND idempotency_key = $2",
+                    tenant_id, idempotency_key,
+                )
+            instance_id = inst["instance_id"]
+            resp = await conn.fetchrow(
+                """
+                INSERT INTO survey.survey_response
+                    (response_id, instance_id, tenant_id, signals, open_text, verbatims,
+                     audio_ref, transcript_ref, response_channel, responded_at)
+                VALUES ($1,$2,$3,$4::jsonb,$5,$6::jsonb,$7,$8,$9, COALESCE($10, now()))
+                ON CONFLICT (instance_id) DO NOTHING
+                RETURNING response_id
+                """,
+                response_id, instance_id, tenant_id,
+                json.dumps(signals or []), open_text, json.dumps(verbatims or []),
+                audio_ref, transcript_ref, response_channel, _responded_at,
+            )
+            created = resp is not None
+            if resp is None:
+                resp = await conn.fetchrow(
+                    "SELECT response_id FROM survey.survey_response WHERE instance_id = $1",
+                    instance_id,
+                )
+            response_id = resp["response_id"]
+    return {"instance_id": instance_id, "response_id": response_id, "created": created}
+
+
+async def list_survey_responses(
+    pool: asyncpg.Pool,
+    *,
+    tenant_id: str,
+    from_dt: str | None = None,
+    to_dt: str | None = None,
+    grain: str | None = None,
+    pool_id: str | None = None,
+    survey_id: str | None = None,
+    metric: str | None = None,
+    accessible_pools: list[str] | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """S8 — navegador de respostas: lista survey_response JOIN survey_instance (verbatim
+    incluído — LGPD, gateado no router). Filtros opcionais; pool-scope por accessible_pools;
+    ordenado por responded_at DESC; paginado. `metric` filtra por sinal presente (jsonb @>)."""
+    conds = ["i.tenant_id = $1"]
+    args: list[Any] = [tenant_id]
+    def ph(v: Any) -> str:
+        args.append(v)
+        return f"${len(args)}"
+    if from_dt:   conds.append(f"r.responded_at >= {ph(_parse_ts(from_dt))}")
+    if to_dt:
+        # `to_dt` date-only (YYYY-MM-DD) = fim do dia INCLUSIVO: sem isto, o limite cai à
+        # meia-noite e as respostas de HOJE ficam de fora (bug do 1º render). Espelha o
+        # _ch_fmt(upper=True) do analytics-api.
+        _to = _parse_ts(to_dt)
+        if _to is not None and len(to_dt) <= 10:
+            _to = _to + timedelta(days=1)
+        conds.append(f"r.responded_at < {ph(_to)}")
+    if grain:     conds.append(f"i.grain = {ph(grain)}")
+    if pool_id:   conds.append(f"i.pool_id = {ph(pool_id)}")
+    if survey_id: conds.append(f"i.survey_id = {ph(survey_id)}")
+    if metric:    conds.append(f"r.signals @> {ph(json.dumps([{'metric': metric}]))}::jsonb")
+    if accessible_pools:
+        conds.append("i.pool_id IN (" + ", ".join(ph(p) for p in accessible_pools) + ")")
+    where = " AND ".join(conds)
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            f"SELECT count(*) FROM survey.survey_response r "
+            f"JOIN survey.survey_instance i ON i.instance_id = r.instance_id WHERE {where}",
+            *args,
+        )
+        rows = await conn.fetch(
+            f"""SELECT r.response_id, r.instance_id, r.signals, r.open_text, r.verbatims,
+                       r.audio_ref, r.transcript_ref, r.response_channel, r.responded_at,
+                       i.survey_id, i.grain, i.origin_session_id, i.segment_id,
+                       i.agent_key, i.pool_id, i.customer_key, i.channel, i.session_at
+                  FROM survey.survey_response r
+                  JOIN survey.survey_instance i ON i.instance_id = r.instance_id
+                 WHERE {where}
+                 ORDER BY r.responded_at DESC
+                 LIMIT {ph(limit)} OFFSET {ph(offset)}""",
+            *args,
+        )
+    return {"data": _rows(rows), "total": int(total or 0), "limit": limit, "offset": offset}
 
 
 # ─── T6a — form criterion model normalization (migration-without-rewrite) ───────

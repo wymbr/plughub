@@ -21,6 +21,50 @@
       "telegram":  "Telegram",
       "webrtc":    "WebRTC",
       "webhook":   "Webhook"
+    },
+    "grain": {
+      "session":  "Session",
+      "segment":  "Segment",
+      "workflow": "Workflow",
+      "journey":  "Process"
+    }
+  },
+  "surveys": {
+    "noTenant": "No tenant",
+    "refresh": "Refresh",
+    "error": "Failed to load responses",
+    "empty": "No responses in range",
+    "totalCount": "{{count}} responses",
+    "hasVerbatim": "yes",
+    "filters": {
+      "from": "From",
+      "allTypes": "All types",
+      "allGrains": "All grains",
+      "poolPlaceholder": "Pool…",
+      "allPools": "All pools in domain",
+      "noPools": "No pools in domain",
+      "poolCount": "{{count}} pools"
+    },
+    "columns": {
+      "respondedAt": "Answered",
+      "signals": "Signals",
+      "grain": "Grain",
+      "pool": "Pool",
+      "customer": "Customer",
+      "verbatim": "Verbatim",
+      "type": "Form",
+      "channel": "Channel"
+    },
+    "detail": {
+      "title": "Survey response",
+      "close": "Close",
+      "signals": "Signals",
+      "verbatim": "Open text (verbatim)",
+      "noVerbatim": "No open text",
+      "agent": "Agent",
+      "respondedAt": "Answered",
+      "sessionAt": "Session at",
+      "openSession": "Open origin process/session"
     }
   },
   "journeys": {
@@ -39,6 +83,13 @@
       "trigger":  "trigger",
       "delegate": "delegate",
       "collect":  "collect"
+    },
+    "signal": {
+      "title":    "Process signal",
+      "outcome":  "Outcome",
+      "duration": "Duration",
+      "count":    "{{count}} signals",
+      "none":     "No survey signals"
     },
     "filters": { "from": "From", "significantOnly": "Significant only" },
     "columns": {

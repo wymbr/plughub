@@ -137,6 +137,9 @@ async def lifespan(app: FastAPI):
         # Público base URL para o link (SMS/e-mail); vazio = caminho relativo.
         base_url       = getattr(settings, "survey_web_base_url", "") or "",
         delivery       = _survey_delivery,
+        # S8/S9 — persist-first da resposta operacional (verbatim/áudio LGPD).
+        evaluation_api_url       = getattr(settings, "evaluation_api_url", "") or "",
+        evaluation_service_token = getattr(settings, "evaluation_service_token", "") or "",
     )
 
     # PostgreSQL pool for attachment metadata

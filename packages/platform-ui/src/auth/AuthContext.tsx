@@ -177,12 +177,12 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         const data    = await apiRefresh(s.refreshToken)
         const renewed = buildSession(data.access_token, data.refresh_token, data.expires_in, data.user)
-        setSession(renewed)
+        setAccessToken(renewed.accessToken); setSession(renewed)
         persistSession(renewed)
         scheduleRefresh(renewed)
       } catch {
         // Refresh failed — session expired
-        setSession(null)
+        setAccessToken(null); setSession(null)
         clearStorage()
       }
     }, refreshIn)
@@ -223,7 +223,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const login = useCallback(async (email: string, password: string): Promise<void> => {
     const data = await apiLogin(email, password)
     const s    = buildSession(data.access_token, data.refresh_token, data.expires_in, data.user)
-    setSession(s)
+    setAccessToken(s.accessToken); setSession(s)
     persistSession(s)
     scheduleRefresh(s)
   }, [buildSession, persistSession, scheduleRefresh])
@@ -234,7 +234,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current)
 
     const current = session
-    setSession(null)
+    setAccessToken(null); setSession(null)
     clearStorage()
 
     if (current) {
@@ -272,13 +272,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       refreshingRef.current = apiRefresh(session.refreshToken)
         .then((data) => {
           const renewed = buildSession(data.access_token, data.refresh_token, data.expires_in, data.user)
-          setSession(renewed)
+          setAccessToken(renewed.accessToken); setSession(renewed)
           persistSession(renewed)
           scheduleRefresh(renewed)
           return renewed
         })
         .catch(() => {
-          setSession(null)
+          setAccessToken(null); setSession(null)
           clearStorage()
           return null
         })

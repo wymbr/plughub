@@ -13,6 +13,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import {
   AreaChart, Area, LineChart, Line, ComposedChart, ReferenceLine,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -642,7 +643,7 @@ export default function AnalisePoolsPage() {
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: 'day' })
     if (poolId)  p.set('pool_id', poolId)
     if (channel) p.set('channel', channel)
-    fetch(`/reports/pools/volume?${p}`)
+    apiFetch(`/reports/pools/volume?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: VolumeData }) => { if (!cancelled) setVolume(d.data ?? null) })
       .catch(() => { if (!cancelled) setVolume(null) })
@@ -658,7 +659,7 @@ export default function AnalisePoolsPage() {
     const spanDays = (new Date(toDt).getTime() - new Date(fromDt).getTime()) / 86400000
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: spanDays <= 2 ? 'hour' : 'day' })
     if (poolId) p.set('pool_id', poolId)
-    fetch(`/reports/pools/occupancy?${p}`)
+    apiFetch(`/reports/pools/occupancy?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: OccData }) => { if (!cancelled) setOcc(d.data ?? null) })
       .catch(() => { if (!cancelled) setOcc(null) })
@@ -672,7 +673,7 @@ export default function AnalisePoolsPage() {
     setLoading(true)
     const p = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, bucket: 'day' })
     if (poolId) p.set('pool_id', poolId)
-    fetch(`/reports/pools/queue?${p}`)
+    apiFetch(`/reports/pools/queue?${p}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then((d: { data: QueueData }) => { if (!cancelled) setQueue(d.data ?? null) })
       .catch(() => { if (!cancelled) setQueue(null) })

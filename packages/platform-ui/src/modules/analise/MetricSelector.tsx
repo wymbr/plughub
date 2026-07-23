@@ -10,6 +10,7 @@
  */
 import React, { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Metric definitions ─────────────────────────────────────────────────────────
 
@@ -112,7 +113,7 @@ export function MetricSelector({ selected, onChange, tenantId }: MetricSelectorP
   function fetchCategories() {
     if (categories.length > 0 || loadingCats) return
     setLoadingCats(true)
-    fetch(`/reports/agent-events/categories?tenant_id=${encodeURIComponent(tenantId)}`)
+    apiFetch(`/reports/agent-events/categories?tenant_id=${encodeURIComponent(tenantId)}`)
       .then(r => r.ok ? r.json() : Promise.reject())
       .then((body: { data?: Array<{ category: string }> }) => {
         setCategories(body.data?.map(d => d.category) ?? [])

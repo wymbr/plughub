@@ -39,6 +39,31 @@ canônica** valorada em `session_id`. Descartado D1 puro (não resolve cenário 
 | J5b ✅ (2026-07-14) | i18n dos **enums** na Vista Processos. `status`/`outcome`/`business_outcome`/`channels` chegavam crus da analytics-api e eram renderizados assim (o operador via inglês técnico em pt-BR); a moldura já passava por `t()`, faltavam os **valores**. Reusa `sessions.status.*` (já existia no namespace) e adiciona `enums.outcome.*` + `enums.channel.*` (en+pt-BR) — não duplica dicionário. `defaultValue: <valor cru>` em todos: enum novo no backend degrada para o valor cru em vez de quebrar a tela. `t` passa por **parâmetro** nos helpers (a regra proíbe `useTranslation` fora de componente). `title` guarda o valor cru para debug. | J5a |
 | — (app-wide, fora do Journey) | **Guard de rota ABAC**: nenhuma página de `analise/` tem gate próprio — só o Sidebar. Deep-link contorna a UI (o dado segue filtrado por `accessible_pools` no backend). Consertar só a de Journeys seria cosmético; é um item do app. | — |
 
+### Journey — 3 itens pendentes: natureza + mini-plano (levantamento 2026-07-23)
+
+Cruzados contra o código. **São três naturezas distintas** — só o Item 1 é entrega de valor acionável.
+
+**Item 1 — sinal N3 no drill da Vista Processos ✅ ENTREGUE (Fatias 1+2, 2026-07-23 — ver CHANGELOG).**
+Painel **PROCESS SIGNAL** no cabeçalho do L2 (desfecho+provisório, duração, NPS/CSAT/CES, `signal_count`);
+`csat_avg`/`ces_avg` agora renderizados. Fatia 1 = UI-only (`selectedJourney` no `AnaliseJourneysPage` →
+prop). Fatia 2 = filtro `root_session_id` no `/reports/journeys` (resolve canônico, ignora janela+significant)
++ rebusca no `JourneySessions` para deep-link. Validado (clique + deep-link). *Limitação:* fetch direcionado
+varre `sessions` por lista de roots-membros — medir se houver journeys enormes sob merge.
+
+**Item 2 — cache `sessions.journey_id` diferido** *(otimização adiada por decisão, não é bug)*. A coluna
+existe (escrita = raiz no nascimento) mas **não é refrescada no merge**; reads resolvem por union-find sobre
+`journey_aliases` (`_journey_resolved_map`). "Ativar" = refrescar `journey_id` no consumer de merge para
+`GROUP BY journey_id` direto. Custo atual baixo (tabela de aliases minúscula, 1 hop pré-resolvido), correção
+intacta (cache nunca é lido como verdade). **Só sob pressão de latência/volume medida.**
+
+**Item 3 — guard de rota ABAC** *(dívida app-wide, defesa-em-profundidade/UX, NÃO vazamento)*. Rotas
+`analise/*` (`routes.tsx`) sem wrapper — só o `Sidebar` esconde o nav; deep-link renderiza o chrome. O dado
+**segue filtrado** por `accessible_pools` no backend (`_apply_pool_scope`), então não vaza. Modelo de correção
+já existe no repo: `RequireEvalAccess` (guard por-rota das telas de Avaliação, hoje hard-coded a
+`module='evaluation'`) — generalizar (prop `module`) ou criar `RequireAbac` irmão e envolver `analise/*`.
+**App-wide** (analise/monitor/config são todos nav-only) — melhor numa passada dedicada, não enxertado no
+Journey.
+
 ### Journey — Árvore de proveniência (T1–T6) ✅ COMPLETA (2026-07-14/15)
 
 Toda a árvore de proveniência entregue e validada — movida para `CHANGELOG.md` (entradas **"Journey T1–T5"**
@@ -1472,14 +1497,197 @@ Decisão de produto/segurança pendente: qual combinação aplicar. Sem isso, ma
 
 ---
 
+## Customer Surveys — estado as-built das fases S1–S11 *(levantamento 2026-07-23)*
+
+> Cruzamento do plano §12 de [`docs/arcos/customer-surveys.md`](docs/arcos/customer-surveys.md) contra o
+> **código real** (o F11 abaixo dizia "nenhuma fase iniciada" em 2026-07-02 — **desatualizado**). Tabela
+> as-built + evidências + próximos passos completos em **`customer-surveys.md` §12.1**. Achado central:
+> várias fases estão **feitas-por-substituição** (dialog-api, `contact_eligibility_check`, `session_signal`
+> genéricos cobrem o que o spec pedia como entidades dedicadas de survey).
+
+**Feito / feito-por-substituição (não é trabalho pendente):** S2 (runner genérico + DialogForm), S3 (gatilho
+lê outcome), S4 (quarentena → `contact_eligibility_check` genérico), S5 (web + link → `session.signals`).
+
+**Pendente — eixo "fechar parciais primeiro" (decidido 2026-07-23):**
+
+1. **S1 — normalizar CES/PMF/FCR** no `parse_session_signal_event` (analytics-api): hoje só NPS/CSAT ganham
+   source+label; CES/PMF/FCR caem cru em `customer_survey` (escala pass-through). Menor esforço, tapa
+   distorção silenciosa no relatório.
+2. **S7 (refinos do editor `/config/dialog-forms`):** biblioteca `survey_question` reutilizável, ABAC no
+   write (hoje só `X-Admin-Token`), drag reorder, locale lado-a-lado + preview.
+3. **S6 (fechar):** view consolidada "Visão do cliente" (cross-cut multi-métrica + divergências §8/§10)
+   sobre a base que a lente `customer_voice` já expõe (Customer Voice Fatia 1 = só grão×instrumento + SLA).
+4. **Higiene S2:** deployar o trio renomeado (`skill_survey_runner_v1`/`outbound`/`trigger`) como pools no
+   `infra/registry/tenant_demo.yaml` — o registry ainda roda o conjunto antigo.
+5. **Store per-response** (gargalo que travava S8/S9) — ✅ **FEITO E VALIDADO (2026-07-23, ver CHANGELOG).**
+   Schema PG `survey` + endpoint idempotente (evaluation-api); `survey_record` persist-first (mcp-server);
+   `survey_web.submit` **captura verbatim** + persist-first (channel-gateway). Smoke
+   `smoke_survey_response_store.sh` verde. **Desbloqueia S8.** ADR aceito:
+   [`docs/adr/adr-survey-response-store.md`](docs/adr/adr-survey-response-store.md). **Opção A** decidida:
+   schema PG `survey` dedicado, escopo mínimo `survey_instance`+`survey_response` (com `open_text`/`audio_ref`),
+   host = **evaluation-api**; poda o §7.2 (definições→dialog-api, quarentena→mailing-api). Caminho de escrita:
+   `survey_record` persiste antes de emitir + `survey_web.submit` para de descartar verbatim. **Contrato de
+   implementação PRONTO** (DDL das 2 tabelas, endpoint `POST /v1/evaluation/survey/responses`, idempotência,
+   ordem persist-first, wiring com linha/símbolo exatos, checklist de build):
+   [`docs/product/survey-response-store-implementation-spec.md`](docs/product/survey-response-store-implementation-spec.md).
+   **Falta só codar.** Abertos: endpoint de leitura de S8, áudio/transcript (S9).
+6. **Valor novo (loop captura→leitura→ação):** **S8** (navegador de respostas `/analise/surveys` + verbatim)
+   ✅ **FEITO (2026-07-23, ver CHANGELOG).** Restante: **S9** (`agente_survey_analyst_v1` — classifica verbatim +
+   áudio/transcript via `attachment_store`) → **S10** (retorno outbound + caixa de ações) → **S11** (NPS/PMF
+   relacional agendado). Refino de S8: endpoint de LEITURA já existe; falta só export CSV (opcional) e o
+   guard de rota ABAC (Item 3 app-wide).
+
+---
+
+## Arco de Segurança — Pool-scoping em relatórios (ABAC no DADO) *(achado 2026-07-23; Fase A preparada)*
+
+**Problema (levantado pelo usuário, confirmado em código).** O modelo pretende que relatórios/monitores
+respeitem o **domínio de pools** do usuário (Arc 7c: `accessible_pools` = filtro de linha; ABAC + grupos).
+Hoje isso está **inerte** em toda a superfície de Analytics.
+
+- **Causa raiz (app-wide):** a **platform-ui não envia `Authorization: Bearer`** nas chamadas de `/reports/*`
+  e `/v1/evaluation/*` — as páginas de `/analise` usam `fetch(url)` cru; o proxy do Vite é pass-through
+  (`vite.config.ts` `^/reports` e `^/v1/evaluation`, só `changeOrigin`). Sem token, o `optional_pool_principal`
+  (analytics-api `pool_auth.py`) e o `_decode_jwt_optional` (evaluation-api) resolvem `accessible_pools=None`
+  = **irrestrito** ("unauthenticated → all pools", documentado). Ou seja, o filtro por pool é **no-op**: qualquer
+  usuário vê **todos os pools**. Vale para journeys, sessions, survey, etc. Postura de demo — mas fura o modelo.
+- **Fix camada de dado:** a UI passa a anexar o `bearer()` (existe em `api/registry.ts`, lê o token em memória)
+  nas chamadas de relatório — ou um gateway injeta o header. Necessário para QUALQUER scoping de Analytics
+  funcionar. Distinto do **Item 3 (guard de rota ABAC)** da seção Journey: aquele protege o *chrome* da página;
+  este protege o *dado*. Os dois juntos = enforcement real (rota + linha).
+
+**Gaps ESPECÍFICOS do survey (S8) — só mordem quando o token for enviado:**
+1. **`survey_instance.pool_id` não é populado na escrita.** Veículo web (`survey_web.submit`, channel-gateway):
+   `pool_id` sai **sempre vazio** (o token congelado não carrega o pool da sessão pesquisada). `survey_record`
+   (mcp-server): `pool_id` é input **opcional** → vazio quando omitido. **Decisão de produto**: a resposta deve
+   ser atribuída ao **pool da sessão/segmento PESQUISADO** (resolver na escrita — web: do `origin_session_id`
+   no `survey_link_create`/persist; record: exigir/derivar). Sem isso o scoping não tem em que se ancorar.
+2. **Sem escape hatch de pool vazio** em `db.list_survey_responses` (`i.pool_id IN (...)`), ao contrário da
+   analytics-api que usa `(s.pool_id IN (...) OR s.pool_id = '')` de propósito. Com o token ativo + pool vazio,
+   um supervisor restrito veria **zero** respostas web (inverte "vê tudo"→"vê nada"). Decidir a política de
+   pool vazio junto com o fix (1).
+- **LGPD reforça a prioridade:** o verbatim é texto aberto do cliente (dado controlado); ler verbatim de pools
+  fora do escopo é vazamento cross-pool, não só cosmético.
+- **Referência do padrão correto:** evaluation-api `list_results` + `_compute_result_scope` (row-scope por
+  role+grupo+pool, trata self-ownership) — mas **também** depende do token que a UI não manda.
+
+**Fases:**
+
+| Fase | Entrega | Depende |
+|---|---|---|
+| **A — propagar o token na UI** | 🟡 **Parcial (2026-07-23):** helper `apiFetch` (`api/apiFetch.ts`) criado; **8 arquivos de `src/modules/analise/` migrados** (fetch→apiFetch). **Falta varrer `src/modules/monitor/`** e demais consumidores de `/reports` (grep `fetch\(['"\`]/(reports\|v1/evaluation\|analytics)`). | — |
+| **B — `pool_id` na escrita do survey** | atribuir a resposta ao **pool da sessão/segmento PESQUISADO** (web: resolver do `origin_session_id` no `survey_link_create`/persist; record: derivar/exigir). Decisão de produto. | — |
+| **C — política de pool vazio** | ✅ **DECIDIDA strict (2026-07-23): pool vazio = só irrestrito/admin vê.** Sem escape hatch — respeita o domínio (resposta sem pool não pertence a nenhum domínio; over-expor a todos seria mais inseguro que sub-expor). É o comportamento ATUAL da query (`pool_id IN (domain)` já exclui vazio p/ restrito), **sem código**. O "restrito vê zero survey web" é sintoma de B (pool vazio na escrita), não de C. | — |
+| **D — endpoints `/reports/*` sem scoping** | auditar quais rotas NÃO têm `optional_pool_principal` e adicionar (ex.: `/reports/evaluations/quality` T11 é unscoped por construção). | A |
+| **E — filtro de pool = combo do DOMÍNIO (não texto)** | 🟡 **Feito no survey (2026-07-23):** componente reusável `PoolMultiSelect` (`components/ui/PoolMultiSelect.tsx`) + `AnaliseSurveysPage` usa o domínio (`listPools ∩ currentUser.accessiblePools`); endpoint aceita `pool_ids[]` e **reintersecta com o domínio** no backend (filtro fora do domínio → vazio). **Falta aplicar** o `PoolMultiSelect` às outras caixas de texto: `AnaliseAgentesPage`, `AnaliseContatosPage`. | A |
+
+Enforcement completo = **rota** (Item 3 do Journey — guard ABAC de `/analise/*`) + **dado** (este arco).
+Ver `docs/arcos/arc7-auth.md` (ABAC/accessible_pools) e `docs/arcos/customer-surveys.md` §7.3.
+
+### Fase A — preparada (turnkey)
+
+**Decisão:** helper explícito `apiFetch` (consistente com o `bearer()` já existente em `api/registry.ts`), NÃO
+monkey-patch do `window.fetch`. Motivo: a base já faz merge explícito de header (`bearer()`), sem interceptor
+global; um patch global tem efeito colateral em chamadas que não devem levar token (auth/refresh, CDNs). O
+custo do explícito (migrar call sites) é aceitável e a segurança do backend **já enforça** quando o token chega
+(o gate é permissivo só na ausência) — logo A é **puramente frontend**.
+
+1. **Novo helper** `packages/platform-ui/src/api/apiFetch.ts`:
+   ```ts
+   import { getAccessToken } from '@/auth/token-store'
+   /** fetch que anexa Authorization: Bearer do token em memória (se houver e não já setado).
+    *  Usar em TODA chamada de relatório (/reports, /v1/evaluation, /analytics). */
+   export function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+     const t = getAccessToken()
+     const headers = new Headers(init.headers)
+     if (t && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${t}`)
+     return fetch(input, { ...init, headers })
+   }
+   ```
+2. **Migrar os call sites** de `fetch(` → `apiFetch(` nas chamadas de `/reports/*` e `/v1/evaluation/*`.
+   Superfície confirmada (8) em `src/modules/analise/`: `AnaliseSurveysPage`, `AnaliseJourneysPage`,
+   `CustomerVoicePage`, `AnalisePoolsPage`, `AnaliseAgentesPage`, `AgentsBenchPage`, `MetricSelector`,
+   `AnaliseComparacaoPage` — **+ varrer `src/modules/monitor/`** e demais consumidores de `/reports`
+   (grep `fetch\(['"\`]/(reports|v1/evaluation|analytics)`). Só GET de relatório; não tocar chamadas de auth.
+3. **Backend: zero mudança em A** — `optional_pool_principal` (analytics-api) e `_decode_jwt_optional`
+   (evaluation-api) já leem o `Authorization` e aplicam `accessible_pools`. **Exceção:** para o survey,
+   entregar a **Fase C junto** (escape hatch), senão o admin segue vendo tudo (accessible_pools vazio→None) mas
+   um supervisor restrito perde as respostas web (pool vazio).
+4. **Verificação:** logar com um usuário **restrito** (accessible_pools não-vazio, sem admin) → só vê linhas
+   dos seus pools em `/analise/*`; admin (accessible_pools vazio→None) → vê tudo. Cobre journeys + survey.
+   Guard futuro (opcional): lint/grep que falha em `fetch('/reports`|`fetch('/v1/evaluation` cru (fora do
+   `apiFetch`), p/ não reintroduzir call site sem token.
+
+**Consequência aceita (decisão C strict):** com o token fluindo (A) + a decisão strict (C), um usuário
+**restrito** vê **zero** respostas web hoje (todas com pool vazio) — é correto (não pertencem ao domínio dele),
+não um bug. **Admin não é afetado** (domínio vazio→None→vê tudo). A completude vem de **B** (carimbar o pool
+da sessão pesquisada na escrita), que faz as respostas web aparecerem para o supervisor do pool certo.
+**Próximo passo natural do arco: B.** (Validação E2E do A/C/E ✅ 2026-07-23 — admin restrito a 2 pools passou a
+ver só o pool do domínio; ver CHANGELOG.)
+
+### Fase B — kickoff (próxima sessão)
+
+**Objetivo:** `survey_instance.pool_id` deixa de nascer vazio — carimbar o **pool da sessão/segmento
+PESQUISADO**, para a resposta ter domínio e o supervisor do pool certo a ver.
+
+**Decisão de produto:** o pool da resposta = o pool da **sessão de origem** (`origin_session_id`), não o pool
+do dispatcher/runner de survey. É o atendimento que gerou a pesquisa que define o domínio.
+
+**Dois veículos (investigar a origem do pool em cada um):**
+1. **Web** (`survey_web`, channel-gateway): o token (`survey_web:token`) tem `origin_session_id`+`grain` mas
+   **não** o pool. Duas opções a decidir: **(a)** `survey_link_create` (mcp-server `tools/survey.ts`) passa o
+   `pool_id` do contexto do chamador (o hook/skill que cria o link roda numa sessão COM pool — `session.pool.id`
+   no ContextStore) → congela no token → persiste; **(b)** resolver no persist a partir do `origin_session_id`
+   (lookup do pool da sessão — analytics-api `sessions.pool_id` OU ContextStore `session.pool.id`). (a) é mais
+   barato (sem lookup) e o pool já está no contexto de quem dispara; preferir (a), (b) como fallback.
+2. **Conferência/inline** (`survey_record`, mcp-server): `pool_id` é input **opcional**. O runner/inline
+   (`agente_nps_v1`, `skill_survey_runner_v1`) roda na sessão pesquisada → tem `session.pool.id` no contexto →
+   passar via `$.pipeline_state`/`@ctx`. Verificar se o skill já resolve o pool e só não o passa.
+
+**Escopo mínimo:** carimbar o pool na escrita (web + record) + demo/smoke que prova a resposta nascendo com o
+pool real (não vazio) e o usuário restrito daquele pool passando a vê-la. **Não** precisa migração de dado
+antigo (pool vazio legado = admin-only, decisão C). **Entry points:** `channel-gateway/survey_web.py` (create/
+submit + token record), `mcp-server/tools/survey.ts` (`survey_link_create`/`survey_record`), ContextStore
+`session.pool.id` (escrito pela Routing Engine no `_write_pool_context`). Ver ADR `adr-survey-response-store.md`
+(o `pool_id` já existe no schema; falta a origem na escrita) e `customer-surveys.md` §7.3.
+
+### Fase E — filtro de pool = combo do domínio (preparada)
+
+**Confirmado (2026-07-23):** o domínio do usuário = bloco **"Accessible Pools"** em Configuration > Access
+(`AccessPage.tsx` → `user.accessible_pools` na auth-api → claim `accessible_pools` no JWT; **vazio = todos**).
+A sessão **já expõe** isso no client: `useAuth().session.accessiblePools` (`AuthContext`, `[]` = todos).
+
+**Problema:** o filtro de pool nas telas de Analytics é **caixa de texto** — `AnaliseSurveysPage.tsx:233` (a
+nova), `AnaliseAgentesPage.tsx:376`, `AnaliseContatosPage.tsx:107`. Deveria ser um **combo multi-select do
+domínio**. (`AnaliseJourneysPage`/`CustomerVoicePage` não têm filtro de pool.)
+
+**Design:**
+1. **Fonte das opções (client):** `registryApi.listPools(tenantId)` (`api/registry.ts`, já normaliza `items`)
+   **∩ `session.accessiblePools`** — se `accessiblePools` vazio (admin) → lista cheia. Assim o combo mostra
+   só o que o usuário pode ver (o filtro nunca oferece pool fora do domínio). Referência de `<select>`
+   populado por `listPools`: `AnaliseProcessosPage.tsx` (fetch L104-108 + select L151-157) — copiar, mas
+   **multi-select** (checkbox-list, como o de `AccessPage.tsx` L430-478, o único multi-select do app; não há
+   componente compartilhado — extrair um `PoolMultiSelect` reusável é oportuno).
+2. **Backend aceita lista:** `GET /v1/evaluation/survey/responses` troca `pool_id: str` por `pool_ids`
+   (repetido ou CSV); `db.list_survey_responses` já filtra `i.pool_id IN (...)` — passar a lista do filtro
+   **interseccionada com `accessible_pools`** (o filtro é subconjunto do domínio; a fronteira dura continua no
+   scoping da Fase A/C). Vazio no filtro = todo o domínio (não todos os pools).
+3. **Invariante:** filtro (subconjunto escolhido) ≠ scoping (domínio permitido). O combo só oferece o domínio;
+   o backend **sempre** reintersecta com `accessible_pools` (nunca confia só na UI).
+4. Aplicar o mesmo `PoolMultiSelect` às outras telas de texto (agentes, contatos) na varredura.
+
+---
+
 ## F11 — Pesquisa multi-grão outbound → superseded pelo módulo Customer Surveys
 
 > **Consolidado (2026-07-02):** o planejamento de orquestração que este item pedia ("quando/como cada
 > grão dispara") está **fechado** em [`docs/arcos/customer-surveys.md`](docs/arcos/customer-surveys.md)
 > §5 (gatilho decidido no skill, não na plataforma) + §12 (plano de fases S1–S11). O **S11** daquele
 > plano é exatamente o "NPS/PMF relacional agendado + grão journey E2E" que este F11 apontava como
-> pendência. Não há mais planejamento em aberto aqui — o que resta é **implementação** das fases S1–S11
-> (nenhuma iniciada). Ver também `CLAUDE.md` § Pending → "Customer Surveys" e "Histórico de contatos do
+> pendência. Não há mais planejamento em aberto aqui — o que resta é **implementação** das fases S1–S11.
+> ⚠️ **"nenhuma iniciada" está obsoleto (2026-07-02):** ver a seção **"Customer Surveys — estado as-built"**
+> acima e `customer-surveys.md` §12.1 para o estado real (S2–S5 feitos/por-substituição; S1/S6/S7 parciais;
+> S8–S11 não iniciados). Ver também `CLAUDE.md` § Pending → "Customer Surveys" e "Histórico de contatos do
 > cliente" (capacidade transversal, §20 do mesmo doc, spec própria em `docs/arcos/customer-contact-
 > history.md`). F5 inline (grão segmento) segue ✅ concluído — a riqueza "N sinais por agente" mora no
 > módulo Surveys (grãos outbound), não no inline.

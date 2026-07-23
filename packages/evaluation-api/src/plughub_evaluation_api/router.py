@@ -68,7 +68,7 @@ from typing import Any
 import asyncpg
 import httpx
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -1298,6 +1298,99 @@ async def mark_instance_error(instance_id: str, tenant_id: str, body: InstanceEr
 
 
 # ─── Ingest (from evaluation_submit MCP tool) ─────────────────────────────────
+
+class SurveyResponseCreate(BaseModel):
+    """S8/S9 — resposta operacional por-resposta. `tenant_id` no CORPO (convenção da
+    evaluation-api). `idempotency_key`: web=token single-use; record=hash composto."""
+    tenant_id:         str
+    idempotency_key:   str
+    grain:             str
+    survey_id:         str | None = None
+    origin_session_id: str | None = None
+    segment_id:        str | None = None
+    agent_key:         str | None = None
+    pool_id:           str | None = None
+    customer_key:      str | None = None
+    channel:           str | None = None
+    survey_session_id: str | None = None
+    session_at:        str | None = None
+    signals:           list[dict] = Field(default_factory=list)
+    open_text:         str | None = None
+    verbatims:         list[dict] = Field(default_factory=list)
+    audio_ref:         str | None = None
+    transcript_ref:    str | None = None
+    response_channel:  str | None = None
+    captured_at:       str | None = None
+
+
+@router.post("/v1/evaluation/survey/responses", status_code=201,
+             dependencies=[Depends(_require_service)])
+async def create_survey_response(body: SurveyResponseCreate, request: Request) -> JSONResponse:
+    """Persiste a resposta operacional (verbatim/áudio LGPD — só aqui, nunca no
+    session_signal). Idempotente por (tenant_id, idempotency_key); replay → 200
+    created:false. Chamado por survey_record (mcp-server) e survey_web.submit
+    (channel-gateway) ANTES de emitir session.signals (persist-first)."""
+    result = await _db.persist_survey_response(
+        _pool(request),
+        tenant_id=body.tenant_id,
+        idempotency_key=body.idempotency_key,
+        grain=body.grain,
+        survey_id=body.survey_id,
+        origin_session_id=body.origin_session_id,
+        segment_id=body.segment_id,
+        agent_key=body.agent_key,
+        pool_id=body.pool_id,
+        customer_key=body.customer_key,
+        channel=body.channel,
+        survey_session_id=body.survey_session_id,
+        signals=list(body.signals),
+        open_text=body.open_text,
+        verbatims=list(body.verbatims),
+        audio_ref=body.audio_ref,
+        transcript_ref=body.transcript_ref,
+        response_channel=body.response_channel,
+        session_at=body.session_at or body.captured_at,
+        responded_at=body.captured_at,
+    )
+    return JSONResponse(status_code=201 if result["created"] else 200, content=result)
+
+
+@router.get("/v1/evaluation/survey/responses",
+            dependencies=[Depends(_require_any_evaluation)])
+async def list_survey_responses(
+    request:    Request,
+    tenant_id:  str,
+    from_dt:    str | None = None,
+    to_dt:      str | None = None,
+    grain:      str | None = None,
+    pool_id:    str | None = None,               # legado (single)
+    pool_ids:   list[str] | None = Query(None),  # Fase E — filtro multi-pool (subconjunto do domínio)
+    survey_id:  str | None = None,
+    metric:     str | None = None,
+    limit:      int = 50,
+    offset:     int = 0,
+) -> dict:
+    """S8 — navegador de respostas. Verbatim incluído (gate = acesso ao módulo evaluation,
+    postura LGPD). **Pool-scoping (arco de segurança):** `domain` = `accessible_pools` do
+    JWT (None = irrestrito/admin). O filtro `pool_ids` (escolha do usuário) é
+    REINTERSECCIONADO com o domínio no backend — a UI nunca é a fronteira. Filtro fora do
+    domínio → vazio (respeita o domínio); sem filtro → todo o domínio."""
+    jwt_payload = _decode_jwt_optional(request)
+    domain = (jwt_payload.get("accessible_pools") if jwt_payload else None) or None
+    filt = [p for p in (pool_ids or ([pool_id] if pool_id else [])) if p]
+    if domain is not None:
+        effective = [p for p in filt if p in domain] if filt else domain
+        if not effective:  # filtro sem interseção com o domínio → nada (respeita o domínio)
+            return {"data": [], "total": 0, "limit": limit, "offset": offset}
+    else:
+        effective = filt or None  # admin: filtro livre; sem filtro = tudo
+    return await _db.list_survey_responses(
+        _pool(request),
+        tenant_id=tenant_id, from_dt=from_dt, to_dt=to_dt, grain=grain,
+        survey_id=survey_id, metric=metric,
+        accessible_pools=effective, limit=limit, offset=offset,
+    )
+
 
 class IngestBody(BaseModel):
     """Called by evaluation_submit when instance_id is present."""
