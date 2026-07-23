@@ -1070,15 +1070,20 @@ async def query_contact_insights_report(
     category:    str | None       = None,
     tags:        list[str] | None = None,
     insight_type: str | None      = None,
+    accessible_pools: list[str] | None = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # accessible_pools=[] → sem acesso a pool nenhum → lista vazia (não chama ClickHouse).
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     try:
         return await asyncio.to_thread(
             _fetch_contact_insights, client, database, tenant_id, since, until,
             session_id, category, tags, insight_type, page, page_size,
+            accessible_pools,
         )
     except Exception as exc:
         logger.warning("query_contact_insights_report failed tenant=%s: %s", tenant_id, exc)
@@ -1091,6 +1096,7 @@ def _fetch_contact_insights(
     session_id: str | None, category: str | None,
     tags: list[str] | None, insight_type: str | None,
     page: int, page_size: int,
+    accessible_pools: list[str] | None = None,
 ) -> dict:
     conditions = [
         "tenant_id = {tenant_id:String}",
@@ -1113,6 +1119,17 @@ def _fetch_contact_insights(
             tag_key = f"tag_{i}"
             conditions.append(f"has(tags, {{{tag_key}:String}})")
             params[tag_key] = tag
+
+    # Segurança Fase D — pool-scoping (Arc 7c). contact_insights só tem session_id;
+    # restringe às sessões que TOCARAM um pool do domínio (subquery a segments, que
+    # carrega pool_id por segmento — mesmo padrão do /reports/sessions). Valores vêm de
+    # JWT verificado → seguros inline. accessible_pools=[] é curto-circuitado no wrapper.
+    if accessible_pools:
+        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+        conditions.append(
+            f"session_id IN (SELECT session_id FROM {db}.segments FINAL "
+            f"WHERE tenant_id = {{tenant_id:String}} AND pool_id IN ({pool_list}))"
+        )
 
     where = " AND ".join(conditions)
     offset = (page - 1) * page_size

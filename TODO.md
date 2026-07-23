@@ -1575,11 +1575,11 @@ Hoje isso está **inerte** em toda a superfície de Analytics.
 
 | Fase | Entrega | Depende |
 |---|---|---|
-| **A — propagar o token na UI** | 🟡 **Parcial (2026-07-23):** helper `apiFetch` (`api/apiFetch.ts`) criado; **8 arquivos de `src/modules/analise/` migrados** (fetch→apiFetch). **Falta varrer `src/modules/monitor/`** e demais consumidores de `/reports` (grep `fetch\(['"\`]/(reports\|v1/evaluation\|analytics)`). | — |
-| **B — `pool_id` na escrita do survey** | atribuir a resposta ao **pool da sessão/segmento PESQUISADO** (web: resolver do `origin_session_id` no `survey_link_create`/persist; record: derivar/exigir). Decisão de produto. | — |
+| **A — propagar o token na UI** | ✅ **Completa (2026-07-23):** helper `apiFetch` + **8 arquivos de `analise/`** + **varredura dos demais consumidores** (18 call sites `/reports` em 15 arquivos: `contacts/*`, `contacts/tabs/*` [Monitor/Analise/Agents/AgentTimeline/Lista], `agent-reports/`, `agent-flow/*`, `service/SessionTranscript`, `billing/`, `campaigns/`, `analise/CustomerVoicePage` instruments). Único `fetch` cru remanescente a `/reports` = `api/evaluation-hooks.ts:515` (POST flush-synthetic, já anexa `bearerHeaders`). | — |
+| **B — `pool_id` na escrita do survey** | 🟢 **Feito p/ web + NPS inline + J4c collect + multi (2026-07-23):** veículo web plumba `pool_id` (`survey_link_create`→token→`submit`); outbound 5b carimba `origin_pool` na metadata→dispatcher→worker; `agente_nps_v1`/`skill_survey_multi_v1` usam `@ctx.session.pool.id` (origem = self); **J4c** — `handle_collect` resolve o pool do alvo e semeia `session.survey_pool_id` no engage, `skill_survey_runner_v1` o carimba. Smokes: `smoke_outbound_fase5b.sh` + pytest `test_collect_pool_scoping.py`. **Resta 1 seam:** `skill_survey_v1` (survey_processo_ia, F10.2b delegate) grava de `@ctx.session.origin_session_id` sem passar pelo collect → semear o pool no `handle_trigger` (do `origin_session_id`). Até lá pool vazio = admin-only (decisão C). | — |
 | **C — política de pool vazio** | ✅ **DECIDIDA strict (2026-07-23): pool vazio = só irrestrito/admin vê.** Sem escape hatch — respeita o domínio (resposta sem pool não pertence a nenhum domínio; over-expor a todos seria mais inseguro que sub-expor). É o comportamento ATUAL da query (`pool_id IN (domain)` já exclui vazio p/ restrito), **sem código**. O "restrito vê zero survey web" é sintoma de B (pool vazio na escrita), não de C. | — |
-| **D — endpoints `/reports/*` sem scoping** | auditar quais rotas NÃO têm `optional_pool_principal` e adicionar (ex.: `/reports/evaluations/quality` T11 é unscoped por construção). | A |
-| **E — filtro de pool = combo do DOMÍNIO (não texto)** | 🟡 **Feito no survey (2026-07-23):** componente reusável `PoolMultiSelect` (`components/ui/PoolMultiSelect.tsx`) + `AnaliseSurveysPage` usa o domínio (`listPools ∩ currentUser.accessiblePools`); endpoint aceita `pool_ids[]` e **reintersecta com o domínio** no backend (filtro fora do domínio → vazio). **Falta aplicar** o `PoolMultiSelect` às outras caixas de texto: `AnaliseAgentesPage`, `AnaliseContatosPage`. | A |
+| **D — endpoints operacionais + `/reports/*` sem scoping** | ✅ **COMPLETA (2026-07-23):** `/v1/operational/pools` (agent-registry) + Monitor SSE `/dashboard/{operational,sentiment,pool-sla}` (token por query param) + auditoria `/reports/*`: `contact-insights` ESCOPADO (subquery a segments); demais não-escopados por decisão fundamentada (`usage`/`campaigns` não pool-atribuídos; `workflows` metadado de processo; `evaluations*` gateados por ABAC evaluation; `quality` unscoped por construção; `instruments` catálogo). Follow-up de posture: JWT em URL do SSE → cookie/ticket em prod. Ver CHANGELOG "Fase D COMPLETA". | A |
+| **E — filtro de pool = combo do DOMÍNIO (não texto)** | ✅ **Completa (2026-07-23):** survey usa `PoolMultiSelect` (multi, `pool_ids[]` + reinterseção no backend); **agentes/contatos** usam o novo `PoolDomainSelect` (single) — `AnaliseAgentesPage`/`AnaliseContatosPage` trocaram o texto livre por combo do domínio (`listPools ∩ accessiblePools`). Single (não multi) por decisão: `ContactFilters.poolId` é singular e compartilhado (blast radius) e a segurança já é backend (`optional_pool_principal`). i18n `agentReports.filters.allPools`. | A |
 
 Enforcement completo = **rota** (Item 3 do Journey — guard ABAC de `/analise/*`) + **dado** (este arco).
 Ver `docs/arcos/arc7-auth.md` (ABAC/accessible_pools) e `docs/arcos/customer-surveys.md` §7.3.
@@ -1625,9 +1625,26 @@ da sessão pesquisada na escrita), que faz as respostas web aparecerem para o su
 **Próximo passo natural do arco: B.** (Validação E2E do A/C/E ✅ 2026-07-23 — admin restrito a 2 pools passou a
 ver só o pool do domínio; ver CHANGELOG.)
 
-### Fase B — kickoff (próxima sessão)
+### Fase B — 🟢 web + NPS inline feitos (2026-07-23); falta J4c runner/workflow
 
-**Objetivo:** `survey_instance.pool_id` deixa de nascer vazio — carimbar o **pool da sessão/segmento
+**Entregue (ver CHANGELOG § "Segurança — Pool-scoping: Fase B"):** veículo web plumba `pool_id`
+(`survey_link_create`→`create` congela no token→`submit` carimba persist + `session.signals`); outbound 5b
+carimba `origin_pool` na metadata→dispatcher (`session.survey_origin_pool`)→worker; `agente_nps_v1` passa
+`@ctx.session.pool.id`. Smoke `smoke_outbound_fase5b.sh` prova pool não-vazio + controle negativo.
+
+**J4c collect-based ✅ (2026-07-23):** `handle_collect` resolve o pool do alvo (`signal_target_id`) do ctx
+(`session.pool.id`), congela em `pending.signal_pool_id`; `handle_collect_engage` semeia `session.survey_pool_id`;
+`skill_survey_runner_v1` passa `pool_id: "@ctx.session.survey_pool_id"`. `skill_survey_multi_v1` pesquisa a
+própria sessão → `@ctx.session.pool.id`. Pytest `test_collect_pool_scoping.py`.
+
+**Resta `skill_survey_v1` (F10.2b delegate, survey_processo_ia):** grava via `survey_record` de
+`@ctx.session.origin_session_id`, mas NÃO passa pelo `handle_collect` (é delegate, não collect). Para carimbar o
+pool: no `handle_trigger` (webhook.py), quando `origin_session_id` vier no `workflow_trigger`, ler o
+`session.pool.id` do ctx da origem e semear `session.survey_pool_id` na sessão do workflow → `skill_survey_v1`
+passa `pool_id: "@ctx.session.survey_pool_id"`. Mudança genérica no trigger (afeta todo trigger com origin) —
+avaliar custo/benefício. Até lá, pool vazio = admin-only (decisão C), correto e sem crash.
+
+**Objetivo (histórico):** `survey_instance.pool_id` deixa de nascer vazio — carimbar o **pool da sessão/segmento
 PESQUISADO**, para a resposta ter domínio e o supervisor do pool certo a ver.
 
 **Decisão de produto:** o pool da resposta = o pool da **sessão de origem** (`origin_session_id`), não o pool
@@ -1651,7 +1668,12 @@ submit + token record), `mcp-server/tools/survey.ts` (`survey_link_create`/`surv
 `session.pool.id` (escrito pela Routing Engine no `_write_pool_context`). Ver ADR `adr-survey-response-store.md`
 (o `pool_id` já existe no schema; falta a origem na escrita) e `customer-surveys.md` §7.3.
 
-### Fase E — filtro de pool = combo do domínio (preparada)
+### Fase E — filtro de pool = combo do domínio ✅ (2026-07-23)
+
+**Concluída:** survey → `PoolMultiSelect` (multi, `pool_ids[]`); agentes/contatos → `PoolDomainSelect` (single,
+`components/ui/PoolDomainSelect.tsx`) em `AnaliseAgentesPage`/`AnaliseContatosPage`. Single por decisão
+(`ContactFilters.poolId` singular/compartilhado; segurança já no backend). Ver CHANGELOG "Fase E (combo do
+domínio em agentes/contatos)". Notas de design abaixo (mantidas p/ referência).
 
 **Confirmado (2026-07-23):** o domínio do usuário = bloco **"Accessible Pools"** em Configuration > Access
 (`AccessPage.tsx` → `user.accessible_pools` na auth-api → claim `accessible_pools` no JWT; **vazio = todos**).

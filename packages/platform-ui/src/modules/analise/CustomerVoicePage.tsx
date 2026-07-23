@@ -92,7 +92,7 @@ export default function CustomerVoicePage() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    fetch('/reports/customer-voice/instruments')
+    apiFetch('/reports/customer-voice/instruments')
       .then(r => r.json())
       .then(d => setInstruments(d.instruments ?? {}))
       .catch(() => setInstruments({}))

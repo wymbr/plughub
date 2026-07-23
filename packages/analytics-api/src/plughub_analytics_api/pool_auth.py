@@ -7,7 +7,11 @@ from its claims to restrict analytics queries to the caller's allowed pools.
 
 Behaviour summary
 -----------------
-- analytics_open_access=True OR no auth_jwt_secret configured
+NB (Segurança Fase A/E): pool-scoping é DESACOPLADO de ``analytics_open_access``. Aquele
+flag é um bypass amplo de demo (audit/admin/transcript sem token) — mas o domínio de pools
+deve valer sempre que houver como verificar o token. Aqui o único bypass é a AUSÊNCIA de
+segredo (sem como verificar o JWT).
+- No auth_jwt_secret configured
     → PoolPrincipal(accessible_pools=None) — no restriction (all pools)
 - No Authorization header present
     → PoolPrincipal(accessible_pools=None) — unauthenticated callers see all pools
@@ -86,8 +90,12 @@ async def optional_pool_principal(
     """
     settings = get_settings()
 
-    # Open-access mode or no JWT secret configured → unrestricted
-    if settings.analytics_open_access or not settings.auth_jwt_secret:
+    # Pool-scoping é DESACOPLADO do `analytics_open_access` (Segurança Fase A/E): o
+    # open_access é um bypass amplo de demo (audit/admin/transcript sem token), mas o
+    # domínio de pools deve valer sempre que dá p/ verificar o token. Único bypass aqui:
+    # nenhum segredo configurado (não há como verificar o JWT) → irrestrito. Com segredo,
+    # a decisão vem do token (ausente → irrestrito no path abaixo; presente → enforça).
+    if not settings.auth_jwt_secret:
         return PoolPrincipal(accessible_pools=None, tenant_id=None, sub="open")
 
     # No token → unrestricted (backward-compatible with unauthenticated callers)
@@ -129,3 +137,25 @@ async def optional_pool_principal(
         sub=sub,
         supervised_agent_types=supervised_agent_types,
     )
+
+
+def accessible_pools_from_token(token: str | None) -> list[str] | None:
+    """
+    Decode `accessible_pools` from a raw JWT string passed as a QUERY PARAM.
+
+    For SSE/EventSource callers (dashboard streams): the browser's EventSource cannot
+    send an Authorization header, so the auth-api Bearer travels as `?token=`. Lenient
+    by design — missing/invalid/expired token or `accessible_pools=[]` → None
+    (unrestricted). NEVER raises: this is read-only pool-scoping that must degrade open
+    (a bad token can't 401 a stream), mirroring the operational snapshot's posture.
+    Decoupled from `analytics_open_access` (same as `optional_pool_principal`).
+    """
+    settings = get_settings()
+    if not settings.auth_jwt_secret or not token:
+        return None
+    try:
+        payload = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        return None
+    raw = payload.get("accessible_pools", [])
+    return None if not raw else list(raw)

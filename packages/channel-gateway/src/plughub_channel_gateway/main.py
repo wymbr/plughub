@@ -1077,6 +1077,9 @@ async def survey_web_create(request: Request) -> dict:
             # Entrega opcional do link (camada plugável — mock/dev por ora).
             body.get("deliver_kind", ""), body.get("deliver_address", ""),
             grain=body.get("grain", "session"),   # Journey J4
+            # Pool-scoping (Segurança Fase B): pool da sessão pesquisada, congelado no
+            # token → carimbado na resposta + session.signals no submit. Vazio = admin-only.
+            pool_id=body.get("pool_id", "") or "",
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"dialog-api error: {exc}")

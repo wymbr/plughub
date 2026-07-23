@@ -19,6 +19,7 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
 import { AgentsTab } from '@/modules/contacts/tabs/AgentsTab'
+import { PoolDomainSelect } from '@/components/ui/PoolDomainSelect'
 import type { ContactFilters } from '@/modules/contacts/types'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
 
@@ -333,7 +334,7 @@ type PageTab = 'humans' | 'ai'
 
 export default function AnaliseAgentesPage() {
   const { t }      = useTranslation('agentReports')
-  const { tenantId } = useAuth()
+  const { tenantId, currentUser } = useAuth()
 
   const [pageTab,  setPageTab]  = useState<PageTab>('humans')
   const [fromDt,   setFromDt]   = useState(DEFAULT_FILTERS.fromDt)
@@ -374,8 +375,13 @@ export default function AnaliseAgentesPage() {
           <input type="date" value={fromDt} onChange={e => setFromDt(e.target.value)} className={inp} />
           <span className="text-xs text-muted">{t('filters.to')}</span>
           <input type="date" value={toDt}   onChange={e => setToDt(e.target.value)}   className={inp} />
-          <input type="text" value={poolId}  onChange={e => setPoolId(e.target.value)}
-            placeholder={t('filters.poolPlaceholder')}      className={`${inp} w-36`} />
+          <PoolDomainSelect
+            tenantId={tenantId}
+            accessiblePools={currentUser?.accessiblePools ?? []}
+            value={poolId}
+            onChange={setPoolId}
+            allLabel={t('filters.allPools')}
+            className={`${inp} w-44`} />
           <input type="text" value={agentId} onChange={e => setAgentId(e.target.value)}
             placeholder={t('filters.agentTypePlaceholder')} className={`${inp} w-48`} />
         </div>

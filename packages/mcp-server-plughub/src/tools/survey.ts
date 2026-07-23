@@ -210,6 +210,13 @@ export function registerSurveyTools(
     origin_session_id: z.string().min(1),
     customer_key:      optStr(),
     grain:             z.enum(["segment", "session", "workflow", "journey"]).default("session"),
+    // Pool-scoping (arco de Segurança, Fase B): o pool da SESSÃO PESQUISADA
+    // (origin), não o do dispatcher/runner. O chamador o resolve do seu contexto
+    // (hook na sessão pesquisada → @ctx.session.pool.id; worker outbound → o pool
+    // carimbado na metadata do mailing). Congela no token → o submit o carimba na
+    // resposta (survey_instance.pool_id) e no session.signals. Vazio = admin-only
+    // (decisão C). Tolera null como os demais opt (@ctx ausente → null).
+    pool_id:           optStr(),
     deliver_kind:      optStr(),
     deliver_address:   optStr(),
   })
@@ -235,6 +242,7 @@ export function registerSurveyTools(
             origin_session_id: p.origin_session_id,
             customer_key:      p.customer_key,
             grain:             p.grain,
+            pool_id:           p.pool_id,
             deliver_kind:      p.deliver_kind,
             deliver_address:   p.deliver_address,
           }),

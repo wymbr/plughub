@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BarChart2 } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ export default function AgentFlowReportPage() {
     setLoading(true); setError(null)
     try {
       const token = await getAccessToken()
-      const res = await fetch(`/reports/agents/performance?tenant_id=${tenantId}`, {
+      const res = await apiFetch(`/reports/agents/performance?tenant_id=${tenantId}`, {
         headers: authHeaders(token),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)

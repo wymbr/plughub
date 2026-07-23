@@ -1143,6 +1143,24 @@ class WebhookAdapter(ChannelAdapter):
                     "context_json do workflow_trigger (a escolha é política do skill)."
                 )
 
+        # ── Segurança Fase B (J4c) — pool da SESSÃO PESQUISADA ────────────────
+        # O pool da resposta = o pool da sessão contra a qual o sinal é gravado
+        # (signal_target_id), NÃO o pool de infra do survey (o runner roda no pool
+        # de survey, não no atendimento pesquisado). Lê `session.pool.id` do ctx do
+        # alvo (escrito pela Routing Engine no `_write_pool_context`). Congela no
+        # pending → `handle_collect_engage` semeia `session.survey_pool_id` → o runner
+        # o carimba no `survey_record`. Vazio (ex.: ctx do alvo expirado) = admin-only
+        # (decisão C) — logado, nunca degrada em silêncio.
+        signal_pool_id = await self._read_ctx_tag(
+            tenant_id, signal_target_id, "session.pool.id"
+        ) or ""
+        if not signal_pool_id:
+            logger.warning(
+                "collect: pool da sessão pesquisada ausente no ctx (target=%s grain=%s) "
+                "— a resposta nascerá SEM pool (admin-only). ctx do alvo expirado?",
+                signal_target_id, signal_grain,
+            )
+
         # ── LAZY: store the collect pending — NO session until the customer clicks ──
         ttl_s      = int(timeout_hours * 3600) + 3600
         expires_at = (now_dt + timedelta(hours=timeout_hours)).isoformat()
@@ -1157,6 +1175,7 @@ class WebhookAdapter(ChannelAdapter):
                 "form_id":           dialog_form_id, # DialogForm the runner will render
                 "signal_grain":      signal_grain,      # S2 — grão do sinal (config do deploy)
                 "signal_target_id":  signal_target_id,  # S2 — chave já resolvida p/ o runner
+                "signal_pool_id":    signal_pool_id,    # Segurança Fase B — pool da sessão pesquisada
                 "signal_segment_id": signal_segment_id, # S3 — atribuição (grain=segment)
                 "signal_agent_key":  signal_agent_key,  # S3 — atribuição (grain=segment)
                 "customer_id":       customer_id,
@@ -1290,6 +1309,14 @@ class WebhookAdapter(ChannelAdapter):
             if pending.get("signal_agent_key"):
                 ctx_writes["session.survey_agent_key"] = self._ctx_entry(
                     pending["signal_agent_key"], "collect_engage", now_iso,
+                )
+            # Segurança Fase B (J4c) — pool da sessão pesquisada (resolvido no
+            # handle_collect). O runner o lê como @ctx.session.survey_pool_id e o passa
+            # ao survey_record. Ausente (pending legado ou ctx do alvo expirado) → a tag
+            # não existe → ref resolve null → pool vazio (admin-only, decisão C).
+            if pending.get("signal_pool_id"):
+                ctx_writes["session.survey_pool_id"] = self._ctx_entry(
+                    pending["signal_pool_id"], "collect_engage", now_iso,
                 )
             await self._redis.hset(ctx_key, mapping=ctx_writes)
             await self._redis.expire(ctx_key, session_ttl_s)

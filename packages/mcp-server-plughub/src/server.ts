@@ -2264,9 +2264,23 @@ export async function startServer(config: ServerConfig): Promise<void> {
         ? [filterPool]
         : await redis.smembers(`${tenantId}:pools`)
 
+      // Segurança Fase D — escopa ao DOMÍNIO de pools do chamador (Bearer). Filtrar a
+      // lista de pools aqui já escopa as instâncias (só as de pools acessíveis). Sem
+      // token / inválido / accessible_pools=[] (convenção admin) → irrestrito. Erros nunca
+      // 401 (read-only, consistente com os demais snapshots operacionais).
+      let accessible: string[] | null = null
+      try {
+        const payload = verifyJwtPayload(req.headers["authorization"] as string | undefined)
+        const raw = payload["accessible_pools"]
+        if (Array.isArray(raw) && raw.length > 0) accessible = raw.map(String)
+      } catch { /* sem token / inválido → irrestrito */ }
+      const scopedPoolIds = accessible
+        ? poolIds.filter(pid => accessible!.includes(pid))
+        : poolIds
+
       const instanceIds = new Set<string>()
       await Promise.all(
-        poolIds.map(async pid => {
+        scopedPoolIds.map(async pid => {
           const members = await redis.smembers(`${tenantId}:pool:${pid}:instances`)
           members.forEach(id => instanceIds.add(id))
         }),

@@ -1245,7 +1245,27 @@ class TestPoolPrincipalAuth:
         p = PoolPrincipal(accessible_pools=["pool_a"], tenant_id="t", sub="u")
         assert p.is_unrestricted is False
 
-    async def test_open_access_returns_unrestricted(self):
+    async def test_open_access_does_not_bypass_pool_scoping(self):
+        # Segurança Fase A/E: pool-scoping é DESACOPLADO do open_access. Mesmo com
+        # open_access=True (bypass amplo de audit/admin/transcript no demo), um token
+        # RESTRITO válido enforça accessible_pools em /reports/*.
+        import jwt as _jwt
+        from unittest.mock import patch
+        from fastapi.security import HTTPAuthorizationCredentials
+        from ..pool_auth import optional_pool_principal
+        tok = _jwt.encode(
+            {"sub": "u", "tenant_id": "t", "accessible_pools": ["pool_a"]},
+            "secret", algorithm="HS256",
+        )
+        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=tok)
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = True
+            m.return_value.auth_jwt_secret = "secret"
+            principal = await optional_pool_principal(credentials=creds)
+        assert principal.accessible_pools == ["pool_a"]
+
+    async def test_open_access_no_token_still_unrestricted(self):
+        # Sem token (dashboards/embeds) segue irrestrito — nada quebra.
         from unittest.mock import patch
         from ..pool_auth import optional_pool_principal
         with patch("plughub_analytics_api.pool_auth.get_settings") as m:

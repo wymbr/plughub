@@ -120,6 +120,9 @@ steps:
       grain:             "segment"
       segment_id:        "@ctx.session.surveyed_segment_id"
       agent_key:         "@ctx.session.surveyed_agent_key"
+      # Segurança Fase B — pool da sessão pesquisada. O hook roda NA conferência dela,
+      # então o session.pool.id (escrito pela Routing Engine) é o pool da origem.
+      pool_id:           "@ctx.session.pool.id"
       signals:
         - metric: "nps"
           value: "$.pipeline_state.nps_resposta"
@@ -136,6 +139,8 @@ steps:
       origin_session_id: "$.session_id"
       grain:             "session"
       survey_session_id: "$.session_id"
+      # Segurança Fase B — pool da sessão pesquisada (a própria; hook roda nela).
+      pool_id:           "@ctx.session.pool.id"
       signals:
         - metric: "nps"
           value: "$.pipeline_state.nps_resposta"

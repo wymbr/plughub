@@ -2,6 +2,192 @@
 
 ---
 
+## Segurança — Pool-scoping: Fase D ✅ COMPLETA (operacional Monitor/Pools + auditoria /reports) (2026-07-23)
+
+Estende o pool-scoping às superfícies **operacionais** (Monitor/Pools), que usam endpoints próprios (não
+`/reports`) e não passavam por `optional_pool_principal`.
+
+- **`/v1/operational/pools` (agent-registry) ✅:** novo `_accessiblePools(req)` — verifica o Bearer do
+  auth-api (reusa `verifyHs256` + `PLUGHUB_JWT_SECRET`, já configurado == auth-api) e devolve `accessible_pools`
+  (`[]`/sem token/sem segredo/token inválido → `null` = irrestrito, degradação graciosa read-only, nunca 401).
+  A lista de pools é filtrada ao domínio LOGO após o load do Postgres → items + snapshots + admissão por-pool +
+  active/mute + os agregados do `summary` derivados de items já saem escopados; `summary.shared.by_pool`
+  (nomeia pools) filtrado; `admitted_total` recalculado dos items escopados (equivale ao antigo quando
+  irrestrito). Frontend: `MonitorTab` (tiles) + `PoolsPage` (`fetch`→`apiFetch`). Cobre **Analytics › Pools**.
+- **Monitor AO VIVO — SSE `/dashboard/*` ✅ (decisão do usuário: token por query param):** a tabela ao vivo
+  (`usePoolViews`) vem de um **SSE** (`EventSource` → `/dashboard/operational`) + `/dashboard/{sentiment,pool-sla}`.
+  Como EventSource **não manda header Authorization**, o Bearer viaja por **query param** (`?token=`). Novo
+  helper `accessible_pools_from_token(token)` (pool_auth, decode lenient — inválido/ausente/`[]` → None
+  irrestrito, nunca 401, read-only) + `_filter_by_pool()` no `dashboard.py` filtra `operational` (dentro do
+  loop SSE), `sentiment` e `pool-sla` ao domínio. Frontend (`service/api/hooks.ts`): helper `_tok()`
+  (`getAccessToken()`) anexa `&token=` nas 3 URLs; sem token → sufixo vazio → irrestrito (embeds/dashboards sem
+  login seguem). `require_principal` continua permitindo o SSE sem header graças ao `open_access=true` (o
+  scoping é independente, do query token). **Nota de posture:** JWT em URL aparece em access logs — aceitável
+  same-origin/demo; em produção migrar p/ cookie ou ticket SSE de curta duração (registrado). `/dashboard/metrics`
+  não filtrado (agregado de tenant, sem `pool_id` — não vaza pool).
+- **Monitor › Agents (instâncias) ✅ (2026-07-23):** a lista de instâncias de runtime vem de `GET /api/instances`
+  (mcp-server-plughub → Redis), que listava TODOS os pools. Escopado: reusa `verifyJwtPayload` (Bearer,
+  `PLUGHUB_JWT_SECRET` == auth-api) e filtra a lista de `poolIds` ao domínio ANTES de coletar instâncias (sem
+  token/inválido/`[]` → irrestrito, nunca 401). Frontend `AgentsPage`: `fetch`→`apiFetch` (anexa o Bearer) +
+  dropdown de pool filtrado ao domínio (`listPools ∩ accessiblePools`). Validado: supervisor restrito passou a
+  ver só as instâncias dos 3 pools. (Deploy: `build mcp-server-plughub platform-ui`.)
+- **Varredura dos dropdowns de filtro cosméticos (Fase E) ✅:** todo seletor de pool em superfície de
+  Analytics/Monitor que populava de `listPools` (todos os pools) passou a interseccionar com `accessiblePools`:
+  `FlowMonitorPage` (Monitor topo), `AgentsPage` (Monitor + Report subtabs), `AnaliseProcessosPage`
+  (InstancesList). Já eram domain-aware: `AnaliseSurveysPage`, `agent-flow/ProcessosPage`, `SessionsPage`
+  (`PoolDomainSelect`). **Mantidos com TODOS os pools de propósito** (config, não filtro): `config-channels/*`
+  e `config-recursos/PoolsPage` (admin gerencia todos). Só frontend.
+- **Auditoria `/reports/*` sem `optional_pool_principal` ✅ (conclusão):**
+  - **`/contact-insights` — ESCOPADO** (era o vazamento claro: eventos de negócio por-sessão que um supervisor
+    restrito acessa via Contatos). `contact_insights` só tem `session_id` → filtro por subquery a `segments`
+    (que carrega `pool_id`): sessões que **tocaram** um pool do domínio. `optional_pool_principal` no endpoint +
+    `accessible_pools` na query + short-circuit em `[]`.
+  - **Não escopados por decisão fundamentada:** `/usage` (billing/metering tenant-level, sem atribuição de pool;
+    gateado pelo ABAC `billing` na nav) · `/campaigns` (eventos de collect por campanha/cliente, não
+    pool-atribuídos por evento) · `/workflows` (metadados de processo webhook; baixo risco — sem conteúdo de
+    cliente; JOIN session→pool possível como follow-up) · `/evaluations` + `/summary` (gateados pelo ABAC
+    `evaluation`; a evaluation-api já pool-escopa os resultados operacionais) · `/evaluations/quality` (unscoped
+    por construção, T11) · `/customer-voice/instruments` (catálogo de instrumentos, sem dado de pool).
+- **Deploy:** `build agent-registry analytics-api && up -d --force-recreate agent-registry analytics-api` +
+  platform-ui (dev server já reflete).
+
+---
+
+## Segurança — Pool-scoping: causa-raiz no analytics-api (`open_access` burlava tudo) ✅ (2026-07-23)
+
+**Achado ao testar com supervisor restrito a 3 pools:** mesmo relogado, via TODOS os pools em
+`/analise/agents` e `/analise/sessions`. Investigação: o backend está cabeado (`/reports/*` usam
+`optional_pool_principal` + `accessible_pools`; o auth-api põe o claim no JWT; a UI manda o Bearer via
+`apiFetch` da Fase A) — mas o **`optional_pool_principal` (pool_auth.py) tinha `analytics_open_access` como
+condição de bypass**: `if analytics_open_access or not auth_jwt_secret → irrestrito`. No demo o analytics-api
+roda `PLUGHUB_ANALYTICS_OPEN_ACCESS=true` **e não recebia** `PLUGHUB_AUTH_JWT_SECRET` → o token era **ignorado**
+e todo `/reports/*` via todos os pools. Por isso o survey (evaluation-api, decode próprio sem esse bypass)
+escopava, mas o analytics-api não. **A Fase A era necessária mas insuficiente** — sem isto, o arco inteiro era
+no-op no analytics-api.
+
+- **Fix cirúrgico (desacopla scoping do bypass amplo):** `analytics_open_access` é bypass de **demo** que
+  também libera `audit.py` (AuditPage + o `tool_trace` do avaliador via `/v1/audit/mcp-calls`), `auth.py`
+  (admin) e `transcript.py` — desligá-lo globalmente quebraria o pipeline do avaliador e a Auditoria. Então:
+  (1) `pool_auth.py` — removido `analytics_open_access` da condição de bypass (fica só `not auth_jwt_secret`):
+  o pool-scoping enforça sempre que há **segredo + token**, independente do open_access; sem token segue
+  irrestrito (dashboards/embeds não quebram). (2) compose: `open_access` **mantido true** (preserva
+  audit/admin/transcript) + **adicionado** `PLUGHUB_AUTH_JWT_SECRET: changeme_auth_jwt_secret_demo_32c`
+  (== auth-api) p/ o `optional_pool_principal` verificar o Bearer.
+- **Testes** (`test_reports.py`): `test_open_access_does_not_bypass_pool_scoping` (open_access=True + token
+  restrito → enforça `["pool_a"]`) + `test_open_access_no_token_still_unrestricted` (sem token → irrestrito).
+- **Resolve os itens 2 e 3** do teste (Analytics/Agents e Analytics/Sessions passam a respeitar o domínio). O
+  **item 1 (Monitor `/flow/monitor`)** usa endpoints **operacionais** (snapshot de pools ao vivo), NÃO
+  `/reports` → segue não-escopado; é **Fase D**.
+- **Deploy:** `build analytics-api && up -d --force-recreate analytics-api` (código do pool_auth + env novo).
+- **Validado (2026-07-23):** supervisor restrito a 3 pools (`demo_ia`/`sac_ia`/`retencao_humano`) passou a ver
+  só o domínio — `/analise/sessions` traz só as sessões desses pools; `/analise/agents` idem. Nota: o combo de
+  Sessions (`PoolDomainSelect`) lista o **domínio inteiro** (3, mesmo pools sem dado); o de Agents é
+  **data-driven** (só pools com atividade no período → `demo_ia` sem dados no range = 2). Diferença por design
+  (domínio vs domínio-com-dado); ambos escopados, nenhum vaza. Pytest `test_reports.py` 25 verdes.
+
+---
+
+## Segurança — Pool-scoping: Fase E (combo do domínio em agentes/contatos) ✅ (2026-07-23)
+
+Fecha a Fase E do arco: as caixas de **texto livre** de pool nas telas de Analytics viram **combo do
+domínio** (`listPools ∩ accessiblePools`) — o filtro nunca oferece um pool fora do domínio do usuário. O
+survey (Fase E parte 1) usa `PoolMultiSelect` (multi, endpoint aceita `pool_ids[]`); agentes/contatos usam o
+novo **`PoolDomainSelect`** (single-select), decisão consciente: seu filtro `poolId` é **um** string que trafega
+pelo `ContactFilters` compartilhado (Monitor/Analise/Lista/Agents tabs + hooks) e os endpoints analytics só
+aceitam `pool_id` singular — multi ponta-a-ponta tocaria o tipo compartilhado + 5+ endpoints por ganho marginal,
+já que **a fronteira de segurança é o backend** (`optional_pool_principal` reintersecta `pool_id IN (domínio)`,
+ativado pela Fase A), não o combo.
+
+- **Componente novo** `components/ui/PoolDomainSelect.tsx`: `<select>` que busca `registryApi.listPools ∩
+  accessiblePools` (vazio = admin → lista cheia); props `tenantId`/`accessiblePools`/`value`/`onChange`/
+  `allLabel`/`className`. Encapsula o fetch do domínio (dep estável via `accessiblePools.join(',')`).
+- **Correção (rotas vivas):** as telas Analytics reais são **`SessionsPage`** (`/analise/sessions`) e
+  **`AgentsBenchPage`** (`/analise/agents`) — `AnaliseAgentesPage`/`AnaliseContatosPage` viraram legacy/redirect
+  (`/analise/agents-legacy`; `/analise/contatos`→`/analise/sessions`). **`AgentsBenchPage` não precisou mudar:**
+  o combo de pool é **data-driven** (`poolOptions` derivam de `/reports/agents/performance`, já escopado por
+  `accessible_pools`) → restringe automaticamente quando o usuário é restrito. **`SessionsPage`:** o `<input>`
+  de texto do filtro `poolId` (em "Mais filtros") virou `PoolDomainSelect` (FilterBar ganhou `useAuth`); i18n
+  `contacts.filter.allPools` (en+pt). `AnaliseAgentesPage`/`AnaliseContatosPage` editadas antes = inertes
+  (rotas mortas) mas inofensivas; a i18n `agentReports.filters.allPools` fica.
+- **Diagnóstico (importante):** os usuários do seed (`admin`/`supervisor`/`operator`@plughub.local) **não têm
+  `accessible_pools`** → `[]` = **todos os pools** (convenção admin). Logo "ver tudo" é **correto** — não há
+  restrição configurada. Para testar o scoping: setar `accessible_pools` de um usuário em Access **e relogar**
+  (o JWT é cunhado no login; token-store é in-memory). O backend já enforça (validado na Fase A com admin
+  restrito a 2 pools).
+- **Backend: zero mudança** — o domínio já é enforçado; o combo é conveniência/UX. **Deploy:** só platform-ui.
+- **Estado do arco:** A ✅, B ✅, C ✅, E ✅. **D pendente** — inclui o **Monitor** (`/flow/monitor`), que usa
+  endpoints **operacionais** (snapshot de pools ao vivo), NÃO `/reports`, e não são gateados por
+  `accessible_pools` → não respeita domínio em nenhuma aba. Scoping do Monitor = escopo da Fase D.
+
+---
+
+## Segurança — Pool-scoping: Fase A completa (varredura de `/reports`) ✅ (2026-07-23)
+
+Fecha a Fase A do arco (o token do usuário fluindo em TODA a superfície de relatórios, não só `analise/`).
+Sem o `Authorization: Bearer`, o backend degrada para `accessible_pools=None` = irrestrito — logo migrar os
+`fetch` crus de relatório para o helper `apiFetch` (que anexa o Bearer do token em memória) é o que ativa o
+pool-scoping ponta a ponta. **18 call sites `/reports` migrados em 15 arquivos** (`fetch(`→`apiFetch(`, `import
+{ apiFetch } from '@/api/apiFetch'`): `contacts/{AgentsPage,ContactsPage,EventsPage}`,
+`contacts/tabs/{MonitorTab,AnaliseTab(×2),AgentsTab,AgentTimeline,ListaTab}`, `agent-reports/AgentReportsPage`,
+`agent-flow/{AgentFlowReportPage,ProcessosPage}`, `service/SessionTranscript`, `billing/BillingPage(×2)`,
+`campaigns/CampaignsPage`, `analise/CustomerVoicePage` (o `/reports/customer-voice/instruments` que faltava).
+**Não migrados de propósito:** `api/evaluation-hooks.ts:515` (POST flush-synthetic — já anexa `bearerHeaders`);
+`fetch` a endpoints não-relatório (`/api/instances`, `/v1/operational/pools`, `/v1/pricing/*`,
+`/v1/pools/capacity/conformance`) — não são gateados por `optional_pool_principal`. **Deploy:** só platform-ui
+(`build platform-ui && up -d`). Guard futuro (opcional): lint/grep que barra `fetch('/reports` cru fora do `apiFetch`.
+
+---
+
+## Segurança — Pool-scoping: Fase B (pool_id na escrita do survey) ✅ (2026-07-23)
+
+Completa o arco de segurança do survey: `survey_instance.pool_id` (e o `pool_id` do `session.signals`)
+deixam de nascer **vazios** — passam a carregar o **pool da SESSÃO PESQUISADA** (origem), dando domínio à
+resposta para o supervisor do pool certo a ver (fecha o "restrito vê zero survey web" apontado na Fase C).
+**Decisão de produto:** o pool da resposta = o pool da sessão de origem (`origin_session_id`), **não** o do
+dispatcher/runner de survey. O store (evaluation-api `persist_survey_response`/`survey_instance.pool_id`) já
+aceitava `pool_id`; o buraco era 100% na **escrita**. Detalhe/fases em `TODO.md` § "Arco de Segurança".
+
+- **Descoberta que fixou a abordagem:** no demo 5b o `origin_session_id` é **sintético** (não há sessão real
+  para um lookup do pool). Logo a opção (b) "resolver do origin no persist" não funciona ali — só a opção (a)
+  **carimbar na escrita** (pool vindo do contexto de quem dispara) satisfaz o demo E é a preferida no kickoff.
+- **Veículo web — plumbing genérico de pool:** `survey_link_create` (mcp-server `tools/survey.ts`) ganha input
+  opcional `pool_id` (tolera `null` como os demais opt) e o repassa ao `POST /v1/survey/web/create`; o handler
+  (`channel-gateway/main.py`) lê `body.pool_id`; `SurveyWebService.create` **congela** `pool_id` no registro do
+  token; `submit` carimba `rec["pool_id"]` **no payload do persist** (antes ausente) **e no evento
+  session.signals** (antes hardcoded `""`). Qualquer chamador do veículo web pode agora prover o pool.
+- **Outbound (5b) — origem carimbada na metadata:** o `origin_pool` viaja na metadata do `mailing`
+  (`skill_outbound_survey_dispatch_v1` repassa `session.survey_origin_pool` do `metadata.origin_pool`) →
+  `skill_outbound_survey_worker_v1` passa `pool_id: @ctx.session.survey_origin_pool` no `survey_link_create`.
+  Ausente → vazio → admin-only (decisão C), sem crash (degrada barulhento, não silencioso).
+- **NPS inline (`agente_nps_v1`):** o hook roda NA conferência da sessão pesquisada → o `session.pool.id`
+  (escrito pela Routing Engine no `_write_pool_context`) É o pool da origem. Ambos os `survey_record`
+  (grão segment e session) passam `pool_id: @ctx.session.pool.id`. (`resolveCtxRef` resolve a tag flat
+  `session.pool.id` — confirmado no `interpolate.ts`, sem null silencioso.)
+- **J4c collect-based (`skill_survey_runner_v1`) + multi ✅ (mesmo dia):** o `handle_collect` (channel-gateway
+  `webhook.py`) resolve o pool da **sessão pesquisada** (`signal_target_id` — origem p/ grão session/segment, raiz
+  p/ journey) lendo `session.pool.id` do ctx do alvo, congela em `pending.signal_pool_id`; `handle_collect_engage`
+  semeia `session.survey_pool_id` no ctx da sessão de survey; `skill_survey_runner_v1` passa
+  `pool_id: @ctx.session.survey_pool_id`. **NÃO** se usa o `session.pool.id` do runner (seria o pool de infra do
+  survey, não o do atendimento). `skill_survey_multi_v1` pesquisa a própria sessão (`origin=$.session_id`) → usa
+  `@ctx.session.pool.id` (origem = self, como o NPS inline). Alvo sem ctx (expirado) → pool vazio = admin-only
+  (decisão C), logado — degrada barulhento. Pytest `tests/test_collect_pool_scoping.py` (fake redis: grão
+  session→origem, journey→raiz, e o caso degradado).
+- **Ainda vazio (decisão C, admin-only) — resta 1 caminho:** `skill_survey_v1` (survey_processo_ia, F10.2b
+  delegate-based) grava via `survey_record` a partir de `@ctx.session.origin_session_id` numa sessão de infra do
+  survey — não é collect (não passa pelo `handle_collect`), então precisa do pool semeado no `handle_trigger`
+  (a partir do `origin_session_id` do `workflow_trigger`). Seam distinto, anotado no TODO.
+- **Smoke ✅ verde (2026-07-23):** `infra/test/smoke_outbound_fase5b.sh` estendido — semeia `origin_pool=retencao_humano`
+  na metadata e, após os submits, prova via `GET /v1/evaluation/survey/responses?pool_ids=retencao_humano` que as N
+  respostas do run nascem escopadas ao pool (não vazias) + **controle negativo** (filtro por `aprovacao_deploy` → 0).
+  Debug de deploy que valeu registro: os pools `outbound_survey_*` são slot-migrados → o `workflow_trigger` logado
+  vinha SEM `session.survey_origin_pool` (rodava o snapshot antigo do slot); `restart` republica `skill.flow` mas o
+  bridge executa o slot `current` → só `set-next`→`promote` (re-snapshot) destravou. Sintoma clássico do invariante.
+- **Deploy:** `build mcp-server-plughub channel-gateway && up -d --force-recreate`; skills YAML (mount ro) =
+  `restart skill-flow-engine` **e** re-snapshot do slot dos pools migrados (`set-next`→`promote`) — o bridge
+  executa o snapshot do slot `current`, não o `skill.flow` republicado.
+
+---
+
 ## Segurança — Pool-scoping em relatórios: Fases A (analise) + C + E ✅ (2026-07-23)
 
 Arco de segurança levantado pelo usuário: relatórios/monitores devem respeitar o **domínio de pools**

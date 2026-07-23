@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts'
 import type { ContactFilters } from '../types'
 import { AgentTimeline } from './AgentTimeline'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ function useAvailability(params: {
     if (poolId)  qs.set('pool_id',       poolId)
     if (agentId) qs.set('agent_type_id', agentId)
 
-    fetch(`/reports/agent-availability?${qs}`)
+    apiFetch(`/reports/agent-availability?${qs}`)
       .then(r => r.ok ? (r.json() as Promise<AvailabilityResponse>) : Promise.reject(r.status))
       .then(resp => {
         if (cancelled) return

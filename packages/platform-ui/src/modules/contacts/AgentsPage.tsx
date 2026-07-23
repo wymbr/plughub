@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { Bot, BarChart2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 import { listPools } from '@/api/registry'
 import type { Pool } from '@/types'
@@ -81,7 +82,7 @@ async function fetchRuntimeInstances(
   const params = new URLSearchParams({ tenant_id: tenantId })
   if (poolId) params.append('pool_id', poolId)
   if (status) params.append('status', status)
-  const res = await fetch(`/api/instances?${params}`)
+  const res = await apiFetch(`/api/instances?${params}`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const body = await res.json()
   return Array.isArray(body) ? body : (body.instances ?? [])
@@ -89,6 +90,7 @@ async function fetchRuntimeInstances(
 
 function MonitorSubTab({ tenantId }: { tenantId: string }) {
   const { t, i18n } = useTranslation('contacts')
+  const { currentUser } = useAuth()
   const [instances,     setInstances]     = useState<RuntimeInstance[]>([])
   const [pools,         setPools]         = useState<Pool[]>([])
   const [loading,       setLoading]       = useState(false)
@@ -112,9 +114,14 @@ function MonitorSubTab({ tenantId }: { tenantId: string }) {
   }
 
   const loadPools = useCallback(async () => {
-    try { const res = await listPools(tenantId); setPools(res.items) }
+    // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools; vazio = todos).
+    try {
+      const res = await listPools(tenantId)
+      const dom = currentUser?.accessiblePools ?? []
+      setPools(dom.length ? res.items.filter(p => dom.includes(p.pool_id)) : res.items)
+    }
     catch { /* non-fatal */ }
-  }, [tenantId])
+  }, [tenantId, currentUser])
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -334,6 +341,7 @@ function RateBar({ value, color }: { value: number; color: string }) {
 
 function ReportSubTab({ tenantId }: { tenantId: string }) {
   const { t } = useTranslation('contacts')
+  const { currentUser } = useAuth()
   const [fromDt,        setFromDt]        = useState(iso7DaysAgo)
   const [toDt,          setToDt]          = useState(isoToday)
   const [filterPool,    setFilterPool]    = useState('')
@@ -346,9 +354,14 @@ function ReportSubTab({ tenantId }: { tenantId: string }) {
   const [sortAsc,       setSortAsc]       = useState(false)
 
   const loadPools = useCallback(async () => {
-    try { const res = await listPools(tenantId); setPools(res.items) }
+    // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools; vazio = todos).
+    try {
+      const res = await listPools(tenantId)
+      const dom = currentUser?.accessiblePools ?? []
+      setPools(dom.length ? res.items.filter(p => dom.includes(p.pool_id)) : res.items)
+    }
     catch { /* non-fatal */ }
-  }, [tenantId])
+  }, [tenantId, currentUser])
 
   const load = useCallback(async () => {
     setLoading(true); setError(null)
@@ -356,7 +369,7 @@ function ReportSubTab({ tenantId }: { tenantId: string }) {
       const qs = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt })
       if (filterPool)  qs.append('pool_id', filterPool)
       if (filterAgent) qs.append('agent_type_id', filterAgent)
-      const res  = await fetch(`/reports/agent-performance/daily?${qs}`)
+      const res  = await apiFetch(`/reports/agent-performance/daily?${qs}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const body = await res.json()
       setData(Array.isArray(body) ? body : (body.data ?? []))

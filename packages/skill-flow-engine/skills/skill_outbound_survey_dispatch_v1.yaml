@@ -52,7 +52,8 @@ steps:
 
   # ── Dispara o survey worker (fire-and-forget), repassando o contrato de survey ──
   # A metadata da entrada (produzida pelo `mailing_add` do processo) carrega
-  # origin_session_id (a sessão/raiz pesquisada), grain, form_id e customer_key.
+  # origin_session_id (a sessão/raiz pesquisada), grain, form_id, customer_key e
+  # origin_pool (Segurança Fase B — o pool da sessão pesquisada, p/ carimbar no sinal).
   - id: disparar_worker
     type: invoke
     tool: workflow_trigger
@@ -69,7 +70,8 @@ steps:
          "session.survey_origin": "{{$.pipeline_state.alvo.metadata.origin_session_id}}",
          "session.survey_grain": "{{$.pipeline_state.alvo.metadata.grain}}",
          "session.survey_form_id": "{{$.pipeline_state.alvo.metadata.form_id}}",
-         "session.survey_customer_key": "{{$.pipeline_state.alvo.metadata.customer_key}}"}
+         "session.survey_customer_key": "{{$.pipeline_state.alvo.metadata.customer_key}}",
+         "session.survey_origin_pool": "{{$.pipeline_state.alvo.metadata.origin_pool}}"}
     output_as: r
     on_success: percorrer
     on_failure: percorrer

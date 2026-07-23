@@ -114,6 +114,7 @@
     "allPools":              "All pools",
     "allTypes":              "All types",
     "loading":               "Loading…",
+    "allPools":              "All pools (domain)",
     "poolPlaceholder":       "e.g.: retention_human",
     "agentTypePlaceholder":  "e.g.: agent_sac_ia_v1"
   },

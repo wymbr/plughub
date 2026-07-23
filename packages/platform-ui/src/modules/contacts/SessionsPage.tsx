@@ -10,6 +10,7 @@ import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
+import { PoolDomainSelect } from '@/components/ui/PoolDomainSelect'
 import { SessionTranscript }   from '@/modules/service/components/SessionTranscript'
 import { SegmentList }         from '@/modules/service/components/SegmentList'
 import { WorkflowTraceList }   from '@/modules/service/components/WorkflowTraceList'
@@ -42,6 +43,7 @@ function FilterBar({ filters, setFilters }: {
   setFilters: React.Dispatch<React.SetStateAction<SessionFilters>>
 }) {
   const { t } = useTranslation('contacts')
+  const { tenantId, currentUser } = useAuth()
   const [showExtra, setShowExtra] = useState(false)
 
   function set<K extends keyof SessionFilters>(key: K, value: SessionFilters[K]) {
@@ -128,10 +130,22 @@ function FilterBar({ filters, setFilters }: {
           ] as { key: keyof SessionFilters; label: string; placeholder: string; width: string }[]).map(f => (
             <div key={f.key} className="flex items-center gap-1">
               <span className="text-xs text-muted-light whitespace-nowrap">{f.label}:</span>
-              <input type="text" value={filters[f.key] as string}
-                onChange={e => set(f.key, e.target.value)}
-                placeholder={f.placeholder}
-                className={`${inp} ${f.width}`} />
+              {f.key === 'poolId' ? (
+                // Segurança Fase E — pool = combo do DOMÍNIO (listPools ∩ accessiblePools),
+                // não texto livre. Vazio no combo = todo o domínio; o backend reintersecta.
+                <PoolDomainSelect
+                  tenantId={tenantId ?? ''}
+                  accessiblePools={currentUser?.accessiblePools ?? []}
+                  value={filters.poolId}
+                  onChange={v => set('poolId', v)}
+                  allLabel={t('filter.allPools', { defaultValue: 'Todos os pools do domínio' })}
+                  className={`${inp} ${f.width}`} />
+              ) : (
+                <input type="text" value={filters[f.key] as string}
+                  onChange={e => set(f.key, e.target.value)}
+                  placeholder={f.placeholder}
+                  className={`${inp} ${f.width}`} />
+              )}
             </div>
           ))}
         </div>

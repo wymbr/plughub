@@ -96,6 +96,10 @@ steps:
       # tags não existem e a ref resolve para null — `.nullish()` no schema tolera).
       segment_id:        "@ctx.session.survey_segment_id"
       agent_key:         "@ctx.session.survey_agent_key"
+      # Segurança Fase B (J4c) — pool da sessão PESQUISADA, resolvido pelo N2
+      # (handle_collect) e semeado no engage. Esta sessão é de INFRA do survey, então
+      # NÃO se usa session.pool.id daqui (seria o pool de survey, não o do atendimento).
+      pool_id:           "@ctx.session.survey_pool_id"
       survey_session_id: "$.session_id"
       form_id:           "@ctx.session.dialog_form_id"
       answers:

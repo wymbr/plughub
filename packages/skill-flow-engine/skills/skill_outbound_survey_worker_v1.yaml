@@ -68,6 +68,9 @@ steps:
       origin_session_id: "@ctx.session.survey_origin"
       grain:             "@ctx.session.survey_grain"
       customer_key:      "@ctx.session.survey_customer_key"
+      # Segurança Fase B — pool da sessão pesquisada (carimbado na metadata do mailing
+      # pelo processo, repassado pelo dispatcher). Vazio → admin-only (decisão C).
+      pool_id:           "@ctx.session.survey_origin_pool"
       tenant_id:         "$.tenant_id"
     output_as: linkres
     on_success: registrar_contacted

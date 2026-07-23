@@ -95,6 +95,7 @@ const PROC_PAGE_SIZE = 50
 
 function InstancesList({ tenantId, onSelectInstance }: InstancesListProps) {
   const { t } = useTranslation('contacts')
+  const { currentUser } = useAuth()
   const [fromDt,  setFromDt]  = React.useState(iso30DaysAgo)
   const [toDt,    setToDt]    = React.useState(isoToday)
   const [status,  setStatus]  = React.useState<string>('all')
@@ -105,8 +106,12 @@ function InstancesList({ tenantId, onSelectInstance }: InstancesListProps) {
 
   React.useEffect(() => {
     if (!tenantId) return
-    registryApi.listPools(tenantId).then(r => setPools(r.items)).catch(() => {})
-  }, [tenantId])
+    // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools; vazio = todos).
+    registryApi.listPools(tenantId).then(r => {
+      const dom = currentUser?.accessiblePools ?? []
+      setPools(dom.length ? r.items.filter(p => dom.includes(p.pool_id)) : r.items)
+    }).catch(() => {})
+  }, [tenantId, currentUser])
 
   const filters = useMemo(() => ({
     status:  status || undefined,

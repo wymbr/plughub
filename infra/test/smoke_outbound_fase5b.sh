@@ -22,11 +22,16 @@ MA="http://localhost:3660"
 SC="http://localhost:3650"
 CGW="http://localhost:8010"
 DIALOG="http://localhost:3760"
+EVAL="http://localhost:3400"
 ts=(-H "X-Tenant-ID: $TENANT")
 jqid() { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 STAMP=$(date +%s)
 N=2
 FORM="dialog_nps_buttons"
+# Segurança Fase B — o pool da SESSÃO PESQUISADA (origem), carimbado na metadata do
+# mailing → repassado pelo dispatcher → survey_link_create → congelado no token →
+# carimbado na resposta (survey_instance.pool_id) e no session.signals no submit.
+POOL_ORIGIN="retencao_humano"
 
 echo "0) garante o DialogForm '$FORM' publicado (idempotente) ..."
 DIALOG_API="$DIALOG" TENANT="$TENANT" bash infra/test/seed_dialog_nps_buttons_form.sh >/dev/null 2>&1 \
@@ -42,7 +47,7 @@ for i in $(seq 1 $N); do
   curl -s -X POST "$MA/v1/mailings/$M/entries" "${ts[@]}" -H 'content-type: application/json' -d "{
     \"customer_id\":\"$CUS\",\"contacts\":{\"webchat\":\"w$i\"},
     \"metadata\":{\"channel\":\"webchat\",\"origin_session_id\":\"$ORIG\",\"grain\":\"journey\",
-                  \"form_id\":\"$FORM\",\"customer_key\":\"$CUS\"}
+                  \"form_id\":\"$FORM\",\"customer_key\":\"$CUS\",\"origin_pool\":\"$POOL_ORIGIN\"}
   }" >/dev/null
 done
 
@@ -86,6 +91,24 @@ done
 [ "$NSUB" = "$N" ] || { echo "FALHA: esperado $N submits com signal gravado (só $NSUB)"; exit 1; }
 echo "   PASS: $N surveys criados pelo substrato de campanha e $N sinais gravados (session.signals) no origin/grão."
 
-echo "5) Limpeza ..."
+echo "5) Segurança Fase B: as respostas nasceram com pool='$POOL_ORIGIN' (não vazio) ..."
+count_scoped() {  # $1 = pool filtrado; conta as respostas DESTE run (origin sess_proc_$STAMP_*)
+  curl -s "$EVAL/v1/evaluation/survey/responses?tenant_id=$TENANT&pool_ids=$1&limit=200" "${ts[@]}" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin).get('data',[]);print(sum(1 for x in d if x.get('origin_session_id','').startswith('sess_proc_${STAMP}_')))"
+}
+SEEN=0
+for _ in $(seq 1 10); do  # o persist é síncrono no submit, mas dá folga p/ o commit
+  sleep 1
+  SEEN=$(count_scoped "$POOL_ORIGIN")
+  [ "$SEEN" = "$N" ] && break
+done
+echo "   respostas do run escopadas a '$POOL_ORIGIN': $SEEN (esperado $N)"
+[ "$SEEN" = "$N" ] || { echo "FALHA Fase B: esperado $N respostas com pool='$POOL_ORIGIN' (pool não fluiu na escrita)"; exit 1; }
+# Controle negativo: filtrando por outro pool do domínio, as nossas NÃO aparecem.
+LEAK=$(count_scoped "aprovacao_deploy")
+[ "$LEAK" = "0" ] || { echo "FALHA Fase B: $LEAK respostas vazaram p/ pool alheio (scoping quebrado)"; exit 1; }
+echo "   PASS: pool da origem carimbado na resposta; controle negativo (pool alheio) = 0."
+
+echo "6) Limpeza ..."
 curl -s -X POST "$SC/v1/agendas/$AG/cancel" "${ts[@]}" >/dev/null || true
 echo "GATE outbound Fase 5b — OK."

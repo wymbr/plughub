@@ -10,6 +10,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -115,7 +116,7 @@ export const AgentTimeline: React.FC<Props> = ({ tenantId, instanceId, label, fr
     let cancelled = false
     setLoading(true); setError(null)
     const qs = new URLSearchParams({ tenant_id: tenantId, instance_id: instanceId, from_dt: fromDt, to_dt: toDt })
-    fetch(`/reports/agent-timeline?${qs}`)
+    apiFetch(`/reports/agent-timeline?${qs}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(resp => { if (!cancelled) setData(resp.data ?? null) })
       .catch(e => { if (!cancelled) setError(String(e)) })

@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
 import { formatMs, OUTCOME_COLORS, CHANNEL_ICONS } from '../types'
 import { TimeseriesChart } from '@/components/TimeseriesChart'
+import { apiFetch } from '@/api/apiFetch'
 
 const FETCH_LIMIT = 1000
 
@@ -215,8 +216,8 @@ export function AnaliseTab({ tenantId, filters }: Props) {
 
     // ── Parallel fetch ───────────────────────────────────────────────────────
     const [sessRes, segRes] = await Promise.allSettled([
-      fetch(`/reports/sessions?${sParams}`),
-      fetch(`/reports/segments?${gParams}`),
+      apiFetch(`/reports/sessions?${sParams}`),
+      apiFetch(`/reports/segments?${gParams}`),
     ])
 
     // Sessions

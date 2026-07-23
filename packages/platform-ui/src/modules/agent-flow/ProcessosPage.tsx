@@ -11,6 +11,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { BarChart2, ClipboardList, Settings, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 import {
   useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
@@ -179,7 +180,7 @@ function SummaryTab({ tenantId }: { tenantId: string }) {
     setLoading(true); setError(null)
     try {
       const qs = new URLSearchParams({ tenant_id: tenantId, from_dt: fromDt, to_dt: toDt, group_by: groupBy })
-      const res  = await fetch(`/reports/workflow-summary?${qs}`)
+      const res  = await apiFetch(`/reports/workflow-summary?${qs}`)
       const body = await res.json() as SummaryResponse
       if (body.error) throw new Error(body.error)
       setData(body.data ?? [])

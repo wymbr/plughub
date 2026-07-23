@@ -4,6 +4,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { apiFetch } from '@/api/apiFetch'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
 import {
   formatMs, formatDt, CHANNEL_ICONS,
@@ -52,7 +53,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
       if (insightTags)     params.set('insight_tags',     insightTags)
       if (status)          params.set('status',           status)          // Arc 19
 
-      const res = await fetch(`/reports/sessions?${params}`)
+      const res = await apiFetch(`/reports/sessions?${params}`)
       if (!res.ok) { setError(t('lista.httpError', { status: res.status })); return }
       const data: ContactsApiResponse = await res.json()
       const items = Array.isArray(data) ? (data as unknown as ContactRow[]) : (data.data ?? [])

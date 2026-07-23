@@ -36,10 +36,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .auth import Principal, require_principal
+from .pool_auth import accessible_pools_from_token
 from .query import (
     get_metrics_24h, get_pool_sla_1h,
     get_pool_snapshots, get_sentiment_live,
 )
+
+
+def _filter_by_pool(rows: list, accessible: list[str] | None) -> list:
+    """Segurança Fase D — restringe uma lista de dicts com `pool_id` ao domínio.
+    `accessible=None` (irrestrito/sem token) → passa tudo."""
+    if accessible is None:
+        return rows
+    allowed = set(accessible)
+    return [r for r in rows if isinstance(r, dict) and r.get("pool_id") in allowed]
 
 logger = logging.getLogger("plughub.analytics.dashboard")
 
@@ -55,6 +65,7 @@ _SSE_RETRY_MS   = 3000
 async def dashboard_operational(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    token:     str | None = Query(None, description="auth-api Bearer (SSE query param — EventSource não manda header) p/ pool-scoping"),
     principal: Principal = Depends(require_principal),
 ) -> StreamingResponse:
     """
@@ -74,6 +85,9 @@ async def dashboard_operational(
             detail="Access denied for requested tenant",
         )
     redis = request.app.state.redis
+    # Segurança Fase D — domínio de pools do chamador (Bearer via query param, pois
+    # EventSource não envia header). None = irrestrito (sem token/segredo/inválido).
+    accessible = accessible_pools_from_token(token)
 
     async def event_generator():
         yield f"retry: {_SSE_RETRY_MS}\n\n"
@@ -81,7 +95,7 @@ async def dashboard_operational(
             while True:
                 if await request.is_disconnected():
                     break
-                snapshots = await get_pool_snapshots(redis, tenant_id)
+                snapshots = _filter_by_pool(await get_pool_snapshots(redis, tenant_id), accessible)
                 event_id  = int(time.time())
                 yield (
                     f"event: pools\n"
@@ -162,6 +176,7 @@ async def dashboard_metrics(
 async def dashboard_sentiment(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    token:     str | None = Query(None, description="auth-api Bearer p/ pool-scoping"),
     principal: Principal = Depends(require_principal),
 ) -> JSONResponse:
     """
@@ -191,7 +206,8 @@ async def dashboard_sentiment(
             detail="Access denied for requested tenant",
         )
     redis = request.app.state.redis
-    data  = await get_sentiment_live(redis, tenant_id)
+    data  = _filter_by_pool(await get_sentiment_live(redis, tenant_id),
+                            accessible_pools_from_token(token))
     return JSONResponse(content=data)
 
 
@@ -201,6 +217,7 @@ async def dashboard_sentiment(
 async def dashboard_pool_sla(
     request:   Request,
     tenant_id: str = Query(..., description="Tenant identifier"),
+    token:     str | None = Query(None, description="auth-api Bearer p/ pool-scoping"),
     principal: Principal = Depends(require_principal),
 ) -> JSONResponse:
     """
@@ -232,6 +249,7 @@ async def dashboard_pool_sla(
         database  = store._database,
         tenant_id = tenant_id,
     )
+    data  = _filter_by_pool(data, accessible_pools_from_token(token))
     return JSONResponse(content=data)
 
 

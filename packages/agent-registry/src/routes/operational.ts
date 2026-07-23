@@ -17,11 +17,36 @@ import { Router, Request, Response, NextFunction } from "express"
 import { prisma }          from "../db"
 import { getRedis, opKeys, getPoolSnapshot } from "../infra/redis"
 import { config }          from "../config"
+import { verifyHs256 }     from "../middleware/require-resource-write"
 
 export const operationalRouter = Router()
 
 function _getTenantId(req: Request): string {
   return (req.headers["x-tenant-id"] as string) ?? "tenant_default"
+}
+
+// ── Segurança Fase D — pool-scoping do snapshot operacional ───────────────────
+// O Monitor (superfície operacional) deve respeitar o DOMÍNIO de pools do usuário
+// (`accessible_pools`, Arc 7c), como os relatórios /reports. Lê o Bearer do auth-api
+// (mesmo segredo, PLUGHUB_JWT_SECRET) e devolve a lista permitida.
+//   null  → sem restrição (todos os pools): sem segredo configurado, sem token, token
+//           inválido (degrada aberto, como o optional_pool_principal), ou accessible_pools
+//           vazio ([] = admin/todos por convenção do auth-api).
+//   [...] → restrito a esses pool_ids.
+// Escopo (não a fronteira dura de escrita): read-only, degradação graciosa — nunca 401.
+function _accessiblePools(req: Request): string[] | null {
+  const secret = config.jwt_secret
+  if (!secret) return null
+  const auth = (req.headers["authorization"] as string | undefined) ?? ""
+  if (!auth.startsWith("Bearer ")) return null
+  try {
+    const claims = verifyHs256(auth.slice("Bearer ".length), secret)
+    const raw = claims["accessible_pools"]
+    if (!Array.isArray(raw) || raw.length === 0) return null   // [] = todos (convenção)
+    return raw.map((p) => String(p))
+  } catch {
+    return null   // token inválido/expirado → degrada aberto (read-only, não bloqueia)
+  }
 }
 
 // ── Item 7a (capacity-governance) — agregador de admissão ─────────────────────
@@ -143,10 +168,18 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
     const tenantId = _getTenantId(req)
 
     // 1. Load pool configurations from PostgreSQL
-    const pools = await prisma.pool.findMany({
+    const allPools = await prisma.pool.findMany({
       where:   { tenant_id: tenantId, status: "active" },
       orderBy: { pool_id: "asc" },
     })
+
+    // Segurança Fase D — filtra ao DOMÍNIO do chamador. Filtrando a lista AQUI,
+    // tudo a jusante (snapshots, live counts, admissão por pool, active/mute, items
+    // e os agregados do summary derivados de items) já sai escopado. Sem token/segredo
+    // → `accessible=null` → sem filtro (compat com o dashboard sem auth).
+    const accessible    = _accessiblePools(req)
+    const accessibleSet = accessible ? new Set(accessible) : null
+    const pools = accessibleSet ? allPools.filter(p => accessibleSet.has(p.pool_id)) : allPools
 
     // 2. Load snapshots + live counts in parallel
     const [snapshots, liveCounts] = await Promise.all([
@@ -265,8 +298,14 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
     const reservedList   = Object.entries(reservations).map(([poolId, r]) => ({
       pool_id: poolId, reservation: r, used: adm.reservedUsed[poolId] ?? 0,
     }))
-    const admittedTotal  = adm.sharedUsed
-      + reservedList.reduce((s, r) => s + r.used, 0)
+    // Segurança Fase D — admitted_total derivado dos items ESCOPADOS (não do
+    // SCARD shared tenant-global). Equivale ao antigo quando irrestrito
+    // (Σ items.admitted = sharedUsed + Σ reserved.used) e escopa corretamente.
+    const admittedTotal  = result.reduce((s, r) => s + r.admitted, 0)
+    // by_pool nomeia pools → restringe ao domínio (o resto do shared é agregado do tenant).
+    const sharedByPoolScoped = accessibleSet
+      ? Object.fromEntries(Object.entries(adm.sharedByPool).filter(([pid]) => accessibleSet.has(pid)))
+      : adm.sharedByPool
     const summary = {
       contracted:      adm.contracted,                       // C (null = sem pricing)
       admitted_total:  admittedTotal,
@@ -278,7 +317,7 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       shared: {
         used:    adm.sharedUsed,
         limit:   adm.sharedLimit,
-        by_pool: adm.sharedByPool,                           // fatias exatas (HASH)
+        by_pool: sharedByPoolScoped,                         // fatias exatas (HASH), escopadas ao domínio
       },
       reserved: reservedList,
       buffer:   { used: adm.bufferUsed, limit: adm.bufferLimit },

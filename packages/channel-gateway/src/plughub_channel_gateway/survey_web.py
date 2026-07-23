@@ -542,11 +542,15 @@ class SurveyWebService:
         deliver_kind:      str = "",
         deliver_address:   str = "",
         grain:             str = "session",
+        pool_id:           str = "",
     ) -> dict[str, Any]:
         """Congela o form publicado num token. Retorna {token, path[, delivery]}.
         Se deliver_kind+deliver_address vierem, entrega o link (camada plugável).
         `grain` (Journey J4): grão do sinal gravado no submit — `session` (default) ou
-        `journey` (survey de processo N3, chaveado na raiz canônica via origin_session_id)."""
+        `journey` (survey de processo N3, chaveado na raiz canônica via origin_session_id).
+        `pool_id` (Segurança Fase B): pool da SESSÃO PESQUISADA (origin), congelado no
+        token → carimbado na resposta (survey_instance.pool_id) e no session.signals no
+        submit. Vazio = admin-only (decisão C)."""
         async with httpx.AsyncClient(timeout=5) as c:
             r = await c.get(
                 f"{self._dialog}/v1/dialog/forms/{form_id}",
@@ -564,6 +568,7 @@ class SurveyWebService:
             "origin_session_id": origin_session_id,
             "customer_key":      customer_key,
             "grain":             grain or "session",   # Journey J4
+            "pool_id":           pool_id or "",        # Segurança Fase B (pool da origem)
             "status":            "open",
             "created_at":        _now_iso(),
         }
@@ -633,6 +638,8 @@ class SurveyWebService:
                             "survey_id":         rec.get("form_id"),
                             "origin_session_id": rec.get("origin_session_id") or token,
                             "customer_key":      rec.get("customer_key") or None,
+                            # Segurança Fase B: pool da sessão pesquisada (congelado no create).
+                            "pool_id":           rec.get("pool_id") or "",
                             "channel":           "web",
                             "signals":           signals,
                             "verbatims":         verbatims,
@@ -654,7 +661,7 @@ class SurveyWebService:
                 "segment_id":        None,
                 "agent_key":         "",
                 "survey_session_id": None,
-                "pool_id":           "",
+                "pool_id":           rec.get("pool_id") or "",        # Segurança Fase B
                 "signals":           signals,
                 "captured_at":       captured_at,
             }

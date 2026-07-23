@@ -16,6 +16,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import { Radio, Settings, ClipboardList, X, Clock, AlertTriangle, BarChart2 } from 'lucide-react'
 import type { ContactFilters } from '../types'
 import { usePoolViews } from '@/modules/service/api/hooks'
@@ -393,7 +394,7 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
     if (!tenantId) return
     let cancelled = false
     const load = () => {
-      fetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
+      apiFetch('/v1/operational/pools', { headers: { 'x-tenant-id': tenantId } })
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then((d: { summary?: typeof adm }) => { if (!cancelled && d.summary) setAdm(d.summary) })
         .catch(() => { /* tiles ficam ocultos */ })
@@ -793,7 +794,7 @@ function EventsView({ tenantId }: { tenantId: string }) {
         period:    '24h',
         ...(categoryFilter.trim() ? { category_regex: categoryFilter.trim() } : {}),
       })
-      const res = await fetch(`/reports/agent-events/summary?${params}`)
+      const res = await apiFetch(`/reports/agent-events/summary?${params}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
       setRows(Array.isArray(data) ? data : data.rows ?? [])

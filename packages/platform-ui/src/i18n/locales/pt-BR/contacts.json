@@ -142,6 +142,7 @@
     "moreFilters":    "Mais filtros",
     "clearFilters":   "✕ Limpar",
     "pool":           "Pool",
+    "allPools":       "Todos os pools do domínio",
     "agent":          "Agente",
     "ani":            "Origem (ANI)",
     "dnis":           "Destino (DNIS)",

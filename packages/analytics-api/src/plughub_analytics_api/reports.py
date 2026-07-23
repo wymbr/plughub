@@ -223,6 +223,7 @@ async def report_contact_insights(
     page:         int           = Query(1,       ge=1),
     page_size:    int           = Query(100,     ge=1),
     format:       str           = Query("json",  pattern="^(json|csv)$"),
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """
     Business events registered via insight_register MCP tool during agent flows.
@@ -245,6 +246,7 @@ async def report_contact_insights(
         category     = category,
         tags         = tags_list,
         insight_type = insight_type,
+        accessible_pools = pool_principal.accessible_pools,
         page      = page,
         page_size = ps,
     )

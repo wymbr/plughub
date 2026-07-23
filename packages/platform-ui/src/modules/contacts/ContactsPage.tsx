@@ -12,6 +12,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ClipboardList, Radio, BarChart2, User } from 'lucide-react'
 import { useAuth }          from '@/auth/useAuth'
+import { apiFetch }          from '@/api/apiFetch'
 import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
 import { SegmentList }       from '@/modules/service/components/SegmentList'
 import type { ContactSegment } from '@/modules/service/types'
@@ -55,7 +56,7 @@ function ContactInsightsPanel({ tenantId, sessionId }: { tenantId: string; sessi
     setLoading(true); setError('')
 
     const params = new URLSearchParams({ tenant_id: tenantId, session_id: sessionId, page_size: '200' })
-    fetch(`/reports/contact-insights?${params}`)
+    apiFetch(`/reports/contact-insights?${params}`)
       .then(r => r.json())
       .then((data: InsightsApiResponse) => {
         if (cancelled) return

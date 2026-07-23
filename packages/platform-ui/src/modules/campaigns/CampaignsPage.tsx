@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
@@ -69,7 +70,7 @@ function useCampaignData(
       if (campaignId) params.set('campaign_id', campaignId)
       if (channel)    params.set('channel', channel)
       if (status)     params.set('status', status)
-      const res = await fetch(`/reports/campaigns?${params}`)
+      const res = await apiFetch(`/reports/campaigns?${params}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       setData(await res.json())
     } catch (e) {

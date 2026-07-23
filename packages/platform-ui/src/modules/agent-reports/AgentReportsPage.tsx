@@ -13,6 +13,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import PageHeader from "@/components/ui/PageHeader";
+import { apiFetch } from "@/api/apiFetch";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -106,7 +107,7 @@ function useAvailability(params: {
     if (poolId)  qs.set("pool_id",        poolId);
     if (agentId) qs.set("agent_type_id",  agentId);
 
-    fetch(`/reports/agent-availability?${qs}`)
+    apiFetch(`/reports/agent-availability?${qs}`)
       .then(r => r.ok ? (r.json() as Promise<AvailabilityResponse>) : Promise.reject(r.status))
       .then(resp => {
         if (cancelled) return;

@@ -9,6 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, SearchX } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ export default function EventsPage() {
       if (filters.channel)   qs.set('channel',    filters.channel)
       if (filters.eventType) qs.set('event_type', filters.eventType)
 
-      const res = await fetch(`/reports/events?${qs}`)
+      const res = await apiFetch(`/reports/events?${qs}`)
       if (!res.ok) { setError(`HTTP ${res.status}`); return }
       const data: EventsResponse = await res.json()
       const items = Array.isArray(data) ? (data as unknown as EventRow[]) : (data.data ?? [])

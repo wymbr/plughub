@@ -915,7 +915,14 @@ services:
       PLUGHUB_CLICKHOUSE_PASSWORD: plughub
       PLUGHUB_CLICKHOUSE_DATABASE: plughub_demo
       PLUGHUB_ADMIN_JWT_SECRET:    demo_analytics_admin_secret
-      PLUGHUB_ANALYTICS_OPEN_ACCESS: "true"   # bypass JWT auth in demo — dashboard accessible without token
+      # open_access = bypass AMPLO de demo (audit/admin/transcript acessíveis sem token).
+      # MANTIDO true p/ não quebrar a Auditoria e o tool_trace do avaliador. O pool-scoping
+      # foi DESACOPLADO deste flag (pool_auth): agora enforça sempre que há segredo + token.
+      PLUGHUB_ANALYTICS_OPEN_ACCESS: "true"
+      # Segurança Fase A/E — o MESMO segredo do auth-api p/ o optional_pool_principal
+      # verificar o Bearer e enforçar accessible_pools em /reports/*. Sem isto (ou sem token)
+      # o scoping degrada p/ irrestrito. Sem token (dashboards/embeds) segue irrestrito.
+      PLUGHUB_AUTH_JWT_SECRET:      changeme_auth_jwt_secret_demo_32c   # == auth-api
       PLUGHUB_PRICING_API_URL:     http://pricing-api:3900   # Fase 2 Pools — teto configurado do total (fallback gracioso p/ provisionada)
       PLUGHUB_AGENT_REGISTRY_URL:  http://agent-registry:3300   # Arc 6 Fase 2 — lente deploy lê skill_deployments (markers); indisponível → série sem markers
       PLUGHUB_CONFIG_API_URL:      http://config-api:3600   # R8b — limiar de divergência + N mínimo (namespace evaluation)

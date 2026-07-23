@@ -15,8 +15,17 @@ import type {
   ActiveSession, ConnectionStatus, ContactSegment, Metrics24h,
   PoolSnapshot, PoolSlaEntry, PoolView, SentimentEntry, StreamEntry, SupervisorState
 } from '../types'
+import { getAccessToken } from '@/auth/token-store'
 
 const BASE = ''  // relative URLs — Vite proxies to analytics-api on port 3500
+
+// Segurança Fase D — pool-scoping dos endpoints /dashboard/*: o token do domínio vai
+// como QUERY PARAM porque o EventSource (SSE) não envia header Authorization. Sem token
+// → sufixo vazio → backend degrada irrestrito (dashboards sem login seguem funcionando).
+function _tok(): string {
+  const t = getAccessToken()
+  return t ? `&token=${encodeURIComponent(t)}` : ''
+}
 
 // ─── usePoolSnapshots ─────────────────────────────────────────────────────────
 
@@ -52,7 +61,7 @@ export function usePoolSnapshots(tenantId: string): {
     snapshotMapRef.current = new Map()
     setSnapshots([])
 
-    const url = `${BASE}/dashboard/operational?tenant_id=${encodeURIComponent(tenantId)}`
+    const url = `${BASE}/dashboard/operational?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`
     const es  = new EventSource(url)
     esRef.current = es
     setStatus('connecting')
@@ -96,7 +105,7 @@ export function useSentimentLive(tenantId: string, intervalMs = 10_000): Sentime
   const fetch_ = useCallback(async () => {
     if (!tenantId) return
     try {
-      const res = await fetch(`${BASE}/dashboard/sentiment?tenant_id=${encodeURIComponent(tenantId)}`)
+      const res = await fetch(`${BASE}/dashboard/sentiment?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`)
       if (res.ok) setEntries(await safeJson(res))
     } catch { /* stale data acceptable */ }
   }, [tenantId])
@@ -126,7 +135,7 @@ export function usePoolSla(tenantId: string, intervalMs = 60_000): PoolSlaEntry[
   const fetch_ = useCallback(async () => {
     if (!tenantId) return
     try {
-      const res = await fetch(`${BASE}/dashboard/pool-sla?tenant_id=${encodeURIComponent(tenantId)}`)
+      const res = await fetch(`${BASE}/dashboard/pool-sla?tenant_id=${encodeURIComponent(tenantId)}${_tok()}`)
       if (res.ok) setEntries(await safeJson(res))
     } catch { /* stale data acceptable */ }
   }, [tenantId])

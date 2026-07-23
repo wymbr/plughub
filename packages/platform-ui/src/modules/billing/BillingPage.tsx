@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Receipt, BarChart2, AlertTriangle, Bot, User, Globe, Gauge } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 import Badge from '@/components/ui/Badge'
 import EmptyState from '@/components/ui/EmptyState'
@@ -99,7 +100,7 @@ function useUsage(tenantId: string) {
     if (!tenantId) return
     setLoading(true)
     try {
-      const res = await fetch(`/reports/usage?tenant_id=${encodeURIComponent(tenantId)}`)
+      const res = await apiFetch(`/reports/usage?tenant_id=${encodeURIComponent(tenantId)}`)
       if (res.ok) {
         const data = await res.json() as { rows?: Array<{ dimension: string; total: number }> }
         setRows(data.rows ?? [])
@@ -140,7 +141,7 @@ function useCapacityGov(tenantId: string) {
       fetch(`/v1/pricing/capacity/${enc}`).then(r => r.ok ? r.json() : null),
       fetch('/v1/pools/capacity/conformance', { headers: { 'x-tenant-id': tenantId } })
         .then(r => r.ok ? r.json() : null),
-      fetch(`/reports/pools/occupancy?tenant_id=${enc}&from_dt=${since}&bucket=hour`)
+      apiFetch(`/reports/pools/occupancy?tenant_id=${enc}&from_dt=${since}&bucket=hour`)
         .then(r => r.ok ? r.json() : null),
     ]).then(([cap, conf, occ]) => {
       if (cancelled) return

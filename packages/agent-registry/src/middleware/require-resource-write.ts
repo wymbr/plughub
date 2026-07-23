@@ -15,7 +15,7 @@ import { config } from "../config"
 
 const RANK: Record<string, number> = { none: 0, read_only: 1, write_only: 1, read_write: 2 }
 
-function verifyHs256(token: string, secret: string): Record<string, any> {
+export function verifyHs256(token: string, secret: string): Record<string, any> {
   const parts = token.split(".")
   if (parts.length !== 3) throw new Error("malformed token")
   const [h, p, sig] = parts as [string, string, string]

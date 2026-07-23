@@ -20,6 +20,7 @@ import { ChevronDown, ChevronRight, Server } from 'lucide-react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ function statusConfig(op: PoolOp['op_status']) {
 // ── API ────────────────────────────────────────────────────────────────────────
 
 async function fetchPools(tenantId: string): Promise<{ items: PoolOp[]; summary: OpSummary | null }> {
-  const res = await fetch('/v1/operational/pools', {
+  const res = await apiFetch('/v1/operational/pools', {
     headers: { 'x-tenant-id': tenantId },
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -115,7 +116,7 @@ async function fetchPools(tenantId: string): Promise<{ items: PoolOp[]; summary:
 }
 
 async function fetchQueue(tenantId: string, poolId: string): Promise<QueueEntry[]> {
-  const res = await fetch(`/v1/operational/pools/${poolId}/queue`, {
+  const res = await apiFetch(`/v1/operational/pools/${poolId}/queue`, {
     headers: { 'x-tenant-id': tenantId },
   })
   if (!res.ok) return []

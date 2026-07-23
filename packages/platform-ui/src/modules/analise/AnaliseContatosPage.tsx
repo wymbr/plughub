@@ -6,6 +6,7 @@
  */
 import React, { useState } from 'react'
 import { useAuth } from '@/auth/useAuth'
+import { PoolDomainSelect } from '@/components/ui/PoolDomainSelect'
 import { AnaliseTab } from '@/modules/contacts/tabs/AnaliseTab'
 import type { ContactFilters } from '@/modules/contacts/types'
 import { DEFAULT_FILTERS } from '@/modules/contacts/types'
@@ -41,7 +42,7 @@ const inp = 'text-sm border border-border-strong rounded-lg px-3 py-1.5 focus:ou
 // ── AnaliseContatosPage ───────────────────────────────────────────────────────
 
 export default function AnaliseContatosPage() {
-  const { tenantId } = useAuth()
+  const { tenantId, currentUser } = useAuth()
   const [period,    setPeriod]    = useState<Period>('week')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo,   setCustomTo]   = useState('')
@@ -104,9 +105,13 @@ export default function AnaliseContatosPage() {
             {['webchat','whatsapp','voice','email','sms'].map(c => <option key={c} value={c}>{c}</option>)}
           </select>
 
-          <input type="text" value={poolId} onChange={e => setPoolId(e.target.value)}
-            placeholder="Pool ID"
-            className={`${inp} text-xs py-1 w-32`} />
+          <PoolDomainSelect
+            tenantId={tenantId}
+            accessiblePools={currentUser?.accessiblePools ?? []}
+            value={poolId}
+            onChange={setPoolId}
+            allLabel="Todos os pools do domínio"
+            className={`${inp} text-xs py-1 w-40`} />
         </div>
       </div>
 

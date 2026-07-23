@@ -17,7 +17,7 @@ import type { Pool } from '@/types'
 
 export default function FlowMonitorPage() {
   const { t } = useTranslation('contacts')
-  const { tenantId } = useAuth()
+  const { tenantId, currentUser } = useAuth()
   // Minimal filter state — pool and channel are the only relevant filters here
   const [filters, setFilters] = useState<ContactFilters>(DEFAULT_FILTERS)
   const [pools,   setPools]   = useState<Pool[]>([])
@@ -25,9 +25,14 @@ export default function FlowMonitorPage() {
   useEffect(() => {
     if (!tenantId) return
     listPools(tenantId)
-      .then(res => setPools(res.items.filter(p => p.status === 'active')))
+      .then(res => {
+        // Segurança Fase E — dropdown = domínio (listPools ∩ accessiblePools; vazio = todos).
+        const active = res.items.filter(p => p.status === 'active')
+        const dom = currentUser?.accessiblePools ?? []
+        setPools(dom.length ? active.filter(p => dom.includes(p.pool_id)) : active)
+      })
       .catch(() => setPools([]))
-  }, [tenantId])
+  }, [tenantId, currentUser])
 
   if (!tenantId) {
     return (

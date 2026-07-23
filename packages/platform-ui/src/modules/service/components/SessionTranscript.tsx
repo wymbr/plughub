@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useSessionStream, useSupervisor } from '../api/hooks'
 import { SupervisorJoinButton, SupervisorPanel } from './SupervisorPanel'
 import { renderWithTokens, useMaskingDisplayRules } from '@/components/MaskedToken'
+import { apiFetch } from '@/api/apiFetch'
 import type { ContactSegment, StreamEntry } from '../types'
 
 // ─── Business event types ─────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ function useSessionInsights(tenantId: string, sessionId: string | null): {
     setLoading(true)
 
     const params = new URLSearchParams({ tenant_id: tenantId, session_id: sessionId, page_size: '200' })
-    fetch(`/reports/contact-insights?${params}`)
+    apiFetch(`/reports/contact-insights?${params}`)
       .then(r => r.json())
       .then((data: { data?: InsightRow[] } | InsightRow[]) => {
         if (cancelled) return
