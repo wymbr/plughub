@@ -1729,6 +1729,38 @@ pool+dispatch; ramal = pull item direcionado + overflow. Embrião de transfer-to
 
 Design fechado: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md).
 
+### Camada B — pull direcionado ("ramal") — kickoff (próxima sessão)
+
+**Objetivo:** um work item da fila pull pode ser **reservado** a um recurso específico (`assigned_to`), com
+**transbordo pro pool** por lease. Fila = pool; ramal = item direcionado + overflow. Invariante: `assigned_to` é
+elegibilidade de claim sobre trabalho *pooled* — **nunca** alvo de roteamento que bypassa o pool.
+
+**Pré-investigação (abrir a sessão lendo isto):** onde vive o work item e o claim hoje —
+- Routing Engine: `dispatch_mode: pull` (claim atômico `ZREM`, lease+auto-release). Achar a estrutura do item na
+  fila e o handler de claim (`work_queue_claim`?). Ver `packages/routing-engine`.
+- Tools MCP `work_queue_*` (mcp-server-plughub) — o preview/claim que a UI consome.
+- `PullInboxPanel` (platform-ui) — como lista/filtra os itens.
+- ADR `docs/adr/adr-human-approval-workflow-step.md` (a aprovação já é o 1º uso do pull; reusar o mesmo item).
+
+**Sub-etapas:**
+1. **Schema do work item:** `assigned_to?: string` (user_id preferido) + `fallback_to_pool_after_s?: number`
+   (default: sem reserva). Onde o item é modelado (schemas / routing). Retrocompat: ausência = fila compartilhada
+   (comportamento atual).
+2. **Claim-eligibility no Routing Engine:** ao reivindicar, um item com `assigned_to` só é elegível se
+   `claimant.user_id == assigned_to` **OU** a idade do item ≥ `fallback_to_pool_after_s` (aí vira claimable por
+   qualquer um do pool/grupo). Sem `assigned_to` = elegível a todos (hoje). Cuidar do hot path (barato, sem
+   query extra — a idade já está no ZSET score).
+3. **Fallback por lease:** o transbordo é do **direcionamento**, não do item (o item continua na fila; só deixa
+   de ser exclusivo). Nada de mover de fila.
+4. **Tools MCP `work_queue_*`:** expor `assigned_to`/estado ("reservado a você" × "transbordado") no preview.
+5. **`PullInboxPanel`:** mostrar itens reservados ao usuário + rótulo de transbordo; ordenar reservados primeiro.
+6. **Smoke:** enfileira item com `assigned_to=userA` + `fallback` curto → userB NÃO vê antes do fallback; após,
+   userB vê; userA vê sempre. `infra/test/smoke_directed_pull.sh`.
+
+**Não fazer nesta camada:** o wrap-up ainda não é wirado como consumidor (isso é a Camada E, depois de a B e a D
+existirem); aqui só o primitivo genérico de pull direcionado. E **nunca** transformar `assigned_to` em alvo de
+roteamento (bypass do pool) — é filtro de claim com fallback.
+
 ---
 
 ## F11 — Pesquisa multi-grão outbound → superseded pelo módulo Customer Surveys
