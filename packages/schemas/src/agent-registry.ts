@@ -147,6 +147,27 @@ const PoolHookEntrySchema = z.object({
    * Default: "timeout" (backward compatible).
    */
   nps_on_disconnect: z.enum(["skip", "timeout"]).default("timeout"),
+  /**
+   * Arco "Detach de hooks de finalização" — Camada A. Como o bridge trata este
+   * hook em relação ao fecho do contato:
+   *
+   *  "inline"   → o hook roda DENTRO da conferência viva; o bridge segura o
+   *               `_trigger_contact_close()` (conta em `hook_pending`) até ele
+   *               concluir. Necessário quando o hook precisa do WS vivo do cliente
+   *               (ex.: NPS síncrono "pega o cliente antes de desconectar"). Default.
+   *  "detached" → o bridge NÃO segura o contato: dispara o agente como sessão
+   *               INDEPENDENTE (via workflow_trigger, herdando o `origin_session_id`
+   *               → membro da mesma journey) carregando a referência de segmento
+   *               (`surveyed_segment_id`/`agent_key`) para atribuição, e fecha o
+   *               contato na hora (estatísticas congeladas na saída do cliente →
+   *               conserta G1/AHT). Só faz sentido em hooks de FINALIZAÇÃO
+   *               (on_human_end / on_contact_end / on_process_end); em hooks
+   *               não-finalização (on_human_start) o parse rejeita `detached`.
+   *
+   * Default "inline" = retrocompat (comportamento atual de todos os hooks).
+   * Ver docs/product/finalization-hooks-detach-and-directed-pull-design.md.
+   */
+  dispatch: z.enum(["inline", "detached"]).default("inline"),
 })
 export type PoolHookEntry = z.infer<typeof PoolHookEntrySchema>
 
@@ -177,6 +198,24 @@ export const PoolHooksSchema = z.object({
    * cliente (ex. survey) usam o veículo OUTBOUND. Ver spec §6.1 + docs/guias/pool-hooks.md.
    */
   on_process_end:  z.array(PoolHookEntrySchema).default([]),
+}).superRefine((hooks, ctx) => {
+  // Arco "Detach de hooks de finalização" — Camada A (guard): `dispatch:'detached'`
+  // só vale em hooks de FINALIZAÇÃO. Um hook de INÍCIO (on_human_start) não pode
+  // existir destacado da sessão que o invocou (o co-pilot/briefing só faz sentido na
+  // conferência viva). Falha barulhenta no parse (invariante de método: degradação
+  // nunca silenciosa) em vez de aceitar um `detached` que o bridge ignoraria.
+  for (const e of hooks.on_human_start) {
+    if (e.dispatch === "detached") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["on_human_start"],
+        message:
+          "dispatch:'detached' não é permitido em on_human_start (hook de início, " +
+          "não-finalização): ele deve rodar inline na sessão que o invocou. " +
+          "`detached` só em on_human_end / on_contact_end / on_process_end.",
+      })
+    }
+  }
 })
 export type PoolHooks = z.infer<typeof PoolHooksSchema>
 

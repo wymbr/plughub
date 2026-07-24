@@ -13,7 +13,40 @@ import {
   SupervisorConfigSchema,
   RoutingDecisionSchema,
   TenantConfigSchema,
+  PoolHooksSchema,
 } from "./agent-registry"
+
+// ─────────────────────────────────────────────
+// PoolHooks dispatch — Camada A ("Detach de hooks de finalização")
+// ─────────────────────────────────────────────
+describe("PoolHooks dispatch (Camada A)", () => {
+  it("default = inline (retrocompat) quando dispatch é omitido", () => {
+    const parsed = PoolHooksSchema.parse({ on_human_end: [{ pool: "wrapup_ia" }] })
+    expect(parsed.on_human_end[0]!.dispatch).toBe("inline")
+  })
+
+  it("aceita dispatch:detached em hooks de finalização (human_end/contact_end/process_end)", () => {
+    const parsed = PoolHooksSchema.parse({
+      on_human_end:   [{ pool: "wrapup_ia",         dispatch: "detached" }],
+      on_contact_end: [{ pool: "nps_ia",            dispatch: "detached" }],
+      on_process_end: [{ pool: "survey_journey_wf", dispatch: "detached" }],
+    })
+    expect(parsed.on_human_end[0]!.dispatch).toBe("detached")
+    expect(parsed.on_contact_end[0]!.dispatch).toBe("detached")
+    expect(parsed.on_process_end[0]!.dispatch).toBe("detached")
+  })
+
+  it("REJEITA dispatch:detached em on_human_start (não-finalização)", () => {
+    expect(() =>
+      PoolHooksSchema.parse({ on_human_start: [{ pool: "copilot_sac", dispatch: "detached" }] }),
+    ).toThrow(/on_human_start/)
+  })
+
+  it("permite on_human_start inline (default)", () => {
+    const parsed = PoolHooksSchema.parse({ on_human_start: [{ pool: "copilot_sac" }] })
+    expect(parsed.on_human_start[0]!.dispatch).toBe("inline")
+  })
+})
 
 // ─────────────────────────────────────────────
 // PoolRegistrationSchema

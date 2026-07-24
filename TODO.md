@@ -1700,6 +1700,37 @@ domínio**. (`AnaliseJourneysPage`/`CustomerVoicePage` não têm filtro de pool.
 
 ---
 
+## Detach de hooks de finalização + Pull direcionado + ACW *(desenho fechado 2026-07-23; Camada A iniciada)*
+
+Unifica a coleta de finalização (survey/wrap-up) e aposenta a **Forma A (delegate `skill_survey_v1`)**. Hooks de
+finalização não podem suspender/collect (o bridge trata `suspended` como concluído → fecha o contato cedo). A
+razão de segurar o contato é **atribuição** — que a Journey (`root_session_id`) + referência de segmento no
+payload resolvem sem segurar. Reduz de 3 mecanismos (inline/delegate/collect) para 2 (inline síncrono / collect
+assíncrono). Fecha **G1** (AHT inflado por wrap-up) e generaliza **G7** (desacoplamento de `on_human_end`).
+
+**Invariante preservado (PABX):** o "ramal" (direcionar a um recurso) NÃO vira alvo de roteamento — é um work
+item que mora num **pool** (fila) com filtro de claim `assigned_to` + **fallback pro pool** por lease. Fila =
+pool+dispatch; ramal = pull item direcionado + overflow. Embrião de transfer-to-agent, sem quebrar o invariante.
+
+**Camadas:**
+- **A — fundação ✅ (iniciada):** `dispatch: inline|detached` no `PoolHookEntry` (`@plughub/schemas`), default
+  `inline`; guard de parse rejeita `detached` em `on_human_start` (não-finalização). Rebuild: agent-registry +
+  skill-flow-service + mcp-server (validam skills/pools).
+- **B — pull direcionado:** `assigned_to` + `fallback_to_pool_after` no work item + claim-eligibility no Routing
+  Engine (reusa `dispatch_mode: pull`/`work_queue`/`PullInboxPanel`). Wrap-up = 1º consumidor.
+- **C — ACW:** `acw_gate: none|soft|hard` como regra de `agent_ready` (o `hard` = ACW bloqueante, mas via
+  elegibilidade de roteamento, não segurando o contato).
+- **D — bridge:** honrar `detached` (não conta em `hook_pending`; `workflow_trigger(origin + segment ctx)`; fecha
+  o contato). **Atualizar `docs/guias/conference-mechanics.md` § Histórico.**
+- **E — migração:** `agente_wrapup_v1` + survey → `detached`; NPS síncrono presente fica `inline`. Aposentar
+  `skill_survey_v1` + `agente_survey_nps_v1` + pool `survey_collector_ia`.
+- **F — validação:** G1 (AHT), atribuição de segmento no relatório, smoke wrap-up na pull inbox (claim direcionado
+  + fallback), pool-scoping do survey sem delegate.
+
+Design fechado: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md).
+
+---
+
 ## F11 — Pesquisa multi-grão outbound → superseded pelo módulo Customer Surveys
 
 > **Consolidado (2026-07-02):** o planejamento de orquestração que este item pedia ("quando/como cada
