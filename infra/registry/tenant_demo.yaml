@@ -57,9 +57,8 @@ pools:
     # roda o skill nps_ia (skill_nps_v1) NA conferência; nps_on_disconnect=skip não
     # oferece se o cliente caiu. O skill ramifica o GRÃO pelo contexto: humano (há
     # surveyed_segment_id) → grão segment; IA (sem segmento) → grão session — um pool
-    # serve os dois. A survey OUTBOUND (skill_survey_v1) NÃO é usada aqui — fica como
-    # padrão de SKILL para casos especiais (multi-humano). Ver §14.2 de
-    # docs/arcos/analytics-agents-workbench.md.
+    # serve os dois. (A survey assíncrona vive no J4c collect — skill_survey_{trigger,
+    # outbound,runner}_v1 —, não mais na Forma A delegate, aposentada na Camada E1.)
     hooks:
       on_contact_end:
         - pool: nps_ia
@@ -95,6 +94,27 @@ pools:
     channel_types: [webhook]
     skill_id: skill_gate_promocao_v1
     webhook_skill_id: skill_gate_promocao_v1
+    sla_target_ms: 86400000
+
+  # Demo do renderer GENÉRICO de collect-form no Console (R0, kickoff
+  # approval-renderer-kickoff.md). formfill_demo = pool pull de atendentes (o item
+  # cai no inbox → DialogFormRenderer genérico); formfill_demo_ia = pool webhook que
+  # roda o workflow que delega o form (SEM decisions[] → branch genérico, não aprovação).
+  - pool_id: formfill_demo
+    agent_kind: human
+    dispatch_mode: pull
+    description: "Pool pull — demo do renderer genérico de collect-form (R0)"
+    channel_types: [webchat]
+    sla_target_ms: 86400000
+
+  - pool_id: formfill_demo_ia
+    agent_kind: ai
+    # Baixo volume — 1 instância basta (tenant demo tem capacidade apertada).
+    deploy: { skill_id: skill_formfill_demo_v1, max_concurrent_sessions: 1 }
+    description: "Pool webhook — demo collect-form genérico (R0)"
+    channel_types: [webhook]
+    skill_id: skill_formfill_demo_v1
+    webhook_skill_id: skill_formfill_demo_v1
     sla_target_ms: 86400000
 
   # Pool webhook que EFETIVA promoção de deploy agendada (Scheduler Fase 2).
@@ -271,7 +291,7 @@ pools:
     channel_types: [webhook]
     skill_id: skill_portabilidade_demo_v1
     # webhook_skill_id = endpoint (DNIS) — resolução determinística por skill_id
-    # agora que há >1 pool webhook (survey_processo_ia foi adicionado na F10.2b).
+    # (há vários pools webhook; sem isso o trigger cairia no scan).
     webhook_skill_id: skill_portabilidade_demo_v1
     sla_target_ms: 172800000  # 48h em ms
 
@@ -298,44 +318,14 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 600000  # 10 min
 
-  - pool_id: survey_processo_ia
-    agent_kind: ai
-    # max_concurrent baixo: survey é rápido/fire-and-forget. A governança de
-    # capacidade exige Σ deploys ≤ C ({tenant}:quota:max_concurrent_sessions);
-    # se C estiver cheio, suba o teto (ver passo de validação F10.2b).
-    deploy: { skill_id: skill_survey_v1, max_concurrent_sessions: 5 }
-    # F10.2b: pool webhook do workflow de pesquisa de sessão. Disparado pelo passo
-    # final do fluxo primário via workflow_trigger (origin_session_id = a sessão
-    # pesquisada). Executa skill_survey_v1: grava o sinal via survey_record contra
-    # a sessão original. F10.2b.1 esqueleto (valor semeado); F10.2b.2 coleta via collect.
-    description: "Pool webhook — survey de pesquisa grão session (F10.2b)"
-    channel_types: [webhook]
-    skill_id: skill_survey_v1
-    # webhook_skill_id = endpoint (DNIS) que o routing usa para resolver pool por
-    # skill_id. Necessário quando há >1 pool webhook (senão o trigger cai no scan).
-    webhook_skill_id: skill_survey_v1
-    sla_target_ms: 3600000  # 1h em ms
-
-  - pool_id: survey_collector_ia
-    agent_kind: ai
-    deploy: { skill_id: skill_survey_nps_v1, max_concurrent_sessions: 5 }
-    # F10.2b.2: pool coletor de NPS (channel-aware). Acionado pelo step delegate em
-    # skill_survey_v1; o agente faz I/O com o cliente (notify+menu NPS) e devolve a
-    # nota via workflow_resume. NÃO é webhook (delegate cria sessão-filho com pool
-    # direto). Consome quota — INCRBY na quota se C estiver cheio.
-    description: "Pool coletor de NPS do survey (delegate I/O channel-aware)"
-    channel_types: [webchat, whatsapp]
-    sla_target_ms: 600000  # 10 min
-
-  - pool_id: survey_reconnect_ia
-    agent_kind: ai
-    deploy: { skill_id: skill_survey_reconnect_v1, max_concurrent_sessions: 5 }
-    # F10.2b.2 (inbound_only): pool de ENTRADA onde o cliente reconecta para
-    # retomar uma pesquisa pendente. Faz pending_workflow_get e delega ao coletor.
-    # Conecte o webchat de teste a este pool para responder o NPS real.
-    description: "Pool de reconexão do survey (inbound_only) — cliente retoma pesquisa pendente"
-    channel_types: [webchat]
-    sla_target_ms: 300000  # 5 min
+  # Forma A do survey (delegate legado) APOSENTADA (2026-07-24, Camada E1 do arco
+  # "detach de hooks de finalização"). Os pools survey_processo_ia (skill_survey_v1),
+  # survey_collector_ia (skill_survey_nps_v1) e survey_reconnect_ia
+  # (skill_survey_reconnect_v1) estavam INERTES — nenhum hook nem workflow_trigger
+  # vivo os chamava. A coleta de survey vive em: NPS inline (nps_ia, on_contact_end)
+  # e J4c collect (skill_survey_{trigger,outbound,runner}_v1). Removidos do YAML e
+  # dos arquivos de skill. (DB rodando: rows persistem inertes — sem DELETE de pool
+  # na API; purge = REGISTRY_SYNC_PRUNE ou remoção manual, opcional.)
 
   - pool_id: survey_multi_ia
     agent_kind: ai

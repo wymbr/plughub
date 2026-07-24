@@ -1716,20 +1716,76 @@ pool+dispatch; ramal = pull item direcionado + overflow. Embrião de transfer-to
 - **A — fundação ✅ (iniciada):** `dispatch: inline|detached` no `PoolHookEntry` (`@plughub/schemas`), default
   `inline`; guard de parse rejeita `detached` em `on_human_start` (não-finalização). Rebuild: agent-registry +
   skill-flow-service + mcp-server (validam skills/pools).
-- **B — pull direcionado:** `assigned_to` + `fallback_to_pool_after` no work item + claim-eligibility no Routing
-  Engine (reusa `dispatch_mode: pull`/`work_queue`/`PullInboxPanel`). Wrap-up = 1º consumidor.
-- **C — ACW:** `acw_gate: none|soft|hard` como regra de `agent_ready` (o `hard` = ACW bloqueante, mas via
-  elegibilidade de roteamento, não segurando o contato).
-- **D — bridge:** honrar `detached` (não conta em `hook_pending`; `workflow_trigger(origin + segment ctx)`; fecha
-  o contato). **Atualizar `docs/guias/conference-mechanics.md` § Histórico.**
-- **E — migração:** `agente_wrapup_v1` + survey → `detached`; NPS síncrono presente fica `inline`. Aposentar
-  `skill_survey_v1` + `agente_survey_nps_v1` + pool `survey_collector_ia`.
+- **B — pull direcionado ✅ (2026-07-24, smoke 5/5):** `assigned_to` + `fallback_to_pool_after_s` +
+  `assigned_at_ms` no work item + claim-eligibility em `Router.work_task_claim` (reusa `dispatch_mode: pull`/
+  `work_queue`/`PullInboxPanel`). Wrap-up como consumidor = Camada E (não wirado aqui). Smoke
+  `infra/test/smoke_directed_pull.sh`.
+- **C — ACW ✅ (2026-07-24, smoke 3/3):** `acw_gate: none|soft|hard` por pool (coluna Prisma
+  `20260724000000_pool_acw_gate` + Zod + pools.ts + UI `PoolsPage`/i18n `pools.acw.*`); propaga a routing
+  (`PoolConfig`+`kafka_listener`); `get_ready_instances` em `hard` pula instância com marker `:acw_pending`
+  (wrap-up detached pendente) — ACW bloqueante enforçado no roteamento, não segurando o contato; inline
+  `wrap_up_pending` intacto ("ou mantém inline"). **Produtor do marker `acw_pending` = Camada E.** Smoke
+  `infra/test/smoke_acw_gate.sh`.
+- **D — bridge ✅ (2026-07-24, smoke 2/2):** `_fire_detached_hook` (workflow webhook fire-and-forget
+  `POST {CHANNEL_GATEWAY_URL}/v1/channels/webhook/pool/{id}`, `origin_session_id`+`journey:inherit`+ref de segmento
+  no `context`); `_entry_will_dispatch` exclui detached do barrier (`hook_pending`/`posatt`); auto-close
+  `_trigger_contact_close` na leva 100% detached de finalização (fecha G1); guardas `_has_customer_hooks` (IA-primário
+  + humano) excluem detached; env `CHANNEL_GATEWAY_URL`. **conference-mechanics.md § Histórico → Mudança 25 ✅.**
+  Limitações registradas: `post_human`+detached e `segment_wrapup` fanout detached → Camada E. Smoke
+  `infra/test/smoke_detached_hook.sh`.
+- **E1 — Forma A aposentada ✅ (2026-07-24):** pools `survey_processo_ia`/`survey_collector_ia`/`survey_reconnect_ia`
+  + skills `skill_survey_v1`/`skill_survey_nps_v1`/`skill_survey_reconnect_v1` estavam **inertes** (sem hook/trigger
+  vivo); removidos do YAML + arquivos. Coleta de survey = NPS inline + J4c collect. *(DB rodando persiste inerte;
+  purge opcional via PRUNE — sem DELETE de pool na API.)*
+- **Renderer R0 ✅ (2026-07-24, pré-requisito do Path α):** `DialogFormRenderer.tsx` (núcleo genérico) entregue e
+  validado — ver CHANGELOG "Renderer genérico de collect-form no Console — R0". Superfície estável que a E2
+  consome: claim de workflow suspensa (`session.dialog_form_id`+resume token) → briefing (`session.briefing_session_id`)
+  + DialogForm → `workflow_resume` com `payload.answers`. Falta só o conteúdo/plumbing da E2 (abaixo).
+- **E2 — wrap-up humano → `detached` (pendente):** `agente_wrapup_v1`/`wrapup_ia` (inline hoje) vira item de pull
+  inbox `assigned_to` o humano (fecha G1 do humano). Plumbar `assigned_to` webhook trigger→routing; `wrapup_ia`→
+  `dispatch_mode: pull`; skill de wrap-up como workflow pull (DialogForm no claim); gravação do outcome por
+  referência (`surveyed_segment_id`); **produtor do marker `acw_pending`** (setar no dispatch detached de pool
+  `hard`, limpar na resolução); briefing. NPS síncrono presente fica `inline`. Fecha as limitações da Camada D
+  (post_human+detached, segment_wrapup fanout). **Desenho FECHADO** → ADR
+  [`docs/adr/adr-wrapup-detached-pull.md`](docs/adr/adr-wrapup-detached-pull.md). **Decisão (2026-07-24): Path α,
+  renderer-first** — o renderer é o **tratamento genérico de collect-form no Console** (não "renderer de
+  aprovação"; reenquadramento 2026-07-24, ADR §2.1): renderiza o DialogForm de qualquer `collect`/`delegate`
+  reivindicado no inbox pull + submit via `workflow_resume`; serve aprovação + wrap-up + survey-no-Console **sem
+  skill por caso** (o wrap-up deixa de ter skill próprio). Construir ANTES (arco/sessão dedicado; kickoff do
+  núcleo R0 em `docs/product/approval-renderer-kickoff.md`); wrap-up-α por cima. Path β (skill agente menu) **NÃO
+  viável no pull-standalone** (humano reivindica → vira primário, sem IA p/ renderizar; só o Console renderiza).
+  Comuns aos dois
+  (não se perdem na troca): **E2a** (DialogForm
+  `dialog_wrapup_v1` + skill) · **E2b** (tool `segment_outcome_record`) · **E2c** (plumbing `assigned_to` no
+  `ConversationInboundEvent`) · **E2d** (dispatch pull sintético no bridge) · **E2e** (`acw_pending` set/clear) ·
+  **E2f** (analytics: sessão de wrap-up fora da contagem de contato/TMA — **ponto de atenção**) · **E2g** (config
+  `wrapup_ia`→pull + smoke E2E).
 - **F — validação:** G1 (AHT), atribuição de segmento no relatório, smoke wrap-up na pull inbox (claim direcionado
   + fallback), pool-scoping do survey sem delegate.
 
 Design fechado: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md).
 
-### Camada B — pull direcionado ("ramal") — kickoff (próxima sessão)
+### Camada B — pull direcionado ("ramal") — ✅ (2026-07-24, smoke 5/5; ver CHANGELOG)
+
+> **As-built (2026-07-24):** entregue conforme o kickoff abaixo. Toques do que ficou:
+> - **Item = dict `contact_data`** (JSON em `{t}:queue_contact:{sid}`) — sem novo schema Zod; campos `assigned_to`/
+>   `fallback_to_pool_after_s`/`assigned_at_ms` tipados em `QueuedContact` (routing `models.py`) e na interface
+>   `QueueContact` (TS: `lib/work-queue.ts` + `PullInboxPanel`).
+> - **Âncora da janela = `assigned_at_ms`**, auto-carimbada no 1º `add_queued_contact` (registry) e **preservada
+>   no re-enqueue** (contact_data re-passado verbatim) — a janela conta desde a atribuição, não reinicia a cada
+>   requeue. Fallback p/ `queued_at_ms` se ausente.
+> - **Gate em `Router.work_task_claim`** (antes do `ZREM`): reservado só é claimable pelo dono OU após transbordo
+>   (idade ≥ `fallback_to_pool_after_s`; ausente = permanente). `reason: reserved_to_other`, **logado** (degradação
+>   nunca silenciosa). Sem I/O extra — âncora já no pacote lido no passo 2.
+> - **Claimant** = `claimant_user_id` explícito (opcional, plumbado em http_api/tools/server) OU derivado de
+>   `instance_id` (`human-{userId}`). Retrocompat: sem `assigned_to` = fila compartilhada (comportamento atual).
+> - **Inbox:** `PullInboxPanel` esconde reservados-a-outro (até transbordo), rotula "reservado a você"/"transbordado",
+>   ordena reservados-a-mim primeiro; i18n `pullInbox.{reservedToYou,overflow}` + `claimReason.reserved_to_other`.
+> - **Sem reaper de lease** (o transbordo é por idade do item, não expiração de lease — o kickoff antecipava lease;
+>   o modelo real dispensa). Smoke `infra/test/smoke_directed_pull.sh` (userB barrado na janela; dono sempre;
+>   userB após transbordo; reserva permanente nunca transborda).
+> - **Validado (2026-07-24):** build dos 3 serviços OK + smoke `smoke_directed_pull.sh` 5/5. **Não wirado:**
+>   wrap-up como consumidor = Camada E.
 
 **Objetivo:** um work item da fila pull pode ser **reservado** a um recurso específico (`assigned_to`), com
 **transbordo pro pool** por lease. Fila = pool; ramal = item direcionado + overflow. Invariante: `assigned_to` é

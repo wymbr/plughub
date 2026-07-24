@@ -41,6 +41,7 @@ import { Header }              from "./components/Header";
 import { ActionBar }           from "./components/ActionBar";
 import { ChatArea }            from "./components/ChatArea";
 import { ApprovalPanel, isApprovalSnapshot } from "./components/ApprovalPanel";
+import { DialogFormRenderer, isFormFillSnapshot } from "./components/DialogFormRenderer";
 import { AgentInput }          from "./components/AgentInput";
 import { PauseReasonModal }    from "./components/PauseReasonModal";
 import { RightPanel }          from "./components/RightPanel";
@@ -537,8 +538,11 @@ export const AgentAssistPage: React.FC = () => {
     ? (selected?.messages ?? [])
     : (selected?.messages ?? []).filter(m => messageMatchesFilter(m, filterKey));
 
-  // Aprovação (A3) — o contato reivindicado carrega o pacote no context_snapshot.
+  // Form-fill (R0) — o contato reivindicado é uma workflow suspensa que carrega um
+  // DialogForm (`session.dialog_form_id`) + resume token no context_snapshot. A
+  // aprovação (A3) é uma ESPECIALIZAÇÃO (também traz `session.decisions`).
   const approvalSnapshot = selected?.supervisorState?.customer_context?.context_snapshot ?? null;
+  const isFormFillContact = isFormFillSnapshot(approvalSnapshot as never);
   const isApprovalContact = isApprovalSnapshot(approvalSnapshot as never);
   const approvalPoolId = ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined) ?? "";
 
@@ -649,11 +653,14 @@ export const AgentAssistPage: React.FC = () => {
                   {t("common.close", { defaultValue: "Fechar" })}
                 </button>
               </div>
-            ) : (selected && isApprovalContact) ? (
-              /* Action bar de aprovação — sem Transfer/Hang up; só "Devolver à fila" (desistir). */
+            ) : (selected && isFormFillContact) ? (
+              /* Action bar de form-fill (aprovação/wrap-up/…) — sem Transfer/Hang up;
+                 só "Devolver à fila" (desistir sem submeter). */
               <div className="flex items-center gap-2 px-4 w-full">
                 <span className="text-2xs font-semibold text-primary uppercase tracking-wide">
-                  {t("approval.tag", { defaultValue: "Approval task" })}
+                  {isApprovalContact
+                    ? t("approval.tag", { defaultValue: "Approval task" })
+                    : t("formFill.tag", { defaultValue: "Task" })}
                 </span>
                 <span className="text-xs text-muted truncate">
                   {(approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.title"]?.value as string ?? ""}
@@ -762,16 +769,28 @@ export const AgentAssistPage: React.FC = () => {
                   </>
                 )}
               </div>
-            ) : selected && isApprovalContact ? (
-              /* Aprovação (A3) — renderiza o pacote no lugar da conversa */
-              <ApprovalPanel
-                sessionId={selected.sessionId}
-                tenantId={session?.tenantId ?? ""}
-                poolId={approvalPoolId}
-                instanceId={session?.userId ? `human-${session.userId}` : ""}
-                snapshot={approvalSnapshot as never}
-                onResolved={refreshSupervisorState}
-              />
+            ) : selected && isFormFillContact ? (
+              /* Form-fill (R0) — renderiza o DialogForm no lugar da conversa.
+                 Aprovação (A3) empilha decisions/edições/ABAC; demais casos
+                 (wrap-up, survey-no-Console) usam o núcleo genérico direto. */
+              isApprovalContact ? (
+                <ApprovalPanel
+                  sessionId={selected.sessionId}
+                  tenantId={session?.tenantId ?? ""}
+                  poolId={approvalPoolId}
+                  instanceId={session?.userId ? `human-${session.userId}` : ""}
+                  snapshot={approvalSnapshot as never}
+                  onResolved={refreshSupervisorState}
+                />
+              ) : (
+                <DialogFormRenderer
+                  tenantId={session?.tenantId ?? ""}
+                  poolId={approvalPoolId}
+                  instanceId={session?.userId ? `human-${session.userId}` : ""}
+                  snapshot={approvalSnapshot as never}
+                  onResolved={refreshSupervisorState}
+                />
+              )
             ) : selected ? (
               <>
                 {/* WebRTC overlay — renders only when channel=webrtc and medium≠text */}

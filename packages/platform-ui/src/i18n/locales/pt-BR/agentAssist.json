@@ -185,10 +185,13 @@
     "previewBanner": "Contato em espera — visualização read-only. Use \"Atender\" para assumir.",
     "atCapacity":    "Capacidade máxima de atendimentos atingida",
     "resizeHint":    "Arraste para ajustar",
+    "reservedToYou": "Reservado a você",
+    "overflow":      "Transbordado",
     "claimReason": {
-      "already_claimed": "Já reivindicado por outro agente",
-      "no_capacity":     "Sem capacidade disponível",
-      "failed":          "Não foi possível atender"
+      "already_claimed":  "Já reivindicado por outro agente",
+      "no_capacity":      "Sem capacidade disponível",
+      "reserved_to_other":"Reservado a outro agente",
+      "failed":           "Não foi possível atender"
     }
   },
   "common": {
@@ -257,6 +260,16 @@
     "noView":       "Você não tem permissão para ver esta tarefa de aprovação (requer approvals.operacao).",
     "release":      "Devolver à fila",
     "resolved":     "Decisão registrada. O workflow vai continuar."
+  },
+  "formFill": {
+    "tag":             "Tarefa",
+    "briefing":        "Resumo",
+    "transcript":      "Conversa referenciada",
+    "transcriptEmpty": "Sem transcrição disponível.",
+    "noForm":          "Carregando formulário…",
+    "submit":          "Enviar",
+    "yes":             "Sim",
+    "resolved":        "Enviado. O workflow vai continuar."
   },
   "empty": {
     "activatePool":      "Ative um pool no cabeçalho para ficar disponível.",

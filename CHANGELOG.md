@@ -2,6 +2,171 @@
 
 ---
 
+## Renderer genérico de collect-form no Console — R0 (núcleo) ✅ (2026-07-24)
+
+Quarta superfície do dialog primitive (chat-runner · página web · hook inline · **Console inbox**). Um
+mecanismo canônico — "reivindicar uma workflow suspensa no pull → renderizar seu DialogForm no Console →
+submeter via `workflow_resume`" — serve **N** consumidores (aprovação, wrap-up, survey-no-Console) **sem skill
+por caso**. Kickoff `docs/product/approval-renderer-kickoff.md` (R0); ADR aprovação (A3) + ADR wrap-up (Path α).
+
+- **`DialogFormRenderer.tsx` (novo, núcleo genérico):** dado um item de pull cuja sessão-filha carrega
+  `session.dialog_form_id` + resume token (delegate/workflow/collect) no ContextStore, renderiza **briefing
+  read-only** (título/resumo + transcrição da sessão referenciada em `session.briefing_session_id`, via
+  `/api/conversation_history/{id}` — reuso do preview do pull) **ao lado** do **DialogForm inteiro** (statements
+  read-only + questions por `interaction`: text→input, button/list→botões, form→campos editáveis; `ask_when`
+  espelhado de `@plughub/schemas`). Porta a lógica de `survey_web.py render()` p/ React. Submete via
+  `POST /v1/channels/webhook/resume/{token}` com **`payload:{ source:"operator", answers:{ output_key→value } }`**
+  (o workflow lê `$.pipeline_state.<step>.answers.<key>`; roteamento nunca no JSON do form). **Sem ABAC de
+  aprovação** — o claim já é gated no inbox; afordâncias por-consumidor empilham no wrapper.
+- **`ApprovalPanel.tsx` → wrapper fino** sobre o núcleo (via render-prop `renderActions`): empilha
+  `decisions[]`→`choice`, auditoria `field_edits` (antes→depois), e o gate `approvals` (operacao/decide).
+  **Payload A5 inalterado** (regressão-safe — a decisão segue `{decision:"input", choice, edits, field_edits}`).
+- **`AgentAssistPage.tsx`:** `isFormFillSnapshot` (`dialog_form_id` + resume token) roteia o contato reivindicado
+  ao núcleo; aprovação (`isApprovalSnapshot` = + `decisions`) usa o wrapper, demais casos o núcleo direto.
+  Action bar de "Return to queue" generalizada a form-fill. i18n `formFill.*` (en + pt-BR).
+- **Demo genérico (não-aprovação):** `dialog_formfill_demo` (form disposição: statement + botões + texto),
+  `skill_formfill_demo_v1` (delegate SEM `decisions[]` + `briefing_session_id` do payload), pools
+  `formfill_demo` (pull) + `formfill_demo_ia` (webhook). Seeds/smoke: `seed_dialog_formfill_demo_form.sh`,
+  `smoke_formfill_renderer.sh` (trigger → item parqueia no pull → ctx da filha carrega form+briefing+token).
+- **Validado (UI, admin):** (1) aprovação — claim → núcleo renderiza briefing+form+decisões → decide → resume
+  (regressão do A5); (2) genérico — claim → núcleo renderiza briefing+form+Submit → `payload.answers` → o
+  `choice` do workflow roteia; transcrição renderiza com `BRIEFING_SID` de sessão real. Smoke verde.
+- **Achado (não-bloqueante, follow-up E2):** o ingress de resume aplica ABAC `approvals.decide` a **qualquer**
+  resume com JWT (admin/supervisor bypassam). Um form-fill genérico não-aprovação (ex.: wrap-up-α) por um
+  operador comum seria gated indevidamente — parametrizar o gate por tipo de tarefa é trabalho de backend da E2,
+  fora do R0.
+
+**Pendente (fora do R0):** R1 = extras de aprovação já empilhados menos anexos/masking-por-role e ABAC `approvals`
+completos (A4/A5.6); wrap-up-α (Camada E2) = `dialog_wrapup_v1` + dispatch detached do bridge + gravação do
+outcome do segmento no `workflow_resume`. O núcleo (R0) é a superfície estável que ambos consomem sem alterá-lo.
+
+→ `docs/product/approval-renderer-kickoff.md`, `docs/adr/adr-human-approval-workflow-step.md` (A3),
+`docs/adr/adr-wrapup-detached-pull.md` (Path α).
+
+---
+
+## Detach de hooks de finalização — Camada E1: Forma A (survey delegate legado) aposentada ✅ (2026-07-24)
+
+Primeira fatia da migração (Camada E). A **Forma A** de coleta de survey — a cadeia delegate legada
+`skill_survey_v1` (pool `survey_processo_ia`) → `skill_survey_nps_v1` (pool `survey_collector_ia`) →
+`skill_survey_reconnect_v1` (pool `survey_reconnect_ia`) — estava **totalmente inerte**: nenhum `hooks:` nem
+`workflow_trigger` vivo a chamava (confirmado por grep exaustivo; só auto-referências da cadeia + comentários).
+Reduz os mecanismos de coleta para os dois desenhados: **NPS inline** (`nps_ia`/`agente_nps_v1`, `on_contact_end`,
+síncrono presente) e **J4c collect** (`skill_survey_{trigger,outbound,runner}_v1`, assíncrono).
+
+- **Removidos do `infra/registry/tenant_demo.yaml`:** os 3 pools da Forma A (bloco substituído por nota de
+  aposentadoria). Comentários dangling que citavam `skill_survey_v1`/`survey_processo_ia` (em `sac_ia` e
+  `portabilidade_processo_ia`) atualizados.
+- **Removidos os 3 arquivos de skill** (`skill_survey_v1.yaml`, `agente_survey_nps_v1.yaml`,
+  `agente_survey_reconnect_v1.yaml`).
+- **Doc:** a linha "Consumidores" do Dialog Primitive (CLAUDE.md) deixa de listar a survey NPS reconnect delegate.
+- **Caveat (DB rodando):** não há `DELETE /v1/pools/:id` na API e o provisionamento é seed-if-absent (DB-owned),
+  então as rows dos 3 pools/skills **persistem inertes** no DB do demo até um `REGISTRY_SYNC_PRUNE=true` ou
+  remoção manual (opcional — inertes, mas ocupam slots de instância ociosos).
+
+**E2 (pendente):** wrap-up humano (`wrapup_ia`/`agente_wrapup_v1`) → `detached` como item de pull `assigned_to`
+(fecha o G1 do caminho humano) — ver design doc Camada E (tem fork de desenho a resolver).
+
+→ `docs/product/finalization-hooks-detach-and-directed-pull-design.md` (Camada E).
+
+---
+
+## Detach de hooks de finalização — Camada C: ACW como regra de `agent_ready` (`acw_gate`) ✅ (2026-07-24)
+
+Quarta camada do arco (A schema, B pull direcionado, D bridge honra detached). O ACW deixa de ser "contato
+aberto segurando o atendente" e vira uma **regra de disponibilidade** por pool: `acw_gate: none|soft|hard`.
+Em `hard`, o Routing Engine não roteia novo contato enquanto o atendente tiver wrap-up **detached** pendente —
+enforçado no roteamento (não segurando o contato). Validado (smoke 3/3): `hard` exclui a instância pendente e
+mantém a de controle; `none`/`soft` não bloqueiam.
+
+- **Config `acw_gate` (default `none`, não-regressivo):** coluna Prisma `pools.acw_gate` (migration
+  `20260724000000_pool_acw_gate`) + Zod `PoolRegistrationSchema` + `pools.ts` (create/update). Flui a routing via
+  `pool.registered`/`pool.updated` (`_formatPool` espalha a linha) → `PoolConfig` pydantic + `kafka_listener`.
+  YAML passthrough grátis (o RegistrySyncer POSTa o pool inteiro).
+- **Regra em `get_ready_instances` (routing-engine):** lê o `acw_gate` do `pool_config` uma vez; em `hard`, pula a
+  instância com marker `{t}:instance:{iid}:acw_pending` (wrap-up detached pendente). `none`/`soft` não bloqueiam.
+  O ACW do wrap-up **inline** segue por `wrap_up_pending`, **independente** deste campo ("ou mantém inline") — sem
+  regressão nos pools atuais.
+- **UI:** Select `acw_gate` (none/soft/hard) no editor de pool (`PoolsPage`), i18n `pools.acw.*` (en + pt-BR);
+  tipo `Pool.acw_gate` no platform-ui.
+- **Produtor do marker `acw_pending` = Camada E** (o wrap-up detached de um pool `hard` seta/limpa o marker;
+  clearing = resolução do item no inbox pull). Camada C entrega o mecanismo + config + UI; `hard` só bloqueia de
+  fato quando E ligar o marker. Smoke `infra/test/smoke_acw_gate.sh` (semeia o marker à mão para exercitar a regra).
+- **Rebuild:** agent-registry (migration via `prisma migrate deploy` no boot) + routing-engine + platform-ui.
+
+→ `docs/product/finalization-hooks-detach-and-directed-pull-design.md` (Camada C).
+
+---
+
+## Detach de hooks de finalização — Camada D: bridge honra `dispatch: detached` ✅ (2026-07-24)
+
+Terceira camada do arco (após A `dispatch` no schema e B pull direcionado). O **bridge** agora honra o
+`dispatch: detached` das entradas de hook de FINALIZAÇÃO (`on_human_end`/`on_contact_end`/`on_process_end`):
+em vez de convidar um especialista na conferência viva (que **segura** o contato), dispara um **workflow
+webhook fire-and-forget** e **fecha o contato na hora** — fecho de **G1** (AHT deixa de inflar pelo wrap-up)
+e generalização de **G7**. A atribuição fina viaja por **referência de segmento** no context + Journey, sem
+segurar. Validado E2E (smoke 2/2): origem fecha na hora + sessão-filha nasce no pool-alvo herdando o `root_session_id`.
+
+- **`_fire_detached_hook` (novo helper, orchestrator-bridge):** `POST {CHANNEL_GATEWAY_URL}/v1/channels/
+  webhook/pool/{target_pool}` com `origin_session_id` + `journey:"inherit"` (a sessão-filha herda o
+  `root_session_id` transitivo → membro da mesma journey) + `context` = referência de segmento
+  (`session.surveyed_segment_id`/`surveyed_agent_key`/`close_origin` + `hook.type`/`hook.origin_pool`).
+  Fire-and-forget: não-2xx/erro **logado** (degradação nunca silenciosa). Novo env `CHANNEL_GATEWAY_URL`.
+- **`fire_pool_hooks` bifurca por `dispatch`:** entrada detached pula todo o caminho de conferência (sem
+  `conversations.inbound` sintético, sem `hook_conf`/`posatt`/`wrap_up_pending`/participants). `_entry_will_dispatch`
+  retorna `False` p/ detached → fora do dimensionamento do barrier `hook_pending` (contá-lo travaria o contato
+  até o force-close de 180s). Ao fim da leva, se foi **100% detached** numa finalização, `_trigger_contact_close`
+  (= `_close_contact_layer` + `_destroy_conference`, idempotente NX) fecha as duas camadas — espelha o caminho sem-hook.
+- **Guardas `_has_customer_hooks` (2 call sites: IA-primário `on_process_end`/`on_contact_end` + humano
+  `agent_done`)** passam a **excluir detached**: um hook detached não segura o WS do cliente, então não conta
+  como "customer hook" — senão o contato ficaria eternamente `active` (mesmo modo de falha da Mudança 24).
+- **Mix inline+detached suportado:** entradas inline seguem armando o barrier e dirigindo o fecho diferido por
+  contador; detached só disparam o webhook. Auto-close imediato só quando nenhuma inline foi disparada na leva.
+- **Limitações registradas (→ Camada E):** `post_human` + `on_human_end` 100% detached (post_human encadeia à
+  conclusão de agentes inline); `segment_wrapup` detached no fan-out de customer-disconnect.
+- **Docs:** `conference-mechanics.md § Histórico → Mudança 25`; `pool-hooks.md` (seção `dispatch: inline|detached`).
+  Smoke `infra/test/smoke_detached_hook.sh` (patcha on_process_end→detached em runtime, restaura hooks no fim).
+- **Rebuild:** orchestrator-bridge (código) + recreate p/ o env `CHANNEL_GATEWAY_URL`.
+
+→ `docs/product/finalization-hooks-detach-and-directed-pull-design.md` (Camada D) · `docs/guias/conference-mechanics.md` (Mudança 25).
+
+---
+
+## Detach de hooks de finalização — Camada B: Pull direcionado ("ramal") ✅ (2026-07-24)
+
+Segunda camada do arco (após a A, `dispatch: inline|detached`). Um work item da fila **pull** pode agora ser
+**reservado** a um recurso específico com **transbordo pro pool** por idade. Primitivo genérico — o wrap-up como
+consumidor é a Camada E. **Invariante PABX preservado:** `assigned_to` é elegibilidade de claim sobre trabalho
+*pooled* (fila = pool + dispatch; ramal = pull item + overflow), **nunca** alvo de roteamento que bypassa o pool.
+
+- **Campos do work item (`assigned_to` / `fallback_to_pool_after_s` / `assigned_at_ms`):** entram no dict
+  `contact_data` (JSON em `{t}:queue_contact:{sid}`) — **sem novo schema Zod**. Tipados em `QueuedContact`
+  (routing `models.py`) e na interface TS `QueueContact` (`mcp-server/lib/work-queue.ts` + `PullInboxPanel`).
+  `assigned_at_ms` é **auto-carimbada** no 1º `add_queued_contact` (registry) e **preservada no re-enqueue**
+  (contact_data re-passado verbatim em release/rollback/re-rota) → a janela conta desde a atribuição, não
+  reinicia a cada requeue; fallback p/ `queued_at_ms` se ausente. Ausência de `assigned_to` = fila
+  compartilhada (comportamento atual, retrocompat).
+- **Gate de elegibilidade em `Router.work_task_claim`** (routing-engine), passo **2b**, ANTES do `ZREM`: item
+  reservado só é claimable por (a) o dono (`claimant == assigned_to`) ou (b) qualquer um do pool após o
+  transbordo (idade ≥ `fallback_to_pool_after_s`; ausente = **reserva permanente**). Senão → `reason:
+  reserved_to_other`, **logado** (degradação nunca silenciosa). **Sem I/O extra** — a âncora já está no pacote
+  lido no passo 2. `claimant` = `claimant_user_id` explícito (opcional, plumbado em `http_api.py` → `ClaimArgs`
+  → tool `work_task_claim` → `/api/work_queue/claim`) OU derivado de `instance_id` (`human-{userId}`).
+  **Sem reaper de lease** — o transbordo é por idade do item, não por expiração de lease (o kickoff antecipava
+  lease; o modelo real dispensa).
+- **Inbox (`PullInboxPanel`):** deriva o `userId` do `instanceId`; **esconde** itens reservados a outro recurso
+  enquanto na janela (`reservedOther`); **rotula** "reservado a você" (`reservedToMe`) e "transbordado"
+  (`overflowed`); **ordena** reservados-a-mim primeiro. i18n `pullInbox.{reservedToYou,overflow}` +
+  `claimReason.reserved_to_other` (en + pt-BR).
+- **Smoke `infra/test/smoke_directed_pull.sh` ✅ (5/5):** semeia instâncias humanas + itens da fila no Redis e
+  exercita o endpoint real do árbitro — userB barrado na janela; dono sempre elegível; userB após o transbordo;
+  reserva permanente nunca transborda.
+- **Rebuild:** routing-engine + mcp-server-plughub + platform-ui (nenhum `@plughub/schemas` tocado).
+
+→ `docs/product/finalization-hooks-detach-and-directed-pull-design.md` (Camada B) · `TODO.md` (as-built).
+
+---
+
 ## Segurança — Pool-scoping: Fase D ✅ COMPLETA (operacional Monitor/Pools + auditoria /reports) (2026-07-23)
 
 Estende o pool-scoping às superfícies **operacionais** (Monitor/Pools), que usam endpoints próprios (não

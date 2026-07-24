@@ -185,10 +185,13 @@
     "previewBanner": "Waiting contact — read-only preview. Use \"Claim\" to take it.",
     "atCapacity":    "Maximum concurrent sessions reached",
     "resizeHint":    "Drag to resize",
+    "reservedToYou": "Reserved to you",
+    "overflow":      "Overflowed",
     "claimReason": {
-      "already_claimed": "Already claimed by another agent",
-      "no_capacity":     "No capacity available",
-      "failed":          "Could not claim"
+      "already_claimed":  "Already claimed by another agent",
+      "no_capacity":      "No capacity available",
+      "reserved_to_other":"Reserved to another agent",
+      "failed":           "Could not claim"
     }
   },
   "common": {
@@ -257,6 +260,16 @@
     "noView":       "You do not have permission to view this approval task (approvals.operacao required).",
     "release":      "Return to queue",
     "resolved":     "Decision recorded. The workflow will continue."
+  },
+  "formFill": {
+    "tag":             "Task",
+    "briefing":        "Briefing",
+    "transcript":      "Referenced conversation",
+    "transcriptEmpty": "No transcript available.",
+    "noForm":          "Loading form…",
+    "submit":          "Submit",
+    "yes":             "Yes",
+    "resolved":        "Submitted. The workflow will continue."
   },
   "empty": {
     "activatePool":      "Activate a pool in the header to become available.",

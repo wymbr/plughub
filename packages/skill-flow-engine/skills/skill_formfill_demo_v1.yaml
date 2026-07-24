@@ -1,0 +1,68 @@
+id: skill_formfill_demo_v1
+name: Demo — Collect-form genérico no Console
+version: "1.0"
+description: |
+  Demo do renderer GENÉRICO de collect-form no Console (R0, kickoff
+  docs/product/approval-renderer-kickoff.md).
+
+  Workflow webhook (Arc 19) que delega um DialogForm de DISPOSIÇÃO a um pool pull
+  SEM `decisions[]` — exercita o caminho GENÉRICO do <DialogFormRenderer> (não o
+  ApprovalPanel) + o painel de BRIEFING (transcrição da sessão referenciada em
+  `briefing_session_id`). Espelha o skill_gate_promocao_v1, trocando o pacote de
+  aprovação por um form genérico.
+
+  O aprovador/atendente logado reivindica no inbox pull, vê o briefing (esquerda) +
+  o form (direita: statement + botões + texto) e SUBMETE. O submit devolve
+  `payload { source:"operator", answers:{ satisfacao, observacao } }` → cai em
+  `$.pipeline_state.coletar` e o WORKFLOW roteia com um `choice` sobre
+  `answers.satisfacao` (a plataforma nunca ramifica pelo form — invariante).
+
+  Perfil workflow (webhook): usa apenas delegate/choice/complete.
+classification:
+  type: vertical
+
+entry: coletar
+
+steps:
+  # ── Delega o form genérico ao pool pull ──────────────────────────────────────
+  # SEM decisions[] → o Console roteia ao DialogFormRenderer genérico (não à
+  # aprovação). `briefing_session_id` vem do payload do trigger
+  # (@ctx.session.briefing_session_id) → o painel de briefing renderiza a
+  # transcrição daquela sessão ao lado do form.
+  - id: coletar
+    type: delegate
+    pool: formfill_demo
+    context:
+      title:               "Disposição do atendimento"
+      summary:             "Revise a conversa referenciada ao lado e registre a disposição deste contato (demo do renderer genérico)."
+      dialog_form_id:      "dialog_formfill_demo"
+      briefing_session_id: "@ctx.session.briefing_session_id"
+    timeout_hours: 24
+    business_hours: false
+    on_resume:
+      next: rotear
+    on_timeout:
+      next: encerrar_timeout
+
+  # ── O WORKFLOW roteia sobre a resposta capturada (answers.satisfacao) ─────────
+  - id: rotear
+    type: choice
+    conditions:
+      - field:    "$.pipeline_state.coletar.answers.satisfacao"
+        operator: eq
+        value:    sim
+        next:     encerrar_resolvido
+    default: encerrar_outro
+
+  # ── Desfechos ────────────────────────────────────────────────────────────────
+  - id: encerrar_resolvido
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_outro
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: failed

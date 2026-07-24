@@ -160,6 +160,20 @@ obrigatória do aprovador (Modo A) não cobre "aprovar sem login" — aceito no 
 ## 6. Fases (plano fatiado — reconcilia F4/F5 do plano consolidado)
 
 > Pré-existente ✅: F1 (pull core), F2 (tools + inbox), F2b (preview). Este ADR detalha o que falta.
+> **Segundo consumidor (2026-07-24):** o **wrap-up-α** (Camada E2, ADR `adr-wrapup-detached-pull.md`) decidiu
+> depender do **renderer (A3)** em vez de construir um caminho próprio descartável. Requisito daí: o renderer
+> (**A3**) deve nascer **genérico** — renderizar um DialogForm arbitrário por `form_id` (ex.: form de disposição
+> do wrap-up), com as afordâncias de aprovação (`decisions[]`/edições/anexos/ABAC) **empilhadas por cima**, não no
+> núcleo. Recorte do núcleo compartilhado (**R0**) em [`docs/product/approval-renderer-kickoff.md`](../product/approval-renderer-kickoff.md).
+>
+> **As-built A3/R0 ✅ (2026-07-24):** núcleo genérico `DialogFormRenderer.tsx` entregue e validado (CHANGELOG
+> "Renderer genérico de collect-form no Console — R0"). O `ApprovalPanel` foi **refatorado em wrapper fino** sobre
+> o núcleo (render-prop `renderActions`), preservando o payload/auditoria A5 (§10) sem regressão. Detecção
+> `isFormFillSnapshot` roteia o contato reivindicado ao núcleo; aprovação empilha `decisions[]`/edições/ABAC.
+> **Falta em A3:** anexos (viewer + masking-por-role) e o gate ABAC `approvals` só é aplicado no wrapper de
+> aprovação — o ingress de resume ainda aplica `approvals.decide` a qualquer resume com JWT (admin/supervisor
+> bypassam), o que gata indevidamente um form-fill genérico não-aprovação; parametrizar por tipo de tarefa é
+> follow-up (relevante à E2 do wrap-up).
 
 | Fase | Entrega | Dep. | Esforço | Gate |
 |---|---|---|---|---|
