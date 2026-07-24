@@ -1371,6 +1371,9 @@ services:
       REDIS_URL:            redis://redis:6379
       SKILL_FLOW_URL:       http://skill-flow-service:3460
       AGENT_REGISTRY_URL:   http://agent-registry:3300
+      # Camada D (detach de hooks de finalização): disparo de hooks `detached` como
+      # workflow webhook fire-and-forget (Arc 19 POST /v1/channels/webhook/pool/{id}).
+      CHANNEL_GATEWAY_URL:  http://channel-gateway:8010
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — RegistrySyncer
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry

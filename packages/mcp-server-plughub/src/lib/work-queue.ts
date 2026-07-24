@@ -30,6 +30,17 @@ export interface QueueContact {
   // "{session}::" (empty conf), the routed event omits the conference, and the
   // Console cannot (re-)attach the package. Empty string = non-conference contact.
   conference_id: string | null
+  // Camada B (pull direcionado / "ramal"): reserva a um recurso preferido.
+  //   assigned_to              — user_id preferido (null = fila compartilhada).
+  //   fallback_to_pool_after_s — janela da reserva (s); após → claimable por todos
+  //                              do pool. null = reserva permanente.
+  //   assigned_at_ms           — âncora da janela (preservada no re-enqueue).
+  // A elegibilidade DURA é aplicada pelo árbitro (routing-engine); estes campos
+  // servem o filtro/rótulo do inbox. INVARIANTE: filtro de claim sobre trabalho
+  // pooled, nunca alvo de roteamento que bypassa o pool.
+  assigned_to:              string | null
+  fallback_to_pool_after_s: number | null
+  assigned_at_ms:           number | null
 }
 
 export async function listQueue(
@@ -71,6 +82,10 @@ export async function listQueue(
         age_ms:       ageBaseMs ? Math.max(nowMs - ageBaseMs, 0) : null,
         first_queued_ms: firstQueuedMs || null,
         conference_id: (contact?.["conference_id"] as string) ?? null,
+        // Camada B — reserva/ramal (null quando não direcionado).
+        assigned_to:              (contact?.["assigned_to"] as string) ?? null,
+        fallback_to_pool_after_s: (contact?.["fallback_to_pool_after_s"] as number) ?? null,
+        assigned_at_ms:           (contact?.["assigned_at_ms"] as number) ?? null,
       })
     }
   }
@@ -100,17 +115,21 @@ export interface ClaimArgs {
   session_id:     string
   instance_id:    string
   conference_id?: string
+  // Camada B — identidade do claimant p/ casar com assigned_to (ramal). Ausente
+  // → o engine deriva de instance_id (`human-{userId}`).
+  claimant_user_id?: string
 }
 
 export function claimTask(
   routingUrl: string, adminToken: string | undefined, a: ClaimArgs,
 ): Promise<unknown> {
   return callRouting(routingUrl, adminToken, "/v1/work_queue/claim", {
-    tenant_id:     a.tenant_id,
-    pool_id:       a.pool_id,
-    session_id:    a.session_id,
-    instance_id:   a.instance_id,
-    conference_id: a.conference_id ?? "",
+    tenant_id:        a.tenant_id,
+    pool_id:          a.pool_id,
+    session_id:       a.session_id,
+    instance_id:      a.instance_id,
+    conference_id:    a.conference_id ?? "",
+    claimant_user_id: a.claimant_user_id ?? "",
   })
 }
 

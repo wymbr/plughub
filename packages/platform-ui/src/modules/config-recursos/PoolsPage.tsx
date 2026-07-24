@@ -483,6 +483,7 @@ const PoolsPage: React.FC = () => {
     // the AI/human capacity gates; '' = inferred by the registry backfill.
     agent_kind:        '' as '' | 'human' | 'ai',
     dispatch_mode:     'push' as 'push' | 'pull',
+    acw_gate:          'none' as 'none' | 'soft' | 'hard',
     session_reservation:         null as number | null,
     channel_types:     [] as string[],
     // Arc 19 — INTERNAL workflow_trigger correlation key (not the public URL).
@@ -645,7 +646,7 @@ const PoolsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
-      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', session_reservation: null,
+      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', acw_gate: 'none', session_reservation: null,
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
@@ -666,6 +667,7 @@ const PoolsPage: React.FC = () => {
       description:     pool.description || '',
       agent_kind:        pool.agent_kind ?? '',
       dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
+      acw_gate:          (pool.acw_gate as 'none' | 'soft' | 'hard') ?? 'none',
       session_reservation:         pool.session_reservation ?? null,
       channel_types:     pool.channel_types,
       webhook_skill_id:  pool.webhook_skill_id ?? '',
@@ -793,6 +795,7 @@ const PoolsPage: React.FC = () => {
         // registry backfill to infer). session_reservation: number to set, null to clear.
         ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
         dispatch_mode:     formData.dispatch_mode,
+        acw_gate:          formData.acw_gate,
         ...(formData.session_reservation !== null
           ? { session_reservation: formData.session_reservation }
           : (editingPool?.session_reservation != null ? { session_reservation: null } : {})),
@@ -1146,6 +1149,21 @@ const PoolsPage: React.FC = () => {
               ]}
             />
             <p className="text-xs text-muted-light mt-0.5">{t('pools.dispatch.hint')}</p>
+          </div>
+
+          {/* ── ACW gate (Camada C — detach de hooks de finalização) ─────────── */}
+          <div>
+            <Select
+              label={t('pools.acw.label')}
+              value={formData.acw_gate}
+              onChange={e => setFormData({ ...formData, acw_gate: e.target.value as 'none' | 'soft' | 'hard' })}
+              options={[
+                { value: 'none', label: t('pools.acw.none') },
+                { value: 'soft', label: t('pools.acw.soft') },
+                { value: 'hard', label: t('pools.acw.hard') },
+              ]}
+            />
+            <p className="text-xs text-muted-light mt-0.5">{t('pools.acw.hint')}</p>
           </div>
 
           {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}

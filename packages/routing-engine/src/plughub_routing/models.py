@@ -210,6 +210,13 @@ class PoolConfig(BaseModel):
     # F1.0 é só plumbing: o route() só passa a ramificar em F1.1.
     dispatch_mode: str = "push"
 
+    # Camada C (detach de hooks): ACW como regra de agent_ready.
+    #   "none" (default): não bloqueia. "soft": disponível, supervisor vê pendências.
+    #   "hard": get_ready_instances pula a instância com wrap-up detached pendente
+    #           (marker {t}:instance:{iid}:acw_pending). O ACW do wrap-up INLINE
+    #           segue via wrap_up_pending, independente deste campo.
+    acw_gate: str = "none"
+
 
 # ─────────────────────────────────────────────
 # Queue
@@ -223,6 +230,21 @@ class QueuedContact(BaseModel):
     tier:          Literal["platinum", "gold", "standard"] = "standard"
     queued_at_ms:  int   # timestamp epoch ms
     requirements:  dict[str, int] = Field(default_factory=dict)
+
+    # Camada B (pull direcionado / "ramal"): reserva do work item a um recurso
+    # específico, com transbordo pro pool por lease.
+    #   assigned_to             — user_id preferido (ausente = fila compartilhada,
+    #                             comportamento atual — retrocompat).
+    #   fallback_to_pool_after_s — janela da reserva em segundos; após ela o item
+    #                             vira claimable por qualquer um do pool. Ausente =
+    #                             reserva permanente (só assigned_to; nunca transborda).
+    #   assigned_at_ms          — âncora da janela (carimbada no 1º enqueue e
+    #                             PRESERVADA no re-enfileiramento; fallback queued_at_ms).
+    # INVARIANTE: isto é elegibilidade de claim sobre trabalho *pooled* — NUNCA
+    # alvo de roteamento que bypassa o pool. O pool segue a unidade endereçável.
+    assigned_to:              str | None = None
+    fallback_to_pool_after_s: int | None = None
+    assigned_at_ms:           int | None = None
 
 
 # ─────────────────────────────────────────────

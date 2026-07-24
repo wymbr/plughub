@@ -251,6 +251,16 @@ export const PoolRegistrationSchema = z.object({
    */
   dispatch_mode:          z.enum(["push", "pull"]).optional(),
   /**
+   * Camada C (detach de hooks de finalização) — ACW como regra de `agent_ready`.
+   *   "none" (default): não bloqueia; wrap-up destacado é backlog no inbox pull.
+   *   "soft":           atendente segue disponível; supervisor vê pendências.
+   *   "hard":           o Routing Engine NÃO roteia novo contato enquanto houver
+   *                     wrap-up detached pendente daquele user_id (agent_ready gated).
+   * O ACW bloqueante clássico do wrap-up INLINE segue por outro caminho
+   * (`wrap_up_pending`), independente deste campo — "ou mantém inline".
+   */
+  acw_gate:               z.enum(["none", "soft", "hard"]).optional(),
+  /**
    * Arc 19 (revisado 2026-06-04) — throttle OPCIONAL de downstream.
    * NÃO é capacidade: alocação real é capada pelos slots de instância do
    * deploy (Bootstrap) + admissão híbrida. Quando setado num pool webhook,

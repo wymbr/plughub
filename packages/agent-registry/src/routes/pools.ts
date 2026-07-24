@@ -112,6 +112,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         webhook_skill_id:        body.webhook_skill_id ?? null,
         max_concurrent_sessions: body.max_concurrent_sessions ?? null,
         dispatch_mode:           body.dispatch_mode ?? "push",
+        acw_gate:                body.acw_gate ?? "none",
         session_reservation:     body.session_reservation ?? null,
         max_reply_time_ms:       body.max_reply_time_ms ?? null,
         routing_expression:      body.routing_expression ?? Prisma.DbNull,
@@ -278,6 +279,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.sla_target_ms           !== undefined && { sla_target_ms:           body.sla_target_ms }),
         ...(body.webhook_skill_id        !== undefined && { webhook_skill_id:        body.webhook_skill_id }),
         ...(body.dispatch_mode           !== undefined && { dispatch_mode:           body.dispatch_mode }),
+        ...(body.acw_gate                !== undefined && { acw_gate:                body.acw_gate }),
         // Campos limpáveis via PUT null (schema .nullable()): escalares aceitam
         // null direto no Prisma; JSONB exige Prisma.DbNull.
         ...(body.max_concurrent_sessions !== undefined && { max_concurrent_sessions: body.max_concurrent_sessions }),

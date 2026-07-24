@@ -29,6 +29,12 @@ interface QueueContact {
   // Bug B fix: carried back from the queued contact so the claim attaches the
   // human to the caller's conference (not as a bare primary). Null/"" = none.
   conference_id: string | null
+  // Camada B (pull direcionado / "ramal"): reserva a um recurso preferido.
+  // assigned_to = user_id (null = fila compartilhada); fallback_to_pool_after_s =
+  // janela da reserva em s (null = permanente); assigned_at_ms = âncora da janela.
+  assigned_to:              string | null
+  fallback_to_pool_after_s: number | null
+  assigned_at_ms:           number | null
 }
 
 interface PullInboxPanelProps {
@@ -150,6 +156,26 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
     return c.age_ms
   }, [nowMs])
 
+  // Camada B (ramal): user_id deste agente, derivado do instanceId (`human-{userId}`).
+  const myUserId = instanceId.startsWith("human-") ? instanceId.slice("human-".length) : instanceId
+
+  // Estado de reserva de um item. O árbitro (routing-engine) é a autoridade no
+  // claim; aqui só filtramos/rotulamos o inbox:
+  //   shared        — sem assigned_to (fila compartilhada).
+  //   reservedToMe  — assigned_to == este agente.
+  //   overflowed    — reservado a outro, mas a janela (fallback) já expirou → claimable.
+  //   reservedOther — reservado a outro e ainda na janela → NÃO exibir (não é meu).
+  const reservationOf = useCallback((c: QueueContact): "shared" | "reservedToMe" | "overflowed" | "reservedOther" => {
+    if (!c.assigned_to) return "shared"
+    if (c.assigned_to === myUserId) return "reservedToMe"
+    // reservado a outro: só aparece se transbordou (janela expirada).
+    if (c.fallback_to_pool_after_s == null) return "reservedOther"  // reserva permanente
+    const anchor = c.assigned_at_ms ?? c.first_queued_ms ?? c.queued_at_ms
+    if (anchor == null) return "reservedOther"
+    const ageS = (nowMs - anchor) / 1000
+    return ageS >= c.fallback_to_pool_after_s ? "overflowed" : "reservedOther"
+  }, [myUserId, nowMs])
+
   const handlePull = useCallback(async (c: QueueContact) => {
     setClaiming(c.session_id)
     try {
@@ -181,13 +207,21 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
 
   if (pullPools.length === 0) return null
 
-  // Agrupa por pool (na ordem de pullPools); dentro do grupo, mais-antigo-primeiro.
+  // Agrupa por pool (na ordem de pullPools). Camada B: esconde itens reservados
+  // a OUTRO recurso enquanto na janela (reservedOther); ordena os reservados a
+  // MIM primeiro, depois mais-antigo-primeiro.
+  const rank = (r: string) => (r === "reservedToMe" ? 0 : 1)
   const groups = pullPools
     .map(pid => ({
       pool_id: pid,
       items: contacts
         .filter(c => c.pool_id === pid)
-        .sort((a, b) => (a.queued_at_ms ?? 0) - (b.queued_at_ms ?? 0)),
+        .filter(c => reservationOf(c) !== "reservedOther")
+        .sort((a, b) => {
+          const dr = rank(reservationOf(a)) - rank(reservationOf(b))
+          if (dr !== 0) return dr
+          return (a.queued_at_ms ?? 0) - (b.queued_at_ms ?? 0)
+        }),
     }))
     .filter(g => g.items.length > 0)
 
@@ -229,6 +263,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                   <ul className="space-y-1 px-2 pb-1">
                     {g.items.map(c => {
                       const age = ageOf(c)
+                      const reservation = reservationOf(c)
                       return (
                         <li
                           key={c.session_id}
@@ -242,8 +277,20 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                             className="min-w-0 flex-1 text-left"
                             title={t("pullInbox.previewHint", { defaultValue: "Ver contexto antes de atender" })}
                           >
-                            <div className="text-sm text-dark truncate">
-                              {c.summary ?? c.session_id.slice(0, 8)}
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className="text-sm text-dark truncate">
+                                {c.summary ?? c.session_id.slice(0, 8)}
+                              </span>
+                              {reservation === "reservedToMe" && (
+                                <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-primary-light text-primary">
+                                  {t("pullInbox.reservedToYou", { defaultValue: "Reservado a você" })}
+                                </span>
+                              )}
+                              {reservation === "overflowed" && (
+                                <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-warning-light text-warning-text">
+                                  {t("pullInbox.overflow", { defaultValue: "Transbordado" })}
+                                </span>
+                              )}
                             </div>
                             {age != null && (
                               <div className="text-xs truncate">

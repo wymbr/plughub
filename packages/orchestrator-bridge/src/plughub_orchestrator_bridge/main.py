@@ -77,6 +77,10 @@ REDIS_URL           = os.getenv("REDIS_URL",            "redis://localhost:6379"
 SKILL_FLOW_URL      = os.getenv("SKILL_FLOW_URL",       "http://localhost:3400")
 AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
 CONFIG_API_URL      = os.getenv("CONFIG_API_URL",       "http://localhost:3500")
+# Camada D (detach de hooks de finalização): o bridge dispara hooks `detached`
+# como workflow webhook (fire-and-forget) via channel-gateway, em vez de convidar
+# um especialista de conferência. Só usado no caminho detached.
+CHANNEL_GATEWAY_URL = os.getenv("CHANNEL_GATEWAY_URL",  "http://localhost:8010")
 
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
@@ -1087,6 +1091,89 @@ async def _route_to_receive_waiting(
 
 # ── Pool lifecycle hooks ──────────────────────────────────────────────────────
 
+async def _fire_detached_hook(
+    http:         aiohttp.ClientSession,
+    session_id:   str,
+    pool_id:      str,
+    tenant_id:    str,
+    customer_id:  str,
+    hook_type:    str,
+    target_pool:  str,
+    human_seg_id: str,
+    agent_key:    str,
+    close_origin: str,
+) -> None:
+    """
+    Camada D — dispara um hook de finalização `dispatch: detached` como **workflow
+    webhook fire-and-forget** (Arc 19: POST /v1/channels/webhook/pool/{target_pool}),
+    em vez de convidar um especialista na conferência viva.
+
+    O contato NÃO é segurado: a atribuição fina viaja por REFERÊNCIA no `context`
+    (surveyed_segment_id/agent_key), e a pertença à journey vem de
+    `origin_session_id` + `journey:"inherit"` (a nova sessão herda o
+    root_session_id transitivo da sessão que fecha → membro do mesmo processo).
+    O agente destacado (survey/wrap-up) lê `@ctx.session.surveyed_*` para gravar
+    `survey_record(grain=segment)`/o wrap-up atribuído ao segmento certo.
+
+    Fire-and-forget: falha é logada, nunca levantada (hook nunca bloqueia a sessão).
+    Endereça o POOL (invariante: pool é a unidade endereçável).
+    """
+    if http is None:
+        logger.warning(
+            "_fire_detached_hook: no HTTP session — skipping detached %s → %s session=%s",
+            hook_type, target_pool, session_id,
+        )
+        return
+    context: dict[str, str] = {
+        "session.close_origin": close_origin or "",
+        "hook.type":            hook_type,
+        "hook.origin_pool":     pool_id,
+    }
+    if human_seg_id:
+        context["session.surveyed_segment_id"] = human_seg_id
+    if agent_key:
+        context["session.surveyed_agent_key"] = agent_key
+    body = {
+        "tenant_id":         tenant_id,
+        "trigger_type":      "task",
+        "customer_id":       customer_id or session_id,
+        "origin_session_id": session_id,
+        "journey":           "inherit",   # herda o root_session_id → membro da journey
+        "context":           context,
+    }
+    url = f"{CHANNEL_GATEWAY_URL}/v1/channels/webhook/pool/{target_pool}"
+    try:
+        async with http.post(url, json=body) as resp:
+            _child = ""
+            if resp.status in (200, 201):
+                try:
+                    _child = (await resp.json()).get("session_id", "") or ""
+                except Exception:
+                    pass
+                logger.info(
+                    "Detached hook fired: hook=%s origin_pool=%s → target_pool=%s "
+                    "session=%s child=%s (contact NOT held)",
+                    hook_type, pool_id, target_pool, session_id, _child,
+                )
+            else:
+                # Degradação nunca silenciosa: loga o status do webhook.
+                _txt = ""
+                try:
+                    _txt = (await resp.text())[:200]
+                except Exception:
+                    pass
+                logger.error(
+                    "Detached hook webhook non-2xx: hook=%s target_pool=%s session=%s "
+                    "status=%s body=%s",
+                    hook_type, target_pool, session_id, resp.status, _txt,
+                )
+    except Exception as exc:
+        logger.error(
+            "Detached hook webhook failed: hook=%s target_pool=%s session=%s — %s",
+            hook_type, target_pool, session_id, exc,
+        )
+
+
 async def fire_pool_hooks(
     http:         aiohttp.ClientSession,
     redis_client: aioredis.Redis,
@@ -1168,9 +1255,14 @@ async def fire_pool_hooks(
 
     def _entry_will_dispatch(_e) -> bool:
         """Reproduz os predicados de skip do loop abaixo para dimensionar o
-        contador. Uma entrada NÃO é disparada quando falta 'pool' ou quando é
-        um hook de cliente com nps_on_disconnect=skip numa queda do cliente."""
+        contador de conclusão da CONFERÊNCIA. Uma entrada NÃO conta quando falta
+        'pool', quando é um hook de cliente com nps_on_disconnect=skip numa queda
+        do cliente, ou quando é `dispatch: detached` (Camada D) — o hook destacado
+        vira workflow webhook fora da conferência, logo NÃO participa do barrier
+        `hook_pending`/`posatt` (contá-lo travaria o contato até o force-close)."""
         if not isinstance(_e, dict) or not _e.get("pool"):
+            return False
+        if (_e.get("dispatch", "inline") or "inline") == "detached":
             return False
         _s   = _e.get("side", "agent") or "agent"
         _nod = _e.get("nps_on_disconnect", "timeout") or "timeout"
@@ -1211,6 +1303,7 @@ async def fire_pool_hooks(
     # segment_id para carimbar no hook_conf de cada hook desta leva.
     _hook_human_seg_id = ""
     _hook_human_instance_id = ""   # G7: pid do humano DESTE segmento (não o global)
+    _surveyed_agent_key = ""       # Camada D: user_id do humano servido (p/ context do detached)
     # G7 Slice B: segment_wrapup também serve um segmento humano específico (o que
     # transferiu) — mesma leitura de human_seg + served_human stash que on_human_end.
     # G7 Fase 3b: on_contact_end (NPS) também precisa do stash — o agente de NPS lê
@@ -1306,6 +1399,13 @@ async def fire_pool_hooks(
                 session_id, _e,
             )
 
+    # Camada D — rastreia se esta leva teve hooks INLINE (conferência) e/ou
+    # DETACHED (workflow webhook). Se a leva de FINALIZAÇÃO for 100% detached, o
+    # contato precisa fechar na hora (nada segura a conferência) — decidido após
+    # o loop, espelhando o caminho sem-hook.
+    _detached_fired    = False
+    _inline_dispatched = False
+
     for entry in hook_list:
         target_pool = entry.get("pool") if isinstance(entry, dict) else None
         if not target_pool:
@@ -1344,6 +1444,20 @@ async def fire_pool_hooks(
             )
             continue
 
+        # ── Camada D — dispatch: detached ────────────────────────────────────
+        # Hook destacado: dispara como workflow webhook fire-and-forget (fora da
+        # conferência) e NÃO arma nada do barrier (hook_conf/posatt/wrap_up_pending).
+        # A atribuição fina viaja por referência de segmento no context. Pula todo
+        # o caminho de conferência abaixo.
+        _dispatch_mode = (entry.get("dispatch", "inline") or "inline") if isinstance(entry, dict) else "inline"
+        if _dispatch_mode == "detached":
+            await _fire_detached_hook(
+                http, session_id, pool_id, tenant_id, customer_id, hook_type,
+                target_pool, _hook_human_seg_id, _surveyed_agent_key, _close_origin_val,
+            )
+            _detached_fired = True
+            continue
+
         conference_id = str(uuid.uuid4())
 
         # ConversationInboundEvent — routing engine picks up on pool_id + conference_id.
@@ -1374,6 +1488,7 @@ async def fire_pool_hooks(
                 TOPIC_INBOUND,
                 json.dumps(event).encode("utf-8"),
             )
+            _inline_dispatched = True
             logger.info(
                 "Pool hook fired: hook=%s side=%s origin_pool=%s → target_pool=%s "
                 "session=%s conference=%s",
@@ -1560,6 +1675,26 @@ async def fire_pool_hooks(
                     "fire_pool_hooks: could not register posatt participants: session=%s — %s",
                     session_id, exc,
                 )
+
+    # ── Camada D — fecho do contato quando a leva de FINALIZAÇÃO é 100% detached ──
+    # Um hook detached não arma o barrier (posatt/hook_pending), logo NADA segura a
+    # conferência/contato. Se houve detached e NENHUM inline nesta leva de finalização,
+    # fechamos as duas camadas na hora — exatamente como o caminho sem-hook faz
+    # (_trigger_contact_close = _close_contact_layer + _destroy_conference; guards NX
+    # idempotentes, seguro mesmo se o caller já disparou _close_contact_layer).
+    # Só para hooks de finalização de contato/processo: segment_wrapup (fim-de-segmento,
+    # contato continua) e post_human (encadeado ao barrier inline) ficam de fora.
+    if (
+        _detached_fired
+        and not _inline_dispatched
+        and hook_type in ("on_human_end", "on_contact_end", "on_process_end")
+    ):
+        logger.info(
+            "fire_pool_hooks: all-detached finalization leva — closing contact now: "
+            "session=%s hook=%s pool=%s",
+            session_id, hook_type, pool_id,
+        )
+        await _trigger_contact_close(redis_client, session_id)
 
 
 # ── Hook timeout guard — safety net when hook agents never start/complete ────
@@ -3746,8 +3881,14 @@ async def process_routed(
                 # não pega. `on_process_end` é `side=agent` por natureza (o survey sai por
                 # veículo OUTBOUND, não inline), então cai exatamente aqui.
                 # Espelha a mesma guarda do caminho humano (`agent_done` → on_human_end).
-                _has_customer_hooks = bool(_contact_end_hooks) or any(
-                    (e.get("side", "agent") if isinstance(e, dict) else "agent") == "customer"
+                # Camada D: um hook `detached` NÃO segura o WS do cliente (vai por
+                # workflow webhook), então NÃO conta como "customer hook" — senão o
+                # contato ficaria eternamente `active` esperando um posatt:customer_active
+                # que nunca é incrementado. Só INLINE segura.
+                def _inline(_e) -> bool:
+                    return isinstance(_e, dict) and (_e.get("dispatch", "inline") or "inline") != "detached"
+                _has_customer_hooks = any(_inline(e) for e in _contact_end_hooks) or any(
+                    _inline(e) and (e.get("side", "agent") or "agent") == "customer"
                     for e in _process_end_hooks
                 )
                 if not _has_customer_hooks:
@@ -6183,11 +6324,12 @@ async def process_contact_event(
                                 # on_human_end fica como defesa para pools ainda não
                                 # migrados ao cutover. _close_contact_layer() dispara de
                                 # process_routed quando posatt:customer_active chega a 0.
-                                _has_customer_hooks = bool(_on_contact_end) or any(
-                                    (
-                                        e.get("side", "agent")
-                                        if isinstance(e, dict) else "agent"
-                                    ) == "customer"
+                                # Camada D: hook `detached` não segura o WS (vai por
+                                # workflow webhook) → não conta como customer hook.
+                                def _inline_ce(_e) -> bool:
+                                    return isinstance(_e, dict) and (_e.get("dispatch", "inline") or "inline") != "detached"
+                                _has_customer_hooks = any(_inline_ce(e) for e in _on_contact_end) or any(
+                                    _inline_ce(e) and (e.get("side", "agent") or "agent") == "customer"
                                     for e in _on_human_end
                                 )
                                 if not _has_customer_hooks:

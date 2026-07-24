@@ -31,6 +31,33 @@ e o Routing Engine o trata como qualquer outra alocação.
 
 ---
 
+## `dispatch: inline | detached` (hooks de finalização — Camada A/D, 2026-07-24)
+
+Cada entrada de hook aceita `dispatch` (default `inline`; parse **rejeita** `detached` em `on_human_start`):
+
+- **`inline`** (comportamento clássico): o hook roda como **especialista na conferência viva** — o bridge
+  publica o `ConversationInboundEvent` sintético com `conference_id`, arma o barrier (`hook_pending`/`posatt`)
+  e **segura o contato** até o hook concluir. É o modo que o NPS síncrono presente precisa (WS do cliente vivo).
+- **`detached`** (só em finalização — `on_human_end`/`on_contact_end`/`on_process_end`): o bridge **não segura**
+  o contato. Dispara um **workflow webhook fire-and-forget** (`POST /v1/channels/webhook/pool/{pool}`) com
+  `origin_session_id` + `journey: "inherit"` (a sessão-filha herda o `root_session_id` → mesma journey) e a
+  **referência de segmento** no `context` (`session.surveyed_segment_id`/`surveyed_agent_key`); fecha o contato
+  na hora (congela estatísticas na saída do cliente → **G1/AHT**). A atribuição fina é por referência carregada,
+  não por o hook ser fisicamente um segmento. Ver `conference-mechanics.md` Mudança 25.
+
+```yaml
+hooks:
+  on_human_end:
+    - pool: wrapup_ia
+      side: agent
+      dispatch: detached        # wrap-up assíncrono na fila/inbox — não infla AHT
+  on_contact_end:
+    - pool: nps_ia
+      side: customer            # NPS síncrono presente → inline (default), segura o WS
+```
+
+---
+
 ## Hooks disponíveis
 
 | Hook | Status | Quando dispara |

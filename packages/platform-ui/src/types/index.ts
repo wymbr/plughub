@@ -145,6 +145,8 @@ export interface Pool {
   webhook_skill_id?: string | null
   /** Frente 1: modo de despacho da fila — "push" (auto-aloca, default) | "pull" (agente puxa). */
   dispatch_mode?: 'push' | 'pull'
+  /** Camada C: ACW como regra de agent_ready — "none" (default) | "soft" | "hard". */
+  acw_gate?: 'none' | 'soft' | 'hard'
   /** Throttle opcional de backpressure downstream (webhook). */
   max_concurrent_sessions?: number | null
   /** Fatia reservada de sessões simultâneas (admissão híbrida). */

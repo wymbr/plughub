@@ -1,6 +1,6 @@
 # Design — Detach de hooks de finalização + Pull direcionado + ACW
 
-**Status:** Desenho fechado (2026-07-23), implementação iniciada (Camada A).
+**Status:** Desenho fechado (2026-07-23). Camada A ✅ · Camada B ✅ (smoke 5/5) · Camada C ✅ (smoke 3/3) · Camada D ✅ (smoke 2/2) — **A/B/C/D concluídas 2026-07-24**. **E1 ✅ (Forma A aposentada); E2 (wrap-up detached) + F pendentes.**
 **Componentes:** `packages/schemas` (`PoolHooks`), `packages/orchestrator-bridge` (barrier de fecho + disparo),
 `packages/routing-engine` (pull direcionado + gate de ACW), `packages/channel-gateway` (handle_collect/trigger),
 `packages/platform-ui` (`PullInboxPanel`), skills de survey/wrap-up.
@@ -94,16 +94,54 @@ O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre
 - **Camada A — fundação (iniciada):** `dispatch: inline|detached` no `PoolHooks` (schema `@plughub/schemas`),
   default `inline`, + guard de parse (rejeita `detached` em `on_human_start`). Rebuild de todo serviço que valida
   skills/pools (agent-registry) + engine + mcp-server.
-- **Camada B — pull direcionado ("ramal"):** work item com `assigned_to` (recurso preferido) +
-  `fallback_to_pool_after` (transbordo); claim-eligibility no Routing Engine (`work_queue`/`dispatch_mode: pull`).
-  Wrap-up = 1º consumidor. **Fronteira:** `assigned_to` é elegibilidade de claim sobre trabalho *pooled*, com
-  fallback — nunca alvo de roteamento que bypassa o pool.
-- **Camada C — ACW:** `acw_gate: none|soft|hard` como regra de `agent_ready` no Routing Engine.
-- **Camada D — bridge:** honrar `detached` (não incrementa `hook_pending`; `workflow_trigger(origin + segment
-  ctx)`; fecha o contato). **Atualizar `docs/guias/conference-mechanics.md` § Histórico** (regra da casa para
-  qualquer mudança no mecanismo de conferência).
-- **Camada E — migração:** `agente_wrapup_v1` e o survey → `detached`; NPS síncrono continua `inline`. Aposentar
-  `skill_survey_v1` + `agente_survey_nps_v1` + pool `survey_collector_ia` (Forma A).
+- **Camada B — pull direcionado ("ramal") — ✅ validada (2026-07-24, smoke 5/5):** work item com `assigned_to`
+  (recurso preferido) + `fallback_to_pool_after_s` (transbordo) + `assigned_at_ms` (âncora da janela, preservada
+  no re-enqueue); claim-eligibility DENTRO de `Router.work_task_claim` (o árbitro), antes do `ZREM`: item
+  reservado só é claimable pelo dono (`claimant == assigned_to`, derivado de `instance_id`=`human-{userId}` ou
+  explícito) OU por qualquer um do pool após a idade ≥ `fallback_to_pool_after_s` (fallback ausente = reserva
+  permanente). Recusa barulhenta (`reason: reserved_to_other`, logada). Campos propagados até o inbox
+  (`lib/work-queue.ts`/tools/`server.ts`) e o `PullInboxPanel` filtra reservados-a-outros (até o transbordo),
+  rotula "reservado a você"/"transbordado" e ordena reservados-a-mim primeiro. Smoke:
+  `infra/test/smoke_directed_pull.sh`. **Fronteira:** `assigned_to` é elegibilidade de claim sobre trabalho
+  *pooled*, com fallback — nunca alvo de roteamento que bypassa o pool. Wrap-up como consumidor = Camada E.
+  **As-built:** o item da fila é o dict `contact_data` (JSON em `{t}:queue_contact:{sid}`); os campos entram
+  ali (auto-stamp de `assigned_at_ms` no 1º `add_queued_contact`), sem novo schema Zod. **Reaper de lease NÃO
+  existe** (o transbordo é por idade do item, não por expiração de lease) — o fallback é calculado no claim, sem
+  I/O extra (âncora já no pacote lido).
+- **Camada C — ACW — ✅ validada (2026-07-24, smoke 3/3):** `acw_gate: none|soft|hard` por pool (Prisma
+  coluna + migration; Zod `PoolRegistration`; propaga a `pool.registered`/`updated` → routing `PoolConfig` +
+  `kafka_listener`). Regra em `get_ready_instances` (o leitor do `_allocate`): em **`hard`**, uma instância com
+  wrap-up **detached** pendente (marker `{t}:instance:{iid}:acw_pending`) é **excluída do roteamento** (ACW
+  bloqueante enforçado no roteamento, não segurando o contato); `none`/`soft` não bloqueiam. O ACW do wrap-up
+  **inline** segue por `wrap_up_pending`, **independente** deste campo ("ou mantém inline"). UI: Select `acw_gate`
+  no editor de pool (`PoolsPage`, i18n `pools.acw.*`). **Produtor do marker `acw_pending` = Camada E** (o
+  wrap-up detached de um pool `hard` seta/limpa o marker); aqui só o mecanismo + config + UI. Smoke
+  `infra/test/smoke_acw_gate.sh`.
+- **Camada D — bridge — ✅ validada (2026-07-24, smoke 2/2):** o bridge honra `detached`. Em
+  `fire_pool_hooks`, uma entrada detached (a) não convida especialista de conferência nem arma o barrier
+  (`_entry_will_dispatch` retorna False → fora do `hook_pending`; sem `posatt`/`hook_conf`/`wrap_up_pending`);
+  (b) dispara `workflow_trigger` fire-and-forget via novo helper `_fire_detached_hook`
+  (`POST {CHANNEL_GATEWAY_URL}/v1/channels/webhook/pool/{pool}`, `origin_session_id`+`journey:inherit`+`context`
+  com `session.surveyed_segment_id`/`surveyed_agent_key`/`close_origin`); (c) fecha o contato na hora quando a
+  leva de finalização é 100% detached (`_trigger_contact_close`, espelha o caminho sem-hook → fecha G1). As
+  duas guardas `_has_customer_hooks` (IA-primário + humano `agent_done`) passam a excluir detached (não segura
+  o WS). Novo env `CHANNEL_GATEWAY_URL` no bridge. **conference-mechanics.md § Histórico** atualizado (Mudança 25).
+  Limitações registradas: `post_human`+`on_human_end` 100% detached; `segment_wrapup` detached no fan-out de
+  customer-disconnect (ambos → Camada E). **Atualizar `docs/guias/conference-mechanics.md` § Histórico** ✅.
+- **Camada E — migração** (fatiada): **E1 ✅ (2026-07-24) — Forma A aposentada.** Os pools `survey_processo_ia`
+  (`skill_survey_v1`), `survey_collector_ia` (`skill_survey_nps_v1`) e `survey_reconnect_ia`
+  (`skill_survey_reconnect_v1`) estavam **inertes** (nenhum hook nem `workflow_trigger` vivo os chamava —
+  confirmado por grep). Removidos do `infra/registry/tenant_demo.yaml` e dos arquivos de skill. A coleta de
+  survey fica em: **NPS inline** (`nps_ia`/`agente_nps_v1`, `on_contact_end`, síncrono presente) + **J4c collect**
+  (`skill_survey_{trigger,outbound,runner}_v1`). *(DB rodando: as rows persistem inertes — não há DELETE de pool
+  na API; purge opcional via `REGISTRY_SYNC_PRUNE` ou remoção manual.)* **E2 (pendente) — wrap-up humano →
+  `detached`:** o `agente_wrapup_v1`/`wrapup_ia` (hoje inline, especialista de conferência que coleta o form do
+  humano) vira **item de pull inbox assigned_to** aquele humano (ele reivindica depois e preenche), fechando o
+  **G1 do caminho humano**. Requer: plumbar `assigned_to` pelo webhook trigger (Arc 19) → enqueue do routing;
+  `wrapup_ia` → `dispatch_mode: pull`; skill de wrap-up reescrito como workflow pull (renderiza DialogForm no
+  claim); gravação do outcome do segmento por referência (`surveyed_segment_id`); **produtor do marker
+  `acw_pending`** (setar no dispatch detached de pool `hard`, limpar na resolução — fecha o pendente da Camada C);
+  briefing (transcrição/verbatim) no item. NPS síncrono presente continua `inline`.
 - **Camada F — validação:** G1 (AHT deixa de inflar); atribuição de segmento no relatório; smoke do wrap-up na
   pull inbox (claim direcionado + fallback); pool-scoping do survey sem caminho delegate.
 

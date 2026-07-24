@@ -598,22 +598,29 @@ class Router:
 
     async def work_task_claim(
         self,
-        tenant_id:     str,
-        pool_id:       str,
-        session_id:    str,
-        instance_id:   str,
-        conference_id: str = "",
+        tenant_id:         str,
+        pool_id:           str,
+        session_id:        str,
+        instance_id:       str,
+        conference_id:     str = "",
+        claimant_user_id:  str | None = None,
     ) -> dict:
         """
         Pull: retirada explícita de um contato da fila por um agente logado.
         Atômica e composta:
           1. valida a instância do agente;
           2. lê o pacote do contato (para routed/rollback);
+          2b. Camada B — elegibilidade do "ramal": se o item é reservado
+             (assigned_to) e o claimant não é o dono, só passa após o transbordo
+             (idade ≥ fallback_to_pool_after_s); senão → reserved_to_other;
           3. ZREM atômico da fila (um vencedor) — perdeu → already_claimed;
           4. reserva a vaga no semáforo do RECURSO (push+pull) — −1 (sem capacidade)
              → ROLLBACK re-enfileira → no_capacity;
           5. mark_busy + grava lease do claim;
           6. publica conversations.routed → reusa bridge/Console (vira atendimento).
+
+        `claimant_user_id`: identidade do agente que puxa, para casar com
+        `assigned_to`. Ausente → derivado do instance_id (`human-{userId}`).
         """
         now = datetime.now(timezone.utc).isoformat()
 
@@ -624,6 +631,37 @@ class Router:
         contact = await self._instances.get_full_queued_contact(tenant_id, session_id)
         if contact is None:
             return {"claimed": False, "reason": "not_in_queue"}
+
+        # 2b — Camada B: gate de elegibilidade do pull direcionado ("ramal").
+        # Item reservado (assigned_to) só é claimable por (a) o próprio dono, ou
+        # (b) qualquer um do pool APÓS o transbordo (idade ≥ fallback_to_pool_after_s;
+        # fallback ausente = reserva permanente). Sem query extra: a âncora
+        # (assigned_at_ms, preservada no requeue; fallback queued_at_ms) já está no
+        # pacote lido acima. INVARIANTE: filtro de claim sobre trabalho pooled —
+        # nunca alvo de roteamento que bypassa o pool.
+        assigned_to = contact.get("assigned_to")
+        if assigned_to:
+            claimant = claimant_user_id or (
+                instance_id[len("human-"):] if instance_id.startswith("human-")
+                else instance_id
+            )
+            if claimant != assigned_to:
+                fallback_s = contact.get("fallback_to_pool_after_s")
+                anchor_ms  = contact.get("assigned_at_ms") or contact.get("queued_at_ms")
+                overflowed = False
+                if fallback_s is not None and anchor_ms:
+                    age_s = (
+                        datetime.now(timezone.utc).timestamp() * 1000 - int(anchor_ms)
+                    ) / 1000.0
+                    overflowed = age_s >= float(fallback_s)
+                if not overflowed:
+                    # Degradação nunca silenciosa: loga o motivo da recusa.
+                    logger.info(
+                        "work_task_claim: reserved_to_other — session=%s assigned_to=%s "
+                        "claimant=%s fallback_s=%s (not overflowed yet)",
+                        session_id, assigned_to, claimant, fallback_s,
+                    )
+                    return {"claimed": False, "reason": "reserved_to_other"}
 
         # 3 — atomic win
         won = await self._instances.atomic_claim_dequeue(tenant_id, pool_id, session_id)

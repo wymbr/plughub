@@ -54,11 +54,14 @@ def build_app(router) -> web.Application:
         if missing:
             return web.json_response({"error": "missing_fields", "fields": missing}, status=400)
         result = await router.work_task_claim(
-            tenant_id     = body["tenant_id"],
-            pool_id       = body["pool_id"],
-            session_id    = body["session_id"],
-            instance_id   = body["instance_id"],
-            conference_id = body.get("conference_id", ""),
+            tenant_id        = body["tenant_id"],
+            pool_id          = body["pool_id"],
+            session_id       = body["session_id"],
+            instance_id      = body["instance_id"],
+            conference_id    = body.get("conference_id", ""),
+            # Camada B — identidade do claimant p/ casar com assigned_to (ramal).
+            # Ausente → o engine deriva de instance_id (`human-{userId}`).
+            claimant_user_id = body.get("claimant_user_id") or None,
         )
         return web.json_response(result)
 

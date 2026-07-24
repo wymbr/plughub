@@ -254,6 +254,18 @@ class InstanceRegistry:
         instance_ids = await self._redis.smembers(
             _pool_instances_key(tenant_id, pool_id)
         )
+        # Camada C (detach de hooks): lê o acw_gate do pool UMA vez. Em "hard", uma
+        # instância com wrap-up detached pendente (marker :acw_pending) é pulada —
+        # ACW bloqueante enforçado no ROTEAMENTO (não segurando o contato). "none"/
+        # "soft" não bloqueiam. O wrap_up_pending do INLINE é independente (abaixo).
+        _acw_gate = "none"
+        try:
+            _pc_raw = await self._redis.get(_pool_config_key(tenant_id, pool_id))
+            if _pc_raw:
+                _pc = json.loads(_pc_raw if isinstance(_pc_raw, str) else _pc_raw.decode())
+                _acw_gate = (_pc.get("acw_gate") or "none")
+        except Exception:
+            pass  # não-fatal: sem config → sem gate de ACW
         instances: list[AgentInstance] = []
         for iid in instance_ids:
             raw = await self._redis.get(_instance_key(tenant_id, iid))
@@ -296,6 +308,16 @@ class InstanceRegistry:
                             continue
                     except Exception:
                         pass  # non-fatal: if check fails, include instance anyway
+                    # Camada C: ACW "hard" — pula instância com wrap-up detached pendente.
+                    if _acw_gate == "hard":
+                        try:
+                            _iid_str = iid if isinstance(iid, str) else iid.decode()
+                            if await self._redis.exists(
+                                f"{tenant_id}:instance:{_iid_str}:acw_pending"
+                            ):
+                                continue
+                        except Exception:
+                            pass  # non-fatal: on error, não bloqueia
                     instances.append(inst)
             except Exception:
                 continue
@@ -886,6 +908,14 @@ class InstanceRegistry:
         queue (re-queue from periodic drain). Callers use this to suppress duplicate
         "waiting" notifications to the customer.
         """
+        # Camada B (pull direcionado): se o item é reservado a um recurso
+        # (assigned_to) e ainda não tem a âncora da janela, carimba assigned_at_ms
+        # AGORA (1º enqueue). Como contact_data é persistido/re-passado verbatim,
+        # a âncora sobrevive ao re-enfileiramento (release/rollback/re-rota) → a
+        # janela de reserva conta desde a atribuição, não reinicia a cada requeue.
+        if contact_data.get("assigned_to") and not contact_data.get("assigned_at_ms"):
+            contact_data["assigned_at_ms"] = int(queued_at_ms)
+
         added = await self._redis.zadd(
             _queue_key(tenant_id, pool_id), {session_id: queued_at_ms}
         )

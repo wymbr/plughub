@@ -48,13 +48,14 @@ export function registerWorkQueueTools(server: McpServer, deps: WorkQueueDeps): 
     "Retira (claim) um contato de uma fila pull para um agente logado. O Routing Engine " +
     "concede atomicamente (um único vencedor) e o contato vira atendimento normal.",
     {
-      tenant_id:     z.string(),
-      pool_id:       z.string(),
-      session_id:    z.string(),
-      instance_id:   z.string().describe("Instância do agente que está puxando"),
-      conference_id: z.string().optional(),
+      tenant_id:        z.string(),
+      pool_id:          z.string(),
+      session_id:       z.string(),
+      instance_id:      z.string().describe("Instância do agente que está puxando"),
+      conference_id:    z.string().optional(),
+      claimant_user_id: z.string().optional().describe("Camada B — user_id do claimant p/ casar com assigned_to (ramal); ausente = derivado de instance_id"),
     } as any,
-    async (args: { tenant_id: string; pool_id: string; session_id: string; instance_id: string; conference_id?: string }) => {
+    async (args: { tenant_id: string; pool_id: string; session_id: string; instance_id: string; conference_id?: string; claimant_user_id?: string }) => {
       try {
         return mcpOk(await claimTask(routingUrl, adminToken, args))
       } catch (err) {

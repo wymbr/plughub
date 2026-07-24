@@ -76,6 +76,13 @@
       "pull": "Pull (agente puxa da fila)",
       "hint": "Push (padrão): o routing aloca o contato automaticamente. Pull: o contato aguarda na fila e um agente logado o retira (claim) explicitamente. Recomendado para assíncrono (e-mail, back-office, aprovação)."
     },
+    "acw": {
+      "label": "Gate de ACW (pós-atendimento)",
+      "none": "Nenhum (não bloqueia)",
+      "soft": "Soft (disponível; supervisor vê pendências)",
+      "hard": "Hard (bloqueia novo contato enquanto houver wrap-up pendente)",
+      "hint": "Como o wrap-up destacado pendente afeta o roteamento. Nenhum (padrão): o atendente segue disponível e o wrap-up é backlog no inbox pull. Hard: o routing não roteia novo contato enquanto o atendente tiver wrap-up pendente. O wrap-up inline mantém o bloqueio clássico próprio, independente disto."
+    },
     "hooks": {
       "label": "Hooks de Ciclo de Vida",
       "hint": "Especialistas (pools) acionados em pontos do atendimento humano. Cada hook recruta uma instância disponível do pool escolhido.",

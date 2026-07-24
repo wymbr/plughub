@@ -1327,5 +1327,53 @@ o pool exibido em qualquer cenário de hook. Site: `analytics-api/models.py`.
 
 ---
 
+### Mudança 25 — hooks de finalização `dispatch: detached` (Camada D do detach de hooks, 2026-07-24)
+
+**Contexto.** Hooks de finalização (`on_human_end`/`on_contact_end`/`on_process_end`) só podiam rodar
+**inline** — como especialista convidado na conferência viva, o que **segura o contato** até o hook
+concluir (barrier `hook_pending`/`posatt`; trata `suspended` como concluído → fecha cedo). A razão de
+segurar é **atribuição**, resolvida por referência de segmento + Journey **sem** segurar. A Camada A
+adicionou `dispatch: "inline"|"detached"` ao `PoolHookEntry` (default inline; parse rejeita detached em
+`on_human_start`). Esta Camada D faz o **bridge honrar `detached`**.
+
+**Comportamento.** Para uma entrada `dispatch: detached`, `fire_pool_hooks`:
+1. **Não** convida especialista de conferência (não publica o `conversations.inbound` sintético) e
+   **não arma nada do barrier** — `hook_conf`, `posatt:active`/`posatt:customer_active`, `wrap_up_pending`,
+   participants SET. O `_entry_will_dispatch` passa a retornar `False` para detached, então o
+   `hook_pending:{hook_type}` também **não** o conta (contá-lo travaria o contato até o force-close de 180s).
+2. Dispara um **workflow webhook fire-and-forget** via novo helper `_fire_detached_hook`
+   (`POST {CHANNEL_GATEWAY_URL}/v1/channels/webhook/pool/{target_pool}`, novo env `CHANNEL_GATEWAY_URL`):
+   `origin_session_id = session_id` + `journey: "inherit"` (a sessão-filha **herda o `root_session_id`**
+   transitivo → membro da mesma journey) + `context` com a **referência de segmento**
+   (`session.surveyed_segment_id`/`surveyed_agent_key`, `session.close_origin`, `hook.type`,
+   `hook.origin_pool`). O agente destacado lê `@ctx.session.surveyed_*` e grava atribuído ao segmento —
+   **sem** ser fisicamente um segmento da conferência. Não-2xx/erro é **logado** (degradação nunca silenciosa).
+3. **Fecha o contato na hora** quando a leva de finalização é **100% detached** (`_detached_fired and not
+   _inline_dispatched` e `hook_type in {on_human_end, on_contact_end, on_process_end}`): chama
+   `_trigger_contact_close` (= `_close_contact_layer` + `_destroy_conference`, guards NX idempotentes),
+   espelhando o caminho **sem-hook**. É isto que fecha **G1** (AHT deixa de inflar pelo wrap-up) e generaliza
+   **G7** (desacople de `on_human_end`). Congela as estatísticas na saída do cliente.
+
+**Guardas de fecho ajustadas (`_has_customer_hooks`).** Nos dois call sites que decidem fechar o WS do
+cliente na hora (caminho IA-primário `on_process_end`/`on_contact_end`, e caminho humano `agent_done`), um
+hook **detached NÃO conta como "customer hook"** — ele não segura o WS (vai por veículo outbound/webhook).
+Sem esse ajuste, um `on_contact_end` detached deixaria `_has_customer_hooks=True` → o contato ficaria
+eternamente `active` esperando um `posatt:customer_active` que nunca é incrementado (o mesmo modo de falha
+da Mudança 24). Agora só **inline** segura.
+
+**Mix inline+detached.** Suportado: entradas inline seguem armando o barrier e dirigindo o fecho diferido
+por contador; entradas detached só disparam o webhook e não tocam contadores. O auto-close imediato só
+ocorre quando **nenhuma** entrada inline foi disparada na leva.
+
+**Limitações registradas (fora do escopo da Camada D):** (a) **`post_human` + `on_human_end` 100% detached**
+— `post_human` é encadeado à conclusão dos agentes inline de `on_human_end`; se todos forem detached, nenhum
+agente inline conclui e o `post_human` não dispara (config incomum; a migração da Camada E não usa post_human).
+(b) **`segment_wrapup` detached no fan-out de customer-disconnect** — o `segment_wrapup` (fim-de-segmento,
+contato continua) não recebe auto-close e não arma `contact_close_pending` quando detached; a coordenação do
+teardown multi-humano detached fica para a Camada E (validação E2E). Sites: `orchestrator-bridge/main.py`
+(`_fire_detached_hook`, `fire_pool_hooks`, os dois `_has_customer_hooks`); `docker-compose.demo.yml` (env).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

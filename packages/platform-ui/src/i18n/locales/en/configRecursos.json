@@ -76,6 +76,13 @@
       "pull": "Pull (agent pulls from queue)",
       "hint": "Push (default): the routing engine auto-allocates the contact. Pull: the contact waits in the queue and a logged-in agent claims it explicitly. Recommended for async (email, back-office, approval)."
     },
+    "acw": {
+      "label": "ACW (after-call work) gate",
+      "none": "None (don't block)",
+      "soft": "Soft (available; supervisor sees backlog)",
+      "hard": "Hard (block new contacts while wrap-up pending)",
+      "hint": "How pending detached wrap-up affects routing. None (default): the agent stays available and wrap-up is backlog in the pull inbox. Hard: the routing engine won't route a new contact while the agent has pending wrap-up. Inline wrap-up keeps its own classic blocking regardless."
+    },
     "hooks": {
       "label": "Lifecycle Hooks",
       "hint": "Specialists (pools) triggered at points of the human service. Each hook recruits an available instance from the chosen pool.",

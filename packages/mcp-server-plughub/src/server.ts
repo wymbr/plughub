@@ -1618,11 +1618,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
         return
       }
       const result = await claimTask(_wqRoutingUrl, _wqAdminToken, {
-        tenant_id:     tenantId,
-        pool_id:       poolId,
-        session_id:    sessionId,
-        instance_id:   instanceId,
-        conference_id: (body["conference_id"] as string) ?? "",
+        tenant_id:        tenantId,
+        pool_id:          poolId,
+        session_id:       sessionId,
+        instance_id:      instanceId,
+        conference_id:    (body["conference_id"] as string) ?? "",
+        // Camada B — claimant explícito (opcional; senão o engine deriva de instance_id).
+        claimant_user_id: (body["claimant_user_id"] as string) ?? "",
       })
       res.json(result)
     } catch (err) {
