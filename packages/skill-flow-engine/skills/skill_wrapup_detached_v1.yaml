@@ -1,0 +1,73 @@
+id: skill_wrapup_detached_v1
+name: Wrap-up destacado (Camada E2 wrap-up-α)
+version: "1.0"
+description: |
+  Workflow webhook (Arc 19) do WRAP-UP DESTACADO (Camada E2 do arco de detach de
+  hooks). Disparado pelo bridge quando um hook on_human_end tem dispatch: detached
+  (fatia de wiring, ainda pendente) — ou manualmente para teste — com no context:
+    session.surveyed_agent_key  — user_id do humano que atendeu (→ assigned_to)
+    session.origin_session_id   — sessão de origem (→ briefing + atribuição)
+    session.surveyed_segment_id — segmento humano a atribuir (usado na gravação)
+
+  O workflow DELEGA o DialogForm de disposição (dialog_wrapup_v1) a um pool pull,
+  DIRECIONADO ao agente que atendeu (assigned_to = @ctx.session.surveyed_agent_key,
+  Camada B). O agente reivindica no inbox pull, o Console (DialogFormRenderer/R0)
+  renderiza o form + o briefing (transcrição da origem via briefing_session_id), e
+  submete via workflow_resume. As respostas caem em $.pipeline_state.coletar.answers.
+
+  SUB-FATIA 1 (esta): gravação STUBADA — apenas completa. A tool
+  `segment_outcome_record` (grava o outcome no segmento da origem por referência)
+  entra na sub-fatia 2. Ver docs/adr/adr-wrapup-detached-pull.md (§3α, D3).
+
+  Perfil workflow (webhook): usa apenas delegate/choice/complete.
+classification:
+  type: vertical
+
+entry: coletar
+
+steps:
+  # ── Delega o form de wrap-up ao pool pull, DIRECIONADO ao agente ──────────────
+  - id: coletar
+    type: delegate
+    pool: formfill_demo          # reusa o pool pull do demo R0 (agente loga nele)
+    # Camada B — o item cai no inbox DAQUELE agente (não fila compartilhada).
+    assigned_to: "@ctx.session.surveyed_agent_key"
+    fallback_to_pool_after_s: 3600   # 1h → transborda pro pool se ele não pegar
+    context:
+      title:               "Wrap-up do atendimento"
+      summary:             "Registre a disposição do seu atendimento."
+      dialog_form_id:      "dialog_wrapup_v1"
+      briefing_session_id: "@ctx.session.origin_session_id"
+    timeout_hours: 24
+    business_hours: false
+    on_resume:
+      next: gravar
+    on_timeout:
+      next: encerrar_timeout
+
+  # ── SUB-FATIA 2: grava o outcome no segmento da ORIGEM por referência ──────────
+  # A tool replica _apply_wrapup_to_segment/_republish_segment_from_signal do bridge:
+  # normaliza a classificação → outcome, acumula no seg_signal e re-publica o
+  # participant_left (linha COMPLETA) para o analytics. A atribuição é por referência
+  # (origin_session_id + surveyed_segment_id), não por o wrap-up ser um segmento.
+  - id: gravar
+    type: invoke
+    tool: segment_outcome_record
+    input:
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "@ctx.session.origin_session_id"
+      segment_id:        "@ctx.session.surveyed_segment_id"
+      classificacao:     "$.pipeline_state.coletar.answers.classificacao"
+      resumo:            "$.pipeline_state.coletar.answers.resumo"
+      proximos_passos:   "$.pipeline_state.coletar.answers.proximos_passos"
+    output_as: wrapup_record
+    on_success: encerrar
+    on_failure: encerrar   # gravação falha não deve prender o wrap-up (já logado/isError)
+
+  - id: encerrar
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: failed

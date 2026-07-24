@@ -81,6 +81,14 @@ class ConversationInboundEvent(BaseModel):
     conference_id:    str | None = None
     channel_identity: dict[str, str] | None = None  # { text, voice_profile }
 
+    # Camada B (pull direcionado / "ramal") — reserva do work item a um user_id
+    # específico com transbordo por lease. Declarado AQUI para SOBREVIVER ao
+    # model_validate/model_dump (Pydantic descarta campos não declarados) e fluir até
+    # `contact_data` → {t}:queue_contact:{sid}, de onde work_task_claim os lê. Só
+    # efetivo em pool `dispatch_mode: pull`; ausente = fila compartilhada (retrocompat).
+    assigned_to:              str | None = None
+    fallback_to_pool_after_s: int | None = None
+
 
 # ─────────────────────────────────────────────
 # Agent Instance — real-time state

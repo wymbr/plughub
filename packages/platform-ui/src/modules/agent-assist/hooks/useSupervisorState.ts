@@ -41,10 +41,22 @@ export function useSupervisorState(
     }
   }, [sessionId]);
 
-  // Initial fetch when sessionId arrives
+  // Initial fetch + short retries when sessionId arrives.
+  // R0 form-fill (wrap-up/aprovação): um contato reivindicado é uma workflow
+  // SUSPENSA, sem mensagens de cliente — logo NÃO há evento de WS
+  // (message.text/menu.render) que dispare o re-fetch abaixo. Se o primeiro fetch
+  // corre com o claim (context_snapshot ainda não legível / transitório), o Console
+  // fica no chat "para sempre" (sem re-fetch), em vez de renderizar o DialogForm.
+  // Alguns re-fetches curtos garantem que o snapshot (dialog_form_id + resume_token)
+  // seja pego logo após o claim. Barato e idempotente (fetchingRef evita concorrência).
   useEffect(() => {
+    if (!sessionId) return;
     fetchState();
-  }, [fetchState]);
+    const t1 = setTimeout(fetchState, 700);
+    const t2 = setTimeout(fetchState, 1800);
+    const t3 = setTimeout(fetchState, 3500);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+  }, [fetchState, sessionId]);
 
   // Re-fetch on events that signal new content or updated AI analysis.
   useEffect(() => {

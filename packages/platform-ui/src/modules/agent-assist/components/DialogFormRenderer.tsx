@@ -420,7 +420,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                   : (
                     <button
                       type="button"
-                      onClick={() => submit({ source: "operator", answers })}
+                      onClick={() => submit({ decision: "input", source: "operator", answers })}
                       disabled={busy !== null || disabled}
                       className="text-sm px-4 py-2 rounded font-medium bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-40"
                     >

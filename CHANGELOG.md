@@ -2,6 +2,143 @@
 
 ---
 
+## Wrap-up-α — sub-fatia 2: tool `segment_outcome_record` (grava o outcome no segmento) ✅ (2026-07-24)
+
+Fecha o conteúdo do wrap-up-α: a disposição preenchida no Console passa a **gravar o outcome no SEGMENTO da
+sessão de origem por REFERÊNCIA** (`origin_session_id` + `surveyed_segment_id`), sem o wrap-up ser fisicamente um
+segmento da conferência. O submit deixa de só completar o workflow (stub da sub-fatia 1).
+
+- **Tool MCP `segment_outcome_record`** (`mcp-server-plughub/tools/segment.ts`, grupo implícito; auditada):
+  replica o par do bridge — `_apply_wrapup_to_segment` (normaliza `classificacao`→outcome pelo mesmo mapa
+  `resolvido/pendente/escalado/cancelado`, acumula no hash `session:{origin}:seg_signal:{seg}` + `last_outcome`) e
+  `_republish_segment_from_signal` (lê o hash COMPLETO e re-publica `participant_left` em
+  `conversations.participants` → `analytics.segments`). **Invariante RMT:** publica a **linha inteira** (estáticos
+  do hash + dinâmicos); se o hash não tem `segment_id` (estáticos não semeados pelo hook) → **não publica**
+  (no-op barulhento) p/ não zerar colunas do segmento. Registrada em `server.ts` (deps redis+kafka).
+- **Workflow `skill_wrapup_detached_v1`**: `on_resume` do delegate → passo `gravar` (`invoke segment_outcome_record`
+  com `origin_session_id`/`segment_id` do ctx + `classificacao`/`resumo`/`proximos_passos` de
+  `$.pipeline_state.coletar.answers`) → `complete`. Falha da gravação não prende o wrap-up (`on_failure: encerrar`,
+  já logado/isError).
+- **Smoke** `infra/test/smoke_segment_outcome.sh` (seed/check): semeia os estáticos do segmento (mimetiza o hook),
+  dispara o wrap-up; após o submit no Console, confere o `seg_signal.outcome` + a linha em `analytics.segments`
+  (outcome preenchido E `joined_at`/pool preservados — prova de não-corrupção do RMT).
+- **Rebuild:** `mcp-server-plughub` (tool nova) + restart do bridge com `REGISTRY_SYNC_RECONCILE=true` (propaga a
+  edição do skill já semeado — o invoke step).
+- **E2E validado no Console (2026-07-24):** submit `Resolvido`+resumo+próximos → `[invoke] step=gravar` →
+  `[segment_outcome_record] recorded outcome=resolved` → `seg_signal.outcome=resolved`/`issue_status=resolvido`,
+  `last_outcome={outcome:resolved,agent_kind:human}`, e **1 linha** em `analytics.segments` (`seg_e2e_wrapup`,
+  `outcome=resolved`, **`pool_id=retencao_humano` preservado**) — prova do invariante RMT (linha completa, sem
+  zerar colunas).
+
+**Quatro defeitos corrigidos no caminho do E2E** (cada um escondido atrás de um valor plausível — CLAUDE.md
+§ Postura de Engenharia):
+
+1. **`startServer` ≠ `createServer` (registro na instância errada) — causa raiz das "Tool not found".** O
+   `server.ts` tem DOIS setups: `createServer` (registra todas as tools) e `startServer` (monta seu **próprio**
+   `McpServer` e re-registra tool-a-tool). O `index.ts` sobe **`startServer`** — e a sub-fatia 2 tinha adicionado
+   `registerSegmentTools` só no `createServer`. O server vivo nunca tinha a tool → `MCP error -32602: Tool not
+   found`. Fix: registrar também no bloco do `startServer` (`server.ts` ~L1019). **Gotcha permanente: toda tool
+   nova precisa ser registrada nos DOIS blocos; o que roda é o do `startServer`.**
+2. **Snapshot do slot desatualizado (resume ia pra `encerrar`, não `gravar`).** O pool `wrapup_detached_ia`
+   executava o snapshot da sub-fatia 1 (`on_resume → encerrar`, sem `gravar`); editar o YAML não re-snapshota o
+   slot `current`. Fix: `REGISTRY_SYNC_RECONCILE=true` no restart do bridge re-aplica skills **e** deploy-slots.
+3. **`meta.agent_type_id` corrompido pelo claim de conferência.** Reivindicar a sessão do WORKFLOW como
+   especialista num pool HUMANO (`formfill_demo`) sobrescreve `session:{id}:meta.agent_type_id` →
+   `human_agent_formfill_demo`, e o resume não achava o flow. Fix: chave dedicada `session:{id}:wf_agent` (escrita
+   NX na 1ª ativação, imune ao claim), preferida no `_handle_webhook_session_resumed` (orchestrator-bridge).
+4. **`catch` silencioso do `invoke` mascarava tudo.** O passo `invoke` engolia qualquer erro (resolução de input
+   ou `mcpCall`) num `on_failure` mudo → a falha ia pra `encerrar` e o outcome saía `resolved` sem nada gravado.
+   Fix (alinhado a "degradação nunca silenciosa"): o `invoke` agora loga `resolveInputMap THREW` e
+   `mcpCall THREW → on_failure=<step>` (sem dumpar o input — carrega JWT/PII). Foi esse log que expôs (1).
+
+→ `docs/adr/adr-wrapup-detached-pull.md` (§3α D3). Falta: wiring do hook `on_human_end` `detached` (o bridge
+preenche `surveyed_agent_key`/`origin`/`segment` a partir do hook) + `acw_pending` + isenção nas métricas.
+## Wrap-up-α — sub-fatia 1: form `dialog_wrapup_v1` + workflow de wrap-up (gravação stubada) ✅ (2026-07-24)
+
+Segunda fatia do wrap-up-α (E2a + o workflow), sobre a keystone (`assigned_to` no delegate). Torna o wrap-up
+**claimável e preenchível** no Console (como o demo R0), **direcionado** ao agente que atendeu. A **gravação do
+outcome** (tool `segment_outcome_record`) fica para a sub-fatia 2 — aqui o workflow apenas completa (stub).
+
+- **Form `dialog_wrapup_v1`** (dialog-api, seed `infra/test/seed_dialog_wrapup_form.sh`): DialogForm de disposição
+  — statement + `classificacao` (botões `resolvido`/`pendente`/`escalado`/`cancelado`, valores que casam com o
+  mapa de outcome do wrap-up) + `resumo` (texto) + `proximos_passos` (texto).
+- **Workflow `skill_wrapup_detached_v1`** (perfil workflow): `delegate` do `dialog_wrapup_v1` ao pool pull
+  `formfill_demo` **direcionado** (`assigned_to: "@ctx.session.surveyed_agent_key"`, `fallback_to_pool_after_s:
+  3600`) + `briefing_session_id: "@ctx.session.origin_session_id"`; `on_resume` → complete (stub). Marcado no YAML
+  onde entra o `invoke segment_outcome_record` (sub-fatia 2).
+- **Pool `wrapup_detached_ia`** (webhook) que roda o workflow. Reusa `formfill_demo` (pull) p/ o claim.
+- **Trigger de teste:** `POST /v1/channels/webhook/pool/wrapup_detached_ia` com `context.{session.surveyed_agent_key,
+  session.origin_session_id, session.surveyed_segment_id}` → o item cai no inbox do agente `surveyed_agent_key`.
+- **Rebuild/deploy:** restart do orchestrator-bridge (seed do pool novo + upsert do skill; capacidade pode exigir
+  bump — pool webhook precisa de slot/instância). Seed do form via o script.
+- **Validado no Console (2026-07-24):** wrap-up direcionado ao **operador** (userId real) → item **"RESERVED TO
+  YOU"** no inbox dele; claim → `dialog_wrapup_v1` + **briefing com a transcrição real da origem** renderizam;
+  preenche + submete + completa. O filtro direcionado da Camada B provado nas duas pontas (dono vê; outro não).
+- **Notas menores (R0/polish, não bloqueiam):** sublinhado vermelho em campo de texto = spellcheck do navegador
+  (silenciável com `spellcheck={false}` nos inputs do DialogFormRenderer); 1º submit ocasional não finalizou e o
+  2º sim (a investigar se reproduzível — validação do renderer vs transitório). Anomalia de teste: `max_concurrent:
+  1` no `wrapup_detached_ia` cria tangle se 2 wrap-ups disparam juntos (o 2º enfileira no pool do workflow).
+
+→ `docs/adr/adr-wrapup-detached-pull.md` (§3α). Sub-fatia 2 = tool `segment_outcome_record` (grava o outcome no
+segmento da origem por referência — hoje o submit só completa o workflow).
+
+---
+
+## Wrap-up-α keystone — `assigned_to` no step `delegate` (pull direcionado) ✅ (2026-07-24)
+
+Primeira fatia funcional do wrap-up-α (E2c): o step `delegate` ganha `assigned_to` (+ `fallback_to_pool_after_s`)
+para reservar o work item a um recurso específico DENTRO de um pool `dispatch_mode: pull` — é como o wrap-up cai
+no inbox **daquele** agente que atendeu. A Camada B já tinha o lado-consumidor (`work_task_claim` honra dono/
+transbordo); esta fatia liga o **produtor**. **Correção de rumo:** o veículo do wrap-up é `delegate` (agente-facing,
+o mesmo do demo R0 `skill_formfill_demo_v1`), **não** `collect` (lazy/cliente-oriented) — ver ADR wrap-up §2.1.
+
+- **Schema** (`@plughub/schemas` `DelegateStep`): `assigned_to?: string` (ref-resolvível — o wrap-up usa
+  `@ctx.session.surveyed_agent_key`) + `fallback_to_pool_after_s?: number`.
+- **Engine** (`skill-flow-engine`): `delegate.ts` resolve o ref (via `resolveInputMap`) e propaga no
+  `persistDelegate`; tipos em `executor.ts` + `engine.ts`.
+- **Forwarder** (`skill-flow-service`): repassa os campos no `POST …/webhook/delegate-conference`.
+- **Channel-gateway**: `WebhookDelegateConferenceRequest` + `webhook_delegate_conference` + `handle_delegate_conference`
+  **injetam `assigned_to`/`fallback_to_pool_after_s` no evento `conversations.inbound`** do especialista.
+- **Routing** (`ConversationInboundEvent`): **declara** `assigned_to`/`fallback_to_pool_after_s` — senão o
+  `event.model_dump()` (que vira `contact_data` → `{t}:queue_contact:{sid}`) os descartaria. `add_queued_contact`
+  auto-carimba `assigned_at_ms` (Camada B). Consumidor já pronto.
+- **Retrocompat:** ausência = fila compartilhada (o demo R0 sem `assigned_to` segue claimable por qualquer um).
+  O caminho `/delegate` (child separado, não usado pelo skill-flow-service) ficou intocado — o ativo é o conference.
+- **Smoke** `infra/test/smoke_directed_delegate.sh` ✅ **(3/3, validado 2026-07-24)**: delegate-conference com
+  `assigned_to` → `queue_contact` carrega `assigned_to`+`fallback_to_pool_after_s`+`assigned_at_ms` (auto).
+- **Rebuild:** channel-gateway + routing-engine (mínimo p/ o smoke); schemas-consumers (agent-registry +
+  skill-flow-service + mcp-server) p/ um skill com `delegate.assigned_to` validar/rodar.
+
+→ `docs/adr/adr-wrapup-detached-pull.md` (§3α D2α).
+
+---
+
+## Resume ingress — gate ABAC por TIPO DE TAREFA (destrava form-fill genérico / wrap-up) ✅ (2026-07-24)
+
+Fecha o follow-up do R0: o ingress `POST /v1/channels/webhook/resume/{token}` aplicava ABAC **`approvals.decide`
+a QUALQUER resume com JWT de usuário não-elevado** — então um **form-fill genérico** (wrap-up) submetido por um
+**operador comum** tomaria 403 indevido. Agora o gate é **parametrizado por tipo de tarefa**, resolvido
+**server-side** (autoritativo, nunca client-asserted) do contexto da workflow suspensa.
+
+- **`WebhookAdapter.resume_required_abac(tenant_id, resume_token)` (novo):** resolve token→session e lê o
+  discriminador do ctx. Precedência: (1) `session.resume_abac` = `"modulo.campo"` (declaração explícita do autor
+  do workflow) → `(modulo, campo)`; (2) `session.decisions` presente (marcador de APROVAÇÃO, retrocompat — mesmo
+  sinal que o `ApprovalPanel` usa) → `("approvals","decide")`; (3) nada → **None = form-fill genérico**. Fail-soft.
+- **`_resolve_approver_principal(request, body, required_abac)`:** aplica ABAC + pool-scope a não-elevados **só
+  quando `required_abac` está setado**. `None` (wrap-up/genérico) → **sem ABAC de aprovação**; o binding do claim
+  (`instance==human-{sub}` + `caller==claimant` no `handle_resume`) já autoriza o operador comum. Admin/supervisor
+  seguem bypassando por role. Header ausente → caminho externo/claimed inalterado.
+- **Sem regressão de aprovação:** o `skill_gate_promocao_v1` escreve `decisions` no `delegate.context` →
+  `session.decisions` no ctx → o fallback (2) mantém `approvals.decide`. Verificado no YAML.
+- **Rebuild:** channel-gateway. Fecha o "achado" da revisão do R0 e é a 1ª fatia de backend da E2 (pré-requisito
+  do wrap-up-α: o agente de wrap-up é operador comum).
+- **Validado no Console (2026-07-24):** operador comum (`Demo Operator`, role `operator`) reivindica o
+  `formfill_demo`, renderiza, preenche e **submete OK** (antes: 403); aprovação segue gated. R0 + gate fechados.
+
+→ `docs/adr/adr-wrapup-detached-pull.md` (E2), `docs/product/approval-renderer-kickoff.md` (R0).
+
+---
+
 ## Renderer genérico de collect-form no Console — R0 (núcleo) ✅ (2026-07-24)
 
 Quarta superfície do dialog primitive (chat-runner · página web · hook inline · **Console inbox**). Um
@@ -31,10 +168,11 @@ por caso**. Kickoff `docs/product/approval-renderer-kickoff.md` (R0); ADR aprova
 - **Validado (UI, admin):** (1) aprovação — claim → núcleo renderiza briefing+form+decisões → decide → resume
   (regressão do A5); (2) genérico — claim → núcleo renderiza briefing+form+Submit → `payload.answers` → o
   `choice` do workflow roteia; transcrição renderiza com `BRIEFING_SID` de sessão real. Smoke verde.
-- **Achado (não-bloqueante, follow-up E2):** o ingress de resume aplica ABAC `approvals.decide` a **qualquer**
-  resume com JWT (admin/supervisor bypassam). Um form-fill genérico não-aprovação (ex.: wrap-up-α) por um
-  operador comum seria gated indevidamente — parametrizar o gate por tipo de tarefa é trabalho de backend da E2,
-  fora do R0.
+- **Achado → RESOLVIDO (2026-07-24, entrada acima):** o ingress de resume aplicava ABAC `approvals.decide` a
+  **qualquer** resume com JWT (só admin/supervisor bypassavam), barrando um form-fill genérico (wrap-up-α) por
+  operador comum. **Fix:** gate parametrizado por tipo de tarefa, resolvido server-side do ctx
+  (`resume_required_abac`) — aprovação (`session.decisions`/`resume_abac`) exige o campo; genérico depende só do
+  binding do claim.
 
 **Pendente (fora do R0):** R1 = extras de aprovação já empilhados menos anexos/masking-por-role e ABAC `approvals`
 completos (A4/A5.6); wrap-up-α (Camada E2) = `dialog_wrapup_v1` + dispatch detached do bridge + gravação do

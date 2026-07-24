@@ -156,6 +156,17 @@ export async function executeDelegate(
     }
   }
 
+  // Camada B (pull direcionado) — resolve assigned_to (aceita ref @ctx.*/$.* via o
+  // mesmo resolveInputMap do context; o wrap-up usa @ctx.session.surveyed_agent_key).
+  let resolvedAssignedTo: string | undefined
+  if (step.assigned_to) {
+    const m = await resolveInputMap({ v: step.assigned_to }, ctx, ctx.contextStore)
+    const v = m["v"]
+    if (v !== undefined && v !== null && String(v).trim() !== "") {
+      resolvedAssignedTo = String(v)
+    }
+  }
+
   // 3. Dispatch child session via persistDelegate callback (wired by bridge)
   let child_session_id = ""
   if (ctx.persistDelegate) {
@@ -172,6 +183,10 @@ export async function executeDelegate(
         // channel-gateway gates the pending_by_customer dual-write.
         customer_resumable: step.customer_resumable,
         resume_policy:      step.resume_policy,
+        // Camada B (pull direcionado / "ramal") — reserva do work item ao recurso.
+        ...(resolvedAssignedTo ? { assigned_to: resolvedAssignedTo } : {}),
+        ...(step.fallback_to_pool_after_s !== undefined
+          ? { fallback_to_pool_after_s: step.fallback_to_pool_after_s } : {}),
       })
       child_session_id = result.child_session_id
     } catch (err) {

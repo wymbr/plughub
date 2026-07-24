@@ -41,6 +41,7 @@ import type { AgentEventDeps }      from "./tools/agent-events"
 import { registerJourneyTools, writeContextTag } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
+import { registerSegmentTools }     from "./tools/segment"
 import { registerWorkflowTools }    from "./tools/workflow"
 import type { WorkflowDeps }        from "./tools/workflow"
 import { registerDialogTools }      from "./tools/dialog"
@@ -169,6 +170,10 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerAgentEventTools(server, agentEventDeps)
   registerJourneyTools(server, agentEventDeps)
   registerSurveyTools(server, surveyDeps)
+  registerSegmentTools(server, {
+    redis, kafka,
+    tenantId: process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+  })
   registerWorkflowTools(server, workflowDeps)
   registerDialogTools(server, dialogDeps)
 
@@ -1011,6 +1016,13 @@ export async function startServer(config: ServerConfig): Promise<void> {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",
       evaluationApiUrl:  process.env["EVALUATION_API_URL"] ?? "http://evaluation-api:3400",
       evaluationServiceToken: process.env["EVALUATION_SERVICE_TOKEN"] ?? process.env["PLUGHUB_EVALUATION_SERVICE_TOKEN"] ?? "",
+    })
+    // Camada E2 (wrap-up-α) — segment_outcome_record. DEVE ser registrada aqui
+    // também: startServer cria seu PRÓPRIO mcpServer (não reusa createServer), e é
+    // este o server que o index.ts sobe e que o skill-flow-service consulta.
+    registerSegmentTools(mcpServer, {
+      redis, kafka,
+      tenantId: process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
     })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",

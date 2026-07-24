@@ -117,6 +117,22 @@ pools:
     webhook_skill_id: skill_formfill_demo_v1
     sla_target_ms: 86400000
 
+  # Camada E2 (wrap-up-α) — pool webhook que roda o workflow de WRAP-UP destacado
+  # (skill_wrapup_detached_v1): delega o dialog_wrapup_v1 DIRECIONADO (assigned_to)
+  # ao agente que atendeu, reusando o pool pull `formfill_demo` p/ o claim. Disparado
+  # pelo bridge (hook on_human_end detached — wiring pendente) ou manualmente p/ teste.
+  - pool_id: wrapup_detached_ia
+    agent_kind: ai
+    # max_concurrent >= 2: o workflow suspende no delegate SEGURANDO a instância; o
+    # resume (submit) precisa de outra instância p/ rodar o on_resume — com 1 só,
+    # deadlock (o resume nunca roda). Folga p/ N wrap-ups suspensos + seus resumes.
+    deploy: { skill_id: skill_wrapup_detached_v1, max_concurrent_sessions: 5 }
+    description: "Pool webhook — workflow de wrap-up destacado (Camada E2)"
+    channel_types: [webhook]
+    skill_id: skill_wrapup_detached_v1
+    webhook_skill_id: skill_wrapup_detached_v1
+    sla_target_ms: 86400000
+
   # Pool webhook que EFETIVA promoção de deploy agendada (Scheduler Fase 2).
   # Disparado por uma Agenda (POST /v1/channels/webhook/pool/deploy_promote_ia); o
   # skill lê o pool-alvo do payload da agenda (@ctx.target_pool) e chama pool_promote.

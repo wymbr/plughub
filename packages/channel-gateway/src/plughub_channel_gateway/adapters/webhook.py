@@ -541,6 +541,49 @@ class WebhookAdapter(ChannelAdapter):
         except Exception as exc:
             logger.warning("A5.4: could not write approval decision message: %s", exc)
 
+    async def resume_required_abac(
+        self, tenant_id: str, resume_token: str
+    ) -> tuple[str, str] | None:
+        """
+        Camada E2 (gate por tipo de tarefa): resolve, SERVER-SIDE, qual capacidade
+        ABAC a submissão deste resume exige — a partir do contexto da workflow
+        suspensa (autoritativo; o autor do workflow declarou no `delegate.context`),
+        NUNCA de valor client-asserted.
+
+        Precedência:
+          1. `session.resume_abac` = "modulo.campo" (ex.: "approvals.decide") →
+             (modulo, campo). É a declaração explícita do autor.
+          2. `session.decisions` presente (marcador de APROVAÇÃO, retrocompat) e sem
+             `resume_abac` → ("approvals", "decide") — preserva o gate das aprovações
+             existentes sem exigir que elas passem a declarar o campo.
+          3. Nada → None = **form-fill genérico** (ex.: wrap-up): o binding do claim
+             (instance==human-{sub} + caller==claimant) já autoriza; sem ABAC extra.
+
+        Fail-soft: token desconhecido/erro → None (o handle_resume trata 404; e o
+        default seguro aqui é não exigir aprovação sobre um form-fill genérico —
+        o claim continua sendo verificado).
+        """
+        try:
+            token_value = await self._redis.hget(
+                f"{tenant_id}:resume_tokens", resume_token
+            )
+            if not token_value:
+                return None
+            session_id = token_value.split(":", 2)[0]
+            explicit = await self._read_ctx_tag(tenant_id, session_id, "session.resume_abac")
+            if explicit and "." in explicit:
+                mod, _, field = explicit.partition(".")
+                mod, field = mod.strip(), field.strip()
+                if mod and field:
+                    return (mod, field)
+            # Retrocompat: aprovação sem resume_abac explícito é reconhecida pelo
+            # marcador `session.decisions` (mesmo sinal que o ApprovalPanel usa).
+            if await self._read_ctx_tag(tenant_id, session_id, "session.decisions"):
+                return ("approvals", "decide")
+            return None
+        except Exception:
+            return None
+
     async def handle_resume(
         self,
         resume_token:  str,
@@ -1582,6 +1625,8 @@ class WebhookAdapter(ChannelAdapter):
         timeout_hours:      float = 1.0,
         customer_resumable: bool = False,
         resume_policy:      str  = "offer",
+        assigned_to:              str = "",
+        fallback_to_pool_after_s: int | None = None,
     ) -> str:
         """
         Create a conference specialist in an existing agent (webchat) session.
@@ -1683,6 +1728,14 @@ class WebhookAdapter(ChannelAdapter):
             "timestamp":   now_iso,
             "started_at":  now_iso,
         }
+        # Camada B (pull direcionado / "ramal") — quando o pool-alvo é `dispatch_mode:
+        # pull`, o routing parqueia este convite como work item; assigned_to/fallback
+        # fluem ao contact_data (via ConversationInboundEvent) e o work_task_claim os
+        # honra (dono OU idade ≥ fallback). Ausentes = fila compartilhada (retrocompat).
+        if assigned_to:
+            event["assigned_to"] = assigned_to
+        if fallback_to_pool_after_s is not None:
+            event["fallback_to_pool_after_s"] = int(fallback_to_pool_after_s)
         await self._publish(event, topic="conversations.inbound")
 
         # ── Pending workflow lookup key (customer reconnect detection) ─────────

@@ -3521,6 +3521,20 @@ async def process_routed(
                     nx=True,
                     ex=_stl(),
                 )
+                # Wrap-up-α / robustez do resume: identidade ESTÁVEL do WORKFLOW
+                # (agent_type_id + pool). O `session:{id}:meta` compartilhado é
+                # sobrescrito quando a sessão do workflow é reivindicada como
+                # ESPECIALISTA de conferência num pool HUMANO (delegate-conference →
+                # ex.: wrap-up reivindicado no formfill_demo), virando o agente humano
+                # do claim. Aí o _handle_webhook_session_resumed lia o agente errado e
+                # não achava o flow → re-suspend. Esta chave dedicada não é tocada pelo
+                # claim e é a fonte de verdade do resume.
+                await redis_client.set(
+                    f"session:{session_id}:wf_agent",
+                    json.dumps({"agent_type_id": agent_type_id, "pool_id": pool_id}),
+                    nx=True,
+                    ex=_stl(),
+                )
                 logger.debug(
                     "Webhook session meta written (NX): session=%s pool=%s instance=%s",
                     session_id, pool_id, native_instance_id,
@@ -6869,6 +6883,28 @@ async def _handle_webhook_session_resumed(
     pool_id       = meta.get("pool_id", "")
     customer_id   = meta.get("customer_id", "")
     instance_id   = meta.get("instance_id", "")
+
+    # Robustez do resume (wrap-up-α): o `meta` pode ter sido corrompido quando a sessão
+    # do WORKFLOW foi reivindicada como especialista de conferência num pool HUMANO
+    # (delegate-conference) — o agent_type_id vira o agente do claim e o flow do
+    # workflow "some". A identidade REAL do workflow está em `session:{id}:wf_agent`
+    # (escrita NX na 1ª ativação, não tocada pelo claim). Prefira-a.
+    try:
+        _raw_wf = await redis_client.get(f"session:{session_id}:wf_agent")
+        if _raw_wf:
+            _wf = json.loads(_raw_wf)
+            if _wf.get("agent_type_id"):
+                if _wf["agent_type_id"] != agent_type_id:
+                    logger.info(
+                        "session_resumed: meta.agent_type_id=%s corrompido pelo claim; "
+                        "usando wf_agent=%s (session=%s)",
+                        agent_type_id, _wf["agent_type_id"], session_id,
+                    )
+                agent_type_id = _wf["agent_type_id"]
+            if _wf.get("pool_id"):
+                pool_id = _wf["pool_id"]
+    except Exception:
+        pass
 
     if not agent_type_id:
         logger.error(

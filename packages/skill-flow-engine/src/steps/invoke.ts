@@ -48,11 +48,24 @@ export async function executeInvoke(
   }
 
   // Resolver inputs — literais, referências $.* (JSONPath) ou @ctx.* (ContextStore)
-  const resolvedInput = await resolveInputMap(
-    step.input ?? {} as Record<string, unknown>,
-    ctx,
-    ctx.contextStore,
-  )
+  let resolvedInput: Record<string, unknown>
+  try {
+    resolvedInput = await resolveInputMap(
+      step.input ?? {} as Record<string, unknown>,
+      ctx,
+      ctx.contextStore,
+    )
+  } catch (resolveErr) {
+    // Degradação nunca silenciosa (CLAUDE.md § Postura de Engenharia): a resolução
+    // de input que falha NÃO pode virar um on_failure mudo — loga o motivo. NÃO
+    // logamos o resolvedInput (carrega session_token/JWT e campos livres do cliente).
+    console.error(
+      "[invoke] step=%s tool=%s resolveInputMap THREW: %s",
+      step.id, step.tool ?? step.target?.tool ?? "?",
+      resolveErr instanceof Error ? resolveErr.message : String(resolveErr),
+    )
+    throw resolveErr
+  }
 
   // step.target (external MCP) and step.tool (native plughub) are both optional;
   // at least one must be present — validated at runtime per spec 4.7.
@@ -109,6 +122,11 @@ export async function executeInvoke(
       transition_reason: "on_success",
     }
   } catch (error) {
+    console.error(
+      "[invoke] step=%s tool=%s mcpCall THREW → on_failure=%s: %s",
+      step.id, toolName, step.on_failure,
+      error instanceof Error ? error.message : String(error),
+    )
     // Sentinel permanece como "dispatched" — na retomada via catch/retry,
     // o step será re-executado (at-least-once para a janela de crash residual).
     return {

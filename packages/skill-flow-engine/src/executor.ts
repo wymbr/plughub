@@ -226,6 +226,9 @@ export interface StepContext {
     customer_resumable?: boolean
     /** How a discovered cross-channel pending is offered on reconnect. */
     resume_policy?:      "offer" | "auto"
+    /** Camada B (pull direcionado) — reserva do work item ao recurso + transbordo. */
+    assigned_to?:              string
+    fallback_to_pool_after_s?: number
   }): Promise<{ child_session_id: string }>
 
   /**

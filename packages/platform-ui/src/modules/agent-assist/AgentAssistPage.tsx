@@ -544,7 +544,14 @@ export const AgentAssistPage: React.FC = () => {
   const approvalSnapshot = selected?.supervisorState?.customer_context?.context_snapshot ?? null;
   const isFormFillContact = isFormFillSnapshot(approvalSnapshot as never);
   const isApprovalContact = isApprovalSnapshot(approvalSnapshot as never);
-  const approvalPoolId = ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined) ?? "";
+  // pool_id do RESUME/release = o pool onde o item foi REIVINDICADO (a claim lease
+  // vive lá), NÃO o `session.pool.id` do snapshot — que é o pool do WORKFLOW (ex.:
+  // wrapup_detached_ia / formfill_demo_ia), não o pool pull do claim (ex.: formfill_demo).
+  // Usar session.pool.id fazia o resume procurar a lease no pool errado → 403
+  // (caller!=claimant) e o workflow nunca resumia. `selected.poolId` vem do routed do claim.
+  const approvalPoolId = (selected?.poolId
+    ?? ((approvalSnapshot as Record<string, { value?: unknown }> | null)?.["session.pool.id"]?.value as string | undefined))
+    ?? "";
 
   // Tira a tarefa de aprovação do atendimento do agente: remove do mapa (para o
   // timer + limpa a lista) e deseleciona. No RELEASE é obrigatório (a sessão persiste

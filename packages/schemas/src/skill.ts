@@ -1088,6 +1088,17 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
     /** Pool where the I/O agent will be allocated via routing engine. */
     pool:           z.string().min(1),
     /**
+     * Camada B (pull direcionado / "ramal") — reserva do work item do delegate a
+     * um user_id específico DENTRO do pool pull, com transbordo pro pool por lease.
+     * Ortogonal ao `pool` (o pool é o endereço; isto é filtro de claim dentro dele).
+     * Suporta refs (@ctx.* / $.pipeline_state.*) — o wrap-up usa
+     * "@ctx.session.surveyed_agent_key". Só efetivo quando o pool é `dispatch_mode: pull`.
+     */
+    assigned_to:              z.string().optional(),
+    /** Janela da reserva (s); após, o item transborda pra qualquer um do pool.
+     *  Ausente = reserva permanente (só assigned_to). */
+    fallback_to_pool_after_s: z.number().int().nonnegative().optional(),
+    /**
      * Key→value pairs written to the child session's ContextStore before
      * the agent is activated. Supports @ctx.* and $.pipeline_state.* references.
      * The engine always writes session.workflow_resume_token automatically —

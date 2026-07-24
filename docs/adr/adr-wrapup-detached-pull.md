@@ -113,25 +113,44 @@ do renderer que o wrap-up-α depende (núcleo genérico **R0**) está em
 - **D1α — Veículo = workflow webhook que `collect`a o form (reusa `_fire_detached_hook`).** O bridge dispara o
   `on_human_end side=agent detached` pelo **mesmo** `_fire_detached_hook` da Camada D (`POST …/webhook/pool/
   {wrapup_pool}`, `origin_session_id`+`journey:inherit`+`surveyed_segment_id`/`surveyed_agent_key` no context) →
-  cria a **sessão de workflow** de wrap-up. Esse workflow faz **`collect`** carregando o `dialog_form_id` do
-  wrap-up + `assigned_to = @ctx.session.surveyed_agent_key` + `briefing_session_id = @ctx.session.origin_session_id`
-  → o **child parqueia como item de pull direcionado** ao agente. O agente reivindica no inbox → o **Console
-  renderiza (form + briefing da origem)** → submete via `workflow_resume` → o workflow **grava o outcome** (D3) e
-  completa. O contato de origem fecha na hora (Camada D). *(Um nível de workflow + um child de collect; NÃO o
-  contato pull sintético do β.)*
-- **D2α — `assigned_to` vive no step `collect`** (não no webhook trigger). A Camada B fez o lado-routing
-  (`QueuedContact.assigned_to` + gate do claim); falta o **executor do `collect`** propagar `assigned_to` (+
-  `fallback_to_pool_after_s`) ao `contact_data` do child ao enfileirar. O agent_id vem do context
-  (`@ctx.session.surveyed_agent_key`, semeado pelo `_fire_detached_hook`). Assim o item cai no inbox **daquele**
-  agente (filtro da Camada B); transbordo pro pool por lease se ele não pegar.
+  cria a **sessão de workflow** de wrap-up. Esse workflow faz **`delegate`** (NÃO `collect` — ver correção
+  abaixo) carregando `context.dialog_form_id` do wrap-up + `context.briefing_session_id =
+  @ctx.session.origin_session_id` + **`assigned_to = @ctx.session.surveyed_agent_key`** (campo de 1ª classe do
+  step) → o convite de especialista **parqueia como item de pull direcionado** ao agente no pool `dispatch_mode:
+  pull`. O agente reivindica no inbox → o **Console renderiza (form + briefing da origem)** → submete via
+  `workflow_resume` → o workflow **grava o outcome** (D3) e completa. O contato de origem fecha na hora (Camada D).
+  **Correção (2026-07-24): o veículo é `delegate`, não `collect`.** O `collect` é lazy e cliente-oriented (link →
+  webchat, para alcançar o CLIENTE); o wrap-up é **agente-facing** (o humano reivindica do inbox) — exatamente o
+  que o demo R0 validado (`skill_formfill_demo_v1`) faz com `delegate` a um pool pull. A cadeia real é
+  `delegate` → `persistDelegate` → `handle_delegate_conference` (o especialista entra na sessão do workflow) →
+  inbound com `conference_id` parqueia no pull.
+- **D2α — `assigned_to` é campo de 1ª classe do step `delegate`** (✅ implementado 2026-07-24). A Camada B fez o
+  lado-routing (`QueuedContact.assigned_to` + gate do claim); o plumbing produtor foi ligado: `DelegateStep.
+  assigned_to`/`fallback_to_pool_after_s` (schema) → executor resolve o ref (`@ctx.session.surveyed_agent_key`) →
+  `persistDelegate` → forwarder → `handle_delegate_conference` injeta no evento inbound → declarado em
+  `ConversationInboundEvent` (senão `model_dump` descarta) → `contact_data` → `work_task_claim` honra. Assim o item
+  cai no inbox **daquele** agente (filtro da Camada B); transbordo pro pool por lease se ele não pegar. Smoke
+  `infra/test/smoke_directed_delegate.sh`.
 - **D5α — Briefing = slot genérico (parte do núcleo, não enriquecimento).** A superfície de collect-form no
   Console tem um **painel de briefing read-only** ao lado do form, alimentado por: (a) **`briefing_session_id`**
   → o Console renderiza a **transcrição** daquela sessão (wrap-up = `origin_session_id`; reuso do
   `/api/conversation_history/{id}` que o preview do pull já usa) e/ou (b) **contexto inline / refs de anexo**
   (aprovação = pacote). Sem esse painel o wrap-up é impreenchível (o agente não lembra) — por isso é **núcleo**,
   não opcional. Mantém-se genérico: wrap-up preenche `briefing_session_id`, aprovação preenche o pacote.
-- **D3/D4/D6/D7 valem sob α** (a gravação por referência agora acontece no `workflow_resume` do collect; o marker
-  `acw_pending` e a config do pool idem). Ver §3 (β) para o detalhe dessas decisões, comuns aos dois caminhos.
+- **D3 ✅ (2026-07-24, E2E validado) — gravação por referência via tool `segment_outcome_record`** (mcp-server): no
+  `on_resume` do delegate, o workflow chama a tool que replica `_apply_wrapup_to_segment`/`_republish_segment_from_signal`
+  (acumula no `seg_signal` + re-publica a linha COMPLETA `participant_left` → `analytics.segments`; no-op se os
+  estáticos não foram semeados, p/ não corromper o RMT). **D4/D6/D7 valem sob α** (`acw_pending` e config do pool).
+  Ver §3 (β) para o detalhe, comum aos dois caminhos. **E2E fechado no Console** (submit → `seg_signal.outcome=resolved`
+  + linha em `analytics.segments` com `pool_id` preservado). **Gotcha registrado (CHANGELOG):** a tool teve de ser
+  registrada no bloco do **`startServer`** do `mcp-server` (não só no `createServer`) — é o `startServer` que o
+  `index.ts` sobe; toda tool nova vai nos DOIS blocos.
+- **Dauth — o wrap-up submete como form-fill GENÉRICO (não aprovação).** O ingress de resume gateia por **tipo de
+  tarefa** (`resume_required_abac`, server-side do ctx — ✅ 2026-07-24): aprovação (`session.decisions`/`session.
+  resume_abac`) exige a capacidade; **form-fill genérico depende só do binding do claim** (`instance==human-{sub}`
+  + `caller==claimant`). Logo o `collect` do wrap-up **NÃO deve setar `decisions`** (senão seria gated como
+  aprovação); se quiser um ABAC próprio de wrap-up, declara `session.resume_abac`, senão o claim já autoriza o
+  operador comum. Foi o pré-requisito de backend que destravou o R0 p/ o wrap-up.
 
 **Núcleo genérico que o renderer precisa entregar (R0):** claim → **form (DialogForm por `form_id`) + painel de
 briefing (transcrição por `briefing_session_id` + contexto inline)** → submit via `workflow_resume` → devolver à

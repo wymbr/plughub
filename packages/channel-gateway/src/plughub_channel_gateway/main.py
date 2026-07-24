@@ -771,6 +771,9 @@ class WebhookDelegateConferenceRequest(BaseModel):
     # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
     customer_resumable: bool = False
     resume_policy:      str  = "offer"   # offer | auto
+    # Camada B (pull direcionado / "ramal") — reserva do item ao recurso + transbordo.
+    assigned_to:              str | None = None
+    fallback_to_pool_after_s: int | None = None
 
 class IdentityAnchor(BaseModel):
     kind:  str   # phone | email | cpf | princ | dev
@@ -833,6 +836,8 @@ async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) ->
         timeout_hours      = body.timeout_hours,
         customer_resumable = body.customer_resumable,
         resume_policy      = body.resume_policy,
+        assigned_to              = body.assigned_to or "",
+        fallback_to_pool_after_s = body.fallback_to_pool_after_s,
     )
     return {"session_id": session_id}
 
@@ -1222,16 +1227,26 @@ async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
     return {"session_id": session_id}
 
 
-def _resolve_approver_principal(request: Request, body: WebhookResumeRequest) -> dict | None:
+def _resolve_approver_principal(
+    request: Request,
+    body: WebhookResumeRequest,
+    required_abac: tuple[str, str] | None = None,
+) -> dict | None:
     """
     A5 — resolve o principal AUTOR do resume + classe de confiança, a partir do header.
 
-    Header `Authorization: Bearer <jwt>` válido → aprovador HUMANO (possessed): verifica
-    assinatura (auth_jwt_secret) + ABAC approvals.decide + accessible_pools + a
-    auto-consistência instance==human-{sub}. O check de POSSE do claim (o caller detém a
-    lease) é feito no handle_resume via o árbitro (precisa do session_id). Ausente → None:
-    caminho externo/sistema (claimed), inalterado. Falha de verificação → HTTPException 403
-    (atribuir a decisão a quem não é o autor é pior que não atribuir).
+    Header `Authorization: Bearer <jwt>` válido → HUMANO logado (possessed): verifica
+    assinatura (auth_jwt_secret) + a auto-consistência instance==human-{sub}. O check de
+    POSSE do claim (o caller detém a lease) é feito no handle_resume via o árbitro (precisa
+    do session_id). Ausente → None: caminho externo/sistema (claimed), inalterado. Falha de
+    verificação → HTTPException 403 (atribuir a decisão a quem não é o autor é pior que não
+    atribuir).
+
+    Camada E2 — `required_abac` (modulo, campo) é resolvido SERVER-SIDE do contexto da
+    workflow suspensa (`resume_required_abac`): quando setado (ex.: APROVAÇÃO →
+    ("approvals","decide")), aplica esse ABAC + pool-scope a não-elevados. Quando None
+    (form-fill genérico, ex.: wrap-up), NÃO exige ABAC de aprovação — o binding do claim
+    (instance==human-{sub} + caller==claimant no handle_resume) já autoriza o operador comum.
     """
     token = bearer_from_header(request.headers.get("Authorization"))
     if not token:
@@ -1254,22 +1269,24 @@ def _resolve_approver_principal(request: Request, body: WebhookResumeRequest) ->
     if payload.get("tenant_id") and payload["tenant_id"] != body.tenant_id:
         _log.warning("A5 403 tenant_mismatch: jwt=%s body=%s", payload.get("tenant_id"), body.tenant_id)
         raise HTTPException(status_code=403, detail="approval: tenant mismatch")
-    # ABAC approvals.decide — admin/supervisor bypassam por role (mesma semântica do
-    # passesAbac da plataforma; contas elevadas não carregam module_config por campo).
+    # ABAC por TIPO DE TAREFA (Camada E2) — admin/supervisor bypassam por role (mesma
+    # semântica do passesAbac da plataforma; contas elevadas não carregam module_config
+    # por campo). Elevados têm autoridade sobre todos os pools e bypassam ABAC E pool-scope
+    # (o pool-scope já foi exercido no inbox/claim; re-exigir cria assimetria claim↔resume).
     roles = payload.get("roles")
     roles = roles if isinstance(roles, list) else []
     is_elevated = ("admin" in roles) or ("supervisor" in roles)
-    # Elevados (admin/supervisor) têm autoridade sobre todos os pools e não carregam
-    # module_config por campo → bypassam ABAC decide E pool-scope (o pool-scope já foi
-    # exercido no inbox/claim; re-exigir aqui cria assimetria claim↔resume). Operador
-    # comum segue barrado por capacidade + pool.
-    if not is_elevated:
-        if not abac_can(payload, "approvals", "decide", "write_only"):
-            _log.warning("A5 403 abac: roles=%s sem approvals.decide", roles)
-            raise HTTPException(status_code=403, detail="approval: missing approvals.decide")
+    if not is_elevated and required_abac is not None:
+        _mod, _field = required_abac
+        # Tarefa que EXIGE capacidade (ex.: aprovação → approvals.decide). Form-fill
+        # genérico (required_abac=None, ex.: wrap-up) NÃO cai aqui: o binding do claim
+        # autoriza o operador comum (senão o agente de wrap-up tomaria 403 indevido).
+        if not abac_can(payload, _mod, _field, "write_only"):
+            _log.warning("E2 403 abac: roles=%s sem %s.%s", roles, _mod, _field)
+            raise HTTPException(status_code=403, detail=f"resume: missing {_mod}.{_field}")
         if body.pool_id and not pool_in_scope(payload, body.pool_id):
-            _log.warning("A5 403 pool_scope: pool=%s accessible_pools=%s", body.pool_id, accessible_pools(payload))
-            raise HTTPException(status_code=403, detail="approval: pool not accessible")
+            _log.warning("E2 403 pool_scope: pool=%s accessible_pools=%s", body.pool_id, accessible_pools(payload))
+            raise HTTPException(status_code=403, detail="resume: pool not accessible")
 
     sub = str(payload.get("sub") or "")
     # Auto-consistência: a instância que o Console envia deve pertencer ao usuário do JWT.
@@ -1305,7 +1322,10 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
-    approver = _resolve_approver_principal(request, body)
+    # Camada E2 — descobre SERVER-SIDE qual ABAC a submissão exige (aprovação vs
+    # form-fill genérico), do contexto da workflow suspensa. Só então gateia.
+    required_abac = await _webhook_adapter.resume_required_abac(body.tenant_id, resume_token)
+    approver = _resolve_approver_principal(request, body, required_abac)
 
     try:
         session_id = await _webhook_adapter.handle_resume(
