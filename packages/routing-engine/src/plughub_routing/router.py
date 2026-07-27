@@ -43,14 +43,14 @@ class Router:
         pool_registry:     PoolRegistry,
         local_site:        str = "site_local",
         kafka_producer:    "AIOKafkaProducer | None" = None,
-        kafka_topic_queue_positions: str = "queue.position_updated",
     ) -> None:
         self._instances       = instance_registry
         self._pools           = pool_registry
         self._local_site      = local_site
         self._settings        = get_settings()
+        # Usado para conversations.routed (work_task_claim). O queue.position_updated
+        # saiu daqui: é publicado em main.py, pós-enqueue (ver CHANGELOG).
         self._producer        = kafka_producer
-        self._topic_positions = kafka_topic_queue_positions
 
     # ─────────────────────────────────────────────
     # SCENARIO 1 — Contact arrives
@@ -139,7 +139,8 @@ class Router:
                 )
             )
             _pull_pool = pools[0]
-            asyncio.create_task(self._publish_queue_position(event, _pull_pool))
+            # queue.position_updated é publicado em main.py APÓS o enqueue
+            # (_publish_queue_position) — aqui a fila ainda não contém a sessão.
             asyncio.create_task(
                 self._write_snapshot(event.tenant_id, _pull_pool.pool_id, _pull_pool)
             )
@@ -191,56 +192,16 @@ class Router:
             )
         )
 
-        # Publish queue.position_updated so subscribers (UI, channel-gateway)
-        # can inform the customer of their queue position and estimated wait time.
+        # queue.position_updated NÃO é publicado aqui: a posição só é verdadeira
+        # DEPOIS do enqueue (`add_queued_contact`), e este ponto roda antes dele.
+        # Publicar daqui — como se fazia — lia a fila sem esta sessão e mandava
+        # posição/ETA zerados. O publish vive em main._publish_queue_position, ao
+        # lado do _write_queue_context (mesma conta, uma fonte). Ver CHANGELOG.
         if event.pool_id and pools:
             _pool = next((p for p in pools if p.pool_id == event.pool_id), pools[0])
-            asyncio.create_task(self._publish_queue_position(event, _pool))
             asyncio.create_task(self._write_snapshot(event.tenant_id, _pool.pool_id, _pool))
 
         return queued_result
-
-    async def _publish_queue_position(
-        self,
-        event: ConversationInboundEvent,
-        pool:  PoolConfig,
-    ) -> None:
-        """
-        Publishes queue.position_updated to Kafka after a contact is queued.
-        Subscribers: channel-gateway (to inform customer), rules-engine, analytics.
-        """
-        if not self._producer:
-            return
-        try:
-            queue_length = await self._instances.get_queue_length(
-                event.tenant_id, pool.pool_id
-            )
-            available = await self._instances.get_available_count(
-                event.tenant_id, pool.pool_id
-            )
-            avg_handle_ms    = int(pool.sla_target_ms * 0.7)
-            estimated_wait_ms = queue_length * avg_handle_ms
-
-            payload = {
-                "event":              "queue.position_updated",
-                "tenant_id":          event.tenant_id,
-                "session_id":         event.session_id,
-                "pool_id":            pool.pool_id,
-                "queue_length":       queue_length,
-                "available_agents":   available,
-                "estimated_wait_ms":  estimated_wait_ms,
-                "sla_target_ms":      pool.sla_target_ms,
-                "published_at":       datetime.now(timezone.utc).isoformat(),
-            }
-            await self._producer.send_and_wait(
-                self._topic_positions,
-                value=json.dumps(payload).encode(),
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to publish queue.position_updated for session %s: %s",
-                event.session_id, exc,
-            )
 
     async def _write_snapshot(
         self,
@@ -669,9 +630,21 @@ class Router:
             return {"claimed": False, "reason": "already_claimed"}
 
         # 4 — reserva a vaga do recurso (semáforo compartilhado push+pull)
+        # Phase 2 (hand-off): item de wrap-up AUTO-ATENDIDO reivindicado pelo PRÓPRIO
+        # dono herda o hold que o close da origem deixou (swap net 0) — a ocupação
+        # não oscila, então um push não toma a vaga na janela a max_concurrent=1.
+        # Sem hold vivo (release já ocorreu / ordem invertida) cai no claim normal.
+        # Gate estreito de propósito: só auto_attend + dono. Push nunca herda.
+        _can_inherit = bool(contact.get("auto_attend")) and bool(assigned_to) and (
+            (claimant_user_id or (
+                instance_id[len("human-"):] if instance_id.startswith("human-")
+                else instance_id
+            )) == assigned_to
+        )
         occ = await self._instances.claim_instance(
             tenant_id, instance_id, session_id,
             conference_id or None, int(inst.max_concurrent),
+            can_inherit_hold=_can_inherit,
         )
         if occ == -1:
             # rollback — re-enfileira (JSON ainda armazenado)

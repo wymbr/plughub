@@ -568,7 +568,7 @@ O **histórico de contatos do cliente** (§20) é transversal (qualquer atendime
 
 | Fase | Estado | Evidência / gap |
 |---|---|---|
-| **S1** Normalização dos 5 instrumentos | 🟡 Parcial | `parse_session_signal_event` (analytics-api `models.py`) normaliza só **NPS/CSAT** (scale+label via `_normalize_signal_value`/`_signal_source_for_metric`); **CES/PMF/FCR caem em `customer_survey` sem label** (escala é pass-through do produtor). Falta normalização por instrumento no consumer. |
+| **S1** Normalização dos 5 instrumentos | ✅ Feito (2026-07-27) | Catálogo único `analytics-api/survey_catalog.py` (source, escala, direção, bandas, roll-up) alimenta `parse_session_signal_event` E `CV_INSTRUMENTS`. Os 5 instrumentos normalizam source+label; `scale` carimbada re-escala a BANDA (valor gravado segue cru); roll-up por instrumento (PMF `% very_disappointed`, FCR `% resolved`, NPS índice, CSAT/CES média). Falta produtor de CES/PMF/FCR (nenhum form/skill emite) e a UI exibir `value_label`. |
 | **S2** Runner genérico + `survey_definition` | 🟢 Feito (substituição) | Skills `skill_survey_runner_v1`/`outbound`/`trigger` + `skill_dialog_runner_v1` (skill-flow-engine); **dialog-api (3760)** com CRUD DialogForm; `composeScore` (`schemas/scoring.ts`). `survey_definition` **dobrado em DialogForm+dimensions**, sem entidade própria. *Ressalva:* trio renomeado ainda não é pool no `tenant_demo.yaml` (registry usa o conjunto antigo). |
 | **S3** Gatilho decidido no skill | 🟢 Feito | `_write_pre_hook_context` (orchestrator-bridge `main.py`) carimba `process_outcome`/`contact_outcome`/`last_primary_segment_id`; `choice` do `skill_survey_trigger_v1` lê e decide. |
 | **S4** Quarentena | 🟢 Feito (superseded) | `survey_eligibility_check` **não existe em código** — substituído pelo `contact_eligibility_check` genérico (mailing-api `db_contact_eligibility`, ordem opt_out→janela→quarentena→caps). Sem tabela `survey_quarantine`; usa schema `outbound`. |
@@ -588,8 +588,12 @@ sinal agregado).
 
 **Próximos passos — eixo "fechar parciais primeiro" (decidido 2026-07-23):**
 
-1. **S1** — normalizar CES/PMF/FCR no `parse_session_signal_event` (source + label band por instrumento; hoje
-   caem cru em `customer_survey`). Menor esforço, tapa distorção silenciosa no relatório.
+1. **S1** — ✅ **FEITO (2026-07-27, ver CHANGELOG).** Catálogo único `survey_catalog.py` (escala, direção,
+   bandas, roll-up) como fonte de `parse_session_signal_event` **e** de `CV_INSTRUMENTS`; CES/PMF/FCR ganham
+   `source`+`value_label`; roll-up por instrumento (PMF `% very_disappointed`, FCR `% resolved` — `avg` sobre
+   escala categórica/binária era inválido). Corrigida a divergência do CES (`higher_is_better` contra a spec).
+   **Aberto:** nenhum produtor emite CES/PMF/FCR ainda (nenhum DialogForm/skill) → falta E2E com dado real; e
+   a UI (`SignalChips`) ignora `value_label` até para NPS.
 2. **S7** (refinos) — biblioteca `survey_question` reutilizável, ABAC no write do editor, drag reorder,
    locale lado-a-lado + preview.
 3. **S6** (fechar) — view consolidada "Visão do cliente" (cross-cut multi-métrica + divergências §8/§10)

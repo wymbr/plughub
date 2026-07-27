@@ -21,13 +21,11 @@ import redis.asyncio as aioredis
 from aiokafka import AIOKafkaConsumer
 
 from .aggregator  import UsageAggregator
-from .cycle_reset import CycleResetter
 from .models      import UsageEvent
 
 logger = logging.getLogger("plughub.usage_aggregator.consumer")
 
 TOPIC_USAGE   = "usage.events"
-TOPIC_RESET   = "usage.cycle_reset"
 GROUP_ID      = "usage-aggregator"
 AUTO_OFFSET   = "earliest"
 
@@ -39,9 +37,8 @@ async def run_consumer(
 ) -> None:
     """
     Inicia o Kafka consumer e processa mensagens indefinidamente.
-    Escuta dois tópicos:
-      - usage.events       → agrega contadores (UsageAggregator)
-      - usage.cycle_reset  → reseta contadores mensais (CycleResetter)
+    Escuta `usage.events` → agrega contadores (UsageAggregator).
+    (O reset de ciclo é HTTP: POST /admin/cycle-reset — ver nota no fim do arquivo.)
     Graceful shutdown via SIGTERM/SIGINT.
     """
     logger.info("Starting Usage Aggregator consumer — brokers=%s", kafka_brokers)
@@ -53,11 +50,9 @@ async def run_consumer(
     await _ensure_schema(pg_pool)
 
     aggregator = UsageAggregator(redis_client=redis_client, pg_pool=pg_pool)
-    resetter   = CycleResetter(redis_client=redis_client)
 
     consumer = AIOKafkaConsumer(
         TOPIC_USAGE,
-        TOPIC_RESET,
         bootstrap_servers=kafka_brokers,
         group_id=GROUP_ID,
         auto_offset_reset=AUTO_OFFSET,
@@ -84,12 +79,9 @@ async def run_consumer(
             if not batch:
                 continue
 
-            for tp, messages in batch.items():
+            for _tp, messages in batch.items():
                 for msg in messages:
-                    if tp.topic == TOPIC_RESET:
-                        await _process_reset_message(resetter, msg)
-                    else:
-                        await _process_message(aggregator, msg)
+                    await _process_message(aggregator, msg)
 
             # Commit após processar o batch completo
             await consumer.commit()
@@ -117,26 +109,12 @@ async def _process_message(aggregator: UsageAggregator, msg: object) -> None:
         logger.error("Failed to process message offset=%s: %s", offset, exc)
 
 
-async def _process_reset_message(resetter: CycleResetter, msg: object) -> None:
-    """
-    Deserializa e processa uma mensagem de reset de ciclo.
-
-    Payload esperado (campos opcionais):
-      { "tenant_id": "tenant_demo" | "*",  "cycle_start": "ISO-8601" }
-    Se tenant_id estiver ausente, usa "*" (todos os tenants).
-    """
-    try:
-        raw = json.loads(msg.value.decode("utf-8"))  # type: ignore[union-attr]
-        tenant_id   = raw.get("tenant_id", "*")
-        cycle_start = raw.get("cycle_start")          # None → usa now() no resetter
-        report = await resetter.reset(tenant_id=tenant_id, cycle_start=cycle_start)
-        if report.ok():
-            logger.info("Cycle reset via Kafka: %s", report.summary())
-        else:
-            logger.error("Cycle reset completed with errors: %s", report.summary())
-    except Exception as exc:
-        offset = getattr(msg, "offset", "?")
-        logger.error("Failed to process cycle_reset message offset=%s: %s", offset, exc)
+# NOTA (2026-07-27): removido o consumo do tópico `usage.cycle_reset` — ele NUNCA
+# teve produtor (varredura de todo `producer.send`/`kafka.publish` em packages/).
+# O reset de ciclo acontece pelo endpoint `POST /admin/cycle-reset` (main.py), que
+# usa a MESMA classe `CycleResetter` — a capacidade permanece intacta; some apenas
+# uma via morta que sugeria um caminho por evento inexistente. Se o reset por evento
+# for desejado no futuro, o produtor é que falta (o schema já existe em usage.ts).
 
 
 # ─── Schema PostgreSQL ────────────────────────────────────────────────────────

@@ -140,3 +140,162 @@ async def test_claim_release_interleave_never_exceeds_capacity(reg_and_redis):
 
     final = await reg.instance_session_count(tenant, instance)
     assert final <= 1, f"ocupação final {final} excedeu a capacidade"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wrap-up unificado Phase 2 — hand-off da vaga (swap_to_hold × claim herdeiro)
+#
+# Modelo: no close de um contato com wrap-up INLINE seguindo, a vaga da origem é
+# TROCADA por um hold ("__wrapup_hold__::{origin}::{expires_at_ms}") em vez de
+# liberada; o auto-claim do wrap-up HERDA o hold (swap net 0). A ocupação nunca
+# oscila → um push não toma a vaga na janela a max_concurrent=1.
+# Spec: docs/product/wrapup-slot-handoff-phase2-spec.md
+# ─────────────────────────────────────────────────────────────────────────────
+
+HOLD_PREFIX = "__wrapup_hold__::"
+
+
+async def _hold_members(client, tenant, instance) -> list[str]:
+    return [
+        m for m in await client.smembers(_instance_sessions_key(tenant, instance))
+        if m.startswith(HOLD_PREFIX)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_handoff_happy_path_occupancy_never_oscillates(reg_and_redis):
+    """Caminho feliz: origem ocupa 1 → swap_to_hold mantém 1 → wrap-up herda e
+    continua 1. Nunca 0 (janela p/ push roubar) nem 2 (sobre-alocação)."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1) == 1
+    assert await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90) == 1
+    assert await reg.instance_session_count(tenant, instance) == 1
+    assert len(await _hold_members(client, tenant, instance)) == 1
+
+    # o wrap-up é OUTRA sessão; herda o hold (net 0)
+    occ = await reg.claim_instance(
+        tenant, instance, "ses-wrapup", None, max_concurrent=1, can_inherit_hold=True,
+    )
+    assert occ == 1
+    assert await reg.instance_session_count(tenant, instance) == 1
+    assert await _hold_members(client, tenant, instance) == []   # hold consumido
+
+    # e o release do wrap-up devolve a vaga normalmente
+    assert await reg.release_instance(tenant, instance, "ses-wrapup") == 0
+
+
+@pytest.mark.asyncio
+async def test_push_never_inherits_a_live_hold(reg_and_redis):
+    """Com hold VIVO e max=1, um push (can_inherit_hold=False) recebe -1 — é o
+    ponto do arco: o agente não recebe contato novo com wrap-up pendente."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1) == 1
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90)
+
+    assert await reg.claim_instance(tenant, instance, "ses-push", None, max_concurrent=1) == -1
+    assert len(await _hold_members(client, tenant, instance)) == 1   # hold intacto
+
+
+@pytest.mark.asyncio
+async def test_expired_hold_is_discarded_by_any_claim(reg_and_redis):
+    """Vazamento (wrap-up nunca chega): o hold EXPIRA passivamente — qualquer claim
+    (inclusive push) o descarta e a vaga volta. Sem isto o agente ficaria preso até
+    o EXPIRE de 24h do SET."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1) == 1
+    # ttl negativo → expires_at_ms já no passado
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=-1)
+    assert len(await _hold_members(client, tenant, instance)) == 1
+
+    assert await reg.claim_instance(tenant, instance, "ses-push", None, max_concurrent=1) == 1
+    assert await _hold_members(client, tenant, instance) == []
+    assert await reg.instance_session_count(tenant, instance) == 1
+
+
+@pytest.mark.asyncio
+async def test_swap_is_idempotent_on_redelivery(reg_and_redis):
+    """agent_done redelivered → swap_to_hold 2× não duplica o hold."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1)
+    assert await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90) == 1
+    assert await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90) == 1
+    assert len(await _hold_members(client, tenant, instance)) == 1
+
+
+@pytest.mark.asyncio
+async def test_swap_after_hold_consumed_does_not_resurrect_it(reg_and_redis):
+    """O nó da idempotência: o wrap-up JÁ herdou o hold; um redelivery do agent_done
+    não pode criar um hold novo (vaga fantasma permanente a max=1)."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1)
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90)
+    await reg.claim_instance(
+        tenant, instance, "ses-wrapup", None, max_concurrent=1, can_inherit_hold=True,
+    )
+    assert await _hold_members(client, tenant, instance) == []
+
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90)   # redelivery
+    assert await _hold_members(client, tenant, instance) == []
+    assert await reg.instance_session_count(tenant, instance) == 1          # só o wrap-up
+
+
+@pytest.mark.asyncio
+async def test_inverted_order_claim_before_swap_does_not_corrupt_count(reg_and_redis):
+    """Ordem invertida (o item de pull chega ANTES do agent_done): o claim herdeiro
+    não encontra hold e cai no claim normal → -1 a max=1 (cai na inbox, degradação
+    graciosa). A contagem NÃO é corrompida e o retry após o swap herda."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1) == 1
+    # wrap-up tenta antes do close ser processado
+    assert await reg.claim_instance(
+        tenant, instance, "ses-wrapup", None, max_concurrent=1, can_inherit_hold=True,
+    ) == -1
+    assert await reg.instance_session_count(tenant, instance) == 1
+
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90)
+    assert await reg.claim_instance(
+        tenant, instance, "ses-wrapup", None, max_concurrent=1, can_inherit_hold=True,
+    ) == 1
+    assert await reg.instance_session_count(tenant, instance) == 1
+
+
+@pytest.mark.asyncio
+async def test_hold_occupies_only_one_slot_when_multi_capacity(reg_and_redis):
+    """max=3: o hold ocupa 1 vaga; as outras 2 seguem disponíveis para push."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=3)
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90)
+
+    assert await reg.claim_instance(tenant, instance, "ses-B", None, max_concurrent=3) == 2
+    assert await reg.claim_instance(tenant, instance, "ses-C", None, max_concurrent=3) == 3
+    assert await reg.claim_instance(tenant, instance, "ses-D", None, max_concurrent=3) == -1
+    assert len(await _hold_members(client, tenant, instance)) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_swap_and_claims_never_exceed_capacity(reg_and_redis):
+    """swap_to_hold × N claims concorrentes (max=1): ocupação final nunca > 1 e no
+    máximo UM herdeiro ganha."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(tenant, instance, "ses-origin", None, max_concurrent=1)
+
+    async def _claim(i):
+        return await reg.claim_instance(
+            tenant, instance, f"ses-w{i}", None, max_concurrent=1, can_inherit_hold=True,
+        )
+
+    results = await asyncio.gather(
+        reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90),
+        *[_claim(i) for i in range(10)],
+    )
+    winners = [r for r in results[1:] if r >= 1]
+    assert len(winners) <= 1, f"mais de um herdeiro ganhou: {results}"
+    assert await reg.instance_session_count(tenant, instance) <= 1

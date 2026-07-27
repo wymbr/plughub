@@ -4,47 +4,59 @@
 
 ---
 
-## Wrap-up unificado — Phase 2: hand-off da vaga no close inline (sem corrida) *(desenho fechado 2026-07-27, adiado)*
+## Wrap-up unificado — resíduos após a Phase 2 ✅ *(arco fechado 2026-07-27, ver CHANGELOG)*
 
-**Contexto.** O wrap-up unificado (Phase 0+1+3 ✅, ver CHANGELOG) tem UMA implementação (workflow
-`skill_wrapup_detached_v1` + DialogForm + `segment_outcome_record`); o `dispatch` do hook `on_human_end`
-(side=agent) escolhe só a entrega: `detached` (pull manual) × `inline` (auto-atendimento no Console). Os dois
-ocupam **uma vaga** pelo semáforo `claim_instance` (nunca bloqueiam o agente inteiro).
+**Polish (não bloqueia):** latência do auto-atendimento (~2-3s do poll da inbox) → instantâneo bombando o
+`refreshSignal` do `PullInboxPanel` no `conversation.assigned`. **Agora é seguro**: antes da Phase 2 o claim
+instantâneo AUMENTARIA a chance de chegar antes do release (`-1` → cai na inbox); com o hold, as duas ordens
+são cobertas. E: UI para a config de `dispatch` inline/detached do hook (hoje só YAML — invariante "config
+UI-editável" pendente para hooks de pool).
 
-**Limitação conhecida (aceita hoje — degrada gracioso).** No `inline`, o fluxo atual é: o contato **fecha**
-(libera a vaga) → o wrap-up é uma **sessão nova** que o Console **auto-reivindica** (~2-3s do poll da inbox). Entre
-o fechar e o auto-claim há uma **janela** em que a vaga fica livre. Com `max_concurrent = 1`, se um contato
-**push** chegar nessa janela, ele pode pegar a vaga antes do wrap-up → o auto-claim cai na inbox (**degradação
-graciosa** — vira detached; não perde o wrap-up). Só morde no `max_concurrent = 1` com push concorrente; em
-`max_concurrent > 1` não importa (sobra vaga). Para o demo (agentes multi-vaga) é inócuo.
+**Camada E2 restante:** `acw_pending` (produtor do marker p/ o `acw_gate: hard` da Camada C — **note** que o
+marker e o gate foram REVERTIDOS na Phase 0; reabrir só sob requisito real) · **E2f** (sessão de wrap-up fora da
+contagem de contato/TMA no analytics — ponto de atenção aberto) · **Camada F** (validação do arco: G1/AHT,
+atribuição de segmento no relatório).
 
-**Fix (Phase 2) — hand-off da vaga.** Segurar a vaga da origem no close e o wrap-up **herdar** (transferir o
-ocupante), em vez de liberar-e-re-reivindicar. Ocupação nunca oscila → sem janela. **4 peças:**
+**Cleanup:** `infra/test/smoke_acw_gate.sh` ficou **órfão** — testa o gate `acw_pending` removido na Phase 0 e
+falha hoje. `git rm`.
 
-1. **Skip-release no close inline.** A vaga da origem é liberada FUNDO no routing: `agent_done` (do humano) →
-   `kafka_listener` (`kafka_listener.py:310`) → `InstanceRegistry.remove_conversation` (`registry.py:402`) →
-   `release_instance` (remove ocupante `{origin}::*`). Pular esse release quando o contato tem wrap-up **inline**
-   seguindo. O routing NÃO conhece a config de hook do pool → precisa de um **flag no evento `agent_done`**
-   (o mcp-server `/api/agent_done` já resolve o pool; poderia carimbar `keep_slot_for_wrapup`), OU o
-   `remove_conversation` consultar o pool. Preferir o flag no evento (o routing não deve consultar hooks).
-2. **`transfer_occupant` (Lua) no semáforo** (`registry.py`, par de `claim_instance`/`release_instance`):
-   atômico `SREM {origin}::*` + `SADD {wrapup}::{conf}` (net 0). É o componente MAIS crítico — bug de
-   over/under-alloc é severo; testar como `test_instance_semaphore.py`.
-3. **`origin_session_id` no item de pull.** O transfer precisa saber qual vaga herdar; hoje o item carrega a
-   sessão do workflow, não a origem. Propagar `origin_session_id` até o `contact_data` (o workflow já tem
-   `@ctx.session.origin_session_id`; falta levá-lo ao delegate-conference inbound → `ConversationInboundEvent`
-   → `contact_data`, mesmo caminho do `auto_attend`).
-4. **Caminho de transfer no `work_task_claim`** (`router.py:599`): quando `auto_attend` + existe vaga presa da
-   origem → chamar `transfer_occupant(origin, wrapup)` em vez de `claim_instance` (que adicionaria uma 2ª vaga).
-   No submit, `release_instance` normal (`{wrapup}::*`) fecha a vaga.
+---
 
-**Por que adiado (2026-07-27):** cirurgia no semáforo (componente crítico compartilhado) + no caminho de
-`agent_done`, benefício estreito (só `max_concurrent=1`) e com degradação graciosa já cobrindo o caso comum.
-Retomar numa sessão focada. Ver CHANGELOG "Wrap-up unificado".
+## Identidade por-pool do agente humano — campo global sobrescrito *(dívida, exposta 2026-07-27)*
 
-**Também pendente (polish, não Phase 2):** latência do auto-atendimento (~2-3s do poll da inbox) → instantâneo
-bombando o `refreshSignal` do `PullInboxPanel` no `conversation.assigned`. E: UI para a config de `dispatch`
-inline/detached do hook (hoje só YAML — invariante "config UI-editável" pendente para hooks de pool).
+**Problema.** Um humano logado em N pools tem UMA instância (`human-{userId}`), e `agent_type_id`/`pool_id`/
+`pools` dela são **last-writer**: cada claim/registro reescreve. Observado no E2E da Phase 2: a mesma instância
+apareceu ora como `human_agent_formfill_demo` com `pools:["formfill_demo"]`, ora como
+`human_agent_retencao_humano` — e o snapshot `session:{id}:routing:human-{userId}` **congela** um desses
+estados parciais.
+
+**Por que importa.** É a mesma classe do invariante já registrado no CLAUDE.md ("never derive or duplicate
+participant identity into a wider-scope field"): um fato **por-pool** vive num campo **global**. Duas
+manifestações já vistas: (a) o roteamento com skill errado (corrigido pela via do `wf_agent.instance_id`, mas a
+causa estrutural continua); (b) risco de uma restauração a partir do snapshot **encolher os pools** do humano
+(sumir de `retencao_humano` porque o último claim foi em `formfill_demo`).
+
+**Alvo.** Ou a identidade humana passa a ser por-pool (`human-{userId}@{pool}` como participante, mantendo UMA
+vaga por recurso), ou os campos por-pool saem do JSON global da instância para um mapa (`pools[]` como conjunto
+estável + `agent_type_id` derivado do pool do segmento). Não decidido — requer desenho.
+
+---
+
+## Posição na fila — resíduos após o fix do `queue.position_updated` ✅ *(2026-07-27, ver CHANGELOG)*
+
+O evento voltou a ser publicado e `queue_position`/`estimated_wait_ms` são corretos. O que ficou:
+
+- **Nenhum canal consome o evento.** O comentário do código promete "channel-gateway (to inform customer)", mas
+  o channel-gateway só assina `collect.events` — **mostrar a posição ao cliente nunca foi implementado**. É
+  feature, não regressão: exige consumidor no gateway + render por canal (webchat WS; voz = prompt falado).
+- **Ruído do drain na tabela.** O drain periódico re-enfileira o mesmo contato a cada ~5 s e cada ciclo grava um
+  par `queued`+`position_updated` (10 linhas para 1 contato em 45 s). Ou o publish passa a ser condicionado a
+  MUDANÇA de posição, ou a série é agregada na leitura. Decidir antes que a tabela vire lixo em produção.
+- **`available_agents` é enganoso**: conta instâncias no set `ready` (SCARD), não vagas livres — um agente
+  lotado ainda aparece como "disponível". Renomear para `ready_instances` ou passar a contar capacidade real.
+- **`queue_length` não é persistido**: o payload leva, a tabela `queue_events` não tem a coluna. Se o tamanho da
+  fila no instante interessa ao relatório, é `ALTER TABLE … ADD COLUMN queue_length Nullable(Int32)` + a linha no
+  `CREATE TABLE` do `clickhouse.py`.
 
 ---
 
@@ -120,295 +132,71 @@ a ser o da raiz) — correção, quebra comparação com prints anteriores.
 
 ---
 
-## ✅ Analytics — `contact_closed` perdido por corrida no ReplacingMergeTree *(bug CORRIGIDO 2026-07-13)*
+## Deploy de skills — cleanup de campos órfãos *(follow-up do redesenho D1–D4, 2026-07-13)*
 
-> **Corrigido:** `sessions` migrada para `ReplacingMergeTree(row_version)`, com
-> `row_version` = timestamp do **evento** (não da inserção). O `contact_closed` carrega `ended_at` —
-> por definição o instante final da sessão — então vence sempre, independente da ordem de inserção
-> entre tópicos. Migração faz **rebuild** (ClickHouse não faz ALTER de engine) e **repara o histórico**
-> via `DEFAULT coalesce(closed_at, opened_at)`. Validado: E2E novo fecha as 3 sessões (`open_count: 0`).
-> **Polimento pendente:** sessões que passaram por suspend/resume fecham com `outcome: suspended`
-> em vez de `resolved` (o `status` fecha correto; só o `outcome` do evento de close está errado).
-
-**Sintoma:** sessões fechadas pelo bridge continuam `active` no ClickHouse (`closed_at NULL`),
-corrompendo `open_count`, TMA, SLA e duração. Reproduzido no E2E do J4c: das 3 sessões da journey,
-o bridge publicou `contact_closed` para todas (logs comprovam), mas nenhuma fechou em `sessions`.
-
-**Causa raiz.** `clickhouse.py` (§Design decisions) assume: *"No explicit version column […]
-Deduplication keeps the LAST inserted row per ORDER BY key. **Kafka ordering** [garante a ordem]."*
-Mas o consumer lê de **múltiplos tópicos** (`conversations.inbound`, `conversations.routed`,
-`conversations.events`, …) e o Kafka só garante ordem **dentro de uma partição**, não **entre tópicos**.
-Então uma linha `routed` (status=active) inserida **depois** do `contact_closed` **vence a
-deduplicação** e apaga o fechamento:
-
-```
-16:56:29,365  conversations.routed   (re-alocação do resume) → status=active
-16:56:29,379  conversations.events   (contact_closed)        → status=closed   ← perdido
-```
-
-Evidência: `d33d4a89` tem as DUAS linhas gravadas; `SELECT … FINAL` devolve a `active`.
-`939154af` e a raiz perderam a linha de close no merge (sobrou só a `active`, com `opened_at`
-carimbado no instante do **resume**).
-
-**Não é bug do J4c** — é pré-existente. O J4c apenas o tornou reproduzível: o `collect` faz
-resume→close numa rajada de ~14ms, enquanto antes o intervalo entre roteamento e fechamento era
-grande o bastante para mascarar a corrida. **Qualquer** sessão com re-roteamento próximo do
-fechamento (transfer, re-queue, resume) está exposta.
-
-**Correção:** coluna de versão não-nula (`row_version DateTime64(3)` = timestamp do evento) +
-`ReplacingMergeTree(row_version)` → o evento mais recente vence deterministicamente, independente da
-ordem de inserção entre tópicos. Migração de schema + carimbo do `row_version` em todos os writers de
-`sessions` (`parse_inbound`, `parse_routed`, `parse_queued`, `parse_conversations_event`,
-`session_suspended`). Revisar os workarounds de `COALESCE`/`channel=""` que existem hoje só para
-mitigar esse mesmo problema.
+Depois do modelo novo de deploy ("uma definição editável + cópia imutável no slot"), ficaram órfãos:
+dropar `flow_draft` e `deploy_status` do schema Prisma (agent-registry) e remover o endpoint
+`POST /v1/skills/:id/deploy`. Deixados para depois de o modelo novo rodar; histórico completo do
+redesenho no `CHANGELOG.md`.
 
 ---
 
-### Survey — nomeação por PAPEL + grão em config (S1 ✅ / S2 pendente, 2026-07-14)
+## Analytics — revisar workarounds pré-`row_version` *(resíduo do fix de 2026-07-13)*
 
-**Decisão de eixo.** Os skills de survey são nomeados pelo **papel**, e o **grão**
-(journey/session/segment) é **parâmetro de deploy**, não uma família de skills. Grão e papel
-são eixos **ortogonais**: nomear pelo grão duplicaria a cadeia inteira (3 papéis × N grãos)
-para diferenças que são de config — e deixaria ambíguo qual dos dois skills de grão *journey*
-é o gatilho e qual é o workflow (foi exatamente a colisão `journey_survey` × `survey_journey`
-que custou um diagnóstico errado no J4c). O que o operador vê como "survey de journey" vs
-"survey de sessão" é o **nome do pool**, não o `skill_id`.
-
-**S1 ✅ — rename puro (sem mudança de comportamento):**
-
-| papel | skill | era |
-|---|---|---|
-| **gatilho** — consome o hook de fim, decide *se* pesquisa, dispara o workflow | `skill_survey_trigger_v1` | `skill_journey_survey_v1` |
-| **workflow** — faz o `collect`, suspende esperando o clique | `skill_survey_outbound_v1` | `skill_survey_journey_v1` |
-| **runner** — renderiza o DialogForm ao vivo, grava o sinal, retoma o workflow | `skill_survey_runner_v1` | `skill_survey_collect_v1` |
-
-O gatilho ficou agnóstico de grão (testa `process_outcome` **ou** `contact_outcome` — só uma
-das tags existe por disparo; um `field` vindo de `$.config` exigiria dupla indireção, que o
-engine não faz).
-
-**Custo operacional do rename (os pools são DB-owned, criados pela UI — não há bloco `deploy:`
-em `infra/registry`):** `skill_id` é a identidade, então os YAMLs novos **semeiam skills novos**
-e os slots dos pools continuam apontando para os antigos. Exige, por pool: `set-next` + `promote`
-com o id novo, atualizar o `webhook_skill_id` do pool `survey_journey_wf`, e apagar os 3 skills
-órfãos.
-
-**S2 ✅ — grão vira config (não skill).** O runner tinha `grain: "journey"` **hardcoded** — o único
-ponto não-genérico de um skill que se descreve como domain-blind. Agora:
-
-- `CollectStepSchema.signal_grain` (união `enum | ref`, reusa `SignalGrainSchema` de `survey.ts` —
-  sem redefinir o enum), propagado por `persistCollect` → skill-flow-service → channel-gateway.
-- `skill_survey_outbound_v1` declara `signal_grain: "$.config.grain"` + `config_param` `grain`.
-- **A tradução grão→chave é do N2** (`_resolve_signal_target`), porque só o chamador tem o contexto:
-  `journey` → raiz canônica; `session` → `session.origin_session_id` do chamador; `workflow` → a
-  própria sessão. Isso NÃO é regra de negócio no core — é a definição de o que cada grão *significa*
-  no modelo de sessão (mesma natureza de `root_session_id`). O que é negócio (*qual* grão) fica no
-  `config_json` do deploy.
-- **`segment` é rejeitado alto**: `survey_record` exige `segment_id`, que o workflow outbound não
-  conhece (foi disparado por um hook de fim de sessão, não de segmento). Gravar o sinal na chave
-  errada contamina o relatório em silêncio — melhor falhar.
-- O gateway semeia `session.survey_grain` + `session.survey_target_id` no ctx da sessão de survey; o
-  runner lê ambos → **zero grão e zero métrica no skill**. Survey de sessão = novo **deploy**.
-- Retrocompat: pending sem os campos → default `journey`/raiz, que é o que faziam hardcoded.
-
-**Armadilha de build:** `CollectStepSchema` mudou ⇒ **agent-registry, skill-flow-service e o engine
-rebuildam juntos**. `z.object()` **descarta** chave desconhecida em silêncio — um agent-registry
-velho gravaria o flow **sem** `signal_grain`, sem erro nenhum.
-
-**Armadilha de DX (custo do D2, achada no S2):** com *seed-if-absent*, **editar um `skill_*.yaml` já
-semeado NÃO propaga** — o DB é a verdade e o syncer não sobrescreve (é justamente o que faz a edição
-da UI sobreviver ao restart). O loop "edito o arquivo, reinicio o bridge" morreu junto. O caminho é o
-`REGISTRY_SYNC_RECONCILE=true`, agora exposto no `docker-compose.demo.yml`:
-`REGISTRY_SYNC_RECONCILE=true docker compose -f docker-compose.demo.yml up -d orchestrator-bridge`
-(e voltar ao default depois). Vale um aviso no log quando um YAML difere do DB semeado — hoje o
-silêncio faz parecer que a edição funcionou.
-
-**S3 ✅ — survey de segmento (grão `segment`).** Decisão de produto (usuário): o gatilho é o de
-**fim de contato** (não `on_human_end`, que dispararia a pesquisa com o contato ainda aberto em caso de
-transferência), e o **segmento é configurável**, com default = **último segmento primary** (quem fechou
-o atendimento).
-
-Princípio: **QUAL segmento pesquisar é política, e política mora no skill.** A plataforma só **expõe os
-fatos**; quem escolhe é o gatilho.
-- **bridge** (`_write_pre_hook_context`): carimba `session.last_primary_segment_id` +
-  `session.last_primary_agent_key` (`user_login` humano | `agent_type_id` IA). São fatos de **sessão**
-  (existe exatamente um "último"), então não ferem o ADR de identidade — o que colapsa em multi-humano
-  é um fato *por-segmento* num campo global (ex.: "qual humano este wrap-up serve": há N wrap-ups).
-- **gatilho** (`skill_survey_trigger_v1`): propaga a escolha via `context_json` do `workflow_trigger`
-  (string JSON com `{{...}}`). Trocar o critério = editar **duas linhas do YAML**, sem tocar em
-  plataforma.
-- **N2**: `segment` resolve a mesma chave que `session` (a sessão que CONTÉM o segmento); o que os
-  separa é o `segment_id` + `agent_key` que acompanham o sinal. Falha alto se o gatilho não escolheu.
-- **runner**: repassa `segment_id`/`agent_key` — continua sem saber de grão.
-- **schema**: `SurveyRecordInputSchema.segment_id`/`agent_key` viraram **`.nullish()`** — o runner é UM
-  só para todos os grãos, então sempre passa os campos, e num grão ≠ segment a ref resolve para `null`.
-  `.optional()` aceita *ausente*, não `null`, e rejeitaria a chamada inteira: **é o mesmo bug do
-  `survey_link_create` do J4b** (`customer_key: z.string().default("")` vs `null`), que falhava em
-  silêncio porque a tool devolve `isError` e o `invoke` segue por `on_failure` sem log.
-- **guard**: `_read_ctx_tag` normaliza `"null"`/`"undefined"`/`""` → `None`. Uma tag semeada por
-  `context_json` cujo ref não resolveu vira a **string** `"null"`, que é truthy em Python e passaria por
-  qualquer `if not value`.
-
-**Aviso de drift no seed-if-absent ✅** (custo do D2, achado no S2): o syncer agora **avisa** quando o
-YAML diverge da definição no DB e não vai ser aplicado, em vez de pular em silêncio. Compara por
-**contenção** (o YAML está contido no DB?), não por igualdade — o agent-registry grava o flow **depois
-dos defaults do Zod**, então o DB legitimamente tem mais chaves; igualdade acusaria drift em todo skill
-a cada boot, que é o falso positivo do D4 com outra roupa ("foi escrito" ≠ "mudou").
-
-**S4 ✅ — o POOL é a unidade endereçável, nunca o `skill_id`** (invariante no CLAUDE.md).
-
-Motivação do usuário: *"hooks em geral devem acionar somente pools e nunca skill_id, justamente por causa
-da configuração dos skills, que precisa estar num único local para não gerar dúvida sobre o que está
-rodando e com que configuração."* Correto — e conserta um **vazamento do modelo**, não só o survey: o
-`workflow_trigger` por `skill_id` sempre foi a exceção ao Arc 19 ("pool webhook = endpoint"), e só
-funcionava porque havia um pool por skill.
-
-- **`workflow_trigger`** ganhou `pool_id` (canônico; vence sobre `skill_id`, que vira legado) → nova rota
-  `POST /v1/channels/webhook/pool/{pool_id}` na channel-gateway (declarada antes da greedy `/{skill_id}`).
-  O mecanismo já existia — o `handle_trigger` **já aceitava `pool_id`** e o evento inbound já o honrava
-  (foi assim que fizemos o slug→pool). Faltava só a tool poder endereçar por pool.
-- **Guard no router**: `skill_id` que casa **>1** pool webhook = endereço **ambíguo** → `pools = []` +
-  ERROR explicando. Antes ele escolhia por score, em silêncio — rodaria um deploy que o chamador não
-  pediu. `skill_id` só é endereço enquanto **um** pool o declara.
-- **`skill_survey_trigger_v1`** ganhou `config_param` **`outbound_pool`**: o operador escolhe o pool de
-  survey na tela de Deploy do gatilho, e **o grão vem junto** — porque cada pool outbound é um deploy do
-  MESMO `skill_survey_outbound_v1` com `grain` diferente. Some a assimetria "grão numa tela, política em
-  outra": tudo que responde *"como pesquisamos"* fica no deploy do gatilho.
-- **Demo**: três pools outbound (`survey_journey_wf`, `survey_session_wf`, `survey_segment_wf`).
-
-**Nota:** a política de escolha do segmento continua no YAML do gatilho (é política, e política mora no
-skill). Torná-la `config_param` exigiria dupla indireção (`@ctx.{{$.config.tag}}`), que o engine não faz.
+Com `sessions` já em `ReplacingMergeTree(row_version)`, revisar (e provavelmente remover) os workarounds
+de `COALESCE` / `channel=""` no analytics-api que existiam **só** para mitigar a corrida entre tópicos.
+Histórico do bug e do fix no `CHANGELOG.md`.
 
 ---
 
-### Bug: escrita PARCIAL em `sessions` apaga a identidade da sessão (achado 2026-07-13) — ✅ VALIDADO 2026-07-15 (ver CHANGELOG)
+## Tópicos Kafka órfãos — achados do saneamento do doc *(2026-07-27, doc ✅ saneado)*
 
-**Sintoma:** a sessão do workflow (`37324d63`, `status: suspended`) ficou com `pool_id` **vazio** no ClickHouse,
-embora o roteamento tivesse registrado `pool=survey_journey_wf`.
+O saneamento de `docs/kafka-eventos.md` (✅ feito, ver CHANGELOG) reconciliou a doc contra o código e expôs
+**quatro defeitos reais** — nenhum é de documentação:
 
-**Causa (classe de bug, não caso isolado).** `sessions` é `ReplacingMergeTree` de **linha inteira** — a versão
-mais nova SUBSTITUI a anterior, sem merge por coluna. Mas **todo** escritor é parcial: `inbound` sabe
-canal/cliente (ainda não roteou → sem pool); `routed`/`queued` sabem o pool (routing não conhece canal →
-escrevem `channel=''`); `session_suspended` sabia só o `status`. Cada escrita **apaga** o que a anterior sabia.
-Ninguém percebeu porque o `contact_closed` monta a linha **completa** (relê o `session:{id}:meta`) e **cura
-tudo no fim** — então o dano só existia entre o roteamento e o fechamento. Bastou existir uma sessão que
-**não fecha** (workflow `suspended` esperando um `collect` por até 48h) para o defeito ficar permanente e
-visível. `opened_at` sofria o mesmo: `routed`/`suspended` carimbavam o instante do próprio evento,
-**adiantando o nascimento** da sessão e encurtando TMA/duração.
+> **Propósito declarado (2026-07-27, decisão do dono do produto):** estes eventos são **negociais, de
+> MEDIÇÃO** — contam ocorrências nos fluxos de agentes gerados nos skills, para análise e comparação
+> posterior. Não são mecanismo (a ação já acontece por outra via) e **não devem ser removidos**: estão
+> incompletos, não mortos. Isso muda a pergunta de "remover ou ligar consumidor" para **"onde essa medição
+> deve aterrissar"**.
+>
+> **Substrato que já existe (avaliar ANTES de criar consumidor/tabela novos):** o **Arc 12** faz exatamente
+> isso — `agent.events` → ClickHouse `analytics.agent_business_events`, com `category` hierárquico
+> (`pool_id.skill_id.metric_key`, decomposto em `category_l1..l4`), endpoints
+> `/reports/agent-events/{series,summary,categories}` e integração com a lente de deploy do Arc 6 Fase 2
+> (`metrics[]=agent_event:{category}` — "esta versão do skill mudou a taxa de ocorrência?"). Se a medição de
+> regras entrar por aí, ganha série temporal, drill e comparação por versão **sem infra nova**.
 
-**Fix (dois níveis):**
-- **bridge** — o evento `session_suspended` passou a repetir a identidade (`pool_id`, `channel`, `customer_id`,
-  `opened_at` do meta), como o `contact_closed` já fazia.
-- **analytics-api (estrutural)** — o `_channel_cache` (que já existia, mas só para `channel`+`origin` e só no
-  tópico `routed`) virou **`_session_identity_cache`**: aprende a identidade de qualquer linha que a traga e
-  reinjeta nas que não trazem, em **todos** os tópicos. Só preenche vazio (nunca sobrescreve o que o produtor
-  sabe); `opened_at` mantém sempre o mais antigo conhecido. Campos de **estado** (`status`, `outcome`,
-  `closed_at`) ficam de fora de propósito — a linha nova tem o direito de sobrescrevê-los.
+1. **`rules.escalation.events`** — telemetria de escalação disparada (modo `active`), sem consumidor. (NÃO é a
+   via da escalação — correção de um diagnóstico meu errado: `escalator.py:79` chama
+   `POST /tools/conversation_escalate` e só depois publica o evento, `:91`.) Falta o destino de medição.
+2. **`rules.shadow.events`** — o shadow mode existe para MEDIR o que uma regra faria antes de ativá-la; hoje o
+   único registro é um `logger.info`. É o caso em que a medição É a feature.
 
-**Terceiro primo do mesmo dia:** o bug de `row_version` (linha de close fisicamente apagada no merge) e o de
-hooks `side=agent` (linha de close nunca emitida). Os três produzem métricas erradas em `sessions`; os três
-vinham de tratar um `ReplacingMergeTree` como se fizesse merge por coluna.
+**Opções para os dois** (mesma decisão): (a) o rules-engine passa a emitir `agent_event` com categoria
+(`{pool}.{skill}.rule_escalation` / `.rule_shadow`) e os tópicos `rules.*` são aposentados — reuso máximo;
+(b) consumidor dedicado no analytics com tabela própria (mais fiel ao schema atual, mais infra); (c) manter
+publicando e aterrissar depois. **Correção pendente no CLAUDE.md** em qualquer caso: a tabela de tópicos lista
+`rules.escalation.events` → consumidor `Routing Engine`, o que nunca foi verdade.
+3. **`agent.done`** — ✅ **REMOVIDO (2026-07-27, ver CHANGELOG).** Publicação órfã + dupla no mcp-server; teste
+   reescrito para cobrir as vias reais. Resíduo: `issue_status` não trafega mais em nenhum tópico (só era
+   publicado no órfão; segue validado na entrada). Se o analytics precisar dele, adicionar ao `contact_closed`.
+4. **`usage.cycle_reset`** — ✅ **REMOVIDO (2026-07-27, ver CHANGELOG).** Consumo morto no usage-aggregator; o
+   reset segue pelo `POST /admin/cycle-reset` (mesma classe). O schema fica em `usage.ts` — se o caminho por
+   evento for desejado, falta o PRODUTOR.
 
----
+Também corrigido na doc (era erro de documentação, não de código): `conversations.events` — o tópico mais
+movimentado da plataforma — estava listado como "nome obsoleto que não existe mais"; e cinco tópicos
+documentados **não existem** (`conversations.session_opened`, `conversations.message_sent`,
+`conversations.abandoned`, `rules.session_tagged`, `gateway.heartbeat` — os três primeiros confundiam evento
+com tópico).
 
-### Bug: sessão com hook `side=agent` NUNCA fecha a camada 1 (achado 2026-07-13) — ✅ VALIDADO 2026-07-15 (ver CHANGELOG)
+**Dívida de contrato:** `conversations.events` não tem schema Zod único, sendo o tópico central e o de maior
+fan-in (5 produtores × 6 consumidores). Contraria o princípio "todo evento cross-package tem contrato
+validado" registrado no próprio doc.
 
-**Sintoma:** a sessão do processo (N3, pool webhook) fica `closed_at NULL` / `status NULL` para sempre no
-ClickHouse. Reproduzido no E2E do item 2: das 3 sessões da journey, as duas sem hook fecharam; a raiz (que
-dispara `on_process_end`) não.
-
-**Causa.** Com hooks, o teardown é **diferido** e cada camada tem gatilho próprio: a camada 1
-(`_close_contact_layer` → publica `contact_closed`) dispara quando `posatt:customer_active` zera; a camada 3
-(`_destroy_conference`) quando `posatt:active` zera. Mas `posatt:customer_active` só é **incrementado** por
-hooks `side=customer`. Um pool cujos hooks são todos `side=agent` — que é o caso do `on_process_end`, porque o
-survey sai por veículo **outbound**, não inline — nunca incrementa o contador, logo ele nunca zera, logo a
-camada 1 **nunca fecha**. O caminho humano (`agent_done` → `on_human_end`) já tinha a guarda
-(`if not _has_customer_hooks: _close_contact_layer(...)`); o ramo do **AI primary** não.
-
-**Agravante:** `_destroy_conference` grava `session:{id}:close_fired`, e o `session_watchdog` usa a ausência
-dessa chave como critério de órfã — então a rede de segurança **também** não pega. A sessão fica aberta
-indefinidamente, corrompendo `open_count`, TMA, SLA e duração (mesmo efeito do bug de `row_version`, causa
-diferente).
-
-**Fix:** espelhada a guarda do caminho humano no ramo do AI primary (`main.py`, dispatch de
-`on_contact_end`/`on_process_end`). NPS inline (`on_contact_end`, side=customer) segue fechando pelo contador.
-
----
-
-### Follow-ups abertos pelo J4c (achados durante o E2E, 2026-07-13)
-
-1. ✅ **RESOLVIDO (2026-07-13) — virou o redesenho do modelo de deploy (D1–D4).** A armadilha ("promovi e
-   rodou a versão velha") era só o sintoma visível. Investigando, achamos uma **incoerência de fundo** e uma
-   **cadeia de 4 bugs que se escondiam mutuamente**:
-
-   - O CLAUDE.md afirmava *"skills seguem upsert (são código)"* — **arquivo é a verdade** — **e** existia um
-     editor de skills na UI — **banco é a verdade**. Não podiam ser ambas.
-   - O `RegistrySyncer` publicava com `x-skill-publish: true`, que grava `{ flow, flow_draft: null }` → **a
-     cada boot do bridge o rascunho do editor era APAGADO**. Perda silenciosa de trabalho.
-   - Mas ninguém percebia, porque **o editor nunca conseguiu salvar**: o `PUT /v1/skills` voltava **401** (o
-     `SkillFlowsPage` tinha um `operatorHeaders` local que não anexava o Bearer).
-   - Removido o 401, apareceu o **round-trip quebrado**: o editor devolvia no PUT os campos gerenciados pelo
-     servidor e os `null` de campos opcionais (que o `SkillSchema` rejeita — aceita *ausente*, não `null`).
-   - E o erro disso aparecia na tela como **`[object Object]`**, escondendo a causa.
-
-   **O `draft` existia para proteger uma produção que ninguém conseguia alterar pela UI** — um remendo
-   defendendo uma porta trancada.
-
-   **Modelo novo (decidido com o usuário): uma definição editável + cópia imutável no deploy.**
-   | Antes | Agora |
-   |---|---|
-   | editar skill → rascunho, **apagado no próximo boot** | grava a **definição**; sobrevive a restart (skills = *seed-if-absent*, como pools) |
-   | pool sem deploy → rodava a **definição viva** (vazamento silencioso) | **não roda**; log diz o que fazer (`ALLOW_LIVE_FLOW_FALLBACK=true` restaura o legado) |
-   | promover congelava "o publicado naquele instante" | congela a **definição atual**; a UI avisa **"⚠ alterações não implantadas"** (`definição.updated_at` × `slot.set_at`) |
-   | YAML sobrescrevia tudo a cada boot | YAML **semeia** DB vazio (`REGISTRY_SYNC_RECONCILE=true` p/ GitOps) |
-
-   **Cleanup pendente:** dropar `flow_draft` / `deploy_status` do schema Prisma e o endpoint
-   `/skills/:id/deploy` (ficaram órfãos; deixados para depois de o modelo novo rodar).
-
-2. ✅ **RESOLVIDO (2026-07-13, ver CHANGELOG) — canal→pool vem do DEPLOY do skill N3.**
-   Era: o N2 (`handle_collect`) resolvia o pool via `ChannelEndpoint` global (`resolve_pool(channel,
-   "default")`), cuja coluna `channel` é independente dos `channel_types` do pool → o operador declarava o
-   canal duas vezes e um endpoint na aba errada dava 409 sem relação óbvia com a causa.
-   Agora: **decisão do usuário** — "o próprio skill-flow N2 recebe por configuração quais canais e pools usar,
-   pois isso varia por negócio, não é problema do core". O par canal→pool vive no `config_json` do slot
-   (`$.config.channel_policy`, mapa `{canal: pool}`); `SkillConfigParamSchema.type` ganhou `"object"` e a tela
-   de Deploy renderiza `JsonParamInput`. `ChannelEndpoint` dedicado eliminado do caminho de survey.
-   Validado E2E: pending nasce com `pool_id`/`channel` vindos do deploy.
-
-   **Achado no caminho (3 bugs de deploy, ver CHANGELOG):** `resolve_flow_for_agent` era chamado **sem
-   `pool_id`** em 2 call sites (YAML-fallback e @mention) — antes do D1 caía no `skill.flow` vivo e ninguém
-   via; `POST /v1/skills` ainda gravava `flow: null` + `flow_draft` (sobra da Fase B que o D3 não alcançou),
-   parindo skills sem definição publicável; e o seed-if-absent do D2 confundia **linha existente** com
-   **skill semeado**, tornando o buraco permanente. `PUT /slots/next` agora rejeita (422) congelar snapshot
-   nulo.
-
-3. **Bug corrigido:** `listChannels` (platform-ui `api/registry.ts`) devolvia o JSON cru (`{channels: […]}`)
-   enquanto os callers liam `.items` → a lista de integrações de canal renderizava **sempre vazia**, mesmo com
-   os registros persistidos. Normalizado (`data.channels ?? data.items`), como o `listPools` já fazia.
-
-4. ✅ **RESOLVIDO (2026-07-13, ver CHANGELOG) — sessão de suspend/resume fechava com `outcome: suspended`.**
-   O `_close_contact_layer` deriva o outcome da SESSÃO do marcador `session:{id}:last_outcome` (o segmento é a
-   fonte única; a sessão é derivada). O `process_routed` grava esse marcador ao fim de cada ativação primary —
-   mas o **resume roda por outro caminho** (`handle_resume`), que publicava o segmento com o outcome correto e
-   **não regravava o marcador**. Sobrevivia o `suspended` da janela PRÉ-suspend, e a sessão fechava como
-   `suspended` mesmo tendo resolvido → o `business_outcome` da journey mentia. Espelhada a escrita do
-   `process_routed` (mesmo marcador/TTL, `agent_kind: ai`); um re-suspend regrava `suspended`, que é o estado
-   correto nesse caso. Validado E2E: journeys respondidas depois do fix fecham `resolved` (as anteriores
-   seguem com o carimbo errado na história).
-
----
-
-## Saneamento `docs/kafka-eventos.md` → Arc 19 *(dívida de doc, 2026-07-08)*
-
-O doc está marcado "Estado: Arc 16" e descreve como **atuais** artefatos removidos no Arc 19 Fase F. Corrigir:
-
-- `journey.events` (9 tipos) + `JourneyEventSchema`/`journey.ts` → marcar como **legado removido** (feito
-  parcialmente 2026-07-08; falta a seção de detalhe do tópico, se houver âncora `#journeyevents`).
-- `workflow.events` + `WorkflowInstance` + endpoints lifecycle do `workflow-api` → removidos/410 no Arc 19
-  (workflow = canal `webhook`); atualizar produtor/consumidor e o texto.
-- `skill-flow-worker` como consumidor → subsumido pelo `orchestrator-bridge`.
-- Cabeçalho "Estado: Arc 16" → Arc 19; refletir modelo unificado (`session_id` persistente, status `suspended`,
-  `origin_session_id`, e futuramente `root_session_id`/`journey.merges`).
-- Adicionar tópicos vivos que faltam (`session.signals`, `calibration.events` se ausente, etc.).
+**Correção pendente no CLAUDE.md**: a tabela de Kafka topics lista `rules.escalation.events` → consumidor
+`Routing Engine` e `agent.done` → `Rules Engine, Analytics`. Ambas falsas — atualizar junto com a decisão (1).
 
 **Método:** cross-check contra `packages/analytics-api/src/plughub_analytics_api/clickhouse.py` (DDLs reais) e
 `CLAUDE.md § Kafka Topics` (que já está correto e serve de gabarito). Baixo risco, alta clareza — chore de doc.
@@ -706,11 +494,7 @@ datasource/query-builder genérico (dado interno); novos tools (heatmap/gauge/le
 
 ---
 
-## Isolamento do substrato por `origin` — ✅ ARCO COMPLETO (2026-06-25) — resta fase 2
-
-Passos 1–6 + fix de rótulo concluídos e validados E2E (`infra/test/smoke_origin_reeval.sh`); detalhe em
-`CHANGELOG.md`, racional em [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
-(Status: Aceito — implementado). Resolveu o concern §9(c) do Quality Ingest.
+## Isolamento do substrato por `origin` — Fase 2 (adiada) *(arco completo 2026-06-25; histórico no CHANGELOG)*
 
 **Fase 2 — ADIADA por decisão (2026-06-25), não enterrada.** Conteúdo: partição CH
 `PARTITION BY (toYYYYMM(date), origin)` em tabelas novas/migração versionada (lifecycle/LGPD; **não**
@@ -1253,92 +1037,6 @@ Hoje o Analytics/Agents mistura agente×pool e não separa humano×IA.
 
 ---
 
-## Governança de Capacidade — contratado como fonte única *(✅ ARCO CONCLUÍDO 2026-06-05)*
-
-Nasce da validação do fechamento Fase 2 Pools: contratado não governa config nem
-runtime (Σ reservas pode exceder C / shared negativo; quota Redis documentada mas
-inexistente; demo deploya 295 vs 25 contratados sem alerta). **Modelo fechado** em
-[`docs/arcos/capacity-governance.md`](docs/arcos/capacity-governance.md): C
-(pricing) é fonte única; **recursos criados no momento do uso** → gate primário na
-criação (instância IA on-demand, humano = concorrentes logados) contra o C vigente;
-declaração no flow/deploy validada no deploy; Σ reservas ≤ C e shared ≥ 0 (zero ok,
-negativo nunca); redução de C sempre aceita com revalidação + alerta de
-não-conformidade (nunca bloqueia); P (alocado) vira medidor de consumo do contrato
-(UI: C × alocado × saldo). Absorve a dívida pricing→quota Redis registrada na
-Fase 2. Pendente de implementação: ver § Pendente do spec.
-**Item 1 ✅** (2026-06-04, ver `CHANGELOG.md`): quota sync no pricing-api —
-mutações de resources gravam `{t}:quota:max_concurrent_sessions` (C = ai+human,
-base + reservas ativas); `sync_all` no boot; o gate já existente da admissão
-híbrida (`shared = C − Σ reservas`) passa a armar de verdade. `pricing.md`
-§ Quota Side Effects corrigido (descrevia integração inexistente).
-**Item 3a ✅** (2026-06-04, ver `CHANGELOG.md`): agent-registry valida
-`Σ session_reservation ≤ C` no POST/PUT de pool (422 só em aumentos; reduções
-sempre passam; sem C → fail-open) + `GET /v1/pools/capacity/conformance`
-(conformidade derivada, revalidação implícita on contract-change).
-**Item 4 ✅** (2026-06-04, ver `CHANGELOG.md`): aba Capacidade na BillingPage —
-contratado × alocado × saldo + reservado/shared com alertas de não-conformidade
-(reservas > C; alocado > C). Restam: 3b (Σ dos deploys ≤ C), 2 (gates por
-tipo), 5 (aba Analytics contratado-cêntrica) e 6 (demo coerente).
-**Item 3b ✅** (2026-06-04, ver `CHANGELOG.md`): Σ declarada nos deploys ≤ C
-validada no PUT slots/next + promote (rollback isento; reduções passam;
-helper `lib/capacity.ts` compartilhado com 3a).
-**Itens 5+6 ✅** (2026-06-04, ver `CHANGELOG.md`): aba Capacidade
-contratado-cêntrica (KPI Alocado como diagnóstico) + `pricing-seed` do demo
-(ai 300 + human 10 → C=310, não-destrutivo). Resta do arco: 2 (gates por
-tipo) e 7 (UX do available).
-**Item 2 / Etapa 1 ✅** (2026-06-05, ver `CHANGELOG.md`): `agent_kind` ponta a
-ponta (schemas+Prisma+backfill+rotas+routing+YAML) + quotas por tipo
-(`{t}:quota:capacity:{ai_agent|human_agent}`) + decisões de tipagem fechadas
-no spec (queue_config⇒human; fila atendida=ai cobrável; tier grátis = fila de
-sistema, arco futuro).
-**Item 2 / Etapa 2 ✅** (2026-06-05, ver `CHANGELOG.md`) — **item 2 completo**:
-gate humano (logins concorrentes ≤ C_human + kind do pool no registerHumanAgent,
-`login_denied` com toast no Console), gate IA (sessões em pools ai ≤ C_ai na
-admissão, cause `quota` → demanda reprimida), recurso×kind (deploy em pool
-human → 422; login humano em pool ai → negado). **Resta do arco: só o item 7**
-(UX do available físico × admissível).
-**Item 7 — design fechado 2026-06-05** (ver § 7 do spec): dois números
-(físico/admissível ⊕), organização Reservados × Compartilhado × Fila gratuita
-com donuts ("total e como está sendo consumido") + tiles do pipeline; HASH
-`{t}:admission:shared_pools` para atribuição exata do shared. Execução:
-**7a ✅** (2026-06-05, ver `CHANGELOG.md`): HASH shared_pools (atribuição exata)
-+ agregador no /v1/operational/pools (admissible, regimes, tiers, summary) +
-Monitor/Pools com tiles/donuts/seções + tiles no Monitor/Sessions.
-**7b ✅** (2026-06-05, ver `CHANGELOG.md`): sampler amostra admissão →
-admitted_peak + linhas __reserved__/__shared__/__buffer__ → bloco admission
-no occupancy → aba Capacidade com "Admissão no tempo" e "Sala de espera
-gratuita no tempo". **ITEM 7 COMPLETO — ARCO CONCLUÍDO.** Verificações na
-validação do 7b: segmento sintético no detalhe de Sessions; nenhum `system`
-em Analytics/Agents.
-
----
-
-## Fila de sistema — tier gratuito *(✅ ARCO CONCLUÍDO 2026-06-05)*
-
-**Spec/ADR**: [`docs/arcos/system-queue.md`](docs/arcos/system-queue.md).
-Recon 2026-06-05 (a armadilha de sempre, na direção boa): a fila muda está
-**majoritariamente viva** — ledger ZSET, aviso de espera ao cliente (mantido no
-render v2), drain-on-ready, `queue_max_wait_default_s`, evento `queued` →
-analytics. O arco real é bem menor que o esboço supunha. **Decisões fechadas**:
-(1) isenção de C libera os buckets de admissão no enqueue mudo (re-admissão
-natural no drain; C cheio → re-enfileira); (2 revisada) teto TOTAL do tenant —
-`max_queue_total` no Config API + SET `{t}:queue:unadmitted` (SCARD = ocupação;
-sem teto por pool; vizinho barulhento = refinamento futuro), estouro = outage
-causa NOVA `queue_full`; (2b) **overflow**: C esgotado em pool humano cai na
-fila muda gratuita em vez de rejeitar na porta (rejeita só com fila cheia);
-(3 superada na implementação) saídas da fila muda viram SEGMENTOS SINTÉTICOS
-`role=queue` (handoff/abandoned) — zero tópicos novos, zero dual-source, o
-relatório Fase D conta fila muda sem mudar; (4) resta só tier da fila por pool;
-(5) updates de posição = v2 opcional.
-**Fase A ✅** (2026-06-05, ver `CHANGELOG.md`): isenção de C + overflow +
-proteções (queue_max_total, max_wait por canal, queue_full) + segmentos
-sintéticos + backstops + fixes da validação (headroom nos drains, dedupe do
-aviso, release imediato no contact_closed). **Fase B ✅** (2026-06-05): causa
-queue_full na demanda reprimida + tier da fila (Atendida/Sistema) na aba Fila.
-**ARCO CONCLUÍDO** — item 7 do capacity-governance destravado.
-
----
-
 ## G7 — Decoupling segment-end × contact-close *(arco aberto)*
 
 Spec em [`docs/arcos/g7-segment-contact-decoupling.md`](docs/arcos/g7-segment-contact-decoupling.md).
@@ -1554,9 +1252,16 @@ lê outcome), S4 (quarentena → `contact_eligibility_check` genérico), S5 (web
 
 **Pendente — eixo "fechar parciais primeiro" (decidido 2026-07-23):**
 
-1. **S1 — normalizar CES/PMF/FCR** no `parse_session_signal_event` (analytics-api): hoje só NPS/CSAT ganham
-   source+label; CES/PMF/FCR caem cru em `customer_survey` (escala pass-through). Menor esforço, tapa
-   distorção silenciosa no relatório.
+1. **S1 — ✅ FEITO (2026-07-27, ver CHANGELOG).** Catálogo único `survey_catalog.py` + roll-up por instrumento.
+   **Resíduos:**
+   - **Nenhum produtor emite CES/PMF/FCR** — nenhum DialogForm (`infra/test/seed_dialog_*`) nem skill de survey
+     os captura. A normalização está pronta e sem dado: falta um form de seed com dimensions CES/PMF/FCR para
+     um E2E de verdade (e para o S6/S8 mostrarem algo além de NPS/CSAT).
+   - **UI ignora `value_label`** — `SignalChips` (`AnaliseSurveysPage.tsx`) renderiza só `metric` + número, até
+     para NPS ("nps 9" em vez de "Promotor"); `CustomerVoicePage` tem um ternário vazio (`rollup === 'avg' ? ''
+     : ''`) onde deveria sufixar `%` para `pct`/`nps_index`. Fatia C do S1.
+   - **Rótulos mistos** — CES/PMF/FCR em inglês (spec), NPS/CSAT em pt-BR (histórico gravado). Unificar exige
+     decidir migração do histórico + i18n na UI.
 2. **S7 (refinos do editor `/config/dialog-forms`):** biblioteca `survey_question` reutilizável, ABAC no
    write (hoje só `X-Admin-Token`), drag reorder, locale lado-a-lado + preview.
 3. **S6 (fechar):** view consolidada "Visão do cliente" (cross-cut multi-métrica + divergências §8/§10)
@@ -1863,21 +1568,8 @@ roteamento (bypass do pool) — é filtro de claim com fallback.
 
 ---
 
-## F11 — Pesquisa multi-grão outbound → superseded pelo módulo Customer Surveys
+## Histórico de contatos do cliente — backlog pós-H5
 
-> **Consolidado (2026-07-02):** o planejamento de orquestração que este item pedia ("quando/como cada
-> grão dispara") está **fechado** em [`docs/arcos/customer-surveys.md`](docs/arcos/customer-surveys.md)
-> §5 (gatilho decidido no skill, não na plataforma) + §12 (plano de fases S1–S11). O **S11** daquele
-> plano é exatamente o "NPS/PMF relacional agendado + grão journey E2E" que este F11 apontava como
-> pendência. Não há mais planejamento em aberto aqui — o que resta é **implementação** das fases S1–S11.
-> ⚠️ **"nenhuma iniciada" está obsoleto (2026-07-02):** ver a seção **"Customer Surveys — estado as-built"**
-> acima e `customer-surveys.md` §12.1 para o estado real (S2–S5 feitos/por-substituição; S1/S6/S7 parciais;
-> S8–S11 não iniciados). Ver também `CLAUDE.md` § Pending → "Customer Surveys" e "Histórico de contatos do
-> cliente" (capacidade transversal, §20 do mesmo doc, spec própria em `docs/arcos/customer-contact-
-> history.md`). F5 inline (grão segmento) segue ✅ concluído — a riqueza "N sinais por agente" mora no
-> módulo Surveys (grãos outbound), não no inline.
-
-### Histórico de contatos do cliente — backlog pós-H5
 > O arco Customer History está **completo no v1** (H1–H5 + C1a/C1b ✅ — ver `CHANGELOG.md` e
 > `docs/arcos/customer-contact-history.md` §9). Resta:
 - **Busca full-text `GIN(tsvector)` (escala)** *(adiado no H5)* — a busca de mensagens (H2) usa hoje
@@ -1889,77 +1581,13 @@ roteamento (bypass do pool) — é filtro de claim com fallback.
 
 ---
 
-## Scheduler / Agenda — `scheduler-api` *(Fase 1 ✅ 2026-07-20; Fase 2 ✅ · Fase 3 ✅ 2026-07-21 — ARCO COMPLETO)*
+## Scheduler / Outbound — resíduos *(arco Scheduler 1–3 ✅ e arco Outbound 1–5 ✅; histórico no CHANGELOG)*
 
-> **Fase 3 CONCLUÍDA (2026-07-21, ver CHANGELOG):** UI (autoria `/config/schedules` + Monitor › Agendas) +
-> endpoint `POST /v1/agendas/{id}/fire` (disparo manual sem consumir a recorrência). ABAC `scheduler.{configurar,
-> operacao}` grant-first, sem role default nem bypass de admin (D2). Proxy `/v1/agendas`→3650 (Vite+nginx).
-> Smoke `infra/test/smoke_scheduler_fire_now.sh`. **Scheduler completo (Fases 1–3).** Follow-ups abaixo
-> (Fase 4 outbound + migração dos timers legados) permanecem opcionais.
-> **Fase 4 (outbound) — módulo Outbound: Fase 1 ✅ validada E2E; Fase 2 ✅ validada via API** (2026-07-21).
-> **Fase 1:** substrato `mailing`+`campaign`+`delivery` (`mailing-api` :3660, schema `outbound`) + tools MCP
-> `outbound` + demo drenado por agenda com diff zero. `smoke_outbound_fase1.sh` verde. Destravou fix de engine
-> (`loop.ts` `:__invoked__`). **Fase 2:** governança de contato — `contact_log`/`contact_policy`/
-> `contact_eligibility_check` (fadiga; substitui `survey_eligibility_check`) + `mailing_unsubscribe`. Motor
-> validado via API (`smoke_outbound_fase2.sh`). **Fase 2b ✅ E2E:** gate fiado no skill
-> (`smoke_outbound_fase2b.sh`, fadiga cross-campanha no fluxo real). Lição: editar skill de pool com slot exige
-> re-snapshot (`PUT /slots/next`→`POST /promote` com service token), não só reconcile. **Fase 3 — desenho fechado**
-> (só 3a calendar + 3b opt-out são build; capacidade=routing/max_wait e canal=collect fecham na Fase 5; pacing
-> look_ahead=discador Fase 5+). **Fase 3a ✅ via API** (janela via calendar-api, `smoke_outbound_fase3a.sh`).
-> **Fase 3b ⚠️ a validar:** opt-out global `do_not_contact` no cadastro (identity), veto de maior precedência no
-> eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve (`smoke_outbound_fase3b.sh`).
-> **Fase 4 ✅ via API (2026-07-22):** importador de arquivo em **duas camadas** no `mailing-api` (REST puro) —
-> Camada A `batch_ingest`/`POST …/entries/batch` (agnóstica de formato: resolve+valida+upsert+relatório) + Camada B
-> `parse_file`/`POST …/import` (CSV/xlsx via `column_map` do mailing, síncrono com teto, rejeita-linha-e-continua).
-> `column_map` = config de parsing no mailing; `identity_client.resolve`; deps `openpyxl`+`python-multipart`.
-> `smoke_outbound_fase4.sh`. **Fase 5a ✅ (2026-07-22):** fan-out **dispatcher/worker** via `workflow_trigger`
-> (fire-and-forget) — `skill_outbound_dispatch_v1` (drena+claima → dispara N workers passando `delivery_id`) +
-> `skill_outbound_worker_v1` (1 por contato: eligibility → contacted → collect lazy → responded|failed), pools
-> `outbound_dispatch`/`outbound_worker`. Decisão B: collect lazy = ativo p/ canal adiável (só voz força ativo-
-> síncrono, fora do corte). `smoke_outbound_fase5a.sh` (N deliveries claimed→contacted).
-> **Fase 5b ✅ (2026-07-22):** survey outbound e2e via substrato de campanha — `skill_outbound_survey_dispatch_v1` +
-> `skill_outbound_survey_worker_v1` (pools homônimos). Veículo = **link web** (`survey_link_create`, origin EXPLÍCITO da
-> metadata) e NÃO o collect (que chavearia pela raiz do dispatcher). `eligibility → survey_link_create → contacted(token)`;
-> submit em `/survey/{token}/submit` → `session.signals`. Closure = sinal+contacted (responded por-delivery = refinamento;
-> skill de processo que auto-alimenta a mailing = refinamento). `smoke_outbound_fase5b.sh`. **Arco Outbound COMPLETO
-> (1–5).** **UI fatia 1b ✅ (2026-07-22):** módulo `outbound` no platform-ui (`/config/outbound`, abas Mailings/
-> Campaigns/Deliveries + editores de `column_map` e `ordering` + import; ABAC `outbound.{configurar,operacao}`, proxy
-> `/v1/(mailings|campaigns)`→3660) — fecha a invariante "UI-editable". **Módulo Outbound completo (backend + UI).**
-> Ver `docs/arcos/outbound.md`.
-
-> **Fase 2 CONCLUÍDA (2026-07-21, ver CHANGELOG):** promote agendado ponta-a-ponta. Tool MCP `pool_promote`
-> (wrapper auditado de `POST /v1/pools/:id/promote`, `isError` em 409/422 → `on_failure`); skill
-> `skill_deploy_promote_v1` (perfil workflow, `invoke pool_promote` lendo `@ctx.target_pool` do payload da
-> agenda); pool webhook `deploy_promote_ia`; gate `infra/test/smoke_scheduled_promote.sh` (next encenado →
-> promove + SkillDeployment; next vazio → 409 → sessão failed, slot intacto). Sem pin (S4), um caminho de
-> promote, sem retry.
-
-> **Fase 1 CONCLUÍDA e validada E2E (2026-07-20, ver CHANGELOG):** `scheduler-api` (porta 3650) —
-> Camada 1 (Redis sorted-set + poller + re-hidratação), Camada 2 (Postgres `agendas`+`agenda_dispatches`),
-> CRUD/lifecycle REST, avaliador de recorrência (daily/weekly/monthly by-date|by-position, `times[]`,
-> `month_overflow`), `business_day_policy` via endpoints by-calendar_id novos no calendar-api (validado
-> shift quarta-fechada→quinta), e disparo webhook→pool (Arc 19) com ledger + re-arme recorrente + complete
-> em `once`/exhausted. **Pendente: Fase 2 (consumidor deploy) e Fase 3 (UI `/config/schedules` + Monitor).**
-
-**Elevação do ADR de timers:** de substrato de disparo efêmero para **agendas de primeira classe**
-(duráveis, observáveis, operáveis). Serviço novo `scheduler-api`; agenda = recurso genérico que, num
-*quando/modo* (1x / recorrente dia-semana-mês, `times[]` no dia, `business_day_policy` via calendar),
-**aciona um pool via webhook** (Arc 19); status da agenda = *acionou o pool ou não* (execução é da sessão,
-por referência/drill-through). Reuso-chave: `calendar_id` traz semana/feriados/exceções/timezone (a agenda
-não remodela feriado); `DayOfWeekSchema` importado; `WeeklyEditor`/Modal reaproveitados na UI. Âncora =
-promote agendado (Fase 2, corpo do job = pool cujo skill faz `invoke promote` c/ `on_failure` + pin de
-versão). Fases: **1** core scheduler-api (Camada 1 sorted-set + Camada 2 Postgres + disparo webhook + ledger)
-· **2** consumidor deploy · **3** UI `/config/schedules` + Monitor (ops reagendar/cancelar/pausar/disparar-já).
-Fora do 1º arco: **4** outbound/campanhas (**design fechado** — substrato genérico mailing+campaign+governança de
-contato; scheduler = cadência, diff zero: [`docs/product/outbound-mailing-campaign-design.md`](docs/product/outbound-mailing-campaign-design.md));
-migração dos timers legados.
-→ Spec: [`docs/product/scheduler-agenda-spec.md`](docs/product/scheduler-agenda-spec.md) · ADR:
-[`docs/adr/adr-timer-scheduler.md`](docs/adr/adr-timer-scheduler.md).
-
-**Decisões §7 FECHADAS (2026-07-20):** pin de versão **descartado** (agenda endereça pool, não skill — versão é
-do pool; promote = "vira o `next` vigente em T"; pin só na composição aprovação+agendamento, e lá é do domínio
-de aprovação); sem retry de dispatch no v1 (grava `failed` + Monitor); overlap permitido; porta 3650 + HTTP
-síncrono; `misfire` default `skip`/`fire_late`. Pré-código para Fase 1.
+- **Fase 3b do Outbound — ⚠️ a validar:** opt-out global `do_not_contact` no cadastro (identity), veto de
+  maior precedência no eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve o
+  atributo. O smoke `infra/test/smoke_outbound_fase3b.sh` está escrito mas **não foi validado**.
+- **Refinamentos do Outbound 5b (backlog):** `responded` por-delivery (submit → `campaign_delivery_result`);
+  skill de processo que **auto-alimenta a mailing** no `complete` (journey_complete real — hoje é seed direto).
 
 ### Migração dos timers legados *(follow-up — antigo "Scheduler central de timers")*
 
@@ -1999,60 +1627,9 @@ original sugeria.
 
 ---
 
-## Arc 19 — Modelo Unificado de Sessão: Workflow como Canal Webhook
+## Arc 19 — cleanup residual de infra *(arco concluído 2026-05-28; histórico no CHANGELOG)*
 
-Spec em [`docs/arcos/arc19-unified-session-model.md`](docs/arcos/arc19-unified-session-model.md). Elimina a dualidade contact/workflow tratando workflows como canal `webhook` na channel-gateway.
-
-- **Fase A** ✅ — WebhookAdapter + `channel_type: webhook` + routing engine (2026-05-28)
-- **Fase B** ✅ — Status `suspended` + TTL extension + hash Redis `resume_tokens` + stream events (2026-05-28)
-- **Fase C** ✅ — orchestrator-bridge: `persistSuspendWebhook` wired in skill-flow-service; `_handle_webhook_session_resumed`; `process_inbound` http param (2026-05-28)
-- **Fase D** ✅ — workflow-api: proxy trigger/resume → channel-gateway; 410 Gone para persist-suspend/complete/fail/cancel/collect; `business_hours` + `calendar_id` em `persistSuspendWebhook` (2026-05-28)
-- **Fase E** ✅ — Monitor e Analytics unificados: filtro `channel_type`/`webhook` badge/`suspended` badge; Events tab (Arc 12); status filter analytics end-to-end (2026-05-28)
-- **Fase F** ✅ — Eliminação Journey (Arc 10/16/17 → CHANGELOG); platform-ui limpa; Arcs 10/16/17 retired (2026-05-28)
-
-**Arc 19 completo.** Cleanup residual (infra): remover `workflow.events` topic do Kafka e arquivar o package `skill-flow-worker`.
-
----
-
-## Arc 18 — Workflow Execution Trace *(DEPRECATED pelo Arc 19)*
-
-A spec original em [`docs/arcos/arc18-workflow-execution-trace.md`](docs/arcos/arc18-workflow-execution-trace.md) está superseded pelo Arc 19.
-
-**Por que deprecated**: todas as superfícies de Arc 18 dependem de entidades eliminadas pelo Arc 19 — `workflow-api` (deprecado Fase D), `Analytics/Processes` (eliminado, merge em Analytics/Sessions), `Analytics/Journeys` (eliminado com Journey na Fase F), rotas `/analytics/processes/:instanceId` e `/analytics/journeys/:journeyId` (desaparecem).
-
-**O que sobrevive do conceito**: conforme documentado em `docs/arcos/arc19-unified-session-model.md` §Analytics/Sessions, a hierarquia correta é **lista de sessions → lista de segments → detalhe do segment**. Workflows webhook aparecem em Analytics/Sessions com `channel_type: webhook`; cada suspend/resume cria um segmento distinto; o padrão de navegação é idêntico ao de sessões normais (webchat, voice). Não há Trace tab separada — o usuário navega pelos segmentos da sessão webhook da mesma forma que navega pelos segmentos de qualquer outra sessão.
-
-**Pendência real ✅** (constatada já implementada em 2026-06-04 — Fase E do delegate
-entregou): `WorkflowTraceList` renderiza a lista ordenada de segmentos da sessão
-webhook com numeração de ciclo, badge de tipo (intake/execução/specialist), status
-por nó (live/outcome/closed), pool+timing e contadores de execuções/suspensões; a
-navegação por canal real (Fase C do delegate) garante que sessão webhook sempre
-passa pela lista antes do detalhe.
-
----
-
-## Step `delegate` + MCP tool `workflow_resume` ✅
-
-Padrão implementado completo. Componentes entregues:
-
-- `skill-flow-engine/src/steps/delegate.ts` — executor do step
-- `skill-flow-engine/src/engine.ts` — `persistDelegate` em `SkillFlowEngineConfig` + wiring em `_buildContext`
-- `mcp-server-plughub/src/tools/workflow.ts` — MCP tool `workflow_resume`
-- `channel-gateway/adapters/webhook.py` — `handle_delegate` (cria sessão-filho + ContextStore)
-- `channel-gateway/main.py` — `POST /v1/channels/webhook/delegate` (antes de `/{skill_id}`)
-- `e2e-tests/services/skill-flow-service/src/index.ts` — `persistDelegateFn` + `CHANNEL_GATEWAY_URL`
-- `docker-compose.demo.yml` — `CHANNEL_GATEWAY_URL` + `CALENDAR_API_URL` no skill-flow-service
-- `skill_portabilidade_demo_v1.yaml` v2.0 — usa `delegate` (sem notify/collect no workflow)
-- `agente_confirmacao_portabilidade_v1.yaml` — agente de I/O de confirmação
-- `infra/registry/tenant_demo.yaml` — pool `portabilidade_confirmacao`
-
----
-
-## Webhook workflow trace — segmentos históricos sem origin_session_id *(deferred)*
-
-A migração ClickHouse `_DDL_SESSIONS_MIGRATE_ORIGIN` adiciona a coluna `origin_session_id` à tabela `sessions`, mas sessões webhook criadas antes da migração têm o campo NULL. O `WorkflowTraceList` não vai exibir o segmento de entrada (intake) para essas sessões. Apenas sessões criadas após a migração terão o link correto.
-
-Não requer ação — os dados históricos permanecem corretos para análise; apenas o link de rastreabilidade cross-session ficará ausente para sessões antigas.
+Remover o tópico `workflow.events` do Kafka e arquivar o package `skill-flow-worker`.
 
 ---
 
@@ -2106,78 +1683,7 @@ Descritivo técnico-funcional consolidado (com a seção de roadmap §20.7): [`d
 
 ---
 
-## Fila de trabalho humano / dispatch pull + inbox no Console *(✅ v1 CONCLUÍDO — pull core F1+F2 + Aprovação A1–A5 validados E2E; resta só A6 pós-v1)*
-
-> **Status (2026-07-17):** **Pull core (F1+F2)** e **Aprovação humana como passo de workflow (A1–A5)**
-> **concluídos e validados E2E** (ver `CHANGELOG.md` §§ "Aprovação humana… A1–A4" 2026-07-16, "Aprovação —
-> A5" 2026-07-17, "Aprovação-conferência (pull) P1+P2/P3" 2026-07-17). Caso âncora = gate de promoção de
-> deploy (homolog→prod), com decisão auditada + gate por `verification_class`.
-> **Resta apenas A6 (pós-v1, ADR §6)** e os não-objetivos v1 — listados no fim desta seção.
-
-Modo de despacho **pull** genérico no Routing Engine (operador puxa da fila) + inbox no Console, tendo a **fila de aprovação** como primeira especialização (revisão de processo montado por IA num passo anterior). Especificações em `docs/product/`:
-
-- **Dispatch pull genérico** — [`docs/product/routing-pull-dispatch-spec.md`](docs/product/routing-pull-dispatch-spec.md). `dispatch_mode: push|pull` no `PoolConfig` (único toque de schema); reusa o sorted set de fila; claim atômico via `ZREM` (alocação concedida pelo routing — invariante preservada); lease TTL + auto-release event-driven (crash_detector); release re-enfileira pelos critérios do routing; ordenação por peso da fila + tags `session.queue.*` no ContextStore; respeita `max_concurrent_sessions`.
-- **Fila de aprovação (especialização)** — [`docs/product/human-work-queue-aprovacao-spec.md`](docs/product/human-work-queue-aprovacao-spec.md). Item = sessão de workflow suspensa (delegate ao pool pull); pacote (form padrão + extensão + `decisions`); decisão volta pelo **retorno do delegate** (`output_as: step.id` já existe — sem schema novo); workflow principal roteia (`choice`); edição auditada (design fechado → seção A5 abaixo / ADR §9).
-- **Inbox no Console (UI)** — [`docs/product/pull-inbox-console-ui-spec.md`](docs/product/pull-inbox-console-ui-spec.md). Integrada ao atendimento (rail de filas piscando → lista → preview no centro → "Pull" na action bar); cor por SLA (verde/amarelo/vermelho); notificação via ciclo do heartbeat; gating de capacidade.
-
-Liga com o **gate de promoção** homologação→produção (descritivo §20.1): promover vira um workflow com passo de aprovação.
-
-A5 — Auditoria de decisão/edições: **concluído 2026-07-17** (E2E validado). Detalhe/as-built em `CHANGELOG.md` + ADR §9/§10.
-
-**Status (2026-06-15):** plano consolidado em `docs/product/frente1-dispatch-pull-aprovacao-plano-consolidado.md`
-(módulos + task list + esforço; decisões D1–D3 resolvidas). Sub-fatiamento da F1 (pull core) confirmado:
-F1.0 (plumbing `dispatch_mode`) → F1.1 (branch `route()`) → F1.2 (claim atômico) → F1.3 (lease).
-- **F1.0 ✅ (2026-06-15)** — `dispatch_mode: push|pull` (default push) ponta a ponta: `@plughub/schemas`
-  `PoolRegistrationSchema`, agent-registry (coluna Prisma + migração + POST/PUT), routing `PoolConfig` +
-  `kafka_listener`, **UI select** na PoolsPage (+ i18n). Aditivo. Validado (`teste_demo` → `dispatch_mode=pull`).
-- **F1.1 ✅ (2026-06-15)** — branch no `route()` (pool pull → parqueia, pula `_allocate`, reusa caminho queued)
-  + `_drain_queue_for_agent` e `_periodic_queue_drain` pulam pools pull. Validado: push byte-parity; pull
-  parqueia (`Contact persisted to queue pool=teste_demo`) sem `Routed`/drain.
-- **F1.2 ✅ (2026-06-15)** — claim atômico no Router: `work_task_claim` (`ZREM` 1-vencedor + `claim_instance`
-  no semáforo do recurso + rollback se −1 + `mark_busy` + lease + publica `conversations.routed` → reusa
-  bridge/Console) e `work_task_release` (lease off + `release_instance` + re-enfileira). Registry:
-  `atomic_claim_dequeue`, `write/delete_claim_lease`. Testes `test_work_queue_claim.py` 5/5 + suíte 96 verde.
-  Invocação (tool mcp-server) é F2.
-- **F1.3 ✅ (2026-06-15)** — `claim_lease_s` no config-api (ns `routing`, 180) + `routing_config` + `Router`
-  lê dele; branch pull do `route()` **deleta a claim lease** no re-parque. **Correção do desenho**: o
-  crash_detector **pula humanos** → o auto-release de pull (humano) é **emergente**: desconexão (mcp-server WS
-  lifecycle / arco "queda involuntária") → bridge re-roteia → `route()` parqueia (F1.1) + limpa lease → contato
-  volta claimável + vaga liberada por `agent_done`/`release_instance`. **Diferido** (spec "sem sweep dedicado"):
-  renovação da lease por heartbeat + sweeper de "conectado-mas-ocioso" (a inbox da F2 sinaliza melhor). Testes
-  6/6 + suíte 96 verde. **Pull core (F1.0–F1.3) COMPLETO.**
-- **F2** — tools mcp-server + API HTTP no routing + inbox no Console. Sub-fatiada:
-  - **F2a-1 ✅ (2026-06-15)** — API HTTP no routing (`http_api.py`, aiohttp): `POST /v1/work_queue/{claim,release}`
-    → `Router.work_task_claim/release`; `/health`; auth `X-Admin-Token` opcional; porta `ROUTING_HTTP_PORT`
-    (3550). `main.py` injeta `router._producer` (liga claim routed **e** `queue.position_updated`, antes latente)
-    + inicia o server. `aiohttp` no pyproject. Validado (health + claim wiring) + suíte 96 verde.
-  - **F2a-2 ✅ (2026-06-15)** — tools mcp-server (`tools/work_queue.ts`): `work_queue_list` (Redis-direct: lê
-    sorted set + `queue_contact`) + `work_task_claim`/`work_task_release` (`fetch` → API routing). Registrado
-    nos 2 sites do `server.ts`; keys `queueContact`/`claimLease` no `infra/redis`. Build TS OK. **F2a completa
-    (backend do pull pronto).** Validação funcional das tools = via F2b (a Console é o cliente MCP).
-  - **F2b-1 ✅ (2026-06-15)** — rotas HTTP `/api/work_queue/{list,claim/:sessionId,release/:sessionId}` no
-    mcp-server (Express, onde vivem `/api/agent_done` etc.) + `lib/work-queue.ts` compartilhado (a tool MCP e as
-    rotas HTTP usam a mesma lógica). **Correção de rumo**: a Console usa rotas HTTP `/api/*`, não tools MCP — as
-    tools (F2a-2) servem clientes MCP/IA. Validado (`/api/work_queue/list` → `{contacts:[],total:0}`).
-  - **F2b-2a ✅ (2026-06-16)** — inbox mínima funcional: `PullInboxPanel` no rodapé da coluna de contatos do
-    Console (`AgentAssistPage`), poll 4s de `/api/work_queue/list?pools=`, botão **Pull** → `claim/:sid` →
-    contato vira atendimento normal (Serving). `dispatch_mode` em `PoolInfo`/`fetchPools`. Junto: **fix de
-    propagação de `pool_config`** (`publishRegistryChanged` no POST/PUT de pool + `agent_kind`/`dispatch_mode`/…
-    no `_pool_config_diverged.MANAGED`) — destravou login humano em pool human e toggle push↔pull. **E2E OK**:
-    parqueia → lista → Pull → atende (bidirecional).
-  - **F2b-2b-1 ✅ (2026-06-16) — preview/triagem read-only antes do claim** *(pedido do usuário)*: clicar na
-    linha da inbox abre preview read-only no centro (conversa via `conversation_history` + abas Context/History
-    via `supervisor_state`, ambos read-only por sessionId — **sem backend novo**), action bar "Atender (Pull)"/
-    "Fechar", input oculto, poll 4s, sem cache ao trocar. Atender → claim existente → atende. **E2E OK**.
-  - **F2b-2b-2 ✅ (2026-06-16) — polish**: cor por SLA nas linhas (verde<0.6 / amarelo≥0.6 / vermelho≥1.0 de
-    idade÷sla_target do pool); idade ao vivo (tick 1s a partir de `queued_at_ms`); gating de capacidade
-    (`atCapacity = contacts.size ≥ maxConcurrentSessions` do JWT) desabilita Pull/Atender + hint; auto-clear do
-    preview quando o contato sai da fila (claim de outro / timeout). Reforça o rollback server-side `no_capacity`
-    (F1.2) com feedback antecipado. **Frente 1 / Pull — completa (F1+F2).**
-  - **F2b-2b-3 ✅ (2026-06-16)** — agrupamento da inbox por pool (cabeçalho recolhível nome+contagem; dentro do
-    grupo mais-antigo-primeiro; pool_id sai da linha). Facilita localizar contatos por fila.
-  - **F2b-2b-4 ✅ (2026-06-16)** — divisória arrastável entre contatos e fila pull: `flexBasis` da área de
-    contatos controlado por drag (clamp 15–85%), persistido em `localStorage` (`plughub_pull_split_pct`).
-    **Frente 1 / Pull — encerrada (F1 + F2 + polish).**
+## Fila de trabalho humano / dispatch pull + inbox no Console — resíduos pós-v1 *(v1 concluído 2026-07-17; histórico no CHANGELOG)*
 
 **Resta (A6 — pós-v1, ADR §6 `adr-human-approval-workflow-step.md`):** quatro-olhos (2 aprovadores);
 reatribuição por supervisor (= conferência padrão); notificações/SLA na inbox; **rework rate**
@@ -2186,6 +1692,10 @@ Modo B (D6); weight-ordering (F6); **promote real** (invoke de deploy no `efetua
 `complete`). **Follow-ups menores (CHANGELOG A5):** Context/History trazendo a journey do workflow por
 `root_session_id` (aprovação raramente tem `customer_id`); gate de servibilidade do pool de aprovação
 pelo ABAC `approvals` (fechar o claim genérico); refresh imediato do inbox pós-release.
+
+**Diferido desde a F1.3** (spec "sem sweep dedicado"): renovação da lease de claim por heartbeat +
+sweeper de "conectado-mas-ocioso". Hoje o auto-release do pull é emergente (desconexão → bridge
+re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que um sweep.
 
 ## Frente 2 — Avaliação campaign-driven (shakedown E2E)
 

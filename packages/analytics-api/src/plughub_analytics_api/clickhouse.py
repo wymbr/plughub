@@ -1845,6 +1845,14 @@ def _session_row(d: dict) -> list:
     ]
 
 
+def _first_not_none(*values):
+    """Primeiro valor não-None (≠ `or`, que descarta 0/""/False)."""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def _queue_row(d: dict) -> list:
     ts = d.get("timestamp") or d.get("published_at")
     return [
@@ -1853,7 +1861,9 @@ def _queue_row(d: dict) -> list:
         d.get("session_id", ""),
         d.get("pool_id", "") or "",
         d.get("event_type", ""),
-        d.get("queue_position") or d.get("queue_length"),
+        # `or` engolia o ZERO (posição/legado 0 → cai no fallback ausente → NULL):
+        # "primeiro da fila" e "sem dado" viravam a mesma coisa na tabela.
+        _first_not_none(d.get("queue_position"), d.get("queue_length")),
         d.get("estimated_wait_ms"),
         d.get("available_agents"),
         _parse_dt(ts) or datetime.utcnow(),

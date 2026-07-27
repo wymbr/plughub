@@ -800,8 +800,14 @@ export const AgentAssistPage: React.FC = () => {
               /* Form-fill (R0) — renderiza o DialogForm no lugar da conversa.
                  Aprovação (A3) empilha decisions/edições/ABAC; demais casos
                  (wrap-up, survey-no-Console) usam o núcleo genérico direto. */
+              /* `key` = a TAREFA: sem ele o React reusa a mesma instância ao trocar
+                 de contato e todo o estado interno gruda (done="Submitted", answers,
+                 fieldValues do item anterior) — pior ainda quando os dois itens usam
+                 o MESMO form_id, porque nem o fetch re-roda. Trocar de tarefa é
+                 remontar. */
               isApprovalContact ? (
                 <ApprovalPanel
+                  key={selected.sessionId}
                   sessionId={selected.sessionId}
                   tenantId={session?.tenantId ?? ""}
                   poolId={approvalPoolId}
@@ -811,6 +817,7 @@ export const AgentAssistPage: React.FC = () => {
                 />
               ) : (
                 <DialogFormRenderer
+                  key={selected.sessionId}
                   tenantId={session?.tenantId ?? ""}
                   poolId={approvalPoolId}
                   instanceId={session?.userId ? `human-${session.userId}` : ""}

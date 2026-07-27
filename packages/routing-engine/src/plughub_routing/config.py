@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     kafka_topic_routed:     str = "conversations.routed"
     kafka_topic_queued:     str = "conversations.queued"
     kafka_topic_outbound:   str = "conversations.outbound"
+    # Posição na fila (analytics `queue_events`; futuros subscribers de canal).
+    # Publicado no ponto pós-enqueue de main.py — ver _publish_queue_position.
+    kafka_topic_queue_positions: str = "queue.position_updated"
     # Agent Registry events — populate Redis cache of pool configs and instances
     kafka_topic_lifecycle:  str = "agent.lifecycle"
     kafka_topic_registry:   str = "agent.registry.events"

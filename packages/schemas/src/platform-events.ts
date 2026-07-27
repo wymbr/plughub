@@ -100,21 +100,26 @@ export type SentimentUpdatedEvent = z.infer<typeof SentimentUpdatedEventSchema>
 // ─────────────────────────────────────────────
 
 /**
- * Published by Routing Engine when a contact is queued (no agent available).
- * Consumed by Channel Gateway (to show queue position to customer) and
- * analytics-api (to populate queue_events in ClickHouse).
+ * Published by the Routing Engine right AFTER a contact enters the pool queue
+ * (post-enqueue — before it, the queue does not yet contain the session and the
+ * position reads 0). Consumed by analytics-api (queue_events in ClickHouse).
+ * Showing the position to the customer is not wired yet — no channel subscriber.
  *
- * `estimated_wait_ms = queue_length × (sla_target_ms × 0.7)` — conservative p70 estimate.
+ * `queue_position` = 1-based position of THIS contact (ZRANK+1) ·
+ * `queue_length` = size of the whole queue. Distinct facts, both carried.
+ * `estimated_wait_ms = queue_position × (sla_target_ms × 0.7)` — conservative p70.
  */
 export const QueuePositionUpdatedEventSchema = z.object({
   event:             z.literal("queue.position_updated"),
   tenant_id:         z.string(),
   session_id:        z.string(),
   pool_id:           z.string(),
+  /** Optional for backward compat: publishers before 2026-07-27 only sent queue_length. */
+  queue_position:    z.number().int().positive().optional(),
   queue_length:      z.number().int().nonnegative(),
   available_agents:  z.number().int().nonnegative(),
   estimated_wait_ms: z.number().int().nonnegative(),
-  sla_target_ms:     z.number().int().positive(),
+  sla_target_ms:     z.number().int().nonnegative(),
   published_at:      z.string().datetime(),
 })
 export type QueuePositionUpdatedEvent = z.infer<typeof QueuePositionUpdatedEventSchema>

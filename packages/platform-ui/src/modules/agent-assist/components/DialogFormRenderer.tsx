@@ -181,6 +181,19 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   const [done,        setDone]        = useState(false)
   const [error,       setError]       = useState<string | null>(null)
 
+  // Defesa em profundidade: o estado é POR TAREFA (resume_token). O call site do
+  // Console monta com `key={sessionId}` (remonta ao trocar de contato), mas um
+  // consumidor que reuse a instância veria o "Submitted" e as respostas da tarefa
+  // ANTERIOR grudados — e, quando as duas tarefas usam o mesmo form_id, nem o fetch
+  // abaixo re-roda para limpar. Declarado ANTES do fetch: quando os dois disparam no
+  // mesmo render, o fetch é quem dá a palavra final sobre fieldValues/baseline.
+  useEffect(() => {
+    setDone(false)
+    setBusy(null)
+    setError(null)
+    setAnswers({})
+  }, [resumeToken])
+
   // Fetch the published DialogForm (same endpoint/shape the web vehicle consumes).
   useEffect(() => {
     if (!formId) { setForm(null); return }

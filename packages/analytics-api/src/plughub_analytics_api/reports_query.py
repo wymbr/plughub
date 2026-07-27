@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import survey_catalog
+
 logger = logging.getLogger("plughub.analytics.reports")
 
 # ─── defaults ─────────────────────────────────────────────────────────────────
@@ -3051,13 +3053,27 @@ def _compare_segments_lens(
 # o KPI operacional SLA (aderência %) no mesmo eixo diário. `source` por métrica no
 # catálogo (survey | operational). Só instrumentos SEM interpretação primeiro (NPS índice,
 # avg, SLA % dentro do alvo); top-box/%alvo entram com a escala carimbada / polaridade.
+#
+# S1: os instrumentos de survey são DERIVADOS de `survey_catalog.SURVEY_INSTRUMENTS`
+# (fonte única: escala, direção, bandas, roll-up). Antes esta tabela era uma segunda
+# definição e já havia divergido da spec (CES com `higher_is_better: False` contra
+# "nota alta = bom"). `sla` continua declarado aqui: é KPI operacional (sessions),
+# não instrumento de pesquisa (session_signal).
 CV_INSTRUMENTS: dict[str, dict] = {
-    "nps":  {"source": "survey",      "rollup": "nps", "label": "NPS",            "higher_is_better": True,  "grains": ["segment", "session", "journey"]},
-    "csat": {"source": "survey",      "rollup": "avg", "label": "CSAT",           "higher_is_better": True,  "grains": ["segment", "session", "journey"]},
-    "ces":  {"source": "survey",      "rollup": "avg", "label": "CES",            "higher_is_better": False, "grains": ["segment", "session", "journey"]},
-    "pmf":  {"source": "survey",      "rollup": "avg", "label": "PMF",            "higher_is_better": True,  "grains": ["session", "journey"]},
-    "fcr":  {"source": "survey",      "rollup": "avg", "label": "FCR (percebido)", "higher_is_better": True, "grains": ["session", "journey"]},
-    "sla":  {"source": "operational", "rollup": "sla_pct", "label": "SLA (aderência)", "higher_is_better": True, "grains": ["segment", "session", "journey"]},
+    metric: {
+        "source":           "survey",
+        "rollup":           inst["rollup"],
+        "rollup_cond":      inst.get("rollup_cond"),
+        "label":            inst["label"],
+        "higher_is_better": inst["higher_is_better"],
+        "grains":           inst["grains"],
+    }
+    for metric, inst in survey_catalog.SURVEY_INSTRUMENTS.items()
+}
+CV_INSTRUMENTS["sla"] = {
+    "source": "operational", "rollup": "sla_pct", "rollup_cond": None,
+    "label": "SLA (aderência)", "higher_is_better": True,
+    "grains": ["segment", "session", "journey"],
 }
 _CV_GRAINS = ("segment", "session", "journey")
 
@@ -3122,33 +3138,52 @@ def query_customer_voice(
         if pool_id:
             conds.append("pool_id = {pool_id:String}"); params["pool_id"] = pool_id
         _apply_pool_scope(conds, accessible_pools)
+        # S1 — roll-up POR INSTRUMENTO (antes era `avg` para tudo que não fosse NPS):
+        #   nps_index → %promotores − %detratores
+        #   pct       → % das respostas que satisfazem `rollup_cond` do catálogo
+        #               (PMF = % "very_disappointed", alvo Sean Ellis ≥40%;
+        #                FCR = % resolvido). `avg` sobre escala categórica 1–3 ou
+        #               binária 0/1 é numericamente sem sentido — PMF ainda tinha a
+        #               direção invertida no número cru (1 = melhor).
+        #   avg       → média (CSAT, CES)
+        # `rollup_cond` vem do catálogo (constante de código), nunca do request.
+        hits_expr = inst.get("rollup_cond") or "1 = 0"
         rows = _rows_to_dicts(client.query(f"""
             SELECT toString(toDate(session_at)) AS date,
                    count()                 AS n,
                    avg(value_num)          AS avg_value,
                    countIf(value_num >= 9) AS promoters,
-                   countIf(value_num <= 6) AS detractors
+                   countIf(value_num <= 6) AS detractors,
+                   countIf({hits_expr})    AS hits
             FROM {db}.session_signal FINAL
             WHERE {" AND ".join(conds)}
             GROUP BY toDate(session_at) ORDER BY date
         """, parameters=params))
-        tot_n = tot_prom = tot_det = 0
+        tot_n = tot_prom = tot_det = tot_hits = 0
         tot_sum = 0.0
         for r in rows:
             n = int(r["n"] or 0)
             avg_v = float(r["avg_value"]) if r["avg_value"] is not None else None
             prom = int(r["promoters"] or 0)
             det = int(r["detractors"] or 0)
-            if inst["rollup"] == "nps":
+            hits = int(r["hits"] or 0)
+            if inst["rollup"] == "nps_index":
                 val = round((prom - det) / n * 100, 1) if n else None
+            elif inst["rollup"] == "pct":
+                val = round(hits / n * 100, 1) if n else None
             else:  # avg
                 val = round(avg_v, 2) if avg_v is not None else None
             series.append({"date": r["date"], "n": n, "value": val})
-            tot_n += n; tot_prom += prom; tot_det += det; tot_sum += (avg_v or 0) * n
+            tot_n += n; tot_prom += prom; tot_det += det; tot_hits += hits
+            tot_sum += (avg_v or 0) * n
         if tot_n:
             summary["n"] = tot_n
-            summary["value"] = (round((tot_prom - tot_det) / tot_n * 100, 1)
-                                if inst["rollup"] == "nps" else round(tot_sum / tot_n, 2))
+            if inst["rollup"] == "nps_index":
+                summary["value"] = round((tot_prom - tot_det) / tot_n * 100, 1)
+            elif inst["rollup"] == "pct":
+                summary["value"] = round(tot_hits / tot_n * 100, 1)
+            else:
+                summary["value"] = round(tot_sum / tot_n, 2)
     elif metric == "sla":
         series = _cv_sla_series(client, db, tenant_id, since, until, pool_id, accessible_pools)
         wsum = sum((s["value"] or 0) * s["n"] for s in series)

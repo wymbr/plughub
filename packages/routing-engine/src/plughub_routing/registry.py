@@ -13,9 +13,10 @@ Redis key structure:
   {tenant_id}:pool_config:{pool_id}                         — pool config JSON (TTL 24h, via PLUGHUB_POOL_CONFIG_TTL_SECONDS)
   {tenant_id}:pools                                         — set of pool_ids for the tenant
   {tenant_id}:pool:{pool_id}:queue                          — sorted set of contacts (score = queued_at_ms)
-  {tenant_id}:instance:{instance_id}:wrap_up_pending        — Arc 14 Fase C: set by bridge during wrap-up;
-                                                              blocks get_ready_instances from returning this
-                                                              instance until wrap-up segment completes (TTL auto-expires)
+  {tenant_id}:instance:{instance_id}:sessions               — SET de ocupantes (semáforo de vagas). Membro
+                                                              "__wrapup_hold__::{origin}::{expires_at_ms}" =
+                                                              vaga SEGURA entre o fim do contato e o auto-claim
+                                                              do wrap-up inline (Phase 2 — hand-off da vaga)
   {tenant_id}:queue_contact:{session_id}                    — queued contact JSON
   session_instance:{session_id}                             — session affinity (stateful)
   {tenant_id}:routing:instance:{instance_id}:meta           — HASH no TTL (pools, agent_type_id)
@@ -140,10 +141,55 @@ def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
 # conference_id) → libera por PREFIXO "{session_id}::" (remove a(s) vaga(s) desta sessão
 # nesta instância). Simétrico: claim deriva de (session_id, conference_id); release de (session_id).
 #
-# claim: KEYS[1]=sessions set; ARGV[1]=occupant_id; ARGV[2]=max_concurrent; ARGV[3]=ttl_s
+# ── Wrap-up unificado Phase 2 — hand-off da vaga ──────────────────────────────
+# HOLD = ocupante especial que SEGURA a vaga da origem entre o fim do contato e o
+# auto-claim do wrap-up inline (auto-atendimento). Sem ele a ocupação OSCILA (o
+# release do agent_done libera a vaga; o auto-claim a reivindica ~2-3s depois) e um
+# push que chegue na janela toma a vaga a max_concurrent=1 — o agente recebe contato
+# novo com wrap-up pendente, exatamente o que a ocupação do wrap-up deve impedir.
+#
+# Membro: "__wrapup_hold__::{origin_session_id}::{expires_at_ms}"
+#   · o prefixo NÃO colide com o prefixo de sessão "{session_id}::" (uuid) → o
+#     release por prefixo de sessão nunca remove um hold, e vice-versa;
+#   · origin_session_id é OBSERVABILIDADE (o casamento é FUNGÍVEL: cada hold vale
+#     uma vaga, cada wrap-up consome uma — a instância já é a mesma);
+#   · expires_at_ms sustenta a expiração PASSIVA (não há sweeper): sem ela, um
+#     wrap-up que nunca chega (webhook non-2xx, workflow falha, logout, browser
+#     fechado) prenderia a vaga até o EXPIRE de 24h do SET.
+_WRAPUP_HOLD_PREFIX = "__wrapup_hold__::"
+
+# claim: KEYS[1]=sessions set; ARGV[1]=occupant_id; ARGV[2]=max_concurrent; ARGV[3]=ttl_s;
+#        ARGV[4]=now_ms; ARGV[5]="1" se este claim pode HERDAR um hold (auto_attend)
 #   retorna a nova ocupação (>=1) em sucesso/idempotente; -1 se lotado.
+#
+# Phase 2: varre holds e (a) DESCARTA os expirados p/ QUALQUER claim — senão um hold
+# vazado bloquearia o push permanentemente; (b) HERDA um hold vivo só quando ARGV[5]=1
+# (swap net 0 — a ocupação nunca oscila). Tolerante às duas ordens de chegada: se o
+# release já ocorreu (sem hold), cai no claim normal com a checagem de capacidade.
 _CLAIM_INSTANCE_LUA = """
 if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
+  return redis.call('SCARD', KEYS[1])
+end
+local HOLD = '__wrapup_hold__::'
+local hlen = string.len(HOLD)
+local now  = tonumber(ARGV[4])
+local members = redis.call('SMEMBERS', KEYS[1])
+local inherit = nil
+for i = 1, #members do
+  local m = members[i]
+  if string.sub(m, 1, hlen) == HOLD then
+    local exp = tonumber(string.match(m, '::(%d+)$'))
+    if exp == nil or exp <= now then
+      redis.call('SREM', KEYS[1], m)
+    elseif inherit == nil and ARGV[5] == '1' then
+      inherit = m
+    end
+  end
+end
+if inherit ~= nil then
+  redis.call('SREM', KEYS[1], inherit)
+  redis.call('SADD', KEYS[1], ARGV[1])
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
   return redis.call('SCARD', KEYS[1])
 end
 local n = redis.call('SCARD', KEYS[1])
@@ -166,6 +212,37 @@ for i = 1, #members do
   if string.sub(members[i], 1, plen) == prefix then
     redis.call('SREM', KEYS[1], members[i])
   end
+end
+local n = redis.call('SCARD', KEYS[1])
+if n <= 0 then
+  redis.call('DEL', KEYS[1])
+  return 0
+end
+return n
+"""
+
+# swap-to-hold (Phase 2): KEYS[1]=sessions set; ARGV[1]=prefixo de sessão ("{origin}::");
+#   ARGV[2]=membro do hold; ARGV[3]=ttl_s do SET. Substitui o RELEASE quando o contato
+#   tem wrap-up INLINE seguindo: remove a(s) vaga(s) da origem e põe o hold no lugar
+#   (net 0 — a ocupação NUNCA oscila). Retorna a ocupação resultante.
+#
+#   IDEMPOTENTE por construção: só cria o hold se DE FATO removeu a origem. Um
+#   redelivery de agent_done (a origem já saiu) não ressuscita um hold que o wrap-up
+#   já consumiu — o que criaria uma vaga fantasma permanente.
+_SWAP_TO_HOLD_LUA = """
+local members = redis.call('SMEMBERS', KEYS[1])
+local prefix  = ARGV[1]
+local plen    = string.len(prefix)
+local removed = 0
+for i = 1, #members do
+  if string.sub(members[i], 1, plen) == prefix then
+    redis.call('SREM', KEYS[1], members[i])
+    removed = removed + 1
+  end
+end
+if removed > 0 then
+  redis.call('SADD', KEYS[1], ARGV[2])
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
 end
 local n = redis.call('SCARD', KEYS[1])
 if n <= 0 then
@@ -206,22 +283,60 @@ class InstanceRegistry:
 
     async def claim_instance(
         self,
-        tenant_id:      str,
-        instance_id:    str,
-        session_id:     str,
-        conference_id:  str | None,
-        max_concurrent: int,
-        ttl_seconds:    int = 86_400,
+        tenant_id:         str,
+        instance_id:       str,
+        session_id:        str,
+        conference_id:     str | None,
+        max_concurrent:    int,
+        ttl_seconds:       int = 86_400,
+        can_inherit_hold:  bool = False,
     ) -> int:
         """Reserva atômica de uma vaga (occupant = session_id::conference_id). Retorna a
         nova ocupação (>=1) em sucesso/idempotente; -1 se lotado. Quem recebe -1 deve
         re-selecionar outro best instance. Duas confs da mesma sessão (conference_ids
-        distintos) NÃO compartilham vaga → vão para instâncias distintas."""
+        distintos) NÃO compartilham vaga → vão para instâncias distintas.
+
+        Phase 2 (hand-off): `can_inherit_hold=True` (claim do wrap-up auto-atendido)
+        permite HERDAR um hold vivo desta instância — swap net 0, a ocupação não
+        oscila. Holds EXPIRADOS são descartados em qualquer claim (inclusive push),
+        senão um hold vazado bloquearia a instância."""
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
         res = await self._redis.eval(
             _CLAIM_INSTANCE_LUA, 1,
             _instance_sessions_key(tenant_id, instance_id),
             self._occupant_id(session_id, conference_id),
             str(int(max_concurrent)), str(int(ttl_seconds)),
+            str(now_ms), "1" if can_inherit_hold else "0",
+        )
+        return int(res)
+
+    async def swap_to_hold(
+        self,
+        tenant_id:   str,
+        instance_id: str,
+        session_id:  str,
+        hold_ttl_s:  int,
+        set_ttl_s:   int = 86_400,
+    ) -> int:
+        """Phase 2 — troca a(s) vaga(s) da sessão por um HOLD de wrap-up (net 0).
+        Usado no lugar de `release_instance` quando o contato que fecha tem wrap-up
+        INLINE seguindo. Retorna a ocupação resultante (mesma de antes, se houve troca).
+
+        Idempotente: sem vaga da origem no SET → nenhum hold é criado."""
+        expires_at_ms = int(
+            datetime.now(timezone.utc).timestamp() * 1000 + int(hold_ttl_s) * 1000
+        )
+        member = f"{_WRAPUP_HOLD_PREFIX}{session_id}::{expires_at_ms}"
+        res = await self._redis.eval(
+            _SWAP_TO_HOLD_LUA, 1,
+            _instance_sessions_key(tenant_id, instance_id),
+            self._session_prefix(session_id),
+            member, str(int(set_ttl_s)),
+        )
+        logger.info(
+            "swap_to_hold: instance=%s origin=%s hold_ttl_s=%d expires_at_ms=%d "
+            "occupancy=%d (vaga SEGURA para o wrap-up inline)",
+            instance_id, session_id, int(hold_ttl_s), expires_at_ms, int(res),
         )
         return int(res)
 
@@ -402,6 +517,8 @@ class InstanceRegistry:
     async def remove_conversation(
         self, tenant_id: str, instance_id: str, conversation_id: str,
         fallback_pools: list[str] | None = None,
+        hold_for_wrapup: bool = False,
+        hold_ttl_s: int = 90,
     ) -> None:
         """
         Removes a completed conversation from the instance.
@@ -415,6 +532,14 @@ class InstanceRegistry:
         human agents in demo mode that never published agent_ready and therefore
         have no persisted meta). The bridge includes pools[] in every agent_done
         payload it synthesises, so this covers the human-agent counter decrement.
+
+        hold_for_wrapup (Phase 2): quando o contato que fecha tem wrap-up INLINE
+        seguindo (flag `keep_slot_for_wrapup` no evento agent_done, carimbado pelo
+        bridge que conhece os hooks do pool), a vaga NÃO é liberada — é trocada por
+        um HOLD (swap net 0) que o auto-claim do wrap-up herda. Elimina a janela em
+        que um push tomaria a vaga a max_concurrent=1. Todo o resto do fluxo abaixo
+        (espelho current_sessions, state, DECR de pool:active_count, exclusão
+        guardada do serving_pool) é IDÊNTICO — só o membro do SET muda.
         """
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
@@ -463,9 +588,16 @@ class InstanceRegistry:
                     # e sincroniza o espelho current_sessions com a fonte de verdade (SCARD).
                     # Substitui o `-= 1` não-atômico (mesma classe de lost-update do mark_busy).
                     # conversation_id == session_id → release_instance remove "{session_id}::*".
-                    remaining = await self.release_instance(
-                        tenant_id, instance_id, conversation_id,
-                    )
+                    # Phase 2: com wrap-up inline seguindo, TROCA a vaga por um hold
+                    # (net 0) em vez de liberar — a ocupação não oscila.
+                    if hold_for_wrapup:
+                        remaining = await self.swap_to_hold(
+                            tenant_id, instance_id, conversation_id, hold_ttl_s,
+                        )
+                    else:
+                        remaining = await self.release_instance(
+                            tenant_id, instance_id, conversation_id,
+                        )
                     inst.current_sessions = remaining
                     if inst.current_sessions < inst.max_concurrent:
                         inst.state = "ready"
@@ -1067,6 +1199,15 @@ class InstanceRegistry:
     async def get_queue_length(self, tenant_id: str, pool_id: str) -> int:
         """Returns the number of contacts waiting in the pool queue."""
         return await self._redis.zcard(_queue_key(tenant_id, pool_id))
+
+    async def get_queue_rank(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> int | None:
+        """Posição 0-based DESTA sessão na fila do pool (ZRANK; score = queued_at_ms,
+        então o rank é a ordem de chegada). `None` quando a sessão não está na fila —
+        o chamador decide o fallback. Distinto de `get_queue_length` (tamanho da fila):
+        posição é um fato DO CONTATO, tamanho é do POOL."""
+        return await self._redis.zrank(_queue_key(tenant_id, pool_id), session_id)
 
     async def get_total_instances_count(self, tenant_id: str, pool_id: str) -> int:
         """

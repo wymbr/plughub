@@ -1186,6 +1186,28 @@ async def _fire_detached_hook(
         )
 
 
+def _has_inline_agent_wrapup(pool_cfg: dict | None) -> bool:
+    """
+    Wrap-up unificado Phase 2 — o pool tem wrap-up de AGENTE com entrega INLINE
+    (auto-atendimento no Console) em `on_human_end`?
+
+    Espelha a decisão de `fire_pool_hooks` (`_is_workflow_dispatch` + `_auto_attend`):
+    `side=agent` + `dispatch=inline` ⇒ o wrap-up roda como workflow destacado que o
+    Console AUTO-REIVINDICA em segundos. Só nesse caso vale segurar a vaga da origem
+    (hold) — em `detached` o agente puxa quando quiser, e reservar capacidade por
+    minutos seria errado. Usado para carimbar `keep_slot_for_wrapup` no agent_done.
+    """
+    entries = ((pool_cfg or {}).get("hooks") or {}).get("on_human_end") or []
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        side     = (e.get("side", "agent") or "agent")
+        dispatch = (e.get("dispatch", "inline") or "inline")
+        if side == "agent" and dispatch == "inline" and e.get("pool"):
+            return True
+    return False
+
+
 async def fire_pool_hooks(
     http:         aiohttp.ClientSession,
     redis_client: aioredis.Redis,
@@ -3559,16 +3581,27 @@ async def process_routed(
                     ex=_stl(),
                 )
                 # Wrap-up-α / robustez do resume: identidade ESTÁVEL do WORKFLOW
-                # (agent_type_id + pool). O `session:{id}:meta` compartilhado é
-                # sobrescrito quando a sessão do workflow é reivindicada como
+                # (agent_type_id + pool + INSTÂNCIA). O `session:{id}:meta` compartilhado
+                # é sobrescrito quando a sessão do workflow é reivindicada como
                 # ESPECIALISTA de conferência num pool HUMANO (delegate-conference →
                 # ex.: wrap-up reivindicado no formfill_demo), virando o agente humano
                 # do claim. Aí o _handle_webhook_session_resumed lia o agente errado e
                 # não achava o flow → re-suspend. Esta chave dedicada não é tocada pelo
                 # claim e é a fonte de verdade do resume.
+                #
+                # `instance_id` é parte da identidade (2026-07-27): sem ele o resume
+                # reusava a instância HUMANA do claim e o `agent_ready` publicado ao fim
+                # do resume reescrevia essa instância com o agent_type do WORKFLOW — a
+                # próxima alocação de contato para aquele humano vinha com
+                # agent_type_id=skill do workflow e o bridge rodava o wrap-up NA SESSÃO
+                # DO CONTATO, que completava e fechava o contato. Ver CHANGELOG.
                 await redis_client.set(
                     f"session:{session_id}:wf_agent",
-                    json.dumps({"agent_type_id": agent_type_id, "pool_id": pool_id}),
+                    json.dumps({
+                        "agent_type_id": agent_type_id,
+                        "pool_id":       pool_id,
+                        "instance_id":   native_instance_id,
+                    }),
                     nx=True,
                     ex=_stl(),
                 )
@@ -6045,23 +6078,55 @@ async def process_contact_event(
                 # AI-agent fix at the top of this file) so the routing engine
                 # calls remove_conversation() and DECRs the counter.
                 if _kafka_producer and _ha_tenant:
-                    asyncio.create_task(_kafka_producer.send(
-                        TOPIC_LIFECYCLE,
-                        json.dumps({
-                            "event":           "agent_done",
-                            "tenant_id":       _ha_tenant,
-                            "instance_id":     instance_id,
-                            "agent_type_id":   _ha_agent_type_id,
-                            "pools":           [_ha_pool] if _ha_pool else [],
-                            "conversation_id": session_id,
-                            "timestamp":       datetime.now(timezone.utc).isoformat(),
-                        }).encode("utf-8"),
-                    ))
-                    logger.info(
-                        "agent_done published to lifecycle (human agent): "
-                        "session=%s instance=%s pool=%s tenant=%s",
-                        session_id, instance_id, _ha_pool, _ha_tenant,
-                    )
+                    # ── Phase 2 (hand-off da vaga) ────────────────────────────
+                    # Quando o pool do segmento que fecha tem wrap-up de AGENTE
+                    # com entrega INLINE, o wrap-up é uma sessão nova que o Console
+                    # auto-reivindica em segundos. Carimbamos `keep_slot_for_wrapup`
+                    # para que o routing TROQUE a vaga por um hold em vez de
+                    # liberá-la — sem a janela em que um push a tomaria (max=1).
+                    # O routing não consulta hooks de pool (invariante): a decisão
+                    # é resolvida AQUI, onde a config já é conhecida. Leitura
+                    # própria (o get_pool_config do bloco de hooks é posterior e
+                    # condicional); degrada para False (release normal) se o
+                    # registry estiver fora — nunca segura vaga sem certeza.
+                    # Resolvido DENTRO da task (o publish já era fire-and-forget):
+                    # o GET ao registry não pode atrasar o handler de fechamento.
+                    async def _publish_agent_done_with_hold_flag(
+                        _t=_ha_tenant, _p=_ha_pool, _i=instance_id,
+                        _at=_ha_agent_type_id, _s=session_id,
+                    ) -> None:
+                        _keep_slot = False
+                        if http and _p and _t:
+                            try:
+                                _keep_slot = _has_inline_agent_wrapup(
+                                    await get_pool_config(http, _t, _p)
+                                )
+                            except Exception as _ks_exc:
+                                logger.warning(
+                                    "keep_slot_for_wrapup: could not resolve pool config "
+                                    "session=%s pool=%s — %s (assumindo release normal)",
+                                    _s, _p, _ks_exc,
+                                )
+                        await _kafka_producer.send(
+                            TOPIC_LIFECYCLE,
+                            json.dumps({
+                                "event":           "agent_done",
+                                "tenant_id":       _t,
+                                "instance_id":     _i,
+                                "agent_type_id":   _at,
+                                "pools":           [_p] if _p else [],
+                                "conversation_id": _s,
+                                "keep_slot_for_wrapup": _keep_slot,
+                                "timestamp":       datetime.now(timezone.utc).isoformat(),
+                            }).encode("utf-8"),
+                        )
+                        logger.info(
+                            "agent_done published to lifecycle (human agent): "
+                            "session=%s instance=%s pool=%s tenant=%s keep_slot_for_wrapup=%s",
+                            _s, _i, _p, _t, _keep_slot,
+                        )
+
+                    asyncio.create_task(_publish_agent_done_with_hold_flag())
                 else:
                     logger.warning(
                         "agent_done NOT published (human agent): session=%s "
@@ -6920,6 +6985,10 @@ async def _handle_webhook_session_resumed(
     pool_id       = meta.get("pool_id", "")
     customer_id   = meta.get("customer_id", "")
     instance_id   = meta.get("instance_id", "")
+    # Preservado antes de qualquer correção pelo wf_agent: quando o item foi
+    # reivindicado por um humano (pull), este campo é a instância DELE (o claim é o
+    # último a escrever o meta compartilhado) — usada só para devolver a vaga no fim.
+    _meta_instance_id = instance_id
 
     # Robustez do resume (wrap-up-α): o `meta` pode ter sido corrompido quando a sessão
     # do WORKFLOW foi reivindicada como especialista de conferência num pool HUMANO
@@ -6940,8 +7009,45 @@ async def _handle_webhook_session_resumed(
                 agent_type_id = _wf["agent_type_id"]
             if _wf.get("pool_id"):
                 pool_id = _wf["pool_id"]
+            if _wf.get("instance_id"):
+                if _wf["instance_id"] != instance_id:
+                    logger.info(
+                        "session_resumed: meta.instance_id=%s corrompido pelo claim; "
+                        "usando wf_agent.instance_id=%s (session=%s)",
+                        instance_id, _wf["instance_id"], session_id,
+                    )
+                instance_id = _wf["instance_id"]
     except Exception:
         pass
+
+    # ── Guarda: NUNCA reativar um workflow sobre a instância do CLAIMANTE humano ──
+    # O `meta.instance_id` vira o humano que reivindicou o item de pull (o claim é o
+    # último a escrever o meta compartilhado). Reusar essa instância aqui fazia o
+    # `agent_ready` do fim do resume REESCREVER a instância HUMANA com a identidade do
+    # WORKFLOW (agent_type_id=skill do workflow, current_sessions=0, max do snapshot).
+    # Consequência observada (2026-07-27): o próximo contato roteado àquele humano
+    # chegava com agent_type_id=skill_wrapup_detached_v1 e o bridge rodava o WRAP-UP na
+    # sessão do CONTATO, que completava na hora e fechava o contato — o contato da fila
+    # "sumia". Degradação nunca silenciosa: loga e segue sem snapshot de instância
+    # (o flow roda igual; o snapshot/restore vira no-op).
+    #
+    # O claimante é guardado à parte: a vaga que ELE ocupa (semáforo) precisa ser
+    # devolvida no fim do resume — hoje isso acontecia por EFEITO COLATERAL do
+    # agent_done publicado com a instância trocada. Ver bloco no fim desta função.
+    _claimant_instance_id = ""
+    if instance_id.startswith("human-"):
+        _claimant_instance_id = instance_id
+        logger.warning(
+            "session_resumed: instance_id=%s é do CLAIMANTE humano — ignorando para não "
+            "corromper a identidade da instância (session=%s agent=%s). Resume segue sem "
+            "snapshot de instância.",
+            instance_id, session_id, agent_type_id,
+        )
+        instance_id = ""
+    elif _meta_instance_id.startswith("human-"):
+        # wf_agent trouxe a instância correta do workflow; o meta ainda aponta para o
+        # claimante — que segue ocupando a vaga e precisa da devolução.
+        _claimant_instance_id = _meta_instance_id
 
     if not agent_type_id:
         logger.error(
@@ -7100,6 +7206,44 @@ async def _handle_webhook_session_resumed(
         redis_client, tenant_id, instance_id, pool_id,
         agent_type_id, native_snapshot,
     )
+
+    # ── Devolve a vaga do CLAIMANTE humano (pull) ────────────────────────────────
+    # O humano que reivindicou este item de pull ocupa uma vaga no semáforo
+    # ("{session}::{conf}", posta por work_task_claim). Ele já entregou o form — a vaga
+    # tem de voltar quando o resume roda. Antes isto acontecia por EFEITO COLATERAL (o
+    # agent_done abaixo saía com a instância humana porque o meta.instance_id estava
+    # trocado); agora é EXPLÍCITO e com a identidade certa.
+    #
+    # Publica SÓ agent_done (nunca agent_ready): o agent_ready reescreveria o JSON da
+    # instância humana com agent_type/current_sessions/max do WORKFLOW — a corrupção que
+    # esta correção elimina. O remove_conversation do routing recalcula current_sessions
+    # a partir do SCARD e devolve o state=ready quando há capacidade.
+    if _kafka_producer and _claimant_instance_id:
+        _claimant_pools: list[str] = []
+        try:
+            _raw_claimant = await redis_client.get(
+                f"{tenant_id}:instance:{_claimant_instance_id}"
+            )
+            if _raw_claimant:
+                _claimant_pools = list(json.loads(_raw_claimant).get("pools") or [])
+        except Exception:
+            pass
+        asyncio.create_task(_kafka_producer.send(
+            TOPIC_LIFECYCLE,
+            json.dumps({
+                "event":           "agent_done",
+                "tenant_id":       tenant_id,
+                "instance_id":     _claimant_instance_id,
+                "pools":           _claimant_pools,
+                "conversation_id": session_id,
+                "timestamp":       datetime.now(timezone.utc).isoformat(),
+            }).encode("utf-8"),
+        ))
+        logger.info(
+            "session_resumed: agent_done publicado p/ o CLAIMANTE (devolve a vaga do "
+            "pull): session=%s claimant=%s pools=%s",
+            session_id, _claimant_instance_id, _claimant_pools,
+        )
 
     # Publish agent_ready + agent_done for routing-engine capacity tracking
     if _kafka_producer and instance_id:

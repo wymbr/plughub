@@ -299,9 +299,16 @@ class LifecycleEventHandler:
         elif event_type == "agent_done":
             conversation_id = event.get("conversation_id", "")
             fallback_pools  = event.get("pools") or []
+            # Phase 2 (hand-off da vaga): o BRIDGE carimba este flag quando o pool do
+            # contato tem wrap-up `side=agent` com `dispatch: inline` seguindo — a vaga
+            # é SEGURADA (swap para hold) em vez de liberada, e o auto-claim do wrap-up
+            # a herda. O routing NÃO consulta hooks de pool (invariante): a decisão vem
+            # pronta no evento. Ausente/false = release normal (retrocompat).
+            keep_slot = bool(event.get("keep_slot_for_wrapup"))
             logger.info(
-                "agent_done received: tenant=%s instance=%s conv=%s fallback_pools=%s",
-                tenant_id, instance_id, conversation_id, fallback_pools,
+                "agent_done received: tenant=%s instance=%s conv=%s fallback_pools=%s "
+                "keep_slot_for_wrapup=%s",
+                tenant_id, instance_id, conversation_id, fallback_pools, keep_slot,
             )
             if conversation_id:
                 # Pass fallback_pools from the event payload so that human agents
@@ -310,6 +317,8 @@ class LifecycleEventHandler:
                 await self._instances.remove_conversation(
                     tenant_id, instance_id, conversation_id,
                     fallback_pools=fallback_pools,
+                    hold_for_wrapup=keep_slot,
+                    hold_ttl_s=int(routing_config.get("wrapup_hold_ttl_s", 90)),
                 )
             else:
                 logger.warning(

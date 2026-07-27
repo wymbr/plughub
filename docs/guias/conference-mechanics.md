@@ -1410,6 +1410,48 @@ auto-close); `mcp-server-plughub/server.ts` (`/api/agent_done` → `inline_wrapu
 (`AgentAssistPage.handleClose`; i18n `message.closedDetached`); `infra/registry/tenant_demo.yaml`
 (`retencao_humano.on_human_end` → `wrapup_detached_ia dispatch: detached`).
 
+### Mudança 27 — hand-off da vaga no wrap-up inline + identidade da instância no resume de delegate-conference (2026-07-27)
+
+**Contexto.** Phase 2 do wrap-up unificado: no modo `inline` a ocupação da instância OSCILAVA entre o fim do
+contato (release da vaga no `agent_done`) e o auto-claim do wrap-up (~2-3 s do poll da inbox). A max_concurrent=1
+um contato push podia tomar a vaga na janela — o agente recebia contato novo com wrap-up pendente. O E2E do
+hand-off destravou **dois defeitos pré-existentes** no ciclo de conferência do pull, ambos corrigidos aqui.
+
+**Hand-off da vaga.** A vaga da origem não é mais LIBERADA no close quando há wrap-up inline seguindo: é
+**trocada por um HOLD** (swap net 0) que o auto-claim do wrap-up **herda**. Ocupação nunca oscila.
+- Ocupante do hold: `__wrapup_hold__::{origin_session_id}::{expires_at_ms}` no SET `{t}:instance:{iid}:sessions`
+  (prefixo não colide com `{session_id}::`, então o release por prefixo de sessão nunca o remove).
+- `_SWAP_TO_HOLD_LUA` (novo) + `_CLAIM_INSTANCE_LUA` (reescrita): todo claim **descarta holds expirados**
+  (senão um wrap-up que nunca chega prenderia a vaga até o EXPIRE de 24 h do SET); só o claim `auto_attend` do
+  **dono** herda um hold vivo. Tolerante às duas ordens de chegada.
+- Decisão vem PRONTA no evento: o bridge carimba `keep_slot_for_wrapup` no `agent_done` do humano quando o pool
+  tem `on_human_end` `side=agent` + `dispatch=inline` (`_has_inline_agent_wrapup`). O routing **não consulta
+  hooks de pool** (invariante preservado).
+
+**Defeito 1 — identidade da instância humana corrompida pelo resume (corrigido).** O claim é o último a escrever
+`session:{id}:meta`, então `meta.instance_id` da sessão do WORKFLOW passa a apontar para o humano que reivindicou
+o item. O `_handle_webhook_session_resumed` corrigia `agent_type_id`/`pool_id` pelo `wf_agent` mas **não o
+`instance_id`** → o `agent_ready` publicado ao fim do resume **reescrevia a instância humana** com a identidade
+do WORKFLOW (`agent_type_id=skill_*`, `current_sessions=0`, `max` do snapshot). Consequência observada: o
+próximo contato roteado àquele humano chegava com `agent_type_id=skill_wrapup_detached_v1` e o bridge rodava o
+**wrap-up na sessão do CONTATO**, que completava na hora e o fechava — o contato da fila "sumia". Fix:
+`session:{id}:wf_agent` passa a guardar também o `instance_id` do workflow, e um guard descarta qualquer
+`instance_id` `human-*` no resume (log warning; o resume segue sem snapshot de instância).
+
+**Defeito 2 — a vaga do claimante só voltava por efeito colateral (corrigido).** Quem devolvia a vaga do humano
+no fim do wrap-up era justamente o `agent_done` publicado com a instância trocada (Defeito 1). Corrigir o 1
+removeria a devolução → vaga presa. O resume passa a publicar um `agent_done` **explícito para o claimante**
+(`conversation_id` = sessão do workflow, `pools` lidos da instância dele) — e **só `agent_done`, nunca
+`agent_ready`**: é o `agent_ready` que corrompe a identidade.
+
+Sites: `routing-engine/registry.py` (Lua + `swap_to_hold` + `remove_conversation(hold_for_wrapup)`),
+`kafka_listener.py` (`keep_slot_for_wrapup` → TTL `routing_config.wrapup_hold_ttl_s`, default 90 s),
+`router.py` (`can_inherit_hold` no `work_task_claim`), `orchestrator-bridge/main.py`
+(`_has_inline_agent_wrapup`, carimbo no `agent_done`, `wf_agent.instance_id`, guard do claimante, `agent_done`
+do claimante), `platform-ui` (`key={sessionId}` no `DialogFormRenderer`/`ApprovalPanel` — o estado do form
+grudava ao trocar de tarefa). Testes: `test_instance_semaphore.py` (+8 casos), `smoke_wrapup_slot_handoff.sh`.
+E2E validado 2026-07-27 (4 contatos, 1 na fila, wrap-ups respondidos, fila drenada sem perda).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

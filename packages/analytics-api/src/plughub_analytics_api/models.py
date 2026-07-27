@@ -26,6 +26,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from . import survey_catalog
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -663,7 +665,14 @@ def parse_queue_position(payload: dict[str, Any]) -> dict | None:
         "session_id":        session_id,
         "pool_id":           payload.get("pool_id") or "",
         "event_type":        "position_updated",
-        "queue_position":    payload.get("queue_length"),
+        # `queue_position` = posição DESTE contato (1-based). Compat: publishers
+        # antigos só mandavam `queue_length` (tamanho da fila) e a coluna recebia o
+        # tamanho no lugar da posição — mantido como fallback para não perder o
+        # histórico, mas o publisher atual manda os dois campos separados.
+        "queue_position":    (
+            payload["queue_position"] if payload.get("queue_position") is not None
+            else payload.get("queue_length")
+        ),
         "estimated_wait_ms": payload.get("estimated_wait_ms"),
         "available_agents":  payload.get("available_agents"),
         "timestamp":         payload.get("published_at") or _now(),
@@ -1095,34 +1104,22 @@ _SESSION_SIGNAL_GRAINS = ("segment", "session", "workflow", "journey")
 
 
 def _signal_source_for_metric(metric: str) -> str:
-    """Fonte normalizada a partir da métrica do sinal."""
-    if metric == "nps":
-        return "customer_nps"
-    if metric == "csat":
-        return "customer_csat"
-    return "customer_survey"
+    """Fonte normalizada a partir da métrica do sinal (catálogo — S1)."""
+    return survey_catalog.source_for(metric)
 
 
-def _normalize_signal_value(metric: str, value: float) -> tuple[float, str | None]:
-    """Normaliza o valor cru do sinal para escala comum + label categórico.
+def _normalize_signal_value(
+    metric: str, value: float, scale: dict | None = None,
+) -> tuple[float, str | None]:
+    """Valor + rótulo categórico do sinal, pelo catálogo de instrumentos (S1).
 
-    NPS 0–10 → promotor (≥9) / neutro (7–8) / detrator (≤6).
-    CSAT 1–5 → satisfeito (≥4) / neutro (3) / insatisfeito (≤2).
-    Métricas customizadas (pesquisa extra): passa o valor, label None.
+    Cobre os CINCO instrumentos (antes só nps/csat tinham rótulo; ces/pmf/fcr caíam
+    crus em `customer_survey` — distorção silenciosa no relatório). O `value` é
+    devolvido SEM alteração: a escala carimbada pelo produtor serve para escolher a
+    banda, nunca para reescrever a resposta do cliente. Métrica fora do catálogo
+    (pesquisa customizada do tenant) segue passando cru, com label None.
     """
-    if metric == "nps":
-        if value >= 9:
-            return value, "promotor"
-        if value >= 7:
-            return value, "neutro"
-        return value, "detrator"
-    if metric == "csat":
-        if value >= 4:
-            return value, "satisfeito"
-        if value >= 3:
-            return value, "neutro"
-        return value, "insatisfeito"
-    return value, None
+    return value, survey_catalog.label_for(metric, value, scale)
 
 
 def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
@@ -1179,13 +1176,15 @@ def parse_session_signal_event(payload: dict[str, Any]) -> list[dict] | None:
         except (TypeError, ValueError):
             continue
 
-        norm_value, norm_label = _normalize_signal_value(metric, value_num)
-        # value_label explícito do produtor prevalece sobre a normalização.
-        value_label = sig.get("value_label") or norm_label
-
         # Customer Voice: escala carimbada pelo produtor (snapshot imutável da
         # DialogDimension). Ausente → NULL (roll-up cai no default do catálogo).
         scale = sig.get("scale") if isinstance(sig.get("scale"), dict) else None
+
+        # S1: a escala carimbada entra na escolha da BANDA (CSAT 1–5 × 1–10 têm
+        # cortes distintos); o valor gravado segue cru.
+        norm_value, norm_label = _normalize_signal_value(metric, value_num, scale)
+        # value_label explícito do produtor prevalece sobre a normalização.
+        value_label = sig.get("value_label") or norm_label
 
         rows.append({
             "table":             "session_signal",

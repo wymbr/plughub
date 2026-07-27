@@ -274,16 +274,42 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       expect(await redis.hget(instanceKey, "state")).toBe("ready")
     })
 
-    it("publica evento em agent.done com outcome e issue_status", async () => {
+    // 2026-07-27: este teste verificava a publicação no tópico `agent.done`, que era
+    // ÓRFÃO (nenhum consumidor) e foi removido. O teste verde mascarava o problema —
+    // provava que publicávamos, não que alguém recebia. Agora cobre as DUAS vias reais:
+    //   · agent.lifecycle (event=agent_done) → routing-engine libera a vaga
+    //   · conversations.events (contact_closed) → bridge/analytics recebem o outcome
+    it("publica agent_done em agent.lifecycle (via com consumidor)", async () => {
       const token = await _loginAndReadyToken()
       await _busy(token)
       await _done(token, SESSION_ID, "resolved")
 
-      const ev = kafka.events.find(e => e.topic === "agent.done")
+      const ev = kafka.events.find(
+        e => e.topic === "agent.lifecycle" && e.message["event"] === "agent_done",
+      )
+      expect(ev).toBeDefined()
+      expect(ev!.message["session_id"]).toBe(SESSION_ID)
+    })
+
+    it("propaga o outcome no contact_closed de conversations.events", async () => {
+      const token = await _loginAndReadyToken()
+      await _busy(token)
+      await _done(token, SESSION_ID, "resolved")
+
+      const ev = kafka.events.find(
+        e => e.topic === "conversations.events" && e.message["event_type"] === "contact_closed",
+      )
       expect(ev).toBeDefined()
       expect(ev!.message["outcome"]).toBe("resolved")
       expect(ev!.message["session_id"]).toBe(SESSION_ID)
-      expect(ev!.message["issue_status"]).toBe("atendimento concluído")
+    })
+
+    it("NÃO publica mais no tópico órfão agent.done", async () => {
+      const token = await _loginAndReadyToken()
+      await _busy(token)
+      await _done(token, SESSION_ID, "resolved")
+
+      expect(kafka.events.find(e => e.topic === "agent.done")).toBeUndefined()
     })
 
     it("rejeita issue_status vazio (string vazia)", async () => {

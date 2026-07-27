@@ -900,6 +900,17 @@ async def _persist_queued_contact(
         )
     )
 
+    # `queue.position_updated` → Kafka (analytics `queue_events`; futuros
+    # subscribers de canal). Publicado AQUI, depois do `add_queued_contact`, pela
+    # mesma razão do ContextStore acima: antes do enqueue a fila não contém esta
+    # sessão e a posição sai 0. (Era o defeito do Router._publish_queue_position,
+    # que rodava concorrente ao enqueue — ver CHANGELOG.)
+    asyncio.create_task(
+        _publish_queue_position(
+            producer, redis_client, event, pool_id, instance_registry, settings,
+        )
+    )
+
     # Notify customer via conversations.outbound so channel-gateway delivers
     # a "waiting" message to the customer WebSocket while they're in queue.
     # Only send on first enqueue — suppress on periodic drain re-attempts to
@@ -951,6 +962,95 @@ async def _persist_queued_contact(
         )
 
 
+async def _publish_queue_position(
+    producer:          AIOKafkaProducer,
+    redis_client:      aioredis.Redis,
+    event:             ConversationInboundEvent,
+    pool_id:           str,
+    instance_registry: InstanceRegistry,
+    settings,
+) -> None:
+    """
+    Publica `queue.position_updated` (schema `QueuePositionUpdatedEventSchema`).
+    Chamado APÓS a persistência na fila — ver `_queue_position_and_eta`.
+
+    `queue_position` = posição deste contato · `queue_length` = tamanho da fila:
+    dois fatos distintos, ambos no payload (o consumer de analytics grava a posição
+    em `queue_events.queue_position`). Fire-and-forget: falha logada, nunca propaga.
+
+    NOTE: o producer tem `value_serializer=json.dumps().encode` — passe dict, NUNCA
+    bytes (o duplo-encode era o bug que mantinha `queue_events` vazia).
+    """
+    try:
+        position, eta_ms, sla_target_ms, queue_length = await _queue_position_and_eta(
+            redis_client, event.tenant_id, event.session_id, pool_id, instance_registry,
+        )
+        available = await instance_registry.get_available_count(event.tenant_id, pool_id)
+        await producer.send(
+            settings.kafka_topic_queue_positions,
+            value={
+                "event":              "queue.position_updated",
+                "tenant_id":          event.tenant_id,
+                "session_id":         event.session_id,
+                "pool_id":            pool_id,
+                "queue_position":     position,
+                "queue_length":       queue_length,
+                "available_agents":   available,
+                "estimated_wait_ms":  eta_ms,
+                "sla_target_ms":      sla_target_ms,
+                "published_at":       datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to publish queue.position_updated for session %s: %s",
+            event.session_id, exc,
+        )
+
+
+async def _queue_position_and_eta(
+    redis_client:      aioredis.Redis,
+    tenant_id:         str,
+    session_id:        str,
+    pool_id:           str,
+    instance_registry: InstanceRegistry,
+) -> tuple[int, int, int, int]:
+    """
+    FONTE ÚNICA da posição na fila. Retorna `(position, eta_ms, sla_target_ms,
+    queue_length)`.
+
+    `position` = posição 1-based DESTE contato, por `ZRANK` no ZSET da fila (score =
+    queued_at_ms, então o rank é a ordem de chegada). Fallback para o comprimento da
+    fila quando o rank não resolve (sessão ainda não visível): o contato entra na
+    cauda, logo length == sua posição.
+
+    **Só é verdadeiro DEPOIS do `add_queued_contact`** — antes disso o ZSET não contém
+    esta sessão e a conta dá 0. Era exatamente esse o defeito do
+    `Router._publish_queue_position`, que rodava concorrente ao enqueue e publicava
+    `queue_length=0`/`eta=0` (ver CHANGELOG). Por isso o cálculo vive AQUI, no ponto
+    pós-persistência, e serve tanto o ContextStore quanto o Kafka — um fato, um lugar.
+    """
+    position = 0
+    try:
+        rank = await instance_registry.get_queue_rank(tenant_id, pool_id, session_id)
+        if rank is not None:
+            position = rank + 1
+    except Exception:
+        position = 0
+
+    queue_length = int(await instance_registry.get_queue_length(tenant_id, pool_id) or 0)
+    if position <= 0:
+        position = max(queue_length, 1)
+
+    sla_target_ms = 0
+    raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+    if raw:
+        sla_target_ms = int(json.loads(raw).get("sla_target_ms", 0) or 0)
+    avg_handle_ms = int(sla_target_ms * 0.7)
+
+    return position, position * avg_handle_ms, sla_target_ms, queue_length
+
+
 async def _write_queue_context(
     redis_client:      aioredis.Redis,
     tenant_id:         str,
@@ -963,10 +1063,9 @@ async def _write_queue_context(
     Fase C (queue-attended-model): writes session.queue.position and
     session.queue.eta_ms to the ContextStore hash while the contact waits.
 
-    position = queue length AFTER this contact was added (it enters at the
-    tail, so length == its 1-based position). eta_ms mirrors the estimate in
-    Router._publish_queue_position: position × (sla_target_ms × 0.7), with
-    sla_target_ms read from the routing engine's own pool_config cache.
+    Position/ETA vêm de `_queue_position_and_eta` — a MESMA conta que alimenta o
+    `queue.position_updated` no Kafka (antes eram duas implementações do mesmo fato,
+    e a do Kafka rodava cedo demais).
 
     Refreshed on every enqueue attempt (drain re-attempts included), so the
     queue skill-flow always reads a current-ish position. Fire-and-forget.
@@ -975,14 +1074,10 @@ async def _write_queue_context(
         ctx_key = f"{tenant_id}:ctx:{session_id}"
         now_str = datetime.now(timezone.utc).isoformat()
 
-        position = await instance_registry.get_queue_length(tenant_id, pool_id)
-        position = max(int(position or 0), 1)
-
-        sla_target_ms = 0
-        raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
-        if raw:
-            sla_target_ms = int(json.loads(raw).get("sla_target_ms", 0) or 0)
-        avg_handle_ms = int(sla_target_ms * 0.7)
+        position, eta_ms, _sla, _qlen = await _queue_position_and_eta(
+            redis_client, tenant_id, session_id, pool_id, instance_registry,
+        )
+        avg_handle_ms = eta_ms // position if position else 0
 
         def _entry(value: object) -> str:
             return json.dumps({
@@ -997,7 +1092,7 @@ async def _write_queue_context(
             "session.queue.position": _entry(position),
         }
         if avg_handle_ms > 0:
-            mapping["session.queue.eta_ms"] = _entry(position * avg_handle_ms)
+            mapping["session.queue.eta_ms"] = _entry(eta_ms)
 
         await redis_client.hset(ctx_key, mapping=mapping)
         await redis_client.expire(ctx_key, ttl_seconds, nx=True)

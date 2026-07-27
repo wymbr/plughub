@@ -789,15 +789,11 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           timestamp,
         })
 
-        // Evento de ciclo de vida para o Rules Engine
-        await kafka.publish("agent.done", {
-          session_id,
-          tenant_id,
-          participant_id,
-          outcome:        "transferred",
-          handoff_reason,
-          completed_at:   timestamp,
-        })
+        // NOTA (2026-07-27): removida a publicação no tópico `agent.done` — órfão
+        // (nenhum consumidor; o rules-engine, citado no comentário original, assina
+        // apenas conversations.events + agent.lifecycle). A transferência já é
+        // comunicada pelo evento publicado acima; o fim do segmento do humano chega
+        // ao routing pelo `agent_done` em `agent.lifecycle`, publicado pelo bridge.
 
         return ok({
           escalated:      true,

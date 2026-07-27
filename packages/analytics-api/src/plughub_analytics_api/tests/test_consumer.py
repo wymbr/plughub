@@ -1086,6 +1086,72 @@ class TestSessionSignalNormalization:
     def test_unknown_metric_no_label(self):
         assert _normalize_signal_value("valor_contrato", 299.0) == (299.0, None)
 
+    # ── S1: CES / PMF / FCR (antes caíam crus, sem rótulo) ────────────────────
+
+    def test_ces_buckets_high_score_is_good(self):
+        # Spec: nota ALTA = bom (baixo esforço). O catálogo do relatório dizia o
+        # contrário; este teste trava a semântica.
+        assert _normalize_signal_value("ces", 7.0) == (7.0, "low_effort")
+        assert _normalize_signal_value("ces", 5.0) == (5.0, "low_effort")
+        assert _normalize_signal_value("ces", 4.0) == (4.0, "neutral")
+        assert _normalize_signal_value("ces", 1.0) == (1.0, "high_effort")
+
+    def test_pmf_buckets_inverted_scale(self):
+        # 1 = "very_disappointed" = MELHOR sinal de product-market fit.
+        assert _normalize_signal_value("pmf", 1.0) == (1.0, "very_disappointed")
+        assert _normalize_signal_value("pmf", 2.0) == (2.0, "somewhat_disappointed")
+        assert _normalize_signal_value("pmf", 3.0) == (3.0, "not_disappointed")
+
+    def test_fcr_binary(self):
+        assert _normalize_signal_value("fcr", 1.0) == (1.0, "resolved")
+        assert _normalize_signal_value("fcr", 0.0) == (0.0, "unresolved")
+
+    def test_scale_stamp_shifts_the_band_but_not_the_value(self):
+        # CSAT respondido numa escala 1–10 (a spec admite): o valor GRAVADO continua
+        # sendo o cru (a resposta do cliente não é reescrita); só a BANDA usa a
+        # re-escala linear para a escala 1–5 do catálogo.
+        value, label = _normalize_signal_value("csat", 8.0, {"min": 1, "max": 10})
+        assert value == 8.0
+        assert label == "satisfeito"          # 8/10 → 4.1 em 1–5
+        # Ponto médio de 1–10 (5,5) → 3,0 em 1–5 → neutro.
+        assert _normalize_signal_value("csat", 5.5, {"min": 1, "max": 10})[1] == "neutro"
+        # 5/10 fica ABAIXO do meio → 2,8 em 1–5 → insatisfeito. Sem a re-escala,
+        # o mesmo 5 seria lido como topo da escala 1–5 ("satisfeito") — a inversão
+        # de leitura que a `scale` carimbada existe para evitar.
+        assert _normalize_signal_value("csat", 5.0, {"min": 1, "max": 10})[1] == "insatisfeito"
+
+    def test_scale_stamp_ignored_when_equal_to_catalog(self):
+        assert _normalize_signal_value("csat", 4.0, {"min": 1, "max": 5})[1] == "satisfeito"
+
+    def test_malformed_scale_falls_back_to_catalog(self):
+        # Degradação nunca silenciosa no sentido de dado: escala inválida não
+        # derruba o parse nem inventa banda — usa a do catálogo.
+        assert _normalize_signal_value("nps", 10.0, {"min": "x", "max": None})[1] == "promotor"
+
+
+class TestSurveyCatalogSources:
+    def test_five_instruments_have_distinct_sources(self):
+        from ..models import _signal_source_for_metric as src
+        assert src("nps")  == "customer_nps"
+        assert src("csat") == "customer_csat"
+        assert src("ces")  == "customer_ces"
+        assert src("pmf")  == "customer_pmf"
+        assert src("fcr")  == "customer_survey"   # FCR percebido (spec §4)
+        assert src("valor_contrato") == "customer_survey"
+
+    def test_report_catalog_is_derived_from_the_same_source(self):
+        # A divergência que motivou o catálogo único: CES estava `higher_is_better:
+        # False` no relatório contra "nota alta = bom" na spec.
+        from ..reports_query import CV_INSTRUMENTS
+        from ..survey_catalog import SURVEY_INSTRUMENTS
+        for metric, inst in SURVEY_INSTRUMENTS.items():
+            assert CV_INSTRUMENTS[metric]["rollup"] == inst["rollup"]
+            assert CV_INSTRUMENTS[metric]["higher_is_better"] == inst["higher_is_better"]
+        assert CV_INSTRUMENTS["ces"]["higher_is_better"] is True
+        assert CV_INSTRUMENTS["pmf"]["rollup"] == "pct"
+        assert CV_INSTRUMENTS["fcr"]["rollup"] == "pct"
+        assert CV_INSTRUMENTS["sla"]["source"] == "operational"   # não é survey
+
 
 class TestParseSessionSignalEvent:
     def _payload(self, signals, **extra):
@@ -1130,22 +1196,28 @@ class TestParseSessionSignalEvent:
 
     def test_multiple_metrics_one_row_each(self):
         # Pesquisa pode agregar várias métricas numa só chamada.
+        # S1: `ces` DEIXOU de ser "métrica extra sem semântica" — é instrumento
+        # catalogado (source customer_ces + banda de esforço). O fallback sem label
+        # continua valendo, mas só para métrica realmente fora do catálogo.
         rows = parse_session_signal_event(
             self._payload([
                 {"metric": "nps",  "value": 8},
                 {"metric": "csat", "value": 5},
-                {"metric": "ces",  "value": 2},   # métrica extra customizada
+                {"metric": "ces",  "value": 2},
+                {"metric": "valor_contrato", "value": 299},   # métrica extra do tenant
             ])
         )
-        assert len(rows) == 3
+        assert len(rows) == 4
         by_metric = {r["metric"]: r for r in rows}
         assert by_metric["nps"]["value_label"] == "neutro"
         assert by_metric["csat"]["source"] == "customer_csat"
         assert by_metric["csat"]["value_label"] == "satisfeito"
-        assert by_metric["ces"]["source"] == "customer_survey"
-        assert by_metric["ces"]["value_label"] is None       # métrica custom, sem label
+        assert by_metric["ces"]["source"] == "customer_ces"
+        assert by_metric["ces"]["value_label"] == "high_effort"   # 2 em 1–7 = esforço alto
+        assert by_metric["valor_contrato"]["source"] == "customer_survey"
+        assert by_metric["valor_contrato"]["value_label"] is None
         # signal_id único por métrica
-        assert len({r["signal_id"] for r in rows}) == 3
+        assert len({r["signal_id"] for r in rows}) == 4
 
     def test_workflow_grain(self):
         rows = parse_session_signal_event(

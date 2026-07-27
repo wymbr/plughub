@@ -446,19 +446,13 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           })
         } catch { /* stream não disponível — non-fatal */ }
 
-        // Publica em agent.done (Kafka) — consumido por Rules Engine e Analytics
-        await kafka.publish("agent.done", {
-          session_id:     payload.session_id,
-          tenant_id,
-          instance_id,
-          participant_id: payload.participant_id,
-          agent_type_id:  payload.agent_type_id,
-          outcome:        payload.outcome,
-          issue_status:   payload.issue_status,
-          handoff_reason: payload.handoff_reason ?? undefined,
-          completed_at:   payload.completed_at,
-          timestamp:      new Date().toISOString(),
-        })
+        // NOTA (2026-07-27): removida a publicação no tópico `agent.done`, que era
+        // ÓRFÃ — nenhum serviço o consumia (o comentário afirmava "Rules Engine e
+        // Analytics"; o rules-engine assina só conversations.events + agent.lifecycle,
+        // e o _TOPICS do analytics-api não o inclui). Esta mesma função publica
+        // `event: "agent_done"` em `agent.lifecycle` mais abaixo — ESSA é a via com
+        // consumidor (dispara remove_conversation no routing e alimenta o analytics).
+        // Ver CHANGELOG + docs/kafka-eventos.md § agent.done.
 
         // Publica contact_closed em conversations.events para que o orchestrator-
         // bridge processe a saída do agente humano.  O bridge é o ÚNICO dono do

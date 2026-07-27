@@ -1,6 +1,16 @@
 # PlugHub — Tópicos Kafka e Schemas de Eventos
 
-> Última atualização: 2026-07-09 · Estado: Arc 19 (modelo unificado de sessão)
+> Última atualização: 2026-07-27 · Estado: Arc 19 (modelo unificado de sessão)
+>
+> **Saneamento 2026-07-27** — este documento foi reconciliado contra o CÓDIGO (varredura de todo
+> `producer.send`/`kafka.publish`/`AIOKafkaConsumer` em `packages/`). Achados corrigidos: o tópico
+> **`conversations.events` — o mais movimentado da plataforma — estava listado como "nome obsoleto que não
+> existe mais"**; cinco tópicos documentados **não existem no código** (`conversations.session_opened`,
+> `conversations.message_sent`, `conversations.abandoned`, `rules.session_tagged`, `gateway.heartbeat`); e três
+> são **órfãos** (publicados sem nenhum consumidor: `agent.done`, `rules.escalation.events`,
+> `rules.shadow.events`). Cada caso está marcado na tabela e na seção do tópico. Regra desta doc daqui em
+> diante: **um tópico só entra se houver produtor ou consumidor no código** — evento dentro de um tópico
+> (`agent_done` em `agent.lifecycle`, `message_sent` em `conversations.events`) **não é tópico**.
 > Broker padrão: `localhost:9092` (configurável via `PLUGHUB_KAFKA_BROKERS`)
 > Formato: JSON — `value_serializer = json.dumps().encode("utf-8")`
 > Chave de partição: `session_id` quando disponível (garante ordem por sessão)
@@ -44,6 +54,8 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | `conversations.participants` | `ConversationParticipantEventSchema` | `contact-segment.ts` |
 | `mcp.audit` | `AuditRecordSchema` | `audit.ts` |
 | `evaluation.events` | `EvaluationEventSchema` | `evaluation.ts` |
+| `session.signals` | `SessionSignalEventSchema` | `survey.ts` |
+| `conversations.events` | `ContactOpenEvent` / `ContactClosedEvent` (channel-gateway `models.py`) + parsers do analytics | — sem schema Zod único (dívida: é o tópico central e o de contrato mais frouxo) |
 
 ---
 
@@ -51,40 +63,47 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 
 | Tópico | Produtores | Consumidores | Propósito |
 |---|---|---|---|
-| [`conversations.inbound`](#conversationsinbound) | channel-gateway, routing-engine (CrashDetector) | core, routing-engine | Eventos inbound normalizados para roteamento |
-| [`conversations.routed`](#conversationsrouted) | routing-engine | core, rules-engine | Decisão de roteamento com alocação |
-| [`conversations.queued`](#conversationsqueued) | routing-engine | rules-engine | Contatos não alocados (pool saturado) |
-| [`conversations.abandoned`](#conversationsabandoned) | routing-engine | core, rules-engine | Contato abandonado antes de alocação |
-| [`conversations.session_opened` / `conversations.session_closed`](#conversationssession_opened--conversationssession_closed) | core | analytics-api, LGPD | Abertura e fechamento de sessão |
-| [`conversations.message_sent`](#conversationsmessage_sent) | core | analytics-api | Mensagem entregue na sessão |
-| [`conversations.participants`](#conversationsparticipants) | orchestrator-bridge | analytics-api → ClickHouse | Participação de agente em segmento |
-| [`agent.done`](#agentdone) | routing-engine | rules-engine, analytics-api | Conclusão de atendimento por um agente |
-| [`agent.lifecycle`](#agentlifecycle) | mcp-server-plughub, routing-engine (CrashDetector) | routing-engine | Transições de ciclo de vida de instâncias |
-| [`rules.escalation.events`](#rulesescalationevents) | rules-engine | routing-engine | Escalações disparadas (modo ativo) |
-| [`rules.shadow.events`](#rulesshadowevents) | rules-engine | analytics-api | Disparos em shadow mode (sem ação real) |
-| [`rules.session_tagged`](#rulessession_tagged) | rules-engine | analytics-api | Tags aplicadas à sessão pelo Rules Engine |
-| [`registry.changed`](#registrychanged) | agent-registry | routing-engine, core, orchestrator-bridge | Registro e atualização de pools, tipos e skills |
-| [`config.changed`](#configchanged) | config-api | orchestrator-bridge, routing-engine | Mudança de configuração de namespace |
-| [`gateway.heartbeat`](#gatewayheartbeat) | channel-gateway | routing-engine | Heartbeat dos gateways de canal |
-| [`queue.position_updated`](#queueposition_updated) | routing-engine | channel-gateway, analytics-api | Posição do contato na fila |
-| [`mcp.audit`](#mcpaudit) | McpInterceptor / proxy sidecar | analytics-api, LGPD | Audit trail de chamadas MCP |
+| [`conversations.inbound`](#conversationsinbound) | channel-gateway (todos os adapters + webhook), routing-engine (CrashDetector, re-rota), orchestrator-bridge | routing-engine, orchestrator-bridge, conversation-writer, analytics-api | Eventos inbound normalizados para roteamento |
+| [`conversations.events`](#conversationsevents) | channel-gateway, orchestrator-bridge, mcp-server-plughub, quality-ingest | orchestrator-bridge, routing-engine, rules-engine, conversation-writer, session-replayer, analytics-api | **Tópico central do ciclo de vida do contato** — `contact_open`, `contact_closed`, `message_sent`, `session_suspended`, `conference_agent_completed`, `insight.registered` |
+| [`conversations.outbound`](#conversationsoutbound) | routing-engine, orchestrator-bridge, mcp-server-plughub | channel-gateway (`outbound_consumer`), conversation-writer | Entrega ao cliente (mensagem, `session.closed` do WS) |
+| [`conversations.routed`](#conversationsrouted) | routing-engine | orchestrator-bridge, analytics-api | Decisão de roteamento com alocação |
+| [`conversations.queued`](#conversationsqueued) | routing-engine | orchestrator-bridge, analytics-api | Contatos não alocados (pool saturado) |
+| [`conversations.session_closed`](#conversationssession_closed) | orchestrator-bridge, quality-ingest | session-replayer, evaluation-api | Fechamento de sessão — dispara Replayer e amostragem de avaliação |
+| [`conversations.participants`](#conversationsparticipants) | orchestrator-bridge, mcp-server-plughub (`segment_outcome_record`), evaluation-api, quality-ingest | analytics-api → `analytics.segments`, session-replayer, evaluation-api | Participação de agente em segmento |
+| [`agent.lifecycle`](#agentlifecycle) | mcp-server-plughub, orchestrator-bridge, routing-engine (CrashDetector), quality-ingest | routing-engine, rules-engine, analytics-api | Ciclo de vida de instâncias — inclui o evento **`agent_done`** |
+| [`agent.registry.events`](#agentregistryevents) | agent-registry | routing-engine | Cache de pools/agent types no routing |
+| [`registry.changed`](#registrychanged) | agent-registry | orchestrator-bridge | Registro e atualização de pools, tipos e skills (hot-reload) |
+| [`config.changed`](#configchanged) | config-api | orchestrator-bridge, routing-engine, channel-gateway | Mudança de configuração de namespace |
+| [`queue.position_updated`](#queueposition_updated) | routing-engine | analytics-api | Posição do contato na fila |
+| [`pool.occupancy`](#pooloccupancy) | routing-engine | analytics-api | Amostragem periódica de ocupação de pool |
+| [`mcp.audit`](#mcpaudit) | SDK `McpInterceptor` / proxy sidecar | analytics-api, LGPD | Audit trail de chamadas MCP |
 | [`sentiment.updated`](#sentimentupdated) | ai-gateway | analytics-api | Atualização de sentimento da sessão |
-| [`evaluation.events`](#evaluationevents) | evaluation-api | analytics-api → ClickHouse | Eventos do ciclo de avaliação de qualidade |
-| [`calibration.events`](#calibrationevents) | evaluation-api | analytics-api → ClickHouse | Eventos de calibração de avaliadores (Arc 13) |
-| [`workflow.events`](#workflowevents) *(legado workflow-api)* | workflow-api | skill-flow-worker, analytics-api | Lifecycle de `WorkflowInstance` — **caminho legado**, fora do modelo unificado (Arc 19) |
-| [`collect.events`](#collectevents) *(legado workflow-api)* | workflow-api | channel-gateway, analytics-api | Step `collect` — contato outbound assíncrono (caminho legado do workflow-api) |
-| [`session.signals`](#sessionsignals) | mcp-server-plughub (`survey_record`) | analytics-api → ClickHouse | Voz do cliente/agente (CSAT/NPS/CES…) — grão contato/segmento/jornada |
-| [`journey.merges`](#journeymerges) *(Journey J3 ✅)* | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` | Aresta de merge de journey (novo→antigo); **1 tipo** — distinto do `journey.events` (9 tipos) removido no Arc 19. Ver `docs/product/journey-3-niveis-implementation-spec.md` |
-| [`usage.events`](#usageevents) | core, ai-gateway, channel-gateway | usage-aggregator | Metering por dimensão de consumo |
+| [`evaluation.events`](#evaluationevents) | evaluation-api, rules-engine (sampler), mcp-server-plughub, session-replayer | routing-engine, session-replayer, evaluation-api, analytics-api | Ciclo de avaliação de qualidade (Arc 6) |
+| [`evaluation.results`](#evaluationresults) | mcp-server-plughub | clickhouse-consumer | Resultado de avaliação (trilha separada de `evaluation.events`) |
+| [`calibration.events`](#calibrationevents) | evaluation-api | analytics-api → ClickHouse | Calibração de avaliadores (Arc 13) |
+| [`workflow.events`](#workflowevents) *(legado workflow-api)* | workflow-api | skill-flow-worker, evaluation-api, analytics-api | Lifecycle de `WorkflowInstance` — **caminho legado**, fora do modelo unificado (Arc 19) |
+| [`collect.events`](#collectevents) *(legado workflow-api)* | workflow-api | channel-gateway, analytics-api | Step `collect` — contato outbound assíncrono (caminho legado) |
+| [`session.signals`](#sessionsignals) | mcp-server-plughub (`survey_record`), channel-gateway (`survey_web`), evaluation-api | analytics-api → ClickHouse | Voz do cliente/agente (CSAT/NPS/CES/PMF/FCR) — grão contato/segmento/jornada |
+| [`journey.merges`](#journeymerges) *(Journey J3 ✅)* | mcp-server-plughub (`journey_merge`) | analytics-api → ClickHouse `journey_aliases` | Aresta de merge de journey (novo→antigo); **1 tipo** — distinto do `journey.events` (9 tipos) removido no Arc 19 |
+| [`usage.events`](#usageevents) | channel-gateway, ai-gateway, mcp-server-plughub | usage-aggregator, analytics-api | Metering por dimensão de consumo |
+| [`usage.cycle_reset`](#usagecycle_reset) | **nenhum** | usage-aggregator | Reset de ciclo — **consumidor sem produtor** |
 | [`agent.events`](#agentevents) | mcp-server-plughub (tool `agent_event`) | analytics-api → ClickHouse | KPIs de negócio publicados por agentes (Arc 12) |
-| [`events.dead_letter`](#eventsdead_letter) | skill-flow-worker, analytics-api, orchestrator-bridge | ops / monitoring | Eventos não processáveis (dead letter) |
+| [`events.dead_letter`](#eventsdead_letter) | orchestrator-bridge, analytics-api | **nenhum** (sink) | Eventos não processáveis (DLQ write-only) |
+| [`agent.done`](#agentdone) ⚠️ órfão | mcp-server-plughub | **nenhum** | Publicado no vácuo — ver seção |
+| [`rules.escalation.events`](#rulesescalationevents) ⚠️ órfão | rules-engine | **nenhum** | Escalações do modo ativo — ver seção |
+| [`rules.shadow.events`](#rulesshadowevents) ⚠️ órfão | rules-engine | **nenhum** | Disparos em shadow mode — ver seção |
 
-> **Nomes obsoletos / removidos.** Versões anteriores deste documento citavam `conversations.events`
-> (substituído por `conversations.session_opened` / `conversations.session_closed` +
-> `agent.done`) e `agent.registry.events` (substituído por `registry.changed`). Esses
-> nomes não existem mais — use os tópicos atuais da tabela acima. **`journey.events`** (9 tipos,
-> `JourneyEventSchema`) foi **removido no Arc 19 Fase F** junto da entidade Journey e da tabela
-> ClickHouse `journey_events`; não confundir com `journey.merges` (topic novo de 1 tipo, ainda em design).
+> **Tópicos que NÃO existem** (verificado no código em 2026-07-27 — zero produtores e zero consumidores):
+> `conversations.session_opened`, `conversations.message_sent`, `conversations.abandoned`,
+> `rules.session_tagged`, `gateway.heartbeat`. Os três primeiros confundem **evento com tópico**:
+> `message_sent` é um `event_type` dentro de `conversations.events`, e abandono é um `close_reason` do
+> `contact_closed`. `gateway.heartbeat` é o evento `agent_heartbeat` dentro de `agent.lifecycle`.
+> **`journey.events`** (9 tipos, `JourneyEventSchema`) foi **removido no Arc 19 Fase F** junto da entidade
+> Journey e da tabela ClickHouse `journey_events`; não confundir com `journey.merges` (1 tipo, implementado).
+>
+> **Órfãos** (produzem sem ninguém consumir, ou consomem sem ninguém produzir): `agent.done`,
+> `rules.escalation.events`, `rules.shadow.events`, `usage.cycle_reset`. Cada um tem uma nota na sua seção;
+> os acionáveis estão registrados no `TODO.md`.
 
 ---
 
@@ -188,35 +207,35 @@ Mesmo schema de `ConversationRoutedEvent`, com `result.allocated: false` e `resu
 
 ---
 
-## `conversations.abandoned`
+## `conversations.events`
 
-**Propósito**: Sinaliza que um contato deixou a plataforma antes de ser alocado a um agente (`close_reason` da família `customer_abandon` / `max_wait_exceeded` / `no_resource`).
+> **O tópico mais movimentado da plataforma** — e o que este documento afirmava não existir até 2026-07-27.
+> Cinco pacotes produzem, seis consomem. Todo o ciclo de vida do CONTATO passa por aqui.
 
-**Produtor**: `routing-engine`
+**Propósito**: Ciclo de vida do contato e das mensagens. Não confundir com `conversations.inbound` (entrada
+para roteamento) nem com o canonical stream (`session:{id}:stream`, que é Redis, não Kafka).
 
-**Consumidores**: `core` (fecha a sessão como `abandoned`), `rules-engine`
+**Produtores**: `channel-gateway` (adapters webchat/email/sms/whatsapp), `orchestrator-bridge`,
+`mcp-server-plughub` (server + tools runtime/bpm/session), `quality-ingest` (importação externa)
 
----
+**Consumidores**: `orchestrator-bridge` (`process_contact_event` — hooks de finalização, close do contato),
+`routing-engine` (remove sessão órfã da fila), `rules-engine`, `conversation-writer`, `session-replayer`
+(reconstrução do stream para importados), `analytics-api` (→ `sessions` + `messages`)
 
-## `conversations.session_opened` / `conversations.session_closed`
+### `event_type` que trafegam
 
-**Propósito**: Eventos de ciclo de vida da sessão — a única exceção à regra de XADD via `writeStreamEntry()` (o Core os escreve diretamente no `server.ts`).
+| `event_type` | Produtor típico | Consumido por |
+|---|---|---|
+| `contact_open` | channel-gateway (adapters), mcp-server (`bpm`), quality-ingest | analytics-api (`sessions`) |
+| `contact_closed` | orchestrator-bridge (versão enriquecida: `close_reason`, `outcome`, `root_session_id`), channel-gateway, mcp-server (`agent_closed`/`agent_transfer`/`agent_disconnect`) | analytics-api, orchestrator-bridge, routing-engine |
+| `message_sent` | mcp-server-plughub, quality-ingest | analytics-api (`messages`) |
+| `session_suspended` | orchestrator-bridge | analytics-api |
+| `conference_agent_completed` | mcp-server-plughub (`runtime`) | orchestrator-bridge (contagem de hooks) — **não materializado no analytics** |
+| `insight.registered` | mcp-server-plughub (`runtime`) | — **não materializado no analytics** |
 
-**Produtor**: `core`
-
-**Consumidores**: `analytics-api`, pipeline LGPD
-
-O `session_closed` carrega `close_reason` (do domínio definido no CLAUDE.md) e dispara, entre outros, o pipeline de Session Replayer para avaliação de qualidade.
-
----
-
-## `conversations.message_sent`
-
-**Propósito**: Registra cada mensagem entregue na sessão para fins analíticos (não substitui o canonical stream).
-
-**Produtor**: `core`
-
-**Consumidores**: `analytics-api`
+> **Cuidado com o wire.** O valor `reason: "agent_done"` dentro de `contact_closed` é um terceiro sentido de
+> "agent done" (≠ tópico `agent.done`, ≠ evento `agent_done` do `agent.lifecycle`) e há código que depende
+> literalmente dessa string — a Arc 14 re-entry guard entre eles. Não renomear.
 
 ---
 
@@ -232,15 +251,40 @@ O `session_closed` carrega `close_reason` (do domínio definido no CLAUDE.md) e 
 
 ---
 
-## `agent.done`
+## `conversations.session_closed`
 
-**Propósito**: Conclusão de atendimento por um agente. Substitui o antigo `conversations.events` / `conversation_completed`.
+**Propósito**: Fechamento da sessão — dispara o pipeline de Session Replayer e a amostragem de avaliação.
 
-**Produtor**: `routing-engine` (o orchestrator-bridge publica em nome de agentes nativos e de fallback YAML)
+**Produtores**: `orchestrator-bridge` (`_close_contact_layer`), `quality-ingest` (histórico importado)
 
-**Consumidores**: `rules-engine`, `analytics-api`
+**Consumidores**: `session-replayer`, `evaluation-api` (sampling)
 
-Regras (espelham o refinement de `AgentDoneSchema`):
+Carrega `close_reason` (domínio no CLAUDE.md). **Nota histórica**: há comentário no bridge dizendo que este
+tópico "nunca teve produtor" — era verdade quando escrito; hoje tem dois.
+
+> `conversations.session_opened` **não existe** (zero produtores/consumidores). A abertura é o
+> `contact_open` dentro de `conversations.events`.
+
+---
+
+## ~~`agent.done`~~ — removido (2026-07-27)
+
+> **Não existe mais.** Era publicado pelo `mcp-server-plughub` (`tools/runtime.ts`, `tools/session.ts`) e
+> **nenhum serviço o consumia**. O comentário no código dizia "consumido por Rules Engine e Analytics" — falso:
+> o rules-engine assina apenas `conversations.events` + `agent.lifecycle`, e a lista de tópicos do analytics-api
+> não o incluía. A MESMA função publicava `agent.done` e, 64 linhas depois, `agent.lifecycle` com
+> `event: "agent_done"` — publicação dupla, sendo que só a segunda tem consumidor. Um teste unitário cobria a
+> publicação órfã, mascarando a ausência de consumo; foi reescrito para cobrir as duas vias reais.
+>
+> **O contrato de conclusão de atendimento é o evento `agent_done` dentro de `agent.lifecycle`** (ver seção
+> abaixo) — é ele que dispara `remove_conversation` no routing-engine e alimenta o analytics. O `outcome`
+> também viaja no `contact_closed` de `conversations.events`.
+>
+> **Efeito colateral registrado:** `issue_status` só era publicado no tópico órfão. Ele continua sendo exigido
+> e validado na entrada do `agent_done` (invariante do CLAUDE.md), mas não trafega mais em nenhum tópico —
+> ninguém o consumia. Se for preciso no analytics, o lugar natural é o `contact_closed`.
+
+Regras do payload (espelham o refinement de `AgentDoneSchema`, válidas para o evento no `agent.lifecycle`):
 - `outcome != "resolved"` → `handoff_reason` é obrigatório
 - `issue_status` é sempre obrigatório e nunca vazio
 
@@ -275,13 +319,23 @@ Eventos: `agent_login`, `agent_ready`, `agent_busy`, `agent_done`, `agent_pause`
 
 ---
 
-## `rules.escalation.events`
+## `rules.escalation.events` ⚠️ telemetria sem consumidor
 
-**Propósito**: Registra cada escalação efetivamente disparada pelo Rules Engine (modo `active`).
+> **A escalação NÃO depende deste tópico.** O efeito real é uma chamada HTTP: `escalator.py` →
+> `POST {mcp_server_url}/tools/conversation_escalate`, e só DEPOIS o evento Kafka é publicado
+> (`escalator.py:79` e `:91`). O tópico é **telemetria**, não mecanismo — e não tem consumidor: nenhum
+> relatório registra escalações disparadas.
+>
+> A documentação anterior (e o CLAUDE.md) davam o `routing-engine` como consumidor. Ele não assina o tópico;
+> a re-rota acontece pelo caminho HTTP → `conversation_escalate`. Decisão pendente no `TODO.md`: ligar um
+> consumidor (para haver relatório de escalações) ou remover a publicação.
 
-**Produtor**: `rules-engine` (Escalator)
+**Propósito**: Telemetria de cada escalação disparada pelo Rules Engine em modo `active` (a AÇÃO é o
+`conversation_escalate` via HTTP).
 
-**Consumidor**: `routing-engine` (recebe o novo pool de destino)
+**Produtor**: `rules-engine` (Escalator, após a chamada HTTP)
+
+**Consumidor**: **nenhum**
 
 **Schema Zod**: `RulesEscalationEventSchema` (`rules-events.ts`)
 
@@ -306,25 +360,23 @@ Eventos: `agent_login`, `agent_ready`, `agent_busy`, `agent_done`, `agent_pause`
 
 ---
 
-## `rules.shadow.events`
+## `rules.shadow.events` ⚠️ telemetria sem consumidor
 
-**Propósito**: Registra disparos de regras em modo `shadow` — o que teria acontecido, sem ação real. Usado para validar novas regras antes de ativá-las.
+> **Sem consumidor.** O rules-engine publica; o analytics-api (dado como consumidor) não assina o tópico. O
+> shadow mode existe para **medir** o que uma regra faria antes de ativá-la — sem consumidor, o único registro
+> é o `logger.info("[SHADOW] Rule %s would escalate…")`. A capacidade está pela metade: o dado é produzido e
+> descartado.
+
+**Propósito**: Registra disparos de regras em modo `shadow` — o que teria acontecido, sem ação real.
 
 **Produtor**: `rules-engine` (Escalator)
 
-**Consumidor**: `analytics-api`
+**Consumidor**: **nenhum**
 
 Schema idêntico a `rules.escalation.events`, com `shadow_mode: true`.
 
----
-
-## `rules.session_tagged`
-
-**Propósito**: Registra tags aplicadas a uma sessão pelo Rules Engine (classificação derivada de regras).
-
-**Produtor**: `rules-engine`
-
-**Consumidor**: `analytics-api`
+> `rules.session_tagged` **não existe** — zero ocorrências no código (nem produtor, nem consumidor, nem
+> schema). Estava documentado como se fosse um tópico ativo.
 
 ---
 
@@ -352,25 +404,56 @@ Schema idêntico a `rules.escalation.events`, com `shadow_mode: true`.
 
 ---
 
-## `gateway.heartbeat`
+## `agent.registry.events`
 
-**Propósito**: Heartbeat dos gateways de canal. O Routing Engine usa esse sinal como hard filter — agentes em gateways sem heartbeat há mais de 90s são excluídos do roteamento.
+**Propósito**: Cache de pools e agent types no Routing Engine. Distinto de `registry.changed` (consumido pelo
+orchestrator-bridge para reconciliação de instâncias) — são dois tópicos vivos, com destinos diferentes.
 
-**Produtor**: `channel-gateway`
+**Produtor**: `agent-registry`
 
-**Consumidor**: `routing-engine`
+**Consumidor**: `routing-engine` (kafka_listener)
+
+> `gateway.heartbeat` **não existe** como tópico. O hard filter de heartbeat do routing opera sobre o evento
+> `agent_heartbeat` dentro de `agent.lifecycle` (TTL da chave de instância no Redis).
 
 ---
 
 ## `queue.position_updated`
 
-**Propósito**: Publica a posição atualizada de um contato na fila de espera, para feedback ao cliente e analytics.
+**Propósito**: Posição do contato na fila de espera. Publicado **após** o enqueue (antes disso a fila não
+contém a própria sessão e a posição sai 0 — ver CHANGELOG 2026-07-27).
+
+**Produtor**: `routing-engine` (`main._publish_queue_position`, pós-`add_queued_contact`)
+
+**Consumidor**: `analytics-api` → `queue_events`
+
+> **Nenhum canal consome.** A documentação anterior dava o `channel-gateway` como consumidor "para informar o
+> cliente" — isso nunca foi implementado: o gateway não assina o tópico. Informar posição/ETA ao cliente é
+> feature em aberto (`TODO.md`).
+
+**Schema Zod**: `QueuePositionUpdatedEventSchema` (`platform-events.ts`) — carrega `queue_position` (posição do
+contato) **e** `queue_length` (tamanho da fila); a tabela persiste só a posição.
+
+---
+
+## `pool.occupancy`
+
+**Propósito**: Amostragem periódica de ocupação de pool (o `_occupancy_sampler` do routing-engine).
 
 **Produtor**: `routing-engine`
 
-**Consumidores**: `channel-gateway`, `analytics-api`
+**Consumidor**: `analytics-api`
 
-**Schema Zod**: `QueuePositionUpdatedEventSchema` (`platform-events.ts`)
+---
+
+## `conversations.outbound`
+
+**Propósito**: Entrega ao cliente — mensagem de sistema (aviso de fila), render de menu e o `session.closed`
+que fecha o WebSocket do cliente.
+
+**Produtores**: `routing-engine`, `orchestrator-bridge`, `mcp-server-plughub`
+
+**Consumidores**: `channel-gateway` (`outbound_consumer`), `conversation-writer`
 
 ---
 
@@ -548,30 +631,54 @@ O `category` é hierárquico em dot notation (`pool_id.skill_id.metric_key`); o 
 
 ---
 
+## ~~`usage.cycle_reset`~~ — removido (2026-07-27)
+
+> **Não existe mais.** O `usage-aggregator` assinava este tópico, mas **nada nunca o publicou**; o consumo foi
+> removido. O reset de ciclo é HTTP: `POST /admin/cycle-reset` (mesma classe `CycleResetter`). O schema
+> permanece em `usage.ts` caso o caminho por evento seja desejado no futuro — nesse caso, o que falta é o
+> **produtor**.
+
+---
+
+## `evaluation.results`
+
+**Propósito**: Resultado de avaliação numa trilha separada de `evaluation.events` — consumida pelo
+`clickhouse-consumer`.
+
+**Produtor**: `mcp-server-plughub` (`tools/evaluation.ts`) · **Consumidor**: `clickhouse-consumer`
+
+---
+
 ## `events.dead_letter`
 
 **Propósito**: Dead letter queue — eventos que não puderam ser processados pelos consumidores.
 
-**Produtores**: `skill-flow-worker`, `analytics-api`, `orchestrator-bridge`
+**Produtores**: `orchestrator-bridge`, `analytics-api`
 
-**Consumidores**: ferramentas de ops e monitoramento
+**Consumidores**: **nenhum** no repo — sink write-only, inspecionado por ferramentas de ops.
 
 ---
 
 ## Fluxo de Eventos — Atendimento Padrão
 
 ```
-1. channel-gateway    → conversations.inbound           (nova mensagem do cliente)
-2. core               → conversations.session_opened
-3. routing-engine     → conversations.routed            (alocação bem-sucedida)
-   ou routing-engine  → conversations.queued            (pool saturado)
+1. channel-gateway    → conversations.inbound             (nova mensagem do cliente)
+2. channel-gateway    → conversations.events (contact_open)
+3. routing-engine     → conversations.routed              (alocação bem-sucedida)
+   ou routing-engine  → conversations.queued              (pool saturado)
+                      → queue.position_updated            (após o enqueue)
 4. mcp-server         → agent.lifecycle (agent_login)
 5. mcp-server         → agent.lifecycle (agent_ready)
-6. routing-engine     → agent.lifecycle (agent_busy)    ← via kafka_listener
-   [atendimento em curso — ai-gateway → sentiment.updated]
-7. routing-engine     → agent.done
-8. core               → conversations.session_closed
+6. routing-engine     → agent.lifecycle (agent_busy)      ← via kafka_listener
+   [atendimento em curso — ai-gateway → sentiment.updated; mcp-server → conversations.events (message_sent)]
+7. mcp-server/bridge  → conversations.events (contact_closed)
+8. orchestrator-bridge→ agent.lifecycle (agent_done)      ← libera a vaga no routing
+9. orchestrator-bridge→ conversations.session_closed      ← dispara Replayer + sampling de avaliação
 ```
+
+> Corrigido em 2026-07-27: o fluxo antigo citava `conversations.session_opened` (inexistente) e o tópico
+> `agent.done` (órfão). A conclusão de atendimento que tem efeito é o **evento** `agent_done` dentro de
+> `agent.lifecycle`.
 
 ## Fluxo de Eventos — Crash de Instância
 
