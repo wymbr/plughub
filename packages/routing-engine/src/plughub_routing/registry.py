@@ -282,20 +282,11 @@ class InstanceRegistry:
                     data["state"] = data["status"]
                 inst = AgentInstance.model_validate(data)
                 if inst.state == "ready" and inst.current_sessions < inst.max_concurrent:
-                    # Arc 14 Fase C: skip instances with an active wrap-up segment.
-                    # The bridge sets {tenant}:instance:{id}:wrap_up_pending (TTL auto-expires)
-                    # when an on_human_end hook with side=agent is dispatched, and deletes it
-                    # when the wrap-up completes.  This prevents the routing engine from
-                    # allocating a new contact while the agent is still in post-call wrap-up.
-                    try:
-                        _iid_str = iid if isinstance(iid, str) else iid.decode()
-                        _wp = await self._redis.exists(
-                            f"{tenant_id}:instance:{_iid_str}:wrap_up_pending"
-                        )
-                        if _wp:
-                            continue
-                    except Exception:
-                        pass  # non-fatal: if check fails, include instance anyway
+                    # Wrap-up unificado (Camada E2, Phase 3): o skip por `wrap_up_pending`
+                    # (bloqueio de instância INTEIRA durante o wrap-up inline antigo) foi
+                    # REMOVIDO. O wrap-up (inline ou detached) ocupa UMA vaga pelo semáforo
+                    # (claim_instance) como qualquer sessão — a capacidade natural cuida do
+                    # ACW, sem bloquear as demais vagas do agente (correto p/ max_concurrent>1).
                     instances.append(inst)
             except Exception:
                 continue

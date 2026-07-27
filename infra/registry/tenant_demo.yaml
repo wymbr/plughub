@@ -413,22 +413,15 @@ pools:
     channel_types: [webchat, whatsapp]
     sla_target_ms: 60000
 
-  - pool_id: wrapup_ia
-    agent_kind: ai
-    deploy: { skill_id: skill_wrapup_v1, max_concurrent_sessions: 20 }
-    # Pool do agente de wrap-up pós-atendimento.
-    # Acionado via pool hook on_human_end — obrigatório quando configurado.
-    # Coleta notas internas do agente humano (resumo, classificação, próximos passos).
-    # Usa visibility agents_only — cliente não vê o wrap-up.
-    description: "Pool do agente de wrap-up — notas internas pós-atendimento (agents_only)"
-    channel_types: [webchat, whatsapp]
-    sla_target_ms: 180000
+  # wrapup_ia (skill_wrapup_v1) REMOVIDO — Camada E2 Phase 3 (wrap-up unificado).
+  # O wrap-up inline antigo (especialista de conferência) foi aposentado; o inline
+  # agora é auto-atendimento sobre o workflow wrapup_detached_ia (uma implementação só).
 
   - pool_id: nps_ia
     agent_kind: ai
     deploy: { skill_id: skill_nps_v1, max_concurrent_sessions: 20 }
     # Pool do agente NPS pós-atendimento.
-    # Acionado via pool hook on_human_end, em paralelo com wrapup_ia.
+    # Acionado via pool hook on_contact_end (side=customer, inline/conferência).
     # Conversa exclusivamente com o cliente via visibility array.
     # O agente humano NÃO vê as mensagens de NPS.
     description: "Pool do agente NPS — pesquisa isolada com o cliente (visibility array)"

@@ -1659,34 +1659,12 @@ async def fire_pool_hooks(
                         session_id, conference_id, hook_side, _fixed_pid,
                     )
 
-                    # Arc 14 Fase C: wrap_up_pending flag — block the human agent from
-                    # receiving a new contact until the wrap-up segment completes.
-                    # Checked by routing-engine get_ready_instances() to skip the instance.
-                    # Deleted in process_routed() when the agent-side hook segment concludes.
-                    # TTL = hook timeout + 5 min safety margin so it auto-expires even
-                    # if the cleanup path is never reached (e.g. bridge crash).
-                    # Key uses human-{pool_id} — same format routing-engine uses to index
-                    # pool instances — NOT participant_id from ContextStore (unreliable).
-                    if hook_side == "agent" and hook_type in ("on_human_end", "segment_wrapup"):
-                        try:
-                            _human_iid = f"human-{pool_id}"
-                            _wp_key = (
-                                f"{tenant_id}:instance:{_human_iid}:wrap_up_pending"
-                            )
-                            await redis_client.setex(
-                                _wp_key, _HOOK_TIMEOUT_S + 300, session_id
-                            )
-                            logger.info(
-                                "fire_pool_hooks: wrap_up_pending set — session=%s "
-                                "instance=%s key=%s",
-                                session_id, _human_iid, _wp_key,
-                            )
-                        except Exception as _wp_exc:
-                            logger.warning(
-                                "fire_pool_hooks: could not set wrap_up_pending: "
-                                "session=%s pool=%s — %s",
-                                session_id, pool_id, _wp_exc,
-                            )
+                    # Wrap-up unificado (Camada E2, Phase 3): o `wrap_up_pending`
+                    # (bloqueio de instância INTEIRA durante o wrap-up inline antigo) foi
+                    # REMOVIDO. Todo hook side=agent (inline/detached) roda pelo workflow
+                    # destacado e ocupa UMA vaga pelo semáforo (claim no auto-atendimento/
+                    # pull) — não bloqueia o agente inteiro. Este bloco de conferência é
+                    # inalcançável para side=agent (sempre toma o branch de workflow acima).
                 else:
                     logger.debug(
                         "fire_pool_hooks: no fixed-side participant found: "

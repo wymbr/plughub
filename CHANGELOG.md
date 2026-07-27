@@ -39,10 +39,16 @@ sessão separada — auto-atendida ou puxada).
 mcp-server-plughub/platform-ui/agent-registry + reconcile + **`set-next`+`promote` do `wrapup_detached_ia`**
 (re-snapshot do slot; o reconcile não basta — memória `skill-slot-resnapshot`).
 
-**Falta (próximas fases):** Phase 2 = hand-off da vaga no close inline (segura a vaga da origem e transfere o
-ocupante ao wrap-up → elimina a janela de corrida fechar-e-reclamar no `max_concurrent=1`); Phase 3 = remover o
-inline antigo (`wrapup_ia` + `skill_wrapup_v1` + `wrap_up_pending`). Latência do auto-atendimento (~2-3s do poll)
-= polish (instant via `refreshSignal` no `conversation.assigned`).
+**Phase 3 ✅ (2026-07-27) — remoção do inline antigo:** pool `wrapup_ia` removido do YAML (o inline agora é
+auto-atendimento sobre o workflow); produtor + consumidor do `wrap_up_pending` (bloqueio de instância inteira)
+removidos do bridge e do `get_ready_instances` (eram inalcançáveis — todo hook side=agent vai pelo workflow). Pura
+remoção de código morto, sem mudança de comportamento (validado: inline+detached seguem; agente não fica bloqueado
+por wrap-up pendente — ocupa só uma vaga). `skill_wrapup_v1.yaml` não existia (nada a remover). O `redis.delete`
+de cleanup do `wrap_up_pending` ficou como no-op inofensivo (deletar chave nunca setada).
+
+**Falta:** Phase 2 = hand-off da vaga no close inline (segura a vaga da origem e transfere o ocupante ao wrap-up →
+elimina a janela de corrida fechar-e-reclamar no `max_concurrent=1`; hoje degrada gracioso: cai na inbox). Latência
+do auto-atendimento (~2-3s do poll) = polish (instant via `refreshSignal` no `conversation.assigned`).
 
 ## Wrap-up-α — wiring do hook `on_human_end` `detached` (dispara sozinho no fim do atendimento) ✅ (2026-07-27)
 
