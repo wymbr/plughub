@@ -4,6 +4,50 @@
 
 ---
 
+## Wrap-up unificado — Phase 2: hand-off da vaga no close inline (sem corrida) *(desenho fechado 2026-07-27, adiado)*
+
+**Contexto.** O wrap-up unificado (Phase 0+1+3 ✅, ver CHANGELOG) tem UMA implementação (workflow
+`skill_wrapup_detached_v1` + DialogForm + `segment_outcome_record`); o `dispatch` do hook `on_human_end`
+(side=agent) escolhe só a entrega: `detached` (pull manual) × `inline` (auto-atendimento no Console). Os dois
+ocupam **uma vaga** pelo semáforo `claim_instance` (nunca bloqueiam o agente inteiro).
+
+**Limitação conhecida (aceita hoje — degrada gracioso).** No `inline`, o fluxo atual é: o contato **fecha**
+(libera a vaga) → o wrap-up é uma **sessão nova** que o Console **auto-reivindica** (~2-3s do poll da inbox). Entre
+o fechar e o auto-claim há uma **janela** em que a vaga fica livre. Com `max_concurrent = 1`, se um contato
+**push** chegar nessa janela, ele pode pegar a vaga antes do wrap-up → o auto-claim cai na inbox (**degradação
+graciosa** — vira detached; não perde o wrap-up). Só morde no `max_concurrent = 1` com push concorrente; em
+`max_concurrent > 1` não importa (sobra vaga). Para o demo (agentes multi-vaga) é inócuo.
+
+**Fix (Phase 2) — hand-off da vaga.** Segurar a vaga da origem no close e o wrap-up **herdar** (transferir o
+ocupante), em vez de liberar-e-re-reivindicar. Ocupação nunca oscila → sem janela. **4 peças:**
+
+1. **Skip-release no close inline.** A vaga da origem é liberada FUNDO no routing: `agent_done` (do humano) →
+   `kafka_listener` (`kafka_listener.py:310`) → `InstanceRegistry.remove_conversation` (`registry.py:402`) →
+   `release_instance` (remove ocupante `{origin}::*`). Pular esse release quando o contato tem wrap-up **inline**
+   seguindo. O routing NÃO conhece a config de hook do pool → precisa de um **flag no evento `agent_done`**
+   (o mcp-server `/api/agent_done` já resolve o pool; poderia carimbar `keep_slot_for_wrapup`), OU o
+   `remove_conversation` consultar o pool. Preferir o flag no evento (o routing não deve consultar hooks).
+2. **`transfer_occupant` (Lua) no semáforo** (`registry.py`, par de `claim_instance`/`release_instance`):
+   atômico `SREM {origin}::*` + `SADD {wrapup}::{conf}` (net 0). É o componente MAIS crítico — bug de
+   over/under-alloc é severo; testar como `test_instance_semaphore.py`.
+3. **`origin_session_id` no item de pull.** O transfer precisa saber qual vaga herdar; hoje o item carrega a
+   sessão do workflow, não a origem. Propagar `origin_session_id` até o `contact_data` (o workflow já tem
+   `@ctx.session.origin_session_id`; falta levá-lo ao delegate-conference inbound → `ConversationInboundEvent`
+   → `contact_data`, mesmo caminho do `auto_attend`).
+4. **Caminho de transfer no `work_task_claim`** (`router.py:599`): quando `auto_attend` + existe vaga presa da
+   origem → chamar `transfer_occupant(origin, wrapup)` em vez de `claim_instance` (que adicionaria uma 2ª vaga).
+   No submit, `release_instance` normal (`{wrapup}::*`) fecha a vaga.
+
+**Por que adiado (2026-07-27):** cirurgia no semáforo (componente crítico compartilhado) + no caminho de
+`agent_done`, benefício estreito (só `max_concurrent=1`) e com degradação graciosa já cobrindo o caso comum.
+Retomar numa sessão focada. Ver CHANGELOG "Wrap-up unificado".
+
+**Também pendente (polish, não Phase 2):** latência do auto-atendimento (~2-3s do poll da inbox) → instantâneo
+bombando o `refreshSignal` do `PullInboxPanel` no `conversation.assigned`. E: UI para a config de `dispatch`
+inline/detached do hook (hoje só YAML — invariante "config UI-editável" pendente para hooks de pool).
+
+---
+
 ## Journey (retorno) — modelo de 3 níveis *(design fechado 2026-07-08, pré-código)*
 
 **Contexto:** o modelo de 3 níveis (N3 negocial `workflow` / N2 acesso a canais / N1 I/O — perfis `agent`) faz
