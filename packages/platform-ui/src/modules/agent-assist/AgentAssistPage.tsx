@@ -325,24 +325,44 @@ export const AgentAssistPage: React.FC = () => {
         // mcp-server cai no meta.instance_id global (last-writer) e, em
         // multi-humano, o agent_done de um humano é atribuído a outro. Ver g7 §10.
         const instanceId = contacts.get(sessionId)?.instanceId ?? undefined;
-        await fetch(`/api/agent_done/${sessionId}`, {
+        const resp = await fetch(`/api/agent_done/${sessionId}`, {
           method:  "POST",
           headers: { "Content-Type": "application/json" },
           body:    JSON.stringify({ ...payload, instance_id: instanceId }),
         });
+        // Camada E2 — modo do wrap-up do AGENTE (inline × detached), resolvido pelo
+        // backend a partir da config do pool. INLINE: o especialista de wrap-up entra
+        // na conferência e o agente responde AQUI → mantém a sessão aberta com o banner
+        // (comportamento atual). DETACHED: o wrap-up vira item da fila pull → NÃO há
+        // prompt inline; limpa a sessão de atendimento na hora (o cleanup completo —
+        // unregisterSession/deseleção final — vem no session.closed que o bridge emite
+        // ao fim do NPS). Fail-open: sem sinal → inline (não regride).
+        let inlineWrapup = true;
+        try {
+          const j = await resp.json() as { inline_wrapup?: boolean };
+          inlineWrapup = j?.inline_wrapup !== false;
+        } catch { /* fail-open: inline */ }
         setContacts(prev => {
           const c = prev.get(sessionId);
           if (!c) return prev;
           const next = new Map(prev);
-          next.set(sessionId, { ...c, sessionClosed: true });
+          if (inlineWrapup) {
+            next.set(sessionId, { ...c, sessionClosed: true });
+          } else {
+            next.delete(sessionId);   // wrap-up detached → limpa a tela de atendimento já
+          }
           return next;
         });
-        addToast(t("message.closingWrapUp"), "info");
+        if (!inlineWrapup && selectedSessionId === sessionId) {
+          // sai do atendimento focado → centro volta ao "waiting for next contact"
+          setSelectedSessionId(null);
+        }
+        addToast(t(inlineWrapup ? "message.closingWrapUp" : "message.closedDetached"), "info");
       } catch {
         addToast(t("message.closingError"), "error");
       }
     },
-    [addToast, setContacts, handledSessions, contacts, t]
+    [addToast, setContacts, setSelectedSessionId, selectedSessionId, handledSessions, contacts, t]
   );
 
   const handleMenuSubmit = useCallback(

@@ -155,6 +155,7 @@
   },
   "message": {
     "closingWrapUp":      "Aguardando finalização (wrap-up/NPS)…",
+    "closedDetached":     "Atendimento encerrado. Wrap-up na sua fila.",
     "closingError":       "Erro ao encerrar atendimento.",
     "menuSubmitFailed":   "Falha ao enviar resposta.",
     "networkError":       "Erro de rede ao enviar resposta.",

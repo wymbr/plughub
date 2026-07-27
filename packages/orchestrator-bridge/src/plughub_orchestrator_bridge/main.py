@@ -1128,6 +1128,12 @@ async def _fire_detached_hook(
         "session.close_origin": close_origin or "",
         "hook.type":            hook_type,
         "hook.origin_pool":     pool_id,
+        # A sessão de ORIGEM viaja no top-level do body (journey inherit + parse_inbound),
+        # mas o agente destacado a lê como TAG de contexto: o wrap-up usa
+        # @ctx.session.origin_session_id no briefing_session_id (transcrição) E no
+        # segment_outcome_record (grava por referência). Sem isto, o briefing e a
+        # gravação ficam sem a origem. Igual ao context provado no smoke.
+        "session.origin_session_id": session_id,
     }
     if human_seg_id:
         context["session.surveyed_segment_id"] = human_seg_id
@@ -1684,9 +1690,38 @@ async def fire_pool_hooks(
     # idempotentes, seguro mesmo se o caller já disparou _close_contact_layer).
     # Só para hooks de finalização de contato/processo: segment_wrapup (fim-de-segmento,
     # contato continua) e post_human (encadeado ao barrier inline) ficam de fora.
+    #
+    # GUARDA DE IRMÃO INLINE (regressão do wrap-up detached): o fim-de-atendimento
+    # dispara DUAS levas em paralelo — on_human_end (wrap-up, agora detached) e
+    # on_contact_end (NPS, INLINE side=customer). Esta leva (on_human_end) enxerga só a
+    # si mesma; se ela auto-fechar, derruba a conferência/WS antes do NPS irmão armar o
+    # posatt:customer_active e renderizar. Então NÃO auto-fechamos quando o pool tem um
+    # on_contact_end inline+customer que VAI rodar (aplica o mesmo skip do NPS vs
+    # close_origin) — o NPS segura o WS e conduz o fecho no seu término (como antes do
+    # detach). Sem NPS (ausente/pulado por desconexão), o auto-close segue.
+    _sibling_customer_hold = False
+    if hook_type == "on_human_end":
+        for _ce in (hooks.get("on_contact_end") or []):
+            if not isinstance(_ce, dict) or not _ce.get("pool"):
+                continue
+            if (_ce.get("dispatch", "inline") or "inline") == "detached":
+                continue  # NPS assíncrono não segura o WS
+            if (_ce.get("side", "agent") or "agent") != "customer":
+                continue
+            # Replica o skip do NPS (fire loop acima): nps_on_disconnect=skip numa queda
+            # do cliente = não roda → não segura → não suprime o auto-close.
+            if (
+                (_ce.get("nps_on_disconnect", "timeout") or "timeout") == "skip"
+                and _close_origin_val == "customer_disconnect"
+            ):
+                continue
+            _sibling_customer_hold = True
+            break
+
     if (
         _detached_fired
         and not _inline_dispatched
+        and not _sibling_customer_hold
         and hook_type in ("on_human_end", "on_contact_end", "on_process_end")
     ):
         logger.info(
@@ -1695,6 +1730,13 @@ async def fire_pool_hooks(
             session_id, hook_type, pool_id,
         )
         await _trigger_contact_close(redis_client, session_id)
+    elif _detached_fired and not _inline_dispatched and _sibling_customer_hold:
+        logger.info(
+            "fire_pool_hooks: on_human_end all-detached, mas há NPS inline irmão "
+            "(on_contact_end) — auto-close SUPRIMIDO; o NPS conduz o fecho: "
+            "session=%s pool=%s",
+            session_id, pool_id,
+        )
 
 
 # ── Hook timeout guard — safety net when hook agents never start/complete ────

@@ -155,6 +155,7 @@
   },
   "message": {
     "closingWrapUp":      "Waiting for finalization (wrap-up/NPS)…",
+    "closedDetached":     "Contact closed. Wrap-up queued in your inbox.",
     "closingError":       "Error closing session.",
     "menuSubmitFailed":   "Failed to submit response.",
     "networkError":       "Network error sending response.",

@@ -120,7 +120,8 @@ pools:
   # Camada E2 (wrap-up-α) — pool webhook que roda o workflow de WRAP-UP destacado
   # (skill_wrapup_detached_v1): delega o dialog_wrapup_v1 DIRECIONADO (assigned_to)
   # ao agente que atendeu, reusando o pool pull `formfill_demo` p/ o claim. Disparado
-  # pelo bridge (hook on_human_end detached — wiring pendente) ou manualmente p/ teste.
+  # pelo bridge no on_human_end do retencao_humano (dispatch: detached ✅) ou
+  # manualmente p/ teste (smoke_segment_outcome.sh).
   - pool_id: wrapup_detached_ia
     agent_kind: ai
     # max_concurrent >= 2: o workflow suspende no delegate SEGURANDO a instância; o
@@ -248,10 +249,16 @@ pools:
       on_human_start: []  # Echo evaluator removido do demo — era agente de debug do receive step
       on_human_end:
         # Arc 14: side=agent → segmento interage com o agente humano.
-        # wrap_up_pending gravado no Redis enquanto este segmento estiver ativo —
-        # routing-engine não aloca novo contato ao agente até o wrap-up concluir.
-        - pool: wrapup_ia
+        # Camada E2 (wrap-up-α): wrap-up DESTACADO. dispatch: detached → o bridge
+        # dispara wrapup_detached_ia como workflow webhook fire-and-forget (fora da
+        # conferência), NÃO segura o contato (fecha na hora — corrige G1/AHT inflado
+        # por wrap-up). O bridge preenche surveyed_segment_id/surveyed_agent_key/
+        # origin_session_id por referência (fire_pool_hooks); o agente reivindica o
+        # form no inbox pull (assigned_to) e o submit grava via segment_outcome_record.
+        # (Substitui o wrapup_ia INLINE, que segurava o segmento via wrap_up_pending.)
+        - pool: wrapup_detached_ia
           side: agent
+          dispatch: detached
       # G7 Fase 3b: NPS é hook de fim-de-CONTATO (1ª classe), dispara 1× quando o
       # contato encerra de fato (no_continuation) — dono = pool do primary corrente.
       on_contact_end:

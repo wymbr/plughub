@@ -1674,16 +1674,19 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const body    = req.body as Record<string, unknown>
       const outcome = (body?.outcome as string) ?? "resolved"
 
-      // Look up contact_id and channel from session metadata so we can notify
-      // the customer's WebSocket via conversations.outbound.
+      // Look up contact_id, channel and pool_id from session metadata so we can
+      // notify the customer's WebSocket via conversations.outbound and resolve the
+      // wrap-up mode (inline vs detached) for the Console teardown.
       let contactId = sessionId
       let channel   = "chat"
+      let poolId    = ""
       try {
         const metaRaw = await redis.get(`session:${sessionId}:meta`)
         if (metaRaw) {
           const meta = JSON.parse(metaRaw) as Record<string, string>
           if (meta["contact_id"]) contactId = meta["contact_id"]
           if (meta["channel"])    channel   = meta["channel"]
+          if (meta["pool_id"])    poolId    = meta["pool_id"]
         }
       } catch { /* use fallback */ }
 
@@ -1748,7 +1751,40 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // on_human_end hooks have completed.  Removing it here prevents the race
       // where the customer WebSocket was closed before the finalisation agent ran.
 
-      res.json({ ok: true })
+      // ── Wrap-up mode para o teardown do Console (Camada E2) ──────────────────
+      // O Console mantém a sessão aberta com o banner de wrap-up quando a finalização
+      // do AGENTE é INLINE (o especialista de wrap-up entra na conferência e envia
+      // prompts que o agente responde ali). Quando é DETACHED (wrap-up vai pra fila
+      // pull), NÃO há prompt inline — o Console deve limpar a sessão na hora e tratar
+      // o wrap-up como item de pull separado. Resolvemos o modo aqui (side=agent do
+      // on_human_end) para o front decidir no retorno do fetch, sem flash do banner.
+      // Fail-open: se não der pra determinar, assume INLINE (comportamento atual).
+      let inlineWrapup = true
+      try {
+        if (poolId) {
+          const registryUrl = process.env["AGENT_REGISTRY_URL"] ?? "http://agent-registry:3300"
+          const tenantId    = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
+          const r = await fetch(`${registryUrl}/v1/pools/${encodeURIComponent(poolId)}`, {
+            headers: { "x-tenant-id": tenantId },
+          })
+          if (r.ok) {
+            const pool  = await r.json() as Record<string, unknown>
+            const hooks = (pool["hooks"] as Record<string, unknown> | undefined) ?? {}
+            const ohe   = (hooks["on_human_end"] as Array<Record<string, unknown>> | undefined) ?? []
+            // Só o wrap-up do AGENTE (side=agent, o default) rege o banner/keep-open.
+            // O NPS (side=customer) é renderizado no WebChat do cliente, não no Console.
+            inlineWrapup = ohe.some(e =>
+              e && ((e["side"] as string) ?? "agent") === "agent"
+                && ((e["dispatch"] as string) ?? "inline") !== "detached"
+            )
+          }
+        }
+      } catch (err) {
+        console.error(`[agent_done] could not resolve wrap-up mode pool=${poolId}:`, err)
+        // fail-open: inlineWrapup stays true (Console mantém o comportamento atual)
+      }
+
+      res.json({ ok: true, inline_wrapup: inlineWrapup })
     } catch {
       res.status(500).json({ error: "publish_failed" })
     }

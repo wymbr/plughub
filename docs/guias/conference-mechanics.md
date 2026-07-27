@@ -1373,6 +1373,43 @@ contato continua) não recebe auto-close e não arma `contact_close_pending` qua
 teardown multi-humano detached fica para a Camada E (validação E2E). Sites: `orchestrator-bridge/main.py`
 (`_fire_detached_hook`, `fire_pool_hooks`, os dois `_has_customer_hooks`); `docker-compose.demo.yml` (env).
 
+### Mudança 26 — wiring do wrap-up detached no `on_human_end` + guarda do NPS irmão + teardown do Console (Camada E2, 2026-07-27)
+
+**Contexto.** A Camada D (Mudança 25) fez o bridge honrar `detached`, mas o wrap-up destacado ainda dependia
+de trigger manual (smoke). Esta mudança liga o `on_human_end` do `retencao_humano` ao `wrapup_detached_ia`
+(`dispatch: detached`) — o wrap-up dispara **sozinho** no fim do atendimento — e corrige duas regressões que
+o wiring expôs.
+
+**Wiring.** `fire_pool_hooks` já computava `_hook_human_seg_id`/`_surveyed_agent_key` e semeava o `seg_signal`
+(`_seed_segment_signal`); o gap era o `_fire_detached_hook` passar `origin_session_id` só no top-level do body.
+Agora ele **também injeta `session.origin_session_id` no `context`** — o workflow de wrap-up lê
+`@ctx.session.origin_session_id` no briefing (transcrição) e no `segment_outcome_record`. E2E validado com
+atendimento real (`Detached hook fired … → wrapup_detached_ia` + gravação no segmento real).
+
+**Regressão 1 — NPS do cliente derrubado (corrigida).** O fim-de-atendimento dispara DUAS levas em paralelo:
+`on_human_end` (wrap-up, agora detached) e `on_contact_end` (NPS, **inline** side=customer). Como a leva
+`on_human_end` ficou 100% detached, o **auto-close da Camada D** (`_detached_fired and not _inline_dispatched`)
+disparava `_trigger_contact_close` e **derrubava a conferência/WS antes do NPS irmão armar o
+`posatt:customer_active`** → cliente sem NPS. Fix: **guarda de irmão inline** no auto-close — quando
+`hook_type=="on_human_end"`, se o pool tem um `on_contact_end` **inline+customer que VAI rodar** (aplica o
+mesmo skip do `nps_on_disconnect` vs `_close_origin_val`), o auto-close é **suprimido**; o NPS segura o WS e
+conduz o fecho no seu término (como antes do detach). Sem NPS (ausente/pulado por desconexão), o auto-close
+segue. Log: `auto-close SUPRIMIDO; o NPS conduz o fecho`.
+
+**Regressão 2 — Console mostrava banner de wrap-up inline p/ wrap-up detached (corrigida).** O `handleClose`
+setava `sessionClosed=true` otimista → banner "Wrap-up in progress" + sessão presa até o fecho final. Errado
+p/ detached (não há prompt inline; o wrap-up é item de fila pull). Fix: `POST /api/agent_done` resolve o **modo
+do wrap-up do AGENTE** (side=agent do `on_human_end` do pool via `GET /v1/pools/:id`; fail-open inline) e
+retorna `inline_wrapup`. O Console: **inline** → mantém o banner + sessão aberta (legado inalterado);
+**detached** → **limpa a tela de atendimento na hora** (remove o contato + desseleciona), sem banner — o
+cleanup final (`unregisterSession`) vem no `session.closed(agent_done)` que o bridge ainda emite ao fim do NPS.
+Só o wrap-up do agente rege o banner; o NPS (side=customer) renderiza no WebChat do cliente, não no Console.
+
+Sites: `orchestrator-bridge/main.py` (`_fire_detached_hook` +ctx origin; guarda `_sibling_customer_hold` no
+auto-close); `mcp-server-plughub/server.ts` (`/api/agent_done` → `inline_wrapup`); `platform-ui`
+(`AgentAssistPage.handleClose`; i18n `message.closedDetached`); `infra/registry/tenant_demo.yaml`
+(`retencao_humano.on_human_end` → `wrapup_detached_ia dispatch: detached`).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

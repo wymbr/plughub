@@ -2,6 +2,51 @@
 
 ---
 
+## Wrap-up-α — wiring do hook `on_human_end` `detached` (dispara sozinho no fim do atendimento) ✅ (2026-07-27)
+
+Fecha o loop do wrap-up-α: o wrap-up destacado deixa de depender do seed manual (smoke) e **dispara
+automaticamente** quando o humano finaliza o atendimento. O `retencao_humano.on_human_end` passou de wrap-up
+**inline** (`wrapup_ia`, conference specialist que segurava o contato via `wrap_up_pending`) para **detached**
+(`wrapup_detached_ia`, `dispatch: detached`) — **corrige G1** (AHT inflado por wrap-up: o contato fecha na hora,
+o wrap-up vira item de pull assíncrono no inbox do agente).
+
+- **`fire_pool_hooks` (bridge)** já computava tudo: lê `human_seg:{instance}` → `segment_id`, deriva
+  `surveyed_agent_key` do `human-{userId}`, **semeia o `seg_signal`** com os estáticos (`_seed_segment_signal` —
+  os mesmos campos que o smoke mimetizava) e escreve `session.surveyed_segment_id`/`surveyed_agent_key` no ctx.
+  O branch `dispatch: detached` chama `_fire_detached_hook` (workflow webhook fire-and-forget).
+- **Gap corrigido:** `_fire_detached_hook` passava `origin_session_id` só no top-level do body (journey inherit),
+  mas o workflow lê `@ctx.session.origin_session_id` (briefing + `segment_outcome_record`). Agora ele **também**
+  injeta `session.origin_session_id` no `context` (igual ao context provado no smoke). Sem isso, briefing e
+  gravação ficariam sem a origem.
+- **Config:** `infra/registry/tenant_demo.yaml` — `retencao_humano.on_human_end` → `{ pool: wrapup_detached_ia,
+  side: agent, dispatch: detached }`. `wrapup_ia` inline aposentado do hook (pool permanece definido; sem trigger).
+- **E2E validado (2026-07-27, atendimento real, sem seed):** operador atende contato real → finaliza → `Detached
+  hook fired: on_human_end → wrapup_detached_ia (contact NOT held)` → item aparece sozinho no inbox pull do
+  operador → preenche/submete → `[segment_outcome_record] recorded origin=0f44dfb3… seg=bc19f903… outcome=resolved`
+  → linha em `analytics.segments` (segmento REAL, `pool_id=retencao_humano` preservado, `outcome=resolved`).
+- **Deploy:** `build orchestrator-bridge` (código: `_fire_detached_hook`) + restart com `REGISTRY_SYNC_RECONCILE=true`
+  (propaga a edição do hook no pool seed).
+
+**Duas regressões que o wiring expôs — corrigidas e validadas (2026-07-27):**
+
+1. **NPS do cliente derrubado.** O fim-de-atendimento dispara `on_human_end` (wrap-up detached) e `on_contact_end`
+   (NPS inline side=customer) em paralelo. A leva `on_human_end` 100% detached fazia o auto-close da Camada D
+   derrubar a conferência/WS **antes** do NPS irmão armar `posatt:customer_active` → cliente sem NPS. Fix: **guarda
+   de irmão inline** no auto-close (`fire_pool_hooks`) — se o pool tem `on_contact_end` inline+customer que vai
+   rodar (aplica o skip do `nps_on_disconnect` vs `close_origin`), suprime o auto-close; o NPS conduz o fecho.
+   Validado: cliente recebeu e respondeu o NPS no WebChat; log `auto-close SUPRIMIDO; o NPS conduz o fecho`.
+2. **Console mostrava banner de wrap-up inline p/ wrap-up detached.** `handleClose` setava `sessionClosed=true`
+   otimista → banner + sessão presa. Fix: `POST /api/agent_done` (mcp-server) resolve o modo do wrap-up do AGENTE
+   (`side=agent` do `on_human_end` via `GET /v1/pools/:id`; fail-open inline) → `inline_wrapup`. Console: inline →
+   banner + sessão aberta (legado); **detached → limpa a tela na hora** (remove contato + desseleciona, toast
+   `message.closedDetached`), wrap-up vira item de fila pull. Só o wrap-up do agente rege o banner (NPS renderiza
+   no cliente). `docs/guias/conference-mechanics.md` Mudança 26.
+- **Deploy (regressões):** `build orchestrator-bridge mcp-server-plughub platform-ui`.
+
+→ `docs/adr/adr-wrapup-detached-pull.md`, `docs/guias/conference-mechanics.md` (Mudança 26). Falta na Camada E2:
+produtor do marker `acw_pending` (Camada C `hard` gate) + isenção da sessão de wrap-up na contagem de contato/TMA
+(E2f) + Camada F (validação do arco inteiro).
+
 ## Wrap-up-α — sub-fatia 2: tool `segment_outcome_record` (grava o outcome no segmento) ✅ (2026-07-24)
 
 Fecha o conteúdo do wrap-up-α: a disposição preenchida no Console passa a **gravar o outcome no SEGMENTO da
@@ -51,8 +96,8 @@ segmento da conferência. O submit deixa de só completar o workflow (stub da su
    Fix (alinhado a "degradação nunca silenciosa"): o `invoke` agora loga `resolveInputMap THREW` e
    `mcpCall THREW → on_failure=<step>` (sem dumpar o input — carrega JWT/PII). Foi esse log que expôs (1).
 
-→ `docs/adr/adr-wrapup-detached-pull.md` (§3α D3). Falta: wiring do hook `on_human_end` `detached` (o bridge
-preenche `surveyed_agent_key`/`origin`/`segment` a partir do hook) + `acw_pending` + isenção nas métricas.
+→ `docs/adr/adr-wrapup-detached-pull.md` (§3α D3). Wiring do hook `on_human_end` `detached` ✅ (2026-07-27, entrada
+acima). Falta: `acw_pending` (Camada C `hard`) + isenção da sessão de wrap-up nas métricas (E2f).
 ## Wrap-up-α — sub-fatia 1: form `dialog_wrapup_v1` + workflow de wrap-up (gravação stubada) ✅ (2026-07-24)
 
 Segunda fatia do wrap-up-α (E2a + o workflow), sobre a keystone (`assigned_to` no delegate). Torna o wrap-up
