@@ -260,11 +260,20 @@ class LifecycleEventHandler:
             return
 
         if event_type == "agent_ready":
-            await self._upsert_instance(tenant_id, instance_id, event)
+            resolved = await self._upsert_instance(
+                tenant_id, instance_id, event, event_type
+            )
+            # F1 — o meta espelha o que o registro EFETIVAMENTE guarda, não o que o
+            # evento propôs. Para humano os dois divergem (a identidade do evento é
+            # a da conexão que o emitiu), e um meta divergente reaparece como pool
+            # errado no `remove_conversation`/`crash_detector`.
+            _meta_pools, _meta_type = resolved if resolved else (
+                event.get("pools") or [], event.get("agent_type_id", ""),
+            )
             await self._instances.update_instance_meta(
                 tenant_id, instance_id,
-                pools         = event.get("pools") or [],
-                agent_type_id = event.get("agent_type_id", ""),
+                pools         = _meta_pools,
+                agent_type_id = _meta_type,
             )
             # Refresh pool snapshots immediately on agent_ready so Monitor
             # shows the pool from login time, not only after the first routing
@@ -291,7 +300,7 @@ class LifecycleEventHandler:
                     self._drain_queue_for_agent(tenant_id, instance_id, event)
                 )
         elif event_type in ("agent_busy", "agent_heartbeat"):
-            await self._upsert_instance(tenant_id, instance_id, event)
+            await self._upsert_instance(tenant_id, instance_id, event, event_type)
             if event_type == "agent_busy":
                 conversation_id = event.get("conversation_id", "")
                 if conversation_id:
@@ -331,43 +340,176 @@ class LifecycleEventHandler:
         else:
             logger.debug("Lifecycle event ignored: %s", event_type)
 
+    @staticmethod
+    def _is_human_instance(instance_id: str, existing: dict | None) -> bool:
+        """Humano = `source: "human_login"` no registro vivo. O prefixo `human-`
+        é o fallback para quando o registro ainda não existe (mesmo teste que o
+        `crash_detector` já usa)."""
+        if existing and existing.get("source") == "human_login":
+            return True
+        return instance_id.startswith("human-")
+
     async def _upsert_instance(
-        self, tenant_id: str, instance_id: str, event: dict
-    ) -> None:
+        self, tenant_id: str, instance_id: str, event: dict,
+        event_type: str = "agent_ready",
+    ) -> tuple[list[str], str] | None:
         """
         Creates or updates an instance in Redis with TTL 30s.
+        Devolve `(pools, agent_type_id)` efetivamente gravados — o chamador usa
+        isso para manter o `instance_meta` de acordo com o registro (em vez de
+        gravar de novo o que veio no evento, que para humano é o valor oscilante).
         Called on agent_ready and agent_busy — spec: "TTL renewed on each agent_ready or agent_busy".
+
+        F1 do ADR `adr-human-agent-pool-scoped-identity` — **liveness ≠ identidade**.
+
+        Um humano tem UMA instância (`human-{userId}`) e N conexões WebSocket (uma
+        por pool selecionado no Console). Cada conexão emite seu próprio pong a
+        cada 15 s, e este método reconstruía o registro INTEIRO a partir do evento
+        — então `pools[]` e `agent_type_id` da instância oscilavam entre os pools
+        conforme qual conexão pingou por último. Isso já roteou contato com o
+        `agent_type_id` errado (o bridge roda o skill que aquele id resolver) e
+        removia o humano de pools onde ele seguia logado.
+
+        Regra: o evento de liveness prova apenas que o recurso está vivo. Os fatos
+        de RECURSO (`agent_type_id`, `max_concurrent`, `execution_model`, `user_*`,
+        ocupação) são preservados do registro vivo, e a MEMBERSHIP (`pools[]`) só
+        muda em evento autoritativo — `agent_ready`, que é o único emitido por quem
+        conhece o conjunto completo (login manda `mergedPools`, logout parcial manda
+        `remainingPools`).
+
+        Instâncias de IA seguem inalteradas: são criadas e mantidas pelo
+        reconciliador por-pool, e o `pools[]` delas é genuinamente unitário.
         """
         try:
+            existing      = await self._instances.get_instance_raw(tenant_id, instance_id)
+            is_human      = self._is_human_instance(instance_id, existing)
+            authoritative = event_type == "agent_ready"
+
+            ev_pools = list(event.get("pools") or [])
+            ev_type  = event.get("agent_type_id", "") or ""
+            dropped_pools: list[str] = []
+
+            if is_human and existing:
+                # ── Fatos de recurso: o registro vivo manda, o evento não opina ──
+                agent_type_id   = existing.get("agent_type_id", "") or ev_type
+                max_concurrent  = existing.get(
+                    "max_concurrent", event.get("max_concurrent_sessions", 1)
+                )
+                execution_model = (
+                    existing.get("execution_model")
+                    or event.get("execution_model", "stateless")
+                )
+                user_id     = existing.get("user_id", "")    or event.get("user_id", "")
+                user_login  = existing.get("user_login", "") or event.get("user_login", "")
+                # Ocupação: a fonte de verdade é o SCARD do semáforo, espelhado no
+                # registro por mark_busy/remove_conversation. O `current_sessions`
+                # do pong conta só as sessões DAQUELA conexão — nunca vale a escrita.
+                current_sessions = int(existing.get("current_sessions", 0) or 0)
+
+                existing_pools = list(existing.get("pools") or [])
+                if authoritative and ev_pools:
+                    pools         = ev_pools
+                    dropped_pools = sorted(set(existing_pools) - set(pools))
+                    if dropped_pools:
+                        # Legítimo APENAS no logout parcial. Em qualquer outro
+                        # caminho é o sintoma de B2 voltando — por isso loga sempre.
+                        logger.warning(
+                            "human instance membership SHRANK: instance=%s dropped=%s "
+                            "before=%s after=%s (evento autoritativo=%s) — esperado só "
+                            "em logout parcial",
+                            instance_id, dropped_pools, existing_pools, pools, event_type,
+                        )
+                else:
+                    pools = existing_pools
+                    if ev_pools and set(ev_pools) != set(existing_pools):
+                        logger.info(
+                            "liveness event carrying membership IGNORED: instance=%s "
+                            "event=%s event_pools=%s kept=%s (produtor legado — "
+                            "membership só muda em agent_ready)",
+                            instance_id, event_type, ev_pools, existing_pools,
+                        )
+                if ev_type and agent_type_id and ev_type != agent_type_id:
+                    logger.warning(
+                        "human instance agent_type_id divergence IGNORED: instance=%s "
+                        "event=%s event_value=%s kept=%s — identidade por-pool não mora "
+                        "no registro do recurso (ADR adr-human-agent-pool-scoped-identity)",
+                        instance_id, event_type, ev_type, agent_type_id,
+                    )
+
+            elif is_human and not authoritative:
+                # ── Registro ausente + evento de liveness: NÃO recria ────────────
+                # Criação de instância humana é do LOGIN (`agent_ready`), não do
+                # pong. Recriar aqui seria pior que o problema: uma aba esquecida
+                # continua pingando depois do logout completo (que faz DEL da
+                # chave) e ressuscitaria um agente FANTASMA — presente para o
+                # roteamento, ausente para o humano; os contatos alocados a ele
+                # não aparecem em Console nenhum. Falhar visível (agente some até
+                # dar refresh) é melhor que falhar invisível (contato some).
+                # Mesma regra que vale para `_restore_instance` no bridge.
+                logger.warning(
+                    "human instance ABSENT on %s — NOT recreating: instance=%s "
+                    "heartbeat_pool=%s. Criação é do login WS (agent_ready); um pong "
+                    "de aba obsoleta pós-logout criaria agente fantasma. Se o agente "
+                    "está de fato conectado, investigar quem apagou %s.",
+                    event_type, instance_id,
+                    event.get("heartbeat_pool", "") or "?", instance_id,
+                )
+                return None
+
+            else:
+                # ── Evento constrói o registro ──────────────────────────────────
+                # Dois casos: (a) instância de IA — comportamento inalterado, é
+                # criada e mantida pelo reconciliador por-pool e seu `pools[]` é
+                # genuinamente unitário; (b) PRIMEIRO `agent_ready` de um humano
+                # (login), que é justamente o evento autoritativo — o mcp-server
+                # manda `mergedPools` lido do próprio registro.
+                pools            = ev_pools
+                agent_type_id    = ev_type
+                max_concurrent   = event.get("max_concurrent_sessions", 1)
+                execution_model  = event.get("execution_model", "stateless")
+                user_id          = event.get("user_id", "")
+                user_login       = event.get("user_login", "")
+                current_sessions = event.get("current_sessions", 0)
+
             status = event.get("status", "ready")
             # Map mcp-server status to internal state
             internal_state = _map_status_to_state(status)
 
             instance = AgentInstance(
                 instance_id      = instance_id,
-                agent_type_id    = event.get("agent_type_id", ""),
+                agent_type_id    = agent_type_id,
                 tenant_id        = tenant_id,
-                pool_id          = (event.get("pools") or [""])[0],
-                pools            = event.get("pools") or [],
-                execution_model  = event.get("execution_model", "stateless"),
-                max_concurrent   = event.get("max_concurrent_sessions", 1),
-                current_sessions = event.get("current_sessions", 0),
+                pool_id          = (pools or [""])[0],
+                pools            = pools,
+                execution_model  = execution_model,
+                max_concurrent   = max_concurrent,
+                current_sessions = current_sessions,
                 state            = internal_state,
                 last_seen        = event.get("timestamp"),
                 registered_at    = event.get("timestamp", ""),
-                user_id          = event.get("user_id", ""),
-                user_login       = event.get("user_login", ""),
+                user_id          = user_id,
+                user_login       = user_login,
             )
             await self._instances.set_instance(instance)
+            # `set_instance` só percorre os pools que a instância AINDA declara —
+            # o pool do qual ela saiu ficaria no SET de roteamento e ela seguiria
+            # alocável nele. Quem limpava era o `unregisterHumanAgent` por escrita
+            # direta no Redis; aqui a limpeza passa a acompanhar o próprio evento.
+            if dropped_pools:
+                await self._instances.remove_from_pool_sets(
+                    tenant_id, instance_id, dropped_pools
+                )
             logger.debug(
-                "Instance updated: tenant=%s instance=%s state=%s sessions=%d",
-                tenant_id, instance_id, internal_state, instance.current_sessions,
+                "Instance updated: tenant=%s instance=%s state=%s sessions=%d pools=%s",
+                tenant_id, instance_id, internal_state, instance.current_sessions, pools,
             )
+            return list(pools), agent_type_id
         except Exception as exc:
             logger.error(
                 "Error updating instance: tenant=%s instance=%s — %s",
                 tenant_id, instance_id, exc,
             )
+            return None
 
     async def _drain_queue_for_agent(
         self, tenant_id: str, instance_id: str, event: dict

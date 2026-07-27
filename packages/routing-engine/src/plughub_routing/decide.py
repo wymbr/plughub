@@ -29,6 +29,7 @@ from .models import (
     AllocatedAgent,
     RoutingDecision,
     RoutingMode,
+    resolve_agent_type,
 )
 from .scorer import (
     compute_priority_score,
@@ -211,7 +212,8 @@ class Decider:
         first_score, first_pool, first_instance = scored_pools[0]
         primary = AllocatedAgent(
             instance_id   = first_instance.instance_id,
-            agent_type_id = first_instance.agent_type_id,
+            # F2 — derivado do pool em escopo (ver models.resolve_agent_type)
+            agent_type_id = resolve_agent_type(first_instance, first_pool.pool_id),
             pool_id       = first_pool.pool_id,
             score         = first_score if first_score != float("inf") else 9999.0,
         )
@@ -221,7 +223,7 @@ class Decider:
             fb_score, fb_pool, fb_instance = scored_pools[1]
             fallback = AllocatedAgent(
                 instance_id   = fb_instance.instance_id,
-                agent_type_id = fb_instance.agent_type_id,
+                agent_type_id = resolve_agent_type(fb_instance, fb_pool.pool_id),  # F2
                 pool_id       = fb_pool.pool_id,
                 score         = fb_score if fb_score != float("inf") else 9999.0,
             )

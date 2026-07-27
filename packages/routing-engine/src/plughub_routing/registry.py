@@ -422,6 +422,26 @@ class InstanceRegistry:
         except Exception:
             return None
 
+    async def get_instance_raw(
+        self, tenant_id: str, instance_id: str
+    ) -> dict | None:
+        """Registro CRU da instância (dict do JSON), sem validar contra o modelo.
+
+        Existe porque `AgentInstance` não carrega `source` — e `source ==
+        "human_login"` é justamente o discriminador de que os leitores de
+        identidade precisam (ver ADR `adr-human-agent-pool-scoped-identity`).
+        Mantém a construção da chave dentro do registry (nenhum chamador monta
+        `{tenant}:instance:{iid}` por conta própria).
+        """
+        raw = await self._redis.get(_instance_key(tenant_id, instance_id))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     async def set_instance(
         self, instance: AgentInstance
     ) -> None:
@@ -489,6 +509,25 @@ class InstanceRegistry:
                     instance.instance_id,
                 )
 
+    async def remove_from_pool_sets(
+        self, tenant_id: str, instance_id: str, pools: list[str]
+    ) -> None:
+        """Remove a instância dos SETs de roteamento dos pools indicados.
+
+        `set_instance` só percorre os pools que a instância AINDA declara — então
+        um pool do qual ela saiu nunca era limpo por ele. No logout parcial de
+        humano quem limpava era o `unregisterHumanAgent` (mcp-server) por escrita
+        direta; se o evento chegasse sem essa escrita, a instância continuava
+        alocável num pool do qual já tinha saído. Idempotente (SREM).
+        """
+        for pool_id in pools:
+            if not pool_id:
+                continue
+            await self._redis.srem(_pool_instances_key(tenant_id, pool_id), instance_id)
+            await self._redis.srem(
+                _pool_busy_instances_key(tenant_id, pool_id), instance_id
+            )
+
     # ── Instance meta (no TTL) ────────────────────────────────────────────────
 
     async def update_instance_meta(
@@ -554,11 +593,21 @@ class InstanceRegistry:
         # we decrement all pools (floor 0) which may transiently undercount a
         # sibling pool — acceptable given 120s snapshot TTL and self-correction
         # on the next routing event.
-        # When meta is absent (human agents that skip agent_ready in demo mode)
-        # fall back to the pools list supplied by the caller.
+        # ── F3 — qual pool decrementar é fato POR-SESSÃO, não por-recurso ────────
+        # (ADR adr-human-agent-pool-scoped-identity)
+        #
+        # A precedência era `meta.pools` (per-RECURSO, e portanto o conjunto
+        # INTEIRO de pools do agente) na frente do `pools` do evento. Para um
+        # humano multi-pool isso decrementa o `active_count` de pools que não
+        # serviram este contato: o pool que serviu fica com carga fantasma (fila
+        # não drena) e os outros vão a zero. O evento `agent_done` é emitido por
+        # quem sabe QUAL pool serviu esta sessão — é a fonte no escopo certo.
+        #
+        # `meta.pools` continua como fallback para o caso que o motivou (agentes
+        # que nunca publicaram agent_ready e cujo agent_done não traz `pools`).
         try:
             meta = await self.get_instance_meta(tenant_id, instance_id)
-            pools_to_decr = meta.pools if meta else (fallback_pools or [])
+            pools_to_decr = (fallback_pools or []) or (meta.pools if meta else [])
 
             # Phase 2 (runs FIRST, before the pools gate): Decrement current_sessions
             # in the instance key and restore state=ready when the agent drops below

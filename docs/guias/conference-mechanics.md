@@ -1452,6 +1452,40 @@ do claimante), `platform-ui` (`key={sessionId}` no `DialogFormRenderer`/`Approva
 grudava ao trocar de tarefa). Testes: `test_instance_semaphore.py` (+8 casos), `smoke_wrapup_slot_handoff.sh`.
 E2E validado 2026-07-27 (4 contatos, 1 na fila, wrap-ups respondidos, fila drenada sem perda).
 
+### Mudança 28 — identidade por-pool do agente humano: liveness ≠ identidade (F1, 2026-07-27)
+
+Fecha a **causa** que a Mudança 27 deixou aberta ("o SINTOMA foi corrigido […]; a CAUSA — fato por-pool
+morando em campo global — continua"). ADR: [`adr-human-agent-pool-scoped-identity`](../adr/adr-human-agent-pool-scoped-identity.md).
+
+**O motor.** Um humano tem UMA instância (`human-{userId}`) e **N conexões WS** — o Console abre uma por
+pool selecionado. Cada conexão mandava, a cada 15 s, um `agent_heartbeat` com `agent_type_id:
+human_agent_${poolId}` e `pools: [poolId]` (a identidade **daquela conexão**), e o `_upsert_instance`
+reconstruía o registro **inteiro** a partir do evento. `pools[]` e `agent_type_id` oscilavam conforme
+quem pingou por último — e é esse `agent_type_id` que vira `conversations.routed.agent_type_id`, com o
+qual o bridge escolhe **o que executar**.
+
+**Regra.** *Evento de liveness prova apenas que o recurso está vivo: nunca carrega identidade nem
+membership, e nunca cria instância.*
+
+- `agent_heartbeat` perdeu `agent_type_id`/`pools`/`current_sessions` e ganhou **`heartbeat_pool`**
+  (diz de qual conexão veio o sinal **sem se passar por membership**).
+- `_upsert_instance` preserva os fatos de RECURSO do registro vivo; `pools[]` só muda em `agent_ready`
+  (login manda `mergedPools`, logout parcial manda `remainingPools`). Defesa no **consumidor**: produtor
+  legado é ignorado com log.
+- **Registro ausente + pong ⇒ não recria.** Uma aba esquecida pingando após o logout completo (que faz
+  `DEL` da chave) criaria **agente fantasma**: presente para o roteamento, ausente para o humano, com
+  contatos alocados que não aparecem em Console nenhum.
+- **Buraco correlato fechado:** `set_instance` só percorre os pools que a instância ainda declara, então
+  o pool abandonado num logout parcial só era limpo do SET de roteamento pela escrita **direta** do
+  `unregisterHumanAgent` (mcp-server) — o consumidor dependia de efeito colateral de outro serviço.
+  Novo `remove_from_pool_sets()`.
+- Instrumentação permanente: `membership SHRANK` e `agent_type_id divergence IGNORED`.
+
+Sites: `mcp-server-plughub/src/server.ts` (pong + logout parcial), `routing-engine/kafka_listener.py`
+(`_upsert_instance`, `_is_human_instance`, meta espelhando o registro), `registry.py`
+(`get_instance_raw`, `remove_from_pool_sets`). Testes: `test_human_instance_identity.py` (11) +
+`infra/test/smoke_human_instance_identity.sh` — ambos verdes 2026-07-27. **F2–F5 pendentes** (ADR §3/Q5).
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

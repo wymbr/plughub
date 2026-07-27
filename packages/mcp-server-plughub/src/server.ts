@@ -613,12 +613,17 @@ async function unregisterHumanAgent(
         await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(inst))
       }
     } catch { /* non-fatal */ }
-    // Partial logout — update routing engine with remaining pools
+    // Partial logout — update routing engine with remaining pools.
+    // F1 (ADR adr-human-agent-pool-scoped-identity): `agent_type_id` aqui nomeava
+    // o pool que está sendo DEIXADO — carimbava a identidade de um pool morto numa
+    // instância ainda ativa nos outros. Passa a nomear um pool REMANESCENTE.
+    // (A routing preserva o valor do registro vivo; isto conserta o que sobra nos
+    // consumidores que leem o payload, como os intervalos de presença do analytics.)
     await kafka.publish("agent.lifecycle", {
       event:            "agent_ready",
       tenant_id:        tenantId,
       instance_id:      instanceId,
-      agent_type_id:    `human_agent_${poolId}`,
+      agent_type_id:    `human_agent_${remainingPools[0]}`,
       status:           "ready",
       execution_model:  "stateful",
       current_sessions: currentSessions,
@@ -2769,20 +2774,32 @@ export async function startServer(config: ServerConfig): Promise<void> {
           try {
             if ((await redis.get(`${tenantId}:agent_paused:${instanceId}`)) !== null) hbStatus = "paused"
           } catch { /* non-fatal */ }
+          // F1 do ADR `adr-human-agent-pool-scoped-identity` — liveness NUNCA
+          // carrega identidade nem membership.
+          //
+          // Este pong vem de UMA das N conexões WS do humano (o Console abre uma
+          // por pool selecionado). `agent_type_id: human_agent_${poolId}` e
+          // `pools: [poolId]` descreviam APENAS esta conexão; como o
+          // `_upsert_instance` da routing reconstruía o registro a partir do
+          // evento, a identidade da instância oscilava a cada 15 s entre os pools
+          // logados — e já roteou contato com o agent_type_id errado.
+          //
+          // `heartbeat_pool` diz de qual conexão veio o sinal SEM se passar por
+          // membership: a routing só o usa na reconstrução degradada (registro
+          // ausente), e loga quando o faz. `current_sessions` também sai — conta
+          // só as sessões desta conexão, e a verdade é o SCARD do semáforo.
           kafka.publish("agent.lifecycle", {
             event:                   "agent_heartbeat",
             tenant_id:               tenantId,
             instance_id:             instanceId,
-            agent_type_id:           `human_agent_${poolId}`,
-            // C1 — must ride every event that _upsert_instance rebuilds the
-            // instance from (agent_ready AND agent_heartbeat), else the periodic
-            // heartbeat wipes user_id/user_login set by agent_ready.
+            heartbeat_pool:          poolId,
+            // C1 — user_id/user_login são fatos do RECURSO e podem viajar; a
+            // routing os preserva do registro vivo, isto é só belt-and-braces
+            // para a reconstrução degradada.
             user_id:                 userId,
             user_login:              userLogin,
             status:                  hbStatus,
             execution_model:         "stateful",
-            current_sessions:        subscribedSessions.size,
-            pools:                   [poolId],
             max_concurrent_sessions: maxConcurrentSessions,
             timestamp:               new Date().toISOString(),
           }).catch(() => {/* non-fatal */})

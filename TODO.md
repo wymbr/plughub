@@ -36,9 +36,55 @@ manifestações já vistas: (a) o roteamento com skill errado (corrigido pela vi
 causa estrutural continua); (b) risco de uma restauração a partir do snapshot **encolher os pools** do humano
 (sumir de `retencao_humano` porque o último claim foi em `formfill_demo`).
 
-**Alvo.** Ou a identidade humana passa a ser por-pool (`human-{userId}@{pool}` como participante, mantendo UMA
-vaga por recurso), ou os campos por-pool saem do JSON global da instância para um mapa (`pools[]` como conjunto
-estável + `agent_type_id` derivado do pool do segmento). Não decidido — requer desenho.
+**Decidido (2026-07-27) — ADR [`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md).**
+Nem instância por-pool nem mapa: os campos por-pool **deixam de ser armazenados** e passam a ser **derivados**
+no escopo onde o pool é conhecido (para humano, `agent_type_id = human_agent_{pool}` é função pura do pool, e
+todo leitor de decisão já itera `for pool in pools: for inst in get_ready_instances(pool)`). A instância segue
+**uma por recurso** — instância por (user, pool) foi descartada porque fragmentaria o semáforo de vagas
+(`max_concurrent=3` em 3 pools ⇒ 9 sessões), quebraria `human-{userId}` como chave de fio **e de dado histórico**
+(`concat('human-', user_id)` em SQL do ClickHouse) e inflaria a quota `C_human`.
+
+**Fases:**
+
+| Fase | Entrega | Estado |
+|---|---|---|
+| F1 | liveness ≠ identidade: heartbeat para de carregar `pools`/`agent_type_id`; `_upsert_instance` preserva os fatos de recurso; membership só muda em `agent_ready`; liveness nunca cria instância | ✅ 2026-07-27 (CHANGELOG) |
+| F2 | `resolve_agent_type(inst, pool_id)` nos 7 leitores de decisão — o campo armazenado deixa de ser load-bearing | ✅ 2026-07-27 (CHANGELOG) |
+| F2b | bridge ativa humano pela **identidade da instância**, hoisted antes do `get_agent_type` (não mais por **falha** do lookup) | ✅ 2026-07-27 |
+| F3 | precedência invertida em `remove_conversation` (`pools` do evento vence `meta.pools`) + claimante lê o pool do snapshot de roteamento | ✅ 2026-07-27 |
+| F4 | `session:{sid}:routing:{iid}` encolhido para `{tenant, instance, pool}`; `_restore_instance` virou patch e não recria instância ausente. Sem migração (tolerância no leitor + TTL 4 h) | ✅ 2026-07-27 |
+| F5 | remove `pool_id` singular; corrige o docstring falso de `update_instance_meta`; `session.ts:184` (@mention lê o pool da **sessão**, e conserta o WRONGTYPE que hoje derruba mentions em silêncio) | pendente |
+
+**Nota de escopo da F5:** são duas naturezas. O `@mention` é **bug de funcionalidade** (menções caem em
+silêncio hoje) e pede validação própria; o resto é higiene. O conserto do `@mention` exige as duas metades
+juntas — o tipo (`HGET` contra chave que é JSON *string* → WRONGTYPE engolido por `catch {}`) **e** o escopo
+(ler o pool da SESSÃO, não o `pool_id` global da instância). Corrigir só o tipo troca um no-op silencioso por
+um convite ao pool errado, que é pior.
+
+---
+
+## `agent_done` de crash-recovery é descartado pelo analytics *(achado 2026-07-27 na F4, não corrigido)*
+
+Dois caminhos de recuperação no bridge publicam `agent_done` em `agent.lifecycle` com **`conversation_id`**:
+`process_contact_event` (contact_closed com `ai_completing` expirado) e `_cleanup_stale_completing_at_startup`.
+Mas `parse_agent_lifecycle` (analytics-api `models.py`) exige **`session_id`** para o `agent_done` e devolve
+`None` sem ele — então **essas linhas nunca chegam em `agent_events`**. O consumidor do routing-engine funciona
+(usa só `conversation_id`/`pools`), então a capacidade é liberada corretamente; o que falta é só o registro
+analítico.
+
+Descoberto ao remover o `agent_type_id` desses eventos na F4: fui checar quem consumia o campo e a resposta foi
+"ninguém, porque o evento inteiro é descartado".
+
+**Por que não foi corrigido junto:** não é do arco de identidade, e a correção não é óbvia. Renomear para
+`session_id` faria aparecerem linhas novas em `agent_events` para contatos recuperados de crash — com
+`outcome`/`handle_time_ms` ausentes e um `timestamp` que é o da recuperação, não o do fim real do atendimento.
+Isso mexe em TMA e taxa de resolução. Antes de corrigir é preciso decidir **o que essas linhas devem
+significar** (evento de recuperação distinto? `outcome` sintético? excluir do TMA?) — decisão de produto sobre
+métrica, não conserto de campo.
+
+**Nota transversal:** o descarte é silencioso (`return None` sem log), o que é o padrão que a § *Postura de
+Engenharia* do CLAUDE.md nomeia. Independente da decisão acima, o parser deveria **logar** o motivo do skip —
+foi só por acaso que isso apareceu.
 
 ---
 

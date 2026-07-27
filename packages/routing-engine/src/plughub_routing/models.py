@@ -135,6 +135,55 @@ class AgentInstance(BaseModel):
     # Competency profile declared in agent_login
     profile:          dict[str, int] = Field(default_factory=dict)
 
+    @property
+    def is_human(self) -> bool:
+        return is_human_instance_id(self.instance_id)
+
+
+# ─────────────────────────────────────────────
+# Identidade de instância por-pool
+# ADR: docs/adr/adr-human-agent-pool-scoped-identity.md
+# ─────────────────────────────────────────────
+
+HUMAN_INSTANCE_PREFIX = "human-"
+HUMAN_LOGIN_SOURCE    = "human_login"
+
+
+def is_human_instance_id(instance_id: str, source: str = "") -> bool:
+    """Instância humana?
+
+    O discriminador forte é `source == "human_login"` (escrito pelo mcp-server),
+    mas ele **não sobrevive** ao round-trip `model_validate → model_dump` do
+    `mark_busy` — o Pydantic descarta campos não declarados, e `AgentInstance`
+    não declara `source`. Por isso o prefixo do `instance_id` é o teste primário
+    aqui (mesma escolha que o `crash_detector` já fazia); `source` entra como
+    reforço quando o chamador tem o dict cru em mãos.
+    """
+    return bool(source == HUMAN_LOGIN_SOURCE
+                or instance_id.startswith(HUMAN_INSTANCE_PREFIX))
+
+
+def resolve_agent_type(instance: "AgentInstance", pool_id: str) -> str:
+    """Tipo de agente da instância **no escopo de um pool**.
+
+    Para humano, `agent_type_id` é função pura do pool (`human_agent_{pool}`) —
+    um mesmo humano atende N pools com a MESMA instância, então não existe um
+    "tipo" único que o registro do recurso possa guardar. O campo armazenado é,
+    para humano, um resíduo arbitrário (o pool do primeiro login) e **não deve
+    ser propagado**: é ele que vira `conversations.routed.agent_type_id`, com o
+    qual o bridge decide o que executar.
+
+    Para IA o campo é identidade legítima (uma instância pertence a um agent
+    type e a um pool) e é devolvido como está.
+
+    Todo chamador tem o pool em escopo — o roteamento itera
+    `for pool in pools: for inst in get_ready_instances(pool)`. É isso que torna
+    a derivação possível sem mudar assinatura de nada.
+    """
+    if pool_id and instance.is_human:
+        return f"human_agent_{pool_id}"
+    return instance.agent_type_id
+
 
 # ─────────────────────────────────────────────
 # Pool Config — read from Redis cache (populated by kafka_listener)

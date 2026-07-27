@@ -18,6 +18,7 @@ from .models import (
     AgentInstance,
     PoolConfig,
     RoutingResult,
+    resolve_agent_type,
 )
 from .scorer import (
     score_resource,
@@ -287,14 +288,18 @@ class Router:
                 # Conference: only allocate instances of the requested agent type.
                 # Prevents assigning a generic pool instance when the supervisor
                 # explicitly invited a specific AI agent type.
-                if event.agent_type_id and inst.agent_type_id != event.agent_type_id:
+                # F2: identidade por-pool é DERIVADA (o pool está em escopo aqui);
+                # o campo armazenado é resíduo arbitrário para humano multi-pool.
+                if event.agent_type_id and resolve_agent_type(
+                    inst, pool.pool_id
+                ) != event.agent_type_id:
                     continue
 
                 # Arc 7d — fetch historical performance score when weight > 0.
                 # Falls back to 0.5 (neutral) when no data is available.
                 if perf_weight > 0.0:
                     perf_score = await self._instances.get_agent_performance_score(
-                        event.tenant_id, inst.agent_type_id
+                        event.tenant_id, resolve_agent_type(inst, pool.pool_id)
                     )
                 else:
                     perf_score = 0.5  # unused — weight is 0.0
@@ -397,7 +402,9 @@ class Router:
             tenant_id=event.tenant_id,
             allocated=True,
             instance_id=best_instance.instance_id,
-            agent_type_id=best_instance.agent_type_id,
+            # F2 — o que o bridge usa para escolher O QUE EXECUTAR. Derivado do
+            # pool alocado, nunca lido do registro global do recurso.
+            agent_type_id=resolve_agent_type(best_instance, best_pool.pool_id),
             pool_id=best_pool.pool_id,
             resource_score=best_score,
             priority_score=prio_score if prio_score != float("inf") else 9999.0,
@@ -506,7 +513,8 @@ class Router:
                 return RoutingResult(
                     session_id=event.session_id, tenant_id=event.tenant_id,
                     allocated=True, instance_id=inst.instance_id,
-                    agent_type_id=inst.agent_type_id, pool_id=pool.pool_id,
+                    agent_type_id=resolve_agent_type(inst, pool.pool_id),  # F2
+                    pool_id=pool.pool_id,
                     resource_score=rscore, routing_mode="autonomous",
                     allocated_site=self._local_site, routed_at=now,
                     sla_target_ms=pool.sla_target_ms,
@@ -679,7 +687,8 @@ class Router:
         # (re-)attach the approval package on claim/re-claim (P2).
         result = RoutingResult(
             session_id=session_id, tenant_id=tenant_id, allocated=True,
-            instance_id=instance_id, agent_type_id=inst.agent_type_id,
+            instance_id=instance_id,
+            agent_type_id=resolve_agent_type(inst, pool_id),  # F2
             pool_id=pool_id, routing_mode="supervised",
             allocated_site=self._local_site, routed_at=now,
             conference_id=conference_id or None,

@@ -671,6 +671,90 @@ async def activate_native_agent(
 
 # ── human activation: notify Agent Assist UI via Redis pub/sub ────────────────
 
+async def _write_routing_ref(
+    redis_client: aioredis.Redis,
+    session_id:   str,
+    tenant_id:    str,
+    instance_id:  str,
+    pool_id:      str,
+) -> None:
+    """Registro de roteamento por-(sessão, instância): QUAL pool esta instância
+    serve NESTA sessão.
+
+    F4 (ADR adr-human-agent-pool-scoped-identity). A chave
+    `session:{sid}:routing:{iid}` guardava também um `snapshot` com a **cópia
+    congelada** do registro da instância, e o `_restore_instance` a escrevia de
+    volta INTEIRA por cima do registro vivo — congelando `pools`/`agent_type_id`/
+    `max_concurrent` do instante do roteamento. Para um humano multi-pool isso
+    significava sumir dos pools em que ele entrou depois.
+
+    O único fato que esta chave tem e mais ninguém tem é o **pool desta sessão
+    para esta instância** — e é justamente ele que a F3 passou a ler para saber
+    qual `active_count` decrementar. A chave encolhe para isso.
+
+    Compatibilidade: chaves no formato antigo (com `snapshot`) continuam válidas —
+    nenhum leitor lê mais esse sub-documento, então ele é simplesmente ignorado, e
+    o TTL de 4 h drena o resto. Sem migração.
+    """
+    try:
+        # `set(ex=)` e não `setex` — este último está deprecado no redis-py. O
+        # resto do arquivo ainda usa `setex` (dezenas de sites); migrar tudo é
+        # outro assunto, mas código novo não nasce deprecado.
+        await redis_client.set(
+            f"session:{session_id}:routing:{instance_id}",
+            json.dumps({
+                "tenant_id":   tenant_id,
+                "instance_id": instance_id,
+                "pool_id":     pool_id,
+            }),
+            ex=14400,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not write routing ref: session=%s instance=%s — %s",
+            session_id, instance_id, exc,
+        )
+
+
+async def _is_human_instance(
+    redis_client: aioredis.Redis,
+    tenant_id:    str,
+    instance_id:  str,
+) -> bool:
+    """A instância alocada é um agente humano?
+
+    F2b (ADR adr-human-agent-pool-scoped-identity): substitui o teste indireto
+    "o registry NÃO conhece este agent_type_id" por uma pergunta sobre a própria
+    instância. Ordem dos sinais:
+
+    1. `source == "human_login"` — o discriminador forte, escrito pelo
+       `registerHumanAgent`. Cuidado: ele NÃO sobrevive ao round-trip
+       `model_validate → model_dump` do `mark_busy` no routing-engine (o
+       Pydantic descarta campos não declarados), então some depois do primeiro
+       contato — por isso não pode ser o único teste.
+    2. prefixo `human-` no `instance_id` — a convenção de id de humano, e o
+       mesmo teste que o `crash_detector` já usa.
+    3. `execution_model == "stateful"` NÃO entra aqui: cobre também agentes MCP
+       externos stateful, que não são humanos. Esses seguem pelo fallback 2.
+
+    Falha de leitura → False (o fluxo cai no caminho antigo, que ainda funciona).
+    """
+    if not instance_id:
+        return False
+    if instance_id.startswith("human-"):
+        return True
+    try:
+        raw = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
+        if raw:
+            return (json.loads(raw) or {}).get("source") == "human_login"
+    except Exception as exc:
+        logger.warning(
+            "_is_human_instance: leitura falhou p/ instance=%s — assumindo não-humano "
+            "(cai no fallback do registry): %s", instance_id, exc,
+        )
+    return False
+
+
 async def activate_human_agent(
     redis_client: aioredis.Redis,
     session_id: str,
@@ -711,29 +795,13 @@ async def activate_human_agent(
             "session=%s — %s", session_id, exc
         )
 
-    # ── Save instance snapshot for restore on contact_closed ─────────────────
-    # The routing engine marks the instance busy (TTL=30s). Without heartbeats
-    # the key expires before the session ends. We snapshot now and restore later.
-    # Snapshot is keyed by instance_id so conference does not overwrite each other.
+    # ── Registro de roteamento por-(sessão, instância) ────────────────────────
+    # F4: guarda QUAL pool esta instância serve NESTA sessão — não uma cópia do
+    # registro dela. Ver _write_routing_ref.
     if instance_id and tenant_id:
-        try:
-            raw = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
-            if raw:
-                await redis_client.setex(
-                    f"session:{session_id}:routing:{instance_id}",
-                    14400,
-                    json.dumps({
-                        "tenant_id":   tenant_id,
-                        "instance_id": instance_id,
-                        "pool_id":     pool_id,
-                        "snapshot":    json.loads(raw),
-                    }),
-                )
-                logger.debug(
-                    "Instance snapshot saved: session=%s instance=%s", session_id, instance_id
-                )
-        except Exception as exc:
-            logger.warning("Could not save instance snapshot: session=%s — %s", session_id, exc)
+        await _write_routing_ref(
+            redis_client, session_id, tenant_id, instance_id, pool_id,
+        )
 
     # ── Store instance_id and pool_id in session meta ─────────────────────────
     # The Agent Assist UI does not pass instance_id in the agent_done request,
@@ -2826,19 +2894,11 @@ async def activate_external_mcp_agent(
             await redis_client.sadd(f"session:{session_id}:ai_agents", instance_id)
             await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
 
-            # Persist routing snapshot for recovery on bridge restart.
-            raw_inst = await redis_client.get(f"{tenant_id}:instance:{instance_id}")
-            if raw_inst:
-                await redis_client.setex(
-                    f"session:{session_id}:routing:{instance_id}",
-                    14400,
-                    json.dumps({
-                        "tenant_id":   tenant_id,
-                        "instance_id": instance_id,
-                        "pool_id":     pool_id,
-                        "snapshot":    json.loads(raw_inst),
-                    }),
-                )
+            # F4 — registro de roteamento por-(sessão, instância) p/ recuperação
+            # no restart do bridge.
+            await _write_routing_ref(
+                redis_client, session_id, tenant_id, instance_id, pool_id,
+            )
 
             # Guardar o JSON do context_package para permitir LREM na limpeza.
             # Se a sessão encerrar antes do agente consumir (ex: reinício do agente),
@@ -2992,6 +3052,42 @@ async def process_routed(
     except Exception:
         pass
 
+    # ── F2b — humano é decidido pela IDENTIDADE da instância ──────────────────
+    # (ADR adr-human-agent-pool-scoped-identity)
+    #
+    # Antes, a ativação de humano só acontecia no "fallback 2", DEPOIS de
+    # `get_agent_type("human_agent_{pool}")` NÃO resolver. Ativar por FALHA de
+    # lookup é frágil: bastaria um AgentType registrado com esse nome — ou um
+    # skill deployado cujo id colidisse — para o Console inteiro parar de receber
+    # contato, e o sintoma seria "o bridge executou um skill no lugar do humano".
+    # A pergunta certa não é "o registry conhece este id?" e sim "esta instância
+    # é um humano?" — e isso a própria instância responde.
+    #
+    # O fallback 2 continua abaixo: cobre agentes STATEFUL não-humanos (MCP
+    # externo) que também não estão no registry.
+    _routed_instance_id = result.get("instance_id", "")
+    if _routed_instance_id and await _is_human_instance(
+        redis_client, tenant_id, _routed_instance_id
+    ):
+        logger.info(
+            "Routing: instância humana %s → Console (pool=%s). agent_type_id=%s é "
+            "derivado do pool, não consultado no registry.",
+            _routed_instance_id, pool_id, agent_type_id,
+        )
+        await activate_human_agent(
+            redis_client=redis_client,
+            session_id=session_id, pool_id=pool_id,
+            tenant_id=tenant_id,
+            routing_result=result,
+        )
+        asyncio.create_task(fire_pool_hooks(
+            http=http, redis_client=redis_client,
+            session_id=session_id, pool_id=pool_id,
+            tenant_id=tenant_id, customer_id=customer_id,
+            hook_type="on_human_start",
+        ))
+        return
+
     # ── Resolve agent type from Agent Registry ────────────────────────────────
     # get_agent_type also synthesizes a native agent_type from a deployed skill
     # when agent_type_id is actually a skill_id (Fase 3a deploy-driven).
@@ -3021,15 +3117,9 @@ async def process_routed(
                     pass
             if yaml_instance_id and yaml_snapshot and tenant_id:
                 try:
-                    await redis_client.setex(
-                        f"session:{session_id}:routing:{yaml_instance_id}",
-                        14400,
-                        json.dumps({
-                            "tenant_id":   tenant_id,
-                            "instance_id": yaml_instance_id,
-                            "pool_id":     pool_id,
-                            "snapshot":    yaml_snapshot,
-                        }),
+                    await _write_routing_ref(   # F4
+                        redis_client, session_id, tenant_id,
+                        yaml_instance_id, pool_id,
                     )
                     await redis_client.sadd(f"session:{session_id}:ai_agents", yaml_instance_id)
                     await redis_client.expire(f"session:{session_id}:ai_agents", _stl())
@@ -3266,15 +3356,9 @@ async def process_routed(
         # Key: session:{session_id}:routing:{instance_id} (same pattern as human agents)
         if native_instance_id and native_snapshot and tenant_id:
             try:
-                await redis_client.setex(
-                    f"session:{session_id}:routing:{native_instance_id}",
-                    14400,
-                    json.dumps({
-                        "tenant_id":   tenant_id,
-                        "instance_id": native_instance_id,
-                        "pool_id":     pool_id,
-                        "snapshot":    native_snapshot,
-                    }),
+                await _write_routing_ref(   # F4
+                    redis_client, session_id, tenant_id,
+                    native_instance_id, pool_id,
                 )
                 # Track instance_id in a SET so process_contact_event can restore
                 # ALL AI instances on contact_closed (mirrors session:{id}:human_agents).
@@ -5839,7 +5923,11 @@ async def process_contact_event(
                                 _c_ten  = _csnap.get("tenant_id", "")
                                 _c_pool = _csnap.get("pool_id", "")
                                 _c_inst = _csnap.get("instance_id", inst_str)
-                                _c_at   = (_csnap.get("snapshot") or {}).get("agent_type_id", "")
+                                # F4: `agent_type_id` saía do snapshot congelado e era
+                                # payload MORTO — o consumidor do routing usa só
+                                # conversation_id/pools, e o parser do analytics exige
+                                # `session_id` (este evento manda `conversation_id`),
+                                # então descarta a linha. Removido junto com o snapshot.
                                 if _c_ten and _c_inst:
                                     asyncio.create_task(_kafka_producer.send(
                                         TOPIC_LIFECYCLE,
@@ -5847,7 +5935,6 @@ async def process_contact_event(
                                             "event":           "agent_done",
                                             "tenant_id":       _c_ten,
                                             "instance_id":     _c_inst,
-                                            "agent_type_id":   _c_at,
                                             "conversation_id": session_id,
                                             "pools":           [_c_pool] if _c_pool else [],
                                             "timestamp":       datetime.now(timezone.utc).isoformat(),
@@ -7219,15 +7306,35 @@ async def _handle_webhook_session_resumed(
     # esta correção elimina. O remove_conversation do routing recalcula current_sessions
     # a partir do SCARD e devolve o state=ready quando há capacidade.
     if _kafka_producer and _claimant_instance_id:
+        # F3 (ADR adr-human-agent-pool-scoped-identity): `pools` do agent_done diz
+        # QUAL pool deve ter o active_count decrementado — é fato POR-SESSÃO. Ler
+        # `pools` do registro da instância devolvia o conjunto INTEIRO de pools do
+        # humano, e o routing passou a dar precedência ao evento: mandaríamos
+        # decrementar todos. O pool desta sessão para esta instância está no
+        # snapshot de roteamento que o próprio bridge escreveu no claim.
         _claimant_pools: list[str] = []
         try:
-            _raw_claimant = await redis_client.get(
-                f"{tenant_id}:instance:{_claimant_instance_id}"
+            _raw_snap = await redis_client.get(
+                f"session:{session_id}:routing:{_claimant_instance_id}"
             )
-            if _raw_claimant:
-                _claimant_pools = list(json.loads(_raw_claimant).get("pools") or [])
+            if _raw_snap:
+                _snap_pool = (json.loads(_raw_snap) or {}).get("pool_id") or ""
+                if _snap_pool:
+                    _claimant_pools = [_snap_pool]
         except Exception:
             pass
+        if not _claimant_pools:
+            # Sem o snapshot não sabemos o pool desta sessão. O agent_done sai sem
+            # `pools` e o routing cai no `meta.pools` (per-RECURSO) — o caminho
+            # antigo, que para humano multi-pool decrementa pools que não serviram
+            # este contato. A vaga em si volta de qualquer forma (o release roda
+            # antes do gate de pools); o que degrada é só o active_count.
+            logger.warning(
+                "session_resumed: sem snapshot de roteamento p/ o claimante "
+                "(session=%s claimant=%s) — agent_done sai sem pools e o routing "
+                "usará meta.pools (per-recurso). active_count pode ficar impreciso.",
+                session_id, _claimant_instance_id,
+            )
         asyncio.create_task(_kafka_producer.send(
             TOPIC_LIFECYCLE,
             json.dumps({
@@ -7788,7 +7895,8 @@ async def _cleanup_stale_completing_at_startup(redis_client: aioredis.Redis) -> 
                     tenant_id  = snap_info.get("tenant_id", "")
                     pool_id    = snap_info.get("pool_id", "")
                     inst_id    = snap_info.get("instance_id", instance_id)
-                    agent_type = (snap_info.get("snapshot") or {}).get("agent_type_id", "")
+                    # F4: `agent_type_id` vinha do snapshot congelado e era payload
+                    # morto aqui (ver nota no crash-recovery de contact_closed).
                     if tenant_id and inst_id:
                         # Use await here (startup, no event-loop contention)
                         await _kafka_producer.send(
@@ -7797,7 +7905,6 @@ async def _cleanup_stale_completing_at_startup(redis_client: aioredis.Redis) -> 
                                 "event":           "agent_done",
                                 "tenant_id":       tenant_id,
                                 "instance_id":     inst_id,
-                                "agent_type_id":   agent_type,
                                 "conversation_id": session_id,
                                 "pools":           [pool_id] if pool_id else [],
                                 "timestamp":       datetime.now(timezone.utc).isoformat(),
@@ -7840,21 +7947,56 @@ async def _restore_instance(
         raw = await redis_client.get(f"session:{session_id}:routing:{instance_id}")
         if not raw:
             return
-        info     = json.loads(raw)
-        tenant   = info.get("tenant_id", "")
-        inst     = info.get("instance_id", instance_id)
-        pool     = info.get("pool_id", "")
-        snapshot = info.get("snapshot", {})
-        if tenant and inst and snapshot:
-            snapshot["current_sessions"] = max(0, int(snapshot.get("current_sessions", 1)) - 1)
-            snapshot["status"] = "ready"
-            # Use 24h TTL — matches seed-demo.sh so the instance survives across sessions.
-            # Previous code used 1h; after restoration the key expired, routing couldn't find
-            # the instance (key gone but ID still in pool instances set), causing contacts to queue.
-            await redis_client.set(f"{tenant}:instance:{inst}", json.dumps(snapshot), ex=86400)
-            if pool:
-                await redis_client.sadd(f"{tenant}:pool:{pool}:instances", inst)
-            logger.info("Instance restored: tenant=%s instance=%s pool=%s", tenant, inst, pool)
+        info   = json.loads(raw)
+        tenant = info.get("tenant_id", "")
+        inst   = info.get("instance_id", instance_id)
+        pool   = info.get("pool_id", "")
+
+        if tenant and inst:
+            # ── F4 — PATCH, não overwrite ────────────────────────────────────
+            # Antes esta função escrevia de volta o `snapshot` CONGELADO inteiro
+            # por cima do registro vivo (`SET {tenant}:instance:{inst}`),
+            # ressuscitando `pools`/`agent_type_id`/`max_concurrent` do instante
+            # do roteamento. Num humano multi-pool isso o fazia sumir dos pools
+            # em que entrou DEPOIS do contato começar.
+            #
+            # Esta função é dona de UMA coisa: devolver a instância ao estado
+            # disponível no fim da sessão. Então ela só toca nisso.
+            live_raw = await redis_client.get(f"{tenant}:instance:{inst}")
+            if not live_raw:
+                # NÃO recria. Quem cria instância é o reconciliador (IA, a partir
+                # do Registry, que é autoritativo) ou o login WS (humano) — não
+                # uma cópia velha de até 4 h atrás. Ressuscitar daqui produz um
+                # agente fantasma: presente para o roteamento, ausente de fato.
+                # Mesma regra do `_upsert_instance` para eventos de liveness.
+                logger.warning(
+                    "restore: instância %s ausente (tenant=%s pool=%s) — NÃO recriada. "
+                    "A criação é do reconciliador/login; o registro velho não é fonte. "
+                    "IA volta no próximo tick do bootstrap; humano, no próximo login.",
+                    inst, tenant, pool,
+                )
+            else:
+                live = json.loads(live_raw)
+                live["status"] = "ready"
+                # Ocupação: a fonte de verdade é o SCARD do semáforo (Fatia B).
+                # O `-1` cego de antes escrevia um contador derivado e obsoleto.
+                try:
+                    live["current_sessions"] = int(
+                        await redis_client.scard(f"{tenant}:instance:{inst}:sessions")
+                    )
+                except Exception:
+                    pass
+                # TTL preservado como estava (24 h): mexer nisso é outro assunto.
+                await redis_client.set(
+                    f"{tenant}:instance:{inst}", json.dumps(live), ex=86400
+                )
+                if pool:
+                    await redis_client.sadd(f"{tenant}:pool:{pool}:instances", inst)
+                logger.info(
+                    "Instance restored (patch): tenant=%s instance=%s pool=%s "
+                    "current_sessions=%s",
+                    tenant, inst, pool, live.get("current_sessions"),
+                )
         await redis_client.delete(f"session:{session_id}:routing:{instance_id}")
     except Exception as exc:
         logger.warning("Could not restore instance %s: session=%s — %s", instance_id, session_id, exc)

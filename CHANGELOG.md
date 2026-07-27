@@ -2,6 +2,179 @@
 
 ---
 
+## Identidade por-pool do agente humano — F4: snapshot de roteamento não-destrutivo ✅ (2026-07-27)
+
+Último vetor de `pools` encolhendo que sobrava depois da F1. ADR:
+[`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md).
+
+**O problema.** `session:{sid}:routing:{iid}` guardava uma **cópia congelada** do registro da instância
+(`snapshot`), e `_restore_instance` a escrevia de volta INTEIRA por cima do registro vivo no fim da
+sessão (`SET {tenant}:instance:{inst}`) — ressuscitando `pools`/`agent_type_id`/`max_concurrent` do
+instante do roteamento, de até 4 h antes. Um humano que entrasse num pool DEPOIS do contato começar
+sumia dele quando aquele contato fechasse.
+
+**A chave encolheu para o que ela realmente é.** O único fato que ela tem e mais ninguém tem é **qual
+pool esta instância serve NESTA sessão** — o mesmo dado que a F3 passou a ler para saber qual
+`active_count` decrementar. Novo `_write_routing_ref()` grava `{tenant_id, instance_id, pool_id}` nos
+**4** sites de escrita (humano, MCP externo, YAML-fallback, plughub-native).
+
+**A restauração virou patch.** `_restore_instance` lê o registro **vivo** e toca só no que é dono —
+`status` e a ocupação, esta **sincronizada do SCARD** do semáforo (fonte de verdade desde a Fatia B),
+no lugar do `-1` cego que escrevia um contador derivado e obsoleto. Identidade nunca é tocada.
+**Instância ausente não é recriada**: quem cria é o reconciliador (IA, a partir do Registry, que é
+autoritativo) ou o login WS (humano) — mesma regra da emenda as-built da F1, e pelo mesmo motivo
+(ressuscitar de cópia velha produz agente fantasma, presente para o roteamento e ausente de fato).
+
+**Sem migração.** Chaves no formato antigo seguem válidas por construção: nenhum leitor lê mais o
+sub-documento `snapshot`, então ele é ignorado e o TTL de 4 h drena o resto — a tolerância no leitor dá
+de graça o que a migração daria com trabalho.
+
+**Achado que destravou o encolhimento:** os dois `agent_done` sintéticos de crash-recovery
+(`contact_closed` e `_cleanup_stale_completing_at_startup`) carregavam `agent_type_id` lido do snapshot
+— e era **payload morto**. O consumidor do routing usa só `conversation_id`/`pools`, e
+`parse_agent_lifecycle` do analytics exige `session_id`, que esses eventos não mandam (mandam
+`conversation_id`), então **já descartava a linha**. Campo removido junto.
+
+Testes: `orchestrator-bridge/.../tests/test_restore_instance_patch.py` (5, integração com Redis real —
+inclui o caso do **formato antigo** com snapshot obsoleto tentando encolher `pools`). Suítes completas
+verdes: bridge 55/55, routing-engine 134/134, `smoke_human_instance_identity.sh`. **E2E validado
+2026-07-27** com contato real fechado até o fim, incluindo wrap-up e NPS — o caminho de fechamento é
+exatamente o que a F4 altera e nenhum teste cobre ponta a ponta.
+
+**Pendente: só F5** — remover `pool_id` singular (é `pools[0]`, sem significado em multi-pool), corrigir
+o docstring de `update_instance_meta` que afirma o oposto do que a F1 provou, e o `@mention`
+(`session.ts:184` lê o `pool_id` **global** da instância via `HGET` contra chave JSON string: o
+WRONGTYPE é engolido por `catch {}` e **as menções caem em silêncio** — consertar só o tipo
+transformaria o no-op num convite ao pool errado).
+
+---
+
+## Identidade por-pool do agente humano — F2 + F2b + F3 ✅ (2026-07-27)
+
+Continuação da F1 (entrada abaixo). A F1 **parou o sangramento** protegendo o registro dos produtores
+conhecidos; F2/F3 **removem a confiança** no campo global, em vez de protegê-lo. ADR:
+[`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md).
+
+**F2 — identidade por-pool é DERIVADA.** Novo `resolve_agent_type(instance, pool_id)` em
+`routing-engine/models.py`: para humano devolve `human_agent_{pool}` (função pura do pool); para IA
+devolve o campo armazenado, que ali é identidade legítima. Todo leitor de decisão já tem o pool em
+escopo — o roteamento itera `for pool in pools: for inst in get_ready_instances(pool)` —, e é isso que
+torna a derivação possível sem mudar assinatura de nada. Aplicado nos **7** sites: filtro duro de
+conferência e chave de `agent_perf` (`router._allocate`), os três `RoutingResult` (route, afinidade/
+dequeue, `work_task_claim`) e os dois `AllocatedAgent` do `/v1/routing/decide`. Depois disto **nenhum
+leitor de decisão lê `inst.agent_type_id` diretamente** — o campo deixou de ser load-bearing para
+humano, e um produtor futuro que o reescreva não tem mais por onde vazar até o bridge.
+
+**F2b — ativação de humano por identidade, não por falha de lookup.** O bridge só chegava em
+`activate_human_agent` no "fallback 2", **depois** de `get_agent_type("human_agent_{pool}")` NÃO
+resolver. Ativar por *falha* é frágil: um AgentType registrado com esse nome — ou um skill deployado
+cujo id colidisse — faria o Console inteiro parar de receber contato, com o sintoma "o bridge executou
+um skill no lugar do humano". Novo `_is_human_instance()` (prefixo `human-`, com `source ==
+"human_login"` como reforço) roda **antes** do lookup. O fallback 2 permanece: cobre agentes
+**stateful não-humanos** (MCP externo), que não devem entrar por identidade.
+
+**F3 — qual pool decrementar é fato POR-SESSÃO.** `remove_conversation` dava precedência a `meta.pools`
+(per-RECURSO, o conjunto **inteiro** de pools do agente) sobre o `pools` do `agent_done` — emitido por
+quem sabe qual pool serviu aquele contato. Para humano multi-pool isso decrementava o `active_count` de
+pools que não participaram: o pool que serviu ficava com **carga fantasma** (fila não drena) e os outros
+iam a zero. Precedência invertida; `meta.pools` segue como fallback para o caso que a motivou (agentes
+sem `agent_ready` publicado).
+
+**Consequência que a inversão criou e foi fechada junto:** o `agent_done` do claimante no
+`_handle_webhook_session_resumed` lia `pools` do **registro da instância** (conjunto inteiro). Inofensivo
+enquanto `meta` vencia; com o evento vencendo, mandaria decrementar todos. Passa a ler o pool do
+**snapshot de roteamento** (`session:{sid}:routing:{iid}.pool_id`) — o único fato por-(sessão, instância)
+que já existia. Sem o snapshot, degrada para o caminho antigo **com warning** (a vaga volta de qualquer
+forma; só o `active_count` fica impreciso).
+
+**Achado registrado (não corrigido — fora de escopo):** `source` **não sobrevive** ao round-trip
+`model_validate → model_dump` do `mark_busy` (o Pydantic descarta campos não declarados e
+`AgentInstance` não declara `source`). Por isso o discriminador de humano é o **prefixo do
+`instance_id`**, não `source`. Declarar o campo no modelo consertaria a perda — mas mudaria o TTL da
+chave humana (o ramo `is_human` do `set_instance` usa `keepttl`), removendo um net de 30 s que hoje
+existe **por acidente**. Decisão consciente de não misturar isso com F2/F3; `test_pool_scoped_agent_type
+::test_is_human_survives_the_model_round_trip` trava a dependência atual.
+
+Testes: `test_pool_scoped_agent_type.py` (7 — 5 unitários de derivação + 2 de integração da precedência);
+suíte completa do routing-engine 134/134 + `smoke_human_instance_identity.sh` verde (sem regressão da F1).
+**E2E validado 2026-07-27** com o cenário exato do defeito: a MESMA instância
+(`human-bef14526-…`) roteada a dois pools em 20 s, cada contato com a identidade do **seu** pool
+(`pool=retencao_humano → human_agent_retencao_humano`; `pool=formfill_demo → human_agent_formfill_demo`)
+— antes da F2 os dois teriam levado o mesmo valor global. Nenhum `not in registry`: o hoist da F2b
+atendeu, o fallback 2 não foi usado.
+Sites: `routing-engine/models.py` (`resolve_agent_type`, `is_human_instance_id`, `AgentInstance.is_human`),
+`router.py`, `decide.py`, `registry.py` (`remove_conversation`), `orchestrator-bridge/main.py`
+(`_is_human_instance`, hoist no `process_routed`, `agent_done` do claimante).
+
+**Pendente:** F4 (encolher o snapshot `session:{sid}:routing:{iid}` + `_restore_instance` vira patch) e
+F5 (remover `pool_id` singular; `@mention` lê o pool da **sessão** e conserta o WRONGTYPE que hoje
+derruba mentions em silêncio).
+
+---
+
+## Identidade por-pool do agente humano — F1: liveness ≠ identidade ✅ (2026-07-27)
+
+Primeira fase do ADR [`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md)
+(desenho fechado no mesmo dia). Fecha a **causa estrutural** do defeito cujo sintoma foi corrigido na
+Mudança 27 (`docs/guias/conference-mechanics.md`).
+
+**O motor da corrupção.** Um humano tem UMA instância (`human-{userId}`) e **N conexões WebSocket** — o
+Console abre uma por pool selecionado (`useMultiPoolWebSocket.ts`). Cada conexão emitia, a cada 15 s, um
+`agent_heartbeat` com `agent_type_id: human_agent_${poolId}` e `pools: [poolId]` — a identidade **daquela
+conexão**. Do outro lado, `_upsert_instance` **reconstruía o registro inteiro** a partir do evento (não era
+merge). Resultado: `pools[]` e `agent_type_id` da instância oscilavam a cada 15 s conforme qual conexão
+pingou por último. Evidência ao vivo: o mesmo id apareceu ora como `human_agent_formfill_demo` com
+`pools:["formfill_demo"]`, ora como `human_agent_aprovacao_deploy`, enquanto o Console mostrava
+"Ready in 3 pools".
+
+Isso é load-bearing: `router.py` propaga `inst.agent_type_id` para `conversations.routed`, e o bridge
+**roda o skill que aquele id resolver**.
+
+**Regra implementada:** *evento de liveness prova apenas que o recurso está vivo — nunca carrega
+identidade nem membership, e nunca cria instância.*
+
+- **`mcp-server-plughub/src/server.ts`** — o pong para de mandar `agent_type_id`, `pools` e
+  `current_sessions`; passa a mandar **`heartbeat_pool`**, que diz de qual conexão veio o sinal **sem se
+  passar por membership**. O logout parcial parava de nomear o pool que está sendo **deixado**
+  (carimbava a identidade de um pool morto numa instância ativa nos outros) → nomeia um remanescente.
+- **`routing-engine/kafka_listener.py`** — `_upsert_instance` ganhou `event_type` e, para instância
+  humana, **preserva do registro vivo** `agent_type_id`, `max_concurrent`, `execution_model`, `user_*` e a
+  ocupação; `pools[]` só muda em evento **autoritativo** (`agent_ready` — login manda `mergedPools`,
+  logout parcial manda `remainingPools`). Defesa no **consumidor**: um produtor legado que ainda mande
+  `pools`/`agent_type_id` é ignorado com log. Instâncias de IA seguem inalteradas (`pools[]` genuinamente
+  unitário, mantido pelo reconciliador por-pool).
+- **`instance_meta` espelha o registro, não o evento** — antes gravava o valor oscilante do payload, e é
+  ele que o `remove_conversation` lê para decidir **qual pool decrementar**.
+- **Instrumentação permanente** (o defeito passou meses porque um `pools` parcial sempre pareceu
+  plausível): warning em `membership SHRANK` (legítimo só no logout parcial) e em
+  `agent_type_id divergence IGNORED`.
+- **Emenda as-built — liveness também não CRIA.** Registro ausente + pong ⇒ **não recria**, loga e ignora.
+  Recriar ressuscitaria um **agente fantasma** quando uma aba esquecida segue pingando após o logout
+  completo (que faz `DEL` da chave): presente para o roteamento, ausente para o humano, com contatos
+  alocados que não aparecem em Console nenhum. Falhar visível > falhar invisível.
+- **`registry.py`** — novo `get_instance_raw()` (o discriminador `source == "human_login"` não existe no
+  modelo `AgentInstance`; mantém a construção de chave dentro do registry).
+- **Buraco achado pelo teste — pool abandonado seguia alocável.** `set_instance` só percorre os pools que
+  a instância **ainda declara**, então o pool removido num logout parcial nunca era limpo do SET de
+  roteamento por ele; quem limpava era o `unregisterHumanAgent` (mcp-server) por **escrita direta no
+  Redis**. Ou seja: o consumidor de lifecycle dependia de um efeito colateral de outro serviço para não
+  deixar o humano alocável num pool do qual já tinha saído. Novo `remove_from_pool_sets()` faz a limpeza
+  acompanhar o próprio evento (idempotente; o SREM do mcp-server vira redundância inofensiva).
+
+**Efeito colateral positivo:** os intervalos de presença por pool do analytics
+(`consumer._apply_pool_diff`) consomem o `pools[]` do payload — o flap de 15 s também os poluía.
+
+Testes: `test_human_instance_identity.py` (10 casos — **nenhum teste cobria multi-pool humano antes**;
+`test_work_queue_claim`/`test_scorer` só constroem `pools=[pool]`). Smoke:
+`infra/test/smoke_human_instance_identity.sh` (caminho real via Kafka: pong pós-F1, pong legado, e
+logout parcial ainda autoritativo).
+
+**Pendente (F2–F5 no ADR):** derivar `agent_type_id` do pool em escopo nos leitores de decisão (torna o
+campo armazenado não-load-bearing); inverter a precedência do pool a decrementar no `remove_conversation`;
+encolher o snapshot `session:{sid}:routing:{iid}`; remover o `pool_id` singular.
+
+---
+
 ## `docs/kafka-eventos.md` — saneamento contra o código ✅ (2026-07-27)
 
 O doc foi reconciliado com a realidade por varredura de todo `producer.send`/`kafka.publish`/`AIOKafkaConsumer`
