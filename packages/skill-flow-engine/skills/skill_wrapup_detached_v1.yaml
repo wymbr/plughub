@@ -33,6 +33,10 @@ steps:
     # Camada B — o item cai no inbox DAQUELE agente (não fila compartilhada).
     assigned_to: "@ctx.session.surveyed_agent_key"
     fallback_to_pool_after_s: 3600   # 1h → transborda pro pool se ele não pegar
+    # Wrap-up unificado (Camada E2): o bridge seta @ctx.session.wrap_up_auto_attend
+    # ="true" quando o hook é `dispatch: inline` → o Console auto-reivindica o item
+    # (auto-atendimento, entrega in-session). Ausente/false → pull manual (detached).
+    auto_attend: "@ctx.session.wrap_up_auto_attend"
     context:
       title:               "Wrap-up do atendimento"
       summary:             "Registre a disposição do seu atendimento."

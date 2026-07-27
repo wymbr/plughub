@@ -167,6 +167,16 @@ export async function executeDelegate(
     }
   }
 
+  // Wrap-up unificado (Camada E2) — resolve auto_attend (ref/literal → booleano).
+  // O bridge seta @ctx.session.wrap_up_auto_attend="true" quando o hook é inline;
+  // o Console usa este flag no item de pull para auto-reivindicar (auto-atendimento).
+  let resolvedAutoAttend = false
+  if (step.auto_attend) {
+    const m = await resolveInputMap({ v: step.auto_attend }, ctx, ctx.contextStore)
+    const v = m["v"]
+    resolvedAutoAttend = v === true || String(v).trim().toLowerCase() === "true"
+  }
+
   // 3. Dispatch child session via persistDelegate callback (wired by bridge)
   let child_session_id = ""
   if (ctx.persistDelegate) {
@@ -187,6 +197,8 @@ export async function executeDelegate(
         ...(resolvedAssignedTo ? { assigned_to: resolvedAssignedTo } : {}),
         ...(step.fallback_to_pool_after_s !== undefined
           ? { fallback_to_pool_after_s: step.fallback_to_pool_after_s } : {}),
+        // Wrap-up unificado (Camada E2) — auto-atendimento no Console (inline).
+        ...(resolvedAutoAttend ? { auto_attend: true } : {}),
       })
       child_session_id = result.child_session_id
     } catch (err) {

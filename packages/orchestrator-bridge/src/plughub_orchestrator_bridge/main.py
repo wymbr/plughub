@@ -1102,6 +1102,7 @@ async def _fire_detached_hook(
     human_seg_id: str,
     agent_key:    str,
     close_origin: str,
+    auto_attend:  bool = False,
 ) -> None:
     """
     Camada D — dispara um hook de finalização `dispatch: detached` como **workflow
@@ -1139,6 +1140,11 @@ async def _fire_detached_hook(
         context["session.surveyed_segment_id"] = human_seg_id
     if agent_key:
         context["session.surveyed_agent_key"] = agent_key
+    # Wrap-up unificado (Camada E2) — entrega INLINE: o delegate do workflow lê
+    # @ctx.session.wrap_up_auto_attend e propaga o flag ao item de pull; o Console
+    # auto-reivindica (auto-atendimento). Ausente = DETACHED (pull manual da inbox).
+    if auto_attend:
+        context["session.wrap_up_auto_attend"] = "true"
     body = {
         "tenant_id":         tenant_id,
         "trigger_type":      "task",
@@ -1456,10 +1462,21 @@ async def fire_pool_hooks(
         # A atribuição fina viaja por referência de segmento no context. Pula todo
         # o caminho de conferência abaixo.
         _dispatch_mode = (entry.get("dispatch", "inline") or "inline") if isinstance(entry, dict) else "inline"
-        if _dispatch_mode == "detached":
+        # Wrap-up unificado (Camada E2): o wrap-up (side=agent) roda SEMPRE pelo mesmo
+        # workflow destacado — `detached` = pull manual; `inline` = auto-atendimento no
+        # Console (flag auto_attend). O NPS (side=customer, inline) permanece na
+        # CONFERÊNCIA (precisa do WS do cliente) → não entra aqui. Detached de qualquer
+        # side segue pelo workflow (retrocompat).
+        _is_workflow_dispatch = (
+            _dispatch_mode == "detached"
+            or (hook_side == "agent" and _dispatch_mode == "inline")
+        )
+        if _is_workflow_dispatch:
+            _auto_attend = (_dispatch_mode == "inline")   # inline → Console auto-claim
             await _fire_detached_hook(
                 http, session_id, pool_id, tenant_id, customer_id, hook_type,
                 target_pool, _hook_human_seg_id, _surveyed_agent_key, _close_origin_val,
+                auto_attend=_auto_attend,
             )
             _detached_fired = True
             continue

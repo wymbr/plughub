@@ -249,16 +249,16 @@ pools:
       on_human_start: []  # Echo evaluator removido do demo — era agente de debug do receive step
       on_human_end:
         # Arc 14: side=agent → segmento interage com o agente humano.
-        # Camada E2 (wrap-up-α): wrap-up DESTACADO. dispatch: detached → o bridge
-        # dispara wrapup_detached_ia como workflow webhook fire-and-forget (fora da
-        # conferência), NÃO segura o contato (fecha na hora — corrige G1/AHT inflado
-        # por wrap-up). O bridge preenche surveyed_segment_id/surveyed_agent_key/
-        # origin_session_id por referência (fire_pool_hooks); o agente reivindica o
-        # form no inbox pull (assigned_to) e o submit grava via segment_outcome_record.
-        # (Substitui o wrapup_ia INLINE, que segurava o segmento via wrap_up_pending.)
+        # Camada E2 (wrap-up unificado): UMA implementação (workflow wrapup_detached_ia
+        # + DialogForm + segment_outcome_record). O `dispatch` controla só a ENTREGA:
+        #   detached = item de pull, o agente reivindica manualmente na inbox;
+        #   inline    = auto-atendimento no Console (o item é auto-reivindicado e
+        #               renderizado na hora — ágil). Capacidade idêntica (uma vaga pelo
+        #               semáforo); nenhum bloqueia o agente inteiro.
+        # (Substitui o wrapup_ia antigo, que era um especialista de conferência.)
         - pool: wrapup_detached_ia
           side: agent
-          dispatch: detached
+          dispatch: inline
       # G7 Fase 3b: NPS é hook de fim-de-CONTATO (1ª classe), dispara 1× quando o
       # contato encerra de fato (no_continuation) — dono = pool do primary corrente.
       on_contact_end:

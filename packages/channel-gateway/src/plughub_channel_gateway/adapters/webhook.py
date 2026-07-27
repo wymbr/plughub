@@ -1627,6 +1627,7 @@ class WebhookAdapter(ChannelAdapter):
         resume_policy:      str  = "offer",
         assigned_to:              str = "",
         fallback_to_pool_after_s: int | None = None,
+        auto_attend:              bool = False,
     ) -> str:
         """
         Create a conference specialist in an existing agent (webchat) session.
@@ -1736,6 +1737,11 @@ class WebhookAdapter(ChannelAdapter):
             event["assigned_to"] = assigned_to
         if fallback_to_pool_after_s is not None:
             event["fallback_to_pool_after_s"] = int(fallback_to_pool_after_s)
+        # Wrap-up unificado (Camada E2) — auto-atendimento: flui ao contact_data (via
+        # ConversationInboundEvent) e chega ao item de pull; o Console o lê e
+        # auto-reivindica (inline) em vez de esperar o claim manual da inbox.
+        if auto_attend:
+            event["auto_attend"] = True
         await self._publish(event, topic="conversations.inbound")
 
         # ── Pending workflow lookup key (customer reconnect detection) ─────────

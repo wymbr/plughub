@@ -1751,40 +1751,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // on_human_end hooks have completed.  Removing it here prevents the race
       // where the customer WebSocket was closed before the finalisation agent ran.
 
-      // ── Wrap-up mode para o teardown do Console (Camada E2) ──────────────────
-      // O Console mantém a sessão aberta com o banner de wrap-up quando a finalização
-      // do AGENTE é INLINE (o especialista de wrap-up entra na conferência e envia
-      // prompts que o agente responde ali). Quando é DETACHED (wrap-up vai pra fila
-      // pull), NÃO há prompt inline — o Console deve limpar a sessão na hora e tratar
-      // o wrap-up como item de pull separado. Resolvemos o modo aqui (side=agent do
-      // on_human_end) para o front decidir no retorno do fetch, sem flash do banner.
-      // Fail-open: se não der pra determinar, assume INLINE (comportamento atual).
-      let inlineWrapup = true
-      try {
-        if (poolId) {
-          const registryUrl = process.env["AGENT_REGISTRY_URL"] ?? "http://agent-registry:3300"
-          const tenantId    = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-          const r = await fetch(`${registryUrl}/v1/pools/${encodeURIComponent(poolId)}`, {
-            headers: { "x-tenant-id": tenantId },
-          })
-          if (r.ok) {
-            const pool  = await r.json() as Record<string, unknown>
-            const hooks = (pool["hooks"] as Record<string, unknown> | undefined) ?? {}
-            const ohe   = (hooks["on_human_end"] as Array<Record<string, unknown>> | undefined) ?? []
-            // Só o wrap-up do AGENTE (side=agent, o default) rege o banner/keep-open.
-            // O NPS (side=customer) é renderizado no WebChat do cliente, não no Console.
-            inlineWrapup = ohe.some(e =>
-              e && ((e["side"] as string) ?? "agent") === "agent"
-                && ((e["dispatch"] as string) ?? "inline") !== "detached"
-            )
-          }
-        }
-      } catch (err) {
-        console.error(`[agent_done] could not resolve wrap-up mode pool=${poolId}:`, err)
-        // fail-open: inlineWrapup stays true (Console mantém o comportamento atual)
-      }
-
-      res.json({ ok: true, inline_wrapup: inlineWrapup })
+      // ── Teardown do Console (Camada E2 — wrap-up unificado) ──────────────────
+      // No modelo unificado o contato SEMPRE fecha no agent_done — o wrap-up é sempre
+      // uma sessão SEPARADA (auto-atendida quando o hook é `dispatch: inline`, ou
+      // puxada da inbox quando `detached`), nunca renderizado in-session na sessão do
+      // contato. Logo o Console SEMPRE limpa a sessão de atendimento aqui; a sessão de
+      // wrap-up entra depois (auto-claim ou pull). `inline_wrapup: false` = sempre
+      // limpa. (O campo é mantido no contrato p/ o handleClose; a distinção in-session
+      // do inline-conferência ANTIGO foi aposentada.)
+      void poolId  // não mais consultado (o modo de entrega é decidido no item de pull)
+      res.json({ ok: true, inline_wrapup: false })
     } catch {
       res.status(500).json({ error: "publish_failed" })
     }

@@ -1099,6 +1099,16 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
      *  Ausente = reserva permanente (só assigned_to). */
     fallback_to_pool_after_s: z.number().int().nonnegative().optional(),
     /**
+     * Wrap-up unificado (Camada E2) — entrega INLINE vs DETACHED. Suporta refs
+     * (@ctx.* / $.pipeline_state.*), resolvido a booleano; o wrap-up usa
+     * "@ctx.session.wrap_up_auto_attend" (o bridge o seta quando o hook é
+     * `dispatch: inline`). Quando true, o Console AUTO-REIVINDICA o item assignado
+     * (auto-atendimento) e o renderiza na hora, em vez de esperar o claim manual da
+     * inbox. Ortogonal a `assigned_to` (a QUEM) — isto é COMO entrega. Capacidade
+     * inalterada (uma vaga pelo semáforo). Ausente/false = pull manual (detached).
+     */
+    auto_attend:              z.string().optional(),
+    /**
      * Key→value pairs written to the child session's ContextStore before
      * the agent is activated. Supports @ctx.* and $.pipeline_state.* references.
      * The engine always writes session.workflow_resume_token automatically —

@@ -41,6 +41,9 @@ export interface QueueContact {
   assigned_to:              string | null
   fallback_to_pool_after_s: number | null
   assigned_at_ms:           number | null
+  // Wrap-up unificado (Camada E2) — quando true, o Console AUTO-REIVINDICA o item
+  // (auto-atendimento, entrega inline) em vez de esperar o claim manual da inbox.
+  auto_attend:              boolean
 }
 
 export async function listQueue(
@@ -86,6 +89,7 @@ export async function listQueue(
         assigned_to:              (contact?.["assigned_to"] as string) ?? null,
         fallback_to_pool_after_s: (contact?.["fallback_to_pool_after_s"] as number) ?? null,
         assigned_at_ms:           (contact?.["assigned_at_ms"] as number) ?? null,
+        auto_attend:              contact?.["auto_attend"] === true,
       })
     }
   }

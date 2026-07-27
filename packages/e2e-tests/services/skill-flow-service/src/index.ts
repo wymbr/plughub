@@ -495,6 +495,8 @@ app.post("/execute", async (req: Request, res: Response) => {
             ...(params.assigned_to ? { assigned_to: params.assigned_to } : {}),
             ...(params.fallback_to_pool_after_s !== undefined
               ? { fallback_to_pool_after_s: params.fallback_to_pool_after_s } : {}),
+            // Wrap-up unificado (Camada E2) — auto-atendimento no Console (inline).
+            ...(params.auto_attend ? { auto_attend: true } : {}),
           }),
         },
       )

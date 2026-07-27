@@ -229,6 +229,8 @@ export interface StepContext {
     /** Camada B (pull direcionado) — reserva do work item ao recurso + transbordo. */
     assigned_to?:              string
     fallback_to_pool_after_s?: number
+    /** Wrap-up unificado (Camada E2) — auto-atendimento no Console (inline). */
+    auto_attend?:              boolean
   }): Promise<{ child_session_id: string }>
 
   /**

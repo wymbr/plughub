@@ -35,6 +35,9 @@ interface QueueContact {
   assigned_to:              string | null
   fallback_to_pool_after_s: number | null
   assigned_at_ms:           number | null
+  // Wrap-up unificado (Camada E2): true = auto-atendimento (o Console reivindica
+  // sozinho o item reservado a mim, entrega inline). null/false = pull manual.
+  auto_attend:              boolean | null
 }
 
 interface PullInboxPanelProps {
@@ -204,6 +207,26 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
       setClaiming(null)
     }
   }, [instanceId, onClaimed, refresh, t])
+
+  // ── Wrap-up unificado (Camada E2) — auto-atendimento (inline) ───────────────
+  // Item reservado a MIM e marcado auto_attend (o hook era `dispatch: inline`) é
+  // reivindicado AUTOMATICAMENTE, sem o agente clicar "Pull" — o form renderiza na
+  // hora (entrega inline). Tentativa ÚNICA por sessão: se falhar (sem vaga na janela
+  // do handoff / claim de corrida), o item fica na inbox para o pull manual
+  // (degradação graciosa). Não afeta itens detached (auto_attend ausente/false).
+  const autoAttendedRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (claiming) return
+    const target = contacts.find(
+      c => c.auto_attend === true
+        && reservationOf(c) === "reservedToMe"
+        && !autoAttendedRef.current.has(c.session_id),
+    )
+    if (target) {
+      autoAttendedRef.current.add(target.session_id)
+      void handlePull(target)
+    }
+  }, [contacts, claiming, reservationOf, handlePull])
 
   if (pullPools.length === 0) return null
 

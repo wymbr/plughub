@@ -774,6 +774,8 @@ class WebhookDelegateConferenceRequest(BaseModel):
     # Camada B (pull direcionado / "ramal") — reserva do item ao recurso + transbordo.
     assigned_to:              str | None = None
     fallback_to_pool_after_s: int | None = None
+    # Wrap-up unificado (Camada E2) — auto-atendimento no Console (inline).
+    auto_attend:              bool = False
 
 class IdentityAnchor(BaseModel):
     kind:  str   # phone | email | cpf | princ | dev
@@ -838,6 +840,7 @@ async def webhook_delegate_conference(body: WebhookDelegateConferenceRequest) ->
         resume_policy      = body.resume_policy,
         assigned_to              = body.assigned_to or "",
         fallback_to_pool_after_s = body.fallback_to_pool_after_s,
+        auto_attend              = body.auto_attend,
     )
     return {"session_id": session_id}
 

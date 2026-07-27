@@ -2,6 +2,48 @@
 
 ---
 
+## Wrap-up unificado — inline = auto-atendimento sobre a MESMA máquina detached (Phase 0+1) ✅ (2026-07-27)
+
+Colapsa os dois wrap-ups (inline especialista-de-conferência × detached workflow) numa **implementação única**
+(workflow `skill_wrapup_detached_v1` + DialogForm + `DialogFormRenderer` + `segment_outcome_record`). O `dispatch`
+do hook `on_human_end` (side=agent) controla só a **ENTREGA**, nunca a capacidade:
+
+- **`detached`** = item de pull; o agente reivindica manualmente na inbox; ocupa uma vaga no claim.
+- **`inline`** = **auto-atendimento**: o Console AUTO-REIVINDICA o item assignado e renderiza o form na hora (ágil),
+  sem clicar "Pull". Ocupa a mesma **uma vaga** pelo semáforo. Substitui o inline antigo (conferência).
+
+**Modelo de capacidade (auditado + confirmado):** os dois modos ocupam **uma vaga** pelo semáforo único
+`claim_instance` (SET de ocupantes por instância), que já é o portão atômico compartilhado push+pull —
+conta-no-claim, checa capacidade (−1 = recusa/rollback no `work_task_claim`). **Nenhum** modo bloqueia o agente
+inteiro (correto p/ `max_concurrent > 1`).
+
+**Phase 0 — revert do `acw_pending`.** O marker `:acw_pending` (produtor no bridge + clear na tool + gate no
+`get_ready_instances` + `acw_gate: hard` no yaml) foi **removido** — era o modelo errado (bloqueava a instância
+INTEIRA, não uma vaga; reservava no dispatch, não no claim). A coluna `acw_gate` fica dormente (drop = migration).
+
+**Phase 1 — auto-atendimento.** Flag `auto_attend` threaded pelo MESMO caminho do `assigned_to` (Camada B):
+`DelegateStep` (schema) → `delegate.ts` (resolve `@ctx.session.wrap_up_auto_attend`) → `persistDelegate`
+(executor/engine) → skill-flow-service → channel-gateway (`handle_delegate_conference` → inbound) → routing
+`ConversationInboundEvent.auto_attend` → `contact_data` (via `model_dump`) → item de pull → mcp-server `listQueue`
+→ Console `PullInboxPanel` (efeito de auto-pull p/ item `reservedToMe`+`auto_attend`). O bridge seta
+`session.wrap_up_auto_attend="true"` no ctx do workflow quando `dispatch: inline` (`_fire_detached_hook`);
+`fire_pool_hooks` roteia inline **de agente** pelo workflow (NPS side=customer segue na conferência). O
+`/api/agent_done` passa a devolver `inline_wrapup: false` sempre (o contato SEMPRE fecha; o wrap-up é sempre uma
+sessão separada — auto-atendida ou puxada).
+
+**E2E validado (2026-07-27):** atendimento real → finaliza → sessão limpa → wrap-up **abre sozinho** no Console
+(~2-3s, poll da inbox) → preenche → `[segment_outcome_record] recorded outcome=resolved`. Item confirmado com
+`auto_attend: true`.
+
+**Deploy:** build de schemas/skill-flow-service/channel-gateway/routing-engine/orchestrator-bridge/
+mcp-server-plughub/platform-ui/agent-registry + reconcile + **`set-next`+`promote` do `wrapup_detached_ia`**
+(re-snapshot do slot; o reconcile não basta — memória `skill-slot-resnapshot`).
+
+**Falta (próximas fases):** Phase 2 = hand-off da vaga no close inline (segura a vaga da origem e transfere o
+ocupante ao wrap-up → elimina a janela de corrida fechar-e-reclamar no `max_concurrent=1`); Phase 3 = remover o
+inline antigo (`wrapup_ia` + `skill_wrapup_v1` + `wrap_up_pending`). Latência do auto-atendimento (~2-3s do poll)
+= polish (instant via `refreshSignal` no `conversation.assigned`).
+
 ## Wrap-up-α — wiring do hook `on_human_end` `detached` (dispara sozinho no fim do atendimento) ✅ (2026-07-27)
 
 Fecha o loop do wrap-up-α: o wrap-up destacado deixa de depender do seed manual (smoke) e **dispara
