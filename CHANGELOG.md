@@ -2,6 +2,96 @@
 
 ---
 
+## ai-gateway: erro de provedor deixa de ser mudo ✅ (2026-07-28)
+
+Achado colateral da validação da Fatia A: **todas** as avaliações do demo falhavam, e o
+único sinal era `POST /v1/reason 502` na linha de acesso do uvicorn. Saldo zerado, chave
+revogada, rate-limit e modelo inexistente eram indistinguíveis sem sondar o endpoint à mão
+— e um 502 mudo derruba todo agente de IA da plataforma (reason, copilot, sentiment) sem
+dizer por quê. Causa real na sonda: `credit balance is too low` (400 da Anthropic).
+
+Duas correções, e a segunda é a que explicava a primeira:
+
+1. **`provider_error_handler` loga o motivo**, não só o devolve no corpo. `retryable=False`
+   (saldo/credencial — nenhuma rotação de conta resolve) sobe a **ERROR**; `retryable=True`
+   (429/529, contornável pelo `AccountSelector`) fica em WARNING.
+2. **O pacote nunca configurou logging.** Sem `basicConfig` em lugar nenhum do
+   `ai-gateway`, o Python caía no handler `lastResort`: escreve só a MENSAGEM em stderr,
+   sem nível nem timestamp, e **descarta tudo abaixo de WARNING**. Ou seja, a distinção
+   ERROR/WARNING do item 1 teria nascido invisível, e todo `logger.info` do serviço vinha
+   sendo jogado fora silenciosamente desde sempre. Formato alinhado aos demais serviços
+   Python (`session-replayer/main.py:14`).
+
+O padrão vale registrar porque se repetiu duas vezes no mesmo dia: o sintoma era "não faz
+nada" e a causa estava um nível abaixo de onde o sintoma aparecia — o gate de avaliação
+parecia desligado e estava ABERTO; o 502 parecia sem log e estava sem CONFIGURAÇÃO de log.
+
+---
+
+## `agent_role` — propósito do agente como fato do registry (Fatia A do resíduo `role`) ✅ (2026-07-28)
+
+Fecha metade do resíduo `role` da F5 (ver `TODO.md`), e o achado que destravou tudo foi de **escopo**,
+não de produtor faltando: o nome `role` cobria **dois fatos diferentes** lidos do mesmo campo.
+
+| | **Fato A** — propósito do agente | **Fato B** — papel de participação |
+|---|---|---|
+| Valores | `executor` / `orchestrator` / `evaluator` | `primary` / `specialist` / `supervisor` |
+| Escopo | o ARTEFATO (skill) — estável por toda a vida da instância | (participante, sessão) |
+| Consumidores | `evaluation_context_get`, `evaluation_submit` | `message_send`, `session_context_get` |
+
+Por isso não havia "o produtor certo": o hash `{tenant}:agent:instance:{id}` é da INSTÂNCIA, e a mesma
+instância atende `max_concurrent_sessions` sessões — é `primary` numa e `specialist` noutra ao mesmo
+tempo. O Fato B ali dentro colapsaria multi-sessão (invariante "never store a narrower-scope fact in a
+wider-scope field"). O Fato A, ao contrário, **cabe exatamente** nesse escopo. Fatia A entrega o A;
+o B segue no `TODO.md` com o desenho e os pré-requisitos levantados.
+
+**O buraco que isso fechou não era capacidade desligada — era autorização ausente.** Em
+`evaluation.ts` o gate era `let role = ""` seguido de `if (role && role !== "evaluator" && role !==
+"reviewer")`. String vazia curto-circuita: **a verificação nunca acontecia**. E `evaluation_context_get`
+devolve o ReplayContext com `original_content` **desmascarado** — qualquer agente com `session_token`
+válido lia PII. O gate irmão da F5 em `message_send` falha fechado; este falhava aberto, e o mesmo
+campo ausente produzia os dois comportamentos opostos.
+
+**Onde o propósito passou a viver.** No **skill**, não num `agent_type`: a entidade AgentType está
+aposentada e no modelo deploy-driven a identidade do agente É o skill deployado (`agent_login` valida
+contra `GET /v1/skills/{id}`). `AgentRoleSchema` migrou de `agent-registry.ts` para `skill.ts` (o
+inverso seria import circular) e `agent-registry.ts` reexporta por retrocompat.
+
+**Implementado:**
+- **schemas**: `AgentRoleSchema` canônico em `skill.ts`; `agent_role: AgentRoleSchema.default("executor")`
+  no `SkillSchema`. Default fecha por omissão — skill que não declara não ganha privilégio.
+- **agent-registry**: coluna `Skill.agent_role` + migration `20260728000000_add_skill_agent_role`
+  (com backfill de `skill_avaliacao_v1`/`skill_revisao_v1`/`skill_pre_revisao_v1`, necessário porque o
+  RegistrySyncer é seed-if-absent e pularia o PUT em DB já provisionado). O PUT só sobrescreve quando o
+  corpo **cru** declara a chave (`_declaresAgentRole`) — o parse usa `CreateSkillSchema`, não-partial,
+  então depois dele é impossível distinguir "declarou executor" de "não falou do campo"; sem isso todo
+  PUT do syncer reverteria `evaluator → executor`.
+- **mcp-server-plughub**: `agent_login` carimba `agent_role` **lido do registry** (nunca do input — um
+  agente declarar "sou evaluator" é asserção, não autorização). Helper `readAgentIdentity` resolve
+  `participant_id → instance_id` pelo mapa `{tenant}:participant:{id}:instance` (a mesma via do
+  `message_send`; os dois ids só coincidem por acidente no avaliador). Ambos os gates exigem leitura
+  **positiva** de `evaluator` e falham fechado. `reviewer` saiu do vocabulário: a revisão humana do
+  Arc 13 é o REST `contestation_router` com Bearer + ABAC, não MCP.
+- **orchestrator-bridge**: `_skill_agent_role_cache` populado no mesmo branch HTTP 200 de
+  `get_skill_flow`, propagado ao agent_type sintetizado (antes hardcodado `"executor"` "por completude
+  cosmética") e invalidado — junto com `_skill_version_cache` — no `registry.changed(skill)`.
+- **skills**: `agent_role: evaluator` em `agente_avaliacao_v1`, `agente_revisor_v1`,
+  `agente_pre_revisor_v1`. UI-editável sem código novo: o editor de skills é YAML e o campo
+  round-trippa no GET→YAML→PUT.
+
+**Degradação deixou de ser muda:** `evaluation_submit` carimbava `agent_type_id = "evaluator_unknown"`
+em silêncio quando não conseguia ler a instância — valor plausível que atravessa o pipeline e só
+aparece como buraco nos cortes por avaliador do Arc 13. Agora loga o porquê.
+
+**Testes/fixtures:** teste de fail-closed nos dois gates + teste da resolução participant→instance;
+`reviewer` virou caso de rejeição; fixture `skill_avaliacao_v1` (`agent_role: evaluator`) adicionada ao
+seed e2e, e os cenários 09/11 passaram a logar com ela em vez de `agente_retencao_v1` (executor).
+
+**Achado registrado, não corrigido:** `evaluation_threads_get` (`evaluation.ts`) anuncia exigir role
+evaluator/reviewer e **não tem gate nenhum** — mesma classe de defeito, fora do escopo desta fatia.
+
+---
+
 ## Semáforo de vagas: reap de ocupantes órfãos ✅ (2026-07-28)
 
 Fecha o resíduo aberto na mesma sessão que o encontrou ao vivo: agente com `max_concurrent=3`

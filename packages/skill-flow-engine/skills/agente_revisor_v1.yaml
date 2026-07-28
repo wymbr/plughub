@@ -90,6 +90,17 @@ classification:
   type: orchestrator
   domain: quality
 
+# Propósito do agente — entrada de autorização do gate de `evaluation_context_get`
+# (que devolve `original_content` DESMASCARADO). Ver agente_avaliacao_v1.yaml.
+#
+# ATENÇÃO — este skill é do motor de revisão por workflow, hoje LEGADO/inerte
+# (nada no backend o dispara; só o cenário 28 do harness e2e). Ele NÃO faz
+# `agent_login`, então não há hash de instância onde ler o papel: com o gate
+# fechado, o `evaluation_context_get` nega. Se este caminho for reativado, ele
+# precisa de um step `login` como o do agente_avaliacao_v1 — a declaração abaixo
+# sozinha não basta.
+agent_role: evaluator
+
 entry: get_context
 
 steps:

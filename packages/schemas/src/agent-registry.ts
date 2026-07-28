@@ -5,7 +5,7 @@
  */
 
 import { z } from "zod"
-import { SkillRefSchema } from "./skill"
+import { SkillRefSchema, AgentRoleSchema } from "./skill"
 import { ChannelSchema }  from "./common"
 
 // ─────────────────────────────────────────────
@@ -399,12 +399,12 @@ export const AgentFrameworkSchema = z.enum([
 ])
 export type AgentFramework = z.infer<typeof AgentFrameworkSchema>
 
-export const AgentRoleSchema = z.enum([
-  "executor",       // resolve diretamente — padrão
-  "orchestrator",   // coordena outros via skill flow
-  "evaluator",      // avalia qualidade pós-sessão (nunca recebe tráfego ao vivo)
-])
-export type AgentRole = z.infer<typeof AgentRoleSchema>
+// A definição canônica de AgentRoleSchema migrou para `./skill`: a entidade
+// AgentType foi aposentada e a identidade do agente passou a ser o skill
+// deployado, então o propósito é fato do SKILL. Reexportado aqui só por
+// retrocompat do import path (`AgentTypeRegistrationSchema` abaixo ainda o usa).
+export { AgentRoleSchema }
+export type { AgentRole } from "./skill"
 
 export const AgentClassificationSchema = z.object({
   type:     z.enum(["vertical", "horizontal"]),

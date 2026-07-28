@@ -88,6 +88,9 @@ skillsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
         version:          body.version ?? "",   // rótulo livre opcional; "" quando ausente (coluna NOT NULL)
         description:      body.description,
         classification:   body.classification,
+        // agent_role — propósito do agente (executor|orchestrator|evaluator).
+        // CreateSkillSchema não é partial, então o Zod já aplicou o default.
+        agent_role:       body.agent_role,
         instruction:      (body.instruction ?? null) as unknown as Prisma.InputJsonValue,
         tools:            body.tools ?? [],
         interface_schema: body.interface    ?? Prisma.DbNull,
@@ -206,6 +209,16 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
 
     const body      = CreateSkillSchema.parse({ ...req.body, skill_id: skillId })
 
+    // O PUT valida com CreateSkillSchema (NÃO-partial), então o Zod já aplicou o
+    // `.default("executor")` de `agent_role` — depois do parse é impossível
+    // distinguir "o corpo declarou executor" de "o corpo não falou do campo".
+    // Para preservar o valor do DB quando o chamador não declara, a pergunta tem
+    // de ser feita ao corpo CRU, antes do parse.
+    const _declaresAgentRole =
+      req.body != null &&
+      typeof req.body === "object" &&
+      "agent_role" in (req.body as Record<string, unknown>)
+
     // ── Validação de bloco masked ──
     if (body.flow) {
       const maskedErrors = validateMaskedBlock(body.flow)
@@ -259,12 +272,19 @@ skillsRouter.put("/:skill_id", async (req: Request, res: Response, next: NextFun
       status:           "active",
       // Vestigial: não há mais draft/published — a definição é a definição.
       deploy_status:    "published",
+      // agent_role — só sobrescreve quando o corpo CRU declara o campo (ver
+      // `_declaresAgentRole` acima). Omitir a chave preserva o valor do DB —
+      // provisioning precedence: uma edição de UI não pode ser silenciosamente
+      // revertida a "executor" por um PUT que nem conhece o campo.
+      ...(_declaresAgentRole && { agent_role: body.agent_role }),
     }
     const _upsertCreate = {
       ..._upsertUpdate,
       skill_id:      skillId,
       tenant_id:     tenantId,
       deploy_status: "published",
+      // Na CRIAÇÃO a coluna é NOT NULL e não há valor prévio a preservar.
+      agent_role:    body.agent_role ?? "executor",
       created_by:    _getUserId(req),
     }
     const skill = await prisma.skill.upsert({

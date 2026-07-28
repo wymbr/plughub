@@ -135,6 +135,10 @@ _RUNTIME_NAMESPACES: frozenset[str] = frozenset({
 _agent_type_cache: dict[str, dict] = {}   # agent_type_id → agent type response body
 _skill_flow_cache: dict[str, dict] = {}   # skill_id → flow dict
 _skill_version_cache: dict[str, str] = {} # skill_id → version (R9 — deploy_version do segmento)
+# Propósito declarado do agente (executor|orchestrator|evaluator), lido do skill no
+# registry. Fato de escopo do ARTEFATO — não confundir com o papel de PARTICIPAÇÃO
+# na sessão (primary/specialist), que é fato de (participante, sessão).
+_skill_agent_role_cache: dict[str, str] = {}  # skill_id → agent_role
 # Skill Versioning Fase B/P1: produção = snapshot do slot `current` do POOL (não o
 # skill.flow vivo). pool_id → (skill_id, flow). Invalidado no registry.changed(pool).
 _pool_flow_cache: dict[str, tuple[str, dict]] = {}
@@ -239,10 +243,21 @@ async def _synthesize_agent_type_from_skill(
         "agent_type_id":          skill_id,
         "framework":              "plughub-native",
         "execution_model":        "stateless",
-        # role is not consumed at runtime (no reads in routing-engine or the
-        # bridge); evaluator-pool isolation comes from routing topology, not
-        # this field. Defaulted to "executor" only for cosmetic completeness.
-        "role":                   "executor",
+        # PROPÓSITO do agente, propagado do skill em vez de hardcodado como
+        # "executor". `get_skill_flow` (chamado acima) já populou o cache.
+        #
+        # ATENÇÃO ao alcance: este campo NÃO é o caminho de autorização. Quem
+        # carimba o `agent_role` no hash da instância é o `agent_login` do
+        # mcp-server, que consulta `GET /v1/skills/{id}` por tenant — este
+        # agent_type sintetizado é um caminho paralelo e hoje sem consumidor
+        # (nada no bridge lê `agent_type["role"]`). Propagar aqui é coerência,
+        # não enforcement; não construa autorização em cima disto sem antes
+        # tornar o cache tenant-aware.
+        #
+        # Não confundir com o papel de PARTICIPAÇÃO numa sessão (primary/
+        # specialist/supervisor): aquele é fato de (participante, sessão) e não
+        # cabe num campo de escopo de artefato.
+        "role":                   _skill_agent_role_cache.get(skill_id, "executor"),
         "skills":                 [{"skill_id": skill_id}],
         "media_capabilities":     [],
         "_synthesized_from_skill": True,
@@ -350,6 +365,9 @@ async def get_skill_flow(
                 # R9 — cacheia a versão do skill p/ carimbar deploy_version no segmento
                 # (resolvida no início, do corpo do skill = versão corrente = a que rodou).
                 _skill_version_cache[skill_id] = str(body.get("version") or "")
+                # Propósito declarado no registry. Fecha por omissão: registry antigo
+                # (sem a coluna) → "executor", que não abre gate nenhum.
+                _skill_agent_role_cache[skill_id] = str(body.get("agent_role") or "executor")
                 flow = body.get("flow")
                 if flow:
                     _skill_flow_cache[skill_id] = flow
@@ -8385,6 +8403,11 @@ async def _dispatch_once(
                 logger.info("Skill flow cache invalidated: skill_id=%s", entity_id)
             else:
                 logger.debug("Skill flow cache miss on invalidation (not cached): %s", entity_id)
+            # Metadata cacheada na MESMA branch HTTP 200 de get_skill_flow — tem de
+            # ser invalidada junto, senão sobrevive a uma edição que remove o flow
+            # (o early-return por cache não reexecuta o fetch e o valor fica stale).
+            _skill_agent_role_cache.pop(entity_id, None)
+            _skill_version_cache.pop(entity_id, None)
         elif entity_type == "pool":
             # Skill Versioning P1/C: promote/rollback publica registry.changed(pool) →
             # invalida o snapshot do slot `current` E a identidade de versão (set_at)

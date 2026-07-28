@@ -155,7 +155,10 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     let evalToken = ""
 
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", evalInstanceId)
+      // Skill de AVALIAÇÃO: o gate exige `agent_role: evaluator` do registry
+      // (`agente_retencao_v1` é executor). O `agent_busy` grava o mapa
+      // participant→instance que a tool usa para resolver o hash.
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_avaliacao_v1", evalInstanceId)
       evalToken = login.session_token
       await mcp.agentReady(evalToken)
       await mcp.agentBusyV2(evalToken, sessionId, evalParticipantId)

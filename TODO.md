@@ -48,8 +48,23 @@ morte abrupta) ou aceitar a rede como suficiente.
 
 ## `role` nunca é escrito no hash de participante *(resíduo da F5 de identidade por-pool, 2026-07-28)*
 
-Quatro sites LEEM `role` de `{tenant}:agent:instance:{participant_id}` — `session_context_get`,
-`message_send`, `evaluation.ts` (×2) — e **nenhum produtor escreve o campo**. Todos caem no default.
+> **Fatia A ✅ (2026-07-28, ver CHANGELOG).** A investigação mostrou que o nome `role` cobria **dois
+> fatos de escopos diferentes**, e que por isso não existia um único produtor a escrever:
+>
+> | | **Fato A** — propósito do agente | **Fato B** — papel de participação |
+> |---|---|---|
+> | Valores | `executor` / `orchestrator` / `evaluator` | `primary` / `specialist` / `supervisor` |
+> | Escopo | o ARTEFATO (skill), estável | (participante, sessão) |
+> | Consumidores | `evaluation_context_get`, `evaluation_submit` | `message_send`, `session_context_get` |
+>
+> **Fato A está fechado**: campo `agent_role` no skill (registry), carimbado pelo `agent_login` no hash
+> da instância — que é o escopo CERTO para ele, porque o propósito é constante por toda a vida da
+> instância. **Fato B segue aberto** e é o que resta desta entrada: NÃO cabe naquele hash (a mesma
+> instância atende `max_concurrent_sessions` sessões e é `primary` numa e `specialist` noutra ao mesmo
+> tempo — guardá-lo ali colapsa multi-sessão, invariante do CLAUDE.md).
+
+Dois sites ainda LEEM `role` de `{tenant}:agent:instance:{participant_id}` — `session_context_get` e
+`message_send` — e **nenhum produtor escreve o campo**. Ambos caem no default.
 
 Consequências vivas:
 
@@ -61,6 +76,24 @@ Consequências vivas:
   → mascara) e carimba `author_role` no stream. Como nunca é lido de fato, toda mensagem via
   `message_send` é mascarada e sai como `primary`. Blast radius maior que o do @mention; mesmo
   produtor ausente.
+
+**Fatia B — desenho decidido, não implementado.** Store por participante
+`session:{id}:participant:{participant_id}` (hash), escrito pelo bridge no join, generalizando o
+`session:{id}:ai_participant:{instance_id}` atual (que hoje cobre só IA nativa e é chaveado por
+instance_id). Pré-requisitos levantados na investigação:
+
+1. **Unificar a convenção de `participant_id`** — o bridge publica `participant_id=native_instance_id`
+   no Kafka (`main.py:3622`) mas entrega `uuid4()` ao especialista de conferência (`main.py:2863`, nunca
+   persistido). Duas identidades para o mesmo participante; nenhum store conserta isso antes.
+2. **Produzir o vocabulário** — `_part_role = "specialist" if conference_id else "primary"`
+   (`main.py:3489`) é a ÚNICA decisão de papel no sistema; os outros 11 call sites de
+   `_publish_participant_event` passam literais. `supervisor` nunca é emitido por caminho nenhum.
+3. **`session:{id}:participants` é chave órfã** — o `ParticipantSchema`
+   (`schemas/src/session.ts:77-88`) já tem a forma exata, é lido por `session_context_get:182` e pelo
+   replayer (`replayer.py:303`), e **não tem writer**. Hoje `session_context_get` sempre devolve
+   `participants: []` e todo `ReplayContext.participants` vem vazio.
+4. `e2e-tests/scenarios/10_masking.ts:235` só passa porque semeia `role` à mão no Redis — o teste
+   documenta a ausência do produtor, não a presença.
 
 Correlatos do mesmo arco (fechado — ADR
 [`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md)):

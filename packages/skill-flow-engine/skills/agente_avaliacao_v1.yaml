@@ -97,6 +97,19 @@ classification:
   type: orchestrator
   domain: quality
 
+# PROPÓSITO do agente (Fato A — escopo do artefato), declarado no registry.
+# É a ENTRADA DE AUTORIZAÇÃO dos gates de avaliação: `agent_login` lê este valor
+# do registry e o carimba no hash da instância; `evaluation_context_get` e
+# `evaluation_submit` exigem "evaluator" e falham FECHADO sem ele.
+#
+# Precisa vir daqui — e não do input do `agent_login` — porque um agente declarar
+# "sou evaluator" é asserção, não autorização. `evaluation_context_get` devolve o
+# ReplayContext com `original_content` DESMASCARADO.
+#
+# Não confundir com o papel de PARTICIPAÇÃO numa sessão (primary/specialist/
+# supervisor): esse é fato de (participante, sessão), vive no escopo da sessão.
+agent_role: evaluator
+
 entry: login
 
 steps:

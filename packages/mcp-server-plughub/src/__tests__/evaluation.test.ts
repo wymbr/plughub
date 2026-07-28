@@ -178,9 +178,36 @@ describe("evaluation_context_get", () => {
     expect(text.error).toBe("unauthorized")
   })
 
-  it("allows participant with role 'reviewer'", async () => {
+  it("rejects participant with agent_role 'reviewer'", async () => {
+    // `reviewer` saiu do vocabulário aceito: a revisão humana do Arc 13 é o
+    // contrato REST (contestation_router) com Bearer JWT + ABAC, não MCP.
+    // `AgentRoleSchema` (registry) nem sequer tem esse valor.
     mockRedis.hget.mockResolvedValue("reviewer")
     mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
+
+    const { rawTool } = makeServer()
+    const raw = await rawTool("evaluation_context_get", {
+      session_token:  VALID_TOKEN,
+      session_id:     SESSION_ID,
+      participant_id: PARTICIPANT_ID,
+    })
+
+    expect(raw.isError).toBe(true)
+    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
+  })
+
+  it("resolves the instance via the participant→instance map", async () => {
+    // O hash é indexado por `instance_id`; o caller passa `participant_id`. Os dois
+    // só coincidem por acidente no avaliador do Arc 6. O mapa
+    // `{tenant}:participant:{id}:instance` (escrito pelo agent_busy) é a via correta
+    // — a mesma que o message_send já usa.
+    const MAPPED_INSTANCE = "inst_evaluator_42"
+    mockRedis.get.mockImplementation((key: string) =>
+      Promise.resolve(
+        key.includes(":participant:")
+          ? MAPPED_INSTANCE
+          : JSON.stringify(makeReplayContext()),
+      ))
 
     const { callTool } = makeServer()
     const result = await callTool("evaluation_context_get", {
@@ -190,6 +217,28 @@ describe("evaluation_context_get", () => {
     }) as Record<string, unknown>
 
     expect(result.session_id).toBe(SESSION_ID)
+    expect(mockRedis.hget).toHaveBeenCalledWith(
+      `tenant_test:agent:instance:${MAPPED_INSTANCE}`,
+      "agent_role",
+    )
+  })
+
+  it("rejects when agent_role cannot be read (fails closed)", async () => {
+    // Regressão do buraco corrigido: o gate antigo tinha default "" e a condição
+    // `if (role && ...)` curto-circuitava — a verificação NÃO acontecia e o
+    // ReplayContext (com original_content DESMASCARADO) saía para qualquer um.
+    mockRedis.hget.mockResolvedValue(null)
+    mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
+
+    const { rawTool } = makeServer()
+    const raw = await rawTool("evaluation_context_get", {
+      session_token:  VALID_TOKEN,
+      session_id:     SESSION_ID,
+      participant_id: PARTICIPANT_ID,
+    })
+
+    expect(raw.isError).toBe(true)
+    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
   })
 
   it("extracts participant_summary fields correctly", async () => {
@@ -216,7 +265,12 @@ describe("evaluation_context_get", () => {
 describe("evaluation_submit", () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockRedis.hget.mockResolvedValue("agente_avaliacao_v1")
+    // O hash da instância responde por CAMPO: `agent_role` é a entrada de
+    // autorização do gate, `agent_type_id` é a identidade carimbada no resultado.
+    // Um `mockResolvedValue` único devolveria o agent_type_id também para
+    // `agent_role` e o gate negaria tudo.
+    mockRedis.hget.mockImplementation((_key: string, field: string) =>
+      Promise.resolve(field === "agent_role" ? "evaluator" : "agente_avaliacao_v1"))
     mockRedis.get.mockResolvedValue(JSON.stringify(makeReplayContext()))
     mockKafka.publish.mockResolvedValue(undefined)
   })
@@ -234,6 +288,18 @@ describe("evaluation_submit", () => {
     compliance_flags:   [],
     is_benchmark:       false,
   }
+
+  it("rejects submit when agent_role is not evaluator (fails closed)", async () => {
+    mockRedis.hget.mockImplementation((_key: string, field: string) =>
+      Promise.resolve(field === "agent_role" ? "executor" : "agente_retencao_v1"))
+
+    const { rawTool } = makeServer()
+    const raw = await rawTool("evaluation_submit", baseInput)
+
+    expect(raw.isError).toBe(true)
+    expect(JSON.parse(raw.content[0]!.text).error).toBe("unauthorized")
+    expect(mockKafka.publish).not.toHaveBeenCalled()
+  })
 
   it("publishes evaluation.completed with eval_status=submitted (Arc 3 baseline)", async () => {
     const { callTool } = makeServer()

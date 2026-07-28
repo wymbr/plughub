@@ -192,10 +192,23 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         const token_expires_at = new Date(Date.now() + SESSION_TOKEN_TTL_S * 1000).toISOString()
 
         // Persiste estado da instância no Redis
+        //
+        // `agent_role` — PROPÓSITO do agente, vindo do REGISTRY (nunca do input).
+        // O escopo casa: o hash é da INSTÂNCIA, e o propósito é fato do artefato
+        // que a instância executa, estável por toda a vida dela. É o campo que os
+        // gates de `evaluation_context_get`/`evaluation_submit` consomem.
+        //
+        // Não confundir com o PAPEL DE PARTICIPAÇÃO (primary/specialist/supervisor):
+        // esse é fato de (participante, sessão) e NÃO cabe aqui — a mesma instância
+        // atende `max_concurrent_sessions` sessões e pode ser primary numa e
+        // specialist noutra simultaneamente. Guardá-lo neste hash colapsaria
+        // multi-sessão (invariante "never store a narrower-scope fact in a
+        // wider-scope field"). Ele vive no escopo da sessão.
         const instanceKey = keys.agentInstance(tenant_id, instance_id)
         await redis.hset(instanceKey, {
           state:                   "logged_in",
           agent_type_id,
+          agent_role:              agentType.agent_role ?? "executor",
           current_sessions:        "0",
           max_concurrent_sessions: String(agentType.max_concurrent_sessions),
           execution_model:         agentType.execution_model ?? "stateless",

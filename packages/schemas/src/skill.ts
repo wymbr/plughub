@@ -30,6 +30,39 @@ export const SkillClassificationSchema = z.object({
 })
 
 // ─────────────────────────────────────────────
+// Propósito do agente (Fato A — escopo do artefato)
+// ─────────────────────────────────────────────
+
+/**
+ * `agent_role` — PROPÓSITO do agente, declarado no registry.
+ *
+ * Não confundir com o **papel de participação numa sessão** (`primary` |
+ * `specialist` | `supervisor`), que é fato de (participante, sessão) e vive no
+ * escopo da sessão. São dois fatos de escopos diferentes que o código já
+ * confundiu sob um único campo chamado `role`:
+ *
+ *   - `agent_role` (aqui)      → escopo do ARTEFATO. Estável, declarado, é
+ *                                 config do tenant. Entrada de AUTORIZAÇÃO.
+ *   - papel de participação    → escopo (participante, sessão). Uma mesma
+ *                                 instância é `primary` numa sessão e
+ *                                 `specialist` noutra ao mesmo tempo.
+ *
+ * Mora no SKILL — e não num `agent_type` — porque a entidade AgentType foi
+ * aposentada: no modelo deploy-driven a identidade do agente É o skill
+ * deployado (`agent_login` valida contra `GET /v1/skills/{id}`).
+ *
+ * **Invariante de autorização**: quem consome isto (ex.: o gate de
+ * `evaluation_context_get`) deve lê-lo do REGISTRY, nunca de um input do
+ * agente. Um agente declarar "sou evaluator" é asserção, não autorização.
+ */
+export const AgentRoleSchema = z.enum([
+  "executor",       // resolve diretamente — padrão
+  "orchestrator",   // coordena outros via skill flow
+  "evaluator",      // avalia qualidade pós-sessão (nunca recebe tráfego ao vivo)
+])
+export type AgentRole = z.infer<typeof AgentRoleSchema>
+
+// ─────────────────────────────────────────────
 // Tools da skill
 // ─────────────────────────────────────────────
 
@@ -1258,6 +1291,15 @@ export const SkillSchema = z.object({
   description: z.string(),
 
   classification: SkillClassificationSchema,
+
+  /**
+   * agent_role — propósito do agente (ver AgentRoleSchema).
+   *
+   * Default `executor`: todo skill existente segue inalterado, e um skill que
+   * esquece de declarar NÃO ganha privilégio por omissão (o gate de avaliação
+   * exige `evaluator` positivo). Campo de config do tenant — editável na UI.
+   */
+  agent_role: AgentRoleSchema.default("executor"),
 
   /**
    * System prompt instruction — obrigatório para skills verticais/horizontais (LLM-driven).

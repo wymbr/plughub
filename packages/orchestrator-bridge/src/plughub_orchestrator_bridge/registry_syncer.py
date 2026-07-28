@@ -615,6 +615,13 @@ class RegistrySyncer:
             if raw.get("config_params"):
                 payload["config_params"] = raw["config_params"]
 
+            # agent_role — propósito do agente (executor|orchestrator|evaluator).
+            # Só entra no payload quando o YAML DECLARA: a rota preserva o valor do
+            # DB quando a chave está ausente (provisioning precedence — uma edição de
+            # UI não pode ser revertida a "executor" por um PUT que nem cita o campo).
+            if raw.get("agent_role"):
+                payload["agent_role"] = raw["agent_role"]
+
             await self._upsert_skill(http, headers, skill_id, payload, report)
 
     async def _upsert_skill(

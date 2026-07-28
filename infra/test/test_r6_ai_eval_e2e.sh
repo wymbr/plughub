@@ -33,6 +33,22 @@ echo "══ aguardando evaluation-api ══"
 for i in $(seq 1 30); do $CURL "$EVAL/health" >/dev/null 2>&1 && { echo "  ✓ no ar"; break; }; \
   [ "$i" = 30 ] && { echo "  ✗ timeout"; exit 1; }; sleep 1; done
 
+# G-PROBE (posterior a este script): create_form/publish/create_campaign exigem Bearer +
+# ABAC `evaluation.formularios:read_write`, e o dispatch aceita Bearer rw OU
+# X-Service-Token — X-Admin-Token deixou de servir (`_require_service` não tem fallback
+# p/ admin). Sem isto o script morria em "form falhou". Bearer mintado no container
+# (mesmo jwt_secret que a API valida), padrão de smoke_gprobe_service_auth.sh.
+JWT_SECRET="${JWT_SECRET:-changeme_auth_jwt_secret_demo_32c}"
+TOK=$($COMPOSE exec -T evaluation-api python - "$JWT_SECRET" <<'PY' 2>/dev/null | tr -d '\r' | tail -n1
+import sys, jwt
+print(jwt.encode({"sub":"u_r6","tenant_id":"tenant_demo","roles":["operator"],
+                  "module_config":{"evaluation":{"formularios":{"access":"read_write","scope":[]}}}},
+                 sys.argv[1], algorithm="HS256"))
+PY
+)
+[ -n "$TOK" ] || { echo "  ✗ mint do Bearer falhou"; exit 1; }
+BH="Authorization: Bearer $TOK"
+
 SID="sess-r6ai-$(date +%s)"
 
 echo "══ descobrindo um flow_id real (agent-registry) p/ flow_definition ══"
@@ -41,7 +57,7 @@ FLOW_ID=$($CURL "$AREG/v1/skills" -H "x-tenant-id: $TENANT" | jq -r '(.skills //
 echo "  flow_id=$FLOW_ID"
 
 echo "══ setup: form de IA (3 critérios) + campanha + instance · session=$SID ══"
-F=$($CURL -X POST "$EVAL/v1/evaluation/forms" $JSON -d "{
+F=$($CURL -X POST "$EVAL/v1/evaluation/forms" $JSON -H "$BH" -d "{
   \"tenant_id\":\"$TENANT\",\"name\":\"r6_ai_e2e\",\"min_passing_score\":7.0,\"dimensions\":[
     {\"dimension_id\":\"ia_qualidade\",\"name\":\"Qualidade de IA\",\"weight\":1,\"criteria\":[
       {\"criterion_id\":\"tool_correctness\",\"label\":\"Tool correctness\",\"type\":\"score\",\"weight\":1,\"max_score\":10,\"na_allowed\":true,
@@ -55,10 +71,10 @@ F=$($CURL -X POST "$EVAL/v1/evaluation/forms" $JSON -d "{
        \"scoring_guidance\":\"O input inclui knowledge_snippets. Verifique afirmacoes factuais contra a KB e atribua nota 0-10. Use na=true se nao houver snippets para checar nenhuma afirmacao.\"}
     ]}]}" | jq -r '.form_id // .id // empty')
 [ -n "$F" ] || { echo "  ✗ form falhou"; exit 1; }
-$CURL -X POST "$EVAL/v1/evaluation/forms/$F/publish?tenant_id=$TENANT" $JSON -d '{"published_by":"e2e"}' >/dev/null
+$CURL -X POST "$EVAL/v1/evaluation/forms/$F/publish?tenant_id=$TENANT" $JSON -H "$BH" -d '{"published_by":"e2e"}' >/dev/null
 FORM_JSON=$($CURL "$EVAL/v1/evaluation/forms/$F?tenant_id=$TENANT")
 
-C=$($CURL -X POST "$EVAL/v1/evaluation/campaigns" $JSON -d "{
+C=$($CURL -X POST "$EVAL/v1/evaluation/campaigns" $JSON -H "$BH" -d "{
   \"tenant_id\":\"$TENANT\",\"name\":\"r6_ai_camp\",\"form_id\":\"$F\",
   \"pool_id\":\"$EVAL_POOL_ID\",\"evaluation_pool_id\":\"$EVAL_POOL_ID\",\"evaluator_pool\":\"$EVALUATOR_POOL\"}" \
   | jq -r '.campaign_id // .id // empty')
@@ -130,7 +146,7 @@ assert_true "pipeline_state no ReplayContext" "$(printf '%s' "$CTX" | jq -e '.pi
 
 echo "══ dispatch ══"
 D=$($CURL -X POST "$EVAL/v1/evaluation/campaigns/$C/dispatch?tenant_id=$TENANT" \
-  -H "X-Admin-Token: $ADMIN" $JSON -d '{}')
+  -H "$BH" $JSON -d '{}')
 echo "  $(echo "$D" | jq -c '{dispatched, evaluator_pool}' 2>/dev/null || echo "$D")"
 
 echo "══ aguardando o avaliador (até 180s) ══"

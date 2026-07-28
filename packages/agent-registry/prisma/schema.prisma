@@ -133,6 +133,12 @@ model Skill {
   description String
 
   classification     Json
+  /// agent_role — PROPÓSITO do agente: "executor" (default) | "orchestrator" | "evaluator".
+  /// Fato de escopo do ARTEFATO, distinto do papel de participação numa sessão
+  /// (primary/specialist/supervisor), que é fato de (participante, sessão).
+  /// Entrada de autorização: `agent_login` carimba este valor (lido daqui, nunca do
+  /// input do agente) no hash da instância, e os gates de avaliação exigem "evaluator".
+  agent_role         String  @default("executor")
   instruction        Json?   // null for orchestrator skills whose behaviour is defined by flow
   tools              Json    @default("[]")
   interface_schema   Json?
