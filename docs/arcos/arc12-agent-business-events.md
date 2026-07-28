@@ -14,6 +14,21 @@ O `agent_event` é o mecanismo de telemetria de negócio do PlugHub. Em vez de c
 
 **Contexto automático**: o agente só passa `category`, `value` e `tags?`. O resto — `tenant_id`, `agent_type_id`, `skill_id`, `pool_id`, `journey_id`, `session_id` — é resolvido automaticamente do `session_token` pelo McpInterceptor.
 
+> ### ⚠️ Desambiguação de nomes
+>
+> Três nomes quase idênticos, para **duas** coisas diferentes:
+>
+> | Nome | O que é |
+> |---|---|
+> | tool `agent_event` (singular) | **este arco** — porta única do eixo de marcação |
+> | tabela `agent_business_events` | **este arco** — onde a marcação é gravada |
+> | rotas `/reports/agent-events/*` | **este arco** — leem `agent_business_events` |
+> | ~~tabela `agent_events`~~ | **NÃO é este arco** — lifecycle derivado (`routed`/`agent_done`), descontinuada em 2026-07-28 por duplicar `segments` |
+>
+> A colisão já induziu erro na documentação do próprio projeto. Regra para decidir:
+> **o eixo de marcação tem porta única — a tool `agent_event`.** O que não passa por ela
+> é substrato derivado (`sessions`/`segments`/`messages`), não marcação.
+
 ---
 
 ## Fase A — MCP Tool + Infraestrutura ClickHouse

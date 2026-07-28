@@ -2,6 +2,68 @@
 
 ---
 
+## `agent_events` descontinuada — fatia 1: para de ser escrita ✅ (2026-07-28)
+
+Começou como "corrigir o `agent_done` de crash-recovery que o analytics descarta"
+(`TODO.md`) e a investigação desmontou a premissa duas vezes.
+
+**Primeiro: não eram 2 caminhos, eram 9.** Todos os call sites do orchestrator-bridge
+publicam `agent_done` chaveando o contato como `conversation_id`; **nenhum** manda
+`session_id`. O parser exigia `session_id` → descartava 100% do `agent_done` do bridge,
+não só o de recuperação. `agent_events` só recebia linha do `runtime.ts` (que não manda
+`outcome`/`pool_id`/`agent_type_id`/`handle_time_ms` — linha praticamente vazia) e do
+quality-ingest.
+
+**Segundo: o medo de mexer em TMA era infundado.** Nenhuma métrica de produto lê
+`agent_events` — TMA, resolução e escalação saem de `sessions`/`segments`, e o
+`performance_score` do Arc 7d passa por `mv_agent_performance_daily`, que lê `segments`.
+
+Com isso a pergunta virou outra: **para que serve a tabela?** O critério que fechou a
+discussão foi de eixo — *no eixo de marcação semântica há uma porta única, a tool
+`agent_event`; o resto é substrato derivado ou duplicata*:
+
+| Eixo | Entrada | Tabela |
+|---|---|---|
+| Marcação semântica (KPI que o agente declara) | tool `agent_event` (Arc 12) | `agent_business_events` |
+| Substrato derivado (fato de plataforma) | consumers Kafka | `sessions`, `segments`, `messages` |
+| Trilha de auditoria | UNION | `/reports/events` (view) |
+
+`agent_events` não pertencia a nenhum: é derivada (nenhum agente a emite — metade dela é
+decisão do routing-engine) **e** duplica `segments`, que guarda o mesmo par
+`routed`/`agent_done` como UMA linha fechada (`started_at`/`ended_at`) com `role`,
+`channel`, `close_reason`, `sequence_index`, `conference_id`, `flow_id` a mais. Peso
+relativo: ~30 `FROM segments` em `reports_query.py` contra 3, e as duas materialized
+views são sobre `segments`. A documentação canônica (`docs/modelos-de-dados.md`,
+`docs/layers/07-data-layer.md`) já não a listava.
+
+**Fatia 1 — para de escrever (esta):**
+- `parse_routed` não emite mais a linha `routed`; `parse_agent_lifecycle` perdeu o ramo
+  `agent_done`. Dispatch do consumer + `insert_agent_event`/`_AGENT_COLS`/`_agent_row`
+  removidos (cadeia órfã).
+- `/reports/events` migrado para `segments`, em duas branches (`started_at`→routed,
+  `ended_at`→agent_done). **Ganha** `channel` sem JOIN, `close_reason` no conteúdo, e
+  `author_role` passa a receber o papel REAL (`primary`/`specialist`) em vez de
+  `agent_type_id` — o campo se chama author_ROLE e as outras branches já põem papel ali.
+- `/reports/agents` (bare) **removido** — não tinha nenhum chamador; o que parecia ser
+  seu cliente aponta para a evaluation-api. Substitutos: `/reports/agents/performance` e
+  `/reports/agent-performance/daily`, sobre `segments`.
+- Bloco `agent_events` de `/dashboard/metrics`: chave preservada por retrocompat, fonte
+  agora `segments`. Fica mais correto — antes `by_outcome` era 100% `"unknown"` no vivo.
+- Card do Metabase reescrito sobre `segments.duration_ms`, com `duration_ms > 0` e
+  `agent_type != 'system'` (o antigo fazia `avg(handle_time_ms)` sem guarda, sobre uma
+  coluna que chegava nula).
+
+**⚠️ O EVENTO `agent_done` não foi removido** — o routing-engine depende dele em
+`agent.lifecycle` para liberar capacidade. Saiu só a gravação analítica redundante.
+
+**Fatia 2 (pendente):** `DROP TABLE` + grants + row policies. Adiada de propósito: a
+auditoria cobre o código, não consulta ad-hoc (Metabase manual, query direta).
+
+**Colisão de nomes desambiguada:** `/reports/agent-events/*` é **Arc 12**
+(`agent_business_events`), não a tabela removida. O `TODO.md` já tinha errado isso.
+
+---
+
 ## ai-gateway: erro de provedor deixa de ser mudo ✅ (2026-07-28)
 
 Achado colateral da validação da Fatia A: **todas** as avaliações do demo falhavam, e o

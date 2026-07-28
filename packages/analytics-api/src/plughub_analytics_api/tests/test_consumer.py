@@ -37,7 +37,6 @@ def make_store() -> MagicMock:
     s = MagicMock()
     s.upsert_session               = AsyncMock()
     s.insert_queue_event           = AsyncMock()
-    s.insert_agent_event           = AsyncMock()
     s.insert_message               = AsyncMock()
     s.insert_usage_event           = AsyncMock()
     s.insert_sentiment_event       = AsyncMock()
@@ -103,24 +102,19 @@ class TestParseRouted:
             },
         }
 
-    def test_returns_two_rows(self):
+    def test_returns_only_sessions_row(self):
+        # A linha `agent_events` saiu em 2026-07-28 junto com a tabela (substrato
+        # derivado que duplicava `segments`). O roteamento continua virando
+        # segmento via `conversations.participants` → `segments.started_at`.
         rows = parse_routed(self._payload())
         assert rows is not None
-        assert len(rows) == 2
-        tables = {r["table"] for r in rows}
-        assert tables == {"sessions", "agent_events"}
+        assert len(rows) == 1
+        assert {r["table"] for r in rows} == {"sessions"}
 
     def test_sessions_row_has_pool_id(self):
         rows = parse_routed(self._payload())
         sess = next(r for r in rows if r["table"] == "sessions")
         assert sess["pool_id"] == POOL
-
-    def test_agent_event_has_correct_type(self):
-        rows = parse_routed(self._payload())
-        ae = next(r for r in rows if r["table"] == "agent_events")
-        assert ae["event_type"] == "routed"
-        assert ae["routing_mode"] == "autonomous"
-        assert ae["instance_id"] == "inst-001"
 
     def test_returns_none_without_session_id(self):
         assert parse_routed({"tenant_id": TENANT, "result": {}}) is None
@@ -130,12 +124,14 @@ class TestParseRouted:
         # NOT write the contact-level sessions row — otherwise a wrap-up routing
         # arriving after contact_closed re-opens the session (no-version
         # ReplacingMergeTree, last-inserted-wins) and clobbers the contact pool.
+        #
+        # Invariante preservado; o que mudou é que agora NADA sobra (antes sobrava
+        # a linha de agent_events).
         payload = self._payload()
         payload["result"]["conference_id"] = "conf-xyz"
         rows = parse_routed(payload)
         assert rows is not None
-        tables = {r["table"] for r in rows}
-        assert tables == {"agent_events"}
+        assert rows == []
         assert all(r["table"] != "sessions" for r in rows)
 
     def test_primary_routing_still_writes_sessions_row(self):
@@ -238,30 +234,27 @@ class TestParseConversationsEvent:
 # ── parse_agent_lifecycle ─────────────────────────────────────────────────────
 
 class TestParseAgentLifecycle:
-    def test_agent_done_returns_row(self):
-        row = parse_agent_lifecycle({
-            "event":         "agent_done",
-            "session_id":    SESSION,
-            "tenant_id":     TENANT,
-            "agent_type_id": "agente_retencao_v1",
-            "pool_id":       POOL,
-            "instance_id":   "inst-001",
-            "outcome":       "resolved",
+    def test_agent_done_is_not_persisted(self):
+        # 2026-07-28 — o ramo agent_done → agent_events saiu com a tabela. O EVENTO
+        # continua existindo em `agent.lifecycle` (o routing-engine depende dele
+        # para liberar capacidade); o que saiu foi a gravação analítica redundante.
+        # O fim de atendimento é `segments.ended_at` + `outcome`, via
+        # `conversations.participants` (ver TestParseParticipantEvent).
+        assert parse_agent_lifecycle({
+            "event":          "agent_done",
+            "session_id":     SESSION,
+            "tenant_id":      TENANT,
+            "agent_type_id":  "agente_retencao_v1",
+            "pool_id":        POOL,
+            "instance_id":    "inst-001",
+            "outcome":        "resolved",
             "handoff_reason": None,
             "handle_time_ms": 12000,
-        })
-        assert row is not None
-        assert row["table"] == "agent_events"
-        assert row["event_type"] == "agent_done"
-        assert row["outcome"] == "resolved"
-        assert row["handle_time_ms"] == 12000
+        }) is None
 
     def test_non_agent_done_returns_none(self):
         assert parse_agent_lifecycle({"event": "agent_ready", "session_id": SESSION, "tenant_id": TENANT}) is None
         assert parse_agent_lifecycle({"event": "agent_busy", "session_id": SESSION, "tenant_id": TENANT}) is None
-
-    def test_missing_session_id_returns_none(self):
-        assert parse_agent_lifecycle({"event": "agent_done", "tenant_id": TENANT}) is None
 
 
 # ── parse_usage_event ─────────────────────────────────────────────────────────
@@ -346,11 +339,6 @@ class TestWriteRowDispatch:
         await _write_row(store, {"table": "queue_events"}, "topic", 0)
         store.insert_queue_event.assert_called_once()
 
-    async def test_agent_events_dispatched(self):
-        store = make_store()
-        await _write_row(store, {"table": "agent_events"}, "topic", 0)
-        store.insert_agent_event.assert_called_once()
-
     async def test_messages_dispatched(self):
         store = make_store()
         await _write_row(store, {"table": "messages"}, "topic", 0)
@@ -386,7 +374,6 @@ class TestWriteRowDispatch:
         await _write_row(store, {"table": "unknown_table"}, "topic", 0)
         store.upsert_session.assert_not_called()
         store.insert_queue_event.assert_not_called()
-        store.insert_agent_event.assert_not_called()
 
 
 # ── parse_participant_event ───────────────────────────────────────────────────
@@ -888,7 +875,6 @@ class TestWriteRowDispatchContactInsight:
         row = {"table": "contact_insights", "insight_id": "ins-002", "tenant_id": TENANT}
         await _write_row(store, row, "conversations.events", 0)
         store.upsert_session.assert_not_awaited()
-        store.insert_agent_event.assert_not_awaited()
         store.insert_evaluation_event.assert_not_awaited()
 
 
@@ -993,19 +979,20 @@ class TestParseAgentLifecyclePause:
         del payload["instance_id"]
         assert parse_agent_lifecycle(payload) is None
 
-    # ── agent_done unaffected ────────────────────────────────────────────────
+    # ── agent_done ───────────────────────────────────────────────────────────
+    # Era o guard de regressão do Arc 8 ("pause/ready não quebrou o agent_done").
+    # A premissa deixou de existir em 2026-07-28: agent_done não gera mais linha
+    # (a tabela agent_events saiu). O guard vira o inverso — pause/ready seguem
+    # vivos (testes acima) e agent_done é inerte para o analytics.
 
-    def test_agent_done_still_returns_agent_events_row(self):
-        row = parse_agent_lifecycle({
+    def test_agent_done_returns_none(self):
+        assert parse_agent_lifecycle({
             "event":      "agent_done",
             "tenant_id":  TENANT,
             "instance_id": self.INSTANCE,
             "session_id": SESSION,
             "timestamp":  self.TS,
-        })
-        assert row is not None
-        assert row["table"] == "agent_events"
-        assert row["event_type"] == "agent_done"
+        }) is None
 
     # ── untracked events ─────────────────────────────────────────────────────
 
@@ -1059,7 +1046,6 @@ class TestWriteRowDispatchPauseIntervals:
         row = {"table": "agent_pause_intervals", "interval_id": "x", "tenant_id": TENANT}
         await _write_row(store, row, "agent.lifecycle", 0)
         store.upsert_session.assert_not_awaited()
-        store.insert_agent_event.assert_not_awaited()
         store.insert_evaluation_event.assert_not_awaited()
 
 

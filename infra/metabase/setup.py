@@ -239,16 +239,25 @@ ORDER BY pool_id, event_type""",
     (
         "Agent Performance — Handle Time e Outcome (24h)",
         "table",
+        # Fonte migrada de `agent_events` (descontinuada) para `segments`.
+        # Ganhos: `duration_ms` é preenchido de fato (o produtor vivo do antigo
+        # agent_done nunca mandava handle_time_ms, então avg/min/max liam NULL
+        # enquanto `sessions` inflava), e `duration_ms > 0` evita que segmento de
+        # duração zero puxe a média — mesma guarda que o timeseries já usa.
+        # `agent_type != 'system'` exclui segmentos sintéticos (outage/fila).
         """SELECT
     agent_type_id,
     outcome,
-    count()                              AS sessions,
-    round(avg(handle_time_ms) / 1000, 1) AS avg_handle_s,
-    round(min(handle_time_ms) / 1000, 1) AS min_handle_s,
-    round(max(handle_time_ms) / 1000, 1) AS max_handle_s
-FROM plughub.agent_events
-WHERE timestamp >= now() - INTERVAL 1 DAY
-  AND event_type = 'agent_done'
+    count()                            AS sessions,
+    round(avg(duration_ms) / 1000, 1)  AS avg_handle_s,
+    round(min(duration_ms) / 1000, 1)  AS min_handle_s,
+    round(max(duration_ms) / 1000, 1)  AS max_handle_s
+FROM plughub.segments FINAL
+WHERE started_at >= now() - INTERVAL 1 DAY
+  AND ended_at IS NOT NULL
+  AND duration_ms > 0
+  AND agent_type != 'system'
+  AND origin = 'live'
 GROUP BY agent_type_id, outcome
 ORDER BY sessions DESC""",
         {},

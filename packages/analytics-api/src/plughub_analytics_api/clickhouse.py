@@ -134,6 +134,22 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_id)
 """
 
+# ⚠️ DESCONTINUADA (2026-07-28) — nenhum parser escreve nesta tabela desde então.
+#
+# Era substrato DERIVADO que duplicava `segments`: guardava `routed` e `agent_done`
+# como duas linhas que nenhuma query juntava, enquanto `segments` guarda o mesmo
+# par como UMA linha fechada (`started_at`/`ended_at`) e ainda traz `role`,
+# `channel`, `close_reason`, `sequence_index`, `conference_id`, `flow_id`.
+#
+# Não pertencia a nenhum eixo do sistema: não é marcação semântica (essa tem porta
+# única — a tool `agent_event` do Arc 12 → `agent_business_events`) nem substrato
+# legítimo (esse é `segments`). A semelhança de nome com `agent_business_events` e
+# com as rotas `/reports/agent-events/*` (que são Arc 12) é histórica e já induziu
+# erro na própria documentação.
+#
+# O DDL fica por enquanto para manter o histórico consultável — a auditoria cobre o
+# código, mas não alcança consulta ad-hoc (Metabase manual, query direta). DROP +
+# limpeza de grants/row policies = fatia 2. Ver CHANGELOG 2026-07-28 e TODO.md.
 _DDL_AGENT_EVENTS = """
 CREATE TABLE IF NOT EXISTS {db}.agent_events
 (
@@ -1208,18 +1224,10 @@ class AnalyticsStore:
             self._insert, "queue_events", [_queue_row(row)], self._QUEUE_COLS
         )
 
-    # agent_events
-
-    _AGENT_COLS = [
-        "event_id", "tenant_id", "session_id", "agent_type_id", "pool_id",
-        "instance_id", "event_type", "outcome", "handoff_reason",
-        "handle_time_ms", "routing_mode", "timestamp", "date",
-    ]
-
-    async def insert_agent_event(self, row: dict) -> None:
-        await asyncio.to_thread(
-            self._insert, "agent_events", [_agent_row(row)], self._AGENT_COLS
-        )
+    # agent_events — caminho de escrita REMOVIDO (2026-07-28).
+    # `_AGENT_COLS` / `insert_agent_event` / `_agent_row` formavam uma cadeia cujo
+    # único ponto de entrada era o dispatch do consumer, que saiu junto com os dois
+    # parsers. Ver o comentário sobre `_DDL_AGENT_EVENTS` no topo deste arquivo.
 
     # messages
 
@@ -1871,23 +1879,7 @@ def _queue_row(d: dict) -> list:
     ]
 
 
-def _agent_row(d: dict) -> list:
-    ts = d.get("timestamp") or d.get("routed_at")
-    return [
-        d.get("event_id", ""),
-        d.get("tenant_id", ""),
-        d.get("session_id", ""),
-        d.get("agent_type_id", "") or "",
-        d.get("pool_id", "") or "",
-        d.get("instance_id", "") or "",
-        d.get("event_type", ""),
-        d.get("outcome"),
-        d.get("handoff_reason"),
-        d.get("handle_time_ms"),
-        d.get("routing_mode"),
-        _parse_dt(ts) or datetime.utcnow(),
-        _today_utc(ts),
-    ]
+# _agent_row removida com o caminho de escrita de `agent_events` (2026-07-28).
 
 
 def _message_row(d: dict) -> list:

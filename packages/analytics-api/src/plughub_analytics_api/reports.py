@@ -4,7 +4,6 @@ FastAPI router for the four /reports/* endpoints.
 
 Routes:
   GET /reports/sessions   — session list with filters
-  GET /reports/agents     — agent event list with filters
   GET /reports/quality    — sentiment event list with filters
   GET /reports/usage      — usage event list with filters
 
@@ -39,7 +38,6 @@ from .reports_query import (
     _to_csv,
     query_agent_performance_daily,
     query_agent_performance_report,
-    query_agents_report,
     query_campaigns_report,
     query_contact_insights_report,
     query_agents_compare,
@@ -167,45 +165,19 @@ async def report_sessions(
     return _respond(data, format, f"sessions_{_today_label()}.csv")
 
 
-# ─── GET /reports/agents ──────────────────────────────────────────────────────
-
-@router.get("/agents")
-async def report_agents(
-    request:        Request,
-    tenant_id:      str           = Query(...,   description="Tenant identifier"),
-    from_dt:        Optional[str] = Query(None,  description="ISO8601 start (default: 7d ago)"),
-    to_dt:          Optional[str] = Query(None,  description="ISO8601 end (default: now)"),
-    agent_type_id:  Optional[str] = Query(None,  description="Filter by agent_type_id"),
-    pool_id:        Optional[str] = Query(None,  description="Filter by pool_id"),
-    event_type:     Optional[str] = Query(None,  description="Filter by event_type (routed|agent_done)"),
-    outcome:        Optional[str] = Query(None,  description="Filter by outcome"),
-    page:           int           = Query(1,      ge=1),
-    page_size:      int           = Query(100,    ge=1),
-    format:         str           = Query("json", pattern="^(json|csv)$"),
-    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
-) -> Response:
-    """
-    Agent event list. Useful for per-agent performance analysis.
-
-    Columns: event_id, tenant_id, session_id, agent_type_id, pool_id, instance_id,
-             event_type, outcome, handoff_reason, handle_time_ms, routing_mode, timestamp
-    """
-    ps = _clamp_page_size(page_size, format == "csv")
-    data = await query_agents_report(
-        client    = request.app.state.store.new_client(),
-        database  = request.app.state.store._database,
-        tenant_id = tenant_id,
-        from_dt   = from_dt,
-        to_dt     = to_dt,
-        agent_type_id    = agent_type_id,
-        pool_id          = pool_id,
-        event_type       = event_type,
-        outcome          = outcome,
-        accessible_pools = pool_principal.accessible_pools,
-        page      = page,
-        page_size = ps,
-    )
-    return _respond(data, format, f"agents_{_today_label()}.csv")
+# ─── GET /reports/agents — REMOVIDO (2026-07-28) ─────────────────────────────
+#
+# Servia linhas cruas de `agent_events`, tabela descontinuada (substrato derivado
+# que duplicava `segments` com menos campos). O endpoint não tinha nenhum chamador
+# em todo o repo.
+#
+# Substitutos, ambos sobre `segments`:
+#   GET /reports/agents/performance        — performance agregada por agente
+#   GET /reports/agent-performance/daily   — tendência diária
+#
+# Não confundir com GET /reports/agent-events/* — esses são Arc 12
+# (`agent_business_events`, KPIs que o agente declara pela tool `agent_event`)
+# e permanecem. A semelhança de nome é histórica e já induziu erro no TODO.md.
 
 
 # ─── GET /reports/contact-insights ───────────────────────────────────────────
@@ -1239,13 +1211,16 @@ async def get_events(
     Sources (UNION ALL):
       sessions            → session_opened, session_closed
       messages            → message_sent (visibility=all only)
-      agent_events        → agent_done, routed
+      segments            → routed (started_at), agent_done (ended_at)
       agent_pause_intervals → agent_pause, agent_ready
       workflow_events     → workflow_{event_type}
 
     All events share the common shape:
       event_id, session_id, tenant_id, type, timestamp,
       channel, pool_id, author_id, author_role, content
+
+    Escopo de substrato: só produção (`origin = 'live'`). Sessões importadas ou
+    reavaliadas (quality-ingest / quality-export) não aparecem aqui.
     """
     ps   = _clamp_page_size(page_size, is_csv=(format == "csv"))
     data = await query_events(

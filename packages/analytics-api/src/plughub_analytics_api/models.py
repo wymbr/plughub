@@ -129,9 +129,15 @@ def parse_inbound(payload: dict[str, Any]) -> dict | None:
 
 def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
     """
-    Returns up to two rows:
-      - sessions upsert (with pool_id from routing result)
-      - agent_events (routing event)
+    Returns 0 or 1 row:
+      - sessions upsert (com pool_id do resultado de roteamento)
+
+    Lista VAZIA em roteamento de conferência/hook (`conference_id` presente): é
+    nível-segmento e não pode reescrever a linha de contato. O segmento em si vem
+    de `conversations.participants`, não daqui.
+
+    Antes devolvia também uma linha `agent_events`; a tabela foi descontinuada em
+    2026-07-28 (duplicava `segments`).
     """
     session_id = payload.get("session_id")
     tenant_id  = payload.get("tenant_id")
@@ -182,25 +188,20 @@ def parse_routed(payload: dict[str, Any]) -> list[dict] | None:
             }
         )
 
-    # agent_events — routing entry (segment-level; emitted for all routings,
-    # including conference/hook agents).
-    rows.append(
-        {
-            "table":        "agent_events",
-            "event_id":     _gen_id(),
-            "tenant_id":    tenant_id,
-            "session_id":   session_id,
-            "agent_type_id": result.get("agent_type_id") or "",
-            "pool_id":      pool_id,
-            "instance_id":  instance_id,
-            "event_type":   "routed",
-            "outcome":      None,
-            "handoff_reason": None,
-            "handle_time_ms": None,
-            "routing_mode": result.get("routing_mode"),
-            "timestamp":    routed_at,
-        }
-    )
+    # (removido 2026-07-28) A linha `agent_events` com event_type='routed'.
+    #
+    # `agent_events` era substrato DERIVADO que duplicava `segments`: cada
+    # roteamento já vira um `participant_joined` → uma linha de segmento com
+    # `started_at`, e o fim vira `ended_at`/`outcome` na MESMA linha. A tabela
+    # antiga guardava dois eventos que nenhuma query juntava, com menos campos
+    # (sem role, channel, close_reason, sequence_index, conference_id).
+    #
+    # Ela não pertencia a nenhum eixo: não é marcação semântica (essa tem porta
+    # única, a tool `agent_event` do Arc 12 → `agent_business_events`) nem
+    # substrato legítimo (esse é `segments`). Ver CHANGELOG 2026-07-28.
+    #
+    # Único campo exclusivo perdido: `routing_mode` — era write-only, lido apenas
+    # pelo endpoint `/reports/agents`, que não tinha chamadores.
     return rows
 
 
@@ -439,7 +440,10 @@ def parse_agent_lifecycle(payload: dict[str, Any]) -> dict | None:
     """
     Handles agent.lifecycle events.
 
-    agent_done  → agent_events table (as before).
+    agent_done  → None (não persiste). O EVENTO segue existindo e é essencial ao
+                  routing-engine (libera capacidade); o que saiu foi a gravação
+                  analítica em `agent_events`, tabela descontinuada em 2026-07-28.
+                  O fim de atendimento vive em `segments.ended_at`/`outcome`.
     agent_pause → agent_pause_intervals table (open interval; action="open").
     agent_ready → may close an open pause interval (action="close").
                   The consumer is responsible for Redis state tracking and
@@ -454,25 +458,25 @@ def parse_agent_lifecycle(payload: dict[str, Any]) -> dict | None:
     tenant_id = payload.get("tenant_id", "")
     instance_id = payload.get("instance_id", "")
 
-    if event == "agent_done":
-        session_id = payload.get("session_id")
-        if not session_id or not tenant_id:
-            return None
-        return {
-            "table":          "agent_events",
-            "event_id":       _gen_id(),
-            "tenant_id":      tenant_id,
-            "session_id":     session_id,
-            "agent_type_id":  payload.get("agent_type_id") or "",
-            "pool_id":        payload.get("pool_id") or "",
-            "instance_id":    instance_id,
-            "event_type":     "agent_done",
-            "outcome":        payload.get("outcome"),
-            "handoff_reason": payload.get("handoff_reason"),
-            "handle_time_ms": payload.get("handle_time_ms"),
-            "routing_mode":   None,
-            "timestamp":      payload.get("timestamp") or _now(),
-        }
+    # (removido 2026-07-28) O ramo `agent_done` → `agent_events`.
+    #
+    # A tabela era substrato derivado que duplicava `segments`, e este ramo era o
+    # sintoma mais visível disso: exigia `session_id`, mas os 9 call sites do
+    # orchestrator-bridge chaveiam o contato como `conversation_id` — então
+    # descartava 100% do agent_done do bridge, em silêncio. O que sobrava vinha do
+    # `runtime.ts`, que não manda outcome/pool_id/agent_type_id/handle_time_ms:
+    # linha praticamente vazia.
+    #
+    # O fim de atendimento continua registrado — em `segments.ended_at` +
+    # `outcome`, na mesma linha do início (via `conversations.participants`), com
+    # os campos que faltavam aqui.
+    #
+    # ⚠️ O EVENTO `agent_done` NÃO foi removido: o routing-engine depende dele em
+    # `agent.lifecycle` para liberar capacidade (`remove_conversation` → semáforo
+    # de vagas). O que saiu foi apenas a gravação analítica redundante.
+    #
+    # Não confundir com a tool `agent_event` (Arc 12) → `agent_business_events`:
+    # eixo diferente (KPI que o agente declara), preservado.
 
     if event == "agent_pause":
         if not tenant_id or not instance_id:

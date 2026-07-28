@@ -99,22 +99,32 @@ def _fetch_metrics_24h(client: Any, db: str, tenant_id: str) -> dict:
         cr = r["close_reason"] or "unknown"
         by_close_reason[cr] = by_close_reason.get(cr, 0) + r["total"]
 
-    # ── agent_events ──────────────────────────────────────────────────────────
+    # ── agent_events — agora derivado de `segments` ───────────────────────────
+    # A chave da resposta segue chamando `agent_events` por retrocompat do
+    # contrato, mas a FONTE mudou: a tabela homônima foi descontinuada (substrato
+    # derivado que duplicava `segments` com menos campos, ver CHANGELOG
+    # 2026-07-28). O mapeamento é direto e o número fica mais correto:
+    #   routed     → segmento iniciado          (count)
+    #   agent_done → segmento fechado           (ended_at IS NOT NULL)
+    # Antes, `total_done` só contava o que o `runtime.ts` publicava, e sempre com
+    # `outcome` nulo — ou seja, `by_outcome` era 100% "unknown" no tráfego vivo.
+    # Um bucket por outcome; segmento ainda aberto cai no sentinela `__open__`,
+    # que conta como roteado mas não como concluído.
     ae_rows = _run_query(client, f"""
-        SELECT event_type, outcome, count() AS cnt
-        FROM {db}.agent_events
+        SELECT
+            if(ended_at IS NULL, '__open__',
+               coalesce(nullIf(outcome, ''), 'unknown')) AS oc,
+            count()                                      AS cnt
+        FROM {db}.segments FINAL
         WHERE tenant_id = {{tenant_id:String}}
-          AND timestamp >= '{since}'
-        GROUP BY event_type, outcome
+          AND started_at >= '{since}'
+          AND origin = 'live'
+        GROUP BY oc
     """, {"tenant_id": tenant_id})
 
-    total_routed = sum(r["cnt"] for r in ae_rows if r["event_type"] == "routed")
-    total_done   = sum(r["cnt"] for r in ae_rows if r["event_type"] == "agent_done")
-    by_ae_outcome: dict[str, int] = {}
-    for r in ae_rows:
-        if r["event_type"] == "agent_done":
-            oc = r["outcome"] or "unknown"
-            by_ae_outcome[oc] = by_ae_outcome.get(oc, 0) + r["cnt"]
+    total_routed  = sum(r["cnt"] for r in ae_rows)
+    total_done    = sum(r["cnt"] for r in ae_rows if r["oc"] != "__open__")
+    by_ae_outcome = {r["oc"]: int(r["cnt"]) for r in ae_rows if r["oc"] != "__open__"}
 
     # ── usage ─────────────────────────────────────────────────────────────────
     usage_rows = _run_query(client, f"""

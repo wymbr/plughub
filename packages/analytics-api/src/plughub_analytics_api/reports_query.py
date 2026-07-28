@@ -546,15 +546,12 @@ def _fetch_sessions(
               AND outcome IS NOT NULL AND outcome != ''
             GROUP BY session_id
         ) AS _seg_out ON _seg_out.session_id = s.session_id
-        -- outcome fallback: most-recent agent_done outcome
-        LEFT JOIN (
-            SELECT session_id, argMax(outcome, timestamp) AS outcome_v
-            FROM {db}.agent_events FINAL
-            WHERE tenant_id = {{tenant_id:String}}
-              AND event_type = 'agent_done'
-              AND outcome IS NOT NULL AND outcome != ''
-            GROUP BY session_id
-        ) AS _ae_out ON _ae_out.session_id = s.session_id
+        -- (removido) 3º nível de fallback de outcome sobre `agent_events`.
+        -- A tabela era substrato derivado que duplicava `segments`, e neste
+        -- caminho específico era inerte: o `runtime.ts` — único produtor vivo do
+        -- agent_done aceito pelo parser — nunca mandou `outcome`, então o JOIN
+        -- rendia NULL em toda sessão live. Só produzia valor para sessões vindas
+        -- do quality-ingest, que hoje escrevem `segments` de qualquer forma.
         -- segment count per session
         LEFT JOIN (
             SELECT session_id, count() AS cnt
@@ -589,7 +586,7 @@ def _fetch_sessions(
             s.opened_at    AS opened_at,
             s.closed_at    AS closed_at,
             s.close_reason AS close_reason,
-            COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome_v, _ae_out.outcome_v) AS outcome,
+            COALESCE(NULLIF(s.outcome, ''), _seg_out.outcome_v) AS outcome,
             s.wait_time_ms AS wait_time_ms,
             -- Fase E.2: webhook duration = tempo decorrido total do processo
             -- (closed_at − início do primeiro segmento). Usa first_started_at porque o
@@ -1152,83 +1149,17 @@ def _fetch_contact_insights(
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
 
 
-# ─── /reports/agents ─────────────────────────────────────────────────────────
-
-async def query_agents_report(
-    client:    Any,
-    database:  str,
-    tenant_id: str,
-    from_dt:   str | None = None,
-    to_dt:     str | None = None,
-    *,
-    agent_type_id:    str | None       = None,
-    pool_id:          str | None       = None,
-    event_type:       str | None       = None,
-    outcome:          str | None       = None,
-    accessible_pools: list[str] | None = None,
-    page:      int = 1,
-    page_size: int = 100,
-) -> dict:
-    since = _ch_fmt(from_dt) if from_dt else _default_from()
-    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
-    if accessible_pools is not None and not accessible_pools:
-        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
-    try:
-        return await asyncio.to_thread(
-            _fetch_agents, client, database, tenant_id, since, until,
-            agent_type_id, pool_id, event_type, outcome, accessible_pools, page, page_size,
-        )
-    except Exception as exc:
-        logger.warning("query_agents_report failed tenant=%s: %s", tenant_id, exc)
-        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
-
-
-def _fetch_agents(
-    client: Any, db: str, tenant_id: str,
-    since: str, until: str,
-    agent_type_id: str | None, pool_id: str | None,
-    event_type: str | None, outcome: str | None,
-    accessible_pools: list[str] | None,
-    page: int, page_size: int,
-) -> dict:
-    conditions = [
-        "tenant_id = {tenant_id:String}",
-        f"timestamp >= '{since}'",
-        f"timestamp < '{until}'",
-    ]
-    params: dict = {"tenant_id": tenant_id}
-
-    if agent_type_id:
-        conditions.append("agent_type_id = {agent_type_id:String}")
-        params["agent_type_id"] = agent_type_id
-    if pool_id:
-        conditions.append("pool_id = {pool_id:String}")
-        params["pool_id"] = pool_id
-    if event_type:
-        conditions.append("event_type = {event_type:String}")
-        params["event_type"] = event_type
-    if outcome:
-        conditions.append("outcome = {outcome:String}")
-        params["outcome"] = outcome
-    _apply_pool_scope(conditions, accessible_pools)
-
-    where = " AND ".join(conditions)
-    offset = (page - 1) * page_size
-
-    total = _count(client, f"SELECT count() FROM {db}.agent_events FINAL WHERE {where}", params)
-
-    result = client.query(f"""
-        SELECT
-            event_id, tenant_id, session_id, agent_type_id, pool_id,
-            instance_id, event_type, outcome, handoff_reason,
-            handle_time_ms, routing_mode, timestamp
-        FROM {db}.agent_events FINAL
-        WHERE {where}
-        ORDER BY timestamp DESC
-        LIMIT {page_size} OFFSET {offset}
-    """, parameters=params)
-
-    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+# ─── /reports/agents — REMOVIDO (2026-07-28) ─────────────────────────────────
+#
+# `query_agents_report` / `_fetch_agents` liam `agent_events` cru e serviam o
+# endpoint `GET /reports/agents`, que não tinha NENHUM chamador em todo o repo.
+# O que parecia ser seu cliente (`useAgentReport` no platform-ui) aponta para a
+# evaluation-api (`/v1/evaluation/reports/agents`) e espera outro shape.
+#
+# Performance por agente vem de `/reports/agents/performance` e
+# `/reports/agent-performance/daily`, ambos sobre `segments` (Arc 5).
+# Não confundir com `/reports/agent-events/*`, que é Arc 12 e lê
+# `agent_business_events` — outro eixo, mantido.
 
 
 # ─── /reports/quality ────────────────────────────────────────────────────────
@@ -5255,7 +5186,9 @@ _NULL = "CAST(NULL AS Nullable(String))"   # reused in every branch
 # Which tables serve which event types (for query pruning)
 _SESSION_TYPES  = {"session_opened", "session_closed"}
 _MESSAGE_TYPES  = {"message_sent"}
-_AGENT_TYPES    = {"agent_done", "routed"}
+# `routed` e `agent_done` viraram branches SEPARADAS sobre `segments` (antes eram
+# uma só, sobre a extinta `agent_events`), então o pruning é por tipo individual —
+# não há mais um conjunto a testar. Ver `include_routed`/`include_done`.
 _PAUSE_TYPES    = {"agent_pause"}
 _READY_TYPES    = {"agent_ready"}
 
@@ -5284,7 +5217,12 @@ def _events_sql_branches(
     """
     include_session  = (not event_type) or event_type in _SESSION_TYPES
     include_messages = (not event_type) or event_type in _MESSAGE_TYPES
-    include_agent    = (not event_type) or event_type in _AGENT_TYPES
+    # `routed` e `agent_done` deixaram de ser uma branch só (eram duas linhas da
+    # antiga `agent_events`); agora são duas branches sobre `segments`, então o
+    # pruning pode ser por tipo. Sem isto, filtrar por `routed` ainda escaneava a
+    # branch de `agent_done` inteira só para o filtro externo descartá-la.
+    include_routed   = (not event_type) or event_type == "routed"
+    include_done     = (not event_type) or event_type == "agent_done"
     include_pause    = (not event_type) or event_type in _PAUSE_TYPES
     include_ready    = (not event_type) or event_type in _READY_TYPES
     include_workflow = (not event_type) or (event_type and event_type.startswith("workflow_"))
@@ -5308,7 +5246,16 @@ def _events_sql_branches(
     # session_id filter inside subqueries — parameterised
     sid_filter_sess  = " AND session_id = {ev_sid:String}"    if session_id else ""
     sid_filter_msg   = " AND m.session_id = {ev_sid:String}"  if session_id else ""
-    sid_filter_agent = " AND ae.session_id = {ev_sid:String}" if session_id else ""
+    # (`sid_filter_agent` foi consolidado em `sid_filter_sess`: as branches de
+    # routed/agent_done agora leem `segments` direto, sem o JOIN com sessions que
+    # exigia o prefixo `ae.` — o filtro ficou idêntico ao das sessões.)
+
+    # Isolamento de substrato (ADR): o stream de eventos é superfície OPERACIONAL,
+    # então mostra produção. Aplicado a TODAS as branches que têm a coluna — uma
+    # única branch filtrando produziria um stream incoerente (sessão importada
+    # aparecendo aberta e com mensagens, mas sem nenhum agente).
+    # `agent_pause_intervals` não tem `origin`; fica de fora por ausência de coluna.
+    origin_live = " AND origin = 'live'"
 
     branches: list[str] = []
 
@@ -5329,7 +5276,7 @@ def _events_sql_branches(
     FROM {db}.sessions FINAL
     WHERE tenant_id = {{ev_tid:String}}
       AND opened_at >= {{ev_since:String}} AND opened_at <= {{ev_until:String}}
-      {pool_scope}{sid_filter_sess}""")
+      {origin_live}{pool_scope}{sid_filter_sess}""")
 
         # session_closed
         branches.append(f"""
@@ -5348,7 +5295,7 @@ def _events_sql_branches(
     WHERE tenant_id = {{ev_tid:String}}
       AND closed_at IS NOT NULL
       AND closed_at >= {{ev_since:String}} AND closed_at <= {{ev_until:String}}
-      {pool_scope}{sid_filter_sess}""")
+      {origin_live}{pool_scope}{sid_filter_sess}""")
 
     if include_messages:
         pool_join_filter = ""
@@ -5375,30 +5322,62 @@ def _events_sql_branches(
     ) s ON m.session_id = s.session_id
     WHERE m.tenant_id = {{ev_tid:String}}
       AND m.timestamp >= {{ev_since:String}} AND m.timestamp <= {{ev_until:String}}
-      AND m.visibility = 'all'{sid_filter_msg}""")
+      AND m.visibility = 'all'
+      AND m.origin = 'live'{sid_filter_msg}""")
 
-    if include_agent:
+    # ── routed / agent_done — fonte `segments` ────────────────────────────────
+    # Substitui a antiga `agent_events` (substrato derivado que reescrevia, com
+    # menos campos, o que `segments` já grava). O mapeamento é 1:1 — a tabela
+    # antiga guardava DUAS linhas que nenhuma query juntava, enquanto `segments`
+    # guarda UMA linha já fechada:
+    #     routed     ≈ participant_joined → started_at
+    #     agent_done ≈ participant_left   → ended_at (+ outcome)
+    #
+    # Ganhos: `channel` vem da própria linha (o JOIN com sessions some) e
+    # `close_reason` enriquece o conteúdo do agent_done. A fonte antiga ainda
+    # chegava vazia no tráfego vivo (o `runtime.ts` não manda outcome nem
+    # pool_id), então isto conserta o dado, não só a origem.
+    #
+    # `author_role` passa a receber `role` (primary/specialist/…) em vez de
+    # `agent_type_id` — o campo se chama author_ROLE e as outras branches do UNION
+    # já põem papel ali ('system', m.author_role). A identidade do agente segue em
+    # `author_id` (instance_id).
+    if include_routed:
         branches.append(f"""
     SELECT
-        ae.event_id,
-        ae.session_id,
-        ae.tenant_id,
-        ae.event_type                     AS type,
-        ae.timestamp,
-        s.channel,
-        ae.pool_id,
-        if(ae.instance_id != '', ae.instance_id, {_NULL}) AS author_id,
-        ae.agent_type_id                  AS author_role,
-        if(ae.outcome IS NOT NULL, ae.outcome, {_NULL}) AS content
-    FROM {db}.agent_events FINAL ae
-    LEFT JOIN (
-        SELECT session_id, channel
-        FROM {db}.sessions FINAL
-        WHERE tenant_id = {{ev_tid:String}}
-    ) s ON ae.session_id = s.session_id
-    WHERE ae.tenant_id = {{ev_tid:String}}
-      AND ae.timestamp >= {{ev_since:String}} AND ae.timestamp <= {{ev_until:String}}
-      {pool_scope.replace('pool_id', 'ae.pool_id')}{sid_filter_agent}""")
+        concat(segment_id, ':routed')     AS event_id,
+        session_id,
+        tenant_id,
+        'routed'                          AS type,
+        started_at                        AS timestamp,
+        channel,
+        pool_id,
+        if(instance_id != '', instance_id, {_NULL}) AS author_id,
+        role                              AS author_role,
+        {_NULL}                           AS content
+    FROM {db}.segments FINAL
+    WHERE tenant_id = {{ev_tid:String}}
+      AND started_at >= {{ev_since:String}} AND started_at <= {{ev_until:String}}
+      {origin_live}{pool_scope}{sid_filter_sess}""")
+
+    if include_done:
+        branches.append(f"""
+    SELECT
+        concat(segment_id, ':done')       AS event_id,
+        session_id,
+        tenant_id,
+        'agent_done'                      AS type,
+        assumeNotNull(ended_at)           AS timestamp,
+        channel,
+        pool_id,
+        if(instance_id != '', instance_id, {_NULL}) AS author_id,
+        role                              AS author_role,
+        coalesce(outcome, close_reason, {_NULL}) AS content
+    FROM {db}.segments FINAL
+    WHERE tenant_id = {{ev_tid:String}}
+      AND ended_at IS NOT NULL
+      AND ended_at >= {{ev_since:String}} AND ended_at <= {{ev_until:String}}
+      {origin_live}{pool_scope}{sid_filter_sess}""")
 
     if include_pause:
         branches.append(f"""

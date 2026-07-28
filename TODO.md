@@ -103,7 +103,174 @@ multi-pool** seguem inexistentes, embora a F5 os previsse.
 
 ---
 
-## `agent_done` de crash-recovery é descartado pelo analytics *(achado 2026-07-27 na F4, não corrigido)*
+## analytics-api — 23 testes vermelhos há tempo *(achado ao rodar a suíte, 2026-07-28)*
+
+Apareceram ao validar a descontinuação do `agent_events`. **Nenhum tem relação com essa
+mudança** — os 260 de `test_reports.py`+`test_consumer.py` passam. São dois defeitos
+independentes, ambos anteriores e ambos do tipo "teste que não pode reprovar".
+
+### (a) 14 testes de RBAC neutralizados por um MagicMock ✅ CORRIGIDO (2026-07-28)
+
+`test_admin.py::TestRequirePrincipal` (8) e `test_dashboard.py::TestDashboardRBAC` (6)
+recebiam `Principal(sub="open_access")` e 200 onde esperavam 401/403.
+
+**Não era o ambiente** (a variável só existe no `docker-compose.demo.yml:921`; `env -u` não
+mudava nada). A causa era o próprio fixture:
+
+```python
+settings = MagicMock()
+settings.admin_jwt_secret = SECRET        # ← só isto era fixado
+```
+
+Um `MagicMock` auto-cria qualquer atributo e o devolve **truthy**. Quando o guard
+`if settings.analytics_open_access:` entrou em `require_principal` (`auth.py:72`), o mock
+passou a respondê-lo como verdadeiro, e os 14 testes silenciosamente trocaram de caminho:
+deixaram de exercitar autenticação e passaram a validar o atalho de open-access.
+
+**Corrigido** com `settings.analytics_open_access = False` nos dois fixtures.
+
+**A lição, que é maior que o conserto:** eram exatamente os testes que provam que o
+analytics exige token e bloqueia cross-tenant, e ficaram incapazes de reprovar sem que nada
+acusasse. É a terceira ocorrência do mesmo padrão nesta sessão — depois do
+`evaluation_context_get` (o `if (role && …)` que curto-circuitava na string vazia) e do 502
+mudo do ai-gateway (`lastResort` do logging). Todos: um default plausível ocupando o lugar
+de uma verificação.
+
+**Regra a adotar:** mock de config precisa fixar TODO atributo booleano que o código sob
+teste lê — o default de um mock nunca é "desligado". Um `MagicMock(spec=Settings)` não
+resolveria (spec valida nomes, não valores); o que resolveria é o mock ser um `Settings`
+real com overrides.
+
+### (b) 9 testes de `_fetch_customer_history` — drift desde a Journey J1
+
+`test_sessions.py::TestFetchCustomerHistory` (7) e `TestCustomerHistoryEndpoint` (2):
+`ValueError: not enough values to unpack (expected 9, got 8)`.
+
+A query em `sessions.py:241` passou a selecionar `root_session_id` (Journey J1) e os
+fixtures continuam com 8 colunas — não há uma única menção a `root_session_id` em
+`test_sessions.py`. Conserto: acrescentar o campo aos `_row()`/`_ch_row()`.
+
+### (c) Testes que travam
+
+`TestDashboardRBAC` pendurou em duas execuções (interrompido com Ctrl+C). Instancia
+`TestClient` com app real; suspeita de request sem timeout. Não investigado.
+
+---
+
+## Eventos — três superfícies para duas ideias *(desenho fechado 2026-07-28, não implementado)*
+
+Levantamento do platform-ui achou **três** telas de "Eventos", duas delas cópia literal
+uma da outra:
+
+| # | Onde | Conteúdo | Fonte |
+|---|---|---|---|
+| 1 | Monitor › Sessões → toggle "Eventos" (`MonitorTab.tsx:780` `EventsView`) | **agregado** (categoria, count, sum, avg, first/last seen) | `/reports/agent-events/summary` → `agent_business_events` (Arc 12) |
+| 2 | Monitor › Eventos (`Sidebar.tsx:70` → `/contacts/events`) | lista crua | `/reports/events` |
+| 3 | Analítico › Eventos (`Sidebar.tsx:123` → `/analise/events`) | lista crua — **mesmo componente do #2** | `/reports/events` |
+
+#2 e #3 montam o MESMO `EventsPage` (`routes.tsx:78` e `:111`); só o grant ABAC difere
+(`contacts.operacao` × `contacts.visualizar`).
+
+**Decisão (2026-07-28):** o #1 já É o dash consolidado que Monitor deveria ter — está só no
+lugar errado, escondido como toggle. Rearranjo:
+
+- **Monitor › Eventos** passa a renderizar o agregado (conteúdo do #1) — vira dash com
+  entrada própria de menu.
+- **O toggle dentro de Sessões sai** (`MonitorScope` volta a `sessions | processes`).
+- **Analítico › Eventos** fica com a lista crua, sozinha.
+
+Espelha o padrão do produto: Monitor = estado agregado ao vivo; Analytics = detalhe
+retrospectivo — a mesma relação que Monitor › Sessões tem com Analítico › Sessões.
+
+**Defeito a corrigir junto:** `EventsView` envia `period=24h` (`MonitorTab.tsx:794`), mas
+`get_agent_events_summary` (`reports.py:1431`) só aceita `from_dt`/`to_dt` — o param é
+ignorado, a janela real é o default de 7 dias, e o título i18n diz "últimas 24h". Número
+que mente.
+
+**Órfãos achados no mesmo levantamento** (não tratados): `AnaliseComparacaoPage` não tem
+rota (arrasta `MetricSelector` junto); `ContactsPage` não é importado no router;
+`/reports/agent-events/series` não tem nenhum chamador; chave i18n `nav.service.events`
+sem item de nav.
+
+---
+
+## Arc 12 — `segment_id` em `agent_business_events` *(investigado 2026-07-28, não implementado)*
+
+**Lacuna:** a marcação emitida pela tool `agent_event` é atribuída à SESSÃO, não ao
+segmento. Numa sessão com vários participantes (primary + especialista, humano + hook de
+wrap-up) não dá para saber **qual** emitiu o KPI; `agent_type_id` é a granularidade mais
+fina hoje, e ela agrega todos os agentes daquele tipo.
+
+**Achado que simplifica:** o `instance_id` já é decodificado do JWT dentro da tool
+(`mcp-server-plughub/src/tools/agent-events.ts:117`) e **descartado** — nunca entra no
+evento publicado (`:189-205`). É exatamente a chave que falta.
+
+**Precedente:** `survey_record` **não resolve** o `segment_id` — ele o **recebe**. O skill
+passa `$.segment_id`, built-in que o engine já tem em memória
+(`skill-flow-engine/src/interpolate.ts:279`), cujo comentário diz que existe "para um skill
+passar seu PRÓPRIO segmento ao `survey_record(grain=segment)`". Ver
+`skills/agente_nps_v1.yaml:121`.
+
+**Plano decidido — A + C:**
+- **A (custo zero):** `segment_id` opcional em `AgentEventInputSchema`
+  (`packages/schemas/src/agent-events.ts:111`); o YAML passa `$.segment_id`. Cobre o caso
+  comum sem I/O nova.
+- **C (rede):** publicar o `instance_id` no evento e enriquecer no consumer via
+  `SegmentEnricher.lookup_by_instance` (`segment_enricher.py:63`), adicionando
+  `"agent.events"` a `_ENRICHED_TOPICS` (`consumer.py:302`). É o que `mcp.audit` já faz.
+  Cobre humanos e replays de DLQ sem penalizar o caminho quente.
+- **B descartado** (1 GET extra em `session:{id}:segment:{instance_id}`) — redundante com C.
+
+**Schema:** 1 ALTER aditivo no padrão de `_DDL_SENTIMENT_EVENTS_MIGRATE_SEGMENT`
+(`clickhouse.py:238`) + entrada em `_MIGRATIONS` + 3 edições posicionais acopladas
+(`_AGENT_BUSINESS_EVENT_COLS` em `clickhouse.py:1588`, `_agent_business_event_row` em
+`:2281`, `parse_agent_business_event` em `models.py:1036`). Nenhum consumidor quebra (todos
+usam SELECT com colunas explícitas).
+
+**Ganho imediato:** `"segment_id"` no `VALID_GROUP_BY` (`reports_query.py:5684`) é UMA linha
+e habilita "KPI de negócio por participante".
+
+**NÃO mexer no ORDER BY:** o ClickHouse só permite acrescentar ao fim, e depois de
+`emitted_at` (alta cardinalidade) o `segment_id` não poda nada. Pôr antes exigiria recriar
+a tabela — não paga, com TTL de 2 anos.
+
+---
+
+## `agent_events` — fatia 2: DROP da tabela *(fatia 1 ✅ 2026-07-28, ver CHANGELOG)*
+
+A tabela **parou de ser escrita**: parsers, dispatch, cadeia de insert, endpoint
+`/reports/agents` e leitores migrados para `segments`. Falta só o descarte físico:
+
+```sql
+DROP TABLE IF EXISTS plughub.agent_events;
+```
+
+mais a limpeza de grants e row policies em `infra/metabase/clickhouse_users.sql`
+(linhas 36, 47-48, 70, 81-82) e a remoção de `_DDL_AGENT_EVENTS` de `clickhouse.py`.
+
+**Por que foi adiado:** a auditoria que concluiu "órfã" cobre o código — ela não alcança
+consulta ad-hoc (card montado à mão no Metabase, query direta de alguém). Manter o
+histórico consultável por um ciclo é a rede. **Gatilho para executar:** confirmar que
+ninguém consulta a tabela por fora, ou simplesmente decidir que o histórico não importa.
+
+**Não confundir na hora de executar:** `agent_business_events` (Arc 12) e as rotas
+`/reports/agent-events/*` são OUTRO eixo e **ficam**. A semelhança de nome já induziu
+erro neste próprio arquivo.
+
+---
+
+## ~~`agent_done` de crash-recovery é descartado pelo analytics~~ — RESOLVIDO por remoção *(2026-07-28)*
+
+> **Fechado sem corrigir o campo.** A investigação mostrou que (a) não eram 2 caminhos e
+> sim **9** — todo `agent_done` do bridge era descartado, não só o de recuperação — e (b)
+> nenhuma métrica de produto lia `agent_events`, então o dilema sobre TMA que travava a
+> decisão não existia. A tabela era substrato derivado duplicando `segments` e foi
+> descontinuada (fatia 1 acima). O texto original fica abaixo como registro do raciocínio.
+
+<details>
+<summary>Registro original</summary>
+
+### `agent_done` de crash-recovery é descartado pelo analytics *(achado 2026-07-27 na F4, não corrigido)*
 
 Dois caminhos de recuperação no bridge publicam `agent_done` em `agent.lifecycle` com **`conversation_id`**:
 `process_contact_event` (contact_closed com `ai_completing` expirado) e `_cleanup_stale_completing_at_startup`.
@@ -125,6 +292,13 @@ métrica, não conserto de campo.
 **Nota transversal:** o descarte é silencioso (`return None` sem log), o que é o padrão que a § *Postura de
 Engenharia* do CLAUDE.md nomeia. Independente da decisão acima, o parser deveria **logar** o motivo do skip —
 foi só por acaso que isso apareceu.
+
+</details>
+
+**Epílogo (2026-07-28).** O log de descarte chegou a ser adicionado e durou uma hora: ele
+foi o instrumento que revelou os 9 produtores, e saiu junto com o ramo que ele instrumentava.
+A lição que fica é a da nota transversal, não a do campo: *o `return None` mudo escondeu por
+meses uma tabela inteira sem produtor válido, e só apareceu por acaso.*
 
 ---
 
@@ -609,7 +783,9 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
   - **E.4 diferido (sem dado no demo)**: (a) **MCP audit** por step — `skill-flow-service`
     chama o mcp-server via cliente cru, não pelo `McpInterceptor`, então os `invoke` não
     geram `mcp.audit`; construir quando a execução passar pelo interceptor. (b)
-    **agent_events** (Arc 12) — agentes de portabilidade não emitem. (c) snapshot de
+    **agent_business_events** (Arc 12, via tool `agent_event`) — agentes de portabilidade
+    não emitem. *(Não confundir com a tabela `agent_events`, descontinuada em 2026-07-28 —
+    eram nomes quase idênticos para eixos diferentes.)* (c) snapshot de
     ContextStore com evolução entre suspends (hoje só o estado atual no strip Input context).
     (d) duration "corridas vs úteis" (business_hours) lado a lado.
 

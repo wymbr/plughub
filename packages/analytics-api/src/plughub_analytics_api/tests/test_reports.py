@@ -20,11 +20,11 @@ from ..reports_query import (
     _apply_pool_scope,
     _apply_origin_scope,
     _clamp_page_size,
+    _events_sql_branches,
     _to_csv,
     query_agent_availability,
     query_agent_performance_daily,
     query_agent_performance_report,
-    query_agents_report,
     query_contact_insights_report,
     query_agents_compare,
     query_agents_cross,
@@ -172,62 +172,15 @@ class TestQuerySessionsReport:
         assert result["meta"]["page_size"] == 50
 
 
-# ── query_agents_report ──────────────────────────────────────────────────────
-
-class TestQueryAgentsReport:
-    _COLS = ["event_id", "tenant_id", "session_id", "agent_type_id", "pool_id",
-             "instance_id", "event_type", "outcome", "handoff_reason",
-             "handle_time_ms", "routing_mode", "timestamp"]
-
-    def _count_result(self, n: int) -> MagicMock:
-        return _ch_result(["count()"], [[n]])
-
-    async def test_returns_required_keys(self):
-        client = _make_client(
-            self._count_result(0),
-            _ch_result(self._COLS, []),
-        )
-        result = await query_agents_report(client, DB, TENANT)
-        assert "data" in result
-        assert "meta" in result
-
-    async def test_agent_done_row_mapped(self):
-        ts = datetime(2026, 4, 21, 10, 0, 0)
-        client = _make_client(
-            self._count_result(1),
-            _ch_result(self._COLS, [
-                ["ev-001", TENANT, "sess-001", "agente_retencao_v1",
-                 "retencao_humano", "inst-001", "agent_done",
-                 "resolved", None, 45000, "balanced", ts],
-            ]),
-        )
-        result = await query_agents_report(client, DB, TENANT)
-        row = result["data"][0]
-        assert row["event_type"]    == "agent_done"
-        assert row["outcome"]       == "resolved"
-        assert row["handle_time_ms"] == 45000
-        assert isinstance(row["timestamp"], str)
-
-    async def test_filters_accepted(self):
-        client = _make_client(
-            self._count_result(0),
-            _ch_result(self._COLS, []),
-        )
-        result = await query_agents_report(
-            client, DB, TENANT,
-            agent_type_id="agente_retencao_v1",
-            pool_id="retencao_humano",
-            event_type="agent_done",
-            outcome="resolved",
-        )
-        assert result["meta"]["total"] == 0
-
-    async def test_error_returns_empty(self):
-        client = MagicMock()
-        client.query = MagicMock(side_effect=Exception("ch timeout"))
-        result = await query_agents_report(client, DB, TENANT)
-        assert result["data"] == []
-        assert result.get("error") == "data_unavailable"
+# ── query_agents_report — REMOVIDO (2026-07-28) ──────────────────────────────
+#
+# A função e o endpoint `/reports/agents` saíram junto com a tabela `agent_events`
+# (substrato derivado que duplicava `segments`; o endpoint não tinha chamadores).
+# Os testes desta classe travavam campos sem equivalente — `routing_mode` era
+# write-only e `event_type` virou coluna em `segments` (started_at/ended_at).
+#
+# Cobertura dos substitutos, no mesmo arquivo: `query_agent_performance_report`
+# e `query_agent_performance_daily`, ambos sobre `segments`.
 
 
 # ── query_quality_report ─────────────────────────────────────────────────────
@@ -1130,6 +1083,96 @@ class TestOriginScopeInReports:
             assert "origin IN ('live')" not in call[0][0]
 
 
+class TestEventsSqlBranches:
+    """
+    `_events_sql_branches` monta o UNION ALL de /reports/events. Não tinha NENHUM
+    teste até 2026-07-28 — e foi exatamente a função reescrita quando `agent_events`
+    foi descontinuada (routed/agent_done passaram a sair de `segments`).
+
+    O risco desta função é estrutural, não de valor: todas as branches do UNION
+    precisam ter o MESMO número e ordem de colunas, senão o ClickHouse rejeita a
+    query inteira e o endpoint devolve `data_unavailable` — falha global, não
+    parcial. Por isso os asserts são sobre o SQL gerado.
+    """
+
+    def _branches(self, **kw):
+        return _events_sql_branches(
+            db=DB, tenant_id=TENANT,
+            since="2026-07-01 00:00:00", until="2026-07-28 23:59:59",
+            **kw,
+        )[0]
+
+    @staticmethod
+    def _projected_columns(branch: str) -> int:
+        """
+        Conta as colunas projetadas pelo SELECT — só as vírgulas de NÍVEL SUPERIOR.
+
+        Contar `,` cru não serve: `concat(a, b)`, `if(a, b, c)` e `coalesce(a, b, c)`
+        somam vírgulas internas e cada branch usa um conjunto diferente delas.
+        """
+        head  = branch.split("FROM")[0]
+        depth = 0
+        cols  = 1
+        for ch in head:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            elif ch == "," and depth == 0:
+                cols += 1
+        return cols
+
+    def test_all_branches_project_the_same_columns(self):
+        # Se uma branch divergir em número de colunas, o UNION quebra em runtime e
+        # o endpoint inteiro devolve data_unavailable — falha global, não parcial.
+        branches = self._branches(event_type=None, session_id=None, accessible_pools=None)
+        assert len(branches) >= 6
+        widths = {self._projected_columns(b) for b in branches}
+        assert widths == {10}, f"branches com larguras diferentes: {widths}"
+
+    def test_routed_and_done_come_from_segments(self):
+        branches = self._branches(event_type=None, session_id=None, accessible_pools=None)
+        routed = [b for b in branches if "'routed'" in b]
+        done   = [b for b in branches if "'agent_done'" in b]
+        assert len(routed) == 1 and len(done) == 1
+        assert f"FROM {DB}.segments" in routed[0]
+        assert f"FROM {DB}.segments" in done[0]
+        assert f"{DB}.agent_events" not in "".join(branches)
+        # agent_done só conta segmento fechado
+        assert "ended_at IS NOT NULL" in done[0]
+
+    def test_event_type_prunes_to_single_branch(self):
+        # Antes as duas saíam juntas (eram uma branch só sobre agent_events), e a
+        # de agent_done era escaneada à toa quando se filtrava por routed.
+        only_routed = self._branches(event_type="routed", session_id=None, accessible_pools=None)
+        assert len(only_routed) == 1
+        assert "'routed'" in only_routed[0]
+
+        only_done = self._branches(event_type="agent_done", session_id=None, accessible_pools=None)
+        assert len(only_done) == 1
+        assert "'agent_done'" in only_done[0]
+
+    def test_origin_scope_is_uniform_across_substrate_branches(self):
+        # Assimetria aqui produz stream incoerente: sessão importada apareceria
+        # aberta e com mensagens, mas sem nenhum agente.
+        branches = self._branches(event_type=None, session_id=None, accessible_pools=None)
+        for b in branches:
+            if f"{DB}.sessions FINAL" in b or f"{DB}.segments FINAL" in b or f"{DB}.messages FINAL" in b:
+                assert "origin = 'live'" in b
+
+    def test_session_filter_has_no_stale_alias(self):
+        # As branches de segmento perderam o JOIN com sessions; um `ae.` remanescente
+        # viraria "unknown identifier" em runtime.
+        branches = self._branches(event_type=None, session_id="sess-1", accessible_pools=None)
+        for b in branches:
+            assert "ae." not in b
+
+    def test_pool_scope_applied(self):
+        branches = self._branches(event_type=None, session_id=None, accessible_pools=["retencao"])
+        seg = [b for b in branches if f"FROM {DB}.segments" in b]
+        assert seg and all("pool_id IN ('retencao')" in b for b in seg)
+
+
 class TestOriginScopeInBench:
     """Substrate isolation reaches the bench (compare/cross) — default live, override works."""
 
@@ -1210,26 +1253,10 @@ class TestPoolScopedSessionsReport:
             assert "pool_id IN ('sac')" in sql
 
 
-class TestPoolScopedAgentsReport:
-    """Arc 7c — accessible_pools short-circuit in query_agents_report."""
-
-    async def test_empty_pools_returns_empty_without_ch_call(self):
-        client = MagicMock()
-        result = await query_agents_report(client, DB, TENANT, accessible_pools=[])
-        assert result["data"] == []
-        client.query.assert_not_called()
-
-    async def test_pools_list_filters_agent_events(self):
-        cols = ["event_id", "tenant_id", "session_id", "agent_type_id", "pool_id",
-                "instance_id", "event_type", "outcome", "handoff_reason",
-                "handle_time_ms", "routing_mode", "timestamp"]
-        client = _make_client(
-            _ch_result(["count()"], [[0]]),
-            _ch_result(cols, []),
-        )
-        await query_agents_report(client, DB, TENANT, accessible_pools=["retencao"])
-        for call in client.query.call_args_list:
-            assert "pool_id IN ('retencao')" in call[0][0]
+# TestPoolScopedAgentsReport removida com `query_agents_report` (2026-07-28).
+# O invariante Arc 7c que ela cobria — short-circuit de `accessible_pools=[]` e
+# `pool_id IN (...)` em todas as queries — segue coberto pela classe acima, sobre
+# `query_sessions_report`.
 
 
 class TestPoolPrincipalAuth:
