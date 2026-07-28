@@ -2,6 +2,55 @@
 
 ---
 
+## Semáforo de vagas: reap de ocupantes órfãos ✅ (2026-07-28)
+
+Fecha o resíduo aberto na mesma sessão que o encontrou ao vivo: agente com `max_concurrent=3`
+comportando-se como `max=1`, com **2 ocupantes órfãos** de contatos já encerrados
+(`bd16cc57-…::`, `1251a56f-…::`) presos no SET `{t}:instance:{iid}:sessions`.
+
+**O buraco.** A vaga só é liberada no `agent_done` (`release_instance`). Sessão que morre por outro
+caminho — instância apagada debaixo dela, bridge reiniciado, contato forçado — deixa o ocupante até o
+EXPIRE de 24 h. O sintoma é **capacidade que encolhe em silêncio**: `max_concurrent` no registro
+continua 3, `current_sessions` do JSON diz 0, e nada acusa a diferença. Indistinguível de config
+errada de pool. Assimetria que denunciava o buraco: o **hold** de wrap-up já tinha expiração passiva
+porque o desenho previu "wrap-up que nunca chega"; o ocupante **real** não tinha equivalente, porque
+se presumiu que todo claim termina em `agent_done`.
+
+**O sinal escolhido — `session:{sid}:closed`.** Gravado pelo `ContactClosedHandler` do próprio
+routing-engine em TODO caminho de fechamento (disconnect, timeout, agent_done), TTL 7 dias — bem maior
+que as 24 h do semáforo. É afirmação positiva ("esta sessão acabou"), não inferência por ausência, e
+**não depende do `agent_done`**, que é exatamente o que falha nos casos que vazam.
+
+Duas alternativas descartadas, ambas registradas no TODO antes de decidir:
+- reconciliar contra `routing:instance:{iid}:conversations` — mantido pelo MESMO `agent_done`; dois
+  conjuntos que vazam juntos não se corrigem. *(Era a recomendação original no TODO; caiu na revisão.)*
+- zerar o SET no `agent_ready` do login — falso desde a correção de hoje: reload **é** `agent_ready`,
+  e o agente segue atendendo através dele. Zerar ali liberaria vaga legitimamente ocupada
+  (over-allocation, pior que capacidade encolhida).
+- carimbar `expires_at_ms` no ocupante como o hold faz — exige escolher um teto de duração de
+  atendimento, que é **política**, e um atendimento longo legítimo perderia a vaga no meio.
+
+**Onde roda — DOIS sites, porque há dois modos de vazamento.** Descoberto na validação: a 1ª versão
+cobria só um deles e o teste não disparava.
+
+1. **Espelho sincronizado com o vazamento** (`mark_busy` rodou depois): a instância parece cheia e é
+   filtrada em `get_ready_instances`, sem nunca chegar ao claim → o reap mora lá. Foi o modo do
+   incidente real.
+2. **Espelho defasado** (nada sincronizou depois do vazamento): a instância parece livre, é
+   selecionada, e a mentira só aparece no confronto com o `SCARD` dentro de `claim_instance` → o reap
+   mora lá também, com um retry do claim quando algo foi recuperado.
+
+Cobrir só (1) — como fiz na primeira passada, justificando que "o filtro acontece antes do claim,
+então um reap no claim nunca rodaria" — deixava o modo (2) mandando o contato para a fila
+exatamente como antes. A afirmação estava certa *para (1)* e eu a generalizei.
+
+Cooldown compartilhado pelos dois sites (`SET NX EX 60`, atômico): uma rajada de claims não vira uma
+rajada de reaps, e N decisões concorrentes disparam UM reap. Só paga quem já aparece lotado — o
+caminho feliz não paga nada. Holds preservados (têm expiração própria). Cada vaga recuperada é
+logada em `warning`: a frequência disso **mede** o buraco restante.
+
+---
+
 ## `source` apagado pelo round-trip do Pydantic derruba o agente humano após o 1º atendimento ✅ (2026-07-28)
 
 **A causa raiz** de `instance_not_found` / "No agents available for this pool" / wrap-up que não abre.

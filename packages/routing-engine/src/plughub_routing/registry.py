@@ -158,6 +158,12 @@ def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
 #     fechado) prenderia a vaga até o EXPIRE de 24h do SET.
 _WRAPUP_HOLD_PREFIX = "__wrapup_hold__::"
 
+# Janela mínima entre dois reaps de vagas órfãs da MESMA instância. Só corre para
+# instância que já aparece lotada, então 60 s é folgado: o custo do atraso é um
+# contato a mais indo para outro agente ou para a fila; o custo de não limitar é
+# SMEMBERS + N×EXISTS a cada decisão de roteamento.
+_REAP_COOLDOWN_S = 60
+
 # claim: KEYS[1]=sessions set; ARGV[1]=occupant_id; ARGV[2]=max_concurrent; ARGV[3]=ttl_s;
 #        ARGV[4]=now_ms; ARGV[5]="1" se este claim pode HERDAR um hold (auto_attend)
 #   retorna a nova ocupação (>=1) em sucesso/idempotente; -1 se lotado.
@@ -300,15 +306,42 @@ class InstanceRegistry:
         permite HERDAR um hold vivo desta instância — swap net 0, a ocupação não
         oscila. Holds EXPIRADOS são descartados em qualquer claim (inclusive push),
         senão um hold vazado bloquearia a instância."""
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        res = await self._redis.eval(
-            _CLAIM_INSTANCE_LUA, 1,
-            _instance_sessions_key(tenant_id, instance_id),
-            self._occupant_id(session_id, conference_id),
-            str(int(max_concurrent)), str(int(ttl_seconds)),
-            str(now_ms), "1" if can_inherit_hold else "0",
-        )
-        return int(res)
+        async def _try() -> int:
+            now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            return int(await self._redis.eval(
+                _CLAIM_INSTANCE_LUA, 1,
+                _instance_sessions_key(tenant_id, instance_id),
+                self._occupant_id(session_id, conference_id),
+                str(int(max_concurrent)), str(int(ttl_seconds)),
+                str(now_ms), "1" if can_inherit_hold else "0",
+            ))
+
+        res = await _try()
+        if res != -1:
+            return res
+
+        # ── Lotação pode ser mentira: reap antes de aceitar o -1 ──────────────
+        # Há DOIS modos de vazamento de vaga, e eles aparecem em lugares
+        # diferentes:
+        #   1. espelho `current_sessions` sincronizado com o vazamento (mark_busy
+        #      rodou depois) → a instância parece cheia e é filtrada em
+        #      `get_ready_instances`, que faz o reap lá;
+        #   2. espelho DEFASADO (nada sincronizou depois do vazamento) → a
+        #      instância parece livre, é selecionada, e a mentira só aparece
+        #      AQUI, no confronto com o SCARD.
+        # Cobrir só (1) deixaria o contato indo para a fila exatamente como
+        # antes. O cooldown é compartilhado com o outro site, então uma rajada de
+        # claims não vira uma rajada de reaps.
+        if await self._try_take_reap_slot(tenant_id, instance_id):
+            if await self.reap_stale_occupants(tenant_id, instance_id):
+                res = await _try()
+                if res != -1:
+                    logger.info(
+                        "claim recuperado após reap: tenant=%s instance=%s session=%s "
+                        "ocupação=%d — a lotação era vaga órfã",
+                        tenant_id, instance_id, session_id, res,
+                    )
+        return res
 
     async def swap_to_hold(
         self,
@@ -355,6 +388,84 @@ class InstanceRegistry:
         )
         return int(res)
 
+    async def _try_take_reap_slot(self, tenant_id: str, instance_id: str) -> bool:
+        """Cooldown do reap: devolve True no máximo uma vez a cada `_REAP_COOLDOWN_S`
+        por instância. `SET NX EX` é atômico, então N decisões de roteamento
+        concorrentes disparam UM reap, não N. Falha de Redis → False (não reaper é
+        degradação aceitável; o pior caso é a capacidade seguir encolhida, que é o
+        estado de hoje)."""
+        try:
+            return bool(await self._redis.set(
+                f"{tenant_id}:instance:{instance_id}:reap_cooldown",
+                "1", nx=True, ex=_REAP_COOLDOWN_S,
+            ))
+        except Exception:
+            return False
+
+    async def reap_stale_occupants(
+        self, tenant_id: str, instance_id: str
+    ) -> int:
+        """Remove do semáforo os ocupantes cuja SESSÃO já fechou. Devolve quantos saiu.
+
+        **O problema.** A vaga só é liberada no `agent_done` (`release_instance`). Se a
+        sessão morrer por outro caminho — instância apagada debaixo dela, bridge
+        reiniciado, contato forçado — o ocupante fica no SET até o EXPIRE de 24 h. O
+        agente aparece lotado com `current_sessions: 0` no registro, e o sintoma é
+        **capacidade que encolhe em silêncio**: `max_concurrent=3` se comportando como
+        `max=1`, indistinguível de config errada de pool. Observado ao vivo 2026-07-28.
+
+        **O sinal.** `session:{sid}:closed` é gravado pelo `ContactClosedHandler` deste
+        mesmo serviço em TODO caminho de fechamento (disconnect, timeout, agent_done),
+        com TTL de 7 dias — bem maior que as 24 h do semáforo. É afirmação positiva
+        ("esta sessão acabou"), não inferência por ausência, e não depende do
+        `agent_done` que é justamente o que falha nos casos que vazam.
+
+        Descartadas duas alternativas:
+        - reconciliar contra `routing:instance:{iid}:conversations` — é mantido pelo
+          MESMO `agent_done`; dois conjuntos que vazam juntos não se corrigem;
+        - carimbar `expires_at_ms` no ocupante, como o hold faz — exigiria escolher um
+          teto de duração de atendimento, que é POLÍTICA, e um atendimento longo
+          legítimo perderia a vaga no meio.
+
+        Holds de wrap-up (`__wrapup_hold__::…`) são preservados: eles têm expiração
+        própria e são descartados no `claim_instance`. Aqui só se olha ocupante real.
+        """
+        key = _instance_sessions_key(tenant_id, instance_id)
+        try:
+            members = await self._redis.smembers(key)
+        except Exception as exc:
+            logger.warning(
+                "reap: SMEMBERS falhou tenant=%s instance=%s — %s",
+                tenant_id, instance_id, exc,
+            )
+            return 0
+
+        stale: list[str] = []
+        for member in members:
+            if member.startswith(_WRAPUP_HOLD_PREFIX):
+                continue          # hold tem expiração própria (claim_instance)
+            session_id = member.split("::", 1)[0]
+            if not session_id:
+                continue
+            try:
+                if await self._redis.exists(f"session:{session_id}:closed"):
+                    stale.append(member)
+            except Exception:
+                continue          # na dúvida, NÃO remove: perder vaga é pior que segurar
+
+        if not stale:
+            return 0
+
+        await self._redis.srem(key, *stale)
+        # Nunca silencioso: cada vaga recuperada aqui é uma que o agent_done deveria
+        # ter liberado e não liberou. A frequência disto MEDE o buraco.
+        logger.warning(
+            "reap: %d vaga(s) órfã(s) recuperada(s) tenant=%s instance=%s occupants=%s "
+            "— sessões já fechadas cujo agent_done não liberou a vaga",
+            len(stale), tenant_id, instance_id, stale,
+        )
+        return len(stale)
+
     async def instance_session_count(self, tenant_id: str, instance_id: str) -> int:
         """Ocupação real da instância (SCARD do SET de sessões). Fonte de verdade
         para os leitores na Fatia B (get_ready_instances/snapshots)."""
@@ -396,6 +507,24 @@ class InstanceRegistry:
                 if "status" in data and "state" not in data:
                     data["state"] = data["status"]
                 inst = AgentInstance.model_validate(data)
+
+                # ── Reap preguiçoso de vagas órfãs (modo 1: espelho cheio) ───
+                # Quando o espelho `current_sessions` já reflete o vazamento, a
+                # instância é filtrada AQUI e nunca chega ao `claim_instance` —
+                # ficaria invisível para sempre. O modo 2 (espelho defasado, a
+                # mentira só aparece no confronto com o SCARD) é coberto dentro do
+                # próprio `claim_instance`; os dois compartilham o cooldown.
+                #
+                # Cooldown por instância limita o custo: no máximo um reap a cada
+                # `_REAP_COOLDOWN_S`, e só para quem JÁ aparece lotado — o caminho
+                # feliz (há vaga) não paga nada.
+                if inst.state == "ready" and inst.current_sessions >= inst.max_concurrent:
+                    if await self._try_take_reap_slot(tenant_id, iid):
+                        if await self.reap_stale_occupants(tenant_id, iid):
+                            inst.current_sessions = await self.instance_session_count(
+                                tenant_id, iid
+                            )
+
                 if inst.state == "ready" and inst.current_sessions < inst.max_concurrent:
                     # Wrap-up unificado (Camada E2, Phase 3): o skip por `wrap_up_pending`
                     # (bloqueio de instância INTEIRA durante o wrap-up inline antigo) foi
