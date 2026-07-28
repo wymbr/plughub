@@ -69,6 +69,17 @@ class TestRequirePrincipal:
     def _patch_settings(self, monkeypatch):
         settings = MagicMock()
         settings.admin_jwt_secret = SECRET
+        # OBRIGATÓRIO: um MagicMock auto-cria qualquer atributo e devolve objeto
+        # TRUTHY. Quando o guard `if settings.analytics_open_access:` entrou em
+        # `require_principal` (auth.py:72), este mock passou a respondê-lo como
+        # verdadeiro — e os 8 testes desta classe silenciosamente pararam de
+        # exercitar autenticação, testando o atalho de open-access.
+        #
+        # Eram justamente os testes que provam que o analytics exige token e
+        # bloqueia cross-tenant: passaram meses sem poder reprovar. Todo atributo
+        # booleano lido pelo código sob teste tem de ser fixado aqui — o default
+        # de um mock nunca é "desligado".
+        settings.analytics_open_access = False
         monkeypatch.setattr(
             "plughub_analytics_api.auth.get_settings",
             lambda: settings,

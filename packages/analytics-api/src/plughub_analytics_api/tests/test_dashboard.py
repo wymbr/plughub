@@ -66,7 +66,9 @@ class TestGetMetrics24h:
                 ["total", "avg_handle_ms", "channel", "outcome", "close_reason"],
                 sess_rows or [],
             ),
-            _ch_result(["event_type", "outcome", "cnt"], ae_rows or []),
+            # 2026-07-28: a fonte do bloco `agent_events` passou a ser `segments`
+            # (a tabela homônima foi descontinuada). Colunas: bucket + contagem.
+            _ch_result(["oc", "cnt"], ae_rows or []),
             _ch_result(["dimension", "total_qty"],         usage_rows or []),
             _ch_result(["category", "cnt", "avg_sc"],      sent_rows or []),
         ]
@@ -111,9 +113,8 @@ class TestGetMetrics24h:
     async def test_agent_events_counted(self):
         client = self._build_client(
             ae_rows=[
-                ["routed",     None,       20],
-                ["agent_done", "resolved", 15],
-                ["agent_done", "transferred", 5],
+                ["resolved",    15],
+                ["transferred",  5],
             ]
         )
         data = await get_metrics_24h(client, DB, TENANT)
@@ -122,6 +123,27 @@ class TestGetMetrics24h:
         assert ae["total_done"]   == 20
         assert ae["by_outcome"]["resolved"]    == 15
         assert ae["by_outcome"]["transferred"] == 5
+
+    async def test_open_segment_counts_as_routed_not_done(self):
+        # Semântica nova: um segmento ainda aberto (`ended_at IS NULL`) cai no
+        # sentinela `__open__` — foi roteado, mas não concluído. Na fonte antiga
+        # isso não existia: `routed` e `agent_done` eram linhas independentes, e
+        # nada garantia que uma tivesse par.
+        client = self._build_client(
+            ae_rows=[
+                ["__open__",  7],
+                ["resolved", 12],
+            ]
+        )
+        ae = (await get_metrics_24h(client, DB, TENANT))["agent_events"]
+        assert ae["total_routed"] == 19
+        assert ae["total_done"]   == 12
+        assert "__open__" not in ae["by_outcome"]
+
+    async def test_closed_segment_without_outcome_falls_back_to_unknown(self):
+        client = self._build_client(ae_rows=[["unknown", 3]])
+        ae = (await get_metrics_24h(client, DB, TENANT))["agent_events"]
+        assert ae["by_outcome"]["unknown"] == 3
 
     async def test_usage_dimension_aggregated(self):
         client = self._build_client(
@@ -329,6 +351,10 @@ class TestDashboardRBAC:
     def _patch_settings(self, monkeypatch):
         settings = MagicMock()
         settings.admin_jwt_secret = SECRET
+        # Ver a nota extensa no fixture homônimo de test_admin.py: sem esta linha,
+        # o MagicMock devolve truthy para `analytics_open_access` e os 6 testes
+        # desta classe recebem 200 em tudo — nunca reprovam.
+        settings.analytics_open_access = False
         monkeypatch.setattr(
             "plughub_analytics_api.auth.get_settings",
             lambda: settings,
@@ -364,7 +390,7 @@ class TestDashboardRBAC:
         store_mock._client.query = MagicMock(
             side_effect=[
                 _ch_result(["total", "avg_handle_ms", "channel", "outcome", "close_reason"], []),
-                _ch_result(["event_type", "outcome", "cnt"], []),
+                _ch_result(["oc", "cnt"], []),
                 _ch_result(["dimension", "total_qty"], []),
                 _ch_result(["category", "cnt", "avg_sc"], []),
             ]
@@ -389,7 +415,7 @@ class TestDashboardRBAC:
         store_mock._client.query = MagicMock(
             side_effect=[
                 _ch_result(["total", "avg_handle_ms", "channel", "outcome", "close_reason"], []),
-                _ch_result(["event_type", "outcome", "cnt"], []),
+                _ch_result(["oc", "cnt"], []),
                 _ch_result(["dimension", "total_qty"], []),
                 _ch_result(["category", "cnt", "avg_sc"], []),
             ]
