@@ -223,8 +223,31 @@ Usage is forwarded to Kafka `usage.events` as `llm_tokens_input` and `llm_tokens
 
 ---
 
+## Observabilidade — erro de provedor (2026-07-28)
+
+`ProviderError` → HTTP 502 `upstream_model_error`, com `provider`, `code`, `retryable` e
+`detail` (mensagem crua do SDK, incluindo `request_id`) **no corpo E no log**.
+
+Nível pelo `retryable`: **ERROR** quando `False` (saldo zerado, credencial inválida,
+modelo inexistente — nenhuma rotação de conta resolve, exige intervenção humana);
+**WARNING** quando `True` (429/529, que o `AccountSelector` pode contornar via outra
+conta ou provedor).
+
+```
+2026-07-28 20:54:35,066 [ERROR] plughub_ai_gateway.main — upstream_model_error
+  path=/v1/reason provider=anthropic code=status_400 retryable=False
+  detail=Error code: 400 - {... 'Your credit balance is too low ...'}
+```
+
+> **Cuidado ao adicionar logs aqui.** O pacote não tinha `logging.basicConfig` até
+> 2026-07-28: sem handler, o Python usa o `lastResort`, que imprime só a mensagem (sem
+> nível nem timestamp) e **descarta tudo abaixo de WARNING**. Qualquer `logger.info`
+> escrito antes disso nunca apareceu. O `basicConfig` vive em `main.py`, no topo — se um
+> refactor movê-lo ou removê-lo, os logs voltam a degradar em silêncio.
+
 ## Invariants
 
+- Erro de provedor nunca é silencioso — motivo vai ao log, não só ao corpo da resposta
 - AI Gateway never maintains state between calls
 - AI Gateway never classifies sentiment scores — only emits numeric scores
 - `evaluation` profile is never shared with `realtime` account pool

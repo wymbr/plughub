@@ -22,6 +22,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+# O ai-gateway nunca configurou logging. Sem handler, o Python cai no `lastResort`:
+# escreve só a MENSAGEM em stderr, sem nível nem timestamp, e descarta tudo abaixo de
+# WARNING. Efeito prático: `logger.error` e `logger.warning` saíam idênticos (a
+# severidade do upstream_model_error era invisível) e todo `logger.info` sumia.
+# Mesmo formato dos demais serviços Python (session-replayer/main.py:14).
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 from .account_selector      import AccountSelector, LLMAccount
@@ -225,6 +234,21 @@ app = FastAPI(
 
 @app.exception_handler(ProviderError)
 async def provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
+    # O motivo vai no CORPO e no LOG. Antes ia só no corpo: o acesso via uvicorn
+    # registrava `POST /v1/reason 502` e nada mais, então saldo zerado, chave
+    # revogada, rate-limit e modelo inexistente eram indistinguíveis sem sondar
+    # o endpoint à mão — e um 502 mudo derruba TODO agente de IA da plataforma
+    # sem dizer por quê (mesma patologia do `except: pass`).
+    #
+    # `retryable=False` é o caso que merece atenção humana: nenhuma rotação de
+    # conta ou tentativa posterior resolve (ex.: "credit balance is too low"),
+    # então sobe a ERROR. O retryable degrada a WARNING — o AccountSelector
+    # ainda pode contornar via outra conta/provedor.
+    log = logger.error if not exc.retryable else logger.warning
+    log(
+        "upstream_model_error path=%s provider=%s code=%s retryable=%s detail=%s",
+        request.url.path, exc.provider, exc.error_code, exc.retryable, exc.message,
+    )
     return JSONResponse(
         status_code=502,
         content={
