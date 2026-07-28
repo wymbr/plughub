@@ -14,6 +14,7 @@ import type { KafkaProducer } from "../infra/kafka"
 import type { RedisClient }   from "../infra/redis"
 import { withGuard }          from "../infra/tool-guard"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
+import { resolveAgentTypeForSession } from "../lib/routing-ref"
 import type { Skill }         from "@plughub/schemas"
 
 /**
@@ -280,22 +281,25 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
       const targetMs   = 480_000  // 8 min default SLA target
       const urgency    = Math.min(elapsedMs / targetMs, 1)
 
-      // Determine active agent type from routing snapshot in Redis
-      // orchestrator-bridge writes session:{id}:routing:{instance_id} after allocation
+      // Determine active agent type for the session.
+      //
+      // F5: este site lia `agent_type_id` do sub-documento `snapshot` da chave
+      // `session:{id}:routing:{iid}` — sub-documento que a F4 removeu (a chave
+      // encolheu para {tenant_id, instance_id, pool_id}). A leitura virou morta,
+      // devolvendo sempre null em silêncio. O helper resolve no escopo certo:
+      // humano → `human_agent_{pool da sessão}`; IA → o campo do registro, que aí
+      // é identidade legítima. Ver ADR adr-human-agent-pool-scoped-identity.
       let agentTypeId: string | null = null
       let agentStatus = "routing"
       const aiAgents  = await deps!.redis.smembers(`session:${parsed.session_id}:ai_agents`)
       const humAgents = await deps!.redis.smembers(`session:${parsed.session_id}:human_agents`)
       if (aiAgents.length > 0 || humAgents.length > 0) {
         agentStatus = "in_progress"
-        // Read first routing snapshot to get agent_type_id
         const firstInstance = aiAgents[0] ?? humAgents[0]
-        const snapRaw = await deps!.redis.get(
-          `session:${parsed.session_id}:routing:${firstInstance}`
-        )
-        if (snapRaw) {
-          const snap = JSON.parse(snapRaw) as Record<string, unknown>
-          agentTypeId = (snap["snapshot"] as Record<string, unknown>)?.["agent_type_id"] as string ?? null
+        if (firstInstance) {
+          agentTypeId = await resolveAgentTypeForSession(
+            deps!.redis, parsed.tenant_id, parsed.session_id, firstInstance, "[process_context_get]",
+          )
         }
       }
 

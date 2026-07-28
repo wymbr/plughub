@@ -31,7 +31,7 @@ def make_instance(**kwargs) -> AgentInstance:
         "instance_id":     "inst_001",
         "agent_type_id":   "agente_retencao_v1",
         "tenant_id":       "tenant_test",
-        "pool_id":         "retencao_humano",
+        "pools":           ["retencao_humano"],
         "execution_model": "stateless",
         "max_concurrent":  1,
         "current_sessions": 0,

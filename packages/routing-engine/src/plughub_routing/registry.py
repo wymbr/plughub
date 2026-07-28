@@ -403,23 +403,48 @@ class InstanceRegistry:
                     # (claim_instance) como qualquer sessão — a capacidade natural cuida do
                     # ACW, sem bloquear as demais vagas do agente (correto p/ max_concurrent>1).
                     instances.append(inst)
-            except Exception:
+            except Exception as exc:
+                # Degradação nunca é silenciosa. Um `continue` mudo aqui faz a
+                # instância SUMIR do roteamento ("No agents available for this
+                # pool") sem deixar rastro — indistinguível de "não há ninguém
+                # logado". Custou um diagnóstico; não custa de novo.
+                logger.warning(
+                    "instância DESCARTADA do pool ready: tenant=%s pool=%s instance=%s — %s",
+                    tenant_id, pool_id, iid, exc,
+                )
                 continue
         return instances
 
     async def get_instance(
         self, tenant_id: str, instance_id: str
     ) -> AgentInstance | None:
-        """Returns an instance by ID."""
+        """Returns an instance by ID.
+
+        `None` tem DOIS significados que o chamador não consegue distinguir
+        (`instance_not_found` no claim é o mesmo texto para os dois): a chave não
+        existe, ou existe e não valida contra o modelo. Cada um pede uma ação
+        diferente — relogar o agente × consertar o produtor do registro. Por isso
+        os dois logam, e dizem qual é qual.
+        """
         raw = await self._redis.get(_instance_key(tenant_id, instance_id))
         if not raw:
+            logger.warning(
+                "instância AUSENTE no Redis: tenant=%s instance=%s (chave %s). "
+                "Humano: só o login WS cria (ADR adr-human-agent-pool-scoped-identity, F1) "
+                "— agente precisa reconectar. IA: TTL de 30 s sem heartbeat.",
+                tenant_id, instance_id, _instance_key(tenant_id, instance_id),
+            )
             return None
         try:
             data = json.loads(raw)
             if "status" in data and "state" not in data:
                 data["state"] = data["status"]
             return AgentInstance.model_validate(data)
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "instância PRESENTE mas INVÁLIDA: tenant=%s instance=%s — %s",
+                tenant_id, instance_id, exc,
+            )
             return None
 
     async def get_instance_raw(
@@ -457,16 +482,20 @@ class InstanceRegistry:
           KEEPTTL on a key with no TTL keeps it permanent.
           KEEPTTL on a missing key creates a key with no TTL — also correct.
 
-        The AgentInstance model does not carry the source field, so we read the
-        existing Redis key to detect human agents before overwriting it.
+        `source` agora É campo do modelo (ver `AgentInstance.source`), então o
+        caminho primário de detecção é o próprio objeto; a leitura da chave viva
+        permanece como rede de segurança para chamadores que construam a instância
+        sem o campo. Antes o modelo não o carregava, e todo round-trip
+        `model_validate → model_dump` (`mark_busy`, `remove_conversation`) o
+        apagava — a chave humana virava efêmera na primeira alocação.
         """
         key  = _instance_key(instance.tenant_id, instance.instance_id)
         data = instance.model_dump()
         # Alias 'state' → 'status' for mcp-server compatibility
         data["status"] = data.pop("state")
 
-        # Detect human agents: check existing key for source="human_login".
-        is_human = False
+        # Detect human agents: campo do modelo primeiro, chave viva como fallback.
+        is_human = instance.source == "human_login"
         try:
             existing_raw = await self._redis.get(key)
             if existing_raw:
@@ -534,8 +563,25 @@ class InstanceRegistry:
         self, tenant_id: str, instance_id: str, pools: list[str], agent_type_id: str
     ) -> None:
         """
-        Persists static instance metadata with no TTL.
-        Called on agent_ready — pools and agent_type_id do not change during the instance lifetime.
+        Persiste o meta da instância (sem TTL). Chamado no `agent_ready`.
+
+        ATENÇÃO — o docstring antigo dizia *"pools and agent_type_id do not change
+        during the instance lifetime"*. **É FALSO para agentes humanos**, e era a
+        premissa sobre a qual `remove_conversation` e `crash_detector` foram
+        construídos (ambos escolhem um pool a partir daqui):
+
+        - `pools` MUDA a cada login/logout parcial — um humano entra e sai de pools
+          o tempo todo pelo Console, com a MESMA instância `human-{userId}`;
+        - `agent_type_id` de humano nem sequer é um fato do recurso: é função do
+          pool (`human_agent_{pool}`), e o valor guardado aqui é o resíduo de um
+          login qualquer. Ver `resolve_agent_type` em `models.py` (F2 do ADR
+          `adr-human-agent-pool-scoped-identity`).
+
+        Portanto este meta é um CACHE do conjunto de membership no instante do
+        último `agent_ready` — não uma constante. Quem precisa do pool de um
+        ATENDIMENTO específico lê `session:{sid}:routing:{iid}` (o único fato
+        por-(sessão, instância)), e é por isso que a F3 inverteu a precedência em
+        `remove_conversation`: o `pools` do evento vence o `meta.pools`.
         """
         await self._redis.hset(
             _instance_meta_key(tenant_id, instance_id),

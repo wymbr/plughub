@@ -31,7 +31,7 @@ def make_pool(**kwargs) -> PoolConfig:
 def make_instance(profile: dict) -> AgentInstance:
     return AgentInstance(
         instance_id="i1", agent_type_id="a1", tenant_id="t1",
-        pool_id="p1", execution_model="stateless",
+        pools=["p1"], execution_model="stateless",
         max_concurrent=1, current_sessions=0, state="ready",
         registered_at="2026-03-16T00:00:00Z", profile=profile,
     )

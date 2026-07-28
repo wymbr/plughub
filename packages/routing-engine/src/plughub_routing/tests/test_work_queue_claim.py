@@ -75,7 +75,7 @@ async def env():
 async def _register_instance(reg, tenant, pool, instance, max_concurrent=3):
     await reg.set_instance(AgentInstance(
         instance_id=instance, agent_type_id="human", tenant_id=tenant,
-        pools=[pool], pool_id=pool, execution_model="stateful",
+        pools=[pool], execution_model="stateful",
         max_concurrent=max_concurrent, current_sessions=0, state="ready",
     ))
 

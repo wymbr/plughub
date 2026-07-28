@@ -256,17 +256,40 @@ O auto-invite é equivalente a um `task` step `mode: assist` executado manualmen
 | `@plughub/schemas / agent-registry.ts` | campo `mentionable_pools: Record<string, string>` em `Pool` |
 | `@plughub/schemas / skill.ts` | seção `mention_commands` em `SkillDefinition` |
 | `@plughub/sdk / interpolate.ts` | mover função de interpolação de `skill-flow-engine` para `sdk` (uso compartilhado) |
-| `mcp-server-plughub / message_send` | parser de `@mention`: permissão, extração de aliases, interpolação, roteamento |
+| `mcp-server-plughub / lib/mention-routing.ts` | **implementação única do roteamento** (F5, 2026-07-28): resolve aliases contra `mentionable_pools`, interpola `@ctx.*` e publica os dois eventos por alias |
+| `mcp-server-plughub / message_send` | gate de permissão + resolução do pool do remetente pelo registro por-(sessão, instância); delega o roteamento ao módulo acima |
+| `mcp-server-plughub / server.ts` (WS de agente) | superfície do Console: detecta o mention, força `agents_only`, ecoa, e delega o roteamento ao mesmo módulo passando o pool DA CONEXÃO |
 | `agent-registry` | persistência de `mentionable_pools` no pool; API de leitura para mcp-server |
 | `skill-flow-engine` | processamento de `mention_commands` recebidos; ações `set_context`, `trigger_step`, `terminate_self` |
 | `agent-assist-ui` | autocomplete de `@alias` no input interno (lê `mentionable_pools` do pool ativo); indicador visual de alias resolvido vs não resolvido |
 
 ---
 
+## Duas superfícies, um roteador
+
+Uma menção pode nascer em duas superfícies, e a diferença entre elas é **como cada uma sabe o pool do
+remetente** — que é o que fecha o domínio de aliases:
+
+| Superfície | Quem emite | Pool do remetente vem de |
+|---|---|---|
+| WebSocket de agente (`server.ts`) — **Console** | humano no Console | query-param da conexão. Há **uma conexão WS por pool**, então o escopo é correto por construção |
+| Tool MCP `message_send` (`session.ts`) | agente via SDK/MCP | `session:{sid}:routing:{iid}.pool_id` — o registro por-(sessão, instância) escrito pelo bridge |
+
+**Nunca** do `pool_id` do registro global da instância: um humano logado em N pools tem UM registro, e
+aquele campo só poderia guardar o pool do último login. Ver
+[`adr-human-agent-pool-scoped-identity`](../adr/adr-human-agent-pool-scoped-identity.md) § B6 — o campo
+foi **removido** na F5 justamente para que ninguém volte a fazer essa pergunta ao lugar errado.
+
+O roteamento em si é o mesmo código nas duas (`lib/mention-routing.ts`); o pool é parâmetro.
+
+---
+
 ## Invariantes
 
 - `@mention` só é roteado em mensagens com `visibility: "agents_only"`
-- Apenas `role: primary` ou `role: human` podem emitir mentions com efeito de roteamento
+- Apenas `role: primary` ou `role: human` podem emitir mentions com efeito de roteamento —
+  e o gate **falha fechado**: sem prova positiva do role, não roteia (e loga por quê). Um gate de
+  autorização que falha aberto não é gate.
 - O domínio de aliases possíveis é sempre fechado pela configuração `mentionable_pools` do pool
 - A mensagem original é sempre entregue a todos os participantes `agents_only`, independente do roteamento
 - Aliases não resolvidos nunca geram erro — são texto inerte

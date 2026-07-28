@@ -34,7 +34,9 @@ from typing import TYPE_CHECKING
 
 import redis.asyncio as aioredis
 
-from .models import AgentInstance, PoolConfig, RoutingExpression
+from .models import (
+    AgentInstance, PoolConfig, RoutingExpression, HUMAN_LOGIN_SOURCE,
+)
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
 from .routing_config import routing_config
@@ -387,7 +389,6 @@ class LifecycleEventHandler:
 
             ev_pools = list(event.get("pools") or [])
             ev_type  = event.get("agent_type_id", "") or ""
-            dropped_pools: list[str] = []
 
             if is_human and existing:
                 # ── Fatos de recurso: o registro vivo manda, o evento não opina ──
@@ -401,33 +402,46 @@ class LifecycleEventHandler:
                 )
                 user_id     = existing.get("user_id", "")    or event.get("user_id", "")
                 user_login  = existing.get("user_login", "") or event.get("user_login", "")
+                # `source` é fato de recurso e discriminador de humano — preservar
+                # sempre (ver AgentInstance.source em models.py). Perdê-lo torna a
+                # chave efêmera e a entrega ao reconciliador do bridge.
+                source      = existing.get("source", "") or HUMAN_LOGIN_SOURCE
                 # Ocupação: a fonte de verdade é o SCARD do semáforo, espelhado no
                 # registro por mark_busy/remove_conversation. O `current_sessions`
                 # do pong conta só as sessões DAQUELA conexão — nunca vale a escrita.
                 current_sessions = int(existing.get("current_sessions", 0) or 0)
 
                 existing_pools = list(existing.get("pools") or [])
-                if authoritative and ev_pools:
-                    pools         = ev_pools
-                    dropped_pools = sorted(set(existing_pools) - set(pools))
-                    if dropped_pools:
-                        # Legítimo APENAS no logout parcial. Em qualquer outro
-                        # caminho é o sintoma de B2 voltando — por isso loga sempre.
-                        logger.warning(
-                            "human instance membership SHRANK: instance=%s dropped=%s "
-                            "before=%s after=%s (evento autoritativo=%s) — esperado só "
-                            "em logout parcial",
-                            instance_id, dropped_pools, existing_pools, pools, event_type,
-                        )
-                else:
-                    pools = existing_pools
-                    if ev_pools and set(ev_pools) != set(existing_pools):
-                        logger.info(
-                            "liveness event carrying membership IGNORED: instance=%s "
-                            "event=%s event_pools=%s kept=%s (produtor legado — "
-                            "membership só muda em agent_ready)",
-                            instance_id, event_type, ev_pools, existing_pools,
-                        )
+                # ── Membership de humano: o REGISTRO manda, o evento nunca ──────
+                #
+                # Correção 2026-07-28. Até aqui o `agent_ready` era tratado como
+                # autoritativo e SUBSTITUÍA `pools` pelo do payload. Duas razões
+                # pelas quais isso está errado agora:
+                #
+                # 1. O mcp-server passou a escrever a membership ATOMICAMENTE antes
+                #    de publicar (EVAL "entra no pool" / "sai do pool"). Quando o
+                #    evento chega, o registro JÁ está correto — reaplicar o payload
+                #    por cima só pode piorar.
+                # 2. O Console abre uma conexão POR POOL, então um login de N pools
+                #    publica N `agent_ready`. Nada garante a ORDEM de entrega (mesmo
+                #    tópico, partições possivelmente distintas): o evento do 1º pool
+                #    chegando por último reimporia `pools=[p1]` sobre um registro que
+                #    já tem os três. Foi assim que a membership colapsava — o log
+                #    mostrava `before=['formfill_demo'] after=['retencao_humano']`,
+                #    substituição pura, não encolhimento.
+                #
+                # Regra: membership é estado do RECURSO, e seu dono é quem administra
+                # o ciclo de vida do login (mcp-server). Este consumidor renova
+                # liveness e espelha — não decide quem é membro de quê. Mesma família
+                # da F1: evento de conexão não carrega fato de recurso.
+                pools = existing_pools
+                if ev_pools and set(ev_pools) != set(existing_pools):
+                    logger.info(
+                        "event carrying membership IGNORED: instance=%s event=%s "
+                        "event_pools=%s kept=%s (o registro é a fonte; o mcp-server "
+                        "já o escreveu atomicamente antes de publicar)",
+                        instance_id, event_type, ev_pools, existing_pools,
+                    )
                 if ev_type and agent_type_id and ev_type != agent_type_id:
                     logger.warning(
                         "human instance agent_type_id divergence IGNORED: instance=%s "
@@ -470,6 +484,8 @@ class LifecycleEventHandler:
                 user_id          = event.get("user_id", "")
                 user_login       = event.get("user_login", "")
                 current_sessions = event.get("current_sessions", 0)
+                # Humano criado por login → carimba o discriminador; IA fica sem.
+                source           = HUMAN_LOGIN_SOURCE if is_human else event.get("source", "")
 
             status = event.get("status", "ready")
             # Map mcp-server status to internal state
@@ -479,7 +495,6 @@ class LifecycleEventHandler:
                 instance_id      = instance_id,
                 agent_type_id    = agent_type_id,
                 tenant_id        = tenant_id,
-                pool_id          = (pools or [""])[0],
                 pools            = pools,
                 execution_model  = execution_model,
                 max_concurrent   = max_concurrent,
@@ -489,16 +504,14 @@ class LifecycleEventHandler:
                 registered_at    = event.get("timestamp", ""),
                 user_id          = user_id,
                 user_login       = user_login,
+                source           = source,
             )
             await self._instances.set_instance(instance)
-            # `set_instance` só percorre os pools que a instância AINDA declara —
-            # o pool do qual ela saiu ficaria no SET de roteamento e ela seguiria
-            # alocável nele. Quem limpava era o `unregisterHumanAgent` por escrita
-            # direta no Redis; aqui a limpeza passa a acompanhar o próprio evento.
-            if dropped_pools:
-                await self._instances.remove_from_pool_sets(
-                    tenant_id, instance_id, dropped_pools
-                )
+            # A limpeza de pool sets por membership encolhida saiu daqui junto com a
+            # substituição de `pools` pelo payload: este consumidor não decide mais
+            # quem saiu de onde. Quem sai de um pool é o `unregisterHumanAgent`, e ele
+            # já faz o próprio SREM (do pool que fechou sempre; de todos, no full
+            # logout). `remove_from_pool_sets` segue existindo para esse uso.
             logger.debug(
                 "Instance updated: tenant=%s instance=%s state=%s sessions=%d pools=%s",
                 tenant_id, instance_id, internal_state, instance.current_sessions, pools,

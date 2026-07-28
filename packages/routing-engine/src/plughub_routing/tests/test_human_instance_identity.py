@@ -93,7 +93,6 @@ async def _seed_human(
         "user_id":          user_id,
         "user_login":       f"{user_id}@demo.local",
         "tenant_id":        tenant,
-        "pool_id":          pools[0],
         "pools":            pools,
         "execution_model":  "stateful",
         "max_concurrent":   max_concurrent,

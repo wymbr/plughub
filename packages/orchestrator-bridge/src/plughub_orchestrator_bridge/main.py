@@ -2945,6 +2945,22 @@ async def _release_native_instance_snapshot(
     """
     if not instance_id:
         return
+    # Este espelho é do agente NATIVO/IA: ele reconstrói um snapshot mínimo quando
+    # o anterior sumiu, e grava com `ex=3600`. Aplicado a uma instância humana faria
+    # dois estragos de uma vez — sobrescreveria o registro do login com um documento
+    # de forma de IA (perdendo `source`, que é o discriminador de que dependem o
+    # KEEPTTL do routing e a guarda do reconciliador) e rebaixaria a chave permanente
+    # a 1 h. Não há caminho conhecido que traga um `human-*` aqui, mas a Mudança 27
+    # registra precedente de `instance_id` humano vazando para fluxo de workflow, e
+    # o custo da guarda é uma leitura.
+    if await _is_human_instance(redis_client, tenant_id, instance_id):
+        logger.warning(
+            "release_native_instance_snapshot IGNORADO para instância humana: "
+            "tenant=%s instance=%s — o registro humano é do login WS (mcp-server), "
+            "não do espelho de agente nativo.",
+            tenant_id, instance_id,
+        )
+        return
     try:
         snap = dict(native_snapshot) if native_snapshot else {}
         prev = int(snap.get("current_sessions", 1) or 1)
@@ -7986,10 +8002,34 @@ async def _restore_instance(
                     )
                 except Exception:
                     pass
-                # TTL preservado como estava (24 h): mexer nisso é outro assunto.
-                await redis_client.set(
-                    f"{tenant}:instance:{inst}", json.dumps(live), ex=86400
-                )
+                # ── Tempo de vida da chave NÃO é fato desta função ───────────────
+                # O comentário anterior dizia "TTL preservado como estava (24 h)".
+                # Não era preservação: `ex=86400` IMPÕE 24 h. Para instância humana
+                # isso é um rebaixamento — a chave dela é **permanente** (`ttl -1`),
+                # e quem é dono do ciclo de vida é o login WS no mcp-server. Todos
+                # os escritores do routing-engine usam KEEPTTL exatamente para não
+                # opinar sobre isso; este site era a exceção.
+                #
+                # O dano é silencioso e diferido: depois da conversão, todo KEEPTTL
+                # subsequente preserva o TTL DECADENTE, e ninguém restaura a
+                # permanência. Um agente logado por mais de 24 h desaparece do
+                # roteamento sem nenhum DEL — sintoma idêntico ao que custou o dia
+                # 2026-07-28 (`instance_not_found`, "No agents available", wrap-up
+                # que não abre). Flagrado na monitoração da validação daquele fix:
+                #   14:18:16 ttl=-1  →  14:18:18 ttl=86398
+                #
+                # Humano: KEEPTTL (permanente segue permanente).
+                # IA: `ex=86400` mantido — a chave dela é efêmera por natureza
+                # (30 s do routing, 35 s do reconciliador) e o restore quer
+                # garantir sobrevida até o próximo tick do bootstrap.
+                if live.get("source") == "human_login":
+                    await redis_client.set(
+                        f"{tenant}:instance:{inst}", json.dumps(live), keepttl=True
+                    )
+                else:
+                    await redis_client.set(
+                        f"{tenant}:instance:{inst}", json.dumps(live), ex=86400
+                    )
                 if pool:
                     await redis_client.sadd(f"{tenant}:pool:{pool}:instances", inst)
                 logger.info(

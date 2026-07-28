@@ -47,7 +47,7 @@ POOL_B = "formfill_demo"
 def _human(pools: list[str], stored_type: str) -> AgentInstance:
     return AgentInstance(
         instance_id="human-u123", agent_type_id=stored_type,
-        tenant_id="t", pools=pools, pool_id=pools[0],
+        tenant_id="t", pools=pools,
         execution_model="stateful", max_concurrent=3,
     )
 
@@ -74,7 +74,7 @@ def test_ai_instance_keeps_its_stored_agent_type():
     identidade legítima e não pode ser reescrito pela derivação."""
     ai = AgentInstance(
         instance_id="agente_retencao_v1-001", agent_type_id="agente_retencao_v1",
-        tenant_id="t", pools=[POOL_A], pool_id=POOL_A,
+        tenant_id="t", pools=[POOL_A],
     )
     assert resolve_agent_type(ai, POOL_A) == "agente_retencao_v1"
     # Mesmo consultado com outro pool (não deve acontecer), nunca vira human_agent_*.
@@ -136,7 +136,7 @@ async def test_event_pools_win_over_resource_wide_meta(ctx):
 
     await client.set(_instance_key(tenant, instance), json.dumps({
         "instance_id": instance, "agent_type_id": f"human_agent_{POOL_A}",
-        "tenant_id": tenant, "pools": [POOL_A, POOL_B], "pool_id": POOL_A,
+        "tenant_id": tenant, "pools": [POOL_A, POOL_B],
         "execution_model": "stateful", "max_concurrent": 3,
         "current_sessions": 1, "status": "busy", "source": "human_login",
     }))
@@ -166,7 +166,7 @@ async def test_meta_still_used_when_event_omits_pools(ctx):
 
     await client.set(_instance_key(tenant, instance), json.dumps({
         "instance_id": instance, "agent_type_id": "x", "tenant_id": tenant,
-        "pools": [POOL_A], "pool_id": POOL_A, "max_concurrent": 1,
+        "pools": [POOL_A], "max_concurrent": 1,
         "current_sessions": 1, "status": "busy",
     }))
     await reg.update_instance_meta(

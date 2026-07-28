@@ -60,7 +60,6 @@ def _instance(
         instance_id      = instance_id,
         agent_type_id    = "agente_retencao_v1",
         tenant_id        = "tenant_test",
-        pool_id          = pool_id,
         pools            = [pool_id],
         execution_model  = "stateless",
         max_concurrent   = max_concurrent,

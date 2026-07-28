@@ -52,6 +52,7 @@ import { createKafkaProducer }     from "./infra/kafka"
 import { createRegistryClient }    from "./infra/registry-client"
 import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
+import { routeMentions }           from "./lib/mention-routing"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
 import { shouldDropAssignment }    from "./lib/assignment-filter"
 import { MaskingService }          from "./lib/masking"
@@ -230,9 +231,10 @@ async function refreshPoolInstances(
         const raw = await redis.get(key)
         if (!raw) continue
         const inst = JSON.parse(raw) as Record<string, unknown>
+        // F5: membership é `pools[]` e só. O fallback `pool_id === poolId` saiu
+        // junto com o campo — toda instância (humana ou de IA) declara `pools`.
         const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
-        const pid   = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
-        if (pools.includes(poolId) || pid === poolId) {
+        if (pools.includes(poolId)) {
           const iid = inst["instance_id"] as string | undefined
           if (iid) candidateIds.add(iid)
         }
@@ -261,10 +263,10 @@ async function refreshPoolInstances(
 
       const inst = JSON.parse(raw) as Record<string, unknown>
 
-      // Filter: only process instances that actually belong to this pool
+      // Filter: only process instances that actually belong to this pool (F5:
+      // membership é `pools[]`; o `pool_id` singular não existe mais).
       const pools = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : []
-      const pid   = typeof inst["pool_id"] === "string" ? inst["pool_id"] : ""
-      if (!pools.includes(poolId) && pid !== poolId) continue
+      if (!pools.includes(poolId)) continue
 
       inst["current_sessions"] = 0
       inst["status"]           = "ready"
@@ -420,21 +422,6 @@ async function registerHumanAgent(
     console.warn(`[agent-ws] Pool registration request failed (non-fatal): pool=${poolId}`, err)
   }
 
-  // ── Read existing instance to merge pools (multi-pool login) ─────────────────
-  let existingPools: string[] = []
-  let existingCurrentSessions = 0
-  try {
-    const existingRaw = await redis.get(`${tenantId}:instance:${instanceId}`)
-    if (existingRaw) {
-      const existing = JSON.parse(existingRaw) as Record<string, unknown>
-      if (Array.isArray(existing["pools"])) existingPools = existing["pools"] as string[]
-      if (typeof existing["current_sessions"] === "number") {
-        existingCurrentSessions = existing["current_sessions"] as number
-      }
-    }
-  } catch { /* non-fatal — treat as fresh registration */ }
-  const mergedPools = Array.from(new Set([...existingPools, poolId]))
-
   // Restore an active pause across reconnects: the durable marker
   // ${tenant}:agent_paused:${instanceId} survives the instance deletion that a
   // WS logout (Console navigation) performs. If present, register the agent as
@@ -444,31 +431,89 @@ async function registerHumanAgent(
     isPaused = (await redis.get(`${tenantId}:agent_paused:${instanceId}`)) !== null
   } catch { /* non-fatal — treat as not paused */ }
 
-  const instance = {
-    instance_id:      instanceId,
-    agent_type_id:    `human_agent_${poolId}`,
-    // C1 — human analytics identity: user_id (stable login id) + user_login (email).
-    // Read by the orchestrator-bridge at activation and denormalized onto the segment.
-    user_id:          userId,
-    user_login:       userLogin,
-    tenant_id:        tenantId,
-    pool_id:          poolId,
-    pools:            mergedPools,
-    execution_model:  "stateful",
-    max_concurrent:   maxConcurrentSessions,
-    current_sessions: existingCurrentSessions,
-    status:           isPaused ? "paused" : "ready",
-    registered_at:    now,
-    source:           "human_login",
+  // ── Entrada no pool: ATÔMICA, e simétrica à saída ─────────────────────────
+  //
+  // O Console abre uma conexão WS POR POOL, então esta função roda N vezes em
+  // paralelo no load da página — uma por pool. A versão anterior fazia
+  // read-modify-write do campo `pools`: lia `existingPools`, calculava
+  // `merged = existente ∪ meuPool` e escrevia o campo INTEIRO. As N chamadas leem
+  // o mesmo estado e a última escrita vence, então a membership colapsa no pool
+  // de quem escreveu por último. Com registro vazio (login novo) cada uma calcula
+  // `[meuPool]` e o agente termina logado em UM pool, achando que está em N.
+  //
+  // O log da F1 flagrou isso em produção-demo, e a linha não deixa dúvida sobre
+  // ser substituição e não encolhimento:
+  //
+  //   membership SHRANK: dropped=['formfill_demo'] before=['formfill_demo']
+  //                      after=['retencao_humano'] (evento autoritativo=agent_ready)
+  //
+  // A consequência não para aí: com um pool só, o `unregisterHumanAgent` daquele
+  // pool calcula `remaining = []`, entra no full logout e DELeta a instância de um
+  // agente conectado — que é a origem do `instance_not_found` e do "No agents
+  // available for this pool" após o primeiro ciclo de atendimento.
+  //
+  // Mesma regra da saída, invertida: a operação não é "escreva o conjunto que eu
+  // calculei", é **"adicione o MEU pool ao conjunto"**, indivisível. O evento
+  // `agent_ready` publicado abaixo carrega o `pools` DEVOLVIDO pelo script — o
+  // estado real pós-escrita — e não o que este chamador imaginou antes de escrever.
+  const LUA_JOIN_POOL = `
+    local raw = redis.call('GET', KEYS[1])
+    local inst = nil
+    if raw then
+      local ok, decoded = pcall(cjson.decode, raw)
+      if ok and type(decoded) == 'table' then inst = decoded end
+    end
+    if not inst then inst = {} end
+    local pools = inst['pools']
+    if type(pools) ~= 'table' then pools = {} end
+    local found = false
+    for _, p in ipairs(pools) do if p == ARGV[1] then found = true end end
+    if not found then pools[#pools + 1] = ARGV[1] end
+    inst['pools']            = pools
+    inst['instance_id']      = ARGV[2]
+    inst['user_id']          = ARGV[3]
+    inst['user_login']       = ARGV[4]
+    inst['tenant_id']        = ARGV[5]
+    inst['max_concurrent']   = tonumber(ARGV[6])
+    inst['status']           = ARGV[7]
+    inst['execution_model']  = 'stateful'
+    inst['source']           = 'human_login'
+    inst['registered_at']    = inst['registered_at'] or ARGV[8]
+    if inst['current_sessions'] == nil then inst['current_sessions'] = 0 end
+    -- Resíduo por-pool: só semeia se ausente. Para humano o valor é derivado do
+    -- pool em escopo (resolve_agent_type, F2) — o campo aqui não é identidade.
+    if inst['agent_type_id'] == nil then
+      inst['agent_type_id'] = 'human_agent_' .. ARGV[1]
+    end
+    -- SET SEM 'KEEPTTL', de propósito: o login é o ponto que AFIRMA a permanência
+    -- da chave humana, e 'SET' sem opção de expiração remove qualquer TTL. Este
+    -- serviço é o dono do ciclo de vida do registro humano; os demais escritores
+    -- usam KEEPTTL justamente para não opinar. Usar KEEPTTL aqui (como esta função
+    -- fez brevemente) elimina o único caminho de VOLTA para permanente: qualquer
+    -- write com expiração em qualquer serviço converteria a chave para efêmera e nem
+    -- relogar a curaria — o TTL decairia até o agente sumir do roteamento sem
+    -- nenhum DEL. Observado em 2026-07-28: ttl decaindo monotonicamente de 86400,
+    -- sem renovação, com o agente conectado.
+    redis.call('SET', KEYS[1], cjson.encode(inst))
+    return cjson.encode({ pools = pools, current_sessions = inst['current_sessions'] })
+  `
+
+  let mergedPools: string[] = [poolId]
+  let existingCurrentSessions = 0
+  try {
+    const raw = await redis.eval(
+      LUA_JOIN_POOL, 1, `${tenantId}:instance:${instanceId}`,
+      poolId, instanceId, userId, userLogin, tenantId,
+      String(maxConcurrentSessions), isPaused ? "paused" : "ready", now,
+    ) as string
+    const res = JSON.parse(raw) as { pools?: string[]; current_sessions?: number }
+    if (Array.isArray(res.pools) && res.pools.length > 0) mergedPools = res.pools
+    if (typeof res.current_sessions === "number") existingCurrentSessions = res.current_sessions
+  } catch (e) {
+    console.error(`[agent-ws] EVAL de entrada no pool falhou — instance=${instanceId}:`, e)
+    throw e   // sem registro não há login; falhar alto é melhor que agente fantasma
   }
 
-  // ── Step 1: write directly to Redis (immediate availability for routing reads)
-  //
-  // Even if the Agent Registry call succeeded, the routing engine's Kafka
-  // consumer may not have processed pool.registered yet.  Writing the instance
-  // and pool config directly to Redis ensures zero delay before the next
-  // routing decision.
-  await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(instance))
   await redis.sadd(`${tenantId}:pool:${poolId}:instances`, instanceId)
   await redis.sadd(`${tenantId}:pool_roster:${poolId}`, instanceId)
 
@@ -555,35 +600,126 @@ async function unregisterHumanAgent(
 
   console.log(`[unregister] START pool=${poolId} user=${userId} instanceId=${instanceId} tenant=${tenantId}`)
 
-  let remainingPools: string[] = []
-  let allPools: string[]       = [poolId]
-  let currentSessions = 0
+  // ── Membership REAL do recurso ────────────────────────────────────────────
+  //
+  // Esta função é chamada por CONEXÃO WS que fecha, e o Console abre uma conexão
+  // POR POOL. O evento é, portanto, de escopo (recurso, pool): "esta conexão saiu
+  // DESTE pool". A decisão de DELetar o registro é de escopo RECURSO. Derivar a
+  // segunda do primeiro sem saber a membership completa é o mesmo defeito que o
+  // ADR `adr-human-agent-pool-scoped-identity` descreve — aqui espelhado no lado
+  // da escrita.
+  //
+  // O default antigo era `allPools = [poolId]`: se a leitura do registro falhasse
+  // (ou a chave estivesse momentaneamente ausente), `remainingPools` ficava vazio
+  // e o código concluía "último pool" — DELetando a instância de um agente ainda
+  // conectado em outros N−1 pools, e publicando um `agent_logout` que só nomeava
+  // um pool, deixando os demais pool sets com membro órfão apontando para chave
+  // inexistente. Estado observado em 2026-07-28: `{t}:instance:human-…` ausente e
+  // `{t}:pool:formfill_demo:instances` ainda listando o id.
+  //
+  // Regra: **não se apaga por ignorância**. Sem membership legível, o full logout
+  // não acontece — degrada para saída-de-pool e loga alto.
+  //
+  // ── E a operação tem que ser ATÔMICA ─────────────────────────────────────
+  //
+  // Ler `pools`, calcular "tudo menos o meu pool" e escrever o campo inteiro é
+  // read-modify-write. Um reload do Console fecha as N conexões praticamente ao
+  // mesmo tempo, as N chamadas caem juntas aqui, e TODAS leem o mesmo snapshot.
+  // Log real de 2026-07-28, três pools, um reload:
+  //
+  //   allPools=retencao,formfill  remainingPools=retencao            (fechou formfill)
+  //   allPools=retencao,formfill  remainingPools=retencao,formfill   (fechou aprovacao)
+  //   allPools=retencao,formfill  remainingPools=formfill            (fechou retencao)
+  //
+  // Cada uma escreveu o campo inteiro; venceu a última. O agente ficou declarando
+  // um pool e presente em nenhum (cada chamada SREMou o seu). Pior: a perda é
+  // CUMULATIVA — a cada reload sobra menos, até restar um só; aí a chamada daquele
+  // pool calcula `remaining = []`, entra no full logout e DELeta a instância de um
+  // agente que está conectado. Foi essa a origem do `(nil)` + `instance_not_found`.
+  //
+  // O erro é o mesmo do ADR mais uma vez: um evento de escopo (recurso, pool)
+  // computando um valor de escopo RECURSO a partir de uma foto velha. A operação
+  // correta não é "escreva o conjunto que eu calculei" e sim **"remova o MEU pool
+  // do conjunto"** — set-difference, executada indivisivelmente. Daí o Lua: EVAL é
+  // atômico no Redis, então a decisão "sobrou alguém?" passa a ser tomada sobre o
+  // estado real no instante da escrita, não sobre o que este chamador viu antes.
+  const LUA_LEAVE_POOL = `
+    local raw = redis.call('GET', KEYS[1])
+    if not raw then return cjson.encode({status='absent'}) end
+    local ok, inst = pcall(cjson.decode, raw)
+    if not ok or type(inst) ~= 'table' then return cjson.encode({status='corrupt'}) end
+    local pools = inst['pools']
+    if type(pools) ~= 'table' or #pools == 0 then
+      return cjson.encode({status='no_membership'})
+    end
+    local all, remaining = {}, {}
+    for _, p in ipairs(pools) do
+      all[#all+1] = p
+      if p ~= ARGV[1] then remaining[#remaining+1] = p end
+    end
+    local sessions = inst['current_sessions'] or 0
+    if #remaining == 0 then
+      redis.call('DEL', KEYS[1])
+      return cjson.encode({status='full_logout', all=all, sessions=sessions})
+    end
+    inst['pools'] = remaining
+    redis.call('SET', KEYS[1], cjson.encode(inst), 'KEEPTTL')
+    return cjson.encode({status='partial', all=all, remaining=remaining, sessions=sessions})
+  `
 
-  // Remove poolId from the instance's pools list
+  type LeaveResult = {
+    status:    "absent" | "corrupt" | "no_membership" | "full_logout" | "partial"
+    all?:      string[]
+    remaining?: string[]
+    sessions?: number
+  }
+
+  let result: LeaveResult = { status: "corrupt" }
   try {
-    const raw = await redis.get(`${tenantId}:instance:${instanceId}`)
-    console.log(`[unregister] Instance key found=${!!raw} key=${tenantId}:instance:${instanceId}`)
-    if (raw) {
-      const inst = JSON.parse(raw) as Record<string, unknown>
-      allPools       = Array.isArray(inst["pools"]) ? inst["pools"] as string[] : [poolId]
-      remainingPools = allPools.filter(p => p !== poolId)
-      if (typeof inst["current_sessions"] === "number") {
-        currentSessions = inst["current_sessions"] as number
-      }
-      console.log(`[unregister] allPools=${allPools.join(",")} remainingPools=${remainingPools.join(",") || "(none)"}`)
-    }
-    // Always remove from this pool's routing sets (ready + busy)
+    const raw = await redis.eval(
+      LUA_LEAVE_POOL, 1, `${tenantId}:instance:${instanceId}`, poolId,
+    ) as string
+    result = JSON.parse(raw) as LeaveResult
+  } catch (e) {
+    console.error(`[unregister] EVAL falhou — nenhuma alteração no registro:`, e)
+    return
+  }
+
+  const allPools       = result.all ?? []
+  const remainingPools = result.remaining ?? []
+  const currentSessions = result.sessions ?? 0
+  console.log(
+    `[unregister] status=${result.status} allPools=${allPools.join(",") || "(none)"} ` +
+    `remainingPools=${remainingPools.join(",") || "(none)"}`
+  )
+
+  // Sempre sai dos sets DESTE pool — é o fato que o evento realmente prova, e é
+  // idempotente, então vale para qualquer status.
+  try {
     const r1 = await redis.srem(`${tenantId}:pool:${poolId}:instances`,      instanceId)
     const r2 = await redis.srem(`${tenantId}:pool:${poolId}:busy_instances`, instanceId)
     const r3 = await redis.srem(`${tenantId}:pool_roster:${poolId}`,         instanceId)
     console.log(`[unregister] SREM instances=${r1} busy_instances=${r2} pool_roster=${r3}`)
   } catch (e) {
-    console.error(`[unregister] ERROR in setup block:`, e)
+    console.error(`[unregister] SREM do pool que fechou falhou:`, e)
   }
 
-  if (remainingPools.length === 0) {
-    // Full logout — publish BEFORE DEL so the routing-engine can still read the
-    // instance key if it processes the event before we delete it.
+  if (result.status !== "full_logout" && result.status !== "partial") {
+    // absent / corrupt / no_membership: nenhuma dessas hipóteses autoriza apagar o
+    // recurso — se a instância já não existe, não há o que deletar; se existe e não
+    // deu para ler, deletar é pior. A saída deste pool (SREM acima) já foi aplicada.
+    console.warn(
+      `[unregister] membership NÃO utilizável (${result.status}) para instance=${instanceId} ` +
+      `(pool=${poolId}) — NÃO trato como full logout e NÃO deleto o registro.`
+    )
+    return
+  }
+
+  if (result.status === "full_logout") {
+    // Full logout — a chave JÁ foi deletada dentro do EVAL (é o que torna a
+    // decisão "era o último pool?" confiável: ninguém pode ter entrado ou saído
+    // entre a checagem e o DEL). O `_deactivate_instance` do routing-engine já
+    // trata chave ausente e usa o `pools` do payload (kafka_listener:718-721).
     console.log(`[unregister] Full logout — publishing agent_logout for instance=${instanceId} pools=${allPools.join(",")}`)
     await kafka.publish("agent.lifecycle", {
       event:        "agent_logout",
@@ -596,24 +732,31 @@ async function unregisterHumanAgent(
       pools:        allPools,
       timestamp:    now,
     })
-    // DEL after publish — routing-engine may have already processed the event, which
-    // is fine; the key is gone and get_instance() will return None gracefully.
-    try {
-      const delResult = await redis.del(`${tenantId}:instance:${instanceId}`)
-      console.log(`[unregister] DEL instance key result=${delResult} (1=deleted, 0=not found)`)
-    } catch (e) { console.error(`[unregister] DEL failed:`, e) }
-    console.log(`[agent-ws] Human agent fully unregistered: instance=${instanceId}`)
-  } else {
-    // Still active in other pools — update and keep ready
-    try {
-      const raw = await redis.get(`${tenantId}:instance:${instanceId}`)
-      if (raw) {
-        const inst = JSON.parse(raw) as Record<string, unknown>
-        inst["pools"] = remainingPools
-        await redis.set(`${tenantId}:instance:${instanceId}`, JSON.stringify(inst))
+    // Sai dos sets de TODOS os pools. O SREM lá em cima só cobre o pool desta
+    // conexão; se o DEL (feito no EVAL) é global, a limpeza também tem que ser. Sem
+    // isso, um pool não-fechado guarda um membro apontando para chave inexistente
+    // — e `get_ready_instances` PULA membro sem chave sem evictar (decisão
+    // deliberada, `registry.py:375-392`), então o órfão nunca é colhido: o pool
+    // parece ter agente, o claim responde `instance_not_found`, e o Console segue
+    // exibindo "Connected". Depender só do `agent_logout` para isso é depender de
+    // efeito colateral em outro serviço — o mesmo padrão que a F1 já corrigiu no
+    // `remove_from_pool_sets`.
+    for (const p of allPools) {
+      if (p === poolId) continue   // já removido acima
+      try {
+        await redis.srem(`${tenantId}:pool:${p}:instances`,      instanceId)
+        await redis.srem(`${tenantId}:pool:${p}:busy_instances`, instanceId)
+        await redis.srem(`${tenantId}:pool_roster:${p}`,         instanceId)
+        console.log(`[unregister] SREM (full logout) pool=${p} instance=${instanceId}`)
+      } catch (e) {
+        console.error(`[unregister] SREM falhou para pool=${p}:`, e)
       }
-    } catch { /* non-fatal */ }
-    // Partial logout — update routing engine with remaining pools.
+    }
+    console.log(`[agent-ws] Human agent fully unregistered: instance=${instanceId} pools=${allPools.join(",")}`)
+  } else {
+    // Partial logout — o registro já foi atualizado (com KEEPTTL) dentro do EVAL.
+    // A escrita em JS que existia aqui era a segunda metade do read-modify-write
+    // que produzia o lost update; sumiu junto com a primeira.
     // F1 (ADR adr-human-agent-pool-scoped-identity): `agent_type_id` aqui nomeava
     // o pool que está sendo DEIXADO — carimbava a identidade de um pool morto numa
     // instância ainda ativa nos outros. Passa a nomear um pool REMANESCENTE.
@@ -2366,6 +2509,43 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const UNREGISTER_GRACE_MS = 2_500
   const pendingUnregister = new Map<string, ReturnType<typeof setTimeout>>()
 
+  // ── Conexões vivas por (usuário, pool) ────────────────────────────────────
+  //
+  // O unregister pertence a uma CONEXÃO, não ao par (usuário, pool): "esta aba
+  // fechou" não é o mesmo fato que "este agente saiu deste pool". O cancelamento
+  // por `pendingUnregister` cobre só o caso em que a reconexão chega DENTRO dos
+  // 2,5 s de graça; um Ctrl+Shift+R mais lento que isso derruba o agente inteiro:
+  // as N conexões fecham, os N unregisters rodam em sequência e o último conclui
+  // "era o último pool" e DELeta o registro de um agente que está reconectando.
+  //
+  // Observado em 2026-07-28, com a aritmética já correta (o Lua atômico funciona):
+  //   status=partial      allPools=[3]  remaining=[2]
+  //   status=partial      allPools=[2]  remaining=[1]
+  //   status=full_logout  allPools=[1]  remaining=(none)   → DEL
+  //
+  // O dano não termina no DEL. O `agent_logout` publicado ali é assíncrono e pode
+  // ser consumido DEPOIS da reregistração, marcando `logged_out` um agente que
+  // acabou de logar — e aí o registro existe, mas o roteamento o ignora
+  // (`get_ready_instances` exige `state == "ready"`).
+  //
+  // Contador de conexões vivas: o timer só age se, no instante em que dispara,
+  // não houver conexão daquele agente naquele pool. Cobre reconexão de qualquer
+  // duração, e não só a que cabe na janela de graça.
+  const liveConnections = new Map<string, number>()
+  const connKey = (user: string, pool: string) => `${user}::${pool}`
+  const addConnection = (user: string, pool: string) => {
+    const k = connKey(user, pool)
+    liveConnections.set(k, (liveConnections.get(k) ?? 0) + 1)
+  }
+  const dropConnection = (user: string, pool: string) => {
+    const k = connKey(user, pool)
+    const next = (liveConnections.get(k) ?? 1) - 1
+    if (next > 0) liveConnections.set(k, next)
+    else liveConnections.delete(k)
+  }
+  const hasLiveConnection = (user: string, pool: string) =>
+    (liveConnections.get(connKey(user, pool)) ?? 0) > 0
+
   httpServer.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url ?? "", `http://${request.headers.host}`)
     console.log(`[upgrade] method=${request.method} pathname=${url.pathname} host=${request.headers.host} upgrade=${request.headers.upgrade}`)
@@ -2629,6 +2809,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
         pendingUnregister.delete(poolId)
         console.log(`[agent-ws] Cancelled pending unregister (StrictMode reconnect) pool=${poolId}`)
       }
+      // Conexão viva registrada ANTES do register: se um timer agendado por um
+      // fechamento anterior disparar durante o await abaixo, ele vê o contador e
+      // aborta, em vez de deslogar o agente que está entrando.
+      addConnection(userId, poolId)
       registerHumanAgent(poolId, userId, userLogin, maxConcurrentSessions, redis, kafka).catch((err) => {
         // Item 2 / Etapa 2: gate de login negou — informa o Console e encerra.
         if (err instanceof HumanLoginDenied) {
@@ -2907,80 +3091,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
           } catch { /* non-fatal */ }
 
           // 3. Route each @alias to the corresponding specialist pool.
-          //    Two events per alias:
-          //      a) mention_routing:true — for command dispatch to an ALREADY-ACTIVE specialist
-          //         (handled by orchestrator-bridge process_mention_routing)
-          //      b) Full ConversationInboundEvent with conference_id — for the Routing Engine to
-          //         ALLOCATE the specialist when it is not yet running in this session
-          //         (routing engine validates required fields; conference_id signals conference mode)
-          try {
-            // Read session metadata once to get customer_id and channel for the routing event
-            let customerIdForInbound = ""
-            let channelForInbound    = "webchat"
-            try {
-              const metaRaw = await redis.get(`session:${targetSessionId}:meta`)
-              if (metaRaw) {
-                const meta = JSON.parse(metaRaw) as Record<string, string>
-                if (meta["customer_id"]) customerIdForInbound = meta["customer_id"]
-                if (meta["channel"])     channelForInbound    = meta["channel"]
-              }
-              if (!customerIdForInbound) {
-                const cidRaw = await redis.get(`session:${targetSessionId}:contact_id`)
-                if (cidRaw) customerIdForInbound = cidRaw
-              }
-            } catch { /* use defaults */ }
-
-            const poolConfigRaw = await redis.get(`${tenantIdForMentions}:pool_config:${poolId}`)
-            if (poolConfigRaw) {
-              const poolConfig = JSON.parse(poolConfigRaw) as Record<string, unknown>
-              const mentionablePools =
-                poolConfig["mentionable_pools"] &&
-                typeof poolConfig["mentionable_pools"] === "object"
-                  ? (poolConfig["mentionable_pools"] as Record<string, string>)
-                  : {}
-
-              for (const mention of mentionParsed.mentions) {
-                const targetPoolId = mentionablePools[mention.alias]
-                if (!targetPoolId) {
-                  console.log(`[agent-ws] @mention alias "${mention.alias}" not in mentionable_pools of pool "${poolId}" — skipping`)
-                  continue
-                }
-                console.log(`[agent-ws] @mention routing: alias="${mention.alias}" → pool="${targetPoolId}" session="${targetSessionId}"`)
-
-                // (a) mention_routing event — dispatches commands to an already-active specialist
-                await kafka.publish("conversations.inbound", {
-                  mention_routing:     true,
-                  session_id:          targetSessionId,
-                  tenant_id:           tenantIdForMentions,
-                  pool_id:             targetPoolId,
-                  alias:               mention.alias,
-                  mention_text:        mention.args_raw || "",
-                  from_participant_id: agentInstanceId || poolId,
-                  from_pool_id:        poolId,
-                  timestamp:           msgTs,
-                })
-
-                // (b) Full ConversationInboundEvent — allocates the specialist via Routing Engine
-                //     when not yet active. conference_id = session_id signals conference/assist mode.
-                //     The orchestrator-bridge process_routed dedup guard prevents double-activation
-                //     when the specialist is already running.
-                await kafka.publish("conversations.inbound", {
-                  session_id:   targetSessionId,
-                  tenant_id:    tenantIdForMentions,
-                  customer_id:  customerIdForInbound || targetSessionId,
-                  channel:      channelForInbound,
-                  pool_id:      targetPoolId,
-                  conference_id: targetSessionId,  // signals conference/assist mode to routing engine
-                  started_at:   new Date().toISOString(),
-                  elapsed_ms:   0,
-                })
-              }
-            } else {
-              console.log(`[agent-ws] No pool_config found for pool "${poolId}" in tenant "${tenantIdForMentions}" — @mention routing skipped`)
-            }
-          } catch (err) {
-            console.error("[agent-ws] @mention routing error (non-fatal):", err)
-          }
+          //    Implementação compartilhada com a tool MCP `message_send` —
+          //    ver lib/mention-routing.ts (F5 do ADR de identidade por-pool).
+          //
+          //    `poolId` aqui é o pool DESTA conexão WebSocket (query-param), e há
+          //    uma conexão por pool selecionado no Console. É a resolução no
+          //    escopo certo por construção — o que o outro chamador precisa
+          //    reconstruir a partir do registro por-(sessão, instância).
+          await routeMentions({
+            text:              msgText,
+            tenantId:          tenantIdForMentions,
+            sessionId:         targetSessionId,
+            senderPoolId:      poolId,
+            fromParticipantId: agentInstanceId || poolId,
+            redis,
+            kafka,
+            timestamp:         msgTs,
+            logPrefix:         "[agent-ws]",
+          })
 
           // Skip conversations.outbound — @mention messages are agents_only
           return
@@ -3219,6 +3347,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
     ws.on("close", () => {
       clearInterval(pingInterval)
+      if (poolId) dropConnection(userId, poolId)
       console.log(`[agent-ws] WS closed: pool=${poolId} user=${userId} instanceId=human-${userId || poolId}`)
       // Write participant_left for every session still open on this connection.
       for (const sid of subscribedSessions) {
@@ -3256,6 +3385,16 @@ export async function startServer(config: ServerConfig): Promise<void> {
                 console.error(`[agent-ws] agent_disconnect publish error session=${sid}:`, e)
               }
             }
+          }
+          // O agente reconectou neste pool enquanto o timer corria (reload, troca
+          // de aba, queda de rede curta). O fechamento que agendou este timer é
+          // história — sair do pool agora derrubaria uma conexão VIVA.
+          if (hasLiveConnection(userId, poolId)) {
+            console.log(
+              `[agent-ws] unregister ABORTADO pool=${poolId} user=${userId} — ` +
+              `há conexão viva (reconectou após a janela de graça)`
+            )
+            return
           }
           unregisterHumanAgent(poolId, userId, redis, kafka).catch((err) =>
             console.error(`[agent-ws] unregisterHumanAgent pool=${poolId} user=${userId}:`, err)

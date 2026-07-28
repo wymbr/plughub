@@ -20,6 +20,12 @@ const q = (output_key: string, capture: unknown, extra: Record<string, unknown> 
 
 const CSAT = { dimension_id: "csat", scale: { min: 1, max: 5 }, aggregation: "weighted_mean" }
 
+// Sinal de DIMENSÃO carrega a escala do instrumento carimbada (snapshot imutável —
+// `schemas/survey.ts` § scale; consumida pelo analytics em `scale_min`/`scale_max`, que
+// escolhe a banda: CSAT 1–5 e 1–10 têm cortes distintos). Métrica legada standalone
+// (sem dimension) NÃO carrega escala — daí os testes de `nps` compararem sem ela.
+const CSAT_SCALE = { min: 1, max: 5 }
+
 describe("composeSurveySignals", () => {
   it("composes a weighted CSAT dimension from multiple questions", () => {
     const f = form(
@@ -31,7 +37,7 @@ describe("composeSurveySignals", () => {
     )
     // (5*3 + 1*1)/4 = 4.0 on the 1–5 scale
     const signals = composeSurveySignals(f, { atendimento: "5", resolucao: "1" })
-    expect(signals).toEqual([{ metric: "csat", value: 4 }])
+    expect(signals).toEqual([{ metric: "csat", value: 4, scale: CSAT_SCALE }])
   })
 
   it("re-normalizes weights when a dimension question is NA/skipped", () => {
@@ -44,7 +50,7 @@ describe("composeSurveySignals", () => {
     )
     // resolucao skipped → only atendimento (4) counts → 4
     const signals = composeSurveySignals(f, { atendimento: "4", resolucao: null })
-    expect(signals).toEqual([{ metric: "csat", value: 4 }])
+    expect(signals).toEqual([{ metric: "csat", value: 4, scale: CSAT_SCALE }])
   })
 
   it("drops a dimension entirely when all its answers are NA", () => {
@@ -74,7 +80,9 @@ describe("composeSurveySignals", () => {
       [CSAT],
     )
     // answer is the option value ("5") → capture.value 5
-    expect(composeSurveySignals(f, { sat: "5" })).toEqual([{ metric: "csat", value: 5 }])
+    expect(composeSurveySignals(f, { sat: "5" })).toEqual([
+      { metric: "csat", value: 5, scale: CSAT_SCALE },
+    ])
   })
 
   it("ignores verbatim questions with no capture", () => {
@@ -91,8 +99,8 @@ describe("composeSurveySignals", () => {
       [CSAT],
     )
     const signals = composeSurveySignals(f, { atendimento: "4", nps: "8" })
-    expect(signals).toContainEqual({ metric: "csat", value: 4 })
-    expect(signals).toContainEqual({ metric: "nps", value: 8 })
+    expect(signals).toContainEqual({ metric: "csat", value: 4, scale: CSAT_SCALE })
+    expect(signals).toContainEqual({ metric: "nps", value: 8 })   // legada: sem escala
     expect(signals).toHaveLength(2)
   })
 

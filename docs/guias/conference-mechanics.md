@@ -1488,5 +1488,69 @@ Sites: `mcp-server-plughub/src/server.ts` (pong + logout parcial), `routing-engi
 
 ---
 
+### Mudança 29 — @mention por implementação única, com o pool do remetente como parâmetro (F5, 2026-07-28)
+
+Fecha o arco de identidade por-pool (F1–F5). ADR:
+[`adr-human-agent-pool-scoped-identity`](../adr/adr-human-agent-pool-scoped-identity.md) § B6.
+
+O `@mention` é o convite mais barato à conferência: um alias resolvido publica dois eventos em
+`conversations.inbound` — dispatch para um especialista **já ativo** e um `ConversationInboundEvent`
+com `conference_id` para o Routing Engine **alocar** quem ainda não está. Quem decide **quais** aliases
+existem é o `mentionable_pools` do pool **do remetente** — e era aí que estava o defeito.
+
+**Havia duas implementações.** A do WS de agente (Console) resolvia o pool pelo query-param da conexão
+— correto por construção, porque há uma conexão WS por pool selecionado. A da tool MCP `message_send`
+resolvia pelo `pool_id` **global** da instância, com `HGET` contra uma chave que é String JSON: o
+WRONGTYPE caía num `catch {}` e a menção morria em silêncio. Como o Console não passa por lá, o defeito
+nunca teve caminho vivo — e por isso sobreviveu.
+
+**Correção estrutural:** o roteamento virou módulo único (`lib/mention-routing.ts`) com o pool do
+remetente como **parâmetro**. Cada superfície resolve no escopo que conhece — a conexão, no WS; o
+registro por-(sessão, instância) `session:{sid}:routing:{iid}`, na tool MCP (mesmo fato que a F3 já
+lia para decrementar o `active_count` certo). Nenhum caminho que deixa de rotear é mudo.
+
+**Terceira metade:** o gate de `role` do `message_send` lia a mesma chave errada e falhava **aberto**
+(`role` sempre `"primary"`), de modo que consertar só o pool teria autorizado agente de IA a convidar
+pool — violando o invariante "IA nunca emite @mention". O gate passa a exigir leitura positiva.
+
+Sites: `mcp-server-plughub/src/lib/mention-routing.ts` (novo), `lib/routing-ref.ts` (novo — leitor do
+fato por-(sessão, instância), tolerante ao formato pré-F4), `server.ts`, `tools/session.ts`,
+`tools/supervisor.ts` e `tools/bpm.ts` (estes dois liam o sub-documento `snapshot` que a F4 removeu —
+leituras mortas silenciosas). **Arco F1–F5 completo.**
+
+---
+
+### Mudança 30 — logout de UMA conexão não apaga o recurso (unregisterHumanAgent, 2026-07-28)
+
+`unregisterHumanAgent` roda **por conexão WS que fecha**, e o Console abre **uma conexão por pool**. O
+evento prova só "esta conexão saiu deste pool" — escopo `(recurso, pool)`. O `DEL` do registro é escopo
+**recurso**. Derivar o segundo do primeiro produziu, em 2026-07-28, um agente conectado sem registro:
+`{t}:instance:human-{uid}` ausente com `{t}:pool:formfill_demo:instances` ainda listando o id →
+`work_task_claim` = `instance_not_found`, pool "sem agentes", Console dizendo "Connected".
+
+Três correções, e só a terceira é a causa: (1) membership ilegível bloqueia o ramo de full logout —
+não se apaga por ignorância; o default antigo (`allPools = [poolId]`) transformava toda leitura falha
+em "último pool". (2) O full logout faz `SREM` em **todos** os pools de `allPools`, em vez de delegar
+a limpeza ao consumidor do `agent_logout`. (3) **Lost update** — um reload fecha as N conexões juntas,
+as N chamadas leem o mesmo snapshot de `pools` e cada uma escreve o campo inteiro com "tudo menos o
+meu pool"; vence a última, a perda é cumulativa e, quando sobra um pool, a chamada dele calcula
+`remaining = []` e DELeta a instância de um agente conectado. A operação virou **EVAL (Lua)**:
+"remova o MEU pool do conjunto", com `DEL`/`SET KEEPTTL` decididos dentro da mesma execução atômica.
+
+> Regra que vale além deste site: **evento por-pool nunca reescreve o campo de membership inteiro.**
+> Ele remove ou adiciona o próprio pool, atomicamente. Escrever o conjunto calculado a partir de uma
+> leitura anterior é lost update esperando N conexões — e N é exatamente o número de pools do agente.
+
+Órfão de pool set é especialmente traiçoeiro porque `get_ready_instances` **pula membro sem chave sem
+evictar** (decisão deliberada, `registry.py:375-392`, para não causar off-by-1 no snapshot): ninguém
+colhe o lixo e o pool parece povoado. Antes da **Mudança 28** (F1) o pong recriava a chave em 15 s e o
+sintoma se apagava sozinho — o defeito é anterior, a F1 só parou de encobri-lo.
+
+Instrumentação junto: `get_instance` e `get_ready_instances` deixaram de devolver `None`/`continue`
+mudos; agora distinguem **chave ausente** de **chave inválida** no log (a UI recebe o mesmo
+`instance_not_found` para os dois, e cada um pede uma ação diferente).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

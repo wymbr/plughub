@@ -37,6 +37,8 @@ import { MaskingService }     from "../lib/masking"
 import { TokenVault }         from "../lib/token-vault"
 import { emitMessageSent }    from "../lib/usage-emitter"
 import { parseMentions }      from "../lib/mention-parser"
+import { routeMentions }      from "../lib/mention-routing"
+import { readRoutingRefPool } from "../lib/routing-ref"
 import { writeStreamEntry }   from "../lib/write-stream-entry"
 import { writeContextTag } from "./journey"
 
@@ -142,105 +144,6 @@ const SessionChannelChangeInputSchema = z.object({
   to_channel:     ChannelSchema,
   reason:         z.string().optional(),
 })
-
-// ─── @mention routing ────────────────────────────────────────────────────────
-
-interface RouteMentionsParams {
-  text:          string
-  tenantId:      string
-  sessionId:     string
-  participantId: string
-  instanceId:    string
-  redis:         RedisClient
-  kafka:         KafkaProducer
-  timestamp:     string
-}
-
-/**
- * routeMentions — resolves @alias tokens in a human agent's message and
- * auto-invites the corresponding pool for each valid mention.
- *
- * Fire-and-forget: all errors are swallowed — mention failures never
- * block message delivery.
- *
- * Algorithm:
- *   1. Parse @alias tokens from text (skip if none)
- *   2. Look up sender's pool via instance hash
- *   3. Load pool_config to get mentionable_pools
- *   4. For each mention, resolve alias → pool_id
- *   5. Resolve @ctx.* args from ContextStore
- *   6. Publish conversations.inbound with mode: "assist" for each resolved pool
- */
-async function routeMentions(p: RouteMentionsParams): Promise<void> {
-  const { text, tenantId, sessionId, participantId, instanceId, redis, kafka, timestamp } = p
-
-  try {
-    const parsed = parseMentions(text)
-    if (!parsed.has_mentions) return
-
-    // ── 1. Get sender's pool_id from instance hash ────────────────────────
-    let senderPoolId: string | null = null
-    try {
-      senderPoolId = await redis.hget(`${tenantId}:instance:${instanceId}`, "pool_id")
-    } catch { /* non-fatal */ }
-
-    if (!senderPoolId) return  // cannot determine domain — skip routing
-
-    // ── 2. Load mentionable_pools from pool config ────────────────────────
-    let mentionablePools: Record<string, string> = {}
-    try {
-      const poolConfigRaw = await redis.get(`${tenantId}:pool_config:${senderPoolId}`)
-      if (poolConfigRaw) {
-        const poolConfig = JSON.parse(poolConfigRaw) as Record<string, unknown>
-        if (poolConfig["mentionable_pools"] && typeof poolConfig["mentionable_pools"] === "object") {
-          mentionablePools = poolConfig["mentionable_pools"] as Record<string, string>
-        }
-      }
-    } catch { /* non-fatal — no mentionable pools configured */ }
-
-    // ── 3. Route each mention ─────────────────────────────────────────────
-    for (const mention of parsed.mentions) {
-      const targetPoolId = mentionablePools[mention.alias]
-      if (!targetPoolId) continue  // unknown alias — silently skip
-
-      // ── 4. Resolve @ctx.* args from ContextStore ──────────────────────
-      const resolvedArgs: Record<string, string> = {}
-      for (const ref of mention.ctx_refs) {
-        try {
-          const entryRaw = await (redis as any).hget(
-            `${tenantId}:ctx:${sessionId}`,
-            ref.field
-          )
-          if (entryRaw) {
-            const entry = JSON.parse(entryRaw) as { value?: unknown }
-            resolvedArgs[ref.field] = String(entry.value ?? ref.fallback)
-          } else {
-            resolvedArgs[ref.field] = ref.fallback
-          }
-        } catch {
-          resolvedArgs[ref.field] = ref.fallback
-        }
-      }
-
-      // ── 5. Auto-invite target pool ────────────────────────────────────
-      try {
-        await kafka.publish("conversations.inbound", {
-          session_id:           sessionId,
-          tenant_id:            tenantId,
-          mode:                 "assist",        // parallel, not transfer
-          mention_routing:      true,            // distinguishes from regular task-step invites
-          from_participant_id:  participantId,
-          from_pool_id:         senderPoolId,
-          alias:                mention.alias,
-          pool_id:              targetPoolId,
-          mention_args:         resolvedArgs,
-          mention_text:         mention.args_raw,
-          timestamp,
-        })
-      } catch { /* non-fatal */ }
-    }
-  } catch { /* swallow all errors — mention routing is best-effort */ }
-}
 
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
@@ -437,15 +340,36 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
 
         const { tenant_id, instance_id: senderInstanceId } = verifySessionToken(session_token)
 
-        // Lê papel do participante no Redis para montar o author
+        // Lê papel do participante no Redis para montar o author.
+        //
+        // F5 — a chave estava errada em DUAS frentes: `{tenant}:instance:{id}` é
+        // String JSON (o `HGET` levantava WRONGTYPE, engolido pelo catch) e o id
+        // certo para este hash é o `participant_id` sob o namespace
+        // `agent:instance:` — o mesmo que `session_context_get` (:373) e
+        // `evaluation.ts` (:936) já usam. O resultado era `role` SEMPRE "primary",
+        // por falha, não por leitura.
+        //
+        // `roleResolved` distingue "li e vale primary" de "não consegui ler".
+        // O default segue "primary" para os consumidores históricos (author do
+        // stream, decisão de mascaramento) — mudar isso é outro assunto, com outro
+        // blast radius. Mas o gate de @mention passa a exigir leitura POSITIVA:
+        // um gate de autorização que falha aberto não é gate.
         let role = "primary"
+        let roleResolved = false
         try {
-          const instRaw = await redis.hget(
-            `${tenant_id}:instance:${participant_id}`,
+          const roleRaw = await redis.hget(
+            `${tenant_id}:agent:instance:${participant_id}`,
             "role"
           )
-          if (instRaw) role = instRaw
-        } catch { /* usa 'primary' como fallback */ }
+          if (roleRaw) {
+            role = roleRaw
+            roleResolved = true
+          }
+        } catch (err) {
+          console.warn(
+            `[message_send] role lookup falhou: participant=${participant_id} — ${String(err)}`
+          )
+        }
 
         // Resolve instance_id via mapeamento participant_id → instance_id (fallback: token)
         let resolvedInstanceId = senderInstanceId ?? ""
@@ -462,6 +386,11 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         // Se a mensagem contém @alias tokens e o remetente é um agente humano
         // (role primary ou human), a mensagem é forçada para agents_only.
         // Spec: "a mensagem é sempre entregue agents_only — o roteamento é adicional".
+        //
+        // Aqui o default permissivo de `role` é o lado SEGURO: na dúvida, esconder
+        // do cliente. É o oposto do gate de roteamento abaixo, que na dúvida não
+        // convida ninguém. Os dois erram para o mesmo lado — nada vaza, nada é
+        // convidado sem prova.
         let effectiveVisibility = visibility
         if (
           (role === "primary" || role === "human") &&
@@ -628,20 +557,51 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
         }
 
         // ── @mention routing ──────────────────────────────────────────────
-        // Apenas agentes humanos com role "primary" podem emitir @mentions com
-        // efeito de roteamento. AI agents usam o task step para coordenação.
-        // O roteamento é adicional — a mensagem já foi entregue acima.
-        if ((role === "primary" || role === "human") && content.type === "text" && content.text) {
-          void routeMentions({
-            text:              content.text,
-            tenantId:          tenant_id,
-            sessionId:         session_id,
-            participantId:     participant_id,
-            instanceId:        resolvedInstanceId,
-            redis,
-            kafka,
-            timestamp,
-          })
+        // Apenas agentes humanos com role "primary"/"human" podem emitir @mentions
+        // com efeito de roteamento (invariante: agentes de IA NUNCA emitem @mention
+        // — coordenam pelo task step). O roteamento é adicional — a mensagem já foi
+        // entregue acima.
+        //
+        // F5: o gate exige `roleResolved`. Enquanto o `role` do participante não for
+        // efetivamente escrito no hash `agent:instance:{participant_id}`, esta
+        // superfície não consegue PROVAR que o emissor é humano — e um gate que não
+        // prova nada não deve autorizar. O Console não passa por aqui (usa o WS, que
+        // conhece o agente pela conexão), então isso não afeta o caminho vivo.
+        if (content.type === "text" && content.text && parseMentions(content.text).has_mentions) {
+          if (!roleResolved) {
+            console.warn(
+              `[message_send] @mention NÃO roteada: role do participante ${participant_id} ` +
+              `não pôde ser lido (hash ${tenant_id}:agent:instance:${participant_id} sem campo ` +
+              `"role"). Invariante: só role primary/human emite @mention.`
+            )
+          } else if (role !== "primary" && role !== "human") {
+            console.warn(
+              `[message_send] @mention NÃO roteada: role="${role}" não autorizado ` +
+              `(participant=${participant_id}, session=${session_id})`
+            )
+          } else {
+            // O pool do remetente é o pool que ESTA instância serve NESTA sessão —
+            // lido do registro por-(sessão, instância). Nunca o `pool_id` global do
+            // registro da instância: um humano logado em N pools tem UM registro, e
+            // aquele campo guarda o último pool escrito, não o desta conversa.
+            // ADR adr-human-agent-pool-scoped-identity § B6.
+            void (async () => {
+              const senderPoolId = await readRoutingRefPool(
+                redis, session_id, resolvedInstanceId, "[message_send]",
+              )
+              await routeMentions({
+                text:              content.text as string,
+                tenantId:          tenant_id,
+                sessionId:         session_id,
+                senderPoolId:      senderPoolId ?? "",
+                fromParticipantId: participant_id,
+                redis,
+                kafka,
+                timestamp,
+                logPrefix:         "[message_send]",
+              })
+            })()
+          }
         }
 
         // Metering: emite messages para mensagens visíveis ao cliente (visibility: "all").

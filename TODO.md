@@ -22,7 +22,99 @@ falha hoje. `git rm`.
 
 ---
 
-## Identidade por-pool do agente humano — campo global sobrescrito *(dívida, exposta 2026-07-27)*
+## ~~`_restore_instance` converte a chave humana de permanente para 24h~~ ✅ *(corrigido 2026-07-28, ver CHANGELOG)*
+
+A chave `{t}:instance:human-*` é **permanente** por construção: quem é dono do ciclo de vida é o login
+WS no mcp-server, e todos os escritores do routing-engine usam `KEEPTTL` justamente para não opinar
+sobre isso. O `_restore_instance` do bridge (`main.py:7990`) grava com **`ex=86400`**.
+
+Observado na validação do fix de `source` (monitoração de 2s):
+
+```
+14:18:16 ttl=-1
+14:18:18 ttl=86398     ← deixou de ser permanente
+14:19:05 ttl=86398     ← renovada como 24h, não como permanente
+```
+
+**Por que importa:** depois da conversão, `KEEPTTL` preserva o TTL *decadente* — ninguém restaura a
+permanência. Um agente logado continuamente por mais de 24 h desaparece do roteamento sem nenhum
+`DEL`, e o sintoma é idêntico ao que custou o dia 2026-07-28 (`instance_not_found`, "No agents
+available", wrap-up que não abre). Em demo não se alcança; num turno longo de produção, sim.
+
+**Família:** a mesma do `source` e do resto do dia — um componente escrevendo um fato de RECURSO
+(tempo de vida da chave) que não é dele. `_restore_instance` já virou patch na F4 e já se recusa a
+recriar instância ausente; falta parar de opinar sobre TTL.
+
+**Correção provável (1 linha):** usar `KEEPTTL` quando a instância for humana (`source ==
+"human_login"`), mantendo `ex=86400` para IA. Vale conferir se algum outro site do bridge grava a
+chave com `ex` — o inventário de 2026-07-28 lista `main.py:2962` (`ex=3600`, só IA) como o outro.
+
+---
+
+## Semáforo de vagas: ocupante real vaza quando a sessão morre sem `agent_done` *(achado 2026-07-28)*
+
+`{t}:instance:{iid}:sessions` é a fonte de verdade da ocupação (`SCARD` × `max_concurrent`). O
+**release** só acontece no `agent_done`. Se a sessão morrer por outro caminho — instância apagada
+debaixo dela, bridge reiniciado, contato forçado — o ocupante fica no SET **até o EXPIRE de 24 h**, e o
+agente aparece lotado ("No capacity available") com `current_sessions: 0` no registro.
+
+Assimetria a notar: o **hold** de wrap-up (`__wrapup_hold__::…`) tem expiração passiva justamente porque
+o desenho previu "wrap-up que nunca chega" (`registry.py` § Phase 2). O ocupante **real** não tem
+equivalente — presume-se que todo claim termina em `agent_done`. Foi essa presunção que quebrou.
+
+Observado ao limpar o rastro do lost update do `unregisterHumanAgent`: 3 vagas presas num agente sem
+nenhum atendimento ativo, e o E2E falhando por capacidade em vez de por defeito real.
+
+**Confirmado em uso (2026-07-28).** Agente com `max_concurrent=3` passou a se comportar como `max=1`:
+o segundo contato simultâneo entrava em fila. O SET tinha **2 ocupantes órfãos** de contatos já
+encerrados —
+
+```
+1) "bd16cc57-0cae-4a8b-a35b-02671ee0879b::"
+2) "1251a56f-6cf7-4d4b-8aab-96956913d97d::"
+```
+
+(forma `{session_id}::` = contato normal, sem conference_id). Após `DEL` do SET: 3 sessões
+simultâneas atendidas, a 4ª enfileirada, admitida ao liberar vaga, todas fechando com wrap-up. O
+sintoma é **capacidade que encolhe silenciosamente** e se parece com config errada de pool — caro de
+diagnosticar, porque `max_concurrent` no registro continua 3 e nada acusa a diferença.
+
+**Opções** (não decidido): (a) carimbar `expires_at_ms` no ocupante real, como já se faz no hold, e
+descartar expirados em qualquer claim — simétrico, sem sweeper, mas exige escolher um teto de duração
+de atendimento, que é política; (b) reconciliar o SET contra
+`{t}:routing:instance:{iid}:conversations` no `agent_ready` do login — o login já é o evento
+autoritativo do recurso, e um agente que acabou de logar não tem atendimento em curso; (c) sweeper
+periódico, o mais caro e o menos alinhado com o resto do desenho.
+
+(b) parece o menor passo com o maior retorno, e não inventa política nenhuma.
+
+---
+
+## Identidade por-pool do agente humano — ✅ ARCO COMPLETO (F1–F5, 2026-07-27/28; ver CHANGELOG)
+
+> Mantido aqui só pelo **resíduo** abaixo. O arco em si está fechado: ADR
+> [`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md).
+>
+> **Resíduo da F5 (não bloqueia):**
+>
+> - **Ninguém escreve `role` no hash `{tenant}:agent:instance:{participant_id}`.** Quatro sites leem
+>   (`session_context_get`, `message_send`, `evaluation.ts` ×2) e todos caem no default. Com o gate de
+>   @mention da F5 falhando **fechado**, a consequência prática é que a tool MCP `message_send` **não
+>   roteia menção nenhuma** — correto por ora (o Console usa o WS, que conhece o agente pela conexão),
+>   mas é uma capacidade desligada por falta de produtor, não por decisão. Fechar quando/se houver
+>   agente humano via SDK.
+> - **`role` default `"primary"` também decide mascaramento** (`session.ts`, `role === "customer" ||
+>   role === "primary"` → mascara) e carimba `author_role` no stream. Como nunca é lido de fato, toda
+>   mensagem via `message_send` é mascarada e sai como `primary`. Blast radius maior que o da F5;
+>   depende do mesmo produtor ausente.
+> - **`crash_detector.py:144`** ainda usa `meta.pools[0]`. Mitigado por pular instâncias `human-*`
+>   (`:98`), e o docstring de `update_instance_meta` agora avisa que o meta é cache, não constante.
+> - **Testes de estabilidade multi-pool** seguem inexistentes (o item da F5 no ADR os previa). Os
+>   testes de unidade tocados só trocaram `pool_id=` por `pools=[...]`.
+
+<details>
+<summary>Histórico do problema e das fases (fechado)</summary>
+
 
 **Problema.** Um humano logado em N pools tem UMA instância (`human-{userId}`), e `agent_type_id`/`pool_id`/
 `pools` dela são **last-writer**: cada claim/registro reescreve. Observado no E2E da Phase 2: a mesma instância
@@ -53,13 +145,22 @@ todo leitor de decisão já itera `for pool in pools: for inst in get_ready_inst
 | F2b | bridge ativa humano pela **identidade da instância**, hoisted antes do `get_agent_type` (não mais por **falha** do lookup) | ✅ 2026-07-27 |
 | F3 | precedência invertida em `remove_conversation` (`pools` do evento vence `meta.pools`) + claimante lê o pool do snapshot de roteamento | ✅ 2026-07-27 |
 | F4 | `session:{sid}:routing:{iid}` encolhido para `{tenant, instance, pool}`; `_restore_instance` virou patch e não recria instância ausente. Sem migração (tolerância no leitor + TTL 4 h) | ✅ 2026-07-27 |
-| F5 | remove `pool_id` singular; corrige o docstring falso de `update_instance_meta`; `session.ts:184` (@mention lê o pool da **sessão**, e conserta o WRONGTYPE que hoje derruba mentions em silêncio) | pendente |
+| F5 | remove `pool_id` singular; corrige o docstring falso de `update_instance_meta`; @mention por implementação única com o pool como parâmetro + gate de `role` falhando fechado | ✅ 2026-07-28 (CHANGELOG) |
 
-**Nota de escopo da F5:** são duas naturezas. O `@mention` é **bug de funcionalidade** (menções caem em
-silêncio hoje) e pede validação própria; o resto é higiene. O conserto do `@mention` exige as duas metades
-juntas — o tipo (`HGET` contra chave que é JSON *string* → WRONGTYPE engolido por `catch {}`) **e** o escopo
-(ler o pool da SESSÃO, não o `pool_id` global da instância). Corrigir só o tipo troca um no-op silencioso por
-um convite ao pool errado, que é pior.
+**Nota de escopo da F5 — corrigida as-built.** A nota original dizia "duas metades" (tipo + escopo).
+Eram **três**, e o enunciado do bug estava errado num ponto material:
+
+1. **Não havia uma implementação de @mention, havia duas.** A do Console (handler WS de agente em
+   `server.ts`) é completa e **já resolvia o pool no escopo certo** — vem do query-param da conexão, e
+   há uma conexão WS por pool. O B6 vivia só na tool MCP `message_send`, que **nenhum cliente vivo
+   exercita** (só e2e-tests e agentes SDK). Logo a validação proposta — "uma menção real que não chega"
+   — não era executável: a menção do Console chega porque passa por outro código.
+2. **Tipo + escopo**, como previsto.
+3. **O gate de `role` logo acima falhava ABERTO** — mesma colisão de chave, `catch {}`, `role` sempre
+   `"primary"` por falha. Consertar (1)+(2) sem (3) não trocaria o no-op por "convite ao pool errado";
+   trocaria por **violação do invariante "IA nunca emite @mention"**, que é pior que ambos.
+
+</details>
 
 ---
 

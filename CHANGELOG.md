@@ -2,6 +2,222 @@
 
 ---
 
+## `source` apagado pelo round-trip do Pydantic derruba o agente humano após o 1º atendimento ✅ (2026-07-28)
+
+**A causa raiz** de `instance_not_found` / "No agents available for this pool" / wrap-up que não abre.
+Encontrada por `MONITOR` filtrado por mutação, depois de quatro correções que atacaram defeitos reais
+mas adjacentes (ver entradas abaixo).
+
+**O rastro**, em três linhas consecutivas do mesmo agente:
+
+```
+13:58:09  .30(routing)  SET {… "status":"ready", "source":"human_login"}  KEEPTTL   ← certo
+13:58:14  .30(routing)  SET {… "status":"busy"}                           KEEPTTL   ← source SUMIU
+13:58:39  .30(routing)  SET {… "status":"ready"}                          EX 30     ← agora efêmera
+13:59:12  .31(bridge)   DEL tenant_demo:instance:human-…                            ← reconciliador
+```
+
+**Mecanismo.** `mark_busy` (`registry.py`) faz `AgentInstance.model_validate(data)` → `model_dump()` →
+`SET`. `AgentInstance` **não declarava `source`**, e o Pydantic descarta campo não declarado: a
+alocação do primeiro contato apagava o discriminador. A partir daí, dois consumidores independentes
+passam a errar:
+
+- `set_instance` decide `KEEPTTL` (humano) × `ex=30` (IA) lendo `source` — sem ele a chave humana vira
+  efêmera (o `EX 30` da terceira linha);
+- `instance_bootstrap._reconcile_tenant` (bridge) pula humanos no ramo de surplus lendo `source`
+  (`:378`) — sem ele o humano é classificado "não desejado e ocioso" e recebe `DEL` (`:745`).
+
+Daí a assinatura tão característica: **quebra só depois do primeiro atendimento**, porque é o
+`mark_busy` que apaga o campo, e ele só roda quando o agente recebe um contato.
+
+**Correção.** `source` declarado em `AgentInstance` — exatamente o remédio que `skill_id`, `flow_id`,
+`user_id` e `user_login` já documentam no mesmo arquivo (*"Declared here so it survives the
+model_validate → model_dump round-trip"*). `_upsert_instance` passa a preservá-lo, e `set_instance`
+detecta pelo campo do modelo com a leitura da chave viva como rede.
+
+**Quem AFIRMA a permanência.** O `LUA_JOIN_POOL` do `registerHumanAgent` nasceu com `KEEPTTL` — erro
+introduzido nesta mesma sessão. O código anterior fazia `SET` sem opção de expiração, e `SET` sem
+expiração **remove** o TTL: era o login que afirmava a permanência da chave humana. Com `KEEPTTL`, o
+login passou a apenas "preservar o que estiver lá", eliminando o único caminho de VOLTA — uma vez
+convertida para efêmera por qualquer `ex` em qualquer serviço, nem relogar curava, e o TTL decaía até
+o agente sumir do roteamento sem nenhum `DEL`. Flagrado na validação: `ttl` caindo monotonicamente de
+86400, sem renovação, com o agente conectado. Regra: **o dono do ciclo de vida afirma; os demais usam
+KEEPTTL para não opinar.** O login é o dono.
+
+**Resíduo fechado junto — TTL da chave humana.** A monitoração da validação flagrou
+`ttl=-1 → ttl=86398`: o `_restore_instance` do bridge gravava com `ex=86400` sob o comentário "TTL
+preservado como estava (24 h)". Não era preservação — `ex` **impõe**. A chave humana é permanente e
+seu dono é o login WS; todos os escritores do routing-engine usam `KEEPTTL` justamente para não
+opinar, e este site era a exceção. O dano é diferido: depois da conversão, todo `KEEPTTL` seguinte
+preserva o TTL **decadente**, e um agente logado por mais de 24 h sumiria do roteamento sem nenhum
+`DEL` — mesmo sintoma, causa nova. Agora: `KEEPTTL` para humano, `ex=86400` mantido para IA (cuja
+chave é efêmera por natureza). Guarda equivalente adicionada em
+`_release_native_instance_snapshot` (`ex=3600`), que além do TTL sobrescreveria o registro humano com
+um documento de forma de IA — perdendo o `source` de novo.
+
+**Nota.** O campo virou load-bearing para dois serviços sem nunca ter sido declarado no contrato que
+ambos atravessam. Não foi regressão: era uma bomba armada desde que o `source` passou a governar
+KEEPTTL e a guarda do reconciliador. O que faltava para achá-la era um `MONITOR` filtrado por
+mutação — comparar payloads consecutivos da mesma chave mostra o campo sumindo em uma linha.
+
+---
+
+## Membership de agente humano: lost update nas DUAS pontas + payload como fonte ✅ (2026-07-28)
+
+Continuação da entrada abaixo — o `unregisterHumanAgent` era **metade** do problema. O log da F1
+(`membership SHRANK`) mostrou a outra:
+
+```
+dropped=['formfill_demo']   before=['formfill_demo']    after=['retencao_humano']
+dropped=['retencao_humano'] before=['retencao_humano']  after=['formfill_demo']
+```
+
+Não é encolhimento: é **substituição**. Cada `agent_ready` chega com um único pool — o da sua conexão.
+
+**Causa 1 — `registerHumanAgent` (entrada).** Mesmo read-modify-write da saída: o Console abre uma
+conexão POR POOL, as N chamadas de login rodam em paralelo, cada uma lê o mesmo `existingPools`,
+calcula `merged = existente ∪ meuPool` e escreve o campo inteiro. Última vence. Com registro vazio,
+cada uma calcula `[meuPool]` e o agente termina logado em **um** pool achando que está em N — e aí o
+`unregisterHumanAgent` daquele pool calcula `remaining = []`, entra no full logout e **DELeta a
+instância de um agente conectado**. Era esta a cadeia por trás do "funciona uma vez, quebra no
+segundo teste": o primeiro ciclo funcionava, o `DEL` vinha depois, e nada recria (F1). Corrigido com
+`EVAL`: **"adicione o MEU pool ao conjunto"**, e o `agent_ready` publicado carrega o `pools`
+DEVOLVIDO pelo script — o estado real pós-escrita, não o que o chamador imaginou antes.
+
+**Causa 2 — o consumidor tratava o payload como autoritativo.** `_upsert_instance` substituía `pools`
+pelo do evento em todo `agent_ready`. Com N eventos por login e **sem garantia de ordem** de entrega,
+o evento do 1º pool chegando por último reimporia `pools=[p1]` sobre um registro já correto. Agora,
+para humano, **o registro manda e o evento nunca opina**: as duas pontas do mcp-server escrevem a
+membership atomicamente ANTES de publicar, então quando o evento chega o estado já está certo.
+Membership é fato do RECURSO e seu dono é quem administra o login — mesma família da F1 (evento de
+conexão não carrega fato de recurso). `remove_from_pool_sets` a partir do consumidor saiu junto: quem
+sai de um pool é o `unregisterHumanAgent`, que já faz o próprio SREM.
+
+**Causa 3 — o unregister pertence à CONEXÃO, não ao par (usuário, pool).** Com a aritmética já
+atômica, o log ficou limpo e mostrou o mecanismo final: um reload fecha as 3 conexões, a graça de
+2,5 s expira antes de elas voltarem, e os três unregisters rodam em sequência correta —
+`partial [3]→[2]`, `partial [2]→[1]`, `full_logout [1]→∅` — **apagando o registro de um agente que
+está reconectando**. O código fazia certo o que foi mandado; o mandado é que estava errado: "esta aba
+fechou" não é o mesmo fato que "este agente saiu deste pool". O dano não termina no `DEL` — o
+`agent_logout` publicado ali é assíncrono e pode ser consumido DEPOIS da reregistração, marcando
+`logged_out` um agente recém-logado (e `get_ready_instances` exige `state == "ready"`).
+Fechado com **contador de conexões vivas por (usuário, pool)**: o timer só age se, no instante em que
+dispara, não houver conexão daquele agente naquele pool. O cancelamento anterior
+(`pendingUnregister`) cobria só reconexões dentro da janela de graça; o contador cobre qualquer
+duração.
+
+**Nota de método.** Três diagnósticos meus por leitura de código erraram o alvo nesta sequência
+(tipo de chave → default da leitura → limpeza de pool set). O que resolveu foi instrumentação: os
+`warning` que substituíram os `except: pass` do `registry.py`, e o `membership SHRANK` que a F1 já
+tinha deixado plantado "para medir a frequência real e virar detector de regressão permanente"
+(ADR §3/Q5). Ele detectou.
+
+---
+
+## `unregisterHumanAgent`: DEL de escopo-recurso decidido por evento de escopo-pool ✅ (2026-07-28)
+
+Bug **anterior** à F5, exposto por ela — ou melhor, pela F1. Mesma família do ADR
+[`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md), espelhada no
+lado da **escrita**: lá o defeito era *ler* um fato estreito de um campo largo; aqui é *escrever* o largo
+a partir do estreito.
+
+**Sintoma.** Console mostrando "Connected / Ready in 3 pools", `work_task_claim` respondendo
+`instance_not_found`, e o painel do pool dizendo "No agents available". No Redis:
+`{t}:instance:human-{uid}` **ausente** e `{t}:pool:formfill_demo:instances` **ainda listando o id**.
+
+**Causa.** A função roda por **conexão WS que fecha**, e o Console abre uma conexão **por pool** — o
+evento prova apenas "esta conexão saiu deste pool". Duas derivações indevidas:
+
+1. O default `allPools = [poolId]` fazia com que uma leitura falha do registro produzisse
+   `remainingPools = []` ⇒ ramo de **full logout** ⇒ `DEL` da instância de um agente ainda conectado
+   nos outros N−1 pools, mais um `agent_logout` que só nomeava um pool (os demais pool sets nunca
+   limpos). Agora a membership ilegível é `null` explícito: **não se apaga por ignorância** — degrada
+   para saída-de-pool e loga alto.
+2. Mesmo no full logout legítimo, o `SREM` cobria só o pool que fechou, enquanto o `DEL` era global —
+   a limpeza dos demais dependia do consumidor do `agent_logout`, isto é, de efeito colateral em outro
+   serviço (mesmo padrão que a F1 já corrigira em `remove_from_pool_sets`). Agora o full logout faz
+   `SREM` em todos os `allPools`.
+3. **A causa real — lost update.** As duas correções acima trataram o *default* e a *limpeza*, e o
+   sintoma voltou. O log instrumentado deu a resposta: um reload do Console fecha as N conexões
+   juntas, as N chamadas leem **o mesmo snapshot** de `pools` e cada uma escreve o campo inteiro com
+   "tudo menos o meu pool" — último escritor vence.
+
+   ```
+   allPools=retencao,formfill  remainingPools=retencao            (fechou formfill)
+   allPools=retencao,formfill  remainingPools=retencao,formfill   (fechou aprovacao)
+   allPools=retencao,formfill  remainingPools=formfill            (fechou retencao)
+   ```
+
+   A perda é **cumulativa**: cada reload deixa menos pools até restar um, e aí a chamada daquele pool
+   calcula `remaining = []`, entra no full logout e **DELeta a instância de um agente conectado**.
+   Origem do `(nil)` + `instance_not_found` + "No agents available", com o Console exibindo
+   "Connected". O read-modify-write virou **EVAL (Lua)**: a operação passou de "escreva o conjunto que
+   eu calculei" para **"remova o MEU pool do conjunto"**, com o `DEL`/`SET KEEPTTL` decididos dentro
+   da mesma execução atômica — ninguém entra ou sai entre a checagem e a escrita.
+
+**Por que só apareceu agora.** Até a F1, o pong recriava a instância 15 s depois e o órfão se
+resolvia sozinho; o defeito existia e era invisível. A F1 proibiu a recriação por liveness — e o ADR
+§3.1 registrou o trade-off nestes termos: *"falhar visível (o agente some da fila até dar refresh) é
+preferível a falhar invisível (o contato some)"*. Esta é a falha visível cobrando o que foi prometido.
+
+**Diagnóstico estava cego.** `get_instance` e `get_ready_instances` (`registry.py`) devolviam `None`/
+`continue` **mudos** para dois casos distintos — chave ausente × chave inválida —, e é o mesmo texto
+`instance_not_found` que chega na UI. Ambos agora logam, e dizem qual é qual. O `continue` de
+`get_ready_instances` era o mais caro: fazia a instância sumir do roteamento sem rastro.
+
+---
+
+## Identidade por-pool do agente humano — F5: @mention, `pool_id` singular e o gate que falhava aberto ✅ (2026-07-28)
+
+Última fase do arco. ADR: [`adr-human-agent-pool-scoped-identity`](docs/adr/adr-human-agent-pool-scoped-identity.md).
+**Arco de identidade por-pool completo (F1–F5).**
+
+**Achado que reescreveu o enunciado: existiam DUAS implementações de @mention.** A do Console é o
+handler WS de agente (`server.ts`) — completa (escreve no stream como `agents_only`, ecoa por pub/sub,
+publica **dois** eventos por alias: dispatch para especialista já ativo + `ConversationInboundEvent`
+com `conference_id` para alocar quem ainda não está) e **já resolvia o pool no escopo certo**, porque
+o pool vem do query-param da conexão e há uma conexão WS por pool. É a decisão do ADR aplicada por
+construção — e é por isso que o @mention sempre funcionou nos E2E de Console. A do `session.ts` era a
+da tool MCP `message_send`: publicava só o primeiro evento (nunca alocaria um especialista inativo) e
+carregava o B6. Ou seja, **o B6 nunca teve caminho vivo** — o que não o torna menos real, torna a
+validação por menção-que-não-chega impossível.
+
+**O gate era a terceira metade.** Acima do `routeMentions`, o `message_send` lia `role` de
+`{tenant}:instance:{participant_id}` — mesma colisão de formato (chave é String JSON) **e** chaveada
+pelo `participant_id` sob o namespace errado (o hash de role é `agent:instance:`, como
+`session_context_get` e `evaluation.ts` já faziam). O `catch {}` engolia, e `role` era **sempre
+`"primary"` por falha, não por leitura**. Consertar tipo+escopo do pool sem isso não trocaria o no-op
+por "convite ao pool errado": trocaria por **violação do invariante "agentes de IA nunca emitem
+@mention"**, porque o gate autoriza todo mundo.
+
+**Correções.**
+- **`lib/mention-routing.ts`** (novo): implementação única, com o corpo do WS (2 eventos por alias) +
+  resolução de `@ctx.*` que só o `session.ts` tinha. O pool do remetente é **parâmetro** — quem chama
+  resolve no escopo que conhece. Nenhum caminho que deixa de rotear é mudo: todos logam o motivo.
+- **`lib/routing-ref.ts`** (novo): leitor de `session:{sid}:routing:{iid}` tolerante aos dois formatos
+  (raiz pós-F4 e sub-documento `snapshot` legado), mais `resolveAgentTypeForSession` — porte em TS do
+  `resolve_agent_type` do routing-engine (humano → `human_agent_{pool}`; IA → campo do registro).
+- **`server.ts` (WS)**: passa a chamar o helper com `poolId` da conexão. Comportamento idêntico.
+- **`session.ts` (`message_send`)**: pool lido do registro por-(sessão, instância); `role` lido da
+  chave certa; e o gate de @mention passa a exigir **leitura positiva** (`roleResolved`) — falha
+  **fechada**. O default permissivo de `role` fica só onde falhar aberto é o lado seguro (o override
+  que força `agents_only`: na dúvida, esconde do cliente). Os dois erram para o mesmo lado.
+- **`AgentInstance.pool_id` removido** (models.py + `_upsert_instance` + `registerHumanAgent`). Era
+  `pools[0]`, sem significado em multi-pool. Os dois únicos leitores (`server.ts`) usavam-no como
+  fallback `pid === poolId` ao lado de `pools.includes(poolId)` — redundante, já que toda instância
+  (humana ou de IA) declara `pools`. Sem migração: Pydantic ignora o campo extra em registros antigos.
+- **Docstring de `update_instance_meta`** (`registry.py`): dizia *"pools and agent_type_id do not
+  change during the instance lifetime"*. Falso para humanos nos dois termos, e era a premissa sobre a
+  qual `remove_conversation` e `crash_detector` foram construídos.
+
+**Fallout da F4 fechado junto.** A entrada da F4 afirmava *"nenhum leitor lê mais o sub-documento
+`snapshot`"* — **não era verdade**: `supervisor.ts` (pool) e `bpm.ts` (agent_type_id) continuavam
+lendo, e viraram leituras mortas silenciosas (`""` e `null` para sempre). Ambos migrados para os
+helpers novos. Exemplo do padrão que a § *Postura de Engenharia* nomeia: o valor plausível (`""`) não
+grita.
+
+---
+
 ## Identidade por-pool do agente humano — F4: snapshot de roteamento não-destrutivo ✅ (2026-07-27)
 
 Último vetor de `pools` encolhendo que sobrava depois da F1. ADR:

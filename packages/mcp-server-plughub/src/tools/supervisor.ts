@@ -12,6 +12,7 @@ import { z }            from "zod"
 import type { McpServer }     from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { Redis }         from "ioredis"
 import type { KafkaProducer } from "../infra/kafka"
+import { readRoutingRefPool } from "../lib/routing-ref"
 
 // ─────────────────────────────────────────────
 // Deps
@@ -412,14 +413,14 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
           const humAgents = await redis.smembers(`session:${parsed.session_id}:human_agents`)
           const firstInst = aiAgents[0] ?? humAgents[0]
           if (firstInst) {
-            const snapRaw = await redis.get(
-              `session:${parsed.session_id}:routing:${firstInst}`
-            )
-            if (snapRaw) {
-              const snap = JSON.parse(snapRaw) as Record<string, unknown>
-              const snapshot = snap["snapshot"] as Record<string, unknown> | undefined
-              poolId = (snapshot?.["pool_id"] as string) ?? ""
-            }
+            // F5: a F4 encolheu `session:{sid}:routing:{iid}` para
+            // {tenant_id, instance_id, pool_id} — o sub-documento `snapshot` que
+            // este site lia deixou de ser escrito, e a leitura virou morta
+            // (poolId sempre ""). O helper aceita os dois formatos e loga o motivo
+            // quando não há pool.
+            poolId = (await readRoutingRefPool(
+              redis, parsed.session_id, firstInst, "[supervisor_state]",
+            )) ?? ""
           }
         } catch { /* non-fatal */ }
       }

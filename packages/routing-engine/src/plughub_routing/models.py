@@ -116,10 +116,31 @@ class AgentInstance(BaseModel):
     # drops undeclared fields). The bridge reads it to denormalize onto the segment.
     user_id:          str = ""
     user_login:       str = ""
-    # pool_id is written by mcp-server (human agents) but omitted by the
-    # orchestrator-bridge bootstrap (which uses pools: list[str] instead).
-    # Optional to allow both sources to validate without errors.
-    pool_id:          str = ""
+    # `source` é o ÚNICO discriminador de instância humana no registro, e é
+    # load-bearing em DOIS consumidores independentes:
+    #   · `set_instance` decide KEEPTTL (humano, chave permanente do mcp-server)
+    #     × `ex=30` (IA) lendo este campo;
+    #   · `instance_bootstrap._reconcile_tenant` (bridge) pula instâncias humanas
+    #     no ramo de surplus lendo este campo — sem ele, o humano é classificado
+    #     como "instância não desejada e ociosa" e recebe DEL.
+    #
+    # Não estava declarado aqui, então o round-trip `model_validate → model_dump`
+    # do `mark_busy` o APAGAVA — silenciosamente, e só quando o agente pegava um
+    # contato. A partir daí a chave humana virava efêmera (`ex=30`) e o
+    # reconciliador do bridge a deletava. Rastro completo no MONITOR de
+    # 2026-07-28 (ver CHANGELOG). Mesma armadilha que `skill_id`/`user_*` acima já
+    # documentam: campo não declarado não sobrevive ao round-trip.
+    source:           str = ""
+    # F5 (ADR adr-human-agent-pool-scoped-identity): o campo `pool_id` SINGULAR foi
+    # removido. Ele era `pools[0]` — sem significado em multi-pool, e um convite
+    # permanente a ler "o pool da instância" onde a pergunta certa é "o pool DESTA
+    # sessão" (que vive em `session:{sid}:routing:{iid}`) ou "o pool em escopo"
+    # (que todo leitor de decisão já tem, via `for pool in pools:`).
+    # Nada consumia o campo como decisão — o único leitor de produção era um
+    # fallback `pid == pool_id` ao lado de `pools.includes(pool_id)` no mcp-server.
+    # Registros antigos que ainda tenham o campo seguem validando (o default do
+    # Pydantic v2 é `extra="ignore"`); ele simplesmente deixa de ser reescrito, e
+    # o `model_dump` do `set_instance` para de emiti-lo.
     pools:            list[str] = Field(default_factory=list)  # all pools this instance belongs to
     # execution_model defaults to "stateless" so bootstrap instances (which do
     # not include this field explicitly) validate cleanly.
