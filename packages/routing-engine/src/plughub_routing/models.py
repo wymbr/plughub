@@ -293,12 +293,10 @@ class PoolConfig(BaseModel):
     # F1.0 é só plumbing: o route() só passa a ramificar em F1.1.
     dispatch_mode: str = "push"
 
-    # Camada C (detach de hooks): ACW como regra de agent_ready.
-    #   "none" (default): não bloqueia. "soft": disponível, supervisor vê pendências.
-    #   "hard": get_ready_instances pula a instância com wrap-up detached pendente
-    #           (marker {t}:instance:{iid}:acw_pending). O ACW do wrap-up INLINE
-    #           segue via wrap_up_pending, independente deste campo.
-    acw_gate: str = "none"
+    # (removido 2026-07-29) `acw_gate` — a Phase 0 do wrap-up unificado reverteu o
+    # gate de ACW (bloqueava a instância inteira, reservava no dispatch e não no
+    # claim) e o campo ficou sem leitor. Capacidade de wrap-up = 1 vaga pelo
+    # semáforo `claim_instance`, nos dois modos.
 
 
 # ─────────────────────────────────────────────

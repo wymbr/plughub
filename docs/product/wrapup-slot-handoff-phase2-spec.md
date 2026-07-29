@@ -227,5 +227,6 @@ Sem mudança de YAML de skill, de schema Zod ou de UI. Sem migration.
 - Plumbing de `origin_session_id` até o `contact_data` (D2 — o hold é fungível).
 - Auto-claim instantâneo (`refreshSignal` no `conversation.assigned`) — **depois** desta Phase 2 (§1).
 - UI para a config `dispatch: inline|detached` do hook (dívida "config UI-editável" para hooks de pool).
-- Reviver o `acw_gate` / `acw_pending` (revertidos na Phase 0). **Cleanup relacionado**:
-  `infra/test/smoke_acw_gate.sh` ficou órfão (testa gate inexistente).
+- Reviver o `acw_gate` / `acw_pending` (revertidos na Phase 0). **Fechado em 2026-07-29**: o smoke órfão já não
+  existia e a coluna/plumbing/UI do `acw_gate` foram removidos ponta a ponta (migration
+  `20260729000000_drop_pool_acw_gate`). Um gate de ACW futuro se desenha sobre a **vaga**, não sobre a instância.

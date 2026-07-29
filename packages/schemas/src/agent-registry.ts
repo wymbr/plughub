@@ -251,15 +251,27 @@ export const PoolRegistrationSchema = z.object({
    */
   dispatch_mode:          z.enum(["push", "pull"]).optional(),
   /**
-   * Camada C (detach de hooks de finalização) — ACW como regra de `agent_ready`.
-   *   "none" (default): não bloqueia; wrap-up destacado é backlog no inbox pull.
-   *   "soft":           atendente segue disponível; supervisor vê pendências.
-   *   "hard":           o Routing Engine NÃO roteia novo contato enquanto houver
-   *                     wrap-up detached pendente daquele user_id (agent_ready gated).
-   * O ACW bloqueante clássico do wrap-up INLINE segue por outro caminho
-   * (`wrap_up_pending`), independente deste campo — "ou mantém inline".
+   * E2f — este pool atende CONTATO de cliente ou trabalho INTERNO da plataforma?
+   *   "contact" (default): voltado ao cliente. Conta como contato, alimenta TMA/SLA.
+   *   "internal": trabalho interno criado pela plataforma (wrap-up destacado, hooks).
+   *
+   * O analytics **exclui** pools `internal` das contagens de contato e das médias de
+   * handle time. Não é supressão e sim **segregação**: o pool interno mantém as
+   * métricas dele — o TMA de um pool de wrap-up É o tempo de ACW, e a fila dele é o
+   * backlog de pós-atendimento.
+   *
+   * Binário de propósito: QUAL trabalho interno é, o `pool_id` já diz.
    */
-  acw_gate:               z.enum(["none", "soft", "hard"]).optional(),
+  purpose:                z.enum(["contact", "internal"]).optional(),
+  /*
+   * (removido 2026-07-29) `acw_gate: none|soft|hard` — Camada C do detach de hooks.
+   * A Phase 0 do wrap-up unificado reverteu o mecanismo por ser o MODELO ERRADO:
+   * bloqueava a instância INTEIRA (não uma vaga) e reservava no dispatch (não no
+   * claim). Capacidade de wrap-up hoje = 1 vaga pelo semáforo `claim_instance`,
+   * nos dois modos (inline e detached). O campo sobreviveu à reversão como config
+   * sem leitor e saiu ponta a ponta aqui. Se um gate de ACW voltar, será desenhado
+   * sobre a VAGA, com semântica diferente — não reviver este enum.
+   */
   /**
    * Arc 19 (revisado 2026-06-04) — throttle OPCIONAL de downstream.
    * NÃO é capacidade: alocação real é capada pelos slots de instância do

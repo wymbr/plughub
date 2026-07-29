@@ -34,10 +34,13 @@ model Pool {
   max_concurrent_sessions Int?
   // Frente 1 (dispatch pull): "push" (auto-allocate, default) | "pull" (agent pulls from queue)
   dispatch_mode          String  @default("push")
-  // Camada C (detach de hooks): ACW como regra de agent_ready. "none" (default, não
-  // bloqueia) | "soft" (disponível; supervisor vê pendências) | "hard" (Routing Engine
-  // não roteia novo contato enquanto houver wrap-up detached pendente do user_id).
-  acw_gate               String  @default("none")
+  // E2f: does this pool serve CUSTOMER CONTACTS or INTERNAL work?
+  //   "contact"  (default) — customer-facing; counts as contact, feeds TMA/SLA.
+  //   "internal" — internal work spawned by the platform (detached wrap-up, hooks).
+  // Analytics excludes `internal` pools from contact counts and handle-time averages;
+  // the pool keeps its OWN metrics (a wrap-up pool's TMA is the ACW time).
+  purpose                String  @default("contact")
+  // (removido 2026-07-29) acw_gate — ver migration 20260729000000_drop_pool_acw_gate.
   // Fase B (queue-attended-model): dedicated session slots (cap+guarantee) carved
   // from the installation total. NULL = pool draws from the shared bucket.
   session_reservation     Int?

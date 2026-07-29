@@ -210,8 +210,6 @@ class RegistryEventHandler:
                 agent_kind               = pool_data.get("agent_kind") or None,
                 # Frente 1: modo de despacho da fila (push default | pull)
                 dispatch_mode            = pool_data.get("dispatch_mode") or "push",
-                # Camada C (detach de hooks): ACW como regra de agent_ready
-                acw_gate                 = pool_data.get("acw_gate") or "none",
             )
             await self._pools.save_pool_config(config)
             logger.info(
