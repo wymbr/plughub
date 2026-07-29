@@ -74,10 +74,29 @@ Atributo no `PoolHookEntry`. Default `inline` (retrocompat). `detached` só em h
 3. Contato fecha na hora (estatísticas congeladas → G1).
 4. O item aparece na `PullInboxPanel` **só do atendente** (`assigned_to` casa). Claim atômico → DialogForm de
    disposição → submete → gravado contra o segmento pela via de atribuição carregada.
-5. `acw_gate` decide o efeito na disponibilidade (ver Camada C).
+5. ~~`acw_gate` decide o efeito na disponibilidade (ver Camada C).~~ **Revertido** — ver abaixo.
 6. Sem claim no lease → transborda pro grupo/pool (team-claimable). Sem órfão.
 
-### ACW = regra de elegibilidade de roteamento (não "segurar o contato")
+### ~~ACW = regra de elegibilidade de roteamento~~ — REVERTIDO (Phase 0) e REMOVIDO (2026-07-29)
+
+> O desenho abaixo foi implementado (Camada C) e depois **desfeito**. Fica registrado porque o *motivo* da
+> reversão é a lição, não o mecanismo: a unidade de capacidade errada.
+>
+> `acw_gate` operava sobre a **instância** — em `hard`, `get_ready_instances` pulava o agente inteiro. Mas a
+> unidade de capacidade do sistema é a **vaga** (`claim_instance`, semáforo de ocupantes): um agente com
+> `max_concurrent > 1` tinha todas as vagas bloqueadas por um wrap-up que consome uma. E a reserva acontecia no
+> **dispatch**, não no **claim**, que é onde o portão atômico vive. A Phase 0 do wrap-up unificado resolveu o
+> problema real por outro caminho: o wrap-up ocupa **uma vaga**, igual nos dois modos, e a Phase 2 fez o
+> hand-off dessa vaga por um hold (swap net 0).
+>
+> A reversão tirou o enforcement e o marker; a **coluna, o plumbing e o seletor da UI sobreviveram sem leitor**
+> até 2026-07-29 (migration `20260729000000_drop_pool_acw_gate`). Um operador que marcasse `hard` acreditava ter
+> armado um gate inexistente.
+>
+> **Se um gate de ACW voltar, desenhe sobre a VAGA** — não ressuscitar o enum `none|soft|hard` por instância.
+
+<details>
+<summary>Desenho original (histórico)</summary>
 
 O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre a disponibilidade:
 `acw_gate: none | soft | hard` (por pool).
@@ -86,6 +105,8 @@ O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre
 - `hard` — Routing Engine **não roteia novo contato** enquanto houver wrap-up pendente daquele `user_id`
   (`agent_ready` efetivamente gated). O ACW bloqueante clássico é preservado, mas enforçado no roteamento — o
   contato fecha honesto; o que "prende" o atendente é o backlog dele.
+
+</details>
 
 ---
 
@@ -108,15 +129,11 @@ O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre
   ali (auto-stamp de `assigned_at_ms` no 1º `add_queued_contact`), sem novo schema Zod. **Reaper de lease NÃO
   existe** (o transbordo é por idade do item, não por expiração de lease) — o fallback é calculado no claim, sem
   I/O extra (âncora já no pacote lido).
-- **Camada C — ACW — ✅ validada (2026-07-24, smoke 3/3):** `acw_gate: none|soft|hard` por pool (Prisma
-  coluna + migration; Zod `PoolRegistration`; propaga a `pool.registered`/`updated` → routing `PoolConfig` +
-  `kafka_listener`). Regra em `get_ready_instances` (o leitor do `_allocate`): em **`hard`**, uma instância com
-  wrap-up **detached** pendente (marker `{t}:instance:{iid}:acw_pending`) é **excluída do roteamento** (ACW
-  bloqueante enforçado no roteamento, não segurando o contato); `none`/`soft` não bloqueiam. O ACW do wrap-up
-  **inline** segue por `wrap_up_pending`, **independente** deste campo ("ou mantém inline"). UI: Select `acw_gate`
-  no editor de pool (`PoolsPage`, i18n `pools.acw.*`). **Produtor do marker `acw_pending` = Camada E** (o
-  wrap-up detached de um pool `hard` seta/limpa o marker); aqui só o mecanismo + config + UI. Smoke
-  `infra/test/smoke_acw_gate.sh`.
+- **~~Camada C — ACW~~ — REVERTIDA (Phase 0) e REMOVIDA (2026-07-29):** entregue em 2026-07-24 (`acw_gate:
+  none|soft|hard` por pool + marker `:acw_pending` + regra em `get_ready_instances` + UI + smoke 3/3), desfeita
+  pela Phase 0 do wrap-up unificado por operar na unidade errada (instância, não vaga; dispatch, não claim) — ver
+  a seção "ACW" acima. A Phase 0 tirou enforcement, marker e smoke; a coluna e o plumbing saíram em 2026-07-29
+  (migration `20260729000000_drop_pool_acw_gate`). **Camada E2e (produtor do marker) sai de escopo junto.**
 - **Camada D — bridge — ✅ validada (2026-07-24, smoke 2/2):** o bridge honra `detached`. Em
   `fire_pool_hooks`, uma entrada detached (a) não convida especialista de conferência nem arma o barrier
   (`_entry_will_dispatch` retorna False → fora do `hook_pending`; sem `posatt`/`hook_conf`/`wrap_up_pending`);
@@ -139,9 +156,14 @@ O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre
   humano) vira **item de pull inbox assigned_to** aquele humano (ele reivindica depois e preenche), fechando o
   **G1 do caminho humano**. Requer: plumbar `assigned_to` pelo webhook trigger (Arc 19) → enqueue do routing;
   `wrapup_ia` → `dispatch_mode: pull`; skill de wrap-up reescrito como workflow pull (renderiza DialogForm no
-  claim); gravação do outcome do segmento por referência (`surveyed_segment_id`); **produtor do marker
-  `acw_pending`** (setar no dispatch detached de pool `hard`, limpar na resolução — fecha o pendente da Camada C);
+  claim); gravação do outcome do segmento por referência (`surveyed_segment_id`); ~~produtor do marker
+  `acw_pending`~~ *(fora de escopo — a Camada C foi revertida/removida)*;
   briefing (transcrição/verbatim) no item. NPS síncrono presente continua `inline`.
+- **E2f ✅ (2026-07-29)** — a sessão de wrap-up sai das contagens de contato e das médias de TMA. O
+  discriminador **não** foi `spawn_reason` (como esta spec supunha) e sim `pools.purpose: contact|internal`: a
+  sessão já é roteada a um pool distinto, e `sessions`/`segments` já carregam `pool_id` — retroativo, cobre NPS
+  destacado de graça e dispensa recriar as MVs (chaveadas por pool). **Segregação, não supressão:** o pool
+  interno mantém as métricas dele (o TMA dele É o ACW). Ver CHANGELOG.
 - **Camada F — validação:** G1 (AHT deixa de inflar); atribuição de segmento no relatório; smoke do wrap-up na
   pull inbox (claim direcionado + fallback); pool-scoping do survey sem caminho delegate.
 
@@ -151,8 +173,8 @@ O ACW deixa de ser "contato aberto segurando o atendente" e vira uma regra sobre
    assíncrona na pull inbox.
 2. **Claim direcionado com fallback** — o wrap-up é pessoal (autoria de quem atendeu); `assigned_to = user_id`,
    com transbordo team-claimable por lease. Não é fila compartilhada pura.
-3. **`acw_gate` configurável, default `none` no `detached`** — o ponto do detach é não segurar; quem quer ACW
-   bloqueante usa `hard` (ou mantém `inline`).
+3. ~~**`acw_gate` configurável, default `none` no `detached`**~~ — **decisão revertida** (Phase 0) e o campo
+   removido em 2026-07-29. Quem quer ACW bloqueante usa `inline`; o wrap-up ocupa **uma vaga** nos dois modos.
 4. **Pull direcionado como primitivo geral** (não campo específico de wrap-up) — forward-compatível com
    transfer-to-agent. Invariante do pool preservado.
 5. **Hooks não-finalização (`on_human_start`) ficam como estão** — não têm existência independente da sessão que

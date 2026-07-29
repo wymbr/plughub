@@ -2480,6 +2480,22 @@ async def _destroy_conference(
             session_id, exc,
         )
 
+    # H2 (2026-07-29) — fecha os segmentos de humanos que AINDA estão abertos.
+    #
+    # Tem de vir ANTES do delete abaixo: a varredura lê as chaves de tracking que
+    # o delete apaga. Essa ordem era a lacuna estrutural — o teardown descartava o
+    # rastro sem emitir nada, e o segmento ficava aberto para sempre.
+    #
+    # Contexto: `participant_left` de humano só tinha DOIS produtores, ambos em
+    # `process_contact_event`, e ambos exigindo um `contact_closed` em
+    # `conversations.events` — que no atendimento normal vem do "Encerrar" do
+    # Console (`/api/agent_done`). A família PULL (aprovação, form-fill, wrap-up
+    # destacado) não tem esse botão, e corretamente: item de tarefa não é contato.
+    # Resultado medido em 2026-07-29: 87 segmentos humanos abertos (9 de aprovação
+    # com uso real, o resto do demo form-fill), contra ZERO no caminho canônico.
+    # Não é bug do wrap-up — a aprovação já vazava 11 dias antes dele existir.
+    await _sweep_open_human_participants(redis_client, session_id)
+
     # Delete human-agent tracking keys.
     # These MUST stay alive during posatt hooks so that wrap-up/NPS messages
     # are routed correctly to the Console (human_agent key is read by the
@@ -2539,6 +2555,153 @@ async def _trigger_contact_close(
 
 
 # ── Participant event publishing — Fase C (analytics) ─────────────────────────
+
+async def _sweep_open_human_participants(
+    redis_client, session_id: str, close_reason: str = "session_teardown",
+) -> int:
+    """H2 — emite `participant_left` para todo humano ainda aberto na sessão.
+
+    Rede de fechamento do teardown: percorre `session:{id}:human_agents` e fecha o
+    segmento de quem sobrou. Devolve quantos foram fechados (0 no caso normal).
+
+    **Idempotência é por GETDEL, não por flag.** As três chaves de rastreio
+    (`participant_joined_at:{inst}`, `segment:{inst}`) são CONSUMIDAS aqui, como o
+    produtor canônico (`process_contact_event`) também as consome. Quem chegar
+    primeiro fecha; o segundo não encontra `joined_at` nem `segment_id` e pula.
+    Nada de duas linhas para o mesmo segmento — e nada de guard novo para manter.
+
+    **Por que `outcome` fica None:** o teardown não sabe o desfecho. Quem sabe é o
+    caminho que fechou o trabalho — o `/api/agent_done` no atendimento normal, o
+    resume no wrap-up (H1). Inventar um `resolved` aqui seria o valor plausível que
+    esconde o buraco. `close_reason` nomeia por que fechamos, que é o que temos.
+    (`session_teardown` é valor NOVO no `close_reason` de segmento — quem enumerar
+    o domínio em relatório precisa saber que ele existe.)
+
+    **Fronteira deliberada: isto fecha o SEGMENTO, não a capacidade.** A vaga é
+    devolvida por outra via (`agent_done` em `agent.lifecycle` no resume;
+    `work_task_release` no devolver-à-fila) e tem o reap como rede. Misturar as duas
+    responsabilidades aqui reintroduziria a confusão que o `acw_gate` custou.
+    """
+    if not session_id:
+        return 0
+    try:
+        members = await redis_client.smembers(f"session:{session_id}:human_agents")
+    except Exception as exc:
+        logger.warning(
+            "_sweep_open_human_participants: SMEMBERS falhou session=%s — %s",
+            session_id, exc,
+        )
+        return 0
+    if not members:
+        return 0
+
+    closed = 0
+    for _raw in members:
+        instance_id = _raw if isinstance(_raw, str) else _raw.decode()
+        if not instance_id:
+            continue
+        # joined_at é o discriminador: ausente ⇒ já fechado por outro produtor.
+        joined_iso = ""
+        try:
+            _raw_jat = await redis_client.getdel(
+                f"session:{session_id}:participant_joined_at:{instance_id}"
+            )
+            joined_iso = (
+                _raw_jat if isinstance(_raw_jat, str)
+                else (_raw_jat.decode() if _raw_jat else "")
+            )
+        except Exception:
+            pass
+        if not joined_iso:
+            continue
+
+        duration_ms: int | None = None
+        try:
+            _jdt = datetime.fromisoformat(joined_iso)
+            duration_ms = int(
+                (datetime.now(timezone.utc) - _jdt).total_seconds() * 1000
+            )
+        except Exception:
+            pass
+
+        segment_id = ""
+        try:
+            _raw_seg = await redis_client.getdel(
+                f"session:{session_id}:segment:{instance_id}"
+            )
+            if _raw_seg:
+                segment_id = (
+                    _raw_seg if isinstance(_raw_seg, str) else _raw_seg.decode()
+                )
+        except Exception:
+            pass
+        if not segment_id:
+            # Sem o segment_id do join, publicar criaria uma linha NOVA (o publish
+            # faz fallback para uuid4) em vez de FECHAR a existente — e no
+            # ReplacingMergeTree isso vira um segmento órfão a mais, não menos.
+            logger.warning(
+                "_sweep_open_human_participants: session=%s instance=%s tinha joined_at "
+                "mas NÃO segment_id — participant_left NÃO publicado (evita linha órfã)",
+                session_id, instance_id,
+            )
+            continue
+
+        pool_id = agent_type_id = tenant_id = user_login = ""
+        try:
+            _pm_raw = await redis_client.get(
+                f"session:{session_id}:participant_meta:{instance_id}"
+            )
+            if _pm_raw:
+                _pm = json.loads(_pm_raw)
+                pool_id       = _pm.get("pool_id", "") or ""
+                agent_type_id = _pm.get("agent_type_id", "") or ""
+                user_login    = _pm.get("user_login", "") or ""
+                tenant_id     = _pm.get("tenant_id", "") or ""
+        except Exception:
+            pass
+        if not pool_id or not tenant_id:
+            try:
+                _raw_meta = await redis_client.get(f"session:{session_id}:meta")
+                if _raw_meta:
+                    _m = json.loads(_raw_meta)
+                    pool_id       = pool_id       or _m.get("pool_id", "")
+                    agent_type_id = agent_type_id or _m.get("agent_type_id", "")
+                    user_login    = user_login    or (_m.get("user_login", "") or "")
+                    tenant_id     = tenant_id     or (
+                        _m.get("tenant_id", "") or _m.get("tenant", "")
+                    )
+            except Exception:
+                pass
+
+        await _publish_participant_event(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            participant_id=instance_id,
+            pool_id=pool_id,
+            agent_type_id=agent_type_id,
+            event_type="participant_left",
+            agent_type="human",
+            role="primary",
+            segment_id=segment_id,
+            joined_at=joined_iso,
+            duration_ms=duration_ms,
+            user_login=user_login,
+            outcome=None,
+            close_reason=close_reason,
+        )
+        closed += 1
+        # Barulhento de propósito: no caminho canônico este log NUNCA aparece
+        # (o /api/agent_done já fechou). Cada linha aqui é um participante que
+        # nenhum produtor específico fechou — serve para medir onde falta gatilho.
+        logger.warning(
+            "_sweep_open_human_participants: FECHADO no teardown session=%s instance=%s "
+            "pool=%s seg=%s duration_ms=%s reason=%s (nenhum produtor específico fechou "
+            "este participante)",
+            session_id, instance_id, pool_id, segment_id, duration_ms, close_reason,
+        )
+
+    return closed
+
 
 async def _publish_participant_event(
     session_id:     str,
@@ -7309,6 +7472,96 @@ async def _handle_webhook_session_resumed(
             logger.warning(
                 "Could not write last_outcome on resume: session=%s — %s",
                 session_id, _lo_exc,
+            )
+
+    # ── H1 (2026-07-29): fecha o segmento do CLAIMANTE humano com a duração REAL ──
+    #
+    # Chegar aqui com `_claimant_instance_id` preenchido significa que um humano
+    # reivindicou o item de pull e SUBMETEU o form — o resume é a prova. Este é o
+    # único ponto do sistema que sabe disso: `_destroy_conference` (H2) fecha depois,
+    # e mede até o teardown, não até a entrega.
+    #
+    # ORDEM IMPORTA: precisa vir ANTES do `_trigger_contact_close` abaixo, que roda
+    # como task CONCORRENTE. Se a varredura do H2 chegasse primeiro, ela consumiria
+    # (GETDEL) as chaves de rastreio e este fechamento nunca aconteceria — o H1 seria
+    # código morto por corrida, e o sintoma seria só uma duração um pouco maior.
+    # Os dois são mutuamente exclusivos por construção: quem consome as chaves fecha.
+    #
+    # Roda mesmo quando `_ai_outcome == "suspended"` (o workflow bateu em outro
+    # suspend): a tarefa DO HUMANO acabou de qualquer forma.
+    #
+    # `outcome` fica None DE PROPÓSITO. É tentador carimbar "resolved" — a tarefa foi
+    # concluída — mas `outcome` é campo do domínio de CONTATO e alimenta o
+    # `resolved_count` da `mv_agent_performance_daily`, ou seja, a taxa de resolução do
+    # atendente. Um wrap-up preenchido não é um contato resolvido; contá-lo assim
+    # inflaria a métrica com um número perfeitamente plausível. O que este ponto sabe é
+    # COMO terminou, e isso vai em `close_reason`.
+    if _claimant_instance_id:
+        _cl_joined_iso = ""
+        try:
+            _cl_raw_jat = await redis_client.getdel(
+                f"session:{session_id}:participant_joined_at:{_claimant_instance_id}"
+            )
+            _cl_joined_iso = (
+                _cl_raw_jat if isinstance(_cl_raw_jat, str)
+                else (_cl_raw_jat.decode() if _cl_raw_jat else "")
+            )
+        except Exception:
+            pass
+        _cl_seg_id = ""
+        try:
+            _cl_raw_seg = await redis_client.getdel(
+                f"session:{session_id}:segment:{_claimant_instance_id}"
+            )
+            if _cl_raw_seg:
+                _cl_seg_id = (
+                    _cl_raw_seg if isinstance(_cl_raw_seg, str) else _cl_raw_seg.decode()
+                )
+        except Exception:
+            pass
+        if _cl_joined_iso and _cl_seg_id:
+            _cl_duration_ms: int | None = None
+            try:
+                _cl_jdt = datetime.fromisoformat(_cl_joined_iso)
+                _cl_duration_ms = int(
+                    (datetime.now(timezone.utc) - _cl_jdt).total_seconds() * 1000
+                )
+            except Exception:
+                pass
+            _cl_pool = _cl_atid = _cl_tenant = _cl_login = ""
+            try:
+                _cl_pm_raw = await redis_client.get(
+                    f"session:{session_id}:participant_meta:{_claimant_instance_id}"
+                )
+                if _cl_pm_raw:
+                    _cl_pm = json.loads(_cl_pm_raw)
+                    _cl_pool   = _cl_pm.get("pool_id", "") or ""
+                    _cl_atid   = _cl_pm.get("agent_type_id", "") or ""
+                    _cl_login  = _cl_pm.get("user_login", "") or ""
+                    _cl_tenant = _cl_pm.get("tenant_id", "") or ""
+            except Exception:
+                pass
+            asyncio.create_task(_publish_participant_event(
+                session_id=session_id,
+                tenant_id=_cl_tenant or tenant_id,
+                participant_id=_claimant_instance_id,
+                pool_id=_cl_pool,
+                agent_type_id=_cl_atid,
+                event_type="participant_left",
+                agent_type="human",
+                role="primary",
+                segment_id=_cl_seg_id,
+                joined_at=_cl_joined_iso,
+                duration_ms=_cl_duration_ms,
+                user_login=_cl_login,
+                outcome=None,
+                close_reason="task_submitted",
+            ))
+            logger.info(
+                "session_resumed: segmento do CLAIMANTE fechado na ENTREGA — session=%s "
+                "claimant=%s pool=%s seg=%s duration_ms=%s (tempo de trabalho humano na "
+                "tarefa; o teardown do H2 não vai reabrir: as chaves foram consumidas)",
+                session_id, _claimant_instance_id, _cl_pool, _cl_seg_id, _cl_duration_ms,
             )
 
     # "suspended" = flow hit another suspend step; session persists in Redis.

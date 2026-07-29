@@ -11,7 +11,8 @@
 > [`docs/guias/pool-hooks.md`](../guias/pool-hooks.md) (`dispatch: inline|detached`),
 > [`docs/adr/adr-human-approval-workflow-step.md`](adr-human-approval-workflow-step.md) (pull inbox + DialogForm),
 > [`docs/product/dialog-primitive-and-runner-design.md`](../product/dialog-primitive-and-runner-design.md)
-> (DialogForm + `form_get` + menu dinâmico), Camadas B (`assigned_to`), C (`acw_gate`/`acw_pending`), D (detached).
+> (DialogForm + `form_get` + menu dinâmico), Camadas B (`assigned_to`), ~~C (`acw_gate`/`acw_pending`)~~ *(revertida
+> na Phase 0, removida em 2026-07-29 — ver D4)*, D (detached).
 
 ---
 
@@ -190,7 +191,14 @@ analytics. `origin_session_id`+`segment_id` vêm do contexto (`@ctx.session.surv
 journey). **Invariante:** a atribuição é por **referência carregada**, nunca por o wrap-up ser fisicamente um
 segmento da conferência.
 
-### D4 — Produtor/consumidor do marker `acw_pending` (fecha o pendente da Camada C)
+### ~~D4 — Produtor/consumidor do marker `acw_pending`~~ — CADUCA (2026-07-29)
+
+> A Camada C que este D4 fechava foi **revertida na Phase 0** (o gate operava sobre a instância, não sobre a
+> vaga, e reservava no dispatch, não no claim) e **removida ponta a ponta em 2026-07-29** (migration
+> `20260729000000_drop_pool_acw_gate`). Não há mais `acw_gate` para ler, nem marker para produzir. O wrap-up
+> ocupa **uma vaga** pelo `claim_instance`, nos dois modos, com hand-off por hold (Phase 2). Texto abaixo
+> mantido como registro.
+
 - **Setar:** no D1, quando o pool do humano (`retencao_humano`) tem `acw_gate == hard`, o bridge **seta**
   `{t}:instance:human-{userId}:acw_pending` (TTL = SLA do wrap-up + margem) **ao criar o item pull**. É o que a
   Camada C lê em `get_ready_instances` p/ **não rotear** novo contato ao humano.
@@ -213,8 +221,8 @@ padrão `agente_nps_v1`) → `gravar` (`invoke segment_outcome_record`) → `com
 do tenant, UI-editável" (editor `/config/dialog-forms`). Mantém `visibility` agent-only (o form é do atendente).
 
 ### D7 — Config do pool `wrapup_ia`
-`dispatch_mode: pull` + `acw_gate` (default `none`; `retencao_humano`/pools que querem ACW bloqueante usam
-`hard`) + `fallback_to_pool_after_s` (transbordo). O hook `on_human_end → wrapup_ia` ganha `dispatch: detached`.
+`dispatch_mode: pull` + `fallback_to_pool_after_s` (transbordo). O hook `on_human_end → wrapup_ia` ganha
+`dispatch: detached`. *(O `acw_gate` que constava aqui foi revertido/removido — ver D4.)*
 
 ---
 
@@ -226,7 +234,7 @@ atribuição viaja por referência de segmento, não duplicada em campo session-
 silenciosa** (marker por TTL; recusa de claim logada). **Routing Engine é o árbitro único** (claim via Camada B).
 
 **Consequências positivas.** Fecha **G1** do caminho humano (AHT congela na saída do cliente; o que "prende" o
-humano vira o backlog dele, gated por `acw_gate`). Fecha as duas limitações registradas na Camada D
+humano vira o backlog dele — a vaga que o wrap-up ocupa, não o gate por instância que foi revertido). Fecha as duas limitações registradas na Camada D
 (`post_human`+detached e `segment_wrapup` fanout deixam de ser bloqueio: o wrap-up destacado não arma barrier).
 Reduz a coleta a **2 mecanismos** de fato (inline síncrono / assíncrono). Reusa B/C/D + dialog primitive.
 
@@ -277,9 +285,9 @@ omnichannel = convergência futura a Path α. (c) `segment_outcome_record` dupli
 | **E2b — tool `segment_outcome_record`** | tool MCP (mcp-server) que replica `_apply_wrapup_to_segment` por referência (origin+segment do contexto) — extrair helper compartilhado. | — | grava seg_signal + republish; segmento aparece no analytics |
 | **E2c — plumbing `assigned_to`** | declarar `assigned_to`/`fallback_to_pool_after_s`/`assigned_at_ms` no `ConversationInboundEvent`; fluem por `model_dump` → `contact_data`. | Camada B | item pull nasce com `assigned_to` |
 | **E2d — dispatch pull no bridge** | novo caminho p/ `on_human_end side=agent detached`: `conversations.inbound` sintético (sem conf) → `wrapup_ia` pull + `assigned_to` + contexto/briefing; fecha origem na hora. | E2c, Camada D | wrap-up parqueia no inbox do humano; origem fecha (G1) |
-| **E2e — `acw_pending` lifecycle** | setar no dispatch se `acw_gate==hard`; limpar na resolução (`segment_outcome_record`/transbordo). | Camada C, E2b, E2d | `hard` bloqueia até resolver; `none`/`soft` não |
+| ~~**E2e — `acw_pending` lifecycle**~~ | **FORA DE ESCOPO (2026-07-29)** — a Camada C foi revertida (Phase 0) e removida ponta a ponta; não há `acw_gate` a ler nem marker a produzir. | — | — |
 | **E2f — analytics: sessão de wrap-up fora da contagem** | discriminador (`spawn_reason=wrapup`) + exclusão das métricas de contato/TMA (espelha a isenção de hook). | E2d | TMA/open_count não contam a sessão de wrap-up |
-| **E2g — config + validação** | `wrapup_ia` → `dispatch_mode: pull`+`acw_gate`; hook `detached`; smoke E2E (claim direcionado → form → grava outcome no segmento → fallback; G1). | todas | smoke verde |
+| **E2g — config + validação** | `wrapup_ia` → `dispatch_mode: pull`; hook `detached`; smoke E2E (claim direcionado → form → grava outcome no segmento → fallback; G1). | todas | smoke verde |
 
-**Sequência:** E2a+E2b (conteúdo+gravação) → E2c+E2d (item pull) → E2e (ACW) → E2f (métricas) → E2g (config+validação).
+**Sequência:** E2a+E2b (conteúdo+gravação) → E2c+E2d (item pull) → E2f (métricas) → E2g (config+validação).
 **Não-objetivos v1:** omnichannel (Path α); briefing rico (verbatim/copilot além do mínimo); wrap-up de IA.
