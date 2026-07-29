@@ -107,6 +107,79 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 
 ---
 
+## Matriz módulo × tópico
+
+> **Varredura de 2026-07-28.** Complementa o Sumário acima invertendo o eixo: lá o índice é o tópico, aqui é o
+> **módulo**. Serve para responder "de que eventos este serviço depende?" ao portar, escalar ou depurar um
+> pacote. Verificada contra o código (`producer.send`/`send_and_wait`/`kafka.publish` e
+> `AIOKafkaConsumer`/`consumer.subscribe` em `packages/`), com `node_modules` e `.venv` excluídos.
+>
+> **P** = produz · **C** = consome (com o `group_id` entre parênteses). Onde a varredura não encontrou
+> evidência, está escrito "nenhum" — não "provavelmente nenhum".
+
+### Núcleo de sessão e roteamento
+
+| Módulo | Produz | Consome (`group_id`) |
+|---|---|---|
+| `mcp-server-plughub` (Core) | `agent.lifecycle`, `conversations.inbound`, `conversations.events`, `conversations.outbound`, `conversations.participants`, `conversations.channel_change` ⚠, `agent.events`, `evaluation.events`, `evaluation.results`, `session.signals`, `journey.merges`, `usage.events`, `audit.mcp_calls` ⚠ | **nenhum** — é produtor puro |
+| `routing-engine` | `conversations.routed`, `conversations.queued`, `conversations.events`, `conversations.participants`, `conversations.outbound`, `conversations.inbound` (re-rota), `queue.position_updated`, `pool.occupancy`, `agent.lifecycle` (`agent_crash`) | `conversations.inbound` (`routing-engine`) · `agent.lifecycle` + `agent.registry.events` + `config.changed` + `conversations.events` (`routing-engine-listener`) · `evaluation.events` (`routing-engine-evaluation`) |
+| `orchestrator-bridge` | `conversations.inbound`, `conversations.outbound`, `conversations.events`, `conversations.session_closed`, `conversations.participants`, `agent.lifecycle`, `events.dead_letter` | `conversations.routed`, `conversations.queued`, `conversations.inbound`, `conversations.events`, `registry.changed`, `config.changed` (`orchestrator-bridge`) |
+| `channel-gateway` | `conversations.inbound`, `conversations.events`, `usage.events`, `session.signals` | `conversations.outbound` (`channel-gateway-webchat`) · `collect.events` (`…-collect`) · `config.changed` (`…-config`) |
+| `rules-engine` | `rules.escalation.events`, `rules.shadow.events`, `evaluation.events` | `conversations.events`, `agent.lifecycle` (`rules-engine-sampling`) |
+| `conversation-writer` | `evaluation.events` (`transcript.created`) ⚠ | `conversations.inbound`, `conversations.outbound`, `conversations.events` (`conversation-writer`) |
+
+### Registro, configuração e fluxo
+
+| Módulo | Produz | Consome (`group_id`) |
+|---|---|---|
+| `agent-registry` | `registry.changed`, `agent.registry.events` | nenhum |
+| `config-api` | `config.changed` | nenhum |
+| `ai-gateway` | `sentiment.updated`, `usage.events` | nenhum |
+| `skill-flow-engine` | nenhum | nenhum — não importa `kafkajs`; é biblioteca de interpretação |
+| `sdk` (`McpInterceptor` / proxy) | `mcp.audit` | nenhum |
+| `workflow-api` *(legado)* | `workflow.events`, `collect.events` | nenhum |
+| `skill-flow-worker` *(legado)* | `events.dead_letter` | `workflow.events` (`skill-flow-worker`) |
+
+### Qualidade e analítica
+
+| Módulo | Produz | Consome (`group_id`) |
+|---|---|---|
+| `analytics-api` | `events.dead_letter` (DLQ) | 18 tópicos num consumer só (`analytics-api`): `conversations.inbound`, `conversations.routed`, `conversations.queued`, `conversations.events`, `conversations.participants`, `agent.lifecycle`, `agent.events`, `usage.events`, `sentiment.updated`, `queue.position_updated`, `pool.occupancy`, `workflow.events`, `collect.events`, `evaluation.events`, `calibration.events`, `session.signals`, `journey.merges`, `mcp.audit` |
+| `evaluation-api` | `evaluation.events`, `calibration.events`, `conversations.participants`, `session.signals` | `workflow.events` (`…-workflow-consumer`) · `conversations.participants` (`…-participants-consumer`) · `conversations.session_closed` (`…-sampling-consumer`) · `evaluation.events` (`…-ingest-consumer`) |
+| `session-replayer` | **nenhum** ⚠ (o `AIOKafkaProducer` é criado mas nunca usado) | `conversations.session_closed` (`session-replayer-persister`) · `evaluation.events` (`session-replayer-replayer`) · `conversations.events` + `conversations.participants` (`session-replayer-import`) |
+| `quality-ingest` | `conversations.events`, `conversations.participants`, `agent.lifecycle`, `conversations.session_closed` | nenhum — produtor puro por design |
+| `clickhouse-consumer` | nenhum | `evaluation.results` (`clickhouse-consumer`) |
+| `usage-aggregator` | nenhum | `usage.events` (`usage-aggregator`) |
+
+### Serviços sem Kafka (REST puro)
+
+`auth-api`, `pricing-api`, `dialog-api`, `scheduler-api`, `mailing-api`, `quality-export`, `dashboard/api`,
+`platform-ui`, `schemas`.
+
+> Vale notar como fato de arquitetura: os três serviços mais novos de domínio (`dialog-api`, `scheduler-api`,
+> `mailing-api`) são **REST puro**. Integram-se ao barramento indiretamente — via tools MCP chamadas por
+> agentes, ou via o webhook de canal — em vez de publicar eventos próprios.
+
+### Achados da varredura de 2026-07-28
+
+Seis divergências encontradas **depois** do saneamento de 27/07. Nenhuma é grave; todas são deriva silenciosa
+do tipo que só aparece em varredura de código.
+
+| # | Achado | Situação |
+|---|---|---|
+| 1 | **`conversations.channel_change`** é produzido (`mcp-server-plughub/src/tools/session.ts:812`) e não estava documentado | Tópico real, sem seção. Consumidor não localizado — candidato a órfão. |
+| 2 | **`audit.mcp_calls`** é produzido (`mcp-server-plughub/src/tools/external-agent.ts:200`) e não estava documentado | Suspeita de deriva: o tópico canônico de auditoria é `mcp.audit`. Dois nomes para a mesma coisa é exatamente o defeito que o saneamento removeu em outros pontos. **Verificar antes de documentar.** |
+| 3 | **`conversation-writer` produz `evaluation.events`** (`writer.py:196`, evento `transcript.created`) | Produtor legítimo e ausente da lista da seção `evaluation.events`. |
+| 4 | **`session-replayer` não produz nada** — cria o producer e nunca chama `send` | A seção `evaluation.events` o lista como produtor. Corrigir a lista (o comentário em `consumer.py:256` confirma que a publicação de `evaluation.requested` foi retirada). |
+| 5 | **`calendar.events`** está declarado em `calendar-api/config.py:30` e o docstring do `main.py` promete publicá-lo — **não há produtor** | Config morta. Remover a declaração ou implementar. |
+| 6 | **`journey.events`** ainda está declarado em `workflow-api/config.py:30` (`journey_topic`) | Resíduo do Arc 19 Fase F. O tópico não existe mais; a config sim. |
+
+> **Nenhum módulo central de constantes de tópicos existe** — os nomes são literais inline em cada call site,
+> com poucas constantes locais de arquivo. É a causa raiz das derivas 1, 2, 5 e 6: um `topics.ts`/`topics.py`
+> compartilhado tornaria um tópico novo ou morto visível no diff. Registrado como dívida.
+
+---
+
 ## `conversations.inbound`
 
 **Propósito**: Ponto de entrada de toda conversa na plataforma. O Routing Engine consome este tópico como único árbitro de alocação.

@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 660" width="1100" height="660" font-family="Segoe UI, Arial, sans-serif">
+  <rect width="1100" height="660" fill="#FFFFFF"/>
+
+  <text x="40" y="40" font-size="22" font-weight="700" fill="#2E3138">Anatomia da sessão — a sala de conferência</text>
+  <text x="40" y="62" font-size="12" fill="#6B7280">Humano e IA são participantes simétricos da mesma sessão. Não há handoff: há entrada e saída de participantes.</text>
+
+  <!-- ============ CLIENTE ============ -->
+  <rect x="40" y="176" width="150" height="80" rx="8" fill="#046A6A"/>
+  <text x="115" y="210" text-anchor="middle" font-size="14" font-weight="700" fill="#FFFFFF">CLIENTE</text>
+  <text x="115" y="230" text-anchor="middle" font-size="10" fill="#D6EAEA">canal negociado</text>
+
+  <line x1="190" y1="216" x2="248" y2="216" stroke="#6B7280" stroke-width="2"/>
+  <polygon points="248,216 240,211 240,221" fill="#6B7280"/>
+
+  <!-- ============ SALA ============ -->
+  <rect x="250" y="100" width="600" height="400" rx="12" fill="#F7F7F8" stroke="#D8DADE" stroke-width="1.5"/>
+  <text x="272" y="128" font-size="13" font-weight="700" fill="#2E3138">SALA DE CONFERÊNCIA</text>
+  <text x="272" y="146" font-size="10.5" fill="#6B7280">criada em todo novo contato · persiste enquanto houver participante</text>
+
+  <!-- stream canônico -->
+  <rect x="272" y="162" width="556" height="52" rx="6" fill="#2E3138"/>
+  <text x="290" y="184" font-size="12" font-weight="700" fill="#FFFFFF">session:{id}:stream</text>
+  <text x="290" y="202" font-size="10" fill="#C9CDD4">fonte única de verdade · toda escrita passa por writeStreamEntry() · validação Zod</text>
+
+  <!-- participantes -->
+  <text x="272" y="242" font-size="11.5" font-weight="700" fill="#6B7280">PARTICIPANTES</text>
+
+  <rect x="272" y="254" width="176" height="62" rx="6" fill="#990011"/>
+  <text x="360" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">primary</text>
+  <text x="360" y="296" text-anchor="middle" font-size="9.5" fill="#F0C4CA">humano OU IA</text>
+
+  <rect x="462" y="254" width="176" height="62" rx="6" fill="#F2F2F2"/>
+  <text x="550" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#2E3138">specialist</text>
+  <text x="550" y="296" text-anchor="middle" font-size="9.5" fill="#6B7280">assist ou transfer</text>
+
+  <rect x="652" y="254" width="176" height="62" rx="6" fill="#F2F2F2"/>
+  <text x="740" y="278" text-anchor="middle" font-size="12" font-weight="700" fill="#2E3138">supervisor</text>
+  <text x="740" y="296" text-anchor="middle" font-size="9.5" fill="#6B7280">monitora e intervém</text>
+
+  <rect x="272" y="328" width="176" height="62" rx="6" fill="#F2F2F2"/>
+  <text x="360" y="352" text-anchor="middle" font-size="12" font-weight="700" fill="#2E3138">evaluator</text>
+  <text x="360" y="370" text-anchor="middle" font-size="9.5" fill="#6B7280">qualidade</text>
+
+  <rect x="462" y="328" width="176" height="62" rx="6" fill="#F2F2F2"/>
+  <text x="550" y="352" text-anchor="middle" font-size="12" font-weight="700" fill="#2E3138">reviewer</text>
+  <text x="550" y="370" text-anchor="middle" font-size="9.5" fill="#6B7280">revisa a avaliação</text>
+
+  <rect x="652" y="328" width="176" height="62" rx="6" fill="#F7F7F8" stroke="#D8DADE" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="740" y="356" text-anchor="middle" font-size="10.5" fill="#6B7280">N participantes</text>
+  <text x="740" y="372" text-anchor="middle" font-size="10.5" fill="#6B7280">simultâneos</text>
+
+  <!-- nota roteamento -->
+  <rect x="272" y="404" width="556" height="72" rx="6" fill="#FFFFFF" stroke="#D8DADE" stroke-width="1.5"/>
+  <text x="290" y="428" font-size="11.5" font-weight="700" fill="#2E3138">O roteador não sabe se aloca uma pessoa ou uma instância de skill-flow</text>
+  <text x="290" y="448" font-size="10.5" fill="#6B7280">Mesmo pool, mesmo score, mesmo filtro de canal, mesma fila, mesma unidade de licença.</text>
+  <text x="290" y="465" font-size="10.5" fill="#6B7280">O handoff deixa de ser o primitivo: vira caso particular de entrada e saída de participante.</text>
+
+  <!-- ============ VISIBILIDADE ============ -->
+  <text x="880" y="128" font-size="13" font-weight="700" fill="#2E3138">VISIBILIDADE</text>
+  <text x="880" y="146" font-size="10.5" fill="#6B7280">por mensagem</text>
+
+  <rect x="880" y="162" width="180" height="66" rx="6" fill="#046A6A"/>
+  <text x="896" y="184" font-size="11.5" font-weight="700" fill="#FFFFFF">all</text>
+  <text x="896" y="202" font-size="9.5" fill="#D6EAEA">todos, incluindo o cliente</text>
+  <text x="896" y="217" font-size="9.5" fill="#D6EAEA">mensagem de atendimento</text>
+
+  <rect x="880" y="240" width="180" height="66" rx="6" fill="#2E3138"/>
+  <text x="896" y="262" font-size="11.5" font-weight="700" fill="#FFFFFF">agents_only</text>
+  <text x="896" y="280" font-size="9.5" fill="#C9CDD4">agentes, sem o cliente</text>
+  <text x="896" y="295" font-size="9.5" fill="#C9CDD4">nota interna, sugestão</text>
+
+  <rect x="880" y="318" width="180" height="80" rx="6" fill="#990011"/>
+  <text x="896" y="340" font-size="11.5" font-weight="700" fill="#FFFFFF">[participant_ids]</text>
+  <text x="896" y="358" font-size="9.5" fill="#F0C4CA">só os listados</text>
+  <text x="896" y="373" font-size="9.5" fill="#F0C4CA">supervisor → um agente;</text>
+  <text x="896" y="388" font-size="9.5" fill="#F0C4CA">NPS só para o cliente</text>
+
+  <!-- ============ MASKING ============ -->
+  <rect x="40" y="530" width="1020" height="92" rx="8" fill="#F2F2F2"/>
+  <text x="62" y="556" font-size="12.5" font-weight="700" fill="#2E3138">Visibilidade não é binária — é por participante × por campo × por role</text>
+  <text x="62" y="578" font-size="11" fill="#3E434D">A mesma mensagem pode ter o CPF tokenizado para o agente que conduz, em texto pleno para o especialista que valida,</text>
+  <text x="62" y="596" font-size="11" fill="#3E434D">com auditoria para o supervisor, e suprimido no log de avaliação. O stream guarda `content` (mascarado) e `original_content`.</text>
+  <text x="62" y="614" font-size="10.5" fill="#6B7280">É o que permite o humano delegar a captura de dado sensível, ver o progresso e não ver o dado.</text>
+</svg>

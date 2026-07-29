@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>PlugHub — folder institucional</title>
+<style>
+  :root{
+    --graphite:#2E3138;
+    --graphite2:#3E434D;
+    --cherry:#990011;
+    --teal:#046A6A;
+    --offwhite:#F2F2F2;
+    --muted:#6B7280;
+    --line:#DDDEE1;
+    --hfont: Cambria, Georgia, serif;
+    --bfont: Calibri, "Segoe UI", Arial, sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#7A7D84;font-family:var(--bfont);color:var(--graphite);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  .page{
+    width:210mm;min-height:297mm;background:#fff;margin:8mm auto;
+    padding:18mm 17mm;position:relative;overflow:hidden;
+  }
+
+  h1{font-family:var(--hfont);font-size:29pt;line-height:1.12;font-weight:700}
+  h2{font-family:var(--hfont);font-size:17pt;line-height:1.15;font-weight:700;margin-bottom:5mm}
+  h3{font-size:11pt;font-weight:700;margin-bottom:1.5mm}
+  p{font-size:9.5pt;line-height:1.5;color:var(--graphite2)}
+  .lead{font-size:11.5pt;line-height:1.45;color:var(--graphite)}
+  .kicker{font-size:8pt;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--cherry);margin-bottom:3mm}
+  .kicker.pale{color:#E39AA4}
+  .kicker.teal{color:var(--teal)}
+
+  .rule{width:26mm;height:1.2mm;background:var(--cherry);margin:6mm 0}
+
+  .cover{background:var(--graphite);color:#fff}
+  .cover h1{color:#fff}
+  .cover p{color:#C9CDD4}
+  .orb{position:absolute;border-radius:50%;background:#3E434D}
+
+  .q{border-top:1px solid var(--line);padding:4.2mm 0}
+  .q:last-of-type{border-bottom:1px solid var(--line)}
+  .q .ask{font-family:var(--hfont);font-size:11.5pt;font-style:italic;color:var(--graphite);line-height:1.3;margin-bottom:1.8mm}
+  .q p{font-size:8.8pt}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:5mm}
+  .card{background:var(--offwhite);border-radius:2mm;padding:4.5mm}
+  .card h3{color:var(--graphite);font-size:10.5pt}
+  .card p{font-size:8.5pt;line-height:1.42}
+  .card.dark{background:var(--graphite)}
+  .card.dark h3{color:#fff}
+  .card.dark p{color:#C9CDD4}
+  .card.teal{background:var(--teal)}
+  .card.teal h3{color:#fff}
+  .card.teal p{color:#DDEDED}
+
+  .hinge{background:var(--cherry);border-radius:2mm;padding:6mm;color:#fff;margin-bottom:6mm}
+  .hinge h2{color:#fff;font-size:15pt;margin-bottom:3mm}
+  .hinge p{color:#FBE4E7;font-size:9.5pt;line-height:1.5}
+  .hinge p + p{margin-top:2.5mm}
+  .hinge strong{color:#fff}
+
+  .chips{display:flex;flex-wrap:wrap;gap:2mm;margin-top:3mm}
+  .chip{background:var(--offwhite);border-radius:1.5mm;padding:1.8mm 3mm;font-size:8.5pt;font-weight:600}
+
+  table{width:100%;border-collapse:collapse;font-size:9pt;margin-top:3mm}
+  td{border-bottom:1px solid var(--line);padding:2.4mm 0;vertical-align:top}
+  td:first-child{font-weight:700;width:36%;padding-right:5mm}
+
+  .note{border:1px solid var(--line);border-radius:2mm;padding:5mm;margin-top:6mm}
+  .note h3{color:var(--cherry)}
+
+  .foot{position:absolute;left:17mm;right:17mm;bottom:12mm;font-size:7.5pt;color:var(--muted);
+        border-top:1px solid var(--line);padding-top:3mm;display:flex;justify-content:space-between}
+  .cover .foot{color:#8A9099;border-top-color:#4A4E57}
+
+  @media print{
+    body{background:#fff}
+    .page{margin:0;box-shadow:none;page-break-after:always}
+    .page:last-child{page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= PÁGINA 1 — CAPA: A PERGUNTA ================= -->
+<section class="page cover">
+  <div class="orb" style="width:130mm;height:130mm;right:-45mm;top:-50mm"></div>
+  <div style="position:relative">
+    <div class="kicker pale">Plataforma de atendimento e processos</div>
+    <div style="height:58mm"></div>
+    <h1>Por que criar mais<br>uma plataforma<br>de atendimento?</h1>
+    <div class="rule"></div>
+    <p class="lead" style="color:#E8EAED;max-width:132mm">
+      É a primeira pergunta que fazemos a nós mesmos. O mercado tem plataformas maduras,
+      com décadas de estrada, e não faltam alternativas.
+    </p>
+    <p class="lead" style="color:#E8EAED;max-width:132mm;margin-top:5mm">
+      As próximas páginas trazem cinco perguntas sobre a sua operação. Se as respostas
+      forem parecidas com as que ouvimos há vinte anos, a resposta do título fica evidente
+      sem que a gente precise argumentar.
+    </p>
+    <div style="height:56mm"></div>
+    <p style="font-size:10pt;color:#C9CDD4;max-width:120mm">
+      Atendimento receptivo e ativo, automação de processos, qualidade e conformidade
+      em uma plataforma única — com pessoas e inteligência artificial na mesma conversa.
+    </p>
+  </div>
+  <div class="foot"><span>PlugHub</span><span>Folder institucional · 2026</span></div>
+</section>
+
+<!-- ================= PÁGINA 2 — AS CINCO PERGUNTAS ================= -->
+<section class="page">
+  <div class="kicker">As perguntas</div>
+  <h2>Cinco coisas que ninguém resolveu</h2>
+  <p style="margin-bottom:5mm;max-width:150mm">
+    Nenhuma delas é sobre funcionalidade faltando. Todas viraram “é assim mesmo”.
+  </p>
+
+  <div class="q">
+    <div class="ask">“Quando o cliente precisa passar um dado sensível, o que acontece?”</div>
+    <p>Transferir para a URA e perder parte dos clientes no caminho. Pausar a gravação e abrir um buraco na
+    auditoria. Ou deixar o atendente ouvir o número — e colocar a operação inteira no escopo de conformidade.</p>
+  </div>
+
+  <div class="q">
+    <div class="ask">“O seu tempo médio de atendimento inclui o pós-atendimento?”</div>
+    <p>Se inclui, você não sabe quanto tempo o cliente é de fato atendido — e o atendente segue bloqueado depois
+    que o cliente já foi embora.</p>
+  </div>
+
+  <div class="q">
+    <div class="ask">“Como vocês relacionam vários contatos ao mesmo problema do cliente?”</div>
+    <p>Pelo número de protocolo que o cliente precisa ter guardado? Pelo atendente lendo o histórico e
+    deduzindo? Por uma planilha à parte? Na maioria das operações a resposta honesta é: <strong>não
+    relacionam</strong>. Cada contato nasce e morre sozinho — e o problema do cliente, que é o que de fato
+    importa, não existe como registro em lugar nenhum.</p>
+  </div>
+
+  <div class="q">
+    <div class="ask">“Que percentual das interações a monitoria cobre?”</div>
+    <p>Normalmente de 2 a 5%, com avaliação subjetiva e contestação resolvida em reunião, sem trilha. E quase
+    nunca é possível responder se a qualidade caiu depois de uma mudança específica.</p>
+  </div>
+
+  <div class="q">
+    <div class="ask">“Quantas vezes o mesmo cliente foi abordado esta semana, somando todos os canais?”</div>
+    <p>Quase ninguém sabe. O discador tem uma lista, o SMS costuma ser outro sistema, o WhatsApp é um terceiro.
+    Cada um sabe se falou com aquele registro; nenhum sabe quanta pressão aquela <em>pessoa</em> recebeu da sua
+    empresa.</p>
+  </div>
+
+  <div class="foot"><span>PlugHub</span><span>2</span></div>
+</section>
+
+<!-- ================= PÁGINA 3 — A VIRADA + O QUE MUDA ================= -->
+<section class="page">
+  <div class="hinge">
+    <div class="kicker pale">A resposta</div>
+    <h2>Nenhuma dessas coisas está sem solução. Todas estão contornadas.</h2>
+    <p>Transferir para a URA, pausar a gravação, amostrar 2%, montar campanha em lote para dar seguimento a um
+      caso. Ninguém desenhou a operação assim porque quis — fez porque a plataforma embaixo não comporta a
+      solução direta.</p>
+    <p><strong>Se fosse funcionalidade faltando, a resposta certa seria esperar o seu fornecedor atual lançar.
+      E seria mesmo.</strong> Mas não é. Está em como essas plataformas foram construídas: a IA como etapa
+      anterior ao atendimento e o humano como anteparo de quando ela falha; o contato isolado como unidade de
+      medida; cada canal em um sistema.</p>
+    <p>Premissa de arquitetura não se conserta com módulo novo. Por isso construímos outra.</p>
+  </div>
+
+  <div class="kicker">O que muda</div>
+  <h2 style="margin-bottom:4mm">Seis diferenças que decorrem disso</h2>
+
+  <div class="grid2">
+    <div class="card dark">
+      <h3>Atendente e IA na mesma sessão</h3>
+      <p>Sem transferência visível ao cliente. O atendente convoca especialistas de IA durante a conversa,
+      delega tarefas e retoma o controle quando quiser.</p>
+    </div>
+    <div class="card">
+      <h3>O processo é a unidade</h3>
+      <p>Um caso atravessa contatos, canais e dias como uma coisa só, com prazo por etapa e o roteamento sabendo
+      que aquele cliente já esteve ali.</p>
+    </div>
+    <div class="card teal">
+      <h3>Dado sensível sem ser visto</h3>
+      <p>O atendente delega a captura, acompanha o andamento e não vê o dado. Sem transferir o cliente, sem
+      pausar gravação. Reduz o escopo de conformidade.</p>
+    </div>
+    <div class="card">
+      <h3>Qualidade com cobertura ampla</h3>
+      <p>Avaliação sobre volume, com parte dos critérios calculada de forma objetiva, contestação estruturada e
+      histórico imutável.</p>
+    </div>
+    <div class="card">
+      <h3>Fadiga de contato única</h3>
+      <p>Um registro só de quanto cada cliente já foi abordado, valendo para qualquer campanha em qualquer canal,
+      com a regra definida por você.</p>
+    </div>
+    <div class="card">
+      <h3>Custo previsível</h3>
+      <p>Licença por capacidade simultânea — pessoas e IA na mesma unidade. Sem cobrança por ação, por token, por
+      resolução ou por módulo.</p>
+    </div>
+  </div>
+
+  <div class="foot"><span>PlugHub</span><span>3</span></div>
+</section>
+
+<!-- ================= PÁGINA 4 — COBERTURA, ESTÁGIO, PRÓXIMO PASSO ================= -->
+<section class="page">
+  <div class="kicker">Cobertura</div>
+  <h2>O que a plataforma abrange</h2>
+
+  <table>
+    <tr><td>Canais</td><td>Webchat, WhatsApp, SMS, e-mail, voz (PSTN), WebRTC e integrações por webhook</td></tr>
+    <tr><td>Atendimento</td><td>Receptivo e ativo no mesmo motor, com atendentes humanos e agentes de IA no mesmo roteamento</td></tr>
+    <tr><td>Processos</td><td>Automação com espera em horário útil, aprovação humana e coleta assíncrona multicanal</td></tr>
+    <tr><td>Contato ativo</td><td>Audiência, campanha, controle de fadiga, importação de base e disparo por qualquer canal</td></tr>
+    <tr><td>Qualidade</td><td>Avaliação por formulário, revisão, contestação por dimensão e calibração do avaliador</td></tr>
+    <tr><td>Operação</td><td>Console do atendente, supervisão em tempo real, fila de trabalho e histórico do cliente</td></tr>
+    <tr><td>Conformidade</td><td>Mascaramento por perfil, trilha de auditoria por chamada e registro imutável de acesso</td></tr>
+    <tr><td>Análise</td><td>Painéis com detalhamento de processo, contato e atendimento individual</td></tr>
+  </table>
+
+  <div class="chips">
+    <span class="chip">Sem lock-in de modelo de IA</span>
+    <span class="chip">Sem lock-in de operadora</span>
+    <span class="chip">Lógica em formato portável</span>
+    <span class="chip">Dados exportáveis</span>
+  </div>
+
+  <div class="note" style="border-color:var(--cherry)">
+    <h3>Em que estágio estamos — e por que dizemos isso aqui</h3>
+    <p>A plataforma está pronta em arquitetura e funcionalidade, validada em ambiente controlado, e
+    <strong>ainda não está em produção em cliente</strong>. Não temos certificações emitidas; elas estão em
+    andamento, e a arquitetura já produz a evidência técnica que elas exigem.</p>
+    <p style="margin-top:2.5mm">Dizemos isso no material porque é o que você descobriria de qualquer forma — e
+    porque é o que explica as condições que oferecemos a quem entra agora: preço de fundador, prioridade de
+    roadmap e acesso direto a quem constrói.</p>
+  </div>
+
+  <div style="margin-top:6mm">
+    <div class="kicker teal">Quem somos</div>
+    <p style="max-width:150mm">Cinco profissionais com mais de vinte anos em soluções e serviços de contact
+    center. Não é um time de tecnologia que descobriu o setor: é gente que operou, implantou e conviveu com
+    essas plataformas — e construiu esta a partir das dores que conhece de perto.</p>
+  </div>
+
+  <div style="margin-top:6mm">
+    <div class="kicker teal">Próximo passo</div>
+    <p style="max-width:150mm">Uma sessão de trabalho com o seu time de operação, sem custo e sem compromisso.
+    Saímos dela com um escopo possível e números — ou com a conclusão honesta de que não é o momento.</p>
+  </div>
+
+  <div class="foot"><span>PlugHub · contato</span><span>4</span></div>
+</section>
+
+</body>
+</html>

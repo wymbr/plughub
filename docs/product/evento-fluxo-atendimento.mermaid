@@ -1,0 +1,38 @@
+%% Fluxo de eventos — atendimento padrão
+%% Fonte: docs/kafka-eventos.md § Fluxo de Eventos (reconciliado contra código 2026-07-27/28)
+%% Convenção: setas cheias = publicação Kafka · setas tracejadas = consumo
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant CG as channel-gateway
+    participant RE as routing-engine
+    participant MCP as mcp-server-plughub<br/>(Core)
+    participant OB as orchestrator-bridge
+    participant AN as analytics-api
+
+    C->>CG: mensagem no canal
+    CG->>RE: conversations.inbound
+    CG->>AN: conversations.events<br/>(contact_open)
+
+    alt instância disponível
+        RE->>OB: conversations.routed
+    else pool saturado
+        RE->>OB: conversations.queued
+        RE->>AN: queue.position_updated
+        Note over RE: publicado APÓS o enqueue —<br/>antes disso a posição sairia 0
+    end
+
+    MCP->>RE: agent.lifecycle (agent_login)
+    MCP->>RE: agent.lifecycle (agent_ready)
+    RE->>OB: agent.lifecycle (agent_busy)
+
+    Note over C,AN: ATENDIMENTO EM CURSO
+    MCP->>AN: conversations.events (message_sent)
+    MCP-->>C: conversations.outbound
+    Note right of AN: em paralelo:<br/>ai-gateway → sentiment.updated<br/>sdk/McpInterceptor → mcp.audit<br/>agentes → agent.events
+
+    MCP->>OB: conversations.events (contact_closed)
+    OB->>RE: agent.lifecycle (agent_done)
+    Note over OB,RE: libera a vaga no pool.<br/>O tópico `agent.done` NÃO existe —<br/>foi removido em 2026-07-27 por ser órfão.
+    OB->>AN: conversations.session_closed
+    Note over AN: dispara session-replayer<br/>e a amostragem de avaliação

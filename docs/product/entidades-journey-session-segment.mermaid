@@ -1,0 +1,64 @@
+%% Relação entre as entidades ao longo do tempo — Cliente, Journey, Session, Segment
+%% Linhas de vida = ENTIDADES do modelo (não serviços). As entradas são os contatos.
+%% Ordem escolhida = hierarquia (journey ⊃ session ⊃ segment), para o aninhamento ficar legível.
+%% Fonte: CLAUDE.md § Unified Session Model · § Journey (retorno, modelo de 3 níveis) · Arc 5 ContactSegment
+sequenceDiagram
+    autonumber
+    actor C as CLIENTE
+    participant J as JOURNEY<br/>processo · raiz canônica
+    participant S as SESSION<br/>contato
+    participant G as SEGMENT<br/>janela do agente
+    participant A as AGENTE<br/>humano ou IA
+
+    Note over C,A: CONTATO 1 — WhatsApp · a journey NASCE aqui
+
+    C->>S: mensagem inbound
+    S->>S: session_id gerado<br/>root_session_id = self (auto-mint, imutável)
+    S-->>J: a journey É esta raiz<br/>nenhuma entidade é criada
+    S->>G: routing aloca → abre segmento
+    G->>A: agent_busy
+    A-->>C: atendimento (IA de triagem)
+    A->>G: agent_done · outcome=escalated
+    Note over G: sequence_index=0 · parent_segment_id=null
+
+    S->>G: especialista convocado — MESMA sessão
+    Note over G: parent_segment_id → segmento anterior<br/>topologia de conferência
+    G->>A: agent_busy
+    A->>G: agent_done
+    C-->>S: cliente sai
+    S->>S: closed · close_reason=flow_complete
+    S->>J: contexto @ctx.journey.* PERSISTE<br/>hash do processo, TTL 30d
+
+    Note over C,A: DIAS DEPOIS — CONTATO 2 · webchat (outro canal)
+
+    C->>S: novo contato
+    S->>J: resolve pendência por identidade<br/>(âncora possessed)
+    J-->>S: root_session_id HERDADO<br/>mesma journey, novo session_id
+    S->>G: abre segmento
+    G->>A: humano atende
+    A-->>C: resolve
+    C-->>S: cliente sai
+    S->>S: closed
+    Note over S,G: o contato fecha AQUI — o AHT congela
+
+    S->>G: wrap-up detached vira item de fila
+    A->>G: segment_outcome_record<br/>grava por REFERÊNCIA no segmento de origem
+
+    Note over C,A: RETORNO ATIVO — a journey dispara o contato
+
+    J->>S: campanha/survey outbound<br/>(mailing → collect ou link web)
+    S->>C: contato ativo
+    C-->>S: responde
+    S->>J: session_signal no GRÃO journey<br/>(não só do contato)
+
+    Note over C,A: CONSOLIDAÇÃO
+
+    S->>J: journey_merge · sempre novo → antigo
+    Note over J: aresta em journey_aliases.<br/>NUNCA reescreve root_session_id.<br/>Ordem total ⇒ floresta sem ciclo.
+    J->>J: raiz canônica resolvida por union-find<br/>NA LEITURA, não na escrita
+
+    Note over C,A: O QUE O ANALYTICS ENXERGA
+    J-->>J: N3 processo — SLA por etapa, custo total, TTR
+    S-->>S: N2 contato — AHT, FCR, close_reason
+    G-->>G: N1 segmento — qualidade, outcome, avaliação
+    Note over J,G: drill de três níveis: journey → session → segment

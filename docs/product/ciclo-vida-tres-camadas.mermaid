@@ -1,0 +1,35 @@
+%% Ciclo de vida em três camadas — e por que o wrap-up destacado conserta o AHT
+%% Fonte: CLAUDE.md § Session & Conference Lifecycle · CHANGELOG 2026-07-27 (wrap-up detached)
+sequenceDiagram
+    autonumber
+    actor C as Cliente
+    participant CT as CAMADA 1<br/>Contato
+    participant SG as CAMADA 2<br/>Segmento do agente
+    participant CF as CAMADA 3<br/>Conferência (a sala)
+    participant IN as Inbox pull<br/>do agente
+
+    C->>CF: entra — a sala é criada
+    CF->>CT: contato aberto
+    CF->>SG: agente entra — segmento aberto
+
+    Note over C,SG: ATENDIMENTO
+
+    C-->>CF: cliente sai
+
+    CF->>CT: contato FECHA aqui
+    Note over CT: as estatísticas congelam no instante<br/>em que o cliente vai embora —<br/>o AHT vira verdade
+
+    CF->>IN: wrap-up vira item de fila (dispatch: detached)
+    Note over CF,IN: o hook on_human_end NÃO segura o contato.<br/>hook_pending não conta o detached.
+
+    SG->>SG: agent_done — a vaga do pool é liberada
+    Note over SG: a instância volta ao pool antes<br/>de o wrap-up ser preenchido
+
+    IN->>IN: agente reivindica quando puder
+    IN->>SG: segment_outcome_record<br/>grava o outcome por REFERÊNCIA
+    Note over IN,SG: origin_session_id + surveyed_segment_id.<br/>O wrap-up não é um segmento da conferência.
+
+    CF-->>CF: sala destruída quando o ÚLTIMO participante sai
+    Note over CF: supervisor e especialista podem<br/>entrar e sair sem encerrar a sala
+
+    Note over CT,IN: Colapsar as três camadas é a causa da dor universal:<br/>o wrap-up inflando o AHT e bloqueando o agente.<br/>Separadas, o contato fecha na hora e a disposição vira trabalho assíncrono.
