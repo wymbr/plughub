@@ -2,6 +2,326 @@
 
 ---
 
+## H2 — segmento humano da família pull deixa de ficar aberto para sempre ✅ (2026-07-29)
+
+Achado ao tentar fechar o resíduo da E2f (excluir wrap-up do TMA por agente). A query
+mostrou que não havia o que excluir: o segmento humano do wrap-up tinha `ended_at`,
+`duration_ms`, `outcome` e `close_reason` **todos nulos**, abertos há mais de um dia.
+
+**O defeito não é do wrap-up.** Medição por pool:
+
+| Segmentos humanos abertos | Sessão já fechada (vazamento provado) | Desde |
+|---|---|---|
+| `formfill_demo` | **78** | 24/07 |
+| `aprovacao_deploy` | **9** | 16/07 |
+| `retencao_humano` (caminho canônico) | **0** | — |
+
+A aprovação vazava **11 dias antes** de o wrap-up destacado existir. O fator comum é
+`delegate` + fila **pull** + claimante **humano** — a família inteira, não uma feature.
+*(Parte dos 78 do `formfill_demo` é provavelmente lixo de teste abortado; o número infla,
+o mecanismo não muda — ele está provado por leitura de código, não por contagem.)*
+
+**Por que ninguém fechava.** `participant_left` de `agent_type=human` tinha **dois**
+produtores, ambos em `process_contact_event`, e ambos exigindo um `contact_closed` em
+`conversations.events`. No atendimento normal quem publica isso é o botão "Encerrar" do
+Console (`/api/agent_done`). A UI de form-fill **não tem esse botão** — e corretamente:
+item de tarefa não é contato. O `agent_done` que o caminho pull publica vai para
+`agent.lifecycle`, que devolve a **vaga**; o analytics não o consome.
+
+**Contraste que prova o diagnóstico:** o NPS, que continua sendo especialista de
+conferência inline, **não vaza** — porque é agente IA, e agente IA chama a tool
+`agent_done` → `conference_agent_completed` → o ramo G5 fecha o segmento. Não existe
+equivalente humano. O humano do pull cai no vão entre os dois tratamentos de fim
+(conferência × primário alocado).
+
+**Triplo trinco** (consertar um só não resolvia): (a) ninguém publica o `contact_closed`;
+(b) `_destroy_conference` **deletava** `human_agent`/`human_agents` sem emitir nada;
+(c) a única varredura existente está atrás de `not _ccf_already`, e `_close_contact_layer`
+seta esse flag 190 linhas antes de publicar — o ramo "customer_side" documentado é
+inalcançável a partir dali.
+
+**Entregue (H2 — estrutural):** `_sweep_open_human_participants` em
+`orchestrator-bridge/main.py`, chamada em `_destroy_conference` **antes** do delete das
+chaves de tracking (a ordem era a lacuna). Percorre `session:{id}:human_agents` e fecha
+quem sobrou.
+
+- **Idempotência por GETDEL, não por flag.** As chaves de rastreio são *consumidas*, como
+  o produtor canônico também as consome — quem chegar primeiro fecha, o segundo não acha
+  `joined_at` e pula. Sem guard novo a manter.
+- **`outcome` fica `None`, de propósito.** O teardown não sabe o desfecho; quem sabe é o
+  caminho que fechou o trabalho. Inventar `resolved` seria o valor plausível que esconde o
+  buraco. `close_reason="session_teardown"` — **valor novo** no domínio de segmento.
+- **Sem `segment_id` do join, NÃO publica** (log de warning): o publish faz fallback para
+  `uuid4`, e publicar criaria uma linha NOVA em vez de fechar a existente — no
+  ReplacingMergeTree isso soma um órfão em vez de subtrair.
+- **Log de WARNING a cada fechamento**, porque no caminho canônico ele nunca aparece. Cada
+  linha é um participante que nenhum produtor específico fechou: a varredura serve para
+  **medir onde falta gatilho**, não só para tapar.
+- **Fronteira deliberada:** fecha o SEGMENTO, não a capacidade. Vaga tem via própria.
+
+### H1 — fechar na ENTREGA, com a duração real ✅ (mesma data)
+
+Validação do H2 no ambiente: wrap-up fechou com `close_reason=session_teardown`,
+`duration_ms=6432`; o contato ao lado fechou por `agent_hangup` (produtor canônico,
+intocado). **Isso ressuscitou o resíduo da E2f**: o segmento passou a ter duração e, com
+`role=primary` + `agent_type=human`, entra na lente `sessions_aht`. Antes eu iria filtrar
+zeros; agora há trabalho de wrap-up contado como tempo de atendimento.
+
+H1 fecha o segmento do claimante em `_handle_webhook_session_resumed`, no ponto em que o
+humano **entregou** — não no teardown.
+
+- **Ordem, não elegância:** teve de ficar **antes** do `_trigger_contact_close`, que roda
+  como `asyncio.create_task` (concorrente). Se a varredura do H2 chegasse primeiro,
+  consumiria as chaves por GETDEL e o H1 seria **código morto por corrida** — com o
+  sintoma sendo apenas uma duração um pouco maior, que ninguém notaria. Os dois são
+  mutuamente exclusivos por construção: quem consome as chaves fecha.
+- **Roda mesmo em `_ai_outcome == "suspended"`** (workflow bateu noutro suspend): a tarefa
+  DO HUMANO acabou de qualquer jeito.
+- **`outcome` continua `None`, e isto é decisão, não omissão.** Era tentador carimbar
+  `resolved` — a tarefa foi concluída. Mas `outcome` é campo do domínio de CONTATO e
+  alimenta o `resolved_count` da `mv_agent_performance_daily`, isto é, a **taxa de
+  resolução do atendente**. Wrap-up preenchido não é contato resolvido; contá-lo assim
+  inflaria a métrica com um número perfeitamente plausível — a armadilha que esta sessão
+  inteira vem perseguindo. O que o ponto sabe é COMO terminou, e isso vai em
+  `close_reason="task_submitted"`.
+
+**Os três `close_reason` agora distinguem o que antes era um buraco só:**
+`task_submitted` (entregue) · `session_teardown` (fechado pela rede, ninguém entregou) ·
+o silêncio de antes (nada fechava). Se o log de WARNING do H2 continuar aparecendo para
+wrap-ups **submetidos** depois disto, existe um terceiro caminho não mapeado.
+
+**Não faz backfill.** Os 87 já abertos continuam abertos (as chaves de tracking sumiram).
+Decisão registrada em `TODO.md`.
+
+---
+
+## `/reports/timeseries/handle_time` nunca devolveu dado — coluna inexistente ✅ (2026-07-29)
+
+Achado ao VALIDAR a E2f, não ao implementá-la. Fui conferir se as sessões de wrap-up
+inflavam o TMA da série e o ClickHouse respondeu `UNKNOWN_IDENTIFIER: Missing columns
+'duration_ms'`.
+
+`_fetch_handle_time` (`timeseries_query.py`) fazia `avg(duration_ms)` + `duration_ms > 0`
+sobre `{db}.sessions`. A coluna **não existe** ali — `sessions` tem `handle_time_ms`
+(`_DDL_SESSIONS`); `duration_ms` é de **`segments`**, outra tabela. Provável origem do
+engano.
+
+**Por que ninguém viu.** O `except` de `query_handle_time_timeseries` capturava, logava
+`warning` e devolvia `{"buckets": [], "error": "data_unavailable"}`. O gráfico de tempo de
+atendimento da aba Análise (`AnaliseTab.tsx`) renderizava **vazio, sem erro na tela** — o
+mesmo padrão que a § Postura de Engenharia nomeia, e o mesmo tipo de defeito do
+`/reports/sessions` que "nunca rodava a query principal" (Journey T6): um caminho de
+degradação transformando uma falha dura em silêncio.
+
+**Fix:** `duration_ms` → `handle_time_ms` nos dois ramos (com e sem breakdown), com
+comentário no código explicando qual tabela tem qual coluna.
+
+**Não auditado:** outros usos de `duration_ms` contra `sessions` fora deste arquivo.
+Registrado em `TODO.md`.
+
+**Efeito colateral honesto:** o filtro da E2f que eu havia adicionado a esta função era
+cosmético enquanto a query não rodava — filtrar uma query que sempre falhava não muda nada.
+Agora ele passa a valer de fato.
+
+---
+
+## E2f — sessão de wrap-up fora da contagem de contato e do TMA ✅ (2026-07-29)
+
+Último item aberto da Camada E2. Entrou como "adicionar um filtro" e a investigação mudou
+duas vezes de forma antes de virar código.
+
+**O problema.** Desde o arco de detach, o wrap-up destacado nasce como **sessão própria**
+(canal `webhook`, `customer_id` **herdado** do contato de origem, `spawn_reason='trigger'` —
+o mesmo rótulo de um workflow de negócio legítimo). Nada nela dizia "trabalho interno". Três
+consequências, e a terceira é a pior:
+
+| Número | Efeito |
+|---|---|
+| Volume de contatos | quase **dobra** nos pools humanos — metade são formulários |
+| TMA | o item fica parado na inbox até o claim, e para sessão `webhook` o handle time é **wall-clock**: um wrap-up de 2h entra na média como um contato de 2h |
+| Histórico do Cliente | **contato fantasma** por atendimento real, na tela que o atendente olha durante o atendimento seguinte — e sem conversa nenhuma dentro |
+
+**Primeira correção de rota — a premissa da ADR era falsa.** A ADR mandava "espelhar a
+isenção de hook". Não havia o que espelhar: a isenção existente tem duas formas
+(`conference_id` ⇒ não escreve linha; `channel != ''` na leitura) e **nenhuma pega** a
+sessão de wrap-up, que nasce de um inbound legítimo, sem `conference_id`, com canal não
+vazio. A própria ADR admite isso 45 linhas antes de mandar espelhá-la.
+
+**Segunda correção de rota — o discriminador já existia, e não era `spawn_reason`.** O
+desenho inicial (carimbar `spawn_reason='wrapup'`) exigia coluna, plumbing no bridge e um
+**carimbo duplo** evento+ContextStore (o `_close_contact_layer` relê o ctx; mudar só o evento
+faria a linha de close reverter o rótulo, e no ReplacingMergeTree o close vence). A
+observação que desmontou isso: *a sessão de wrap-up é roteada a um POOL diferente do pool
+humano* — e `sessions` e `segments` **já carregam `pool_id`**.
+
+Classificar o **pool** (`purpose: contact | internal`) é melhor em três eixos:
+
+- **retroativo por construção** — o histórico já gravado se corrige sozinho; `spawn_reason`
+  nunca conseguiria (não há backfill);
+- **cobre o resto de graça** — NPS destacado e `segment_wrapup` entram sem rótulo novo;
+- **dissolve a parte cara** — `mv_agent_performance_daily` é chaveada por
+  `(tenant_id, agent_type_id, pool_id, period_date)`, então dá para excluir pool interno
+  **lendo a MV**, sem `DROP`+recriar com `POPULATE`.
+
+**Segregação, não supressão** — o ponto que fecha o desenho: o pool interno **mantém as
+métricas dele**. O TMA do pool de wrap-up **é** o tempo de ACW; a fila dele é o backlog de
+pós-atendimento. Não se perdeu métrica; parou-se de somar no total errado. Por isso
+relatórios **agrupados por pool** (volume por pool, monitor de ativas) **não** foram
+filtrados — lá a linha do pool interno é legítima e desejada.
+
+**Entregue:**
+- **agent-registry** — `pools.purpose` (migration `20260729010000_pool_purpose`, default
+  `contact` não-regressivo) + `PoolRegistrationSchema` + create/update. `_formatPool` faz
+  spread da linha, então o campo já flui em `pool.registered`/`updated` e no `GET /v1/pools`
+  sem código novo. **Não** foi adicionado ao `PoolConfig` do routing-engine: o roteamento não
+  decide nada com ele, e campo sem leitor é o erro que o `acw_gate` acabou de custar.
+- **platform-ui** — Select "Propósito do pool" no editor + tipo + i18n en/pt-BR (fecha a
+  invariante "todo campo de config tem superfície na UI").
+- **analytics-api** — `pools_client.fetch_internal_pools` (cache 60s) + helper único
+  `_apply_contact_scope`, aplicado em `/reports/sessions`, `/reports/journeys` (o wrap-up
+  herda `root_session_id`, então inflava a contagem de sessões do processo), Cliente 360
+  (bloco `contacts`), **Histórico do Cliente**, dashboard 24h (`total` **e**
+  `avg_handle_ms`) e as séries de volume e handle time.
+- **Bônus não pedido:** o helper nomeia num lugar só a regra que estava **copiada
+  literalmente em 3 queries e ausente nas outras** — o dashboard 24h, o TMA no tempo e o
+  volume por pool já contavam as sessões de hook `channel=''` desde sempre. Bug
+  pré-existente, fechado junto.
+- `wrapup_detached_ia` marcado `purpose: internal` no `tenant_demo.yaml`.
+
+**Duas exceções deliberadas, ambas testadas ou comentadas no código:**
+1. **Lookup por `session_id` não filtra.** O escopo filtra LISTAGENS; quem pede uma sessão
+   pelo id (drill, deep-link, suporte) está pedindo *aquela* sessão.
+2. **Séries com `pool_id` explícito não filtram** — pedir a série do pool de wrap-up é
+   pedir a curva de ACW.
+
+**Degradação — por que o `pools_client` não copia o `deployments_client`.** Aquele degrada
+para `[]` e a lente perde um overlay: falha visível e inofensiva. Aqui degradar para
+conjunto vazio significa **voltar a contar wrap-up como contato** — número errado com cara
+de certo. Então: sucesso guarda um "último bom" sem expiração; falha **com** último bom
+reusa e loga `WARNING` nomeando a consequência; falha **sem** último bom loga `ERROR`
+dizendo que os números vão sair inflados. Nunca há degradação muda. Os testes cobrem os
+dois ramos — é o comportamento que ninguém percebe faltando.
+
+**Testes:** `test_pools_client.py` (8, foco em degradação) + `TestApplyContactScope` (6,
+incluindo a guarda de regressão do `channel=''` que faria sessões **ativas** sumirem logo
+após o roteamento).
+
+**⚠️ Fora desta fatia:** o TMA **por agente** (lente `sessions_aht`) roda sobre `segments`,
+que tem `pool_id` mas exige decisão própria (subquery × filtro na leitura da MV) — fatia
+seguinte. E `pools.purpose` é **seed-if-absent**: em DB já existente o
+`wrapup_detached_ia` nasce `contact` e precisa ser marcado pela UI (ou por `PUT`) para o
+filtro valer.
+
+**Rebuild:** `schemas` → `agent-registry` + `analytics-api` + `platform-ui`.
+
+---
+
+## Limpeza do vermelho — fixtures da Journey J1, `agent_events` fatia 2, smoke órfão ✅ (2026-07-29)
+
+Três itens de `TODO.md` que compartilham a mesma natureza: **substrato que ficou vermelho ou
+morto depois que a coisa certa foi feita em outro lugar.**
+
+**(1) 9 testes de `_fetch_customer_history` — drift desde a Journey J1.**
+`ValueError: not enough values to unpack (expected 9, got 8)`. A query
+(`sessions.py`) passou a selecionar `root_session_id` em J1; os fixtures ficaram em 8
+colunas. `_row()`/`_ch_row()` ganharam o campo, com **default = o próprio `session_id`** —
+que é a semântica de J1, não uma conveniência de teste: `root_session_id` nunca é null e um
+contato avulso é sua própria raiz (auto-mint = self).
+
+O conserto em si é de uma linha. **O que interessa é o motivo do drift:** não havia uma
+única menção a `root_session_id` em `test_sessions.py`. A coluna foi adicionada, o campo foi
+exposto na resposta do endpoint, e nenhum teste olhava para ele — os 9 falharam por
+*desempacotamento*, não por asserção. Um teste que quebra pela aridade da tupla não está
+cobrindo o campo; está tropeçando nele. Acrescentados 3 asserts que cobrem de fato:
+raiz = self, **raiz ≠ self ⇒ membro de processo** (o caso HJ que faz a UI renderizar o link
+`PRC-`), e a presença do campo na resposta do endpoint.
+
+**(2) `agent_events` — fatia 2: DROP.** A fatia 1 (2026-07-28) parou a escrita e deixou o
+DDL de pé por um ciclo, de propósito: a auditoria cobre o código, não alcança consulta
+ad-hoc (card manual no Metabase, query direta). Confirmado que ninguém lê por fora, a tabela
+sai fisicamente.
+
+- `clickhouse.py`: `_DDL_AGENT_EVENTS` (o `CREATE`) removido de `_ALL_DDL` e substituído por
+  `_DDL_AGENT_EVENTS_DROP = "DROP TABLE IF EXISTS {db}.agent_events"` em `_MIGRATIONS` —
+  mesmo padrão idempotente do `_DDL_SEGMENTS_DROP_NPS`. O drop **acontece no boot**, em todo
+  ambiente, sem passo manual. Docstring do módulo e o comentário do caminho de escrita
+  atualizados.
+- `infra/metabase/clickhouse_users.sql`: GRANT + ROW POLICY de `agent_events` removidos nos
+  dois tenants. O `DROP TABLE` remove as policies presas à tabela; o GRANT remanescente fica
+  inerte (aponta para tabela inexistente) — conferir com a query de verificação do arquivo.
+- Menções obsoletas saneadas: `docker-compose.demo.yml` (o UNION de `/reports/events` cita
+  `segments`, não a tabela morta), `docs/arcos/analytics-reports-redesign.md` (2),
+  `docs/arcos/arc12-agent-business-events.md`.
+
+⚠️ **`agent_business_events` (Arc 12) e as rotas `/reports/agent-events/*` são outro eixo e
+ficam.** A semelhança de nome já induziu erro na documentação do projeto duas vezes; o aviso
+está agora no comentário do próprio DROP. A chave `agent_events` na resposta de
+`/dashboard/metrics` também fica — é retrocompat de API, com fonte já migrada para `segments`.
+
+**(3) `infra/test/smoke_acw_gate.sh` — nada a remover, e um achado no lugar.** O `git rm`
+falhou com `did not match any files`: o smoke **já tinha saído** junto com a Phase 0. O item
+do `TODO.md` estava stale.
+
+Mas a conferência mostrou que a Phase 0 removeu o **enforcement** e o smoke, e deixou o
+**campo de config** `acw_gate` de pé ponta a ponta — `PoolsPage.tsx` → `pools.ts` → Prisma →
+`registry.changed` → `PoolConfig.acw_gate` — **sem nenhum leitor**. O valor atravessa cinco
+pacotes e morre num atributo que ninguém consulta, enquanto o comentário do
+`routing-engine/models.py` ainda descreve o comportamento revertido. Um operador que
+selecione `hard` na tela acredita ter armado um gate que não existe. Registrado em `TODO.md`
+com as duas saídas (remover ponta a ponta × esconder da UI e corrigir o comentário) —
+**decisão não tomada aqui**, mas o achado vale mais que o `git rm` que o produziu.
+
+**Resíduo:** `scripts/commit-agent-events.sh` (script de commit one-shot da fatia 1) segue no
+repo — registrado no `TODO.md`.
+
+---
+
+## `acw_gate` removido ponta a ponta — config que sobreviveu à própria reversão ✅ (2026-07-29)
+
+Continuação direta do achado acima. A Camada C do detach de hooks (2026-07-24) entregou o ACW
+como **regra de disponibilidade**: `acw_gate: none|soft|hard` por pool + marker
+`{t}:instance:{iid}:acw_pending` + regra em `get_ready_instances`. Três dias depois a Phase 0
+do wrap-up unificado a **reverteu** — e a reversão levou o enforcement, o marker e o smoke,
+mas **deixou a configuração de pé**.
+
+**Por que foi revertida (a lição, que não é sobre ACW):** o gate operava sobre a **instância** —
+em `hard`, o roteamento pulava o agente inteiro. Mas a unidade de capacidade do sistema é a
+**vaga** (`claim_instance`, semáforo de ocupantes): um agente com `max_concurrent > 1` tinha
+todas as vagas bloqueadas por um wrap-up que consome uma. E a reserva acontecia no **dispatch**,
+não no **claim**, que é onde o portão atômico vive. A Phase 0 resolveu o problema real por outro
+caminho (o wrap-up ocupa uma vaga, igual nos dois modos) e a Phase 2 fez o hand-off dessa vaga
+por um hold. *Escolher a unidade errada não deixa o mecanismo meio certo — deixa ele errado com
+aparência de funcionar.*
+
+**O que sobrou e por que importa.** O campo seguia viajando cinco pacotes —
+`PoolsPage.tsx` → `pools.ts` → Prisma → `registry.changed` → `PoolConfig.acw_gate` — e morria
+num atributo sem leitor. Um operador que marcasse `hard` na tela de Pools acreditava ter armado
+um gate de ACW. **Config que não decide nada é pior que config ausente**: a ausente se percebe,
+a inerte se confia. É a mesma família dos defeitos que o `CLAUDE.md § Postura de Engenharia`
+nomeia — só que aqui o valor plausível está na tela, não no dado.
+
+**Removido:**
+- `@plughub/schemas/agent-registry.ts` (`PoolRegistrationSchema`), `pools.ts` (create + update).
+- Prisma: campo fora do schema + migration `20260729000000_drop_pool_acw_gate` (`DROP COLUMN
+  IF EXISTS`), aditiva à `20260724000000_pool_acw_gate` que a criou.
+- routing-engine: `PoolConfig.acw_gate` + a leitura no `kafka_listener`.
+- platform-ui: `Pool.acw_gate`, o `<Select>` do editor de pool, chaves `pools.acw.*` em **en e
+  pt-BR** (as duas, como manda a invariante de i18n).
+- Doc reconciliada nas 4 superfícies que o descreviam como vivo: `CLAUDE.md` (Camada C),
+  design doc (Camada C + decisão fechada nº 3 + fluxo), ADR `adr-wrapup-detached-pull` (D4
+  caducado, D7, tabela E2e, consequências), `plughub-descritivo-tecnico-funcional` (§11), e a
+  spec da Phase 2. Em todas fica o **motivo** da reversão, não só o fato: quem for reabrir ACW
+  precisa saber que a unidade é a vaga.
+
+**Efeito colateral no roteiro:** a **E2e** (produtor do marker `acw_pending`), que ainda constava
+como pendência da Camada E2, **sai de escopo** — não existe mais gate a alimentar. Restam E2f
+(sessão de wrap-up fora da contagem de TMA) e a Camada F (validação).
+
+**Rebuild:** `schemas` → `agent-registry` (migration roda no boot via `prisma migrate deploy`) +
+`routing-engine` + `platform-ui`.
+
+---
+
 ## `agent_events` descontinuada — fatia 1: para de ser escrita ✅ (2026-07-28)
 
 Começou como "corrigir o `agent_done` de crash-recovery que o analytics descarta"

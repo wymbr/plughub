@@ -4,7 +4,9 @@
 `DialogForm.dimensions`), **runtime** (`survey_record` compõe via `composeScore`) e **wiring E2E**
 (`skill_survey_multi_v1` loop → compose; form CSAT composto) prontos e **validados ao vivo** no webchat
 (atendimento=5, resolução=3 → `csat`≈4.33 + `nps`). Pendente: **editor** de dialog-forms com UI de dimension.
-**Data:** 2026-07-07 · **Atualizado:** 2026-07-07 (schema + runtime + wiring E2E)
+**Data:** 2026-07-07 · **Atualizado:** 2026-07-29 (D10–D12: captura declarada pelo AGENTE — regra de sink por
+quem-responde, formato pontuável×nominal no `agent_event`, roteamento server-side na tool. **Não implementadas**
+— são a fatia 3 do arco "Wrap-up como fonte de dados", `TODO.md`.)
 **Componentes:** `packages/schemas` (novo `scoring.ts` compartilhado + extensão de `dialog.ts`), `packages/dialog-api`
 (store canônico do `survey_definition` = `DialogForm`+dimensions — D8), `mcp-server-plughub` (`survey_record` compõe —
 D9), `packages/analytics-api` (roll-up populacional — inalterado), `packages/platform-ui` (editor de forms com dimension).
@@ -121,8 +123,87 @@ O `survey_record` passa a aceitar `form_id` + respostas cruas e **compõe** os s
 declarativo (nada de matemática em step de flow — respeita "sem eval em step") e o analytics inalterado (roll-up
 populacional read-time). O contrato atual (`signals[]` explícito) permanece válido para o caminho legado.
 
+## Decisões resolvidas (2026-07-29) — captura declarada pelo AGENTE (wrap-up)
+
+> **Origem:** a discussão da E2f (tirar a sessão de wrap-up da contagem de TMA) revelou que o wrap-up não é
+> ruído a excluir, e sim **fonte de dados** (serviços executados, FCR, motivo do contato), cruzável com
+> Evaluation. Isso trouxe para este ADR uma pergunta que ele ainda não respondia: o `DialogCapture` é o
+> mecanismo declarativo certo também quando **quem responde é o atendente**, e não o cliente?
+>
+> **Achado que forçou a decisão:** o `segment_outcome_record` (`mcp-server-plughub/src/tools/segment.ts`) tem
+> contrato **fixo de 4 campos**, enquanto o DialogForm é genérico. Acrescentar uma pergunta no editor produz
+> hoje uma resposta que **some sem log** — o skill não passa, a tool não aceita, o segmento não tem coluna.
+
+### D10 — O sink roteia por QUEM RESPONDE, não por que métrica é
+
+O `DialogCapture` já foi desenhado para isso: o binding é *"echoed back to **the domain**… the domain routes it
+to its sink"* (`schemas/src/dialog.ts`). A decisão apenas torna a regra explícita, porque a violação é
+silenciosa e irreversível:
+
+| Captura | Quem responde | Sink |
+|---|---|---|
+| CSAT/NPS/CES/PMF de survey | o **cliente** | `session_signal` → Voz do Cliente (máquina de `dimension`, D1–D6) |
+| FCR, serviço executado, motivo (wrap-up) | o **atendente** | `agent_business_events` (Arc 12, tool `agent_event`) |
+
+**Por que a linha é "quem responde" e não "que métrica é":** o mesmo conceito existe dos dois lados. FCR
+perguntado ao cliente é instrumento de survey; FCR marcado pelo atendente é declaração de agente. São **séries
+distintas**, e é justamente a divergência entre elas que informa. Colapsá-las num sink só destrói a informação
+que as torna úteis.
+
+**Consequência de violar:** a superfície "Voz do Cliente" passaria a exibir declaração de atendente como se
+fosse fala do cliente — contaminando a série histórica, que não se descontamina depois.
+
+*(Correção registrada: a proposta inicial de acrescentar FCR ao catálogo de instrumentos do editor pegava o
+mecanismo certo e o sink errado — o catálogo desemboca em `session_signal` via `survey_record`.)*
+
+**Brinde:** FCR ganha três fontes independentes — **declarado** (agente, wrap-up), **percebido** (cliente,
+survey) e **observado** (o cliente voltou na janela? `root_session_id` da Journey, já existe). Cruzam entre si
+e com Evaluation pelo mesmo `segment_id`.
+
+### D11 — Dentro do `agent_event`, pontuável × nominal é só ONDE o dado mora
+
+A máquina de `dimension` (D2: `scale` + `aggregation` + `composeScore`) é de **instrumento pontuável**. Um dado
+nominal — serviço executado, motivo, produto — não tem escala: forçá-lo em dimension faria o sistema calcular a
+média de códigos de serviço e devolver um número plausível e sem significado (o padrão que o CLAUDE.md
+§ Postura de Engenharia nomeia).
+
+Restrições do contrato do Arc 12 que fecham o desenho:
+
+- `value` é `z.number().finite()` (`schemas/src/agent-events.ts`) — o código nominal **não cabe** nele.
+- O relatório **não agrupa por tag**: `VALID_GROUP_BY = {category, skill_id, pool_id, agent_type_id}`
+  (`analytics-api/reports_query.py`). Nominal em tag seria gravado e **invisível**.
+- `category` aceita **2–5 segmentos** e a convenção usa 3 (`pool.skill.metric`) → `category_l4` está livre e
+  já vem pré-decomposto no publish.
+
+Portanto:
+
+| Tipo | Forma | Como se lê |
+|---|---|---|
+| **Pontuável** (FCR) | categoria fixa + `value` numérico | `avg_value` do summary **é** a taxa |
+| **Nominal** (serviço, motivo) | folha na **categoria** (`l4`) + `value: 1` | `count` por categoria; multi-select = N eventos |
+
+Ambos ganham série temporal, drill e comparação por versão de skill sem infra nova — inclusive
+`/reports/agent-events/series`, que hoje não tem nenhum chamador.
+
+### D12 — O roteamento roda na TOOL (server-side), não no YAML do skill
+
+Simétrico ao D9. Se o skill passar campo a campo, cada pergunta nova no editor vira edição de skill +
+`set-next` + `promote` — e o formulário deixa de dirigir, que era o ponto do primitivo declarativo. O
+`segment_outcome_record` passa a receber as respostas + as capturas e roteia: disposição canônica → segmento
+(como hoje), capturas → `agent_event`.
+
+**Corolário de governança — a folha nominal vem do `options[].value` do DialogForm.** A regex de `category`
+valida só o *formato*: nada impede `troca_titularidade` e `troca_de_titularidade` coexistirem como duas séries
+que nunca reconciliam. A lista controlada precisa ser o **formulário** (versionado, UI-editável, sem lista
+hardcoded) — e só a tool tem como derivá-la, o que é mais um motivo para o roteamento não morar no YAML.
+
 ## Decisões em aberto
 
+0. **Serviços executados por múltiplos agentes** — num atendimento orquestrado, especialistas (IA ou humanos)
+   executam parte dos serviços. Posição preliminar: **não se consolida dentro do wrap-up** — serviço executado é
+   fato de *(segmento, momento)*, cada agente emite no seu próprio segmento, e "serviços do contato" é a **união
+   sobre os segmentos da sessão** na leitura. Eleva o item Arc 12 `segment_id` a pré-requisito. Detalhe e
+   desdobramento de UI em `TODO.md` § "Wrap-up como fonte de dados".
 1. **Composite de form opcional** (health score) — roll-up por cima das dimensions paralelas; adiado até haver
    requisito. (`DialogDimension.weight` já reservado para isso.)
 2. **`survey_question` reutilizável** (biblioteca compartilhada entre definitions, prevista na spec de surveys) —
