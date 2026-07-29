@@ -115,7 +115,7 @@
 #     http://localhost:5174/contacts/agents
 #
 #   • Eventos — stream unificado de auditoria
-#     GET /reports/events: UNION ALL de sessions/messages/agent_events/
+#     GET /reports/events: UNION ALL de sessions/messages/segments/
 #     agent_pause_intervals/workflow_events. Filtros session_id, pool_id,
 #     channel, event_type com branch pruning por event_type.
 #     http://localhost:5174/contacts/events

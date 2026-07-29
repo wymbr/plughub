@@ -135,6 +135,24 @@ def _to_csv_timeseries(buckets: list[dict]) -> str:
     return buf.getvalue()
 
 
+# ─── E2f: pools internos fora das séries tenant-wide ─────────────────────────
+
+
+def _internal_pools_clause(
+    internal_pools: "frozenset[str] | None", pool_id: str | None = None,
+) -> str:
+    """Cláusula que tira pools INTERNOS (wrap-up destacado) da série.
+
+    Segregação, não supressão: quando o chamador pede UM pool explicitamente
+    (`pool_id`), a cláusula é vazia — a série daquele pool é legítima e é
+    justamente onde o tempo de ACW deve aparecer.
+    """
+    if pool_id or not internal_pools:
+        return ""
+    lst = ", ".join(f"'{p}'" for p in sorted(internal_pools))
+    return f"AND pool_id NOT IN ({lst})"
+
+
 # ─── volume ───────────────────────────────────────────────────────────────────
 
 def _fetch_volume(
@@ -147,9 +165,11 @@ def _fetch_volume(
     breakdown_by: str | None,
     pool_id:    str | None,
     accessible_pools: list[str] | None,
+    internal_pools: "frozenset[str] | None" = None,
 ) -> list[dict]:
     pool_clause = _pool_scope_clause(accessible_pools)
     pool_filter = f"AND pool_id = '{pool_id}'" if pool_id else ""
+    pool_filter = f"{pool_filter} {_internal_pools_clause(internal_pools, pool_id)}".strip()
 
     if breakdown_by:
         sql = f"""
@@ -209,9 +229,12 @@ async def query_volume_timeseries(
     if accessible_pools is not None and not accessible_pools:
         return {"buckets": [], "meta": _meta(iv, since, until, 0)}
 
+    from .reports_query import _internal_pools_for
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         rows = await asyncio.to_thread(
-            _fetch_volume, client, database, tenant_id, since, until, iv, bd, pool_id, accessible_pools
+            _fetch_volume, client, database, tenant_id, since, until, iv, bd, pool_id,
+            accessible_pools, internal_pools,
         )
         buckets = _rows_to_buckets(rows, bd)
         return {
@@ -235,21 +258,30 @@ def _fetch_handle_time(
     breakdown_by: str | None,
     pool_id:    str | None,
     accessible_pools: list[str] | None,
+    internal_pools: "frozenset[str] | None" = None,
 ) -> list[dict]:
     pool_clause = _pool_scope_clause(accessible_pools)
     pool_filter = f"AND pool_id = '{pool_id}'" if pool_id else ""
+    pool_filter = f"{pool_filter} {_internal_pools_clause(internal_pools, pool_id)}".strip()
 
+    # ⚠️ A coluna é `handle_time_ms` (ver `_DDL_SESSIONS`). Até 2026-07-29 esta query
+    # pedia `duration_ms`, que NÃO EXISTE em `sessions` — o ClickHouse levantava
+    # UNKNOWN_IDENTIFIER, o `except` do wrapper engolia e o endpoint devolvia
+    # `buckets: []` com `error: "data_unavailable"`. O gráfico de tempo de
+    # atendimento da aba Análise ficava vazio sem nenhum erro na tela.
+    # (`duration_ms` existe em `segments`, que é outra tabela — provável origem
+    # do engano.)
     if breakdown_by:
         sql = f"""
             SELECT
                 toStartOfInterval(opened_at, toIntervalMinute({interval})) AS bucket,
                 {breakdown_by} AS breakdown_label,
-                avg(duration_ms) AS value
+                avg(handle_time_ms) AS value
             FROM {database}.sessions
             WHERE tenant_id = {{tenant_id:String}}
               AND opened_at >= {{since:String}}
               AND opened_at <  {{until:String}}
-              AND duration_ms > 0
+              AND handle_time_ms > 0
               {pool_clause}
               {pool_filter}
             GROUP BY bucket, breakdown_label
@@ -259,12 +291,12 @@ def _fetch_handle_time(
         sql = f"""
             SELECT
                 toStartOfInterval(opened_at, toIntervalMinute({interval})) AS bucket,
-                avg(duration_ms) AS value
+                avg(handle_time_ms) AS value
             FROM {database}.sessions
             WHERE tenant_id = {{tenant_id:String}}
               AND opened_at >= {{since:String}}
               AND opened_at <  {{until:String}}
-              AND duration_ms > 0
+              AND handle_time_ms > 0
               {pool_clause}
               {pool_filter}
             GROUP BY bucket
@@ -298,9 +330,12 @@ async def query_handle_time_timeseries(
     if accessible_pools is not None and not accessible_pools:
         return {"buckets": [], "meta": _meta(iv, since, until, 0)}
 
+    from .reports_query import _internal_pools_for
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         rows = await asyncio.to_thread(
-            _fetch_handle_time, client, database, tenant_id, since, until, iv, bd, pool_id, accessible_pools
+            _fetch_handle_time, client, database, tenant_id, since, until, iv, bd, pool_id,
+            accessible_pools, internal_pools,
         )
         buckets = _rows_to_buckets(rows, bd)
         # meta.total = overall avg across all buckets (weighted would be better but avg is fine here)

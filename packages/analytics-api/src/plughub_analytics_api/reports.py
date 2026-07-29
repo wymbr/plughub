@@ -836,7 +836,9 @@ async def report_timeseries_handle_time(
     """
     Average handle time (ms) bucketed by time interval.
 
-    buckets[].value = avg duration_ms of sessions opened in the bucket window.
+    buckets[].value = avg handle_time_ms of sessions opened in the bucket window.
+    (Era `duration_ms` até 2026-07-29 — coluna de `segments`, inexistente em
+    `sessions`; a query falhava mudo e o gráfico ficava vazio. Ver CHANGELOG.)
     meta.total = overall avg across all buckets.
     Tip: divide by 60000 in the UI to display minutes.
     """

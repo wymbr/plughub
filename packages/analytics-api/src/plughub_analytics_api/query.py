@@ -58,17 +58,34 @@ async def get_metrics_24h(client: Any, database: str, tenant_id: str) -> dict:
       sentiment:      { avg_score, by_category, sample_count }
     """
     db = database
+    # E2f — este bloco soma TENANT-WIDE (sem GROUP BY pool), então é onde a sessão
+    # de wrap-up mais distorce: infla `total` e dilui `avg_handle_ms` (para sessão
+    # webhook o handle time é wall-clock, e o item fica parado na inbox até o claim).
+    from .reports_query import _internal_pools_for
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
-            _fetch_metrics_24h, client, db, tenant_id
+            _fetch_metrics_24h, client, db, tenant_id, internal_pools
         )
     except Exception as exc:
         logger.warning("get_metrics_24h failed tenant=%s: %s", tenant_id, exc)
         return _empty_metrics()
 
 
-def _fetch_metrics_24h(client: Any, db: str, tenant_id: str) -> dict:
+def _fetch_metrics_24h(
+    client: Any, db: str, tenant_id: str,
+    internal_pools: "frozenset[str] | None" = None,
+) -> dict:
     since = _ch_24h_ago()
+
+    # E2f — escopo de contato. Reusa o helper único do reports_query para não
+    # existir uma segunda definição de "isto conta como contato".
+    from .reports_query import _apply_contact_scope
+    sess_conds = [
+        "tenant_id = {tenant_id:String}",
+        f"opened_at >= '{since}'",
+    ]
+    _apply_contact_scope(sess_conds, internal_pools)
 
     # ── sessions ──────────────────────────────────────────────────────────────
     sess_rows = _run_query(client, f"""
@@ -79,8 +96,7 @@ def _fetch_metrics_24h(client: Any, db: str, tenant_id: str) -> dict:
             outcome,
             close_reason
         FROM {db}.sessions
-        WHERE tenant_id = {{tenant_id:String}}
-          AND opened_at >= '{since}'
+        WHERE {' AND '.join(sess_conds)}
         GROUP BY channel, outcome, close_reason
     """, {"tenant_id": tenant_id})
 

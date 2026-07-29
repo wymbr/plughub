@@ -195,10 +195,17 @@ async def customer_history(
       duration_ms, outcome, close_reason
     """
     store = request.app.state.store
+    # E2f — pools internos (wrap-up destacado) fora do histórico do cliente. Esta é
+    # a superfície mais sensível do problema: o wrap-up herda o `customer_id` da
+    # origem, então cada atendimento real gerava um "contato" a mais na lista que o
+    # atendente vê durante o atendimento seguinte — e que não tem conversa nenhuma.
+    from .reports_query import _internal_pools_for
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         rows = await asyncio.to_thread(
             _fetch_customer_history,
             store.new_client(), store._database, tenant_id, customer_id, limit,
+            internal_pools,
         )
         return JSONResponse(content=rows)
     except Exception as exc:
@@ -211,12 +218,20 @@ async def customer_history(
 
 def _fetch_customer_history(
     client: Any, db: str, tenant_id: str, customer_id: str, limit: int,
+    internal_pools: "frozenset[str] | None" = None,
 ) -> list[dict]:
     """
     Queries ClickHouse for closed sessions belonging to the given customer,
     ordered by opened_at DESC.  Uses FINAL to force ReplacingMergeTree dedup
     so we don't return stale open-row duplicates that haven't merged yet.
+
+    E2f: sessions from INTERNAL pools (detached wrap-up) are excluded — they carry
+    the origin contact's `customer_id` but are not contacts of the customer.
     """
+    internal_clause = ""
+    if internal_pools:
+        lst = ", ".join(f"'{p}'" for p in sorted(internal_pools))
+        internal_clause = f"AND pool_id NOT IN ({lst})"
     result = client.query(f"""
         SELECT
             session_id,
@@ -232,6 +247,7 @@ def _fetch_customer_history(
         WHERE tenant_id   = {{tenant_id:String}}
           AND customer_id = {{customer_id:String}}
           AND closed_at IS NOT NULL
+          {internal_clause}
         ORDER BY opened_at DESC
         LIMIT {limit}
     """, parameters={"tenant_id": tenant_id, "customer_id": customer_id})

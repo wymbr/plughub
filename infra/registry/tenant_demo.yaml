@@ -124,6 +124,10 @@ pools:
   # manualmente p/ teste (smoke_segment_outcome.sh).
   - pool_id: wrapup_detached_ia
     agent_kind: ai
+    # E2f: trabalho INTERNO — a sessão de wrap-up não é um contato de cliente. Sai
+    # das contagens de contato e das médias de TMA no analytics; as métricas DESTE
+    # pool continuam valendo (o TMA daqui é o tempo de ACW).
+    purpose: internal
     # max_concurrent >= 2: o workflow suspende no delegate SEGURANDO a instância; o
     # resume (submit) precisa de outra instância p/ rodar o on_resume — com 1 só,
     # deadlock (o resume nunca roda). Folga p/ N wrap-ups suspensos + seus resumes.

@@ -287,6 +287,57 @@ def _apply_origin_scope(
     conditions.append(f"{col} IN ({lst})")
 
 
+# ─── E2f: o que conta como CONTATO de cliente ────────────────────────────────
+
+
+def _apply_contact_scope(
+    conditions: list[str],
+    internal_pools: "frozenset[str] | set[str] | None" = None,
+    alias: str = "",
+) -> None:
+    """Mutates *conditions* in-place com a regra INTEIRA de "isto é um contato".
+
+    Nomeia num lugar só duas exclusões que respondem à mesma pergunta e viviam
+    separadas (uma copiada literalmente em 3 queries, a outra inexistente):
+
+    1. **Sessão de hook sem canal físico** (NPS inline, especialista de conferência).
+       Não pode ser `channel != ''` sozinho: `parse_routed` escreve `channel=''` e,
+       no ReplacingMergeTree, essa linha sobrescreve a do `parse_inbound` — sessões
+       ATIVAS sumiriam logo após o roteamento. Por isso ativas passam sempre; só as
+       FECHADAS precisam de canal (as de hook fecham com `channel=''`).
+
+    2. **Sessão de pool INTERNO** (E2f) — o wrap-up destacado nasce como sessão
+       própria de canal `webhook`, com `customer_id` herdado do contato de origem.
+       `channel` não é vazio, então a regra (1) não a pega. O discriminador é o
+       POOL (`pools.purpose == "internal"`, resolvido pelo `pools_client`).
+
+    **Segregação, não supressão:** relatórios AGRUPADOS POR POOL não devem chamar
+    este helper — lá o pool interno é uma linha legítima e desejada (o TMA do pool
+    de wrap-up É o tempo de ACW). O helper serve os totais de ATENDIMENTO e as
+    listas de contato do cliente.
+
+    `internal_pools` vem do `pools_client.fetch_internal_pools` (async, cache 60s,
+    degradação barulhenta). Vazio/None ⇒ só a regra (1) — o helper nunca inventa
+    exclusão, e o cliente é quem loga quando não conseguiu resolver o conjunto.
+    """
+    ch  = f"{alias}channel" if alias else "channel"
+    cl  = f"{alias}closed_at" if alias else "closed_at"
+    conditions.append(f"({ch} != '' OR {cl} IS NULL)")
+    if internal_pools:
+        col = f"{alias}pool_id" if alias else "pool_id"
+        # pool_ids vêm do agent-registry (não do request) — seguro inlinear.
+        lst = ", ".join(f"'{p}'" for p in sorted(internal_pools))
+        conditions.append(f"{col} NOT IN ({lst})")
+
+
+async def _internal_pools_for(tenant_id: str) -> frozenset[str]:
+    """Conjunto de pools internos do tenant (E2f). Ver `pools_client` p/ degradação."""
+    from .config import get_settings
+    from .pools_client import fetch_internal_pools
+
+    return await fetch_internal_pools(get_settings().agent_registry_url, tenant_id)
+
+
 # ─── /reports/sessions ────────────────────────────────────────────────────────
 
 async def query_sessions_report(
@@ -325,6 +376,7 @@ async def query_sessions_report(
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
     if supervised_agent_types is not None and not supervised_agent_types:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
             _fetch_sessions, client, database, tenant_id, since, until,
@@ -332,6 +384,7 @@ async def query_sessions_report(
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
             ani, dnis, status, origin, root_session_id, spawned_from_root,
+            internal_pools,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -352,22 +405,21 @@ def _fetch_sessions(
     origin: "str | list[str]" = "live",
     root_session_id: str | None = None,
     spawned_from_root: str | None = None,
+    internal_pools: "frozenset[str] | None" = None,
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
         f"s.opened_at >= '{since}'",
         f"s.opened_at < '{until}'",
-        # Exclude completed hook-agent sessions (wrapup_ia, nps_ia, etc.) that have no
-        # physical channel — these are synthetic conferences created by orchestrator-bridge.
-        # We CANNOT use `s.channel != ''` alone because parse_routed writes channel=''
-        # which overwrites the parse_inbound row in ReplacingMergeTree, causing active
-        # sessions to vanish right after routing. Instead:
-        #   - Active sessions (closed_at IS NULL) are always shown — routing may have
-        #     zeroed the channel column but the session is genuinely in progress.
-        #   - Closed sessions must have channel != '' — hook sessions close with channel=''
-        #     (their synthetic inbound event carries no channel) so they are excluded here.
-        "(s.channel != '' OR s.closed_at IS NULL)",
     ]
+    # E2f — o que conta como contato: sessão de hook sem canal + sessão de pool
+    # interno (wrap-up destacado) ficam de fora. Ver `_apply_contact_scope`.
+    #
+    # EXCETO no lookup explícito por `session_id`: o escopo filtra LISTAGENS, não
+    # uma busca por id. Quem pede uma sessão pelo id (drill, deep-link, suporte)
+    # está pedindo AQUELA sessão — devolver vazio seria esconder o que foi pedido.
+    if not session_id:
+        _apply_contact_scope(conditions, internal_pools, alias="s.")
     params: dict = {"tenant_id": tenant_id}
 
     if session_id:
@@ -703,11 +755,12 @@ async def query_journeys_report(
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
         return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
             _fetch_journeys, client, database, tenant_id, since, until,
             channel, pool_id, customer_id, root_session_id, significant_only,
-            accessible_pools, origin, page, page_size,
+            accessible_pools, origin, page, page_size, internal_pools,
         )
     except Exception as exc:
         logger.warning("query_journeys_report failed tenant=%s: %s", tenant_id, exc)
@@ -721,6 +774,7 @@ def _fetch_journeys(
     significant_only: bool,
     accessible_pools: list[str] | None, origin: "str | list[str]",
     page: int, page_size: int,
+    internal_pools: "frozenset[str] | None" = None,
 ) -> dict:
     # Journey J3 — mapa union-find (raiz→canônica). Computado CEDO porque a Fatia 2
     # (fetch de UMA journey por deep-link ao L2) resolve o root pedido ao canônico e
@@ -728,11 +782,11 @@ def _fetch_journeys(
     resolved = _journey_resolved_map(client, db, tenant_id)
     jexpr    = _journey_group_expr(resolved)
 
-    conditions = [
-        "s.tenant_id = {tenant_id:String}",
-        # Exclui sessões-hook sintéticas fechadas (mesma regra do _fetch_sessions).
-        "(s.channel != '' OR s.closed_at IS NULL)",
-    ]
+    conditions = ["s.tenant_id = {tenant_id:String}"]
+    # E2f — mesma regra do _fetch_sessions. O wrap-up destacado herda o
+    # `root_session_id` da origem, então sem isto ele entraria na journey como mais
+    # uma sessão do processo e inflaria a contagem.
+    _apply_contact_scope(conditions, internal_pools, alias="s.")
     params: dict = {"tenant_id": tenant_id}
 
     # Fatia 2 — fetch DIRECIONADO de uma journey (o L2 abre por URL sem a JourneyRow
@@ -2208,9 +2262,11 @@ async def query_customer_360(
     `session_id`, então o vínculo é sempre via subquery no conjunto de sessões do cliente.
     `origin='live'` por default (isolamento de substrato) — a superfície é operacional.
     """
+    internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
             _fetch_customer_360, client, database, tenant_id, customer_id, origin,
+            internal_pools,
         )
     except Exception as exc:
         logger.warning("query_customer_360 failed tenant=%s customer=%s: %s",
@@ -2222,6 +2278,7 @@ async def query_customer_360(
 def _fetch_customer_360(
     client: Any, db: str, tenant_id: str, customer_id: str,
     origin: "str | list[str]",
+    internal_pools: "frozenset[str] | None" = None,
 ) -> dict:
     params = {"tenant_id": tenant_id, "customer_id": customer_id}
 
@@ -2236,6 +2293,11 @@ def _fetch_customer_360(
     )
 
     # ── contacts ──────────────────────────────────────────────────────────────
+    # E2f: o bloco de contatos usa o escopo de CONTATO (o subquery acima, usado
+    # pelos joins de qualidade/sinal, segue com todas as sessões do cliente — uma
+    # avaliação do segmento de wrap-up continua sendo do cliente).
+    contact_conds = list(sess_conds)
+    _apply_contact_scope(contact_conds, internal_pools)
     contacts: dict | None = None
     try:
         r = client.query(f"""
@@ -2246,8 +2308,7 @@ def _fetch_customer_360(
                 arrayFilter(x -> x != '', groupUniqArray(channel)) AS channels,
                 max(opened_at)                                   AS last_contact_at
             FROM {db}.sessions FINAL
-            WHERE {' AND '.join(sess_conds)}
-              AND (channel != '' OR closed_at IS NULL)
+            WHERE {' AND '.join(contact_conds)}
         """, parameters=params)
         rows = _rows_to_dicts(r)
         contacts = rows[0] if rows else None

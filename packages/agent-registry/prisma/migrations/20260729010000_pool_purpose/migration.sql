@@ -1,0 +1,34 @@
+-- E2f — `pools.purpose`: este pool atende CONTATO de cliente ou trabalho INTERNO?
+--
+--   "contact"  (default, não-regressivo) — voltado ao cliente. Conta como contato,
+--              alimenta TMA/SLA de atendimento.
+--   "internal" — trabalho interno criado pela própria plataforma: o wrap-up
+--              destacado, hooks de finalização e o que vier depois.
+--
+-- CONTEXTO. Desde o arco de detach, o wrap-up destacado nasce como uma SESSÃO
+-- própria (canal `webhook`, `customer_id` herdado do contato de origem). Ela não
+-- carrega nenhum campo que a distinga de um workflow de negócio legítimo, e por
+-- isso entrava nas métricas como se fosse um contato: volume quase dobrado nos
+-- pools humanos, TMA diluído por itens que ficam parados na inbox (para sessão
+-- webhook o handle time é wall-clock) e um contato fantasma no Histórico do
+-- Cliente 360 — que é chaveado por `customer_id`, não por pool.
+--
+-- POR QUE NO POOL, e não um campo na sessão. O discriminador já existia: a sessão
+-- de wrap-up é roteada a um POOL diferente do pool humano, e tanto `sessions`
+-- quanto `segments` já carregam `pool_id`. Classificar o pool (a) dispensa coluna
+-- nova, plumbing no bridge e o carimbo duplo evento+ContextStore, (b) é RETROATIVO
+-- por construção — o histórico já gravado se corrige sozinho, coisa que um campo
+-- por sessão nunca conseguiria (não há backfill), e (c) permite excluir da
+-- materialized view `mv_agent_performance_daily` sem recriá-la, porque ela já é
+-- chaveada por `pool_id`.
+--
+-- É SEGREGAÇÃO, NÃO SUPRESSÃO. O pool interno mantém as métricas dele: o TMA do
+-- pool de wrap-up É o tempo de ACW, e a fila dele é o backlog de pós-atendimento.
+-- O que muda é só parar de somar isso no total de atendimento.
+--
+-- Binário de propósito: QUAL trabalho interno é, o `pool_id` já diz. Um enum com
+-- `wrapup`/`survey`/`internal` gravaria granularidade que outro campo já carrega —
+-- o erro que o `acw_gate` cometeu.
+
+ALTER TABLE "pools"
+  ADD COLUMN IF NOT EXISTS "purpose" TEXT NOT NULL DEFAULT 'contact';

@@ -19,6 +19,7 @@ import pytest
 from ..reports_query import (
     _apply_pool_scope,
     _apply_origin_scope,
+    _apply_contact_scope,
     _clamp_page_size,
     _events_sql_branches,
     _to_csv,
@@ -1056,6 +1057,53 @@ class TestApplyOriginScope:
         conds: list = []
         _apply_origin_scope(conds, "live", alias="s.")
         assert conds == ["s.origin IN ('live')"]
+
+
+# ── E2f — escopo de CONTATO (sessão de hook sem canal + pool interno) ─────────
+
+class TestApplyContactScope:
+    """Unit tests do _apply_contact_scope (puro, sem async).
+
+    A regra tem duas metades que respondem à MESMA pergunta ("isto é um contato?")
+    e viviam separadas: a de hook-sem-canal (copiada em 3 queries) e a de pool
+    interno (E2f, inexistente até então).
+    """
+
+    def test_hook_clause_always_present(self):
+        conds: list = []
+        _apply_contact_scope(conds)
+        assert conds == ["(channel != '' OR closed_at IS NULL)"]
+
+    def test_no_internal_pools_adds_nothing_extra(self):
+        """Sem conjunto resolvido o helper NÃO inventa exclusão — quem loga a
+        degradação é o pools_client, não este helper."""
+        conds: list = []
+        _apply_contact_scope(conds, frozenset())
+        assert len(conds) == 1
+
+    def test_internal_pools_excluded(self):
+        conds: list = []
+        _apply_contact_scope(conds, frozenset({"wrapup_detached_ia"}))
+        assert conds[1] == "pool_id NOT IN ('wrapup_detached_ia')"
+
+    def test_internal_pools_sorted_for_determinism(self):
+        conds: list = []
+        _apply_contact_scope(conds, frozenset({"z_pool", "a_pool"}))
+        assert conds[1] == "pool_id NOT IN ('a_pool', 'z_pool')"
+
+    def test_alias_prefix_applies_to_all_columns(self):
+        conds: list = []
+        _apply_contact_scope(conds, frozenset({"wrapup_detached_ia"}), alias="s.")
+        assert conds[0] == "(s.channel != '' OR s.closed_at IS NULL)"
+        assert conds[1] == "s.pool_id NOT IN ('wrapup_detached_ia')"
+
+    def test_active_sessions_survive_empty_channel(self):
+        """Guarda contra a regressão que o comentário do _fetch_sessions descreve:
+        parse_routed escreve channel='' e sobrescreve a linha do inbound no
+        ReplacingMergeTree — sessão ATIVA some se a condição for só channel != ''."""
+        conds: list = []
+        _apply_contact_scope(conds)
+        assert "closed_at IS NULL" in conds[0]
 
 
 class TestOriginScopeInReports:
