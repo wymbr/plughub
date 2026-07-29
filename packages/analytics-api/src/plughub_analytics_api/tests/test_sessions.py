@@ -389,13 +389,18 @@ class TestFetchCustomerHistory:
 
     def _row(self, session_id="sess_001", channel="webchat", pool_id="pool_a",
              opened_at=None, closed_at=None, handle_time_ms=120_000,
-             outcome="resolved", close_reason="flow_complete"):
+             outcome="resolved", close_reason="flow_complete",
+             root_session_id=None):
         if opened_at is None:
             opened_at = datetime(2024, 3, 10, 9, 0, 0, tzinfo=timezone.utc)
         if closed_at is None:
             closed_at = datetime(2024, 3, 10, 9, 2, 0, tzinfo=timezone.utc)
+        # Journey J1: root_session_id is never null — a standalone contact is its
+        # own root (auto-mint = self), so that is the default here.
+        if root_session_id is None:
+            root_session_id = session_id
         return (session_id, channel, pool_id, opened_at, closed_at,
-                handle_time_ms, outcome, close_reason)
+                handle_time_ms, outcome, close_reason, root_session_id)
 
     def test_returns_list_of_dicts(self):
         client = self._make_client([self._row()])
@@ -429,7 +434,7 @@ class TestFetchCustomerHistory:
         # opened_at defaults to datetime in _row, override properly
         result_mock = MagicMock()
         result_mock.result_rows = [
-            ("sess_001", "webchat", "pool_a", None, None, None, "resolved", "flow_complete")
+            ("sess_001", "webchat", "pool_a", None, None, None, "resolved", "flow_complete", "sess_001")
         ]
         client = MagicMock()
         client.query.return_value = result_mock
@@ -464,6 +469,20 @@ class TestFetchCustomerHistory:
         assert result[0]["outcome"] is None
         assert result[0]["close_reason"] is None
 
+    def test_root_session_id_standalone_contact_is_its_own_root(self):
+        client = self._make_client([self._row(session_id="sess_X")])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["root_session_id"] == "sess_X"
+
+    def test_root_session_id_member_of_process(self):
+        # HJ: root != session_id ⇒ the contact belongs to a multi-session process
+        # and the UI renders the PRC- link. This assertion is what was missing when
+        # the J1 column was added and the fixtures drifted.
+        client = self._make_client([self._row(session_id="sess_B", root_session_id="sess_A")])
+        result = _fetch_customer_history(client, "analytics", "tenant_test", "cust_001", 10)
+        assert result[0]["root_session_id"] == "sess_A"
+        assert result[0]["session_id"] == "sess_B"
+
 
 # ─── TestCustomerHistoryEndpoint ──────────────────────────────────────────────
 
@@ -491,12 +510,13 @@ class TestCustomerHistoryEndpoint:
         app.state.redis = redis
         return app
 
-    def _ch_row(self, session_id="sess_001"):
+    def _ch_row(self, session_id="sess_001", root_session_id=None):
         return (
             session_id, "webchat", "pool_a",
             datetime(2024, 3, 10, 9, 0, 0, tzinfo=timezone.utc),
             datetime(2024, 3, 10, 9, 2, 0, tzinfo=timezone.utc),
             120_000, "resolved", "flow_complete",
+            root_session_id or session_id,
         )
 
     def test_returns_200_with_history(self):
@@ -511,6 +531,7 @@ class TestCustomerHistoryEndpoint:
         assert data[0]["channel"] == "webchat"
         assert data[0]["outcome"] == "resolved"
         assert data[0]["duration_ms"] == 120_000
+        assert data[0]["root_session_id"] == "sess_001"
 
     def test_returns_200_empty_when_no_history(self):
         app = self._make_app(ch_rows=[])

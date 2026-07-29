@@ -23,7 +23,7 @@ O `agent_event` é o mecanismo de telemetria de negócio do PlugHub. Em vez de c
 > | tool `agent_event` (singular) | **este arco** — porta única do eixo de marcação |
 > | tabela `agent_business_events` | **este arco** — onde a marcação é gravada |
 > | rotas `/reports/agent-events/*` | **este arco** — leem `agent_business_events` |
-> | ~~tabela `agent_events`~~ | **NÃO é este arco** — lifecycle derivado (`routed`/`agent_done`), descontinuada em 2026-07-28 por duplicar `segments` |
+> | ~~tabela `agent_events`~~ | **NÃO é este arco** — lifecycle derivado (`routed`/`agent_done`), descontinuada em 2026-07-28 por duplicar `segments`; **dropada em 2026-07-29** (fatia 2) |
 >
 > A colisão já induziu erro na documentação do próprio projeto. Regra para decidir:
 > **o eixo de marcação tem porta única — a tool `agent_event`.** O que não passa por ela

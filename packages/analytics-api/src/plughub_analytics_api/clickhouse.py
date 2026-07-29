@@ -6,7 +6,6 @@ Tables, all in database `plughub`:
 
   sessions               — session lifecycle (opened, closed, channel, pool, durations)
   queue_events           — contact queued / dequeued / abandoned / position_updated
-  agent_events           — contact routed + agent_done (outcome, handle time)
   messages               — messages published to the canonical stream
   usage_events           — metering events (passthrough from usage.events Kafka topic)
   sentiment_events       — per-turn sentiment scores from AI Gateway
@@ -147,30 +146,16 @@ ORDER BY (tenant_id, event_id)
 # com as rotas `/reports/agent-events/*` (que são Arc 12) é histórica e já induziu
 # erro na própria documentação.
 #
-# O DDL fica por enquanto para manter o histórico consultável — a auditoria cobre o
-# código, mas não alcança consulta ad-hoc (Metabase manual, query direta). DROP +
-# limpeza de grants/row policies = fatia 2. Ver CHANGELOG 2026-07-28 e TODO.md.
-_DDL_AGENT_EVENTS = """
-CREATE TABLE IF NOT EXISTS {db}.agent_events
-(
-    event_id       String,
-    tenant_id      String,
-    session_id     String,
-    agent_type_id  String,
-    pool_id        String,
-    instance_id    String,
-    event_type     String,
-    outcome        Nullable(String),
-    handoff_reason Nullable(String),
-    handle_time_ms Nullable(Int64),
-    routing_mode   Nullable(String),
-    timestamp      DateTime64(3, 'UTC'),
-    date           Date
-)
-ENGINE = ReplacingMergeTree()
-PARTITION BY toYYYYMM(date)
-ORDER BY (tenant_id, event_id)
-"""
+# FATIA 2 (2026-07-29) — DROP. O CREATE saiu de `_ALL_DDL` e virou este DROP
+# idempotente em `_MIGRATIONS`, mesmo padrão do `_DDL_SEGMENTS_DROP_NPS`. A fatia 1
+# deixou o DDL de pé por um ciclo para manter o histórico consultável enquanto se
+# confirmava que ninguém a lia por fora do código (card ad-hoc no Metabase, query
+# direta). Confirmado → a tabela sai fisicamente.
+#
+# ⚠️ NÃO confundir com `agent_business_events` (Arc 12) nem com as rotas
+# `/reports/agent-events/*`, que são OUTRO eixo e ficam. A semelhança de nome já
+# induziu erro na documentação.
+_DDL_AGENT_EVENTS_DROP = "DROP TABLE IF EXISTS {db}.agent_events"
 
 _DDL_MESSAGES = """
 CREATE TABLE IF NOT EXISTS {db}.messages
@@ -960,7 +945,6 @@ _ALL_DDL = [
     _DDL_SESSIONS,
     _DDL_JOURNEY_ALIASES,
     _DDL_QUEUE_EVENTS,
-    _DDL_AGENT_EVENTS,
     _DDL_MESSAGES,
     _DDL_USAGE_EVENTS,
     _DDL_SENTIMENT_EVENTS,
@@ -1015,6 +999,7 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS,
     _DDL_MESSAGES_MIGRATE_ORIGIN_CLASS,
     _DDL_SESSION_SIGNAL_MIGRATE_SCALE,    # Customer Voice: escala carimbada no sinal (top-box)
+    _DDL_AGENT_EVENTS_DROP,               # fatia 2: DROP agent_events (substrato derivado → segments)
 ]
 
 
@@ -1227,7 +1212,8 @@ class AnalyticsStore:
     # agent_events — caminho de escrita REMOVIDO (2026-07-28).
     # `_AGENT_COLS` / `insert_agent_event` / `_agent_row` formavam uma cadeia cujo
     # único ponto de entrada era o dispatch do consumer, que saiu junto com os dois
-    # parsers. Ver o comentário sobre `_DDL_AGENT_EVENTS` no topo deste arquivo.
+    # parsers. A tabela foi dropada na fatia 2 (2026-07-29) — ver
+    # `_DDL_AGENT_EVENTS_DROP` no topo deste arquivo.
 
     # messages
 

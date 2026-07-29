@@ -92,8 +92,8 @@ Métricas e fonte (ClickHouse):
   mini-fase 1b: tabela `agent_login_intervals` (login→logout, espelhando
   `agent_pause_intervals`) + handler no consumer + endpoint. Eventos já são publicados pelo
   mcp-server (`agent_login`/`agent_logout`), só não são consumidos.
-- **Qualidade** — `resolution_rate`, `escalation_rate`, `handoff_rate` (`agent_events` /
-  `segments.outcome`); **score de avaliação** (`evaluation_results`, Arc 6); **sentimento**
+- **Qualidade** — `resolution_rate`, `escalation_rate`, `handoff_rate`
+  (`segments.outcome`); **score de avaliação** (`evaluation_results`, Arc 6); **sentimento**
   médio das sessões do agente (`sentiment_events`).
 - **Performance score** (Arc 7d) — `resolution_rate × (1 − escalation_rate)`.
 
@@ -162,7 +162,7 @@ Gap de endpoint: nenhum dos acima é exposto analiticamente. Endpoints novos sug
 
 `sessions` (volume, wait/handle time, outcome, channel, pool), `segments` (participação por
 agente: role, duração, outcome, handoff), `queue_events` (fila: posição, espera estimada,
-agentes disponíveis, abandono), `agent_events` (routed + agent_done), `agent_pause_intervals`
+agentes disponíveis, abandono), `agent_pause_intervals`
 (Arc 8), `participation_intervals` (janelas de participação — concorrência), `sentiment_events`,
 `evaluation_results`/`evaluation_events` (Arc 6), `usage_events` (metering por dimensão),
 `agent_business_events` (Arc 12), `mv_agent_performance_daily`, `mv_segment_summary`.

@@ -3,15 +3,17 @@
 -- Executar como superusuário no ClickHouse após o schema existir.
 --
 -- Tabelas protegidas (database `plughub`):
---   sessions, segments, queue_events, agent_events, messages, usage_events, sentiment_events
+--   sessions, segments, queue_events, messages, usage_events, sentiment_events
 --
 -- ⚠️ GRANT e ROW POLICY andam SEMPRE juntos. Os cards do Metabase não filtram
 -- `tenant_id` no SQL (ver infra/metabase/setup.py) — o isolamento é 100% das row
 -- policies. Conceder SELECT numa tabela sem criar a policy correspondente vaza os
 -- dados de TODOS os tenants para dentro do dashboard de cada um.
 --
--- `agent_events` está descontinuada (2026-07-28) e não recebe mais escrita; os
--- GRANT/policies dela saem junto com o DROP (fatia 2, ver TODO.md).
+-- `agent_events` foi dropada (fatia 2, 2026-07-29): GRANT e ROW POLICY dela saíram
+-- deste arquivo. O DROP TABLE remove as row policies presas à tabela; o GRANT fica
+-- inerte (aponta para tabela inexistente). Conferir com a query de verificação no
+-- fim do arquivo. Não confundir com `agent_business_events` (Arc 12), que fica.
 --
 -- Uso:
 --   clickhouse-client -h localhost -u plughub --password plughub \
@@ -42,7 +44,6 @@ CREATE USER IF NOT EXISTS tenant_telco
 GRANT SELECT ON plughub.sessions         TO tenant_telco;
 GRANT SELECT ON plughub.segments         TO tenant_telco;
 GRANT SELECT ON plughub.queue_events     TO tenant_telco;
-GRANT SELECT ON plughub.agent_events     TO tenant_telco;
 GRANT SELECT ON plughub.messages         TO tenant_telco;
 GRANT SELECT ON plughub.usage_events     TO tenant_telco;
 GRANT SELECT ON plughub.sentiment_events TO tenant_telco;
@@ -55,9 +56,6 @@ CREATE ROW POLICY IF NOT EXISTS tenant_telco_segments
 
 CREATE ROW POLICY IF NOT EXISTS tenant_telco_queue_events
     ON plughub.queue_events FOR SELECT USING tenant_id = 'tenant_telco' TO tenant_telco;
-
-CREATE ROW POLICY IF NOT EXISTS tenant_telco_agent_events
-    ON plughub.agent_events FOR SELECT USING tenant_id = 'tenant_telco' TO tenant_telco;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_telco_messages
     ON plughub.messages FOR SELECT USING tenant_id = 'tenant_telco' TO tenant_telco;
@@ -80,7 +78,6 @@ CREATE USER IF NOT EXISTS tenant_bank
 GRANT SELECT ON plughub.sessions         TO tenant_bank;
 GRANT SELECT ON plughub.segments         TO tenant_bank;
 GRANT SELECT ON plughub.queue_events     TO tenant_bank;
-GRANT SELECT ON plughub.agent_events     TO tenant_bank;
 GRANT SELECT ON plughub.messages         TO tenant_bank;
 GRANT SELECT ON plughub.usage_events     TO tenant_bank;
 GRANT SELECT ON plughub.sentiment_events TO tenant_bank;
@@ -93,9 +90,6 @@ CREATE ROW POLICY IF NOT EXISTS tenant_bank_segments
 
 CREATE ROW POLICY IF NOT EXISTS tenant_bank_queue_events
     ON plughub.queue_events FOR SELECT USING tenant_id = 'tenant_bank' TO tenant_bank;
-
-CREATE ROW POLICY IF NOT EXISTS tenant_bank_agent_events
-    ON plughub.agent_events FOR SELECT USING tenant_id = 'tenant_bank' TO tenant_bank;
 
 CREATE ROW POLICY IF NOT EXISTS tenant_bank_messages
     ON plughub.messages FOR SELECT USING tenant_id = 'tenant_bank' TO tenant_bank;
