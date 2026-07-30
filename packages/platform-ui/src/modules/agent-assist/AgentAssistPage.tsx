@@ -33,6 +33,7 @@ import { Clock, WifiOff } from "lucide-react";
 
 import { ActiveTab, ClosePayload, ResponseTimer, ChatMessage } from "./types";
 import { useAgentAssist, aggregateStatus } from "./AgentAssistContext";
+import { poolDisplayLabel }                from "./poolLabel";
 import { useSupervisorState }              from "./hooks/useSupervisorState";
 import { useSupervisorCapabilities }       from "./hooks/useSupervisorCapabilities";
 import { useCopilotState }                 from "./hooks/useCopilotState";
@@ -145,6 +146,12 @@ export const AgentAssistPage: React.FC = () => {
   const atCapacity    = contacts.size >= maxConcurrent;
   const poolSlaMap: Record<string, number | null> = {};
   for (const p of availablePools) poolSlaMap[p.pool_id] = p.sla_target_ms ?? null;
+  // ADR internal-work-queue (D3) — o espelho `-int` é OCULTO onde se ESCOLHE e
+  // VISÍVEL onde se trabalha/mede. `availablePools` mantém o espelho (a inbox e o
+  // poolSlaMap precisam dele); só o seletor de presença o esconde, porque entrar no
+  // pai já entra na fila interna (handleTogglePool) — oferecê-lo como opção separada
+  // sugeriria uma escolha que não existe.
+  const selectablePools = availablePools.filter(p => !p.mirror_of);
   // Pools pull ativos (accessible ∩ dispatch_mode=pull). Se houver, a inbox divide
   // a coluna esquerda em duas metades (atendidos × fila pull) em vez de ficar no rodapé.
   const pullPoolIds = activePools.filter(p =>
@@ -628,8 +635,8 @@ export const AgentAssistPage: React.FC = () => {
         sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
         contactCount={contacts.size}
-        pools={availablePools}
-        activePools={activePools}
+        pools={selectablePools}
+        activePools={activePools.filter(p => !p.endsWith("-int"))}
         poolStatuses={statuses}
         onTogglePool={handleTogglePool}
         onJoinAll={handleJoinAll}
@@ -661,7 +668,13 @@ export const AgentAssistPage: React.FC = () => {
             {(!selected && previewSessionId) ? (
               <div className="flex items-center gap-2 px-4 w-full">
                 <span className="text-xs font-mono text-muted truncate">{previewSessionId.slice(0, 8)}</span>
-                {previewPoolId && <span className="text-2xs text-muted-light">· {previewPoolId}</span>}
+                {/* D3 — mesmo rótulo da fila: o item de wrap-up é "Pós-atendimento —
+                    {origem}" aqui também. Antes esta barra mostrava o id cru
+                    (`retencao_humano-int`), então o MESMO item tinha dois nomes na
+                    mesma tela — e o da barra vazava uma convenção de construção. */}
+                {previewPoolId && (
+                  <span className="text-2xs text-muted-light">· {poolDisplayLabel(previewPoolId, t)}</span>
+                )}
                 <div className="flex-1" />
                 <button
                   type="button"

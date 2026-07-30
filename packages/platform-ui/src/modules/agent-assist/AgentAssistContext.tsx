@@ -41,6 +41,7 @@ import {
 } from "./types";
 import { useMultiPoolWebSocket } from "./hooks/useMultiPoolWebSocket";
 import type { TaggedWsEvent }    from "./hooks/useMultiPoolWebSocket";
+import { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf } from "./poolLabel";
 
 const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 
@@ -84,6 +85,14 @@ export function aggregateStatus(
   return "disconnected";
 }
 
+/**
+ * ADR adr-internal-work-queue-author-bound — sufixo reservado do espelho de fila interna.
+ * A regra mora em `poolLabel.ts` (dono único: contexto, inbox e barra do contato liam três
+ * cópias do mesmo sufixo e uma delas divergiu). Re-exportado aqui por compatibilidade dos
+ * call sites existentes.
+ */
+export { INTERNAL_QUEUE_SUFFIX, mirrorOriginOf };
+
 // ── Fetch pools from agent-registry ───────────────────────────────────────
 async function fetchPools(accessiblePools: string[], accessToken?: string): Promise<PoolInfo[]> {
   try {
@@ -104,9 +113,18 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       sla_target_ms:         p.sla_target_ms ?? null,
       max_reply_time_ms:     p.max_reply_time_ms ?? null,
       dispatch_mode:         p.dispatch_mode ?? 'push',
+      mirror_of:             mirrorOriginOf(p.pool_id),
     }));
     if (accessiblePools.length === 0) return list;
-    return list.filter(p => accessiblePools.includes(p.pool_id));
+    // I2 (D2) — ACESSO DERIVADO, não associação: quem alcança `p` alcança `p-int`.
+    // Sem isto o espelho não entra em `availablePools`, `pullPools` não casa o
+    // `dispatch_mode` e o wrap-up do próprio agente fica invisível — falha por
+    // AUSÊNCIA, que é a que ninguém percebe.
+    return list.filter(p => {
+      if (accessiblePools.includes(p.pool_id)) return true;
+      const origin = p.mirror_of;
+      return !!origin && accessiblePools.includes(origin);
+    });
   } catch {
     return [];
   }
@@ -170,11 +188,34 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   // ── Presence ──────────────────────────────────────────────────────────────
   const [activePools, setActivePools] = useState<string[]>([]);
 
+  /**
+   * I2/D2 — entrar num pool entra TAMBÉM na fila interna dele.
+   *
+   * A inbox é governada por `activePools` (= pools com WebSocket ABERTO), não por
+   * `accessiblePools`. Sem abrir o WS do espelho, quatro coisas quebram de uma vez e
+   * nenhuma dá erro: a inbox não consulta a fila `-int`; um claim forçado até passa
+   * (o motor é pool-agnóstico), mas o `conversation.assigned` vai para
+   * `pool:events:{pool}-int` que ninguém assina — item reivindicado, tela vazia;
+   * `mark_busy` incrementa um pool cujo ready-set está vazio; e o `pool_config` do
+   * espelho nunca é escrito (sem SLA na inbox, sem lookup de hooks no bridge).
+   * `registerHumanAgent` (o handshake do WS) resolve os quatro.
+   *
+   * Continua DERIVADO: nenhum agente é associado a nada novo, e o espelho não
+   * aparece na lista onde ele escolhe pools (D3).
+   */
+  const withMirror = useCallback((poolId: string): string[] => {
+    const mirror = availablePools.find(p => p.mirror_of === poolId);
+    return mirror ? [poolId, mirror.pool_id] : [poolId];
+  }, [availablePools]);
+
   const handleTogglePool = useCallback((poolId: string) => {
+    const group = withMirror(poolId);
     setActivePools(prev =>
-      prev.includes(poolId) ? prev.filter(p => p !== poolId) : [...prev, poolId]
+      prev.includes(poolId)
+        ? prev.filter(p => !group.includes(p))
+        : [...prev, ...group.filter(p => !prev.includes(p))]
     );
-  }, []);
+  }, [withMirror]);
 
   const handleJoinAll = useCallback(() => {
     setActivePools(availablePools.map(p => p.pool_id));

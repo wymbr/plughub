@@ -14,6 +14,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { ChevronRight } from "lucide-react"
+import { poolDisplayLabel } from "../poolLabel"
 
 interface QueueContact {
   session_id:   string
@@ -73,6 +74,12 @@ function fmtAge(ms: number | null): string {
   const m = Math.floor(s / 60)
   return `${m}m ${s % 60}s`
 }
+
+/**
+ * Rótulo da fila (D3). A regra vive em `poolLabel.ts` — esta cópia local do sufixo foi o
+ * que deixou a barra do contato divergir da fila: mesmo item, dois nomes na mesma tela.
+ */
+const queueLabel = poolDisplayLabel
 
 // Cor por urgência: idade relativa ao SLA do pool. Sem SLA → neutro.
 function slaColor(ageMs: number | null, slaMs: number | null | undefined): string {
@@ -279,7 +286,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                     className={`w-3 h-3 flex-shrink-0 transition-transform ${isCollapsed ? "" : "rotate-90"}`}
                     aria-hidden="true"
                   />
-                  <span className="truncate flex-1 text-left">{g.pool_id}</span>
+                  <span className="truncate flex-1 text-left">{queueLabel(g.pool_id, t)}</span>
                   <span className="text-muted-light">({g.items.length})</span>
                 </button>
                 {!isCollapsed && (

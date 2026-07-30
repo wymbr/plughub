@@ -115,11 +115,69 @@ export async function executeDelegate(
   }
 
   // ── First execution — suspend + dispatch agent ──────────────────────────────
+
+  // 0. Resolve the TARGET POOL. Ele aceita ref (@ctx.* / $.pipeline_state.*) porque o
+  // alvo pode ser fato do CHAMADOR, não do skill: um skill de hook genérico (wrap-up)
+  // precisa delegar na fila interna do pool que o disparou, e lê "@ctx.hook.wrapup_pool"
+  // — escrito pelo bridge em _fire_detached_hook. Ver ADR
+  // adr-internal-work-queue-author-bound.
+  //
+  // Resolvido ANTES de qualquer efeito colateral (o resume_token e o persistSuspendWebhook
+  // vêm depois): falhar aqui não deixa token órfão nem sentinela pela metade.
+  //
+  // Ref não resolvida é FALHA DURA — nunca passa adiante como literal. Roteando para um
+  // pool chamado "@ctx.hook.wrapup_pool" o erro apareceria como "pool not found",
+  // apontando para o registry em vez de para a tag ausente, que é a causa real.
+  let targetPool = step.pool
+  if (step.pool.startsWith("@") || step.pool.startsWith("$.")) {
+    const m = await resolveInputMap({ v: step.pool }, ctx, ctx.contextStore)
+    const v = m["v"]
+    const resolved = v === undefined || v === null ? "" : String(v).trim()
+    if (resolved === "" || resolved === step.pool) {
+      const msg =
+        `[delegate] step=${step.id}: pool ref "${step.pool}" não resolveu ` +
+        `(session=${ctx.sessionId}). O delegate NÃO foi despachado.`
+      console.error(msg)
+      return {
+        next_step_id:      step.on_timeout.next,
+        output_as:         step.id,
+        output_value:      { error: "pool_ref_unresolved", ref: step.pool },
+        transition_reason: "on_failure",
+      }
+    }
+    targetPool = resolved
+  }
+
+  // 0b. Resolve o PRAZO. Aceita ref porque pode ser fato do CHAMADOR: o prazo de ACW
+  // é do POOL DE ORIGEM (@ctx.hook.acw_timeout_hours, via PoolHookEntry.context), não
+  // deste skill genérico.
+  //
+  // Ao contrário do `pool`, ref não resolvida aqui NÃO é falha dura — um prazo tem
+  // default seguro, um pool não tem para onde rotear. Mas degrada COM log: prazo
+  // errado em silêncio é justamente o valor plausível que nunca denuncia nada.
+  const DEFAULT_TIMEOUT_HOURS = 24
+  let timeoutHours = DEFAULT_TIMEOUT_HOURS
+  if (typeof step.timeout_hours === "number") {
+    timeoutHours = step.timeout_hours
+  } else {
+    const m = await resolveInputMap({ v: step.timeout_hours }, ctx, ctx.contextStore)
+    const n = Number(m["v"])
+    if (Number.isFinite(n) && n > 0) {
+      timeoutHours = n
+    } else {
+      console.warn(
+        `[delegate] step=${step.id}: timeout_hours ref "${step.timeout_hours}" não ` +
+        `resolveu para um número positivo (valor=${JSON.stringify(m["v"])}); ` +
+        `usando o default de ${DEFAULT_TIMEOUT_HOURS}h (session=${ctx.sessionId}).`
+      )
+    }
+  }
+
   const resume_token = randomUUID()
 
   // 1. Persist resume_token (extends Redis TTLs + writes to resume_tokens hash)
   let expires_at = new Date(
-    Date.now() + step.timeout_hours * 3600 * 1000
+    Date.now() + timeoutHours * 3600 * 1000
   ).toISOString()
 
   if (ctx.persistSuspendWebhook) {
@@ -127,7 +185,7 @@ export async function executeDelegate(
       const result = await ctx.persistSuspendWebhook({
         step_id:       step.id,
         resume_token,
-        timeout_hours: step.timeout_hours,
+        timeout_hours: timeoutHours,
         ...(step.business_hours !== undefined ? { business_hours: step.business_hours } : {}),
         ...(step.calendar_id                 ? { calendar_id:    step.calendar_id }    : {}),
       })
@@ -184,9 +242,9 @@ export async function executeDelegate(
       const result = await ctx.persistDelegate({
         step_id:           step.id,
         resume_token,
-        pool:              step.pool,
+        pool:              targetPool,
         context:           resolvedContext,
-        timeout_hours:     step.timeout_hours,
+        timeout_hours:     timeoutHours,
         origin_session_id: (ctx.sessionContext["origin_session_id"] as string | undefined)
                            ?? ctx.sessionId,  // propagate root or self as root
         // Identity Resolver (nível b) — forward retomada policy so the

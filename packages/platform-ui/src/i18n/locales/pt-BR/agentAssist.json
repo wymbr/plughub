@@ -188,6 +188,7 @@
     "resizeHint":    "Arraste para ajustar",
     "reservedToYou": "Reservado a você",
     "overflow":      "Transbordado",
+    "internalQueue": "Pós-atendimento — {{pool}}",
     "claimReason": {
       "already_claimed":  "Já reivindicado por outro agente",
       "no_capacity":      "Sem capacidade disponível",

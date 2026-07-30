@@ -88,6 +88,14 @@ class ConversationInboundEvent(BaseModel):
     # efetivo em pool `dispatch_mode: pull`; ausente = fila compartilhada (retrocompat).
     assigned_to:              str | None = None
     fallback_to_pool_after_s: int | None = None
+    # I5 — prazo do item de trabalho (ISO), quando o parqueamento nasce de um
+    # `delegate` (o deadline do step). Declarado AQUI pelo mesmo motivo dos campos
+    # acima (Pydantic descarta não-declarados) e usado por `add_queued_contact` para
+    # que o JSON do contato NÃO morra antes do prazo: com o TTL fixo de 4 h contra um
+    # `timeout_hours: 24`, o membro do ZSET sobrevivia ao JSON e o item continuava
+    # listado na inbox — só que SEM `assigned_to` (deixava de ser author-bound) e
+    # irreivindicável (`not_in_queue`). Vazio = comportamento anterior.
+    work_item_deadline:       str = ""
     # Wrap-up unificado (Camada E2) — auto-atendimento (inline). Declarado AQUI para
     # SOBREVIVER ao model_validate/model_dump e fluir até `contact_data` →
     # {t}:queue_contact:{sid}, de onde o item de pull o leva ao Console (que

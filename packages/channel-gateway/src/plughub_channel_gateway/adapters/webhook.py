@@ -442,6 +442,56 @@ class WebhookAdapter(ChannelAdapter):
             logger.warning("A5 lease holder lookup failed: %s", exc)
             return None
 
+    async def _routing_work_task_expire(
+        self, tenant_id: str, pool_id: str, session_id: str, reason: str,
+    ) -> dict | None:
+        """
+        I5 — pede ao ÁRBITRO que encerre o item de trabalho (ZREM + lease + vaga).
+        Mesmo caminho de confiança do `_routing_lease_holder`: o gateway solicita, o
+        routing decide. Falha de rede degrada para None **com log** — o resume segue
+        (o workflow não pode ficar preso porque a limpeza falhou), mas o motivo
+        aparece; sem isso o item ficaria pendurado sem nenhum registro do porquê.
+        """
+        if not pool_id:
+            return None
+        import httpx
+        base = (getattr(self._settings, "routing_engine_url", "") or "").rstrip("/")
+        if not base:
+            logger.warning(
+                "work_task_expire: routing_engine_url não configurada — item %s do "
+                "pool %s não foi encerrado", session_id, pool_id,
+            )
+            return None
+        headers: dict[str, str] = {}
+        tok = getattr(self._settings, "routing_admin_token", "")
+        if tok:
+            headers["X-Admin-Token"] = tok
+        try:
+            async with httpx.AsyncClient(timeout=5) as c:
+                r = await c.post(
+                    f"{base}/v1/work_queue/expire",
+                    json={
+                        "tenant_id":  tenant_id,
+                        "pool_id":    pool_id,
+                        "session_id": session_id,
+                        "reason":     reason,
+                    },
+                    headers=headers,
+                )
+            if r.status_code != 200:
+                logger.warning(
+                    "work_task_expire: HTTP %s (session=%s pool=%s)",
+                    r.status_code, session_id, pool_id,
+                )
+                return None
+            return r.json()
+        except Exception as exc:
+            logger.warning(
+                "work_task_expire: falhou (session=%s pool=%s): %s",
+                session_id, pool_id, exc,
+            )
+            return None
+
     async def _write_approval_decision(
         self,
         tenant_id:         str,
@@ -763,6 +813,41 @@ class WebhookAdapter(ChannelAdapter):
             "started_at":   now_iso,
         }
 
+        # ── I5 — encerra o item de trabalho que este delegate parqueou ───────────
+        # Roda em TODO resume (submit, timeout, supervisor): é UM caminho, idempotente,
+        # que faz só o que restou. Ramo exclusivo do caso raro apodrece sem ser exercitado.
+        #
+        # A ORDEM é load-bearing, presa entre dois vizinhos:
+        #   · DEPOIS do check A5 (caller==claimant), que lê a lease que este bloco apaga;
+        #   · ANTES do publish, porque um flow pode RE-DELEGAR no on_timeout — publicar
+        #     primeiro criaria um item NOVO que esta limpeza (tardia) apagaria, e o
+        #     sintoma seria uma tarefa que some da inbox sem ninguém a ter tocado.
+        _wt = await self.read_work_task(tenant_id, session_id)
+        if _wt:
+            _reason = "acw_expired" if payload.get("decision") == "timeout" else "task_done"
+            _src = str(payload.get("source") or "")
+            if _src.startswith("supervisor"):
+                _reason = "acw_supervisor_closed"
+            await self._routing_work_task_expire(
+                tenant_id  = tenant_id,
+                pool_id    = str(_wt.get("pool_id") or ""),
+                # o id que está DE FATO no ZSET (== session_id em conferência)
+                session_id = str(_wt.get("queue_session_id") or session_id),
+                reason     = _reason,
+            )
+            try:
+                await self._redis.delete(self.work_task_key(tenant_id, session_id))
+            except Exception:
+                pass
+        else:
+            # Ausência é esperada em resume de `suspend` puro (sem delegate) — mas é
+            # também o sintoma de um ledger perdido. Logar em debug mantém o rastro
+            # sem poluir o caminho normal.
+            logger.debug(
+                "work_task: nenhum item parqueado para session=%s (resume de suspend?)",
+                session_id,
+            )
+
         await self._publish(event, topic="conversations.inbound")
 
         # Clean up the token after successful resume (one-shot)
@@ -947,6 +1032,11 @@ class WebhookAdapter(ChannelAdapter):
             "spawn_reason":      "delegate",    # Journey T4: rótulo da aresta
             "timestamp":         now_iso,
             "started_at":        now_iso,
+            # I5 — prazo do item (mesmo motivo do caminho de conferência): o TTL do
+            # JSON na fila acompanha o deadline em vez do default de 4 h.
+            "work_item_deadline": (
+                datetime.now(timezone.utc) + timedelta(hours=timeout_hours)
+            ).isoformat(),
         }
         await self._publish(event, topic="conversations.inbound")
 
@@ -954,6 +1044,43 @@ class WebhookAdapter(ChannelAdapter):
             "webhook delegate: child_session=%s pool=%s origin=%s customer=%s tenant=%s ctx_tags=%d",
             child_session_id, pool_id, origin_session_id, customer_id, tenant_id, len(ctx_writes),
         )
+
+        # ── I5 — ledger do item de trabalho ───────────────────────────────────
+        # Aqui o item vai ao ZSET sob o id da FILHA, mas o ledger é chaveado pela
+        # sessão que o RESUME resolve — que NÃO é o `origin_session_id` recebido
+        # (esse é a RAIZ da topologia estrela; num delegate aninhado a raiz e o
+        # chamador direto divergem). A associação exata token→sessão já existe em
+        # `{t}:resume_tokens`, escrita pelo persistSuspendWebhook ANTES deste
+        # dispatch (delegate.ts: passo 1 antes do passo 3). Lê-se de lá em vez de
+        # inferir. Este caminho está inerte hoje (todo delegate roda como
+        # conferência); o ledger o cobre para que voltar a usá-lo não reabra a I5.
+        try:
+            _tok_val = await self._redis.hget(f"{tenant_id}:resume_tokens", resume_token)
+            _tok_val = (
+                _tok_val if isinstance(_tok_val, str)
+                else (_tok_val.decode() if _tok_val else "")
+            )
+            _tok_parts = _tok_val.split(":", 2) if _tok_val else []
+            if len(_tok_parts) >= 2:
+                await self._write_work_task(
+                    tenant_id        = tenant_id,
+                    session_id       = _tok_parts[0],
+                    queue_session_id = child_session_id,
+                    pool_id          = pool_id,
+                    resume_token     = resume_token,
+                    step_id          = _tok_parts[1],
+                    assigned_to      = "",
+                    deadline         = _tok_parts[2] if len(_tok_parts) > 2 else "",
+                    ttl_s            = ttl_s,
+                )
+            else:
+                logger.warning(
+                    "work_task: delegate sem token em resume_tokens (token=%s child=%s) — "
+                    "item de trabalho ficará sem caminho de expiração",
+                    resume_token, child_session_id,
+                )
+        except Exception as _e:
+            logger.warning("work_task: ledger do delegate roteado falhou: %s", _e)
 
         # ── Pending workflow lookup key (customer reconnect detection) ─────────
         # When the customer reconnects and their intake agent collects
@@ -1742,7 +1869,24 @@ class WebhookAdapter(ChannelAdapter):
         # auto-reivindica (inline) em vez de esperar o claim manual da inbox.
         if auto_attend:
             event["auto_attend"] = True
+        # I5 — prazo do item: o TTL do JSON do contato na fila passa a acompanhá-lo,
+        # em vez do default de 4 h que expirava antes do deadline e apagava a reserva.
+        event["work_item_deadline"] = exp_at
         await self._publish(event, topic="conversations.inbound")
+
+        # I5 — ledger do item de trabalho. Em conferência o item vai ao ZSET sob o id
+        # do PAI (o especialista roda dentro dele), então queue_session_id == session_id.
+        await self._write_work_task(
+            tenant_id        = tenant_id,
+            session_id       = session_id,
+            queue_session_id = session_id,
+            pool_id          = pool_id,
+            resume_token     = resume_token,
+            step_id          = step_id or "delegate_conference",
+            assigned_to      = assigned_to or "",
+            deadline         = exp_at,
+            ttl_s            = ttl_s,
+        )
 
         # ── Pending workflow lookup key (customer reconnect detection) ─────────
         # When the delegating caller is a workflow that captured a contact_identifier
@@ -1874,6 +2018,88 @@ class WebhookAdapter(ChannelAdapter):
                     logger.warning(
                         "webhook timeout scanner: handle_resume failed token=%s: %s", token, exc,
                     )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Work task ledger (I5) — o item de trabalho que o delegate parqueou
+    # ──────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def work_task_key(tenant_id: str, session_id: str) -> str:
+        """`{tenant}:work_task:{session_id}` — ver `_write_work_task`."""
+        return f"{tenant_id}:work_task:{session_id}"
+
+    async def _write_work_task(
+        self,
+        tenant_id:        str,
+        session_id:       str,
+        queue_session_id: str,
+        pool_id:          str,
+        resume_token:     str,
+        step_id:          str,
+        assigned_to:      str,
+        deadline:         str,
+        ttl_s:            int,
+    ) -> None:
+        """
+        I5 — registra o fato "esta delegação parqueou um item de trabalho no pool P".
+
+        É o ÚNICO lugar onde esse fato é conhecido: quem despacha. Nem o scanner de
+        timeout nem o supervisor têm como derivá-lo depois —
+          · `session:{id}:meta` carrega o pool do WORKFLOW enquanto ninguém reivindica
+            (só o claim o reescreve), então serve exatamente no caso em que não
+            precisamos dele e mente no caso em que precisamos;
+          · `{t}:queue_contact:{sid}` morre por TTL antes do deadline do delegate.
+
+        Chaveado pela sessão que o RESUME resolve (o pai), porque os dois gatilhos da
+        I5 entram por lá: o scanner traz o token e resolve o pai; o supervisor traz o
+        pai e precisa do token. `queue_session_id` é o id que está DE FATO no ZSET —
+        hoje igual ao pai (todo delegate roda como especialista de conferência), e
+        diferente dele se o `/delegate` roteado (sessão-filha com uuid próprio) voltar
+        a ser usado. Guardar os dois custa um campo e tira a topologia do caminho.
+
+        Escrita incondicional: o pool-alvo pode ser `push` (sem item de fila nenhum) e
+        o expire é no-op nesse caso — a lease do claim é a evidência de pull, e sem
+        ela nada é devolvido. Não vale acoplar o gateway ao `dispatch_mode` do pool
+        para evitar uma escrita de uma chave.
+
+        Consumido (e apagado) por `handle_resume`; expira junto com o token.
+        """
+        try:
+            await self._redis.set(
+                self.work_task_key(tenant_id, session_id),
+                json.dumps({
+                    "pool_id":          pool_id,
+                    "queue_session_id": queue_session_id,
+                    "resume_token":     resume_token,
+                    "step_id":          step_id,
+                    "assigned_to":      assigned_to,
+                    "deadline":         deadline,
+                    "created_at":       datetime.now(timezone.utc).isoformat(),
+                }),
+                ex=max(int(ttl_s), 60),
+            )
+        except Exception as _e:
+            # Degradação nunca silenciosa: sem esta chave o item fica sem quem o
+            # encerre (é a lacuna que a I5 fecha) — o motivo tem de aparecer.
+            logger.warning(
+                "work_task: could not write ledger session=%s pool=%s — %s "
+                "(o item de trabalho ficará sem caminho de expiração)",
+                session_id, pool_id, _e,
+            )
+
+    async def read_work_task(self, tenant_id: str, session_id: str) -> dict | None:
+        """Lê o ledger do item de trabalho desta sessão. None = nenhum parqueado."""
+        try:
+            raw = await self._redis.get(self.work_task_key(tenant_id, session_id))
+        except Exception:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw if isinstance(raw, str) else raw.decode())
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
 
     # ──────────────────────────────────────────────────────────────────────────
     # Internal helpers

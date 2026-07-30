@@ -269,6 +269,17 @@ export interface PoolInfo {
   max_reply_time_ms:    number | null;
   /** Frente 1 — modo de despacho da fila: "push" (auto-aloca, default) | "pull" (agente puxa). */
   dispatch_mode?:       'push' | 'pull';
+  /**
+   * ADR adr-internal-work-queue-author-bound — quando este pool é o ESPELHO de fila
+   * interna de outro (`{origem}-int`), carrega aqui o pool de ORIGEM.
+   *
+   * Existe porque o espelho é visível onde se MEDE e onde se TRABALHA, e oculto onde
+   * se ESCOLHE (D3): ele não aparece na lista de pools que o agente marca, mas o WS
+   * dele é aberto junto com o do pai e a inbox lista os itens dele. O rótulo na inbox
+   * vem da ORIGEM ("Wrap-up — Retenção"), nunca do id cru: `{pool}-int` é convenção
+   * de construção, não nome de produto.
+   */
+  mirror_of?:           string | null;
 }
 
 // ── Multi-contact session state ───────────────────────────────────────────────

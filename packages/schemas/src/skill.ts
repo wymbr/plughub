@@ -1118,7 +1118,19 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
   z.object({
     type:           z.literal("delegate"),
     id:             z.string(),
-    /** Pool where the I/O agent will be allocated via routing engine. */
+    /**
+     * Pool where the I/O agent will be allocated via routing engine.
+     *
+     * Supports refs (@ctx.* / $.pipeline_state.*) — the target may be a fact of the
+     * CALLER, not of the skill. A generic hook skill (wrap-up) must delegate into the
+     * internal queue mirror of whichever pool fired it, so it reads
+     * "@ctx.hook.wrapup_pool" (written by the bridge). See ADR
+     * adr-internal-work-queue-author-bound.
+     *
+     * An unresolved ref is a HARD FAILURE at execution — it is never passed through as
+     * a literal. Routing to a pool named "@ctx.hook.wrapup_pool" would fail as
+     * "pool not found", pointing at the registry instead of at the missing tag.
+     */
     pool:           z.string().min(1),
     /**
      * Camada B (pull direcionado / "ramal") — reserva do work item do delegate a
@@ -1148,8 +1160,27 @@ export const FlowStepSchema = z.discriminatedUnion("type", [
      * no need to declare it here.
      */
     context:        z.record(z.string()).optional(),
-    /** How long to wait for the agent to call workflow_resume. Default: 24h. */
-    timeout_hours:  z.number().positive().default(24),
+    /**
+     * How long to wait for the agent to call workflow_resume. Default: 24h.
+     *
+     * União `número | ref` (mesmo padrão de `menu.interaction`/`options`): quando
+     * string com prefixo `$.`/`@ctx.`, é resolvida em runtime. Existe porque o prazo
+     * pode ser fato do CHAMADOR, não do skill — o wrap-up é o caso: o prazo de ACW é
+     * do POOL DE ORIGEM (Retenção e Cobrança podem ter prazos diferentes, pela mesma
+     * razão que têm formulários diferentes), e um skill de hook genérico não pode
+     * carregar um número global. Chega por `@ctx.hook.acw_timeout_hours`, declarado no
+     * `PoolHookEntry.context` — mesma via do `dialog_form_id` (ADR
+     * adr-internal-work-queue-author-bound, D7).
+     *
+     * Ref não resolvida NÃO é falha dura aqui (diferente de `pool`): um prazo ausente
+     * tem default seguro e sensato, enquanto um pool ausente não tem para onde rotear.
+     * Mas degrada COM log — prazo silenciosamente errado é o tipo de valor plausível
+     * que não denuncia nada.
+     */
+    timeout_hours:  z.union([
+      z.number().positive(),
+      z.string().regex(/^(\$\.|@ctx\.)/, "timeout_hours deve ser um número ou um ref $./@ctx."),
+    ]).default(24),
     business_hours: z.boolean().default(false),
     calendar_id:    z.string().uuid().optional(),
     /**

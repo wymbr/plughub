@@ -118,10 +118,15 @@ pools:
     sla_target_ms: 86400000
 
   # Camada E2 (wrap-up-α) — pool webhook que roda o workflow de WRAP-UP destacado
-  # (skill_wrapup_detached_v1): delega o dialog_wrapup_v1 DIRECIONADO (assigned_to)
-  # ao agente que atendeu, reusando o pool pull `formfill_demo` p/ o claim. Disparado
-  # pelo bridge no on_human_end do retencao_humano (dispatch: detached ✅) ou
-  # manualmente p/ teste (smoke_segment_outcome.sh).
+  # (skill_wrapup_detached_v1): delega o form de disposição DIRECIONADO (assigned_to)
+  # ao agente que atendeu. O claim NÃO é mais no `formfill_demo` (pool de contato,
+  # emprestado da fatia R0): vai para a FILA INTERNA do pool de ORIGEM
+  # (`retencao_humano-int`), auto-provisionada por `internal_queue_enabled` — ADR
+  # adr-internal-work-queue-author-bound. É o que torna o ACW legível POR POOL e faz
+  # o segmento do wrap-up nascer com `purpose: internal`.
+  # Disparado pelo bridge no on_human_end do retencao_humano (hoje `dispatch: inline`
+  # = auto-atendimento; `detached` = pull manual — mesma máquina) ou manualmente p/
+  # teste (smoke_segment_outcome.sh).
   - pool_id: wrapup_detached_ia
     agent_kind: ai
     # E2f: trabalho INTERNO — a sessão de wrap-up não é um contato de cliente. Sai
@@ -218,6 +223,13 @@ pools:
     description: "Pool de agentes humanos — retenção e suporte especializado"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 300000
+    # ADR adr-internal-work-queue-author-bound — liga a FILA INTERNA espelho
+    # `retencao_humano-int` (auto-provisionada pelo registry: purpose=internal,
+    # dispatch_mode=pull, agent_kind=human, mesmos canais). É onde vive o wrap-up
+    # deste pool: trabalho AUTHOR-BOUND (só quem atendeu classifica o próprio
+    # atendimento) e portanto SEM transbordo. Acesso é derivado — nenhum agente
+    # precisa ser associado ao espelho.
+    internal_queue_enabled: true
     # Fase C (queue-attended-model): agente de fila — ativado pelo bridge no
     # conversations.queued enquanto o contato espera; gera segmento role=queue
     # (ledger de fila da Fase D). skill_id explícito porque agent_types estão
@@ -263,6 +275,19 @@ pools:
         - pool: wrapup_detached_ia
           side: agent
           dispatch: inline
+          # Configuração do hook injetada como @ctx.hook.* na sessão do wrap-up
+          # (ADR internal-work-queue). O skill é GENÉRICO: qual formulário este pool
+          # usa é fato DAQUI, não dele — cravá-lo no skill daria um form global para
+          # todos os pools de origem. O alvo do delegate (`hook.wrapup_pool` =
+          # retencao_humano-int) o bridge deriva sozinho da flag acima.
+          context:
+            dialog_form_id: dialog_wrapup_v1
+            # Prazo do ACW (I5). Mesmo argumento do form: quanto tempo o atendente
+            # tem para classificar o próprio atendimento é fato DESTE pool —
+            # Retenção e Cobrança podem divergir. Ausente ⇒ o engine usa 24 h e loga.
+            # Encurtar aqui é o que torna a expiração mensurável na Camada F sem
+            # esperar um dia.
+            acw_timeout_hours: "24"
       # G7 Fase 3b: NPS é hook de fim-de-CONTATO (1ª classe), dispara 1× quando o
       # contato encerra de fato (no_continuation) — dono = pool do primary corrente.
       on_contact_end:

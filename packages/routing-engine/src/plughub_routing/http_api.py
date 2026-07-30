@@ -100,10 +100,32 @@ def build_app(router) -> web.Application:
         )
         return web.json_response(result)
 
+    async def expire(request: web.Request) -> web.Response:
+        # I5 — encerra o item de trabalho (prazo vencido / supervisor). Idempotente.
+        # Não exige `instance_id`: o caso que motiva o endpoint é justamente o item
+        # que NINGUÉM reivindicou. Quando houve claim, o dono sai da lease.
+        if not _authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        body = await _read_body(request)
+        if body is None:
+            return web.json_response({"error": "bad_json"}, status=400)
+        req = ("tenant_id", "pool_id", "session_id")
+        missing = [f for f in req if not body.get(f)]
+        if missing:
+            return web.json_response({"error": "missing_fields", "fields": missing}, status=400)
+        result = await router.work_task_expire(
+            tenant_id  = body["tenant_id"],
+            pool_id    = body["pool_id"],
+            session_id = body["session_id"],
+            reason     = body.get("reason") or "expired",
+        )
+        return web.json_response(result)
+
     app.router.add_get("/health", health)
     app.router.add_post("/v1/work_queue/claim", claim)
     app.router.add_post("/v1/work_queue/release", release)
     app.router.add_post("/v1/work_queue/holder", holder)
+    app.router.add_post("/v1/work_queue/expire", expire)
     return app
 
 
@@ -113,5 +135,7 @@ async def start_http_api(router, port: int) -> web.AppRunner:
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info("Routing HTTP API on :%d — POST /v1/work_queue/{claim,release,holder}", port)
+    logger.info(
+        "Routing HTTP API on :%d — POST /v1/work_queue/{claim,release,holder,expire}", port
+    )
     return runner

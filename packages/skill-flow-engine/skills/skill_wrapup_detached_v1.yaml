@@ -3,36 +3,49 @@ name: Wrap-up destacado (Camada E2 wrap-up-α)
 version: "1.0"
 description: |
   Workflow webhook (Arc 19) do WRAP-UP DESTACADO (Camada E2 do arco de detach de
-  hooks). Disparado pelo bridge quando um hook on_human_end tem dispatch: detached
-  (fatia de wiring, ainda pendente) — ou manualmente para teste — com no context:
+  hooks). Disparado pelo bridge em todo hook on_human_end side=agent — `detached`
+  (pull manual) ou `inline` (auto-atendimento no Console); é a MESMA máquina, muda só
+  a entrega. O bridge injeta no context:
     session.surveyed_agent_key  — user_id do humano que atendeu (→ assigned_to)
     session.origin_session_id   — sessão de origem (→ briefing + atribuição)
     session.surveyed_segment_id — segmento humano a atribuir (usado na gravação)
+    hook.origin_pool            — pool que disparou o hook
+    hook.wrapup_pool            — fila interna DELE (`{origin}-int`) → alvo do delegate
+    hook.*                      — o que a entrada de hook declarar em `context:`
+                                  (ex.: dialog_form_id, acw_timeout_hours)
 
-  O workflow DELEGA o DialogForm de disposição (dialog_wrapup_v1) a um pool pull,
-  DIRECIONADO ao agente que atendeu (assigned_to = @ctx.session.surveyed_agent_key,
-  Camada B). O agente reivindica no inbox pull, o Console (DialogFormRenderer/R0)
-  renderiza o form + o briefing (transcrição da origem via briefing_session_id), e
-  submete via workflow_resume. As respostas caem em $.pipeline_state.coletar.answers.
+  ESTE SKILL É GENÉRICO: ele não sabe de que pool veio nem qual formulário usar. Os
+  dois são fato da CONFIGURAÇÃO DO POOL DE ORIGEM e chegam por @ctx.hook.* — cravá-los
+  aqui daria um alvo e um formulário globais para todos os pools de origem.
 
-  SUB-FATIA 1 (esta): gravação STUBADA — apenas completa. A tool
-  `segment_outcome_record` (grava o outcome no segmento da origem por referência)
-  entra na sub-fatia 2. Ver docs/adr/adr-wrapup-detached-pull.md (§3α, D3).
+  O workflow DELEGA o DialogForm de disposição à FILA INTERNA do pool de origem
+  (ADR adr-internal-work-queue-author-bound: wrap-up é trabalho AUTHOR-BOUND — só quem
+  atendeu pode classificar o próprio atendimento), DIRECIONADO ao agente
+  (assigned_to = @ctx.session.surveyed_agent_key, Camada B). O agente reivindica no
+  inbox pull, o Console (DialogFormRenderer/R0) renderiza o form + o briefing
+  (transcrição da origem via briefing_session_id) e submete via workflow_resume. As
+  respostas caem em $.pipeline_state.coletar.answers.
 
-  Perfil workflow (webhook): usa apenas delegate/choice/complete.
+  Perfil workflow (webhook): usa apenas delegate/invoke/complete.
 classification:
   type: vertical
 
 entry: coletar
 
 steps:
-  # ── Delega o form de wrap-up ao pool pull, DIRECIONADO ao agente ──────────────
+  # ── Delega o form de wrap-up à FILA INTERNA do pool de origem, direcionado ────
   - id: coletar
     type: delegate
-    pool: formfill_demo          # reusa o pool pull do demo R0 (agente loga nele)
+    # Alvo dinâmico: a fila interna do pool que disparou o hook (`{origem}-int`),
+    # escrita pelo bridge. Skill genérico ⇒ o alvo é do chamador. Se a fila interna
+    # do pool de origem não estiver ligada, a tag não existe e o delegate FALHA
+    # nomeando a ref — em vez de cair num pool de contato por engano.
+    pool: "@ctx.hook.wrapup_pool"
     # Camada B — o item cai no inbox DAQUELE agente (não fila compartilhada).
     assigned_to: "@ctx.session.surveyed_agent_key"
-    fallback_to_pool_after_s: 3600   # 1h → transborda pro pool se ele não pegar
+    # SEM transbordo: wrap-up é author-bound, só quem atendeu pode classificar o
+    # próprio atendimento — transbordar seria erro de categoria (ADR D4). A saída de
+    # pendência é supervisor + TTL (`acw_expired`), fase I5.
     # Wrap-up unificado (Camada E2): o bridge seta @ctx.session.wrap_up_auto_attend
     # ="true" quando o hook é `dispatch: inline` → o Console auto-reivindica o item
     # (auto-atendimento, entrega in-session). Ausente/false → pull manual (detached).
@@ -40,16 +53,23 @@ steps:
     context:
       title:               "Wrap-up do atendimento"
       summary:             "Registre a disposição do seu atendimento."
-      dialog_form_id:      "dialog_wrapup_v1"
+      # Fato do pool de ORIGEM (PoolHookEntry.context), não deste skill: Retenção e
+      # Cobrança podem usar formulários de wrap-up diferentes.
+      dialog_form_id:      "@ctx.hook.dialog_form_id"
       briefing_session_id: "@ctx.session.origin_session_id"
-    timeout_hours: 24
+    # Prazo do ACW — fato do POOL DE ORIGEM, pela mesma razão que o formulário:
+    # Retenção e Cobrança podem ter janelas diferentes para classificar o próprio
+    # atendimento. Declarado em `PoolHookEntry.context.acw_timeout_hours`. Ausente,
+    # o engine usa o default de 24 h e LOGA (prazo tem default seguro; alvo não tem —
+    # por isso `pool` falha duro e este degrada).
+    timeout_hours: "@ctx.hook.acw_timeout_hours"
     business_hours: false
     on_resume:
       next: gravar
     on_timeout:
       next: encerrar_timeout
 
-  # ── SUB-FATIA 2: grava o outcome no segmento da ORIGEM por referência ──────────
+  # ── Grava o outcome no segmento da ORIGEM por referência ─────────────────────
   # A tool replica _apply_wrapup_to_segment/_republish_segment_from_signal do bridge:
   # normaliza a classificação → outcome, acumula no seg_signal e re-publica o
   # participant_left (linha COMPLETA) para o analytics. A atribuição é por referência

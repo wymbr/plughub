@@ -47,6 +47,38 @@ logger = logging.getLogger("plughub.analytics.pool_auth")
 
 _bearer = HTTPBearer(auto_error=False)
 
+# ADR adr-internal-work-queue-author-bound (D2) — sufixo reservado do espelho de fila
+# interna. Garantido por construção: a regex de `pool_id` no registry só admite hífen
+# nesta posição, então nenhum pool declarado por tenant pode colidir.
+_INTERNAL_QUEUE_SUFFIX = "-int"
+
+
+def _with_internal_mirrors(pools: list[str] | None) -> list[str] | None:
+    """
+    Acesso DERIVADO: quem alcança `p` alcança `p-int`.
+
+    Sem isto o supervisor com acesso a `retencao_humano` NÃO enxerga o ACW de
+    `retencao_humano-int` — teríamos tornado o tempo de pós-atendimento mensurável e
+    o escondido justamente de quem precisa dele. É a falha mais provável desta ADR
+    porque o sintoma é AUSÊNCIA (um pool a menos no relatório), não erro.
+
+    Derivamos aqui, e não no JWT emitido pelo auth-api: mantém o token intacto,
+    dispensa re-login e evita duplicar o conceito em todo consumidor de
+    `accessible_pools`. `None` (irrestrito) e `[]` passam inalterados.
+    """
+    if not pools:
+        return pools
+    out = list(pools)
+    seen = set(out)
+    for p in pools:
+        if p.endswith(_INTERNAL_QUEUE_SUFFIX):
+            continue
+        mirror = f"{p}{_INTERNAL_QUEUE_SUFFIX}"
+        if mirror not in seen:
+            out.append(mirror)
+            seen.add(mirror)
+    return out
+
 
 class PoolPrincipal:
     """
@@ -125,7 +157,9 @@ async def optional_pool_principal(
     raw_pools  = payload.get("accessible_pools", [])  # [] = all pools in auth-api
 
     # auth-api convention: accessible_pools=[] means global access (admin/developer)
-    accessible_pools: list[str] | None = None if not raw_pools else list(raw_pools)
+    accessible_pools: list[str] | None = (
+        None if not raw_pools else _with_internal_mirrors(list(raw_pools))
+    )
 
     # Arc 9 — supervised_agent_types: [] = no restriction (admin); non-empty = filter
     raw_agent_types = payload.get("supervised_agent_types", [])
@@ -158,4 +192,7 @@ def accessible_pools_from_token(token: str | None) -> list[str] | None:
     except jwt.InvalidTokenError:
         return None
     raw = payload.get("accessible_pools", [])
-    return None if not raw else list(raw)
+    # Mesma derivação do `optional_pool_principal` (D2) — os dois pontos de escopo
+    # precisam concordar, senão o mesmo relatório mostra pools diferentes conforme
+    # o token venha no header ou na query.
+    return None if not raw else _with_internal_mirrors(list(raw))

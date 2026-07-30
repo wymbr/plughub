@@ -1550,6 +1550,39 @@ Instrumentação junto: `get_instance` e `get_ready_instances` deixaram de devol
 mudos; agora distinguem **chave ausente** de **chave inválida** no log (a UI recebe o mesmo
 `instance_not_found` para os dois, e cada um pede uma ação diferente).
 
+### Mudança 31 — encerramento do item de trabalho no resume (I5 núcleo A+B, 2026-07-30)
+
+**Chave nova:** `{tenant}:work_task:{session_id}` = `{pool_id, queue_session_id, resume_token,
+step_id, assigned_to, deadline}`, escrita pelo `handle_delegate_conference`/`handle_delegate` no
+despacho e **consumida no `handle_resume`**. Ela existe porque o pool REAL do item não é derivável
+depois: `session:{id}:meta` carrega o pool do WORKFLOW enquanto ninguém reivindica — mente
+exatamente no caso que interessa — e `{t}:queue_contact:{sid}` morre por TTL antes do prazo.
+
+**Fluxo novo no resume** (qualquer resume, não só timeout): lê o ledger → `POST
+/v1/work_queue/expire` no árbitro (`Router.work_task_expire`: ZREM + JSON + lease + vaga) → apaga o
+ledger. Idempotente: faz só o que restou.
+
+**A ordem é load-bearing**, presa entre dois vizinhos: **depois** do check A5 (caller==claimant), que
+lê a lease apagada aqui; e **antes** do publish de `conversations.inbound`, porque um flow pode
+re-delegar no `on_timeout` — publicar primeiro criaria um item NOVO que a limpeza tardia apagaria, e o
+sintoma seria uma tarefa sumindo da inbox sem ninguém a ter tocado.
+
+**A vaga só volta quando há lease.** A lease é a evidência de claim de PULL; chamar `release_instance`
+às cegas derrubaria o occupant de um contato PUSH alocado na mesma sessão.
+
+**Premissa corrigida:** `delegate` roda **sempre** como especialista de conferência
+(`persistDelegate` → `/delegate-conference`), logo o item na fila é a PRÓPRIA sessão do workflow e
+`child_session_id == parent`. O `handle_delegate` roteado (uuid próprio) está inerte. `queue_session_id`
+no ledger guarda o id que está DE FATO no ZSET, para o dia em que isso mudar.
+
+**TTL do JSON da fila** passou a acompanhar o `work_item_deadline` do delegate (era fixo em 4 h contra
+prazos de 24 h). Entre as duas marcas o membro do ZSET sobrevivia sozinho e o item seguia listado na
+inbox **sem `assigned_to`** — perdendo o author-binding — e irreivindicável (`not_in_queue`).
+
+**Segmento humano:** `close_reason` ganhou um terceiro valor. `task_submitted` (entregou) ·
+`acw_expired` (prazo) · `acw_supervisor_closed` (supervisor encerrou). Os dois últimos têm
+`outcome = None`, então é o `close_reason` que os separa.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

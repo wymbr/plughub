@@ -4,6 +4,62 @@
 
 ---
 
+## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ 2026-07-30; resta o relatório)*
+
+Fase final da ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md).
+**Núcleo A+B entregue** (ver CHANGELOG): ledger `{t}:work_task:{session}`, `Router.work_task_expire`
++ `POST /v1/work_queue/expire`, expire em todo resume, gatilho de supervisor no BFF, TTL do JSON da
+fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_acw_expire.sh`.
+
+### Falta
+
+- **Relatório de pendências por agente** (bloqueado pela lacuna 5 abaixo). Pendência tem DUAS formas
+  e um relatório que cubra só uma **mente**:
+  - *nunca reivindicada* — vive só no ZSET, **invisível ao analytics** (e, por não ter segmento
+    humano, não tem onde carimbar `acw_expired`; o núcleo A+B só garante a limpeza);
+  - *reivindicada e não submetida* — segmento humano aberto, visível em `segments`.
+  Decidir a fonte antes de construir.
+- **Validação ao vivo do gatilho de prazo.** O smoke exercita o gatilho de supervisor; o de prazo
+  depende do scanner de 60 s. ✅ o prazo virou config do pool (`PoolHookEntry.context.acw_timeout_hours`
+  → `@ctx.hook.acw_timeout_hours`), então encurtá-lo para medir na Camada F é edição de pool via PUT,
+  sem tocar em skill nem em slot.
+- **Cenário reivindicado no smoke** — só roda com `INSTANCE=human-<user_id>` de um agente logado.
+
+### Lacunas do levantamento que seguem abertas
+
+| # | Lacuna | Evidência |
+|---|---|---|
+| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`); o reaper vira item MEDIDO na Camada F |
+| 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
+| 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
+| 5 | **A fila pull não é consultável pelo analytics** | não há evento nem tabela espelho; só `work_queue_list` (Redis-direto, exige a lista de pools, e **não lista item já reivindicado**). É o bloqueio do relatório. Candidato a fonte: o próprio ledger `{t}:work_task:*`, que é varrível e já nomeia pool + assigned_to + deadline |
+| 6 | **`close_reason` de segmento não tem enum** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. Hoje quem enumera o domínio o descobre por arqueologia |
+
+### Timeouts ainda constantes no caminho da I5 *(arco de consolidação de config)*
+
+Auditoria do caminho todo (2026-07-30). `claim_lease_s` já é config (`routing`); o
+`delegate.timeout_hours` é dado de autoria e agora aceita ref. Restam três, todos com casa natural
+no namespace `session` (cujos seeds já dizem "currently hardcoded — migrating"):
+
+| Onde | Valor | Chave candidata |
+|---|---|---|
+| `add_queued_contact(ttl=14_400)` — routing-engine `registry.py` | 4 h | `routing.queue_contact_ttl_s` |
+| Buffer `+3600` no TTL do item — channel-gateway `webhook.py` **e** registry (duplicado) | 1 h | `session.work_item_ttl_buffer_s` |
+| `run_timeout_scanner(interval_s=60)` — chamado sem argumento em `main.py:374` | 60 s | `session.timeout_scan_interval_s` |
+
+O terceiro é o que mais importa: **é política, não infra** — define a granularidade de toda
+expiração da plataforma, e hoje ninguém pode afrouxá-la ou apertá-la sem rebuild.
+
+### Dívida de segurança encostada nesta fatia
+
+`mcp-server-plughub` **não recebe `PLUGHUB_JWT_SECRET`** no compose da demo, então
+`verifyJwtPayload` cai no fallback de desenvolvimento (decodifica sem verificar assinatura) — vale
+para TODAS as rotas de UI do BFF, incluindo o novo gate `supervisor|admin`. Não foi wirado aqui de
+propósito: ligar o segredo muda o comportamento de autenticação do BFF inteiro e merece fatia
+própria, não um efeito colateral da I5. Enquanto isso, o gate é de intenção, não de autenticação.
+
+---
+
 ## Wrap-up unificado — resíduos após a Phase 2 ✅ *(arco fechado 2026-07-27, ver CHANGELOG)*
 
 **Polish (não bloqueia):** latência do auto-atendimento (~2-3s do poll da inbox) → instantâneo bombando o
@@ -12,9 +68,10 @@ instantâneo AUMENTARIA a chance de chegar antes do release (`-1` → cai na inb
 são cobertas. E: UI para a config de `dispatch` inline/detached do hook (hoje só YAML — invariante "config
 UI-editável" pendente para hooks de pool).
 
-**Camada E2 restante:** ~~**E2f**~~ ✅ (2026-07-29, ver CHANGELOG — `pools.purpose` + `_apply_contact_scope`;
-resíduo: TMA **por agente** sobre `segments`, fatia própria) · **Camada F** (validação do arco: G1/AHT,
-atribuição de segmento no relatório).
+**Camada E2 restante:** ~~**E2f**~~ ✅ (2026-07-29) · ~~**Camada F**~~ ✅ **2026-07-30** (F1 atribuição,
+F2 G1 no relatório, F3 pull direcionado 5/5, F4 expiração — ver CHANGELOG). **Arco A–F completo.**
+Resíduo da F: a **lease** não foi medida (a sonda observou a chave de outra sessão) — a lacuna 2
+segue como estava, e o que ficou provado é que o **prazo** devolve a vaga.
 *(E2e — produtor do marker `acw_pending` — **saiu de escopo** com a remoção da Camada C, 2026-07-29.)*
 
 **Cleanup:** ~~`infra/test/smoke_acw_gate.sh` órfão~~ — não existia mais (item stale) · ~~`acw_gate` como config
@@ -38,6 +95,19 @@ desemboca em `outcome`/`issue_status`/`handoff_reason` (texto livre concatenado)
 contrário, é genérico: dá para acrescentar "serviço executado" no editor hoje — e a resposta
 **some sem log**, porque o skill não passa e a tool não aceita. Formulário genérico × tool de
 contrato fixo = funil que descarta em silêncio.
+
+**Evidência ao vivo (F1, 2026-07-30)** — o funil é mais estreito do que "campo novo no editor":
+descarta campo que o formulário JÁ TEM. Wrap-up submetido com `resumo="zxzxzx"` e
+`proximos_passos="wwww"`; o segmento da origem gravou
+
+```
+outcome: resolved   issue_status: resolvido   handoff_reason: NULL
+```
+
+porque a tool só monta `handoff_reason` quando `outcome !== "resolved"` (`segment.ts:95-100`).
+Num atendimento **resolvido** — o caso mais comum — o resumo que o atendente escreveu não vai a
+lugar nenhum, e a tela não dá nenhum sinal disso. O `issue_status` (classificação crua, em
+português) é o campo que prova a atribuição por referência: nada mais no sistema o escreve.
 
 ### Fatias
 
@@ -107,6 +177,36 @@ agentes caem na mesma sessão sem dizer quem executou o quê. O item do Arc 12 d
 **Desdobramento de UI a discutir:** se os serviços já estão marcados, o formulário de wrap-up pode
 **exibi-los** (o briefing já carrega contexto da origem) para o humano confirmar/complementar, em
 vez de digitar do zero.
+
+---
+
+## `close_reason` do contato só é persistido se o wrap-up for submetido *(medido 2026-07-30)*
+
+Dois atendimentos idênticos na validação da Camada F, diferindo só no wrap-up:
+
+| Caso | `retencao_humano`.`close_reason` | `outcome` | wrap-up |
+|---|---|---|---|
+| 1º | `agent_hangup` | `resolved` | submetido |
+| 2º | **`NULL`** | `resolved` | expirado (nunca reivindicado) |
+
+**Mecanismo** (confirmado no código): o valor é semeado no hash `seg_signal` pelo bridge quando o
+hook dispara (`_seed_segment_signal(..., _hs_close_reason)`, `main.py:1509`, derivado de
+`_TRANSPORT_TO_CLOSE_REASON`), mas só alcança o ClickHouse quando a linha é **republicada a partir do
+hash** — e quem republica é o `segment_outcome_record` (`tools/segment.ts:166`), acionado pelo SUBMIT
+do wrap-up. O `participant_left` do fechamento canônico leva `outcome`, não `close_reason`.
+
+**Por que importa:** o motivo de encerramento do CONTATO passa a depender de um ato do atendente sobre
+outra coisa (o formulário de wrap-up). Um relatório que enumere `close_reason` tem um buraco do tamanho
+da taxa de não-preenchimento — e o buraco é `NULL`, não zero: não desbalanceia contagem nenhuma, não
+acusa erro, só encolhe a amostra em silêncio. É o padrão da § Postura de Engenharia: `outcome=resolved`
+igual nos dois casos é o valor plausível que impede de notar.
+
+**Onde consertar (a decidir):** (a) incluir `close_reason` no `participant_left` do fechamento
+canônico — mas ele roda antes do hook semear o hash, então precisa derivar o valor por conta própria;
+(b) `_republish_segment_from_signal` incondicional ao fim do contato, independente de wrap-up. A (b)
+reusa o caminho já provado; a (a) elimina a dependência de republish. **Não** confundir com o
+`close_reason` do segmento de WRAP-UP (`task_submitted`/`acw_expired`/`acw_supervisor_closed`), que é
+outro domínio e está correto.
 
 ---
 
@@ -234,23 +334,24 @@ vaga — e também não emite `participant_left`. Idem o `on_timeout` do delegat
 >   na lente `sessions_aht`. Filtrar por `segments.pool_id` **não serve** (o segmento
 >   carrega `formfill_demo`, pool `contact`). Fazer o **pool próprio** abaixo torna o
 >   filtro trivial e conserta a MV junto; sem ele, exige subquery por sessão.
-> - **Pool próprio para o claim** — desenho **fechado e superseded** pela ADR
->   [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md)
->   (2026-07-29, **Proposto**): em vez de UM pool de claim compartilhado, cada pool ganha uma
->   **fila interna espelho** `<pool_id>-int` (física, auto-provisionada por flag, oculta na UX
->   de configuração), com **acesso derivado** — o agente não se associa a nada novo. Ganha
->   ACW por pool de origem, que o pool único perderia. O achado que a sustenta:
->   **trabalho author-bound ≠ trabalho pooled** — só quem atendeu pode classificar o próprio
->   atendimento, logo transbordo é erro de categoria (e aprovação, que É pooled, fica de fora).
->   Fases I1–I5 na ADR; **decidir/implementar ANTES de escrever qualquer filtro**, porque I1
->   faz o resíduo do TMA desaparecer sem código.
+> - ~~**Resíduo da E2f**~~ + ~~**Pool próprio para o claim**~~ ✅ **RESOLVIDOS (2026-07-30, ver
+>   CHANGELOG)** pela ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md),
+>   fases **I1–I4**. O segmento humano do wrap-up passou a nascer em `{pool}-int`
+>   (`purpose: internal`) e o `_apply_contact_scope` já existente o cobre — o resíduo do TMA por
+>   agente desapareceu **sem filtro novo**, e o ACW ficou legível **por pool de origem**.
+>   **Falta a fase I5** (sem transbordo + supervisor pode encerrar + TTL `acw_expired` +
+>   relatório de pendências por agente). Sem ela um wrap-up que ninguém preenche fica pendurado
+>   para sempre — os 87 órfãos em outra roupa. *(Achado a checar junto: o segmento de wrap-up
+>   SUBMETIDO fechou com `outcome = NULL`, que é o valor que a D5 reserva para "ninguém
+>   preencheu" — o que os separa tem de ser o `close_reason`.)*
 > - **Backfill dos 87 já abertos** — decisão: não curar dado de teste (o grosso do
 >   `formfill_demo` é lixo de teste abortado); os 9 da aprovação são uso real e ficam como
 >   ruído. Alternativa a fingir fechamento: `DELETE` no ClickHouse.
 > - **As 3 divergências de doc** listadas abaixo.
-> - **Validar H1 ao vivo:** um wrap-up submetido deve fechar com
->   `close_reason=task_submitted` (não `session_teardown`). Se vier `session_teardown`, a
->   corrida que o H1 tenta evitar não foi evitada.
+> - ~~**Validar H1 ao vivo**~~ ✅ **(2026-07-30)** — atendimento real: o segmento de wrap-up
+>   fechou com `close_reason=task_submitted` e `duration_ms=89 483`. A corrida não ocorreu, e
+>   o **tempo de ACW passou a existir como número** (contato: 11 656 ms no `retencao_humano`;
+>   ACW: 89 483 ms no `retencao_humano-int` — 7,7× o atendimento, a distorção que G1 nomeia).
 
 **Conserto proposto (duas camadas, complementares):**
 - **H2 (estrutural, primeiro):** varrer `session:{id}:human_agents` emitindo `participant_left`
@@ -270,6 +371,15 @@ agrupados por pool. Se aparecerem wrap-ups **nunca submetidos** (devolvidos/expi
 sozinha é insuficiente — previsão do código é que ambos vazem.
 
 **Divergências doc × código achadas no mapeamento (corrigir junto):**
+0. ✅ **CORRIGIDA (2026-07-30)** — `CLAUDE.md` § Configuration dizia "Skills seguem upsert (são
+   código, não config de tenant)". **Falso desde 2026-07-13**: skills são seed-if-absent
+   (`registry_syncer.py` §46-53). Consequência que custou um ciclo inteiro de validação: editar o
+   YAML de um skill já semeado é **no-op**, reiniciar o bridge não publica nada (só loga o DRIFT),
+   e o modo de falha é **sucesso pelo caminho antigo**.
+4. `tenant_demo.yaml:123` comentava "dispatch: detached ✅" enquanto a entrada declarava
+   `inline` — corrigido em 2026-07-30 junto com a I3.
+5. `PresenceSidebar.tsx` não é renderizado por ninguém — 5º órfão, além dos 4 já listados em
+   § "Eventos — três superfícies para duas ideias".
 1. `docs/arcos/session-conference-lifecycle.md:305-311` diz que o segmento fecha por "agent_done
    OU heartbeat TTL expirado". A perna de heartbeat (`server.ts:3371-3388`) é **gated em
    `sismember human_agents`** — SET que `_destroy_conference` já apagou. A rede não fecha.

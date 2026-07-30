@@ -179,6 +179,69 @@ async def test_release_requeues_and_frees_slot(env):
 
 
 @pytest.mark.asyncio
+async def test_expire_never_claimed_removes_from_queue(env):
+    """
+    I5 — o caso que hoje não tem quem limpe: item NUNCA reivindicado. O expire tira
+    o membro do ZSET e o JSON; sem isso o item fica listado para sempre e o claim o
+    recusa com not_in_queue quando o JSON expira por TTL.
+    """
+    reg, router, client, _p, tenant, pool = env
+    sid = "ses-exp-nunca"
+    await _queue_contact(reg, tenant, pool, sid)
+
+    res = await router.work_task_expire(tenant, pool, sid, reason="acw_expired")
+    assert res["expired"] is True
+    assert res["was_queued"] is True
+    assert res["was_claimed"] is False
+    assert await client.zscore(_queue_key(tenant, pool), sid) is None
+    assert await reg.get_full_queued_contact(tenant, sid) is None
+
+
+@pytest.mark.asyncio
+async def test_expire_claimed_frees_slot_without_requeue(env):
+    """
+    I5 — item reivindicado e não submetido: devolve a VAGA (a lease é a evidência do
+    claim de pull) e NÃO re-enfileira (diferença essencial para o work_task_release).
+    """
+    reg, router, client, _p, tenant, pool = env
+    sid, inst = "ses-exp-claim", "human-exp-1"
+    await _register_instance(reg, tenant, pool, inst, max_concurrent=3)
+    await _queue_contact(reg, tenant, pool, sid)
+    await router.work_task_claim(tenant, pool, sid, inst)
+    assert await reg.instance_session_count(tenant, inst) == 1
+
+    res = await router.work_task_expire(tenant, pool, sid, reason="acw_expired")
+    assert res["was_claimed"] is True and res["instance_id"] == inst
+    assert res["was_queued"] is False          # o claim já havia feito o ZREM
+    assert await reg.instance_session_count(tenant, inst) == 0
+    assert await client.get(_claim_lease_key(tenant, pool, sid)) is None
+    assert await client.zscore(_queue_key(tenant, pool), sid) is None   # NÃO re-enfileira
+
+
+@pytest.mark.asyncio
+async def test_expire_is_idempotent(env):
+    """
+    I5 — o expire roda em TODO resume; a 2ª passagem tem de ser inócua. Um segundo
+    expire NÃO pode derrubar a vaga que o agente ocupa com OUTRA sessão.
+    """
+    reg, router, _c, _p, tenant, pool = env
+    sid, inst = "ses-exp-idem", "human-exp-2"
+    await _register_instance(reg, tenant, pool, inst, max_concurrent=3)
+    await _queue_contact(reg, tenant, pool, sid)
+    await router.work_task_claim(tenant, pool, sid, inst)
+    # o mesmo agente atende outra sessão em paralelo — ela não pode ser afetada
+    await reg.claim_instance(tenant, inst, "outra-sessao", None, max_concurrent=3)
+
+    first  = await router.work_task_expire(tenant, pool, sid)
+    second = await router.work_task_expire(tenant, pool, sid)
+    assert first["was_claimed"] is True
+    assert second["was_claimed"] is False and second["was_queued"] is False
+    assert second["expired"] is True
+    # sobra exatamente a outra sessão
+    assert await reg.instance_session_count(tenant, inst) == 1
+
+
+@pytest.mark.asyncio
 async def test_route_pull_parks_and_clears_lease(env):
     """F1.1+F1.3: route() de um pool pull PARQUEIA (não aloca) e LIMPA a claim
     lease anterior da sessão (re-parque após desconexão)."""

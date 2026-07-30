@@ -188,6 +188,7 @@
     "resizeHint":    "Drag to resize",
     "reservedToYou": "Reserved to you",
     "overflow":      "Overflowed",
+    "internalQueue": "Wrap-up — {{pool}}",
     "claimReason": {
       "already_claimed":  "Already claimed by another agent",
       "no_capacity":      "No capacity available",

@@ -1,6 +1,8 @@
 # ADR: Fila interna por pool — trabalho author-bound não é trabalho pooled
 
-**Status:** Proposto (2026-07-29) — não implementado.
+**Status:** Aceito (2026-07-29) — **I1–I4 implementadas** (2026-07-30); **I5 núcleo A+B implementado**
+(2026-07-30: encerramento único com dois gatilhos). Resta o **relatório de pendências** (fatia própria,
+bloqueado pela lacuna 5 do `TODO.md`). Ver § "Correções ao desenho original".
 **Componentes:** `packages/agent-registry` (flag + espelho auto-provisionado), `packages/routing-engine`
 (claim sem transbordo), `packages/platform-ui` (acesso derivado, UX oculta, rótulo por origem),
 `packages/analytics-api` (derivação no `accessible_pools`), `packages/orchestrator-bridge` +
@@ -92,6 +94,25 @@ Esquecer (2) é a falha mais provável desta ADR, porque o sintoma é ausência,
 
 O id `<pool>-int` é convenção de construção, não rótulo de produto.
 
+### D7 — Configuração do hook viaja com o hook (`PoolHookEntry.context`)
+
+A entrada de hook ganha `context: Record<string,string>`, que o bridge injeta prefixado `hook.*` no
+ContextStore da sessão do hook. É o que permite ao skill do hook ser genérico de verdade: ele recebe
+alvo e formulário em vez de conhecê-los.
+
+```yaml
+on_human_end:
+  - pool: wrapup_detached_ia
+    dispatch: detached
+    context:
+      dialog_form_id:    dialog_wrapup_retencao
+      acw_timeout_hours: "24"      # I5 — prazo é fato do pool, como o formulário
+```
+
+Reservadas (escritas pelo bridge, não sobrescrevíveis pela config do tenant): `hook.type`,
+`hook.origin_pool`, `hook.wrapup_pool`. Sem essa proteção, config de tenant poderia sequestrar o alvo
+do delegate.
+
 ### D4 — Sem transbordo. A saída é supervisor + expiração
 
 Transbordo automático some (D1/o achado). No lugar:
@@ -116,6 +137,25 @@ Portanto, na expiração o segmento do wrap-up fecha com:
 outcome      = null              (ausência é o dado — nada é inventado)
 close_reason = "acw_expired"     (nomeia por que fechamos, que é o que sabemos)
 ```
+
+**As-built (2026-07-30): são TRÊS valores, não dois.** O encerramento pelo supervisor não
+é o mesmo fato que o prazo vencido — e como ambos têm `outcome = null`, o `close_reason` é
+o único lugar onde podem se separar:
+
+| `close_reason` | Causa |
+|---|---|
+| `task_submitted` | o humano entregou o formulário |
+| `acw_expired` | o prazo do delegate venceu sem entrega |
+| `acw_supervisor_closed` | um supervisor encerrou a pendência |
+
+Colapsar os dois últimos custaria a única pergunta que o supervisor vai fazer — *quantos
+eu tive de limpar?* — e série histórica não se reprocessa. A distinção vem do `source` do
+resume, escrito server-side pelo gatilho, nunca asserido pelo cliente da API.
+
+**Limite conhecido:** o item **nunca reivindicado** não tem segmento humano, logo não
+existe linha onde carimbar `acw_expired`. O núcleo A+B garante a *limpeza* (item sai da
+fila, vaga volta, workflow completa); a *visibilidade* dessa pendência depende do
+relatório (fatia própria).
 
 Simetria já existente: `null` é exatamente como `scoring.ts` representa item NA/skipped, com
 re-normalização de peso. A ausência é cidadã de primeira classe no modelo, não um buraco.
@@ -160,17 +200,102 @@ de ruído indistinguível.
 
 ---
 
+## Correções ao desenho original *(levantamento de código, 2026-07-30)*
+
+Cinco pontos em que a ADP proposta divergia do código. Os três primeiros mudaram decisões.
+
+**1. O sufixo `-int` era inválido.** `PoolRegistrationSchema.pool_id` era `^[a-z0-9_]+$` — hífen não
+passa. **Decidido:** relaxar para `^[a-z0-9_]+(-int)?$`, com o hífen legal **só** nessa posição. Assim o
+sufixo é reservado **por construção** (nenhum pool legado pode contê-lo) e `endsWith` vira garantia em vez
+de convenção — que é o que a D6 precisa para derivar acesso sem adivinhar. `PoolHookEntrySchema.pool`
+segue **estrito**: hook nunca aponta para espelho, e isso vira guarda de graça.
+
+**2. "I1 sozinha faz o resíduo desaparecer" era falso.** `delegate.ts` passava `pool: step.pool`
+**literal** — só `assigned_to`, `auto_attend` e `context` iam por `resolveInputMap`. Criar o espelho não
+movia o item: ele continuava caindo em `formfill_demo` por hardcode. **I1 e I3 viraram uma fatia só**, e
+I3 **não** sai "sem trabalho no engine" como a ADR afirmava: exigiu tornar `delegate.pool` resolvível,
+com ref não resolvida como **falha dura** (nunca passa adiante como literal — rotear para um pool chamado
+`@ctx.hook.wrapup_pool` acusaria "pool not found" e apontaria para o registry em vez de para a tag ausente).
+
+**3. A D2 tem TRÊS pontos, não dois — e o terceiro falha por ausência.** Além da inbox e do
+`accessible_pools` do analytics, a inbox é governada por `activePools` = **pools com WebSocket aberto**
+(`AgentAssistPage.tsx`, `AgentAssistContext.tsx`), não por `accessiblePools`. Sem login no espelho:
+a inbox nem consulta a fila; um claim forçado **passa** (o motor é pool-agnóstico — `work_task_claim`
+nunca valida instância×pool) mas o `conversation.assigned` vai para `pool:events:{pool}-int`, que ninguém
+assina → *claimado com sucesso, tela vazia*; `mark_busy` incrementa um pool cujo ready-set está vazio; e
+`pool_config:{pool}-int` não existe → sem SLA na inbox e sem lookup de hooks no bridge.
+**Decidido:** o toggle de pool abre o WS do pai **e** o do espelho — `registerHumanAgent` resolve os
+quatro de uma vez, e continua derivado (nada administrado). A derivação para o analytics fica em
+`pool_auth.py`, **não** no JWT: mantém o token intacto e dispensa re-login.
+
+**4. Não existe DELETE de pool** na API do registry (só POST/PUT), e o `RegistrySyncer` não poda pools.
+"Remover o espelho" é **desativar** (`status: inactive`) — desejável, porque o espelho aparece em
+`segments` e apagá-lo tornaria ilegível o ACW já medido.
+
+**5. O bloqueio de desligar-com-pendências (D6) não é verificável daqui.** A fila vive no Redis do
+routing-engine e o invariante proíbe acesso direto pelo registry. **Decidido:** tratar a impossibilidade
+de verificar como pendência — recusa por default, desligamento exige `?force_disable=true`. O que se
+evita é a falha por ausência: desativar o espelho o tira de `availablePools`, a inbox para de listá-lo e
+os itens somem da vista do agente sem erro nenhum.
+
+**6. O "nó" da I5 não existia — e o fato ausente era outro** *(2026-07-30)*. O plano
+registrava que o `ZREM` precisaria do id da sessão-FILHA do delegate, indisponível no
+handler de resume. Levantamento: o `persistDelegate` do `skill-flow-service` chama
+**sempre** `/v1/channels/webhook/delegate-conference` (*"delegate() is A2A: the target
+agent ALWAYS runs as a conference specialist INSIDE the caller's session"*), logo
+`child_session_id == parent session_id` e o id já está em mãos. O `handle_delegate`
+roteado está inerte (só alcançável por POST direto; sequer aceita `assigned_to`/
+`auto_attend`, que o wrap-up usa). O que **de fato** faltava era o **pool** do item:
+`session:{id}:meta` carrega o pool do WORKFLOW enquanto ninguém reivindica — mente
+exatamente no caso que importa — e `{t}:queue_contact:{sid}` morre por TTL antes do prazo.
+**Decidido:** ledger `{t}:work_task:{session_id}` escrito no despacho (único ponto que
+conhece o fato), chaveado pela sessão que o resume resolve, carregando `queue_session_id`
+(o id que está DE FATO no ZSET) para que a topologia não volte ao caminho.
+
+**7. TTL do JSON da fila < prazo do item** *(achado 2026-07-30)*. `add_queued_contact`
+usava TTL fixo de 4 h contra `timeout_hours: 24`. Entre as duas marcas o membro do ZSET
+sobrevive sozinho e o item **mente**: continua listado na inbox, **sem `assigned_to`** —
+perde o author-binding que é a razão de ser desta ADR — e irreivindicável
+(`not_in_queue`). **Decidido:** o delegate propaga `work_item_deadline` e o TTL o
+acompanha.
+
+**Peça acrescentada — `PoolHookEntry.context`.** O skill do hook é genérico; o que varia é a configuração
+de quem o invoca. Qual DialogForm o wrap-up de Retenção usa não é fato do `skill_wrapup_detached_v1` — é
+fato do `retencao_humano`. Sem esse campo o valor só teria dois lugares onde morar, e os dois erram o
+escopo: cravado no YAML do skill (um form global) ou no `config_json` do slot de deploy do pool do hook
+(idem, o deploy é um só). O bridge mescla o `context` da entrada como `hook.*`, com
+`hook.type`/`hook.origin_pool`/`hook.wrapup_pool` reservadas e não-sobrescrevíveis.
+
+**Alvo do delegate: UMA tag, resolvida no bridge.** A alternativa (duas tags + `choice` no skill) não
+multiplicaria YAMLs, mas multiplicaria a **política de fallback**: cada consumidor de hook destacado
+responderia à sua maneira "e se o pool de origem não tiver fila interna?". Com tag única, a pergunta é
+respondida onde a configuração é conhecida — e quando a flag está desligada a tag simplesmente não é
+escrita, o `warning` nomeia o motivo e o delegate falha apontando a ref.
+
+---
+
 ## Fases
 
-| Fase | Entrega | Depende |
-|---|---|---|
-| I1 | Flag no pool + espelho auto-provisionado + guardas (D1, D6) | — |
-| I2 | Acesso derivado — inbox **e** `accessible_pools` do analytics (D2) | I1 |
-| I3 | Skill resolve o alvo do delegate por `hook.origin_pool` (some o hardcode) | I1 |
-| I4 | UX — ocultar nos seletores, rotular pela origem na inbox (D3) | I1 |
-| I5 | Sem transbordo + supervisor + TTL `acw_expired` + relatório de pendências (D4, D5) | I2 |
+| Fase | Entrega | Depende | Estado |
+|---|---|---|---|
+| I1 | Flag no pool + espelho auto-provisionado + guardas (D1, D6) | — | ✅ 2026-07-30 (smoke 7/7) |
+| I3 | `delegate.pool` resolvível + `hook.wrapup_pool`/`hook.*` no bridge + skill genérico | I1 | ✅ 2026-07-30 |
+| I2 | Acesso derivado — `fetchPools`, **WS do espelho junto com o do pai**, `pool_auth` (D2) | I1 | ✅ 2026-07-30 |
+| I4 | UX — oculto nos seletores + rótulo pela origem na inbox (D3) | I1 | ✅ 2026-07-30 |
+| I5 (núcleo A+B) | Encerramento único com dois gatilhos: `work_task_expire` + ledger + supervisor + `close_reason` distintos (D4, D5) | I2 | ✅ 2026-07-30 |
+| I5 (relatório) | Pendências por agente — visibilidade do item nunca reivindicado | lacuna 5 | pendente |
+| F | Validação do arco de detach (G1, atribuição, pull direcionado, expiração) | I5 | ✅ 2026-07-30 |
 
-I1–I3 já entregam o valor de métrica; I5 é o que evita recriar órfãos.
+I1+I3 movem o item para um pool `internal` (é o que faz o resíduo do TMA por agente desaparecer sem query
+nova); I2 é o que o devolve ao agente. **I5 é o que evita recriar órfãos**: sem transbordo e sem TTL, um
+wrap-up que ninguém preenche fica pendurado para sempre — a mesma forma dos 87 segmentos que acabamos de
+consertar, em outra roupa.
+
+**Três pontos de derivação, não dois** (a "ficha mais fácil de derrubar" das Consequências):
+`fetchPools`/`handleTogglePool` (`AgentAssistContext.tsx`) e `_with_internal_mirrors`
+(`analytics-api/pool_auth.py`, aplicado nos DOIS decodificadores — header e query param, senão o mesmo
+relatório mostra pools diferentes conforme por onde o token chega). O sufixo é a única coisa que os
+mantém em sincronia; é por isso que ele precisa ser garantido pela regex, não convencionado.
 
 ## Não-objetivos
 

@@ -80,8 +80,24 @@ def _pool_set_key(tenant_id: str) -> str:
     return f"{tenant_id}:pools"
 
 def _claim_lease_key(tenant_id: str, pool_id: str, session_id: str) -> str:
-    """Frente 1 (pull): lease do claim — {instance_id, claimed_at}, TTL curto
-    renovado por heartbeat (F1.3). Ao expirar, o auto-release re-enfileira."""
+    """
+    Frente 1 (pull): lease do claim — {instance_id, claimed_at}, TTL de
+    `routing.claim_lease_s` (default 180 s).
+
+    ATENÇÃO — a lease é escrita UMA vez (`work_task_claim`) e apagada no release
+    explícito ou no re-parque. **Não há heartbeat que a renove nem reaper que a
+    colete**: ela expira passivamente no Redis e ninguém repara nisso. Item
+    reivindicado e abandonado fica fora da fila, sem lease, com a vaga do agente
+    ocupada até o reap de ocupantes órfãos passar.
+
+    *(Este docstring afirmava o contrário — "TTL curto renovado por heartbeat (F1.3);
+    ao expirar, o auto-release re-enfileira" — descrevendo um mecanismo que nunca foi
+    implementado. Corrigido em 2026-07-30. Documentação que promete uma rede
+    inexistente é pior que a ausência dela: quem lê para de procurar o vazamento.)*
+
+    O único consumidor é `work_task_holder` (leitura A5 pelo channel-gateway), que
+    **falha aberto** quando a lease sumiu — o resume não é bloqueado por isso.
+    """
     return f"{tenant_id}:pool:{pool_id}:claim:{session_id}"
 
 def _queue_key(tenant_id: str, pool_id: str) -> str:
@@ -1241,6 +1257,28 @@ class InstanceRegistry:
         if contact_data.get("assigned_to") and not contact_data.get("assigned_at_ms"):
             contact_data["assigned_at_ms"] = int(queued_at_ms)
 
+        # I5 — o JSON não pode morrer ANTES do item. O TTL default (4 h) foi pensado
+        # para contato de cliente; um item de trabalho de `delegate` vive até o
+        # `timeout_hours` do step (24 h no wrap-up). Com o JSON expirado o membro do
+        # ZSET sobrevive sozinho e o item passa a MENTIR: segue listado na inbox, sem
+        # `assigned_to` (perde o author-binding, que é a razão de ser da fila interna)
+        # e irreivindicável — `work_task_claim` lê o JSON e devolve `not_in_queue`.
+        # Nada erra; o item só deixa de ser o que diz ser. Prazo ausente = default.
+        effective_ttl = int(ttl)
+        _deadline = contact_data.get("work_item_deadline") or ""
+        if _deadline:
+            try:
+                _dl = datetime.fromisoformat(str(_deadline).replace("Z", "+00:00"))
+                _remaining = int((_dl - datetime.now(timezone.utc)).total_seconds())
+                # +1 h de folga: o expire da I5 precisa do JSON para saber o que limpar.
+                effective_ttl = max(effective_ttl, _remaining + 3600)
+            except Exception as _e:
+                logger.warning(
+                    "add_queued_contact: work_item_deadline inválido (%r) session=%s — "
+                    "usando TTL default de %ds: %s",
+                    _deadline, session_id, effective_ttl, _e,
+                )
+
         added = await self._redis.zadd(
             _queue_key(tenant_id, pool_id), {session_id: queued_at_ms}
         )
@@ -1249,7 +1287,7 @@ class InstanceRegistry:
         await self._redis.set(
             _queue_contact_key(tenant_id, session_id),
             json.dumps(contact_data),
-            ex=ttl,
+            ex=effective_ttl,
         )
         # P3 — wall-clock da PRIMEIRA vez na fila (NX: re-enfileiramentos — ex.:
         # devolução via work_task_release, re-rota no drain — NÃO sobrescrevem).

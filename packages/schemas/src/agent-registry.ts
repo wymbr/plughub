@@ -168,6 +168,27 @@ const PoolHookEntrySchema = z.object({
    * Ver docs/product/finalization-hooks-detach-and-directed-pull-design.md.
    */
   dispatch: z.enum(["inline", "detached"]).default("inline"),
+  /**
+   * Configuração declarada pelo pool de ORIGEM e injetada no ContextStore da sessão
+   * do hook, prefixada como `hook.*` (o bridge mescla em `_fire_detached_hook`).
+   *
+   * Existe porque o skill do hook é **genérico** e o que varia é a configuração de
+   * quem o invoca: qual DialogForm o wrap-up de Retenção usa não é fato do
+   * `skill_wrapup_detached_v1` — é fato do `retencao_humano`. Sem este campo o valor
+   * só teria dois lugares onde morar, e os dois são errados: cravado no YAML do skill
+   * (um form global para todos os pools de origem) ou no `config_json` do slot de
+   * deploy do pool do hook (idem — o deploy é um só). É o invariante do CLAUDE.md:
+   * fato de escopo estreito derivado onde o escopo é conhecido.
+   *
+   *   on_human_end:
+   *     - pool: wrapup_detached_ia
+   *       dispatch: detached
+   *       context: { dialog_form_id: dialog_wrapup_retencao }
+   *
+   * → o skill lê `@ctx.hook.dialog_form_id`. Chaves reservadas, escritas pelo bridge
+   * e NÃO sobrescrevíveis por aqui: `hook.type`, `hook.origin_pool`, `hook.wrapup_pool`.
+   */
+  context: z.record(z.string()).optional(),
 })
 export type PoolHookEntry = z.infer<typeof PoolHookEntrySchema>
 
@@ -222,7 +243,17 @@ export type PoolHooks = z.infer<typeof PoolHooksSchema>
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const PoolRegistrationSchema = z.object({
-  pool_id:                z.string().regex(/^[a-z0-9_]+$/),
+  /**
+   * snake_case. O hífen é legal em UMA única posição: o sufixo reservado `-int`,
+   * que identifica o **espelho de fila interna** auto-provisionado de um pool
+   * (ADR adr-internal-work-queue-author-bound, D1).
+   *
+   * O sufixo é reservado **por construção**: nenhum pool declarado por tenant pode
+   * conter hífen, logo `endsWith("-int")` é garantia, não convenção — é isso que
+   * permite derivar acesso (`p ∪ p+"-int"`) sem adivinhação. O registry **rejeita**
+   * a criação manual de um pool com esse sufixo (D6): só o auto-provisionamento o cria.
+   */
+  pool_id:                z.string().regex(/^[a-z0-9_]+(-int)?$/),
   /**
    * Tipagem do pool (capacity-governance item 2, 2026-06-05).
    * Canal NUNCA é associado a tipo — canal aponta para pool; o pool declara.
@@ -263,6 +294,25 @@ export const PoolRegistrationSchema = z.object({
    * Binário de propósito: QUAL trabalho interno é, o `pool_id` já diz.
    */
   purpose:                z.enum(["contact", "internal"]).optional(),
+  /**
+   * ADR adr-internal-work-queue-author-bound (D1) — liga a **fila interna espelho**
+   * deste pool: um pool físico `{pool_id}-int` (`purpose: internal`,
+   * `dispatch_mode: pull`, `agent_kind: human`, mesmos canais) auto-provisionado pelo
+   * registry, onde vive o trabalho **author-bound** gerado por este pool — wrap-up à
+   * frente. Author-bound ≠ pooled: só quem atendeu pode classificar o próprio
+   * atendimento, logo transbordo é erro de categoria (aprovação, que É pooled, NÃO usa
+   * fila interna).
+   *
+   * Por que um pool real e não uma fila virtual: o invariante "o POOL é a unidade
+   * endereçável". Com pool real, `segments.pool_id` do wrap-up passa a ser `internal`
+   * e o filtro da E2f já o cobre — sem subquery e sem tocar a `mv_agent_performance_daily`.
+   * Ganha-se ACW **por pool de origem** ("quanto Retenção gasta em pós-atendimento"),
+   * que um pool de claim único teria misturado.
+   *
+   * Acesso é DERIVADO, nunca associado: quem alcança `p` alcança `p-int` (D2).
+   * Desligar com pendências na fila é bloqueado (D6) — não migrado em silêncio.
+   */
+  internal_queue_enabled: z.boolean().optional(),
   /*
    * (removido 2026-07-29) `acw_gate: none|soft|hard` — Camada C do detach de hooks.
    * A Phase 0 do wrap-up unificado reverteu o mecanismo por ser o MODELO ERRADO:

@@ -40,6 +40,14 @@ model Pool {
   // Analytics excludes `internal` pools from contact counts and handle-time averages;
   // the pool keeps its OWN metrics (a wrap-up pool's TMA is the ACW time).
   purpose                String  @default("contact")
+  // ADR adr-internal-work-queue-author-bound (D1): enables the AUTHOR-BOUND work
+  // mirror `{pool_id}-int` (purpose=internal, dispatch_mode=pull, agent_kind=human),
+  // auto-provisioned by the registry. Author-bound work (wrap-up) can only be done by
+  // whoever handled the contact, so it must not overflow to the pool — unlike pooled
+  // work (approval), which stays on the regular model. Access is DERIVED, never
+  // associated: reaching `p` reaches `p-int`.
+  // Set only on the PARENT pool; the mirror itself always carries false.
+  internal_queue_enabled Boolean @default(false)
   // (removido 2026-07-29) acw_gate — ver migration 20260729000000_drop_pool_acw_gate.
   // Fase B (queue-attended-model): dedicated session slots (cap+guarantee) carved
   // from the installation total. NULL = pool draws from the shared bucket.

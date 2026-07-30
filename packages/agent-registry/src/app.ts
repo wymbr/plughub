@@ -66,6 +66,27 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       detail: zodErr.errors ?? (zodErr as unknown as { issues: unknown[] }).issues,
     })
   }
+  // Erros que JÁ CARREGAM status HTTP são de CLIENTE, não do servidor: o
+  // `express.json()` marca `status: 400` + `type: "entity.parse.failed"` em corpo
+  // malformado, e o `http-errors` faz o mesmo. Ignorar esse campo devolvia
+  // `500 internal_error` para um JSON inválido — o que manda quem depura procurar
+  // o defeito no serviço em vez de na requisição, e ainda esconde a mensagem
+  // (só visível em NODE_ENV=development). Erro de cliente rotulado como falha do
+  // servidor é degradação silenciosa com sinal trocado.
+  const httpStatus = (err !== null && typeof err === "object")
+    ? Number((err as { status?: number; statusCode?: number }).status
+             ?? (err as { statusCode?: number }).statusCode)
+    : NaN
+  if (Number.isInteger(httpStatus) && httpStatus >= 400 && httpStatus < 500) {
+    const parseFailed =
+      (err as { type?: string }).type === "entity.parse.failed"
+    return res.status(httpStatus).json({
+      error:  parseFailed ? "invalid_json" : "bad_request",
+      // A mensagem do body-parser descreve o corpo enviado pelo CLIENTE (posição do
+      // token inválido) — não vaza estado interno, então pode ir sempre.
+      detail: err instanceof Error ? err.message : "Bad request",
+    })
+  }
   if (err instanceof Error) {
     return res.status(500).json({
       error:  "internal_error",

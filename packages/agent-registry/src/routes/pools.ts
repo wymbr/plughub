@@ -9,6 +9,12 @@ import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
 import { publishRegistryEvent, publishRegistryChanged } from "../infra/kafka"
 import { contractedCapacity } from "../lib/capacity"
+import {
+  INTERNAL_QUEUE_SUFFIX,
+  isMirrorPoolId,
+  syncInternalQueueMirror,
+  detachedHookViolation,
+} from "../lib/internal-queue"
 
 export const poolsRouter = Router()
 
@@ -74,6 +80,18 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     const createdBy = _getUserId(req)
     const body      = CreatePoolSchema.parse(req.body)
 
+    // ADR internal-work-queue (D6): o sufixo `-int` só é garantia enquanto NINGUÉM
+    // além do auto-provisionamento o usa. Se um pool manual pudesse tomá-lo, a
+    // derivação de acesso (`p ∪ p+"-int"`) viraria adivinhação e o supervisor podia
+    // acabar enxergando — ou deixando de enxergar — um pool que não é espelho de nada.
+    if (isMirrorPoolId(body.pool_id)) {
+      return res.status(422).json({
+        error:
+          `o sufixo "${INTERNAL_QUEUE_SUFFIX}" é reservado ao espelho de fila interna, ` +
+          "criado automaticamente por `internal_queue_enabled` no pool de origem",
+      })
+    }
+
     // Verificar duplicata
     const existing = await prisma.pool.findUnique({
       where: { pool_id_tenant_id: { pool_id: body.pool_id, tenant_id: tenantId } },
@@ -100,6 +118,10 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
       })
     }
 
+    // ADR internal-work-queue: hook detached agent-side exige a fila interna ligada.
+    const hookViolation = detachedHookViolation(body.hooks, body.internal_queue_enabled === true)
+    if (hookViolation) return res.status(422).json(hookViolation)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pool = await prisma.pool.create({
       data: {
@@ -113,6 +135,7 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         max_concurrent_sessions: body.max_concurrent_sessions ?? null,
         dispatch_mode:           body.dispatch_mode ?? "push",
         purpose:                 body.purpose ?? "contact",
+        internal_queue_enabled:  body.internal_queue_enabled ?? false,
         session_reservation:     body.session_reservation ?? null,
         max_reply_time_ms:       body.max_reply_time_ms ?? null,
         routing_expression:      body.routing_expression ?? Prisma.DbNull,
@@ -130,6 +153,17 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     })
 
     const formatted = _formatPool(pool)
+
+    // Espelho de fila interna (ADR internal-work-queue, D1). Depois do create para
+    // que o espelho nunca exista sem o pai.
+    if (body.internal_queue_enabled === true) {
+      await syncInternalQueueMirror(
+        tenantId,
+        { pool_id: body.pool_id, channel_types: body.channel_types, description: body.description ?? null },
+        true,
+        createdBy,
+      )
+    }
 
     // Publica evento para o Routing Engine atualizar o cache Redis (pool_config)
     await publishRegistryEvent({
@@ -269,6 +303,36 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       })
     }
 
+    // ── ADR internal-work-queue — estado RESULTANTE da flag e dos hooks ──────────
+    const exIq = existing as { internal_queue_enabled?: boolean; hooks: unknown }
+    const resultingIq = body.internal_queue_enabled !== undefined
+      ? body.internal_queue_enabled
+      : (exIq.internal_queue_enabled ?? false)
+    const resultingHooks = body.hooks !== undefined ? body.hooks : exIq.hooks
+
+    const hookViolation = detachedHookViolation(resultingHooks, resultingIq)
+    if (hookViolation) return res.status(422).json(hookViolation)
+
+    // D6 — desligar a flag NUNCA é silencioso. O registry não enxerga a fila (ela vive
+    // no Redis do routing-engine, e o invariante proíbe acesso direto daqui), então a
+    // impossibilidade de VERIFICAR pendência é tratada como pendência: recusa por
+    // default, e o desligamento exige confirmação explícita.
+    //
+    // O que se evita: desativar o espelho tira o pool de `availablePools`, a inbox
+    // deixa de listá-lo e os itens somem da vista do agente — falha por AUSÊNCIA, que
+    // é a que ninguém percebe. Melhor recusar barulhento do que orfanar quieto.
+    const disabling = (exIq.internal_queue_enabled ?? false) && !resultingIq
+    const forceDisable = String(req.query["force_disable"] ?? "") === "true"
+    if (disabling && !forceDisable) {
+      return res.status(422).json({
+        error:
+          "desligar `internal_queue_enabled` desativa a fila interna e qualquer item " +
+          "pendente nela deixa de ser reivindicável. O registry não consegue verificar " +
+          "a fila (ela é do routing-engine). Drene a fila e repita com ?force_disable=true.",
+        details: { mirror_pool_id: `${req.params["pool_id"]!}${INTERNAL_QUEUE_SUFFIX}` },
+      })
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const updated = await prisma.pool.update({
       where: { id: existing.id },
@@ -280,6 +344,7 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         ...(body.webhook_skill_id        !== undefined && { webhook_skill_id:        body.webhook_skill_id }),
         ...(body.dispatch_mode           !== undefined && { dispatch_mode:           body.dispatch_mode }),
         ...(body.purpose                 !== undefined && { purpose:                 body.purpose }),
+        ...(body.internal_queue_enabled  !== undefined && { internal_queue_enabled:  body.internal_queue_enabled }),
         // Campos limpáveis via PUT null (schema .nullable()): escalares aceitam
         // null direto no Prisma; JSONB exige Prisma.DbNull.
         ...(body.max_concurrent_sessions !== undefined && { max_concurrent_sessions: body.max_concurrent_sessions }),
@@ -299,6 +364,19 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
     })
 
     const formatted = _formatPool(updated)
+
+    // Espelho de fila interna — reconcilia SEMPRE (idempotente): a flag pode ter mudado
+    // e os campos derivados (canais) podem ter mudado com a flag já ligada. Espelho não
+    // espelha espelho.
+    const up = updated as unknown as { pool_id: string; channel_types: string[]; description: string | null }
+    if (!isMirrorPoolId(up.pool_id)) {
+      await syncInternalQueueMirror(
+        tenantId,
+        { pool_id: up.pool_id, channel_types: up.channel_types, description: up.description },
+        resultingIq,
+        _getUserId(req),
+      )
+    }
 
     // Publica evento de atualização para o Routing Engine invalidar/atualizar cache
     await publishRegistryEvent({

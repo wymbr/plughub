@@ -1189,6 +1189,8 @@ async def _fire_detached_hook(
     agent_key:    str,
     close_origin: str,
     auto_attend:  bool = False,
+    internal_queue_enabled: bool = False,
+    entry_context: dict | None = None,
 ) -> None:
     """
     Camada D — dispara um hook de finalização `dispatch: detached` como **workflow
@@ -1231,6 +1233,43 @@ async def _fire_detached_hook(
     # auto-reivindica (auto-atendimento). Ausente = DETACHED (pull manual da inbox).
     if auto_attend:
         context["session.wrap_up_auto_attend"] = "true"
+
+    # ── ADR internal-work-queue (I3) — alvo do delegate e config do hook ─────────
+    # Duas tags que existem pela MESMA razão: o skill do hook é genérico e o que varia
+    # é a configuração de QUEM o invocou. Resolvê-las aqui mantém a decisão num lugar
+    # só; deixá-las no YAML do skill as multiplicaria por consumidor de hook, cada um
+    # respondendo à sua maneira "e se o pool de origem não tiver fila interna?".
+    #
+    # `hook.wrapup_pool` só é escrita quando a fila interna do pool de ORIGEM está
+    # ligada. Ausente, o `@ctx.hook.wrapup_pool` do skill não resolve e o delegate
+    # falha nomeando a tag — em vez de cair silenciosamente num pool de CONTATO, que
+    # é o que o modelo antigo (`pool: formfill_demo` cravado) fazia.
+    if internal_queue_enabled:
+        context["hook.wrapup_pool"] = f"{pool_id}-int"
+    else:
+        logger.warning(
+            "Detached hook sem fila interna: pool=%s não tem internal_queue_enabled; "
+            "@ctx.hook.wrapup_pool NÃO será injetada e um skill que delegue por ela "
+            "falhará (hook=%s session=%s)",
+            pool_id, hook_type, session_id,
+        )
+
+    # Configuração declarada na ENTRADA de hook do pool de origem (PoolHookEntry.context),
+    # prefixada `hook.*`. É por aqui que "qual DialogForm o wrap-up de Retenção usa"
+    # chega ao skill genérico. Chaves reservadas (escritas acima) não são sobrescritas:
+    # a config do tenant não pode sequestrar o alvo do delegate.
+    _RESERVED = ("hook.type", "hook.origin_pool", "hook.wrapup_pool")
+    for _k, _v in (entry_context or {}).items():
+        _tag = _k if str(_k).startswith("hook.") else f"hook.{_k}"
+        if _tag in _RESERVED:
+            logger.warning(
+                "Detached hook: entry.context tentou sobrescrever a chave reservada "
+                "%s (pool=%s hook=%s) — ignorada",
+                _tag, pool_id, hook_type,
+            )
+            continue
+        context[_tag] = "" if _v is None else str(_v)
+
     body = {
         "tenant_id":         tenant_id,
         "trigger_type":      "task",
@@ -1585,6 +1624,10 @@ async def fire_pool_hooks(
                 http, session_id, pool_id, tenant_id, customer_id, hook_type,
                 target_pool, _hook_human_seg_id, _surveyed_agent_key, _close_origin_val,
                 auto_attend=_auto_attend,
+                # ADR internal-work-queue: a fila interna é do pool de ORIGEM (este),
+                # não do pool-alvo do hook — o ACW pertence a quem atendeu.
+                internal_queue_enabled=bool(pool_config.get("internal_queue_enabled")),
+                entry_context=(entry.get("context") if isinstance(entry, dict) else None),
             )
             _detached_fired = True
             continue
@@ -7220,6 +7263,30 @@ async def process_mention_routing(
 
 # ── Arc 19 Fase C: resume a suspended webhook session ─────────────────────────
 
+def _wrapup_close_reason(decision: str, payload: dict) -> str:
+    """
+    I5 — como o segmento do CLAIMANTE fechou. Três causas distintas, três valores:
+
+      task_submitted         o humano entregou o formulário;
+      acw_expired            o prazo do delegate venceu sem entrega (timeout scanner);
+      acw_supervisor_closed  um supervisor encerrou a pendência (D4/D5).
+
+    Os dois últimos têm `outcome = None` — a ausência de disposição é o mesmo fato nos
+    dois —, então é AQUI que eles se separam. Colapsá-los custaria a única pergunta que
+    o supervisor vai fazer ("quantos eu tive de limpar?"), e a série histórica não se
+    reprocessa depois. `abandoned` continua fora: já é a disposição "cancelado pelo
+    cliente" escolhida pelo atendente (WRAPUP_OUTCOME_MAP).
+
+    A distinção vem do `source` do resume (server-side, escrito pelo gatilho), nunca de
+    valor asserido pelo cliente da API.
+    """
+    if decision != "timeout":
+        return "task_submitted"
+    if str(payload.get("source") or "").startswith("supervisor"):
+        return "acw_supervisor_closed"
+    return "acw_expired"
+
+
 async def _handle_webhook_session_resumed(
     event: dict,
     redis_client: aioredis.Redis,
@@ -7555,7 +7622,14 @@ async def _handle_webhook_session_resumed(
                 duration_ms=_cl_duration_ms,
                 user_login=_cl_login,
                 outcome=None,
-                close_reason="task_submitted",
+                # I5/D5 — a AUSÊNCIA de disposição é o fato, e `outcome` não a nomeia:
+                # `None` é o mesmo valor nos dois casos opostos (preenchido × expirado).
+                # Quem os separa é o `close_reason`. E `abandoned` NÃO serve para o
+                # expirado: já é a disposição "cancelado pelo cliente", escolhida
+                # deliberadamente pelo atendente (WRAPUP_OUTCOME_MAP) — reusá-lo tornaria
+                # indistinguíveis o contato classificado como cancelado e o wrap-up que
+                # ninguém tocou.
+                close_reason=_wrapup_close_reason(decision, payload),
             ))
             logger.info(
                 "session_resumed: segmento do CLAIMANTE fechado na ENTREGA — session=%s "

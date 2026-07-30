@@ -53,6 +53,13 @@ export const keys = {
   firstQueued: (tenantId: string, sessionId: string) =>
     `${tenantId}:queue:first_queued:${sessionId}`,
 
+  /** I5 — ledger do item de trabalho parqueado por um `delegate` (escrito pelo
+   * channel-gateway no despacho): { pool_id, queue_session_id, resume_token,
+   * step_id, assigned_to, deadline }. É onde o gatilho de supervisor acha o
+   * resume_token a partir do session_id. */
+  workTask: (tenantId: string, sessionId: string) =>
+    `${tenantId}:work_task:${sessionId}`,
+
   /** Frente 1 (pull): lease do claim — {instance_id, claimed_at} */
   claimLease: (tenantId: string, poolId: string, sessionId: string) =>
     `${tenantId}:pool:${poolId}:claim:${sessionId}`,

@@ -2,6 +2,266 @@
 
 ---
 
+## Camada F — validação do arco de detach de hooks ✅ (2026-07-30)
+
+Fecha as Camadas A–F do arco `finalization-hooks-detach-and-directed-pull`. Validação
+contra o DADO, com o demo em `dispatch: detached` e `acw_timeout_hours: 0.03` (≈108 s) —
+em `inline` o ACW é bloqueante por desenho e a medição seria de outra coisa.
+
+**F1 — atribuição do wrap-up ao segmento da ORIGEM ✅.** O campo que prova é o
+`issue_status`, que recebe a classificação **crua** do formulário (`"resolvido"`) e não tem
+outro produtor. `outcome=resolved` não serviria: o fechamento do contato também o produz —
+é o valor plausível que confirmaria a hipótese errada.
+
+**F2 — G1 no relatório, não só na tabela ✅.** Analytics › Sessions mostrou **8 contatos**
+no dia; a agregação por pool deu `retencao_humano = 8` e mais **11 sessões internas**
+(5 `retencao_humano-int`, 2+2 formfill, 1 survey, 1 wrapup) todas fora. O filtro da E2f
+alcança a LISTA, não só a agregação. Achado ao medir: `handle_time_ms` é **NULL** nas
+sessões internas, então a contaminação nunca seria na média — seria na **contagem** (8 × 19),
+que é pior: média enviesada alguém questiona, volume dobrado parece dia movimentado.
+
+**F3 — pull direcionado ✅ (5/5, duas execuções).** O smoke falhava de forma intermitente
+com `not_in_queue` no último item. Causa: `ramal_test` só existia como chaves no Redis, sem
+`pool_config` — o routing o tratava como **push** e o **drain periódico** comia o item antes
+do claim (`Periodic drain: re-routing session=sess_ramal_3_…`), com a re-rota falhando em
+seguida (`Unrecognised inbound event`). O teste disputava o item com o motor. Corrigido na
+raiz: `ensure_pool` registra o pool como `dispatch_mode: pull` via API e espera o
+`registry.changed` propagar; a limpeza **desativa** em vez de apagar (não há DELETE de pool).
+*A forma da falha já dizia qual era: gate quebrado daria `claimed: true` para o terceiro;
+"nem o dono consegue" é item que sumiu.*
+
+**F4 — expiração do reivindicado-e-abandonado ✅ (parcial).** Dois segmentos
+`acw_expired` em `retencao_humano-int` com duração real (**100 545 ms** e **111 678 ms**);
+duração < prazo é coerente, porque o segmento conta do **claim** e o prazo do **despacho**.
+A vaga voltou ~2 min após o claim — antes da I5 ficaria presa até o timeout de 24 h.
+**Não medido:** a lease. A sonda observou a chave de um `session_id` de outra sessão
+(`lease_ttl=-2` já na primeira amostra, antes de o item entrar na fila) — o que a série
+prova é a devolução da VAGA pelo prazo, não o apagamento da lease. A lacuna 2 (ausência de
+reaper) segue aberta como estava.
+
+**G1, duas medições.** Contato 10 102 ms × ACW 7 612 ms (0,75×) e, na medição da I4,
+11 656 ms × 89 483 ms (7,7×). Não é fator estável — e é esse o ponto: o ACW varia com quem
+preenche, então somá-lo ao TMA distorce de forma imprevisível. O que a segregação por pool
+`internal` garante é que ele deixou de ser somado.
+
+**Achados que a F produziu e não resolveu** (registrados no `TODO.md`): `close_reason` do
+CONTATO só persiste se o wrap-up for submetido; `handoff_reason` descarta em silêncio o
+resumo digitado quando a disposição é `resolved`; `available 4 / total 3` no Monitor do
+espelho; e o caminho drain-remove-e-republicação-rejeitada, que num contato real seria perda
+com um `WARNING` por único vestígio.
+
+---
+
+## I5 núcleo A+B — encerramento de trabalho author-bound ✅ (2026-07-30)
+
+Fecha a fase I5 da ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md):
+**um caminho de encerramento, dois gatilhos** (prazo vencido e supervisor). Sem ela, um
+wrap-up que ninguém preenche fica pendurado para sempre — os 87 segmentos órfãos da H1/H2
+em outra roupa.
+
+**O levantamento derrubou a premissa do plano.** O `TODO.md` registrava como "o nó" que o
+`ZREM` precisaria do id da sessão-FILHA que o handler de resume não tem. **Essa filha não
+existe no caminho vivo:** o `persistDelegate` do `skill-flow-service` chama *sempre*
+`/v1/channels/webhook/delegate-conference` — *"delegate() is A2A: the target agent ALWAYS
+runs as a conference specialist INSIDE the caller's session"* —, então `child_session_id ==
+parent session_id`. O `handle_delegate` roteado (uuid próprio) só é alcançável por POST
+direto e está inerte. Quatro evidências independentes batem: `/delegate` sequer aceita
+`assigned_to`/`auto_attend` (o wrap-up usa os dois, e a reserva sumiria em silêncio); a
+medição da I4 mostrou workflow e segmento humano sob o MESMO `session_id`; o guard de
+`meta.instance_id` no bridge só faz sentido se o claim escreveu o meta da mesma sessão; e
+o log confirmou 4 delegates, todos por conferência.
+
+**O que faltava era o POOL, não a sessão** — e ninguém o guardava: `session:{id}:meta`
+carrega o pool do WORKFLOW enquanto ninguém reivindica (mente exatamente no caso que
+interessa) e `{t}:queue_contact:{sid}` morre por TTL antes do prazo. Daí o ledger
+**`{t}:work_task:{session_id}`** = `{pool_id, queue_session_id, resume_token, step_id,
+assigned_to, deadline}`, escrito no despacho — o único ponto que conhece o fato. É
+chaveado pela sessão que o resume resolve porque os dois gatilhos entram por lá (o prazo
+traz o token e resolve a sessão; o supervisor traz a sessão e precisa do token), e
+`queue_session_id` guarda o id que está DE FATO no ZSET: hoje o pai, e a filha se o
+`/delegate` roteado voltar a ser usado. A topologia sai do caminho por um campo.
+
+**A I5 é menor e diferente do que a tabela de lacunas sugeria.** Medido caso a caso: o
+item *submetido* já era coberto pela H1; o *reivindicado e não submetido* prende a vaga
+até o timeout de 24 h; o **nunca reivindicado** é o único sem ninguém que o limpe.
+
+**Achado novo, anterior ao TTL da I5.** `add_queued_contact` gravava o JSON com TTL fixo
+de 4 h contra um `timeout_hours: 24`. Entre as duas marcas o membro do ZSET sobrevive
+sozinho e o item passa a **mentir**: segue listado na inbox, **sem `assigned_to`** (perde
+o author-binding, que é a razão de ser da fila interna) e irreivindicável —
+`work_task_claim` lê o JSON e devolve `not_in_queue`. Nada erra; o item só deixa de ser o
+que diz ser. O TTL passou a acompanhar o `work_item_deadline`, propagado do delegate.
+
+**Peças.** `Router.work_task_expire` (ZREM + JSON + lease + vaga) idempotente e
+`POST /v1/work_queue/expire`; a vaga só é devolvida **quando há lease** — ela é a
+evidência de claim de pull, e soltá-la às cegas derrubaria o occupant de um contato push
+alocado na mesma sessão. O `handle_resume` chama o expire em **todo** resume (um caminho
+exercitado sempre, não um ramo raro que apodrece), numa posição presa entre dois vizinhos:
+depois do check A5 (que lê a lease apagada aqui) e **antes** do publish, porque um flow
+pode re-delegar no `on_timeout` — publicar primeiro criaria um item novo que a limpeza
+tardia apagaria, e o sintoma seria uma tarefa sumindo da inbox sem ninguém a ter tocado.
+
+**Gatilho 2** — `POST /api/work_queue/expire/:sessionId` no BFF, role `supervisor|admin`,
+encerra **sem disposição** (D5) e repassa o Bearer ao gateway para que o resume seja
+autorado e auditado como dele. Mesmo caminho do prazo (`decision: "timeout"`), separado
+pelo `source`.
+
+**Três causas, três `close_reason`** (`_wrapup_close_reason` no bridge): `task_submitted`
+(entregou), `acw_expired` (venceu o prazo), `acw_supervisor_closed` (alguém encerrou). Os
+dois últimos têm `outcome = None` — a ausência de disposição é o mesmo fato nos dois —,
+então é o `close_reason` que os separa. Colapsá-los custaria a única pergunta que o
+supervisor vai fazer ("quantos eu tive de limpar?"), e série histórica não se reprocessa.
+
+**Limite registrado:** o item **nunca reivindicado** não tem segmento humano, logo não há
+onde carimbar `acw_expired`. A fatia garante a limpeza (item sai, vaga volta, workflow
+completa); a *visibilidade* da pendência depende do relatório, que é fatia própria.
+
+**Prazo de ACW virou fato do POOL** (mesma sessão). `delegate.timeout_hours` passou a
+aceitar ref (união `número | ref`, o padrão já usado em `menu.interaction`/`options`) e
+`skill_wrapup_detached_v1` lê `@ctx.hook.acw_timeout_hours`, declarado no
+`PoolHookEntry.context` — pelo mesmo argumento que moveu o `dialog_form_id` (D7): quanto
+tempo o atendente tem para classificar o próprio atendimento é fato de quem atendeu, não
+de um skill genérico. Não era "constante em código" (o campo sempre foi de autoria do
+YAML); era **escopo errado** — um número global dentro de um skill compartilhado.
+Diferente do `pool`, ref não resolvida **não** é falha dura: prazo tem default seguro
+(24 h), alvo não tem para onde rotear. Mas degrada com log — prazo silenciosamente errado
+é o valor plausível que não denuncia nada. Efeito colateral útil: encurtar o prazo por
+pool é o que torna a expiração mensurável na Camada F sem esperar um dia.
+
+Validação: `infra/test/smoke_acw_expire.sh` (ledger, TTL > 4 h, encerramento por
+supervisor, one-shot 404 — 10/10 ao vivo) + 3 testes em `test_work_queue_claim.py` (nunca
+reivindicado, reivindicado, idempotência sem derrubar a vaga de outra sessão do mesmo
+agente) + 3 em `delegate.slice3.test.ts` (ref resolvida, ausente→default com warn,
+literal numérico).
+
+**Rótulo do espelho com dono único** (resíduo da I4). A barra do contato no Console mostrava
+o `pool_id` cru (`retencao_humano-int`) enquanto o cabeçalho da fila já dizia
+"Pós-atendimento — retencao_humano": o **mesmo item com dois nomes na mesma tela**, e o da
+barra vazando uma convenção de construção que a D3 diz não ser nome de produto. A causa não
+era o rótulo faltando num lugar — era a regra do sufixo replicada por **quatro** superfícies
+(`AgentAssistContext`, `PullInboxPanel`, `AgentAssistPage`, `ContactList`), das quais duas
+nunca a aplicaram. Extraída para `modules/agent-assist/poolLabel.ts`
+(`INTERNAL_QUEUE_SUFFIX`, `mirrorOriginOf`, `poolDisplayLabel`); os quatro call sites leem de
+lá. Regra repetida é regra que diverge.
+
+A quarta só apareceu depois de consertadas as outras, e o motivo é instrutivo: o chip da
+lista **trunca em 72 px**, então exibia `retencao h…` — indistinguível do pool de contato. A
+divergência vivia no `title`, visível apenas no hover. Truncar esconde exatamente a diferença
+que o sufixo carrega; a inspeção que acha esse tipo de resíduo é `grep` pelos call sites, não
+leitura de tela.
+
+**Ficam registradas como dívida do arco de consolidação de config** três constantes de
+timeout que este caminho atravessa e que hoje não têm superfície: o TTL default do JSON da
+fila (`add_queued_contact`, 4 h), o buffer `+1 h` do prazo do item (agora em dois lugares)
+e o intervalo do timeout scanner (60 s, `main.py:374`) — este último é política, não
+infra: define a granularidade de toda expiração da plataforma. O namespace `session` já é
+o registro central desses TTLs.
+
+---
+
+## Fila interna por pool — trabalho author-bound (ADR, fases I1–I4) ✅ (2026-07-30)
+
+Fecha o resíduo do "TMA por agente" da E2f **sem escrever filtro nenhum**: o segmento
+humano do wrap-up passa a nascer num pool `purpose: internal`, e o
+`_apply_contact_scope` já existente o cobre. Ver
+[`docs/adr/adr-internal-work-queue-author-bound.md`](docs/adr/adr-internal-work-queue-author-bound.md).
+
+**O achado que sustenta o desenho.** `fallback_to_pool_after_s` existe porque item de
+fila é trabalho **pooled** — qualquer agente do time serve, e a reserva é preferência de
+roteamento. Wrap-up não é isso: **só quem atendeu pode classificar o próprio
+atendimento**. A identidade do executor é parte da *definição* da tarefa, não uma
+preferência — é trabalho **author-bound**, e transbordo nele é erro de categoria.
+Aprovação **É** pooled (outro aprovador decide) e segue no modelo antigo; o critério
+separa os dois sem apelar a "é humano" ou "é workflow".
+
+**I1 — flag + espelho.** `pools.internal_queue_enabled` (migration
+`20260730000000_pool_internal_queue`) auto-provisiona um pool FÍSICO `{pool_id}-int`
+(`purpose: internal`, `dispatch_mode: pull`, `agent_kind: human`, canais do pai, SLA
+próprio de 24 h — o do pai é prazo de CONTATO e herdá-lo faria a inbox exibir um número
+que mente). Pool real, não fila virtual, pelo invariante *"o POOL é a unidade
+endereçável"*: routing, capacidade, `segments.pool_id`, `pools_client` e a
+`mv_agent_performance_daily` seguem com UMA gramática. Espelho **por pool** (não um pool
+de claim único) torna o ACW legível **por pool de origem**.
+Guardas: criação manual com sufixo `-int` → 422; hook `detached`+`side:agent` num pool
+sem fila interna → 422 na configuração, não em runtime; desligar a flag → recusa por
+default (`?force_disable=true` confirma). Sem DELETE de pool no registry, "remover" é
+`status: inactive` — desejável, porque o espelho aparece em `segments` e apagá-lo
+tornaria ilegível o ACW já medido.
+
+**I3 — alvo dinâmico.** `delegate.pool` passou a aceitar refs (`resolveInputMap`), com
+ref não resolvida como **falha dura**: rotear para um pool chamado
+`@ctx.hook.wrapup_pool` acusaria "pool not found" e apontaria o registry em vez da tag
+ausente. O bridge escreve `hook.wrapup_pool` (só com a flag ligada; desligada, loga o
+motivo) e mescla o novo **`PoolHookEntry.context`** como `hook.*`, com
+`hook.type`/`hook.origin_pool`/`hook.wrapup_pool` reservadas. Isso torna
+`skill_wrapup_detached_v1` genérico de verdade: alvo **e** `dialog_form_id` são fato da
+configuração do pool de ORIGEM, não do skill — Retenção e Cobrança podem usar formulários
+diferentes. *(Nota: `hook.origin_pool` já era injetado desde a Camada D e era contexto
+morto — zero leitores no repo.)*
+
+**I2 — acesso derivado, em TRÊS pontos (a ADR previa dois).** Além de `fetchPools` e do
+`accessible_pools` do analytics (`_with_internal_mirrors` em `pool_auth.py`, aplicado nos
+DOIS decodificadores — header e query param do SSE), a inbox é governada por
+`activePools` = **pools com WebSocket aberto**. Sem login no espelho, quatro coisas
+quebram e nenhuma dá erro: a inbox não consulta a fila; um claim forçado passa (o motor é
+pool-agnóstico) mas o `conversation.assigned` vai para um canal que ninguém assina —
+*item reivindicado, tela vazia*; `mark_busy` incrementa um pool de ready-set vazio; e o
+`pool_config` do espelho nunca é escrito. `handleTogglePool` passou a abrir os dois WS,
+e `registerHumanAgent` resolve os quatro de uma vez. Continua derivado: nenhuma
+associação nova por agente.
+
+**I4 — UX.** Espelho oculto no seletor de presença (entrar no pai já entra na fila
+interna) e rotulado pela ORIGEM na inbox, i18n en+pt-BR.
+
+**Sufixo reservado por construção.** `pool_id` passou de `^[a-z0-9_]+$` para
+`^[a-z0-9_]+(-int)?$` — o hífen é legal só nessa posição, então `endsWith("-int")` é
+garantia e não convenção. É o que permite derivar acesso em três lugares sem adivinhar.
+`PoolHookEntrySchema.pool` ficou estrito: hook nunca aponta para espelho.
+
+**Validação** (`infra/test/smoke_internal_work_queue.sh`, modos `apply`/`verify`):
+9/9 na configuração; ao vivo, o wrap-up nasceu em `retencao_humano-int` com
+`formfill_demo` zerado. Segmentos de um atendimento real:
+
+| pool | close_reason | outcome | duration_ms |
+|---|---|---|---|
+| `retencao_humano` | `agent_hangup` | `resolved` | **11 656** ← o contato |
+| `retencao_humano-int` | `task_submitted` | `NULL` | **89 483** ← o ACW |
+| `wrapup_detached_ia` | — | `suspended`/`resolved` | 22 / 16 ← runtime do workflow |
+
+Três coisas que essa tabela fecha:
+- **O tempo de ACW existe como número pela primeira vez** — era a promessa da E2f
+  ("segregação, não supressão"), e até aqui o `duration_ms` do segmento era nulo. Confirma
+  também a correção de registro do TODO: os 22/16 ms do `wrapup_detached_ia` são o runtime
+  do workflow, nunca foram o ACW.
+- **G1 dimensionado**: o pós-atendimento foi **7,7×** o atendimento. Somado ao TMA, o
+  número estaria oito vezes errado.
+- **H1 validada ao vivo** (item aberto no `TODO.md`): `close_reason = task_submitted`, não
+  `session_teardown` — a corrida que a H1 evita não ocorreu. E `outcome = NULL` +
+  `task_submitted` **distingue** perfeitamente do futuro `acw_expired` da D5: o `NULL` é
+  correto aqui porque a disposição pertence ao segmento de ORIGEM; o wrap-up não tem
+  desfecho próprio. A I5 só não pode usar `NULL` sozinho como sinal de "ninguém preencheu".
+
+**O que a validação ensinou, que vale mais que a fatia.** Três leituras erradas em
+sequência, todas do tipo que a § Postura de Engenharia nomeia:
+1. **Falso negativo** — `cmd | python3 - <<'PY'` não funciona: o heredoc substitui o
+   pipe como stdin, o `json.load` lê vazio e o assert reporta "ausente" sobre um recurso
+   que existia.
+2. **Falso positivo, o caro** — o e2e passou no Console com o wrap-up caindo no pool
+   ANTIGO. Funcionou porque o caminho antigo funciona. Só a query em `segments` denunciou.
+3. **A causa não era a suposta** — não bastava reiniciar o bridge: **skills são
+   seed-if-absent desde 2026-07-13**, então editar o YAML de um skill já semeado é no-op
+   (o syncer só loga o DRIFT). O `CLAUDE.md` afirmava "skills seguem upsert" — 5ª
+   divergência doc × código, corrigida. Publicar exige `PUT` com `x-skill-publish`, e
+   ainda não basta se o pool usa slot: o bridge executa o snapshot do `current`.
+O smoke passou a assertar sobre o **snapshot**, e ganhou marcador de tempo no promote —
+sem ele a leitura ao vivo mistura segmentos de antes e depois do fix.
+
+**Pendente:** I5 (sem transbordo + supervisor + TTL `acw_expired` + relatório de
+pendências). Sem ela, wrap-up não preenchido fica pendurado — a mesma forma dos 87
+segmentos órfãos recém-consertados, em outra roupa.
+
+---
+
 ## H2 — segmento humano da família pull deixa de ficar aberto para sempre ✅ (2026-07-29)
 
 Achado ao tentar fechar o resíduo da E2f (excluir wrap-up do TMA por agente). A query

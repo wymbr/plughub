@@ -17,6 +17,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Timer, Sparkles, Clock, MessageSquare, CheckCheck } from "lucide-react";
 import { ContactSession, ResponseTimer } from "../types";
+import { poolDisplayLabel } from "../poolLabel";
 
 interface ContactListProps {
   contacts:          ContactSession[];
@@ -201,12 +202,15 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
           {displayId(contact)}
         </span>
         {contact.poolId && (
+          /* D3 — chip E tooltip pelo rótulo de exibição. O `title` cru era o último
+             lugar onde o id do espelho (`retencao_humano-int`) ainda vazava: o chip
+             trunca em 72px e escondia a diferença, então só o hover a revelava. */
           <span
             className="flex-shrink-0 text-2xs text-primary bg-primary-light border border-primary/20
               px-1 py-0.5 rounded truncate max-w-[72px]"
-            title={contact.poolId}
+            title={poolDisplayLabel(contact.poolId, t)}
           >
-            {contact.poolId.replace(/_/g, " ")}
+            {poolDisplayLabel(contact.poolId, t).replace(/_/g, " ")}
           </span>
         )}
         {contact.unreadCount > 0 && (

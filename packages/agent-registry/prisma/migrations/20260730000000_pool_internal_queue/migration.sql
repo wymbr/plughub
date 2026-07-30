@@ -1,0 +1,36 @@
+-- ADR adr-internal-work-queue-author-bound (I1) — `pools.internal_queue_enabled`:
+-- liga a FILA INTERNA ESPELHO deste pool, um pool físico `{pool_id}-int`
+-- (purpose=internal, dispatch_mode=pull, agent_kind=human, mesmos canais) criado e
+-- mantido pelo próprio registry.
+--
+-- O ACHADO QUE MOTIVA. `fallback_to_pool_after_s` (transbordo) existe porque item de
+-- fila é trabalho POOLED: qualquer agente do time serve, e a reserva é uma preferência
+-- de roteamento. Wrap-up não é isso — só quem atendeu pode classificar o próprio
+-- atendimento. A identidade do executor é parte da DEFINIÇÃO da tarefa, não uma
+-- preferência: é trabalho AUTHOR-BOUND, e aplicar transbordo a ele é erro de categoria.
+-- O critério separa os dois casos sem apelar para "é humano" ou "é workflow":
+-- aprovação É pooled (outro aprovador pode decidir) e segue no modelo atual.
+--
+-- POR QUE UM POOL REAL, e não uma fila virtual em Redis. O invariante "o POOL é a
+-- unidade endereçável". Fila virtual criaria uma segunda classe de coisa endereçável,
+-- e routing, capacidade, `segments.pool_id`, `pools_client` e a
+-- `mv_agent_performance_daily` passariam a precisar de duas gramáticas. Com pool real
+-- nada disso muda: o segmento humano do wrap-up passa a carregar um `pool_id` com
+-- `purpose='internal'`, o filtro da E2f (`_apply_contact_scope`) já o cobre, e o
+-- resíduo do "TMA por agente" desaparece sem query nova.
+--
+-- POR QUE UM ESPELHO POR POOL, e não um pool de claim único. ACW por pool de ORIGEM
+-- ("quanto Retenção gasta em pós-atendimento") vira pergunta respondível sem trabalho
+-- novo. Um pool único teria misturado todos os times — e a MV, chaveada por `pool_id`,
+-- não teria conserto por leitura.
+--
+-- SUFIXO RESERVADO POR CONSTRUÇÃO. A regex de `pool_id` (@plughub/schemas) passou a
+-- `^[a-z0-9_]+(-int)?$`: o hífen é legal só nessa posição, então nenhum pool declarado
+-- por tenant pode colidir. `endsWith('-int')` vira garantia e não convenção — é o que
+-- permite derivar acesso (`p ∪ p+'-int'`) sem adivinhação. A criação MANUAL com esse
+-- sufixo é rejeitada pela API: só o auto-provisionamento cria espelho.
+--
+-- FLAG SÓ NO PAI. O espelho carrega sempre `false` — espelho de espelho não existe.
+
+ALTER TABLE "pools"
+  ADD COLUMN IF NOT EXISTS "internal_queue_enabled" BOOLEAN NOT NULL DEFAULT false;

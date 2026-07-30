@@ -1752,6 +1752,12 @@ export async function startServer(config: ServerConfig): Promise<void> {
   const _wqRoutingUrl = process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550"
   const _wqAdminToken = process.env["ROUTING_ADMIN_TOKEN"] || undefined
   const _wqTenant = () => process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo"
+  // I5 — o gatilho de supervisor retoma a workflow pelo channel-gateway (mesmo
+  // ingress do submit humano), então precisa da URL dele aqui.
+  const _wqGatewayUrl =
+    process.env["CHANNEL_GATEWAY_URL"] ??
+    process.env["CHANNEL_GATEWAY_HTTP_URL"] ??
+    "http://channel-gateway:8010"
 
   app.get("/api/work_queue/list", async (req: Request, res: Response) => {
     try {
@@ -1812,6 +1818,79 @@ export async function startServer(config: ServerConfig): Promise<void> {
       res.json(result)
     } catch (err) {
       res.status(502).json({ error: "routing_unreachable", message: String(err) })
+    }
+  })
+
+  // ── I5 (D4) — supervisor encerra uma pendência de trabalho ──────────────────
+  // POST /api/work_queue/expire/:sessionId  { tenant_id? }   role: supervisor|admin
+  //
+  // Encerra SEM disposição: o supervisor não finge ser o autor (D5). Por isso não
+  // existe corpo de formulário aqui — só a decisão de encerrar.
+  //
+  // O caminho é o MESMO do prazo vencido (um caminho, dois gatilhos): resume do
+  // workflow com decision="timeout", que faz o flow seguir seu on_timeout, o
+  // handle_resume encerrar o item de trabalho e o bridge fechar o segmento. O que
+  // distingue os dois é o `source`, que o bridge lê para escolher entre
+  // acw_expired e acw_supervisor_closed.
+  //
+  // O Bearer do supervisor é REPASSADO ao channel-gateway de propósito: assim o
+  // resume é autorado e auditado como dele (A5), em vez de chegar como "externo".
+  app.post("/api/work_queue/expire/:sessionId", async (req: Request, res: Response) => {
+    const claims = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
+    if (!claims) return
+    const sessionId = String(req.params["sessionId"] ?? "")
+    const body      = (req.body ?? {}) as Record<string, unknown>
+    const tenantId  = (body["tenant_id"] as string) || _wqTenant()
+    if (!sessionId) {
+      res.status(400).json({ error: "missing_fields", message: "session_id é obrigatório" })
+      return
+    }
+    // O resume_token vem do ledger escrito no despacho do delegate — é o único
+    // lugar que liga a sessão ao item parqueado. Ausente = nada a encerrar (ou o
+    // item já foi encerrado): 404 explícito, nunca um 200 que não fez nada.
+    let ledger: Record<string, unknown> | null = null
+    try {
+      const raw = await redis.get(keys.workTask(tenantId, sessionId))
+      if (raw) ledger = JSON.parse(raw) as Record<string, unknown>
+    } catch { /* tratado abaixo como ausência */ }
+    const resumeToken = (ledger?.["resume_token"] as string) ?? ""
+    if (!resumeToken) {
+      res.status(404).json({
+        error:   "no_work_task",
+        message: `nenhum item de trabalho parqueado para a sessão ${sessionId}`,
+      })
+      return
+    }
+    const supervisor = String(claims["sub"] ?? "unknown")
+    try {
+      const r = await fetch(
+        `${_wqGatewayUrl}/v1/channels/webhook/resume/${encodeURIComponent(resumeToken)}`,
+        {
+          method:  "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+          },
+          body: JSON.stringify({
+            tenant_id: tenantId,
+            payload:   { decision: "timeout", source: `supervisor:${supervisor}` },
+          }),
+        },
+      )
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        res.status(r.status).json({ error: "expire_failed", detail: data })
+        return
+      }
+      res.json({
+        expired:    true,
+        session_id: sessionId,
+        pool_id:    ledger?.["pool_id"] ?? null,
+        closed_by:  supervisor,
+        ...(data as Record<string, unknown>),
+      })
+    } catch (err) {
+      res.status(502).json({ error: "channel_gateway_unreachable", message: String(err) })
     }
   })
 

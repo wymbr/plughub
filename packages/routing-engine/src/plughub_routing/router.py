@@ -740,6 +740,66 @@ class Router:
         )
         return {"released": True, "requeued": contact is not None}
 
+    async def work_task_expire(
+        self,
+        tenant_id:  str,
+        pool_id:    str,
+        session_id: str,
+        reason:     str = "expired",
+    ) -> dict:
+        """
+        I5 — ENCERRA um item de trabalho: um caminho só, idempotente, para os dois
+        gatilhos (prazo vencido e supervisor). Diferente do `work_task_release`, que
+        DEVOLVE o item à fila: aqui o item deixa de existir.
+
+        Faz exatamente o que ainda restar:
+          1. ZREM do ZSET + delete do JSON (`remove_queued_contact`) — o caso NUNCA
+             REIVINDICADO, o único que hoje não tem quem limpe: sem isto o membro
+             fica no ZSET para sempre e a inbox continua exibindo um item que o
+             claim recusa (`not_in_queue`);
+          2. lease do claim apagada;
+          3. vaga do recurso devolvida — **e só quando há lease**. A lease é a
+             evidência de que houve claim de PULL; sem ela não há vaga desta fila
+             para devolver, e chamar `release_instance` às cegas derrubaria o
+             occupant de um contato de PUSH alocado normalmente na mesma sessão.
+
+        Não re-enfileira, não publica `conversations.routed` e não fecha segmento: o
+        fechamento do segmento humano é do bridge (H1, na entrega do resume), que é
+        quem conhece `outcome` e `close_reason`. Aqui só se desfaz o parqueamento.
+
+        Idempotente por construção: 2ª chamada devolve
+        `was_queued=False, was_claimed=False` e não toca em nada.
+        """
+        lease       = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
+        instance_id = (lease or {}).get("instance_id") or ""
+
+        was_queued = await self._instances.atomic_claim_dequeue(
+            tenant_id, pool_id, session_id
+        )
+        await self._instances.remove_queued_contact(tenant_id, pool_id, session_id)
+        await self._instances.delete_claim_lease(tenant_id, pool_id, session_id)
+
+        remaining = -1
+        if instance_id:
+            remaining = await self._instances.release_instance(
+                tenant_id, instance_id, session_id
+            )
+
+        logger.info(
+            "work_task_expire: session=%s pool=%s reason=%s was_queued=%s "
+            "was_claimed=%s instance=%s remaining=%s",
+            session_id, pool_id, reason, was_queued, bool(instance_id),
+            instance_id or "-", remaining,
+        )
+        return {
+            "expired":     True,
+            "was_queued":  bool(was_queued),
+            "was_claimed": bool(instance_id),
+            "instance_id": instance_id,
+            "remaining":   remaining,
+            "reason":      reason,
+        }
+
 
 def _contact_to_event(contact: QueuedContact) -> ConversationInboundEvent:
     """Builds a minimal ConversationInboundEvent from a QueuedContact."""
