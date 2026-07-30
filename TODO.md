@@ -13,12 +13,21 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 
 ### Falta
 
-- **Relatório de pendências por agente** (bloqueado pela lacuna 5 abaixo). Pendência tem DUAS formas
-  e um relatório que cubra só uma **mente**:
-  - *nunca reivindicada* — vive só no ZSET, **invisível ao analytics** (e, por não ter segmento
-    humano, não tem onde carimbar `acw_expired`; o núcleo A+B só garante a limpeza);
-  - *reivindicada e não submetida* — segmento humano aberto, visível em `segments`.
-  Decidir a fonte antes de construir.
+- **Relatório de pendências por agente** — **desenho fechado 2026-07-30** (ADR § D7b), implementação
+  pendente. A lacuna 5 deixou de bloquear: o **ledger `{t}:work_task:{session}` da I5 é o índice de
+  pendência por construção** (nasce no despacho, morre no resume; o claim NÃO o apaga → cobre as duas
+  formas com uma linha só) e carrega `assigned_to`.
+
+  | Fatia | Entrega | Estado |
+  |---|---|---|
+  | 1 | **Pendências agora** — endpoint no BFF varrendo o ledger (`SCAN`, não `KEYS`) + cruzamento com ZSET/lease para classificar reivindicada × nunca-reivindicada; superfície no Monitor/inbox do supervisor. Precedente: `work_queue_list` já é Redis-direto no mcp-server | pendente |
+  | 2 | **Histórico do caso reivindicado** — `segments` já cobre (`close_reason` + duração + `user_id`). Nada a construir; só a query/lente | pendente |
+  | 3 | **Histórico do nunca-reivindicado** — evento `work_item.expired` → ClickHouse. **Gated:** só se a fatia 1 mostrar volume. Nas medições da Camada F quase toda expiração foi de item reivindicado | **não construir sem medir** |
+
+  **Não criar segmento sintético** para o item nunca reivindicado: nenhum valor de `duration_ms` é
+  honesto ali (`0` dilui o ACW que a E2f fez existir; a janela de pendência vira tempo de trabalho;
+  `NULL` queima a assinatura que achou os 87 órfãos). Segmento = participação; pendência = item de
+  trabalho, com dono/prazo/tempo parado que segmento não comporta. Discussão completa no ADR § D7b.
 - **Validação ao vivo do gatilho de prazo.** O smoke exercita o gatilho de supervisor; o de prazo
   depende do scanner de 60 s. ✅ o prazo virou config do pool (`PoolHookEntry.context.acw_timeout_hours`
   → `@ctx.hook.acw_timeout_hours`), então encurtá-lo para medir na Camada F é edição de pool via PUT,

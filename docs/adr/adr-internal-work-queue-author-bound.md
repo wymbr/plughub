@@ -168,6 +168,42 @@ especialmente traiçoeiro porque o valor é legítimo no domínio.
 **Ganho:** "% de contatos sem disposição" vira métrica de qualidade operacional consultável, em vez
 de ruído indistinguível.
 
+### D7b — Fonte do relatório de pendências: o ledger é o índice, `segments` é o histórico
+
+*(desenho fechado 2026-07-30, após a Camada F; implementação pendente)*
+
+A D4 pede "relatório de wrap-ups pendentes por agente" sem dizer de onde. O `TODO.md`
+registrava o bloqueio como lacuna 5 (a fila pull não é consultável pelo analytics) e o risco
+de um relatório que cubra só uma das duas formas de pendência — e portanto **minta**.
+
+**O ledger da I5 resolve isso por construção.** `{t}:work_task:{session}` nasce no despacho
+do delegate e morre no resume: seu tempo de vida **é exatamente o intervalo da pendência**.
+O claim **não** o apaga — logo ele cobre as DUAS formas com uma linha só (nunca reivindicada
+e reivindicada-não-submetida), que é justamente o que o relatório precisava e não tinha. E
+carrega `assigned_to`, que é a identidade do agente no trabalho author-bound.
+
+| Pergunta | Fonte | Por quê |
+|---|---|---|
+| "Quem está com wrap-up pendente **agora**" | ledger, lido pelo BFF | Pergunta operacional, instantânea. Precedente estabelecido: `work_queue_list` já é Redis-direto no mcp-server. Classificar reivindicada × nunca-reivindicada = cruzar com o ZSET/lease do routing |
+| "Quantos o agente X **deixou vencer** no período" (reivindicados) | `segments` | Já existe: `close_reason` ∈ {`task_submitted`, `acw_expired`, `acw_supervisor_closed`}, com duração e `user_id`/`user_login`. Nada a construir |
+| Idem, **nunca reivindicados** | **lacuna real** | Não têm segmento (ninguém participou). O único vestígio hoje é o segmento do WORKFLOW com `outcome: failed`, que não carrega o agente |
+
+**O que NÃO fazer, e por quê.** Criar um segmento sintético para o item nunca reivindicado
+resolveria o relatório de graça — a tentação é legítima e vem da própria D1 (preferir a
+entidade real a uma nova gramática). Mas `duration_ms` não tem valor honesto ali: `0` dilui a
+média de ACW que a E2f acabou de fazer existir; a janela de pendência transforma espera em
+tempo de trabalho (o engano `duration_ms × handle_time_ms` já catalogado); e `NULL` queima a
+assinatura "segmento humano sem duração", que é o detector que achou os 87 órfãos. Segmento
+responde *"o que este participante fez?"*; pendência responde *"o que aconteceu com este item
+de trabalho?"* — e esta tem campos (dono, prazo, tempo parado, quem encerrou) que aquele não
+comporta.
+
+**Gate para a fatia histórica.** O caso nunca-reivindicado só justifica evento próprio
+(`work_item.expired` → ClickHouse) se tiver volume. A superfície instantânea o mede sem
+custo: se a operação mostrar que quase toda expiração é de item **reivindicado** — como nas
+medições da Camada F —, o histórico já está em `segments` e a fatia 2 não precisa existir.
+Medir antes de construir; o inverso cria uma tabela para responder uma pergunta rara.
+
 ### D6 — Guardas
 
 - O registry **rejeita** criação manual de pool com sufixo `-int` — senão o sufixo deixa de ser
