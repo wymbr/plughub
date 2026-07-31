@@ -2,6 +2,45 @@
 
 ---
 
+## Sonda de prosa do wrap-up: dois defeitos que a impediam de reprovar + validação 4/4 ✅ (2026-07-31)
+
+O bloco C de `check_wrapup_prose_persisted.sh` (regressão do caminho **não-resolvido**) estava
+anotado como "não exercitado" desde 2026-07-30. Ao preparar a execução, o motivo se mostrou outro:
+**ele não tinha como rodar**.
+
+**1. O bloco C era inalcançável.** Sem amostra *resolvida* na janela, a sonda saía com `exit 2` antes
+de chegar nele — e o bloco C não depende dessa amostra. Um bloco que nunca executa não é verde nem
+vermelho: é silêncio que se parece com cobertura. Agora cada lado se declara INCONCLUSIVO por conta
+própria, e o exit code distingue verde completo (`0`) de **verde parcial** (`2`, nomeando qual lado
+faltou) — um dos dois lados sozinho não pode mais se passar pelos dois.
+
+**2. O bloco C reprovaria por defeito do cenário, não do código.** A tool só monta `handoff_reason` a
+partir de `resumo`/`proximos_passos` (`segment.ts:109-113`); wrap-up não-resolvido com prosa vazia
+grava vazio, e isso é **correto**. A asserção cobrava mesmo assim. O bloco A já trazia essa ressalva
+desde a origem; o C não — assimetria corrigida: a cobrança passou a ser condicional a existir prosa,
+e sem prosa o bloco se declara não exercitado em vez de vermelho.
+
+**Medição (2 atendimentos reais em `retencao_humano`, hook `dispatch: inline`):**
+
+| Disposição | `handoff_reason` | `wrapup_summary` | `wrapup_next_steps` |
+|---|---|---|---|
+| `resolved` | ∅ (intacto) | ✅ | ✅ |
+| `escalated` | `aaaa \| Próximos: bbbbb` | ✅ | ✅ |
+
+O fix de 2026-07-30 vale nas duas pontas: a prosa sobrevive ao caso resolvido (o que descartava em
+silêncio) **e** o caminho antigo segue gravando `handoff_reason` — `handoff_rate` não foi movida.
+
+**Achado que o dado entregou de brinde:** o `TODO.md` registrava como resíduo que o caminho inline
+(`_apply_wrapup_to_segment`) só conhecia `wrapup_resumo`, e que `wrapup_next_steps` só seria
+preenchido pelo destacado. **Falso** — `next_steps` veio preenchido nos dois, e aquela função sequer
+recebe o campo na assinatura, logo o produtor foi o `segment_outcome_record`. A nota ficou defasada na
+Phase 3: o inline de hoje é auto-atendimento sobre a **mesma** máquina destacada. `_apply_wrapup_to_segment`
+(`main.py:3010`) servia o `wrapup_ia` removido, e sua única chave de entrada (`wrapup_classificacao`)
+só é emitida por `agente_wrapup_v1.yaml`, que **nenhum pool deploya**. Ambos ficam registrados no
+`TODO.md` como candidatos a código morto — a confirmar antes de remover.
+
+---
+
 ## Agente deslogado deixa de contar capacidade + guard contra instância fantasma ✅ (2026-07-30)
 
 Dois defeitos achados ao investigar um `retencao_humano` exibindo `available 1 / total 1` — num pool

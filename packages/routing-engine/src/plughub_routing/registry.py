@@ -129,7 +129,9 @@ def _instance_conversations_key(tenant_id: str, instance_id: str) -> str:
     return f"{tenant_id}:routing:instance:{instance_id}:conversations"
 
 def _pool_snapshot_key(tenant_id: str, pool_id: str) -> str:
-    """Operational snapshot — written by router after each routing event. TTL 120s."""
+    """Operational snapshot — written by router after each routing event. TTL 3600s
+    (o default de `write_pool_snapshot(snapshot_ttl=3600)`; três docs diziam 120s —
+    corrigido 2026-07-31 após medir 2958s restantes numa chave de 11 min)."""
     return f"{tenant_id}:pool:{pool_id}:snapshot"
 
 def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
@@ -1521,7 +1523,14 @@ class InstanceRegistry:
     ) -> None:
         """
         Writes an operational pool snapshot to Redis after each routing event.
-        TTL: 120s — refreshed on every route() or dequeue() call.
+        TTL: 3600s (ver `snapshot_ttl` acima) — refreshed on every route() or
+        dequeue() call.
+
+        ATENÇÃO (medido 2026-07-31): "refreshed on every route()" NÃO cobre o
+        claim/release de item de fila PULL — `write_pool_snapshot` tem um único
+        call site no router (`router.py:215`, dentro de `route()`), e
+        `work_task_claim`/`work_task_release` não passam por ele. Com TTL de 1h,
+        um snapshot que ficou obsoleto por essa via NÃO se auto-cura expirando.
         Key: {tenant_id}:pool:{pool_id}:snapshot
 
         Fields:

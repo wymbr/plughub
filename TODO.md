@@ -72,11 +72,13 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
      interessante — a pendência de quem já saiu. Conserto real (se incomodar): ou um endpoint
      de diretório mínimo com grant próprio, ou carimbar `user_login` no ledger no despacho
      (mudança de produtor, só vale para itens novos).
-- **Cenários `claimed` e `orphaned` do relatório** — o `smoke_work_task_pending.sh` só os roda com
-  `INSTANCE=human-<user_id>` de um agente logado. Enquanto não rodarem, o estado `orphaned` é
-  instrumento **não calibrado**: a leitura de `pool_config` está provada (`dispatch_mode: "pull"`
-  apareceu na linha), mas ninguém viu a condição real acontecer. Mesma disciplina do "não
-  exercitado" do `smoke_acw_expire.sh`.
+- ~~**Bloco C da sonda de prosa**~~ ✅ **2026-07-31** — exercitado (4/4, resolvido E não-resolvido).
+  Ver CHANGELOG: a sonda tinha **dois defeitos que a impediam de reprovar**, corrigidos antes da
+  medição.
+- ~~**Cenários `claimed` e `orphaned` do relatório**~~ ✅ **2026-07-31** — rodados com
+  `INSTANCE=human-<user_id>` de agente logado: **14/14**. `claimed` (fora do ZSET, com lease,
+  `claimed_by` correto) e `orphaned` (lease apagada sem re-enfileirar) foram **vistos acontecer**. O
+  estado `orphaned` deixa de ser instrumento não calibrado e passa a valer como medida da **lacuna 2**.
 - **Validação ao vivo do gatilho de prazo.** O smoke exercita o gatilho de supervisor; o de prazo
   depende do scanner de 60 s. ✅ o prazo virou config do pool (`PoolHookEntry.context.acw_timeout_hours`
   → `@ctx.hook.acw_timeout_hours`), então encurtá-lo para medir na Camada F é edição de pool via PUT,
@@ -87,7 +89,7 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 
 | # | Lacuna | Evidência |
 |---|---|---|
-| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`). A Camada F **não** o mediu (a sonda observou a chave de outra sessão); **agora há instrumento**: o estado `orphaned` do relatório de pendências é exatamente esta condição — item de pool pull fora do ZSET e sem lease. Decidir o reaper só depois de ver o volume |
+| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`). A Camada F **não** o mediu (a sonda observou a chave de outra sessão); **agora há instrumento**: o estado `orphaned` do relatório de pendências é exatamente esta condição — item de pool pull fora do ZSET e sem lease. ✅ **instrumento CALIBRADO em 2026-07-31** (smoke 14/14 — a condição foi vista acontecer, não só o classificador lido). Decidir o reaper só depois de ver o volume **em uso normal**, que ainda não se mediu |
 | 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
 | 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
@@ -180,9 +182,24 @@ resumo ali levaria a taxa de repasse a ~100%: trocaria perda silenciosa por mét
 sentido sem avisar. Prosa também não caberia em `agent_business_events` (D2: `value` é numérico,
 nominal vive na categoria). Sonda `infra/test/check_wrapup_prose_persisted.sh`.
 
-**Resíduo:** o caminho **inline** (`_apply_wrapup_to_segment`) só conhece `wrapup_resumo` — não há
-`wrapup_proximos_passos` no `pipeline_state` daquele fluxo. `wrapup_next_steps` só é preenchido
-pelo destacado. Uma linha, quando o inline passar a coletá-lo.
+**~~Resíduo~~ — era STALE, medido e derrubado em 2026-07-31.** A nota dizia que o caminho
+**inline** (`_apply_wrapup_to_segment`) só conhece `wrapup_resumo`, e que portanto
+`wrapup_next_steps` só seria preenchido pelo destacado. A sonda mostrou o contrário: os dois
+atendimentos (um `resolvido`, um `escalado`, ambos pelo hook `dispatch: inline`) gravaram
+`wrapup_next_steps`. Um campo que aquela função **não recebe na assinatura** não poderia estar ali —
+logo o produtor foi o `segment_outcome_record`.
+
+**Causa da defasagem:** a Phase 3 (wrap-up unificado) aposentou o inline antigo, e o inline de hoje é
+**auto-atendimento sobre a mesma máquina destacada** — mesmo `skill_wrapup_detached_v1`, mesma tool.
+`_apply_wrapup_to_segment` (`main.py:3010`, acionado em `process_routed` por
+`pipeline_state.results.wrapup_classificacao`) servia o especialista de conferência `wrapup_ia`, que
+saiu do `tenant_demo.yaml:445`. O único emissor daquela chave é `agente_wrapup_v1.yaml`, que **nenhum
+pool deploya** (`grep` em `infra/` só acha o comentário de remoção).
+
+**Consequência a tratar:** `_apply_wrapup_to_segment` e `agente_wrapup_v1.yaml` são candidatos a
+**código morto** — sem produtor vivo. Não remover sem confirmar que nenhum tenant fora do demo
+deploya o skill; enquanto ficarem, ensinam um modelo que não é mais o corrente (foi exatamente o que
+produziu esta nota errada).
 
 ### Fatias
 
@@ -316,6 +333,52 @@ gatilhos que hoje remendam (`available += 1` no `remove_conversation`, `busy = n
 `queue_length` no enqueue): mesma imediaticidade na UI, sem deriva acumulada. Custo do recálculo
 resolvido com **Lua** (uma ida e volta, percorre o set dentro do Redis) — não com laço de N round-trips,
 que era a objeção real.
+
+### Linha de base medida (2026-07-31) — 3 números para o mesmo fato, e um gatilho que não existe
+
+Medição ao vivo com **1 humano logado** (`max_concurrent 3`) e **1 vaga ocupada** no semáforo
+(resíduo do cenário E do `smoke_work_task_pending.sh` — a lacuna 2 acontecendo):
+
+| Superfície | Diz | Verdade |
+|---|---|---|
+| `retencao_humano` snapshot | `available 3, busy 0` | 2 |
+| `retencao_humano-int` snapshot | `available 3, busy 0` | 2 |
+| Soma na tela | **6** | **2** |
+
+O registro da instância declara `pools: ["retencao_humano","aprovacao_deploy"]` e o espelho `-int` é
+auto-provisionado por cima ⇒ **3 pools para um humano de 3 vagas**. É exatamente a origem do
+`Available 9` relatado no topo desta seção.
+
+**Achado 1 — são TRÊS representações do mesmo fato, e a que o snapshot lê é a que já divergiu.**
+
+| Representação | Onde | Valor medido |
+|---|---|---|
+| contador por POOL | `get_busy_count` → `busy` do snapshot | **0** ❌ |
+| contador por INSTÂNCIA | `current_sessions` no registro da instância | 1 ✅ |
+| SET de ocupantes | `SCARD {t}:instance:{iid}:sessions` | 1 ✅ |
+
+Consequência de desenho: derivar do **SET**, não adotar `current_sessions`. O contador da instância
+está certo *hoje*, mas é da mesma família do contador por pool — número paralelo que pode derivar.
+Trocar um contador por outro não fecha a classe de defeito; só muda qual deles vai mentir depois.
+
+**Achado 2 — o conjunto de gatilhos do desenho é insuficiente.** A proposta acima diz "trocar remendo
+por recálculo **nos mesmos gatilhos que hoje remendam**". Mas o **claim/release de item de fila pull
+não é um desses gatilhos**: não remenda nem recalcula — `write_pool_snapshot` tem **um único call site
+no router** (`router.py:215`, dentro de `route()`), e `work_task_claim`/`work_task_release` não passam
+por lá. Os dois snapshots medidos são de 11:29, **anteriores** ao claim das 11:34; o `formfill_demo`
+prova o simétrico, anunciando `queue_length: 1` de uma fila já esvaziada. A lista de gatilhos precisa
+**ganhar** claim e release — e, como a I5 tornou todo humano multi-pool por construção, essa via
+deixou de ser exceção.
+
+**Achado 3 — o TTL amplifica o achado 2 em 30×.** O snapshot vive **3600 s**, não 120 s: o código
+sempre usou o default `snapshot_ttl=3600`, e três docs diziam 120 s (`registry.py:132`, o docstring de
+`write_pool_snapshot`, e `CLAUDE.md` § Operational Visibility) — corrigidos em 2026-07-31 após medir
+`TTL 2958` numa chave escrita 11 min antes. Com 120 s um snapshot obsoleto se auto-curaria expirando;
+com 1 h ele **persiste**, e a tela mostra capacidade de uma hora atrás.
+
+**Detalhe lateral que reforça "pool é TAG":** `formfill_demo` tem `total_instances 0` e ainda assim
+teve item reivindicado por esse humano. Aqui é artefato do smoke (passa `instance_id` explícito), mas
+vale o registro: nada no caminho do claim exigiu membership.
 
 ### Prioridade — medida, não presumida (2026-07-30)
 

@@ -607,7 +607,7 @@ plughub-sdk proxy              # starts proxy sidecar on localhost:7422
 ## Operational Visibility — Section 3.3c
 
 Routing Engine writes pool snapshot to Redis after every routing event:
-`{tenant_id}:pool:{pool_id}:snapshot` (TTL 120s) — `{ pool_id, available, queue_length, sla_target_ms, channel_types, updated_at }`.
+`{tenant_id}:pool:{pool_id}:snapshot` (**TTL 3600s** — o código sempre usou o default `snapshot_ttl=3600`; "120s" era erro de doc em 3 lugares, corrigido 2026-07-31) — `{ pool_id, available, queue_length, sla_target_ms, channel_types, updated_at }`. **O snapshot NÃO é reescrito no claim/release de item de fila pull** (único call site em `router.py:215`, dentro de `route()`) — e com TTL de 1h a obsolescência por essa via não se auto-cura.
 
 Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `system_availability_check`. When contact is queued, Routing Engine publishes `queue.position_updated` to Kafka.
 
