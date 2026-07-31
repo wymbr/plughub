@@ -96,6 +96,230 @@ export async function listQueue(
   return out
 }
 
+// ─── I5 / D7b — pendências de wrap-up (leitura do ledger) ─────────────────────
+//
+// O ledger `{t}:work_task:{session}` nasce no despacho do delegate e morre no
+// resume — seu tempo de vida É o intervalo da pendência. O claim NÃO o apaga,
+// então UMA linha cobre as duas formas (nunca reivindicada e reivindicada-não-
+// submetida), que é justamente o que o relatório precisava e a fila pull não
+// dava (`work_queue_list` não lista item já reivindicado).
+//
+// ESCOPO: só wrap-up. O ledger é genérico (cobre aprovação e delegate a pool
+// push), mas o relatório da D4 é de trabalho AUTHOR-BOUND — aprovação é pooled,
+// tem transbordo por `fallback_to_pool_after_s`, e portanto ninguém fica preso
+// nela. O discriminador é o sufixo `-int` do pool, que a D6 tornou garantia por
+// CONSTRUÇÃO (o registry rejeita criação manual de pool com esse sufixo), não
+// convenção — `endsWith` aqui é seguro pela mesma razão que a derivação de
+// acesso da D2 é.
+
+/** Sufixo reservado (D6) das filas internas author-bound. */
+export const INTERNAL_POOL_SUFFIX = "-int"
+
+/**
+ * Estado de um item parqueado, derivado do cruzamento ledger × ZSET × lease.
+ *
+ * `orphaned` é o estado que NÃO existia no desenho e que a leitura de código
+ * revelou: pool pull, item fora do ZSET e sem lease = a lease venceu e ninguém
+ * re-enfileirou, porque não há reaper de `claim_lease` (lacuna 2 do TODO, que a
+ * Camada F deixou sem instrumento). Colapsá-lo em `not_queued` o esconderia
+ * atrás de um valor plausível — é o padrão que a § Postura de Engenharia nomeia.
+ */
+export type WorkTaskState =
+  | "unclaimed"    // no ZSET, sem lease — nunca reivindicada
+  | "claimed"      // fora do ZSET, com lease — reivindicada, não submetida
+  | "orphaned"     // pool pull, fora do ZSET e sem lease — lease venceu sem reaper
+  | "not_queued"   // pool push — não é item de fila (o expire é no-op)
+  | "unknown"      // sem pool_config no cache — infra ausente, NÃO presumir push
+
+export interface PendingWorkTask {
+  /** Sessão que o RESUME resolve (chave do ledger) — a que o expire recebe. */
+  session_id:       string
+  /** Id que está DE FATO no ZSET (== session_id em conferência). */
+  queue_session_id: string
+  pool_id:          string
+  /** user_id do dono (Camada B). Vazio sob `-int` é ANOMALIA, não normalidade. */
+  assigned_to:      string | null
+  step_id:          string | null
+  state:            WorkTaskState
+  /** dispatch_mode do pool lido de `{t}:pool_config:{pool}`; null = ausente. */
+  dispatch_mode:    string | null
+  created_at:       string | null
+  /** Prazo do delegate (ISO). */
+  deadline:         string | null
+  /** Idade desde o despacho. */
+  age_ms:           number | null
+  /** ms até o prazo (negativo = vencido). */
+  time_to_deadline_ms: number | null
+  /**
+   * Prazo no passado com a chave AINDA VIVA. No caminho normal isso não ocorre:
+   * o timeout scanner resume no prazo e apaga o ledger. Ver = o scanner não
+   * passou (serviço fora, ou o intervalo de 60 s). Sinal, não decoração.
+   */
+  overdue:          boolean
+  /** Instância que detém a lease (só em `claimed`). */
+  claimed_by:       string | null
+  claimed_at:       string | null
+}
+
+export interface PendingWorkTasksResult {
+  items: PendingWorkTask[]
+  /** Chaves varridas antes do teto — não é o total do Redis quando truncado. */
+  scanned: number
+  /**
+   * Bateu o teto do SCAN. Explícito de propósito: resultado parcial mudo é a
+   * mentira tranquila que a § Postura proíbe. A UI PRECISA exibir isto.
+   */
+  truncated: boolean
+}
+
+export interface PendingWorkTasksOpts {
+  /** Teto de chaves varridas. Default 2000. */
+  maxKeys?:     number
+  /** Filtros (conveniência: o SCAN varre tudo e filtra depois — não há índice). */
+  assignedTo?:  string
+  poolId?:      string
+  state?:       WorkTaskState
+  /** false = não filtra por `-int` (diagnóstico). Default true. */
+  internalOnly?: boolean
+}
+
+/**
+ * Varre o ledger e classifica as pendências. SCAN (nunca KEYS — KEYS bloqueia o
+ * Redis inteiro, e este é o mesmo Redis do routing em produção).
+ */
+export async function listPendingWorkTasks(
+  redis:    RedisClient,
+  tenantId: string,
+  opts:     PendingWorkTasksOpts = {},
+): Promise<PendingWorkTasksResult> {
+  const maxKeys      = Math.max(1, Math.min(opts.maxKeys ?? 2000, 20000))
+  const internalOnly = opts.internalOnly !== false
+  const prefix       = `${tenantId}:work_task:`
+  const nowMs        = Date.now()
+
+  // ── 1. SCAN com teto ───────────────────────────────────────────────────────
+  const rawKeys: string[] = []
+  let cursor    = "0"
+  let truncated = false
+  do {
+    const [next, batch] = await redis.scan(cursor, "MATCH", `${prefix}*`, "COUNT", 500)
+    cursor = next
+    for (const k of batch) {
+      if (rawKeys.length >= maxKeys) { truncated = true; break }
+      rawKeys.push(k)
+    }
+    if (truncated) break
+  } while (cursor !== "0")
+
+  if (rawKeys.length === 0) return { items: [], scanned: 0, truncated }
+
+  // ── 2. Ledger de cada chave (pipeline) ─────────────────────────────────────
+  const ledgerPipe = redis.pipeline()
+  for (const k of rawKeys) ledgerPipe.get(k)
+  const ledgerRes = await ledgerPipe.exec()
+
+  interface Row { sessionId: string; led: Record<string, unknown> }
+  const rows: Row[] = []
+  for (let i = 0; i < rawKeys.length; i++) {
+    const raw = ledgerRes?.[i]?.[1]
+    if (typeof raw !== "string") continue          // expirou entre o SCAN e o GET
+    let led: Record<string, unknown>
+    try { led = JSON.parse(raw) as Record<string, unknown> } catch { continue }
+    const poolId = String(led["pool_id"] ?? "")
+    if (!poolId) continue
+    if (internalOnly && !poolId.endsWith(INTERNAL_POOL_SUFFIX)) continue
+    if (opts.poolId && poolId !== opts.poolId) continue
+    const assignedTo = String(led["assigned_to"] ?? "")
+    if (opts.assignedTo && assignedTo !== opts.assignedTo) continue
+    rows.push({ sessionId: rawKeys[i]!.slice(prefix.length), led })
+  }
+
+  if (rows.length === 0) return { items: [], scanned: rawKeys.length, truncated }
+
+  // ── 3. dispatch_mode por pool DISTINTO (uma leitura por pool, não por item) ─
+  const pools = [...new Set(rows.map(r => String(r.led["pool_id"])))]
+  const cfgPipe = redis.pipeline()
+  for (const p of pools) cfgPipe.get(`${tenantId}:pool_config:${p}`)
+  const cfgRes = await cfgPipe.exec()
+  const dispatchByPool = new Map<string, string | null>()
+  for (let i = 0; i < pools.length; i++) {
+    const raw = cfgRes?.[i]?.[1]
+    let mode: string | null = null
+    if (typeof raw === "string") {
+      try { mode = String((JSON.parse(raw) as Record<string, unknown>)["dispatch_mode"] ?? "push") }
+      catch { mode = null }
+    }
+    dispatchByPool.set(pools[i]!, mode)
+  }
+
+  // ── 4. ZSET + lease por item ───────────────────────────────────────────────
+  const stPipe = redis.pipeline()
+  for (const r of rows) {
+    const poolId = String(r.led["pool_id"])
+    const qsid   = String(r.led["queue_session_id"] ?? r.sessionId)
+    stPipe.zscore(keys.poolQueue(tenantId, poolId), qsid)
+    stPipe.get(keys.claimLease(tenantId, poolId, qsid))
+  }
+  const stRes = await stPipe.exec()
+
+  // ── 5. Classificação ───────────────────────────────────────────────────────
+  const items: PendingWorkTask[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const { sessionId, led } = rows[i]!
+    const poolId  = String(led["pool_id"])
+    const qsid    = String(led["queue_session_id"] ?? sessionId)
+    const inQueue = stRes?.[i * 2]?.[1] != null
+    const leaseRaw = stRes?.[i * 2 + 1]?.[1]
+
+    let claimedBy: string | null = null
+    let claimedAt: string | null = null
+    if (typeof leaseRaw === "string") {
+      try {
+        const lease = JSON.parse(leaseRaw) as Record<string, unknown>
+        claimedBy = (lease["instance_id"] as string) ?? null
+        claimedAt = (lease["claimed_at"]  as string) ?? null
+      } catch { claimedBy = "?" }
+    }
+
+    const mode = dispatchByPool.get(poolId) ?? null
+    let state: WorkTaskState
+    if (inQueue)          state = "unclaimed"
+    else if (claimedBy)   state = "claimed"
+    else if (mode === null) state = "unknown"     // sem config: não presumir nada
+    else if (mode === "pull") state = "orphaned"  // lease venceu sem reaper
+    else                  state = "not_queued"
+
+    if (opts.state && state !== opts.state) continue
+
+    const createdAt = (led["created_at"] as string) ?? null
+    const deadline  = (led["deadline"]   as string) ?? null
+    const createdMs = createdAt ? Date.parse(createdAt) : NaN
+    const deadlineMs = deadline ? Date.parse(deadline) : NaN
+    const assignedTo = String(led["assigned_to"] ?? "")
+
+    items.push({
+      session_id:       sessionId,
+      queue_session_id: qsid,
+      pool_id:          poolId,
+      assigned_to:      assignedTo || null,
+      step_id:          (led["step_id"] as string) || null,
+      state,
+      dispatch_mode:    mode,
+      created_at:       createdAt,
+      deadline,
+      age_ms:              Number.isFinite(createdMs)  ? Math.max(nowMs - createdMs, 0) : null,
+      time_to_deadline_ms: Number.isFinite(deadlineMs) ? deadlineMs - nowMs : null,
+      overdue:             Number.isFinite(deadlineMs) ? deadlineMs < nowMs : false,
+      claimed_by:       claimedBy,
+      claimed_at:       claimedAt,
+    })
+  }
+
+  // Mais antigas primeiro — a pendência que mais dói é a que mais esperou.
+  items.sort((a, b) => (b.age_ms ?? 0) - (a.age_ms ?? 0))
+  return { items, scanned: rawKeys.length, truncated }
+}
+
 async function callRouting(
   routingUrl: string,
   adminToken: string | undefined,

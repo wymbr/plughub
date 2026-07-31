@@ -271,6 +271,8 @@ echo
 echo "I5 núcleo A+B ✅ — wrap-up não preenchido tem saída: prazo (acw_timeout_hours acima)"
 echo "ou supervisor (POST /api/work_queue/expire/:sessionId). Regressão da I5:"
 echo "  bash infra/test/smoke_acw_expire.sh"
-echo "Pendente da I5: relatório de pendências por agente (o item NUNCA reivindicado não"
-echo "tem segmento humano, então some da limpeza sem deixar linha em \`segments\`)."
+echo "Pendente da I5: relatório de pendências por agente — desenho fechado (ADR § D7b)."
+echo "  fonte = o ledger {t}:work_task:{session}, que cobre AS DUAS formas de pendência"
+echo "  (o claim não o apaga). O item nunca reivindicado segue sem segmento humano, mas"
+echo "  isso deixou de bloquear: quem responde 'quem está pendente agora' é o ledger."
 [ "$fail" -eq 0 ]

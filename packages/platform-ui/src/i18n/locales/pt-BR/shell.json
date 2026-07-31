@@ -9,6 +9,7 @@
     "monitor.pools": "Pools",
     "monitor.events": "Eventos",
     "monitor.schedules": "Agendas",
+    "monitor.workItems": "Pendências",
     "monitor.processes": "Processos",
     "service": "Atendimento",
     "service.sessions": "Sessões",
@@ -44,6 +45,7 @@
     "analise.customers": "Clientes",
     "analise.customerVoice": "Voz do Cliente",
     "analise.surveys": "Respostas de Pesquisa",
+    "analise.wrapup": "Histórico de Wrap-up",
     "quality": "Qualidade",
     "eval": {
       "forms": "Formulários",

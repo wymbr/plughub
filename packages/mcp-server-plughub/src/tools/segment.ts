@@ -68,9 +68,9 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
       origin_session_id: z.string().describe("Sessão de ORIGEM (o contato que fechou) — chaveia o seg_signal"),
       segment_id:        z.string().describe("Segmento humano a atribuir (@ctx.session.surveyed_segment_id)"),
       classificacao:     z.string().describe("Disposição crua: resolvido | pendente | escalado | cancelado"),
-      resumo:            z.string().optional().describe("Resumo do atendimento (→ handoff_reason quando não-resolvido)"),
+      resumo:            z.string().optional().describe("Resumo do atendimento (→ wrapup_summary, SEMPRE gravado)"),
       escalation_reason: z.string().optional().describe("Motivo da escalação (quando classificacao=escalado)"),
-      proximos_passos:   z.string().optional().describe("Próximos passos (apensado ao handoff_reason quando não-resolvido)"),
+      proximos_passos:   z.string().optional().describe("Próximos passos (→ wrapup_next_steps, SEMPRE gravado)"),
       tenant_id:         z.string().optional(),
     } as any,
     async (args: {
@@ -92,6 +92,20 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
 
       // ── 1. Acumula os campos DINÂMICOS no hash (mesma semântica de _apply_wrapup_to_segment) ──
       const dyn: Record<string, string> = { outcome, issue_status: raw }
+
+      // Prosa do wrap-up — SEMPRE gravada (fix 2026-07-30). Antes, o texto que o
+      // atendente digitou só era guardado quando `outcome !== "resolved"`; no caso
+      // mais comum (resolvido) ele era descartado em silêncio, e a tela não dava
+      // sinal nenhum disso. Colunas próprias, não `handoff_reason`: aquele campo
+      // define `handoff_rate` (`countIf(handoff_reason != '') / count()`) e escrever
+      // o resumo ali levaria a taxa de repasse a ~100% — trocaria uma perda muda por
+      // uma métrica que muda de sentido sem avisar.
+      if (args.resumo)          dyn["wrapup_summary"]    = args.resumo
+      if (args.proximos_passos) dyn["wrapup_next_steps"] = args.proximos_passos
+
+      // `handoff_reason` segue EXATAMENTE como antes — mesma regra, mesmo formato.
+      // Há sobreposição de texto com as colunas novas no caso não-resolvido, e é
+      // deliberado: mudar este campo mudaria `handoff_rate` retroativamente.
       if (outcome !== "resolved") {
         const parts: string[] = []
         if (args.resumo) parts.push(args.resumo)
@@ -165,6 +179,8 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
       if (h["handoff_reason"])    event["handoff_reason"]    = h["handoff_reason"]
       if (h["close_reason"])      event["close_reason"]      = h["close_reason"]
       if (h["escalation_reason"]) event["escalation_reason"] = h["escalation_reason"]
+      if (h["wrapup_summary"])    event["wrapup_summary"]    = h["wrapup_summary"]
+      if (h["wrapup_next_steps"]) event["wrapup_next_steps"] = h["wrapup_next_steps"]
 
       try {
         await kafka.publish(TOPIC_PARTICIPANTS, event)

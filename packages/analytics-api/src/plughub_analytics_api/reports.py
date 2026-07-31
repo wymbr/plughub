@@ -48,6 +48,7 @@ from .reports_query import (
     query_participation_report,
     query_quality_report,
     query_segments_report,
+    query_wrapup_summary,
     query_agent_availability,
     query_agent_timeline,
     query_pools_volume,
@@ -493,6 +494,53 @@ async def get_segments_report(
         page_size = ps,
     )
     return _respond(data, format, f"segments_{_today_label()}.csv")
+
+
+# ─── /reports/wrapup-summary (I5 / ADR § D7b, fatia 2) ──────────────────────
+
+@router.get("/wrapup-summary")
+async def get_wrapup_summary(
+    request:        Request,
+    tenant_id:      str,
+    from_dt:        str | None    = None,
+    to_dt:          str | None    = None,
+    group_by:       str           = Query("agent", pattern="^(agent|pool)$"),
+    pool_id:        str | None    = None,
+    origin:         str           = Query("live", pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
+    format:         str | None    = None,
+    pool_principal: PoolPrincipal = Depends(optional_pool_principal),
+) -> Response:
+    """
+    Desfecho das pendências de wrap-up (trabalho author-bound) no período.
+
+    Contraparte RETROSPECTIVA do Monitor › Pendências, que mostra só o vivo — e
+    que tem horizonte de ~25 h (o ledger no Redis expira com o prazo do delegate).
+    Aqui o histórico é permanente, porque vive em `segments`.
+
+    Escopo: pools com sufixo `-int`. O trio de `close_reason` sozinho não serve de
+    filtro — `task_submitted` também é escrito por claimante de APROVAÇÃO, que é
+    trabalho pooled num pool de contato.
+
+    Uma linha por agente (`user_login`) ou por pool, conforme `group_by`:
+      total, submitted, expired, supervisor_closed, avg_fill_ms, last_seen
+    `avg_fill_ms` é a média só dos SUBMETIDOS — é o tempo de ACW real; a duração de
+    um item expirado mede abandono, não trabalho.
+
+    `totals.unfilled_rate` = (expired + supervisor_closed) / total — a "% de
+    contatos sem disposição" que a D4 nomeia como ganho.
+    """
+    data = await query_wrapup_summary(
+        client    = request.app.state.store.new_client(),
+        database  = request.app.state.store._database,
+        tenant_id = tenant_id,
+        from_dt   = from_dt,
+        to_dt     = to_dt,
+        group_by  = group_by,
+        pool_id   = pool_id,
+        origin    = origin,
+        accessible_pools = pool_principal.accessible_pools,
+    )
+    return _respond(data, format, f"wrapup_summary_{_today_label()}.csv")
 
 
 # ─── /reports/agents/performance (Arc 5 — aggregate per agent) ──────────────

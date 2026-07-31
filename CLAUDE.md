@@ -239,6 +239,25 @@ system_error         — unrecoverable error
   implementação — ele descobre que a especificação pedia a coisa errada. Corrigir a spec é resultado
   válido, não desvio.
 
+- **Um teste que não pode reprovar é pior que teste nenhum — ele compra confiança sem dar nada.**
+  O modo de falha é sempre o mesmo: a asserção nunca alcança a condição que deveria julgar, e o
+  resultado (verde, ou `skipped`) parece resposta. Catálogo do que já aconteceu: `skipped` por ler
+  `REDIS_URL` quando o serviço define `PLUGHUB_REDIS_URL` (9 testes do claim pull, **nunca** rodaram
+  no container) · `MagicMock` devolvendo truthy para `analytics_open_access` (14 testes de RBAC
+  trocaram de caminho) · `set -e` + `VAR=$(curl …)` matando o script sem imprimir quando o serviço
+  ainda sobe · `jq '.campo // empty'` tratando `false` como ausente · janela por `started_at`
+  cobrando dado gravado antes do deploy (o corte certo é `ingested_at`). **Antes de aceitar um
+  verde, pergunte o que o faria ficar vermelho** — e prefira que o teste se declare INCONCLUSIVO a
+  passar por ausência de amostra.
+
+- **Em ClickHouse, alias de agregado NUNCA repete nome de coluna real da tabela.** `any(pool_id) AS
+  pool_id` faz o alias sombrear a coluna que o `WHERE` usa, e a query inteira falha
+  (`ILLEGAL_AGGREGATION`, code 184) — não a coluna, a query. Já aconteceu duas vezes: `any(attr.agent_type)`
+  na lente `deploy` e `any(pool_id)`/`any(user_id)` no `wrapup-summary`. Sufixe o alias (`_ref`) e renomeie
+  na camada Python, onde o contrato da API é definido. O modo de falha agrava a regra: o wrapper devolve
+  `data_unavailable` com `data: []`, indistinguível de "não há dado" para quem só olha a tela — só se
+  diagnostica se o `except` logar o texto da exceção.
+
 - **`docker cp` sobrevive a `restart`, não a `up -d`.** `up -d` recria o container a partir da imagem.
   Mudança em código de serviço = `build`, nunca `cp` (que é só atalho de iteração efêmera). Um `up -d`
   no meio de uma validação faz o serviço voltar à imagem antiga e os testes "regridem" sem motivo.

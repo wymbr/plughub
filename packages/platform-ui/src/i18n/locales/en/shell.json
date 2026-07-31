@@ -9,6 +9,7 @@
     "monitor.pools": "Pools",
     "monitor.events": "Events",
     "monitor.schedules": "Schedules",
+    "monitor.workItems": "Pending work",
     "monitor.processes": "Processes",
     "service": "Service",
     "service.sessions": "Sessions",
@@ -44,6 +45,7 @@
     "analise.customers": "Customers",
     "analise.customerVoice": "Customer Voice",
     "analise.surveys": "Survey Responses",
+    "analise.wrapup": "Wrap-up History",
     "quality": "Quality",
     "eval": {
       "forms": "Forms",

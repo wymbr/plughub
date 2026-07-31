@@ -341,6 +341,28 @@ class LifecycleEventHandler:
             logger.debug("Lifecycle event ignored: %s", event_type)
 
     @staticmethod
+    def _carries_resource_facts(event: dict) -> bool:
+        """
+        O evento tem autoridade para CRIAR uma instância humana?
+
+        Só o login (`registerHumanAgent` no mcp-server) conhece os fatos de RECURSO
+        e os publica: `user_id`, `user_login` e `max_concurrent_sessions`. Qualquer
+        outro `agent_ready` (pong de aba obsoleta, republish de outro caminho) chega
+        sem eles — e criar a instância a partir dele grava os DEFAULTS do ramo
+        (`max_concurrent=1`, identidade vazia), que é indistinguível de uma
+        configuração legítima ao olhar a tela.
+
+        Exigimos `user_id` E `max_concurrent_sessions`: os dois juntos, porque é a
+        combinação que só o login produz. `user_login` fica de fora do teste de
+        propósito — é denormalização para exibição e pode faltar em cliente legado
+        sem que isso torne o evento não-autoritativo.
+        """
+        return bool(
+            str(event.get("user_id") or "")
+            and event.get("max_concurrent_sessions") is not None
+        )
+
+    @staticmethod
     def _is_human_instance(instance_id: str, existing: dict | None) -> bool:
         """Humano = `source: "human_login"` no registro vivo. O prefixo `human-`
         é o fallback para quando o registro ainda não existe (mesmo teste que o
@@ -468,13 +490,44 @@ class LifecycleEventHandler:
                 )
                 return None
 
+            elif is_human and not self._carries_resource_facts(event):
+                # ── `agent_ready` de humano SEM os fatos de recurso: NÃO recria ──
+                #
+                # Fix 2026-07-30. O guard acima cobria só eventos não-autoritativos,
+                # então um `agent_ready` TARDIO (aba obsoleta, pong pós-logout, ou o
+                # republish de um caminho que não é o login) caía no `else` abaixo e
+                # RECONSTRUÍA a instância a partir do payload — com os defaults do
+                # ramo: `max_concurrent=1`, `user_id=""`, `user_login=""`.
+                #
+                # Medido em produção: instância com `registered_at == last_seen`
+                # (prova de recriação), identidade vazia e capacidade 1, embora o
+                # usuário tenha `max_concurrent_sessions: 3`. O Monitor exibia
+                # `total 1` — um número que não é a capacidade de ninguém.
+                #
+                # O discriminador é o PAYLOAD, não o tipo do evento: o login
+                # (`registerHumanAgent`) sempre manda `user_id` + `user_login` +
+                # `max_concurrent_sessions`; quem não os manda não é login e
+                # portanto não tem autoridade para criar o recurso. Mesma regra da
+                # F1 — evento de conexão não carrega fato de recurso.
+                logger.warning(
+                    "human instance ABSENT on %s SEM fatos de recurso — NÃO recriada: "
+                    "instance=%s event_pools=%s (user_id=%r max_concurrent_sessions=%r). "
+                    "Recriar daqui produziria capacidade 1 e identidade vazia. Criação "
+                    "é do login WS; se o agente está conectado, investigar quem apagou %s.",
+                    event_type, instance_id, ev_pools,
+                    event.get("user_id"), event.get("max_concurrent_sessions"),
+                    instance_id,
+                )
+                return None
+
             else:
                 # ── Evento constrói o registro ──────────────────────────────────
                 # Dois casos: (a) instância de IA — comportamento inalterado, é
                 # criada e mantida pelo reconciliador por-pool e seu `pools[]` é
                 # genuinamente unitário; (b) PRIMEIRO `agent_ready` de um humano
                 # (login), que é justamente o evento autoritativo — o mcp-server
-                # manda `mergedPools` lido do próprio registro.
+                # manda `mergedPools` lido do próprio registro E os fatos de
+                # recurso (validados pelo ramo acima).
                 pools            = ev_pools
                 agent_type_id    = ev_type
                 max_concurrent   = event.get("max_concurrent_sessions", 1)
@@ -657,46 +710,27 @@ class LifecycleEventHandler:
             return
 
     async def _refresh_pool_snapshots(
-        self, tenant_id: str, pool_ids: list[str], delta: int | None = None
+        self, tenant_id: str, pool_ids: list[str]
     ) -> None:
         """
-        Refreshes pool snapshots for each pool_id.
+        Refreshes pool snapshots for each pool_id — SEMPRE recontagem completa.
 
         Called fire-and-forget on agent_ready so Monitor reflects the pool's
         available/busy counts immediately.
 
-        Two modes:
-        - delta is None (initial login / snapshot absent): always do a full
-          write_pool_snapshot() which sums capacity across all ready instances.
-          This is correct at login time when the pool transitions from 0 → N.
-        - delta is set (one agent returned from a session): try a fast-patch
-          first (+delta to existing snapshot). If the snapshot has expired
-          (TTL 3600s normally keeps it alive; rare miss), fall back to a full
-          recount so the counter is never permanently lost.
+        A recontagem é idempotente: chamadas repetidas dão o mesmo resultado
+        correto. O laço de reconciliação manda `agent_ready` para TODOS os agentes
+        de IA a cada 15 s — um fast-patch por delta comporia a cada ciclo e
+        superestimaria a capacidade sem limite.
 
-        This prevents hook pools (wrapup_ia, nps_ia) with 400 agents from
-        showing available += 400 every time a single agent finishes a session.
+        O parâmetro `delta` (e a `patch_pool_snapshot_available` que ele chamava)
+        foram REMOVIDOS em 2026-07-30: nenhum call site os usava desde sempre, e o
+        nome fez a caça ao `available 4 / total 3` começar pelo caminho errado.
+        O incremento real acontece em `InstanceRegistry.remove_conversation`.
         """
         assert self._pools is not None
         for pool_id in pool_ids:
             try:
-                if delta is not None:
-                    patched = await self._instances.patch_pool_snapshot_available(
-                        tenant_id, pool_id, delta
-                    )
-                    if patched:
-                        logger.debug(
-                            "Pool snapshot fast-patched on agent_ready: "
-                            "tenant=%s pool=%s delta=%+d",
-                            tenant_id, pool_id, delta,
-                        )
-                        continue
-                    # Snapshot absent — fall through to full recount below
-                    logger.debug(
-                        "Pool snapshot absent on agent_ready fast-patch, "
-                        "falling back to full recount: tenant=%s pool=%s",
-                        tenant_id, pool_id,
-                    )
                 pool = await self._pools.get_pool(tenant_id, pool_id)
                 if pool:
                     await self._instances.write_pool_snapshot(
@@ -746,9 +780,29 @@ class LifecycleEventHandler:
                 instance.state = new_state
                 await self._instances.set_instance(instance)
                 affected_pools = list(instance.pools)
+                # ── Fix 2026-07-30 — o SREM existia SÓ no ramo de fallback ───────
+                # O docstring desta função sempre prometeu "removes instance from
+                # all pool sets", mas neste ramo (o CASO NORMAL: a chave ainda
+                # existe quando o evento chega) nada era removido. O agente ficava
+                # `logged_out` E membro do ready_set — e o `write_pool_snapshot`
+                # soma a capacidade dele assim mesmo: o `get_ready_instances` o
+                # pula (state ≠ ready), mas o laço seguinte
+                # (`_all_pool_member_ids - _ready_instance_ids`) conta o
+                # `max_concurrent` de todo membro pulado.
+                # Sintoma medido: `available 1 / total 1` num pool SEM ninguém
+                # logado. Capacidade fantasma — pior que número errado, porque o
+                # roteamento acredita nela.
+                _redis = self._instances._redis
+                for pool_id in affected_pools:
+                    await _redis.srem(
+                        f"{tenant_id}:pool:{pool_id}:instances", instance_id
+                    )
+                    await _redis.srem(
+                        f"{tenant_id}:pool:{pool_id}:busy_instances", instance_id
+                    )
                 logger.info(
                     "[deactivate] Instance found and deactivated: "
-                    "tenant=%s instance=%s state=%s pools=%s",
+                    "tenant=%s instance=%s state=%s pools=%s (removido dos sets)",
                     tenant_id, instance_id, new_state, affected_pools,
                 )
             else:

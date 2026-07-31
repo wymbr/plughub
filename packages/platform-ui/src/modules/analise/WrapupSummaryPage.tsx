@@ -1,0 +1,241 @@
+/**
+ * WrapupSummaryPage
+ * Rota: /analise/wrapup — HISTÓRICO das pendências de wrap-up (I5 / ADR § D7b, fatia 2).
+ *
+ * Contraparte retrospectiva do Monitor › Pendências. A divisão não é arbitrária:
+ *   · Monitor  = quem está devendo AGORA (ledger Redis, janela de ~25 h)
+ *   · Analytics = como terminaram no período (segments, permanente)
+ * A superfície viva não pode responder "quantos venceram este mês" porque o ledger
+ * expira com o prazo do delegate; esta não pode responder "quem está devendo agora"
+ * porque o segmento só existe depois de fechado.
+ *
+ * Fonte: GET /reports/wrapup-summary (analytics-api) — agregado sobre `segments`
+ * com o trio de close_reason, escopado a pools `-int`. Nenhum dado novo foi
+ * produzido para esta tela: a D7b previu que ela era só a lente.
+ */
+
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
+import Spinner from '@/components/ui/Spinner'
+import EmptyState from '@/components/ui/EmptyState'
+
+type GroupAxis = 'agent' | 'pool'
+
+interface Row {
+  group_key:         string
+  pool_id:           string
+  user_id:           string
+  total:             number
+  submitted:         number
+  expired:           number
+  supervisor_closed: number
+  avg_fill_ms:       number | null
+  last_seen:         string | null
+}
+
+interface Totals {
+  total?:             number
+  submitted?:         number
+  expired?:           number
+  supervisor_closed?: number
+  /** (expired + supervisor_closed) / total — a "% sem disposição" da D4. */
+  unfilled_rate?:     number | null
+}
+
+const PERIODS: { key: string; days: number }[] = [
+  { key: '7d',  days: 7 },
+  { key: '30d', days: 30 },
+  { key: '90d', days: 90 },
+]
+
+function isoDaysAgo(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString()
+}
+
+function fmtDuration(ms: number | null): string {
+  if (ms == null || !Number.isFinite(ms)) return '—'
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return r ? `${m}min ${r}s` : `${m}min`
+}
+
+function fmtPct(v: number | null | undefined): string {
+  if (v == null) return '—'
+  return `${(v * 100).toFixed(1)}%`
+}
+
+function KpiCard({ label, value, hint, tone }: {
+  label: string; value: string; hint?: string; tone?: 'warn' | 'plain'
+}) {
+  return (
+    <div className="bg-white border border-border rounded-xl px-4 py-3 min-w-[140px]">
+      <div className="text-2xs uppercase tracking-wide text-muted-light">{label}</div>
+      <div className={`text-xl font-semibold mt-0.5 ${tone === 'warn' ? 'text-red-text' : 'text-dark'}`}>
+        {value}
+      </div>
+      {hint && <div className="text-2xs text-muted-light mt-0.5">{hint}</div>}
+    </div>
+  )
+}
+
+export default function WrapupSummaryPage() {
+  const { t } = useTranslation('workItems')
+  const { session, tenantId, perms } = useAuth()
+
+  const [rows,    setRows]    = useState<Row[]>([])
+  const [totals,  setTotals]  = useState<Totals>({})
+  const [loading, setLoading] = useState(true)
+  const [error,   setError]   = useState('')
+  const [axis,    setAxis]    = useState<GroupAxis>('agent')
+  const [period,  setPeriod]  = useState(PERIODS[1]!)
+
+  const canView = perms.can('contacts', 'visualizar')
+
+  const load = useCallback(async () => {
+    if (!tenantId) return
+    setLoading(true)
+    const p = new URLSearchParams({
+      tenant_id: tenantId,
+      group_by:  axis,
+      from_dt:   isoDaysAgo(period.days),
+    })
+    try {
+      const res = await apiFetch(`/reports/wrapup-summary?${p}`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json() as { data?: Row[]; totals?: Totals; error?: string }
+      // `error: data_unavailable` é degradação do backend — NÃO é lista vazia. Sem
+      // esta distinção a tela mostraria "nenhum wrap-up no período" para uma query
+      // que falhou, que é o modo de falha mais caro: um zero que parece resultado.
+      if (data.error) { setError(t('history.errorBackend')); setRows([]); setTotals({}); return }
+      setRows(data.data ?? [])
+      setTotals(data.totals ?? {})
+      setError('')
+    } catch (e) {
+      setError(t('errors.loadFailed'))
+      console.error(e)
+    } finally {
+      setLoading(false)
+    }
+  }, [tenantId, axis, period, t])
+
+  useEffect(() => { if (canView) void load(); else setLoading(false) }, [canView, load])
+
+  const maxTotal = useMemo(
+    () => rows.reduce((m, r) => Math.max(m, Number(r.total) || 0), 0),
+    [rows],
+  )
+
+  if (!session || !canView) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-muted">{t('restricted')}</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-surface-muted">
+      <div className="bg-white flex-shrink-0 px-6 pt-4 pb-3 border-b border-border">
+        <h1 className="text-lg font-semibold text-dark">{t('history.title')}</h1>
+        <p className="text-sm text-muted mt-0.5">{t('history.info')}</p>
+
+        <div className="flex items-center gap-3 mt-3 flex-wrap">
+          <div className="flex gap-1 rounded-lg border border-border-strong overflow-hidden">
+            {(['agent', 'pool'] as GroupAxis[]).map(a => (
+              <button key={a} type="button" onClick={() => setAxis(a)}
+                className={`px-3 py-1.5 text-xs transition-colors ${axis === a
+                  ? 'bg-primary text-white' : 'bg-white text-muted hover:text-dark'}`}>
+                {t(`axis.${a}`)}
+              </button>
+            ))}
+          </div>
+          <div className="flex gap-1 flex-wrap">
+            {PERIODS.map(p => (
+              <button key={p.key} type="button" onClick={() => setPeriod(p)}
+                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${period.key === p.key
+                  ? 'bg-primary text-white border-primary'
+                  : 'bg-white text-muted border-border-strong hover:text-dark'}`}>
+                {t(`history.period.${p.key}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {loading && <div className="flex justify-center py-8"><Spinner /></div>}
+        {error && <p className="text-sm text-red-text">{error}</p>}
+
+        {!loading && !error && (
+          <div className="flex gap-3 flex-wrap">
+            <KpiCard label={t('history.kpi.total')}     value={String(totals.total ?? 0)} />
+            <KpiCard label={t('history.kpi.submitted')} value={String(totals.submitted ?? 0)} />
+            <KpiCard label={t('history.kpi.expired')}   value={String(totals.expired ?? 0)} />
+            <KpiCard label={t('history.kpi.supervisorClosed')} value={String(totals.supervisor_closed ?? 0)} />
+            <KpiCard
+              label={t('history.kpi.unfilled')}
+              value={fmtPct(totals.unfilled_rate)}
+              hint={t('history.kpi.unfilledHint')}
+              tone={(totals.unfilled_rate ?? 0) > 0 ? 'warn' : 'plain'}
+            />
+          </div>
+        )}
+
+        {!loading && !error && rows.length === 0 && (
+          <EmptyState icon="📋" title={t('history.empty')} description={t('history.emptyHint')} />
+        )}
+
+        {!loading && !error && rows.length > 0 && (
+          <div className="bg-white border border-border rounded-xl overflow-hidden">
+            <div className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2 text-2xs uppercase tracking-wide text-muted-light border-b border-border">
+              <span>{t(`axis.${axis}`)}</span>
+              <span className="text-right">{t('history.col.total')}</span>
+              <span className="text-right">{t('history.col.submitted')}</span>
+              <span className="text-right">{t('history.col.expired')}</span>
+              <span className="text-right">{t('history.col.supervisorClosed')}</span>
+              <span className="text-right">{t('history.col.avgFill')}</span>
+            </div>
+            {rows.map(r => {
+              const unfilled = (Number(r.expired) || 0) + (Number(r.supervisor_closed) || 0)
+              return (
+                <div key={r.group_key || '—'}
+                  className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2 items-center text-xs border-b border-border last:border-b-0">
+                  <div className="min-w-0">
+                    <div className="text-dark font-medium truncate" title={r.group_key}>
+                      {r.group_key || t('history.unknownAgent')}
+                    </div>
+                    {/* Barra proporcional: comparar agentes sem ler número a número. */}
+                    <div className="h-1 bg-surface-alt rounded mt-1 overflow-hidden">
+                      <div className="h-full bg-primary"
+                        style={{ width: maxTotal ? `${(Number(r.total) / maxTotal) * 100}%` : '0%' }} />
+                    </div>
+                  </div>
+                  <span className="text-right text-dark">{r.total}</span>
+                  <span className="text-right text-muted">{r.submitted}</span>
+                  <span className={`text-right ${Number(r.expired) > 0 ? 'text-red-text font-medium' : 'text-muted'}`}>
+                    {r.expired}
+                  </span>
+                  <span className={`text-right ${Number(r.supervisor_closed) > 0 ? 'text-warning-text font-medium' : 'text-muted'}`}>
+                    {r.supervisor_closed}
+                  </span>
+                  <span className="text-right text-muted" title={t('history.col.avgFillHint')}>
+                    {fmtDuration(r.avg_fill_ms)}
+                    {unfilled > 0 && <span className="sr-only"> ({unfilled})</span>}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {!loading && !error && rows.length > 0 && (
+          <p className="text-2xs text-muted-light">{t('history.avgNote')}</p>
+        )}
+      </div>
+    </div>
+  )
+}

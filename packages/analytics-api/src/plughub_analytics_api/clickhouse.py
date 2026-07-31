@@ -402,6 +402,8 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     handoff_reason     Nullable(String),
     issue_status       Nullable(String),
     escalation_reason  Nullable(String),
+    wrapup_summary     Nullable(String),
+    wrapup_next_steps  Nullable(String),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
     date               Date
@@ -452,6 +454,26 @@ _DDL_SEGMENTS_DROP_NPS = (
 # escalate step). Nullable: só segmentos escalados têm. handoff_reason segue como nota livre.
 _DDL_SEGMENTS_MIGRATE_ESCALATION = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS escalation_reason Nullable(String)"
+)
+
+# Prosa do wrap-up (fix 2026-07-30). O formulário sempre pergunta "resumo" e
+# "próximos passos", mas eles só eram gravados quando `outcome != 'resolved'` — no
+# caso MAIS COMUM (resolvido) o texto que o atendente digitou não ia a lugar nenhum,
+# sem sinal nenhum na tela.
+#
+# Colunas PRÓPRIAS, e não `handoff_reason`, por dois motivos:
+#   1. `handoff_rate` é definido como `countIf(handoff_reason != '') / count()` —
+#      escrever o resumo ali levaria a taxa de repasse a ~100%, trocando uma perda
+#      silenciosa por uma métrica que muda de significado sem avisar;
+#   2. mesmo precedente do `escalation_reason`, que foi extraído desta mesma nota
+#      livre quando ganhou significado próprio.
+# Prosa não cabe em `agent_business_events` (Arc 12): lá `value` é numérico e o
+# nominal vive na CATEGORIA — texto livre não é nem um nem outro.
+_DDL_SEGMENTS_MIGRATE_WRAPUP_SUMMARY = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS wrapup_summary Nullable(String)"
+)
+_DDL_SEGMENTS_MIGRATE_WRAPUP_NEXT_STEPS = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS wrapup_next_steps Nullable(String)"
 )
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
@@ -994,6 +1016,8 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_USER_LOGIN,     # C1: user_login (email) — exibição legível
     _DDL_SEGMENTS_DROP_NPS,               # item 5: DROP nps_score (vestigial → session_signal)
     _DDL_SEGMENTS_MIGRATE_ESCALATION,     # F7: escalation_reason normalizado por segmento
+    _DDL_SEGMENTS_MIGRATE_WRAPUP_SUMMARY,    # prosa do wrap-up (antes descartada quando resolved)
+    _DDL_SEGMENTS_MIGRATE_WRAPUP_NEXT_STEPS,
     # Quality substrate isolation (ADR) — passo 1: origin (live|import|reeval) no substrato.
     _DDL_SESSIONS_MIGRATE_ORIGIN_CLASS,
     _DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS,
@@ -1360,7 +1384,8 @@ class AnalyticsStore:
         "parent_segment_id", "sequence_index",
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status",
-        "escalation_reason", "conference_id", "date",
+        "escalation_reason", "wrapup_summary", "wrapup_next_steps",
+        "conference_id", "date",
         "origin",   # substrate isolation (ADR)
     ]
 
@@ -2020,6 +2045,8 @@ def _segment_row(d: dict) -> list:
         d.get("handoff_reason") or None,
         d.get("issue_status") or None,
         d.get("escalation_reason") or None,
+        d.get("wrapup_summary") or None,
+        d.get("wrapup_next_steps") or None,
         d.get("conference_id") or None,
         _today_utc(ts),
         d.get("origin") or "live",   # substrate isolation (ADR)

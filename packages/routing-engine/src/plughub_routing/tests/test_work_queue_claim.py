@@ -39,7 +39,14 @@ class _FakePoolRegistry:
         return [self._pool] if self._pool else []
 
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+# Também aceita `PLUGHUB_REDIS_URL` (2026-07-30): é a variável que o serviço define
+# no compose. Lendo só `REDIS_URL`, estes testes PULAVAM silenciosamente ao rodar
+# dentro do container — o claim atômico da fila pull nunca foi exercitado lá.
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("PLUGHUB_REDIS_URL")
+    or "redis://localhost:6379"
+)
 
 
 class _FakeProducer:

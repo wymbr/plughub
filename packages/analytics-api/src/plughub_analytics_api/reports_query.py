@@ -1830,6 +1830,8 @@ def _fetch_segments(
             parent_segment_id, sequence_index,
             started_at, ended_at, duration_ms,
             outcome, close_reason, handoff_reason, issue_status,
+            -- Prosa do wrap-up: gravada em TODA disposição, inclusive resolvido.
+            wrapup_summary, wrapup_next_steps,
             conference_id
         FROM {db}.segments FINAL
         WHERE {where}
@@ -1838,6 +1840,151 @@ def _fetch_segments(
     """, parameters=params)
 
     return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+
+
+# ─── /reports/wrapup-summary (I5 / ADR § D7b, fatia 2) ───────────────────────
+#
+# HISTÓRICO do trabalho author-bound, contraparte retrospectiva do Monitor ›
+# Pendências (que só mostra o VIVO). Não há dado novo a produzir: o segmento do
+# wrap-up já nasce com `close_reason` do trio, duração e `user_login` — a fatia 2
+# é a lente, como a D7b previu.
+#
+# ESCOPO idêntico ao da fatia 1: pools com sufixo `-int` (trabalho author-bound).
+# O trio de `close_reason` SOZINHO não bastaria como filtro — `task_submitted` é
+# escrito por qualquer claimante de fila pull, incluindo APROVAÇÃO, que é pooled e
+# mora num pool de contato. Filtrar só pelo trio misturaria os dois regimes e o
+# número de "wrap-ups vencidos" incluiria aprovações. Escopo = `-int`; trio =
+# classificação. Exatamente o par da tela viva.
+
+_WRAPUP_CLOSE_REASONS = ("task_submitted", "acw_expired", "acw_supervisor_closed")
+
+_WRAPUP_GROUP_COLS = {
+    # Identidade legível do atendente. `user_login` (e não `user_id`) porque é o que
+    # o produtor carimba no segmento — ver `participant_meta`. O `user_id` viaja
+    # junto, derivado de `participant_id` (`human-{uid}`), para casar com o
+    # `assigned_to` da superfície VIVA, que é chaveada por user_id.
+    "agent": "user_login",
+    "pool":  "pool_id",
+}
+
+
+async def query_wrapup_summary(
+    client:    Any,
+    database:  str,
+    tenant_id: str,
+    from_dt:   str | None = None,
+    to_dt:     str | None = None,
+    *,
+    group_by:         str              = "agent",
+    pool_id:          str | None       = None,
+    accessible_pools: list[str] | None = None,
+    origin:           "str | list[str]" = "live",
+) -> dict:
+    """
+    Agregado do desfecho das pendências author-bound no período.
+
+      submitted         — o humano entregou o formulário (`task_submitted`)
+      expired           — o prazo venceu sem entrega (`acw_expired`)
+      supervisor_closed — um supervisor encerrou (`acw_supervisor_closed`)
+      avg_fill_ms       — duração MÉDIA dos submetidos = o tempo de ACW real
+
+    `avg_fill_ms` cobre só os submetidos de propósito: a duração de um item
+    expirado é o intervalo claim→prazo, que mede abandono, não trabalho. Somar os
+    dois produziria uma média plausível que não é ACW nem outra coisa.
+    """
+    since = _ch_fmt(from_dt) if from_dt else _default_from()
+    until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    if accessible_pools is not None and not accessible_pools:
+        return {"data": [], "totals": {}, "meta": _meta(1, 0, 0, since, until)}
+    try:
+        return await asyncio.to_thread(
+            _fetch_wrapup_summary, client, database, tenant_id, since, until,
+            group_by, pool_id, accessible_pools, origin,
+        )
+    except Exception as exc:
+        # Log em WARNING com o texto da exceção: um `except` mudo aqui repetiria o
+        # engano `duration_ms × handle_time_ms`, que ficou anos invisível.
+        logger.warning("query_wrapup_summary failed tenant=%s: %s", tenant_id, exc)
+        return {
+            "data": [], "totals": {}, "meta": _meta(1, 0, 0, since, until),
+            "error": "data_unavailable",
+        }
+
+
+def _fetch_wrapup_summary(
+    client: Any, db: str, tenant_id: str,
+    since: str, until: str,
+    group_by: str, pool_id: str | None,
+    accessible_pools: list[str] | None,
+    origin: "str | list[str]" = "live",
+) -> dict:
+    group_col = _WRAPUP_GROUP_COLS.get(group_by, _WRAPUP_GROUP_COLS["agent"])
+    reasons   = ", ".join(f"'{r}'" for r in _WRAPUP_CLOSE_REASONS)
+
+    conditions = [
+        "tenant_id = {tenant_id:String}",
+        # `segments` usa started_at/duration_ms (`sessions` usa opened_at/
+        # handle_time_ms) — trocar dá UNKNOWN_IDENTIFIER ou vazio mudo.
+        f"started_at >= '{since}'",
+        f"started_at < '{until}'",
+        "agent_type = 'human'",
+        "endsWith(pool_id, '-int')",
+        f"close_reason IN ({reasons})",
+    ]
+    params: dict = {"tenant_id": tenant_id}
+    if pool_id:
+        conditions.append("pool_id = {pool_id:String}")
+        params["pool_id"] = pool_id
+    _apply_pool_scope(conditions, accessible_pools)
+    _apply_origin_scope(conditions, origin)
+
+    where = " AND ".join(conditions)
+
+    # ATENÇÃO — alias NUNCA pode repetir nome de coluna real desta tabela.
+    # `pool_id` e `user_id` EXISTEM em `segments`; aliasar um agregado com esses
+    # nomes faz o alias sombrear a coluna que o `WHERE` usa (`endsWith(pool_id,…)`)
+    # e a query falha inteira. É o mesmo defeito já catalogado na lente `deploy`
+    # (`any(attr.agent_type)` colidindo com o `WHERE attr.agent_type`). Por isso os
+    # agregados saem com sufixo `_ref` e são renomeados em Python, abaixo — o
+    # contrato da API segue `pool_id`/`user_id`.
+    result = client.query(f"""
+        SELECT
+            {group_col} AS group_key,
+            any(pool_id) AS pool_id_ref,
+            -- user_id derivado de participant_id (`human-{{uid}}`): é o que casa
+            -- com o `assigned_to` da superfície viva, que é chaveada por user_id.
+            any(if(startsWith(participant_id, 'human-'),
+                   substring(participant_id, 7), '')) AS user_id_ref,
+            count() AS total,
+            countIf(close_reason = 'task_submitted')        AS submitted,
+            countIf(close_reason = 'acw_expired')           AS expired,
+            countIf(close_reason = 'acw_supervisor_closed') AS supervisor_closed,
+            round(avgIf(duration_ms, close_reason = 'task_submitted' AND duration_ms > 0)) AS avg_fill_ms,
+            max(started_at) AS last_seen
+        FROM {db}.segments FINAL
+        WHERE {where}
+        GROUP BY group_key
+        ORDER BY total DESC
+    """, parameters=params)
+
+    rows = _rows_to_dicts(result)
+    for r in rows:
+        r["pool_id"] = r.pop("pool_id_ref", "")
+        r["user_id"] = r.pop("user_id_ref", "")
+    totals = {
+        "total":             sum(int(r.get("total") or 0)             for r in rows),
+        "submitted":         sum(int(r.get("submitted") or 0)         for r in rows),
+        "expired":           sum(int(r.get("expired") or 0)           for r in rows),
+        "supervisor_closed": sum(int(r.get("supervisor_closed") or 0) for r in rows),
+    }
+    # Taxa de não-preenchimento — a pergunta que a D4 queria responder. Derivada
+    # aqui (uma vez) em vez de em cada consumidor, que é onde ela viraria três
+    # definições diferentes.
+    totals["unfilled_rate"] = (
+        round((totals["expired"] + totals["supervisor_closed"]) / totals["total"], 4)
+        if totals["total"] else None
+    )
+    return {"data": rows, "totals": totals, "meta": _meta(1, len(rows), len(rows), since, until)}
 
 
 # ─── /reports/agents/performance (Arc 5 — aggregate per agent) ───────────────

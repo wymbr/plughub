@@ -204,6 +204,31 @@ custo: se a operação mostrar que quase toda expiração é de item **reivindic
 medições da Camada F —, o histórico já está em `segments` e a fatia 2 não precisa existir.
 Medir antes de construir; o inverso cria uma tabela para responder uma pergunta rara.
 
+#### As-built da fatia 1 *(2026-07-30)*
+
+`GET /api/work_queue/pending` (BFF, `lib/work-queue.ts::listPendingWorkTasks`) + **Monitor ›
+Pendências** (`/monitor/work-items`, ABAC `contacts.operacao`; o encerramento segue
+`supervisor|admin` no endpoint). Três coisas divergiram do desenho e ficam registradas:
+
+**1. O escopo `-int` é obrigatório, não cosmético.** O ledger é **genérico**: `_write_work_task`
+roda incondicionalmente nos dois handlers de delegate — o docstring já assumia pool push —, logo
+ele indexa também **aprovação** e **delegate a especialista IA**. Um relatório que somasse as três
+populações mentiria na direção oposta à que esta seção queria evitar. O corte usa o sufixo `-int`
+(garantia por construção pela D6). O critério é o mesmo **author-bound × pooled** da D1: aprovação
+tem transbordo por `fallback_to_pool_after_s`, então ninguém fica preso nela.
+
+**2. São QUATRO estados, e o quarto não estava previsto.** Além de `unclaimed`/`claimed`/
+`not_queued`, existe **`orphaned`**: pool *pull*, item fora do ZSET e **sem lease** — a lease
+venceu e nada o devolveu à fila, que é a **lacuna 2** (ausência de reaper de `claim_lease`).
+Colapsá-lo em `not_queued` o esconderia atrás de um valor plausível. O relatório vira, de graça,
+o instrumento que a Camada F não teve para medi-la. (`unknown` cobre pool sem `pool_config` no
+cache — ausência de infra não vira presunção de "push".)
+
+**3. A superfície é uma janela de ~25 h, não um acumulado.** O ledger vive
+`timeout_hours*3600 + 3600`. No caminho normal morre antes, no resume; mas se o timeout scanner
+não passar, a pendência **some sem rastro** — item nunca reivindicado não deixa segmento. Isso
+não muda o gate da fatia 3, muda **como** medir: olhar e anotar, porque nada se acumula.
+
 ### D6 — Guardas
 
 - O registry **rejeita** criação manual de pool com sufixo `-int` — senão o sufixo deixa de ser

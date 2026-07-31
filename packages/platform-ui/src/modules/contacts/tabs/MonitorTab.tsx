@@ -259,10 +259,13 @@ function PoolRow({ pool, color, selected, onDrillDown }: {
   selected:   boolean
   onDrillDown:() => void
 }) {
-  // total_instances = distinct agents dimensioned to the pool (ready ∪ busy sets).
-  // available       = total_capacity − active_count (computed by routing-engine / bootstrap).
-  // busy            = active sessions (atomic active_count).
-  // Occupancy = active sessions / total instances.
+  // total_instances = CAPACIDADE total do pool (soma de `max_concurrent`), NÃO
+  //                   contagem de agentes — o nome é herança do modelo antigo.
+  //                   Para pool de IA (max_concurrent=1) os dois coincidem, e é por
+  //                   isso que a divergência sobreviveu tanto tempo sem sintoma.
+  // available       = total_capacity − active_count (routing-engine / bootstrap).
+  // busy            = sessões ativas (active_count atômico).
+  // Ocupação        = sessões ativas / capacidade total.
   const displayTotal = pool.total_instances ?? pool.available
   const displayAvail = pool.available
   const occPct = displayTotal > 0 && pool.busy > 0

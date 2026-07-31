@@ -6,7 +6,7 @@ import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
   FileText, List, Waves, Zap, PenLine, Rocket, FileCheck, BookOpen,
   Archive, Ruler, LayoutDashboard, Package, Tv2, Calendar, ShieldOff, CreditCard,
-  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send,
+  Lock, Users, Globe, MessageSquare, UserSearch, CalendarClock, Send, Inbox,
 } from 'lucide-react'
 
 type LucideIcon = React.FC<{ className?: string }>
@@ -70,6 +70,10 @@ const Sidebar: React.FC = () => {
         { label: t('nav.monitor.events'),    href: '/contacts/events',   icon: Zap,       abac: { module: 'contacts',   field: 'operacao' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.operacao (D2).
         { label: t('nav.monitor.schedules'), href: '/monitor/schedules', icon: CalendarClock, abac: { module: 'scheduler', field: 'operacao', strict: true } },
+        // I5 / ADR § D7b — pendências de wrap-up AGORA. Leitura sob o mesmo grant
+        // do resto do Monitor; a AÇÃO de encerrar é mais estreita e é o endpoint
+        // que a enforça (supervisor|admin).
+        { label: t('nav.monitor.workItems'), href: '/monitor/work-items', icon: Inbox, abac: { module: 'contacts', field: 'operacao' } },
       ]
     },
 
@@ -125,6 +129,9 @@ const Sidebar: React.FC = () => {
         { label: t('nav.analise.customers'), href: '/analise/customers', icon: UserSearch,    abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.customerVoice'), href: '/analise/customer-voice', icon: MessageSquare, abac: { module: 'contacts', field: 'visualizar' } },
         { label: t('nav.analise.surveys'), href: '/analise/surveys', icon: ClipboardList, abac: { module: 'evaluation', field: 'report' } },
+        // I5 / ADR § D7b fatia 2 — histórico de wrap-up. Par retrospectivo do
+        // Monitor › Pendências; mesmo grant do resto do Analytics.
+        { label: t('nav.analise.wrapup'), href: '/analise/wrapup', icon: Inbox, abac: { module: 'contacts', field: 'visualizar' } },
       ]
     },
 

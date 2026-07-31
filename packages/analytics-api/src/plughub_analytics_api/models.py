@@ -838,6 +838,9 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         "handoff_reason":    payload.get("handoff_reason") or None,
         "issue_status":      payload.get("issue_status") or None,
         "escalation_reason": payload.get("escalation_reason") or None,
+        # Prosa do wrap-up — sempre gravada, inclusive quando resolvido (fix 2026-07-30).
+        "wrapup_summary":    payload.get("wrapup_summary") or None,
+        "wrapup_next_steps": payload.get("wrapup_next_steps") or None,
         "timestamp":         payload.get("timestamp") or _now(),
         # Substrate isolation: procedência derivada do source (live|import|reeval).
         "origin":            origin_from_source(payload.get("source")),

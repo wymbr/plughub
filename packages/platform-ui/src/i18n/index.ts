@@ -28,6 +28,7 @@ import dialogFormsPtBr from './locales/pt-BR/dialogForms.json'
 import schedulerPtBr from './locales/pt-BR/scheduler.json'
 import outboundPtBr from './locales/pt-BR/outbound.json'
 import customerVoicePtBr from './locales/pt-BR/customerVoice.json'
+import workItemsPtBr from './locales/pt-BR/workItems.json'
 
 // en
 import commonEn from './locales/en/common.json'
@@ -56,6 +57,7 @@ import dialogFormsEn from './locales/en/dialogForms.json'
 import schedulerEn from './locales/en/scheduler.json'
 import outboundEn from './locales/en/outbound.json'
 import customerVoiceEn from './locales/en/customerVoice.json'
+import workItemsEn from './locales/en/workItems.json'
 
 i18n.use(initReactI18next).init({
   resources: {
@@ -86,6 +88,7 @@ i18n.use(initReactI18next).init({
       scheduler:       schedulerPtBr,
       outbound:        outboundPtBr,
       customerVoice:   customerVoicePtBr,
+      workItems:       workItemsPtBr,
     },
     en: {
       common:          commonEn,
@@ -114,6 +117,7 @@ i18n.use(initReactI18next).init({
       scheduler:       schedulerEn,
       outbound:        outboundEn,
       customerVoice:   customerVoiceEn,
+      workItems:       workItemsEn,
     }
   },
   lng: 'en',
@@ -124,7 +128,7 @@ i18n.use(initReactI18next).init({
     'agentAssist', 'agentReports', 'workflows', 'agentFlow',
     'calendars', 'service', 'campaigns', 'configPlataforma',
     'dashboards', 'home', 'groups', 'audit', 'channels', 'webrtc', 'dialogForms',
-    'scheduler', 'outbound', 'customerVoice',
+    'scheduler', 'outbound', 'customerVoice', 'workItems',
   ],
   defaultNS: 'common',
   interpolation: {

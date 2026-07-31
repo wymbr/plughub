@@ -1506,7 +1506,11 @@ async def fire_pool_hooks(
                             _hs_transport = str((_org or {}).get("value", "") or "")
                     except Exception:
                         pass
-                    _hs_close_reason = _TRANSPORT_TO_CLOSE_REASON.get(_hs_transport, "agent_hangup")
+                    # Sem default: transporte desconhecido NÃO vira `agent_hangup`.
+                    # Desde o fix de 2026-07-30 o fechamento canônico já semeou o
+                    # valor real — inventar aqui SOBRESCREVERIA o correto por um
+                    # palpite. None deixa o campo intacto.
+                    _hs_close_reason = _close_reason_from_transport(_hs_transport, session_id)
                     await _seed_segment_signal(redis_client, session_id, _hs_rec, _hs_close_reason)
                     # F10.3b (cutover unificado): expõe a atribuição do segmento humano
                     # ao agente de NPS (on_human_end side=customer) via @ctx, para ele
@@ -2770,6 +2774,10 @@ async def _publish_participant_event(
     handoff_reason: str | None = None,
     issue_status:   str | None = None,
     escalation_reason: str | None = None,
+    # Prosa do wrap-up (fix 2026-07-30) — sempre gravada, inclusive quando resolvido.
+    # Colunas próprias porque `handoff_reason` define `handoff_rate` no analytics.
+    wrapup_summary:    str | None = None,
+    wrapup_next_steps: str | None = None,
 ) -> None:
     """
     Fire-and-forget publish to conversations.participants Kafka topic.
@@ -2835,6 +2843,10 @@ async def _publish_participant_event(
         event["issue_status"] = issue_status
     if escalation_reason is not None:
         event["escalation_reason"] = escalation_reason
+    if wrapup_summary is not None:
+        event["wrapup_summary"] = wrapup_summary
+    if wrapup_next_steps is not None:
+        event["wrapup_next_steps"] = wrapup_next_steps
     try:
         await _kafka_producer.send_and_wait(
             TOPIC_PARTICIPANTS,
@@ -2874,6 +2886,30 @@ _TRANSPORT_TO_CLOSE_REASON = {
     "max_wait_exceeded": "max_wait_exceeded",
     "no_resource":       "no_resource",
 }
+
+
+def _close_reason_from_transport(transport: str, session_id: str = "") -> str | None:
+    """
+    Deriva o `close_reason` do CONTATO a partir do transporte do fechamento.
+
+    Devolve **None** — e LOGA — quando o transporte não está no mapa. O default
+    anterior (`"agent_hangup"`, cravado no call site do hook) inventava um motivo
+    plausível para um caso desconhecido: exatamente o valor que impede de notar
+    que há um transporte novo sem mapeamento. A ausência é visível; um
+    `agent_hangup` errado não é.
+
+    Devolver None também é o que permite as duas escritas COMPOREM: o fechamento
+    canônico semeia o valor real e o hook, se não souber o transporte, não o
+    sobrescreve (`_seed_segment_signal` só grava o campo quando ele é verdadeiro).
+    """
+    cr = _TRANSPORT_TO_CLOSE_REASON.get(transport or "")
+    if cr is None:
+        logger.warning(
+            "close_reason: transporte %r não mapeado — segmento sai SEM close_reason "
+            "(session=%s). Acrescentar em _TRANSPORT_TO_CLOSE_REASON.",
+            transport, session_id,
+        )
+    return cr
 
 
 # ── F5 (grão segmento): acumulador de sinais por segmento humano ──────────────
@@ -2960,6 +2996,8 @@ async def _republish_segment_from_signal(
             handoff_reason=g("handoff_reason"),
             close_reason=g("close_reason"),
             escalation_reason=g("escalation_reason"),
+            wrapup_summary=g("wrapup_summary"),
+            wrapup_next_steps=g("wrapup_next_steps"),
         )
         logger.info(
             "F5: segment re-published from signal: session=%s segment=%s outcome=%s",
@@ -2991,6 +3029,13 @@ async def _apply_wrapup_to_segment(
     try:
         key = _seg_signal_key(session_id, segment_id)
         mapping = {"outcome": outcome, "issue_status": wrapup_raw}
+        # Prosa do wrap-up — SEMPRE gravada (fix 2026-07-30), espelhando o
+        # `segment_outcome_record` do caminho DESTACADO. Antes o resumo só existia
+        # quando `outcome != "resolved"`; no caso mais comum era descartado sem
+        # sinal. Coluna própria, não `handoff_reason`: aquele define `handoff_rate`.
+        if wrapup_resumo:
+            mapping["wrapup_summary"] = wrapup_resumo
+        # `handoff_reason` inalterado — mesma regra de antes, para não mover a métrica.
         if outcome != "resolved" and wrapup_resumo:
             mapping["handoff_reason"] = wrapup_resumo
         # F7: só faz sentido para escalações (escalado → outcome escalated).
@@ -5705,6 +5750,9 @@ async def process_contact_event(
                     session_id,
                     [m.decode() if isinstance(m, bytes) else m for m in (_human_members or [])],
                 )
+                # Motivo do encerramento do CONTATO — derivado UMA vez (depende só do
+                # transporte, não do humano) e aplicado a todos os segmentos desta leva.
+                _hm_close_reason = _close_reason_from_transport(reason, session_id)
                 _last_human_instance_id: str | None = None
                 for _hm_inst in (_human_members or []):
                     _hm_inst_str = (
@@ -5802,6 +5850,13 @@ async def process_contact_event(
                                 "instance=%s pool=%s seg=%s",
                                 session_id, _hm_inst_str, _hm_pool, _hm_seg_id,
                             )
+                            # Fix 2026-07-30 — simetria com o branch agent_closed: o
+                            # acumulador nasce já com o close_reason do fechamento
+                            # canônico, para que QUALQUER republish posterior (wrap-up,
+                            # NPS) o carregue em vez de depender do hook para tê-lo.
+                            await _seed_segment_signal(
+                                redis_client, session_id, _hm_hs_record, _hm_close_reason,
+                            )
                         except Exception:
                             pass
                     asyncio.create_task(_publish_participant_event(
@@ -5822,6 +5877,10 @@ async def process_contact_event(
                             if reason in ("client_disconnect", "timeout", "session_timeout")
                             else None
                         ),
+                        # Fix 2026-07-30 — ver o branch agent_closed. Aqui o buraco era
+                        # ainda mais provável: cliente que cai não gera wrap-up nenhum
+                        # em muitos pools, então NADA republicaria o segmento.
+                        close_reason=_hm_close_reason,
                     ))
 
                     # Fase A: keep the last_outcome marker consistent with the
@@ -6335,6 +6394,11 @@ async def process_contact_event(
                 # on_human_end (process_routed) a disposição/NPS são atribuídos a
                 # ESTE segmento. Keyed por pool → suporta N humanos/pools por contato
                 # (o "último primário único" da F1.4 era simplificação de demo).
+                # Motivo do encerramento do CONTATO, derivado do transporte que
+                # chegou no evento. Está em escopo aqui — era o "precisa derivar o
+                # valor por conta própria" que o TODO listava como obstáculo da
+                # opção (a), e que na prática é uma linha.
+                _ha_close_reason = _close_reason_from_transport(reason, session_id)
                 if _ha_seg_id and _ha_pool:
                     _hs_record = {
                         "segment_id":     _ha_seg_id,
@@ -6369,7 +6433,16 @@ async def process_contact_event(
                         # (_done_outcome): garante que um re-publish de NPS-só (pool
                         # sem wrap-up) não anule o outcome. O wrap-up sobrescreve
                         # com a disposição real na conclusão do hook.
-                        await _seed_segment_signal(redis_client, session_id, _hs_record, None)
+                        #
+                        # close_reason (fix 2026-07-30): passa a ser semeado AQUI, no
+                        # fechamento canônico, e não só no hook. Antes o valor existia
+                        # apenas no hash e só alcançava o ClickHouse quando o
+                        # `segment_outcome_record` republicava — ou seja, o motivo de
+                        # encerramento do CONTATO dependia de o atendente submeter o
+                        # formulário de wrap-up. Quem não submetia deixava NULL.
+                        await _seed_segment_signal(
+                            redis_client, session_id, _hs_record, _ha_close_reason,
+                        )
                         if _done_outcome:
                             await redis_client.hset(
                                 _seg_signal_key(session_id, _ha_seg_id),
@@ -6394,6 +6467,12 @@ async def process_contact_event(
                     user_login=_ha_user_login,
                     # Fase A: human outcome from /api/agent_done (Console)
                     outcome=_done_outcome or None,
+                    # Fix 2026-07-30: o motivo de encerramento do CONTATO viaja no
+                    # fechamento canônico. Sem isto ele só chegava ao ClickHouse pelo
+                    # republish do wrap-up, e o buraco NULL era do tamanho da taxa de
+                    # não-preenchimento — invisível, porque `outcome` ficava igual nos
+                    # dois casos.
+                    close_reason=_ha_close_reason,
                 ))
 
                 # ── Decrement human pool active_count via routing engine ──────

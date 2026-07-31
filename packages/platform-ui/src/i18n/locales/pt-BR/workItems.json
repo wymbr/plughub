@@ -1,0 +1,85 @@
+{
+  "title": "Pendências de wrap-up",
+  "info": "Quem está com classificação de atendimento pendente neste momento.",
+  "windowNote": "Janela viva, não acumulado: o item deixa de aparecer quando é encerrado ou quando o prazo do delegate expira (24 h + 1 h por padrão). O histórico do período fica em Analítico.",
+  "restricted": "Você não tem permissão para ver esta página.",
+  "truncated": "Lista PARCIAL — o limite de varredura foi atingido ({{scanned}} chaves). Filtre por pool ou agente para ver o resto.",
+  "directoryUnavailable": "Nomes indisponíveis: sua conta não tem o campo config.usuarios, então os agentes aparecem pelo identificador.",
+  "searchPlaceholder": "Buscar por agente, pool ou sessão…",
+  "filterAll": "Todos",
+  "empty": "Nenhuma pendência",
+  "emptyHint": "Nenhum wrap-up aguardando preenchimento agora.",
+  "emptyFiltered": "Nenhuma pendência com os filtros atuais.",
+  "confirmExpire": "Encerrar a pendência da sessão {{session}}… de {{agent}}?\n\nO atendimento fica SEM disposição — o supervisor não preenche pelo atendente. A vaga volta e o processo segue.",
+  "axis": {
+    "agent": "Por agente",
+    "pool": "Por pool"
+  },
+  "state": {
+    "unclaimed": "Não reivindicada",
+    "unclaimedHint": "O item está na fila e ninguém o pegou.",
+    "claimed": "Em preenchimento",
+    "claimedHint": "Reivindicada por um agente; o formulário ainda não foi submetido.",
+    "orphaned": "Órfã",
+    "orphanedHint": "Fila pull, mas o item não está na fila nem tem reserva ativa — a reserva venceu e nada o devolveu à fila.",
+    "not_queued": "Sem fila",
+    "not_queuedHint": "O pool de destino é push: não existe item de fila para este registro.",
+    "unknown": "Indeterminada",
+    "unknownHint": "A configuração do pool não está no cache — o estado não pôde ser derivado e nada foi presumido."
+  },
+  "col": {
+    "session": "Sessão",
+    "state": "Estado",
+    "age": "Idade",
+    "ageHint": "Tempo desde o despacho do wrap-up.",
+    "deadline": "Prazo",
+    "overdue": "Vencido",
+    "overdueHint": "O prazo passou e o item continua registrado — sinal de que a varredura de expiração não passou.",
+    "holder": "Reservado por"
+  },
+  "group": {
+    "count": "{{count}} pendente",
+    "count_plural": "{{count}} pendentes",
+    "overdue": "{{count}} vencida",
+    "overdue_plural": "{{count}} vencidas",
+    "unassigned": "Sem dono",
+    "unassignedHint": "Item sem agente atribuído — inesperado numa fila interna."
+  },
+  "actions": {
+    "expire": "Encerrar",
+    "cancel": "Cancelar"
+  },
+  "errors": {
+    "loadFailed": "Não foi possível carregar as pendências."
+  },
+  "history": {
+    "title": "Histórico de wrap-up",
+    "info": "Como as pendências de classificação terminaram no período. Para quem está devendo agora, use Monitor › Pendências.",
+    "errorBackend": "A consulta falhou no servidor — o resultado abaixo NÃO é zero, é ausência de dado.",
+    "empty": "Nenhum wrap-up no período",
+    "emptyHint": "Nenhuma pendência de classificação foi encerrada na janela escolhida.",
+    "unknownAgent": "(sem identificação)",
+    "avgNote": "O tempo médio conta apenas os wrap-ups submetidos: a duração de um item expirado mede abandono, não trabalho.",
+    "period": {
+      "7d": "7 dias",
+      "30d": "30 dias",
+      "90d": "90 dias"
+    },
+    "kpi": {
+      "total": "Total",
+      "submitted": "Submetidos",
+      "expired": "Vencidos",
+      "supervisorClosed": "Encerrados pelo supervisor",
+      "unfilled": "Sem disposição",
+      "unfilledHint": "vencidos + encerrados / total"
+    },
+    "col": {
+      "total": "Total",
+      "submitted": "Submetidos",
+      "expired": "Vencidos",
+      "supervisorClosed": "Sup.",
+      "avgFill": "Tempo médio",
+      "avgFillHint": "Média apenas dos submetidos — é o tempo de pós-atendimento real."
+    }
+  }
+}

@@ -2,6 +2,286 @@
 
 ---
 
+## Agente deslogado deixa de contar capacidade + guard contra instância fantasma ✅ (2026-07-30)
+
+Dois defeitos achados ao investigar um `retencao_humano` exibindo `available 1 / total 1` — num pool
+**sem ninguém logado**.
+
+**1. O `SREM` existia só no ramo de fallback.** `_deactivate_instance` (`kafka_listener.py`) sempre
+prometeu no docstring *"removes instance from all pool sets (paused/logout)"*, mas no **caso normal**
+(a chave ainda existe quando o evento chega) só marcava `state=logged_out` — sem remover de pool
+nenhum. O agente ficava deslogado E membro do ready_set, e o `write_pool_snapshot` somava a capacidade
+dele assim mesmo: `get_ready_instances` o pula (state ≠ ready), mas o laço seguinte
+(`_all_pool_member_ids − _ready_instance_ids`) conta o `max_concurrent` de todo membro pulado.
+Capacidade fantasma — pior que número errado, porque o roteamento acredita nela.
+
+**2. `agent_ready` sem os fatos de recurso recriava a instância com defaults.** A instância medida
+tinha `user_id: ""`, `user_login: ""`, `max_concurrent: 1` e `registered_at == last_seen` — os três
+campos são exatamente os defaults do ramo `else` do `_upsert_instance`, e a igualdade dos timestamps
+prova recriação (o Lua só semeia `registered_at` em chave ausente). O guard existente cobria apenas
+eventos **não**-autoritativos; um `agent_ready` tardio (aba obsoleta, republish de outro caminho) caía
+no `else` e reconstruía o registro a partir de um payload que não carrega identidade nem capacidade.
+
+Novo `_carries_resource_facts(event)`: só o login (`registerHumanAgent`) publica `user_id` **e**
+`max_concurrent_sessions`. Sem os dois, instância humana ausente **não é recriada** — com WARNING.
+
+**Honestidade sobre o 2º:** o produtor **não foi identificado**. O guard não se apoia num culpado, e
+sim no **formato do registro que impede** — uma instância humana com identidade vazia e capacidade 1
+não é correta sob produtor nenhum. O WARNING é o que vai nomear o produtor quando disparar; é o mesmo
+desenho do teto do `remove_conversation`: conserta e mede. Se ele aparecer em uso normal, reavaliar se
+bloquear é a resposta ou se o conserto é na origem.
+
+**Testes** (`test_pool_snapshot_invariant.py`, agora 5/5): o de logout exige que um pool sem ninguém
+logado declare **0** (não 1, não 3); o do guard exige que o **login legítimo siga criando** com
+`max_concurrent=3` — *"o guard barrou o LOGIN"* seria pior que o defeito original.
+
+**Correção de registro no fixture:** `_seed` passou a fazer o `SADD` no ready_set explicitamente.
+`set_instance` grava só a CHAVE da instância — a membership é do login (EVAL) e do `_upsert_instance`.
+Sem o SADD o teste mediria um pool vazio e passaria por motivo errado.
+
+---
+
+## Monitor `available > total_instances` — chão sem teto no `remove_conversation` ✅ (2026-07-30)
+
+O Monitor exibia `available 4 / total 3` no pool espelho. Duas hipóteses anteriores (ready-set órfão
+e `active_count` negativo) já haviam sido refutadas com dado; esta terceira caçada começou **lendo os
+produtores** em vez de inferir a fórmula, e o defeito estava dentro de um único bloco:
+
+```python
+new_val = DECR(active_count)
+if new_val < 0: set(0); new_val = 0        # ← CHÃO, existia
+...
+snap["available"] = snap["available"] + 1  # ← TETO, não existia
+```
+
+`InstanceRegistry.remove_conversation` (`registry.py:918` e `:955`, seis linhas de distância). Quando
+o DECR bate no chão — remoção **sem `mark_busy` correspondente** (`agent_done` duplicado/tardio, ou
+sessão contabilizada noutro pool) — `busy` fica em 0 e `available` ainda ganha +1. Repetido, passa da
+capacidade. **Corrigido** com o teto simétrico (`min(available+1, total_instances)`), e ambos os
+ramos agora **logam em WARNING**: o clamp conserta o número, mas a condição é anômala e era engolida.
+
+**Três correções de registro que a leitura produziu** — todas apontavam o investigador para o lugar
+errado, e é por isso que entram no histórico:
+
+1. **O caminho incremental não era o que o nome dizia.** `patch_pool_snapshot_available` é **código
+   morto**: o único call site (`kafka_listener._refresh_pool_snapshots`) sempre passou `delta=None`.
+   Foi esse nome que orientou a hipótese anterior. **Removida**, junto com o parâmetro `delta`. Quem
+   incrementa de fato é o `remove_conversation`.
+2. **`total_instances` não é contagem de instâncias** — é `total_capacity` (soma de `max_concurrent`).
+   O docstring e o comentário do `MonitorTab` afirmavam o contrário. A divergência sobreviveu porque
+   em pool de IA (`max_concurrent=1`) os dois números **coincidem**: só aparece em pool humano.
+   Docstring e comentário corrigidos, com o invariante `available ≤ total_instances` nomeado.
+3. **`get_total_instances_count` removida** — sem nenhum chamador, implementava o modelo de CONTAGEM
+   (`SUNION`) que o sistema abandonou, e era a origem do modelo mental errado que migrou para os
+   outros dois docstrings. Código morto que ensina algo falso custa mais que o espaço.
+
+**Testes** (`tests/test_pool_snapshot_invariant.py`, 3/3): fixam o **invariante**, não a
+implementação. O 2º é o que protege do conserto ruim — reprova um teto que congelasse o incremento
+**legítimo** (vaga que nunca volta é pior que vaga sobrando); o 3º cobre snapshot legado sem
+`total_instances`, onde clampar contra um teto ausente leria 0 e faria a capacidade sumir.
+
+**Ainda não provado:** que ESTE era o mecanismo do `4/3` observado. Os dois WARNING novos respondem
+em produção — se aparecerem, é este; se não, sobrou outro produtor, e o log nomeia pool, instância e
+conversa para continuar.
+
+**Achado colateral, e maior que o fix: 9 testes que nunca rodaram.** Os testes de integração do
+routing liam `REDIS_URL`, mas o serviço define **`PLUGHUB_REDIS_URL`** — dentro do container o ping
+falhava e a suíte reportava `skipped`, que numa corrida grande passa como linha verde. O
+`test_work_queue_claim.py` (claim atômico da fila pull, 9 testes) estava assim **desde que foi
+escrito**. Corrigido nos dois arquivos (aceitam as duas variáveis); os 9 passam.
+
+---
+
+## Prosa do wrap-up deixa de ser descartada quando o contato é resolvido ✅ (2026-07-30)
+
+O formulário sempre pergunta **resumo** e **próximos passos**, mas eles só eram gravados quando
+`outcome !== "resolved"` — no caso MAIS COMUM o texto que o atendente digitou não ia a lugar nenhum.
+Medido ao vivo na Camada F: wrap-up submetido com `resumo="zxzxzx"`/`proximos_passos="wwww"` gravou
+`handoff_reason: NULL`. Sem erro, sem log, sem sinal na tela.
+
+**Colunas próprias, e o motivo é uma métrica.** A correção óbvia — tirar o gate e escrever em
+`handoff_reason` — está errada: `handoff_rate` é definido como
+`countIf(handoff_reason != '') / count()` (`reports_query.py:2103`), então o resumo de todo contato
+resolvido levaria a taxa de repasse a ~100%. Seria trocar uma perda silenciosa por uma **métrica que
+muda de significado sem avisar**, retroativa sobre a série inteira. Entram
+`segments.wrapup_summary` e `segments.wrapup_next_steps` (ALTER idempotente, mesmo precedente do
+`escalation_reason`, que foi extraído desta mesma nota livre ao ganhar significado próprio).
+
+**Prosa não cabe na fatia 3 do arco.** Pela D2, `agent_event` guarda número (`value` é
+`z.number()`) ou folha nominal na CATEGORIA — texto livre não é nem um nem outro. Logo a prosa tem
+de morar em `segments`, e estas colunas não pré-emptam o roteamento genérico de captura.
+
+**Caminho completo:** `segment_outcome_record` (destacado) e `_apply_wrapup_to_segment` (inline)
+escrevem no `seg_signal` → `_republish_segment_from_signal` / `_publish_participant_event` propagam
+→ `parse_participant_event` + row builder persistem → `/reports/segments` expõe. `ContactSegmentSchema`
+e `ConversationParticipantEventSchema` atualizados (aditivo).
+
+**`handoff_reason` ficou byte a byte como estava**, inclusive com sobreposição de texto no caso
+não-resolvido. A sonda guarda os dois lados: bloco **B** reprova se o resumo vazar para lá (inflando
+a taxa), bloco **C** reprova se o caminho antigo parar de gravá-lo (zerando-a).
+
+**Validação** (`infra/test/check_wrapup_prose_persisted.sh`, 3/3): wrap-up `resolved` com
+`wrapup_summary="123456"` e `wrapup_next_steps="asasasasasas"` — a linha que antes gravaria os três
+campos vazios. **Não exercitado:** o bloco C (nenhum wrap-up não-resolvido na janela).
+
+**Resíduo conhecido:** o caminho inline só conhece `wrapup_resumo` (não existe
+`wrapup_proximos_passos` no `pipeline_state` daquele fluxo), então `wrapup_next_steps` só é
+preenchido pelo destacado. O campo não foi inventado lá.
+
+**Defeito de método na própria sonda, registrado porque é o 3º da sessão.** A 1ª versão filtrava por
+`started_at` numa janela de minutos e reprovou com dado **pré-fix** — wrap-ups submetidos antes do
+rebuild, que não tinham como carregar colunas que ainda não existiam. Corrigido para cortar por
+`ingested_at` (o instante do republish = do submit) contra o start do container mais novo do
+caminho. Junto com os outros dois desta sessão (`set -e` + `$(curl)` sumindo mudo; `jq '.x // empty'`
+tratando `false` como ausente), formam um padrão: **o teste afirmou sobre uma amostra que não podia
+satisfazer a asserção, e a mensagem de erro apontou para o código sob teste em vez de para o teste.**
+
+---
+
+## I5 / D7b fatia 2 — histórico de wrap-up no Analytics ✅ (2026-07-30)
+
+Contraparte retrospectiva do Monitor › Pendências. A divisão não é organizacional, é do dado:
+a superfície viva lê o ledger do Redis e por isso tem horizonte de ~25 h; esta lê `segments` e é
+permanente. Nenhuma consegue responder a pergunta da outra.
+
+**`GET /reports/wrapup-summary`** (analytics-api) — agregado por agente (`user_login`) ou por pool,
+com `total`, `submitted`, `expired`, `supervisor_closed`, `avg_fill_ms` e `last_seen`. Em `totals`,
+**`unfilled_rate` = (expired + supervisor_closed) / total** — a "% de contatos sem disposição" que a
+D4 reivindicava, derivada uma vez no servidor em vez de virar três definições nos consumidores.
+Tela: **Analítico › Histórico de Wrap-up** (`/analise/wrapup`, ABAC `contacts.visualizar`).
+
+**O filtro é `-int`, não o trio de `close_reason`.** `task_submitted` é escrito por QUALQUER claimante
+de fila pull — inclusive **aprovação**, que é pooled e mora em pool de contato. Filtrar pelo trio
+misturaria os dois regimes e o número de "wrap-ups vencidos" incluiria aprovações, sem sintoma. Escopo
+= `-int`, trio = classificação: o mesmo par da fatia 1. A sonda tem asserção dedicada (bloco C).
+
+**`avg_fill_ms` cobre só os submetidos.** A duração de um item expirado é o intervalo claim→prazo, que
+mede abandono, não trabalho; somar os dois daria uma média plausível que não é ACW nem outra coisa. A
+nota está na tela, não só no código.
+
+**Escopo de pool sai de graça:** o `_with_internal_mirrors` do `pool_auth.py` (D2) já deriva
+`p` → `p-int`, então o supervisor com acesso a `retencao_humano` enxerga o ACW do espelho.
+
+**Validação** (`infra/test/check_wrapup_summary.sh`, 7/7): 9 wrap-ups no período — 7 submetidos, 2
+vencidos, **`unfilled_rate` 22,2%**; `group_by=agent` e `group_by=pool` fecham no mesmo total (eixos
+vendo o mesmo universo); nenhuma linha de pool de contato.
+
+**Dois defeitos achados pela própria validação, ambos do tipo que a § Postura nomeia:**
+
+1. **Colisão de alias no ClickHouse** — `any(pool_id) AS pool_id` e `any(…) AS user_id` repetiam nomes
+   de colunas REAIS de `segments`; o alias sombreava a coluna usada no `WHERE endsWith(pool_id,'-int')`
+   e a query falhava inteira (`ILLEGAL_AGGREGATION`, code 184). **Segunda ocorrência da mesma classe** —
+   a primeira foi `any(attr.agent_type)` na lente `deploy`. Corrigido com sufixo `_ref` no SQL +
+   renomeação em Python (o contrato da API segue `pool_id`/`user_id`). Regra promovida ao `CLAUDE.md`
+   § Postura de Engenharia.
+   *O que permitiu diagnosticar em vez de adivinhar foi o `except` ter sido escrito com
+   `logger.warning(… exc)`: a mensagem do ClickHouse nomeou a coluna e a expressão.*
+2. **A sonda morria em silêncio** — `BODY=$(curl …)` sob `set -e` sai sem imprimir quando o curl falha,
+   e ele falha enquanto o container sobe (`up -d --force-recreate` leva ~50 s). O sintoma era o script
+   desaparecer entre dois cabeçalhos. Corrigido com código HTTP explícito e espera nomeada. Armadilha
+   reutilizável: vale para todo smoke que faça `VAR=$(curl …)` logo após um recreate.
+
+---
+
+## `close_reason` do contato deixa de depender do wrap-up ✅ (2026-07-30)
+
+O motivo de encerramento do CONTATO só chegava ao ClickHouse quando o atendente **submetia o
+formulário de wrap-up** — o valor era semeado no hash `seg_signal` pelo hook, e quem o republicava
+era o `segment_outcome_record`, acionado pelo submit. Quem não preenchia deixava `NULL`.
+
+**Por que passou despercebido:** o buraco é `NULL`, não zero. Não desbalanceia contagem, não acusa
+erro, só encolhe a amostra em silêncio — e o `outcome` fica `resolved` nos DOIS casos, que é o valor
+plausível que impede de notar. É o padrão da § Postura de Engenharia, na camada de dado.
+
+**Conserto — opção (a), e o obstáculo do plano não existia.** O `TODO.md` registrava que (a) exigiria
+"derivar o valor por conta própria" porque o fechamento canônico roda antes de o hook semear o hash.
+O levantamento mostrou que o transporte (`reason`) está **em escopo** nos dois produtores de
+`participant_left` humano — o branch `agent_closed` e a varredura `customer_side` —, então a derivação
+é uma linha. `close_reason` passou a viajar no evento canônico e a ser semeado no acumulador, para que
+qualquer republish posterior (wrap-up, NPS) o carregue em vez de depender dele para tê-lo.
+
+**Efeito colateral que virou correção própria.** O call site do hook derivava com
+`.get(transport, "agent_hangup")` — inventava um motivo plausível para transporte desconhecido. Com o
+fechamento canônico escrevendo o valor real ANTES, esse palpite passaria a **sobrescrever o correto**.
+Trocado por `_close_reason_from_transport`, que devolve `None` + `WARNING` no caso não mapeado: é o que
+torna as duas escritas componíveis (o seed só grava o campo quando ele é verdadeiro) e o que dá rastro
+a um transporte novo, em vez de enterrá-lo sob um valor legível.
+
+**Validação** (`infra/test/check_close_reason_persisted.sh`, 3/3): dois atendimentos na mesma janela,
+mesmo pool, mesmo `outcome=resolved` — um COM wrap-up e outro SEM — **ambos** com
+`close_reason=agent_hangup`. O discriminador de "houve wrap-up" é o `issue_status` (o `outcome` não
+serve: vale `resolved` nos dois, que é justamente o que escondeu o defeito). A sonda se declara
+INCONCLUSIVA quando a janela não tem o caso sem wrap-up — o único que provava o fix.
+
+---
+
+## I5 / D7b fatia 1 — relatório de pendências de wrap-up ✅ (2026-07-30)
+
+Fecha a última entrega da fase I5 (ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md)
+§ D7b): a pendência author-bound passa a ser **visível**. Sem ela a D4 tinha as duas saídas
+(supervisor e prazo) e nenhuma forma de saber que havia o que encerrar — o `/api/work_queue/expire`
+existia desde o núcleo A+B **sem um único chamador na UI**.
+
+**Fonte: o ledger, que já era o índice por construção.** `{t}:work_task:{session}` nasce no
+despacho do delegate e morre no resume — seu tempo de vida É o intervalo da pendência —, e o
+claim **não** o apaga, então uma linha cobre as duas formas (nunca reivindicada e
+reivindicada-não-submetida). Era o que a lacuna 5 dizia não existir: `work_queue_list` exige a
+lista de pools e não enxerga item já reivindicado.
+
+**Backend** — `listPendingWorkTasks` (`mcp-server-plughub/src/lib/work-queue.ts`) +
+`GET /api/work_queue/pending`. `SCAN` com teto (nunca `KEYS`) e `truncated` **explícito**;
+pipeline em três lotes (ledger → `pool_config` por pool distinto → ZSET+lease por item). Sem
+role no GET: quem lê é governado pelo ABAC da tela; o corte fino fica na AÇÃO.
+
+**Escopo `-int`, e não é cosmético.** O ledger é **genérico** — `_write_work_task` roda
+incondicionalmente nos dois handlers de delegate (o docstring já assumia pool push), então
+indexa também aprovação e delegate a especialista IA. Somar as três populações mentiria na
+direção que a D7b queria evitar. O corte usa o sufixo que a **D6 tornou garantia por
+construção**, e o critério é o **author-bound × pooled** da D1: aprovação tem transbordo por
+`fallback_to_pool_after_s`, logo ninguém fica preso nela. `?all=1` derruba o filtro.
+
+**Quatro estados — e o quarto não estava no desenho.** `unclaimed` (no ZSET) · `claimed`
+(lease) · `not_queued` (pool push) · **`orphaned`**: pool *pull*, fora do ZSET e **sem lease**,
+isto é, a lease venceu e nada devolveu o item à fila — a **lacuna 2** (ausência de reaper de
+`claim_lease`), que a Camada F tentou medir e não conseguiu. Colapsá-lo em `not_queued` o
+esconderia atrás de um valor plausível. Um 5º, `unknown`, cobre pool sem `pool_config` no cache:
+ausência de infra não vira presunção de "push".
+
+**Frontend** — Monitor › Pendências (`/monitor/work-items`, ABAC `contacts.operacao`), agrupável
+por **agente ou pool** (o eixo pool entrega o "ACW por pool de origem" que a ADR reivindicava, sem
+query nova), filtros de estado, flag de prazo vencido, e o encerramento pelo supervisor ligado
+(`supervisor|admin`, botão escondido de quem não pode usá-lo). i18n `workItems` (en + pt-BR).
+
+**Dois limites declarados na própria tela, em vez de escondidos.** (a) É uma **janela de ~25 h**,
+não um acumulado: o ledger vive `timeout_hours*3600 + 3600`, e se o timeout scanner não passar a
+pendência some **sem rastro** — item nunca reivindicado não deixa segmento. (b) O **nome do
+agente** depende de `/auth/users`, que exige ABAC `config.usuarios` (strict) — grant que o
+supervisor típico não tem; a tela degrada para o `user_id` cru **dizendo o porquê**. A alternativa
+Redis foi descartada: `{t}:instance:human-{uid}` é heartbeat de 30 s e some no logout, falhando
+justamente na linha mais interessante.
+
+**Smoke `infra/test/smoke_work_task_pending.sh` — 11/11.** Cobre `unclaimed`, o escopo `-int`
+(que um item de `formfill_demo` **não** apareça no default é o teste que impede a tela de virar
+"todo delegate parqueado"), `truncated`, `unknown` e a forma da linha.
+
+**Não exercitado, e registrado como tal:** `claimed` e `orphaned` só rodam com
+`INSTANCE=human-<user_id>` de um agente logado — esta execução **não diz nada** sobre eles.
+`not_queued` não tem cenário (exigiria skill dedicado; é o ramo trivial do classificador).
+
+**Dois defeitos do próprio teste, achados ao rodar.** `jq '.truncated // empty'` tratava `false`
+como campo ausente — o operador `//` dispara em `null` **e** em `false` —, e a mensagem de falha
+acusou o endpoint em vez do teste. Atrás dele, um segundo: a asserção dependia de haver ≥2 chaves
+no ledger por acaso; com uma só, `truncated=false` é a resposta **correta** e o teste reprovaria
+sem motivo. Corrigido semeando uma segunda chave — que, por ter pool inexistente, cobre `unknown`
+de graça.
+
+**Não construído, de propósito:** segmento sintético para o item nunca reivindicado (§ D7b —
+nenhum `duration_ms` é honesto ali) e o evento `work_item.expired` (fatia 3, **gated** por
+medição). A fatia 2 (histórico do reivindicado) é query sobre `segments` e foi alocada ao
+**Analytics**, não ao Monitor.
+
+---
+
 ## Camada F — validação do arco de detach de hooks ✅ (2026-07-30)
 
 Fecha as Camadas A–F do arco `finalization-hooks-detach-and-directed-pull`. Validação

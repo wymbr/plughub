@@ -1,0 +1,85 @@
+{
+  "title": "Pending wrap-ups",
+  "info": "Who currently has an unfinished contact disposition.",
+  "windowNote": "Live window, not a running total: an item disappears once it is closed or once the delegate deadline expires (24h + 1h by default). Period history lives in Analytics.",
+  "restricted": "You do not have permission to view this page.",
+  "truncated": "PARTIAL list — the scan cap was reached ({{scanned}} keys). Filter by pool or agent to see the rest.",
+  "directoryUnavailable": "Names unavailable: your account lacks the config.usuarios field, so agents are shown by identifier.",
+  "searchPlaceholder": "Search by agent, pool or session…",
+  "filterAll": "All",
+  "empty": "No pending items",
+  "emptyHint": "No wrap-up is waiting to be filled in right now.",
+  "emptyFiltered": "No pending items match the current filters.",
+  "confirmExpire": "Close the pending item on session {{session}}… from {{agent}}?\n\nThe contact is left WITHOUT a disposition — a supervisor does not fill it in on the agent's behalf. The slot is released and the process moves on.",
+  "axis": {
+    "agent": "By agent",
+    "pool": "By pool"
+  },
+  "state": {
+    "unclaimed": "Unclaimed",
+    "unclaimedHint": "The item is in the queue and nobody has taken it.",
+    "claimed": "Being filled in",
+    "claimedHint": "Claimed by an agent; the form has not been submitted yet.",
+    "orphaned": "Orphaned",
+    "orphanedHint": "Pull queue, yet the item is neither queued nor actively held — the hold expired and nothing returned it to the queue.",
+    "not_queued": "Not queued",
+    "not_queuedHint": "The target pool is push: there is no queue item for this record.",
+    "unknown": "Undetermined",
+    "unknownHint": "The pool configuration is not in cache — the state could not be derived and nothing was assumed."
+  },
+  "col": {
+    "session": "Session",
+    "state": "State",
+    "age": "Age",
+    "ageHint": "Time since the wrap-up was dispatched.",
+    "deadline": "Deadline",
+    "overdue": "Overdue",
+    "overdueHint": "The deadline passed and the item is still recorded — a sign the expiry sweep did not run.",
+    "holder": "Held by"
+  },
+  "group": {
+    "count": "{{count}} pending",
+    "count_plural": "{{count}} pending",
+    "overdue": "{{count}} overdue",
+    "overdue_plural": "{{count}} overdue",
+    "unassigned": "No owner",
+    "unassignedHint": "Item with no assigned agent — unexpected in an internal queue."
+  },
+  "actions": {
+    "expire": "Close",
+    "cancel": "Cancel"
+  },
+  "errors": {
+    "loadFailed": "Could not load pending items."
+  },
+  "history": {
+    "title": "Wrap-up history",
+    "info": "How disposition items ended over the period. For who owes one right now, see Monitor › Pending work.",
+    "errorBackend": "The query failed on the server — what you see below is NOT zero, it is missing data.",
+    "empty": "No wrap-ups in this period",
+    "emptyHint": "No disposition item was closed within the selected window.",
+    "unknownAgent": "(unidentified)",
+    "avgNote": "The average counts submitted wrap-ups only: the duration of an expired item measures abandonment, not work.",
+    "period": {
+      "7d": "7 days",
+      "30d": "30 days",
+      "90d": "90 days"
+    },
+    "kpi": {
+      "total": "Total",
+      "submitted": "Submitted",
+      "expired": "Expired",
+      "supervisorClosed": "Closed by supervisor",
+      "unfilled": "No disposition",
+      "unfilledHint": "expired + closed / total"
+    },
+    "col": {
+      "total": "Total",
+      "submitted": "Submitted",
+      "expired": "Expired",
+      "supervisorClosed": "Sup.",
+      "avgFill": "Avg time",
+      "avgFillHint": "Average of submitted items only — the real after-call work time."
+    }
+  }
+}

@@ -27,7 +27,8 @@ import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
-import { listQueue, claimTask, releaseTask } from "./lib/work-queue"
+import { listQueue, claimTask, releaseTask, listPendingWorkTasks } from "./lib/work-queue"
+import type { WorkTaskState } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
 import { registerDeployTools }      from "./tools/deploy"
@@ -1818,6 +1819,46 @@ export async function startServer(config: ServerConfig): Promise<void> {
       res.json(result)
     } catch (err) {
       res.status(502).json({ error: "routing_unreachable", message: String(err) })
+    }
+  })
+
+  // ── I5 / D7b (fatia 1) — pendências de wrap-up AGORA ────────────────────────
+  // GET /api/work_queue/pending?tenant_id=&assigned_to=&pool_id=&state=&max_keys=
+  //
+  // Superfície VIVA (Monitor › Pendências). O histórico é outra fonte e outra
+  // tela: `segments` no Analytics, pelo trio de close_reason (task_submitted /
+  // acw_expired / acw_supervisor_closed) — fatia 2, ciclo próprio.
+  //
+  // Sem gate de role: quem vê é governado pelo ABAC da tela (contacts.operacao),
+  // igual ao /api/work_queue/list logo acima. O corte fino fica na AÇÃO, que é o
+  // /expire — esse sim supervisor|admin.
+  app.get("/api/work_queue/pending", async (req: Request, res: Response) => {
+    try {
+      const tenantId = (req.query["tenant_id"] as string) || _wqTenant()
+      const maxKeys  = req.query["max_keys"]
+        ? parseInt(req.query["max_keys"] as string, 10) : undefined
+      const result = await listPendingWorkTasks(redis, tenantId, {
+        ...(maxKeys ? { maxKeys } : {}),
+        ...(req.query["assigned_to"] ? { assignedTo: String(req.query["assigned_to"]) } : {}),
+        ...(req.query["pool_id"]     ? { poolId:     String(req.query["pool_id"])     } : {}),
+        ...(req.query["state"]       ? { state:      String(req.query["state"]) as WorkTaskState } : {}),
+        // `all=1` derruba o filtro `-int` (diagnóstico: ver aprovação e delegate
+        // a pool push no mesmo ledger). Fora disso a tela é de wrap-up.
+        ...(req.query["all"] === "1" ? { internalOnly: false } : {}),
+      })
+      res.json({
+        items:      result.items,
+        total:      result.items.length,
+        scanned:    result.scanned,
+        truncated:  result.truncated,
+        // Horizonte da leitura: o ledger vive `timeout_hours*3600 + 3600` (25 h
+        // no wrap-up default). Passado isso a pendência some SEM rastro se o
+        // timeout scanner não tiver passado. Quem consome precisa saber que esta
+        // é uma janela, não um acumulado.
+        generated_at: new Date().toISOString(),
+      })
+    } catch (err) {
+      res.status(500).json({ error: "pending_failed", message: String(err) })
     }
   })
 

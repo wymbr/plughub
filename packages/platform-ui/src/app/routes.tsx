@@ -14,6 +14,8 @@ import WorkflowCalendarPage from '@/modules/workflows/WorkflowCalendarPage'
 import CalendarsPage from '@/modules/calendars/CalendarsPage'
 import SchedulesPage from '@/modules/schedules/SchedulesPage'
 import SchedulesMonitorPage from '@/modules/schedules/SchedulesMonitorPage'
+import WorkItemsPage from '@/modules/work-items/WorkItemsPage'
+import WrapupSummaryPage from '@/modules/analise/WrapupSummaryPage'
 import OutboundPage from '@/modules/outbound/OutboundPage'
 import AgentFlowEditorPage  from '@/modules/agent-flow/AgentFlowEditorPage'
 import AgentFlowDeployPage  from '@/modules/agent-flow/AgentFlowDeployPage'
@@ -79,6 +81,9 @@ export const routes: RouteObject[] = [
       { path: 'flow/monitor',      element: <FlowMonitorPage     /> },
       // Monitor/Agendas → live schedules + dispatch ledger (Scheduler Fase 3)
       { path: 'monitor/schedules', element: <SchedulesMonitorPage /> },
+      // Monitor/Pendências → wrap-ups pendentes AGORA (I5 / ADR § D7b, fatia 1).
+      // Só o vivo: o histórico do período é query sobre `segments` no Analytics.
+      { path: 'monitor/work-items', element: <WorkItemsPage /> },
       // Monitor/Processes → KPI dashboard (completion rates, failure analysis)
       { path: 'flow/processos',    element: <ProcessosPage      /> },
       // Legacy redirects
@@ -118,6 +123,9 @@ export const routes: RouteObject[] = [
       { path: 'analise/customer-voice', element: <CustomerVoicePage /> },
       // Survey response navigator (S8) — per-response list from PG survey_response.
       { path: 'analise/surveys', element: <AnaliseSurveysPage /> },
+      // I5 / ADR § D7b fatia 2 — histórico do trabalho author-bound (wrap-up).
+      // Contraparte retrospectiva de Monitor › Pendências, que só mostra o vivo.
+      { path: 'analise/wrapup', element: <WrapupSummaryPage /> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
       { path: 'analise/agentes',   element: <Navigate to="/analise/agents"   replace /> },

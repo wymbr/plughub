@@ -13,21 +13,70 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 
 ### Falta
 
-- **Relatório de pendências por agente** — **desenho fechado 2026-07-30** (ADR § D7b), implementação
-  pendente. A lacuna 5 deixou de bloquear: o **ledger `{t}:work_task:{session}` da I5 é o índice de
+- **Relatório de pendências por agente** — **desenho fechado 2026-07-30** (ADR § D7b); **fatia 1
+  entregue 2026-07-30**, fatias 2 e 3 pendentes. A lacuna 5 deixou de bloquear: o **ledger
+  `{t}:work_task:{session}` da I5 é o índice de
   pendência por construção** (nasce no despacho, morre no resume; o claim NÃO o apaga → cobre as duas
   formas com uma linha só) e carrega `assigned_to`.
 
   | Fatia | Entrega | Estado |
   |---|---|---|
-  | 1 | **Pendências agora** — endpoint no BFF varrendo o ledger (`SCAN`, não `KEYS`) + cruzamento com ZSET/lease para classificar reivindicada × nunca-reivindicada; superfície no Monitor/inbox do supervisor. Precedente: `work_queue_list` já é Redis-direto no mcp-server | pendente |
-  | 2 | **Histórico do caso reivindicado** — `segments` já cobre (`close_reason` + duração + `user_id`). Nada a construir; só a query/lente | pendente |
+  | 1 | **Pendências agora** — `GET /api/work_queue/pending` no BFF (`SCAN` do ledger + cruzamento ZSET/lease/`dispatch_mode`) + **Monitor › Pendências** (`/monitor/work-items`), agrupável por agente ou pool, com o encerramento pelo supervisor ligado | ✅ **2026-07-30** (smoke 11/11; ver CHANGELOG) |
+  | 2 | **Histórico do caso reivindicado** — `GET /reports/wrapup-summary` + **Analítico › Histórico de Wrap-up** (`/analise/wrapup`), agregado por agente/pool com `unfilled_rate` | ✅ **2026-07-30** (sonda 7/7; ver CHANGELOG) |
   | 3 | **Histórico do nunca-reivindicado** — evento `work_item.expired` → ClickHouse. **Gated:** só se a fatia 1 mostrar volume. Nas medições da Camada F quase toda expiração foi de item reivindicado | **não construir sem medir** |
+
+  **Primeira medição do gate (2026-07-30, sonda da fatia 2):** 9 wrap-ups no período — 7 submetidos,
+  2 vencidos, `unfilled_rate` **22,2%**. Os 2 vencidos são **reivindicados** (têm segmento, senão não
+  apareceriam nesta contagem), o que reforça o achado da Camada F e mantém a fatia 3 fora de escopo.
+  O que ainda não se mediu é o **nunca reivindicado** — que por construção não aparece aqui; esse
+  número só sai olhando o Monitor › Pendências dentro da janela de 25 h.
+
+  **Escopo da fatia 1 — só wrap-up, e por quê.** O ledger é genérico (`_write_work_task`
+  é incondicional nos DOIS handlers de delegate, e o próprio docstring assume pool push),
+  então ele indexa também aprovação e delegate a especialista IA. A tela corta pelo sufixo
+  `-int`, que a **D6 tornou garantia por construção** (o registry rejeita criação manual com
+  ele). O critério não é arbitrário: aprovação é **pooled** e tem transbordo por
+  `fallback_to_pool_after_s` — ninguém fica preso nela; wrap-up é **author-bound** e sem
+  transbordo, que é a razão de a D4 pedir o relatório. `?all=1` derruba o filtro para
+  diagnóstico.
+
+  **Quatro estados, e o quarto é o achado.** `unclaimed` (no ZSET) · `claimed` (lease) ·
+  `not_queued` (pool push) · **`orphaned`** — pool *pull*, fora do ZSET e **sem lease**, isto
+  é: a lease venceu e nada devolveu o item à fila. É a **lacuna 2** (não há reaper de
+  `claim_lease`), que a Camada F deixou sem instrumento. Colapsá-lo em `not_queued` o
+  esconderia atrás de um valor plausível. Há ainda `unknown` para pool sem `pool_config` no
+  cache — ausência de infra não é presumida como "push". Se `orphaned` aparecer com volume, a
+  discussão do reaper passa a ter número.
 
   **Não criar segmento sintético** para o item nunca reivindicado: nenhum valor de `duration_ms` é
   honesto ali (`0` dilui o ACW que a E2f fez existir; a janela de pendência vira tempo de trabalho;
   `NULL` queima a assinatura que achou os 87 órfãos). Segmento = participação; pendência = item de
   trabalho, com dono/prazo/tempo parado que segmento não comporta. Discussão completa no ADR § D7b.
+
+  **Achados da fatia 1 — dois limites que a tela declara em vez de esconder:**
+
+  1. **O relatório é uma JANELA de ~25 h, não um acumulado.** O ledger nasce com
+     `ex = timeout_hours*3600 + 3600` (`webhook.py:1012` e `:1787`) — 25 h no wrap-up default.
+     No caminho normal a linha morre antes disso, no resume (o `handle_resume` apaga o ledger),
+     e o buffer de +1 h existe justamente para o TTL não ganhar do timeout scanner. **Mas se o
+     scanner não passar** (serviço fora, ou o intervalo de 60 s), a pendência **desaparece da
+     tela sem deixar registro nenhum** — nem em `segments`, porque item nunca reivindicado não
+     tem segmento. Consequência para o gate da fatia 3: "medir antes de construir" significa
+     *olhar a tela e anotar*, não *deixar acumular*; nada acumula.
+  2. **O nome do agente depende de um grant que o público da tela pode não ter.** `assigned_to`
+     é `user_id` (derivado de `human-{uid}`, `main.py:1517`), e `/auth/users` exige ABAC
+     `config.usuarios` (strict, sem bypass de admin) — que o supervisor típico não tem. A tela
+     degrada para o `user_id` cru **exibindo o motivo**, em vez de mostrar UUID sem explicação.
+     A alternativa Redis (`{t}:instance:human-{uid}` → `user_login`) foi **descartada**: aquela
+     chave é heartbeat de 30 s e some no logout, ou seja, falharia exatamente na linha mais
+     interessante — a pendência de quem já saiu. Conserto real (se incomodar): ou um endpoint
+     de diretório mínimo com grant próprio, ou carimbar `user_login` no ledger no despacho
+     (mudança de produtor, só vale para itens novos).
+- **Cenários `claimed` e `orphaned` do relatório** — o `smoke_work_task_pending.sh` só os roda com
+  `INSTANCE=human-<user_id>` de um agente logado. Enquanto não rodarem, o estado `orphaned` é
+  instrumento **não calibrado**: a leitura de `pool_config` está provada (`dispatch_mode: "pull"`
+  apareceu na linha), mas ninguém viu a condição real acontecer. Mesma disciplina do "não
+  exercitado" do `smoke_acw_expire.sh`.
 - **Validação ao vivo do gatilho de prazo.** O smoke exercita o gatilho de supervisor; o de prazo
   depende do scanner de 60 s. ✅ o prazo virou config do pool (`PoolHookEntry.context.acw_timeout_hours`
   → `@ctx.hook.acw_timeout_hours`), então encurtá-lo para medir na Camada F é edição de pool via PUT,
@@ -38,10 +87,10 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 
 | # | Lacuna | Evidência |
 |---|---|---|
-| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`); o reaper vira item MEDIDO na Camada F |
+| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`). A Camada F **não** o mediu (a sonda observou a chave de outra sessão); **agora há instrumento**: o estado `orphaned` do relatório de pendências é exatamente esta condição — item de pool pull fora do ZSET e sem lease. Decidir o reaper só depois de ver o volume |
 | 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
 | 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
-| 5 | **A fila pull não é consultável pelo analytics** | não há evento nem tabela espelho; só `work_queue_list` (Redis-direto, exige a lista de pools, e **não lista item já reivindicado**). É o bloqueio do relatório. Candidato a fonte: o próprio ledger `{t}:work_task:*`, que é varrível e já nomeia pool + assigned_to + deadline |
+| 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
 | 6 | **`close_reason` de segmento não tem enum** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. Hoje quem enumera o domínio o descobre por arqueologia |
 
 ### Timeouts ainda constantes no caminho da I5 *(arco de consolidação de config)*
@@ -105,18 +154,35 @@ contrário, é genérico: dá para acrescentar "serviço executado" no editor ho
 **some sem log**, porque o skill não passa e a tool não aceita. Formulário genérico × tool de
 contrato fixo = funil que descarta em silêncio.
 
+> **✅ A perna do descarte foi CONSERTADA em 2026-07-30** (ver CHANGELOG): `resumo` e
+> `proximos_passos` agora têm colunas próprias (`segments.wrapup_summary` /
+> `wrapup_next_steps`) e são gravados em TODA disposição. O que **permanece** deste arco é o
+> outro lado do funil: campo NOVO acrescentado no editor do DialogForm segue sem chegar à
+> tool (contrato fixo de 4 campos) — é a fatia 3.
+
 **Evidência ao vivo (F1, 2026-07-30)** — o funil é mais estreito do que "campo novo no editor":
-descarta campo que o formulário JÁ TEM. Wrap-up submetido com `resumo="zxzxzx"` e
+descartava campo que o formulário JÁ TINHA. Wrap-up submetido com `resumo="zxzxzx"` e
 `proximos_passos="wwww"`; o segmento da origem gravou
 
 ```
 outcome: resolved   issue_status: resolvido   handoff_reason: NULL
 ```
 
-porque a tool só monta `handoff_reason` quando `outcome !== "resolved"` (`segment.ts:95-100`).
-Num atendimento **resolvido** — o caso mais comum — o resumo que o atendente escreveu não vai a
-lugar nenhum, e a tela não dá nenhum sinal disso. O `issue_status` (classificação crua, em
-português) é o campo que prova a atribuição por referência: nada mais no sistema o escreve.
+porque a tool só montava `handoff_reason` quando `outcome !== "resolved"`. Num atendimento
+**resolvido** — o caso mais comum — o resumo que o atendente escreveu não ia a lugar nenhum, e a
+tela não dava nenhum sinal disso. O `issue_status` (classificação crua, em português) é o campo
+que prova a atribuição por referência: nada mais no sistema o escreve.
+
+**Conserto (2026-07-30):** colunas próprias `wrapup_summary`/`wrapup_next_steps`, escritas em toda
+disposição pelos DOIS produtores (destacado e inline). **`handoff_reason` ficou intacto de
+propósito** — ele define `handoff_rate` (`countIf(handoff_reason != '') / count()`), e escrever o
+resumo ali levaria a taxa de repasse a ~100%: trocaria perda silenciosa por métrica que muda de
+sentido sem avisar. Prosa também não caberia em `agent_business_events` (D2: `value` é numérico,
+nominal vive na categoria). Sonda `infra/test/check_wrapup_prose_persisted.sh`.
+
+**Resíduo:** o caminho **inline** (`_apply_wrapup_to_segment`) só conhece `wrapup_resumo` — não há
+`wrapup_proximos_passos` no `pipeline_state` daquele fluxo. `wrapup_next_steps` só é preenchido
+pelo destacado. Uma linha, quando o inline passar a coletá-lo.
 
 ### Fatias
 
@@ -189,33 +255,102 @@ vez de digitar do zero.
 
 ---
 
-## `close_reason` do contato só é persistido se o wrap-up for submetido *(medido 2026-07-30)*
+## ~~`close_reason` do contato só é persistido se o wrap-up for submetido~~ ✅ *(2026-07-30, ver CHANGELOG)*
 
-Dois atendimentos idênticos na validação da Camada F, diferindo só no wrap-up:
+Resolvido pela opção **(a)** — `close_reason` viaja no `participant_left` do fechamento canônico,
+nos dois produtores. Validado com dois atendimentos na mesma janela, um COM e outro SEM wrap-up,
+ambos gravando `agent_hangup`. Sonda: `infra/test/check_close_reason_persisted.sh`.
 
-| Caso | `retencao_humano`.`close_reason` | `outcome` | wrap-up |
-|---|---|---|---|
-| 1º | `agent_hangup` | `resolved` | submetido |
-| 2º | **`NULL`** | `resolved` | expirado (nunca reivindicado) |
+**Resíduo (não bloqueia):** o `_TRANSPORT_TO_CLOSE_REASON` cobre 6 transportes; qualquer outro
+agora produz `close_reason` ausente **com WARNING** em vez de um `agent_hangup` inventado. Se o
+WARNING aparecer em produção, completar o mapa — a sonda tem uma asserção que o varre nos logs.
 
-**Mecanismo** (confirmado no código): o valor é semeado no hash `seg_signal` pelo bridge quando o
-hook dispara (`_seed_segment_signal(..., _hs_close_reason)`, `main.py:1509`, derivado de
-`_TRANSPORT_TO_CLOSE_REASON`), mas só alcança o ClickHouse quando a linha é **republicada a partir do
-hash** — e quem republica é o `segment_outcome_record` (`tools/segment.ts:166`), acionado pelo SUBMIT
-do wrap-up. O `participant_left` do fechamento canônico leva `outcome`, não `close_reason`.
+---
 
-**Por que importa:** o motivo de encerramento do CONTATO passa a depender de um ato do atendente sobre
-outra coisa (o formulário de wrap-up). Um relatório que enumere `close_reason` tem um buraco do tamanho
-da taxa de não-preenchimento — e o buraco é `NULL`, não zero: não desbalanceia contagem nenhuma, não
-acusa erro, só encolhe a amostra em silêncio. É o padrão da § Postura de Engenharia: `outcome=resolved`
-igual nos dois casos é o valor plausível que impede de notar.
+## Capacidade compartilhada: pool é TAG do recurso, não dono de capacidade *(desenho 2026-07-30, medido)*
 
-**Onde consertar (a decidir):** (a) incluir `close_reason` no `participant_left` do fechamento
-canônico — mas ele roda antes do hook semear o hash, então precisa derivar o valor por conta própria;
-(b) `_republish_segment_from_signal` incondicional ao fim do contato, independente de wrap-up. A (b)
-reusa o caminho já provado; a (a) elimina a dependência de republish. **Não** confundir com o
-`close_reason` do segmento de WRAP-UP (`task_submitted`/`acw_expired`/`acw_supervisor_closed`), que é
-outro domínio e está correto.
+**Sintoma observado:** agente com `max_concurrent 3`, logado em `retencao_humano` + `retencao_humano-int`.
+Durante um wrap-up (que ocupa vaga no espelho), o pool PAI seguia exibindo `0 busy / 3 available / 3 total`.
+E o KPI somava `Available 9` para 3 pools que compartilham o mesmo humano de 3 vagas.
+
+**Enquadramento correto (do usuário, corrige o meu):** não é "capacidade duplicada". A capacidade é
+**compartilhada e isso está certo** — o agente atende contato de qualquer um dos pools em que está
+logado, então cada pool legitimamente anuncia que pode contar com ele. O defeito é que **o consumo não
+é propagado**: quando uma vaga é tomada por um pool, os outros não descontam.
+
+**Mecanismo:** `available(pool) = total_capacity(pool) − active_count(pool)`, e `active_count` é um
+contador **por pool** (`get_busy_count`, `registry.py:1487`). A ocupação real vive no semáforo do
+RECURSO (`{t}:instance:{iid}:sessions`), que nenhum snapshot lê. Pool irmão e hold de wrap-up ficam,
+os dois, invisíveis. É o invariante do `CLAUDE.md` violado: *"capacidade é do RECURSO e não fragmenta
+por pool"*.
+
+**Por que apareceu agora:** o espelho `-int` (ADR author-bound, D2) tornou **todo** humano multi-pool
+por construção. Antes era exceção.
+
+### Desenho proposto — recurso é a entidade, pool é TAG
+
+| Grandeza | Natureza | Fonte |
+|---|---|---|
+| capacidade / disponibilidade | fato do **RECURSO** | derivar: `Σ max(0, max_concurrent − SCARD(sessions))` sobre as instâncias com a tag |
+| fila | fato do **POOL** | ZSET (já é) |
+| ocupação | fato do recurso, **projetável** por pool | tag de pool no membro do semáforo (ver abaixo) |
+| pool webhook | capacidade **do pool** (throttle) | `max_concurrent_sessions` — exceção legítima, mantém a fórmula atual |
+
+O índice por tag **já existe** (`{t}:pool:{p}:instances` ∪ `busy_instances`), e a verdade da ocupação
+também (`sessions`). Falta parar de manter o número paralelo.
+
+**`available` por pool NÃO é aditivo.** Dois pools que compartilham um agente de 3 vagas dizem "3"
+cada, e ainda assim só cabem 3 contatos. Logo há **duas correções distintas**: a *fonte* (cada pool
+refletir ocupação global) e a *agregação* (KPI contar recursos DISTINTOS, não somar pools). Corrigir só
+a primeira deixa o `Available N` inflado.
+
+**Tag de pool no membro do semáforo** (ideia do usuário): faria `active_count` desaparecer — o último
+agregado incremental deste caminho, e a origem do `available 4 / total 3` corrigido hoje. Invariante a
+preservar: o release é por **prefixo** `{session_id}::`, então o pool entra como **sufixo**
+(`{session}::{conf}::{pool}`), nunca como prefixo. O hold precisa do mesmo tratamento — e isso resolve
+de brinde a atribuição dele a um pool.
+
+**Sobre cachear com TTL:** o cache já existe — é o próprio snapshot (TTL, escrito no evento, lido pela
+tela). Introduzir outro seria redundante. O ganho está em **trocar remendo por recálculo** nos mesmos
+gatilhos que hoje remendam (`available += 1` no `remove_conversation`, `busy = new_val` no transfer,
+`queue_length` no enqueue): mesma imediaticidade na UI, sem deriva acumulada. Custo do recálculo
+resolvido com **Lua** (uma ida e volta, percorre o set dentro do Redis) — não com laço de N round-trips,
+que era a objeção real.
+
+### Prioridade — medida, não presumida (2026-07-30)
+
+- **NÃO gateia roteamento**: `admission.py` não lê `available`; o árbitro da alocação é o semáforo via
+  `claim_instance`. Sem super-alocação.
+- **MAS alimenta decisão de agente**: `queue_context_get`, `pool_status_get` e
+  `system_availability_check` (`tools/operational.ts`) expõem `available_agents` aos Skill Flows para
+  *"offer a channel switch, inform wait time, or escalate"*. Inflado, o agente pode não oferecer troca
+  de canal num momento saturado, ou informar espera menor que a real — **ao cliente**.
+
+Logo: prioridade média. Não corrompe alocação; corrompe afirmação.
+
+**Alternativas avaliadas e descartadas:** reservar vagas por pool (aritmética limpa, mas fragmenta a
+capacidade do recurso — contraria o invariante e destrói a flexibilidade); remover `available` da linha
+de pool e movê-lo para um painel de agentes (conceitualmente o mais honesto, mais disruptivo para quem
+já lê a tela — vale reconsiderar se a tabela seguir sendo lida como aditiva).
+
+---
+
+## Confirmar em produção o mecanismo do `available > total` *(fix aplicado 2026-07-30, ver CHANGELOG)*
+
+O teto simétrico no `remove_conversation` está em vigor e testado (invariante, 3/3), mas **não está
+provado** que era ele o mecanismo do `available 4 / total 3` observado. Os dois `WARNING` novos
+respondem sem trabalho adicional:
+
+- `active_count de pool=… foi a NEGATIVO` — remoção sem `mark_busy` correspondente (a causa-raiz);
+- `available (…) passaria de total_instances (…)` — o teto segurando.
+
+Se aparecerem em uso normal, o mecanismo é este e a caça continua no **produtor** da remoção espúria
+(`agent_done` duplicado/tardio é o suspeito). Se **não** aparecerem e o `4/3` voltar, sobrou outro
+escritor do snapshot — e aí a lista completa de escritores da chave está no CHANGELOG desta entrada.
+
+**Não reintroduzir** `patch_pool_snapshot_available` nem `get_total_instances_count` sem necessidade:
+ambas eram código morto e ambas ensinavam um modelo errado (a 1ª, que o incremento vinha dali; a 2ª,
+que `total_instances` era contagem de agentes e não capacidade).
 
 ---
 

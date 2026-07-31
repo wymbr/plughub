@@ -919,6 +919,17 @@ class InstanceRegistry:
                 if new_val < 0:
                     await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
                     new_val = 0
+                    # Degradação nunca silenciosa: `< 0` significa uma REMOÇÃO SEM
+                    # `mark_busy` correspondente (agent_done duplicado/tardio, ou
+                    # sessão contada noutro pool). O clamp conserta o contador, mas
+                    # o fato é anômalo e era engolido — é a MESMA condição que fazia
+                    # `available` passar de `total_instances` no Monitor.
+                    logger.warning(
+                        "remove_conversation: active_count de pool=%s foi a NEGATIVO "
+                        "(instance=%s conv=%s) — houve uma remoção sem mark_busy "
+                        "correspondente. Contador zerado; procurar o produtor.",
+                        pool_id, instance_id, conversation_id,
+                    )
                 new_active_counts[pool_id] = new_val
                 logger.info(
                     "remove_conversation: DECR pool=%s new_active_count=%d",
@@ -952,7 +963,25 @@ class InstanceRegistry:
                     # already in the ready_set it still gained exactly 1 slot.
                     # Using SCARD here would regress to the instance-count model
                     # instead of the capacity-sum model written by write_pool_snapshot.
-                    snap["available"] = snap.get("available", 0) + 1
+                    #
+                    # TETO (fix 2026-07-30) — simétrico ao chão do DECR seis linhas
+                    # acima. `available` é `total_capacity − busy`, logo NUNCA pode
+                    # passar da capacidade; sem o teto, toda remoção que bateu no
+                    # chão do contador ainda somava +1 aqui, e o Monitor exibia
+                    # `available 4 / total 3`. O chão existia desde sempre; o teto
+                    # não — a assimetria estava no mesmo bloco.
+                    _cap    = int(snap.get("total_instances") or 0)
+                    _avail  = int(snap.get("available", 0) or 0) + 1
+                    if _cap > 0 and _avail > _cap:
+                        logger.warning(
+                            "remove_conversation: available (%d) passaria de "
+                            "total_instances (%d) no pool=%s — limitado à capacidade. "
+                            "Sintoma de remoção sem mark_busy correspondente "
+                            "(instance=%s conv=%s).",
+                            _avail, _cap, pool_id, instance_id, conversation_id,
+                        )
+                        _avail = _cap
+                    snap["available"] = _avail
                     await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
 
         except Exception as exc:
@@ -1471,18 +1500,12 @@ class InstanceRegistry:
         posição é um fato DO CONTATO, tamanho é do POOL."""
         return await self._redis.zrank(_queue_key(tenant_id, pool_id), session_id)
 
-    async def get_total_instances_count(self, tenant_id: str, pool_id: str) -> int:
-        """
-        Returns the count of distinct instances registered to this pool.
-        Uses SUNION(ready_set, busy_set) to avoid double-counting agents with
-        max_concurrent > 1, who appear in both sets simultaneously while serving
-        a session below their capacity limit.
-        """
-        union = await self._redis.sunion(
-            _pool_instances_key(tenant_id, pool_id),
-            _pool_busy_instances_key(tenant_id, pool_id),
-        )
-        return len(union)
+    # `get_total_instances_count` REMOVIDA (2026-07-30). Era o modelo de CONTAGEM de
+    # instâncias (SUNION dos dois sets), abandonado quando o snapshot passou a
+    # publicar CAPACIDADE. Não tinha um único chamador — mas seu docstring era a
+    # fonte do modelo mental errado ("total_instances = agentes distintos"), que
+    # migrou para o docstring de `write_pool_snapshot` e para o comentário do
+    # `MonitorTab`. Código morto que ensina algo falso custa mais que o espaço.
 
     async def write_pool_snapshot(
         self,
@@ -1505,8 +1528,13 @@ class InstanceRegistry:
           available       — instances currently in 'ready' state (idle capacity)
           busy            — active sessions being served (may exceed instance count
                             when max_concurrent > 1)
-          total_instances — distinct instances registered to this pool (ready + busy),
-                            regardless of session load; dimensioning metric
+          total_instances — CAPACIDADE total do pool (soma de `max_concurrent` sobre
+                            ready_set ∪ busy_set), NÃO contagem de instâncias. O nome
+                            é herança do modelo antigo (contagem), abandonado quando
+                            `max_concurrent > 1` passou a existir. Para pools de IA
+                            (max_concurrent=1) os dois coincidem, o que fez a
+                            divergência sobreviver anos sem sintoma.
+                            INVARIANTE: `available ≤ total_instances`, sempre.
           queue_length    — contacts waiting in queue
         """
         # ── Step 1: snapshot the ready_set BEFORE calling get_ready_instances() ──
@@ -1692,34 +1720,15 @@ class InstanceRegistry:
             max_concurrent_sessions= max_concurrent_sessions,
         )
 
-    async def patch_pool_snapshot_available(
-        self, tenant_id: str, pool_id: str, delta: int
-    ) -> bool:
-        """
-        Increments snap["available"] by delta if the snapshot already exists.
-
-        Used when a single agent returns from a session — only one capacity slot
-        is freed, so we add +delta (typically max_concurrent_sessions of that
-        one instance, usually 1) instead of doing a full recount via
-        write_pool_snapshot() which would sum all ready instances and produce
-        a large jump for hook pools (e.g. wrapup_ia with 400 agents → +400).
-
-        Returns True when the snapshot existed and was patched.
-        Returns False when no snapshot was present; the caller must fall back
-        to a full write_pool_snapshot().
-        """
-        snap_key = _pool_snapshot_key(tenant_id, pool_id)
-        raw_snap = await self._redis.get(snap_key)
-        if not raw_snap:
-            return False
-        try:
-            snap = json.loads(raw_snap)
-        except Exception:
-            return False
-        snap["available"] = snap.get("available", 0) + delta
-        snap["updated_at"] = datetime.now(timezone.utc).isoformat()
-        await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
-        return True
+    # `patch_pool_snapshot_available` REMOVIDA (2026-07-30). Nenhum chamador passava
+    # delta — o único call site (`kafka_listener._refresh_pool_snapshots`) sempre
+    # invocava com `delta=None`, e o comentário que dizia "remove_conversation() já
+    # patcheia +1" estava certo sobre o FATO e errado sobre o LUGAR: quem incrementa
+    # é o `remove_conversation` desta mesma classe, direto no snapshot.
+    #
+    # Removida porque induziu diagnóstico errado: caçando `available 4 / total 3`,
+    # o nome desta função levou a investigar um caminho que não roda. Ela também não
+    # tinha teto — se voltar a ser usada, precisa do mesmo clamp de `remove_conversation`.
 
     async def get_agent_performance_score(
         self,

@@ -86,6 +86,13 @@ export const ContactSegmentSchema = z.object({
   // F7: normalized escalation reason (id from config escalation_reasons). Set when
   // outcome is an escalate-family value. handoff_reason stays as the free-text note.
   escalation_reason: z.string().nullable().default(null),
+  // Wrap-up prose — ALWAYS recorded, including when the contact was resolved.
+  // Separate columns rather than handoff_reason: that field defines `handoff_rate`
+  // (`countIf(handoff_reason != '') / count()`), so writing the summary there would
+  // silently push the handoff rate to ~100%. Same precedent as escalation_reason,
+  // which was split out of the same free-text note once it had its own meaning.
+  wrapup_summary:    z.string().nullable().default(null),
+  wrapup_next_steps: z.string().nullable().default(null),
 })
 
 export type ContactSegment = z.infer<typeof ContactSegmentSchema>
@@ -127,6 +134,8 @@ export const ConversationParticipantEventSchema = z.object({
   issue_status:     z.string().nullable().optional(),
   close_reason:     z.string().nullable().optional(),
   escalation_reason: z.string().nullable().optional(),   // F7
+  wrapup_summary:    z.string().nullable().optional(),   // prosa do wrap-up, sempre gravada
+  wrapup_next_steps: z.string().nullable().optional(),
 })
 
 export type ConversationParticipantEvent = z.infer<typeof ConversationParticipantEventSchema>
