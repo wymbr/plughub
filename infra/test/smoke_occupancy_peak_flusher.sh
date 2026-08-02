@@ -8,12 +8,32 @@
 # primitivos e com o laço quebrado produziria exatamente o sintoma que o arco combate —
 # série sem pico — e nenhum teste ficaria vermelho.
 #
-# TRÊS PORTÕES, e o do meio é o contrato:
+# CINCO PORTÕES, e o segundo é o contrato:
 #   A. o flusher está VIVO           → linha nova chegando em pool_occupancy_peaks
 #   B. o CONTRATO ponta a ponta      → um pico que sobe a 2 e volta a 0 DENTRO de um
 #                                      minuto aparece na série. Contra a amostragem de
 #                                      5 s isso dava 0 (ou linha nenhuma).
 #   C. achado 1 (skew de capacidade) → nenhuma linha nova com peak > provisioned
+#   D. seed do bucket novo           → nenhum 'watermark AUSENTE' no log
+#   E. marcador da F4c               → todo minuto com `__total__` tem `__capacity_*`
+#
+# POR QUE O PORTÃO E EXISTE. O produtor de `kind_peaks` (`main.py`, laço do flusher que
+# lê o rollup `{t}:capacity:snapshot` e amostra `used`/`total_capacity` por tipo) é a
+# ÚNICA peça da F4c sem rede: `test_occupancy_series_capacity.py` cobre
+# `_flush_occupancy` recebendo `kind_peaks` já pronto — ninguém testa quem o preenche.
+# E é exatamente ali que o defeito apareceu na vida real: `__total__ 362` para 356 vagas
+# reais, denunciado só pelo dado. Se o rollup parar de ser lido (exceção engolida, chave
+# renomeada, `by_kind` vazio), `kind_peaks` fica `{}`, as linhas `__capacity_*` somem e
+# o `__total__` volta ao `Σ` inflado por pool — SEM nada ficar vermelho, porque a linha
+# continua chegando com um número plausível. O contrato publicado no docstring de
+# `_flush_occupancy` é o que este portão cobra:
+#
+#     minuto sem `__capacity_*` ⇒ `__total__.provisioned_capacity` não é confiável
+#
+# Contrapositiva: minuto COM `__total__` e SEM `__capacity_*` é a assinatura da falha.
+# Única exceção legítima é a janela de arranque (1–2 min pós-restart, rollup ainda não
+# publicado) — por isso o portão compara com o instante de boot do container em vez de
+# reprovar de cara.
 #
 # JANELA POR `ingested_at`, NUNCA por `minute`: o corte precisa separar o que ESTE run
 # gravou do que já estava na tabela. Cortar por `minute` cobraria de linhas antigas
@@ -33,8 +53,20 @@ set -uo pipefail
 
 DC="docker compose -f docker-compose.demo.yml"
 SVC="routing-engine"
-CH() { $DC exec -T clickhouse clickhouse-client -u plughub --password plughub \
-         -d plughub_demo -q "$1" < /dev/null 2>/dev/null; }
+# stderr NÃO é engolido (2026-08-02). Um `-q` que erra devolve saída vazia, e vazio é
+# lido como "0 linhas" pelos portões — erro virando zero plausível, o defeito que este
+# arco persegue. Custou um INCONCLUSIVO falso no smoke irmão da F5 (coluna inexistente
+# no `WHERE`), e a mesma armadilha estava latente aqui.
+CH() {
+  local out rc
+  out="$($DC exec -T clickhouse clickhouse-client -u plughub --password plughub \
+           -d plughub_demo -q "$1" < /dev/null 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "   ⚠️  query ClickHouse FALHOU (rc=$rc): ${out%%$'\n'*}" >&2
+    return "$rc"
+  fi
+  printf '%s' "$out"
+}
 
 RAND="$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 TENANT="t_smokepeak_${RAND}"
@@ -246,14 +278,113 @@ if [ "${MISSING:-0}" = "0" ]; then
 else
   bad "$MISSING ocorrência(s) de 'watermark AUSENTE' (fora o tenant sintético) em 5 min"
   note "o flusher publicou 0 para pool cujo bucket ninguém semeou: zero com cara de"
-  note "medição. Antes de acusar a virada, checar as duas causas legítimas — o bucket"
-  note "da mensagem é o do BOOT (serviço sobe no meio do minuto), ou o pool NASCEU no"
-  note "meio do minuto (o seed daquela virada passou sem ele). Recorrente, em pool"
-  note "estável e minuto qualquer, é o seed da virada não rodando."
+  note "medição. **Sobrou UMA causa legítima**: o minuto do BOOT (serviço sobe no meio"
+  note "do minuto). Comparar o bucket da mensagem com o instante abaixo antes de tudo."
+  note ""
+  note "A segunda desculpa — 'o pool nasceu no meio do minuto' — MORREU em 2026-08-02,"
+  note "e morreu porque este portão a encontrou: o seed usava a foto da VIRADA enquanto"
+  note "\`seen_pools\` crescia o minuto inteiro, então todo login de humano gerava uma"
+  note "rajada de AUSENTE (um por pool do agente) e o log tinha álibi permanente — que"
+  note "é o mesmo que não ter alarme. O seed passou a rodar na PRIMEIRA VISTA do pool."
+  note "Logo: fora do minuto de boot, isto agora é defeito, não ruído."
   $DC logs --since 5m "$SVC" 2>/dev/null | grep 'watermark AUSENTE' \
     | grep -v 't_smokepeak_' | tail -3 | sed 's/^/      /'
   note "instante do boot p/ comparar: $(docker inspect -f '{{.State.StartedAt}}' \
     "$($DC ps -q "$SVC")" 2>/dev/null)"
+fi
+
+# ── Portão E · o marcador da F4c (produtor de `kind_peaks`) ──────────────────
+echo
+echo "── Portão E · linhas __capacity_{kind}__ no minuto ─────────────────────────"
+# O tenant SINTÉTICO é excluído de propósito, e não por conveniência: o rollup
+# (`compute_tenant_capacity`) parte de `{t}:pools` (o SET de pools do tenant), que este
+# smoke nunca escreve — ele só faz SADD em `{t}:pool:{p}:instances`. Logo o rollup
+# devolve `{}` para `t_smokepeak_*` e a AUSÊNCIA de `__capacity_*` ali é correta. Cobrar
+# dele seria um vermelho garantido que não fala sobre o código.
+BOOT_ISO="$(docker inspect -f '{{.State.StartedAt}}' "$($DC ps -q "$SVC")" 2>/dev/null)"
+BOOT_EPOCH="$(date -u -d "$BOOT_ISO" +%s 2>/dev/null || echo 0)"
+
+# Denominador primeiro: sem `__total__` no período o portão NÃO JULGOU. Um "0 violações"
+# sobre zero linhas é o verde vazio que este arco combate — a mesma família do teste que
+# passa por ausência de amostra.
+N_TOTAL_ROWS="$(CH "SELECT count() FROM plughub_demo.pool_occupancy_peaks FINAL
+                     WHERE ingested_at >= toDateTime('${T0}') AND tenant_id != '${TENANT}'
+                       AND pool_id = '__total__'")"
+if [ "${N_TOTAL_ROWS:-0}" -eq 0 ]; then
+  inc "nenhuma linha \`__total__\` de tenant real no período — nada a julgar"
+  note "mesma causa provável do portão A: ambiente sem pool com instância registrada."
+else
+  # (tenant, minuto) que publicou `__total__` e NÃO publicou nenhuma `__capacity_*`.
+  VIOL_E="$(CH "SELECT tenant_id, toString(minute) FROM plughub_demo.pool_occupancy_peaks FINAL
+                 WHERE ingested_at >= toDateTime('${T0}') AND tenant_id != '${TENANT}'
+                 GROUP BY tenant_id, minute
+                 HAVING countIf(pool_id = '__total__') > 0
+                    AND countIf(startsWith(pool_id, '__capacity_')) = 0
+                 ORDER BY minute FORMAT TSV")"
+  E_HARD=0; E_BOOT=0
+  while IFS=$'\t' read -r v_tenant v_minute; do
+    [ -z "${v_minute:-}" ] && continue
+    M_EPOCH="$(date -u -d "${v_minute}Z" +%s 2>/dev/null || echo 0)"
+    # Janela de arranque: até 2 min depois do boot o rollup pode não ter sido publicado
+    # ainda. Documentado no docstring de `_flush_occupancy` como caso conhecido.
+    if [ "$BOOT_EPOCH" -gt 0 ] && [ "$M_EPOCH" -gt 0 ] \
+       && [ "$M_EPOCH" -lt $(( BOOT_EPOCH + 120 )) ]; then
+      E_BOOT=$(( E_BOOT + 1 ))
+      note "janela de arranque tolerada: $v_tenant $v_minute (boot $BOOT_ISO)"
+    else
+      E_HARD=$(( E_HARD + 1 ))
+      note "sem \`__capacity_*\`: $v_tenant $v_minute"
+    fi
+  done <<< "$VIOL_E"
+
+  if [ "$E_HARD" -eq 0 ]; then
+    ok "todo minuto com \`__total__\` trouxe as linhas por tipo ($N_TOTAL_ROWS linha(s) conferida(s))"
+    [ "$E_BOOT" -gt 0 ] && note "$E_BOOT minuto(s) na janela de arranque, tolerados por desenho."
+  else
+    bad "$E_HARD minuto(s) com \`__total__\` e SEM \`__capacity_*\` fora da janela de arranque"
+    note "o produtor de \`kind_peaks\` parou: o rollup \`{t}:capacity:snapshot\` não está"
+    note "sendo lido (exceção engolida em refresh_tenant_capacity/get_tenant_capacity, ou"
+    note "\`by_kind\` vazio). Consequência silenciosa: \`__total__.provisioned_capacity\`"
+    note "volta ao Σ por pool, que INFLA capacidade compartilhada (defeito C)."
+    note "Diagnóstico: $DC logs --tail=120 $SVC | grep -E 'rollup de capacidade|sem rollup por tipo'"
+    note "             $DC exec -T redis redis-cli --scan --pattern '*:capacity:snapshot'"
+  fi
+
+  # E2 — `peak > provisioned` nas linhas por TIPO. O portão C exclui todo `__%`, então
+  # estas linhas ficam fora dele; e são justamente as que o achado 1 ensinou a checar.
+  VIOL_E2="$(CH "SELECT count() FROM plughub_demo.pool_occupancy_peaks FINAL
+                  WHERE ingested_at >= toDateTime('${T0}') AND tenant_id != '${TENANT}'
+                    AND startsWith(pool_id, '__capacity_')
+                    AND peak_concurrency > provisioned_capacity")"
+  if [ "${VIOL_E2:-0}" = "0" ]; then
+    ok "nenhuma linha por tipo com peak > provisioned"
+  else
+    bad "$VIOL_E2 linha(s) \`__capacity_*\` com peak > provisioned"
+    note "\`used\` e \`total_capacity\` vieram de leituras diferentes do rollup — a"
+    note "captura por tipo deixou de ser do mesmo instante (achado 1, um nível acima)."
+  fi
+
+  # E3 — Σ das capacidades por tipo == capacidade do `__total__`. É a definição do
+  # produtor (`dedup = Σ kind_caps`), então divergir significa que uma das duas linhas
+  # foi calculada por outro caminho. Cada instância entra em UM balde de tipo, logo esta
+  # soma é legítima — ao contrário de `by_channel`, que é projeção.
+  VIOL_E3="$(CH "SELECT tenant_id, toString(minute),
+                        anyIf(provisioned_capacity, pool_id = '__total__') AS tot,
+                        sumIf(provisioned_capacity, startsWith(pool_id, '__capacity_')) AS soma
+                   FROM plughub_demo.pool_occupancy_peaks FINAL
+                  WHERE ingested_at >= toDateTime('${T0}') AND tenant_id != '${TENANT}'
+                  GROUP BY tenant_id, minute
+                 HAVING countIf(pool_id = '__total__') > 0
+                    AND countIf(startsWith(pool_id, '__capacity_')) > 0
+                    AND tot != soma
+                  ORDER BY minute LIMIT 5 FORMAT TSV")"
+  if [ -z "$VIOL_E3" ]; then
+    ok "\`__total__.provisioned\` == Σ das linhas por tipo"
+  else
+    bad "\`__total__\` diverge da soma por tipo — a capacidade deduplicada tem dois donos"
+    printf '%s\n' "$VIOL_E3" | sed 's/^/      /'
+    note "colunas: tenant · minuto · __total__ · Σ por tipo."
+  fi
 fi
 
 echo

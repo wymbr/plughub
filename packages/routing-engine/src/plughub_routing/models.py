@@ -278,11 +278,11 @@ class PoolConfig(BaseModel):
     # Included in the pool snapshot so the Monitor can display configured capacity.
     max_concurrent_sessions: int | None = None
 
-    # Fase B (queue-attended-model): hybrid session admission.
-    # session_reservation: dedicated session slots for this pool (cap AND guarantee),
-    # carved out of the installation's max_session_total. None = the pool draws from
-    # the shared bucket (total − Σ reservations). Billing is on the total only.
-    session_reservation: int | None = None
+    # `session_reservation` REMOVIDO (fatia 3, 2026-08-02). Era a fatia dedicada de
+    # sessões do pool, subtraída do pote `max_concurrent_sessions` — pote que somava
+    # `C_ai + C_human` e deixou de gatear. `model_config = ConfigDict(extra="ignore")`
+    # (acima) faz o campo, enquanto a coluna existir no DB, ser descartado no parse sem
+    # erro: é a mesma tolerância que já absorve qualquer campo novo do registry.
 
     # Fase E (queue-attended-model): queue treatment config passthrough.
     # {agent_type_id, max_wait_s?, skill_id?} — the bridge activates the queue

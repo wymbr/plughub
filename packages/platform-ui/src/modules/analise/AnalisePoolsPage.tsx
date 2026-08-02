@@ -44,7 +44,11 @@ interface OccTotalRow  { bucket: string; peak_concurrency: number; capacity: num
 interface AdmSeriesRow { bucket: string; used: number; limit: number }
 interface OccData      {
   series: OccSeriesRow[]; by_pool: OccPoolRow[]; total: OccTotal | null; total_series?: OccTotalRow[]
-  admission?: { reserved_series: AdmSeriesRow[]; shared_series: AdmSeriesRow[]; buffer_series: AdmSeriesRow[] }
+  // Fatia 3 (2026-08-02): `reserved_series`/`shared_series` saíram — mediam os baldes
+  // de SESSÃO carvidos do pote misto `C_ai + C_human`. `ai_series` (sessões debitando
+  // C_ai vs C_ai) é a série que sobrou, e ela COMEÇA em 2026-08-02: numerador e
+  // denominador mudaram, então não é continuação da antiga.
+  admission?: { ai_series: AdmSeriesRow[]; buffer_series: AdmSeriesRow[] }
 }
 
 // F5: `available_agents` saiu do contrato — produtor, query e gráfico removidos juntos.
@@ -292,22 +296,18 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
         </div>
       )}
 
-      {/* Item 7b — Admissão no tempo: histórico do Monitor (reservado ×
-          compartilhado empilhados vs C; sala de espera gratuita vs teto) */}
+      {/* Item 7b — Admissão no tempo: histórico do Monitor (licença de IA usada vs
+          C_ai; sala de espera gratuita vs teto). O empilhamento reservado×compartilhado
+          saiu na fatia 3 junto com os baldes: sobrou UMA área, e o teto agora vem da
+          própria série (`limit` = C_ai) em vez do `capacity_source` do pool. */}
       {(() => {
         const adm = data?.admission
-        if (!adm || (adm.reserved_series.length === 0 && adm.shared_series.length === 0)) return null
-        const byBucket = new Map<string, { bucket: string; reserved: number; shared: number }>()
-        for (const r of adm.reserved_series) {
-          byBucket.set(r.bucket, { bucket: r.bucket, reserved: r.used, shared: 0 })
-        }
-        for (const r of adm.shared_series) {
-          const row = byBucket.get(r.bucket) ?? { bucket: r.bucket, reserved: 0, shared: 0 }
-          row.shared = r.used
-          byBucket.set(r.bucket, row)
-        }
-        const admData = [...byBucket.values()].sort((a, b) => a.bucket.localeCompare(b.bucket))
-        const cLine = total?.capacity_source === 'pricing' ? total.capacity : null
+        if (!adm || adm.ai_series.length === 0) return null
+        const admData = [...adm.ai_series].sort((a, b) => a.bucket.localeCompare(b.bucket))
+        // Teto da própria série. Antes vinha de `total.capacity` quando a fonte era
+        // `pricing` — o `max_concurrent_sessions` misto. Agora é o denominador que o
+        // produtor gravou no mesmo minuto do pico.
+        const cLine = admData.length > 0 ? Math.max(...admData.map(r => r.limit)) : null
         const buf = adm.buffer_series
         const bufLimit = buf.length > 0 ? Math.max(...buf.map(b => b.limit)) : null
         return (
@@ -325,13 +325,11 @@ const CapacitySubTab: React.FC<{ data: OccData | null; loading: boolean }> = ({ 
                     <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
                     <Tooltip labelFormatter={fmtBucket} />
                     <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
-                    <Area type="monotone" dataKey="reserved" stackId="adm" name={t('pools.capacity.reservedArea')}
-                          stroke="#059669" fill="#059669" fillOpacity={0.45} />
-                    <Area type="monotone" dataKey="shared" stackId="adm" name={t('pools.capacity.sharedArea')}
-                          stroke="#1B4F8A" fill="#1B4F8A" fillOpacity={0.4} />
-                    {cLine !== null && (
+                    <Area type="monotone" dataKey="used" name={t('pools.capacity.aiArea')}
+                          stroke="#7C3AED" fill="#7C3AED" fillOpacity={0.4} />
+                    {cLine !== null && cLine > 0 && (
                       <ReferenceLine y={cLine} stroke="#DC2626" strokeDasharray="4 4" ifOverflow="extendDomain"
-                        label={{ value: t('pools.capacity.configuredLine'), fontSize: 11, fill: '#DC2626', position: 'insideTopRight' }} />
+                        label={{ value: t('pools.capacity.aiLine'), fontSize: 11, fill: '#DC2626', position: 'insideTopRight' }} />
                     )}
                   </ComposedChart>
                 </ResponsiveContainer>

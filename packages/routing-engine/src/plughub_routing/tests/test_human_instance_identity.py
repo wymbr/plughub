@@ -40,7 +40,16 @@ from plughub_routing.registry import (
 )
 
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+# Dual-read (2026-08-02) — ver a nota longa em `test_instance_semaphore.py`. Lendo só
+# `REDIS_URL`, os 11 testes deste arquivo pulavam dentro do container. São os testes de
+# IDENTIDADE da instância humana, os mesmos cujas duas asserções foram invertidas em
+# 2026-08-02 por afirmarem um contrato revogado — invertidas contra um arquivo que, no
+# container, nunca rodava.
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("PLUGHUB_REDIS_URL")
+    or "redis://localhost:6379"
+)
 
 POOL_A = "retencao_humano"
 POOL_B = "formfill_demo"

@@ -6,9 +6,17 @@
  * quota sync do pricing-api (item 1). Sem C / Redis fora → fail-open (sem pricing
  * configurado não há o que validar; o runtime segue protegido pela admissão).
  *
- * Consumidores:
- *   - routes/pools.ts      (item 3a — Σ session_reservation ≤ C)
- *   - routes/pool-slots.ts (item 3b — Σ declarada nos deploys ≤ C)
+ * Consumidor: `routes/pool-slots.ts` (item 3b — Σ declarada nos deploys ≤ C).
+ *
+ * O item 3a (`routes/pools.ts`: Σ `session_reservation` ≤ C) saiu na fatia 3
+ * (2026-08-02) junto com os baldes reservados. Sobrou o gate de PROVISIONAMENTO, que
+ * responde outra pergunta — "cabe no contrato o que está deployado?" — e continua sendo
+ * imposto com 422 no PUT de slot.
+ *
+ * Nota herdada, e que a fatia 3 torna mais aguda: `C` aqui é
+ * `max_concurrent_sessions`, que soma licença humana com licença de IA. Como teto de
+ * ADMISSÃO isso foi removido; como teto de PROVISIONAMENTO ele sobrevive e mistura as
+ * moedas do mesmo jeito. É o defeito C do arco de capacidade, ainda aberto.
  */
 
 import { prisma } from "../db"

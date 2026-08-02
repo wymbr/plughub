@@ -25,6 +25,12 @@ export default defineConfig({
                 ws: true,
                 rewrite: function (path) { return path.replace(/^\/agent-ws/, '/agent/ws'); },
             },
+            '^/analytics': {
+                // agent-assist customer history + transcript → analytics-api (prefix stripped)
+                target: 'http://localhost:3500',
+                changeOrigin: true,
+                rewrite: function (path) { return path.replace(/^\/analytics/, ''); },
+            },
             '^/v1/workflow': {
                 target: 'http://localhost:3800',
                 changeOrigin: true
@@ -51,6 +57,26 @@ export default defineConfig({
             },
             '^/v1/audit': {
                 target: 'http://localhost:3500',
+                changeOrigin: true
+            },
+            '^/v1/dialog': {
+                // dialog-api — DialogForm store (dialog primitive editor). Before generic /v1.
+                target: 'http://localhost:3760',
+                changeOrigin: true
+            },
+            '^/v1/channels': {
+                // channel-gateway — identity resolver REST (Cliente 360 cadastro manual). Before generic /v1.
+                target: 'http://localhost:8010',
+                changeOrigin: true
+            },
+            '^/v1/agendas': {
+                // scheduler-api — Agendas (Scheduler Fase 3). Before generic /v1 (→ agent-registry).
+                target: 'http://localhost:3650',
+                changeOrigin: true
+            },
+            '^/v1/(mailings|campaigns)': {
+                // mailing-api — Outbound (fatia 1b). Before generic /v1 (→ agent-registry).
+                target: 'http://localhost:3660',
                 changeOrigin: true
             },
             '^/v1': {

@@ -154,8 +154,8 @@ export interface Pool {
   purpose?: 'contact' | 'internal'
   /** Throttle opcional de backpressure downstream (webhook). */
   max_concurrent_sessions?: number | null
-  /** Fatia reservada de sessões simultâneas (admissão híbrida). */
-  session_reservation?: number | null
+  /* `session_reservation` removido na fatia 3 (2026-08-02) — era fatia de sessão do
+     pote misto `C_ai + C_human`, que a admissão deixou de aplicar. */
   /** Queue agent + max_wait_s (queue-attended-model). Null = tenant default. */
   queue_config?: QueueConfig | null
   /** Hooks de ciclo de vida (wrap-up/NPS/post). */
@@ -192,7 +192,7 @@ interface PoolGapFields {
   agent_kind?: 'human' | 'ai' | null
   webhook_skill_id?: string | null
   max_concurrent_sessions?: number | null
-  session_reservation?: number | null
+  /* `session_reservation` fora desde a fatia 3 — o registry não aceita mais o campo. */
   max_reply_time_ms?: number | null
   hooks?: PoolHooks | null
   supervisor_config?: PoolSupervisorConfig | null

@@ -623,6 +623,32 @@ class InstanceBootstrap:
            Ausência é honesta; zero não seria. `model: "bootstrap_placeholder"`
            torna a linha reconhecível — consumidor que precisa de `busy` deve
            tratá-la como DESCONHECIDA, nunca como 0.
+
+        **3 (2026-08-02) — e `available`/`total_instances` também são omitidos quando
+        o pool tem membro que este serviço NÃO gerencia.** O cuidado do item 2 foi
+        aplicado a três campos e escapou dos outros dois: `total_capacity` é somado
+        iterando `self._registered`, e **agentes humanos não são gerenciados pelo
+        Bootstrap** (invariante do `CLAUDE.md`). Para um pool humano o laço não achava
+        ninguém e publicava `total 0 / available 0` — não "desconhecido", e sim a
+        AFIRMAÇÃO de que não há capacidade num pool com humano pronto para atender.
+
+        Medido em 2026-08-02: `retencao_humano`, `retencao_humano-int` e
+        `aprovacao_deploy` com `READY 1` no Redis e `TOTAL 0 / AVAIL 0` na linha, com o
+        humano em `status: ready`, `max_concurrent: 3` — três pools que alcançam 3
+        vagas anunciando zero.
+
+        A janela explica por que demorou a aparecer: o routing-engine escreve a linha
+        boa (`resource_semaphore`, TTL 3600 s) nas transições, inclusive no login. Só
+        depois de UMA HORA sem transição naquele pool a linha expira e este NX a
+        substitui pela versão com zero. Pool humano ocioso por mais de uma hora passava
+        a se anunciar sem capacidade — e `pool_status_get` usa isso para decidir o que
+        oferecer ao CLIENTE.
+
+        Saída escolhida: **omitir**, não corrigir a fórmula. Derivar a capacidade do
+        Redis aqui faria deste serviço uma TERCEIRA implementação da mesma conta, e a
+        fatia 2 passou inteira reduzindo isso a uma. O consumidor já sabe tratar
+        ausência (F5b fez `pool_status_get` devolver `available: null` +
+        `status: "unknown"`).
         """
         for tenant_id, pool_map in self._pool_configs.items():
             for pool_id, pool_data in pool_map.items():
@@ -640,11 +666,13 @@ class InstanceBootstrap:
                     # até o reap, em vez de virar capacidade fantasma.
                     total_capacity = 0
                     used = 0
+                    managed_here: set[str] = set()
                     for _iid, _pl in self._registered.items():
                         if _pl.get("tenant_id") != tenant_id:
                             continue
                         if pool_id not in _pl.get("pools", []):
                             continue
+                        managed_here.add(_iid)
                         if _pl.get("status") == "paused":
                             # Paused instances are intentionally offline — skip.
                             continue
@@ -655,24 +683,52 @@ class InstanceBootstrap:
                             f"{tenant_id}:instance:{_iid}:sessions"
                         ) or 0)
 
+                    # Membro no Redis que este serviço NÃO gerencia (humano logado é o
+                    # caso normal, não a exceção) torna `total_capacity` uma soma
+                    # PARCIAL. Publicá-la seria afirmar capacidade zero para um pool que
+                    # tem agente pronto — ver item 3 do docstring.
+                    try:
+                        live_members = set(await self._redis.sunion(
+                            f"{tenant_id}:pool:{pool_id}:instances",
+                            f"{tenant_id}:pool:{pool_id}:busy_instances",
+                        ) or [])
+                    except Exception:
+                        live_members = set()
+                    unmanaged = {
+                        m.decode() if isinstance(m, bytes) else str(m)
+                        for m in live_members
+                    } - managed_here
+
                     available     = max(0, total_capacity - used)
                     queue_length  = int(await self._redis.zcard(queue_key) or 0)
 
                     snapshot = {
                         "pool_id":         pool_id,
                         "tenant_id":       tenant_id,
-                        "available":       available,
-                        # total_instances = total concurrent capacity (sum of max_concurrent
-                        # across all non-paused agents).  Mirrors routing-engine formula.
-                        # For AI pools (max_concurrent=1): equals agent count.
-                        # For human pools (max_concurrent>1): equals N_agents × max_concurrent.
-                        "total_instances": total_capacity,
-                        "queue_length":    queue_length,
+                        "queue_length":    queue_length,   # do POOL — este serviço sabe
                         "sla_target_ms":   pool_data.get("sla_target_ms", 480000),
                         "channel_types":   pool_data.get("channel_types", []),
                         "model":           "bootstrap_placeholder",
                         "updated_at":      datetime.now(timezone.utc).isoformat(),
                     }
+                    if unmanaged:
+                        # Soma parcial: omitir os dois campos JUNTOS (publicar só um
+                        # convidaria o leitor a derivar o outro). O motivo vai no
+                        # payload para que a tela possa dizer POR QUE não sabe.
+                        snapshot["capacity_unknown"] = "unmanaged_members"
+                        logger.debug(
+                            "pool snapshot %s/%s sem capacidade: %d membro(s) fora do "
+                            "bootstrap (humano logado é o caso normal) — omitindo "
+                            "available/total_instances em vez de publicar soma parcial",
+                            tenant_id, pool_id, len(unmanaged),
+                        )
+                    else:
+                        snapshot["available"] = available
+                        # total_instances = total concurrent capacity (sum of max_concurrent
+                        # across all non-paused agents).  Mirrors routing-engine formula.
+                        # For AI pools (max_concurrent=1): equals agent count.
+                        # For human pools (max_concurrent>1): equals N_agents × max_concurrent.
+                        snapshot["total_instances"] = total_capacity
                     # NX: só escreve se o snapshot não existir no Redis.
                     # O routing-engine sobrescreve com TTL 120s quando há routing events.
                     await self._redis.set(
@@ -1131,7 +1187,9 @@ def _pool_config_diverged(existing: dict, desired: dict) -> bool:
         # campos via UI/YAML PRECISAM reescrever o pool_config no Redis na hora —
         # senão o gate de login humano (agent_kind) e o despacho da fila
         # (dispatch_mode) leem valor velho até o reconcile periódico (5min).
-        "agent_kind", "dispatch_mode", "session_reservation",
+        # `session_reservation` saiu da lista na fatia 3 (2026-08-02): nenhum leitor
+        # depende mais dele, então uma mudança no campo não precisa forçar reescrita.
+        "agent_kind", "dispatch_mode",
         "max_concurrent_sessions", "queue_config", "webhook_skill_id",
         "hooks", "supervisor_config", "calendar_id", "context_visibility",
         "agent_groups", "llm_account_ids",

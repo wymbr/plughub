@@ -2,6 +2,348 @@
 
 ---
 
+## Capacidade e licenças — fatia 3: a admissão parou de somar as moedas ✅ (2026-08-02)
+
+**O defeito B, e por que ele era o único do arco que recusava contato real.** A admissão gateava
+TODA sessão contra `shared_limit = {t}:quota:max_concurrent_sessions − Σ session_reservation`. No
+demo, `max_concurrent_sessions = 370 = 360 IA + 10 humanos`: a soma de duas licenças que não se
+substituem. É a mesma falácia de aditividade que a F4 recusou um nível acima, onde **não existe**
+`available` escalar no topo — só `available_by_kind`. Duas consequências, e a segunda é a que morde:
+
+- **gate duplo** — a licença humana é por LOGIN, e `mcp-server/server.ts` já a cobra
+  (`instâncias human-* ≥ C_human` ⇒ `human_capacity_exhausted`);
+- **gate na unidade errada** — 10 licenças humanas rendem 30 sessões servíveis (`max_concurrent 3`)
+  e contribuíam 10 ao pote. O sistema respondia `shared_full` → outage com humano ocioso do outro
+  lado. Sub-admissão medida de ~5% no demo, e **cresce** quando o dimensionamento aperta.
+
+**Sobrou UM gate: `{t}:admission:kind:ai ≤ {t}:quota:capacity:ai_agent`.** Moeda correta, e hoje o
+único teto de IA — licenças materializadas na aquisição (fatia 4) seguem adiadas por medição
+(Q2 = zero pools usando reserva). A unidade ainda é SESSÃO onde o contrato é INSTÂNCIA, mas o
+bootstrap só cria instância de IA com `max_concurrent=1` (instância == sessão): defeito **latente**,
+registrado, não ativo. Quando as licenças existirem, este gate é **substituído** por elas, não
+somado — construir os dois juntos deixaria dois portões com intenção sobreposta, que é exatamente
+como se chegou aqui.
+
+**Removido ponta a ponta** (`admission.py`): `_shared_limit`, `_sum_reservations`, o cache de
+reservas, o SET `{t}:admission:shared`, os SETs `{t}:admission:reserved:{pool}`, o
+`{t}:admission:member:{sid}` e o `pool_registry` do construtor do `AdmissionController` (sua única
+razão de existir era somar reservas). `AdmissionDecision.cause` ficou com **um** valor: `quota`.
+
+**Dois ramos ficaram sem entrada possível e saíram junto — achado da remoção, não do desenho.**
+`_try_overflow_enqueue` acomodava na fila muda gratuita o contato de pool HUMANO recusado por `C`; o
+único jeito de um pool humano ser recusado era o pote misto, e a função já recusava IA de propósito
+("capacidade de IA libera em segundos"). Sem entrada, saiu — e com ela `force_mute` em
+`_persist_queued_contact`, `mute_queue.buffer_usage` e a causa `queue_full`, que ficou sem produtor.
+**A fila muda continua viva pelo outro motivo**: pool sem `queue_config`.
+
+**Instrumentação REAPONTADA, não mantida** (a alternativa era publicar um número plausível
+descrevendo um portão que não existe):
+
+| Antes | Depois |
+|---|---|
+| HASH `{t}:admission:shared_pools` | `{t}:admission:ai_pools` — o nome antigo é o que manteria o pote em circulação depois de ele sumir (mesma lição de `get_available_count`, F5) |
+| linha de série `__shared__` (vs `C − Σ reservas`) | **`__admitted_ai__`** (vs `C_ai`) |
+| linha de série `__reserved__` | removida — sem baldes reservados, sem referente |
+| linha de série `__buffer__` | mantida — a fila muda tem razão própria |
+| analytics `admission.{reserved,shared}_series` | `admission.ai_series` |
+| `summary.shared` / `summary.reserved` | `summary.ai.by_pool`; `headroom` passou a ser `C_ai − usado` |
+| `admission_scope: reserved\|shared` | `licensed\|unlicensed` (debita C_ai por sessão, ou é licenciado no login) |
+
+Consumidores atualizados junto: `reports_query.query_pools_occupancy`, `/v1/operational/pools`,
+`MonitorTab`, `contacts/PoolsPage` (donut de reservas e `MiniDonut` removidos), `AnalisePoolsPage`
+(área única em vez de empilhamento; teto vem da própria série, não do `capacity_source`), i18n
+en + pt-BR.
+
+> **Descontinuidade na série — marcar a data no eixo.** `ai_series` COMEÇA em 2026-08-02. Não é
+> renomeação: o numerador deixou de contar sessão humana e o denominador passou de `370 − Σ reservas`
+> para `C_ai = 360`. Emendá-la ao histórico de `__shared__` seria juntar duas medições diferentes na
+> mesma linha.
+
+**`max_concurrent_sessions` NÃO foi removida:** segue sendo o número de PROVISIONAMENTO que
+`lib/capacity.ts` cobra dos deploys (Σ declarada ≤ C). Mistura moedas ali também — mas isso é o
+defeito **C**, de outra fatia, e trocar o gate de provisionamento aqui seria construir a fatia 4 no
+meio da 3.
+
+**Verificação — e a prova de reprovação, que vale mais que o verde.** `test_admission_licensing.py`
+(11 testes). Rodado contra o `admission.py` de ANTES (via `docker cp`, sem rebuild): **`rc=1`, 4
+failed / 7 passed**, com a assinatura exata —
+`AdmissionDecision(admitted=False, cause='shared_full', limit=2, current=3)` recusando contato
+HUMANO com o pote esgotado. Caem `test_human_is_not_gated_by_the_mixed_pot`,
+`test_mixed_pot_alone_gates_nobody` (o simétrico: com `C_ai` ausente e o pote cheio, nem IA passava)
+e os dois da instrumentação, porque `ai_pools` não existe no código antigo. **Os controles positivos
+de IA PASSARAM** — é o que separa "o gate errado saiu" de "não há gate nenhum", e sem eles
+"humano é admitido" passaria sozinho num ambiente sem limite configurado.
+
+Duas condições que a prova exigiu, e ambas quase a invalidaram:
+- **`_controller()` aceita as duas assinaturas do construtor.** A fatia 3 tirou `pool_registry`
+  dali; sem a tolerância, o arquivo contra o código antigo dava `TypeError` na fixture — **11
+  errors, não 11 failed**. Erro de construção não diz nada sobre a REGRA: um teste que nem instancia
+  o código antigo é incapaz de demonstrar que reprova contra ele.
+- **`up -d --force-recreate` apaga o `pip install` ad-hoc** (dívida catalogada), e a primeira
+  tentativa morreu em `No module named pytest`. O caminho certo é `docker cp` do teste E do
+  `admission.py` antigo, sem rebuild — e o teste tem de ir PRIMEIRO, senão o container roda a
+  versão baked na imagem (foi o que produziu os 11 errors).
+
+Achado colateral: **a admissão não tinha teste algum** até aqui — o portão que recusava contato real
+em produção nunca teve rede. Smoke `infra/test/smoke_admission_licensing.sh` cobre o sistema vivo
+(4 portões, todos verdes em 2026-08-02); o primeiro compara duas leituras do Redis em volta de uma
+janela de tráfego — o que reprova é a chave morta ser **reescrita**, não existir: resíduo pré-deploy
+não expira sozinho e não é regressão.
+
+---
+
+## `bootstrap_placeholder` afirmava capacidade ZERO em pool humano ✅ (2026-08-02)
+
+**Medido**, ao rodar a linha de base já corrigida: `retencao_humano`, `retencao_humano-int` e
+`aprovacao_deploy` com `READY 1` no Redis e `TOTAL 0 / AVAIL 0` na linha publicada. O registro da
+instância fecha a dúvida — `"status": "ready"`, `"max_concurrent": 3`, nos três pools. **Três pools
+que alcançavam 3 vagas anunciando zero.**
+
+**Causa.** `instance_bootstrap._refresh_pool_snapshots` soma `total_capacity` iterando
+`self._registered`, e **agentes humanos não são gerenciados pelo Bootstrap** (invariante do
+`CLAUDE.md`). Para pool humano o laço não achava ninguém: `total 0`, `available = max(0, 0−0) = 0`.
+
+**O que torna isto uma recaída, e não um bug novo.** A fatia 2 já tinha decidido que este escritor
+"para de afirmar o que não sabe" e fez o bootstrap **omitir** `busy`/`busy_elsewhere`/`untagged` em
+vez de zerá-los. O cuidado foi aplicado a três campos e escapou dos outros dois — que são
+justamente os que `pool_status_get` usa para decidir **o que oferecer ao cliente**. A F5b consertou
+o *live fallback* daquele tool (`available: null` + `status: "unknown"`); esta linha não é fallback,
+é snapshot escrito, lido como autoridade.
+
+**Janela que explica a demora em aparecer:** o routing-engine escreve a linha boa
+(`resource_semaphore`, TTL 3600 s) nas transições, inclusive no login. Só depois de **uma hora** sem
+transição naquele pool ela expira e o NX do bootstrap a substitui pela versão com zero. Todas as
+medições anteriores foram feitas logo após tráfego.
+
+**Correção — omitir, não recalcular.** Derivar a capacidade do Redis aqui faria deste serviço uma
+TERCEIRA implementação da mesma fórmula, e a fatia 2 passou inteira reduzindo isso a uma. O
+bootstrap agora compara os membros vivos (`instances ∪ busy_instances`) com o que ele gerencia; se
+sobrar alguém, omite `available` **e** `total_instances` (juntos — publicar um convidaria a derivar
+o outro) e carimba `capacity_unknown: "unmanaged_members"`.
+
+**Consumidores, todos atrás:** `/v1/operational/pools` distingue ausência de zero
+(`available: null` → `op_status: "unknown"`; sem isso `undefined > 0` é `false` em JS e a linha
+viraria `"empty"` — o mesmo zero plausível, produzido do lado do leitor); `PoolsPage` mostra "—" com
+o motivo no tooltip (i18n en/pt-BR); `compute_tenant_capacity` **não** conta ausência como porta
+aberta em `pools_available` — subcontar na janela é preferível a oferecer ao cliente uma porta que
+ninguém verificou.
+
+**Verificação — e o primeiro run NÃO julgou.** Logo após o `up -d --force-recreate`, os três pools
+humanos apareceram em `resource_semaphore` com `available: 3`: o recreate provocou re-login e o
+routing-engine escreveu a linha boa (TTL 1 h), então o ramo do bootstrap nem rodou. *O defeito só
+existe na janela em que a linha do routing expirou e a do bootstrap assumiu — e é por isso que ele
+sobreviveu: qualquer verificação feita logo depois de tráfego encontra a linha certa.* Mesma família
+do `available_agents` e do `active_count`: o valor errado não aparece quando se está olhando.
+
+Forçando a janela (`DEL` do snapshot + heartbeat de 15 s), com **controle negativo no mesmo
+instante** — sem ele, "—" na tela inteira pareceria consistência em vez de regressão do caminho de IA:
+
+| | Snapshot | `/v1/operational/pools` |
+|---|---|---|
+| `retencao_humano` (humano) | sem `available`/`total_instances`, com `capacity_unknown: "unmanaged_members"` | `available=null · op_status=unknown · why=unmanaged_members` |
+| `nps_ia` (IA, controle) | `available: 20`, `total_instances: 20`, sem `capacity_unknown` | `available=20 · op_status=available · why=null` |
+
+**Deploy:** `build orchestrator-bridge agent-registry platform-ui`.
+
+---
+
+## O banco do agent-registry não é `plughub_demo` — Q1/Q2 do arco mediram um FÓSSIL ⚠️ (2026-08-02)
+
+**Como apareceu.** Conferindo se o `DROP COLUMN` da fatia 3 tinha pegado, duas fontes se
+contradisseram: o log do Prisma dizia *"Applying migration … All migrations have been successfully
+applied"* **e** *"Schema verified in sync"*, enquanto `psql -d plughub_demo` dizia que
+`pools.session_reservation` continuava lá. As duas afirmações eram verdadeiras — sobre bancos
+diferentes.
+
+**O fato.** O agent-registry roda em **`plughub_registry`**
+(`docker-compose.demo.yml:551-555`): ele executa `prisma db push --accept-data-loss` no boot, que
+dropa tabelas do `public` fora do seu Prisma, e foi isolado num banco próprio para não clobberar
+config-api/auth/calendar. `plughub_demo` guarda um `public.pools` **FÓSSIL** daquela época — mesmas
+colunas, dados congelados, nenhum serviço escrevendo. `plughub_demo` sequer tem `_prisma_migrations`.
+
+**O que isso contamina.** `infra/test/measure_capacity_licensing_baseline.sh` usava
+`PGDB="plughub_demo"`, então **Q1 e Q2 da linha de base de 2026-07-31 leram o fóssil** — e foi **Q2
+("zero pools usam `session_reservation`") que decidiu ADIAR a fatia 4**. Q1 tem uma segunda perna
+(leitura de `instance_bootstrap.py`) que sustenta a conclusão; Q2 não tem, e a coluna já foi dropada,
+então aquela medição **não volta**. Q3/Q4 vêm do Redis e estão intactas.
+
+*Evidência que sobrou para Q2, e ela aponta para o mesmo lado:* `infra/registry/*.yaml` não declara
+`session_reservation` em pool nenhum, e o próprio fóssil mostrava zero. **Mas o método estava errado
+mesmo com o resultado provavelmente certo** — e é o método que decide o próximo caso.
+
+**Por que é o pior modo de falha do repertório.** Não há vazio, não há erro, não há log. A tabela
+existe, as colunas existem, as linhas são plausíveis. Todo mecanismo de desconfiança deste arco
+depende de algo *faltar* ou *não bater*; aqui nada falta. Só a contradição entre duas fontes
+independentes expôs — e ela só aconteceu porque a verificação foi feita no DADO, e não no log.
+
+**Correções:** `PGDB=plughub_registry` no script + portão **Q-1**, que aborta se o banco não tiver
+`_prisma_migrations` — o único discriminador, já que a estrutura é idêntica nos dois. Snippet
+equivalente no `TODO.md` corrigido junto.
+
+**Resíduo aberto:** o fóssil continua em `plughub_demo` e vai enganar a próxima medição. Ou dropar,
+ou renomear para `pools__fossil_pre_registry_split` — o nome é a única defesa que sobrevive a quem
+não leu o registro. Ver `TODO.md` § "Medições que decidiram o escopo".
+
+---
+
+## `Pool.session_reservation` removida ponta a ponta ✅ (2026-08-02)
+
+Resíduo da fatia 3, fechado nos três passos previstos. O campo era a "fatia dedicada de sessões
+simultâneas" do pool na admissão híbrida — `shared = max_concurrent_sessions − Σ session_reservation`
+—, e **os dois termos dessa conta morreram** na fatia 3: o pote somava `C_ai + C_human`, e a reserva
+por pool fragmentava um recurso que é COMPARTILHADO (contra o invariante *"capacidade é do
+RECURSO"*). Medição Q2 de 2026-07-31: **zero pools** o usavam; nunca governou nada em produção.
+
+Ordem seguida — cada passo verificável sozinho, o DROP por último por ser o único irreversível:
+
+1. **Validação e escrita.** `_reservationViolation`/`_reservedTotal` (item 3a: `Σ ≤ C`), a aceitação
+   no POST e no PUT, e o endpoint `GET /v1/pools/capacity/conformance`.
+2. **Contratos.** Campo fora de `PoolRegistrationSchema` (`@plughub/schemas`), de `PoolConfig`
+   (routing-engine), dos tipos da UI, do `kafka_listener` e da allowlist `MANAGED` do
+   `instance_bootstrap`. Tirar do **schema** e não só do código é o ponto: enquanto o contrato
+   aceitasse o campo, UI e RegistrySyncer poderiam enviá-lo, e um valor aceito e persistido que não
+   governa nada é config inerte.
+3. **Migração** `20260802000000_drop_pool_session_reservation`.
+
+**Consumidor que a remoção arrastou — e é a parte que não era óbvia.** A aba Capacidade do Billing
+lia o endpoint removido para exibir `reservado`, `compartilhado`, a tabela "Pools com reserva" e um
+selo **conforme/não-conforme**. Manter isso seria pior que manter a coluna: *um selo de conformidade
+sobre uma regra que nenhum caminho de execução aplica é afirmação ao operador — plausível e falsa*.
+Sobrou `contratado × alocado × saldo`, que **é** imposto de fato (`deployViolation`, 422 no PUT de
+slot). Chaves i18n órfãs removidas nos dois locales.
+
+> **O defeito C ficou mais visível, não menor.** `C` = `max_concurrent_sessions` continua somando
+> licença humana com licença de IA — agora exclusivamente como teto de PROVISIONAMENTO
+> (`lib/capacity.ts`). Registrado no docstring do próprio arquivo, para que quem chegue nele pela
+> primeira vez não repita a conta. Fecha na fatia 4 (licenças materializadas).
+
+**Deploy:** `build --no-cache agent-registry` (migração é arquivo NOVO) + `build platform-ui schemas`.
+
+---
+
+## `pytest.skip` sai VERDE — 35 testes que nunca rodaram no container ✅ (2026-08-02)
+
+Achado ao conferir a contagem da suíte durante a validação da fatia 3: `171 passed, **35 skipped**`,
+onde o esperado era zero skip. Todos com a mesma razão — `Redis indisponível em
+redis://localhost:6379`:
+
+| Arquivo | Testes | O que cobre |
+|---|---|---|
+| `test_instance_semaphore.py` | **24** | `claim_instance`: concorrência, teto, e os 10 da tag de pool (fatia 1) |
+| `test_human_instance_identity.py` | 11 | identidade da instância humana (as 2 asserções invertidas em 2026-08-02) |
+
+Causa: os dois liam **só** `REDIS_URL` e caíam no default `localhost:6379`, que não resolve dentro do
+container — o serviço define `PLUGHUB_REDIS_URL`. **É a mesma causa catalogada em 2026-07-30** para
+os 9 testes do claim pull. Reapareceu porque aquela correção foi feita arquivo a arquivo e ninguém
+varreu os vizinhos.
+
+O peso do achado está em QUAL arquivo: `claim_instance` é o código de maior consequência da
+plataforma, e o `CLAUDE.md`/`TODO.md` mandam *"estender `test_instance_semaphore.py`, nunca
+contornar"* — sob a premissa de que ele estava rodando. **A rede não existia no ambiente onde o
+serviço roda.** As fatias 1 e 2 foram validadas com ela pulando em silêncio.
+
+Correção: dual-read nos dois arquivos + **`test_redis_url_resolution_guard.py`**, que varre os
+módulos de teste e reprova quem lê `REDIS_URL` sem ler `PLUGHUB_REDIS_URL`. A guarda **checa o
+denominador primeiro**: se nenhum módulo casar o padrão (por exemplo depois de um refactor que mova
+a resolução para um `conftest.py`), ela se declara inútil em vez de passar. *Correção pontual não
+fecha classe de defeito cujo sintoma é a ausência de sintoma — `skip` é verde, e ninguém lê a
+contagem de `skipped`.*
+
+**Resultado medido:** a suíte do `routing-engine` foi de `171 passed, 35 skipped` para
+**`207 passed, 0 skipped`** (171 + 35 + 1 da guarda). Os 35 rodaram e **passaram** — o código das
+fatias 1 e 2 se sustenta sob a suíte que se alegou tê-lo validado. Isso não prova que ela rodou
+durante aquelas validações (segue sem dado), mas elimina o risco material de vermelho latente no
+`claim_instance`. **Pendente:** a guarda cobre só este pacote; varrer as demais suítes pela
+CONTAGEM DE SKIPS dentro dos respectivos containers — ver `TODO.md` § "Varrer o `REDIS_URL` de
+leitura única nos DEMAIS pacotes".
+
+**Dívida aberta:** `Pool.session_reservation` (coluna Prisma, aceitação no PUT, validação
+`Σ ≤ C` do item 3a) continua existindo e não governa nada. O **input saiu da tela** — campo inerte
+oferecido ao tenant é pior que campo ausente — mas o drop da coluna é migração à parte. Ver
+`TODO.md` § "Drop de `Pool.session_reservation`".
+
+**Deploy:** `build routing-engine agent-registry analytics-api platform-ui` +
+`up -d --force-recreate` nos quatro. Arquivo de teste NOVO exige `build --no-cache`.
+
+---
+
+## Resíduos do arco de capacidade — portões que faltavam ✅ (2026-08-02)
+
+Três buracos deixados pelas fatias anteriores, todos da mesma família: peça correta sem quem a
+derrube.
+
+**(a) `smoke_occupancy_peak_flusher.sh` ganhou o Portão E.** O produtor de `kind_peaks` (o laço que
+lê `{t}:capacity:snapshot` e amostra `used`/`total_capacity` por tipo) era a **única** peça da F4c
+sem rede: `test_occupancy_series_capacity.py` cobre `_flush_occupancy` recebendo `kind_peaks` já
+pronto, e ninguém testava quem o preenche. Foi ali que o `__total__ 362` apareceu, denunciado só
+pelo dado real. O portão cobra o contrato que o próprio docstring publica — *minuto com `__total__`
+e sem `__capacity_*` ⇒ a capacidade do `__total__` não é confiável* — mais duas asserções que o
+Portão C não alcança (ele exclui todo `__%`): `peak ≤ provisioned` nas linhas por tipo, e
+`Σ __capacity_*.provisioned == __total__.provisioned`. Janela de arranque (1–2 min pós-boot,
+rollup ainda não publicado) é tolerada comparando com o `StartedAt` do container; **sem nenhuma
+linha `__total__` no período o portão sai INCONCLUSIVO**, nunca verde.
+
+**(b) F5 ganhou verificação de RUNTIME** (`infra/test/smoke_f5_available_agents_null.sh`). A
+afirmação da F5 é sobre o PAYLOAD que atravessa Kafka, e ela tem dois produtores:
+`parse_queued` (escreve `None` hardcoded) e `parse_queue_position` (**repassa** `payload.get(...)` —
+o perigoso: não filtra nada, então um "só para o gráfico voltar" no publisher entra em silêncio).
+O smoke PRODUZ a fila que vai julgar: provisiona um pool sintético com `queue_config` e zero
+instâncias, publica um `conversations.inbound` real e confere que as linhas em `queue_events` vêm
+com `available_agents NULL`. Sem linha, sai INCONCLUSIVO — era exatamente assim que o portão tinha
+ficado ao ser verificado sem tráfego, e "0 linhas com valor" não se distingue de "0 linhas". Um
+terceiro portão checa que `get_available_count` não voltou à imagem, casando `def` ou `.chamada(` e
+**não** o nome cru: ele sobrevive de propósito em dois comentários que explicam a remoção.
+
+**(a-bis) O Portão E não foi o que achou defeito — o Portão D foi, na primeira execução.**
+`watermark AUSENTE` disparou 3× no mesmo bucket, para `retencao_humano`,
+`retencao_humano-int` e `aprovacao_deploy`: exatamente os três pools de UM humano, todos ao mesmo
+tempo. Causa: **`_seed_bucket` semeava a foto da VIRADA, enquanto `seen_pools` cresce durante o minuto
+inteiro.** Pool que aparece no meio do minuto entrava na união sem watermark e o flusher publicava 0
+para ele — e "pool aparece no meio do minuto" não é caso de borda: é o que acontece em **todo login
+de humano**, em todos os pools dele de uma vez. Pior que o zero: o log tinha um álibi permanente
+("pool nasceu no meio do minuto"), o que é equivalente a não ter alarme.
+Correção: **seed por PRIMEIRA VISTA** — `new_pools = occ_by_pool − seen_pools` é semeado no tick em
+que aparece, antes de entrar na união. `record_pool_peak` é max-write, então semear duas vezes é
+no-op, e um pool que nasce OCUPADO passa a gravar a ocupação real em vez de 0. Efeito colateral que
+era o objetivo: com seed e união no mesmo gatilho, **`AUSENTE` fora do minuto de boot deixou de ter
+causa legítima** — o Portão D ficou estritamente mais forte, e o texto de diagnóstico dele foi
+reescrito para não oferecer mais a desculpa que acabou de morrer.
+
+**(b-bis) Dois erros MEUS nos próprios portões, ambos da família que o arco persegue.**
+(1) A pré-condição do `smoke_admission_licensing.sh` grepava `_shared_limit` cru e reprovou contra a
+imagem CORRETA — o nome sobrevive de propósito no docstring que explica a remoção. Passou a casar
+`def _shared_limit|self\._shared_limit\(`. É o mesmo cuidado que o Portão 3 do smoke da F5 já tomava,
+esquecido no vizinho. (2) O smoke da F5 cortava por `ingested_at`, coluna que `queue_events` **não
+tem**; o `CH()` engolia stderr, a saída vinha vazia e o script leu vazio como "0 linhas" →
+INCONCLUSIVO por defeito do próprio portão. Corrigido em três frentes: corte pelo tenant sintético
+(único por run, e portanto um filtro completo), `CH()` **propagando rc e imprimindo o erro** nos dois
+smokes, e uma checagem de schema (`system.columns`) antes dos portões. *Erro engolido virando zero
+plausível é exatamente o defeito que este arco combate; um harness que o comete não pode julgar
+ninguém.*
+
+**(b-ter) Terceira rodada de validação — dois portões afinados pelo que o dado mostrou.**
+(1) `hlen(ai_pools)=0 × scard(kind:ai)=2` não é defeito: são sessões admitidas ANTES do deploy, que
+entraram no SET `kind:ai` (que não mudou de nome) com a atribuição escrita no HASH antigo. O
+reconciler **não** as conserta de propósito — sua higiene remove entrada de HASH sem lastro no SET,
+nunca inventa a de um membro do SET, porque inventar exigiria adivinhar o pool. A cura é o
+fechamento das sessões, finita. O portão passou a julgar pela **direção**: `hlen < scard` é herança
+(nota), `hlen > scard` é atribuição sem lastro (reprova). (2) A sonda do Monitor usava `curl`, que a
+imagem do agent-registry não tem — INCONCLUSIVO por ferramenta ausente. Virou cadeia
+curl → wget → `node -e` (garantido num serviço Node), e o portão passou a exigir `"items"` no payload
+em vez de aceitar qualquer resposta não-vazia.
+
+**(c) A seção "Confirmar em produção o mecanismo do `available > total`" foi ENCERRADA no `TODO.md`.**
+Ela mandava caçar dois `WARNING` (`active_count … foi a NEGATIVO` e `available … passaria de
+total_instances`) que **não existem mais** — a fatia 2 removeu `active_count` ponta a ponta e levou
+junto o contador que ia a negativo e o teto que o segurava. Seguir a instrução daria "zero
+ocorrências", o verde vazio. A classe fechou por **construção**: os dois escritores do snapshot
+calculam `available = max(0, T − u)` com `total_instances = T`, então a desigualdade é aritmética e
+não invariante defendida por um `if`. O que sobra é risco de um TERCEIRO escritor, e a seção agora
+traz duas queries sobre o dado (Redis) usando o campo `model` como discriminador — que existe
+exatamente para isso.
+
+---
+
 ## Capacidade compartilhada — F4a (rollup por recurso distinto) + F5b ✅ (2026-08-02)
 
 **O defeito C.** `Σ available(pool)` conta o mesmo recurso uma vez por pool: um humano

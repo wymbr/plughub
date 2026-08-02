@@ -31,7 +31,22 @@ from plughub_routing.registry import (
 )
 
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+# Dual-read (2026-08-02). Lendo só `REDIS_URL`, este arquivo PULAVA INTEIRO dentro do
+# container — o serviço define `PLUGHUB_REDIS_URL`, e o default `localhost:6379` não
+# resolve lá. São **24 testes** do semáforo de instância, incluindo os de concorrência,
+# de teto e os 10 da tag de pool (fatia 1): a rede do `claim_instance`, que é o código
+# de maior consequência da plataforma, nunca chegou a rodar no ambiente onde o serviço
+# roda. Medido em 2026-08-02: `171 passed, 35 skipped`, e os 35 eram estes 24 mais os
+# 11 de `test_human_instance_identity.py`.
+#
+# É a MESMA causa catalogada em 2026-07-30 para os 9 testes do claim pull. Ela reapareceu
+# porque a correção de lá foi feita arquivo a arquivo, e ninguém varreu os vizinhos —
+# `pytest.skip` sai VERDE, então o modo de falha não tem sintoma.
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("PLUGHUB_REDIS_URL")
+    or "redis://localhost:6379"
+)
 
 
 @pytest.fixture

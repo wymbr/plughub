@@ -697,6 +697,34 @@ negativo: total impossível é a única evidência de caminho de vaga fora dos g
 a fonte mudou de `active_count` (derivava para cima) para `used_here`, e agora o método mudou —
 marcar a data no eixo se a série virar base de dimensionamento.
 
+## Admissão de sessão — UM gate, na moeda certa
+
+**A admissão NUNCA soma licenças de tipos diferentes** (fatia 3, 2026-08-02). Até aqui ela gateava
+toda sessão contra `max_concurrent_sessions` (= `C_ai + C_human`, 370 no demo) — a mesma falácia de
+aditividade que o rollup de capacidade recusa no topo, agora do lado que **recusa contato real**:
+`shared_full` → outage com humano ocioso, porque 10 licenças humanas rendem 30 sessões servíveis e
+contribuíam 10 ao pote. Sobrou um único portão:
+
+```
+{t}:admission:kind:ai  ≤  {t}:quota:capacity:ai_agent      # sessão em pool agent_kind='ai'
+```
+
+- **Humano NÃO é gateado por sessão** — a licença humana é por LOGIN, cobrada no `agent_login`
+  (`instâncias human-* ≥ C_human` ⇒ `human_capacity_exhausted`). Gatear de novo por sessão é gate
+  duplo e na unidade errada.
+- **Rejeição só na PORTA** (`cause="quota"`, único valor de `AdmissionDecision.cause`); migração de
+  sessão ATIVA para IA saturada é fail-open, mantendo a atribuição de origem.
+- **`max_concurrent_sessions` sobrevive como número de PROVISIONAMENTO** (`lib/capacity.ts`:
+  Σ declarada nos deploys ≤ C), nunca como teto de admissão. Mistura moedas ali também — é o
+  defeito **C**, de outra fatia.
+- **Não reviver:** SET `{t}:admission:shared`, `{t}:admission:reserved:{pool}`,
+  `{t}:admission:member:{sid}`, `session_reservation` como fatia de sessão. Reserva por pool
+  fragmenta um recurso que é compartilhado, contra o invariante *"capacidade é do RECURSO"*.
+- Instrumentação (item 7a/7b): HASH `{t}:admission:ai_pools` (atribuição por pool de quem debita
+  `C_ai`) → linhas de série `__admitted_ai__` e `__buffer__`. `__shared__`/`__reserved__` saíram.
+- **Fila muda** (`{t}:queue:unadmitted`) existe por **pool sem `queue_config`** — não por `C`
+  esgotado. O overflow por admissão saiu junto com o pote.
+
 Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `system_availability_check`. When contact is queued, Routing Engine publishes `queue.position_updated` to Kafka.
 
 → See [`docs/product/shared-capacity-pool-as-tag-design.md`](docs/product/shared-capacity-pool-as-tag-design.md)

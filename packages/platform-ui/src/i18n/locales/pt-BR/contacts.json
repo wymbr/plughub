@@ -385,20 +385,22 @@
         "engine_unreachable": "capacidade indisponível"
       }
     },
+    "capacityUnknown": {
+      "unmanaged_members": "Capacidade desconhecida: este pool tem agentes que o bootstrap não gerencia (humano logado é o caso normal). Ele omite o número em vez de publicar uma soma parcial — um evento de roteamento atualiza a linha."
+    },
     "admission": {
-      "contracted":      "Contratado (C)",
+      "aiLicense":       "Licença de IA (C_ai)",
       "headroom":        "folga",
       "inService":       "Em atendimento",
       "inQueue":         "Em fila",
       "att":             "atend.",
       "mute":            "grátis",
       "freeBuffer":      "Sala de espera gratuita",
-      "sharedDonut":     "Capacidade compartilhada",
-      "reservedDonut":   "Pools reservados",
-      "bufferDonut":     "Sala de espera gratuita",
-      "free":            "disponível",
-      "sectionReserved": "Pools reservados (fatia própria de C)",
-      "sectionShared":   "Capacidade compartilhada (sem teto por pool)",
+      "aiDonut":           "Licença de IA em uso",
+      "bufferDonut":       "Sala de espera gratuita",
+      "free":              "disponível",
+      "sectionLicensed":   "Pools de IA (cada sessão debita C_ai)",
+      "sectionUnlicensed": "Pools humanos (licenciados no login, não por sessão)",
       "cols": {
         "inService": "Atend.",
         "queue":     "Fila (at/grátis)",

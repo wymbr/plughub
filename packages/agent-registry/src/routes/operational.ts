@@ -125,8 +125,9 @@ async function _tenantCapacity(
 // ── Item 7a (capacity-governance) — agregador de admissão ─────────────────────
 // Lê o estado dos buckets de admissão (Fase B + gates por tipo + fila de
 // sistema) direto do Redis — read-only, sem tocar o hot path do routing.
-// Per-pool: reserva usada / atribuição do shared (HASH shared_pools) /
-// fila muda×atendida / admissível. Tenant: C, shared usado/limite, buffer.
+// Per-pool: atribuição da licença de IA (HASH ai_pools) / fila muda×atendida /
+// admissível. Tenant: C_ai usado/limite, buffer. Fatia 3 (2026-08-02): reserva por
+// pool e pote compartilhado saíram — eram baldes de SESSÃO de um C que soma moedas.
 
 async function _intOrNull(raw: string | null): Promise<number | null> {
   if (!raw) return null
@@ -161,50 +162,46 @@ async function _maxQueueTotal(tenantId: string): Promise<number> {
   return value
 }
 
+/**
+ * Estado da admissão. **Fatia 3 (2026-08-02): sobrou UM balde.**
+ *
+ * Saíram `sharedUsed`/`sharedLimit`/`sharedByPool` (o pote misto
+ * `max_concurrent_sessions = C_ai + C_human`, que gateava sessão HUMANA contra uma
+ * soma de moedas não-fungíveis) e `reservedUsed` (fatia de sessão por pool, do mesmo
+ * pote, sem nenhum pool usando). O que resta é o teto de IA, na moeda certa.
+ *
+ * `contracted` continua sendo lido, mas NÃO é mais teto de admissão: é o número de
+ * PROVISIONAMENTO que `lib/capacity.ts` cobra dos deploys (Σ declarada ≤ C). Fica
+ * fora do bloco de admissão do `summary` por isso.
+ */
 interface AdmissionState {
-  contracted:    number | null            // C ({t}:quota:max_concurrent_sessions)
-  aiCap:         number | null            // C_ai
-  aiUsed:        number
-  sharedUsed:    number                   // SCARD shared
-  sharedLimit:   number | null            // C − Σ reservas
-  sharedByPool:  Record<string, number>   // HASH shared_pools group-by (exato)
-  reservedUsed:  Record<string, number>   // SCARD reserved:{pool}
+  contracted:    number | null            // C ({t}:quota:max_concurrent_sessions) — provisionamento
+  aiCap:         number | null            // C_ai — ÚNICO teto de admissão
+  aiUsed:        number                   // SCARD kind:ai
+  aiByPool:      Record<string, number>   // HASH ai_pools group-by (exato)
   bufferUsed:    number                   // SCARD unadmitted
   bufferLimit:   number
   unadmitted:    Set<string>              // p/ split fila muda×atendida
 }
 
-async function _admissionState(
-  tenantId: string,
-  reservations: Record<string, number>,   // pool_id → session_reservation
-): Promise<AdmissionState> {
+async function _admissionState(tenantId: string): Promise<AdmissionState> {
   const redis = getRedis()
-  const [cRaw, aiRaw, sharedUsed, aiUsed, bufferMembers, sharedHash] = await Promise.all([
+  const [cRaw, aiRaw, aiUsed, bufferMembers, aiHash] = await Promise.all([
     redis.get(`${tenantId}:quota:max_concurrent_sessions`),
     redis.get(`${tenantId}:quota:capacity:ai_agent`),
-    redis.scard(`${tenantId}:admission:shared`),
     redis.scard(`${tenantId}:admission:kind:ai`),
     redis.smembers(`${tenantId}:queue:unadmitted`),
-    redis.hgetall(`${tenantId}:admission:shared_pools`),
+    redis.hgetall(`${tenantId}:admission:ai_pools`),
   ])
-  const reservedUsed: Record<string, number> = {}
-  await Promise.all(Object.keys(reservations).map(async (poolId) => {
-    reservedUsed[poolId] = await redis.scard(`${tenantId}:admission:reserved:${poolId}`)
-  }))
-  const sharedByPool: Record<string, number> = {}
-  for (const poolId of Object.values(sharedHash)) {
-    sharedByPool[poolId] = (sharedByPool[poolId] ?? 0) + 1
+  const aiByPool: Record<string, number> = {}
+  for (const poolId of Object.values(aiHash)) {
+    aiByPool[poolId] = (aiByPool[poolId] ?? 0) + 1
   }
-  const contracted = await _intOrNull(cRaw)
-  const sumReservations = Object.values(reservations).reduce((s, v) => s + v, 0)
   return {
-    contracted,
+    contracted:  await _intOrNull(cRaw),
     aiCap:       await _intOrNull(aiRaw),
     aiUsed,
-    sharedUsed,
-    sharedLimit: contracted === null ? null : Math.max(0, contracted - sumReservations),
-    sharedByPool,
-    reservedUsed,
+    aiByPool,
     bufferUsed:  bufferMembers.length,
     bufferLimit: await _maxQueueTotal(tenantId),
     unadmitted:  new Set(bufferMembers),
@@ -260,14 +257,9 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       Promise.all(pools.map(p => _liveCount(tenantId, p.pool_id))),
     ])
 
-    // 2b. Item 7a — estado da admissão (reservado×shared×fila gratuita) +
+    // 2b. Item 7a — estado da admissão (licença de IA × fila gratuita) +
     //     ativos e fila muda por pool.
-    const reservations: Record<string, number> = {}
-    for (const p of pools) {
-      const r = (p as unknown as { session_reservation: number | null }).session_reservation
-      if (r && r > 0) reservations[p.pool_id] = r
-    }
-    const adm = await _admissionState(tenantId, reservations)
+    const adm = await _admissionState(tenantId)
     const cap = await _tenantCapacity(tenantId, accessible)
     const redis = getRedis()
     // Capacidade compartilhada, fatia 2 — `active_sessions` vinha de
@@ -296,13 +288,26 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
 
       const snapshotAgeMs = hasSnap ? Date.now() - Date.parse(snap!.updated_at) : null
 
-      // Use snapshot values if available, else live counts
-      const available   = hasSnap ? snap!.available    : live.instances
+      // Use snapshot values if available, else live counts.
+      //
+      // `available` pode vir AUSENTE (2026-08-02): o bootstrap omite capacidade quando
+      // o pool tem membro que ele não gerencia — humano logado é o caso normal, e antes
+      // disso ele publicava `0`, afirmando que um pool com agente pronto não tinha
+      // vaga. `undefined` aqui é DESCONHECIDO, e a diferença importa: `undefined > 0`
+      // é `false` em JS, então tratar por omissão devolveria "empty" — o mesmo zero
+      // plausível, só que produzido do lado do leitor.
+      //
+      // O live fallback (`live.instances`) é PERTENCIMENTO, não vaga — o mesmo modelo
+      // que a F5 removeu do `available_agents`. Mantido só onde já estava (sem
+      // snapshot nenhum) e marcado, para não crescer.
+      const snapAvail   = hasSnap && typeof snap!.available === "number" ? snap!.available : null
+      const available   = hasSnap ? snapAvail : live.instances
       const queueLength = hasSnap ? snap!.queue_length : live.queue
 
       const status =
-        available > 0   ? "available"
-        : queueLength > 0 ? "queued"
+        available === null  ? "unknown"
+        : available > 0     ? "available"
+        : queueLength > 0   ? "queued"
         : "empty"
 
       // Estimated wait: each position waits ~sla*0.7 (p70 handle time heuristic)
@@ -311,28 +316,19 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       const estimatedWaitMs = queueLength > 0 ? Math.round(queueLength * avgHandleMs) : null
 
       // ── Item 7a — regime de admissão e disponibilidade admissível ──────────
+      // Fatia 3: o regime não é mais "reservado × compartilhado" (baldes de sessão
+      // do pote misto) e sim **licenciado × não-licenciado por sessão**. Pool de IA
+      // debita `C_ai`; pool humano não debita nada aqui — sua licença é por LOGIN, e
+      // o `agent_login` já a cobra. `admissible: null` num pool humano é ausência
+      // honesta ("não há teto de sessão a informar"), não infinito otimista.
       const px          = p as unknown as {
-        session_reservation: number | null; agent_kind: string | null; queue_config: unknown
+        agent_kind: string | null; queue_config: unknown
       }
-      const reservation = px.session_reservation && px.session_reservation > 0
-        ? px.session_reservation : null
-      const scope       = reservation ? "reserved" : "shared"
-      const admitted    = reservation
-        ? (adm.reservedUsed[p.pool_id] ?? 0)
-        : (adm.sharedByPool[p.pool_id] ?? 0)
-      // Admissível: fatia própria (reservado) ou shared restante; pools IA
-      // também limitados por C_ai restante. null = sem teto configurado.
-      let admissible: number | null
-      if (reservation) {
-        admissible = Math.max(0, reservation - admitted)
-      } else {
-        admissible = adm.sharedLimit === null
-          ? null : Math.max(0, adm.sharedLimit - adm.sharedUsed)
-      }
-      if (px.agent_kind === "ai" && adm.aiCap !== null) {
-        const aiLeft = Math.max(0, adm.aiCap - adm.aiUsed)
-        admissible = admissible === null ? aiLeft : Math.min(admissible, aiLeft)
-      }
+      const licensed  = px.agent_kind === "ai"
+      const admitted  = licensed ? (adm.aiByPool[p.pool_id] ?? 0) : 0
+      const admissible: number | null = licensed && adm.aiCap !== null
+        ? Math.max(0, adm.aiCap - adm.aiUsed)
+        : null
       const queueMute = muteCounts[i] ?? 0
       const queueTier = px.queue_config ? "attended"
         : px.agent_kind === "human" ? "system" : "none"
@@ -355,9 +351,8 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
         snapshot_updated_at: hasSnap ? snap!.updated_at : null,
 
         // Item 7a — admissão (físico × admissível, regime, fila por tier)
-        admission_scope:  scope,                            // "reserved" | "shared"
-        reservation,                                        // fatia própria (ou null)
-        admitted,                                           // sessões debitando C neste pool
+        admission_scope:  licensed ? "licensed" : "unlicensed",  // debita C_ai por sessão?
+        admitted,                                           // sessões debitando C_ai neste pool
         active_sessions:  activeCounts[i] ?? null,          // em atendimento NESTE pool (null = desconhecido)
         // Vagas do MESMO recurso consumidas por pools IRMÃOS. Sem isto a linha fica
         // aritmeticamente inexplicável (`available < total − active_sessions`) e o
@@ -365,11 +360,15 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
         busy_elsewhere:   snap && typeof snap.busy_elsewhere === "number" ? snap.busy_elsewhere : null,
         total_capacity:   snap && typeof snap.total_instances === "number" ? snap.total_instances : null,
         capacity_model:   snap?.model ?? null,              // resource_semaphore | bootstrap_placeholder
+        // POR QUE a capacidade é desconhecida, quando é. Hoje só `unmanaged_members`
+        // (pool com humano logado numa janela em que o bootstrap escreveu a linha).
+        // Sem isto a tela mostraria "—" sem conseguir dizer se é falha ou desenho.
+        capacity_unknown: (snap as { capacity_unknown?: string } | null)?.capacity_unknown ?? null,
         queue_mute:       queueMute,                        // espera gratuita (fora de C)
         queue_attended:   Math.max(0, queueLength - queueMute),
         queue_tier:       queueTier,                        // attended | system | none
-        admissible,                                         // o que a admissão deixa entrar
-        admissible_shared: !reservation,                    // ⊕ — número compartilhado
+        admissible,                                         // o que a admissão deixa entrar (null = sem teto)
+        admissible_shared: licensed,                        // ⊕ — número compartilhado (teto de tenant, não do pool)
 
         // Source flags
         has_snapshot:  hasSnap,
@@ -385,33 +384,27 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
     const inServiceTotal = activeCounts.reduce<number>((s, v) => s + (v ?? 0), 0)
     const queueTotal     = result.reduce((s, r) => s + r.queue_length, 0)
     const queueMuteTotal = result.reduce((s, r) => s + r.queue_mute, 0)
-    const reservedList   = Object.entries(reservations).map(([poolId, r]) => ({
-      pool_id: poolId, reservation: r, used: adm.reservedUsed[poolId] ?? 0,
-    }))
     // Segurança Fase D — admitted_total derivado dos items ESCOPADOS (não do
-    // SCARD shared tenant-global). Equivale ao antigo quando irrestrito
-    // (Σ items.admitted = sharedUsed + Σ reserved.used) e escopa corretamente.
+    // SCARD tenant-global). Escopa corretamente e equivale ao global quando irrestrito.
     const admittedTotal  = result.reduce((s, r) => s + r.admitted, 0)
-    // by_pool nomeia pools → restringe ao domínio (o resto do shared é agregado do tenant).
-    const sharedByPoolScoped = accessibleSet
-      ? Object.fromEntries(Object.entries(adm.sharedByPool).filter(([pid]) => accessibleSet.has(pid)))
-      : adm.sharedByPool
+    // by_pool nomeia pools → restringe ao domínio (o resto é agregado do tenant).
+    const aiByPoolScoped = accessibleSet
+      ? Object.fromEntries(Object.entries(adm.aiByPool).filter(([pid]) => accessibleSet.has(pid)))
+      : adm.aiByPool
     const summary = {
+      // `contracted` é PROVISIONAMENTO (Σ declarada nos deploys ≤ C — lib/capacity.ts),
+      // NÃO teto de admissão. Deixou de ser denominador de `admitted_total` na fatia 3:
+      // aquele par respondia "quantas sessões cabem no contrato", pergunta que exigia
+      // somar licença humana com licença de IA. O teto que existe está em `ai.cap`.
       contracted:      adm.contracted,                       // C (null = sem pricing)
-      admitted_total:  admittedTotal,
-      headroom:        adm.contracted === null ? null : Math.max(0, adm.contracted - admittedTotal),
+      admitted_total:  admittedTotal,                        // sessões debitando C_ai (escopado)
+      headroom:        adm.aiCap === null ? null : Math.max(0, adm.aiCap - adm.aiUsed),
       in_service:      inServiceTotal,
       queue_total:     queueTotal,
       queue_attended:  Math.max(0, queueTotal - queueMuteTotal),
       queue_mute:      queueMuteTotal,
-      shared: {
-        used:    adm.sharedUsed,
-        limit:   adm.sharedLimit,
-        by_pool: sharedByPoolScoped,                         // fatias exatas (HASH), escopadas ao domínio
-      },
-      reserved: reservedList,
       buffer:   { used: adm.bufferUsed, limit: adm.bufferLimit },
-      ai:       { cap: adm.aiCap, used: adm.aiUsed },
+      ai:       { cap: adm.aiCap, used: adm.aiUsed, by_pool: aiByPoolScoped },
       // F4b — capacidade DEDUPLICADA por tipo de licença. Substitui `Σ available`
       // na UI. `null` + motivo quando indisponível: o consumidor mostra ausência,
       // nunca cai de volta na soma (a soma É o defeito, não o fallback dele).

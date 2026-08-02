@@ -1,0 +1,32 @@
+-- Drop `pools.session_reservation` (adicionada em 20260603000000_phase_b_session_reservation).
+--
+-- A coluna guardava a "fatia dedicada de sessões simultâneas" do pool, na admissão
+-- híbrida da Fase B:
+--
+--     shared = {t}:quota:max_concurrent_sessions − Σ session_reservation
+--
+-- A fatia 3 do arco de capacidade (2026-08-02) removeu esse modelo por inteiro, e os
+-- DOIS termos da conta caíram junto:
+--
+--   · `max_concurrent_sessions` era **360 IA + 10 humanos = 370** — a soma de duas
+--     licenças que não se substituem. Gatear sessão contra ela recusava contato humano
+--     real (`shared_full` → outage) com humano ocioso, e ainda era gate DUPLO: a
+--     licença humana é por LOGIN, cobrada no `agent_login`;
+--   · a reserva por pool fragmentava um recurso que é COMPARTILHADO — um agente atende
+--     contato de qualquer pool em que esteja logado —, contra o invariante do CLAUDE.md
+--     *"capacidade é do RECURSO e não fragmenta por pool"*.
+--
+-- Medição de 2026-07-31 (Q2): **zero pools** usavam o campo. Ele nunca chegou a
+-- governar nada em produção.
+--
+-- Ordem seguida até aqui (cada passo verificável sozinho, o DROP por último por ser o
+-- único irreversível): validação `Σ ≤ C` + aceitação no PUT + endpoint
+-- `/v1/pools/capacity/conformance` → campo fora de `PoolRegistrationSchema`,
+-- `PoolConfig` (routing-engine) e dos tipos da UI → este DROP.
+--
+-- Se piso/teto por pool voltar, volta como LICENÇA MATERIALIZADA (fatia 4, ADR
+-- `adr-agent-licensing-and-pool-isolation.md` D4/D10) — não como fatia de sessão.
+-- Esta coluna não deve ser ressuscitada.
+
+ALTER TABLE "pools"
+  DROP COLUMN IF EXISTS "session_reservation";

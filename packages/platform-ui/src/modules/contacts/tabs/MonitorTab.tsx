@@ -452,8 +452,12 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
 
   // Item 7a (capacity-governance): tiles de contrato e sala de espera gratuita —
   // mesmos agregados do Monitor/Pools (summary do /v1/operational/pools).
+  // Fatia 3 (2026-08-02): o tile de contrato passou a mostrar a LICENÇA DE IA
+  // (`ai.cap`), não o `contracted` misto — este último soma licença humana com
+  // licença de IA e por isso não é teto de nada.
   const [adm, setAdm] = useState<{
     contracted: number | null; admitted_total: number; headroom: number | null
+    ai: { cap: number | null; used: number }
     buffer: { used: number; limit: number }
     capacity: TenantCapacity | null
     capacity_unavailable: string | null
@@ -520,10 +524,10 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
         {renderCapacityKpis(adm, t)}
         <KpiCard label={t('monitor.kpi.queue')}     value={totalQueue}     color="#d97706" />
         {/* Item 7a — contrato e sala de espera gratuita */}
-        {adm && adm.contracted !== null && (
+        {adm && adm.ai.cap !== null && (
           <KpiCard
-            label={`${t('pools.admission.contracted')} · ${t('pools.admission.headroom')} ${adm.headroom ?? '—'}`}
-            value={`${adm.admitted_total}/${adm.contracted}` as unknown as number}
+            label={`${t('pools.admission.aiLicense')} · ${t('pools.admission.headroom')} ${adm.headroom ?? '—'}`}
+            value={`${adm.admitted_total}/${adm.ai.cap}` as unknown as number}
             color={adm.headroom !== null && adm.headroom <= 0 ? '#DC2626' : '#1B4F8A'} />
         )}
         {adm && (

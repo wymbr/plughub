@@ -164,9 +164,8 @@ async def resolve_mute_exit(
     return True
 
 
-async def buffer_usage(redis_client, tenant_id: str) -> int:
-    """Ocupação atual do buffer grátis (SCARD do unadmitted)."""
-    try:
-        return int(await redis_client.scard(unadmitted_key(tenant_id)))
-    except Exception:
-        return 0
+# `buffer_usage` REMOVIDA (fatia 3, 2026-08-02). Único chamador era
+# `main._try_overflow_enqueue`, que checava se o buffer grátis tinha vaga antes de
+# acomodar o overflow da admissão — overflow que ficou sem entrada possível quando
+# sessão humana deixou de ser gateada por `C`. O teto do buffer (`max_queue_total`)
+# continua vivo: é o denominador da linha `__buffer__` da série e do tile do Monitor.

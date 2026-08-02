@@ -332,14 +332,24 @@ export const PoolRegistrationSchema = z.object({
    */
   // .nullable(): PUT com null LIMPA o campo (antes só SQL — gap recorrente).
   max_concurrent_sessions: z.number().int().positive().nullable().optional(),
-  /**
-   * Fase B (queue-attended-model) — admissão híbrida de sessões.
-   * Fatia dedicada de sessões simultâneas deste pool (teto E garantia),
-   * subtraída do max_session_total da instalação. Ausente = o pool consome
-   * o bucket compartilhado (total − Σ reservas). Billing é só sobre o total.
-   * Invariante: Σ session_reservation ≤ max_session_total.
+  /*
+   * `session_reservation` REMOVIDO (fatia 3, 2026-08-02).
+   *
+   * Era a fatia dedicada de sessões simultâneas do pool, subtraída do
+   * `max_session_total` da instalação — e os dois termos morreram: o bucket
+   * compartilhado era o pote misto (`C_ai + C_human`), que recusava sessão humana
+   * contra uma soma de moedas não-fungíveis, e a admissão parou de lê-lo.
+   *
+   * Retirado do SCHEMA (não só do código) de propósito: enquanto o contrato aceitasse
+   * o campo, a UI e o RegistrySyncer continuariam podendo enviá-lo, e um valor aceito
+   * e persistido que não governa nada é config inerte — o defeito que a invariante
+   * "todo campo de config tem superfície na tela" existe para impedir, de trás para
+   * frente. Reserva por pool também fragmenta um recurso que é COMPARTILHADO, contra
+   * o invariante "capacidade é do RECURSO".
+   *
+   * Piso/teto por pool volta, se voltar, como LICENÇA MATERIALIZADA (fatia 4 / ADR
+   * `adr-agent-licensing-and-pool-isolation.md`), não como fatia de sessão.
    */
-  session_reservation:    z.number().int().positive().nullable().optional(),
   /**
    * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
    * Opcional — sem limite por mensagem quando ausente.

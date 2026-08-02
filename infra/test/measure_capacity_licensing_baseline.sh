@@ -4,12 +4,21 @@
 # Mede o estado ATUAL de capacidade e licenciamento antes do arco
 # "Capacidade, licenças e isolamento entre pools" (TODO.md).
 #
-# Responde quatro perguntas que decidem escopo:
-#   Q1  algum pool de IA roda com > 1 sessão por instância?   → defeito de unidade ATIVO ou latente
-#   Q2  alguém usa session_reservation?                        → piso/teto é conserto ou FEATURE
-#   Q3  existe quota contratada (C) configurada?               → defeito B (teto misto) vivo ou dormente
-#   Q4  o balde compartilhado de admissão contém sessão HUMANA? → defeito B-2, evidência direta
-# E tira o retrato "antes" do defeito A (snapshot × verdade do semáforo).
+# Perguntas que decidem escopo (estado em 2026-08-02, pós-fatia 3):
+#   Q-1 estou no banco do agent-registry, ou num fóssil?       → PORTÃO, aborta se errado
+#   Q1  algum pool de IA roda com > 1 sessão por instância?    → defeito de unidade ATIVO ou latente
+#   Q3  existe quota contratada (C) configurada?               → defeito C (teto misto) no provisionamento
+#   Q4  estado do balde de IA + resíduo das chaves mortas      → regressão da fatia 3
+# E tira o retrato do defeito A (snapshot × verdade do semáforo).
+#
+# **Q2 ("alguém usa `session_reservation`?") SAIU** — respondida por remoção: a coluna
+# foi dropada na fatia 3. Duas lições ficaram registradas no `TODO.md`
+# § "Medições que decidiram o escopo", e valem para qualquer sonda futura:
+#   · a medição ORIGINAL de Q1/Q2 saiu do banco ERRADO (`plughub_demo`, que tem um
+#     `pools` fóssil) — daí o portão Q-1, que agora abre este arquivo;
+#   · a descoberta da tabela era ancorada em `session_reservation`, o próprio objeto
+#     sob investigação. Sonda que só funciona enquanto o defeito existe para de
+#     funcionar exatamente quando se quer confirmar que ele foi embora.
 #
 # NÃO usa `set -e`: um comando que falha deve IMPRIMIR e seguir. Script que morre
 # mudo no meio de uma medição produz ausência de dado indistinguível de "não há dado".
@@ -19,7 +28,19 @@
 COMPOSE="docker compose -f docker-compose.demo.yml"
 TENANT="${1:-demo}"
 PGUSER="plughub"
-PGDB="plughub_demo"
+# ⚠️ CORRIGIDO 2026-08-02 — era `plughub_demo`, e essa era a resposta ERRADA.
+#
+# O agent-registry roda ISOLADO em `plughub_registry` (docker-compose.demo.yml:551-555:
+# ele executava `prisma db push --accept-data-loss`, que dropa tabelas do `public` fora
+# do seu Prisma; apontá-lo a um DB dedicado impediu o clobber). `plughub_demo` guarda um
+# `public.pools` **FÓSSIL**, de antes dessa separação — mesma estrutura, dados
+# congelados, nenhum serviço escrevendo.
+#
+# Q1 e Q2 desta linha de base foram medidos contra o fóssil em 2026-07-31, e foi Q2
+# ("zero pools usam `session_reservation`") que decidiu ADIAR a fatia 4. A tabela existe,
+# tem as colunas certas e devolve linhas plausíveis — o modo de falha perfeito: nada
+# fica vazio, nada erra, e o número está desatualizado.
+PGDB="plughub_registry"
 
 # Extrai campo numérico de JSON. `json.dumps` do Python usa separador ': ' (COM
 # espaço) — um grep '"campo":[0-9]*' casa o rótulo e captura ZERO dígitos, devolvendo
@@ -41,6 +62,25 @@ psqlq() { $COMPOSE exec -T postgres psql -U "$PGUSER" -d "$PGDB" -tA -c "$1" 2>&
 
 printf 'Baseline de capacidade e licenciamento — tenant=%s — %s\n' \
        "$TENANT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# ── Q-1 — estou olhando o banco do agent-registry, ou um fóssil? ──────────────
+# Este portão existe porque a resposta errada NÃO se anuncia: `plughub_demo` também
+# tem um `public.pools`, com as mesmas colunas, devolvendo linhas plausíveis e
+# desatualizadas. O discriminador é `_prisma_migrations` — só o banco que o Prisma do
+# agent-registry administra a possui. Vem ANTES de tudo: uma linha de base tirada do
+# banco errado não é imprecisa, é sobre outra coisa.
+MIGR=$(psqlq "SELECT to_regclass('public._prisma_migrations') IS NOT NULL;")
+if [ "$MIGR" != "t" ]; then
+  hr
+  printf '!! ABORTADO: %s não é o banco do agent-registry (sem _prisma_migrations).\n' "$PGDB"
+  printf '   O DATABASE_URL autoritativo:\n'
+  printf '     %s exec -T agent-registry sh -lc '"'"'echo "$DATABASE_URL"'"'"'\n' "$COMPOSE"
+  printf '   Ajuste PGDB no topo deste arquivo. NÃO leia os números abaixo de outro banco:\n'
+  printf '   `plughub_demo.public.pools` é um FÓSSIL de antes da separação (compose:551).\n'
+  hr
+  exit 2
+fi
+note "banco conferido: $PGDB tem _prisma_migrations (é o do agent-registry)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Q0 — sanidade do prefixo. Medir o tenant errado devolve tudo vazio, e vazio
@@ -65,15 +105,30 @@ elif [ -z "$REDIS_TENANTS" ]; then
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-head1 "Q1/Q2 — configuração dos pools (unidade e uso de reserva)"
+head1 "Q1 — configuração dos pools (unidade de licença)"
 
-# A tabela do Prisma pode estar mapeada; descobrir em vez de adivinhar.
-POOL_TABLE=$(psqlq "SELECT table_schema||'.'||table_name
-                      FROM information_schema.columns
-                     WHERE column_name = 'session_reservation'
+# ⚠️ A DESCOBERTA DA TABELA ERA ANCORADA NA COLUNA QUE ESTE ARCO REMOVEU.
+# Até 2026-08-02 este bloco localizava a tabela por `column_name='session_reservation'`
+# — e a fatia 3 dropou a coluna, então o script passou a sair INCONCLUSIVO. A âncora
+# tinha de ser algo ESTÁVEL, não o próprio objeto sob investigação: uma sonda que só
+# funciona enquanto o defeito existe deixa de funcionar exatamente quando você precisa
+# confirmar que ele foi embora. Agora ancora em `pool_id` + `tenant_id`.
+#
+# **Q2 SAIU do script.** A pergunta era "alguém usa `session_reservation`?", e o campo
+# não existe mais (migração `20260802000000_drop_pool_session_reservation`). Mantê-la
+# devolveria "0 pools" para sempre — resposta que parece medição e é tautologia. O
+# histórico dela, e o fato de a medição original ter sido tirada do BANCO ERRADO, está
+# no `TODO.md` § "Medições que decidiram o escopo".
+POOL_TABLE=$(psqlq "SELECT c.table_schema||'.'||c.table_name
+                      FROM information_schema.columns c
+                     WHERE c.column_name = 'pool_id'
+                       AND EXISTS (SELECT 1 FROM information_schema.columns c2
+                                    WHERE c2.table_schema = c.table_schema
+                                      AND c2.table_name  = c.table_name
+                                      AND c2.column_name = 'agent_kind')
                      LIMIT 1;")
 if [ -z "$POOL_TABLE" ] || printf '%s' "$POOL_TABLE" | grep -qi 'error'; then
-  note "INCONCLUSIVO: não localizei a tabela de pools por 'session_reservation'."
+  note "INCONCLUSIVO: não localizei a tabela de pools (pool_id + agent_kind)."
   note "Saída bruta: ${POOL_TABLE:-<vazio>}"
   note "Fallback: consultar o agent-registry — curl -s localhost:3300/v1/pools -H \"x-tenant-id: $TENANT\""
 else
@@ -83,18 +138,12 @@ else
   note "e a API as expõe como 'deployed_max_concurrent_sessions' (pools.ts:213-217). Não são a mesma"
   note "grandeza; só a segunda responde a pergunta de unidade de licença."
 
-  printf '\n%-28s %-8s %-12s %-10s\n' POOL KIND WH_THROTTLE RESERVA
+  printf '\n%-28s %-8s %-12s\n' POOL KIND WH_THROTTLE
   psqlq "SELECT COALESCE(pool_id,'?'), COALESCE(agent_kind,'-'),
-                COALESCE(max_concurrent_sessions::text,'-'),
-                COALESCE(session_reservation::text,'-')
+                COALESCE(max_concurrent_sessions::text,'-')
            FROM $POOL_TABLE WHERE tenant_id = '$TENANT'
           ORDER BY agent_kind NULLS LAST, pool_id;" \
-    | awk -F'|' '{printf "%-28s %-8s %-12s %-10s\n", $1, $2, $3, $4}'
-
-  RESERVAS=$(psqlq "SELECT count(*) FROM $POOL_TABLE
-                     WHERE tenant_id = '$TENANT' AND COALESCE(session_reservation,0) > 0;")
-  note "Q2: pools com session_reservation > 0 → ${RESERVAS:-?}"
-  note "    0 = piso/teto é FEATURE (compete por mérito de produto, não por urgência de defeito)."
+    | awk -F'|' '{printf "%-28s %-8s %-12s\n", $1, $2, $3}'
 
   # Q1 — sessões por instância de IA: slot 'current', config_json.
   SLOT_TABLE=$(psqlq "SELECT c.table_schema||'.'||c.table_name
@@ -147,24 +196,33 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-head1 "Q4 — baldes de admissão: o compartilhado contém sessão humana?"
+head1 "Q4 — admissão: um balde só, e as chaves mortas não voltaram"
 
-SHARED_N=$(redis SCARD "$TENANT:admission:shared")
-note "SCARD $TENANT:admission:shared = ${SHARED_N:-?}"
-redis --scan --pattern "$TENANT:admission:reserved:*" | sort | while read -r k; do
-  [ -z "$k" ] && continue
-  printf '  %-52s SCARD=%s\n' "$k" "$(redis SCARD "$k")"
-done
+# A pergunta original era "o balde compartilhado contém sessão HUMANA?" — evidência
+# direta do defeito B-2. Ela foi RESPONDIDA POR REMOÇÃO na fatia 3 (2026-08-02): o pote
+# misto deixou de existir e humano não é mais gateado por sessão. O que este bloco mede
+# agora é o estado do único balde que sobrou, mais um portão de regressão sobre as
+# chaves mortas — porque a evidência de que o modelo antigo voltou seria justamente
+# alguém REESCREVENDO `admission:shared`.
 KIND_AI=$(redis SCARD "$TENANT:admission:kind:ai")
-note "SCARD $TENANT:admission:kind:ai = ${KIND_AI:-?}"
-if [ -n "$SHARED_N" ] && [ "$SHARED_N" -gt 0 ] 2>/dev/null; then
-  note "shared(${SHARED_N}) − kind:ai(${KIND_AI:-0}) ≈ sessões NÃO-IA no balde compartilhado."
-  note "Qualquer valor > 0 é evidência direta de B-2 (sessão humana gateada por licença)."
+C_AI=$(redis GET "$TENANT:quota:capacity:ai_agent")
+note "SCARD $TENANT:admission:kind:ai = ${KIND_AI:-?}   (teto C_ai = ${C_AI:-<sem quota>})"
+note "Atribuição por pool (HASH ai_pools) — todo membro do SET deve ter uma linha aqui:"
+redis HGETALL "$TENANT:admission:ai_pools" | paste - - 2>/dev/null | sed 's/^/    /'
+
+# Chaves mortas: presença é HISTÓRIA (não expiram sozinhas), reescrita é REGRESSÃO.
+# O script não sabe distinguir as duas numa foto única — quem distingue é o
+# `smoke_admission_licensing.sh`, que compara duas leituras em volta de tráfego.
+SHARED_N=$(redis SCARD "$TENANT:admission:shared")
+RESV=$(redis --scan --pattern "$TENANT:admission:reserved:*" | grep -c . 2>/dev/null)
+if [ "${SHARED_N:-0}" != "0" ] || [ "${RESV:-0}" != "0" ]; then
+  note "!! resíduo do pote misto: shared=${SHARED_N:-0} membro(s), ${RESV:-0} balde(s) reserved."
+  note "   Sem escritor desde a fatia 3, e SETs não têm TTL — some quando as sessões"
+  note "   antigas fecharem, ou por limpeza manual. Para saber se é história ou"
+  note "   REGRESSÃO: bash infra/test/smoke_admission_licensing.sh (Portão A)."
 else
-  note "INCONCLUSIVO para B-2: balde vazio agora. Repetir com atendimento humano ativo."
+  note "nenhum resíduo do pote misto."
 fi
-note "Atribuição por pool no shared:"
-redis HGETALL "$TENANT:admission:shared_pools" | paste - - 2>/dev/null | sed 's/^/    /'
 
 # ─────────────────────────────────────────────────────────────────────────────
 head1 "Defeito A — snapshot × verdade do semáforo"

@@ -115,19 +115,21 @@ function useUsage(tenantId: string) {
 
 // ── Capacity (capacity-governance item 4) ──────────────────────────────────────
 // Contratado (pricing /v1/pricing/capacity) × alocado (provisionada do occupancy)
-// × saldo, + reservas/shared/conformidade (registry /v1/pools/capacity/conformance).
+// × saldo.
+//
+// **Fatia 3 (2026-08-02):** as reservas por pool e o `shared` saíram daqui junto com o
+// endpoint `/v1/pools/capacity/conformance`. Aqueles números descreviam o pote misto
+// (`C = C_ai + C_human`) fatiado por pool — modelo que a admissão deixou de aplicar. Um
+// selo "conforme/não-conforme" sobre uma regra que nenhum caminho de execução impõe é
+// afirmação ao operador, plausível e falsa. A conformidade que sobra é `contratado ×
+// alocado × saldo`, e essa É imposta: `deployViolation` devolve 422 no PUT de slot.
 
 interface CapacityByType { resource_type: string; base: number; reserve_active: number; total: number }
-interface Conformance {
-  contracted: number | null; reserved_total: number; shared: number | null; conform: boolean
-  pools: Array<{ pool_id: string; session_reservation: number | null }>
-}
 
 function useCapacityGov(tenantId: string) {
   const [byType,      setByType]      = useState<CapacityByType[]>([])
   const [contracted,  setContracted]  = useState<number>(0)
   const [allocated,   setAllocated]   = useState<number | null>(null)
-  const [conformance, setConformance] = useState<Conformance | null>(null)
   const [loading,     setLoading]     = useState(true)
 
   useEffect(() => {
@@ -139,17 +141,14 @@ function useCapacityGov(tenantId: string) {
 
     void Promise.allSettled([
       fetch(`/v1/pricing/capacity/${enc}`).then(r => r.ok ? r.json() : null),
-      fetch('/v1/pools/capacity/conformance', { headers: { 'x-tenant-id': tenantId } })
-        .then(r => r.ok ? r.json() : null),
       apiFetch(`/reports/pools/occupancy?tenant_id=${enc}&from_dt=${since}&bucket=hour`)
         .then(r => r.ok ? r.json() : null),
-    ]).then(([cap, conf, occ]) => {
+    ]).then(([cap, occ]) => {
       if (cancelled) return
       if (cap.status === 'fulfilled' && cap.value) {
         setByType((cap.value.by_type ?? []) as CapacityByType[])
         setContracted(Number(cap.value.agent_capacity_total ?? 0))
       }
-      if (conf.status === 'fulfilled' && conf.value) setConformance(conf.value as Conformance)
       if (occ.status === 'fulfilled' && occ.value) {
         // Alocado agora = provisionada do último bucket do total (fallback: agregado do período)
         const d = occ.value.data ?? {}
@@ -163,19 +162,18 @@ function useCapacityGov(tenantId: string) {
     return () => { cancelled = true }
   }, [tenantId])
 
-  return { byType, contracted, allocated, conformance, loading }
+  return { byType, contracted, allocated, loading }
 }
 
 function CapacityTab({ tenantId }: { tenantId: string }) {
   const { t } = useTranslation('billing')
-  const { byType, contracted, allocated, conformance, loading } = useCapacityGov(tenantId)
+  const { byType, contracted, allocated, loading } = useCapacityGov(tenantId)
 
   if (loading) return <div className="flex justify-center items-center py-16 flex-1"><Spinner /></div>
 
   const hasContract   = contracted > 0
   const balance       = hasContract && allocated !== null ? contracted - allocated : null
   const overAllocated = balance !== null && balance < 0
-  const nonConform    = conformance !== null && !conformance.conform
 
   const kpi = (label: string, value: React.ReactNode, hint: string, color?: string) => (
     <div className="rounded-lg border border-lightGray bg-white p-4">
@@ -192,18 +190,9 @@ function CapacityTab({ tenantId }: { tenantId: string }) {
         <p className="text-xs text-gray mt-0.5">{t('capacity.subtitle')}</p>
       </div>
 
-      {/* Alertas de não-conformidade */}
-      {nonConform && (
-        <div className="flex items-start gap-2 bg-red/10 border border-red/30 rounded-lg px-4 py-3 text-xs text-red">
-          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
-          <span>
-            {t('capacity.alertNonConform')}{' '}
-            <span className="font-mono">
-              (C={conformance?.contracted ?? '—'} · Σ={conformance?.reserved_total} · shared={conformance?.shared})
-            </span>
-          </span>
-        </div>
-      )}
+      {/* Alerta de não-conformidade. O de RESERVAS saiu na fatia 3: comparava
+          `Σ session_reservation` com um `C` misto, e nenhum caminho de execução
+          aplicava a regra. Sobrou o de sobre-alocação, que `deployViolation` impõe. */}
       {overAllocated && (
         <div className="flex items-start gap-2 bg-warning-light border border-warning/40 rounded-lg px-4 py-3 text-xs text-warning-text">
           <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
@@ -221,14 +210,13 @@ function CapacityTab({ tenantId }: { tenantId: string }) {
       )}
 
       {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {/* Fatia 3: os KPIs `reservado` e `compartilhado` saíram — eram as duas metades
+          do pote misto fatiado por pool. Restam os três que descrevem provisionamento. */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         {kpi(t('capacity.contracted'), hasContract ? contracted : '—', t('capacity.contractedHint'))}
         {kpi(t('capacity.allocated'), allocated ?? '—', t('capacity.allocatedHint'))}
         {kpi(t('capacity.balance'), balance ?? '—', t('capacity.balanceHint'),
              balance === null ? undefined : balance < 0 ? '#DC2626' : '#059669')}
-        {kpi(t('capacity.reserved'), conformance?.reserved_total ?? '—', '')}
-        {kpi(t('capacity.shared'), conformance?.shared ?? '—', '',
-             nonConform ? '#DC2626' : undefined)}
       </div>
 
       {/* Por tipo de recurso */}
@@ -262,32 +250,7 @@ function CapacityTab({ tenantId }: { tenantId: string }) {
         </section>
       )}
 
-      {/* Pools com reserva */}
-      <section>
-        <h4 className="text-sm font-semibold text-dark mb-2">{t('capacity.reservedPools')}</h4>
-        {(conformance?.pools ?? []).length === 0 ? (
-          <p className="text-xs text-gray/60">{t('capacity.noReservations')}</p>
-        ) : (
-          <div className="rounded-lg border border-lightGray overflow-hidden">
-            <table className="w-full text-xs">
-              <thead className="bg-surface-muted">
-                <tr>
-                  <th className="px-4 py-2.5 text-left font-semibold text-gray">{t('capacity.poolCols.pool')}</th>
-                  <th className="px-4 py-2.5 text-right font-semibold text-gray">{t('capacity.poolCols.reservation')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(conformance?.pools ?? []).map((p, i) => (
-                  <tr key={p.pool_id} className={i % 2 === 1 ? 'bg-tableAlt' : 'bg-white'}>
-                    <td className="px-4 py-2 text-dark">{p.pool_id}</td>
-                    <td className="px-4 py-2 text-right font-mono text-dark">{p.session_reservation}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      {/* A seção "Pools com reserva" saiu na fatia 3 junto com os baldes reservados. */}
     </div>
   )
 }

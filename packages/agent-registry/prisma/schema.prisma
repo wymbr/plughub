@@ -49,9 +49,11 @@ model Pool {
   // Set only on the PARENT pool; the mirror itself always carries false.
   internal_queue_enabled Boolean @default(false)
   // (removido 2026-07-29) acw_gate — ver migration 20260729000000_drop_pool_acw_gate.
-  // Fase B (queue-attended-model): dedicated session slots (cap+guarantee) carved
-  // from the installation total. NULL = pool draws from the shared bucket.
-  session_reservation     Int?
+  // (removido 2026-08-02) session_reservation — ver migration
+  // 20260802000000_drop_pool_session_reservation. Era a fatia dedicada de sessões do
+  // pool, subtraída do pote `max_concurrent_sessions` (= C_ai + C_human). A fatia 3
+  // removeu o pote da admissão; a reserva também fragmentava um recurso que é
+  // COMPARTILHADO, contra o invariante "capacidade é do RECURSO".
   max_reply_time_ms      Int?    // Maximum reply time per customer message (ms). Optional.
   routing_expression     Json?
   evaluation_template_id String?

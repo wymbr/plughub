@@ -15,16 +15,10 @@
     "allocatedHint": "slots deployados × concorrência, agora",
     "balance": "Saldo (C − alocado)",
     "balanceHint": "contratado e ainda não utilizado",
-    "reserved": "Reservado (Σ pools)",
-    "shared": "Shared (C − reservado)",
-    "alertNonConform": "Reservas de pool excedem a capacidade contratada — o shared ficaria negativo. Reduza reservas ou aumente o contrato.",
-    "alertOverAllocated": "Capacidade provisionada excede o contrato. A admissão corta no contratado; o deploy excedente é custo ocioso.",
+    "alertOverAllocated": "Capacidade provisionada excede o contrato. O deploy excedente é custo ocioso.",
     "noContract": "Sem capacidade contratada configurada (resources do pricing vazios) — nenhum teto se aplica.",
     "byType": "Por tipo de recurso",
-    "cols": { "type": "Recurso", "base": "Base", "reserve": "Reserva ativa", "total": "Total" },
-    "reservedPools": "Pools com reserva",
-    "poolCols": { "pool": "Pool", "reservation": "Reserva" },
-    "noReservations": "Nenhuma reserva de pool configurada."
+    "cols": { "type": "Recurso", "base": "Base", "reserve": "Reserva ativa", "total": "Total" }
   },
   "invoice": {
     "title":        "Fatura",

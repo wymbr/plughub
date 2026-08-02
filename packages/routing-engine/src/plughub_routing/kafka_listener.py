@@ -202,8 +202,8 @@ class RegistryEventHandler:
                 # Arc 19: webhook pool endpoint skill and capacity ceiling
                 webhook_skill_id         = pool_data.get("webhook_skill_id") or None,
                 max_concurrent_sessions  = pool_data.get("max_concurrent_sessions") or None,
-                # Fase B: hybrid session admission reservation
-                session_reservation      = pool_data.get("session_reservation") or None,
+                # `session_reservation` não é mais lido (fatia 3): o campo saiu do
+                # `PoolConfig` e a admissão deixou de tê-lo como entrada.
                 # Fase E: queue treatment passthrough (max_wait_s enforcement)
                 queue_config             = pool_data.get("queue_config") or None,
                 # Capacity-governance item 2: tipagem do pool (gate por tipo)
@@ -651,10 +651,10 @@ class LifecycleEventHandler:
                     unadm = await self._instances._redis.sismember(
                         mute_queue.unadmitted_key(tenant_id), contact.session_id
                     )
+                    # `session_reservation` saiu do parâmetro na fatia 3 junto com os
+                    # baldes reservados — o único teto consultável agora é o de IA.
                     if unadm and not await self._admission.has_headroom(
-                        tenant_id, pool_id,
-                        session_reservation = pool.session_reservation,
-                        agent_kind          = pool.agent_kind,
+                        tenant_id, pool_id, agent_kind=pool.agent_kind,
                     ):
                         continue
                 except Exception:

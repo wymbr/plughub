@@ -385,20 +385,22 @@
         "engine_unreachable": "capacity unavailable"
       }
     },
+    "capacityUnknown": {
+      "unmanaged_members": "Capacity unknown: this pool has agents the bootstrap does not manage (a logged-in human is the normal case). It omits the number instead of publishing a partial sum — a routing event refreshes it."
+    },
     "admission": {
-      "contracted":      "Contracted (C)",
+      "aiLicense":       "AI licence (C_ai)",
       "headroom":        "headroom",
       "inService":       "In service",
       "inQueue":         "In queue",
       "att":             "att.",
       "mute":            "free",
       "freeBuffer":      "Free waiting room",
-      "sharedDonut":     "Shared capacity",
-      "reservedDonut":   "Reserved pools",
-      "bufferDonut":     "Free waiting room",
-      "free":            "available",
-      "sectionReserved": "Reserved pools (own slice of C)",
-      "sectionShared":   "Shared capacity (no per-pool ceiling)",
+      "aiDonut":           "AI licence in use",
+      "bufferDonut":       "Free waiting room",
+      "free":              "available",
+      "sectionLicensed":   "AI pools (each session debits C_ai)",
+      "sectionUnlicensed": "Human pools (licensed at login, not per session)",
       "cols": {
         "inService": "In service",
         "queue":     "Queue (att/free)",

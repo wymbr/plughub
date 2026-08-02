@@ -60,7 +60,7 @@ export const getPool = async (poolId: string, tenantId: string): Promise<Pool> =
 }
 
 // Extract a human-readable error from a non-OK pool response. The registry
-// returns { error, details? } (e.g. 422 when Σ session_reservation > contracted C).
+// returns { error, details? } (e.g. 422 when Σ declarada nos deploys > contracted C).
 const poolError = async (response: Response, fallback: string): Promise<Error> => {
   const body = await response.json().catch(() => ({})) as { error?: string }
   return new Error(body.error || fallback)

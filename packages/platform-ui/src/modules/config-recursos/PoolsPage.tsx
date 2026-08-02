@@ -484,7 +484,6 @@ const PoolsPage: React.FC = () => {
     agent_kind:        '' as '' | 'human' | 'ai',
     dispatch_mode:     'push' as 'push' | 'pull',
     purpose:           'contact' as 'contact' | 'internal',
-    session_reservation:         null as number | null,
     channel_types:     [] as string[],
     // Arc 19 — INTERNAL workflow_trigger correlation key (not the public URL).
     webhook_skill_id:  '' as string,
@@ -646,7 +645,7 @@ const PoolsPage: React.FC = () => {
   const handleOpenCreate = () => {
     setEditingPool(null)
     setFormData({
-      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', purpose: 'contact', session_reservation: null,
+      pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', purpose: 'contact',
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
@@ -668,7 +667,6 @@ const PoolsPage: React.FC = () => {
       agent_kind:        pool.agent_kind ?? '',
       dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
       purpose:           (pool.purpose as 'contact' | 'internal') ?? 'contact',
-      session_reservation:         pool.session_reservation ?? null,
       channel_types:     pool.channel_types,
       webhook_skill_id:  pool.webhook_skill_id ?? '',
       sla_target_ms:     pool.sla_target_ms,
@@ -792,13 +790,11 @@ const PoolsPage: React.FC = () => {
           ? { webhook_skill_id: formData.webhook_skill_id.trim() } : {}),
         sla_target_ms:     formData.sla_target_ms,
         // Type & capacity. agent_kind: send only when explicitly set ('' leaves the
-        // registry backfill to infer). session_reservation: number to set, null to clear.
+        // registry backfill to infer). `session_reservation` deixou de ser enviado na
+        // fatia 3 — o campo não governa mais nada (ver TODO § drop da coluna).
         ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
         dispatch_mode:     formData.dispatch_mode,
         purpose:           formData.purpose,
-        ...(formData.session_reservation !== null
-          ? { session_reservation: formData.session_reservation }
-          : (editingPool?.session_reservation != null ? { session_reservation: null } : {})),
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
         // calendar_id: null limpa no registry (undefined era removido pelo
         // JSON.stringify e o valor antigo persistia).
@@ -870,7 +866,7 @@ const PoolsPage: React.FC = () => {
       await loadPools()
       handleClose()
     } catch (e) {
-      // Surface the registry's error (e.g. 422 Σ session_reservation > contracted C).
+      // Surface the registry's error (e.g. 422 do gate de provisionamento no deploy).
       setError(e instanceof Error && e.message ? e.message : tCommon('failedToSave'))
     } finally {
       setIsSaving(false)
@@ -1099,7 +1095,12 @@ const PoolsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Type & capacity (agent_kind + session_reservation) ───────────── */}
+          {/* ── Type & capacity (agent_kind) ─────────────────────────────────
+              O input de `session_reservation` SAIU na fatia 3 (2026-08-02): a
+              admissão parou de ler o campo (era fatia de SESSÃO de um pote que somava
+              licença humana com licença de IA), então oferecê-lo na tela seria pedir
+              ao tenant que configurasse algo inerte — pior que não ter o campo. A
+              coluna e o endpoint continuam existindo; o drop está no TODO. */}
           <div>
             <p className="text-sm font-semibold text-dark mb-2">{t('pools.typeCapacity.label')}</p>
             <div className="flex gap-3">
@@ -1115,21 +1116,8 @@ const PoolsPage: React.FC = () => {
                   ]}
                 />
               </div>
-              <div className="w-40">
-                <Input
-                  label={t('pools.typeCapacity.sessionReservation')}
-                  type="number"
-                  placeholder={t('pools.typeCapacity.reservationPlaceholder')}
-                  value={formData.session_reservation ?? ''}
-                  onChange={e => {
-                    const v = e.target.value
-                    setFormData({ ...formData, session_reservation: v === '' ? null : parseInt(v) })
-                  }}
-                />
-              </div>
             </div>
             <p className="text-xs text-muted-light mt-0.5">{t('pools.typeCapacity.agentKindHint')}</p>
-            <p className="text-xs text-muted-light mt-0.5">{t('pools.typeCapacity.sessionReservationHint')}</p>
             {formData.agent_kind === 'ai' && formData.queue_skill_id.trim() && (
               <div className="mt-2 bg-warning-light border border-warning/30 text-warning-text px-3 py-1.5 rounded text-xs">
                 {t('pools.typeCapacity.queueNeedsHuman')}

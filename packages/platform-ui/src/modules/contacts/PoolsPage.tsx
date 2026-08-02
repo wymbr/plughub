@@ -33,15 +33,22 @@ interface PoolOp {
   pool_status:         string
   agent_kind:          string | null
   op_status:           'available' | 'queued' | 'empty' | 'unknown'
-  available:           number
+  /** `null` = DESCONHECIDO. O bootstrap omite capacidade em pool com membro que ele
+   *  não gerencia (humano logado); antes publicava `0`, afirmando que um pool com
+   *  agente pronto não tinha vaga. `capacity_unknown` diz o motivo. */
+  available:           number | null
+  capacity_unknown:    string | null
   queue_length:        number
   estimated_wait_ms:   number | null
   snapshot_age_ms:     number | null
   snapshot_updated_at: string | null
   has_snapshot:        boolean
-  // Item 7a (capacity-governance) — admissão por regime
-  admission_scope:     'reserved' | 'shared'
-  reservation:         number | null
+  // Item 7a (capacity-governance) — admissão por regime.
+  // Fatia 3 (2026-08-02): o regime deixou de ser "reservado × compartilhado" (baldes
+  // de sessão carvidos do pote misto `C_ai + C_human`) e passou a ser "licenciado por
+  // SESSÃO × não". Só pool de IA debita licença por sessão; humano é licenciado no
+  // LOGIN. `reservation` saiu junto com os baldes reservados.
+  admission_scope:     'licensed' | 'unlicensed'
   admitted:            number
   // Capacidade compartilhada (fatia 2). `null` = o snapshot não trouxe o campo
   // (linha do bootstrap, `capacity_model: 'bootstrap_placeholder'`) → DESCONHECIDO,
@@ -60,6 +67,8 @@ interface PoolOp {
 }
 
 interface OpSummary {
+  // `contracted` é o número de PROVISIONAMENTO (Σ declarada nos deploys ≤ C), não o
+  // teto de admissão — este último é `ai.cap`. Ver fatia 3 no TODO.
   contracted:     number | null
   admitted_total: number
   headroom:       number | null
@@ -67,10 +76,8 @@ interface OpSummary {
   queue_total:    number
   queue_attended: number
   queue_mute:     number
-  shared:   { used: number; limit: number | null; by_pool: Record<string, number> }
-  reserved: Array<{ pool_id: string; reservation: number; used: number }>
   buffer:   { used: number; limit: number }
-  ai:       { cap: number | null; used: number }
+  ai:       { cap: number | null; used: number; by_pool: Record<string, number> }
   // F4b — capacidade DEDUPLICADA por tipo de licença (rollup do Routing Engine sobre
   // instâncias DISTINTAS). Sem escalar no topo: humano e IA não se substituem.
   // `null` + motivo (`no_rollup` | `scope_limited`) quando indisponível.
@@ -179,26 +186,11 @@ function ConsumptionDonut({
   )
 }
 
-function MiniDonut({ label, used, total }: { label: string; used: number; total: number }) {
-  const data = [
-    { name: 'used', value: used },
-    { name: 'free', value: Math.max(0, total - used) },
-  ]
-  return (
-    <div className="flex flex-col items-center px-2">
-      <ResponsiveContainer width={72} height={72}>
-        <PieChart>
-          <Pie data={data} dataKey="value" cx="50%" cy="50%" innerRadius={20} outerRadius={32}>
-            <Cell fill={used >= total ? '#DC2626' : '#1B4F8A'} />
-            <Cell fill={FREE_COLOR} />
-          </Pie>
-        </PieChart>
-      </ResponsiveContainer>
-      <span className="text-2xs text-dark font-medium truncate max-w-[90px]">{label}</span>
-      <span className="text-2xs text-muted tabular-nums">{used}/{total}</span>
-    </div>
-  )
-}
+// `MiniDonut` REMOVIDO (fatia 3, 2026-08-02). Desenhava uma rosquinha por RESERVA de
+// pool (`session_reservation`); os baldes reservados eram fatia de SESSÃO do pote misto
+// `C_ai + C_human`, zero pools os usavam, e saíram inteiros. Sem eles o componente ficou
+// sem chamador — e componente sem chamador que desenha um modelo abandonado é
+// exatamente o que faz o modelo voltar.
 
 // ── PoolStatusCard — reusable for dashboard (Task #35) ─────────────────────────
 
@@ -226,8 +218,8 @@ export function PoolStatusCard({ pool, compact = false }: { pool: PoolOp; compac
 
       {/* Metrics grid */}
       <div className="grid grid-cols-3 gap-2">
-        <Metric label={t('pools.card.available')} value={pool.available}      color="#22c55e" />
-        <Metric label={t('pools.card.inSession')} value={pool.available === 0 && pool.queue_length === 0 && !pool.has_snapshot ? '—' : (pool.has_snapshot ? String(pool.queue_length > 0 ? '~' : pool.available) : '—')} color="#3b82f6" />
+        <Metric label={t('pools.card.available')} value={pool.available ?? '—'} color="#22c55e" />
+        <Metric label={t('pools.card.inSession')} value={pool.available === null || !pool.has_snapshot ? '—' : String(pool.queue_length > 0 ? '~' : pool.available)} color="#3b82f6" />
         <Metric label={t('pools.card.queue')}     value={pool.queue_length}   color={pool.queue_length > 0 ? '#eab308' : '#6b7280'} />
       </div>
 
@@ -407,9 +399,13 @@ export default function PoolsPage() {
         <div className="flex gap-3 mb-3 flex-wrap">
           {summary && (
             <>
+              {/* Fatia 3: o denominador é `ai.cap` (C_ai), não mais o `contracted`
+                  misto. O par antigo (`admitted_total/contracted`) respondia "quantas
+                  sessões cabem no contrato" somando licença humana com licença de IA —
+                  a mesma falácia de aditividade que a F4 recusou na capacidade. */}
               <SummaryPill
-                label={`${t('pools.admission.contracted')}${summary.headroom !== null ? ` · ${t('pools.admission.headroom')} ${summary.headroom}` : ''}`}
-                value={summary.contracted !== null ? `${summary.admitted_total}/${summary.contracted}` : summary.admitted_total}
+                label={`${t('pools.admission.aiLicense')}${summary.headroom !== null ? ` · ${t('pools.admission.headroom')} ${summary.headroom}` : ''}`}
+                value={summary.ai.cap !== null ? `${summary.admitted_total}/${summary.ai.cap}` : summary.admitted_total}
                 color={summary.headroom !== null && summary.headroom <= 0 ? '#DC2626' : '#1B4F8A'} />
               <SummaryPill label={t('pools.admission.inService')} value={summary.in_service} color="#059669" />
               <SummaryPill
@@ -448,23 +444,16 @@ export default function PoolsPage() {
         {/* Item 7a — donuts: total e como está sendo consumido */}
         {summary && (
           <div className="flex gap-3 mb-3 flex-wrap items-stretch">
+            {/* Fatia 3: o donut do pote compartilhado virou o donut da LICENÇA DE IA
+                (único balde com teto), e o de reservas saiu — não havia mais fatias
+                por pool a desenhar depois que os baldes reservados foram removidos. */}
             <ConsumptionDonut
-              title={t('pools.admission.sharedDonut')}
-              subtitle={summary.shared.limit !== null
-                ? `${summary.shared.used}/${summary.shared.limit}` : `${summary.shared.used}`}
-              slices={Object.entries(summary.shared.by_pool).map(([name, value]) => ({ name, value }))}
-              free={summary.shared.limit !== null ? Math.max(0, summary.shared.limit - summary.shared.used) : null}
+              title={t('pools.admission.aiDonut')}
+              subtitle={summary.ai.cap !== null
+                ? `${summary.ai.used}/${summary.ai.cap}` : `${summary.ai.used}`}
+              slices={Object.entries(summary.ai.by_pool).map(([name, value]) => ({ name, value }))}
+              free={summary.ai.cap !== null ? Math.max(0, summary.ai.cap - summary.ai.used) : null}
               freeLabel={t('pools.admission.free')} />
-            {summary.reserved.length > 0 && (
-              <div className="rounded-xl bg-white border border-border p-3 min-w-[220px]">
-                <div className="text-xs font-semibold text-dark mb-1">{t('pools.admission.reservedDonut')}</div>
-                <div className="flex flex-wrap items-center" style={{ minHeight: 130 }}>
-                  {summary.reserved.map(r => (
-                    <MiniDonut key={r.pool_id} label={r.pool_id} used={r.used} total={r.reservation} />
-                  ))}
-                </div>
-              </div>
-            )}
             <ConsumptionDonut
               title={t('pools.admission.bufferDonut')}
               subtitle={`${summary.buffer.used}/${summary.buffer.limit}`}
@@ -530,11 +519,14 @@ export default function PoolsPage() {
             </tr>
           </thead>
           <tbody>
+            {/* Fatia 3: as seções passaram a separar quem debita licença POR SESSÃO
+                (IA) de quem é licenciado no LOGIN (humano) — antes separavam dois
+                baldes do mesmo pote misto. */}
             {[
-              { key: 'reserved', label: t('pools.admission.sectionReserved'),
-                rows: filtered.filter(p => p.admission_scope === 'reserved') },
-              { key: 'shared',   label: t('pools.admission.sectionShared'),
-                rows: filtered.filter(p => p.admission_scope !== 'reserved') },
+              { key: 'licensed', label: t('pools.admission.sectionLicensed'),
+                rows: filtered.filter(p => p.admission_scope === 'licensed') },
+              { key: 'unlicensed', label: t('pools.admission.sectionUnlicensed'),
+                rows: filtered.filter(p => p.admission_scope !== 'licensed') },
             ].filter(s => s.rows.length > 0).map(section => (
             <React.Fragment key={section.key}>
             <tr className="bg-surface-muted border-b border-border">
@@ -606,7 +598,16 @@ export default function PoolsPage() {
                     <td className="px-3 py-3 text-center">
                       {pool.has_snapshot
                         ? <span className="text-sm tabular-nums">
-                            <span className="font-bold" style={{ color: pool.available > 0 ? '#22c55e' : '#6b7280' }}>{pool.available}</span>
+                            {/* `null` = desconhecido (bootstrap omitiu por membro que
+                                não gerencia). "—" com o motivo no title; renderizar 0
+                                aqui era a mentira que o backend parou de contar. */}
+                            <span className="font-bold"
+                                  title={pool.available === null && pool.capacity_unknown
+                                    ? t(`pools.capacityUnknown.${pool.capacity_unknown}`) : undefined}
+                                  style={{ color: pool.available === null ? '#6b7280'
+                                    : pool.available > 0 ? '#22c55e' : '#6b7280' }}>
+                              {pool.available === null ? '—' : pool.available}
+                            </span>
                             <span className="text-muted-light"> / </span>
                             <span className="font-bold" style={{
                               color: pool.admissible === null ? '#6b7280'

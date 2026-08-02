@@ -4929,8 +4929,10 @@ async def query_pools_volume(
     Volume de contatos por (bucket, pool, canal, endpoint=DNIS) a partir de `sessions`.
     Retorna series (no tempo) + by_channel (donut) + by_endpoint (drill-down) + totals.
     Fase D (queue-attended-model): inclui `rejected` (demanda reprimida) — sessões
-    outage na porta, com causa (`reservation_full|shared_full|quota`) derivada dos
-    segmentos sintéticos `agent_type='system'` (Fase B). `totals.contacts` segue
+    outage na porta, com causa derivada dos segmentos sintéticos `agent_type='system'`
+    (Fase B). Desde a fatia 3 (2026-08-02) a única causa PRODUZIDA é `quota` (teto de
+    IA); `reservation_full`/`shared_full`/`queue_full` continuam aparecendo em dados
+    HISTÓRICOS e por isso não foram removidas da leitura. `totals.contacts` segue
     sendo a demanda total (atendida + reprimida).
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
@@ -5265,7 +5267,7 @@ async def query_pools_occupancy(
     # somáveis, onde um bucket menor não responde a mesma pergunta.
     bkt   = bucket if bucket in ("15min", "hour", "day") else "hour"
     empty = {"series": [], "by_pool": [], "total": None, "total_series": [],
-             "admission": {"reserved_series": [], "shared_series": [], "buffer_series": []}}
+             "admission": {"ai_series": [], "buffer_series": []}}
     if accessible_pools is not None and len(accessible_pools) == 0:
         return {"data": empty, "meta": {"from_dt": since, "to_dt": until, "bucket": bkt}}
     try:
@@ -5372,9 +5374,18 @@ def _fetch_pools_occupancy(
         for r in total_series:
             r["bucket"] = _iso(r["bucket"])
 
-    # ── Item 7b — séries de admissão (histórico do Monitor: reservado ×
-    # compartilhado × fila gratuita, peak usado vs limite por bucket) ──────────
-    admission: dict = {"reserved_series": [], "shared_series": [], "buffer_series": []}
+    # ── Item 7b — séries de admissão (histórico do Monitor: licença de IA ×
+    # fila gratuita, peak usado vs limite por bucket) ──────────────────────────
+    #
+    # **Fatia 3 (2026-08-02) — o produtor mudou, e este leitor mudou junto.**
+    # `__reserved__` e `__shared__` deixaram de ser publicadas: mediam os baldes de
+    # SESSÃO carvidos de `max_concurrent_sessions`, que somava licenças humanas e de
+    # IA num pote só. `__admitted_ai__` é a linha que sobrou (denominador `C_ai`).
+    # **Descontinuidade:** `ai_series` começa em 2026-08-02; consulta que abranja
+    # data anterior devolve os buckets antigos VAZIOS, e isso é o correto — a série
+    # velha tinha outro numerador e outro denominador, então continuá-la seria
+    # emendar duas medições diferentes na mesma linha.
+    admission: dict = {"ai_series": [], "buffer_series": []}
     if accessible_pools is None:
         adm_rows = _rows_to_dicts(client.query(f"""
             SELECT {bucket_fn}                AS bucket,
@@ -5383,11 +5394,10 @@ def _fetch_pools_occupancy(
                    max(provisioned_capacity)  AS cap
             FROM {db}.pool_occupancy_peaks FINAL
             WHERE tenant_id = {{tenant_id:String}} AND minute >= '{since}' AND minute < '{until}'
-              AND pool_id IN ('__reserved__','__shared__','__buffer__')
+              AND pool_id IN ('__admitted_ai__','__buffer__')
             GROUP BY bucket, pool_id ORDER BY bucket
         """, parameters={"tenant_id": tenant_id}))
-        key_map = {"__reserved__": "reserved_series", "__shared__": "shared_series",
-                   "__buffer__": "buffer_series"}
+        key_map = {"__admitted_ai__": "ai_series", "__buffer__": "buffer_series"}
         for r in adm_rows:
             admission[key_map[r["pool_id"]]].append({
                 "bucket": _iso(r["bucket"]),

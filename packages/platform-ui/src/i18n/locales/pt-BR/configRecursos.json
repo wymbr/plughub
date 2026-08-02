@@ -65,10 +65,7 @@
       "kindInferred": "— Inferido —",
       "kindHuman": "Humano",
       "kindAi": "IA",
-      "queueNeedsHuman": "Tratamento de fila exige pool Humano — defina o tipo como Humano ou limpe a skill-flow da fila.",
-      "sessionReservation": "Reserva de sessões",
-      "sessionReservationHint": "Fatia dedicada de sessões simultâneas separada da capacidade contratada (C). Vazio = usa o bucket compartilhado. Σ reservas ≤ C.",
-      "reservationPlaceholder": "compartilhado"
+      "queueNeedsHuman": "Tratamento de fila exige pool Humano — defina o tipo como Humano ou limpe a skill-flow da fila."
     },
     "dispatch": {
       "label": "Modo de despacho da fila",

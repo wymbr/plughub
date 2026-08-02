@@ -1100,6 +1100,13 @@ class InstanceRegistry:
             if snap_raw:
                 try:
                     snap = json.loads(snap_raw) or {}
+                    # `available` pode estar AUSENTE (2026-08-02): o bootstrap omite
+                    # capacidade em pool com membro que ele não gerencia. Aqui a
+                    # ausência NÃO conta como porta aberta — `pools_available` responde
+                    # "há por onde entrar?", e desconhecido não é "sim". A escolha custa
+                    # subcontagem na janela em que a linha do bootstrap é a vigente
+                    # (pool humano ocioso > 1 h); o inverso — contar como disponível —
+                    # ofereceria ao cliente uma porta que ninguém verificou.
                     if (snap.get("available") or 0) > 0:
                         for ch in channels:
                             key = (kind or "unknown", ch)
@@ -2816,19 +2823,14 @@ class PoolRegistry:
                 pools.append(config)
         return pools
 
-    async def list_pools(self, tenant_id: str) -> list[PoolConfig]:
-        """
-        Returns all cached pool configurations for the tenant.
-        Fase B (queue-attended-model): used by AdmissionController to compute
-        Σ session_reservation for the shared-bucket limit.
-        """
-        pool_ids = await self._redis.smembers(_pool_set_key(tenant_id))
-        pools: list[PoolConfig] = []
-        for pool_id in pool_ids or []:
-            config = await self._get_pool_config(tenant_id, pool_id)
-            if config:
-                pools.append(config)
-        return pools
+    # `list_pools` REMOVIDA (fatia 3, 2026-08-02). Seu único chamador era
+    # `AdmissionController._sum_reservations`, que somava `Σ session_reservation` para
+    # carvar o pote compartilhado de `max_concurrent_sessions` — pote que somava
+    # licença humana com licença de IA e por isso deixou de gatear. Removida pela mesma
+    # regra de `get_available_count` (F5) e `get_busy_count` (fatia 2): sobreviver com
+    # um nome útil é o que faz um modelo abandonado voltar a ser chamado.
+    # Quem precisa varrer pools: `get_candidate_pools` (com filtro de canal) ou
+    # `SMEMBERS {t}:pools` + `_get_pool_config`, que é o que o rollup de capacidade faz.
 
     async def _get_pool_config(
         self, tenant_id: str, pool_id: str

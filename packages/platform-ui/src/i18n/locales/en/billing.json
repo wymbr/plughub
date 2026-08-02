@@ -15,16 +15,10 @@
     "allocatedHint": "deployed slots × concurrency, right now",
     "balance": "Balance (C − allocated)",
     "balanceHint": "contracted and not yet used",
-    "reserved": "Reserved (Σ pools)",
-    "shared": "Shared (C − reserved)",
-    "alertNonConform": "Pool reservations exceed the contracted capacity — shared would be negative. Reduce reservations or increase the contract.",
-    "alertOverAllocated": "Provisioned capacity exceeds the contract. Admission caps at the contracted value; excess deploy is idle cost.",
+    "alertOverAllocated": "Provisioned capacity exceeds the contract. Excess deploy is idle cost.",
     "noContract": "No contracted capacity configured (pricing resources empty) — no ceiling applies.",
     "byType": "By resource type",
-    "cols": { "type": "Resource", "base": "Base", "reserve": "Active reserve", "total": "Total" },
-    "reservedPools": "Pools with reservation",
-    "poolCols": { "pool": "Pool", "reservation": "Reservation" },
-    "noReservations": "No pool reservations configured."
+    "cols": { "type": "Resource", "base": "Base", "reserve": "Active reserve", "total": "Total" }
   },
   "invoice": {
     "title":        "Invoice",

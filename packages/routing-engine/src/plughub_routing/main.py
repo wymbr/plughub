@@ -47,8 +47,10 @@ async def run() -> None:
     instance_registry = InstanceRegistry(redis_client)
     pool_registry     = PoolRegistry(redis_client)
     router            = Router(instance_registry, pool_registry)
-    # Fase B (queue-attended-model): hybrid session admission control
-    admission         = AdmissionController(redis_client, pool_registry)
+    # Admissão de sessão. Fatia 3 (2026-08-02): o pote misto
+    # (`max_concurrent_sessions`) saiu; sobrou o gate por TIPO (`kind:ai ≤ C_ai`).
+    # `pool_registry` deixou de ser dependência — servia só para somar reservas.
+    admission         = AdmissionController(redis_client)
 
     # Pre-load routing namespace from Config API so first routing call already
     # has up-to-date SLA/scoring values (performance_score_weight, etc.).
@@ -265,17 +267,13 @@ async def _process_message(
             _adm_pool = None
             decision  = AdmissionDecision(admitted=True)
         if not decision.admitted:
-            # ── Fila de sistema (system-queue.md 2b): OVERFLOW ────────────────
-            # C esgotado em pool humano não rejeita na porta — cai na fila muda
-            # gratuita (isenta por construção: nunca foi admitida) até o teto
-            # total do buffer; o drain re-publica e re-admite quando C liberar.
-            # Rejeita só com fila cheia (queue_full) ou canal sem fila muda.
-            overflowed = await _try_overflow_enqueue(
-                event, decision, producer, redis_client,
-                instance_registry, settings, _adm_pool,
-            )
-            if not overflowed:
-                await _emit_outage(event, decision, producer, redis_client)
+            # Fatia 3 (2026-08-02): a única rejeição possível é `quota` em pool de IA.
+            # O `_try_overflow_enqueue` (overflow p/ fila muda gratuita) foi REMOVIDO
+            # com ela: existia porque `C` esgotado derrubava contato em pool HUMANO, e
+            # humano deixou de ser gateado por sessão. O próprio overflow já recusava
+            # IA de propósito ("capacidade de IA libera em segundos"), então após a
+            # remoção do pote misto ele virou um ramo que nenhuma entrada alcança.
+            await _emit_outage(event, decision, producer, redis_client)
             return
         # ── Fila de sistema: transição unadmitted→admitted ────────────────────
         # Sessão que esperava em fila muda acabou de ser admitida — fecha a
@@ -356,47 +354,16 @@ async def _pool_sla_target(
     return None
 
 
-async def _try_overflow_enqueue(
-    event:             ConversationInboundEvent,
-    decision:          "AdmissionDecision",
-    producer:          AIOKafkaProducer,
-    redis_client:      aioredis.Redis,
-    instance_registry: InstanceRegistry,
-    settings,
-    pool,              # PoolConfig | None
-) -> bool:
-    """
-    Fila de sistema (system-queue.md 2b) — overflow da admissão.
-    Retorna True se o contato foi acomodado na fila muda gratuita; False para
-    o caller emitir o outage (com a causa ajustada quando a fila está cheia).
-
-    Condições: pool humano (agent_kind=human — IA rejeita normal: capacidade IA
-    libera em segundos e espera por IA não faz sentido), canal aceita fila muda
-    (max_wait_by_channel > 0) e buffer total com vaga (SCARD < queue_max_total).
-    """
-    if pool is None or getattr(pool, "agent_kind", None) != "human":
-        return False
-    if mute_queue.channel_max_wait_s(settings, event.channel) <= 0:
-        return False   # canal sem fila muda (ex. voice) → outage com a causa original
-    usage = await mute_queue.buffer_usage(redis_client, event.tenant_id)
-    if usage >= mute_queue.max_queue_total():
-        decision.cause = "queue_full"   # demanda reprimida distingue fila lotada
-        logger.warning(
-            "overflow rejected (queue_full): session=%s tenant=%s usage=%d limit=%d",
-            event.session_id, event.tenant_id, usage, mute_queue.max_queue_total(),
-        )
-        return False
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    await _persist_queued_contact(
-        event, producer, redis_client, instance_registry, now_ms, settings,
-        admission=None, force_mute=True,
-    )
-    logger.info(
-        "overflow → mute queue: session=%s pool=%s cause=%s buffer=%d/%d",
-        event.session_id, event.pool_id, decision.cause,
-        usage + 1, mute_queue.max_queue_total(),
-    )
-    return True
+# `_try_overflow_enqueue` REMOVIDA (fatia 3, 2026-08-02). Acomodava na fila muda
+# gratuita o contato de pool HUMANO recusado por `C` esgotado — e o único jeito de um
+# pool humano ser recusado era o pote misto, que saiu. A função já recusava IA de
+# propósito ("capacidade de IA libera em segundos; esperar por IA não faz sentido"),
+# então sobrou um ramo sem nenhuma entrada possível. Foi ela também que introduzia a
+# causa `queue_full` na demanda reprimida — causa que agora não tem produtor.
+#
+# A FILA MUDA CONTINUA EXISTINDO, por outro motivo (pool sem `queue_config`):
+# `_persist_queued_contact` decide `attended` lendo a config do pool. O que morreu foi
+# só o gatilho "overflow de C", junto com o parâmetro `force_mute` que o servia.
 
 
 async def _emit_outage(
@@ -416,7 +383,9 @@ async def _emit_outage(
          gateway-sourced events are skipped by the analytics parser).
       2. conversations.participants — synthetic zero-duration segment
          (agent_type=system, outcome=outage) pointing at the pool that lacked
-         resources; close_reason carries the cause (reservation_full|shared_full).
+         resources; close_reason carries the cause. Fatia 3 (2026-08-02): a causa
+         é sempre `quota` (teto de IA) — `reservation_full`/`shared_full`/`queue_full`
+         saíram com o pote misto e o overflow, e não têm mais produtor.
       3. conversations.outbound session.closed — channel-gateway closes the
          customer connection (rejection render: spec § rejeição na porta).
 
@@ -798,17 +767,20 @@ async def _persist_queued_contact(
     now_ms:            int,
     settings,
     admission:         "AdmissionController | None" = None,
-    force_mute:        bool = False,
 ) -> None:
     """
     Stores contact in the pool queue sorted set and notifies the customer.
     Full original event is preserved so it can be re-published verbatim when
     an agent becomes available (drain-on-ready).
 
-    Fila de sistema (system-queue.md Fase A): quando a fila é MUDA (pool sem
-    queue_config, ou `force_mute` no overflow da admissão), a sessão é isenta
-    de C (admission.release) e marcada em {t}:queue:unadmitted; a espera real
-    é preservada através de re-enfileiramentos (first_queued NX vira o score).
+    Fila de sistema (system-queue.md Fase A): quando a fila é MUDA (**pool sem
+    `queue_config`** — única origem desde a fatia 3), a sessão é isenta de C
+    (admission.release) e marcada em {t}:queue:unadmitted; a espera real é
+    preservada através de re-enfileiramentos (first_queued NX vira o score).
+
+    O parâmetro `force_mute` saiu com o `_try_overflow_enqueue` (fatia 3): era o único
+    chamador, e o overflow que ele servia ficou sem entrada possível quando o pote misto
+    deixou de recusar sessão humana.
     """
     pool_id = event.pool_id or ""
     if not pool_id:
@@ -823,16 +795,15 @@ async def _persist_queued_contact(
         await _emit_no_resource_drop(redis_client, producer, settings, event)
         return
 
-    # Tier da fila: atendida (queue_config no pool) × muda (sem, ou overflow).
+    # Tier da fila: atendida (`queue_config` no pool) × muda (sem).
     attended     = False
     mute_requeue = False
-    if not force_mute:
-        try:
-            raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
-            if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
-                attended = True
-        except Exception:
-            pass
+    try:
+        raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
+        if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
+            attended = True
+    except Exception:
+        pass
 
     if not attended:
         # Canal não aceita fila muda (max_wait 0, ex. voice) → encerra gracioso
@@ -1388,9 +1359,10 @@ async def _periodic_queue_drain(
                             unadm = await redis_client.sismember(
                                 mute_queue.unadmitted_key(tenant_id), session_id
                             )
+                            # `session_reservation` saiu do parâmetro na fatia 3 junto
+                            # com os baldes reservados — só o teto de IA é consultável.
                             if unadm and not await admission.has_headroom(
                                 tenant_id, pool_id,
-                                session_reservation=_pool_cfg.get("session_reservation"),
                                 agent_kind=_pool_cfg.get("agent_kind"),
                             ):
                                 continue
@@ -1509,9 +1481,13 @@ async def _read_pool_watermarks(
     diferentes. Sem a chave-irmã, `None`: o chamador degrada para a leitura ao vivo
     **e loga**, para que a linha enviesada não se confunda com uma medida boa.
 
-    Watermark AUSENTE é registrado como pico 0 e logado: só acontece se o seed da
-    virada não rodou (serviço subiu no meio do minuto, ou Redis engasgou). Publicar 0
-    mantém a série sem buraco; o log é o que impede que ele passe por medição.
+    Watermark AUSENTE é registrado como pico 0 e logado. Desde o **seed por primeira
+    vista** (2026-08-02) a única causa legítima que sobra é o minuto do BOOT: o seed e a
+    união `seen_pools` passaram a ter o mesmo gatilho, então pool que nasce no meio do
+    minuto já entra semeado. Antes disso, todo login de humano produzia uma rajada de
+    AUSENTE (um por pool do agente) e o log tinha uma desculpa permanente — o que é
+    equivalente a não ter alarme. Publicar 0 mantém a série sem buraco; o log é o que
+    impede que ele passe por medição.
     """
     bucket = minute_bucket(minute)
     peaks: dict = {}
@@ -1549,8 +1525,7 @@ async def _flush_occupancy(
     peaks:        dict,
     total_peaks:  dict,
     adm_pool_peaks:     dict | None = None,   # (tenant, pool) -> peak admitted
-    adm_reserved_peaks: dict | None = None,   # tenant -> peak Σ reservas usadas
-    adm_shared_peaks:   dict | None = None,   # tenant -> peak shared usado
+    adm_ai_peaks:       dict | None = None,   # tenant -> peak sessões debitando C_ai
     buffer_peaks:       dict | None = None,   # tenant -> peak fila gratuita
     caps:               dict | None = None,   # (tenant, pool) -> capacidade no pico
     kind_peaks:         dict | None = None,   # (tenant, kind) -> peak `used` do tipo
@@ -1558,12 +1533,14 @@ async def _flush_occupancy(
 ) -> None:
     """
     Emit one pool.occupancy event per (tenant, pool) + per-tenant aggregates.
-    Item 7b: cada linha por pool ganha `admitted_peak` (sessões debitando C
-    atribuídas ao pool — reserva + atribuição do shared via HASH), e três
-    linhas agregadas espelham o Monitor no histórico:
-      __reserved__  peak = Σ reservas usadas    | capacity = Σ reservas configuradas
-      __shared__    peak = shared usado         | capacity = shared limit (C − Σ res)
-      __buffer__    peak = fila gratuita usada  | capacity = queue_max_total
+    Item 7b: cada linha por pool ganha `admitted_peak` (sessões debitando licença
+    atribuídas ao pool, via HASH `{t}:admission:ai_pools`), e DUAS linhas agregadas
+    espelham o Monitor no histórico:
+      __admitted_ai__  peak = sessões debitando C_ai | capacity = C_ai
+      __buffer__       peak = fila gratuita usada    | capacity = queue_max_total
+
+    A linha `__reserved__` e a `__shared__` saíram na fatia 3 junto com os baldes que
+    mediam (ver o bloco do item 7b, abaixo).
 
     `caps` (P1) traz a capacidade capturada no instante do pico. Ausente → leitura ao
     vivo, com o viés temporal do achado 1 — logado, nunca silencioso.
@@ -1594,10 +1571,9 @@ async def _flush_occupancy(
     depende de ter guardado o log. Query de saneamento em `docs/product/
     shared-capacity-pool-as-tag-design.md` §6 (F4c).
     """
-    adm_pool_peaks     = adm_pool_peaks or {}
-    adm_reserved_peaks = adm_reserved_peaks or {}
-    adm_shared_peaks   = adm_shared_peaks or {}
-    buffer_peaks       = buffer_peaks or {}
+    adm_pool_peaks = adm_pool_peaks or {}
+    adm_ai_peaks   = adm_ai_peaks or {}
+    buffer_peaks   = buffer_peaks or {}
     caps               = caps or {}
     minute_iso = minute.isoformat()
     tenant_cap_total: dict = {}
@@ -1640,7 +1616,7 @@ async def _flush_occupancy(
         await producer.send_and_wait(_OCCUPANCY_TOPIC, {
             "tenant_id": tenant_id, "pool_id": "__total__", "minute": minute_iso,
             "peak_concurrency": tot, "provisioned_capacity": dedup,
-            "admitted_peak": adm_reserved_peaks.get(tenant_id, 0) + adm_shared_peaks.get(tenant_id, 0),
+            "admitted_peak": adm_ai_peaks.get(tenant_id, 0),
         })
 
     # F4c — uma linha por TIPO DE LICENÇA com a capacidade deduplicada. É o número de
@@ -1657,37 +1633,31 @@ async def _flush_occupancy(
         })
 
     # ── Item 7b — agregados de admissão (histórico do Monitor) ────────────────
+    #
+    # **Fatia 3 (2026-08-02) — as linhas foram REAPONTADAS, não renomeadas.**
+    #   · `__reserved__` SAIU — sem baldes reservados a linha não tem referente;
+    #   · `__shared__`   virou `__admitted_ai__`: o numerador deixou de contar sessão
+    #     humana e o denominador passou de `C − Σ reservas` (pote misto, 370) para
+    #     `C_ai` (360). Publicar o nome antigo com o limite antigo seria um número
+    #     plausível descrevendo um portão que não existe;
+    #   · `__buffer__`   FICA — a fila muda tem razão própria (pool sem `queue_config`).
+    #
+    # Descontinuidade assumida na série: `__admitted_ai__` começa em 2026-08-02 e não é
+    # comparável com o histórico de `__shared__`.
     for tenant_id in tenants:
-        # Σ reservas configuradas + C → limites das linhas agregadas.
-        sum_reservations = 0
+        c_ai = 0
         try:
-            async for rk in redis_client.scan_iter(
-                match=f"{tenant_id}:admission:reserved:*", count=100
-            ):
-                rk_s = rk.decode() if isinstance(rk, bytes) else str(rk)
-                r_pool = rk_s.rsplit(":", 1)[-1]
-                raw_cfg = await redis_client.get(f"{tenant_id}:pool_config:{r_pool}")
-                if raw_cfg:
-                    sum_reservations += int(
-                        (json.loads(raw_cfg) or {}).get("session_reservation") or 0
-                    )
-        except Exception:
-            pass
-        contracted = 0
-        try:
-            raw_c = await redis_client.get(f"{tenant_id}:quota:max_concurrent_sessions")
-            if raw_c:
-                contracted = max(0, int(float(
-                    raw_c.decode() if isinstance(raw_c, bytes) else raw_c
+            raw_ai = await redis_client.get(f"{tenant_id}:quota:capacity:ai_agent")
+            if raw_ai:
+                c_ai = max(0, int(float(
+                    raw_ai.decode() if isinstance(raw_ai, bytes) else raw_ai
                 )))
         except Exception:
             pass
-        shared_limit = max(0, contracted - sum_reservations) if contracted else 0
 
         for pool_marker, peak_v, cap_v in (
-            ("__reserved__", adm_reserved_peaks.get(tenant_id, 0), sum_reservations),
-            ("__shared__",   adm_shared_peaks.get(tenant_id, 0),   shared_limit),
-            ("__buffer__",   buffer_peaks.get(tenant_id, 0),       mute_queue.max_queue_total()),
+            ("__admitted_ai__", adm_ai_peaks.get(tenant_id, 0), c_ai),
+            ("__buffer__",      buffer_peaks.get(tenant_id, 0), mute_queue.max_queue_total()),
         ):
             await producer.send_and_wait(_OCCUPANCY_TOPIC, {
                 "tenant_id": tenant_id, "pool_id": pool_marker, "minute": minute_iso,
@@ -1738,8 +1708,7 @@ async def _occupancy_sampler(
     seen_pools: set = set()       # (tenant_id, pool_id) vistos no minuto corrente
     total_peaks: dict = {}        # tenant_id -> peak total this minute
     adm_pool_peaks: dict = {}     # (tenant_id, pool_id) -> peak admitted (item 7b)
-    adm_reserved_peaks: dict = {} # tenant_id -> peak Σ reservas usadas
-    adm_shared_peaks: dict = {}   # tenant_id -> peak shared usado
+    adm_ai_peaks: dict = {}       # tenant_id -> peak de sessões debitando C_ai
     buffer_peaks: dict = {}       # tenant_id -> peak fila gratuita
     kind_peaks: dict = {}         # (tenant_id, kind) -> peak `used` do tipo (F4c)
     kind_caps: dict = {}          # (tenant_id, kind) -> capacidade NO INSTANTE do pico
@@ -1830,13 +1799,12 @@ async def _occupancy_sampler(
                         )
                 await _flush_occupancy(
                     redis_client, producer, cur_minute, peaks, total_peaks,
-                    adm_pool_peaks, adm_reserved_peaks, adm_shared_peaks, buffer_peaks,
+                    adm_pool_peaks, adm_ai_peaks, buffer_peaks,
                     caps=caps, kind_peaks=kind_peaks, kind_caps=kind_caps,
                 )
                 seen_pools = set()
                 total_peaks = {}
-                adm_pool_peaks, adm_reserved_peaks = {}, {}
-                adm_shared_peaks, buffer_peaks = {}, {}
+                adm_pool_peaks, adm_ai_peaks, buffer_peaks = {}, {}, {}
                 kind_peaks, kind_caps = {}, {}
                 cur_minute = minute
                 await _seed_bucket(occ_by_pool, cur_minute)
@@ -1871,47 +1839,58 @@ async def _occupancy_sampler(
 
             # A união (não a foto do último tick) decide quais linhas o minuto publica:
             # um pool que existiu no início do minuto e sumiu no fim ainda teve carga.
+            #
+            # **SEED POR PRIMEIRA VISTA (2026-08-02).** A união e o seed tinham
+            # gatilhos DIFERENTES: `_seed_bucket` semeava a foto da VIRADA, mas
+            # `seen_pools` cresce durante o minuto inteiro. Pool que aparecia no meio
+            # do minuto — que é o que acontece toda vez que um humano faz login, e ele
+            # aparece em TODOS os seus pools de uma vez — entrava na união sem
+            # watermark, e o flusher publicava 0 para ele com o log "watermark
+            # AUSENTE". Zero com cara de medição, justamente na entrada do recurso.
+            #
+            # Semear na primeira vista fecha o buraco e, de quebra, torna o log um
+            # alarme de verdade: com as duas fontes no mesmo gatilho, AUSENTE deixa de
+            # ter causa legítima fora do minuto de boot. `record_pool_peak` é max-write,
+            # então semear um pool já semeado é no-op — e semear um pool que nasce
+            # OCUPADO grava a ocupação real, não o zero.
+            new_pools = set(occ_by_pool.keys()) - seen_pools
+            if new_pools and cur_minute is not None:
+                await _seed_bucket(
+                    {k: occ_by_pool[k] for k in new_pools}, cur_minute
+                )
             seen_pools |= set(occ_by_pool.keys())
             for tenant_id, tot in tenant_totals.items():
                 total_peaks[tenant_id] = max(total_peaks.get(tenant_id, 0), tot)
 
-            # ── Item 7b — amostra a admissão (reserved/shared/buffer) ─────────
+            # ── Item 7b — amostra a admissão (licença de IA + buffer) ─────────
             # Mesmas chaves que o Monitor lê (HASH de atribuição do 7a) — o
             # histórico espelha o tempo real por construção.
+            #
+            # Fatia 3: o SET `{t}:admission:shared` e os `…:reserved:{pool}` saíram;
+            # `{t}:admission:kind:ai` é o único balde com teto, e o HASH de atribuição
+            # virou `{t}:admission:ai_pools`. A soma `reserved + shared` por pool
+            # desapareceu junto — havia UMA fonte, não duas.
             for tenant_id in tenants_seen:
                 try:
-                    shared_hash = await redis_client.hgetall(
-                        f"{tenant_id}:admission:shared_pools"
+                    ai_hash = await redis_client.hgetall(
+                        f"{tenant_id}:admission:ai_pools"
                     )
-                    shared_by_pool: dict = {}
-                    for p_raw in shared_hash.values():
+                    ai_by_pool: dict = {}
+                    for p_raw in ai_hash.values():
                         p = p_raw.decode() if isinstance(p_raw, bytes) else str(p_raw)
-                        shared_by_pool[p] = shared_by_pool.get(p, 0) + 1
-                    shared_used = await redis_client.scard(
-                        f"{tenant_id}:admission:shared"
+                        ai_by_pool[p] = ai_by_pool.get(p, 0) + 1
+                    ai_used = await redis_client.scard(
+                        f"{tenant_id}:admission:kind:ai"
                     )
-                    reserved_sum = 0
-                    reserved_by_pool: dict = {}
-                    async for rk in redis_client.scan_iter(
-                        match=f"{tenant_id}:admission:reserved:*", count=100
-                    ):
-                        rk_s = rk.decode() if isinstance(rk, bytes) else str(rk)
-                        r_pool = rk_s.rsplit(":", 1)[-1]
-                        used = await redis_client.scard(rk_s)
-                        reserved_by_pool[r_pool] = used
-                        reserved_sum += used
                     buffer_used = await redis_client.scard(
                         f"{tenant_id}:queue:unadmitted"
                     )
 
-                    for p in set(list(shared_by_pool) + list(reserved_by_pool)):
-                        admitted = reserved_by_pool.get(p, 0) + shared_by_pool.get(p, 0)
+                    for p, admitted in ai_by_pool.items():
                         apk = (tenant_id, p)
                         adm_pool_peaks[apk] = max(adm_pool_peaks.get(apk, 0), admitted)
-                    adm_reserved_peaks[tenant_id] = max(
-                        adm_reserved_peaks.get(tenant_id, 0), reserved_sum)
-                    adm_shared_peaks[tenant_id] = max(
-                        adm_shared_peaks.get(tenant_id, 0), int(shared_used))
+                    adm_ai_peaks[tenant_id] = max(
+                        adm_ai_peaks.get(tenant_id, 0), int(ai_used))
                     buffer_peaks[tenant_id] = max(
                         buffer_peaks.get(tenant_id, 0), int(buffer_used))
                 except Exception:

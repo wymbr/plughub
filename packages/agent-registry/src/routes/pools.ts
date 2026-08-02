@@ -8,7 +8,9 @@ import { prisma, Prisma }    from "../db"
 import { CreatePoolSchema, UpdatePoolSchema } from "../validators/pool"
 import { ZodError }          from "zod"
 import { publishRegistryEvent, publishRegistryChanged } from "../infra/kafka"
-import { contractedCapacity } from "../lib/capacity"
+// `contractedCapacity` saiu daqui na fatia 3 junto com o endpoint de conformidade de
+// reservas. Ela continua viva em `lib/capacity.ts`, usada por `pool-slots.ts` para o
+// gate de PROVISIONAMENTO (Σ declarada ≤ C) — que é uma pergunta diferente.
 import {
   INTERNAL_QUEUE_SUFFIX,
   isMirrorPoolId,
@@ -19,58 +21,21 @@ import {
 export const poolsRouter = Router()
 
 // ─────────────────────────────────────────────
-// Capacity-governance item 3 — Σ session_reservation ≤ C (shared ≥ 0)
+// `_reservedTotal` / `_reservationViolation` REMOVIDAS (fatia 3, 2026-08-02).
 //
-// C (capacidade contratada) = {t}:quota:max_concurrent_sessions, gravada pelo
-// quota sync do pricing-api. A admissão híbrida deriva shared = C − Σ reservas;
-// reserva acima de C tornaria o shared negativo (pool "rouba" capacidade que
-// não existe). Regras:
-//   - Sem C (pricing não configurado / Redis fora) → sem validação (fail-open;
-//     o runtime continua protegido pela própria admissão).
-//   - REDUÇÕES são sempre permitidas (heal gradual de estado legado
-//     não-conforme; re-PUT do RegistrySyncer com valor igual também passa).
-//   - AUMENTOS que façam Σ > C são rejeitados com 422 + detalhe.
-// Conformidade é derivável (não persistida): GET /v1/pools/capacity/conformance.
-// ─────────────────────────────────────────────
-
-async function _reservedTotal(tenantId: string, excludePoolId: string | null): Promise<number> {
-  const agg = await prisma.pool.aggregate({
-    _sum:  { session_reservation: true },
-    where: {
-      tenant_id: tenantId,
-      status:    "active" as never,
-      ...(excludePoolId ? { NOT: { pool_id: excludePoolId } } : {}),
-    },
-  })
-  return agg._sum.session_reservation ?? 0
-}
-
-/** Retorna o payload de erro 422, ou null quando a mutação é permitida. */
-async function _reservationViolation(
-  tenantId:      string,
-  poolId:        string,
-  newValue:      number | null | undefined,
-  currentValue:  number | null,
-): Promise<Record<string, unknown> | null> {
-  if (newValue === undefined || newValue === null || newValue <= 0) return null
-  if (currentValue !== null && newValue <= currentValue) return null   // redução/igual sempre passa
-  const contracted = await contractedCapacity(tenantId)
-  if (contracted === null) return null
-  const reservedOthers = await _reservedTotal(tenantId, poolId)
-  const reservedTotal  = reservedOthers + newValue
-  if (reservedTotal <= contracted) return null
-  return {
-    error: "session_reservation excede a capacidade contratada (shared ficaria negativo)",
-    details: {
-      contracted,
-      reserved_others:    reservedOthers,
-      requested:          newValue,
-      reserved_total:     reservedTotal,
-      shared_would_be:    contracted - reservedTotal,
-    },
-  }
-}
-
+// Eram a validação "capacity-governance item 3": Σ `session_reservation` ≤ C, para que
+// `shared = C − Σ reservas` não ficasse negativo. Os dois termos dessa conta morreram
+// na fatia 3 — o balde `shared` não existe mais (era o pote misto `C_ai + C_human`, que
+// recusava sessão humana contra uma soma de moedas não-fungíveis) e os baldes reservados
+// saíram com ele. Validar uma soma que não limita nada, contra um `C` que soma moedas,
+// é pior que não validar: era a ÚLTIMA coisa no sistema a afirmar que reservas de sessão
+// existem, e quem lesse o código por ela reconstruiria o modelo removido.
+//
+// O que continua valendo é o gate de PROVISIONAMENTO (`lib/capacity.ts`,
+// `deployViolation`: Σ declarada nos slots ≤ C), que responde outra pergunta — "cabe no
+// contrato o que está deployado?" — e não passa por aqui.
+//
+// Endpoint `GET /v1/pools/capacity/conformance` derivava desta mesma conta; ver abaixo.
 // ─────────────────────────────────────────────
 // POST /v1/pools
 // ─────────────────────────────────────────────
@@ -103,12 +68,6 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
     // Validar evaluation_template_id se fornecido
     // TODO: consultar tabela evaluation_templates
 
-    // Capacity-governance item 3: Σ reservas ≤ C
-    const violation = await _reservationViolation(
-      tenantId, body.pool_id, body.session_reservation, null,
-    )
-    if (violation) return res.status(422).json(violation)
-
     // Capacity-governance item 2: queue_config ⇒ agent_kind 'human' (fila
     // atendida só para recurso escasso/lento; para IA o slot da fila
     // instanciaria o próprio agente solicitado).
@@ -136,7 +95,6 @@ poolsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =>
         dispatch_mode:           body.dispatch_mode ?? "push",
         purpose:                 body.purpose ?? "contact",
         internal_queue_enabled:  body.internal_queue_enabled ?? false,
-        session_reservation:     body.session_reservation ?? null,
         max_reply_time_ms:       body.max_reply_time_ms ?? null,
         routing_expression:      body.routing_expression ?? Prisma.DbNull,
         evaluation_template_id: body.evaluation_template_id ?? null,
@@ -226,33 +184,17 @@ poolsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => 
 })
 
 // ─────────────────────────────────────────────
-// GET /v1/pools/capacity/conformance
-// Conformidade derivada (não persistida) — capacity-governance item 3.
-// Reflete mudanças de contrato na hora (revalidação implícita: C é lido do
-// Redis a cada chamada). conform=false → alerta na UI (item 4 do arco).
-// ─────────────────────────────────────────────
-poolsRouter.get("/capacity/conformance", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const tenantId   = _getTenantId(req)
-    const contracted = await contractedCapacity(tenantId)
-    const pools = await prisma.pool.findMany({
-      where:  { tenant_id: tenantId, status: "active" as never, session_reservation: { gt: 0 } },
-      select: { pool_id: true, session_reservation: true },
-      orderBy: { session_reservation: "desc" },
-    })
-    const reservedTotal = pools.reduce((s, p) => s + (p.session_reservation ?? 0), 0)
-    return res.json({
-      contracted,                                            // null = sem pricing configurado
-      reserved_total: reservedTotal,
-      shared:         contracted === null ? null : contracted - reservedTotal,
-      conform:        contracted === null ? true : reservedTotal <= contracted,
-      pools,
-    })
-  } catch (err) {
-    return next(err)
-  }
-})
-
+// `GET /v1/pools/capacity/conformance` REMOVIDO (fatia 3, 2026-08-02).
+//
+// Publicava `{contracted, reserved_total, shared, conform, pools}` — e três desses cinco
+// campos deixaram de ter referente: `shared = C − Σ reservas` era o pote misto, `Σ
+// reservas` os baldes por pool, e `conform` a comparação entre os dois. Manter o
+// endpoint significaria a tela de Billing exibir "conforme/não-conforme" sobre uma regra
+// que nenhum caminho de execução aplica — afirmação ao operador, plausível e falsa.
+//
+// A conformidade que SOBREVIVE é outra e já é imposta: Σ declarada nos slots de deploy
+// ≤ C (`lib/capacity.ts` → `deployViolation`, 422 no PUT de slot). Na tela ela aparece
+// como `contratado × alocado × saldo`, que continua de pé.
 // ─────────────────────────────────────────────
 // GET /v1/pools/:pool_id
 // ─────────────────────────────────────────────
@@ -282,15 +224,6 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
       where: { pool_id_tenant_id: { pool_id: req.params["pool_id"]!, tenant_id: tenantId } },
     })
     if (!existing) return res.status(404).json({ error: "Pool não encontrado" })
-
-    // Capacity-governance item 3: Σ reservas ≤ C (só aumentos são bloqueados)
-    const violation = await _reservationViolation(
-      tenantId,
-      req.params["pool_id"]!,
-      body.session_reservation,
-      (existing as { session_reservation: number | null }).session_reservation,
-    )
-    if (violation) return res.status(422).json(violation)
 
     // Capacity-governance item 2: queue_config ⇒ agent_kind 'human' — valida o
     // ESTADO RESULTANTE (campo novo ou existente, fila nova ou existente).
@@ -348,7 +281,6 @@ poolsRouter.put("/:pool_id", async (req: Request, res: Response, next: NextFunct
         // Campos limpáveis via PUT null (schema .nullable()): escalares aceitam
         // null direto no Prisma; JSONB exige Prisma.DbNull.
         ...(body.max_concurrent_sessions !== undefined && { max_concurrent_sessions: body.max_concurrent_sessions }),
-        ...(body.session_reservation     !== undefined && { session_reservation:     body.session_reservation }),
         ...(body.max_reply_time_ms       !== undefined && { max_reply_time_ms:       body.max_reply_time_ms }),
         ...(body.routing_expression      !== undefined && { routing_expression:      body.routing_expression }),
         ...(body.evaluation_template_id !== undefined && { evaluation_template_id: body.evaluation_template_id }),
