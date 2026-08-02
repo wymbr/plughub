@@ -10,12 +10,17 @@ estava numa ASSIMETRIA dentro de `InstanceRegistry.remove_conversation`:
     ...
     snap["available"] = snap["available"] + 1  ← TETO não existia
 
-Quando o DECR bate no chão — remoção sem `mark_busy` correspondente (`agent_done`
-duplicado/tardio, ou sessão contabilizada noutro pool) — `busy` fica em 0 e
-`available` ainda ganha +1. Repetido, ultrapassa a capacidade.
+Quando o DECR batia no chão — remoção sem `mark_busy` correspondente (`agent_done`
+duplicado/tardio, ou sessão contabilizada noutro pool) — `busy` ficava em 0 e
+`available` ainda ganhava +1. Repetido, ultrapassava a capacidade.
 
-Estes testes fixam o invariante, não a implementação: qualquer caminho que volte a
-somar sem teto reprova aqui.
+**A fatia 2 tirou o remendo em vez de reforçá-lo.** O contador e o patch `+1`
+sumiram: `available`/`busy` são RECALCULADOS do semáforo do recurso a cada escrita
+(`compute_pool_occupancy`), então nem o chão nem o teto têm mais o que segurar —
+um valor derivado de `total_capacity − used_global` não tem como passar da
+capacidade nem ficar negativo. Estes testes seguem aqui porque fixam o
+INVARIANTE, não a implementação: qualquer caminho que volte a somar sobre o número
+anterior reprova.
 
 Teste de INTEGRAÇÃO: precisa de um Redis real. Pulado se indisponível.
     REDIS_URL=redis://localhost:6379 pytest test_pool_snapshot_invariant.py
@@ -29,9 +34,7 @@ import uuid
 import pytest
 import redis.asyncio as aioredis
 
-from plughub_routing.registry import (
-    InstanceRegistry, _pool_snapshot_key, _pool_active_count_key,
-)
+from plughub_routing.registry import InstanceRegistry, _pool_snapshot_key
 from plughub_routing.models import AgentInstance
 
 
@@ -109,30 +112,41 @@ async def test_available_never_exceeds_capacity_on_spurious_removal(env):
     snap = await _snap(client, tenant, pool)
     assert snap["available"] <= snap["total_instances"], (
         f"available={snap['available']} passou de total_instances="
-        f"{snap['total_instances']} — o teto do remove_conversation não segurou"
+        f"{snap['total_instances']} — alguém voltou a SOMAR sobre o valor anterior "
+        f"em vez de recalcular"
     )
-    # E o contador de ocupação não pode ficar negativo (chão, que já existia).
-    assert int(await client.get(_pool_active_count_key(tenant, pool)) or 0) >= 0
+    # E a ocupação publicada nunca é negativa nem inventada (fatia 2: derivada).
+    assert snap["busy"] == 0 and snap["busy_elsewhere"] == 0, snap
+    assert snap["available"] == 3, (
+        f"remoções espúrias não podem MUDAR a capacidade: {snap}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_available_still_increments_on_legitimate_release(env):
     """
-    Regressão simétrica: o teto não pode congelar o incremento LEGÍTIMO.
+    Regressão simétrica: recalcular não pode congelar a devolução LEGÍTIMA.
 
     Com uma sessão realmente ocupada (available 2 de 3), terminar devolve a vaga —
-    available volta a 3. Um teto mal posto (ex.: clamp em `available` atual) faria
-    a vaga nunca voltar, que é pior que o defeito original: capacidade some.
+    available volta a 3. Um recompute que lesse a fonte errada (ou um teto mal
+    posto, no modelo antigo) faria a vaga nunca voltar, que é pior que o defeito
+    original: capacidade some.
     """
     reg, client, tenant, pool = env
     inst = "human-snap-2"
     await _seed(reg, client, tenant, pool, capacity=3, instance=inst)
 
-    # Estado "uma sessão em curso": ocupa a vaga pelo caminho real.
+    # Estado "uma sessão em curso" pelo caminho REAL: claim atômico (com a tag do
+    # pool) + mark_busy. Forçar o snapshot à mão não serviria — o recompute não lê
+    # o valor anterior, é justamente esse o ponto.
+    assert await reg.claim_instance(
+        tenant, inst, "conv-real", None, 3, pool_id=pool
+    ) == 1
     await reg.mark_busy(tenant, pool, inst, "conv-real")
-    await client.set(_pool_snapshot_key(tenant, pool), json.dumps({
-        **await _snap(client, tenant, pool), "available": 2, "busy": 1,
-    }), ex=120)
+    mid = await _snap(client, tenant, pool)
+    assert (mid["available"], mid["busy"]) == (2, 1), (
+        f"o setup não chegou ao estado 'uma sessão em curso': {mid}"
+    )
 
     await reg.remove_conversation(tenant, inst, "conv-real")
 
@@ -222,11 +236,18 @@ async def test_agent_ready_without_resource_facts_does_not_recreate_human(env):
 
 
 @pytest.mark.asyncio
-async def test_snapshot_without_capacity_field_is_not_clamped(env):
+async def test_previous_snapshot_never_contaminates_the_next(env):
     """
-    Snapshot legado (sem `total_instances`) não tem teto conhecido — o incremento
-    passa em vez de ser zerado. Clampar contra um teto ausente leria 0 e faria a
-    capacidade sumir; ausência de informação não pode virar ausência de vaga.
+    O snapshot anterior NÃO é entrada do próximo.
+
+    Era: o `+1` somava sobre o `available` que estivesse gravado, então um snapshot
+    legado, truncado ou corrompido se propagava indefinidamente — e o teste desta
+    posição precisava tratar "sem `total_instances`" como caso especial.
+
+    Agora o recompute deriva tudo do semáforo; o valor gravado é saída, nunca
+    entrada. Este teste grava um snapshot deliberadamente MENTIROSO (available 99,
+    busy 42, sem `total_instances`) e exige que a próxima escrita o ignore por
+    completo — 2 vagas, nenhuma ocupada.
     """
     reg, client, tenant, pool = env
     inst = "human-snap-3"
@@ -237,13 +258,13 @@ async def test_snapshot_without_capacity_field_is_not_clamped(env):
     ))
     await client.set(_pool_snapshot_key(tenant, pool), json.dumps({
         "pool_id": pool, "tenant_id": tenant,
-        "available": 1, "busy": 1,          # sem total_instances (legado)
+        "available": 99, "busy": 42,        # mentira, e sem total_instances (legado)
         "queue_length": 0, "sla_target_ms": 480_000, "channel_types": ["webchat"],
     }), ex=120)
 
     await reg.remove_conversation(tenant, inst, "conv-legacy")
 
     snap = await _snap(client, tenant, pool)
-    assert snap["available"] == 2, (
-        f"sem total_instances o incremento deve passar: available={snap['available']}"
+    assert (snap["available"], snap["busy"], snap["total_instances"]) == (2, 0, 2), (
+        f"o snapshot anterior contaminou o novo: {snap}"
     )

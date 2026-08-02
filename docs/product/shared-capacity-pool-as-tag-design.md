@@ -282,13 +282,22 @@ re-tag no cross-pool) + herança da tag no `swap_to_hold`. Snapshot ainda não m
 segue removendo membro com tag; hold expira com o parse intacto; membro legado de 2 campos conta como
 untagged. Vermelho hoje: o teste de re-tag produz `SCARD 2`.
 
-**F2 — recompute + fan-out.** Lua de recompute, `busy_elsewhere`/`untagged` no snapshot, fan-out por
-`pools(instance)`; remove o patch `available += 1` e o INCR/DECR.
-*Verificação:* reproduzir a linha de base medida — 1 humano `max_concurrent 3`, 3 pools, 1 vaga ocupada
-→ `available 2/2/2`. Hoje dá `3/3/3`, então o teste nasce vermelho.
+**F2 — recompute + fan-out. ✅ CONCLUÍDA (2026-08-02, ver `CHANGELOG.md`).** Lua de recompute,
+`busy_elsewhere`/`untagged` no snapshot, fan-out por `pools(instance)`; removidos o patch
+`available += 1` e o INCR/DECR — e, com eles, o chão e o teto, porque a condição que os exigia
+deixou de existir.
+*Verificação:* `test_shared_capacity_snapshot.py` (8 testes) reproduziu a linha de base medida e
+**nasceu vermelho** — `3/3/3` onde afirma `2/2/2`.
+*Ajuste de escopo registrado:* o item "bootstrap para de afirmar capacidade" foi **antecipado de F3**,
+porque deixá-lo lendo `active_count` (agora sem escritor) o transformaria num leitor de chave morta
+devolvendo o `0` plausível. Solução mais conservadora que a prevista: em vez de `null` em todos os
+campos — que quebraria `MonitorTab`/`PoolsPage` antes da F4 —, ele publica `available`/
+`total_instances` derivados do `Σ SCARD` e **OMITE** `busy`/`busy_elsewhere`/`untagged`, com
+`model: "bootstrap_placeholder"`. Ausência é honesta; zero não seria; e separar consumo próprio do
+consumo dos irmãos exigiria duplicar o parse da tag num segundo serviço.
 
-**F3 — gatilhos de pull + bootstrap.** `work_task_claim` / `_release` / `_expire` recomputam; bootstrap
-vira placeholder com `null`.
+**F3 — gatilhos de pull + bootstrap.** `work_task_claim` (✅ de carona no `mark_busy`) /
+`work_task_release` / `work_task_expire` recomputam; bootstrap ✅ (antecipado, ver F2).
 *Verificação:* o cenário exato do achado 2 — claim posterior ao último snapshot muda os três pools; e
 `formfill_demo` deixa de anunciar `queue_length 1` de fila vazia. Asserção sobre o **conteúdo** do
 snapshot e sobre `updated_at`, não sobre a existência da chave.

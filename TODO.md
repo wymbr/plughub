@@ -401,6 +401,35 @@ unidade); a redução gradual do D5 aritmético.
 2. **Relatório (A)** — recompute + fan-out por recurso + rollup **por tipo de licença**; bootstrap
    deixa de afirmar capacidade. É o defeito **efetivamente observado**, e a medição mostrou que o
    bootstrap é hoje o escritor principal do snapshot.
+   **✅ F2 CONCLUÍDA (2026-08-02)** — ver `CHANGELOG.md`. `available`/`busy` derivados do semáforo do
+   recurso (`_RECOMPUTE_POOL_OCCUPANCY_LUA` → `compute_pool_occupancy`); `busy_elsewhere`+`untagged`+
+   `model` no snapshot; fan-out `pools(instance) ∪ {pool_id}` em `mark_busy`/`remove_conversation`/
+   `release_session_from_pool`; `active_count` **removido ponta a ponta** (chave, helper,
+   `get_busy_count`, INCR/DECR/clamp e o patch `available += 1`) com **todos** os leitores
+   reapontados — sampler do routing, `/v1/operational/pools` (`active_sessions` agora `null` quando
+   desconhecido, não 0), bootstrap e `PoolsPage`. Teste `test_shared_capacity_snapshot.py` **nasceu
+   vermelho** contra o código anterior (`3/3/3` onde afirma `2/2/2`).
+   **Antecipado de F3 por necessidade:** o bootstrap parou de ler `active_count` (viraria leitor de
+   chave sem escritor, devolvendo o 0 plausível) — publica `model: "bootstrap_placeholder"`, ocupação
+   por `Σ SCARD`, e **omite** `busy`/`busy_elsewhere`/`untagged` em vez de zerá-los.
+   **Falta:** **F3a** — `work_task_release`/`work_task_expire` ainda não recomputam (o
+   `work_task_claim` entra de carona no `mark_busy`; **F3b, o bootstrap placeholder, JÁ FOI FEITA**
+   nesta fatia — ver acima); **F4** — rollup `{t}:capacity:snapshot` por
+   tipo de licença e a troca nos consumidores (é o defeito **C**: `Σ available` no `MonitorTab`/
+   `PoolsPage` segue somando recurso compartilhado — comentado no ponto exato do código); **F5b** —
+   o *live fallback* de `pool_status_get` ainda devolve `SCARD(pool:instances)`.
+
+   **Pré-requisito da F3 (registrado 2026-08-02, decisão de escopo):** `refresh_snapshots_for_instance`
+   só reescreve pool que **já tem snapshot** — sem um, não há de onde tirar `sla_target_ms`/
+   `channel_types`, e inventá-los publicaria config falsa num registro que o
+   `system_availability_check` usa para decidir oferta de canal **ao cliente**. Hoje é inofensivo
+   porque o bootstrap cria a primeira linha de todo pool configurado a cada 15 s (e o `route()` cria
+   a de qualquer pool que receba contato). Mas **é uma dependência silenciosa de um serviço no
+   outro**, e a F3 mexe justamente no bootstrap: se ele deixar de escrever, pool sem contato fica
+   sem linha nenhuma e some do feed. Saída já identificada e barata: `refresh_pool_snapshot` cair em
+   `{t}:pool_config:{p}` (cache do próprio routing-engine, alimentado pelo `kafka_listener` — fonte
+   autoritativa, não invenção), o que de quebra elimina a heurística do "só se já existe". **Fechar
+   isto ANTES de alterar o bootstrap**, não depois.
 3. **Desmontagem do modelo errado (B)** — para de gatear sessão humana, para de somar as moedas. É
    **remoção**. Atenção: o teste vermelho **exige `C` configurada** (existe: 370) **e humanos logados**
    com sessões — senão passa por ausência de limite.
@@ -476,6 +505,72 @@ parar de afirmar capacidade (escrever `null` + `model: bootstrap_placeholder`).
   **teste**, não do código: o argumento do código é verificável (ordem de entrega) e o do teste não.
   Decidir se some ou se inverte a asserção — enquanto ficar assim, são 2 vermelhos permanentes que
   anestesiam a leitura de qualquer suíte que inclua o arquivo.
+
+### Pico de ocupação VERDADEIRO — event-driven *(desenho fechado 2026-08-02; F3a + P1–P3 não iniciados)*
+
+> Nasceu de uma pergunta sobre o relatório de dimensionamento: *"o pico por pool existe?"*. Existe —
+> `analytics.pool_occupancy_peaks` (grão 1 min) ← Kafka `pool.occupancy` ← `_occupancy_sampler`, lido
+> por `GET /reports/pools/occupancy?bucket=hour|day` e exibido em Analytics › Pools › Capacidade.
+> **Mas é pico AMOSTRADO a 5 s, e amostrar por relógio é o método errado por construção:** pico é o
+> máximo de uma função escada, e qualquer intervalo de amostra pode cair inteiro entre duas subidas.
+> Não é questão de escolher um intervalo menor. A alocação/liberação é o instante em que o valor muda.
+
+**Grandeza decidida: VAGA CONSUMIDA** (o que `busy`/`available` já publicam), wrap-up incluído. O
+agente em wrap-up não recebe o próximo contato, logo está ocupado por qualquer definição operacional;
+e licença de humano é **por login**, então o hold não gasta licença — as duas grandezas não colidem.
+Nada a construir: o hold já herda a tag do ocupante (F1) e já entra em `used_here`.
+
+**Regra de gravação (fechada):**
+
+- `max` sobe **só na ALOCAÇÃO** — liberação nunca cria máximo novo.
+- **Carga carregada** (bucket que começa alto e só desce, ou sem transição alguma) entra por SEED:
+  `max(bucket novo) := ocupação corrente` na virada.
+- O seed por virada tem um buraco de **relógio** (flusher acorda em 00:00.4, ocupação caiu em 00:00.1
+  → perde 300 ms de pico, justo a classe que motivou sair da amostragem). Seguro barato e **coerente
+  com a regra**: na liberação, semear o bucket com o valor de ANTES *se ainda não semeado* — não é
+  "gravar max na liberação", é o mesmo seed disparado por EVENTO em vez de por relógio.
+- **Ocupação corrente** não precisa ser mantida para POOL (o recompute em Lua já devolve `used_here`
+  fresco a cada transição). Só o tenant precisa (ver P2).
+
+> **Invariante de implementação — o bump mora na costura de ALOCAÇÃO (`mark_busy`, sobre o `used_here`
+> que o recompute devolveu), NUNCA dentro de `write_pool_snapshot`.** Se "quem escreve snapshot também
+> sobe o pico", a F3a passa a bumpar em liberações e o pico volta a ser *amostrado nos instantes em que
+> alguém escreve snapshot* — numericamente inofensivo hoje, e a semântica escorrega de volta para
+> amostragem **sem nada ficar vermelho**.
+
+**Cobertura verificada (2026-08-02):** `claim_instance` tem **3 sítios, todos em `router.py`**
+(`_allocate` 327, `_try_affinity` 500, `work_task_claim` 655) e **cada um chama `mark_busy` logo
+depois** → a cobertura de subida já é 100% hoje. `release_instance`: `remove_conversation` (coberto) +
+`work_task_release`/`work_task_expire` (F3a, descobertos).
+
+**Consequência: a F3a NÃO é pré-requisito do pico** (afirmação anterior RETIFICADA — ela valia para um
+modelo descartado, em que a liberação gravava max). F3a mexe em ocupação corrente e frescor de
+snapshot; o flusher lê a ocupação pelo recompute (fresco do Redis), então nem o seed se contamina com
+snapshot velho. F3a tem valor próprio e independente.
+
+| # | Fatia | Nota |
+|---|---|---|
+| **F3a** | `work_task_release`/`work_task_expire` chamam `refresh_snapshots_for_instance` | 2 sítios; sem decisão pendente. *(F3b — bootstrap placeholder — JÁ FEITA na fatia 2.)* |
+| **P1** | watermark por pool: bump na alocação + seed na virada + seed por evento na liberação; `_occupancy_sampler` deixa de amostrar e vira **flusher** | `{t}:pool:{p}:peak:{minuto}`, TTL ~2 h. **Zero mudança de schema, tópico, endpoint ou UI** — publica no mesmo `pool.occupancy` |
+| **P2** | `__total__` do tenant exato | `max` de SOMAS ≠ soma de `max`, então watermark por pool não o produz. ZSET `{t}:occupancy` `instance → ocupação` (o Lua de claim/release já devolve o novo SCARD; ZREM em zero ⇒ cardinalidade O(ocupadas)) + `INCRBY delta` O(1) no caminho quente + **reconciliação barulhenta 1×/min** no flusher contra a soma do ZSET. *Diferença para o `active_count`: aquele não era pecado por ser contador, e sim por ser de escopo errado, sem fonte contra a qual conferir e sem ninguém conferindo.* |
+| **P3** | `bucket=15min` | Leitura pura (`toStartOfInterval(minute, INTERVAL 15 MINUTE)` + o valor no `pattern="^(hour\|day)$"`). Retroativo, a qualquer momento — o grão de 1 min já retém a informação |
+
+**Validação cruzada (a resposta para "como eu saberia que está certo"):** derivar o pico
+retroativamente de `analytics.segments` no ClickHouse, desdobrando `started_at`/`ended_at` em ±1 e
+tomando o máximo da soma corrida. Derivação independente, sem escritor novo, em qualquer
+granularidade. Deve bater com o watermark **a menos dos holds de wrap-up e de vagas órfãs** — que é
+exatamente a diferença entre "vaga consumida" e "contato sendo servido".
+
+**Descontinuidade na série histórica (2026-08-02):** a fonte do sampler mudou de `active_count` para
+`used_here`. Não é troca cosmética — o contador **derivava para cima** (ficava preso alto quando
+faltava `agent_done`; o clamp de negativo mascarava o simétrico), então `peak_concurrency` histórico
+tende a estar **superestimado**. O valor novo herda outra coisa: vaga órfã conta como ocupação até o
+reap passar — mas agora ela também aparece em `available`, ou seja, deixou de ser invisível. Tamanho do
+degrau não medido. **Se a série virar base de decisão de dimensionamento, marcar a data no eixo.**
+
+**Limitação que permanece em qualquer desenho:** o `peak_concurrency` responde *"quantas vagas no
+máximo"*, nunca *"ocupação média"* — o registro por minuto já é máximo, e média de máximos não é média
+de ocupação. Média exigiria soma+contagem de amostras por minuto (campo novo, não pedido).
 
 ### Medições que decidiram o escopo (script mantido para o "depois")
 

@@ -167,9 +167,21 @@ note "Atribuição por pool no shared:"
 redis HGETALL "$TENANT:admission:shared_pools" | paste - - 2>/dev/null | sed 's/^/    /'
 
 # ─────────────────────────────────────────────────────────────────────────────
-head1 "Defeito A — snapshot × verdade do semáforo (retrato 'antes')"
+head1 "Defeito A — snapshot × verdade do semáforo"
 
-printf '%-28s %-9s %-7s %-7s %-7s %-7s\n' POOL SNAP_AVAIL SNAP_BUSY SNAP_TOT ACTIVE_C FILA
+# ── Fatia 2 (2026-08-02): a coluna ACTIVE_C MORREU com o contador que ela lia ──
+# `{t}:pool:{p}:active_count` foi REMOVIDO — contava por POOL uma capacidade que é
+# do RECURSO. Mantê-la aqui faria a ferramenta de MEDIÇÃO cair exatamente na
+# armadilha que o código deixou de ter: chave sem escritor devolve 0, e 0 é
+# plausível. No lugar entram os campos derivados do semáforo.
+#
+# MODEL é a coluna que impede a leitura errada das outras:
+#   resource_semaphore    → routing-engine; BUSY/ELSEW/UNTAG são MEDIDOS
+#   bootstrap_placeholder → bridge (NX); ele não parseia a tag do ocupante e por
+#                           isso OMITE os três. `-` ali é AUSÊNCIA, não zero — não
+#                           somar, não concluir "ninguém em atendimento".
+printf '%-28s %-7s %-6s %-7s %-7s %-7s %-6s %s\n' \
+       POOL AVAIL BUSY ELSEW UNTAG TOTAL FILA MODEL
 # Lista capturada ANTES do laço (defesa em profundidade contra consumo de stdin).
 SNAP_KEYS=$(redis --scan --pattern "$TENANT:pool:*:snapshot" | sort)
 for k in $SNAP_KEYS; do
@@ -178,12 +190,27 @@ for k in $SNAP_KEYS; do
   SNAP=$(redis GET "$k")
   AV=$(jnum "$SNAP" available)
   BU=$(jnum "$SNAP" busy)
+  BE=$(jnum "$SNAP" busy_elsewhere)
+  UN=$(jnum "$SNAP" untagged)
   TI=$(jnum "$SNAP" total_instances)
-  AC=$(redis GET "$TENANT:pool:$POOL:active_count")
+  MO=$(printf '%s' "$SNAP" | sed -n 's/.*"model": *"\([a-z_]*\)".*/\1/p')
   QL=$(redis ZCARD "$TENANT:pool:$POOL:queue")
-  printf '%-28s %-9s %-7s %-7s %-7s %-7s\n' \
-         "$POOL" "${AV:--}" "${BU:--}" "${TI:--}" "${AC:-0}" "${QL:-0}"
+  printf '%-28s %-7s %-6s %-7s %-7s %-7s %-6s %s\n' \
+         "$POOL" "${AV:--}" "${BU:--}" "${BE:--}" "${UN:--}" "${TI:--}" \
+         "${QL:-0}" "${MO:-legado}"
 done
+
+# Chave morta: se ainda houver `active_count` no Redis, é resíduo anterior à fatia 2
+# (a chave não tem TTL — ninguém a apaga) OU um escritor que ressuscitou. Denunciar,
+# porque valor sobrevivente ali é convite a que volte a ser lido.
+AC_LEFT=$(redis --scan --pattern "$TENANT:pool:*:active_count" | grep -c .)
+if [ "${AC_LEFT:-0}" -gt 0 ] 2>/dev/null; then
+  note "ATENÇÃO — $AC_LEFT chave(s) '$TENANT:pool:*:active_count' ainda existem."
+  note "O contador foi REMOVIDO na fatia 2 e não tem mais escritor. Sem TTL, resíduo"
+  note "anterior ao deploy persiste indefinidamente. Se o número CRESCER entre duas"
+  note "execuções, alguém voltou a escrever — procurar o produtor. Limpar o resíduo:"
+  note "  redis-cli --scan --pattern '$TENANT:pool:*:active_count' | xargs -r redis-cli DEL"
+fi
 
 SNAP_N=$(redis --scan --pattern "$TENANT:pool:*:snapshot" | grep -c .)
 if [ "${SNAP_N:-0}" -eq 0 ] 2>/dev/null; then
@@ -207,8 +234,9 @@ OCC_TOTAL=$(printf '%s\n' "$OCC_KEYS" | grep -c .)
 printf '\n  Instâncias registradas: %s   ·   com ocupação agora: %s\n' \
        "${INST_TOTAL:-?}" "${OCC_TOTAL:-0}"
 if [ "${OCC_TOTAL:-0}" -eq 0 ] 2>/dev/null; then
-  note "Nenhuma instância ocupada. Para reproduzir A em movimento, rodar durante"
-  note "um atendimento — ou comparar ACTIVE_C > 0 com ocupação 0 (deriva parada)."
+  note "Nenhuma instância ocupada — sem ocupação não há consumo a propagar, e este"
+  note "retrato NÃO julga o defeito A. Rodar DURANTE um atendimento (o caso que o"
+  note "reproduz é humano logado em ≥2 pools com pelo menos uma vaga tomada)."
 else
   printf '  %-34s %-6s %-6s %-6s %s\n' INSTANCIA OCUP MAXC MCS POOLS
   for k in $OCC_KEYS; do
@@ -240,7 +268,15 @@ for k in $POOLSET_KEYS; do
 done
 
 hr
-note "LEITURA: se a soma de SNAP_AVAIL entre pools que compartilham a MESMA instância"
-note "for maior que (max_concurrent − ocupação) daquela instância, o defeito A está reproduzido."
-note "Se ACTIVE_C divergir da ocupação real do semáforo, é a deriva do contador por pool."
+note "LEITURA (fatia 2 — o que cada linha deve satisfazer):"
+note "  1. ARITMÉTICA DA LINHA: em toda linha 'resource_semaphore',"
+note "     AVAIL = TOTAL − BUSY − ELSEW. Não fechando, o recompute e os campos"
+note "     publicados divergiram — cada um plausível sozinho, contraditórios juntos."
+note "  2. CONSUMO PROPAGADO (defeito A, corrigido): para um recurso logado em N pools,"
+note "     AVAIL é IGUAL nas N linhas e vale (max_concurrent − ocupação do recurso)."
+note "     BUSY aparece só na linha do pool que serviu; as irmãs mostram ELSEW."
+note "  3. UNTAG deve ser 0. Membro sem tag é legítimo só nas 24 h após o deploy da"
+note "     F1 (TTL do SET); persistente = escritor de ocupante fora do claim_instance."
+note "  4. Σ AVAIL entre pools CONTINUA ERRADO — é o defeito C (fase F4), não regressão:"
+note "     available não é aditivo entre pools que compartilham o mesmo recurso."
 hr

@@ -43,7 +43,15 @@ interface PoolOp {
   admission_scope:     'reserved' | 'shared'
   reservation:         number | null
   admitted:            number
-  active_sessions:     number
+  // Capacidade compartilhada (fatia 2). `null` = o snapshot não trouxe o campo
+  // (linha do bootstrap, `capacity_model: 'bootstrap_placeholder'`) → DESCONHECIDO,
+  // nunca 0. `busy_elsewhere` = vagas do mesmo recurso consumidas por pools irmãos:
+  // é o que explica `available < total − active_sessions` sem que a linha pareça
+  // um bug. Consumo na tela (coluna própria + fim da soma de `available`) = F4.
+  active_sessions:     number | null
+  busy_elsewhere:      number | null
+  total_capacity:      number | null
+  capacity_model:      'resource_semaphore' | 'bootstrap_placeholder' | null
   queue_mute:          number
   queue_attended:      number
   queue_tier:          'attended' | 'system' | 'none'
@@ -546,8 +554,14 @@ export default function PoolsPage() {
 
                     {/* Em atendimento (item 7a) */}
                     <td className="px-3 py-3 text-center">
-                      <span className="text-sm font-bold" style={{ color: pool.active_sessions > 0 ? '#059669' : '#6b7280' }}>
-                        {pool.active_sessions}
+                      <span
+                        className="text-sm font-bold"
+                        style={{ color: (pool.active_sessions ?? 0) > 0 ? '#059669' : '#6b7280' }}
+                        title={pool.active_sessions === null
+                          ? 'sem snapshot do routing-engine — ocupação por pool desconhecida'
+                          : undefined}
+                      >
+                        {pool.active_sessions ?? '—'}
                       </span>
                     </td>
 

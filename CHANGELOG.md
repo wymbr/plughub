@@ -2,6 +2,90 @@
 
 ---
 
+## Capacidade compartilhada — fatia 2: relatório derivado do semáforo (defeito A) ✅ (2026-08-02)
+
+Fecha o defeito **efetivamente observado** e medido em 2026-07-31: 1 humano `max_concurrent 3`
+logado em 3 pools com 1 vaga ocupada, e **cada** linha do Monitor dizendo `available 3`. A
+capacidade é do RECURSO; o consumo não se propagava porque a fonte era um contador **por POOL**.
+
+**A correção é uma troca de FONTE, não de fórmula.** `available`/`busy` passam a ser recalculados
+do semáforo do recurso (`{t}:instance:{iid}:sessions`) num único Lua
+(`_RECOMPUTE_POOL_OCCUPANCY_LUA`, `compute_pool_occupancy`), sobre `ready_set ∪ busy_set`:
+
+```
+total_capacity = Σ max_concurrent(i)                 available      = max(0, total_capacity − used_global)
+used_global    = Σ SCARD(sessions_i)   ← irmãos+holds busy           = used_here
+used_here      = Σ #{ m : tag(m) = P }  ← tag da F1   busy_elsewhere = used_global − used_here
+```
+
+**`current_sessions` NÃO foi promovido a fonte**, embora esteja certo hoje: é da mesma família do
+contador por pool — número paralelo que pode derivar. Trocar um contador por outro não fecha a
+classe de defeito, só muda qual deles vai mentir depois.
+
+**O que morreu.** `{t}:pool:{p}:active_count` inteiro: a chave, o helper, `get_busy_count`, o INCR
+do `mark_busy`, o DECR do `remove_conversation`/`release_session_from_pool`/transferência cross-pool
+e o patch `snap["available"] += 1`. Com ele foram embora o **chão** (DECR negativo) e o **teto**
+(`available 4 / total 3`, remendado em 2026-07-30): um valor derivado de `total_capacity −
+used_global` não tem como passar da capacidade nem ficar negativo — a condição deixou de existir,
+não o clamp.
+
+**Fan-out — a mudança estrutural.** O refresh deixou de ser *"o pool roteado"* e passou a ser
+`pools(instance) ∪ {pool_id}` (`refresh_snapshots_for_instance`). Sem isso, mesmo com a fórmula
+certa, a linha do pool irmão só seria reescrita quando algo o tocasse — que é literalmente o defeito
+relatado. Ligado em `mark_busy` (⇒ `work_task_claim` entra de carona), `remove_conversation` e
+`release_session_from_pool`. **Só reescreve pool que já tem snapshot**: inventar
+`sla_target_ms`/`channel_types` publicaria config falsa num registro que o `system_availability_check`
+usa para decidir oferta de canal ao cliente; o bootstrap cria o primeiro em ≤15 s e o pulo é logado.
+
+**Dois campos novos, os dois contra silêncio.** `busy_elsewhere` (vagas do mesmo recurso consumidas
+por irmãos) faz `available = total − busy − busy_elsewhere` **fechar na própria linha** — sem ele a
+linha do irmão fica inexplicável e alguém "conserta" de volta para o modelo errado. `untagged`
+publica os ocupantes sem tag: contam na capacidade do recurso, em projeção de pool nenhuma, devem ir
+a zero em ≤24 h (TTL do SET) e, persistentes, denunciam um escritor de ocupante fora do
+`claim_instance`. Também `model: "resource_semaphore"`, para distinguir a linha do routing-engine da
+do bootstrap.
+
+**Nenhum leitor ficou lendo chave morta** (era o modo de falha mais provável desta remoção —
+`active_count` some, o leitor devolve 0, e 0 é plausível):
+- routing-engine `_occupancy_sampler` → `compute_pool_occupancy(...)["used_here"]`. *Efeito na
+  série: o total do tenant deixa de contar o mesmo atendimento uma vez por pool; o degrau na virada
+  é a correção, não queda de carga.*
+- agent-registry `/v1/operational/pools` → `active_sessions` vem do `busy` do snapshot, e é **`null`**
+  (não 0) quando o snapshot não traz o campo. Novos: `busy_elsewhere`, `total_capacity`,
+  `capacity_model`. `PoolSnapshot` (TS) ganhou os campos como opcionais.
+- orchestrator-bridge `_refresh_pool_snapshots` (o escritor **principal** num sistema ocioso, medido)
+  → ocupação por `Σ SCARD`, `model: "bootstrap_placeholder"`, e **omite** `busy`/`busy_elsewhere`/
+  `untagged` em vez de zerá-los: separar consumo próprio do consumo dos irmãos exige o parse da tag,
+  e duplicar essa regra em dois serviços é como se chega a duas verdades. *(Item de F3 antecipado
+  por necessidade: deixá-lo lendo `active_count` seria deixar um leitor de chave sem escritor.)*
+- platform-ui `PoolsPage` renderiza `—` para `active_sessions: null`.
+
+**Verificação — o teste nasceu vermelho de verdade** (diferente da fatia 1, cuja reprovação teve de
+ser provada por mutação): `test_shared_capacity_snapshot.py` (8 testes) reproduz a linha de base
+medida e afirma `available 2/2/2` onde o código anterior dava `3/3/3`. Cobre ainda: aritmética da
+linha (`available = total − busy − busy_elsewhere`), membro legado publicado como `untagged` em vez
+de descartado, hold de wrap-up contando como ocupação **com a tag herdada**, fan-out reescrevendo o
+irmão que nada tocou, devolução simétrica no `remove_conversation`, ausência de escritor de
+`active_count` e vaga órfã **encolhendo `available`** em vez de ficar invisível.
+Reescritos: `test_pool_snapshot_invariant.py` (o teste do teto virou *"o snapshot anterior nunca
+contamina o próximo"* — grava `available 99/busy 42` e exige que o recompute ignore) e a parte F3 de
+`test_pool_scoped_agent_type.py` (a precedência de listas deixou de ser o mecanismo: qual pool serviu
+é lido da tag, então o `agent_done` de A **não tem como** mexer no `busy` de B).
+
+**Fora desta fatia, registrado:** F3 (`work_task_release`/`work_task_expire` não recomputam) e o
+defeito **C** — `Σ available` no `MonitorTab`/`PoolsPage` continua somando recurso compartilhado
+(2+2+2 = 6 para uma disponibilidade real de 2); exige o rollup por recurso distinto e **por tipo de
+licença** em `{t}:capacity:snapshot` (F4). Comentado no ponto exato do código, não só aqui.
+
+**Arquivos:** `routing-engine/registry.py` (Lua de recompute, `compute_pool_occupancy`,
+`pools_of_instance`, `refresh_snapshots_for_instance`, `write_pool_snapshot` reescrito, remoções),
+`routing-engine/main.py` (sampler), `routing-engine/router.py` + `kafka_listener.py` (comentários que
+descreviam o contador), `orchestrator-bridge/instance_bootstrap.py`, `agent-registry/infra/redis.ts`
++ `routes/operational.ts`, `platform-ui/PoolsPage.tsx` + `tabs/MonitorTab.tsx`, `CLAUDE.md`
+§ Operational Visibility.
+
+---
+
 ## Capacidade compartilhada — fatia 1: tag de pool no membro do semáforo ✅ (2026-08-02)
 
 Pré-requisito das fatias seguintes (relatório A, desmontagem B), **sem mudança de comportamento

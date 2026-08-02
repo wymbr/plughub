@@ -602,33 +602,44 @@ class InstanceBootstrap:
           - NX=True → só escreve se não existir snapshot no Redis.
             Garante visibilidade imediata sem interferir com dados frescos do
             routing-engine quando o pool está ativo.
-          - TTL 60s → menor que o TTL 120s do routing-engine. Se nenhum evento
+          - TTL 60s → menor que o TTL do routing-engine (3600s). Se nenhum evento
             de routing ocorrer em 60s, o bootstrap reescreve na próxima iteração
             do heartbeat (15s).
+
+        **Fatia 2 (capacidade compartilhada) — esta é uma SEGUNDA implementação da
+        fórmula, e ela para de afirmar o que não sabe.** Duas mudanças:
+
+        1. A ocupação deixou de vir de `{t}:pool:{p}:active_count` (contador
+           REMOVIDO no routing-engine: contava por POOL uma capacidade que é do
+           RECURSO). Passa a ser `Σ SCARD({t}:instance:{iid}:sessions)` sobre as
+           instâncias do pool — a MESMA fonte de verdade que o routing-engine usa, e
+           a que o heal de fantasma logo abaixo já consulta. Não fosse isso, este
+           escritor — que a medição de 2026-07-31 mostrou ser o PRINCIPAL num
+           sistema ocioso — leria uma chave sem escritor e publicaria capacidade
+           cheia para sempre, que é o "valor plausível" da pior espécie.
+        2. Ele NÃO publica `busy`/`busy_elsewhere`/`untagged`: separar o consumo
+           deste pool do consumo dos irmãos exige o parse da TAG do membro, e
+           duplicar essa regra em dois serviços é como se chega a duas verdades.
+           Ausência é honesta; zero não seria. `model: "bootstrap_placeholder"`
+           torna a linha reconhecível — consumidor que precisa de `busy` deve
+           tratá-la como DESCONHECIDA, nunca como 0.
         """
         for tenant_id, pool_map in self._pool_configs.items():
             for pool_id, pool_data in pool_map.items():
                 try:
                     snap_key      = f"{tenant_id}:pool:{pool_id}:snapshot"
-                    active_key    = f"{tenant_id}:pool:{pool_id}:active_count"
                     queue_key     = f"{tenant_id}:pool:{pool_id}:queue"
 
-                    # Capacity-sum model — mirrors routing-engine's write_pool_snapshot():
-                    #   available = total_capacity − active_count
+                    # available = total_capacity − ocupação REAL do recurso
                     #
-                    # We intentionally do NOT exclude busy/paused instances from
-                    # total_capacity.  Excluding them causes a crash-recovery bug:
-                    # when sessions end without an agent_done event (crash scenario),
-                    # active_count drops to 0 but instance state stays status=busy.
-                    # The old formula then produced available=8 with busy=0, which is
-                    # logically inconsistent and confuses the Monitor.
-                    #
-                    # Using total_capacity−active_count means:
-                    #  • Normal operation: total_capacity=10, active_count=2 → available=8 ✓
-                    #  • Crash recovery:   total_capacity=10, active_count=0 → available=10 ✓
-                    #    (stale-busy instances have no active session; self-heal
-                    #     in _heartbeat_tick will reset their state on the next cycle)
+                    # Instâncias busy/paused NÃO são excluídas de total_capacity de
+                    # propósito: excluí-las causava um bug de crash-recovery (sessão
+                    # que termina sem agent_done deixava o estado em busy, e a
+                    # capacidade sumia). Com a ocupação vindo do semáforo, o caso de
+                    # crash se resolve sozinho — a vaga órfã aparece como ocupação
+                    # até o reap, em vez de virar capacidade fantasma.
                     total_capacity = 0
+                    used = 0
                     for _iid, _pl in self._registered.items():
                         if _pl.get("tenant_id") != tenant_id:
                             continue
@@ -640,17 +651,17 @@ class InstanceBootstrap:
                         _mc = int(_pl.get("max_concurrent",
                                    _pl.get("max_concurrent_sessions", 1)))
                         total_capacity += _mc
+                        used += int(await self._redis.scard(
+                            f"{tenant_id}:instance:{_iid}:sessions"
+                        ) or 0)
 
-                    busy_raw      = await self._redis.get(active_key)
-                    busy          = max(0, int(busy_raw)) if busy_raw else 0
-                    available     = max(0, total_capacity - busy)
+                    available     = max(0, total_capacity - used)
                     queue_length  = int(await self._redis.zcard(queue_key) or 0)
 
                     snapshot = {
                         "pool_id":         pool_id,
                         "tenant_id":       tenant_id,
                         "available":       available,
-                        "busy":            busy,
                         # total_instances = total concurrent capacity (sum of max_concurrent
                         # across all non-paused agents).  Mirrors routing-engine formula.
                         # For AI pools (max_concurrent=1): equals agent count.
@@ -659,6 +670,7 @@ class InstanceBootstrap:
                         "queue_length":    queue_length,
                         "sla_target_ms":   pool_data.get("sla_target_ms", 480000),
                         "channel_types":   pool_data.get("channel_types", []),
+                        "model":           "bootstrap_placeholder",
                         "updated_at":      datetime.now(timezone.utc).isoformat(),
                     }
                     # NX: só escreve se o snapshot não existir no Redis.

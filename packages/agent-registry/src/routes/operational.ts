@@ -196,11 +196,17 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
     }
     const adm = await _admissionState(tenantId, reservations)
     const redis = getRedis()
-    const activeCounts = await Promise.all(pools.map(async (p) => {
-      const raw = await redis.get(`${tenantId}:pool:${p.pool_id}:active_count`)
-      const n = raw ? parseInt(raw, 10) : 0
-      return Number.isFinite(n) && n > 0 ? n : 0
-    }))
+    // Capacidade compartilhada, fatia 2 — `active_sessions` vinha de
+    // `{t}:pool:{p}:active_count`, contador POR POOL de uma capacidade que é do
+    // RECURSO (e agora sem escritor: foi removido). Passa a vir do `busy` do
+    // snapshot, que é a projeção pela TAG do membro do semáforo — um ocupante tem
+    // exatamente uma tag, então somar entre pools não conta o mesmo atendimento
+    // duas vezes. `null` quando o snapshot não traz o campo (linha do bootstrap):
+    // desconhecido, NÃO zero — zero é indistinguível de "ninguém em atendimento".
+    const activeCounts: (number | null)[] = pools.map((_p, i) => {
+      const s = snapshots[i]
+      return s && typeof s.busy === "number" ? s.busy : null
+    })
     const muteCounts = await Promise.all(pools.map(async (p) => {
       try {
         const members = await redis.zrange(opKeys.poolQueue(tenantId, p.pool_id), 0, -1)
@@ -278,7 +284,13 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
         admission_scope:  scope,                            // "reserved" | "shared"
         reservation,                                        // fatia própria (ou null)
         admitted,                                           // sessões debitando C neste pool
-        active_sessions:  activeCounts[i] ?? 0,             // em atendimento agora
+        active_sessions:  activeCounts[i] ?? null,          // em atendimento NESTE pool (null = desconhecido)
+        // Vagas do MESMO recurso consumidas por pools IRMÃOS. Sem isto a linha fica
+        // aritmeticamente inexplicável (`available < total − active_sessions`) e o
+        // leitor conclui que há um bug — quando o que há é capacidade compartilhada.
+        busy_elsewhere:   snap && typeof snap.busy_elsewhere === "number" ? snap.busy_elsewhere : null,
+        total_capacity:   snap && typeof snap.total_instances === "number" ? snap.total_instances : null,
+        capacity_model:   snap?.model ?? null,              // resource_semaphore | bootstrap_placeholder
         queue_mute:       queueMute,                        // espera gratuita (fora de C)
         queue_attended:   Math.max(0, queueLength - queueMute),
         queue_tier:       queueTier,                        // attended | system | none
@@ -291,8 +303,12 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       }
     })
 
-    // Item 7a — agregados do tenant (tiles + donuts)
-    const inServiceTotal = activeCounts.reduce((s, v) => s + v, 0)
+    // Item 7a — agregados do tenant (tiles + donuts).
+    // `active_sessions` é aditivo entre pools por construção (um ocupante carrega
+    // UMA tag), diferente de `available`, que não é — ver §3 do desenho de
+    // capacidade compartilhada. Pools sem `busy` no snapshot ficam de fora da soma
+    // em vez de entrar como 0.
+    const inServiceTotal = activeCounts.reduce<number>((s, v) => s + (v ?? 0), 0)
     const queueTotal     = result.reduce((s, r) => s + r.queue_length, 0)
     const queueMuteTotal = result.reduce((s, r) => s + r.queue_mute, 0)
     const reservedList   = Object.entries(reservations).map(([poolId, r]) => ({

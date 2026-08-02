@@ -349,8 +349,9 @@ class Router:
         #   DECR for independent parallel participants.
         # - EXCEPTION: if the conference event targets a pool that already owns the session
         #   (e.g. a conference specialist escalating back to the primary pool), pass the
-        #   session_id so the same-pool re-entry guard fires and prevents a double INCR.
-        #   Without this, active_count[target_pool] would go 1→2 and never come back to 0.
+        #   session_id so the same-pool re-entry guard fires. (Antes da fatia 2 isso
+        #   evitava um INCR duplo de `active_count`; hoje evita reescrever o
+        #   serving_pool e re-disparar o caminho de transferência cross-pool.)
         mark_busy_session_id: str | None
         if not event.conference_id:
             mark_busy_session_id = event.session_id

@@ -8,12 +8,20 @@ guardar. O campo armazenado é resíduo arbitrário (o pool do primeiro login) �
 ele que virava `conversations.routed.agent_type_id`, com o qual o bridge decide
 **o que executar**. Para IA o campo é identidade legítima e passa intacto.
 
-**F3 — qual pool decrementar é fato por-sessão.** `remove_conversation` dava
+**F3 — qual pool serviu o contato é fato por-sessão.** `remove_conversation` dava
 precedência a `meta.pools` (per-RECURSO = o conjunto INTEIRO de pools do agente)
 sobre o `pools` do evento `agent_done`, emitido por quem sabe qual pool serviu
 aquele contato. Para humano multi-pool isso decrementava o `active_count` de
 pools que não serviram: o pool que serviu ficava com carga fantasma (fila não
 drena) e os outros iam a zero.
+
+**Fatia 2 — a F3 mudou de mecanismo.** Não existe mais contador por pool a
+decrementar: `busy` é a projeção da TAG do membro do semáforo, então "qual pool
+serviu" é lido do PRÓPRIO dado, não inferido de uma precedência de listas. A
+classe de defeito ficou estruturalmente impossível — e é isso que os testes de
+integração abaixo afirmam agora: um `agent_done` do contato servido em A zera o
+`busy` de A e **não pode tocar** o de B, mesmo que B esteja em `meta.pools`. A
+precedência sobrevive no código porque ainda decide a MEMBERSHIP dos SETs.
 
 F2 é unitário (função pura). F3 precisa de Redis real e é pulado sem ele.
 """
@@ -30,13 +38,19 @@ from plughub_routing.models import AgentInstance, resolve_agent_type
 from plughub_routing.registry import (
     InstanceRegistry,
     _instance_key,
-    _instance_meta_key,
-    _pool_active_count_key,
+    _instance_sessions_key,
     _pool_instances_key,
+    _pool_snapshot_key,
 )
 
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
+# O serviço define `PLUGHUB_REDIS_URL`; ler só `REDIS_URL` faz o teste PULAR dentro
+# do próprio container onde o Redis está a um hostname de distância.
+REDIS_URL = (
+    os.environ.get("REDIS_URL")
+    or os.environ.get("PLUGHUB_REDIS_URL")
+    or "redis://localhost:6379"
+)
 
 POOL_A = "retencao_humano"
 POOL_B = "formfill_demo"
@@ -114,11 +128,8 @@ async def ctx():
     reg      = InstanceRegistry(client)
 
     async def cleanup() -> None:
-        keys = [_instance_key(tenant, instance), _instance_meta_key(tenant, instance)]
-        for pool in (POOL_A, POOL_B):
-            keys += [_pool_active_count_key(tenant, pool),
-                     _pool_instances_key(tenant, pool)]
-        await client.delete(*keys)
+        async for k in client.scan_iter(f"{tenant}:*"):
+            await client.delete(k)
 
     await cleanup()
     try:
@@ -128,52 +139,83 @@ async def ctx():
         await client.aclose()
 
 
-@pytest.mark.asyncio
-async def test_event_pools_win_over_resource_wide_meta(ctx):
-    """O nó da F3: o humano está em A e B (meta = ambos), mas o contato foi
-    servido em A. Só A pode ser decrementado."""
-    reg, client, tenant, instance = ctx
+async def _snap(client, tenant, pool) -> dict:
+    raw = await client.get(_pool_snapshot_key(tenant, pool))
+    assert raw, f"snapshot ausente para {pool} — o teste não tem o que julgar"
+    return json.loads(raw)
 
+
+async def _human_in(reg, client, tenant, instance, pools: list[str], capacity=3):
     await client.set(_instance_key(tenant, instance), json.dumps({
-        "instance_id": instance, "agent_type_id": f"human_agent_{POOL_A}",
-        "tenant_id": tenant, "pools": [POOL_A, POOL_B],
-        "execution_model": "stateful", "max_concurrent": 3,
-        "current_sessions": 1, "status": "busy", "source": "human_login",
+        "instance_id": instance, "agent_type_id": f"human_agent_{pools[0]}",
+        "tenant_id": tenant, "pools": pools,
+        "execution_model": "stateful", "max_concurrent": capacity,
+        "current_sessions": 0, "status": "ready", "source": "human_login",
     }))
+    for pool in pools:
+        await client.sadd(_pool_instances_key(tenant, pool), instance)
+        await reg.write_pool_snapshot(
+            tenant_id=tenant, pool_id=pool,
+            sla_target_ms=480_000, channel_types=["webchat"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_serving_pool_is_read_from_the_data_not_inferred(ctx):
+    """O nó da F3, no mecanismo novo.
+
+    O humano está em A e B (meta = ambos) e atende UM contato em cada. O
+    `agent_done` do contato de A não pode mexer no `busy` de B — e agora isso não
+    depende de nenhuma precedência de listas: cada ocupante carrega a tag do pool
+    que o serviu, então "qual pool serviu" é dado, não inferência.
+    """
+    reg, client, tenant, instance = ctx
+    await _human_in(reg, client, tenant, instance, [POOL_A, POOL_B])
     # meta = conjunto INTEIRO de pools do recurso (o que a precedência antiga usava)
     await reg.update_instance_meta(
         tenant, instance, pools=[POOL_A, POOL_B],
         agent_type_id=f"human_agent_{POOL_A}",
     )
-    await client.set(_pool_active_count_key(tenant, POOL_A), 1)
-    await client.set(_pool_active_count_key(tenant, POOL_B), 1)
+
+    assert await reg.claim_instance(tenant, instance, "ses-a", None, 3, pool_id=POOL_A) == 1
+    assert await reg.claim_instance(tenant, instance, "ses-b", None, 3, pool_id=POOL_B) == 2
+    await reg.mark_busy(tenant, POOL_A, instance, "ses-a")
+
+    before_a, before_b = await _snap(client, tenant, POOL_A), await _snap(client, tenant, POOL_B)
+    assert (before_a["busy"], before_a["busy_elsewhere"]) == (1, 1), before_a
+    assert (before_b["busy"], before_b["busy_elsewhere"]) == (1, 1), before_b
 
     # agent_done do contato servido em A (o bridge sabe qual pool serviu)
     await reg.remove_conversation(
         tenant, instance, "ses-a", fallback_pools=[POOL_A],
     )
 
-    assert await client.get(_pool_active_count_key(tenant, POOL_A)) == "0"
-    # B não participou deste contato — seu contador não pode ser tocado.
-    assert await client.get(_pool_active_count_key(tenant, POOL_B)) == "1"
+    after_a, after_b = await _snap(client, tenant, POOL_A), await _snap(client, tenant, POOL_B)
+    assert after_a["busy"] == 0, f"A ficou com carga fantasma: {after_a}"
+    assert after_b["busy"] == 1, (
+        f"o contato de B foi levado junto pelo agent_done de A: {after_b}"
+    )
+    # A vaga devolvida é do RECURSO: a linha de B também precisa enxergá-la.
+    assert after_b["busy_elsewhere"] == 0 and after_b["available"] == 2, after_b
+    assert await reg.instance_session_count(tenant, instance) == 1
 
 
 @pytest.mark.asyncio
 async def test_meta_still_used_when_event_omits_pools(ctx):
     """O fallback que motivou a precedência antiga continua vivo: agentes que
-    nunca publicaram agent_ready e cujo agent_done não traz `pools`."""
+    nunca publicaram agent_ready e cujo agent_done não traz `pools`. Ele decide a
+    membership dos SETs e o alcance do fan-out do snapshot."""
     reg, client, tenant, instance = ctx
-
-    await client.set(_instance_key(tenant, instance), json.dumps({
-        "instance_id": instance, "agent_type_id": "x", "tenant_id": tenant,
-        "pools": [POOL_A], "max_concurrent": 1,
-        "current_sessions": 1, "status": "busy",
-    }))
+    await _human_in(reg, client, tenant, instance, [POOL_A], capacity=1)
     await reg.update_instance_meta(
         tenant, instance, pools=[POOL_A], agent_type_id="x",
     )
-    await client.set(_pool_active_count_key(tenant, POOL_A), 1)
+    assert await reg.claim_instance(tenant, instance, "ses-b", None, 1, pool_id=POOL_A) == 1
+    await reg.mark_busy(tenant, POOL_A, instance, "ses-b")
+    assert (await _snap(client, tenant, POOL_A))["busy"] == 1
 
     await reg.remove_conversation(tenant, instance, "ses-b", fallback_pools=[])
 
-    assert await client.get(_pool_active_count_key(tenant, POOL_A)) == "0"
+    snap = await _snap(client, tenant, POOL_A)
+    assert (snap["busy"], snap["available"]) == (0, 1), snap
+    assert not await client.exists(_instance_sessions_key(tenant, instance))

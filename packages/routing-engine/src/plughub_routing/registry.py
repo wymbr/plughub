@@ -66,13 +66,14 @@ def _pool_busy_instances_key(tenant_id: str, pool_id: str) -> str:
     """Set of instance_ids currently handling at least one session in the pool."""
     return f"{tenant_id}:pool:{pool_id}:busy_instances"
 
-def _pool_active_count_key(tenant_id: str, pool_id: str) -> str:
-    """
-    Atomic counter of active sessions currently being served in the pool.
-    INCR'd synchronously in mark_busy (at routing time, same call chain as
-    write_pool_snapshot), DECR'd in remove_conversation (agent_done).
-    """
-    return f"{tenant_id}:pool:{pool_id}:active_count"
+# `_pool_active_count_key` REMOVIDA (fatia 2 da capacidade compartilhada).
+# Era o contador atômico `{t}:pool:{p}:active_count` — INCR em `mark_busy`, DECR em
+# `remove_conversation` — e a FONTE do defeito A: contava por POOL uma capacidade que
+# é do RECURSO, então vaga tomada num pool não descontava nos irmãos (1 humano de 3
+# vagas em 3 pools ⇒ três linhas dizendo `available 3`, soma 6, verdade 2). Também
+# era a origem do `available 4 / total 3` remendado por teto/chão em 2026-07-30.
+# `busy` agora é DERIVADO do semáforo do recurso — ver `_RECOMPUTE_POOL_OCCUPANCY_LUA`.
+# Não ressuscitar: um contador paralelo à fonte diverge por construção.
 
 def _pool_config_key(tenant_id: str, pool_id: str) -> str:
     """Pool configuration cache — populated by kafka_listener."""
@@ -112,9 +113,13 @@ def _queue_contact_key(tenant_id: str, session_id: str) -> str:
 
 def _session_serving_pool_key(tenant_id: str, session_id: str) -> str:
     """
-    Stores which pool_id currently has an active_count increment for this session.
+    Stores which pool_id is currently serving this session.
     Written on each routing event; used to detect cross-pool transfers (escalations)
-    and decrement the origin pool's counter without relying on agent_done.
+    and to know which sibling snapshot to recompute without relying on agent_done.
+
+    Depois da fatia 2 este valor NÃO é mais o índice de um contador — a ocupação vem
+    da tag no membro do semáforo. Ele sobrevive como discriminador de RE-ENTRADA no
+    mesmo pool (o guard de `mark_busy`) e como pista de qual pool reescrever.
     TTL: 24h (sessions don't last longer).
     """
     return f"{tenant_id}:session:pool:{session_id}"
@@ -366,6 +371,151 @@ return n
 
 
 # ─────────────────────────────────────────────
+# Recompute da ocupação do POOL — Lua (fatia 2, defeito A)
+# ─────────────────────────────────────────────
+# A ocupação de um pool passa a ser DERIVADA do semáforo do RECURSO
+# (`{t}:instance:{iid}:sessions`), nunca de um contador. Sobre
+# I = ready_set(P) ∪ busy_set(P):
+#
+#   total_capacity = Σ max_concurrent(i)
+#   used_global    = Σ SCARD(sessions_i)                  ← inclui irmãos E holds
+#   used_here      = Σ #{ m ∈ sessions_i : tag(m) = P }   ← projeção pela tag (F1)
+#   untagged       = Σ #{ m ∈ sessions_i : tag(m) = nil } ← membro legado / escritor mudo
+#
+# Por que não adotar `current_sessions` (o espelho no registro da instância), que
+# hoje está CERTO: é da mesma família do contador por pool — número paralelo que
+# pode derivar. Trocar um contador por outro não fecha a classe de defeito, só muda
+# qual deles vai mentir depois. O SET é a fonte que o `claim_instance` arbitra.
+#
+# `untagged` é publicado, nunca descartado: ele conta na ocupação do recurso (senão
+# a capacidade apareceria maior do que é) e em projeção de pool nenhuma. Deve ir a
+# zero em ≤ 24 h (TTL do SET); persistente = bug de escritor.
+#
+# NÃO é cluster-safe — deriva chaves de instância dentro do script, diferente do
+# claim/release que são single-key de propósito. Deliberado (uma ida e volta em vez
+# de um laço de N round-trips); se Redis Cluster entrar em cena, ou hash-tag por
+# tenant, ou volta a pipeline.
+#
+# KEYS[1] = ready_set  ({t}:pool:{p}:instances)
+# KEYS[2] = busy_set   ({t}:pool:{p}:busy_instances)
+# ARGV[1] = tenant_id   ARGV[2] = pool_id
+# → { total_capacity, used_global, used_here, untagged, instances, evicted, unknown }
+_RECOMPUTE_POOL_OCCUPANCY_LUA = """
+local HOLD = '__wrapup_hold__::'
+local HLEN = string.len(HOLD)
+
+local function tag_of(m)
+  local parts = {}
+  local start = 1
+  while true do
+    local s, e = string.find(m, '::', start, true)
+    if s == nil then
+      parts[#parts + 1] = string.sub(m, start)
+      break
+    end
+    parts[#parts + 1] = string.sub(m, start, s - 1)
+    start = e + 1
+  end
+  local minimo = 3
+  if string.sub(m, 1, HLEN) == HOLD then minimo = 4 end
+  if #parts < minimo then return nil end
+  local p = parts[3]
+  if p == nil or p == '' then return nil end
+  return p
+end
+
+local tenant = ARGV[1]
+local pool   = ARGV[2]
+
+local ready = redis.call('SMEMBERS', KEYS[1])
+local busy  = redis.call('SMEMBERS', KEYS[2])
+local in_ready = {}
+for i = 1, #ready do in_ready[ready[i]] = true end
+
+local total_capacity = 0
+local used_global    = 0
+local used_here      = 0
+local untagged       = 0
+local instances      = 0
+local evicted        = 0
+local unknown        = 0
+local default_mc     = 0
+
+local function occupancy(iid)
+  local members = redis.call('SMEMBERS', tenant .. ':instance:' .. iid .. ':sessions')
+  local n, here, unt = 0, 0, 0
+  for i = 1, #members do
+    n = n + 1
+    local t = tag_of(members[i])
+    if t == nil then
+      unt = unt + 1
+    elseif t == pool then
+      here = here + 1
+    end
+  end
+  return n, here, unt
+end
+
+local function max_concurrent_of(iid)
+  local raw = redis.call('GET', tenant .. ':instance:' .. iid)
+  if not raw then return nil end
+  local ok, data = pcall(cjson.decode, raw)
+  if not ok or type(data) ~= 'table' then return nil end
+  local v = tonumber(data['max_concurrent'])
+  if v == nil or v < 1 then return nil end
+  return v
+end
+
+local function account(iid)
+  instances = instances + 1
+  local mc = max_concurrent_of(iid)
+  if mc ~= nil then
+    if default_mc == 0 then default_mc = mc end
+    total_capacity = total_capacity + mc
+  else
+    -- Chave da instância expirada/ilegível. O bootstrap a restaura em ~15 s; contar
+    -- capacidade cheia (não zero) evita que a capacidade pisque para baixo no meio
+    -- da janela — mesma escolha do modelo anterior, agora CONTABILIZADA em `unknown`
+    -- em vez de indistinguível de capacidade medida.
+    unknown = unknown + 1
+  end
+  local n, here, unt = occupancy(iid)
+  used_global = used_global + n
+  used_here   = used_here + here
+  untagged    = untagged + unt
+end
+
+for i = 1, #ready do
+  account(ready[i])
+end
+
+for i = 1, #busy do
+  local iid = busy[i]
+  if not in_ready[iid] then
+    -- Instância que o bootstrap moveu para FORA do ready_set por estar ocupada.
+    -- Só conta se de fato ocupa alguma vaga NO SEMÁFORO (não no espelho): sem
+    -- ocupação e sem chave é entrada podre, e o modelo anterior já a despejava.
+    local n = redis.call('SCARD', tenant .. ':instance:' .. iid .. ':sessions')
+    local exists = redis.call('EXISTS', tenant .. ':instance:' .. iid)
+    if exists == 0 or n == 0 then
+      redis.call('SREM', KEYS[2], iid)
+      evicted = evicted + 1
+    else
+      account(iid)
+    end
+  end
+end
+
+-- Default para instâncias sem chave legível: o `max_concurrent` da primeira que
+-- pôde ser lida (1 quando nenhuma pôde). Preserva a heurística do modelo anterior.
+if default_mc == 0 then default_mc = 1 end
+total_capacity = total_capacity + (unknown * default_mc)
+
+return { total_capacity, used_global, used_here, untagged, instances, evicted, unknown }
+"""
+
+
+# ─────────────────────────────────────────────
 # InstanceRegistry
 # ─────────────────────────────────────────────
 
@@ -599,6 +749,117 @@ class InstanceRegistry:
         return int(await self._redis.scard(
             _instance_sessions_key(tenant_id, instance_id)
         ))
+
+    # ── Ocupação do pool: DERIVADA do semáforo do recurso (fatia 2) ───────────
+
+    async def compute_pool_occupancy(
+        self, tenant_id: str, pool_id: str
+    ) -> dict[str, int]:
+        """Recompute atômico da ocupação do pool a partir do SET do RECURSO.
+
+        Uma ida e volta (Lua) sobre `ready_set ∪ busy_set`. Ver
+        `_RECOMPUTE_POOL_OCCUPANCY_LUA` para a fórmula e para por que nenhum
+        contador (`active_count`, `current_sessions`) entra na conta.
+
+        Falha de Redis/script degrada devolvendo zeros **e logando o motivo** — quem
+        chama precisa poder distinguir "pool vazio" de "não consegui medir", e é o
+        log que faz essa distinção existir.
+
+        `untagged` é DEVOLVIDO aqui e ALERTADO no `write_pool_snapshot` (caminho
+        dirigido por evento). Alertar aqui faria o amostrador de ocupação — que roda
+        a cada 5 s sobre todos os pools — transformar o aviso em ruído de fundo, e
+        aviso que vira ruído deixa de ser aviso.
+        """
+        try:
+            raw = await self._redis.eval(
+                _RECOMPUTE_POOL_OCCUPANCY_LUA, 2,
+                _pool_instances_key(tenant_id, pool_id),
+                _pool_busy_instances_key(tenant_id, pool_id),
+                tenant_id, pool_id,
+            )
+            vals = [int(v) for v in (raw or [])]
+        except Exception as exc:
+            logger.warning(
+                "compute_pool_occupancy FALHOU tenant=%s pool=%s — %s. "
+                "O snapshot resultante NÃO mede capacidade; procurar a causa.",
+                tenant_id, pool_id, exc,
+            )
+            vals = []
+        vals += [0] * (7 - len(vals))
+        occ = {
+            "total_capacity": vals[0],
+            "used_global":    vals[1],
+            "used_here":      vals[2],
+            "untagged":       vals[3],
+            "instances":      vals[4],
+            "evicted":        vals[5],
+            "unknown":        vals[6],
+        }
+        return occ
+
+    async def pools_of_instance(
+        self, tenant_id: str, instance_id: str
+    ) -> list[str]:
+        """Pools em que o RECURSO está logado — o alcance do fan-out do snapshot.
+
+        Fonte primária = registro da instância (`pools`), que é a autoridade de
+        membership desde 2026-07-28 (o `agent_ready` deixou de ser autoritativo:
+        o mcp-server escreve a membership ANTES de publicar, e o Console abre uma
+        conexão por pool, sem ordem garantida entre partições). `meta.pools` é
+        fallback para agentes que nunca publicaram `agent_ready`.
+        """
+        try:
+            raw = await self.get_instance_raw(tenant_id, instance_id)
+            pools = [p for p in (raw or {}).get("pools", []) if p]
+            if pools:
+                return list(dict.fromkeys(pools))
+        except Exception:
+            pass
+        meta = await self.get_instance_meta(tenant_id, instance_id)
+        return list(dict.fromkeys([p for p in (meta.pools if meta else []) if p]))
+
+    async def refresh_snapshots_for_instance(
+        self,
+        tenant_id:   str,
+        instance_id: str,
+        extra_pools: list[str] | None = None,
+    ) -> None:
+        """Fan-out: reescreve o snapshot de TODOS os pools do recurso.
+
+        A mudança estrutural da fatia 2. Antes o refresh era *"o pool roteado"* —
+        e por isso, mesmo com a fórmula certa, a linha do pool irmão só seria
+        reescrita quando algo o tocasse, que é literalmente o defeito relatado.
+
+        **Só reescreve pool que JÁ tem snapshot.** Um pool sem snapshot não tem de
+        onde tirar `sla_target_ms`/`channel_types`, e inventá-los publicaria config
+        falsa num registro que o `system_availability_check` lê para decidir oferta
+        de canal ao cliente. O bootstrap cria o snapshot inicial de todo pool
+        configurado a cada 15 s, então a lacuna se fecha sozinha — e o pulo é logado.
+        """
+        pools = set(await self.pools_of_instance(tenant_id, instance_id))
+        pools |= {p for p in (extra_pools or []) if p}
+        if not pools:
+            logger.warning(
+                "fan-out de snapshot SEM pools: tenant=%s instance=%s — nenhuma "
+                "linha será atualizada por esta transição de ocupação",
+                tenant_id, instance_id,
+            )
+            return
+        for pool_id in sorted(pools):
+            try:
+                if not await self._redis.exists(_pool_snapshot_key(tenant_id, pool_id)):
+                    logger.info(
+                        "fan-out: pool=%s sem snapshot — pulado (o bootstrap cria o "
+                        "primeiro; recomputar aqui inventaria sla/channel_types)",
+                        pool_id,
+                    )
+                    continue
+                await self.refresh_pool_snapshot(tenant_id, pool_id)
+            except Exception as exc:
+                logger.warning(
+                    "fan-out: falha ao recomputar snapshot pool=%s tenant=%s — %s",
+                    pool_id, tenant_id, exc,
+                )
 
     async def get_ready_instances(
         self, tenant_id: str, pool_id: str
@@ -879,8 +1140,8 @@ class InstanceRegistry:
         bridge que conhece os hooks do pool), a vaga NÃO é liberada — é trocada por
         um HOLD (swap net 0) que o auto-claim do wrap-up herda. Elimina a janela em
         que um push tomaria a vaga a max_concurrent=1. Todo o resto do fluxo abaixo
-        (espelho current_sessions, state, DECR de pool:active_count, exclusão
-        guardada do serving_pool) é IDÊNTICO — só o membro do SET muda.
+        (espelho current_sessions, state, membership dos SETs, exclusão guardada do
+        serving_pool, fan-out do snapshot) é IDÊNTICO — só o membro do SET muda.
         """
         await self._redis.srem(
             _instance_conversations_key(tenant_id, instance_id), conversation_id
@@ -889,21 +1150,22 @@ class InstanceRegistry:
         # so we can guard it against conference specialists wiping the primary
         # contact's serving_pool key.  See guarded delete after pools_to_decr.
 
-        # Decrement active-session counters and update snapshots in-place.
-        # We look up which pools this instance belongs to from its meta record.
-        # For the common single-pool case this is exact; for multi-pool agents
-        # we decrement all pools (floor 0) which may transiently undercount a
-        # sibling pool — acceptable given 120s snapshot TTL and self-correction
-        # on the next routing event.
-        # ── F3 — qual pool decrementar é fato POR-SESSÃO, não por-recurso ────────
+        # Quais pools este contato tocou — usado para a membership dos SETs.
+        # ── F3 — qual pool o contato serviu é fato POR-SESSÃO, não por-recurso ───
         # (ADR adr-human-agent-pool-scoped-identity)
         #
         # A precedência era `meta.pools` (per-RECURSO, e portanto o conjunto
         # INTEIRO de pools do agente) na frente do `pools` do evento. Para um
-        # humano multi-pool isso decrementa o `active_count` de pools que não
-        # serviram este contato: o pool que serviu fica com carga fantasma (fila
-        # não drena) e os outros vão a zero. O evento `agent_done` é emitido por
+        # humano multi-pool isso decrementava o `active_count` de pools que não
+        # serviram este contato: o pool que serviu ficava com carga fantasma (fila
+        # não drena) e os outros iam a zero. O evento `agent_done` é emitido por
         # quem sabe QUAL pool serviu esta sessão — é a fonte no escopo certo.
+        #
+        # NOTA (fatia 2): a classe de defeito que a F3 corrigia deixou de existir
+        # aqui. Não há mais contador a decrementar — `busy` é derivado da TAG do
+        # membro do semáforo, então o pool que serviu é lido do próprio dado. A
+        # precedência sobrevive porque ainda decide a MEMBERSHIP dos SETs (ready/
+        # busy), e errá-la ainda tira o agente do pool errado.
         #
         # `meta.pools` continua como fallback para o caso que o motivou (agentes
         # que nunca publicaram agent_ready e cujo agent_done não traz `pools`).
@@ -977,11 +1239,11 @@ class InstanceRegistry:
 
             # ── Guarded serving-pool deletion ─────────────────────────────────
             # Only delete the serving_pool key if it currently points to one of
-            # the pools we are about to decrement.  A conference specialist (e.g.
+            # the pools this contact actually touched.  A conference specialist (e.g.
             # auth_form_ia) shares the same session_id as the primary contact; if
             # we delete unconditionally we wipe the primary's "retencao_humano"
-            # entry, causing the primary's own remove_conversation to skip the
-            # cross-pool chain and leaving active_count[retencao] stuck at 1.
+            # entry, and o primário perde o discriminador de re-entrada no mesmo pool
+            # (guard do `mark_busy`) e a pista de qual linha reescrever.
             serving_key = _session_serving_pool_key(tenant_id, conversation_id)
             raw_sp = await self._redis.get(serving_key)
             sp_val = (raw_sp.decode() if isinstance(raw_sp, bytes) else raw_sp) if raw_sp else None
@@ -1017,39 +1279,21 @@ class InstanceRegistry:
             if not effective_pools:
                 logger.warning(
                     "remove_conversation: NO pools found for "
-                    "tenant=%s instance=%s conv=%s — active_count NOT decremented "
-                    "(instance state already reset above)",
+                    "tenant=%s instance=%s conv=%s — membership dos SETs não "
+                    "atualizada (estado da instância já foi resetado acima); os "
+                    "snapshots ainda serão recomputados pelo fan-out do recurso",
                     tenant_id, instance_id, conversation_id,
                 )
-                return
 
-            # Phase 1: Decrement active_count atomically for each pool.
-            new_active_counts: dict[str, int] = {}
+            # Phase 3: pool set membership.
+            #
+            # Fatia 2 — o DECR de `active_count` e o patch `available += 1` sumiram
+            # daqui. Eram REMENDO: somavam/subtraíam sobre o número anterior em vez
+            # de recalcular, e por isso precisavam de chão (DECR negativo) e de teto
+            # (`available 4 / total 3`, corrigido em 2026-07-30). Um recompute
+            # derivado do SET não pode ultrapassar a capacidade nem ficar negativo —
+            # os dois clamps deixaram de existir porque a condição deixou de existir.
             for pool_id in effective_pools:
-                new_val = await self._redis.decr(_pool_active_count_key(tenant_id, pool_id))
-                if new_val < 0:
-                    await self._redis.set(_pool_active_count_key(tenant_id, pool_id), 0)
-                    new_val = 0
-                    # Degradação nunca silenciosa: `< 0` significa uma REMOÇÃO SEM
-                    # `mark_busy` correspondente (agent_done duplicado/tardio, ou
-                    # sessão contada noutro pool). O clamp conserta o contador, mas
-                    # o fato é anômalo e era engolido — é a MESMA condição que fazia
-                    # `available` passar de `total_instances` no Monitor.
-                    logger.warning(
-                        "remove_conversation: active_count de pool=%s foi a NEGATIVO "
-                        "(instance=%s conv=%s) — houve uma remoção sem mark_busy "
-                        "correspondente. Contador zerado; procurar o produtor.",
-                        pool_id, instance_id, conversation_id,
-                    )
-                new_active_counts[pool_id] = new_val
-                logger.info(
-                    "remove_conversation: DECR pool=%s new_active_count=%d",
-                    pool_id, new_val,
-                )
-
-            # Phase 3: Update pool set membership and patch snapshots.
-            for pool_id in effective_pools:
-                new_val = new_active_counts[pool_id]
                 pool_key = _pool_instances_key(tenant_id, pool_id)
                 busy_key = _pool_busy_instances_key(tenant_id, pool_id)
 
@@ -1060,40 +1304,12 @@ class InstanceRegistry:
                 if new_current_sessions == 0:
                     await self._redis.srem(busy_key, instance_id)
 
-                # Patch snapshot with updated busy + available so the SSE dashboard
-                # reflects the change without waiting for the next routing event.
-                snap_key = _pool_snapshot_key(tenant_id, pool_id)
-                raw_snap = await self._redis.get(snap_key)
-                if raw_snap:
-                    snap = json.loads(raw_snap)
-                    snap["busy"] = new_val
-                    # Increment available by 1: one session ended, so one extra
-                    # capacity slot is now free.  This is always +1 regardless of
-                    # max_concurrent because: if the instance was at capacity and
-                    # transitioned busy→ready it gained exactly 1 slot; if it was
-                    # already in the ready_set it still gained exactly 1 slot.
-                    # Using SCARD here would regress to the instance-count model
-                    # instead of the capacity-sum model written by write_pool_snapshot.
-                    #
-                    # TETO (fix 2026-07-30) — simétrico ao chão do DECR seis linhas
-                    # acima. `available` é `total_capacity − busy`, logo NUNCA pode
-                    # passar da capacidade; sem o teto, toda remoção que bateu no
-                    # chão do contador ainda somava +1 aqui, e o Monitor exibia
-                    # `available 4 / total 3`. O chão existia desde sempre; o teto
-                    # não — a assimetria estava no mesmo bloco.
-                    _cap    = int(snap.get("total_instances") or 0)
-                    _avail  = int(snap.get("available", 0) or 0) + 1
-                    if _cap > 0 and _avail > _cap:
-                        logger.warning(
-                            "remove_conversation: available (%d) passaria de "
-                            "total_instances (%d) no pool=%s — limitado à capacidade. "
-                            "Sintoma de remoção sem mark_busy correspondente "
-                            "(instance=%s conv=%s).",
-                            _avail, _cap, pool_id, instance_id, conversation_id,
-                        )
-                        _avail = _cap
-                    snap["available"] = _avail
-                    await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+            # Fan-out: a vaga devolvida é do RECURSO, então TODOS os pools em que ele
+            # está logado voltaram a ter capacidade — não só o que serviu. É o
+            # simétrico exato do fan-out do `mark_busy`.
+            await self.refresh_snapshots_for_instance(
+                tenant_id, instance_id, extra_pools=effective_pools,
+            )
 
         except Exception as exc:
             logger.error(
@@ -1185,25 +1401,32 @@ class InstanceRegistry:
         session_id: str | None = None,
     ) -> None:
         """
-        Increments current_sessions on the instance and updates pool active-count.
+        Sincroniza o espelho `current_sessions`/`state` da instância com o semáforo,
+        acerta a membership dos SETs do pool e recomputa os snapshots do RECURSO.
+
+        **Fatia 2** — não há mais INCR de contador aqui. A vaga já foi reservada
+        atomicamente pelo `claim_instance` (antes desta chamada) e a ocupação por
+        pool é derivada da TAG do membro. O que sobrou é espelho, membership e o
+        FAN-OUT do snapshot sobre `pools(instance) ∪ {pool_id}` — sem ele, mesmo com
+        a fórmula certa, a linha do pool irmão só seria reescrita quando algo o
+        tocasse, que é o defeito relatado.
 
         session_id (optional) — when provided, enables three guards:
 
         0. Closed-session guard: if the session is already closing/closed
            (session:{id}:close_fired or session:{id}:closed keys exist), mark_busy
-           is a no-op.  This prevents active_count from being incremented for a
-           session that already had its counter decremented by remove_conversation().
-           The primary guard lives in _process_message() (routing engine main.py);
-           this is a belt-and-suspenders second layer for tight-race conditions.
+           is a no-op.  The primary guard lives in _process_message() (routing engine
+           main.py); this is a belt-and-suspenders second layer for tight races.
 
-        1. Same-pool re-entry guard: if the session is already counted in pool_id
-           (prev_pool == pool_id), mark_busy is a no-op.  This prevents double-
-           counting when a specialist returns and _try_affinity re-routes the
-           primary's session back to the same pool.
+        1. Same-pool re-entry guard: quando `prev_pool == pool_id` a sessão já é
+           servida por este pool (especialista volta e `_try_affinity` re-roteia o
+           primário para o mesmo pool). Nada muda de estado — mas o fan-out roda
+           assim mesmo, porque o claim que precedeu pode ter mexido na ocupação.
 
-        2. Cross-pool transfer: if the session was previously served by a different
-           pool (escalation / agent_transfer), that pool's active-count is
-           decremented and its snapshot is patched in-place.
+        2. Cross-pool transfer: sessão antes servida por OUTRO pool (escalação /
+           agent_transfer). O `claim_instance` já fez o RE-TAG do membro (contagem
+           inalterada); aqui o pool de origem só entra na lista do fan-out — pode
+           não estar em `pools(instance)` se for de outro agente.
 
         Uses KEEPTTL to preserve the original instance TTL (see comment below).
         """
@@ -1229,7 +1452,7 @@ class InstanceRegistry:
                 )
                 return
 
-        prev_pool_for_decr: str | None = None
+        prev_pool_for_refresh: str | None = None
 
         if session_id:
             serving_key = _session_serving_pool_key(tenant_id, session_id)
@@ -1243,23 +1466,29 @@ class InstanceRegistry:
 
             if prev_raw:
                 if prev_raw.startswith("queued:"):
-                    # The session was parked in this pool's queue by
-                    # release_session_from_pool but NOT yet counted in
-                    # active_count.  We must NOT skip the INCR below.
-                    # The previous pool's counter was already decremented
-                    # inside release_session_from_pool, so no cross-DECR
-                    # needed here either — fall through to the INCR.
+                    # A sessão estava PARQUEADA na fila deste pool
+                    # (release_session_from_pool), ainda sem vaga tomada. Não é
+                    # re-entrada: segue o caminho normal. O sentinela "queued:"
+                    # existe justamente para distinguir "esperando na fila deste
+                    # pool" de "já sendo servida por este pool" — sem ele o guard
+                    # abaixo dispararia e o contato sairia da fila sem ser contado.
                     pass
                 elif prev_raw == pool_id:
-                    # True same-pool re-entry: session already counted in
-                    # active_count for this pool (e.g. specialist returns →
-                    # _try_affinity fires → mark_busy called again for the
-                    # primary pool).  No-op — prevents double-counting.
+                    # True same-pool re-entry: a sessão já é servida por ESTE pool
+                    # (ex.: especialista volta → _try_affinity dispara → mark_busy
+                    # de novo no pool primário). Nada muda de estado — mas o
+                    # snapshot é recomputado assim mesmo: o claim que precedeu esta
+                    # chamada pode ter mexido na ocupação do recurso, e sair daqui
+                    # sem reescrever devolveria a linha antiga.
+                    await self.refresh_snapshots_for_instance(
+                        tenant_id, instance_id, extra_pools=[pool_id],
+                    )
                     return
                 else:
-                    # Cross-pool transfer: session was counted in a different
-                    # pool.  Decrement that pool's counter after the INCR.
-                    prev_pool_for_decr = prev_raw
+                    # Cross-pool transfer: a sessão era servida por outro pool. O
+                    # RE-TAG do membro já foi feito pelo `claim_instance`; guardamos
+                    # o pool de origem só para incluí-lo no fan-out do snapshot.
+                    prev_pool_for_refresh = prev_raw
 
         key = _instance_key(tenant_id, instance_id)
         raw = await self._redis.get(key)
@@ -1293,22 +1522,21 @@ class InstanceRegistry:
         # Track busy instances (for membership visibility)
         await self._redis.sadd(_pool_busy_instances_key(tenant_id, pool_id), instance_id)
 
-        # Increment atomic active-session counter for the new pool.
-        await self._redis.incr(_pool_active_count_key(tenant_id, pool_id))
-
-        # Cross-pool transfer: decrement the previous pool's counter and patch snapshot.
-        if prev_pool_for_decr:
-            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, prev_pool_for_decr))
-            if new_val < 0:
-                await self._redis.set(_pool_active_count_key(tenant_id, prev_pool_for_decr), 0)
-                new_val = 0
-            # Patch previous pool snapshot so SSE reflects the change immediately
-            snap_key = _pool_snapshot_key(tenant_id, prev_pool_for_decr)
-            raw_snap = await self._redis.get(snap_key)
-            if raw_snap:
-                snap = json.loads(raw_snap)
-                snap["busy"] = new_val
-                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+        # ── Fatia 2 — recompute com FAN-OUT, no lugar do INCR do contador ────────
+        # O INCR de `{t}:pool:{p}:active_count` (e o DECR do pool anterior na
+        # transferência cross-pool) sumiram: `busy` agora é derivado da tag no
+        # membro do semáforo, e a transferência é um RE-TAG feito pelo próprio
+        # `claim_instance` — contagem inalterada, nada a decrementar.
+        #
+        # O fan-out cobre os pools IRMÃOS: a vaga consumida aqui é do RECURSO, e sem
+        # reescrever a linha deles o defeito A continuaria, agora com a fórmula
+        # certa escrita no lugar errado. `prev_pool_for_refresh` entra na lista porque
+        # pode ser um pool onde o recurso NÃO está logado (transferência entre pools
+        # de agentes diferentes) — nesse caso `pools_of_instance` não o alcança.
+        await self.refresh_snapshots_for_instance(
+            tenant_id, instance_id,
+            extra_pools=[pool_id] + ([prev_pool_for_refresh] if prev_pool_for_refresh else []),
+        )
 
     async def release_session_from_pool(
         self,
@@ -1336,10 +1564,10 @@ class InstanceRegistry:
         if new_pool_id:
             # Write a "queued:" sentinel (not the bare pool_id) so that a
             # subsequent mark_busy can distinguish "session is parked in queue,
-            # active_count NOT yet incremented" from "session is already counted
-            # in active_count for this pool".  Using the bare pool_id caused
-            # the same-pool re-entry guard in mark_busy to fire as a no-op,
-            # leaving active_count at 0 after the agent dequeued the contact.
+            # sem vaga tomada" from "session is already being served by this pool".
+            # Using the bare pool_id caused the same-pool re-entry guard in
+            # mark_busy to fire as a no-op, e o contato saía da fila sem que o
+            # espelho/membership do pool fossem acertados.
             prev_pool = await self._redis.getset(serving_key, f"queued:{new_pool_id}")
             await self._redis.expire(serving_key, 86_400)   # 24h TTL
         else:
@@ -1356,18 +1584,19 @@ class InstanceRegistry:
         actual_prev = prev_pool[len(_QUEUED_PFX):] if prev_pool and prev_pool.startswith(_QUEUED_PFX) else prev_pool
 
         if actual_prev and actual_prev != new_pool_id:
-            new_val = await self._redis.decr(_pool_active_count_key(tenant_id, actual_prev))
-            if new_val < 0:
-                await self._redis.set(_pool_active_count_key(tenant_id, actual_prev), 0)
-                new_val = 0
-            # Patch the previous pool's snapshot in-place so SSE clients see the
-            # update without waiting for the next routing event.
-            snap_key = _pool_snapshot_key(tenant_id, actual_prev)
-            raw_snap = await self._redis.get(snap_key)
-            if raw_snap:
-                snap = json.loads(raw_snap)
-                snap["busy"] = new_val
-                await self._redis.set(snap_key, json.dumps(snap), keepttl=True)
+            # Fatia 2 — recompute em vez de DECR+patch. A vaga em si é liberada pelo
+            # `release_instance`/`remove_conversation` (semáforo do recurso); aqui só
+            # se reescreve a linha do pool de origem, que deixou de servir a sessão.
+            # Sem instância em escopo (esta função só conhece a sessão) o fan-out por
+            # recurso não se aplica: é um pool só.
+            try:
+                if await self._redis.exists(_pool_snapshot_key(tenant_id, actual_prev)):
+                    await self.refresh_pool_snapshot(tenant_id, actual_prev)
+            except Exception as exc:
+                logger.warning(
+                    "release_session_from_pool: falha ao recomputar snapshot "
+                    "pool=%s session=%s — %s", actual_prev, session_id, exc,
+                )
 
     async def add_queued_contact(
         self,
@@ -1583,20 +1812,10 @@ class InstanceRegistry:
         """Returns count of ready instances in the pool."""
         return await self._redis.scard(_pool_instances_key(tenant_id, pool_id))
 
-    async def get_busy_count(self, tenant_id: str, pool_id: str) -> int:
-        """
-        Returns the count of ACTIVE SESSIONS currently being served in the pool.
-
-        Uses an atomic INCR/DECR counter keyed at _pool_active_count_key.
-        The counter is incremented synchronously in mark_busy (at routing time,
-        in the same call chain as write_pool_snapshot) and decremented in
-        remove_conversation (called on agent_done Kafka event).
-
-        This correctly handles agents with max_concurrent > 1: every routed
-        session increments the counter, so N sessions on one instance → N.
-        """
-        raw = await self._redis.get(_pool_active_count_key(tenant_id, pool_id))
-        return max(0, int(raw)) if raw else 0
+    # `get_busy_count` REMOVIDA (fatia 2). Lia `{t}:pool:{p}:active_count` — um
+    # contador POR POOL de uma capacidade que é do RECURSO. Substituída por
+    # `compute_pool_occupancy(...)["used_here"]`, derivado da tag no membro do
+    # semáforo. O nome sobreviver seria convite a que o modelo voltasse.
 
     async def get_queue_length(self, tenant_id: str, pool_id: str) -> int:
         """Returns the number of contacts waiting in the pool queue."""
@@ -1632,134 +1851,73 @@ class InstanceRegistry:
     ) -> None:
         """
         Writes an operational pool snapshot to Redis after each routing event.
-        TTL: 3600s (ver `snapshot_ttl` acima) — refreshed on every route() or
-        dequeue() call.
+        TTL: 3600s (ver `snapshot_ttl` acima).
 
-        ATENÇÃO (medido 2026-07-31): "refreshed on every route()" NÃO cobre o
-        claim/release de item de fila PULL — `write_pool_snapshot` tem um único
-        call site no router (`router.py:215`, dentro de `route()`), e
-        `work_task_claim`/`work_task_release` não passam por ele. Com TTL de 1h,
-        um snapshot que ficou obsoleto por essa via NÃO se auto-cura expirando.
+        **Fatia 2 — a ocupação é DERIVADA do semáforo do RECURSO**, num único
+        recompute em Lua (`_RECOMPUTE_POOL_OCCUPANCY_LUA`). Nenhum contador entra na
+        conta: nem `active_count` (removido — contava por POOL uma capacidade que é
+        do RECURSO), nem `current_sessions` (espelho da instância; correto hoje, mas
+        da mesma família — trocar um contador por outro só muda qual mente depois).
+
         Key: {tenant_id}:pool:{pool_id}:snapshot
 
         Fields:
-          available       — instances currently in 'ready' state (idle capacity)
-          busy            — active sessions being served (may exceed instance count
-                            when max_concurrent > 1)
+          available       — max(0, total_capacity − used_global). Desconta o consumo
+                            do recurso em QUALQUER pool, que é o defeito A.
+          busy            — sessões servidas NESTE pool (`used_here`, projeção pela
+                            tag do membro do semáforo).
+          busy_elsewhere  — vagas do MESMO recurso consumidas por pools irmãos.
+                            Não é enfeite: sem ele a linha fica aritmeticamente
+                            inexplicável (`available < total − busy`, sem motivo
+                            visível) e alguém "conserta" de volta para o modelo
+                            errado. Com ele, `available = total − busy −
+                            busy_elsewhere` fecha na própria linha.
+          untagged        — ocupantes sem tag de pool (membro legado de 2 campos, ou
+                            escritor que não informou o pool). Contam na capacidade
+                            do recurso e em projeção nenhuma. Publicado, nunca
+                            descartado em silêncio: deve ir a zero em ≤ 24 h (TTL do
+                            SET); persistente é bug de ESCRITOR.
           total_instances — CAPACIDADE total do pool (soma de `max_concurrent` sobre
                             ready_set ∪ busy_set), NÃO contagem de instâncias. O nome
                             é herança do modelo antigo (contagem), abandonado quando
-                            `max_concurrent > 1` passou a existir. Para pools de IA
-                            (max_concurrent=1) os dois coincidem, o que fez a
-                            divergência sobreviver anos sem sintoma.
+                            `max_concurrent > 1` passou a existir.
                             INVARIANTE: `available ≤ total_instances`, sempre.
           queue_length    — contacts waiting in queue
+
+        Gatilhos: `route()`, `mark_busy`, `remove_conversation`,
+        `release_session_from_pool` e o listener de `agent.lifecycle` — os três do
+        meio via `refresh_snapshots_for_instance`, que faz FAN-OUT sobre os pools do
+        recurso. Ainda NÃO cobertos (F3): `work_task_release` / `work_task_expire`
+        (o `work_task_claim` entra de carona no `mark_busy`).
         """
-        # ── Step 1: snapshot the ready_set BEFORE calling get_ready_instances() ──
-        # We read all set members now so that the SCARD used for total_instances
-        # is consistent with the state at routing time (right after mark_busy()).
-        # Do NOT evict stale entries here — stale entries (expired keys still in the
-        # set) must remain so that len(_all_pool_members) gives the correct total.
-        # The bootstrap heartbeat (every 15 s) restores expired keys automatically.
-        _pool_set_key       = _pool_instances_key(tenant_id, pool_id)
-        _all_pool_members   = await self._redis.smembers(_pool_set_key)
-        _all_pool_member_ids = {
-            m.decode() if isinstance(m, bytes) else m for m in _all_pool_members
-        }
-
-        # ── Step 2: enumerate valid ready instances ──────────────────────────────
-        # get_ready_instances() returns instances with valid keys, state=ready,
-        # available capacity, and no wrap_up_pending.  It skips — but does NOT
-        # evict — entries whose keys have expired (see comment there).
-        ready_instances      = await self.get_ready_instances(tenant_id, pool_id)
-        _ready_instance_ids  = {inst.instance_id for inst in ready_instances}
-
-        # ── Steps 3 & 4 combined: total_capacity, available, total_instances ────────
-        #
-        # Pool membership spans TWO Redis sets:
-        #   • ready_set  ({tenant}:pool:{pool}:instances)     — read above as _all_pool_members
-        #   • busy_set   ({tenant}:pool:{pool}:busy_instances) — read below
-        #
-        # The bootstrap may remove an instance from the ready_set when it goes
-        # busy (and add it to the busy_set), so instances in the busy_set but NOT
-        # in the ready_set are invisible to loops that only iterate over
-        # _all_pool_member_ids.  We must inspect the busy_set separately.
-        #
-        # total_capacity = gross capacity across ALL instances (ready_set ∪ busy_set),
-        #                  regardless of current load.
-        # available      = max(0, total_capacity − busy)
-        #                  where busy = atomic active_count (INCR/DECR in
-        #                  mark_busy / remove_conversation).
-        # total_instances = number of DISTINCT agents dimensioned to the pool
-        #                   (ready_set ∪ valid busy_set entries).
-        _default_max_concurrent = (
-            ready_instances[0].max_concurrent if ready_instances else 1
-        )
-
-        # --- Capacity from ready_set members ---
-        total_capacity = sum(inst.max_concurrent for inst in ready_instances)
-        for _mid in _all_pool_member_ids - _ready_instance_ids:
-            # Members that exist in the ready_set but were skipped by
-            # get_ready_instances() (state=busy, wrap_up_pending, etc.)
-            _raw_mid = await self._redis.get(_instance_key(tenant_id, _mid))
-            if _raw_mid:
-                try:
-                    _inst_data = json.loads(_raw_mid)
-                    total_capacity += _inst_data.get(
-                        "max_concurrent", _default_max_concurrent
-                    )
-                except Exception:
-                    total_capacity += _default_max_concurrent
-            else:
-                # Key expired — bootstrap restores within ~15 s; count full capacity
-                total_capacity += _default_max_concurrent
-
-        # --- Capacity from busy_set members NOT in ready_set ---
-        # These are instances the bootstrap moved OUT of the ready_set because they
-        # are busy.  They are already counted in total_instances via
-        # valid_busy_not_in_ready_set, but we also need their max_concurrent in
-        # total_capacity so the available calculation is correct.
-        busy_key  = _pool_busy_instances_key(tenant_id, pool_id)
-        busy_iids = await self._redis.smembers(busy_key)
-        valid_busy_not_in_ready_set = 0
-        for _iid in busy_iids:
-            iid_str = _iid.decode() if isinstance(_iid, bytes) else _iid
-            if iid_str in _all_pool_member_ids:
-                # Already counted via ready_set loop above; skip.
-                # (happens when _sync_pool_sets re-adds a busy instance to the
-                # ready_set during the 5-min reconciliation pass)
-                continue
-            raw_inst = await self._redis.get(_instance_key(tenant_id, iid_str))
-            if not raw_inst:
-                # State key expired → stale busy entry; evict
-                await self._redis.srem(busy_key, _iid)
-                continue
-            try:
-                state = json.loads(raw_inst)
-                if state.get("current_sessions", 0) > 0:
-                    # Genuinely busy instance outside the ready_set — count for
-                    # BOTH total_instances and total_capacity.
-                    valid_busy_not_in_ready_set += 1
-                    total_capacity += state.get(
-                        "max_concurrent", _default_max_concurrent
-                    )
-                else:
-                    # Idle but still in busy_set — evict (remove_conversation()
-                    # should have cleaned this; tolerate here for robustness).
-                    await self._redis.srem(busy_key, _iid)
-            except Exception:
-                await self._redis.srem(busy_key, _iid)
-
-        busy      = await self.get_busy_count(tenant_id, pool_id)
-        available = max(0, total_capacity - busy)
-
-        # total_instances = total concurrent capacity across all agents in this pool
-        # (sum of max_concurrent, not count of distinct agents).
-        # For pools where max_concurrent=1 per agent (AI pools), this equals the
-        # agent count.  For human pools where max_concurrent>1, this gives the
-        # correct dimensioning metric: e.g. 1 agent × max_concurrent=3 → total=3.
+        occ = await self.compute_pool_occupancy(tenant_id, pool_id)
+        total_capacity  = occ["total_capacity"]
+        used_global     = occ["used_global"]
+        busy            = occ["used_here"]
+        busy_elsewhere  = max(0, used_global - busy)
+        untagged        = occ["untagged"]
+        available       = max(0, total_capacity - used_global)
         total_instances = total_capacity
-        queue_length     = await self.get_queue_length(tenant_id, pool_id)
+        queue_length    = await self.get_queue_length(tenant_id, pool_id)
+
+        if untagged:
+            # Nunca silencioso. Membro sem tag é legítimo apenas na janela de 24 h
+            # após o deploy da F1 (TTL do SET). Depois disso significa que existe um
+            # escritor de ocupante fora do `claim_instance` — e ele consome
+            # capacidade sem aparecer em `busy` de pool nenhum, que é precisamente o
+            # tipo de vaga que some sem deixar rastro.
+            logger.warning(
+                "pool=%s tenant=%s: %d ocupante(s) UNTAGGED no semáforo — contam na "
+                "capacidade do recurso e em projeção de pool nenhuma. Esperado zero "
+                "após 24 h do deploy da tag; persistente = bug de ESCRITOR.",
+                pool_id, tenant_id, untagged,
+            )
+        if occ["unknown"]:
+            logger.info(
+                "pool=%s tenant=%s: %d instância(s) sem chave legível — capacidade "
+                "contada pelo default (o bootstrap restaura em ~15 s)",
+                pool_id, tenant_id, occ["unknown"],
+            )
 
         # Arc 19 (revisado 2026-06-04): max_concurrent_sessions pool-level é um
         # THROTTLE OPCIONAL de downstream (backpressure p/ sistemas frágeis) —
@@ -1769,7 +1927,12 @@ class InstanceRegistry:
         # a capacidade real por instâncias, como qualquer pool.
         is_webhook_pool = "webhook" in channel_types
         if is_webhook_pool and max_concurrent_sessions is not None:
-            # Throttle configurado — Monitor exibe o teto de backpressure
+            # Throttle configurado — Monitor exibe o teto de backpressure.
+            # Aqui o teto é do POOL (exceção legítima, §4 do desenho), então a conta
+            # usa `busy` (deste pool) e não `used_global`. `busy_elsewhere` segue
+            # publicado como diagnóstico — para instância de webhook ele é 0 por
+            # construção (uma instância pertence a um pool), e diferente de 0
+            # significa que a premissa quebrou, que é justamente o que se quer ver.
             available       = max(0, max_concurrent_sessions - busy)
             total_instances = max_concurrent_sessions
 
@@ -1778,10 +1941,16 @@ class InstanceRegistry:
             "tenant_id":        tenant_id,
             "available":        available,
             "busy":             busy,
+            "busy_elsewhere":   busy_elsewhere,
+            "untagged":         untagged,
             "total_instances":  total_instances,
             "queue_length":     queue_length,
             "sla_target_ms":    sla_target_ms,
             "channel_types":    channel_types,
+            # Discriminador de MODELO. O bootstrap escreve o seu próprio snapshot
+            # (NX) com outra fonte; sem este campo as duas linhas são
+            # indistinguíveis na tela e no diagnóstico.
+            "model":            "resource_semaphore",
             "updated_at":       datetime.now(timezone.utc).isoformat(),
         }
         if max_reply_time_ms is not None:

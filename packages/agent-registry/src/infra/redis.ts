@@ -56,6 +56,19 @@ export interface PoolSnapshot {
   sla_target_ms: number
   channel_types: string[]
   updated_at:    string
+
+  // Capacidade compartilhada (fatia 2). Opcionais porque há DOIS escritores:
+  //   · routing-engine  → model "resource_semaphore", publica todos os campos;
+  //   · bootstrap (NX)  → model "bootstrap_placeholder", publica só available/
+  //     total_instances — ele não parseia a tag de pool do membro do semáforo e
+  //     não pode separar o consumo deste pool do consumo dos irmãos.
+  // Ausente ≠ zero: quem lê `busy` sem snapshot do routing-engine não SABE, e
+  // apresentar 0 seria inventar. Discriminar por `model`, nunca por `?? 0`.
+  busy?:            number   // sessões servidas NESTE pool (projeção pela tag)
+  busy_elsewhere?:  number   // vagas do MESMO recurso consumidas por pools irmãos
+  untagged?:        number   // ocupantes sem tag — devem ir a zero em ≤24h
+  total_instances?: number   // CAPACIDADE (Σ max_concurrent), não contagem
+  model?:           "resource_semaphore" | "bootstrap_placeholder"
 }
 
 export async function getPoolSnapshot(

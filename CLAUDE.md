@@ -606,10 +606,41 @@ plughub-sdk proxy              # starts proxy sidecar on localhost:7422
 
 ## Operational Visibility — Section 3.3c
 
-Routing Engine writes pool snapshot to Redis after every routing event:
-`{tenant_id}:pool:{pool_id}:snapshot` (**TTL 3600s** — o código sempre usou o default `snapshot_ttl=3600`; "120s" era erro de doc em 3 lugares, corrigido 2026-07-31) — `{ pool_id, available, queue_length, sla_target_ms, channel_types, updated_at }`. **O snapshot NÃO é reescrito no claim/release de item de fila pull** (único call site em `router.py:215`, dentro de `route()`) — e com TTL de 1h a obsolescência por essa via não se auto-cura.
+Routing Engine writes pool snapshot to Redis: `{tenant_id}:pool:{pool_id}:snapshot`
+(**TTL 3600s**) — `{ pool_id, available, busy, busy_elsewhere, untagged, total_instances,
+queue_length, sla_target_ms, channel_types, model, updated_at }`.
+
+**A ocupação é DERIVADA do semáforo do RECURSO, nunca de um contador** (fatia 2 da capacidade
+compartilhada, 2026-08-02). Um recompute em Lua (`_RECOMPUTE_POOL_OCCUPANCY_LUA`) sobre
+`ready_set ∪ busy_set` do pool:
+
+```
+total_capacity = Σ max_concurrent(i)                    available      = max(0, total_capacity − used_global)
+used_global    = Σ SCARD({t}:instance:{i}:sessions)     busy           = used_here
+used_here      = Σ #{ m : occupant_pool(m) = P }        busy_elsewhere = used_global − used_here
+```
+
+`{t}:pool:{p}:active_count` foi **removido** (contava por POOL uma capacidade que é do RECURSO
+— 1 humano de 3 vagas em 3 pools dava três linhas `available 3`, soma 6, verdade 2), e com ele o
+INCR/DECR e o patch `available += 1` (com o teto/chão que o remendo exigia). `current_sessions`
+**não** foi promovido a fonte: é da mesma família, e trocar um contador por outro só muda qual
+mente depois. **`busy_elsewhere` é obrigatório na linha** — sem ele `available = total − busy` não
+fecha e o modelo compartilhado parece bug. **`untagged` denuncia escritor de ocupante fora do
+`claim_instance`**: deve ir a zero em ≤24 h (TTL do SET); persistente é bug, não ruído.
+
+Gatilhos: `route()` (pool roteado) + **fan-out sobre `pools(instance)`** em `mark_busy`,
+`remove_conversation` e `release_session_from_pool` (`refresh_snapshots_for_instance`; só reescreve
+pool que já tem snapshot — inventar `sla_target_ms`/`channel_types` seria publicar config falsa).
+`work_task_claim` entra de carona no `mark_busy`; **`work_task_release`/`work_task_expire` ainda
+não recomputam** (F3). O bootstrap (`instance_bootstrap._refresh_pool_snapshots`, NX, TTL 60 s) é
+uma segunda implementação: publica `model: "bootstrap_placeholder"` com `available`/`total_instances`
+derivados do SCARD e **omite `busy`/`busy_elsewhere`/`untagged`** — ausência é honesta, zero não
+seria. **Σ `available` entre pools continua errado** (defeito C, fase F4: exige rollup por recurso
+distinto em `{t}:capacity:snapshot`, por TIPO de licença).
 
 Three MCP tools (group `operational`): `queue_context_get`, `pool_status_get`, `system_availability_check`. When contact is queued, Routing Engine publishes `queue.position_updated` to Kafka.
+
+→ See [`docs/product/shared-capacity-pool-as-tag-design.md`](docs/product/shared-capacity-pool-as-tag-design.md)
 
 ## Security — Section 9.5
 

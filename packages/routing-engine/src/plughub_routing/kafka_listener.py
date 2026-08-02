@@ -322,7 +322,7 @@ class LifecycleEventHandler:
             if conversation_id:
                 # Pass fallback_pools from the event payload so that human agents
                 # (which never publish agent_ready and therefore have no instance_meta)
-                # still trigger the pool active_count DECR correctly.
+                # still update the pool SET membership correctly.
                 await self._instances.remove_conversation(
                     tenant_id, instance_id, conversation_id,
                     fallback_pools=fallback_pools,

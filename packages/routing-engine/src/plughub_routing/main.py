@@ -126,7 +126,7 @@ async def run() -> None:
         _periodic_queue_drain(redis_client, producer, settings, admission)
     )
 
-    # Fase 2 — occupancy sampler: samples per-pool concurrency (active_count) +
+    # Fase 2 — occupancy sampler: samples per-pool concurrency (derivada do semáforo) +
     # tenant total every few seconds, tracks the per-minute peak, and flushes it
     # to Kafka `pool.occupancy` for the capacity/headroom report.
     occupancy_task = asyncio.create_task(
@@ -210,15 +210,15 @@ async def _process_message(
             )
         return
 
-    # Guard: do not route (and therefore do not INCR active_count) for sessions
+    # Guard: do not route (and therefore do not re-claim a slot) for sessions
     # that are already closing or closed.  This prevents a race condition where:
     #   1. WS1 closes → _trigger_contact_close sets close_fired + publishes agent_done
-    #                  → remove_conversation() DECRs active_count and deletes serving-pool key
+    #                  → remove_conversation() libera a vaga e apaga a serving-pool key
     #   2. Browser refresh → WS2 connects with same session_id → publishes new
-    #      conversations.inbound → mark_busy() fires (serving key gone → guard misses)
-    #                            → active_count INCR'd again (counter stuck at 1)
+    #      conversations.inbound → o router reivindica uma vaga de novo (serving key
+    #      gone → guard misses)
     #   3. WS2 closes → bridge idempotency guard (close_fired already set) → no agent_done
-    #                  → no DECR → counter permanently stuck
+    #                  → a vaga fica ocupada por uma sessão morta (só o reap a recupera)
     # Checking both keys covers two states: close_fired = bridge initiated close;
     # session:{id}:closed = routing engine confirmed close from contact_closed event.
     #
@@ -226,9 +226,8 @@ async def _process_message(
     # dispatched by fire_pool_hooks() AFTER the session is already closing (e.g. wrap-up
     # and NPS agents in on_human_end).  These must be allowed through — they are
     # legitimate activations on a closing session.  The router already passes
-    # session_id=None to mark_busy() for conference events, so they never INCR the
-    # active_count or update the serving-pool key; they are safe to route even when
-    # session:{id}:closed is set.
+    # session_id=None to mark_busy() for conference events, so they never touch the
+    # serving-pool key; they are safe to route even when session:{id}:closed is set.
     if not event.conference_id:
         is_closing = await redis_client.exists(
             f"session:{event.session_id}:close_fired",
@@ -1554,16 +1553,24 @@ async def _occupancy_sampler(
     settings,
 ) -> None:
     """
-    Samples per-pool concurrency (the existing `active_count` counter) + the
-    per-tenant instantaneous total every few seconds, tracks the per-minute peak,
-    and flushes the completed minute to Kafka. The live counter is read each
-    sample, so the carry-over (sessions spanning minutes) is implicit and a minute
-    without events still records the steady-state concurrency.
+    Samples per-pool concurrency + the per-tenant instantaneous total every few
+    seconds, tracks the per-minute peak, and flushes the completed minute to Kafka.
+    O estado vivo é lido a cada amostra, então o carry-over (sessões que atravessam
+    minutos) é implícito e um minuto sem eventos ainda registra a concorrência.
+
+    **Fatia 2** — a fonte deixou de ser o contador `{t}:pool:{p}:active_count`
+    (removido: contava por POOL uma capacidade que é do RECURSO) e passou a ser
+    `compute_pool_occupancy(...)["used_here"]`, derivado da tag do membro do
+    semáforo. Consequência para a SÉRIE: para humano multi-pool o total do tenant
+    deixa de contar o mesmo atendimento uma vez por pool — cada ocupante tem
+    exatamente uma tag. A série antiga e a nova não são comparáveis nesse ponto; o
+    degrau na virada é a correção, não uma queda de carga.
     """
     interval = getattr(settings, "occupancy_sample_interval_s", 5)
     if interval <= 0:
         return
     await asyncio.sleep(interval)  # let services start
+    _occ_reg = InstanceRegistry(redis_client)
 
     cur_minute = None
     peaks: dict = {}              # (tenant_id, pool_id) -> peak active this minute
@@ -1604,8 +1611,11 @@ async def _occupancy_sampler(
                         continue
                     seen.add((tenant_id, pool_id))
                     tenants_seen.add(tenant_id)
-                    raw = await redis_client.get(f"{tenant_id}:pool:{pool_id}:active_count")
-                    c = max(0, int(raw)) if raw else 0
+                    # Derivado do semáforo do recurso (fatia 2) — `used_here` é a
+                    # projeção pela tag do membro, uma tag por ocupante, logo o
+                    # somatório entre pools não conta o mesmo atendimento duas vezes.
+                    _occ = await _occ_reg.compute_pool_occupancy(tenant_id, pool_id)
+                    c = max(0, int(_occ["used_here"]))
                     pk = (tenant_id, pool_id)
                     peaks[pk] = max(peaks.get(pk, 0), c)
                     tenant_totals[tenant_id] = tenant_totals.get(tenant_id, 0) + c

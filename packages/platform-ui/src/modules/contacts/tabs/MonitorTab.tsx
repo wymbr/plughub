@@ -263,9 +263,12 @@ function PoolRow({ pool, color, selected, onDrillDown }: {
   //                   contagem de agentes — o nome é herança do modelo antigo.
   //                   Para pool de IA (max_concurrent=1) os dois coincidem, e é por
   //                   isso que a divergência sobreviveu tanto tempo sem sintoma.
-  // available       = total_capacity − active_count (routing-engine / bootstrap).
-  // busy            = sessões ativas (active_count atômico).
-  // Ocupação        = sessões ativas / capacidade total.
+  // available       = total_capacity − ocupação do RECURSO (inclui as vagas que
+  //                   pools IRMÃOS consumiram do mesmo agente — capacidade é do
+  //                   recurso e não fragmenta por pool). Fatia 2.
+  // busy            = sessões servidas NESTE pool (projeção pela tag do ocupante);
+  //                   o resto do consumo do recurso está em `busy_elsewhere`.
+  // Ocupação        = sessões deste pool / capacidade total.
   const displayTotal = pool.total_instances ?? pool.available
   const displayAvail = pool.available
   const occPct = displayTotal > 0 && pool.busy > 0
@@ -383,7 +386,14 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
   const totalBusy      = pools.reduce((s, p) => s + p.busy, 0)
   // Online = sum of total_instances per pool (distinct registered agents).
   const totalOnline    = pools.reduce((s, p) => s + (p.total_instances ?? p.available), 0)
-  // Available = sum of pool.available (already = total_capacity − active_count).
+  // Available = Σ pool.available.
+  // ATENÇÃO — este somatório é o defeito **C** da capacidade compartilhada, ainda
+  // ABERTO (fase F4): `available` NÃO é aditivo entre pools que compartilham o
+  // mesmo recurso. Um humano de 3 vagas logado em 3 pools produz 2+2+2 = 6 aqui,
+  // quando a disponibilidade real é 2. A fatia 2 corrigiu cada LINHA (que agora
+  // desconta o consumo dos irmãos); somá-las continua errado até existir o rollup
+  // por recurso distinto em `{t}:capacity:snapshot`.
+  // Ver docs/product/shared-capacity-pool-as-tag-design.md §3.
   const totalAvailable = pools.reduce((s, p) => s + p.available, 0)
   const totalQueue     = pools.reduce((s, p) => s + p.queue_length, 0)
 
