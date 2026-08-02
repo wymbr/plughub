@@ -430,6 +430,12 @@ unidade); a redução gradual do D5 aritmético.
    `{t}:pool_config:{p}` (cache do próprio routing-engine, alimentado pelo `kafka_listener` — fonte
    autoritativa, não invenção), o que de quebra elimina a heurística do "só se já existe". **Fechar
    isto ANTES de alterar o bootstrap**, não depois.
+   *Medido 2026-08-02 (rebaixa a urgência, não elimina a dívida):* a suspeita era que o espelho
+   `retencao_humano-int` — que **não existe em `public.pools`** — ficasse sem linha e o fan-out
+   nunca o alcançasse. **Não se confirma:** o bootstrap escreve `bootstrap_placeholder` para ele
+   também, e no login do humano as duas linhas viraram `resource_semaphore` no mesmo instante
+   (`…436019` e `…441911`, 5 ms de diferença — o fan-out percorrendo `pools(instance)`). Ou seja, a
+   dependência **está satisfeita hoje**; o que permanece é ela ser silenciosa.
 3. **Desmontagem do modelo errado (B)** — para de gatear sessão humana, para de somar as moedas. É
    **remoção**. Atenção: o teste vermelho **exige `C` configurada** (existe: 370) **e humanos logados**
    com sessões — senão passa por ausência de limite.
@@ -571,6 +577,25 @@ degrau não medido. **Se a série virar base de decisão de dimensionamento, mar
 **Limitação que permanece em qualquer desenho:** o `peak_concurrency` responde *"quantas vagas no
 máximo"*, nunca *"ocupação média"* — o registro por minuto já é máximo, e média de máximos não é média
 de ocupação. Média exigiria soma+contagem de amostras por minuto (campo novo, não pedido).
+
+**Achados na série real (2026-08-02), a tratar no P1 — nenhum vem do diff da fatia 2:**
+
+1. **`provisioned_capacity` é FLASHADA no flush, não amostrada junto com o pico.** `_flush_occupancy`
+   chama `_pool_capacity` na virada do minuto, enquanto `peak_concurrency` veio do minuto que passou.
+   Consequência observada: `16:38 cap_smoke_a peak 1 / provisioned 0` — `peak > capacity`, impossível
+   por construção, e a MESMA assinatura registrada como "defeito A reproduzido" no `formfill_demo`
+   (`busy 1 / total_instances 0`). Ali a causa era o contador; aqui é *skew temporal* entre duas
+   grandezas do mesmo registro. **No P1, capturar a capacidade no mesmo instante do watermark** (ou
+   registrar explicitamente que são de instantes diferentes) — senão `headroom` e `utilization`, que
+   a UI deriva das duas, ficam com denominador de outro momento.
+2. **O defeito C aparece na SÉRIE, não só na tela.** `16:39 retencao_humano provisioned 3` +
+   `retencao_humano-int provisioned 3` = 6 para **um** recurso de 3 vagas. O rollup por recurso
+   distinto (F4) precisa alcançar `pool_occupancy_peaks` também, senão o histórico de capacidade
+   segue inflado mesmo depois que a tela for corrigida.
+3. **`__total__` está correto e é a prova viva de que `max` de somas ≠ soma de `max`:** no mesmo
+   minuto 16:39, quatro pools registraram pico 1 (`nps_ia`, `retencao_humano`, `retencao_humano-int`,
+   `sac_ia`) e o `__total__` foi **2** — porque os picos ocorreram em instantes diferentes e no máximo
+   dois coexistiram. É exatamente por isso que o P2 não pode derivar o total dos watermarks por pool.
 
 ### Medições que decidiram o escopo (script mantido para o "depois")
 

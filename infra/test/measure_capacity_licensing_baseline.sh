@@ -188,6 +188,16 @@ for k in $SNAP_KEYS; do
   [ -z "$k" ] && continue
   POOL=$(printf '%s' "$k" | sed "s/^$TENANT:pool://; s/:snapshot$//")
   SNAP=$(redis GET "$k")
+  # A chave EXISTIA no --scan e sumiu antes do GET. Não é snapshot ruim: cada campo
+  # custa um `docker compose exec` (~0,5 s) e o laço leva minutos, enquanto a linha
+  # do bootstrap vive 60 s. Sem este ramo, o pool sai com tudo '-' e MODEL 'legado'
+  # — indistinguível de snapshot corrompido, e sistematicamente nos ÚLTIMOS pools da
+  # ordem alfabética (foi assim que apareceu: só `wrapup_*`).
+  if [ -z "$SNAP" ] || [ "$SNAP" = "" ]; then
+    printf '%-28s %-7s %-6s %-7s %-7s %-7s %-6s %s\n' \
+           "$POOL" "?" "?" "?" "?" "?" "?" "EXPIROU-DURANTE-A-LEITURA"
+    continue
+  fi
   AV=$(jnum "$SNAP" available)
   BU=$(jnum "$SNAP" busy)
   BE=$(jnum "$SNAP" busy_elsewhere)
@@ -279,4 +289,7 @@ note "  3. UNTAG deve ser 0. Membro sem tag é legítimo só nas 24 h após o de
 note "     F1 (TTL do SET); persistente = escritor de ocupante fora do claim_instance."
 note "  4. Σ AVAIL entre pools CONTINUA ERRADO — é o defeito C (fase F4), não regressão:"
 note "     available não é aditivo entre pools que compartilham o mesmo recurso."
+note "  5. MODEL 'EXPIROU-DURANTE-A-LEITURA' não é defeito do dado: a linha do bootstrap"
+note "     vive 60 s e este laço leva minutos (um exec por campo). Para um retrato"
+note "     coerente de TODOS os pools, medir com o bridge parado ou reduzir o escopo."
 hr
