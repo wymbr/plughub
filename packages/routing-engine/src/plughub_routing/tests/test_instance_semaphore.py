@@ -5,9 +5,11 @@ Valida o par atômico claim_instance/release_instance (semáforo de contagem
 por-instância via Lua sobre um SET de occupants). É a primitiva que elimina a
 corrida de sobre-alocação do select→mark_busy não-atômico.
 
-Modelo do occupant: "{session_id}::{conference_id}". Duas conferências da MESMA
-sessão (conference_ids distintos) NÃO compartilham vaga. Release é por PREFIXO de
-sessão ("{session_id}::"), pois o agent_done só carrega session_id.
+Modelo do occupant: "{session_id}::{conference_id}::{pool_id}". Duas conferências da
+MESMA sessão (conference_ids distintos) NÃO compartilham vaga. Release é por PREFIXO
+de sessão ("{session_id}::"), pois o agent_done só carrega session_id. O pool é
+sempre o 3º campo "::" — TAG (projeção), nunca contagem: mudar de pool não muda
+quantas vagas a sessão ocupa.
 
 Teste de INTEGRAÇÃO: precisa de um Redis real (Lua roda no servidor). É pulado
 automaticamente se não houver Redis acessível. Aponte REDIS_URL para o Redis do
@@ -24,7 +26,9 @@ import uuid
 import pytest
 import redis.asyncio as aioredis
 
-from plughub_routing.registry import InstanceRegistry, _instance_sessions_key
+from plughub_routing.registry import (
+    InstanceRegistry, _instance_sessions_key, occupant_pool,
+)
 
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -299,3 +303,225 @@ async def test_concurrent_swap_and_claims_never_exceed_capacity(reg_and_redis):
     winners = [r for r in results[1:] if r >= 1]
     assert len(winners) <= 1, f"mais de um herdeiro ganhou: {results}"
     assert await reg.instance_session_count(tenant, instance) <= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F1 — tag de pool no membro do semáforo (capacidade compartilhada)
+#
+# occupant = "{session_id}::{conference_id}::{pool_id}"
+# hold     = "__wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}"
+# Invariante: o pool é SEMPRE o 3º campo "::" — um parse só (`occupant_pool`), e as
+# três restrições preservadas: release por prefixo de sessão, prefixo do hold, e o
+# parse numérico da expiração do hold.
+#
+# A tag é PROJEÇÃO, não contagem: quem serve continua sendo o RECURSO, e a capacidade
+# não fragmenta por pool. Spec: docs/product/shared-capacity-pool-as-tag-design.md §1
+# ─────────────────────────────────────────────────────────────────────────────
+
+POOL_A = "retencao_humano"
+POOL_B = "aprovacao_deploy"
+
+
+async def _members(client, tenant, instance) -> list[str]:
+    return sorted(await client.smembers(_instance_sessions_key(tenant, instance)))
+
+
+@pytest.mark.asyncio
+async def test_claim_grava_a_tag_do_pool_no_occupant(reg_and_redis):
+    """O básico: o membro carrega o pool que consumiu a vaga, no 3º campo."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=1, pool_id=POOL_A,
+    ) == 1
+    assert await _members(client, tenant, instance) == [f"ses-A::conf-A::{POOL_A}"]
+    assert occupant_pool(f"ses-A::conf-A::{POOL_A}") == POOL_A
+
+
+@pytest.mark.asyncio
+async def test_retag_cross_pool_nao_altera_a_ocupacao(reg_and_redis):
+    """O nó da fatia. Transferência cross-pool para uma instância logada nos DOIS
+    pools: a mesma (sessão, conferência) é reivindicada por outro pool. Tem de ser
+    RE-TAG (SREM+SADD), não vaga nova.
+
+    Vermelho antes da mudança: a idempotência era `SISMEMBER` EXATO, a string do 2º
+    claim é diferente, e o membro extra entrava → SCARD 2 (dupla ocupação da mesma
+    sessão no mesmo recurso — 1 acima e perfeitamente plausível).
+
+    max_concurrent=2 DE PROPÓSITO: com 1, o código antigo devolveria -1 por teto e o
+    teste passaria por ausência de vaga, não por corretude."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_A,
+    ) == 1
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_B,
+    ) == 1
+
+    assert await reg.instance_session_count(tenant, instance) == 1
+    assert await _members(client, tenant, instance) == [f"ses-A::conf-A::{POOL_B}"]
+
+    # e a vaga segue sendo UMA: o release por sessão zera a instância
+    assert await reg.release_instance(tenant, instance, "ses-A") == 0
+
+
+@pytest.mark.asyncio
+async def test_reclaim_mesmo_pool_continua_idempotente(reg_and_redis):
+    """Redelivery no MESMO pool: nada muda (nem SREM/SADD, nem contagem)."""
+    reg, client, tenant, instance = reg_and_redis
+
+    r1 = await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_A,
+    )
+    r2 = await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_A,
+    )
+    assert r1 == 1 and r2 == 1
+    assert await _members(client, tenant, instance) == [f"ses-A::conf-A::{POOL_A}"]
+
+
+@pytest.mark.asyncio
+async def test_confs_distintas_seguem_vagas_distintas_mesmo_com_tag(reg_and_redis):
+    """Guarda contra o excesso oposto: o prefixo de idempotência inclui a
+    CONFERÊNCIA. Duas confs da mesma sessão continuam ocupando 2 vagas — se o
+    prefixo fosse só "{session}::", o fan-out de wrap-up passaria a dividir vaga."""
+    reg, client, tenant, instance = reg_and_redis
+
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-1", max_concurrent=2, pool_id=POOL_A,
+    ) == 1
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-2", max_concurrent=2, pool_id=POOL_A,
+    ) == 2
+
+
+@pytest.mark.asyncio
+async def test_release_por_prefixo_remove_membro_COM_tag(reg_and_redis):
+    """A restrição nº 1 do formato: a tag entra DEPOIS do prefixo de sessão, então o
+    release (que só conhece o session_id) segue removendo. Vermelho se alguém puser
+    o pool antes — ex. "{pool}::{session}::…"."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_A,
+    )
+    await reg.claim_instance(
+        tenant, instance, "ses-B", "conf-B", max_concurrent=2, pool_id=POOL_B,
+    )
+    # pré-condição: os membros ESTÃO tagados (sem isto o teste passaria pré-mudança)
+    assert all(occupant_pool(m) for m in await _members(client, tenant, instance))
+
+    assert await reg.release_instance(tenant, instance, "ses-A") == 1
+    assert await _members(client, tenant, instance) == [f"ses-B::conf-B::{POOL_B}"]
+
+
+@pytest.mark.asyncio
+async def test_hold_herda_a_tag_do_occupant_e_expira_com_o_parse_intacto(reg_and_redis):
+    """A restrição nº 3: no hold a tag entra ANTES do timestamp, então o único parse
+    numérico do Lua (`::(%d+)$`) continua valendo. Duas asserções que podem falhar
+    separadamente: (1) o hold herdou o pool do occupant removido — sem parâmetro novo
+    atravessando `remove_conversation`; (2) um hold EXPIRADO ainda é descartado por
+    qualquer claim (se o parse quebrar, o Lua trata como `exp == nil` → também
+    descarta, então a expiração é checada com um hold VIVO logo abaixo)."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(
+        tenant, instance, "ses-origin", None, max_concurrent=1, pool_id=POOL_A,
+    )
+    assert await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90) == 1
+
+    holds = await _hold_members(client, tenant, instance)
+    assert len(holds) == 1
+    assert occupant_pool(holds[0]) == POOL_A, f"hold sem a tag herdada: {holds[0]}"
+    assert holds[0].split("::")[-1].isdigit(), f"expiração ilegível: {holds[0]}"
+
+    # hold VIVO com 4 campos: o parse funciona → push é barrado (não é descartado)
+    assert await reg.claim_instance(
+        tenant, instance, "ses-push", None, max_concurrent=1, pool_id=POOL_B,
+    ) == -1
+    assert len(await _hold_members(client, tenant, instance)) == 1
+
+    # o herdeiro consome o hold e re-taga a vaga com o pool do wrap-up
+    assert await reg.claim_instance(
+        tenant, instance, "ses-wrapup", None, max_concurrent=1,
+        pool_id=POOL_B, can_inherit_hold=True,
+    ) == 1
+    assert await _members(client, tenant, instance) == [f"ses-wrapup::::{POOL_B}"]
+
+
+@pytest.mark.asyncio
+async def test_hold_expirado_com_tag_ainda_e_descartado(reg_and_redis):
+    """Mesmo cenário do teste Phase 2 de expiração, agora com o membro de 4 campos:
+    o hold expirado é varrido e a vaga volta. Vermelho se a tag empurrar o timestamp
+    para fora do `::(%d+)$` (o hold ficaria preso até o EXPIRE de 24h do SET)."""
+    reg, client, tenant, instance = reg_and_redis
+
+    await reg.claim_instance(
+        tenant, instance, "ses-origin", None, max_concurrent=1, pool_id=POOL_A,
+    )
+    await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=-1)
+    holds = await _hold_members(client, tenant, instance)
+    assert len(holds) == 1 and occupant_pool(holds[0]) == POOL_A
+
+    assert await reg.claim_instance(
+        tenant, instance, "ses-push", None, max_concurrent=1, pool_id=POOL_B,
+    ) == 1
+    assert await _hold_members(client, tenant, instance) == []
+
+
+# ── Compatibilidade: membros de 2 campos escritos antes do deploy (SET com TTL 24h)
+
+@pytest.mark.asyncio
+async def test_membro_legado_de_2_campos_conta_como_untagged(reg_and_redis):
+    """Legado ocupa vaga do RECURSO (é o que `available` usa) e não pertence a
+    projeção de pool nenhuma: `occupant_pool` devolve None, não "". Quem agregar por
+    pool tem de publicar esse resto — untagged persistente é bug de escritor, não
+    ruído de migração."""
+    reg, client, tenant, instance = reg_and_redis
+
+    key = _instance_sessions_key(tenant, instance)
+    await client.sadd(key, "ses-legado::conf-legado")
+
+    assert occupant_pool("ses-legado::conf-legado") is None
+    assert occupant_pool("ses-legado::") is None          # sem conferência, sem pool
+    assert occupant_pool("ses-A::conf-A::") is None       # 3º campo vazio ≠ pool ""
+    # conta na ocupação do recurso
+    assert await reg.instance_session_count(tenant, instance) == 1
+    assert await reg.claim_instance(
+        tenant, instance, "ses-nova", None, max_concurrent=1, pool_id=POOL_A,
+    ) == -1
+
+
+@pytest.mark.asyncio
+async def test_reclaim_de_membro_legado_re_taga_sem_duplicar(reg_and_redis):
+    """A janela de migração: um redelivery/re-rota da MESMA sessão sobre um membro
+    legado não pode virar vaga nova. Vermelho se o Lua só reconhecer o prefixo de 3
+    campos — o legado tem 2 e não casa → SCARD 2."""
+    reg, client, tenant, instance = reg_and_redis
+
+    key = _instance_sessions_key(tenant, instance)
+    await client.sadd(key, "ses-A::conf-A")
+
+    assert await reg.claim_instance(
+        tenant, instance, "ses-A", "conf-A", max_concurrent=2, pool_id=POOL_A,
+    ) == 1
+    assert await _members(client, tenant, instance) == [f"ses-A::conf-A::{POOL_A}"]
+
+
+@pytest.mark.asyncio
+async def test_swap_de_occupant_legado_gera_hold_untagged_com_parse_intacto(reg_and_redis):
+    """Origem untagged → hold untagged, mas ainda com 4 campos: o campo de pool fica
+    VAZIO em vez de sumir, senão o timestamp escorregaria para o 3º campo e um leitor
+    de tag passaria a ler o relógio como nome de pool."""
+    reg, client, tenant, instance = reg_and_redis
+
+    key = _instance_sessions_key(tenant, instance)
+    await client.sadd(key, "ses-origin::")
+
+    assert await reg.swap_to_hold(tenant, instance, "ses-origin", hold_ttl_s=90) == 1
+    holds = await _hold_members(client, tenant, instance)
+    assert len(holds) == 1
+    assert occupant_pool(holds[0]) is None, f"tag fantasma no hold: {holds[0]}"
+    assert holds[0].split("::")[-1].isdigit()
+    assert len(holds[0].split("::")) == 4

@@ -2,6 +2,63 @@
 
 ---
 
+## Capacidade compartilhada — fatia 1: tag de pool no membro do semáforo ✅ (2026-08-02)
+
+Pré-requisito das fatias seguintes (relatório A, desmontagem B), **sem mudança de comportamento
+observável**: nenhum leitor novo, snapshot intocado, `active_count` intocado. O membro do semáforo
+passa a dizer **qual pool** consumiu a vaga.
+
+```
+occupant = {session_id}::{conference_id}::{pool_id}
+hold     = __wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}
+```
+
+**O pool é sempre o 3º campo `::`** — regra única que satisfaz as três restrições ao mesmo tempo:
+release por prefixo `{session_id}::` (a tag entra depois), prefixo `__wrapup_hold__::` (não colide com
+uuid de sessão) e o parse de expiração do hold `::(%d+)$` (no hold a tag entra **antes** do timestamp).
+A tag é **projeção, não contagem**: capacidade segue sendo do RECURSO e não fragmenta por pool.
+
+**A mudança não-óbvia — idempotência do claim.** Era `SISMEMBER` exato. Com a tag, a mesma
+`(sessão, conferência)` reivindicada por **outro pool** (transferência cross-pool para instância logada
+nos dois) tem string diferente, passaria no teste de existência e criaria um **segundo membro**: dupla
+ocupação da mesma sessão no mesmo recurso — número 1 acima, plausível, silencioso. Agora a checagem é
+por **prefixo de identidade** `{session}::{conference}::` e, em hit com pool diferente, o Lua faz
+`SREM` + `SADD` (**re-tag**, contagem inalterada). Membro legado de 2 campos também é hit — senão um
+redelivery na janela de migração (o SET tem TTL 24 h) duplicaria a vaga.
+
+**Hold sem plumbing novo:** `_SWAP_TO_HOLD_LUA` monta o membro **dentro do Lua**, herdando a tag do
+occupant que remove — o pool que serviu é, por construção, o do membro removido. Nenhum `pool_id`
+atravessa `remove_conversation`. Origem untagged → campo vazio, **4 campos preservados**
+(`…::{origin}::::{exp}`), para o timestamp não escorregar para o 3º campo.
+
+**Arquivos:** `registry.py` (`_occupant_id`+`pool_id`, `_occupant_identity_prefix`, `occupant_pool()`
+como ponto único de parse — devolve `None`, não `""`, para untagged; `_CLAIM_INSTANCE_LUA` e
+`_SWAP_TO_HOLD_LUA`), `router.py` (3 call sites: `route`, `_try_affinity`, `work_task_claim`).
+Docs de formato: `CLAUDE.md`, `docs/guias/conference-mechanics.md`, header do smoke de hand-off.
+
+**Verificação — 10 testes novos em `test_instance_semaphore.py` (24 no arquivo, 44 na suíte — 42 verdes
++ os 2 vermelhos pré-existentes do achado lateral abaixo —, 0 skipped;
+`REDIS_URL` explícito, senão o fixture pula e o skip vira falso-verde).** Os testes da F1 **não podem**
+nascer vermelhos contra o código anterior (lá o parâmetro `pool_id` não existe — daria erro de
+assinatura, não asserção reprovada), então a prova de reprovação foi por **mutação**:
+
+| Mutação | Reprovou | Modo de falha |
+|---|---|---|
+| idempotência ← `SISMEMBER` exato | re-tag cross-pool · re-claim de legado | `SCARD 2` — a dupla ocupação |
+| tag **depois** do timestamp no hold | 5 testes, **2 deles pré-existentes** | `exp = nil` → hold **vivo** tratado como expirado → **o push rouba a vaga do wrap-up** |
+
+A segunda mutação reprovou mais do que o previsto, e é o achado: quem pegou o modo perigoso foram
+`test_push_never_inherits_a_live_hold` e `test_hold_occupies_only_one_slot_when_multi_capacity`, da
+Phase 2 do wrap-up. A rede que já existia era a que importava — motivo de estender o arquivo, nunca
+contornar.
+
+**Achado lateral (não é desta fatia, registrado em `TODO.md`):** dois testes de
+`test_human_instance_identity.py` afirmam um contrato revogado em 2026-07-28 (`agent_ready`
+autoritativo sobre `pools`; hoje o registro é a fonte, `kafka_listener.py:434-464`). São 2 vermelhos
+permanentes anteriores à fatia.
+
+---
+
 ## Sonda de prosa do wrap-up: dois defeitos que a impediam de reprovar + validação 4/4 ✅ (2026-07-31)
 
 O bloco C de `check_wrapup_prose_persisted.sh` (regressão do caminho **não-resolvido**) estava

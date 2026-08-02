@@ -386,6 +386,18 @@ unidade); a redução gradual do D5 aritmético.
    sem mudança de comportamento. Invariante: release é por **prefixo** `{session_id}::`, então o pool
    entra como **sufixo**; regra unificadora = *pool é sempre o 3º campo `::`*, o que preserva também o
    parse de expiração do hold.
+   **✅ CONCLUÍDA E VALIDADA (2026-08-02)** — ver `CHANGELOG.md`. As-built em `registry.py`: `_occupant_id`
+   ganhou `pool_id`; `_CLAIM_INSTANCE_LUA` troca `SISMEMBER` exato por hit de **prefixo de identidade**
+   `{session}::{conf}::` (+ o membro legado de 2 campos, para a janela de migração) e faz **RE-TAG**
+   (SREM+SADD) em hit com pool diferente; `_SWAP_TO_HOLD_LUA` monta o membro do hold **no Lua**,
+   herdando a tag do occupant removido (nenhum `pool_id` atravessa `remove_conversation`); parse único
+   em `occupant_pool(member)` → `None` para untagged. Call sites: `router.py` ×3 (`route`,
+   `_try_affinity`, `work_task_claim`). Verificação: 10 testes novos em `test_instance_semaphore.py`
+   (24 no arquivo, 44 na suíte, 0 skipped) + prova de reprovação por **mutação** (os testes F1 não podem nascer
+   vermelhos contra o código antigo — lá o `pool_id` nem existe): idempotência ← `SISMEMBER` exato
+   derruba o re-tag com `SCARD 2`; tag **depois** do timestamp no hold derruba 5, dois deles
+   **pré-existentes**, pelo modo perigoso (`exp = nil` → hold vivo tido por expirado → push rouba a
+   vaga do wrap-up).
 2. **Relatório (A)** — recompute + fan-out por recurso + rollup **por tipo de licença**; bootstrap
    deixa de afirmar capacidade. É o defeito **efetivamente observado**, e a medição mostrou que o
    bootstrap é hoje o escritor principal do snapshot.
@@ -453,6 +465,17 @@ parar de afirmar capacidade (escrever `null` + `model: bootstrap_placeholder`).
   configurá-lo).
 - **`fila_humano` está com `agent_kind = ai`** — pelo nome deveria ser humano; muda comportamento de
   licenciamento e de hook.
+- **Dois testes de `test_human_instance_identity.py` afirmam um contrato REVOGADO** (achado ao rodar a
+  suíte da fatia 1, 2026-08-02; **anteriores a ela** — nada do diff toca esse caminho).
+  `test_agent_ready_is_authoritative_partial_logout_shrinks` e `test_agent_ready_login_grows_membership`
+  exigem que o `agent_ready` seja autoritativo sobre `pools` (encolher no logout parcial, crescer no
+  login). O `kafka_listener.py:434-464` faz o **oposto desde 2026-07-28**, de propósito: `pools =
+  existing_pools`, evento ignorado — o mcp-server escreve a membership atomicamente ANTES de publicar, e
+  o Console abre uma conexão por pool (N `agent_ready` sem ordem garantida entre partições; era assim
+  que a membership colapsava, `before=['formfill_demo'] after=['retencao_humano']`). Suspeitar do
+  **teste**, não do código: o argumento do código é verificável (ordem de entrega) e o do teste não.
+  Decidir se some ou se inverte a asserção — enquanto ficar assim, são 2 vermelhos permanentes que
+  anestesiam a leitura de qualquer suíte que inclua o arquivo.
 
 ### Medições que decidiram o escopo (script mantido para o "depois")
 

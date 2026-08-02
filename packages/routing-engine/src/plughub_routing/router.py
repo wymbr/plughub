@@ -327,6 +327,7 @@ class Router:
             claimed = await self._instances.claim_instance(
                 event.tenant_id, inst.instance_id,
                 event.session_id, event.conference_id, inst.max_concurrent,
+                pool_id=pool.pool_id,
             )
             if claimed >= 1:
                 best_instance, best_pool, best_score = inst, pool, rscore
@@ -498,6 +499,7 @@ class Router:
                 _aff_claimed = await self._instances.claim_instance(
                     event.tenant_id, inst.instance_id,
                     event.session_id, event.conference_id, inst.max_concurrent,
+                    pool_id=pool.pool_id,
                 )
                 if _aff_claimed < 1:
                     logger.info(
@@ -652,6 +654,7 @@ class Router:
         occ = await self._instances.claim_instance(
             tenant_id, instance_id, session_id,
             conference_id or None, int(inst.max_concurrent),
+            pool_id=pool_id,
             can_inherit_hold=_can_inherit,
         )
         if occ == -1:

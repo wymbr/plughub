@@ -1419,8 +1419,14 @@ hand-off destravou **dois defeitos pré-existentes** no ciclo de conferência do
 
 **Hand-off da vaga.** A vaga da origem não é mais LIBERADA no close quando há wrap-up inline seguindo: é
 **trocada por um HOLD** (swap net 0) que o auto-claim do wrap-up **herda**. Ocupação nunca oscila.
-- Ocupante do hold: `__wrapup_hold__::{origin_session_id}::{expires_at_ms}` no SET `{t}:instance:{iid}:sessions`
-  (prefixo não colide com `{session_id}::`, então o release por prefixo de sessão nunca o remove).
+- Ocupante do hold: `__wrapup_hold__::{origin_session_id}::{pool_id}::{expires_at_ms}` no SET
+  `{t}:instance:{iid}:sessions` (prefixo não colide com `{session_id}::`, então o release por prefixo de
+  sessão nunca o remove). O campo `{pool_id}` entrou na fatia F1 de capacidade compartilhada (2026-08-02):
+  o pool é **sempre o 3º campo `::`** nos dois tipos de membro — occupant
+  `{session_id}::{conference_id}::{pool_id}` e hold —, e no hold ele entra **antes** do timestamp
+  justamente para não quebrar o único parse numérico do Lua (`::(%d+)$`). O hold **herda** a tag do
+  occupant que substitui. Membro sem o campo = *untagged* (escrito antes do deploy; o SET tem TTL 24 h):
+  conta na ocupação do recurso e em nenhuma projeção por pool.
 - `_SWAP_TO_HOLD_LUA` (novo) + `_CLAIM_INSTANCE_LUA` (reescrita): todo claim **descarta holds expirados**
   (senão um wrap-up que nunca chega prenderia a vaga até o EXPIRE de 24 h do SET); só o claim `auto_attend` do
   **dono** herda um hold vivo. Tolerante às duas ordens de chegada.

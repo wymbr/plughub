@@ -13,10 +13,13 @@ Redis key structure:
   {tenant_id}:pool_config:{pool_id}                         — pool config JSON (TTL 24h, via PLUGHUB_POOL_CONFIG_TTL_SECONDS)
   {tenant_id}:pools                                         — set of pool_ids for the tenant
   {tenant_id}:pool:{pool_id}:queue                          — sorted set of contacts (score = queued_at_ms)
-  {tenant_id}:instance:{instance_id}:sessions               — SET de ocupantes (semáforo de vagas). Membro
-                                                              "__wrapup_hold__::{origin}::{expires_at_ms}" =
-                                                              vaga SEGURA entre o fim do contato e o auto-claim
-                                                              do wrap-up inline (Phase 2 — hand-off da vaga)
+  {tenant_id}:instance:{instance_id}:sessions               — SET de ocupantes (semáforo de vagas). Membros:
+                                                              "{session_id}::{conference_id}::{pool_id}" = vaga
+                                                              ocupada, TAGGED com o pool que serviu (F1);
+                                                              "__wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}"
+                                                              = vaga SEGURA entre o fim do contato e o auto-claim
+                                                              do wrap-up inline (Phase 2 — hand-off da vaga).
+                                                              Invariante: o pool é SEMPRE o 3º campo "::"
   {tenant_id}:queue_contact:{session_id}                    — queued contact JSON
   session_instance:{session_id}                             — session affinity (stateful)
   {tenant_id}:routing:instance:{instance_id}:meta           — HASH no TTL (pools, agent_type_id)
@@ -152,12 +155,32 @@ def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
 # por-instância sobre um SET de occupant_ids; SCARD é a contagem real. claim/release
 # são IDEMPOTENTES (cobre de quebra o redelivery de agent_done). Single-key (cluster-safe).
 #
-# OCCUPANT = "{session_id}::{conference_id}"  (conference_id vazio p/ contato normal).
+# OCCUPANT = "{session_id}::{conference_id}::{pool_id}"  (conference_id vazio p/ contato
+# normal; pool_id vazio quando o chamador não o informa = UNTAGGED).
 # Por quê: duas conferências da MESMA sessão (ex.: fan-out de wrap-up) têm conference_ids
 # distintos → occupants distintos → NÃO dividem a mesma vaga (a 2ª recebe -1 e re-seleciona
 # outra instância). Já o RELEASE só conhece o session_id (o agent_done não carrega
 # conference_id) → libera por PREFIXO "{session_id}::" (remove a(s) vaga(s) desta sessão
 # nesta instância). Simétrico: claim deriva de (session_id, conference_id); release de (session_id).
+#
+# ── Tag de pool (F1, capacidade compartilhada) ────────────────────────────────
+# O pool entra como 3º campo "::" — nos DOIS tipos de membro, então o parse é um só
+# (`occupant_pool`). É PROJEÇÃO, nunca contagem: a capacidade é do RECURSO e não
+# fragmenta por pool; a tag só diz QUAL pool consumiu a vaga, para o snapshot por pool
+# parar de ignorar o consumo dos irmãos (fatia 2). Restrições que o formato preserva:
+#   · release por prefixo "{session_id}::" intacto (a tag entra DEPOIS);
+#   · prefixo "__wrapup_hold__::" não colide com prefixo de sessão (uuid);
+#   · parse de expiração do hold `::(%d+)$` intacto (no hold a tag entra ANTES do ts).
+# IDEMPOTÊNCIA: com a tag, a MESMA (sessão, conferência) reivindicada por OUTRO pool
+# — transferência cross-pool para instância logada nos dois — passaria num SISMEMBER
+# exato com string diferente e criaria um SEGUNDO membro (dupla ocupação da mesma
+# sessão no mesmo recurso, número 1 acima e plausível). Por isso a checagem passa a ser
+# por PREFIXO "{session_id}::{conference_id}::" e, em hit com pool diferente, o Lua
+# faz SREM+SADD (RE-TAG, contagem inalterada).
+# LEGADO: membros de 2 campos escritos antes do deploy (o SET tem TTL 24h) são
+# UNTAGGED — contam na ocupação do recurso e em nenhuma projeção por pool. O claim
+# também os reconhece como hit de idempotência (senão um redelivery na janela de
+# migração duplicaria a vaga) e os re-taga ao tocá-los.
 #
 # ── Wrap-up unificado Phase 2 — hand-off da vaga ──────────────────────────────
 # HOLD = ocupante especial que SEGURA a vaga da origem entre o fim do contato e o
@@ -166,15 +189,42 @@ def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
 # push que chegue na janela toma a vaga a max_concurrent=1 — o agente recebe contato
 # novo com wrap-up pendente, exatamente o que a ocupação do wrap-up deve impedir.
 #
-# Membro: "__wrapup_hold__::{origin_session_id}::{expires_at_ms}"
+# Membro: "__wrapup_hold__::{origin_session_id}::{pool_id}::{expires_at_ms}"
 #   · o prefixo NÃO colide com o prefixo de sessão "{session_id}::" (uuid) → o
 #     release por prefixo de sessão nunca remove um hold, e vice-versa;
 #   · origin_session_id é OBSERVABILIDADE (o casamento é FUNGÍVEL: cada hold vale
 #     uma vaga, cada wrap-up consome uma — a instância já é a mesma);
 #   · expires_at_ms sustenta a expiração PASSIVA (não há sweeper): sem ela, um
 #     wrap-up que nunca chega (webhook non-2xx, workflow falha, logout, browser
-#     fechado) prenderia a vaga até o EXPIRE de 24h do SET.
+#     fechado) prenderia a vaga até o EXPIRE de 24h do SET;
+#   · o pool_id (F1) é HERDADO do occupant que o swap remove — o pool que serviu é,
+#     por construção, o do membro removido. Nenhum parâmetro novo atravessa
+#     `remove_conversation`; a atribuição do hold a um pool sai de brinde.
 _WRAPUP_HOLD_PREFIX = "__wrapup_hold__::"
+
+
+def occupant_pool(member: str) -> str | None:
+    """Pool que consumiu a vaga (3º campo "::" do membro), ou None se UNTAGGED.
+
+    Ponto ÚNICO de parse da tag — os dois formatos de membro têm o pool no mesmo
+    campo, de propósito:
+        occupant  "{session_id}::{conference_id}::{pool_id}"
+        hold      "__wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}"
+
+    Devolve None (untagged, não ""): membro legado de 2 campos escrito antes do
+    deploy da tag, e membro cujo escritor não informou o pool. Untagged conta na
+    ocupação do RECURSO e em nenhuma projeção por pool — quem agrega precisa
+    contá-los e publicá-los, nunca descartá-los em silêncio.
+    """
+    if not member:
+        return None
+    parts = member.split("::")
+    # hold  → ['__wrapup_hold__', origin, pool, expires]  (3 campos = hold legado)
+    # occup → [session, conference, pool]                 (2 campos = occupant legado)
+    minimo = 4 if member.startswith(_WRAPUP_HOLD_PREFIX) else 3
+    if len(parts) < minimo:
+        return None
+    return parts[2] or None
 
 # Janela mínima entre dois reaps de vagas órfãs da MESMA instância. Só corre para
 # instância que já aparece lotada, então 60 s é folgado: o custo do atraso é um
@@ -183,21 +233,46 @@ _WRAPUP_HOLD_PREFIX = "__wrapup_hold__::"
 _REAP_COOLDOWN_S = 60
 
 # claim: KEYS[1]=sessions set; ARGV[1]=occupant_id; ARGV[2]=max_concurrent; ARGV[3]=ttl_s;
-#        ARGV[4]=now_ms; ARGV[5]="1" se este claim pode HERDAR um hold (auto_attend)
+#        ARGV[4]=now_ms; ARGV[5]="1" se este claim pode HERDAR um hold (auto_attend);
+#        ARGV[6]=prefixo de IDENTIDADE do occupant "{session_id}::{conference_id}::"
 #   retorna a nova ocupação (>=1) em sucesso/idempotente; -1 se lotado.
+#
+# F1 (tag de pool): a idempotência é por PREFIXO de identidade, não por SISMEMBER
+# exato — a mesma (sessão, conferência) reivindicada por outro pool tem string
+# diferente e criaria um 2º membro. Em hit com pool diferente: SREM antigo + SADD
+# novo (RE-TAG, contagem inalterada). O membro LEGADO de 2 campos (idpfx sem o "::"
+# final) também é hit — e é re-tagado ao ser tocado.
 #
 # Phase 2: varre holds e (a) DESCARTA os expirados p/ QUALQUER claim — senão um hold
 # vazado bloquearia o push permanentemente; (b) HERDA um hold vivo só quando ARGV[5]=1
 # (swap net 0 — a ocupação nunca oscila). Tolerante às duas ordens de chegada: se o
 # release já ocorreu (sem hold), cai no claim normal com a checagem de capacidade.
+# A varredura de holds NÃO roda no caminho idempotente (retorno antecipado), igual
+# ao comportamento pré-tag: quem já tem vaga não altera o estado de ninguém.
 _CLAIM_INSTANCE_LUA = """
-if redis.call('SISMEMBER', KEYS[1], ARGV[1]) == 1 then
+local members = redis.call('SMEMBERS', KEYS[1])
+local idpfx  = ARGV[6]
+local ilen   = string.len(idpfx)
+local legacy = string.sub(idpfx, 1, ilen - 2)
+local existing = nil
+for i = 1, #members do
+  local m = members[i]
+  if string.sub(m, 1, ilen) == idpfx or m == legacy then
+    existing = m
+    break
+  end
+end
+if existing ~= nil then
+  if existing ~= ARGV[1] then
+    redis.call('SREM', KEYS[1], existing)
+    redis.call('SADD', KEYS[1], ARGV[1])
+    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+  end
   return redis.call('SCARD', KEYS[1])
 end
 local HOLD = '__wrapup_hold__::'
 local hlen = string.len(HOLD)
 local now  = tonumber(ARGV[4])
-local members = redis.call('SMEMBERS', KEYS[1])
 local inherit = nil
 for i = 1, #members do
   local m = members[i]
@@ -246,9 +321,15 @@ return n
 """
 
 # swap-to-hold (Phase 2): KEYS[1]=sessions set; ARGV[1]=prefixo de sessão ("{origin}::");
-#   ARGV[2]=membro do hold; ARGV[3]=ttl_s do SET. Substitui o RELEASE quando o contato
-#   tem wrap-up INLINE seguindo: remove a(s) vaga(s) da origem e põe o hold no lugar
-#   (net 0 — a ocupação NUNCA oscila). Retorna a ocupação resultante.
+#   ARGV[2]=cabeça do hold ("__wrapup_hold__::{origin}"); ARGV[3]=ttl_s do SET;
+#   ARGV[4]=expires_at_ms. Substitui o RELEASE quando o contato tem wrap-up INLINE
+#   seguindo: remove a(s) vaga(s) da origem e põe o hold no lugar (net 0 — a ocupação
+#   NUNCA oscila). Retorna a ocupação resultante.
+#
+#   F1: o hold HERDA a tag de pool do PRIMEIRO occupant removido — o membro final é
+#   montado aqui, no Lua, justamente para que nenhum parâmetro novo precise atravessar
+#   `remove_conversation`. Origem untagged (membro legado) → tag vazia, e o membro
+#   segue com 4 campos ("…::{origin}::::{exp}") para o parse `::(%d+)$` não mudar.
 #
 #   IDEMPOTENTE por construção: só cria o hold se DE FATO removeu a origem. Um
 #   redelivery de agent_done (a origem já saiu) não ressuscita um hold que o wrap-up
@@ -258,14 +339,21 @@ local members = redis.call('SMEMBERS', KEYS[1])
 local prefix  = ARGV[1]
 local plen    = string.len(prefix)
 local removed = 0
+local tag     = ''
 for i = 1, #members do
-  if string.sub(members[i], 1, plen) == prefix then
-    redis.call('SREM', KEYS[1], members[i])
+  local m = members[i]
+  if string.sub(m, 1, plen) == prefix then
+    if removed == 0 then
+      local rest = string.sub(m, plen + 1)
+      local t = string.match(rest, '::(.*)$')
+      if t ~= nil then tag = t end
+    end
+    redis.call('SREM', KEYS[1], m)
     removed = removed + 1
   end
 end
 if removed > 0 then
-  redis.call('SADD', KEYS[1], ARGV[2])
+  redis.call('SADD', KEYS[1], ARGV[2] .. '::' .. tag .. '::' .. ARGV[4])
   redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
 end
 local n = redis.call('SCARD', KEYS[1])
@@ -298,8 +386,18 @@ class InstanceRegistry:
     # correta. occupant = "{session_id}::{conference_id}"; release por prefixo de sessão
     # (o agent_done só carrega session_id). Ver TODO § Router (corrida de sobre-alocação).
     @staticmethod
-    def _occupant_id(session_id: str, conference_id: str | None) -> str:
-        return f"{session_id}::{conference_id or ''}"
+    def _occupant_id(
+        session_id: str, conference_id: str | None, pool_id: str | None = None
+    ) -> str:
+        """Membro do semáforo. O pool é sempre o 3º campo (F1); ausente = untagged."""
+        return f"{session_id}::{conference_id or ''}::{pool_id or ''}"
+
+    @staticmethod
+    def _occupant_identity_prefix(session_id: str, conference_id: str | None) -> str:
+        """Prefixo que identifica a vaga INDEPENDENTE do pool — base da idempotência
+        do claim (o mesmo par (sessão, conferência) por outro pool é RE-TAG, não vaga
+        nova)."""
+        return f"{session_id}::{conference_id or ''}::"
 
     @staticmethod
     def _session_prefix(session_id: str) -> str:
@@ -312,13 +410,20 @@ class InstanceRegistry:
         session_id:        str,
         conference_id:     str | None,
         max_concurrent:    int,
+        pool_id:           str | None = None,
         ttl_seconds:       int = 86_400,
         can_inherit_hold:  bool = False,
     ) -> int:
-        """Reserva atômica de uma vaga (occupant = session_id::conference_id). Retorna a
-        nova ocupação (>=1) em sucesso/idempotente; -1 se lotado. Quem recebe -1 deve
-        re-selecionar outro best instance. Duas confs da mesma sessão (conference_ids
-        distintos) NÃO compartilham vaga → vão para instâncias distintas.
+        """Reserva atômica de uma vaga (occupant = session_id::conference_id::pool_id).
+        Retorna a nova ocupação (>=1) em sucesso/idempotente; -1 se lotado. Quem recebe
+        -1 deve re-selecionar outro best instance. Duas confs da mesma sessão
+        (conference_ids distintos) NÃO compartilham vaga → vão para instâncias distintas.
+
+        F1 (tag de pool): `pool_id` é o pool que CONSUMIU a vaga — projeção, não
+        contagem. Reivindicar a mesma (sessão, conferência) por outro pool RE-TAGA o
+        membro existente; a ocupação não muda (é o mesmo recurso servindo o mesmo
+        contato). `pool_id=None` grava untagged — legítimo só para escritor que não
+        conhece o pool.
 
         Phase 2 (hand-off): `can_inherit_hold=True` (claim do wrap-up auto-atendido)
         permite HERDAR um hold vivo desta instância — swap net 0, a ocupação não
@@ -329,9 +434,10 @@ class InstanceRegistry:
             return int(await self._redis.eval(
                 _CLAIM_INSTANCE_LUA, 1,
                 _instance_sessions_key(tenant_id, instance_id),
-                self._occupant_id(session_id, conference_id),
+                self._occupant_id(session_id, conference_id, pool_id),
                 str(int(max_concurrent)), str(int(ttl_seconds)),
                 str(now_ms), "1" if can_inherit_hold else "0",
+                self._occupant_identity_prefix(session_id, conference_id),
             ))
 
         res = await _try()
@@ -373,16 +479,19 @@ class InstanceRegistry:
         Usado no lugar de `release_instance` quando o contato que fecha tem wrap-up
         INLINE seguindo. Retorna a ocupação resultante (mesma de antes, se houve troca).
 
-        Idempotente: sem vaga da origem no SET → nenhum hold é criado."""
+        Idempotente: sem vaga da origem no SET → nenhum hold é criado.
+
+        F1: a tag de pool do hold é HERDADA do occupant removido (montagem do membro
+        acontece no Lua) — por isso nenhum pool_id atravessa `remove_conversation`."""
         expires_at_ms = int(
             datetime.now(timezone.utc).timestamp() * 1000 + int(hold_ttl_s) * 1000
         )
-        member = f"{_WRAPUP_HOLD_PREFIX}{session_id}::{expires_at_ms}"
+        head = f"{_WRAPUP_HOLD_PREFIX}{session_id}"
         res = await self._redis.eval(
             _SWAP_TO_HOLD_LUA, 1,
             _instance_sessions_key(tenant_id, instance_id),
             self._session_prefix(session_id),
-            member, str(int(set_ttl_s)),
+            head, str(int(set_ttl_s)), str(expires_at_ms),
         )
         logger.info(
             "swap_to_hold: instance=%s origin=%s hold_ttl_s=%d expires_at_ms=%d "

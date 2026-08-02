@@ -2,7 +2,7 @@
 # Wrap-up unificado Phase 2 — hand-off da vaga: smoke.
 #
 # Prova que, no close de um contato com wrap-up INLINE seguindo, a vaga da origem é
-# TROCADA por um hold ("__wrapup_hold__::{origin}::{expires_at_ms}") em vez de
+# TROCADA por um hold ("__wrapup_hold__::{origin}::{pool_id}::{expires_at_ms}") em vez de
 # liberada, e que o auto-claim do wrap-up a HERDA (swap net 0). A ocupação nunca
 # oscila → um contato push não toma a vaga na janela a max_concurrent=1.
 #
