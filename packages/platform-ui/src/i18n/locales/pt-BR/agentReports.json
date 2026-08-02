@@ -58,11 +58,10 @@
       "source": { "pricing": "configurada (pricing)", "provisioned": "provisionada" }
     },
     "queue": {
-      "title": "Espera e disponíveis no tempo",
+      "title": "Espera na fila ao longo do tempo",
       "tableTitle": "Fila por pool",
       "noData": "Sem dados de fila no período.",
       "waitAvg": "Espera média (s)",
-      "available": "Disponíveis",
       "hint": "Espera = duração do segmento de fila (fila atendida). Abandono % sobre os enfileirados.",
       "cols": { "pool": "Pool", "tier": "Fila", "contacts": "Contatos", "queued": "Em fila", "handoff": "Pós-fila", "abandoned": "Abandono", "abandonRate": "Aband. %", "avgWait": "Espera méd", "p95Wait": "p95" },
       "tier": { "attended": "Atendida (IA)", "system": "Sistema (grátis)", "none": "—" }

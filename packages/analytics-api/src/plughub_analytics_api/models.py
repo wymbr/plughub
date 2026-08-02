@@ -253,6 +253,11 @@ def parse_queued(payload: dict[str, Any]) -> list[dict] | None:
             "event_type":      "queued",
             "queue_position":  None,
             "estimated_wait_ms": None,
+            # F5 (2026-08-02): `available_agents` MORREU no produtor e não é mais lido
+            # por relatório nenhum. Segue como `None` aqui só porque a coluna existe em
+            # `queue_events` (Nullable, com dados históricos) e dropá-la é migração à
+            # parte. NÃO voltar a preenchê-la: o valor era `SCARD(pool:instances)` —
+            # pertencimento, não capacidade — e ambíguo por construção.
             "available_agents":  None,
             "timestamp":       queued_at,
         }

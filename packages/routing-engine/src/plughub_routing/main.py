@@ -21,7 +21,13 @@ from .config import get_settings
 from .crash_detector import CrashDetector
 from .evaluation_consumer import EvaluationConsumer, load_evaluation_flow
 from .models import ConversationInboundEvent, ConversationRoutedEvent
-from .registry import InstanceRegistry, PoolRegistry
+from .registry import (
+    InstanceRegistry,
+    PoolRegistry,
+    _pool_peak_cap_key,
+    _pool_peak_key,
+    minute_bucket,
+)
 from .router import Router
 from .http_api import start_http_api
 from .kafka_listener import run_listeners
@@ -984,7 +990,19 @@ async def _publish_queue_position(
         position, eta_ms, sla_target_ms, queue_length = await _queue_position_and_eta(
             redis_client, event.tenant_id, event.session_id, pool_id, instance_registry,
         )
-        available = await instance_registry.get_available_count(event.tenant_id, pool_id)
+        # F5 — `available_agents` REMOVIDO do payload (§3.1 do desenho de capacidade
+        # compartilhada). Vinha de `get_available_count` = `SCARD(pool:instances)`:
+        # contagem de PERTENCIMENTO, o modelo abandonado quando `max_concurrent > 1`
+        # passou a existir. Três defeitos empilhados, e o pior não era o viés:
+        #   · modelo errado — conta instância lotada como disponível;
+        #   · valor AMBÍGUO — os 126 registros com valor 1 (de 142 não-nulos em 2 meses)
+        #     podiam significar filtro de canal, pool `dispatch_mode: pull` (onde fila é
+        #     o caminho normal), ou o defeito. Viés se corrige; ambiguidade não;
+        #   · ausência disfarçada de zero — o outro produtor de `queue_events` escrevia
+        #     `None` hardcoded (77% de nulos), e o leitor convertia para 0.
+        # Não havia o que corrigir, só o que REDEFINIR — e redefinir não backfilla.
+        # Substituto honesto, se a série for desejada: amostragem por relógio da
+        # ocupação do rollup de tenant (`{t}:capacity:snapshot`), que é deduplicado.
         await producer.send(
             settings.kafka_topic_queue_positions,
             value={
@@ -994,7 +1012,6 @@ async def _publish_queue_position(
                 "pool_id":            pool_id,
                 "queue_position":     position,
                 "queue_length":       queue_length,
-                "available_agents":   available,
                 "estimated_wait_ms":  eta_ms,
                 "sla_target_ms":      sla_target_ms,
                 "published_at":       datetime.now(timezone.utc).isoformat(),
@@ -1436,7 +1453,22 @@ async def _periodic_queue_drain(
         await asyncio.sleep(interval)
 
 
-# ── Fase 2 — occupancy sampler (concurrency peak per minute → pool.occupancy) ──
+# ── Fase 2 — occupancy FLUSHER (concurrency peak per minute → pool.occupancy) ──
+#
+# **P1 (2026-08-02): o pico por pool deixou de ser AMOSTRADO.** Pico é o máximo de uma
+# função escada, e qualquer intervalo de amostra pode cair inteiro entre duas subidas —
+# não é questão de escolher um intervalo menor. O valor passou a ser gravado nas
+# TRANSIÇÕES (watermark `{t}:pool:{p}:peak:{minuto}`, ver `registry.record_pool_peak`),
+# e este laço só (a) lê e publica o minuto que fechou, (b) semeia o bucket novo com a
+# ocupação corrente — a carga carregada, que não tem transição para gravá-la.
+#
+# O que AINDA é amostrado, de propósito:
+#   · `__total__` do tenant — `max` de SOMAS ≠ soma de `max`, então o watermark por
+#     pool não o produz (comprovado na série de 2026-08-02: quatro pools com pico 1 no
+#     mesmo minuto e `__total__` 2, porque os picos foram em instantes diferentes).
+#     Fica exato no P2 (ZSET + contador reconciliado).
+#   · agregados de admissão (item 7b) — outra grandeza, com outras chaves (baldes de
+#     `C`), fora do semáforo. Não é dívida deste arco.
 
 _OCCUPANCY_TOPIC = "pool.occupancy"
 
@@ -1463,6 +1495,53 @@ async def _pool_capacity(redis_client: "aioredis.Redis", tenant_id: str, pool_id
     return cap
 
 
+async def _read_pool_watermarks(
+    redis_client: "aioredis.Redis",
+    pools:        set,
+    minute,
+) -> tuple[dict, dict]:
+    """Lê o watermark do minuto FECHADO: `{(tenant, pool): pico}` + `{…: capacidade}`.
+
+    A capacidade vem da chave-irmã, gravada no MESMO instante do pico (achado 1 de
+    2026-08-02): antes, `_pool_capacity` era consultada na virada do minuto enquanto o
+    pico vinha do minuto que passou, e a série registrou `peak 1 / provisioned 0` —
+    impossível por construção, com `headroom`/`utilization` derivados de dois momentos
+    diferentes. Sem a chave-irmã, `None`: o chamador degrada para a leitura ao vivo
+    **e loga**, para que a linha enviesada não se confunda com uma medida boa.
+
+    Watermark AUSENTE é registrado como pico 0 e logado: só acontece se o seed da
+    virada não rodou (serviço subiu no meio do minuto, ou Redis engasgou). Publicar 0
+    mantém a série sem buraco; o log é o que impede que ele passe por medição.
+    """
+    bucket = minute_bucket(minute)
+    peaks: dict = {}
+    caps:  dict = {}
+    for (tenant_id, pool_id) in pools:
+        try:
+            raw_peak = await redis_client.get(
+                _pool_peak_key(tenant_id, pool_id, bucket)
+            )
+            raw_cap = await redis_client.get(
+                _pool_peak_cap_key(tenant_id, pool_id, bucket)
+            )
+        except Exception as exc:
+            logger.warning(
+                "watermark: leitura falhou tenant=%s pool=%s bucket=%s — %s",
+                tenant_id, pool_id, bucket, exc,
+            )
+            raw_peak = raw_cap = None
+        if raw_peak is None:
+            logger.info(
+                "watermark AUSENTE tenant=%s pool=%s bucket=%s — publicando 0. "
+                "Esperado só quando o seed da virada não rodou (boot no meio do "
+                "minuto); recorrente significa que o flusher não está semeando.",
+                tenant_id, pool_id, bucket,
+            )
+        peaks[(tenant_id, pool_id)] = int(raw_peak) if raw_peak is not None else 0
+        caps[(tenant_id, pool_id)]  = int(raw_cap) if raw_cap is not None else None
+    return peaks, caps
+
+
 async def _flush_occupancy(
     redis_client: "aioredis.Redis",
     producer:     "AIOKafkaProducer",
@@ -1473,6 +1552,9 @@ async def _flush_occupancy(
     adm_reserved_peaks: dict | None = None,   # tenant -> peak Σ reservas usadas
     adm_shared_peaks:   dict | None = None,   # tenant -> peak shared usado
     buffer_peaks:       dict | None = None,   # tenant -> peak fila gratuita
+    caps:               dict | None = None,   # (tenant, pool) -> capacidade no pico
+    kind_peaks:         dict | None = None,   # (tenant, kind) -> peak `used` do tipo
+    kind_caps:          dict | None = None,   # (tenant, kind) -> capacidade no pico
 ) -> None:
     """
     Emit one pool.occupancy event per (tenant, pool) + per-tenant aggregates.
@@ -1482,29 +1564,96 @@ async def _flush_occupancy(
       __reserved__  peak = Σ reservas usadas    | capacity = Σ reservas configuradas
       __shared__    peak = shared usado         | capacity = shared limit (C − Σ res)
       __buffer__    peak = fila gratuita usada  | capacity = queue_max_total
+
+    `caps` (P1) traz a capacidade capturada no instante do pico. Ausente → leitura ao
+    vivo, com o viés temporal do achado 1 — logado, nunca silencioso.
+
+    **Defeito C na série — F4c (2026-08-02).** A linha POR POOL continua com a
+    capacidade do pool, e está certa: aquele pool alcança mesmo N vagas. O que estava
+    errado era o agregado — `__total__.provisioned_capacity` vinha de `Σ` das linhas,
+    contando um recurso de 3 vagas em dois pools como 6. Duas correções:
+
+      · `__total__` passa a usar a capacidade DEDUPLICADA (Σ sobre instâncias
+        distintas, de todos os tipos), coerente com o seu próprio `peak_concurrency`,
+        que já é ocupação de tipos misturados. Serve como número de infra
+        ("quantas vagas existem"), NÃO para dimensionar atendimento;
+      · linhas novas `__capacity_{kind}__` (human/ai/unknown) trazem a capacidade
+        deduplicada POR TIPO — o número de planejamento, que não é derivável do
+        `__total__` porque humano e IA não se substituem.
+
+    **Janela de arranque (medida 2026-08-02).** Nos primeiros 1–2 minutos após um
+    restart o rollup ainda não foi publicado, e `__total__` cai no `Σ` por pool —
+    inflado (362 onde o correto era 356, no demo). A alternativa seria omitir a linha,
+    mas isso levaria junto o `peak_concurrency`, que é bom; e publicar capacidade 0
+    seria o valor plausível de sempre. Escolha: publicar com log **e um marcador
+    consultável** — nesses minutos NÃO existem linhas `__capacity_*`. Logo:
+
+        minuto sem `__capacity_*` ⇒ `__total__.provisioned_capacity` não é confiável
+
+    O marcador vive na própria série, então quem ler o histórico meses depois não
+    depende de ter guardado o log. Query de saneamento em `docs/product/
+    shared-capacity-pool-as-tag-design.md` §6 (F4c).
     """
     adm_pool_peaks     = adm_pool_peaks or {}
     adm_reserved_peaks = adm_reserved_peaks or {}
     adm_shared_peaks   = adm_shared_peaks or {}
     buffer_peaks       = buffer_peaks or {}
+    caps               = caps or {}
     minute_iso = minute.isoformat()
     tenant_cap_total: dict = {}
     tenants: set = set()
     for (tenant_id, pool_id), peak in peaks.items():
         tenants.add(tenant_id)
-        cap = await _pool_capacity(redis_client, tenant_id, pool_id)
+        cap = caps.get((tenant_id, pool_id))
+        if cap is None:
+            cap = await _pool_capacity(redis_client, tenant_id, pool_id)
+            logger.info(
+                "capacidade do pico ausente tenant=%s pool=%s — usando leitura ao "
+                "vivo (viés temporal do achado 1: pico e capacidade de instantes "
+                "diferentes)", tenant_id, pool_id,
+            )
         tenant_cap_total[tenant_id] = tenant_cap_total.get(tenant_id, 0) + cap
         await producer.send_and_wait(_OCCUPANCY_TOPIC, {
             "tenant_id": tenant_id, "pool_id": pool_id, "minute": minute_iso,
             "peak_concurrency": peak, "provisioned_capacity": cap,
             "admitted_peak": adm_pool_peaks.get((tenant_id, pool_id), 0),
         })
+    kind_peaks = kind_peaks or {}
+    kind_caps  = kind_caps  or {}
+
     for tenant_id, tot in total_peaks.items():
         tenants.add(tenant_id)
+        # F4c — capacidade DEDUPLICADA (Σ sobre instâncias distintas). O `Σ` por pool
+        # contava o mesmo recurso uma vez por pool; aqui cada instância entra em
+        # exatamente um balde de tipo, então somar os baldes não duplica ninguém.
+        dedup = sum(
+            c for (t, _k), c in kind_caps.items() if t == tenant_id
+        ) if any(t == tenant_id for (t, _k) in kind_caps) else None
+        if dedup is None:
+            dedup = tenant_cap_total.get(tenant_id, 0)
+            logger.info(
+                "tenant=%s minuto=%s: sem rollup por tipo — `__total__` publica Σ das "
+                "capacidades por pool, que INFLA quando há recurso compartilhado "
+                "(defeito C). Valor registrado assim mesmo, para não abrir buraco na série.",
+                tenant_id, minute_iso,
+            )
         await producer.send_and_wait(_OCCUPANCY_TOPIC, {
             "tenant_id": tenant_id, "pool_id": "__total__", "minute": minute_iso,
-            "peak_concurrency": tot, "provisioned_capacity": tenant_cap_total.get(tenant_id, 0),
+            "peak_concurrency": tot, "provisioned_capacity": dedup,
             "admitted_peak": adm_reserved_peaks.get(tenant_id, 0) + adm_shared_peaks.get(tenant_id, 0),
+        })
+
+    # F4c — uma linha por TIPO DE LICENÇA com a capacidade deduplicada. É o número de
+    # planejamento, e não é derivável do `__total__`: somar humano com IA responderia
+    # "há 356 vagas" para quem precisa saber se há atendente humano.
+    for (tenant_id, kind), peak in sorted(kind_peaks.items()):
+        tenants.add(tenant_id)
+        await producer.send_and_wait(_OCCUPANCY_TOPIC, {
+            "tenant_id": tenant_id, "pool_id": f"__capacity_{kind}__",
+            "minute": minute_iso,
+            "peak_concurrency": peak,
+            "provisioned_capacity": kind_caps.get((tenant_id, kind), 0),
+            "admitted_peak": 0,
         })
 
     # ── Item 7b — agregados de admissão (histórico do Monitor) ────────────────
@@ -1553,18 +1702,31 @@ async def _occupancy_sampler(
     settings,
 ) -> None:
     """
-    Samples per-pool concurrency + the per-tenant instantaneous total every few
-    seconds, tracks the per-minute peak, and flushes the completed minute to Kafka.
-    O estado vivo é lido a cada amostra, então o carry-over (sessões que atravessam
-    minutos) é implícito e um minuto sem eventos ainda registra a concorrência.
+    FLUSHER do pico por pool + amostrador do que ainda não é event-driven.
 
-    **Fatia 2** — a fonte deixou de ser o contador `{t}:pool:{p}:active_count`
-    (removido: contava por POOL uma capacidade que é do RECURSO) e passou a ser
-    `compute_pool_occupancy(...)["used_here"]`, derivado da tag do membro do
-    semáforo. Consequência para a SÉRIE: para humano multi-pool o total do tenant
-    deixa de contar o mesmo atendimento uma vez por pool — cada ocupante tem
-    exatamente uma tag. A série antiga e a nova não são comparáveis nesse ponto; o
-    degrau na virada é a correção, não uma queda de carga.
+    **P1 — o pico por pool não é mais amostrado.** Ele é escrito nas TRANSIÇÕES
+    (`registry.record_pool_peak`, chamado na costura de alocação) e aqui apenas lido e
+    publicado no fim do minuto. A diferença é de MÉTODO, não de intervalo: amostrar a
+    cada 5 s deixa de fora todo pico que sobe e desce dentro da janela, e reduzir a
+    janela não fecha a classe — só a estreita.
+
+    Duas responsabilidades sobram para este laço:
+
+    1. **Virada do minuto** — publica o bucket que fechou e SEMEIA o novo com a
+       ocupação corrente. O seed é o que registra carga carregada: um minuto que
+       começa alto e só desce (ou sem transição alguma) não tem alocação para gravá-lo,
+       e sem semente sairia como zero. O seed simétrico, na LIBERAÇÃO, cobre a janela
+       entre a virada do relógio e o despertar deste laço (ver `release_instance`).
+    2. **Amostragem do que continua sendo amostra** — `__total__` do tenant (max de
+       SOMAS ≠ soma de max; exato só no P2) e os agregados de admissão do item 7b
+       (outra grandeza, outras chaves). Ambos declarados, não herdados por inércia.
+
+    **Fatia 2** — a fonte da ocupação deixou de ser o contador
+    `{t}:pool:{p}:active_count` (removido: contava por POOL uma capacidade que é do
+    RECURSO) e passou a ser `compute_pool_occupancy(...)["used_here"]`, derivado da tag
+    do membro do semáforo. Para humano multi-pool o total do tenant deixou de contar o
+    mesmo atendimento uma vez por pool. A série antiga e a nova não são comparáveis
+    nesse ponto; o degrau na virada é a correção, não uma queda de carga.
     """
     interval = getattr(settings, "occupancy_sample_interval_s", 5)
     if interval <= 0:
@@ -1573,31 +1735,41 @@ async def _occupancy_sampler(
     _occ_reg = InstanceRegistry(redis_client)
 
     cur_minute = None
-    peaks: dict = {}              # (tenant_id, pool_id) -> peak active this minute
+    seen_pools: set = set()       # (tenant_id, pool_id) vistos no minuto corrente
     total_peaks: dict = {}        # tenant_id -> peak total this minute
     adm_pool_peaks: dict = {}     # (tenant_id, pool_id) -> peak admitted (item 7b)
     adm_reserved_peaks: dict = {} # tenant_id -> peak Σ reservas usadas
     adm_shared_peaks: dict = {}   # tenant_id -> peak shared usado
     buffer_peaks: dict = {}       # tenant_id -> peak fila gratuita
+    kind_peaks: dict = {}         # (tenant_id, kind) -> peak `used` do tipo (F4c)
+    kind_caps: dict = {}          # (tenant_id, kind) -> capacidade NO INSTANTE do pico
+
+    async def _seed_bucket(occ_by_pool: dict, minute) -> None:
+        """Carga carregada: `max(bucket novo) := ocupação corrente`, na virada."""
+        bucket = minute_bucket(minute)
+        for (tenant_id, pool_id), (used, cap) in occ_by_pool.items():
+            await _occ_reg.record_pool_peak(
+                tenant_id, pool_id, used, cap, bucket=bucket,
+            )
+        # P2 — o `__total__` tem watermark próprio e precisa do mesmo seed de carga
+        # carregada. Vem do contador conferível, não da soma dos pools deste tick.
+        for tenant_id in {t for (t, _p) in occ_by_pool}:
+            total = await _occ_reg.get_tenant_occupancy(tenant_id)
+            if total is not None:
+                await _occ_reg.record_pool_peak(
+                    tenant_id, "__total__", total, 0,
+                    bucket=bucket, write_capacity=False,
+                )
 
     while True:
         try:
             minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-            if cur_minute is None:
-                cur_minute = minute
-            if minute != cur_minute:
-                await _flush_occupancy(
-                    redis_client, producer, cur_minute, peaks, total_peaks,
-                    adm_pool_peaks, adm_reserved_peaks, adm_shared_peaks, buffer_peaks,
-                )
-                peaks, total_peaks = {}, {}
-                adm_pool_peaks, adm_reserved_peaks = {}, {}
-                adm_shared_peaks, buffer_peaks = {}, {}
-                cur_minute = minute
 
+            # A varredura vem ANTES da virada: o seed do bucket novo precisa da
+            # ocupação de AGORA, não da que sobrou do tick anterior.
             cursor = 0
             tenant_totals: dict = {}
-            seen: set = set()
+            occ_by_pool: dict = {}
             tenants_seen: set = set()
             while True:
                 cursor, keys = await redis_client.scan(cursor, match="*:pool:*:instances", count=50)
@@ -1607,20 +1779,99 @@ async def _occupancy_sampler(
                         continue
                     tenant_id = parts[0]
                     pool_id   = ":".join(parts[2:-1])
-                    if (tenant_id, pool_id) in seen:
+                    if (tenant_id, pool_id) in occ_by_pool:
                         continue
-                    seen.add((tenant_id, pool_id))
                     tenants_seen.add(tenant_id)
                     # Derivado do semáforo do recurso (fatia 2) — `used_here` é a
                     # projeção pela tag do membro, uma tag por ocupante, logo o
                     # somatório entre pools não conta o mesmo atendimento duas vezes.
                     _occ = await _occ_reg.compute_pool_occupancy(tenant_id, pool_id)
                     c = max(0, int(_occ["used_here"]))
-                    pk = (tenant_id, pool_id)
-                    peaks[pk] = max(peaks.get(pk, 0), c)
+                    occ_by_pool[(tenant_id, pool_id)] = (c, int(_occ["total_capacity"]))
                     tenant_totals[tenant_id] = tenant_totals.get(tenant_id, 0) + c
                 if cursor == 0:
                     break
+
+            if cur_minute is None:
+                cur_minute = minute
+                await _seed_bucket(occ_by_pool, cur_minute)
+            elif minute != cur_minute:
+                peaks, caps = await _read_pool_watermarks(
+                    redis_client, seen_pools, cur_minute
+                )
+                # P2 — o pico do tenant vem do WATERMARK, não da amostragem. Sem ele o
+                # `max` de somas perdia todo pico que subia e descia entre dois ticks,
+                # exatamente como acontecia por pool antes do P1. A amostra fica só
+                # como fallback, e o fallback se anuncia.
+                _bkt = minute_bucket(cur_minute)
+                for _t in {t for (t, _p) in seen_pools}:
+                    try:
+                        _raw = await redis_client.get(_pool_peak_key(_t, "__total__", _bkt))
+                    except Exception:
+                        _raw = None
+                    if _raw is not None:
+                        total_peaks[_t] = int(_raw)
+                    else:
+                        logger.info(
+                            "watermark de `__total__` AUSENTE tenant=%s bucket=%s — "
+                            "publicando a AMOSTRA do minuto, que perde pico entre ticks. "
+                            "Esperado só no minuto do boot.", _t, _bkt,
+                        )
+                # Reconciliação 1×/min: o contador do total é atalho, o ZSET é a fonte.
+                # É esta conferência que separa `{t}:occupancy:total` do `active_count`
+                # que este arco removeu — tirá-la devolve o contador àquela condição.
+                for _t in {t for (t, _p) in seen_pools}:
+                    try:
+                        await _occ_reg.reconcile_tenant_occupancy(_t)
+                    except Exception as exc:
+                        logger.warning(
+                            "flusher: reconciliação de ocupação falhou tenant=%s — %s",
+                            _t, exc,
+                        )
+                await _flush_occupancy(
+                    redis_client, producer, cur_minute, peaks, total_peaks,
+                    adm_pool_peaks, adm_reserved_peaks, adm_shared_peaks, buffer_peaks,
+                    caps=caps, kind_peaks=kind_peaks, kind_caps=kind_caps,
+                )
+                seen_pools = set()
+                total_peaks = {}
+                adm_pool_peaks, adm_reserved_peaks = {}, {}
+                adm_shared_peaks, buffer_peaks = {}, {}
+                kind_peaks, kind_caps = {}, {}
+                cur_minute = minute
+                await _seed_bucket(occ_by_pool, cur_minute)
+
+            # F4 — mantém o rollup de capacidade fresco para tenant OCIOSO. O gatilho
+            # principal é a transição de ocupação (fan-out), mas tenant sem transição
+            # nenhuma deixaria o rollup expirar por TTL, e o consumidor leria ausência.
+            # Throttled (5 s) — na prática este laço só o renova quando nada mais o fez.
+            for tenant_id in tenants_seen:
+                try:
+                    await _occ_reg.refresh_tenant_capacity(tenant_id)
+                    # F4c — amostra a ocupação POR TIPO para a série. Continua sendo
+                    # AMOSTRA (o watermark event-driven do P1 é por POOL; ocupação por
+                    # tipo é `max` de SOMAS, mesma família do `__total__` que o P2
+                    # resolve). A capacidade é capturada quando o pico AVANÇA, não no
+                    # flush — a lição do achado 1: `peak > capacity` nasce de medir as
+                    # duas grandezas em instantes diferentes.
+                    roll = await _occ_reg.get_tenant_capacity(tenant_id)
+                    for kind, k in (roll or {}).get("by_kind", {}).items():
+                        key  = (tenant_id, kind)
+                        used = int(k.get("used") or 0)
+                        if used > kind_peaks.get(key, -1):
+                            kind_peaks[key] = used
+                            kind_caps[key]  = int(k.get("total_capacity") or 0)
+                        elif key not in kind_caps:
+                            kind_caps[key] = int(k.get("total_capacity") or 0)
+                except Exception as exc:
+                    logger.warning(
+                        "flusher: rollup de capacidade falhou tenant=%s — %s",
+                        tenant_id, exc,
+                    )
+
+            # A união (não a foto do último tick) decide quais linhas o minuto publica:
+            # um pool que existiu no início do minuto e sumiu no fim ainda teve carga.
+            seen_pools |= set(occ_by_pool.keys())
             for tenant_id, tot in tenant_totals.items():
                 total_peaks[tenant_id] = max(total_peaks.get(tenant_id, 0), tot)
 

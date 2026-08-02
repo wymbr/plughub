@@ -42,6 +42,24 @@ interface PoolSnapshot {
   updated_at:    string
 }
 
+/** Rollup de capacidade do tenant (F4). Sem campo `available` no topo, de propósito:
+ *  humano e IA são moedas não-fungíveis e um escalar único as somaria. */
+interface TenantCapacity {
+  tenant_id?:  string
+  by_kind:     Record<string, {
+    total_capacity: number
+    used:           number
+    available:      number
+    instances:      number
+    by_channel:     Record<string, {
+      available:       number
+      instances:       number
+      pools_available: number
+    }>
+  }>
+  computed_at: string
+}
+
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
@@ -55,6 +73,23 @@ async function getSnapshot(
   if (!raw) return null
   try {
     return JSON.parse(raw) as PoolSnapshot
+  } catch {
+    return null
+  }
+}
+
+/** Lê o rollup do tenant. `null` = DESCONHECIDO — e o chamador precisa tratá-lo como
+ *  tal. Nunca reconstruir somando as linhas de pool: essa soma é o defeito C, não um
+ *  fallback dele. */
+async function getTenantCapacity(
+  redis: RedisClient,
+  tenantId: string,
+): Promise<TenantCapacity | null> {
+  try {
+    const raw = await redis.get(keys.tenantCapacity(tenantId))
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as TenantCapacity
+    return parsed?.by_kind ? parsed : null
   } catch {
     return null
   }
@@ -150,20 +185,30 @@ export function registerOperationalTools(
     async ({ tenant_id, pool_id }: { tenant_id: string; pool_id: string }) => {
       const snapshot = await getSnapshot(redis, tenant_id, pool_id)
       if (!snapshot) {
-        // Fallback: read live data directly from Redis (no snapshot yet)
-        const [availableRaw, queueLengthRaw] = await Promise.all([
-          redis.scard(keys.poolInstances(tenant_id, pool_id)),
-          redis.zcard(keys.poolQueue(tenant_id, pool_id)),
-        ])
+        // F5b — sem snapshot, "não sei" é a resposta CORRETA.
+        //
+        // O fallback anterior devolvia `available = SCARD(pool:instances)`: contagem de
+        // PERTENCIMENTO ao pool, o modelo abandonado quando `max_concurrent > 1` passou
+        // a existir. Ele conta instância lotada como disponível, ignora a capacidade
+        // consumida em pools irmãos (a vaga é do RECURSO) e não filtra pausa nem
+        // wrap-up. E fazia isso no tool que o Skill Flow usa para decidir oferta de
+        // canal e tempo de espera AO CLIENTE — o pior lugar para um número plausível.
+        //
+        // `available: null` obriga o chamador a tratar o desconhecido; zero teria dito
+        // "não há agente", e o SCARD dizia "há", ambos sem base. A fila é fato do pool
+        // (ZSET), então ela continua sendo respondida.
+        const queueLengthRaw = await redis.zcard(keys.poolQueue(tenant_id, pool_id))
         return mcpOk({
           pool_id,
-          available:     availableRaw,
+          available:     null,
           queue_length:  queueLengthRaw,
           sla_target_ms: null,
           channel_types: [],
-          status:        availableRaw > 0 ? "available" : queueLengthRaw > 0 ? "queued" : "empty",
+          status:        "unknown",
           snapshot_age_ms: null,
           live_fallback:   true,
+          reason: "no_snapshot: capacidade desconhecida (o bootstrap publica a primeira " +
+                  "linha de todo pool configurado em ~15s; SCARD de membership NÃO é capacidade)",
         })
       }
 
@@ -188,7 +233,8 @@ export function registerOperationalTools(
   // ── system_availability_check ─────────────────────────────────────────────
   //
   // Checks the availability of all channels across all pools for a tenant.
-  // Returns a map of channel → { pools_available, total_available_agents, status }.
+  // Returns a map of channel → { pools_available, total_queued, available_by_kind, status }.
+  // NÃO existe `total_available_agents`: humano e IA são moedas não-fungíveis (F4).
   // Useful for offer-channel-switch logic in Skill Flows.
 
   server.tool(
@@ -219,10 +265,25 @@ export function registerOperationalTools(
         poolIds.map(pid => getSnapshot(redis, tenant_id, pid))
       )
 
-      // Aggregate by channel
+      // F4 — disponibilidade por canal vem do ROLLUP DO TENANT, não da soma das linhas.
+      //
+      // `Σ snap.available` era o defeito C: a vaga é do RECURSO, então um humano de 3
+      // vagas logado em 3 pools contribuía 3 por linha e o total dizia 9 para 3 vagas.
+      // O erro NÃO é corrigível aqui — a informação de sobreposição não está nas linhas
+      // de pool. O rollup agrega sobre instâncias DISTINTAS, e por isso é a única fonte
+      // que responde "quantos agentes existem de fato".
+      //
+      // E responde POR TIPO DE LICENÇA. Humano e IA não se substituem: um número único
+      // repetiria a falácia de aditividade um nível acima — em vez de contar o mesmo
+      // recurso duas vezes, somaria recursos que não são intercambiáveis. Por isso não
+      // existe `total_available_agents` escalar na resposta; existe `by_kind`.
+      const rollup = await getTenantCapacity(redis, tenant_id)
+
+      // `pools_available` e `total_queued` SOBREVIVEM como soma: contagem de pools com
+      // vaga e profundidade de fila são grandezas aditivas legítimas — respondem "há por
+      // onde entrar?" e "quanto está esperando?", que são outras perguntas.
       const channelMap: Record<string, {
         pools_available: number
-        total_agents:    number
         total_queued:    number
         pools:           string[]
       }> = {}
@@ -232,29 +293,45 @@ export function registerOperationalTools(
         for (const ch of snap.channel_types) {
           if (filterChannels && !filterChannels.includes(ch)) continue
           if (!channelMap[ch]) {
-            channelMap[ch] = { pools_available: 0, total_agents: 0, total_queued: 0, pools: [] }
+            channelMap[ch] = { pools_available: 0, total_queued: 0, pools: [] }
           }
-          channelMap[ch]!.total_queued  += snap.queue_length
-          channelMap[ch]!.total_agents  += snap.available
+          channelMap[ch]!.total_queued += snap.queue_length
           channelMap[ch]!.pools.push(snap.pool_id)
-          if (snap.available > 0) {
-            channelMap[ch]!.pools_available += 1
-          }
+          if (snap.available > 0) channelMap[ch]!.pools_available += 1
         }
       }
 
-      // Annotate with status
       const result: Record<string, unknown> = {}
       for (const [ch, data] of Object.entries(channelMap)) {
+        // available por tipo, para ESTE canal, do rollup deduplicado.
+        const byKind: Record<string, number> = {}
+        let known = false
+        if (rollup?.by_kind) {
+          for (const [kind, k] of Object.entries(rollup.by_kind)) {
+            const n = k.by_channel?.[ch]?.available
+            if (typeof n === "number") { byKind[kind] = n; known = true }
+          }
+        }
+        const anyAgent = Object.values(byKind).some(n => n > 0)
         result[ch] = {
           ...data,
-          status: data.total_agents > 0 ? "available"
-                : data.total_queued > 0  ? "queued"
-                : "no_agents",
+          // Rollup ausente (TTL expirado / routing-engine sem escrever) → `null`, não 0.
+          // Zero afirmaria "não há agente" e faria o Skill Flow desviar o cliente de um
+          // canal que pode estar saudável; `null` obriga a tratar o desconhecido. Nunca
+          // cair de volta na soma das linhas: a soma é o defeito, não o fallback dele.
+          available_by_kind: known ? byKind : null,
+          capacity_unknown:  !known,
+          status: known
+            ? (anyAgent ? "available" : data.total_queued > 0 ? "queued" : "no_agents")
+            : (data.pools_available > 0 ? "available" : "unknown"),
         }
       }
 
-      return mcpOk({ tenant_id, channels: result })
+      return mcpOk({
+        tenant_id,
+        channels: result,
+        capacity_computed_at: rollup?.computed_at ?? null,
+      })
     },
   )
 }

@@ -47,7 +47,8 @@ interface OccData      {
   admission?: { reserved_series: AdmSeriesRow[]; shared_series: AdmSeriesRow[]; buffer_series: AdmSeriesRow[] }
 }
 
-interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number; available_agents: number }
+// F5: `available_agents` saiu do contrato — produtor, query e gráfico removidos juntos.
+interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number }
 interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
 interface QueueData   { series: QSeriesRow[]; by_pool: QPoolRow[] }
 
@@ -456,16 +457,25 @@ const FilaSubTab: React.FC<{
     <div className="h-48 flex items-center justify-center text-sm text-muted-light">{t('pools.queue.noData')}</div>
   )
 
-  const byBucket = new Map<string, { bucket: string; _w: number; _n: number; available: number }>()
+  // F5 — a linha `available` foi REMOVIDA deste gráfico (§3.1 do desenho de capacidade
+  // compartilhada). Não era a mesma grandeza do `available` do snapshot: vinha de
+  // `queue_events.available_agents`, alimentado por `SCARD(pool:instances)` — contagem
+  // de PERTENCIMENTO, com valor ambíguo (o `1` podia ser filtro de canal, pool
+  // `dispatch_mode: pull` ou defeito), 77% de nulos que viravam 0 na leitura, e ainda
+  // somada ENTRE POOLS (o defeito C). Não havia o que corrigir, só o que redefinir — e
+  // redefinir não backfilla. O produtor e a coluna da query também saíram; deixar o
+  // campo sendo escrito sem leitor seria convite a que voltasse ao gráfico.
+  // Substituto honesto, se a série for desejada: amostragem por relógio do rollup de
+  // tenant (`{t}:capacity:snapshot`), que é deduplicado e separado por tipo de licença.
+  const byBucket = new Map<string, { bucket: string; _w: number; _n: number }>()
   for (const r of (data?.series ?? [])) {
-    const b = byBucket.get(r.bucket) ?? { bucket: r.bucket, _w: 0, _n: 0, available: 0 }
+    const b = byBucket.get(r.bucket) ?? { bucket: r.bucket, _w: 0, _n: 0 }
     if (r.avg_wait_ms > 0) { b._w += r.avg_wait_ms; b._n += 1 }
-    b.available += r.available_agents
     byBucket.set(r.bucket, b)
   }
   const chartData = [...byBucket.values()]
     .sort((a, b) => a.bucket.localeCompare(b.bucket))
-    .map(b => ({ bucket: b.bucket, wait_s: b._n ? Math.round(b._w / b._n / 1000) : 0, available: b.available }))
+    .map(b => ({ bucket: b.bucket, wait_s: b._n ? Math.round(b._w / b._n / 1000) : 0 }))
 
   return (
     <div className="flex flex-col gap-4">
@@ -482,7 +492,6 @@ const FilaSubTab: React.FC<{
               <Tooltip labelFormatter={fmtBucket} />
               <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
               <Line type="monotone" dataKey="wait_s" name={t('pools.queue.waitAvg')} stroke="#D97706" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="available" name={t('pools.queue.available')} stroke="#2D9CDB" strokeWidth={2} dot={false} />
             </LineChart>
           </ResponsiveContainer>
         </div>

@@ -145,9 +145,9 @@ reescrito quando algo o toca — que é literalmente o defeito relatado.
 | `route()` → `_write_snapshot` (`router.py:215`) | 1 pool | fan-out |
 | `mark_busy` | INCR do contador | recompute (fan-out) |
 | `remove_conversation` | patch `available += 1` c/ teto e chão | recompute (fan-out) |
-| **`work_task_claim`** | **nada** (achado 2) | recompute (fan-out) |
-| **`work_task_release`** | **nada** | recompute (fan-out) |
-| **`work_task_expire`** | **nada** | recompute (fan-out) |
+| **`work_task_claim`** | **nada** (achado 2) | recompute (fan-out) ✅ |
+| **`work_task_release`** | **nada** | recompute (fan-out) ✅ F3a |
+| **`work_task_expire`** | **nada** | recompute (fan-out) ✅ F3a |
 | `agent.lifecycle` listener | `_refresh_pool_snapshots` | mantém, sobre o recompute |
 | pause / resume / logout | `refresh_pool_snapshot` | mantém, sobre o recompute |
 
@@ -296,17 +296,68 @@ campos — que quebraria `MonitorTab`/`PoolsPage` antes da F4 —, ele publica `
 `model: "bootstrap_placeholder"`. Ausência é honesta; zero não seria; e separar consumo próprio do
 consumo dos irmãos exigiria duplicar o parse da tag num segundo serviço.
 
-**F3 — gatilhos de pull + bootstrap.** `work_task_claim` (✅ de carona no `mark_busy`) /
-`work_task_release` / `work_task_expire` recomputam; bootstrap ✅ (antecipado, ver F2).
-*Verificação:* o cenário exato do achado 2 — claim posterior ao último snapshot muda os três pools; e
-`formfill_demo` deixa de anunciar `queue_length 1` de fila vazia. Asserção sobre o **conteúdo** do
-snapshot e sobre `updated_at`, não sobre a existência da chave.
+**F3 — gatilhos de pull + bootstrap. ✅ CONCLUÍDA (2026-08-02, ver `CHANGELOG.md`).**
+`work_task_claim` (✅ de carona no `mark_busy`) / `work_task_release` / `work_task_expire` recomputam;
+bootstrap ✅ (antecipado, ver F2).
+*Verificação:* `test_pull_release_snapshot.py` (4 testes) — asserção sobre o **conteúdo** do snapshot
+depois da liberação, não sobre a existência da chave. Nasce vermelho: a vaga volta no semáforo
+(`instance_session_count == 0`) e a linha segue dizendo `available = CAPACITY − 1`, em todos os pools
+do recurso.
+*As-built:* (a) o refresh roda depois do requeue, mas a ordem **não é load-bearing** — a versão
+inicial deste registro dizia que era, por conta de `queue_length`; `add_queued_contact` já faz patch
+in-place daquele campo, então as duas ordens convergem. A mutação M1
+(`infra/test/mutation_occupancy_peak.sh`) expôs isso ao pegar o teste de `queue_length` passando com
+o refresh desligado — o teste foi deletado, e o que só o recompute produz (a CAPACIDADE) é o que
+ficou coberto; (b) o `work_task_expire` de item **nunca reivindicado** também recompõe (ali só a fila encolheu), com
+`extra_pools=[pool_id]`, porque sem `instance_id` o fan-out não alcança pool nenhum do recurso.
+Passar `instance_id` vazio é deliberado — a alternativa, `release_instance` às cegas, derrubaria o
+occupant de um contato de PUSH alocado na mesma sessão.
 
-**F4 — rollup por tenant (por tipo) + consumidores.** `{t}:capacity:snapshot` com `by_kind`, throttle,
-e a troca em `system_availability_check`, `MonitorTab`, `PoolsPage`.
-*Verificação:* 3 pools / 1 humano de 3 vagas com 1 ocupada → KPI **2**, e `system_availability_check`
-devolve `total_available_agents 2` por canal. Hoje: 6. Segunda asserção: **não existe** um campo de
-disponibilidade que some humano e IA — se alguém conseguir ler um número único, o rollup regrediu.
+**F4a — rollup por tenant (por tipo) + `system_availability_check`. ✅ CONCLUÍDA (2026-08-02, ver
+`CHANGELOG.md`).** `{t}:capacity:snapshot` com `by_kind`, throttle 5 s, TTL 1 h; gatilhos = fan-out +
+flusher (este cobre tenant ocioso). `system_availability_check` devolve `available_by_kind`; ausente
+→ `null` + `capacity_unknown`, nunca somando as linhas de volta.
+*Verificação:* `test_tenant_capacity_rollup.py` (8) + mutações M7/M7b/M7c/M8/M9. As duas asserções
+previstas aqui foram escritas: recurso compartilhado contado uma vez (o teste computa a soma errada
+dentro de si e exige a certa), e **inexistência** de campo escalar somando humano e IA.
+*Correções que o desenho não previa:* (a) `available_by_kind` substituiu `total_available_agents` —
+o desenho ainda falava num escalar por canal, que é a própria falácia um nível abaixo; (b)
+`pools_available` precisa ser chaveado por **(tipo, canal)**, não só por canal — contá-lo por canal
+fazia `human/whatsapp` publicar 19 num tenant com 2 pools humanos, reintroduzindo a fungibilidade no
+campo vizinho ao que a separa. Achado olhando o rollup do tenant REAL; a suíte não pegava porque o
+tenant de teste só tinha pools de um tipo.
+
+**F4b — consumidores de UI.** `MonitorTab:387` / `PoolsPage:366` ainda fazem
+`reduce((s,p) => s + p.available)`. Enquanto não trocarem, a TELA mostra o número errado mesmo com o
+rollup correto no Redis.
+*Verificação prevista:* 3 pools / 1 humano de 3 vagas com 1 ocupada → KPI **2**, hoje 6.
+
+**F4c — a série. ✅ CONCLUÍDA (2026-08-02).** A linha do pool **não mudou** (está certa e é
+não-aditiva, como na superfície viva). Mudou o agregado: `__total__.provisioned_capacity` passou a
+usar a capacidade DEDUPLICADA (Σ sobre instâncias distintas, todos os tipos — coerente com o seu
+`peak_concurrency`, que já é ocupação de tipos misturados), e entraram linhas `__capacity_{kind}__`
+com a capacidade por tipo, que é o número de planejamento e não é derivável do `__total__`.
+*Verificação:* `test_occupancy_series_capacity.py` (6) sobre a MENSAGEM publicada + confirmação na
+série real: `__capacity_human__` 3, `__capacity_ai__` 353, `__total__` 356 (antes 362).
+*Limitação medida — janela de arranque:* nos 1–2 minutos após um restart o rollup ainda não existe e
+`__total__` cai no `Σ` por pool, inflado. Publicar-com-log foi preferido a omitir (omitir levaria
+junto o `peak`, que é bom) ou a publicar 0 (o valor plausível de sempre). O marcador **vive na
+série**, não só no log — minuto inflado é exatamente o que não tem linhas `__capacity_*`:
+
+```sql
+-- minutos em que `__total__.provisioned_capacity` NÃO é confiável
+SELECT t.minute, t.provisioned_capacity
+FROM   (SELECT minute, provisioned_capacity FROM pool_occupancy_peaks FINAL
+        WHERE tenant_id = {t} AND pool_id = '__total__') AS t
+LEFT ANTI JOIN
+       (SELECT DISTINCT minute FROM pool_occupancy_peaks
+        WHERE tenant_id = {t} AND pool_id LIKE '__capacity%') AS c
+USING (minute)
+```
+
+*Nota de método:* a ocupação por tipo (`peak_concurrency` das linhas `__capacity_*`) segue
+**AMOSTRADA** — é `max` de SOMAS, mesma família do `__total__` que o P2 resolve. O watermark
+event-driven do P1 é por POOL e não se aplica aqui.
 
 **F5 — limpeza e docs.** Remover `_pool_active_count_key` e todo o INCR/DECR/clamp; aplicar a remoção
 do §3.1 (gráfico + `q_series` + produtor). **`get_available_count` fica sem chamador** ao remover
@@ -316,12 +367,13 @@ nome `available` é o que o mantém em circulação. Atualizar `CLAUDE.md` § Op
 (campos novos do snapshot; o TTL já foi corrigido) e `docs/guias/conference-mechanics.md` se o formato
 do membro do semáforo estiver descrito lá.
 
-**F5b — o mesmo modelo errado no caminho que fala com o cliente.** `pool_status_get`
-(`operational.ts:154-167`) tem um *live fallback* para quando não há snapshot: devolve
-`available = SCARD(pool:instances)`. É a mesma contagem de pertencimento, num tool que o Skill Flow usa
-para decidir oferta de canal e tempo de espera — o pior lugar para ela sobreviver. Fallback deve
-devolver `available: null` + `live_fallback: true` (desconhecido, não zero e não SCARD), ou derivar do
-semáforo. Sem snapshot, "não sei" é a resposta correta.
+**F5b — o mesmo modelo errado no caminho que fala com o cliente. ✅ CONCLUÍDA (2026-08-02).**
+`pool_status_get` tinha um *live fallback* que devolvia `available = SCARD(pool:instances)` — contagem
+de pertencimento, num tool que o Skill Flow usa para decidir oferta de canal e tempo de espera. Agora
+devolve `available: null`, `status: "unknown"`, `live_fallback: true` e o motivo; a fila continua
+respondida (é fato do pool, ZSET). Sem snapshot, "não sei" é a resposta correta.
+*Pendência que isto abriu:* é **mudança de contrato** — fluxo que compare `available` numericamente
+recebe `null`. Varrer os skills atrás de leitores desse campo.
 
 ---
 

@@ -121,7 +121,43 @@ def build_app(router) -> web.Application:
         )
         return web.json_response(result)
 
+    async def capacity(request: web.Request) -> web.Response:
+        """F4b — rollup de capacidade, opcionalmente restrito a um DOMÍNIO de pools.
+
+        Existe porque a deduplicação **não projeta**: depois de agregar, não se sabe
+        mais qual instância pertencia a qual pool, então o rollup do tenant não pode
+        ser recortado para um subconjunto. A conta restrita tem de ser refeita — e é
+        refeita AQUI, com o mesmo `compute_tenant_capacity`, para que a regra continue
+        existindo num lugar só. Reimplementá-la no agent-registry (que é quem tem o
+        `accessible_pools`) criaria dois números que divergem no primeiro ajuste.
+
+        `pools` ausente → tenant inteiro (lê a chave publicada, sem recomputar).
+        `pools` presente → recompute escopado, sem cache no engine: o chamador é quem
+        sabe por quanto tempo pode segurar a resposta.
+        """
+        if not _authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        tenant_id = request.query.get("tenant_id") or ""
+        if not tenant_id:
+            return web.json_response({"error": "missing_fields", "fields": ["tenant_id"]}, status=400)
+        raw_pools = request.query.get("pools")
+        if raw_pools is None:
+            roll = await router._instances.get_tenant_capacity(tenant_id)
+            if roll is None:
+                return web.json_response({"capacity": None, "reason": "no_rollup"})
+            return web.json_response({"capacity": roll, "reason": None})
+        pools = [p for p in raw_pools.split(",") if p.strip()]
+        if not pools:
+            # Domínio vazio ≠ domínio irrestrito. Devolver o tenant aqui vazaria
+            # capacidade para um chamador que declarou não alcançar pool nenhum.
+            return web.json_response({"capacity": None, "reason": "empty_scope"})
+        roll = await router._instances.compute_tenant_capacity(tenant_id, only_pools=pools)
+        if not roll:
+            return web.json_response({"capacity": None, "reason": "no_rollup"})
+        return web.json_response({"capacity": roll, "reason": None})
+
     app.router.add_get("/health", health)
+    app.router.add_get("/v1/capacity", capacity)
     app.router.add_post("/v1/work_queue/claim", claim)
     app.router.add_post("/v1/work_queue/release", release)
     app.router.add_post("/v1/work_queue/holder", holder)

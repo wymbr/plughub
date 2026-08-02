@@ -71,6 +71,13 @@ interface OpSummary {
   reserved: Array<{ pool_id: string; reservation: number; used: number }>
   buffer:   { used: number; limit: number }
   ai:       { cap: number | null; used: number }
+  // F4b — capacidade DEDUPLICADA por tipo de licença (rollup do Routing Engine sobre
+  // instâncias DISTINTAS). Sem escalar no topo: humano e IA não se substituem.
+  // `null` + motivo (`no_rollup` | `scope_limited`) quando indisponível.
+  capacity:             { by_kind: Record<string, {
+    total_capacity: number; used: number; available: number; instances: number
+  }>; computed_at: string } | null
+  capacity_unavailable: string | null
 }
 
 interface QueueEntry {
@@ -370,8 +377,10 @@ export default function PoolsPage() {
     return true
   })
 
-  // Summary counts
-  const totalAvailable = pools.reduce((s, p) => s + p.available, 0)
+  // Summary counts.
+  // `queue_length` é aditivo (fila é fato do pool); `available` NÃO é — capacidade é do
+  // RECURSO, e um humano de 3 vagas em 3 pools somava 9 para 3 vagas (defeito C, F4b).
+  // A disponibilidade vem do rollup deduplicado, por TIPO de licença.
   const totalQueued    = pools.reduce((s, p) => s + p.queue_length, 0)
   const poolsWithQueue = pools.filter(p => p.queue_length > 0).length
 
@@ -413,7 +422,24 @@ export default function PoolsPage() {
                 color={summary.buffer.used >= summary.buffer.limit ? '#DC2626' : '#7C3AED'} />
             </>
           )}
-          <SummaryPill label={t('pools.summary.available')} value={totalAvailable} color="#22c55e" />
+          {/* F4b — uma pill por TIPO de licença, do rollup deduplicado. Sem rollup,
+              "—" com o motivo: jamais voltar a somar `available` entre pools. */}
+          {summary?.capacity
+            ? Object.entries(summary.capacity.by_kind)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([kind, k]) => (
+                  <SummaryPill
+                    key={kind}
+                    label={`${t('pools.summary.available')} · ${t(`pools.summary.kind.${kind}`)}`}
+                    value={k.available}
+                    color={kind === 'human' ? '#059669' : kind === 'ai' ? '#7C3AED' : '#D97706'} />
+                ))
+            : (
+              <SummaryPill
+                label={`${t('pools.summary.available')} · ${t(`pools.summary.capacityUnavailable.${summary?.capacity_unavailable ?? 'no_rollup'}`)}`}
+                value={'—'}
+                color="#6b7280" />
+            )}
           <SummaryPill label={t('pools.summary.queued')}    value={totalQueued}    color={totalQueued > 0 ? '#eab308' : '#6b7280'} />
           <SummaryPill label={t('pools.summary.withQueue')} value={poolsWithQueue} color={poolsWithQueue > 0 ? '#f97316' : '#6b7280'} />
           <SummaryPill label={t('pools.summary.total')}     value={pools.length}   color="#1B4F8A" />

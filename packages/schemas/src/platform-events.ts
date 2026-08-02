@@ -117,7 +117,17 @@ export const QueuePositionUpdatedEventSchema = z.object({
   /** Optional for backward compat: publishers before 2026-07-27 only sent queue_length. */
   queue_position:    z.number().int().positive().optional(),
   queue_length:      z.number().int().nonnegative(),
-  available_agents:  z.number().int().nonnegative(),
+  /**
+   * REMOVIDO do produtor em 2026-08-02 (F5). Mantido OPCIONAL só para eventos antigos
+   * ainda em retenção no tópico — nada novo o escreve, e nada deve voltar a escrever.
+   *
+   * Era `SCARD(pool:instances)`: contagem de PERTENCIMENTO, não capacidade. Além do
+   * modelo errado, o valor era AMBÍGUO (o `1` registrado podia ser filtro de canal,
+   * pool `dispatch_mode: pull` — onde fila é o caminho normal — ou o defeito), e
+   * ambiguidade não se corrige como viés se corrige. Capacidade agregada honesta vive
+   * em `{tenant}:capacity:snapshot`, deduplicada por instância distinta e por tipo.
+   */
+  available_agents:  z.number().int().nonnegative().optional(),
   estimated_wait_ms: z.number().int().nonnegative(),
   sla_target_ms:     z.number().int().nonnegative(),
   published_at:      z.string().datetime(),

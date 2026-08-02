@@ -221,18 +221,26 @@ async def test_agent_busy_preserves_membership(ctx):
 # ── o que AINDA deve mudar a membership ───────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_agent_ready_is_authoritative_partial_logout_shrinks(ctx):
-    """Logout parcial é o caminho LEGÍTIMO de remoção: `agent_ready` é o único
-    evento emitido por quem conhece o conjunto completo. Preservar aqui deixaria
-    o agente preso num pool do qual ele saiu.
+async def test_agent_ready_never_shrinks_membership(ctx):
+    """**Contrato vigente desde 2026-07-28: o REGISTRO manda, o evento nunca.**
 
-    A asserção do SET de roteamento expôs um buraco real: `set_instance` só
-    percorre os pools que a instância AINDA declara, então o pool abandonado
-    nunca era limpo por ele. Quem limpava era o `unregisterHumanAgent`
-    (mcp-server) por escrita direta no Redis — logo o consumidor de lifecycle
-    dependia de um efeito colateral de OUTRO serviço para não deixar a instância
-    alocável num pool do qual ela saiu. Agora a limpeza acompanha o evento
-    (`remove_from_pool_sets`), e o SREM do mcp-server vira redundância inofensiva."""
+    Estes dois testes afirmavam o OPOSTO (que `agent_ready` era autoritativo e podia
+    encolher/crescer a membership) e reprovavam permanentemente desde a correção —
+    dois vermelhos normalizados, que é justamente o que faz uma falha NOVA passar
+    despercebida. Invertidos em 2026-08-02 para prender o contrato real.
+
+    **Por que o evento perdeu a autoridade.** (1) O mcp-server passou a escrever a
+    membership ATOMICAMENTE antes de publicar: quando o evento chega, o registro já
+    está correto, e reaplicar o payload por cima só pode piorar. (2) O Console abre uma
+    conexão POR POOL, então um login de N pools publica N `agent_ready` sem ordem
+    garantida entre partições — o evento do 1º pool chegando por último reimporia
+    `pools=[p1]` sobre um registro que já tinha os três. O sintoma medido não era
+    encolhimento e sim SUBSTITUIÇÃO: `before=['formfill_demo'] after=['retencao_humano']`.
+
+    Aqui o evento propõe um subconjunto e é IGNORADO. Quem de fato remove alguém de um
+    pool é o `unregisterHumanAgent` (mcp-server), que faz o próprio SREM — a saída tem
+    dono, e não é um consumidor de liveness.
+    """
     reg, handler, client, tenant, instance, user_id = ctx
     await _seed_human(client, tenant, instance, user_id, [POOL_A, POOL_B, POOL_C])
 
@@ -244,13 +252,27 @@ async def test_agent_ready_is_authoritative_partial_logout_shrinks(ctx):
     })
 
     data = await _read(client, tenant, instance)
-    assert set(data["pools"]) == {POOL_A, POOL_C}
-    assert not await client.sismember(_pool_instances_key(tenant, POOL_B), instance)
+    assert set(data["pools"]) == {POOL_A, POOL_B, POOL_C}, (
+        f"o evento encolheu a membership para {sorted(data['pools'])} — "
+        "`agent_ready` voltou a ser autoritativo, e a corrida entre as N conexões do "
+        "Console recomeça (o registro deixa de ser a fonte)"
+    )
+    assert await client.sismember(_pool_instances_key(tenant, POOL_B), instance), (
+        "o consumidor de liveness removeu a instância de um pool — quem tira alguém de "
+        "um pool é o `unregisterHumanAgent`, não este caminho"
+    )
 
 
 @pytest.mark.asyncio
-async def test_agent_ready_login_grows_membership(ctx):
-    """Login num pool adicional (o mcp-server manda `mergedPools`)."""
+async def test_agent_ready_never_grows_membership_either(ctx):
+    """Simétrico: o evento também não pode ACRESCENTAR pool.
+
+    A tentação é aceitar só o crescimento ("é aditivo, não perde nada"). Mas a
+    membership do login já foi escrita pelo mcp-server antes do publish, então
+    crescimento vindo do evento é ou redundante ou ERRADO — e aceitar metade do payload
+    devolve ao consumidor a decisão de quem é membro de quê, que é exatamente a
+    autoridade que ele perdeu. Um teste só do encolhimento deixaria essa porta aberta.
+    """
     reg, handler, client, tenant, instance, user_id = ctx
     await _seed_human(client, tenant, instance, user_id, [POOL_A])
 
@@ -262,9 +284,13 @@ async def test_agent_ready_login_grows_membership(ctx):
     })
 
     data = await _read(client, tenant, instance)
-    assert set(data["pools"]) == {POOL_A, POOL_B}
-    for pool in (POOL_A, POOL_B):
-        assert await client.sismember(_pool_instances_key(tenant, pool), instance)
+    assert set(data["pools"]) == {POOL_A}, (
+        f"o evento acrescentou pool ({sorted(data['pools'])}): o registro é a fonte, e "
+        "o login já o escreveu atomicamente antes de publicar"
+    )
+    assert await client.sismember(_pool_instances_key(tenant, POOL_A), instance), (
+        "o pool legítimo saiu do SET de roteamento — a instância ficou inalocável"
+    )
 
 
 @pytest.mark.asyncio

@@ -309,7 +309,16 @@
       "active":      "Em atendimento",
       "available":   "Disponíveis",
       "online":      "Online",
-      "queue":       "Na fila"
+      "queue":       "Na fila",
+      "kind": {
+        "human":   "humanos",
+        "ai":      "IA",
+        "unknown": "sem tipo"
+      },
+      "capacityUnavailable": {
+        "no_rollup":          "capacidade indisponível",
+        "engine_unreachable": "capacidade indisponível"
+      }
     },
     "stale": {
       "label":    "Dados desatualizados — sem atividade de roteamento nos últimos 2 minutos",
@@ -362,10 +371,19 @@
     "queueOf":    "Contatos em fila — {{pool}}",
     "slaExceeded":"SLA excedido",
     "summary": {
-      "available": "Agentes disponíveis",
+      "available": "Disponíveis",
       "queued":    "Contatos em fila",
       "withQueue": "Pools com fila",
-      "total":     "Total de pools"
+      "total":     "Total de pools",
+      "kind": {
+        "human":   "humanos",
+        "ai":      "IA",
+        "unknown": "sem tipo"
+      },
+      "capacityUnavailable": {
+        "no_rollup":          "capacidade indisponível",
+        "engine_unreachable": "capacidade indisponível"
+      }
     },
     "admission": {
       "contracted":      "Contratado (C)",

@@ -64,9 +64,18 @@ export const keys = {
   claimLease: (tenantId: string, poolId: string, sessionId: string) =>
     `${tenantId}:pool:${poolId}:claim:${sessionId}`,
 
-  /** SET de instance_ids disponíveis (prontos) num pool */
+  /** SET de instance_ids disponíveis (prontos) num pool.
+   *  ATENÇÃO: é PERTENCIMENTO, não capacidade. `SCARD` disto conta instância lotada
+   *  como disponível e ignora a vaga que o recurso gastou em pool irmão — foi o
+   *  fallback errado de `pool_status_get` até a F5b. Capacidade vem do snapshot do
+   *  pool (por pool) ou de `tenantCapacity` (agregada, deduplicada). */
   poolInstances: (tenantId: string, poolId: string) =>
     `${tenantId}:pool:${poolId}:instances`,
+
+  /** Rollup de capacidade do tenant por TIPO DE LICENÇA — escrito pelo Routing Engine
+   *  (F4). Única fonte que agrega sobre instâncias DISTINTAS: somar `available` das
+   *  linhas de pool conta o mesmo recurso uma vez por pool. */
+  tenantCapacity: (tenantId: string) => `${tenantId}:capacity:snapshot`,
 }
 
 // ─── Estado canônico da instância ──────────────────────────────────────────────

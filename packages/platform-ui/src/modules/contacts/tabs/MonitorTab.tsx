@@ -71,6 +71,60 @@ function KpiCard({ label, value, color }: { label: string; value: number; color:
   )
 }
 
+// ── F4b — capacidade deduplicada por tipo de licença ──────────────────────
+//
+// Publicada pelo Routing Engine em `{t}:capacity:snapshot` sobre instâncias
+// DISTINTAS, e repassada pelo /v1/operational/pools. Não existe campo escalar de
+// disponibilidade: humano e IA são moedas não-fungíveis.
+export interface TenantCapacity {
+  by_kind: Record<string, {
+    total_capacity: number; used: number; available: number; instances: number
+  }>
+  computed_at: string
+}
+
+const KIND_COLOR: Record<string, string> = {
+  human:   '#059669',
+  ai:      '#7C3AED',
+  unknown: '#D97706',   // config contraditória — visível de propósito
+}
+
+/** Um cartão por tipo. Recebe `t` explicitamente: helper fora de componente não pode
+ *  chamar `useTranslation` (invariante de i18n do CLAUDE.md). */
+function renderCapacityKpis(
+  adm: { capacity: TenantCapacity | null; capacity_unavailable: string | null } | null,
+  t:   (k: string, o?: Record<string, unknown>) => string,
+) {
+  if (!adm) return null
+  if (!adm.capacity) {
+    // Ausência com MOTIVO, e nunca a soma como fallback — a soma é o defeito.
+    // `scope_limited`: o rollup é do tenant e não projeta sobre um subconjunto de
+    // pools; mostrar o número cheio a um supervisor restrito vazaria capacidade.
+    return (
+      <div className="bg-white rounded-xl border border-border px-5 py-3 flex flex-col items-center min-w-[110px]">
+        <span className="text-3xl font-black tabular-nums leading-none text-muted-light">—</span>
+        <span className="text-xs text-muted mt-1 text-center leading-tight">
+          {t('monitor.kpi.available')}
+          <br />
+          <span className="text-[10px] text-muted-light">
+            {t(`monitor.kpi.capacityUnavailable.${adm.capacity_unavailable ?? 'no_rollup'}`)}
+          </span>
+        </span>
+      </div>
+    )
+  }
+  return Object.entries(adm.capacity.by_kind)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([kind, k]) => (
+      <KpiCard
+        key={kind}
+        label={`${t('monitor.kpi.available')} · ${t(`monitor.kpi.kind.${kind}`)} (${k.instances})`}
+        value={k.available}
+        color={KIND_COLOR[kind] ?? '#6b7280'}
+      />
+    ))
+}
+
 // ── Donut chart — pure SVG, multi-arc ─────────────────────────────────────
 function PoolDonut({ pools, colorMap, selectedPool, onSelect }: {
   pools:        PoolView[]
@@ -383,25 +437,26 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
 
+  // `busy` e `queue_length` SÃO aditivos: um ocupante carrega exatamente uma tag de
+  // pool, e fila é fato do pool. Somá-los é legítimo.
   const totalBusy      = pools.reduce((s, p) => s + p.busy, 0)
-  // Online = sum of total_instances per pool (distinct registered agents).
-  const totalOnline    = pools.reduce((s, p) => s + (p.total_instances ?? p.available), 0)
-  // Available = Σ pool.available.
-  // ATENÇÃO — este somatório é o defeito **C** da capacidade compartilhada, ainda
-  // ABERTO (fase F4): `available` NÃO é aditivo entre pools que compartilham o
-  // mesmo recurso. Um humano de 3 vagas logado em 3 pools produz 2+2+2 = 6 aqui,
-  // quando a disponibilidade real é 2. A fatia 2 corrigiu cada LINHA (que agora
-  // desconta o consumo dos irmãos); somá-las continua errado até existir o rollup
-  // por recurso distinto em `{t}:capacity:snapshot`.
-  // Ver docs/product/shared-capacity-pool-as-tag-design.md §3.
-  const totalAvailable = pools.reduce((s, p) => s + p.available, 0)
   const totalQueue     = pools.reduce((s, p) => s + p.queue_length, 0)
+  // `available` e `total_instances` NÃO são aditivos — foi o defeito **C** (F4b).
+  // A capacidade é do RECURSO: um humano de 3 vagas logado em 3 pools aparece —
+  // corretamente — com 3 em cada linha, e a soma dizia 9 para 3 vagas. Somar melhor
+  // não resolve: a informação de sobreposição não existe nas linhas. Os dois números
+  // agora vêm do rollup deduplicado (`summary.capacity`), e POR TIPO DE LICENÇA —
+  // humano e IA não se substituem, então um total único responderia "há 356 agentes"
+  // para quem perguntou se há atendente humano. Ver
+  // docs/product/shared-capacity-pool-as-tag-design.md §3.
 
   // Item 7a (capacity-governance): tiles de contrato e sala de espera gratuita —
   // mesmos agregados do Monitor/Pools (summary do /v1/operational/pools).
   const [adm, setAdm] = useState<{
     contracted: number | null; admitted_total: number; headroom: number | null
     buffer: { used: number; limit: number }
+    capacity: TenantCapacity | null
+    capacity_unavailable: string | null
   } | null>(null)
   useEffect(() => {
     if (!tenantId) return
@@ -459,8 +514,10 @@ function PoolsOverview({ pools, metrics, selectedPool, onPoolClick, isStale, las
       {/* KPI strip */}
       <div className="flex gap-3 flex-wrap">
         <KpiCard label={t('monitor.kpi.active')}    value={totalBusy}      color="#1B4F8A" />
-        <KpiCard label={t('monitor.kpi.available')} value={totalAvailable} color="#059669" />
-        <KpiCard label={t('monitor.kpi.online')}    value={totalOnline}    color="#7C3AED" />
+        {/* F4b — um cartão POR TIPO de licença. Não existe cartão "disponível" único:
+            humano e IA não se substituem, e o total somado responderia a pergunta
+            errada. Rollup ausente → "—" com o motivo, nunca a soma das linhas. */}
+        {renderCapacityKpis(adm, t)}
         <KpiCard label={t('monitor.kpi.queue')}     value={totalQueue}     color="#d97706" />
         {/* Item 7a — contrato e sala de espera gratuita */}
         {adm && adm.contracted !== null && (

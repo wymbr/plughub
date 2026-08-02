@@ -412,12 +412,38 @@ unidade); a redução gradual do D5 aritmético.
    **Antecipado de F3 por necessidade:** o bootstrap parou de ler `active_count` (viraria leitor de
    chave sem escritor, devolvendo o 0 plausível) — publica `model: "bootstrap_placeholder"`, ocupação
    por `Σ SCARD`, e **omite** `busy`/`busy_elsewhere`/`untagged` em vez de zerá-los.
-   **Falta:** **F3a** — `work_task_release`/`work_task_expire` ainda não recomputam (o
-   `work_task_claim` entra de carona no `mark_busy`; **F3b, o bootstrap placeholder, JÁ FOI FEITA**
-   nesta fatia — ver acima); **F4** — rollup `{t}:capacity:snapshot` por
-   tipo de licença e a troca nos consumidores (é o defeito **C**: `Σ available` no `MonitorTab`/
-   `PoolsPage` segue somando recurso compartilhado — comentado no ponto exato do código); **F5b** —
-   o *live fallback* de `pool_status_get` ainda devolve `SCARD(pool:instances)`.
+   **F3a ✅ CONCLUÍDA (2026-08-02)** — `work_task_release`/`work_task_expire` recomputam com fan-out
+   (`work_task_claim` já entrava de carona no `mark_busy`; **F3b, o bootstrap placeholder, foi feita
+   na fatia 2** — ver acima). Teste `test_pull_release_snapshot.py` nasceu vermelho: depois da
+   liberação o semáforo estava certo e o snapshot seguia afirmando a vaga consumida, em todas as
+   linhas do recurso. Prova por mutação em `infra/test/mutation_occupancy_peak.sh` (M1) — que de
+   quebra pegou um 4º teste que **não podia reprovar** (`queue_length` tem 2 escritores) e o
+   eliminou.
+   **F4a ✅ + F5b ✅ CONCLUÍDAS (2026-08-02)** — ver `CHANGELOG.md`. Rollup
+   `{t}:capacity:snapshot` sobre instâncias DISTINTAS, por tipo de licença (sem escalar no topo;
+   balde `unknown` para config contraditória; `pools_available` por **(tipo, canal)**);
+   `system_availability_check` lê o rollup e devolve `available_by_kind`, com `null` +
+   `capacity_unknown` quando ausente — nunca voltando a somar as linhas. F5b: o *live fallback* de
+   `pool_status_get` devolve `available: null` + `status: "unknown"` em vez de
+   `SCARD(pool:instances)`.
+   **F4b ✅ CONCLUÍDA (2026-08-02)** — `/v1/operational/pools` repassa o rollup em `summary.capacity`
+   (sem reimplementar a agregação); `MonitorTab`/`PoolsPage` mostram um cartão POR TIPO. Achados:
+   o `Online` somava `total_instances` e tinha o mesmo defeito (não estava no desenho);
+   `by_channel` é PROJEÇÃO, não partição (Σ entre canais excede o total do tipo, por construção —
+   fixado por teste); e **escopo exigiu recompute, não recorte** — a 1ª versão devolvia "—" a quem
+   tivesse `accessible_pools`, e a tela mostrou que isso mata o KPI para praticamente todo mundo
+   (usuário escopado é a norma). `compute_tenant_capacity(only_pools=…)` + `GET /v1/capacity?pools=`
+   no engine, chamado pelo agent-registry com cache 5 s; a regra de dedução segue num lugar só.
+   Sem teste de componente na UI: verificação visual + endpoint conferido ao vivo.
+   **F4c ✅ CONCLUÍDA (2026-08-02)** — `__total__.provisioned_capacity` passou à capacidade
+   deduplicada e entraram linhas `__capacity_{kind}__` (linha do pool inalterada, está certa).
+   Série real: `human` 3 / `ai` 353 / `__total__` 356 (era 362). Janela de arranque (1–2 min pós
+   restart) publica o `Σ` inflado com log **e marcador na série**: minuto sem linhas `__capacity_*`
+   ⇒ `__total__` não confiável. Ocupação por tipo segue AMOSTRADA (é `max` de somas; P2).
+   **Varredura da F5b ✅** — nenhum skill YAML chama `pool_status_get`/`system_availability_check`/
+   `queue_context_get`; a mudança de contrato é inerte hoje.
+   **Falta:** **F5** (limpeza: `get_available_count` sem chamador, remoção do §3.1 do
+   `AnalisePoolsPage` — gráfico + `q_series` + produtor `main.py:988`).
 
    **Pré-requisito da F3 (registrado 2026-08-02, decisão de escopo):** `refresh_snapshots_for_instance`
    só reescreve pool que **já tem snapshot** — sem um, não há de onde tirar `sla_target_ms`/
@@ -509,10 +535,31 @@ parar de afirmar capacidade (escrever `null` + `model: bootstrap_placeholder`).
   o Console abre uma conexão por pool (N `agent_ready` sem ordem garantida entre partições; era assim
   que a membership colapsava, `before=['formfill_demo'] after=['retencao_humano']`). Suspeitar do
   **teste**, não do código: o argumento do código é verificável (ordem de entrega) e o do teste não.
-  Decidir se some ou se inverte a asserção — enquanto ficar assim, são 2 vermelhos permanentes que
-  anestesiam a leitura de qualquer suíte que inclua o arquivo.
+  **✅ RESOLVIDO (2026-08-02): asserções INVERTIDAS.** Viraram
+  `test_agent_ready_never_shrinks_membership` e `test_agent_ready_never_grows_membership_either` —
+  afirmam o contrato vigente (o registro manda, o evento nunca) e passam. O simétrico do
+  crescimento foi acrescentado de propósito: aceitar só a adição ("é aditivo, não perde nada")
+  devolveria ao consumidor a autoridade de membership que ele perdeu, e um teste só do
+  encolhimento deixaria essa porta aberta. Suíte do routing-engine: 188/188.
 
-### Pico de ocupação VERDADEIRO — event-driven *(desenho fechado 2026-08-02; F3a + P1–P3 não iniciados)*
+### Pico de ocupação VERDADEIRO — event-driven *(**COMPLETO** 2026-08-02: F3a ✅ P1 ✅ P2 ✅ P3 ✅ — ver `CHANGELOG.md`)*
+
+> **P3 as-built:** `bucket=15min` em `/reports/pools/occupancy` (só nele). No caminho, dois defeitos:
+> as linhas `__capacity_{kind}__` da F4c entravam em `series`/`by_pool` **como pools** (exclusão era
+> por lista literal; virou `NOT startsWith(pool_id, '__')`), e `meta.bucket` ecoava o parâmetro cru
+> em vez do aplicado. **Cuidado ao editar `reports_query.py`:** a linha de validação de bucket é
+> idêntica em 3 funções — âncora de edição sem contexto pega a errada (aconteceu, e o teste de
+> `meta.bucket` foi quem pegou).
+
+> **P2 as-built:** ZSET `{t}:occupancy` (fonte, `ZREM` em zero) + contador
+> `{t}:occupancy:total` (atalho O(1)), delta tirado de `ZSCORE` antes/depois num Lua; ganchos DENTRO
+> de `claim_instance`/`release_instance`/`swap_to_hold`; `reconcile_tenant_occupancy` 1×/min no
+> flusher, corrigindo para a fonte e LOGANDO. **A reconciliação é a condição de existência do
+> contador** — sem ela ele é o `active_count` de novo, e deve sair junto. Não clampa negativo (é a
+> única evidência de caminho de vaga fora dos ganchos). O `__total__` passou a vir do watermark
+> (`{t}:pool:__total__:peak:{minuto}`, sem chave-irmã de capacidade — a capacidade deduplicada é
+> montada pelo flusher a partir dos baldes por tipo, F4c); a amostra sobrevive só como fallback, e
+> ela se anuncia no log.
 
 > Nasceu de uma pergunta sobre o relatório de dimensionamento: *"o pico por pool existe?"*. Existe —
 > `analytics.pool_occupancy_peaks` (grão 1 min) ← Kafka `pool.occupancy` ← `_occupancy_sampler`, lido
@@ -556,10 +603,17 @@ snapshot velho. F3a tem valor próprio e independente.
 
 | # | Fatia | Nota |
 |---|---|---|
-| **F3a** | `work_task_release`/`work_task_expire` chamam `refresh_snapshots_for_instance` | 2 sítios; sem decisão pendente. *(F3b — bootstrap placeholder — JÁ FEITA na fatia 2.)* |
-| **P1** | watermark por pool: bump na alocação + seed na virada + seed por evento na liberação; `_occupancy_sampler` deixa de amostrar e vira **flusher** | `{t}:pool:{p}:peak:{minuto}`, TTL ~2 h. **Zero mudança de schema, tópico, endpoint ou UI** — publica no mesmo `pool.occupancy` |
-| **P2** | `__total__` do tenant exato | `max` de SOMAS ≠ soma de `max`, então watermark por pool não o produz. ZSET `{t}:occupancy` `instance → ocupação` (o Lua de claim/release já devolve o novo SCARD; ZREM em zero ⇒ cardinalidade O(ocupadas)) + `INCRBY delta` O(1) no caminho quente + **reconciliação barulhenta 1×/min** no flusher contra a soma do ZSET. *Diferença para o `active_count`: aquele não era pecado por ser contador, e sim por ser de escopo errado, sem fonte contra a qual conferir e sem ninguém conferindo.* |
-| **P3** | `bucket=15min` | Leitura pura (`toStartOfInterval(minute, INTERVAL 15 MINUTE)` + o valor no `pattern="^(hour\|day)$"`). Retroativo, a qualquer momento — o grão de 1 min já retém a informação |
+| **F3a** ✅ | `work_task_release`/`work_task_expire` chamam `refresh_snapshots_for_instance` | 2 sítios; sem decisão pendente. *(F3b — bootstrap placeholder — JÁ FEITA na fatia 2.)* As-built: refresh depois do requeue (ordem **não** load-bearing — `add_queued_contact` já patcheia `queue_length` in-place; a afirmação contrária foi retificada) e **também** no expire de item nunca reivindicado (só a fila encolheu), com `extra_pools=[pool_id]` porque sem `instance_id` o fan-out não alcança pool nenhum |
+| **P1** ✅ | watermark por pool: bump na alocação + seed na virada + seed por evento na liberação; `_occupancy_sampler` deixa de amostrar e vira **flusher** | `{t}:pool:{p}:peak:{minuto}`, TTL 2 h. **Zero mudança de schema, tópico, endpoint ou UI** — publica no mesmo `pool.occupancy`. As-built: primitivo único `record_pool_peak` (Lua max-write, atômico — GET+SET em Python perderia o maior entre dois claims concorrentes); `refresh_snapshots_for_instance` passou a **devolver** `{pool: occ}` (dado, não gatilho) e o bump vive só em `mark_busy`; o seed da liberação mora em `release_instance` (porta única de saída da vaga: `remove_conversation` + os dois do pull), com atalho por `EXISTS` — bucket já gravado é ≥ a ocupação corrente, então o `max` seria no-op |
+| **P2** ✅ | `__total__` do tenant exato | `max` de SOMAS ≠ soma de `max`, então watermark por pool não o produz. ZSET `{t}:occupancy` `instance → ocupação` (o Lua de claim/release já devolve o novo SCARD; ZREM em zero ⇒ cardinalidade O(ocupadas)) + `INCRBY delta` O(1) no caminho quente + **reconciliação barulhenta 1×/min** no flusher contra a soma do ZSET. *Diferença para o `active_count`: aquele não era pecado por ser contador, e sim por ser de escopo errado, sem fonte contra a qual conferir e sem ninguém conferindo.* |
+| **P3** ✅ | `bucket=15min` | Leitura pura (`toStartOfInterval(minute, INTERVAL 15 MINUTE)` + o valor no `pattern="^(hour\|day)$"`). Retroativo, a qualquer momento — o grão de 1 min já retém a informação |
+
+**Verificação as-built (2026-08-02):** primitivos por `test_pool_occupancy_peak.py` + prova por
+MUTAÇÃO (`infra/test/mutation_occupancy_peak.sh`, 6 mutações — cada peça tem quem a derrube); o LAÇO
+por `infra/test/smoke_occupancy_peak_flusher.sh` (4 portões, ponta a ponta até o ClickHouse). Duas
+lições do harness ficaram registradas: **exit ≠ 0 não é vermelho** (veredicto de 3 estados; `local`
+zera `$?`; `build --no-cache` apaga o pytest ad-hoc) e **portão que não discrimina não é portão** —
+o "linhas chegando" não separa seed-da-virada de seed-ausente, daí o portão sobre o log.
 
 **Validação cruzada (a resposta para "como eu saberia que está certo"):** derivar o pico
 retroativamente de `analytics.segments` no ClickHouse, desdobrando `started_at`/`ended_at` em ±1 e
@@ -578,7 +632,15 @@ degrau não medido. **Se a série virar base de decisão de dimensionamento, mar
 máximo"*, nunca *"ocupação média"* — o registro por minuto já é máximo, e média de máximos não é média
 de ocupação. Média exigiria soma+contagem de amostras por minuto (campo novo, não pedido).
 
-**Achados na série real (2026-08-02), a tratar no P1 — nenhum vem do diff da fatia 2:**
+**Achados na série real (2026-08-02) — 1 FECHADO no P1, 2 e 3 seguem abertos:**
+
+> **Achado 1 ✅ FECHADO no P1.** A capacidade passou a ser gravada na chave-irmã
+> `{t}:pool:{p}:peakcap:{minuto}`, no MESMO instante do pico e só quando o pico avança — é a
+> capacidade *daquele* instante, por construção. Ausente → o flusher degrada para a leitura ao vivo
+> **e loga** o viés, para a linha enviesada não se confundir com medida boa. Testes:
+> `test_capacity_is_captured_at_the_peak_instant` (a capacidade cresce DEPOIS do pico; a linha do
+> minuto tem de manter a antiga) + a asserção `peak <= capacity`, que é a assinatura exata do
+> defeito. O registro original fica abaixo — o diagnóstico é o que ensina, não o `✅`.
 
 1. **`provisioned_capacity` é FLASHADA no flush, não amostrada junto com o pico.** `_flush_occupancy`
    chama `_pool_capacity` na virada do minuto, enquanto `peak_concurrency` veio do minuto que passou.

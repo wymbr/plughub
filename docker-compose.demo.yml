@@ -563,6 +563,11 @@ services:
       KAFKA_BROKERS:  kafka:29092
       REDIS_URL:      redis://redis:6379
       CONFIG_API_URL: http://config-api:3600   # item 7a — teto do buffer (queue_max_total)
+      # F4b — rollup de capacidade ESCOPADO ao domínio de pools do usuário. A
+      # deduplicação por instância distinta não projeta sobre um subconjunto depois de
+      # agregada, então a conta restrita é refeita no engine (dono da regra) em vez de
+      # reimplementada aqui. Indisponível → capacity_unavailable, nunca Σ das linhas.
+      ROUTING_ENGINE_URL: http://routing-engine:3550
     depends_on:
       postgres:
         condition: service_healthy

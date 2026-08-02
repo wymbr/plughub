@@ -309,7 +309,16 @@
       "active":      "In progress",
       "available":   "Available",
       "online":      "Online",
-      "queue":       "In queue"
+      "queue":       "In queue",
+      "kind": {
+        "human":   "human",
+        "ai":      "AI",
+        "unknown": "untyped"
+      },
+      "capacityUnavailable": {
+        "no_rollup":          "capacity unavailable",
+        "engine_unreachable": "capacity unavailable"
+      }
     },
     "stale": {
       "label":    "Stale data — no routing activity in the last 2 minutes",
@@ -362,10 +371,19 @@
     "queueOf":    "Contacts in queue — {{pool}}",
     "slaExceeded":"SLA exceeded",
     "summary": {
-      "available": "Available agents",
+      "available": "Available",
       "queued":    "Contacts in queue",
       "withQueue": "Pools with queue",
-      "total":     "Total pools"
+      "total":     "Total pools",
+      "kind": {
+        "human":   "human",
+        "ai":      "AI",
+        "unknown": "untyped"
+      },
+      "capacityUnavailable": {
+        "no_rollup":          "capacity unavailable",
+        "engine_unreachable": "capacity unavailable"
+      }
     },
     "admission": {
       "contracted":      "Contracted (C)",

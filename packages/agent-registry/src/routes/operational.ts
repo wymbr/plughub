@@ -49,6 +49,79 @@ function _accessiblePools(req: Request): string[] | null {
   }
 }
 
+// ── F4b — rollup de capacidade do tenant (defeito C) ──────────────────────────
+//
+// `Σ available(pool)` conta o mesmo recurso uma vez por pool: um humano de 3 vagas
+// logado em 3 pools soma 9 para 3 vagas. Não é corrigível somando melhor — a
+// informação de sobreposição não está nas linhas. O Routing Engine publica o rollup
+// deduplicado (sobre instâncias DISTINTAS, por TIPO de licença) e aqui apenas o
+// repassamos. **Nunca reimplementar a agregação neste serviço**: seria a segunda
+// implementação da mesma regra, e é assim que dois números divergem.
+interface TenantCapacity {
+  by_kind: Record<string, {
+    total_capacity: number; used: number; available: number; instances: number
+    by_channel: Record<string, { available: number; instances: number; pools_available: number }>
+  }>
+  computed_at: string
+}
+
+// Cache curto do rollup ESCOPADO. O recompute é O(pools + instâncias) no engine e o
+// Monitor recarrega a cada 15 s; 5 s espelham o throttle do próprio rollup, então a
+// resposta escopada nunca é mais velha que a global.
+const _scopedCapCache = new Map<string, { at: number; value: TenantCapacity | null }>()
+
+async function _tenantCapacity(
+  tenantId: string,
+  accessible: string[] | null,
+): Promise<{ capacity: TenantCapacity | null; capacity_unavailable: string | null }> {
+  // Sem escopo: lê a chave publicada, direto.
+  if (!accessible) {
+    try {
+      const raw = await getRedis().get(opKeys.tenantCapacity(tenantId))
+      if (!raw) return { capacity: null, capacity_unavailable: "no_rollup" }
+      const parsed = JSON.parse(raw) as TenantCapacity
+      if (!parsed?.by_kind) return { capacity: null, capacity_unavailable: "no_rollup" }
+      return { capacity: parsed, capacity_unavailable: null }
+    } catch {
+      return { capacity: null, capacity_unavailable: "no_rollup" }
+    }
+  }
+
+  // Com escopo: a deduplicação **não projeta**. Depois de agregar, a informação de qual
+  // instância pertence a qual pool foi consumida — do `available: 353` do tenant não há
+  // como derivar quanto 2 pools alcançam. A conta restrita precisa ser REFEITA, e é
+  // refeita no Routing Engine (`GET /v1/capacity?pools=…`), que é o dono da regra.
+  // Reimplementá-la aqui, onde o `accessible_pools` está à mão, criaria a segunda
+  // implementação da mesma regra — e é assim que dois números divergem.
+  const key = `${tenantId}::${[...accessible].sort().join(",")}`
+  const hit = _scopedCapCache.get(key)
+  if (hit && Date.now() - hit.at < 5_000) {
+    return hit.value
+      ? { capacity: hit.value, capacity_unavailable: null }
+      : { capacity: null, capacity_unavailable: "no_rollup" }
+  }
+  try {
+    const url = `${config.routing_engine_url}/v1/capacity`
+      + `?tenant_id=${encodeURIComponent(tenantId)}`
+      + `&pools=${encodeURIComponent(accessible.join(","))}`
+    const resp = await fetch(url, {
+      headers: config.routing_admin_token
+        ? { "X-Admin-Token": config.routing_admin_token } : {},
+      signal: AbortSignal.timeout(2_000),
+    })
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const body = await resp.json() as { capacity: TenantCapacity | null }
+    _scopedCapCache.set(key, { at: Date.now(), value: body.capacity ?? null })
+    return body.capacity
+      ? { capacity: body.capacity, capacity_unavailable: null }
+      : { capacity: null, capacity_unavailable: "no_rollup" }
+  } catch {
+    // Engine fora / timeout → desconhecido. NUNCA cair para `Σ available` das linhas:
+    // a soma é o defeito C, não um fallback dele.
+    return { capacity: null, capacity_unavailable: "engine_unreachable" }
+  }
+}
+
 // ── Item 7a (capacity-governance) — agregador de admissão ─────────────────────
 // Lê o estado dos buckets de admissão (Fase B + gates por tipo + fila de
 // sistema) direto do Redis — read-only, sem tocar o hot path do routing.
@@ -195,6 +268,7 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       if (r && r > 0) reservations[p.pool_id] = r
     }
     const adm = await _admissionState(tenantId, reservations)
+    const cap = await _tenantCapacity(tenantId, accessible)
     const redis = getRedis()
     // Capacidade compartilhada, fatia 2 — `active_sessions` vinha de
     // `{t}:pool:{p}:active_count`, contador POR POOL de uma capacidade que é do
@@ -338,6 +412,11 @@ operationalRouter.get("/pools", async (req: Request, res: Response, next: NextFu
       reserved: reservedList,
       buffer:   { used: adm.bufferUsed, limit: adm.bufferLimit },
       ai:       { cap: adm.aiCap, used: adm.aiUsed },
+      // F4b — capacidade DEDUPLICADA por tipo de licença. Substitui `Σ available`
+      // na UI. `null` + motivo quando indisponível: o consumidor mostra ausência,
+      // nunca cai de volta na soma (a soma É o defeito, não o fallback dele).
+      capacity:             cap.capacity,
+      capacity_unavailable: cap.capacity_unavailable,
     }
 
     return res.json({ items: result, total: result.length, summary })

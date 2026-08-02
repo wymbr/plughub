@@ -58,11 +58,10 @@
       "source": { "pricing": "configured (pricing)", "provisioned": "provisioned" }
     },
     "queue": {
-      "title": "Wait and available over time",
+      "title": "Queue wait over time",
       "tableTitle": "Queue by pool",
       "noData": "No queue data in the period.",
       "waitAvg": "Avg wait (s)",
-      "available": "Available",
       "hint": "Wait = duration of the queue segment (attended queue). Abandon % over queued contacts.",
       "cols": { "pool": "Pool", "tier": "Queue", "contacts": "Contacts", "queued": "Queued", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" },
       "tier": { "attended": "Attended (AI)", "system": "System (free)", "none": "—" }

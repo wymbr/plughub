@@ -41,9 +41,16 @@ export const opKeys = {
   poolQueue: (tenantId: string, poolId: string) =>
     `${tenantId}:pool:${poolId}:queue`,
 
-  /** SET of all instance_ids registered to a pool (written by orchestrator-bridge) */
+  /** SET of all instance_ids registered to a pool (written by orchestrator-bridge).
+   *  É PERTENCIMENTO, não capacidade: `SCARD` conta instância lotada como disponível e
+   *  ignora a vaga que o recurso gastou em pool irmão. */
   poolInstances: (tenantId: string, poolId: string) =>
     `${tenantId}:pool:${poolId}:instances`,
+
+  /** Rollup de capacidade do tenant por TIPO de licença (F4), escrito pelo Routing
+   *  Engine sobre instâncias DISTINTAS. Única fonte válida para "quantos agentes há":
+   *  somar `available` das linhas de pool conta o mesmo recurso uma vez por pool. */
+  tenantCapacity: (tenantId: string) => `${tenantId}:capacity:snapshot`,
 }
 
 // ── Pool snapshot type ─────────────────────────────────────────────────────────

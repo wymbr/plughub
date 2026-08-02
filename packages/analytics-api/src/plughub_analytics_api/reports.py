@@ -1202,7 +1202,10 @@ async def get_pools_occupancy(
     from_dt:        Optional[str] = Query(None, description="ISO8601 start (default: 7d ago)"),
     to_dt:          Optional[str] = Query(None, description="ISO8601 end (default: now)"),
     pool_id:        Optional[str] = Query(None, description="Filter by pool_id"),
-    bucket:         Optional[str] = Query(None, pattern="^(hour|day)$", description="Time bucket"),
+    # P3 — `15min` é leitura pura sobre o grão de 1 minuto que já é gravado: retroativo,
+    # sem escritor novo. Só neste endpoint: os demais agregam grandezas somáveis, onde
+    # um bucket mais fino não responde a mesma pergunta de dimensionamento.
+    bucket:         Optional[str] = Query(None, pattern="^(15min|hour|day)$", description="Time bucket"),
     pool_principal: PoolPrincipal = Depends(optional_pool_principal),
 ) -> Response:
     """

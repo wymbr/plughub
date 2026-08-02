@@ -2,6 +2,379 @@
 
 ---
 
+## Capacidade compartilhada — F4a (rollup por recurso distinto) + F5b ✅ (2026-08-02)
+
+**O defeito C.** `Σ available(pool)` conta o mesmo recurso uma vez por pool: um humano
+`max_concurrent 3` logado em 3 pools contribui 3 em cada linha e o total diz 9 para 3 vagas. A linha
+do pool **não é o defeito** — ela está certa, aquele pool alcança mesmo 3 vagas. Somá-la é que não
+pode, e a correção não cabe ali: a informação de sobreposição (quais pools compartilham qual recurso)
+não existe nas linhas. Exige uma **segunda superfície**.
+
+**Rollup `{t}:capacity:snapshot`** (`compute_tenant_capacity`/`refresh_tenant_capacity`): `Σ` sobre
+instâncias **DISTINTAS** de `max(0, max_concurrent − SCARD(sessions))`, dois pipelines (pools →
+membership+config+snapshot; instâncias → estado+ocupação), throttle `SET NX EX 5` e TTL 1 h.
+Gatilhos: fan-out (`refresh_snapshots_for_instance` — "a ocupação deste recurso mudou", nos dois
+sentidos, porque é ocupação corrente e não máximo) + flusher, que cobre tenant ocioso cujo TTL
+expiraria sem transição nenhuma.
+
+**Por TIPO DE LICENÇA, e sem escalar no topo.** Humano e IA não se substituem; um `available` único
+repetiria a falácia de aditividade um nível acima — em vez de contar o mesmo recurso duas vezes,
+somaria recursos que não são intercambiáveis, e "há 5 agentes" viraria resposta para "posso atender
+por voz humana?". Há teste cobrando a **ausência** do campo. O tipo vem de `Pool.agent_kind`
+(autoridade canônica desde 2026-07-02, quando `agent_group_members.is_human` morreu por ser segunda
+fonte de verdade) — nunca de `source`/`agent_type_id` da instância. Pool sem `agent_kind`, ou
+instância em pools de tipos **diferentes**, cai no balde **`unknown`**, publicado como tipo próprio e
+logado: dobrar em `human` seria escolher a moeda cara em silêncio, e superestimar disponibilidade
+humana faz oferecer atendimento que não existe.
+
+**`system_availability_check`** passou a devolver `available_by_kind` do rollup. Rollup ausente →
+`null` + `capacity_unknown: true`, **nunca** zero (que afirmaria "não há agente" e desviaria o cliente
+de um canal saudável) e **nunca** voltando a somar as linhas: a soma é o defeito, não o fallback dele.
+`pools_available` e `total_queued` sobrevivem como somas — grandezas aditivas legítimas que respondem
+outras perguntas ("há por onde entrar?", "quanto está esperando?").
+
+**F5b — o mesmo modelo errado no caminho que fala com o cliente.** O *live fallback* de
+`pool_status_get` devolvia `available = SCARD(pool:instances)`: contagem de PERTENCIMENTO, o modelo
+abandonado quando `max_concurrent > 1` passou a existir — conta instância lotada como disponível,
+ignora a vaga que o recurso gastou em pool irmão e não filtra pausa nem wrap-up. Agora devolve
+`available: null`, `status: "unknown"` e o motivo; a fila continua respondida (é fato do pool).
+**Mudança de contrato registrada:** fluxo que compare `available` numericamente recebe `null` no caso
+sem snapshot (raro — o bootstrap publica a primeira linha de todo pool em ~15 s).
+
+**Verificação.** `test_tenant_capacity_rollup.py` (8 testes) + 5 mutações novas em
+`infra/test/mutation_occupancy_peak.sh` (M7, M7b, M7c, M8, M9 — 11 no total). O teste central
+(`test_shared_resource_is_counted_once_not_once_per_pool`) **não tem mutação de uma linha** que o
+derrube, e isso está declarado no script: a deduplicação é estrutural, não uma linha que se desliga.
+A falsificabilidade dele vem de ser um teste que **calcula o número errado dentro de si**
+(`_sum_of_pool_lines` → 6) e exige o certo (3) — qualquer implementação que agregue por pool reprova
+por construção.
+
+**Dois defeitos que os testes NÃO pegaram, e o que os pegou.** (1) M7 nasceu com expectativa errada
+minha: o caso "pools de tipos diferentes" não passa pelo default `kind or "unknown"` (os dois pools
+declaram tipo) — são duas peças, e a M7b é a mutação da outra. (2) `pools_available` era contado por
+CANAL e copiado em cada balde, fazendo `human/whatsapp` publicar 19 num tenant com 2 pools humanos —
+a fungibilidade voltando pelo campo vizinho ao que existe para separá-la. **Quem o achou foi olhar o
+rollup do tenant real, não a suíte**: meu teste usava um tenant só de pools humanos, então a asserção
+passava sem discriminar tipo. Corrigido para chave `(tipo, canal)`, teste reescrito com um pool de IA
+no mesmo canal, mutação M7c. Confirmação ao vivo: `human/whatsapp` 19 → **2**, `ai/whatsapp` **17**
+(2 + 17 = o 19 global antigo).
+
+### F4b — a tela (2026-08-02)
+
+`/v1/operational/pools` (agent-registry) passou a **repassar** o rollup em `summary.capacity` — sem
+reimplementar a agregação, que seria a segunda implementação da mesma regra e é assim que dois números
+divergem. `MonitorTab` e `PoolsPage` deixaram de somar: onde havia um cartão "Disponíveis" com
+`Σ available`, há agora **um cartão por tipo de licença**.
+
+**O `Online` do Monitor tinha o mesmo defeito e não estava mapeado.** Ele somava `total_instances`
+entre pools — capacidade do pool, igualmente não-aditiva para recurso compartilhado. O desenho só
+listava `available`; a contagem de instâncias distintas agora vem do rollup e aparece entre parênteses
+no próprio cartão do tipo.
+
+**Escopo: a conta restrita é REFEITA, não recortada.** A primeira versão devolvia "—" a quem tivesse
+`accessible_pools` — coerente (a deduplicação não projeta sobre um subconjunto: saber que 1 humano
+cobre 3 pools não diz quanto ele oferece a 2 deles), mas a tela provou que a consequência era pior
+que o problema: **usuário escopado é a norma**, e o admin do demo (2 pools) via "—". Trocar um número
+errado por nenhum número não é obviamente melhor quando a pergunta *tem* resposta.
+`compute_tenant_capacity` ganhou `only_pools` (parâmetro do CÁLCULO, não recorte do resultado),
+exposto em `GET /v1/capacity?pools=…` no Routing Engine; o agent-registry passa os `accessible_pools`
+do JWT e cacheia 5 s (mesmo throttle do rollup, então a resposta escopada nunca é mais velha que a
+global). Sem escopo, segue lendo a chave publicada — nenhum hop. A regra de dedução continua
+existindo **num lugar só**: reimplementá-la no agent-registry, onde o `accessible_pools` está à mão,
+criaria dois números que divergem no primeiro ajuste. Engine fora → `engine_unreachable` + "—",
+nunca `Σ available`.
+
+Duas propriedades contraintuitivas do escopo, fixadas por teste: (a) **recurso logado dentro e fora
+do domínio conta INTEIRO** — disponibilidade escopada é "quanto os MEUS pools alcançam", não "quanto
+é meu"; ratear entre os pools do recurso inventaria frações e subestimaria o alcance real, e que um
+pool de fora possa consumir a vaga antes é `busy_elsewhere`; (b) **`only_pools=[]` ≠ `only_pools=None`**
+— domínio vazio e domínio irrestrito são opostos que um `if not only_pools` colapsaria num só,
+vazando o tenant para quem declarou não alcançar pool nenhum.
+
+A **linha de cada pool não mudou** — ela está certa; o defeito era somá-la. Validado na tela com o
+admin de 2 pools: cartão único `Available · human 2` (3 vagas − 1 em atendimento), sem linha de IA,
+e as duas linhas de pool concordando em `2 / 369` (antes divergiam, 3 e 2, com snapshots de idades
+diferentes — o fan-out da F2/F3a reescrevendo o irmão na mesma transição).
+
+**`by_channel` é PROJEÇÃO, não PARTIÇÃO** — descoberto lendo o rollup real: `ai` soma 275 + 286 + 67
+= 628 entre canais para 353 instâncias. Está correto (instância que serve dois canais conta nos dois),
+mas é a mesma falácia de aditividade um nível abaixo, agora dentro do campo criado para consertá-la.
+Fixado por teste (`test_by_channel_is_a_projection_not_a_partition`) para que ninguém "conserte" o
+excesso dividindo o recurso entre canais — inventaria frações de vaga — nem passe a somar os canais.
+
+**Sem rede automatizada na UI:** não há teste de componente aqui; a verificação é visual (Monitor →
+cartões por tipo) e o endpoint foi conferido ao vivo (`human` 3/1 instância, `ai` 353/353).
+
+## Pico de ocupação — P3: `bucket=15min` ✅ (2026-08-02) · **arco COMPLETO**
+
+Leitura pura: o grão gravado é de 1 MINUTO, então qualquer agregação maior é retroativa e não exige
+escritor novo. `toStartOfInterval(minute, INTERVAL 15 MINUTE)` no `_fetch_pools_occupancy` +
+`15min` no `pattern` da rota. `max` re-agrega picos corretamente (máximo de máximos É o máximo); o que
+nunca seria válido é SOMAR buckets, pela mesma razão que somar pools não é. Só neste endpoint — os
+demais agregam grandezas somáveis, onde um bucket mais fino não responde a mesma pergunta.
+
+**Dois defeitos encontrados no caminho, um deles introduzido pela F4c.**
+
+1. **Marcadores vazando como pools.** O `WHERE` excluía por LISTA
+   (`'__total__','__reserved__','__shared__','__buffer__'`); as linhas `__capacity_{kind}__` que a
+   F4c acrescentou passaram a entrar em `series`/`by_pool` **como se fossem pools** — a Analytics
+   exibiria um pool `__capacity_human__`, com `headroom` e `utilization` calculados em cima. Ninguém
+   viu porque nenhum teste olhava a lista de pools do relatório e, na tela, um pool a mais entre 44
+   não salta aos olhos. Trocado por `NOT startsWith(pool_id, '__')`, que cobre também o próximo
+   marcador que alguém adicionar sem lembrar deste `WHERE`. **Mesmo padrão de sempre neste arco:
+   adicionei um produtor e não segui até os consumidores.**
+2. **`meta.bucket` ecoava o parâmetro cru.** Pedir `bucket=xyz` respondia `meta.bucket: "xyz"` sobre
+   dados agregados por hora — o rótulo descrevendo algo que a query não fez.
+
+**E um erro de edição que quase virou regressão em outro endpoint.** A linha
+`bkt = bucket if bucket in ("hour","day") else "hour"` é **idêntica nas três funções** de
+`reports_query.py`, e a edição pegou a primeira (`query_pools_volume`). O efeito seria duplo: `15min`
+liberado num endpoint que não sabe agregá-lo (cairia no fallback silencioso do `bucket_fn` dele,
+virando `toStartOfDay`) e **não** liberado no que estava sendo construído. Quem pegou foi o teste de
+`meta.bucket` — e só na versão FORTE dele: a primeira versão que escrevi era tautológica
+(`assert x in ("xyz","hour")`) e teria passado com o bug intacto. Regra que fica: em arquivo com
+linhas repetidas, a âncora da edição precisa incluir contexto que a torne única.
+
+*Verificação:* `test_pools_occupancy_bucket.py` (9) + ponta a ponta — `15min` produz `:15/:30/:45`,
+`hour` produz `:00`, e `/reports/pools/volume` rejeita `15min` com 422 (a reversão pegou).
+
+---
+
+## Pico de ocupação — P2: o `__total__` do tenant, exato ✅ (2026-08-02)
+
+**Por que o P1 não bastava.** O watermark por pool não produz o total do tenant: `max` de SOMAS ≠
+soma de `max`. A série de 16:39 é a prova viva — quatro pools registraram pico 1 no mesmo minuto e o
+`__total__` foi 2, porque os picos ocorreram em instantes diferentes e no máximo dois coexistiram.
+Somar os watermarks daria 4.
+
+**ZSET como FONTE, contador como atalho.** `{t}:occupancy` (`instance → ocupação`, `ZREM` em zero, o
+que mantém a cardinalidade em O(instâncias OCUPADAS)) e `{t}:occupancy:total`, atualizados juntos num
+Lua que tira o delta de `ZSCORE` antes/depois — o contador nunca é incrementado por *achar* que houve
+alocação, só pela diferença entre dois estados observáveis. Os ganchos ficam DENTRO de
+`claim_instance`, `release_instance` e `swap_to_hold`, não nos call sites: `claim_instance` tem três
+chamadores e o quarto não lembraria de espelhar.
+
+> **Sim, isto é um CONTADOR — a família do `active_count` que este arco removeu.** A diferença não é
+> de forma, é de regime: escopo CERTO (tenant, onde a grandeza existe), FONTE contra a qual conferir,
+> e conferência que de fato roda (`reconcile_tenant_occupancy`, 1×/min no flusher, corrigindo para a
+> fonte **e logando**). **Se a reconciliação sair, o contador tem de sair junto** — sem ela ele é o
+> `active_count` outra vez. Registrado no docstring da chave e coberto por mutação (M12).
+
+**Não clampa negativo.** Total negativo é impossível pelo invariante, portanto é a única evidência de
+que existe caminho de vaga fora dos três ganchos. Clampar repetiria o teto/chão do `available` que a
+fatia 2 desfez — remendos que existiam para esconder um modelo errado.
+
+**Fora do Lua da vaga, de propósito.** Claim e release são single-key por decisão (cluster-safe, §2
+do desenho); escrever o ZSET lá dentro custaria essa propriedade no código de maior consequência da
+plataforma. O preço é que o espelho não é atômico com a reserva — e é exatamente esse drift que a
+reconciliação existe para achar.
+
+**Verificação:** `test_tenant_occupancy_total.py` (7) + mutações M10–M13 (17 no total no harness).
+Ao vivo: durante um atendimento, contador 1 e ZSET com a instância em score 1, batendo com o
+semáforo; após o fim, contador 0 e ZSET vazio.
+
+**O achado da M13, que mudou a suíte.** A mutação "derivar o `__total__` da soma dos pools do fan-out"
+— o defeito exato que o P2 evita — **não derrubava** nenhum dos dois testes de contrato. Ambos têm
+uma liberação, e o seed de liberação grava o total pré-release, entregando o valor certo por outro
+caminho enquanto a peça central estava quebrada. É a segunda ocorrência do mesmo fenômeno (a M2 do P1
+tinha a mesma forma), e agora está nomeado: **quando duas peças escrevem o mesmo watermark, um teste
+de contrato não distingue qual delas funcionou; quem discrimina é o cenário que remove a outra peça.**
+Daí `test_allocation_alone_records_the_tenant_total` — alocar sem liberar nada no minuto —, que é o
+que a M13 derruba.
+
+---
+
+### F5 — remoção (2026-08-02)
+
+`available_agents` em `queue_events` saiu inteiro: produtor (`_publish_queue_position`), a coluna da
+query (`q_series`), a linha do gráfico (`AnalisePoolsPage`) e o `get_available_count` que o
+alimentava. Remoção, não conserto — **não havia o que corrigir, só o que redefinir, e redefinir não
+backfilla.** Três defeitos empilhados, e o pior não era o viés: modelo de PERTENCIMENTO
+(`SCARD(pool:instances)`, conta instância lotada como disponível); valor **AMBÍGUO** (dos 142
+registros não-nulos em 2 meses, 126 valiam exatamente 1, e esse 1 podia ser filtro de canal, pool
+`dispatch_mode: pull` — onde fila é o caminho normal, não escassez — ou o defeito; viés se corrige,
+ambiguidade não); e 77% de nulos que o `avg()` do ClickHouse ignorava em silêncio enquanto o leitor
+os convertia para 0, deixando "não medimos" com a mesma cara de "nenhum agente disponível". Os quatro
+sítios saíram juntos porque deixar qualquer um seria convite para o campo voltar ao gráfico. A coluna
+em ClickHouse fica (Nullable, com o histórico), com comentário no consumidor dizendo para não
+repovoá-la; o campo virou `.optional()` no Zod só por eventos ainda em retenção no tópico.
+
+*Verificação parcial, declarada:* a suíte passa (186 + os 2 revividos abaixo), mas a checagem de
+runtime saiu **inconclusiva** — `0 linhas` em `queue_events` nos 10 min seguintes, ou seja, não houve
+contato enfileirado e nada foi julgado. Evidência da remoção é de código, não de dado.
+
+**Os 2 vermelhos permanentes de `test_human_instance_identity.py` foram revividos** (não deletados).
+Afirmavam que `agent_ready` era autoritativo sobre `pools` — contrato revogado em 2026-07-28, quando
+se descobriu que o Console abre uma conexão POR POOL e a ordem de entrega entre partições fazia a
+membership COLAPSAR por substituição (`before=['formfill_demo'] after=['retencao_humano']`).
+Invertidos para prender o contrato real, com o simétrico do crescimento acrescentado de propósito:
+aceitar só a adição ("é aditivo, não perde nada") devolveria ao consumidor de liveness a autoridade
+de membership que ele perdeu. Falha normalizada é o que faz falha NOVA passar despercebida — o mesmo
+problema que este arco combateu no dado, agora na leitura da suíte.
+
+---
+
+### F4c — a série (2026-08-02) · **arco F1–F5b + P1 COMPLETO**
+
+Fecha o achado 2. A linha do POOL não mudou — está certa e é não-aditiva, como na superfície viva;
+rebaixá-la a uma fatia do recurso inventaria frações e quebraria `peak <= capacity` na própria linha.
+Mudou o agregado: `__total__.provisioned_capacity` vinha de `Σ` das linhas (um recurso de 3 vagas em
+dois pools contava 6) e passa à capacidade **deduplicada** de todos os tipos — coerente com o seu
+próprio `peak_concurrency`, que já é ocupação de tipos misturados, e útil como número de infra
+("quantas vagas existem"), não de dimensionamento. Entraram linhas `__capacity_{kind}__` com a
+capacidade por tipo, que é o número de planejamento e **não** é derivável do `__total__`.
+Confirmado na série real: `__capacity_human__` 3, `__capacity_ai__` 353, `__total__` **356** (era 362).
+
+**Janela de arranque, medida e marcada.** Nos 1–2 minutos após um restart o rollup ainda não foi
+publicado e `__total__` cai no `Σ` por pool, inflado. Omitir a linha levaria junto o `peak_concurrency`
+(que é bom) e publicar capacidade 0 seria o valor plausível de sempre. Escolha: publicar com log **e
+um marcador consultável na própria série** — nesses minutos não existem linhas `__capacity_*`, então
+`minuto sem __capacity_* ⇒ __total__ não confiável` é uma query, não uma lembrança. Quem ler o
+histórico meses depois não depende de ter guardado o log.
+
+**A ocupação por tipo segue AMOSTRADA** — é `max` de SOMAS, mesma família do `__total__` que o P2
+resolve; o watermark event-driven do P1 é por POOL e não se aplica. Declarado em vez de deixar
+parecer que virou event-driven por proximidade.
+
+**O que os testes desta fatia NÃO cobriam, e como apareceu.** Os 6 testes exercitam `_flush_occupancy`
+com `kind_peaks` já preenchido: provam que a função publica certo dado o insumo, e nada sobre quem
+produz o insumo. Foi a consulta à série real que mostrou `__total__ 362` sem linhas `__capacity_*` —
+o produtor (o laço do flusher) é a mesma lacuna declarada e não fechada no P1. **Duas fatias seguidas
+com o defeito no mesmo lugar:** o laço precisa de teste próprio, não de mais testes na função que ele
+alimenta. (Neste caso o valor era da janela de arranque, e o comportamento estava correto — mas isso
+só se soube olhando o dado.)
+
+---
+
+## Pico de ocupação VERDADEIRO — event-driven (F3a + P1) ✅ (2026-08-02)
+
+Nasceu da pergunta *"o pico por pool existe?"*. Existia — `analytics.pool_occupancy_peaks` ←
+`pool.occupancy` ← `_occupancy_sampler` — **mas era pico AMOSTRADO a 5 s, e amostrar por relógio é o
+método errado por construção**: pico é o máximo de uma função escada, e qualquer intervalo de
+amostra pode cair inteiro entre duas subidas. Não é questão de escolher um intervalo menor; encurtá-lo
+só estreita a classe de falha. A alocação/liberação É o instante em que o valor muda.
+
+**F3a — a liberação do PULL passa a recomputar o snapshot.** `work_task_release` e
+`work_task_expire` liberavam a vaga do recurso e não avisavam ninguém: entre a liberação e o próximo
+evento que tocasse qualquer pool do recurso, o snapshot afirmava uma vaga consumida que já voltara —
+em TODAS as linhas do recurso, porque a capacidade é compartilhada. Não era chave ausente (que se lê
+como "não sei"), era número plausível num registro que o `system_availability_check` usa para decidir
+oferta de canal ao cliente. Os dois agora chamam `refresh_snapshots_for_instance` (fan-out sobre
+`pools(instance) ∪ {pool_id}`), depois do requeue. O `work_task_expire` de item **nunca
+reivindicado** também recomputa: ali só a fila encolheu, e sem `instance_id` o fan-out não alcança
+pool nenhum — daí o `extra_pools`. Passar `instance_id` vazio é deliberado; a alternativa (chamar
+`release_instance` às cegas) derrubaria o occupant de um contato de PUSH na mesma sessão.
+
+**P1 — o pico passa a ser gravado na TRANSIÇÃO.** Watermark `{t}:pool:{p}:peak:{minuto}` (TTL 2 h),
+escrito pelo primitivo único `record_pool_peak` (Lua max-write: atômico porque um GET+SET em Python
+perderia o maior entre dois claims concorrentes — a mesma classe de lost update que o `+= 1` do
+`mark_busy` tinha antes da fatia B). **Três chamadores, e nenhum a mais:**
+
+1. **Alocação** — `mark_busy`, sobre o `used_here` que o recompute JÁ devolveu (nenhuma conta
+   refeita). Único que faz o pico SUBIR. A cobertura é 100% por construção: `claim_instance` tem 3
+   sítios, todos em `router.py`, todos seguidos deste `mark_busy`.
+2. **Virada do bucket** — o flusher semeia `max(novo) := ocupação corrente`. É o que registra carga
+   carregada: um minuto que começa alto e só desce não tem alocação para gravá-lo e sairia zero.
+3. **Liberação** — `release_instance`, com o valor de ANTES. Não é "gravar max na liberação": é o
+   mesmo seed do item 2, disparado por EVENTO, cobrindo o buraco de relógio (o flusher acorda em
+   00:00.4, a ocupação caiu em 00:00.1 — justo a classe que motivou sair da amostragem). Mora em
+   `release_instance` porque é a porta única de saída da vaga (`remove_conversation` + os dois do
+   pull); semear em cada chamador seriam quatro sítios para errar em silêncio. Atalho por `EXISTS`:
+   bucket já gravado é ≥ a ocupação corrente, então o `max` seria no-op.
+
+> **INVARIANTE: o bump NUNCA mora dentro de `write_pool_snapshot`.** Se "quem escreve snapshot também
+> sobe o pico", a F3a passa a bumpar em liberações e o pico volta a ser *amostrado nos instantes em
+> que alguém escreve snapshot* — numericamente inofensivo hoje, e a semântica escorrega de volta para
+> amostragem **sem nada ficar vermelho**. Por isso `write_pool_snapshot`/`refresh_pool_snapshot`/
+> `refresh_snapshots_for_instance` passaram a **DEVOLVER** o recompute (dado), e só `mark_busy` o usa
+> para subir o watermark. Há teste dedicado a essa deriva
+> (`test_writing_a_snapshot_does_not_record_a_peak`) — é o "nada" ficando vermelho.
+
+**Achado 1 fechado junto (skew de capacidade).** `_flush_occupancy` chamava `_pool_capacity` na
+virada do minuto enquanto o pico vinha do minuto que passou: a série registrou `16:38 cap_smoke_a
+peak 1 / provisioned 0` — `peak > capacity`, impossível por construção — e `headroom`/`utilization`,
+derivados dos dois, ficavam com denominador de outro momento. A capacidade agora é gravada na
+chave-irmã `{t}:pool:{p}:peakcap:{minuto}`, no mesmo instante do pico e só quando o pico avança.
+Ausente → leitura ao vivo **com log do viés**.
+
+**`_occupancy_sampler` virou FLUSHER.** Mesmo tópico `pool.occupancy`, mesma tabela
+`pool_occupancy_peaks`, mesmo endpoint, mesma UI — **zero mudança de schema**. Segue amostrando só o
+que ainda não é event-driven, e agora isso está declarado em vez de herdado: `__total__` do tenant
+(`max` de SOMAS ≠ soma de `max` — a série de 2026-08-02 prova: quatro pools com pico 1 no mesmo
+minuto e `__total__` 2, porque os picos foram em instantes diferentes; exato só no P2) e os
+agregados de admissão do item 7b (outra grandeza, outras chaves, fora do semáforo).
+
+**Verificação.** Os testes foram escritos junto com o código e rodados só depois do build — nunca
+foram vistos vermelhos por acidente. A prova é por MUTAÇÃO: `infra/test/mutation_occupancy_peak.sh`
+desliga uma peça por vez e afirma quais testes têm de reprovar e quais têm de seguir verdes,
+abortando se a âncora da mutação não casar (mutação que não se aplica faria o verde seguinte parecer
+robustez). Seis mutações: refresh da F3a, bump da alocação, seed da liberação, os dois juntos,
+capacidade lida no flush, e o bump migrado para dentro de `write_pool_snapshot`.
+
+**A mutação achou um teste que não podia reprovar** — e ele foi deletado, não remendado.
+`test_release_snapshot_shows_the_requeued_item` afirmava que a linha mostra `queue_length 1` depois
+do release, e **passava com o refresh da F3a desligado**: `add_queued_contact` já faz PATCH in-place
+daquele campo, que portanto tem dois escritores e nunca dependeu do recompute. Junto caiu uma
+afirmação errada que eu havia escrito no docstring e aqui: a de que o refresh precisa vir *depois* do
+requeue. Não precisa — na ordem inversa o campo é gravado 0 e o patch o corrige em seguida; as duas
+ordens convergem. O que só o recompute produz é a CAPACIDADE, e é ela que os três testes restantes
+prendem.
+
+**Limite conhecido da rede.** Com o bump da alocação desligado, `test_peak_that_rises_and_falls` e
+`test_release_never_lowers_the_peak` seguem VERDES — o seed da liberação satisfaz o contrato
+sozinho. Não é defeito (o contrato é sobre o valor publicado, não sobre qual peça o produziu), mas
+significa que nenhum dos dois isola o bump: quem isola é
+`test_peak_is_projected_per_pool_not_per_resource`, e quem prova que o contrato inteiro pode cair é a
+mutação M4, com as duas escritas fora. Registrado porque ver só a M2 verde levaria à conclusão errada.
+
+`test_pull_release_snapshot.py` (F3a, 3 testes) assere o CONTEÚDO do snapshot depois de
+`work_task_release`/`work_task_expire`. `test_pool_occupancy_peak.py` (P1, 6 testes) usa o
+**contrato observável**, não a
+existência da chave nova: um pico que sobe a 2 e volta a 0 dentro do mesmo minuto, sem nenhuma
+amostra no meio, tem de aparecer no valor publicado — contra a amostragem de 5 s dá 0. A leitura
+passa pelo mesmo `_read_pool_watermarks` que o flusher usa (ler a chave crua concordaria com um
+flusher quebrado), e o cenário reexecuta se atravessar a virada do minuto, **falhando** se nunca
+obtiver medição válida em vez de passar por ausência de amostra.
+
+**O harness errou duas vezes antes de medir — e as duas são da família que este arco corrige.**
+(1) `build --no-cache` apaga o `pip install pytest` ad-hoc; sem `pytest` toda chamada saía com código
+1 por `No module named pytest`, e o `expect_red` leu "não-zero" como "reprovou" — carimbou seis
+vermelhos sem executar uma asserção. (2) Corrigido isso, `_run "$1"; local v; v="$(_verdict $?)"`
+julgava o `$?` do builtin `local` (que devolve 0), não o do pytest, e classificou seis vermelhos
+legítimos como INCONCLUSIVO. Correções permanentes no script: pré-condição que **aborta** se
+`import pytest` falhar, e veredicto de TRÊS estados — só `rc==1` **com** `N failed` é vermelho, só
+`rc==0` **com** `N passed` é verde, e todo o resto é INCONCLUSIVO, que falha o script. *Não-zero não
+é vermelho: vermelho é o teste tendo julgado e reprovado.*
+
+**O LAÇO do flusher tem gate próprio** (`infra/test/smoke_occupancy_peak_flusher.sh`, validado
+2026-08-02). Virada do minuto, seed do bucket novo e `_flush_occupancy` publicando só existem no
+serviço vivo — um P1 correto nos primitivos e com o laço quebrado produziria exatamente o sintoma que
+o arco combate, sem nenhum teste vermelho. Quatro portões, com janela por `ingested_at` (cortar por
+`minute` cobraria de linhas pré-deploy, legitimamente enviesadas pelo achado 1, e reprovaria por
+história): **B** o contrato ponta a ponta — ocupação sobe a 2 e volta a 0 dentro de um minuto, sem
+amostra no meio, e a linha sai da série com `peak_concurrency 2` (watermark → laço → Kafka →
+consumer → ClickHouse); **A** linhas novas chegando para os pools reais; **C** nenhuma linha nova com
+`peak > provisioned` (achado 1 não reaparece); **D** nenhum `watermark AUSENTE` no log. O D existe
+porque o A **não discrimina**: pool ocioso gera linha tanto com o seed da virada gravando 0 quanto
+com o seed ausente e o flusher publicando 0 — mesma linha, hipóteses opostas; o log é o único
+separador, e é para isso que aquela ausência é logada em vez de degradar calada. Resultado real:
+`peak=2 provisioned=3`, 88 linhas em 44 pools, zero violações.
+
+O portão D **exclui o tenant sintético**, e a razão é um achado do próprio smoke: o `trap cleanup`
+apaga as chaves do tenant depois do portão, inclusive o watermark que a virada acabou de semear, e na
+virada seguinte o flusher o lê, não acha e loga. Numa 2ª execução dentro da janela de 5 min esse
+rastro faria o portão acusar o CÓDIGO por sujeira do harness. Ao interpretar um `watermark AUSENTE`
+real há três causas legítimas antes de suspeitar da virada: minuto do boot, pool que nasceu no meio
+do minuto, e (agora filtrado) limpeza de tenant.
+
+**Não fechados (registrados):** achado 2 — `provisioned_capacity` é por-POOL, então um recurso de 3
+vagas em dois pools publica 3 + 3 = 6 na SÉRIE (defeito C, precisa que o rollup da F4 alcance
+`pool_occupancy_peaks`); P2 (`__total__` exato) e P3 (`bucket=15min`, leitura pura e retroativa).
+**Descontinuidade na série:** além da troca de fonte da fatia 2 (`active_count` → `used_here`), o
+MÉTODO mudou. Se a série virar base de decisão de dimensionamento, marcar a data no eixo.
+
+---
+
 ## Capacidade compartilhada — fatia 2: relatório derivado do semáforo (defeito A) ✅ (2026-08-02)
 
 Fecha o defeito **efetivamente observado** e medido em 2026-07-31: 1 humano `max_concurrent 3`

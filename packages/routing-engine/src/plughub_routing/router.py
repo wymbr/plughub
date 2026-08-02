@@ -726,6 +726,22 @@ class Router:
         Pull: devolve um contato claimado à fila — remove a lease, libera a vaga do
         recurso (release_instance) e re-enfileira pelos critérios do routing
         (add_queued_contact, NÃO preserva posição). O agente desistiu da task.
+
+        **F3a** — a liberação recomputa o snapshot dos pools do RECURSO (fan-out). Sem
+        isto a vaga voltava no semáforo e o snapshot seguia afirmando-a consumida, em
+        TODAS as linhas do recurso, até que qualquer outro evento tocasse um dos pools.
+        Não é chave ausente (que se lê como "não sei"): é número plausível e errado num
+        registro que o `system_availability_check` usa para decidir oferta de canal ao
+        cliente.
+
+        O refresh vem depois do requeue porque é a ordem em que o recompute vê o estado
+        final — **mas a posição não é load-bearing**, e a versão anterior deste
+        docstring dizia que era. `add_queued_contact` faz um PATCH in-place de
+        `queue_length` no snapshot, então na ordem inversa o campo seria gravado 0 e
+        corrigido para 1 em seguida: as duas ordens convergem. Descoberto pela mutação
+        M1 (`infra/test/mutation_occupancy_peak.sh`), que mostrou o teste de
+        `queue_length` passando com este refresh desligado. O que só o recompute
+        produz — e o que os testes cobrem — é a CAPACIDADE.
         """
         await self._instances.delete_claim_lease(tenant_id, pool_id, session_id)
         remaining = await self._instances.release_instance(
@@ -738,6 +754,9 @@ class Router:
                 tenant_id, pool_id, session_id, contact,
                 int(datetime.now(timezone.utc).timestamp() * 1000),   # re-ordena
             )
+        await self._instances.refresh_snapshots_for_instance(
+            tenant_id, instance_id, extra_pools=[pool_id],
+        )
         logger.info(
             "work_task_release: released session=%s instance=%s pool=%s remaining=%d requeued=%s",
             session_id, instance_id, pool_id, remaining, contact is not None,
@@ -788,6 +807,19 @@ class Router:
             remaining = await self._instances.release_instance(
                 tenant_id, instance_id, session_id
             )
+
+        # F3a — recompute + fan-out. Roda nos DOIS casos, por motivos diferentes:
+        #   · item reivindicado  → a vaga do recurso voltou (capacidade em todas as
+        #     linhas do recurso);
+        #   · nunca reivindicado → só a FILA encolheu, e `queue_length` é campo da
+        #     mesma linha. Sem `instance_id` o fan-out não alcança pool nenhum do
+        #     recurso — daí `extra_pools`, que garante ao menos a linha deste pool.
+        # Passar `instance_id` vazio é seguro (pools do recurso = ∅) e deliberado: a
+        # alternativa, chamar `release_instance` às cegas, derrubaria o occupant de um
+        # contato de PUSH alocado na mesma sessão.
+        await self._instances.refresh_snapshots_for_instance(
+            tenant_id, instance_id, extra_pools=[pool_id],
+        )
 
         logger.info(
             "work_task_expire: session=%s pool=%s reason=%s was_queued=%s "

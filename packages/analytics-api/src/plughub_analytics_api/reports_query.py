@@ -4935,6 +4935,10 @@ async def query_pools_volume(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
+    # NÃO aceita `15min`: `_fetch_pools_volume` não tem essa função de agregação, e o
+    # valor cairia no fallback silencioso do seu `bucket_fn`. (Alterado por engano no P3
+    # — as três funções deste arquivo têm a MESMA linha de validação, e a edição pegou a
+    # primeira. Revertido; a mudança pertence a `query_pools_occupancy`.)
     bkt   = bucket if bucket in ("hour", "day") else "hour"
     empty = {"series": [], "by_channel": [], "by_endpoint": [], "totals": {"contacts": 0, "rejected": 0},
              "rejected": {"series": [], "by_cause": [], "total": 0}}
@@ -5179,11 +5183,18 @@ def _fetch_pools_queue(
         GROUP BY bucket, pool_id
     """, parameters=params))
 
+    # F5 — `avg(available_agents)` REMOVIDO desta série (§3.1 do desenho de capacidade
+    # compartilhada). A coluna em `queue_events` continua existindo (Nullable, dados
+    # históricos), mas não é mais lida: o produtor parou de escrevê-la, e o valor
+    # herdado é irrecuperável — não havia o que corrigir, só o que redefinir, e
+    # redefinir não backfilla. Três defeitos empilhados: modelo de PERTENCIMENTO
+    # (`SCARD`), valor ambíguo (o `1` podia ser filtro de canal, pool pull, ou defeito)
+    # e 77% de nulos que o `avg()` ignorava em silêncio enquanto o leitor os convertia
+    # para 0 — "nenhum agente disponível" e "não medimos" com a mesma cara.
     q_series = _rows_to_dicts(client.query(f"""
         SELECT {bucket_fn}(timestamp)                              AS bucket,
                pool_id,
-               max(queue_position)                                 AS max_queue_len,
-               round(avg(available_agents), 1)                     AS available_agents
+               max(queue_position)                                 AS max_queue_len
         FROM {db}.queue_events FINAL WHERE {q_where}
         GROUP BY bucket, pool_id
     """, parameters=params))
@@ -5194,14 +5205,13 @@ def _fetch_pools_queue(
         merged[k] = {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
                      "avg_wait_ms": int(r.get("avg_wait_ms") or 0), "contacts": int(r.get("contacts") or 0),
                      "queued": int(r.get("queued") or 0), "abandoned": int(r.get("abandoned") or 0),
-                     "max_queue_len": 0, "available_agents": 0}
+                     "max_queue_len": 0}
     for r in q_series:
         k = (r["pool_id"], _iso(r["bucket"]))
         m = merged.setdefault(k, {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
                                   "avg_wait_ms": 0, "contacts": 0, "queued": 0, "abandoned": 0,
-                                  "max_queue_len": 0, "available_agents": 0})
+                                  "max_queue_len": 0})
         m["max_queue_len"]    = int(r.get("max_queue_len") or 0)
-        m["available_agents"] = float(r.get("available_agents") or 0)
     series = sorted(merged.values(), key=lambda x: (x["bucket"], x["pool_id"]))
 
     # SLA: contato não-enfileirado espera 0 (dentro do SLA por construção);
@@ -5250,7 +5260,10 @@ async def query_pools_occupancy(
     """
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
-    bkt   = bucket if bucket in ("hour", "day") else "hour"
+    # P3 — `15min` só AQUI: o pico por minuto já está gravado, então agregar mais fino
+    # é leitura retroativa. Os outros endpoints deste arquivo agregam grandezas
+    # somáveis, onde um bucket menor não responde a mesma pergunta.
+    bkt   = bucket if bucket in ("15min", "hour", "day") else "hour"
     empty = {"series": [], "by_pool": [], "total": None, "total_series": [],
              "admission": {"reserved_series": [], "shared_series": [], "buffer_series": []}}
     if accessible_pools is not None and len(accessible_pools) == 0:
@@ -5274,9 +5287,23 @@ def _fetch_pools_occupancy(
     bucket:           str,
     accessible_pools: list[str] | None,
 ) -> dict:
-    bucket_fn = "toStartOfHour" if bucket == "hour" else "toStartOfDay"
+    # P3 — `15min` entra como leitura pura: o grão gravado é de 1 minuto, então
+    # qualquer agregação maior é retroativa e não exige escritor novo. `max` re-agrega
+    # picos corretamente (máximo de máximos É o máximo) — o que NUNCA seria válido é
+    # somar buckets, pela mesma razão que somar pools não é.
+    bucket_fn = {
+        "15min": "toStartOfInterval(minute, INTERVAL 15 MINUTE)",
+        "hour":  "toStartOfHour(minute)",
+        "day":   "toStartOfDay(minute)",
+    }.get(bucket, "toStartOfHour(minute)")
+    # Exclusão por PREFIXO, não por lista. A lista explícita
+    # (`'__total__','__reserved__','__shared__','__buffer__'`) deixou as linhas
+    # `__capacity_{kind}__` da F4c entrarem em `series`/`by_pool` como se fossem POOLS —
+    # a Analytics passaria a exibir "pool __capacity_human__". Defeito introduzido em
+    # 2026-08-02 junto com aquelas linhas e encontrado no P3. Prefixo cobre também o
+    # próximo marcador que alguém adicionar sem lembrar deste `WHERE`.
     conditions = ["tenant_id = {tenant_id:String}", f"minute >= '{since}'", f"minute <  '{until}'",
-                  "pool_id NOT IN ('__total__','__reserved__','__shared__','__buffer__')"]
+                  "NOT startsWith(pool_id, '__')"]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
         conditions.append("pool_id = {pool_id:String}")
@@ -5288,7 +5315,7 @@ def _fetch_pools_occupancy(
         return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
     series = _rows_to_dicts(client.query(f"""
-        SELECT {bucket_fn}(minute)        AS bucket,
+        SELECT {bucket_fn}                AS bucket,
                pool_id,
                max(peak_concurrency)      AS peak_concurrency,
                max(provisioned_capacity)  AS capacity,
@@ -5334,7 +5361,7 @@ def _fetch_pools_occupancy(
                      "headroom": max(cap - peak, 0), "utilization": round(peak / cap, 4) if cap else None}
 
         total_series = _rows_to_dicts(client.query(f"""
-            SELECT {bucket_fn}(minute)        AS bucket,
+            SELECT {bucket_fn}                AS bucket,
                    max(peak_concurrency)      AS peak_concurrency,
                    max(provisioned_capacity)  AS capacity
             FROM {db}.pool_occupancy_peaks FINAL
@@ -5350,7 +5377,7 @@ def _fetch_pools_occupancy(
     admission: dict = {"reserved_series": [], "shared_series": [], "buffer_series": []}
     if accessible_pools is None:
         adm_rows = _rows_to_dicts(client.query(f"""
-            SELECT {bucket_fn}(minute)        AS bucket,
+            SELECT {bucket_fn}                AS bucket,
                    pool_id,
                    max(peak_concurrency)      AS used,
                    max(provisioned_capacity)  AS cap
@@ -5368,6 +5395,10 @@ def _fetch_pools_occupancy(
                 "limit":  int(r.get("cap") or 0),
             })
 
+    # `bucket` aqui é o VALIDADO — `query_pools_occupancy` resolve para `bkt` antes de
+    # chamar. O `meta` reporta o bucket APLICADO, não o pedido: até o P3 ele ecoava o
+    # parâmetro cru do chamador, então `bucket=xyz` respondia `meta.bucket: "xyz"` sobre
+    # dados agregados por hora — o rótulo descrevendo algo que a query não fez.
     return {"data": {"series": series, "by_pool": by_pool, "total": total,
                      "total_series": total_series, "admission": admission},
             "meta": {"from_dt": since, "to_dt": until, "bucket": bucket}}

@@ -142,6 +142,107 @@ def _pool_snapshot_key(tenant_id: str, pool_id: str) -> str:
     corrigido 2026-07-31 após medir 2958s restantes numa chave de 11 min)."""
     return f"{tenant_id}:pool:{pool_id}:snapshot"
 
+def _pool_peak_key(tenant_id: str, pool_id: str, minute_bucket: str) -> str:
+    """Watermark de ocupação do pool no minuto (P1 — pico EVENT-DRIVEN).
+
+    Pico é o máximo de uma FUNÇÃO ESCADA, e o valor só muda na alocação/liberação.
+    Amostrar por relógio é o método errado por construção: qualquer intervalo de
+    amostra pode cair inteiro entre duas subidas, e não é questão de escolher um
+    intervalo menor. Esta chave guarda o máximo alcançado no minuto; quem escreve são
+    as TRANSIÇÕES (ver `record_pool_peak`), e o flusher só lê e publica.
+
+    TTL curto (`_PEAK_TTL_S`): a chave é buffer entre a transição e o flush do minuto,
+    não armazenamento — a série durável é `analytics.pool_occupancy_peaks`.
+    """
+    return f"{tenant_id}:pool:{pool_id}:peak:{minute_bucket}"
+
+def _pool_peak_cap_key(tenant_id: str, pool_id: str, minute_bucket: str) -> str:
+    """Capacidade provisionada NO INSTANTE DO PICO (achado 1 de 2026-08-02).
+
+    O flusher chamava `_pool_capacity` na virada do minuto, enquanto o pico vinha do
+    minuto que passou — duas grandezas do mesmo registro medidas em instantes
+    diferentes. Consequência observada: `peak 1 / provisioned 0`, impossível por
+    construção, e `headroom`/`utilization` derivados com denominador de outro momento.
+    Escrita junto com o pico, e só quando o pico avança: é a capacidade *daquele*
+    instante, de propósito.
+    """
+    return f"{tenant_id}:pool:{pool_id}:peakcap:{minute_bucket}"
+
+# 2 h: folga generosa sobre o minuto que o flusher precisa reler, sem virar histórico.
+_PEAK_TTL_S = 7200
+
+
+def minute_bucket(when: "datetime | None" = None) -> str:
+    """Rótulo do bucket de um minuto (UTC). Ponto único — a chave de escrita (nas
+    transições) e a de leitura (no flusher) precisam derivar do MESMO formato, senão
+    o flusher lê um bucket que ninguém escreveu e publica zero com cara de medição."""
+    dt = when or datetime.now(timezone.utc)
+    return dt.strftime("%Y%m%d%H%M")
+
+
+def _tenant_occupancy_zset_key(tenant_id: str) -> str:
+    """Ocupação corrente por INSTÂNCIA (P2) — `member = instance_id`, `score = SCARD`.
+
+    Existe porque o pico do TENANT não é derivável dos watermarks por pool: `max` de
+    SOMAS ≠ soma de `max`. Provado na série de 2026-08-02 — quatro pools registraram
+    pico 1 no mesmo minuto e o `__total__` foi 2, porque os picos ocorreram em instantes
+    diferentes e no máximo dois coexistiram.
+
+    **É a FONTE, não um contador.** Instância com ocupação 0 é removida (`ZREM`), então
+    a cardinalidade é O(instâncias ocupadas) e a soma dos scores é a verdade a qualquer
+    momento. O contador ao lado é só o atalho O(1); quando os dois discordam, quem manda
+    é este.
+    """
+    return f"{tenant_id}:occupancy"
+
+def _tenant_occupancy_total_key(tenant_id: str) -> str:
+    """Total de vagas ocupadas no tenant (P2) — atalho O(1) do ZSET acima.
+
+    > **Este é um CONTADOR, a mesma família do `{t}:pool:{p}:active_count` que este arco
+    > removeu.** A diferença que o torna aceitável não é de forma, é de regime:
+    >   · escopo CERTO (tenant, que é onde a grandeza existe) — o `active_count` contava
+    >     por POOL uma capacidade que é do RECURSO;
+    >   · tem FONTE contra a qual conferir (o ZSET), que o `active_count` não tinha;
+    >   · é CONFERIDO de fato, 1×/min, e a divergência é LOGADA e corrigida.
+    >
+    > Remover a reconciliação devolve este contador exatamente à condição do anterior.
+    > Se ela sair, este contador tem de sair junto.
+    """
+    return f"{tenant_id}:occupancy:total"
+
+# TTL das duas chaves. Generoso: elas são estado vivo, não histórico, e o `EXPIRE` é
+# rede contra tenant que some — não mecanismo de correção (isso é a reconciliação).
+_TENANT_OCCUPANCY_TTL_S = 86_400
+
+
+def _tenant_capacity_key(tenant_id: str) -> str:
+    """Rollup de capacidade do TENANT, por tipo de licença (F4, defeito C).
+
+    Existe porque `Σ available(pool)` está errado e **não é corrigível na linha do
+    pool**: a informação de sobreposição não está lá. Um humano `max_concurrent 3`
+    logado em 3 pools aparece — corretamente — como `available 3` em cada linha; quem
+    soma obtém 9 (ou 6, com dois pools) para UM recurso de 3 vagas. A linha do pool não
+    é o defeito: somá-la é. Daí uma SEGUNDA superfície, sobre instâncias DISTINTAS.
+
+    Nunca existe um campo `available` no topo: disponibilidade de humano e de IA são
+    moedas não-fungíveis, e somá-las repetiria a falácia de aditividade um nível acima —
+    em vez de contar o mesmo recurso duas vezes, contaria recursos que não se
+    substituem. Ver `docs/product/shared-capacity-pool-as-tag-design.md` §3.
+    """
+    return f"{tenant_id}:capacity:snapshot"
+
+def _tenant_capacity_cooldown_key(tenant_id: str) -> str:
+    """Throttle do rollup. Ele alimenta KPI e decisão em escala humana (oferta de canal,
+    tela de monitor), não gate de milissegundo — recomputar a cada transição de ocupação
+    de um tenant movimentado seria custo sem consumidor."""
+    return f"{tenant_id}:capacity:cooldown"
+
+# Janela do throttle. Mesmo espírito do `_REAP_COOLDOWN_S`: N transições concorrentes
+# disparam UM recompute, não N.
+_CAPACITY_ROLLUP_COOLDOWN_S = 5
+_CAPACITY_ROLLUP_TTL_S      = 3600
+
+
 def _agent_perf_key(tenant_id: str, agent_type_id: str) -> str:
     """
     Arc 7d: historical performance score for an agent type.
@@ -371,6 +472,85 @@ return n
 
 
 # ─────────────────────────────────────────────
+# Ocupação do TENANT — ZSET + contador conferível (P2)
+# ─────────────────────────────────────────────
+# KEYS[1]=ZSET de ocupação por instância; KEYS[2]=contador do total.
+# ARGV[1]=instance_id; ARGV[2]=nova ocupação da instância; ARGV[3]=ttl.
+#
+# O delta sai de dentro: `ZSCORE` antes, `ZADD` depois, `INCRBY (novo − antigo)`. É por
+# isso que o contador consegue ser O(1) e ainda assim derivar de um fato observável —
+# ele nunca é incrementado por "achar" que houve uma alocação, e sim pela diferença
+# entre dois estados do mesmo recurso.
+#
+# Ocupação 0 → `ZREM`: a cardinalidade do ZSET fica O(instâncias OCUPADAS), não
+# O(instâncias), então a reconciliação (soma dos scores) é barata mesmo com 353 agentes.
+#
+# NÃO clampa negativo. Total negativo é impossível se o invariante vale, então é sinal
+# de drift — e o chamador o LOGA. Clampar aqui repetiria o erro que a fatia 2 desfez:
+# o teto e o chão do `available` existiam para esconder um modelo errado.
+_UPDATE_TENANT_OCCUPANCY_LUA = """
+local old = tonumber(redis.call('ZSCORE', KEYS[1], ARGV[1])) or 0
+local new = tonumber(ARGV[2])
+if new <= 0 then
+  redis.call('ZREM', KEYS[1], ARGV[1])
+else
+  redis.call('ZADD', KEYS[1], new, ARGV[1])
+end
+local total
+local delta = new - old
+if delta ~= 0 then
+  total = redis.call('INCRBY', KEYS[2], delta)
+else
+  total = tonumber(redis.call('GET', KEYS[2]) or '0')
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[3]))
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
+return total
+"""
+
+# Reconciliação: soma os scores do ZSET (a FONTE) e devolve {soma, contador}. Não
+# corrige aqui — quem corrige loga primeiro, senão o conserto apaga a evidência.
+_RECONCILE_TENANT_OCCUPANCY_LUA = """
+local members = redis.call('ZRANGE', KEYS[1], 0, -1, 'WITHSCORES')
+local soma = 0
+for i = 2, #members, 2 do
+  soma = soma + tonumber(members[i])
+end
+local contador = tonumber(redis.call('GET', KEYS[2]) or '0')
+return {soma, contador}
+"""
+
+
+# ─────────────────────────────────────────────
+# Watermark de ocupação do POOL — Lua (P1, pico event-driven)
+# ─────────────────────────────────────────────
+# KEYS[1]=peak key; KEYS[2]=capacity key; ARGV[1]=valor; ARGV[2]=capacidade; ARGV[3]=ttl.
+# Só sobe (max), nunca desce — a única escrita que faz o pico crescer é uma ocupação que
+# DE FATO existiu. Capacidade é gravada junto e só quando o pico avança: ela é a
+# capacidade *daquele* instante (achado 1), não a do momento do flush.
+#
+# Atômico de propósito: dois claims concorrentes na mesma instância chegam aqui com
+# valores diferentes, e um GET+SET em Python perderia o maior (lost update — a mesma
+# classe de defeito que o `+= 1` do mark_busy tinha antes da fatia B).
+# ARGV[4]="1" grava a capacidade junto; "0" grava só o pico. O `__total__` (P2) usa
+# "0": a capacidade deduplicada do tenant é montada pelo flusher a partir dos baldes
+# por tipo (F4c), e gravar 0 aqui plantaria um zero plausível na chave-irmã.
+_RECORD_POOL_PEAK_LUA = """
+local cur = tonumber(redis.call('GET', KEYS[1]))
+local val = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[3])
+if cur ~= nil and cur >= val then
+  return cur
+end
+redis.call('SET', KEYS[1], val, 'EX', ttl)
+if ARGV[4] == '1' then
+  redis.call('SET', KEYS[2], ARGV[2], 'EX', ttl)
+end
+return val
+"""
+
+
+# ─────────────────────────────────────────────
 # Recompute da ocupação do POOL — Lua (fatia 2, defeito A)
 # ─────────────────────────────────────────────
 # A ocupação de um pool passa a ser DERIVADA do semáforo do RECURSO
@@ -592,6 +772,10 @@ class InstanceRegistry:
 
         res = await _try()
         if res != -1:
+            # P2 — espelha a ocupação desta instância no ZSET do tenant. Aqui, e não no
+            # call site, porque `claim_instance` tem 3 chamadores em `router.py` e o
+            # quarto que aparecer amanhã não vai lembrar de espelhar.
+            await self._sync_tenant_occupancy(tenant_id, instance_id, res)
             return res
 
         # ── Lotação pode ser mentira: reap antes de aceitar o -1 ──────────────
@@ -615,6 +799,11 @@ class InstanceRegistry:
                         "ocupação=%d — a lotação era vaga órfã",
                         tenant_id, instance_id, session_id, res,
                     )
+        if res != -1:
+            # O caminho do reap também ocupa vaga — espelhar só o caminho feliz deixaria
+            # o contador baixo justamente nos tenants que têm vaga órfã, que são os que
+            # mais precisam do número certo.
+            await self._sync_tenant_occupancy(tenant_id, instance_id, res)
         return res
 
     async def swap_to_hold(
@@ -648,6 +837,11 @@ class InstanceRegistry:
             "occupancy=%d (vaga SEGURA para o wrap-up inline)",
             instance_id, session_id, int(hold_ttl_s), expires_at_ms, int(res),
         )
+        # P2 — o swap é net 0 na ocupação, então o total do tenant NÃO muda. Espelha
+        # assim mesmo: o `ZADD` com o mesmo score é no-op para o contador (delta 0) e
+        # mantém o ZSET fiel caso o hold tenha alterado a contagem por algum caminho de
+        # borda. Pular por "sei que é zero" é como o drift começa.
+        await self._sync_tenant_occupancy(tenant_id, instance_id, int(res))
         return int(res)
 
     async def release_instance(
@@ -657,12 +851,22 @@ class InstanceRegistry:
         session_id:  str,
     ) -> int:
         """Libera a(s) vaga(s) desta sessão na instância (prefixo "{session_id}::",
-        idempotente). Retorna a ocupação restante."""
+        idempotente). Retorna a ocupação restante.
+
+        P1 — a liberação NÃO grava pico (max só sobe na alocação), mas SEMEIA o bucket
+        corrente com o valor de ANTES caso ele ainda esteja vazio: é o seed da virada,
+        disparado por evento em vez de por relógio, para o pico que sobe e desce
+        inteiro entre duas passadas do flusher. Ponto único porque `release_instance` é
+        a única porta de saída da vaga (`remove_conversation`, `work_task_release`,
+        `work_task_expire` passam todos por aqui) — semear em cada chamador seria
+        quatro sítios para errar em silêncio."""
+        await self._seed_peaks_before_release(tenant_id, instance_id)
         res = await self._redis.eval(
             _RELEASE_INSTANCE_LUA, 1,
             _instance_sessions_key(tenant_id, instance_id),
             self._session_prefix(session_id),
         )
+        await self._sync_tenant_occupancy(tenant_id, instance_id, int(res))
         return int(res)
 
     async def _try_take_reap_slot(self, tenant_id: str, instance_id: str) -> bool:
@@ -797,6 +1001,444 @@ class InstanceRegistry:
         }
         return occ
 
+    # ── Rollup de capacidade do tenant, por tipo de licença (F4, defeito C) ───
+
+    async def compute_tenant_capacity(
+        self, tenant_id: str, only_pools: list[str] | None = None
+    ) -> dict:
+        """Agrega capacidade sobre instâncias DISTINTAS, separadas por tipo de licença.
+
+        `only_pools` restringe o cálculo ao DOMÍNIO do chamador (`accessible_pools` do
+        JWT). Precisa ser um parâmetro do cálculo, não um recorte do resultado: depois
+        de agregar, a informação de qual instância pertence a qual pool foi consumida —
+        do `available: 353` publicado não há como saber quantas daquelas vagas um
+        subconjunto de pools alcança. Semântica do escopo: **"quanto os MEUS pools
+        alcançam"**, não "quanto é meu" — um recurso logado dentro e fora do domínio
+        conta inteiro, porque o domínio de fato o alcança inteiro; que outro pool possa
+        consumi-lo antes é `busy_elsewhere`, não uma fatia a descontar aqui.
+
+        `Σ` sobre instâncias distintas de `max(0, max_concurrent − SCARD(sessions))`.
+        A dedução por instância é a única forma de não contar o mesmo recurso uma vez
+        por pool — e é por isso que este número não sai das linhas de pool.
+
+        **O tipo vem do POOL (`agent_kind`), que é a autoridade canônica** — não de
+        `source`/`agent_type_id` da instância, que seriam uma segunda fonte de verdade
+        para a mesma pergunta (foi por isso que `agent_group_members.is_human` morreu em
+        2026-07-02). Instância cujos pools DISCORDAM de tipo, ou cujo pool não declara
+        `agent_kind`, cai no balde **`unknown`** — publicado como tipo próprio, nunca
+        dobrado em `human` ou `ai`: dobrar escolheria um lado em silêncio, e o número
+        resultante seria plausível e errado.
+
+        `by_channel`: uma instância serve o canal `ch` se ALGUM pool seu declara `ch`.
+
+        > **`by_channel` é PROJEÇÃO, não PARTIÇÃO — nunca somar entre canais.** Uma
+        > instância que serve dois canais conta nos dois, então `Σ by_channel.available`
+        > excede `available` do tipo (medido no tenant demo: 275 + 286 + 67 = 628 para
+        > 353 instâncias). É a mesma falácia de aditividade um nível abaixo, agora
+        > dentro do campo criado para consertá-la. O número deduplicado do tipo é
+        > `by_kind[k].available`; o de um canal é `by_kind[k].by_channel[ch].available`;
+        > não existe soma válida entre canais.
+
+        `pools_available` continua sendo contagem de POOLS com vaga — grandeza aditiva
+        legítima, que responde outra pergunta ("há por onde entrar?") e por isso
+        sobrevive ao lado do `available` deduplicado. Chaveada por (TIPO, canal): contar
+        só por canal fazia `human/whatsapp` publicar 19 num tenant com 2 pools humanos.
+
+        Degradação: falha de Redis devolve `{}` **e loga**. Quem chama precisa poder
+        distinguir "tenant sem capacidade" de "não consegui medir" — zero é a resposta
+        plausível que apagaria a diferença.
+        """
+        try:
+            pool_ids = list(await self._redis.smembers(_pool_set_key(tenant_id)))
+        except Exception as exc:
+            logger.warning(
+                "rollup de capacidade: SMEMBERS de pools falhou tenant=%s — %s",
+                tenant_id, exc,
+            )
+            return {}
+        if only_pools is not None:
+            allowed  = set(only_pools)
+            pool_ids = [p for p in pool_ids if p in allowed]
+        if not pool_ids:
+            return {}
+
+        # Uma passada por pool: membership (ready ∪ busy) + config (kind, canais).
+        pipe = self._redis.pipeline(transaction=False)
+        for pid in pool_ids:
+            pipe.smembers(_pool_instances_key(tenant_id, pid))
+            pipe.smembers(_pool_busy_instances_key(tenant_id, pid))
+            pipe.get(_pool_config_key(tenant_id, pid))
+            pipe.get(_pool_snapshot_key(tenant_id, pid))
+        try:
+            raw = await pipe.execute()
+        except Exception as exc:
+            logger.warning(
+                "rollup de capacidade: pipeline de pools falhou tenant=%s — %s",
+                tenant_id, exc,
+            )
+            return {}
+
+        inst_kinds:    dict[str, set[str]] = {}
+        inst_channels: dict[str, set[str]] = {}
+        # Chaveado por (TIPO, canal), não só por canal. Dentro de `by_kind.human`, um
+        # `pools_available` que contasse pools de IA responderia "há 19 portas humanas"
+        # quando há uma — o mesmo erro de fungibilidade que motivou separar as moedas,
+        # reintroduzido no campo vizinho. Observado no tenant real em 2026-08-02:
+        # human/whatsapp e ai/whatsapp publicando 19 idênticos.
+        pools_available_by_kind_ch: dict[tuple[str, str], int] = {}
+
+        for i, pid in enumerate(pool_ids):
+            ready, busy, cfg_raw, snap_raw = raw[4 * i: 4 * i + 4]
+            kind, channels = None, []
+            if cfg_raw:
+                try:
+                    cfg      = json.loads(cfg_raw) or {}
+                    kind     = cfg.get("agent_kind") or None
+                    channels = list(cfg.get("channel_types") or [])
+                except Exception:
+                    pass
+            if snap_raw:
+                try:
+                    snap = json.loads(snap_raw) or {}
+                    if (snap.get("available") or 0) > 0:
+                        for ch in channels:
+                            key = (kind or "unknown", ch)
+                            pools_available_by_kind_ch[key] = (
+                                pools_available_by_kind_ch.get(key, 0) + 1
+                            )
+                except Exception:
+                    pass
+            for iid in set(list(ready or [])) | set(list(busy or [])):
+                inst_kinds.setdefault(iid, set()).add(kind or "unknown")
+                inst_channels.setdefault(iid, set()).update(channels)
+
+        if not inst_kinds:
+            return {}
+
+        instance_ids = sorted(inst_kinds)
+        pipe = self._redis.pipeline(transaction=False)
+        for iid in instance_ids:
+            pipe.get(_instance_key(tenant_id, iid))
+            pipe.scard(_instance_sessions_key(tenant_id, iid))
+        try:
+            raw2 = await pipe.execute()
+        except Exception as exc:
+            logger.warning(
+                "rollup de capacidade: pipeline de instâncias falhou tenant=%s — %s",
+                tenant_id, exc,
+            )
+            return {}
+
+        by_kind: dict[str, dict] = {}
+        mixed:   list[str] = []
+        for i, iid in enumerate(instance_ids):
+            inst_raw, used_raw = raw2[2 * i: 2 * i + 2]
+            kinds = inst_kinds[iid]
+            if len(kinds) > 1:
+                mixed.append(iid)
+                kind = "unknown"
+            else:
+                kind = next(iter(kinds))
+            mc = 1
+            if inst_raw:
+                try:
+                    d  = json.loads(inst_raw) or {}
+                    mc = int(d.get("max_concurrent") or d.get("max_concurrent_sessions") or 1)
+                except Exception:
+                    pass
+            used  = int(used_raw or 0)
+            avail = max(0, mc - used)
+
+            k = by_kind.setdefault(kind, {
+                "total_capacity": 0, "used": 0, "available": 0,
+                "instances": 0, "by_channel": {},
+            })
+            k["total_capacity"] += mc
+            k["used"]           += used
+            k["available"]      += avail
+            k["instances"]      += 1
+            for ch in inst_channels.get(iid, set()):
+                c = k["by_channel"].setdefault(
+                    ch, {"available": 0, "instances": 0, "pools_available": 0}
+                )
+                c["available"] += avail
+                c["instances"] += 1
+
+        for kind_name, k in by_kind.items():
+            for ch, c in k["by_channel"].items():
+                c["pools_available"] = pools_available_by_kind_ch.get((kind_name, ch), 0)
+
+        if mixed:
+            # Nunca silencioso: instância em pools de tipos diferentes é contradição de
+            # configuração, não caso de borda. Ela consome licença de UMA moeda, e qual
+            # delas é indeterminado a partir daqui.
+            logger.warning(
+                "rollup de capacidade tenant=%s: %d instância(s) em pools de tipos "
+                "DIFERENTES (%s) — contadas como `unknown`, não dobradas em human/ai. "
+                "É contradição de config: `agent_kind` é fato do pool e a instância "
+                "consome uma licença só.",
+                tenant_id, len(mixed), ", ".join(sorted(mixed)[:5]),
+            )
+        if "unknown" in by_kind:
+            logger.info(
+                "rollup de capacidade tenant=%s: %d instância(s) sem tipo resolvido — "
+                "pool sem `agent_kind` no cache de config, ou config ainda não replicada",
+                tenant_id, by_kind["unknown"]["instances"],
+            )
+        out = {
+            "tenant_id":   tenant_id,
+            "by_kind":     by_kind,
+            "computed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if only_pools is not None:
+            # Carimba o recorte: um número escopado que não se anuncia como tal vira
+            # "capacidade do tenant" na cabeça de quem lê a tela.
+            out["scoped_to_pools"] = sorted(pool_ids)
+        return out
+
+    async def get_tenant_capacity(self, tenant_id: str) -> dict | None:
+        """Lê o rollup publicado (tenant inteiro). `None` = não publicado ainda."""
+        try:
+            raw = await self._redis.get(_tenant_capacity_key(tenant_id))
+            if not raw:
+                return None
+            parsed = json.loads(raw)
+            return parsed if parsed.get("by_kind") else None
+        except Exception:
+            return None
+
+    async def refresh_tenant_capacity(
+        self, tenant_id: str, force: bool = False
+    ) -> dict | None:
+        """Recomputa e publica o rollup, respeitando o throttle. Devolve o que gravou.
+
+        `force=True` ignora o cooldown — para teste e para o caminho periódico. O
+        cooldown usa `SET NX EX`, atômico, então uma rajada de transições dispara UM
+        recompute, não N.
+        """
+        if not force:
+            try:
+                got = await self._redis.set(
+                    _tenant_capacity_cooldown_key(tenant_id), "1",
+                    nx=True, ex=_CAPACITY_ROLLUP_COOLDOWN_S,
+                )
+                if not got:
+                    return None
+            except Exception:
+                return None   # sem throttle confiável, pular é mais barato que martelar
+        roll = await self.compute_tenant_capacity(tenant_id)
+        if not roll:
+            return None
+        try:
+            await self._redis.set(
+                _tenant_capacity_key(tenant_id), json.dumps(roll),
+                ex=_CAPACITY_ROLLUP_TTL_S,
+            )
+        except Exception as exc:
+            logger.warning(
+                "rollup de capacidade: escrita falhou tenant=%s — %s", tenant_id, exc
+            )
+            return None
+        return roll
+
+    # ── Ocupação do TENANT: ZSET + contador conferível (P2) ───────────────────
+
+    async def _sync_tenant_occupancy(
+        self, tenant_id: str, instance_id: str, occupancy: int
+    ) -> int | None:
+        """Espelha a ocupação da instância no ZSET do tenant e devolve o total.
+
+        Chamado de DENTRO de `claim_instance`/`release_instance`/`swap_to_hold`, logo
+        após o Lua de cada um — um ponto por operação, não um por call site. É fora do
+        Lua de propósito: claim e release são **single-key** por decisão (cluster-safe,
+        §2 do desenho), e escrever o ZSET lá dentro custaria essa propriedade no código
+        de maior consequência da plataforma. O preço é que a atualização não é atômica
+        com a reserva da vaga: uma queda entre as duas deixa drift — que é exatamente o
+        que a reconciliação de 1×/min existe para encontrar e denunciar.
+
+        Total negativo é impossível se o invariante vale; se aparecer, é drift e vai
+        para o log. Não é corrigido aqui: quem conserta antes de contar apaga a
+        evidência de que havia o que consertar.
+        """
+        try:
+            total = int(await self._redis.eval(
+                _UPDATE_TENANT_OCCUPANCY_LUA, 2,
+                _tenant_occupancy_zset_key(tenant_id),
+                _tenant_occupancy_total_key(tenant_id),
+                instance_id, str(int(occupancy)), str(_TENANT_OCCUPANCY_TTL_S),
+            ))
+        except Exception as exc:
+            logger.warning(
+                "ocupação do tenant NÃO sincronizada tenant=%s instance=%s ocupação=%d "
+                "— %s. O total do tenant fica defasado até a próxima reconciliação.",
+                tenant_id, instance_id, int(occupancy), exc,
+            )
+            return None
+        if total < 0:
+            logger.warning(
+                "ocupação do tenant NEGATIVA tenant=%s total=%d — impossível pelo "
+                "invariante, portanto é DRIFT do contador. A reconciliação corrige no "
+                "próximo minuto; a causa é uma atualização perdida entre o Lua da vaga "
+                "e este espelho.",
+                tenant_id, total,
+            )
+        return total
+
+    async def reconcile_tenant_occupancy(self, tenant_id: str) -> tuple[int, int] | None:
+        """Confere o contador contra a FONTE (soma dos scores do ZSET). Devolve
+        `(soma, contador_antes)`; corrige o contador quando divergem, sempre logando.
+
+        **Esta função é o que separa este contador do `active_count` que o arco
+        removeu.** Aquele não tinha fonte contra a qual conferir e ninguém o conferia;
+        divergia em silêncio e a tela mentia. Se esta reconciliação for removida ou
+        deixar de rodar, o contador volta à mesma condição — e deve ser removido junto.
+        """
+        try:
+            raw = await self._redis.eval(
+                _RECONCILE_TENANT_OCCUPANCY_LUA, 2,
+                _tenant_occupancy_zset_key(tenant_id),
+                _tenant_occupancy_total_key(tenant_id),
+            )
+            soma, contador = int(raw[0]), int(raw[1])
+        except Exception as exc:
+            logger.warning(
+                "reconciliação de ocupação FALHOU tenant=%s — %s. O contador segue sem "
+                "conferência; se isto persistir, o total do tenant não é confiável.",
+                tenant_id, exc,
+            )
+            return None
+        if soma != contador:
+            logger.warning(
+                "DRIFT de ocupação tenant=%s: contador=%d, fonte(ZSET)=%d, delta=%d. "
+                "Corrigido para a fonte. Drift recorrente significa atualização perdida "
+                "entre o Lua da vaga e o espelho — procurar o caminho que não passa por "
+                "claim_instance/release_instance/swap_to_hold.",
+                tenant_id, contador, soma, contador - soma,
+            )
+            try:
+                await self._redis.set(
+                    _tenant_occupancy_total_key(tenant_id), str(soma),
+                    ex=_TENANT_OCCUPANCY_TTL_S,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "reconciliação: correção do contador falhou tenant=%s — %s",
+                    tenant_id, exc,
+                )
+        return soma, contador
+
+    async def get_tenant_occupancy(self, tenant_id: str) -> int | None:
+        """Total corrente de vagas ocupadas no tenant (leitura O(1) do contador).
+        `None` = sem valor publicado — desconhecido, nunca zero."""
+        try:
+            raw = await self._redis.get(_tenant_occupancy_total_key(tenant_id))
+            return int(raw) if raw is not None else None
+        except Exception:
+            return None
+
+    # ── Pico de ocupação: watermark EVENT-DRIVEN (P1) ─────────────────────────
+
+    async def record_pool_peak(
+        self,
+        tenant_id:  str,
+        pool_id:    str,
+        value:          int,
+        capacity:       int,
+        bucket:         str | None = None,
+        write_capacity: bool = True,
+    ) -> int:
+        """Registra `value` como pico do minuto SE for maior que o já registrado.
+
+        Primitivo único de escrita do pico — e são exatamente TRÊS chamadores, cada
+        um com uma razão distinta (a regra de gravação está fechada no TODO
+        § Pico de ocupação VERDADEIRO):
+
+        1. **ALOCAÇÃO** (`mark_busy`, sobre o `used_here` que o recompute devolveu).
+           É o único que faz o pico SUBIR. Liberação nunca cria máximo novo.
+        2. **Virada do bucket** (flusher): `max(bucket novo) := ocupação corrente`.
+           Sem isto, carga carregada — um minuto que começa alto e só desce, ou sem
+           transição alguma — registraria zero, que é o valor plausível que esconde
+           justamente a ocupação sustentada.
+        3. **Liberação** (`_seed_peaks_before_release`, com o valor de ANTES). Não é
+           "gravar max na liberação": é o MESMO seed do item 2, disparado por EVENTO
+           em vez de por relógio, para o caso em que a ocupação cai antes de o flusher
+           acordar (ele acorda em 00:00.4, a queda foi em 00:00.1 — 300 ms de pico
+           perdidos, justo a classe que motivou sair da amostragem).
+
+        > **Nunca chamar isto de dentro de `write_pool_snapshot`.** Se "quem escreve
+        > snapshot também sobe o pico", a F3a passa a bumpar em LIBERAÇÕES e o pico
+        > volta a ser amostrado nos instantes em que alguém escreve snapshot — sem
+        > nada ficar vermelho. O bump mora na costura de alocação, e só nela.
+
+        Falha degrada devolvendo -1 **e logando**: um pico perdido é um buraco na
+        série, e um buraco silencioso se lê como "não houve carga".
+        """
+        b = bucket or minute_bucket()
+        try:
+            res = await self._redis.eval(
+                _RECORD_POOL_PEAK_LUA, 2,
+                _pool_peak_key(tenant_id, pool_id, b),
+                _pool_peak_cap_key(tenant_id, pool_id, b),
+                str(int(value)), str(int(capacity)), str(_PEAK_TTL_S),
+                "1" if write_capacity else "0",
+            )
+            return int(res)
+        except Exception as exc:
+            logger.warning(
+                "record_pool_peak FALHOU tenant=%s pool=%s bucket=%s valor=%d — %s. "
+                "O minuto sai da série com pico subestimado; procurar a causa.",
+                tenant_id, pool_id, b, int(value), exc,
+            )
+            return -1
+
+    async def _seed_peaks_before_release(
+        self, tenant_id: str, instance_id: str
+    ) -> None:
+        """Seed por EVENTO (chamador 3 de `record_pool_peak`): antes de derrubar a
+        ocupação, garante que o bucket corrente já carrega o valor de ANTES.
+
+        Roda DENTRO de `release_instance`, isto é, **antes** do Lua que remove o
+        membro — o valor que interessa é o pré-liberação, e depois ele não existe mais
+        em lugar nenhum.
+
+        Atalho honesto: se o bucket já tem valor, não há o que semear. Desde o início
+        do minuto a ocupação só pode ter SUBIDO por alocação (que grava) ou DESCIDO
+        por liberação (que não cria máximo), logo um bucket já gravado é ≥ a ocupação
+        corrente e o `max` do primitivo seria no-op. O `EXISTS` evita o recompute.
+
+        `swap_to_hold` não passa por aqui de propósito: a troca é net 0 (a vaga não é
+        devolvida, é segurada pelo hold), então não há queda a preservar.
+        """
+        try:
+            b = minute_bucket()
+            # P2 — o `__total__` precisa do MESMO seed por evento: um pico de tenant que
+            # sobe e desce entre duas passadas do flusher se perderia igual. Vem antes
+            # do laço dos pools porque `pools_of_instance` pode devolver vazio (agente
+            # que nunca publicou membership) e sair cedo — e o total não depende disso.
+            total = await self.get_tenant_occupancy(tenant_id)
+            if total is not None:
+                await self.record_pool_peak(
+                    tenant_id, "__total__", total, 0,
+                    bucket=b, write_capacity=False,
+                )
+            pools = await self.pools_of_instance(tenant_id, instance_id)
+            if not pools:
+                return
+            for pool_id in pools:
+                if await self._redis.exists(_pool_peak_key(tenant_id, pool_id, b)):
+                    continue
+                occ = await self.compute_pool_occupancy(tenant_id, pool_id)
+                await self.record_pool_peak(
+                    tenant_id, pool_id,
+                    occ["used_here"], occ["total_capacity"], bucket=b,
+                )
+        except Exception as exc:
+            logger.warning(
+                "seed de pico na liberação FALHOU tenant=%s instance=%s — %s. "
+                "Um pico que subiu e desceu dentro deste minuto pode sair da série.",
+                tenant_id, instance_id, exc,
+            )
+
     async def pools_of_instance(
         self, tenant_id: str, instance_id: str
     ) -> list[str]:
@@ -823,7 +1465,7 @@ class InstanceRegistry:
         tenant_id:   str,
         instance_id: str,
         extra_pools: list[str] | None = None,
-    ) -> None:
+    ) -> dict[str, dict[str, int]]:
         """Fan-out: reescreve o snapshot de TODOS os pools do recurso.
 
         A mudança estrutural da fatia 2. Antes o refresh era *"o pool roteado"* —
@@ -835,6 +1477,18 @@ class InstanceRegistry:
         falsa num registro que o `system_availability_check` lê para decidir oferta
         de canal ao cliente. O bootstrap cria o snapshot inicial de todo pool
         configurado a cada 15 s, então a lacuna se fecha sozinha — e o pulo é logado.
+
+        **Devolve** `{pool_id: occ}` com a ocupação recomputada de cada pool do
+        recurso (P1). É DADO, não efeito: quem decide o que fazer com ele é o
+        chamador — e só a costura de ALOCAÇÃO (`mark_busy`) o usa para subir o
+        watermark do pico. Subir o pico aqui dentro faria a liberação (F3a) bumpar
+        também, e o pico voltaria a ser amostrado nos instantes de escrita de
+        snapshot, sem nada ficar vermelho.
+
+        O pool PULADO por falta de snapshot também entra no retorno, recomputado à
+        parte: o pico é outra grandeza, com outro consumidor, e herdar a heurística
+        de "só se já existe snapshot" o faria sumir da série por um motivo que nada
+        tem a ver com ele.
         """
         pools = set(await self.pools_of_instance(tenant_id, instance_id))
         pools |= {p for p in (extra_pools or []) if p}
@@ -844,7 +1498,8 @@ class InstanceRegistry:
                 "linha será atualizada por esta transição de ocupação",
                 tenant_id, instance_id,
             )
-            return
+            return {}
+        occupancies: dict[str, dict[str, int]] = {}
         for pool_id in sorted(pools):
             try:
                 if not await self._redis.exists(_pool_snapshot_key(tenant_id, pool_id)):
@@ -853,13 +1508,30 @@ class InstanceRegistry:
                         "primeiro; recomputar aqui inventaria sla/channel_types)",
                         pool_id,
                     )
+                    occupancies[pool_id] = await self.compute_pool_occupancy(
+                        tenant_id, pool_id
+                    )
                     continue
-                await self.refresh_pool_snapshot(tenant_id, pool_id)
+                occupancies[pool_id] = await self.refresh_pool_snapshot(
+                    tenant_id, pool_id
+                )
             except Exception as exc:
                 logger.warning(
                     "fan-out: falha ao recomputar snapshot pool=%s tenant=%s — %s",
                     pool_id, tenant_id, exc,
                 )
+
+        # F4 — o rollup do tenant é da mesma transição, então este é o gatilho certo:
+        # "a ocupação deste RECURSO mudou". Throttled (5 s), e diferente do pico ele
+        # roda nos dois sentidos — subida e descida — porque é ocupação corrente, não
+        # máximo. Falha aqui não pode derrubar o snapshot, que é o dado principal.
+        try:
+            await self.refresh_tenant_capacity(tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "fan-out: rollup de capacidade falhou tenant=%s — %s", tenant_id, exc
+            )
+        return occupancies
 
     async def get_ready_instances(
         self, tenant_id: str, pool_id: str
@@ -1480,8 +2152,11 @@ class InstanceRegistry:
                     # snapshot é recomputado assim mesmo: o claim que precedeu esta
                     # chamada pode ter mexido na ocupação do recurso, e sair daqui
                     # sem reescrever devolveria a linha antiga.
-                    await self.refresh_snapshots_for_instance(
-                        tenant_id, instance_id, extra_pools=[pool_id],
+                    await self._bump_peaks(
+                        tenant_id,
+                        await self.refresh_snapshots_for_instance(
+                            tenant_id, instance_id, extra_pools=[pool_id],
+                        ),
                     )
                     return
                 else:
@@ -1533,10 +2208,41 @@ class InstanceRegistry:
         # certa escrita no lugar errado. `prev_pool_for_refresh` entra na lista porque
         # pode ser um pool onde o recurso NÃO está logado (transferência entre pools
         # de agentes diferentes) — nesse caso `pools_of_instance` não o alcança.
-        await self.refresh_snapshots_for_instance(
+        occupancies = await self.refresh_snapshots_for_instance(
             tenant_id, instance_id,
             extra_pools=[pool_id] + ([prev_pool_for_refresh] if prev_pool_for_refresh else []),
         )
+
+        # ── P1 — o pico sobe AQUI, e só aqui ─────────────────────────────────────
+        # Esta é a costura de ALOCAÇÃO: a vaga acabou de ser reservada pelo
+        # `claim_instance` (3 sítios, todos em `router.py`, todos seguidos deste
+        # `mark_busy` — cobertura de subida 100%). O valor é o `used_here` que o
+        # recompute JÁ devolveu, então nenhuma conta é refeita e nenhum relógio entra
+        # na medição: o pico passa a ser o máximo da própria função escada, em vez de
+        # um máximo de amostras que pode cair inteiro entre duas subidas.
+        await self._bump_peaks(tenant_id, occupancies)
+
+    async def _bump_peaks(
+        self, tenant_id: str, occupancies: dict[str, dict[str, int]]
+    ) -> None:
+        """Sobe o watermark de cada pool do fan-out **e o do tenant**. Só `mark_busy`."""
+        b = minute_bucket()
+        for pool_id, occ in (occupancies or {}).items():
+            await self.record_pool_peak(
+                tenant_id, pool_id,
+                occ.get("used_here", 0), occ.get("total_capacity", 0), bucket=b,
+            )
+        # P2 — o `__total__` do tenant tem watermark PRÓPRIO, e não pode ser derivado
+        # dos watermarks por pool: `max` de SOMAS ≠ soma de `max`. A série de
+        # 2026-08-02 é a prova — quatro pools com pico 1 no mesmo minuto e total 2,
+        # porque os picos foram em instantes diferentes. O valor vem do contador
+        # conferível (`{t}:occupancy:total`), leitura O(1).
+        total = await self.get_tenant_occupancy(tenant_id)
+        if total is not None:
+            await self.record_pool_peak(
+                tenant_id, "__total__", total, 0,
+                bucket=b, write_capacity=False,
+            )
 
     async def release_session_from_pool(
         self,
@@ -1808,9 +2514,14 @@ class InstanceRegistry:
                 continue
         return contacts
 
-    async def get_available_count(self, tenant_id: str, pool_id: str) -> int:
-        """Returns count of ready instances in the pool."""
-        return await self._redis.scard(_pool_instances_key(tenant_id, pool_id))
+    # `get_available_count` REMOVIDA (F5, 2026-08-02). Era `SCARD(pool:instances)` —
+    # contagem de PERTENCIMENTO ao pool, o modelo abandonado quando `max_concurrent > 1`
+    # passou a existir: conta instância lotada como disponível e ignora a vaga que o
+    # recurso gastou em pool irmão. Removida pelo mesmo motivo que
+    # `get_total_instances_count` em 2026-07-30 — e por um a mais: sobreviver com o nome
+    # `available` era o que a mantinha em circulação. Único chamador era
+    # `_publish_queue_position`, que parou de publicar `available_agents`.
+    # Capacidade por pool = snapshot (`available`); agregada = `{t}:capacity:snapshot`.
 
     # `get_busy_count` REMOVIDA (fatia 2). Lia `{t}:pool:{p}:active_count` — um
     # contador POR POOL de uma capacidade que é do RECURSO. Substituída por
@@ -1848,7 +2559,7 @@ class InstanceRegistry:
         webhook_skill_id:       str | None = None,
         max_concurrent_sessions: int | None = None,
         snapshot_ttl:           int = 3600,
-    ) -> None:
+    ) -> dict[str, int]:
         """
         Writes an operational pool snapshot to Redis after each routing event.
         TTL: 3600s (ver `snapshot_ttl` acima).
@@ -1885,10 +2596,15 @@ class InstanceRegistry:
           queue_length    — contacts waiting in queue
 
         Gatilhos: `route()`, `mark_busy`, `remove_conversation`,
-        `release_session_from_pool` e o listener de `agent.lifecycle` — os três do
-        meio via `refresh_snapshots_for_instance`, que faz FAN-OUT sobre os pools do
-        recurso. Ainda NÃO cobertos (F3): `work_task_release` / `work_task_expire`
-        (o `work_task_claim` entra de carona no `mark_busy`).
+        `release_session_from_pool`, `work_task_release`/`work_task_expire` (F3a) e o
+        listener de `agent.lifecycle` — todos menos o `route()` via
+        `refresh_snapshots_for_instance`, que faz FAN-OUT sobre os pools do recurso.
+        `work_task_claim` entra de carona no `mark_busy` que ele já chamava.
+
+        **Esta função não grava pico.** Ela DEVOLVE o recompute (P1) para quem chamou;
+        subir o watermark aqui faria os gatilhos de LIBERAÇÃO bumparem, e o pico
+        voltaria a ser amostrado nos instantes de escrita de snapshot. Ver
+        `record_pool_peak`.
         """
         occ = await self.compute_pool_occupancy(tenant_id, pool_id)
         total_capacity  = occ["total_capacity"]
@@ -1965,6 +2681,11 @@ class InstanceRegistry:
             json.dumps(snapshot),
             ex=snapshot_ttl,
         )
+        # Devolve o recompute (P1) para que o chamador não precise repeti-lo. É DADO,
+        # não gatilho: esta função NÃO grava pico. Ver `record_pool_peak` — se "quem
+        # escreve snapshot também sobe o pico", a liberação (F3a) passa a bumpar e o
+        # pico volta a ser amostrado nos instantes de escrita de snapshot.
+        return occ
 
     async def get_pool_snapshot(
         self, tenant_id: str, pool_id: str
@@ -1980,7 +2701,7 @@ class InstanceRegistry:
 
     async def refresh_pool_snapshot(
         self, tenant_id: str, pool_id: str
-    ) -> None:
+    ) -> dict[str, int]:
         """
         Convenience wrapper: recompute and write the pool snapshot, reusing the
         sla_target_ms, channel_types, and max_reply_time_ms from the existing
@@ -1989,6 +2710,9 @@ class InstanceRegistry:
         Used after agent_logout / agent_paused events where only the capacity
         numbers need updating, not the pool-level config fields.
         Falls back to defaults if no existing snapshot is found.
+
+        Devolve o recompute (P1) — repassado de `write_pool_snapshot`, sem repetir a
+        conta. Ver lá por que este caminho não grava pico.
         """
         existing = await self.get_pool_snapshot(tenant_id, pool_id)
         sla_target_ms          = int(existing.get("sla_target_ms", 480_000)) if existing else 480_000
@@ -1997,7 +2721,7 @@ class InstanceRegistry:
         # Arc 19: preserve webhook pool fields from the existing snapshot
         webhook_skill_id       = existing.get("webhook_skill_id") if existing else None
         max_concurrent_sessions = existing.get("max_concurrent_sessions") if existing else None
-        await self.write_pool_snapshot(
+        return await self.write_pool_snapshot(
             tenant_id,
             pool_id,
             sla_target_ms=           sla_target_ms,
