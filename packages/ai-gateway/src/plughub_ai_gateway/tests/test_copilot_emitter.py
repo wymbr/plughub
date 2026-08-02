@@ -86,11 +86,26 @@ class TestReadCtxValue:
 
 class TestBuildUserPrompt:
     def test_includes_all_context(self):
-        prompt = _build_user_prompt("quero cancelar", "Ana", "cancelamento", "frustrated")
+        """Sentimento entra como SCORE — o copiloto deixou de ler `categoria` (2026-08-02).
+
+        A tag de rótulo nunca era escrita (o emitter chamava um `_classify` removido),
+        então este contexto simplesmente faltava no prompt, em silêncio.
+        """
+        prompt = _build_user_prompt("quero cancelar", "Ana", "cancelamento", -0.42)
         assert "Ana" in prompt
         assert "cancelamento" in prompt
-        assert "frustrated" in prompt
+        assert "-0.42" in prompt
         assert "quero cancelar" in prompt
+
+    def test_neutral_score_is_not_mistaken_for_absence(self):
+        """Score `0.0` é NEUTRO, não ausência — `if score:` o descartaria.
+
+        Guarda um erro barato de cometer e caro de ver: o prompt perderia o contexto
+        exatamente nas sessões neutras, sem nenhum sintoma.
+        """
+        prompt = _build_user_prompt("oi", None, None, 0.0)
+        assert "0.00" in prompt
+        assert "No prior context available" not in prompt
 
     def test_no_context_shows_placeholder(self):
         prompt = _build_user_prompt("oi", None, None, None)

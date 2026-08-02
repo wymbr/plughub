@@ -46,7 +46,15 @@ def _fake_tenant_config_row(tenant_id: str, default_timezone: str) -> MagicMock:
 
 
 def _fake_calendar_row() -> MagicMock:
-    """Minimal calendar row for create_calendar tests."""
+    """Minimal calendar row for create_calendar tests.
+
+    "Minimal" tem de significar *todas as colunas que `_row_to_calendar` lê* — não as
+    que o teste usa. `always_open` entrou no schema (`db.py:57`) e o mapeamento passou a
+    lê-la; este dublê não a fornecia, e os 4 testes de timezone quebravam com
+    `KeyError: 'always_open'` — falha em testes que nada têm a ver com o campo.
+    Não apareceu antes porque a coleta do arquivo abortava por falta de `httpx`
+    (dependência do `starlette.testclient`), então a suíte inteira nunca rodou.
+    """
     data = {
         "id": "11111111-1111-1111-1111-111111111111",
         "installation_id": "inst-test",
@@ -56,6 +64,7 @@ def _fake_calendar_row() -> MagicMock:
         "name": "Test Calendar",
         "description": "",
         "timezone": "America/New_York",
+        "always_open": False,
         "weekly_schedule": "[]",
         "holiday_set_ids": "[]",
         "exceptions": "[]",

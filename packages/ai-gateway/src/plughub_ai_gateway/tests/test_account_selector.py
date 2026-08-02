@@ -217,12 +217,32 @@ class TestPreferredConfigIds:
         )
 
         redis = AsyncMock()
-        async def mget_mock(*args):
-            # Throttle gcfg_evaluation, allow gcfg_realtime
-            key_str = str(args)
-            if acc_eval.key_id in key_str:
-                return [b"1", None, None]   # throttled
-            return [None, b"0", b"0"]       # available
+
+        async def mget_mock(*keys):
+            """Responde por CHAVE, com o mesmo comprimento que foi pedido.
+
+            O dublê anterior devolvia SEMPRE 3 valores e decidia o throttle olhando
+            `str(args)`. Duas coisas quebravam nisso:
+
+            · `AccountSelector` faz DOIS formatos de `mget` — `_is_available` pede
+              3 chaves (throttled/rpm/tpm) e `_utilization` pede 2 (rpm/tpm). Três
+              valores para duas variáveis estourava `ValueError: too many values to
+              unpack`, e o teste reprovava por defeito do DUBLÊ, não do código. Só
+              aparecia neste cenário porque é o único com DUAS contas a comparar no
+              fallback — com uma só, `_utilization` nem é chamada.
+            · `str(args)` mistura todas as chaves numa string, então "esta conta está
+              throttled?" virava "alguma conta aparece aqui?" — a mesma classe de
+              acoplamento por substring que quebrou os testes da analytics-api hoje.
+
+            Aqui cada chave é respondida por si, e o comprimento acompanha o pedido.
+            """
+            out = []
+            for k in keys:
+                if k.endswith(":throttled"):
+                    out.append(b"1" if acc_eval.key_id in k else None)
+                else:
+                    out.append(b"0")     # rpm/tpm zerados = longe do limite
+            return out
 
         redis.mget = mget_mock
         selector = AccountSelector(redis, [acc_realtime, acc_eval])

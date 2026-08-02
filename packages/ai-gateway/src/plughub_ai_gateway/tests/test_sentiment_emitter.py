@@ -17,7 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, call
 import pytest
 
 from ..sentiment_emitter import (
-    _classify,
     emit_sentiment_updated,
     update_sentiment_live,
     write_context_store_sentiment,
@@ -52,45 +51,20 @@ def captured_kafka_event(producer: MagicMock) -> dict:
     return json.loads(value_bytes)
 
 
-# ── _classify ─────────────────────────────────────────────────────────────────
-
-class TestClassify:
-    def test_satisfied_above_threshold(self):
-        assert _classify(0.3)  == "satisfied"
-        assert _classify(0.5)  == "satisfied"
-        assert _classify(1.0)  == "satisfied"
-
-    def test_neutral_range(self):
-        assert _classify(0.0)  == "neutral"
-        assert _classify(0.29) == "neutral"
-        assert _classify(-0.29) == "neutral"
-
-    def test_frustrated_range(self):
-        # frustrated: [-0.6, -0.3) — -0.3 itself is neutral (neutral wins at overlap)
-        assert _classify(-0.31) == "frustrated"
-        assert _classify(-0.5)  == "frustrated"
-        assert _classify(-0.59) == "frustrated"
-
-    def test_angry_range(self):
-        # angry: [-1.0, -0.6) — -0.6 itself is frustrated (frustrated wins at overlap)
-        assert _classify(-0.61) == "angry"
-        assert _classify(-0.8)  == "angry"
-        assert _classify(-1.0)  == "angry"
-
-    def test_boundary_neutral_satisfied(self):
-        # 0.3 is the satisfied boundary (inclusive on satisfied side)
-        assert _classify(0.3)   == "satisfied"
-        assert _classify(0.299) == "neutral"
-
-    def test_boundary_frustrated_neutral(self):
-        # -0.3 is neutral (included in neutral range [-0.3, 0.3])
-        assert _classify(-0.3)   == "neutral"
-        assert _classify(-0.301) == "frustrated"
-
-    def test_boundary_angry_frustrated(self):
-        # -0.6 is frustrated (included in frustrated range [-0.6, -0.3))
-        assert _classify(-0.6)   == "frustrated"
-        assert _classify(-0.601) == "angry"
+# ── `TestClassify` REMOVIDA (2026-08-02) ──────────────────────────────────────
+#
+# Sete testes cobriam `_classify` — faixas e fronteiras — para uma função que já não
+# existe neste módulo, e que NÃO deve voltar: classificar usa faixas configuráveis por
+# tenant e é feito na LEITURA, pelo consumidor (`CLAUDE.md` § Sentiment Tracking;
+# classificador canônico em `analytics-api/sessions.py::_classify`).
+#
+# Eles não estavam vermelhos: estavam INALCANÇÁVEIS. O `import` no topo do arquivo
+# falhava, e `pytest` aborta a coleta INTEIRA do arquivo — e, por `Interrupted: 1 error
+# during collection`, a suíte inteira do pacote. Sete testes de fronteira dando a
+# impressão de cobertura enquanto bloqueavam os outros seis arquivos.
+#
+# Se as fronteiras precisarem de teste, o lugar é a suíte da analytics-api, junto do
+# `_classify` que sobrevive.
 
 
 # ── emit_sentiment_updated ────────────────────────────────────────────────────
@@ -110,27 +84,30 @@ class TestEmitSentimentUpdated:
         assert ev["session_id"] == SESSION
         assert ev["pool_id"]    == POOL
         assert ev["score"]      == 0.75
-        assert ev["category"]   == "satisfied"
         assert "event_id"       in ev
         assert "timestamp"      in ev
 
-    async def test_category_neutral(self):
-        p = make_producer()
-        await emit_sentiment_updated(p, TENANT, SESSION, POOL, 0.0)
-        ev = captured_kafka_event(p)
-        assert ev["category"] == "neutral"
+    async def test_event_carries_no_category(self):
+        """O evento leva SCORE, nunca rótulo — e a asserção é de AUSÊNCIA.
 
-    async def test_category_frustrated(self):
-        p = make_producer()
-        await emit_sentiment_updated(p, TENANT, SESSION, POOL, -0.4)
-        ev = captured_kafka_event(p)
-        assert ev["category"] == "frustrated"
+        Substitui `test_category_{neutral,frustrated,angry}`, que afirmavam
+        `ev["category"]` para uma chave removida de propósito (ver o comentário em
+        `platform-events.ts`: "Category classification is intentionally…"). Eles não
+        estavam vermelhos — estavam inalcançáveis, porque o `import` do módulo de teste
+        falhava e a coleta abortava.
 
-    async def test_category_angry(self):
-        p = make_producer()
-        await emit_sentiment_updated(p, TENANT, SESSION, POOL, -0.8)
-        ev = captured_kafka_event(p)
-        assert ev["category"] == "angry"
+        Um único caso de fronteira bastaria; três valores diferentes entram porque a
+        ausência tem de valer para todo o domínio, não só para o extremo.
+        """
+        for score in (0.75, 0.0, -0.4, -0.8):
+            p = make_producer()
+            await emit_sentiment_updated(p, TENANT, SESSION, POOL, score)
+            ev = captured_kafka_event(p)
+            assert "category" not in ev, (
+                f"score={score}: o AI Gateway voltou a interpretar o sentimento — "
+                "faixas são configuráveis por tenant e a classificação é do consumidor"
+            )
+            assert ev["score"] == score
 
     async def test_event_id_unique(self):
         p = make_producer()
@@ -169,19 +146,21 @@ class TestUpdateSentimentLive:
         assert mapping["count"]       == "1"
         assert mapping["avg_score"]   == "0.5"
         assert mapping["score_total"] == "0.5"
-        assert mapping["satisfied"]   == "1"
         assert mapping["last_session_id"] == SESSION
+        # Sem contadores por categoria: o hash live guarda soma e contagem, e quem
+        # precisa de faixa classifica na leitura (`update_sentiment_live` docstring).
+        assert "satisfied" not in mapping
 
     async def test_increments_count_on_second_call(self):
         r = make_redis(existing={
             "count": "1", "score_total": "0.5",
             "satisfied": "1",
         })
-        await update_sentiment_live(r, TENANT, POOL, -0.2, SESSION)  # neutral
+        await update_sentiment_live(r, TENANT, POOL, -0.2, SESSION)
         mapping = r.hset.call_args.kwargs["mapping"]
         assert mapping["count"]     == "2"
-        assert mapping["neutral"]   == "1"
         assert float(mapping["avg_score"]) == pytest.approx(0.15, abs=1e-3)
+        assert "neutral" not in mapping
 
     async def test_avg_score_running_mean(self):
         # Simulate 3 accumulated turns: 0.8, 0.6, 0.4 → avg 0.6
@@ -214,11 +193,19 @@ class TestUpdateSentimentLive:
         assert "updated_at" in mapping
         assert len(mapping["updated_at"]) > 10
 
-    async def test_angry_category_incremented(self):
+    async def test_legacy_category_counters_are_not_carried_forward(self):
+        """Contador de categoria em hash ANTIGO não é propagado na escrita nova.
+
+        Substitui `test_angry_category_incremented`. O hash live de um tenant que rodou
+        a versão anterior ainda tem `angry`/`satisfied`/… gravados; o que se cobra aqui
+        é que a escrita atual não os RECRIE — deixá-los crescer manteria vivo, no dado,
+        um modelo que o código abandonou, e o consumidor não saberia qual dos dois ler.
+        """
         r = make_redis(existing={"count": "1", "score_total": "-0.8", "angry": "1"})
         await update_sentiment_live(r, TENANT, POOL, -0.9, SESSION)
         mapping = r.hset.call_args.kwargs["mapping"]
-        assert mapping["angry"] == "2"
+        assert mapping["count"] == "2"
+        assert "angry" not in mapping
 
     async def test_silently_ignores_redis_error(self):
         r = make_redis()
@@ -313,12 +300,22 @@ class TestWriteContextStoreSentiment:
         key_arg = r.hset.call_args.args[0]
         assert key_arg == f"{TENANT}:ctx:{SESSION}"
 
-    async def test_writes_two_fields(self):
+    async def test_writes_only_the_score_never_the_label(self):
+        """Uma tag, e a AUSÊNCIA da outra é a asserção que importa.
+
+        `categoria` aqui seria o AI Gateway interpretando o score — proibido por
+        desenho (faixas são de tenant, classificação é na leitura). Afirmar só a
+        presença de `current` deixaria a regressão passar; é a ausência que a pega.
+        """
         r = make_redis()
         await write_context_store_sentiment(r, TENANT, SESSION, 0.5)
         mapping = r.hset.call_args.kwargs["mapping"]
-        assert "session.sentimento.current"   in mapping
-        assert "session.sentimento.categoria" in mapping
+        assert "session.sentimento.current" in mapping
+        assert "session.sentimento.categoria" not in mapping, (
+            "o emitter voltou a classificar: categoria usa faixas configuráveis por "
+            "tenant e é responsabilidade de quem LÊ"
+        )
+        assert list(mapping) == ["session.sentimento.current"]
 
     async def test_current_entry_value_matches_score(self):
         r = make_redis()
@@ -331,21 +328,28 @@ class TestWriteContextStoreSentiment:
         assert entry["visibility"] == "agents_only"
         assert "updated_at" in entry
 
-    async def test_categoria_entry_maps_to_label(self):
-        r = make_redis()
-        await write_context_store_sentiment(r, TENANT, SESSION, -0.7)  # angry
-        mapping = r.hset.call_args.kwargs["mapping"]
-        entry = json.loads(mapping["session.sentimento.categoria"])
-        assert entry["value"] == "angry"
-        assert entry["confidence"] == 0.80
-        assert entry["visibility"] == "agents_only"
+    async def test_negative_score_is_written_verbatim(self):
+        """Score negativo entra como número, sem virar rótulo no caminho.
 
-    async def test_satisfied_score(self):
+        Substitui os dois testes que afirmavam `categoria == "angry"` / `"satisfied"`.
+        """
         r = make_redis()
-        await write_context_store_sentiment(r, TENANT, SESSION, 0.8)
-        mapping = r.hset.call_args.kwargs["mapping"]
-        cat_entry = json.loads(mapping["session.sentimento.categoria"])
-        assert cat_entry["value"] == "satisfied"
+        await write_context_store_sentiment(r, TENANT, SESSION, -0.7)
+        entry = json.loads(r.hset.call_args.kwargs["mapping"]["session.sentimento.current"])
+        assert entry["value"] == -0.7
+
+    async def test_writes_survive_without_a_classifier(self):
+        """**Teste de regressão do defeito real.**
+
+        `write_context_store_sentiment` chamava `_classify`, removido do módulo — e a
+        linha ficava FORA do `try`, então todo call levantava `NameError` e NENHUMA tag
+        era escrita, nem `current`. O chamador engolia com "Sentiment pipeline failed",
+        que soa intermitente. Este teste falha se qualquer computação voltar para fora
+        do bloco protegido: aqui o `hset` precisa ter sido chamado.
+        """
+        r = make_redis()
+        await write_context_store_sentiment(r, TENANT, SESSION, -0.7)
+        r.hset.assert_called_once()
 
     async def test_expire_called_with_session_ttl(self):
         r = make_redis()

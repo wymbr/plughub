@@ -823,7 +823,36 @@ e o `status` no registro da instância dizem.
 
 ---
 
-## Suítes VERMELHAS fora do routing-engine — ~58 testes *(aberto — 2026-08-02)*
+## Suítes VERMELHAS fora do routing-engine *(2026-08-02 — ai-gateway e calendar-api ✅; 4 pacotes abertos)*
+
+> **ai-gateway ✅ e calendar-api ✅** — ver `CHANGELOG.md`. Os dois estavam com a suíte INTEIRA
+> ausente (`testpaths` com hífen num; `httpx` faltando no outro), e o sintoma era `0 passou /
+> 1 falhou` — que se lê como um teste ruim, não como 130 e 63 testes que nunca rodaram. Uma vez
+> rodando, o ai-gateway revelou um **bug de produção**: `session.sentimento.*` nunca chegava ao
+> ContextStore.
+>
+> **Restam:** channel-gateway 22, evaluation-api 14, pricing-api 7, config-api 3, e as 2 da
+> analytics-api (`TestPoolPrincipalAuth`, provavelmente `PLUGHUB_AUTH_JWT_SECRET`).
+
+### O padrão que se repetiu quatro vezes hoje, e vale mais que qualquer um dos consertos
+
+Todo dublê que **despacha ou responde por uma aproximação** do que o código realmente faz vira
+falha em cascata quando o código muda de forma legítima:
+
+| Onde | A aproximação | O que a quebrou |
+|---|---|---|
+| `test_pools_occupancy_bucket` (analytics) | ramo por `"admitted" in sql` | renomear um literal para `__admitted_ai__`, que contém a substring |
+| idem | filtro por `'__reserved__'` | o literal sumiu → filtro casava tudo, VERDE por vacuidade |
+| `test_account_selector` (ai-gateway) | throttle por `str(args)` + sempre 3 valores | `_utilization` pede 2 chaves, `_is_available` pede 3 → `ValueError` |
+| `test_router` (calendar) | fixture com "as colunas que o teste usa" | mapeamento passou a ler `always_open` |
+
+**Regra que fica:** dublê responde à ESTRUTURA do argumento (chave a chave, comprimento igual ao
+pedido, alias de projeção em vez de substring solta), nunca a uma serialização dele. E fixture
+"mínima" significa *todas as colunas que o mapeamento lê*, não as que a asserção olha.
+
+---
+
+## Suítes vermelhas — os 4 pacotes restantes *(aberto — 2026-08-02)*
 
 Achado por `infra/test/report_suite_skips.sh`, que foi escrito para contar SKIPS e acabou expondo
 FALHAS. Medição de 2026-08-02, cada suíte dentro do próprio container:

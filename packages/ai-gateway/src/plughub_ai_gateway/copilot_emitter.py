@@ -8,7 +8,7 @@ bloqueiam o retorno ao chamador.
 
 Fluxo:
   1. Lê ContextStore ({tenant_id}:ctx:{session_id}) para contexto da sessão
-     (caller.nome, caller.motivo_contato, session.sentimento.categoria)
+     (caller.nome, caller.motivo_contato, session.sentimento.current)
   2. Monta prompt compacto e chama LLM (haiku — isolado de tráfego realtime)
   3. Parseia resposta JSON: { sugestao_resposta, flags_risco, acoes_recomendadas }
   4. Escreve session.copilot.* no ContextStore (fire-and-forget)
@@ -62,16 +62,33 @@ def _build_user_prompt(
     customer_message: str,
     caller_nome: str | None,
     motivo_contato: str | None,
-    sentimento_categoria: str | None,
+    sentimento_score: float | None,
 ) -> str:
-    """Builds the compact user prompt for co-pilot analysis."""
+    """Builds the compact user prompt for co-pilot analysis.
+
+    **Sentimento entra como SCORE, não como rótulo (2026-08-02).** Este módulo lia
+    `session.sentimento.categoria`, tag que o AI Gateway não escreve — classificar é
+    responsabilidade de quem LÊ, com faixas configuráveis por tenant (`CLAUDE.md`
+    § Sentiment Tracking). Como a tag nunca existiu, o `if` abaixo apenas pulava e o
+    copiloto rodou sem contexto de sentimento, em silêncio.
+
+    Rotular aqui exigiria trazer os limiares do Config API para um caminho
+    fire-and-forget quente. A escala vai explícita no prompt porque um número sem
+    régua é pior que rótulo nenhum.
+    """
     ctx_parts = []
     if caller_nome:
         ctx_parts.append(f"Customer name: {caller_nome}")
     if motivo_contato:
         ctx_parts.append(f"Contact reason: {motivo_contato}")
-    if sentimento_categoria:
-        ctx_parts.append(f"Current sentiment: {sentimento_categoria}")
+    if sentimento_score is not None:
+        # `is not None`, não truthiness: score 0.0 é NEUTRO, um dado legítimo, e
+        # `if 0.0:` o descartaria — o mesmo erro de ler ausência em valor válido que
+        # este arquivo acabou de sofrer do outro lado.
+        ctx_parts.append(
+            f"Current sentiment score: {sentimento_score:+.2f} (scale -1.00 negative "
+            "to +1.00 positive)"
+        )
 
     ctx_block = "\n".join(ctx_parts) if ctx_parts else "No prior context available."
     msg_truncated = customer_message[:_MAX_MSG_LEN]
@@ -100,11 +117,13 @@ async def _read_context(
     redis: Any,
     tenant_id: str,
     session_id: str,
-) -> tuple[str | None, str | None, str | None]:
+) -> tuple[str | None, str | None, float | None]:
     """
     Reads relevant ContextStore fields for co-pilot analysis.
-    Returns (caller_nome, motivo_contato, sentimento_categoria).
+    Returns (caller_nome, motivo_contato, sentimento_score).
     Never raises.
+
+    Lê `session.sentimento.current` (score), não `…categoria` — ver `_build_user_prompt`.
     """
     try:
         key = f"{tenant_id}:ctx:{session_id}"
@@ -112,15 +131,26 @@ async def _read_context(
             key,
             "caller.nome",
             "caller.motivo_contato",
-            "session.sentimento.categoria",
+            "session.sentimento.current",
         )
-        caller_nome          = _read_ctx_value(raw[0]) if raw else None
-        motivo_contato       = _read_ctx_value(raw[1]) if raw else None
-        sentimento_categoria = _read_ctx_value(raw[2]) if raw else None
+        caller_nome      = _read_ctx_value(raw[0]) if raw else None
+        motivo_contato   = _read_ctx_value(raw[1]) if raw else None
+        sentimento_raw   = _read_ctx_value(raw[2]) if raw else None
+        try:
+            sentimento_score = float(sentimento_raw) if sentimento_raw is not None else None
+        except (TypeError, ValueError):
+            # Valor não-numérico na tag: provável escrita legada de `categoria` no
+            # campo errado. Descarta o SCORE, não o contato — mas loga, senão vira a
+            # degradação muda que este arquivo acabou de sair.
+            logger.warning(
+                "sentimento.current não é numérico (%r) tenant=%s session=%s — "
+                "copiloto segue sem sentimento", sentimento_raw, tenant_id, session_id,
+            )
+            sentimento_score = None
         return (
-            str(caller_nome)          if caller_nome          else None,
-            str(motivo_contato)       if motivo_contato       else None,
-            str(sentimento_categoria) if sentimento_categoria else None,
+            str(caller_nome)    if caller_nome    else None,
+            str(motivo_contato) if motivo_contato else None,
+            sentimento_score,
         )
     except Exception as exc:
         logger.debug("Failed to read ContextStore for copilot tenant=%s session=%s: %s", tenant_id, session_id, exc)
@@ -236,16 +266,16 @@ async def analyze_for_copilot(
 
     try:
         # 1. Read ContextStore context
-        caller_nome, motivo_contato, sentimento_categoria = await _read_context(
+        caller_nome, motivo_contato, sentimento_score = await _read_context(
             redis, tenant_id, session_id,
         )
 
         # 2. Build messages for LLM
         user_prompt = _build_user_prompt(
-            customer_message     = customer_message,
-            caller_nome          = caller_nome,
-            motivo_contato       = motivo_contato,
-            sentimento_categoria = sentimento_categoria,
+            customer_message = customer_message,
+            caller_nome      = caller_nome,
+            motivo_contato   = motivo_contato,
+            sentimento_score = sentimento_score,
         )
         messages = [{"role": "user", "content": user_prompt}]
 

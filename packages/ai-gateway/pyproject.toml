@@ -29,7 +29,17 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths    = ["src/plughub-ai-gateway/tests"]
+# ⚠️ CORRIGIDO 2026-08-02 — era `src/plughub-ai-gateway/tests`, com HÍFEN, enquanto o
+# pacote é `src/plughub_ai_gateway` (underscore, como declara `packages` abaixo).
+# O caminho não existia, então `pytest` abortava com "file or directory not found" e a
+# suíte INTEIRA deste pacote — 7 arquivos — nunca rodou.
+#
+# Por que passou despercebido: o resumo saía como `0 passed / 1 error`, e "1" parece um
+# teste quebrado, não uma suíte ausente. É o mesmo modo de falha dos 35 `skipped` de
+# 2026-08-02 — o número que denuncia é pequeno e a leitura natural é benigna.
+# Achado por `infra/test/report_suite_skips.sh`, que existe para tornar essa leitura
+# impossível.
+testpaths    = ["src/plughub_ai_gateway/tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/plughub_ai_gateway"]

@@ -2,6 +2,67 @@
 
 ---
 
+## Duas suítes que NUNCA rodaram — e um bug de produção escondido atrás delas ✅ (2026-08-02)
+
+Achado por `report_suite_skips.sh`, que reportava `ai-gateway 0 passou / 1 falhou` e
+`calendar-api 0 passou / 1 falhou`. **"1" se lê como um teste ruim; era a suíte inteira ausente** —
+130 e 63 testes. `pytest` aborta a coleta do pacote inteiro num único `ImportError`
+(`Interrupted: N error during collection`), então um arquivo quebrado esconde todos os outros.
+
+| Pacote | Causa | Consequência |
+|---|---|---|
+| ai-gateway | `testpaths = ["src/plughub-ai-gateway/tests"]` — **hífen**, pacote é `plughub_ai_gateway` | caminho inexistente; nenhum teste jamais coletado |
+| calendar-api | `httpx` ausente — `starlette.testclient` levanta na IMPORTAÇÃO | `test_router.py` derrubava a coleta e levava os outros 63 junto |
+
+### O bug de produção que só apareceu quando a suíte rodou
+
+`sentiment_emitter.write_context_store_sentiment` chamava **`_classify`, removido do módulo** —
+removido de propósito, porque classificar usa faixas configuráveis por tenant e é responsabilidade
+de quem LÊ (regra escrita em três lugares: cabeçalho do módulo, `platform-events.ts`, `CLAUDE.md`
+§ Sentiment Tracking). A chamada ficou para trás, **fora do `try`**, que começava 18 linhas abaixo.
+
+Efeito, e ele é maior que a tag perdida:
+- toda invocação levantava `NameError`, então **NENHUMA** tag era escrita — nem
+  `session.sentimento.current`, que nada tinha a ver com o problema;
+- o chamador engolia com `logger.warning("Sentiment pipeline failed …")` — mensagem que soa
+  intermitente para um defeito permanente;
+- as duas emissões anteriores (Kafka `sentiment.updated` + hash live no Redis) **sucediam**, então
+  o pipeline parecia funcionar;
+- `copilot_emitter` lia `session.sentimento.categoria`, recebia `None`, e o `if` simplesmente
+  pulava: **o copiloto rodou sem contexto de sentimento no prompt, sem log**.
+
+**Correção (decisão do usuário):** o emitter escreve só `current` (score); o `copilot_emitter` lê o
+score e o põe no prompt com a escala explícita (`-0.42 (scale -1.00 … +1.00)`). Rotular no gateway
+contradiria a regra; rotular na leitura exigiria trazer limiares do Config API para um caminho
+fire-and-forget quente. Usado `is not None` em vez de truthiness — score `0.0` é NEUTRO, e
+`if 0.0:` o descartaria, repetindo do outro lado o erro de confundir ausência com valor válido.
+`CLAUDE.md` corrigido (documentava as duas tags).
+
+### Os testes que a suíte ausente vinha protegendo de si mesma
+
+Com o `testpaths` corrigido: **121 passou / 9 falhou**. Só **1** era da fatia de hoje (assinatura do
+`_build_user_prompt`). As outras 8 afirmavam `category` no evento Kafka e contadores por faixa no
+hash live — campos removidos na mesma limpeza que levou o `_classify`. Não estavam vermelhas:
+estavam **inalcançáveis**. Invertidas em asserções de **ausência** (`"category" not in ev`,
+`"angry" not in mapping`): afirmar só o que sobrou deixaria a regressão passar. No hash live isso
+importa em dado real — tenant que rodou a versão antiga ainda tem `angry`/`satisfied` gravados, e
+recriá-los manteria vivo, no dado, um modelo que o código abandonou.
+
+`calendar-api`: fixture `_fake_calendar_row` não trazia `always_open`, coluna que entrou no schema e
+que `_row_to_calendar` lê — 4 testes de *timezone* quebrando por um campo que não é deles. `httpx`
+declarado em `[project.optional-dependencies].dev`, para a dependência viajar com o pacote em vez
+de depender de um `pip install` lembrado.
+
+**Placar:** ai-gateway 129/129, calendar-api 63/63.
+
+> **O padrão que se repetiu quatro vezes hoje** (registrado no `TODO.md` § Suítes vermelhas): dublê
+> que responde a uma APROXIMAÇÃO do que o código faz — substring do SQL, `str(args)`, lista de
+> comprimento fixo, fixture com "as colunas que o teste usa" — quebra quando o código muda de forma
+> legítima. Dublê responde à ESTRUTURA do argumento; fixture "mínima" é *todas as colunas que o
+> mapeamento lê*.
+
+---
+
 ## Fatia 3 quebrou 9 testes da analytics-api — e eu não rodei aquela suíte ✅ (2026-08-02)
 
 **O que aconteceu.** A entrada da fatia 3 diz "consumidores atualizados junto" e lista

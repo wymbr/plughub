@@ -131,32 +131,44 @@ async def write_context_store_sentiment(
     """
     Escreve o sentimento atual no ContextStore da sessão.
     Chave: {tenant_id}:ctx:{session_id}  (hash Redis)
-    Tags:
-      session.sentimento.current   → score numérico (-1.0 a 1.0)
-      session.sentimento.categoria → categoria textual (satisfied/neutral/frustrated/angry)
+    Tag:
+      session.sentimento.current → score numérico (-1.0 a 1.0)
+
+    **`session.sentimento.categoria` NÃO é escrita aqui (corrigido 2026-08-02).**
+    A classificação em satisfied/neutral/frustrated/angry usa faixas CONFIGURÁVEIS POR
+    TENANT e é feita na LEITURA, pelo consumidor — regra escrita em três lugares
+    independentes (o cabeçalho deste módulo, `platform-events.ts` e o `CLAUDE.md`
+    § Sentiment Tracking). O classificador canônico vive em
+    `analytics-api/sessions.py::_classify`; os limiares, no `config-api`.
+
+    Histórico, porque o modo de falha vale mais que o conserto: `_classify` foi
+    REMOVIDO deste módulo para fazer valer essa regra, e a chamada aqui ficou para trás.
+    Toda invocação levantava `NameError` — e a linha caía FORA do `try` abaixo, que
+    começava depois dela. O chamador (`session.py`) engolia com
+    `logger.warning("Sentiment pipeline failed …")`, mensagem que soa intermitente
+    quando o defeito era permanente; e como as duas emissões anteriores (Kafka + Redis
+    live) já haviam sucedido, o pipeline parecia funcionar. Resultado: NENHUMA das duas
+    tags chegava ao ContextStore, incluindo `current`, que nada tinha a ver com o
+    problema. O `copilot_emitter` lia `categoria` e degradava sem log.
+
+    Só foi encontrado porque o `testpaths` deste pacote apontava para um diretório
+    inexistente (hífen × underscore) — a suíte inteira nunca rodou.
 
     Convenções de ContextEntry:
       confidence: 0.80 — inferência do AI Gateway (não é dado declarado pelo cliente)
       source:     "ai_inferred:sentiment_emitter"
       visibility: "agents_only" — não é exposto ao cliente
 
-    Fire-and-forget: nunca levanta exceção.
+    Fire-and-forget: nunca levanta exceção — e agora isso é verdade, porque não há
+    computação fora do `try`.
     """
     if redis is None:
         return
-    key      = f"{tenant_id}:ctx:{session_id}"
-    category = _classify(score)
-    now      = datetime.now(timezone.utc).isoformat()
+    key = f"{tenant_id}:ctx:{session_id}"
+    now = datetime.now(timezone.utc).isoformat()
 
     entry_current = json.dumps({
         "value":      round(score, 4),
-        "confidence": 0.80,
-        "source":     "ai_inferred:sentiment_emitter",
-        "visibility": "agents_only",
-        "updated_at": now,
-    })
-    entry_category = json.dumps({
-        "value":      category,
         "confidence": 0.80,
         "source":     "ai_inferred:sentiment_emitter",
         "visibility": "agents_only",
@@ -166,10 +178,7 @@ async def write_context_store_sentiment(
     try:
         await redis.hset(
             key,
-            mapping={
-                "session.sentimento.current":   entry_current,
-                "session.sentimento.categoria": entry_category,
-            },
+            mapping={"session.sentimento.current": entry_current},
         )
         # Renew TTL on the session context hash
         await redis.expire(key, _CTX_SESSION_TTL)
