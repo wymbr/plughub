@@ -823,7 +823,45 @@ e o `status` no registro da instância dizem.
 
 ---
 
-## Varrer o `REDIS_URL` de leitura única nos DEMAIS pacotes *(aberto — 2026-08-02)*
+## Suítes VERMELHAS fora do routing-engine — ~58 testes *(aberto — 2026-08-02)*
+
+Achado por `infra/test/report_suite_skips.sh`, que foi escrito para contar SKIPS e acabou expondo
+FALHAS. Medição de 2026-08-02, cada suíte dentro do próprio container:
+
+| Pacote | passou | falhou | Observação |
+|---|---:|---:|---|
+| routing-engine | 207 | 0 | |
+| orchestrator-bridge | 55 | 0 | |
+| rules-engine | 27 | 0 | |
+| analytics-api | 517 | **2** | `TestPoolPrincipalAuth` — ver abaixo |
+| channel-gateway | 628 | **22** | |
+| evaluation-api | 192 | **14** | |
+| pricing-api | 32 | **7** | |
+| config-api | 24 | **3** | |
+| ai-gateway | 0 | **1** | `0 passou` ⇒ cheira a ERRO DE COLETA (import), não a um teste ruim |
+| calendar-api | 0 | **1** | idem |
+
+**11 pacotes saíram INCONCLUSIVO** (caminho ≠ `/app/packages/<nome>`, ou serviço fora do ar):
+session-replayer, workflow-api, auth-api, quality-ingest, quality-export, usage-aggregator,
+scheduler-api, dialog-api, mailing-api, clickhouse-consumer, conversation-writer. **Não são "zero
+falha"** — o script sai com código 2 por isso. Fechar o mapeamento serviço↔caminho é parte do item.
+
+**As 2 da analytics-api** (`test_open_access_does_not_bypass_pool_scoping`,
+`test_valid_jwt_with_pools_restricts`) falham também em `HEAD~1`, são de JWT/pool-scoping e batem
+com o requisito de `PLUGHUB_AUTH_JWT_SECRET` no container. Confirmar com
+`docker compose … exec -T analytics-api sh -lc 'echo $PLUGHUB_AUTH_JWT_SECRET'` antes de tratá-las
+como defeito de código: se a variável não estiver definida, é ambiente de teste, e a correção é o
+compose — mas então o teste deveria se declarar INCONCLUSIVO em vez de falhar.
+
+**Como abordar, e a ordem importa.** Começar por `ai-gateway` e `calendar-api`: `0 passou / 1 falhou`
+é assinatura de coleta quebrada, o que significa que a suíte inteira daqueles pacotes **não roda** —
+o mesmo modo de falha dos 35 skips, com outra roupa. Depois os volumosos. **Não presumir
+pré-existência de nenhuma:** o método que separa é `git checkout <commit> -- <pacote>` + rebuild,
+nunca `git stash` (que não desfaz commit — erro cometido nesta sessão).
+
+---
+
+## Varrer o `REDIS_URL` de leitura única nos DEMAIS pacotes ✅ *(2026-08-02 — classe fechada)*
 
 **Resolvido no `routing-engine`, e medido:** `test_instance_semaphore.py` (24) e
 `test_human_instance_identity.py` (11) pulavam inteiros no container por lerem só `REDIS_URL` (ver
@@ -833,20 +871,31 @@ alegou tê-lo validado; o que faltava era a suíte rodar onde o serviço roda. N
 que ela rodou durante aquelas validações — isso segue sem dado —, mas não há vermelho latente, que
 era o risco material.
 
-**Varredura estática feita (2026-08-02).** No repositório inteiro existe **um único** outro arquivo
-de teste com o padrão: `orchestrator-bridge/.../tests/test_restore_instance_patch.py:35` —
-`os.environ.get("REDIS_URL", "redis://redis:6379")`. Ele provavelmente NÃO sofre do defeito, e o
-motivo importa: o default é o **hostname do compose**, não `localhost`, e o serviço dele
-(`orchestrator-bridge/main.py:76`) também lê `REDIS_URL` cru. Teste e serviço leem a mesma variável.
+**Varredura estática feita (2026-08-02) — a causa específica está essencialmente fechada.** No
+repositório inteiro só **13 arquivos** usam `pytest.skip`/`skipif`: 12 no `routing-engine` (todos com
+dual-read, mais a guarda) e **um** no `orchestrator-bridge`
+(`tests/test_restore_instance_patch.py:35`). Este último provavelmente não sofre do defeito, e o
+motivo importa: o default é `redis://redis:6379` — o **hostname do compose**, não `localhost` — e o
+serviço dele (`main.py:76`) também lê `REDIS_URL` cru. Teste e serviço leem a mesma variável.
 
-**Confirmar com o dado, não com a leitura** (é barato, e "provavelmente" não é medição):
+**Mas skip em massa não é só `REDIS_URL`.** O sintoma pode vir de ClickHouse, Postgres, marker
+esquecido. Escrito `infra/test/report_suite_skips.sh`: roda cada suíte DENTRO do próprio container e
+reporta passou/pulou/falhou por pacote, com INCONCLUSIVO (e saída ≠ 0) para quem não mediu —
+porque "não rodou" não pode se apresentar como "zero skip", que é o defeito original um nível acima.
 
 ```bash
-docker compose -f docker-compose.demo.yml exec -T orchestrator-bridge sh -lc \
-  'pip install -q pytest pytest-asyncio && cd /app/packages/orchestrator-bridge && \
-   python -m pytest -p no:cacheprovider -q src -rs 2>&1 | tail -20'
-#   skip com razão "Redis indisponível" ⇒ mesmo defeito, outro endereço.
+bash infra/test/report_suite_skips.sh              # todos os pacotes
+bash infra/test/report_suite_skips.sh orchestrator-bridge   # só o candidato conhecido
 ```
+
+**MEDIDO (2026-08-02): ZERO skips em todos os pacotes que rodaram** — routing-engine 207/0,
+orchestrator-bridge 55/0, rules-engine 27/0, analytics-api 517/0, channel-gateway 628/0,
+evaluation-api 192/0, config-api 24/0, pricing-api 32/0. O candidato conhecido (bridge) está limpo:
+o default dele (`redis://redis:6379`) resolve dentro do compose, como a leitura estática previa.
+**A classe `REDIS_URL` está fechada.**
+
+O que a varredura entregou de sobra foi outra coisa — **~58 testes VERMELHOS** em seis pacotes, e 11
+pacotes que não mediram. Item próprio acima ("Suítes VERMELHAS fora do routing-engine").
 
 ### A raiz: os serviços discordam do NOME da variável
 

@@ -2,6 +2,43 @@
 
 ---
 
+## Fatia 3 quebrou 9 testes da analytics-api — e eu não rodei aquela suíte ✅ (2026-08-02)
+
+**O que aconteceu.** A entrada da fatia 3 diz "consumidores atualizados junto" e lista
+`reports_query.py`. Atualizei o produtor e o leitor; **nunca rodei a suíte do pacote.** As 9
+falhas só apareceram porque `report_suite_skips.sh` — escrito para outra coisa, contar skips —
+passou por lá.
+
+**A causa é a parte que ensina.** `test_pools_occupancy_bucket.py` usa um cliente ClickHouse falso
+que despacha por **substring do SQL**: `if "GROUP BY bucket, pool_id" in sql and "admitted" in sql`
+identificava a série por pool. A fatia 3 renomeou o marcador `__shared__` → **`__admitted_ai__`**,
+e o literal do marcador **contém a substring do discriminador**. A query de admissão passou a cair
+no ramo errado, recebeu as colunas da outra query (`peak_concurrency`/`capacity` em vez de
+`used`/`cap`), e o `KeyError` derrubou os NOVE testes do arquivo — inclusive os que não falam de
+admissão.
+
+> **Dublê que despacha por substring acopla-se a VALORES do SQL, não só à forma dele.** Renomear um
+> literal vira falha em cascata num arquivo que não trata do assunto. Discriminador passou a ser
+> `AS admitted` — alias de projeção, que só existe na série por pool e que nenhum literal contém.
+
+**Segundo conserto no mesmo arquivo:** `test_capacity_marker_rows_are_excluded_from_the_pool_series`
+filtrava queries contendo `'__reserved__'`, literal que não existe mais. Ele teria seguido VERDE por
+vacuidade — o filtro casaria tudo, sem separar nada. Trocado por `'__admitted_ai__'`.
+
+**Erro de método, registrado porque quase virou conclusão.** Para saber se as falhas eram minhas usei
+`git stash` — que só guarda o que NÃO está commitado, e o commit já existia. Rodei o mesmo código
+duas vezes e li "11 failed" nas duas como prova de pré-existência. O reverso correto de um commit é
+`git checkout HEAD~1 -- <pacote>`. Feito assim: **HEAD~1 → 2 failed / 517 passed**, HEAD com o teste
+antigo → 11, HEAD com o teste corrigido → 2. As 9 eram minhas.
+
+**As 2 que sobram são anteriores:** `TestPoolPrincipalAuth::test_open_access_does_not_bypass_pool_scoping`
+e `::test_valid_jwt_with_pools_restricts`. Falham em `HEAD~1` também, são de JWT/pool-scoping (caminho
+não tocado) e batem com o requisito conhecido de `PLUGHUB_AUTH_JWT_SECRET` no container. *Ressalva: o
+build de `HEAD~1` reaproveitou camada `CACHED`, então aquele run é evidência de apoio, não prova
+isolada — o argumento que sustenta é o do caminho não tocado.* Ver `TODO.md`.
+
+---
+
 ## Capacidade e licenças — fatia 3: a admissão parou de somar as moedas ✅ (2026-08-02)
 
 **O defeito B, e por que ele era o único do arco que recusava contato real.** A admissão gateava

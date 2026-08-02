@@ -13,6 +13,12 @@ pools** — a Analytics exibiria um pool chamado `__capacity_human__`, com o `he
 a `utilization` calculados em cima. Ninguém viu porque nenhum teste olhava a lista de
 pools do relatório, e na tela um pool a mais entre 44 não salta aos olhos.
 
+**Nomenclatura pós-fatia 3 (2026-08-02).** Os marcadores de admissão viraram
+`__admitted_ai__` + `__buffer__`; `__shared__` e `__reserved__` mediam os baldes de
+sessão do pote misto e saíram com eles. Duas âncoras deste arquivo dependiam dos nomes
+antigos e precisaram acompanhar — ver os comentários no `_FakeClient` e no filtro de
+`test_capacity_marker_rows_are_excluded_from_the_pool_series`.
+
 Testes de unidade sobre `_fetch_pools_occupancy` com um cliente ClickHouse FALSO que
 captura o SQL. O que se julga é a query construída — não há Redis nem CH aqui.
 """
@@ -38,7 +44,20 @@ class _FakeClient:
 
     def query(self, sql: str, parameters=None):
         self.queries.append(sql)
-        if "GROUP BY bucket, pool_id" in sql and "admitted" in sql:
+        # ⚠️ DISCRIMINADOR: `AS admitted`, não `admitted` solto.
+        #
+        # O dublê despacha por SUBSTRING do SQL, e em 2026-08-02 a fatia 3 renomeou o
+        # marcador de admissão `__shared__` → `__admitted_ai__` — que CONTÉM
+        # "admitted". A query de admissão passou a casar este primeiro ramo, recebeu as
+        # colunas da série por pool (`peak_concurrency`/`capacity`) em vez das suas
+        # (`used`/`cap`), e o `KeyError` derrubou os NOVE testes do arquivo, inclusive
+        # os que não têm nada com admissão.
+        #
+        # A lição não é sobre este teste: **dublê que despacha por substring acopla-se
+        # a VALORES do SQL, não só à forma dele** — renomear um literal vira falha em
+        # cascata num arquivo que não fala do assunto. `AS admitted` é um alias de
+        # projeção: só aparece na série por pool, e nenhum literal o contém.
+        if "GROUP BY bucket, pool_id" in sql and "AS admitted" in sql:
             return _FakeResult(
                 [[datetime(2026, 8, 2, 19, 15), "retencao_humano", 2, 3, 0]],
                 ["bucket", "pool_id", "peak_concurrency", "capacity", "admitted"],
@@ -109,9 +128,13 @@ def test_capacity_marker_rows_are_excluded_from_the_pool_series():
     PREFIXO cobre também o próximo marcador que alguém adicionar sem lembrar do `WHERE`.
     """
     client = _run("hour")
+    # O filtro exclui as queries que LEEM marcador. `'__reserved__'` saiu do código na
+    # fatia 3 e foi substituído por `'__admitted_ai__'`; manter o literal morto aqui
+    # deixaria o filtro passando por vacuidade — ele casaria tudo, e o teste seguiria
+    # verde sem separar o que se propõe a separar.
     pool_qs = [q for q in client.queries
                if "AS peak_concurrency" in q and "'__total__'" not in q
-               and "'__reserved__'" not in q]
+               and "'__admitted_ai__'" not in q]
     assert pool_qs, "nenhuma query por pool foi construída"
     for q in pool_qs:
         assert "NOT startsWith(pool_id, '__')" in q, (
