@@ -48,9 +48,19 @@ for pkg in "${PKGS[@]}"; do
     printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - "serviço não responde a exec"
     INCONCL=$((INCONCL + 1)); continue
   fi
-  WD="/app/packages/$pkg"
-  if ! $DC exec -T "$pkg" sh -lc "[ -f '$WD/pyproject.toml' ]" >/dev/null 2>&1; then
-    printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - "sem pyproject em $WD (TS? caminho outro?)"
+
+  # DESCOBRIR o diretório, não SUPOR. A 1ª versão assumia `/app/packages/<nome>` — o
+  # padrão do routing-engine — e marcou 6 pacotes como "sem pyproject" quando o
+  # Dockerfile deles copia o pacote direto em `/app` (ex.: quality-ingest). Supor o
+  # caminho transformava "não sei medir" em "não mediu", que é o mesmo defeito que este
+  # relatório existe para caçar, cometido pelo próprio relatório.
+  WD="$($DC exec -T "$pkg" sh -lc '
+        for d in "/app/packages/'"$pkg"'" /app /app/src; do
+          [ -f "$d/pyproject.toml" ] && { echo "$d"; exit 0; }
+        done
+        exit 1' 2>/dev/null | tr -d '\r')"
+  if [ -z "$WD" ]; then
+    printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - "pyproject não encontrado (TS? outro layout?)"
     INCONCL=$((INCONCL + 1)); continue
   fi
 
@@ -63,7 +73,32 @@ for pkg in "${PKGS[@]}"; do
   S=$(printf '%s' "$OUT" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | tail -1)
   F=$(printf '%s' "$OUT" | grep -oE '[0-9]+ (failed|error)' | grep -oE '[0-9]+' | tail -1)
   if [ -z "$P$S$F" ]; then
-    printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - "sem linha-resumo: ${OUT##*$'\n'}"
+    # Zero testes coletados NA IMAGEM tem DUAS causas, e confundi-las custa caro:
+    #   · o repositório não tem teste nenhum (dívida de cobertura), ou
+    #   · o teste EXISTE e o Dockerfile não o copia (suíte invisível — o mesmo defeito
+    #     do `ai-gateway`, com outro mecanismo).
+    # Este script roda da raiz do repo, então pode conferir o disco e responder qual das
+    # duas é. Sem essa checagem ele afirmaria "SEM SUÍTE" para pacotes bem cobertos —
+    # exatamente o erro de ler ausência-de-visão como ausência-de-fato que ele persegue.
+    # Medido 2026-08-02: auth-api, session-replayer e usage-aggregator TÊM testes no
+    # repo e nenhum na imagem; dialog-api, scheduler-api e mailing-api não têm nenhum.
+    if printf '%s' "$OUT" | grep -qE 'no tests ran|warning[s]? in'; then
+      # `wc -l`, NÃO `grep -c . || echo 0`: com zero linhas o `grep -c` imprime "0" E
+      # sai com 1, então o `||` acrescentava um SEGUNDO "0" e a variável virava "0\n0"
+      # — `[ "0\n0" -gt 0 ]` erra com "integer expression expected". A classificação
+      # ainda saía certa por acidente (o `[` falho cai no `else`), que é o pior tipo de
+      # bug: ruidoso no terminal e correto no resultado, portanto fácil de ignorar.
+      N_REPO=$(find "packages/$pkg" -name 'test_*.py' 2>/dev/null | wc -l | tr -d ' ')
+      if [ "${N_REPO:-0}" -gt 0 ]; then
+        printf '%-24s %8s %8s %8s   %s\n' "$pkg" 0 0 0 \
+          "❌ SUÍTE INVISÍVEL — $N_REPO arquivo(s) no repo, 0 na imagem (Dockerfile não copia?)"
+      else
+        printf '%-24s %8s %8s %8s   %s\n' "$pkg" 0 0 0 \
+          "⚠️  SEM SUÍTE — nenhum test_*.py no repositório"
+      fi
+    else
+      printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - "sem linha-resumo: ${OUT##*$'\n'}"
+    fi
     INCONCL=$((INCONCL + 1)); continue
   fi
 

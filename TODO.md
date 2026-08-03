@@ -852,6 +852,94 @@ pedido, alias de projeção em vez de substring solta), nunca a uma serializaç�
 
 ---
 
+## Zero testes coletados em 6 pacotes — e são DOIS defeitos diferentes *(aberto — 2026-08-02)*
+
+Os seis respondiam `1 warning in 0.00s` (pytest coletando ZERO testes). Conferindo o repositório,
+a causa se parte em duas — e confundi-las teria produzido a conclusão errada nos dois lados:
+
+### (a) SUÍTE INVISÍVEL — o teste existe e a imagem não o copia · **MEDIDAS 2026-08-02**
+
+| Pacote | Arquivos | Resultado ao rodar |
+|---|---:|---|
+| **session-replayer** | 3 | ✅ **43 passou** em 0,17 s |
+| **usage-aggregator** | 1 | ✅ **11 passou** em 0,18 s |
+| **auth-api** | 1 (58 testes) | ⚠️ **35 passou / 23 falhou** — diagnóstico abaixo |
+
+As duas primeiras estavam verdes: suítes mantidas que nunca rodavam, e o código acompanhou.
+**Isso é sorte, não garantia** — ninguém saberia se tivesse apodrecido, que foi o caso do
+`ai-gateway`.
+
+#### auth-api: dois defeitos empilhados, ambos invisíveis pela mesma razão
+
+**1. A suíte não TERMINAVA (corrigido).** O `lifespan` ganhou `ensure_permissions_schema` e
+`_register_platform_modules`, e a fixture não os mockava. `ensure_permissions_schema` roda DENTRO do
+laço de 10 tentativas (`main.py:138-149`), falha contra o pool falso e dorme `2 × attempt` a cada
+uma: **110 s por teste**, fixture em escopo de função, 58 testes. Não era erro — era **lentidão**, e
+lentidão não tem cor no relatório. Com os `patch` acrescentados: 12,5 s a suíte inteira.
+
+**2. Os 23 vermelhos são TESTE DESATUALIZADO, não defeito de código.** Os testes mandam
+`x-admin-token`; os endpoints migraram para **Bearer + ABAC `config.usuarios`** em 2026-06-26
+(G-PROBE, comentário em `router.py:62-66` — *"Strict: sem fallback de admin-token"*). Sem header
+`Authorization`, `_bearer_claims` devolve **401**, que é exatamente o que as asserções relatam
+(`assert 401 == 404`, `== 204`, …). A decisão de produto está documentada e o código a cumpre.
+
+**Receita do conserto** (mecânico, 23 testes): trocar
+`headers={"x-admin-token": "test-admin-token"}` por `headers={"Authorization": f"Bearer {tok}"}`,
+onde `tok` vem de um `_access_token()` que inclua o claim ABAC —
+`module_config={"config": {"usuarios": {"access": "read_write"}}}`. Atenção: `_check_config_field`
+é **grant-first** (ausência = deny), então token sem o claim dá **403**, não 401 — e um teste que
+aceite "não-2xx" passaria pelos dois motivos errados. Vale um caso negativo explícito por status:
+sem Bearer → 401; com Bearer e sem o campo → 403.
+
+**Enquanto não for feito, a suíte não roda no container** (o `Dockerfile` copia só `src/`, o
+`testpaths` é `["tests"]`): o `report_suite_skips.sh` a marca como SUÍTE INVISÍVEL.
+
+**É o mesmo defeito do `ai-gateway`, com outro mecanismo:** lá o `testpaths` apontava para um
+caminho inexistente; aqui o `Dockerfile` copia só `src/` e o `testpaths` é `["tests"]`, na raiz do
+pacote. O resultado é idêntico — suíte que existe, é mantida, e **nunca roda**. E são justamente
+auth, replay de avaliação e metering: os três lugares onde um defeito silencioso custa mais.
+
+*Correções possíveis:* copiar `tests/` na imagem (simples, engorda a imagem de runtime), ou rodar a
+suíte destes pacotes fora do container (host/CI, com as deps de dev). A segunda é provavelmente a
+certa — teste não precisa viajar na imagem de produção —, mas então **o `report_suite_skips.sh`
+precisa saber disso**, senão volta a marcar os três como zero e a mentira só muda de lugar.
+
+### (b) SEM SUÍTE — não há teste nenhum no repositório
+
+`dialog-api`, `scheduler-api` e `mailing-api`. Os três declaram `[tool.pytest.ini_options]` com
+`testpaths` apontando para um diretório que não existe: **a config de teste existe, a suíte não.**
+É a forma mais educada de aparentar cobertura.
+
+Não é dívida cosmética — os três guardam regra própria e recente:
+
+**Não é dívida cosmética.** Os três guardam lógica de arco recente e com regra própria:
+
+| Serviço | O que não tem teste |
+|---|---|
+| `dialog-api` (3760) | store canônico do `DialogForm` — versionamento draft/published, i18n `LocalizedText`, `capture`/`validation` |
+| `scheduler-api` (3650) | recorrência (daily/weekly/monthly + `times[]`), `business_day_policy` via calendar-api, re-arme no disparo, ledger de `AgendaDispatch` |
+| `mailing-api` (3660) | `campaign_drain` com `FOR UPDATE SKIP LOCKED`, elegibilidade em camadas (opt-out → janela → fadiga), `column_map` do importador |
+
+O `campaign_drain` e o `contact_eligibility_check` são os que eu atacaria primeiro: claim atômico e
+precedência de regra são exatamente onde um defeito é silencioso e caro (contatar quem pediu para
+não ser contatado, ou drenar a mesma entrada duas vezes).
+
+**Antes de escrever teste, medir o que os smokes já cobrem:** existem
+`smoke_outbound_fase{1,2,2b,3a,3b,4,5a,5b}.sh` e `smoke_scheduled_promote.sh`. Eles exercitam o
+caminho ponta a ponta, mas por API — não separam regra de plumbing, e não reprovam por unidade.
+A pergunta a responder é *qual regra some sem nada ficar vermelho*, não *quantos testes faltam*.
+
+### Ordem sugerida, e por quê
+
+1. **(a) primeiro** — são três suítes prontas e mantidas que só precisam RODAR. Custo quase zero,
+   e podem estar vermelhas há meses (o `ai-gateway` estava, e escondia um bug de produção).
+2. **(b) depois**, começando por `mailing-api`: `campaign_drain` (claim atômico com
+   `FOR UPDATE SKIP LOCKED`) e `contact_eligibility_check` (precedência opt-out → janela → fadiga).
+   Claim e precedência são onde o defeito não produz erro, produz **comportamento** — contatar quem
+   pediu para não ser contatado, ou drenar a mesma entrada duas vezes.
+
+---
+
 ## Suítes vermelhas — os 4 pacotes restantes *(aberto — 2026-08-02)*
 
 Achado por `infra/test/report_suite_skips.sh`, que foi escrito para contar SKIPS e acabou expondo

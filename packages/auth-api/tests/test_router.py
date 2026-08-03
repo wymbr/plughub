@@ -94,12 +94,31 @@ def mock_pool():
 
 @pytest.fixture()
 def client(mock_pool):
-    """TestClient com pool injetado e seed suprimido."""
+    """TestClient com pool injetado e seed suprimido.
+
+    **Todo I/O do lifespan tem de ser mockado — inclusive o que foi acrescentado
+    depois (corrigido 2026-08-02).** `ensure_permissions_schema` e
+    `_register_platform_modules` entraram no `lifespan` sem entrar aqui, e o efeito não
+    foi erro: foi LENTIDÃO. `ensure_permissions_schema` roda DENTRO do laço de 10
+    tentativas (`main.py:138-149`), falha contra o pool mockado, e cada tentativa dorme
+    `2 × attempt` — 2+4+…+20 = **110 s por teste**, com a fixture em escopo de função e
+    58 testes. A suíte deixou de terminar.
+
+    Ninguém percebeu porque esta suíte **não roda no container**: o `Dockerfile` copia
+    só `src/` e o `testpaths` é `["tests"]`, na raiz do pacote. Suíte mantida, nunca
+    executada — o mesmo desfecho do `ai-gateway`, com outro mecanismo.
+
+    **Regra:** ao acrescentar qualquer `await` ao `lifespan`, acrescentar o `patch`
+    correspondente aqui. Um lifespan que faz I/O real num teste de unidade não falha —
+    ele fica lento, e lentidão não tem cor no relatório.
+    """
     app = build_app()
 
     # Injeta pool no state ANTES do lifespan completar
     with patch("plughub_auth_api.main.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)), \
          patch("plughub_auth_api.main.db_mod.ensure_schema", new=AsyncMock()), \
+         patch("plughub_auth_api.main.ensure_permissions_schema", new=AsyncMock()), \
+         patch("plughub_auth_api.main._register_platform_modules", new=AsyncMock()), \
          patch("plughub_auth_api.main.db_mod.seed_admin_if_absent", new=AsyncMock(return_value=False)), \
          patch("plughub_auth_api.router.get_settings", return_value=TEST_SETTINGS), \
          patch("plughub_auth_api.main.get_settings", return_value=TEST_SETTINGS):

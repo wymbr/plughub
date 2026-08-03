@@ -2,6 +2,46 @@
 
 ---
 
+## Varredura de suítes: 4 pacotes destravados, 1.131 testes verdes ✅ (2026-08-02)
+
+Continuação do achado das suítes ausentes. `report_suite_skips.sh` ganhou duas correções que
+mudaram o diagnóstico de 8 pacotes:
+
+1. **Descobrir o `WORKDIR` em vez de supor.** Assumia `/app/packages/<nome>` (padrão do
+   routing-engine); vários Dockerfiles copiam o pacote direto em `/app`. Seis pacotes apareciam como
+   "sem pyproject" — *supor o caminho transformava "não sei medir" em "não mediu"*, que é o defeito
+   que o relatório existe para caçar, cometido por ele.
+2. **Separar "sem suíte" de "suíte invisível".** Zero testes coletados na imagem tem duas causas
+   opostas: não há teste no repositório, ou há e o `Dockerfile` não o copia. O script roda da raiz,
+   então confere o disco e responde qual. Sem isso marcaria como "SEM SUÍTE" três pacotes bem
+   cobertos — lendo ausência-de-visão como ausência-de-fato.
+
+**Resultado das três suítes invisíveis:** `session-replayer` **43/43**, `usage-aggregator` **11/11**,
+`auth-api` 35/58. As duas primeiras estavam verdes — mantidas, nunca executadas, e o código
+acompanhou. É sorte: no `ai-gateway` a mesma situação escondia um bug de produção.
+
+**auth-api — a suíte não terminava.** O `lifespan` ganhou `ensure_permissions_schema` e
+`_register_platform_modules` sem que a fixture os mockasse. O primeiro roda dentro do laço de 10
+tentativas e dorme `2 × attempt` a cada falha: **110 s por teste**, escopo de função, 58 testes.
+*Não era erro — era lentidão, e lentidão não tem cor no relatório.* Com os `patch`: **12,5 s**.
+Os 23 vermelhos que sobram são **teste desatualizado** (mandam `x-admin-token`; os endpoints
+migraram para Bearer+ABAC em 2026-06-26), com receita de conserto no `TODO.md`.
+
+**Placar medido:** 10 pacotes verdes / 1.131 testes · 5 vermelhos / 48 falhas · 3 sem suíte
+(`dialog-api`, `scheduler-api`, `mailing-api`) · 2 sem `exec`.
+
+> **O padrão do dia, sexta ocorrência:** toda fixture congela uma foto do que o código fazia quando
+> ela foi escrita — colunas da tabela, formato do SQL, número de chaves do `mget`, `await`s do
+> `lifespan`, cabeçalho de autenticação. Nenhuma delas falhou por estar errada; falharam por o
+> código ter andado. E nenhuma foi notada, porque a suíte que as continha não rodava.
+
+*Nota de método, minha:* dois travamentos do laço de verificação foram diagnosticados como "`pip`
+sem rede" antes de eu lembrar que **`docker compose exec` consome stdin** — está na memória do
+projeto e no `measure_capacity_licensing_baseline.sh`, com comentário. O custo não foi o erro, foi o
+diagnóstico errado que ele induziu.
+
+---
+
 ## Duas suítes que NUNCA rodaram — e um bug de produção escondido atrás delas ✅ (2026-08-02)
 
 Achado por `report_suite_skips.sh`, que reportava `ai-gateway 0 passou / 1 falhou` e
