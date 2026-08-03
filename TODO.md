@@ -190,11 +190,54 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 
 | # | Lacuna | Evidência |
 |---|---|---|
-| 2 | **Não há reaper de `claim_lease`** | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ o docstring que **afirmava** existir heartbeat + auto-release foi corrigido (`registry.py:82`). A Camada F **não** o mediu (a sonda observou a chave de outra sessão); **agora há instrumento**: o estado `orphaned` do relatório de pendências é exatamente esta condição — item de pool pull fora do ZSET e sem lease. ✅ **instrumento CALIBRADO em 2026-07-31** (smoke 14/14 — a condição foi vista acontecer, não só o classificador lido). Decidir o reaper só depois de ver o volume **em uso normal**, que ainda não se mediu |
+| 2 | **Não há reaper de `claim_lease`** — ~~vaga presa~~ ✅ **2026-08-03**; janela de invisibilidade SEGUE ABERTA | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ docstring do heartbeat inexistente corrigido (2026-07-30) — e **corrigido de novo em 2026-08-03**, porque o substituto afirmava outra rede que também não existe (ver § abaixo). Instrumento: estado `orphaned` do relatório de pendências, ✅ **CALIBRADO em 2026-07-31** (smoke 14/14). **O que fechou:** a VAGA, que nunca voltava — ver § "Lacuna 2 — o que fechou e o que não" |
 | 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
 | 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
 | 6 | **`close_reason` de segmento não tem enum** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. Hoje quem enumera o domínio o descobre por arqueologia |
+
+### Lacuna 2 — o que fechou e o que não *(2026-08-03)*
+
+O item pedia *"volume antes de decidir o reaper"*. A leitura de código achou algo que não
+depende de volume, e por isso não esperou por ele: **a vaga nunca voltava**.
+
+**Sequência real, medida no código** (wrap-up default, `timeout_hours` 24 h):
+
+| t | O que acontece |
+|---|---|
+| 0 | claim: `ZREM` da fila · vaga ocupada no semáforo · lease com TTL **180 s** · bridge abre o segmento |
+| 180 s | a lease expira e **nada reage** — sem reaper, sem heartbeat. Item invisível a todos, vaga ocupada, segmento aberto. `work_task_holder` passa a falhar ABERTO |
+| 24 h | o scanner do channel-gateway dispara `work_task_expire` → limpa ZSET/JSON/lease; o bridge fecha o segmento com `acw_expired` |
+
+**O defeito:** o `work_task_expire` derivava o dono da vaga **da lease** — exatamente o que já
+expirou no cenário que o motiva (~480× de diferença entre os dois prazos). `instance_id` saía
+vazio, `release_instance` não era chamado, e cada claim abandonado subtraía uma vaga do agente
+**até o SET inteiro expirar**. Não era frequência, era aritmética.
+
+**E o docstring mentia duas vezes.** `_claim_lease_key` dizia *"com a vaga ocupada até o reap de
+ocupantes órfãos passar"* — e o `reap_stale_occupants` só remove ocupante cuja sessão tenha
+`session:{sid}:closed`. Num claim abandonado o delegate está **suspenso** e a sessão está
+**aberta**: o reap passa ao lado e nunca a toca. Não havia "até". *A nota anterior (07-30) já
+havia corrigido um heartbeat inexistente e o substituiu por uma segunda rede inexistente —
+correção pela metade é mais cara que o erro, porque ganha data recente e passa por conferida.*
+
+**✅ Fechado (fix 2a):** `work_task_expire` consulta a lease primeiro e, faltando ela, acha o
+ocupante pelo semáforo (`find_occupant_instance`). O que tornou isso seguro foi a **F1**: o membro
+leva o pool no 3º campo, então a busca discrimina `(sessão, pool)` e devolve `None` — com log —
+quando o único ocupante daquela sessão pertence a outro pool, que era o risco usado para justificar
+depender só da lease. Qual via respondeu vai no log e em `claimed_via`. `was_claimed` deixou de
+reportar `False` para item que FOI reivindicado. Testes: 2 novos em `test_pull_release_snapshot.py`
+(213 na suíte) + `infra/test/mutation_claim_lease_slot.sh` (M1 e M2, 6 atribuições).
+
+**❌ Segue aberto (2b): a janela de invisibilidade.** Entre os 180 s e o prazo do item, o trabalho
+está fora do ZSET e **nem o próprio dono consegue retomá-lo**. Um reaper que re-enfileirasse
+fecharia isso, mas precisa de política decidida antes do código: re-enfileirar preserva o
+`assigned_to`? quantas vezes, antes de virar transbordo? E aí sim vale o número — que o estado
+`orphaned` do Monitor › Pendências mede, dentro da janela de 25 h do ledger.
+
+> **A regra que este caso deixa:** *posse de um item de trabalho não pode morar só numa chave cujo
+> TTL é menor que o prazo do próprio item.* Quando mora, o caminho de limpeza chega sempre depois
+> da testemunha, e a limpeza fica incompleta **sem nada ficar vermelho**.
 
 ### Timeouts ainda constantes no caminho da I5 *(arco de consolidação de config)*
 

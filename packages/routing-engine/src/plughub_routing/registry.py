@@ -92,13 +92,21 @@ def _claim_lease_key(tenant_id: str, pool_id: str, session_id: str) -> str:
     ATENÇÃO — a lease é escrita UMA vez (`work_task_claim`) e apagada no release
     explícito ou no re-parque. **Não há heartbeat que a renove nem reaper que a
     colete**: ela expira passivamente no Redis e ninguém repara nisso. Item
-    reivindicado e abandonado fica fora da fila, sem lease, com a vaga do agente
-    ocupada até o reap de ocupantes órfãos passar.
+    reivindicado e abandonado fica fora da fila, sem lease, e **invisível aos outros
+    agentes até o prazo do ITEM** (`work_task_expire`), que é ~480× este TTL no
+    default de wrap-up (180 s × 24 h). Essa janela é a **lacuna 2** e segue aberta.
 
-    *(Este docstring afirmava o contrário — "TTL curto renovado por heartbeat (F1.3);
-    ao expirar, o auto-release re-enfileira" — descrevendo um mecanismo que nunca foi
-    implementado. Corrigido em 2026-07-30. Documentação que promete uma rede
-    inexistente é pior que a ausência dela: quem lê para de procurar o vazamento.)*
+    *(Duas correções, e a segunda só apareceu porque a primeira foi feita pela metade.
+    Em 2026-07-30 saiu o "TTL renovado por heartbeat; ao expirar, o auto-release
+    re-enfileira" — mecanismo que nunca existiu. O texto que o substituiu dizia "com a
+    vaga ocupada até o reap de ocupantes órfãos passar", e isso também era falso:
+    `reap_stale_occupants` só remove ocupante cuja sessão tenha `session:{sid}:closed`,
+    e num claim abandonado o delegate está SUSPENSO — a sessão está ABERTA e o reap
+    passa ao lado. Não havia "até": a vaga ficava presa até o SET inteiro expirar.
+    Corrigido em 2026-08-03, junto com o `work_task_expire`, que deixou de derivar o
+    dono só desta chave — ver `find_occupant_instance`. **Uma correção que troca uma
+    rede inexistente por outra é mais cara que o erro original**, porque agora tem
+    data recente e passa por conferida.)*
 
     O único consumidor é `work_task_holder` (leitura A5 pelo channel-gateway), que
     **falha aberto** quando a lease sumiu — o resume não é bloqueado por isso.
@@ -947,6 +955,102 @@ class InstanceRegistry:
             len(stale), tenant_id, instance_id, stale,
         )
         return len(stale)
+
+    async def find_occupant_instance(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> str | None:
+        """Instância que consome vaga por ESTA sessão NESTE pool, ou `None`.
+
+        Existe porque a posse de um item de fila pull vivia num único lugar — a
+        `claim_lease`, TTL 180 s — e o `work_task_expire` dispara no prazo do item,
+        24 h depois. Derivar o dono da lease significava, no cenário que motiva o
+        expire, não achar dono nenhum e **não devolver a vaga**: cada claim
+        abandonado subtraía uma vaga do agente até o SET inteiro expirar. A vaga é
+        o próprio fato, e o semáforo é onde ele mora; a lease é só um carimbo curto
+        sobre ele.
+
+        **Discriminação (o que tornou isto seguro):** o membro leva o pool no 3º
+        campo desde a F1, então "vaga desta sessão" e "vaga desta sessão NESTE
+        pool" deixaram de ser a mesma pergunta. É a distinção que o
+        `work_task_expire` precisava para não derrubar o occupant de um contato de
+        PUSH alocado na mesma sessão — o risco que o justificava depender da lease.
+
+        Devolve `None` (nunca um palpite) quando: nenhuma instância do pool tem
+        membro desta sessão; ou o membro existe mas é de OUTRO pool — caso em que
+        loga, porque é exatamente o cenário push que não pode ser tocado.
+
+        Varre `ready_set ∪ busy_set`, a mesma união do recompute: instância ocupada
+        pode ter saído do ready. Não é Lua — multi-key sobre N instâncias quebraria
+        a garantia single-key que o caminho da vaga mantém de propósito, e este
+        caminho é frio (um expire, não o claim).
+        """
+        prefix = self._session_prefix(session_id)
+        try:
+            pool_pipe = self._redis.pipeline()
+            pool_pipe.smembers(_pool_instances_key(tenant_id, pool_id))
+            pool_pipe.smembers(_pool_busy_instances_key(tenant_id, pool_id))
+            ready, busy = await pool_pipe.execute()
+        except Exception as exc:
+            logger.warning(
+                "find_occupant_instance: leitura dos SETs do pool FALHOU tenant=%s "
+                "pool=%s session=%s — %s. Nenhuma vaga será devolvida por esta via.",
+                tenant_id, pool_id, session_id, exc,
+            )
+            return None
+
+        instances = sorted({str(i) for i in (set(ready or []) | set(busy or [])) if i})
+        if not instances:
+            return None
+
+        pipe = self._redis.pipeline()
+        for iid in instances:
+            pipe.smembers(_instance_sessions_key(tenant_id, iid))
+        try:
+            raw = await pipe.execute()
+        except Exception as exc:
+            logger.warning(
+                "find_occupant_instance: leitura dos semáforos FALHOU tenant=%s "
+                "pool=%s session=%s — %s. Nenhuma vaga será devolvida por esta via.",
+                tenant_id, pool_id, session_id, exc,
+            )
+            return None
+
+        hits: list[str] = []
+        other_pool: list[tuple[str, str]] = []
+        for iid, members in zip(instances, raw):
+            for member in (members or []):
+                m = str(member)
+                if not m.startswith(prefix):
+                    continue
+                mp = occupant_pool(m)
+                if mp == pool_id:
+                    hits.append(iid)
+                    break
+                # Untagged (None) NÃO entra: membro legado sem pool pode ser de
+                # push. Devolver a vaga com base num palpite é o defeito que a
+                # dependência da lease existia para evitar — trocá-lo por outro
+                # palpite não seria conserto.
+                other_pool.append((iid, mp or "untagged"))
+
+        if not hits:
+            if other_pool:
+                logger.info(
+                    "find_occupant_instance: sessão %s ocupa vaga em %s, mas de outro "
+                    "pool (%s) — NÃO devolvida (seria derrubar occupant alheio)",
+                    session_id, tenant_id, other_pool,
+                )
+            return None
+
+        if len(hits) > 1:
+            # Impossível por construção (uma vaga por (sessão, pool)); se acontecer,
+            # é escritor de ocupante fora do claim — a mesma família que `untagged`
+            # denuncia no snapshot.
+            logger.warning(
+                "find_occupant_instance: sessão %s ocupa vaga em %d instâncias do pool "
+                "%s (%s) — devolvendo só a primeira; investigar escritor fora do claim",
+                session_id, len(hits), pool_id, hits,
+            )
+        return hits[0]
 
     async def instance_session_count(self, tenant_id: str, instance_id: str) -> int:
         """Ocupação real da instância (SCARD do SET de sessões). Fonte de verdade
@@ -2445,7 +2549,10 @@ class InstanceRegistry:
         self, tenant_id: str, pool_id: str, session_id: str,
         instance_id: str, ttl_seconds: int,
     ) -> None:
-        """Frente 1 (pull): grava/renova a lease do claim (TTL curto)."""
+        """Frente 1 (pull): GRAVA a lease do claim (TTL curto). Não renova — o
+        docstring dizia "grava/renova" e não existe caminho de renovação: um único
+        call site, uma vez por claim (`work_task_claim`). Verbo que descreve
+        capacidade não usada faz o leitor supor uma rede que não está lá."""
         await self._redis.set(
             _claim_lease_key(tenant_id, pool_id, session_id),
             json.dumps({

@@ -120,9 +120,11 @@ _SEED: list[tuple[str, str, object, str]] = [
         "routing", "claim_lease_s",
         180,
         "Frente 1 (dispatch pull): TTL (segundos) da lease do claim "
-        "({tenant}:pool:{pool}:claim:{session}). Curto e independente do SLA "
-        "fim-a-fim. Backstop para claim ocioso; auto-release principal é por "
-        "desconexão (mcp-server) → re-parque na fila."
+        "({tenant}:pool:{pool}:claim:{session}). Carimbo de POSSE, com validade "
+        "curta e independente do SLA fim-a-fim. NÃO é backstop: nada reage à sua "
+        "expiração — não há reaper nem heartbeat, e o item permanece fora da fila "
+        "até o prazo do delegate. Único leitor: o check caller==claimant do "
+        "channel-gateway, que falha ABERTO quando ela sumiu."
     ),
     (
         "routing", "sla_default_ms",

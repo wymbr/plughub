@@ -1,5 +1,6 @@
 """
 test_pull_release_snapshot.py — F3a: a liberação do PULL também recomputa o snapshot.
+**+ lacuna 2 (2026-08-03): a vaga volta mesmo quando a lease já expirou** (testes 3).
 
 **O buraco.** A fatia 2 pôs o recompute + fan-out nos gatilhos de PUSH (`route`,
 `mark_busy`, `remove_conversation`, `release_session_from_pool`). O pull entrou pela
@@ -234,3 +235,104 @@ async def test_expire_of_a_never_claimed_item_does_not_invent_capacity(env):
         assert snap["available"] == CAPACITY - 1, (
             f"{pool}: capacidade inventada por um expire que não liberou nada — {snap}"
         )
+
+
+# ── 3. lacuna 2: a lease morre 480× antes do prazo do item ────────────────────
+#
+# O teste 2 acima passa porque o expire acontece com a lease VIVA — o que, no
+# caminho real, quase nunca é o caso: a lease dura 180 s e o expire dispara no
+# `timeout_hours` do delegate (24 h no wrap-up default). Os dois testes abaixo
+# cobrem o cenário que de fato motiva o `work_task_expire`, e que até 2026-08-03
+# não tinha teste nenhum — nem aqui, nem em `test_work_queue_claim.py`, que grava a
+# lease e testa o delete mas nunca avança o relógio além do TTL.
+
+
+@pytest.mark.asyncio
+async def test_expire_returns_the_slot_even_after_the_lease_expired(env):
+    """Claim abandonado: a lease expirou, e a VAGA tem de voltar assim mesmo.
+
+    **Por que este teste reprova contra o código anterior.** O `work_task_expire`
+    derivava o dono exclusivamente da `claim_lease` — a chave que, neste cenário,
+    já expirou. `instance_id` saía vazio, `release_instance` não era chamado e a
+    vaga ficava presa até o SET inteiro expirar. Contra aquele código este teste
+    falha em três lugares: `available` fica em `CAPACITY − 1`, o semáforo segue com
+    1 ocupante, e `was_claimed` volta `False` — indistinguível de "nunca
+    reivindicado", que é precisamente a distinção que o estado `orphaned` do
+    relatório de pendências existe para preservar.
+
+    Apagar a lease é a simulação FIEL da expiração: o TTL do Redis faz exatamente
+    isto, e nada mais (não há reaper que reaja a ela — a lacuna 2).
+
+    O que este teste NÃO cobre: a janela entre os 180 s e o prazo do item, em que o
+    trabalho fica invisível a todos os agentes. Essa é a lacuna 2 propriamente
+    dita e segue aberta — aqui só se conserta a vaga.
+    """
+    reg, router, client, tenant, instance = env
+    sid = "ses-abandonada"
+    await _claimed(reg, router, client, tenant, instance, sid)
+
+    # A lease expira (TTL 180 s); ninguém reage — nem reaper, nem heartbeat.
+    await reg.delete_claim_lease(tenant, POOLS[0], sid)
+    assert await reg.read_claim_lease(tenant, POOLS[0], sid) is None, (
+        "setup: a lease ainda existe — este teste mediria o caminho do teste 2"
+    )
+    assert await reg.instance_session_count(tenant, instance) == 1, (
+        "setup: a vaga não está ocupada — não há o que devolver, nada a medir"
+    )
+
+    res = await router.work_task_expire(tenant, POOLS[0], sid, reason="acw_expired")
+
+    assert res["was_claimed"] is True, (
+        f"expire não reconheceu um item que FOI reivindicado — reportá-lo como "
+        f"nunca-reivindicado apaga a evidência da lacuna 2 ({res})"
+    )
+    assert res["claimed_via"] == "semaphore", (
+        f"a vaga deveria ter sido encontrada pelo semáforo, não pela lease ({res})"
+    )
+    assert await reg.instance_session_count(tenant, instance) == 0, (
+        "VAGA PRESA: a lease expirou e o expire não devolveu a vaga do recurso — "
+        "cada claim abandonado subtrai capacidade do agente permanentemente"
+    )
+    for pool in POOLS:
+        snap = await _snap(client, tenant, pool)
+        assert snap["available"] == CAPACITY, (
+            f"{pool}: capacidade não voltou após o expire sem lease — {snap}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_expire_without_lease_never_takes_a_slot_of_another_pool(env):
+    """A busca pelo semáforo discrimina `(sessão, POOL)` — e é isso que a torna segura.
+
+    **Este teste NÃO nasce vermelho, e o motivo importa:** contra o código anterior
+    ele passa trivialmente, porque aquele código não devolvia vaga nenhuma sem
+    lease. Ele existe como rede do fix, não como prova do defeito — o risco que
+    justificava depender da lease era exatamente *"derrubar o occupant de um contato
+    alocado na mesma sessão"*, e trocá-lo por uma busca cega seria substituir um
+    palpite por outro.
+
+    O que o torna capaz de reprovar é a MUTAÇÃO: se `find_occupant_instance` deixar
+    de comparar `occupant_pool(member) == pool_id` (ou passar a aceitar membro
+    `untagged`), este teste fica vermelho e o anterior continua verde.
+    """
+    reg, router, client, tenant, instance = env
+    sid = "ses-vizinha"
+    await _login(reg, client, tenant, instance)
+    await _seed_snapshots(reg, tenant)
+
+    # A vaga desta sessão foi consumida pelo pool IRMÃO, não pelo pool do item.
+    assert await reg.claim_instance(
+        tenant, instance, sid, None, CAPACITY, pool_id=POOLS[1]
+    ) == 1
+    await reg.mark_busy(tenant, POOLS[1], instance, sid)
+    await _queue(reg, tenant, POOLS[0], sid)
+
+    assert await reg.find_occupant_instance(tenant, POOLS[0], sid) is None, (
+        "a busca devolveu uma instância cuja vaga pertence a OUTRO pool"
+    )
+
+    res = await router.work_task_expire(tenant, POOLS[0], sid, reason="expired")
+    assert res["was_claimed"] is False and res["claimed_via"] is None, res
+    assert await reg.instance_session_count(tenant, instance) == 1, (
+        "o expire derrubou a vaga que o pool irmão detinha para a mesma sessão"
+    )

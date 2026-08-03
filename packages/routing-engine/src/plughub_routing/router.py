@@ -781,20 +781,54 @@ class Router:
              fica no ZSET para sempre e a inbox continua exibindo um item que o
              claim recusa (`not_in_queue`);
           2. lease do claim apagada;
-          3. vaga do recurso devolvida — **e só quando há lease**. A lease é a
-             evidência de que houve claim de PULL; sem ela não há vaga desta fila
-             para devolver, e chamar `release_instance` às cegas derrubaria o
-             occupant de um contato de PUSH alocado normalmente na mesma sessão.
+          3. vaga do recurso devolvida — pela lease **ou pelo semáforo**.
+
+        **Por que o dono não pode vir só da lease (fix da lacuna 2, 2026-08-03).**
+        A lease tem TTL de 180 s e este método dispara no prazo do ITEM, tipicamente
+        24 h depois — ~480× maior. No cenário que MOTIVA o expire (reivindicado e
+        nunca submetido) a lease já expirou há muito, `instance_id` saía vazio e a
+        vaga **nunca era devolvida**: cada claim abandonado subtraía uma vaga do
+        agente até o SET inteiro expirar. Não era questão de frequência — era
+        aritmética. Pior, o docstring de `_claim_lease_key` afirmava que o "reap de
+        ocupantes órfãos" a recuperava; ele só remove ocupante cuja sessão tenha
+        `session:{sid}:closed`, e num claim abandonado o delegate está suspenso e a
+        sessão está ABERTA — o reap passa ao lado.
+
+        A segunda via é `find_occupant_instance`, que lê a vaga onde ela de fato
+        mora. O medo que justificava depender da lease — derrubar o occupant de um
+        contato de PUSH na mesma sessão — deixou de existir com a F1: o membro do
+        semáforo leva o pool no 3º campo, então a busca discrimina `(sessão, pool)`
+        e devolve `None` (com log) quando o único ocupante daquela sessão é de outro
+        pool. A lease continua sendo consultada PRIMEIRO por ser mais barata e mais
+        direta; a busca é o fallback, e qual das duas respondeu vai no log e no
+        retorno (`claimed_via`) — degradação silenciosa aqui reapareceria como
+        capacidade que encolhe sem motivo.
 
         Não re-enfileira, não publica `conversations.routed` e não fecha segmento: o
         fechamento do segmento humano é do bridge (H1, na entrega do resume), que é
         quem conhece `outcome` e `close_reason`. Aqui só se desfaz o parqueamento.
 
         Idempotente por construção: 2ª chamada devolve
-        `was_queued=False, was_claimed=False` e não toca em nada.
+        `was_queued=False, was_claimed=False` e não toca em nada — a 1ª liberou a
+        vaga, então a busca não acha mais ocupante.
         """
-        lease       = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
-        instance_id = (lease or {}).get("instance_id") or ""
+        lease        = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
+        instance_id  = (lease or {}).get("instance_id") or ""
+        claimed_via  = "lease" if instance_id else ""
+        if not instance_id:
+            instance_id = await self._instances.find_occupant_instance(
+                tenant_id, pool_id, session_id
+            ) or ""
+            if instance_id:
+                claimed_via = "semaphore"
+                # Nunca silencioso: esta linha é a MEDIDA da lacuna 2 — item que foi
+                # reivindicado, ficou sem lease, e cuja vaga estava presa até aqui.
+                logger.warning(
+                    "work_task_expire: lease AUSENTE mas vaga ocupada — session=%s "
+                    "pool=%s instance=%s. Claim abandonado (lease 180 s × prazo do "
+                    "item); a vaga estava presa e só agora volta.",
+                    session_id, pool_id, instance_id,
+                )
 
         was_queued = await self._instances.atomic_claim_dequeue(
             tenant_id, pool_id, session_id
@@ -814,23 +848,28 @@ class Router:
         #   · nunca reivindicado → só a FILA encolheu, e `queue_length` é campo da
         #     mesma linha. Sem `instance_id` o fan-out não alcança pool nenhum do
         #     recurso — daí `extra_pools`, que garante ao menos a linha deste pool.
-        # Passar `instance_id` vazio é seguro (pools do recurso = ∅) e deliberado: a
-        # alternativa, chamar `release_instance` às cegas, derrubaria o occupant de um
-        # contato de PUSH alocado na mesma sessão.
+        # `instance_id` vazio segue seguro (pools do recurso = ∅); com o fallback do
+        # semáforo ele só fica vazio quando NÃO há vaga desta sessão neste pool.
         await self._instances.refresh_snapshots_for_instance(
             tenant_id, instance_id, extra_pools=[pool_id],
         )
 
         logger.info(
             "work_task_expire: session=%s pool=%s reason=%s was_queued=%s "
-            "was_claimed=%s instance=%s remaining=%s",
+            "was_claimed=%s via=%s instance=%s remaining=%s",
             session_id, pool_id, reason, was_queued, bool(instance_id),
-            instance_id or "-", remaining,
+            claimed_via or "-", instance_id or "-", remaining,
         )
         return {
             "expired":     True,
             "was_queued":  bool(was_queued),
+            # `was_claimed` derivado da lease reportava False para item que FOI
+            # reivindicado e cuja lease expirou — indistinguível de "nunca
+            # reivindicado", justo a distinção que o estado `orphaned` do relatório
+            # de pendências existe para preservar. Agora cobre as duas vias, e
+            # `claimed_via` diz qual respondeu.
             "was_claimed": bool(instance_id),
+            "claimed_via": claimed_via or None,
             "instance_id": instance_id,
             "remaining":   remaining,
             "reason":      reason,

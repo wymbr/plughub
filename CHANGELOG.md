@@ -2,6 +2,75 @@
 
 ---
 
+## Lacuna 2: a vaga do claim abandonado nunca voltava — e dois docstrings mentiam 🐞✅ (2026-08-03)
+
+O `TODO.md` pedia *"volume antes de decidir o reaper"*. A leitura de código achou um defeito que
+**não depende de volume**, e por isso não esperou por ele.
+
+**`work_task_expire` derivava o dono da vaga da `claim_lease`** — a chave que, no cenário que
+motiva o expire, já expirou há muito. A lease dura **180 s**; o expire dispara no `timeout_hours`
+do delegate, **24 h** no wrap-up default. ~480× de diferença. Sem lease, `instance_id` saía vazio,
+`release_instance` não era chamado, e **cada claim abandonado subtraía uma vaga do agente até o SET
+inteiro expirar**. Um agente de 3 vagas fica inútil depois de 3 acidentes — e o acidente é trivial:
+o achado de ontem veio de um 422 no corpo de um request de smoke.
+
+### Os dois docstrings, e por que o segundo é o mais caro
+
+`_claim_lease_key` afirmava *"com a vaga do agente ocupada **até o reap de ocupantes órfãos
+passar**"*. O `reap_stale_occupants` só remove ocupante cuja sessão tenha `session:{sid}:closed`;
+num claim abandonado o delegate está **suspenso** e a sessão está **aberta**. O reap passa ao lado
+e nunca a toca. **Não havia "até".**
+
+O agravante: esse texto é de **2026-07-30**, e nasceu justamente de corrigir outra afirmação falsa
+no mesmo lugar (*"TTL renovado por heartbeat; ao expirar, o auto-release re-enfileira"*, mecanismo
+que nunca existiu). *Uma correção que troca uma rede inexistente por outra é mais cara que o erro
+original — a nova tem data recente e passa por conferida.* Corrigidos também `write_claim_lease`
+("grava/**renova**", sem caminho de renovação: um único call site) e o seed de `claim_lease_s`
+("**backstop** para claim ocioso" — não é backstop de nada; nada reage à sua expiração).
+
+### O fix, e a peça que o tornou seguro
+
+`work_task_expire` consulta a lease primeiro (barata, direta) e, faltando ela, acha o ocupante onde
+a vaga de fato mora: `find_occupant_instance`, sobre `ready_set ∪ busy_set` do pool.
+
+O que impedia isso antes era um risco real — *"chamar `release_instance` às cegas derrubaria o
+occupant de um contato de PUSH alocado na mesma sessão"*. **A F1 já tinha dissolvido esse risco sem
+que ninguém notasse:** desde a tag de pool no membro do semáforo, `{session}::{conf}::{pool}`,
+"vaga desta sessão" e "vaga desta sessão NESTE pool" deixaram de ser a mesma pergunta. A busca
+compara `occupant_pool(member) == pool_id` e devolve `None` — **com log** — quando o único ocupante
+daquela sessão é de outro pool. Membro `untagged` também não entra: trocar um palpite por outro não
+seria conserto.
+
+Nada disso é silencioso: a via que respondeu vai no log e no retorno (`claimed_via`), e o caso
+lease-ausente-vaga-ocupada sai como **WARNING** — ele É a medida da lacuna. `was_claimed` deixou de
+reportar `False` para item que FOI reivindicado, o que o tornava indistinguível de "nunca
+reivindicado" — justo a distinção que o estado `orphaned` existe para preservar.
+
+### Verificação
+
+2 testes novos em `test_pull_release_snapshot.py` (suíte **213**, previsão exata). O primeiro
+reprova contra o código anterior em **três** asserções independentes (vaga presa, `was_claimed`,
+`claimed_via`). O segundo **não nasce vermelho, e isso está escrito nele**: contra o código antigo
+passa trivialmente, porque aquele não devolvia vaga nenhuma — é rede do fix, não prova do defeito.
+
+`infra/test/mutation_claim_lease_slot.sh`, 6 atribuições, todas conferindo: **M1** (volta a derivar
+só da lease) derruba o primeiro e deixa os outros três verdes; **M2** (a busca deixa de comparar o
+pool) derruba o segundo e deixa o primeiro verde. M2 existe porque a segurança inteira do fix mora
+numa comparação de uma linha, e comparação é o que se afrouxa sem ninguém notar.
+
+### O que NÃO fechou
+
+A **janela de invisibilidade**: entre os 180 s e o prazo do item, o trabalho está fora do ZSET e
+nem o próprio dono consegue retomá-lo. Fechar isso é um reaper, e o reaper precisa de política
+antes de código (re-enfileirar preserva `assigned_to`? quantas vezes até virar transbordo?) — aí
+sim com o número que o `orphaned` do Monitor › Pendências mede.
+
+> **A regra que fica:** *posse de um item de trabalho não pode morar só numa chave cujo TTL é menor
+> que o prazo do próprio item.* Quando mora, o caminho de limpeza chega depois da testemunha, e a
+> limpeza fica incompleta **sem nada ficar vermelho**.
+
+---
+
 ## Poda do TODO: 2519 → 2010 linhas, e as contradições que o volume escondia 🧹✅ (2026-08-03)
 
 A maior seção do `TODO.md` (20% do arquivo) descrevia um arco **majoritariamente concluído**: F1,
