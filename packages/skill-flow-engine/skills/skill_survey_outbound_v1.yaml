@@ -1,3 +1,10 @@
+# ⚠️ NÃO DEPLOYADO — nenhum pool declara este skill (medido 2026-08-03).
+# Ver a nota completa em `skill_survey_runner_v1.yaml`. Quarentena documentada.
+# CUIDADO ao decidir: o outbound VIVO hoje é outro par —
+# `skill_outbound_survey_dispatch_v1` / `skill_outbound_survey_worker_v1` (arco
+# Outbound fase 5b), que TÊM pool. Este aqui é o desenho anterior, e a semelhança
+# de nome já é armadilha por si.
+#
 # skill_survey_outbound_v1.yaml
 # Survey — WORKFLOW OUTBOUND (perfil workflow, canal webhook).
 # Era `skill_survey_journey_v1` (renomeado 2026-07-14 — ver skill_survey_trigger_v1.yaml

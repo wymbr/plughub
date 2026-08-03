@@ -165,7 +165,6 @@ services:
           conversations.session_closed
           conversations.participants
           agent.lifecycle
-          agent.done
           agent.registry.events
           queue.position_updated
           rules.escalation_triggered

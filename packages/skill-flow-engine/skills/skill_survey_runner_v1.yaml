@@ -1,3 +1,13 @@
+# ⚠️ NÃO DEPLOYADO — nenhum pool declara este skill (medido 2026-08-03).
+# `grep -r skill_survey_runner_v1 infra/registry/` não devolve nada; as únicas
+# menções fora deste arquivo são EXEMPLOS em docstring (channel-gateway/main.py,
+# schemas/skill.ts, workflow.ts). O conjunto ANTIGO (skill_survey_v1 etc.) foi
+# removido na Camada E1 (2026-07-24), e este trio renomeado nunca ganhou pool —
+# o TODO registrava o inverso ("o registry ainda roda o conjunto antigo").
+# Quarentena documentada, mesmo critério dos pacotes fósseis clickhouse-consumer
+# e conversation-writer: o arquivo fica, o erro fica visível, e nada roda.
+# Decidir (TODO § Customer Surveys, item 4): deployar como pool, ou remover.
+#
 # skill_survey_runner_v1.yaml
 # Survey — RUNNER do pool de survey (perfil agent, canal webchat).
 # Era `skill_survey_collect_v1` (renomeado 2026-07-14 — ver skill_survey_trigger_v1.yaml

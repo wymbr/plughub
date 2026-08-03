@@ -941,6 +941,14 @@ sem leitor. Fóssil que falha barulhento é inofensivo; este falharia em silênc
 com as entradas do `ecosystem.config.js`, ou manter. Apagar só o pacote e deixar o PM2
 apontando para um script inexistente troca um fóssil silencioso por um erro de boot.
 
+**Terceiro caso da mesma família (2026-08-03):** o trio `skill_survey_runner_v1` /
+`skill_survey_outbound_v1` / `skill_survey_trigger_v1` — existe como YAML, **nenhum pool o
+deploya**, e as únicas menções fora dos próprios arquivos são exemplos em docstring. Cada um
+ganhou a marca de quarentena no cabeçalho. **Armadilha registrada lá:**
+`skill_survey_outbound_v1` NÃO é o outbound vivo — o que roda é o par
+`skill_outbound_survey_dispatch_v1`/`_worker_v1` (fase 5b), com pool. Nomes quase idênticos,
+destinos opostos; quem for apagar precisa olhar duas vezes.
+
 ---
 
 ## ~~Suítes vermelhas — os 4 pacotes restantes~~ ✅ **FECHADO 2026-08-03** *(48 → 0)*

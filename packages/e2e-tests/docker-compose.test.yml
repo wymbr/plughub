@@ -98,7 +98,7 @@ services:
           conversations.outbound conversations.message_sent conversations.channel_change \
           conversations.session_opened conversations.session_closed conversations.dequeued conversations.abandoned \
           conversations.participants \
-          agent.lifecycle agent.done agent.registry.events \
+          agent.lifecycle agent.registry.events \
           registry.changed config.changed \
           usage.events sentiment.updated \
           workflow.events collect.events \

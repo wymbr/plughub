@@ -2,6 +2,46 @@
 
 ---
 
+## Pontas soltas: `agent.done`, trio de skills sem pool, 17 órfãos 🧹✅ (2026-08-03)
+
+Três pendências pequenas fechadas. A terceira encontrou algo.
+
+**`agent.done` — removido dos 4 compose.** O `CLAUDE.md` o marcava REMOVIDO desde 2026-07-27 e o
+`kafka-init` continuava criando. Medido antes: zero produtores, zero consumidores, e um teste de
+regressão já existente (`runtime.test.ts:307`) afirmando que **não** se publica lá. Os compose
+(`demo`, `full`, `visual`, `e2e-tests`) eram a última coisa no repositório sustentando que o tópico
+existia — o diagrama em `docs/product/` já dizia o contrário. *(Remover do `kafka-init` impede a
+criação em instalação nova; não apaga o tópico já existente no broker do demo.)*
+
+**Trio `skill_survey_*` — quarentena marcada no arquivo.** `skill_survey_runner_v1`,
+`skill_survey_outbound_v1` e `skill_survey_trigger_v1` existem como YAML e **nenhum pool os
+deploya**; as únicas menções fora deles são exemplos em docstring. Mesmo critério dos pacotes
+fósseis. **Armadilha registrada no cabeçalho do `outbound`:** ele NÃO é o outbound vivo — o que
+roda é `skill_outbound_survey_dispatch_v1`/`_worker_v1` (fase 5b), com pool. Nomes quase idênticos
+e destinos opostos.
+
+**17 órfãos apagados — e a guarda pegou um 18º.**
+`infra/scripts/cleanup_approval_orphan_segments.sh` (dry-run por defeito, corte pós-fix, conferência
+depois da mutação porque `ALTER … DELETE` é assíncrono no ClickHouse). Ele **abortou** na primeira
+execução: havia um órfão de **2026-08-03 19:06**, posterior ao fix.
+
+A causa era minha: a 1ª rodada do `smoke_approval_segment_closes.sh`, que reivindicou o item e
+falhou no resume com 422 (corpo sem `tenant_id`). **Claim sem submit ⇒ segmento aberto para
+sempre.** Não é defeito da aprovação — é a **lacuna 2** (não há reaper de claim abandonado), e o
+achado tem valor próprio: *a lacuna é alcançável por acidente trivial*. O TODO dizia que a
+discussão do reaper "passa a ter número" se `orphaned` aparecer com volume; apareceu com volume 1 e
+causa banal, numa tarde.
+
+A isenção ficou **nominal, por session_id, com o motivo no código** — não por pool e não por
+variável de ambiente solta. Allowlist por pool seria cega: qualquer vazamento futuro naquele pool
+entraria junto e em silêncio. Por sessão, cada isenção é uma decisão datada que alguém teve de
+justificar por escrito — e o alarme volta a poder ficar vermelho, que era a condição para ele
+continuar servindo (*"alarme que nunca fica verde treina a pessoa a ignorá-lo"*).
+
+Resultado: 18 linhas apagadas, **0 órfãos de aprovação**, conferido após a mutação.
+
+---
+
 ## Wrap-up fatia 3 — o Arc 12 ganha seu PRIMEIRO produtor 📊✅ (2026-08-03)
 
 Até hoje `agent_business_events` tinha **1 linha, de seed** (2026-06-10 12:00:00.000) e nenhum
