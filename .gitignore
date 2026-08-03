@@ -57,5 +57,11 @@ test-results/
 data/
 volumes/
 
+# ── Backups dos podadores de TODO ─────────────────────────────────────────────
+# `prune_todo_closed.py` e `prune_todo_capacity_section.py` gravam este backup no --apply.
+# Commitá-lo daria uma TERCEIRA casa para a mesma informação — que é o defeito que a poda
+# existe para fechar. O git já é o backup versionado; o .bak é só a rede da execução.
+TODO.md.bak
+
 # Cowork local settings
 .claude/

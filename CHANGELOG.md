@@ -2,6 +2,56 @@
 
 ---
 
+## Poda da seção de capacidade: 503 → 81 linhas, e duas contradições que ela escondia 🧹✅ (2026-08-03)
+
+A maior seção do `TODO.md` (20% do arquivo) descrevia um arco **majoritariamente concluído**: F1,
+F2, F3a, F3b, F4a/b/c, F5, F5b, P1, P2 e P3, todas ✅ em 02–03/08, cada uma com entrada própria e
+detalhada aqui — 14 no total. Pela regra do `CLAUDE.md` § Saúde do CLAUDE.md, detalhe de arco
+concluído mora no `CHANGELOG`/`docs/arcos/`. O cabeçalho já tinha sido corrigido na sessão anterior
+(o dano imediato); a poda física foi **adiada de propósito** para uma sessão com contexto limpo,
+porque o risco aqui não é "remover de menos", é **levar junto o que ainda vale**.
+
+**O que sobrou (81 linhas):** fatia 4/defeito C adiada + o comando que refaz a medição que a adiou;
+`max_concurrent_sessions` ainda somando moedas como teto de provisionamento; os 5 itens
+independentes da medição de 2026-07-31 (o mais concreto: **`webhook_skill_id` é um pool com 3
+instâncias** — o nome de um campo virou id de pool); as três coisas que a poda não podia levar
+junto (não somar linha de pool; duas descontinuidades de série a marcar no eixo; `peak` nunca é
+média); e as alternativas descartadas, que existem para não serem reabertas.
+
+### As duas contradições — e por que nenhuma delas era visível pelo título
+
+O pré-requisito de deletar é conferir que o essencial está aqui. Conferindo, a seção discordava do
+`CHANGELOG` em dois pontos, ambos mandando trabalhar:
+
+| A seção dizia | O que estava feito |
+|---|---|
+| *"Dívida aberta: a coluna `Pool.session_reservation`, o endpoint que a aceita e a validação `Σ ≤ C` continuam existindo"* | removida **ponta a ponta** em 02/08 — schema, contratos, UI, validação e migração `20260802000000`. E a **própria seção** dizia, 250 linhas adiante, *"a coluna já foi dropada"*: ela se contradizia internamente |
+| *"Fechar o pré-requisito da F3 ANTES de alterar o bootstrap, não depois"* | fechado em 03/08 — cadeia `snapshot → {t}:pool_config:{p} → default com WARNING`, heurística removida, `test_snapshot_config_provenance.py` + 2 mutações |
+
+*Uma seção longa demais para ser lida inteira não envelhece só nas bordas — ela passa a discordar de
+si mesma no meio, e ninguém chega lá para notar.* É o § Erros de método nº 5 num grau acima: não é o
+título mentindo sobre o corpo, é o corpo mentindo sobre si mesmo.
+
+### `prune_todo_capacity_section.py` — por que não deu para usar o script que já existia
+
+`prune_todo_closed.py` remove seções `## ` **inteiras**, e só serve para seção 100% fechada. Aqui a
+operação é **substituir o corpo**, com resíduo aberto no meio. Script novo, 5 portões, todos
+abortando antes de gravar: âncora única (P1); fim no próximo `## ` e **nunca no EOF** — sem isso um
+título alterado faria o corte comer o resto do arquivo (P2); marcadores obrigatórios no bloco, prova
+de que a âncora pegou a seção certa (P3); tamanho ±40 linhas do esperado, porque substituição sobre
+seção que mudou é substituição cega (P4).
+
+**P5 é o que este projeto vem aprendendo:** o texto novo declara *"503 → 81 linhas"*, e esse número
+é **preenchido pela própria medição**, não digitado. Número de poda escrito à mão é exatamente a
+classe "valor plausível que ninguém confere" — e erraria: a previsão registrada antes de rodar era
+81 novas linhas, saiu 81, mas a de removidas foi 501 contra 503 reais. Trivial no resultado,
+menos trivial no método.
+
+Corridas: dry-run (números e linhas de borda conferidos) → `--apply`, backup em `TODO.md.bak`.
+`TODO.md`: **2519 → 2097 linhas**.
+
+---
+
 ## Pontas soltas: `agent.done`, trio de skills sem pool, 17 órfãos 🧹✅ (2026-08-03)
 
 Três pendências pequenas fechadas. A terceira encontrou algo.
