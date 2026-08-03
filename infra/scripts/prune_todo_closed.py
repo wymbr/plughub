@@ -31,10 +31,12 @@ from pathlib import Path
 
 TODO = Path("TODO.md")
 
-# Substrings que identificam o cabeçalho `## ` de cada seção a remover.
-# Conferido em 2026-08-03: o conteúdo essencial de todas está no CHANGELOG.md.
-CLOSED = [
-    "Suítes VERMELHAS fora do routing-engine",
+# Já removidas em execuções anteriores. NÃO entram em CLOSED: o aviso "NÃO ENCONTRADO" existe
+# para denunciar título que MUDOU, e um padrão que nunca mais vai casar o dispara para sempre.
+# Alarme com álibi permanente é equivalente a não ter alarme — a mesma lição do Portão D do
+# smoke de ocupação. Ficam aqui como registro do que saiu, sem serem verificadas.
+ALREADY_PRUNED = [
+    "Suítes VERMELHAS fora do routing-engine",      # 2026-08-03, 1ª rodada
     "Registro original — Zero testes coletados",
     "Registro original — Suítes vermelhas",
     "Varrer o `REDIS_URL` de leitura única",
@@ -44,6 +46,30 @@ CLOSED = [
     "`agent_events` — fatia 2: DROP",
     "`agent_done` de crash-recovery",
     "`bootstrap_placeholder` publica capacidade ZERO",
+]
+
+# Substrings que identificam o cabeçalho `## ` de cada seção a remover NESTA execução.
+# Conferido em 2026-08-03: o conteúdo essencial de todas está no CHANGELOG.md.
+#
+# ── 2026-08-03, 3ª sessão ────────────────────────────────────────────────────────────────
+# Sete seções tachadas, e TRÊS tinham resíduo VIVO enterrado no corpo — colhido à mão antes
+# de entrar nesta lista. É a forma que este script NÃO vê sozinho: o título é tachado, o
+# pendente mora no meio, e a remoção é por seção inteira.
+#   · `close_reason`   → `_TRANSPORT_TO_CLOSE_REASON` (gated em WARNING) foi para
+#                        § Wrap-up unificado — resíduos após a Phase 2
+#   · Pricing → quota  → tenant fantasma `smoke_gprobe_pricing` foi para a tabela de
+#                        resíduos de smoke da § Capacidade
+#   · Suítes vermelhas → 2 das 5 regras de dublê viraram § Erros de método nº 7
+# A do Arc 12 saiu por estar STALE de um jeito ativo: afirmava *"não há produtor algum"*, e a
+# fatia 3 do wrap-up criou o primeiro produtor no mesmo dia.
+CLOSED = [
+    "`close_reason` do contato só é persistido",
+    "Zero testes coletados em 6 pacotes",
+    "Suítes vermelhas — os 4 pacotes restantes",
+    "analytics-api — 23 testes vermelhos há tempo",
+    "Arc 12 — `segment_id` em `agent_business_events`",
+    "evaluation-api — 10 testes de `test_router.py`",
+    "Pricing → quota Redis não existe",
 ]
 
 

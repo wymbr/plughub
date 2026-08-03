@@ -80,6 +80,22 @@ pior que portão nenhum — este manda alguém trabalhar.
 *Placar do dia, que é o argumento inteiro:* **7 defeitos de instrumento × 1 achado de código real.*
 Seis falharam alto e custaram minutos. O sétimo falhou plausível e quase custou a sessão.
 
+### 7. Como um dublê mente *(destilado dos 48 vermelhos de 2026-08-03; seção de origem podada)*
+
+Nenhum dos 48 era defeito de produção, e a causa se repetiu em famílias. As duas que não têm outra
+casa permanente ficam aqui, porque valem para a **próxima** suíte que alguém escrever:
+
+- **Dublê de store responde por CHAVE** — nunca com valor único para todas elas, nunca por ordem de
+  chamada (`side_effect` posicional). Valor único faz o teste ler o dado do vizinho; ordem faz o
+  teste depender de um detalhe que o código pode reorganizar sem quebrar nada. Melhor ainda:
+  **derivar o dublê por introspecção** do objeto real, para ele responder à ESTRUTURA e não a uma
+  serialização congelada.
+- **A alavanca do teste tem de ser a fonte que o CÓDIGO lê** — mexer em `Settings` quando o adapter
+  resolve pelo cache do config-api testa uma alavanca desconectada (invariante *"config-api vence"*).
+  O teste fica verde porque não alcança o caminho, não porque o caminho está certo.
+
+Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 48 falhas em 6 pacotes → 0"*.
+
 ---
 
 ## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅ 2026-07-30; resta só a fatia 3, GATED)*
@@ -226,6 +242,12 @@ F2 G1 no relatório, F3 pull direcionado 5/5, F4 expiração — ver CHANGELOG).
 Resíduo da F: a **lease** não foi medida (a sonda observou a chave de outra sessão) — a lacuna 2
 segue como estava, e o que ficou provado é que o **prazo** devolve a vaga.
 *(E2e — produtor do marker `acw_pending` — **saiu de escopo** com a remoção da Camada C, 2026-07-29.)*
+
+**Resíduo herdado da seção `close_reason` (podada em 2026-08-03; o fix está no CHANGELOG de 07-30):**
+o `_TRANSPORT_TO_CLOSE_REASON` cobre **6 transportes**; qualquer outro agora produz `close_reason`
+ausente **com WARNING**, em vez do `agent_hangup` inventado de antes. **Gated em evidência:** completar
+o mapa só se o WARNING aparecer em produção — `infra/test/check_close_reason_persisted.sh` tem uma
+asserção que o varre nos logs. *Ausência barulhenta é o estado desejado, não o pendente.*
 
 **Cleanup:** ~~`infra/test/smoke_acw_gate.sh` órfão~~ — não existia mais (item stale) · ~~`acw_gate` como config
 sem leitor~~ ✅ **removido ponta a ponta (2026-07-29, ver CHANGELOG)**: schemas, Prisma (migration
@@ -390,18 +412,6 @@ vez de digitar do zero.
 
 ---
 
-## ~~`close_reason` do contato só é persistido se o wrap-up for submetido~~ ✅ *(2026-07-30, ver CHANGELOG)*
-
-Resolvido pela opção **(a)** — `close_reason` viaja no `participant_left` do fechamento canônico,
-nos dois produtores. Validado com dois atendimentos na mesma janela, um COM e outro SEM wrap-up,
-ambos gravando `agent_hangup`. Sonda: `infra/test/check_close_reason_persisted.sh`.
-
-**Resíduo (não bloqueia):** o `_TRANSPORT_TO_CLOSE_REASON` cobre 6 transportes; qualquer outro
-agora produz `close_reason` ausente **com WARNING** em vez de um `agent_hangup` inventado. Se o
-WARNING aparecer em produção, completar o mapa — a sonda tem uma asserção que o varre nos logs.
-
----
-
 ## Capacidade, licenças e isolamento entre pools *(A e B ✅ 2026-08-02/03 — histórico no CHANGELOG; resta C + fatia 4)*
 
 > **Podada em 2026-08-03: 503 → 81 linhas.** O as-built das fatias F1–F5b e P1–P3 mora no
@@ -448,6 +458,7 @@ docstring do próprio arquivo, para quem chegar nele primeiro não repetir a con
 |---|---|---|
 | vazamento de admissão | 3 sessões presas em `…:admission:shared` (todas `kind:ai`, pool `survey_journey_wf`) com zero instâncias ocupadas; o reconciler não as liberou | o SET `shared` **não existe mais** (fatia 3). O mecanismo sobrevive em `kind:ai`: a liberação depende do marcador `closed` + reconciler. **Re-medir antes de tratar como defeito** |
 | pools fantasma | `formfill_demo`, `ramal_test`, `survey_journey_wf` — resíduo de smoke com estado vivo | limpeza, não defeito |
+| tenant fantasma *(colhido na poda de 03/08)* | `smoke_gprobe_pricing`, capacidade 1, aparece no `sync_all` do boot do pricing | mesma família da linha acima; herdado da seção "Pricing → quota Redis", podada |
 | **`webhook_skill_id` é um pool** | com 3 instâncias: **o nome de um campo virou id de pool** | o mais concreto dos três; bug de seed/provisionamento |
 | `retencao_humano-int` fora de `public.pools` | espelho vive só em runtime ⇒ **invisível a validação em tempo de config** | é por desenho (ADR §9.1: pool interno resolve licenciamento no pai). Registro, não defeito |
 | `fila_humano` com `agent_kind = ai` | pelo nome deveria ser humano; muda licenciamento e hook | dado de tenant, não código |
@@ -482,16 +493,6 @@ em vez do SET de ocupantes (é da mesma família do contador por pool — trocar
 não fecha a classe, só muda qual deles vai mentir depois).
 
 ---
-
-## ~~Zero testes coletados em 6 pacotes~~ ✅ **FECHADO 2026-08-03**
-
-> **2.197 testes verdes em 19 pacotes, 0 falhas, 0 skips** (`report_suite_skips.sh`). As três
-> suítes invisíveis rodam por mount; as três ausentes existem (`mailing-api 22` ·
-> `scheduler-api 17` · `dialog-api 10`), cada uma com prova por mutação. Ver `CHANGELOG.md`.
->
-> **Resíduo fechado 2026-08-03:** `clickhouse-consumer` e `conversation-writer` saíram da
-> lista do relatório. Não havia defeito de sonda — **não existe container** para nenhum dos
-> dois. Ver § "Dois pacotes fósseis" abaixo. O relatório volta a terminar com 0.
 
 ## Dois pacotes fósseis — `clickhouse-consumer` e `conversation-writer` *(quarentena 2026-08-03)*
 
@@ -528,20 +529,6 @@ ganhou a marca de quarentena no cabeçalho. **Armadilha registrada lá:**
 destinos opostos; quem for apagar precisa olhar duas vezes.
 
 ---
-
-## ~~Suítes vermelhas — os 4 pacotes restantes~~ ✅ **FECHADO 2026-08-03** *(48 → 0)*
-
-> **Placar:** `auth-api 64` · `config-api 29` · `pricing-api 47` · `evaluation-api 214` ·
-> `channel-gateway 653` · `analytics-api 520`. Nenhum dos 48 era defeito de código; dois
-> **escondiam** um (rota de review inalcançável). Detalhe completo no `CHANGELOG.md`.
->
-> **O que sobrou como regra**, e vale para a próxima suíte que alguém escrever:
-> · dublê responde à ESTRUTURA do objeto real (derivar por introspecção > listar à mão);
-> · dublê de store responde por CHAVE, nunca com valor único nem por ordem de chamada;
-> · ao consertar um vermelho, olhar a CLASSE inteira — o vermelho costuma ter irmãos verdes
->   pela mesma causa, e esses são piores;
-> · teste que copia a condição de produção para dentro de si não testa nada;
-> · alavanca do teste tem de ser a fonte que o CÓDIGO lê (config-api, não `Settings`).
 
 ## Costura única de aquisição (`acquire`/`release`) *(arco separado, adiado — 2026-07-31)*
 
@@ -850,21 +837,6 @@ multi-pool** seguem inexistentes, embora a F5 os previsse.
 
 ---
 
-## ~~analytics-api — 23 testes vermelhos há tempo~~ ✅ **FECHADO 2026-08-03**
-
-> Os 23 estavam corrigidos desde 2026-07-28/29 — (a) e (b) já marcados ✅ aqui, e o item (c)
-> ("`TestDashboardRBAC` pendurou em duas execuções, interrompido com Ctrl+C, não
-> investigado") **não se reproduz**: `test_dashboard.py` + `test_admin.py` medidos em
-> 2026-08-03 dão **51 passed em 0,51 s** (`infra/test/probe_hygiene.sh`, bloco 1a). A trava
-> provavelmente morreu junto com a causa de (a) — o `MagicMock` que fazia
-> `analytics_open_access` responder truthy trocava o caminho de código exercitado.
->
-> A lição de (a) sobrevive onde ela vale: `CLAUDE.md` § Postura de Engenharia cita o caso
-> ("`MagicMock` devolvendo truthy para `analytics_open_access` — 14 testes de RBAC trocaram
-> de caminho") no catálogo de testes-que-não-podem-reprovar. Detalhe em `CHANGELOG.md`.
-
----
-
 ## Eventos — três superfícies para duas ideias *(desenho fechado 2026-07-28, não implementado)*
 
 Levantamento do platform-ui achou **três** telas de "Eventos", duas delas cópia literal
@@ -901,29 +873,6 @@ rota (arrasta `MetricSelector` junto); `ContactsPage` não é importado no route
 sem item de nav.
 
 ---
-
-## ~~Arc 12 — `segment_id` em `agent_business_events`~~ ✅ **IMPLEMENTADO 2026-08-03**
-
-> Plano A+C executado como desenhado. Ver CHANGELOG. **Destrava as fatias 3 e 4** do arco
-> "wrap-up como fonte de dados" (§ acima) — que agora são o próximo passo natural — e o
-> cruzamento com Evaluation pelo mesmo `segment_id`.
->
-> **Reenquadrado pela medição de 2026-08-03** (`infra/test/probe_block2.sh`, bloco B). A nota
-> anterior dizia *"nenhum YAML passa `$.segment_id`, então na prática hoje só a rede (C)
-> atribui — é uma linha por chamada"*. Medido: `agent_business_events` tem **1 linha**, de
-> `2026-06-10 12:00:00.000` (timestamp redondo, categoria
-> `retencao_humano.skill_finalizacao_v1.nps_contact`) — **seed**. Zero com `segment_id`.
->
-> **Não há produtor algum.** A busca estática não acha um único chamador de `agent_event`:
-> nenhum YAML de skill, nenhum smoke, nenhum serviço. Logo a rede (C) também não atribui
-> nada — não há o que atribuir. A coluna entregue em 03/08 nunca foi exercitada por dado real,
-> e o teste que a cobre (`test_agent_event_segment.py`) prova a função, não o laço que a
-> alimentaria.
->
-> Consequência para o planejamento: **"ligar o caminho A" não é uma linha por chamada — é
-> criar a PRIMEIRA chamada do sistema.** A infra do Arc 12 está completa de ponta a ponta
-> (tool, tópico, tabela, `/reports/agent-events/*`, UI) e ociosa. O primeiro produtor natural
-> é a **fatia 3 do wrap-up** (abaixo), não um skill avulso.
 
 ## Posição na fila — resíduos após o fix do `queue.position_updated` ✅ *(2026-07-27, ver CHANGELOG)*
 
@@ -1170,23 +1119,6 @@ e adotado por OTP, NPS e survey multi-pergunta. ADRs: `docs/adr/adr-otp-workflow
 
 ---
 
-## ~~evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente~~ ✅ **FECHADO 2026-08-03**
-
-> Medido: **60 passed em 3,95 s** no `test_router.py`, dentro do container
-> (`infra/test/probe_hygiene.sh`, bloco 1b). As três causas raiz (mock novo × `dict(record)`,
-> `422` no `/review`, `state.redis` ausente na fixture) foram embora com o conserto das
-> suítes de 2026-08-03. Os testes nominalmente citados no item — `test_list_results`,
-> `test_lock_result`, `test_review_result`, `test_review_invalid_outcome`,
-> `test_create_contestation`, `test_cannot_contest_locked_result` — **continuam existindo** e
-> passando (conferido por nome, não pelo total: total verde não prova que o caso específico
-> não foi deletado).
->
-> **Ressalva sobre o número:** o item dizia "10 de 83". O 83 era a suíte **do pacote** na
-> época, não o arquivo — hoje o pacote está em 214 e o arquivo em 60. Prever ">83 no arquivo"
-> foi erro meu de leitura, e só apareceu porque a previsão estava escrita.
-
----
-
 ## Flow — step de expressão sandboxed (NÃO eval cru) *(decisão de design, 2026-06-28)*
 
 **Necessidade**: valores computados / lógica mais rica em flows (ex.: o loop p/ ler o form JSON de pesquisa de
@@ -1411,25 +1343,6 @@ Modelo corrigido e backend verde em [`docs/arcos/delegate-workflow-io.md`](docs/
     eram nomes quase idênticos para eixos diferentes.)* (c) snapshot de
     ContextStore com evolução entre suspends (hoje só o estado atual no strip Input context).
     (d) duration "corridas vs úteis" (business_hours) lado a lado.
-
-## ~~Pricing → quota Redis não existe~~ ✅ **STALE — resolvido desde 2026-06-04/05** *(conferido 2026-08-03)*
-
-O item descrevia o estado **anterior** à própria correção que pedia. `quota_sync.py` existe
-(capacity-governance itens 1 e 2), grava `max_concurrent_sessions` **e**
-`capacity:{ai_agent,human_agent}`, e re-deriva tudo no boot. Medido ao vivo: `370 / 360 / 10`,
-com log do `sync_all` e `admission.py:240` lendo a mesma chave.
-
-**O que a conferência achou de verdade** (ver CHANGELOG): (a) `quota_sync.py` e
-`docs/arcos/pricing.md` ainda descreviam a **admissão híbrida removida em 2026-08-02** — corrigidos
-com o mapa atual (`capacity:ai_agent` = admissão · `capacity:human_agent` = login ·
-`max_concurrent_sessions` = provisionamento); (b) `quota_sync` **não tinha teste nenhum**, e o
-contrato com o routing é uma string cujo desalinhamento causa **fail open** silencioso — 6 testes
-novos fecham o lado do produtor (o do consumidor já estava preso).
-
-**Resíduo menor:** tenant `smoke_gprobe_pricing` com capacidade 1 aparece no sync do boot —
-resíduo de smoke, mesma família dos "pools fantasma".
-
----
 
 ## Relatórios analíticos — Agentes e Pools *(só o que resta aberto; histórico no CHANGELOG)*
 

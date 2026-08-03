@@ -2,7 +2,7 @@
 
 ---
 
-## Poda da seção de capacidade: 503 → 81 linhas, e duas contradições que ela escondia 🧹✅ (2026-08-03)
+## Poda do TODO: 2519 → 2010 linhas, e as contradições que o volume escondia 🧹✅ (2026-08-03)
 
 A maior seção do `TODO.md` (20% do arquivo) descrevia um arco **majoritariamente concluído**: F1,
 F2, F3a, F3b, F4a/b/c, F5, F5b, P1, P2 e P3, todas ✅ em 02–03/08, cada uma com entrada própria e
@@ -49,6 +49,32 @@ menos trivial no método.
 
 Corridas: dry-run (números e linhas de borda conferidos) → `--apply`, backup em `TODO.md.bak`.
 `TODO.md`: **2519 → 2097 linhas**.
+
+### Segunda poda — as 7 seções tachadas, e a armadilha que 3 delas tinham
+
+Sete seções `## ~~…~~ ✅` sobreviviam no arquivo. Caso do `prune_todo_closed.py`, que remove seção
+inteira — **e é justamente por remover inteira que ele não pode decidir sozinho**: título tachado
+não garante corpo fechado. **Três das sete tinham resíduo vivo enterrado no meio**, colhido à mão
+antes da remoção:
+
+| Seção | O que estava enterrado | Para onde foi |
+|---|---|---|
+| `close_reason` do contato | `_TRANSPORT_TO_CLOSE_REASON` cobre 6 transportes; completar o mapa **se** o WARNING aparecer em produção | § Wrap-up unificado — resíduos após a Phase 2 |
+| Pricing → quota Redis | tenant fantasma `smoke_gprobe_pricing` (capacidade 1) aparecendo no `sync_all` do boot | tabela de resíduos de smoke da § Capacidade — mesma família dos pools fantasma |
+| Suítes vermelhas (4 pacotes) | 5 regras destiladas dos 48 vermelhos; 3 já tinham casa permanente, **2 não** | § Erros de método nº 7, *"Como um dublê mente"* |
+
+A do **Arc 12** saiu por um motivo diferente e mais forte: estava STALE de um jeito ativo. Afirmava
+*"não há produtor algum — a infra está completa e ociosa"*, e a fatia 3 do wrap-up criou o primeiro
+produtor **no mesmo dia**. Quem a lesse hoje planejaria construir o que já existe.
+
+**O `ALREADY_PRUNED` que o script ganhou** é a lição do Portão D aplicada a si mesmo: os 10 padrões
+da rodada anterior nunca mais vão casar, e mantê-los em `CLOSED` faria o aviso *"NÃO ENCONTRADO"*
+disparar em toda execução, para sempre. Aviso com álibi permanente é equivalente a não ter aviso —
+e o aviso existe para denunciar **título que mudou**, que é um caso real. Passaram a lista
+documentada, não verificada.
+
+110 linhas, exatamente a previsão, com os 7 tamanhos individuais batendo. **`TODO.md`: 2519 → 2010
+linhas no dia (−20%), com 3 resíduos preservados e 1 contradição ativa eliminada.**
 
 ---
 
