@@ -1337,7 +1337,10 @@ class TestPoolPrincipalAuth:
             m.return_value.analytics_open_access = True
             m.return_value.auth_jwt_secret = "secret"
             principal = await optional_pool_principal(credentials=creds)
-        assert principal.accessible_pools == ["pool_a"]
+        # O espelho `-int` entra por DERIVAÇÃO (`_with_internal_mirrors`, ADR
+        # author-bound D2): quem alcança `p` alcança `p-int`. O teste fixava a forma
+        # anterior à I5. Ver `test_internal_mirrors_are_derived` abaixo para o porquê.
+        assert set(principal.accessible_pools) == {"pool_a", "pool_a-int"}
 
     async def test_open_access_no_token_still_unrestricted(self):
         # Sem token (dashboards/embeds) segue irrestrito — nada quebra.
@@ -1400,7 +1403,49 @@ class TestPoolPrincipalAuth:
             m.return_value.analytics_open_access = False
             m.return_value.auth_jwt_secret = secret
             principal = await optional_pool_principal(credentials=creds)
-        assert principal.accessible_pools == ["sac", "retencao"]
+        assert set(principal.accessible_pools) == {"sac", "sac-int", "retencao", "retencao-int"}
+
+    async def test_internal_mirrors_are_derived(self):
+        """Quem alcança `p` alcança `p-int` — e o espelho não duplica se já veio no token.
+
+        Diagnóstico (2026-08-03): estes dois testes reprovavam desde a I5 e o `TODO.md`
+        registrava a hipótese de que era `PLUGHUB_AUTH_JWT_SECRET` ausente no container.
+        **A variável está definida** — a suposição foi conferida e derrubada. A causa é
+        `_with_internal_mirrors` (ADR author-bound, D2), acrescentado depois que os
+        testes foram escritos.
+
+        Vale um teste próprio porque o modo de falha desta função é **ausência**: um pool
+        a menos no relatório, não erro. Se a derivação sumisse, o supervisor com acesso a
+        `retencao_humano` deixaria de enxergar o ACW de `retencao_humano-int` — a I5
+        teria tornado o pós-atendimento mensurável e o escondido de quem precisa dele.
+        Nada ficaria vermelho, e a tela pareceria certa.
+        """
+        import jwt as pyjwt
+        from unittest.mock import MagicMock, patch
+        from ..pool_auth import optional_pool_principal
+        secret = "testsecret"
+
+        async def _resolve(pools: list[str]) -> list[str]:
+            token = pyjwt.encode(
+                {"sub": "u", "tenant_id": "t1", "accessible_pools": pools},
+                secret, algorithm="HS256",
+            )
+            creds = MagicMock()
+            creds.credentials = token
+            with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+                m.return_value.analytics_open_access = False
+                m.return_value.auth_jwt_secret = secret
+                p = await optional_pool_principal(credentials=creds)
+            return p.accessible_pools
+
+        # espelho já presente no token → não duplica
+        got = await _resolve(["retencao_humano", "retencao_humano-int"])
+        assert got.count("retencao_humano-int") == 1
+        assert set(got) == {"retencao_humano", "retencao_humano-int"}
+
+        # o espelho de um espelho não é criado (`-int-int` não existe)
+        got = await _resolve(["sac-int"])
+        assert got == ["sac-int"]
 
     async def test_invalid_jwt_raises_401(self):
         from unittest.mock import MagicMock, patch

@@ -8,8 +8,9 @@ Cobertura:
   TestRefresh                — refresh token rotation, token inválido
   TestLogout                 — logout OK e idempotente
   TestMe                     — Bearer válido, sem token, token expirado
-  TestCreateUser             — criação OK, e-mail duplicado, sem admin token
-  TestListUsers              — listagem filtrada por tenant
+  TestCreateUser             — criação OK, e-mail duplicado, 401 sem Bearer, 403 sem grant
+                               e 403 com grant `read_only`
+  TestListUsers              — listagem filtrada por tenant, `read_only` basta, 403 sem grant
   TestGetUser                — OK, não encontrado
   TestUpdateUser             — update parcial (name, password, roles)
   TestDeleteUser             — OK, não encontrado
@@ -17,7 +18,7 @@ Cobertura:
   TestPasswordUtils          — hash/verify
   TestJwtUtils               — encode/decode, expirado
   TestHashRefreshToken       — determinístico, diferente do plain
-  TestGrantPermission        — grant OK, idempotente
+  TestGrantPermission        — grant OK, 401 sem Bearer, 403 sem grant, 401 com token expirado
   TestListPermissions        — list com filtros user_id/module
   TestRevokePermission       — revoke OK e not-found
   TestResolvePermission      — allowed true/false, global e pool scope
@@ -127,7 +128,10 @@ def client(mock_pool):
             yield c, mock_pool
 
 
-def _access_token(user: dict[str, Any] | None = None) -> str:
+def _access_token(
+    user: dict[str, Any] | None = None,
+    module_config: dict[str, Any] | None = None,
+) -> str:
     u = user or _SAMPLE_USER
     return create_access_token(
         user_id=str(u["id"]),
@@ -137,7 +141,34 @@ def _access_token(user: dict[str, Any] | None = None) -> str:
         roles=list(u["roles"]),
         accessible_pools=list(u["accessible_pools"]),
         settings=TEST_SETTINGS,
+        module_config=module_config,
     )
+
+
+# ─── Autorização das rotas de gestão (G-PROBE, 2026-06-26) ────────────────────
+# Gestão de usuários/permissões/templates/módulos NÃO usa mais `X-Admin-Token`:
+# autoriza pelo JWT do operador + ABAC `config.usuarios` (`router.py:62-66`,
+# *"Strict: sem fallback de admin-token"*). Um teste que ainda mandasse o header
+# antigo receberia **401 por falta de Bearer** — que é o que os 23 vermelhos
+# relatavam (`assert 401 == 204`), e não um defeito de código.
+#
+# `_check_config_field` é **grant-first**: ausência do campo = deny. Logo os dois
+# modos de recusa têm status DIFERENTES, e é por isso que os testes negativos
+# abaixo afirmam o status exato em vez de "não-2xx" — um `assert r.status_code
+# >= 400` passaria pelos dois motivos errados (rota inexistente, payload inválido).
+#
+#   sem Authorization            → 401 (_bearer_claims)
+#   Bearer sem config.usuarios   → 403 (_require_config_usuarios)
+#   Bearer read_only em escrita  → 403 (rank insuficiente)
+
+
+def _usuarios_token(access: str = "read_write") -> str:
+    """JWT com o grant ABAC que as rotas de gestão exigem."""
+    return _access_token(module_config={"config": {"usuarios": {"access": access, "scope": []}}})
+
+
+def _admin_headers(access: str = "read_write") -> dict[str, str]:
+    return {"Authorization": f"Bearer {_usuarios_token(access)}"}
 
 
 # ─── TestHealth ───────────────────────────────────────────────────────────────
@@ -282,7 +313,7 @@ class TestCreateUser:
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "new@test.local",
                              "password": "password123", "roles": ["supervisor"]},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 201
         assert r.json()["email"] == "new@test.local"
 
@@ -292,14 +323,35 @@ class TestCreateUser:
             r = c.post("/auth/users",
                        json={"tenant_id": "tenant_test", "email": "user@test.local",
                              "password": "password123"},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 409
 
-    def test_create_no_admin_token(self, client):
+    def test_create_without_bearer_is_401(self, client):
         c, _ = client
         r = c.post("/auth/users",
                    json={"tenant_id": "tenant_test", "email": "x@x.com", "password": "pw12345678"})
         assert r.status_code == 401
+
+    def test_create_with_bearer_but_no_grant_is_403(self, client):
+        """Grant-first: token válido SEM `config.usuarios` é 403, não 401.
+
+        Distinguir os dois é o ponto — 401 diz "não sei quem é você" e 403 diz
+        "sei, e não pode". Se o gate ABAC sumisse, este caso viraria 201 e o
+        de cima continuaria verde.
+        """
+        c, _ = client
+        r = c.post("/auth/users",
+                   json={"tenant_id": "tenant_test", "email": "x@x.com", "password": "pw12345678"},
+                   headers={"Authorization": f"Bearer {_access_token()}"})
+        assert r.status_code == 403
+
+    def test_create_with_read_only_grant_is_403(self, client):
+        """`read_only` lê, não escreve — `_ACCESS_RANK` 1 < 2."""
+        c, _ = client
+        r = c.post("/auth/users",
+                   json={"tenant_id": "tenant_test", "email": "x@x.com", "password": "pw12345678"},
+                   headers=_admin_headers("read_only"))
+        assert r.status_code == 403
 
 
 # ─── TestListUsers ────────────────────────────────────────────────────────────
@@ -311,9 +363,28 @@ class TestListUsers:
         users = [_SAMPLE_USER, _user_copy(email="b@test.local")]
         with patch("plughub_auth_api.router.db_mod.list_users", new=AsyncMock(return_value=users)):
             r = c.get("/auth/users?tenant_id=tenant_test",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 200
         assert len(r.json()) == 2
+
+    def test_list_users_read_only_grant_is_enough(self, client):
+        """Controle positivo do rank: leitura aceita `read_only`.
+
+        Sem ele, os testes de 403 acima passariam mesmo se o gate recusasse
+        TUDO — verde por recusa universal, que é o modo de falha mais fácil de
+        não ver num teste negativo.
+        """
+        c, _ = client
+        with patch("plughub_auth_api.router.db_mod.list_users", new=AsyncMock(return_value=[_SAMPLE_USER])):
+            r = c.get("/auth/users?tenant_id=tenant_test",
+                      headers=_admin_headers("read_only"))
+        assert r.status_code == 200
+
+    def test_list_users_without_grant_is_403(self, client):
+        c, _ = client
+        r = c.get("/auth/users?tenant_id=tenant_test",
+                  headers={"Authorization": f"Bearer {_access_token()}"})
+        assert r.status_code == 403
 
 
 # ─── TestGetUser ──────────────────────────────────────────────────────────────
@@ -324,14 +395,14 @@ class TestGetUser:
         c, _ = client
         uid = str(_SAMPLE_USER["id"])
         with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=_SAMPLE_USER)):
-            r = c.get(f"/auth/users/{uid}", headers={"x-admin-token": "test-admin-token"})
+            r = c.get(f"/auth/users/{uid}", headers=_admin_headers())
         assert r.status_code == 200
         assert r.json()["id"] == uid
 
     def test_get_not_found(self, client):
         c, _ = client
         with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=None)):
-            r = c.get(f"/auth/users/{uuid.uuid4()}", headers={"x-admin-token": "test-admin-token"})
+            r = c.get(f"/auth/users/{uuid.uuid4()}", headers=_admin_headers())
         assert r.status_code == 404
 
 
@@ -347,7 +418,7 @@ class TestUpdateUser:
              patch("plughub_auth_api.router.db_mod.update_user", new=AsyncMock(return_value=updated)):
             r = c.patch(f"/auth/users/{uid}",
                         json={"name": "New Name"},
-                        headers={"x-admin-token": "test-admin-token"})
+                        headers=_admin_headers())
         assert r.status_code == 200
         assert r.json()["name"] == "New Name"
 
@@ -356,7 +427,7 @@ class TestUpdateUser:
         with patch("plughub_auth_api.router.db_mod.get_user_by_id", new=AsyncMock(return_value=None)):
             r = c.patch(f"/auth/users/{uuid.uuid4()}",
                         json={"name": "x"},
-                        headers={"x-admin-token": "test-admin-token"})
+                        headers=_admin_headers())
         assert r.status_code == 404
 
 
@@ -368,13 +439,13 @@ class TestDeleteUser:
         c, _ = client
         uid = str(_SAMPLE_USER["id"])
         with patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=True)):
-            r = c.delete(f"/auth/users/{uid}", headers={"x-admin-token": "test-admin-token"})
+            r = c.delete(f"/auth/users/{uid}", headers=_admin_headers())
         assert r.status_code == 204
 
     def test_delete_not_found(self, client):
         c, _ = client
         with patch("plughub_auth_api.router.db_mod.delete_user", new=AsyncMock(return_value=False)):
-            r = c.delete(f"/auth/users/{uuid.uuid4()}", headers={"x-admin-token": "test-admin-token"})
+            r = c.delete(f"/auth/users/{uuid.uuid4()}", headers=_admin_headers())
         assert r.status_code == 404
 
 
@@ -524,16 +595,38 @@ class TestGrantPermission:
             r = c.post("/auth/permissions",
                        json={"tenant_id": "tenant_test", "user_id": str(_SAMPLE_USER["id"]),
                              "module": "analytics", "action": "view"},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 201
         body = r.json()
         assert body["module"] == "analytics"
         assert body["scope_type"] == "global"
 
-    def test_grant_without_admin_token(self, client):
+    def test_grant_without_bearer_is_401(self, client):
         c, _ = client
         r = c.post("/auth/permissions",
                    json={"tenant_id": "t", "user_id": "u", "module": "analytics", "action": "view"})
+        assert r.status_code == 401
+
+    def test_grant_without_grant_is_403(self, client):
+        c, _ = client
+        r = c.post("/auth/permissions",
+                   json={"tenant_id": "t", "user_id": "u", "module": "analytics", "action": "view"},
+                   headers={"Authorization": f"Bearer {_access_token()}"})
+        assert r.status_code == 403
+
+    def test_grant_with_expired_bearer_is_401(self, client):
+        """Token expirado é falha de AUTENTICAÇÃO (401), mesmo carregando o grant."""
+        c, _ = client
+        expired = Settings(**{**TEST_SETTINGS.model_dump(), "access_token_expire_minutes": -1})
+        token = create_access_token(
+            user_id=str(_SAMPLE_USER["id"]), tenant_id="tenant_test",
+            email=_SAMPLE_USER["email"], name=_SAMPLE_USER["name"],
+            roles=["admin"], accessible_pools=[], settings=expired,
+            module_config={"config": {"usuarios": {"access": "read_write", "scope": []}}},
+        )
+        r = c.post("/auth/permissions",
+                   json={"tenant_id": "t", "user_id": "u", "module": "analytics", "action": "view"},
+                   headers={"Authorization": f"Bearer {token}"})
         assert r.status_code == 401
 
     def test_grant_pool_scope(self, client):
@@ -545,7 +638,7 @@ class TestGrantPermission:
                        json={"tenant_id": "tenant_test", "user_id": str(_SAMPLE_USER["id"]),
                              "module": "analytics", "action": "view",
                              "scope_type": "pool", "scope_id": "pool_sac"},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 201
         assert r.json()["scope_id"] == "pool_sac"
 
@@ -559,7 +652,7 @@ class TestListPermissions:
         with patch("plughub_auth_api.router.perms_mod.list_permissions",
                    new=AsyncMock(return_value=[_SAMPLE_PERM])):
             r = c.get("/auth/permissions?tenant_id=tenant_test",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 200
         assert len(r.json()) == 1
 
@@ -568,7 +661,7 @@ class TestListPermissions:
         with patch("plughub_auth_api.router.perms_mod.list_permissions",
                    new=AsyncMock(return_value=[_SAMPLE_PERM])) as mock:
             r = c.get(f"/auth/permissions?tenant_id=tenant_test&user_id={_SAMPLE_USER['id']}",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 200
         assert mock.call_args.kwargs.get("user_id") == str(_SAMPLE_USER["id"])
 
@@ -582,7 +675,7 @@ class TestRevokePermission:
         with patch("plughub_auth_api.router.perms_mod.revoke_permission",
                    new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/permissions/{uuid.uuid4()}",
-                         headers={"x-admin-token": "test-admin-token"})
+                         headers=_admin_headers())
         assert r.status_code == 204
 
     def test_revoke_not_found(self, client):
@@ -590,7 +683,7 @@ class TestRevokePermission:
         with patch("plughub_auth_api.router.perms_mod.revoke_permission",
                    new=AsyncMock(return_value=False)):
             r = c.delete(f"/auth/permissions/{uuid.uuid4()}",
-                         headers={"x-admin-token": "test-admin-token"})
+                         headers=_admin_headers())
         assert r.status_code == 404
 
 
@@ -641,7 +734,7 @@ class TestTemplates:
             r = c.post("/auth/templates",
                        json={"tenant_id": "tenant_test", "name": "operator_default",
                              "permissions": [{"module": "analytics", "action": "view"}]},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 201
         assert r.json()["name"] == "operator_default"
 
@@ -650,7 +743,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.list_templates",
                    new=AsyncMock(return_value=[_SAMPLE_TMPL])):
             r = c.get("/auth/templates?tenant_id=tenant_test",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 200
         assert len(r.json()) == 1
 
@@ -660,7 +753,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.get_template",
                    new=AsyncMock(return_value=_SAMPLE_TMPL)):
             r = c.get(f"/auth/templates/{tid}",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 200
         assert r.json()["id"] == tid
 
@@ -669,7 +762,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.get_template",
                    new=AsyncMock(return_value=None)):
             r = c.get(f"/auth/templates/{uuid.uuid4()}",
-                      headers={"x-admin-token": "test-admin-token"})
+                      headers=_admin_headers())
         assert r.status_code == 404
 
     def test_update_template(self, client):
@@ -682,7 +775,7 @@ class TestTemplates:
                    new=AsyncMock(return_value=updated)):
             r = c.patch(f"/auth/templates/{tid}",
                         json={"description": "Updated description"},
-                        headers={"x-admin-token": "test-admin-token"})
+                        headers=_admin_headers())
         assert r.status_code == 200
         assert r.json()["description"] == "Updated description"
 
@@ -691,7 +784,7 @@ class TestTemplates:
         with patch("plughub_auth_api.router.perms_mod.delete_template",
                    new=AsyncMock(return_value=True)):
             r = c.delete(f"/auth/templates/{uuid.uuid4()}",
-                         headers={"x-admin-token": "test-admin-token"})
+                         headers=_admin_headers())
         assert r.status_code == 204
 
 
@@ -709,7 +802,7 @@ class TestApplyTemplate:
                    new=AsyncMock(return_value=materialized)):
             r = c.post(f"/auth/templates/{_SAMPLE_TMPL['id']}/apply",
                        json={"user_id": str(_SAMPLE_USER["id"]), "granted_by": "admin"},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 200
         assert len(r.json()) == 2
 
@@ -719,7 +812,7 @@ class TestApplyTemplate:
                    new=AsyncMock(side_effect=ValueError("Template not found"))):
             r = c.post(f"/auth/templates/{uuid.uuid4()}/apply",
                        json={"user_id": str(_SAMPLE_USER["id"])},
-                       headers={"x-admin-token": "test-admin-token"})
+                       headers=_admin_headers())
         assert r.status_code == 404
 
 

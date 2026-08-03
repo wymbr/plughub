@@ -88,8 +88,17 @@ class TestAuthHandshake:
     async def test_auth_timeout_closes_ws(
         self, mock_producer, registry, context_reader, settings, mock_redis
     ):
-        """If client never sends conn.authenticate, WS is closed with 4001."""
-        # receive_text sleeps longer than ws_auth_timeout_s to simulate no auth
+        """If client never sends conn.authenticate, WS is closed with 4001.
+
+        **A alavanca do teste era inerte (corrigido 2026-08-03).** Ele reduzia
+        `Settings.ws_auth_timeout_s` para 0, mas o adapter resolve o prazo por
+        `resolve_ws_auth_timeout_s`, cuja fonte ÚNICA é o `WebchatConfigCache` — o valor
+        de `Settings` é só o *fallback* (invariante do CLAUDE.md: *"quando env e
+        config-api têm a mesma chave, config-api vence"*). Com o cache respondendo o
+        default de 30 s, o `wait_for` não estourava, o `_never_respond` dormia 10 s,
+        devolvia `None`, e o `json.loads(None)` estourava em `_auth_handshake`. O
+        vermelho parecia bug do handshake e era o teste puxando a alavanca errada.
+        """
         async def _never_respond():
             await asyncio.sleep(10)
 
@@ -99,12 +108,15 @@ class TestAuthHandshake:
         ws.close = AsyncMock()
         ws.receive_text = _never_respond
 
-        # Use a tiny auth timeout so the test completes in milliseconds
-        from plughub_channel_gateway.config import Settings
-        fast_settings = Settings(**{**settings.model_dump(), "ws_auth_timeout_s": 0})
-
-        adapter = make_adapter(ws, mock_producer, registry, context_reader, fast_settings, mock_redis)
-        await adapter.handle()
+        # Prazo curto na fonte que o código LÊ (não em Settings).
+        from plughub_channel_gateway import webchat_config as wc
+        _saved = wc.webchat_config._data
+        wc.webchat_config._data = {"auth_timeout_s": 0}
+        try:
+            adapter = make_adapter(ws, mock_producer, registry, context_reader, settings, mock_redis)
+            await adapter.handle()
+        finally:
+            wc.webchat_config._data = _saved
 
         ws.close.assert_called_once()
         close_args = ws.close.call_args
@@ -786,8 +798,13 @@ class TestStreamExpiredReconnect:
         _stream_delivery_loop catches StreamExpiredError and sends
         conn.session_ended to the client.
         """
-        # Client reconnects with a cursor — stream does NOT exist
-        mock_redis.exists = AsyncMock(return_value=0)
+        # Client reconnects with a cursor — stream does NOT exist.
+        # A sondagem é por XRANGE (lista vazia = chave ausente), não por EXISTS: a troca
+        # foi deliberada para fechar a race entre sondar e o primeiro XREAD
+        # (`stream_subscriber.py:112-118`). O teste continuava zerando `exists`, que o
+        # código não lê mais — a condição nunca era criada, e o vermelho dizia
+        # "conn.session_ended não enviado" como se o adapter tivesse deixado de enviar.
+        mock_redis.xrange = AsyncMock(return_value=[])
         # skip_auth=True so we control the exact auth message (cursor="1234-0")
         ws = make_ws_mock(
             [json.dumps({"type": "conn.authenticate",

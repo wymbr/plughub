@@ -18,6 +18,12 @@
 # "verde" na conversa. A pergunta a fazer de cada linha com skip > 0 é a mesma:
 # *o que faria estes testes rodarem, e por que isso não está acontecendo aqui?*
 #
+# SUÍTE INVISÍVEL (2026-08-03). Três pacotes (auth-api, session-replayer,
+# usage-aggregator) mantêm testes em `packages/<pkg>/tests` que o Dockerfile não copia —
+# a suíte existe, é mantida, e nunca roda. Este relatório deixou de apenas REPORTAR isso
+# e passa a RODAR, montando o diretório num container efêmero da mesma imagem. A decisão
+# (montar × copiar na imagem × rodar no host) está comentada no ponto do código.
+#
 # Uso:  bash infra/test/report_suite_skips.sh [pacote ...]
 # Pré:  stack demo no ar. Dura: ~1 min por pacote com suíte.
 
@@ -90,8 +96,41 @@ for pkg in "${PKGS[@]}"; do
       # bug: ruidoso no terminal e correto no resultado, portanto fácil de ignorar.
       N_REPO=$(find "packages/$pkg" -name 'test_*.py' 2>/dev/null | wc -l | tr -d ' ')
       if [ "${N_REPO:-0}" -gt 0 ]; then
-        printf '%-24s %8s %8s %8s   %s\n' "$pkg" 0 0 0 \
-          "❌ SUÍTE INVISÍVEL — $N_REPO arquivo(s) no repo, 0 na imagem (Dockerfile não copia?)"
+        # SUÍTE INVISÍVEL — o teste existe no repo e não na imagem. Em vez de só
+        # reportar, RODA: monta `packages/<pkg>/tests` num container efêmero da mesma
+        # imagem (2026-08-03).
+        #
+        # Por que montar e não copiar `tests/` no Dockerfile: teste não precisa viajar
+        # na imagem de produção. E por que não rodar no host: as deps de dev teriam de
+        # existir lá, e a suíte deixaria de rodar no MESMO ambiente que o serviço — que
+        # é toda a razão de este relatório existir (o caso `REDIS_URL` ×
+        # `PLUGHUB_REDIS_URL` só apareceu por rodar dentro do container).
+        #
+        # `--no-deps` (não sobe a stack), `--rm` (não deixa resíduo), mount `:ro` +
+        # PYTHONDONTWRITEBYTECODE (não suja o repo com `__pycache__` de root — em WSL
+        # isso vira arquivo que o usuário não consegue apagar).
+        MOUNT_OUT="$($DC run --rm --no-deps \
+              -e PYTHONDONTWRITEBYTECODE=1 \
+              -v "$PWD/packages/$pkg/tests:$WD/tests:ro" \
+              "$pkg" sh -lc \
+              "pip install -q pytest pytest-asyncio httpx >/dev/null 2>&1;
+               cd '$WD' && python -m pytest -p no:cacheprovider -q tests 2>&1 | tail -5" 2>&1)"
+
+        MP=$(printf '%s' "$MOUNT_OUT" | grep -oE '[0-9]+ passed'  | grep -oE '[0-9]+' | tail -1)
+        MS=$(printf '%s' "$MOUNT_OUT" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | tail -1)
+        MF=$(printf '%s' "$MOUNT_OUT" | grep -oE '[0-9]+ (failed|error)' | grep -oE '[0-9]+' | tail -1)
+
+        if [ -z "$MP$MS$MF" ]; then
+          printf '%-24s %8s %8s %8s   %s\n' "$pkg" - - - \
+            "❌ INVISÍVEL e o mount TAMBÉM não mediu: ${MOUNT_OUT##*$'\n'}"
+          INCONCL=$((INCONCL + 1)); continue
+        fi
+
+        [ "${MS:-0}" -gt 0 ] 2>/dev/null && TOTAL_SKIP=$((TOTAL_SKIP + MS))
+        MNOTE="↺ rodou por MOUNT (não está na imagem — por desenho)"
+        [ "${MF:-0}" -gt 0 ] 2>/dev/null && MNOTE="❌ falhas — $MNOTE"
+        printf '%-24s %8s %8s %8s   %s\n' "$pkg" "${MP:-0}" "${MS:-0}" "${MF:-0}" "$MNOTE"
+        continue
       else
         printf '%-24s %8s %8s %8s   %s\n' "$pkg" 0 0 0 \
           "⚠️  SEM SUÍTE — nenhum test_*.py no repositório"

@@ -135,16 +135,27 @@ Toda mutação de resources — `POST /v1/pricing/resources` (upsert), `DELETE`
 instalações) e grava:
 
 ```
-{tenant}:quota:max_concurrent_sessions = C     (C > 0)
-                                          DEL  (C == 0 — sem resources → sem limite)
+{tenant}:quota:max_concurrent_sessions = C            (C > 0)  |  DEL (C == 0)
+{tenant}:quota:capacity:ai_agent       = C_ai         (item 2, 2026-06-05)
+{tenant}:quota:capacity:human_agent    = C_human
 ```
 
-Leitores: `AdmissionController._shared_limit` no routing-engine (admissão híbrida:
-`shared = C − Σ session_reservation`; rejeição vira outage `shared_full`) e
-`checkConcurrentSessions` no mcp-server. Recompute completo e idempotente; no boot
-o `sync_all` re-deriva a quota de todos os tenants com resources (auto-cura após
-flush do Redis). `PLUGHUB_PRICING_REDIS_URL` vazia → sync desabilitado; Redis fora
-→ loga warning e o billing segue (quota nunca quebra o pricing).
+**Leitores — corrigido em 2026-08-03.** Esta seção dizia que `max_concurrent_sessions`
+alimentava `AdmissionController._shared_limit` (admissão híbrida, `shared = C − Σ
+session_reservation`, rejeição `shared_full`). Esse modelo foi **removido em 2026-08-02**
+(fatia 3 do arco de capacidade): somava licença humana com licença de IA num pote único e
+recusava contato real com humano ocioso.
+
+| Chave | Quem lê hoje | Governa |
+|---|---|---|
+| `capacity:ai_agent` | `AdmissionController` | **admissão de sessão** — `kind:ai ≤ C_ai`, o único gate que sobrou; rejeição só na porta, `cause="quota"` |
+| `capacity:human_agent` | `agent_login` (mcp-server) | **login humano** concorrente (`human_capacity_exhausted`). Licença humana é por login; gateá-la por sessão seria gate duplo na unidade errada |
+| `max_concurrent_sessions` | `capacity.ts/deployViolation`, `checkConcurrentSessions` | **provisionamento** (Σ declarada nos deploys ≤ C) — **não** admissão |
+
+Recompute completo e idempotente; no boot o `sync_all` re-deriva a quota de todos os
+tenants com resources (auto-cura após flush do Redis). `PLUGHUB_PRICING_REDIS_URL` vazia
+→ sync desabilitado; Redis fora → loga warning e o billing segue (quota nunca quebra o
+pricing).
 
 As dimensões de **uso** (`{tenant}:quota:limit:{dimension}` — messages,
 llm_tokens, voice_minutes — lidas pelo `assertQuota()`) seguem **sem produtor**:

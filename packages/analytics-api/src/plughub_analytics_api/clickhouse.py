@@ -680,6 +680,7 @@ CREATE TABLE IF NOT EXISTS {db}.agent_business_events
     category_l4    String,
     value          Float64,
     tags           Map(String, String),
+    segment_id     Nullable(String),
     emitted_at     DateTime64(3, 'UTC'),
     date           Date
 )
@@ -688,6 +689,22 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, category_l1, category_l2, category_l3, emitted_at)
 TTL toDateTime(emitted_at) + INTERVAL 2 YEAR
 """
+
+# Arc 12 fatia 2 (2026-08-03) — atribuição por PARTICIPANTE.
+#
+# Aditivo e Nullable: `NULL` é o evento anterior à fatia (não sabemos quem emitiu) e
+# também aquele em que nem o skill passou `$.segment_id` nem o enricher resolveu. String
+# vazia seria pior — misturaria "não sabemos" com um segmento de id vazio, e o relatório
+# não teria como separar.
+#
+# **ORDER BY não muda, de propósito.** O ClickHouse só permite ACRESCENTAR ao fim da
+# chave, e depois de `emitted_at` (altíssima cardinalidade) o `segment_id` não podaria
+# nada — seria custo de merge sem ganho de leitura. Pô-lo antes exigiria recriar a tabela,
+# o que não paga com TTL de 2 anos de histórico.
+_DDL_AGENT_BUSINESS_EVENTS_MIGRATE_SEGMENT = (
+    "ALTER TABLE {db}.agent_business_events"
+    " ADD COLUMN IF NOT EXISTS segment_id Nullable(String) DEFAULT NULL"
+)
 
 # ── F10 (bancada): session_signal — voz do cliente/agente, store ÚNICO de sinais.
 # Cobre TODOS os grãos (segment|session|workflow|journey), gravados explicitamente
@@ -1024,6 +1041,8 @@ _MIGRATIONS = [
     _DDL_MESSAGES_MIGRATE_ORIGIN_CLASS,
     _DDL_SESSION_SIGNAL_MIGRATE_SCALE,    # Customer Voice: escala carimbada no sinal (top-box)
     _DDL_AGENT_EVENTS_DROP,               # fatia 2: DROP agent_events (substrato derivado → segments)
+    # Arc 12 fatia 2: quem emitiu o KPI (participante), não só em qual sessão.
+    _DDL_AGENT_BUSINESS_EVENTS_MIGRATE_SEGMENT,
 ]
 
 
@@ -1600,7 +1619,17 @@ class AnalyticsStore:
         "event_id", "tenant_id", "session_id", "journey_id",
         "agent_type_id", "skill_id", "pool_id",
         "category", "category_l1", "category_l2", "category_l3", "category_l4",
-        "value", "tags", "emitted_at", "date",
+        # DUAS ordens diferentes, e só UMA importa aqui (conferido 2026-08-03):
+        #
+        # · esta lista ↔ `_agent_business_event_row`: **posicional e acoplada**.
+        #   Acrescentar no fim de uma e no meio da outra desloca todas as seguintes, e o
+        #   INSERT NÃO falha — grava o valor de uma coluna em outra do mesmo tipo. As
+        #   duas edições andam juntas, e `test_agent_event_segment.py` trava isso.
+        # · esta lista ↔ ordem FÍSICA da tabela: **irrelevante**. `_insert` passa
+        #   `column_names=`, então o ClickHouse casa por nome. Por isso não há problema
+        #   em o `ALTER` ter posto `segment_id` no fim da tabela migrada enquanto o
+        #   `CREATE` o põe antes de `emitted_at` numa instalação nova.
+        "value", "tags", "segment_id", "emitted_at", "date",
     ]
 
     async def insert_agent_business_event(self, row: dict) -> None:
@@ -2326,6 +2355,13 @@ def _agent_business_event_row(d: dict) -> list:
         _level("category_l4", 3),
         float(d.get("value", 0.0)),
         tags,
+        # Arc 12 fatia 2 — posição casada com `_AGENT_BUSINESS_EVENT_COLS`.
+        # `or None` e não `or ""`: string vazia se confundiria com um segmento real de
+        # id vazio, e o relatório perderia a distinção entre "ninguém atribuiu" e
+        # "atribuído". O enriquecimento por `instance_id` acontece no consumer, ANTES
+        # daqui — se chegou vazio até este ponto, os dois caminhos falharam e o NULL
+        # é a resposta honesta.
+        d.get("segment_id") or None,
         _parse_dt(ts) or datetime.utcnow(),
         _today_utc(ts),
     ]

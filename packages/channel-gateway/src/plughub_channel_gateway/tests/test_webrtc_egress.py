@@ -20,11 +20,11 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter
+from plughub_channel_gateway.adapters.webrtc import WebRTCAdapter, _SESSION_TTL
 from plughub_channel_gateway.adapters.webrtc_provider import (
     MockWebRTCProvider,
     LiveKitProvider,
@@ -210,8 +210,24 @@ class TestEgressStart:
 
         await adapter._start_egress(SESSION_ID, SEGMENT_ID, ROOM_NAME)
 
+        # `pytest.approx(str, rel=0)` comparava o valor gravado com a CLASSE `str` —
+        # "aproximadamente igual a <class 'str'>" não casa com nada, então este teste
+        # nunca pôde passar (corrigido 2026-08-03). O autor queria "um str qualquer";
+        # o instrumento para isso é `mock.ANY`, e aqui dá para afirmar mais: o valor é
+        # o egress_id, e é ele que o teardown usa para parar a gravação. Um valor vazio
+        # gravado aqui deixaria a sessão sem como encerrar o egress — falha silenciosa,
+        # que é exatamente o que este teste existe para pegar.
+        # O TTL é `_SESSION_TTL` (4 h), não 3600 — o literal antigo congelava um valor
+        # que mudou. Afirmar contra a constante mantém o contrato que importa: a chave
+        # de gravação vive tanto quanto a sessão, senão o teardown perde o egress_id e
+        # a gravação fica órfã no LiveKit.
         rec_key = f"channel:webrtc:{SESSION_ID}:egress:{SEGMENT_ID}"
-        redis.set.assert_any_call(rec_key, pytest.approx(str, rel=0), ex=3600)
+        redis.set.assert_any_call(rec_key, ANY, ex=_SESSION_TTL)
+
+        stored = next(
+            c.args[1] for c in redis.set.call_args_list if c.args[0] == rec_key
+        )
+        assert isinstance(stored, str) and stored, "egress_id gravado vazio"
 
     @pytest.mark.asyncio
     async def test_output_path_contains_session_and_segment(self):
@@ -539,65 +555,72 @@ class TestEgressStopAllIdempotent:
 
 
 class TestEgressRoutingAssigned:
-    """_on_routing_assigned integration: egress task created when flag set."""
+    """_on_routing_assigned: a gravação começa (ou não) conforme pool/medium/segment.
+
+    **Reescrita em 2026-08-03.** Os quatro testes desta classe REIMPLEMENTAVAM a condição
+    de `webrtc.py:690` no corpo do próprio teste e afirmavam sobre a cópia — o comentário
+    dizia isso abertamente (*"Replicate the guard condition"*). Consequências:
+
+    · Não tocavam o código de produção. Se a condição real mudasse — ou sumisse — os
+      quatro continuariam verdes. Cobertura aparente de uma decisão (gravar ou não
+      gravar a chamada do cliente) que ninguém verificava.
+    · Três passavam por acidente de tipo: `False and …` devolve `False`, e `is False`
+      dá certo. O quarto usava `segment_id = ""`, e `True and ""` devolve `""` —
+      falsy, mas não `False`. Reprovava por semântica do `and` do Python, não por
+      comportamento do produto.
+
+    Agora chamam `_on_routing_assigned` de verdade e observam se a task de egress foi
+    criada. O `_start_egress` é substituído para não subir gravação real; a asserção é
+    sobre TER SIDO CHAMADO, que é o que a condição decide.
+    """
+
+    @staticmethod
+    def _fields(*, recording: bool, capabilities: list[str], segment_id: str) -> dict:
+        return {
+            "agent_type": json.dumps({"media_capabilities": capabilities}),
+            "pool":       json.dumps({"webrtc_recording": recording}),
+            "segment_id": segment_id,
+        }
+
+    async def _run(self, fields: dict):
+        adapter, _, _ = _make_adapter()
+        with patch.object(adapter, "_start_egress", new=AsyncMock()) as start, \
+             patch.object(adapter, "_start_stt_pipeline", new=AsyncMock()):
+            await adapter._on_routing_assigned(
+                AsyncMock(), SESSION_ID, fields, adapter._settings,
+            )
+            await asyncio.sleep(0)      # deixa as tasks criadas iniciarem
+        return start
 
     @pytest.mark.asyncio
     async def test_egress_task_created_when_recording_enabled(self):
-        """
-        Verify that the egress guard logic in _on_routing_assigned creates a task
-        when pool.webrtc_recording=True and medium=voice.
-        The logic is extracted and tested as a unit to avoid full WS lifecycle.
-        """
-        pool_obj    = {"webrtc_recording": True}
-        medium      = "voice"
-        segment_id  = SEGMENT_ID
-
-        # Replicate the guard condition from _on_routing_assigned
-        should_start = (
-            pool_obj.get("webrtc_recording", False)
-            and segment_id
-            and medium in ("voice", "video")
+        start = await self._run(
+            self._fields(recording=True, capabilities=["voice"], segment_id=SEGMENT_ID)
         )
-        assert should_start is True
+        start.assert_called_once()
+        assert start.call_args.args[1] == SEGMENT_ID
 
     @pytest.mark.asyncio
     async def test_egress_not_started_for_text_medium(self):
-        pool_obj   = {"webrtc_recording": True}
-        medium     = "text"
-        segment_id = SEGMENT_ID
-
-        should_start = (
-            pool_obj.get("webrtc_recording", False)
-            and segment_id
-            and medium in ("voice", "video")
+        start = await self._run(
+            self._fields(recording=True, capabilities=["text"], segment_id=SEGMENT_ID)
         )
-        assert should_start is False
+        start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_egress_not_started_when_flag_missing(self):
-        pool_obj   = {}   # no webrtc_recording key
-        medium     = "voice"
-        segment_id = SEGMENT_ID
-
-        should_start = (
-            pool_obj.get("webrtc_recording", False)
-            and segment_id
-            and medium in ("voice", "video")
+        start = await self._run(
+            self._fields(recording=False, capabilities=["voice"], segment_id=SEGMENT_ID)
         )
-        assert should_start is False
+        start.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_egress_not_started_when_no_segment_id(self):
-        pool_obj   = {"webrtc_recording": True}
-        medium     = "voice"
-        segment_id = ""    # empty — routing event without segment_id
-
-        should_start = (
-            pool_obj.get("webrtc_recording", False)
-            and segment_id
-            and medium in ("voice", "video")
+        """Evento de routing sem `segment_id` — a gravação não teria onde ser anexada."""
+        start = await self._run(
+            self._fields(recording=True, capabilities=["voice"], segment_id="")
         )
-        assert should_start is False
+        start.assert_not_called()
 
 
 # ── TestEgressProviderImpl ────────────────────────────────────────────────────

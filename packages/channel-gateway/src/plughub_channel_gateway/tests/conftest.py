@@ -6,12 +6,14 @@ Shared fixtures for Channel Gateway tests.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from plughub_channel_gateway.models import ContextSnapshot
+from plughub_channel_gateway.session_registry import SessionRegistry
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -39,6 +41,12 @@ def mock_redis():
     redis.delete  = AsyncMock(return_value=1)
     redis.publish = AsyncMock(return_value=1)
     redis.exists  = AsyncMock(return_value=1)   # stream exists by default
+    # O StreamSubscriber sonda o stream com XRANGE, não EXISTS (troca deliberada, para
+    # eliminar a janela de race entre a sondagem e o primeiro XREAD —
+    # `stream_subscriber.py:112-118`). Sem esta linha o atributo cai no AsyncMock
+    # genérico, que devolve um MagicMock TRUTHY: "o stream existe" por acidente, e
+    # nenhum teste consegue alcançar o caminho de stream expirado.
+    redis.xrange  = AsyncMock(return_value=[(b"0-0", {})])   # stream existe por default
     redis.aclose  = AsyncMock()
 
     # StreamSubscriber uses xread with BLOCK.  In tests we add a small sleep so
@@ -67,6 +75,38 @@ def mock_redis():
 
     redis.pubsub = lambda: pubsub_mock
     return redis
+
+
+def redis_get_by_key(mapping: dict[str, object], default=None):
+    """`side_effect` para `redis.get` que responde POR CHAVE, não com um valor único.
+
+    **Por que existe (2026-08-03).** `mock_redis.get.return_value = "existing-sid"`
+    responde o mesmo para *todas* as chaves. O `SMSAdapter._handle_inbound` faz duas
+    consultas distintas — a sessão e `…:pending_collect` — e a segunda recebia
+    `"existing-sid"`, que o `json.loads` não decodifica. O teste morria com
+    `JSONDecodeError` num caminho que ele nem pretendia exercitar, e o log dizia
+    *"sms inbound processing failed"*, apontando para o adapter.
+
+    Um dublê de Redis que ignora a chave não está simulando Redis — está simulando *uma*
+    leitura. Casa por substring para não acoplar o teste ao formato exato da chave (que é
+    detalhe do adapter), mas exige que o teste DECLARE cada leitura que pretende atender;
+    o que não estiver no mapa devolve `default` (ausência), nunca o valor do vizinho.
+    """
+    # Fragmento MAIS ESPECÍFICO vence, não o primeiro declarado. Com "primeiro vence",
+    # um mapa `{"channel:sms": …, "menu_collect": …}` faz a chave
+    # `channel:sms:{sid}:menu_collect` casar com o prefixo genérico — e o teste recebe o
+    # valor da sessão numa leitura de collect. Aconteceu na 1ª versão deste helper
+    # (2026-08-03): trocou um dublê cego por um dublê quase-cego, com a mesma assinatura
+    # de falha (JSONDecodeError num caminho não pretendido).
+    _ordered = sorted(mapping.items(), key=lambda kv: len(kv[0]), reverse=True)
+
+    def _get(key, *_a, **_kw):
+        k = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
+        for fragment, value in _ordered:
+            if fragment in k:
+                return value
+        return default
+    return _get
 
 
 # ── Kafka producer mock ───────────────────────────────────────────────────────
@@ -130,8 +170,36 @@ def ws_factory():
 
 @pytest.fixture
 def registry(mock_redis):
-    """SessionRegistry mock wired to the shared redis mock."""
+    """SessionRegistry mock wired to the shared redis mock.
+
+    **Os métodos SÍNCRONOS do real precisam ser síncronos no dublê** (corrigido
+    2026-08-03). `AsyncMock()` torna *todo* atributo assíncrono, então
+    `registry.pop_menu_masked_fields(...)` devolvia uma **corrotina**, e o
+    `_handle_menu_submit` estourava em `set(masked_fields)` —
+    `'coroutine' object is not iterable`. Três testes de submissão de menu morriam por
+    isso, e o erro apontava para o código de produção (`webchat.py:825`), que está
+    correto: `pop_menu_masked_fields` **é** sync (`session_registry.py:175`).
+
+    A lista não é escrita à mão: é derivada do `SessionRegistry` real. Escrever
+    `reg.pop_menu_masked_fields = MagicMock()` conserta hoje e quebra de novo no próximo
+    método sync que alguém acrescentar — foi assim que este chegou aqui (o
+    `test_outbound_consumer.py` já declarava `store_menu_masked_fields = MagicMock()`,
+    isolado, e a lição não alcançou o vizinho). Derivar do real é a mesma regra dos
+    quatro dublês de 2026-08-02: *responde à ESTRUTURA do objeto, não a uma foto dela*.
+    """
     reg = AsyncMock()
+
+    for name in dir(SessionRegistry):
+        if name.startswith("__"):
+            continue
+        attr = inspect.getattr_static(SessionRegistry, name, None)
+        if inspect.isfunction(attr) and not inspect.iscoroutinefunction(attr):
+            setattr(reg, name, MagicMock())
+
+    # Retornos que o chamador consome de fato (o resto pode ser MagicMock cru).
+    reg.pop_menu_masked_fields = MagicMock(return_value=[])   # nenhum campo mascarado
+    reg.is_local               = MagicMock(return_value=True)
+
     reg.register   = AsyncMock()
     reg.unregister = AsyncMock(return_value="2024-01-01T10:00:00Z")
     reg.send       = AsyncMock(return_value=True)

@@ -2177,7 +2177,6 @@ async def get_result_transcript(
     }
 
 
-@router.post("/v1/evaluation/results/{result_id}/review")
 def _deprecated_arc6(name: str) -> None:
     """5d — endpoints Arc 6 (result-level review + /contestations) substituídos pelo
     contrato único Arc 13 (/v1/evaluation/instances/{id}/contest|review). Mantidos
@@ -2188,6 +2187,22 @@ def _deprecated_arc6(name: str) -> None:
     )
 
 
+# ⚠️ BUG CORRIGIDO 2026-08-03 — o decorator abaixo estava em cima de `_deprecated_arc6`.
+# Ao inserir o helper logo após a linha do `@router.post`, ele passou a ser o HANDLER da
+# rota, e `review_result` deixou de ser registrada. Três consequências, em ordem de
+# gravidade:
+#   1. a revisão inteira ficou INALCANÇÁVEL por HTTP — identidade por JWT, anti-replay de
+#      `round`, ABAC `revisar`, persistência, escrita no ContextStore e resume do workflow
+#      viraram código morto;
+#   2. a rota exigia `?name=` (o parâmetro do helper virou query param obrigatório), então
+#      toda chamada real devolvia **422**;
+#   3. com `?name=x`, devolvia **200 com corpo nulo** — sucesso para uma revisão que nunca
+#      aconteceu. É o pior dos três: 422 a UI trataria como erro; 200 ela trata como feito.
+# Por que passou despercebido: os testes de review JÁ estavam vermelhos com 422, pelo corpo
+# desatualizado (contrato Arc 6 → Arc 13). Mesma cor, mesmo status, duas causas empilhadas —
+# e a explicação "teste velho" era verdadeira, só não era suficiente. Só apareceu quando o
+# corpo foi corrigido e o 422 CONTINUOU.
+@router.post("/v1/evaluation/results/{result_id}/review")
 async def review_result(result_id: str, tenant_id: str, body: ReviewBody, request: Request) -> dict:
     """
     DEPRECATED (5d) — use POST /v1/evaluation/instances/{id}/review (mantida/revisada).

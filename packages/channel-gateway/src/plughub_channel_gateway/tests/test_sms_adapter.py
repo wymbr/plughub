@@ -29,6 +29,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from plughub_channel_gateway.tests.conftest import redis_get_by_key
 from plughub_channel_gateway.adapters.sms import SMSAdapter
 from plughub_channel_gateway.adapters.sms_provider import (
     MockSMSProvider,
@@ -358,9 +359,29 @@ class TestAccumulateParts:
         )
         # Should return None (still waiting for part 2) and not duplicate
         assert result is None
-        stored_json = json.loads(mock_redis.setex.call_args[0][2])
-        part_seqs = [p[0] for p in stored_json]
-        assert part_seqs.count(1) == 1  # no duplicate
+        # A dedup acontece ANTES da escrita (`sms.py:241`): parte repetida não muda
+        # estado, logo não há `setex`. O teste lia `setex.call_args[0][2]` e estourava
+        # com `'NoneType' object is not subscriptable` — estava afirmando o conteúdo de
+        # uma escrita que, corretamente, não ocorre. A intenção ("não duplica") se
+        # verifica melhor pela ausência da reescrita.
+        mock_redis.setex.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_new_part_is_written(self, adapter, mock_redis):
+        """Controle positivo do teste acima: parte NOVA é persistida, sem duplicar.
+
+        Sem ele, `assert_not_called` passaria também numa implementação que nunca
+        escrevesse nada — e a concatenação de SMS ficaria quebrada sem nenhum vermelho.
+        """
+        mock_redis.get.return_value = json.dumps([[1, "Original"]])
+        result = await adapter._accumulate_parts(
+            contact_id=CONTACT_NUM, sms_sid="SM006",
+            body="Segunda", part_seq=2, num_segments=3,
+        )
+        assert result is None                      # 2 de 3 partes
+        mock_redis.setex.assert_called_once()
+        stored = json.loads(mock_redis.setex.call_args[0][2])
+        assert [p[0] for p in stored] == [1, 2]
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -719,7 +740,14 @@ class TestInboundTextIntegration:
     async def test_existing_session_publishes_inbound_only(
         self, adapter, mock_redis, mock_producer
     ):
-        mock_redis.get.return_value = "existing-sid"  # session exists, no collect
+        # Sessão existe; NÃO há collect pendente. As duas leituras precisam ser
+        # distinguidas — com um `return_value` único o `pending_collect` também recebia
+        # "existing-sid" e o `json.loads` estourava.
+        mock_redis.get.side_effect = redis_get_by_key({
+            "pending_collect": None,     # sem collect por capability
+            "menu_collect":    None,     # sem collect sequencial em curso
+            ":session":        "existing-sid",
+        })
 
         await adapter._handle_inbound(_sms_params(body="Outra mensagem"))
 

@@ -352,15 +352,20 @@ class TestLiveKitProviderDevMode:
         result = await self.provider.list_participants("any")
         assert result == []
 
+    # A Fase D saiu do stub: em dev_mode o egress devolve um id mock e não faz I/O de
+    # rede (`webrtc_provider.py:327`). Os testes cobravam `NotImplementedError`, que era
+    # o contrato ANTIGO — e o docstring da classe ainda o anunciava, o que fazia o teste
+    # parecer certo por escrito. Trocados por afirmações sobre o contrato vigente, que é
+    # mais forte do que "levanta": id no formato esperado (para o chamador conseguir
+    # distinguir gravação real de mock) e ausência de exceção no stop.
     @pytest.mark.asyncio
-    async def test_start_egress_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            await self.provider.start_egress("room", "s3://bucket/path")
+    async def test_start_egress_dev_mode_returns_mock_id(self):
+        eid = await self.provider.start_egress("room", "s3://bucket/path")
+        assert eid.startswith("EG_dev_")
 
     @pytest.mark.asyncio
-    async def test_stop_egress_raises_not_implemented(self):
-        with pytest.raises(NotImplementedError):
-            await self.provider.stop_egress("egress-id")
+    async def test_stop_egress_dev_mode_is_noop(self):
+        await self.provider.stop_egress("EG_dev_deadbeef")   # não deve levantar
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

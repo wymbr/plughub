@@ -299,7 +299,10 @@ _PARSERS = {
 }
 
 # Topics that require segment_id enrichment before being passed to the parser.
-_ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit"})
+# `agent.events` entrou na Arc 12 fatia 2 (2026-08-03) como REDE: o caminho principal é
+# o skill passar `$.segment_id` (custo zero). O enricher só age quando ele não veio —
+# cobre agente humano e replay de DLQ sem I/O no caminho quente.
+_ENRICHED_TOPICS = frozenset({"sentiment.updated", "mcp.audit", "agent.events"})
 
 # Redis key TTL for open pause intervals (24 h — covers overnight shifts)
 _PAUSE_KEY_TTL = 86_400
@@ -885,6 +888,10 @@ async def _parse_with_enrichment(
           the current primary participant of the session.
       mcp.audit         → lookup_by_instance(session_id, instance_id)
           The AuditRecord always carries instance_id (the agent invoking the tool).
+      agent.events      → só quando o payload NÃO trouxe segment_id (Arc 12 fatia 2).
+          O caminho principal é o skill passar `$.segment_id`, que o engine já tem em
+          memória; consultar o Redis nesse caso seria I/O para confirmar o que já se
+          sabe. A rede existe para humano e replay de DLQ.
     """
     session_id = raw.get("session_id") or ""
     tenant_id  = raw.get("tenant_id") or ""
@@ -898,6 +905,15 @@ async def _parse_with_enrichment(
             segment_id = await enricher.lookup_by_instance(
                 session_id, instance_id, tenant_id
             )
+        elif topic == "agent.events":
+            # Caminho A já resolveu → não consulta.
+            segment_id = raw.get("segment_id") or None
+            if segment_id is None:
+                instance_id = raw.get("instance_id") or ""
+                if instance_id:
+                    segment_id = await enricher.lookup_by_instance(
+                        session_id, instance_id, tenant_id
+                    )
     except Exception as exc:
         logger.debug(
             "Segment enrichment failed topic=%s session=%s: %s",

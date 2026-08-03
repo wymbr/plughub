@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -1509,16 +1510,18 @@ class InstanceRegistry:
         occupancies: dict[str, dict[str, int]] = {}
         for pool_id in sorted(pools):
             try:
-                if not await self._redis.exists(_pool_snapshot_key(tenant_id, pool_id)):
-                    logger.info(
-                        "fan-out: pool=%s sem snapshot — pulado (o bootstrap cria o "
-                        "primeiro; recomputar aqui inventaria sla/channel_types)",
-                        pool_id,
-                    )
-                    occupancies[pool_id] = await self.compute_pool_occupancy(
-                        tenant_id, pool_id
-                    )
-                    continue
+                # A heurística "só reescreve pool que JÁ tem snapshot" SAIU
+                # (2026-08-03). Ela existia porque o `refresh_pool_snapshot` inventava
+                # `sla_target_ms`/`channel_types` quando não havia snapshot; agora ele
+                # cai no `{t}:pool_config:{p}` — fonte autoritativa — e só usa default
+                # com log de aviso.
+                #
+                # O que a heurística custava: uma **dependência silenciosa** deste
+                # serviço no bootstrap. Enquanto o bootstrap criasse a primeira linha
+                # de todo pool a cada 15 s, a lacuna se fechava sozinha e ninguém via;
+                # no dia em que ele deixasse de escrever, pool sem contato sumiria do
+                # feed — sem erro, sem log, só uma linha a menos. A F3 mexe justamente
+                # no bootstrap, e por isso isto tinha de ser fechado ANTES dela.
                 occupancies[pool_id] = await self.refresh_pool_snapshot(
                     tenant_id, pool_id
                 )
@@ -2720,14 +2723,56 @@ class InstanceRegistry:
 
         Devolve o recompute (P1) — repassado de `write_pool_snapshot`, sem repetir a
         conta. Ver lá por que este caminho não grava pico.
+
+        **Cadeia de proveniência dos campos de CONFIG** (2026-08-03, pré-requisito da F3):
+        snapshot existente → `{t}:pool_config:{p}` → defaults, e só a última é invenção.
+
+        O `pool_config` é o cache do próprio routing-engine, alimentado pelo
+        `kafka_listener` a partir de `pool.registered`/`pool.updated` — fonte
+        autoritativa, não palpite. Antes, sem snapshot, este método caía direto num
+        `sla_target_ms=480_000` e `channel_types=[]` fabricados e os publicava num
+        registro que o `system_availability_check` lê para decidir **oferta de canal ao
+        cliente**: `channel_types=[]` faz o pool parecer não atender canal nenhum.
+
+        Era por isso que o `refresh_snapshots_for_instance` pulava pool sem snapshot — a
+        heurística existia para não deixar este método inventar. Com a cadeia acima, a
+        heurística deixa de ser necessária (e sai, lá).
+
+        Quando NENHUMA das duas fontes existe, o default entra **com log de aviso**: é o
+        único caso em que a linha publicada não descreve config nenhuma, e isso precisa
+        ser visível em vez de plausível.
         """
         existing = await self.get_pool_snapshot(tenant_id, pool_id)
-        sla_target_ms          = int(existing.get("sla_target_ms", 480_000)) if existing else 480_000
-        channel_types          = existing.get("channel_types", []) if existing else []
-        max_reply_time_ms      = existing.get("max_reply_time_ms") if existing else None
-        # Arc 19: preserve webhook pool fields from the existing snapshot
-        webhook_skill_id       = existing.get("webhook_skill_id") if existing else None
-        max_concurrent_sessions = existing.get("max_concurrent_sessions") if existing else None
+
+        cfg: dict[str, Any] = {}
+        if not existing:
+            raw_cfg = await self._redis.get(_pool_config_key(tenant_id, pool_id))
+            if raw_cfg:
+                try:
+                    cfg = json.loads(raw_cfg) or {}
+                except Exception as exc:
+                    logger.warning(
+                        "refresh_pool_snapshot: pool_config ilegível pool=%s tenant=%s — %s",
+                        pool_id, tenant_id, exc,
+                    )
+            else:
+                logger.warning(
+                    "refresh_pool_snapshot: pool=%s tenant=%s SEM snapshot e SEM "
+                    "pool_config — publicando sla/channel_types DEFAULT. A linha não "
+                    "descreve a config do pool; se persistir, o pool não está no cache "
+                    "do kafka_listener (pool.registered não chegou?)",
+                    pool_id, tenant_id,
+                )
+
+        src = existing or cfg
+        sla_target_ms          = int(src.get("sla_target_ms", 480_000) or 480_000)
+        channel_types          = src.get("channel_types", []) or []
+        max_reply_time_ms      = src.get("max_reply_time_ms")
+        # Arc 19: campos de pool webhook — do snapshot quando existe, senão do
+        # pool_config cru (o `PoolConfig` os descarta por `extra="ignore"`, então ler
+        # o JSON direto é o que preserva a informação).
+        webhook_skill_id        = src.get("webhook_skill_id")
+        max_concurrent_sessions = src.get("max_concurrent_sessions")
         return await self.write_pool_snapshot(
             tenant_id,
             pool_id,

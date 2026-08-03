@@ -595,7 +595,23 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       PORT: "3100"
+      # ⚠️ DOIS segredos, emissores DIFERENTES — os nomes convidam ao erro:
+      #
+      #   JWT_SECRET          → token de AGENTE (`session_token` do agent_login),
+      #                         emitido e verificado pelo próprio mcp-server.
+      #   PLUGHUB_JWT_SECRET  → Bearer da UI, emitido pela AUTH-API. Tem de ser o MESMO
+      #                         valor do `PLUGHUB_AUTH_JWT_SECRET` dos demais serviços.
       JWT_SECRET: demo_plughub_secret_32chars__
+      # Ligado em 2026-08-03. Sem ele, `verifyJwtPayload` caía no fallback de
+      # desenvolvimento — decodifica o payload SEM verificar assinatura — e isso valia
+      # para TODAS as rotas de UI do BFF, inclusive os gates `supervisor|admin`
+      # (`/api/force-complete`, `/api/work_queue/expire`). Duas consequências, e a
+      # segunda é a que passava despercebida:
+      #   1. assinatura forjada era aceita → qualquer um podia se declarar admin;
+      #   2. o decode-only **nem olha `exp`** → token EXPIRADO seguia válido para
+      #      sempre, o que anula o TTL de 1 h do access token.
+      # O gate era de intenção, não de autenticação.
+      PLUGHUB_JWT_SECRET: changeme_auth_jwt_secret_demo_32c   # == auth-api
       KAFKA_BROKERS: kafka:29092
       AGENT_REGISTRY_URL: http://agent-registry:3300
       ANALYTICS_API_URL: http://analytics-api:3500   # R5 — tool_trace via GET /v1/audit/mcp-calls

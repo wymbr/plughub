@@ -2,6 +2,548 @@
 
 ---
 
+## BFF passa a VERIFICAR o JWT — assinatura e expiração 🔐✅ (2026-08-03)
+
+`mcp-server-plughub` não recebia `PLUGHUB_JWT_SECRET`, então `verifyJwtPayload`
+(`server.ts:796`) caía no fallback de desenvolvimento — base64-decode do payload, sem verificar
+nada — em **todas** as rotas de UI do BFF, inclusive os gates `supervisor|admin`
+(`/api/force-complete`, `/api/work_queue/expire`).
+
+**O escopo era maior que o registrado.** O `TODO.md` descrevia a assinatura não verificada. Mas o
+decode-only **também não lê `exp`**: o TTL de 1 h do access token era decorativo nessas rotas — um
+token vazado valia para sempre. Duas falhas, uma linha de compose.
+
+| Caso | Antes | Depois |
+|---|---|---|
+| sem token | 401 | 401 |
+| assinatura forjada | **aceita** (qualquer um se declarava admin) | 401 |
+| token expirado | **aceito indefinidamente** | 401 |
+| token válido | 200 | 200 |
+
+**Dois segredos, emissores diferentes, e os nomes convidam ao erro:** `JWT_SECRET` é o token de
+AGENTE (`session_token` do `agent_login`, emitido pelo próprio mcp-server); `PLUGHUB_JWT_SECRET` é
+o Bearer da UI, emitido pela **auth-api**. Comentário no compose deixa a distinção explícita —
+trocá-los quebraria uma das duas autenticações sem sintoma óbvio.
+
+**Análise de impacto antes de ligar:** os únicos chamadores das 9 rotas com `requireJwtRole` são o
+platform-ui (Bearer da auth-api, mesmo segredo) e o próprio BFF — a menção na analytics-api é
+comentário, e o token de agente trafega por outro caminho (`verifySessionToken`), não pelo header
+`Authorization`. O UI mantém o token fresco (auto-refresh 60 s antes do vencimento), então o 401
+por expiração é caso de borda.
+
+**Smoke com prova de que ele pode reprovar:** `infra/test/smoke_bff_jwt_verification.sh` sai
+**INCONCLUSIVO (exit 2)** quando a variável não está no container — porque sem ela os casos de
+forjado e expirado *não podem* falhar, e um verde ali significaria apenas "o fallback de dev está
+ativo". Rodado ANTES do fix: exit 2. Depois: 4/4. É teste de SERVIÇO e não unitário de propósito —
+`_JWT_SECRET` é lido no import, então um unitário provaria o ambiente do teste, e o defeito era
+exatamente o ambiente do deploy.
+
+**Validado no Console (2026-08-03).** Os logs sem 401 novo eram evidência fraca — ausência de erro
+sem tráfego não prova nada. O Console foi aberto e operado depois da mudança, sem regressão: é
+esta a confirmação que fecha o item, não o silêncio do log.
+
+---
+
+## Quota pricing→admissão: doc revogada corrigida + o contrato-string agora tem guarda ✅ (2026-08-03)
+
+O item do `TODO.md` ("pricing-api não tem código Redis; o gate nunca arma", 2026-06-04) estava
+**stale** — `quota_sync.py` existe desde então e as chaves estão vivas (`370 / 360 / 10`,
+re-derivadas no boot, com log). Foi o **terceiro item stale do dia**. A verificação, porém, rendeu
+dois achados reais.
+
+**1. Os dois docs descreviam o modelo removido ontem.** `quota_sync.py` e `docs/arcos/pricing.md`
+diziam que `max_concurrent_sessions` alimenta `AdmissionController._shared_limit` com
+`shared = C − Σ session_reservation` e rejeição `shared_full` — as três coisas saíram na fatia 3
+(2026-08-02). Quem lesse hoje procuraria um gate inexistente e concluiria que
+`max_concurrent_sessions` governa admissão. Mapa corrigido nos dois:
+
+| Chave | Governa |
+|---|---|
+| `capacity:ai_agent` | **admissão de sessão** — `kind:ai ≤ C_ai`, único gate restante |
+| `capacity:human_agent` | **login** humano concorrente (licença humana é por login) |
+| `max_concurrent_sessions` | **provisionamento** (`deployViolation`), não admissão |
+
+**2. `quota_sync` não tinha teste nenhum**, e o contrato pricing→routing é **uma string**. Se um
+dos lados mudar o formato da chave: ela não existe → `get()` devolve `None` → `None` significa
+"sem gate" → **IA sem teto, sem erro, sem log**. O consumidor já estava preso por
+`test_admission_licensing.py`; o produtor não. Agora o par fecha, e o teste de formato nomeia o
+arquivo do outro lado.
+
+O caso mais valioso do conjunto é `test_zero_capacity_DELETES_which_means_NO_GATE`: o `DEL` em
+capacidade 0 é deliberado (instalação sem pricing não deve ser barrada), mas a consequência é
+contraintuitiva — **zerar a capacidade de IA no cadastro não restringe, libera**. Sem asserção, é
+o tipo de comportamento que vira "conserto" errado no dia em que alguém investigar por que a IA
+não está sendo barrada. pricing-api: **53**.
+
+---
+
+## Arc 12 fatia 2 — `segment_id` em `agent_business_events` ✅ (2026-08-03)
+
+Fecha a lacuna de **atribuição**: a marcação da tool `agent_event` ia para a SESSÃO, e numa sessão
+orquestrada (primary + especialista, humano + hook de wrap-up) não havia como saber **quem** emitiu
+o KPI — `agent_type_id` agrega todos os agentes daquele tipo. Destrava as fatias 3 e 4 do arco
+"wrap-up como fonte de dados" e o cruzamento com Evaluation, chaveada pelo mesmo `segment_id`.
+
+Plano A+C, como decidido em 2026-07-28. O achado que o barateou continua valendo: o `instance_id`
+**já era decodificado do JWT** dentro da tool e **descartado** — publicá-lo custa zero e é a chave
+que faltava.
+
+| Caminho | Como | Cobre |
+|---|---|---|
+| **A** (principal) | skill passa `$.segment_id` (built-in que o engine tem em memória) | agentes de skill-flow, sem I/O nova — mesmo precedente do `survey_record(grain=segment)`, que RECEBE o segmento em vez de resolvê-lo |
+| **C** (rede) | consumer resolve por `instance_id` via `SegmentEnricher` (`agent.events` entra em `_ENRICHED_TOPICS`) | humanos e replay de DLQ |
+
+**O enricher não consulta quando A resolveu** — seria I/O no caminho quente para confirmar o que o
+payload já traz. **Precedência payload > enricher:** quem *declara* vence quem *deduz*, porque uma
+instância pode ter mais de um segmento ao longo da sessão, e atribuição plausível e errada é pior
+que ausente.
+
+**`NULL`, nunca `""`:** string vazia se confundiria com um segmento de id vazio e o relatório
+perderia a distinção entre "ninguém atribuiu" e "atribuído". Eventos anteriores à fatia caem num
+grupo próprio no `group_by`.
+
+**`ORDER BY` intocado, de propósito:** o ClickHouse só permite acrescentar ao fim da chave, e depois
+de `emitted_at` (altíssima cardinalidade) o `segment_id` não podaria nada — custo de merge sem ganho.
+Recriar a tabela não paga com TTL de 2 anos.
+
+**Ganho imediato:** `"segment_id"` em `VALID_GROUP_BY` — uma linha, e habilita "KPI de negócio por
+participante".
+
+**O teste que mais importa é o de alinhamento posicional.** `_AGENT_BUSINESS_EVENT_COLS` e
+`_agent_business_event_row` são listas casadas por posição, e deslocar uma sem a outra **não levanta
+erro**: grava o valor de uma coluna em outra do mesmo tipo, e só aparece no relatório semanas
+depois. A asserção é sobre o valor na posição nomeada, não sobre o comprimento. *Verificado no
+caminho:* a ordem FÍSICA da tabela não entra nessa conta — `_insert` passa `column_names=`, então o
+`ALTER` ter posto a coluna no fim da tabela migrada enquanto o `CREATE` a põe antes de `emitted_at`
+numa instalação nova é inofensivo. analytics-api: **528**.
+
+---
+
+## Segmentos humanos órfãos: 107 → 27, e o fix de 07-30 provado ✅ (2026-08-03)
+
+Fecha o "backfill dos 87 órfãos". **A ordem foi invertida de propósito:** o `TODO.md` propunha
+limpar primeiro, mas limpar apaga a única evidência de que possa existir um caminho ainda
+descoberto. Instrumento novo — `infra/test/report_open_human_segments.sh` — corta por
+**2026-07-30** (data do fix H1/H2) antes de contar.
+
+**Medição (o número tinha crescido de 87 para 107):**
+
+| Janela | Qtd | Leitura |
+|---|---:|---|
+| antes do fix | 98 | dívida histórica |
+| **depois do fix** | **9** | precisavam de explicação antes de qualquer limpeza |
+
+Os 9 eram `ramal_test` (8, 30/07 19:24–19:29) e `formfill_demo` (1, 31/07 **11:34**) — datas que
+batem com smokes documentados no próprio TODO (`smoke_directed_pull.sh` na F3; o cenário E do
+`smoke_work_task_pending.sh`, cujo claim das 11:34 a seção de capacidade cita literalmente).
+
+**A consulta decisiva foi a da SESSÃO**, não a do segmento: todas as 9 sessões estão **abertas**.
+Isso separa as duas hipóteses — sessão fechada com segmento aberto seria vazamento de teardown
+(código); sessão aberta é **claim abandonado sem reaper**, a lacuna 2, que já tem dono. Nenhum
+caso do primeiro tipo depois do fix ⇒ **H1/H2 segurou**. Ganho lateral: a lacuna 2 passa a ter um
+segundo instrumento, além do estado `orphaned` do relatório de pendências.
+
+**O relatório classifica em vez de só contar.** Deixá-lo permanentemente vermelho por 9 resíduos
+explicados treinaria a pessoa a ignorá-lo, e o vermelho que importa se perderia junto. Mas o
+critério **não** é allowlist de pool: exige *pool de smoke* **E** *sessão aberta*. Segmento aberto
+com sessão FECHADA nesses mesmos pools segue INEXPLICADO e derruba o exit code.
+
+**Limpeza — 80 linhas, e só elas.** `formfill_demo` pré-corte (lixo do demo R0). Mantidos de
+propósito: `aprovacao_deploy` (**17**, uso real — e o número subiu desde os "9" registrados em
+29/07, confirmando que a aprovação **segue** produzindo órfãos: são a evidência viva de um defeito
+aberto, não ruído a varrer), `retencao_humano` (1, única amostra do pool canônico) e os 9
+pós-corte (apagar o segmento deixaria a sessão órfã — troca de inconsistência).
+
+Controles do `DELETE`: `ended_at IS NULL` no **predicado** (sem ele levaria junto os wrap-ups que
+fecharam certo), `date <` para preservar o pós-corte, e `--mutations_sync=2` porque
+`ALTER … DELETE` é assíncrono — presumir pelo retorno mediria o estado velho. Contagem de
+fechados **16 → 16** como prova de que o predicado não foi largo demais.
+
+---
+
+## Capacidade: pré-requisito da F3, F5 e o fóssil em quarentena ✅ (2026-08-03)
+
+Fecha os três resíduos do arco de capacidade compartilhada.
+
+### 1. Pré-requisito da F3 — proveniência da config do snapshot
+
+`refresh_pool_snapshot`, sem snapshot prévio, caía em `sla_target_ms=480_000` e
+`channel_types=[]` **fabricados** e os publicava num registro que o `system_availability_check`
+lê para decidir **oferta de canal ao cliente** — `channel_types: []` faz o pool parecer que não
+atende canal nenhum. Era por isso que o fan-out pulava pool sem snapshot: a heurística existia
+para impedir a invenção.
+
+O preço dela era uma **dependência silenciosa no bootstrap** (quem criava a primeira linha de todo
+pool a cada 15 s). Enquanto ele escrevesse, a lacuna se fechava sozinha; a F3 mexe justamente nele,
+e pool sem contato sumiria do feed sem erro e sem log.
+
+Cadeia agora: `snapshot → {t}:pool_config:{p} (cache autoritativo do kafka_listener) → default com
+WARNING`. Só a última é invenção, e ela se anuncia. Com a fonte disponível, a heurística saiu.
+Testes: `test_snapshot_config_provenance.py` (4). **Mutação:** M1 (volta a inventar) → 2 vermelhos;
+M2 (volta a pular) → 1; ambos exatamente os previstos. Suíte: **211**.
+
+### 2. F5 — o item estava quase todo STALE
+
+Das quatro peças que o `TODO.md` listava como pendentes, **três já haviam sido feitas em
+2026-08-02**, no mesmo dia em que a nota foi escrita: `get_available_count` removida, produtor
+(`main.py:964`) removido, `q_series` e o gráfico do `AnalisePoolsPage` removidos. *Item que
+descreve trabalho concluído faz alguém refazer — ou procurar um defeito que não existe.*
+
+Sobrou **uma** peça real, que a lista não mencionava: o mapper de `position_updated` ainda fazia
+`payload.get("available_agents")` — o último **leitor sem produtor** do campo, imagem espelhada da
+dívida "config sem leitor" que o arco fecha do outro lado. Fixado em `None` em vez de deletado: com
+o `get`, bastaria alguém voltar a publicar para o campo reviver em silêncio com o valor errado de
+sempre (`SCARD(pool:instances)` = pertencimento, não capacidade). O teste que o cobria
+(`available_agents == 0`, passthrough de um payload que o próprio teste fornecia) foi **invertido**
+— agora afirma que o campo NÃO passa, com um payload simulando o produtor ressuscitado por engano.
+analytics-api: **521**.
+
+### 3. Fóssil `plughub_demo.public.pools` em quarentena
+
+Sete tabelas do agent-registry pré-separação movidas para o schema `fossil_pre_registry_split`
+(`SET SCHEMA`, não `DROP`). Grafo de FK fechado entre elas (nenhuma dependente externa, conferido
+pelo `report_registry_fossil_tables.sh`) e nenhum serviço emitindo SQL contra elas em
+`plughub_demo` — a analytics-api lê `skill_deployments` pela REST.
+
+**O erro é o conserto:** `SELECT 1 FROM pools` em `plughub_demo` agora devolve
+`relation "pools" does not exist`. Era o silêncio dessa consulta — tabela existe, colunas existem,
+linhas plausíveis — que fez Q1/Q2 do arco de capacidade medirem dado congelado e **decidirem adiar
+a fatia 4**. Quarentena e não destruição: as 23 linhas seguem em
+`fossil_pre_registry_split.pools`, e a operação reverte com `SET SCHEMA public`.
+
+Quatro portões, cada um medindo coisa diferente: (1) a consulta falha; (2) o dado está preservado;
+(3) a medição viva (`measure_capacity_licensing_baseline.sh`, que aponta para `plughub_registry`)
+sai idêntica — este é o que poderia desmentir a varredura de código; (4) routing-engine **211** e
+analytics-api **521** verdes, cobrindo serviço que monte SQL por string em runtime, que `grep` não
+alcança.
+
+---
+
+## 2.197 testes verdes em 19 pacotes — zero vermelho, zero skip ✅ (2026-08-03)
+
+Fecha o arco iniciado em 2026-08-02 (`report_suite_skips.sh`). **Estado inicial:** 48 falhas em 6
+pacotes, 3 pacotes sem suíte nenhuma, 3 com suíte invisível, 11 que não mediam. **Estado final:**
+19 pacotes medidos, **2.197 testes, 0 falhas, 0 skips**. Restam 2 INCONCLUSIVOS
+(`clickhouse-consumer`, `conversation-writer` — não respondem a `exec`), reportados com saída ≠ 0
+em vez de virarem "zero falha".
+
+| | Antes | Agora |
+|---|---|---|
+| routing-engine · orchestrator-bridge · rules-engine | 207 · 55 · 27 | inalterados |
+| analytics-api · channel-gateway · evaluation-api | 517/2✗ · 628/22✗ · 192/14✗ | **520 · 653 · 214** |
+| config-api · pricing-api · auth-api | 24/3✗ · 32/7✗ · 35/23✗ | **29 · 47 · 64** |
+| ai-gateway · calendar-api · workflow-api · quality-ingest/export | não mediam | **129 · 63 · 50 · 27/9** |
+| session-replayer · usage-aggregator | invisíveis | **43 · 11** (por mount) |
+| **mailing-api · scheduler-api · dialog-api** | **sem suíte** | **22 · 17 · 10** |
+
+### As três suítes novas — escolhidas por consequência, não por cobertura
+
+O critério foi a pergunta do `TODO.md`: *qual regra some sem nada ficar vermelho*. Os smokes já
+cobrem o caminho feliz ponta a ponta; o que eles não isolam é **precedência**, **série** e
+**separação rascunho/produção** — e nos três casos o modo de falha é comportamento, não erro.
+
+| Pacote | Alvo | Se quebrar, o que acontece |
+|---|---|---|
+| `mailing-api` | precedência dos portões de elegibilidade | `opt_out` virar `frequency_cap` faz o chamador entender "adiado" e recontatar quem pediu para nunca mais |
+| `scheduler-api` | a SÉRIE de recorrência (não um disparo) | `interval`, rearme e horário de verão só erram na 2ª/3ª ocorrência; um smoke de disparo único não distingue de "funcionou" |
+| `dialog-api` | rascunho × publicado | é o defeito do `skill.flow_draft` reencenado: editar sobrescreveria produção sem erro, sem versão nova, sem rastro |
+
+**Todas com prova por mutação, e discriminante** — cada mutação derruba exatamente os testes
+nomeados na previsão, nem um a mais:
+
+| Pacote | Mutação | Vermelhos |
+|---|---|---:|
+| `mailing-api` | desliga o portão de opt-out | 2 (os dois de opt-out) |
+| | opt-out passa a valer p/ `transactional` | 1 (o do escopo do furo) |
+| `scheduler-api` | `interval` do daily deixa de valer | 1 |
+| | calendário indisponível cancela o disparo | 1 |
+| `dialog-api` | **editar publicado passa a sobrescrever** (o `skill.flow_draft` reencenado) | 2 |
+| | publish passa a reescrever o `json` | 1 |
+
+Prever o número **antes** de rodar é o que transforma um resultado inesperado em achado: a mutação
+ampla demais (a do scheduler, abaixo) só se distingue da mutação certeira porque havia previsão
+contra a qual comparar.
+
+**Uma previsão minha falhou, e o erro é informativo:** previ que M2 do scheduler (permitir
+`fire_utc == lower`) derrubaria 1 teste; derrubou **9**. O invariante "estritamente depois" não é
+um caso isolado — é carga estrutural: sem ele o rearme devolve o mesmo instante e toda série
+colapsa. Ou seja, uma regressão ali é barulhenta, não silenciosa.
+
+### Dois comportamentos fixados como estão, com a divergência anotada
+
+Não são consertos — são decisões que precisam ser escolha, não surpresa:
+
+1. `mailing-api`: `_parse_window_seconds("24hs")` → `0`, e `0` **desliga** o cap. Um "s" a mais na
+   policy do tenant faz a campanha contatar sem teto (o código loga warning).
+2. `mailing-api`: o docstring promete *"erro do calendar → degrada para ABERTO"* e **não há
+   `try/except`** — a exceção propaga. O teste afirma o real; no dia em que alguém implementar o
+   fail-open, ele fica vermelho e força a decisão.
+
+---
+
+## mailing-api ganha sua primeira suíte — 22 testes na PRECEDÊNCIA ✅ (2026-08-03)
+
+O pacote tinha `[tool.pytest.ini_options]` apontando para um diretório inexistente: config de
+teste sem suíte. O alvo não foi escolhido por cobertura, e sim pela pergunta do `TODO.md` —
+**qual regra some sem nada ficar vermelho**.
+
+**Resposta: a precedência do `contact_eligibility_check`.** Os oito `smoke_outbound_fase*.sh`
+exercitam o caminho por API, mas cada um percorre UM caminho — nunca distinguem *"negou pelo motivo
+certo"* de *"negou por outro motivo"*. E aqui os motivos não são intercambiáveis:
+
+| Se trocar | Consequência |
+|---|---|
+| `opt_out` → `frequency_cap` | o chamador entende "adiado", tenta de novo, e contata quem pediu para nunca mais |
+| furo de `transactional` vazar da fase de opt-out para a de fadiga | campanha marcada transacional vira canal **sem teto** |
+
+Por isso vários casos montam **duas** condições de negação ao mesmo tempo e afirmam qual vence: um
+teste que olhasse só `allowed is False` passaria com a ordem invertida.
+
+**Prova por mutação, discriminante:** M1 (desliga o portão de opt-out) → **exatamente** os 2 testes
+de opt-out ficam vermelhos; M2 (opt-out passa a valer também para `transactional`) → **exatamente**
+1, o do escopo do furo. Restauração → 22 verdes. Nenhuma mutação foi ampla demais, o que é o que
+separa "os testes reprovam" de "os testes reprovam **pelo motivo certo**".
+
+**Dois achados fixados em teste (comportamento, não conserto):**
+
+1. `_parse_window_seconds("24hs")` → `0`, e `0` **desliga** o cap (`db.py:906`, `if w <= 0`). Um
+   "s" a mais na policy do tenant faz a campanha contatar sem teto. O código loga warning — não é
+   silencioso —, mas a consequência agora é escolha declarada, não surpresa.
+2. O docstring do portão de janela promete *"erro do calendar → degrada para ABERTO"*, e **não há
+   `try/except`**: a exceção propaga. O teste afirma o comportamento REAL (`pytest.raises`) com a
+   divergência anotada — no dia em que alguém implementar o fail-open, ele fica vermelho e força a
+   decisão, em vez de a promessa seguir só na doc.
+
+*Nota de método, minha — terceira ocorrência no dia:* rodei a mutação com o caminho do arquivo
+**suposto** (`/app/src/...`), quando o pacote vive em `/app/packages/mailing-api/src/...`. Os `sed`
+falharam, o pytest rodou de `/app` (rootdir errado → sem `asyncio_mode=auto`) e devolveu
+`9 failed / 13 passed` — plausível o bastante para passar por "a mutação funcionou", sobre código
+**não mutado**. O `grep -c` de verificação entre `sed` e pytest existe exatamente para isso, e na
+segunda tentativa foi ele que deu a garantia.
+
+---
+
+## Suítes invisíveis passam a RODAR — por mount, não por cópia na imagem ✅ (2026-08-03)
+
+`auth-api`, `session-replayer` e `usage-aggregator` mantêm testes em `packages/<pkg>/tests` que o
+Dockerfile não copia. O `report_suite_skips.sh` deixou de só reportar isso e passou a **rodá-los**:
+monta o diretório num container efêmero da mesma imagem (`run --rm --no-deps`), instala as deps de
+dev e mede. **64 / 43 / 11**, todos verdes.
+
+**Por que mount, e não as outras duas saídas:** copiar `tests/` no Dockerfile põe teste na imagem
+de produção; rodar no host exigiria deps de dev lá **e tiraria a suíte do mesmo ambiente em que o
+serviço roda** — que é toda a razão de o relatório existir (o caso `REDIS_URL` ×
+`PLUGHUB_REDIS_URL` só apareceu por medir dentro do container). Mount `:ro` +
+`PYTHONDONTWRITEBYTECODE=1` para não deixar `__pycache__` de root no repo (em WSL, arquivo que o
+usuário não consegue apagar). Mount que também não mede → INCONCLUSIVO com saída ≠ 0.
+
+**O instrumento foi EXERCITADO, e quase não foi.** Na primeira execução os três apareceram verdes
+pela linha NORMAL, sem a nota de mount: o pytest achou os testes dentro dos containers — resíduo de
+`docker cp` de sessões anteriores (sobrevive a `restart`, não a `up -d`). O ramo novo nunca tinha
+rodado. Só depois de `up -d --force-recreate` (com `ls /app/tests` confirmando a ausência) os três
+saíram com `↺ rodou por MOUNT` e as mesmas contagens. *Aceitar o primeiro verde teria sido comprar
+confiança de um caminho que não executou* — o mesmo defeito que este arco passou o dia consertando,
+cometido pela ferramenta que existe para caçá-lo.
+
+---
+
+## Zero suítes vermelhas: 48 falhas em 6 pacotes → 0 ✅ (2026-08-03)
+
+**Placar final:** `auth-api 64` · `config-api 29` · `pricing-api 47` · `evaluation-api 214` ·
+`channel-gateway 653` · `analytics-api 520`. **Nenhum dos 48 vermelhos era defeito de código** —
+mas dois deles escondiam um (a rota de review inalcançável, entrada acima).
+
+### O achado que vale mais que os 48: os verdes acidentais
+
+Em quatro lugares o conserto do vermelho revelou testes **verdes pelo mesmo motivo**, e esses são
+piores — ocupam o lugar da cobertura que falta:
+
+| Onde | Verdes acidentais | Por quê |
+|---|---:|---|
+| `TestVoiceAdapterProviderFactories` | 2 | o helper injetava `MockSTTProvider`; os testes que afirmavam "é Mock" passariam com QUALQUER factory, inclusive nenhuma |
+| `TestDataChannel` (webrtc) | 2 | com `iter_text()` quebrado nada é publicado — e os dois testes afirmam justamente que *nada* foi publicado |
+| `TestEgressRoutingAssigned` | 3 | reimplementavam a condição de `webrtc.py:690` no corpo do teste; `False and …` devolve `False`, e `is False` casa |
+| `test_lock_result` (evaluation) | 1 | patchava `update_result`, função que aquele handler **nunca chamou** |
+
+Por isso cada conserto migrou a **classe inteira**, não só o teste vermelho: consertar apenas o
+vermelho deixaria os verdes vazios exatamente onde o leitor supõe cobertura.
+
+### O caso mais grave: teste que não toca o código
+
+`TestEgressRoutingAssigned` (4 testes) copiava a condição de gravação para dentro do teste — o
+comentário dizia `"Replicate the guard condition from _on_routing_assigned"`. Se a condição real
+mudasse **ou sumisse**, os quatro seguiriam verdes. E a decisão que eles fingiam cobrir é *gravar
+ou não a chamada do cliente*. O único vermelho da classe reprovava por semântica do `and` do
+Python (`True and ""` → `""`, que não é `False`), não por comportamento do produto. Reescritos para
+chamar `_on_routing_assigned` de verdade.
+
+### Famílias de causa (todas de dublê ou de contrato, nenhuma de produção)
+
+1. **Dublê responde a uma serialização, não à estrutura** — `AsyncMock` onde o método real é
+   síncrono (`pop_menu_masked_fields`, `iter_text`); `redis.get.return_value` único para todas as
+   chaves; `side_effect` posicional que depende da ORDEM das leituras. Conserto estrutural:
+   `registry` do conftest passou a **derivar por introspecção** os métodos sync do `SessionRegistry`
+   real, e nasceu `redis_get_by_key` (responde por chave; ausência para o que o teste não declarou,
+   nunca o valor do vizinho — com **fragmento mais específico vencendo**, corrigido depois de a 1ª
+   versão trocar um dublê cego por um quase-cego).
+2. **Teste puxa alavanca que o código não lê mais** — `Settings.ws_auth_timeout_s` (o adapter
+   resolve pelo `WebchatConfigCache`; invariante *"config-api vence"*) e `redis.exists` (o
+   `StreamSubscriber` sonda por `XRANGE` desde a correção da race).
+3. **Contrato que evoluiu** — `tenant_id` obrigatório nos eventos de ciclo de vida; Fase D do
+   egress saiu do stub (e o **docstring da classe ainda prometia `NotImplementedError`**, ou seja o
+   teste estava do lado da doc, ambos contra o código); `_SESSION_TTL` 3600 → 14400.
+4. **Asserção impossível** — `redis.set.assert_any_call(key, pytest.approx(str, rel=0), ex=3600)`:
+   `approx` sobre a **classe** `str` não casa com nada, em nenhuma implementação. O instrumento
+   pretendido era `mock.ANY`. Varredura do `packages/`: ocorrência única.
+5. **Corrida** — `Task.cancelled()` afirmado no instante seguinte ao `cancel()`. Cancelamento em
+   asyncio é pedido, não fato; entre os dois a task fica em *cancelling*.
+
+### analytics-api — e uma hipótese do `TODO.md` derrubada
+
+As 2 de `TestPoolPrincipalAuth` não eram `PLUGHUB_AUTH_JWT_SECRET` ausente (a variável **está**
+definida). Era `_with_internal_mirrors` (ADR author-bound D2), que **deriva** o espelho `-int`:
+quem alcança `p` alcança `p-int`. Os testes fixavam a lista pré-I5. Ganhou teste próprio porque o
+modo de falha da derivação é **ausência** — um pool a menos no relatório, sem erro: se sumisse, a
+I5 teria tornado o pós-atendimento mensurável e o escondido de quem precisa dele.
+
+*O erro ficou registrado no `TODO.md` em vez de apagado.* A hipótese era plausível e teria levado a
+mexer no compose; o que salvou foi ela estar escrita **como hipótese**, com um "confirmar antes"
+junto.
+
+### Instrumento novo
+
+`infra/test/triage_failing_suites.sh` — uma linha por vermelho (`--tb=line`), todos os pacotes de
+uma vez, INCONCLUSIVO com saída ≠ 0 para quem não mediu. Complementa o `report_suite_skips.sh`
+(*quantos?*) respondendo *quais, e por quê*. **Nasceu com defeito:** cortava a saída em
+`short test summary info`, que vem DEPOIS do bloco onde o `--tb=line` imprime o motivo — devolvia
+só os nomes, com formatação certa e veredicto no fim, aparentando completude.
+
+---
+
+## Rota de revisão INALCANÇÁVEL — decorator no helper errado 🐞✅ (2026-08-03)
+
+`@router.post("/v1/evaluation/results/{result_id}/review")` estava decorando o helper
+`_deprecated_arc6(name: str)`, inserido logo abaixo da linha do decorator. O handler real
+(`review_result`) **nunca foi registrado**.
+
+| Consequência | Gravidade |
+|---|---|
+| identidade por JWT, anti-replay de `round`, ABAC `revisar`, persistência, escrita no ContextStore e resume do workflow — **inalcançáveis por HTTP** | a revisão de avaliação não existia como rota |
+| `name` (parâmetro do helper) virou **query param obrigatório** → toda chamada real: **422** | erro visível |
+| com `?name=x`: **200 com corpo nulo** | **pior dos três** — a UI lê 200 como "revisão registrada" |
+
+**Por que sobreviveu, e é este o achado.** Os testes de review já estavam vermelhos com
+**422**, pelo corpo desatualizado (contrato Arc 6 → Arc 13: `{reviewer_agent_id,
+reviewer_outcome}` → `{decision, round}`). Mesma cor, mesmo status, **duas causas
+empilhadas** — e "teste velho" era uma explicação verdadeira, só não suficiente. O bug só
+apareceu quando o corpo foi corrigido e o 422 **continuou**. É a forma mais cara do padrão
+do arco: um vermelho já explicado não é investigado de novo.
+
+Varredura do `packages/` inteiro pelo padrão (`@router.*` seguido de `def _`):
+**ocorrência única**. Classe fechada. Testes novos: `test_review_stale_round_is_409` (com
+`update_result.assert_not_called()` — decisão obsoleta não pode ser persistida) e a
+separação 401/403 na contestação.
+
+---
+
+## Suítes vermelhas: config-api, pricing-api e evaluation-api ✅ (2026-08-03)
+
+**Placar: 3 → 0, 7 → 0, 14 → 0.** `config-api 29` · `pricing-api 47` · `evaluation-api 214`.
+Nenhum dos 24 vermelhos era defeito de código — mas dois deles **escondiam** um (acima).
+
+### A classe que apareceu em dois pacotes: o teste herdou a configuração do DEPLOY
+
+`pricing-api` (7 × 403) e `evaluation-api` (8 × 401) têm a **mesma causa**, com sintomas
+diferentes. Os gates abrem quando o token é vazio — *"auth desabilitada (deploy interno)"*,
+*"postura demo aberta"* — e os testes foram escritos contra esse ramo. O default é vazio no
+**repositório**; no compose os tokens estão setados (`:1075`, `:1423-1424`).
+
+O vermelho não é o problema. O problema é o simétrico: **num ambiente sem os tokens essas
+suítes ficam verdes sem nunca exercitar o portão** — que era o estado anterior. Nos dois
+pacotes o gate governa coisa séria (cobrança; ingestão de avaliação) e em nenhum havia um
+único teste afirmando que credencial errada é recusada. Net new: `TestAdminGate` (8 casos) e
+`TestServiceTokenGate` (3), com controle positivo — sem ele, todos passariam num gate que
+nega tudo.
+
+### Dublê que responde "qualquer coisa" (6 testes, uma causa)
+
+`MagicMock()` configura `__aenter__` como `AsyncMock` desde o 3.8. Então
+`async with pool.acquire() as conn` entregava um **AsyncMock**, e `dict(record)` sobre ele
+estourava em `db.py:699`. Bastou o handler ganhar uma query que ninguém patchou. `_wire_acquire`
+faz o conn responder `None`/`[]` — *a estrutura de uma consulta sem resultado é `None`, não um
+mock*. Efeito colateral imediato: `test_lock_result` ficou 404 e revelou que ele patchava
+`update_result`, função que **aquele handler nunca chamou** — estava verde sem tocar o caminho
+real.
+
+### config-api — três causas distintas em três testes
+
+| Teste | Causa | Conserto |
+|---|---|---|
+| `..._global_sentinel` | tabela virou `public.platform_config`; a asserção casava a **string** do SQL | estrutural: `args[1] == GLOBAL` por POSIÇÃO (`GLOBAL in args` passaria com o sentinela dentro do próprio SQL) |
+| `..._required_namespaces` | `quota` saiu do seed **de propósito** (CLAUDE.md § Pricing: vai ao Redis na ativação de plano) | **invertido** — agora afirma que `quota` não volta; apagar a linha deixaria o lugar vazio p/ uma segunda fonte de verdade |
+| `..._numeric_positive` | `performance_score_weight=0.0` e `reserve_markup_pct=0.0` são defaults documentados | `>= 0` no geral **+** teste novo `> 0` só p/ `_s/_ms/_days/...` — TTL zero não é "desligado", é expiração imediata |
+
+*Nota de método, minha:* rodei config-api com `cd /app` na mão, mas o `pyproject` dele está em
+`/app/packages/config-api` — sem ele o pytest perde `asyncio_mode="auto"` e **todo teste async
+falha**. Deu `7 passed / 22 failed`, plausível o bastante para eu ter ido caçar 19 bugs
+inexistentes. Escrevi um script que **descobre** o WORKDIR justamente para não supor, e daí
+supus, contornando o próprio script.
+
+---
+
+## auth-api: os 23 vermelhos eram a doc antiga, não o código ✅ (2026-08-03)
+
+Os 23 mandavam `x-admin-token`; as rotas de gestão (usuários, permissões, templates, módulos)
+migraram para **Bearer + ABAC `config.usuarios`** em 2026-06-26 (G-PROBE, strict, sem fallback).
+Sem `Authorization`, `_bearer_claims` devolve 401 — exatamente o que as asserções relatavam
+(`assert 401 == 204`). **Suíte: 58 → 64, todos verdes** (12,5 s → 19 s).
+
+**Os 401 antigos não eram cobertura, eram coincidência.** `test_create_no_admin_token` afirmava
+"sem admin token → 401" e passava *depois* da migração — pelo motivo novo, com o nome do motivo
+velho. Um teste certo pelo acaso é pior que um ausente: ele ocupa o lugar do que faltava.
+
+**Grant-first tem DOIS modos de recusa com status diferentes**, e um `assert >= 400` os
+confundiria (e ainda passaria por rota inexistente ou payload inválido). Os 6 testes novos afirmam
+o status exato:
+
+| Caso | Status | Quem recusa |
+|---|---|---|
+| sem `Authorization` | 401 | `_bearer_claims` |
+| Bearer válido, sem `config.usuarios` | 403 | `_require_config_usuarios` |
+| Bearer com `read_only` em rota de escrita | 403 | `_ACCESS_RANK` 1 < 2 |
+| Bearer expirado **com** o grant | 401 | autenticação vem antes de autorização |
+| `read_only` em rota de leitura | **200** | controle positivo |
+
+O controle positivo não é zelo: sem ele os três 403 passariam num gate que recusasse **tudo** —
+verde por recusa universal, o modo de falha que um teste negativo não denuncia sozinho.
+
+**Prova por mutação** (`_check_config_field` → allow-all): **4 vermelhos, 60 verdes**. Os quatro
+são os de grant; os três de 401 seguiram verdes, porque `_bearer_claims` não foi tocado. É essa
+assimetria que mostra que a suíte separa *"não sei quem é você"* de *"sei, e não pode"* — um teste
+que só contasse não-2xx ficaria vermelho nos sete e não provaria nada.
+
+**`router.py`: docstring corrigida.** Ela ainda anunciava *"Autenticação de operações admin: header
+X-Admin-Token"*, revogado há mais de um mês. Não é cosmético — os testes foram escritos contra a
+promessa da doc, então ela era parte da causa. Mesma família do `registry.py:82` que *afirmava*
+heartbeat + auto-release inexistentes.
+
+**Achado de método, meu, no meio da execução:** o primeiro `docker cp` caiu em `/app/tests/tests`
+porque `/app/tests` **já existia** — resíduo de sessão anterior, com uma versão VELHA do arquivo.
+A colisão de nome de módulo abortou a coleta e denunciou; sem ela o pytest teria rodado a suíte
+antiga e devolvido um número que passaria por medição. *Copiar para destino que já existe é
+sobrescrever ou aninhar dependendo do dia — conferir o conteúdo (`grep -c`) antes de rodar, nunca
+o "Successfully copied".* Errei também as três previsões numéricas do laço (63 em vez de 64, 28 em
+vez de 26, 3 falhas em vez de 4): nenhuma mudou a conclusão, mas prever o número **antes** de rodar
+é o que faz um resultado inesperado aparecer como inesperado.
+
+**A suíte segue sem rodar sozinha.** O `Dockerfile` copia só `src/`, o `testpaths` é `["tests"]`, e
+`httpx` é dev-dep ausente da imagem — o mesmo mecanismo do `calendar-api`. Rodou por `docker cp`,
+que **não sobrevive a `up -d`**. Decidir onde ela mora é item aberto do `TODO.md` (§ Zero testes
+coletados, item (a)) — e enquanto não for decidido, `report_suite_skips.sh` continua marcando
+auth-api como SUÍTE INVISÍVEL, corretamente.
+
+---
+
 ## Varredura de suítes: 4 pacotes destravados, 1.131 testes verdes ✅ (2026-08-02)
 
 Continuação do achado das suítes ausentes. `report_suite_skips.sh` ganhou duas correções que

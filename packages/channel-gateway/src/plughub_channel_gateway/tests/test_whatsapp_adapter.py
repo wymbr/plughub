@@ -32,6 +32,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from plughub_channel_gateway.tests.conftest import redis_get_by_key
 from plughub_channel_gateway.adapters.whatsapp import WhatsAppAdapter
 from plughub_channel_gateway.adapters.whatsapp_provider import (
     MetaCloudProvider,
@@ -239,7 +240,16 @@ class TestInboundText:
     async def test_text_publishes_normalized_event(
         self, adapter, mock_redis, mock_producer
     ):
-        mock_redis.get.side_effect = [SESSION_ID, None]  # session exists, no collect
+        # Era `side_effect=[SESSION_ID, None]` — uma lista POSICIONAL, que responde à
+        # ORDEM das chamadas em vez de à chave pedida. O caminho de texto faz TRÊS
+        # leituras (`:session`, `pending_collect`, `menu_collect`); a terceira esgotava a
+        # lista e levantava `StopAsyncIteration` de dentro do mock. Qualquer leitura nova
+        # no adapter quebra esse formato, e o erro aponta para o código de produção.
+        mock_redis.get.side_effect = redis_get_by_key({
+            "pending_collect": None,
+            "menu_collect":    None,
+            ":session":        SESSION_ID,
+        })
         body = _meta_text_body(CONTACT_ID, "Olá, preciso de ajuda")
         await adapter._process_inbound(body)
 

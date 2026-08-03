@@ -990,8 +990,18 @@ class TestNormalizeE164:
         assert result == "+5511999990000"
 
     def test_with_spaces_dashes(self):
-        result = _normalize_e164("+55 11 9999-0000")
+        # A entrada tinha 8 dígitos de assinante ("9999-0000") e a expectativa, 9
+        # ("99999-0000" — celular brasileiro pós-nono-dígito). O teste afirmava que a
+        # normalização ACRESCENTA um dígito ao número — coisa que nenhum normalizador
+        # pode fazer, e que passaria despercebida como "bug de formatação" se alguém
+        # tivesse ajustado a função em vez do dado. `_normalize_e164` está correto:
+        # remove tudo que não é dígito nem "+" e prefixa "+" quando falta.
+        result = _normalize_e164("+55 11 99999-0000")
         assert result == "+5511999990000"
+
+    def test_does_not_invent_digits(self):
+        """Trava a regressão que o teste anterior descrevia sem querer."""
+        assert _normalize_e164("+55 11 9999-0000") == "+551199990000"
 
     def test_us_number(self):
         assert _normalize_e164("+12025551234") == "+12025551234"
@@ -1377,6 +1387,34 @@ class TestFallbackTTSProvider:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _make_adapter_with_real_providers(settings) -> VoiceAdapter:
+    """Adapter que EXERCITA as factories — sem injetar `stt_provider`/`tts_provider`.
+
+    **Achado 2026-08-03.** `_make_adapter` injeta sempre
+    `stt_provider=MockSTTProvider()` e `tts_provider=MockTTSProvider(...)`, e o construtor
+    é `self._tts = tts_provider or self._build_tts_provider()` — ou seja, com o helper
+    padrão **a factory nunca roda**. A classe inteira `TestVoiceAdapterProviderFactories`
+    estava afirmando o tipo do mock que ela mesma injetou.
+
+    Os 4 vermelhos eram o sintoma barulhento. O problema silencioso são os 2 VERDES:
+    `test_build_stt_returns_mock_when_no_key` e `..._when_provider_is_mock` passavam
+    porque o injetado É um `MockSTTProvider` — passariam com QUALQUER implementação de
+    factory, inclusive nenhuma. Por isso os seis migram para este helper, e não só os
+    que estavam vermelhos: consertar apenas os vermelhos deixaria dois testes vazios
+    exatamente onde o leitor acha que há cobertura.
+
+    (Minha hipótese inicial era ambiente — variável de provider setada no container, como
+    no pricing/evaluation. Conferi antes de mexer: `_build_tts_provider` **não tem** ramo
+    que devolva `MockTTSProvider`, então o Mock só podia ter vindo de injeção.)
+    """
+    return VoiceAdapter(
+        producer       = AsyncMock(),
+        redis          = AsyncMock(),
+        settings       = settings,
+        voice_provider = MockVoiceProvider(),   # irrelevante p/ STT/TTS; evita I/O de CPaaS
+    )
+
+
 class TestVoiceAdapterProviderFactories:
 
     def test_build_tts_returns_fallback_with_elevenlabs_when_key_set(self):
@@ -1384,7 +1422,7 @@ class TestVoiceAdapterProviderFactories:
             voice_elevenlabs_api_key="el-key-123",
             voice_elevenlabs_voice_id="custom-voice",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         # _build_tts_provider is called in __init__ — check type
         assert isinstance(adapter._tts, FallbackTTSProvider)
         # Primary should be ElevenLabs
@@ -1397,7 +1435,7 @@ class TestVoiceAdapterProviderFactories:
             voice_elevenlabs_api_key="",
             voice_tts_provider="twilio_say",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         assert isinstance(adapter._tts, TwilioSayTTSProvider)
 
     def test_build_tts_returns_fallback_with_deepgram_aura(self):
@@ -1406,7 +1444,7 @@ class TestVoiceAdapterProviderFactories:
             voice_tts_provider="deepgram_aura",
             voice_deepgram_api_key="dg-key-123",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         assert isinstance(adapter._tts, FallbackTTSProvider)
         assert isinstance(adapter._tts._providers[0], DeepgramAuraTTSProvider)
         assert isinstance(adapter._tts._providers[-1], TwilioSayTTSProvider)
@@ -1416,7 +1454,7 @@ class TestVoiceAdapterProviderFactories:
             voice_stt_provider="deepgram",
             voice_deepgram_api_key="dg-key-456",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         assert isinstance(adapter._stt, FallbackSTTProvider)
 
     def test_build_stt_returns_mock_when_no_key(self):
@@ -1424,7 +1462,7 @@ class TestVoiceAdapterProviderFactories:
             voice_stt_provider="deepgram",
             voice_deepgram_api_key="",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         assert isinstance(adapter._stt, MockSTTProvider)
 
     def test_build_stt_returns_mock_when_provider_is_mock(self):
@@ -1432,7 +1470,7 @@ class TestVoiceAdapterProviderFactories:
             voice_stt_provider="mock",
             voice_deepgram_api_key="dg-key",
         )
-        adapter = _make_adapter(settings=settings)
+        adapter = _make_adapter_with_real_providers(settings)
         assert isinstance(adapter._stt, MockSTTProvider)
 
 

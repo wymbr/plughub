@@ -7,6 +7,7 @@ Verifies serialization round-trips and field defaults.
 from __future__ import annotations
 import json
 import pytest
+from pydantic import ValidationError
 
 from plughub_channel_gateway.models import (
     WsMessageText, WsMessageTextLegacy, WsMenuSubmit,
@@ -181,20 +182,34 @@ class TestNormalizedInboundEvent:
 # ── Contact lifecycle events ──────────────────────────────────────────────────
 
 class TestLifecycleEvents:
+    # `tenant_id` passou a ser OBRIGATÓRIO nos dois eventos (`models.py:231` e `:244`) e os
+    # testes ainda montavam a forma pré-multi-tenant. Não é campo opcional que virou
+    # obrigatório por acaso: evento de ciclo de vida sem tenant é irroteável — todo
+    # consumidor (analytics, LGPD) particiona por ele. Acrescentar um default aqui seria o
+    # conserto errado; o certo é o teste declarar o tenant, como um produtor real declara.
     def test_contact_open_event(self):
-        ev = ContactOpenEvent(contact_id="c1", session_id="s1", started_at="2024-01-01T10:00:00Z")
+        ev = ContactOpenEvent(contact_id="c1", session_id="s1", tenant_id="tenant_test",
+                              started_at="2024-01-01T10:00:00Z")
         assert ev.event_type == "contact_open"
         assert ev.channel == "webchat"
+        assert ev.tenant_id == "tenant_test"
+
+    def test_contact_open_without_tenant_is_rejected(self):
+        """O obrigatório precisa ser afirmado, senão um default futuro passa despercebido."""
+        with pytest.raises(ValidationError):
+            ContactOpenEvent(contact_id="c1", session_id="s1")
 
     def test_contact_closed_event(self):
         ev = ContactClosedEvent(
             contact_id="c1",
             session_id="s1",
+            tenant_id="tenant_test",
             reason="client_disconnect",
             started_at="2024-01-01T10:00:00Z",
         )
         assert ev.event_type == "contact_closed"
         assert ev.reason == "client_disconnect"
+        assert ev.tenant_id == "tenant_test"
         assert ev.ended_at  # auto-generated
 
     def test_contact_closed_invalid_reason(self):

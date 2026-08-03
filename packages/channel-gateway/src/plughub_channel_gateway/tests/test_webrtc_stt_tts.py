@@ -502,29 +502,45 @@ class TestTtsInjection:
 # 5. DataChannel text → Kafka
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _ws_streaming(messages: list[str]):
+    """WS cujo `iter_text()` é ITERÁVEL — como o do Starlette (corrigido 2026-08-03).
+
+    O `_receive_loop` faz `async for raw in ws.iter_text()` (`webrtc.py:788`). Num
+    `AsyncMock`, `iter_text()` devolve uma **corrotina**, e o `async for` levanta
+    `'async for' requires an object with __aiter__ method`. Os testes ainda montavam
+    `receive_text`, que era o formato ANTERIOR do loop.
+
+    **Dois testes desta classe passavam por causa disso**
+    (`..._empty_text_not_published` e `..._interaction_reply_empty_not_written`): eles
+    afirmam que NADA foi publicado, e com o loop quebrado nada é mesmo. Verde por
+    ausência de execução — o inverso exato do que o teste pretende provar. Por isso os
+    quatro passam a usar este helper, não só os dois que estavam vermelhos.
+
+    `iter_text` é função SÍNCRONA que devolve um gerador assíncrono — não `AsyncMock`,
+    não `async def`. É a forma do objeto real.
+    """
+    ws = AsyncMock()
+    ws.accept    = AsyncMock()
+    ws.send_json = AsyncMock()
+    ws.close     = AsyncMock()
+
+    async def _iter_text():
+        for m in messages:
+            yield m
+
+    ws.iter_text = _iter_text
+    return ws
+
+
 class TestDataChannel:
     @pytest.mark.asyncio
     async def test_datachannel_text_published_to_kafka(self):
         """webrtc.message from browser DataChannel must be published as Kafka inbound."""
-        from fastapi import WebSocketDisconnect
-
         adapter, redis, producer = _make_adapter()
 
-        ws = AsyncMock()
-        ws.accept = AsyncMock()
-        ws.send_json = AsyncMock()
-        ws.close = AsyncMock()
-
-        msgs = [
+        ws = _ws_streaming([
             json.dumps({"type": "webrtc.message", "text": "Preciso de ajuda"}),
-        ]
-
-        async def receive_text():
-            if msgs:
-                return msgs.pop(0)
-            raise WebSocketDisconnect(code=1000)
-
-        ws.receive_text = receive_text
+        ])
 
         await adapter._receive_loop(ws, SESSION_ID)
 
@@ -541,21 +557,9 @@ class TestDataChannel:
     @pytest.mark.asyncio
     async def test_datachannel_empty_text_not_published(self):
         """webrtc.message with empty text must not publish to Kafka."""
-        from fastapi import WebSocketDisconnect
-
         adapter, redis, producer = _make_adapter()
 
-        ws = AsyncMock()
-        ws.send_json = AsyncMock()
-        ws.close = AsyncMock()
-        msgs = [json.dumps({"type": "webrtc.message", "text": "   "})]
-
-        async def receive_text():
-            if msgs:
-                return msgs.pop(0)
-            raise WebSocketDisconnect(code=1000)
-
-        ws.receive_text = receive_text
+        ws = _ws_streaming([json.dumps({"type": "webrtc.message", "text": "   "})])
 
         await adapter._receive_loop(ws, SESSION_ID)
 
@@ -568,28 +572,15 @@ class TestDataChannel:
     @pytest.mark.asyncio
     async def test_datachannel_interaction_reply_written_to_redis(self):
         """webrtc.interaction_reply must write reply to Redis menu:result:{session_id}."""
-        from fastapi import WebSocketDisconnect
-
         adapter, redis, producer = _make_adapter()
 
-        ws = AsyncMock()
-        ws.send_json = AsyncMock()
-        ws.close = AsyncMock()
-
-        msgs = [
+        ws = _ws_streaming([
             json.dumps({
                 "type":           "webrtc.interaction_reply",
                 "reply":          "option_a",
                 "interaction_id": "int-001",
             }),
-        ]
-
-        async def receive_text():
-            if msgs:
-                return msgs.pop(0)
-            raise WebSocketDisconnect(code=1000)
-
-        ws.receive_text = receive_text
+        ])
 
         await adapter._receive_loop(ws, SESSION_ID)
 
@@ -604,22 +595,9 @@ class TestDataChannel:
     @pytest.mark.asyncio
     async def test_datachannel_interaction_reply_empty_not_written(self):
         """interaction_reply with empty reply must not write to Redis."""
-        from fastapi import WebSocketDisconnect
-
         adapter, redis, producer = _make_adapter()
 
-        ws = AsyncMock()
-        ws.send_json = AsyncMock()
-        ws.close = AsyncMock()
-
-        msgs = [json.dumps({"type": "webrtc.interaction_reply", "reply": ""})]
-
-        async def receive_text():
-            if msgs:
-                return msgs.pop(0)
-            raise WebSocketDisconnect(code=1000)
-
-        ws.receive_text = receive_text
+        ws = _ws_streaming([json.dumps({"type": "webrtc.interaction_reply", "reply": ""})])
         await adapter._receive_loop(ws, SESSION_ID)
 
         redis.lpush.assert_not_called()
@@ -680,6 +658,14 @@ class TestTeardown:
 
         await adapter._close_session(SESSION_ID, "customer_hangup")
 
+        # `_close_session` chama `stt_task.cancel()` e NÃO aguarda a task
+        # (`webrtc.py:955-956`) — cancelamento em asyncio é um pedido, não um fato.
+        # Entre o `cancel()` e a task de fato terminar ela fica em estado *cancelling*, e
+        # `Task.cancelled()` só devolve True depois que ela termina. O teste afirmava
+        # `cancelled()` no instante seguinte à chamada, então dependia de a task ter
+        # sido escalonada — o que é corrida, não contrato. Aqui a espera é explícita.
+        with pytest.raises(asyncio.CancelledError):
+            await stt_task
         assert stt_task.cancelled()
         assert room_client.disconnected is True
         assert SESSION_ID not in adapter._room_clients

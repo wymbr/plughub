@@ -66,6 +66,31 @@ export const AgentBusinessEventSchema = z.object({
   pool_id: z.string().min(1),
 
   /**
+   * Segmento (participante) que emitiu o evento — Arc 12, fatia 2 (2026-08-03).
+   *
+   * Sem ele a marcação é atribuída à SESSÃO, e numa sessão com vários participantes
+   * (primary + especialista, humano + hook de wrap-up) não há como saber QUEM emitiu o
+   * KPI — `agent_type_id` agrega todos os agentes daquele tipo. É o que impede
+   * contabilizar "serviços executados" por quem executou, e o que bloqueia o cruzamento
+   * com Evaluation (que é chaveada por `segment_id`).
+   *
+   * Preenchido por dois caminhos complementares:
+   *   A) o skill passa `$.segment_id` (built-in que o engine já tem em memória) — mesmo
+   *      precedente do `survey_record(grain=segment)`, que RECEBE o segmento em vez de
+   *      resolvê-lo;
+   *   B) rede: o consumer enriquece por `instance_id` quando A não veio.
+   * `null` quando nenhum dos dois resolveu — ausência honesta, não string vazia.
+   */
+  segment_id: z.string().nullable().default(null),
+
+  /**
+   * Instância que emitiu — já decodificada do JWT pela tool, antes descartada.
+   * Publicada para o `SegmentEnricher` do consumer resolver o `segment_id` (caminho B).
+   * Não é dimensão de relatório: é a chave de enriquecimento.
+   */
+  instance_id: z.string().nullable().default(null),
+
+  /**
    * Categoria hierárquica em dot notation.
    * Regex: ^[a-z0-9_]+(\.[a-z0-9_]+){1,4}$
    * O primeiro segmento DEVE ser igual ao pool_id da sessão (namespace isolation).
@@ -133,6 +158,17 @@ export const AgentEventInputSchema = z.object({
     .refine((t) => Object.keys(t).length <= 10, {
       message: "tags must have at most 10 entries",
     }),
+
+  /**
+   * Segmento do PRÓPRIO emissor (Arc 12 fatia 2, caminho A — custo zero).
+   *
+   * O skill passa `$.segment_id`; o engine já o tem em memória, então não há I/O nova.
+   * Opcional de propósito: agente que não o passe continua funcionando, e o consumer
+   * tenta resolver pelo `instance_id` (caminho B). Não confundir com o segmento ALVO de
+   * uma marcação sobre terceiro — não existe esse caso: `agent_event` marca o que o
+   * emissor fez, e fato de escopo estreito se deriva onde o escopo é conhecido.
+   */
+  segment_id: z.string().min(1).optional(),
 })
 
 export type AgentEventInput = z.infer<typeof AgentEventInputSchema>

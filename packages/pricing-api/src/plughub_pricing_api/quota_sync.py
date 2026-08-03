@@ -8,10 +8,27 @@ base + reservas comerciais ativas, todas as instalações) — e grava:
 
     {tenant_id}:quota:max_concurrent_sessions = C
 
-Leitores existentes (o gate já estava pronto, faltava o produtor):
-  - routing-engine `AdmissionController._shared_limit` (admissão híbrida:
-    shared = C − Σ session_reservation; rejeição = outage `shared_full`/`quota`)
-  - mcp-server `checkConcurrentSessions`
+⚠️ **LEITORES — corrigido em 2026-08-03.** Este docstring descrevia a admissão híbrida
+(`shared = C − Σ session_reservation`, rejeição `shared_full`), modelo **removido em
+2026-08-02** (fatia 3 do arco de capacidade). Ele somava licença humana com licença de IA
+num pote único — a mesma falácia de aditividade que o rollup recusa no topo —, e por isso
+recusava contato real com humano ocioso. Quem lesse isto hoje procuraria um gate que não
+existe, e pior: concluiria que `max_concurrent_sessions` governa admissão.
+
+Estado atual de cada chave que este módulo escreve:
+
+  {t}:quota:capacity:ai_agent        → **é o teto de admissão.** Único gate de sessão
+      que sobrou (`AdmissionController`: `kind:ai ≤ C_ai`). Sessão em pool
+      `agent_kind='ai'`; rejeição só na porta, com `cause="quota"`.
+  {t}:quota:capacity:human_agent     → **gate de LOGIN**, não de sessão. Licença humana é
+      por login (`agent_login` → `human_capacity_exhausted`), e gateá-la de novo por
+      sessão seria gate duplo na unidade errada.
+  {t}:quota:max_concurrent_sessions  → **não governa admissão.** Sobrevive como número de
+      PROVISIONAMENTO, cobrado por `capacity.ts/deployViolation` (Σ declarada nos deploys
+      ≤ C). Mistura moedas também — mas isso é o defeito C, de outra fatia; trocá-lo aqui
+      seria construir a fatia 4 no meio desta.
+
+  - mcp-server `checkConcurrentSessions` (segue lendo `max_concurrent_sessions`)
 
 Semântica:
   - C > 0  → SET (recompute completo, idempotente)

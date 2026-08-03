@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
 
 from plughub_pricing_api.main import app
-from plughub_pricing_api.config import Settings
+from plughub_pricing_api.config import Settings, get_settings
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -59,7 +59,66 @@ def mock_app_pool():
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    """Cliente com o portão de escrita DESLIGADO de propósito.
+
+    **Por que existe (corrigido 2026-08-03).** `require_admin` abre quando
+    `settings.admin_token` é vazio (*"auth desabilitada (deploy interno)"*,
+    `router.py:94`). Os testes de negócio foram escritos contra esse ramo — o comentário
+    original dizia, literalmente, *"should succeed when admin_token is empty (default)"*
+    — e o default É vazio… **no repositório**. No container do compose,
+    `PLUGHUB_PRICING_ADMIN_TOKEN=demo_pricing_admin_token`
+    (`docker-compose.demo.yml:1075`), então `get_settings()` devolvia token não-vazio e as
+    **7** rotas gatilhadas passaram a responder 403. Sete vermelhos, nenhuma linha de
+    código de produção errada.
+
+    O defeito não é o 403: é o teste ter herdado a configuração do DEPLOY em vez de
+    declarar a sua. Um teste assim muda de significado conforme a variável de ambiente do
+    dia — e, quando muda, não avisa que mudou de assunto. Mesma família do
+    `PLUGHUB_AUTH_JWT_SECRET` na analytics-api.
+
+    Aqui a escolha é explícita: estes testes exercitam **negócio**, então o portão sai do
+    caminho. O portão em si ganhou cobertura própria em `TestAdminGate` — que antes não
+    existia em lugar nenhum, ou seja, ninguém verificava que um token ERRADO é recusado.
+    """
+    app.dependency_overrides[get_settings] = lambda: Settings(admin_token="", jwt_secret="")
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.fixture
+def gated_client():
+    """Cliente com o portão LIGADO — `admin_token` e `jwt_secret` fixos no teste."""
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        admin_token=_GATE_TOKEN, jwt_secret=_GATE_SECRET,
+    )
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+
+_GATE_TOKEN  = "token_de_teste_nao_vazio"
+_GATE_SECRET = "segredo_hs256_de_teste_com_32_chars!"
+
+
+def _bearer(module_config: dict | None = None, exp_delta: int = 3600) -> str:
+    """JWT HS256 mínimo, montado à mão — o router valida em stdlib, o teste também."""
+    import base64, hashlib, hmac, json, time
+
+    def _b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    header  = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload = _b64(json.dumps({
+        "sub": "u1",
+        "module_config": module_config or {},
+        "exp": int(time.time()) + exp_delta,
+    }).encode())
+    sig = _b64(hmac.new(_GATE_SECRET.encode(), f"{header}.{payload}".encode(),
+                        hashlib.sha256).digest())
+    return f"{header}.{payload}.{sig}"
 
 
 # ── TestHealth ─────────────────────────────────────────────────────────────────
@@ -139,9 +198,11 @@ class TestResources:
         assert len(data["resources"]) == 1
 
     @patch("plughub_pricing_api.router.pricing_db.upsert_resource", new_callable=AsyncMock)
-    def test_upsert_resource_requires_admin(self, mock_upsert, client):
+    def test_upsert_resource_open_when_admin_token_unset(self, mock_upsert, client):
+        # Nome anterior: `test_upsert_resource_requires_admin` — que era o oposto do que
+        # ele fazia. Sem header nenhum e com `admin_token` vazio, o portão ABRE; o teste
+        # nunca exerceu "requires admin". Quem exerce é `TestAdminGate`, abaixo.
         mock_upsert.return_value = MOCK_RESOURCE
-        # No admin token — should succeed when admin_token is empty (default)
         r = client.post("/v1/pricing/resources/t1", json={
             "resource_type": "ai_agent",
             "quantity": 5,
@@ -221,6 +282,75 @@ class TestReserveActivation:
         mock_set.return_value = 0
         r = client.post("/v1/pricing/reserve/t1/unknown/deactivate")
         assert r.status_code == 404
+
+
+# ── TestAdminGate ──────────────────────────────────────────────────────────────
+
+class TestAdminGate:
+    """O portão de escrita (`require_admin`), que até 2026-08-03 não tinha teste NENHUM.
+
+    Ele governa alteração de recursos contratados e ativação de pool de reserva — ou
+    seja, **o que o cliente é cobrado**. Quando os 7 testes ficaram vermelhos por causa
+    do `admin_token` do compose, o reflexo seria neutralizar o ambiente e seguir; o achado
+    real foi que a única coisa que exercitava aquele código era um acidente de
+    configuração, e pelo ramo ABERTO.
+
+    Cada caso afirma o status EXATO: 403 (sem credencial / sem o campo ABAC), 401
+    (assinatura inválida, token expirado) e 200. Colapsar em "não-2xx" faria a suíte
+    passar por um gate que recusa tudo — inclusive o admin legítimo.
+    """
+
+    _WRITE = ("/v1/pricing/reserve/t1/peak_pool/activate", {})
+
+    def test_no_credential_is_403(self, gated_client):
+        r = gated_client.post(self._WRITE[0])
+        assert r.status_code == 403
+
+    def test_wrong_admin_token_is_403(self, gated_client):
+        r = gated_client.post(self._WRITE[0], headers={"X-Admin-Token": "chute"})
+        assert r.status_code == 403
+
+    @patch("plughub_pricing_api.router.pricing_db.set_reserve_active", new_callable=AsyncMock)
+    @patch("plughub_pricing_api.router.pricing_db.record_activation", new_callable=AsyncMock)
+    def test_correct_admin_token_passes(self, mock_record, mock_set, gated_client):
+        """Controle positivo: sem ele, os 403 acima passariam num gate que nega tudo."""
+        mock_set.return_value    = 2
+        mock_record.return_value = MOCK_LOG
+        r = gated_client.post(self._WRITE[0], headers={"X-Admin-Token": _GATE_TOKEN})
+        assert r.status_code == 200
+
+    @patch("plughub_pricing_api.router.pricing_db.set_reserve_active", new_callable=AsyncMock)
+    @patch("plughub_pricing_api.router.pricing_db.record_activation", new_callable=AsyncMock)
+    def test_bearer_with_config_plataforma_passes(self, mock_record, mock_set, gated_client):
+        mock_set.return_value    = 2
+        mock_record.return_value = MOCK_LOG
+        tok = _bearer({"config": {"plataforma": {"access": "read_write"}}})
+        r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 200
+
+    def test_bearer_without_the_field_is_403(self, gated_client):
+        tok = _bearer({"config": {"usuarios": {"access": "read_write"}}})
+        r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403
+
+    def test_bearer_read_only_is_403(self, gated_client):
+        """`plataforma` em `read_only` lê, não escreve — rank 1 < 2."""
+        tok = _bearer({"config": {"plataforma": {"access": "read_only"}}})
+        r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 403
+
+    def test_tampered_signature_is_401(self, gated_client):
+        """401, não 403: assinatura quebrada é falha de AUTENTICAÇÃO."""
+        tok = _bearer({"config": {"plataforma": {"access": "read_write"}}})
+        h, p, sig = tok.split(".")
+        r = gated_client.post(self._WRITE[0],
+                              headers={"Authorization": f"Bearer {h}.{p}.{sig[:-2]}xy"})
+        assert r.status_code == 401
+
+    def test_expired_bearer_is_401(self, gated_client):
+        tok = _bearer({"config": {"plataforma": {"access": "read_write"}}}, exp_delta=-60)
+        r = gated_client.post(self._WRITE[0], headers={"Authorization": f"Bearer {tok}"})
+        assert r.status_code == 401
 
 
 # ── TestActivationLog ─────────────────────────────────────────────────────────

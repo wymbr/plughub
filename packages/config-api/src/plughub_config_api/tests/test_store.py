@@ -200,12 +200,27 @@ class TestConfigStoreSet:
         redis = _make_redis()
         store = ConfigStore(pool, ConfigCache(redis))
         await store.set(None, "routing", "snapshot_ttl_s", 90)
-        # The SQL should include GLOBAL sentinel
-        sql_call = pool.execute.call_args[0][0]
-        assert "INSERT INTO platform_config" in sql_call
-        # First positional arg after SQL should be GLOBAL
         args = pool.execute.call_args[0]
-        assert GLOBAL in args
+        sql_call = args[0]
+
+        # Asserção sobre ESTRUTURA, não sobre serialização (corrigido 2026-08-03).
+        # A versão anterior exigia a substring `"INSERT INTO platform_config"` e passou
+        # a reprovar quando a tabela foi qualificada com o schema
+        # (`INSERT INTO public.platform_config`, `db.py:166` — feito de propósito, para
+        # que o schema `$user` do usuário `plughub` não sombreie `public`). O código
+        # ficou MAIS correto e o teste ficou vermelho: é o padrão que já apareceu em
+        # `test_pools_occupancy_bucket`, `test_account_selector` e `test_router` do
+        # calendar — a asserção casa com uma foto do texto, não com o comportamento.
+        assert "platform_config" in sql_call
+        assert "ON CONFLICT" in sql_call        # é upsert, não insert cego
+
+        # POSIÇÃO, não pertinência: `GLOBAL in args` passaria se o sentinela aparecesse
+        # em QUALQUER argumento — inclusive dentro do texto do SQL, onde ele de fato
+        # aparece no DDL (`DEFAULT '__global__'`). O contrato é que `tenant_id=None`
+        # vira o sentinela no 1º parâmetro ($1).
+        assert args[1] == GLOBAL
+        assert args[2] == "routing"
+        assert args[3] == "snapshot_ttl_s"
 
     async def test_set_triggers_scan_invalidation_for_global(self):
         """Writing global → scan should be called to invalidate tenant variants."""
@@ -298,9 +313,29 @@ class TestSeedData:
     def test_all_required_namespaces_present(self):
         namespaces = {entry[0] for entry in _SEED}
         required   = {"sentiment", "routing", "session", "consumer", "dashboard",
-                      "webchat", "masking", "quota"}
+                      "webchat", "masking"}
         assert required.issubset(namespaces), \
             f"Missing namespaces: {required - namespaces}"
+
+    def test_quota_is_NOT_seeded(self):
+        """`quota` saiu da lista de obrigatórios — e a ausência virou asserção.
+
+        Decisão de produto documentada (CLAUDE.md § Pricing Module): *"Quota limits
+        written to Redis on plan activation — **not seeded by Config API**"*. O teste
+        antigo exigia o namespace `quota` no `_SEED` e reprovava desde que ele foi
+        removido — cobrando um contrato revogado.
+
+        Apagar a linha teria bastado para o verde, e teria deixado o lugar vazio: nada
+        impediria alguém de re-semear `quota` aqui e criar uma SEGUNDA fonte de verdade
+        para limite de plano, silenciosamente (invariante *one source per domain*).
+        Invertida, a asserção passa a defender a decisão em vez de a contradizer —
+        mesmo movimento aplicado em `test_human_instance_identity.py` em 2026-08-02.
+        """
+        namespaces = {entry[0] for entry in _SEED}
+        assert "quota" not in namespaces, (
+            "quota voltou ao seed do Config API. Limite de plano é escrito no Redis "
+            "pela ativação de plano (pricing-api); semear aqui cria segunda fonte."
+        )
 
     def test_sentiment_thresholds_are_valid(self):
         thresholds = next(
@@ -319,11 +354,34 @@ class TestSeedData:
             assert combo not in seen, f"Duplicate seed entry: {ns}.{key}"
             seen.add(combo)
 
-    def test_numeric_values_are_positive(self):
+    def test_numeric_values_are_non_negative(self):
+        """Nenhum default numérico é negativo.
+
+        Era `> 0` e reprovava em DOIS defaults legítimos e documentados:
+        `routing.performance_score_weight = 0.0` (*"0.0 = pure competency match
+        (default — backward-compatible)"*, Arc 7d) e `pricing.reserve_markup_pct = 0.0`
+        (*"default 0%"*). O teste afirmava um invariante que a plataforma nunca teve —
+        zero é um valor de negócio válido para peso e para markup.
+        """
         for ns, key, value, _ in _SEED:
             # booleans are int subclass in Python — skip them
             if isinstance(value, (int, float)) and not isinstance(value, bool):
-                assert value > 0, f"{ns}.{key} = {value} must be positive"
+                assert value >= 0, f"{ns}.{key} = {value} must not be negative"
+
+    def test_duration_defaults_are_strictly_positive(self):
+        """A parte do `> 0` que ainda vale — e agora sabe a quê se aplica.
+
+        Afrouxar tudo para `>= 0` compraria o verde perdendo o que o teste defendia:
+        um TTL, janela ou intervalo com valor 0 não é "desligado", é **expiração
+        imediata** ou laço apertado — degradação que não levanta erro em lugar nenhum
+        (`live_ttl_s = 0` faria o sentimento sumir do Redis sem uma linha de log).
+        Peso e percentual aceitam zero; duração, não.
+        """
+        for ns, key, value, _ in _SEED:
+            if not key.endswith(("_s", "_ms", "_days", "_hours", "_min")):
+                continue
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                assert value > 0, f"{ns}.{key} = {value}: duração/TTL não pode ser 0"
 
     async def test_seed_function_calls_set_for_each_entry(self):
         pool  = _make_pool(fetchrow_return=None)  # get_entry returns None → not exists

@@ -5930,7 +5930,15 @@ async def query_agent_events_summary(
       meta: pagination info
     """
     # Validate group_by to prevent injection
-    VALID_GROUP_BY = {"category", "skill_id", "pool_id", "agent_type_id"}
+    # `segment_id` (Arc 12 fatia 2, 2026-08-03) habilita "KPI de negócio por
+    # PARTICIPANTE" — antes a granularidade mais fina era `agent_type_id`, que agrega
+    # todos os agentes daquele tipo. É o eixo que permite atribuir serviço executado a
+    # quem executou (numa sessão orquestrada há vários emissores) e cruzar com
+    # Evaluation, que é chaveada pelo mesmo `segment_id`.
+    #
+    # Eventos anteriores à fatia têm `segment_id = NULL` e caem num grupo próprio — a
+    # ausência é visível em vez de diluída num agente qualquer.
+    VALID_GROUP_BY = {"category", "skill_id", "pool_id", "agent_type_id", "segment_id"}
     if group_by not in VALID_GROUP_BY:
         group_by = "category"
 

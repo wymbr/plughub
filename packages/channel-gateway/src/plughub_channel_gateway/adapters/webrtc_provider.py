@@ -148,7 +148,11 @@ class LiveKitProvider:
     (lighter than full 'livekit' SDK — no track pub/sub, server API only)
 
     Phase A: room CRUD + token generation
-    Phase D: egress start/stop (stubs raise NotImplementedError until then)
+    Phase D: egress start/stop — IMPLEMENTADO. Em dev_mode (sem api_key/secret) devolve
+             um egress_id mock (`EG_dev_…`) sem I/O de rede, e `stop_egress` é no-op.
+             (Docstring corrigida em 2026-08-03: ainda anunciava *"stubs raise
+             NotImplementedError until then"*, e havia dois testes cobrando essa
+             promessa — o código andou, a doc ficou, e o teste ficou do lado da doc.)
     """
 
     def __init__(

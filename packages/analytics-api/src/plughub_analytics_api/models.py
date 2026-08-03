@@ -683,7 +683,19 @@ def parse_queue_position(payload: dict[str, Any]) -> dict | None:
             else payload.get("queue_length")
         ),
         "estimated_wait_ms": payload.get("estimated_wait_ms"),
-        "available_agents":  payload.get("available_agents"),
+        # F5 — resíduo fechado em 2026-08-03. Este mapper era o ÚLTIMO leitor de
+        # `available_agents`: o produtor (`_publish_queue_position`) parou de publicá-lo
+        # em 2026-08-02, então o `payload.get()` já devolvia None sempre — leitor sem
+        # produtor, a mesma família de dívida que o arco fecha do outro lado
+        # (config sem leitor).
+        #
+        # Fixado em None de propósito, em vez de deletado: a coluna existe em
+        # `queue_events` (Nullable, dados históricos) e dropá-la é migração à parte.
+        # A diferença entre `payload.get(...)` e `None` é quem decide — com o `get`,
+        # bastaria alguém voltar a publicar o campo para ele reviver em silêncio, com o
+        # mesmo valor errado de antes (`SCARD(pool:instances)` = PERTENCIMENTO, não
+        # capacidade). Com o `None`, ressuscitar exige editar esta linha e ler isto.
+        "available_agents":  None,
         "timestamp":         payload.get("published_at") or _now(),
     }
 
@@ -1041,13 +1053,20 @@ def parse_evaluation_event(payload: dict[str, Any]) -> list[dict] | None:
 
 # ─── agent.events (Arc 12) ────────────────────────────────────────────────────
 
-def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
+def parse_agent_business_event(
+    payload: dict[str, Any], segment_id: str | None = None,
+) -> dict | None:
     """
     Maps agent.events topic → agent_business_events table.
 
     The mcp-server pre-decomposes category into category_l1..l4 at publish time,
     so the consumer simply passes them through.  If a level is absent it defaults
     to an empty string.
+
+    `segment_id` (Arc 12 fatia 2) chega por dois caminhos e a PRECEDÊNCIA importa: o do
+    payload (o skill declarou o próprio segmento) vence o resolvido pelo enricher. Se
+    divergirem, quem sabe é o emissor — o enricher deduz a partir do `instance_id`, e uma
+    instância pode ter mais de um segmento ao longo da sessão.
     """
     tenant_id  = payload.get("tenant_id")
     session_id = payload.get("session_id")
@@ -1093,6 +1112,14 @@ def parse_agent_business_event(payload: dict[str, Any]) -> dict | None:
         "category_l4":    category_l4,
         "value":          value,
         "tags":           {str(k): str(v) for k, v in tags.items()},
+        # Arc 12 fatia 2 — atribuição por participante.
+        # `segment_id` vem do skill (`$.segment_id`, caminho A). `instance_id` viaja
+        # junto e NÃO é coluna: é a chave que o `SegmentEnricher` usa para resolver o
+        # segmento quando A não veio (caminho B), no mesmo ponto em que `mcp.audit` já
+        # é enriquecido. Por isso ele fica na linha intermediária e some antes do
+        # INSERT — o row builder só lê `segment_id`.
+        "segment_id":     payload.get("segment_id") or segment_id or None,
+        "instance_id":    payload.get("instance_id") or None,
         "emitted_at":     payload.get("emitted_at") or _now(),
     }
 

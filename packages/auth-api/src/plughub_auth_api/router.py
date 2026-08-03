@@ -2,7 +2,11 @@
 router.py
 Endpoints REST da auth-api.
 
-Autenticação de operações admin: header X-Admin-Token.
+Autenticação de operações de gestão (usuários, permissões, templates, módulos):
+    header Authorization: Bearer <access_token> + ABAC `config.usuarios`.
+    **Não há mais X-Admin-Token aqui** — G-PROBE 2026-06-26, strict, sem fallback
+    (ver o bloco "ABAC gate" abaixo). Docstring corrigida em 2026-08-03: ela ainda
+    anunciava o header antigo, e os testes tinham sido escritos contra a promessa.
 Autenticação de sessão (me/refresh/logout): header Authorization: Bearer <access_token>
                                             ou body refresh_token.
 """

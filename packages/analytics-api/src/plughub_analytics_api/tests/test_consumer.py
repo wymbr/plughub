@@ -323,7 +323,28 @@ class TestParseQueuePosition:
         assert row["event_type"] == "position_updated"
         assert row["queue_position"] == 3
         assert row["estimated_wait_ms"] == 90000
-        assert row["available_agents"] == 0
+
+    def test_available_agents_is_NOT_passed_through(self):
+        """F5: mesmo que alguém volte a publicar o campo, ele não entra na linha.
+
+        A asserção antiga era `row["available_agents"] == 0` — passthrough do payload
+        que o próprio teste fornecia, num campo cujo produtor morreu em 2026-08-02.
+        Verde por construção, e documentando um contrato revogado: quem lesse o teste
+        concluiria que o pipeline suporta o campo.
+
+        Invertida, ela vira a guarda do que se decidiu: o valor era
+        `SCARD(pool:instances)` — PERTENCIMENTO, não capacidade — e reintroduzi-lo
+        contaminaria a série de novo, sem nada ficar vermelho.
+        """
+        row = parse_queue_position({
+            "event":            "queue.position_updated",
+            "session_id":       SESSION,
+            "tenant_id":        TENANT,
+            "pool_id":          POOL,
+            "queue_length":     3,
+            "available_agents": 7,          # produtor ressuscitado por engano
+        })
+        assert row["available_agents"] is None
 
 
 # ── _write_row dispatch ───────────────────────────────────────────────────────

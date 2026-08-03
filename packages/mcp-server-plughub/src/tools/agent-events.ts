@@ -104,7 +104,7 @@ export function registerAgentEventTools(
     async (input: Record<string, unknown>) => {
       try {
         const parsed = AgentEventToolInputSchema.parse(input)
-        const { session_token, session_id, category, value, tags } = parsed
+        const { session_token, session_id, category, value, tags, segment_id } = parsed
 
         // ── Decode JWT ──────────────────────────────────────────────────────
         let tenant_id:     string
@@ -202,6 +202,20 @@ export function registerAgentEventTools(
           value,
           tags,
           emitted_at,
+          // Arc 12 fatia 2 (2026-08-03) — atribuição por PARTICIPANTE.
+          //
+          // `segment_id` (caminho A): vem do skill via `$.segment_id`, built-in que o
+          // engine já tem em memória. `null` — não `""` — quando ausente: ausência é
+          // um fato diferente de "segmento vazio", e a coluna é Nullable justamente
+          // para que o relatório possa distinguir "não sabemos quem emitiu" de um
+          // segmento real.
+          //
+          // `instance_id` (caminho B): já era decodificado do JWT logo acima e
+          // DESCARTADO. Publicá-lo custa zero e dá ao consumer a chave para resolver o
+          // segmento via `SegmentEnricher` quando A não veio — cobre humanos e replay
+          // de DLQ sem I/O extra no caminho quente.
+          segment_id:  segment_id ?? null,
+          instance_id: instance_id || null,
         }
 
         try {
