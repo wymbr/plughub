@@ -2,6 +2,72 @@
 
 ---
 
+## Wrap-up fatia 3 — o Arc 12 ganha seu PRIMEIRO produtor 📊✅ (2026-08-03)
+
+Até hoje `agent_business_events` tinha **1 linha, de seed** (2026-06-10 12:00:00.000) e nenhum
+chamador de `agent_event` no repositório inteiro. A infra do Arc 12 estava completa de ponta a
+ponta — tool, tópico, tabela, `/reports/agent-events/*`, UI — e ociosa. Agora tem dado real, com
+atribuição por segmento.
+
+**Gate:** `infra/test/smoke_wrapup_arc12_capture.sh` — **14/14**. Três eventos de um wrap-up:
+
+```
+retencao_humano.wrapup.fcr                      1   com_seg
+retencao_humano.wrapup.servico.alteracao_plano  1   com_seg
+retencao_humano.wrapup.servico.segunda_via      1   com_seg
+```
+
+**O desenho, e o que ele recusa.** `DialogCapture` ganhou `kind: "scored" | "nominal"`.
+
+- **`kind` NÃO escolhe o sink** — o sink vem de QUEM RESPONDE (§D1), e isso já está determinado
+  pela tool que compõe (`segment_outcome_record` ⇒ Arc 12, `survey_record` ⇒ `session_signal`).
+  Um campo `sink` no capture permitiria declarar, num form de wrap-up, que a resposta do
+  atendente é voz do cliente — contaminando a série histórica de forma irreversível.
+- **`kind` escolhe a FORMA**, porque `value` é `Float64` e o relatório não agrupa por tag:
+  `scored` → categoria fixa + valor numérico (`avg_value` **é** a taxa de FCR); `nominal` → a
+  resposta vira a FOLHA da categoria, `value: 1` (multi-select ⇒ N eventos), com a folha saindo
+  de `options[].value` — lista controlada (§D3).
+- **§D6 fica decidida por construção:** capture presente ⇒ Arc 12; ausente ⇒ prosa nas colunas do
+  segmento. O smoke testa o **negativo** também (resumo/próximos passos NÃO viram evento) — sem
+  ele, prosa entrando numa tabela de `value` numérico só apareceria meses depois.
+
+**A tool virou form-driven (§D3).** Recebe `answers` inteiro + `dialog_form_id`, busca o form
+publicado (mesmo `fetchDialogForm` do `survey_record`) e roteia por capture. Antes o SKILL mapeava
+campo a campo, então cada pergunta nova no editor exigia editar YAML + `set-next` + `promote`.
+Agora **acrescentar FCR ou serviço ao wrap-up de um pool é mudança de CONFIGURAÇÃO**. O núcleo
+(`classificacao` → `outcome`) segue fixo de propósito: é a disposição do segmento, já vive em
+`segments`, e duplicá-la no Arc 12 criaria duas fontes para a mesma pergunta.
+
+`buildAgentBusinessEvent` foi extraído para haver UM lugar que conhece a forma do evento — o
+wrap-up não pode chamar a tool `agent_event` (ela exige `session_token` de `agent_login`, e
+workflow não tem agente logado), e repetir o literal seria a segunda implementação da mesma
+fórmula que o CLAUDE.md nomeia em `_refresh_pool_snapshots`.
+
+**Novo: `infra/scripts/deploy_skill_to_slot.sh`** (ferramenta de deploy, não teste — `infra/test/`
+é para o que fica vermelho), e ele nasceu de um diagnóstico errado. A sequência
+manual publicou o skill com `PUT` → **422**, e o `set-next`/`promote` seguinte respondeu
+`"action":"promoted"` **tirando foto do flow ANTIGO**. O smoke então falhou apontando para a
+captura — feature que nunca chegou a rodar. O script agora (a) imprime o CORPO do erro, não o
+código (foram dois 422 distintos: `flow` com campos demais, depois `description`/`classification`
+faltando — só o corpo distingue), (b) **aborta antes do promote** se o PUT falhar, (c) confere o
+snapshot promovido contra uma âncora que só existe no flow novo, e (d) preserva o `config_json`
+do slot.
+
+> **Regressão causada e registrada:** o `set-next` manual sem `config_json` gravou `{}` e o promote
+> apagou o `max_concurrent_sessions: 5` do slot de `wrapup_detached_ia`. Restaurado à mão. É
+> exatamente a armadilha que a nota de memória do projeto já descrevia ("re-snapshot exige
+> config_json completo") e que foi reproduzida assim mesmo.
+
+**Custo de instrumento (o padrão do dia, agora quantificado).** Doze defeitos em sondas, portões e
+sequências de deploy contra **um** achado de código real na sessão inteira. Nenhum deles esteve na
+lógica que faz o trabalho (`deriveAgentEvents` passou de primeira); todos foram de **canal ou de
+leitura** — corpo de request errado, stdin ocupado pelo heredoc (duas vezes, a mesma causa),
+resposta lida na forma errada, campo inexistente, destructuring por posição sobre objeto. A
+conclusão prática: quando um teste novo fica vermelho contra código novo, a hipótese de maior
+probabilidade **não** é a feature.
+
+---
+
 ## Poda dos parciais do TODO — três títulos que mentiam e um item que se contradizia 🧹✅ (2026-08-03)
 
 Terceiro bloco do dia. Alvo: as seções **parciais** (I5, Capacidade, Customer Surveys) que a poda

@@ -81,9 +81,17 @@ steps:
       tenant_id:         "$.tenant_id"
       origin_session_id: "@ctx.session.origin_session_id"
       segment_id:        "@ctx.session.surveyed_segment_id"
-      classificacao:     "$.pipeline_state.coletar.answers.classificacao"
-      resumo:            "$.pipeline_state.coletar.answers.resumo"
-      proximos_passos:   "$.pipeline_state.coletar.answers.proximos_passos"
+      # Fatia 3 — passa as respostas INTEIRAS + o form que as descreve, em vez de
+      # mapear campo a campo (`answers.classificacao`, `answers.resumo`, …). O mapa
+      # campo-a-campo fazia cada pergunta nova no editor exigir editar este YAML +
+      # `set-next` + `promote` — ou seja, o formulário não dirigia nada, que era o
+      # ponto (§D3). A tool lê o form publicado e roteia por `capture.kind`.
+      #
+      # Consequência boa e deliberada: acrescentar uma pergunta de FCR ou de serviço
+      # ao form de wrap-up de um pool passa a ser mudança de CONFIGURAÇÃO — sem
+      # tocar em skill, sem deploy.
+      answers:           "$.pipeline_state.coletar.answers"
+      dialog_form_id:    "@ctx.hook.dialog_form_id"
     output_as: wrapup_record
     on_success: encerrar
     on_failure: encerrar   # gravação falha não deve prender o wrap-up (já logado/isError)

@@ -85,6 +85,59 @@ function mcpError(code: string, message: string): ToolResult {
   }
 }
 
+// ─── Construtor compartilhado do evento (Arc 12 fatia 3) ──────────────────────
+
+/**
+ * Monta a linha de `agent.events`. Existe para haver UM lugar que conhece a forma
+ * do evento.
+ *
+ * O segundo produtor é o `segment_outcome_record` (wrap-up, fatia 3), que NÃO pode
+ * chamar a tool `agent_event`: aquela exige `session_token` de `agent_login`, e o
+ * wrap-up roda como workflow, sem agente logado. A alternativa seria repetir o
+ * literal do evento lá — e "duas implementações da mesma fórmula" é precisamente o
+ * defeito que o CLAUDE.md nomeia em `_refresh_pool_snapshots` (a segunda cópia
+ * virou a principal e passou a divergir em silêncio).
+ *
+ * `segment_id`/`instance_id` são `null`, nunca `""`: a coluna é Nullable para que o
+ * relatório distinga "não sabemos quem emitiu" de um segmento real.
+ */
+export function buildAgentBusinessEvent(args: {
+  tenant_id:     string
+  session_id:    string
+  category:      string
+  value:         number
+  agent_type_id: string
+  skill_id?:     string
+  pool_id?:      string
+  journey_id?:   string | null
+  tags?:         Record<string, string>
+  segment_id?:   string | null
+  instance_id?:  string | null
+}): Record<string, unknown> {
+  // `decomposeCategoryLevels` devolve OBJETO `{l1,l2,l3,l4}`, não array — conferido
+  // na assinatura (`schemas/agent-events.ts:188`). Destructuring por posição
+  // compilaria em JS e produziria quatro `undefined`, com o evento saindo com as
+  // colunas de categoria vazias: linha gravada, série silenciosamente inútil.
+  const { l1: category_l1, l2: category_l2, l3: category_l3, l4: category_l4 } =
+    decomposeCategoryLevels(args.category)
+  return {
+    event_id:      crypto.randomUUID(),
+    tenant_id:     args.tenant_id,
+    session_id:    args.session_id,
+    journey_id:    args.journey_id ?? null,
+    agent_type_id: args.agent_type_id,
+    skill_id:      args.skill_id || category_l2 || "",
+    pool_id:       args.pool_id  || category_l1 || "",
+    category:      args.category,
+    category_l1, category_l2, category_l3, category_l4,
+    value:         args.value,
+    tags:          args.tags ?? {},
+    emitted_at:    new Date().toISOString(),
+    segment_id:    args.segment_id  ?? null,
+    instance_id:   args.instance_id ?? null,
+  }
+}
+
 // ─── Registration ─────────────────────────────────────────────────────────────
 
 export function registerAgentEventTools(

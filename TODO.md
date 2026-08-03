@@ -300,8 +300,8 @@ produziu esta nota errada).
 |---|---|---|
 | 1 | **E2f** — atributo `purpose: contact\|internal` no pool + filtros no analytics | ✅ 2026-07-29 (resíduo: TMA por agente sobre `segments`) |
 | 2 | **Arc 12 `segment_id`** em `agent_business_events` (plano A+C já decidido, seção própria) | ✅ 2026-08-03 — **coluna existe, e nunca recebeu dado real** (ver abaixo) |
-| 3 | **Capture de wrap-up** — tipo de captura nominal no editor + roteamento no `segment_outcome_record` | pendente (ADR) — **é ela que cria o 1º produtor do Arc 12** |
-| 4 | **Relatório de wrap-up** — cai sobre `/reports/agent-events/*` (série/summary/categorias já existem) | pendente — **bloqueada pela 3 de fato**, não por decisão: hoje esses endpoints reportariam 1 linha de seed |
+| 3 | **Capture de wrap-up** — roteamento no `segment_outcome_record` | ✅ **backend 2026-08-03** (smoke 14/14) — **resta o editor** |
+| 4 | **Relatório de wrap-up** — cai sobre `/reports/agent-events/*` (série/summary/categorias já existem) | **destravada** — o Arc 12 passou a ter dado real com `segment_id` |
 
 **Medição de 2026-08-03 que reenquadra as fatias 3 e 4** (`infra/test/probe_block2.sh`):
 

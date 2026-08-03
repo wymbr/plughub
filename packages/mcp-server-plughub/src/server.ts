@@ -175,6 +175,10 @@ export function createServer(allDeps?: AllDeps): McpServer {
   registerSegmentTools(server, {
     redis, kafka,
     tenantId: process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+    // Fatia 3 — sem esta URL a captura Arc 12 fica desligada (e a tool DIZ isso na
+    // resposta, em `capture_note`; silêncio aqui seria um wrap-up que grava a
+    // disposição e perde as métricas sem que nada acuse).
+    dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://dialog-api:3760",
   })
   registerWorkflowTools(server, workflowDeps)
   registerDialogTools(server, dialogDeps)
@@ -1172,6 +1176,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
     registerSegmentTools(mcpServer, {
       redis, kafka,
       tenantId: process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+      // Idem createServer acima — este é o server que roda de verdade. Esquecer a
+      // URL AQUI daria o modo de falha mais traiçoeiro possível: tudo compila, a
+      // tool responde ok, e a captura simplesmente não acontece em produção.
+      dialogApiUrl: process.env["DIALOG_API_URL"] ?? "http://dialog-api:3760",
     })
     registerWorkflowTools(mcpServer, {
       channelGatewayUrl: process.env["CHANNEL_GATEWAY_URL"] ?? "http://channel-gateway:8010",

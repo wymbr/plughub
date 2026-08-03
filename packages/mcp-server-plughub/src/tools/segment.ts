@@ -28,14 +28,115 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z }         from "zod"
 import { randomUUID } from "crypto"
 import type { RedisClient } from "../infra/redis"
+import { buildAgentBusinessEvent } from "./agent-events"
 
 export interface SegmentDeps {
   redis: RedisClient
   kafka: { publish: (topic: string, payload: Record<string, unknown>) => Promise<void> }
   tenantId: string
+  /** dialog-api base URL — fatia 3: a tool lê o form para saber o que capturar. */
+  dialogApiUrl?: string
 }
 
 const TOPIC_PARTICIPANTS = "conversations.participants"
+const TOPIC_AGENT_EVENTS = "agent.events"
+
+// ─── Fatia 3 — captura dirigida pelo FORMULÁRIO ───────────────────────────────
+//
+// Antes: a tool tinha contrato fixo de 4 campos e o SKILL mapeava
+// `answers.classificacao`/`resumo`/`proximos_passos` um a um. Cada pergunta nova no
+// editor exigia editar o skill + `set-next` + `promote` — ou seja, o formulário não
+// dirigia nada, que era o ponto (§D3).
+//
+// Agora a tool recebe `answers` inteiro + `dialog_form_id`, busca o form publicado e
+// roteia CADA resposta pela declaração dela:
+//
+//   capture.kind = "scored"   → agent.events, categoria `{pool}.{skill}.{metric}`,
+//                               value = resposta numérica  (avg_value É a taxa)
+//   capture.kind = "nominal"  → agent.events, categoria `…{metric}.{opção}`, value 1
+//                               (multi-select ⇒ N eventos)
+//   sem capture, chave conhecida → prosa nas colunas do segmento
+//   sem capture, chave desconhecida → IGNORADA, com log
+//
+// O núcleo (`classificacao` → outcome) NÃO é capture: é a disposição do segmento,
+// contrato do wrap-up, e some do Arc 12 de propósito — `outcome` já vive em
+// `segments` e duplicá-lo criaria duas fontes para a mesma pergunta (§D6).
+
+/** Chaves de resposta que a tool trata como núcleo do wrap-up (não vão ao Arc 12). */
+const CORE_ANSWER_KEYS = new Set(["classificacao", "resumo", "proximos_passos", "escalation_reason"])
+
+type FormQuestion = {
+  id?: string
+  output_key?: string
+  capture?: { metric?: string; kind?: string; value?: number | string }
+  options?: Array<{ id?: string; value?: number | string; capture?: { value?: number | string } }>
+}
+
+/** Busca o DialogForm publicado — mesmo caminho que `survey_record` usa (§D3). */
+async function fetchPublishedForm(
+  dialogApiUrl: string, tenantId: string, formId: string,
+): Promise<{ nodes: FormQuestion[] } | null> {
+  try {
+    const resp = await fetch(
+      `${dialogApiUrl}/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`,
+      { headers: { "X-Tenant-ID": tenantId } },
+    )
+    if (!resp.ok) {
+      console.warn("[segment_outcome_record] dialog-api %s ao buscar form=%s", resp.status, formId)
+      return null
+    }
+    return (await resp.json()) as { nodes: FormQuestion[] }
+  } catch (err) {
+    // Degradação NUNCA silenciosa: sem o form não há captura Arc 12, e o motivo é logado.
+    // A prosa e o outcome seguem gravados — perder a captura não pode perder a disposição.
+    console.warn("[segment_outcome_record] falha ao buscar form=%s: %s", formId, String(err))
+    return null
+  }
+}
+
+/**
+ * Deriva os eventos Arc 12 das respostas, lendo o form. Devolve [] quando não há
+ * form, o que é diferente de "o form não tinha captura" — o chamador loga os dois.
+ */
+export function deriveAgentEvents(
+  form:      { nodes: FormQuestion[] } | null,
+  answers:   Record<string, unknown>,
+  ctx:       { poolId: string; skillId: string },
+): Array<{ category: string; value: number }> {
+  if (!form?.nodes?.length) return []
+  const out: Array<{ category: string; value: number }> = []
+  for (const q of form.nodes) {
+    const cap = q.capture
+    if (!cap?.kind || !cap.metric) continue
+    const key = q.output_key || q.id || ""
+    if (!key || !(key in answers)) continue
+    const raw = answers[key]
+    if (raw === undefined || raw === null || raw === "") continue
+    const base = `${ctx.poolId}.${ctx.skillId}.${cap.metric}`
+
+    if (cap.kind === "scored") {
+      // A resposta pode ser o `value` da opção (botão "4") ou um escalar numérico.
+      const n = Number(
+        q.options?.find((o) => String(o.value ?? o.id) === String(raw))?.capture?.value ?? raw,
+      )
+      if (!Number.isFinite(n)) {
+        console.warn("[segment_outcome_record] scored não-numérico: %s=%j (ignorado)", key, raw)
+        continue
+      }
+      out.push({ category: base, value: n })
+      continue
+    }
+
+    // nominal — a resposta VIRA a folha. Multi-select chega como array ⇒ N eventos.
+    // A folha sai do valor da OPÇÃO (lista controlada), nunca de texto livre (§D3).
+    for (const item of Array.isArray(raw) ? raw : [raw]) {
+      const leaf = String(item).trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_")
+      if (!leaf) continue
+      out.push({ category: `${base}.${leaf}`, value: 1 })
+    }
+  }
+  return out
+}
 
 // Mesmo mapa do bridge (_WRAPUP_OUTCOME_MAP): classificação CRUA → outcome canônico.
 const WRAPUP_OUTCOME_MAP: Record<string, string> = {
@@ -56,7 +157,7 @@ function mcpError(code: string, message: string) {
 }
 
 export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void {
-  const { redis, kafka, tenantId: defaultTenant } = deps
+  const { redis, kafka, tenantId: defaultTenant, dialogApiUrl } = deps
 
   server.tool(
     "segment_outcome_record",
@@ -67,19 +168,35 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
     {
       origin_session_id: z.string().describe("Sessão de ORIGEM (o contato que fechou) — chaveia o seg_signal"),
       segment_id:        z.string().describe("Segmento humano a atribuir (@ctx.session.surveyed_segment_id)"),
-      classificacao:     z.string().describe("Disposição crua: resolvido | pendente | escalado | cancelado"),
+      // Fatia 3 — o caminho preferido: respostas cruas + o form que as descreve.
+      answers:           z.record(z.any()).optional().describe("Respostas do DialogForm ($.pipeline_state.coletar.answers). Preferido — dispensa mapear campo a campo"),
+      dialog_form_id:    z.string().optional().describe("Form respondido (@ctx.session.dialog_form_id) — dirige a captura Arc 12"),
+      // Contrato antigo (4 campos nomeados) — mantido para os chamadores que ainda
+      // mapeiam campo a campo. `answers` VENCE quando presente.
+      classificacao:     z.string().optional().describe("Disposição crua: resolvido | pendente | escalado | cancelado"),
       resumo:            z.string().optional().describe("Resumo do atendimento (→ wrapup_summary, SEMPRE gravado)"),
       escalation_reason: z.string().optional().describe("Motivo da escalação (quando classificacao=escalado)"),
       proximos_passos:   z.string().optional().describe("Próximos passos (→ wrapup_next_steps, SEMPRE gravado)"),
       tenant_id:         z.string().optional(),
     } as any,
     async (args: {
-      origin_session_id: string; segment_id: string; classificacao: string
+      origin_session_id: string; segment_id: string; classificacao?: string
+      answers?: Record<string, unknown>; dialog_form_id?: string
       resumo?: string; escalation_reason?: string; proximos_passos?: string; tenant_id?: string
     }) => {
       const { origin_session_id, segment_id } = args
       const tenant = args.tenant_id || defaultTenant
-      const raw = String(args.classificacao || "").trim().toLowerCase()
+
+      // `answers` vence o argumento nomeado — é a fonte mais próxima do que o humano
+      // digitou. Precedência declarada, e não "o que estiver preenchido": com dois
+      // caminhos vivos, ordem implícita vira dado que muda conforme o chamador.
+      const ans = args.answers ?? {}
+      const pick = (key: string, legacy?: string): string => {
+        const v = ans[key]
+        if (v !== undefined && v !== null && v !== "") return String(v)
+        return legacy ?? ""
+      }
+      const raw = pick("classificacao", args.classificacao).trim().toLowerCase()
       const outcome = WRAPUP_OUTCOME_MAP[raw]
       if (!outcome) {
         console.warn("[segment_outcome_record] unknown_classification: %j", args.classificacao)
@@ -100,20 +217,23 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
       // define `handoff_rate` (`countIf(handoff_reason != '') / count()`) e escrever
       // o resumo ali levaria a taxa de repasse a ~100% — trocaria uma perda muda por
       // uma métrica que muda de sentido sem avisar.
-      if (args.resumo)          dyn["wrapup_summary"]    = args.resumo
-      if (args.proximos_passos) dyn["wrapup_next_steps"] = args.proximos_passos
+      const resumo          = pick("resumo", args.resumo)
+      const proximosPassos  = pick("proximos_passos", args.proximos_passos)
+      const escalationReason = pick("escalation_reason", args.escalation_reason)
+      if (resumo)         dyn["wrapup_summary"]    = resumo
+      if (proximosPassos) dyn["wrapup_next_steps"] = proximosPassos
 
       // `handoff_reason` segue EXATAMENTE como antes — mesma regra, mesmo formato.
       // Há sobreposição de texto com as colunas novas no caso não-resolvido, e é
       // deliberado: mudar este campo mudaria `handoff_rate` retroativamente.
       if (outcome !== "resolved") {
         const parts: string[] = []
-        if (args.resumo) parts.push(args.resumo)
-        if (args.proximos_passos) parts.push(`Próximos: ${args.proximos_passos}`)
+        if (resumo) parts.push(resumo)
+        if (proximosPassos) parts.push(`Próximos: ${proximosPassos}`)
         if (parts.length) dyn["handoff_reason"] = parts.join(" | ")
       }
-      if (outcome === "escalated" && args.escalation_reason) {
-        dyn["escalation_reason"] = args.escalation_reason
+      if (outcome === "escalated" && escalationReason) {
+        dyn["escalation_reason"] = escalationReason
       }
       try {
         await redis.hset(key, dyn)
@@ -188,12 +308,66 @@ export function registerSegmentTools(server: McpServer, deps: SegmentDeps): void
         return mcpError("publish_failed", `publish conversations.participants falhou: ${String(err)}`)
       }
 
+      // ── 3. Fatia 3 — captura dirigida pelo form → agent.events (Arc 12) ────────
+      //
+      // DEPOIS do participant_left, de propósito: a disposição do segmento é o
+      // contrato do wrap-up e não pode ser perdida por uma falha na captura. Falha
+      // aqui é logada e devolvida em `agent_events_error`, nunca convertida em
+      // `isError` — o wrap-up já foi gravado, e reportar erro faria o `on_failure`
+      // do skill tratar como não-gravado.
+      let agentEvents = 0
+      let captureNote: string | undefined
+      if (args.dialog_form_id && Object.keys(ans).length) {
+        if (!dialogApiUrl) {
+          captureNote = "dialog_api_url_ausente — captura Arc 12 desligada nesta instância"
+          console.warn("[segment_outcome_record] %s", captureNote)
+        } else {
+          const form = await fetchPublishedForm(dialogApiUrl, tenant, args.dialog_form_id)
+          // `skill_id` da categoria = "wrapup", constante: o produtor É o wrap-up, e o
+          // l2 existe para dizer QUEM emitiu. Usar o skill do workflow faria a série
+          // quebrar a cada rename de skill, sem que a métrica tenha mudado.
+          const derived = deriveAgentEvents(form, ans, {
+            poolId:  h["pool_id"] || "",
+            skillId: "wrapup",
+          })
+          if (form && !derived.length) {
+            // Distinção que importa: form lido E sem captura declarada ≠ form não lido.
+            captureNote = `form ${args.dialog_form_id} sem pergunta com capture.kind — nada a emitir`
+            console.log("[segment_outcome_record] %s", captureNote)
+          }
+          for (const ev of derived) {
+            try {
+              await kafka.publish(TOPIC_AGENT_EVENTS, buildAgentBusinessEvent({
+                tenant_id:     h["tenant_id"] || tenant,
+                session_id:    origin_session_id,
+                category:      ev.category,
+                value:         ev.value,
+                agent_type_id: h["agent_type_id"] || "human",
+                skill_id:      "wrapup",
+                pool_id:       h["pool_id"] || "",
+                // Caminho A do Arc 12: o segmento é conhecido AQUI, por referência —
+                // é a atribuição por participante que a fatia 2 preparou e que até
+                // agora nenhum produtor exercitava.
+                segment_id:    segId,
+                instance_id:   participantId || null,
+              }))
+              agentEvents++
+            } catch (err) {
+              captureNote = `publish agent.events falhou: ${String(err)}`
+              console.warn("[segment_outcome_record] %s", captureNote)
+            }
+          }
+        }
+      }
+
       console.log(
-        "[segment_outcome_record] recorded origin=%s seg=%s outcome=%s (participant_left published)",
-        origin_session_id, segId, outcome,
+        "[segment_outcome_record] recorded origin=%s seg=%s outcome=%s (participant_left published, agent_events=%d)",
+        origin_session_id, segId, outcome, agentEvents,
       )
       return mcpOk({
         recorded: true, segment_id: segId, outcome, session_id: origin_session_id,
+        agent_events: agentEvents,
+        ...(captureNote ? { capture_note: captureNote } : {}),
       })
     },
   )

@@ -136,6 +136,37 @@ export const DialogCaptureSchema = z
     weight: z.number().min(0).optional(),
     /** Fixed machine value for this option/field (e.g. button "4" → score 4). */
     value: z.union([z.number(), z.string()]).optional(),
+    /**
+     * Wrap-up / Arc 12 (fatia 3) — como a resposta entra em `agent_business_events`.
+     * Só é lido quando quem responde é o AGENTE (`segment_outcome_record`); no
+     * domínio de survey, onde quem responde é o CLIENTE, este campo é ignorado.
+     *
+     * NÃO escolhe o sink. O sink é dado por QUEM RESPONDE (ADR §D1), e isso já está
+     * determinado pela TOOL que compõe: `segment_outcome_record` ⇒ Arc 12,
+     * `survey_record` ⇒ `session_signal`. Um campo aqui para escolher sink permitiria
+     * declarar, num form de wrap-up, que a resposta do atendente é voz do cliente —
+     * e contaminaria a série histórica de forma irreversível.
+     *
+     * O que ele escolhe é a FORMA do evento, porque `agent_business_events` tem
+     * `value Float64` e o relatório **não agrupa por tag** (só por
+     * category/skill_id/pool_id/agent_type_id) — logo o que não for numérico precisa
+     * virar CATEGORIA para ser contável (§D2):
+     *
+     *   scored  — categoria fixa `{pool}.{skill}.{metric}`, `value` = a resposta
+     *             numérica. `avg_value` do summary É a taxa (ex.: FCR).
+     *   nominal — a resposta VIRA a folha: `{pool}.{skill}.{metric}.{option.value}`,
+     *             `value: 1`. `count` por categoria. Multi-select ⇒ N eventos.
+     *             A folha sai de `options[].value` (lista controlada, versionada e
+     *             UI-editável) e nunca de texto livre — §D3: sem isso
+     *             `troca_titularidade` × `troca_de_titularidade` viram duas séries
+     *             que jamais reconciliam.
+     *
+     * Ausente num form de wrap-up = a resposta NÃO vai para o Arc 12; texto livre
+     * sem capture vira prosa nas colunas do segmento (`wrapup_summary` /
+     * `wrapup_next_steps`). É assim que a §D6 (os dois sinks coexistem) fica
+     * decidida por construção, e não por convenção que alguém precise lembrar.
+     */
+    kind: z.enum(["scored", "nominal"]).optional(),
   })
   .optional()
 export type DialogCapture = z.infer<typeof DialogCaptureSchema>
