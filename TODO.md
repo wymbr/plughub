@@ -98,7 +98,7 @@ Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 
 
 ---
 
-## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅ 2026-07-30; resta só a fatia 3, GATED)*
+## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03 — restam 4 lacunas abertas)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:
 > fatia 1 (Monitor › Pendências) ✅ e fatia 2 (Analítico › Histórico de Wrap-up) ✅, ambas em
@@ -106,6 +106,13 @@ Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 
 > **explicitamente gated em medição** (*"não construir sem medir"*), com o gate já rodado uma vez:
 > `unfilled_rate` 22,2%, e os 2 vencidos eram **reivindicados**, não nunca-reivindicados. Ou seja: a
 > evidência disponível diz para NÃO construir. Ler "resta o relatório" no índice sugeria o oposto.
+>
+> **Corrigido DE NOVO no mesmo dia**, e o segundo erro é mais sutil que o primeiro: o cabeçalho
+> passou a dizer *"resta **só** a fatia 3"* enquanto a tabela § Lacunas, 100 linhas abaixo, listava
+> **cinco** lacunas abertas — nº 2 (reaper), 3 (TTL de fila não alcança pull), 4 (parcial), 6 (enum
+> de `close_reason`). "Resta só" é uma afirmação de completude, e ela não era do autor do título
+> para dar: quem varre o índice conclui que a seção está a um item de fechar. *O erro nº 5 tem uma
+> forma pior que o título desatualizado — o título que resume a MAIS do que sabe.*
 
 Fase final da ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md).
 **Núcleo A+B entregue** (ver CHANGELOG): ledger `{t}:work_task:{session}`, `Router.work_task_expire`
@@ -282,8 +289,11 @@ UI-editável" pendente para hooks de pool).
 
 **Camada E2 restante:** ~~**E2f**~~ ✅ (2026-07-29) · ~~**Camada F**~~ ✅ **2026-07-30** (F1 atribuição,
 F2 G1 no relatório, F3 pull direcionado 5/5, F4 expiração — ver CHANGELOG). **Arco A–F completo.**
-Resíduo da F: a **lease** não foi medida (a sonda observou a chave de outra sessão) — a lacuna 2
-segue como estava, e o que ficou provado é que o **prazo** devolve a vaga.
+Resíduo da F: a **lease** não foi medida (a sonda observou a chave de outra sessão), e o que ficou
+provado é que o **prazo** devolve a vaga. ⚠️ **Atualizado 2026-08-03** — a frase seguinte dizia
+*"a lacuna 2 segue como estava"*, e não segue: o prazo **só** devolvia a vaga porque a sonda pegou
+o caso de lease viva; com a lease expirada (o caso normal, 180 s × 24 h) a vaga ficava presa. Ver
+§ I5 → "Lacuna 2 — o que fechou e o que não". *A medição que faltou é a que teria mostrado isso.*
 *(E2e — produtor do marker `acw_pending` — **saiu de escopo** com a remoção da Camada C, 2026-07-29.)*
 
 **Resíduo herdado da seção `close_reason` (podada em 2026-08-03; o fix está no CHANGELOG de 07-30):**
