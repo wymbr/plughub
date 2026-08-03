@@ -8,6 +8,17 @@ After invalidation, a background reload fetches fresh values from the API.
 
 Defaults mirror the seeds in packages/config-api/src/plughub_config_api/seed.py
 so the routing-engine works correctly even when the Config API is unreachable.
+
+Esta correspondência é CONTRATO, não comentário de cortesia. Em 2026-08-03 ela
+era verificavelmente falsa para `score_weights` (as duas pontas tinham chaves
+diferentes) e enganosa para `snapshot_ttl_s` (ambos os lados diziam 120 e o
+código gravava 3600). As duas chaves foram REMOVIDAS daqui e do seed, medidas
+antes — ver o comentário longo em `seed.py` § routing. Docstring que afirma uma
+correspondência inexistente é a mesma classe de defeito do `registry.py:82`
+(heartbeat + auto-release que não existiam): custa caro porque quem lê para de
+conferir.
+
+Ao acrescentar chave aqui: ou ela existe no seed E tem leitor, ou não entra.
 """
 
 from __future__ import annotations
@@ -23,18 +34,14 @@ logger = logging.getLogger("plughub.routing.routing_config")
 
 # Defaults matching Config API seed — routing namespace
 _DEFAULTS: dict[str, Any] = {
-    "snapshot_ttl_s":           120,
     "claim_lease_s":            180,   # Frente 1 (pull): TTL da lease do claim
     "sla_default_ms":           480_000,
     "estimated_wait_factor":    0.7,
     "congestion_sla_factor":    1.5,
     "performance_score_weight": 0.0,
-    "score_weights": {
-        "sla":        0.4,
-        "channel":    0.3,
-        "skills":     0.2,
-        "load":       0.1,
-    },
+    # `snapshot_ttl_s` e `score_weights` saíram em 2026-08-03 (sem leitor).
+    # Peso de score é campo do POOL — `pool.aging_factor`/`pool.breach_factor`
+    # em `models.py`, lidos pelo `scorer.py`. Não realocar para cá.
     # Mensagens de sistema viradas ao cliente (render v2, queue-attended-model).
     # Tenant sobrescreve via Config API namespace `routing` no idioma desejado;
     # defaults em pt-BR. As mensagens da fila ATENDIDA são do skill-flow (YAML).

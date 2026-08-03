@@ -2,6 +2,228 @@
 
 ---
 
+## Poda dos parciais do TODO — três títulos que mentiam e um item que se contradizia 🧹✅ (2026-08-03)
+
+Terceiro bloco do dia. Alvo: as seções **parciais** (I5, Capacidade, Customer Surveys) que a poda
+anterior deixou de fora por exigirem julgar resíduo real, item a item.
+
+**Achado transversal — o padrão é sempre o mesmo: corpo mantido, título não.**
+
+| Seção | Título dizia | Corpo dizia |
+|---|---|---|
+| Capacidade, licenças e isolamento | "desenho FECHADO — **implementação não iniciada**" | F1, F2, F3a, F4a/b/c, F5, F5b **✅ 02–03/08** |
+| I5 — encerramento author-bound | "resta **o relatório**" | relatório = fatias 1 e 2, **ambas ✅ 30/07** |
+| Resolvedor de Identidade | "falta **Slice 3 + Fase B**" | Slice 3 **✅ 03/07**, Fase B **✅ 04/07** |
+
+Os três foram corrigidos com a nota do que o corpo já registrava. Virou o **item 5** do § Erros de
+método: *o título é a única linha que se lê no índice* — quem varre o TODO para planejar nunca chega
+ao parágrafo que corrige, então atualizar fatia sem atualizar cabeçalho é a forma mais barata de
+fazer alguém replanejar trabalho pronto. **Ao fechar uma fatia, o cabeçalho entra no mesmo commit.**
+
+**Customer Surveys — um item que se contradizia dentro de si.** O item 5 (store per-response) abria
+com *"✅ FEITO E VALIDADO"* e terminava com *"**Falta só codar**"* — parágrafo da spec
+pré-implementação que sobreviveu à implementação. Quem lesse o fim decidiria que há trabalho; quem
+lesse o começo, que não. Conferido no código antes de podar: `survey.survey_instance` +
+`survey.survey_response` (`db.py:632-672`), `persist_survey_response` (`:723`) e
+`list_survey_responses` (`:801`) existem — inclusive o "endpoint de leitura de S8" que o próprio
+item listava como aberto.
+
+**Customer Surveys — item 4 tinha a premissa invertida.** Dizia *"o registry ainda roda o conjunto
+antigo"*. O conjunto antigo foi REMOVIDO na Camada E1 (24/07); de `tenant_demo.yaml` sobrou só o
+comentário da remoção (linha 374). O estado real é o oposto e é pior: **o trio novo existe como YAML
+e nenhum pool o deploya** — `skill_survey_runner_v1`, `skill_survey_outbound_v1` e
+`skill_survey_trigger_v1` não têm uma única menção em `infra/registry/`. São arquivos mortos da
+mesma família dos dois pacotes fósseis do bloco 1: existem, não rodam, e ensinam um modelo que
+ninguém executa. Decisão registrada como pendente (deployar × remover).
+
+**Reconfirmados por medição (seguem abertos, agora com evidência):** nenhum produtor de CES/PMF/FCR
+(os seeds só cobrem `nps` e `csat`+`nps`); e o ternário vazio de `CustomerVoicePage.tsx:161`
+(`rollup === 'avg' ? '' : ''`, os dois ramos idênticos — assinatura de um sufixo que nunca foi
+escrito), com `value_label` declarado na interface de `AnaliseSurveysPage.tsx:21` e não renderizado.
+
+**Não executado, e por quê:** a poda física das ~485 linhas da seção de Capacidade (quase todas ✅).
+O pré-requisito de deletar é conferir, subseção a subseção, que o essencial está no CHANGELOG — o
+mesmo que o `prune_todo_closed.py` documenta e faz à mão antes de rodar. Ficou registrado como
+proposta dentro da própria seção, com o estado real no cabeçalho, que era o dano imediato.
+
+---
+
+## A aprovação NÃO estava quebrada — e o Arc 12 nunca teve produtor 🔍✅ (2026-08-03)
+
+Segundo bloco do dia. Três itens do `TODO.md` medidos antes de executados
+(`infra/test/probe_block2.sh`, novo). **Os três estavam errados no enunciado**, e em duas
+direções opostas: um acusava defeito que não existe, outro descrevia como quase-pronto algo
+que nunca rodou.
+
+### 1. "A aprovação segue produzindo segmentos órfãos" — REFUTADO, e depois PROVADO o contrário
+
+O item tratava os 17 órfãos de `aprovacao_deploy` como evidência viva de um defeito aberto,
+sustentado por o número ter crescido de **9** (29/07) para **17** (03/08).
+
+**As 17 linhas vão de 2026-07-16 a 2026-07-24** — a última é seis dias ANTERIOR ao fix H1/H2
+(30/07). Nenhuma depois do corte. As linhas não são novas, logo o crescimento 9→17 foi
+**artefato de contagem** (`FINAL` ou filtro diferente entre as leituras), não produção. É o
+§ Erros de método item 1 aplicado à medição da própria sessão anterior: *um número que cresce é
+plausível como evidência de defeito ativo, e por isso não foi conferido contra as datas.*
+
+**Mas refutar não é provar o contrário.** Não houve UMA aprovação desde 24/07 — zero amostra
+pós-fix. "Nenhum órfão novo" e "nenhuma aprovação nova" são indistinguíveis nessa tabela;
+concluir "está consertado" dali seria aceitar ausência-de-visão como ausência-de-fato.
+
+Fechado com amostra própria: **`infra/test/smoke_approval_segment_closes.sh` — 7/7 ✅**.
+Trigger → item no pull → claim → submit deixa o segmento do aprovador com
+`close_reason=task_submitted` e `duration_ms=428`. O H1 é genérico (dispara com qualquer
+`_claimant_instance_id` `human-*`) e cobre aprovação e wrap-up igualmente. Brinde: **a
+aprovação não tinha smoke nenhum**; agora tem gate.
+
+### 2. Arc 12 — a coluna foi entregue para uma tabela sem produtor
+
+O item dizia *"nenhum YAML passa `$.segment_id`, então hoje só a rede (C) atribui — é uma linha
+por chamada"*. Medido: `agent_business_events` tem **1 linha**, de `2026-06-10 12:00:00.000`
+(timestamp redondo — seed), categoria `retencao_humano.skill_finalizacao_v1.nps_contact`,
+**zero com `segment_id`**. E a busca estática não acha um único chamador de `agent_event`:
+nenhum YAML, nenhum smoke, nenhum serviço.
+
+Ou seja **a rede (C) também não atribui nada** — não há o que atribuir. A infra do Arc 12 está
+completa de ponta a ponta (tool, tópico, tabela, `/reports/agent-events/*`, UI) e ociosa.
+"Ligar o caminho A" deixa de ser *uma linha por chamada* e passa a ser **criar a primeira
+chamada do sistema**. O produtor natural é a fatia 3 do wrap-up, não um skill avulso.
+
+### 3. Fatias 3 e 4 do wrap-up — a 3 muda o SINK, não acrescenta captura
+
+Medido onde o wrap-up grava hoje: **13 segmentos** com `wrapup_summary`/`wrapup_next_steps`
+(último às 18:06 de hoje), contra a única linha de seed do Arc 12. A fatia 3, portanto, seria o
+primeiro produtor vivo do Arc 12 — e isso levanta a pergunta que o registro não fazia: as duas
+escritas coexistem ou uma substitui a outra? Registrada como **pendente de confirmação**, com a
+leitura preliminar (coexistem: prosa em `segments`, nominal/pontuável no Arc 12) marcada como
+inferência, não decisão.
+
+### O custo do dia foi de instrumento, não de código
+
+Sete defeitos nas próprias sondas, contra um único achado de código real no dia inteiro (as
+chaves de config sem leitor, bloco 1). Seis falharam alto. **O sétimo falhou plausível, e é o
+que merece registro:**
+
+O `smoke_approval_segment_closes.sh` v1 mandou o corpo do resume sem `tenant_id`
+(`WebhookResumeRequest` exige, e a aprovação exige ainda `pool_id`+`instance_id` — o A5
+claimant binding). Levou 422: **o submit nunca aconteceu**. O passo seguinte marcou o passo do
+submit como INCONCLUSIVO e mesmo assim **seguiu julgando**, concluindo *"❌ DEFEITO REAL na
+aprovação"* — porque o segmento estava, de fato, aberto. Pelo motivo mais banal possível:
+ninguém tinha submetido.
+
+Esse vermelho era convincente, e tinha os 17 órfãos "confirmando" a hipótese. Levado adiante,
+teria custado a sessão caçando um bug inexistente no `_handle_webhook_session_resumed`.
+
+> **Regra que fica:** um portão nunca julga o ALVO quando a falha foi na PRÓPRIA montagem.
+> Pré-condição falha ⇒ INCONCLUSIVO **e o teste para**. Um portão que aponta defeito no lugar
+> errado é pior que portão nenhum — portão nenhum não manda ninguém consertar nada.
+
+O smoke também passou a separar `401/403` do resto: recusa por autorização é achado sobre o
+gate ABAC `approvals.decide`, não sobre o fechamento do segmento. Conclusões diferentes não
+podem sair do mesmo ramo.
+
+---
+
+## Higiene: duas seções stale, dois pacotes fósseis, duas chaves de config órfãs 🧹✅ (2026-08-03)
+
+Bloco de limpeza medido antes de executado, seguindo a regra que a sessão anterior deixou no
+topo do `TODO.md`. Instrumento: `infra/test/probe_hygiene.sh` (novo) — uma sonda que imprime a
+**previsão antes de medir**, em três blocos.
+
+**A sonda errou três vezes antes de medir certo, e cada erro é do catálogo que ela persegue.**
+Vale mais registrado que escondido:
+
+| # | Defeito da própria sonda | Sintoma |
+|---|---|---|
+| 1 | procurou os testes em `<pkg>/tests`; o layout é `src/<pkg_snake>/tests` | `no tests ran` **com `rc=0`** — verde que não pode reprovar |
+| 2 | leu o TTL cru do Redis | `ttl=1791` é ambíguo entre "1800 agora" e "3600 há 30 min" |
+| 3 | `python - <<'PY'` **e** `< /dev/null` na mesma linha | o redirecionamento venceu o heredoc; `python` leu script vazio, imprimiu nada, saiu 0 |
+
+O nº 3 é o mais instrutivo: uma medição que não aconteceu, sem uma linha de erro. Correções:
+classificação em três estados (verde/vermelho/**inconclusivo**) em vez de confiar no `rc`, e o
+TTL original derivado de `ttl_restante + (agora − updated_at)`.
+
+### 1. Duas seções do TODO estavam stale — medidas e removidas
+
+- **`analytics-api` — 23 testes vermelhos.** (a) e (b) já constavam ✅ desde 2026-07-28/29. O
+  resíduo era o item (c), *"`TestDashboardRBAC` pendurou em duas execuções, não investigado"*:
+  **51 passed em 0,51 s** (`test_dashboard.py` + `test_admin.py`). A trava provavelmente morreu
+  junto com a causa de (a) — o `MagicMock` que respondia `analytics_open_access` truthy trocava
+  o caminho de código exercitado.
+- **`evaluation-api` — 10 de 83 em `test_router.py`.** **60 passed em 3,95 s**. Conferidos **por
+  nome** os seis casos que o item citava (`test_list_results`, `test_lock_result`,
+  `test_review_result`, `test_review_invalid_outcome`, `test_create_contestation`,
+  `test_cannot_contest_locked_result`) — todos existem e passam. Total verde não provaria isso:
+  um teste deletado também some do vermelho.
+
+### 2. `clickhouse-consumer` e `conversation-writer` — fósseis em quarentena
+
+Saíam INCONCLUSIVOS no `report_suite_skips.sh` ("não responde a `exec`"), fazendo o relatório
+inteiro terminar com código 2. A leitura fácil — *a sonda não alcança o serviço* — estava errada
+nos dois: **não existe serviço**. Nenhum é serviço do compose, nenhum tem `Dockerfile`, ambos só
+vivem no `ecosystem.config.js` (topologia PM2 anterior ao Docker), e nenhum consta da §
+Repository Structure do `CLAUDE.md`.
+
+| | evidência medida |
+|---|---|
+| `clickhouse-consumer` | consome `evaluation.results` — tópico que **não existe** no broker, não pode ser criado (`KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"`) e que **nenhum produtor** no repo escreve. O caminho vivo é `evaluation.events` → analytics-api |
+| `conversation-writer` | escreve `transcripts`/`transcript_messages` — tabelas que **não existem** em `plughub_demo` e que **ninguém lê**. A persistência viva é o `StreamPersister` → `session_stream_events` |
+
+Retirados da lista do relatório **com o motivo escrito no próprio script**, e com `README.md` de
+fóssil em cada diretório. **Não apagados** — mesmo critério da tabela `pools` fóssil: reversível,
+e o erro fica visível.
+
+**O `conversation-writer` é o perigoso dos dois**: consome tópicos **vivos** e traz `migrate()`
+embutido. Subi-lo não daria erro — criaria uma segunda persistência de transcrição, paralela ao
+`StreamPersister`, divergente e sem leitor. Fóssil que falha barulhento é inofensivo; este não
+falharia.
+
+### 3. `routing.snapshot_ttl_s` e `routing.score_weights` — removidas
+
+Duas chaves semeadas pelo config-api, editáveis na tela, que **nenhum código lia**. Medido antes
+de remover:
+
+- **`snapshot_ttl_s`** — seed 120 s. As 7 linhas de snapshot escritas pelo routing-engine
+  (`model=resource_semaphore`) tinham **TTL original ≈3600**; as do bootstrap, ≈59 (TTL 60 s, NX).
+  A tela prometia exatamente o valor que tornaria auto-curável o defeito descrito no *achado 3*
+  do arco de capacidade. Qual TTL é o certo é decisão daquele arco, onde há contexto.
+- **`score_weights`** — seed `{skill_match, availability, aging_factor, breach_factor}` **por
+  tenant**. Mas `aging_factor`/`breach_factor` são campos **do POOL** (`models.py`), lidos pelo
+  scorer como `pool.aging_factor`. O `TODO` registrava "vocabulário divergente"; a medição mostrou
+  outra coisa — é o vocabulário **certo no nível errado**. O próprio `NamespaceEditor.tsx` já
+  descrevia o namespace com *"Weights/factors stay in pool settings"*.
+
+O único hit de `snapshot_ttl_s` fora de config-api/`routing_config`/testes era a **descrição da
+tela**. Removido junto: a tela era a última a afirmar o número que o sistema ignorava.
+
+**Tocados:** `config-api/seed.py` (as duas entradas, com o porquê no lugar delas) ·
+`routing-engine/routing_config.py` (`_DEFAULTS` + a docstring que **afirmava**
+*"Defaults mirror the seeds"* — verificavelmente falsa para `score_weights`) ·
+`platform-ui/NamespaceEditor.tsx` · `config-api/tests/test_store.py` (a cobaia passou a ser
+`claim_lease_s`, chave que existe e é lida — teste mencionando chave removida vira falso positivo
+no próximo grep).
+
+**Portão:** `infra/test/smoke_config_routing_orphan_keys.sh` — **verde, 2 rodadas**
+(8/8 no DELETE, `config-api 29` + `routing-engine 211` passed). Ele existe por causa de um modo
+de falha específico: o seed é *seed-if-absent*, então **tirar a entrada do `_SEED` não apaga a
+linha do banco**. Sem o `DELETE` pela API oficial, o resultado seria código limpo e tela
+continuando a exibir e oferecer edição das duas chaves — *"«foi escrito» ≠ «mudou»"*.
+
+O portão também errou duas vezes antes de servir, e as duas são reaproveitáveis:
+
+- **não rodava duas vezes.** Na 2ª rodada as chaves já não existem, e `404` no DELETE global
+  passa a significar *"já aplicado"* em vez de *"a linha nunca existiu"* — **estados opostos com
+  o mesmo código HTTP**. Só o estado ANTES os distingue, então ele virou baseline explícito. Um
+  portão que só vale uma vez não é portão: na segunda vez ninguém o roda.
+- **`No module named pytest`.** As imagens de serviço não trazem pytest, e o
+  `build` + `up -d --force-recreate` que esta mudança exige apaga o que um `exec` tenha
+  instalado antes. Faltava o mesmo prólogo `pip install` que o `report_suite_skips.sh` já tinha.
+
+**Efeito colateral bom:** com os dois fósseis fora da lista, `report_suite_skips.sh` volta a
+terminar com **0** (era 2), sem skips e sem inconclusivos.
+
+---
+
 ## BFF passa a VERIFICAR o JWT — assinatura e expiração 🔐✅ (2026-08-03)
 
 `mcp-server-plughub` não recebia `PLUGHUB_JWT_SECRET`, então `verifyJwtPayload`

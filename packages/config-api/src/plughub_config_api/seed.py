@@ -95,13 +95,27 @@ _SEED: list[tuple[str, str, object, str]] = [
 
     # ── routing ───────────────────────────────────────────────────────────────
     # Source: routing-engine/registry.py, router.py, kafka_listener.py
-    (
-        "routing", "snapshot_ttl_s",
-        120,
-        "Redis TTL (seconds) for pool operational snapshots "
-        "({tenant}:pool:{pool}:snapshot). Stale snapshots are excluded from the "
-        "dashboard automatically."
-    ),
+    #
+    # REMOVIDAS em 2026-08-03, medidas antes de remover: `snapshot_ttl_s` e
+    # `score_weights`. As duas eram semeadas aqui, editáveis na tela — e nenhum
+    # código as lia. O invariante "every config field is UI-editable" fala dos
+    # dois lados: campo sem leitor é a mesma dívida que campo sem tela, e mais
+    # perigoso, porque a tela AFIRMA um número.
+    #
+    #   · snapshot_ttl_s — semeava 120 s; o routing-engine grava com o default
+    #     `write_pool_snapshot(snapshot_ttl=3600)` e nenhum call site passa
+    #     outro valor. Medição de 2026-08-03: as 7 linhas com
+    #     `model=resource_semaphore` tinham TTL original ≈3600 (derivado de
+    #     `ttl_restante + (agora − updated_at)`; o TTL cru é ambíguo). Ou seja: a
+    #     tela prometia justamente o valor que tornaria auto-curável o defeito
+    #     descrito no *achado 3* do arco de capacidade. Qual TTL é o certo é
+    #     decisão daquele arco, onde há contexto; não de uma chave órfã.
+    #   · score_weights — semeava {skill_match, availability, aging_factor,
+    #     breach_factor} POR TENANT. Mas `aging_factor`/`breach_factor` são
+    #     campos do POOL (`routing-engine/models.py`), lidos pelo scorer como
+    #     `pool.aging_factor`. Não era vocabulário divergente: era o vocabulário
+    #     certo no nível errado. O próprio `NamespaceEditor.tsx` já descrevia o
+    #     namespace com "Weights/factors stay in pool settings".
     (
         "routing", "claim_lease_s",
         180,
@@ -122,17 +136,6 @@ _SEED: list[tuple[str, str, object, str]] = [
         "Conservative factor applied to sla_target_ms to compute estimated_wait_ms "
         "when a contact is queued. estimated_wait = queue_length × sla_target × factor. "
         "Source: routing-engine/router.py"
-    ),
-    (
-        "routing", "score_weights",
-        {
-            "skill_match":    1.0,
-            "availability":   1.0,
-            "aging_factor":   0.5,
-            "breach_factor":  2.0,
-        },
-        "Scoring algorithm weight factors for agent allocation. "
-        "breach_factor amplifies priority for contacts that have exceeded SLA."
     ),
     (
         "routing", "congestion_sla_factor",

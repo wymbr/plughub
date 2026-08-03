@@ -199,7 +199,12 @@ class TestConfigStoreSet:
         pool  = _make_pool()
         redis = _make_redis()
         store = ConfigStore(pool, ConfigCache(redis))
-        await store.set(None, "routing", "snapshot_ttl_s", 90)
+        # Cobaia trocada de `snapshot_ttl_s` para `claim_lease_s` em 2026-08-03:
+        # a primeira foi REMOVIDA do seed (campo sem leitor). Teste que exercita
+        # mecânica de store com uma chave inexistente ainda passa — e é
+        # exatamente por isso que ela precisa sair: o próximo grep atrás de
+        # "quem menciona esta chave" encontraria o teste e leria como uso vivo.
+        await store.set(None, "routing", "claim_lease_s", 90)
         args = pool.execute.call_args[0]
         sql_call = args[0]
 
@@ -220,7 +225,7 @@ class TestConfigStoreSet:
         # vira o sentinela no 1º parâmetro ($1).
         assert args[1] == GLOBAL
         assert args[2] == "routing"
-        assert args[3] == "snapshot_ttl_s"
+        assert args[3] == "claim_lease_s"
 
     async def test_set_triggers_scan_invalidation_for_global(self):
         """Writing global → scan should be called to invalidate tenant variants."""
@@ -256,18 +261,18 @@ class TestConfigStoreDelete:
 class TestConfigStoreList:
     async def test_list_namespace_returns_resolved_dict(self):
         rows = [
-            _full_row("snapshot_ttl_s", 120),
+            _full_row("claim_lease_s", 180),
             _full_row("sla_default_ms", 480000),
         ]
         pool  = _make_pool(fetch_return=rows)
         redis = _make_redis(get_return=None)  # namespace cache miss
         store = ConfigStore(pool, ConfigCache(redis))
         result = await store.list_namespace(TENANT, "routing")
-        assert result["snapshot_ttl_s"] == 120
+        assert result["claim_lease_s"] == 180
         assert result["sla_default_ms"] == 480000
 
     async def test_list_namespace_cache_hit_skips_db(self):
-        ns_data = {"snapshot_ttl_s": 120}
+        ns_data = {"claim_lease_s": 180}
         pool    = _make_pool()
         redis   = _make_redis(get_return=json.dumps(ns_data))
         store   = ConfigStore(pool, ConfigCache(redis))
@@ -279,7 +284,7 @@ class TestConfigStoreList:
         rows = [
             _full_row("thresholds", {"satisfied": [0.3, 1.0]}, ns="sentiment"),
             _full_row("live_ttl_s", 300, ns="sentiment"),
-            _full_row("snapshot_ttl_s", 120, ns="routing"),
+            _full_row("claim_lease_s", 180, ns="routing"),
         ]
         # Patch to return different ns in the row
         def _row_ns(key, value, ns):

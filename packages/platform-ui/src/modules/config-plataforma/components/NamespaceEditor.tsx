@@ -45,7 +45,11 @@ const NAMESPACES: NsEntry[] = [
     ],
     label: 'Routing & Timeouts',
     icon: '🔀', color: 'bg-secondary',
-    desc: 'SLA, snapshot_ttl_s | TTLs: ai_gateway, channel_gateway, transcript, replayer. Weights/factors stay in pool settings.',
+    // `snapshot_ttl_s` saiu da descrição em 2026-08-03 junto com a chave: ela era
+    // semeada, aparecia aqui e nenhum código a lia (o routing grava TTL 3600, o
+    // seed prometia 120). Esta linha era o ÚNICO hit da chave fora do config-api
+    // — a tela era a última a afirmar o número que o sistema ignorava.
+    desc: 'SLA & queue TTLs | TTLs: ai_gateway, channel_gateway, transcript, replayer. Weights/factors stay in pool settings.',
   },
   {
     id: 'consumer',

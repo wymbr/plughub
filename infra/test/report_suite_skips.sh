@@ -33,11 +33,30 @@ DC="docker compose -f docker-compose.demo.yml"
 
 # Serviço do compose == diretório em packages/ (padrão do repo). Onde divergir, a
 # sonda abaixo reporta INCONCLUSIVO em vez de pular calado.
+#
+# FORA DA LISTA, com motivo (2026-08-03): `clickhouse-consumer` e
+# `conversation-writer`. Eles saíam INCONCLUSIVOS ("não responde a exec") e o
+# script terminava com código 2 por causa deles. A investigação mostrou que não
+# havia defeito de sonda nenhum — **não existe container**: nenhum dos dois é
+# serviço do `docker-compose.demo.yml`, nenhum tem Dockerfile, e ambos só
+# aparecem no `ecosystem.config.js` (topologia PM2 anterior ao Docker).
+#
+# Medido antes de tirar da lista:
+#   · clickhouse-consumer consome `evaluation.results` — tópico que o broker NÃO
+#     tem e não pode criar (`KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"`), e que
+#     nenhum produtor no repo escreve. O caminho vivo é `evaluation.events`.
+#   · conversation-writer escreve `transcripts`/`transcript_messages` — tabelas
+#     que não existem em `plughub_demo` e que ninguém lê. A persistência viva de
+#     stream é o `StreamPersister` (session-replayer → `session_stream_events`).
+#
+# Ficaram em quarentena documentada (README no próprio diretório), não apagados:
+# mesmo tratamento dado à tabela `pools` fóssil. Ver TODO § "Dois pacotes
+# fósseis". Se um deles voltar a ser deployado, volta para esta lista junto.
 PKGS=(
   routing-engine orchestrator-bridge analytics-api channel-gateway evaluation-api
   ai-gateway session-replayer workflow-api calendar-api scheduler-api config-api
   pricing-api auth-api dialog-api mailing-api quality-ingest quality-export
-  rules-engine usage-aggregator clickhouse-consumer conversation-writer
+  rules-engine usage-aggregator
 )
 [ "$#" -gt 0 ] && PKGS=("$@")
 

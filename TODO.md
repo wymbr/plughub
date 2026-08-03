@@ -54,9 +54,42 @@ Quatro previsões erradas em 2026-08-03, três delas produzindo resultados **pla
 (`7 passed / 22 failed` por rootdir errado; `9 failed / 13 passed` de uma mutação que não
 mutou nada). Sem a previsão escrita, cada uma teria virado diagnóstico em vez de erro.
 
+### 5. O TÍTULO é o que mente para mais gente *(acrescentado 2026-08-03, 2ª sessão)*
+
+Três seções foram achadas com **corpo mantido e cabeçalho não**, na mesma varredura:
+
+| Seção | Título dizia | Corpo dizia |
+|---|---|---|
+| Capacidade | "implementação não iniciada" | F1, F2, F3a, F4a/b/c, F5, F5b ✅ |
+| I5 | "resta o relatório" | relatório = fatias 1 e 2, ambas ✅ |
+| Resolvedor de Identidade | "falta Slice 3 + Fase B" | Slice 3 ✅ e Fase B ✅ há um mês |
+
+Atualizar item a item e deixar o título é o modo mais comum de a seção envelhecer, e o mais caro:
+**o título é a única linha que se lê no índice**. Quem varre o TODO para planejar nunca chega ao
+parágrafo que corrige. Ao fechar uma fatia, o cabeçalho da seção entra no mesmo commit.
+
+### 6. Um portão nunca julga o ALVO quando a falha foi na PRÓPRIA montagem *(2026-08-03)*
+
+O `smoke_approval_segment_closes.sh` v1 mandou o resume sem `tenant_id`, levou 422 — e o passo
+seguinte, mesmo tendo marcado o submit como INCONCLUSIVO, **seguiu julgando** e concluiu
+*"❌ DEFEITO REAL na aprovação"*. O segmento estava aberto porque ninguém submetera. O vermelho era
+convincente e tinha 17 órfãos "confirmando"; levado adiante, custaria a sessão consertando código
+correto. **Pré-condição falha ⇒ INCONCLUSIVO e o teste PARA.** Portão que aponta o lugar errado é
+pior que portão nenhum — este manda alguém trabalhar.
+
+*Placar do dia, que é o argumento inteiro:* **7 defeitos de instrumento × 1 achado de código real.*
+Seis falharam alto e custaram minutos. O sétimo falhou plausível e quase custou a sessão.
+
 ---
 
-## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ 2026-07-30; resta o relatório)*
+## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅ 2026-07-30; resta só a fatia 3, GATED)*
+
+> ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:
+> fatia 1 (Monitor › Pendências) ✅ e fatia 2 (Analítico › Histórico de Wrap-up) ✅, ambas em
+> 2026-07-30. O que resta é a **fatia 3**, e ela não é "pendente" no sentido usual — está
+> **explicitamente gated em medição** (*"não construir sem medir"*), com o gate já rodado uma vez:
+> `unfilled_rate` 22,2%, e os 2 vencidos eram **reivindicados**, não nunca-reivindicados. Ou seja: a
+> evidência disponível diz para NÃO construir. Ler "resta o relatório" no índice sugeria o oposto.
 
 Fase final da ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md).
 **Núcleo A+B entregue** (ver CHANGELOG): ledger `{t}:work_task:{session}`, `Router.work_task_expire`
@@ -266,9 +299,34 @@ produziu esta nota errada).
 | # | Entrega | Estado |
 |---|---|---|
 | 1 | **E2f** — atributo `purpose: contact\|internal` no pool + filtros no analytics | ✅ 2026-07-29 (resíduo: TMA por agente sobre `segments`) |
-| 2 | **Arc 12 `segment_id`** em `agent_business_events` (plano A+C já decidido, seção própria) | pendente — **pré-requisito das fatias 3 e 4** |
-| 3 | **Capture de wrap-up** — tipo de captura nominal no editor + roteamento no `segment_outcome_record` | pendente (ADR) |
-| 4 | **Relatório de wrap-up** — cai sobre `/reports/agent-events/*` (série/summary/categorias já existem) | pendente |
+| 2 | **Arc 12 `segment_id`** em `agent_business_events` (plano A+C já decidido, seção própria) | ✅ 2026-08-03 — **coluna existe, e nunca recebeu dado real** (ver abaixo) |
+| 3 | **Capture de wrap-up** — tipo de captura nominal no editor + roteamento no `segment_outcome_record` | pendente (ADR) — **é ela que cria o 1º produtor do Arc 12** |
+| 4 | **Relatório de wrap-up** — cai sobre `/reports/agent-events/*` (série/summary/categorias já existem) | pendente — **bloqueada pela 3 de fato**, não por decisão: hoje esses endpoints reportariam 1 linha de seed |
+
+**Medição de 2026-08-03 que reenquadra as fatias 3 e 4** (`infra/test/probe_block2.sh`):
+
+| Onde o wrap-up grava HOJE | Medido |
+|---|---|
+| `segments.wrapup_summary` + `segments.wrapup_next_steps` | **13 segmentos**, o último em 2026-08-03 18:06 |
+| `agent_business_events` (Arc 12) | **1 linha, de seed**, zero com `segment_id` |
+
+Logo a fatia 3 **não acrescenta captura — ela muda o sink**, e ao fazê-lo passa a ser o
+primeiro produtor vivo do Arc 12.
+
+**D6 — os dois sinks COEXISTEM** *(decidido 2026-08-03)*. Não é uma migração: é uma divisão por
+natureza do dado, coerente com a D2 desta seção e com `clickhouse.py:470` (*"prosa não cabe em
+`agent_business_events`: lá `value` é numérico e o nominal vive na CATEGORIA"*).
+
+| Dado | Sink | Por quê |
+|---|---|---|
+| resumo em prosa, próximos passos | `segments.wrapup_summary` / `wrapup_next_steps` | texto livre não é `value` numérico nem folha de categoria |
+| FCR (pontuável), serviço/motivo (nominal) | `agent_business_events` (Arc 12) | é o que agrega, série histórica, cruza por `segment_id` |
+
+**Corolário que a decisão obriga a escrever, senão ela não vale:** para cada pergunta do
+relatório existe UMA fonte, declarada. Prosa nunca é agregada; contagem/taxa nunca sai de
+`segments`. Escrever nos dois lugares sem essa regra é como nasce a divergência que não
+reconcilia — o mesmo defeito que a D3 previne na folha nominal (`options[].value` como lista
+controlada, senão `troca_titularidade` × `troca_de_titularidade` viram duas séries).
 
 ### Decisões fechadas na discussão
 
@@ -344,7 +402,24 @@ WARNING aparecer em produção, completar o mapa — a sonda tem uma asserção 
 
 ---
 
-## Capacidade, licenças e isolamento entre pools *(desenho FECHADO 2026-07-31 — implementação não iniciada)*
+## Capacidade, licenças e isolamento entre pools *(A e B ✅ implementados 2026-08-02/03; falta C + fatia 4)*
+
+> ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"desenho FECHADO 2026-07-31 — implementação não
+> iniciada"* enquanto o CORPO desta mesma seção registrava F1, F2, F3a, F4a/b/c, F5 e F5b como ✅
+> concluídas em 02–03/08. É a pior forma da staleness: o corpo foi mantido item a item e o título
+> não, e **o título é a única linha que se lê no índice**. Quem varresse o TODO planejaria de novo
+> um arco majoritariamente pronto — que é exatamente o custo que o § Erros de método descreve.
+>
+> **Estado real:** **A** (relatório mente) e **B** (teto de licença mistura moedas) estão
+> implementados — ver `CLAUDE.md` § Operational Visibility e § Admissão de sessão, que já descrevem
+> o as-built, e o `CHANGELOG.md`. Segue aberto: **C** (piso/teto por pool, licenças materializadas,
+> cerimônia de deploy — é capacidade NOVA, não conserto) e a **fatia 4**, adiada por decisão.
+>
+> **Dívida de forma, não de conteúdo:** esta seção tem ~485 linhas, quase todas ✅. Pela regra do
+> `CLAUDE.md` § Saúde do CLAUDE.md, detalhe de arco concluído mora em `CHANGELOG.md`/`docs/arcos/`,
+> não aqui. Poda proposta abaixo, não executada nesta sessão (exige conferir, subseção a subseção,
+> que o essencial de cada uma está no CHANGELOG — o mesmo pré-requisito que o
+> `prune_todo_closed.py` documenta).
 
 > Começou como "recontagem de recursos" e a pergunta *"a alocação usa os mesmos números errados?"*
 > abriu **três** problemas distintos. O desenho dos três está fechado em documento próprio; aqui fica
@@ -836,45 +911,35 @@ atribuição).
 > suítes invisíveis rodam por mount; as três ausentes existem (`mailing-api 22` ·
 > `scheduler-api 17` · `dialog-api 10`), cada uma com prova por mutação. Ver `CHANGELOG.md`.
 >
-> **Resíduo único:** `clickhouse-consumer` e `conversation-writer` seguem INCONCLUSIVOS — não
-> respondem a `exec`. **Não são "zero falha"**, e o script sai com código 2 por isso. Fechar
-> exige descobrir se têm shell/imagem própria ou se o serviço simplesmente não sobe no demo;
-> a resposta muda o que fazer (medir × declarar fora de escopo com motivo).
+> **Resíduo fechado 2026-08-03:** `clickhouse-consumer` e `conversation-writer` saíram da
+> lista do relatório. Não havia defeito de sonda — **não existe container** para nenhum dos
+> dois. Ver § "Dois pacotes fósseis" abaixo. O relatório volta a terminar com 0.
 
-## Namespace `routing` do Config API: duas chaves SEM LEITOR *(achado 2026-08-03, ao consertar a suíte do config-api)*
+## Dois pacotes fósseis — `clickhouse-consumer` e `conversation-writer` *(quarentena 2026-08-03)*
 
-Achado de raspão, conferindo por que `test_numeric_values_are_positive` reprovava. Não é
-dívida cosmética: são campos que o tenant edita na UI e que **não governam nada**. Mesma
-família do `acw_gate` (config sem leitor, removido em 2026-07-29) e do `get_available_count`
-(helper sem chamador) — e aqui no namespace cuja razão de existir é *tunar o roteador*.
+Vieram do resíduo acima. Estavam INCONCLUSIVOS no `report_suite_skips.sh` desde sempre, e a
+leitura fácil ("a sonda não alcança o serviço") estava errada em ambos: **não há serviço**.
+Nenhum dos dois é serviço do compose, nenhum tem `Dockerfile`, e os dois só existem no
+`ecosystem.config.js` — a topologia PM2 anterior ao Docker. Também não constam da §
+Repository Structure do `CLAUDE.md`.
 
-| Chave | Seed do config-api | `_DEFAULTS` do routing | Quem lê | Valor efetivo |
-|---|---:|---:|---|---|
-| `routing.snapshot_ttl_s` | 120 | 120 | **ninguém** | **3600** (`registry.py:2568`, `snapshot_ttl: int = 3600`, nenhum call site passa) |
-| `routing.score_weights` | `{skill_match, availability, aging_factor, breach_factor}` | `{sla, channel, skills, load}` | **ninguém** | — |
+| | consome | escreve | estado medido |
+|---|---|---|---|
+| `clickhouse-consumer` | `evaluation.results` | `evaluation_results` (CH) | tópico **não existe** no broker e nenhum produtor no repo o escreve; auto-create desligado |
+| `conversation-writer` | `conversations.*` (vivos) | `transcripts`, `transcript_messages` | tabelas **não existem** em `plughub_demo`; ninguém as lê |
 
-**O `snapshot_ttl_s` é o caro**, e liga direto ao *achado 3* do arco de capacidade: aquela
-seção corrigiu **três docs** que diziam 120 s depois de medir `TTL 2958` numa chave escrita
-11 min antes. Faltaram estes dois lugares — e eles não são doc, são a **superfície de
-configuração**: quem abrir a tela lê que o snapshot expira em 2 min, quando o defeito
-descrito lá é exatamente *"com 1 h ele persiste, e a tela mostra capacidade de uma hora
-atrás"*. A config diz o número que tornaria o defeito auto-curável.
+Ambos ganharam `README.md` de fóssil no próprio diretório, com a evidência e o que exigiria
+reativação. **Não apagados** — mesmo critério da tabela `pools` fóssil: reversível, e o erro
+fica visível.
 
-**O `score_weights` é pior de outro jeito:** os dois lados nem sequer têm as **mesmas
-chaves** — não é valor divergente, é vocabulário divergente. E o docstring do
-`routing_config.py:9` afirma *"Defaults mirror the seeds in …/seed.py"*, o que é
-verificavelmente falso para esta entrada. Docstring que **afirma** uma correspondência
-inexistente é a mesma classe do `registry.py:82` (heartbeat + auto-release que não
-existiam).
+**O `conversation-writer` é o que merece atenção se alguém mexer**: ele consome tópicos
+**vivos** e traz `migrate()` embutido no `postgres_writer.py`. Subi-lo não daria erro —
+criaria uma segunda persistência de transcrição, paralela ao `StreamPersister`, divergente e
+sem leitor. Fóssil que falha barulhento é inofensivo; este falharia em silêncio.
 
-**Decisão pendente, e são caminhos opostos** — não fazer o barato por reflexo:
-(a) **ligar** — `write_pool_snapshot` passa a receber o TTL do `RoutingConfigCache`, e o
-scorer passa a ler `score_weights`; cumpre o invariante *"every config field is UI-editable"*
-no sentido forte (editável **e** obedecido), mas muda comportamento vivo (TTL cairia de 1 h
-para 2 min, o que **é** o conserto do achado 3 — logo precisa entrar junto com ele, não
-antes); (b) **remover** as duas chaves do seed e do `_DEFAULTS`, assumindo que TTL de
-snapshot e pesos de score são infra, não tuning de tenant. O que não se sustenta é o estado
-atual, em que a tela promete e o código ignora.
+**Falta decidir** (não urgente, e a quarentena já tira o dano): apagar os dois pacotes junto
+com as entradas do `ecosystem.config.js`, ou manter. Apagar só o pacote e deixar o PM2
+apontando para um script inexistente troca um fóssil silencioso por um erro de boot.
 
 ---
 
@@ -1056,10 +1121,23 @@ vaga — e também não emite `participant_left`. Idem o `on_timeout` do delegat
 >   CLASSIFICA antes de contar). **Medir antes de limpar mudou a conclusão:** havia 9
 >   órfãos PÓS-fix, e a consulta da SESSÃO (todas abertas) provou que são claim
 >   abandonado — lacuna 2 — e não vazamento de teardown; logo **H1/H2 segurou**.
->   Deletados só os 80 do `formfill_demo` pré-corte. **Mantidos os 17 do
->   `aprovacao_deploy`** — eram "9" em 29/07 e são 17 agora: a aprovação **segue**
->   produzindo órfãos, e essas linhas são a evidência viva do defeito que nunca foi
->   corrigido junto com o wrap-up. Ver CHANGELOG.
+>   Deletados só os 80 do `formfill_demo` pré-corte.
+> - ~~**Os 17 órfãos do `aprovacao_deploy` — "a aprovação segue produzindo"**~~
+>   ❌ **AFIRMAÇÃO REFUTADA 2026-08-03 (2ª medição do mesmo dia).** As 17 linhas vão de
+>   **2026-07-16 a 2026-07-24** — a última é SEIS DIAS anterior ao fix. Nenhuma depois do
+>   corte. O que sustentava "segue produzindo" era o número ter ido de 9 (29/07) para 17
+>   (03/08); mas as linhas subjacentes não são novas, então **o crescimento foi artefato de
+>   contagem** (`FINAL` ou filtro diferente entre as duas leituras), não produção. É o § Erros
+>   de método item 1 aplicado à medição da PRÓPRIA sessão: um número que cresce é plausível
+>   como evidência de defeito ativo, e por isso não foi conferido contra as datas.
+>
+>   **Nem por isso estava provado o contrário:** zero aprovações desde 24/07 ⇒ zero amostra
+>   pós-fix. "Nenhum órfão novo" e "nenhuma aprovação nova" são indistinguíveis na tabela.
+>   Fechado com amostra própria — **`infra/test/smoke_approval_segment_closes.sh` ✅ 7/7**:
+>   trigger → claim → submit deixa o segmento do aprovador com `close_reason=task_submitted`
+>   e `duration_ms=428`. O H1 é genérico (dispara com qualquer `_claimant_instance_id`
+>   `human-*`) e cobre aprovação e wrap-up igualmente. Os 17 viraram dívida histórica pura.
+>   *(O smoke também fecha uma lacuna à parte: a aprovação não tinha smoke nenhum.)*
 > - **As 3 divergências de doc** listadas abaixo.
 > - ~~**Validar H1 ao vivo**~~ ✅ **(2026-07-30)** — atendimento real: o segmento de wrap-up
 >   fechou com `close_reason=task_submitted` e `duration_ms=89 483`. A corrida não ocorreu, e
@@ -1186,63 +1264,18 @@ multi-pool** seguem inexistentes, embora a F5 os previsse.
 
 ---
 
-## analytics-api — 23 testes vermelhos há tempo *(achado ao rodar a suíte, 2026-07-28)*
+## ~~analytics-api — 23 testes vermelhos há tempo~~ ✅ **FECHADO 2026-08-03**
 
-Apareceram ao validar a descontinuação do `agent_events`. **Nenhum tem relação com essa
-mudança** — os 260 de `test_reports.py`+`test_consumer.py` passam. São dois defeitos
-independentes, ambos anteriores e ambos do tipo "teste que não pode reprovar".
-
-### (a) 14 testes de RBAC neutralizados por um MagicMock ✅ CORRIGIDO (2026-07-28)
-
-`test_admin.py::TestRequirePrincipal` (8) e `test_dashboard.py::TestDashboardRBAC` (6)
-recebiam `Principal(sub="open_access")` e 200 onde esperavam 401/403.
-
-**Não era o ambiente** (a variável só existe no `docker-compose.demo.yml:921`; `env -u` não
-mudava nada). A causa era o próprio fixture:
-
-```python
-settings = MagicMock()
-settings.admin_jwt_secret = SECRET        # ← só isto era fixado
-```
-
-Um `MagicMock` auto-cria qualquer atributo e o devolve **truthy**. Quando o guard
-`if settings.analytics_open_access:` entrou em `require_principal` (`auth.py:72`), o mock
-passou a respondê-lo como verdadeiro, e os 14 testes silenciosamente trocaram de caminho:
-deixaram de exercitar autenticação e passaram a validar o atalho de open-access.
-
-**Corrigido** com `settings.analytics_open_access = False` nos dois fixtures.
-
-**A lição, que é maior que o conserto:** eram exatamente os testes que provam que o
-analytics exige token e bloqueia cross-tenant, e ficaram incapazes de reprovar sem que nada
-acusasse. É a terceira ocorrência do mesmo padrão nesta sessão — depois do
-`evaluation_context_get` (o `if (role && …)` que curto-circuitava na string vazia) e do 502
-mudo do ai-gateway (`lastResort` do logging). Todos: um default plausível ocupando o lugar
-de uma verificação.
-
-**Regra a adotar:** mock de config precisa fixar TODO atributo booleano que o código sob
-teste lê — o default de um mock nunca é "desligado". Um `MagicMock(spec=Settings)` não
-resolveria (spec valida nomes, não valores); o que resolveria é o mock ser um `Settings`
-real com overrides.
-
-### (b) 9 testes de `_fetch_customer_history` — drift desde a Journey J1 ✅ CORRIGIDO (2026-07-29)
-
-`test_sessions.py::TestFetchCustomerHistory` (7) e `TestCustomerHistoryEndpoint` (2):
-`ValueError: not enough values to unpack (expected 9, got 8)`.
-
-A query em `sessions.py:241` passou a selecionar `root_session_id` (Journey J1) e os
-fixtures continuavam com 8 colunas. **Corrigido:** campo acrescentado aos `_row()`/
-`_ch_row()`, com default = o próprio `session_id` (J1: contato avulso é sua própria raiz,
-auto-mint = self).
-
-**O que faltava não era a coluna, era a asserção.** Não havia uma única menção a
-`root_session_id` no arquivo — por isso o drift passou. Foram adicionados 3 asserts que
-cobrem o campo (raiz = self, raiz ≠ self ⇒ membro de processo, e o campo na resposta do
-endpoint). Sem eles o próximo `SELECT` novo repete a história.
-
-### (c) Testes que travam
-
-`TestDashboardRBAC` pendurou em duas execuções (interrompido com Ctrl+C). Instancia
-`TestClient` com app real; suspeita de request sem timeout. Não investigado.
+> Os 23 estavam corrigidos desde 2026-07-28/29 — (a) e (b) já marcados ✅ aqui, e o item (c)
+> ("`TestDashboardRBAC` pendurou em duas execuções, interrompido com Ctrl+C, não
+> investigado") **não se reproduz**: `test_dashboard.py` + `test_admin.py` medidos em
+> 2026-08-03 dão **51 passed em 0,51 s** (`infra/test/probe_hygiene.sh`, bloco 1a). A trava
+> provavelmente morreu junto com a causa de (a) — o `MagicMock` que fazia
+> `analytics_open_access` responder truthy trocava o caminho de código exercitado.
+>
+> A lição de (a) sobrevive onde ela vale: `CLAUDE.md` § Postura de Engenharia cita o caso
+> ("`MagicMock` devolvendo truthy para `analytics_open_access` — 14 testes de RBAC trocaram
+> de caminho") no catálogo de testes-que-não-podem-reprovar. Detalhe em `CHANGELOG.md`.
 
 ---
 
@@ -1289,9 +1322,22 @@ sem item de nav.
 > "wrap-up como fonte de dados" (§ acima) — que agora são o próximo passo natural — e o
 > cruzamento com Evaluation pelo mesmo `segment_id`.
 >
-> **Falta ligar o caminho A nos skills**: nenhum YAML passa `$.segment_id` ainda, então na
-> prática hoje só a rede (C) atribui. Um skill que emita `agent_event` deve passá-lo — é
-> uma linha por chamada, e o caminho A é o único que não custa I/O.
+> **Reenquadrado pela medição de 2026-08-03** (`infra/test/probe_block2.sh`, bloco B). A nota
+> anterior dizia *"nenhum YAML passa `$.segment_id`, então na prática hoje só a rede (C)
+> atribui — é uma linha por chamada"*. Medido: `agent_business_events` tem **1 linha**, de
+> `2026-06-10 12:00:00.000` (timestamp redondo, categoria
+> `retencao_humano.skill_finalizacao_v1.nps_contact`) — **seed**. Zero com `segment_id`.
+>
+> **Não há produtor algum.** A busca estática não acha um único chamador de `agent_event`:
+> nenhum YAML de skill, nenhum smoke, nenhum serviço. Logo a rede (C) também não atribui
+> nada — não há o que atribuir. A coluna entregue em 03/08 nunca foi exercitada por dado real,
+> e o teste que a cobre (`test_agent_event_segment.py`) prova a função, não o laço que a
+> alimentaria.
+>
+> Consequência para o planejamento: **"ligar o caminho A" não é uma linha por chamada — é
+> criar a PRIMEIRA chamada do sistema.** A infra do Arc 12 está completa de ponta a ponta
+> (tool, tópico, tabela, `/reports/agent-events/*`, UI) e ociosa. O primeiro produtor natural
+> é a **fatia 3 do wrap-up** (abaixo), não um skill avulso.
 
 ## Posição na fila — resíduos após o fix do `queue.position_updated` ✅ *(2026-07-27, ver CHANGELOG)*
 
@@ -1454,7 +1500,17 @@ validado" registrado no próprio doc.
 
 ---
 
-## Resolvedor de Identidade — próximos passos (Fase A ✅ Slices 1–4; falta Slice 3 + Fase B) *(2026-07-02)*
+## Resolvedor de Identidade — próximos passos (Fases A ✅ e B ✅; falta a Fase C) *(2026-07-02, cabeçalho corrigido 2026-08-03)*
+
+> ⚠️ **Terceiro cabeçalho stale achado na mesma varredura.** Dizia *"falta Slice 3 + Fase B"*. O
+> `CLAUDE.md` registra o **Slice 3 ✅ (2026-07-03)** e a **Fase B completa em 3 fases (2026-07-04)** —
+> identidade progressiva, posse de canal por OTP e gate seguro. O que falta é a **Fase C**
+> (`external_refs` + merge de clientes, wiring do step CRM `resolve`, `resume_origin=same_channel`,
+> transporte real do OTP), e ela depende de haver um CRM.
+>
+> Os três cabeçalhos stale (este, I5 e Capacidade) têm a mesma assinatura: **corpo mantido, título
+> não.** Vale como padrão a vigiar — o título é o que sobrevive à leitura rápida, então ele mente
+> para mais gente do que qualquer parágrafo interno.
 
 **Estado:** Fase A completa e validada (ver `CHANGELOG.md` § Slices 1/2/4 e `docs/product/identity-resolver-fase-a-plano.md`). Cadastro mínimo interno sem CRM: índice Redis + durabilidade PG (`schema identity`) + retomada cross-canal + `sessions.customer_id` = nativo no fechamento (conserta `contact_id`-como-`customer_id`, reconecta H1/H2/H3).
 
@@ -1528,30 +1584,20 @@ e adotado por OTP, NPS e survey multi-pergunta. ADRs: `docs/adr/adr-otp-workflow
 
 ---
 
-## evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente *(achado ao vivo, 2026-07-02)*
+## ~~evaluation-api — 10 testes de `test_router.py` quebrados por drift de ambiente~~ ✅ **FECHADO 2026-08-03**
 
-Encontrado ao validar o fix de self-view (ver `CHANGELOG.md` § "evaluation-api — bug self-view..."): rodando
-a suíte local (`pytest`, Python 3.12.3, `pytest-9.1.1`) — ambiente mais novo que o usado da última vez que os
-`.pyc` cacheados foram gerados (Python 3.10) — **10 de 83 testes falham**, todos em `test_router.py`, **nenhum
-relacionado à mudança de self-view** (confirmado por leitura: os testes que tocam `_compute_result_scope`/
-`list_results` — seção T10-C de `test_available_actions.py` + o novo teste de regressão — passam 100%).
-Três causas raiz distintas, todas pré-existentes:
-
-1. **`AsyncMock.keys() returned a non-iterable` (7 casos)** — `_row()` em `db.py` faz `dict(record)` sobre o
-   retorno de `fetchrow()` de um `MagicMock()` fake; a versão mais nova da lib `mock` (stdlib do Python 3.12)
-   trata isso diferente. Afeta `TestIngest` (4 casos, via `_db.set_contestation_state`) e `TestResults` (
-   `test_list_results` via `_db.get_campaign` — chamada pré-existente no handler pra montar
-   `available_actions`, nunca mockada pelo teste; `test_lock_result` via `_db.lock_result`).
-2. **`422` em vez de `200`/`400` (2 casos)** — `test_review_result`, `test_review_invalid_outcome`: o schema
-   de validação do endpoint `/review` evoluiu desde que os testes foram escritos.
-3. **`'State' object has no attribute 'redis'` (2 casos)** — `TestContestations::test_create_contestation` e
-   `test_cannot_contest_locked_result`: o endpoint legado de contestação (`/v1/evaluation/contestations`)
-   passou a exigir `request.app.state.redis`; a fixture `_app_with_mocks` não seta isso.
-
-**Não bloqueia** nenhum trabalho corrente — documentado aqui só pra não perder o achado. Corrigir exige (1)
-atualizar `_row`/os testes pra funcionar com o mock mais novo (ou fixar versão de `mock`/pytest do projeto),
-(2) alinhar `test_review_*` ao schema atual do endpoint, (3) a fixture `_app_with_mocks` setar `state.redis`
-(`AsyncMock()`) por padrão.
+> Medido: **60 passed em 3,95 s** no `test_router.py`, dentro do container
+> (`infra/test/probe_hygiene.sh`, bloco 1b). As três causas raiz (mock novo × `dict(record)`,
+> `422` no `/review`, `state.redis` ausente na fixture) foram embora com o conserto das
+> suítes de 2026-08-03. Os testes nominalmente citados no item — `test_list_results`,
+> `test_lock_result`, `test_review_result`, `test_review_invalid_outcome`,
+> `test_create_contestation`, `test_cannot_contest_locked_result` — **continuam existindo** e
+> passando (conferido por nome, não pelo total: total verde não prova que o caso específico
+> não foi deletado).
+>
+> **Ressalva sobre o número:** o item dizia "10 de 83". O 83 era a suíte **do pacote** na
+> época, não o arquivo — hoje o pacote está em 214 e o arquivo em 60. Prever ">83 no arquivo"
+> foi erro meu de leitura, e só apareceu porque a previsão estava escrita.
 
 ---
 
@@ -1964,37 +2010,43 @@ lê outcome), S4 (quarentena → `contact_eligibility_check` genérico), S5 (web
 
 1. **S1 — ✅ FEITO (2026-07-27, ver CHANGELOG).** Catálogo único `survey_catalog.py` + roll-up por instrumento.
    **Resíduos:**
-   - **Nenhum produtor emite CES/PMF/FCR** — nenhum DialogForm (`infra/test/seed_dialog_*`) nem skill de survey
-     os captura. A normalização está pronta e sem dado: falta um form de seed com dimensions CES/PMF/FCR para
-     um E2E de verdade (e para o S6/S8 mostrarem algo além de NPS/CSAT).
-   - **UI ignora `value_label`** — `SignalChips` (`AnaliseSurveysPage.tsx`) renderiza só `metric` + número, até
-     para NPS ("nps 9" em vez de "Promotor"); `CustomerVoicePage` tem um ternário vazio (`rollup === 'avg' ? ''
-     : ''`) onde deveria sufixar `%` para `pct`/`nps_index`. Fatia C do S1.
+   - **Nenhum produtor emite CES/PMF/FCR** — ✅ **reconfirmado 2026-08-03**: os seeds só cobrem `nps`
+     (`seed_dialog_nps_buttons_form.sh`) e `csat`+`nps` (`seed_dialog_survey_multi_form.sh`). A
+     normalização está pronta e sem dado; falta um form de seed com dimensions CES/PMF/FCR para um E2E
+     de verdade (e para o S6/S8 mostrarem algo além de NPS/CSAT).
+   - **UI ignora `value_label`** — ✅ **reconfirmado 2026-08-03**: o ternário vazio segue literal em
+     `CustomerVoicePage.tsx:161` (`data.instrument.rollup === 'avg' ? '' : ''` — os dois ramos idênticos,
+     que é a assinatura de um sufixo que nunca foi escrito), e `AnaliseSurveysPage.tsx:21` declara
+     `value_label` na interface sem renderizá-lo. Fatia C do S1.
    - **Rótulos mistos** — CES/PMF/FCR em inglês (spec), NPS/CSAT em pt-BR (histórico gravado). Unificar exige
      decidir migração do histórico + i18n na UI.
 2. **S7 (refinos do editor `/config/dialog-forms`):** biblioteca `survey_question` reutilizável, ABAC no
    write (hoje só `X-Admin-Token`), drag reorder, locale lado-a-lado + preview.
 3. **S6 (fechar):** view consolidada "Visão do cliente" (cross-cut multi-métrica + divergências §8/§10)
    sobre a base que a lente `customer_voice` já expõe (Customer Voice Fatia 1 = só grão×instrumento + SLA).
-4. **Higiene S2:** deployar o trio renomeado (`skill_survey_runner_v1`/`outbound`/`trigger`) como pools no
-   `infra/registry/tenant_demo.yaml` — o registry ainda roda o conjunto antigo.
-5. **Store per-response** (gargalo que travava S8/S9) — ✅ **FEITO E VALIDADO (2026-07-23, ver CHANGELOG).**
-   Schema PG `survey` + endpoint idempotente (evaluation-api); `survey_record` persist-first (mcp-server);
-   `survey_web.submit` **captura verbatim** + persist-first (channel-gateway). Smoke
-   `smoke_survey_response_store.sh` verde. **Desbloqueia S8.** ADR aceito:
-   [`docs/adr/adr-survey-response-store.md`](docs/adr/adr-survey-response-store.md). **Opção A** decidida:
-   schema PG `survey` dedicado, escopo mínimo `survey_instance`+`survey_response` (com `open_text`/`audio_ref`),
-   host = **evaluation-api**; poda o §7.2 (definições→dialog-api, quarentena→mailing-api). Caminho de escrita:
-   `survey_record` persiste antes de emitir + `survey_web.submit` para de descartar verbatim. **Contrato de
-   implementação PRONTO** (DDL das 2 tabelas, endpoint `POST /v1/evaluation/survey/responses`, idempotência,
-   ordem persist-first, wiring com linha/símbolo exatos, checklist de build):
-   [`docs/product/survey-response-store-implementation-spec.md`](docs/product/survey-response-store-implementation-spec.md).
-   **Falta só codar.** Abertos: endpoint de leitura de S8, áudio/transcript (S9).
-6. **Valor novo (loop captura→leitura→ação):** **S8** (navegador de respostas `/analise/surveys` + verbatim)
-   ✅ **FEITO (2026-07-23, ver CHANGELOG).** Restante: **S9** (`agente_survey_analyst_v1` — classifica verbatim +
-   áudio/transcript via `attachment_store`) → **S10** (retorno outbound + caixa de ações) → **S11** (NPS/PMF
-   relacional agendado). Refino de S8: endpoint de LEITURA já existe; falta só export CSV (opcional) e o
-   guard de rota ABAC (Item 3 app-wide).
+4. **Higiene S2 — enunciado CORRIGIDO (medido 2026-08-03).** Dizia *"o registry ainda roda o conjunto
+   antigo"*. **Falso**: o conjunto antigo foi REMOVIDO na Camada E1 (2026-07-24) — de
+   `tenant_demo.yaml` sobrou só o comentário na linha 374 explicando a remoção. O estado real é
+   outro e é pior: o **trio novo existe como YAML e NENHUM pool o deploya** —
+   `skill_survey_runner_v1`, `skill_survey_outbound_v1` e `skill_survey_trigger_v1` estão em
+   `packages/skill-flow-engine/skills/` e não têm uma única menção em `infra/registry/`. São
+   arquivos mortos da mesma família dos dois pacotes fósseis: existem, não rodam, e ensinam um
+   modelo que ninguém executa. **Decidir**: deployar como pools, ou remover junto com os fósseis.
+5. **Store per-response** — ✅ **FEITO E VALIDADO (2026-07-23, ver CHANGELOG).** Schema PG `survey`
+   (`survey.survey_instance` + `survey.survey_response`, `db.py:632-672`), `persist_survey_response`
+   (`:723`) e `list_survey_responses` (`:801`); `survey_record` persist-first; `survey_web.submit`
+   captura verbatim. ADR aceito: [`docs/adr/adr-survey-response-store.md`](docs/adr/adr-survey-response-store.md).
+
+   > **Resíduo textual removido em 2026-08-03:** este item terminava com *"**Falta só codar**"* logo
+   > depois de se declarar FEITO — parágrafo da spec pré-implementação que sobreviveu à
+   > implementação. Contradição dentro do mesmo item, e do tipo que engana: quem lê o fim decide
+   > que há trabalho, quem lê o começo decide que não. Conferido no código antes de podar (as duas
+   > tabelas, o persist e o list existem). O "endpoint de leitura de S8" que ele listava como aberto
+   > também já existe — é o `list_survey_responses`.
+6. **Valor novo (loop captura→leitura→ação):** **S8** ✅ **FEITO (2026-07-23).** Restante: **S9**
+   (`agente_survey_analyst_v1` — classifica verbatim + áudio/transcript via `attachment_store`) →
+   **S10** (retorno outbound + caixa de ações) → **S11** (NPS/PMF relacional agendado). Refino de S8:
+   export CSV (opcional) + guard de rota ABAC (Item 3 app-wide).
 
 ---
 

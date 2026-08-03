@@ -12,7 +12,10 @@ Usage by platform modules:
   # → {"satisfied": [0.3, 1.0], "neutral": [-0.3, 0.3], ...}
 
   all_ns = await store.list_namespace("tenant_telco", "routing")
-  # → {"snapshot_ttl_s": 120, "sla_default_ms": 480000, ...}
+  # → {"claim_lease_s": 180, "sla_default_ms": 480000, ...}
+  #   (o exemplo citava `snapshot_ttl_s`, removida em 2026-08-03 por não ter
+  #    leitor — exemplo de docstring envelhece calado e vira a única prova de
+  #    que um campo existe)
 """
 from __future__ import annotations
 
