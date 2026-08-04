@@ -186,6 +186,8 @@
     "previewBanner": "Contato em espera — visualização read-only. Use \"Atender\" para assumir.",
     "atCapacity":    "Capacidade máxima de atendimentos atingida",
     "atCapacityCount": "Todas as vagas em uso ({{n}}/{{max}})",
+    "claimFailed": "Não foi possível atender {{id}}: {{reason}}",
+    "claimFailedDismiss": "OK",
     "resizeHint":    "Arraste para ajustar",
     "reservedToYou": "Reservado a você",
     "internalQueue": "Pós-atendimento — {{pool}}",
@@ -193,6 +195,8 @@
       "already_claimed":  "Já reivindicado por outro agente",
       "no_capacity":      "Sem capacidade disponível",
       "reserved_to_other":"Reservado a outro agente",
+      "not_in_queue":     "Não está mais na fila",
+      "instance_not_found":"Sua sessão de agente não está registrada — reconecte",
       "failed":           "Não foi possível atender"
     }
   },

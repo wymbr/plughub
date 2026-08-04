@@ -48,10 +48,11 @@ interface PullInboxPanelProps {
   instanceId:   string
   /** SLA target (ms) por pool — para a cor de urgência das linhas. */
   poolSla?:     Record<string, number | null>
-  /** Bloqueia o claim (teto de sessões simultâneas atingido). */
-  claimDisabled?:       boolean
-  /** Hint exibido no botão quando claimDisabled. */
-  claimDisabledReason?: string
+  // `claimDisabled`/`claimDisabledReason` REMOVIDAS em 2026-08-04: eram props mortas
+  // (declaradas, desestruturadas, nunca usadas no render) — sobra do tempo em que a
+  // LINHA tinha botão de Pull. Hoje a linha só abre o preview, e o gate de capacidade
+  // vive no botão da barra do preview (`AgentAssistPage`, `disabled={atCapacity}`).
+  // Prop aceita e ignorada é pior que prop ausente: promete um gate que não existe.
   /** Chamado após um claim bem-sucedido (sessionId) — ex.: selecionar na lista. */
   onClaimed?:   (sessionId: string) => void
   /** F2b-2b — clicar na linha abre o preview read-only (sem claim). */
@@ -91,7 +92,7 @@ function slaColor(ageMs: number | null, slaMs: number | null | undefined): strin
 }
 
 export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
-  pullPools, instanceId, poolSla, claimDisabled, claimDisabledReason,
+  pullPools, instanceId, poolSla,
   onClaimed, onPreview, previewSessionId, onPreviewInvalid, pollMs = 4000,
   refreshSignal,
 }) => {
@@ -99,6 +100,19 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   const [contacts, setContacts] = useState<QueueContact[]>([])
   const [claiming, setClaiming] = useState<string | null>(null)
   const [error, setError]       = useState<string | null>(null)
+  // RECUSA DE CLAIM em estado PRÓPRIO, separado do erro de listagem.
+  //
+  // Antes os dois dividiam `error`, e o `refresh()` que segue a recusa (§ handlePull)
+  // faz `setError(null)` no caminho feliz — ou seja, o motivo da recusa era apagado
+  // pela linha seguinte, vivendo o tempo de um fetch. Contra a invariante do
+  // CLAUDE.md: "degradação NUNCA é silenciosa". Hoje só o auto-atendimento de
+  // wrap-up passa por ali, e é justamente onde o silêncio custa caro — o agente não
+  // clicou em nada, então não tem por que suspeitar que algo falhou.
+  //
+  // A recusa persiste até o próprio item sair da fila (foi resolvido de algum jeito)
+  // ou até o agente dispensá-la. Um refresh de lista NÃO a apaga: o que a torna
+  // obsoleta é o item sumir, não a lista recarregar.
+  const [claimError, setClaimError] = useState<{ sessionId: string; text: string } | null>(null)
   const [nowMs, setNowMs]       = useState<number>(Date.now())
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
@@ -218,18 +232,32 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
       })
       const result = await res.json() as { claimed?: boolean; reason?: string }
       if (result.claimed) {
+        setClaimError(null)
         setContacts(prev => prev.filter(x => x.session_id !== c.session_id))
         onClaimed?.(c.session_id)
       } else {
-        setError(t(`pullInbox.claimReason.${result.reason ?? "failed"}`, { defaultValue: result.reason ?? "" }))
+        // Ordem importa: o refresh vem ANTES, porque ele mexe em `error` (o da
+        // listagem). A recusa é gravada depois, no estado dela, e nada a limpa.
         await refresh()
+        setClaimError({
+          sessionId: c.session_id,
+          text: t(`pullInbox.claimReason.${result.reason ?? "failed"}`, { defaultValue: result.reason ?? "" }),
+        })
       }
     } catch (e) {
-      setError(String(e))
+      setClaimError({ sessionId: c.session_id, text: String(e) })
     } finally {
       setClaiming(null)
     }
   }, [instanceId, onClaimed, refresh, t])
+
+  // A recusa deixa de valer quando o ITEM sai da fila — foi reivindicado por outro,
+  // expirou, ou o trabalho acabou. Aí a mensagem viraria afirmação sobre algo que
+  // não está mais na tela. Recarregar a lista, por si só, não a invalida.
+  useEffect(() => {
+    if (!claimError) return
+    if (!contacts.some(c => c.session_id === claimError.sessionId)) setClaimError(null)
+  }, [contacts, claimError])
 
   // ── Wrap-up unificado (Camada E2) — auto-atendimento (inline) ───────────────
   // Item reservado a MIM e marcado auto_attend (o hook era `dispatch: inline`) é
@@ -303,6 +331,25 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
       </div>
       {error && (
         <div className="px-3 text-xs text-warning-text mb-1">{error}</div>
+      )}
+      {claimError && (
+        <div className="mx-2 mb-1 flex items-start gap-2 rounded border border-warning/40
+                        bg-warning-light px-2 py-1.5 text-2xs text-warning-text">
+          <span className="flex-1">
+            {t("pullInbox.claimFailed", {
+              id: claimError.sessionId.slice(0, 8),
+              reason: claimError.text,
+              defaultValue: "Não foi possível atender {{id}}: {{reason}}",
+            })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setClaimError(null)}
+            className="flex-shrink-0 font-semibold hover:underline"
+          >
+            {t("pullInbox.claimFailedDismiss", { defaultValue: "OK" })}
+          </button>
+        </div>
       )}
       {groups.length === 0 ? (
         <div className="px-3 py-2 text-xs text-muted-light">

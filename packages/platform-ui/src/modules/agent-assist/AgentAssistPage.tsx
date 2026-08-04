@@ -684,8 +684,12 @@ export const AgentAssistPage: React.FC = () => {
                     é lido como tela quebrada; foi essa leitura ("reivindiquei e
                     veio vazio") que disparou uma investigação inteira na direção
                     errada. */}
+                {/* `text-warning` (#D97706) e não `text-warning-text` (#92400E):
+                    o segundo é marrom escuro, feito para texto SOBRE fundo âmbar
+                    (é assim que o crachá do Header fica âmbar). Sobre branco e em
+                    text-2xs ele lê como cinza — medido na tela em 2026-08-04. */}
                 {atCapacity && (
-                  <span className="text-2xs text-warning-text whitespace-nowrap">
+                  <span className="text-2xs font-medium text-warning whitespace-nowrap">
                     {t("pullInbox.atCapacityCount", { n: contacts.size, max: maxConcurrent })}
                   </span>
                 )}
@@ -791,8 +795,6 @@ export const AgentAssistPage: React.FC = () => {
                     pullPools={pullPoolIds}
                     instanceId={session?.userId ? `human-${session.userId}` : ""}
                     poolSla={poolSlaMap}
-                    claimDisabled={atCapacity}
-                    claimDisabledReason={t("pullInbox.atCapacity", { defaultValue: "Capacidade máxima de atendimentos atingida" })}
                     previewSessionId={previewSessionId}
                     onPreview={handlePreviewQueueContact}
                     onPreviewInvalid={() => { setPreviewSessionId(null); setPreviewPoolId(null); setPreviewConferenceId(""); }}

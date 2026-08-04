@@ -144,12 +144,31 @@ if [ "$TOTALINST" -eq 0 ]; then
   echo "INCONCLUSIVO — nenhuma instância legível."
   exit 2
 fi
+
+# CORRIGIDO 2026-08-04 — este bloco imprimia "SEM DIVERGÊNCIA" e o leitor lia VERDE.
+# Era um veredicto que NÃO PODE REPROVAR o caso principal: o script só enxerga o lado
+# do ÁRBITRO, então `NSESS < MC` compara o árbitro CONSIGO MESMO. Na reprodução do
+# achado 2 (3 ocupantes × 0 cartões na tela) ele imprimiu verde justamente onde a
+# divergência era total — porque 3 sessões com max 3 não disparam aquela condição.
+# O número de CARTÕES é entrada HUMANA que o script não tem; sem ela o resultado é
+# INCONCLUSIVO, nunca aprovado. Ver CLAUDE.md § Postura de Engenharia.
 if [ "$MISMATCH" -gt 0 ]; then
-  echo "DIVERGÊNCIA em ${MISMATCH} instância(s): o árbitro está lotado e o cliente,"
-  echo "contando cartões, acha que há vaga. O botão fica habilitado, o servidor recusa,"
-  echo "e a recusa é a ÚNICA coisa que informa o operador."
-else
-  echo "SEM DIVERGÊNCIA nesta amostra: ocupação do semáforo == cartões esperados."
-  echo "Isso NÃO fecha a questão — só diz que, agora, as duas fontes concordam."
-  echo "Rodar de novo logo após um wrap-up inline (a janela do hold é curta)."
+  echo "DIVERGÊNCIA CONFIRMADA em ${MISMATCH} instância(s), sem precisar da tela:"
+  echo "o árbitro está lotado e sobram vagas gastas por não-sessões, então o cliente —"
+  echo "que conta cartões — acha que há espaço. Botão habilitado, servidor recusa."
+  exit 1
 fi
+
+echo "INCONCLUSIVO até você conferir a tela."
+echo
+echo "  O script lê SÓ o lado do árbitro. Ele NÃO enxerga quantos cartões o Console"
+echo "  mostra, e é essa comparação que responde a pergunta. Compare à mão, por"
+echo "  instância, o número impresso em '>>> COMPARE:' com a coluna CONTACTS:"
+echo
+echo "    iguais            → as duas fontes concordam AGORA (não fecha a questão)"
+echo "    cartões MENORES   → DIVERGÊNCIA: vaga ocupada por sessão sem cartão"
+echo "                        (achado 2) — os ids acima nomeiam os suspeitos"
+echo "    cartões MAIORES   → cartão sobrevivendo a vaga já devolvida"
+echo
+echo "  Vale repetir logo após um wrap-up inline: a janela do hold é curta e é a"
+echo "  única ocupação legítima que nunca vira cartão."

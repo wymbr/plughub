@@ -2289,6 +2289,43 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    **Causa desconhecida**; não confundir com a ocupação artificial que a montagem sintética do F2
    produziu no mesmo dia. Reproduzir antes de teorizar.
 
+   ### ✅ DIAGNOSTICADO 2026-08-04 — "Return to queue" deixa o marcador de humano no bridge
+
+   **Receita de reprodução (3/3, determinística):** reivindicar N itens → **"Return to queue"** em
+   todos → reivindicar de novo. Os re-claims sobem a ocupação (1→2→3) e **nenhum cartão aparece**.
+
+   **Cadeia, medida:**
+   1. MONITOR do Redis: os três `ZREM` de claim em `…921`, `…928`, `…932` (deltas 7s e 4s), cada um
+      com o `EVAL` de ocupação subindo. O árbitro concedeu as três vagas.
+   2. `orchestrator-bridge`: três `Skipping duplicate routing for already-served session …
+      skill_running=False human_active=True` em **22:18:41, 22:18:48, 22:18:52** — deltas **7s e 4s**.
+      Mesmos eventos, casados pelo relógio.
+   3. `mcp-server-plughub`: **nenhum** `Forwarding conversation.assigned` nesses instantes (os três que
+      aparecem no log são da 1ª rodada de claims, 22:08–22:09). O evento nunca chegou ao frontend —
+      o que também **exclui o bundle de UI** como causa.
+   4. `EXISTS {t}:session:{sid}:closed` = **0** nos três: sessões VIVAS. Vaga gasta, trabalho vivo,
+      tela vazia.
+
+   **Causa:** o guard de dedup (`main.py` §3509-3519) descarta `conversations.routed` sem
+   `conference_id` quando existe `session:{sid}:human_agent`. Esse marcador é escrito por
+   `activate_human_agent` (§808, `SETEX` no TTL da sessão) e apagado **só** em caminhos de
+   encerramento/queda: close de contato (§2696, §6347), último humano derrubado (§6810) e
+   `agent_done` (§7284). **O `work_task_release` ("Return to queue") não está entre eles** — libera a
+   vaga do árbitro e deixa a presença no bridge. O re-claim vira, para o guard, uma re-emissão do
+   drain periódico (que é contra o que o guard foi escrito) e é indistinguível dela.
+
+   Mesma assimetria já registrada no CLAUDE.md sobre este caminho — *"`remove_conversation` também
+   restaura a membership dos SETs do pool, que o `work_task_release` não faz"*. Mais um fato que ele
+   não restaura.
+
+   **Forma do conserto (não implementado):** limpar `session:{sid}:human_agent` + o membro
+   correspondente de `session:{sid}:human_agents` na devolução à fila, simétrico ao ramo de queda do
+   §6810 — o marcador significa "há humano anexado", e depois do release não há. **Preferir isso a
+   afrouxar o guard**: exceção no guard trocaria um caso mudo por outro (o spam de
+   `participant_joined` que ele existe para impedir), enquanto corrigir o estado torna o guard
+   verdadeiro. Cuidado ao escrever o teste: o TTL do marcador é o da sessão, então "some sozinho"
+   é uma janela de horas, não um conserto.
+
    **Tentativa de reprodução em 2026-08-04 (achado 1): NÃO reproduziu.** Três claims seguidos,
    ocupantes do semáforo == cartões na tela, mesmos ids, nenhum hold. Isso **não** absolve o
    achado — só diz que o caminho feliz não o produz. Ficou o instrumento:

@@ -186,6 +186,8 @@
     "previewBanner": "Waiting contact — read-only preview. Use \"Claim\" to take it.",
     "atCapacity":    "Maximum concurrent sessions reached",
     "atCapacityCount": "All slots in use ({{n}}/{{max}})",
+    "claimFailed": "Could not claim {{id}}: {{reason}}",
+    "claimFailedDismiss": "OK",
     "resizeHint":    "Drag to resize",
     "reservedToYou": "Reserved to you",
     "internalQueue": "Wrap-up — {{pool}}",
@@ -193,6 +195,8 @@
       "already_claimed":  "Already claimed by another agent",
       "no_capacity":      "No capacity available",
       "reserved_to_other":"Reserved to another agent",
+      "not_in_queue":     "No longer in the queue",
+      "instance_not_found":"Your agent session is not registered — reconnect",
       "failed":           "Could not claim"
     }
   },
