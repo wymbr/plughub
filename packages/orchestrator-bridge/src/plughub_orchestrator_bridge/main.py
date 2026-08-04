@@ -81,6 +81,12 @@ CONFIG_API_URL      = os.getenv("CONFIG_API_URL",       "http://localhost:3500")
 # como workflow webhook (fire-and-forget) via channel-gateway, em vez de convidar
 # um especialista de conferência. Só usado no caminho detached.
 CHANNEL_GATEWAY_URL = os.getenv("CHANNEL_GATEWAY_URL",  "http://localhost:8010")
+# Fase B (ADR requeue, D1): o bridge pergunta ao ÁRBITRO quem detém um item antes
+# de decidir o que fazer com a queda do transporte, e devolve item de fila pull
+# pelo `work_task_release` — nunca por re-publish em `conversations.inbound`.
+# Nunca lê o Redis do routing direto (invariante do árbitro único).
+ROUTING_ENGINE_URL  = os.getenv("ROUTING_ENGINE_URL",   "http://routing-engine:3550")
+ROUTING_ADMIN_TOKEN = os.getenv("ROUTING_ADMIN_TOKEN",  "")
 
 _default_skills_dir = str(Path(__file__).parent.parent.parent.parent / "skill-flow-engine" / "skills")
 SKILLS_DIR          = os.getenv("SKILLS_DIR", _default_skills_dir)
@@ -1309,6 +1315,147 @@ async def _fire_detached_hook(
             "Detached hook webhook failed: hook=%s target_pool=%s session=%s — %s",
             hook_type, target_pool, session_id, exc,
         )
+
+
+# ── Fase B (ADR requeue, D1) — devolver item de fila pull pelo caminho de pull ──
+
+def _routing_headers() -> dict[str, str]:
+    return {"X-Admin-Token": ROUTING_ADMIN_TOKEN} if ROUTING_ADMIN_TOKEN else {}
+
+
+async def _routing_holds_item(
+    http:        aiohttp.ClientSession | None,
+    tenant_id:   str,
+    pool_id:     str,
+    session_id:  str,
+    instance_id: str,
+) -> bool:
+    """
+    Fase B — esta sessão é um ITEM DE FILA PULL reivindicado por `instance_id`?
+
+    **O discriminador é a POSSE, não a config do pool.** Só `work_task_claim`
+    escreve o registro de posse (Fase A/D6); contato de cliente é alocado por push
+    e nunca tem um. Perguntar ao árbitro responde a pergunta certa — *"este agente
+    detém um item de trabalho?"* — em vez da aproximação *"o pool é pull?"*, que
+    ainda precisaria de um ramo para `pool_config` ausente do cache, e os dois
+    fallbacks possíveis desse ramo erram para lados opostos: presumir push mantém
+    o defeito em silêncio, presumir pull larga um cliente esperando.
+
+    Falha de rede/árbitro → **False com log**: o caminho antigo (re-rota) é o
+    comportamento vigente, e degradar para ele é conservador. Nunca silencioso —
+    sem o log, um árbitro fora do ar faria a Fase B desaparecer sem deixar marca.
+    """
+    if http is None or not (tenant_id and pool_id and session_id and instance_id):
+        return False
+    try:
+        async with http.post(
+            f"{ROUTING_ENGINE_URL}/v1/work_queue/holder",
+            json={"tenant_id": tenant_id, "pool_id": pool_id, "session_id": session_id},
+            headers=_routing_headers(),
+        ) as resp:
+            if resp.status != 200:
+                logger.warning(
+                    "Fase B: holder lookup HTTP %s (session=%s pool=%s) — tratando como "
+                    "contato de cliente (re-rota)", resp.status, session_id, pool_id,
+                )
+                return False
+            data = await resp.json()
+    except Exception as exc:
+        logger.warning(
+            "Fase B: holder lookup falhou (session=%s pool=%s): %s — tratando como "
+            "contato de cliente (re-rota)", session_id, pool_id, exc,
+        )
+        return False
+
+    if not data.get("found"):
+        return False
+    held_by = data.get("instance_id") or ""
+    if held_by != instance_id:
+        # Não é erro: o item pode ter sido reivindicado por outro depois. Quem caiu
+        # não o detém, então não há nada a devolver por ele.
+        logger.info(
+            "Fase B: session=%s detida por %s (via %s), não por %s que caiu — sem release",
+            session_id, held_by, data.get("via"), instance_id,
+        )
+        return False
+    return True
+
+
+async def _release_work_item(
+    http:        aiohttp.ClientSession,
+    tenant_id:   str,
+    pool_id:     str,
+    session_id:  str,
+    instance_id: str,
+) -> bool:
+    """
+    Fase B / D1 — devolve o item à fila pelo caminho de pull.
+
+    Diferença que motiva a fase inteira: o `work_task_release` re-enfileira o
+    **pacote armazenado, verbatim** (`get_full_queued_contact` → `add_queued_contact`),
+    preservando `assigned_to`, `fallback_to_pool_after_s`, `assigned_at_ms`,
+    `conference_id`, `work_item_deadline` e `auto_attend`. O re-publish de seis
+    campos em `conversations.inbound` reconstruía tudo isso pelos defaults do
+    Pydantic — as chaves apareciam preenchidas de vazio, e por isso o JSON passava
+    por íntegro numa inspeção de campos. Também devolve a vaga e apaga
+    lease + registro de posse, que o re-publish não fazia (daí a duplicação).
+    """
+    try:
+        async with http.post(
+            f"{ROUTING_ENGINE_URL}/v1/work_queue/release",
+            json={
+                "tenant_id":   tenant_id,
+                "pool_id":     pool_id,
+                "session_id":  session_id,
+                "instance_id": instance_id,
+                # Fase C (D3) — ESTE caminho é queda de transporte, não desistência:
+                # o item volta reservado ao agente que caiu, com transbordo por
+                # janela. O botão "Return to queue" do Console usa o mesmo endpoint
+                # e NÃO manda este campo — é a única diferença entre os dois, e é
+                # deliberada.
+                "reserve_to_previous": True,
+            },
+            headers=_routing_headers(),
+        ) as resp:
+            if resp.status != 200:
+                _txt = ""
+                try:
+                    _txt = (await resp.text())[:200]
+                except Exception:
+                    pass
+                logger.error(
+                    "Fase B: work_task_release non-2xx (session=%s pool=%s status=%s body=%s)",
+                    session_id, pool_id, resp.status, _txt,
+                )
+                return False
+            data = await resp.json()
+    except Exception as exc:
+        logger.error(
+            "Fase B: work_task_release falhou (session=%s pool=%s): %s",
+            session_id, pool_id, exc,
+        )
+        return False
+
+    # `requeued=False` = o árbitro liberou a vaga mas NÃO reenfileirou, porque o
+    # JSON do contato já não existe. Não é sucesso pela metade em silêncio: o item
+    # some da fila e só o `work_task_expire` o encerra. Merece linha própria.
+    if not data.get("requeued"):
+        logger.warning(
+            "Fase B: release SEM requeue (session=%s pool=%s) — o JSON do contato não "
+            "existe mais; a vaga voltou, o item não. Encerramento fica com o expire.",
+            session_id, pool_id,
+        )
+    else:
+        # `reserved_to` vazio num release de QUEDA não é normalidade: ou o item já
+        # tinha vínculo autoral (caso legítimo, logado pelo árbitro), ou a reserva
+        # não foi aplicada. Registrar o valor deixa os dois distinguíveis aqui.
+        logger.info(
+            "Fase B: item de trabalho devolvido à fila pelo work_task_release "
+            "(session=%s pool=%s instance=%s) — pacote preservado, vaga liberada, "
+            "reservado a %s",
+            session_id, pool_id, instance_id, data.get("reserved_to") or "-",
+        )
+    return True
 
 
 def _has_inline_agent_wrapup(pool_cfg: dict | None) -> bool:
@@ -6632,6 +6779,25 @@ async def process_contact_event(
                     # Não escreve session:closed (contato continua) — o mcp-server tb não
                     # setou (só /api/agent_done seta). Ver g7 §11 / heartbeat.
                     if reason == "agent_disconnect":
+                        # ── Fase B (ADR requeue, D1) — item de trabalho ≠ contato ──
+                        # A política abaixo ("devolve o contato ao pool para não perder
+                        # o cliente") é correta para contato de CLIENTE e errada para
+                        # item de fila pull, onde não há cliente esperando: há um
+                        # formulário com dono, prazo e token de resume. Aplicada a ele,
+                        # produzia DUPLICAÇÃO — item de volta no ZSET com a vaga ainda
+                        # ocupada — e apagava o pacote (`assigned_to`, `conference_id`,
+                        # `work_item_deadline`, `auto_attend`) pelos defaults do Pydantic.
+                        #
+                        # O discriminador é a POSSE no árbitro, não a config do pool: só
+                        # o caminho pull escreve registro de posse (Fase A/D6), então
+                        # contato de cliente nunca casa aqui, e não existe ramo "não sei".
+                        if await _routing_holds_item(
+                            http, _ha_tenant, _ha_pool, session_id, instance_id
+                        ):
+                            await _release_work_item(
+                                http, _ha_tenant, _ha_pool, session_id, instance_id
+                            )
+                            return
                         _rr_customer = session_id
                         _rr_channel  = "webchat"
                         try:

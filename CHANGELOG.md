@@ -2,6 +2,325 @@
 
 ---
 
+## Fase D (D5): a tela deixa de ser fonte de posse ✅ (2026-08-04)
+
+Quarta fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).
+Fecha a **duplicação visual**, a única que restava depois de A+B+C.
+
+**O caminho era `pool:pending_assignment:{pool}`**, não o pub/sub. A chave é escrita pelo bridge (TTL
+300 s), sobrevive ao F5 e é **reentregue** ao agente que reconecta (`server.ts`). Duas guardas já
+existiam ali — "sessão já fechada" (`session:{sid}:closed`) e "assignment de outro agente"
+(`shouldDropAssignment`) — e **nenhuma cobre o caso do item de fila pull devolvido**: a workflow
+segue SUSPENSA (não há marcador de fechado) e o `instance_id` BATE (é o mesmo agente). O assignment
+passava nas duas, e o Console redesenhava o formulário de um item que o backend já tinha devolvido
+à fila. Era esse o "form órfão", com o mesmo id em CONTACTS **e** em PULL QUEUES.
+
+**A guarda que faltava pergunta ao ÁRBITRO** (`POST /v1/work_queue/holder`, o endpoint que a Fase A
+endureceu), com o **mesmo veredicto de quatro ramos** do submit (Fase A) e do drop (Fase B):
+
+| Estado do árbitro | Decisão |
+|---|---|
+| detido por mim (lease ou registro) | entrega |
+| detido por outro | descarta |
+| ninguém detém **e** item na fila | **descarta** — o que a Fase D fecha |
+| ninguém detém e fora da fila | entrega — ausência honesta (push, encerrado, claim pré-Fase A) |
+| árbitro sem resposta (`null`) | entrega, **com aviso** — falha de rede não recusa reconexão |
+
+**Onde a guarda mora, e por quê.** No **mcp-server** (BFF), não no React: é quem serve o Console e
+quem já fala com o árbitro. Resolver no cliente exigiria expor a pergunta de posse ao browser e
+confiar que toda tela futura a fizesse. Aqui vale para qualquer consumidor do WS.
+
+**O veredicto é função PURA** (`shouldDropOnPossession`, em `lib/assignment-filter.ts`), seguindo o
+`shouldDropAssignment` que já vivia lá pelo mesmo motivo: dentro do handler de WebSocket a regra só
+seria exercitável com Redis, pub/sub e socket — ou seja, não seria. A regra de posse agora existe em
+**três lugares no mesmo formato** (submit, drop, replay), e os testes são o que impede os três de
+divergirem.
+
+### Validação
+
+`possession-filter.test.ts` (**9**) + `assignment-filter.test.ts` (5) = 14 verdes. E o e2e, que é o
+que decide, com o critério **invertido** em relação às fases anteriores: antes o sucesso era "o
+backend recusa", agora é "a tela não oferece".
+
+Medido no Console, com três itens em três estados simultâneos — leitura melhor que a do smoke,
+porque cada crachá é explicado por qual fase estava viva quando aquele item foi devolvido:
+
+| Item | Crachá | Origem |
+|---|---|---|
+| recém-devolvido por F5 | **RESERVED TO YOU** | Fase B devolveu, Fase C reservou; janela de 30 s correndo |
+| devolvido 71 min antes | **RESERVATION EXPIRED** | reservado no teste da Fase C; janela vencida (crachá corrigido hoje) |
+| devolvido na Fase B | *sem crachá* | anterior à Fase C — nunca teve `assigned_to` |
+
+E, acima de tudo: **"Waiting for next contact…"** — sem formulário órfão.
+
+### Aberto
+
+- `pool:pending_assignment` **não é apagado** no `work_task_release`; segue vivo até o TTL de 300 s e
+  é descartado na entrega. Conserto no produtor = follow-up; a guarda cobre o sintoma
+  independentemente de quem deixou a chave para trás.
+- **Reserva permanente em `-int` não foi exercitada na tela** — exige wrap-up real em pool espelho;
+  `formfill_demo` é pooled. Coberta por pytest (`test_internal_queue_never_overflows`).
+
+---
+
+## Fase C (D2+D3): queda devolve o item RESERVADO ao dono anterior ✅ (2026-08-04)
+
+Terceira fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).
+
+**Não é mecanismo novo.** O ADR descartou a *carência* (um timer específico de desconexão) em favor
+da reserva com janela — `assigned_to` + `fallback_to_pool_after_s` + `assigned_at_ms`, a **Camada B**,
+já implementada, com gate dentro do `work_task_claim` e smoke próprio. A Fase C só passa a
+**escrever** esses campos no release por queda.
+
+**A decisão central é o CHAMADOR, não a janela.** Dois call sites do mesmo endpoint, com intenções
+opostas:
+
+| Chamador | `reserve_to_previous` | Por quê |
+|---|---|---|
+| bridge, `agent_disconnect` | `True` | o agente não desistiu; a digitação parcial só existe no navegador dele |
+| Console, botão "Return to queue" | ausente (`False`) | largou de propósito — reservar esconderia do pool inteiro pela janela |
+
+O **default é não reservar**: chamador que ignore o campo mantém o comportamento anterior. O
+inverso faria o botão passar a esconder itens em silêncio.
+
+**Três regras em `_apply_drop_reservation`:**
+
+1. **Nunca sobrescreve `assigned_to` existente** — num item author-bound ele é o AUTOR do
+   atendimento, fato mais forte e durável que "quem estava com ele agora". Sobrescrever
+   transferiria o vínculo autoral a um claimante de transbordo, sem ninguém notar.
+2. **A âncora reinicia** (`assigned_at_ms = agora`): a reserva de queda é evento novo. É o oposto
+   da âncora autoral, que `add_queued_contact` preserva de propósito através de re-enfileiramentos —
+   duas reservas com vidas diferentes, e por isso o carimbo é feito no release, não lá.
+3. **O dono sai do REGISTRO de posse** (`claimant_user_id`, Fase A), não da lease nem do
+   `instance_id` cru: `assigned_to` casa por USER. Sem registro, deriva de `human-{userId}` — e
+   **loga que derivou**.
+
+**Janela por tipo — e em `-int` a resposta é NÃO TER JANELA.** Discriminador = sufixo `-int`,
+garantia por construção (o registry rejeita criação manual de pool com esse sufixo):
+
+- **`-int` (author-bound) → reserva PERMANENTE.** `fallback_to_pool_after_s` fica **ausente**, que é
+  como a Camada B codifica "não transborda". A saída é o prazo ou o `work_task_expire` do supervisor
+  (D7), que encerra **sem disposição** — nunca outro autor.
+- **Demais filas pull (pooled: aprovação e afins) → `drop_reserve_window_default_s` = 30 s**
+  (config-api ns `routing`, UI: Configuration › Platform › "Routing (SLA & TTL)"; sem código de tela
+  — o `NamespaceEditor` renderiza o namespace genericamente).
+
+> **Correção no mesmo dia, por revisão do dono do produto.** A primeira versão semeava
+> `drop_reserve_window_internal_s = 300`, tratando `-int` como "janela generosa". É o **erro de
+> categoria** que a migration `20260730000000_pool_internal_queue` já havia nomeado por escrito:
+> *"transbordo existe porque item de fila é trabalho POOLED… wrap-up não é isso — só quem atendeu
+> pode classificar o próprio atendimento. A identidade do executor é parte da DEFINIÇÃO da tarefa,
+> não uma preferência."* Transbordar um wrap-up entregaria a outro agente a classificação de um
+> atendimento que ele não fez — o mesmo "fingir ser o autor" que a ADR author-bound recusou ao
+> supervisor.
+>
+> **Sem efeito em produção**, e vale registrar por quê: o caminho normal nunca alcançava a chave —
+> um wrap-up real já traz `assigned_to` do despacho, e a regra 1 impede sobrescrita. Ela só
+> dispararia num `-int` **sem** `assigned_to`, que o `work-queue.ts` classifica como *"ANOMALIA, não
+> normalidade"*. Uma decisão errada, escondida atrás de um caminho que não se percorre — que é
+> justamente onde ela sobreviveria a testes verdes. E sobreviveu: os 5 pytests da Fase C passavam
+> **afirmando** os 300 s.
+
+**D2 já estava satisfeita pela Fase B** — "sempre devolver, sem teto de rodadas" exige apenas que
+nenhum contador seja criado, e nenhum foi. Na prática esta fase é a D3.
+
+`work_task_release` passa a devolver `reserved_to`: `None` distingue "não pediu reserva" de "pediu
+e não coube" (vínculo autoral venceu) — quem olhasse só `released` não veria a diferença.
+
+### Gates
+
+`test_claim_possession_record.py` (**19**, routing: +5 da Fase C — reserva na queda, ausência de
+reserva no botão, vínculo autoral preservado sob transbordo, janela por tipo, dedução sem registro)
+· `test_work_item_release_on_drop.py` (**14**, bridge: o corpo do release agora exige
+`reserve_to_previous: true`) · `smoke_claim_possession.sh` (**30 PASS**, +6 do passo 6).
+
+Um detalhe de instrumento: o passo 6 exigiu um veredicto novo (`nothing_there`), porque o `eq` trata
+campo AUSENTE como inconclusivo — regra certa quando se espera um valor, errada quando a **ausência
+é o resultado esperado**. Comparar contra a string `"ABSENT"` teria confundido "campo não veio" com
+"campo veio com o texto ABSENT".
+
+---
+
+## Fase B (D1): queda de transporte devolve item de trabalho pelo caminho de pull ✅ (2026-08-04)
+
+Segunda fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).
+
+**O defeito.** No `agent_disconnect` com `remaining<=0`, o orchestrator-bridge
+(`main.py:6634`) aplicava a política *"último humano caiu, devolve o contato ao pool para não perder
+o cliente"* — correta para contato de CLIENTE — a um **item de fila pull**, onde não há cliente
+esperando: há um formulário com dono, prazo e token de resume. A devolução era um **re-publish de
+seis campos** em `conversations.inbound`; todo o resto voltava como default do Pydantic, com as
+chaves presentes e os valores perdidos, e é por isso que o JSON passava por íntegro numa inspeção.
+
+**O discriminador é a POSSE, não a config do pool.** Ler `dispatch_mode` do `{t}:pool_config:{pool}`
+resolveria, mas criaria um ramo "config ausente do cache" cujos dois fallbacks erram para lados
+opostos: presumir push mantém o defeito em silêncio, presumir pull larga um cliente esperando. A
+Fase A dissolveu isso de graça — **só o caminho pull escreve `claim_record`**. O bridge pergunta ao
+árbitro se a instância que caiu detém o item (`POST /v1/work_queue/holder`); se detém, chama
+`POST /v1/work_queue/release` e retorna. Contato de cliente é alocado por push, nunca tem registro,
+e segue re-roteado como antes. Árbitro inalcançável → degrada para o caminho antigo **com log**.
+
+**Medido no item real `413b9f75…` (formfill_demo), depois de um F5 no Console:**
+
+| Campo | Caminho antigo (medido 08-04) | Depois da Fase B |
+|---|---|---|
+| `conference_id` | `null` | `027ec7a2-7f10-43fb-9ed1-3e2a704ea653` |
+| `work_item_deadline` | `""` | `2026-08-05T13:14:22…` |
+| `queued_at_ms` | reescrito | `1785849262212` (original; só o score do ZSET reordena) |
+
+Log do bridge: `devolvido pelo work_task_release` 1× · `last human dropped — re-routing` 0×.
+
+**`first_queued_ms` saiu do escopo — a sub-tarefa não existia.** O ADR (D2) dizia que ele *"NÃO é
+escrito no caminho de re-enqueue"*. Não é campo do JSON: é a chave `{t}:queue:first_queued:{sid}`,
+escrita com **NX** por `add_queued_contact` e lida de lá pelo inbox. Medido em item real
+(`probe_first_queued_on_real_item.sh`): `1785849262212` (13:14:22Z), TTL 604798 s — 1 item na fila,
+1 com a chave, 0 sem. D2 emendada.
+
+### Três medições que não decidiam, e por quê
+
+Vale registrar porque as três falharam pela **mesma família** de erro, e uma delas produziu verde:
+
+1. **Espécime morto.** O item sujo de 08-04 respondeu `TTL -2` — mas o contato tinha sido finalizado
+   na tela, então ledger e item já não existiam. *Ausência num item morto não é evidência sobre
+   caminho de escrita.*
+2. **Teste que exercita a função lida, não a rota do produto.** O pytest enfileira chamando
+   `add_queued_contact` direto; ficaria verde mesmo se a rota real divergisse. Só a leitura de um
+   item **vivo** separou as hipóteses.
+3. **FALSO VERDE do probe.** `probe_fase_b_release_on_reload.sh` rodava `python3` no container do
+   **redis**, que não o tem. O `|| echo ABSENT` deixava a mensagem de erro sair como valor; o
+   veredicto comparou "antes" com "depois", achou **duas mensagens de erro idênticas** e imprimiu
+   `✅ FASE B ATIVA`. O guarda de INCONCLUSIVO testava `= "ABSENT"` e passou ao lado, porque o valor
+   era o texto do erro *terminando* em ABSENT.
+
+   Correções, e são duas porque uma só já se mostrou insuficiente: **preflight** (exercita o parser
+   contra um JSON conhecido e aborta com código 3 antes de qualquer retrato — instrumento não
+   conferido não mede, só produz caracteres) e **veredicto sobre a FORMA do valor final**
+   (`work_item_deadline` ISO × vazio) em vez da igualdade antes/depois, já que duas leituras
+   quebradas são sempre iguais entre si.
+
+### Gates
+
+`test_work_item_release_on_drop.py` (**14**, orchestrator-bridge: 4 ramos da decisão + guardas de
+entrada + contrato do release) · `test_claim_possession_record.py` (**14**, routing, +1 do
+`first_queued`) · `smoke_claim_possession.sh` (**24 PASS**, +5 do passo 4b: os quatro campos que o
+re-publish apagava + `first_queued` inalterado) · `probe_fase_b_release_on_reload.sh` (manual,
+precisa do Console) · `probe_first_queued_on_real_item.sh`.
+
+> ⚠️ `up -d --force-recreate` **apaga o `pip install` do pytest** feito no container. A suíte do
+> routing chegou a não rodar por isso, com `pytest: executable file not found` — que é barulhento, e
+> por isso não virou falso verde.
+
+### O que ainda NÃO está fechado
+
+- **A duplicação VISUAL continua**, e é esperada: o Console redesenha o formulário por replay do
+  `conversation.assigned` na reconexão. É a **D5** (*a tela não é fonte de posse*) = **Fase D**. O
+  que A+B fecham é a duplicação **efetiva**: o item volta pelo caminho certo, a vaga é devolvida, e
+  o submit do formulário órfão deve ser recusado com 403.
+- ~~O 403 na UI real ainda não foi exercitado~~ ✅ **exercitado 2026-08-04**: item reivindicado →
+  F5 → Submit no formulário órfão → **403**. É a prova de ponta da Fase A pela tela, e a primeira
+  vez que o sistema recusa submit de trabalho que o agente não detém.
+
+  Junto veio um defeito de superfície: `DialogFormRenderer` exibia só `HTTP 403` e descartava o
+  corpo. O motivo colapsava — "você perdeu o item, reivindique de novo" (ação óbvia) ficava
+  indistinguível de "você não tem permissão" (nenhuma), justo na tela onde isso custa mais.
+  Corrigido lendo `detail` da resposta: agora sai
+  `HTTP 403 — resume: work item is back in the queue — claim it before submitting`.
+  *Degradação silenciosa do MOTIVO também é degradação silenciosa.*
+- **`agent_done` falso e segmento sem `close_reason`** seguem sendo publicados no drop: é a
+  **Fase E (D8)**, que o ADR põe depois da C.
+
+---
+
+## Fase A (D6): o submit confere posse, contra um registro que sobrevive à lease ✅ (2026-08-04)
+
+Primeira fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md),
+aberto no mesmo dia pela medição que achou a **duplicação** (um F5 no Console devolve à fila um item
+em trabalho). Pré-requisito de segurança das demais: sem ele, a Fase C (*"sempre devolver à fila"*)
+trocaria dois donos **possíveis** por dois donos **efetivos** — um preenchendo pela aba velha, outro
+pela fila.
+
+### O que estava aberto
+
+O check A5 do `handle_resume` (channel-gateway) conferia `caller == claimant` lendo a `claim_lease`
+pelo árbitro, e **falhava aberto quando a lease não existia**. Essa é exatamente a condição depois de
+um re-parque: a lease dura **180 s**, o prazo do item **24 h**, e o F5 apaga a lease antes disso.
+A submissão pela aba velha passava com HTTP 200.
+
+### A emenda à D6 — o ledger `work_task` não servia
+
+A redação original mandava conferir contra `{t}:work_task:{session}`, *"que sobrevive ao claim e
+carrega `assigned_to`"*. Ao implementar, a leitura mostrou que isso **não fecharia o buraco**:
+
+- o ledger é escrito **uma vez, no despacho**, e **nada escreve claimant nele** — `work_task_claim`
+  não o toca;
+- `assigned_to` é **reserva** (Camada B: quem *pode* puxar, com transbordo), não posse. Em item
+  **pooled** nasce vazio ⇒ o fail-open continuaria intacto justamente onde a duplicação foi medida;
+  em item reservado **após o transbordo**, rejeitaria o claimante legítimo e aceitaria o dono
+  original, que já não detém nada.
+
+Ler posse de `assigned_to` é guardar um fato de escopo *(item, instante)* num campo de escopo
+*(item, política de alocação)* — o erro que o `CLAUDE.md` nomeia, aplicado ao contrário.
+
+### O que entrou
+
+- **`{t}:pool:{pool}:claim_record:{session}`** (routing-engine) — `{instance_id, claimant_user_id,
+  claimed_at}`, **TTL derivado do `work_item_deadline` do item** (fallback 25 h, a convenção do
+  ledger; **nunca** `claim_lease_s`, que reabriria o fail-open). Escrito no `work_task_claim`,
+  apagado em `work_task_release`, `work_task_expire` e no **re-parque** do `route()` — este último é
+  o caminho do F5 e a razão de a chave existir. A `claim_lease` sobrevive como carimbo curto e
+  deixou de ser load-bearing.
+- **`POST /v1/work_queue/holder`** passa a responder `{found, instance_id, claimant_user_id,
+  claimed_at, via, in_queue}`. `in_queue` é o campo que torna o veredicto **fechável**: o claim é um
+  `ZREM`, então membro do ZSET é item sem dono — `found=false, in_queue=true` é resposta
+  **positiva** ("ninguém detém, está na fila"), não ausência de informação.
+- **O bloco A5 vira quatro ramos** (antes dois, e o segundo misturava dois fatos): detido por mim →
+  passa · detido por outro → 403 · **ninguém detém e item na fila → 403 "reivindique antes de
+  submeter"** · ninguém detém e fora da fila → passa com log (push / encerrado / claim pré-Fase A).
+  Árbitro sem resposta (`None`) segue permissivo, com log: falha de rede não pode recusar submissão
+  legítima, e `None` é o que preserva a diferença entre *não sei* e *ninguém detém*.
+- **Relatório de pendências** (`mcp-server-plughub/lib/work-queue.ts`) passa a ler o registro. Sem
+  isso ele e o árbitro discordariam sobre o mesmo fato: passados 180 s, a tela diria `orphaned`
+  enquanto o holder nomeava o dono. Efeito colateral: **`orphaned` ficou mais estreito e mais
+  grave** — deixou de englobar "a lease venceu" (que não é orfandade: o dono está lá) e passou a
+  significar o que o nome diz. Novo campo `claimed_via` (`lease` | `record`).
+- **`work_task_expire`** ganha o registro como **segunda via** de dono, antes da busca no semáforo —
+  mais direta e cobre exatamente o cenário que o motiva (reivindicado, lease vencida, nunca
+  submetido).
+
+### O defeito que o gate barato não pegou
+
+A primeira rodada saiu **12 pytests verdes** e o smoke reprovou: `claimant_user_id` voltava `null`
+quando a **lease** respondia (só o registro o carrega) e correto quando o **registro** respondia.
+Campo cuja presença depende do tier de armazenamento, não do fato — e o consumidor agendado é a
+Fase C, que vai compará-lo com `assigned_to`: funcionaria depois de 180 s e falharia aberto na
+janela quente.
+
+*A assimetria não foi acidente:* o pytest exercitava o que eu tinha em mente ao escrever o código;
+o smoke exercitava o **contrato**, pela porta real do árbitro. O holder passou a **compor** a
+resposta (`via`/`instance_id` de quem provou a posse; `claimant_user_id` sempre do registro, seu
+único escritor), e a asserção entrou nos **dois** gates.
+
+### Gates
+
+`infra/test/smoke_claim_possession.sh` (**19 PASS**, veredicto de 3 estados — INCONCLUSIVO sai com
+código 2, porque campo ausente é falta de resposta, não resposta) ·
+`test_claim_possession_record.py` (**13**, routing) · `test_resume_possession_check.py` (**7**,
+channel-gateway, cobre os 4 ramos + o caminho sem aprovador).
+
+Previsões escritas antes de rodar e conferidas: TTL do registro **7198 s** contra lease de **180 s**
+(previsto ~7200 e "> 180 em todo caso"). *Uma previsão errou — "11 pytests" quando eram 12; erro de
+contagem, não do código, e fica registrado porque previsão ajustada depois do fato não vale nada.*
+
+### O que a Fase A **não** faz
+
+Não fecha a duplicação — impede o segundo dono de **submeter**. Devolver o item pelo caminho certo
+(`work_task_release` em vez do re-publish de seis campos em `conversations.inbound`, com
+`first_queued_ms` carimbado) é a **Fase B (D1)**. Sinal precoce dela: o log
+`claim_record: item sem work_item_deadline … fallback de 25 h` é o campo que o re-route apaga
+aparecendo em outro lugar.
+
+---
+
 ## Lacuna 2: a vaga do claim abandonado nunca voltava — e dois docstrings mentiam 🐞✅ (2026-08-03)
 
 O `TODO.md` pedia *"volume antes de decidir o reaper"*. A leitura de código achou um defeito que

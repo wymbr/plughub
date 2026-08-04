@@ -1395,6 +1395,11 @@ services:
       # Camada D (detach de hooks de finalização): disparo de hooks `detached` como
       # workflow webhook fire-and-forget (Arc 19 POST /v1/channels/webhook/pool/{id}).
       CHANNEL_GATEWAY_URL:  http://channel-gateway:8010
+      # Fase B (ADR requeue, D1): o bridge consulta a POSSE no árbitro antes de
+      # decidir o que fazer com a queda de transporte, e devolve item de fila pull
+      # por work_task_release. Ausente ⇒ o holder falha e o bridge degrada para a
+      # re-rota antiga COM LOG — o defeito volta, mas não em silêncio.
+      ROUTING_ENGINE_URL:   http://routing-engine:3550
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — RegistrySyncer
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry

@@ -60,9 +60,18 @@ export const keys = {
   workTask: (tenantId: string, sessionId: string) =>
     `${tenantId}:work_task:${sessionId}`,
 
-  /** Frente 1 (pull): lease do claim — {instance_id, claimed_at} */
+  /** Frente 1 (pull): lease do claim — {instance_id, claimed_at}. TTL curto
+   *  (`routing.claim_lease_s`, default 180 s), MUITO menor que o prazo do item. */
   claimLease: (tenantId: string, poolId: string, sessionId: string) =>
     `${tenantId}:pool:${poolId}:claim:${sessionId}`,
+
+  /** Fase A / D6 — registro DURÁVEL de posse do item de trabalho:
+   *  {instance_id, claimant_user_id, claimed_at}, TTL casado ao prazo do item.
+   *  Escrito pelo Routing Engine no claim, apagado em release/expire/re-parque.
+   *  Ler só a `claimLease` faz um item reivindicado há mais de 180 s parecer
+   *  sem dono — é a leitura que a Fase A corrigiu. */
+  claimRecord: (tenantId: string, poolId: string, sessionId: string) =>
+    `${tenantId}:pool:${poolId}:claim_record:${sessionId}`,
 
   /** SET de instance_ids disponíveis (prontos) num pool.
    *  ATENÇÃO: é PERTENCIMENTO, não capacidade. `SCARD` disto conta instância lotada

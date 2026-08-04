@@ -27,7 +27,7 @@ import type { ExternalAgentDeps }     from "./tools/external-agent"
 import { registerOperationalTools }  from "./tools/operational"
 import type { OperationalDeps }      from "./tools/operational"
 import { registerWorkQueueTools }    from "./tools/work_queue"
-import { listQueue, claimTask, releaseTask, listPendingWorkTasks } from "./lib/work-queue"
+import { listQueue, claimTask, releaseTask, listPendingWorkTasks, workTaskHolder } from "./lib/work-queue"
 import type { WorkTaskState } from "./lib/work-queue"
 import { registerDelegationTools }  from "./tools/delegation"
 import type { DelegationDeps }      from "./tools/delegation"
@@ -55,7 +55,7 @@ import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
 import { routeMentions }           from "./lib/mention-routing"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
-import { shouldDropAssignment }    from "./lib/assignment-filter"
+import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
 import { MaskingService }          from "./lib/masking"
 import type { ContextMaskingConfig } from "@plughub/schemas"
 
@@ -2910,6 +2910,56 @@ export async function startServer(config: ServerConfig): Promise<void> {
             )
             return
           }
+          // ── Fase D (D5) — a TELA não é fonte de posse ────────────────────────
+          // Terceira guarda, e a que faltava. As duas acima cobrem "sessão já
+          // fechada" e "assignment de outro agente"; nenhuma cobre o caso do F5
+          // sobre item de fila pull: a workflow segue SUSPENSA (não há
+          // `session:closed`) e o `instance_id` BATE (é o mesmo agente). O
+          // assignment passava, e o Console redesenhava o formulário de um item
+          // que o backend já tinha devolvido à fila — o "form órfão" que o
+          // operador via, com o mesmo id aparecendo em CONTACTS e em PULL QUEUES.
+          //
+          // A pergunta é feita ao ÁRBITRO, o mesmo veredicto de 4 ramos do submit
+          // (Fase A) e do drop (Fase B) — a regra de posse existe num formato só.
+          try {
+            const pend        = JSON.parse(pendingRaw) as Record<string, unknown>
+            const pendSession = String(pend["session_id"] ?? "")
+            const pendPool    = String(pend["pool_id"] ?? poolId)
+            const pendTenant  = String(
+              pend["tenant_id"] ??
+              process.env["PLUGHUB_TENANT_ID"] ?? process.env["TENANT_ID"] ?? "tenant_demo",
+            )
+            if (pendSession && pendPool) {
+              const holder = await workTaskHolder(
+                process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550",
+                process.env["ROUTING_ADMIN_TOKEN"] || undefined,
+                { tenant_id: pendTenant, pool_id: pendPool, session_id: pendSession },
+              )
+              // Veredicto em função PURA (`shouldDropOnPossession`), pelo mesmo
+              // motivo que `shouldDropAssignment`: a regra fica testável fora do
+              // WebSocket, onde exercitá-la exigiria Redis, pub/sub e um socket.
+              const verdict = shouldDropOnPossession(holder, expectedInstanceId)
+              if (verdict.drop) {
+                console.log(
+                  `[agent-ws] D5: assignment DESCARTADO (${verdict.reason}) — ` +
+                  `pool=${pendPool} session=${pendSession} expected=${expectedInstanceId}. ` +
+                  `Se o item estiver na fila, o agente deve reivindicá-lo pela inbox.`
+                )
+                return
+              }
+              if (verdict.reason === "arbiter_unreachable") {
+                // DESCONHECIDO ≠ "ninguém detém". Entrega — recusar a reconexão
+                // por falha de rede seria pior —, mas nunca em silêncio.
+                console.warn(
+                  `[agent-ws] D5: posse NÃO conferida (árbitro sem resposta) — ` +
+                  `entregando assignment mesmo assim: pool=${pendPool} session=${pendSession}`
+                )
+              }
+            }
+          } catch (err) {
+            console.warn(`[agent-ws] D5: guarda de posse falhou (entregando): ${String(err)}`)
+          }
+
           console.log(`[agent-ws] Delivering pending assignment to reconnecting agent pool=${poolId}`)
           forward(`pool:events:${poolId}`, pendingRaw)
         }

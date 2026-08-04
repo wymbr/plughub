@@ -79,6 +79,10 @@ def build_app(router) -> web.Application:
             pool_id     = body["pool_id"],
             session_id  = body["session_id"],
             instance_id = body["instance_id"],
+            # Fase C (D3) — só a QUEDA reserva o item ao dono anterior. Ausente =
+            # False = desistência deliberada (botão "Return to queue"), que é o
+            # comportamento anterior: chamador que não conhece o campo não muda.
+            reserve_to_previous = bool(body.get("reserve_to_previous", False)),
         )
         return web.json_response(result)
 

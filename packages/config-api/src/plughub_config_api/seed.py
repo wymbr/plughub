@@ -127,6 +127,23 @@ _SEED: list[tuple[str, str, object, str]] = [
         "channel-gateway, que falha ABERTO quando ela sumiu."
     ),
     (
+        "routing", "drop_reserve_window_default_s",
+        30,
+        "Fase C (ADR requeue, D3) — janela (segundos) da reserva criada por QUEDA DE "
+        "TRANSPORTE em fila pull POOLED (aprovação e afins). Quando o agente que detinha "
+        "o item perde a conexão, o item volta à fila reservado a ele (`assigned_to`) e "
+        "transborda para o pool inteiro após este tempo. Curta de propósito: em trabalho "
+        "pooled qualquer agente do time serve, e a preferência pelo anterior não pode "
+        "custar tempo a quem espera. "
+        "NÃO existe chave equivalente para fila interna (`-int`): ali a reserva é "
+        "PERMANENTE, porque wrap-up é trabalho author-bound — só quem atendeu pode "
+        "classificar o próprio atendimento — e a saída é o prazo ou o encerramento pelo "
+        "supervisor, nunca outro autor. "
+        "NÃO se aplica ao botão 'Return to queue' (desistência deliberada nunca reserva), "
+        "e nunca sobrescreve um `assigned_to` já existente. "
+        "Fonte: routing-engine/router.py work_task_release"
+    ),
+    (
         "routing", "sla_default_ms",
         480_000,
         "Default SLA target in milliseconds (8 minutes) used when a pool "

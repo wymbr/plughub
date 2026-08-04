@@ -407,20 +407,33 @@ class WebhookAdapter(ChannelAdapter):
     # Resume — wake a suspended session
     # ──────────────────────────────────────────────────────────────────────────
 
-    async def _routing_lease_holder(
+    async def _routing_work_task_holder(
         self, tenant_id: str, pool_id: str, session_id: str,
     ) -> dict | None:
         """
-        A5 — consulta o holder da claim lease no ÁRBITRO (routing HTTP API), em vez de
-        ler o Redis do routing direto (invariante do árbitro único). Retorna
-        {instance_id, claimed_at} quando há lease; None (degradação graciosa) caso
-        contrário ou em falha de rede.
+        A5 — consulta a POSSE do item no ÁRBITRO (routing HTTP API), em vez de ler o
+        Redis do routing direto (invariante do árbitro único).
+
+        Devolve o veredicto INTEIRO do árbitro
+        (`{found, instance_id?, claimant_user_id?, claimed_at?, via, in_queue}`), e não
+        só o holder: `found=False, in_queue=True` é uma resposta positiva ("ninguém
+        detém, está na fila") de que o chamador precisa para recusar. A versão anterior
+        colapsava esse caso em `None` — indistinguível de falha de rede — e por isso o
+        check só sabia falhar aberto.
+
+        `None` fica reservado ao que é de fato desconhecido: pool ausente, árbitro não
+        configurado, HTTP não-200 ou falha de rede. Só aí o chamador degrada para
+        permissivo, e com log.
         """
         if not pool_id:
             return None
         import httpx
         base = (getattr(self._settings, "routing_engine_url", "") or "").rstrip("/")
         if not base:
+            logger.warning(
+                "A5: routing_engine_url não configurada — posse do item %s NÃO "
+                "conferida (submit degrada para permissivo)", session_id,
+            )
             return None
         headers: dict[str, str] = {}
         tok = getattr(self._settings, "routing_admin_token", "")
@@ -434,12 +447,12 @@ class WebhookAdapter(ChannelAdapter):
                     headers=headers,
                 )
             if r.status_code != 200:
-                logger.warning("A5 lease holder lookup HTTP %s", r.status_code)
+                logger.warning("A5 work_task holder lookup HTTP %s", r.status_code)
                 return None
             data = r.json()
-            return data if data.get("found") else None
+            return data if isinstance(data, dict) else None
         except Exception as exc:
-            logger.warning("A5 lease holder lookup failed: %s", exc)
+            logger.warning("A5 work_task holder lookup failed: %s", exc)
             return None
 
     async def _routing_work_task_expire(
@@ -447,7 +460,7 @@ class WebhookAdapter(ChannelAdapter):
     ) -> dict | None:
         """
         I5 — pede ao ÁRBITRO que encerre o item de trabalho (ZREM + lease + vaga).
-        Mesmo caminho de confiança do `_routing_lease_holder`: o gateway solicita, o
+        Mesmo caminho de confiança do `_routing_work_task_holder`: o gateway solicita, o
         routing decide. Falha de rede degrada para None **com log** — o resume segue
         (o workflow não pode ficar preso porque a limpeza falhou), mas o motivo
         aparece; sem isso o item ficaria pendurado sem nenhum registro do porquê.
@@ -686,26 +699,65 @@ class WebhookAdapter(ChannelAdapter):
         session_id = parts[0]
         step_id    = parts[1]
 
-        # ── A5 — caller==claimant (apenas no caminho do aprovador interno) ──────
-        # A instância do aprovador precisa DETER a claim lease desta sessão. Leitura
-        # via o ÁRBITRO (nunca o Redis do routing direto). Found+mismatch = forja →
-        # PermissionError (rota → 403). Lease ausente = claim de TTL curto pode ter
-        # expirado enquanto o humano ainda detém a sessão → não bloqueia (instance==
-        # human-{sub} + posse do resume_token já amarram o caller).
+        # ── A5 / Fase A (D6) — o submit confere POSSE contra o árbitro ──────────
+        # A instância que submete precisa DETER o item. Leitura via o ÁRBITRO (nunca o
+        # Redis do routing direto), que responde lease → registro durável → `in_queue`.
+        #
+        # QUATRO ramos, e a distinção entre os dois últimos é o ponto da Fase A. Até
+        # aqui havia dois: "detido por outro" (403) e "tudo o mais" (passa), e esse
+        # "tudo o mais" misturava *ninguém detém* com *não sei* — o primeiro é motivo
+        # de recusa, o segundo não. Depois de um re-parque (F5 do Console: WS cai, o
+        # bridge re-rota, o item volta ao ZSET) a lease some, e o antigo fail-open
+        # deixava a ABA VELHA submeter sobre trabalho que já estava de volta na fila,
+        # disponível para outro agente. Ver ADR § D6 e § 1.
         if approver is not None and claim_instance_id:
-            holder  = await self._routing_lease_holder(
+            holder = await self._routing_work_task_holder(
                 tenant_id, claim_pool_id or "", session_id,
             )
-            held_by = (holder or {}).get("instance_id")
-            if held_by and held_by != claim_instance_id:
-                raise PermissionError(
-                    "approval: caller does not hold the claim on this session"
+            if holder is None:
+                # (4) árbitro inalcançável / pool ausente = DESCONHECIDO. Degrada para
+                # permissivo — recusar submissão legítima por causa de uma falha de
+                # rede é pior — mas nunca em silêncio.
+                logger.warning(
+                    "A5: posse NÃO conferida para session=%s (árbitro sem resposta); "
+                    "submit liberado pelo binding instance==human-{sub}", session_id,
                 )
-            if held_by is None:
-                logger.info(
-                    "A5: claim lease absent for session=%s (short-TTL); relying on "
-                    "instance/identity match", session_id,
-                )
+            else:
+                held_by = holder.get("instance_id")
+                if held_by and held_by != claim_instance_id:
+                    # (2) forja / segundo dono — o caso que o A5 já cobria.
+                    logger.warning(
+                        "A5 403: session=%s detida por %s (via %s), submit veio de %s",
+                        session_id, held_by, holder.get("via"), claim_instance_id,
+                    )
+                    raise PermissionError(
+                        "resume: caller does not hold the claim on this session"
+                    )
+                if not held_by and holder.get("in_queue"):
+                    # (3) NINGUÉM detém e o item está na FILA. Resposta positiva, não
+                    # ausência: o claim é um ZREM, então membro do ZSET é item sem dono.
+                    # Submeter aqui é submeter sobre trabalho disponível a outro agente.
+                    logger.warning(
+                        "A5 403: session=%s está NA FILA do pool %s (ninguém detém) — "
+                        "submit de %s recusado; reivindique o item antes de submeter",
+                        session_id, claim_pool_id or "?", claim_instance_id,
+                    )
+                    raise PermissionError(
+                        "resume: work item is back in the queue — claim it before submitting"
+                    )
+                if not held_by:
+                    # (4') sem posse e fora da fila: pool push, item já encerrado, ou
+                    # claim anterior à Fase A (sem registro durável). Ausência honesta.
+                    logger.info(
+                        "A5: sem posse registrada para session=%s e item fora da fila "
+                        "(push / encerrado / claim pré-Fase A) — submit liberado pelo "
+                        "binding instance==human-{sub}", session_id,
+                    )
+                else:
+                    logger.info(
+                        "A5 OK: session=%s detida por %s (via %s)",
+                        session_id, held_by, holder.get("via"),
+                    )
 
         # A5.5 — expõe a classe de confiança do AUTOR no payload do resume, para o
         # `choice` do workflow gatear ($.pipeline_state.<delegate>.verification_class

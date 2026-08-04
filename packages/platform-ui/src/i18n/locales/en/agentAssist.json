@@ -187,6 +187,7 @@
     "atCapacity":    "Maximum concurrent sessions reached",
     "resizeHint":    "Drag to resize",
     "reservedToYou": "Reserved to you",
+    "reservationExpired": "Reservation expired",
     "overflow":      "Overflowed",
     "internalQueue": "Wrap-up — {{pool}}",
     "claimReason": {

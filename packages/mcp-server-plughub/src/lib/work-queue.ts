@@ -116,13 +116,17 @@ export async function listQueue(
 export const INTERNAL_POOL_SUFFIX = "-int"
 
 /**
- * Estado de um item parqueado, derivado do cruzamento ledger × ZSET × lease.
+ * Estado de um item parqueado, derivado do cruzamento ledger × ZSET × lease ×
+ * registro durável de posse.
  *
  * `orphaned` é o estado que NÃO existia no desenho e que a leitura de código
- * revelou: pool pull, item fora do ZSET e sem lease = a lease venceu e ninguém
- * re-enfileirou, porque não há reaper de `claim_lease` (lacuna 2 do TODO, que a
- * Camada F deixou sem instrumento). Colapsá-lo em `not_queued` o esconderia
- * atrás de um valor plausível — é o padrão que a § Postura de Engenharia nomeia.
+ * revelou: pool pull, item fora do ZSET e sem dono. **A Fase A (D6) o estreitou
+ * e com isso o tornou mais grave.** Antes, ele englobava o caso comum de "a lease
+ * de 180 s venceu" — que não é orfandade nenhuma, o dono está lá. Agora que a posse
+ * tem registro durável (`claimRecord`, TTL do prazo do item), item com dono aparece
+ * como `claimed` (via `record`), e `orphaned` passou a significar o que o nome diz:
+ * fora da fila, sem lease E sem registro — ninguém detém e ninguém re-enfileirou.
+ * Ver `orphaned` na tela = investigar, não é mais ruído esperado.
  */
 export type WorkTaskState =
   | "unclaimed"    // no ZSET, sem lease — nunca reivindicada
@@ -156,9 +160,12 @@ export interface PendingWorkTask {
    * passou (serviço fora, ou o intervalo de 60 s). Sinal, não decoração.
    */
   overdue:          boolean
-  /** Instância que detém a lease (só em `claimed`). */
+  /** Instância que detém o item (só em `claimed`). */
   claimed_by:       string | null
   claimed_at:       string | null
+  /** Qual fonte nomeou o dono: `lease` (fresca) ou `record` (durável, Fase A).
+   *  `record` num item antigo é normal — a lease tem TTL de 180 s. */
+  claimed_via:      "lease" | "record" | null
 }
 
 export interface PendingWorkTasksResult {
@@ -252,13 +259,19 @@ export async function listPendingWorkTasks(
     dispatchByPool.set(pools[i]!, mode)
   }
 
-  // ── 4. ZSET + lease por item ───────────────────────────────────────────────
+  // ── 4. ZSET + lease + registro durável por item ────────────────────────────
+  // O registro (Fase A / D6) entra aqui porque sem ele este relatório e o árbitro
+  // discordam sobre o MESMO fato: passados 180 s a lease some, e a classificação
+  // caía em `orphaned` ("ninguém detém") enquanto `work_task_holder` continuava
+  // nomeando o dono. Valor plausível e errado num relatório de pendências.
+  const STRIDE = 3
   const stPipe = redis.pipeline()
   for (const r of rows) {
     const poolId = String(r.led["pool_id"])
     const qsid   = String(r.led["queue_session_id"] ?? r.sessionId)
     stPipe.zscore(keys.poolQueue(tenantId, poolId), qsid)
     stPipe.get(keys.claimLease(tenantId, poolId, qsid))
+    stPipe.get(keys.claimRecord(tenantId, poolId, qsid))
   }
   const stRes = await stPipe.exec()
 
@@ -268,17 +281,30 @@ export async function listPendingWorkTasks(
     const { sessionId, led } = rows[i]!
     const poolId  = String(led["pool_id"])
     const qsid    = String(led["queue_session_id"] ?? sessionId)
-    const inQueue = stRes?.[i * 2]?.[1] != null
-    const leaseRaw = stRes?.[i * 2 + 1]?.[1]
+    const inQueue  = stRes?.[i * STRIDE]?.[1] != null
+    const leaseRaw  = stRes?.[i * STRIDE + 1]?.[1]
+    const recordRaw = stRes?.[i * STRIDE + 2]?.[1]
 
     let claimedBy: string | null = null
     let claimedAt: string | null = null
+    let claimedVia: "lease" | "record" | null = null
+    // Lease primeiro (mais fresca); registro como segunda via — mesma ordem do
+    // `work_task_holder`, para que os dois leitores nunca divirjam.
     if (typeof leaseRaw === "string") {
       try {
         const lease = JSON.parse(leaseRaw) as Record<string, unknown>
-        claimedBy = (lease["instance_id"] as string) ?? null
-        claimedAt = (lease["claimed_at"]  as string) ?? null
-      } catch { claimedBy = "?" }
+        claimedBy  = (lease["instance_id"] as string) ?? null
+        claimedAt  = (lease["claimed_at"]  as string) ?? null
+        claimedVia = "lease"
+      } catch { claimedBy = "?"; claimedVia = "lease" }
+    }
+    if (!claimedBy && typeof recordRaw === "string") {
+      try {
+        const rec  = JSON.parse(recordRaw) as Record<string, unknown>
+        claimedBy  = (rec["instance_id"] as string) ?? null
+        claimedAt  = (rec["claimed_at"]  as string) ?? null
+        claimedVia = "record"
+      } catch { claimedBy = "?"; claimedVia = "record" }
     }
 
     const mode = dispatchByPool.get(poolId) ?? null
@@ -312,6 +338,7 @@ export async function listPendingWorkTasks(
       overdue:             Number.isFinite(deadlineMs) ? deadlineMs < nowMs : false,
       claimed_by:       claimedBy,
       claimed_at:       claimedAt,
+      claimed_via:      claimedVia,
     })
   }
 
@@ -359,6 +386,56 @@ export function claimTask(
     conference_id:    a.conference_id ?? "",
     claimant_user_id: a.claimant_user_id ?? "",
   })
+}
+
+/** Veredicto de posse do árbitro (Fase A/D6). Ver `Router.work_task_holder`. */
+export interface WorkTaskHolder {
+  found:             boolean
+  instance_id?:      string
+  claimant_user_id?: string
+  claimed_at?:       string
+  /** Qual fonte provou a posse: "lease" | "record" | "none". */
+  via:               string
+  /**
+   * A sessão é membro do ZSET da fila AGORA. Fato POSITIVO, e é o que torna o
+   * veredicto fechável: o claim é um ZREM, então item na fila não tem dono.
+   * `found=false, in_queue=true` = "ninguém detém"; `found=false, in_queue=false`
+   * = ausência honesta (push, encerrado, claim pré-Fase A).
+   */
+  in_queue:          boolean
+}
+
+/**
+ * Fase D (D5) — pergunta ao ÁRBITRO quem detém um item.
+ *
+ * O Console precisa disto para derivar *"eu detenho"* do CLAIM em vez de confiar
+ * num `conversation.assigned` republicado na reconexão. `null` = desconhecido
+ * (árbitro inalcançável ou resposta ilegível) e **nunca** deve ser lido como
+ * "ninguém detém": os dois exigem condutas opostas do chamador.
+ */
+export async function workTaskHolder(
+  routingUrl: string,
+  adminToken: string | undefined,
+  a: { tenant_id: string; pool_id: string; session_id: string },
+): Promise<WorkTaskHolder | null> {
+  try {
+    const raw = await callRouting(routingUrl, adminToken, "/v1/work_queue/holder", {
+      tenant_id:  a.tenant_id,
+      pool_id:    a.pool_id,
+      session_id: a.session_id,
+    }) as Record<string, unknown>
+    if (!raw || typeof raw !== "object" || typeof raw["found"] !== "boolean") return null
+    return {
+      found:            raw["found"] as boolean,
+      instance_id:      (raw["instance_id"]      as string) ?? undefined,
+      claimant_user_id: (raw["claimant_user_id"] as string) ?? undefined,
+      claimed_at:       (raw["claimed_at"]       as string) ?? undefined,
+      via:              String(raw["via"] ?? "none"),
+      in_queue:         raw["in_queue"] === true,
+    }
+  } catch {
+    return null
+  }
 }
 
 export interface ReleaseArgs {

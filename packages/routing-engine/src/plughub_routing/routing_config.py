@@ -35,6 +35,15 @@ logger = logging.getLogger("plughub.routing.routing_config")
 # Defaults matching Config API seed — routing namespace
 _DEFAULTS: dict[str, Any] = {
     "claim_lease_s":            180,   # Frente 1 (pull): TTL da lease do claim
+    # Fase C (ADR requeue, D3): janela da reserva criada por QUEDA DE TRANSPORTE em
+    # fila pull POOLED (aprovação e afins). O item volta reservado ao dono anterior
+    # e transborda para o pool inteiro depois destes segundos.
+    # NÃO existe chave equivalente para `-int`: fila interna é AUTHOR-BOUND e não
+    # transborda em tempo nenhum (ver `Router._drop_reserve_window_s`). Uma
+    # `drop_reserve_window_internal_s` chegou a ser semeada em 2026-08-04 e foi
+    # removida no mesmo dia — era o erro de categoria que a migration
+    # `20260730000000_pool_internal_queue` nomeia, com cara de parâmetro.
+    "drop_reserve_window_default_s":   30,
     "sla_default_ms":           480_000,
     "estimated_wait_factor":    0.7,
     "congestion_sla_factor":    1.5,

@@ -108,10 +108,48 @@ def _claim_lease_key(tenant_id: str, pool_id: str, session_id: str) -> str:
     rede inexistente por outra é mais cara que o erro original**, porque agora tem
     data recente e passa por conferida.)*
 
-    O único consumidor é `work_task_holder` (leitura A5 pelo channel-gateway), que
-    **falha aberto** quando a lease sumiu — o resume não é bloqueado por isso.
+    O consumidor é `work_task_holder` (leitura A5 pelo channel-gateway), onde a lease
+    é a PRIMEIRA via, não a única: desde a Fase A (2026-08-04) a posse tem um registro
+    durável (`_claim_record_key`) com TTL casado ao prazo do item, e é ele que responde
+    na janela em que esta chave já venceu. Enquanto a lease era a única fonte, o check
+    do submit **falhava aberto** exatamente aí — e é essa a janela em que um F5 do
+    Console devolve o item à fila. A lease sobrevive por ser barata e direta; ela
+    deixou de ser load-bearing.
     """
     return f"{tenant_id}:pool:{pool_id}:claim:{session_id}"
+
+def _claim_record_key(tenant_id: str, pool_id: str, session_id: str) -> str:
+    """
+    Fase A (ADR requeue/afinidade, D6) — REGISTRO DURÁVEL de posse do item de
+    trabalho: `{instance_id, claimant_user_id, claimed_at}`, com **TTL casado ao
+    prazo do ITEM** (não ao da lease).
+
+    Existe porque a posse precisa ser legível no instante do SUBMIT, e a
+    `claim_lease` não serve para isso: ela tem TTL de 180 s contra um prazo de
+    item de 24 h, então na janela em que o check importa ela já sumiu — e o
+    check A5 do channel-gateway **falhava aberto** justamente ali. É a mesma
+    regra que a fix da lacuna 2 (2026-08-03) aplicou ao `work_task_expire`:
+    *posse não pode morar só numa chave cujo TTL é menor que o prazo do item.*
+
+    **Não é a `claim_lease` com outro TTL, e não a substitui.** A lease é o
+    carimbo operacional curto (barato, é o que o holder consulta primeiro);
+    este é o registro. Fundi-los faria uma chave só responder duas perguntas
+    com regimes de expiração incompatíveis.
+
+    **Também não é `assigned_to`.** O `assigned_to` do pacote de fila é
+    *reserva* (Camada B: quem PODE puxar, com transbordo por
+    `fallback_to_pool_after_s`) — escopo de alocação. Posse é fato de
+    *(item, instante)*. Ler um do outro rejeitaria o claimante legítimo do
+    transbordo e aceitaria o dono original que já não detém nada; e em item
+    pooled (`assigned_to` vazio) não responderia nada.
+
+    Ciclo de vida — escrito em `work_task_claim`, apagado em TODO caminho que
+    tira a posse: `work_task_release`, `work_task_expire` e o **re-parque**
+    (`route()`, pull), que é o caminho do F5 e a razão de o registro existir.
+    Registro sobrevivente a um re-parque devolveria posse a quem já a perdeu —
+    o defeito que a Fase A fecha, invertido.
+    """
+    return f"{tenant_id}:pool:{pool_id}:claim_record:{session_id}"
 
 def _queue_key(tenant_id: str, pool_id: str) -> str:
     """Sorted set of queued contacts (score = queued_at_ms)."""
@@ -2580,6 +2618,68 @@ class InstanceRegistry:
             return data if isinstance(data, dict) else None
         except Exception:
             return None
+
+    # ── Fase A / D6 — registro durável de posse (ver `_claim_record_key`) ──────
+
+    async def write_claim_record(
+        self, tenant_id: str, pool_id: str, session_id: str,
+        instance_id: str, claimant_user_id: str, ttl_seconds: int,
+    ) -> None:
+        """Grava o registro durável de posse. TTL vem do PRAZO DO ITEM."""
+        await self._redis.set(
+            _claim_record_key(tenant_id, pool_id, session_id),
+            json.dumps({
+                "instance_id":      instance_id,
+                "claimant_user_id": claimant_user_id,
+                "claimed_at":       datetime.now(timezone.utc).isoformat(),
+            }),
+            ex=max(int(ttl_seconds), 60),
+        )
+
+    async def read_claim_record(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> dict | None:
+        """Lê o registro durável de posse. None = ninguém detém (ou pré-Fase A)."""
+        raw = await self._redis.get(_claim_record_key(tenant_id, pool_id, session_id))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw if isinstance(raw, str) else raw.decode())
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
+    async def delete_claim_record(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> None:
+        """Remove o registro durável de posse (release / expire / re-parque)."""
+        await self._redis.delete(_claim_record_key(tenant_id, pool_id, session_id))
+
+    async def is_queued(
+        self, tenant_id: str, pool_id: str, session_id: str
+    ) -> bool:
+        """
+        A sessão é membro do ZSET da fila deste pool AGORA?
+
+        Fato distinto de "o JSON do contato existe": `atomic_claim_dequeue` faz
+        ZREM e **mantém** o JSON (o release re-enfileira a partir dele). Só o
+        ZSET responde "está na fila", e é sobre ele que o veredicto
+        `not-held-and-in-queue` do A5 se apoia — item na fila não tem dono, por
+        construção, então submeter sem claim é submeter sobre trabalho alheio.
+
+        Falha de leitura devolve False **com log**: `True` inventado aqui viraria
+        um 403 sobre submissão legítima.
+        """
+        try:
+            score = await self._redis.zscore(_queue_key(tenant_id, pool_id), session_id)
+        except Exception as exc:
+            logger.warning(
+                "is_queued: leitura do ZSET falhou pool=%s session=%s — %s "
+                "(devolvendo False; o A5 degrada para permissivo)",
+                pool_id, session_id, exc,
+            )
+            return False
+        return score is not None
 
     async def get_full_queued_contact(
         self, tenant_id: str, session_id: str

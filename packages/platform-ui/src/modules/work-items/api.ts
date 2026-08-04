@@ -12,11 +12,17 @@
  * Analytics — fatia 2, outra fonte, outro ciclo.
  */
 
-/** Estado derivado do cruzamento ledger × ZSET × lease. Ver lib/work-queue.ts. */
+/**
+ * Estado derivado do cruzamento ledger × ZSET × lease × registro de posse.
+ * Ver lib/work-queue.ts.
+ */
 export type WorkTaskState =
   | 'unclaimed'    // na fila, ninguém pegou
   | 'claimed'      // reivindicada, formulário não submetido
-  | 'orphaned'     // pool pull, fora da fila e sem lease — lease venceu sem reaper
+  // Fase A (D6) estreitou `orphaned`: item cuja lease de 180 s venceu mas que tem
+  // dono no registro durável agora aparece como `claimed`. Sobrou aqui o caso
+  // literal — fora da fila, sem lease E sem registro. Não é mais ruído esperado.
+  | 'orphaned'     // pool pull, fora da fila e SEM dono em nenhuma das duas fontes
   | 'not_queued'   // pool push — não é item de fila
   | 'unknown'      // sem pool_config no cache — infra ausente, nada presumido
 
@@ -35,6 +41,8 @@ export interface PendingWorkTask {
   overdue:             boolean
   claimed_by:          string | null
   claimed_at:          string | null
+  /** Fonte que nomeou o dono: 'lease' (fresca) | 'record' (durável, Fase A). */
+  claimed_via:         'lease' | 'record' | null
 }
 
 export interface PendingResponse {

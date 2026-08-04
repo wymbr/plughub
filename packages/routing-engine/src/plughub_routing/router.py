@@ -36,6 +36,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("plughub.routing.router")
 
+# Fase A / D6 — TTL do registro durável de posse quando o item chega SEM
+# `work_item_deadline`. 25 h é a mesma convenção do ledger
+# `{t}:work_task:{session}` (24 h de prazo + folga), de propósito: as duas chaves
+# descrevem a vida do MESMO item, e um registro que morre antes do ledger
+# devolveria o fail-open que a Fase A fecha — só que ~20 h depois, quando
+# ninguém está mais olhando.
+_CLAIM_RECORD_FALLBACK_TTL_S = 25 * 3600
+
+# Fase C (D3) — sufixo reservado das filas internas author-bound. É garantia por
+# CONSTRUÇÃO, não convenção: o agent-registry rejeita criação manual de pool com
+# este sufixo (ADR internal-work-queue, D6). Mesmo discriminador que o relatório
+# de pendências usa em `mcp-server-plughub/lib/work-queue.ts`.
+_INTERNAL_POOL_SUFFIX = "-int"
+
 
 class Router:
     def __init__(
@@ -130,6 +144,16 @@ class Router:
             # aqui) não pode ficar com lease órfã apontando a um claim que acabou.
             asyncio.create_task(
                 self._instances.delete_claim_lease(
+                    event.tenant_id, event.pool_id, event.session_id
+                )
+            )
+            # Fase A / D6 — e o REGISTRO durável junto, pela mesma razão e com mais
+            # força: este é o caminho do F5 (drop de transporte → bridge re-rota →
+            # item volta ao ZSET). Se o registro sobrevivesse ao re-parque, a aba
+            # velha do agente continuaria provando posse sobre um item que já está
+            # na fila — que é exatamente o cenário que a Fase A existe para recusar.
+            asyncio.create_task(
+                self._instances.delete_claim_record(
                     event.tenant_id, event.pool_id, event.session_id
                 )
             )
@@ -547,6 +571,48 @@ class Router:
         # Config API namespace `routing` (cache routing_config); default 180.
         return int(routing_config.get("claim_lease_s", 180))
 
+    @staticmethod
+    def _claim_record_ttl_s(contact: dict, session_id: str) -> int:
+        """
+        Fase A / D6 — TTL do registro durável de posse = o que RESTA do prazo do
+        item (`work_item_deadline`, carimbado no despacho pelo channel-gateway).
+
+        Derivado, não configurável: o registro tem de cobrir a janela em que o
+        item pode ser submetido, e essa janela é o prazo do item — um knob
+        separado só criaria uma segunda régua que diverge da primeira no
+        primeiro ajuste.
+
+        Prazo ausente/ilegível → fallback de 25 h **com log**, mesma convenção do
+        ledger `{t}:work_task:{session}`. Nunca cai no `claim_lease_s`: um
+        registro de 180 s seria a lease com outro nome, e reabriria o fail-open.
+        """
+        raw = str(contact.get("work_item_deadline") or "")
+        if raw:
+            try:
+                deadline = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                remaining = int(
+                    (deadline - datetime.now(timezone.utc)).total_seconds()
+                )
+                if remaining > 0:
+                    return remaining
+                logger.info(
+                    "claim_record: prazo do item já vencido (session=%s deadline=%s) — "
+                    "TTL cai no piso; o expire é quem encerra",
+                    session_id, raw,
+                )
+                return 60
+            except Exception as exc:
+                logger.warning(
+                    "claim_record: work_item_deadline ilegível (session=%s valor=%r): %s "
+                    "— usando fallback de 25 h", session_id, raw, exc,
+                )
+        else:
+            logger.info(
+                "claim_record: item sem work_item_deadline (session=%s) — fallback de "
+                "25 h (convenção do ledger work_task)", session_id,
+            )
+        return _CLAIM_RECORD_FALLBACK_TTL_S
+
     async def work_task_holder(
         self,
         tenant_id:  str,
@@ -554,18 +620,52 @@ class Router:
         session_id: str,
     ) -> dict:
         """
-        A5 — leitura da lease do claim (holder) pelo ÁRBITRO. O ingress de aprovação
-        (channel-gateway) usa isto para o check caller==claimant no resume interno, sem
-        ler o Redis do routing direto (invariante do árbitro único). Retorna
-        {found, instance_id?, claimed_at?}.
+        A5 — quem detém este item de trabalho, respondido pelo ÁRBITRO. O ingress de
+        resume (channel-gateway) usa isto para o check caller==claimant, sem ler o
+        Redis do routing direto (invariante do árbitro único).
+
+        Duas fontes, nesta ordem: a `claim_lease` (carimbo curto, mais barato) e o
+        **registro durável** (`_claim_record_key`), que sobrevive ao TTL da lease e
+        cobre a janela em que o submit de fato acontece. Qual respondeu vai em `via`
+        — sem isso, "posse ausente" e "posse expirada" chegariam ao chamador como o
+        mesmo silêncio.
+
+        `in_queue` é o terceiro fato, e é o que torna o veredicto **fechável**: item
+        que está no ZSET não tem dono nenhum (por construção — o claim é um ZREM), então
+        `found=False, in_queue=True` é uma resposta POSITIVA ("ninguém detém, está na
+        fila"), não uma ausência de informação. `found=False, in_queue=False` continua
+        sendo ausência honesta (pool push, item já encerrado, claim pré-Fase A) e é o
+        único caso em que o chamador deve degradar para permissivo.
+
+        A resposta é COMPOSTA das duas fontes, não devolvida pela que respondeu
+        primeiro. `via`/`instance_id`/`claimed_at` vêm de quem PROVOU a posse; o
+        `claimant_user_id` vem sempre do **registro**, que é seu único escritor — a
+        lease não o carrega. Devolver a chave crua fazia o campo ser `null` nos
+        primeiros 180 s e correto depois: um consumidor que o comparasse com
+        `assigned_to` (é o que a Fase C/D3 vai fazer) falharia aberto justamente na
+        janela quente. Campo cuja presença depende do tier de armazenamento é o
+        valor plausível que a § Postura de Engenharia proíbe.
+
+        Retorna {found, instance_id?, claimant_user_id?, claimed_at?, via, in_queue}.
         """
-        lease = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
-        if not lease:
-            return {"found": False}
+        in_queue = await self._instances.is_queued(tenant_id, pool_id, session_id)
+        lease    = await self._instances.read_claim_lease(tenant_id, pool_id, session_id)
+        record   = await self._instances.read_claim_record(tenant_id, pool_id, session_id)
+
+        proof = lease or record
+        if not proof:
+            return {"found": False, "via": "none", "in_queue": in_queue}
+
         return {
-            "found":       True,
-            "instance_id": lease.get("instance_id"),
-            "claimed_at":  lease.get("claimed_at"),
+            "found":            True,
+            "instance_id":      proof.get("instance_id"),
+            "claimed_at":       proof.get("claimed_at"),
+            # Único escritor. Ausente ⇒ o registro morreu antes da lease (só
+            # acontece com prazo de item menor que 180 s) — `None` aqui é
+            # ausência honesta, não "não há claimant".
+            "claimant_user_id": (record or {}).get("claimant_user_id"),
+            "via":              "lease" if lease else "record",
+            "in_queue":         in_queue,
         }
 
     async def work_task_claim(
@@ -671,8 +771,12 @@ class Router:
             )
             return {"claimed": False, "reason": "no_capacity"}
 
-        # 5 — mark_busy + lease
+        # 5 — mark_busy + lease + registro durável de posse
         await self._instances.mark_busy(tenant_id, pool_id, instance_id, session_id)
+        _claimant = claimant_user_id or (
+            instance_id[len("human-"):] if instance_id.startswith("human-")
+            else instance_id
+        )
         try:
             await self._instances.write_claim_lease(
                 tenant_id, pool_id, session_id, instance_id, self._claim_lease_s,
@@ -680,6 +784,20 @@ class Router:
         except Exception as exc:
             logger.warning(
                 "work_task_claim: could not write lease session=%s — %s", session_id, exc
+            )
+        # Fase A / D6 — o registro que o SUBMIT confere. Falhar aqui não desfaz o
+        # claim (o agente já detém a vaga), mas tem de gritar: sem esta chave o
+        # check A5 volta a degradar para permissivo assim que a lease vencer.
+        try:
+            await self._instances.write_claim_record(
+                tenant_id, pool_id, session_id, instance_id, _claimant,
+                self._claim_record_ttl_s(contact, session_id),
+            )
+        except Exception as exc:
+            logger.warning(
+                "work_task_claim: could not write claim RECORD session=%s instance=%s — %s "
+                "(o submit desta sessão degradará para permissivo após a lease vencer)",
+                session_id, instance_id, exc,
             )
 
         # 6 — publica conversations.routed (reusa todo o downstream)
@@ -715,17 +833,67 @@ class Router:
             "pool_id": pool_id, "contact": contact,
         }
 
+    def _drop_reserve_window_s(self, pool_id: str) -> int | None:
+        """
+        Fase C (D3) — janela da reserva por queda. `None` = reserva PERMANENTE.
+
+        **Fila interna (`-int`) não transborda. Nunca.** Não é uma janela generosa:
+        é a ausência de janela. A migration `20260730000000_pool_internal_queue`
+        já havia fechado isso, e vale citá-la porque é a razão inteira:
+
+        > `fallback_to_pool_after_s` (transbordo) existe porque item de fila é
+        > trabalho POOLED: qualquer agente do time serve, e a reserva é uma
+        > preferência de roteamento. Wrap-up não é isso — só quem atendeu pode
+        > classificar o próprio atendimento. A identidade do executor é parte da
+        > DEFINIÇÃO da tarefa, não uma preferência: é trabalho AUTHOR-BOUND, e
+        > aplicar transbordo a ele é **erro de categoria**.
+
+        Transbordar um wrap-up entregaria a outro agente a classificação de um
+        atendimento que ele não fez — o mesmo "fingir ser o autor" que a D5 da ADR
+        author-bound recusou ao supervisor. A saída de um item `-int` abandonado é
+        o PRAZO ou o `work_task_expire` do supervisor (D7), que encerra **sem
+        disposição**; nunca outro autor.
+
+        Demais filas pull são POOLED por definição — aprovação inclusive ("outro
+        aprovador pode decidir") — e ali a janela existe e é curta: a preferência
+        pelo agente anterior não pode custar tempo a quem espera.
+
+        *Uma primeira versão desta função devolvia 300 s para `-int`, cometendo
+        exatamente o erro que a migration nomeia. Achado por revisão em 2026-08-04,
+        antes de qualquer efeito: o caminho normal nunca chega aqui, porque um
+        wrap-up real já traz `assigned_to` do despacho e `_apply_drop_reservation`
+        não sobrescreve reserva existente.*
+        """
+        if pool_id.endswith(_INTERNAL_POOL_SUFFIX):
+            return None
+        return int(routing_config.get("drop_reserve_window_default_s", 30))
+
     async def work_task_release(
         self,
         tenant_id:   str,
         pool_id:     str,
         session_id:  str,
         instance_id: str,
+        reserve_to_previous: bool = False,
     ) -> dict:
         """
         Pull: devolve um contato claimado à fila — remove a lease, libera a vaga do
         recurso (release_instance) e re-enfileira pelos critérios do routing
-        (add_queued_contact, NÃO preserva posição). O agente desistiu da task.
+        (add_queued_contact, NÃO preserva posição).
+
+        **Dois chamadores com intenções OPOSTAS** (Fase C / D3), e é o que
+        `reserve_to_previous` separa:
+
+        · `False` (default) — **desistência deliberada**: o botão "Return to queue"
+          do Console. O agente largou a task de propósito; reservá-la de volta a ele
+          a esconderia do pool inteiro pela duração da janela. O default é este
+          justamente porque é o inócuo: um chamador que ignore o parâmetro mantém o
+          comportamento anterior.
+
+        · `True` — **queda de transporte**: o bridge, no `agent_disconnect`. Aqui o
+          agente NÃO desistiu, e a digitação parcial só existe no navegador dele. O
+          item volta **reservado a ele** com transbordo automático
+          (`_apply_drop_reservation`).
 
         **F3a** — a liberação recomputa o snapshot dos pools do RECURSO (fan-out). Sem
         isto a vaga voltava no semáforo e o snapshot seguia afirmando-a consumida, em
@@ -743,12 +911,29 @@ class Router:
         `queue_length` passando com este refresh desligado. O que só o recompute
         produz — e o que os testes cobrem — é a CAPACIDADE.
         """
+        # Fase C — o dono anterior sai do REGISTRO, e por isso ele é lido ANTES de
+        # ser apagado. A lease não serve: ela não carrega `claimant_user_id`, e
+        # `assigned_to` é casado por user, não por instância.
+        prev_record = (
+            await self._instances.read_claim_record(tenant_id, pool_id, session_id)
+            if reserve_to_previous else None
+        )
+
         await self._instances.delete_claim_lease(tenant_id, pool_id, session_id)
+        # Fase A / D6 — a posse acaba aqui, então o registro tem de acabar junto.
+        # Registro sobrevivente a um release devolveria "eu detenho" a quem
+        # devolveu o item — o mesmo defeito da Fase A, com o sinal trocado.
+        await self._instances.delete_claim_record(tenant_id, pool_id, session_id)
         remaining = await self._instances.release_instance(
             tenant_id, instance_id, session_id
         )
 
         contact = await self._instances.get_full_queued_contact(tenant_id, session_id)
+        reserved_to: str | None = None
+        if contact is not None and reserve_to_previous:
+            reserved_to = self._apply_drop_reservation(
+                contact, pool_id, session_id, instance_id, prev_record,
+            )
         if contact is not None:
             await self._instances.add_queued_contact(
                 tenant_id, pool_id, session_id, contact,
@@ -758,10 +943,109 @@ class Router:
             tenant_id, instance_id, extra_pools=[pool_id],
         )
         logger.info(
-            "work_task_release: released session=%s instance=%s pool=%s remaining=%d requeued=%s",
+            "work_task_release: released session=%s instance=%s pool=%s remaining=%d "
+            "requeued=%s reserved_to=%s",
             session_id, instance_id, pool_id, remaining, contact is not None,
+            reserved_to or "-",
         )
-        return {"released": True, "requeued": contact is not None}
+        return {
+            "released": True,
+            "requeued": contact is not None,
+            # Explícito no retorno: `None` distingue "não pediu reserva" de "pediu
+            # e não coube" (item já reservado ao autor). O chamador que só olhasse
+            # `released` não veria a diferença.
+            "reserved_to": reserved_to,
+        }
+
+    def _apply_drop_reservation(
+        self,
+        contact:     dict,
+        pool_id:     str,
+        session_id:  str,
+        instance_id: str,
+        prev_record: dict | None,
+    ) -> str | None:
+        """
+        Fase C (D3) — muta `contact` para que ele volte à fila RESERVADO ao dono
+        anterior, com transbordo automático. Devolve o user_id reservado, ou None.
+
+        Reusa integralmente o mecanismo da **Camada B** (`assigned_to` +
+        `fallback_to_pool_after_s` + `assigned_at_ms`), já implementado e com smoke
+        próprio, e cujo gate vive dentro do `work_task_claim`. A alternativa
+        descartada no ADR era uma *carência* — um timer novo, específico de
+        desconexão, resolvendo um caso do que a reserva resolve em geral.
+
+        Três regras, e nenhuma é arbitrária:
+
+        1. **Nunca sobrescreve `assigned_to` existente.** Num item author-bound
+           (`-int`) ele é o AUTOR do atendimento — fato mais forte e mais durável
+           que "quem estava com ele agora". Sobrescrever transferiria o vínculo
+           autoral para um claimante de transbordo, silenciosamente.
+        2. **A âncora reinicia (`assigned_at_ms = agora`).** A reserva de queda é
+           um evento novo; a janela conta a partir dela. Isso é o OPOSTO da âncora
+           autoral, que `add_queued_contact` preserva de propósito através de
+           re-enfileiramentos — são duas reservas com vidas diferentes, e por isso
+           o carimbo é feito aqui, e não lá.
+        3. **O dono sai do registro de posse; o `instance_id` é só o fallback.**
+           `assigned_to` casa por USER (`work_task_claim` deriva `human-{userId}`),
+           então usar a instância crua produziria uma reserva que nunca casa. Sem
+           registro (expirou), deriva da instância — e diz no log que derivou.
+        """
+        existing = contact.get("assigned_to")
+        if existing:
+            logger.info(
+                "work_task_release: reserva de queda NÃO aplicada — item já reservado "
+                "a %s (vínculo autoral vence a posse transitória): session=%s pool=%s",
+                existing, session_id, pool_id,
+            )
+            return None
+
+        claimant = (prev_record or {}).get("claimant_user_id") or ""
+        source   = "claim_record"
+        if not claimant:
+            claimant = (
+                instance_id[len("human-"):] if instance_id.startswith("human-")
+                else instance_id
+            )
+            source = "instance_id"
+            # Degradação nunca silenciosa: sem registro, o dono é DEDUZIDO.
+            logger.warning(
+                "work_task_release: registro de posse ausente — dono da reserva "
+                "derivado de instance_id=%s (session=%s pool=%s)",
+                instance_id, session_id, pool_id,
+            )
+        if not claimant:
+            logger.warning(
+                "work_task_release: sem dono identificável — item volta à fila SEM "
+                "reserva (session=%s pool=%s)", session_id, pool_id,
+            )
+            return None
+
+        window_s = self._drop_reserve_window_s(pool_id)
+        contact["assigned_to"]    = claimant
+        contact["assigned_at_ms"] = int(
+            datetime.now(timezone.utc).timestamp() * 1000
+        )
+        if window_s is None:
+            # Reserva PERMANENTE: o campo fica AUSENTE, que é como a Camada B
+            # codifica "não transborda" (`fallback ausente = reserva permanente`).
+            # Gravar um número grande seria a mesma coisa com prazo de validade —
+            # e trabalho author-bound não tem prazo para deixar de ser do autor.
+            contact.pop("fallback_to_pool_after_s", None)
+            logger.info(
+                "work_task_release: item reservado a %s PERMANENTEMENTE (fila interna "
+                "author-bound, fonte=%s) — session=%s pool=%s. Não transborda; a saída "
+                "é o prazo ou o expire do supervisor.",
+                claimant, source, session_id, pool_id,
+            )
+        else:
+            contact["fallback_to_pool_after_s"] = window_s
+            logger.info(
+                "work_task_release: item reservado a %s por %ds (fonte=%s) — session=%s "
+                "pool=%s. Transborda para o pool inteiro depois disso.",
+                claimant, window_s, source, session_id, pool_id,
+            )
+        return claimant
 
     async def work_task_expire(
         self,
@@ -816,6 +1100,19 @@ class Router:
         instance_id  = (lease or {}).get("instance_id") or ""
         claimed_via  = "lease" if instance_id else ""
         if not instance_id:
+            # Fase A / D6 — segunda via, ANTES do semáforo: o registro durável guarda
+            # exatamente o dono, com TTL casado ao prazo do item, e é justamente no
+            # cenário que motiva o expire (reivindicado, lease vencida) que ele ainda
+            # está lá. A busca no semáforo continua como terceira via — ela responde
+            # "quem ocupa a vaga", que é a mesma resposta por caminho mais caro e só
+            # enquanto a vaga não foi devolvida por outro caminho.
+            record = await self._instances.read_claim_record(
+                tenant_id, pool_id, session_id
+            )
+            instance_id = (record or {}).get("instance_id") or ""
+            if instance_id:
+                claimed_via = "record"
+        if not instance_id:
             instance_id = await self._instances.find_occupant_instance(
                 tenant_id, pool_id, session_id
             ) or ""
@@ -835,6 +1132,8 @@ class Router:
         )
         await self._instances.remove_queued_contact(tenant_id, pool_id, session_id)
         await self._instances.delete_claim_lease(tenant_id, pool_id, session_id)
+        # Fase A / D6 — o item deixa de existir; a posse dele também.
+        await self._instances.delete_claim_record(tenant_id, pool_id, session_id)
 
         remaining = -1
         if instance_id:

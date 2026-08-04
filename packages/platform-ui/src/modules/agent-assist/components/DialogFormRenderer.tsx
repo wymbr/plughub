@@ -261,7 +261,23 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
           payload,
         }),
       })
-      if (!res.ok) { setError(`HTTP ${res.status}`); setBusy(null); return }
+      if (!res.ok) {
+        // O MOTIVO da recusa vem no corpo (`detail`) e é acionável: 403 por item
+        // devolvido à fila ("reivindique antes de submeter") pede uma ação do
+        // operador; 403 por ABAC não pede nenhuma. Exibir só o status colapsa os
+        // dois no mesmo "HTTP 403" e transforma uma instrução em enigma — é
+        // degradação silenciosa do motivo, na superfície onde ela custa mais.
+        // Introduzido junto com o gate de posse da Fase A, que é quem passou a
+        // produzir 403 com motivo útil.
+        let detail = ""
+        try {
+          const body = await res.json()
+          detail = typeof body?.detail === "string" ? body.detail : ""
+        } catch { /* corpo não-JSON: sobra o status, que é melhor que nada */ }
+        setError(detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`)
+        setBusy(null)
+        return
+      }
       setDone(true)
       onResolved?.()
     } catch (e) {

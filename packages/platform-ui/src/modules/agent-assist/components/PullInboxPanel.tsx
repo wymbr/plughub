@@ -175,9 +175,25 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   //   reservedToMe  — assigned_to == este agente.
   //   overflowed    — reservado a outro, mas a janela (fallback) já expirou → claimable.
   //   reservedOther — reservado a outro e ainda na janela → NÃO exibir (não é meu).
-  const reservationOf = useCallback((c: QueueContact): "shared" | "reservedToMe" | "overflowed" | "reservedOther" => {
+  const reservationOf = useCallback((c: QueueContact): "shared" | "reservedToMe" | "reservedToMeExpired" | "overflowed" | "reservedOther" => {
     if (!c.assigned_to) return "shared"
-    if (c.assigned_to === myUserId) return "reservedToMe"
+    if (c.assigned_to === myUserId) {
+      // A janela vale para a MINHA reserva também. Passado
+      // `fallback_to_pool_after_s`, o árbitro libera o item a qualquer um do pool
+      // (o gate vive dentro do `work_task_claim`), e continuar exibindo "Reservado
+      // a você" afirmaria uma exclusividade que acabou.
+      //
+      // Assimetria encontrada em 2026-08-04, ao validar a Fase C na tela: o
+      // transbordo era calculado só para a reserva ALHEIA (logo abaixo), e o
+      // próprio dono via o crachá para sempre. Valor plausível — ninguém olha um
+      // rótulo que diz o que se espera dele.
+      const anchorMine = c.assigned_at_ms ?? c.first_queued_ms ?? c.queued_at_ms
+      const expiredMine =
+        c.fallback_to_pool_after_s != null &&
+        anchorMine != null &&
+        (nowMs - anchorMine) / 1000 >= c.fallback_to_pool_after_s
+      return expiredMine ? "reservedToMeExpired" : "reservedToMe"
+    }
     // reservado a outro: só aparece se transbordou (janela expirada).
     if (c.fallback_to_pool_after_s == null) return "reservedOther"  // reserva permanente
     const anchor = c.assigned_at_ms ?? c.first_queued_ms ?? c.queued_at_ms
@@ -226,7 +242,11 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
     if (claiming) return
     const target = contacts.find(
       c => c.auto_attend === true
-        && reservationOf(c) === "reservedToMe"
+        // Aceita a reserva EXPIRADA também: o item continua sendo o wrap-up deste
+        // agente, e depois da janela ele não perde o direito de reivindicar — perde
+        // a exclusividade. Restringir a `reservedToMe` faria o auto-atendimento
+        // parar de funcionar justamente no caso em que o agente demorou a voltar.
+        && (reservationOf(c) === "reservedToMe" || reservationOf(c) === "reservedToMeExpired")
         && !autoAttendedRef.current.has(c.session_id),
     )
     if (target) {
@@ -240,7 +260,10 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   // Agrupa por pool (na ordem de pullPools). Camada B: esconde itens reservados
   // a OUTRO recurso enquanto na janela (reservedOther); ordena os reservados a
   // MIM primeiro, depois mais-antigo-primeiro.
-  const rank = (r: string) => (r === "reservedToMe" ? 0 : 1)
+  // Ordenação: o que é (ou era) meu primeiro. A reserva expirada continua no topo
+  // de propósito — é o item que este agente mais quer de volta, e agora com pressa,
+  // porque deixou de ser exclusivo.
+  const rank = (r: string) => (r === "reservedToMe" || r === "reservedToMeExpired" ? 0 : 1)
   const groups = pullPools
     .map(pid => ({
       pool_id: pid,
@@ -314,6 +337,11 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                               {reservation === "reservedToMe" && (
                                 <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-primary-light text-primary">
                                   {t("pullInbox.reservedToYou", { defaultValue: "Reservado a você" })}
+                                </span>
+                              )}
+                              {reservation === "reservedToMeExpired" && (
+                                <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-warning-light text-warning-text">
+                                  {t("pullInbox.reservationExpired", { defaultValue: "Reserva expirada" })}
                                 </span>
                               )}
                               {reservation === "overflowed" && (

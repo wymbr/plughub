@@ -98,7 +98,7 @@ Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 
 
 ---
 
-## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03 — restam 4 lacunas abertas)*
+## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03; **2b REENQUADRADA em 2026-08-04 — no lugar dela apareceu um defeito de duplicação, aberto e mais grave**; seguem abertas 2/3/4/6)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:
 > fatia 1 (Monitor › Pendências) ✅ e fatia 2 (Analítico › Histórico de Wrap-up) ✅, ambas em
@@ -201,7 +201,7 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 | 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
 | 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
-| 6 | **`close_reason` de segmento não tem enum** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. Hoje quem enumera o domínio o descobre por arqueologia |
+| 6 | **`close_reason` de segmento não tem enum** — ⚠️ **com produtor concreto desde 2026-08-04** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. **O `_TRANSPORT_TO_CLOSE_REASON` do bridge serve os DOIS** (`main.py:5755` = contato; `:6401` = segmento), e por isso todo `agent_disconnect` (um F5 no Console) gera segmento SEM `close_reason`, com aviso no log. Conserto = separar os mapas, não estender o compartilhado. Ver § "um F5 no Console devolve à fila um item em trabalho" |
 
 ### Lacuna 2 — o que fechou e o que não *(2026-08-03)*
 
@@ -236,15 +236,186 @@ depender só da lease. Qual via respondeu vai no log e em `claimed_via`. `was_cl
 reportar `False` para item que FOI reivindicado. Testes: 2 novos em `test_pull_release_snapshot.py`
 (213 na suíte) + `infra/test/mutation_claim_lease_slot.sh` (M1 e M2, 6 atribuições).
 
-**❌ Segue aberto (2b): a janela de invisibilidade.** Entre os 180 s e o prazo do item, o trabalho
-está fora do ZSET e **nem o próprio dono consegue retomá-lo**. Um reaper que re-enfileirasse
-fecharia isso, mas precisa de política decidida antes do código: re-enfileirar preserva o
-`assigned_to`? quantas vezes, antes de virar transbordo? E aí sim vale o número — que o estado
-`orphaned` do Monitor › Pendências mede, dentro da janela de 25 h do ledger.
+**⚠️ 2b REENQUADRADA PELA MEDIÇÃO (2026-08-04) — a descrição abaixo estava errada.** O texto que
+ficava aqui dizia: *"entre os 180 s e o prazo do item o trabalho está fora do ZSET e nem o próprio
+dono consegue retomá-lo; um reaper que re-enfileirasse fecharia isso"*. Foram medidas as duas
+metades, e **as duas caíram**:
+
+- o dono **recupera** o formulário depois de um F5 — não por restauração de estado, mas porque o
+  mcp-server **replay-a o `conversation.assigned`** na reconexão ao pool;
+- o item **não fica** reivindicado durante a janela: ele **volta à fila**. O estado observado é
+  `unclaimed`, não `orphaned` — e o reaper proposto faria o que o defeito já faz sozinho.
+
+Ou seja, o gate *"medir `orphaned` antes de construir"* nunca produziria número: o estado que
+aparece é outro. Ver § abaixo — o que existe é o defeito **oposto** ao descrito, e mais grave.
+Probes: `infra/test/probe_invisibility_window.sh` (as duas lentes) e
+`probe_console_restore_after_reload.sh` (as duas observações de F5).
 
 > **A regra que este caso deixa:** *posse de um item de trabalho não pode morar só numa chave cujo
 > TTL é menor que o prazo do próprio item.* Quando mora, o caminho de limpeza chega sempre depois
 > da testemunha, e a limpeza fica incompleta **sem nada ficar vermelho**.
+
+### ❌ ABERTO E GRAVE — um F5 no Console devolve à fila um item em trabalho *(achado 2026-08-04)*
+
+Procurando o número da 2b, apareceu o defeito contrário. **Um reload do Console (≈2 s de WS
+fechado) é interpretado como abandono do atendimento**, e o item reivindicado volta a ser
+reivindicável enquanto o formulário segue na tela do primeiro agente. Medido ponta a ponta em
+`formfill_demo` (probes `probe_reclaim_duplication.sh` e `probe_requeue_culprit.sh`):
+
+| t | Evento (log real, session `dbdb1e94…`) |
+|---|---|
+| 10:56:30 | `work_task_claim: claimed … occ=1` — item sai do ZSET, vaga tomada, form na tela |
+| 10:56:53 | `WS closed: pool=formfill_demo` — **o F5** |
+| 10:56:55 | `agent_disconnect published` → `G7-decision: remaining=0 → continuation=False` → `agent_done published to lifecycle (human agent)` |
+| 10:56:55 | `agent_disconnect: last human dropped — re-routing to pool=formfill_demo (contact kept alive)` |
+| 10:56:55 | `Queued session=… pool=formfill_demo — no agents available` — **de volta ao ZSET** |
+| 10:56:59 | `Forwarding conversation.assigned …` — o form REAPARECE na tela por replay do pub/sub |
+
+Estado final conferido: item no ZSET **e** instância ocupando vaga
+(`dbdb1e94::bfa4d4b2::formfill_demo`) **e** lease ausente. Dois donos possíveis para o mesmo
+trabalho: quem puxar entra numa sessão em atendimento, e o primeiro submete um item que não detém.
+
+**A causa não é a lease.** É `main.py:6634` — a política *"último humano caiu, devolve o contato ao
+pool para não perder o cliente"*, correta para **contato de cliente**, aplicada a um **item de fila
+pull**, onde não há cliente esperando: há um formulário com dono, prazo e token de resume.
+
+**E a devolução é feita pelo caminho ERRADO.** O re-route republica em `conversations.inbound` um
+evento de **seis campos** (`session_id`, `tenant_id`, `customer_id`, `channel`, `pool_id`,
+`started_at`) — não pelo `work_task_release`, que é o caminho que a Frente 1 construiu para
+devolver item de pull. Todo o resto é reconstruído pelos **defaults do Pydantic**, então o JSON da
+fila *parece íntegro* (as chaves estão lá) com os valores perdidos:
+
+| Campo perdido | Consequência |
+|---|---|
+| `assigned_to`, `fallback_to_pool_after_s`, `assigned_at_ms` | a reserva author-bound morre — **um wrap-up vira reivindicável pelo pool inteiro** (Camada B anulada) |
+| `conference_id` | o claim anexa como primary solto, ocupante vira `{session}::`, o re-claim bate no dedup do bridge e nunca reanexa (o "Bug B" que o `PullInboxPanel` documenta) |
+| `work_item_deadline` | TTL do JSON cai no default de 4 h contra prazo de 24 h → o membro do ZSET sobrevive ao JSON e o item passa a mentir (defeito que `models.py:92-97` já descreve como consertado no caminho normal) |
+| `auto_attend` | o hand-off de vaga do wrap-up inline (Phase 2) não acontece |
+
+**Terceiro efeito, já denunciado pelo próprio sistema:** `close_reason: transporte
+'agent_disconnect' não mapeado — segmento sai SEM close_reason`. **Não é uma linha no
+`_TRANSPORT_TO_CLOSE_REASON`:** o mapa serve DOIS domínios — em `main.py:5755` o valor é o
+`close_reason` do CONTATO (enum fechado, `CloseReasonSchema`) e em `:6401` ele carimba o SEGMENTO
+humano (vocabulário livre, já com literais próprios: `task_submitted`, `acw_expired`, …). No
+`agent_disconnect` o contato **não fecha**, então estender o mapa compartilhado escolheria um
+domínio em silêncio — exatamente o palpite que o docstring da função existe para impedir. É a
+**lacuna 6 com produtor concreto**, e o conserto é separar os dois mapas.
+
+**Desenho fechado em 2026-08-04:** [`docs/adr/adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md)
+(D1–D8, alternativas descartadas com o motivo, fases A→F). Os três pontos abaixo são o que a
+discussão precisava resolver e já estão resolvidos lá — ficam como registro do caminho.
+
+**Fase A (D6) ✅ VALIDADA 2026-08-04** (13 pytests routing + 7 channel-gateway + smoke 19 PASS; ver
+CHANGELOG). Posse do item passou a ter
+**registro durável no árbitro** (`{t}:pool:{p}:claim_record:{sid}`, TTL do `work_item_deadline`),
+escrito no `work_task_claim` e apagado em `release`/`expire`/**re-parque**; `/v1/work_queue/holder`
+responde `{found, instance_id, claimant_user_id, via, in_queue}`; o A5 do `handle_resume` virou
+**quatro ramos** e recusa (403) quando ninguém detém **e** o item está no ZSET.
+⚠️ **A D6 original — conferir contra o ledger `work_task` — foi EMENDADA ao implementar:** o ledger
+não carrega claimant, e seu `assigned_to` é *reserva* (vazio em item pooled ⇒ fail-open intacto;
+enganoso após o transbordo). Motivo completo no ADR § D6 Emenda. Gates:
+`infra/test/smoke_claim_possession.sh` + `test_claim_possession_record.py` (routing) +
+`test_resume_possession_check.py` (channel-gateway). **A Fase A NÃO fecha a duplicação** — ela impede
+o segundo dono de *submeter*.
+
+**Fase B (D1) ✅ VALIDADA 2026-08-04** (14 pytests bridge + 14 routing + smoke 24 PASS + e2e com F5
+real no Console; ver CHANGELOG). O bridge pergunta ao ÁRBITRO se a instância que caiu detém o item
+(`claim_record` da Fase A — só o caminho pull o escreve, então contato de cliente nunca casa) e, se
+detém, devolve por `work_task_release` em vez do re-publish de seis campos. Medido no item real
+`413b9f75…` pós-F5: `conference_id` e `work_item_deadline` **preservados** (antes vinham `null` e
+`""`). ⚠️ `first_queued_ms` **saiu do escopo**: não é campo do JSON, é chave própria escrita com NX,
+já preenchida na rota real (D2 emendada).
+
+**Fase C (D3) ✅ VALIDADA 2026-08-04** (19 pytests routing + 14 bridge + smoke 30 PASS). A queda
+devolve o item **reservado ao agente que caiu**, reusando `assigned_to` + `fallback_to_pool_after_s`
+da Camada B (a *carência* foi descartada no ADR). A distinção decisiva é o CHAMADOR: o bridge manda
+`reserve_to_previous: true` (queda); o botão "Return to queue" não manda (desistência) — e o default
+é **não** reservar, senão o botão passaria a esconder itens do pool em silêncio. Nunca sobrescreve
+`assigned_to` autoral. **Janela por AUTHOR-BOUND × POOLED, não por `-int` × cliente:** `-int` =
+reserva **permanente** (wrap-up não transborda — aplicar transbordo a trabalho author-bound é erro
+de categoria, ver migration `20260730000000_pool_internal_queue`); pooled (aprovação e afins) =
+`drop_reserve_window_default_s` 30 s, config-api ns `routing`, UI-editável em Configuration ›
+Platform. D2 já vinha satisfeita pela Fase B (não há contador de rodadas, e nenhum foi criado).
+⚠️ **O seed do config-api é job separado** (`docker compose run --rm config-seed`) — rebuildar o
+serviço NÃO insere chave nova.
+
+**Fase D (D5) ✅ VALIDADA 2026-08-04** (14 testes + e2e no Console). A duplicação **visual** fechou:
+o replay não vinha do pub/sub, vinha de `pool:pending_assignment:{pool}` (TTL 300 s, reentregue na
+reconexão), onde as duas guardas existentes não pegavam o caso — workflow SUSPENSA (sem
+`session:closed`) e `instance_id` batendo (mesmo agente). Guarda nova no **mcp-server** pergunta a
+posse ao árbitro; veredicto em função pura `shouldDropOnPossession` (`lib/assignment-filter.ts`),
+com os **mesmos 4 ramos** do submit (A) e do drop (B) — a regra existe em três lugares no mesmo
+formato. E2e: F5 sobre item reivindicado deixa a tela em "Waiting for next contact…" e o item só na
+inbox, com crachá de reserva.
+
+**Aberto na Fase D:** `pool:pending_assignment` não é apagado no `work_task_release` (vive até o TTL
+e é descartado na entrega) — conserto no produtor é follow-up opcional.
+
+**Próximo: Fase E (D8)** — a queda de transporte deixa de publicar `agent_done` e os mapas de
+`close_reason` são separados (contato = enum fechado × segmento = vocabulário livre), fechando a
+lacuna 6. Sob D2 uma conexão instável produz uma pilha de `agent_done` falsos e de segmentos por um
+único wrap-up, contaminando contagem, AHT e a bancada de agentes. Depois F (resume
+terminal-uma-vez: corrida submit × expire do supervisor).
+
+**O que decidir antes de codar** (é a "política de filas pull × push" — o enquadramento certo):
+
+1. **Reload não é abandono.** Hoje 2 s e 20 min de WS fechado recebem o mesmo tratamento. Não há
+   nenhum sinal que os distinga — e é essa ausência, não a lease, que produz o defeito.
+2. **Item de trabalho ≠ contato de cliente** no `agent_disconnect`. Para item de trabalho, a
+   resposta certa a um WS caído é (a) **nada** (ledger, token e ctx sobrevivem; o dono volta) ou
+   (b) `work_task_release` de verdade — que preserva `assigned_to`, devolve a vaga e apaga a lease.
+   Nunca o re-route genérico.
+3. A assimetria a **preservar** (não achatar): aprovação é *pooled* e tem transbordo; wrap-up é
+   *author-bound* e não tem, de propósito.
+
+**Medido no JSON do item, depois do re-route** (`GET {t}:queue_contact:{sid}`):
+
+```
+assigned_to: null   conference_id: null   work_item_deadline: ""
+auto_attend: false  skill_id: ""          agent_type_id: null
+```
+
+`conference_id`, `work_item_deadline`, `skill_id` e `agent_type_id` **estavam preenchidos** no
+enfileiramento original (o ledger da mesma sessão ainda traz `deadline 2026-08-05T10:56:17`): o
+re-route os apagou. As chaves seguem presentes — os defaults do Pydantic as recriam —, e é por isso
+que o JSON passa por íntegro numa inspeção de campos.
+
+**Consequência do `work_item_deadline` vazio ✅ CONFIRMADA (2026-08-04, pelos TTLs):**
+`queue_contact` = **8909 s** restantes (original ≈ 4h01m — o **default**) × `work_task` = **84471 s**
+(23h27m de 25 h). O JSON morre ~**20 h antes** do ledger; nesse intervalo o membro do ZSET sobrevive
+sozinho e o item fica **listado na inbox e irreivindicável** (`not_in_queue`).
+
+> *Método, e é o terceiro escorregão do dia no mesmo lugar:* a previsão original mandava **esperar**
+> a expiração (~14:56 UTC) para provar. O valor que a determina — o TTL — estava legível desde o
+> primeiro minuto. Esperar o fenômeno quando o número já está na mão é a versão temporal de
+> "esperar volume para decidir", que esta mesma seção critica duas telas acima.
+
+**Não medido:** (a) se um segundo agente logado no mesmo pool consegue de fato puxar o item
+duplicado — exige dois logins; (b) se o wrap-up `-int` perde o `assigned_to`. Este segue **DEDUZIDO**
+do evento de seis campos: em `formfill_demo` o campo nasceria vazio de qualquer forma, então o
+`null` observado não é evidência sobre item author-bound.
+
+### Portão de deriva do seed do config-api *(proposta — 2026-08-04)*
+
+**O achado.** Ao aplicar as chaves da Fase C, o `config-seed` reportou `inserted=2`: uma minha e
+**`survey.link_delivery`, que estava em `seed.py` e nunca fora aplicada**. A fonte declarativa e o
+store estavam divergentes havia tempo indeterminado, e ninguém notou — porque não há o que notar. O
+modo de falha é mudo dos DOIS lados: a UI simplesmente não lista a chave, e o leitor no código cai
+no seu próprio default. Lê-se como *"config com valor padrão"*, não como *"config inexistente"*.
+
+*(Neste caso o valor semeado era igual ao default do código — `mock`/vazio — então nada mudou de
+comportamento. Isso é sorte, não garantia: nada obriga os dois a coincidirem.)*
+
+**Proposta (barata).** `infra/test/gate_config_seed_drift.sh`: varre `_SEED` e falha (vermelho) se
+existir chave ausente do store, ou presente com **descrição** divergente. Transforma "descobrir por
+acaso, meses depois" em CI vermelho no dia. Não deve comparar VALOR — o tenant edita legitimamente
+pela tela, e um portão que exigisse valor igual ao seed brigaria com o próprio invariante
+"every config field is UI-editable".
+
+**Cuidado de implementação.** O gate precisa consultar o **store** (`GET /config/{ns}/{key}?tenant_id=`),
+nunca reler `seed.py`; e `config-seed` tem **imagem própria** (`build:` separado do `config-api`),
+então qualquer automação que rode o seed precisa buildá-lo antes — foi essa peça que fez a primeira
+tentativa de aplicar as chaves da Fase C rodar o `seed.py` antigo em silêncio.
 
 ### Timeouts ainda constantes no caminho da I5 *(arco de consolidação de config)*
 

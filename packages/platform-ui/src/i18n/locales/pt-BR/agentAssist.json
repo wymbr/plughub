@@ -187,6 +187,7 @@
     "atCapacity":    "Capacidade máxima de atendimentos atingida",
     "resizeHint":    "Arraste para ajustar",
     "reservedToYou": "Reservado a você",
+    "reservationExpired": "Reserva expirada",
     "overflow":      "Transbordado",
     "internalQueue": "Pós-atendimento — {{pool}}",
     "claimReason": {
