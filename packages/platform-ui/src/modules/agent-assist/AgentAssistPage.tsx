@@ -827,6 +827,7 @@ export const AgentAssistPage: React.FC = () => {
                   instanceId={session?.userId ? `human-${session.userId}` : ""}
                   snapshot={approvalSnapshot as never}
                   onResolved={refreshSupervisorState}
+                  onDismiss={() => dropApprovalContact(selected.sessionId)}
                 />
               ) : (
                 <DialogFormRenderer
@@ -836,6 +837,9 @@ export const AgentAssistPage: React.FC = () => {
                   instanceId={session?.userId ? `human-${session.userId}` : ""}
                   snapshot={approvalSnapshot as never}
                   onResolved={refreshSupervisorState}
+                  /* Encerrada por outro: SÓ derruba o cartão. Nada de release —
+                     re-enfileirar item morto é o defeito que esta saída evita. */
+                  onDismiss={() => dropApprovalContact(selected.sessionId)}
                 />
               )
             ) : selected ? (

@@ -2,6 +2,97 @@
 
 ---
 
+## F2: o Console LÊ o 409 da Fase F ✅ (2026-08-04)
+
+Resíduo de UI da Fase F ([ADR](docs/adr/adr-work-item-requeue-and-agent-affinity.md) § D7, emenda F2).
+A F pôs a causa no fio; ninguém a lia. A promessa da fase — *"um supervisor encerrou"* em vez de
+*"sua sessão expirou"* — só se cumpre na tela.
+
+### Medido antes de mexer, nos dois caminhos
+
+Os dois estados foram **construídos por chave no Redis**, sem precisar de corrida real: o lock
+`{t}:resume_inflight:{token}` produz `in_flight` deterministicamente (é checado antes da resolução do
+token), e `HDEL` do token + `{t}:resume_terminal:{token}` produz `terminal` sem consumir a workflow.
+
+| | previsto | medido |
+|---|---|---|
+| supervisor — aninhamento | `detail.detail` (duplo) | `detail.detail` ✔ |
+| supervisor — texto | `alert()` com JSON cru, `state:"in_flight"`, `session_id`/`cause`/`closed_at` vazios | idêntico, literal ✔ |
+| agente — texto | `HTTP 409` e nada mais | `HTTP 409` ✔ |
+
+O duplo aninhamento não é o descrito no handoff (que falava de um salto): o gateway já embrulha em
+`detail` (FastAPI), e o mcp-server repassa o **corpo inteiro** sob `expire_failed`. E o agente via só
+o status porque o ramo de erro do `DialogFormRenderer` — escrito na Fase A, quando o 403 mandava
+`str(exc)` — aceita `detail` **apenas se for string**, e o 409 manda objeto.
+
+### A assimetria que mudou o desenho
+
+O supervisor **nunca** vê `terminal`: um resume bem-sucedido apaga o ledger `work_task`, e sem
+`resume_token` o mcp-server devolve 404 `no_work_task` antes de chegar ao gateway. Sobra-lhe
+`in_flight`, cujo corpo traz **só** o detentor do lock — `session_id`, `cause` e `closed_at` vêm
+vazios. Concatenar tudo numa frase daria *"encerrado por agent () em "*. Daí a separação:
+
+- **sentença** — do consumidor, porque o que se perde difere (o agente perde as respostas digitadas;
+  o supervisor não perde nada, "nada foi alterado");
+- **linha de fatos** — compartilhada, e cada parte **omitida** quando o campo não veio.
+
+### O que entrou
+
+- **`platform-ui/src/lib/resume-conflict.ts`** (novo) — `parseResumeConflict` **desce** por `detail`
+  atrás do discriminador `resume_already_terminal` em vez de ler profundidade fixa: fixar o nível
+  faria um salto novo no caminho devolver a tela ao estado de hoje, e sem nada ficar vermelho.
+  `state` desconhecido → mensagem genérica **com `console.warn`**, nunca um estado inventado.
+  `resumeActorLabel` traduz o vocabulário fechado (`agent`, `operator`, `timeout_scanner`,
+  `external`) e deixa passar `human:{id}`/`supervisor:{id}` **cru** — id opaco é feio, mas é
+  acionável; trocá-lo por "alguém" apagaria a única pista.
+- **`work-items/api.ts`** — `ExpirePendingError` (status + conflito já lido) no lugar do
+  `Error('HTTP 409: ' + corpo cru)`.
+- **`WorkItemsPage.tsx`** — faixa dispensável no lugar do `alert()`; recarrega a lista após a recusa
+  (no ramo `terminal` o item já não existe, e oferecer o botão de novo seria oferecer uma falha).
+- **`DialogFormRenderer.tsx`** — lê o conflito antes do ramo de string; `terminal` **desliga o
+  Submit** (reenviar só produziria o mesmo 409), `in_flight` **não** desliga (o outro encerramento
+  ainda pode falhar e soltar o lock). `closedElsewhere` exposto no `DialogFormActionsState` para que
+  um overlay (ApprovalPanel) desligue os próprios botões.
+- **i18n nos dois locales** — `common:resumeConflict.*` (fatos, ator, causa), `workItems:errors.
+  conflict*`, `agentAssist:formFill.conflict.*`.
+
+### Conferido na tela, depois do build
+
+| caminho | texto medido |
+|---|---|
+| supervisor (`in_flight`) | *"Another close of this item is already under way — nothing was changed. Being closed by: the agent"* — sem `Reason:`/`At:`, que não vieram |
+| agente (`terminal`) | *"This task was already closed by someone else. Your answers were NOT saved. Closed by: sup_demo · Reason: a supervisor closed it · At: 04/08/2026, 09:00:00"* + Submit desabilitado |
+
+### Achado da validação: sem saída, e a saída existente reciclava item morto
+
+Com o Submit desligado, o agente ficava sem como largar a tarefa — e a única saída à mão,
+**"Return to queue"**, é `POST /api/work_queue/release/{sid}`: devolve o item à fila **reservado ao
+dono anterior** (Camada C). Depois de um `terminal` o trabalho não existe mais, então esse botão
+recicla trabalho MORTO pela fila — outro agente reivindica, preenche e leva o mesmo 409. Não é
+rótulo confuso, é consequência mecânica.
+
+Entrou `onDismiss` no `DialogFormRenderer` (repassado pelo `ApprovalPanel`, que tem o mesmo beco):
+botão *"Tirar da minha lista"* que aparece **só** no estado `terminal` e **só derruba o cartão** —
+seguro porque o resume vencedor já liberou a vaga. Fica FORA do slot de `renderActions`: o overlay
+pode substituir o envio, mas não pode deixar o agente sem saída.
+
+**E o caminho real foi medido depois** (mesma sessão), porque a primeira redação afirmava que a vaga
+já estaria liberada **sem ter medido**. Encerramento REAL por supervisor (resume `HTTP 200` com o
+formulário aberto no Console):
+
+| | medido |
+|---|---|
+| `SMEMBERS {t}:instance:human-{uid}:sessions` antes | exatamente a sessão reivindicada |
+| idem, 6 s depois do resume | **vazio** |
+| cartão no Console | **sumiu sozinho**, sem clique |
+
+Ou seja: o árbitro devolve a vaga e o Console aprende sozinho — o botão é **recuperação rara**, não
+o caminho normal, e não deve devolver vaga nenhuma. O "agente preso na tela" que motivou a saída era
+**artefato da montagem sintética** (chaves escritas no Redis, nenhum resume rodado, logo nenhum
+evento publicado). A saída continua valendo para quando a notícia não chegar.
+
+---
+
 ## Fase F (D7): resume terminal-uma-vez ✅ (2026-08-04) — **ARCO A–F COMPLETO**
 
 Sexta e última fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).

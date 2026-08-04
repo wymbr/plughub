@@ -34,6 +34,7 @@ import React, { useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { CheckCircle2 } from "lucide-react"
 import { useAuth } from "../../../auth/useAuth"
+import { parseResumeConflict, resumeConflictDetails } from "../../../lib/resume-conflict"
 import type { ChatMessage } from "../types"
 
 export type Snapshot = Record<string, { value?: unknown } | undefined> | null | undefined
@@ -138,6 +139,12 @@ export interface DialogFormActionsState {
   formFields:  DialogFormField[]
   /** busyKey of the in-flight submit (null = idle). */
   busy:        string | null
+  /**
+   * True after a 409 `terminal`: someone else closed this task and no submit can
+   * ever succeed. An overlay MUST disable its own action buttons on this — the
+   * core can only disable the default bar it owns.
+   */
+  closedElsewhere: boolean
   /** Submit a fully-formed resume payload. busyKey drives a per-button spinner. */
   submit:      (payload: Record<string, unknown>, busyKey?: string) => Promise<void>
 }
@@ -154,6 +161,25 @@ interface DialogFormRendererProps {
   /** Called after a successful resume so the parent can drop the resolved contact. */
   onResolved?: () => void
   /**
+   * Called when the agent acknowledges a task that was closed by someone else
+   * (409 `terminal`). The parent must only DROP THE CARD — never re-queue.
+   *
+   * "Return to queue" (`work_queue/release`) é a saída errada aqui: ela devolve
+   * o item à fila reservado ao dono anterior, e depois de um `terminal` o
+   * trabalho não existe mais — outro agente reivindicaria trabalho MORTO e
+   * levaria o mesmo 409. Não é confusão de rótulo, é reciclagem de item morto.
+   *
+   * MEDIDO (2026-08-04), não suposto: num encerramento REAL por supervisor
+   * (resume 200 com o formulário aberto), o SET de sessões do agente vai de
+   * `{sessão reivindicada}` a VAZIO e **o Console derruba o cartão sozinho**.
+   * Logo (a) derrubar localmente é seguro — a vaga já foi devolvida pelo
+   * árbitro, e este botão não deve devolvê-la de novo; (b) este botão é
+   * RECUPERAÇÃO RARA, para quando a notícia não chegar, não o caminho normal.
+   * A primeira redação afirmava (a) sem ter medido; a medição veio depois e
+   * confirmou, mas a afirmação era um palpite com cara de fato.
+   */
+  onDismiss?: () => void
+  /**
    * Replace the default submit bar. Default = a single "Submit" that posts
    * `{ source:"operator", answers }`. Approval passes decisions[] buttons here.
    */
@@ -161,7 +187,7 @@ interface DialogFormRendererProps {
 }
 
 export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
-  tenantId, snapshot, poolId, instanceId, inputsDisabled, onResolved, renderActions,
+  tenantId, snapshot, poolId, instanceId, inputsDisabled, onResolved, onDismiss, renderActions,
 }) => {
   const { t } = useTranslation("agentAssist")
   const { getAccessToken } = useAuth()
@@ -180,6 +206,8 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
   const [busy,        setBusy]        = useState<string | null>(null)
   const [done,        setDone]        = useState(false)
   const [error,       setError]       = useState<string | null>(null)
+  /** 409 `terminal`: a tarefa acabou nas mãos de outro — reenviar é impossível. */
+  const [closedElsewhere, setClosedElsewhere] = useState(false)
 
   // Defesa em profundidade: o estado é POR TAREFA (resume_token). O call site do
   // Console monta com `key={sessionId}` (remonta ao trocar de contato), mas um
@@ -192,6 +220,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
     setBusy(null)
     setError(null)
     setAnswers({})
+    setClosedElsewhere(false)
   }, [resumeToken])
 
   // Fetch the published DialogForm (same endpoint/shape the web vehicle consumes).
@@ -269,11 +298,36 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
         // degradação silenciosa do motivo, na superfície onde ela custa mais.
         // Introduzido junto com o gate de posse da Fase A, que é quem passou a
         // produzir 403 com motivo útil.
-        let detail = ""
+        let body: unknown = null
         try {
-          const body = await res.json()
-          detail = typeof body?.detail === "string" ? body.detail : ""
+          body = await res.json()
         } catch { /* corpo não-JSON: sobra o status, que é melhor que nada */ }
+
+        // F2 — o 409 da Fase F carrega o `detail` como OBJETO, e o ramo acima só
+        // aceita string: sem esta leitura o agente cujo item o supervisor acabou
+        // de encerrar vê "HTTP 409" e mais nada, sem saber que o que digitou não
+        // foi salvo. É a promessa da fase, e ela se cumpre aqui.
+        const conflict = parseResumeConflict(body)
+        if (conflict) {
+          const head = conflict.state === "terminal"
+            ? t("formFill.conflict.terminal", {
+                defaultValue: "This task was already closed by someone else. Your answers were NOT saved." })
+            : t("formFill.conflict.inFlight", {
+                defaultValue: "Another close of this task is already under way. Your answers were NOT saved." })
+          const facts = resumeConflictDetails(conflict, t)
+          setError(facts ? `${head} ${facts}` : head)
+          // `terminal` é irreversível: reenviar só produziria o mesmo 409. Desliga
+          // o envio para não convidar a uma tentativa que não pode dar certo.
+          // `in_flight` NÃO desliga — o outro encerramento ainda pode falhar e
+          // soltar o lock, e aí o reenvio é legítimo.
+          if (conflict.state === "terminal") setClosedElsewhere(true)
+          setBusy(null)
+          return
+        }
+
+        const detail = typeof (body as { detail?: unknown } | null)?.detail === "string"
+          ? (body as { detail: string }).detail
+          : ""
         setError(detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`)
         setBusy(null)
         return
@@ -285,7 +339,9 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
     }
   }
 
-  const actionsState: DialogFormActionsState = { answers, fieldValues, baseline, formFields, busy, submit }
+  const actionsState: DialogFormActionsState = {
+    answers, fieldValues, baseline, formFields, busy, closedElsewhere, submit,
+  }
 
   if (done) {
     return (
@@ -443,6 +499,20 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                 <div className="text-xs text-red-text bg-red-light border border-red/30 rounded p-2">{error}</div>
               )}
 
+              {/* Saída para a tarefa encerrada por outro. Fica FORA do slot de
+                  `renderActions` de propósito: o overlay pode substituir o envio,
+                  mas o agente não pode ficar sem saída por causa disso — e a saída
+                  do action bar ("Return to queue") é justamente a que não serve. */}
+              {closedElsewhere && onDismiss && (
+                <button
+                  type="button"
+                  onClick={onDismiss}
+                  className="text-sm px-4 py-2 rounded font-medium border border-border-strong text-dark hover:bg-slate-50 transition-colors"
+                >
+                  {t("formFill.conflict.dismiss", { defaultValue: "Remove from my list" })}
+                </button>
+              )}
+
               <div className="pt-1">
                 {renderActions
                   ? renderActions(actionsState)
@@ -450,7 +520,7 @@ export const DialogFormRenderer: React.FC<DialogFormRendererProps> = ({
                     <button
                       type="button"
                       onClick={() => submit({ decision: "input", source: "operator", answers })}
-                      disabled={busy !== null || disabled}
+                      disabled={busy !== null || disabled || closedElsewhere}
                       className="text-sm px-4 py-2 rounded font-medium bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-40"
                     >
                       {busy ? "…" : t("formFill.submit", { defaultValue: "Submit" })}

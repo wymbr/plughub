@@ -187,8 +187,6 @@
     "atCapacity":    "Maximum concurrent sessions reached",
     "resizeHint":    "Drag to resize",
     "reservedToYou": "Reserved to you",
-    "reservationExpired": "Reservation expired",
-    "overflow":      "Overflowed",
     "internalQueue": "Wrap-up — {{pool}}",
     "claimReason": {
       "already_claimed":  "Already claimed by another agent",
@@ -272,7 +270,12 @@
     "noForm":          "Loading form…",
     "submit":          "Submit",
     "yes":             "Yes",
-    "resolved":        "Submitted. The workflow will continue."
+    "resolved":        "Submitted. The workflow will continue.",
+    "conflict": {
+      "terminal": "This task was already closed by someone else. Your answers were NOT saved.",
+      "inFlight": "Another close of this task is already under way. Your answers were NOT saved.",
+      "dismiss":  "Remove from my list"
+    }
   },
   "empty": {
     "activatePool":      "Activate a pool in the header to become available.",

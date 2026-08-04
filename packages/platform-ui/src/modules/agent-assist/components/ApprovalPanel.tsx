@@ -39,6 +39,8 @@ interface ApprovalPanelProps {
   snapshot:  Snapshot
   /** Called after a successful resume so the parent can drop the resolved contact. */
   onResolved?: () => void
+  /** Repassado ao núcleo: saída da tarefa encerrada por outro (409 `terminal`). */
+  onDismiss?: () => void
 }
 
 /**
@@ -50,7 +52,7 @@ export function isApprovalSnapshot(snap: Snapshot): boolean {
   return !!snapVal(snap, "session.decisions") && !!resumeTokenOf(snap)
 }
 
-export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ tenantId, poolId, instanceId, snapshot, onResolved }) => {
+export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ tenantId, poolId, instanceId, snapshot, onResolved, onDismiss }) => {
   const { t } = useTranslation("agentAssist")
   const { perms } = useAuth()
   const canView   = perms.can("approvals", "operacao")
@@ -84,6 +86,7 @@ export const ApprovalPanel: React.FC<ApprovalPanelProps> = ({ tenantId, poolId, 
       instanceId={instanceId}
       inputsDisabled={!canDecide}
       onResolved={onResolved}
+      onDismiss={onDismiss}
       renderActions={({ fieldValues, baseline, formFields, busy, submit }) => (
         !canDecide ? (
           <div className="flex items-start gap-2 text-xs text-warning-text bg-warning-light border border-warning/30 rounded p-2">

@@ -12,6 +12,8 @@
  * Analytics — fatia 2, outra fonte, outro ciclo.
  */
 
+import { parseResumeConflict, type ResumeConflict } from '@/lib/resume-conflict'
+
 /**
  * Estado derivado do cruzamento ledger × ZSET × lease × registro de posse.
  * Ver lib/work-queue.ts.
@@ -80,8 +82,32 @@ export async function fetchPending(params: {
 }
 
 /**
+ * Falha do encerramento, com o MOTIVO já lido (F2).
+ *
+ * Antes esta função lançava `Error('HTTP 409: ' + corpo cru)` e a tela dava
+ * `alert(String(e))` — o operador via o JSON aninhado duas vezes. O corpo sempre
+ * teve a resposta; faltava alguém lê-lo.
+ */
+export class ExpirePendingError extends Error {
+  readonly status:   number
+  /** Não-nulo quando o 409 é o conflito nomeado da Fase F. */
+  readonly conflict: ResumeConflict | null
+
+  constructor(status: number, conflict: ResumeConflict | null, raw: string) {
+    super(`HTTP ${status}${raw ? `: ${raw}` : ''}`)
+    this.name     = 'ExpirePendingError'
+    this.status   = status
+    this.conflict = conflict
+  }
+}
+
+/**
  * Encerra a pendência SEM disposição (D5): o supervisor não finge ser o autor.
  * O Bearer vai adiante de propósito — o resume é autorado e auditado como dele.
+ *
+ * O 409 da Fase F chega aqui embrulhado DUAS vezes (`detail.detail`): uma pelo
+ * FastAPI do gateway, outra pelo mcp-server, que repassa o corpo inteiro sob
+ * `expire_failed`. O parser desce sozinho — ver lib/resume-conflict.ts.
  */
 export async function expirePending(sessionId: string, accessToken: string): Promise<void> {
   const res = await fetch(`/api/work_queue/expire/${encodeURIComponent(sessionId)}`, {
@@ -93,8 +119,10 @@ export async function expirePending(sessionId: string, accessToken: string): Pro
     body: JSON.stringify({}),
   })
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`HTTP ${res.status}${body ? `: ${body}` : ''}`)
+    const raw = await res.text().catch(() => '')
+    let parsed: unknown = null
+    try { parsed = raw ? JSON.parse(raw) : null } catch { /* não-JSON: sobra o status */ }
+    throw new ExpirePendingError(res.status, parseResumeConflict(parsed), raw)
   }
 }
 

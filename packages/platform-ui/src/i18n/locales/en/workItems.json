@@ -50,7 +50,10 @@
     "cancel": "Cancel"
   },
   "errors": {
-    "loadFailed": "Could not load pending items."
+    "loadFailed": "Could not load pending items.",
+    "conflictTerminal": "This item had already been closed — nothing was changed.",
+    "conflictInFlight": "Another close of this item is already under way — nothing was changed.",
+    "expireFailed": "Could not close the item (HTTP {{status}})."
   },
   "history": {
     "title": "Wrap-up history",

@@ -24,8 +24,9 @@ import Spinner from '@/components/ui/Spinner'
 import EmptyState from '@/components/ui/EmptyState'
 import {
   PendingWorkTask, WorkTaskState, fetchPending, fetchDirectory, expirePending,
-  fmtDuration, fmtDateTime,
+  ExpirePendingError, fmtDuration, fmtDateTime,
 } from './api'
+import { resumeConflictDetails } from '@/lib/resume-conflict'
 
 const POLL_MS = 15_000
 
@@ -135,6 +136,8 @@ export default function WorkItemsPage() {
   const [search,    setSearch]    = useState('')
   const [confirm,   setConfirm]   = useState<PendingWorkTask | null>(null)
   const [busy,      setBusy]      = useState<string | null>(null)
+  /** Resultado da ÚLTIMA tentativa de encerrar — separado do erro de carga. */
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const canView   = perms.can('contacts', 'operacao')
   // A LEITURA é governada pelo ABAC da tela; a AÇÃO é mais estreita (o endpoint
@@ -210,14 +213,36 @@ export default function WorkItemsPage() {
     return [...m.entries()].sort((a, b) => b[1].length - a[1].length)
   }, [filtered, axis])
 
+  /**
+   * F2 — a recusa da Fase F é LIDA, não despejada. O 409 nomeado (`in_flight` /
+   * `terminal`) vira frase; qualquer outra falha vira a genérica com o status.
+   *
+   * A sentença é desta tela porque o que se perde é diferente do lado do agente:
+   * aqui NADA foi alterado (o supervisor não tinha trabalho em curso), enquanto
+   * lá as respostas digitadas não foram salvas. Os FATOS (quem/por quê/quando)
+   * são compartilhados e vêm do helper.
+   */
   const runExpire = async (item: PendingWorkTask) => {
-    setBusy(item.session_id)
+    setBusy(item.session_id); setActionError(null)
     try {
       const token = await getAccessToken()
       await expirePending(item.session_id, token ?? '')
       await load()
     } catch (e) {
-      alert(String(e))
+      if (e instanceof ExpirePendingError && e.conflict) {
+        const head = e.conflict.state === 'terminal'
+          ? t('errors.conflictTerminal')
+          : t('errors.conflictInFlight')
+        const facts = resumeConflictDetails(e.conflict, t)
+        setActionError(facts ? `${head} ${facts}` : head)
+        // A recusa é informação sobre a lista: no ramo `terminal` o item já não
+        // existe. Recarregar evita oferecer de novo um botão que só falharia.
+        await load()
+      } else {
+        const status = e instanceof ExpirePendingError ? e.status : 0
+        setActionError(t('errors.expireFailed', { status }))
+        console.error(e)
+      }
     } finally {
       setBusy(null); setConfirm(null)
     }
@@ -247,6 +272,22 @@ export default function WorkItemsPage() {
           <p className="mt-2 text-xs text-muted bg-surface-alt rounded px-2 py-1">
             {t('directoryUnavailable')}
           </p>
+        )}
+        {actionError && (
+          <div
+            role="alert"
+            className="mt-2 flex items-start gap-2 text-xs text-red-text bg-red-light border border-red/30 rounded px-2 py-1"
+          >
+            <span className="flex-1">{actionError}</span>
+            <button
+              type="button"
+              onClick={() => setActionError(null)}
+              aria-label={t('actions.cancel')}
+              className="text-red-text/70 hover:text-red-text leading-none"
+            >
+              ×
+            </button>
+          </div>
         )}
 
         <div className="flex items-center gap-3 mt-3 flex-wrap">

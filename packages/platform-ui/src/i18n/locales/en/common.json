@@ -41,6 +41,24 @@
     "networkError": "Connection error",
     "required": "Required field"
   },
+  "resumeConflict": {
+    "by": "Closed by",
+    "byInFlight": "Being closed by",
+    "reason": "Reason",
+    "at": "At",
+    "cause": {
+      "task_done": "the form was submitted",
+      "acw_expired": "the deadline expired",
+      "acw_supervisor_closed": "a supervisor closed it"
+    },
+    "actor": {
+      "agent": "the agent",
+      "operator": "the operator",
+      "timeout_scanner": "the deadline sweep",
+      "external": "an external caller",
+      "unknown": "unidentified"
+    }
+  },
   "confirm": {
     "deleteTitle": "Confirm deletion",
     "deleteMessage": "This action cannot be undone. Do you want to continue?",

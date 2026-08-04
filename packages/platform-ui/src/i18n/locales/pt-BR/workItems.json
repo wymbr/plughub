@@ -50,7 +50,10 @@
     "cancel": "Cancelar"
   },
   "errors": {
-    "loadFailed": "Não foi possível carregar as pendências."
+    "loadFailed": "Não foi possível carregar as pendências.",
+    "conflictTerminal": "Este item já tinha sido encerrado — nada foi alterado.",
+    "conflictInFlight": "Outro encerramento deste item já está em curso — nada foi alterado.",
+    "expireFailed": "Não foi possível encerrar o item (HTTP {{status}})."
   },
   "history": {
     "title": "Histórico de wrap-up",

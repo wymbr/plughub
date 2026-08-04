@@ -247,6 +247,32 @@ havia quase dois minutos. Nenhum duplo-terminal gravado (não havia como: o bra�
 rodou), então a fase teve de **construir** a corrida. E `work_item_deadline` == `token_expires_at` ao
 microssegundo nos 4 itens vivos: o prazo do item e o relógio do scanner são o mesmo.
 
+#### Emenda de 2026-08-04 (F2) — a recusa é LIDA, e o que ela diz depende de quem perdeu
+
+A F pôs a causa no fio; nenhum dos dois consumidores a lia. Medido antes de mexer (Console real, dois
+estados construídos por chave no Redis): o supervisor recebia `alert()` com o JSON **aninhado duas
+vezes** — o gateway embrulha em `detail` e o mcp-server repassa o corpo inteiro sob `expire_failed`,
+logo `detail.detail` —, e o agente recebia **`HTTP 409` e mais nada**, porque o ramo de erro do
+`DialogFormRenderer` (escrito na Fase A, quando o 403 mandava `str(exc)`) só aceita `detail` do tipo
+string, e o 409 manda objeto. O 409 mais rico da fase renderizava na forma mais pobre possível,
+exatamente na tela para a qual ele foi criado.
+
+**Assimetria que o desenho tem de respeitar, e que só a leitura do código mostrou:** o supervisor
+**nunca** vê `terminal`. Um resume bem-sucedido apaga o ledger `work_task`, e sem `resume_token` no
+ledger o mcp-server devolve 404 `no_work_task` antes de chegar ao gateway. Logo `in_flight` (campos
+`session_id`/`cause`/`closed_at` **vazios**, só o detentor do lock) é o único caso dele, e `terminal`
+(detalhe completo) é o único que importa ao agente. Uma frase única saindo como *"encerrado por agent
+() em "* seria a "mentira tranquila" da § Postura — daí a separação em **sentença** (do consumidor,
+porque o que se perde difere: o agente perde respostas digitadas, o supervisor não perde nada) e
+**linha de fatos** (compartilhada, montada só com os campos presentes).
+
+Implementação: `platform-ui/src/lib/resume-conflict.ts` — o parser **desce** por `detail` procurando
+o discriminador `resume_already_terminal` em vez de ler profundidade fixa, para que um salto novo no
+caminho (proxy, BFF) não devolva a tela ao estado de hoje sem nada ficar vermelho; `state`
+desconhecido degrada para a mensagem genérica **com `console.warn`**. No agente, `terminal` desliga o
+Submit (reenviar só produziria o mesmo 409) e `in_flight` **não** desliga — o outro encerramento
+ainda pode falhar e soltar o lock.
+
 ### D8 — Queda de transporte não publica `agent_done`
 
 Hoje todo drop publica `agent_done` no `agent.lifecycle` e fecha segmento. Sob D2, uma conexão

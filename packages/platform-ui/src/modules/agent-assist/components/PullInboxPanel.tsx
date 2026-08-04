@@ -258,12 +258,27 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
   if (pullPools.length === 0) return null
 
   // Agrupa por pool (na ordem de pullPools). Camada B: esconde itens reservados
-  // a OUTRO recurso enquanto na janela (reservedOther); ordena os reservados a
-  // MIM primeiro, depois mais-antigo-primeiro.
-  // Ordenação: o que é (ou era) meu primeiro. A reserva expirada continua no topo
-  // de propósito — é o item que este agente mais quer de volta, e agora com pressa,
-  // porque deixou de ser exclusivo.
-  const rank = (r: string) => (r === "reservedToMe" || r === "reservedToMeExpired" ? 0 : 1)
+  // a OUTRO recurso enquanto na janela (reservedOther).
+  //
+  // ORDENAÇÃO (revista 2026-08-04). A regra geral é UMA — espera real, que o
+  // re-enfileiramento preserva em `first_queued_ms` justamente para não mentir.
+  // Exceção só vale se ganhar o lugar:
+  //
+  //   · `reservedToMe` (dentro da janela) GANHA: o item é exclusivamente deste
+  //     agente e ninguém mais pode pegá-lo, então pôr no topo não fura fila —
+  //     mostra o que só ele resolve.
+  //   · `reservedToMeExpired` / `overflowed` NÃO ganham mais: a exclusividade
+  //     acabou e o item concorre em igualdade. Mantê-los no topo contradizia o
+  //     mesmo fato que lhes tirou o crachá, e cobrava a espera de quem esperava
+  //     mais.
+  //
+  // E o desempate passou a ser o `ageOf` EXIBIDO. Antes ordenava por
+  // `queued_at_ms` (que RESETA na devolução à fila) enquanto a tela mostrava a
+  // idade derivada de `first_queued_ms` (que não reseta): a lista parecia
+  // ordenada pelo número que exibia e não estava — item mostrando-se mais velho
+  // aparecia abaixo de um mais novo. Ordenar pelo valor mostrado é o que torna a
+  // ordem CONFERÍVEL a olho.
+  const rank = (r: string) => (r === "reservedToMe" ? 0 : 1)
   const groups = pullPools
     .map(pid => ({
       pool_id: pid,
@@ -273,7 +288,7 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
         .sort((a, b) => {
           const dr = rank(reservationOf(a)) - rank(reservationOf(b))
           if (dr !== 0) return dr
-          return (a.queued_at_ms ?? 0) - (b.queued_at_ms ?? 0)
+          return (ageOf(b) ?? 0) - (ageOf(a) ?? 0)   // mais velho primeiro
         }),
     }))
     .filter(g => g.items.length > 0)
@@ -339,16 +354,16 @@ export const PullInboxPanel: React.FC<PullInboxPanelProps> = ({
                                   {t("pullInbox.reservedToYou", { defaultValue: "Reservado a você" })}
                                 </span>
                               )}
-                              {reservation === "reservedToMeExpired" && (
-                                <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-warning-light text-warning-text">
-                                  {t("pullInbox.reservationExpired", { defaultValue: "Reserva expirada" })}
-                                </span>
-                              )}
-                              {reservation === "overflowed" && (
-                                <span className="flex-shrink-0 text-2xs font-semibold uppercase tracking-wide px-1 py-0.5 rounded bg-warning-light text-warning-text">
-                                  {t("pullInbox.overflow", { defaultValue: "Transbordado" })}
-                                </span>
-                              )}
+                              {/* `reservedToMeExpired` e `overflowed` NÃO têm crachá, de propósito
+                                  (2026-08-04). Os dois significam "qualquer um do pool pode pegar
+                                  agora", que é exatamente o que `shared` significa — e `shared` é
+                                  renderizado SEM selo. A ausência já é a notação; um selo dizendo
+                                  o default só compete com o único que carrega informação
+                                  ("Reservado a você"). Os nomes anteriores ("Reserva expirada" /
+                                  "Transbordado") descreviam o que acontecera com a RESERVA e eram
+                                  lidos como "o item morreu" — levaram a pedir a remoção da fila de
+                                  itens perfeitamente válidos. O estado segue vivo no
+                                  `reservationOf` (filtro e ordenação); só a marca visual saiu. */}
                             </div>
                             {age != null && (
                               <div className="text-xs truncate">

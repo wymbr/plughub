@@ -2230,6 +2230,47 @@ pelo ABAC `approvals` (fechar o claim genérico); refresh imediato do inbox pós
 sweeper de "conectado-mas-ocioso". Hoje o auto-release do pull é emergente (desconexão → bridge
 re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que um sweep.
 
+### Achados de 2026-08-04 (na validação do F2) — três, em ordem de gravidade
+
+1. **A recusa de claim é EFÊMERA demais para o que ela custa** *(reescrito depois de ler o código —
+   a primeira redação dizia que o preview engolia o motivo, e é FALSO: `claimPreviewContact` faz
+   `addToast(pullInbox.claimReason.*, "error")`)*. Os dois caminhos avisam — inbox por `setError`
+   fixo no painel, preview por toast que some. Com as vagas cheias, o operador clica em Claim, o
+   toast passa, a tela do preview segue igual, e o que fica é "reivindiquei e veio vazio". Foi
+   assim que uma investigação inteira virou caça a defeito de ITEM (fantasma, `conference_id`,
+   `assigned_to` — três hipóteses mortas no dado) enquanto o endpoint respondia
+   `{"claimed":false,"reason":"no_capacity"}` desde o primeiro clique. **Verificar primeiro** se o
+   toast realmente aparece (encher a capacidade e olhar a tela); só então decidir entre torná-lo
+   persistente, marcar o item na lista, ou nada.
+
+2. **Vaga ocupada por sessão que nunca virou cartão.** `9d37879e…` foi reivindicada às 19:39,
+   consumiu vaga e não apareceu no Console; o `release` posterior confirmou posse real
+   (`{"released":true,"requeued":true}`). Com `max_concurrent` pequeno, duas dessas travam o agente
+   inteiro — e o sintoma que chega é `no_capacity` em tudo (achado 1), não "há uma sessão presa".
+   **Causa desconhecida**; não confundir com a ocupação artificial que a montagem sintética do F2
+   produziu no mesmo dia. Reproduzir antes de teorizar.
+
+3. ~~**Rótulo "Reserva expirada"**~~ ✅ **2026-08-04** — os crachás de `reservedToMeExpired` e
+   `overflowed` foram **removidos**, não reescritos. Primeira tentativa trocou os dois por "Aberto
+   a todos"; o dono do produto apontou o erro: **a ausência de crachá já é a notação de "qualquer
+   um pode pegar"** (é como `shared` é exibido), então o selo anunciava o default e competia com o
+   único que carrega informação, "Reservado a você". Os nomes antigos descreviam o que acontecera
+   com a RESERVA e eram lidos como "o item morreu". O estado segue no `reservationOf` — filtro e
+   ordenação intactos; só a marca visual saiu.
+
+   **E a ordenação foi junto**, pela regra geral que o dono do produto formulou: *item devolvido à
+   fila preserva o timestamp original, logo é ordenado normalmente pela espera*. `first_queued_ms`
+   já existe exatamente para isso. Então `rank` 0 ficou só com `reservedToMe` (dentro da janela —
+   exclusivo, ninguém mais pode pegar, o topo não fura fila); expirado e transbordado voltaram à
+   ordem por espera. **Achado colhido na mesma passada:** o `sort` usava `queued_at_ms` (que RESETA
+   na devolução) enquanto a tela exibia idade de `first_queued_ms` (que não reseta) — a lista
+   parecia ordenada pelo número mostrado e não estava. Agora desempata pelo próprio `ageOf`, o que
+   torna a ordem conferível a olho.
+
+*(Medido junto, e por isso NÃO é item: no encerramento real por supervisor o árbitro devolve a vaga
+e o Console derruba o cartão sozinho — `SMEMBERS` da instância vai a vazio em ≤6 s. Ver CHANGELOG
+§ F2.)*
+
 ## Frente 2 — Avaliação campaign-driven — resíduos *(pipeline S1/S2.1/S2.Q1/S2.2 ✅ e lente `deploy` P2+P3 ✅; histórico no CHANGELOG)*
 
 Avaliação é **sempre dirigida por campanha** (janela = `evaluation_calendar_id`, throttle = `avaliacao_ia.max_concurrent_sessions`).

@@ -187,8 +187,6 @@
     "atCapacity":    "Capacidade máxima de atendimentos atingida",
     "resizeHint":    "Arraste para ajustar",
     "reservedToYou": "Reservado a você",
-    "reservationExpired": "Reserva expirada",
-    "overflow":      "Transbordado",
     "internalQueue": "Pós-atendimento — {{pool}}",
     "claimReason": {
       "already_claimed":  "Já reivindicado por outro agente",
@@ -272,7 +270,12 @@
     "noForm":          "Carregando formulário…",
     "submit":          "Enviar",
     "yes":             "Sim",
-    "resolved":        "Enviado. O workflow vai continuar."
+    "resolved":        "Enviado. O workflow vai continuar.",
+    "conflict": {
+      "terminal": "Esta tarefa já foi encerrada por outra pessoa. Suas respostas NÃO foram salvas.",
+      "inFlight": "Outro encerramento desta tarefa já está em curso. Suas respostas NÃO foram salvas.",
+      "dismiss":  "Tirar da minha lista"
+    }
   },
   "empty": {
     "activatePool":      "Ative um pool no cabeçalho para ficar disponível.",

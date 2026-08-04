@@ -41,6 +41,24 @@
     "networkError": "Erro de conexão",
     "required": "Campo obrigatório"
   },
+  "resumeConflict": {
+    "by": "Encerrado por",
+    "byInFlight": "Sendo encerrado por",
+    "reason": "Motivo",
+    "at": "Em",
+    "cause": {
+      "task_done": "o formulário foi enviado",
+      "acw_expired": "o prazo venceu",
+      "acw_supervisor_closed": "um supervisor encerrou"
+    },
+    "actor": {
+      "agent": "o agente",
+      "operator": "o operador",
+      "timeout_scanner": "a varredura de prazo",
+      "external": "um chamador externo",
+      "unknown": "não identificado"
+    }
+  },
   "confirm": {
     "deleteTitle": "Confirmar exclusão",
     "deleteMessage": "Esta ação não pode ser desfeita. Deseja continuar?",
