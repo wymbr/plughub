@@ -25,7 +25,7 @@ from .adapters.sms import SMSAdapter
 from .adapters.voice import VoiceAdapter
 from .adapters.webchat import WebchatAdapter
 from .adapters.webchat_channel import WebchatChannelAdapter
-from .adapters.webhook import WebhookAdapter
+from .adapters.webhook import ResumeAlreadyTerminalError, WebhookAdapter
 from .adapters.webrtc import WebRTCAdapter
 from .adapters.whatsapp import WhatsAppAdapter
 from .attachment_store import (
@@ -1320,7 +1320,10 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
     → external/system (claimed), unchanged.
 
     Returns: { session_id }
-    Raises 404 if the token is unknown/expired; 403 if approver verification fails.
+    Raises 404 if the token is unknown/expired; 403 if approver verification fails;
+    **409** (Fase F / D7) if another trigger already terminalised this resume, or is
+    terminalising it right now — with `closed_by` / `cause` in the detail, so the
+    caller can say *which* of the three ended it instead of "session expired".
     """
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
@@ -1342,6 +1345,12 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
+    except ResumeAlreadyTerminalError as exc:
+        # Fase F (D7) — 409, nunca 404. O 404 afirma que o token não existe; o
+        # agente cujo item o supervisor acabou de encerrar recebia essa frase e
+        # concluía que a própria sessão tinha vencido. `state` separa a corrida
+        # real (`in_flight`) do caso sequencial (`terminal`).
+        raise HTTPException(status_code=409, detail=exc.as_detail())
     if session_id is None:
         raise HTTPException(
             status_code=404,

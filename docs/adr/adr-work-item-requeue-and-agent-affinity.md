@@ -202,6 +202,51 @@ expire é a única forma de tirá-lo de cena antes disso.
 supervisor encerra. O resume tem de ser terminal-uma-vez — o segundo a chegar (submit ou expire)
 recebe recusa explícita, nunca aplica em silêncio.
 
+#### Emenda de 2026-08-04 (implementação, Fase F) — três correções de premissa
+
+**1. Não é corrida da fila pull; é da retomada.** A redação acima descreve a corrida como se ela
+nascesse do item de trabalho. Os TRÊS gatilhos entram pela mesma função (`handle_resume`,
+channel-gateway): o endpoint do supervisor não tem rota própria — lê o ledger e faz este mesmo
+resume com `decision=timeout` — e o scanner de prazo a chama direto. O hash
+`{tenant}:resume_tokens` é escrito por **`suspend`, `delegate` e `collect`**, então *toda* workflow
+suspensa tem ao menos dois retomadores possíveis: o pretendido e o scanner no prazo. Um `suspend`
+esperando a operadora numa portabilidade tem a mesma exposição, sem fila nenhuma envolvida. Pull só
+acrescenta o terceiro gatilho e o bloco de limpeza do item. A correção age no consumo do token e
+portanto é geral.
+
+**2. A F NÃO é o veredicto da Fase A num segundo eixo.** O roteiro supunha reuso. Não há: o bloco A5
+está gated em `if approver is not None and claim_instance_id`, e supervisor e scanner chegam sem
+`claim_instance_id` — o árbitro **nunca** é consultado nos dois terminais não-submit. Eixo novo,
+mecanismo novo.
+
+**3. O casos SEQUENCIAIS já recusavam — mas um deles mentia.** submit→expire dava 404
+`no_work_task` (correto) e expire→expire já era coberto pelo caso D do `smoke_acw_expire.sh`. O que
+faltava, além da concorrência, era **expire→submit**: 404 *"Resume token not found or expired"*, ou
+seja, o agente cujo item o supervisor acabara de encerrar era informado de que a **própria sessão**
+tinha vencido. Recusa sem nome, sobre causa errada, não é a "recusa explícita" que esta decisão pede.
+
+**Mecanismo (implementado):** `SET NX` atômico no topo do `handle_resume`, solto num `finally`; o
+`HDEL` **permanece no fim**, porque é ele que preserva a retentabilidade em falha no meio do caminho
+e que faz o 403 do A5 não consumir o item — subi-lo trocaria a corrida por item permanentemente
+irresumível. Registro terminal `{tenant}:resume_terminal:{token}` (`by`/`cause`/`at`, TTL 25 h)
+gravado **antes** do consumo, para dar NOME à recusa; token ausente com registro → **409**, sem
+registro → 404 honesto. O `work_task_expire` segue idempotente: a propriedade é certa para o
+árbitro, o errado era ela ser a única linha de defesa.
+
+**Consequência aceita — o lock dá unicidade, não prioridade.** Uma entrega já preenchida pode perder
+para uma expiração numa janela de segundos, e o segmento sai `acw_expired` (sem disposição) quando
+havia disposição. A D7 pede recusa explícita ao segundo, e ele a recebe com a causa — o Console pode
+dizer *"expirou enquanto você enviava"*. Em produção o scanner só dispara no prazo (24 h), então a
+coincidência é rara. **O conserto, se um dia for preciso, não é no lock**: é dar ao scanner um sinal
+de "item em preenchimento", que ele hoje não tem.
+
+**Medido antes de projetar** (`probe_fase_f_terminal_footprint.sh`): 27 `task_submitted`, 0
+`acw_supervisor_closed`, **2 `acw_expired`** — estas duas de 30/07, pool `retencao_humano-int`, com
+100 s e 111 s de segmento real, ou seja, o scanner encerrou por prazo item que um humano segurava
+havia quase dois minutos. Nenhum duplo-terminal gravado (não havia como: o braço do supervisor nunca
+rodou), então a fase teve de **construir** a corrida. E `work_item_deadline` == `token_expires_at` ao
+microssegundo nos 4 itens vivos: o prazo do item e o relógio do scanner são o mesmo.
+
 ### D8 — Queda de transporte não publica `agent_done`
 
 Hoje todo drop publica `agent_done` no `agent.lifecycle` e fecha segmento. Sob D2, uma conexão
@@ -342,6 +387,6 @@ reivindicado. A afinidade de agente vira feature reutilizável, não remendo de 
 | C | **D2+D3** — sempre devolver, reservado ao dono, com janela por tipo ✅ *(2026-08-04; D2 já vinha satisfeita por B — na prática é a D3. Janela em config-api ns `routing`: `-int` 300 s, demais 30 s)* | B |
 | D | **D5** — Console deriva posse do claim ✅ *(2026-08-04; guarda no mcp-server sobre `pool:pending_assignment`, veredicto puro `shouldDropOnPossession` — mesmos 4 ramos do submit e do drop)* | B |
 | E | **D8** — mapas de `close_reason` separados (fecha a lacuna 6) + a queda publica `agent_released` no lugar de `agent_done` ⚠️ *(2026-08-04; ver § D8 Emenda — o "deixa de publicar" original virava regressão de membership de SET)* | C |
-| F | **D7** — resume terminal-uma-vez (corrida submit × expire) | C |
+| F | **D7** — resume terminal-uma-vez (corrida submit × expire) ✅ *(2026-08-04; ver § D7 Emenda — não era corrida da fila pull e sim da RETOMADA: `SET NX` no `handle_resume` + registro terminal + 409 no lugar do 404 que mentia. Cobre `suspend`/`collect` de graça)* | C |
 
 A ordem não é negociável em A→B→C: cada uma torna a seguinte segura.

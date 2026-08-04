@@ -408,11 +408,22 @@ async def test_handle_resume_resets_status_key_to_active(adapter, mock_redis):
         tenant_id    = TENANT_ID,
     )
 
-    mock_redis.set.assert_called_once_with(
+    # `assert_any_call`, não `assert_called_once_with`: desde a Fase F o resume
+    # também faz um SET NX (o lock de exclusão mútua). A asserção original
+    # conflava dois fatos — "a chave de status foi escrita assim" e "nenhum outro
+    # SET aconteceu" — e só o primeiro é o assunto deste teste. O segundo fato
+    # ganhou asserção PRÓPRIA logo abaixo, então a divisão não perde cobertura.
+    mock_redis.set.assert_any_call(
         f"{TENANT_ID}:session:{SESSION_ID}:status",
         "active",
         keepttl=True,
     )
+    lock_calls = [
+        c for c in mock_redis.set.call_args_list
+        if str(c.args[0]).startswith(f"{TENANT_ID}:resume_inflight:")
+    ]
+    assert len(lock_calls) == 1, "Fase F: o resume tem de reivindicar o lock uma vez"
+    assert lock_calls[0].kwargs.get("nx") is True
 
 
 @pytest.mark.asyncio

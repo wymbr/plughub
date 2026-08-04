@@ -2,6 +2,113 @@
 
 ---
 
+## Fase F (D7): resume terminal-uma-vez ✅ (2026-08-04) — **ARCO A–F COMPLETO**
+
+Sexta e última fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).
+O segundo a chegar — submit, supervisor ou prazo — passa a receber **recusa explícita e nomeada**.
+
+### A medição veio antes, e derrubou uma previsão
+
+`infra/test/probe_fase_f_terminal_footprint.sh` (novo — preflight de leitor, veredicto de 3 estados,
+não semeia nada). Previsão escrita antes de rodar, no cabeçalho do próprio probe:
+
+| | previsto | medido |
+|---|---|---|
+| `task_submitted` | ≥ 9, humano | **27**, humano ✔ |
+| `acw_supervisor_closed` | 0 | **0** ✔ |
+| `acw_expired` | 0 | **2**, humano ✘ |
+| duplo-terminal no mesmo segmento (sem `FINAL`) | 0 | 0 ✔ |
+| sessões com ≥2 segmentos terminais | 0 | 0 ✔ |
+| itens de `formfill_demo` sem caminho terminal | 0 | 0 ✔ |
+
+**A previsão que errou é a que ensinou.** Eu supunha que o braço do PRAZO nunca tinha disparado
+porque os itens do demo são recriados dentro das 24 h. Dois não foram: as duas linhas `acw_expired`
+são de 30/07, pool `retencao_humano-int`, com **100 s e 111 s de duração real de segmento** — o
+scanner encerrou por prazo um item que um humano tinha reivindicado e segurava havia quase dois
+minutos. A janela da D7 já foi atravessada com trabalho vivo na mão; só não houve colisão.
+
+**Achado que fechou uma hipótese:** nos 4 itens vivos, `work_item_deadline` == `token_expires_at`
+**ao microssegundo**. O prazo do item e o relógio que move o scanner são o MESMO — a F não precisou
+reconciliar relógios.
+
+### O defeito não era da fila pull
+
+Os três gatilhos entram pela MESMA função (`handle_resume`): o endpoint do supervisor não tem rota
+própria (lê o ledger e faz este mesmo resume com `decision=timeout`), e o scanner a chama direto. A
+janela ficava entre o `HGET` do token (topo) e o `HDEL` (fim), com um round-trip HTTP ao árbitro, o
+`xadd` e o publish no meio. E o scanner roda **no mesmo processo e no mesmo event loop** do endpoint
+HTTP: a corrida não precisa de duas réplicas, basta um interleave de `await`.
+
+O hash `{tenant}:resume_tokens` é escrito por **`suspend`, `delegate` e `collect`** — toda workflow
+suspensa tem, por construção, ao menos dois retomadores possíveis (o pretendido e o scanner no
+prazo). Pull só acrescenta o terceiro gatilho e o bloco de limpeza do item. **A correção age no
+consumo do token, então cobre o `suspend` da operadora e o `collect` de graça.**
+
+### A correção: reivindicar o token, não consumi-lo
+
+`SET NX` atômico no topo do `handle_resume`, solto num `finally`. **Não** foi subir o `HDEL` — ler o
+efeito inteiro (a lição da Fase E) mostrou que o apagamento tardio é o que (a) preserva a
+retentabilidade quando o caminho estoura no meio e (b) faz o 403 do A5 **não** consumir o item. Subir
+o `HDEL` trocaria a corrida por item permanentemente irresumível — o estado "sem saída" que a medição
+mostrou não existir em nenhum dos 4 itens vivos.
+
+**A recusa ganhou nome.** Registro terminal `{tenant}:resume_terminal:{token}` (`by`/`cause`/`at`,
+TTL 25 h) gravado **antes** do consumo — a ordem é load-bearing: entre o `HDEL` e a escrita haveria
+um instante com o token ausente e a causa inexistente, e um resume caindo ali levaria o 404 antigo.
+Token ausente **com** registro → **409**; **sem** registro → o 404 honesto de antes.
+
+**409, nunca 404.** O 404 afirma que o token nunca existiu — e era exatamente o que o agente recebia
+quando um supervisor encerrava o item que ele estava preenchendo: a tela dizia que a sessão dele
+tinha expirado. Recusa sobre causa errada não é recusa explícita.
+
+A expressão inline que decidia a causa virou `_terminal_cause` (e ganhou os 4 testes que nunca teve),
+porque a Fase F passou a precisar dela em dois lugares; duas cópias divergiriam e o item sairia
+gravado com um nome e recusado com outro. O árbitro (`work_task_expire`) **segue idempotente de
+propósito** — a propriedade é certa para ele; o errado era ela ser a única linha de defesa, porque
+idempotência devolve 200 tendo feito nada.
+
+### Consequência aceita: quem chega primeiro vence
+
+O lock dá **unicidade**, não prioridade. Uma entrega já preenchida pode perder para uma expiração
+numa janela de segundos, e o segmento sai `acw_expired` (sem disposição) quando havia disposição.
+Aceito: a D7 pede que o segundo receba recusa explícita, e ele recebe — com a causa, então o Console
+pode dizer "expirou enquanto você enviava" em vez de engolir. Em produção o scanner só dispara 24 h
+depois, então a coincidência é rara. **Se um dia virar problema, o conserto não é no lock** — é dar
+ao scanner um sinal de "item em preenchimento", que ele hoje não tem.
+
+### Testes
+
+| Gate | n |
+|---|---|
+| `channel-gateway … tests/test_resume_terminal_once.py` (novo) | **17** |
+| `channel-gateway … tests/test_resume_possession_check.py` (Fase A, intacto) | 7 |
+| `channel-gateway … tests/test_webhook_adapter.py` | 37 |
+| `infra/test/smoke_resume_terminal_once.sh` (novo, Redis + HTTP reais) | **8** |
+
+Previsão de 17 contada antes de escrever (4 `_terminal_cause` + 3 `_resume_actor` + 5 lock + 3
+registro terminal + 1 corrida + 1 scanner) e batida exata.
+
+**Um teste quase passou pelo motivo errado.** O `test_concurrent_resumes_exactly_one_wins` usava um
+fake cujos métodos não tinham `await` interno: a primeira corrotina rodava até o fim sem ceder o
+controle, e a segunda encontrava o caso **sequencial**, não a corrida. Verde, e reprovando contra o
+código antigo — sem ter exercitado a corrida uma única vez. Corrigido com `sleep(0)` em cada operação
+do fake e asserção exigindo `state == "in_flight"`. O smoke confirmou o mesmo ramo contra Redis real.
+
+**E o smoke pegou o que o pytest não vê:** o detentor lido sem decodificar sairia no 409 como
+`closed_by: "b'agent'"` — o fake devolve `str`, o cliente real pode devolver `bytes`.
+
+### Achado aberto, NÃO fechado nesta fase
+
+O `source` decide a causa gravada, e o endpoint público de resume repassa o `payload` do corpo
+verbatim: um chamador externo pode declarar `source: "supervisor:x"` e obter `acw_supervisor_closed`.
+A exposição é anterior à Fase F (a expressão inline lia o mesmo campo), mas a F a tornou **durável**
+(25 h no registro terminal). Não foi fechada aqui porque o downgrade exige ler
+`_resolve_approver_principal` antes — sem principal verificado no caminho genérico de form-fill, um
+downgrade cego derrubaria o encerramento legítimo do supervisor, que **nunca foi exercitado** e
+portanto não reclamaria. Item próprio em `TODO.md`.
+
+---
+
 ## Fase E (D8): dois domínios de `close_reason`, dois nomes de evento ✅ (2026-08-04)
 
 Quinta fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).

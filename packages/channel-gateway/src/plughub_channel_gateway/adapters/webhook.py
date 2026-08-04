@@ -77,6 +77,138 @@ _PII_MASKERS: list[tuple[re.Pattern, Any]] = [
 ]
 
 
+# ── Fase F (D7) — resume terminal-uma-vez ─────────────────────────────────────
+#
+# Toda workflow suspensa tem SEMPRE mais de um retomador possível: quem deveria
+# retomá-la e o scanner de prazo, que varre `*:resume_tokens` a cada 60 s no
+# MESMO processo (e no mesmo event loop) deste endpoint. Onde há item de trabalho
+# parqueado existe um terceiro — o encerramento do supervisor, que não tem rota
+# própria: ele faz este mesmo resume com `decision=timeout`. Os três entram por
+# `handle_resume`, então a unicidade é propriedade de UMA função.
+#
+# A janela ficava entre o HGET do token (topo) e o HDEL (fim), com um round-trip
+# HTTP ao árbitro, o xadd e o publish no meio — `await`s de sobra para dois
+# resumes se interlaçarem sem precisar de duas réplicas. Medido em 2026-08-04:
+# duas expirações reais (`acw_expired`, 30/07, pool `retencao_humano-int`)
+# atravessaram essa janela com um humano segurando o item havia ~100 s.
+#
+# POR QUE UM LOCK, E NÃO SUBIR O HDEL. O apagamento tardio não é descuido: ele
+#   (a) preserva a retentabilidade quando o caminho estoura no meio — o token
+#       sobrevive e o scanner tenta de novo em 60 s;
+#   (b) faz um submit recusado por posse (403 do A5) NÃO consumir o item.
+# Subir o HDEL trocaria a corrida por item permanentemente irresumível — o
+# estado "sem saída" que a medição mostrou não existir em nenhum dos 4 itens
+# vivos. O lock dá exclusão mútua sem tocar em nenhum dos dois efeitos.
+#
+# O árbitro (`work_task_expire`, routing) segue idempotente de propósito: essa é
+# a propriedade certa para ele. O que estava errado era ela ser a ÚNICA linha de
+# defesa — idempotência devolve 200 tendo feito nada, que é indistinguível de
+# sucesso para quem chama. A recusa sobe para o token; o segundo não chega lá.
+_RESUME_INFLIGHT_TTL_S = 45      # teto do corpo do resume; o lock sai no `finally`
+_RESUME_TERMINAL_TTL_S = 90000   # 25 h — mesma convenção do ledger `work_task`
+
+
+def _resume_inflight_key(tenant_id: str, resume_token: str) -> str:
+    """`{tenant}:resume_inflight:{token}` — o lock de exclusão mútua."""
+    return f"{tenant_id}:resume_inflight:{resume_token}"
+
+
+def _resume_terminal_key(tenant_id: str, resume_token: str) -> str:
+    """`{tenant}:resume_terminal:{token}` — quem encerrou, por quê, quando."""
+    return f"{tenant_id}:resume_terminal:{resume_token}"
+
+
+def _terminal_cause(payload: dict[str, Any]) -> str:
+    """
+    A causa do encerramento, das TRÊS que existem. Era uma expressão inline no
+    meio do `handle_resume` (e por isso não tinha teste); virou função porque a
+    Fase F passou a precisar dela em dois lugares — o encerramento do item no
+    routing e o registro terminal que dá NOME à recusa do segundo.
+
+    A distinção vem do `source`, escrito pelo gatilho: o tool marca "agent", o
+    scanner "timeout_scanner", o endpoint do supervisor "supervisor:{sub}".
+
+    ⚠️ **Isso vale para os gatilhos internos, não para a porta pública.** O
+    `POST /v1/channels/webhook/resume/{token}` repassa o `payload` do corpo
+    verbatim, então um chamador externo PODE declarar `source: "supervisor:x"` e
+    obter o carimbo `acw_supervisor_closed` — no segmento e, desde a Fase F,
+    também no registro terminal (que é durável por 25 h). A exposição é anterior
+    a esta fase (a expressão inline lia o mesmo campo), mas a Fase F a tornou
+    persistente, então ela deixa de ser aceitável por omissão.
+    O fecho pede ler `_resolve_approver_principal` primeiro — sem principal
+    verificado no caminho genérico de form-fill, um downgrade cego derrubaria o
+    encerramento legítimo do supervisor, que nunca foi exercitado e portanto não
+    reclamaria. Item próprio em `TODO.md`; não misturar com a corrida da D7.
+
+    Espelha `_wrapup_close_reason` do orchestrator-bridge, que carimba o mesmo
+    fato no SEGMENTO — lá `task_submitted`, aqui `task_done`, por o nome do
+    routing já existir antes. Mesmo eixo, dois domínios; não inventar um terceiro.
+    """
+    if payload.get("decision") != "timeout":
+        return "task_done"
+    if str(payload.get("source") or "").startswith("supervisor"):
+        return "acw_supervisor_closed"
+    return "acw_expired"
+
+
+def _resume_actor(payload: dict[str, Any], approver: dict[str, Any] | None) -> str:
+    """
+    QUEM está encerrando. Preferência pelo principal verificado (o aprovador do
+    A5, que passou por JWT+ABAC); na ausência dele, o `source` do payload — que
+    o `handle_resume` garante existir (`setdefault("external")`), então esta
+    função nunca devolve vazio.
+    """
+    if approver and approver.get("decided_by"):
+        return f"human:{approver['decided_by']}"
+    return str(payload.get("source") or "external")
+
+
+class ResumeAlreadyTerminalError(RuntimeError):
+    """
+    Fase F (D7) — este resume já foi encerrado, ou está sendo encerrado agora
+    por outro. Mapeia para **409**, não 404.
+
+    A diferença não é cosmética. 404 afirma *"o token nunca existiu ou venceu"*,
+    e era exatamente o que o agente recebia quando um supervisor encerrava o item
+    que ele estava preenchendo: a tela dizia que a sessão dele tinha expirado. A
+    D7 pede recusa explícita, e recusa sem nome — sobre uma causa errada — não é
+    explícita. 409 afirma *"já acabou"*, e o detalhe diz por quem e por quê.
+
+    `state`:
+      · `in_flight` — outro resume está NO MEIO do caminho (corrida real);
+      · `terminal`  — outro resume já concluiu (o caso sequencial).
+    """
+
+    def __init__(
+        self,
+        *,
+        state:      Literal["in_flight", "terminal"],
+        session_id: str = "",
+        by:         str = "",
+        cause:      str = "",
+        at:         str = "",
+    ) -> None:
+        self.state      = state
+        self.session_id = session_id
+        self.by         = by
+        self.cause      = cause
+        self.at         = at
+        super().__init__(
+            f"resume already {state} (by={by or '?'} cause={cause or '?'} at={at or '?'})"
+        )
+
+    def as_detail(self) -> dict[str, str]:
+        """Corpo do 409 — o que a tela precisa para dizer a frase certa."""
+        return {
+            "error":      "resume_already_terminal",
+            "state":      self.state,
+            "session_id": self.session_id,
+            "closed_by":  self.by,
+            "cause":      self.cause,
+            "closed_at":  self.at,
+        }
+
+
 def _mask_pii(value: Any) -> str | None:
     """Mascara PII formatada num valor (net-pass). None permanece None."""
     if value is None:
@@ -670,6 +802,11 @@ class WebhookAdapter(ChannelAdapter):
         the reconnect-offer origins land with the Fase B resume path.
 
         Returns session_id on success, None if the token is unknown/expired.
+
+        Fase F (D7): levanta `ResumeAlreadyTerminalError` (→ 409) quando outro
+        gatilho já encerrou este resume, ou o está encerrando agora. Ver o bloco
+        de comentário do topo do módulo para por que a exclusão é um lock e não
+        um HDEL antecipado.
         """
         # Fase E.3: garante uma fonte de resume (resumed_by). Quem entra aqui sem
         # source é o resume externo (curl/operador/API); o tool workflow_resume marca
@@ -677,10 +814,155 @@ class WebhookAdapter(ChannelAdapter):
         payload = dict(payload or {})
         payload.setdefault("source", "external")
 
+        actor        = _resume_actor(payload, approver)
+        inflight_key = _resume_inflight_key(tenant_id, resume_token)
+
+        # ── Fase F — EXCLUSÃO MÚTUA, antes de qualquer await que possa ceder ──
+        # `SET NX` é uma operação atômica única: exatamente um chamador recebe
+        # verdadeiro. Não usa Lua de propósito — o valor do token continua
+        # intocado até o consumo, então a retentabilidade e o 403 do A5 seguem
+        # como estavam.
+        try:
+            won = await self._redis.set(
+                inflight_key, actor, nx=True, ex=_RESUME_INFLIGHT_TTL_S,
+            )
+        except Exception as exc:
+            # O lock é a única linha de defesa da unicidade, mas uma falha de
+            # Redis não pode recusar resume legítimo. Degrada permissivo E
+            # BARULHENTO — degradação silenciosa aqui reapareceria como duplo
+            # encerramento sem nada vermelho.
+            logger.warning(
+                "Fase F: lock de resume indisponível (token=%s tenant=%s): %s — "
+                "seguindo SEM exclusão mútua",
+                resume_token, tenant_id, exc,
+            )
+            won = True
+
+        if not won:
+            holder = ""
+            try:
+                _raw = await self._redis.get(inflight_key)
+                # Decodifica defensivamente: o cliente pode ou não vir com
+                # `decode_responses`, e sem isto o 409 sairia com
+                # `closed_by: "b'agent'"` — um nome que não é nome. Mesmo cuidado
+                # que o `read_work_task` já toma neste arquivo.
+                holder = (_raw if isinstance(_raw, str) else _raw.decode()) if _raw else ""
+            except Exception:
+                pass
+            logger.warning(
+                "Fase F 409: resume do token=%s (tenant=%s) recusado — outro "
+                "encerramento EM CURSO por %s; chamador=%s",
+                resume_token, tenant_id, holder or "?", actor,
+            )
+            raise ResumeAlreadyTerminalError(state="in_flight", by=holder or "?")
+
+        try:
+            return await self._handle_resume_locked(
+                resume_token      = resume_token,
+                tenant_id         = tenant_id,
+                payload           = payload,
+                actor             = actor,
+                resume_origin     = resume_origin,
+                approver          = approver,
+                claim_pool_id     = claim_pool_id,
+                claim_instance_id = claim_instance_id,
+            )
+        finally:
+            # Solto SEMPRE, inclusive no 403 do A5 e em falha no meio: segurar o
+            # lock por 45 s depois de uma recusa transformaria uma recusa legítima
+            # em indisponibilidade temporária do item.
+            try:
+                await self._redis.delete(inflight_key)
+            except Exception:
+                pass
+
+    async def _read_resume_terminal(
+        self, tenant_id: str, resume_token: str,
+    ) -> dict[str, Any] | None:
+        """Registro terminal do token, se houver. Ausência ≠ erro."""
+        try:
+            raw = await self._redis.get(_resume_terminal_key(tenant_id, resume_token))
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    async def _write_resume_terminal(
+        self,
+        tenant_id:    str,
+        resume_token: str,
+        session_id:   str,
+        step_id:      str,
+        actor:        str,
+        cause:        str,
+    ) -> None:
+        """
+        Grava QUEM encerrou e POR QUÊ, para o próximo a chegar poder ser recusado
+        **com nome**. Sem isto, depois que o token some o perdedor volta a receber
+        "token não encontrado" — a recusa muda sem que a causa apareça.
+
+        TTL 25 h: o prazo do item é ≤ 24 h, então a janela cobre todo o período em
+        que alguém ainda poderia plausivelmente clicar em enviar.
+        """
+        try:
+            await self._redis.set(
+                _resume_terminal_key(tenant_id, resume_token),
+                json.dumps({
+                    "session_id": session_id,
+                    "step_id":    step_id,
+                    "by":         actor,
+                    "cause":      cause,
+                    "at":         datetime.now(timezone.utc).isoformat(),
+                }),
+                ex=_RESUME_TERMINAL_TTL_S,
+            )
+        except Exception as exc:
+            # Best-effort: perder o registro custa o NOME da recusa, não a
+            # unicidade (que é do lock + do consumo do token). Mas nunca calado.
+            logger.warning(
+                "Fase F: não gravou o registro terminal (token=%s): %s — a próxima "
+                "recusa vai sair sem causa",
+                resume_token, exc,
+            )
+
+    async def _handle_resume_locked(
+        self,
+        resume_token:  str,
+        tenant_id:     str,
+        payload:       dict[str, Any],
+        actor:         str,
+        resume_origin: str = "token",
+        approver:          dict[str, Any] | None = None,
+        claim_pool_id:     str | None = None,
+        claim_instance_id: str | None = None,
+    ) -> str | None:
+        """
+        Corpo do resume, já sob o lock da Fase F. Separado de `handle_resume` só
+        para que a exclusão mútua tenha um `finally` que não dependa de nenhum
+        `return` do corpo — não há mudança de comportamento nesta divisão.
+        """
         hash_key    = f"{tenant_id}:resume_tokens"
         token_value = await self._redis.hget(hash_key, resume_token)
 
         if not token_value:
+            # Fase F — token ausente tem DUAS causas, e até aqui elas saíam com a
+            # mesma resposta. Se há registro terminal, o item foi encerrado (o
+            # caso do supervisor que encerra enquanto o agente preenche): 409 com
+            # a causa. Sem registro, é ausência honesta: 404 como antes.
+            terminal = await self._read_resume_terminal(tenant_id, resume_token)
+            if terminal:
+                logger.warning(
+                    "Fase F 409: resume do token=%s (tenant=%s) recusado — já "
+                    "encerrado por %s (%s) em %s; chamador=%s",
+                    resume_token, tenant_id, terminal.get("by"),
+                    terminal.get("cause"), terminal.get("at"), actor,
+                )
+                raise ResumeAlreadyTerminalError(
+                    state      = "terminal",
+                    session_id = str(terminal.get("session_id") or ""),
+                    by         = str(terminal.get("by") or "?"),
+                    cause      = str(terminal.get("cause") or "?"),
+                    at         = str(terminal.get("at") or ""),
+                )
             logger.warning(
                 "webhook resume: unknown or expired token=%s tenant=%s",
                 resume_token, tenant_id,
@@ -876,10 +1158,11 @@ class WebhookAdapter(ChannelAdapter):
         #     sintoma seria uma tarefa que some da inbox sem ninguém a ter tocado.
         _wt = await self.read_work_task(tenant_id, session_id)
         if _wt:
-            _reason = "acw_expired" if payload.get("decision") == "timeout" else "task_done"
-            _src = str(payload.get("source") or "")
-            if _src.startswith("supervisor"):
-                _reason = "acw_supervisor_closed"
+            # Fase F — a expressão inline que morava aqui virou `_terminal_cause`,
+            # porque o registro terminal precisa da MESMA causa. Duas cópias da
+            # regra divergiriam, e a divergência sairia como um encerramento
+            # gravado com um nome e recusado com outro.
+            _reason = _terminal_cause(payload)
             await self._routing_work_task_expire(
                 tenant_id  = tenant_id,
                 pool_id    = str(_wt.get("pool_id") or ""),
@@ -901,6 +1184,15 @@ class WebhookAdapter(ChannelAdapter):
             )
 
         await self._publish(event, topic="conversations.inbound")
+
+        # Fase F — o registro terminal é escrito ANTES do consumo, e a ordem é
+        # load-bearing: entre o HDEL e a escrita haveria um instante em que o
+        # token já não existe e a causa ainda não existe, e um resume caindo ali
+        # levaria o 404 antigo — a recusa sem nome que esta fase remove.
+        await self._write_resume_terminal(
+            tenant_id, resume_token, session_id, step_id, actor,
+            _terminal_cause(payload),
+        )
 
         # Clean up the token after successful resume (one-shot)
         await self._redis.hdel(hash_key, resume_token)
@@ -2065,6 +2357,17 @@ class WebhookAdapter(ChannelAdapter):
                         resume_token=token,
                         tenant_id=tenant_id,
                         payload={"decision": "timeout", "source": "timeout_scanner"},
+                    )
+                except ResumeAlreadyTerminalError as exc:
+                    # Fase F — o scanner PERDER para uma entrega viva é o
+                    # comportamento correto, não uma falha: o agente estava
+                    # submetendo quando o prazo bateu, e a entrega vence o prazo.
+                    # Logar como warning aqui ensinaria a operação a ignorar
+                    # warnings do scanner.
+                    logger.info(
+                        "webhook timeout scanner: token=%s já terminal (%s por %s) — "
+                        "expiração descartada, e é o resultado certo",
+                        token, exc.state, exc.by or "?",
                     )
                 except Exception as exc:
                     logger.warning(

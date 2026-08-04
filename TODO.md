@@ -121,6 +121,31 @@ seria confundir dois defeitos.
 401 já basta), e responder *"o que este registro grava, e quem lê"*. Se a resposta for "nada que
 alguém leia", o item vira remoção da chamada — não conserto do token.
 
+## `source` do resume é asserido pelo CLIENTE na porta pública *(achado 2026-08-04, ao implementar a Fase F)*
+
+`_terminal_cause` (channel-gateway `adapters/webhook.py`) decide entre `task_done`, `acw_expired` e
+`acw_supervisor_closed` lendo `payload["source"]`. Os gatilhos internos escrevem esse campo
+server-side (o tool marca `agent`, o scanner `timeout_scanner`, o endpoint do supervisor
+`supervisor:{sub}`) — mas o `POST /v1/channels/webhook/resume/{token}` **repassa o `payload` do corpo
+verbatim**. Um chamador externo pode declarar `source: "supervisor:x"` e obter o carimbo
+`acw_supervisor_closed` no segmento.
+
+**A exposição é anterior à Fase F** — a expressão inline lia o mesmo campo — mas a F a tornou
+**durável**: a causa agora também vai para `{t}:resume_terminal:{token}`, que vive 25 h e é o que
+nomeia a recusa do próximo. Uma causa forjada deixou de ser efêmera.
+
+**Por que NÃO foi fechado junto:** o conserto óbvio (rebaixar `source` quando não há principal
+verificado) depende de `_resolve_approver_principal`, que ainda não foi lido. No caminho genérico de
+form-fill o `resume_required_abac` devolve `None` — se disso resultar `approver is None` também para
+um supervisor legítimo, o downgrade cego **derrubaria o expire do supervisor**. E esse caminho
+`acw_supervisor_closed` tem **0 ocorrências** no demo (medido): ele não reclamaria. Fechar no escuro
+seria trocar um defeito silencioso por outro.
+
+**Primeiro passo:** ler `_resolve_approver_principal` e responder *"um Bearer de supervisor sem ABAC
+exigida produz principal?"*. Só então decidir entre rebaixar no endpoint ou exigir o header. Validar
+com `INSTANCE=human-<user_id> bash infra/test/smoke_acw_expire.sh`, que é o único jeito de exercitar
+o ramo reivindicado do supervisor.
+
 ## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03; **2b REENQUADRADA em 2026-08-04 — no lugar dela apareceu um defeito de duplicação, aberto e mais grave**; seguem abertas 2/3/4/6)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:
