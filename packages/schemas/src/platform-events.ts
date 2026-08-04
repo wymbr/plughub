@@ -233,6 +233,46 @@ export const AgentDoneEventSchema = z.object({
 })
 export type AgentDoneEvent = z.infer<typeof AgentDoneEventSchema>
 
+/**
+ * Fase E (D8) — liberação de vaga SEM conclusão de trabalho.
+ *
+ * Publicado pelo orchestrator-bridge quando o transporte de um agente humano
+ * cai (`agent_disconnect`) num CONTATO DE CLIENTE. O routing-engine trata este
+ * evento exatamente como `agent_done` para efeito de capacidade
+ * (`remove_conversation`) — o que muda é o significado: a vaga volta, o
+ * atendimento não terminou.
+ *
+ * Existe porque reusar `agent_done` seria um nome servindo dois fatos — a mesma
+ * falha que a Fase E corrigiu no mapa de `close_reason` do bridge. Ver
+ * `docs/adr/adr-work-item-requeue-and-agent-affinity.md` § D8.
+ *
+ * NÃO é publicado quando a queda é sobre um ITEM DE FILA PULL: ali o
+ * `work_task_release` (Fase B) já devolve a vaga, e um evento a mais seria
+ * liberação dupla.
+ *
+ * ⚠️ Divergência conhecida, herdada e NÃO corrigida aqui: o `AgentDoneEventSchema`
+ * acima descreve o produtor do mcp-server (`session_id`, `participant_id`,
+ * `current_sessions`), enquanto o orchestrator-bridge publica `conversation_id`,
+ * `pools`, `agent_type_id` e `keep_slot_for_wrapup`. Foi essa divergência que
+ * fez o consumidor analítico descartar 100% do `agent_done` do bridge até a
+ * remoção de `agent_events` em 2026-07-28 (analytics-api/models.py). Este schema
+ * descreve o que o BRIDGE realmente publica; reconciliar o de cima é item
+ * próprio, e fundi-los sem medir repetiria o erro.
+ */
+export const AgentReleasedEventSchema = z.object({
+  event:                 z.literal("agent_released"),
+  tenant_id:             z.string(),
+  instance_id:           z.string(),
+  agent_type_id:         z.string().optional(),
+  pools:                 z.array(z.string()).optional(),
+  /** id do contato cuja vaga volta (o bridge chaveia por contato, não por sessão de agente) */
+  conversation_id:       z.string(),
+  /** sempre false numa queda: não há wrap-up inline para herdar a vaga */
+  keep_slot_for_wrapup:  z.boolean().optional(),
+  timestamp:             z.string().datetime(),
+})
+export type AgentReleasedEvent = z.infer<typeof AgentReleasedEventSchema>
+
 export const AgentPauseEventSchema = z.object({
   event:         z.literal("agent_pause"),
   tenant_id:     z.string(),
@@ -293,6 +333,7 @@ export const AgentLifecycleEventSchema = z.discriminatedUnion("event", [
   AgentReadyEventSchema,
   AgentBusyEventSchema,
   AgentDoneEventSchema,
+  AgentReleasedEventSchema,
   AgentPauseEventSchema,
   AgentLogoutEventSchema,
   AgentHeartbeatEventSchema,

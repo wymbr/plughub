@@ -3059,6 +3059,57 @@ def _close_reason_from_transport(transport: str, session_id: str = "") -> str | 
     return cr
 
 
+# ── Fase E (D8) — o mapa do domínio de SEGMENTO ───────────────────────────────
+# Só transportes em que o CONTATO **não** fecha: o segmento acabou, o contato
+# segue. É o critério inteiro, e é por isso que este mapa não pode ser fundido
+# com o de cima — lá o valor descreve por que o CONTATO terminou, aqui descreve
+# por que ESTE segmento terminou, e nos dois casos abaixo o contato não terminou
+# coisa alguma.
+#
+#   agent_disconnect  o transporte do agente caiu. Sob a D2 o item volta à fila e
+#                     o agente reivindica de novo — a queda não é conclusão de
+#                     trabalho, e carimbá-la com vocabulário de contato
+#                     (`agent_hangup`) diria que o atendente encerrou.
+#   agent_transfer    o segmento de origem fecha e o contato segue por re-rota
+#                     (o branch de transfer em handle_agent_close retorna sem
+#                     fechar). Produtor DEDUZIDO do código, não medido: nenhum
+#                     WARNING de transfer apareceu no probe de 2026-08-04.
+#
+# A união de vocabulários já existe nesta coluna e não é categoria nova: hoje
+# convivem em `analytics.segments.close_reason` os valores de contato
+# (`agent_hangup`) e os de segmento (`task_submitted`, `acw_expired`,
+# `acw_supervisor_closed`), e os relatórios já os discriminam
+# (`_WRAPUP_CLOSE_REASONS`, analytics-api/reports_query.py).
+_TRANSPORT_TO_SEGMENT_CLOSE_REASON = {
+    "agent_disconnect": "agent_disconnect",
+    "agent_transfer":   "agent_transfer",
+}
+
+
+def _segment_close_reason_from_transport(
+    transport: str, session_id: str = "",
+) -> str | None:
+    """
+    Deriva o `close_reason` do SEGMENTO no fim de segmento pelo lado do AGENTE.
+
+    **Uma regra de precedência, explícita.** Transporte em que o contato não
+    fecha → vocabulário de segmento. Qualquer outro → o motivo do CONTATO é
+    também o motivo do segmento (o segmento acabou porque o contato acabou), e a
+    derivação cai em `_close_reason_from_transport`, que loga se também não
+    souber. Desconhecido continua devolvendo None — ausência visível.
+
+    *Por que uma função separada e não mais uma linha no mapa compartilhado:* o
+    mapa de contato alimenta um enum fechado (`CloseReasonSchema`); acrescentar
+    `agent_disconnect` a ele escolheria um dos dois domínios em silêncio, que é
+    exatamente o palpite que o docstring de `_close_reason_from_transport`
+    existe para impedir. Ver ADR § D8 e § 4 (alternativa descartada).
+    """
+    cr = _TRANSPORT_TO_SEGMENT_CLOSE_REASON.get(transport or "")
+    if cr is not None:
+        return cr
+    return _close_reason_from_transport(transport, session_id)
+
+
 # ── F5 (grão segmento): acumulador de sinais por segmento humano ──────────────
 # Cada on_human_end serve um SEGMENTO humano específico (o do pool que disparou
 # o hook). Os sinais (disposição do wrap-up, NPS) são acumulados num hash Redis
@@ -6541,11 +6592,20 @@ async def process_contact_event(
                 # on_human_end (process_routed) a disposição/NPS são atribuídos a
                 # ESTE segmento. Keyed por pool → suporta N humanos/pools por contato
                 # (o "último primário único" da F1.4 era simplificação de demo).
-                # Motivo do encerramento do CONTATO, derivado do transporte que
+                # Motivo do encerramento DESTE SEGMENTO, derivado do transporte que
                 # chegou no evento. Está em escopo aqui — era o "precisa derivar o
                 # valor por conta própria" que o TODO listava como obstáculo da
                 # opção (a), e que na prática é uma linha.
-                _ha_close_reason = _close_reason_from_transport(reason, session_id)
+                #
+                # Fase E: este é o fim de segmento pelo lado do AGENTE, e só aqui
+                # existem transportes em que o contato NÃO fecha (queda, transfer).
+                # Os outros dois call sites (customer_side e hook de fim) seguem no
+                # mapa de contato: lá o contato terminou de fato, e o motivo dele é
+                # o motivo do segmento. Antes, `agent_disconnect` caía fora do mapa
+                # único e o segmento saía mudo — medido em 2026-08-04: 12 de 14
+                # segmentos humanos sem close_reason vinham de pools de pull cujo
+                # item nunca foi entregue.
+                _ha_close_reason = _segment_close_reason_from_transport(reason, session_id)
                 if _ha_seg_id and _ha_pool:
                     _hs_record = {
                         "segment_id":     _ha_seg_id,
@@ -6644,12 +6704,13 @@ async def process_contact_event(
                     # registry estiver fora — nunca segura vaga sem certeza.
                     # Resolvido DENTRO da task (o publish já era fire-and-forget):
                     # o GET ao registry não pode atrasar o handler de fechamento.
-                    async def _publish_agent_done_with_hold_flag(
+                    async def _publish_lifecycle_end(
+                        _event="agent_done", _resolve_hold=True,
                         _t=_ha_tenant, _p=_ha_pool, _i=instance_id,
                         _at=_ha_agent_type_id, _s=session_id,
                     ) -> None:
                         _keep_slot = False
-                        if http and _p and _t:
+                        if _resolve_hold and http and _p and _t:
                             try:
                                 _keep_slot = _has_inline_agent_wrapup(
                                     await get_pool_config(http, _t, _p)
@@ -6663,7 +6724,7 @@ async def process_contact_event(
                         await _kafka_producer.send(
                             TOPIC_LIFECYCLE,
                             json.dumps({
-                                "event":           "agent_done",
+                                "event":           _event,
                                 "tenant_id":       _t,
                                 "instance_id":     _i,
                                 "agent_type_id":   _at,
@@ -6674,12 +6735,43 @@ async def process_contact_event(
                             }).encode("utf-8"),
                         )
                         logger.info(
-                            "agent_done published to lifecycle (human agent): "
+                            "%s published to lifecycle (human agent): "
                             "session=%s instance=%s pool=%s tenant=%s keep_slot_for_wrapup=%s",
-                            _s, _i, _p, _t, _keep_slot,
+                            _event, _s, _i, _p, _t, _keep_slot,
                         )
 
-                    asyncio.create_task(_publish_agent_done_with_hold_flag())
+                    # ── Fase E (D8) — queda NÃO conclui trabalho ─────────────
+                    # `agent_done` significa "o agente terminou o atendimento", e
+                    # o routing o usa para devolver a vaga. Num `agent_disconnect`
+                    # a segunda metade continua verdadeira e a primeira não: o
+                    # transporte caiu, o trabalho não acabou. Então muda o NOME,
+                    # e só ele — `agent_released` tem efeito idêntico no routing.
+                    #
+                    # ⚠️ O primeiro desenho desta fase suprimia o evento no ramo de
+                    # ITEM DE TRABALHO, com o argumento de que o `work_task_release`
+                    # (Fase B) já chama `release_instance` e o publish seria
+                    # liberação dupla. Está ERRADO, e a leitura do
+                    # `remove_conversation` mostrou por quê: além de liberar a vaga
+                    # ele restaura a MEMBERSHIP dos SETs do pool (SADD no ready_set,
+                    # SREM no busy_set) e ressincroniza o espelho `current_sessions`
+                    # — nada disso está no `work_task_release`. Como o
+                    # `mark_busy` do claim tira o humano do ready_set ao bater a
+                    # capacidade (max_concurrent=1 é o caso comum), suprimir o
+                    # evento deixaria o agente FORA do ready_set depois de cada F5:
+                    # invisível para o roteamento por push, sem nada ficar vermelho.
+                    #
+                    # `_resolve_hold=False` é a única mudança de efeito, e é
+                    # deliberada: o hand-off de vaga (Phase 2) existe para o wrap-up
+                    # inline do próprio atendente herdar a vaga. Numa queda não há
+                    # herdeiro — o autor sumiu e o branch de disconnect retorna sem
+                    # disparar hook nenhum. Segurar a vaga ali é segurá-la para
+                    # ninguém, até o TTL do hold.
+                    if reason == "agent_disconnect":
+                        asyncio.create_task(_publish_lifecycle_end(
+                            _event="agent_released", _resolve_hold=False,
+                        ))
+                    else:
+                        asyncio.create_task(_publish_lifecycle_end())
                 else:
                     logger.warning(
                         "agent_done NOT published (human agent): session=%s "

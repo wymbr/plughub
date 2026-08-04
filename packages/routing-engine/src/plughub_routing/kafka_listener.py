@@ -305,7 +305,19 @@ class LifecycleEventHandler:
                 conversation_id = event.get("conversation_id", "")
                 if conversation_id:
                     await self._instances.add_conversation(tenant_id, instance_id, conversation_id)
-        elif event_type == "agent_done":
+        elif event_type in ("agent_done", "agent_released"):
+            # ── Fase E (D8) — dois NOMES, um efeito de capacidade ──────────────
+            # `agent_done`     o agente CONCLUIU o atendimento;
+            # `agent_released` o transporte do agente caiu (bridge, agent_disconnect
+            #                  em contato de cliente). A vaga tem de voltar — o
+            #                  re-route depende disso —, mas nada concluiu.
+            #
+            # O efeito aqui é deliberadamente o MESMO: este handler é dono de uma
+            # coisa só, devolver a vaga, e para essa pergunta os dois eventos dizem
+            # a mesma verdade. O que os separa é o significado, e ele importa a
+            # montante (quem lê "agent_done" como conclusão) e a jusante (o log).
+            # Reusar `agent_done` para os dois era um nome servindo dois fatos —
+            # a mesma falha que a Fase E corrigiu no mapa de `close_reason`.
             conversation_id = event.get("conversation_id", "")
             fallback_pools  = event.get("pools") or []
             # Phase 2 (hand-off da vaga): o BRIDGE carimba este flag quando o pool do
@@ -313,11 +325,17 @@ class LifecycleEventHandler:
             # é SEGURADA (swap para hold) em vez de liberada, e o auto-claim do wrap-up
             # a herda. O routing NÃO consulta hooks de pool (invariante): a decisão vem
             # pronta no evento. Ausente/false = release normal (retrocompat).
-            keep_slot = bool(event.get("keep_slot_for_wrapup"))
+            #
+            # Numa QUEDA nunca há hand-off: o autor sumiu, não há wrap-up inline
+            # para herdar a vaga. O bridge já manda o flag false; o `and` aqui é a
+            # segunda linha de defesa, para que um produtor futuro não consiga
+            # segurar vaga em nome de um agente que caiu.
+            keep_slot = bool(event.get("keep_slot_for_wrapup")) and event_type == "agent_done"
             logger.info(
-                "agent_done received: tenant=%s instance=%s conv=%s fallback_pools=%s "
+                "%s received: tenant=%s instance=%s conv=%s fallback_pools=%s "
                 "keep_slot_for_wrapup=%s",
-                tenant_id, instance_id, conversation_id, fallback_pools, keep_slot,
+                event_type, tenant_id, instance_id, conversation_id, fallback_pools,
+                keep_slot,
             )
             if conversation_id:
                 # Pass fallback_pools from the event payload so that human agents
@@ -331,9 +349,9 @@ class LifecycleEventHandler:
                 )
             else:
                 logger.warning(
-                    "agent_done: missing conversation_id — skipping remove_conversation "
+                    "%s: missing conversation_id — skipping remove_conversation "
                     "tenant=%s instance=%s pools=%s",
-                    tenant_id, instance_id, fallback_pools,
+                    event_type, tenant_id, instance_id, fallback_pools,
                 )
         elif event_type in ("agent_paused", "agent_logout"):
             await self._deactivate_instance(tenant_id, instance_id, event)

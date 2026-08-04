@@ -2,6 +2,99 @@
 
 ---
 
+## Fase E (D8): dois domínios de `close_reason`, dois nomes de evento ✅ (2026-08-04)
+
+Quinta fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).
+Fecha a **lacuna 6** e tira da queda de transporte a afirmação de que o atendimento acabou.
+
+### A medição veio antes, e corrigiu a fase duas vezes
+
+`infra/test/probe_fase_e_drop_footprint.sh` (novo — preflight de leitor, veredicto de 3 estados,
+não semeia nada). Tenant demo, janela 48 h:
+
+| | medido |
+|---|---|
+| sem `close_reason`, bruto | 69 de 86 |
+| … IA (`native`/`system`) | 55, **100 %** |
+| **lacuna 6 real** (humanos) | **14 de 31** |
+| pull de contato | `posse_test` 7/7 · `formfill_demo` 5/5 |
+| contato de cliente | `retencao_humano` 2/9 (7 × `agent_hangup`) |
+| **fila interna `-int`** | **0/9** (9 × `task_submitted`) |
+| pilha (par sessão×participante) | 1 par, 2 segmentos, ambos mudos |
+
+A aritmética fecha sem sobra (10 `task_submitted` + 7 `agent_hangup` + 14 ∅ = 31). **Ressalva
+registrada:** 7 dos 12 segmentos de pull são de `posse_test`, pool do `smoke_claim_possession.sh` —
+origem sintética, não contam como dano observado.
+
+**Correção 1 — a lacuna é maior que o F5.** A fila interna carimba 9/9 e os pools de pull de contato
+0/12: o carimbo de domínio de segmento já existia e funcionava, mas **só pela porta do submit**
+(`_wrapup_close_reason`). Toda saída de item reivindicado que não seja entrega saía muda.
+
+**Correção 2 — nada analítico lê o `agent_done`.** `analytics-api/models.py` o mapeia para `None`
+desde 2026-07-28, e o comentário da remoção da tabela `agent_events` registra que o ramo
+*"descartava 100 % do `agent_done` do bridge, em silêncio"* (o bridge chaveia `conversation_id`, o
+parser exigia `session_id`). Sobra um consumidor que age: o routing (`remove_conversation`). A
+premissa da D8 — *"contamina contagem, AHT e a bancada"* — acerta o dano e erra o veículo: quem
+contamina é a pilha de **segmentos**.
+
+**Correção 3 — suprimir o evento seria regressão.** O primeiro desenho tirava o publish do ramo de
+item de trabalho ("o `work_task_release` já libera a vaga"). Ler o `remove_conversation` derrubou:
+ele também restaura a membership dos SETs do pool (SADD ready_set / SREM busy_set) e o espelho
+`current_sessions`, e o `mark_busy` do claim tira o humano do ready_set a `max_concurrent=1`. O
+agente sairia **invisível para o roteamento por push depois de cada F5** — sem nada ficar vermelho.
+
+### O que foi implementado
+
+**Mapas separados** (`orchestrator-bridge/main.py`). `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` = só os
+transportes em que o CONTATO não fecha (`agent_disconnect`, `agent_transfer`);
+`_segment_close_reason_from_transport` consulta esse mapa e **cai** no de contato para todo o resto —
+uma regra de precedência, explícita. Usado só no fim de segmento pelo lado do agente; os outros dois
+call sites (customer_side, hook de fim) seguem no mapa de contato, onde o contato fecha de fato.
+`agent_transfer` entrou junto por ser a mesma lacuna na mesma linha — produtor **deduzido do
+código**, não medido (nenhum WARNING de transfer apareceu no probe).
+
+**Nome próprio para a liberação.** A queda publica `agent_released` em vez de `agent_done`
+(`AgentReleasedEventSchema` em `@plughub/schemas`); o routing trata os dois no mesmo `elif` — para
+"devolvo a vaga?" eles dizem a mesma verdade — e força `keep_slot_for_wrapup=false` no
+`agent_released`: o hand-off de vaga existe para o wrap-up inline **do próprio atendente** herdar a
+vaga, e numa queda não há herdeiro.
+
+**Divergência de schema nomeada, não consertada:** `AgentDoneEventSchema` descreve o produtor do
+mcp-server (`session_id`/`participant_id`/`current_sessions`), não o do bridge
+(`conversation_id`/`pools`/`agent_type_id`/`keep_slot_for_wrapup`). Foi essa divergência que fez o
+consumidor analítico descartar tudo até 2026-07-28. Reconciliar é item próprio; fundir sem medir
+repetiria o erro.
+
+### Validação
+
+- `orchestrator-bridge … tests/test_segment_close_reason_domain.py` — **15** (6 de fall-through do
+  domínio de contato, e 5 INVARIANTES). Os invariantes são o que importa: os testes de mapeamento
+  **continuariam verdes** se alguém "consertasse" a lacuna com uma linha a mais no mapa
+  compartilhado, que é o conserto descartado no § 4 do ADR.
+- `routing-engine … tests/test_agent_released_lifecycle.py` — **4** (inclui guarda de regressão da
+  Phase 2: `agent_done` ainda honra o hold).
+- `infra/test/check_fase_e_drop_stamp.sh` (sonda, exige Console): correlaciona as sessões que
+  publicaram `agent_released` com o `close_reason` do segmento no ClickHouse. Ramifica em
+  `agent_disconnect` ✅ · `agent_hangup` ❌ (vocabulário de contato vazou) · AUSENTE ❌ (lacuna 6
+  aberta) · segmento não ingerido ⚠️ INCONCLUSIVO.
+- **E2E no Console (2026-08-04, 3/3)** — claim de `0a939b61…` em `formfill_demo` → F5 → sonda:
+  `agent_released` publicado · nenhum `agent_done` para a mesma sessão · segmento com
+  `close_reason=agent_disconnect` (antes: NULL). A mesma tela provou o arco inteiro de uma vez: sem
+  formulário órfão (Fase D) e item de volta à fila como **RESERVED TO YOU** (Fase C).
+
+> **Nota de método — a sonda se recusou a dar verde duas vezes antes disso**, e as duas recusas
+> foram corretas: a primeira porque o F5 não tinha acontecido (o `#` da instrução virou comentário
+> de shell), a segunda porque o claim não tinha acontecido. Nos dois casos a saída foi
+> `INCONCLUSIVO`, não `0 quedas → ✅`. Foi o que impediu de registrar como validada uma fase que
+> ninguém havia exercitado.
+>
+> *Erro meu no diagnóstico, registrado:* pedi o log do **bridge** para investigar a ausência da
+> queda. O produtor do `agent_disconnect` é o **mcp-server** (`server.ts`, após 2 500 ms de graça e
+> gated por `sismember session:{sid}:human_agents`). Log vazio no consumidor não diz nada sobre o
+> produtor — a pergunta certa era duas camadas acima.
+
+---
+
 ## Fase D (D5): a tela deixa de ser fonte de posse ✅ (2026-08-04)
 
 Quarta fase do ADR [`adr-work-item-requeue-and-agent-affinity.md`](docs/adr/adr-work-item-requeue-and-agent-affinity.md).

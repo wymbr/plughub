@@ -98,6 +98,29 @@ Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 
 
 ---
 
+## `Pool registration returned HTTP 401` no login do agente humano *(achado 2026-08-04, na validação da Fase E)*
+
+Visto no log do mcp-server em **todo** pool do login do Console, seguido de sucesso:
+
+```
+[agent-ws] Pool registration returned HTTP 401: pool=formfill_demo
+[agent-ws] Human agent registered: instance=human-bef14526-… pools=retencao_humano,aprovacao_deploy,formfill_demo status=ready
+```
+
+O registro **degrada e segue** — e loga o motivo, que é o comportamento certo pela postura de
+engenharia. Mas um 401 é falha de **autenticação de serviço**, não estado normal: alguma chamada de
+registro de pool está indo sem `x-service-token` (ou com um que o destino não aceita), e o caminho
+que "conserta" a ausência é justamente o que impede de notar.
+
+**Não investigado, e por isso não afirmado:** qual endpoint devolve o 401, o que ele registraria se
+tivesse sucesso, e se alguma coisa depende disso mais tarde. O login funciona, o claim funciona e a
+Fase E foi validada com ele presente — então não é bloqueante, e misturá-lo com o arco de requeue
+seria confundir dois defeitos.
+
+**Primeiro passo quando for atacado:** capturar a URL e o status body (`console.error` no ramo do
+401 já basta), e responder *"o que este registro grava, e quem lê"*. Se a resposta for "nada que
+alguém leia", o item vira remoção da chamada — não conserto do token.
+
 ## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03; **2b REENQUADRADA em 2026-08-04 — no lugar dela apareceu um defeito de duplicação, aberto e mais grave**; seguem abertas 2/3/4/6)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:

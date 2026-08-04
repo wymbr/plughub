@@ -214,6 +214,63 @@ Queda de transporte não é conclusão de trabalho. O fim do segmento por queda 
 `_TRANSPORT_TO_CLOSE_REASON` compartilhado, que escolheria um dos dois domínios em silêncio.
 Separar os mapas fecha a lacuna 6 junto.
 
+#### Emenda de 2026-08-04 — o dano está certo, o VEÍCULO estava errado
+
+Medido antes de implementar (`infra/test/probe_fase_e_drop_footprint.sh`, tenant demo, 48 h):
+
+| | medido |
+|---|---|
+| segmentos sem `close_reason`, bruto | 69 de 86 |
+| … dos quais **IA** (`native`/`system`) | 55, **100 %** — nenhum call site `native` passa o campo |
+| **a lacuna 6 de verdade** (humanos) | **14 de 31** |
+| por família | pull de contato (`posse_test` 7/7, `formfill_demo` 5/5) = 12 · contato de cliente (`retencao_humano`) 2/9 · **fila interna `-int` 0/9** |
+| pilha (mesmo par sessão×participante) | 1 par, 2 segmentos, ambos sem motivo e sem outcome |
+
+Dois achados que mudaram a fase:
+
+**1. A lacuna 6 é maior do que "o F5 esquece o campo".** A fila interna carimba 9/9
+(`task_submitted`), e os pools de pull de contato carimbam 0/12. O carimbo de domínio de segmento
+**já existe e funciona** — mas só pela porta do SUBMIT (`_wrapup_close_reason`, no
+`session_resumed`). Toda saída de item reivindicado que não seja entrega sai muda. *(Ressalva: 7
+dos 12 são de `posse_test`, pool do `smoke_claim_possession.sh` — origem sintética, não contam
+como dano observado.)*
+
+**2. Nada analítico lê o `agent_done`.** `analytics-api/models.py` mapeia `agent_done → None`
+desde 2026-07-28, quando a tabela `agent_events` foi removida — e o comentário da remoção registra
+que o ramo *"exigia `session_id`, mas os call sites do orchestrator-bridge chaveiam o contato como
+`conversation_id` — então descartava 100 % do `agent_done` do bridge, em silêncio"*. O
+rules-engine só consome `agent_login`. Sobra **um** consumidor que age: o routing-engine
+(`remove_conversation`, liberação de vaga).
+
+Logo a pilha de `agent_done` falsos **nunca chegou** a contagem, AHT ou bancada. O dano que esta
+decisão nomeia é real e vem inteiro da pilha de **segmentos** (`conversations.participants` →
+`analytics.segments`). Deixar de publicar o evento, isolado, não limparia relatório nenhum.
+
+**3. E suprimi-lo teria sido uma regressão.** O primeiro desenho da Fase E suprimia o publish no
+ramo de item de trabalho ("o `work_task_release` já libera a vaga"). Ler o `remove_conversation`
+derrubou isso: além de liberar a vaga ele restaura a **membership dos SETs do pool** (SADD no
+ready_set, SREM no busy_set) e ressincroniza o espelho `current_sessions` — nada disso está no
+`work_task_release`. Como o `mark_busy` do claim tira o humano do ready_set ao bater a capacidade
+(`max_concurrent=1` é o caso comum), suprimir o evento deixaria o agente **fora do ready_set após
+cada F5**: invisível para o roteamento por push, e sem nada ficar vermelho.
+
+**Decisão emendada.** A queda continua publicando — com **nome próprio**:
+
+| ramo | evento | por quê |
+|---|---|---|
+| encerramento normal | `agent_done` | inalterado |
+| queda (`agent_disconnect`), qualquer ramo | **`agent_released`** | mesmo efeito de capacidade no routing (`remove_conversation`), sem afirmar conclusão |
+
+O routing trata os dois no mesmo `elif` — para a pergunta *"devolvo a vaga?"* eles dizem a mesma
+verdade, e o handler é dono de uma coisa só. O que muda é o significado, e ele importa a montante
+(quem lê `agent_done` como conclusão) e no log. Reusar um nome para dois fatos é a mesma falha que
+esta decisão corrige no mapa de `close_reason`.
+
+Única mudança de efeito: a queda publica `keep_slot_for_wrapup=false` incondicionalmente (e o
+routing força `false` para `agent_released`, como segunda linha de defesa). O hand-off de vaga
+existe para o wrap-up inline **do próprio atendente** herdar a vaga; numa queda não há herdeiro, e
+segurá-la é segurá-la para ninguém até o TTL do hold.
+
 ---
 
 ## 4. Alternativas descartadas
@@ -227,7 +284,9 @@ Separar os mapas fecha a lacuna 6 junto.
 | **Ledger `work_task` como fonte de posse** (a redação original da D6) | Retirada na emenda de 2026-08-04, ao implementar: o ledger não carrega claimant, e seu `assigned_to` é *reserva* — vazio em item pooled (fail-open intacto) e enganoso após o transbordo. Ver D6 § Emenda |
 | **Carência (timer) como mecanismo próprio** | Absorvida pela D3. Timer novo, específico de desconexão, resolvendo um caso do que a reserva com janela resolve em geral |
 | **Teto de rodadas de devolução** | O prazo já é o teto. Contador seria segunda regra dizendo o mesmo |
-| **Acrescentar `agent_disconnect` ao `_TRANSPORT_TO_CLOSE_REASON`** | Parecia conserto de uma linha. O mapa serve dois domínios e no `agent_disconnect` o contato **não fecha** — estender o compartilhado escolheria um domínio em silêncio, que é o palpite que o docstring da função existe para impedir |
+| **Acrescentar `agent_disconnect` ao `_TRANSPORT_TO_CLOSE_REASON`** | Parecia conserto de uma linha. O mapa serve dois domínios e no `agent_disconnect` o contato **não fecha** — estender o compartilhado escolheria um domínio em silêncio, que é o palpite que o docstring da função existe para impedir. *O teste `test_contact_map_never_absorbs_segment_transports` existe só para pegar quem tentar de novo: com a linha extra, todos os testes de MAPEAMENTO continuariam verdes* |
+| **Suprimir o `agent_done` do drop no ramo de item de trabalho** (o 1º desenho da Fase E) | Retirada ao implementar. O `work_task_release` libera a vaga, mas **não** restaura a membership dos SETs do pool nem o espelho `current_sessions` — e o `mark_busy` do claim tira o humano do ready_set. O agente sairia invisível para o roteamento por push depois de cada F5. Ver § D8 Emenda, item 3 |
+| **Não publicar nada no drop** (a leitura literal da D8) | Exigiria inventar uma liberação de vaga para o ramo de contato de cliente, sob pena de reabrir "vaga presa sem item" (fix 2a). Mais código, e — medido — zero ganho analítico: nada lê o `agent_done` |
 
 ---
 
@@ -282,7 +341,7 @@ reivindicado. A afinidade de agente vira feature reutilizável, não remendo de 
 | B | **D1** — devolução pelo `work_task_release` *(o `first_queued_ms` saiu do escopo: já é escrito, ver D2)* | A |
 | C | **D2+D3** — sempre devolver, reservado ao dono, com janela por tipo ✅ *(2026-08-04; D2 já vinha satisfeita por B — na prática é a D3. Janela em config-api ns `routing`: `-int` 300 s, demais 30 s)* | B |
 | D | **D5** — Console deriva posse do claim ✅ *(2026-08-04; guarda no mcp-server sobre `pool:pending_assignment`, veredicto puro `shouldDropOnPossession` — mesmos 4 ramos do submit e do drop)* | B |
-| E | **D8** — drop deixa de publicar `agent_done`; mapas de `close_reason` separados (fecha a lacuna 6) | C |
+| E | **D8** — mapas de `close_reason` separados (fecha a lacuna 6) + a queda publica `agent_released` no lugar de `agent_done` ⚠️ *(2026-08-04; ver § D8 Emenda — o "deixa de publicar" original virava regressão de membership de SET)* | C |
 | F | **D7** — resume terminal-uma-vez (corrida submit × expire) | C |
 
 A ordem não é negociável em A→B→C: cada uma torna a seguinte segura.
