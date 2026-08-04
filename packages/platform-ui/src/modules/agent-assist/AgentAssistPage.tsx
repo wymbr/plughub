@@ -635,6 +635,7 @@ export const AgentAssistPage: React.FC = () => {
         sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
         contactCount={contacts.size}
+        maxConcurrent={maxConcurrent}
         pools={selectablePools}
         activePools={activePools.filter(p => !p.endsWith("-int"))}
         poolStatuses={statuses}
@@ -676,6 +677,18 @@ export const AgentAssistPage: React.FC = () => {
                   <span className="text-2xs text-muted-light">· {poolDisplayLabel(previewPoolId, t)}</span>
                 )}
                 <div className="flex-1" />
+                {/* A razão do bloqueio precisa ser VISÍVEL, não só um `title`.
+                    Medido em 2026-08-04: com as vagas cheias o botão fica cinza
+                    e o único texto explicando isso aparecia no hover — que não
+                    existe no toque. Um controle desabilitado sem causa legível
+                    é lido como tela quebrada; foi essa leitura ("reivindiquei e
+                    veio vazio") que disparou uma investigação inteira na direção
+                    errada. */}
+                {atCapacity && (
+                  <span className="text-2xs text-warning-text whitespace-nowrap">
+                    {t("pullInbox.atCapacityCount", { n: contacts.size, max: maxConcurrent })}
+                  </span>
+                )}
                 <button
                   type="button"
                   disabled={atCapacity}

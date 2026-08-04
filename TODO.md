@@ -2232,16 +2232,55 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
 
 ### Achados de 2026-08-04 (na validação do F2) — três, em ordem de gravidade
 
-1. **A recusa de claim é EFÊMERA demais para o que ela custa** *(reescrito depois de ler o código —
-   a primeira redação dizia que o preview engolia o motivo, e é FALSO: `claimPreviewContact` faz
-   `addToast(pullInbox.claimReason.*, "error")`)*. Os dois caminhos avisam — inbox por `setError`
-   fixo no painel, preview por toast que some. Com as vagas cheias, o operador clica em Claim, o
-   toast passa, a tela do preview segue igual, e o que fica é "reivindiquei e veio vazio". Foi
-   assim que uma investigação inteira virou caça a defeito de ITEM (fantasma, `conference_id`,
-   `assigned_to` — três hipóteses mortas no dado) enquanto o endpoint respondia
-   `{"claimed":false,"reason":"no_capacity"}` desde o primeiro clique. **Verificar primeiro** se o
-   toast realmente aparece (encher a capacidade e olhar a tela); só então decidir entre torná-lo
-   persistente, marcar o item na lista, ou nada.
+1. ~~**A recusa de claim é EFÊMERA demais**~~ ✅ **2026-08-04 — PREMISSA FALSA, medida na tela.**
+   Esta é a **terceira** redação do item, e as duas primeiras erraram pelo mesmo motivo: descreviam
+   a tela a partir do que se esperava do código. O que a leitura dos handlers + o experimento
+   acharam:
+
+   · **A inbox não tem botão de claim.** A linha do item é um `<button>` único que abre o preview
+     (`PullInboxPanel.tsx` §342). O `handlePull` — o do `setError` que as redações anteriores
+     chamavam de "erro fixo no painel" — tem **um único chamador**: o efeito de auto-atendimento do
+     wrap-up (§254). O operador nunca o dispara clicando.
+   · **E esse erro se apaga sozinho**: `setError(motivo)` na §224, `await refresh()` na §225, e
+     `refresh()` faz `setError(null)` na §130. Vive o tempo de um fetch. *(Contraria "degradação
+     NUNCA é silenciosa", mas só no caminho do auto-atendimento — item próprio, abaixo.)*
+   · **O claim manual é só o do preview, e lá o botão é `disabled={atCapacity}`**
+     (`AgentAssistPage.tsx` §681). Com as vagas cheias **não há clique, logo não há toast**.
+
+   **Experimento** (`infra/test/probe_claim_capacity_sources.sh` + tela, agente `human-bef14526…`,
+   `max_concurrent` 3), previsto × medido — todos bateram:
+
+   | | previsto | medido |
+   |---|---|---|
+   | cartões × ocupantes do semáforo | iguais | **iguais** (3 e 3, mesmos ids) |
+   | botão do preview com vagas cheias | cinza | **cinza** |
+   | toast de `no_capacity` | não dispara | **não disparou** |
+   | teto cliente (JWT) × árbitro (registro) | 3 × 3 | **3 × 3** |
+
+   **O gap real, que sobrou e foi consertado:** o teto nunca era exibido. O crachá dizia
+   "Serving 3", não "3/3", e a única explicação do botão cinza era um `title` — hover apenas,
+   inexistente no toque. Um controle desabilitado sem causa legível é lido como tela quebrada, e foi
+   essa leitura ("reivindiquei e veio vazio") que disparou a investigação errada. Fix: crachá vira
+   fração e ganha cor de lotação; o preview mostra "Todas as vagas em uso (3/3)" ao lado do botão.
+
+   **Não fazer:** tornar o toast persistente. Ele não dispara neste caminho — seria conserto
+   especulativo sobre um defeito não observado.
+
+1b. **`handlePull` apaga o próprio motivo de falha** *(aberto, pequeno)*. `setError` na §224 é
+   limpo pelo `refresh()` da §225. Hoje só o auto-atendimento de wrap-up passa por ali: quando o
+   auto-claim falha (sem vaga na janela do hand-off), o motivo some e o comentário da §237 promete
+   "degradação graciosa" — mas ela degrada **muda**, contra a invariante do CLAUDE.md. Junto: as
+   props `claimDisabled`/`claimDisabledReason` do `PullInboxPanel` são **mortas** (declaradas,
+   desestruturadas na §94, nunca usadas no render) — sobra do tempo em que a linha tinha botão.
+
+1c. **Item reivindicado depois de sair do ZSET** *(observação, causa não determinada)*. Na montagem
+   deste experimento, `509d5441…` foi removido da fila (`ZREM` → `1`) e o probe seguinte mostrou o
+   semáforo **vazio**; ainda assim o item foi reivindicado com sucesso minutos depois e virou
+   cartão. O `work_task_claim` §739 exige o `ZREM` vencedor (`atomic_claim_dequeue`), logo ele
+   **estava** no ZSET no momento do claim — algo o repôs. Pode ser um reconciliador fazendo o certo
+   (o ZSET é projeção; o ledger `work_task` é a verdade) ou um requeue perdido. **O `ZREM` foi
+   mutação sintética minha** — não teorizar sobre rastro próprio; reproduzir sem ele antes de
+   chamar de defeito.
 
 2. **Vaga ocupada por sessão que nunca virou cartão.** `9d37879e…` foi reivindicada às 19:39,
    consumiu vaga e não apareceu no Console; o `release` posterior confirmou posse real
@@ -2249,6 +2288,14 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    inteiro — e o sintoma que chega é `no_capacity` em tudo (achado 1), não "há uma sessão presa".
    **Causa desconhecida**; não confundir com a ocupação artificial que a montagem sintética do F2
    produziu no mesmo dia. Reproduzir antes de teorizar.
+
+   **Tentativa de reprodução em 2026-08-04 (achado 1): NÃO reproduziu.** Três claims seguidos,
+   ocupantes do semáforo == cartões na tela, mesmos ids, nenhum hold. Isso **não** absolve o
+   achado — só diz que o caminho feliz não o produz. Ficou o instrumento:
+   `infra/test/probe_claim_capacity_sources.sh` **identifica** cada ocupante (`SMEMBERS`, não
+   `SCARD` — contar não diz QUAL) e separa hold de sessão, então da próxima vez que a vaga sumir
+   basta rodá-lo para ter o id do ocupante sem cartão. Vale rodar logo após um wrap-up inline: a
+   janela do hold é curta e é a única ocupação legítima que nunca vira cartão.
 
 3. ~~**Rótulo "Reserva expirada"**~~ ✅ **2026-08-04** — os crachás de `reservedToMeExpired` e
    `overflowed` foram **removidos**, não reescritos. Primeira tentativa trocou os dois por "Aberto

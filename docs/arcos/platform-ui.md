@@ -340,6 +340,30 @@ Vite proxies added: `'^/api'` → `http://localhost:3100`, `'^/agent-ws'` → `w
 
 New dependency: `recharts@^2.x` (used by EstadoTab sentiment line chart).
 
+## Capacidade do agente na tela (2026-08-04)
+
+Duas fontes contam a capacidade do agente, e o Console só enxerga uma:
+
+| quem decide | fonte | inclui |
+|---|---|---|
+| **Console** (`atCapacity`) | `contacts.size >= JWT.maxConcurrentSessions ?? 3` | só o que virou **cartão** |
+| **Árbitro** (`work_task_claim` → `claim_instance`) | `SCARD {t}:instance:{iid}:sessions >= max_concurrent` do registro | **holds** `__wrapup_hold__::` (Phase 2) e sessões sem cartão |
+
+Enquanto concordam, o botão "Atender (Pull)" do preview (`disabled={atCapacity}`) é um previsor
+fiel. Quando discordam, ele fica habilitado e o servidor recusa com `no_capacity` — e a recusa é a
+única coisa que informa. Instrumento para diagnosticar:
+`infra/test/probe_claim_capacity_sources.sh`, que **identifica** cada ocupante (`SMEMBERS`) e separa
+hold de sessão.
+
+Por isso o teto é **exibido**: o crachá do `Header` mostra fração (`Serving 3/3`, cor de lotação
+quando cheio; sem a prop `maxConcurrent` mantém o rótulo antigo) e o preview mostra "Todas as vagas
+em uso (n/max)" ao lado do botão desabilitado. Antes, a razão do bloqueio existia só num `title` —
+hover apenas, inexistente no toque —, e um botão cinza sem causa legível é lido como tela quebrada.
+
+**Não há botão de claim na linha da inbox**: a linha abre o preview, e o claim manual acontece só na
+barra do preview. O `handlePull` do `PullInboxPanel` serve exclusivamente o auto-atendimento de
+wrap-up (Camada E2).
+
 ## Module structure
 
 ```

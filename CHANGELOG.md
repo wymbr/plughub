@@ -2,6 +2,71 @@
 
 ---
 
+## Teto de capacidade visível no Console ✅ (2026-08-04)
+
+Fecha o achado 1 de 2026-08-04 (TODO § "Fila de trabalho humano … resíduos pós-v1") — **por
+refutação**. O item afirmava que a recusa de claim era efêmera demais: *"o operador clica, o toast
+passa, a tela não muda, e ele conclui 'reivindiquei e veio vazio'"*. A medição derrubou a premissa,
+e o que sobrou é menor e de outra natureza.
+
+### O que a leitura dos handlers achou (antes de qualquer medição)
+
+- **A inbox não tem botão de claim.** A linha do item é um `<button>` único que abre o preview
+  (`PullInboxPanel.tsx` §342). O `handlePull` — o do `setError` descrito como "erro fixo no painel"
+  — tem **um único chamador**: o auto-atendimento de wrap-up (§254). O operador nunca o dispara.
+- **E esse erro se apaga sozinho**: `setError(motivo)` §224 → `await refresh()` §225 → `setError(null)`
+  §130. Vive o tempo de um fetch.
+- **O claim manual é só o do preview**, e lá o botão é `disabled={atCapacity}` (§681) — com as vagas
+  cheias não há clique, logo não há toast.
+
+### Medido — previsto × medido, `infra/test/probe_claim_capacity_sources.sh` + tela
+
+Agente `human-bef14526…`, `max_concurrent` 3, três claims seguidos:
+
+| | previsto | medido |
+|---|---|---|
+| cartões × ocupantes do semáforo | iguais | **iguais** (3 e 3, mesmos ids) |
+| botão do preview com vagas cheias | cinza | **cinza** |
+| toast de `no_capacity` | não dispara | **não disparou** |
+| teto cliente (JWT, default 3) × árbitro (registro) | 3 × 3 | **3 × 3** |
+
+O probe existe porque **cliente e árbitro contam capacidade em fontes diferentes**: o Console usa
+`contacts.size >= JWT.maxConcurrentSessions` (conta CARTÕES); o árbitro usa
+`SCARD {t}:instance:{iid}:sessions >= max_concurrent` do registro (conta OCUPANTES DO SEMÁFORO, que
+incluem os holds `__wrapup_hold__::` da Phase 2 e qualquer sessão que ocupe vaga sem virar cartão).
+Quando discordam, o botão fica habilitado e o servidor recusa. **Nesta amostra não discordaram** —
+o que também não reproduziu o achado 2. O probe **identifica** cada ocupante (`SMEMBERS`, não
+`SCARD`: contar não diz QUAL) e separa hold de sessão, e fica como instrumento para a próxima vez.
+
+### O que entrou
+
+- `Header.tsx` — prop `maxConcurrent`; o crachá vira **fração** (`Serving 3/3`) e ganha cor de
+  lotação quando cheio. **Sem a prop, mantém o rótulo antigo** — ausência é honesta; inventar um
+  denominador não seria.
+- `AgentAssistPage.tsx` — passa `maxConcurrent` ao Header e mostra **"Todas as vagas em uso (3/3)"**
+  ao lado do botão desabilitado do preview. A razão do bloqueio existia só num `title`, que aparece
+  no hover e **nunca no toque**; um controle cinza sem causa legível é lido como tela quebrada — foi
+  essa leitura que disparou uma investigação inteira na direção errada.
+- i18n nos dois locales: `agentAssist:header.attendingOfMax`, `header.atCapacityHint`,
+  `pullInbox.atCapacityCount`. Variável **`{{n}}`, não `{{count}}`**: `count` liga a pluralização do
+  i18next (o repo usa o sufixo `_plural`) e estas chaves não têm formas plurais.
+
+### Não feito, de propósito
+
+Tornar o toast persistente. **Ele não dispara neste caminho** — seria conserto especulativo sobre um
+defeito não observado. Fica registrado no TODO como 1b o que é real e sobrou: o `setError` do
+`handlePull` apagado pelo `refresh` seguinte (degrada mudo, contra a invariante) e as props mortas
+`claimDisabled`/`claimDisabledReason`.
+
+### Lição de método (a mesma da sessão anterior, agora com preço fechado)
+
+Esta foi a **terceira** redação do achado 1, e as duas primeiras erraram igual: descreviam a tela a
+partir do que se esperava do código. Ler os dois handlers custou minutos e derrubou a premissa
+inteira antes de escrever uma linha de conserto. **Ler o handler antes de nomear o defeito;
+perguntar ao endpoint antes de explicar a tela.**
+
+---
+
 ## F2: o Console LÊ o 409 da Fase F ✅ (2026-08-04)
 
 Resíduo de UI da Fase F ([ADR](docs/adr/adr-work-item-requeue-and-agent-affinity.md) § D7, emenda F2).

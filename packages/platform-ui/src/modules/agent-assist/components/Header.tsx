@@ -31,6 +31,14 @@ interface HeaderProps {
   /** @deprecated — timer now shown only in the contact list and ActionBar (Fase B) */
   sessionStartedAt?: Date | null;
   contactCount?:    number;
+  /**
+   * Teto de sessões simultâneas do agente. Exibido AO LADO da contagem porque,
+   * sem ele, "Serving 3" não explica um botão de claim desabilitado — medido em
+   * 2026-08-04: com as vagas cheias o Console mostrava só o 3, e a única pista
+   * do bloqueio era um `title` de hover (invisível no toque). O número sozinho
+   * é plausível e por isso não denuncia nada.
+   */
+  maxConcurrent?:   number;
   pools:            PoolInfo[];
   activePools:      string[];
   poolStatuses:     Map<string, PoolConnectionStatus>;
@@ -214,6 +222,7 @@ export const Header: React.FC<HeaderProps> = ({
   agentName,
   wsStatus,
   contactCount = 0,
+  maxConcurrent,
   pools,
   activePools,
   poolStatuses,
@@ -262,14 +271,29 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Right: contact-count badge / pause / WS status */}
         <div className="flex items-center gap-3 flex-shrink-0">
 
-          {contactCount > 0 && (
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full
-              bg-white/15 border border-white/25 text-white text-xs font-medium"
-              title={t('header.attending', { count: contactCount })}>
-              <span>🎧</span>
-              <span>{t('header.attending', { count: contactCount })}</span>
-            </div>
-          )}
+          {contactCount > 0 && (() => {
+            // Com o teto conhecido a contagem vira fração ("Serving 3/3"), e a
+            // lotação ganha cor própria. Sem teto (prop ausente) mantém o rótulo
+            // antigo — ausência é honesta; inventar um denominador não seria.
+            const full = maxConcurrent != null && contactCount >= maxConcurrent
+            // `n`, não `count`: `count` liga a pluralização do i18next (o repo usa
+            // o sufixo `_plural`), e estas chaves não têm formas plurais.
+            const label = maxConcurrent != null
+              ? t('header.attendingOfMax', { n: contactCount, max: maxConcurrent })
+              : t('header.attending', { count: contactCount })
+            return (
+              <div className={[
+                "flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium",
+                full
+                  ? "bg-warning-light border border-warning/40 text-warning-text"
+                  : "bg-white/15 border border-white/25 text-white",
+              ].join(" ")}
+                title={full ? t('header.atCapacityHint') : label}>
+                <span>🎧</span>
+                <span>{label}</span>
+              </div>
+            )
+          })()}
 
           {(onTogglePause || onPauseRequest) && (
             <button
