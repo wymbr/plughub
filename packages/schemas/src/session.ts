@@ -81,7 +81,15 @@ export const ParticipantSchema = z.object({
   instance_id:     z.string(),
   role:            ParticipantRoleSchema,
   pool_id:         z.string().optional(),
-  visibility:      MessageVisibilitySchema,
+  // OPCIONAL desde 2026-08-05 (§1055 Fatia B, quando o schema ganhou seu primeiro
+  // produtor). Visibilidade é fato da MENSAGEM — `all` / `agents_only` / lista de
+  // participant_ids —, e não existe nenhum produtor de visibilidade POR
+  // PARTICIPANTE no sistema. Enquanto nada escrevia um `Participant`, o campo
+  // obrigatório nunca foi exercido; ao escrever o primeiro, a escolha era inventar
+  // `"all"` para todo mundo ou admitir que o fato não existe. Um default plausível
+  // aqui seria pior que a ausência: apareceria nos consumidores como se alguém o
+  // tivesse decidido. Ver CLAUDE.md § "um valor plausível esconde bugs".
+  visibility:      MessageVisibilitySchema.optional(),
   joined_at:       z.string().datetime(),
   left_at:         z.string().datetime().optional(),
 })

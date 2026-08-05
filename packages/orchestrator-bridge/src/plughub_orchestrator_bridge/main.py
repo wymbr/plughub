@@ -181,6 +181,13 @@ def _live_flow_fallback_enabled() -> bool:
 # None until run() starts; hooks silently skip if producer not ready.
 _kafka_producer: AIOKafkaProducer | None = None
 
+# Redis do roster de participantes — inicializado em run(), MESMO padrão do
+# `_kafka_producer` acima e pela mesma razão: `_publish_participant_event` é
+# chamado de 12 sites e não recebe o client. Global aqui evita mudar 12
+# assinaturas para carregar uma dependência que o processo já tem uma só.
+# None até o run() começar; o roster é pulado (com log) em vez de estourar.
+_roster_redis: "aioredis.Redis | None" = None
+
 
 async def get_agent_type(
     http: aiohttp.ClientSession,
@@ -2897,6 +2904,112 @@ async def _sweep_open_human_participants(
     return closed
 
 
+# ── Roster de participantes — `session:{id}:participants` (Fatia B do §1055) ──
+#
+# A chave existia com CONSUMIDOR e SCHEMA prontos e NENHUM produtor desde sempre:
+# `session_context_get` (mcp-server `tools/session.ts`) sempre devolvia
+# `participants: []`, e `ReplayContext.participants` chegava vazio ao avaliador
+# (`session-replayer/replayer.py`). `ParticipantSchema` (`schemas/src/session.ts`)
+# já tinha a forma exata. Chave órfã não dá erro — dá lista vazia, que passa por
+# "sessão sem participantes".
+#
+# ESCOPO, e é o ponto do arco: papel de participação (`primary`/`specialist`/…) é
+# fato de **(participante, sessão)**, NÃO da instância. A mesma instância atende
+# `max_concurrent_sessions` sessões e pode ser `primary` numa e `specialist` noutra
+# ao mesmo tempo — por isso ele nunca coube no hash `{t}:agent:instance:{id}`, e por
+# isso ninguém conseguia escrevê-lo lá. Ver CLAUDE.md § "Never store a narrower-scope
+# fact in a wider-scope field".
+#
+# ATÔMICO POR NECESSIDADE, não por elegância: o bridge despacha cada mensagem Kafka
+# com `asyncio.create_task` e **não preserva ordem alguma** (ver
+# docs/guias/conference-mechanics.md § 7b). Dois participantes entrando na mesma
+# sessão são duas corrotinas concorrentes; um read-modify-write em Python sobre uma
+# string JSON perderia entradas em silêncio — o roster ficaria plausível e incompleto.
+_PARTICIPANT_ROSTER_LUA = """
+local raw = redis.call('GET', KEYS[1])
+local list = {}
+if raw then
+  local ok, decoded = pcall(cjson.decode, raw)
+  if ok and type(decoded) == 'table' then list = decoded end
+end
+local pid   = ARGV[1]
+local entry = cjson.decode(ARGV[2])
+local found = -1
+for i, p in ipairs(list) do
+  if type(p) == 'table' and p.participant_id == pid then
+    found = i
+    break
+  end
+end
+if ARGV[3] == 'leave' then
+  if found > 0 then
+    -- Saída de quem já estava: preserva o registro de entrada e carimba a saída.
+    list[found].left_at = entry.left_at
+    if entry.duration_ms then list[found].duration_ms = entry.duration_ms end
+    if entry.close_reason then list[found].close_reason = entry.close_reason end
+  else
+    -- Saída sem entrada registrada (bridge reiniciado no meio, evento perdido).
+    -- Registrar assim mesmo: um participante que saiu É um fato do atendimento, e
+    -- descartá-lo faria o roster mentir por omissão.
+    list[#list + 1] = entry
+  end
+else
+  if found > 0 then
+    -- Re-publish do mesmo participante: preserva o `joined_at` ORIGINAL. Sem isto,
+    -- qualquer re-emissão empurraria a entrada para frente e a duração derivada do
+    -- roster encolheria a cada evento repetido.
+    entry.joined_at = list[found].joined_at or entry.joined_at
+    list[found] = entry
+  else
+    list[#list + 1] = entry
+  end
+end
+redis.call('SET', KEYS[1], cjson.encode(list), 'EX', tonumber(ARGV[4]))
+return #list
+"""
+
+# TTL 7d: o roster precisa sobreviver ao FIM da sessão porque o
+# `session-replayer` o lê para montar o `ReplayContext` da avaliação, que roda
+# depois do `session_closed`. Mesmo prazo do marcador `session:{id}:closed`.
+_ROSTER_TTL_S = 604_800
+
+
+async def _upsert_participant_roster(
+    session_id: str,
+    entry:      dict,
+    kind:       str,        # "join" | "leave"
+) -> None:
+    """
+    Grava/atualiza UMA entrada do roster de `session:{id}:participants`.
+
+    Degrada com LOG, nunca em silêncio (CLAUDE.md § Postura de Engenharia): o
+    roster é o único produtor desta chave, então uma falha muda aqui reproduz
+    exatamente o defeito que esta função existe para fechar — lista vazia
+    indistinguível de "sessão sem participantes".
+    """
+    if _roster_redis is None:
+        logger.warning(
+            "roster: sem client Redis (run() ainda não inicializou) — "
+            "participante %s de session=%s NÃO entrou no roster",
+            entry.get("participant_id"), session_id,
+        )
+        return
+    try:
+        await _roster_redis.eval(
+            _PARTICIPANT_ROSTER_LUA, 1,
+            f"session:{session_id}:participants",
+            str(entry.get("participant_id") or ""),
+            json.dumps(entry),
+            kind,
+            str(_ROSTER_TTL_S),
+        )
+    except Exception as exc:
+        logger.warning(
+            "roster: falha ao gravar participante %s (%s) em session=%s — %s",
+            entry.get("participant_id"), kind, session_id, exc,
+        )
+
+
 async def _publish_participant_event(
     session_id:     str,
     tenant_id:      str,
@@ -2932,10 +3045,13 @@ async def _publish_participant_event(
     Never raises — failures are logged at DEBUG level only.
 
     Arc 5: segment_id, sequence_index, parent_segment_id added for ContactSegment model.
+
+    §1055 Fatia B: também mantém o roster `session:{id}:participants` (Redis), lido
+    pelo `session_context_get` e pelo `session-replayer`. O guard de produtor ausente
+    NÃO cobre mais a função inteira — ele desceu para junto do `send_and_wait`, senão
+    um broker fora levaria junto uma escrita de Redis que não depende dele.
     """
     global _kafka_producer
-    if _kafka_producer is None:
-        return
     event: dict = {
         "event_id":       str(uuid.uuid4()),
         "type":           event_type,
@@ -2994,6 +3110,56 @@ async def _publish_participant_event(
         event["wrapup_summary"] = wrapup_summary
     if wrapup_next_steps is not None:
         event["wrapup_next_steps"] = wrapup_next_steps
+    # ── Roster (§1055 Fatia B) — ANTES do publish, de propósito ──────────────
+    # O Kafka é fire-and-forget com `send_and_wait` dentro de try/except; o roster
+    # é leitura de OUTRO componente (session_context_get, replayer) e não deve
+    # depender de o broker estar de pé. Ordená-lo depois faria uma falha de Kafka
+    # levar junto uma escrita que nada tem a ver com ela.
+    #
+    # `agent_type_id`/`instance_id`: no modelo as-built o participante nativo É a
+    # instância (o Kafka publica `participant_id=native_instance_id`), então os dois
+    # coincidem aqui. A EXCEÇÃO conhecida é o especialista de conferência via SDK
+    # externo, que recebe um `uuid4()` efêmero nunca persistido (§3338) — esse
+    # participante não é resolvível por este roster, e é o pré-requisito 1 que segue
+    # aberto no §1055. Nomeado aqui para não parecer cobertura completa.
+    #
+    # `visibility` do ParticipantSchema é OMITIDO: não existe produtor de
+    # visibilidade POR PARTICIPANTE no sistema (visibilidade é fato da MENSAGEM).
+    # Escrever "all" para todos seria um valor plausível sem significado — o
+    # schema foi afrouxado para opcional em vez de inventá-lo aqui.
+    _roster_entry: dict = {
+        "participant_id": participant_id,
+        "session_id":     session_id,
+        "instance_id":    participant_id,
+        "agent_type_id":  agent_type_id,
+        "role":           role,
+        "agent_type":     agent_type,
+    }
+    if pool_id:
+        _roster_entry["pool_id"] = pool_id
+    if event_type == "participant_left":
+        _roster_entry["left_at"] = datetime.now(timezone.utc).isoformat()
+        if joined_at:
+            _roster_entry["joined_at"] = joined_at
+        # `duration_ms` NÃO entra no roster (medido 2026-08-05, na 1ª validação).
+        # Ele é a duração do SEGMENTO (execução), e o roster carrega a PRESENÇA
+        # (joined_at → left_at). Para humano os dois coincidem; para agente nativo
+        # divergem, porque a presença atravessa o suspend à espera do humano — no
+        # caso medido, `duration_ms: 10` ao lado de uma janela de 84 s. Dois fatos
+        # com um nome só, adjacentes, coincidindo justamente no tipo em que alguém
+        # conferiria primeiro. A duração de segmento tem casa própria: o evento
+        # Kafka logo abaixo, que o analytics consome.
+        if close_reason is not None:
+            _roster_entry["close_reason"] = close_reason
+    else:
+        _roster_entry["joined_at"] = joined_at or event["timestamp"]
+    await _upsert_participant_roster(
+        session_id, _roster_entry,
+        "leave" if event_type == "participant_left" else "join",
+    )
+
+    if _kafka_producer is None:
+        return
     try:
         await _kafka_producer.send_and_wait(
             TOPIC_PARTICIPANTS,
@@ -8914,8 +9080,11 @@ async def _session_watchdog(redis_client: aioredis.Redis) -> None:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 async def run() -> None:
-    global _kafka_producer
+    global _kafka_producer, _roster_redis
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+    # §1055 Fatia B — mesmo client, exposto ao `_publish_participant_event`, que é
+    # chamado de 12 sites e não o recebe por parâmetro (ver `_roster_redis`).
+    _roster_redis = redis_client
     consumer = AIOKafkaConsumer(
         TOPIC_ROUTED,
         TOPIC_QUEUED,

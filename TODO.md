@@ -98,7 +98,31 @@ Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 
 
 ---
 
-## `Pool registration returned HTTP 401` no login do agente humano *(achado 2026-08-04, na validação da Fase E)*
+## ~~`Pool registration returned HTTP 401` no login do agente humano~~ ✅ **2026-08-05** *(achado 2026-08-04, na validação da Fase E)*
+
+> **Conserto:** o `POST /v1/pools` do login (`mcp-server/server.ts`) passou a mandar `x-service-token`
+> a partir de `AGENT_REGISTRY_SERVICE_TOKEN` — o **mesmo padrão, no mesmo processo, da mesma env**
+> que `tools/deploy.ts` já usava, e que o container já recebia (`docker-compose.demo.yml` §619).
+> Omitido quando vazio, porque sem `service_token`/`jwt_secret` no destino o gate é no-op.
+>
+> **A pergunta que o item mandava fazer primeiro — *"o que grava, e quem lê"* — tinha resposta no
+> comentário logo acima da chamada:** persiste o pool no PostgreSQL do Registry porque o reconciliador
+> do `InstanceBootstrap` **apaga `pool_config` do Redis que não esteja no Registry**. Logo não era
+> candidato a remoção: o fallback em Redis competia com um processo que o desfaz a cada 5 min.
+>
+> **Medido** (previsão escrita antes, com contador-testemunha ao lado): `returned HTTP 401` = **0** e
+> `Pool (registered|already exists)` = **3** (um por pool do login). O segundo existe porque `0`
+> sozinho é indistinguível de "o login não rodou".
+>
+> **De passagem:** o ramo de erro passou a logar o **corpo** da resposta e `token=enviado|AUSENTE`.
+> Era a falta disso que mantinha o item aberto — o TODO pedia "capturar a URL e o status body" como
+> primeiro passo, e um status nu não separa credencial errada de variável não entregue.
+>
+> **Efeito colateral útil:** este 401 é o mesmo que trava a suíte e2e contra o demo (ela morre no seed
+> em `POST /v1/skills`). O conserto aqui **não** a desbloqueia — o `http-client` do e2e não tem
+> suporte a service token —, mas identifica exatamente o que falta lá: uma env + o header, no
+> `lib/http-client.ts`. Isso destravaria o cenário 10, único exercício vivo do leitor de `role`
+> (§1055 Fatia B).
 
 Visto no log do mcp-server em **todo** pool do login do Console, seguido de sucesso:
 
@@ -872,7 +896,20 @@ do analytics-api; conferir se o build usa BuildKit com cache montado.
 
 ---
 
-## Segmento humano do wrap-up NUNCA fecha — produtor de `agent_done` faltando *(achado 2026-07-29)*
+## ~~Segmento humano do wrap-up NUNCA fecha~~ ✅ **RESOLVIDO DE PASSAGEM — fechado por pente de código 2026-08-05** *(achado 2026-07-29)*
+
+> **Nenhum trabalho novo: o conserto veio junto com o arco de wrap-up unificado.** Verificado no
+> código, não no registro: no `session_resumed`, com `_claimant_instance_id` preenchido, o bridge
+> consome (`GETDEL`) `participant_joined_at:{inst}` e `segment:{inst}` e publica `participant_left`
+> com `agent_type="human"`, `duration_ms` real e `close_reason` de `_wrapup_close_reason`
+> (`orchestrator-bridge/main.py` §7971-8038) — **sem depender de `contact_closed` nem do botão
+> "Encerrar"**. O `_wrapup_close_reason` (§7671-7692) já emite `task_submitted`/`acw_expired`/
+> `acw_supervisor_closed`, ou seja, a fase I5 que este item listava como faltante existe
+> (contraparte em `routing-engine/router.py` §1094-1205 `work_task_expire`). E o teardown varre o
+> que sobrou: `_sweep_open_human_participants` (§2753-2891) fecha com `close_reason="session_teardown"`,
+> idempotente por GETDEL contra o caminho principal.
+>
+> *Texto original preservado abaixo pelo valor de diagnóstico.*
 
 > **Candidato forte ao "produtor faltante" da seção seguinte.** Os dois itens são
 > provavelmente o mesmo defeito visto de ângulos diferentes.
@@ -1028,7 +1065,24 @@ sozinha é insuficiente — previsão do código é que ambos vazem.
 
 ---
 
-## Vaga só é liberada no `agent_done` — reap é rede, não conserto da origem *(2026-07-28)*
+## ~~Vaga só é liberada no `agent_done`~~ ✅ **ORIGEM FECHADA — pente de código 2026-08-05** *(2026-07-28)*
+
+> **A premissa do título deixou de valer: `release_instance` tem hoje TRÊS origens, não uma** —
+> `registry.py` §2035 (via `remove_conversation`), `router.py` §933 (`work_task_release`) e
+> `router.py` §1184 (`work_task_expire`). O `kafka_listener.py` §308 trata `agent_done` e
+> `agent_released` com o MESMO efeito de capacidade, e o bridge publica `agent_released` nos caminhos
+> de morte que não concluem trabalho (§6800-6803: `agent_disconnect`/`agent_release_item`). A vaga do
+> claimante de pull deixou de ser efeito colateral: §8074-8114 publica `agent_done` explícito com o
+> pool da sessão.
+>
+> **Resíduo que sobra (2 itens, pequenos):** (a) o docstring de `registry.py` §938 ainda repete a
+> afirmação antiga *"a vaga só é liberada no `agent_done`"* — comentário obsoleto sobre desenho
+> revertido, exatamente a classe que este projeto trata como mentira documentada; (b) a medição de
+> frequência do `warning "reap:"` que este item pedia **nunca foi feita**, e não se responde por
+> leitura — precisa de log de produção. O caso crash/restart segue coberto só pela rede, o que o
+> próprio item já aceitava.
+>
+> *Texto original preservado abaixo pelo valor de diagnóstico.*
 
 O reap de ocupantes órfãos está **implementado e validado** (ver CHANGELOG): ocupante cuja sessão tem
 `session:{sid}:closed` sai do semáforo, nos dois sites onde a lotação pode ser mentira
@@ -1052,7 +1106,32 @@ morte abrupta) ou aceitar a rede como suficiente.
 
 ---
 
-## `role` nunca é escrito no hash de participante *(resíduo da F5 de identidade por-pool, 2026-07-28)*
+## ~~`role` nunca é escrito no hash de participante~~ — **Fatia A ✅ · Fatia B ✅ 2026-08-05** *(resíduo da F5 de identidade por-pool, 2026-07-28)*
+
+> **Fatia B entregue (2026-08-05, ver CHANGELOG § "Roster de participantes").** O bridge passou a
+> escrever `session:{id}:participants` dentro de `_publish_participant_event` (funil dos 12 call
+> sites), com upsert **atômico em Lua** — obrigatório, porque o bridge despacha com `create_task` e
+> não preserva ordem. Os dois leitores de `role` passaram a resolvê-lo do roster
+> (`resolveParticipantRole`), que é o escopo do fato, sem fallback para o hash da instância.
+>
+> **Medido com grupo de controle:** ~97 replay contexts do demo — as 2 sessões com roster têm
+> `ReplayContext.participants` = 3 e 4; as ~95 sem roster têm 0, todas. O consumidor que mais
+> importava (substrato de avaliação chegando sem participantes) está fechado ponta a ponta.
+>
+> **Não exercitado, e registrado como tal:** o leitor de `role` em `session_context_get`/`message_send`
+> compila e está no artefato em execução, mas **nenhum caminho do demo o chama** (verificado por
+> leitura: só a suíte e2e e agentes externos via SDK). A suíte não roda contra o demo — para no seed
+> com o 401 do `requireResourceWrite`, que é o **TODO §101**. Fechar aquele item desbloqueia este
+> exercício.
+>
+> **Segue aberto desta seção:** os pré-requisitos **1** (dupla identidade de `participant_id` — o
+> especialista de conferência via SDK recebe um `uuid4()` efêmero nunca persistido, `main.py` §3338, e
+> por isso não é resolvível pelo roster) e **2** (vocabulário de papel), ambos detalhados abaixo. O
+> pré-req 3 (chave órfã) e o 4 (schema) foram fechados pela Fatia B.
+>
+> **Nit colhido de passagem, não consertado:** a asserção D do `10_masking.ts` é
+> `evalHasOriginal || !isMasked` — passa por ausência quando masking não está configurado. Teste que
+> não pode reprovar, mesma família dos instrumentos que falharam em 2026-08-05.
 
 > **Fatia A ✅ (2026-07-28, ver CHANGELOG).** A investigação mostrou que o nome `role` cobria **dois
 > fatos de escopos diferentes**, e que por isso não existia um único produtor a escrever:
@@ -1094,6 +1173,13 @@ instance_id). Pré-requisitos levantados na investigação:
 2. **Produzir o vocabulário** — `_part_role = "specialist" if conference_id else "primary"`
    (`main.py:3489`) é a ÚNICA decisão de papel no sistema; os outros 11 call sites de
    `_publish_participant_event` passam literais. `supervisor` nunca é emitido por caminho nenhum.
+
+   > **Consequência agora OBSERVÁVEL (2026-08-05, na 1ª validação do roster):** numa sessão-filha de
+   > `delegate` o roster traz **DOIS participantes `primary`** — o agente nativo do workflow e o
+   > humano que reivindicou o item de trabalho. Não é defeito do roster: é este pré-requisito, que
+   > antes ninguém via porque nada persistia papel. O vocabulário não tem como dizer "quem executa o
+   > processo" × "quem preenche o formulário", e a regra binária (`conference_id` ou não) responde
+   > `primary` para os dois. Qualquer consumidor que assuma *um* primary por sessão vai errar.
 3. **`session:{id}:participants` é chave órfã** — o `ParticipantSchema`
    (`schemas/src/session.ts:77-88`) já tem a forma exata, é lido por `session_context_get:182` e pelo
    replayer (`replayer.py:303`), e **não tem writer**. Hoje `session_context_get` sempre devolve
@@ -2266,16 +2352,28 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    **Não fazer:** tornar o toast persistente. Ele não dispara neste caminho — seria conserto
    especulativo sobre um defeito não observado.
 
-1b. **`handlePull` apaga o próprio motivo de falha** *(aberto, pequeno — mas a faixa JÁ foi vista)*.
-   **2026-08-05:** a faixa persistente de recusa foi exercitada na tela pela primeira vez, pelo
-   gatilho natural que o conserto do achado 2 previa: com as 3 vagas presas e 0 cartões, o claim
-   recusou e **"No capacity available" ficou** — não é mais especulação. O que segue aberto é só o
-   caminho do `handlePull`, abaixo. `setError` na §224 é
-   limpo pelo `refresh()` da §225. Hoje só o auto-atendimento de wrap-up passa por ali: quando o
-   auto-claim falha (sem vaga na janela do hand-off), o motivo some e o comentário da §237 promete
-   "degradação graciosa" — mas ela degrada **muda**, contra a invariante do CLAUDE.md. Junto: as
-   props `claimDisabled`/`claimDisabledReason` do `PullInboxPanel` são **mortas** (declaradas,
-   desestruturadas na §94, nunca usadas no render) — sobra do tempo em que a linha tinha botão.
+1b. ~~**`handlePull` apaga o próprio motivo de falha**~~ ✅ **JÁ ESTAVA CONSERTADO — item obsoleto,
+   fechado por LEITURA + medição em 2026-08-05.** Nenhuma linha de código foi escrita para fechá-lo;
+   o trabalho foi descobrir que ele já não descrevia o código. O que `PullInboxPanel.tsx` tem hoje:
+
+   · **estado `claimError` próprio**, separado do `error` de listagem (§115) — e o `refresh()` roda
+     ANTES do `setClaimError` (§241), com comentário explicando que a ordem é o conserto;
+   · **faixa persistente** com botão de dispensa (§335-353);
+   · **invalidação pelo fato certo**: a recusa some quando o ITEM sai da fila (§257), não quando a
+     lista recarrega — recarregar não torna a recusa falsa;
+   · props `claimDisabled`/`claimDisabledReason` **removidas** (§51-55, com lápide);
+   · i18n completo nos DOIS locales, incluindo os 6 `pullInbox.claimReason.*`.
+
+   **Verificado onde importa, não só no repo:** `grep claimFailedDismiss` dentro do bundle servido
+   (`/usr/share/nginx/html/assets/index-*.js`) devolve o arquivo — o conserto está na TELA, não só no
+   fonte. Num pacote sem volume mount, essa é a única prova que vale; o fonte estar certo é
+   compatível com o Console rodar o bundle de ontem.
+
+   **Lição de método:** este item descrevia como "aberto" um caminho (`setError` §224 → `refresh()`
+   §225) que o código já não tinha. *Entrada de TODO é comentário como qualquer outro — envelhece, e
+   envelhece em silêncio.* A releitura custou minutos; implementar por cima do registro teria custado
+   um conserto duplicado sobre código já correto. **Antes de abrir um item antigo, conferir contra o
+   código que executa** — a mesma regra que vale para docstring, e pelo mesmo motivo.
 
 1c. **Item reivindicado depois de sair do ZSET** *(observação, causa não determinada)*. Na montagem
    deste experimento, `509d5441…` foi removido da fila (`ZREM` → `1`) e o probe seguinte mostrou o
@@ -2379,25 +2477,77 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    achado 2 viraria verde vazio sem nada ficar vermelho. Trocado por `session:{sid}:segment_seq`.
    *Instrumento que depende de um defeito precisa ser revisto no mesmo commit que o conserta.*
 
-6. **`get_queued_contacts` lê ZREVRANGE enquanto os outros leitores tratam menor score = mais antigo**
-   *(aberto, achado em 2026-08-05 na leitura do item 4)*. A janela de candidatos do `dequeue` pega os
-   `top_n` de **maior** score — os mais NOVOS —, enquanto `get_queue_rank` (ZRANK) e
-   `get_oldest_queue_wait_ms` (ZRANGE 0,0) tratam menor score como mais antigo. Com `top_n=10` e fila
-   maior que isso, os antigos nunca chegam a ser pontuados pelo `score_contact_in_queue`: starvation
-   silenciosa. No demo a fila é minúscula, então nunca mordeu. **Não é bug de requeue** — independe
-   dele. Antes de mexer, decidir a pergunta de produto que os dois lados respondem diferente: *o
-   score do ZSET é timestamp de chegada ou prioridade?* O docstring de `add_queued_contact` diz
-   ambas as coisas ("lowest = oldest = served first for FIFO base, though queue_scorer may override
-   with priority"). **Medir com fila > top_n antes de tratar como defeito.**
+   *(A pendência sobre `get_queued_contacts`/ZREVRANGE que este item deixou aberta foi fechada no
+   mesmo dia — ver item 6.)*
 
-5. **Janela de ordenação entre `conversations.events` e `conversations.routed`** *(aberto, pequeno;
-   nasceu com o conserto do achado 2)*. O anúncio `contact_closed(agent_release_item)` é produzido
-   antes de o HTTP do release responder, mas os dois tópicos são independentes e o bridge não
-   garante ordem entre eles. Na prática o intervalo é humano (segundos) contra dezenas de ms de
-   Kafka — não apareceu na validação. Um re-claim suficientemente rápido (ou um `auto_attend`, que
-   dispensa o humano) ainda cairia no guard, e o sintoma seria o achado 2 de volta em UMA sessão.
-   Antes de engenheirar contorno, **medir**: o caminho de `auto_attend` é o candidato real, porque
-   ali não há clique humano separando os dois eventos.
+6. ~~**`get_queued_contacts` lê ZREVRANGE**~~ ✅ **CONSERTADO 2026-08-05 — e a pergunta de produto
+   já estava respondida pelo código.** O item mandava decidir antes *"o score é timestamp ou
+   prioridade?"*. Não era escolha: há **um único escritor** do score (`add_queued_contact`) e ele
+   grava `queued_at_ms`; e prioridade **não pode** ser um score armazenado, porque
+   `score_contact_in_queue` depende de `now_ms` (aging e breach crescem com a espera) — gravá-la seria
+   gravar um valor que nasce velho. O `"queue_scorer may override with priority"` do docstring
+   descrevia um caminho inexistente, e foi ele que autorizou a leitura invertida.
+
+   **Eram DOIS leitores** (este item registrava um): `get_queued_contacts` (janela 10 → `Router.dequeue`,
+   só pool push, consequência = **atendimento**) e `listQueue` (janela 20 → inbox pull do Console,
+   consequência = **visibilidade**, e invisível de propósito: o Console ordena por idade o que
+   RECEBEU, então a lista parecia ordenada e estava sem o começo). Medido em fila de 25 com previsão
+   escrita antes: antes `06..25` e `16..25`; depois `01..20` e `01..10`. Detalhe em `CHANGELOG.md`;
+   instrumento em `infra/test/probe_queue_window_order.sh`.
+
+   **Fica em aberto, e é da JANELA, não do sentido:** contato de tier alto que chegue além do corte
+   também não é pontuado. Ordenar pela espera é estritamente melhor (o aging é monótono no tempo de
+   espera), mas não zera o efeito para `base_priority`. Não consertado de propósito — leitura integral
+   tornaria o drain O(fila). Se virar requisito, o desenho é uma segunda passada por tier, não a
+   remoção do limite.
+
+   **Lição de método, guardada porque mudou como esta suíte valida:** o controle negativo por fora
+   (reverter → rebuildar → rodar → restaurar) falhou **duas vezes**, das duas por pular o rebuild, e
+   das duas o resultado pareceu resposta — `238 deselected` (nenhum teste selecionado, exit 0) e
+   depois `2 passed` contra um container ainda consertado. Substituído por um teste **diferencial**
+   que lê a mesma fila pelas duas semânticas e exige que divirjam. Ele ainda cobre o que o ritual
+   manual nunca cobriria: fixture encolhida para dentro da janela faz as duas leituras coincidirem,
+   os testes de sentido seguem verdes e param de discriminar — agora isso fica vermelho.
+
+5. ~~**Janela de ordenação entre `conversations.events` e `conversations.routed`**~~ ✅ **MEDIDO
+   2026-08-05 — risco caracterizado, sem conserto; VIGIAR.** Três coisas mudaram na descrição.
+
+   **(a) A causa é maior do que "dois tópicos sem ordem entre si".** O bridge tem UM consumidor para
+   os seis tópicos e despacha com `asyncio.create_task(_dispatch(...))`, sem `await` (`main.py` §9021).
+   Isso **descarta a ordenação do Kafka inteira** — inclusive dentro de uma partição do mesmo tópico.
+   Não há ordem entre dois eventos quaisquer, e nunca houve.
+
+   **(b) `auto_attend` NÃO é o candidato rápido que o item afirmava.** Acelerador e cruzamento são
+   mutuamente exclusivos: na MESMA aba o `refreshSignal` refaz a lista na hora após o release, mas o
+   `autoAttendedRef` já tem o id (a aba não re-reivindica o que devolveu); em OUTRA aba o ref está
+   vazio, mas o gatilho é o poll de 4 s. Reproduzir "pelo uso" devolveria NÃO-REPRODUZIU explicado
+   pelos 4 s — inconclusivo por construção.
+
+   **(c) O que foi medido, então, foi a JANELA** (`infra/test/probe_release_reclaim_race.sh`, 5
+   rodadas, release→re-claim back-to-back num único processo para o gap ser um round-trip HTTP e não
+   o custo do `docker exec`): desmonte da presença em **~30 ms** a partir do release; re-claim
+   disparado a **~15 ms**; **0 engolidas** em 5/5, com 10 `Return to queue` no log como testemunha de
+   que o transporte rodou. Guard **em jogo**, não isento — o claim manda `conference_id=""` e
+   `work_task_claim` monta o routed com `conference_id or None` (`router.py` §816), então a condição
+   `if not conference_id` (§3517) foi avaliada.
+
+   **A margem é incidental, e não é (window − gap).** Os dois eventos atravessam o Kafka; o que
+   protege é o `contact_closed` ser publicado ANTES (no início do release) enquanto o routed depende
+   de todo o resto (release responder + claim ir e voltar). A margem é esse **offset de publicação**
+   menos a diferença de latência dos dois handlers. Sob carga, o `create_task` pode atrasar o handler
+   de `contact_closed` enquanto o de routed corre — **é aí que o risco mora, e o probe não mede isso**
+   (rodada ociosa ≠ rodada sob carga).
+
+   **Gatilhos que reabrem:** auto-claim server-side (sem round-trip de UI no meio), `pollMs` menor no
+   inbox, um ref que não guarde o id, ou qualquer coisa que engorde o prólogo do handler de
+   `contact_closed` até o `DEL session:{sid}:human_agent` (§6841). O conserto, se preciso, **não** é
+   afrouxar o guard (trocaria um caso mudo por outro, o spam de `participant_joined` do drain): é dar
+   ao routed de CLAIM um discriminador que o drain não tem.
+
+   **Lição de instrumento:** `presence_at_reclaim` é medido quando o re-claim é DISPARADO, e o guard
+   avalia quando o bridge PROCESSA o routed. O proxy **superestima** o acerto — na 1ª leitura eu
+   afirmei "caiu dentro da janela 5/5" com base nele, e estava errado. Quem decide é a contagem no
+   log. *Proxy medido no instante errado é um número certo respondendo outra pergunta.*
 
 *(Medido junto, e por isso NÃO é item: no encerramento real por supervisor o árbitro devolve a vaga
 e o Console derruba o cartão sozinho — `SMEMBERS` da instância vai a vazio em ≤6 s. Ver CHANGELOG

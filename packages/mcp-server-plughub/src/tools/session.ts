@@ -108,6 +108,69 @@ const MessageSendInputSchema = z.object({
   visibility:     MessageVisibilitySchema.default("all"),
 })
 
+/**
+ * Papel de PARTICIPAÇÃO (`primary`/`specialist`/`supervisor`/`evaluator`/`reviewer`)
+ * do participante NESTA sessão. Fonte única dos dois consumidores abaixo
+ * (`session_context_get` e `message_send`).
+ *
+ * **Por que o roster e não o hash da instância** (§1055, Fatia B — 2026-08-05):
+ * papel de participação é fato de **(participante, sessão)**. A mesma instância
+ * atende `max_concurrent_sessions` sessões e pode ser `primary` numa e
+ * `specialist` noutra ao mesmo tempo — guardá-lo em `{t}:agent:instance:{id}`
+ * colapsaria multi-sessão, e foi por isso que NENHUM produtor jamais escreveu lá.
+ * Os dois leitores liam um campo sem escritor e caíam no default desde sempre.
+ * O que mora legitimamente no hash da instância é `agent_role` (propósito do
+ * agente: executor/orchestrator/evaluator), que é constante por toda a vida dela
+ * — outro fato, outro nome. Ver CLAUDE.md § "Never store a narrower-scope fact
+ * in a wider-scope field".
+ *
+ * `resolved` distingue "li e vale primary" de "não consegui ler" — o gate de
+ * @mention exige leitura POSITIVA, porque um gate de autorização que falha aberto
+ * não é gate.
+ */
+async function resolveParticipantRole(
+  redis:         RedisClient,
+  sessionId:     string,
+  participantId: string,
+): Promise<{ role: string; resolved: boolean }> {
+  try {
+    const raw = await redis.get(`session:${sessionId}:participants`)
+    if (!raw) {
+      // Sem roster: sessão anterior ao produtor (§1055 Fatia B), ou TTL vencido.
+      // Degradação COM log — muda aqui reproduz exatamente o defeito que a fatia
+      // fechou, e o sintoma (tudo `primary`) é plausível demais para ser notado.
+      console.warn(
+        `[role] roster ausente: session=${sessionId} participant=${participantId} ` +
+        `— caindo em 'primary' (não-resolvido)`
+      )
+      return { role: "primary", resolved: false }
+    }
+    const list = JSON.parse(raw) as Array<Record<string, unknown>>
+    const hit  = Array.isArray(list)
+      ? list.find(p => p && p["participant_id"] === participantId)
+      : undefined
+    if (hit && typeof hit["role"] === "string" && hit["role"]) {
+      return { role: hit["role"] as string, resolved: true }
+    }
+    // Roster existe e o participante NÃO está nele. O caso conhecido é o
+    // especialista de conferência via SDK externo, que recebe um `uuid4()` efêmero
+    // nunca persistido (orchestrator-bridge §3338) — o pré-requisito 1 do §1055,
+    // ainda aberto. Nomear no log evita que vire "o roster não funciona".
+    console.warn(
+      `[role] participante fora do roster: session=${sessionId} ` +
+      `participant=${participantId} roster=${list.length} entradas ` +
+      `— caindo em 'primary' (não-resolvido)`
+    )
+    return { role: "primary", resolved: false }
+  } catch (err) {
+    console.warn(
+      `[role] leitura do roster falhou: session=${sessionId} ` +
+      `participant=${participantId} — ${String(err)}`
+    )
+    return { role: "primary", resolved: false }
+  }
+}
+
 const SessionInviteInputSchema = z.object({
   session_token:  z.string().min(1),
   session_id:     z.string().min(1),
@@ -270,15 +333,14 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
           process.env["CONFIG_API_URL"] ?? "http://localhost:3600", tenant_id,
         )
 
-        // Determina o role do participante solicitante
-        let requesterRole = "primary"
-        try {
-          const roleRaw = await redis.hget(
-            `${tenant_id}:agent:instance:${participant_id}`,
-            "role"
-          )
-          if (roleRaw) requesterRole = roleRaw
-        } catch { /* usa 'primary' como fallback seguro */ }
+        // Determina o role do participante solicitante — do ROSTER da sessão
+        // (§1055 Fatia B). Antes lia `{tenant}:agent:instance:{pid}`, campo `role`,
+        // que nunca teve produtor: o resultado era "primary" por FALHA, não por
+        // leitura. O fallback continua "primary" e continua sendo o seguro (nega
+        // `original_content`), mas agora a degradação é LOGADA em vez de muda.
+        const { role: requesterRole } = await resolveParticipantRole(
+          redis, session_id, participant_id
+        )
 
         const canReadOriginal = MaskingService.canReadOriginalContent(
           requesterRole as any,
@@ -340,36 +402,25 @@ export function registerSessionTools(server: McpServer, deps: SessionDeps): void
 
         const { tenant_id, instance_id: senderInstanceId } = verifySessionToken(session_token)
 
-        // Lê papel do participante no Redis para montar o author.
+        // Papel do participante, para montar o author e decidir mascaramento.
         //
-        // F5 — a chave estava errada em DUAS frentes: `{tenant}:instance:{id}` é
-        // String JSON (o `HGET` levantava WRONGTYPE, engolido pelo catch) e o id
-        // certo para este hash é o `participant_id` sob o namespace
-        // `agent:instance:` — o mesmo que `session_context_get` (:373) e
-        // `evaluation.ts` (:936) já usam. O resultado era `role` SEMPRE "primary",
-        // por falha, não por leitura.
+        // Histórico em duas correções, e a segunda desfez a premissa da primeira:
+        //   · **F5** achou que o problema era a CHAVE (`{t}:instance:{id}` é String
+        //     JSON → `HGET` dava WRONGTYPE, engolido pelo catch) e mudou para
+        //     `{t}:agent:instance:{participant_id}`. Continuou "primary" sempre.
+        //   · **§1055 Fatia B (2026-08-05)** achou o motivo real: não era a chave, era
+        //     o ESCOPO. Papel de participação é fato de (participante, sessão) e
+        //     nunca coube num hash de instância — por isso nenhum produtor existia
+        //     para escrevê-lo lá. Agora vem do roster `session:{id}:participants`.
         //
-        // `roleResolved` distingue "li e vale primary" de "não consegui ler".
-        // O default segue "primary" para os consumidores históricos (author do
-        // stream, decisão de mascaramento) — mudar isso é outro assunto, com outro
-        // blast radius. Mas o gate de @mention passa a exigir leitura POSITIVA:
-        // um gate de autorização que falha aberto não é gate.
-        let role = "primary"
-        let roleResolved = false
-        try {
-          const roleRaw = await redis.hget(
-            `${tenant_id}:agent:instance:${participant_id}`,
-            "role"
-          )
-          if (roleRaw) {
-            role = roleRaw
-            roleResolved = true
-          }
-        } catch (err) {
-          console.warn(
-            `[message_send] role lookup falhou: participant=${participant_id} — ${String(err)}`
-          )
-        }
+        // `roleResolved` distingue "li e vale primary" de "não consegui ler". O
+        // default segue "primary" para os consumidores históricos (author do stream,
+        // decisão de mascaramento) — mudar isso é outro assunto, com outro blast
+        // radius. Mas o gate de @mention exige leitura POSITIVA: um gate de
+        // autorização que falha aberto não é gate.
+        const { role, resolved: roleResolved } = await resolveParticipantRole(
+          redis, session_id, participant_id
+        )
 
         // Resolve instance_id via mapeamento participant_id → instance_id (fallback: token)
         let resolvedInstanceId = senderInstanceId ?? ""

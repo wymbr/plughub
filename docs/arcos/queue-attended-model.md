@@ -58,6 +58,43 @@ suplementar (posição histórica), não como fonte de verdade.
    posição via ContextStore escrita pelo Routing — `session.queue.position`, `session.queue.eta`)
    com **zero chamada de LLM**. "Fila muda" é um skill-flow que não fala nada.
 
+## Ordem da fila — o score é chegada, a prioridade é derivada (2026-08-05)
+
+Invariante que faltava estar escrito, e cuja ausência custou dois leitores invertidos:
+
+> **O score do ZSET `{t}:pool:{p}:queue` é `queued_at_ms` — epoch de CHEGADA, sempre.
+> Menor score = mais antigo. Prioridade nunca é armazenada ali.**
+
+Não é convenção escolhida: é imposto por duas propriedades do código.
+
+1. **Escritor único.** `add_queued_contact` é o único `zadd` sobre essa chave em todo o
+   routing-engine. Não existe outro produtor que pudesse pôr outra coisa no score.
+2. **Prioridade não é armazenável.** `score_contact_in_queue` = `base_priority(tier) + aging×min(t/sla,1)
+   + breach×max(t/sla−1,0)`, e `t` depende de `now_ms`. Um score gravado nasceria velho e envelheceria
+   errado. Por isso ela é função **pura**, recomputada a cada `Router.dequeue` sobre o JSON do contato.
+
+Consequência de leitura, que vale para qualquer leitor novo: **a janela é sobre CHEGADA
+(`ZRANGE 0 top_n-1`), a pontuação é sobre a janela.** Ler pela outra ponta (`ZREVRANGE`) seleciona
+os mais novos e deixa os antigos sem pontuação alguma — o aging e o breach, que existem
+precisamente para que nenhum contato espere para sempre, ficam inertes para quem mais espera.
+Foi o que aconteceu em `get_queued_contacts` (janela do `dequeue`, pools push) e em `listQueue`
+(inbox pull do Console) até 2026-08-05; ver `CHANGELOG.md` § "A fila é lida pela ponta dos mais
+antigos" e o gate `infra/test/probe_queue_window_order.sh`.
+
+**Limite residual, que é da janela e não do sentido:** contato de tier alto chegando além do corte
+não é pontuado. Ordenar pela espera é estritamente melhor — o aging é monótono em `t`, logo os
+candidatos mais bem pontuados por ele *são* os mais antigos —, mas não zera o efeito de
+`base_priority`. Consertar isso é uma segunda passada por tier, **nunca** remover o limite: leitura
+integral tornaria o drain O(fila).
+
+**Duas armadilhas operacionais medidas na validação**, ambas relevantes a quem for instrumentar fila:
+
+- **Fila é descoberta por padrão, não por registry.** O sweep de retenção faz `--scan` em
+  `*:pool:*:queue`. Uma chave de fila num pool inexistente é varrida como qualquer outra, incluindo
+  emissão de `max_wait_exceeded` e segmentos sintéticos. Pool inventado **não** é sandbox.
+- **Sem `pool_config`, cai no ramo de fila MUDA** (teto por canal, default 1800 s), não no teto
+  atendido do pool. Semear com timestamps antigos entrega os itens ao sweep antes de qualquer medição.
+
 ## Outcome mora no segmento (decisão 2026-06-03)
 
 **`segments.outcome` é a única fonte de verdade de outcome.** Motivos: (1) evita dupla

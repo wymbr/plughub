@@ -229,12 +229,25 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     // ── Part D: Simula acesso de evaluator ────────────────────────────────────
     // O MCP tool evaluation_context_get retorna o ReplayContext com original_content.
     // Para testar o filtro do session_context_get com role evaluator,
-    // seedamos o role do participante como evaluator no Redis e relemos.
-
-    // Seta role do participante como evaluator diretamente no Redis
-    await ctx.redis.hset(
-      `${ctx.tenantId}:agent:instance:${participantId}`,
-      "role", "evaluator"
+    // seedamos o papel do participante no ROSTER da sessão e relemos.
+    //
+    // §1055 Fatia B (2026-08-05): antes este seed escrevia o campo `role` em
+    // `{tenant}:agent:instance:{pid}` — a chave que o `session_context_get` LIA e
+    // que **nenhum produtor escrevia**. O teste passava semeando à mão o que a
+    // produção nunca gravava: documentava a AUSÊNCIA do produtor, não a presença
+    // dele. Agora semeia o roster `session:{id}:participants`, que é o que o bridge
+    // escreve de verdade — o seed passou a imitar produção em vez de substituí-la.
+    await ctx.redis.set(
+      `session:${sessionId}:participants`,
+      JSON.stringify([{
+        participant_id: participantId,
+        session_id:     sessionId,
+        instance_id:    participantId,
+        agent_type_id:  "e2e_evaluator",
+        role:           "evaluator",
+        agent_type:     "native",
+        joined_at:      new Date().toISOString(),
+      }])
     );
 
     const ctxEvaluator = await mcp.sessionContextGet(sessionToken, sessionId, participantId);

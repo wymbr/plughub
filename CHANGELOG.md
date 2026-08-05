@@ -2,6 +2,266 @@
 
 ---
 
+## Login humano registra o pool com credencial de serviço ✅ (2026-08-05)
+
+Fecha o TODO §101. O `POST /v1/pools` do login do Console ia **sem `x-service-token`**, e o
+`requireResourceWrite` do agent-registry devolvia 401 em **todo** login humano desde que o gate
+existe. O caminho degradava e seguia (gravação direta em Redis logo abaixo), e era o fallback que
+impedia de notar.
+
+**Não era cosmético.** O comentário acima da própria chamada responde o que o item mandava investigar
+— *"o que grava, e quem lê"*: o registro persiste o pool no PostgreSQL do Registry **porque o
+reconciliador do `InstanceBootstrap` apaga `pool_config` do Redis que não esteja lá**. O fallback
+competia com um processo que o desfaz a cada 5 minutos.
+
+**Conserto de uma linha, com modelo dentro de casa:** `tools/deploy.ts`, no MESMO processo, já lia
+`AGENT_REGISTRY_SERVICE_TOKEN` e mandava o header; o container já recebia a variável
+(`docker-compose.demo.yml` §619). Omitido quando vazio — sem `service_token`/`jwt_secret` no destino o
+gate é no-op.
+
+**Medido**, previsão escrita antes: `returned HTTP 401` = **0**; `Pool (registered|already exists)` =
+**3**, um por pool do login. O segundo contador é **testemunha**, e está ali por decisão: `0` sozinho
+é indistinguível de "o login não rodou" — a falha que se repetiu três vezes neste mesmo dia.
+
+**O ramo de erro passou a logar o corpo** da resposta e `token=enviado|AUSENTE`. Foi a ausência disso
+que manteve o item aberto por um dia: um status nu não separa credencial errada de variável não
+entregue, e o TODO pedia "capturar a URL e o status body" justamente como primeiro passo.
+
+**Ponta solta identificada, não consertada:** o mesmo 401 trava a suíte e2e contra o demo (morre no
+seed, em `POST /v1/skills`). Este conserto não a desbloqueia — o `lib/http-client.ts` do e2e não tem
+suporte a service token —, mas nomeia o que falta lá. Destravá-la libera o cenário 10, único
+exercício vivo do leitor de `role` da Fatia B do §1055.
+
+**Arquivo:** `mcp-server-plughub/src/server.ts`.
+
+---
+
+## Roster de participantes — a chave órfã ganhou produtor ✅ (2026-08-05)
+
+Fecha a **Fatia B** do §1055 (`role` nunca escrito no hash de participante). `session:{id}:participants`
+existia com **schema pronto** (`ParticipantSchema`, `schemas/src/session.ts`) e **dois consumidores**
+(`session_context_get` no mcp-server; `session-replayer` `replayer.py:303`) e **nenhum produtor, desde
+sempre**. Chave órfã não dá erro — dá lista vazia, que passa por "sessão sem participantes".
+
+**Por que ninguém conseguia escrever `role`, e por que a F5 não resolveu.** A F5 tratou o caso como
+erro de CHAVE e mudou o leitor para `{t}:agent:instance:{participant_id}`. Continuou "primary"
+sempre. O motivo real é de **ESCOPO**: papel de participação (`primary`/`specialist`/…) é fato de
+**(participante, sessão)**, e a mesma instância atende `max_concurrent_sessions` sessões podendo ser
+`primary` numa e `specialist` noutra ao mesmo tempo. Num hash de instância ele não cabe — por isso
+nenhum produtor existia. O que mora legitimamente ali é `agent_role` (propósito do agente), constante
+por toda a vida da instância. Ver CLAUDE.md § *"Never store a narrower-scope fact in a wider-scope
+field"*.
+
+**Escritor:** dentro de `_publish_participant_event` (orchestrator-bridge) — funil único dos 12 call
+sites, sem tocar 12 assinaturas. **Upsert ATÔMICO em Lua**, e não por elegância: o bridge despacha
+cada mensagem Kafka com `asyncio.create_task` e **não preserva ordem alguma** (medido no mesmo dia,
+ver § "Corrida release × re-claim"). Dois participantes entrando na mesma sessão são duas corrotinas
+concorrentes; um read-modify-write em Python sobre a string JSON perderia entradas em silêncio — o
+roster ficaria plausível e incompleto, que é o defeito original em forma mais difícil de ver.
+
+**Medido, com grupo de controle na mesma saída** (~97 replay contexts do demo):
+
+| | `ctx_participants` |
+|---|---|
+| sessões COM roster (pós-build: 16:16 e 16:28) | **3** e **4** |
+| sessões SEM roster (pré-build, ~95 linhas) | **0**, todas |
+
+Correlação perfeita, e as sessões antigas provam que o número mudou pelo produtor e não por outra
+causa. O escritor foi validado antes disso em 2 atendimentos reais: entrada e saída **casadas na
+mesma linha** (o upsert acha por `participant_id`), `joined_at` < `left_at`, TTL 604529 ≈ 7 d.
+
+**Três decisões de conteúdo, todas contra o caminho mais fácil:**
+
+- **`duration_ms` NÃO entra no roster** (achado na 1ª validação). Ele é duração de SEGMENTO; o roster
+  carrega PRESENÇA (`joined_at`→`left_at`). Para humano os dois coincidem; para agente nativo divergem,
+  porque a presença atravessa o suspend — medimos `duration_ms: 10` ao lado de uma janela de 84 s.
+  Dois fatos com um nome só, adjacentes, **coincidindo justamente no tipo em que alguém conferiria
+  primeiro**. A duração de segmento tem casa: o evento Kafka.
+- **`visibility` virou opcional no `ParticipantSchema`** em vez de ganhar um `"all"` universal.
+  Visibilidade é fato da MENSAGEM; não existe produtor de visibilidade por participante. O campo era
+  obrigatório e nunca fora exercido porque nada jamais escreveu um `Participant` — ao escrever o
+  primeiro, inventar um default seria publicar um valor plausível sem significado.
+- **Sem fallback para o hash antigo.** Ler o roster e cair no `{t}:agent:instance:{pid}` na falha
+  manteria vivo um campo sem produtor e disfarçaria a degradação. Agora a falha vira log (`[role]`),
+  nunca valor plausível.
+
+**Teste e2e corrigido junto:** `10_masking.ts` semeava `role` à mão na chave que a produção **não**
+escrevia — documentava a ausência do produtor, não a presença. Agora semeia o roster real.
+
+**Escopo honesto do que ficou provado:** o escritor e o consumidor VIVO (replayer → `ReplayContext`)
+estão medidos ponta a ponta. O leitor de `role` em `session_context_get`/`message_send` compila, está
+no artefato em execução (`grep` no `dist`), e **não tem caminho vivo neste ambiente** — verificado por
+leitura: só a suíte e2e e agentes externos via SDK o chamam, e a suíte não roda contra o demo (para no
+seed com o 401 do `requireResourceWrite`, o mesmo defeito do TODO §101). Registrado como
+não-exercitado em vez de contado como verde.
+
+**Achado que o roster tornou visível:** numa sessão-filha de `delegate` aparecem **dois participantes
+`primary`** — o agente do workflow e o humano que reivindicou o item. Não é defeito do roster: é o
+pré-requisito 2 do §1055 (o vocabulário só sabe decidir por `conference_id`), que antes ninguém via
+porque nada persistia papel. Consumidor que assuma um único primary por sessão vai errar.
+
+**Arquivos:** `orchestrator-bridge/main.py` (`_PARTICIPANT_ROSTER_LUA`, `_upsert_participant_roster`,
+`_roster_redis`) · `mcp-server-plughub/tools/session.ts` (`resolveParticipantRole` + 2 leitores) ·
+`schemas/src/session.ts` · `e2e-tests/scenarios/10_masking.ts` · `TODO.md` §1055.
+
+---
+
+## Corrida release × re-claim: medida, caracterizada, sem conserto ✅ (2026-08-05)
+
+Fecha o item 5 de "Achados de 2026-08-04" **sem mudar código de produção** — o resultado é um risco
+caracterizado com número, não um defeito. Entrada registrada porque a decisão *"vigiar, não
+consertar"* precisa do dado que a sustenta; sem ele, a próxima sessão refaz a investigação.
+
+**A causa é estrutural e maior do que o item dizia.** O bridge não tem um consumidor por tópico: tem
+**um** para os seis, e despacha com `asyncio.create_task(_dispatch(...))`, sem `await` (`main.py`
+§9021). Isso descarta a ordenação do Kafka **inteira**, inclusive dentro de uma partição do mesmo
+tópico. Não existe ordem entre dois eventos quaisquer no bridge — o item falava de "dois tópicos
+independentes" quando a concorrência é introduzida ali.
+
+**O candidato nomeado no item não existe.** `auto_attend` foi descartado por leitura: na mesma aba o
+`refreshSignal` refaz a lista na hora após o release, mas o `autoAttendedRef` já tem o id; em outra
+aba o ref está vazio, mas o gatilho é o poll de 4 s. Acelerador e cruzamento são mutuamente
+exclusivos. Reproduzir "pelo uso" devolveria NÃO-REPRODUZIU explicado pelos 4 s.
+
+**Medido** (`infra/test/probe_release_reclaim_race.sh`, 5 rodadas, release→re-claim back-to-back
+dentro de UM processo — orquestrar por `docker exec` separados poria centenas de ms entre os dois e
+mediria o overhead do medidor):
+
+| | valor |
+|---|---|
+| desmonte da presença, a partir do release | **~30 ms** |
+| re-claim disparado | **~15 ms** |
+| `Skipping duplicate` (guard engoliu) | **0** em 5/5 |
+| `Return to queue` (testemunha de que o transporte rodou) | **10** (2 releases por rodada) |
+
+**O guard estava em jogo, não isento** — e isto é o que torna o VERDE legível: o claim manda
+`conference_id=""` e `work_task_claim` monta o routed com `conference_id or None` (`router.py` §816),
+então a condição `if not conference_id` do guard (`main.py` §3517) foi avaliada. Sem conferir isso, a
+isenção do guard passaria por vitória do desmonte.
+
+**A margem é incidental, e não é `window − gap`.** Os dois eventos atravessam o Kafka; o que protege é
+o `contact_closed` ser publicado ANTES (no início do release) enquanto o routed depende de todo o
+resto — release responder, claim ir e voltar. A margem é esse **offset de publicação** menos a
+diferença de latência dos dois handlers. Sob carga, o `create_task` pode atrasar o handler de
+`contact_closed` enquanto o de routed corre. **O probe não mede isso**: rodada ociosa ≠ rodada sob
+carga.
+
+**Gatilhos que reabrem:** auto-claim server-side, `pollMs` menor, um ref que não guarde o id, ou
+qualquer coisa que engorde o prólogo do handler de `contact_closed` até o
+`DEL session:{sid}:human_agent` (§6841). Conserto, se preciso, **não** é afrouxar o guard — é dar ao
+routed de CLAIM um discriminador que o drain não tem.
+
+**Dois defeitos do instrumento, ambos achados pela saída dele:**
+
+- **`--since` com timestamp sem fuso.** `date -u +%FT%T` entregue ao Docker é lido como hora LOCAL;
+  numa máquina em UTC-3 o filtro apontava 3 h no futuro e os dois `grep -c` devolviam 0 — um deles
+  era o contador de "a corrida aconteceu?". Trocado por **delta sobre linha de base** (contar antes,
+  contar depois), imune a fuso por construção. *O veredicto INCONCLUSIVO pegou o caso porque exigia
+  o `Return to queue` como prova de que o transporte rodou antes de aceitar qualquer "nenhuma
+  engolida" — **um contador de ausências precisa de um contador-testemunha de presença ao lado**,
+  senão mede o próprio silêncio.*
+- **Proxy medido no instante errado.** `presence_at_reclaim` é lido quando o re-claim é DISPARADO; o
+  guard avalia quando o bridge PROCESSA o routed. Com base nele afirmei "caiu dentro da janela 5/5" —
+  **errado**. Quem decide é a contagem no log. *Proxy no instante errado é um número certo
+  respondendo outra pergunta.*
+
+**Arquivos:** `infra/test/probe_release_reclaim_race.sh` (NOVO) · `TODO.md` item 5. Nenhuma mudança
+em código de produção.
+
+---
+
+## A fila é lida pela ponta dos mais antigos ✅ (2026-08-05)
+
+Fecha o item 6 de "Achados de 2026-08-04". A pergunta que o item mandava responder antes de mexer —
+*o score do ZSET é timestamp de chegada ou prioridade?* — **não estava em aberto: o código já a
+respondia**, por dois caminhos independentes.
+
+1. **Escritor único.** `add_queued_contact` (`registry.py`) é o único `zadd` sobre
+   `{t}:pool:{p}:queue` em todo o serviço, e grava `queued_at_ms`. Menor score = mais antigo.
+2. **Prioridade não pode ser um score armazenado.** `score_contact_in_queue` depende de `now_ms`
+   (aging e breach crescem com a espera), então um valor gravado nasceria velho. Ela é função pura,
+   recomputada em `Router.dequeue` sobre o JSON do contato, e nunca toca o ZSET.
+
+O `"though queue_scorer may override with priority"` do docstring de `add_queued_contact` descrevia
+um caminho **que não existe** — e foi ele que autorizou dois leitores a ordenarem por `ZREVRANGE`
+"pela maior prioridade".
+
+**Eram DOIS leitores, não um.** O TODO registrava só o do árbitro; a leitura achou o segundo:
+
+| leitor | janela | consumidor | consequência |
+|---|---|---|---|
+| `InstanceRegistry.get_queued_contacts` | ZREVRANGE, `top_n` 10 | `Router.dequeue` — só pool **push** | **atendimento** |
+| `listQueue` (`mcp-server/lib/work-queue.ts`) | ZREVRANGE, `topN` 20 | inbox **pull** do Console | **visibilidade** |
+
+No primeiro, os mais antigos não entravam na janela de candidatos e por isso **nunca eram
+pontuados**: o aging e o breach, que existem para que nenhum contato espere para sempre, ficavam
+inertes exatamente para quem mais esperava. No segundo, sumiam da inbox — e de forma projetada para
+não ser notada, porque o Console ordena por idade **o que recebeu**: a lista parecia corretamente
+ordenada e estava apenas sem o começo dela.
+
+**Medido antes e depois**, fila de 25 itens com identidade no nome (`zrevprobe-01` = mais antigo),
+previsão escrita antes de cada execução:
+
+| superfície | janela | antes | depois |
+|---|---|---|---|
+| `listQueue` (HTTP real do Console) | 20 | `06..25` (os 20 mais novos) | `01..20` |
+| `get_queued_contacts` (função real, Redis real) | 10 | `16..25` (os 10 mais novos) | `01..10` |
+
+**Conserto:** `zrevrange` → `zrange` nos dois. A nota *"ZREVRANGE for backwards compatibility with
+redis-py < 4.2"* não se perde: ela justificava evitar `zrange(desc=True)`, e a leitura ascendente é a
+forma básica, disponível em toda versão.
+
+**Limite que PERMANECE, e é da janela, não do sentido:** contato de tier alto que chegue além do
+corte também não é pontuado. Ordenar pela espera é estritamente melhor (o aging é monótono no tempo
+de espera, logo os mais bem pontuados por ele *são* os mais antigos), mas não elimina o efeito para
+`base_priority`. Registrado no docstring e no TODO em vez de consertado — trocar a janela por leitura
+integral tornaria o drain O(fila).
+
+**Removida junto:** `PoolRegistry.get_queued_contacts`, cópia idêntica **sem um único chamador**.
+Mesmo motivo de `get_total_instances_count` em 2026-07-30: cópia morta é sobretudo uma segunda fonte
+do modelo mental — esta ensinava "highest score first" a quem a lesse e sobreviveria a um conserto
+feito só na irmã viva.
+
+**Dois comentários corrigidos por estarem factualmente errados desde ontem:** `registry.py` e
+`work-queue.ts` afirmavam que *"o score é reordenado no re-enqueue"* — deixou de ser verdade com o
+conserto do item 4. *Comentário que descreve um desenho revertido é uma mentira documentada.*
+
+**Testes (3, anexados a arquivo existente para não exigir `build --no-cache`):** sentido da janela ·
+corte por `top_n` · **divergência entre as duas leituras**. O terceiro é o controle negativo
+**embutido**: lê a mesma fila por `zrange` e `zrevrange` e exige que difiram. Ele cobre um caso que o
+controle manual nunca cobriria — se alguém encolher a fixture para dentro da janela, as duas leituras
+coincidem, os testes de sentido continuam verdes e param de discriminar, em silêncio.
+
+**Por que o controle negativo virou teste:** tentado duas vezes por fora (reverter → rebuildar →
+rodar → restaurar), falhou as duas por pular o rebuild, e **as duas vezes o resultado pareceu
+resposta** — primeiro `238 deselected` (nenhum teste selecionado, exit 0), depois `2 passed` contra
+um container que ainda tinha o código consertado. *Procedimento de validação que depende de sequência
+manual não é validação; é uma chance de erro com aparência de rigor.*
+
+**O instrumento errou no ramo VERDE, e só nele.** A 1ª versão do veredicto contava ausências nas duas
+pontas e exigia "nenhum dos novos presente" para aprovar — impossível quando a janela passa de metade
+da fila (com N=25 e janela 20, a janela certa `01..20` e a errada `06..25` **compartilham 15 itens**).
+Resultado: o probe sabia reprovar e não sabia aprovar, e devolveu INCONCLUSIVO sobre a saída correta.
+Trocado por comparação direta de conjunto. *Um veredicto que só acerta num sentido é a versão de três
+estados do teste que não pode reprovar — e passa despercebido porque o estado inútil parece prudência.*
+
+**Custo colateral, medido e declarado:** a 1ª semeadura do probe usou scores de nov/2023 sob a
+premissa de que um pool inventado seria inerte. Não é: o sweep de retenção (`main.py`) faz `--scan`
+por `*:pool:*:queue` e **não pergunta se o pool existe no registry**. Os itens foram varridos como
+`max_wait_exceeded`/`abandoned`, emitindo 15 segmentos sintéticos ao Kafka (15 linhas em `segments` e
+15 em `sessions` do `plughub_demo`, recortáveis pelo prefixo `zrevprobe-`). Daí as duas regras que o
+probe passou a obedecer: **scores recentes** (dentro da retenção) e **semeadura atômica** por um único
+`EVAL` Lua — cada segundo de semeadura sequencial era uma janela para o sweep agir sobre fila pela
+metade. *Num sistema que descobre trabalho por varredura de padrão, inventar um nome que ninguém usa
+não isola nada.*
+
+**Arquivos:** `routing-engine/registry.py` (`get_queued_contacts` + docstring de
+`add_queued_contact` + remoção da cópia do `PoolRegistry`) · `mcp-server-plughub/lib/work-queue.ts`
+(`listQueue`) · `tests/test_claim_possession_record.py` (+3) ·
+`infra/test/probe_queue_window_order.sh` (NOVO).
+
+---
+
 ## A espera sobrevive à devolução à fila ✅ (2026-08-05)
 
 Fecha o item 4 de "Achados de 2026-08-04" — e **corrige a descrição dele**, que estava errada sobre

@@ -1,0 +1,98 @@
+fix(requeue): posse do item de trabalho — Fases A–D do ADR de requeue
+
+Um reload do Console (~2 s de WS fechado) era tratado como abandono do
+atendimento: o bridge publicava `agent_done`, re-rotava o contato ao pool, e o
+item reivindicado voltava ao ZSET enquanto o formulário seguia na tela do
+primeiro agente. Item na fila + vaga ocupada + lease ausente = dois donos
+possíveis para o mesmo trabalho. Medido ponta a ponta em `formfill_demo`.
+
+Quatro fases, cada uma validada com e2e no Console (não só em teste).
+
+FASE A (D6) — o submit confere POSSE, contra registro durável
+  O check A5 lia a `claim_lease` (TTL 180 s) e falhava ABERTO quando ela sumia —
+  exatamente o estado depois de uma devolução, e a janela em que o submit
+  acontece. Novo `{t}:pool:{p}:claim_record:{sid}` (instance + claimant_user_id +
+  claimed_at), TTL derivado do `work_item_deadline`, escrito no claim e apagado em
+  release/expire/re-parque. `/v1/work_queue/holder` passa a compor a resposta
+  (lease -> registro) e a devolver `in_queue`, que torna o veredicto fechável: o
+  claim é um ZREM, então item no ZSET não tem dono. O bloco A5 virou 4 ramos e
+  recusa (403) submit sobre item que voltou à fila.
+
+  EMENDA À D6: a redação original mandava conferir contra o ledger
+  `{t}:work_task:{sid}`. Não serve — ele não carrega claimant, e seu `assigned_to`
+  é RESERVA (vazio em item pooled => fail-open intacto; enganoso após transbordo).
+
+FASE B (D1) — a queda devolve pelo caminho de pull
+  `main.py:6634` (bridge) aplicava a política "último humano caiu, devolve o
+  contato ao pool" — correta para CLIENTE — a um item de fila pull. O re-publish
+  de seis campos em `conversations.inbound` reconstruía o resto pelos defaults do
+  Pydantic: `conference_id`, `work_item_deadline`, `assigned_to` e `auto_attend`
+  voltavam vazios com as CHAVES presentes, e por isso o JSON passava por íntegro.
+  Agora o bridge pergunta a POSSE ao árbitro (só o caminho pull escreve
+  `claim_record`, então contato de cliente nunca casa) e devolve por
+  `work_task_release`. Medido pós-F5 real: pacote preservado.
+
+  `first_queued_ms` saiu do escopo: não é campo do JSON, é chave própria escrita
+  com NX — já preenchida na rota real (medido em item vivo).
+
+FASE C (D3) — a queda devolve RESERVADO ao dono anterior
+  Reusa `assigned_to` + `fallback_to_pool_after_s` + `assigned_at_ms` (Camada B),
+  em vez da *carência* que o ADR descartou. A decisão central é o CHAMADOR: o
+  bridge manda `reserve_to_previous: true` (queda); o botão "Return to queue" não
+  manda (desistência) — e o default é NÃO reservar, senão o botão passaria a
+  esconder itens do pool em silêncio.
+
+  Três regras: nunca sobrescreve `assigned_to` autoral; a âncora reinicia (reserva
+  de queda é evento novo); o dono sai do REGISTRO, não da lease nem do instance_id
+  cru (`assigned_to` casa por USER).
+
+  EMENDA À D3: o eixo não é `-int` x cliente, é AUTHOR-BOUND x POOLED. `-int` NÃO
+  transborda — nunca, não "depois de uma janela generosa". A primeira versão
+  semeava `drop_reserve_window_internal_s = 300`, que é o erro de categoria que a
+  migration 20260730000000_pool_internal_queue já nomeava: "a identidade do
+  executor é parte da DEFINIÇÃO da tarefa, não uma preferência". Chave removida;
+  `-int` -> reserva permanente, saída pelo prazo ou pelo expire do supervisor.
+  Pooled (aprovação e afins) -> `routing.drop_reserve_window_default_s` = 30 s.
+
+FASE D (D5) — a TELA deixa de ser fonte de posse
+  O replay não vinha do pub/sub: vinha de `pool:pending_assignment:{pool}`
+  (TTL 300 s), reentregue na reconexão. As duas guardas existentes não pegavam o
+  caso — a workflow segue SUSPENSA (sem `session:closed`) e o `instance_id` BATE
+  (é o mesmo agente). Guarda nova no mcp-server pergunta a posse ao árbitro;
+  veredicto em função pura `shouldDropOnPossession`, com os MESMOS 4 ramos do
+  submit e do drop. A regra de posse passa a existir em três lugares no mesmo
+  formato.
+
+Correções de superfície que apareceram na validação:
+  · `DialogFormRenderer` exibia só `HTTP 403` e descartava o `detail` — o motivo
+    acionável ("reivindique antes de submeter") ficava indistinguível de falta de
+    permissão;
+  · `PullInboxPanel` aplicava o transbordo só à reserva ALHEIA, então o dono via
+    "RESERVED TO YOU" para sempre. Novo estado `reservedToMeExpired` (+ i18n
+    en/pt-BR); auto-attend e ordenação aceitam os dois estados;
+  · relatório de pendências (`lib/work-queue.ts`) passa a ler o registro — sem
+    isso ele e o árbitro discordavam sobre o mesmo fato. `orphaned` ficou mais
+    estreito e mais grave: deixou de englobar "a lease venceu".
+
+Gates
+  routing-engine      test_claim_possession_record.py         19
+  channel-gateway     test_resume_possession_check.py          7
+  orchestrator-bridge test_work_item_release_on_drop.py       14
+  mcp-server          possession-filter.test.ts                9
+  infra/test/smoke_claim_possession.sh                        30 PASS
+  probes manuais: probe_fase_b_release_on_reload.sh,
+                  probe_first_queued_on_real_item.sh
+
+Aberto (registrado em TODO.md)
+  · Fase E (D8): drop não publica `agent_done`; separar os mapas de
+    `close_reason` (contato = enum fechado x segmento = vocabulário livre).
+    Fecha a lacuna 6. NÃO estender `_TRANSPORT_TO_CLOSE_REASON`.
+  · Fase F (D7): resume terminal-uma-vez (corrida submit x expire).
+  · `pool:pending_assignment` não é apagado no `work_task_release`.
+  · Portão de deriva do seed do config-api (o `inserted=2` revelou uma chave que
+    ficara sem aplicar por tempo indeterminado).
+
+Nota de deploy: `config-seed` tem imagem própria — `build config-seed` ANTES do
+`run --rm`, senão roda o seed.py antigo em silêncio.
+
+Refs: docs/adr/adr-work-item-requeue-and-agent-affinity.md (D1-D8, duas emendas)

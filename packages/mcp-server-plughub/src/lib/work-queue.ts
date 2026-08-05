@@ -58,7 +58,16 @@ export async function listQueue(
   for (const pool_id of pools) {
     let sessions: string[] = []
     try {
-      sessions = await redis.zrevrange(keys.poolQueue(tenantId, pool_id), 0, limit - 1)
+      // ZRANGE (menor score = mais antigo), NÃO ZREVRANGE.
+      //
+      // Até 2026-08-05 esta linha era `zrevrange`, e o ZSET é ordenado por
+      // `queued_at_ms` (epoch de chegada — escritor único, `add_queued_contact`).
+      // Ou seja: a inbox mostrava os `limit` itens mais NOVOS e escondia os mais
+      // velhos numa fila maior que a janela. O modo de falha era invisível de
+      // propósito: o Console ordena por idade o que RECEBEU, então a lista parecia
+      // corretamente ordenada e estava apenas sem o começo dela. Medido em 25
+      // itens/janela 20: vinham 06..25 (`infra/test/probe_queue_window_order.sh`).
+      sessions = await redis.zrange(keys.poolQueue(tenantId, pool_id), 0, limit - 1)
     } catch { sessions = [] }
     for (const session_id of sessions) {
       let contact: Record<string, unknown> | null = null
@@ -66,8 +75,11 @@ export async function listQueue(
         const raw = await redis.get(keys.queueContact(tenantId, session_id))
         if (raw) contact = JSON.parse(raw)
       } catch { /* ignore */ }
-      // P3 — a idade real vem do primeiro enqueue (preservado no re-enfileiramento);
-      // fallback para o score do sorted set (queued_at_ms, reordenado no re-enqueue).
+      // P3 — a idade real vem do primeiro enqueue; fallback para o score do sorted
+      // set. *O "(queued_at_ms, reordenado no re-enqueue)" desta linha deixou de ser
+      // verdade em 2026-08-05 (item 4): a devolução preserva o `queued_at_ms`
+      // original, então os dois valores coincidem. O fallback continua valendo pelo
+      // motivo restante — o carimbo tem TTL próprio e pode faltar.*
       let firstQueuedMs = 0
       try {
         const fq = await redis.get(keys.firstQueued(tenantId, session_id))

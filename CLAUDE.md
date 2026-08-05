@@ -469,6 +469,15 @@ Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → fr
 4. **SLA lazy evaluation** — `min(wait_time / sla_target, max_score)` at queue head only
 5. **Tie-breaking** — equal-score pools broken by shortest queue length
 6. **close_reason detection** — `no_resource` when no queue; `max_wait_exceeded` by lazy eval
+7. **O score do ZSET de fila é CHEGADA (`queued_at_ms`), nunca prioridade — e toda janela de
+   leitura é `ZRANGE` (menor score = mais antigo).** Escritor único (`add_queued_contact`), e
+   prioridade não é armazenável: `score_contact_in_queue` depende de `now_ms` (aging/breach crescem
+   com a espera), logo é recomputada na LEITURA, sobre a janela. Ler pela outra ponta seleciona os
+   mais NOVOS e deixa os antigos sem pontuação nenhuma — o aging fica inerte justamente para quem
+   ele existe para proteger. Aconteceu em `get_queued_contacts` (dequeue, pools push) e `listQueue`
+   (inbox pull) até 2026-08-05, autorizado por um docstring que prometia override por prioridade.
+   Gate: `infra/test/probe_queue_window_order.sh`. Detalhe: `docs/arcos/queue-attended-model.md`
+   § "Ordem da fila".
 
 ## Rules Engine — Scope
 

@@ -2467,8 +2467,20 @@ class InstanceRegistry:
     ) -> bool:
         """
         Persist a queued contact.
-        Sorted set score = queued_at_ms (lowest = oldest = served first for FIFO
-        base, though queue_scorer may override with priority).
+
+        Sorted set score = `queued_at_ms`. **Sempre**, e este é o único escritor do
+        score em todo o serviço: menor = mais antigo. Nada de prioridade entra aqui.
+
+        *A redação anterior dizia "though queue_scorer may override with priority".
+        Esse caminho não existe — o `queue_scorer` é `score_contact_in_queue`
+        (scorer.py), função pura que o `Router.dequeue` aplica sobre o JSON do
+        contato e que nunca escreve no ZSET. Nem poderia: a prioridade depende de
+        `now_ms` (aging e breach crescem com a espera), então armazená-la seria
+        gravar um valor que nasce velho. Prioridade é derivada na LEITURA, por
+        construção. Aquela frase foi o que autorizou dois leitores a ordenarem por
+        ZREVRANGE achando que pegavam "a maior prioridade" — ver o histórico no
+        docstring de `get_queued_contacts`.*
+
         Full event JSON is stored separately so it can be re-published verbatim
         to conversations.inbound when the contact is dequeued.
 
@@ -2518,8 +2530,11 @@ class InstanceRegistry:
         )
         # P3 — wall-clock da PRIMEIRA vez na fila (NX: re-enfileiramentos — ex.:
         # devolução via work_task_release, re-rota no drain — NÃO sobrescrevem).
-        # O score do sorted set (queued_at_ms) é reordenado no re-enqueue; este
-        # carimbo preserva a espera REAL do contato para o display do inbox
+        # *Este comentário dizia "o score do sorted set é reordenado no re-enqueue".
+        # Deixou de ser verdade em 2026-08-05 (item 4): a devolução re-enfileira com
+        # o `queued_at_ms` ORIGINAL, então score e `first_queued` coincidem. O
+        # carimbo sobrevive porque é DURÁVEL de outra forma — vive além do ZSET
+        # (TTL 7d, não sai no claim), e é dele que a idade exibida na inbox sai.*
         # (listQueue lê e cai em queued_at_ms se ausente/expirado). Mesmo padrão/
         # chave da fila muda (mute_queue.mark_mute_queued). TTL 7d; UUID por sessão
         # → sem colisão, limpeza por TTL (não precisa delete no claim/resolve).
@@ -2715,9 +2730,33 @@ class InstanceRegistry:
     async def get_queued_contacts(
         self, tenant_id: str, pool_id: str, top_n: int = 10
     ) -> list[QueuedContact]:
-        """Returns top_n contacts from queue by score (highest priority first).
-        Uses ZREVRANGE for backwards compatibility with redis-py < 4.2."""
-        members = await self._redis.zrevrange(
+        """
+        Janela de CANDIDATOS do `Router.dequeue`: os `top_n` contatos que estão há
+        MAIS TEMPO na fila (ZRANGE, menor score primeiro).
+
+        **ZRANGE, não ZREVRANGE.** Até 2026-08-05 esta função lia a ponta oposta,
+        sob o comentário "highest priority first". A premissa era falsa: o score
+        deste ZSET tem um único escritor (`add_queued_contact`) e ele grava
+        `queued_at_ms` — epoch de chegada, sempre. Maior score = mais NOVO. A
+        prioridade nunca esteve aqui; ela é derivada na leitura por
+        `score_contact_in_queue`, e **tem** de ser, porque depende de `now_ms`
+        (aging e breach crescem com a espera) — um score armazenado nasceria velho.
+
+        Por que importava: numa fila maior que `top_n`, os mais antigos não entravam
+        na janela e portanto **nunca eram pontuados**. O aging e o breach, que
+        existem para que nenhum contato espere para sempre, ficavam inertes
+        exatamente para quem mais esperava. Abaixo do limite tudo carrega e a
+        re-ordenação em Python corrige — por isso o defeito só aparece com carga.
+        Medido em 25 itens/janela 10: devolvia 16..25, faltando os 15 mais antigos
+        (`infra/test/probe_queue_window_order.sh`).
+
+        LIMITE QUE PERMANECE, e é da JANELA, não do sentido: contato de tier alto
+        que chegue além do corte também não é pontuado. Ordenar pela espera é
+        estritamente melhor (o aging é monótono no tempo de espera, então os
+        candidatos mais bem pontuados por ele são justamente os mais antigos), mas
+        não elimina o efeito para `base_priority`. Ver TODO § item 6.
+        """
+        members = await self._redis.zrange(
             _queue_key(tenant_id, pool_id), 0, top_n - 1
         )
         contacts: list[QueuedContact] = []
@@ -3126,21 +3165,10 @@ class PoolRegistry:
         # Register pool_id in the tenant set
         await self._redis.sadd(_pool_set_key(config.tenant_id), config.pool_id)
 
-    async def get_queued_contacts(
-        self, tenant_id: str, pool_id: str, top_n: int = 10
-    ) -> list[QueuedContact]:
-        """Returns top_n contacts from the pool queue (highest score first).
-        Uses ZREVRANGE for backwards compatibility with redis-py < 4.2."""
-        members = await self._redis.zrevrange(
-            _queue_key(tenant_id, pool_id), 0, top_n - 1
-        )
-        contacts: list[QueuedContact] = []
-        for session_id in members:
-            raw = await self._redis.get(_queue_contact_key(tenant_id, session_id))
-            if not raw:
-                continue
-            try:
-                contacts.append(QueuedContact.model_validate_json(raw))
-            except Exception:
-                continue
-        return contacts
+    # `PoolRegistry.get_queued_contacts` REMOVIDA (2026-08-05). Era cópia IDÊNTICA
+    # da de `InstanceRegistry` (§2715) e **não tinha um único chamador** — o
+    # `Router.dequeue` sempre usou a do `InstanceRegistry`. Removida no mesmo commit
+    # que corrigiu o sentido da janela (ZREVRANGE → ZRANGE) e pelo mesmo motivo que
+    # `get_total_instances_count` saiu em 2026-07-30: cópia morta é sobretudo uma
+    # SEGUNDA fonte do modelo mental — esta ensinava "highest score first" a quem a
+    # lesse, e sobreviveria a qualquer conserto feito só na irmã viva.

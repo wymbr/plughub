@@ -87,6 +87,7 @@ Layer 3 — Infraestrutura da conferência (a sala)
 | `session:{id}:contact_close_fired` | 7 dias | `_close_contact_layer()` (NX) | Idempotência de `_close_contact_layer()` | Evita duplo disparo de Layer 1 |
 | `session:{id}:close_fired` | 7 dias | `_destroy_conference()` (NX) | Idempotência de `_destroy_conference()` | Evita duplo disparo de Layer 3 |
 | `session:{id}:closed` | 7 dias | mcp-server `/agent_done` handler | mcp-server (reconnect guard para pending_assignment) | Marca sessão como encerrada para redelivery guard |
+| `session:{id}:participants` | 7 dias | Bridge (`_publish_participant_event` → `_upsert_participant_roster`, **Lua atômico**) | mcp-server (`session_context_get`, `resolveParticipantRole`), session-replayer (`ReplayContext.participants`) | **Roster** — array JSON de `Participant` (§1055 Fatia B, 2026-08-05). Fonte do PAPEL DE PARTICIPAÇÃO, que é fato de *(participante, sessão)* e por isso nunca coube no hash da instância. TTL 7 d porque o replayer o lê DEPOIS do `session_closed`, para montar o contexto de avaliação. **Upsert atômico é obrigatório**: o bridge despacha com `create_task` e não preserva ordem (§ 7b), logo dois joins concorrentes num read-modify-write em Python perderiam entradas em silêncio. Não guarda `duration_ms` — presença (`joined_at`→`left_at`) ≠ duração de segmento; para agente nativo os dois divergem porque a presença atravessa o suspend |
 
 ### 3.2 Keys de posatt (pós-atendimento)
 
@@ -594,6 +595,29 @@ Agente pressiona F5 durante atendimento ativo
 ```
 
 ---
+
+## 7b. Ordenação de eventos no bridge — não existe (medido 2026-08-05)
+
+Fato que precisa estar escrito antes de alguém desenhar em cima de uma garantia que não há:
+
+> **O bridge não preserva ordem entre eventos Kafka — de tópicos diferentes NEM do mesmo tópico.**
+> Um único consumidor assina os seis tópicos e o laço é
+> `async for msg in consumer: asyncio.create_task(_dispatch(...))` (`main.py` §9021), sem `await`.
+> Cada mensagem vira uma corrotina concorrente; a ordenação por partição do Kafka termina nessa linha.
+
+Consequência viva: o desmonte da presença do humano (`contact_closed(agent_release_item)` →
+`DEL session:{sid}:human_agent`, §6841) corre em paralelo com o guard de dedup do `process_routed`
+(§3517, que descarta routed SEM `conference_id` quando a presença existe). Um re-claim processado
+antes do desmonte é engolido: vaga gasta, nenhum cartão — o achado 2, em forma transitória.
+
+**Medido** (`infra/test/probe_release_reclaim_race.sh`): desmonte em **~30 ms**; re-claim
+back-to-back a **~15 ms**; **0 engolidas em 5/5**. O que protege **não** é ordem, e sim o
+`contact_closed` ser publicado no início do release enquanto o routed depende de release-responder +
+claim-ir-e-voltar. É um **offset de publicação**, incidental. Sob carga, o `create_task` pode atrasar
+o handler de `contact_closed` enquanto o de routed corre — o probe roda ocioso e não cobre isso.
+
+Ao desenhar qualquer caminho novo que reivindique logo após soltar, assumir que **os dois handlers
+correm juntos** e que a proteção é uma diferença de tempo de publicação, não uma garantia.
 
 ## 8. Histórico de Problemas e Correções
 

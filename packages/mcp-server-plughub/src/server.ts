@@ -409,11 +409,30 @@ async function registerHumanAgent(
       channel_types: ["webchat", "whatsapp"],
       sla_target_ms: 300_000,   // 5 minutes
     }
+    // Credencial de SERVIÇO — `POST /v1/pools` é gateado por `requireResourceWrite`
+    // no agent-registry, que aceita `x-service-token` OU `Bearer` + ABAC. Este
+    // caller é interno (login do Console) e não carrega JWT de usuário aqui, então
+    // usa o token de serviço — o MESMO padrão de `tools/deploy.ts`, no mesmo
+    // processo e a partir da MESMA variável de ambiente, que o container já recebe.
+    //
+    // Sem ele o registro devolvia 401 em TODO login humano desde que o gate
+    // existe (TODO §101, achado 2026-08-04). O caminho degradava e seguia — a
+    // gravação em Redis logo abaixo mantinha o login funcionando —, e é justamente
+    // o fallback que impedia de notar. Não é cosmético: o pool deixava de existir
+    // no PostgreSQL do Registry, e o reconciliador do `InstanceBootstrap` apaga
+    // `pool_config` do Redis que NÃO esteja no Registry (ver comentário acima).
+    // Ou seja, o fallback competia com um processo que o desfaz a cada 5 min.
+    //
+    // Omitido quando vazio (`...(svcToken ? … : {})`): se o destino não configurou
+    // `service_token` nem `jwt_secret`, o gate é no-op e mandar header vazio só
+    // ruído. Ver `agent-registry/middleware/require-resource-write.ts` §39.
+    const svcToken = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
     const resp = await fetch(`${registryUrl}/v1/pools`, {
       method:  "POST",
       headers: {
         "Content-Type": "application/json",
         "x-tenant-id":  tenantId,
+        ...(svcToken ? { "x-service-token": svcToken } : {}),
       },
       body: JSON.stringify(poolPayload),
     })
@@ -422,7 +441,17 @@ async function registerHumanAgent(
     } else if (resp.status === 409) {
       console.log(`[agent-ws] Pool already exists in Agent Registry: pool=${poolId}`)
     } else {
-      console.warn(`[agent-ws] Pool registration returned HTTP ${resp.status}: pool=${poolId}`)
+      // O corpo entra no log: um 401 e um 422 são falhas de naturezas diferentes
+      // (credencial × payload), e o status sozinho não distingue. Foi por não ter
+      // o corpo que este item ficou aberto desde 2026-08-04 — o TODO pedia
+      // "capturar a URL e o status body" como PRIMEIRO passo.
+      let detail = ""
+      try { detail = (await resp.text()).slice(0, 300) } catch { /* ignore */ }
+      console.warn(
+        `[agent-ws] Pool registration returned HTTP ${resp.status}: pool=${poolId} ` +
+        `token=${svcToken ? "enviado" : "AUSENTE (env AGENT_REGISTRY_SERVICE_TOKEN vazia)"} ` +
+        `body=${detail}`
+      )
     }
   } catch (err) {
     // Non-fatal: if the Agent Registry is unreachable, fall through.

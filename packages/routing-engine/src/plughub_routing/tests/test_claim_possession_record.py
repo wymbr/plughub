@@ -666,3 +666,114 @@ async def test_expire_recovers_owner_from_record(env):
         f"expire não usou o registro: via={res.get('claimed_via')!r}"
     )
     assert res.get("instance_id") == inst
+
+
+# ── Item 6 (2026-08-05) — a janela de candidatos lê a ponta certa do ZSET ─────
+#
+# `get_queued_contacts` lia com ZREVRANGE ("highest priority first"), premissa
+# falsa: o score deste ZSET tem escritor único (`add_queued_contact`) e é
+# `queued_at_ms`. Numa fila maior que `top_n`, os mais antigos não entravam na
+# janela e portanto NUNCA eram pontuados pelo `score_contact_in_queue` — o aging
+# e o breach, que existem para que nenhum contato espere para sempre, ficavam
+# inertes justamente para quem mais esperava.
+#
+# Os dois testes abaixo são complementares de propósito: o primeiro reprova o
+# SENTIDO da janela, o segundo reprova a AUSÊNCIA de janela. Só o primeiro
+# passaria com `zrange(0, -1)` (que carrega a fila inteira e mata o limite de
+# trabalho); só o segundo passaria com o ZREVRANGE original.
+
+@pytest.mark.asyncio
+async def test_queued_contacts_window_takes_oldest(env):
+    """
+    Fila MAIOR que a janela → vêm os mais ANTIGOS.
+
+    Reprova se voltar o ZREVRANGE: a asserção nomeia os ids ausentes, então a
+    falha diz qual ponta veio, não só que veio errado.
+
+    Os `queued_at_ms` são explícitos e crescentes (`q-00` o mais antigo) — a
+    ordem não depende do relógio nem da ordem de inserção, que é o que torna o
+    teste determinístico e a mensagem de falha legível.
+    """
+    reg, _router, _client, _p, tenant, pool = env
+    N, WINDOW = 15, 5
+    for i in range(N):
+        await _queue_contact(
+            reg, tenant, pool, f"q-{i:02d}", queued_at_ms=1_700_000_000_000 + i * 1000
+        )
+
+    got = [c.session_id for c in await reg.get_queued_contacts(tenant, pool, WINDOW)]
+
+    assert got == [f"q-{i:02d}" for i in range(WINDOW)], (
+        f"janela devolveu {got} — esperado os {WINDOW} mais ANTIGOS "
+        f"(q-00..q-{WINDOW - 1:02d}). Vindo q-{N - WINDOW:02d}.. significa ZREVRANGE "
+        "de volta: os mais velhos nunca são pontuados pelo aging."
+    )
+
+
+@pytest.mark.asyncio
+async def test_queued_contacts_window_respects_top_n(env):
+    """
+    A janela CORTA. Sem este teste, trocar a leitura por "a fila inteira" passaria
+    no teste de sentido acima e reintroduziria trabalho ilimitado por drain — o
+    limite existe para que `Router.dequeue` seja O(top_n), não O(fila).
+    """
+    reg, _router, _client, _p, tenant, pool = env
+    for i in range(12):
+        await _queue_contact(
+            reg, tenant, pool, f"w-{i:02d}", queued_at_ms=1_700_000_000_000 + i * 1000
+        )
+
+    got = await reg.get_queued_contacts(tenant, pool, 4)
+    assert len(got) == 4, f"janela não cortou: {len(got)} contatos para top_n=4"
+
+
+@pytest.mark.asyncio
+async def test_queued_contacts_window_diverges_from_reverse_reading(env):
+    """
+    CONTROLE NEGATIVO EMBUTIDO — a leitura de produção é comparada, na mesma fila,
+    com a leitura ERRADA reconstruída (`zrevrange`), e as duas têm de DIVERGIR.
+
+    Por que existe: o controle negativo "de verdade" (reverter o conserto,
+    rebuildar, rodar, restaurar) é frágil por construção — três passos manuais na
+    ordem certa com um rebuild no meio. Ele falhou DUAS vezes em 2026-08-05, das
+    duas por pular o build, e em ambas o sintoma foi um resultado que *parecia*
+    resposta: primeiro `238 deselected` (nenhum teste selecionado, código 0),
+    depois `2 passed` contra um container que ainda tinha o código consertado.
+    *Um procedimento de validação que depende de sequência manual não é validação
+    — é uma chance de erro com aparência de rigor.*
+
+    O que este teste garante e os dois acima não garantem: que a FIXTURE
+    discrimina. Se alguém encolher N para dentro da janela, as duas leituras
+    passam a coincidir, os testes de sentido continuam verdes e param de testar
+    qualquer coisa — silenciosamente. Aqui isso fica vermelho, e a mensagem diz
+    exatamente o que aconteceu.
+
+    Reprova em três situações, todas úteis:
+      · a produção volta ao ZREVRANGE      → os conjuntos coincidem
+      · a fila deixa de exceder a janela   → os conjuntos coincidem
+      · a produção passa a ler outra coisa → nenhum dos dois conjuntos bate
+    """
+    reg, _router, client, _p, tenant, pool = env
+    N, WINDOW = 15, 5
+    for i in range(N):
+        await _queue_contact(
+            reg, tenant, pool, f"d-{i:02d}", queued_at_ms=1_700_000_000_000 + i * 1000
+        )
+
+    prod = [c.session_id for c in await reg.get_queued_contacts(tenant, pool, WINDOW)]
+    # A leitura ERRADA, reconstruída sobre a MESMA fila. Não é o código antigo
+    # importado (ele não existe mais) — é a operação Redis que ele fazia.
+    reverse = await client.zrevrange(_queue_key(tenant, pool), 0, WINDOW - 1)
+
+    assert prod != reverse, (
+        f"as duas leituras coincidiram ({prod}) — ou a produção voltou a ler a "
+        f"ponta errada, ou a fila (N={N}) não excede mais a janela ({WINDOW}) e "
+        "esta suíte parou de discriminar as duas semânticas"
+    )
+    assert prod == [f"d-{i:02d}" for i in range(WINDOW)], (
+        f"produção não trouxe os mais ANTIGOS: {prod}"
+    )
+    assert reverse == [f"d-{i:02d}" for i in range(N - 1, N - 1 - WINDOW, -1)], (
+        f"a leitura reversa não trouxe os mais NOVOS: {reverse} — a premissa do "
+        "próprio controle mudou, e ele deixou de ser o oposto que diz ser"
+    )
