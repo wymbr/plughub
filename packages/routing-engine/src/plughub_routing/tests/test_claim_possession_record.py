@@ -105,16 +105,23 @@ async def _register_instance(reg, tenant, pool, instance, max_concurrent=3):
 
 
 async def _queue_contact(reg, tenant, pool, sid, *, deadline: str | None = None,
-                         assigned_to: str = ""):
+                         assigned_to: str = "", queued_at_ms: int = 1):
     contact: dict = {
         "session_id": sid, "tenant_id": tenant, "channel": "webhook",
         "pool_id": pool,
+        # Produção SEMPRE carimba este campo no enfileiramento
+        # (`main.py`: contact_data["queued_at_ms"] = now_ms), e é dele que saem o
+        # aging (`score_contact_in_queue`) e o teto de retenção
+        # (`_emit_queue_timeout`). O fixture o omitia — divergência do real
+        # exatamente no campo que o re-enfileiramento lê, ou seja, no único lugar
+        # onde um teste de requeue poderia reprovar. Corrigido em 2026-08-05.
+        "queued_at_ms": queued_at_ms,
     }
     if deadline is not None:
         contact["work_item_deadline"] = deadline
     if assigned_to:
         contact["assigned_to"] = assigned_to
-    await reg.add_queued_contact(tenant, pool, sid, contact, queued_at_ms=1)
+    await reg.add_queued_contact(tenant, pool, sid, contact, queued_at_ms=queued_at_ms)
 
 
 def _iso_in(hours: float) -> str:
@@ -376,6 +383,82 @@ async def test_release_preserves_first_queued(env):
     assert fq_after == fq_first, (
         f"first_queued foi reescrito na devolução ({fq_first} → {fq_after}) — a "
         "espera real do item reiniciaria a cada queda de transporte"
+    )
+
+
+# ── Espera preservada na devolução (achado 4, 2026-08-05) ────────────────────
+
+@pytest.mark.asyncio
+async def test_release_preserves_zset_score(env):
+    """
+    Regra de produto: *item devolvido à fila preserva o timestamp original, logo é
+    ordenado pela espera*. O `work_task_release` carimbava `now` no score do ZSET.
+
+    **O efeito não era o que o achado dizia.** A medição de 2026-08-05 mostrou DUAS
+    fontes de tempo, porque `add_queued_contact` grava o `contact_data` verbatim:
+    o JSON `queued_at_ms` sobrevivia (e é dele que saem o aging e o
+    `max_wait_exceeded`), enquanto o score do ZSET reiniciava — e é o score que a
+    posição publicada ao cliente (`get_queue_rank`) e a urgência de SLA do pool
+    (`get_oldest_queue_wait_ms`) leem. Quem decidia o atendimento estava certo;
+    quem o cliente via, não.
+
+    Reprova se o score voltar a ser `now`: a posição do contato devolvido salta
+    para o fim da fila enquanto a idade exibida no inbox continua correta — os dois
+    números na mesma tela, discordando, que foi como o achado apareceu.
+
+    O `sleep` existe para que `now` seja mensuravelmente diferente do carimbo: sem
+    ele, um relógio grosseiro deixaria o teste passar com o bug presente.
+    """
+    reg, router, client, _p, tenant, pool = env
+    sid, inst = "ses-score-1", "human-ana"
+    ORIGINAL_MS = 1_700_000_000_000          # bem no passado, impossível de confundir com `now`
+    await _register_instance(reg, tenant, pool, inst)
+    await _queue_contact(
+        reg, tenant, pool, sid, deadline=_iso_in(24), queued_at_ms=ORIGINAL_MS
+    )
+    before = await client.zscore(_queue_key(tenant, pool), sid)
+    assert before == float(ORIGINAL_MS), "premissa do teste falhou no enfileiramento"
+
+    await router.work_task_claim(tenant, pool, sid, inst)
+    await asyncio.sleep(0.01)
+    await router.work_task_release(tenant, pool, sid, inst)
+
+    after = await client.zscore(_queue_key(tenant, pool), sid)
+    assert after == float(ORIGINAL_MS), (
+        f"score do ZSET foi recarimbado na devolução ({before} → {after}) — a "
+        "posição e a urgência de SLA reiniciam, contra a espera real do item"
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_without_queued_at_falls_back_to_now(env):
+    """
+    Contato SEM `queued_at_ms` (legado, ou JSON montado por outro caminho) não tem
+    espera a preservar. O fallback é `now` — e é logado como WARNING, porque aí o
+    item realmente vai para o fim e o sintoma seria inexplicável sem a linha.
+
+    Este teste existe para o fallback não virar silencioso por acidente: se alguém
+    trocar o `or now` por `or 0`, o item iria para o TOPO absoluto da fila
+    (score 0), furando fila para sempre — falha grave e totalmente muda.
+    """
+    reg, router, client, _p, tenant, pool = env
+    sid, inst = "ses-score-2", "human-bia"
+    await _register_instance(reg, tenant, pool, inst)
+    # Enfileirado à mão, SEM o campo — o helper agora sempre o inclui.
+    await reg.add_queued_contact(
+        tenant, pool, sid,
+        {"session_id": sid, "tenant_id": tenant, "channel": "webhook",
+         "pool_id": pool, "work_item_deadline": _iso_in(24)},
+        queued_at_ms=1,
+    )
+    await router.work_task_claim(tenant, pool, sid, inst)
+    floor_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    await router.work_task_release(tenant, pool, sid, inst)
+
+    after = await client.zscore(_queue_key(tenant, pool), sid)
+    assert after >= float(floor_ms), (
+        f"sem `queued_at_ms` o score deveria cair em `now` (>= {floor_ms}); veio "
+        f"{after} — score baixo aqui significa furar fila, não perdê-la"
     )
 
 

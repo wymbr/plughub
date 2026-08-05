@@ -90,6 +90,7 @@ fi
 VIOLATIONS=0
 QUEUED_TOTAL=0
 RETURNED_TOTAL=0   # itens que JÁ voltaram à fila — os únicos em que a pergunta morde
+WAIT_RESETS=0      # itens devolvidos cujo score reiniciou (item 4)
 QUEUED_SIDS=" "    # acumulador p/ não repetir na seção de contexto (ver abaixo)
 
 for POOL in $POOLS; do
@@ -113,27 +114,47 @@ for POOL in $POOLS; do
     # ── Item VIRGEM × item DEVOLVIDO ─────────────────────────────────────────
     # Sem esta distinção o script tem um VERDE vazio: numa fila recém-semeada
     # nenhum item jamais teve humano, então "nenhum item na fila tem presença" é
-    # verdade por construção e não diz nada sobre o conserto. O discriminador já
-    # existe no Redis: `first_queued` é gravado NX no primeiro enfileiramento e o
-    # score do ZSET é reescrito a cada re-enfileiramento (o `add_queued_contact`
-    # do `work_task_release` carimba `now`). Score > first_queued ⇒ este item já
-    # voltou à fila pelo menos uma vez — que é exatamente a situação do achado 2.
-    #   (que o score seja reescrito é, ele próprio, o item (a) do TODO — aqui a
-    #    consequência é aproveitada como sinal, não endossada como desenho.)
+    # verdade por construção e não diz nada sobre o conserto.
+    #
+    # O discriminador é `session:{sid}:segment_seq`, que `activate_human_agent`
+    # INCREMENTA a cada ativação de humano. Existir ⇒ esta sessão já teve humano
+    # anexado; estar na fila AGORA ⇒ o humano saiu. É o fato exato que interessa,
+    # e não um proxy.
+    #
+    # *A primeira versão usava `score do ZSET > first_queued` ("o requeue carimba
+    # `now`"). Morreu com o conserto do item 4, que passou a preservar a espera —
+    # os dois valores viraram iguais e todo item devolvido seria lido como virgem,
+    # transformando o gate em verde vazio SEM nada ficar vermelho. Discriminador
+    # que depende de um defeito morre junto com o conserto dele.*
+    SEQ="$(r EXISTS "session:${SID}:segment_seq")"
+    if [ "$SEQ" = "1" ]; then
+      KIND="devolvido"; RETURNED_TOTAL=$((RETURNED_TOTAL + 1))
+    else
+      KIND="virgem"
+    fi
+
+    # ── Espera preservada? (item 4) ──────────────────────────────────────────
+    # Segunda pergunta, respondida de graça porque os dois números já estão aqui:
+    # o `work_task_release` deve re-enfileirar com o `queued_at_ms` ORIGINAL, não
+    # com `now`. Score divergindo do `first_queued` num item DEVOLVIDO = a espera
+    # reiniciou, e com ela a posição publicada ao cliente (`get_queue_rank`) e a
+    # urgência de SLA do pool (`get_oldest_queue_wait_ms`).
     SCORE="$(r ZSCORE "${TENANT}:pool:${POOL}:queue" "$SID" | awk -F. '{print $1}')"
     FIRSTQ="$(r GET "${TENANT}:queue:first_queued:${SID}" | awk -F. '{print $1}')"
-    KIND="indeterminado"
+    WAIT="indeterminado"
     if [ -n "$SCORE" ] && [ -n "$FIRSTQ" ]; then
-      if [ "$((SCORE - FIRSTQ))" -gt 1000 ] 2>/dev/null; then
-        KIND="devolvido"; RETURNED_TOTAL=$((RETURNED_TOTAL + 1))
+      DELTA=$((SCORE - FIRSTQ)); [ "$DELTA" -lt 0 ] && DELTA=$((-DELTA))
+      if [ "$DELTA" -le 1000 ]; then
+        WAIT="espera preservada"
       else
-        KIND="virgem"
+        WAIT="espera REINICIADA (+$((DELTA / 1000))s)"
+        [ "$KIND" = "devolvido" ] && WAIT_RESETS=$((WAIT_RESETS + 1))
       fi
     fi
 
     if [ "$MARK" = "1" ] || [ -n "$SETM" ]; then
       VIOLATIONS=$((VIOLATIONS + 1))
-      echo "   [VIOLAÇÃO] ${SID}  (${KIND})"
+      echo "   [VIOLAÇÃO] ${SID}  (${KIND}, ${WAIT})"
       echo "              na fila (sem dono, por construção do ZREM do claim),"
       echo "              mas human_agent=${MARK} e human_agents=[${SETM:-vazio}]"
       echo "              → o próximo claim desta sessão será ENGOLIDO pelo guard"
@@ -142,7 +163,7 @@ for POOL in $POOLS; do
       # um segundo desacordo (o árbitro devolveu, o registro ficou) e vale citar.
       [ "$REC" = "1" ] && echo "              (obs.: claim_record TAMBÉM presente — árbitro e registro discordam)"
     else
-      echo "   [ok]       ${SID}  (${KIND}) — na fila, sem presença de humano"
+      echo "   [ok]       ${SID}  (${KIND}, ${WAIT}) — na fila, sem presença de humano"
     fi
   done <<< "$MEMBERS"
   echo
@@ -171,15 +192,28 @@ echo
 
 echo "== veredicto =="
 if [ "$QUEUED_TOTAL" -eq 0 ]; then
-  echo "INCONCLUSIVO — nenhum item na fila; a pergunta não chegou a ser feita."
+  echo "INCONCLUSIVO — nenhum item na fila; nenhuma das duas perguntas foi feita."
   exit 2
 fi
 
+# ── Veredicto 2 de 2 (item 4): a espera sobrevive à devolução? ───────────────
+# Impresso ANTES do principal e com rótulo próprio. Fundir os dois num veredicto
+# só diria "vermelho" sem dizer QUAL invariante caiu — e são invariantes de
+# camadas diferentes (presença é do bridge, espera é do árbitro).
+if [ "$WAIT_RESETS" -gt 0 ]; then
+  echo "VERMELHO (espera) — ${WAIT_RESETS} item(ns) devolvido(s) com o score recarimbado."
+  echo "  A posição publicada ao cliente e a urgência de SLA do pool reiniciaram."
+elif [ "$RETURNED_TOTAL" -gt 0 ]; then
+  echo "VERDE (espera) — ${RETURNED_TOTAL} devolvido(s), score == first_queued em todos."
+fi
+
 if [ "$VIOLATIONS" -gt 0 ]; then
-  echo "VERMELHO — ${VIOLATIONS} de ${QUEUED_TOTAL} item(ns) na fila carregam presença de humano."
+  echo "VERMELHO (presença) — ${VIOLATIONS} de ${QUEUED_TOTAL} item(ns) na fila carregam presença de humano."
   echo "Este é o achado 2. Cada id acima gastará uma vaga sem gerar cartão no re-claim."
   exit 1
 fi
+
+[ "$WAIT_RESETS" -gt 0 ] && exit 1
 
 # VERDE sem item DEVOLVIDO é verdade por construção, não evidência: item que nunca
 # teve humano obviamente não tem marcador. Sair "aprovado" aqui seria um veredicto
@@ -196,8 +230,8 @@ if [ "$RETURNED_TOTAL" -eq 0 ]; then
   exit 2
 fi
 
-echo "VERDE — ${QUEUED_TOTAL} item(ns) na fila (${RETURNED_TOTAL} já devolvido(s)),"
-echo "        nenhum com presença de humano."
+echo "VERDE (presença) — ${QUEUED_TOTAL} item(ns) na fila (${RETURNED_TOTAL} já"
+echo "        devolvido(s)), nenhum com presença de humano."
 echo
 echo "  O que este VERDE afirma: nenhuma sessão está simultaneamente sem dono (na"
 echo "  fila) e com humano anexado (marcador) — inclusive as que voltaram por"

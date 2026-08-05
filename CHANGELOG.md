@@ -2,6 +2,62 @@
 
 ---
 
+## A espera sobrevive à devolução à fila ✅ (2026-08-05)
+
+Fecha o item 4 de "Achados de 2026-08-04" — e **corrige a descrição dele**, que estava errada sobre
+o efeito. O registro dizia *"o item devolvido perde o lugar; a tela está certa, o ZSET que o árbitro
+e o drain leem não está"*. A leitura dos quatro leitores do ZSET achou outra coisa.
+
+**São DUAS fontes de tempo, não uma.** `add_queued_contact` recebe o score como parâmetro e grava o
+`contact_data` verbatim, então o `work_task_release` atualizava só um dos carimbos:
+
+- JSON `contact.queued_at_ms` → lido pelo **aging** (`score_contact_in_queue`) e pelo **teto de
+  retenção** (`max_wait_exceeded`): **já preservado**;
+- score do ZSET → lido pela **posição publicada ao cliente** (`get_queue_rank`) e pela **urgência de
+  SLA do pool** (`get_oldest_queue_wait_ms`): **reiniciava**.
+
+Quem decidia o atendimento estava certo. Quem o cliente via e quem media o SLA do pool é que
+discordavam — e a divergência crescia a cada devolução.
+
+**Conserto:** o score passa a ser o `queued_at_ms` original. Não é convenção nova — o rollback do
+`work_task_claim`, na mesma classe, já re-enfileirava assim; o release era o único site fora dela.
+Alinhar ao JSON e não a `first_queued` é deliberado: o aging lê o JSON, então a outra chave trocaria
+uma divergência de duas fontes por outra. Sem o campo, fallback `now` **com WARNING** — `or 0`
+mandaria o item para o topo absoluto, furando fila em silêncio.
+
+**Medido** (mesmo item, mesma chamada, só a imagem mudou): `score_antes 1785934355601` ·
+`first_queued 1785933433275` · `score_depois 1785933433275` — o score não parou de avançar, **voltou**
+ao original. Os outros dois itens da fila, devolvidos pela imagem antiga, seguiram divergentes na
+MESMA saída do probe: grupo de controle sem montagem sintética.
+
+**Testes:** `test_claim_possession_record.py` 21 passed (19 + 2). O primeiro prende a preservação; o
+segundo prende o fallback, para que ele não vire `or 0` por acidente. **Nenhum teste antigo afirmava
+o comportamento alterado** — o reset nunca esteve sob rede, e é por isso que a divergência entre a
+idade exibida e a posição real viveu meses sem nada ficar vermelho.
+
+**Fixture corrigido junto:** o helper `_queue_contact` não punha `queued_at_ms` no contato, embora
+produção sempre carimbe (`main.py`). Divergência do real exatamente no campo que o requeue lê — ou
+seja, no único ponto onde um teste de requeue poderia reprovar.
+
+**O probe teve de mudar com o conserto.** `probe_release_presence.sh` distinguia item virgem de
+devolvido por `score > first_queued` — um sinal que **existia por causa do defeito** e morreu com
+ele: todo item devolvido passaria a ser lido como virgem, e o gate do achado 2 viraria verde vazio
+sem nada ficar vermelho. Trocado por `session:{sid}:segment_seq` (existe ⇒ já teve humano anexado),
+que é o fato direto. O probe passou a responder **duas** perguntas com **veredictos separados**
+(presença × espera) — fundi-los diria "vermelho" sem dizer qual invariante caiu, e são camadas
+diferentes: presença é do bridge, espera é do árbitro.
+
+**Aberto, de outra natureza (TODO item 6):** `get_queued_contacts` usa **ZREVRANGE** (mais novo
+primeiro) enquanto `get_queue_rank` e `get_oldest_queue_wait_ms` tratam menor score = mais antigo.
+Com `top_n=10` e fila maior, os 10 mais novos entram na janela de candidatos e os antigos nunca são
+pontuados. Independe de requeue; exige decidir antes se o score é timestamp ou prioridade.
+
+**Arquivos:** `routing-engine/router.py` (`work_task_release` + docstring, que afirmava
+"NÃO preserva posição") · `tests/test_claim_possession_record.py` ·
+`infra/test/probe_release_presence.sh` · `docs/adr/adr-work-item-requeue-and-agent-affinity.md` § D2b.
+
+---
+
 ## "Return to queue" desmonta a presença do humano ✅ (2026-08-05)
 
 Fecha o **achado 2** de 2026-08-04 (TODO § "Fila de trabalho humano … resíduos pós-v1"), que a

@@ -878,8 +878,14 @@ class Router:
     ) -> dict:
         """
         Pull: devolve um contato claimado à fila — remove a lease, libera a vaga do
-        recurso (release_instance) e re-enfileira pelos critérios do routing
-        (add_queued_contact, NÃO preserva posição).
+        recurso (release_instance) e re-enfileira **preservando a espera**
+        (`add_queued_contact` com o `queued_at_ms` original como score).
+
+        *Até 2026-08-05 este docstring dizia "NÃO preserva posição", e o código
+        carimbava `now`. Passou a preservar por regra de produto — item devolvido é
+        ordenado pela espera real —, alinhando o score do ZSET ao mesmo número que o
+        aging e o teto de retenção já liam do JSON. Ver o comentário no site do
+        `add_queued_contact` abaixo.*
 
         **Dois chamadores com intenções OPOSTAS** (Fase C / D3), e é o que
         `reserve_to_previous` separa:
@@ -935,9 +941,47 @@ class Router:
                 contact, pool_id, session_id, instance_id, prev_record,
             )
         if contact is not None:
+            # ── A espera NÃO recomeça na devolução ────────────────────────────
+            # Regra de produto: *item devolvido à fila preserva o timestamp
+            # original, logo é ordenado normalmente pela espera*. Este site
+            # carimbava `now`, e era o ÚNICO — o rollback do `work_task_claim`
+            # (mesma classe, ~200 linhas acima) já re-enfileira com o
+            # `queued_at_ms` do contato. Não é convenção nova: é a que existe.
+            #
+            # O efeito não era "o item perde o lugar", que é como o achado foi
+            # registrado. Medido (2026-08-05), há DUAS fontes de tempo e só uma
+            # resetava, porque `add_queued_contact` grava o `contact_data`
+            # verbatim:
+            #   · JSON `contact.queued_at_ms` — lido pelo aging
+            #     (`score_contact_in_queue`) e pelo teto de retenção
+            #     (`_emit_queue_timeout`/`max_wait_exceeded`) → JÁ preservado;
+            #   · score do ZSET — lido pela posição publicada ao cliente
+            #     (`get_queue_rank`) e pela urgência de SLA do pool
+            #     (`get_oldest_queue_wait_ms`) → resetava.
+            # Ou seja: quem decide o atendimento estava certo; quem o cliente vê
+            # e quem mede o SLA do pool é que discordavam. Alinhar o score ao
+            # JSON faz os quatro leitores usarem o MESMO número.
+            #
+            # Usar `first_queued` aqui seria pior: o aging continuaria lendo o
+            # JSON, e trocaríamos uma divergência de duas fontes por outra.
+            _orig_ms = 0
+            try:
+                _orig_ms = int(contact.get("queued_at_ms") or 0)
+            except (TypeError, ValueError):
+                _orig_ms = 0
+            if not _orig_ms:
+                # Degradação nunca silenciosa: sem o carimbo original o item
+                # REALMENTE vai para o fim, e isso precisa de linha própria —
+                # senão o sintoma (item devolvido furando/perdendo fila) volta a
+                # ser inexplicável, que foi como este achado nasceu.
+                logger.warning(
+                    "work_task_release: contato sem `queued_at_ms` — score do ZSET "
+                    "carimbado com AGORA, a espera deste item reinicia "
+                    "(session=%s pool=%s)", session_id, pool_id,
+                )
             await self._instances.add_queued_contact(
                 tenant_id, pool_id, session_id, contact,
-                int(datetime.now(timezone.utc).timestamp() * 1000),   # re-ordena
+                _orig_ms or int(datetime.now(timezone.utc).timestamp() * 1000),
             )
         await self._instances.refresh_snapshots_for_instance(
             tenant_id, instance_id, extra_pools=[pool_id],

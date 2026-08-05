@@ -86,6 +86,43 @@ o contador seria uma segunda regra dizendo o que o prazo já diz.
 > **Consequência:** a Fase B não precisa carimbar nada. `first_queued` já é load-bearing e já está
 > preenchido.
 
+#### D2b — A espera preservada não era UMA fonte, eram DUAS (medido 2026-08-05)
+
+`first_queued` estar correto **não bastava**, e a nota acima, ao fechar aquela pergunta, escondeu a
+seguinte. `add_queued_contact` recebe o score do ZSET como parâmetro e grava o `contact_data`
+**verbatim** — então existem dois carimbos de tempo, e o `work_task_release` atualizava só um:
+
+| leitor | fonte | no requeue (antes do fix) |
+|---|---|---|
+| aging / prioridade (`score_contact_in_queue`) | JSON `contact.queued_at_ms` | preservado ✓ |
+| teto de retenção (`_emit_queue_timeout` → `max_wait_exceeded`) | JSON `contact.queued_at_ms` | preservado ✓ |
+| posição publicada ao cliente (`get_queue_rank`, ZRANK) | **score do ZSET** | reiniciava ✗ |
+| urgência de SLA do pool (`get_oldest_queue_wait_ms`, ZRANGE 0,0) | **score do ZSET** | reiniciava ✗ |
+| idade exibida no inbox (`listQueue`) | `first_queued` | preservado ✓ |
+
+Ou seja: **quem decidia o atendimento já estava certo; quem o cliente via e quem media o SLA do pool
+é que discordavam** — e a divergência crescia a cada devolução. O achado tinha sido registrado como
+*"o item devolvido perde o lugar"*, o que descreve o sintoma errado pelo motivo errado.
+
+**Decisão:** o score do ZSET no `work_task_release` passa a ser o `queued_at_ms` ORIGINAL do contato.
+Não é convenção nova — o rollback do `work_task_claim`, na mesma classe, já re-enfileirava assim; o
+release era o único site divergente. Alinhar ao JSON (e não a `first_queued`) é deliberado: o aging
+lê o JSON, então usar a outra chave trocaria uma divergência de duas fontes por outra.
+
+Sem `queued_at_ms` no contato (legado), o fallback é `now` **com WARNING** — aí o item realmente vai
+para o fim, e sem a linha o sintoma seria inexplicável. `or 0` seria pior que `or now`: mandaria o
+item para o topo absoluto, furando fila para sempre, e em silêncio.
+
+**Medido** (mesmo item, mesma chamada, só a imagem mudou): `score_antes 1785934355601` ·
+`first_queued 1785933433275` · `score_depois 1785933433275`. Os outros dois itens da fila, devolvidos
+pela imagem antiga, seguiram divergentes na MESMA saída do probe — grupo de controle sem montagem.
+
+**Aberto, e de outra natureza:** `get_queued_contacts` (a janela de candidatos do `dequeue`) usa
+**ZREVRANGE** — score mais alto primeiro, isto é, o mais NOVO —, enquanto `get_queue_rank` e
+`get_oldest_queue_wait_ms` tratam *menor score = mais antigo*. Com `top_n=10` e fila maior, os 10 mais
+novos entram na janela e os antigos nunca são pontuados. Não tem relação com requeue e exige decidir
+antes se o score é timestamp ou prioridade. Ver TODO § "Achados de 2026-08-04", item 6.
+
 ### D3 — Reserva com janela cobre os dois tipos; não existe "carência" como mecanismo próprio
 
 O item volta à fila **reservado ao dono anterior**, com transbordo automático — isto é,

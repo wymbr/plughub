@@ -2364,15 +2364,31 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    parecia ordenada pelo número mostrado e não estava. Agora desempata pelo próprio `ageOf`, o que
    torna a ordem conferível a olho.
 
-4. **Requeue carimba score NOVO no ZSET** *(aberto)*. `add_queued_contact` no `work_task_release`
-   grava `now` como score, contra a regra do dono do produto: *"item devolvido preserva o timestamp
-   original, logo é ordenado pela espera"*. A TELA está certa desde 2026-08-04 (o sort passou a usar
-   `ageOf` de `first_queued_ms`, que não reseta), mas o **ZSET que o árbitro e o drain leem** para
-   decidir "cabeça da fila" reseta — então a ordem que a tela mostra e a ordem que o sistema usa
-   divergem, e a divergência cresce com o número de devoluções. `first_queued` já existe e é gravado
-   NX exatamente para isto. *Efeito colateral aproveitado (não endossado): é essa diferença
-   `score − first_queued` que o `probe_release_presence.sh` usa para distinguir item virgem de
-   devolvido — se o score passar a ser preservado, o probe precisa de outro discriminador.*
+4. ~~**Requeue carimba score NOVO no ZSET**~~ ✅ **CONSERTADO 2026-08-05 — e a descrição do item
+   estava errada.** Não era "o item perde o lugar". São **duas fontes de tempo**: o aging e o
+   `max_wait_exceeded` leem o JSON `contact.queued_at_ms` (que já era preservado), enquanto a posição
+   publicada ao cliente (`get_queue_rank`) e a urgência de SLA do pool (`get_oldest_queue_wait_ms`)
+   leem o **score do ZSET** (que reiniciava). Quem decidia o atendimento estava certo; quem o cliente
+   via, não. Conserto: score = `queued_at_ms` original, que é o que o rollback do `work_task_claim`
+   já fazia. Medido no mesmo item, mesma chamada: score **voltou** de `…355601` para `…433275`
+   (== `first_queued`), com os outros dois itens da fila como controle na mesma saída. Detalhe em
+   `CHANGELOG.md` e `docs/adr/adr-work-item-requeue-and-agent-affinity.md` § **D2b**.
+
+   **Lição:** o discriminador `score > first_queued` do `probe_release_presence.sh` existia **por
+   causa do defeito** e morreu com ele — todo item devolvido passaria a parecer virgem, e o gate do
+   achado 2 viraria verde vazio sem nada ficar vermelho. Trocado por `session:{sid}:segment_seq`.
+   *Instrumento que depende de um defeito precisa ser revisto no mesmo commit que o conserta.*
+
+6. **`get_queued_contacts` lê ZREVRANGE enquanto os outros leitores tratam menor score = mais antigo**
+   *(aberto, achado em 2026-08-05 na leitura do item 4)*. A janela de candidatos do `dequeue` pega os
+   `top_n` de **maior** score — os mais NOVOS —, enquanto `get_queue_rank` (ZRANK) e
+   `get_oldest_queue_wait_ms` (ZRANGE 0,0) tratam menor score como mais antigo. Com `top_n=10` e fila
+   maior que isso, os antigos nunca chegam a ser pontuados pelo `score_contact_in_queue`: starvation
+   silenciosa. No demo a fila é minúscula, então nunca mordeu. **Não é bug de requeue** — independe
+   dele. Antes de mexer, decidir a pergunta de produto que os dois lados respondem diferente: *o
+   score do ZSET é timestamp de chegada ou prioridade?* O docstring de `add_queued_contact` diz
+   ambas as coisas ("lowest = oldest = served first for FIFO base, though queue_scorer may override
+   with priority"). **Medir com fila > top_n antes de tratar como defeito.**
 
 5. **Janela de ordenação entre `conversations.events` e `conversations.routed`** *(aberto, pequeno;
    nasceu com o conserto do achado 2)*. O anúncio `contact_closed(agent_release_item)` é produzido
