@@ -96,6 +96,63 @@ casa permanente ficam aqui, porque valem para a **próxima** suíte que alguém 
 
 Detalhe completo das 5 famílias no `CHANGELOG.md` § *"Zero suítes vermelhas: 48 falhas em 6 pacotes → 0"*.
 
+### 8. Um número que PARECE resposta *(2026-08-05 — cinco casos num dia)*
+
+Placar do dia: **5 defeitos de instrumento × 1 achado de código real**, e os cinco tinham a mesma
+forma — um número foi produzido, foi lido, e não significava o que parecia. Nenhum falhou alto.
+
+| O que apareceu | O que significava de verdade |
+|---|---|
+| `238 deselected in 0.37s` | **zero** testes selecionados; `-k` não casou nada, exit 0 |
+| `2 passed` (duas vezes) | container ainda com o código VELHO — o arquivo de teste mora na imagem |
+| `INCONCLUSIVO` sobre saída correta | o veredicto do probe só sabia REPROVAR (ver abaixo) |
+| `grep -c` = 0, duas vezes | `--since` com timestamp sem fuso: janela de log 3 h no FUTURO |
+| `presence_at_reclaim = 1` | proxy lido no instante errado — o guard avalia DEPOIS |
+
+**A regra que emergiu, e que funcionou toda vez que foi aplicada:**
+
+> **Um contador de AUSÊNCIA precisa de um contador-TESTEMUNHA de presença ao lado.**
+
+Sem a testemunha, `0` significa *"não aconteceu"* **ou** *"não foi exercitado"*, e não há como
+distinguir. Os três pares que funcionaram: `Return to queue` ao lado de `Skipping duplicate`;
+`Pool (registered|already exists)` ao lado de `HTTP 401`; roster com participante ao lado de
+`ctx_participants`. **O único gate que pegou seu próprio erro de primeira** foi o que já exigia a
+testemunha antes de aceitar um verde.
+
+**A pergunta que teria evitado três erros seguidos:** *qual linha de código precisa executar para
+este número mudar, e o meu experimento a executa?* Duas vezes propus um gate que media o **produtor**
+quando a mudança estava no **consumidor** — e a segunda vez foi na mesma mensagem em que eu advertia
+contra a primeira.
+
+**Corolário do §3 (verde acidental), na direção oposta:** um veredicto de três estados pode estar
+errado no ramo que **aprova**, e isso não chama atenção porque o estado inútil (`INCONCLUSIVO`)
+parece prudência. O probe de janela contava ausências nas duas pontas e exigia "nenhum dos novos
+presente" para dar verde — impossível quando a janela passa de metade da fila, porque as duas pontas
+se **sobrepõem**. Ele sabia reprovar e não sabia aprovar. **Provar que o veredicto APROVA exige uma
+execução esperada-verde**; só a esperada-vermelha não basta.
+
+**Controle negativo por ritual manual não é validação.** Reverter → rebuildar → rodar → restaurar
+falhou **duas vezes**, das duas por pular o rebuild. Substituído por um teste **diferencial** (lê o
+mesmo dado pelas duas semânticas e afirma que DIVERGEM), que roda em todo build e ainda cobre o caso
+que o ritual nunca cobriria: fixture encolhida para dentro da janela faz as duas leituras
+coincidirem, os testes de sentido seguem verdes e param de discriminar — em silêncio.
+
+### 9. O pente vale mais que o plano *(2026-08-05)*
+
+Sete achados antigos foram auditados contra o código que executa. **Três já estavam consertados** —
+resolvidos de passagem por arcos vizinhos, sem ninguém marcar. Um deles (`§1b`) estava completo
+inclusive no bundle servido.
+
+Isso põe número no §1 e no §5: **o custo não é o item ficar aberto, é o registro AFIRMAR que está
+aberto**, porque quem planeja em cima dele planeja trabalho que não existe. Antes de abrir uma frente
+grande, passar o pente nos achados da faixa de datas correspondente — a taxa foi de 3 em 7, e cada
+verificação custou minutos.
+
+*Corolário achado no mesmo dia:* dois itens sem nenhuma referência cruzada podem estar em cadeia. O
+**§101** (401 no registry) travava a suíte e2e, que era o único caminho vivo do leitor de `role` do
+**§1055**. Um defeito de autenticação a três saltos era o que impedia de validar outro. **Ao fechar
+um item, perguntar o que ele DESBLOQUEIA.**
+
 ---
 
 ## ~~`Pool registration returned HTTP 401` no login do agente humano~~ ✅ **2026-08-05** *(achado 2026-08-04, na validação da Fase E)*
