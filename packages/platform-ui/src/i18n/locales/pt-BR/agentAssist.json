@@ -516,13 +516,18 @@
     "injecting":              "Injetando…",
     "inject":                 "Injetar",
     "forceComplete":          "⚡ Forçar encerramento",
-    "forceCompleteDesc":      "Marca o pipeline como \"completed\" no Redis. Use apenas em emergências.",
+    "forceCompleteDesc":      "Encerra o item de trabalho parqueado desta sessão pelo mesmo caminho do prazo vencido. Use apenas em emergências.",
     "forceCompleteConfirm":   "Isso forçará o encerramento do Skill-Flow. Confirma?",
     "cancel":                 "Cancelar",
     "confirm":                "Confirmar",
     "closing":                "Encerrando…",
     "pipelineClosed":         "Pipeline encerrado com sucesso.",
-    "forcePipelineBtn":       "⚡ Force-complete pipeline"
+    "forcePipelineBtn":       "⚡ Force-complete pipeline",
+    "forceNothingToComplete": "Nada a encerrar: esta sessão não tem item parqueado nem passo em execução.",
+    "forceAbortNotSupported": "Há um passo EM EXECUÇÃO. A plataforma não sabe abortar execução em curso — espere o passo concluir ou suspender e encerre então.",
+    "forceForbidden":         "Sem permissão para encerrar (requer supervisor ou admin).",
+    "forceFailed":            "Falha ao encerrar (HTTP {{status}}).",
+    "forceNetworkError":      "Erro de rede ao encerrar."
   },
   "presence": {
     "title":       "Presença",
@@ -550,6 +555,9 @@
     "injected":           "Contexto injetado.",
     "completed":          "Completado.",
     "failed":             "Falha.",
+    "nothingToComplete":  "Nada a encerrar nesta sessão.",
+    "abortNotSupported":  "Passo em execução — não é possível abortar agora.",
+    "forbidden":          "Sem permissão (requer supervisor).",
     "networkError":       "Erro de rede.",
     "customer":           "Cliente",
     "agent":              "Agente"

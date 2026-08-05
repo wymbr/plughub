@@ -1237,6 +1237,30 @@ async def _periodic_queue_drain(
                             _pool_cfg = json.loads(raw_cfg) or {}
                             # Frente 1: pools pull não são auto-drenados (o agente
                             # puxa via work_task_claim) — pula o pool inteiro neste ciclo.
+                            #
+                            # O `continue` fica ANTES da varredura de propósito, e não
+                            # é lugar errado (avaliado 2026-08-05, TODO lacuna 3). Item
+                            # de fila pull JÁ TEM teto: o `timeout_hours` do delegate,
+                            # via `work_task_expire` — que é o árbitro e trata
+                            # nomeadamente o nunca-reivindicado (`router.py` §1107-1112),
+                            # apagando a lease e devolvendo a VAGA.
+                            #
+                            # Deixar a varredura alcançar pool pull faria três estragos:
+                            #   (a) `_emit_queue_timeout` fecha um CONTATO — cortesia ao
+                            #       cliente, `session.closed`, `outcome=abandoned` e
+                            #       segmento sintético `role=queue`. Num item de wrap-up
+                            #       ou aprovação não há cliente: seria contato abandonado
+                            #       falso no ledger;
+                            #   (b) sem `queue_config.max_wait_s` o pool cai no ramo da
+                            #       fila muda e herda `queue_max_wait_default_s` (1800 s)
+                            #       — teto que ninguém configurou para itens de trabalho;
+                            #   (c) duas autoridades de expiração sobre o mesmo item, e
+                            #       esta não apaga o ledger `work_task` nem devolve vaga.
+                            #
+                            # Se um dia a fila pull precisar de teto PRÓPRIO, ele é de
+                            # visibilidade/SLA (o item aparece há tempo demais na inbox),
+                            # não de abandono de contato — e o produtor seria o árbitro,
+                            # não esta varredura.
                             if _pool_cfg.get("dispatch_mode") == "pull":
                                 continue
                             _qc = _pool_cfg.get("queue_config") or {}

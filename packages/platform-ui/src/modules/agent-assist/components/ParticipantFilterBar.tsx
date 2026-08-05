@@ -15,6 +15,7 @@ import React, { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { User, Bot, Settings2 } from "lucide-react";
 import { AiParticipantInfo, ChatMessage, CopilotSuggestions } from "../types";
+import { getAccessToken } from "@/auth/token-store";
 
 // ── Filter key helpers ────────────────────────────────────────────────────────
 
@@ -184,18 +185,31 @@ const InterventionsPanel: React.FC<InterventionsProps> = ({
     }
   }
 
+  // Ver OrchestrationTab.handleConfirm: esta chamada também ia sem `Authorization`
+  // (401 garantido), e 404 × 501 são conselhos OPOSTOS ao supervisor — colapsá-los
+  // em "Falha." fazia o mesmo texto significar "não precisava" e "tente mais tarde".
   async function handleForce() {
     if (!window.confirm(t('filterBar.forceComplete'))) return;
     setBusy("force");
     setMsg(null);
     try {
+      const token = getAccessToken();
       const res = await fetch(`${mcpBase}/api/force-complete/${sessionId}`, {
-        method: "POST",
+        method:  "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      setMsg(res.ok
-        ? { text: t('filterBar.completed'), ok: true }
-        : { text: t('filterBar.failed'), ok: false });
-      if (res.ok) onRefresh();
+      if (res.ok) {
+        setMsg({ text: t('filterBar.completed'), ok: true });
+        onRefresh();
+      } else if (res.status === 404) {
+        setMsg({ text: t('filterBar.nothingToComplete'), ok: false });
+      } else if (res.status === 501) {
+        setMsg({ text: t('filterBar.abortNotSupported'), ok: false });
+      } else if (res.status === 401 || res.status === 403) {
+        setMsg({ text: t('filterBar.forbidden'), ok: false });
+      } else {
+        setMsg({ text: t('filterBar.failed'), ok: false });
+      }
     } catch {
       setMsg({ text: t('filterBar.networkError'), ok: false });
     } finally {

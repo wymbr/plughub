@@ -517,13 +517,18 @@
     "injecting":              "Injecting…",
     "inject":                 "Inject",
     "forceComplete":          "⚡ Force completion",
-    "forceCompleteDesc":      "Marks the pipeline as \"completed\" in Redis. Use only in emergencies.",
+    "forceCompleteDesc":      "Ends this session's parked work item through the same path as an expired deadline. Use only in emergencies.",
     "forceCompleteConfirm":   "This will force-close the Skill-Flow. Confirm?",
     "cancel":                 "Cancel",
     "confirm":                "Confirm",
     "closing":                "Closing…",
     "pipelineClosed":         "Pipeline closed successfully.",
-    "forcePipelineBtn":       "⚡ Force-complete pipeline"
+    "forcePipelineBtn":       "⚡ Force-complete pipeline",
+    "forceNothingToComplete": "Nothing to close: this session has no parked work item and no running step.",
+    "forceAbortNotSupported": "A step is RUNNING. The platform cannot abort a step in flight — wait for it to finish or suspend, then close.",
+    "forceForbidden":         "Not allowed to close (requires supervisor or admin).",
+    "forceFailed":            "Could not close (HTTP {{status}}).",
+    "forceNetworkError":      "Network error while closing."
   },
   "presence": {
     "title":       "Presence",
@@ -551,6 +556,9 @@
     "injected":           "Context injected.",
     "completed":          "Completed.",
     "failed":             "Failed.",
+    "nothingToComplete":  "Nothing to close in this session.",
+    "abortNotSupported":  "Step in flight — cannot abort right now.",
+    "forbidden":          "Not allowed (requires supervisor).",
     "networkError":       "Network error.",
     "customer":           "Customer",
     "agent":              "Agent"

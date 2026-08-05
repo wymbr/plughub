@@ -16,6 +16,7 @@
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pause, Search, Check } from "lucide-react";
+import { getAccessToken } from "@/auth/token-store";
 import { AiParticipantInfo, ChatMessage, PipelineTransition, SupervisorState } from "../../types";
 import { AiParticipantCard } from "../AiParticipantCard";
 
@@ -167,19 +168,42 @@ const ForceCompleteConfirm: React.FC<ForceCompleteProps> = ({ sessionId, mcpBase
     );
   }
 
+  // O endpoint exige role supervisor|admin (`requireJwtRole`), e esta chamada ia
+  // SEM `Authorization` — tomava 401 antes de chegar ao handler. O botão nunca
+  // funcionou; a faixa genérica de erro é que escondia isso (lacuna 4, 2026-08-05).
+  //
+  // Os três estados do backend têm leituras DIFERENTES para o supervisor, e por
+  // isso não podem colapsar em "falha": 404 = não havia nada a encerrar (o item já
+  // acabou — a ação era desnecessária); 501 = há passo EM EXECUÇÃO e a plataforma
+  // não sabe abortá-lo (a ação é impossível AGORA, mas será possível quando o passo
+  // suspender). Dizer "falha" nos dois manda o supervisor tentar de novo em um caso
+  // e desistir no outro, exatamente ao contrário do que serve.
   const handleConfirm = async () => {
     setBusy(true); setError(null);
     try {
+      const token = getAccessToken();
       const res = await fetch(`${mcpBase}/api/force-complete/${sessionId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: "supervisor_force_complete", outcome: "resolved" }),
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ reason: "supervisor_force_complete" }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setOk(true);
-      setTimeout(() => { setOk(false); onDone(); }, 1500);
-    } catch (err) {
-      setError(String(err));
+      if (res.ok) {
+        setOk(true);
+        setTimeout(() => { setOk(false); onDone(); }, 1500);
+        return;
+      }
+      if (res.status === 404) { setError(t('orchestration.forceNothingToComplete')); return; }
+      if (res.status === 501) { setError(t('orchestration.forceAbortNotSupported')); return; }
+      if (res.status === 401 || res.status === 403) {
+        setError(t('orchestration.forceForbidden'));
+        return;
+      }
+      setError(t('orchestration.forceFailed', { status: res.status }));
+    } catch {
+      setError(t('orchestration.forceNetworkError'));
     } finally {
       setBusy(false);
     }

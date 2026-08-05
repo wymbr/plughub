@@ -55,44 +55,76 @@ async function patch(url: string, body: unknown, headers?: Record<string, string
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class RegistryClient {
+  /**
+   * `serviceToken` — credencial de SERVIÇO do agent-registry. As MUTAÇÕES de
+   * `/v1/pools` e `/v1/skills` são gateadas por `requireResourceWrite`, que
+   * aceita `x-service-token` OU `Bearer` + ABAC `config.resources`. O runner e2e
+   * é caller interno e não carrega JWT de usuário, então usa o token de serviço
+   * — o MESMO padrão, e a MESMA variável de ambiente, de `mcp-server/server.ts`
+   * e `tools/deploy.ts`.
+   *
+   * Sem ele o seed morria em `POST /v1/skills` com 401 desde que o gate existe,
+   * travando a suíte INTEIRA contra o demo (TODO §101 → e2e → §1055). Note que
+   * `/v1/agent-types` NÃO é gateado (`agent-registry/src/app.ts` §43-48) — só
+   * pools e skills passam por aqui precisando da credencial.
+   *
+   * Default por env e não por `config` de propósito: `fixtures/seed_demo.ts`
+   * monta um objeto de config próprio, e um campo em `runner.ts` seria uma
+   * segunda fonte que aquele caminho não enxerga.
+   */
   constructor(
     private readonly baseUrl: string,
-    private readonly tenantId: string
+    private readonly tenantId: string,
+    private readonly serviceToken: string = process.env["AGENT_REGISTRY_SERVICE_TOKEN"] ?? ""
   ) {}
 
   private headers(): Record<string, string> {
     return {
       "x-tenant-id": this.tenantId,
       "x-user-id": "e2e-runner",
+      // Omitido quando vazio: se o destino não configurou `service_token` nem
+      // `jwt_secret`, o gate é no-op e header vazio só faz ruído.
+      ...(this.serviceToken ? { "x-service-token": this.serviceToken } : {}),
     };
   }
 
-  async createPool(body: object): Promise<unknown> {
+  /**
+   * Mutação com 409 tolerado (already exists) e 401/403 ANOTADO.
+   *
+   * A anotação existe porque status sozinho não distingue "não mandei
+   * credencial" de "mandei a credencial errada" — e foi exatamente essa
+   * ambiguidade que deixou o §101 aberto. Um 401 sem `token=…` no texto manda
+   * quem depura procurar no lugar errado.
+   */
+  private async createIgnoringConflict(path: string, body: object): Promise<unknown> {
     try {
-      return await post(`${this.baseUrl}/v1/pools`, body, this.headers());
+      return await post(`${this.baseUrl}${path}`, body, this.headers());
     } catch (err) {
-      // Ignore 409 Conflict (already exists)
-      if (err instanceof Error && err.message.includes("409")) return null;
+      if (!(err instanceof Error)) throw err;
+      if (err.message.includes("409")) return null;  // already exists
+      if (err.message.includes("→ 401") || err.message.includes("→ 403")) {
+        throw new Error(
+          `${err.message} [x-service-token=${
+            this.serviceToken
+              ? "enviado"
+              : "AUSENTE (env AGENT_REGISTRY_SERVICE_TOKEN vazia)"
+          }]`
+        );
+      }
       throw err;
     }
+  }
+
+  async createPool(body: object): Promise<unknown> {
+    return this.createIgnoringConflict("/v1/pools", body);
   }
 
   async createAgentType(body: object): Promise<unknown> {
-    try {
-      return await post(`${this.baseUrl}/v1/agent-types`, body, this.headers());
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("409")) return null;
-      throw err;
-    }
+    return this.createIgnoringConflict("/v1/agent-types", body);
   }
 
   async createSkill(body: object): Promise<unknown> {
-    try {
-      return await post(`${this.baseUrl}/v1/skills`, body, this.headers());
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("409")) return null;
-      throw err;
-    }
+    return this.createIgnoringConflict("/v1/skills", body);
   }
 
   async getPool(poolId: string): Promise<unknown> {

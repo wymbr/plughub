@@ -63,6 +63,12 @@
  *   EVALUATION_API_URL        (default: http://localhost:3400)
  *   CONFIG_API_URL            (default: http://localhost:3600)
  *   CONFIG_API_ADMIN_TOKEN    (default: test_e2e_admin_token)
+ *   AGENT_REGISTRY_SERVICE_TOKEN (default: vazio — lido em lib/http-client.ts)
+ *                             Credencial de serviço das MUTAÇÕES de /v1/pools e
+ *                             /v1/skills no agent-registry (requireResourceWrite).
+ *                             Vazio funciona contra docker-compose.test.yml (gate
+ *                             no-op sem service_token/jwt_secret); contra o DEMO
+ *                             é obrigatório, senão o seed morre com 401.
  *   REDIS_URL                 (default: redis://localhost:6379)
  *   KAFKA_BROKERS             (default: localhost:9092)
  *   TENANT_ID                 (default: tenant_e2e_test)

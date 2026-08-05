@@ -1634,44 +1634,127 @@ export async function startServer(config: ServerConfig): Promise<void> {
     }
   })
 
-  // POST /api/force-complete/:sessionId
-  // Arc 11 Fase D — Supervisor forces a running Skill-Flow pipeline to the completed state.
-  // Body: { reason?: string, outcome?: string }
-  // Updates {tenantId}:pipeline:{sessionId} status → "completed" in Redis.
+  // POST /api/force-complete/:sessionId       role: supervisor|admin
+  //
+  // Arc 11 Fase D — o supervisor encerra uma execução travada. Body: { reason? }.
+  //
+  // ─── O que este endpoint FAZIA, e por que foi reescrito (lacuna 4, 2026-08-05) ──
+  // Ele gravava `status: "completed"` em `{t}:pipeline:{sid}` e devolvia `ok: true`.
+  // Levantamento de "o que grava, e quem lê": esse campo só tem leitores de
+  // EXIBIÇÃO (`analytics-api/sessions.py` §727/984, o `supervisor_state` daqui,
+  // `pipeline_persister` no close). NINGUÉM o lê para parar coisa alguma — o lock
+  // de execução do engine é outra chave (`…:running`). Ou seja: mudava o que o
+  // supervisor VIA e nada mais. Sem evento, sem fila, sem vaga, sem segmento — e
+  // ainda assim `200 ok:true`, com botão na UI. Degradação de SINAL TROCADO: pior
+  // que inerte, porque afirma sucesso. O endpoint irmão logo abaixo
+  // (`/api/work_queue/expire`) já carregava a regra por escrito — *"nunca um 200
+  // que não fez nada"*.
+  //
+  // ─── Três estados, porque a resposta honesta depende do que existe ─────────────
+  //  1. Há item de trabalho parqueado (ledger `work_task` com `resume_token`) →
+  //     encerra PELO CAMINHO QUE FUNCIONA: o mesmo resume do gatilho de prazo e do
+  //     supervisor (`decision: "timeout"`, `source: supervisor:{sub}`), que faz o
+  //     flow seguir seu `on_timeout`, o `handle_resume` encerrar o item e o bridge
+  //     fechar o segmento. Bearer repassado para o resume ser AUDITADO como dele.
+  //  2. Não há item, mas há pipeline em execução (`{t}:pipeline:{sid}:running`) →
+  //     **501**. Abortar execução em curso não tem mecanismo: o skill-flow-engine
+  //     não lê nenhum flag de cancelamento (os `abort` que existem são graciosos
+  //     internos — lock perdido, step falho). Um 501 que NOMEIA a ausência é a
+  //     resposta correta; inventar um flag que o engine não consulta seria repetir
+  //     o defeito com outro nome.
+  //  3. Nem um nem outro → **404**. Nada a encerrar.
+  //
+  // `session:{sid}:meta` deixou de ser condição de existência: ele tem TTL, e o
+  // caso que MOTIVA este endpoint é justamente o item parado há muito tempo. O
+  // 404-por-meta-ausente escondia exatamente a sessão que o supervisor quer matar.
   app.post("/api/force-complete/:sessionId", async (req: Request, res: Response) => {
-    const payload = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
-    if (!payload) return
+    const claims = requireJwtRole(req.headers.authorization, ["supervisor", "admin"], res)
+    if (!claims) return
 
-    const { sessionId } = req.params
-    const { reason = "supervisor_force_complete", outcome = "resolved" } = req.body as {
-      reason?: string; outcome?: string
+    const sessionId = String(req.params["sessionId"] ?? "")
+    if (!sessionId) {
+      res.status(400).json({ error: "missing_fields", message: "session_id é obrigatório" })
+      return
     }
+    const body = (req.body ?? {}) as Record<string, unknown>
+
+    // Tenant: meta primeiro (mais preciso), depois corpo, depois default do serviço.
+    let tenantId = ""
     try {
-      // Resolve tenantId from session meta
-      let tenantId: string | null = null
+      const metaRaw = await redis.get(`session:${sessionId}:meta`)
+      if (metaRaw) tenantId = (JSON.parse(metaRaw) as Record<string, string>)["tenant_id"] ?? ""
+    } catch { /* segue para o fallback */ }
+    if (!tenantId) tenantId = (body["tenant_id"] as string) || _wqTenant()
+
+    // ── Ramo 1: item de trabalho parqueado ──────────────────────────────────────
+    let ledger: Record<string, unknown> | null = null
+    try {
+      const raw = await redis.get(keys.workTask(tenantId, sessionId))
+      if (raw) ledger = JSON.parse(raw) as Record<string, unknown>
+    } catch { /* tratado abaixo como ausência */ }
+    const resumeToken = (ledger?.["resume_token"] as string) ?? ""
+
+    if (resumeToken) {
+      const supervisor = String(claims["sub"] ?? "unknown")
       try {
-        const metaRaw = await redis.get(`session:${sessionId}:meta`)
-        if (metaRaw) tenantId = (JSON.parse(metaRaw) as Record<string, string>)["tenant_id"] ?? null
-      } catch { /* non-fatal */ }
-      if (!tenantId) { res.status(404).json({ error: "session_not_found" }); return }
-
-      const pipeKey = `${tenantId}:pipeline:${sessionId}`
-      let pipeline: Record<string, unknown> = {}
-      try {
-        const pipeRaw = await redis.get(pipeKey)
-        if (pipeRaw) pipeline = JSON.parse(pipeRaw) as Record<string, unknown>
-      } catch { /* non-fatal */ }
-
-      pipeline["status"]                = "completed"
-      pipeline["force_complete_reason"] = reason
-      pipeline["force_complete_outcome"] = outcome
-      pipeline["force_complete_at"]     = new Date().toISOString()
-      await redis.set(pipeKey, JSON.stringify(pipeline))
-
-      res.json({ ok: true, session_id: sessionId, reason, outcome })
-    } catch {
-      res.status(500).json({ error: "force_complete_failed" })
+        const r = await fetch(
+          `${_wqGatewayUrl}/v1/channels/webhook/resume/${encodeURIComponent(resumeToken)}`,
+          {
+            method:  "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(req.headers.authorization ? { Authorization: req.headers.authorization } : {}),
+            },
+            body: JSON.stringify({
+              tenant_id: tenantId,
+              payload:   { decision: "timeout", source: `supervisor:${supervisor}` },
+            }),
+          },
+        )
+        const data = await r.json().catch(() => ({}))
+        if (!r.ok) {
+          res.status(r.status).json({ error: "force_complete_failed", detail: data })
+          return
+        }
+        res.json({
+          completed:  true,
+          via:        "work_task_resume",
+          session_id: sessionId,
+          pool_id:    ledger?.["pool_id"] ?? null,
+          closed_by:  supervisor,
+          reason:     (body["reason"] as string) ?? "supervisor_force_complete",
+          ...(data as Record<string, unknown>),
+        })
+      } catch (err) {
+        res.status(502).json({ error: "channel_gateway_unreachable", message: String(err) })
+      }
+      return
     }
+
+    // ── Ramo 2: pipeline em execução, sem item — sem mecanismo ──────────────────
+    let running = ""
+    try {
+      running = (await redis.get(`${tenantId}:pipeline:${sessionId}:running`)) ?? ""
+    } catch { /* ausência */ }
+    if (running) {
+      res.status(501).json({
+        error:    "abort_not_supported",
+        message:
+          "há um pipeline EM EXECUÇÃO nesta sessão e a plataforma não tem como abortá-lo: " +
+          "o skill-flow-engine não consulta flag de cancelamento. Aguarde o passo corrente " +
+          "concluir (ou suspender) e encerre então — item parqueado tem caminho.",
+        session_id:  sessionId,
+        instance_id: running,
+      })
+      return
+    }
+
+    // ── Ramo 3: nada a encerrar ────────────────────────────────────────────────
+    res.status(404).json({
+      error:   "nothing_to_complete",
+      message: `nenhum item parqueado nem pipeline em execução para a sessão ${sessionId}`,
+      session_id: sessionId,
+    })
   })
 
   // GET /conversation_history/:sessionId

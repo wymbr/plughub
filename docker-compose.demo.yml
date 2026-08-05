@@ -1680,6 +1680,10 @@ services:
       AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_demo
       EVAL_ADMIN_TOKEN:         changeme_eval_admin_token_demo
+      # Credencial de serviço do agent-registry: as MUTAÇÕES de /v1/pools e
+      # /v1/skills são gateadas por `requireResourceWrite`, e o seed do runner
+      # morria em 401 sem ela (TODO §101 → e2e → §1055). Mesmo valor de §559/619/1403.
+      AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
       E2E_REPORT_PATH:          /app/e2e-report.json
       # E2E_EXTRA_ARGS exemplos:
       #   --demo              cenários 01–14 (padrão)

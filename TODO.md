@@ -180,6 +180,53 @@ um item, perguntar o que ele DESBLOQUEIA.**
 > suporte a service token —, mas identifica exatamente o que falta lá: uma env + o header, no
 > `lib/http-client.ts`. Isso destravaria o cenário 10, único exercício vivo do leitor de `role`
 > (§1055 Fatia B).
+>
+> **Ponta fechada em 2026-08-05** (ver CHANGELOG § "O runner e2e ganhou credencial de serviço"): o
+> `RegistryClient` manda o header, a env entrou no `e2e-runner` do compose, e o gate diferencial
+> rodou nos dois ramos. **A cadeia, porém, NÃO fechou:** o cenário 10 ainda não roda, barrado por um
+> defeito de outra natureza logo adiante — ver § "Fixtures do e2e ainda falam AgentType". O leitor de
+> `role` do §1055 segue **não-exercitado**.
+>
+> **Duas correções de método que este item rendeu.** (1) *O header no código é no-op sem o
+> aplicador*: a env faltava no `environment:` do `e2e-runner`, e sem ela o 401 continuaria — só que
+> com uma anotação bonita dizendo `AUSENTE`. Mesmo padrão de skill YAML, slot e seed do config-api.
+> (2) *A receita de contorno virou receita canônica sem ninguém decidir*: rodar o runner no HOST com
+> `6380/9093` era gambiarra de porta; existe serviço `e2e-runner` no compose, com URLs internas e
+> `tenant_demo`. Vale a pergunta ao herdar qualquer receita de handoff — **isto é o jeito certo ou é
+> o contorno de alguém?**
+
+## Fixtures do e2e ainda falam AgentType *(achado 2026-08-05, ao destravar o seed)*
+
+Com o 401 resolvido, o seed avança e morre em `POST /v1/agent-types → 404 Cannot POST`
+(`fixtures/seed.ts:94`). **Não é permissão: a rota não existe.** Zero ocorrências de `agent-types` em
+todo o `agent-registry/src`; o `app.ts` §43-49 monta pools, skills, instances, channels,
+channel-endpoints e operational, mais nada. A decisão está nomeada em
+`registry_syncer.py` §293 — *"AgentType entity retired (Fase 3d/C)"* — e o mundo novo está em
+`mcp-server/infra/registry-client.ts` §42: **a identidade de um agente É o `skill_id` deployado**, e
+`agent_login` resolve por `GET /v1/skills/{id}`.
+
+**A camada de fixtures ficou meio migrada, e dá para ver a costura.** O seed cria três skills (vivas)
+e dois agent-types (mortos). Nos cenários, `09` e `11` já logam o avaliador como `skill_avaliacao_v1`
+— e o comentário §54-59 do próprio `seed.ts` documenta essa migração, feita quando o gate de
+`agent_role` entrou. A identidade do **executor** ficou para trás: `"agente_retencao_v1"` aparece em
+~15 chamadas de `agentLogin` em 9 arquivos (`06`, `07`, `08`, `09`, `10`, `11`, `regressions`, mais
+`01`–`04` em chamadas multi-linha não conferidas).
+
+**Consequência**: remover só o bloco morto do seed não basta — o cenário 10 passaria a morrer no
+login com `agent_type_not_found`, porque não existe skill chamada `agente_retencao_v1`.
+
+**Duas saídas, e a barata é a errada.** (a) Migrar as identidades para `skill_id`
+(`skill_retencao_oferta_v1`), removendo o bloco morto: é o conserto certo, coerente com o que `09`/`11`
+já fizeram e com a convenção `skill_{slug}`, ao custo de ~15 edições. (b) Semear uma skill chamada
+`agente_retencao_v1`: uma linha, zero churn — e grava um nome com forma de `agent_type` como
+`skill_id`, consertando o sintoma e deixando a dívida **com aparência de resolvida**. Preferir (a).
+
+**Antes de atacar, conferir contra o código que executa** (a lição de 2026-08-05, que rendeu 3 de 7):
+este item nasceu de leitura de fonte, não de execução. Confirmar em especial se `01`–`04` usam mesmo
+`agente_retencao_v1` nas chamadas multi-linha, e o que `regressions.ts` espera.
+
+**O que isto desbloqueia:** o cenário 10 e, com ele, o único exercício vivo do leitor de `role`
+(§1055 Fatia B) — a mesma cadeia que o §101 abriu.
 
 Visto no log do mcp-server em **todo** pool do login do Console, seguido de sucesso:
 
@@ -327,10 +374,65 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 | # | Lacuna | Evidência |
 |---|---|---|
 | 2 | **Não há reaper de `claim_lease`** — ~~vaga presa~~ ✅ **2026-08-03**; janela de invisibilidade SEGUE ABERTA | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ docstring do heartbeat inexistente corrigido (2026-07-30) — e **corrigido de novo em 2026-08-03**, porque o substituto afirmava outra rede que também não existe (ver § abaixo). Instrumento: estado `orphaned` do relatório de pendências, ✅ **CALIBRADO em 2026-07-31** (smoke 14/14). **O que fechou:** a VAGA, que nunca voltava — ver § "Lacuna 2 — o que fechou e o que não" |
-| 3 | **O TTL de fila existente nunca alcança fila pull** | `routing-engine/main.py:1253` pula `dispatch_mode=pull` **antes** da varredura de `max_wait_exceeded` — `queue_config.max_wait_s` não se aplica. O prazo do item hoje vem do `timeout_hours` do delegate, não da fila |
-| 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ resolvido para a fila pull (`/api/work_queue/expire/:sessionId`). Seguem inertes: `/v1/workflow/instances/:id/cancel` = **410 hard**; `POST /api/force-complete` só reescreve uma chave Redis (sem evento, sem fila, sem vaga) |
+| 3 | ~~**O TTL de fila existente nunca alcança fila pull**~~ | ✅ **NÃO É DEFEITO — item mal especificado, fechado 2026-08-05 sem código.** Ver § "Lacuna 3" abaixo |
+| 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ fila pull (`/api/work_queue/expire/:sessionId`). ✅ **`force-complete` — 2026-08-05**, ramificado em 200/404/501, probe 9/9 (ver § "Lacuna 4" abaixo). Segue inerte só `/v1/workflow/instances/:id/cancel` = **410 hard** |
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
 | 6 | **`close_reason` de segmento não tem enum** — ⚠️ **com produtor concreto desde 2026-08-04** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. **O `_TRANSPORT_TO_CLOSE_REASON` do bridge serve os DOIS** (`main.py:5755` = contato; `:6401` = segmento), e por isso todo `agent_disconnect` (um F5 no Console) gera segmento SEM `close_reason`, com aviso no log. Conserto = separar os mapas, não estender o compartilhado. Ver § "um F5 no Console devolve à fila um item em trabalho" |
+
+### Lacuna 4 — `force-complete` ✅ *(2026-08-05; resta só o `cancel` 410)*
+
+Detalhe em `CHANGELOG.md` § "`force-complete` deixou de mentir". Aqui fica só o que serve ao
+próximo item, porque **os dois achados não estavam na descrição da lacuna** e valem como método:
+
+- **A lacuna descrevia o handler; o defeito estava no caminho.** Ela dizia *"só reescreve uma chave
+  Redis"* — verdade sobre o handler, e irrelevante na prática: as duas chamadas da UI iam **sem
+  `Authorization`** num endpoint que exige `supervisor|admin`, logo tomavam **401 antes de chegar
+  lá**. O comportamento descrito só era alcançável por curl. *Ao auditar um endpoint, ler também
+  QUEM o chama e COM O QUÊ — senão descreve-se um trecho que ninguém executa.*
+- **Chave com TTL não serve de condição de existência.** O `404 session_not_found` vinha de
+  `session:{sid}:meta` ausente — e o caso que motiva o botão é justamente a sessão parada há muito
+  tempo, cujo `meta` já expirou. O guarda escondia exatamente o alvo.
+- **Um 501 que NOMEIA a ausência vale mais que um flag falso.** Abortar pipeline em execução não
+  tem mecanismo (o engine não consulta cancelamento). Inventar um campo que ninguém lê seria repetir
+  o defeito com outro nome — foi o que o endpoint fazia.
+
+**Aberto na mesma linha:** `/v1/workflow/instances/:id/cancel` segue **410 hard**. Não conferido
+nesta passada — se for atacado, começar pelo mesmo levantamento (*o que grava, quem lê, e quem
+chama*), que aqui rendeu dois achados fora do enunciado.
+
+**Não coberto:** a mudança de UI foi verificada por leitura, não executada. O probe exerce o
+endpoint por curl.
+
+### Lacuna 3 — não era defeito, era descrição errada *(avaliada 2026-08-05, fechada sem código)*
+
+O item dizia *"fila pull nunca tem teto de espera"* e prometia conserto de **uma linha** (mover o
+`continue` de `dispatch_mode == "pull"` para depois da varredura de `max_wait_exceeded`, hoje em
+`routing-engine/main.py:1240`). Movê-lo seria **regressão**, por três razões lidas no código:
+
+1. **A varredura fecha um CONTATO, não um item.** `_emit_queue_timeout` (§495-514) emite mensagem de
+   cortesia, `session.closed` ao gateway, `contact_closed` com `outcome=abandoned` e segmento
+   sintético `role=queue`. Item de wrap-up/aprovação/formfill não tem cliente — seria contato
+   abandonado **falso** no ledger, a mesma contaminação que a Camada F acabou de limpar.
+2. **O teto que passaria a valer não é o do pool.** Sem `queue_config.max_wait_s`, `attended_wait_s`
+   é 0 e o pool cai no ramo da fila muda, herdando `queue_max_wait_default_s` = **1800 s**. Itens de
+   trabalho expirando em 30 min por um default que ninguém configurou para eles.
+3. **Já existe autoridade de expiração, e não é esta.** `router.py:1107-1112` nomeia o caso:
+   `work_task_expire` faz `ZREM` + delete do JSON no **nunca-reivindicado**, apaga a lease e devolve
+   a **vaga** (pela lease ou pelo semáforo). A varredura não faz nada disso — deixaria ledger
+   `work_task` e vaga para trás, e seriam duas autoridades sobre o mesmo item.
+
+**A fila pull TEM teto**: o `timeout_hours` do delegate. O que a evidência original observou de fato
+— *"o prazo do item vem do delegate, não da fila"* — está correto; o que estava errado era chamar
+isso de ausência de teto. **A linha está no lugar certo.**
+
+**O que sobra, e é pergunta de produto, não defeito:** se a fila pull deve ter um teto **próprio**,
+ele é de **visibilidade/SLA** (o item está exposto na inbox há tempo demais), não de abandono de
+contato — e o produtor seria o árbitro (`work_task_expire`), nunca esta varredura. Só abrir se
+alguém pedir o número.
+
+**Lição (a segunda vez na mesma semana):** o item envelheceu com um **conserto proposto** embutido, e
+o conserto é que estava errado — mais perigoso que um item vago, porque parece pronto para executar.
+O comentário em `main.py` §1238-1262 agora carrega o porquê, para o próximo leitor não re-derivar.
 
 ### Lacuna 2 — o que fechou e o que não *(2026-08-03)*
 

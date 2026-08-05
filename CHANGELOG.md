@@ -2,6 +2,103 @@
 
 ---
 
+## `force-complete` deixou de mentir ✅ (2026-08-05)
+
+Fecha a metade que faltava da **lacuna 4** do levantamento I5. O endpoint gravava
+`status: "completed"` em `{t}:pipeline:{sid}` e devolvia `200 ok:true`. O levantamento *"o que
+grava, e quem lê"* — a mesma pergunta que fechou o §101 — respondeu que **esse campo só tem
+leitores de EXIBIÇÃO** (`analytics-api/sessions.py` §727/984, o `supervisor_state` do próprio
+mcp-server, o `pipeline_persister` no close). Ninguém o lê para parar coisa alguma: o lock de
+execução do engine é **outra chave** (`…:running`). O endpoint mudava o que o supervisor VIA, e
+nada mais — sem evento, sem fila, sem vaga, sem segmento — atrás de um botão. **Degradação de
+sinal trocado: pior que inerte, porque afirma sucesso.** O endpoint irmão logo abaixo
+(`/api/work_queue/expire`) já trazia a regra por escrito: *"nunca um 200 que não fez nada"*.
+
+**Dois achados que a lacuna não previa**, ambos encontrados ao ler o caminho inteiro:
+
+1. **As duas chamadas da UI iam sem `Authorization`** (`OrchestrationTab` §173,
+   `ParticipantFilterBar` §192), e o endpoint exige `supervisor|admin`. Elas tomavam **401 antes do
+   handler** — o botão nunca funcionou em lugar nenhum, e a faixa genérica de erro é que escondia.
+   O comportamento descrito na lacuna ("grava uma chave inútil") só era alcançável por curl.
+2. **`session:{sid}:meta` era condição de existência, e tem TTL.** O `404 session_not_found`
+   escondia exatamente a sessão parada há muito tempo — a que motiva o botão.
+
+**Três estados, porque a resposta honesta depende do que existe:**
+
+| Estado | Resposta | O que faz |
+|---|---|---|
+| Item de trabalho parqueado (`work_task` com `resume_token`) | **200** `via: work_task_resume` | Encerra pelo **mesmo caminho do prazo vencido**: resume `decision:"timeout"`, `source: supervisor:{sub}`, Bearer repassado para o resume ser AUDITADO como dele. Reuso do irmão, não código novo |
+| Pipeline em execução (`{t}:pipeline:{sid}:running`), sem item | **501** `abort_not_supported` | **Nomeia a ausência.** O skill-flow-engine não consulta flag de cancelamento — os `abort` que existem são graciosos internos (lock perdido, step falho). Inventar um flag que o engine não lê seria repetir o defeito com outro nome |
+| Nem um nem outro | **404** `nothing_to_complete` | Nada a encerrar |
+
+**UI (as duas superfícies):** Bearer via `getAccessToken()` do `auth/token-store`, e 404 × 501 viraram
+mensagens **opostas** de propósito — uma diz *"não precisava"*, a outra *"tente quando o passo
+suspender"*. Colapsadas em "Falha." mandavam o supervisor insistir no caso errado e desistir no
+certo. Strings nos dois locales; `forceCompleteDesc` reescrito (ele descrevia o defeito: *"marca o
+pipeline como completed no Redis"*).
+
+**Gate** — `infra/test/probe_force_complete_branches.sh`, **9/9 verde**, previsão escrita antes e
+todos os ramos batendo. Desenho do probe, com o que cada peça compra:
+
+- **preflight no artefato** (`grep nothing_to_complete dist/server.js`) — sem ele, "404 em tudo"
+  seria indistinguível de "não rebuildou";
+- **ramo A é a testemunha** — sem um 200 real, três 404 passariam por "ramificou";
+- **A julga CONSEQUÊNCIA, não código**: relê o ledger depois e exige que o `resume_token` tenha
+  sumido. Um 200 sem isso seria a mesma mentira num invólucro novo;
+- **controle negativo sem Bearer** (401) — prova que o gate de role está EM JOGO, e não que os três
+  ramos foram medidos num endpoint sem porteiro;
+- **INCONCLUSIVO tem ramo próprio** (ledger ausente em 4 s ⇒ exit 2), porque "o delegate não
+  parqueou a tempo" não é reprovação.
+
+**Não coberto pelo probe, e dito de propósito:** a mudança de UI. O probe exerce o endpoint por
+curl; que a faixa certa apareça na tela em cada estado foi verificado por leitura, não executado.
+
+---
+
+## O runner e2e ganhou credencial de serviço ✅ (2026-08-05)
+
+Fecha a ponta solta que o §101 nomeou: o `lib/http-client.ts` do e2e não tinha suporte a
+`x-service-token`, e por isso o seed morria em `POST /v1/skills → 401` contra o demo — travando a
+suíte **inteira** por um defeito de autenticação a três saltos do que ela testa.
+
+**Conserto**, o mesmo padrão e a mesma env de `server.ts`/`deploy.ts`: `RegistryClient` ganhou um 3º
+parâmetro `serviceToken`, default `process.env["AGENT_REGISTRY_SERVICE_TOKEN"]`, emitido no
+`headers()` e **omitido quando vazio** (sem `service_token`/`jwt_secret` no destino o gate é no-op —
+é o caso do `docker-compose.test.yml`, cuja agent-registry não define nenhum dos dois). Os cinco call
+sites não mudaram. Os três `create*` colapsaram num `createIgnoringConflict` que, além do 409
+tolerado, **anota 401/403** com `[x-service-token=enviado|AUSENTE]`.
+
+**Default por env e não por campo em `config`**: `fixtures/seed_demo.ts` monta um objeto de config
+próprio e não enxergaria o campo — seria segunda fonte para o mesmo fato.
+
+**A metade que faltava, e que é a lição:** o header no código é no-op sem o aplicador. O bloco
+`environment:` do serviço `e2e-runner` (`docker-compose.demo.yml` §1659) **não tinha** a variável, e o
+arquivo mora na imagem (`COPY`, sem volume). Env adicionada + `build e2e-runner`. É o mesmo padrão de
+*fonte declarativa com aplicador separado* que já mordeu em skill YAML, slot e seed do config-api.
+
+**Correção de rota no meio do caminho:** a primeira proposta era rodar o runner no HOST com
+`REDIS_URL=…6380`/`KAFKA_BROKERS=…9093`. Existe um serviço `e2e-runner` no compose do demo, com URLs
+internas, `TENANT_ID: tenant_demo` e `redis:6379`/`kafka:29092` — **sem divergência de porta alguma**.
+A receita de portas do handoff anterior era contorno para rodar de fora, não a via canônica.
+
+**Gate diferencial**, previsão escrita antes, os dois ramos executados:
+
+| Ramo | Comando | Resultado |
+|---|---|---|
+| Nega | `run --rm -e AGENT_REGISTRY_SERVICE_TOKEN= e2e-runner` | `POST …/v1/skills → 401` **com** `[x-service-token=AUSENTE …]` |
+| Aprova | `run --rm e2e-runner` | seed passa de `/v1/skills`; morre adiante, em `seed.ts:94` |
+
+O ramo que nega é o que prova que o veredicto sabe reprovar — e a anotação aparecendo no log é
+testemunha mais forte que o `grep` do preflight: ela **só pode** ter vindo do código novo, logo prova
+o rebuild também.
+
+**Não fecha a cadeia §101→e2e→§1055.** O leitor de `role` da Fatia B segue **não-exercitado**: o
+cenário 10 não chegou a rodar, barrado por um defeito pré-existente de outra natureza (fixtures
+anteriores à aposentadoria do AgentType — TODO § "Fixtures do e2e ainda falam AgentType"). O que este
+item entrega é o seed passar da autenticação, não o cenário.
+
+---
+
 ## Login humano registra o pool com credencial de serviço ✅ (2026-08-05)
 
 Fecha o TODO §101. O `POST /v1/pools` do login do Console ia **sem `x-service-token`**, e o
