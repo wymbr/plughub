@@ -53,7 +53,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     let sessionToken = "";
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", instanceId);
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", instanceId);
       sessionToken = login.session_token;
       await mcp.agentReady(sessionToken);
       await mcp.agentBusyV2(sessionToken, sessionId, participantId);
@@ -173,7 +173,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     // D1: Login → ready → busy (simulated as evaluator)
     try {
       // Loga como o skill de AVALIAÇÃO: o gate de `evaluation_context_get` exige
-      // `agent_role: evaluator` declarado no registry, e `agente_retencao_v1` é
+      // `agent_role: evaluator` declarado no registry, e `skill_retencao_oferta_v1` é
       // executor. O `agent_busy` abaixo grava o mapa participant→instance, que é
       // como a tool resolve o hash a partir do participant_id.
       const login = await mcp.agentLogin(ctx.tenantId, "skill_avaliacao_v1", evalInstanceId);

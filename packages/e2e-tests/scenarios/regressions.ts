@@ -51,7 +51,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     let r1Token = ""
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", r1InstanceId)
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", r1InstanceId)
       r1Token = login.session_token
       await mcp.agentReady(r1Token)
       await mcp.agentBusyV2(r1Token, r1SessionId, r1ParticipantId)
@@ -128,7 +128,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     let r2Token = ""
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", r2InstanceId)
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", r2InstanceId)
       r2Token = login.session_token
       await mcp.agentReady(r2Token)
       await mcp.agentBusyV2(r2Token, r2SessionId, r2ParticipantId)

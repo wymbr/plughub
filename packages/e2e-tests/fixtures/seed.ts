@@ -90,34 +90,48 @@ export async function seedBaseFixtures(config: SeedConfig): Promise<void> {
     max_concurrent_sessions: 1,
   });
 
-  // Agent Types
-  await registry.createAgentType({
-    agent_type_id: "agente_retencao_v1",
-    framework: "anthropic_sdk",
-    execution_model: "stateless",
-    role: "executor",
-    max_concurrent_sessions: 2,
-    skills: [{ skill_id: "skill_retencao_oferta_v1" }],
-    pools: ["retencao_humano"],
-    permissions: ["mcp-server-plughub:agent_heartbeat"],
-  });
-
-  await registry.createAgentType({
-    agent_type_id: "agente_credito_v3",
-    framework: "anthropic_sdk",
-    execution_model: "stateless",
-    role: "executor",
-    max_concurrent_sessions: 1,
-    skills: [{ skill_id: "skill_analise_credito_v1" }],
-    pools: ["especialista_onboarding"],
-    permissions: ["mcp-server-plughub:agent_heartbeat"],
-  });
+  // NÃO existe bloco de AgentType aqui — e a ausência é a fixture.
+  //
+  // A entidade AgentType foi aposentada (Fase 3d/C; ver `registry_syncer.py` §293).
+  // `/v1/agent-types` não é uma rota gateada nem protegida: ela NÃO EXISTE no
+  // agent-registry (`app.ts` §43-49 monta pools, skills, instances, channels,
+  // channel-endpoints e operational). Os dois `createAgentType` que moravam aqui
+  // tomavam `404 Cannot POST` e matavam o seed — e o seed roda antes de TODO
+  // cenário que precise do registry (`runner.ts` §363), então a suíte inteira
+  // parava neste ponto, não só o cenário que o log estivesse mostrando.
+  //
+  // No modelo deploy-driven a identidade de um agente É o `skill_id` deployado:
+  // `agent_login` resolve por `GET /v1/skills/{id}` (`mcp-server/infra/registry-client.ts`
+  // §41-47). Por isso as três skills acima são a fixture de identidade completa —
+  // os cenários logam como `skill_retencao_oferta_v1` (executor) ou
+  // `skill_avaliacao_v1` (evaluator), e não há mais nada a semear.
+  //
+  // Nota sobre o que NÃO se perdeu na remoção: o bloco morto declarava
+  // `pools: ["retencao_humano"]` e `max_concurrent_sessions: 2`, mas nenhum dos
+  // dois chegava a lugar algum — o cliente HTTP de produção devolve `pools: []` e
+  // `max_concurrent_sessions: 1` FIXOS (registry-client.ts §69-72), porque config
+  // por-agente passou a viver no slot de deploy do pool. Quem depender de o
+  // routing ALOCAR uma instância logada por aqui está quebrado por essa razão,
+  // que é outra e anterior a esta.
 
   console.log(`[seed] Base fixtures seeded for tenant ${config.tenantId}`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Performance fixtures — used by Scenario 5 only
+//
+// ⚠️ DUAS AFIRMAÇÕES FALSAS NESTE BLOCO, deixadas visíveis de propósito (2026-08-05):
+//
+//   1. "used by Scenario 5" — NINGUÉM chama esta função. `runner.ts` §90 importa
+//      apenas `seedBaseFixtures`. O cenário 05 monta `agent_perf_{i}_v1` a partir
+//      de fixtures que nunca foram semeadas em execução alguma.
+//   2. `createAgentType` abaixo aponta para `/v1/agent-types`, rota que não existe
+//      (entidade aposentada) — se alguém passasse a chamar esta função, ela morreria
+//      no primeiro `await`, igual ao seed base morria.
+//
+// Não foi removida junto com o bloco base porque remover código morto e migrar o
+// cenário 05 são a mesma decisão, e ela não cabia na fatia que destravou a suíte.
+// Registrada em TODO.md § "Fixtures do e2e ainda falam AgentType".
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function seedPerfFixtures(config: SeedConfig): Promise<void> {

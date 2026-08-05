@@ -78,7 +78,7 @@ async function runPartA(
   const aiParticipantId = randomUUID();
 
   try {
-    const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", aiInstanceId);
+    const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", aiInstanceId);
     aiToken = login.session_token;
     await mcp.agentReady(aiToken);
     const busy = await mcp.agentBusyV2(aiToken, sessionId, aiParticipantId);
@@ -166,7 +166,7 @@ async function runPartB(
 
   // ── B1: Human agent login → ready → busy ─────────────────────────────────
   try {
-    const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", humanInstanceId);
+    const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", humanInstanceId);
     humanToken = login.session_token;
     await mcp.agentReady(humanToken);
     const busy = await mcp.agentBusyV2(humanToken, sessionId, humanParticipantId);
@@ -195,7 +195,7 @@ async function runPartB(
   // ── B3: Human invites AI specialist via agent_join_conference ─────────────
   const specialistJoin = await mcp.agentJoinConference(
     sessionId,
-    "agente_retencao_v1",
+    "skill_retencao_oferta_v1",
     "retencao_humano",
     "conference",
     { text: "Especialista IA" }
@@ -233,7 +233,7 @@ async function runPartB(
   let specialistToken: string;
 
   try {
-    const specLogin = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", specialistInstanceId);
+    const specLogin = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", specialistInstanceId);
     specialistToken = specLogin.session_token;
     await mcp.agentReady(specialistToken);
     await mcp.agentBusyV2(specialistToken, sessionId, specialistParticipantId);
@@ -292,7 +292,7 @@ async function runPartC(
   // ── C1: Human invites AI supervisor via agent_join_conference ─────────────
   const supervisorJoin = await mcp.agentJoinConference(
     sessionId,
-    "agente_retencao_v1",
+    "skill_retencao_oferta_v1",
     "retencao_humano",
     "background",            // supervisor joins in background monitoring mode
     { text: "Supervisor" }
@@ -328,7 +328,7 @@ async function runPartC(
   // ── C2: Supervisor logs in and becomes busy ───────────────────────────────
   let supervisorToken: string;
   try {
-    const supLogin = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", supervisorInstanceId);
+    const supLogin = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", supervisorInstanceId);
     supervisorToken = supLogin.session_token;
     await mcp.agentReady(supervisorToken);
     await mcp.agentBusyV2(supervisorToken, sessionId, supervisorParticipantId);

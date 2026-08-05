@@ -64,9 +64,15 @@ export class RegistryClient {
    * e `tools/deploy.ts`.
    *
    * Sem ele o seed morria em `POST /v1/skills` com 401 desde que o gate existe,
-   * travando a suíte INTEIRA contra o demo (TODO §101 → e2e → §1055). Note que
-   * `/v1/agent-types` NÃO é gateado (`agent-registry/src/app.ts` §43-48) — só
-   * pools e skills passam por aqui precisando da credencial.
+   * travando a suíte INTEIRA contra o demo (TODO §101 → e2e → §1055).
+   *
+   * CORREÇÃO (2026-08-05): a versão anterior desta nota dizia que "`/v1/agent-types`
+   * NÃO é gateado — só pools e skills precisam da credencial". A frase é verdadeira
+   * e enganosa ao mesmo tempo: `/v1/agent-types` não é gateado porque **não existe**
+   * (`agent-registry/src/app.ts` §43-49 não monta esse router). Descrever uma rota
+   * inexistente pelo que ela não exige sugere que ela funcione sem credencial —
+   * o oposto do que acontece, que é 404 em qualquer caso. Ver os avisos em
+   * `createAgentType`/`listAgentTypes`/`getAgentType` abaixo.
    *
    * Default por env e não por `config` de propósito: `fixtures/seed_demo.ts`
    * monta um objeto de config próprio, e um campo em `runner.ts` seria uma
@@ -119,6 +125,17 @@ export class RegistryClient {
     return this.createIgnoringConflict("/v1/pools", body);
   }
 
+  /**
+   * ⚠️ ROTA APOSENTADA — sempre 404 (`Cannot POST /v1/agent-types`).
+   *
+   * A entidade AgentType foi retirada na Fase 3d/C; no modelo deploy-driven a
+   * identidade de um agente É o `skill_id` deployado, e `agent_login` resolve por
+   * `GET /v1/skills/{id}`. Use `createSkill`.
+   *
+   * Mantido apenas porque `fixtures/seed_demo.ts` e `seedPerfFixtures` ainda o
+   * chamam — os dois igualmente mortos, os dois registrados em TODO.md
+   * § "Fixtures do e2e ainda falam AgentType". Não é ponto de extensão.
+   */
   async createAgentType(body: object): Promise<unknown> {
     return this.createIgnoringConflict("/v1/agent-types", body);
   }
@@ -135,6 +152,14 @@ export class RegistryClient {
     return get(`${this.baseUrl}/v1/pools`, this.headers());
   }
 
+  /**
+   * ⚠️ ROTA APOSENTADA — sempre 404. Ver `createAgentType`.
+   *
+   * Único chamador vivo: `15_instance_bootstrap.ts` §78, cuja espinha INTEIRA é a
+   * entidade AgentType (deriva `instance_id` de `agent_type_id` + `max_concurrent_sessions`
+   * e confere pertencimento a pools a partir do registro). Migrar o cenário 15 é
+   * trabalho próprio, não renomeação de chamada — por isso o método sobrevive.
+   */
   async listAgentTypes(): Promise<{ agent_types: AgentTypeRecord[]; total: number }> {
     return get(`${this.baseUrl}/v1/agent-types`, this.headers()) as Promise<{
       agent_types: AgentTypeRecord[];
@@ -142,6 +167,7 @@ export class RegistryClient {
     }>;
   }
 
+  /** ⚠️ ROTA APOSENTADA — sempre 404. Ver `createAgentType`. Sem chamadores. */
   async getAgentType(agentTypeId: string): Promise<AgentTypeRecord> {
     return get(`${this.baseUrl}/v1/agent-types/${agentTypeId}`, this.headers()) as Promise<AgentTypeRecord>;
   }

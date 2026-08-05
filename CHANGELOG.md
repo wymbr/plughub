@@ -2,6 +2,78 @@
 
 ---
 
+## O seed do e2e parou de falar de uma entidade aposentada ✅ (2026-08-05)
+
+Terceiro e último degrau da cadeia §101 → e2e → §1055. O anterior deu ao runner a credencial de
+serviço e o seed passou a vencer `POST /v1/skills`; morria logo adiante em
+`POST /v1/agent-types → 404 Cannot POST`. **Não era permissão — a rota não existe**: a entidade
+`AgentType` foi aposentada na Fase 3d/C (`registry_syncer.py` §293) e, no modelo deploy-driven, a
+identidade de um agente **É o `skill_id` deployado** (`agent_login` resolve por `GET /v1/skills/{id}`).
+
+**Feito:** removido o bloco morto de `createAgentType` do `seedBaseFixtures`; migradas **23 call
+sites** de `"agente_retencao_v1"` → `"skill_retencao_oferta_v1"` em 11 arquivos (01, 02, 03, 04,
+06×5, 07×6, 08×3, 09, 10, 11, regressions×2) mais os 2 comentários que citavam o id antigo. Foi a
+saída **(a)** que o TODO recomendava: migrar as identidades, não semear uma skill com nome de
+`agent_type` — a saída barata custaria uma linha e gravaria a dívida com **aparência de resolvida**.
+
+**Três medições que corrigiram o item ao executá-lo** (ele nasceu de leitura de fonte, e as três
+divergências são de tipos diferentes):
+
+1. **A contagem estava baixa** — "~15 chamadas em 9 arquivos" eram **23 em 11**. E nem todas eram
+   `agentLogin`: duas são `agentJoinConference` (a tool não valida contra o registry; o id viaja como
+   identidade do participante IA) e uma é o campo `agent_type_id` de `outbound_contact_request`.
+2. **O escopo do dano estava subestimado** — o item lia como "o cenário 10 está barrado", mas
+   `runner.ts` §363 roda `seedBaseFixtures` para **todo** cenário com `needsRegistry` (todos fora de
+   13/14/16). O 404 parava a suíte **inteira**; "cenário 10" era apenas o que estava na linha de
+   comando. *Um erro que se lê como local porque foi observado por uma janela local.*
+3. **A migração não custou os `pools` porque eles já não existiam** — o bloco morto declarava
+   `pools: ["retencao_humano"]` e `max_concurrent_sessions: 2`, e o cliente HTTP de produção devolve
+   `pools: []` e `max_concurrent_sessions: 1` **fixos** (`registry-client.ts` §69-72), porque config
+   por-agente migrou para o slot de deploy do pool. `agent_ready` (§271-275) itera lista vazia e não
+   inscreve a instância em pool algum. **Achado que sobrevive a este item:** todo cenário e2e que
+   dependa de o *routing alocar* uma instância logada por essa via está quebrado por causa anterior e
+   independente — ainda não medido quais. O 10 não é um deles (semeia `session:meta` à mão).
+
+**O sinal de que (a) era mesmo a saída certa** apareceu na conferência final: em `01_happy_path.ts` a
+string `skill_retencao_oferta_v1` **já existia** no `skill_id:` do `execute` (§156), a sete linhas do
+`agentLogin` que dizia `agente_retencao_v1` (§50). O mesmo agente tinha dois nomes no mesmo arquivo, e
+o modelo deploy-driven afirma que são um só. A migração não introduziu convenção — removeu a exceção.
+
+**Um comentário que mentia, corrigido** (`lib/http-client.ts` §68): afirmava que "`/v1/agent-types`
+NÃO é gateado — só pools e skills precisam da credencial". Verdadeiro e enganoso ao mesmo tempo — não
+é gateado porque **não existe**, e descrever rota inexistente pelo que ela *não exige* sugere que
+funcione sem credencial. `createAgentType`/`listAgentTypes`/`getAgentType` ganharam aviso de rota
+aposentada em vez de remoção, porque ainda têm chamadores (abaixo).
+
+**O que NÃO foi feito, e por quê** (3 bolsões, nenhum bloqueia a suíte — detalhe em TODO.md):
+`seedPerfFixtures` (50 agent-types na rota morta **e não é chamada por ninguém** — o cenário 05 usa
+fixtures que nunca foram semeadas); `15_instance_bootstrap.ts` (o `listAgentTypes` é a espinha do
+cenário, não uma chamada a renomear); `fixtures/seed_demo.ts` (script standalone, morto desde a
+aposentadoria da entidade — ninguém reclamou, o que sugere que ninguém o roda).
+
+**Gates (previsão escrita antes de rodar):** cenário **10 → 8/8**, com a previsão das 8 asserções
+correta. Importa *como* passou: `masked:true` ficou verde, então a cláusula de escape da asserção D
+(`evalHasOriginal || !isMasked`) **não** foi acionada — D passou porque o evaluator recebeu mesmo
+`original_content`. **O leitor de `role` da Fatia B §1055 foi exercitado pela primeira vez**, contra
+o roster `session:{id}:participants` que a produção escreve, e funciona. Fecha a cadeia §101 → e2e →
+§1055. Cenário **01 → 10/11**, com o vermelho no lugar exato previsto (ver TODO § "`agent_ready` não
+inscreve instância em pool nenhum") — e não é regressão: antes desta sessão o 01 morria no seed, e a
+causa (`pools: []` fixo no cliente) não tem ramo por `skill_id`.
+
+**Um instrumento reprovou, e o registro é a parte útil.** O preflight que eu desenhei —
+`grep -c createAgentType fixtures/seed.ts`, previsto 1 — devolveu **3**, que é o número **antigo**.
+Causa: `grep -c` conta *linhas com a palavra*, e os dois comentários novos escrevem `createAgentType`
+ao explicar a remoção; somados à chamada remanescente em `seedPerfFixtures`, reproduzem o total de
+antes. **Se o build não tivesse entrado, o preflight teria dito 3 igual** — ele não podia reprovar.
+Contei a *string*, não a *coisa*: o discriminante é `grep -c 'registry.createAgentType('` (3 → 1).
+A prova real de que o build entrou veio dos runs (`[seed] Base fixtures seeded` sem 404, onde antes
+morria em `seed.ts:94`) — evidência boa, mas *post-hoc*, que é justamente o que um preflight existe
+para dispensar. **Regra:** um preflight sobre texto de código tem de casar o TOKEN SINTÁTICO da
+chamada, nunca o identificador solto, porque comentários e docstrings sobre a mudança contaminam a
+contagem — e contaminam **para cima**, na direção que imita o estado anterior.
+
+---
+
 ## `force-complete` deixou de mentir ✅ (2026-08-05)
 
 Fecha a metade que faltava da **lacuna 4** do levantamento I5. O endpoint gravava

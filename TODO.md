@@ -195,7 +195,51 @@ um item, perguntar o que ele DESBLOQUEIA.**
 > `tenant_demo`. Vale a pergunta ao herdar qualquer receita de handoff — **isto é o jeito certo ou é
 > o contorno de alguém?**
 
-## Fixtures do e2e ainda falam AgentType *(achado 2026-08-05, ao destravar o seed)*
+## Fixtures do e2e ainda falam AgentType — **seed base ✅ 2026-08-05; sobram 3 bolsões**
+
+**Fechado nesta passada (saída (a), a que o item recomendava):** removido o bloco morto de
+`createAgentType` do `seedBaseFixtures` e migradas **23 call sites** de `"agente_retencao_v1"` →
+`"skill_retencao_oferta_v1"` em 11 arquivos (01, 02, 03, 04, 06×5, 07×6, 08×3, 09, 10, 11,
+regressions×2), mais os 2 comentários que citavam o id antigo. Ver CHANGELOG.
+
+**Três medições que corrigem o texto original abaixo — ler antes de reaproveitá-lo:**
+
+1. **A contagem estava baixa.** O item dizia "~15 chamadas em 9 arquivos"; são **23 em 11**. Duas não
+   são `agentLogin`: `06:116` e `07:198`/`07:295` são `agentJoinConference` (a tool **não** valida
+   contra o registry — passa o id adiante como identidade do participante IA), e `08:59` é o campo
+   `agent_type_id` de `outbound_contact_request`.
+2. **O escopo do dano estava subestimado.** O item lia como "o cenário 10 está barrado". `runner.ts`
+   §363 chama `seedBaseFixtures` para **todo** cenário com `needsRegistry` (todos fora de 13/14/16) —
+   logo o 404 parava a suíte **inteira**, e o "cenário 10" era só o que estava na linha de comando.
+3. **A migração não custou os `pools` porque eles já não existiam.** O bloco morto declarava
+   `pools: ["retencao_humano"]` e `max_concurrent_sessions: 2`, mas o cliente HTTP de produção
+   (`mcp-server/infra/registry-client.ts` §69-72) devolve `pools: []` e `max_concurrent_sessions: 1`
+   **fixos** — config por-agente mudou para o slot de deploy do pool. `agent_ready`
+   (`runtime.ts` §271-275) itera lista vazia e **não inscreve a instância em pool nenhum**.
+   *Consequência que vale mais que o item*: qualquer cenário e2e que dependa de o **routing alocar**
+   uma instância logada por essa via está quebrado — por uma causa anterior e independente desta.
+   Ainda não medido quais são; o 10 não é um deles (semeia `session:meta` à mão).
+
+**Os três bolsões que sobram** (nenhum bloqueia a suíte hoje):
+
+- **`seedPerfFixtures` (cenário 05)** — 50 `createAgentType` na rota morta, E **a função não é chamada
+  por ninguém**: `runner.ts` §90 importa só `seedBaseFixtures`. O cenário 05 monta `agent_perf_{i}_v1`
+  a partir de fixtures que nunca foram semeadas em execução alguma. Remover o código morto e migrar o
+  05 são a mesma decisão.
+- **`15_instance_bootstrap.ts`** — `listAgentTypes()` (§78) é a **espinha** do cenário: ele deriva
+  `instance_id` de `agent_type_id`+`max_concurrent_sessions` e confere pertencimento a pools a partir
+  do registro. Não é renomear chamada; é reescrever o cenário sobre skills+slots. Por isso o método
+  sobreviveu no `http-client`, agora com aviso de rota aposentada.
+- **`fixtures/seed_demo.ts`** — script standalone (`ts-node fixtures/seed_demo.ts`), 2 `createAgentType`
+  (`orquestrador_demo_v1`, `agente_suporte_humano_v1`). Morre no primeiro `await` desde que a entidade
+  saiu. Ninguém reclamou, o que sugere que ninguém o roda.
+
+**Um comentário que mentia foi corrigido** (`lib/http-client.ts` §68): dizia que "`/v1/agent-types`
+NÃO é gateado — só pools e skills precisam da credencial". Verdadeiro e enganoso ao mesmo tempo: não é
+gateado porque **não existe**. Descrever rota inexistente pelo que ela não exige sugere que funcione
+sem credencial. Mesma família do §57 ("o TÍTULO é o que mente para mais gente").
+
+<details><summary>Texto original do item (2026-08-05) — mantido para rastreio</summary>
 
 Com o 401 resolvido, o seed avança e morre em `POST /v1/agent-types → 404 Cannot POST`
 (`fixtures/seed.ts:94`). **Não é permissão: a rota não existe.** Zero ocorrências de `agent-types` em
@@ -248,6 +292,59 @@ seria confundir dois defeitos.
 **Primeiro passo quando for atacado:** capturar a URL e o status body (`console.error` no ramo do
 401 já basta), e responder *"o que este registro grava, e quem lê"*. Se a resposta for "nada que
 alguém leia", o item vira remoção da chamada — não conserto do token.
+
+</details>
+
+> **Nota de arquivo (2026-08-05):** os últimos 5 parágrafos do texto original acima
+> (`[agent-ws] Pool registration returned HTTP 401`) **não são deste item** — falam do registro de
+> pool no login do Console, que é outro assunto e tem seção própria já fechada no topo do arquivo.
+> Chegaram aqui por colagem. Não confundir com o 401 do seed do e2e, que era em `POST /v1/skills` e
+> está resolvido.
+
+## `agent_ready` não inscreve instância em pool nenhum — e o SET que ele escreve não tem leitor *(medido 2026-08-05, ao destravar o e2e)*
+
+**Como apareceu:** com o seed destravado, o cenário 01 rodou pela primeira vez e deu 10 verdes e
+**um** vermelho, exatamente onde a previsão escrita antes dizia que daria:
+
+```
+✗ Pool retencao_humano contains instance after agent_ready   {"available":[], …}
+```
+
+**Três fatos, medidos, em ordem de gravidade crescente:**
+
+1. **O caminho não pode popular o SET.** `agent_ready` (`tools/runtime.ts` §271-275) itera a lista
+   `pools` do hash da instância, escrita no `agent_login` a partir de `agentType.pools`. O cliente
+   HTTP de produção (`infra/registry-client.ts` §71) devolve `pools: []` **sem ramo algum** — não
+   existe `skill_id` que produza outra coisa. Junto vêm `max_concurrent_sessions: 1` e
+   `permissions: []`, igualmente fixos. Logo o laço é vazio **sempre**, para qualquer agente.
+2. **O SET não tem leitor.** `{tenant}:pool:{p}:available` tem, em todo o `mcp-server-plughub`,
+   **um `sadd` e quatro `srem`** — e nenhuma leitura fora de teste. As leituras de pertencimento em
+   produção vão para `pool:{p}:instances` e `pool_roster:{p}`; o routing-engine sequer conhece a
+   chave (zero ocorrências de `:available` em `.py`). É a resposta de *"o que grava, e quem lê"* —
+   a mesma pergunta que fechou o §101 e a lacuna 4 — e ela é **ninguém**.
+3. **O teste unitário é verde por causa do dublê.** `runtime.test.ts` §158-159 afirma
+   `sismember == 1` em dois pools; passa porque `createStubRegistryClient` devolve
+   `pools: ["retencao_humano","retencao_bot"]` — **uma forma que o cliente real não consegue
+   retornar**. O stub não simplifica a produção: contradiz. Vale para `max_concurrent_sessions: 2`
+   e `permissions` no mesmo objeto. É o §7 ("como um dublê mente") num teste que ninguém suspeitava.
+
+**O que NÃO está provado, e por isso não afirmado:** que isto seja defeito de produção. A hipótese
+concorrente, e mais provável, é que a inscrição em pool **deixou de ser** do `agent_ready` e passou
+ao slot de deploy do pool + bootstrap (o próprio comentário do `registry-client` §44-46 diz que
+"config por-agente vive no slot do pool"), e que o `sadd` + o SET + a asserção do 01 sejam **vestígio
+do modelo anterior**. O demo aloca agentes normalmente, o que sustenta a hipótese. Não foi medido
+qual caminho popula o pool hoje para IA.
+
+**Por isso a decisão não é "consertar o vermelho".** São duas saídas de sentidos opostos, e escolher
+exige a medição acima: (a) se é vestígio → **remover** o `sadd`, o SET e a asserção do 01, e trocar o
+stub por um que respeite a forma do cliente real (o que provavelmente deixa outros testes vermelhos —
+e esse vermelho é o resultado, não o obstáculo); (b) se algum consumidor real depende do SET →
+o defeito é o `pools: []` fixo, e o conserto é no cliente. **Não fazer (a) sem medir**, porque
+apagar o SET certo pelo motivo errado dá o mesmo diff com a dívida escondida.
+
+**Primeiro passo:** responder *"quem inscreve uma instância de IA num pool hoje, no demo"* — com
+`MONITOR` filtrado por `SADD` durante um boot do bridge, não por leitura de código (a lição de
+2026-08-05, que rendeu 3 de 7).
 
 ## `source` do resume é asserido pelo CLIENTE na porta pública *(achado 2026-08-04, ao implementar a Fase F)*
 

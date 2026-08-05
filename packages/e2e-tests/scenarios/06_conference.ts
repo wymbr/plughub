@@ -71,7 +71,7 @@ async function runPartA(
     // ── A2: Primary agent login → ready → busy (v2) ──────────────────────────
     let primaryToken: string;
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", primaryInstanceId);
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", primaryInstanceId);
       primaryToken = login.session_token;
       assertions.push(pass("A: primary agent_login OK", { instance_id: login.instance_id }));
     } catch (err) {
@@ -113,7 +113,7 @@ async function runPartA(
 
     const joinResult = await mcp.agentJoinConference(
       sessionId,
-      "agente_retencao_v1",   // specialist agent type (same for test simplicity)
+      "skill_retencao_oferta_v1",   // specialist agent type (same for test simplicity)
       "retencao_humano",
       "conference",
       { text: "Assistente IA" }
@@ -160,7 +160,7 @@ async function runPartA(
     // ── A6: Specialist logs in, becomes ready, takes the session (v2 API) ────
     let specialistToken: string;
     try {
-      const specLogin = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", specialistInstanceId);
+      const specLogin = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", specialistInstanceId);
       specialistToken = specLogin.session_token;
       await mcp.agentReady(specialistToken);
       const specBusy = await mcp.agentBusyV2(specialistToken, sessionId, specialistParticipantId);
@@ -254,7 +254,7 @@ async function runPartB(
     // ── B1: Agent login → ready → busy ───────────────────────────────────────
     let firstToken: string;
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", instanceId);
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", instanceId);
       firstToken = login.session_token;
       assertions.push(pass("B: initial agent_login OK", { instance_id: login.instance_id }));
     } catch (err) {
@@ -303,7 +303,7 @@ async function runPartB(
     // ── B3: Re-login with same instance_id → Redis state persists ────────────
     let newToken: string;
     try {
-      const reLogin = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", instanceId);
+      const reLogin = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", instanceId);
       newToken = reLogin.session_token;
       assertions.push(
         reLogin.instance_id === instanceId

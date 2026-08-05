@@ -91,7 +91,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     let sessionToken = "";
     try {
-      const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", instanceId);
+      const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", instanceId);
       sessionToken = login.session_token;
       await mcp.agentReady(sessionToken);
       await mcp.agentBusyV2(sessionToken, sessionId, participantId);

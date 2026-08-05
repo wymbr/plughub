@@ -56,7 +56,7 @@ async function runPartA(
     tenant_id:    ctx.tenantId,
     customer_id:  customerId,
     channel:      "whatsapp",
-    agent_type_id: "agente_retencao_v1",
+    agent_type_id: "skill_retencao_oferta_v1",
     pool_id:       "retencao_humano",
     metadata:      { campaign: "retencao_q1", priority: "high" },
   });
@@ -138,7 +138,7 @@ async function runPartB(
 
   // ── B1: AI agent login → ready → busy ────────────────────────────────────
   try {
-    const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", aiInstanceId);
+    const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", aiInstanceId);
     aiToken = login.session_token;
     await mcp.agentReady(aiToken);
     const busy = await mcp.agentBusyV2(aiToken, sessionId, aiParticipantId);
@@ -210,7 +210,7 @@ async function runPartC(
   // ── C2: Human agent login → ready → busy ─────────────────────────────────
   let humanToken: string;
   try {
-    const login = await mcp.agentLogin(ctx.tenantId, "agente_retencao_v1", humanInstanceId);
+    const login = await mcp.agentLogin(ctx.tenantId, "skill_retencao_oferta_v1", humanInstanceId);
     humanToken = login.session_token;
     await mcp.agentReady(humanToken);
     const busy = await mcp.agentBusyV2(humanToken, sessionId, humanParticipantId);
