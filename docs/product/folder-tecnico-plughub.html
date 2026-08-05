@@ -1,0 +1,1175 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>PlugHub — folder técnico</title>
+<style>
+  :root{
+    --graphite:#2E3138;
+    --graphite2:#3E434D;
+    --cherry:#990011;
+    --teal:#046A6A;
+    --offwhite:#F2F2F2;
+    --muted:#6B7280;
+    --line:#DDDEE1;
+    --hfont: Cambria, Georgia, serif;
+    --bfont: Calibri, "Segoe UI", Arial, sans-serif;
+    --mfont: Consolas, "Courier New", monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#7A7D84;font-family:var(--bfont);color:var(--graphite);
+       -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  .page{width:210mm;min-height:297mm;background:#fff;margin:8mm auto;
+        padding:16mm 15mm;position:relative}
+
+  h1{font-family:var(--hfont);font-size:28pt;line-height:1.1;font-weight:700}
+  h2{font-family:var(--hfont);font-size:16pt;line-height:1.15;font-weight:700;margin-bottom:4mm}
+  h3{font-size:10.5pt;font-weight:700;margin-bottom:1.5mm}
+  h4{font-size:9.5pt;font-weight:700;margin-bottom:1.5mm}
+  p{font-size:9pt;line-height:1.48;color:var(--graphite2)}
+  .lead{font-size:11pt;line-height:1.42;color:var(--graphite)}
+  .kicker{font-size:7.5pt;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+          color:var(--cherry);margin-bottom:2.5mm}
+  .kicker.pale{color:#E39AA4}
+  .kicker.teal{color:var(--teal)}
+  .kicker.grey{color:var(--muted)}
+  .rule{width:26mm;height:1.2mm;background:var(--cherry);margin:5mm 0}
+
+  .cover{background:var(--graphite);color:#fff}
+  .cover h1{color:#fff}
+  .cover p{color:#C9CDD4}
+  .orb{position:absolute;border-radius:50%;background:var(--graphite2)}
+
+  .q{border-top:1px solid var(--line);padding:3.2mm 0}
+  .q:last-of-type{border-bottom:1px solid var(--line)}
+  .q .ask{font-family:var(--hfont);font-size:10.5pt;font-style:italic;color:var(--graphite);
+          line-height:1.28;margin-bottom:1.4mm}
+  .q p{font-size:8.4pt}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4mm}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:3.5mm}
+  .card{background:var(--offwhite);border-radius:2mm;padding:4mm}
+  .card p{font-size:8.4pt;line-height:1.42}
+  .card.dark{background:var(--graphite)}
+  .card.dark h3,.card.dark h4{color:#fff}
+  .card.dark p{color:#C9CDD4}
+  .card.teal{background:var(--teal)}
+  .card.teal h3,.card.teal h4{color:#fff}
+  .card.teal p{color:#DDEDED}
+  .card.cherry{background:var(--cherry)}
+  .card.cherry h3,.card.cherry h4{color:#fff}
+  .card.cherry p{color:#FBE4E7}
+  .card.cherry strong{color:#fff}
+
+  .hinge{background:var(--cherry);border-radius:2mm;padding:5.5mm;color:#fff;margin-bottom:5mm}
+  .hinge h2{color:#fff;font-size:14pt;margin-bottom:2.5mm}
+  .hinge p{color:#FBE4E7;font-size:9pt;line-height:1.48}
+  .hinge p + p{margin-top:2.2mm}
+  .hinge strong{color:#fff}
+
+  .band{background:var(--graphite);border-radius:2mm;padding:4.5mm 5mm;color:#fff}
+  .band p{color:#C9CDD4}
+  .band strong{color:#fff}
+
+  table{width:100%;border-collapse:collapse;font-size:8.4pt;margin-top:2.5mm}
+  th{background:var(--graphite);color:#fff;text-align:left;padding:2mm 2.5mm;font-size:8pt;font-weight:700}
+  td{border-bottom:1px solid var(--line);padding:2mm 2.5mm;vertical-align:top;color:var(--graphite2)}
+  td.k{font-weight:700;color:var(--graphite);width:28%}
+
+  .chips{display:flex;flex-wrap:wrap;gap:1.6mm;margin-top:2.5mm}
+  .chip{background:var(--offwhite);border-radius:1.2mm;padding:1.3mm 2.4mm;font-size:7.8pt;font-weight:600}
+  .chip.mono{font-family:var(--mfont);font-weight:400;background:#fff;border:1px solid var(--line)}
+  .mono{font-family:var(--mfont);font-size:8pt}
+
+  .note{border:1px solid var(--line);border-radius:2mm;padding:4mm;margin-top:5mm}
+  .note h3{color:var(--cherry)}
+
+  .seal{display:inline-block;font-size:7pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+        border:1px solid var(--teal);color:var(--teal);border-radius:1mm;padding:.6mm 1.6mm;
+        margin-left:2mm;vertical-align:1.5mm}
+  .seal.road{border-color:var(--muted);color:var(--muted)}
+  .seal.pale{border-color:#8FB8B8;color:#8FB8B8}
+
+  ul{margin:1.5mm 0 0 4.5mm}
+  li{font-size:8.4pt;line-height:1.42;color:var(--graphite2);margin-bottom:.8mm}
+
+  .foot{margin-top:6mm;border-top:1px solid var(--line);padding-top:2mm;
+        font-size:7.5pt;color:var(--muted);display:flex;justify-content:space-between}
+  .cover .foot{border-top-color:#4A4E57;color:#8A9099}
+
+  svg{display:block;width:100%;height:auto}
+
+  @media print{
+    body{background:#fff}
+    .page{margin:0;box-shadow:none;page-break-after:always}
+    .page:last-child{page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+</style>
+</head>
+<body>
+
+<!-- ================= 1 · CAPA ================= -->
+<section class="page cover">
+  <div class="orb" style="width:120mm;height:120mm;right:-40mm;top:-45mm"></div>
+  <div style="position:relative">
+    <div class="kicker pale">Folder técnico · plataforma</div>
+    <div style="height:38mm"></div>
+    <h1>Uma plataforma de<br>atendimento desenhada<br>para orquestrar agentes<br>humanos e de IA.</h1>
+    <div class="rule"></div>
+    <p class="lead" style="color:#E8EAED;max-width:135mm">
+      Este documento é para quem já conhece contact center por dentro. Ele não lista funcionalidades:
+      descreve as decisões de arquitetura, as camadas de abstração e o que decorre delas.
+    </p>
+    <div style="height:40mm"></div>
+    <div class="grid3">
+      <div class="card dark"><h4>Sessão é sala, não fila</h4>
+        <p>Humano e IA são participantes simultâneos da mesma sessão, com visibilidade controlada — não fases de um handoff.</p></div>
+      <div class="card dark"><h4>Motor único</h4>
+        <p>Receptivo, ativo, processo, pesquisa e qualidade sobre o mesmo interpretador declarativo. Não é suíte integrada.</p></div>
+      <div class="card dark"><h4>Licença por capacidade</h4>
+        <p>Pessoas e IA na mesma unidade de concorrência. Sem cobrança por token, por ação ou por resolução.</p></div>
+    </div>
+    <div style="height:14mm"></div>
+    <p style="font-size:9.5pt;color:#C9CDD4;max-width:130mm">
+      Atendimento receptivo e ativo, automação de processos, pesquisa, qualidade e conformidade
+      em uma plataforma única — com pessoas e inteligência artificial na mesma conversa.
+    </p>
+    <div class="foot"><span>PlugHub · descritivo técnico resumido</span><span>2026</span></div>
+  </div>
+</section>
+
+<!-- ================= 2 · INTRODUÇÃO ================= -->
+<section class="page">
+  <div class="kicker">Introdução</div>
+  <h2>Por que mais uma plataforma de atendimento?</h2>
+  <p style="max-width:170mm">
+    É a primeira pergunta que fazemos a nós mesmos. O mercado tem plataformas maduras, com décadas de estrada.
+    O filtro que aplicamos a cada capacidade é direto: <strong>“por que o incumbente não poderia lançar isto no
+    próximo trimestre?”</strong> Se a resposta honesta é “poderia”, a capacidade pode ser necessária — mas não
+    justifica um produto novo. O que segue são seis perguntas em que a resposta é “não poderia, sem reescrever”.
+  </p>
+
+  <div style="margin-top:5mm" class="kicker grey">Seis coisas que ninguém resolveu</div>
+  <p style="margin-bottom:1.5mm">Nenhuma é funcionalidade faltando. Todas viraram “é assim mesmo”.</p>
+
+  <div class="q">
+    <div class="ask">“Quando o cliente precisa passar um dado sensível, o que acontece?”</div>
+    <p>Transferir para a URA e perder parte dos clientes no caminho. Pausar a gravação e abrir um buraco na
+    auditoria. Ou deixar o atendente ouvir o número do cartão — e colocar a operação inteira no escopo PCI.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“O seu TMA inclui o pós-atendimento?”</div>
+    <p>Se inclui, você não sabe quanto tempo o cliente é de fato atendido — e o atendente segue bloqueado depois
+    que o cliente já foi embora. Contato, segmento e conferência são tratados como uma coisa só.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Como vocês relacionam vários contatos ao mesmo problema do cliente?”</div>
+    <p>Por protocolo que o cliente precisa ter guardado, por dedução do atendente lendo o histórico, ou por
+    planilha. Na maioria das operações a resposta honesta é: <strong>não relacionam</strong>. O FCR é a métrica
+    que <em>quase</em> mede processo e falha — conta a repetição como fracasso do contato, não como duração do
+    caso.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Que percentual das interações a monitoria cobre?”</div>
+    <p>De 2 a 5%, com avaliação subjetiva e contestação resolvida em reunião, sem trilha. E quase nunca é possível
+    responder se a qualidade caiu <em>depois de uma mudança específica</em> — porque o substrato não foi carimbado
+    com a versão que estava rodando no momento do atendimento.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Quantas vezes o mesmo cliente foi abordado esta semana, somando todos os canais?”</div>
+    <p>O discador tem uma lista, o SMS é outro sistema, o WhatsApp é um terceiro. Cada um sabe se falou com aquele
+    registro; nenhum sabe quanta pressão aquela <em>pessoa</em> recebeu da empresa.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“E a sua pesquisa de satisfação — ela conta como abordagem?”</div>
+    <p>Quase nunca. A pesquisa costuma rodar em ferramenta separada, com <em>mailing</em> próprio, fora de qualquer
+    controle de fadiga: o cliente que já recebeu três abordagens na semana recebe ainda o convite para avaliar, e
+    às vezes de mais de uma área ao mesmo tempo. Como a lista é montada por extração, ela também não sabe o que
+    aconteceu no atendimento — pergunta sobre um contato que pode ter sido justamente o que irritou o cliente, e
+    pergunta de novo depois. <strong>Medir satisfação sem respeitar o bem-estar de quem responde</strong> não é
+    detalhe de processo: é a própria pesquisa corroendo o dado que pretende coletar.</p>
+  </div>
+  <div class="foot"><span>Introdução</span><span>2</span></div>
+</section>
+
+<!-- ================= 3 · DIAGNÓSTICO + O QUE É ================= -->
+<section class="page">
+  <div class="hinge">
+    <div class="kicker pale">O diagnóstico</div>
+    <h2>Nenhum desses problemas está sem solução. Todos estão contornados.</h2>
+    <p>Transferir para a URA, pausar a gravação, amostrar 2%, extrair uma lista para pesquisar, montar campanha em
+    lote para dar seguimento a um caso. Ninguém desenhou a operação assim porque quis — fez porque a plataforma
+    embaixo não comporta a solução direta.</p>
+    <p><strong>Se fosse funcionalidade faltando, a resposta certa seria esperar o fornecedor atual lançar.</strong>
+    Mas a limitação é fundacional: a IA modelada como etapa <em>anterior</em> ao atendimento e o humano como
+    anteparo; o contato isolado como unidade de medida; assento humano e consumo de IA em moedas diferentes.
+    Premissa de arquitetura não se conserta com módulo novo.</p>
+    <p><strong>E há uma segunda razão, mais prosaica.</strong> O que se chama de “plataforma” costuma ser uma
+    <em>suíte</em>: o CCaaS de um fornecedor, o WFM de outro, a gestão de qualidade de um terceiro, o discador, o
+    bot, a ferramenta de pesquisa e o CRM de mais alguns — boa parte reunida por aquisição e costurada por
+    conector. Cada peça tem seu modelo de dado, seu ciclo de release, seu contrato e seu suporte. O cliente da
+    pesquisa não é o mesmo cliente do discador; o agente do WFM não é o mesmo agente do QM; a jornada não existe
+    em lugar nenhum porque nenhuma peça sozinha a enxerga. <strong>O contorno, portanto, não é só de arquitetura:
+    é a costura entre produtos que nunca foram desenhados juntos</strong> — e é essa costura que a operação
+    mantém todo dia e que quebra a cada atualização de qualquer uma das partes.</p>
+  </div>
+
+  <div class="kicker">O que é</div>
+  <h2>Plataforma única de atendimento e processos, com orquestração de agentes humanos e de IA</h2>
+  <p style="max-width:170mm">
+    Uma plataforma de contact center contemporânea em que a unidade de recurso não é o assento humano nem a
+    licença de bot: é o <strong>agente</strong> — humano ou de IA — com pool, canais, competências,
+    disponibilidade e score. O roteador não sabe qual dos dois está alocando. A sessão é uma <strong>sala de
+    conferência</strong> com múltiplos participantes simultâneos e visibilidade controlada por participante, não
+    uma fila de passagem.
+  </p>
+
+  <div class="grid3" style="margin-top:4mm">
+    <div class="card"><h4>Uma superfície</h4>
+      <p>Receptivo, ativo, automação de processo, pesquisa, qualidade e conformidade no mesmo produto — não
+      módulos licenciados à parte, com configuração, billing e times próprios.</p></div>
+    <div class="card teal"><h4>Uma unidade de custo</h4>
+      <p>Licença por concorrência configurada. Humanos e IA na mesma moeda; o ganho de eficiência da IA fica com o
+      cliente, não com o fornecedor.</p></div>
+    <div class="card dark"><h4>Um substrato</h4>
+      <p>Todo contato — humano, de IA, receptivo, ativo ou importado de terceiro — produz o mesmo dado de sessão,
+      segmento e evento. Um só pipeline de qualidade e de analytics.</p></div>
+  </div>
+
+  <div class="note">
+    <h3>Estágio, dito aqui de propósito</h3>
+    <p>A plataforma está pronta em arquitetura e funcionalidade e validada em ambiente controlado — com parte das
+    capacidades validada em atendimento real —, e <strong>ainda não está em produção em cliente</strong>. Não há
+    certificações emitidas; estão em andamento, e a arquitetura já produz a evidência técnica que elas exigem.
+    Comparações de capacidade neste documento são reais; nenhuma comparação de tração nos favorece hoje.</p>
+  </div>
+  <div class="foot"><span>O que é</span><span>3</span></div>
+</section>
+
+<!-- ================= 4 · COMO É ================= -->
+<section class="page">
+  <div class="kicker">Como é</div>
+  <h2>O recurso básico de atendimento é o agente — humano ou de IA</h2>
+  <p style="max-width:170mm">
+    Toda sessão tem um <strong>orquestrador</strong>: o participante que conduz o atendimento, mantém o contexto e
+    decide o que delegar. Em torno dele entram e saem <strong>especialistas</strong>, convocados pelo mesmo
+    roteador e com o mesmo contrato de execução. O ponto do desenho é que o papel de orquestrador é
+    <strong>cambiável</strong>: pode ser ocupado por uma pessoa ou por uma instância de fluxo, sem que nada mais
+    na sessão mude.
+  </p>
+
+  <svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="margin-top:4mm">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+        <path d="M0,0 L7,3 L0,6 z" fill="#6B7280"/>
+      </marker>
+    </defs>
+    <rect x="4" y="52" width="752" height="200" rx="10" fill="#F2F2F2"/>
+    <text x="22" y="76" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#6B7280" letter-spacing="1.4">SESSÃO · SALA DE CONFERÊNCIA</text>
+
+    <rect x="22" y="118" width="104" height="62" rx="7" fill="#2E3138"/>
+    <text x="74" y="145" text-anchor="middle" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">cliente</text>
+    <text x="74" y="163" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" fill="#C9CDD4">canal negociado</text>
+    <line x1="128" y1="149" x2="188" y2="149" stroke="#6B7280" stroke-width="1.6" marker-end="url(#ar)"/>
+
+    <rect x="192" y="96" width="196" height="106" rx="8" fill="#fff" stroke="#990011" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="290" y="116" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#990011" letter-spacing="1.2">ORQUESTRADOR</text>
+    <rect x="204" y="126" width="82" height="62" rx="6" fill="#990011"/>
+    <text x="245" y="150" text-anchor="middle" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">humano</text>
+    <text x="245" y="167" text-anchor="middle" font-family="Calibri,Arial" font-size="10" fill="#FBE4E7">Console</text>
+    <rect x="294" y="126" width="82" height="62" rx="6" fill="#046A6A"/>
+    <text x="335" y="150" text-anchor="middle" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">IA</text>
+    <text x="335" y="167" text-anchor="middle" font-family="Calibri,Arial" font-size="10" fill="#DDEDED">fluxo de agente</text>
+    <path d="M286,213 C286,231 294,231 294,213" fill="none" stroke="#6B7280" stroke-width="1.6" marker-end="url(#ar)" marker-start="url(#ar)"/>
+    <text x="290" y="248" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-style="italic" fill="#6B7280">mesmo pool · mesmo roteador · mesma sessão</text>
+
+    <line x1="392" y1="149" x2="446" y2="149" stroke="#6B7280" stroke-width="1.6" marker-end="url(#ar)"/>
+    <text x="419" y="140" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">delega</text>
+
+    <rect x="450" y="82" width="290" height="136" rx="8" fill="#fff" stroke="#DDDEE1"/>
+    <text x="464" y="101" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#6B7280" letter-spacing="1.2">ESPECIALISTAS (entram e saem)</text>
+    <rect x="464" y="110" width="126" height="44" rx="6" fill="#3E434D"/>
+    <text x="527" y="130" text-anchor="middle" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#fff">captura mascarada</text>
+    <text x="527" y="145" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">o orquestrador não vê o dado</text>
+    <rect x="600" y="110" width="126" height="44" rx="6" fill="#3E434D"/>
+    <text x="663" y="130" text-anchor="middle" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#fff">consulta / RAG</text>
+    <text x="663" y="145" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">base vetorial</text>
+    <rect x="464" y="162" width="126" height="44" rx="6" fill="#3E434D"/>
+    <text x="527" y="182" text-anchor="middle" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#fff">supervisor</text>
+    <text x="527" y="197" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">visibilidade privada</text>
+    <rect x="600" y="162" width="126" height="44" rx="6" fill="#046A6A"/>
+    <text x="663" y="182" text-anchor="middle" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#fff">avaliador</text>
+    <text x="663" y="197" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">online ou pós-sessão</text>
+  </svg>
+
+  <div class="grid3" style="margin-top:4mm">
+    <div class="card"><h4>Papéis de participação</h4>
+      <p><span class="mono">primary</span> · <span class="mono">specialist</span> · <span class="mono">supervisor</span> ·
+      <span class="mono">evaluator</span> · <span class="mono">reviewer</span>. O papel é fato do par (participante,
+      sessão) — a mesma instância é primária numa sessão e especialista em outra, ao mesmo tempo.</p></div>
+    <div class="card"><h4>Propósito do agente</h4>
+      <p><span class="mono">executor</span> · <span class="mono">orchestrator</span> · <span class="mono">evaluator</span>.
+      É fato do artefato, declarado no registro e lido na autenticação — nunca informado pelo próprio agente. É
+      entrada de autorização, não de configuração.</p></div>
+    <div class="card"><h4>Visibilidade por mensagem</h4>
+      <p><span class="mono">all</span> (inclui o cliente), <span class="mono">agents_only</span> (nota interna) ou
+      lista explícita de participantes — supervisor falando com um agente específico, sem que os demais vejam.</p></div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">O dial do anteparo — e ele gira nos dois sentidos</div>
+    <p style="color:#fff;font-family:var(--hfont);font-size:11.5pt;line-height:1.35">
+      O humano começa no comando do processo e a IA assume pedaços; a cada pedaço que a avaliação prova confiável,
+      o humano recua. Mas o inverso também é regime normal: <strong>a IA orquestra e convoca o humano</strong> como
+      especialista para o trecho que ela não deve decidir sozinha — exceção, autorização, negociação, empatia.
+    </p>
+    <p style="margin-top:2.5mm">
+      É por isso que o papel de orquestrador precisa ser cambiável de verdade, e não um modo de operação. E é o que
+      dá base concreta à ideia de <strong>a IA aprender com o humano</strong>: quando os dois ocupam o mesmo papel
+      na mesma estrutura de sessão, o atendimento humano produz exatamente o registro — turno, ferramenta chamada,
+      decisão, desfecho — de que o agente de IA precisa para ser construído, avaliado e corrigido. Sendo honesto
+      sobre o mecanismo: <strong>não é aprendizado automático em produção</strong>. É um laço supervisionado —
+      avaliação com critérios, calibração do avaliador, nova versão publicada e medida contra a anterior — em que
+      cada avanço da IA é explícito, auditável e reversível por versão.
+    </p>
+  </div>
+  <div class="foot"><span>Como é</span><span>4</span></div>
+</section>
+
+<!-- ================= 5 · ARQUITETURA — FIGURA DAS CAMADAS ================= -->
+<section class="page">
+  <div class="kicker">Arquitetura</div>
+  <h2>Sete camadas de abstração — e o caminho de um contato por elas</h2>
+  <p style="max-width:170mm">
+    Cada camada só conhece o contrato da camada vizinha. O motor de fluxo não sabe qual canal está em uso; o canal
+    não sabe qual agente atende; o roteador não sabe se o recurso é uma pessoa. A leitura das camadas é top-down,
+    por nível de abstração; <strong>o caminho do contato é outro</strong> — e a figura mostra os dois ao mesmo
+    tempo.
+  </p>
+
+  <svg viewBox="0 0 760 560" xmlns="http://www.w3.org/2000/svg" style="margin-top:4mm">
+    <defs>
+      <marker id="a2" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#990011"/>
+      </marker>
+      <marker id="a3" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#6B7280"/>
+      </marker>
+    </defs>
+
+    <text x="8" y="16" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#6B7280" letter-spacing="1.3">CAMADAS DE ABSTRAÇÃO (top-down)</text>
+    <text x="600" y="16" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#990011" letter-spacing="1.3">ORDEM DO CONTATO</text>
+
+    <!-- camada 1 -->
+    <rect x="8" y="26" width="576" height="54" rx="6" fill="#990011"/>
+    <text x="24" y="48" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">1 · Bus interno</text>
+    <text x="24" y="66" font-family="Calibri,Arial" font-size="10.5" fill="#F3D6DA">sinalização, eventos e dados num único barramento, com contrato versionado e stream canônico por sessão</text>
+    <circle cx="620" cy="53" r="15" fill="#fff" stroke="#990011" stroke-width="2"/>
+    <text x="620" y="58" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#990011">∞</text>
+    <text x="644" y="50" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">transversal</text>
+    <text x="644" y="63" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">tudo passa por aqui</text>
+
+    <!-- camada 2 -->
+    <rect x="8" y="88" width="576" height="54" rx="6" fill="#7A2E38"/>
+    <text x="24" y="110" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">2 · Fluxos de agente</text>
+    <text x="24" y="128" font-family="Calibri,Arial" font-size="10.5" fill="#EBD5D8">workflows declarativos em três níveis: negocial · acesso · entrada e saída</text>
+    <circle cx="620" cy="115" r="15" fill="#990011"/>
+    <text x="620" y="120" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">5</text>
+    <text x="644" y="112" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">executa o processo</text>
+    <text x="644" y="125" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">e chama sistemas</text>
+
+    <!-- camada 3 -->
+    <rect x="8" y="150" width="576" height="54" rx="6" fill="#2E3138"/>
+    <text x="24" y="172" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">3 · Canais</text>
+    <text x="24" y="190" font-family="Calibri,Arial" font-size="10.5" fill="#C9CDD4">normalização de entrada, renderização de saída, degradação por capacidade — receptivo e ativo</text>
+    <circle cx="620" cy="177" r="15" fill="#990011"/>
+    <text x="620" y="182" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">1</text>
+    <text x="644" y="174" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">o contato entra</text>
+    <text x="644" y="187" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">ou é iniciado</text>
+
+    <!-- camada 4 -->
+    <rect x="8" y="212" width="576" height="54" rx="6" fill="#3E434D"/>
+    <text x="24" y="234" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">4 · Identificação</text>
+    <text x="24" y="252" font-family="Calibri,Arial" font-size="10.5" fill="#C9CDD4">resolução por âncoras, posse de canal comprovada, pendências em aberto, política de retomada</text>
+    <circle cx="620" cy="239" r="15" fill="#990011"/>
+    <text x="620" y="244" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">2</text>
+    <text x="644" y="236" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">quem é</text>
+    <text x="644" y="249" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">e o que retoma</text>
+
+    <!-- camada 5 -->
+    <rect x="8" y="274" width="576" height="54" rx="6" fill="#2C5560"/>
+    <text x="24" y="296" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">5 · Roteamento</text>
+    <text x="24" y="314" font-family="Calibri,Arial" font-size="10.5" fill="#CFE0E4">competência, canal, disponibilidade, SLA e performance — fila com estatística própria, despacho push ou pull</text>
+    <circle cx="620" cy="301" r="15" fill="#990011"/>
+    <text x="620" y="306" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">3</text>
+    <text x="644" y="298" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">a quem vai</text>
+    <text x="644" y="311" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">ou espera na fila</text>
+
+    <!-- camada 6 -->
+    <rect x="8" y="336" width="576" height="54" rx="6" fill="#046A6A"/>
+    <text x="24" y="358" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">6 · Agentes</text>
+    <text x="24" y="376" font-family="Calibri,Arial" font-size="10.5" fill="#CFE7E7">runtime único para humano e IA · capacidade compartilhada · ferramentas mediadas e auditadas</text>
+    <circle cx="620" cy="363" r="15" fill="#990011"/>
+    <text x="620" y="368" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">4</text>
+    <text x="644" y="360" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">quem atende</text>
+    <text x="644" y="373" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">pessoa ou instância</text>
+
+    <!-- camada 7 -->
+    <rect x="8" y="398" width="576" height="54" rx="6" fill="#0E4E4E"/>
+    <text x="24" y="420" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">7 · Contato</text>
+    <text x="24" y="438" font-family="Calibri,Arial" font-size="10.5" fill="#CDE3E3">organização do que foi atendido em jornada → sessão → segmento, com métrica e avaliação em cada grão</text>
+    <circle cx="620" cy="425" r="15" fill="#990011"/>
+    <text x="620" y="430" text-anchor="middle" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">6</text>
+    <text x="644" y="422" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">vira registro</text>
+    <text x="644" y="435" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">medível e avaliável</text>
+
+    <!-- trilha do contato -->
+    <rect x="8" y="470" width="744" height="76" rx="6" fill="#F2F2F2"/>
+    <text x="24" y="490" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#990011" letter-spacing="1.2">TRILHA DE UM CONTATO</text>
+
+    <rect x="24" y="500" width="86" height="34" rx="5" fill="#2E3138"/>
+    <text x="67" y="521" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">cliente</text>
+    <line x1="112" y1="517" x2="132" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="136" y="500" width="86" height="34" rx="5" fill="#2E3138"/>
+    <text x="179" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">① canal</text>
+    <text x="179" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">sessão criada</text>
+    <line x1="224" y1="517" x2="244" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="248" y="500" width="86" height="34" rx="5" fill="#3E434D"/>
+    <text x="291" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">② identidade</text>
+    <text x="291" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">e pendências</text>
+    <line x1="336" y1="517" x2="356" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="360" y="500" width="86" height="34" rx="5" fill="#2C5560"/>
+    <text x="403" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">③ roteador</text>
+    <text x="403" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE0E4">fila e score</text>
+    <line x1="448" y1="517" x2="468" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="472" y="500" width="86" height="34" rx="5" fill="#046A6A"/>
+    <text x="515" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">④ agente</text>
+    <text x="515" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">humano ou IA</text>
+    <line x1="560" y1="517" x2="580" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="584" y="500" width="74" height="34" rx="5" fill="#7A2E38"/>
+    <text x="621" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">⑤ fluxo</text>
+    <text x="621" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EBD5D8">e sistemas</text>
+    <line x1="660" y1="517" x2="676" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
+
+    <rect x="680" y="500" width="60" height="34" rx="5" fill="#0E4E4E"/>
+    <text x="710" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">⑥ registro</text>
+    <text x="710" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CDE3E3">jornada</text>
+  </svg>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card dark">
+      <h4>Princípio transversal: estado externalizado</h4>
+      <p>Componentes sem estado por padrão. O estado de tempo real vive fora do processo — fila, contexto, estado
+      do fluxo, sinal de vida e o stream canônico da sessão. Qualquer instância pode cair e ser substituída sem
+      perda de sessão, porque o estado não está nela.</p>
+    </div>
+    <div class="card">
+      <h4>Princípio transversal: uma fonte por domínio</h4>
+      <p>Cada domínio tem um único store canônico e todo provisionamento passa pela API oficial — inclusive seed e
+      demonstração. Variável de ambiente serve só para segredo e topologia; quando ambos existem, a configuração
+      vence o ambiente. Há verificação automatizada que falha o build em violação nova.</p>
+    </div>
+  </div>
+  <div class="foot"><span>Arquitetura · mapa</span><span>5</span></div>
+</section>
+
+<!-- ================= 6 · CAMADAS 1 e 2 ================= -->
+<section class="page">
+  <div class="kicker">Camada 1</div>
+  <h2>Bus interno padronizado <span class="seal">em operação</span></h2>
+  <p style="max-width:170mm">
+    Sinalização, eventos de domínio e dados analíticos trafegam por um barramento único de eventos. Nenhum
+    componente lê o banco de outro; nenhum integra por chamada interna ad-hoc. Todo evento que cruza fronteira de
+    pacote tem contrato declarado e validado antes da escrita, e os consumidores críticos têm retry e fila de
+    mensagens mortas.
+  </p>
+  <table>
+    <tr><th style="width:32%">Família de tópico</th><th>Conteúdo</th></tr>
+    <tr><td class="k">Conversa</td><td>Entrada normalizada, roteada, enfileirada, abandonada, mensagem enviada, participantes, sessão aberta e fechada</td></tr>
+    <tr><td class="k">Ciclo de vida do agente</td><td>Login, pronto, ocupado, pausa com motivo, conclusão com desfecho e status de tratativa</td></tr>
+    <tr><td class="k">Fluxo e processo</td><td>Eventos de workflow, coleta assíncrona, união de jornadas, sinais de cliente</td></tr>
+    <tr><td class="k">Governança</td><td>Auditoria de cada chamada de ferramenta, alteração de registro, alteração de configuração</td></tr>
+    <tr><td class="k">Qualidade e consumo</td><td>Avaliação solicitada, concluída e finalizada; calibração; medição de uso por dimensão</td></tr>
+    <tr><td class="k">Operação</td><td>Sinal de vida de gateway, posição de fila, ocupação de pool, eventos de negócio publicados pelo agente</td></tr>
+  </table>
+  <p style="margin-top:2.5mm">
+    <strong>Além do bus</strong>, cada sessão tem um <em>stream canônico</em> — a única fonte de verdade dos
+    eventos daquela sessão, com escritor único e validação de esquema na escrita. Mensagem carrega conteúdo
+    mascarado e conteúdo original em campos distintos; só papéis autorizados alcançam o segundo, e todo acesso
+    deixa registro imutável.
+  </p>
+
+  <div class="kicker" style="margin-top:6mm">Camada 2</div>
+  <h2>Fluxos de agente organizados em três níveis</h2>
+  <p style="max-width:170mm">
+    Um interpretador de grafo de estados, com quinze tipos de passo, executa tanto o atendimento conversacional
+    quanto a automação de processo. O que separa os níveis não é a tecnologia — é <strong>o que cada nível tem o
+    direito de saber</strong>.
+  </p>
+
+  <div class="grid3" style="margin-top:3mm">
+    <div class="card cherry">
+      <h4>a · Negocial</h4>
+      <p>O processo em si: portabilidade, cobrança, onboarding, crédito. Agnóstico de canal e de identidade.
+      Espera em horário útil, aprovação humana, ramificação, chamada de sistema, raciocínio com esquema de saída.
+      Não sabe por onde o cliente chegou.</p>
+    </div>
+    <div class="card dark">
+      <h4>b · Acesso</h4>
+      <p>Quem é o cliente e o que ele pode retomar. Resolução por âncoras, comprovação de posse de canal,
+      pendências em aberto, política de retomada (oferecer ou retomar automaticamente). É o nível que o CCaaS
+      tradicional não tem como primeira classe — vira código repetido dentro de cada fluxo.</p>
+    </div>
+    <div class="card teal">
+      <h4>c · Entrada e saída</h4>
+      <p>Como se pergunta e como se mostra. Formulário de diálogo versionado, renderizado em quatro superfícies —
+      chat, embutido no encerramento, página web pública e Console — a partir do <em>mesmo</em> conteúdo. Reprompt
+      por formato, i18n embutido, campo mascarado.</p>
+    </div>
+  </div>
+  <div class="chips">
+    <span class="chip mono">task</span><span class="chip mono">choice</span><span class="chip mono">catch</span>
+    <span class="chip mono">escalate</span><span class="chip mono">complete</span><span class="chip mono">invoke</span>
+    <span class="chip mono">reason</span><span class="chip mono">notify</span><span class="chip mono">menu</span>
+    <span class="chip mono">suspend</span><span class="chip mono">collect</span><span class="chip mono">resolve</span>
+    <span class="chip mono">receive</span><span class="chip mono">loop</span><span class="chip mono">begin/end_transaction</span>
+  </div>
+  <p style="margin-top:2.5mm">
+    Dois perfis de execução com conjuntos de passos <strong>mutuamente exclusivos</strong>, validados na análise do
+    fluxo e no motor: o perfil de <em>workflow</em> pode suspender e coletar, mas não pode falar diretamente com o
+    cliente; o perfil de <em>agente</em> pode falar, mas não pode suspender. Um fluxo não consegue, por construção,
+    virar as duas coisas — que é como nascem os processos impossíveis de auditar.
+  </p>
+  <div class="foot"><span>Arquitetura · bus e fluxos</span><span>6</span></div>
+</section>
+
+<!-- ================= 7 · CAMADAS 3 e 4 ================= -->
+<section class="page">
+  <div class="kicker">Camada 3</div>
+  <h2>Abstração de canais — receptivo e ativo <span class="seal">em operação</span></h2>
+  <p style="max-width:170mm">
+    Adaptadores concentram todo o conhecimento específico de canal: normalização de entrada, renderização de saída
+    e degradação de interação. Nenhuma lógica de canal existe no motor de fluxo. Um menu com botões vira lista
+    numerada onde botão não existe — decisão do adaptador, não do fluxo.
+  </p>
+  <div class="chips" style="margin-bottom:3mm">
+    <span class="chip">webchat</span><span class="chip">WhatsApp</span><span class="chip">SMS</span>
+    <span class="chip">e-mail</span><span class="chip">voz (PSTN)</span><span class="chip">WebRTC / SFU</span>
+    <span class="chip">Instagram</span><span class="chip">Telegram</span><span class="chip">webhook</span>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h4>Canal × meio</h4>
+      <p><em>Canal</em> é filtro duro de roteamento — casamento obrigatório. <em>Meio</em> (voz, vídeo, mensagem,
+      e-mail) é fator de score, ajuste fino. Em WebRTC o meio é negociado em tempo real, de vídeo para voz e para
+      texto, sem trocar de sessão.</p>
+    </div>
+    <div class="card">
+      <h4>Ativo pelo mesmo motor</h4>
+      <p>Contato ativo é audiência + campanha + entrega, endereçando um <strong>pool</strong> — nunca um fluxo
+      específico. Disparo por agenda recorrente, distribuição em paralelo por instância, importação de base com
+      rejeição por linha. Não há stack de outbound paralela.</p>
+    </div>
+    <div class="card teal">
+      <h4>Governança de contato — inclusive para pesquisa</h4>
+      <p>Antes de qualquer abordagem, um motor agnóstico de canal e de campanha decide em ordem de precedência:
+      opt-out global (salvo campanha transacional) → janela de calendário → fadiga (tetos por frequência,
+      quarentena, teto por canal) → supressão de mailing. A decisão sempre <strong>nomeia a regra</strong> que a
+      produziu, e o registro do contato é gravado na mesma transação. Por ser genérico, <strong>a pesquisa de
+      satisfação passa pelo mesmo portão</strong> das campanhas comerciais: convite para avaliar conta como
+      abordagem, e o cliente saturado não recebe mais um.</p>
+    </div>
+    <div class="card dark">
+      <h4>Limite declarado</h4>
+      <p>O ativo é forte em orquestração assíncrona — link, mensagem, engajamento adiável. <strong>Não há discador
+      preditivo</strong>: modos power, progressivo e preview, guarda de taxa de abandono e listas restritivas
+      regulatórias são roadmap. Para voz ativa em massa, os incumbentes entregam hoje e nós não.</p>
+    </div>
+  </div>
+
+  <div class="foot"><span>Arquitetura · canais</span><span>7</span></div>
+</section>
+
+<!-- ================= 8 · CAMADA 4 — IDENTIFICAÇÃO ================= -->
+<section class="page">
+  <div class="kicker">Camada 4</div>
+  <h2>Identificação do usuário — três classes de evidência</h2>
+  <p style="max-width:170mm">
+    A identidade é resolvida por <strong>âncoras</strong> — telefone, e-mail, documento, identificador de canal — e
+    construída de forma progressiva: âncoras que não casaram são anexadas ao cliente vencedor, de modo que um
+    e-mail sozinho passa a resolver em contatos futuros. O que distingue esta camada não é a resolução, e sim a
+    <strong>escala de evidência</strong>: cada âncora carrega <em>como</em> foi obtida, e a autorização lê essa
+    classe, nunca só o valor.
+  </p>
+  <table>
+    <tr><th style="width:22%">Classe de evidência</th><th style="width:16%">Mecanismo</th><th>O que autoriza</th></tr>
+    <tr>
+      <td class="k">Alegada — o que o cliente diz</td><td>declaração no atendimento</td>
+      <td>Identificar e personalizar. <strong>Nunca</strong> autoriza retomar processo em outro canal nem revelar
+      contexto pendente — a consulta responde “verificação necessária” sem sequer confirmar que há algo pendente.</td>
+    </tr>
+    <tr>
+      <td class="k">Comprovada — o canal que ele possui</td><td>OTP <span class="seal" style="margin-left:0">em operação</span></td>
+      <td>Desafio e verificação de código com limite de tentativas, código armazenado só como hash e entrega pelo
+      próprio canal. É a <em>única</em> via para esta classe: nenhum agente, humano ou de IA, escreve a marcação
+      diretamente. Libera retomada cross-canal e exibição de contexto — ainda mascarado.</td>
+    </tr>
+    <tr>
+      <td class="k">Inerente — o que ele é</td><td>biometria <span class="seal road" style="margin-left:0">roadmap</span></td>
+      <td>Biometria de voz ou comportamental entra como <strong>terceira classe</strong>, com confiança e validade
+      próprias. A plataforma <em>consome o veredito</em> de um provedor especializado e o registra com proveniência
+      — ela não é o motor biométrico. Uso previsto: dispensar o OTP em canal já reconhecido e elevar a confiança
+      antes de operação de risco.</td>
+    </tr>
+    <tr><td class="k">Pendências por cliente</td><td>—</td><td>O que aquele cliente tem em aberto, consultável de qualquer canal — retomar no WhatsApp o que começou na voz. Gated pela classe de evidência.</td></tr>
+    <tr><td class="k">Política de retomada</td><td>—</td><td>Declarada no passo do fluxo: oferecer ao cliente ou retomar automaticamente. A prévia do contexto é exibida mascarada.</td></tr>
+  </table>
+
+  <div class="grid2" style="margin-top:3.5mm">
+    <div class="card dark">
+      <h4>A postura, e por que a biometria não a muda</h4>
+      <p>A plataforma é autoridade sobre <strong>posse de canal</strong>, não sobre identidade de registro — esta
+      continua no CRM do cliente, com referência externa e fusão de cadastros previstas. A biometria não desloca
+      essa fronteira justamente porque entra como <em>evidência de terceiro registrada com proveniência</em>, e não
+      como veredito próprio da plataforma.</p>
+    </div>
+    <div class="card">
+      <h4>Consequência para LGPD</h4>
+      <p>Dado biométrico é dado pessoal <strong>sensível</strong>: exige base legal e consentimento específicos,
+      retenção própria e trilha de acesso. Por isso o desenho guarda o veredito e a proveniência, e não o
+      template biométrico — que permanece no provedor. Esta é a razão de a biometria ser roadmap e não um item de
+      backlog qualquer: o custo dela é de conformidade, não de código.</p>
+    </div>
+  </div>
+  <div class="foot"><span>Arquitetura · identidade</span><span>8</span></div>
+</section>
+
+<!-- ================= 8 · CAMADAS 5 e 6 ================= -->
+<section class="page">
+  <div class="kicker">Camada 5</div>
+  <h2>Roteador — árbitro único de alocação <span class="seal">em operação</span></h2>
+  <p style="max-width:170mm">
+    Nenhum componente encaminha conversa sem passar por ele. A alocação combina competência declarada, canal,
+    disponibilidade real, SLA da fila e performance histórica — e trata pessoa e instância de IA pela mesma
+    interface.
+  </p>
+  <div class="grid2" style="margin-top:2mm">
+    <div class="card">
+      <h4>Regras de alocação</h4>
+      <ul>
+        <li>Canal é filtro duro; agente que não suporta é proibido.</li>
+        <li>Pausa é filtro duro; agente pausado sai do conjunto.</li>
+        <li>Gateway sem sinal de vida recente é excluído.</li>
+        <li>Empate de score decide pela fila mais curta.</li>
+        <li>Performance entra com peso configurável e exige volume mínimo para significância.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Fila com estatística própria</h4>
+      <ul>
+        <li>A ordem da fila é <strong>chegada</strong>, nunca prioridade armazenada.</li>
+        <li>Prioridade e envelhecimento são recalculados <strong>na leitura</strong> — quem espera mais sobe.</li>
+        <li>Violação de SLA é avaliada na cabeça da fila; excedido o tempo máximo, o contato encerra com motivo próprio.</li>
+        <li>Posição de fila é publicada como evento — o canal informa o cliente sem consultar o roteador.</li>
+      </ul>
+    </div>
+    <div class="card dark">
+      <h4>Dois modos de despacho</h4>
+      <p><em>Push</em>: o roteador entrega ao agente. <em>Pull</em>: o item fica numa caixa de trabalho e o agente
+      reivindica, com reivindicação atômica, prazo e devolução à fila. O pull direcionado reserva o item a um
+      agente específico e transborda para o pool por idade — é o “ramal” sem quebrar a regra de que a unidade
+      endereçável é o pool.</p>
+    </div>
+    <div class="card teal">
+      <h4>Capacidade é do recurso</h4>
+      <p>A ocupação é <strong>derivada</strong> de um semáforo por recurso, não de contador incrementado. Uma
+      pessoa com três vagas presente em três pools rende três, não nove. Licenças humana e de IA são moedas
+      distintas e nunca são somadas — inclusive no portão de admissão de novas sessões.</p>
+    </div>
+  </div>
+
+  <div class="kicker" style="margin-top:6mm">Camada 6</div>
+  <h2>Agentes — runtime único, ferramentas mediadas</h2>
+  <p style="max-width:170mm">
+    O contrato de ciclo de vida é o mesmo para humano e IA: autenticar → pronto → ocupado → concluir, com desfecho
+    e status de tratativa <strong>obrigatórios</strong> na conclusão. Nenhum agente acessa sistema de negócio
+    diretamente: toda chamada passa por servidores de ferramenta autorizados.
+  </p>
+  <table>
+    <tr><th style="width:30%">Tipo de agente</th><th>Mecanismo de interceptação</th><th style="width:22%">Salto de rede</th></tr>
+    <tr><td class="k">Nativo (SDK da plataforma)</td><td>Interceptador dentro do próprio processo</td><td>nenhum</td></tr>
+    <tr><td class="k">Externo (framework de terceiro)</td><td>Sidecar de proxy local</td><td>apenas loopback</td></tr>
+  </table>
+  <p style="margin-top:2.5mm">
+    Em cada chamada, abaixo de um milissegundo: <strong>validação de permissão</strong> — a lista de ferramentas
+    enviada ao modelo já vem filtrada pelo perfil —, <strong>guarda de injeção</strong> por heurística e
+    <strong>registro de auditoria</strong>. A política de auditoria é declarada <em>na ferramenta</em>, não na
+    chamada: o chamador não pode optar por sair. É o que sustenta a alegação de governança para agentes que não
+    escrevemos.
+  </p>
+  <div class="card cherry" style="margin-top:3mm">
+    <h4>Inferência agnóstica de modelo</h4>
+    <p>O gateway de IA é estritamente sem estado — um turno por chamada. Múltiplas contas por provedor com seleção
+    por menor ocupação, marcação de contas limitadas e queda para provedor alternativo. Perfis de modelo (rápido,
+    equilibrado, potente, avaliação) são configuração por tenant, e a carga de avaliação roda isolada da de
+    atendimento. Sem lock-in de fornecedor de modelo.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · roteamento e agentes</span><span>9</span></div>
+</section>
+
+<!-- ================= 9 · FRONTEIRA ABERTA ================= -->
+<section class="page">
+  <div class="kicker">Fronteira</div>
+  <h2>Agentes externos, portabilidade e convivência com o que já existe</h2>
+  <p style="max-width:170mm">
+    Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A
+    fronteira é aberta nas duas direções: <strong>incorporar</strong> agentes construídos fora e
+    <strong>derivar</strong> atendimento, dado e lógica para fora — inclusive para a plataforma que o cliente já
+    tem.
+  </p>
+
+  <div class="grid2" style="margin-top:3mm">
+    <div class="card dark">
+      <h4>Incorporar agentes de terceiros</h4>
+      <p>Um agente escrito em outro framework participa como <strong>participante de primeira classe</strong> da
+      mesma sessão: entra pelo mesmo roteador, ocupa vaga do mesmo pool, produz segmento e é avaliado pelo mesmo
+      formulário. O que ele não escolhe é a governança — as ferramentas chegam por sidecar de proxy local, e cada
+      chamada passa pela mesma validação de permissão, guarda de injeção e auditoria não-optável de um agente
+      nativo. <em>Adotar um agente externo não abre buraco de conformidade.</em></p>
+    </div>
+    <div class="card">
+      <h4>Derivar para sistemas externos</h4>
+      <p>Na direção oposta, o webhook é canal de primeira classe: um processo da plataforma aciona sistemas do
+      cliente e <em>é acionado</em> por eles com o mesmo modelo de sessão, suspendendo e retomando por token. A
+      integração com o negócio é sempre mediada por servidores de ferramenta — o que significa que a mesma
+      capacidade fica disponível para o agente de IA, para o fluxo e para o Console, com uma única trilha de
+      auditoria.</p>
+    </div>
+    <div class="card teal">
+      <h4>Conviver com a plataforma instalada</h4>
+      <p>O histórico de atendimento de outro contact center entra no pipeline de qualidade por um leitor plugável:
+      um fluxo de eventos canônicos, com mascaramento aplicado na entrada, que reidrata sessão, segmento e
+      transcrição como se tivessem nascido aqui. Serve para avaliar a operação atual antes de migrar qualquer
+      tráfego. O caminho inverso também existe: o histórico interno pode ser reexportado e reavaliado com um
+      formulário novo, sem contaminar a medição de produção — todo dado carrega a procedência.</p>
+    </div>
+    <div class="card">
+      <h4>Não aprisionar</h4>
+      <p>A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e
+      verificável por linha de comando quanto a contrato de execução e a isolamento de dependências. Os modelos são
+      trocáveis por configuração, as operadoras e provedores de canal são adaptadores, e o dado é exportável.
+      <strong>O custo de sair é uma decisão de projeto, não uma consequência.</strong></p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">Por que isto importa mais em 2026 do que importava em 2023</div>
+    <p>O protocolo aberto de ferramentas deixou de ser diferencial — virou infraestrutura, com milhares de
+    servidores disponíveis. O que <strong>não</strong> virou commodity é a governança por chamada: permissão,
+    guarda de injeção e auditoria obrigatória, válidas igualmente para o agente que você escreveu, o que comprou e
+    o que baixou. É exatamente aí que os projetos de IA agêntica travam na passagem para produção — identidade,
+    auditabilidade e lock-in —, e é o ponto em que a regulação europeia passa a cobrar evidência.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · fronteira aberta</span><span>10</span></div>
+</section>
+
+<!-- ================= 10 · CAMADA 7 ================= -->
+<section class="page">
+  <div class="kicker">Camada 7</div>
+  <h2>Contatos organizados em jornada, sessão e segmento</h2>
+  <p style="max-width:170mm">
+    Três grãos, com identidade e métrica próprias. É o que permite responder “quanto custou resolver a
+    portabilidade do início ao fim” e “quanto tempo <em>este</em> participante levou” com o mesmo dado.
+  </p>
+
+  <svg viewBox="0 0 760 214" xmlns="http://www.w3.org/2000/svg" style="margin:4mm 0">
+    <rect x="4" y="10" width="752" height="66" rx="8" fill="#0E4E4E"/>
+    <text x="20" y="34" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">JORNADA · o processo do cliente</text>
+    <text x="20" y="52" font-family="Calibri,Arial" font-size="10.5" fill="#CDE3E3">componente conexa de sessões — identidade pela raiz canônica, união por alias, resolvida na leitura</text>
+    <text x="20" y="68" font-family="Calibri,Arial" font-size="10.5" fill="#CDE3E3">SLA por etapa · contexto compartilhado com validade de 30 dias · sinal de cliente no grão do processo</text>
+
+    <rect x="14" y="86" width="232" height="52" rx="6" fill="#2E3138"/>
+    <text x="28" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · contato</text>
+    <text x="28" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">WhatsApp · dia 1</text>
+    <rect x="262" y="86" width="232" height="52" rx="6" fill="#2E3138"/>
+    <text x="276" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · contato</text>
+    <text x="276" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">voz · dia 4</text>
+    <rect x="510" y="86" width="236" height="52" rx="6" fill="#2E3138"/>
+    <text x="524" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · ativo</text>
+    <text x="524" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">retorno da campanha · dia 12</text>
+
+    <rect x="14" y="150" width="112" height="46" rx="5" fill="#990011"/>
+    <text x="70" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
+    <text x="70" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">IA primária</text>
+    <rect x="134" y="150" width="112" height="46" rx="5" fill="#990011"/>
+    <text x="190" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
+    <text x="190" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">humano</text>
+    <rect x="262" y="150" width="112" height="46" rx="5" fill="#990011"/>
+    <text x="318" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
+    <text x="318" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">humano</text>
+    <rect x="382" y="150" width="112" height="46" rx="5" fill="#046A6A"/>
+    <text x="438" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
+    <text x="438" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">especialista IA</text>
+    <rect x="510" y="150" width="236" height="46" rx="5" fill="#3E434D"/>
+    <text x="628" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
+    <text x="628" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">pós-atendimento destacado — fora do TMA</text>
+  </svg>
+
+  <div class="grid2">
+    <div class="card">
+      <h4>Segmento — a janela de cada participante</h4>
+      <p>Carimba pool, papel, tipo de agente, segmento pai (a topologia da conferência), índice de sequência,
+      duração, desfecho, motivo de encerramento, canal e <strong>versão de deploy</strong>. É o grão da avaliação
+      de qualidade e da produtividade individual.</p>
+    </div>
+    <div class="card">
+      <h4>Sessão — a perspectiva do cliente</h4>
+      <p>Status ativa, suspensa, encerrada ou abandonada, com domínio fechado de motivos de encerramento: sem
+      recurso, tempo máximo excedido, desconexão, abandono, transferência, fluxo concluído, erro. Suspensa é
+      primeira classe — o processo que espera dias é a mesma sessão.</p>
+    </div>
+  </div>
+
+  <div class="card cherry" style="margin-top:3.5mm">
+    <h4>Três camadas de ciclo de vida que a indústria colapsa em uma</h4>
+    <p><strong>Contato</strong> — a perspectiva do cliente, cujas estatísticas congelam quando ele sai ·
+    <strong>segmento</strong> — a janela de cada participante, cujo recurso do pool é liberado na conclusão ·
+    <strong>conferência</strong> — a sala, que só termina quando o último participante sai. Separá-las é o que faz
+    o pós-atendimento virar item de fila do próprio agente, com o desfecho gravado por referência no segmento de
+    origem, e o <strong>TMA voltar a ser verdade</strong>. Validado com atendimento real.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · grãos de contato</span><span>11</span></div>
+</section>
+
+<!-- ================= 11 · MÓDULOS — FIGURA ================= -->
+<section class="page">
+  <div class="kicker">Módulos</div>
+  <h2>Como os módulos se relacionam — e o mesmo contato entre eles</h2>
+  <p style="max-width:170mm">
+    O monorepo tem cerca de trinta serviços com dependências explícitas e sem ciclos. A figura mantém a numeração
+    da trilha da página 5: o mesmo contato, agora atravessando serviços em vez de camadas.
+  </p>
+
+  <svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" style="margin-top:3mm">
+    <defs>
+      <marker id="b1" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#990011"/>
+      </marker>
+      <marker id="b2" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#9AA0AA"/>
+      </marker>
+    </defs>
+
+    <!-- linha principal -->
+    <rect x="6" y="26" width="96" height="52" rx="6" fill="#2E3138"/>
+    <text x="54" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">canais</text>
+    <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">voz · chat · WA</text>
+    <text x="54" y="72" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">e-mail · webhook</text>
+
+    <line x1="104" y1="52" x2="124" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
+    <circle cx="114" cy="34" r="10" fill="#990011"/><text x="114" y="38" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">1</text>
+
+    <rect x="128" y="26" width="122" height="52" rx="6" fill="#3E434D"/>
+    <text x="189" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">gateway de canais</text>
+    <text x="189" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">adaptadores · normalização</text>
+
+    <line x1="252" y1="52" x2="272" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
+    <rect x="276" y="26" width="118" height="52" rx="6" fill="#2E3138"/>
+    <text x="335" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">núcleo de sessão</text>
+    <text x="335" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">stream canônico · masking</text>
+
+    <line x1="396" y1="52" x2="416" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
+    <circle cx="406" cy="34" r="10" fill="#990011"/><text x="406" y="38" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">3</text>
+
+    <rect x="420" y="26" width="104" height="52" rx="6" fill="#2C5560"/>
+    <text x="472" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">roteador</text>
+    <text x="472" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE0E4">fila · score · pull</text>
+
+    <line x1="526" y1="52" x2="546" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
+    <circle cx="536" cy="34" r="10" fill="#990011"/><text x="536" y="38" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">4</text>
+
+    <rect x="550" y="26" width="100" height="52" rx="6" fill="#990011"/>
+    <text x="600" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">Console</text>
+    <text x="600" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#FBE4E7">agente humano</text>
+    <rect x="656" y="26" width="98" height="52" rx="6" fill="#046A6A"/>
+    <text x="705" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">motor de fluxo</text>
+    <text x="705" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">agente de IA</text>
+
+    <!-- linha de apoio -->
+    <rect x="6" y="92" width="96" height="46" rx="6" fill="#7A7D84"/>
+    <text x="54" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">agenda</text>
+    <text x="54" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">campanha · mailing</text>
+    <line x1="54" y1="90" x2="54" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+
+    <rect x="128" y="92" width="122" height="46" rx="6" fill="#7A7D84"/>
+    <text x="189" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">identidade</text>
+    <text x="189" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">âncoras · posse · pendências</text>
+    <line x1="189" y1="90" x2="189" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+    <circle cx="214" cy="100" r="10" fill="#990011"/><text x="214" y="104" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">2</text>
+
+    <rect x="276" y="92" width="118" height="46" rx="6" fill="#7A7D84"/>
+    <text x="335" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">registro e config</text>
+    <text x="335" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">pools · skills · deploys</text>
+    <line x1="335" y1="90" x2="335" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+
+    <rect x="420" y="92" width="104" height="46" rx="6" fill="#7A7D84"/>
+    <text x="472" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">autenticação</text>
+    <text x="472" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">perfis · escopo</text>
+    <line x1="472" y1="90" x2="472" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+
+    <rect x="550" y="92" width="204" height="46" rx="6" fill="#0E4E4E"/>
+    <text x="652" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">ferramentas MCP · gateway de IA · base vetorial</text>
+    <text x="652" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CDE3E3">permissão · guarda de injeção · auditoria em toda chamada</text>
+    <line x1="652" y1="90" x2="652" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+    <circle cx="700" cy="100" r="10" fill="#990011"/><text x="700" y="104" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">5</text>
+
+    <!-- bus -->
+    <rect x="6" y="156" width="748" height="42" rx="6" fill="#990011"/>
+    <text x="24" y="182" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">BUS DE MENSAGENS E EVENTOS</text>
+    <text x="330" y="182" font-family="Calibri,Arial" font-size="10" fill="#F3D6DA">conversa · agente · fluxo · governança · qualidade · uso · operação</text>
+    <line x1="189" y1="150" x2="189" y2="154" stroke="#990011" stroke-width="1.4"/>
+    <line x1="335" y1="150" x2="335" y2="154" stroke="#990011" stroke-width="1.4"/>
+    <line x1="472" y1="150" x2="472" y2="154" stroke="#990011" stroke-width="1.4"/>
+    <line x1="652" y1="150" x2="652" y2="154" stroke="#990011" stroke-width="1.4"/>
+
+    <!-- persistência -->
+    <text x="6" y="222" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280" letter-spacing="1.2">PERSISTÊNCIA</text>
+    <rect x="6" y="230" width="142" height="54" rx="6" fill="#2E3138"/>
+    <text x="77" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">Redis</text>
+    <text x="77" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">stream · contexto · fila</text>
+    <text x="77" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">capacidade · retomada</text>
+
+    <rect x="156" y="230" width="142" height="54" rx="6" fill="#2E3138"/>
+    <text x="227" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">PostgreSQL</text>
+    <text x="227" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">registro · auth · workflow</text>
+    <text x="227" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">identidade · campanha</text>
+
+    <rect x="306" y="230" width="142" height="54" rx="6" fill="#3E434D"/>
+    <text x="377" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">PostgreSQL vetorial</text>
+    <text x="377" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">base de conhecimento</text>
+    <text x="377" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">notas de calibração</text>
+
+    <rect x="456" y="230" width="142" height="54" rx="6" fill="#046A6A"/>
+    <text x="527" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">ClickHouse</text>
+    <text x="527" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">série temporal · auditoria</text>
+    <text x="527" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">sessões · segmentos · sinais</text>
+
+    <rect x="606" y="230" width="148" height="54" rx="6" fill="#7A7D84"/>
+    <text x="680" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">object storage</text>
+    <text x="680" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">gravações · anexos</text>
+
+    <line x1="77" y1="200" x2="77" y2="228" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+    <line x1="227" y1="200" x2="227" y2="228" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+    <line x1="527" y1="200" x2="527" y2="228" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+
+    <!-- consumo -->
+    <text x="6" y="316" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280" letter-spacing="1.2">MÓDULOS DE LEITURA E GOVERNANÇA</text>
+    <line x1="527" y1="286" x2="527" y2="322" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
+
+    <rect x="6" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
+    <text x="65" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Analytics</text>
+    <text x="65" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">monitor e relatórios</text>
+
+    <rect x="132" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
+    <text x="191" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Qualidade</text>
+    <text x="191" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">avaliar · revisar · contestar</text>
+
+    <rect x="258" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
+    <text x="317" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Bancada</text>
+    <text x="317" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">comparar por versão</text>
+
+    <rect x="384" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
+    <text x="443" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Survey</text>
+    <text x="443" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">voz do cliente por grão</text>
+
+    <rect x="510" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
+    <text x="569" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Auditoria</text>
+    <text x="569" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">acesso e chamadas</text>
+
+    <rect x="636" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#9AA0AA" stroke-dasharray="5 3"/>
+    <text x="695" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280">WFM</text>
+    <text x="695" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#9AA0AA">previsão · simulação</text>
+
+    <!-- fechamento do ciclo -->
+    <rect x="6" y="392" width="748" height="46" rx="6" fill="#F2F2F2"/>
+    <text x="24" y="412" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#990011" letter-spacing="1.2">⑥ O CONTATO VIRA REGISTRO</text>
+    <text x="24" y="428" font-family="Calibri,Arial" font-size="10" fill="#3E434D">jornada → sessão → segmento, com versão de deploy carimbada — é o que fecha o laço de volta para Qualidade, Bancada e Survey</text>
+
+    <rect x="6" y="450" width="748" height="42" rx="6" fill="#2E3138"/>
+    <text x="24" y="468" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">Fronteira aberta</text>
+    <text x="24" y="484" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">agente externo entra pelo sidecar de proxy com a mesma governança · histórico de outra plataforma entra pelo leitor plugável e reidrata sessão e transcrição</text>
+  </svg>
+
+  <div class="foot"><span>Módulos · relacionamento</span><span>12</span></div>
+</section>
+
+<!-- ================= 12 · MÓDULOS POR CAMADA ================= -->
+<section class="page">
+  <div class="kicker">Módulos</div>
+  <h2>Onde cada serviço se encaixa nas camadas</h2>
+  <table>
+    <tr><th style="width:22%">Camada</th><th>Serviços e superfícies</th></tr>
+    <tr><td class="k">1 · Bus e sessão</td><td>Núcleo de sessão e ferramentas (runtime de agente) · escritor de conversa · motor de regras pós-roteamento · ponte de orquestração e reconciliação de instâncias</td></tr>
+    <tr><td class="k">2 · Fluxos</td><td>Interpretador de fluxo · registro de agentes, pools, skills e slots de deploy · ciclo de vida de workflow · motor de calendário · formulários de diálogo · agenda</td></tr>
+    <tr><td class="k">3 · Canais</td><td>Gateway de canais com adaptadores · audiência, campanha e entrega · política de fadiga de contato</td></tr>
+    <tr><td class="k">4 · Identificação</td><td>Módulo de identidade no gateway de canais: resolução, âncoras, posse de canal, pendências</td></tr>
+    <tr><td class="k">5 · Roteamento</td><td>Motor de roteamento: filas, score, despacho push e pull, capacidade, motivos de encerramento</td></tr>
+    <tr><td class="k">6 · Agentes</td><td>Gateway de IA · base de conhecimento vetorial · SDK com interceptador e sidecar de proxy · autenticação, perfis e controle de acesso</td></tr>
+    <tr><td class="k">7 · Contato e dados</td><td>Analytics · consumidor de ingestão · replayer de sessão · avaliação de qualidade · leitor e exportador de histórico · medição de uso · faturamento por capacidade · configuração por namespace · interface de operação</td></tr>
+  </table>
+
+  <div class="grid3" style="margin-top:5mm">
+    <div class="card"><h4>Multi-tenant</h4>
+      <p>Isolamento por tenant em chaves de estado, esquemas de banco, escopo de pools no token e segredos. A
+      fundação é pervasiva; o <strong>isolamento operacional completo está em maturação</strong> e é o item nº 1 a
+      validar em prova de conceito.</p></div>
+    <div class="card"><h4>Controle de acesso</h4>
+      <p>Perfis (operação, supervisão, administração, desenvolvimento, negócio) somados a controle por atributo:
+      oito módulos, cada campo com nível de acesso e escopo. Grupos de agentes são organograma, ortogonais aos
+      pools de roteamento.</p></div>
+    <div class="card"><h4>Configuração</h4>
+      <p>Todo parâmetro operacional é editável na interface, por namespace e por tenant, com recarga a quente.
+      Campo que só existe em arquivo é dívida declarada — e há verificação automatizada disso.</p></div>
+  </div>
+  <div class="foot"><span>Módulos · mapa</span><span>13</span></div>
+</section>
+
+<!-- ================= 13 · MÓDULOS DE OPERAÇÃO ================= -->
+<section class="page">
+  <div class="kicker">Módulos de operação</div>
+  <h2>Console, Analytics, Bancada, Qualidade, Survey e WFM</h2>
+
+  <div class="grid2">
+    <div class="card dark">
+      <h4>Console <span class="seal pale">em operação</span></h4>
+      <p>Superfície de orquestração, não tela de atendimento. Cartões de participantes de IA em tempo real com
+      passo e estado do fluxo; convocar especialista; delegar tarefa a partir de mensagens selecionadas, com
+      instrução e visibilidade; aba de orquestração com intervenção de supervisor; caixa de trabalho pull com
+      prévia; e um renderizador genérico de formulário — o mesmo componente serve aprovação humana,
+      pós-atendimento e coleta, sem código por caso.</p>
+    </div>
+    <div class="card">
+      <h4>Analytics <span class="seal">em operação</span></h4>
+      <p>Monitoria em tempo real (sessões, pools, agentes, eventos, agendas) e análise retrospectiva com
+      detalhamento em três níveis — processo → contato → segmento — até o turno. Relatórios de fila e SLA,
+      disponibilidade e pausas por motivo, capacidade e picos de ocupação registrados <strong>na
+      transição</strong>, não por amostragem. Séries de eventos de negócio publicados pelos próprios agentes.</p>
+    </div>
+    <div class="card teal">
+      <h4>Bancada de agentes <span class="seal pale">em operação</span></h4>
+      <p>Visualização e comparação de agentes lado a lado, com duas lentes: <em>diária</em>, com marcadores de
+      deploy sobre a curva, e <em>por versão</em>, em que o eixo é a versão publicada. Exige amostra mínima para
+      exibir ponto e sinaliza quando não há. Responde “a qualidade caiu depois que mexemos neste agente?” —
+      pergunta que só é respondível porque a versão de deploy foi carimbada no segmento no momento do
+      atendimento, e não reconstruída depois.</p>
+    </div>
+    <div class="card">
+      <h4>Qualidade <span class="seal">em operação</span></h4>
+      <p>Formulários com critérios ponderados, parte deles <strong>calculados de forma determinística</strong> a
+      partir de métricas da sessão e somados à nota. Campanhas com amostragem, agentes avaliadores de IA que
+      pontuam com evidência, revisão humana, contestação por dimensão com histórico imutável e limite de rodadas,
+      e calibração do avaliador realimentada por base de conhecimento. Uma única fonte de verdade para relatório
+      de qualidade: a avaliação finalizada.</p>
+    </div>
+    <div class="card">
+      <h4>Survey <span class="seal">em operação</span></h4>
+      <p>Instrumentos de pesquisa (CSAT, NPS, CES, PMF, FCR) sobre o mesmo conteúdo de formulário, endereçáveis ao
+      <strong>grão</strong> desejado — segmento (aquele atendente), sessão (aquele contato) ou jornada (o processo
+      inteiro). Três veículos: no chat, embutido no encerramento e por página web pública com envio ativo. Por
+      rodar dentro da plataforma, a pesquisa <strong>respeita o mesmo controle de fadiga</strong> das campanhas e
+      conhece o desfecho do atendimento que está avaliando.</p>
+    </div>
+    <div class="card">
+      <h4>WFM <span class="seal road">roadmap</span></h4>
+      <p>Previsão de demanda e simulação de dimensionamento: dado tráfego e TMA por intervalo, projetar SLA por
+      cenário de recursos — e o inverso, os recursos necessários para o SLA-alvo. O substrato já existe e é
+      justamente o que costuma faltar: chegada e abandono por intervalo, TMA por segmento (livre de
+      pós-atendimento), pausas com motivo, picos de ocupação por transição, capacidade por tipo de licença e
+      histórico de fila com SLA. <strong>Falta o motor de previsão e o de simulação</strong> — e a diferença aqui é
+      que o dimensionamento passa a incluir agentes de IA na mesma conta de concorrência.</p>
+    </div>
+  </div>
+  <div class="foot"><span>Módulos · operação</span><span>14</span></div>
+</section>
+
+<!-- ================= 14 · MENSAGERIA E PERSISTÊNCIA ================= -->
+<section class="page">
+  <div class="kicker">Componentes</div>
+  <h2>Mensageria e persistência</h2>
+  <p style="max-width:170mm">
+    Cada tecnologia tem uma responsabilidade única e declarada. O modelo de estado é explícito e auditável pelo
+    time de arquitetura do cliente — não escondido atrás de serviço gerenciado proprietário.
+  </p>
+
+  <table>
+    <tr><th style="width:20%">Componente</th><th style="width:26%">Papel</th><th>O que guarda</th></tr>
+    <tr>
+      <td class="k">Kafka</td><td>Bus de mensagens e eventos</td>
+      <td>Conversa, ciclo de vida de agente, workflow e coleta, união de jornadas, sinais de cliente, auditoria de
+      ferramentas, alterações de registro e configuração, avaliação e calibração, medição de uso, ocupação e fila,
+      eventos de negócio. Consumidores críticos com retry e fila de mensagens mortas.</td>
+    </tr>
+    <tr>
+      <td class="k">Redis</td><td>Estado de tempo real</td>
+      <td>Stream canônico da sessão, contexto de sessão, de segmento e de jornada, estado do fluxo persistido a
+      cada transição, filas ordenadas por chegada, semáforo de capacidade, reservas e prazos da caixa de trabalho,
+      sinais de vida, tokens de retomada, trilha de sentimento durante a sessão.</td>
+    </tr>
+    <tr>
+      <td class="k">PostgreSQL</td><td>Registro durável e relacional</td>
+      <td>Registro de agentes, pools, skills e deploys; autenticação, perfis e grupos; workflow; formulários de
+      diálogo; identidade e âncoras; agenda; audiência e campanhas; avaliação, contestação e calibração; histórico
+      persistido do stream de sessão.</td>
+    </tr>
+    <tr>
+      <td class="k">PostgreSQL vetorial</td><td>Busca semântica</td>
+      <td>Base de conhecimento para RAG, com extensão de vetores, consumida por servidor de ferramentas próprio —
+      busca, inserção e remoção. Guarda também as notas de calibração devolvidas ao avaliador.</td>
+    </tr>
+    <tr>
+      <td class="k">ClickHouse</td><td>Analítico e série temporal</td>
+      <td>Sessões, segmentos, mensagens e linha do tempo; desempenho diário por agente; picos de ocupação por pool
+      e por tenant; pausas; auditoria de chamadas de ferramenta e registro imutável de acesso a dado sensível;
+      resultados de avaliação; sinais de cliente; eventos de negócio.</td>
+    </tr>
+    <tr>
+      <td class="k">Object storage</td><td>Mídia</td>
+      <td>Gravações de voz e WebRTC, anexos de webchat com expiração em duas fases.</td>
+    </tr>
+  </table>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card">
+      <h4>Nota sobre série temporal</h4>
+      <p>A série temporal operacional vive no ClickHouse, não no PostgreSQL: o volume é de evento, a consulta é
+      colunar por intervalo e o dado é imutável por natureza. O PostgreSQL guarda o que precisa de transação e
+      integridade referencial. Manter os dois papéis separados evita o padrão clássico de relatório pesado
+      competindo com escrita transacional — e é o que torna viável o WFM sobre histórico real.</p>
+    </div>
+    <div class="card">
+      <h4>Procedência do dado de qualidade</h4>
+      <p>Todo substrato carrega a origem — produção, importado de terceiro ou reavaliação interna — com filtro
+      padrão para produção em relatório e em amostragem. É o que permite trazer histórico de outro contact center
+      para o mesmo pipeline de avaliação, ou reavaliar a própria base com um formulário novo,
+      <strong>sem contaminar</strong> a medição operacional.</p>
+    </div>
+  </div>
+
+  <div class="note" style="border-color:var(--cherry)">
+    <h3>Próximo passo</h3>
+    <p>Uma sessão técnica com o seu time de arquitetura e de operação, sem custo e sem compromisso. Saímos dela com
+    um escopo possível, a lista de pontos a validar em prova de conceito e números — ou com a conclusão honesta de
+    que não é o momento.</p>
+  </div>
+  <div class="foot"><span>PlugHub · componentes</span><span>15</span></div>
+</section>
+
+</body>
+</html>
