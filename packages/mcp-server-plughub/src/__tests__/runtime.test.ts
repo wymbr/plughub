@@ -66,13 +66,22 @@ describe("Tools Agent Runtime — integração com Redis", () => {
     redis  = new RedisMock()
     kafka  = createCapturingKafkaProducer()
 
+    // ── A FORMA aqui é a que o cliente REAL consegue devolver ────────────────
+    // Até 2026-08-05 esta fixture declarava `max_concurrent_sessions: 2`,
+    // `pools: ["retencao_humano","retencao_bot"]` e `permissions: [...]`. Nenhum
+    // dos três é alcançável em produção: `createRegistryClient` (registry-client.ts
+    // §67-74) devolve `1`, `[]` e `[]` FIXOS, sem ramo por `agent_type_id`, porque
+    // config por-agente migrou para o slot de deploy do pool.
+    // Um dublê que devolve o que a produção não consegue devolver não simplifica
+    // a produção — contradiz. Era ele que sustentava, verde, a asserção de que
+    // `agent_ready` inscreve a instância em dois pools.
     const registry = createStubRegistryClient([
       {
         agent_type_id:           AGENT_TYPE_ID,
-        max_concurrent_sessions: 2,
+        max_concurrent_sessions: 1,
         execution_model:         "stateless",
-        pools:                   ["retencao_humano", "retencao_bot"],
-        permissions:             ["mcp-server-crm:customer_get"],
+        pools:                   [],
+        permissions:             [],
       },
     ])
 
@@ -99,7 +108,7 @@ describe("Tools Agent Runtime — integração com Redis", () => {
 
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
       expect(await redis.hget(instanceKey, "state")).toBe("logged_in")
-      expect(await redis.hget(instanceKey, "max_concurrent_sessions")).toBe("2")
+      expect(await redis.hget(instanceKey, "max_concurrent_sessions")).toBe("1")
       expect(await redis.hget(instanceKey, "current_sessions")).toBe("0")
       expect(await redis.hget(instanceKey, "agent_type_id")).toBe(AGENT_TYPE_ID)
     })
@@ -144,7 +153,7 @@ describe("Tools Agent Runtime — integração com Redis", () => {
   // ── agent_ready ─────────────────────────────────────────────────────────
 
   describe("agent_ready", () => {
-    it("muda estado para 'ready' e adiciona instância aos pools", async () => {
+    it("muda estado para 'ready'", async () => {
       const token = await _loginToken()
       const res   = await server.callTool("agent_ready", { session_token: token })
 
@@ -153,19 +162,22 @@ describe("Tools Agent Runtime — integração com Redis", () => {
 
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
       expect(await redis.hget(instanceKey, "state")).toBe("ready")
-
-      // Instância nos dois pools
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(1)
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_bot"),    INSTANCE_ID)).toBe(1)
     })
 
-    it("publica evento agent_ready no Kafka com lista de pools", async () => {
+    // As duas asserções de `poolAvailable` que existiam aqui foram REMOVIDAS em
+    // 2026-08-05 junto com o SET. Não foram substituídas por uma asserção sobre
+    // `:instances` de propósito: `agent_ready` não inscreve instância em pool
+    // nenhum — quem faz isso é o `instance_bootstrap`, a partir do slot de
+    // deploy (medido: `infra/test/probe_pool_registration.sh`).
+    it("publica agent_ready no Kafka carregando a lista de pools da instância", async () => {
       const token = await _loginToken()
       await server.callTool("agent_ready", { session_token: token })
 
       const ev = kafka.events.find(e => e.message["event"] === "agent_ready")
       expect(ev).toBeDefined()
-      expect(ev!.message["pools"]).toEqual(["retencao_humano", "retencao_bot"])
+      // Vazia, e é o valor CERTO: é o que o cliente do registry devolve. O
+      // consumidor (routing-engine `_deactivate_instance`) trata lista vazia.
+      expect(ev!.message["pools"]).toEqual([])
     })
 
     it("rejeita token inválido", async () => {
@@ -211,22 +223,24 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       expect(await redis.sismember(convKey, SESSION_ID)).toBe(1)
     })
 
-    it("mantém instância no pool enquanto abaixo do limite (max=2, sessions=1)", async () => {
-      const token = await _loginAndReadyToken()
-      await server.callTool("agent_busy", { session_token: token, session_id: SESSION_ID, participant_id: PART_ID })
-
-      // Ainda com capacidade (1 < 2): deve continuar no pool
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(1)
-    })
-
-    it("remove da fila quando current_sessions == max_concurrent_sessions (max=2)", async () => {
+    // REMOVIDOS 2026-08-05 — dois testes ("mantém no pool abaixo do limite" e
+    // "remove da fila ao atingir max") cujas ÚNICAS asserções eram sobre
+    // `poolAvailable`. Com o SET, foi-se o ramo `if (currentSessions >= max)` que
+    // eles cobriam: `agent_busy` não controla capacidade. Quem controla é o
+    // semáforo do recurso no Routing Engine (`{t}:instance:{i}:sessions`), e é lá
+    // que essa cobertura tem de morar — `test_shared_capacity_snapshot.py` e
+    // `test_pool_snapshot_invariant.py` já a exercem.
+    it("contabiliza duas sessões simultâneas na mesma instância", async () => {
       const token = await _loginAndReadyToken()
       await server.callTool("agent_busy", { session_token: token, session_id: SESSION_ID,   participant_id: PART_ID   })
-      await server.callTool("agent_busy", { session_token: token, session_id: SESSION_ID_2, participant_id: PART_ID_2 })
+      const res = await server.callTool("agent_busy", { session_token: token, session_id: SESSION_ID_2, participant_id: PART_ID_2 })
 
-      // Atingiu max: deve sair do pool
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(0)
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_bot"),    INSTANCE_ID)).toBe(0)
+      // Sem recusa por capacidade neste tool, mesmo com max_concurrent_sessions=1:
+      // o contador sobe e o veto (se houver) é de outro componente.
+      expect(res.isError).toBeFalsy()
+      expect(_body(res).current_sessions).toBe(2)
+      const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
+      expect(await redis.hget(instanceKey, "current_sessions")).toBe("2")
     })
 
     it("rejeita participant_id com formato inválido (não UUID)", async () => {
@@ -380,7 +394,11 @@ describe("Tools Agent Runtime — integração com Redis", () => {
   // ── agent_pause ─────────────────────────────────────────────────────────
 
   describe("agent_pause", () => {
-    it("muda estado para 'paused' e remove dos pools", async () => {
+    // O título dizia "e remove dos pools". A saída de circulação numa pausa é
+    // feita pelo consumidor de `agent.lifecycle` no routing-engine
+    // (`_deactivate_instance`), não por este tool — o que ele removia era o SET
+    // `:available`, que ninguém lia. Sobra o que o tool de fato faz: o estado.
+    it("muda estado para 'paused'", async () => {
       const token = await _loginAndReadyToken()
       const res   = await server.callTool("agent_pause", { session_token: token })
 
@@ -389,8 +407,18 @@ describe("Tools Agent Runtime — integração com Redis", () => {
 
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
       expect(await redis.hget(instanceKey, "state")).toBe("paused")
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(0)
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_bot"),    INSTANCE_ID)).toBe(0)
+    })
+
+    it("publica agent_pause para que o routing-engine tire a instância dos sets", async () => {
+      const token = await _loginAndReadyToken()
+      await server.callTool("agent_pause", { session_token: token })
+
+      // Esta é a asserção que substitui as de `:available`: o efeito no
+      // roteamento é do EVENTO, e é ele que precisa existir.
+      const ev = kafka.events.find(e => e.message["event"] === "agent_pause")
+      expect(ev).toBeDefined()
+      expect(ev!.topic).toBe("agent.lifecycle")
+      expect(ev!.message["instance_id"]).toBe(INSTANCE_ID)
     })
 
     it("sessões ativas não são alteradas por agent_pause", async () => {
@@ -412,17 +440,10 @@ describe("Tools Agent Runtime — integração com Redis", () => {
 
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
       expect(await redis.hget(instanceKey, "state")).toBe("ready")
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(1)
     })
 
-    it("publica evento agent_pause no Kafka", async () => {
-      const token = await _loginAndReadyToken()
-      await server.callTool("agent_pause", { session_token: token })
-
-      const ev = kafka.events.find(e => e.message["event"] === "agent_pause")
-      expect(ev).toBeDefined()
-      expect(ev!.topic).toBe("agent.lifecycle")
-    })
+    // ("publica evento agent_pause no Kafka" foi absorvido pelo teste do topo
+    //  deste bloco, que assere o mesmo e mais o `instance_id`.)
   })
 
   // ── agent_logout ────────────────────────────────────────────────────────
@@ -451,9 +472,6 @@ describe("Tools Agent Runtime — integração com Redis", () => {
 
       expect(body.status).toBe("draining")
       expect(body.active_sessions).toBe(1)
-
-      // Fora dos pools
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(0)
 
       // Instância ainda existe no Redis (sessão ativa)
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
@@ -630,8 +648,6 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       const instanceKey = keys.agentInstance(TENANT, INSTANCE_ID)
       // Instância AINDA existe no Redis — drain aguarda agent_done
       expect(await redis.hget(instanceKey, "state")).toBe("draining")
-      // Mas foi removida dos pools de disponibilidade
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(0)
     })
 
     it("instância é removida do Redis apenas APÓS agent_done durante drain", async () => {
@@ -661,7 +677,7 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       // Ready
       const readyRes = await server.callTool("agent_ready", { session_token: token })
       expect(readyRes.isError).toBeFalsy()
-      expect(await redis.sismember(keys.poolAvailable(TENANT, "retencao_humano"), INSTANCE_ID)).toBe(1)
+      expect(await redis.hget(keys.agentInstance(TENANT, INSTANCE_ID), "state")).toBe("ready")
 
       // Busy
       const busyRes = await _busy(token)

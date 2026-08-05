@@ -2516,7 +2516,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const pools: string[] = Array.isArray(inst["pools"]) ? (inst["pools"] as string[]) : [poolId]
       for (const pid of pools) {
         await redis.srem(keys.poolInstances(tenantId, pid), instanceId)
-        await redis.srem(keys.poolAvailable(tenantId, pid), instanceId)
+        // O `srem` irmão em `:available` saiu em 2026-08-05 — SET sem leitor.
       }
 
       // Durable pause marker — survives a full logout (WS disconnect on Console

@@ -2,6 +2,83 @@
 
 ---
 
+## O SET que ninguém lia saiu, e quem inscreve em pool foi MEDIDO ✅ (2026-08-05)
+
+Fecha o item que a sessão anterior abriu com o único vermelho do cenário 01
+(`Pool retencao_humano contains instance after agent_ready`, `available: []`). O item
+nasceu com duas saídas de **sentidos opostos** e diff quase idêntico — (a) vestígio, remover;
+(b) consumidor real, consertar o `pools: []` fixo do cliente — e com a instrução explícita de
+**não escolher sem medir**, porque apagar o SET certo pelo motivo errado dá o mesmo diff com a
+dívida escondida.
+
+**A medição** (`infra/test/probe_pool_registration.sh`, novo, tenant_demo, janela de 150 s de
+`MONITOR` em torno de um restart do orchestrator-bridge). Seis previsões escritas no cabeçalho
+**antes** de rodar, seis certas:
+
+| | previsto | medido |
+|---|---|---|
+| chaves `:pool:*:instances` (testemunha de prefixo) | ≥ 1 | **37** |
+| chaves `:pool:*:available` | 0 | **0** |
+| probe `SADD` injetado aparece no log (testemunha do instrumento) | sim | **8 linhas** |
+| `SADD` em `:instances` na janela | ≥ 1 | **2471** |
+| `SADD` em `:available` | 0 | **0** |
+| **qualquer** comando sobre `:available` | 0 | **0** |
+
+E o achado que o item pedia por nome — *"quem inscreve uma instância de IA num pool hoje"* — veio
+com endereço: os **2471 `SADD` têm um único cliente**, `172.20.0.35` = **orchestrator-bridge**
+(`instance_bootstrap`, a partir do slot de deploy do pool). Routing-engine (`…0.25`) e mcp-server
+(`…0.26`) ficaram **mudos** na mesma janela. É a diferença entre "o bootstrap provavelmente faz
+isso" e o fato: um IP, um processo, 2471 escritas.
+
+**Três contadores de ausência ao lado de três de presença, de propósito.** Sozinhos, os zeros de
+`:available` não distinguem "ninguém escreve" de "o prefixo está errado" ou "o `grep` não casa" —
+por isso o probe só chega ao veredicto depois de provar que enxerga 37 chaves vivas e o `SADD` que
+ele mesmo emite. Sem a testemunha do instrumento, o resultado mediria o instrumento.
+
+**Removido (saída (a)):** o `sadd` do `agent_ready`, os quatro `srem` (`agent_busy`, `agent_pause`,
+`agent_logout`, endpoint de pause do `server.ts`), o helper `keys.poolAvailable`, o
+`getPoolAvailableAgents` do e2e, a asserção do cenário 01, e a entrada de
+`docs/modelos-de-dados.md` — que afirmava *"consultado pelo Routing Engine para encontrar
+candidatos"*, num serviço sem **uma ocorrência** de `:available` em `.py`. *Uma chave documentada
+com um leitor inexistente é pior que uma chave não documentada: ela sobrevive a toda limpeza,
+porque cada revisão lê ali que alguém depende dela.*
+
+**Duas remoções que não estavam na lista, e são a parte que só aparece ao executar:**
+
+1. **O ramo `if (currentSessions >= max)` do `agent_busy` foi junto** — seu corpo era *apenas* o
+   `srem` no SET morto. Ficou sem chamador o `max_concurrent_sessions` lido três linhas acima, e
+   com ele caiu a descrição do tool, que prometia *"Remove da fila se atingir
+   max_concurrent_sessions"*. Não foi substituído por nada: quem controla capacidade é o semáforo
+   do RECURSO no Routing Engine (`{t}:instance:{i}:sessions`), que este ramo nunca alcançou. Um
+   `if` vazio ali sugeriria um segundo controle de capacidade que não existe.
+2. **O dublê passou a declarar o que a produção consegue devolver.** A fixture do
+   `runtime.test.ts` afirmava `max_concurrent_sessions: 2`, `pools: [dois pools]` e `permissions`
+   não-vazias; o cliente real devolve `1`, `[]` e `[]` **fixos, sem ramo por `agent_type_id`**.
+   Era esse objeto que sustentava, verde, o `sismember == 1` — o teste unitário não simplificava a
+   produção, **contradizia**. Dois testes morreram com o SET (as únicas asserções deles eram sobre
+   `:available`); no lugar entrou o que o tool de fato garante: no `agent_pause`, a publicação em
+   `agent.lifecycle` — porque a saída de circulação é efeito do **evento**, consumido pelo
+   `_deactivate_instance` do routing-engine, e não deste tool.
+
+**O que NÃO foi feito, e por quê.** A asserção do cenário 01 não foi trocada por uma equivalente
+sobre `:instances`: o cenário loga um agente de SDK efêmero, que o bootstrap não conhece — afirmar
+pertencimento ali exigiria semear o slot de deploy, e isso é outro cenário. Trocar a asserção por
+uma que passasse teria sido reconstruir o mesmo falso conforto num SET diferente.
+
+**Um comentário conferido antes de virar TODO.** O `_deactivate_instance` (routing-engine) diz que
+o fallback usa "a lista de pools no evento, populada desde o fix que manda `pools=[allPools]` no
+logout". O `agent_logout` **deste tool** não manda `pools` — o que parecia lacuna. Não é: o
+produtor descrito é o caminho **humano** (`unregisterHumanAgent`, `server.ts` §761-768), e o agente
+de SDK que passa pelo tool tem `pools: []` na origem, logo não há membership a limpar. Ficou
+escrito no código, no ponto onde a dúvida ocorre.
+
+**Gates:** `docker compose -f docker-compose.demo.yml build mcp-server-plughub e2e-runner`, depois
+`npm test` no mcp-server (previsão: os testes de `:available` não existem mais; o restante verde) e
+`run --rm e2e-runner ts-node runner.ts --only 01` → **10/10** (eram 10/11; a 11ª era a asserção
+removida — **contagem menor é o resultado esperado**, não regressão).
+
+---
+
 ## O seed do e2e parou de falar de uma entidade aposentada ✅ (2026-08-05)
 
 Terceiro e último degrau da cadeia §101 → e2e → §1055. O anterior deu ao runner a credencial de

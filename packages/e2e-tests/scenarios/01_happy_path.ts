@@ -18,7 +18,6 @@ import type { ScenarioContext, ScenarioResult, Assertion } from "./types";
 import { McpTestClient } from "../lib/mcp-client";
 import {
   getAgentInstanceState,
-  getPoolAvailableAgents,
   getPipelineState,
   genSessionId,
   seedSessionMeta,
@@ -85,20 +84,21 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         : fail("Redis agent state = ready after agent_ready", { state: instanceState?.state })
     );
 
-    // ── Step 4: Pool available set contains instance ─────────────────────────
-    const available = await getPoolAvailableAgents(
-      ctx.redis,
-      ctx.tenantId,
-      "retencao_humano"
-    );
-    assertions.push(
-      available.includes(instanceId)
-        ? pass("Pool retencao_humano contains instance after agent_ready")
-        : fail("Pool retencao_humano contains instance after agent_ready", {
-            available,
-            instanceId,
-          })
-    );
+    // ── Step 4 REMOVIDO 2026-08-05 ───────────────────────────────────────────
+    // Era "Pool retencao_humano contains instance after agent_ready", lendo
+    // `{t}:pool:{p}:available`. Foi o único vermelho do cenário quando ele voltou
+    // a rodar, e a investigação mostrou que a asserção é que estava errada:
+    //   · `agent_ready` inscrevia a instância nos pools do campo `pools` do hash,
+    //     que o cliente do registry devolve VAZIO por construção desde que config
+    //     por-agente migrou para o slot de deploy do pool;
+    //   · o SET `:available` não tinha leitor algum — nem no mcp-server, nem no
+    //     routing-engine;
+    //   · quem inscreve instância de IA em pool, hoje, é o `instance_bootstrap`,
+    //     em `{t}:pool:{p}:instances` (medido com MONITOR: 2471 SADD numa janela
+    //     de 150 s, todos do orchestrator-bridge — `probe_pool_registration.sh`).
+    // NÃO foi trocada por uma asserção sobre `:instances`: este cenário loga um
+    // agente de SDK efêmero, que o bootstrap não conhece — afirmar pertencimento
+    // aqui exigiria semear o slot de deploy, e isso é outro cenário.
 
     // ── Step 5: agent_busy ───────────────────────────────────────────────────
     try {

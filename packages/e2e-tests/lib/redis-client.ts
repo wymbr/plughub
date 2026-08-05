@@ -110,17 +110,12 @@ export async function getAgentInstanceState(
   return data;
 }
 
-/**
- * Returns the list of available agent instance_ids in a pool.
- * Key: `{tenantId}:pool:{poolId}:available`
- */
-export async function getPoolAvailableAgents(
-  redis: Redis,
-  tenantId: string,
-  poolId: string
-): Promise<string[]> {
-  return redis.smembers(`${tenantId}:pool:${poolId}:available`);
-}
+// REMOVIDO 2026-08-05 — `getPoolAvailableAgents` lia `{t}:pool:{p}:available`,
+// um SET que a produção parou de alimentar (e que nunca teve leitor fora de
+// teste). Se precisar afirmar pertencimento de instância a pool, o SET vivo é
+// `{t}:pool:{p}:instances` — mas note que quem o escreve é o `instance_bootstrap`
+// a partir do slot de deploy, não o `agent_ready` de um agente de teste.
+// Medição: `infra/test/probe_pool_registration.sh`.
 
 /**
  * Directly writes an agent instance state to Redis using the Routing Engine's

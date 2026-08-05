@@ -267,12 +267,15 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
         //                   paused   → ready  (retomada após pausa)
         await redis.hset(instanceKey, "state", "ready")
 
-        // Adiciona aos pools declarados
+        // A lista `pools` segue sendo LIDA porque viaja no evento Kafka abaixo
+        // (o routing-engine a usa como fallback de limpeza no `_deactivate_instance`).
+        // O que saiu daqui em 2026-08-05 foi o `sadd` em `{t}:pool:{p}:available`:
+        // SET sem leitor algum, alimentado por um laço vazio por construção (o
+        // cliente do registry devolve `pools: []` fixo). Quem inscreve instância
+        // num pool é o `instance_bootstrap`, em `{t}:pool:{p}:instances` — medido,
+        // não deduzido: `infra/test/probe_pool_registration.sh`.
         const poolsRaw = await redis.hget(instanceKey, "pools")
         const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
-        for (const poolId of pools) {
-          await redis.sadd(keys.poolAvailable(tenant_id, poolId), instance_id)
-        }
 
         // Ler campos necessários para o Routing Engine poder criar a instância corretamente
         const agentTypeId      = await redis.hget(instanceKey, "agent_type_id")      ?? ""
@@ -304,7 +307,8 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
   server.tool(
     "agent_busy",
     "Atualiza current_sessions ao iniciar o atendimento de uma sessão. " +
-    "Remove da fila se atingir max_concurrent_sessions. Spec seção 5.",
+    "NÃO controla capacidade — quem faz isso é o semáforo do recurso no " +
+    "Routing Engine. Spec seção 5.",
     AgentBusyInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
@@ -325,8 +329,6 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
 
         // Incremento atômico via HINCRBY
         const currentSessions = await redis.hincrby(instanceKey, "current_sessions", 1)
-        const maxRaw = await redis.hget(instanceKey, "max_concurrent_sessions")
-        const max    = maxRaw ? parseInt(maxRaw, 10) : 1
 
         await redis.hset(instanceKey, "state", "busy")
 
@@ -341,14 +343,13 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           14400  // 4h — mesma janela da sessão
         )
 
-        // Se atingiu o limite, remove dos pools para não receber novas sessões
-        if (currentSessions >= max) {
-          const poolsRaw = await redis.hget(instanceKey, "pools")
-          const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
-          for (const poolId of pools) {
-            await redis.srem(keys.poolAvailable(tenant_id, poolId), instance_id)
-          }
-        }
+        // REMOVIDO 2026-08-05 — o ramo "atingiu o limite, sai dos pools" continha
+        // SÓ o `srem` em `:available`, o SET sem leitor. Não foi substituído por
+        // nada de propósito: quem tira a instância de circulação por capacidade é
+        // o semáforo do RECURSO no routing-engine (`claim_instance` / `mark_busy`
+        // sobre `{t}:instance:{i}:sessions`), que este ramo nunca alcançou. Manter
+        // um `if (currentSessions >= max)` vazio aqui sugeriria um segundo controle
+        // de capacidade que não existe — e `max` aqui é o `1` fixo do cliente.
 
         await kafka.publish("agent.lifecycle", {
           event:            "agent_busy",
@@ -565,12 +566,12 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
 
         await redis.hset(instanceKey, "state", "paused")
 
-        // Remove dos pools — não receberá novas conversas
-        const poolsRaw = await redis.hget(instanceKey, "pools")
-        const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
-        for (const poolId of pools) {
-          await redis.srem(keys.poolAvailable(tenant_id, poolId), instance_id)
-        }
+        // REMOVIDO 2026-08-05 — o "remove dos pools" daqui era `srem` em
+        // `:available` (SET sem leitor) sobre uma lista sempre vazia. Quem tira o
+        // agente de circulação numa pausa é o consumidor de `agent.lifecycle` no
+        // routing-engine (`_deactivate_instance` → SREM em `:instances` e
+        // `:busy_instances`), pelo evento publicado logo abaixo — e o pause do
+        // agente HUMANO passa pelo endpoint do server.ts, não por aqui.
 
         await kafka.publish("agent.lifecycle", {
           event:        "agent_pause",
@@ -606,12 +607,14 @@ export function registerRuntimeTools(server: McpServer, deps: RuntimeDeps): void
           return mcpError("instance_not_found", `Instância '${instance_id}' não encontrada`)
         }
 
-        // Remove dos pools — para de receber novas conversas imediatamente
-        const poolsRaw = await redis.hget(instanceKey, "pools")
-        const pools: string[] = poolsRaw ? (JSON.parse(poolsRaw) as string[]) : []
-        for (const poolId of pools) {
-          await redis.srem(keys.poolAvailable(tenant_id, poolId), instance_id)
-        }
+        // REMOVIDO 2026-08-05 — idem: `srem` em `:available` sobre lista vazia.
+        // ATENÇÃO ao ler o routing-engine: o docstring de `_deactivate_instance`
+        // (kafka_listener.py §785) diz que o fallback de limpeza usa "a lista de
+        // pools no evento, populada desde o fix que manda pools=[allPools] no
+        // logout". Isso é verdade do caminho HUMANO (`unregisterHumanAgent`,
+        // server.ts §761-768), não deste tool — o publish abaixo não manda
+        // `pools`. Não é lacuna: o agente de SDK que passa por aqui tem
+        // `pools: []` na origem, então não há membership a limpar.
 
         const currentSessionsRaw = await redis.hget(instanceKey, "current_sessions")
         const activeSessions     = currentSessionsRaw ? parseInt(currentSessionsRaw, 10) : 0

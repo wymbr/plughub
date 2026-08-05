@@ -24,9 +24,24 @@ export const keys = {
   agentToken: (tenantId: string, sessionToken: string) =>
     `${tenantId}:agent:token:${sessionToken}`,
 
-  /** SET de instance_ids disponíveis num pool */
-  poolAvailable: (tenantId: string, poolId: string) =>
-    `${tenantId}:pool:${poolId}:available`,
+  // REMOVIDO 2026-08-05 — `poolAvailable` (`{t}:pool:{p}:available`).
+  //
+  // Era um SET com UM escritor (o `sadd` do `agent_ready`), quatro `srem` e
+  // NENHUM leitor fora de teste em todo o repo — zero ocorrências de
+  // `:available` no routing-engine (`.py`). O pertencimento que a produção lê é
+  // `poolInstances` (abaixo) + `pool_roster:{p}`.
+  //
+  // Medido antes de remover (`infra/test/probe_pool_registration.sh`, tenant_demo):
+  //   · 37 chaves `:pool:*:instances` vivas   ·  0 chaves `:pool:*:available`
+  //   · 2471 SADD em `:instances` numa janela de 150 s, TODOS de um único
+  //     cliente — 172.20.0.35 = orchestrator-bridge (routing-engine e mcp-server
+  //     mudos na janela). Quem inscreve instância de IA em pool é o
+  //     `instance_bootstrap`, a partir do slot de deploy.
+  //   · 0 SADD e 0 comandos de QUALQUER tipo sobre `:available`.
+  // O laço que alimentava o `sadd` era vazio por construção: ele itera o campo
+  // `pools` do hash da instância, escrito pelo `agent_login` a partir do cliente
+  // HTTP que devolve `pools: []` sem ramo algum (`registry-client.ts` §71),
+  // porque config por-agente migrou para o slot de deploy do pool.
 
   /** SET de conversation_ids ativos para uma instância */
   agentConversations: (tenantId: string, instanceId: string) =>

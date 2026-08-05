@@ -301,7 +301,24 @@ alguém leia", o item vira remoção da chamada — não conserto do token.
 > Chegaram aqui por colagem. Não confundir com o 401 do seed do e2e, que era em `POST /v1/skills` e
 > está resolvido.
 
-## `agent_ready` não inscreve instância em pool nenhum — e o SET que ele escreve não tem leitor *(medido 2026-08-05, ao destravar o e2e)*
+## ~~`agent_ready` não inscreve instância em pool nenhum — e o SET que ele escreve não tem leitor~~ ✅ **RESOLVIDO 2026-08-05 — saída (a), vestígio removido** *(item nascido 2026-08-05, ao destravar o e2e)*
+
+> **Fechado no mesmo dia em que nasceu, e a medição é o que decidiu.** As seis
+> previsões do `infra/test/probe_pool_registration.sh` foram escritas antes de rodar e
+> saíram todas certas: 37 chaves `:pool:*:instances` vivas · **0** chaves
+> `:pool:*:available` · 2471 `SADD` em `:instances` numa janela de 150 s, **todos de um
+> único cliente** (172.20.0.35 = orchestrator-bridge; routing-engine e mcp-server mudos)
+> · **0** `SADD` e **0** comandos de qualquer tipo sobre `:available`. Removidos: o
+> `sadd`, os quatro `srem`, o helper `keys.poolAvailable`, o ramo
+> `if (currentSessions >= max)` do `agent_busy` (cujo corpo era só o `srem`), a asserção
+> do cenário 01, o `getPoolAvailableAgents` do e2e e a entrada de
+> `docs/modelos-de-dados.md` que prometia um leitor no Routing Engine. O dublê do
+> `runtime.test.ts` passou a declarar a forma que o cliente real devolve
+> (`pools: []`, `max_concurrent_sessions: 1`, `permissions: []`). Detalhe e o que
+> **não** foi substituído (e por quê) no CHANGELOG.
+
+<details><summary>Registro original do item (mantido: é o raciocínio que a medição testou)</summary>
+
 
 **Como apareceu:** com o seed destravado, o cenário 01 rodou pela primeira vez e deu 10 verdes e
 **um** vermelho, exatamente onde a previsão escrita antes dizia que daria:
@@ -345,6 +362,8 @@ apagar o SET certo pelo motivo errado dá o mesmo diff com a dívida escondida.
 **Primeiro passo:** responder *"quem inscreve uma instância de IA num pool hoje, no demo"* — com
 `MONITOR` filtrado por `SADD` durante um boot do bridge, não por leitura de código (a lição de
 2026-08-05, que rendeu 3 de 7).
+
+</details>
 
 ## `source` do resume é asserido pelo CLIENTE na porta pública *(achado 2026-08-04, ao implementar a Fase F)*
 

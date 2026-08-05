@@ -38,7 +38,7 @@ O Redis é a camada de estado operacional da plataforma — tudo que precisa ser
 | `{t}:usage:current:*` | usage-aggregator | Contadores de metering por dimensão |
 | `{t}:quota:limit:*` | usage-aggregator | Limites de quota por dimensão |
 | `{t}:agent:*` | mcp-server-plughub | Ciclo de vida de instâncias de agente |
-| `{t}:pool:{id}:available` | mcp-server-plughub | Set de instâncias disponíveis por pool |
+| `{t}:pool:{id}:instances` | orchestrator-bridge (bootstrap) / routing-engine / mcp-server (humano) | ready_set: instâncias dimensionadas ao pool (pertencimento, **não** capacidade) |
 | `{t}:insight:*` | mcp-server / routing-engine | Insights de conversa e histórico do cliente |
 | `{t}:pipeline:*` | skill-flow-engine | Estado do pipeline e locks de execução |
 | `{t}:instance:*` | routing-engine | Snapshot de instâncias para alocação |
@@ -178,15 +178,28 @@ TTL: `SESSION_TOKEN_TTL_S`
 
 ---
 
-### `{t}:pool:{pool_id}:available` — SET
+### ~~`{t}:pool:{pool_id}:available` — SET~~ **REMOVIDO 2026-08-05**
 
-Set de `instance_id`s com `state == ready` em um pool. Consultado pelo Routing Engine para encontrar candidatos.
+Esta entrada afirmava *"consultado pelo Routing Engine para encontrar candidatos"*.
+**Nunca foi** — o routing-engine não tinha uma ocorrência sequer de `:available` em
+`.py`, e no mcp-server a chave tinha um `SADD`, quatro `SREM` e **nenhuma leitura**
+fora de teste. Uma chave documentada com um leitor que não existe é pior que uma
+chave não documentada: ela sobrevive a toda limpeza, porque cada revisão lê aqui
+que alguém depende dela.
 
-- `SADD` em `agent_ready` (instância disponível)
-- `SREM` em `agent_busy` quando `current_sessions >= max` (instância saturada)
-- `SREM` em `agent_pause` e `agent_logout`
+O escritor também era inerte: o `SADD` iterava o campo `pools` do hash da instância,
+que o cliente do registry devolve **vazio por construção** (`registry-client.ts` §71)
+desde que a config por-agente migrou para o slot de deploy do pool.
 
-Sem TTL — gerenciado por transições de estado.
+**O que ler no lugar:** pertencimento de instância a pool vive em
+`{t}:pool:{pool_id}:instances` (ready_set) e `{t}:pool:{pool_id}:busy_instances`;
+capacidade **não** se lê de nenhum dos dois (é do RECURSO — ver o snapshot do pool e
+`{t}:capacity:snapshot`).
+
+**Quem inscreve, medido e não deduzido** (`infra/test/probe_pool_registration.sh`,
+tenant_demo, janela de 150 s): o `instance_bootstrap` do orchestrator-bridge, a partir
+do slot de deploy — 2471 `SADD` em `:instances`, todos de um único cliente; zero
+comandos de qualquer tipo sobre `:available`.
 
 ---
 
@@ -715,7 +728,6 @@ Legenda: **E** = Escrita · **L** = Leitura · **—** = Sem acesso
 | `{t}:quota:limit:{dimension}` | — | — | — | — | — | — |
 | `{t}:agent:instance:{id}` | **E** | — | L | — | — | — |
 | `{t}:agent:token:{token}` | **E** | — | — | — | — | — |
-| `{t}:pool:{id}:available` | **E** | — | L | — | — | — |
 | `{t}:agent:instance:{id}:conversations` | **E** | — | — | — | — | — |
 | `{t}:insight:{conv_id}:{item_id}` | **E** | — | L | — | — | — |
 | `{t}:insight:h:{cust_id}:{item_id}` | — | — | L | — | — | — |
@@ -723,7 +735,7 @@ Legenda: **E** = Escrita · **L** = Leitura · **—** = Sem acesso
 | `{t}:pipeline:{session_id}:running` | — | **E** | — | — | — | — |
 | `{t}:pipeline:{session_id}:job:{step_id}` | — | **E** | — | — | — | — |
 | `{t}:instance:{instance_id}` | — | — | **E** | — | — | — |
-| `{t}:pool:{id}:instances` | — | — | **E** | — | — | — |
+| `{t}:pool:{id}:instances` | **E**¹ | — | **E** | — | — | — |
 | `{t}:pool_config:{pool_id}` | — | — | **E** | — | — | — |
 | `{t}:pools` | — | — | **E** | — | — | — |
 | `{t}:pool:{id}:queue` | — | — | **E** | — | — | — |
@@ -736,6 +748,16 @@ Legenda: **E** = Escrita · **L** = Leitura · **—** = Sem acesso
 | `{t}:cache:{hash}` | — | — | — | **E** | — | — |
 | `{t}:ratelimit:{agent_type}:{window}` | — | — | — | **E** | — | — |
 | `rules:{t}:active` | — | — | — | — | **E** | — |
+
+> ¹ `{t}:pool:{id}:instances` — o mcp-server escreve **só no caminho humano**
+> (`registerHumanAgent` / `unregisterHumanAgent`). **O escritor dominante não tem
+> coluna nesta tabela**: é o `instance_bootstrap` do **orchestrator-bridge**, que
+> reconcilia as instâncias de IA a partir do slot de deploy do pool — medido em
+> 2026-08-05 com `MONITOR` (2471 `SADD` numa janela de 150 s, todos dele;
+> routing-engine e mcp-server mudos na mesma janela:
+> `infra/test/probe_pool_registration.sh`). A tabela nasceu antes do bridge e
+> ainda descreve um mundo de 6 serviços — ler a ausência de coluna como "não
+> escreve" é o erro que esta nota existe para evitar.
 
 ### PostgreSQL e ClickHouse
 
