@@ -190,3 +190,53 @@ async def test_release_returns_false_on_exception():
     assert await bridge_mod._release_work_item(
         http, TENANT, POOL, SESSION, MINE
     ) is False
+
+
+# ── "Return to queue" (transporte `agent_release_item`) ──────────────────────
+#
+# Achado 2 de 2026-08-04: o botão do Console chamava o `work_task_release` direto
+# no árbitro, a vaga voltava e a PRESENÇA do humano ficava
+# (`session:{sid}:human_agent`), fazendo o guard de dedup do `process_routed`
+# engolir o `conversations.routed` do re-claim — vaga gasta, cartão nenhum.
+#
+# O desmonte da presença vive dentro de `process_contact_event`, que precisa de
+# Redis + Kafka + HTTP e por isso não tem teste de unidade aqui (fabricar esse
+# mundo testaria o mock). **O gate desse comportamento é a tela**, e está no
+# CHANGELOG. O que estes dois testes prendem são as DUAS decisões puras de que o
+# ramo depende — e cada um reprova por um motivo diferente, nenhum deles
+# hipotético: as duas são tabelas que um cleanup futuro remove sem quebrar nada
+# visível, e o efeito seria mudo.
+
+RELEASE_TRANSPORT = "agent_release_item"
+
+
+def test_release_transport_carries_a_segment_close_reason():
+    """
+    Reprova se o transporte sair do mapa de SEGMENTO. Aí a derivação cai no mapa de
+    CONTATO, e o segmento passa a ser carimbado com vocabulário de fim de contato
+    (ou `None`) — dizendo que o atendimento acabou quando o item só voltou à fila.
+    É o mesmo defeito que a Fase E corrigiu para `agent_disconnect`, e ele já custou
+    12 de 14 segmentos humanos mudos numa medição real.
+    """
+    assert bridge_mod._TRANSPORT_TO_SEGMENT_CLOSE_REASON[RELEASE_TRANSPORT] == (
+        RELEASE_TRANSPORT
+    )
+    assert bridge_mod._segment_close_reason_from_transport(
+        RELEASE_TRANSPORT, SESSION
+    ) == RELEASE_TRANSPORT
+
+
+@pytest.mark.asyncio
+async def test_release_transport_is_classified_as_continuation():
+    """
+    `remaining=0` e AINDA ASSIM continuação: é o único caso do classificador em que
+    "não sobrou humano" não implica "acabou o contato" — o item continua na fila,
+    claimável. Reprova se alguém tratar a devolução como fim de contato, que é
+    exatamente a leitura que faria o log dizer `no_continuation` ao lado de um
+    contato vivo.
+    """
+    redis_client = MagicMock()
+    redis_client.scard = AsyncMock(return_value=0)
+    assert await bridge_mod._has_continuation(
+        redis_client, SESSION, RELEASE_TRANSPORT, 0
+    ) == (True, "item_requeued")

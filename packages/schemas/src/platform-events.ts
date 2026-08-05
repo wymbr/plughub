@@ -236,19 +236,28 @@ export type AgentDoneEvent = z.infer<typeof AgentDoneEventSchema>
 /**
  * Fase E (D8) — liberação de vaga SEM conclusão de trabalho.
  *
- * Publicado pelo orchestrator-bridge quando o transporte de um agente humano
- * cai (`agent_disconnect`) num CONTATO DE CLIENTE. O routing-engine trata este
- * evento exatamente como `agent_done` para efeito de capacidade
- * (`remove_conversation`) — o que muda é o significado: a vaga volta, o
- * atendimento não terminou.
+ * Publicado pelo orchestrator-bridge em DOIS transportes, e nos dois a metade
+ * "a vaga volta" é verdadeira e a metade "o trabalho acabou" não é:
+ *   · `agent_disconnect`   — o transporte do agente humano caiu.
+ *   · `agent_release_item` — o agente devolveu o item à fila ("Return to queue"
+ *                            do Console). Anunciado pelo mcp-server DEPOIS do
+ *                            `released: true` do árbitro.
+ * O routing-engine trata este evento exatamente como `agent_done` para efeito de
+ * capacidade (`remove_conversation`) — o que muda é o significado.
  *
  * Existe porque reusar `agent_done` seria um nome servindo dois fatos — a mesma
  * falha que a Fase E corrigiu no mapa de `close_reason` do bridge. Ver
  * `docs/adr/adr-work-item-requeue-and-agent-affinity.md` § D8.
  *
- * NÃO é publicado quando a queda é sobre um ITEM DE FILA PULL: ali o
- * `work_task_release` (Fase B) já devolve a vaga, e um evento a mais seria
- * liberação dupla.
+ * ⚠️ Este parágrafo dizia, até 2026-08-05, que o evento **não** era publicado
+ * sobre ITEM DE FILA PULL, "porque o `work_task_release` já devolve a vaga e um
+ * evento a mais seria liberação dupla". Era o desenho ORIGINAL da Fase E, e o
+ * código o reverteu sem que o comentário acompanhasse (`main.py`, § do
+ * `_publish_lifecycle_end`): não há liberação dupla, porque a ocupação é DERIVADA
+ * do `SCARD` do semáforo — o segundo SREM é idempotente. E suprimir custava caro:
+ * só o `remove_conversation` restaura a MEMBERSHIP dos SETs do pool (SADD
+ * `ready_set` / SREM `busy_set`), que o `work_task_release` não toca; sem o
+ * evento, o agente sumia do roteamento por push depois de cada devolução.
  *
  * ⚠️ Divergência conhecida, herdada e NÃO corrigida aqui: o `AgentDoneEventSchema`
  * acima descreve o produtor do mcp-server (`session_id`, `participant_id`,

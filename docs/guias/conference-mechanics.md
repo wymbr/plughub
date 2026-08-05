@@ -1589,6 +1589,65 @@ inbox **sem `assigned_to`** — perdendo o author-binding — e irreivindicável
 `acw_expired` (prazo) · `acw_supervisor_closed` (supervisor encerrou). Os dois últimos têm
 `outcome = None`, então é o `close_reason` que os separa.
 
+### Mudança 32 — "Return to queue" desmonta a presença do humano (achado 2, 2026-08-05)
+
+**Sintoma:** devolver N itens à fila e reivindicá-los de novo consumia as N vagas e **não gerava
+cartão nenhum**. Reproduzido 4×, determinístico, com controle positivo: depois de um F5 — que passa
+pelo desmonte completo — os mesmos 3 claims viravam 3 cartões.
+
+**Causa:** o botão do Console chamava `work_task_release` **direto no árbitro**. A vaga voltava e a
+presença ficava: `session:{sid}:human_agent` + `session:{sid}:human_agents`, escritos por
+`activate_human_agent` e apagados só em caminhos de encerramento/queda. O guard de dedup do
+`process_routed` — que existe para o drain periódico não gerar `participant_joined` repetido — então
+descartava o `conversations.routed` do re-claim, indistinguível de uma re-emissão do drain.
+
+**Transporte novo: `agent_release_item`.** Depois do `released: true` do árbitro, o mcp-server publica
+`contact_closed(reason=agent_release_item)` em `conversations.events` — o mesmo par tópico/evento que
+o `session_transfer` já usa para *"o segmento deste agente acabou, o contato continua"*. **Quem
+escreveu o fato é quem o desfaz:** o mcp-server não toca chave de presença; o bridge desmonta pelo
+caminho que já existia.
+
+**No bridge**, o transporte entra em três lugares e sai por um quarto:
+- `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` (domínio de SEGMENTO — o contato não fechou);
+- `_has_continuation` → `(True, "item_requeued")`. É o único caso em que `remaining == 0` **não**
+  implica fim de contato: o item continua na fila. Sem esta linha o log diria `no_continuation` ao
+  lado de um contato vivo;
+- `agent_released` (não `agent_done`), `_resolve_hold=False`, junto com `agent_disconnect`;
+- ramo próprio irmão do `agent_disconnect`, **antes** do marcador `session:closed`: retorna sem
+  re-rota, sem `_release_work_item` (o árbitro já devolveu), sem `_mark_contact_ended` e sem
+  `on_human_end`. Devolver não é encerrar, e congelar o AHT ali inventaria um fim que não houve.
+
+**Por que `agent_released` e não suprimir o evento.** O árbitro já devolveu a vaga, então parecia
+liberação dupla — o mesmo raciocínio que a Fase E fez e reverteu para o `agent_disconnect`. Não é
+dupla: a ocupação é DERIVADA do `SCARD` do semáforo, logo o segundo SREM é idempotente. E só o
+`remove_conversation` restaura a **membership** dos SETs do pool (SADD `ready_set` / SREM
+`busy_set`), que o `work_task_release` não toca — sem o evento, o agente ficava invisível ao
+roteamento por push depois de cada devolução. Era um segundo defeito da mesma raiz, e a correção
+mínima (apagar as duas chaves) o teria deixado de pé.
+
+**Não afrouxar o guard.** Uma exceção nele trocaria um caso mudo por outro (o spam de
+`participant_joined` que ele existe para impedir). Corrigir o ESTADO torna o guard verdadeiro.
+
+**Wrap-up de peer** exclui o novo transporte pelo motivo simétrico ao do `agent_disconnect`: lá o
+humano sumiu, aqui ele está mas não há disposição a colher — devolveu sem atender.
+
+**Consequência de leitura:** cada ciclo claim→devolução→re-claim gera um segmento humano a mais
+(`segment_seq` incrementa por claim), agora todos fechados por `participant_left` com
+`close_reason=agent_release_item`. São N janelas de participação reais, não órfãos.
+
+**Janela residual conhecida:** `contact_closed` e `conversations.routed` são tópicos diferentes; a
+ordem entre eles não é garantida. O anúncio é produzido antes de o HTTP do release responder, então
+o intervalo é humano (segundos) contra dezenas de ms de Kafka. Um re-claim suficientemente rápido
+ainda cairia no guard.
+
+**Validado na tela (2026-08-05)**, com previsão escrita antes: probe de presença VERMELHO→VERDE no
+MESMO item · 3× `Return to queue` e 3× `continuation=True (item_requeued)` no log · **0** linhas
+`Skipping duplicate … human_active=True` · **3 cartões** no re-claim (antes: 0) · árbitro 3 × tela 3,
+mesmos ids. Instrumento: `infra/test/probe_release_presence.sh` — item no ZSET não tem dono (o claim
+é um ZREM), então item na fila COM marcador de presença é o defeito em estado puro; o veredicto fecha
+sem entrada humana, e sai `INCONCLUSIVO` quando só há item virgem, porque aí o verde seria verdade
+por construção.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

@@ -2,6 +2,81 @@
 
 ---
 
+## "Return to queue" desmonta a presença do humano ✅ (2026-08-05)
+
+Fecha o **achado 2** de 2026-08-04 (TODO § "Fila de trabalho humano … resíduos pós-v1"), que a
+sessão anterior deixou DIAGNOSTICADO com receita determinística e não consertado.
+
+**Sintoma:** devolver N itens à fila e reivindicá-los de novo consumia as N vagas e não gerava cartão
+nenhum. **Causa:** o botão do Console chamava `work_task_release` direto no árbitro — a vaga voltava
+e a presença ficava (`session:{sid}:human_agent` + `session:{sid}:human_agents`), e o guard de dedup
+do `process_routed` descartava o `conversations.routed` do re-claim como se fosse re-emissão do drain.
+
+**Forma do conserto:** transporte novo `agent_release_item`. O mcp-server anuncia
+`contact_closed(reason=agent_release_item)` em `conversations.events` **depois** do `released: true`
+do árbitro — mesmo par tópico/evento do `session_transfer` — e o **bridge** faz o desmonte pelo
+caminho já provado da queda. Quem escreveu o fato é quem o desfaz: o mcp-server não toca chave de
+presença.
+
+**Escopo maior que o mínimo, por medição e não por gosto.** A correção mínima (apagar as duas
+chaves) deixaria de pé um segundo defeito da mesma raiz: só `remove_conversation` restaura a
+membership dos SETs do pool (SADD `ready_set` / SREM `busy_set`), que o `work_task_release` não
+toca — sem isso o agente ficava invisível ao roteamento por push depois de cada devolução. Publicar
+`agent_released` não é liberação dupla porque a ocupação é DERIVADA do `SCARD` do semáforo: o segundo
+SREM é idempotente. É o mesmo raciocínio que a Fase E já tinha feito e revertido para o
+`agent_disconnect` — e o comentário do `AgentReleasedEventSchema`, que ainda afirmava a versão
+revertida ("não é publicado sobre item de fila pull"), foi corrigido junto.
+
+**O guard não foi afrouxado.** Exceção nele trocaria um caso mudo por outro (o spam de
+`participant_joined` que ele existe para impedir). Corrigir o estado torna o guard verdadeiro.
+
+**Arquivos:** `orchestrator-bridge/main.py` (mapa de close_reason de segmento · `_has_continuation` →
+`item_requeued` · `agent_released` com `_resolve_hold=False` · ramo próprio antes do marcador
+`session:closed` · exclusão do wrap-up de peer) · `mcp-server-plughub/lib/work-queue.ts` (o anúncio
+mora no `releaseTask`, então vale para a rota do Console **e** para a tool MCP; `kafka` virou
+dependência obrigatória de `WorkQueueDeps` — opcional deixaria um caminho sem desmonte) ·
+`server.ts` (os DOIS registros, `createServer` e `startServer`) · `schemas/platform-events.ts`
+(comentário) · `docs/guias/conference-mechanics.md` § Mudança 32.
+
+**Instrumento novo:** `infra/test/probe_release_presence.sh`. Item no ZSET não tem dono — o claim é um
+ZREM —, então item na fila COM marcador de presença é o defeito em estado puro, e o veredicto fecha
+**sem entrada humana** (ao contrário do probe de capacidade, que só enxerga o lado do árbitro). Tem
+self-test de prefixo de chave antes de medir, e distingue item **virgem** de **devolvido**: numa fila
+recém-semeada "sem presença" é verdade por construção, então o resultado sai `INCONCLUSIVO` em vez de
+um verde vazio.
+
+**Validação na tela**, com previsão escrita antes de rodar — todas bateram:
+
+| medida | previsto | medido |
+|---|---|---|
+| probe de presença, MESMO item, antes × depois do build | VERMELHO → VERDE | VERMELHO → VERDE |
+| `Return to queue` no log do bridge | 3 | 3 |
+| classificação do transporte | `continuation=True (item_requeued)`, `remaining=0` | 3× |
+| `Skipping duplicate … human_active=True` no re-claim | 0 | 0 |
+| cartões no re-claim | 3 (antes: 0) | 3 |
+| árbitro × tela | 3 × 3, mesmos ids | 3 × 3 |
+
+As idades dos cartões (4:10/4:08/4:06 contra 0:15/0:13/0:11 do primeiro claim) mostram que a
+identidade do item sobreviveu ao ciclo — mesma sessão, não uma nova.
+
+**Testes:** 2 casos anexados a `test_work_item_release_on_drop.py` (16 passed). Prendem as duas
+decisões PURAS de que o ramo depende — as duas são tabelas que um cleanup remove sem quebrar nada
+visível, e o efeito seria mudo. O desmonte em si vive dentro de `process_contact_event`, que sem
+Redis+Kafka+HTTP só testaria o mock; o gate dele é a tela.
+
+**Achados colhidos na mesma passada:**
+- **Os marcadores expiram sozinhos** (TTL = TTL da sessão). O lixo do demo deixado como reprodução
+  viva já não reproduzia nada 14 h depois: as 3 vagas seguiam presas, mas sem marcador. Confirma o
+  aviso do handoff — "some sozinho" é janela de horas, não conserto — e vale como regra ao montar
+  reprodução: **o rastro sobrevive ao mecanismo**, e medir o rastro não mede a causa.
+- **A faixa de recusa persistente (item 1b) foi exercitada pela primeira vez na tela**, pelo gatilho
+  natural: com as 3 vagas presas e 0 cartões, o claim recusou e "No capacity available" ficou.
+- **Defeito no próprio instrumento, corrigido na hora:** a seção de contexto do probe listava a
+  sessão acusada sob o rótulo "estado normal de item reivindicado" — a mesma saída dizendo violação e
+  normalidade sobre o mesmo id. Rótulo que descreve o oposto da medição é pior que rótulo nenhum.
+
+---
+
 ## Teto de capacidade visível no Console ✅ (2026-08-04)
 
 Fecha o achado 1 de 2026-08-04 (TODO § "Fila de trabalho humano … resíduos pós-v1") — **por

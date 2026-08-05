@@ -3074,6 +3074,13 @@ def _close_reason_from_transport(transport: str, session_id: str = "") -> str | 
 #                     (o branch de transfer em handle_agent_close retorna sem
 #                     fechar). Produtor DEDUZIDO do código, não medido: nenhum
 #                     WARNING de transfer apareceu no probe de 2026-08-04.
+#   agent_release_item  o agente DEVOLVEU o item de trabalho à fila ("Return to
+#                     queue" do Console). O item continua vivo e claimável — pelo
+#                     mesmo agente ou por outro —, então o contato não fechou;
+#                     acabou só a janela de participação deste humano. Terceiro
+#                     transporte do domínio de segmento, e o mais explícito dos
+#                     três: os outros dois são acidentes (queda) ou repasse
+#                     (transfer), este é desistência deliberada.
 #
 # A união de vocabulários já existe nesta coluna e não é categoria nova: hoje
 # convivem em `analytics.segments.close_reason` os valores de contato
@@ -3081,8 +3088,9 @@ def _close_reason_from_transport(transport: str, session_id: str = "") -> str | 
 # `acw_supervisor_closed`), e os relatórios já os discriminam
 # (`_WRAPUP_CLOSE_REASONS`, analytics-api/reports_query.py).
 _TRANSPORT_TO_SEGMENT_CLOSE_REASON = {
-    "agent_disconnect": "agent_disconnect",
-    "agent_transfer":   "agent_transfer",
+    "agent_disconnect":   "agent_disconnect",
+    "agent_transfer":     "agent_transfer",
+    "agent_release_item": "agent_release_item",
 }
 
 
@@ -5333,9 +5341,10 @@ async def _has_continuation(
     segue) ou um fim de contato. Read-only — não muda estado.
 
     Continuação quando:
-      - reason == "agent_transfer"  → re-rota em voo para outro pool;
-      - remaining > 0               → ainda há outro humano primário ativo;
-      - active_ai_specialists > 0   → specialist IA ainda respondendo.
+      - reason == "agent_transfer"     → re-rota em voo para outro pool;
+      - reason == "agent_release_item" → o item voltou à fila, claimável;
+      - remaining > 0                  → ainda há outro humano primário ativo;
+      - active_ai_specialists > 0      → specialist IA ainda respondendo.
     Caso contrário → fim de contato (no_continuation).
 
     Retorna (is_continuation, motivo). Nas fases ≥3 do G7 esta decisão passa a
@@ -5343,6 +5352,14 @@ async def _has_continuation(
     """
     if reason == "agent_transfer":
         return True, "transfer"
+    # A devolução à fila é continuação pelo mesmo critério do transfer — o trabalho
+    # segue existindo, só troca de mãos (aqui, para "mãos nenhumas, na fila"). O ramo
+    # que age sobre isso retorna antes de ler esta decisão; classificar mesmo assim é
+    # o que impede a linha `G7-decision … continuation=False (no_continuation)` de
+    # aparecer no log EXATAMENTE onde o contato não fechou — valor plausível e errado
+    # num log de diagnóstico é como o achado 2 passou despercebido por um dia.
+    if reason == "agent_release_item":
+        return True, "item_requeued"
     if remaining > 0:
         return True, "other_human_active"
     try:
@@ -6766,7 +6783,21 @@ async def process_contact_event(
                     # herdeiro — o autor sumiu e o branch de disconnect retorna sem
                     # disparar hook nenhum. Segurar a vaga ali é segurá-la para
                     # ninguém, até o TTL do hold.
-                    if reason == "agent_disconnect":
+                    #
+                    # `agent_release_item` (devolução deliberada à fila) entra aqui
+                    # pelos MESMOS dois motivos, e não por analogia: o trabalho não
+                    # terminou (o item volta claimável, então `agent_done` seria um
+                    # nome servindo dois fatos — a falha que a Fase E corrigiu), e
+                    # não há herdeiro do hold (quem devolveu não faz wrap-up).
+                    # O `work_task_release` já devolveu a vaga; publicar mesmo assim
+                    # NÃO é liberação dupla — a ocupação é DERIVADA do SCARD do
+                    # semáforo, então o segundo SREM é idempotente, e é o
+                    # `remove_conversation` deste evento que restaura a MEMBERSHIP
+                    # (SADD ready_set / SREM busy_set) que o release não toca. Sem
+                    # ele, o agente ficava invisível ao push depois de cada
+                    # "Return to queue" — o mesmo defeito que o comentário acima
+                    # descreve para o F5, e pela mesma razão.
+                    if reason in ("agent_disconnect", "agent_release_item"):
                         asyncio.create_task(_publish_lifecycle_end(
                             _event="agent_released", _resolve_hold=False,
                         ))
@@ -6939,6 +6970,36 @@ async def process_contact_event(
                             asyncio.create_task(
                                 _trigger_contact_close(redis_client, session_id)
                             )
+                        return
+
+                    # ── Devolução deliberada do item à fila ("Return to queue") ────
+                    # Achado 2 de 2026-08-04. O botão do Console chamava o
+                    # `work_task_release` DIRETO no árbitro: a vaga voltava e a
+                    # presença ficava. `session:{sid}:human_agent` sobrevivia, e o
+                    # guard de dedup do `process_routed` (§"Skipping duplicate
+                    # routing … human_active=True") engolia o `conversations.routed`
+                    # do re-claim — vaga gasta, trabalho vivo, tela vazia. Medido
+                    # 4×, com controle: marcador 0 (após F5) → 3 claims → 3 cartões;
+                    # marcador 1 (após return-to-queue) → 3 claims → 0 cartões.
+                    #
+                    # O conserto é o ESTADO, não o guard: afrouxá-lo trocaria um caso
+                    # mudo por outro (o spam de `participant_joined` do drain, que é
+                    # contra o que ele foi escrito). Chegar aqui já apagou as duas
+                    # chaves acima (remaining<=0), fechou o segmento pelo
+                    # `participant_left` e publicou `agent_released` — o mesmo
+                    # desmonte da queda, que é o caminho PROVADO. O que este ramo
+                    # faz é parar: nada de re-rota (não há cliente esperando: o item
+                    # está na fila), nada de `_release_work_item` (o árbitro já
+                    # devolveu — daí o evento vir DEPOIS do release, não antes), e
+                    # nada de marcador `session:closed`/`_mark_contact_ended`/
+                    # `on_human_end` — devolver não é encerrar, e congelar o AHT aqui
+                    # inventaria um fim de contato que não houve.
+                    if reason == "agent_release_item":
+                        logger.info(
+                            "Return to queue: segmento humano encerrado, item segue na "
+                            "fila (contato NÃO fechado) — session=%s instance=%s pool=%s",
+                            session_id, instance_id, _ha_pool,
+                        )
                         return
 
                     # ── G7 Fase 3a — marcador session:closed (no_continuation) ────
@@ -7190,7 +7251,14 @@ async def process_contact_event(
                     # Ver g7 §11.
                     # G7 heartbeat: num agent_disconnect o humano SUMIU — não pode preencher
                     # o menu de wrap-up → pula o segment_wrapup (só encerra o segmento acima).
-                    if reason != "agent_disconnect" and http and _ha_pool and _ha_tenant:
+                    # `agent_release_item` sai pelo motivo SIMÉTRICO e não pelo mesmo: o
+                    # humano está lá, mas não há disposição a colher — ele devolveu o item
+                    # sem atendê-lo, e o trabalho continua na fila. Pedir wrap-up de quem
+                    # desistiu produziria formulário sobre um atendimento que não houve.
+                    if (
+                        reason not in ("agent_disconnect", "agent_release_item")
+                        and http and _ha_pool and _ha_tenant
+                    ):
                         _oha_customer = session_id
                         try:
                             _oha_raw_meta = await redis_client.get(f"session:{session_id}:meta")

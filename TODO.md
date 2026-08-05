@@ -2266,7 +2266,11 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    **Não fazer:** tornar o toast persistente. Ele não dispara neste caminho — seria conserto
    especulativo sobre um defeito não observado.
 
-1b. **`handlePull` apaga o próprio motivo de falha** *(aberto, pequeno)*. `setError` na §224 é
+1b. **`handlePull` apaga o próprio motivo de falha** *(aberto, pequeno — mas a faixa JÁ foi vista)*.
+   **2026-08-05:** a faixa persistente de recusa foi exercitada na tela pela primeira vez, pelo
+   gatilho natural que o conserto do achado 2 previa: com as 3 vagas presas e 0 cartões, o claim
+   recusou e **"No capacity available" ficou** — não é mais especulação. O que segue aberto é só o
+   caminho do `handlePull`, abaixo. `setError` na §224 é
    limpo pelo `refresh()` da §225. Hoje só o auto-atendimento de wrap-up passa por ali: quando o
    auto-claim falha (sem vaga na janela do hand-off), o motivo some e o comentário da §237 promete
    "degradação graciosa" — mas ela degrada **muda**, contra a invariante do CLAUDE.md. Junto: as
@@ -2282,14 +2286,21 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    mutação sintética minha** — não teorizar sobre rastro próprio; reproduzir sem ele antes de
    chamar de defeito.
 
-2. **Vaga ocupada por sessão que nunca virou cartão.** `9d37879e…` foi reivindicada às 19:39,
-   consumiu vaga e não apareceu no Console; o `release` posterior confirmou posse real
-   (`{"released":true,"requeued":true}`). Com `max_concurrent` pequeno, duas dessas travam o agente
-   inteiro — e o sintoma que chega é `no_capacity` em tudo (achado 1), não "há uma sessão presa".
-   **Causa desconhecida**; não confundir com a ocupação artificial que a montagem sintética do F2
-   produziu no mesmo dia. Reproduzir antes de teorizar.
+2. ~~**Vaga ocupada por sessão que nunca virou cartão.**~~ ✅ **CONSERTADO 2026-08-05** — transporte
+   `agent_release_item`: o mcp-server anuncia `contact_closed` depois do `released:true` do árbitro e
+   o **bridge** faz o desmonte pelo caminho da queda. Escopo maior que o mínimo por medição: publicar
+   `agent_released` também restaura a membership do `ready_set`, que o `work_task_release` não toca
+   (sem isso o agente sumia do push a cada devolução). Validado na tela, 3 cartões no re-claim contra
+   0 antes, `Skipping duplicate` = 0. Detalhe em `CHANGELOG.md` e `docs/guias/conference-mechanics.md`
+   § Mudança 32; instrumento em `infra/test/probe_release_presence.sh`.
 
-   ### ✅ DIAGNOSTICADO 2026-08-04 — "Return to queue" deixa o marcador de humano no bridge
+   **Lição de método, guardada porque muda como se monta reprodução:** os marcadores expiram com o
+   TTL da SESSÃO. O lixo deixado como "reprodução viva" já não reproduzia nada 14 h depois — as vagas
+   seguiam presas, os marcadores não existiam mais. **O rastro sobrevive ao mecanismo**, e medir o
+   rastro não mede a causa. Reproduções que dependem de estado com TTL precisam ser refeitas do zero
+   na sessão que as usa.
+
+   <details><summary>Diagnóstico original (2026-08-04) — mantido pelo valor de método</summary>
 
    **Receita de reprodução (3/3, determinística):** reivindicar N itens → **"Return to queue"** em
    todos → reivindicar de novo. Os re-claims sobem a ocupação (1→2→3) e **nenhum cartão aparece**.
@@ -2334,6 +2345,8 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    basta rodá-lo para ter o id do ocupante sem cartão. Vale rodar logo após um wrap-up inline: a
    janela do hold é curta e é a única ocupação legítima que nunca vira cartão.
 
+   </details>
+
 3. ~~**Rótulo "Reserva expirada"**~~ ✅ **2026-08-04** — os crachás de `reservedToMeExpired` e
    `overflowed` foram **removidos**, não reescritos. Primeira tentativa trocou os dois por "Aberto
    a todos"; o dono do produto apontou o erro: **a ausência de crachá já é a notação de "qualquer
@@ -2350,6 +2363,25 @@ re-roteia → `route()` parqueia e limpa a lease); a inbox sinaliza melhor que u
    na devolução) enquanto a tela exibia idade de `first_queued_ms` (que não reseta) — a lista
    parecia ordenada pelo número mostrado e não estava. Agora desempata pelo próprio `ageOf`, o que
    torna a ordem conferível a olho.
+
+4. **Requeue carimba score NOVO no ZSET** *(aberto)*. `add_queued_contact` no `work_task_release`
+   grava `now` como score, contra a regra do dono do produto: *"item devolvido preserva o timestamp
+   original, logo é ordenado pela espera"*. A TELA está certa desde 2026-08-04 (o sort passou a usar
+   `ageOf` de `first_queued_ms`, que não reseta), mas o **ZSET que o árbitro e o drain leem** para
+   decidir "cabeça da fila" reseta — então a ordem que a tela mostra e a ordem que o sistema usa
+   divergem, e a divergência cresce com o número de devoluções. `first_queued` já existe e é gravado
+   NX exatamente para isto. *Efeito colateral aproveitado (não endossado): é essa diferença
+   `score − first_queued` que o `probe_release_presence.sh` usa para distinguir item virgem de
+   devolvido — se o score passar a ser preservado, o probe precisa de outro discriminador.*
+
+5. **Janela de ordenação entre `conversations.events` e `conversations.routed`** *(aberto, pequeno;
+   nasceu com o conserto do achado 2)*. O anúncio `contact_closed(agent_release_item)` é produzido
+   antes de o HTTP do release responder, mas os dois tópicos são independentes e o bridge não
+   garante ordem entre eles. Na prática o intervalo é humano (segundos) contra dezenas de ms de
+   Kafka — não apareceu na validação. Um re-claim suficientemente rápido (ou um `auto_attend`, que
+   dispensa o humano) ainda cairia no guard, e o sintoma seria o achado 2 de volta em UMA sessão.
+   Antes de engenheirar contorno, **medir**: o caminho de `auto_attend` é o candidato real, porque
+   ali não há clique humano separando os dois eventos.
 
 *(Medido junto, e por isso NÃO é item: no encerramento real por supervisor o árbitro devolve a vaga
 e o Console derruba o cartão sozinho — `SMEMBERS` da instância vai a vazio em ≤6 s. Ver CHANGELOG

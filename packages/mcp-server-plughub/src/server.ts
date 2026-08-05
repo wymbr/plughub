@@ -112,6 +112,9 @@ export function createServer(allDeps?: AllDeps): McpServer {
     redis,
     routingUrl: process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550",
     adminToken: process.env["ROUTING_ADMIN_TOKEN"] || undefined,
+    // O release anuncia o fim do segmento humano em conversations.events — sem
+    // isso a presença fica no bridge e o re-claim é engolido. Ver lib/work-queue.
+    kafka,
   }
 
   const delegationDeps: DelegationDeps = {
@@ -1142,6 +1145,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
       redis,
       routingUrl: process.env["PLUGHUB_ROUTING_URL"] ?? "http://routing-engine:3550",
       adminToken: process.env["ROUTING_ADMIN_TOKEN"] || undefined,
+      kafka,
     })
     registerDelegationTools(mcpServer, {
       redis,
@@ -1818,12 +1822,15 @@ export async function startServer(config: ServerConfig): Promise<void> {
         res.status(400).json({ error: "missing_fields", message: "session_id, pool_id e instance_id são obrigatórios" })
         return
       }
+      // `releaseTask` também anuncia o fim do segmento humano
+      // (contact_closed / reason=agent_release_item) em conversations.events,
+      // e só depois do `released: true` do árbitro — ver lib/work-queue.ts.
       const result = await releaseTask(_wqRoutingUrl, _wqAdminToken, {
         tenant_id:   tenantId,
         pool_id:     poolId,
         session_id:  sessionId,
         instance_id: instanceId,
-      })
+      }, kafka)
       res.json(result)
     } catch (err) {
       res.status(502).json({ error: "routing_unreachable", message: String(err) })

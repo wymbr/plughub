@@ -11,11 +11,17 @@ import { McpServer }       from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z }               from "zod"
 import type { RedisClient } from "../infra/redis"
 import { listQueue, claimTask, releaseTask } from "../lib/work-queue"
+import type { WorkQueuePublisher } from "../lib/work-queue"
 
 export interface WorkQueueDeps {
   redis:       RedisClient
   routingUrl:  string                  // ex.: http://routing-engine:3550
   adminToken?: string | undefined      // X-Admin-Token opcional (exactOptionalPropertyTypes)
+  // OBRIGATÓRIO de propósito: o release anuncia o fim do segmento humano em
+  // `conversations.events` (ver `releaseTask`). Opcional aqui deixaria a tool MCP
+  // devolvendo o item sem desfazer a presença — o defeito de 2026-08-04 vivo por
+  // um caminho só, que é a forma mais cara de tê-lo.
+  kafka:       WorkQueuePublisher
 }
 
 function mcpOk(data: unknown) {
@@ -26,7 +32,7 @@ function mcpError(code: string, message: string) {
 }
 
 export function registerWorkQueueTools(server: McpServer, deps: WorkQueueDeps): void {
-  const { redis, routingUrl, adminToken } = deps
+  const { redis, routingUrl, adminToken, kafka } = deps
 
   server.tool(
     "work_queue_list",
@@ -66,7 +72,8 @@ export function registerWorkQueueTools(server: McpServer, deps: WorkQueueDeps): 
 
   server.tool(
     "work_task_release",
-    "Devolve um contato claimado à fila pull (o agente desistiu da task) — re-enfileira e libera a vaga.",
+    "Devolve um contato claimado à fila pull (o agente desistiu da task) — re-enfileira, " +
+    "libera a vaga e encerra o segmento do humano na sessão.",
     {
       tenant_id:   z.string(),
       pool_id:     z.string(),
@@ -75,7 +82,7 @@ export function registerWorkQueueTools(server: McpServer, deps: WorkQueueDeps): 
     } as any,
     async (args: { tenant_id: string; pool_id: string; session_id: string; instance_id: string }) => {
       try {
-        return mcpOk(await releaseTask(routingUrl, adminToken, args))
+        return mcpOk(await releaseTask(routingUrl, adminToken, args, kafka))
       } catch (err) {
         return mcpError("routing_unreachable", `release falhou: ${String(err)}`)
       }

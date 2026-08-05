@@ -445,13 +445,78 @@ export interface ReleaseArgs {
   instance_id: string
 }
 
-export function releaseTask(
-  routingUrl: string, adminToken: string | undefined, a: ReleaseArgs,
+/** Produtor mínimo de Kafka de que o release precisa (mesma forma que `server.ts` usa). */
+export interface WorkQueuePublisher {
+  publish: (topic: string, payload: Record<string, unknown>) => Promise<void>
+}
+
+/**
+ * Devolve um item claimado à fila.
+ *
+ * **Duas metades, e a segunda é o conserto do achado 2 de 2026-08-04.** O árbitro
+ * devolve a VAGA e re-enfileira o item; a PRESENÇA do humano na sessão é fato do
+ * orchestrator-bridge (`session:{sid}:human_agent` + `session:{sid}:human_agents`),
+ * e ninguém a desfazia. O marcador sobrevivente fazia o guard de dedup do bridge
+ * descartar o `conversations.routed` do re-claim — a vaga era concedida, a
+ * ocupação subia, e nenhum cartão nascia. Reproduzido 4×, com controle positivo
+ * (após um F5, que passa pelo desmonte completo, os mesmos 3 claims viram 3
+ * cartões).
+ *
+ * O anúncio é `contact_closed(reason=agent_release_item)` em `conversations.events`
+ * — mesmo par tópico/evento que o `session_transfer` já usa para "o segmento deste
+ * agente acabou, o contato continua". **O bridge é quem apaga as chaves**, e é por
+ * isso que este arquivo não fala Redis de presença: quem escreveu o fato é quem o
+ * desfaz. O ramo do bridge não re-rota, não fecha o contato e não chama o release
+ * de novo.
+ *
+ * **Ordem load-bearing:** publica só depois do `released: true` do árbitro. Anunciar
+ * antes derrubaria a presença de um item que o árbitro pode recusar a soltar
+ * (posse de outro agente, 403) — e o humano perderia a tela de um item que
+ * continua sendo dele.
+ *
+ * Falha do publish NÃO derruba o release (a vaga já voltou), mas nunca é muda:
+ * sem o anúncio o defeito volta para ESTA sessão, e o log é a única coisa que
+ * distingue isso de "consertado".
+ */
+export async function releaseTask(
+  routingUrl: string,
+  adminToken: string | undefined,
+  a: ReleaseArgs,
+  kafka: WorkQueuePublisher,
 ): Promise<unknown> {
-  return callRouting(routingUrl, adminToken, "/v1/work_queue/release", {
+  const result = await callRouting(routingUrl, adminToken, "/v1/work_queue/release", {
     tenant_id:   a.tenant_id,
     pool_id:     a.pool_id,
     session_id:  a.session_id,
     instance_id: a.instance_id,
   })
+
+  const released = (result as Record<string, unknown> | null)?.["released"] === true
+  if (!released) {
+    console.warn(
+      `[work_queue] release NÃO confirmado pelo árbitro — presença do humano ` +
+      `preservada de propósito: session=${a.session_id} pool=${a.pool_id} ` +
+      `instance=${a.instance_id} resposta=${JSON.stringify(result)}`,
+    )
+    return result
+  }
+
+  try {
+    await kafka.publish("conversations.events", {
+      event_type:  "contact_closed",
+      session_id:  a.session_id,
+      instance_id: a.instance_id,
+      reason:      "agent_release_item",
+      // Sem `outcome`: devolver não é desfecho. Um placeholder aqui viraria a
+      // disposição do segmento no acumulador de sinais do bridge.
+    })
+  } catch (err) {
+    console.error(
+      `[work_queue] release OK mas o anúncio contact_closed(agent_release_item) ` +
+      `FALHOU — a presença do humano fica no bridge e o próximo claim desta sessão ` +
+      `será engolido pelo guard de dedup: session=${a.session_id} ` +
+      `pool=${a.pool_id} instance=${a.instance_id}:`, err,
+    )
+  }
+  return result
 }
