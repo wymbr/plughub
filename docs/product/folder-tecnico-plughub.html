@@ -36,15 +36,15 @@
   .kicker.grey{color:var(--muted)}
   .rule{width:26mm;height:1.2mm;background:var(--cherry);margin:5mm 0}
 
-  .cover{background:var(--graphite);color:#fff}
+  .cover{background:var(--graphite);color:#fff;overflow:hidden}
   .cover h1{color:#fff}
   .cover p{color:#C9CDD4}
   .orb{position:absolute;border-radius:50%;background:var(--graphite2)}
 
-  .q{border-top:1px solid var(--line);padding:3.2mm 0}
+  .q{border-top:1px solid var(--line);padding:2.8mm 0}
   .q:last-of-type{border-bottom:1px solid var(--line)}
   .q .ask{font-family:var(--hfont);font-size:10.5pt;font-style:italic;color:var(--graphite);
-          line-height:1.28;margin-bottom:1.4mm}
+          line-height:1.28;margin-bottom:1.2mm}
   .q p{font-size:8.4pt}
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4mm}
@@ -54,9 +54,11 @@
   .card.dark{background:var(--graphite)}
   .card.dark h3,.card.dark h4{color:#fff}
   .card.dark p{color:#C9CDD4}
+  .card.dark strong{color:#fff}
   .card.teal{background:var(--teal)}
   .card.teal h3,.card.teal h4{color:#fff}
   .card.teal p{color:#DDEDED}
+  .card.teal strong{color:#fff}
   .card.cherry{background:var(--cherry)}
   .card.cherry h3,.card.cherry h4{color:#fff}
   .card.cherry p{color:#FBE4E7}
@@ -76,6 +78,8 @@
   th{background:var(--graphite);color:#fff;text-align:left;padding:2mm 2.5mm;font-size:8pt;font-weight:700}
   td{border-bottom:1px solid var(--line);padding:2mm 2.5mm;vertical-align:top;color:var(--graphite2)}
   td.k{font-weight:700;color:var(--graphite);width:28%}
+  td.when{font-weight:700;color:var(--cherry);width:15%;white-space:nowrap}
+  td.uses{width:26%;color:var(--muted);font-size:8pt}
 
   .chips{display:flex;flex-wrap:wrap;gap:1.6mm;margin-top:2.5mm}
   .chip{background:var(--offwhite);border-radius:1.2mm;padding:1.3mm 2.4mm;font-size:7.8pt;font-weight:600}
@@ -125,9 +129,9 @@
     <div style="height:40mm"></div>
     <div class="grid3">
       <div class="card dark"><h4>Sessão é sala, não fila</h4>
-        <p>Humano e IA são participantes simultâneos da mesma sessão, com visibilidade controlada — não fases de um handoff.</p></div>
+        <p>Humano e IA são participantes simultâneos da mesma sessão. A competência entra na conversa em vez de o cliente ser passado adiante.</p></div>
       <div class="card dark"><h4>Motor único</h4>
-        <p>Receptivo, ativo, processo, pesquisa e qualidade sobre o mesmo interpretador declarativo. Não é suíte integrada.</p></div>
+        <p>Receptivo, ativo, processo, pesquisa e qualidade sobre o mesmo interpretador declarativo. Não é suíte integrada por conector.</p></div>
       <div class="card dark"><h4>Licença por capacidade</h4>
         <p>Pessoas e IA na mesma unidade de concorrência. Sem cobrança por token, por ação ou por resolução.</p></div>
     </div>
@@ -140,91 +144,169 @@
   </div>
 </section>
 
-<!-- ================= 2 · INTRODUÇÃO ================= -->
+<!-- ================= 2 · A HERANÇA ================= -->
 <section class="page">
-  <div class="kicker">Introdução</div>
-  <h2>Por que mais uma plataforma de atendimento?</h2>
-  <p style="max-width:170mm">
-    É a primeira pergunta que fazemos a nós mesmos. O mercado tem plataformas maduras, com décadas de estrada.
-    O filtro que aplicamos a cada capacidade é direto: <strong>“por que o incumbente não poderia lançar isto no
-    próximo trimestre?”</strong> Se a resposta honesta é “poderia”, a capacidade pode ser necessária — mas não
-    justifica um produto novo. O que segue são seis perguntas em que a resposta é “não poderia, sem reescrever”.
+  <div class="kicker">A herança</div>
+  <h2>Por que as plataformas de atendimento são do jeito que são</h2>
+  <p style="max-width:172mm">
+    Não é desleixo nem falta de investimento — os fornecedores desse mercado investem muito. É
+    <strong>sedimentação</strong>. Quase tudo que existe hoje descende de uma central telefônica, e o que não
+    descende foi comprado e conectado por fora. As duas coisas explicam quase todas as limitações que a operação
+    aprendeu a contornar.
   </p>
 
-  <div style="margin-top:5mm" class="kicker grey">Seis coisas que ninguém resolveu</div>
-  <p style="margin-bottom:1.5mm">Nenhuma é funcionalidade faltando. Todas viraram “é assim mesmo”.</p>
+  <div style="margin-top:5mm" class="kicker grey">Primeira camada — o modelo do PABX e do DAC</div>
+  <p style="max-width:172mm;margin-bottom:1mm">
+    O motor original foi desenhado quando a unidade era a <strong>chamada</strong>, o recurso era o
+    <strong>ramal</strong> e o canal era o <strong>tronco</strong>. E-mail, chat, redes sociais, bot e agora IA
+    entraram depois, cada um como um tipo de mídia pendurado nesse motor. O vocabulário mudou; o modelo não.
+  </p>
+  <table>
+    <tr><th style="width:20%">Conceito da central</th><th style="width:22%">O que virou</th><th>O que ficou preso</th></tr>
+    <tr>
+      <td class="k">Chamada</td><td>Contato, interação</td>
+      <td>A unidade de medida continua sendo o contato isolado. O problema do cliente — que pode durar dias e atravessar canais — não existe como registro em lugar nenhum.</td>
+    </tr>
+    <tr>
+      <td class="k">Ramal / assento</td><td>Licença de agente</td>
+      <td>O recurso é a pessoa logada. Agente de IA não cabe nessa conta, então virou consumo cobrado à parte — e o dimensionamento passou a somar duas moedas diferentes.</td>
+    </tr>
+    <tr>
+      <td class="k">Transferência</td><td>Handoff, escalonamento</td>
+      <td><strong>Trazer competência para dentro de um atendimento significa passar o cliente adiante.</strong> A transferência virou a interface de integração — e tudo que precisa de especialista paga o preço dela.</td>
+    </tr>
+    <tr>
+      <td class="k">Pós-atendimento (ACW)</td><td>Wrap-up, disposição</td>
+      <td>Continua dentro do tempo do contato, porque no modelo o contato e a ocupação do agente são a mesma coisa. Daí o TMA inflado que todo mundo conhece e ninguém corrige.</td>
+    </tr>
+    <tr>
+      <td class="k">Discagem</td><td>Contato ativo, campanha</td>
+      <td>Alcançar alguém só é possível abrindo um canal ao vivo. Como o processo não sabe esperar nem voltar sozinho, a saída é ligar — para muita gente, sobre algo que ela não está esperando.</td>
+    </tr>
+    <tr>
+      <td class="k">Estatística da chamada</td><td>Relatório operacional</td>
+      <td>Contenção do bot e TMA do humano viraram universos separados, em sistemas diferentes.
+      <strong>Não existe régua em que a pessoa e a IA apareçam juntas</strong> — e, sem carimbo de versão no
+      atendimento, nem sobre a própria IA se compara o antes e o depois de uma mudança.</td>
+    </tr>
+  </table>
 
-  <div class="q">
-    <div class="ask">“Quando o cliente precisa passar um dado sensível, o que acontece?”</div>
-    <p>Transferir para a URA e perder parte dos clientes no caminho. Pausar a gravação e abrir um buraco na
-    auditoria. Ou deixar o atendente ouvir o número do cartão — e colocar a operação inteira no escopo PCI.</p>
+  <div style="margin-top:5mm" class="kicker grey">Segunda camada — a costura entre produtos</div>
+  <p style="max-width:172mm">
+    O que se chama de “plataforma” costuma ser uma <strong>suíte</strong>: o CCaaS de um fornecedor, o WFM de
+    outro, a gestão de qualidade de um terceiro, o discador, o bot, a ferramenta de pesquisa e o CRM de mais
+    alguns — boa parte reunida por aquisição e conectada por integração. Cada peça tem seu modelo de dado, seu
+    ciclo de release e seu suporte. O cliente da pesquisa não é o mesmo cliente do discador; o agente do WFM não é
+    o mesmo agente da qualidade; a jornada não existe porque nenhuma peça sozinha a enxerga.
+  </p>
+
+  <div class="band" style="margin-top:5mm">
+    <p style="font-family:var(--hfont);font-size:12pt;color:#fff;line-height:1.35">
+      Premissa de arquitetura não se conserta com módulo novo — e costura entre produtos não se conserta com
+      conector.
+    </p>
   </div>
-  <div class="q">
-    <div class="ask">“O seu TMA inclui o pós-atendimento?”</div>
-    <p>Se inclui, você não sabe quanto tempo o cliente é de fato atendido — e o atendente segue bloqueado depois
-    que o cliente já foi embora. Contato, segmento e conferência são tratados como uma coisa só.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Como vocês relacionam vários contatos ao mesmo problema do cliente?”</div>
-    <p>Por protocolo que o cliente precisa ter guardado, por dedução do atendente lendo o histórico, ou por
-    planilha. Na maioria das operações a resposta honesta é: <strong>não relacionam</strong>. O FCR é a métrica
-    que <em>quase</em> mede processo e falha — conta a repetição como fracasso do contato, não como duração do
-    caso.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Que percentual das interações a monitoria cobre?”</div>
-    <p>De 2 a 5%, com avaliação subjetiva e contestação resolvida em reunião, sem trilha. E quase nunca é possível
-    responder se a qualidade caiu <em>depois de uma mudança específica</em> — porque o substrato não foi carimbado
-    com a versão que estava rodando no momento do atendimento.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“Quantas vezes o mesmo cliente foi abordado esta semana, somando todos os canais?”</div>
-    <p>O discador tem uma lista, o SMS é outro sistema, o WhatsApp é um terceiro. Cada um sabe se falou com aquele
-    registro; nenhum sabe quanta pressão aquela <em>pessoa</em> recebeu da empresa.</p>
-  </div>
-  <div class="q">
-    <div class="ask">“E a sua pesquisa de satisfação — ela conta como abordagem?”</div>
-    <p>Quase nunca. A pesquisa costuma rodar em ferramenta separada, com <em>mailing</em> próprio, fora de qualquer
-    controle de fadiga: o cliente que já recebeu três abordagens na semana recebe ainda o convite para avaliar, e
-    às vezes de mais de uma área ao mesmo tempo. Como a lista é montada por extração, ela também não sabe o que
-    aconteceu no atendimento — pergunta sobre um contato que pode ter sido justamente o que irritou o cliente, e
-    pergunta de novo depois. <strong>Medir satisfação sem respeitar o bem-estar de quem responde</strong> não é
-    detalhe de processo: é a própria pesquisa corroendo o dado que pretende coletar.</p>
-  </div>
-  <div class="foot"><span>Introdução</span><span>2</span></div>
+  <div class="foot"><span>Introdução · a herança</span><span>2</span></div>
 </section>
 
-<!-- ================= 3 · DIAGNÓSTICO + O QUE É ================= -->
+<!-- ================= 3 · AS PERGUNTAS ================= -->
+<section class="page">
+  <div class="kicker">As perguntas</div>
+  <h2>Sete perguntas sobre o curso natural de um atendimento</h2>
+  <p style="max-width:172mm;margin-bottom:2mm">
+    Nenhuma é sobre funcionalidade faltando. Todas descrevem algo que a operação aprendeu a contornar — e o
+    contorno virou processo, treinamento e indicador.
+  </p>
+
+  <div class="q">
+    <div class="ask">“Trazer um especialista para dentro do atendimento exige transferir o cliente?”</div>
+    <p>Hoje sim — e não por falta de roteamento por competência, que existe desde os anos 90. É que a competência
+    mora em <em>outra fila</em>, e a única forma de alcançá-la é passar o cliente adiante: histórico repetido, nova
+    espera, risco de perder a conversa no caminho. A pergunta não é se há especialistas; é por que eles não podem
+    entrar na conversa que já está acontecendo.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“A necessidade do cliente sempre termina em um atendimento?”</div>
+    <p>Quase nunca. Ela começa num contato e se resolve dias depois, muitas vezes em outro canal e às vezes sem
+    contato nenhum. Mas o sistema só sabe registrar contatos — então quatro conversas sobre o mesmo caso viram
+    quatro registros e três falhas de FCR, e ninguém consegue dizer quanto custou resolver aquilo do início ao
+    fim.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Se a resposta não existe agora, como se dá continuidade?”</div>
+    <p>Protocolo que o cliente precisa guardar, retorno anotado numa planilha, ou uma campanha montada depois por
+    extração. O caso fica parado esperando alguém lembrar dele — e quem faz o retorno raramente sabe o que
+    aconteceu no contato de origem.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Por que se disca para milhares de pessoas para falar de algo que elas não esperam — e quem soma quanta pressão cada uma já recebeu?”</div>
+    <p>Discar é a única forma que a plataforma tem de alcançar alguém. Boa parte dessas ligações apenas entrega
+    uma informação — aprovado, agendado, disponível, vencido — que poderia ter chegado sozinha, no canal que a
+    pessoa usa, no instante em que o fato aconteceu. E a soma ninguém faz: o discador tem uma lista, o SMS costuma
+    ser outro sistema, o WhatsApp é um terceiro. Cada um sabe se falou com aquele registro; nenhum sabe quanto
+    aquela <em>pessoa</em> recebeu — e a pesquisa de satisfação, que quase nunca conta como abordagem, chega por
+    cima de tudo isso.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Quando quem atende é uma IA, você consegue dizer o que ela consultou e com que autorização?”</div>
+    <p>São duas perguntas, e a segunda é a nova. A primeira — quem <em>vê</em> o dado sensível — a operação
+    resolve transferindo para a URA, pausando a gravação ou deixando o atendente ouvir, e cada uma dessas saídas
+    tem um preço conhecido. A segunda quase nunca tem resposta: quais sistemas o agente de IA consultou naquele
+    atendimento, sob que permissão, com que registro — e o que impede alguém de induzi-lo a consultar outra
+    coisa.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Como você compara uma pessoa e uma IA que fazem o mesmo trabalho?”</div>
+    <p>Hoje não se compara. Taxa de contenção do bot de um lado; TMA, nota de monitoria e pesquisa do outro —
+    universos separados, em sistemas diferentes e muitas vezes sob times diferentes. Some-se a base: a monitoria
+    olha de 2 a 5% das interações, com avaliação subjetiva e contestação resolvida em reunião, sem trilha. E, sem
+    carimbo da versão que estava rodando, <strong>nem sobre a própria IA</strong> se responde se a qualidade caiu
+    depois da última mudança.</p>
+  </div>
+  <div class="q">
+    <div class="ask">“Quanto vai custar colocar mais IA na sua operação no mês que vem?”</div>
+    <p>A cobrança costuma ser por ação, por conversa, por resolução ou por token — o que produz duas coisas ruins
+    ao mesmo tempo: fatura imprevisível e incentivo invertido, porque quanto melhor a IA fica, mais o cliente
+    paga. E como o assento humano e o consumo de IA são cobrados em moedas diferentes, dimensionar a operação
+    vira uma soma de unidades que não se somam.</p>
+  </div>
+  <div class="foot"><span>Introdução · as perguntas</span><span>3</span></div>
+</section>
+
+<!-- ================= 4 · O QUE É ================= -->
 <section class="page">
   <div class="hinge">
-    <div class="kicker pale">O diagnóstico</div>
-    <h2>Nenhum desses problemas está sem solução. Todos estão contornados.</h2>
-    <p>Transferir para a URA, pausar a gravação, amostrar 2%, extrair uma lista para pesquisar, montar campanha em
-    lote para dar seguimento a um caso. Ninguém desenhou a operação assim porque quis — fez porque a plataforma
-    embaixo não comporta a solução direta.</p>
-    <p><strong>Se fosse funcionalidade faltando, a resposta certa seria esperar o fornecedor atual lançar.</strong>
-    Mas a limitação é fundacional: a IA modelada como etapa <em>anterior</em> ao atendimento e o humano como
-    anteparo; o contato isolado como unidade de medida; assento humano e consumo de IA em moedas diferentes.
-    Premissa de arquitetura não se conserta com módulo novo.</p>
-    <p><strong>E há uma segunda razão, mais prosaica.</strong> O que se chama de “plataforma” costuma ser uma
-    <em>suíte</em>: o CCaaS de um fornecedor, o WFM de outro, a gestão de qualidade de um terceiro, o discador, o
-    bot, a ferramenta de pesquisa e o CRM de mais alguns — boa parte reunida por aquisição e costurada por
-    conector. Cada peça tem seu modelo de dado, seu ciclo de release, seu contrato e seu suporte. O cliente da
-    pesquisa não é o mesmo cliente do discador; o agente do WFM não é o mesmo agente do QM; a jornada não existe
-    em lugar nenhum porque nenhuma peça sozinha a enxerga. <strong>O contorno, portanto, não é só de arquitetura:
-    é a costura entre produtos que nunca foram desenhados juntos</strong> — e é essa costura que a operação
-    mantém todo dia e que quebra a cada atualização de qualquer uma das partes.</p>
+    <div class="kicker pale">A dobradiça</div>
+    <h2>Como seria o atendimento se ele seguisse o curso natural da necessidade do cliente, e não o que a ferramenta permite?</h2>
+    <p>O cliente pediria uma coisa e a conversa continuaria até resolver — mudando de canal quando fosse
+    conveniente para ele, parando quando dependesse de terceiros e retomando sozinha quando a resposta chegasse.
+    A competência necessária entraria na conversa, em vez de o cliente ser mandado atrás dela. Nada disso é
+    exótico: é o que qualquer pessoa descreveria se perguntássemos como o atendimento <em>deveria</em> funcionar.</p>
+    <p><strong>É esse desenho que a plataforma persegue — e as decisões de arquitetura das próximas páginas
+    existem para permiti-lo.</strong></p>
   </div>
 
   <div class="kicker">O que é</div>
-  <h2>Plataforma única de atendimento e processos, com orquestração de agentes humanos e de IA</h2>
-  <p style="max-width:170mm">
-    Uma plataforma de contact center contemporânea em que a unidade de recurso não é o assento humano nem a
-    licença de bot: é o <strong>agente</strong> — humano ou de IA — com pool, canais, competências,
-    disponibilidade e score. O roteador não sabe qual dos dois está alocando. A sessão é uma <strong>sala de
-    conferência</strong> com múltiplos participantes simultâneos e visibilidade controlada por participante, não
-    uma fila de passagem.
+  <h2>Plataforma única de atendimento e processos, feita para agentes — humanos e de IA</h2>
+  <p style="max-width:172mm">
+    A unidade de recurso não é o assento humano nem a licença de bot: é o <strong>agente</strong>, com pool,
+    canais, competências, disponibilidade e score. O roteador não sabe qual dos dois está alocando. A sessão é uma
+    <strong>sala</strong> com participantes simultâneos e visibilidade controlada, não uma fila de passagem. E o
+    atendimento é feito para seguir o curso da necessidade: <strong>sem transferir para capturar um dado, sem
+    encerrar porque a resposta não veio hoje, sem recomeçar porque o canal mudou.</strong>
   </p>
+
+  <div class="card cherry" style="margin-top:4mm">
+    <h4>A interface de integração é o agente especialista, não a transferência</h4>
+    <p>É a diferença mais concreta em relação ao modelo herdado. Onde o CCaaS passa o cliente para outra fila
+    quando precisa de uma competência, aqui o orquestrador <strong>convoca um especialista para dentro da sessão
+    que já está acontecendo</strong> — e o cliente não percebe movimento nenhum.</p>
+    <p style="margin-top:2.2mm">O especialista existe para automatizar serviço e dar produtividade, e serve os
+    <strong>dois</strong> tipos de orquestrador: o humano, pelo Console, e o de IA, pelo fluxo. Nos incumbentes essa
+    capacidade é construída duas vezes — copilot para a pessoa de um lado, fluxo de bot do outro, dois artefatos,
+    dois times, dois roadmaps. Aqui é construída uma vez e rende nos dois: automação e produtividade deixam de ser
+    projetos separados.</p>
+  </div>
 
   <div class="grid3" style="margin-top:4mm">
     <div class="card"><h4>Uma superfície</h4>
@@ -235,29 +317,26 @@
       cliente, não com o fornecedor.</p></div>
     <div class="card dark"><h4>Um substrato</h4>
       <p>Todo contato — humano, de IA, receptivo, ativo ou importado de terceiro — produz o mesmo dado de sessão,
-      segmento e evento. Um só pipeline de qualidade e de analytics.</p></div>
+      segmento e evento. Um só pipeline de qualidade e de analytics: é o que permite pôr operação, qualidade e voz
+      do cliente no mesmo eixo, e <strong>uma pessoa ao lado de um agente de IA</strong>.</p></div>
   </div>
 
-  <div class="note">
-    <h3>Estágio, dito aqui de propósito</h3>
-    <p>A plataforma está pronta em arquitetura e funcionalidade e validada em ambiente controlado — com parte das
-    capacidades validada em atendimento real —, e <strong>ainda não está em produção em cliente</strong>. Não há
-    certificações emitidas; estão em andamento, e a arquitetura já produz a evidência técnica que elas exigem.
-    Comparações de capacidade neste documento são reais; nenhuma comparação de tração nos favorece hoje.</p>
-  </div>
-  <div class="foot"><span>O que é</span><span>3</span></div>
+  <p style="margin-top:4mm;font-size:8.5pt;color:var(--muted)">
+    O estágio do produto, os limites conhecidos e o que é roadmap declarado estão reunidos na última página, sem
+    espalhamento pelo documento.
+  </p>
+  <div class="foot"><span>O que é</span><span>4</span></div>
 </section>
 
-<!-- ================= 4 · COMO É ================= -->
+<!-- ================= 5 · COMO É ================= -->
 <section class="page">
   <div class="kicker">Como é</div>
-  <h2>O recurso básico de atendimento é o agente — humano ou de IA</h2>
-  <p style="max-width:170mm">
+  <h2>O recurso básico é o agente — e o papel de orquestrador é cambiável</h2>
+  <p style="max-width:172mm">
     Toda sessão tem um <strong>orquestrador</strong>: o participante que conduz o atendimento, mantém o contexto e
     decide o que delegar. Em torno dele entram e saem <strong>especialistas</strong>, convocados pelo mesmo
-    roteador e com o mesmo contrato de execução. O ponto do desenho é que o papel de orquestrador é
-    <strong>cambiável</strong>: pode ser ocupado por uma pessoa ou por uma instância de fluxo, sem que nada mais
-    na sessão mude.
+    roteador e com o mesmo contrato de execução. O papel de orquestrador pode ser ocupado por uma pessoa ou por
+    uma instância de fluxo, sem que nada mais na sessão mude.
   </p>
 
   <svg viewBox="0 0 760 300" xmlns="http://www.w3.org/2000/svg" style="margin-top:4mm">
@@ -286,7 +365,7 @@
     <text x="290" y="248" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-style="italic" fill="#6B7280">mesmo pool · mesmo roteador · mesma sessão</text>
 
     <line x1="392" y1="149" x2="446" y2="149" stroke="#6B7280" stroke-width="1.6" marker-end="url(#ar)"/>
-    <text x="419" y="140" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">delega</text>
+    <text x="419" y="140" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">convoca</text>
 
     <rect x="450" y="82" width="290" height="136" rx="8" fill="#fff" stroke="#DDDEE1"/>
     <text x="464" y="101" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#6B7280" letter-spacing="1.2">ESPECIALISTAS (entram e saem)</text>
@@ -314,35 +393,161 @@
       É fato do artefato, declarado no registro e lido na autenticação — nunca informado pelo próprio agente. É
       entrada de autorização, não de configuração.</p></div>
     <div class="card"><h4>Visibilidade por mensagem</h4>
-      <p><span class="mono">all</span> (inclui o cliente), <span class="mono">agents_only</span> (nota interna) ou
-      lista explícita de participantes — supervisor falando com um agente específico, sem que os demais vejam.</p></div>
+      <p>Todos (inclui o cliente), só agentes (nota interna) ou lista explícita de participantes — supervisor
+      falando com um agente específico, sem que os demais vejam.</p></div>
+  </div>
+
+  <div class="foot"><span>Como é</span><span>5</span></div>
+</section>
+
+<!-- ================= 6 · O DIAL DO ANTEPARO ================= -->
+<section class="page">
+  <div class="kicker">O dial do anteparo</div>
+  <h2>Quem comanda o processo muda — e o dial gira nos dois sentidos</h2>
+  <p style="max-width:172mm">
+    Se o papel de orquestrador é cambiável, a pergunta operacional deixa de ser “a IA substitui o humano?” e passa
+    a ser <strong>onde, neste processo, cada um deve estar hoje</strong> — sabendo que a resposta muda com o tempo,
+    nas duas direções, e que mudá-la não pode custar um projeto.
+  </p>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card cherry">
+      <h4>Humano orquestra, IA assume</h4>
+      <p>O sentido mais conhecido. O atendente conduz e delega trechos delimitados: consulta a sistema, captura de
+      dado sensível, cálculo, redação, resumo. Cada trecho é medido antes do próximo — e o humano segue vendo o
+      andamento e podendo retomar o controle a qualquer momento.</p>
+    </div>
+    <div class="card teal">
+      <h4>IA orquestra, humano assume</h4>
+      <p>O sentido que quase nenhuma plataforma consegue representar. A IA conduz o atendimento e convoca a pessoa
+      como <em>especialista</em> para o trecho que ela não deve decidir sozinha: exceção contratual, autorização,
+      negociação, empatia. Sem transferência visível ao cliente e sem perder o contexto.</p>
+    </div>
   </div>
 
   <div class="band" style="margin-top:4mm">
-    <div class="kicker pale" style="margin-bottom:2mm">O dial do anteparo — e ele gira nos dois sentidos</div>
-    <p style="color:#fff;font-family:var(--hfont);font-size:11.5pt;line-height:1.35">
-      O humano começa no comando do processo e a IA assume pedaços; a cada pedaço que a avaliação prova confiável,
-      o humano recua. Mas o inverso também é regime normal: <strong>a IA orquestra e convoca o humano</strong> como
-      especialista para o trecho que ela não deve decidir sozinha — exceção, autorização, negociação, empatia.
-    </p>
-    <p style="margin-top:2.5mm">
-      É por isso que o papel de orquestrador precisa ser cambiável de verdade, e não um modo de operação. E é o que
-      dá base concreta à ideia de <strong>a IA aprender com o humano</strong>: quando os dois ocupam o mesmo papel
-      na mesma estrutura de sessão, o atendimento humano produz exatamente o registro — turno, ferramenta chamada,
-      decisão, desfecho — de que o agente de IA precisa para ser construído, avaliado e corrigido. Sendo honesto
-      sobre o mecanismo: <strong>não é aprendizado automático em produção</strong>. É um laço supervisionado —
-      avaliação com critérios, calibração do avaliador, nova versão publicada e medida contra a anterior — em que
-      cada avanço da IA é explícito, auditável e reversível por versão.
-    </p>
+    <div class="kicker pale" style="margin-bottom:2mm">E como a IA aprende com o humano</div>
+    <p>Quando os dois ocupam o mesmo papel na mesma estrutura de sessão, o atendimento humano produz exatamente o
+    registro — turno, ferramenta chamada, decisão, desfecho — de que o agente de IA precisa para ser construído,
+    avaliado e corrigido. Sendo honesto sobre o mecanismo: <strong>não é aprendizado automático em
+    produção</strong>. É um laço supervisionado — avaliação com critérios, calibração do avaliador, nova versão
+    publicada e medida contra a anterior — em que cada avanço é explícito, auditável e reversível por versão.</p>
   </div>
-  <div class="foot"><span>Como é</span><span>4</span></div>
+
+  <div class="kicker" style="margin-top:6mm">O que torna o movimento seguro</div>
+  <h2>Mover o dial é decisão medida, não aposta</h2>
+  <div class="grid3" style="margin-top:3mm">
+    <div class="card">
+      <h4>Critério antes de opinião</h4>
+      <p>O avanço é decidido por avaliação com formulário, e parte dos critérios é <strong>calculada de forma
+      determinística</strong> a partir de métricas da sessão — não depende da percepção de quem assiste à
+      gravação.</p>
+    </div>
+    <div class="card">
+      <h4>Comparação na mesma régua</h4>
+      <p>O segmento guarda a <strong>versão que estava rodando</strong>, e a bancada põe o antes e o depois — e a
+      pessoa e o agente de IA — lado a lado, com operação, qualidade e voz do cliente no mesmo eixo.</p>
+    </div>
+    <div class="card">
+      <h4>Reversível por deploy</h4>
+      <p>A versão em produção é o slot promovido do pool. Recuar é <strong>promover a anterior</strong>, não
+      refazer o fluxo — o que torna barato experimentar e, principalmente, barato desistir.</p>
+    </div>
+  </div>
+
+  <p style="margin-top:4mm;max-width:172mm">
+    E onde o dial está em cada processo é <strong>configuração de pool e de deploy, não mudança de código</strong>.
+    Por isso ele anda por etapa — um trecho de cada vez, no ritmo que a evidência permitir — em vez de andar por
+    projeto.
+  </p>
+  <div class="foot"><span>O dial do anteparo</span><span>6</span></div>
 </section>
 
-<!-- ================= 5 · ARQUITETURA — FIGURA DAS CAMADAS ================= -->
+<!-- ================= 6 · CASO PONTA A PONTA ================= -->
+<section class="page">
+  <div class="kicker">Um caso inteiro</div>
+  <h2>Uma portabilidade, do primeiro contato ao registro final</h2>
+  <p style="max-width:172mm">
+    O mesmo caso percorrendo todas as camadas. É deliberadamente um processo que <strong>não cabe num
+    atendimento</strong>: depende de terceiro, atravessa dias e muda de canal — que é a forma da maior parte do que
+    um contact center realmente resolve.
+  </p>
+
+  <table>
+    <tr><th style="width:15%">Quando</th><th>O que acontece</th><th style="width:26%">O que a plataforma usa</th></tr>
+    <tr>
+      <td class="when">Dia 1 · 21h40</td>
+      <td>O cliente pede portabilidade pelo WhatsApp. Um agente de IA orquestra, resolve a identidade pelas
+      âncoras do canal e abre o processo. Não há URA, não há triagem: a conversa já é o atendimento.</td>
+      <td class="uses">Canais · identificação · fluxo negocial</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 1 · 21h48</td>
+      <td>É preciso um documento e um dado de conta. O orquestrador <strong>convoca um especialista de captura</strong>:
+      acompanha etapa, validação e tempo decorrido — e recebe só o resultado. O valor bruto nunca passa por ele.</td>
+      <td class="uses">Especialista na sessão · mascaramento por papel</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 1 · 21h52</td>
+      <td>A operadora doadora só responde em horário útil. O processo <strong>suspende</strong>. O contato encerra
+      porque o cliente saiu — e as estatísticas dele congelam aí. Nenhum agente fica bloqueado esperando.</td>
+      <td class="uses">Suspend · três camadas de ciclo de vida</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 3 · 06h10</td>
+      <td>A resposta chega por webhook, fora do horário de atendimento. O processo <strong>retoma sozinho</strong>,
+      sem contato e sem ninguém logado.</td>
+      <td class="uses">Webhook como canal · resume por token</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 3 · 06h11</td>
+      <td>O resultado precisa chegar ao cliente. Não é uma ligação: é uma mensagem no canal que ele usa, disparada
+      pelo fato ter acontecido. Antes de sair, o motor de contato verifica opt-out, janela e teto de abordagem.</td>
+      <td class="uses">Contato ativo · governança de fadiga</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 3 · 19h30</td>
+      <td>O cliente responde — agora pelo webchat do aplicativo, não pelo WhatsApp. A identidade resolve pela
+      âncora comprovada e o processo <strong>continua de onde parou</strong>, sem protocolo e sem recontar a
+      história.</td>
+      <td class="uses">Retomada cross-canal · posse de canal</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 4 · 10h05</td>
+      <td>Aparece uma exceção contratual que a IA não deve decidir. Agora o <strong>dial gira ao contrário</strong>:
+      a IA segue orquestrando e convoca uma pessoa como especialista, para o trecho de negociação.</td>
+      <td class="uses">Orquestrador de IA · humano como especialista</td>
+    </tr>
+    <tr>
+      <td class="when">Dia 4 · 10h22</td>
+      <td>Resolvido. O pós-atendimento da pessoa <strong>não entra no tempo do contato</strong>: vira item na caixa
+      de trabalho dela, com o desfecho gravado por referência no segmento de origem.</td>
+      <td class="uses">Wrap-up destacado · fila pull</td>
+    </tr>
+    <tr>
+      <td class="when">Depois</td>
+      <td>Fica registrado: uma <strong>jornada</strong> de quatro dias, as sessões que a compõem e os segmentos de
+      cada participante — cada um com sua duração, desfecho e a versão do agente que estava rodando. A pesquisa de
+      satisfação é endereçada ao processo, não ao último contato.</td>
+      <td class="uses">Jornada → sessão → segmento · qualidade · survey por grão</td>
+    </tr>
+  </table>
+
+  <div class="card cherry" style="margin-top:4mm">
+    <h4>Nenhuma ligação foi feita. Nenhum agente ficou bloqueado esperando. Nada foi repetido pelo cliente.</h4>
+    <p>É este o caso que substitui boa parte da discagem — não porque discar seja proibido, mas porque a
+    informação chegou sozinha, no canal certo, no instante em que passou a existir. Um contact center que só sabe
+    alcançar alguém abrindo um canal ao vivo <strong>precisa</strong> de discador para fazer o mesmo trabalho, e
+    paga por isso em custo, em taxa de abandono e em paciência do cliente.</p>
+  </div>
+  <div class="foot"><span>Um caso inteiro</span><span>7</span></div>
+</section>
+
+<!-- ================= 7 · ARQUITETURA — CAMADAS ================= -->
 <section class="page">
   <div class="kicker">Arquitetura</div>
   <h2>Sete camadas de abstração — e o caminho de um contato por elas</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Cada camada só conhece o contrato da camada vizinha. O motor de fluxo não sabe qual canal está em uso; o canal
     não sabe qual agente atende; o roteador não sabe se o recurso é uma pessoa. A leitura das camadas é top-down,
     por nível de abstração; <strong>o caminho do contato é outro</strong> — e a figura mostra os dois ao mesmo
@@ -354,15 +559,11 @@
       <marker id="a2" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
         <path d="M0,0 L8,3.2 L0,6.4 z" fill="#990011"/>
       </marker>
-      <marker id="a3" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
-        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#6B7280"/>
-      </marker>
     </defs>
 
     <text x="8" y="16" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#6B7280" letter-spacing="1.3">CAMADAS DE ABSTRAÇÃO (top-down)</text>
     <text x="600" y="16" font-family="Calibri,Arial" font-size="11" font-weight="700" fill="#990011" letter-spacing="1.3">ORDEM DO CONTATO</text>
 
-    <!-- camada 1 -->
     <rect x="8" y="26" width="576" height="54" rx="6" fill="#990011"/>
     <text x="24" y="48" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">1 · Bus interno</text>
     <text x="24" y="66" font-family="Calibri,Arial" font-size="10.5" fill="#F3D6DA">sinalização, eventos e dados num único barramento, com contrato versionado e stream canônico por sessão</text>
@@ -371,7 +572,6 @@
     <text x="644" y="50" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">transversal</text>
     <text x="644" y="63" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">tudo passa por aqui</text>
 
-    <!-- camada 2 -->
     <rect x="8" y="88" width="576" height="54" rx="6" fill="#7A2E38"/>
     <text x="24" y="110" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">2 · Fluxos de agente</text>
     <text x="24" y="128" font-family="Calibri,Arial" font-size="10.5" fill="#EBD5D8">workflows declarativos em três níveis: negocial · acesso · entrada e saída</text>
@@ -380,7 +580,6 @@
     <text x="644" y="112" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">executa o processo</text>
     <text x="644" y="125" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">e chama sistemas</text>
 
-    <!-- camada 3 -->
     <rect x="8" y="150" width="576" height="54" rx="6" fill="#2E3138"/>
     <text x="24" y="172" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">3 · Canais</text>
     <text x="24" y="190" font-family="Calibri,Arial" font-size="10.5" fill="#C9CDD4">normalização de entrada, renderização de saída, degradação por capacidade — receptivo e ativo</text>
@@ -389,7 +588,6 @@
     <text x="644" y="174" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">o contato entra</text>
     <text x="644" y="187" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">ou é iniciado</text>
 
-    <!-- camada 4 -->
     <rect x="8" y="212" width="576" height="54" rx="6" fill="#3E434D"/>
     <text x="24" y="234" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">4 · Identificação</text>
     <text x="24" y="252" font-family="Calibri,Arial" font-size="10.5" fill="#C9CDD4">resolução por âncoras, posse de canal comprovada, pendências em aberto, política de retomada</text>
@@ -398,7 +596,6 @@
     <text x="644" y="236" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">quem é</text>
     <text x="644" y="249" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">e o que retoma</text>
 
-    <!-- camada 5 -->
     <rect x="8" y="274" width="576" height="54" rx="6" fill="#2C5560"/>
     <text x="24" y="296" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">5 · Roteamento</text>
     <text x="24" y="314" font-family="Calibri,Arial" font-size="10.5" fill="#CFE0E4">competência, canal, disponibilidade, SLA e performance — fila com estatística própria, despacho push ou pull</text>
@@ -407,7 +604,6 @@
     <text x="644" y="298" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">a quem vai</text>
     <text x="644" y="311" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">ou espera na fila</text>
 
-    <!-- camada 6 -->
     <rect x="8" y="336" width="576" height="54" rx="6" fill="#046A6A"/>
     <text x="24" y="358" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">6 · Agentes</text>
     <text x="24" y="376" font-family="Calibri,Arial" font-size="10.5" fill="#CFE7E7">runtime único para humano e IA · capacidade compartilhada · ferramentas mediadas e auditadas</text>
@@ -416,7 +612,6 @@
     <text x="644" y="360" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">quem atende</text>
     <text x="644" y="373" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">pessoa ou instância</text>
 
-    <!-- camada 7 -->
     <rect x="8" y="398" width="576" height="54" rx="6" fill="#0E4E4E"/>
     <text x="24" y="420" font-family="Calibri,Arial" font-size="13" font-weight="700" fill="#fff">7 · Contato</text>
     <text x="24" y="438" font-family="Calibri,Arial" font-size="10.5" fill="#CDE3E3">organização do que foi atendido em jornada → sessão → segmento, com métrica e avaliação em cada grão</text>
@@ -425,7 +620,6 @@
     <text x="644" y="422" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">vira registro</text>
     <text x="644" y="435" font-family="Calibri,Arial" font-size="9.5" fill="#6B7280">medível e avaliável</text>
 
-    <!-- trilha do contato -->
     <rect x="8" y="470" width="744" height="76" rx="6" fill="#F2F2F2"/>
     <text x="24" y="490" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#990011" letter-spacing="1.2">TRILHA DE UM CONTATO</text>
 
@@ -434,32 +628,32 @@
     <line x1="112" y1="517" x2="132" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="136" y="500" width="86" height="34" rx="5" fill="#2E3138"/>
-    <text x="179" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">① canal</text>
+    <text x="179" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">1 · canal</text>
     <text x="179" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">sessão criada</text>
     <line x1="224" y1="517" x2="244" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="248" y="500" width="86" height="34" rx="5" fill="#3E434D"/>
-    <text x="291" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">② identidade</text>
+    <text x="291" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">2 · identidade</text>
     <text x="291" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">e pendências</text>
     <line x1="336" y1="517" x2="356" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="360" y="500" width="86" height="34" rx="5" fill="#2C5560"/>
-    <text x="403" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">③ roteador</text>
+    <text x="403" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">3 · roteador</text>
     <text x="403" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE0E4">fila e score</text>
     <line x1="448" y1="517" x2="468" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="472" y="500" width="86" height="34" rx="5" fill="#046A6A"/>
-    <text x="515" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">④ agente</text>
+    <text x="515" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">4 · agente</text>
     <text x="515" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">humano ou IA</text>
     <line x1="560" y1="517" x2="580" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="584" y="500" width="74" height="34" rx="5" fill="#7A2E38"/>
-    <text x="621" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">⑤ fluxo</text>
+    <text x="621" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">5 · fluxo</text>
     <text x="621" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EBD5D8">e sistemas</text>
     <line x1="660" y1="517" x2="676" y2="517" stroke="#990011" stroke-width="2" marker-end="url(#a2)"/>
 
     <rect x="680" y="500" width="60" height="34" rx="5" fill="#0E4E4E"/>
-    <text x="710" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">⑥ registro</text>
+    <text x="710" y="515" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">6 · registro</text>
     <text x="710" y="528" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CDE3E3">jornada</text>
   </svg>
 
@@ -477,14 +671,14 @@
       vence o ambiente. Há verificação automatizada que falha o build em violação nova.</p>
     </div>
   </div>
-  <div class="foot"><span>Arquitetura · mapa</span><span>5</span></div>
+  <div class="foot"><span>Arquitetura · mapa</span><span>8</span></div>
 </section>
 
-<!-- ================= 6 · CAMADAS 1 e 2 ================= -->
+<!-- ================= 8 · CAMADAS 1 e 2 ================= -->
 <section class="page">
   <div class="kicker">Camada 1</div>
   <h2>Bus interno padronizado <span class="seal">em operação</span></h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Sinalização, eventos de domínio e dados analíticos trafegam por um barramento único de eventos. Nenhum
     componente lê o banco de outro; nenhum integra por chamada interna ad-hoc. Todo evento que cruza fronteira de
     pacote tem contrato declarado e validado antes da escrita, e os consumidores críticos têm retry e fila de
@@ -503,12 +697,12 @@
     <strong>Além do bus</strong>, cada sessão tem um <em>stream canônico</em> — a única fonte de verdade dos
     eventos daquela sessão, com escritor único e validação de esquema na escrita. Mensagem carrega conteúdo
     mascarado e conteúdo original em campos distintos; só papéis autorizados alcançam o segundo, e todo acesso
-    deixa registro imutável.
+    deixa registro imutável. Mascarar deixa de ser filtro de tela e passa a ser propriedade do dado.
   </p>
 
   <div class="kicker" style="margin-top:6mm">Camada 2</div>
   <h2>Fluxos de agente organizados em três níveis</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Um interpretador de grafo de estados, com quinze tipos de passo, executa tanto o atendimento conversacional
     quanto a automação de processo. O que separa os níveis não é a tecnologia — é <strong>o que cada nível tem o
     direito de saber</strong>.
@@ -547,14 +741,14 @@
     cliente; o perfil de <em>agente</em> pode falar, mas não pode suspender. Um fluxo não consegue, por construção,
     virar as duas coisas — que é como nascem os processos impossíveis de auditar.
   </p>
-  <div class="foot"><span>Arquitetura · bus e fluxos</span><span>6</span></div>
+  <div class="foot"><span>Arquitetura · bus e fluxos</span><span>9</span></div>
 </section>
 
-<!-- ================= 7 · CAMADAS 3 e 4 ================= -->
+<!-- ================= 9 · CAMADA 3 — CANAIS ================= -->
 <section class="page">
   <div class="kicker">Camada 3</div>
   <h2>Abstração de canais — receptivo e ativo <span class="seal">em operação</span></h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Adaptadores concentram todo o conhecimento específico de canal: normalização de entrada, renderização de saída
     e degradação de interação. Nenhuma lógica de canal existe no motor de fluxo. Um menu com botões vira lista
     numerada onde botão não existe — decisão do adaptador, não do fluxo.
@@ -575,33 +769,52 @@
       <h4>Ativo pelo mesmo motor</h4>
       <p>Contato ativo é audiência + campanha + entrega, endereçando um <strong>pool</strong> — nunca um fluxo
       específico. Disparo por agenda recorrente, distribuição em paralelo por instância, importação de base com
-      rejeição por linha. Não há stack de outbound paralela.</p>
-    </div>
-    <div class="card teal">
-      <h4>Governança de contato — inclusive para pesquisa</h4>
-      <p>Antes de qualquer abordagem, um motor agnóstico de canal e de campanha decide em ordem de precedência:
-      opt-out global (salvo campanha transacional) → janela de calendário → fadiga (tetos por frequência,
-      quarentena, teto por canal) → supressão de mailing. A decisão sempre <strong>nomeia a regra</strong> que a
-      produziu, e o registro do contato é gravado na mesma transação. Por ser genérico, <strong>a pesquisa de
-      satisfação passa pelo mesmo portão</strong> das campanhas comerciais: convite para avaliar conta como
-      abordagem, e o cliente saturado não recebe mais um.</p>
-    </div>
-    <div class="card dark">
-      <h4>Limite declarado</h4>
-      <p>O ativo é forte em orquestração assíncrona — link, mensagem, engajamento adiável. <strong>Não há discador
-      preditivo</strong>: modos power, progressivo e preview, guarda de taxa de abandono e listas restritivas
-      regulatórias são roadmap. Para voz ativa em massa, os incumbentes entregam hoje e nós não.</p>
+      rejeição por linha. Não há stack de outbound paralela, com billing e time próprios.</p>
     </div>
   </div>
 
-  <div class="foot"><span>Arquitetura · canais</span><span>7</span></div>
+  <div class="card cherry" style="margin-top:4mm">
+    <h4>Contato ativo sem discador — a premissa que estamos recusando</h4>
+    <p>O pacing do discador preditivo é uma função da <strong>disponibilidade do agente</strong>: ele disca N
+    linhas porque M operadores ficarão livres em T segundos. A pessoa chamada é entrada de um modelo de filas
+    otimizado para ocupação de operador — e a prova documental disso é o <strong>teto regulatório de taxa de
+    abandono</strong>: a indústria admitindo, por escrito, que o modelo transfere custo para quem atende. Nenhum
+    outro canal precisou de um limite desses.</p>
+    <p style="margin-top:2.2mm">A inversão é simples. Em vez de abrir um canal ao vivo por conveniência de quem
+    liga, a plataforma envia uma mensagem com <em>motivo e assunto</em> e devolve a decisão de quando conversar a
+    quem foi procurado. São três efeitos, que convém não confundir: a <strong>conversão por tentativa</strong>
+    sobe, porque só engaja quem tem algum interesse; o <strong>custo por contato útil</strong> cai, porque não se
+    gasta operador em silêncio e caixa postal; e o <strong>volume absoluto de conversas</strong> pode cair — é a
+    troca que se está fazendo, deliberadamente.</p>
+    <p style="margin-top:2.2mm">O diferencial, porém, não é o link: click-to-call, callback e opt-in existem no
+    mercado há vinte anos. É <strong>o que existe do outro lado quando a pessoa clica</strong> — o processo já tem
+    estado, com jornada, contexto e pendência —, então a conversa continua de onde parou, em vez de nascer numa
+    fila genérica com o cliente recontando a história para alguém que não sabe por que o procuraram.</p>
+    <p style="margin-top:2.2mm"><strong>O limite, dito com clareza:</strong> a inversão não cobre tudo. Cobrança
+    de valor relevante, prospecção fria e urgência regulatória continuam exigindo voz ativa em volume, e aí
+    <strong>não temos discador preditivo</strong> — pacing power, progressivo e preview, guarda de taxa de abandono
+    e listas restritivas são roadmap. Um modelo que começa por mensagem também pressupõe letramento digital, que
+    nem toda base tem. Onde a inversão não serve, os incumbentes entregam hoje e nós não.</p>
+  </div>
+
+  <div class="card teal" style="margin-top:4mm">
+    <h4>Governança de contato — um portão só, inclusive para pesquisa</h4>
+    <p>Antes de qualquer abordagem, um motor agnóstico de canal e de campanha decide em ordem de precedência:
+    opt-out global (salvo campanha transacional) → janela de calendário → fadiga (tetos por frequência,
+    quarentena, teto por canal) → supressão de mailing. A decisão sempre <strong>nomeia a regra</strong> que a
+    produziu, e o registro do contato é gravado na mesma transação — a janela começa no envio, não na tentativa.</p>
+    <p style="margin-top:2.2mm">Por ser genérico, <strong>a pesquisa de satisfação passa pelo mesmo portão</strong>
+    das campanhas comerciais: convite para avaliar conta como abordagem, e o cliente já saturado não recebe mais
+    um. É a diferença entre medir satisfação e corroer o dado que se pretende coletar.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · canais</span><span>10</span></div>
 </section>
 
-<!-- ================= 8 · CAMADA 4 — IDENTIFICAÇÃO ================= -->
+<!-- ================= 10 · CAMADA 4 — IDENTIFICAÇÃO ================= -->
 <section class="page">
   <div class="kicker">Camada 4</div>
   <h2>Identificação do usuário — três classes de evidência</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     A identidade é resolvida por <strong>âncoras</strong> — telefone, e-mail, documento, identificador de canal — e
     construída de forma progressiva: âncoras que não casaram são anexadas ao cliente vencedor, de modo que um
     e-mail sozinho passa a resolver em contatos futuros. O que distingue esta camada não é a resolução, e sim a
@@ -628,7 +841,7 @@
       — ela não é o motor biométrico. Uso previsto: dispensar o OTP em canal já reconhecido e elevar a confiança
       antes de operação de risco.</td>
     </tr>
-    <tr><td class="k">Pendências por cliente</td><td>—</td><td>O que aquele cliente tem em aberto, consultável de qualquer canal — retomar no WhatsApp o que começou na voz. Gated pela classe de evidência.</td></tr>
+    <tr><td class="k">Pendências por cliente</td><td>—</td><td>O que aquele cliente tem em aberto, consultável de qualquer canal — retomar no webchat o que começou na voz. Gated pela classe de evidência.</td></tr>
     <tr><td class="k">Política de retomada</td><td>—</td><td>Declarada no passo do fluxo: oferecer ao cliente ou retomar automaticamente. A prévia do contexto é exibida mascarada.</td></tr>
   </table>
 
@@ -643,19 +856,19 @@
     <div class="card">
       <h4>Consequência para LGPD</h4>
       <p>Dado biométrico é dado pessoal <strong>sensível</strong>: exige base legal e consentimento específicos,
-      retenção própria e trilha de acesso. Por isso o desenho guarda o veredito e a proveniência, e não o
-      template biométrico — que permanece no provedor. Esta é a razão de a biometria ser roadmap e não um item de
-      backlog qualquer: o custo dela é de conformidade, não de código.</p>
+      retenção própria e trilha de acesso. Por isso o desenho guarda o veredito e a proveniência, e não o template
+      biométrico — que permanece no provedor. É por conformidade, e não por esforço de código, que a biometria é
+      roadmap.</p>
     </div>
   </div>
-  <div class="foot"><span>Arquitetura · identidade</span><span>8</span></div>
+  <div class="foot"><span>Arquitetura · identidade</span><span>11</span></div>
 </section>
 
-<!-- ================= 8 · CAMADAS 5 e 6 ================= -->
+<!-- ================= 11 · CAMADAS 5 e 6 ================= -->
 <section class="page">
   <div class="kicker">Camada 5</div>
   <h2>Roteador — árbitro único de alocação <span class="seal">em operação</span></h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Nenhum componente encaminha conversa sem passar por ele. A alocação combina competência declarada, canal,
     disponibilidade real, SLA da fila e performance histórica — e trata pessoa e instância de IA pela mesma
     interface.
@@ -697,7 +910,7 @@
 
   <div class="kicker" style="margin-top:6mm">Camada 6</div>
   <h2>Agentes — runtime único, ferramentas mediadas</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     O contrato de ciclo de vida é o mesmo para humano e IA: autenticar → pronto → ocupado → concluir, com desfecho
     e status de tratativa <strong>obrigatórios</strong> na conclusão. Nenhum agente acessa sistema de negócio
     diretamente: toda chamada passa por servidores de ferramenta autorizados.
@@ -712,7 +925,7 @@
     enviada ao modelo já vem filtrada pelo perfil —, <strong>guarda de injeção</strong> por heurística e
     <strong>registro de auditoria</strong>. A política de auditoria é declarada <em>na ferramenta</em>, não na
     chamada: o chamador não pode optar por sair. É o que sustenta a alegação de governança para agentes que não
-    escrevemos.
+    escrevemos — e é a resposta à segunda metade da pergunta “essas informações estão seguras?”.
   </p>
   <div class="card cherry" style="margin-top:3mm">
     <h4>Inferência agnóstica de modelo</h4>
@@ -721,14 +934,14 @@
     equilibrado, potente, avaliação) são configuração por tenant, e a carga de avaliação roda isolada da de
     atendimento. Sem lock-in de fornecedor de modelo.</p>
   </div>
-  <div class="foot"><span>Arquitetura · roteamento e agentes</span><span>9</span></div>
+  <div class="foot"><span>Arquitetura · roteamento e agentes</span><span>12</span></div>
 </section>
 
-<!-- ================= 9 · FRONTEIRA ABERTA ================= -->
+<!-- ================= 12 · FRONTEIRA ABERTA ================= -->
 <section class="page">
   <div class="kicker">Fronteira</div>
   <h2>Agentes externos, portabilidade e convivência com o que já existe</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A
     fronteira é aberta nas duas direções: <strong>incorporar</strong> agentes construídos fora e
     <strong>derivar</strong> atendimento, dado e lógica para fora — inclusive para a plataforma que o cliente já
@@ -777,16 +990,17 @@
     o que baixou. É exatamente aí que os projetos de IA agêntica travam na passagem para produção — identidade,
     auditabilidade e lock-in —, e é o ponto em que a regulação europeia passa a cobrar evidência.</p>
   </div>
-  <div class="foot"><span>Arquitetura · fronteira aberta</span><span>10</span></div>
+  <div class="foot"><span>Arquitetura · fronteira aberta</span><span>13</span></div>
 </section>
 
-<!-- ================= 10 · CAMADA 7 ================= -->
+<!-- ================= 13 · CAMADA 7 ================= -->
 <section class="page">
   <div class="kicker">Camada 7</div>
   <h2>Contatos organizados em jornada, sessão e segmento</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Três grãos, com identidade e métrica próprias. É o que permite responder “quanto custou resolver a
-    portabilidade do início ao fim” e “quanto tempo <em>este</em> participante levou” com o mesmo dado.
+    portabilidade do início ao fim” e “quanto tempo <em>este</em> participante levou” com o mesmo dado — e é o
+    registro que sobra do caso da página 7.
   </p>
 
   <svg viewBox="0 0 760 214" xmlns="http://www.w3.org/2000/svg" style="margin:4mm 0">
@@ -800,23 +1014,23 @@
     <text x="28" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">WhatsApp · dia 1</text>
     <rect x="262" y="86" width="232" height="52" rx="6" fill="#2E3138"/>
     <text x="276" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · contato</text>
-    <text x="276" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">voz · dia 4</text>
+    <text x="276" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">webchat · dia 3</text>
     <rect x="510" y="86" width="236" height="52" rx="6" fill="#2E3138"/>
-    <text x="524" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · ativo</text>
-    <text x="524" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">retorno da campanha · dia 12</text>
+    <text x="524" y="106" font-family="Calibri,Arial" font-size="11.5" font-weight="700" fill="#fff">SESSÃO · suspensa</text>
+    <text x="524" y="122" font-family="Calibri,Arial" font-size="10" fill="#C9CDD4">retomada por webhook · dia 3</text>
 
     <rect x="14" y="150" width="112" height="46" rx="5" fill="#990011"/>
     <text x="70" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
     <text x="70" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">IA primária</text>
-    <rect x="134" y="150" width="112" height="46" rx="5" fill="#990011"/>
+    <rect x="134" y="150" width="112" height="46" rx="5" fill="#046A6A"/>
     <text x="190" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
-    <text x="190" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">humano</text>
+    <text x="190" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">captura mascarada</text>
     <rect x="262" y="150" width="112" height="46" rx="5" fill="#990011"/>
     <text x="318" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
-    <text x="318" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">humano</text>
-    <rect x="382" y="150" width="112" height="46" rx="5" fill="#046A6A"/>
+    <text x="318" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#FBE4E7">IA primária</text>
+    <rect x="382" y="150" width="112" height="46" rx="5" fill="#3E434D"/>
     <text x="438" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
-    <text x="438" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#DDEDED">especialista IA</text>
+    <text x="438" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">humano especialista</text>
     <rect x="510" y="150" width="236" height="46" rx="5" fill="#3E434D"/>
     <text x="628" y="169" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">SEGMENTO</text>
     <text x="628" y="184" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">pós-atendimento destacado — fora do TMA</text>
@@ -845,16 +1059,16 @@
     o pós-atendimento virar item de fila do próprio agente, com o desfecho gravado por referência no segmento de
     origem, e o <strong>TMA voltar a ser verdade</strong>. Validado com atendimento real.</p>
   </div>
-  <div class="foot"><span>Arquitetura · grãos de contato</span><span>11</span></div>
+  <div class="foot"><span>Arquitetura · grãos de contato</span><span>14</span></div>
 </section>
 
-<!-- ================= 11 · MÓDULOS — FIGURA ================= -->
+<!-- ================= 14 · MÓDULOS — FIGURA ================= -->
 <section class="page">
   <div class="kicker">Módulos</div>
   <h2>Como os módulos se relacionam — e o mesmo contato entre eles</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     O monorepo tem cerca de trinta serviços com dependências explícitas e sem ciclos. A figura mantém a numeração
-    da trilha da página 5: o mesmo contato, agora atravessando serviços em vez de camadas.
+    da trilha da página 8: o mesmo contato, agora atravessando serviços em vez de camadas.
   </p>
 
   <svg viewBox="0 0 760 500" xmlns="http://www.w3.org/2000/svg" style="margin-top:3mm">
@@ -867,7 +1081,6 @@
       </marker>
     </defs>
 
-    <!-- linha principal -->
     <rect x="6" y="26" width="96" height="52" rx="6" fill="#2E3138"/>
     <text x="54" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">canais</text>
     <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">voz · chat · WA</text>
@@ -902,24 +1115,23 @@
     <text x="705" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">motor de fluxo</text>
     <text x="705" y="62" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">agente de IA</text>
 
-    <!-- linha de apoio -->
-    <rect x="6" y="92" width="96" height="46" rx="6" fill="#7A7D84"/>
+    <rect x="6" y="92" width="96" height="46" rx="6" fill="#8E9299"/>
     <text x="54" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">agenda</text>
     <text x="54" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">campanha · mailing</text>
     <line x1="54" y1="90" x2="54" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
 
-    <rect x="128" y="92" width="122" height="46" rx="6" fill="#7A7D84"/>
+    <rect x="128" y="92" width="122" height="46" rx="6" fill="#8E9299"/>
     <text x="189" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">identidade</text>
     <text x="189" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">âncoras · posse · pendências</text>
     <line x1="189" y1="90" x2="189" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
     <circle cx="214" cy="100" r="10" fill="#990011"/><text x="214" y="104" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">2</text>
 
-    <rect x="276" y="92" width="118" height="46" rx="6" fill="#7A7D84"/>
+    <rect x="276" y="92" width="118" height="46" rx="6" fill="#8E9299"/>
     <text x="335" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">registro e config</text>
     <text x="335" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">pools · skills · deploys</text>
     <line x1="335" y1="90" x2="335" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
 
-    <rect x="420" y="92" width="104" height="46" rx="6" fill="#7A7D84"/>
+    <rect x="420" y="92" width="104" height="46" rx="6" fill="#8E9299"/>
     <text x="472" y="110" text-anchor="middle" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">autenticação</text>
     <text x="472" y="124" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">perfis · escopo</text>
     <line x1="472" y1="90" x2="472" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
@@ -930,16 +1142,10 @@
     <line x1="652" y1="90" x2="652" y2="80" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
     <circle cx="700" cy="100" r="10" fill="#990011"/><text x="700" y="104" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff">5</text>
 
-    <!-- bus -->
     <rect x="6" y="156" width="748" height="42" rx="6" fill="#990011"/>
     <text x="24" y="182" font-family="Calibri,Arial" font-size="12" font-weight="700" fill="#fff">BUS DE MENSAGENS E EVENTOS</text>
     <text x="330" y="182" font-family="Calibri,Arial" font-size="10" fill="#F3D6DA">conversa · agente · fluxo · governança · qualidade · uso · operação</text>
-    <line x1="189" y1="150" x2="189" y2="154" stroke="#990011" stroke-width="1.4"/>
-    <line x1="335" y1="150" x2="335" y2="154" stroke="#990011" stroke-width="1.4"/>
-    <line x1="472" y1="150" x2="472" y2="154" stroke="#990011" stroke-width="1.4"/>
-    <line x1="652" y1="150" x2="652" y2="154" stroke="#990011" stroke-width="1.4"/>
 
-    <!-- persistência -->
     <text x="6" y="222" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280" letter-spacing="1.2">PERSISTÊNCIA</text>
     <rect x="6" y="230" width="142" height="54" rx="6" fill="#2E3138"/>
     <text x="77" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">Redis</text>
@@ -961,7 +1167,7 @@
     <text x="527" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">série temporal · auditoria</text>
     <text x="527" y="276" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#CFE7E7">sessões · segmentos · sinais</text>
 
-    <rect x="606" y="230" width="148" height="54" rx="6" fill="#7A7D84"/>
+    <rect x="606" y="230" width="148" height="54" rx="6" fill="#8E9299"/>
     <text x="680" y="250" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">object storage</text>
     <text x="680" y="264" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#EDEDED">gravações · anexos</text>
 
@@ -969,7 +1175,6 @@
     <line x1="227" y1="200" x2="227" y2="228" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
     <line x1="527" y1="200" x2="527" y2="228" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
 
-    <!-- consumo -->
     <text x="6" y="316" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280" letter-spacing="1.2">MÓDULOS DE LEITURA E GOVERNANÇA</text>
     <line x1="527" y1="286" x2="527" y2="322" stroke="#9AA0AA" stroke-width="1.6" marker-end="url(#b2)"/>
 
@@ -983,7 +1188,7 @@
 
     <rect x="258" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
     <text x="317" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Bancada</text>
-    <text x="317" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">comparar por versão</text>
+    <text x="317" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#6B7280">comparar lado a lado</text>
 
     <rect x="384" y="324" width="118" height="50" rx="6" fill="#F2F2F2" stroke="#DDDEE1"/>
     <text x="443" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#2E3138">Survey</text>
@@ -997,9 +1202,8 @@
     <text x="695" y="344" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#6B7280">WFM</text>
     <text x="695" y="358" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#9AA0AA">previsão · simulação</text>
 
-    <!-- fechamento do ciclo -->
     <rect x="6" y="392" width="748" height="46" rx="6" fill="#F2F2F2"/>
-    <text x="24" y="412" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#990011" letter-spacing="1.2">⑥ O CONTATO VIRA REGISTRO</text>
+    <text x="24" y="412" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#990011" letter-spacing="1.2">6 · O CONTATO VIRA REGISTRO</text>
     <text x="24" y="428" font-family="Calibri,Arial" font-size="10" fill="#3E434D">jornada → sessão → segmento, com versão de deploy carimbada — é o que fecha o laço de volta para Qualidade, Bancada e Survey</text>
 
     <rect x="6" y="450" width="748" height="42" rx="6" fill="#2E3138"/>
@@ -1007,10 +1211,10 @@
     <text x="24" y="484" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">agente externo entra pelo sidecar de proxy com a mesma governança · histórico de outra plataforma entra pelo leitor plugável e reidrata sessão e transcrição</text>
   </svg>
 
-  <div class="foot"><span>Módulos · relacionamento</span><span>12</span></div>
+  <div class="foot"><span>Módulos · relacionamento</span><span>15</span></div>
 </section>
 
-<!-- ================= 12 · MÓDULOS POR CAMADA ================= -->
+<!-- ================= 15 · MÓDULOS POR CAMADA ================= -->
 <section class="page">
   <div class="kicker">Módulos</div>
   <h2>Onde cada serviço se encaixa nas camadas</h2>
@@ -1027,9 +1231,8 @@
 
   <div class="grid3" style="margin-top:5mm">
     <div class="card"><h4>Multi-tenant</h4>
-      <p>Isolamento por tenant em chaves de estado, esquemas de banco, escopo de pools no token e segredos. A
-      fundação é pervasiva; o <strong>isolamento operacional completo está em maturação</strong> e é o item nº 1 a
-      validar em prova de conceito.</p></div>
+      <p>Isolamento por tenant em chaves de estado, esquemas de banco, escopo de pools no token e segredos — a
+      fundação é pervasiva e atravessa todos os serviços.</p></div>
     <div class="card"><h4>Controle de acesso</h4>
       <p>Perfis (operação, supervisão, administração, desenvolvimento, negócio) somados a controle por atributo:
       oito módulos, cada campo com nível de acesso e escopo. Grupos de agentes são organograma, ortogonais aos
@@ -1038,10 +1241,10 @@
       <p>Todo parâmetro operacional é editável na interface, por namespace e por tenant, com recarga a quente.
       Campo que só existe em arquivo é dívida declarada — e há verificação automatizada disso.</p></div>
   </div>
-  <div class="foot"><span>Módulos · mapa</span><span>13</span></div>
+  <div class="foot"><span>Módulos · mapa</span><span>16</span></div>
 </section>
 
-<!-- ================= 13 · MÓDULOS DE OPERAÇÃO ================= -->
+<!-- ================= 16 · MÓDULOS DE OPERAÇÃO ================= -->
 <section class="page">
   <div class="kicker">Módulos de operação</div>
   <h2>Console, Analytics, Bancada, Qualidade, Survey e WFM</h2>
@@ -1064,11 +1267,16 @@
     </div>
     <div class="card teal">
       <h4>Bancada de agentes <span class="seal pale">em operação</span></h4>
-      <p>Visualização e comparação de agentes lado a lado, com duas lentes: <em>diária</em>, com marcadores de
-      deploy sobre a curva, e <em>por versão</em>, em que o eixo é a versão publicada. Exige amostra mínima para
-      exibir ponto e sinaliza quando não há. Responde “a qualidade caiu depois que mexemos neste agente?” —
-      pergunta que só é respondível porque a versão de deploy foi carimbada no segmento no momento do
-      atendimento, e não reconstruída depois.</p>
+      <p>Superfície de comparação lado a lado, com humanos e agentes de IA na mesma régua. São
+      <strong>dez lentes</strong>, e o que elas têm de incomum é atravessar módulos que num CCaaS tradicional são
+      produtos diferentes: <em>operação</em> (resolução e escalação, motivo de escalação, sessões e TMA,
+      disponibilidade e ocupação, motivo de pausa), <em>qualidade</em> (nota, nota por dimensão, deploy),
+      <em>voz do cliente</em> (NPS) e <em>wrap-up</em> (disposição). Sobre a mesma seleção há duas leituras — a
+      lente, e o <em>cross-cut</em>, que põe os agentes escolhidos lado a lado pelos KPIs daquela lente.</p>
+      <p style="margin-top:2.2mm">Reunir essas famílias no mesmo eixo, para o mesmo agente, é consequência direta
+      do substrato único: numa suíte elas vivem em quatro produtos, com quatro identidades de agente, e juntá-las
+      vira projeto de data warehouse. A lente de deploy é a que responde “a qualidade caiu depois da última
+      mudança?” — só respondível porque a versão foi carimbada no segmento no momento do atendimento.</p>
     </div>
     <div class="card">
       <h4>Qualidade <span class="seal">em operação</span></h4>
@@ -1083,8 +1291,8 @@
       <p>Instrumentos de pesquisa (CSAT, NPS, CES, PMF, FCR) sobre o mesmo conteúdo de formulário, endereçáveis ao
       <strong>grão</strong> desejado — segmento (aquele atendente), sessão (aquele contato) ou jornada (o processo
       inteiro). Três veículos: no chat, embutido no encerramento e por página web pública com envio ativo. Por
-      rodar dentro da plataforma, a pesquisa <strong>respeita o mesmo controle de fadiga</strong> das campanhas e
-      conhece o desfecho do atendimento que está avaliando.</p>
+      rodar dentro da plataforma, a pesquisa respeita o mesmo controle de fadiga das campanhas e conhece o
+      desfecho do atendimento que está avaliando.</p>
     </div>
     <div class="card">
       <h4>WFM <span class="seal road">roadmap</span></h4>
@@ -1096,14 +1304,14 @@
       que o dimensionamento passa a incluir agentes de IA na mesma conta de concorrência.</p>
     </div>
   </div>
-  <div class="foot"><span>Módulos · operação</span><span>14</span></div>
+  <div class="foot"><span>Módulos · operação</span><span>17</span></div>
 </section>
 
-<!-- ================= 14 · MENSAGERIA E PERSISTÊNCIA ================= -->
+<!-- ================= 17 · COMPONENTES ================= -->
 <section class="page">
   <div class="kicker">Componentes</div>
   <h2>Mensageria e persistência</h2>
-  <p style="max-width:170mm">
+  <p style="max-width:172mm">
     Cada tecnologia tem uma responsabilidade única e declarada. O modelo de estado é explícito e auditável pelo
     time de arquitetura do cliente — não escondido atrás de serviço gerenciado proprietário.
   </p>
@@ -1161,6 +1369,84 @@
       <strong>sem contaminar</strong> a medição operacional.</p>
     </div>
   </div>
+  <div class="foot"><span>Componentes</span><span>18</span></div>
+</section>
+
+<!-- ================= 18 · LIMITES E PRÓXIMO PASSO ================= -->
+<section class="page">
+  <div class="kicker">Onde estamos</div>
+  <h2>Limites declarados e próximo passo</h2>
+  <p style="max-width:172mm">
+    Reunimos aqui, num lugar só, tudo que este documento marcou como parcial ou como roadmap. Preferimos dizer no
+    material o que você descobriria de qualquer forma — e é isso que explica as condições que oferecemos a quem
+    entra agora.
+  </p>
+
+  <table>
+    <tr><th style="width:24%">Item</th><th>Situação</th></tr>
+    <tr>
+      <td class="k">Estágio do produto</td>
+      <td>Pronto em arquitetura e funcionalidade, validado em ambiente controlado, com parte das capacidades
+      validada em atendimento real. <strong>Ainda não está em produção em cliente</strong>, e não há deployment
+      enterprise.</td>
+    </tr>
+    <tr>
+      <td class="k">Certificações</td>
+      <td>Nenhuma emitida. Estão em andamento, e a arquitetura já produz a evidência técnica que elas exigem —
+      trilha de auditoria por chamada, registro imutável de acesso a dado sensível e mascaramento por papel.</td>
+    </tr>
+    <tr>
+      <td class="k">Discador preditivo</td>
+      <td>Não existe. Pacing power, progressivo e preview, guarda de taxa de abandono e listas restritivas
+      regulatórias são roadmap. Para voz ativa em massa — venda fria, negociação, urgência —, os incumbentes
+      entregam hoje e nós não. O que a plataforma substitui é a discagem <em>de entrega de informação</em>
+      (página 10).</td>
+    </tr>
+    <tr>
+      <td class="k">Isolamento multi-tenant</td>
+      <td>A fundação é pervasiva, mas o isolamento operacional completo está em maturação. Para SaaS multi-tenant
+      em produção, <strong>é o item nº 1 a validar em prova de conceito</strong>.</td>
+    </tr>
+    <tr>
+      <td class="k">Biometria</td>
+      <td>Roadmap. A camada de identificação já tem a escala de evidência que a acomoda como terceira classe; o
+      custo pendente é de conformidade (dado sensível, base legal, retenção), não de código.</td>
+    </tr>
+    <tr>
+      <td class="k">WFM</td>
+      <td>Roadmap. O substrato de dados está construído — chegada, abandono, TMA limpo de pós-atendimento, pausas,
+      picos por transição e capacidade por tipo de licença. Faltam os motores de previsão e de simulação.</td>
+    </tr>
+    <tr>
+      <td class="k">Fusão de cadastros</td>
+      <td>Parcial. Resolução de identidade, âncoras progressivas e posse de canal estão em operação; referência
+      externa a CRM e fusão de clientes são a fase seguinte.</td>
+    </tr>
+  </table>
+
+  <div class="grid2" style="margin-top:5mm">
+    <div class="card dark">
+      <h4>Quem somos</h4>
+      <p>Profissionais com mais de vinte anos em soluções e serviços de contact center. Não é um time de tecnologia
+      que descobriu o setor: é gente que operou, implantou e conviveu com essas plataformas — e construiu esta a
+      partir das dores que conhece de perto.</p>
+    </div>
+    <div class="card teal">
+      <h4>O que oferecemos a quem entra agora</h4>
+      <p>Preço de fundador, prioridade de roadmap e acesso direto a quem constrói. A imaturidade de estágio é
+      real, e a contrapartida também: influência sobre o produto que não se compra de um fornecedor
+      estabelecido.</p>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:4mm">
+    <h4>Um princípio de projeto, para fechar</h4>
+    <p>Quando a conveniência de quem contata e a de quem é contatado entram em conflito — e no atendimento elas
+    entram —, a plataforma <strong>expõe a escolha em vez de escondê-la</strong>. A política continua sendo do
+    cliente: os tetos de abordagem, a janela, o que é transacional, quem enxerga dado sensível. O que a plataforma
+    garante é que a regra seja explícita, que cada decisão <em>nomeie</em> qual regra a produziu e que fique
+    trilha. Responsabilidade de quem opera, evidência de quem fornece.</p>
+  </div>
 
   <div class="note" style="border-color:var(--cherry)">
     <h3>Próximo passo</h3>
@@ -1168,7 +1454,7 @@
     um escopo possível, a lista de pontos a validar em prova de conceito e números — ou com a conclusão honesta de
     que não é o momento.</p>
   </div>
-  <div class="foot"><span>PlugHub · componentes</span><span>15</span></div>
+  <div class="foot"><span>PlugHub · limites e próximo passo</span><span>19</span></div>
 </section>
 
 </body>
