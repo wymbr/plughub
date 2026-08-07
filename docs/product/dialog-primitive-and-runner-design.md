@@ -406,6 +406,15 @@ Entregue nesta sessão (pendente build/teste do usuário):
   (challenge/verify) permanece no intake — **costura de segredo intacta**. Seed:
   `infra/test/seed_dialog_otp_form.sh`.
 
+**Provisionamento dos forms (2026-08-07).** O conteúdo é **dado do tenant**, então tem as duas
+superfícies de sempre: o editor (`/config/dialog-forms`) e um seed declarativo. A fonte declarativa é
+`infra/dialog/*.json`, aplicada no boot pelo serviço `dialog-seed` (`infra/seed/seed_dialog.py`) **via
+API oficial** e em **seed-if-absent** — form já publicado não é tocado (DB vence; edição pela UI
+sobrevive a rebuild), `DIALOG_SEED_RECONCILE=true` inverte. Antes disso os forms só existiam nos
+scripts de `infra/test/`, e **banco novo subia sem nenhum**: o NPS de fim-de-contato caía no
+`on_failure` do `form_get` (contato fecha sem pesquisa) e o `DialogFormRenderer` abria o painel de
+wrap-up vazio (`404 → setForm(null)`). Ver CHANGELOG 2026-08-07 e `infra/dialog/README.md`.
+
 **Decisão as-built — binding do `form_id` ao runner = contexto de delegate (`@ctx.session.dialog_form_id`),
 não `$.config`.** O caminho de delegate já escreve o context no ContextStore do especialista (padrão
 `delegate-workflow-io`, provado pelo `agente_confirmacao`), então o runner lê `@ctx.session.dialog_form_id`

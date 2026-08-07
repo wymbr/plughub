@@ -105,6 +105,31 @@ fonte única, deploy NÃO é editável no drawer de pool (sem duplicar o ciclo).
 **F2-pool COMPLETA**: todo o gap de campos do pool ou foi exposto na UI (A–C) ou tem dono consciente em
 outro módulo/tela (D, E) ou foi deixado fora por decisão (max_concurrent_sessions, webhook_skill_id).
 
+## F2.F — entrega do hook e config do hook (2026-08-07)
+
+O editor de hooks da F2.A cobria três campos (`pool`, `side`, `nps_on_disconnect`); os campos que a Camada A
+do arco de detach e o ADR internal-work-queue acrescentaram DEPOIS ficaram fora, e com eles a decisão mais
+visível do wrap-up. Fechado agora:
+
+| Campo | Onde | Nota |
+|---|---|---|
+| `hooks[].dispatch` (`inline`\|`detached`) | por entrada, **só em slots de finalização** | `on_human_start` não recebe o seletor — o parse do backend **rejeita** `detached` lá, e oferecer o que não passa é pior que omitir |
+| `hooks[].context.dialog_form_id` | por entrada | combo dos DialogForms da dialog-api; marca `(rascunho)` quem não está publicado e mostra o id quando o form referenciado sumiu do editor |
+| `hooks[].context.acw_timeout_hours` | por entrada | vazio = default de 24 h do engine |
+| `internal_queue_enabled` | seção própria do drawer | pré-requisito de `detached`+`side: agent` |
+
+Duas decisões de desenho:
+
+- **O 422 do registry virou aviso no formulário.** `detached` + `side: agent` sem fila interna é recusado
+  pelo `detachedHookViolation`; a tela mostra o aviso na hora de marcar, porque o custo do erro é um
+  wrap-up que só quebra no próximo atendimento real.
+- **Desligar a fila interna pede confirmação e manda `?force_disable=true`.** O registry recusa por
+  default — ele não enxerga a fila (é do routing-engine) e trata "não consigo verificar pendência" como
+  pendência. A confirmação é do operador; `forceDisable` NÃO é default de conveniência no cliente.
+
+Chaves de `context` que a tela não conhece são **preservadas** no round-trip (o editor faz merge por
+chave, não substitui o objeto) — o campo é `Record<string,string>` aberto de propósito.
+
 ## Plano de fases (proposto)
 
 1. **Contrato** — garantir que cada campo do gap está no `PoolRegistrationSchema` e é aceito no

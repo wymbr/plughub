@@ -251,6 +251,18 @@ system_error         — unrecoverable error
   verde, pergunte o que o faria ficar vermelho** — e prefira que o teste se declare INCONCLUSIVO a
   passar por ausência de amostra.
 
+- **Um ambiente que só sobe porque já subiu antes não está sendo verificado — está sendo lembrado.**
+  Estado herdado (volume, imagem, linha de DB, coluna criada por `db push`) é entrada não declarada
+  do boot: enquanto ele existir, o aplicador pode estar quebrado sem que nada fique vermelho. Três
+  defeitos ANTIGOS caíram juntos no primeiro `down -v` (2026-08-05): `migrations` do agent-registry
+  atrás do `schema.prisma` (o `db push` aplicava o schema direto, então batia sempre); a ordem do
+  DDL do ClickHouse (a MV já existia de instalações passadas); e o `eval-seed` sem credencial desde
+  o G-PROBE fase 2 (o `GET` achava o formulário e retornava **antes** de exercer o gate, saindo 0).
+  Nenhum foi causado pelo wipe — o wipe foi o instrumento. **Instalação limpa é um teste, e teste
+  que nunca roda não é cobertura**: rode `infra/scripts/rebuild-all.sh --wipe` de propósito e em dia
+  calmo, não no dia em que você precisa da stack de pé. Corolário para diagnóstico: quando um
+  serviço falha logo após um wipe, a hipótese ordenada não é "o wipe quebrou", é "o wipe revelou".
+
 - **Em ClickHouse, alias de agregado NUNCA repete nome de coluna real da tabela.** `any(pool_id) AS
   pool_id` faz o alias sombrear a coluna que o `WHERE` usa, e a query inteira falha
   (`ILLEGAL_AGGREGATION`, code 184) — não a coluna, a query. Já aconteceu duas vezes: `any(attr.agent_type)`
@@ -1135,6 +1147,13 @@ hook `on_contact_end`, **inline**, form `dialog_nps_buttons` botões 0-10 custom
 (aninhar no collector = colisão de `session.delegate_resume_token`, rejeitado). *(A "survey NPS reconnect"
 delegate — `agente_survey_reconnect_v1`/`skill_survey_v1` — foi **aposentada na Camada E1**, arco detach de
 hooks; a coleta assíncrona vive no J4c collect.)*
+
+**Provisionamento ✅ (2026-08-07):** fonte declarativa `infra/dialog/*.json` aplicada no boot pelo serviço
+**`dialog-seed`** (`infra/seed/seed_dialog.py`), via API oficial e **seed-if-absent** (form publicado → DB
+vence; `DIALOG_SEED_RECONCILE=true` → arquivo vence). Antes disso os forms só existiam em scripts ad-hoc de
+`infra/test/`, e **base nova subia sem nenhum**: NPS de fim-de-contato caía no `on_failure` do `form_get`
+(contato fecha sem pesquisa) e o wrap-up abria o painel VAZIO (`404 → setForm(null)`). Editar um JSON de
+`infra/dialog/` é **no-op** onde o form já está publicado — mesma pegadinha do YAML de skill.
 
 **Editor ✅:** `/config/dialog-forms` (platform-ui, grupo Configuração) — cria/edita/publica DialogForms via
 `dialog-api` (proxy `/v1/dialog`). Fecha a dívida "form = dado do tenant, UI-editável". **Multi-locale ✅**
