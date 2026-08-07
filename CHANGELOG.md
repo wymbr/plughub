@@ -2,6 +2,248 @@
 
 ---
 
+## Um botão de cancelar sem alvo, e o gate que o generaliza ✅ (2026-08-07)
+
+Fecha a **lacuna 4** da I5 (a última com defeito vivo). O enunciado dizia que
+`POST /v1/workflow/instances/{id}/cancel` "segue **inerte**" — inerte sugere endpoint sem chamador.
+Eram **quatro telas**: `ProcessosPage:414`, `WorkflowsPage:52`, `WorkflowMonitorPage:69`,
+`MonitorTab:642`, todas com `catch { alert(String(e)) }`. O operador confirmava um cancelamento e
+recebia **`Error: HTTP 410`**, porque `cancelWorkflow` lançava `HTTP ${status}` e descartava o corpo.
+
+**A mensagem que ele não via apontava um substituto inexistente.** O 410 instruía *"cancel webhook
+sessions via the channel-gateway (`DELETE /v1/channels/webhook/{session_id}`)"* — e o channel-gateway
+não tem **nenhuma** rota `DELETE`. Modo de falha invertido em relação ao `force-complete` de 08-05:
+lá a mentira era de SINAL (`200 ok:true` sem fazer nada); aqui o status é honesto e a mentira está no
+**ponteiro**. Pior de achar, porque um 410 tem cara de decisão arquitetural tomada — e por isso
+ninguém foi conferir se o substituto nasceu. (Mesma forma do docstring de `_claim_lease_key`, que
+citava uma segunda rede inexistente.)
+
+**O conserto óbvio foi REPROVADO pela medição, e é esse o resultado que importa.** Reapontar as 4
+telas para `POST /api/force-complete/:sessionId` — o encerramento por terceiro que a própria I5/D4
+construiu — parecia natural. Mas ele é endereçado por `session_id`, e:
+
+- `workflow.instances` tem **um único escritor**: `db_create_instance` (`db.py:252`), chamado só de
+  `POST /v1/workflow/webhook/{id}` (`router.py:794`), o gatilho legado por token;
+- esse escritor grava **`"session_id": None` HARDCODED** (`:799`) ⇒ cobertura **0% por construção**,
+  não por amostra;
+- o caminho canônico (`/v1/workflow/trigger`) é, desde o Arc 19 Fase D, **proxy do channel-gateway**:
+  cria sessão, não cria linha;
+- e uma linha criada **nunca muda de estado** — `persist-suspend`, `complete`, `fail`, `cancel`,
+  `collect/persist` e `collect/respond` são todos 410; o único mutador vivo (`/v1/workflow/resume`,
+  ramo legado) exige `status == 'suspended'`, e nada pode pôr uma linha em `suspended`.
+
+Reapontar teria trocado `HTTP 410` por `HTTP 404`: defeito novo com data recente, que passa por
+conserto. **Saída aplicada: remoção.**
+
+**O que saiu.** platform-ui: `cancelWorkflow`, `handleCancel` nas 4 telas, prop `onCancel`/`canCancel`
+dos dois `InstanceDetail`, 4 chaves i18n nos **dois** locales; `refresh` do `MonitorTab` (sem outro
+consumidor — o polling de 10 s mantém a lista viva). workflow-api: a rota (era `status_code=410`);
+o teste virou `test_cancel_route_is_gone` assertando **404** e não `!= 410` — `!= 410` passaria se
+alguém reintroduzisse a rota com outro código, que é a regressão a pegar. e2e: Parte F do cenário 13
+e `WorkflowClient.cancel()`.
+
+**Gate novo — `infra/test/gate_orphan_ui_callers.sh`** (verde: 5 rotas duras, 0 órfãos). Falha se
+alguma tela chamar rota declarada com `status_code=410|501`. Três decisões de desenho:
+
+- **Estático, não dinâmico.** Sondar ao vivo exigiria stack de pé, credencial por rota, e um POST de
+  teste teria efeito colateral. O gate lê o código dos dois lados e cruza.
+- **410/501 CONDICIONAL não conta.** O 501 do ramo 2 do `force-complete` é o padrão que a I5
+  estabeleceu como bom — *"um 501 que NOMEIA a ausência vale mais que um flag falso"*. Marcá-lo
+  ensinaria a esconder a ausência. O gate persegue rota que NUNCA funciona.
+- **Contador-testemunha.** Zero rotas duras ⇒ **INCONCLUSIVO**, não verde: nesse caso o zero mede o
+  detector, não o código.
+
+**Dois erros de método registrados, os dois da mesma família já catalogada:**
+
+1. **A sonda esperou o fenômeno com o número na mão.** `probe_workflow_cancel_callers.sh` foi
+   desenhada para contar linhas e classificar ramos, quando `session_id: None` é uma **constante no
+   produtor**, legível desde o primeiro minuto. *Antes de instrumentar uma leitura, perguntar se o
+   ESCRITOR já responde.* A sonda não foi perdida — é ela que prova a lista vazia.
+2. **Contar não é identificar, e o `-q` engoliu o `-v`.** A 1ª rodada de pytest deu `48 passed` sem
+   nomear teste nenhum — e rodou da **imagem**, que não tem volume mount: código velho e teste velho,
+   coerentes entre si, passariam de qualquer jeito. Só após `build workflow-api` e `-v --no-header` o
+   nome novo apareceu na tela.
+
+**⚠️ Adjacência anotada, não consertada:** as Partes **C e E** do cenário e2e 13 batem em
+`persist-suspend` e `complete`, ambas 410 — o cenário descreve o ciclo pré-Arc 19 inteiro e não pode
+passar como está. Fatia própria (reescrevê-lo é decidir o que ele deve provar sob o modelo
+unificado), somada ao item já aberto *"Fixtures do e2e ainda falam AgentType"*.
+
+Docs: `TODO.md` § "Lacuna 4b" (levantamento, medição, execução).
+
+---
+
+## Entrega do hook (inline × destacada) virou campo de tela ✅ (2026-08-07)
+
+O editor de hooks do drawer de pool (`/config/resources` → Pools) foi escrito na F2.A com os três campos
+que existiam na época — `pool`, `side`, `nps_on_disconnect`. A Camada A do arco de detach acrescentou
+`dispatch` e `context`, e o ADR internal-work-queue acrescentou `internal_queue_enabled`, mas **nenhum dos
+três chegou à tela**: a escolha entre wrap-up **inline** (auto-atendimento no Console) e **destacado**
+(item de pull) — a decisão mais visível do pós-atendimento — só era editável por `PUT /v1/pools/:id` no
+curl. Contra o invariante *"every config field is UI-editable"*.
+
+**O que entrou** (`PoolsPage.tsx` / `types/index.ts` / `api/registry.ts`, i18n en+pt-BR):
+
+- **`hooks[].dispatch`** — seletor Inline/Destacada por entrada, **só nos slots de finalização**
+  (`on_human_end`, `on_contact_end`, `post_human`, `on_process_end`). O `on_human_start` não recebe o
+  campo porque o `PoolHooksSchema` **rejeita** `detached` ali: oferecer o que o parse recusa seria
+  transformar um guard barulhento numa surpresa.
+- **`hooks[].context.dialog_form_id`** — combo alimentado pela dialog-api. Rotula `(rascunho)` o form não
+  publicado e, quando o id configurado não está na lista, **mostra o id** em vez de exibir "nenhum" — o
+  form que sumiu do editor é exatamente o caso que produzia o painel de wrap-up vazio.
+- **`hooks[].context.acw_timeout_hours`** — vazio = default de 24 h do engine (o campo em branco é
+  ausência honesta; gravar `""` faria o skill ler string vazia como configuração).
+- **`internal_queue_enabled`** — seção própria, com o nome do espelho (`{pool}-int`) no hint.
+
+**Dois erros movidos para onde têm resposta.** (1) `detached` + `side: agent` sem fila interna é o 422 do
+`detachedHookViolation`; agora o aviso aparece **ao marcar**, não no save — sem ele o defeito só apareceria
+no próximo atendimento real, longe da configuração que o causou. (2) Desligar a fila interna pede
+confirmação explícita e só então manda `?force_disable=true` (novo parâmetro opcional em
+`registryApi.updatePool`); o registry recusa por default porque não enxerga a fila — ela é do
+routing-engine — e trata "não consigo verificar pendência" como pendência.
+
+**Preservação de chaves desconhecidas:** o editor faz merge por chave em `context` (`Record<string,string>`
+aberto), então chave de hook que esta tela não conhece sobrevive ao round-trip. Antes disso a sobrevivência
+era acidente — o tipo `PoolHookEntry` do platform-ui tinha 3 campos e as chaves extras passavam só porque
+o JS não apaga o que o TS não declara.
+
+Doc: `docs/arcos/pool-config-surface.md` § F2.F.
+
+---
+
+## DialogForms passaram a nascer com a instalação (`dialog-seed`) ✅ (2026-08-07)
+
+Quarto defeito da mesma família da entrada de 2026-08-05, e o mais silencioso deles: **nenhum
+`DialogForm` era provisionado no boot**. Os formulários viviam só em scripts ad-hoc
+(`infra/test/seed_dialog_*.sh`), rodados à mão uma vez, e sobreviviam no Postgres de uma
+instalação para a seguinte. Base nova (rebuild de imagens + init de banco) sobe com `dialog.forms`
+**vazia** — e o conteúdo de dois fluxos vivos some sem nada ficar vermelho:
+
+- **NPS de fim-de-contato não aparece ao cliente.** `agente_nps_v1` entra em `carregar_form`
+  (`invoke form_get`, `form_id: dialog_nps_buttons`), a dialog-api devolve **404**, e o próprio
+  YAML manda `on_failure: encerrar`. O hook roda, o contato fecha, `session_signal` fica sem
+  linha de `nps` — e o log só diz que o step falhou. O `on_failure` está certo (NPS nunca deve
+  prender o fechamento); o que faltava era o dado.
+- **Wrap-up abre sem formulário.** `retencao_humano.on_human_end` injeta
+  `context.dialog_form_id: dialog_wrapup_v1`; o item é criado, direcionado e (em `dispatch:
+  inline`) auto-reivindicado. O `DialogFormRenderer` busca
+  `GET /v1/dialog/forms/{id}?status=published` e cai no `.catch(() => setForm(null))` — painel
+  vazio, sem mensagem. Aqui a degradação é mesmo muda: o catch **descarta o motivo**, contra a
+  postura *"degradação NUNCA é silenciosa"*. Fica anotado como dívida de UI (mostrar
+  `form_id` + status HTTP no lugar do vazio).
+
+Os dois compartilham a causa e nenhum deles é bug de código: é **provisionamento ausente**.
+
+**`infra/dialog/*.json` — fonte declarativa.** Oito DialogForms (`dialog_nps_buttons`,
+`dialog_wrapup_v1`, `dialog_wrapup_arc12_v1`, `dialog_otp_possession`, `dialog_formfill_demo`,
+`dialog_promocao_deploy`, `dialog_survey_multi_v1`, `dialog_nps_v1`) saíram dos heredocs dos
+scripts e viraram arquivo. Um form por arquivo; o `form_id` de dentro é que vale.
+
+**`infra/seed/seed_dialog.py` + serviço `dialog-seed`** (compose demo, padrão `eval-seed`,
+`depends_on: dialog-api healthy`). Escreve **pela API oficial** (nunca `INSERT` em
+`dialog.forms`) e segue a precedência do `RegistrySyncer`: **há versão publicada → não toca**
+(DB vence, form editado em `/config/dialog-forms` sobrevive a rebuild); **não há → `POST` +
+`publish`**; `DIALOG_SEED_RECONCILE=true` → o arquivo vence (`PUT` + `publish`). Cada form
+imprime a decisão **e o motivo**, e o `publish` que falha depois de um `POST` que passou é
+reportado como o que é — draft criado, form irresolvível.
+
+**Consequência a lembrar (mesma dos skills):** editar um JSON de `infra/dialog/` é **no-op** num
+ambiente que já publicou aquele form. Para o arquivo valer: publicar pela UI, rodar o seeder com
+`DIALOG_SEED_RECONCILE=true`, ou rodar o wrapper em `infra/test/`.
+
+**Fonte dupla eliminada.** Os oito `seed_dialog_*.sh` viraram wrappers de uma linha sobre
+`--data-binary @infra/dialog/<form_id>.json` (contrato preservado para os smokes que os chamam:
+`smoke_formfill_renderer.sh`, `smoke_outbound_fase5b.sh`, `smoke_approval_segment_closes.sh`,
+`smoke_wrapup_arc12_capture.sh`, `probe_console_restore_after_reload.sh`). Sem heredoc duplicado,
+não há como o arquivo e o script divergirem.
+
+Docs: `infra/dialog/README.md` (precedência, consumidor de cada form, como adicionar).
+
+---
+
+## O provisionamento de qualidade ganhou credencial, e o migration history alcançou o schema ✅ (2026-08-05)
+
+Três defeitos que o `down -v` revelou de uma vez. **Nenhum deles era novo** — os três eram
+invisíveis enquanto o substrato carregava o artefato de uma instalação anterior, e a base
+zerada foi o instrumento que os denunciou. *Um ambiente que só sobe porque já subiu antes não
+está sendo verificado; está sendo lembrado.*
+
+**1 — `migrations` atrás do `schema.prisma` (agent-registry).** Cinco mudanças entraram no
+`schema.prisma` e chegaram às bases vivas pelo `db push` (o boot da época), sem nunca virar
+migration: `pools.agent_kind`, `skills.flow_draft`, e a remoção de `agent_types`,
+`agent_type_pools`, `skill_version_slots` + enum `AgentTypeStatus`. Com toda base sendo
+db-push, batia sempre — o push aplica o `schema.prisma` direto. Em base nova, `migrate deploy`
+constrói a forma ANTIGA e o sanity check do `bootstrap-db.js` recusa subir. **O FATAL era o
+guard funcionando**, não o defeito: sem ele o registry serviria 500 em toda query de `pools`.
+Migration `20260805000000_sync_agent_kind_flow_draft_drop_agent_types`, escrita
+**defensivamente** (`IF EXISTS`/`IF NOT EXISTS`) — bases legadas já têm as colunas, e um
+`ADD COLUMN` cru quebraria exatamente as instalações que hoje funcionam. Bloqueava 8 serviços
+em cascata (`mcp-server-plughub`, `routing-engine`, `orchestrator-bridge`, `platform-ui`,
+`agent-assist-ui`, `skill-flow-worker`, `quality-export`, `pricing-seed`) e derrubava o
+`skill-flow-service` por `ENOTFOUND mcp-server-plughub`.
+
+**2 — ordem do DDL do ClickHouse** (ver entrada própria abaixo).
+
+**3 — `eval-seed` sem credencial.** O G-PROBE fase 2 moveu o CRUD de forms/campaigns para
+`_require_evaluation_field` (Bearer+ABAC); o seed continuou mandando `X-Admin-Token`, que
+aquele endpoint não aceita mais. **Por que ninguém viu:** o seed faz `GET /forms` primeiro e,
+achando o formulário com dimensões, retorna com um `warn` sem tocar em endpoint de escrita —
+saindo com **código 0**. Só base zerada alcança o `POST` e leva o 401. *O caminho de sucesso
+era um early-return; o gate nunca era exercido.*
+**Correção:** `POST`/`PUT` de `/forms` e `/campaigns` passam a `_require_service_or_eval_write`
+— o gate que já existia no arquivo, com o docstring nomeando "backend (scanner/**seed**/e2e)
+OU UI", e que só tinha sido aplicado a ações de ops (dispatch, backfill, synthetic). O seed
+manda `X-Service-Token` (`EVALUATION_SERVICE_TOKEN` no compose, casado com
+`PLUGHUB_EVALUATION_SERVICE_TOKEN`). **Linha mantida de propósito:** `publish`, `delete`,
+`pause` e `resume` seguem no gate humano estrito — provisionar não é publicar, e a credencial
+de serviço não deve alcançar ação deliberada de operador. Sem credencial nenhuma o endpoint
+segue 401: o teste do conserto inclui esse negativo, senão "passou" não distingue gate correto
+de gate aberto. `docs/arcos/arc6-evaluation.md` § Auth reescrita — afirmava `X-Admin-Token`,
+desatualizada desde o G-PROBE fase 2.
+
+**Também nesta sessão:** `infra/scripts/rebuild-all.sh` — rebuild da stack demo inteira (pull
+das imagens de infra + build do monorepo + `up` sem `e2e-runner`), com `--no-cache` (diretório
+novo não invalida cache de layer neste repo) e `--wipe` (destrutivo, confirmação explícita).
+
+---
+
+## A ordem do DDL voltou a ser a da lista ✅ (2026-08-05)
+
+Rebuild com volume zerado (`down -v`) deixou a analytics-api em retry eterno —
+*"ClickHouse not ready yet … Table plughub_demo.mv_segment_summary does not exist
+(UNKNOWN_TABLE, code 60)"* — contra um ClickHouse saudável, que respondia `/ping` e
+tinha as tabelas base.
+
+**Causa:** `AnalyticsStore.ensure_schema` particionava `_ALL_DDL` em duas passadas por
+**substring** — `base_ddl` (estrita) e `view_ddl` (tolerante) — e a partição fazia duas
+coisas de uma vez: reordenava a lista e classificava. O teste era `"CREATE VIEW" not in d`,
+mas `v_segment_summary` é declarada `CREATE OR REPLACE VIEW`, que **não contém** essa
+string. Ela caiu na passada estrita, que roda inteira ANTES das views, e tentou
+selecionar de `mv_segment_summary` antes da MV existir.
+
+**Por que só apareceu agora:** em banco já povoado a MV estava lá de instalações
+anteriores, e a passada errada passava. A falha exigia substrato novo para existir — e o
+`down -v` a produziu. *A ordem só é violável quando ninguém depende dela ainda.*
+
+**Correção:** uma passada só, na ordem de `_ALL_DDL` — que já declarava o requisito no
+comentário (*"Materialized views — must come AFTER the source tables they reference"*).
+Ordem é propriedade da LISTA; quem a garante não pode ser um teste de string sobre o
+statement. Tabelas seguem estritas; views seguem toleradas (o `POPULATE` + `IF NOT EXISTS`
+não é atômico em toda versão), mas o `warning` deixou de afirmar `"already exists?"` — o
+palpite convertia uma view que falhou de verdade, e os relatórios vazios que ela produz,
+em ruído esperado. Agora loga o motivo.
+
+`packages/analytics-api/src/plughub_analytics_api/clickhouse.py`. Verificação:
+`system.tables` devolve `mv_segment_summary` (MaterializedView) **e** `v_segment_summary`
+(View) em base recém-criada.
+
+**Também nesta sessão:** `infra/scripts/rebuild-all.sh` — rebuild da stack demo inteira
+(pull das imagens de infra + build de todas as imagens do monorepo + `up` sem `e2e-runner`),
+com `--no-cache` (arquivo novo não invalida cache de layer) e `--wipe` (destrutivo,
+confirmação explícita).
+
+---
+
 ## O SET que ninguém lia saiu, e quem inscreve em pool foi MEDIDO ✅ (2026-08-05)
 
 Fecha o item que a sessão anterior abriu com o único vermelho do cenário 01

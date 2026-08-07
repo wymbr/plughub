@@ -100,9 +100,27 @@
       "npsOnDisconnect": "Se o cliente desconectou",
       "npsSkip": "Pular",
       "npsTimeout": "Disparar",
+      "dispatch": "Entrega",
+      "dispatchInline": "Inline",
+      "dispatchDetached": "Destacada",
+      "dispatchInlineHint": "roda na conferência viva; o contato só fecha quando o hook termina",
+      "dispatchDetachedHint": "sessão independente; o contato fecha na hora e o item vai para a inbox do agente",
+      "detachedNeedsInternalQueue": "Entrega destacada no lado Agente exige a fila interna ligada neste pool — sem ela o skill do hook não recebe o alvo do delegate e falha no próximo atendimento real. Marque \"Fila interna\" acima.",
+      "dialogForm": "Formulário",
+      "dialogFormNone": "— Nenhum (o hook decide) —",
+      "dialogFormDraft": "rascunho",
+      "dialogFormMissing": "{{id}} (não encontrado no editor)",
+      "acwTimeout": "Prazo (h)",
+      "acwTimeoutDefault": "24",
+      "acwTimeoutHint": "tempo para o agente classificar; vazio = 24 h",
       "add": "+ Adicionar hook",
       "none": "Nenhum hook configurado.",
       "deployedSkill": "deploy: {{skill}}"
+    },
+    "internalQueue": {
+      "label": "Fila interna de pós-atendimento",
+      "hint": "Espelha a fila {{pool}} para trabalho author-bound (wrap-up): só quem atendeu classifica o próprio atendimento. Obrigatória para hooks de encerramento com entrega Destacada no lado Agente.",
+      "disableConfirm": "Desligar a fila interna tira o pool da inbox: qualquer item de wrap-up ainda pendente deixa de ser reivindicável, e a plataforma não consegue verificar daqui se há algum. Drene a fila antes. Desligar mesmo assim?"
     },
     "transfer": {
       "label": "Transferência / Escalonamento",

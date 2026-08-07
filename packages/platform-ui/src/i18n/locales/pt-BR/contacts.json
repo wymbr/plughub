@@ -844,7 +844,6 @@
           "collect": "collect"
         }
       },
-      "confirmCancel": "Cancelar esta instância de processo?",
       "detail": {
         "status":         "Status",
         "flowId":         "Flow",
@@ -859,8 +858,7 @@
         "resumeToken":    "Token de retomada",
         "tokenClickHint": "Clique para copiar",
         "expires":        "Expira",
-        "originSession":  "Sessão de origem",
-        "cancelButton":   "Cancelar processo"
+        "originSession":  "Sessão de origem"
       }
     }
   }

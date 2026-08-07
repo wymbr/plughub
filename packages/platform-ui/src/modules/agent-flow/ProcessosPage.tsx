@@ -14,7 +14,7 @@ import { useAuth } from '@/auth/useAuth'
 import { apiFetch } from '@/api/apiFetch'
 import Spinner from '@/components/ui/Spinner'
 import {
-  useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
+  useWorkflowInstances, useWorkflowInstance,
 } from '@/modules/workflows/api/hooks'
 import type { WorkflowStatus } from '@/modules/workflows/api/hooks'
 import { Link } from 'react-router-dom'
@@ -407,16 +407,6 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
     .filter(inst => !flowFilterTrimmed || inst.flow_id.toLowerCase().includes(flowFilterTrimmed))
     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
-  async function handleCancel() {
-    if (!selectedId || !tenantId) return
-    if (!confirm(t('processes.instances.confirmCancel'))) return
-    try {
-      await cancelWorkflow(selectedId, tenantId)
-      setSelectedId(null)
-      refresh()
-    } catch (e) { alert(String(e)) }
-  }
-
   return (
     <div className="flex flex-1 overflow-hidden">
 
@@ -619,15 +609,9 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
             )}
           </div>
 
-          {/* Cancel button */}
-          {['active', 'suspended'].includes(detail.status) && (
-            <div className="px-4 py-3 bg-white border-t border-border flex-shrink-0">
-              <button onClick={handleCancel}
-                className="w-full py-2 rounded border border-red/30 bg-red-light text-red-text text-sm font-semibold hover:bg-red/10 transition-colors">
-                {t('processes.instances.detail.cancelButton')}
-              </button>
-            </div>
-          )}
+          {/* Botão "Cancelar" REMOVIDO em 2026-08-07 (I5, lacuna 4b): o endpoint
+              que ele chamava é 410 hard e não há substituto endereçável —
+              `workflow.instances` nunca tem `session_id`. Ver `api/hooks.ts`. */}
         </div>
       ) : (
         <div className="flex-1 flex flex-col items-center justify-center text-muted-light">

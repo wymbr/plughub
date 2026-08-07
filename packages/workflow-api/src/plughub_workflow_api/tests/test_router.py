@@ -17,7 +17,7 @@ Arc 19 Fase D behaviour summary:
       without tenant_id             → legacy PostgreSQL path → 200
   POST /.../complete                → 410 Gone
   POST /.../fail                    → 410 Gone
-  POST /.../cancel                  → 410 Gone
+  POST /.../cancel                  → 404 (rota REMOVIDA em 2026-08-07, I5 lacuna 4b)
   POST /.../collect/persist         → 410 Gone
   POST /v1/workflow/collect/respond → 410 Gone
   GET  /v1/workflow/instances       → read-only, kept as-is
@@ -419,12 +419,24 @@ class TestDeprecated:
         )
         assert resp.status_code == 410
 
-    def test_cancel_returns_410(self, client):
+    def test_cancel_route_is_gone(self, client):
+        """
+        A rota /cancel foi REMOVIDA em 2026-08-07 (I5, lacuna 4b) — não é mais
+        410, é 404 de rota inexistente.
+
+        A asserção é 404 e NÃO `!= 410` de propósito: `!= 410` passaria também
+        se alguém reintroduzisse a rota com outro código, que é exatamente a
+        regressão que este teste existe para pegar. O que se afirma é que o
+        caminho não está registrado no router.
+        """
         resp = client.post(
             f"/v1/workflow/instances/{INSTANCE_ID}/cancel",
             json={"cancelled_by": "operator"},
         )
-        assert resp.status_code == 410
+        assert resp.status_code == 404, (
+            f"esperado 404 (rota removida), veio {resp.status_code}. "
+            "Se a rota voltou, ler o motivo da remoção em router.py § Cancel."
+        )
 
     def test_collect_persist_returns_410(self, client):
         resp = client.post(

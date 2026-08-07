@@ -358,15 +358,9 @@ export class WorkflowClient {
     )) as WorkflowInstance;
   }
 
-  async cancel(
-    instanceId: string,
-    body?: { cancelled_by?: string; reason?: string }
-  ): Promise<WorkflowInstance> {
-    return (await post(
-      `${this.baseUrl}/v1/workflow/instances/${encodeURIComponent(instanceId)}/cancel`,
-      body ?? {}
-    )) as WorkflowInstance;
-  }
+  // `cancel()` REMOVIDO em 2026-08-07 (I5, lacuna 4b) — a rota
+  // `POST /v1/workflow/instances/{id}/cancel` foi apagada do workflow-api.
+  // Motivo medido em `workflow-api/router.py` § Cancel.
 
   // ── Collect step methods ───────────────────────────────────────────────────
 

@@ -7,8 +7,7 @@ import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from '@/auth/useAuth'
 import {
-  useWorkflowInstances, useWorkflowInstance,
-  cancelWorkflow, triggerWorkflow,
+  useWorkflowInstances, useWorkflowInstance, triggerWorkflow,
 } from './api/hooks'
 import type { WorkflowInstance, WorkflowStatus } from './api/hooks'
 import WebhooksTab from './WebhooksTab'
@@ -44,16 +43,6 @@ export default function WorkflowsPage() {
   const sorted = [...instances].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
-
-  async function handleCancel() {
-    if (!selectedId) return
-    if (!confirm(t('instance.confirmCancel'))) return
-    try {
-      await cancelWorkflow(selectedId, tenantId)
-      setSelectedId(null)
-      refresh()
-    } catch (e) { alert(String(e)) }
-  }
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'instances', label: `⚡ ${t('instance.title')}` },
@@ -145,7 +134,6 @@ export default function WorkflowsPage() {
         {detail ? (
           <InstanceDetail
             instance={detail}
-            onCancel={handleCancel}
             onClose={() => setSelectedId(null)}
             t={t}
           />
@@ -212,14 +200,12 @@ function InstanceRow({ inst, selected, onClick }: { inst: WorkflowInstance; sele
 
 // ─── InstanceDetail ───────────────────────────────────────────────────────────
 
-function InstanceDetail({ instance: inst, onCancel, onClose, t }: {
+function InstanceDetail({ instance: inst, onClose, t }: {
   instance: WorkflowInstance
-  onCancel: () => void
   onClose:  () => void
   t: (key: string, options?: Record<string, unknown>) => string
 }) {
   const color    = STATUS_COLORS[inst.status]
-  const canCancel = ['active', 'suspended'].includes(inst.status)
   const suspendLabel = inst.suspend_reason ? t(`suspendReasons.${inst.suspend_reason}`) ?? inst.suspend_reason : null
 
   return (
@@ -287,17 +273,8 @@ function InstanceDetail({ instance: inst, onCancel, onClose, t }: {
         )}
       </div>
 
-      {/* Cancel */}
-      {canCancel && (
-        <div style={{ padding: '12px 16px', borderTop: '1px solid #1e293b' }}>
-          <button
-            onClick={onCancel}
-            style={{ width: '100%', padding: '8px', borderRadius: 4, border: '1px solid #ef4444', background: '#7f1d1d', color: '#fca5a5', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
-          >
-            {t('instance.cancelInstance')}
-          </button>
-        </div>
-      )}
+      {/* Botão "Cancelar" REMOVIDO em 2026-08-07 (I5, lacuna 4b) — ver
+          `api/hooks.ts` para o motivo medido. */}
     </div>
   )
 }

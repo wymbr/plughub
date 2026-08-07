@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import {
-  useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
+  useWorkflowInstances, useWorkflowInstance,
 } from './api/hooks'
 import type { WorkflowInstance, WorkflowStatus } from './api/hooks'
 
@@ -61,16 +61,6 @@ export default function WorkflowMonitorPage() {
   const sorted = [...instances].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
-
-  async function handleCancel() {
-    if (!selectedId) return
-    if (!confirm(t('instance.confirmCancel'))) return
-    try {
-      await cancelWorkflow(selectedId, tenantId)
-      setSelectedId(null)
-      refresh()
-    } catch (e) { alert(String(e)) }
-  }
 
   // Nested component: InstanceRow
   function InstanceRow({ inst, selected, onClick }: {
@@ -129,11 +119,10 @@ export default function WorkflowMonitorPage() {
   }
 
   // Nested component: InstanceDetail
-  function InstanceDetail({ instance: inst, onCancel, onClose }: {
-    instance: WorkflowInstance; onCancel: () => void; onClose: () => void
+  function InstanceDetail({ instance: inst, onClose }: {
+    instance: WorkflowInstance; onClose: () => void
   }) {
     const color    = STATUS_COLORS[inst.status]
-    const canCancel = ['active', 'suspended'].includes(inst.status)
 
     return (
       <div style={detailPanel}>
@@ -195,16 +184,8 @@ export default function WorkflowMonitorPage() {
           )}
         </div>
 
-        {canCancel && (
-          <div style={{ padding: '12px 16px', borderTop: '1px solid #1e293b' }}>
-            <button
-              onClick={onCancel}
-              style={{ width: '100%', padding: '8px', borderRadius: 4, border: '1px solid #ef4444', background: '#7f1d1d', color: '#fca5a5', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
-            >
-              {t('instance.cancelInstance')}
-            </button>
-          </div>
-        )}
+        {/* Botão "Cancelar" REMOVIDO em 2026-08-07 (I5, lacuna 4b) — ver
+            `api/hooks.ts` para o motivo medido. */}
       </div>
     )
   }
@@ -276,7 +257,6 @@ export default function WorkflowMonitorPage() {
         {detail ? (
           <InstanceDetail
             instance={detail}
-            onCancel={handleCancel}
             onClose={() => setSelectedId(null)}
           />
         ) : (

@@ -26,7 +26,7 @@ import { SessionTranscript } from '@/modules/service/components/SessionTranscrip
 import type { PoolView, ContactSegment, Metrics24h } from '@/modules/service/types'
 import { scoreToAccent, formatMs } from '@/modules/service/utils/sentiment'
 import {
-  useWorkflowInstances, useWorkflowInstance, cancelWorkflow,
+  useWorkflowInstances, useWorkflowInstance,
 } from '@/modules/workflows/api/hooks'
 import type { WorkflowInstance, WorkflowStatus } from '@/modules/workflows/api/hooks'
 
@@ -628,22 +628,14 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
   const [selectedId,   setSelectedId]   = useState<string | null>(null)
 
   const statusParam = filterStatus === 'all' ? undefined : filterStatus
-  const { instances, loading, refresh } = useWorkflowInstances(tenantId, statusParam, 10_000)
+  // `refresh` saiu com o botão Cancelar (2026-08-07): esta aba não tinha outro
+  // consumidor dele — o polling de 10 s já mantém a lista viva.
+  const { instances, loading }          = useWorkflowInstances(tenantId, statusParam, 10_000)
   const { instance: detail }            = useWorkflowInstance(selectedId, 10_000)
 
   const sorted = [...instances].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
-
-  async function handleCancel() {
-    if (!selectedId) return
-    if (!confirm(t('processes.instances.confirmCancel'))) return
-    try {
-      await cancelWorkflow(selectedId, tenantId)
-      setSelectedId(null)
-      refresh()
-    } catch (e) { alert(String(e)) }
-  }
 
   return (
     <div className="flex h-full overflow-hidden bg-[#0a1628] text-slate-200">
@@ -819,15 +811,8 @@ function ProcessosView({ tenantId }: { tenantId: string }) {
             )}
           </div>
 
-          {/* Cancel button */}
-          {['active', 'suspended'].includes(detail.status) && (
-            <div className="px-4 py-3 border-t border-slate-800 flex-shrink-0">
-              <button onClick={handleCancel}
-                className="w-full py-2 rounded border border-red-800 bg-red-950 text-red-300 text-sm font-semibold hover:bg-red-900 transition-colors">
-                {t('processes.instances.detail.cancelButton')}
-              </button>
-            </div>
-          )}
+          {/* Botão "Cancelar" REMOVIDO em 2026-08-07 (I5, lacuna 4b) — ver
+              `modules/workflows/api/hooks.ts` para o motivo medido. */}
         </div>
       ) : (
         <div className="flex-1 flex flex-col items-center justify-center text-slate-500">

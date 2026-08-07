@@ -844,7 +844,6 @@
           "collect": "collect"
         }
       },
-      "confirmCancel": "Cancel this process instance?",
       "detail": {
         "status":         "Status",
         "flowId":         "Flow",
@@ -859,8 +858,7 @@
         "resumeToken":    "Resume token",
         "tokenClickHint": "Click to copy",
         "expires":        "Expires",
-        "originSession":  "Origin session",
-        "cancelButton":   "Cancel process"
+        "originSession":  "Origin session"
       }
     }
   }

@@ -52,7 +52,6 @@
     "count":             "{{count}} instância(s)",
     "noItems":          "Nenhuma instância de workflow encontrada.",
     "selectForDetails": "Selecione uma instância para ver os detalhes",
-    "confirmCancel":    "Cancelar esta instância?",
     "currentStep":      "Step atual",
     "outcome":          "Outcome",
     "timeline":         "Timeline",
@@ -63,7 +62,6 @@
     "suspendReason":    "Motivo de suspensão",
     "resumeToken":      "Resume Token",
     "expiresAt":        "Expira",
-    "cancelInstance":   "Cancelar Instância",
     "clickToCopy":      "Clique para copiar"
   },
   "suspendReasons": {

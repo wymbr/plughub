@@ -100,9 +100,27 @@
       "npsOnDisconnect": "If customer disconnected",
       "npsSkip": "Skip",
       "npsTimeout": "Trigger",
+      "dispatch": "Delivery",
+      "dispatchInline": "Inline",
+      "dispatchDetached": "Detached",
+      "dispatchInlineHint": "runs in the live conference; the contact only closes once the hook finishes",
+      "dispatchDetachedHint": "independent session; the contact closes immediately and the item lands in the agent's inbox",
+      "detachedNeedsInternalQueue": "Detached delivery on the Agent side requires this pool's internal queue — without it the hook skill never gets the delegate target and fails on the next real contact. Tick \"Internal queue\" above.",
+      "dialogForm": "Form",
+      "dialogFormNone": "— None (hook decides) —",
+      "dialogFormDraft": "draft",
+      "dialogFormMissing": "{{id}} (not found in the editor)",
+      "acwTimeout": "Deadline (h)",
+      "acwTimeoutDefault": "24",
+      "acwTimeoutHint": "time the agent has to classify; empty = 24 h",
       "add": "+ Add hook",
       "none": "No hooks configured.",
       "deployedSkill": "deploy: {{skill}}"
+    },
+    "internalQueue": {
+      "label": "Internal after-call-work queue",
+      "hint": "Mirrors the {{pool}} queue for author-bound work (wrap-up): only the agent who handled the contact classifies it. Required for end hooks with Detached delivery on the Agent side.",
+      "disableConfirm": "Disabling the internal queue removes the pool from the inbox: any pending wrap-up item stops being claimable, and the platform cannot check from here whether one exists. Drain the queue first. Disable anyway?"
     },
     "transfer": {
       "label": "Transfer / Escalate",

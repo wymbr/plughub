@@ -10,7 +10,7 @@ Endpoints:
   POST /v1/workflow/instances/{id}/fail           — mark an instance failed (called by engine)
   GET  /v1/workflow/instances                     — list instances
   GET  /v1/workflow/instances/{id}                — get instance detail
-  POST /v1/workflow/instances/{id}/cancel         — cancel active/suspended instance
+  (POST /v1/workflow/instances/{id}/cancel        — REMOVIDA 2026-08-07, ver § Cancel)
 
   ── Webhook Trigger ───────────────────────────────────────────────────────────
   POST /v1/workflow/webhooks                      — register a webhook (admin)
@@ -452,29 +452,32 @@ async def get_instance(
     return instance
 
 
-# ── Cancel ────────────────────────────────────────────────────────────────────
-
-class CancelRequest(BaseModel):
-    cancelled_by: str = "operator"
-    reason:       str | None = None
-
-
-@router.post("/v1/workflow/instances/{instance_id}/cancel", status_code=410)
-async def cancel_instance(
-    instance_id: str,
-    request:     Request,
-) -> dict[str, Any]:
-    """
-    Arc 19 Fase D — deprecated.
-
-    Cancellation of webhook sessions is handled by the channel-gateway
-    (DELETE /v1/channels/webhook/{session_id} or operator session close).
-    """
-    raise HTTPException(
-        410,
-        "Deprecated in Arc 19 Fase D. Cancel webhook sessions via the "
-        "channel-gateway or the operator session-close flow.",
-    )
+# ── Cancel — ROTA REMOVIDA em 2026-08-07 (I5, lacuna 4b) ──────────────────────
+#
+# Era `POST /v1/workflow/instances/{id}/cancel` devolvendo 410 hard, com a
+# mensagem *"cancel webhook sessions via the channel-gateway
+# (DELETE /v1/channels/webhook/{session_id})"*.
+#
+# Dois motivos para apagar em vez de manter o 410:
+#
+#  1. **O substituto que ela nomeava nunca existiu.** O channel-gateway não tem
+#     nenhuma rota DELETE: a superfície webhook é POST trigger/resume/pool/
+#     collect/delegate + GET …/status. Um 410 que aponta caminho inexistente é
+#     pior que ausência — tem cara de decisão tomada, e por isso ninguém foi
+#     conferir. (Mesma forma do docstring de `_claim_lease_key`, que citava uma
+#     segunda rede inexistente. Ver TODO § "Lacuna 2".)
+#  2. **Havia quatro chamadores vivos**, não zero: ProcessosPage,
+#     WorkflowsPage, WorkflowMonitorPage e MonitorTab, todas com
+#     `catch { alert(String(e)) }` — o operador confirmava o cancelamento e
+#     recebia `Error: HTTP 410`. Foram removidas na mesma mudança.
+#
+# **Não foi reapontada para `/api/force-complete`** porque a medição mostrou que
+# não há endereço: esta tabela tem UM escritor (`:794`) e ele grava
+# `session_id: None` hardcoded (`:799`) — cobertura 0% por construção. Sonda:
+# `infra/test/probe_workflow_cancel_callers.sh`.
+#
+# Quem precisar encerrar execução parada usa `POST /api/force-complete/{sid}`
+# no mcp-server (BFF), que é endereçado por SESSÃO — a unidade do Arc 19.
 
 
 # ── Collect: Persist ──────────────────────────────────────────────────────────

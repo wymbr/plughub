@@ -25,11 +25,11 @@
  *   POST /v1/workflow/instances/{id}/complete {outcome="approved"}
  *   Expects: status=completed, outcome persisted (verified via GET)
  *
- * Part F — Cancel path:
- *   Trigger new instance → persist-suspend → cancel
- *   Expects: status=cancelled (terminal)
+ * Part F — REMOVIDA em 2026-08-07 (I5, lacuna 4b): exercitava a rota /cancel,
+ *   que foi apagada. Ver o comentário no corpo — Partes C e E também batem em
+ *   410 e este cenário precisa de reescrita própria sob o Arc 19.
  *
- * Assertions: 13
+ * Assertions: 11
  */
 
 import { randomUUID } from "crypto";
@@ -203,46 +203,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     assertions.push(fail("E: complete outcome", "skipped"));
   }
 
-  // ── Part F: Cancel path ───────────────────────────────────────────────────
-
-  let cancelInstanceId!: string;
-
-  try {
-    const inst2 = await wf.trigger({
-      tenant_id:    tenantId,
-      flow_id:      flowId,
-      trigger_type: "api",
-      context:      { customer_id: `cust-${randomUUID()}` },
-    });
-    cancelInstanceId = inst2.id;
-
-    await wf.persistSuspend(cancelInstanceId, {
-      step_id:        "aguardar_aprovacao",
-      resume_token:   `tok-${randomUUID()}`,
-      reason:         "approval",
-      timeout_hours:  24,
-      business_hours: false,
-    });
-
-    assertions.push(pass("F: cancel path — trigger + persist-suspend ok"));
-  } catch (err) {
-    assertions.push(fail("F: cancel path setup", String(err)));
-    return buildResult(assertions, startAt);
-  }
-
-  try {
-    const cancelled = await wf.cancel(cancelInstanceId, {
-      cancelled_by: "e2e-runner",
-      reason:       "E2E test cancel path validation",
-    });
-    assertions.push(
-      cancelled.status === "cancelled"
-        ? pass("F: cancel → status=cancelled (terminal)")
-        : fail("F: cancel status", `expected cancelled, got '${cancelled.status}'`)
-    );
-  } catch (err) {
-    assertions.push(fail("F: cancel", String(err)));
-  }
+  // ── Part F: Cancel path — REMOVIDA em 2026-08-07 (I5, lacuna 4b) ──────────
+  //
+  // Exercitava `POST /.../cancel`, rota que foi apagada por não ter alvo (ver
+  // `workflow-api/router.py` § Cancel). O setup dela já falhava antes disso:
+  // chamava `persistSuspend`, que é 410 desde o Arc 19 Fase D.
+  //
+  // ⚠️ Adjacência ANOTADA, não consertada: as Partes C e E deste mesmo cenário
+  // também batem em endpoints 410 (`persist-suspend` e `complete`). Este
+  // cenário inteiro descreve o ciclo PRÉ-Arc 19 e não pode passar como está —
+  // registrado no TODO § "Lacuna 4b" para fatia própria, porque reescrevê-lo
+  // é decidir o que o cenário deve provar sob o modelo unificado, não uma
+  // limpeza mecânica.
 
   return buildResult(assertions, startAt);
 }

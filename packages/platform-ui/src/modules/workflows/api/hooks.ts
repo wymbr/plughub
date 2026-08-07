@@ -210,16 +210,21 @@ export function useWorkflowInstanceSessions(
   return { sessions, loading }
 }
 
-// ─── cancelWorkflow ───────────────────────────────────────────────────────────
-
-export async function cancelWorkflow(instanceId: string, tenantId: string): Promise<void> {
-  const res = await fetch(`/v1/workflow/instances/${encodeURIComponent(instanceId)}/cancel`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ tenant_id: tenantId }),
-  })
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-}
+// ─── cancelWorkflow — REMOVIDA em 2026-08-07 (I5, lacuna 4b) ──────────────────
+//
+// Chamava `POST /v1/workflow/instances/{id}/cancel`, que é **410 hard** desde o
+// Arc 19 Fase D. Quatro telas a usavam, todas com `catch { alert(String(e)) }`:
+// o operador confirmava um cancelamento e recebia `Error: HTTP 410`.
+//
+// Não foi reapontada para `POST /api/force-complete/:sessionId` (o encerramento
+// por terceiro que a I5/D4 construiu) porque a medição provou que **não há
+// endereço**: `workflow.instances` tem UM escritor (`router.py:794`, o gatilho
+// legado por token) e ele grava `session_id: None` HARDCODED (`:799`) — a
+// cobertura é 0% **por construção**, não por amostra. O caminho canônico
+// (`/v1/workflow/trigger`) virou proxy do channel-gateway e não escreve linha
+// alguma aqui. Reapontar teria trocado `HTTP 410` por `HTTP 404`.
+//
+// Sonda: `infra/test/probe_workflow_cancel_callers.sh`. Detalhe: TODO § "Lacuna 4b".
 
 // ─── Webhook types ────────────────────────────────────────────────────────────
 
