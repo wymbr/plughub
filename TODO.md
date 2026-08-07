@@ -62,6 +62,13 @@ Três seções foram achadas com **corpo mantido e cabeçalho não**, na mesma v
 |---|---|---|
 | Capacidade | "implementação não iniciada" | F1, F2, F3a, F4a/b/c, F5, F5b ✅ |
 | I5 | "resta o relatório" | relatório = fatias 1 e 2, ambas ✅ |
+
+**Quarta ocorrência, 2026-08-07 — a variante que erra para MAIS.** O I5 dizia *"seguem abertas
+2/3/4/6"* com a 3 e a 6 fechadas (a 3 na própria tabela da seção; a 6 pela Fase E), e o corpo dizia
+*"Próximo: Fase E"* com E e F concluídas. As três da tabela acima subestimavam o feito e faziam
+pular a seção; esta **superestimava o pendente** e faz gastar a sessão re-medindo o que já foi
+medido. A regra não muda de forma: *o cabeçalho entra no mesmo commit que fecha a fatia* — inclusive
+quando o que fecha é uma FASE citada num parágrafo de "próximo passo".
 | Resolvedor de Identidade | "falta Slice 3 + Fase B" | Slice 3 ✅ e Fase B ✅ há um mês |
 
 Atualizar item a item e deixar o título é o modo mais comum de a seção envelhecer, e o mais caro:
@@ -390,7 +397,7 @@ exigida produz principal?"*. Só então decidir entre rebaixar no endpoint ou ex
 com `INSTANCE=human-<user_id> bash infra/test/smoke_acw_expire.sh`, que é o único jeito de exercitar
 o ramo reivindicado do supervisor.
 
-## I5 — encerramento de trabalho author-bound *(núcleo A+B ✅ + relatório fatias 1–2 ✅; fatia 3 GATED; lacuna 2 fechada pela metade em 2026-08-03; **2b REENQUADRADA em 2026-08-04 — no lugar dela apareceu um defeito de duplicação, aberto e mais grave**; seguem abertas 2/3/4/6)*
+## I5 — encerramento de trabalho author-bound *(**sem defeito vivo desde 2026-08-07**; núcleo A+B ✅, relatório fatias 1–2 ✅, arco de duplicação/afinidade A–F ✅, lacunas 3/4/5/6 ✅. Resíduo NÃO é defeito: fatia 3 e lacuna 2 estão **gated em evidência que manda não construir**; sobram 3 timeouts constantes + o portão de deriva do seed, ambos de consolidação de config)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-03.** Dizia *"resta o relatório"*, e o relatório está pronto:
 > fatia 1 (Monitor › Pendências) ✅ e fatia 2 (Analítico › Histórico de Wrap-up) ✅, ambas em
@@ -405,6 +412,17 @@ o ramo reivindicado do supervisor.
 > de `close_reason`). "Resta só" é uma afirmação de completude, e ela não era do autor do título
 > para dar: quem varre o índice conclui que a seção está a um item de fechar. *O erro nº 5 tem uma
 > forma pior que o título desatualizado — o título que resume a MAIS do que sabe.*
+>
+> **Terceira correção — 2026-08-07, e desta vez o título errava para o LADO OPOSTO.** Ele listava
+> *"seguem abertas 2/3/4/6"*, e conferido contra o código: a **3** já estava marcada fechada na
+> própria tabela desta seção (2026-08-05, sem código); a **6** foi fechada pela **Fase E**
+> (`_TRANSPORT_TO_SEGMENT_CLOSE_REASON`, `orchestrator-bridge/main.py:3256`, separado do de contato
+> em `:3194`, com `test_segment_close_reason_domain.py` assertando não-sobreposição); a **2** está
+> meio-fechada desde 08-03 e teve a outra metade *reenquadrada pela medição*; e a **4** perdeu o
+> `force-complete` em 08-05. O corpo, mais abaixo, ainda dizia **"Próximo: Fase E"** — com E e F
+> concluídas em 08-04 e registradas no `CLAUDE.md`. *Título que superestima o pendente custa
+> diferente do que subestima: ele não faz ninguém pular a seção, faz gastar a sessão re-medindo o
+> que já foi medido. Foi o que quase aconteceu ao escolher o próximo item por esta linha.*
 
 Fase final da ADR [`adr-internal-work-queue-author-bound`](docs/adr/adr-internal-work-queue-author-bound.md).
 **Núcleo A+B entregue** (ver CHANGELOG): ledger `{t}:work_task:{session}`, `Router.work_task_expire`
@@ -491,9 +509,9 @@ fila alinhado ao prazo, três `close_reason` distintos. Smoke `infra/test/smoke_
 |---|---|---|
 | 2 | **Não há reaper de `claim_lease`** — ~~vaga presa~~ ✅ **2026-08-03**; janela de invisibilidade SEGUE ABERTA | nenhum poller varre `*:pool:*:claim:*`; a lease expira passivamente. Defeito da família pull inteira (aprovação também), não do wrap-up. ✅ docstring do heartbeat inexistente corrigido (2026-07-30) — e **corrigido de novo em 2026-08-03**, porque o substituto afirmava outra rede que também não existe (ver § abaixo). Instrumento: estado `orphaned` do relatório de pendências, ✅ **CALIBRADO em 2026-07-31** (smoke 14/14). **O que fechou:** a VAGA, que nunca voltava — ver § "Lacuna 2 — o que fechou e o que não" |
 | 3 | ~~**O TTL de fila existente nunca alcança fila pull**~~ | ✅ **NÃO É DEFEITO — item mal especificado, fechado 2026-08-05 sem código.** Ver § "Lacuna 3" abaixo |
-| 4 | **Nenhuma ação de terceiro encerra item de tarefa** | ✅ fila pull (`/api/work_queue/expire/:sessionId`). ✅ **`force-complete` — 2026-08-05**, ramificado em 200/404/501, probe 9/9 (ver § "Lacuna 4" abaixo). Segue inerte só `/v1/workflow/instances/:id/cancel` = **410 hard** |
+| 4 | **Nenhuma ação de terceiro encerra item de tarefa** — ⚠️ **ÚNICA LACUNA COM DEFEITO VIVO** | ✅ fila pull (`/api/work_queue/expire/:sessionId`). ✅ **`force-complete` — 2026-08-05**, ramificado em 200/404/501, probe 9/9 (ver § "Lacuna 4" abaixo). Resta `/v1/workflow/instances/:id/cancel` = **410 hard** — e "inerte" era descrição errada: **4 telas o chamam** e a mensagem do 410 aponta um substituto **que não existe**. Ver § "Lacuna 4b" abaixo |
 | 5 | ~~**A fila pull não é consultável pelo analytics**~~ | ✅ **resolvido para a pergunta operacional (2026-07-30)**: `GET /api/work_queue/pending` varre o ledger `{t}:work_task:*` e cobre as duas formas de pendência com uma linha só (o claim não apaga o ledger). Segue sem evento/tabela espelho — o histórico do **nunca-reivindicado** continua sem fonte (fatia 3, gated) |
-| 6 | **`close_reason` de segmento não tem enum** — ⚠️ **com produtor concreto desde 2026-08-04** | `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. **O `_TRANSPORT_TO_CLOSE_REASON` do bridge serve os DOIS** (`main.py:5755` = contato; `:6401` = segmento), e por isso todo `agent_disconnect` (um F5 no Console) gera segmento SEM `close_reason`, com aviso no log. Conserto = separar os mapas, não estender o compartilhado. Ver § "um F5 no Console devolve à fila um item em trabalho" |
+| 6 | ~~**`close_reason` de segmento não tem enum**~~ | ✅ **FECHADA pela Fase E (2026-08-04).** Os mapas foram separados por domínio: `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` (`orchestrator-bridge/main.py:3256`, vocabulário de SEGMENTO) × `_TRANSPORT_TO_CLOSE_REASON` (`:3194`, enum de CONTATO), com `test_segment_close_reason_domain.py` assertando que os conjuntos não se cruzam. O `contact-segment.ts:83` segue `z.string()` livre **de propósito** — o domínio de segmento é aberto (`task_submitted`, `acw_expired`, `agent_release_item`, …); o que estava errado não era a ausência de enum, era o mapa compartilhado escolhendo domínio em silêncio. Registro original abaixo. ⟨histórico⟩ `contact-segment.ts:83` é `z.string()` livre; `task_submitted`/`session_teardown`/`acw_expired`/`acw_supervisor_closed` são literais no publish do bridge. O enum fechado (`CloseReasonSchema`, `common.ts:44-56`) é o de SESSÃO — domínio diferente. **O `_TRANSPORT_TO_CLOSE_REASON` do bridge serve os DOIS** (`main.py:5755` = contato; `:6401` = segmento), e por isso todo `agent_disconnect` (um F5 no Console) gera segmento SEM `close_reason`, com aviso no log. Conserto = separar os mapas, não estender o compartilhado. Ver § "um F5 no Console devolve à fila um item em trabalho" |
 
 ### Lacuna 4 — `force-complete` ✅ *(2026-08-05; resta só o `cancel` 410)*
 
@@ -512,12 +530,237 @@ próximo item, porque **os dois achados não estavam na descrição da lacuna** 
   tem mecanismo (o engine não consulta cancelamento). Inventar um campo que ninguém lê seria repetir
   o defeito com outro nome — foi o que o endpoint fazia.
 
-**Aberto na mesma linha:** `/v1/workflow/instances/:id/cancel` segue **410 hard**. Não conferido
-nesta passada — se for atacado, começar pelo mesmo levantamento (*o que grava, quem lê, e quem
-chama*), que aqui rendeu dois achados fora do enunciado.
+**Aberto na mesma linha:** `/v1/workflow/instances/:id/cancel` segue **410 hard**. ✅ **Conferido em
+2026-08-07** pelo mesmo levantamento — e rendeu de novo dois achados fora do enunciado. Ver § abaixo.
 
 **Não coberto:** a mudança de UI foi verificada por leitura, não executada. O probe exerce o
 endpoint por curl.
+
+### Lacuna 4b — o `/cancel` 410 *(levantado 2026-08-07; sonda escrita, medição pendente)*
+
+O enunciado dizia *"segue **inerte**"*. Inerte sugere endpoint sem chamador. Medido por leitura:
+
+- **410 hard sem handler** — `workflow-api/router.py:462`, só `raise HTTPException(410, …)`.
+- **Quatro telas o chamam**, com o corpo idêntico: `ProcessosPage.tsx:414`, `WorkflowsPage.tsx:52`,
+  `WorkflowMonitorPage.tsx:69`, `MonitorTab.tsx:642` — `confirm(…confirmCancel)` → `cancelWorkflow()`
+  → `catch { alert(String(e)) }`. `cancelWorkflow` (`hooks.ts:221`) lança `HTTP ${status}` e
+  **descarta o corpo**, então o operador confirma um cancelamento e recebe um `alert` dizendo
+  **`Error: HTTP 410`**, sem nada mais.
+- **A mensagem que ele não vê aponta um substituto inexistente.** O 410 instrui *"cancel webhook
+  sessions via the channel-gateway (`DELETE /v1/channels/webhook/{session_id}`)"* — e o
+  channel-gateway **não tem nenhuma rota `DELETE`**: a superfície webhook é POST
+  trigger/resume/pool/collect/delegate + `GET …/status`.
+
+**Modo de falha invertido em relação ao `force-complete`.** Lá a mentira era de SINAL (`200 ok:true`
+sem fazer nada). Aqui o status é honesto — 410 é o certo para deprecado — e a mentira está no
+**ponteiro**: manda usar um caminho que ninguém construiu. É a mesma forma do docstring do
+`_claim_lease_key`, que citava uma segunda rede inexistente: *o 410 tem cara de decisão
+arquitetural tomada (Arc 19 Fase D), e por isso ninguém foi conferir se o substituto nasceu.*
+
+**Pré-requisito NÃO verificado do conserto óbvio.** Religar as 4 telas a
+`POST /api/force-complete/:sessionId` (BFF, JWT `supervisor|admin`, já ramificado 200/404/501) é o
+caminho natural — é literalmente o "encerramento por terceiro" que a D4 pedia. Mas ele é endereçado
+por **`session_id`**, e a linha da lista de instâncias traz `session_id?` **opcional**
+(`hooks.ts:24`). Se vier vazio, o botão troca `HTTP 410` por `HTTP 404` — defeito novo com data
+recente, que é o pior tipo. **Medir antes:** `infra/test/probe_workflow_cancel_callers.sh` conta a
+cobertura de `session_id` nas linhas reais e ramifica o veredicto em três estados.
+
+**Três saídas, e a medição escolhe** (não decidir antes do número):
+
+| Cobertura de `session_id` | Conserto |
+|---|---|
+| ~100% | religar as 4 telas ao `force-complete`; apagar o `cancel` e a rota deprecada |
+| parcial | o botão precisa **declarar por que não pode agir** naquela linha (e as linhas sem `session_id` são o próprio diagnóstico: instâncias pré-Arc 19) |
+| ~0% | o botão não tem alvo sob o modelo unificado — remover das 4 telas fecha a lacuna sem backend novo |
+
+#### Medição de 2026-08-07 — respondeu, e por outra via
+
+`probe_workflow_cancel_callers.sh`, 2ª execução (a 1ª caiu no preflight: pingava `/health`, e o
+serviço expõe `/v1/health` — caminho copiado do comentário errado em `docker-compose.demo.yml:207`).
+
+Resultado: **`workflow.instances` tem ZERO linhas em `tenant_demo`**, com o serviço de pé e o
+endpoint respondendo. Isso reprovou a P1 e, pela regra da própria seção, seria *ausência de amostra*
+— o probe declarou INCONCLUSIVO, corretamente. **Mas a pergunta não precisava da amostra**, e a
+evidência que a fecha é estática:
+
+1. **A tabela tem UM único escritor**: `db_create_instance` (`db.py:252`), chamado num só lugar —
+   `POST /v1/workflow/webhook/{webhook_id}` (`router.py:794`), o gatilho legado por token.
+2. **Esse escritor grava `"session_id": None` HARDCODED** (`router.py:799`). Logo a cobertura de
+   `session_id` nesta tabela é **0% por construção**, não por amostragem: nenhuma linha que ela
+   possa vir a ter jamais terá `session_id`.
+3. **O caminho canônico não escreve nada aqui.** `POST /v1/workflow/trigger` (`router.py:158`) é,
+   desde o Arc 19 Fase D, um *proxy* para o channel-gateway: cria sessão e devolve `session_id`,
+   sem linha em `workflow.instances`.
+4. **Uma linha criada nunca muda de estado.** `persist-suspend`, `complete`, `fail`, `cancel`,
+   `collect/persist` e `collect/respond` são **todos 410**. O único mutador vivo — `/v1/workflow/resume`
+   no ramo legado — exige `status == 'suspended'` (`router.py:299`), e nada pode pôr uma linha em
+   `suspended`. Ela nasce `active` e **congela ali para sempre**.
+
+**Conclusão: saída (c).** O `force-complete` está descartado como conserto — ele é endereçado por
+`session_id`, que esta tabela nunca tem. Não há backend a construir: as 4 telas listam uma tabela
+cujo único escritor é legado e cujas linhas são imutáveis por desenho.
+
+> *Método, e é o mesmo escorregão registrado na § Lacuna 2 com outro nome:* a sonda foi desenhada
+> para **esperar o fenômeno** (contar linhas, classificar ramos) quando a resposta estava legível
+> no **produtor** desde o primeiro minuto — `session_id: None` é uma constante no código, não uma
+> distribuição a medir. Antes de instrumentar uma leitura, perguntar se o ESCRITOR já responde.
+> A sonda não foi perdida: é ela que prova o estado *vazio* da lista, que a leitura de código
+> sozinha não provaria.
+
+#### Executado em 2026-08-07 — saída (c) aplicada ✅
+
+- **platform-ui**: `cancelWorkflow` removida (`hooks.ts`), com o motivo medido no lugar dela; botão
+  + `handleCancel` fora das 4 telas; prop `onCancel`/`canCancel` dos dois `InstanceDetail`; 4 chaves
+  i18n nos **dois** locales (`instance.confirmCancel`, `instance.cancelInstance`,
+  `processes.instances.confirmCancel`, `…detail.cancelButton`). `refresh` saiu do `MonitorTab` (não
+  tinha outro consumidor — o polling de 10 s já mantém a lista viva).
+- **workflow-api**: rota apagada (era `status_code=410`); teste virou `test_cancel_route_is_gone`
+  assertando **404**, não `!= 410` — `!= 410` passaria se alguém reintroduzisse a rota com outro
+  código, que é a regressão que o teste existe para pegar.
+- **e2e**: Parte F do cenário 13 e `WorkflowClient.cancel()` removidas.
+- **Gate novo**: `infra/test/gate_orphan_ui_callers.sh` — falha se alguma tela chamar rota declarada
+  com `status_code=410|501`. Estático (sem stack, sem efeito colateral), com **contador-testemunha**
+  (zero rotas duras ⇒ INCONCLUSIVO, porque o zero mediria o detector). Distinção central: 410/501
+  **condicional** não conta — o 501 do ramo 2 do `force-complete` é o padrão BOM que a I5
+  estabeleceu, e marcá-lo ensinaria a esconder a ausência. Previsão contada: **5 rotas duras, 0
+  órfãos**.
+
+**Validação ✅ 2026-08-07** — `test_cancel_route_is_gone` PASSED **nomeado** (`-v --no-header`) e da
+imagem RECONSTRUÍDA: `workflow-api` não tem volume mount, então a 1ª rodada (`48 passed`, sem nomes)
+exercitou código velho + teste velho, coerentes entre si — passaria de qualquer jeito. Gate
+`gate_orphan_ui_callers.sh` verde (5 rotas duras, 0 órfãos). UI conferida **nas duas telas
+alcançáveis**, com fixture `skill_probe_ui_v1` (`status=suspended`, que era exatamente a condição de
+render do botão): `/flow/monitor` › Processes e `/flow/processos` › Instances abrem o painel de
+detalhe **sem** o rodapé vermelho.
+
+**Correção do próprio levantamento:** eram *quatro chamadores em código*, mas só **duas telas
+alcançáveis** — `WorkflowsPage.tsx` e `WorkflowMonitorPage.tsx` não são importadas por ninguém
+(`routes.tsx:106,108` mandam `/workflows` e `/workflow/monitor` para `/flow/monitor`). Arquivos
+mortos, e a frase "quatro telas vivas" superestimava a gravidade. *Contar call sites não é contar
+superfície: o roteador é que decide o que existe.*
+
+**O que a validação mostrou de graça (argumento da saída removida do escopo):** o painel exibe um
+processo `Suspended` que não oferece **ação nenhuma** — nem cancelar, nem retomar. Coerente com o
+achado: as linhas nascem `active`/`suspended` e congelam. A listagem inteira é candidata a remoção
+sob o Arc 19, mas isso é decisão de produto, não conserto de defeito. *(O chip de filtro
+"Cancelled" segue na tela e sempre volta vazio — defensável, porque linhas legadas de tenants reais
+podem ter esse status; anotado para não ser "descoberto" de novo.)*
+
+#### Quatro sintomas independentes, uma decisão de produto *(2026-08-07)*
+
+Não construir nada com isto — é o dossiê para quando a remoção da listagem for decidida. Cada linha
+foi observada por uma via diferente, o que é o que dá peso ao conjunto:
+
+1. **Nada a fazer** — o painel de detalhe não oferece ação alguma (visto na tela, após a remoção).
+2. **Nada muda** — todo mutador é 410; o único vivo exige `suspended`, estado inalcançável.
+3. **O campo canônico está vazio** — a tabela TEM `pool_id`, e o único escritor grava `None`
+   (`router.py:801`). Por isso o filtro da tela é por **`flow_id`** (= `skill_id`, o endereço
+   legado), e **está certo assim**: "corrigi-lo" para pool, obedecendo o invariante ao pé da letra,
+   criaria um filtro sobre coluna sempre nula — digitar qualquer pool devolveria vazio sem erro.
+   *Trocar um rótulo legado honesto por um filtro que nunca casa é a armadilha do valor plausível.*
+4. **O produtor é inalcançável pelo menu** — as linhas só nascem do registro legado
+   `workflow.webhooks` (`flow_id` + token `plughub_wh_…`), cujo editor é o `WebhooksTab` em
+   **`/workflow/calendar`** (`routes.tsx:104`): rota existente, **sem entrada em nav nenhuma**. Só
+   se chega digitando a URL.
+
+**Duas gerações de "webhook", e é isso que confunde ao ler a tela:** o canônico é o `ChannelEndpoint`
+de `/config/channels` › Webhook (**slug → pool**, ex. `crm-callback` → `retencao_humano`), que cria
+sessão normal; o legado é o `workflow.webhooks` (**`flow_id`** = skill), que cria linha em
+`workflow.instances`. Não são o mesmo campo em telas diferentes — são a mesma pergunta respondida
+antes e depois do invariante "o pool é a unidade endereçável".
+
+➡️ **Isto virou arco próprio:** [`docs/adr/adr-webhook-endpoint-single-registry.md`](docs/adr/adr-webhook-endpoint-single-registry.md)
+(proposto, 2026-08-07) — registro único + `identifier` opaco. Ver § abaixo.
+
+---
+
+## Webhook — registro único e identificador opaco *(ADR proposto 2026-08-07; zero código)*
+
+**A regra:** um webhook é UMA coisa, logo tem UM registro. `ChannelEndpoint` é esse registro
+(já é o de webchat/WhatsApp/voz — **webhook é o desviante, não o caso especial**), e o `identifier`
+é **opaco**: não codifica qual skill roda, e nada o interpreta.
+
+**Não é regra nova** — é a aplicação de duas invariantes que o `CLAUDE.md` já declara ("One source
+per domain", "Every config field is UI-editable") ao domínio que escapou delas.
+
+**O que a medição mostrou** (detalhe no ADR §1-2): três superfícies acionáveis, uma visível; o
+defeito **não é colisão** (`@@unique` bloqueia, e os prefixos de URL são disjuntos) e sim **ausência
+de inventário** — todo pool com `webhook_skill_id` está acionável agora, sem linha em registro
+nenhum. E o endereçamento por skill **não é inevitável**: é convenção do Arc 19, já rebaixada pelo
+invariante do pool, com **modo de falha conhecido** (skill em N pools ⇒ `Webhook endpoint AMBÍGUO`,
+regime legítimo previsto no próprio `CLAUDE.md`).
+
+**Duas propriedades que barateiam a mudança:**
+
+- **É backfill, não reescrita.** Identificador opaco ⇒ os chamadores internos seguem mandando a
+  MESMA string; muda só quem a resolve (registro, não fallback).
+- **Nada se perde.** "Qual skill roda" já tem autoridade única — o slot `current` do pool. Derivar
+  skill do path sempre foi a fonte ERRADA, não só redundante: após um `promote` o path continua
+  dizendo o nome antigo.
+
+**Emenda ao enunciado original:** "sem regra de formação" = **sem semântica**, com validação
+**sintática** (URL-safe). Opaco quanto ao significado, validado quanto à forma — senão trocamos
+acoplamento semântico por defeito de transporte.
+
+**Ordem é parte da decisão (D7):** semear ANTES de trocar a resolução, remover o fallback POR
+ÚLTIMO. Invertido, todo disparo interno vira 404 — falha muda do lado de quem chama.
+
+**Fases A–F no ADR.** Em aberto: se `/v1/channels/webhook/pool/{id}` também entra no registro
+(inclinação: sim, inventário só vale se exaustivo) e o destino do legado por token.
+
+**Fase A ✅ MEDIDA 2026-08-07** (`infra/test/probe_webhook_endpoint_inventory.sh`; detalhe no ADR §6).
+**11 superfícies acionáveis, 1 na tela, e é a suspeita.** As 4 previsões bateram exatas — o que
+também prova ausência de drift YAML↔store para estas entidades.
+
+| | Medido |
+|---|---|
+| pools com canal webhook (acionáveis, sem registro) | **10 de 10** |
+| `ChannelEndpoint(webhook)` | **1** (`crm-callback`) |
+| endpoint registrado com pool que **não declara o canal** | **1 de 1** |
+| `workflow.webhooks` (token) | **0** |
+
+**Dois achados fora do enunciado:**
+
+1. **O registro visível não é validado.** `POST /v1/channel-endpoints` confere só PRESENÇA de campo
+   (`channel-endpoints.ts:93-95`) — não valida existência do pool nem o canal declarado. Não é erro
+   de seed, é buraco sistemático, e é o **espelho** do problema de invisibilidade: *endpoint que
+   aparece na tela e não serve é pior que endpoint ausente — tem aparência de conferido.* Vira
+   requisito da D8.
+2. **`workflow.instances` está vazia PORQUE `workflow.webhooks` está vazia** — o único escritor
+   daquela exige linha desta (`router.py:794`). Os dois achados da manhã eram um só. Não decide a
+   fase F (demo vazio ≠ nenhum tenant usa), mas nada no demo depende do caminho por token.
+
+✅ **`crm-callback` MEDIDO (2026-08-07) — e o resultado REFUTOU a hipótese: o endpoint FUNCIONA.**
+Disparo → 201 → fila (nenhum humano logado ainda) → recursos conectados → **contato entregue a um
+agente humano, atendido e encerrado**.
+
+**Mecanismo** (`router.py:86-92`): com `pool_id` explícito, `pools = [pool]` — **sem filtro de
+canal**. O filtro por `channel_types` só existe no ramo legado de DESCOBERTA (`:94`). Logo *canal é
+hard filter sobre a descoberta de pool, não sobre pool endereçado* — e `ChannelEndpoint` é
+justamente um entry point que declara o pool. A configuração é **válida**.
+
+⚠️ **Erro de método meu, registrado porque é novo:** a versão anterior desta nota dizia "hard filter
+provado", a partir de um snapshot com `available: 2` lido **depois** de os recursos serem
+conectados — **leitura pós-intervenção usada como controle do estado anterior**, com
+contemporaneidade *inferida* de um `updated_at` isolado em vez de *provada* contra o instante do
+disparo. *Um controle só vale se for CONTEMPORÂNEO do fenômeno, e contemporaneidade se prova
+comparando instantes, nunca se deduz de um timestamp lido sozinho.* Versão temporal do erro que a
+§ Postura já cataloga: o valor era plausível e por isso passou.
+
+**Consequência na D8:** validar **existência do pool** mantém-se; validar **canal declarado** é
+**rebaixado a aviso** — rejeitar quebraria configuração legítima (esta). E a justificativa "fabrica
+contato abandonado" **cai**: a fila foi por ausência de agente logado, que é comportamento correto.
+⚠️ A checagem **F4b da sonda é geradora de falso-positivo** e precisa virar advisory (não deve
+mais puxar `exit 1`).
+
+**Próximo:** fase B (seed idempotente das 10 linhas `internal`) + guard da D8 + conserto do dado do
+`crm-callback` — nessa ordem, respeitando a D7 (o fallback sai por último).
+
+**⚠️ Adjacência encontrada, NÃO consertada — fatia própria:** o cenário e2e **13** descreve o ciclo
+pré-Arc 19 inteiro. Além da Parte F, as **Partes C e E** batem em `persist-suspend` e `complete`,
+ambas 410 — ou seja, o cenário não pode passar como está, e provavelmente já não passava. Reescrevê-lo
+é decidir *o que ele deve provar sob o modelo unificado*, não limpeza mecânica. Some-se ao item
+já aberto "Fixtures do e2e ainda falam AgentType": há um bolsão de e2e que envelheceu com o Arc 19.
 
 ### Lacuna 3 — não era defeito, era descrição errada *(avaliada 2026-08-05, fechada sem código)*
 
@@ -698,11 +941,15 @@ inbox, com crachá de reserva.
 **Aberto na Fase D:** `pool:pending_assignment` não é apagado no `work_task_release` (vive até o TTL
 e é descartado na entrega) — conserto no produtor é follow-up opcional.
 
-**Próximo: Fase E (D8)** — a queda de transporte deixa de publicar `agent_done` e os mapas de
-`close_reason` são separados (contato = enum fechado × segmento = vocabulário livre), fechando a
-lacuna 6. Sob D2 uma conexão instável produz uma pilha de `agent_done` falsos e de segmentos por um
-único wrap-up, contaminando contagem, AHT e a bancada de agentes. Depois F (resume
-terminal-uma-vez: corrida submit × expire do supervisor).
+**Fase E (D8) ✅ 2026-08-04 — fechou a lacuna 6.** Os mapas de `close_reason` foram separados
+(contato = enum fechado × segmento = vocabulário livre); a queda publica `agent_released`, não
+`agent_done`. Duas emendas medidas ao implementar (nada analítico lê `agent_done`; suprimir o evento
+seria regressão, porque `remove_conversation` também restaura membership) — detalhe no `CLAUDE.md`
+§ ADR de requeue/afinidade e no `CHANGELOG.md`.
+
+**Fase F ✅ 2026-08-04 — ARCO A–F COMPLETO.** Resume terminal-uma-vez (`SET NX` + registro terminal
+→ 409 nomeado × 404 honesto); F2 fez o Console ler o 409. *Este parágrafo dizia "Próximo: Fase E"
+até 2026-08-07 — ver a 3ª correção no topo da seção.*
 
 **O que decidir antes de codar** (é a "política de filas pull × push" — o enquadramento certo):
 
