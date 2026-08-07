@@ -700,7 +700,25 @@ Body de contestation: `{ result_id, reason, round: number }`. O campo `round` é
 
 ### Operações admin (CRUD de formulários e campanhas)
 
-Requerem `X-Admin-Token` header.
+**Desde o G-PROBE fase 2, `X-Admin-Token` NÃO vale mais nestes endpoints.** As escritas de
+form e campaign (`POST`/`PUT` de `/forms` e `/campaigns`) usam `_require_service_or_eval_write`:
+aceitam **`X-Service-Token`** (backend — seed, e2e, scanner) **OU** `Authorization: Bearer <jwt>`
+com grant ABAC `evaluation.formularios` em `read_write` (a UI opera com o JWT do operador, sem
+segredo no frontend). Sem nenhuma das duas → 401; com Bearer sem o grant → 403.
+
+Ações deliberadas de operador seguem **só** no gate humano estrito (`_require_evaluation_field`,
+Bearer+ABAC, sem credencial de serviço): `publish`, `delete`, `pause`, `resume`. Provisionar não
+é o mesmo que publicar.
+
+As leituras de lista (`GET /forms`, `GET /campaigns`) usam `_require_any_evaluation`: Bearer
+opcional, degrada para permitir quando ausente/legado, nega só um JWT cujo `module_config` não
+concede nenhum campo de `evaluation`.
+
+> Armadilha registrada (2026-08-05): enquanto as escritas eram Bearer-only, o `eval-seed` — que
+> manda `X-Admin-Token` — falhava com 401, mas **só em base zerada**. Em base povoada ele
+> encontrava o formulário no `GET` e retornava antes de tocar em qualquer endpoint de escrita,
+> saindo com código 0. O defeito existia desde o endurecimento e só era observável no substrato
+> novo.
 
 ### Operações de revisão e contestação
 

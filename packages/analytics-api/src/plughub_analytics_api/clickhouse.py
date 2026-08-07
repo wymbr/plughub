@@ -1084,20 +1084,32 @@ class AnalyticsStore:
 
     def ensure_schema(self) -> None:
         """Creates the database, all tables, and materialized views if they don't exist. Idempotent."""
-        # Base tables: execute strictly — errors are real problems.
-        base_ddl = [d for d in _ALL_DDL if "MATERIALIZED VIEW" not in d and "CREATE VIEW" not in d]
-        for ddl in base_ddl:
+        # Executed in _ALL_DDL ORDER — never partitioned into two passes.
+        #
+        # It used to split into base_ddl / view_ddl by substring, and the split
+        # both REORDERED the list and misclassified: `CREATE OR REPLACE VIEW`
+        # (v_segment_summary) does not contain the literal "CREATE VIEW", so it
+        # landed in the strict base pass and ran BEFORE the materialized view it
+        # selects from. On an existing database that was invisible (the MV was
+        # already there); on a FRESH ClickHouse volume it raised UNKNOWN_TABLE
+        # (code 60) out of ensure_schema, and analytics-api retried forever
+        # ("ClickHouse not ready yet") against a ClickHouse that was perfectly
+        # healthy. Ordering is a property of the list, so it is the list that
+        # must be honoured — not a string test on the statement.
+        for ddl in _ALL_DDL:
             stmt = ddl.format(db=self._database)
-            self._client.command(stmt)
-        # Materialized views and readable views: wrap in try/except because POPULATE
-        # can raise on ClickHouse versions that don't support IF NOT EXISTS + POPULATE
-        # atomically. On re-runs the view already exists and the error is harmless.
-        view_ddl = [d for d in _ALL_DDL if "MATERIALIZED VIEW" in d or "CREATE VIEW" in d]
-        for ddl in view_ddl:
+            if "VIEW" not in ddl:
+                # Tables: strict — an error here is a real problem.
+                self._client.command(stmt)
+                continue
+            # Views: tolerated because POPULATE + IF NOT EXISTS is not atomic on
+            # every ClickHouse version, so a re-run can raise harmlessly. The
+            # motive is always logged — a view that fails to build makes the
+            # reports over it empty, and that must not be silent.
             try:
-                self._client.command(ddl.format(db=self._database))
+                self._client.command(stmt)
             except Exception as exc:
-                logger.warning("View DDL skipped (already exists?): %s — %s", ddl[:80], exc)
+                logger.warning("View DDL failed: %s — %s", ddl.strip()[:80], exc)
         # Forward-compatible migrations (idempotent ALTER TABLE statements).
         for ddl in _MIGRATIONS:
             try:

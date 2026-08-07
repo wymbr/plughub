@@ -31,6 +31,9 @@ import urllib.error
 # ─── Config ───────────────────────────────────────────────────────────────────
 EVAL_URL    = os.environ.get("EVALUATION_API_URL", "http://evaluation-api:3400")
 ADMIN_TOKEN = os.environ.get("AUTH_ADMIN_TOKEN",   "changeme_auth_admin_token_demo")
+# G-PROBE fase 2 — o CRUD de forms/campaigns deixou de aceitar X-Admin-Token; as
+# escritas exigem Bearer+ABAC (UI) OU esta credencial de serviço (backend/seed/e2e).
+SERVICE_TOKEN = os.environ.get("EVALUATION_SERVICE_TOKEN", "")
 TENANT_ID   = os.environ.get("TENANT_ID",          "tenant_demo")
 MAX_WAIT_S  = int(os.environ.get("SEED_MAX_WAIT",  "120"))
 
@@ -91,8 +94,9 @@ def _req(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
     req  = urllib.request.Request(
         url, data=data, method=method,
         headers={
-            "Content-Type":  "application/json",
-            "X-Admin-Token": ADMIN_TOKEN,
+            "Content-Type":    "application/json",
+            "X-Admin-Token":   ADMIN_TOKEN,
+            "X-Service-Token": SERVICE_TOKEN,
         },
     )
     try:

@@ -500,7 +500,10 @@ async def list_forms(
 
 @router.post("/v1/evaluation/forms", status_code=201)
 async def create_form(body: FormCreate, request: Request) -> dict:
-    _require_evaluation_field(request, "formularios", write=True)
+    # Provisionamento (seed/e2e) OU UI. O gate estrito Bearer+ABAC deixava o
+    # `eval-seed` de fora: ele provisiona pela API oficial (invariante de config),
+    # mas não é um operador logado e não tem JWT. Ver `_require_service_or_eval_write`.
+    _require_service_or_eval_write(request)
     pool = _pool(request)
     row = await _db.create_form(pool, **body.model_dump())
     return _expose_form_id(row)
@@ -517,7 +520,7 @@ async def get_form(form_id: str, tenant_id: str, request: Request) -> dict:
 
 @router.put("/v1/evaluation/forms/{form_id}")
 async def update_form(form_id: str, tenant_id: str, body: FormUpdate, request: Request) -> dict:
-    _require_evaluation_field(request, "formularios", write=True)
+    _require_service_or_eval_write(request)   # provisionamento é upsert: create + update
     pool = _pool(request)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_form(pool, form_id, tenant_id, **updates)
@@ -839,7 +842,7 @@ async def list_campaigns(
 
 @router.post("/v1/evaluation/campaigns", status_code=201)
 async def create_campaign(body: CampaignCreate, request: Request) -> dict:
-    _require_evaluation_field(request, "formularios", write=True)
+    _require_service_or_eval_write(request)   # provisionamento (seed/e2e) OU UI
     pool = _pool(request)
     # Validate form exists
     form = await _db.get_form(pool, body.form_id, body.tenant_id)
@@ -886,7 +889,7 @@ async def get_campaign(campaign_id: str, tenant_id: str, request: Request) -> di
 
 @router.put("/v1/evaluation/campaigns/{campaign_id}")
 async def update_campaign(campaign_id: str, tenant_id: str, body: CampaignUpdate, request: Request) -> dict:
-    _require_evaluation_field(request, "formularios", write=True)
+    _require_service_or_eval_write(request)   # provisionamento é upsert: create + update
     pool = _pool(request)
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     row = await _db.update_campaign(pool, campaign_id, tenant_id, **updates)
