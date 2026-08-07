@@ -18,7 +18,9 @@ import {
   PoolHooks,
   PoolHookEntry,
   PoolHookSide,
+  PoolHookDispatch,
 } from '@/types'
+import { useDialogForms } from '@/api/dialog-hooks'
 import Button from '@/components/ui/Button'
 import Table from '@/components/ui/Table'
 import Input from '@/components/ui/Input'
@@ -156,12 +158,23 @@ interface PoolOption { value: string; label: string }
 
 function HookListEditor({
   entries, onChange, poolOptions, defaultSide = 'agent',
+  finalization = false, dialogFormOptions = [], internalQueueEnabled = false,
 }: {
   entries:     PoolHookEntry[]
   onChange:    (e: PoolHookEntry[]) => void
   poolOptions: PoolOption[]
   /** G7 Fase 3b-ii: novas entries de on_contact_end nascem side=customer (NPS). */
   defaultSide?: PoolHookSide
+  /**
+   * Slot de FINALIZAÇÃO (on_human_end / on_contact_end / on_process_end / post_human).
+   * Só neles `dispatch: detached` é aceito — o backend REJEITA no on_human_start, então
+   * o campo não é oferecido lá (não adianta oferecer o que o parse recusa).
+   */
+  finalization?: boolean
+  /** DialogForms disponíveis para `context.dialog_form_id`. */
+  dialogFormOptions?: PoolOption[]
+  /** Estado RESULTANTE da flag no formulário — governa o aviso de `detached`. */
+  internalQueueEnabled?: boolean
 }) {
   const { t } = useTranslation('configRecursos')
 
@@ -172,6 +185,19 @@ function HookListEditor({
 
   const update = (i: number, patch: Partial<PoolHookEntry>) =>
     onChange(entries.map((e, idx) => idx === i ? { ...e, ...patch } : e))
+
+  /**
+   * Edita UMA chave de `context` preservando as demais — inclusive as que esta tela
+   * não conhece (o campo é `Record<string,string>` aberto e outros hooks podem usar
+   * chaves próprias). Valor vazio REMOVE a chave: mandar "" faria o skill ler string
+   * vazia como se fosse configuração, que é pior do que ler a ausência e usar default.
+   */
+  const setCtx = (i: number, key: string, value: string) => {
+    const next: Record<string, string> = { ...(entries[i]?.context ?? {}) }
+    if (value.trim()) next[key] = value.trim()
+    else delete next[key]
+    update(i, { context: Object.keys(next).length > 0 ? next : undefined })
+  }
 
   return (
     <div className="space-y-2">
@@ -212,6 +238,79 @@ function HookListEditor({
                 <option value="timeout">{t('pools.hooks.npsTimeout')}</option>
                 <option value="skip">{t('pools.hooks.npsSkip')}</option>
               </select>
+            </div>
+          )}
+
+          {/* ── Entrega (Camada A) + config do hook (@ctx.hook.*) ──────────────
+              Só em slots de FINALIZAÇÃO: `detached` no on_human_start é rejeitado
+              pelo parse do backend, e oferecer o que não passa é pior que omitir. */}
+          {finalization && (
+            <div className="flex flex-col gap-1.5 pl-1 pt-1 border-t border-border/60">
+              <div className="flex items-center gap-2">
+                <span className="text-2xs text-muted-light w-20 flex-shrink-0">
+                  {t('pools.hooks.dispatch')}:
+                </span>
+                <select
+                  value={entry.dispatch ?? 'inline'}
+                  onChange={e => update(i, { dispatch: e.target.value as PoolHookDispatch })}
+                  className="text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+                >
+                  <option value="inline">{t('pools.hooks.dispatchInline')}</option>
+                  <option value="detached">{t('pools.hooks.dispatchDetached')}</option>
+                </select>
+                <span className="text-2xs text-muted-light">
+                  {entry.dispatch === 'detached'
+                    ? t('pools.hooks.dispatchDetachedHint')
+                    : t('pools.hooks.dispatchInlineHint')}
+                </span>
+              </div>
+
+              {/* O 422 do registry vive aqui, ANTES do save: detached+agent sem fila
+                  interna quebraria só no próximo atendimento real. */}
+              {entry.dispatch === 'detached' && entry.side === 'agent' && !internalQueueEnabled && (
+                <div className="bg-warning-light border border-warning/30 text-warning-text px-2 py-1 rounded text-2xs">
+                  {t('pools.hooks.detachedNeedsInternalQueue')}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <span className="text-2xs text-muted-light w-20 flex-shrink-0">
+                  {t('pools.hooks.dialogForm')}:
+                </span>
+                <select
+                  value={entry.context?.['dialog_form_id'] ?? ''}
+                  onChange={e => setCtx(i, 'dialog_form_id', e.target.value)}
+                  className="flex-1 min-w-0 text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+                >
+                  <option value="">{t('pools.hooks.dialogFormNone')}</option>
+                  {dialogFormOptions.map(o => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                  {/* Form referenciado que não está na lista (ainda não publicado, ou
+                      apagado): mostrar o id em vez de silenciosamente virar "nenhum". */}
+                  {!!entry.context?.['dialog_form_id'] &&
+                   !dialogFormOptions.some(o => o.value === entry.context?.['dialog_form_id']) && (
+                    <option value={entry.context?.['dialog_form_id'] ?? ''}>
+                      {t('pools.hooks.dialogFormMissing', { id: entry.context?.['dialog_form_id'] ?? '' })}
+                    </option>
+                  )}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-2xs text-muted-light w-20 flex-shrink-0">
+                  {t('pools.hooks.acwTimeout')}:
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder={t('pools.hooks.acwTimeoutDefault')}
+                  value={entry.context?.['acw_timeout_hours'] ?? ''}
+                  onChange={e => setCtx(i, 'acw_timeout_hours', e.target.value)}
+                  className="w-24 text-xs border border-border-strong rounded px-2 py-1 bg-white focus:outline-none focus:ring-1 focus:ring-primary/40"
+                />
+                <span className="text-2xs text-muted-light">{t('pools.hooks.acwTimeoutHint')}</span>
+              </div>
             </div>
           )}
         </div>
@@ -449,6 +548,15 @@ const PoolsPage: React.FC = () => {
   const { t } = useTranslation('configRecursos')
   const { t: tCommon } = useTranslation('common')
 
+  // DialogForms para `hooks[].context.dialog_form_id`. Lista TODOS (não só publicados):
+  // o hook referencia por id, e um form em draft é erro de operação — a tela mostra o
+  // status junto para o erro aparecer aqui, não no atendimento.
+  const { forms: dialogForms } = useDialogForms(session?.tenantId ?? '')
+  const dialogFormOptions: PoolOption[] = dialogForms.map(f => ({
+    value: f.form_id,
+    label: `${f.form_id}${f.name ? ` — ${f.name}` : ''}${f.status === 'published' ? '' : ` (${t('pools.hooks.dialogFormDraft')})`}`,
+  }))
+
   const DINAMICOS_META: Array<{
     key: keyof RoutingWeightsDinamicos
     label: string
@@ -484,6 +592,8 @@ const PoolsPage: React.FC = () => {
     agent_kind:        '' as '' | 'human' | 'ai',
     dispatch_mode:     'push' as 'push' | 'pull',
     purpose:           'contact' as 'contact' | 'internal',
+    // ADR internal-work-queue: espelho da fila `{pool}-int` (wrap-up author-bound).
+    internal_queue_enabled: false,
     channel_types:     [] as string[],
     // Arc 19 — INTERNAL workflow_trigger correlation key (not the public URL).
     webhook_skill_id:  '' as string,
@@ -646,6 +756,7 @@ const PoolsPage: React.FC = () => {
     setEditingPool(null)
     setFormData({
       pool_id: '', description: '', agent_kind: '', dispatch_mode: 'push', purpose: 'contact',
+      internal_queue_enabled: false,
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
@@ -667,6 +778,7 @@ const PoolsPage: React.FC = () => {
       agent_kind:        pool.agent_kind ?? '',
       dispatch_mode:     (pool.dispatch_mode as 'push' | 'pull') ?? 'push',
       purpose:           (pool.purpose as 'contact' | 'internal') ?? 'contact',
+      internal_queue_enabled: pool.internal_queue_enabled ?? false,
       channel_types:     pool.channel_types,
       webhook_skill_id:  pool.webhook_skill_id ?? '',
       sla_target_ms:     pool.sla_target_ms,
@@ -795,6 +907,7 @@ const PoolsPage: React.FC = () => {
         ...(formData.agent_kind ? { agent_kind: formData.agent_kind } : {}),
         dispatch_mode:     formData.dispatch_mode,
         purpose:           formData.purpose,
+        internal_queue_enabled: formData.internal_queue_enabled,
         ...(formData.max_reply_time_ms !== null && { max_reply_time_ms: formData.max_reply_time_ms }),
         // calendar_id: null limpa no registry (undefined era removido pelo
         // JSON.stringify e o valor antigo persistia).
@@ -834,7 +947,19 @@ const PoolsPage: React.FC = () => {
           : ((editingPool?.llm_account_ids?.length ?? 0) > 0 ? { llm_account_ids: [] } : {})),
       }
       if (editingPool) {
-        await registryApi.updatePool(editingPool.pool_id, payload, session.tenantId)
+        // Desligar a fila interna órfana qualquer item ainda nela, e o registry não
+        // consegue verificar (a fila é do routing-engine) — por isso ele recusa sem
+        // `force_disable`. A confirmação é do OPERADOR, não um default silencioso.
+        const disablingQueue = (editingPool.internal_queue_enabled ?? false)
+          && !formData.internal_queue_enabled
+        if (disablingQueue && !window.confirm(t('pools.internalQueue.disableConfirm'))) {
+          setIsSaving(false)
+          return
+        }
+        await registryApi.updatePool(
+          editingPool.pool_id, payload, session.tenantId,
+          disablingQueue ? { forceDisable: true } : undefined,
+        )
       } else {
         await registryApi.createPool({ pool_id: formData.pool_id, ...payload }, session.tenantId)
       }
@@ -1153,6 +1278,22 @@ const PoolsPage: React.FC = () => {
             <p className="text-xs text-muted-light mt-0.5">{t('pools.purpose.hint')}</p>
           </div>
 
+          {/* ── Fila interna (ADR internal-work-queue) ───────────────────────── */}
+          <div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.internal_queue_enabled}
+                onChange={e => setFormData({ ...formData, internal_queue_enabled: e.target.checked })}
+                className="w-4 h-4 accent-primary"
+              />
+              <span className="text-sm font-medium text-dark">{t('pools.internalQueue.label')}</span>
+            </label>
+            <p className="text-xs text-muted-light mt-0.5">
+              {t('pools.internalQueue.hint', { pool: `${formData.pool_id || '{pool}'}-int` })}
+            </p>
+          </div>
+
           {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}
           <div>
             <p className="text-sm font-semibold text-dark">{t('pools.queueCfg.label')}</p>
@@ -1207,6 +1348,9 @@ const PoolsPage: React.FC = () => {
                   entries={formData.hooks.on_human_end}
                   onChange={e => setHookSlot('on_human_end', e)}
                   poolOptions={poolComboOptions}
+                  finalization
+                  dialogFormOptions={dialogFormOptions}
+                  internalQueueEnabled={formData.internal_queue_enabled}
                 />
               </div>
               <div>
@@ -1217,6 +1361,9 @@ const PoolsPage: React.FC = () => {
                   onChange={e => setHookSlot('on_contact_end', e)}
                   poolOptions={poolComboOptions}
                   defaultSide="customer"
+                  finalization
+                  dialogFormOptions={dialogFormOptions}
+                  internalQueueEnabled={formData.internal_queue_enabled}
                 />
               </div>
               <div>
@@ -1226,6 +1373,9 @@ const PoolsPage: React.FC = () => {
                   entries={formData.hooks.post_human}
                   onChange={e => setHookSlot('post_human', e)}
                   poolOptions={poolComboOptions}
+                  finalization
+                  dialogFormOptions={dialogFormOptions}
+                  internalQueueEnabled={formData.internal_queue_enabled}
                 />
               </div>
               <div>
@@ -1235,6 +1385,9 @@ const PoolsPage: React.FC = () => {
                   entries={formData.hooks.on_process_end}
                   onChange={e => setHookSlot('on_process_end', e)}
                   poolOptions={poolComboOptions}
+                  finalization
+                  dialogFormOptions={dialogFormOptions}
+                  internalQueueEnabled={formData.internal_queue_enabled}
                 />
               </div>
             </div>

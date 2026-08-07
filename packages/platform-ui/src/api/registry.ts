@@ -76,8 +76,20 @@ export const createPool = async (data: CreatePoolInput, tenantId: string): Promi
   return response.json()
 }
 
-export const updatePool = async (poolId: string, data: UpdatePoolInput, tenantId: string): Promise<Pool> => {
-  const response = await fetch(`${getBaseUrl()}/v1/pools/${poolId}`, {
+/**
+ * `forceDisable` só existe para o desligamento de `internal_queue_enabled`: o registry
+ * recusa (422) desligar sem ele, porque não enxerga a fila (ela vive no Redis do
+ * routing-engine) e trata "não consigo verificar pendência" como pendência. Quem chama
+ * precisa ter confirmado com o operador — não é default de conveniência.
+ */
+export const updatePool = async (
+  poolId: string,
+  data: UpdatePoolInput,
+  tenantId: string,
+  opts?: { forceDisable?: boolean },
+): Promise<Pool> => {
+  const qs = opts?.forceDisable ? '?force_disable=true' : ''
+  const response = await fetch(`${getBaseUrl()}/v1/pools/${poolId}${qs}`, {
     method: 'PUT',
     headers: headers(tenantId),
     body: JSON.stringify(data)

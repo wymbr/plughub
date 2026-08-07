@@ -95,6 +95,8 @@ export interface QueueConfig {
 export type PoolHookSide = 'agent' | 'customer'
 export type PoolHookNpsOnDisconnect = 'skip' | 'timeout'
 
+export type PoolHookDispatch = 'inline' | 'detached'
+
 export interface PoolHookEntry {
   /** pool_id de onde o especialista é recrutado (wrapup_ia, nps_ia, …). */
   pool: string
@@ -102,6 +104,26 @@ export interface PoolHookEntry {
   side: PoolHookSide
   /** Só relevante para side=customer: skip = não dispara se o cliente desconectou. */
   nps_on_disconnect: PoolHookNpsOnDisconnect
+  /**
+   * Camada A do arco "detach de hooks de finalização". Só vale em hooks de
+   * FINALIZAÇÃO (on_human_end / on_contact_end / on_process_end / post_human) —
+   * o backend REJEITA `detached` em on_human_start.
+   *   inline   — roda na conferência viva; o bridge segura o fechamento do contato
+   *              até o hook concluir. Necessário quando precisa do WS do cliente
+   *              (NPS). No wrap-up = auto-atendimento no Console. Default.
+   *   detached — sessão independente (workflow_trigger); o contato fecha na hora
+   *              (conserta o G1/AHT) e o item vai para a inbox pull do agente.
+   * Ausente = inline (default do Zod no backend).
+   */
+  dispatch?: PoolHookDispatch
+  /**
+   * Config injetada como `@ctx.hook.*` na sessão do hook. Existe porque o skill do
+   * hook é GENÉRICO e o que varia é quem o invoca: qual DialogForm o wrap-up de
+   * Retenção usa é fato do `retencao_humano`, não do `skill_wrapup_detached_v1`.
+   * Chaves conhecidas pela UI: `dialog_form_id`, `acw_timeout_hours`. Chaves
+   * desconhecidas são PRESERVADAS no round-trip (o editor faz merge).
+   */
+  context?: Record<string, string>
 }
 
 export interface PoolHooks {
@@ -152,6 +174,14 @@ export interface Pool {
    * wrap-up é o tempo de ACW).
    */
   purpose?: 'contact' | 'internal'
+  /**
+   * ADR internal-work-queue: espelha a fila interna `{pool_id}-int` (trabalho
+   * author-bound: wrap-up). Pré-requisito de qualquer hook de finalização com
+   * `dispatch: detached` + `side: agent` — sem ela o skill do hook não recebe
+   * `@ctx.hook.wrapup_pool` e o delegate falha em runtime (o registry devolve 422).
+   * Desligar exige `?force_disable=true` (pode haver item pendente invisível daqui).
+   */
+  internal_queue_enabled?: boolean
   /** Throttle opcional de backpressure downstream (webhook). */
   max_concurrent_sessions?: number | null
   /* `session_reservation` removido na fatia 3 (2026-08-02) — era fatia de sessão do
@@ -194,6 +224,8 @@ interface PoolGapFields {
   max_concurrent_sessions?: number | null
   /* `session_reservation` fora desde a fatia 3 — o registry não aceita mais o campo. */
   max_reply_time_ms?: number | null
+  /** ADR internal-work-queue — espelho da fila `{pool}-int`. Desligar exige force_disable. */
+  internal_queue_enabled?: boolean
   hooks?: PoolHooks | null
   supervisor_config?: PoolSupervisorConfig | null
   mentionable_pools?: Record<string, string> | null
