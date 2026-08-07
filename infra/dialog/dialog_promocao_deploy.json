@@ -1,0 +1,38 @@
+{
+  "form_id": "dialog_promocao_deploy",
+  "name": "Aprovação de promoção de deploy",
+  "description": "Campos editáveis do pacote de aprovação do gate de promoção (homolog→prod). Decisões e resumo vêm do delegate.context do workflow.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["approval"],
+  "nodes": [
+    {
+      "id": "instrucoes",
+      "kind": "statement",
+      "text": { "pt-BR": "Revise a promoção acima e registre sua decisão. Você pode anexar uma justificativa." }
+    },
+    {
+      "id": "campos",
+      "kind": "question",
+      "prompt": { "pt-BR": "Dados da aprovação" },
+      "interaction": "form",
+      "output_key": "campos",
+      "timeout_s": -1,
+      "fields": [
+        {
+          "id": "nota",
+          "label": { "pt-BR": "Justificativa (opcional)" },
+          "type": "text",
+          "required": false
+        },
+        {
+          "id": "notificar_equipe",
+          "label": { "pt-BR": "Notificar a equipe após promover" },
+          "type": "bool",
+          "required": false,
+          "value": "false"
+        }
+      ]
+    }
+  ]
+}

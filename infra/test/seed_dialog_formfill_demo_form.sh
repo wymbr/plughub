@@ -9,61 +9,29 @@
 # payload { source:"operator", answers:{ satisfacao, observacao } } → o workflow lê
 # $.pipeline_state.<delegate>.answers.satisfacao.
 #
+# FONTE ÚNICA: o JSON vive em `infra/dialog/dialog_formfill_demo.json` e é semeado
+# no boot pelo `dialog-seed` (seed-if-absent). Este script é o atalho manual.
+#
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_formfill_demo_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_formfill_demo"
+FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
-echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
+[ -f "$FORM_FILE" ] || { echo "✗ arquivo do form não encontrado: $FORM_FILE" >&2; exit 1; }
 
-read -r -d '' BODY <<'JSON' || true
-{
-  "form_id": "dialog_formfill_demo",
-  "name": "Disposição do atendimento",
-  "description": "Form genérico de collect-form no Console (R0). Statements + botões + texto, sem decisions[]/form-fields — exercita o caminho genérico do DialogFormRenderer.",
-  "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["formfill"],
-  "nodes": [
-    {
-      "id": "intro",
-      "kind": "statement",
-      "text": { "pt-BR": "Revise a conversa ao lado e registre a disposição deste atendimento." }
-    },
-    {
-      "id": "satisfacao",
-      "kind": "question",
-      "prompt": { "pt-BR": "O contato foi resolvido?" },
-      "interaction": "button",
-      "output_key": "satisfacao",
-      "timeout_s": -1,
-      "options": [
-        { "id": "sim",     "label": { "pt-BR": "Resolvido" },     "value": "sim" },
-        { "id": "nao",     "label": { "pt-BR": "Não resolvido" }, "value": "nao" },
-        { "id": "escalar", "label": { "pt-BR": "Escalado" },      "value": "escalar" }
-      ]
-    },
-    {
-      "id": "observacao",
-      "kind": "question",
-      "prompt": { "pt-BR": "Observações / próximos passos" },
-      "interaction": "text",
-      "output_key": "observacao",
-      "timeout_s": -1
-    }
-  ]
-}
-JSON
+echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
-  -d "${BODY}" >/dev/null
+  --data-binary @"${FORM_FILE}" >/dev/null
 echo "✓ DialogForm criado (draft): ${FORM_ID}"
 
 echo "→ Publicando"

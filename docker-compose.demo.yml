@@ -1068,11 +1068,45 @@ services:
     environment:
       EVALUATION_API_URL: http://evaluation-api:3400
       AUTH_ADMIN_TOKEN:   changeme_eval_admin_token_demo
+      # G-PROBE fase 2 — credencial de serviço; as escritas de form/campaign não
+      # aceitam mais X-Admin-Token. DEVE casar com PLUGHUB_EVALUATION_SERVICE_TOKEN.
+      EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo
       TENANT_ID:          tenant_demo
       SEED_MAX_WAIT:      "120"
     command: ["python", "/seed/seed_evaluation.py"]
     depends_on:
       evaluation-api:
+        condition: service_healthy
+    networks:
+      - plughub-demo
+    restart: "no"
+
+  # Provisiona os DialogForms declarativos de ./infra/dialog/*.json na dialog-api,
+  # via API oficial e SEED-IF-ABSENT (form já publicado não é tocado — o DB vence,
+  # então formulário editado em /config/dialog-forms sobrevive a rebuild).
+  #
+  # Sem este job, um banco NOVO sobe sem nenhum DialogForm e os consumidores
+  # degradam EM SILÊNCIO: o NPS de fim-de-contato (agente_nps_v1 → form_get 404 →
+  # on_failure) simplesmente não aparece para o cliente, e o wrap-up no Console
+  # abre o painel SEM formulário (DialogFormRenderer → 404 → setForm(null)).
+  #
+  # Para fazer o ARQUIVO vencer o DB (dev/GitOps): DIALOG_SEED_RECONCILE=true.
+  dialog-seed:
+    image: python:3.11-slim
+    volumes:
+      - ./infra/seed:/seed:ro
+      - ./infra/dialog:/dialog:ro
+    environment:
+      DIALOG_API_URL:   http://dialog-api:3760
+      DIALOG_FORMS_DIR: /dialog
+      TENANT_ID:        tenant_demo
+      SEED_MAX_WAIT:    "120"
+      # dialog-api roda sem admin_token no demo (escritas abertas); se
+      # PLUGHUB_DIALOG_ADMIN_TOKEN for definido lá, espelhe aqui.
+      DIALOG_ADMIN_TOKEN: ""
+    command: ["python", "/seed/seed_dialog.py"]
+    depends_on:
+      dialog-api:
         condition: service_healthy
     networks:
       - plughub-demo

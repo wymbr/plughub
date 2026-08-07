@@ -1,0 +1,25 @@
+{
+  "form_id": "dialog_nps_v1",
+  "name": "Survey — NPS de sessão",
+  "description": "Agradecimento + coleta do NPS (0–10) pós-atendimento, por TEXTO. Consumido pelo dialog-runner via delegate (veículo runner-especialista).",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["survey", "nps"],
+  "nodes": [
+    {
+      "id": "agradecer",
+      "kind": "statement",
+      "text": { "pt-BR": "Obrigado pelo seu contato! Gostaríamos de saber como foi sua experiência." }
+    },
+    {
+      "id": "coletar_nps",
+      "kind": "question",
+      "prompt": { "pt-BR": "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento? (digite o número)" },
+      "interaction": "text",
+      "output_key": "nps",
+      "capture": { "metric": "nps" },
+      "validation": { "numeric": true, "min": 0, "max": 10 },
+      "timeout_s": 600
+    }
+  ]
+}

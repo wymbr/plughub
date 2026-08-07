@@ -1,0 +1,38 @@
+{
+  "form_id": "dialog_nps_buttons",
+  "name": "NPS de fim-de-contato (botões)",
+  "description": "Agradecimento + NPS 0-10 por botões, customer-only. Conteúdo do NPS ativo (hook on_contact_end) consumido INLINE pelo agente_nps_v1 via form_get.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["survey", "nps"],
+  "nodes": [
+    {
+      "id": "agradecer",
+      "kind": "statement",
+      "text": { "pt-BR": "Obrigado por entrar em contato conosco! 🙏 Foi um prazer te atender." }
+    },
+    {
+      "id": "coletar_nps",
+      "kind": "question",
+      "prompt": { "pt-BR": "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento para um amigo ou familiar?" },
+      "interaction": "list",
+      "output_key": "nps",
+      "capture": { "metric": "nps" },
+      "visibility": ["@ctx.session.customer_participant_id"],
+      "options": [
+        { "id": "0",  "label": { "pt-BR": "0" } },
+        { "id": "1",  "label": { "pt-BR": "1" } },
+        { "id": "2",  "label": { "pt-BR": "2" } },
+        { "id": "3",  "label": { "pt-BR": "3" } },
+        { "id": "4",  "label": { "pt-BR": "4" } },
+        { "id": "5",  "label": { "pt-BR": "5" } },
+        { "id": "6",  "label": { "pt-BR": "6" } },
+        { "id": "7",  "label": { "pt-BR": "7" } },
+        { "id": "8",  "label": { "pt-BR": "8" } },
+        { "id": "9",  "label": { "pt-BR": "9" } },
+        { "id": "10", "label": { "pt-BR": "10" } }
+      ],
+      "timeout_s": 30
+    }
+  ]
+}

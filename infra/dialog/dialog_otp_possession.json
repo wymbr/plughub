@@ -1,0 +1,25 @@
+{
+  "form_id": "dialog_otp_possession",
+  "name": "OTP — prova de posse de canal",
+  "description": "Prompts do step-up de OTP: aviso de envio + coleta do código digitado pelo cliente. O código gerado NUNCA vive aqui (só o script de diálogo); challenge/verify ficam no OtpService.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["otp"],
+  "nodes": [
+    {
+      "id": "aviso_envio",
+      "kind": "statement",
+      "text": { "pt-BR": "Enviamos um código de 6 dígitos para o seu número por SMS." }
+    },
+    {
+      "id": "coletar_codigo",
+      "kind": "question",
+      "prompt": { "pt-BR": "Digite o código para confirmar:" },
+      "interaction": "text",
+      "output_key": "code",
+      "validation": { "numeric": true, "min_length": 6, "max_length": 6 },
+      "retry": { "reprompt": { "pt-BR": "Código inválido. Digite os 6 dígitos:" }, "max_attempts": 3 },
+      "timeout_s": 180
+    }
+  ]
+}

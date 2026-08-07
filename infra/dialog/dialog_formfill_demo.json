@@ -1,0 +1,36 @@
+{
+  "form_id": "dialog_formfill_demo",
+  "name": "Disposição do atendimento",
+  "description": "Form genérico de collect-form no Console (R0). Statements + botões + texto, sem decisions[]/form-fields — exercita o caminho genérico do DialogFormRenderer.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["formfill"],
+  "nodes": [
+    {
+      "id": "intro",
+      "kind": "statement",
+      "text": { "pt-BR": "Revise a conversa ao lado e registre a disposição deste atendimento." }
+    },
+    {
+      "id": "satisfacao",
+      "kind": "question",
+      "prompt": { "pt-BR": "O contato foi resolvido?" },
+      "interaction": "button",
+      "output_key": "satisfacao",
+      "timeout_s": -1,
+      "options": [
+        { "id": "sim",     "label": { "pt-BR": "Resolvido" },     "value": "sim" },
+        { "id": "nao",     "label": { "pt-BR": "Não resolvido" }, "value": "nao" },
+        { "id": "escalar", "label": { "pt-BR": "Escalado" },      "value": "escalar" }
+      ]
+    },
+    {
+      "id": "observacao",
+      "kind": "question",
+      "prompt": { "pt-BR": "Observações / próximos passos" },
+      "interaction": "text",
+      "output_key": "observacao",
+      "timeout_s": -1
+    }
+  ]
+}

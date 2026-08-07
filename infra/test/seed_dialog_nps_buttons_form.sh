@@ -4,66 +4,34 @@
 #
 # Form `dialog_nps_buttons` — o conteúdo do NPS ATIVO (hook on_contact_end): botões
 # 0-10 (interaction=list) + visibilidade customer-only (o agente humano não vê o NPS).
-# Renderizado pelo dialog_runner via delegate no agente_nps_v1. O runner usa a
-# interação/opções/visibilidade nativas do form (§17.4 — dinâmicos no engine).
+# Consumido INLINE pelo agente_nps_v1 via form_get (hook de on_contact_end não pode
+# delegar). O conteúdo usa interação/opções/visibilidade nativas do form (§17.4).
+#
+# FONTE ÚNICA: o JSON vive em `infra/dialog/dialog_nps_buttons.json` e é semeado no
+# boot pelo serviço `dialog-seed` (seed-if-absent). Este script é o atalho manual —
+# ele SEMPRE cria+publica uma versão nova, então é também a via de "republicar o
+# arquivo" num ambiente que já tem o form.
 #
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_nps_buttons_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_nps_buttons"
+FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
-echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
+[ -f "$FORM_FILE" ] || { echo "✗ arquivo do form não encontrado: $FORM_FILE" >&2; exit 1; }
 
-read -r -d '' BODY <<'JSON' || true
-{
-  "form_id": "dialog_nps_buttons",
-  "name": "NPS de fim-de-contato (botões)",
-  "description": "Agradecimento + NPS 0-10 por botões, customer-only. Conteúdo do NPS ativo (hook on_contact_end) renderizado pelo dialog-runner.",
-  "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["survey", "nps"],
-  "nodes": [
-    {
-      "id": "agradecer",
-      "kind": "statement",
-      "text": { "pt-BR": "Obrigado por entrar em contato conosco! 🙏 Foi um prazer te atender." }
-    },
-    {
-      "id": "coletar_nps",
-      "kind": "question",
-      "prompt": { "pt-BR": "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento para um amigo ou familiar?" },
-      "interaction": "list",
-      "output_key": "nps",
-      "capture": { "metric": "nps" },
-      "visibility": ["@ctx.session.customer_participant_id"],
-      "options": [
-        { "id": "0",  "label": { "pt-BR": "0" } },
-        { "id": "1",  "label": { "pt-BR": "1" } },
-        { "id": "2",  "label": { "pt-BR": "2" } },
-        { "id": "3",  "label": { "pt-BR": "3" } },
-        { "id": "4",  "label": { "pt-BR": "4" } },
-        { "id": "5",  "label": { "pt-BR": "5" } },
-        { "id": "6",  "label": { "pt-BR": "6" } },
-        { "id": "7",  "label": { "pt-BR": "7" } },
-        { "id": "8",  "label": { "pt-BR": "8" } },
-        { "id": "9",  "label": { "pt-BR": "9" } },
-        { "id": "10", "label": { "pt-BR": "10" } }
-      ],
-      "timeout_s": 30
-    }
-  ]
-}
-JSON
+echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
-  -d "${BODY}" >/dev/null
+  --data-binary @"${FORM_FILE}" >/dev/null
 echo "✓ DialogForm criado (draft): ${FORM_ID}"
 
 echo "→ Publicando"

@@ -7,50 +7,29 @@
 # renderiza para coletar o código de posse. O código gerado NUNCA vive aqui (só o
 # script de diálogo); challenge/verify ficam no OtpService (costura de segredo).
 #
+# FONTE ÚNICA: o JSON vive em `infra/dialog/dialog_otp_possession.json` e é semeado
+# no boot pelo `dialog-seed` (seed-if-absent). Este script é o atalho manual.
+#
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_otp_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_otp_possession"
+FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
-echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
+[ -f "$FORM_FILE" ] || { echo "✗ arquivo do form não encontrado: $FORM_FILE" >&2; exit 1; }
 
-read -r -d '' BODY <<JSON || true
-{
-  "form_id": "${FORM_ID}",
-  "name": "OTP — prova de posse de canal",
-  "description": "Prompts do step-up de OTP: aviso de envio + coleta do código digitado pelo cliente.",
-  "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["otp"],
-  "nodes": [
-    {
-      "id": "aviso_envio",
-      "kind": "statement",
-      "text": { "pt-BR": "Enviamos um código de 6 dígitos para o seu número por SMS." }
-    },
-    {
-      "id": "coletar_codigo",
-      "kind": "question",
-      "prompt": { "pt-BR": "Digite o código para confirmar:" },
-      "interaction": "text",
-      "output_key": "code",
-      "validation": { "numeric": true, "min_length": 6, "max_length": 6 },
-      "retry": { "reprompt": { "pt-BR": "Código inválido. Digite os 6 dígitos:" }, "max_attempts": 3 },
-      "timeout_s": 180
-    }
-  ]
-}
-JSON
+echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
-  -d "${BODY}" >/dev/null
+  --data-binary @"${FORM_FILE}" >/dev/null
 echo "✓ DialogForm criado (draft): ${FORM_ID}"
 
 echo "→ Publicando (torna a versão corrente que o form_get resolve por padrão)"

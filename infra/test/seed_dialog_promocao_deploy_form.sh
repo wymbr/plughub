@@ -5,66 +5,31 @@
 # Form `dialog_promocao_deploy` — os CAMPOS EDITÁVEIS do pacote de aprovação do gate
 # de promoção de deploy. O contexto read-only (resumo) e as DECISÕES vêm do
 # delegate.context do workflow (skill_gate_promocao_v1), NÃO do form. O form carrega
-# só os campos que o aprovador pode editar (form_ext) — exercita os tipos de campo
-# e o valor pré-preenchido adicionados no A1 (DialogField.value/type/options).
+# só os campos que o aprovador pode editar (form_ext).
+#
+# FONTE ÚNICA: o JSON vive em `infra/dialog/dialog_promocao_deploy.json` e é semeado
+# no boot pelo `dialog-seed` (seed-if-absent). Este script é o atalho manual.
 #
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_promocao_deploy_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_promocao_deploy"
+FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
-echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
+[ -f "$FORM_FILE" ] || { echo "✗ arquivo do form não encontrado: $FORM_FILE" >&2; exit 1; }
 
-read -r -d '' BODY <<'JSON' || true
-{
-  "form_id": "dialog_promocao_deploy",
-  "name": "Aprovação de promoção de deploy",
-  "description": "Campos editáveis do pacote de aprovação do gate de promoção (homolog→prod). Decisões e resumo vêm do delegate.context do workflow.",
-  "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["approval"],
-  "nodes": [
-    {
-      "id": "instrucoes",
-      "kind": "statement",
-      "text": { "pt-BR": "Revise a promoção acima e registre sua decisão. Você pode anexar uma justificativa." }
-    },
-    {
-      "id": "campos",
-      "kind": "question",
-      "prompt": { "pt-BR": "Dados da aprovação" },
-      "interaction": "form",
-      "output_key": "campos",
-      "timeout_s": -1,
-      "fields": [
-        {
-          "id": "nota",
-          "label": { "pt-BR": "Justificativa (opcional)" },
-          "type": "text",
-          "required": false
-        },
-        {
-          "id": "notificar_equipe",
-          "label": { "pt-BR": "Notificar a equipe após promover" },
-          "type": "bool",
-          "required": false,
-          "value": "false"
-        }
-      ]
-    }
-  ]
-}
-JSON
+echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
-  -d "${BODY}" >/dev/null
+  --data-binary @"${FORM_FILE}" >/dev/null
 echo "✓ DialogForm criado (draft): ${FORM_ID}"
 
 echo "→ Publicando"

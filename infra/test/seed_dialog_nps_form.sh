@@ -2,57 +2,33 @@
 #
 # seed_dialog_nps_form.sh — Dialog primitive (Fatia 2): DialogForm de NPS do survey.
 #
-# Provisiona, VIA API OFICIAL do dialog-api, o form `dialog_nps_v1` — o conteúdo
-# (agradecimento + pergunta NPS) que o dialog-runner renderiza no fluxo de survey.
-# O survey passa a ser o 2º consumidor do primitivo (o OTP foi o 1º).
+# Form `dialog_nps_v1` — agradecimento + coleta do NPS (0–10) por TEXTO. Consumido
+# pelo dialog-runner via delegate (veículo runner-especialista). O NPS de
+# fim-de-contato (inline, botões) é o `dialog_nps_buttons`, outro form.
 #
-# Nota v1: a pergunta usa `interaction: text` (o cliente digita 0–10). Botões/lista
-# de NPS exigem campos `choice` com opções no render+adapter (refinamento Fatia 2+).
+# FONTE ÚNICA: o JSON vive em `infra/dialog/dialog_nps_v1.json` e é semeado no boot
+# pelo `dialog-seed` (seed-if-absent). Este script é o atalho manual.
 #
 # Uso:
 #   DIALOG_API=http://localhost:3760 TENANT=tenant_demo ./infra/test/seed_dialog_nps_form.sh
 #
-# Requer: curl, jq.
+# Requer: curl.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DIALOG_API="${DIALOG_API:-http://localhost:3760}"
 TENANT="${TENANT:-tenant_demo}"
 FORM_ID="dialog_nps_v1"
+FORM_FILE="${REPO_ROOT}/infra/dialog/${FORM_ID}.json"
 
-echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT})"
+[ -f "$FORM_FILE" ] || { echo "✗ arquivo do form não encontrado: $FORM_FILE" >&2; exit 1; }
 
-read -r -d '' BODY <<JSON || true
-{
-  "form_id": "${FORM_ID}",
-  "name": "Survey — NPS de sessão",
-  "description": "Agradecimento + coleta do NPS (0–10) pós-atendimento. Consumido pelo dialog-runner via delegate no fluxo de reconexão do survey.",
-  "default_locale": "pt-BR",
-  "locales": ["pt-BR"],
-  "tags": ["survey", "nps"],
-  "nodes": [
-    {
-      "id": "agradecer",
-      "kind": "statement",
-      "text": { "pt-BR": "Obrigado pelo seu contato! Gostaríamos de saber como foi sua experiência." }
-    },
-    {
-      "id": "coletar_nps",
-      "kind": "question",
-      "prompt": { "pt-BR": "Em uma escala de 0 a 10, qual a probabilidade de você recomendar nosso atendimento? (digite o número)" },
-      "interaction": "text",
-      "output_key": "nps",
-      "capture": { "metric": "nps" },
-      "validation": { "numeric": true, "min": 0, "max": 10 },
-      "timeout_s": 600
-    }
-  ]
-}
-JSON
+echo "→ Criando DialogForm '${FORM_ID}' em ${DIALOG_API} (tenant=${TENANT}) a partir de ${FORM_FILE#"$REPO_ROOT"/}"
 
 curl -fsS -X POST "${DIALOG_API}/v1/dialog/forms" \
   -H 'Content-Type: application/json' \
   -H "X-Tenant-ID: ${TENANT}" \
-  -d "${BODY}" >/dev/null
+  --data-binary @"${FORM_FILE}" >/dev/null
 echo "✓ DialogForm criado (draft): ${FORM_ID}"
 
 echo "→ Publicando"
