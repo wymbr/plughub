@@ -2,6 +2,586 @@
 
 ---
 
+## Autenticação de endpoint webhook — fatia 2 (UI de token) ✅ (2026-08-07)
+
+Gerar, rotacionar e revogar token direto em `/config/channels` › Webhook. Fecha a lacuna que a fatia 1
+deixou: a coluna `anônimo` apontava um problema que a tela não deixava consertar — só havia API.
+
+**O token aparece UMA vez, e a UI trata isso como o que é.** Banner que **não some sozinho**: este é o
+único instante em que o segredo existe fora do hash, e um aviso auto-dispensável pode ser perdido por uma
+distração — sem recuperação possível, só rotacionar, invalidando o que acabou de ser gerado. Some apenas
+quando o operador clica em *"já guardei"*. Nada de `localStorage`: persistir no navegador anularia a
+decisão de não persistir no servidor, e num terminal compartilhado é pior.
+
+**Confirmação assimétrica, de propósito.** Gerar o PRIMEIRO token não pergunta nada (é aditivo);
+**rotacionar** pergunta, porque invalida o anterior na hora e quebra quem estiver usando. Confirmar nos
+dois casos treinaria o operador a clicar em "ok" sem ler — que é como uma confirmação deixa de proteger.
+
+**A confirmação de revogar diz o que realmente acontece:** remove o token **e desliga a autenticação**,
+devolvendo o endpoint ao estado anônimo. *"Revoguei" lido como "protegi" seria a pior leitura possível
+desta ação* — e é a leitura natural se o texto só disser "revogar".
+
+**Botões só em linhas `external`.** Ligar auth num endpoint `internal` silenciaria o disparo interno —
+`workflow_trigger`, o proxy da workflow-api e o bridge não enviam credencial (fatia 3). Oferecer o botão
+ali seria gatilho para um defeito que a tela não explica.
+
+**Falha de clipboard não é fatal e não mente:** se `navigator.clipboard` for bloqueado (contexto inseguro,
+permissão negada), o botão simplesmente não passa a "Copiado" — o token segue visível e selecionável. O
+que não pode é parecer ter copiado sem ter copiado.
+
+### Copy que a própria fatia tornou falsa
+
+O cabeçalho da aba dizia *"Webhook endpoints do not require API credentials"* — verdade quando escrito
+(o contraste era com WhatsApp, que precisa de conta de provedor), **falsa depois desta fatia**, e falsa
+justamente na frase que o operador lê antes de decidir se precisa proteger o endpoint. Reescrita para
+preservar o sentido original (sem conta de provedor) e dizer o novo: cada endpoint pode exigir token, e
+**sem token aceita chamada anônima de qualquer um que o alcance**. *Feature nova que não revisa o texto ao
+lado dela deixa a tela afirmando o contrário do que o código faz.*
+
+### Correção de fonte única, achada ao revisar
+
+`_isServiceCaller` lia `process.env["AGENT_REGISTRY_SERVICE_TOKEN"]` direto, enquanto o middleware
+`requireResourceWrite` lê `config.service_token`. Duas leituras independentes do ambiente **divergem em
+silêncio** se o nome mudar de um lado só — e o modo de falha seria traiçoeiro: o gateway deixaria de
+receber o `token_hash`, cairia no fail-closed e recusaria **todo** disparo autenticado, com a causa a dois
+serviços de distância do sintoma. Passou a ler de `config`.
+
+### Arquivos
+
+`platform-ui/api/registry.ts` (`rotateChannelEndpointToken`, `revokeChannelEndpointToken`) ·
+`modules/config-channels/ChannelEndpointList.tsx` (banner + botões) · `i18n/{en,pt-BR}/channels.json` ·
+`agent-registry/routes/channel-endpoints.ts` (fonte única do service token).
+
+---
+
+## Autenticação de endpoint webhook — fatia 1 (mecanismo + medida) ✅ (2026-08-07)
+
+Arco aberto pela Fase F do ADR `adr-webhook-endpoint-single-registry`. Até aqui **todo disparo de webhook
+era anônimo**, nas duas portas, contra pools que promovem deploy e contatam clientes. O único caminho
+autenticado era o registro legado por token, cuja auth estava acoplada a um ciclo de vida de instância
+morto. A Fase F separou as duas coisas; esta fatia entrega a autenticação onde ela deve morar.
+
+**`auth_required` opcional por endpoint, default `false`.** Nada quebra: os onze endpoints em uso seguem
+funcionando. O risco conhecido do opt-in é virar proteção que ninguém liga — e o antídoto escolhido **não
+é o default agressivo**, é tornar a ausência **medida**: o probe conta e nomeia os anônimos a cada
+execução (F6), e a tela ganhou uma coluna que diz `anônimo` em vez de deixar subentendido. Mesmo
+movimento da Fase A do ADR: *ausência honesta vira presença declarada*.
+
+### O mecanismo foi PORTADO, não reinventado
+
+`lib/endpoint-token.ts` é a porta do `workflow-api/webhooks.py`: prefixo `plughub_wh_` (reconhecível por
+scanner de credencial), 32 bytes de CSPRNG, SHA-256 persistido, `token_prefix` de 16 chars para
+identificação, comparação em tempo constante. O desenho já tinha sido revisado e usado; o que estava morto
+era o lifecycle a que ele vinha grudado. **SHA-256 e não bcrypt/argon2 é deliberado**: o segredo é de alta
+entropia e gerado por nós, não escolhido por humano — não há dicionário a resistir, e o KDF só somaria
+latência no caminho quente.
+
+### Três decisões que valem mais que o diff
+
+**O hash não sai na leitura geral.** `GET /v1/channel-endpoints` é o mesmo endpoint que a UI consome —
+devolver `token_hash` entregaria material de credencial a qualquer usuário da tela. Ele sai **apenas** a
+quem apresenta `x-service-token` (o channel-gateway, que precisa verificar localmente). `token_prefix` sai
+sempre: prefixo é identificação, hash é credencial. O sanitizador tem **default ESCONDER** — precisa provar
+o contrário para incluir; um que só remove quando lembra vaza no primeiro caminho novo.
+
+**Fail-CLOSED quando não dá para verificar.** Sem credencial de serviço, o registry omite o hash e o
+gateway não tem contra o quê comparar. Nesse estado ele **recusa**: *"não sei verificar" jamais pode virar
+"está autorizado"* — é a diferença entre um portão fechado e um que some quando a luz apaga. O log
+distingue as duas causas (gateway sem credencial × endpoint sem token); a resposta, não.
+
+**Revogar DESLIGA a exigência junto.** `auth_required=true` sem token é um estado impossível de satisfazer:
+o endpoint aparece ativo e recusa 100%, e a recusa (401) diz *"sua credencial está errada"* quando a
+verdade é *"este endpoint não tem credencial"*. `DELETE /:id/token` limpa o token **e** desliga a
+exigência, e a resposta avisa que o endpoint voltou a ser anônimo — quem revoga precisa saber disso na
+hora, não descobrir depois.
+
+**Três recusas, uma resposta.** Header ausente, token errado e endpoint mal configurado saem todos como
+401 sem detalhe: distinguir contaria a um chamador não autenticado que o endereço existe e como está
+configurado. Cada ramo loga a sua causa, em nível diferente — mesmo padrão do filtro de procedência
+(§7.6.3): a resposta não distingue, o log sim.
+
+### Gate — `infra/test/gate_webhook_endpoint_auth.sh`
+
+Protegido (sem header → 401 · token errado → 401 · certo → 201) **+ controle de NÃO-REGRESSÃO**: endpoint
+anônimo sem header → **201**. A segunda metade é a que decide se o arco pode ser entregue — um bug que
+ligasse a exigência para todos passaria despercebido num gate que só testasse o caminho protegido, e o
+sintoma em produção seria todo disparo parando de uma vez. O gate **cria e destrói** seu próprio endpoint
+(`trap`), em vez de ligar auth num endpoint de produção que outros gates usam.
+
+### Invalidação de cache — a limitação da fatia 1, fechada no mesmo dia
+
+Revogação/rotação levava até `endpoint_cache_ttl_s` (30 s) para valer: o gateway seguia verificando
+contra o hash cacheado. Enquanto o cache guardava só `pool_id`, a defasagem era desconfortável; com
+credencial, virou consequência de segurança — **token vazado seguia aceito por meia janela depois de
+revogado**. O `invalidate()` do resolver existia desde sempre, com um docstring dizendo *"until that
+consumer is wired"*. Este é o consumidor.
+
+**A decisão que não se copia dos vizinhos: `group_id` ÚNICO POR PROCESSO.** O `kafka_listener` do
+routing-engine consome o mesmo `registry.changed` com group compartilhado — e está certo, porque o cache
+que ele atualiza vive no **Redis**: um escreve, todas as réplicas leem. Aqui o cache é um **dicionário de
+módulo, dentro do processo**: com group compartilhado o Kafka entregaria cada evento a UMA réplica e as
+outras seguiriam servindo o hash revogado até o TTL. *Invalidação de cache local é broadcast, não fila.*
+O custo é proliferação de consumer groups efêmeros — barato perto de uma réplica aceitando credencial
+revogada. `uuid4` e não hostname: dois processos no mesmo host voltariam a compartilhar grupo sem que
+nada ficasse vermelho.
+
+Invalidação é **por tenant**, não por endereço: o evento carrega `entity_id` (o UUID da linha) e o cache é
+chaveado por identificador — traduzir um no outro exigiria a consulta que a invalidação existe para
+evitar. Escopo restrito a `entity_type == "channel_endpoint"`, senão o boot do RegistrySyncer (dezenas de
+eventos) esvaziaria o cache repetidamente. Evento sem `tenant_id` derruba o cache inteiro: para um cache,
+correção vale mais que economia.
+
+**O gate testa ROTAÇÃO, não revogação** — e a escolha é o que torna o teste falseável. Revogar desliga
+`auth_required` junto, então o endereço fica anônimo e aceita sem header: não distingue "valeu" de "não
+valeu". Rotacionar mantém a exigência e troca o segredo, então o token antigo **tem** de passar a ser
+recusado. E o disparo anterior (token certo → 201) **populou o cache** com o hash velho: sem invalidação,
+o antigo seguiria aceito até 30 s. Por isso o teto de espera (10 s) fica muito abaixo do TTL — igualá-lo
+tornaria o teste incapaz de separar invalidação de expiração natural, e ele passaria com o consumidor
+desligado.
+
+**Medido, em dois regimes:** com o consumidor já no grupo, token antigo recusado em **0 s**; rodando o
+gate durante o join (sem espera após o boot), **3 s** — exatamente a duração do join, fechada pelo
+`invalidate_all()`. TTL do cache: 30 s. *Os dois números confirmam que a janela do join é real e que o
+esvaziamento pós-join a cobre.*
+
+⚠️ **Uma falha anterior segue SEM explicação e está registrada como tal:** numa execução antes destas
+correções, o token antigo continuava aceito após **10 s** — que um join de 3 s não explica. Aquele build
+não existe mais e não vou fabricar causa para ele. O que mudou é a observabilidade: se reincidir, o
+`_supervise` e a testemunha do pipe dizem qual das quatro causas foi (consumidor morto, tópico errado,
+grupo mal posicionado, filtro que não casa).
+
+### Janela cega do join, fechada por construção
+
+O log mostra `subscribe 23:40:10` → `Joined group (generation 1) 23:40:13`: **~3 s** entre subir o
+consumidor e o grupo ser atribuído. Com `auto_offset_reset=latest` num grupo NOVO, o que for publicado
+nessa janela **não é entregue nunca** — não fica pendente, some. Consequência real: endereço cacheado logo
+após o boot cuja linha mude nesses segundos serve dado velho pelo TTL inteiro — com token, credencial
+revogada ainda aceita.
+
+Fechado com `invalidate_all()` **depois do join**: tudo que entrou no cache durante o período cego é
+descartado. Custa uma consulta por endereço em uso, uma vez por boot. *É conserto que não depende do
+diagnóstico estar certo* — a janela existe e é fechável, independentemente de ela ter sido a causa da
+falha observada.
+
+### Dois guards que não guardavam — consertados
+
+**`start_registry_invalidation()` foi REMOVIDA.** Ela envolvia `asyncio.create_task` num try/except, mas
+`create_task` **não levanta** a exceção da corrotina: agenda e volta. O `except` só pegaria falha ao
+*agendar* (que não acontece); a falha real, dentro do `run()`, passava por ele e morria calada. E o helper
+sequer era usado — o `main.py` chamava `create_task(...run())` direto. Dois motivos independentes para não
+funcionar, com aparência de proteção. *Um guard só protege o que consegue observar; try/except em volta de
+um agendamento observa o agendamento, não o trabalho.* A proteção real está dentro do `run()`.
+
+**`_supervise()` nas CINCO tasks de background do gateway.** `outbound`, `collect-events`,
+`config-changed` e `registry-pubsub` tinham a mesma exposição **desde sempre**: se a corrotina levanta, a
+exceção fica presa no objeto `Task`, o `/health` segue verde e o serviço roda com um consumidor a menos —
+o sintoma aparece camadas abaixo, sem nada apontando para a causa. O done-callback loga ERROR com
+traceback. **Não reinicia de propósito:** reiniciar em laço esconderia falha permanente atrás de ruído;
+isto é o alarme, e a política de recuperação precisa do alarme para ser decidida.
+
+**Testemunha do pipe:** uma linha INFO no PRIMEIRO evento recebido, qualquer que seja a entidade. "Consumidor
+de pé" e "eventos chegando" são fatos diferentes, e a ausência de invalidação não os distingue — pode ser
+consumidor morto, tópico errado, grupo mal posicionado ou filtro que não casa. A linha se limita sozinha,
+então não vira ruído.
+
+### Arquivos
+
+`agent-registry`: `schema.prisma` + migration `20260807120000_channel_endpoint_auth`,
+`lib/endpoint-token.ts` (novo), `routes/channel-endpoints.ts` (sanitizador, create com token, `POST/DELETE
+/:id/token`), `types/channel-endpoint.ts` · `schemas/src/channel-endpoint.ts` ·
+`channel-gateway`: `config.py` (credencial de serviço), `endpoint_resolver.py` (`ResolvedEndpoint`,
+`resolve_endpoint`), `main.py` (`_check_endpoint_auth` nas duas portas) · `docker-compose.demo.yml` ·
+`platform-ui` (coluna Auth + i18n) · `probe_webhook_endpoint_inventory.sh` (F6) ·
+`gate_webhook_endpoint_auth.sh` (novo).
+
+---
+
+## Webhook: registro único — Fase F (legado por token) ✅ decisão · ARCO A–F COMPLETO (2026-08-07)
+
+ADR `adr-webhook-endpoint-single-registry`, Fase F. **Decidido: aposentar** o registro legado
+(`workflow.webhooks`), com a autenticação virando **item próprio de plataforma**. A remoção física sai
+como arco separado (§7.8.4).
+
+### A pergunta da fase estava mal posta — reformulá-la é o resultado
+
+A tabela de fases pedia *"migrar OU aposentar"*. O levantamento mostrou por que a dicotomia não fecha:
+
+| | |
+|---|---|
+| `workflow.webhooks` (demo) | **0 linhas** |
+| `workflow.instances` | vazia **porque** `webhooks` está vazia (único escritor exige linha dela) |
+| Execução | **viva** — emite `workflow.started`, o `skill-flow-worker` consome e roda o flow |
+| Ciclo de vida da instância | **morto** — `persist-suspend`/`complete`/`fail`/`cancel`/`collect/*` são 410; a linha nasce `active` e nunca muda; flow que suspenda trava |
+| Editor | `WebhooksTab` em `/workflow/calendar`, rota sem entrada em nav |
+| Autenticação | `X-Webhook-Token`, SHA-256 + verificação em tempo constante + `active` + log de entrega |
+
+**O achado: o caminho por token é o ÚNICO autenticado.** O `ChannelEndpoint`, nas duas portas, não tem
+autenticação alguma — todo disparo desta sessão foi `curl` sem credencial, contra pools que promovem
+deploy e contatam clientes.
+
+Isso desmonta a escolha oferecida: o legado acopla **uma coisa valiosa** (auth) a **um modelo de execução
+morto** (instância imortal). Como pacote, força escolher entre preservar o morto para manter a auth ou
+perder a auth ao matar o morto. *Quando as duas saídas oferecidas são ruins, desconfie de que a pergunta
+amarrou coisas separáveis.* Separadas, a decisão é óbvia.
+
+**Duas consequências explícitas:** a janela protegida está **vazia** (`F3 = 0`, nada usa token hoje),
+então aposentar não retira proteção de ninguém; e a ausência de auth no registro canônico **é anterior a
+este ADR**, mas passou a estar declarada em vez de mascarada por um caminho que ninguém usa — o mesmo
+movimento da Fase A, *ausência honesta vira presença declarada*.
+
+### Escopo que sai como arco próprio
+
+**Remoção**: rotas + tabela do token, `workflow.instances`, `WebhooksTab` e a rota órfã. ⚠️ O tópico
+`workflow.events` e o `skill-flow-worker` **não** morrem junto sem análise: o e2e 18 depende do worker e a
+evaluation-api consome o tópico para `suspended`/`completed`. **Autenticação**: token opcional por
+endpoint no `ChannelEndpoint` (hash, `active`, log de entrega) — o desenho já existe e funciona; muda onde
+mora. Até lá, **todo endpoint webhook é anônimo**, registrado em `TODO.md`.
+
+### Arco A–F completo
+
+Onze superfícies acionáveis viraram um registro único, com procedência carimbada, visíveis na tela e
+resolvidas por uma fonte só — sem que nenhum disparo em uso fosse perdido. `webhook_skill_id` deixou de
+ser endereço e sobreviveu como declaração.
+
+---
+
+## Webhook: registro único — Fase E (remoção do fallback) ✅ (2026-08-07)
+
+ADR `adr-webhook-endpoint-single-registry`, Fase E. O registro `ChannelEndpoint` é agora o **único**
+resolvedor de webhook: não resolveu, a sessão não nasce.
+
+- **channel-gateway**: `not_found` → **404** nomeado · `unavailable` → **503 + `Retry-After`**.
+- **routing-engine**: apagado o ramo que casava `event.skill_id` contra `pool.webhook_skill_id`.
+
+### O critério da fase foi TROCADO, e essa é a decisão
+
+A tabela de fases dizia *"só quando o log da fase C zerar"*. **Não era satisfazível**: o demo é reiniciado
+com frequência e o log tem minutos de vida — esperar significaria nunca remover, ou aceitar "não vi
+fallback nos últimos três minutos" como prova. Seria a mesma ausência-de-amostra que este arco já pegou
+duas vezes (o `F4c` sobre zero linhas; a medição feita antes de o boot terminar).
+
+Trocado por **inventário estático dos discadores** — o método da Fase A: contar na fonte declarativa antes
+de medir. Dois discadores reais (`agente_portabilidade_intake_v1` e `smoke_journey_root.sh`), ambos
+discando `skill_portabilidade_demo_v1`, que **tem linha**. Os outros três `workflow_trigger` dos skills já
+endereçam pool; bridge, scheduler e os demais smokes usam `/pool/{id}`, `/resume/`, `/delegate` ou
+`/identity/*`. *Log mede amostra; inventário mede o espaço* — e o espaço é fechado porque todos os
+produtores passam pela porta HTTP do gateway, verificado na Fase C.
+
+**Fallout aceito:** os cenários e2e que discam `flow_id` arbitrário via `/v1/workflow/trigger` (03, 13,
+14, 18, 28) passam a receber 404. Eles **já não funcionavam** — nenhum pool declara aqueles skills, o
+router os rejeitava e a sessão morria enfileirada. Troca "201 + sessão que não vai a lugar nenhum" por
+"404", mais honesto, mas quebra asserção de 201. Item em `TODO.md`.
+
+### Apagar o ramo do router não é faxina — é o que fecha a D1
+
+Enquanto ele existisse, um evento de webhook sem `pool_id` continuaria sendo roteado por um endereço
+aposentado: **um segundo resolvedor**, exatamente o que a D1 proíbe. Mantê-lo "por segurança" preservaria
+a ambiguidade do §2 (mesmo skill em N pools) e o envelhecimento da D3 (o path segue dizendo `skill_x`
+depois de um promote). *Um fallback que ninguém usa não é inofensivo — é uma segunda fonte esperando
+alguém tropeçar nela.* `Pool.webhook_skill_id` sobrevive como **campo** (fonte declarativa do que semear,
+cruzada pelo guard do RegistrySyncer), não como endereço.
+
+### O 503 é o ponto delicado, e é opt-in no gate
+
+`not_found` × `unavailable` estavam separados desde a Fase C, mas a distinção era ornamental enquanto o
+fallback absorvia os dois. Agora é load-bearing: com 404 sobre indisponibilidade, um soluço de rede do
+agent-registry faria todo disparo interno parecer endereço inexistente — e o chamador típico é
+fire-and-forget, que não retenta o que "não existe". O gate exercita esse ramo por **opt-in**
+(`GATE_TEST_UNAVAILABLE=1`, com `trap` religando o serviço) e, sem a flag, **declara que não mediu**.
+Ramo não exercido aparecendo como verde é a forma mais barata de comprar confiança sem dar nada.
+
+### Defeito do instrumento (duas correções, e a primeira estava errada)
+
+As contagens saíram **2** onde deveria haver 1 — a janela era `--since "${elapsed}s"`, e duas execuções
+seguidas ficam a segundos uma da outra, então a duração da segunda alcançava o log da primeira. Não deu
+verde falso (asserções `≥1`, códigos HTTP medidos à parte), mas **poderia**: se o disparo atual não
+logasse nada, a sobra da execução anterior satisfaria o `≥1` sozinha. *Contagem que soma execuções passadas
+não mede esta execução.*
+
+**A 1ª correção (instante absoluto) não resolveu, e a explicação que eu dei para ela era falsa.** Com
+`--since "$T0_ISO"` a contagem voltou a dar 2 quando o gate de auth — que dispara o MESMO endpoint como
+controle de não-regressão — rodava antes. Atribuí a "`docker compose logs` ignora o timestamp"; a medição
+**refutou**: `--since` com instante de agora devolve 0 linhas, logo o filtro é honrado. **A causa segue em
+aberto** (granularidade de segundo, fuso na comparação, buffering — nenhum descartado).
+
+**Correção final: DELTA.** Contar antes, disparar, contar depois, afirmar sobre a diferença — dispensa a
+resposta, porque não depende de recorte temporal nenhum. E continua diagnóstico: se o serviço passar a
+logar duas vezes de verdade, o delta acusa igual. Com delta, as asserções subiram para **`-eq 1`**.
+*Nota de método registrada no próprio arquivo: "passou a funcionar" não é "eu entendi", e a v2 nasceu de
+uma explicação plausível que não foi verificada.*
+
+### O gate inverteu — e a inversão é o registro da fase
+
+A metade negativa esperava **201** (fallback vivo) e passou a esperar **404**. *Um gate cujo resultado
+esperado não muda quando o comportamento muda não estava medindo o comportamento.* As duas contagens de
+fallback viraram **testemunhas impressas, não asserções**: com os produtores removidos elas só podem dar
+zero, e verificação que só pode dar o valor esperado não distingue nada.
+
+### Arquivos
+
+`channel-gateway/main.py` (404/503 no lugar do fallthrough) · `routing-engine/router.py` (ramo removido) ·
+`infra/test/gate_webhook_registry_resolution.sh` (negativo invertido + ramo 503 opt-in + testemunhas).
+
+---
+
+## Webhook: registro único — Fase D (a tela) ✅ (2026-08-07)
+
+ADR `adr-webhook-endpoint-single-registry`, Fase D. `/config/channels` › Webhook carimba **origem** por
+linha (`cadastrado` · `declarado` · `legado (token)`) e trata `internal` como **read-only**.
+
+**Read-only não é permissão, é honestidade sobre quem manda.** A linha `internal` nasce da declaração do
+ambiente e o provisionamento é seed-if-absent: uma edição feita na tela sobrevive até o próximo boot do
+bridge, que repõe o que foi apagado. Aceitar a edição e perdê-la em silêncio é pior que recusá-la — por
+isso a coluna de ações mostra *"declarado"* com a razão no `title`, e não um botão desabilitado, que
+leria como falta de permissão.
+
+### O critério da fase obrigou a fechar o §7 — e a resposta não foi registrar
+
+*"Endpoint acionável ausente da tela"* reprovaria assim que escrito: **todo pool webhook também é
+acionável em `/v1/channels/webhook/pool/{pool_id}`**, e a Fase B decidiu não registrar esses dez
+endereços. A tela ganhou a seção **"endereço implícito de cada pool webhook"**, derivada dos pools, sem
+linha no registro — pelo mesmo argumento da §7.1 aplicado do outro lado: `identifier = pool_id → pool_id`
+é a **função identidade do pool**, um registro que não pode discordar da fonte e portanto não pode
+denunciar nada. O inventário fica exaustivo **onde a pergunta é feita** (a tela) sem inflar a tabela.
+
+Isso **resolve o primeiro item em aberto do ADR**, e contra a inclinação que estava escrita lá: venceu
+(a) "atalho sem registro", não (b) "também vira registro".
+
+### O que a tela ainda não mostra — e o probe passou a reprovar por isso
+
+O registro legado por token (`workflow.webhooks`) é acionável, vive em outra tabela e tem editor numa
+rota fora do menu. No demo é inócuo (`F3 = 0`), mas num tenant com linhas a Fase D estaria incompleta por
+construção. Em vez de maquiar, o `probe_webhook_endpoint_inventory.sh` ganhou a seção **F5 (cobertura da
+tela)** e agora **reprova quando `F3 > 0`**, apontando a Fase F (migrar ou aposentar) como o conserto.
+
+### Limite deliberado: read-only é da TELA, não da API
+
+`PUT`/`DELETE` seguem aceitando linha `internal`. Bloquear no servidor tiraria a única forma de remover
+uma linha interna obsoleta depois que ela sai do YAML — o provisionamento é seed-if-absent e **nunca
+poda**, então a linha ficaria imortal. O buraco prático (apagar pela UI e ver voltar no boot) fecha com a
+tela não oferecendo a ação. Enforcement server-side só faz sentido junto de um caminho de poda explícito.
+
+### ⚠️ A Fase B tinha mudado comportamento — descoberto ao conferir a tela, e corrigido
+
+"Não muda comportamento" valia para a porta INTERNA. A porta externa `POST /channel/webhook/{slug}`
+sempre resolveu pelo registro e **404 quando não achava** — ao semear os dez identificadores,
+`/channel/webhook/skill_formfill_demo_v1` passou de 404 a **201** (medido, não inferido). **Dez endereços
+internos ganharam uma segunda porta.** Não era falha de autenticação (mesmo gateway, nenhuma rota exige
+credencial), mas apagava a distinção que o próprio docstring da rota declara — e um ambiente que publique
+esse prefixo na borda mantendo `/v1/*` interno passaria a expor endereços internos.
+
+**Decidido filtrar** (`allowed_origins=frozenset({"external"})`, novo desfecho `origin_refused`). O
+argumento não foi "é mais seguro" e sim a **assimetria dos erros**: aceitar e a topologia divergir depois
+expõe endereço interno em silêncio; filtrar e a exposição ser uniforme custa um alias que ninguém usa.
+*Quando falta a informação que decidiria (a topologia futura), decide-se pelo custo de errar.*
+
+Três cuidados no código: **(1)** o filtro é aplicado **na saída do cache, nunca antes** — as duas portas
+compartilham a chave `(tenant, canal, identificador)`, e cachear o veredicto filtrado faria a primeira a
+consultar decidir pela outra (o endereço sumiria por até `cache_ttl_s`, intermitência dependente de quem
+chamou primeiro — defeito que não se reproduz sob investigação); **(2)** a resposta é **404 e o log é que
+nomeia** — 403 confirmaria a existência do endereço a quem chama de fora; **(3)** linha sem `origin`
+conta como `external`, senão uma janela de deploy derrubaria endpoint legítimo.
+
+Gate estendido com a terceira metade: `/channel/webhook/{interno}` → **404 E** log de recusa por origem.
+A asserção é dupla de propósito — se a porta externa quebrasse por inteiro, o 404 continuaria vindo e o
+log não diria isso; 404 sozinho não distingue "recusado por origem" de "parou de resolver". **Sem
+controle positivo aqui**: seria disparar `crm-callback`, o único endpoint externo, que aponta para
+`retencao_humano` — criaria um contato humano enfileirado a cada execução.
+
+### Correção de copy
+
+A coluna de ações dizia **"declared"**, a mesma palavra do badge de Origem: a linha saía com o carimbo
+duplicado e a célula lia como segunda procedência, não como ausência de ação. Agora `read-only` /
+`somente leitura` — coluna de ações responde *"o que dá para fazer"*, não *"o que isto é"*.
+
+### Arquivos
+
+`channel-gateway/endpoint_resolver.py` (`allowed_origins` + `origin_refused`, filtro na saída do cache) ·
+`channel-gateway/main.py` (porta externa filtrada) · `infra/test/gate_webhook_registry_resolution.sh` ·
+`platform-ui/types/index.ts` (`ChannelEndpointOrigin`, `origin?` opcional — resposta antiga ⇒ `external`)
+· `platform-ui/modules/config-channels/ChannelEndpointList.tsx` (coluna Origem, read-only por
+procedência, `PoolAddressNote`) · `i18n/{en,pt-BR}/channels.json` · `probe_webhook_endpoint_inventory.sh`
+(F5). **platform-ui não tem volume mount — exige `build`.**
+
+---
+
+## Webhook: registro único — Fase C (resolução pelo registro) ✅ (2026-08-07)
+
+ADR `adr-webhook-endpoint-single-registry`, Fase C. `/v1/channels/webhook/{identifier}` passou a
+resolver pelo **registro** e a publicar `pool_id` explícito; o fallback por `webhook_skill_id`
+segue **ativo e intocado** (D7 — ele sai por ÚLTIMO, na Fase E, e só quando o log zerar).
+
+**Choke point verificado antes de mexer:** todo disparo passa pela porta HTTP do gateway
+(`workflow_trigger` do mcp-server, proxy `/v1/workflow/trigger` da workflow-api). Nenhum produtor
+publica `conversations.inbound` sem `pool_id` por fora — logo um log de fallback no ROUTER, se
+aparecer sozinho, é achado e não ruído. **Dois logs em camadas diferentes, de propósito:** o gateway
+loga a *intenção* ("não resolvi pelo registro", com motivo, nomeando o endereço a semear); o router
+loga o *fato* ("o fallback roteou"), cobrindo qualquer produtor futuro que contorne a porta.
+
+**`skill_id` continua no evento quando o registro resolve.** Deixa de ser chave de roteamento (o router
+o ignora com `pool_id` presente) e sobrevive como registro de qual endereço foi discado — o papel de
+DNIS da D5. Zerá-lo, como faz o caminho da slug, apagaria a única evidência do endereço numa fase cujo
+propósito é inventário.
+
+### Emenda de fato à D5 — o carimbo de DNIS que ela protege **não existe**
+
+A D5 adverte: *"⚠️ atenção ao segundo uso — ele também carimba o DNIS no `conversations.inbound`
+(`routing-engine/models.py:272`)"*. **Não acontece no código.** A linha 272 é um COMENTÁRIO de campo;
+quem popula `sessions.dnis` é `analytics-api/models.py:89`, lendo `payload.dnis|dialed_number|to` ou
+`metadata.*` — nada disso é escrito pelo adapter de webhook. Portanto **`dnis` é NULL para toda sessão
+webhook hoje**, nas duas portas, e a tabela "por endpoint (DNIS)" da `AnalisePoolsPage` mostra vazio
+para elas. A ADR descrevia uma intenção como se fosse comportamento — o caso "spec e código discordam,
+desconfie dos DOIS". Consequência: carimbar o DNIS é trabalho a FAZER (candidato à Fase D, onde a tela
+já mostra o endereço), não efeito a preservar.
+
+### `not_found` ≠ `unavailable` (`resolve_pool_ex`)
+
+`resolve_pool` colapsava em `None` *"perguntei e não existe"* e *"não consegui perguntar"*. Com fallback
+permissivo em todo caminho, a diferença não aparecia. Passa a importar por dois motivos independentes:
+**(1)** o log da Fase C é uma MEDIDA — indisponibilidade do agent-registry contada como "chamador não
+migrado" contamina o número que decide a Fase E; **(2)** na Fase E `not_found` vira 404 e `unavailable`
+**não pode** virar (404 afirmaria que o endereço não existe por causa de uma falha de rede).
+`resolve_pool` fica como wrapper para o webchat (fallback permissivo, motivo irrelevante). Correção
+junto: **`unavailable` deixou de ser cacheado** — cachear falha transformava um soluço de 2 s em 30 s de
+resolução degradada.
+
+### Gate — `infra/test/gate_webhook_registry_resolution.sh`
+
+Duas metades, e a segunda é o que torna a primeira falseável: **positivo** (`skill_formfill_demo_v1`,
+tem linha → 201 + resolve pelo registro + 0 fallback) e **controle NEGATIVO**
+(`skill_gate_c_controle_negativo`, sem linha → 201 + cai no fallback, `motivo=not_found`). Sem o
+negativo, um código que logasse "via REGISTRO" incondicionalmente — ou um fallback removido cedo —
+passaria verde; ele também prova que o fallback segue vivo, que é a exigência da D7. **Não dispara os
+dez endereços**: entre eles há `skill_deploy_promote_v1` (promove um pool de verdade) e os dispatchers de
+outbound (drenam campanha e contatam gente) — gate com efeito colateral de produção é dano, não
+cobertura. A existência das dez linhas é do probe da Fase B; este gate acrescenta que o gateway as
+CONSULTA.
+
+### O gate reprovou e o achado não era da Fase C: **o channel-gateway rodava sem logging**
+
+Primeira execução: positivo HTTP 201, mas `via REGISTRO = 0` **e** `fallback = 0` — os dois ramos do
+código são exaustivos, então "nenhum dos dois" é impossível se o log estivesse saindo. Era o nível.
+
+`logging.basicConfig` morava dentro de `run()`, o entry point de `python -m`. **O container sobe com
+`uvicorn plughub_channel_gateway.main:app`** (Dockerfile:12) — uvicorn importa o módulo e nunca chama
+`run()`. O serviço rodava com o root logger no default `WARNING`, e **todo `logger.info` do pacote era
+descartado em silêncio** desde sempre: `"webhook trigger: session=…"`, `"endpoint-resolver: … → pool=…"`,
+survey, collect, delegate. `logger.warning` continuava aparecendo (handler de último recurso do Python),
+o que tornava o defeito quase invisível — havia log, só nunca o informativo.
+
+Mesma família de *"o aplicador é separado da fonte"*: o código está lá, correto, e não roda. E o modo de
+falha é o de sempre — a ausência do log parecia ausência do comportamento, e o gate quase me fez
+"consertar" uma resolução que estava certa. Corrigido com `_configure_logging()` chamado **no import**
+(nível por `PLUGHUB_LOG_LEVEL`, default INFO); `run()` segue chamando (no-op se o root já tem handler).
+
+**Não é caso isolado — é sweep pendente.** O `ai-gateway` já tem um comentário descrevendo exatamente
+este sintoma ("todo `logger.info` sumia"), corrigido lá e não varrido para os demais. Levantamento
+(2026-08-07): dos serviços cujo `CMD` é `uvicorn …:app`, **seis não configuram logging em lugar nenhum**
+— `dialog-api`, `scheduler-api`, `mailing-api`, `analytics-api`, `calendar-api` e `config-api` (que só
+tem `basicConfig` no `seed.py`, um job à parte). Todos rodam em `WARNING`. Item próprio em `TODO.md`.
+
+### Arquivos
+
+`channel-gateway/endpoint_resolver.py` (`ResolveOutcome` + `resolve_pool_ex`, sem cache de falha) ·
+`channel-gateway/main.py` (`_configure_logging` no import — ver acima) ·
+`channel-gateway/main.py` (`webhook_trigger` resolve pelo registro + log da medida) ·
+`channel-gateway/adapters/webhook.py` (comentário do evento reconciliado com as duas portas) ·
+`routing-engine/router.py` (log do fallback que roteou) ·
+`infra/test/gate_webhook_registry_resolution.sh` (novo).
+
+---
+
+## Webhook: registro único — Fase B (seed idempotente) ✅ (2026-08-07)
+
+ADR `adr-webhook-endpoint-single-registry`, Fase B. As **10 superfícies vivas e invisíveis** medidas na
+Fase A ganharam linha em `ChannelEndpoint`. Probe verde na primeira execução válida: `F1=10 · F2=11 ·
+F3=0` → **21** superfícies, `sem registro: 0`, `pool inexistente: 0`, `procedência: 0 errada(s) de 10
+checada(s)`, 1 aviso de higiene (`crm-callback`), **exit 0**. As quatro previsões bateram exatas.
+
+**Não muda comportamento (D7):** a resolução segue pelo fallback por `webhook_skill_id`, intocado.
+Semear vem ANTES de trocar a resolução (Fase C); o fallback sai POR ÚLTIMO (Fase E) — invertido, todo
+disparo interno viraria 404, que é falha **muda** do lado de quem chama.
+
+### A decisão da fase: declarado, não derivado
+
+A pergunta era se as linhas internas vêm de entradas escritas à mão em `infra/registry/tenant_demo.yaml`
+ou se o `RegistrySyncer` as **deriva** de `pool.webhook_skill_id` no boot. Derivar é sedutor: zero
+duplicação no arquivo, e a D6 ("endpoint interno é declarado e read-only na UI") parece empurrar para
+lá. **Recusado, por duas razões que não são de estilo:**
+
+1. **Derivar INVERTE a D5.** Ela retira de `webhook_skill_id` o papel de endereço. Copiá-lo para o
+   registro a cada boot mantém a autoridade nele e rebaixa o `ChannelEndpoint` a projeção — o contrário
+   exato da D1. E a derivação nem sobreviveria à própria Fase E: retirado o campo, o derivador fica sem
+   o que ler e as 10 linhas ficam sem declaração nenhuma atrás delas.
+2. **Derivar tornaria o gate da D8 um teste que NÃO PODE REPROVAR.** A linha sempre concordaria com o
+   pool porque teria sido copiada dele — verde comprado sem nada em troca (§ Postura). Declarada, a
+   reprovação tem causa real e cotidiana: pool webhook novo entra sem entrada correspondente.
+
+"Declarado" da D6 é literal: *read-only* é sobre o operador não editar no console; a superfície de
+declaração da plataforma é o YAML. **A derivação sobrevive como CHECADOR** — `_validate_webhook_endpoints`
+no syncer loga ERROR nomeando pool webhook sem entrada (fail-open, padrão do `_validate_teardown_hooks`)
+—, nunca como escritor. Ele e o probe respondem perguntas **diferentes**: o guard lê o YAML (declaração
+faltando), o probe lê o store (drift entre arquivo e registro).
+
+### `origin` é coluna porque a D2 obriga
+
+`channel_endpoints.origin` (`external` | `internal` | `legacy_token`, default `external`, migration
+`20260807000000_channel_endpoint_origin`). Não é conveniência de UI: a D2 torna o `identifier` **opaco**
+e decide que *nada o interpreta*. Sem a coluna, "esta linha é interna" só seria decidível lendo o texto
+do identificador (`skill_…`) — exatamente a semântica que a D2 retira. Em `settings` (Json) o campo
+existiria sem tipo nem default, e a ausência seria indistinguível de `external` por acidente em vez de
+por decisão. `origin` **não participa da resolução** e sai do `UpdateChannelEndpointSchema`: procedência
+é fato de nascimento da linha, não atributo editável.
+
+### D8 no `POST /v1/channel-endpoints` — e a assimetria que a medição impôs
+
+Até aqui a rota validava só **presença de campo** (buraco medido na Fase A). Agora:
+
+- **pool inexistente REPROVA (400 nomeado).** Endpoint que aparece na tela e não serve é pior que
+  endpoint ausente — tem aparência de conferido.
+- **canal não declarado só AVISA (log).** Refutado ao vivo em 2026-08-07: `crm-callback` →
+  `retencao_humano` (`[webchat, whatsapp]`) recebeu o disparo, foi entregue a um humano, atendido e
+  encerrado. `router.py:86-92`: com `pool_id` explícito, `pools = [pool]` **sem** filtro de canal; o
+  filtro vive só no ramo legado de DESCOBERTA. Canal é hard filter sobre *descobrir* pool, não sobre
+  pool *endereçado*, e um `ChannelEndpoint` é precisamente um endereçamento. Reprovar aqui quebraria
+  configuração que funciona — e um portão que reprova o que funciona ensina a ignorar o vermelho.
+- **409 passou a NOMEAR a linha colidida** (pool, display_name, origin, id). "Colidiu" sem "com o quê"
+  não responde a única pergunta útil de quem cadastra.
+
+### Dois erros de MÉTODO cometidos na própria fase, ambos corrigidos no instrumento
+
+1. **`F4c` aprovou sobre zero amostras.** O bloco novo de procedência imprimiu *"(todas carimbadas
+   internal)"* num store sem NENHUMA linha interna: o laço pula (corretamente) endereço sem linha, para
+   não contar a mesma lacuna duas vezes, e caía num `[ BADORIGIN -eq 0 ]` que não distingue *"checei 10 e
+   passaram"* de *"não checei nada"*. Zero defeitos sobre zero amostras é um valor **plausível**, e por
+   isso passou — dentro do teste escrito para impedir essa exata classe de verde. O exit code não foi
+   afetado (`F4a = 0 ⇒ CHECKED = 10` por construção), mas a **linha impressa mentia**, e induzia a leitura
+   "procedência ok, só falta semear". Conserto: contador-testemunha `CHECKED`; sem amostra o bloco se
+   declara **NÃO CHECADO**, e o veredicto imprime `de 0 checada(s) ← sem amostra, não é aprovação`.
+
+2. **`up -d` retornar não é "o syncer rodou".** A primeira execução do probe deu `F2=1` e pareceu
+   *"o seed não aplicou"* — mas o log mostra os 10 `created` alguns segundos depois: o bridge sobe após
+   `agent-registry` + `skill-flow-service` ficarem healthy, e o probe mediu **antes de a intervenção
+   terminar**. Versão espelhada do erro do §6.1 do ADR (lá, controle lido *depois* da intervenção; aqui,
+   medição feita *antes*). Nos dois casos o número saiu plausível — `F2=1` era exatamente o valor
+   pré-Fase-B — e por isso não pareceu erro. *Regra: entre agir e medir, prove que a ação terminou; um
+   comando que retorna não é uma ação concluída.*
+
+### Arquivos
+
+`schema.prisma` + migration · `schemas/src/channel-endpoint.ts` (`ChannelEndpointOriginSchema`) ·
+`agent-registry/src/routes/channel-endpoints.ts` (origin + D8 + 409 nomeado) ·
+`agent-registry/src/types/channel-endpoint.ts` · `infra/registry/tenant_demo.yaml` (10 entradas
+`origin: internal`, com o porquê de serem declaradas no próprio arquivo) ·
+`orchestrator-bridge/registry_syncer.py` (passthrough + `_validate_webhook_endpoints`) ·
+`infra/test/probe_webhook_endpoint_inventory.sh` (F4c + contador-testemunha).
+
+**Consequência conhecida até a Fase D:** as 10 linhas aparecem em `/config/channels` › Webhook
+**editáveis**; apagar uma lá é ressurreição silenciosa no próximo boot do bridge (seed-if-absent).
+É consequência da ordem da D7, não defeito novo.
+
+---
+
 ## Um botão de cancelar sem alvo, e o gate que o generaliza ✅ (2026-08-07)
 
 Fecha a **lacuna 4** da I5 (a última com defeito vivo). O enunciado dizia que

@@ -279,6 +279,33 @@ model ChannelEndpoint {
   settings           Json     @default("{}")   // per-instance overrides
   active             Boolean  @default(true)
 
+  // Procedência da linha (ADR adr-webhook-endpoint-single-registry, D6):
+  //   external     — cadastrada pelo tenant (o caso normal; editável na tela)
+  //   internal     — declarada no provisionamento p/ um pool interno; read-only na tela
+  //   legacy_token — migrada do registro por token (workflow.webhooks)
+  // Coluna FORÇADA pela D2: o `identifier` é OPACO e nada o interpreta. Sem este
+  // campo, a única forma de saber que a linha é interna seria ler o texto do
+  // identificador (`skill_…`) — exatamente a semântica que a D2 proíbe.
+  origin             String   @default("external")
+
+  // ── Autenticação opcional por endpoint (arco webhook-endpoint-auth) ─────────
+  // Até 2026-08-07 NENHUM endpoint webhook exigia credencial: o caminho legado por
+  // token (`workflow.webhooks`) era o único autenticado, e foi aposentado na Fase F
+  // do ADR de registro único. A auth mudou de casa — é requisito de plataforma, não
+  // resquício do legado.
+  //
+  // `auth_required` nasce **false**: ligar por padrão transformaria todo endpoint em
+  // uso num 401 retroativo. O antídoto para "segurança opcional que ninguém liga"
+  // não é o default agressivo — é a ausência MEDIDA (o probe conta os anônimos e a
+  // tela os marca). Mesmo movimento da Fase A: ausência honesta vira presença declarada.
+  //
+  // O segredo NUNCA é persistido: guarda-se o SHA-256 (`token_hash`) e os 16
+  // primeiros caracteres (`token_prefix`), que servem para identificar o token na
+  // tela e nos logs sem permitir força bruta.
+  auth_required      Boolean  @default(false)
+  token_hash         String?
+  token_prefix       String?
+
   // Optional parent integration — links this endpoint to its GatewayConfig account
   gateway_config_id  String?
   gateway_config     GatewayConfig? @relation(fields: [gateway_config_id], references: [id], onDelete: SetNull)

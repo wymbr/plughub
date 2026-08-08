@@ -286,3 +286,53 @@ export const deleteChannelEndpoint = async (id: string, tenantId: string): Promi
   if (!response.ok) throw new Error('Failed to delete channel endpoint')
 }
 
+// ── Token do endpoint (arco webhook-endpoint-auth) ────────────────────────────
+//
+// ⚠️ O `token` em claro vem SÓ nestas respostas, UMA vez. Ele não é persistido em
+// lugar nenhum (o servidor guarda apenas o SHA-256), não volta num GET e não pode ser
+// recuperado — só rotacionado. Quem consome estas funções tem de mostrá-lo ao
+// operador na hora; guardá-lo em estado de longa duração, em storage do navegador ou
+// em log é o oposto do que a decisão de não persistir pretende.
+
+export interface EndpointTokenResult extends ChannelEndpoint {
+  /** Token em claro — existe apenas nesta resposta. */
+  token?:   string
+  warning?: string
+}
+
+/** Gera ou ROTACIONA o token e liga `auth_required`. Invalida o token anterior. */
+export const rotateChannelEndpointToken = async (
+  id: string,
+  tenantId: string,
+): Promise<EndpointTokenResult> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}/token`, {
+    method: 'POST',
+    headers: headers(tenantId),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(err.error ?? 'Failed to generate endpoint token')
+  }
+  return response.json()
+}
+
+/**
+ * Revoga o token E desliga `auth_required` — o endpoint volta a aceitar disparo
+ * anônimo. O servidor devolve `warning` dizendo isso; a tela precisa mostrá-lo,
+ * senão "revoguei" é lido como "protegi".
+ */
+export const revokeChannelEndpointToken = async (
+  id: string,
+  tenantId: string,
+): Promise<EndpointTokenResult> => {
+  const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints/${id}/token`, {
+    method: 'DELETE',
+    headers: headers(tenantId),
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({})) as { error?: string }
+    throw new Error(err.error ?? 'Failed to revoke endpoint token')
+  }
+  return response.json()
+}
+

@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     kafka_topic_inbound:        str = "conversations.inbound"
     kafka_topic_outbound:       str = "conversations.outbound"
     kafka_topic_events:         str = "conversations.events"
+    # Invalidação do cache in-process do endpoint_resolver. Consumido com group_id
+    # ÚNICO POR PROCESSO — é broadcast, não fila: cada réplica tem o próprio cache
+    # e precisa de TODOS os eventos. Ver registry_invalidation_consumer.py.
+    kafka_topic_registry_changed: str = "registry.changed"
     # Session signals (survey web vehicle → analytics.session_signal). Same topic
     # survey_record (mcp-server) publishes to — the web submit reuses the trail.
     kafka_topic_signals:        str = "session.signals"
@@ -53,6 +57,15 @@ class Settings(BaseSettings):
     # Set via PLUGHUB_AGENT_REGISTRY_URL.
     # Example: "http://agent-registry:3000"
     agent_registry_url:         str = "http://localhost:3000"
+
+    # Credencial de serviço do agent-registry (= AGENT_REGISTRY_SERVICE_TOKEN lá).
+    # Necessária para o resolver receber `token_hash` do endpoint — material de
+    # credencial que a leitura GERAL não devolve, porque é o mesmo endpoint que a UI
+    # consome. Ausente ⇒ a verificação de token não tem contra o quê comparar, e o
+    # gateway RECUSA disparo em endpoint com `auth_required` (fail-closed, com log):
+    # deixar passar seria transformar "não sei verificar" em "está autorizado".
+    # Set via PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN.
+    agent_registry_service_token: str = ""
 
     # Config API — source of horizontal config (webchat namespace etc.). Read via
     # the HTTP-backed WebchatConfigCache (config-http-propagation arc), NOT the

@@ -32,6 +32,99 @@ channel_endpoints:
     identifier: crm-callback
     pool_id: retencao_humano
     display_name: "CRM Callback"
+    # origin: external (default) — cadastro de tenant. MEDIDO funcionando em
+    # 2026-08-07: o pool não declara `webhook` em channel_types e ainda assim o
+    # disparo virou contato entregue a um humano. Canal é hard filter sobre
+    # DESCOBRIR pool, não sobre pool ENDEREÇADO (router.py:86-92).
+
+  # ── Endereços internos — ADR adr-webhook-endpoint-single-registry, Fase B ────
+  #
+  # Cada pool webhook já está acionável AGORA em `/v1/channels/webhook/{skill_id}`,
+  # e até aqui nenhum deles tinha linha em registro nenhum: dez superfícies vivas e
+  # invisíveis (Fase A, medida 2026-08-07). Estas entradas são o INVENTÁRIO — a
+  # resposta a *"quais URLs disparam alguma coisa neste tenant?"*.
+  #
+  # NÃO MUDA COMPORTAMENTO (D7). A resolução continua pelo fallback por
+  # `webhook_skill_id`; semear vem ANTES de trocar a resolução (Fase C), e o
+  # fallback sai POR ÚLTIMO (Fase E) — invertido, todo disparo interno viraria 404,
+  # que é falha MUDA do lado de quem chama.
+  #
+  # POR QUE DECLARADO AQUI, e não derivado do pool pelo RegistrySyncer:
+  #   1. Derivar INVERTERIA a D5. Ela decide que `webhook_skill_id` deixa de ser
+  #      endereço; se a linha for copiada dele a cada boot, a autoridade continua
+  #      sendo ele e o registro vira projeção — o contrário da D1.
+  #   2. Derivar tornaria o gate da D8 um teste QUE NÃO PODE REPROVAR: a linha
+  #      sempre concordaria com o pool porque foi copiada dele. Declarada, o gate
+  #      tem modo de falha real e cotidiano — pool webhook novo entra sem entrada.
+  #   3. "Declarado" da D6 é literal: read-only é sobre o operador não editar no
+  #      console; a superfície de declaração da plataforma é este arquivo.
+  # A derivação sobrevive como CHECADOR (o syncer loga ERROR nomeando pool webhook
+  # sem entrada), nunca como escritor.
+  #
+  # O `identifier` é OPACO (D2): tem este texto por BACKFILL — os chamadores internos
+  # seguem mandando a mesma string. Ele NÃO diz qual skill roda; isso é o slot
+  # `current` do pool (D3), e um endereço que descrevesse o que roda envelheceria no
+  # primeiro `promote`.
+
+  - channel: webhook
+    identifier: skill_gate_promocao_v1
+    pool_id: gate_promocao_ia
+    display_name: "Gate de promoção (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_formfill_demo_v1
+    pool_id: formfill_demo_ia
+    display_name: "Form-fill demo (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_wrapup_detached_v1
+    pool_id: wrapup_detached_ia
+    display_name: "Wrap-up destacado (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_deploy_promote_v1
+    pool_id: deploy_promote_ia
+    display_name: "Promote agendado (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_outbound_demo_v1
+    pool_id: outbound_demo
+    display_name: "Outbound demo (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_outbound_dispatch_v1
+    pool_id: outbound_dispatch
+    display_name: "Outbound dispatcher (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_outbound_worker_v1
+    pool_id: outbound_worker
+    display_name: "Outbound worker (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_outbound_survey_dispatch_v1
+    pool_id: outbound_survey_dispatch
+    display_name: "Outbound survey dispatcher (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_outbound_survey_worker_v1
+    pool_id: outbound_survey_worker
+    display_name: "Outbound survey worker (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_portabilidade_demo_v1
+    pool_id: portabilidade_processo_ia
+    display_name: "Portabilidade — processo (interno)"
+    origin: internal
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pools

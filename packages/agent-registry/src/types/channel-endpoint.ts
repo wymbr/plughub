@@ -17,6 +17,14 @@ export interface ChannelEndpointRow {
   display_name:      string
   settings:          Record<string, unknown>
   active:            boolean
+  /** external | internal | legacy_token — ADR webhook-endpoint-single-registry, D6 */
+  origin:            string
+  /** Exige `X-Webhook-Token` no disparo. Default false — ver a migration. */
+  auth_required:     boolean
+  /** SHA-256 do token. CREDENCIAL: nunca sai na leitura geral (ver `_sanitize`). */
+  token_hash:        string | null
+  /** 16 primeiros chars do token em claro — identificação, não credencial. */
+  token_prefix:      string | null
   gateway_config_id: string | null   // optional FK to GatewayConfig
   created_at:        Date
   updated_at:        Date

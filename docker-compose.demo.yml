@@ -1206,6 +1206,12 @@ services:
       # resolve_pool always fails. Webchat/voice fall back to identifier=pool_id;
       # the webhook slug endpoint has no fallback and 404s. Arc 19.
       PLUGHUB_AGENT_REGISTRY_URL:         http://agent-registry:3300
+      # Credencial de serviço (= AGENT_REGISTRY_SERVICE_TOKEN do agent-registry).
+      # Arco webhook-endpoint-auth: sem ela o registry OMITE o `token_hash` do
+      # endpoint — material de credencial não sai na leitura geral, que é a mesma
+      # que a UI consome. Sem o hash o gateway não tem contra o quê comparar e
+      # RECUSA (fail-closed) disparo em endpoint com `auth_required`.
+      PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo
       # auth_timeout_s (F2-TTL) e attachment_expiry_days (F1.2) vêm do config-api via
       # WebchatConfigCache HTTP (config-http-propagation arc): GET /config/webchat +
       # invalidação config.changed. Os envs PLUGHUB_WS_AUTH_TIMEOUT_S /

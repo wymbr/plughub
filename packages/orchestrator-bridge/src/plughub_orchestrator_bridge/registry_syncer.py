@@ -290,6 +290,12 @@ class RegistrySyncer:
         # Migrados do antigo infra/seed/seed.py (aposentado). Fonte única = YAML.
         await self._sync_channel_endpoints(http, headers, cfg, report)
 
+        # ── Guard de inventário de webhook (read-only, fail-open) ──────────────
+        # ADR adr-webhook-endpoint-single-registry: pool webhook está acionável AGORA;
+        # sem linha declarada ele é endereço vivo e invisível. Roda DEPOIS do sync
+        # para que o ERROR descreva o que ficou de fora do que acabou de ser aplicado.
+        self._validate_webhook_endpoints(cfg, report)
+
         # AgentType entity retired (Fase 3d/C): no agent_types are synced or
         # pruned. AI provisioning comes from each pool's `deploy:` block (below);
         # human agents are login-driven (no registry agent_type).
@@ -848,6 +854,15 @@ class RegistrySyncer:
         POST /v1/channel-endpoints. Idempotente: 409 = já existe (skip).
         Fonte única: o YAML (migrado do seed.py aposentado). Campo `display_name`
         é o exigido pela rota (o seed antigo mandava `label` — POST falhava 400).
+
+        `origin` (ADR adr-webhook-endpoint-single-registry, D6) é repassado como
+        declarado; ausente ⇒ a rota aplica `external`.
+
+        ⚠️ O 409 aqui é seed-if-absent, e isso tem CONSEQUÊNCIA que morde: editar
+        uma entrada JÁ SEMEADA neste YAML é NO-OP silencioso — o POST devolve 409 e
+        o syncer segue. Entrada NOVA aplica normalmente. Para o arquivo vencer sobre
+        uma linha existente: apagar a linha no store, ou subir com
+        REGISTRY_SYNC_RECONCILE (que hoje não cobre channel_endpoints).
         """
         url = f"{self._registry_url}/v1/channel-endpoints"
         for ep in cfg.get("channel_endpoints", []):
@@ -858,6 +873,7 @@ class RegistrySyncer:
                 "pool_id":      ep.get("pool_id"),
                 "display_name": ep.get("display_name") or ep.get("identifier"),
                 "active":       ep.get("active", True),
+                "origin":       ep.get("origin", "external"),
             }
             try:
                 async with http.post(url, headers=headers, json=body,
@@ -871,6 +887,59 @@ class RegistrySyncer:
                         logger.warning("  channel_endpoint %s: POST %d — %s", cid, resp.status, b)
             except Exception as exc:
                 logger.warning("  channel_endpoint %s: POST exception — %s", cid, exc)
+
+    # ── Guard: pool webhook sem endereço declarado ────────────────────────────
+
+    def _validate_webhook_endpoints(self, cfg: dict, report: SyncReport) -> None:
+        """
+        ADR adr-webhook-endpoint-single-registry (D1/D8): todo pool que declara o canal
+        `webhook` é acionável AGORA, e por isso precisa de uma linha `ChannelEndpoint`
+        declarada — sem ela o tenant não tem resposta para *"quais URLs disparam alguma
+        coisa aqui?"*, que é o defeito que o ADR fecha (não é colisão: `@@unique` já a
+        bloqueia, e os prefixos de URL são disjuntos).
+
+        POR QUE ISTO É UM CHECADOR E NÃO UM ESCRITOR — é a decisão da Fase B, não
+        economia de código. Seria trivial DERIVAR a linha de `pool.webhook_skill_id` e
+        POSTá-la. Duas razões para não:
+
+          1. Derivar INVERTE a D5, que retira de `webhook_skill_id` o papel de endereço.
+             Copiá-lo para o registro a cada boot mantém a autoridade nele e rebaixa o
+             `ChannelEndpoint` a projeção — o contrário exato da D1.
+          2. Derivar torna este guard um TESTE QUE NÃO PODE REPROVAR: a linha sempre
+             concordaria com o pool porque teria sido copiada dele. Verde comprado sem
+             nada em troca (§ Postura). Declarada no YAML, a reprovação tem causa real e
+             cotidiana: pool webhook novo entra sem a entrada correspondente.
+
+        Fail-open e barulhento, no padrão de `_validate_teardown_hooks`: a checagem
+        cruzada é o sinal correto, não bloquear o boot. Read-only por construção.
+        """
+        declared: set[tuple[str, str]] = {
+            (str(ep.get("channel", "")), str(ep.get("identifier", "")))
+            for ep in cfg.get("channel_endpoints", []) or []
+        }
+
+        for p in cfg.get("pools", []) or []:
+            if "webhook" not in (p.get("channel_types") or []):
+                continue
+            pid  = str(p.get("pool_id", "?"))
+            wsid = p.get("webhook_skill_id")
+            if not wsid:
+                logger.error(
+                    "  CONFIG ERROR: pool %s declara canal 'webhook' SEM webhook_skill_id "
+                    "— acionável por /v1/channels/webhook/pool/%s e por endereço nenhum",
+                    pid, pid,
+                )
+                report.errors.append(f"pool {pid}: webhook sem webhook_skill_id")
+                continue
+            if ("webhook", str(wsid)) not in declared:
+                logger.error(
+                    "  CONFIG ERROR: pool %s é acionável em /v1/channels/webhook/%s mas NÃO "
+                    "tem linha declarada em channel_endpoints — endereço vivo e invisível. "
+                    "Declare-a no YAML (ADR webhook-endpoint-single-registry, Fase B); "
+                    "NÃO derive do pool (o guard passaria a nunca poder reprovar).",
+                    pid, wsid,
+                )
+                report.errors.append(f"pool {pid}: webhook '{wsid}' sem channel_endpoint declarado")
 
     # ── Agent type sync ───────────────────────────────────────────────────────
 

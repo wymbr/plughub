@@ -48,7 +48,7 @@
   "endpoint": {
     "title":               "Endpoints",
     "identifierHintFallback": "identifiers routing to pools",
-    "webhookNote":         "Webhook endpoints do not require API credentials — just configure a URL slug and target pool.",
+    "webhookNote":         "Webhook endpoints need no provider account — just a URL slug and a target pool. Each endpoint can optionally require a token on every trigger; without one it accepts anonymous calls from anyone who can reach it.",
     "add":                 "+ Add endpoint",
     "addBtn":              "Add endpoint",
     "noEndpoints":         "No endpoints yet. Click \"+ Add endpoint\" to add a {{channel}} number or address.",
@@ -57,7 +57,42 @@
     "colIdentifier":       "Identifier",
     "colDisplayName":      "Display name",
     "colPool":             "Pool",
-    "colStatus":           "Status"
+    "colOrigin":           "Origin",
+    "colAuth":             "Auth",
+    "colStatus":           "Status",
+    "auth": {
+      "required":      "token",
+      "anonymous":     "anonymous",
+      "anonymousHint": "Anyone who can reach this address can trigger it — no credential is checked. Generate a token to require one."
+    },
+    "token": {
+      "generate":      "Generate token",
+      "rotate":        "Rotate token",
+      "revoke":        "Revoke",
+      "rotateHint":    "Requires X-Webhook-Token on every trigger. The token is shown once and cannot be recovered.",
+      "revokeHint":    "Removes the token AND turns authentication off — the endpoint goes back to accepting anonymous triggers.",
+      "rotateConfirm": "Rotating invalidates the current token immediately. Any integration still using it will start failing. Continue?",
+      "revokeConfirm": "This removes the token AND turns authentication off — the endpoint will accept anonymous triggers from anyone who can reach it. Continue?",
+      "freshTitle":    "Token for \"{{identifier}}\" — copy it now",
+      "freshWarning":  "This is the only time this token is shown. It is not stored and cannot be recovered — if you lose it, you must rotate, which invalidates this one.",
+      "copy":          "Copy",
+      "copied":        "Copied",
+      "dismiss":       "I've saved it"
+    },
+    "origin": {
+      "external":     "registered",
+      "internal":     "declared",
+      "legacy_token": "legacy (token)"
+    },
+    "originHint": {
+      "external":     "Registered on this screen by your team.",
+      "internal":     "Declared in the environment provisioning and served by an internal pool. Read-only here.",
+      "legacy_token": "Migrated from the legacy token-based webhook registry."
+    },
+    "readOnly":            "read-only",
+    "readOnlyHint":        "This endpoint comes from the environment declaration, not from this screen. Editing it here would be undone on the next platform restart — change it at the source.",
+    "poolAddressTitle":    "Implicit address of every webhook pool",
+    "poolAddressNote":     "Besides the identifiers above, each webhook pool can also be triggered directly by its pool id. These addresses have no registry row because they already point at the pool itself — there is nothing a row could add."
   },
   "form": {
     "displayName":           "Display name",

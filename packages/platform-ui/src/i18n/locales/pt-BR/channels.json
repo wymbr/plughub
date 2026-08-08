@@ -48,7 +48,7 @@
   "endpoint": {
     "title":               "Endpoints",
     "identifierHintFallback": "identificadores de roteamento para pools",
-    "webhookNote":         "Endpoints de webhook não precisam de credenciais de API — apenas configure um slug de URL e o pool de destino.",
+    "webhookNote":         "Endpoints de webhook não precisam de conta de provedor — só de um slug de URL e um pool de destino. Cada endpoint pode, opcionalmente, exigir um token em todo disparo; sem token, ele aceita chamada anônima de qualquer um que o alcance.",
     "add":                 "+ Adicionar endpoint",
     "addBtn":              "Adicionar endpoint",
     "noEndpoints":         "Nenhum endpoint ainda. Clique em \"+ Adicionar endpoint\" para adicionar um número ou endereço {{channel}}.",
@@ -57,7 +57,42 @@
     "colIdentifier":       "Identificador",
     "colDisplayName":      "Nome de exibição",
     "colPool":             "Pool",
-    "colStatus":           "Status"
+    "colOrigin":           "Origem",
+    "colAuth":             "Auth",
+    "colStatus":           "Status",
+    "auth": {
+      "required":      "token",
+      "anonymous":     "anônimo",
+      "anonymousHint": "Qualquer um que alcance este endereço pode acioná-lo — nenhuma credencial é conferida. Gere um token para exigir uma."
+    },
+    "token": {
+      "generate":      "Gerar token",
+      "rotate":        "Rotacionar token",
+      "revoke":        "Revogar",
+      "rotateHint":    "Passa a exigir X-Webhook-Token em todo disparo. O token aparece uma única vez e não pode ser recuperado.",
+      "revokeHint":    "Remove o token E desliga a autenticação — o endpoint volta a aceitar disparos anônimos.",
+      "rotateConfirm": "Rotacionar invalida o token atual imediatamente. Qualquer integração que ainda o use passa a falhar. Continuar?",
+      "revokeConfirm": "Isto remove o token E desliga a autenticação — o endpoint passará a aceitar disparo anônimo de qualquer um que o alcance. Continuar?",
+      "freshTitle":    "Token de \"{{identifier}}\" — copie agora",
+      "freshWarning":  "Esta é a única vez que este token é exibido. Ele não é armazenado e não pode ser recuperado — se você o perder, terá de rotacionar, o que invalida este.",
+      "copy":          "Copiar",
+      "copied":        "Copiado",
+      "dismiss":       "Já guardei"
+    },
+    "origin": {
+      "external":     "cadastrado",
+      "internal":     "declarado",
+      "legacy_token": "legado (token)"
+    },
+    "originHint": {
+      "external":     "Cadastrado nesta tela pela sua equipe.",
+      "internal":     "Declarado no provisionamento do ambiente e atendido por um pool interno. Somente leitura aqui.",
+      "legacy_token": "Migrado do registro legado de webhook por token."
+    },
+    "readOnly":            "somente leitura",
+    "readOnlyHint":        "Este endpoint vem da declaração do ambiente, não desta tela. Editá-lo aqui seria desfeito no próximo restart da plataforma — altere na origem.",
+    "poolAddressTitle":    "Endereço implícito de cada pool webhook",
+    "poolAddressNote":     "Além dos identificadores acima, todo pool webhook também pode ser acionado direto pelo id do pool. Esses endereços não têm linha no registro porque já apontam para o próprio pool — não há o que uma linha acrescentaria."
   },
   "form": {
     "displayName":           "Nome de exibição",

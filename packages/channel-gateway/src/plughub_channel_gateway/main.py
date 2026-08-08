@@ -8,8 +8,11 @@ Spec: PlugHub v24.0 section 3.5 / channel-gateway-webchat.md
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -39,8 +42,9 @@ from .channel_capability_registry import (
 from .config import get_settings, Settings
 from .auth import verify_user_jwt, abac_can, pool_in_scope, accessible_pools, bearer_from_header
 from .context_reader import ContextReader
-from .endpoint_resolver import resolve_pool
+from .endpoint_resolver import ResolvedEndpoint, resolve_endpoint, resolve_pool
 from .outbound_consumer import OutboundConsumer
+from .registry_invalidation_consumer import RegistryInvalidationConsumer
 from .webchat_config import webchat_config
 from .session_registry import SessionRegistry
 from .survey_web import (
@@ -49,6 +53,36 @@ from .survey_web import (
     SURVEY_PAGE_HTML,
     SURVEY_COLLECT_PAGE_HTML,   # Journey J4c — collect-based survey (webchat client)
 )
+
+def _configure_logging() -> None:
+    """
+    Configura o logging da APLICAÇÃO — no import, não só no `run()`.
+
+    ⚠️ **Achado 2026-08-07 (Fase C do ADR de webhook).** Isto morava exclusivamente
+    dentro de `run()`, que é o entry point de `python -m`. Mas o container sobe com
+    `uvicorn plughub_channel_gateway.main:app` — uvicorn importa o módulo e **nunca
+    chama `run()`**. Resultado: o serviço rodava com o root logger no default
+    (`WARNING`), e **todo `logger.info` do pacote inteiro era descartado em
+    silêncio** — "webhook trigger: session=…", "endpoint-resolver: … → pool=…",
+    survey, collect, delegate. `logger.warning` continuava aparecendo (handler de
+    último recurso do Python), o que tornava o defeito quase invisível: os logs
+    existiam, só nunca os importantes.
+
+    Como apareceu: um gate da Fase C afirmou "o positivo NÃO resolveu pelo registro"
+    porque procurava uma linha INFO. O comportamento estava certo; a EVIDÊNCIA é que
+    não existia. Configuração de logging presa ao entry point errado é a mesma
+    família de "o aplicador é separado da fonte": o código está lá e não roda.
+
+    Idempotente: `basicConfig` é no-op se o root já tem handler, então chamar aqui e
+    de novo em `run()` não duplica saída.
+    """
+    logging.basicConfig(
+        level  = os.getenv("PLUGHUB_LOG_LEVEL", "INFO").upper(),
+        format = "%(asctime)s %(levelname)s %(name)s — %(message)s",
+    )
+
+
+_configure_logging()
 
 logger = logging.getLogger("plughub.channel-gateway")
 
@@ -366,10 +400,52 @@ async def lifespan(app: FastAPI):
         finally:
             await consumer.stop()
 
-    pubsub_task     = asyncio.create_task(_registry.start_pubsub_listener())
-    outbound_task   = asyncio.create_task(outbound.run())
-    collect_task    = asyncio.create_task(_collect_events_consumer())
-    config_task     = asyncio.create_task(_config_changed_consumer())
+    def _supervise(name: str, task: asyncio.Task) -> asyncio.Task:
+        """
+        Faz a MORTE de uma task de background aparecer.
+
+        ⚠️ Conserto de uma cegueira medida em 2026-08-07. Estas cinco tasks rodam sob
+        `asyncio.create_task` e **ninguém as aguarda** — se a corrotina levanta, a
+        exceção fica presa no objeto Task e some. O serviço segue de pé, saudável no
+        `/health`, com um consumidor a menos. O sintoma aparece longe: no caso que
+        expôs isto, "revogar token não vale" — três camadas abaixo, num gate.
+        `outbound`, `collect` e `config` têm a MESMA exposição desde sempre; a
+        diferença é que ninguém tinha perguntado.
+
+        Não reinicia a task de propósito: reiniciar em laço esconderia uma falha
+        permanente atrás de ruído. Isto aqui é o alarme; a política de recuperação é
+        decisão à parte, e precisa do alarme para ser tomada.
+        """
+        def _done(t: asyncio.Task) -> None:
+            if t.cancelled():
+                return                      # shutdown normal
+            exc = t.exception()
+            if exc is not None:
+                logger.error(
+                    "task de background '%s' MORREU: %s — o serviço segue de pé SEM "
+                    "ela. Reinicie o channel-gateway depois de tratar a causa.",
+                    name, exc, exc_info=exc,
+                )
+            else:
+                logger.warning(
+                    "task de background '%s' TERMINOU sozinha (sem exceção) — "
+                    "consumidores não deveriam retornar enquanto o serviço vive.",
+                    name,
+                )
+        task.add_done_callback(_done)
+        return task
+
+    pubsub_task     = _supervise("registry-pubsub", asyncio.create_task(_registry.start_pubsub_listener()))
+    outbound_task   = _supervise("outbound",        asyncio.create_task(outbound.run()))
+    collect_task    = _supervise("collect-events",  asyncio.create_task(_collect_events_consumer()))
+    config_task     = _supervise("config-changed",  asyncio.create_task(_config_changed_consumer()))
+    # Invalidação do cache de endereço por `registry.changed`. Sem isto, revogar ou
+    # rotacionar um token de endpoint só passa a valer depois do TTL do cache
+    # (`endpoint_cache_ttl_s`) — o gateway seguiria aceitando a credencial revogada.
+    invalidation_task = _supervise(
+        "registry-invalidation",
+        asyncio.create_task(RegistryInvalidationConsumer(settings).run()),
+    )
     # Arc 19 Fase D: expira suspends/delegates webhook vencidos (resume_tokens)
     timeout_scan_task = asyncio.create_task(_webhook_adapter.run_timeout_scanner())
 
@@ -381,6 +457,7 @@ async def lifespan(app: FastAPI):
     outbound_task.cancel()
     collect_task.cancel()
     config_task.cancel()
+    invalidation_task.cancel()
     timeout_scan_task.cancel()
     await _producer.stop()
     await db_pool.close()
@@ -1151,8 +1228,79 @@ async def survey_web_page(token: str):
     return HTMLResponse(content=SURVEY_PAGE_HTML)
 
 
+def _check_endpoint_auth(
+    ep:         ResolvedEndpoint,
+    request:    Request,
+    identifier: str,
+    tenant_id:  str,
+) -> None:
+    """
+    Autenticação OPCIONAL por endpoint (arco webhook-endpoint-auth). Aplicada pelas
+    DUAS portas de webhook, a partir da MESMA função — auth duplicada em dois lugares
+    diverge, e a divergência aparece como "uma porta protegida e a outra não".
+
+    `auth_required=False` (o default) ⇒ no-op. Nada do que existe hoje quebra.
+
+    ── Três recusas, uma resposta ────────────────────────────────────────────────
+    Header ausente, token errado e endpoint mal configurado saem todos como **401
+    sem detalhe**. Distinguir seria contar a um chamador não autenticado que o
+    endereço EXISTE e como ele está configurado — o mesmo raciocínio do filtro de
+    procedência (§7.6.3). Quem precisa do motivo é o operador, e ele lê o log; por
+    isso cada ramo loga a sua causa, com nível diferente.
+
+    ── Fail-CLOSED quando não dá para verificar ─────────────────────────────────
+    `auth_required=True` sem `token_hash` tem duas causas possíveis, e as duas levam
+    à mesma decisão: recusar.
+      · o gateway não tem credencial de serviço ⇒ o registry OMITE o hash. Aqui
+        "não sei verificar" jamais pode virar "está autorizado" — é a diferença
+        entre um portão fechado e um portão que some quando a luz apaga.
+      · a linha está mesmo sem token (estado que a revogação evita criar, mas que
+        uma escrita direta no banco produziria).
+    O log distingue os dois para o operador; a resposta, não.
+    """
+    if not ep.auth_required:
+        return
+
+    presented = request.headers.get("x-webhook-token", "")
+
+    if not ep.token_hash:
+        settings = get_settings()
+        if not settings.agent_registry_service_token:
+            logger.error(
+                "AUTH webhook: endpoint '%s' exige token, mas o gateway NÃO tem "
+                "credencial de serviço (PLUGHUB_AGENT_REGISTRY_SERVICE_TOKEN) — o "
+                "registry omite o token_hash e não há contra o que comparar. "
+                "RECUSANDO (fail-closed): 'não sei verificar' não é 'autorizado'. "
+                "tenant=%s", identifier, tenant_id,
+            )
+        else:
+            logger.error(
+                "AUTH webhook: endpoint '%s' tem auth_required=true e NENHUM token "
+                "configurado — estado impossível de satisfazer (recusa 100%%). "
+                "Gere um token (POST /v1/channel-endpoints/{id}/token) ou revogue "
+                "para voltar a anônimo. tenant=%s", identifier, tenant_id,
+            )
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if not presented:
+        logger.warning(
+            "AUTH webhook: disparo em '%s' SEM header X-Webhook-Token (tenant=%s)",
+            identifier, tenant_id,
+        )
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Comparação em tempo constante sobre o digest — `==` sobre hash vaza, pelo
+    # tempo, quantos caracteres iniciais bateram.
+    computed = hashlib.sha256(presented.encode("utf-8")).hexdigest()
+    if not hmac.compare_digest(computed, ep.token_hash):
+        logger.warning(
+            "AUTH webhook: token INVÁLIDO em '%s' (tenant=%s)", identifier, tenant_id,
+        )
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.post("/channel/webhook/{slug}", status_code=201)
-async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest) -> dict:
+async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest, request: Request) -> dict:
     """
     External webhook endpoint trigger (channel-endpoint model, like webchat).
 
@@ -1165,6 +1313,22 @@ async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest) -> di
     path (POST /v1/channels/webhook/{skill_id}, used by workflow_trigger) is kept
     for backward compatibility and internal intake flows.
 
+    ── ADR adr-webhook-endpoint-single-registry §7.6.3 ───────────────────────────
+    **Esta porta serve apenas endpoints de procedência `external`.**
+
+    A Fase B semeou uma linha para cada endereço INTERNO, e como esta rota sempre
+    resolveu pelo registro, os dez passaram a responder aqui também — 404 antes,
+    201 depois. Foi mudança de comportamento não prevista pela fase, medida em
+    2026-08-07. Não era falha de autenticação (as duas rotas vivem no mesmo gateway
+    e nenhuma exige credencial), mas apagava a distinção que o próprio docstring
+    acima declara: um ambiente que publique este prefixo na borda e mantenha `/v1/*`
+    restrito passaria a expor endereços internos.
+
+    A escolha entre "aceitar as duas portas" e "filtrar" não se decide pelo código,
+    e sim pela topologia — mas os dois erros custam diferente: aceitar e a topologia
+    divergir depois expõe endereço interno EM SILÊNCIO; filtrar e a exposição ser
+    uniforme custa um alias que ninguém usa. Filtramos.
+
     Returns: { session_id }
     """
     if _webhook_adapter is None:
@@ -1172,20 +1336,40 @@ async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest) -> di
 
     settings  = get_settings()
     tenant_id = body.tenant_id or settings.tenant_id
-    pool_id: str | None = None
+    resolved = ResolvedEndpoint(None, None, False, None, "unavailable")
     if settings.agent_registry_url:
-        pool_id = await resolve_pool(
+        resolved = await resolve_endpoint(
             channel            = "webhook",
             identifier         = slug,
             tenant_id          = tenant_id,
             agent_registry_url = settings.agent_registry_url,
             cache_ttl_s        = settings.endpoint_cache_ttl_s,
+            allowed_origins    = frozenset({"external"}),
+            service_token      = settings.agent_registry_service_token,
         )
+    pool_id = resolved.pool_id
+    outcome = resolved.outcome
     if not pool_id:
+        # A RESPOSTA não distingue os motivos; o LOG distingue. Devolver 403 (ou
+        # dizer "existe, mas é interno") confirmaria a existência do endereço a
+        # quem chama de fora — o oposto do que filtrar pretende. Quem precisa saber
+        # é o operador, e ele lê o log; degradar sem dizer por quê é que não vale.
+        if outcome == "origin_refused":
+            logger.warning(
+                "webhook externo: '%s' EXISTE mas é de procedência interna — recusado "
+                "nesta porta (tenant=%s). Endereços internos são acionáveis apenas em "
+                "/v1/channels/webhook/{identifier}. Ver ADR §7.6.3.",
+                slug, tenant_id,
+            )
         raise HTTPException(
             status_code=404,
             detail=f"No webhook endpoint '{slug}' configured for this tenant",
         )
+
+    # Autenticação DEPOIS da resolução e ANTES de criar sessão: só se pode exigir a
+    # credencial de um endpoint depois de saber qual endpoint é, e nada deve ser
+    # criado antes de a credencial ser aceita.
+    _check_endpoint_auth(resolved, request, slug, tenant_id)
 
     session_id = await _webhook_adapter.handle_trigger(
         skill_id           = "",            # pool-driven: runs the pool's deployed skill
@@ -1201,24 +1385,108 @@ async def webhook_endpoint_trigger(slug: str, body: WebhookTriggerRequest) -> di
 
 
 @app.post("/v1/channels/webhook/{skill_id}", status_code=201)
-async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
+async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest, request: Request) -> dict:
     """
-    Trigger a new webhook workflow session (internal, skill_id-keyed path).
+    Trigger a new webhook workflow session — endereço interno.
 
-    The skill_id is the endpoint identifier (analogous to a WA number or voice DIN).
-    The routing engine resolves the pool that owns this skill_id and allocates
-    a skill-flow instance to execute the workflow.
+    ── Fase C do ADR adr-webhook-endpoint-single-registry ────────────────────────
+    O path param passou a ser tratado como **`identifier` OPACO** (D2), resolvido
+    pelo **registro** (`ChannelEndpoint`, D1) — não mais como "o skill que roda".
+    O nome do parâmetro segue `skill_id` porque é ele que forma a URL pública e os
+    chamadores internos mandam a MESMA string (D4: é backfill, não reescrita);
+    renomear a variável mudaria a rota e não mudaria nada de verdade.
 
-    For external, version-stable endpoints prefer POST /channel/webhook/{slug}
-    (channel-endpoint model). This path stays for workflow_trigger / intake flows.
+    ── Fase E (2026-08-07): o FALLBACK SAIU ──────────────────────────────────────
+    O registro é agora o **único** resolvedor. Não resolveu ⇒ a sessão não nasce.
+
+      · `not_found`   → **404** nomeado. O endereço não existe: semeie a linha.
+      · `unavailable` → **503** + `Retry-After`. **NUNCA 404** — 404 afirmaria que o
+        endereço não existe por causa de um soluço de rede do agent-registry, e o
+        chamador (fire-and-forget, na maioria) desistiria de um disparo legítimo.
+        Falha de infraestrutura é retentável; endereço inexistente não é.
+
+    A distinção existe porque `resolve_pool_ex` a preserva desde a Fase C. Ela era
+    ornamental enquanto o fallback absorvia os dois casos; virou load-bearing aqui.
+
+    **`skill_id` continua no evento.** Deixou de ser chave de roteamento (é o
+    `pool_id` que roteia), mas segue sendo o registro de qual endereço foi discado —
+    o papel de DNIS (D5). Zerá-lo apagaria a única evidência do endereço no evento.
 
     Returns: { session_id }
     """
     if _webhook_adapter is None:
         raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
 
+    settings   = get_settings()
+    identifier = skill_id
+    # SEM default de tenant aqui, de propósito: o caminho da slug usa
+    # `body.tenant_id or settings.tenant_id`, mas nesta rota o `handle_trigger`
+    # sempre recebeu `body.tenant_id` cru. Defaultar só na CONSULTA criaria uma
+    # divergência nova — resolver no tenant padrão e abrir a sessão noutro — para
+    # ganhar nada: tenant vazio já estava quebrado antes desta fase, e com o
+    # default ele passaria a resolver, o que é mudança de comportamento
+    # justamente onde a Fase C promete não ter nenhuma.
+    tenant_id  = body.tenant_id
+
+    resolved = ResolvedEndpoint(None, None, False, None, "unavailable")
+    if settings.agent_registry_url:
+        resolved = await resolve_endpoint(
+            channel            = "webhook",
+            identifier         = identifier,
+            tenant_id          = tenant_id,
+            agent_registry_url = settings.agent_registry_url,
+            cache_ttl_s        = settings.endpoint_cache_ttl_s,
+            service_token      = settings.agent_registry_service_token,
+        )
+        pool_id = resolved.pool_id
+        outcome = resolved.outcome
+    else:
+        pool_id = None
+        outcome = "no_registry_url"
+
+    if not pool_id:
+        # ── Fase E — sem fallback: a recusa é a resposta ──────────────────────
+        # Os dois motivos pedem ações OPOSTAS de quem chama, então saem com status
+        # diferentes. Colapsá-los num 404 só seria seguro enquanto o fallback
+        # existia para absorver o engano.
+        if outcome == "unavailable" or outcome == "no_registry_url":
+            logger.error(
+                "webhook trigger: registro INALCANÇÁVEL ao resolver identifier=%s "
+                "(motivo=%s, tenant=%s) — 503. Isto NÃO diz que o endereço não "
+                "existe; diz que não deu para perguntar. Retentável.",
+                identifier, outcome, tenant_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Endpoint registry unavailable — could not resolve "
+                    f"'{identifier}'. This is retryable; it does not mean the "
+                    f"endpoint is unknown."
+                ),
+                headers={"Retry-After": "5"},
+            )
+        logger.warning(
+            "webhook trigger: identifier=%s SEM linha no registro (tenant=%s) — 404. "
+            "Todo endereço acionável precisa de um ChannelEndpoint(channel=webhook); "
+            "declare-o em infra/registry/*.yaml (origin=internal) ou cadastre na tela.",
+            identifier, tenant_id,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail=f"No webhook endpoint '{identifier}' configured for this tenant",
+        )
+
+    # Mesma ordem da porta externa: resolve, autentica, só então cria.
+    _check_endpoint_auth(resolved, request, identifier, tenant_id)
+
+    logger.info(
+        "webhook trigger: identifier=%s → pool=%s (via REGISTRO, tenant=%s)",
+        identifier, pool_id, tenant_id,
+    )
+
     session_id = await _webhook_adapter.handle_trigger(
-        skill_id           = skill_id,
+        # Endereço discado. Chave de roteamento só quando pool_id é None (fallback).
+        skill_id           = identifier,
         tenant_id          = body.tenant_id,
         trigger_type       = body.trigger_type,
         metadata           = body.metadata,
@@ -1226,6 +1494,7 @@ async def webhook_trigger(skill_id: str, body: WebhookTriggerRequest) -> dict:
         origin_session_id  = body.origin_session_id,
         context            = body.context,
         journey            = body.journey,   # T3: inherit | new
+        pool_id            = pool_id,        # Fase C: registro resolve → pool direto
     )
     return {"session_id": session_id}
 
@@ -1410,10 +1679,10 @@ async def health() -> dict:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run() -> None:
-    logging.basicConfig(
-        level  = logging.INFO,
-        format = "%(asctime)s %(levelname)s %(name)s — %(message)s",
-    )
+    # Já configurado no import (`_configure_logging`), porque o container sobe por
+    # `uvicorn …:app` e nunca passa por aqui. Mantido para o caso `python -m`;
+    # `basicConfig` é no-op se o root já tem handler.
+    _configure_logging()
     uvicorn.run(
         "plughub_channel_gateway.main:app",
         host   = "0.0.0.0",

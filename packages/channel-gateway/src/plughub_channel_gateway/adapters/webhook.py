@@ -460,11 +460,18 @@ class WebhookAdapter(ChannelAdapter):
             "session_id":        session_id,
             "tenant_id":         tenant_id,
             "channel":           "webhook",
-            # When pool_id is set (external slug→pool endpoint), the routing engine
-            # assigns it directly and runs the pool's DEPLOYED skill (stable URL).
-            # When None, routing resolves the pool via skill_id (internal trigger).
+            # When pool_id is set, the routing engine assigns it directly and runs
+            # the pool's DEPLOYED skill (stable address). Desde a Fase C do ADR
+            # adr-webhook-endpoint-single-registry isso vale para as DUAS portas —
+            # a slug externa (`/channel/webhook/{slug}`) e a interna
+            # (`/v1/channels/webhook/{identifier}`) —, ambas resolvendo pelo MESMO
+            # registro `ChannelEndpoint`. When None, routing ainda resolve pelo
+            # `skill_id` (fallback por `webhook_skill_id`), que sai na Fase E.
             "pool_id":           pool_id,
-            "skill_id":          skill_id,    # DNIS for webhook channel — routing key
+            # Endereço discado. Enquanto `pool_id` é None ele é a CHAVE DE ROTEAMENTO
+            # (fallback); com `pool_id` preenchido o router o ignora e ele sobrevive
+            # como registro de qual endereço foi usado — o papel de DNIS (D5).
+            "skill_id":          skill_id,
             "customer_id":       customer_id,
             "trigger_type":      trigger_type,
             "metadata":          metadata or {},

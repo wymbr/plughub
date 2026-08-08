@@ -377,6 +377,17 @@ export interface UpdateGatewayConfigInput {
 
 export type ChannelEndpointChannel = 'webchat' | 'whatsapp' | 'voice' | 'sms' | 'email' | 'webhook'
 
+/**
+ * Procedência da linha (ADR adr-webhook-endpoint-single-registry, D6).
+ *   external     — cadastrada pelo tenant. Editável.
+ *   internal     — declarada no provisionamento p/ um pool interno. VISÍVEL e read-only:
+ *                  nasce da declaração do ambiente, não do cadastro. Editá-la aqui seria
+ *                  mentira de curta duração — o próximo boot do bridge a repõe.
+ *   legacy_token — migrada do registro por token (`workflow.webhooks`).
+ * Campo do servidor; ausente em respostas antigas ⇒ tratar como 'external'.
+ */
+export type ChannelEndpointOrigin = 'external' | 'internal' | 'legacy_token'
+
 export interface ChannelEndpoint {
   id:                string
   tenant_id:         string
@@ -386,6 +397,11 @@ export interface ChannelEndpoint {
   display_name:      string
   settings:          Record<string, unknown>
   active:            boolean
+  origin?:           ChannelEndpointOrigin
+  /** Exige X-Webhook-Token no disparo. Ausente/false ⇒ endpoint ANÔNIMO. */
+  auth_required?:    boolean
+  /** 16 primeiros chars do token — identificação. O hash NUNCA chega à UI. */
+  token_prefix?:     string | null
   gateway_config_id: string | null   // FK to GatewayConfig; null = standalone
   created_at:        string
   updated_at:        string

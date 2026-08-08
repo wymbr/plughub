@@ -95,40 +95,33 @@ class Router:
             # Only reached if the event was published without pool_id
             # (e.g. manual test events, external integrations not yet updated).
             pools = await self._pools.get_candidate_pools(event.tenant_id, event.channel)
-            # Arc 19: webhook sessions carry no pool_id — the skill_id is the
-            # endpoint (DNIS). Resolve deterministically by matching it against
-            # each pool's webhook_skill_id, so multiple webhook pools route
-            # correctly (not just the first/scored candidate). Falls back to the
-            # unfiltered scan when no pool declares webhook_skill_id (backward-compat
-            # with a single webhook pool).
-            if event.channel == "webhook" and event.skill_id:
-                matched = [
-                    p for p in pools
-                    if getattr(p, "webhook_skill_id", None) == event.skill_id
-                ]
-                if len(matched) > 1:
-                    # S4 — endereço AMBÍGUO: o mesmo skill está deployado em N pools
-                    # (regime legítimo — é o desenho do survey: um skill outbound em três
-                    # pools, um por grão, cada um com `config_json` diferente). Escolher
-                    # por score seria rodar um deploy que o chamador não pediu, em
-                    # silêncio. O endereço canônico é o POOL (`pool_id` no evento).
-                    logger.error(
-                        "Webhook endpoint AMBÍGUO: skill_id=%s casa %d pools (%s) — "
-                        "sessão %s NÃO será roteada. O endereço canônico é o POOL: use "
-                        "workflow_trigger(pool_id=...) / POST /v1/channels/webhook/pool/{pool_id}. "
-                        "skill_id só é endereço enquanto UM pool o declara.",
-                        event.skill_id, len(matched),
-                        ",".join(p.pool_id for p in matched), event.session_id,
-                    )
-                    pools = []
-                elif matched:
-                    pools = matched
-                elif any(getattr(p, "webhook_skill_id", None) for p in pools):
-                    # Regime multi-pool determinístico: veio um skill_id mas NENHUM pool
-                    # webhook o declara → REJEITA (não misroteia para um pool alheio).
-                    # pools=[] cai no no_resource/queued abaixo. O fallback não-filtrado
-                    # fica só para o legado single-pool (nenhum pool declara webhook_skill_id).
-                    pools = []
+
+            # ── Fase E do ADR adr-webhook-endpoint-single-registry (2026-08-07) ──
+            #
+            # REMOVIDO: a resolução de webhook por casamento contra
+            # `pool.webhook_skill_id`. Ela era o FALLBACK — o caminho que respondia
+            # quando o evento chegava sem `pool_id`. Desde a Fase C o channel-gateway
+            # resolve pelo registro `ChannelEndpoint` e publica `pool_id` explícito;
+            # não resolvendo, ele recusa na porta (404/503) e o evento nem nasce.
+            #
+            # POR QUE ISTO NÃO É "SÓ APAGAR CÓDIGO MORTO". Enquanto este ramo
+            # existisse, um evento de webhook sem `pool_id` continuaria sendo roteado
+            # por um endereço que o ADR aposentou — ou seja, existiria um segundo
+            # resolvedor, que é exatamente o que a D1 proíbe. Deixá-lo "por
+            # segurança" manteria viva a ambiguidade do §2 (mesmo skill em N pools)
+            # e o envelhecimento do §D3 (o path continua dizendo `skill_x` depois de
+            # um promote). Um fallback que ninguém usa não é inofensivo: é uma
+            # segunda fonte esperando alguém tropeçar nela.
+            #
+            # CONSEQUÊNCIA DELIBERADA: evento de webhook sem `pool_id` cai no
+            # `_build_queued_result` abaixo, como qualquer contato sem pool
+            # compatível. Não há caminho especial — que é o ponto.
+            #
+            # `pool.webhook_skill_id` SOBREVIVE como campo, e não por inércia: ele é
+            # a fonte declarativa de qual identificador semear, e o guard
+            # `_validate_webhook_endpoints` do RegistrySyncer o cruza contra os
+            # `channel_endpoints` declarados. Deixou de ser ENDEREÇO (D5); continua
+            # sendo a declaração de que o pool tem um.
 
         if not pools:
             return self._build_queued_result(event, now)
