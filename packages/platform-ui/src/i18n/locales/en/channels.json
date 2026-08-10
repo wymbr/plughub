@@ -77,7 +77,9 @@
       "freshWarning":  "This is the only time this token is shown. It is not stored and cannot be recovered — if you lose it, you must rotate, which invalidates this one.",
       "copy":          "Copy",
       "copied":        "Copied",
-      "dismiss":       "I've saved it"
+      "dismiss":       "I've saved it",
+      "lockNotice":    "The other endpoint actions stay locked until you confirm — so this token can't be mistaken for another row's.",
+      "lockHint":      "Save the token for \"{{identifier}}\" and confirm first — it is shown only once."
     },
     "origin": {
       "external":     "registered",
@@ -101,6 +103,9 @@
     "pool":                  "Pool",
     "selectPool":            "— select pool —",
     "displayNamePlaceholder":"e.g. Technical Support",
+    "authRequired":          "Require a token on every trigger",
+    "authRequiredOnHint":    "The token is shown once, right after creating — it is never stored in clear and cannot be recovered, only rotated. Copy it before closing.",
+    "authRequiredOffHint":   "Anonymous endpoint: anyone who can reach the gateway will be able to trigger it. You can generate a token later from the list.",
     "newValueOptional":      "New value (optional)",
     "firstEndpoint":         "First endpoint",
     "firstEndpointOptional": "— optional, can be added later",

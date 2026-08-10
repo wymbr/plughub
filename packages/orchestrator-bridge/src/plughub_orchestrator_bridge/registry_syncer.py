@@ -93,6 +93,36 @@ _SUSPENDING_STEP_TYPES = frozenset({"delegate", "suspend", "collect"})
 logger = logging.getLogger("plughub.registry-syncer")
 
 
+def _runs_as_workflow(entry: dict) -> bool:
+    """
+    A entrada de hook roda como WORKFLOW destacado (fora da conferência) ou como
+    especialista DENTRO dela?
+
+    ⚠️ **Espelho de `_is_workflow_dispatch` em `main.py:fire_pool_hooks`.** Os dois têm
+    de concordar: divergir faz o guard acima reprovar configuração que o bridge executa
+    sem problema — ou, pior, calar sobre uma que trava de verdade.
+
+        workflow ⇔ dispatch == "detached"  OU  (side == "agent" E dispatch == "inline")
+
+    Só resta **`side=customer` + `inline`** dentro da conferência: o NPS, que precisa do
+    WS vivo do cliente. É o único caso em que a premissa do guard — *"o bridge fecha o
+    contato antes de o I/O renderizar"* — se aplica, e portanto o único a checar.
+
+    ─── Por que olhar só `dispatch` NÃO basta ───────────────────────────────────
+    Foi o erro da primeira tentativa deste conserto (2026-08-10): isentar apenas
+    `detached` deixou o ERROR de pé, porque o wrap-up do demo é `dispatch: inline`. No
+    **wrap-up unificado** (Phase 0+1+3), `inline` não quer dizer "roda na conferência" —
+    quer dizer "o Console AUTO-REIVINDICA o item", sobre a MESMA máquina destacada.
+    `dispatch` governa a ENTREGA; é o `side` que decide se há conferência.
+
+    Defaults idênticos aos do bridge (`side=agent`, `dispatch=inline`): entrada antiga
+    sem nenhum dos dois campos é `agent`+`inline` ⇒ workflow.
+    """
+    side     = (entry.get("side", "agent") or "agent")
+    dispatch = (entry.get("dispatch", "inline") or "inline")
+    return dispatch == "detached" or (side == "agent" and dispatch == "inline")
+
+
 def _contained_in(subset: object, superset: object) -> bool:
     """
     Todo campo de `subset` existe e é igual em `superset`? (chaves EXTRA no superset são OK)
@@ -341,6 +371,25 @@ class RegistrySyncer:
         I/O renders. Logs a loud config ERROR naming the offending wiring. Read-only
         and fail-open (does not block startup, consistent with the syncer's policy;
         the cross-reference is the correct signal, not the skill's own profile).
+
+        ⚠️ SÓ ENTRADA QUE FICA NA CONFERÊNCIA É CHECADA (corrigido 2026-08-10). Este
+        guard é anterior ao arco de detach e cruzava apenas
+        `hook → pool → skill → steps`, sem olhar como a entrada é DESPACHADA. Sua
+        premissa — *"o bridge fecha o contato antes de o I/O renderizar"* — só vale para
+        o hook que roda como especialista dentro da conferência; o que vira workflow
+        fire-and-forget sai da janela segurada e pode suspender à vontade. A condição
+        está em `_runs_as_workflow`, espelho de `_is_workflow_dispatch` (main.py), e o
+        resultado prático é que **só `side=customer` + `inline` (o NPS) é checado**.
+
+        Sem isso, o guard logava ERROR a cada boot sobre
+        `retencao_humano.on_human_end → wrapup_detached_ia`, configuração correta e
+        validada ponta a ponta. *Um portão que reprova o que funciona ensina a ignorar o
+        vermelho* — mesmo critério que rebaixou a validação de canal a aviso na D8.
+
+        Typo em `dispatch` (ex.: `detatched`) cai no default `inline`; com `side=agent`
+        isso ainda é workflow e fica isento — igual ao bridge, que aplica o mesmo
+        default. Guard e executor concordarem importa mais aqui do que pegar o typo:
+        divergir reintroduziria o falso positivo que este conserto remove.
         """
         pools = cfg.get("pools", []) or []
 
@@ -356,6 +405,13 @@ class RegistrySyncer:
 
         skill_steps = self._load_skill_steps()
 
+        # Testemunha da isenção. Sem ela, um dia em que TODA entrada de teardown vire
+        # `detached` deixaria este guard sem nada para checar — e "0 violações" sobre
+        # 0 entradas checadas é o mesmo verde-sem-amostra que o F4c do probe de webhook
+        # já produziu uma vez. Aqui não reprova; apenas se declara em vez de calar.
+        checked_detached = 0
+        checked_inline   = 0
+
         for p in pools:
             hooking_pool = p.get("pool_id", "?")
             hooks = p.get("hooks") or {}
@@ -366,12 +422,19 @@ class RegistrySyncer:
                     target_pool = entry.get("pool") if isinstance(entry, dict) else None
                     if not target_pool:
                         continue
+                    # Espelha `_is_workflow_dispatch` de `fire_pool_hooks` (main.py).
+                    # Entrada que roda como WORKFLOW sai da conferência e pode suspender
+                    # à vontade — a premissa do guard não se aplica a ela.
+                    if isinstance(entry, dict) and _runs_as_workflow(entry):
+                        checked_detached += 1
+                        continue
                     target_skill = pool_skill.get(str(target_pool))
                     if not target_skill:
                         continue  # target pool not declared in this YAML → skip (lenient)
                     steps = skill_steps.get(target_skill)
                     if not isinstance(steps, list):
                         continue  # skill flow unavailable (YAML fallback / no id) → skip
+                    checked_inline += 1
                     bad = [
                         (s.get("id", "?"), s.get("type"))
                         for s in steps
@@ -388,6 +451,18 @@ class RegistrySyncer:
                             "See docs/product/dialog-primitive-and-runner-design.md.",
                             hooking_pool, hook_key, target_pool, target_skill, detail,
                         )
+
+        if checked_inline == 0:
+            logger.info(
+                "  teardown-hook guard: NÃO CHECOU nenhuma entrada inline "
+                "(%d detached isenta(s)). Ausência de violação aqui é ausência de "
+                "amostra, não aprovação.", checked_detached,
+            )
+        else:
+            logger.debug(
+                "  teardown-hook guard: %d entrada(s) inline checada(s), %d detached isenta(s)",
+                checked_inline, checked_detached,
+            )
 
     # ── Deploy-slot sync (Fase 3c) ──────────────────────────────────────────────
 
@@ -875,6 +950,31 @@ class RegistrySyncer:
                 "active":       ep.get("active", True),
                 "origin":       ep.get("origin", "external"),
             }
+            # ── Fatia 4 (ADR §7.10) — webhook `external` exige decisão EXPLÍCITA ──
+            #
+            # Repassado SÓ quando declarado: omitir aqui é o que faz o 422 do route
+            # acontecer, e o 422 é o ponto. Se este syncer inventasse um default, o
+            # portão que existe para impedir "endpoint externo nasce anônimo por
+            # esquecimento" seria contornado justamente pelo caminho automático.
+            #
+            # ⚠️ E ele NUNCA pode declarar `true`: este chamador **descarta o corpo da
+            # resposta**, onde o token em claro vive uma única vez. Um `true` aqui
+            # criaria endpoint exigindo credencial que ninguém recebeu — 401 permanente,
+            # e só em INSTALAÇÃO LIMPA (com a linha já semeada o POST leva 409 e nada
+            # acontece), que é a classe de defeito que dorme até o dia do `--wipe`.
+            # Endpoint externo que precise de token nasce pela UI, que mostra o segredo.
+            if "auth_required" in ep:
+                if ep.get("auth_required"):
+                    logger.error(
+                        "  channel_endpoint %s: auth_required=true no YAML é INVÁLIDO e foi "
+                        "REBAIXADO para false — este syncer descarta o corpo do 201, onde o "
+                        "token em claro vive uma única vez, então o endpoint nasceria exigindo "
+                        "credencial que ninguém recebeu (401 permanente, só em instalação "
+                        "limpa). Declare false aqui e gere o token pela UI, que mostra o "
+                        "segredo. Ver ADR §7.10.", cid,
+                    )
+                body["auth_required"] = False
+
             try:
                 async with http.post(url, headers=headers, json=body,
                                      timeout=aiohttp.ClientTimeout(total=15)) as resp:

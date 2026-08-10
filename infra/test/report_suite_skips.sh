@@ -174,7 +174,10 @@ if [ "$TOTAL_SKIP" -gt 0 ]; then
   echo "     $DC exec -T <pacote> sh -lc 'cd /app/packages/<pacote> && python -m pytest -q -rs'"
   echo "   Se o motivo citar um serviço INDISPONÍVEL que está no ar, é a causa de"
   echo "   2026-07-30/08-02: o teste lê uma variável que o serviço não define"
-  echo "   (`REDIS_URL` × `PLUGHUB_REDIS_URL`). Correção = dual-read + guarda no pacote."
+  # Crase ESCAPADA (\`) — sem escapar, o bash faz substituição de comando e tenta
+  # executar REDIS_URL/PLUGHUB_REDIS_URL, imprimindo "command not found" no meio do
+  # relatório e apagando os dois nomes justamente da frase que os compara.
+  echo "   (\`REDIS_URL\` × \`PLUGHUB_REDIS_URL\`). Correção = dual-read + guarda no pacote."
 else
   echo "   nenhum skip nos pacotes medidos."
 fi

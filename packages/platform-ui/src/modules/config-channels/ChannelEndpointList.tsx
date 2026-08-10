@@ -37,6 +37,25 @@ import type {
 const originOf = (ep: ChannelEndpoint): ChannelEndpointOrigin => ep.origin ?? 'external'
 const isReadOnly = (ep: ChannelEndpoint): boolean => originOf(ep) !== 'external'
 
+/**
+ * Ordem de exibição: `external` primeiro, depois por identificador.
+ *
+ * A API devolve ordenado por identificador, e isso escondia a linha recém-criada:
+ * um endpoint novo (`xxxx-callback`) cai depois dos dez `skill_*` internos, ou seja,
+ * fora da área visível — enquanto o banner do token DELE está no topo da tela. O
+ * operador acaba de criar algo, é avisado sobre o segredo e não vê a linha.
+ *
+ * Agrupar por procedência conserta isso sem inventar destaque temporário, e alinha a
+ * ordem ao que a tela oferece: as linhas com ações (`external`) ficam juntas em cima,
+ * as read-only (`internal`, que nascem do YAML e não se editam) descem. Dentro de cada
+ * grupo, a ordem alfabética da API é preservada — previsível para quem procura um
+ * endereço específico.
+ */
+const byOriginThenIdentifier = (a: ChannelEndpoint, b: ChannelEndpoint): number => {
+  const rank = (ep: ChannelEndpoint) => (originOf(ep) === 'external' ? 0 : 1)
+  return rank(a) - rank(b) || a.identifier.localeCompare(b.identifier)
+}
+
 const ORIGIN_BADGE: Record<ChannelEndpointOrigin, string> = {
   external:     'bg-surface-alt text-muted',
   internal:     'bg-secondary/10 text-secondary',
@@ -61,13 +80,24 @@ interface FormState {
   pool_id:      string
   display_name: string
   active:       boolean
+  /**
+   * Fatia 4 (ADR §7.10). Só existe para `channel === 'webhook'` — é o único canal em
+   * que o channel-gateway consulta a flag; nos demais o servidor RECUSA (422), porque
+   * uma linha que afirma proteção sem ninguém verificar é pior que anônima declarada.
+   *
+   * Nasce `true`: endpoint externo novo **nasce protegido**, e ficar anônimo passa a
+   * exigir desmarcar de propósito. O opt-in anterior (nasce anônimo, o operador lembra
+   * de gerar o token depois) é a proteção que ninguém liga.
+   */
+  auth_required: boolean
 }
 
 const emptyForm = (): FormState => ({
-  identifier:   '',
-  pool_id:      '',
-  display_name: '',
-  active:       true,
+  identifier:    '',
+  pool_id:       '',
+  display_name:  '',
+  active:        true,
+  auth_required: true,
 })
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -127,10 +157,14 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
   function openEdit(ep: ChannelEndpoint) {
     setForm({
-      identifier:   ep.identifier,
-      pool_id:      ep.pool_id,
-      display_name: ep.display_name,
-      active:       ep.active,
+      identifier:    ep.identifier,
+      pool_id:       ep.pool_id,
+      display_name:  ep.display_name,
+      active:        ep.active,
+      // Só para satisfazer o tipo: o PUT não envia este campo. Ligar/desligar auth
+      // numa linha existente é pelos botões de token (gerar/rotacionar/revogar), que
+      // são os únicos caminhos que entregam ou destroem o segredo.
+      auth_required: ep.auth_required ?? false,
     })
     setFormErr(null)
     setFormMode(ep.id)
@@ -150,7 +184,23 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
     setSaving(true); setFormErr(null)
     try {
       if (formMode === 'new') {
-        await createChannelEndpoint({ ...form, channel }, tenantId)
+        // `auth_required` viaja SÓ em webhook: nos demais canais o servidor recusa a
+        // flag (422), e mandá-la como `false` seria ruído que sugere que ali existe
+        // uma decisão a tomar. Em webhook ela é OBRIGATÓRIA — o route não tem default,
+        // porque não distingue quem consegue receber o token (esta tela) de quem não
+        // consegue (o RegistrySyncer, que descarta o corpo). Ver ADR §7.10.
+        const { auth_required, ...rest } = form
+        const created = await createChannelEndpoint(
+          channel === 'webhook' ? { ...rest, channel, auth_required } : { ...rest, channel },
+          tenantId,
+        )
+        // A janela ÚNICA do segredo. Sem isto, marcar a caixa criaria um endpoint
+        // protegido cujo token o operador nunca veria — o mesmo defeito que o default
+        // ON no servidor causaria, só que na tela. O banner não some sozinho.
+        if (created.token) {
+          setFreshToken({ identifier: rest.identifier.trim(), token: created.token })
+          setCopied(false)
+        }
       } else if (formMode) {
         await updateChannelEndpoint(formMode, {
           pool_id:      form.pool_id,
@@ -240,6 +290,24 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
 
   const identifierHint = t(`identifierHints.${channel}`, t('form.identifierHintFallback'))
 
+  // ── Trava enquanto há token não reconhecido ─────────────────────────────────
+  //
+  // O banner NÃO some sozinho (é o único instante em que o segredo existe), e isso
+  // criava um defeito de pareamento: com o banner no topo e um form de OUTRA linha
+  // aberto embaixo, o operador podia copiar o token de `demo-callback` achando que
+  // era do `crm-callback` que está editando — e depurar depois um 401 cuja causa
+  // está a duas linhas de distância na tela. O banner nomeia o identificador, então
+  // não mente; mas "não mente" não basta quando a leitura errada é a mais natural.
+  //
+  // POR QUE TRAVAR, e não fechar o banner ao abrir outro form: fechar destruiria o
+  // segredo sem o operador reconhecer, que é exatamente o que este desenho recusa.
+  // A trava torna o pareamento errado IMPOSSÍVEL em vez de improvável, e custa os
+  // poucos segundos entre copiar e clicar em "já guardei".
+  const tokenPending = freshToken !== null
+  const lockHint = tokenPending
+    ? t('endpoint.token.lockHint', { identifier: freshToken!.identifier })
+    : undefined
+
   return (
     <div className="space-y-4">
 
@@ -250,7 +318,8 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
         </div>
         <button
           onClick={openNew}
-          disabled={formMode !== null}
+          disabled={formMode !== null || tokenPending}
+          title={lockHint}
           className="px-3 py-1.5 rounded text-xs font-semibold bg-primary text-white hover:bg-primary-dark disabled:opacity-40 transition-colors"
         >
           {t('endpoint.add')}
@@ -280,9 +349,15 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
               {copied ? t('endpoint.token.copied') : t('endpoint.token.copy')}
             </button>
           </div>
+          {/* A razão da trava fica VISÍVEL aqui, não só no `title` dos botões: um
+              botão desabilitado sem explicação à vista lê como falta de permissão —
+              é a mesma crítica que fez a coluna de ações da Fase D escrever
+              "declarado" em vez de exibir um botão apagado. E o lugar certo para a
+              explicação é onde o olho já está: dentro do banner que causou a trava. */}
+          <p className="text-xs text-warning-text">{t('endpoint.token.lockNotice')}</p>
           <button
             onClick={() => { setFreshToken(null); setCopied(false) }}
-            className="text-xs text-muted hover:text-dark"
+            className="text-xs font-semibold text-warning-text underline hover:text-dark"
           >
             {t('endpoint.token.dismiss')}
           </button>
@@ -298,6 +373,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
           channel={channel}
           placeholder={IDENTIFIER_PLACEHOLDER[channel]}
           identifierReadonly={false}
+          isNew={true}
           saving={saving}
           error={formErr}
           onSave={handleSave}
@@ -322,7 +398,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
             </tr>
           </thead>
           <tbody>
-            {endpoints.map(ep => (
+            {[...endpoints].sort(byOriginThenIdentifier).map(ep => (
               <React.Fragment key={ep.id}>
                 <tr className="border-b border-border hover:bg-surface-muted">
                   <td className="py-2.5 pr-4 font-mono text-xs text-dark">{ep.identifier}</td>
@@ -391,9 +467,9 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                             por que a linha não se edita. */}
                         <button
                           onClick={() => handleRotateToken(ep)}
-                          disabled={formMode !== null || tokenBusy === ep.id}
+                          disabled={formMode !== null || tokenBusy === ep.id || tokenPending}
                           className="text-xs text-secondary hover:text-primary disabled:opacity-40"
-                          title={t('endpoint.token.rotateHint')}
+                          title={lockHint ?? t('endpoint.token.rotateHint')}
                         >
                           {tokenBusy === ep.id
                             ? t('actions.saving')
@@ -404,23 +480,25 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                         {ep.auth_required && (
                           <button
                             onClick={() => handleRevokeToken(ep)}
-                            disabled={formMode !== null || tokenBusy === ep.id}
+                            disabled={formMode !== null || tokenBusy === ep.id || tokenPending}
                             className="text-xs text-warning-text hover:text-red-text disabled:opacity-40"
-                            title={t('endpoint.token.revokeHint')}
+                            title={lockHint ?? t('endpoint.token.revokeHint')}
                           >
                             {t('endpoint.token.revoke')}
                           </button>
                         )}
                         <button
                           onClick={() => openEdit(ep)}
-                          disabled={formMode !== null}
+                          disabled={formMode !== null || tokenPending}
+                          title={lockHint}
                           className="text-xs text-secondary hover:text-primary disabled:opacity-40"
                         >
                           {t('actions.edit')}
                         </button>
                         <button
                           onClick={() => handleDelete(ep.id)}
-                          disabled={formMode !== null}
+                          disabled={formMode !== null || tokenPending}
+                          title={lockHint}
                           className="text-xs text-red hover:text-red-text disabled:opacity-40"
                         >
                           {t('actions.delete')}
@@ -441,6 +519,7 @@ export const ChannelEndpointList: React.FC<Props> = ({ channel }) => {
                         channel={channel}
                         placeholder={IDENTIFIER_PLACEHOLDER[channel]}
                         identifierReadonly={true}
+                        isNew={false}
                         saving={saving}
                         error={formErr}
                         onSave={handleSave}
@@ -505,6 +584,13 @@ interface FormProps {
   channel:            ChannelEndpointChannel
   placeholder:        string
   identifierReadonly: boolean
+  /**
+   * Prop própria em vez de `!identifierReadonly`: hoje as duas coincidem, mas são
+   * fatos diferentes (o identificador é imutável após criar; a decisão de auth só
+   * existe na criação). Derivar uma da outra faz a próxima mudança em uma quebrar a
+   * outra em silêncio.
+   */
+  isNew:              boolean
   saving:             boolean
   error:              string | null
   onSave:             () => void
@@ -512,7 +598,7 @@ interface FormProps {
 }
 
 function EndpointForm({
-  form, setForm, pools, placeholder, identifierReadonly,
+  form, setForm, pools, channel, placeholder, identifierReadonly, isNew,
   saving, error, onSave, onCancel,
 }: FormProps) {
   const { t } = useTranslation('channels')
@@ -564,6 +650,33 @@ function EndpointForm({
           </label>
         </div>
       </div>
+
+      {/*
+        Decisão de autenticação — só em webhook (é o único canal em que o gateway
+        consulta a flag) e só na CRIAÇÃO (depois, ligar/desligar é pelos botões de
+        token, que são os caminhos que entregam ou destroem o segredo).
+
+        Nasce MARCADA: endpoint externo novo nasce protegido, e ficar anônimo exige
+        desmarcar de propósito. O aviso embaixo muda com o estado porque as duas
+        escolhas têm consequências opostas e nenhuma é óbvia: marcada, o token aparece
+        uma única vez e não é recuperável; desmarcada, qualquer um que alcance o
+        gateway dispara. Ver ADR §7.10.
+      */}
+      {isNew && channel === 'webhook' && (
+        <div className="border-t border-border pt-3">
+          <label className="flex items-center gap-2 text-xs cursor-pointer font-medium text-dark">
+            <input
+              type="checkbox"
+              checked={form.auth_required}
+              onChange={e => setForm(p => ({ ...p, auth_required: e.target.checked }))}
+            />
+            {t('form.authRequired')}
+          </label>
+          <p className={`text-xs mt-1 ${form.auth_required ? 'text-muted' : 'text-warning-text'}`}>
+            {form.auth_required ? t('form.authRequiredOnHint') : t('form.authRequiredOffHint')}
+          </p>
+        </div>
+      )}
 
       {error && <p className="text-xs text-red-text">{error}</p>}
 

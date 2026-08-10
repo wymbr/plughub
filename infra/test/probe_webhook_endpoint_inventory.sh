@@ -251,17 +251,69 @@ echo
 # **NÃO REPROVA de propósito.** Um endpoint anônimo pode ser uma escolha legítima
 # (ambiente fechado, endereço só alcançável de dentro). Reprovar aqui obrigaria a
 # desligar o gate, e gate desligado não mede nada. O que ele não pode é ficar calado.
+#
+# ─── RECLASSIFICAÇÃO 2026-08-10 (fatia 3 do arco de auth) ─────────────────────
+# A v1 contava um número só — `ANÔNIMOS: 10 de 11` — e a lista dos dez era lida
+# como ORDEM DE SERVIÇO ("plumbar credencial nos chamadores internos e ligar").
+# O inventário estático dos discadores refutou a premissa: dos dez `internal`,
+# **nove não têm chamador nenhum** na porta por identificador; os pools deles são
+# disparados por `/v1/channels/webhook/pool/{id}`, que não passa pelo registro e
+# **não tem onde pendurar credencial** (ADR §7.6.1). Daí o argumento que decidiu:
+#
+#   · `/v1/*` exposto na borda ⇒ a porta por POOL também está ⇒ todo pool webhook
+#     é disparável anonimamente, INDEPENDENTE de `auth_required`. Auth aqui é teatro.
+#   · `/v1/*` não exposto      ⇒ os internos são inalcançáveis de fora ⇒ auth aqui
+#     é redundante.
+#
+# Nos dois ramos `auth_required` em `origin=internal` compra zero — não por risco
+# baixo, mas porque a porta por pool já força a TOPOLOGIA a ser a resposta. Logo os
+# internos deixam de ser pendência e viram **decisão declarada**, e o número que
+# ainda é ordem de serviço é só o dos `external`.
+#
+# ⚠️ O QUE ESTE BLOCO NÃO MEDE, E DIZ QUE NÃO MEDE: se a borda de fato restringe
+# `/v1/*`. Isso é infra, não está no store, e nenhuma leitura daqui alcança. Chamar
+# de "protegido" seria comprar confiança sem dar nada — o mesmo motivo pelo qual o
+# gate da Fase E declara que não exerceu o ramo 503 sem `GATE_TEST_UNAVAILABLE=1`.
+# **Esta decisão depende da porta por pool seguir anônima por construção**; registrar
+# pool no registro (o que a §7.6.1 recusou) a reabre.
 echo "── F6 · autenticação dos endpoints registrados ───────────────────────────"
 ANON=$(jq -r '[.[] | select((.auth_required // false) | not)] | length' <<<"${EP:-[]}")
 ANON=$(num "${ANON:-0}")
+ANON_INT=$(jq -r '[.[] | select((.auth_required // false) | not)
+                       | select((.origin // "external") == "internal")] | length' <<<"${EP:-[]}")
+ANON_INT=$(num "${ANON_INT:-0}")
+ANON_EXT=$(( ANON - ANON_INT ))
 AUTHED=$(( F2 - ANON ))
-echo "   com token: ${AUTHED}    ANÔNIMOS: ${ANON}   de ${F2}"
-if [ "${ANON:-0}" -gt 0 ]; then
-  jq -r '.[] | select((.auth_required // false) | not) | "   ⚠️  \(.identifier)\t(origin=\(.origin // "external"))"' <<<"${EP:-[]}"
-  echo "      Acionáveis por qualquer um que alcance o gateway. Para exigir credencial:"
-  echo "      POST /v1/channel-endpoints/{id}/token  (devolve o token UMA vez)."
-  echo "      Os endereços por pool (F5) NÃO passam pelo registro e seguem anônimos"
-  echo "      por construção — ver ADR §7.6.1."
+echo "   com token: ${AUTHED}   ·   anônimos: ${ANON} de ${F2}"
+echo "      ├─ PENDENTES (origin=external): ${ANON_EXT}"
+echo "      └─ por DECISÃO (origin=internal, proteção de borda): ${ANON_INT}"
+if [ "${ANON_EXT:-0}" -gt 0 ]; then
+  echo
+  echo "   ⚠️  PENDENTES — acionáveis por qualquer um que alcance o gateway, inclusive"
+  # ⚠️ SEM CRASE aqui. A v1 desta linha escrevia (que serve `external`) e o bash tratou
+  # a crase como SUBSTITUIÇÃO DE COMANDO: tentou executar `external`, imprimiu
+  # "command not found" no meio do relatório e deixou o parêntese vazio. Não alterou
+  # veredicto nem exit code — degradou em silêncio, dentro de um instrumento cujo
+  # propósito é justamente não deixar nada degradar calado. Markdown em string de
+  # shell usa aspas simples ou nada.
+  echo "       pela porta externa /channel/webhook/{slug} (que serve origin=external):"
+  jq -r '.[] | select((.auth_required // false) | not)
+             | select((.origin // "external") != "internal")
+             | "        \(.identifier)\t→ \(.pool_id)"' <<<"${EP:-[]}"
+  echo "       Conserto: POST /v1/channel-endpoints/{id}/token (devolve o token UMA vez)"
+  echo "       ou o botão em /config/channels › Webhook."
+fi
+if [ "${ANON_INT:-0}" -gt 0 ]; then
+  echo
+  echo "   ℹ️  POR DECISÃO — NÃO são pendência e NÃO devem receber token: ligar"
+  echo "       auth_required aqui silencia disparo interno e não fecha nada, porque"
+  echo "       os mesmos pools seguem acionáveis por /v1/channels/webhook/pool/{id},"
+  echo "       que não passa pelo registro. Só a topologia protege este prefixo."
+  jq -r '.[] | select((.auth_required // false) | not)
+             | select((.origin // "external") == "internal")
+             | "        \(.identifier)"' <<<"${EP:-[]}"
+  echo "       ⚠️  NÃO VERIFICADO AQUI: que a borda restrinja /v1/*. Este probe lê o"
+  echo "           store; a exposição é infra. Ausência de vermelho ≠ prefixo fechado."
 fi
 echo
 
@@ -271,7 +323,7 @@ echo "══ veredicto ═══════════════════
 echo "superfícies acionáveis: ${TOTAL}   (F1=${F1} interno · F2=${F2} registrado · F3=${F3:-?} token)"
 echo "sem registro: ${UNCOVERED}    pool inexistente: ${INVALID}    avisos: ${ADVISORY}"
 echo "procedência: ${BADORIGIN} errada(s) de ${CHECKED} checada(s)$([ "$CHECKED" -eq 0 ] && echo '  ← sem amostra, não é aprovação')"
-echo "autenticação: ${ANON} anônimo(s) de ${F2} registrado(s)   (informativo — não reprova)"
+echo "autenticação: ${ANON_EXT} pendente(s) · ${ANON_INT} por decisão (borda, NÃO verificada aqui) de ${F2}   (informativo — não reprova)"
 echo
 if [ "$UNCOVERED" -eq 0 ] && [ "$INVALID" -eq 0 ] && [ "$BADORIGIN" -eq 0 ] && [ "${F3:-0}" -eq 0 ]; then
   echo "✅ inventário COMPLETO — nada a semear (B) e nada acionável fora da tela (D)."

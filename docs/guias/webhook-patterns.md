@@ -1,10 +1,63 @@
 # Guia: Padrões de Webhook
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-08-10 (§ Exposição na borda) · Estado: Arc 16 + arco de auth de endpoint
 
 > Audience: desenvolvedores e integradores que conectam sistemas externos ao PlugHub
 
+> ⚠️ **O "Padrão 1" abaixo está OBSOLETO.** Ele descreve `POST /v1/workflow/webhook/{id}` +
+> `workflow.webhooks`, o caminho por token que a **Fase F** do ADR
+> [`adr-webhook-endpoint-single-registry`](../adr/adr-webhook-endpoint-single-registry.md) §7.8 decidiu
+> **aposentar** (a remoção física é arco próprio; ver `TODO.md`). O trigger canônico hoje é o
+> `ChannelEndpoint` — `POST /channel/webhook/{identifier}` para sistemas externos —, com autenticação
+> opcional por endpoint (mesmo header `X-Webhook-Token`, outro registro). O Padrão 2 (resume) segue válido.
+
 Existem dois padrões distintos de uso de webhook na plataforma. Cada um serve a um caso de uso diferente e usa endpoints diferentes. Entender qual aplicar evita confusão de design.
+
+---
+
+## ⚠️ Exposição na borda — requisito de deploy, não recomendação
+
+> Escrito em 2026-08-10, ao fechar o arco de autenticação de endpoint. **Até aqui isto era suposição:**
+> a segurança dos endereços internos dependia de o prefixo `/v1/*` não ser público, e isso não estava
+> escrito em lugar nenhum. Um ambiente que o publicasse perderia a proteção **sem nada ficar vermelho** —
+> nenhum teste alcança a topologia. Registrar é a única defesa disponível.
+
+O PlugHub expõe webhook em **dois prefixos com públicos diferentes**, e a diferença é de deploy:
+
+| Prefixo | Público | Deve estar na borda? |
+|---|---|---|
+| `/channel/webhook/{identifier}` | sistemas de terceiros do tenant | **Sim** — é a porta externa. Serve apenas endpoints `origin=external` (ADR §7.6.3). |
+| `/v1/*` (inclui `/v1/channels/webhook/...`) | componentes internos da plataforma | **Não.** Restrito à rede interna. |
+
+### Por que `/v1/*` não pode ser público
+
+Dentro dele vivem **duas** portas de disparo, e a segunda não tem como ser protegida por credencial:
+
+1. `POST /v1/channels/webhook/{identifier}` — resolve pelo registro; **pode** exigir token por endpoint.
+2. `POST /v1/channels/webhook/pool/{pool_id}` — **anônima por construção**. Não passa pelo registro
+   (ADR §7.6.1: uma linha `identifier = pool_id → pool_id` é a função identidade do pool, um inventário
+   incapaz de discordar da fonte), logo **não tem onde pendurar credencial**.
+
+Todo pool webhook é acionável pela porta (2). Publicar `/v1/*` torna disparável, por qualquer um,
+**todo pool webhook do tenant** — inclusive os que promovem deploy (`deploy_promote_ia`) e os que
+contatam clientes (`outbound_*`). Nenhuma configuração de `auth_required` muda isso; é por isso que a
+fatia 3 do arco de auth foi **cancelada** em vez de implementada (§7.9).
+
+E o mesmo prefixo abriga RPC interno que nunca foi endpoint de tenant: `/v1/channels/webhook/delegate`,
+`…/collect`, `…/resume/{token}`, `…/identity/*`. O nome é infeliz (anotado no §8 do ADR), mas a
+consequência é concreta — publicar o prefixo publica isso junto.
+
+### O que verificar num ambiente
+
+- `/channel/webhook/*` → alcançável de fora. ✅ esperado.
+- `/v1/*` do channel-gateway (porta 8010) → **não** alcançável de fora.
+- Endpoint `external` que precise de proteção adicional → gere token pela UI
+  (`/config/channels` › Webhook). Endpoint `internal` **não recebe token**: o servidor recusa (422), e a
+  razão é a porta (2) acima.
+
+**Nenhum gate cobre isto.** `probe_webhook_endpoint_inventory.sh` § F6 lê o *store* e declara
+explicitamente que **não verificou** a borda — exposição é infra, e ausência de vermelho ali não é
+prefixo fechado.
 
 ---
 

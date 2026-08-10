@@ -251,15 +251,21 @@ export const listChannelEndpoints = async (
 export const createChannelEndpoint = async (
   data: CreateChannelEndpointInput,
   tenantId: string,
-): Promise<ChannelEndpoint> => {
+  // ⚠️ Com `auth_required: true` a resposta traz `token` EM CLARO — a única janela em
+  // que ele existe. Por isso o retorno é `EndpointTokenResult`, não `ChannelEndpoint`:
+  // um tipo que não menciona o token faz o chamador descartá-lo sem perceber, que é
+  // exatamente o defeito do RegistrySyncer (ADR §7.10) reproduzido no front.
+): Promise<EndpointTokenResult> => {
   const response = await fetch(`${getBaseUrl()}/v1/channel-endpoints`, {
     method: 'POST',
     headers: headers(tenantId),
     body: JSON.stringify(data),
   })
   if (!response.ok) {
-    const err = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(err.error ?? 'Failed to create channel endpoint')
+    // O 422 da §7.10 traz `detail` explicando o que declarar; sem ele a tela mostraria
+    // só "auth_required é obrigatório", que não diz qual valor nem por quê.
+    const err = await response.json().catch(() => ({})) as { error?: string; detail?: string }
+    throw new Error([err.error, err.detail].filter(Boolean).join(' — ') || 'Failed to create channel endpoint')
   }
   return response.json()
 }

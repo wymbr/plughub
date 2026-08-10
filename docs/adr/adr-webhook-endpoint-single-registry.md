@@ -1,7 +1,9 @@
 # ADR — Webhook: registro único de endpoint e identificador opaco
 
 **Status:** aceito — **Fases A–F ✅ (arco completo, 2026-08-07)**. A remoção física do legado e a
-autenticação de webhook saem como arcos próprios (§7.8.4).
+autenticação de webhook saem como arcos próprios (§7.8.4). O arco de auth ganhou uma seção aqui
+(**§7.9**, 2026-08-10) porque a sua fatia 3 se resolveu por um argumento sobre a topologia das DUAS
+portas — matéria deste ADR, não do arco filho.
 **Contexto imediato:** levantamento da I5 § "Lacuna 4b", que ao remover um botão sem alvo expôs
 três superfícies de webhook e um registro só.
 
@@ -577,6 +579,137 @@ tópico `workflow.events` (⚠️ o cenário e2e 18 depende do worker, e a evalu
 **Autenticação (item novo)** — token opcional por endpoint no `ChannelEndpoint`: segredo só em hash,
 `active`, log de entrega. O desenho já existe e funciona; o que muda é onde mora. Enquanto não existir,
 **todo endpoint webhook é anônimo** — fato a registrar em `TODO.md`, não a esconder.
+
+---
+
+## 7.9 Auth fatia 3 — de onde os chamadores internos tiram o segredo: **de lugar nenhum** *(decidido 2026-08-10)*
+
+A fatia 3 foi aberta como *"fazer os chamadores internos carregarem credencial, para que
+`auth_required` possa ser ligado nos dez endpoints internos"*. **O inventário estático dos discadores
+— mesmo método das Fases A e E — mostrou que a tarefa não deve ser feita.**
+
+### 7.9.1 O inventário
+
+Porta por identificador (`/v1/channels/webhook/{identifier}`), a única que tem onde pendurar credencial:
+
+| Chamador | Local | Endereço discado |
+|---|---|---|
+| `agente_portabilidade_intake_v1` → `workflow_trigger` | `skills/agente_portabilidade_intake_v1.yaml:484` | `skill_portabilidade_demo_v1` (literal) |
+| proxy `/v1/workflow/trigger` | `workflow-api/router.py:184` | `flow_id` dinâmico — **404 desde a Fase E** |
+| ↳ único produtor vivo do proxy | `platform-ui/modules/workflows/api/hooks.ts:115` | `flow_id` digitado |
+| `smoke_journey_root.sh:33` · os dois gates · `smoke_close_bugs_20260713.sh:57` | — | fixos de teste |
+
+Porta por pool (`/v1/channels/webhook/pool/{id}`), **anônima por construção** (§7.6.1): `workflow_trigger`
+quando há `pool_id` (`tools/workflow.ts:176` — `skill_survey_trigger_v1`, `skill_outbound_dispatch_v1`,
+`skill_outbound_survey_dispatch_v1`) · orchestrator-bridge `_fire_detached_hook`
+(`main.py:1294`) · scheduler-api `dispatcher.py:98` · ~10 smokes.
+
+**O achado: dos dez `origin=internal`, NOVE não têm chamador nenhum na porta por identificador.** Os pools
+deles são disparados pela porta por pool. Só `skill_portabilidade_demo_v1` é discado por identificador. O
+`_fire_detached_hook`, citado no enunciado da fatia, **não entra no escopo** — é porta por pool.
+
+*"Dez anônimos" foi lido como dez caminhos de disparo desprotegidos. São dez ENDEREÇOS e um DISCADOR* —
+a mesma confusão entre presença e conteúdo que a § Postura cataloga.
+
+### 7.9.2 O argumento que decide, e ele é estrutural
+
+- `/v1/*` exposto na borda ⇒ a porta por **pool** está exposta junto ⇒ todo pool webhook é disparável
+  anonimamente, **independente** de `auth_required`. Auth na porta por identificador é **teatro**.
+- `/v1/*` não exposto ⇒ os dez internos são inalcançáveis de fora ⇒ auth neles é **redundante**.
+
+Nos dois ramos, `auth_required` em `origin=internal` compra **zero** — não porque o risco seja baixo, mas
+porque a porta por pool, que não tem onde pendurar token, **já força a topologia a ser a resposta**. É a
+mesma conclusão que o §7.6.3 antecipou (*"a escolha depende da topologia, não do código"*), agora do lado
+de dentro.
+
+### 7.9.3 Por que não (a) token por endpoint nem (b) credencial de serviço
+
+| | |
+|---|---|
+| **(a) distribuir o token de cada endpoint** | `workflow_trigger` é genérico: não sabe em build-time qual endereço vai discar, logo teria de resolver o token por identificador em runtime. O mcp-server passaria a guardar **N** segredos em vez de 1 — pior que (b), e reintroduz a rotação coordenada que o enunciado já temia. |
+| **(b) credencial de serviço única** | Um segredo que diz *"sou da plataforma"* vale para **todo** endpoint, inclusive os `external` que o tenant protegeu com token próprio: vazou, discou tudo. Escopá-lo a `origin=internal` conserta a elevação — e aí ele é (c) com passos extras, porque continua sem fechar a porta por pool. |
+
+### 7.9.4 O que (c) exige para não ser mentira
+
+(c) tem o defeito clássico: é proteção que **não deixa evidência no código**, e *"está restrito na borda"*
+é afirmação que ninguém verifica. Sem contrapartida, o `F6` do probe nunca desceria de 10 e a lista de
+anônimos viraria ruído permanente — treinando a ignorar o número, que é o mesmo dano de um gate que não
+pode reprovar. Fecha com três itens, todos implementados junto com esta decisão:
+
+1. **`F6` reclassificado** — `internal` sai de *"anônimos pendentes"* e vira *"anônimo por DECISÃO"*, com
+   o bloco **declarando que não mediu** a restrição de borda (o probe lê o store; exposição é infra). O
+   número que resta como ordem de serviço é só o dos `external`.
+2. **Guard `INTERNAL_AUTH_REFUSAL`** — `POST /v1/channel-endpoints` com `auth_required=true` em linha
+   `internal` e `POST /v1/channel-endpoints/{id}/token` sobre linha `internal` passam a **422 nomeado**
+   (era só `console.warn`). A segunda metade é a que importa: a tela já não oferece o botão desde a Fase D,
+   mas **read-only da tela não é read-only da API** (§7.6.4) — e todo disparo deste arco foi por `curl`.
+3. **A decisão registra sua dependência** — ela vale *enquanto a porta por pool for anônima por
+   construção*. Dar endereço registrável ao pool (o que a §7.6.1 recusou) ou fechá-la reabre a pergunta.
+
+**Consequência para o TODO:** o item 3 (*"plumbing de credencial nos chamadores internos"*) é **cancelado**,
+não adiado. Nenhum chamador muda, o que satisfaz o invariante da fatia (*"um erro aqui não dá 401 num gate,
+silencia processo real de produção"*) por não haver o que errar. O trabalho de segurança que sobra é a
+**fatia 4** (default ON para `external` novo) e deixar o requisito de borda **escrito**, em vez de suposto.
+
+---
+
+## 7.10 Auth fatia 4 — endpoint `external` novo: **sem default, com decisão obrigatória** *(2026-08-10)*
+
+O item pedia *"default ON para endpoint `external` novo"*. O inventário dos **criadores** (mesmo método
+das fatias anteriores) mostrou que a formulação embutia uma premissa falsa: a de que existe **um** tipo de
+criador.
+
+### 7.10.1 Os criadores, e a assimetria entre eles
+
+| Quem cria | `POST /v1/channel-endpoints` de onde | Consegue receber o token? |
+|---|---|---|
+| Operador pela UI | `ChannelEndpointList.tsx` (aba Webhook é standalone; os outros dois forms de criação ficam ocultos nela) | ✅ o 201 traz o token em claro e a tela mostra o banner (fatia 2) |
+| `RegistrySyncer` | `registry_syncer.py:867`, a partir de `infra/registry/*.yaml` | ❌ lê só o código HTTP e **descarta o corpo** |
+
+Com default ON no route, uma **instalação limpa** faria o syncer criar `crm-callback` (external,
+declarado no YAML) já exigindo um token gerado e imediatamente perdido: **401 permanente, sem caminho de
+recuperação**. Hoje não morde porque o provisionamento é seed-if-absent e as linhas existem (409) — é o
+*"ambiente que só sobe porque já subiu antes"* da § Postura, com o defeito dormindo até o `--wipe`.
+
+### 7.10.2 A decisão
+
+**Não há default. `auth_required` ausente em `channel=webhook` + `origin=external` ⇒ 422 nomeado.**
+
+*"Este chamador consegue guardar um segredo?"* é informação que só existe **no chamador**. O route não a
+tem e não deve adivinhar: adivinhar ON quebra o provisionamento automático, adivinhar OFF é o opt-in que a
+fatia 1 já diagnosticou como proteção que ninguém liga. Exigir a declaração torna as **duas** falhas
+impossíveis de acontecer em silêncio. É o mesmo movimento do *"declarado, não derivado"* da Fase B (§7.1):
+quando a autoridade está fora, importe-a em vez de inferi-la.
+
+Onde cada criador declara:
+
+- **UI** — caixa *"Exigir token em todo disparo"*, **marcada por padrão** (é aqui que a intenção original
+  do "default ON" vive, e legitimamente: este criador recebe o segredo). Só aparece em webhook e só na
+  criação; depois, ligar/desligar é pelos botões de token, que são os caminhos que entregam ou destroem o
+  segredo. O texto de apoio **muda com o estado**, porque as duas escolhas têm consequências opostas e
+  nenhuma é óbvia.
+- **YAML** — `auth_required: false`, e **só `false` é válido ali**. O syncer rebaixa um `true` para
+  `false` com log ERROR em vez de obedecer: obedecer criaria o endpoint inalcançável que a §7.10.1
+  descreve. Endereço externo que precise de token nasce pela UI.
+
+### 7.10.3 Achado paralelo — a flag só é aplicada em webhook
+
+`_check_endpoint_auth` é chamado nas duas rotas de webhook e em nenhuma outra; webchat, WhatsApp, voz, SMS
+e e-mail resolvem por `resolve_pool`, que não consulta `auth_required` (cada um tem handshake próprio —
+JWT por tenant no webchat, assinatura no WhatsApp). Uma linha não-webhook com a flag ligada **afirmaria
+proteção que ninguém aplica**, e a tela a mostraria como protegida.
+
+**Decidido recusar (422)**, no create e no `POST /{id}/token`, pelo mesmo critério do §7.9: anônimo
+declarado é honesto; protegido-mentiroso convida a parar de procurar. Estender o enforcement aos demais
+canais é arco próprio, não uma linha aqui.
+
+### 7.10.4 Cobertura
+
+`gate_webhook_endpoint_auth.sh` ganhou **P11** (webhook external sem `auth_required` ⇒ 422) e **P12**
+(`auth_required` em canal não-webhook ⇒ 422). P11 é o que impede um default de ser reintroduzido em
+qualquer dos dois sentidos sem ficar vermelho. Os ids dos creates que *deveriam* falhar entram no `trap`:
+quando o guard está ausente a linha nasce, e é justamente aí — com a atenção no erro, não no ambiente —
+que o lixo passaria despercebido.
 
 ---
 

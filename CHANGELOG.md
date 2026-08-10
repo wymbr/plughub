@@ -2,6 +2,240 @@
 
 ---
 
+## Prontidão de provisionamento + dois falsos sinais (2026-08-10)
+
+Três itens pequenos, ligados por um tema: **sinal que falta, e sinal que grita errado.**
+
+### `wait_registry_converged.sh` — o sinal que não existia
+
+`rebuild-all.sh` termina em `up -d` e delega a convergência ao olho humano; o
+`orchestrator-bridge` **não tem healthcheck**, então `ps` não sabe dizer se o provisionamento acabou. Ele
+é o último a convergir (espera agent-registry + skill-flow-service healthy, depois skills → pools →
+channel_endpoints). O mesmo erro custou três sessões, sempre com número **plausível**: ADR §7.4 (`F2=1`
+lido antes do seed, valor idêntico ao pré-Fase-B), `up -d <serviço>` subindo só o subgrafo, e a bateria
+inteira em INCONCLUSIVO após o `--wipe` de hoje.
+
+**O critério é QUIESCÊNCIA, não contagem fixa** — duas amostras iguais e `> 0`. Contagem fixa faria do
+helper um teste do tenant demo, que envelhece no primeiro pool novo e falharia por timeout enganoso sobre
+uma stack sadia; e prontidão não é a mesma pergunta que inventário — se este script julgasse conteúdo,
+duplicaria o probe, e duas fontes para o mesmo veredicto divergem. O `> 0` é o que barra o caso
+degenerado: registro vazio também é estável.
+
+Resposta não-numérica (registro fora do ar) **não conta como amostra** — tratá-la como `0` faria duas
+indisponibilidades seguidas parecerem estabilidade. Três veredictos distintos no timeout: nunca
+respondeu · responde mas vazio (com ordem de suspeita) · não estabilizou. `EXPECT_WEBHOOK_POOLS` /
+`EXPECT_WEBHOOK_ENDPOINTS` viram asserção (exit 1) quando o chamador conhece os números; sem elas o
+script **declara que não julgou conteúdo** em vez de deixar o silêncio parecer aprovação.
+**Ainda não é chamado pelo `rebuild-all.sh`** — de propósito: é o caminho de instalação de todo mundo, e
+criar a ferramenta e mudar o instalador no mesmo movimento junta duas coisas que devem falhar separadas.
+
+### Guard de teardown-hook — o sinal que gritava errado
+
+`_validate_teardown_hooks` logava **ERROR a cada boot** sobre `retencao_humano.on_human_end →
+wrapup_detached_ia`, configuração correta e validada ponta a ponta. O guard é anterior ao arco de detach
+e cruzava só `hook → pool → skill → steps`, **sem olhar como a entrada é despachada**.
+
+**A primeira tentativa de conserto FALHOU, e o motivo é o registro que interessa.** Isentei
+`dispatch == "detached"`, apoiado no texto do `TODO.md` que descrevia o hook assim — sem ler o YAML. O
+YAML diz `dispatch: inline`, e o ERROR continuou de pé no boot seguinte. *Descrição de configuração não
+é configuração; a fonte é o arquivo.*
+
+A condição correta é o espelho de `_is_workflow_dispatch` (`main.py:1775`), agora em `_runs_as_workflow`:
+
+```
+workflow ⇔ dispatch == "detached"  OU  (side == "agent" E dispatch == "inline")
+```
+
+No **wrap-up unificado** (Phase 0+1+3), `inline` não significa "roda na conferência" — significa "o
+Console AUTO-REIVINDICA o item", sobre a MESMA máquina destacada. `dispatch` governa a ENTREGA; é o
+`side` que decide se há conferência. Sobra **só `side=customer` + `inline`** (o NPS, que precisa do WS
+vivo do cliente) como caso em que a premissa do guard vale — e portanto como único caso checado.
+*Um portão que reprova o que funciona ensina a ignorar o vermelho* — mesmo critério da D8.
+
+Entrou junto um **contador-testemunha**: zero violações sobre zero entradas de conferência se declara
+NÃO CHECOU em vez de passar por aprovação (é o defeito do F4c, evitado antes de acontecer).
+
+**Achado adjacente, medido e NÃO é bug:** `_entry_will_dispatch` (que dimensiona o barrier
+`hook_pending`) isenta apenas `detached`, então uma entrada `agent`+`inline` é contada no contador mas
+nunca arma `hook_conf` — o contador fica órfão. Não trava nada: o ramo `_detached_fired and not
+_inline_dispatched` (`main.py:2025`) fecha o contato na hora, e a chave expira no TTL de 4 h. Fica
+registrado porque o docstring de `_entry_will_dispatch` afirma *"reproduz os predicados de skip do loop
+abaixo"* e **deixou de reproduzir** quando a Phase 2 acrescentou o ramo `agent+inline` — hoje é inócuo,
+mas é uma cópia que se diz sincronizada e não está.
+
+### Lista de endpoints — a linha nova que sumia
+
+Ordem passou a ser `external` primeiro, depois identificador. A API ordena só por identificador, e um
+endpoint novo (`xxxx-callback`) caía depois dos dez `skill_*` internos, fora da área visível — enquanto o
+banner do token **dele** estava no topo. Agrupar por procedência conserta sem inventar destaque
+temporário e alinha a ordem ao que a tela oferece: linhas com ações em cima, read-only embaixo.
+
+⚠️ **Build:** `orchestrator-bridge` (guard) + `platform-ui` (ordem). O helper é script, sem build.
+
+---
+
+## Banner de token: trava as demais ações até o operador confirmar (2026-08-10)
+
+Achado em teste manual da fatia 4, e as duas metades do sintoma têm status diferentes.
+
+**Não sumir ao copiar é intencional** — copiar não é prova de ter guardado (o clipboard morre no próximo
+Ctrl+C), então o banner só fecha no *"Já guardei"*. **Sumir no refresh também** — o token vive só em
+memória, sem `localStorage`.
+
+**O defeito real é de PAREAMENTO, e não estava previsto:** com o banner fixo no topo e o form de OUTRA
+linha aberto embaixo, dava para copiar o token do `demo-callback` achando que era do `crm-callback` que
+se está editando — e depurar depois um 401 cuja causa está a duas linhas de distância na tela. O banner
+nomeia o identificador, então não mente; mas *"não mente"* não basta quando a leitura errada é a mais
+natural.
+
+**Conserto: travar `+ Add endpoint`, `Rotate token`, `Revoke`, `Edit` e `Delete` enquanto houver token
+não reconhecido.** Descartado fechar o banner ao abrir outro form — destruiria o segredo sem o operador
+reconhecer, que é exatamente o que o desenho da fatia 2 recusa. A trava torna o pareamento errado
+**impossível** em vez de improvável, e custa os poucos segundos entre copiar e confirmar.
+
+A razão fica **visível dentro do banner** (`lockNotice`), não só no `title` dos botões: botão
+desabilitado sem explicação à vista lê como falta de permissão — a mesma crítica que fez a coluna de
+ações da Fase D escrever *"declarado"* em vez de exibir um botão apagado. O `title` (`lockHint`) nomeia
+o identificador de quem prendeu a tela.
+
+⚠️ **Build:** `platform-ui` (sem volume mount). i18n en + pt-BR.
+
+---
+
+## Requisito de exposição na borda — ARCO DE AUTH DE WEBHOOK FECHADO (2026-08-10)
+
+Último item do arco, e é **doc, não código** — mas é o que sustenta a decisão da fatia 3. Até aqui a
+segurança dos dez endereços internos dependia de o prefixo `/v1/*` não ser público, e **isso não estava
+escrito em lugar nenhum**: suposição carregada de uma sessão para a outra, que um deploy poderia violar
+sem nada ficar vermelho.
+
+Registrado em **dois lugares, de propósito**: **invariante** em `CLAUDE.md` § What Never To Do — é o
+arquivo lido toda sessão, e prosa em guia não é requisito — e **detalhe** em
+`docs/guias/webhook-patterns.md` § "Exposição na borda" (tabela dos dois prefixos, o argumento completo,
+o que conferir num ambiente).
+
+**O argumento é a porta por pool.** Dentro de `/v1/*` vivem duas portas de disparo:
+`…/webhook/{identifier}`, que pode exigir token, e `…/webhook/pool/{pool_id}`, **anônima por
+construção** — não passa pelo registro (ADR §7.6.1), logo não tem onde pendurar credencial. Todo pool
+webhook é acionável por ela. Publicar o prefixo torna disparável por qualquer um **todo pool webhook do
+tenant**, inclusive `deploy_promote_ia` e os `outbound_*`, e **nenhum `auth_required` muda isso**. É por
+isso que a fatia 3 foi cancelada em vez de implementada. O mesmo prefixo ainda abriga RPC interno de nome
+infeliz (`…/delegate`, `…/collect`, `…/resume/{token}`, `…/identity/*`), que vai junto.
+
+⚠️ **Sem cobertura de teste, e isso está declarado.** Topologia não é alcançável de dentro: o F6 do probe
+lê o store e diz explicitamente que **não verificou** a borda. Fechar exigiria um probe externo (curl de
+fora da rede), que é trabalho de infra.
+
+**Achado colateral:** o § "Padrão 1" de `webhook-patterns.md` ensina como canônico justamente o caminho
+por token que a Fase F decidiu aposentar. Recebeu aviso de obsolescência no topo; a reescrita entrou como
+item da remoção física do legado, não como follow-up solto — um guia que ensina o caminho errado a
+integradores é dívida ativa, não documentação velha.
+
+**Arco de autenticação de endpoint webhook: FECHADO.** Fatias 1 ✅ · 2 ✅ · 3 ❌ (cancelada com motivo
+medido) · 4 ✅ · requisito de borda ✅. Aberto só o item 2b (regime de cache do `token_hash`), que espera
+número de volume.
+
+---
+
+## Autenticação de endpoint webhook — fatia 4: decisão obrigatória, não default (2026-08-10)
+
+O item pedia *"default ON para endpoint `external` novo"*. O inventário dos **criadores** mostrou que a
+formulação embutia uma premissa falsa — a de que existe **um** tipo de criador. Detalhe em
+[`docs/adr/adr-webhook-endpoint-single-registry.md`](docs/adr/adr-webhook-endpoint-single-registry.md) §7.10.
+
+**A assimetria:** o operador pela UI **recebe** o token (o corpo do 201 é a única janela em que ele existe
+em claro); o `RegistrySyncer` (`registry_syncer.py:867`) faz o mesmo POST a partir do YAML e **descarta o
+corpo**. Com default ON, uma instalação limpa criaria `crm-callback` — external, declarado no YAML — já
+exigindo um token gerado e imediatamente perdido: **401 permanente, sem recuperação**. Não morde hoje só
+porque seed-if-absent dá 409 nas linhas existentes; o defeito dormiria até o `--wipe`.
+
+**Decisão: sem default.** `auth_required` ausente em `channel=webhook` + `origin=external` ⇒ **422
+nomeado**. *"Este chamador consegue guardar um segredo?"* é informação que só existe no chamador; o route
+não a tem e para de adivinhar. Adivinhar ON quebra o provisionamento automático, adivinhar OFF é o opt-in
+que a fatia 1 já diagnosticou como proteção que ninguém liga — exigir a declaração torna as **duas** falhas
+impossíveis em silêncio. Mesmo movimento do *"declarado, não derivado"* da Fase B.
+
+- **UI** (`ChannelEndpointList.tsx`, `registry.ts`, `types/index.ts`, i18n en+pt-BR): caixa *"Exigir token
+  em todo disparo"* **marcada por padrão** — é aqui que a intenção do "default ON" vive legitimamente,
+  porque este criador recebe o segredo. Só em webhook, só na criação (depois é pelos botões de token). O
+  texto de apoio **muda com o estado**: as duas escolhas têm consequências opostas e nenhuma é óbvia. O
+  create passou a exibir o banner do token — sem isso, marcar a caixa reproduziria na tela o mesmo defeito
+  do syncer. `createChannelEndpoint` devolve `EndpointTokenResult`, não `ChannelEndpoint`: um tipo que não
+  menciona o token faz o chamador descartá-lo sem perceber.
+- **YAML** (`infra/registry/tenant_demo.yaml`): `auth_required: false` no `crm-callback`, e **só `false` é
+  válido nessa fonte** — o syncer **rebaixa** um `true` com log ERROR em vez de obedecer, porque obedecer
+  criaria o endpoint inalcançável. Endereço externo que precise de token nasce pela UI.
+
+**Achado paralelo — a flag só é aplicada em webhook.** `_check_endpoint_auth` roda nas duas rotas de
+webhook e em nenhuma outra; webchat/WhatsApp/voz/SMS/e-mail resolvem por `resolve_pool`, que não a
+consulta (cada um tem handshake próprio). Uma linha não-webhook com a flag ligada afirmaria proteção que
+ninguém aplica, e a tela a mostraria como protegida. **Recusado (422)** no create e no `POST /{id}/token`,
+mesmo critério do §7.9: anônimo declarado é honesto, protegido-mentiroso convida a parar de procurar.
+Estender enforcement aos demais canais é arco próprio.
+
+**Cobertura:** `gate_webhook_endpoint_auth.sh` ganhou **P11** (webhook external sem `auth_required` ⇒ 422)
+e **P12** (flag em canal não-webhook ⇒ 422). P11 é o que impede um default de voltar em qualquer dos dois
+sentidos sem ficar vermelho. Os ids dos creates que *devem* falhar entram no `trap` — quando o guard está
+ausente a linha nasce, e é exatamente aí, com a atenção no erro e não no ambiente, que o lixo passaria.
+
+⚠️ **Build:** `agent-registry` (guards) + `orchestrator-bridge` (syncer) + `platform-ui` (form/i18n — não
+tem volume mount). Nada em `@plughub/schemas`.
+
+---
+
+## Autenticação de endpoint webhook — fatia 3 ❌ CANCELADA por inventário (2026-08-10)
+
+A fatia pedia *"fazer os chamadores internos carregarem credencial, para que `auth_required` possa ser
+ligado nos dez endpoints internos"*. **O inventário estático dos discadores — mesmo método das Fases A e
+E do ADR — mostrou que a tarefa não deve ser feita.** Decisão e argumento completos em
+[`docs/adr/adr-webhook-endpoint-single-registry.md`](docs/adr/adr-webhook-endpoint-single-registry.md) §7.9.
+
+**O achado:** dos dez `origin=internal`, **nove não têm chamador algum** na porta por identificador. Os
+pools deles são disparados por `/v1/channels/webhook/pool/{id}`, que não passa pelo registro e **não tem
+onde pendurar token** (§7.6.1). Só `skill_portabilidade_demo_v1` é discado por identificador
+(`agente_portabilidade_intake_v1.yaml:484` + `smoke_journey_root.sh`). O `_fire_detached_hook`, citado no
+enunciado da fatia, é porta por pool e **está fora do escopo**. *"Dez anônimos" era dez ENDEREÇOS e um
+DISCADOR* — presença confundida com conteúdo, de novo.
+
+**O argumento é estrutural, não de risco.** `/v1/*` exposto na borda ⇒ a porta por pool está exposta junto
+⇒ todo pool webhook segue disparável anonimamente, **independente** de `auth_required`: auth por
+identificador é teatro. `/v1/*` não exposto ⇒ os internos são inalcançáveis de fora: auth é redundante.
+Nos dois ramos compra **zero**, e no primeiro ainda custa — silencia disparo interno em troca de nada.
+Descartadas (a) distribuir o token por endpoint (o `workflow_trigger` é genérico ⇒ N segredos no
+mcp-server, pior que 1) e (b) credencial de serviço única (vale para todo endpoint, inclusive os
+`external` que o tenant protegeu; escopá-la a `internal` é (c) com passos extras).
+
+**Três itens entregues para (c) não ser mentira:**
+
+- **`F6` reclassificado** (`infra/test/probe_webhook_endpoint_inventory.sh`) — `internal` sai de "anônimos
+  pendentes" e vira **"anônimo por DECISÃO"**, separado dos `external`, que continuam sendo ordem de
+  serviço. O bloco **declara que não verificou** a restrição de borda: o probe lê o store, exposição é
+  infra. Sem isso o número 10 nunca desceria e a lista viraria ruído permanente — treinando a ignorar o
+  vermelho, que é o dano de um gate que não pode reprovar.
+- **Guard `INTERNAL_AUTH_REFUSAL`** (`agent-registry/routes/channel-endpoints.ts`) — `POST
+  /v1/channel-endpoints` com `auth_required=true` em linha `internal` **e** `POST
+  /v1/channel-endpoints/{id}/token` sobre linha `internal` passam a **422 nomeado** (era `console.warn`).
+  A segunda metade é a que importa: a tela não oferece o botão desde a Fase D, mas **read-only da tela não
+  é read-only da API** (§7.6.4) — e todo disparo deste arco foi por `curl`.
+- **P9/P10 no gate** (`infra/test/gate_webhook_endpoint_auth.sh`), com **contador-testemunha**
+  (`GUARD_CHECKED`): sem linha `internal` de amostra o bloco se declara NÃO CHECADO, nunca aprovado.
+
+⚠️ **P10 é o único passo do gate com efeito colateral quando reprova.** Sem o guard no ar, a chamada
+**sucede** e protege um endpoint interno real — silenciando disparo interno e destruindo o controle de
+não-regressão anônimo das execuções seguintes. *Testar o guard sem o guard causaria exatamente o dano que
+ele impede.* Por isso o ramo de sucesso reverte na hora (`DELETE /token`, que desliga `auth_required`
+junto por desenho da fatia 1), **confere `auth_required=false` de volta** e só então deixa o gate reprovar;
+se a reversão falhar, imprime o comando de conserto manual. O `trap` também remove a linha efêmera do
+create, que só existe se o guard estiver ausente.
+
+**Nenhum chamador mudou** — o que satisfaz o invariante da fatia (*"um erro aqui silencia processo real de
+produção"*) por não haver o que errar. Sobram como trabalho aberto a **fatia 4** (default ON para
+`external` novo, agora o único número do F6 que é pendência) e **escrever o requisito de borda**, hoje
+suposição e não requisito. A decisão **depende de a porta por pool seguir anônima por construção**;
+registrá-la ou fechá-la reabre a pergunta.
+
+---
+
 ## Autenticação de endpoint webhook — fatia 2 (UI de token) ✅ (2026-08-07)
 
 Gerar, rotacionar e revogar token direto em `/config/channels` › Webhook. Fecha a lacuna que a fatia 1

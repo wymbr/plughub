@@ -415,6 +415,16 @@ export interface CreateChannelEndpointInput {
   settings?:          Record<string, unknown>
   active?:            boolean
   gateway_config_id?: string | null
+  /**
+   * ADR adr-webhook-endpoint-single-registry §7.10 — **obrigatório** quando
+   * `channel === 'webhook'` e a origem é `external`; omitir devolve 422. O servidor não
+   * tem default porque não distingue quem consegue RECEBER o token (esta UI, que mostra
+   * o segredo uma vez) de quem não consegue (o RegistrySyncer, que descarta o corpo).
+   *
+   * `true` ⇒ a resposta traz `token` em claro, uma única vez. Recusado (422) em canal
+   * não-webhook e em linha `origin=internal`.
+   */
+  auth_required?:     boolean
 }
 
 export interface UpdateChannelEndpointInput {

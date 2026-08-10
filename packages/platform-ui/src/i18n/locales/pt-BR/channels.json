@@ -77,7 +77,9 @@
       "freshWarning":  "Esta é a única vez que este token é exibido. Ele não é armazenado e não pode ser recuperado — se você o perder, terá de rotacionar, o que invalida este.",
       "copy":          "Copiar",
       "copied":        "Copiado",
-      "dismiss":       "Já guardei"
+      "dismiss":       "Já guardei",
+      "lockNotice":    "As demais ações ficam bloqueadas até você confirmar — assim este token não é confundido com o de outra linha.",
+      "lockHint":      "Guarde o token de \"{{identifier}}\" e confirme primeiro — ele é exibido uma única vez."
     },
     "origin": {
       "external":     "cadastrado",
@@ -101,6 +103,9 @@
     "pool":                  "Pool",
     "selectPool":            "— selecionar pool —",
     "displayNamePlaceholder":"ex: Suporte Técnico",
+    "authRequired":          "Exigir token em todo disparo",
+    "authRequiredOnHint":    "O token aparece uma única vez, logo após criar — não é guardado em claro e não pode ser recuperado, só rotacionado. Copie antes de fechar.",
+    "authRequiredOffHint":   "Endpoint anônimo: qualquer um que alcance o gateway conseguirá dispará-lo. Você pode gerar um token depois, pela lista.",
     "newValueOptional":      "Novo valor (opcional)",
     "firstEndpoint":         "Primeiro endpoint",
     "firstEndpointOptional": "— opcional, pode ser adicionado depois",

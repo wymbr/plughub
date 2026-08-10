@@ -33,6 +33,30 @@
 #   P7  após ROTACIONAR, o token antigo  → 401 em poucos segundos (« TTL de 30 s)
 #   P8  após rotacionar, o token novo    → 201
 #
+# ─── P9/P10 — o guard da fatia 3 (ADR §7.9), acrescentados 2026-08-10 ─────────
+#   P9   create com auth_required=true e origin=internal      → **422**
+#   P10  POST /v1/channel-endpoints/{id}/token em linha internal → **422**
+#
+# Não é sobre segurança do endereço interno (esse se protege pela topologia — é a
+# própria decisão do §7.9). É sobre a decisão não depender de alguém lembrar dela:
+# ligar auth ali silencia disparo interno e não fecha nada, porque o mesmo pool segue
+# acionável por /v1/channels/webhook/pool/{id}, fora do registro.
+#
+# ─── P11/P12 — o guard da fatia 4 (ADR §7.10) ────────────────────────────────
+#   P11  create webhook `external` SEM `auth_required` no corpo   → **422**
+#   P12  create com `auth_required` em canal NÃO-webhook          → **422**
+#
+# P11 guarda a ausência de default: o route serve a UI (que RECEBE o token) e o
+# RegistrySyncer (que descarta o corpo), e qualquer default é errado para um dos dois
+# — ON faz instalação limpa nascer exigindo token que ninguém viu; OFF é o opt-in que
+# a fatia 1 já diagnosticou. P12 guarda o escopo: a flag só é lida nas rotas de webhook.
+#
+# ⚠️ P10 é o ÚNICO passo deste arquivo com efeito colateral quando REPROVA: sem o
+# guard no ar a chamada sucede e protege um endpoint interno REAL. O bloco reverte
+# imediatamente (DELETE /token) e confere o `auth_required` de volta em false ANTES de
+# declarar a falha — testar o guard sem o guard causaria justamente o dano que ele
+# impede. Se a reversão falhar, o gate imprime o comando de conserto manual.
+#
 # Uso:  bash infra/test/gate_webhook_endpoint_auth.sh [tenant]
 # Pré:  channel-gateway (8010), agent-registry (3300).
 # Saída: 0 = passou · 1 = mediu e reprovou · 2 = INCONCLUSIVO (não mediu).
@@ -49,9 +73,18 @@ POOL="formfill_demo_ia"          # alvo já exercitado por smoke_formfill_render
 ANON_IDENT="skill_formfill_demo_v1"   # endpoint REAL, anônimo — controle de não-regressão
 
 EP_ID=""
+# Os três abaixo só ganham valor se o guard correspondente estiver AUSENTE e o create
+# passar. Existirem no cleanup é o que impede o gate de deixar lixo justamente quando
+# reprova — que é quando ninguém está olhando para o ambiente, e sim para o erro.
+INT_EP_ID=""      # §7.9  — auth em origin=internal
+NOAUTH_EP_ID=""   # §7.10 — webhook external sem decisão explícita
+NONWH_EP_ID=""    # §7.10 — auth em canal não-webhook
 cleanup() {
-  [ -n "$EP_ID" ] && curl -s -o /dev/null -X DELETE "$REG/v1/channel-endpoints/$EP_ID" \
-    -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" 2>/dev/null
+  for _id in "$EP_ID" "$INT_EP_ID" "$NOAUTH_EP_ID" "$NONWH_EP_ID"; do
+    [ -n "$_id" ] && curl -s -o /dev/null -X DELETE "$REG/v1/channel-endpoints/$_id" \
+      -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" 2>/dev/null
+  done
+  return 0
 }
 trap cleanup EXIT INT TERM
 
@@ -82,6 +115,7 @@ fi
 
 # ── Criar o endpoint protegido ───────────────────────────────────────────────
 echo "── criando endpoint protegido efêmero · $IDENT ──────────────────────────"
+# `auth_required` explícito — obrigatório desde a fatia 4 (§7.10) em webhook external.
 CREATE=$(curl -s -m 10 -X POST "$REG/v1/channel-endpoints" \
   -H 'content-type: application/json' -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" \
   -d "{\"channel\":\"webhook\",\"identifier\":\"$IDENT\",\"pool_id\":\"$POOL\",
@@ -172,8 +206,112 @@ ANONCODE=$(curl -s -o /dev/null -w '%{http_code}' -m 20 -X POST "$GW/v1/channels
 echo "   endpoint ANÔNIMO sem header .. HTTP $ANONCODE   (esperado 201 — default OFF)"
 echo
 
+# ── Guard: auth_required é RECUSADO em linha origin=internal (ADR §7.9) ──────
+#
+# A decisão da fatia 3 é que endereço interno se protege pela TOPOLOGIA, não por
+# token: ligar auth ali silencia o disparo interno e não fecha nada, porque o mesmo
+# pool segue acionável por /v1/channels/webhook/pool/{id}, que não passa pelo
+# registro. O guard existe para que essa decisão não dependa de alguém lembrar dela.
+#
+# ⚠️ AS DUAS METADES, e a segunda é a que importa. A tela já não oferece o botão em
+# linha `internal` desde a Fase D — mas read-only da TELA não é read-only da API
+# (§7.6.4), e todo disparo deste arco foi por curl. Testar só o create deixaria
+# passar exatamente o caminho que estava aberto.
+echo "── guard · auth_required recusado em origin=internal (§7.9) ──────────────"
+INT_ID=$(curl -sf -m 10 "$REG/v1/channel-endpoints?channel=webhook&identifier=$ANON_IDENT" \
+  -H "x-tenant-id: $TENANT" 2>/dev/null | jq -r '(.endpoints // [])[0].id // empty')
+INT_ORIGIN=$(curl -sf -m 10 "$REG/v1/channel-endpoints?channel=webhook&identifier=$ANON_IDENT" \
+  -H "x-tenant-id: $TENANT" 2>/dev/null | jq -r '(.endpoints // [])[0].origin // "«AUSENTE»"')
+
+# Testemunha: sem uma linha REALMENTE `internal` este bloco não julga nada, e
+# "0 falhas sobre 0 amostras" já passou por aprovação neste mesmo arco (F4c).
+GUARD_CHECKED=0
+CREATE_INT=""; TOKEN_INT=""
+if [ -z "$INT_ID" ] || [ "$INT_ORIGIN" != "internal" ]; then
+  echo "   ⚠️  NÃO CHECADO — '$ANON_IDENT' tem origin=$INT_ORIGIN (esperado internal)."
+  echo "       Sem amostra interna o guard não é exercido. Isto NÃO é aprovação."
+else
+  GUARD_CHECKED=1
+  # (i) create com auth_required=true numa linha que NASCE internal.
+  # Guarda o corpo, não só o código: se o guard estiver ausente a linha É criada, e
+  # ela precisa ser removida no trap — senão o gate deixa para trás um endpoint
+  # interno protegido, que é lixo com aparência de configuração.
+  CREATE_INT_BODY=$(curl -s -m 10 -w $'\n%{http_code}' -X POST "$REG/v1/channel-endpoints" \
+    -H 'content-type: application/json' -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" \
+    -d "{\"channel\":\"webhook\",\"identifier\":\"skill_gate_int_probe_$$\",\"pool_id\":\"$POOL\",
+         \"display_name\":\"Guard interno (efêmero)\",\"origin\":\"internal\",\"auth_required\":true}" 2>/dev/null)
+  CREATE_INT=$(tail -n1 <<<"$CREATE_INT_BODY")
+  INT_EP_ID=$(jq -r '.id // empty' <<<"$(sed '$d' <<<"$CREATE_INT_BODY")" 2>/dev/null)
+  echo "   create internal + auth ....... HTTP $CREATE_INT   (esperado 422)"
+  # (ii) gerar token sobre a linha interna REAL — o furo que a tela escondia
+  #
+  # ⚠️ ESTE PASSO TEM EFEITO COLATERAL QUANDO REPROVA, e é o único do arquivo que tem.
+  # Se o guard NÃO estiver no ar (imagem antiga do agent-registry), a chamada SUCEDE e
+  # liga `auth_required` num endpoint interno de verdade — silenciando disparo interno
+  # e destruindo o controle de não-regressão das próximas execuções. Ou seja: o teste
+  # do guard, sem o guard, causa exatamente o dano que o guard existe para impedir.
+  # Por isso a reversão é IMEDIATA e incondicional no ramo de sucesso (DELETE /token
+  # revoga e desliga `auth_required` junto, por desenho da fatia 1), e o gate reprova
+  # DEPOIS de restaurar — nunca antes.
+  TOKEN_INT=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST "$REG/v1/channel-endpoints/$INT_ID/token" \
+    -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" 2>/dev/null)
+  echo "   POST {id}/token em internal .. HTTP $TOKEN_INT   (esperado 422)"
+  case "$TOKEN_INT" in
+    2*)
+      echo "   ⚠️  o guard NÃO recusou — revertendo AGORA para não deixar '$ANON_IDENT'"
+      echo "       protegido (silenciaria disparo interno e quebraria o controle anônimo)."
+      REVERT=$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X DELETE \
+        "$REG/v1/channel-endpoints/$INT_ID/token" \
+        -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" 2>/dev/null)
+      BACK=$(curl -sf -m 10 "$REG/v1/channel-endpoints?channel=webhook&identifier=$ANON_IDENT" \
+        -H "x-tenant-id: $TENANT" 2>/dev/null | jq -r '(.endpoints // [])[0].auth_required // false')
+      echo "       revert HTTP $REVERT · auth_required agora = $BACK   (esperado false)"
+      [ "$BACK" = "false" ] || {
+        echo "   ‼️  REVERSÃO FALHOU — '$ANON_IDENT' ficou com auth_required=$BACK."
+        echo "       CONSERTE À MÃO antes de qualquer outra coisa:"
+        echo "         curl -X DELETE $REG/v1/channel-endpoints/$INT_ID/token \\"
+        echo "              -H 'x-tenant-id: $TENANT' -H \"x-service-token: \$SVC\""
+      }
+      ;;
+  esac
+fi
+echo
+
+# ── Guard fatia 4 · decisão explícita + canal (ADR §7.10) ────────────────────
+#
+# P11 — webhook `external` SEM `auth_required` no corpo ⇒ 422. O route não tem
+#       default porque não distingue quem RECEBE o token (a UI) de quem descarta o
+#       corpo (o RegistrySyncer). Sem esta asserção, um default reintroduzido em
+#       qualquer dos dois sentidos passaria verde.
+# P12 — `auth_required` em canal não-webhook ⇒ 422. A flag só é lida nas rotas de
+#       webhook; aceitá-la ali gravaria linha afirmando proteção inexistente.
+#
+# Ambos são criações que DEVEM falhar, então não sujam nada quando o guard está no
+# ar. Quando NÃO está, a linha nasce — e o `trap` a remove (ids capturados abaixo).
+echo "── guard · decisão explícita e escopo de canal (§7.10) ───────────────────"
+NOAUTH_BODY=$(curl -s -m 10 -w $'\n%{http_code}' -X POST "$REG/v1/channel-endpoints" \
+  -H 'content-type: application/json' -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" \
+  -d "{\"channel\":\"webhook\",\"identifier\":\"skill_gate_noauth_probe_$$\",\"pool_id\":\"$POOL\",
+       \"display_name\":\"Sem decisão de auth (efêmero)\"}" 2>/dev/null)
+NOAUTH=$(tail -n1 <<<"$NOAUTH_BODY")
+NOAUTH_EP_ID=$(jq -r '.id // empty' <<<"$(sed '$d' <<<"$NOAUTH_BODY")" 2>/dev/null)
+echo "   webhook external sem auth_required .. HTTP $NOAUTH   (esperado 422)"
+
+# Canal não-webhook com a flag. `webchat` + o mesmo pool: o pool não declara webchat,
+# mas isso é só AVISO (§6.1) e a recusa por canal vem antes de importar.
+NONWH_BODY=$(curl -s -m 10 -w $'\n%{http_code}' -X POST "$REG/v1/channel-endpoints" \
+  -H 'content-type: application/json' -H "x-tenant-id: $TENANT" -H "x-service-token: $SVC" \
+  -d "{\"channel\":\"webchat\",\"identifier\":\"gate-nonwh-probe-$$\",\"pool_id\":\"$POOL\",
+       \"display_name\":\"Auth em canal errado (efêmero)\",\"auth_required\":true}" 2>/dev/null)
+NONWH=$(tail -n1 <<<"$NONWH_BODY")
+NONWH_EP_ID=$(jq -r '.id // empty' <<<"$(sed '$d' <<<"$NONWH_BODY")" 2>/dev/null)
+echo "   webchat com auth_required ........... HTTP $NONWH   (esperado 422)"
+echo
+
 # ── Veredicto ────────────────────────────────────────────────────────────────
 FAIL=0
+[ "$NOAUTH" = "422" ] || { echo "❌ webhook external SEM auth_required devolveu $NOAUTH (esperado 422) — voltou a existir um DEFAULT, e um dos dois sentidos é sempre errado para um dos dois chamadores (§7.10)"; FAIL=1; }
+[ "$NONWH"  = "422" ] || { echo "❌ auth_required em canal webchat devolveu $NONWH (esperado 422) — a flag não é lida fora de webhook; a linha afirmaria proteção inexistente"; FAIL=1; }
 [ -n "$TOKEN" ] && [[ "$TOKEN" == plughub_wh_* ]] || { echo "❌ o create não devolveu um token no formato esperado"; FAIL=1; }
 [ "$HASH_LEAKED_ON_CREATE" = "false" ] || { echo "❌ o 201 do create devolveu token_hash — material de credencial não sai na resposta"; FAIL=1; }
 [ "$HASH_AS_UI"  = "false" ] || { echo "❌ token_hash VISÍVEL sem credencial de serviço — qualquer usuário da tela recebe material de credencial"; FAIL=1; }
@@ -184,6 +322,12 @@ FAIL=0
 [ "$ANONCODE" = "201" ] || { echo "❌ REGRESSÃO: endpoint anônimo devolveu $ANONCODE sem header (esperado 201). O default OFF virou ON — isto derruba os onze endpoints em uso"; FAIL=1; }
 [ -n "$NEWTOKEN" ] || { echo "❌ a rotação não devolveu token novo"; FAIL=1; }
 [ "$NEW_CODE" = "201" ] || { echo "❌ o token NOVO devolveu $NEW_CODE (esperado 201) — a rotação quebrou o endpoint"; FAIL=1; }
+if [ "$GUARD_CHECKED" -eq 1 ]; then
+  [ "$CREATE_INT" = "422" ] || { echo "❌ create com auth_required em origin=internal devolveu $CREATE_INT (esperado 422) — o guard §7.9 não está no ar (rebuild do agent-registry?)"; FAIL=1; }
+  [ "$TOKEN_INT"  = "422" ] || { echo "❌ POST {id}/token em linha internal devolveu $TOKEN_INT (esperado 422) — read-only da tela não é read-only da API (§7.6.4); confira a reversão acima"; FAIL=1; }
+else
+  echo "⚠️  guard §7.9 NÃO exercido (sem linha internal de amostra) — o verde abaixo não o cobre."
+fi
 if [ -z "$OLD_DEAD_AFTER" ]; then
   echo "❌ o token ANTIGO ainda era aceito ${ROT_MAX_WAIT_S}s após a rotação."
   echo "   Causa provável: a invalidação por registry.changed não está no ar, e o"

@@ -876,7 +876,7 @@ retira proteção de ninguém hoje.
 
 ---
 
-## Autenticação de endpoint webhook *(fatia 1 ✅ 2026-08-07; fatias 2–4 pendentes)*
+## Autenticação de endpoint webhook ✅ ARCO FECHADO *(1 ✅ · 2 ✅ 2026-08-07 · 3 ❌ cancelada · 4 ✅ · borda ✅ 2026-08-10 — ADR §7.9 e §7.10; aberto só o 2b, que espera número de volume)*
 
 ✅ **Fatia 1 — mecanismo + medida** (detalhe no `CHANGELOG.md`). `auth_required` opcional por endpoint,
 default **false**; token portado do `workflow-api/webhooks.py`; hash só para chamador de serviço;
@@ -908,15 +908,179 @@ anônimo tem de seguir aceitando sem header — é o que prova que o default OFF
    protegidos; (b) não cachear o `token_hash`, resolvendo o resto do cache — uma ida ao registry por
    disparo autenticado, aceitável em webhook de baixo volume, cara em alto; (c) manter como está e confiar
    na invalidação, que é o desenho atual. **Decidir com número de volume na mão**, não por preferência.
-3. **Plumbing de credencial nos chamadores internos** (fatia 3): `workflow_trigger`, o proxy da
-   workflow-api e o orchestrator-bridge não enviam header. Enquanto não enviarem, ligar `auth_required`
-   num endpoint `origin=internal` silencia o disparo interno — o create já **avisa** (log) quem tentar.
-4. **Decidir default ON para endpoint `external` NOVO** (fatia 4): só depois de (2), senão cria-se
-   endpoint protegido sem caminho de UI para pegar o token.
+3. ❌ **CANCELADA — fatia 3 (plumbing de credencial nos chamadores internos)** *(2026-08-10, ADR §7.9)*.
+   Não foi adiada: o **inventário estático dos discadores** (método das Fases A/E) mostrou que a tarefa
+   **não deve ser feita**. Dos dez `origin=internal`, **nove não têm chamador algum** na porta por
+   identificador — os pools deles são disparados por `/v1/channels/webhook/pool/{id}`, que não passa pelo
+   registro e **não tem onde pendurar token** (§7.6.1). Só `skill_portabilidade_demo_v1` é discado por
+   identificador (intake + `smoke_journey_root`); o `_fire_detached_hook`, citado no enunciado da fatia,
+   é porta por pool e **está fora do escopo**. Daí o argumento, estrutural e não de risco: `/v1/*` exposto
+   na borda ⇒ a porta por pool está junto ⇒ auth por identificador é **teatro**; `/v1/*` não exposto ⇒ os
+   internos são inalcançáveis ⇒ auth é **redundante**. Nos dois ramos compra zero, e no primeiro ainda
+   custa (silencia disparo interno). *"Dez anônimos" era dez ENDEREÇOS e um DISCADOR.* Entregue junto:
+   **F6 reclassificado** (internal = "por DECISÃO", com o probe declarando que **não verificou** a borda —
+   ele lê o store, exposição é infra) e **guard `INTERNAL_AUTH_REFUSAL`** (422 nomeado no create *e* no
+   `POST /{id}/token`, que era o furo real: read-only da tela ≠ read-only da API, §7.6.4). ⚠️ **A decisão
+   depende da porta por pool seguir anônima por construção** — registrá-la ou fechá-la reabre a pergunta.
+4. ✅ **Fatia 4 — FEITA, mas NÃO como "default ON"** *(2026-08-10, ADR §7.10)*. O inventário dos
+   **criadores** refutou a premissa de que existe um só: o operador pela UI **recebe** o token (o 201 é a
+   única janela em que ele existe em claro), e o `RegistrySyncer` faz o mesmo POST a partir do YAML e
+   **descarta o corpo**. Default ON faria instalação limpa nascer com `crm-callback` exigindo um token que
+   ninguém viu — 401 permanente, dormindo até o `--wipe` porque seed-if-absent dá 409 nas linhas que já
+   existem. **Decisão: sem default.** `auth_required` ausente em `channel=webhook` + `origin=external` ⇒
+   **422 nomeado** — "este chamador consegue guardar um segredo?" só é sabido NO chamador, então o route
+   para de adivinhar. A UI declara `true` (caixa **marcada por padrão**, que é onde a intenção do "default
+   ON" legitimamente vive) e mostra o banner do token no create; o YAML declara `false`, e **só `false` é
+   válido ali** (o syncer rebaixa `true` com log ERROR em vez de criar endpoint inalcançável). Junto:
+   **`auth_required` recusado em canal não-webhook** (a flag só é lida nas rotas de webhook; nos demais a
+   linha afirmaria proteção que ninguém aplica). Cobertura: **P11/P12** no gate, com os ids dos creates
+   que devem falhar no `trap`.
+5. ✅ **Requisito de borda ESCRITO** *(2026-08-10)* — era o último item do arco. Vive em dois lugares, de
+   propósito: **invariante** em `CLAUDE.md` § What Never To Do (é o arquivo lido toda sessão; prosa em
+   guia não é requisito) e **detalhe** em `docs/guias/webhook-patterns.md` § Exposição na borda (tabela
+   dos dois prefixos, por que a porta por pool é inprotegível, o que conferir num ambiente). O argumento
+   registrado é o da porta (2): `/v1/channels/webhook/pool/{id}` é anônima por construção, logo publicar
+   o prefixo torna disparável todo pool webhook do tenant e **nenhum `auth_required` muda isso**.
+   ⚠️ Continua **sem cobertura de teste** — ver item 6.
+6. **Probe EXTERNO de borda** *(aberto 2026-08-10)* — o requisito do item 5 está escrito e não é
+   verificável de dentro: todo instrumento que temos roda na rede interna, onde `/v1/*` **deve** mesmo
+   responder. Um probe que rodasse ali confirmaria o oposto do que se quer provar. O teste válido é um
+   `curl` **de fora** contra o host publicado, esperando: `/channel/webhook/{identifier}` responde e
+   `/v1/channels/webhook/pool/{qualquer}` **não**. É trabalho de infra (precisa de um ponto de origem
+   externo), não de código — e enquanto não existir, o F6 do probe de inventário declara que não mediu,
+   que é o comportamento correto. **Não fabricar um substituto interno:** um teste que só pode passar
+   não distingue nada, e aqui ele ainda daria a impressão de que a borda foi conferida.
+
+**Arco de autenticação de endpoint webhook: FECHADO** (fatias 1 ✅, 2 ✅, 3 ❌ cancelada com motivo, 4 ✅,
+requisito de borda ✅). Aberto só o item **2b** (acima), que espera número de volume para decidir o regime
+de cache do material de credencial.
 
 ⚠️ **Os endereços por pool (`/v1/channels/webhook/pool/{id}`) seguem anônimos por construção** — não passam
 pelo registro (ADR §7.6.1), logo não têm onde pendurar credencial. Se isso for inaceitável num ambiente, a
 saída não é registrá-los (ver o argumento da função identidade), é restringir o prefixo `/v1/*` na borda.
+
+---
+
+## Prontidão de provisionamento — não há sinal de "o syncer terminou" *(aberto 2026-08-10)*
+
+`rebuild-all.sh` termina em `up -d` e imprime *"Acompanhe a convergência"*, delegando ao olho humano; e o
+`orchestrator-bridge` **não tem healthcheck**, então `docker compose ps` não consegue dizer se o
+provisionamento acabou. O bridge é o ÚLTIMO a convergir (espera agent-registry + skill-flow-service
+healthy, depois sincroniza skills → pools → channel_endpoints), e nada anuncia esse fim.
+
+**Consequência medida, três vezes:** ADR §7.4 (`F2=1` lido antes do seed, que parecia "o seed não
+aplicou"), `up -d <serviço>` subindo só o subgrafo, e 2026-08-10 (bateria inteira em INCONCLUSIVO logo
+após um `--wipe`, com o bridge em *"Up Less than a second"*). Nos três, o número era **plausível** — e
+por isso pareceu resultado, não ausência de medição.
+
+**Conserto:** `infra/test/wait_registry_converged.sh` ✅ *(feito 2026-08-10)* — bloqueia até o registro
+ficar **quiescente** (duas amostras iguais e > 0), com timeout e veredicto de 3 estados. Critério é
+estabilidade, não contagem fixa: contagem fixa faria do helper um teste do tenant demo, que envelhece a
+cada pool novo, e prontidão não é a mesma pergunta que inventário (essa é do probe). `EXPECT_*` permite
+exigir números exatos quando o chamador os conhece.
+
+**Falta:** chamá-lo no fim do `rebuild-all.sh`. Não foi feito junto de propósito — o script é o caminho
+de instalação de todo mundo, e mudá-lo no mesmo movimento em que se cria a ferramenta mistura duas
+coisas que devem falhar em separado.
+
+---
+
+## `sequence_index` apagado pelo `participant_left` — atribuição de agente em qualidade está em risco *(achado 2026-08-10)*
+
+**Causa raiz, localizada e única.** O `sequence_index` é atribuído no `participant_joined` (contador Redis
+`INCR session:{sid}:segment_seq`) mas **não é persistido junto com o `segment_id`**
+(`orchestrator-bridge/main.py:918-922` grava só o segment_id). No `participant_left` ele é reconstruído
+como `0` (`main.py:6759`) ou omitido (default `0`, `main.py:3030`) — e como `analytics.segments` é
+`ReplacingMergeTree`, **a linha do left substitui a do join e apaga o índice**. Atinge **todo segmento
+humano e todo especialista**; os nativos escapam por acidente (join e left no mesmo escopo léxico).
+
+Medido: sessão `5553c72a` saiu `0, 0, 2` — o `1` do segmento humano existiu no join e foi sobrescrito.
+Verificável com `SELECT sequence_index, ingested_at FROM segments WHERE session_id=… ` **sem `FINAL`**,
+que mostra as duas versões.
+
+⚠️ **A consequência mais séria não é a ordenação — é ATRIBUIÇÃO.** `reports_query.py:2183-2209`
+(`_session_agent_attribution_sql`) usa **cinco** `argMax(…, sequence_index)` para decidir *qual agente é
+atribuído à sessão* nas lentes **quality**, **quality_criteria**, **deploy** e **session_nps**. Com
+empates em `0` o `argMax` é **não-determinístico** — e as cinco colunas podem vir de **linhas
+diferentes** (agent_key de um segmento, pool_id de outro). Na sessão medida, atribuiria ao agente nativo
+(seq 2) e não ao humano que efetivamente atendeu. **Nota de honestidade:** o impacto real em números de
+qualidade **não foi medido**, só derivado do código.
+
+Outros consumidores afetados: `quality-export/exporter.py:181` (`ORDER BY sequence_index ASC`, chave
+primária do export), `mv_segment_summary`/`v_segment_summary` → `handoff_count` →
+`/reports/sessions/complexity`, e o badge de handoff em `SegmentList.tsx:146`.
+
+**A cadeia a jusante já está correta — não precisa de conserto** *(verificado 2026-08-10)*. O registro
+`human_seg:{pool}` é gravado **no `participant_left`** (`main.py:1613`); `_seed_segment_signal:3321` lê
+`record["sequence_index"]` e `_republish_segment_from_signal:3362` lê do acumulador. Os três propagam
+fielmente — **herdam o `0` do left**. Logo o conserto é num ponto só de origem, e a cadeia se corrige
+sozinha. *(Isto corrige a v1 desta nota, que listava acumulador e `segment.ts` como sites a alterar.)*
+
+**Conserto, simétrico ao que já se faz com `segment_id`:**
+
+1. **No join** (`main.py:900-930`): `_seq_idx` é calculado em `:915` e **nunca persistido**, enquanto
+   `_seg_id` é gravado em `:918-922`. Persistir o índice ao lado — chave paralela
+   `session:{sid}:segment_seq_idx:{instance_id}` (mesmo TTL 14400) **ou** um campo a mais no
+   `participant_meta:{instance_id}` (`:934-944`), que já se declara *"fonte por-participante para o path
+   de close"*. Preferir o `participant_meta`: reusa chave existente e é `get`, não `getdel`, então
+   sobrevive a um left republicado.
+2. **Nos left sites** que hoje mandam `0`: recuperar junto com o `segment_id`, no mesmo bloco `getdel`
+   que já existe (`main.py:2830`, `4531`, `5641`, `6165`, e os demais em `6854`/`8182`).
+
+⚠️ **Um segundo left do MESMO segmento tem de continuar funcionando.** O `segment_id` sobrevive porque os
+sites guardam fallback em escopo (`_left_seg_id = _part_seg_id`); o índice precisa do mesmo cuidado, ou o
+republish volta a escrever 0 e o `ReplacingMergeTree` desfaz o conserto — exatamente o bug de novo, por
+outro caminho.
+
+**Como validar (e o e2e 23 NÃO serve — ver acima):** rodar `smoke_formfill_renderer.sh` + claim/submit no
+Console e conferir que o segmento humano sai com `sequence_index = 1`, não `0`. A prova de hoje foi
+aritmética (`0, ?, 2` com o meio em zero ⇒ o `1` foi consumido e perdido); depois do conserto a sequência
+tem de ler `0, 1, 2`.
+
+⚠️ **Não conserta a ordenação, e não deve prometer isso.** Mesmo corrigido, `queue`, sintéticos e
+especialistas ficam fora do contador **por decisão** — o campo é *"ordem entre primários não-sintéticos"*,
+nunca ordenação total. Os dois consumidores que o usam como chave de ordem precisam mudar de chave
+**independentemente** do conserto. Ordenar por `started_at`.
+
+**Dívidas adjacentes que apareceram junto:**
+- **O e2e 23 não pode pegar isto** — `23_contact_segments.ts:532-552` publica join **e** left já com o
+  índice correto, então nunca exercita o caminho onde o left zera. Teste que passa por não tocar o
+  defeito.
+- **`ConversationParticipantEventSchema` não declara `sequence_index`** (`contact-segment.ts:108-139`) —
+  o campo trafega sem validação em ponto nenhum do pipeline.
+- **Contradição de doc, precisa de decisão humana:** `arc5-segments.md:23,106` diz escopo **por pool com
+  reset**; `adr-contact-segments.md` e `CLAUDE.md:852` dizem **por sessão sem reset**. O código segue o
+  segundo.
+- **TTL do contador** (`session:{sid}:segment_seq`, 14400 s) — sessão com >4 h entre dois joins reinicia
+  em 0. Segunda fonte de duplicata, plausível e **não medida**.
+
+---
+
+## Modelo journey/session/segment — ADR fechado, spec pendente *(2026-08-10)*
+
+Fixado em [`docs/adr/adr-journey-session-segment-model.md`](docs/adr/adr-journey-session-segment-model.md):
+três definições + discriminador por **identidade de contato** (não por duração), a **regra dual** de
+escopo, pertença de journey com **uma** regra (o resto é filtro), **transição como primeira classe** (D4),
+`journey_id` como projeção **com reconciliação** (D5), *workflow declara / journey observa* (D6), merge
+como reparo de proveniência não observável (D7), **porta externa de resume como pré-requisito** (D8) e
+**definição única de duração** (D9).
+
+**§8 todo medido** (2026-08-10, ambiente pós-`--wipe`): legado **zero** em todas as tabelas ⇒ **não há
+backfill**; transição **observável** num ciclo real (suspend → delegate a humano → submit → resume →
+`resolved`, 6 min 23 s de lacuna); TTL do `pipeline` ~24 h ⇒ `current_step` cobre o recente, não o
+histórico; `journey_aliases = 0` ⇒ a reconciliação da D5 nasce sem dado de teste; **não há re-carimbo de
+`opened_at`**.
+
+**Achados adjacentes registrados no ADR, nenhum investigado:**
+
+- **`sequence_index` não ordena** — medido `0, 0, 2` numa sessão e `0, 0` noutra. Ordenar por
+  `started_at` é o único caminho correto hoje; código que use o índice como chave de ordem está errado.
+- **Composição de segmentos varia por caminho** — item de pull não gera segmento de fila, push gera.
+  Contar segmentos para inferir ciclos é frágil por natureza (reforça a D4).
+- **`handle_time_ms` com dois comportamentos vivos** + um terceiro que o `CLAUDE.md` afirma e o código
+  registra como adiado. Virou **D9**, dentro deste arco.
+
+**Spec pendente**, e a ordem é imposta pela D8: porta externa de resume **antes** de qualquer remoção.
 
 ---
 
@@ -933,6 +1097,13 @@ que a Fase F acabou de desfazer — tratar como pacote coisas que só estão adj
 **Gate:** o `probe_webhook_endpoint_inventory.sh` já reprova se `F3 > 0`; depois da remoção, F3 passa a ser
 estruturalmente 0 e a checagem vira testemunha (mesma reclassificação que os contadores de fallback
 sofreram na Fase E).
+
+📄 **Doc a corrigir junto:** `docs/guias/webhook-patterns.md` § "Padrão 1" descreve exatamente este
+caminho legado (`POST /v1/workflow/webhook/{id}` + registro por `X-Admin-Token`) como se fosse o trigger
+canônico. Recebeu um aviso de obsolescência no topo em 2026-08-10, mas o corpo continua ensinando o
+caminho errado a integradores — reescrever para o `ChannelEndpoint` faz parte da remoção, não é
+follow-up. (O guia também ainda cita `notify` como step depreciado no Arc 16 e o `skill-flow-worker`;
+conferir o resto ao mexer.)
 
 ---
 
@@ -972,7 +1143,7 @@ o código está lá, correto, e não roda; o sintoma é ausência, e ausência p
 
 ---
 
-## Guard de teardown-hook não conhece `dispatch: detached` — falso positivo a cada boot *(achado 2026-08-07)*
+## Guard de teardown-hook — falso positivo a cada boot ✅ *(achado 2026-08-07, corrigido 2026-08-10)*
 
 `_validate_teardown_hooks` (`registry_syncer.py`) loga **ERROR** a cada boot do orchestrator-bridge:
 
@@ -981,17 +1152,28 @@ CONFIG ERROR — pool 'retencao_humano' declares hook 'on_human_end' → pool 'w
 (skill 'skill_wrapup_detached_v1'), but that skill has SUSPENDING step(s) [coletar:delegate]
 ```
 
-**É falso positivo.** O guard é anterior à Camada A do arco de detach e cruza apenas
-`hook → pool → skill → steps`: **não lê o `dispatch` da entrada**. Esse hook é `dispatch: detached`, cujo
-propósito é exatamente que o wrap-up **não** rode dentro da janela que o bridge segura — a premissa do
-guard ("o bridge fecha o contato antes de o I/O renderizar") **não se aplica** ao caminho detached, que
-foi construído para quebrá-la. Um portão que reprova configuração que funciona ensina a ignorar o
-vermelho — o mesmo critério que rebaixou a validação de canal a aviso na D8 do ADR de webhook.
+✅ **CORRIGIDO 2026-08-10** (detalhe no `CHANGELOG.md`). Era falso positivo mesmo, mas **o diagnóstico
+acima estava errado no ponto que importava** — e o erro sobreviveu porque ninguém abriu o YAML:
 
-**Conserto:** pular entradas com `dispatch == "detached"` no laço de `hooks.get(hook_key, [])`. Uma linha.
-**Cuidado ao fazer:** o default é `inline`, então a ausência do campo tem de continuar validando —
-inverter isso desligaria o guard para todo mundo, trocando um falso positivo por um falso negativo, que é
-a troca ruim.
+> *"Esse hook é `dispatch: detached`"* — **não é.** `retencao_humano.on_human_end` declara
+> `dispatch: inline` (`infra/registry/tenant_demo.yaml:377`). A primeira tentativa de conserto seguiu
+> esta nota ao pé da letra, isentou só `detached`, e o ERROR continuou de pé no boot seguinte.
+> *Descrição de configuração não é configuração.*
+
+A condição real é o espelho de `_is_workflow_dispatch` (`main.py:1775`), extraída em `_runs_as_workflow`:
+`workflow ⇔ dispatch == "detached" OU (side == "agent" E dispatch == "inline")`. No **wrap-up unificado**
+(Phase 0+1+3) `inline` não quer dizer "roda na conferência" — quer dizer "o Console AUTO-REIVINDICA o
+item", sobre a MESMA máquina destacada. `dispatch` governa a ENTREGA; é o `side` que decide se há
+conferência. Sobra só **`side=customer` + `inline`** (o NPS, que precisa do WS vivo) para checar.
+Entrou junto um contador-testemunha: zero violações sobre zero entradas checadas se declara NÃO CHECOU.
+
+> ⚠️ **Achado adjacente — `_entry_will_dispatch` diz reproduzir os predicados do loop e não reproduz
+> mais.** Ele isenta só `detached`, então entrada `agent`+`inline` é contada no barrier `hook_pending` e
+> nunca arma `hook_conf` → contador órfão. **Hoje é inócuo**: o ramo `_detached_fired and not
+> _inline_dispatched` (`main.py:2025`) fecha o contato na hora e a chave expira no TTL de 4 h. Não foi
+> mexido junto de propósito — consertar um contador que nada lê no mesmo movimento em que se conserta um
+> guard tira a chance de saber qual mudança causou o quê. Conserto: usar `_runs_as_workflow` nos dois
+> lados (hoje ele vive no `registry_syncer`; viraria utilitário compartilhado).
 
 **Consequência na D8:** validar **existência do pool** mantém-se; validar **canal declarado** é
 **rebaixado a aviso** — rejeitar quebraria configuração legítima (esta). E a justificativa "fabrica

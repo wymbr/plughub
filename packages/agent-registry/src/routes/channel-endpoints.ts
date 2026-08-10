@@ -30,6 +30,68 @@ const VALID_CHANNELS = new Set(["webchat", "whatsapp", "voice", "sms", "email", 
 const VALID_ORIGINS = new Set(["external", "internal", "legacy_token"])
 
 /**
+ * ⚠️ RECUSA: `auth_required` em linha `origin=internal`.
+ *
+ * Era AVISO até 2026-08-10 ("os chamadores internos ainda não mandam header"), o que
+ * a enquadrava como pendência de plumbing. O inventário estático dos discadores
+ * (fatia 3 do arco de auth) mostrou que a premissa estava errada e que a config é
+ * **inútil, não prematura**:
+ *
+ *   · dos dez identificadores `internal` do demo, NOVE não têm chamador algum nesta
+ *     porta — os pools deles são disparados por `/v1/channels/webhook/pool/{id}`;
+ *   · essa porta por POOL não passa pelo registro e **não tem onde pendurar token**
+ *     (ADR §7.6.1: registrar pool seria a função identidade do pool).
+ *
+ * Daí o argumento, que é estrutural e não de risco: se `/v1/*` está exposto na borda,
+ * a porta por pool está junto e todo pool webhook segue disparável anonimamente —
+ * `auth_required` aqui é teatro. Se não está exposto, os internos são inalcançáveis
+ * de fora — `auth_required` aqui é redundante. Nos DOIS ramos compra zero, e no
+ * primeiro ainda custa: silencia o disparo interno em troca de nada.
+ *
+ * Recusamos em vez de avisar porque um portão que aceita configuração inútil e
+ * perigosa ensina a ignorar o vermelho — o mesmo critério que rebaixou a validação de
+ * canal a aviso na D8 (lá a config FUNCIONAVA; aqui ela quebra e não protege).
+ *
+ * **Reabrir isto exige mudar a premissa, não este arquivo:** dar endereço registrável
+ * (logo, credenciável) à porta por pool, ou fechá-la.
+ */
+/**
+ * ⚠️ RECUSA: `auth_required` em canal que não é `webhook`.
+ *
+ * A flag só é LIDA por `_check_endpoint_auth`, no channel-gateway, e essa função só é
+ * chamada nas duas rotas de webhook (`/channel/webhook/{slug}` e
+ * `/v1/channels/webhook/{identifier}`). Webchat, WhatsApp, voz, SMS e e-mail resolvem
+ * o endpoint por `resolve_pool`, que **não consulta `auth_required`** — cada um tem o
+ * seu próprio handshake (JWT por tenant no webchat, assinatura no WhatsApp).
+ *
+ * Aceitar a flag ali gravaria uma linha que **afirma proteção que ninguém aplica**, e
+ * a tela mostraria "token" nela. É o mesmo critério do §7.9, e o pior dos dois mundos:
+ * anônimo declarado é honesto; protegido-mentiroso convida a parar de procurar.
+ *
+ * Estender enforcement aos demais canais é arco próprio (handshakes distintos), não
+ * uma linha aqui.
+ */
+const NON_WEBHOOK_AUTH_REFUSAL = (channel: string) => ({
+  error: `auth_required não é aplicável ao canal '${channel}'`,
+  reason: "auth_enforced_on_webhook_only",
+  detail:
+    `A verificação de X-Webhook-Token só roda nas rotas de webhook do channel-gateway; ` +
+    `um endpoint '${channel}' com a flag ligada apareceria como protegido na tela sem que ` +
+    `nada verificasse a credencial. O canal '${channel}' tem handshake próprio. ` +
+    `Ver ADR adr-webhook-endpoint-single-registry §7.10.`,
+})
+
+const INTERNAL_AUTH_REFUSAL = {
+  error: "auth_required não é aplicável a endpoint origin=internal",
+  reason: "internal_endpoint_auth_is_topology",
+  detail:
+    "Endereço interno é protegido pela TOPOLOGIA (restrição do prefixo /v1/* na borda), " +
+    "não por token. Ligar auth_required aqui silencia o disparo interno e não fecha nada: " +
+    "o mesmo pool continua acionável por /v1/channels/webhook/pool/{id}, que não passa " +
+    "pelo registro e não pode carregar credencial. Ver ADR adr-webhook-endpoint-single-registry §7.9.",
+} as const
+
+/**
  * ⚠️ `token_hash` é MATERIAL DE CREDENCIAL e não pode sair na leitura geral — este é
  * o mesmo endpoint que a UI consome, então devolvê-lo entregaria o hash a qualquer
  * usuário da tela. Ele sai APENAS para chamador que apresente `x-service-token`, que
@@ -200,27 +262,50 @@ channelEndpointsRouter.post("/", async (req: Request, res: Response, next: NextF
       )
     }
 
-    // ── Autenticação opcional ────────────────────────────────────────────────
-    // `auth_required` nasce false. Quando o operador o liga na criação, o token é
-    // gerado AQUI e devolvido em claro UMA vez — não existe "recuperar token", só
-    // rotacionar. Ligar sem gerar deixaria o endpoint num estado que exige
-    // credencial e não tem nenhuma: recusa tudo, e a recusa não diz isso.
+    // ── Autenticação ─────────────────────────────────────────────────────────
+    // Quando ligada na criação, o token é gerado AQUI e devolvido em claro UMA vez —
+    // não existe "recuperar token", só rotacionar. Ligar sem gerar deixaria o endpoint
+    // num estado que exige credencial e não tem nenhuma: recusa tudo, e a recusa não
+    // diz isso.
+    if (body.auth_required === true && origin === "internal") {
+      return res.status(422).json(INTERNAL_AUTH_REFUSAL)
+    }
+    if (body.auth_required === true && body.channel !== "webhook") {
+      return res.status(422).json(NON_WEBHOOK_AUTH_REFUSAL(body.channel))
+    }
+
+    // ── Fatia 4 · webhook EXTERNO exige decisão EXPLÍCITA (ADR §7.10) ────────
+    //
+    // Nem default ON nem default OFF: **sem default**. O route serve dois chamadores
+    // de naturezas diferentes e não consegue distingui-los — o operador pela UI RECEBE
+    // o token (o corpo do 201 é a única janela em que ele existe), e o `RegistrySyncer`
+    // faz o POST a partir do YAML e **descarta o corpo**. Um default ON criaria, em
+    // instalação limpa, endpoint exigindo um token que ninguém recebeu: 401 permanente,
+    // sem caminho de recuperação. Um default OFF é o opt-in que a fatia 1 já
+    // diagnosticou como frágil — proteção que ninguém liga.
+    //
+    // "Este chamador consegue guardar um segredo?" é informação que só existe NO
+    // CHAMADOR. Então o route para de adivinhar e exige a declaração. Mesma família do
+    // "declarado, não derivado" da Fase B: quando a autoridade está fora, importe-a em
+    // vez de inferi-la.
+    //
+    // Escopo estreito de propósito: só `webhook` (é o único canal onde a flag é
+    // aplicada) e só `external` (em `internal` a resposta já é a recusa acima, §7.9).
+    if (body.channel === "webhook" && origin === "external" && body.auth_required === undefined) {
+      return res.status(422).json({
+        error: "auth_required é obrigatório para endpoint webhook de origem external",
+        reason: "explicit_auth_decision_required",
+        detail:
+          "Declare auth_required: true (o 201 devolve o token EM CLARO, uma única vez — " +
+          "guarde-o na hora) ou false (endpoint anônimo, acionável por qualquer um que " +
+          "alcance o gateway). Não há default: quem cria pela UI consegue receber o token, " +
+          "quem provisiona por YAML/script não — e este route não distingue os dois. " +
+          "Ver ADR adr-webhook-endpoint-single-registry §7.10.",
+      })
+    }
+
     const authRequired = body.auth_required === true
     const token = authRequired ? generateEndpointToken() : null
-
-    if (authRequired && origin === "internal") {
-      // Aviso, não recusa: é config que o operador escolheu, e pode ser legítima
-      // num ambiente onde os chamadores internos já carreguem credencial. Mas HOJE
-      // nenhum carrega (`workflow_trigger`, o proxy da workflow-api e o bridge
-      // disparam sem header), então ligar isto num endpoint interno silencia o
-      // disparo interno. Melhor dizer antes do que depurar 401 depois.
-      console.warn(
-        `[channel-endpoints] AVISO ${body.channel}/${identifier}: auth_required=true ` +
-        `num endpoint origin=internal. Os chamadores internos (workflow_trigger, ` +
-        `proxy da workflow-api, orchestrator-bridge) NÃO enviam token hoje — este ` +
-        `endpoint passará a recusar disparo interno até que eles carreguem a credencial.`,
-      )
-    }
 
     const ep = await channelEndpoint.create({
       data: {
@@ -308,6 +393,20 @@ channelEndpointsRouter.post("/:id/token", async (req: Request, res: Response, ne
 
     const existing = await channelEndpoint.findFirst({ where: { id, tenant_id: tenantId } })
     if (!existing) return res.status(404).json({ error: "Channel endpoint not found" })
+
+    // Mesmo veredicto do create, e esta é a metade que importa mais: a tela já não
+    // oferece o botão em linha `internal` (Fase D), mas read-only da TELA não é
+    // read-only da API (§7.6.4) — sem esta checagem o caminho continuava aberto por
+    // curl, que é exatamente como todo disparo deste arco foi feito.
+    if (existing.origin === "internal") {
+      return res.status(422).json(INTERNAL_AUTH_REFUSAL)
+    }
+    // Simétrico ao create: gerar token numa linha webchat/whatsapp/voz ligaria uma flag
+    // que nenhuma rota daqueles canais consulta. Sem esta metade, o caminho continuava
+    // aberto por PUT-equivalente — a mesma lição do §7.9 sobre read-only da tela.
+    if (existing.channel !== "webhook") {
+      return res.status(422).json(NON_WEBHOOK_AUTH_REFUSAL(existing.channel))
+    }
 
     const token = generateEndpointToken()
     const updated = await channelEndpoint.update({

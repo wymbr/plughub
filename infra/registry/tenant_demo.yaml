@@ -32,6 +32,13 @@ channel_endpoints:
     identifier: crm-callback
     pool_id: retencao_humano
     display_name: "CRM Callback"
+    # ⚠️ OBRIGATÓRIO desde a fatia 4 (ADR §7.10): webhook `external` não tem default de
+    # `auth_required` — omitir aqui faz o POST devolver 422 e a linha NÃO nascer numa
+    # instalação limpa. `false` é o único valor válido nesta fonte: o RegistrySyncer
+    # descarta o corpo do 201, onde o token em claro existe uma única vez, então `true`
+    # criaria endpoint exigindo credencial que ninguém recebeu. Para proteger este
+    # endereço, gere o token pela UI (/config/channels › Webhook), que mostra o segredo.
+    auth_required: false
     # origin: external (default) — cadastro de tenant. MEDIDO funcionando em
     # 2026-08-07: o pool não declara `webhook` em channel_types e ainda assim o
     # disparo virou contato entregue a um humano. Canal é hard filter sobre
