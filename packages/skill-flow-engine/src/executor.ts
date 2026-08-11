@@ -154,6 +154,14 @@ export interface StepContext {
     // can call the calendar-api for business-hours deadline calculation.
     business_hours?: boolean
     calendar_id?:    string
+    /**
+     * Fase 1 do arco de workflow. `persistSuspend` (Arc 4) sempre recebeu `reason`;
+     * este callback não, e por isso o motivo da suspensão só existia na tabela
+     * `workflow_events` — cujo produtor está morto e que tem ZERO linhas. É o campo
+     * que a transição (D4) precisa e que hoje não tem portador durável nenhum.
+     * Opcional para não quebrar implementações existentes do contexto.
+     */
+    reason?:         string
   }): Promise<{ resume_expires_at: string }>
 
   /**

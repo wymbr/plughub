@@ -1628,6 +1628,93 @@ async def webhook_resume(resume_token: str, body: WebhookResumeRequest, request:
     return {"session_id": session_id}
 
 
+class ExternalResumeRequest(BaseModel):
+    """
+    Corpo da porta EXTERNA de resume. Deliberadamente MENOR que o
+    `WebhookResumeRequest` interno — cada campo que falta aqui é um campo que um
+    terceiro não pode declarar. Ver `external_webhook_resume`.
+    """
+    tenant_id: str
+    payload:   dict | None = None
+
+
+@app.post("/channel/webhook/resume/{resume_token}", status_code=200)
+async def external_webhook_resume(
+    resume_token: str, body: ExternalResumeRequest,
+) -> dict:
+    """
+    Porta EXTERNA de resume — D8 do ADR journey/session/segment, Fase 1 do arco de
+    workflow (`docs/product/workflow-arc-implementation-spec.md`).
+
+    Simétrica ao trigger (`POST /channel/webhook/{slug}`) em prefixo e em classe de
+    alcance. **Não passa pelo registro de `ChannelEndpoint`**: não há endereço a
+    registrar. O `resume_token` é uma *capability* — opaco, ligado a UMA sessão, de
+    uso único (Camada F) — e não endereça pool nem canal, endereça *execução
+    suspensa*. A posse do token é a credencial, como no link público de survey.
+
+    Reusa `handle_resume` INTEIRO (lock da Fase F, registro terminal, 404 × 409,
+    consumo do token). A porta é fina de propósito: duplicar a máquina de unicidade
+    criaria a segunda fonte que o arco anterior gastou seis fases removendo.
+
+    ⚠️ **TRÊS diferenças em relação à rota interna, e nenhuma é cosmética:**
+
+    1. **`source` NÃO é asserido pelo chamador.** A rota interna repassa o payload
+       verbatim, e `_terminal_cause` lê `payload["source"]` — logo um chamador podia
+       declarar `source:"supervisor:x"` e obter o carimbo `acw_supervisor_closed` no
+       registro terminal DURÁVEL de 25 h, que é o que o Console mostra ao agente
+       como *"encerrado por …"*. Aqui o campo é **descartado e reescrito** como
+       `external`. Sem principal verificado não existe encerramento de supervisor.
+    2. **`decision` de encerramento não é aceita.** `decision:"timeout"` é o que
+       separa `task_done` de `acw_*` em `_terminal_cause`; deixá-la passar daria a
+       um terceiro o poder de marcar o item como expirado/encerrado por supervisor.
+       Um sistema externo *responde* um resume; ele não encerra o trabalho de um
+       humano.
+    3. **`resume_origin` é fixo em `token`** — é o único valor honesto por esta
+       porta. `identity`/`same_channel` descrevem caminhos internos, e aceitá-los
+       de fora seria deixar o chamador escolher o próprio rótulo analítico.
+
+    Sem `pool_id`/`instance_id`: são o caminho de posse (A5) do Console, que exige
+    principal. Sem `Authorization`: quem tem JWT usa a porta interna.
+
+    Retorna `{ session_id }`. 404 token desconhecido/vencido · 409 já terminal ou em
+    curso (Camada F) · 503 adapter fora.
+    """
+    if _webhook_adapter is None:
+        raise HTTPException(status_code=503, detail="Webhook adapter not initialised")
+
+    # Saneamento do payload ANTES de qualquer uso. Campos de autoridade são
+    # removidos, não validados: recusar com 4xx ensinaria ao chamador que eles
+    # existem, e aceitar-os-ignorando é o comportamento que já se espera de um
+    # corpo livre.
+    safe_payload = dict(body.payload or {})
+    _dropped = [k for k in ("source", "decision") if k in safe_payload]
+    for k in _dropped:
+        safe_payload.pop(k, None)
+    safe_payload["source"] = "external"
+    if _dropped:
+        logger.info(
+            "external resume: campo(s) de autoridade descartado(s) %s do payload "
+            "(token=%s tenant=%s) — esta porta não autentica quem os declara",
+            _dropped, resume_token, body.tenant_id,
+        )
+
+    try:
+        session_id = await _webhook_adapter.handle_resume(
+            resume_token  = resume_token,
+            tenant_id     = body.tenant_id,
+            payload       = safe_payload,
+            resume_origin = "token",
+            approver      = None,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    except ResumeAlreadyTerminalError as exc:
+        raise HTTPException(status_code=409, detail=exc.as_detail())
+    if session_id is None:
+        raise HTTPException(status_code=404, detail="Resume token not found or expired")
+    return {"session_id": session_id}
+
+
 @app.get("/v1/channels/webhook/pending/{contact_identifier}", status_code=200)
 async def webhook_pending(contact_identifier: str, tenant_id: str) -> dict:
     """

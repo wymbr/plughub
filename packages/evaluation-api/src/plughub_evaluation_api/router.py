@@ -305,12 +305,29 @@ async def _write_ctx(redis_client: Any, tenant_id: str, session_id: str, fields:
 
 
 async def _resume_workflow(resume_token: str, tenant_id: str) -> None:
-    """POST /v1/workflow/resume to workflow-api (fire-and-forget)."""
+    """
+    Retoma a workflow suspensa, direto no channel-gateway (fire-and-forget).
+
+    Fase 4a do arco de workflow (2026-08-11). Antes esta função batia em
+    `POST /v1/workflow/resume` da **workflow-api**, que era um **proxy** para esta
+    mesma rota — sempre com `tenant_id`, logo sempre pelo ramo proxy, sem tocar o
+    PostgreSQL legado. Um salto de rede e um serviço a mais no caminho, sem nada
+    acontecendo no meio.
+
+    ⚠️ Usa a porta **INTERNA** (`/v1/channels/webhook/resume/...`), não a externa
+    (`/channel/webhook/resume/...`) criada na Fase 1: a evaluation-api é componente
+    interno da plataforma. A porta externa existe para TERCEIROS e paga por isso —
+    lá o `source` é descartado e reescrito como `external`, o que apagaria a
+    procedência desta chamada.
+
+    Este era o ÚNICO chamador de produção de `/v1/workflow/resume`; com o repointe,
+    a rota fica só com e2e e pode sair na 4d.
+    """
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
-                f"{settings.workflow_api_url}/v1/workflow/resume",
-                json={"token": resume_token, "decision": "input", "tenant_id": tenant_id},
+                f"{settings.channel_gateway_url}/v1/channels/webhook/resume/{resume_token}",
+                json={"tenant_id": tenant_id, "payload": {"decision": "input"}},
             )
             if resp.status_code >= 400:
                 logger.warning("workflow resume returned %s: %s", resp.status_code, resp.text)

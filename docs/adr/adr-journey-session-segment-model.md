@@ -100,12 +100,32 @@ deve depender do índice.
 O conserto de (1) e suas consequências (atribuição de agente em relatórios de qualidade) saem como item
 próprio — ver `TODO.md` § "`sequence_index` apagado pelo participant_left".
 
+> **Conserto executado 2026-08-10, e ele produziu um achado que pertence à D4.** A atribuição
+> (`_session_agent_attribution_sql`) **filtra** por `role='primary' AND agent_type != 'system'`, escopo
+> que coincide com o do contador — então o conserto torna o índice único ali e o empate do `argMax`
+> desaparece. Sobra o que o índice nunca causou: a regra é *"último primário não-sintético"*, e na sessão
+> `5553c72a` o último primário é o segmento nativo de **13 ms** que só processou o resume — a lente de
+> qualidade credita a máquina pelos 30 s de trabalho do humano, e depois do conserto passa a errar
+> **deterministicamente**.
+>
+> É a D4 cobrando o preço em outro lugar: sem a transição nomeada, "quem atendeu esta sessão" tem de ser
+> adivinhado a partir da posição do segmento, e a posição não sabe distinguir *fez o trabalho* de
+> *fechou a porta*. Some-se a isto a §8.1b — o mesmo caminho já produz duas respostas para "quanto durou".
+> **A transição como primeira classe deixa de ser conveniência de relatório: dois defeitos vivos de
+> medição a apontam.**
+
 *(Sobreposição de 14 ms entre o fim do segmento 2 e o início do 3 é esperada: o resume dispara enquanto
 o segmento do humano ainda está fechando.)*
 
-*(Esta sessão **não** tem segmento de fila, ao contrário de `b934b602` — item de pull não passa pela
-mesma fila que o push. Reforça o §2.2: a composição de segmentos varia por caminho, então contá-los
-para inferir ciclos é frágil por natureza.)*
+*(Esta sessão **não** tem segmento de fila, ao contrário de `b934b602`. A explicação que escrevi aqui —
+*"item de pull não passa pela mesma fila que o push"* — **está errada, e foi refutada em 2026-08-10** por
+uma segunda execução da MESMA smoke (`f1ecc571`, mesmo skill, mesmo pool), que produziu
+`queue/system 2 620 ms handoff` **antes** do primeiro primário. O segmento de fila é da entrada do
+workflow no pool dele, não do item de pull, e apareceu numa execução e não na outra — o discriminador é
+**haver instância livre naquele instante**, não push×pull. Reforça o §2.2 por um motivo mais forte do que
+eu tinha: a composição de segmentos varia não só por caminho, mas **entre duas execuções do mesmo
+caminho**. Contá-los para inferir ciclos é frágil por natureza — e uma amostra de uma execução não
+estabelece a composição de nenhum caminho.)*
 
 ---
 
@@ -297,8 +317,25 @@ wall-clock, ~30,6 s de trabalho somando segmentos):
 > *"descrição de configuração não é configuração"*, agora aplicada a métrica — e desta vez o tell estava
 > no próprio código, que registra a pendência a poucas linhas de distância.
 
-**O que sobra de real:** um nome (`handle_time_ms`) com dois comportamentos vivos — ausente nas médias,
-wall-clock na listagem —, e o `CLAUDE.md` prometendo um terceiro. Nenhum dos três separa as duas
+> ⚠️ **Segunda correção, 2026-08-10 (inventário estático para a spec): eram TRÊS, não dois — e há um
+> quarto NOME.** (1) coluna crua (`query.py:94`, `admin_query.py:115/168`, `timeseries_query.py:279`,
+> `reports_query.py:708`); (2) recomputado por canal (`reports_query.py:647-657`); (3) **wall-clock ao
+> vivo** em `/sessions/live` (`sessions.py:127`, `now − opened_at`, sem tocar a coluna); e (4)
+> `/sessions/customer/{id}` renomeia o valor para **`duration_ms`** (`sessions.py:268-279`), consumido
+> pela `HistoricoTab`. Contei dois porque procurei o campo nos relatórios e não nos endpoints ao vivo.
+>
+> ⚠️ **E "`handle_time_ms` é NULL para webhook" é EMPÍRICO, não derivável do código.** `models.py:319-330`
+> produz NULL só nas condições que lista; **não existe caminho que garanta** que uma sessão webhook nunca
+> receba um `contact_closed` com `started_at`+`ended_at` válidos. A frase entrou no `CLAUDE.md` como
+> invariante e é observação de medição — a D9 item (iii) depende dela e precisa medi-la antes.
+>
+> ⚠️ **Os dois grãos já discordam POR DECISÃO:** sessão **inclui** o suspenso de propósito
+> (`reports_query.py:645-646`: *"Inclui as esperas (suspends) — é a duração real do caso"*), journey
+> registra **excluir** como refino adiado (`:898-899`). Não é descuido dos dois lados; é uma escolha em
+> cada lado, e unificar é escolher uma.
+
+**O que sobra de real:** um nome (`handle_time_ms`) com três comportamentos vivos e um quarto nome de
+saída, e o `CLAUDE.md` prometendo um quinto. Nenhum dos três separa as duas
 grandezas que a §7 distingue: **trabalho consumido** (soma de segmentos) × **processo decorrido**
 (wall-clock com esperas). O sintoma aparece aqui como fator ~13× entre as duas, na mesma sessão.
 
@@ -376,7 +413,13 @@ resume e foi encerrada pelo *scanner*. Todo `0` aqui é *"não houve o fenômeno
 
 ## 9. O que este ADR NÃO decide
 
-- **A forma física da transição** (tabela × colunas × evento) — spec, após §8.2.
+- ~~**A forma física da transição** (tabela × colunas × evento) — spec, após §8.2.~~ **Decidida na spec**
+  ([`docs/product/workflow-arc-implementation-spec.md`](../product/workflow-arc-implementation-spec.md)
+  §2.1): tabela `analytics.session_transitions`, `ReplacingMergeTree` chaveada pelo **`resume_token`** —
+  que já É a identidade da lacuna (nasce no suspend, morre no `HDEL` do resume), então não se inventa
+  identidade nova. Isso impõe uma ordem técnica: o escritor do resume só manda a linha inteira (invariante
+  RMT) se o `suspend_reason` estiver num registro lido com `get` antes do `HDEL` — logo a porta externa
+  (D8) vem antes por razão de mecanismo, não só de disponibilidade.
 - **O destino de `GET /reports/workflows` e `/reports/workflow-summary`** — se somem ou são reapontados
   para o substrato de sessão. Depende de §8.1.
 - **`installation_id` / `organization_id`** da `WorkflowInstance`: sem equivalente em sessão, suspeita de

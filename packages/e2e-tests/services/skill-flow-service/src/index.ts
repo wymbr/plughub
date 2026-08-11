@@ -454,13 +454,50 @@ app.post("/execute", async (req: Request, res: Response) => {
           // ── Write resume_token to hash ───────────────────────────────────────
           // WebhookAdapter.handle_resume() does HGET on this hash for token lookup.
           const tokenValue = `${params.session_id}:${params.step_id}:${expiresAt}`
-          await dedicatedRedis.hset(
-            `${params.tenant_id}:resume_tokens`,
-            params.resume_token,
-            tokenValue,
-          )
-          // Keep the hash alive at least until the deadline (best-effort).
-          try { await dedicatedRedis.expire(`${params.tenant_id}:resume_tokens`, ttlS) } catch { /* non-fatal */ }
+          const hashKey    = `${params.tenant_id}:resume_tokens`
+          await dedicatedRedis.hset(hashKey, params.resume_token, tokenValue)
+
+          // ── Fase 1 do arco de workflow — o TTL do hash só ESTENDE ────────────
+          // O `expire` cru daqui era metade do defeito: `resume_tokens` é
+          // compartilhado por TODAS as sessões do tenant, então este EXPIRE
+          // redefinia o prazo de todos os tokens do tenant — um collect de 1h
+          // escrito depois matava um suspend de 48h. Comparar e só estender faz a
+          // direção do erro virar "não estendeu" em vez de "encurtou".
+          //
+          // ⚠️ `-1` = existe SEM expiração, e aqui é BOOTSTRAP, não "infinito".
+          // A v1 pulava o -1 ("sem TTL é mais longo que qualquer TTL"), mas chave
+          // recém-criada pelo HSET nasce -1 — então o hash nunca mais recebia TTL e
+          // vivia para sempre com os tokens órfãos dentro. Trocar "encurta" por
+          // "não expira nunca" é pior: é silencioso. Espelha `_extend_hash_ttl` do
+          // channel-gateway; as duas implementações têm de concordar.
+          try {
+            const currentTtl = await dedicatedRedis.ttl(hashKey)
+            if (currentTtl === -1 || currentTtl < ttlS) {
+              await dedicatedRedis.expire(hashKey, ttlS)
+            }
+          } catch { /* non-fatal */ }
+
+          // ── Registro POR TOKEN — prazo próprio + substrato da transição (D4) ──
+          // `{tenant}:resume_meta:{token}` tem o TTL do PRÓPRIO token, então nenhuma
+          // outra sessão o encurta; e carrega `suspend_reason`, que até aqui só
+          // existia em `workflow_events` (produtor morto, zero linhas).
+          try {
+            await dedicatedRedis.set(
+              `${params.tenant_id}:resume_meta:${params.resume_token}`,
+              JSON.stringify({
+                session_id:     params.session_id,
+                step_id:        params.step_id,
+                expires_at:     expiresAt,
+                suspend_reason: params.reason ?? "",
+                opened_at:      new Date().toISOString(),
+              }),
+              "EX", Math.max(ttlS, 60),
+            )
+          } catch (err) {
+            // Barulhento: perder isto custa o fallback de prazo e o substrato da
+            // transição. Silêncio aqui faria a Fase 2 nascer com reason vazio.
+            console.warn(`[skill-flow-service] resume_meta write failed (token=${params.resume_token}):`, err)
+          }
 
           return { resume_expires_at: expiresAt }
         }

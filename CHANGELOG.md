@@ -2,6 +2,362 @@
 
 ---
 
+## Arco de workflow — Fase 4 reenquadrada + 4a (2026-08-11)
+
+### ⚠️ A Fase 4 não é remoção — é MIGRAÇÃO. O erro era da spec, e é meu
+
+A spec dizia *"a remoção ficou barata: tudo zero, sem backfill"*, apoiada na §8.1 do ADR
+(`instances=0`, `webhooks=0`, `collects=0`, `workflow_events` vazia). **Isso vale para o DADO; estendi ao
+CÓDIGO sem verificar.** O inventário de chamadores mostra cinco frentes vivas:
+
+- **`POST /v1/workflow/resume`** — chamado pela **evaluation-api** em produção (`router.py:312`, usado em
+  `:2269`/`:2388`), sempre com `tenant_id` ⇒ sempre pelo ramo **proxy**, que só reencaminha ao
+  channel-gateway sem tocar PostgreSQL. Tabela vazia, rota viva.
+- **Rotas que já devolvem 410** (`persist-suspend`, `complete`, `fail`, `collect/persist`) — o
+  **`skill-flow-worker` de produção ainda as chama** (`workflow-client.ts:79,90,104,120`). Removê-las
+  troca 410 por 404 **sem eliminar a chamada**.
+- **`GET /instances*`** — 4 telas + `agent-registry/skills.ts:501` + `skill-flow-worker/worker.ts:230`.
+- **CRUD de webhooks** — `WebhooksTab`, montada em `/workflow/calendar` **e** `/workflow/triggers`.
+- ⚠️ **Erro factual da spec corrigido:** eu havia chamado `/workflow/calendar` de "rota órfã". Ela está
+  registrada (`routes.tsx:104` e `:168`) e viva. Órfãos são dois *componentes* (`WorkflowsPage`,
+  `WorkflowMonitorPage`), que é outra coisa.
+
+> **A frase que fica: _tabela vazia não implica rota morta_.** Uma rota pode ter chamador de produção e não
+> persistir nada. Remover como pacote repetiria o erro que a Fase F desfez — tratar como pacote coisas que
+> só estão adjacentes.
+
+Reescrita em quatro sub-fases ordenadas por dependência (spec §Fase 4): **4a** repontar a evaluation-api ·
+**4b** desacoplar o `skill-flow-worker` das rotas 410 · **4c** migrar a UI de processos para o substrato de
+sessão (a fatia CARA — trabalho de produto, e é onde a Fase 2 rende: `session_transitions` responde "por
+que o processo está parado" sem a `WorkflowInstance`) · **4d** remover o que sobrar.
+
+**Sem chamador algum, removível já:** `POST /admin/backfill-events` · `GET /campaigns/{id}/collects` ·
+`POST /collect/respond` · os dois componentes órfãos. `POST /v1/workflow/webhook/{id}` não tem chamador
+**in-repo**, mas o risco residual é **externo** (integrador real) — o código não responde por isso.
+
+### 4a — evaluation-api retoma direto no channel-gateway ✅
+
+`_resume_workflow` passa a chamar `POST /v1/channels/webhook/resume/{token}` (porta **interna**), em vez do
+proxy da workflow-api. Interna e não a externa da Fase 1 de propósito: a externa existe para TERCEIROS e
+paga por isso — descarta o `source` e o reescreve como `external`, o que apagaria a procedência de uma
+chamada interna. Novo setting `channel_gateway_url` + env no compose.
+
+Era o **único chamador de produção** de `/v1/workflow/resume`; a rota fica só com e2e e sai na 4d.
+
+⚠️ **Verificado apenas o WIRING** (env resolvido dentro do container), não o comportamento: a chamada é
+fire-and-forget dentro de `except → logger.warning(non-fatal)`, então uma URL errada degrada em silêncio.
+O gate honesto é o cenário e2e **28** (contestação → revisão → resume), não executado nesta sessão.
+
+Docs: `docs/product/workflow-arc-implementation-spec.md` § Fase 4 (reescrita).
+
+---
+
+## Arco de workflow — Fase 3: D9, duas grandezas e dois nomes ✅ (2026-08-11)
+
+Um nome (`handle_time_ms`) tinha **três comportamentos vivos** — coluna crua (`query.py:94`,
+`admin_query.py:115/168`, `timeseries_query.py:279`), recomputado por canal
+(`reports_query.py:647-657`) e wall-clock ao vivo (`sessions.py:127`) — **e um quarto nome de saída**
+(`duration_ms` em `/sessions/customer/{id}`). Nenhum dos quatro separava as duas grandezas que a §7 do ADR
+distingue.
+
+| Nome | Unidade | Pergunta |
+|---|---|---|
+| `elapsed_time_ms` | tempo | quanto o caso levou, do ponto de vista do cliente |
+| `agent_time_ms` | agente × tempo | quanto RECURSO o atendimento consumiu |
+
+Emitidos nos **dois grãos** — `/reports/sessions` e `/reports/journeys` — porque consertar só um deixaria
+os níveis discordando. `agent_time_ms` = `Σ segments.duration_ms` com `agent_type != 'system'`,
+`role IN ('primary','specialist')`, `duration_ms IS NOT NULL` (precedente vivo: `busy_ms` da ocupação
+humana). `handle_time_ms` e `business_duration_ms` sobrevivem como **alias de compat** — a UI os consome, e
+trocar backend e frontend no mesmo movimento junta duas coisas que devem falhar separadas.
+
+**O quarto nome morreu.** `/sessions/customer/{id}` devolvia `duration_ms`, que já é o nome da coluna de
+SEGMENTO: a mesma palavra significava "tempo do contato" ali e "tempo de um participante" na tabela ao
+lado — engano que já custou uma aba de Análise vazia sem erro na tela (`timeseries_query.py:267-273`).
+
+⚠️ **A promessa do `CLAUDE.md` estava errada nos DOIS sentidos, e foi removida.** Ele afirmava *"TMA
+webhook = `SUM(segment.duration_ms)`"* como implementação: (a) **falso** — o código faz wall-clock e
+registra a soma como refino adiado (`reports_query.py:898-899`); (b) **conceitualmente errado** — somar
+segmentos não remove o suspenso de um wall-clock, produz OUTRA grandeza em OUTRA unidade, que pode ser
+MAIOR que o wall-clock quando há paralelismo (`@mention` é sempre paralelo e é rotina; especialista de
+conferência nasce dentro da janela do pai; hooks posatt são paralelos entre si). O refino que aquele
+comentário prometia agora tem lugar próprio: o tempo suspenso sai de `analytics.session_transitions`
+(D4/Fase 2), por união de intervalos, quando for pedido — **não da soma**.
+
+**Medido** (`infra/test/probe_duration_definitions.sh`, sessão webhook real):
+`elapsed_time_ms = 1 052 ms` × `agent_time_ms = 29 ms` — **36×** na mesma sessão, que é exatamente o
+sintoma que a D9 existe para nomear. Os dois nomes presentes na resposta do endpoint.
+
+**Limite declarado pelo probe:** o **filtro** do tempo-agente **não foi coberto** — a sessão medida não tem
+segmento de fila nem sintético para excluir (`espera_ms = NULL`), então `agent == soma bruta` por ausência,
+não por acerto. Cobri-lo pede uma sessão que tenha passado por FILA (push, não pull). *A frase de sucesso
+foi corrigida para não afirmar o contrário: a v1 imprimia "e o filtro pegou" três linhas abaixo do aviso de
+que ele não fora exercitado.*
+
+**Fora de escopo, com o motivo:** união de intervalos (é o que daria "wall-clock sem suspenso"; não está
+neste arco) e mudar o que `avgOrNull` faz com webhook — depende de medir se `handle_time_ms` é mesmo sempre
+`NULL` em webhook, que o inventário mostrou ser afirmação **empírica, não derivável do código**. Item com
+dado, não sem.
+
+### Nota de método — o instrumento errou três vezes no MESMO eixo
+
+Falso vermelho por espaço no `grep` do JSON (Fase 1) · falso verde por `-1` chamado de "TTL curto"
+(Fase 1) · falso vermelho por **HTTP 422 lido como campo ausente** (esta fase: chamada sem o `tenant_id`
+obrigatório). O padrão é um só: **julgar o conteúdo sem antes julgar se a leitura era válida**. As três
+correções foram a mesma correção — validar o degrau anterior antes de opinar sobre o próximo: status antes
+do corpo, número antes da comparação, estado antes do comportamento.
+
+O que salvou a fase foi medir o **substrato de forma independente**: `elapsed` e `agent` foram calculados
+direto no ClickHouse, sem passar pelo endpoint, então o `1 052 × 29` ficou de pé mesmo com a chamada HTTP
+quebrada.
+
+Docs: `docs/product/workflow-arc-implementation-spec.md` Fase 3 · `CLAUDE.md` (Arc 19, afirmação removida).
+
+---
+
+## Arco de workflow — Fase 2: a transição como primeira classe ✅ (2026-08-11)
+
+D4 do ADR journey/session/segment. `suspend_reason` e `resume_expires_at` eram órfãos desde o Arc 19:
+não são fato do segmento que fecha nem do que abre, e a `WorkflowInstance` legada seguia sendo a única
+portadora. O buraco não era de dado — era de **lugar nomeado**.
+
+**`analytics.session_transitions`** (`ReplacingMergeTree`), chaveada por
+`(tenant_id, session_id, resume_token)`. **O token JÁ é a identidade da lacuna** — nasce no suspend, vive
+exatamente enquanto ela está aberta, morre no `HDEL` do resume; não se inventou identidade, nomeou-se a que
+existe. `date` particiona pelo **início** da lacuna, nunca pelo fim: uma suspensão que atravessa a virada
+do mês precisa deixar abertura e fechamento na MESMA partição, senão o RMT não as encontra e a transição
+aparece duas vezes, uma eternamente "aberta".
+
+**Nenhum tópico novo, nenhum produtor novo.** O inventário mostrou que `session_suspended` já ia a
+`conversations.events` e que o bridge já tinha `_susp_token`/`_susp_expires` em escopo (o `logger.info`
+abaixo os imprimia) — só não entravam no evento. O resume ganhou um irmão analítico no mesmo tópico.
+⚠️ Ficam **dois eventos com o mesmo nome em tópicos diferentes**: o de `conversations.inbound` é o
+*comando* que faz o routing realocar; o de `conversations.events` é o *fato*. Comentado no código para que
+o próximo leitor não conclua que um é duplicata.
+
+**Os dois escritores e o invariante RMT.** O suspend grava a linha aberta; o resume grava a **linha
+inteira**, lendo `{tenant}:resume_meta:{token}` com `get` ANTES do `HDEL`. Mandar só `resumed_at` faria o
+RMT apagar o `suspend_reason` — o único campo desta tabela sem outra fonte viva (`workflow_events` tem
+produtor morto e zero linhas). É por isso que a Fase 1 era pré-requisito **técnico**, não de ordem.
+
+**Medido** (`infra/test/probe_transition.sh`, ciclo real): `suspend_reason=input · outcome=resumed ·
+resume_origin=token · lacuna=1 014 ms · expires_at` 24 h à frente; lente B `versoes=2
+outcomes=['resumed','open']`.
+
+### ⚠️ Três defeitos meus no caminho, e os três são de MÉTODO
+
+1. **Writer sem row builder.** Passei `[row.get(c) for c in cols]` — genérico e elegante — ignorando que
+   todo writer deste arquivo converte ISO string → `datetime`/`date` via `_parse_dt`/`_today_utc`. Morreu
+   em `Error serializing column 'date'`. A falha foi **barulhenta e contida**: o `except` do consumer deu
+   tabela, tópico e offset, e nada além desta tabela quebrou.
+2. **Guard que degrada em SILÊNCIO.** `if payload.get("resume_token")` — argumento certo (ausência é fato
+   honesto; forjar id sintético criaria linha órfã), implementação errada: pulava sem log. Custou **três
+   rodadas de diagnóstico** e duas hipóteses erradas minhas (produtor mudo, tópico errado). *Um fallback
+   que esconde o motivo do fallback não é resiliência.* Agora o guard anuncia (`_log_missing_token`, em
+   `warning` — `info` é invisível nestes serviços).
+3. **Medi dado produzido por consumidor quebrado.** As linhas abertas sumiram porque os eventos foram
+   consumidos DURANTE a janela do bug (1), e o Kafka não os reentrega: os offsets avançaram. Segui
+   investigando o produtor sobre evidência que o consumidor tinha descartado. **Depois de corrigir um
+   consumidor, só o ciclo NOVO é evidência** — e com o serviço já quente (há ~3 s de janela cega até o
+   `Joined group`).
+
+**Instrumento — três lições incorporadas ao probe:** (a) alias NUNCA repete nome de coluna real
+(`toString(suspended_at) AS suspended_at` faz o `dateDiff` receber String; o `CLAUDE.md` documenta para
+agregado, vale igual p/ função simples); (b) todo número passa por validador — `CH` captura stderr no
+stdout, e `[ "$X" -gt 0 ]` sobre texto de exceção era lido como "nada encontrado"; (c) **lente B sem
+`FINAL`**, porque `FINAL` não distingue "abertura+fechamento" de "só fechamento" — sem ela o probe daria
+verde com metade do caminho mudo, e a ambiguidade "merge comeu × nunca escreveu" virou **veredicto**
+(nenhuma linha `open` em ≥3 escritas do tenant não é merge).
+
+Docs: `docs/product/workflow-arc-implementation-spec.md` Fase 2 · ADR §5 (D4).
+
+---
+
+## Arco de workflow — Fase 1: porta externa de resume ✅ (2026-08-10)
+
+D8 do ADR journey/session/segment. **Pré-requisito de qualquer remoção do legado:** hoje o único caminho
+de resume alcançável de fora é `POST /v1/workflow/resume` da workflow-api, e removê-la sem substituto
+deixaria o Padrão 2 sem porta.
+
+**`POST /channel/webhook/resume/{token}`** — simétrica ao trigger em prefixo e em classe de alcance, fora
+do registro de `ChannelEndpoint` (não há endereço a registrar; o token é *capability* de uso único, e a
+posse dele é a credencial, como no link público de survey). Reusa `handle_resume` inteiro: lock da
+Camada F, registro terminal, 404 × 409, consumo do token. A porta é fina de propósito — duplicar a máquina
+de unicidade criaria a segunda fonte que a Fase F gastou seis fases removendo.
+
+**QUATRO diferenças em relação à rota interna** (a spec previa três; a quarta apareceu ao ler
+`_terminal_cause`):
+
+1. **`source` descartado e reescrito como `external`.** A rota interna repassa o payload verbatim, e
+   `_terminal_cause` lê `payload["source"]` — um chamador podia declarar `source:"supervisor:x"` e obter
+   `acw_supervisor_closed` no registro terminal DURÁVEL de 25 h, que é o que o Console mostra ao agente
+   como *"encerrado por …"*. Dívida já catalogada; **abrir a porta a tornaria explorável**, então virou
+   gate da fase em vez de follow-up dela.
+2. **`decision` recusada** (net new). `decision:"timeout"` é o que separa `task_done` de `acw_*`; deixá-la
+   passar daria a um terceiro o poder de marcar como expirado o item de um humano. Um sistema externo
+   *responde* um resume; não encerra trabalho alheio.
+3. **`resume_origin` fixo em `token`** — único valor honesto por esta porta.
+4. Sem `pool_id`/`instance_id`/`Authorization`: são o caminho de posse (A5) do Console.
+
+**`{tenant}:resume_meta:{token}` — o prazo passa a ser DO TOKEN.** O TTL de `{tenant}:resume_tokens` é do
+**hash**, não do token: os três escritores davam `EXPIRE` na chave inteira, compartilhada por todo o
+tenant, então o último escritor redefinia o prazo de todos — um `collect` de 1 h matava um `suspend` de
+48 h. Medido no gate: `89999s → 90s`. O novo registro tem TTL do próprio token e **dois consumidores
+vivos**: (a) *fallback de resolução* — se a entrada do hash sumiu e o meta vive, o token é reidratado **e
+reinserido no hash** (sem isso ficaria invisível ao scanner de prazo: um token que resume mas nunca expira
+seria vazamento novo trocado por defeito velho); (b) *substrato da transição* (D4/Fase 2), carregando
+`suspend_reason` — que só existia em `workflow_events`, tabela com produtor morto e zero linhas. Lido com
+`get`, nunca `getdel`, antes do consumo: é o que permitirá ao escritor do resume mandar a LINHA INTEIRA ao
+`ReplacingMergeTree`. *Chave órfã seria o modo de falha desta casa; ela nasceu com leitor.*
+
+**`persistSuspendWebhook` ganhou `reason`** (`persistSuspend` do Arc 4 sempre teve). ⚠️ O contrato tem
+**DUAS declarações** — `StepContext` em `executor.ts` e `SkillFlowEngineConfig` em `engine.ts`. Alarguei só
+a primeira e o implementador (skill-flow-service) tipa pela segunda; as duas estão feitas, com nota
+cruzada. Mesma família do registro duplo do mcp-server.
+
+### ⚠️ O conserto do TTL foi escrito ERRADO primeiro, e o erro era pior que o defeito
+
+`_extend_hash_ttl` nasceu com `if current == -1: return`, sob um raciocínio que soa correto — *"sem
+expiração é mais longo que qualquer TTL, logo defini-lo seria encurtar"*. Mas **chave recém-criada pelo
+`HSET` nasce com `-1`**, então o caminho normal nunca chegava ao `EXPIRE`: o hash passava a viver **para
+sempre**, com todo token órfão dentro. Troquei *encurta* por *não expira nunca* — pior por ser
+**silencioso**: nada fica vermelho quando uma chave apenas deixa de morrer, enquanto o defeito original ao
+menos se manifestava como resume recusado.
+
+Apareceu porque o P6 **lê o TTL antes de julgar**, como pré-condição. Um P6 que apenas apagasse o hash e
+verificasse o resume teria saído **verde** — o `resume_meta` funciona igual — e a plataforma ganharia um
+vazamento de chave permanente com um portão verde por cima. Corrigido nas duas implementações (Python e
+TypeScript, que precisam concordar) e o gate aprendeu a distinguir **`-2` inexistente · `-1` sem expiração
+· `n` curto**: a v1 imprimia *"TTL curto (-1s)"*, o rótulo errado para o estado errado.
+
+**Gate `infra/test/gate_external_resume.sh` — 7/7** (2026-08-10): P1 resume `200` · P2 reenvio `409
+resume_already_terminal` · P3 inexistente `404` · P4 `by:"external"` inclusive no token adversarial que
+declarou `supervisor:mallory`+`timeout` · P5 concorrência `1×200 + 1×409` · P6 token sobrevive à morte do
+hash. **Limite declarado no próprio script:** o P6 prova a *recuperação* (`resume_meta`), não a *prevenção*
+(`_extend_hash_ttl`) — o encurtamento é forçado por `redis-cli`, então cobrir a prevenção pede um escritor
+real de TTL curto no caminho da aplicação. E o gate nunca reivindica o item de pull, ver abaixo.
+
+**Aberto, com decisão registrada em `TODO.md`:** a conferência de posse do A5 é gateada em
+`approver is not None` (`webhook.py:1148`) e a porta externa passa `approver=None` — **ela não confere
+posse**. Para `suspend` puro isso é o ponto da porta; para `delegate` a uma fila de pull, três estados, e
+só o primeiro é claramente aceitável (sem item ✅ · na fila sem dono ⚠️ · detido por um humano ❌). O
+terceiro não precisa de principal para ser recusado — é propriedade do ITEM. Não implementado de propósito:
+o gate nunca reivindica, logo mede sempre o caso indeciso, e **um portão que só alcança o caso duvidoso não
+pode julgar o caso errado**.
+
+Docs: `docs/product/workflow-arc-implementation-spec.md` Fase 1 · `TODO.md` § porta externa × posse.
+
+---
+
+## Arco de workflow — Fase 0: a borda declarada ✅ (2026-08-10)
+
+Primeira fase da spec [`docs/product/workflow-arc-implementation-spec.md`](docs/product/workflow-arc-implementation-spec.md).
+Não entrega produto: entrega **saber o que a borda é**, porque a Fase 1 (porta externa de resume) ia ser
+escrita contra uma borda que não existe.
+
+**O achado que motivou a fase:** `/channel/webhook/{slug}` (`channel-gateway/main.py:1302`) e
+`/v1/channels/webhook/{skill_id}` (`:1387`) são rotas do **mesmo app FastAPI na mesma porta**
+(`docker-compose.demo.yml:1185`). Não há proxy para `/channel` no `vite.config.ts` nem no `Dockerfile` do
+platform-ui, e **não existe nenhum `nginx.conf` versionado no repositório**. A separação externo×interno é
+o filtro `allowed_origins={"external"}` (`:1347`) — de **código**, não de topologia. O `CLAUDE.md` opunha
+os dois como se a borda existisse (e admitia, duas linhas abaixo, que nenhum teste a alcança).
+
+**Decisão: declarar, não construir.** Construir borda no meio de um arco de modelagem junta duas coisas que
+devem falhar separadas, e o risco que ela cobriria (a rota anônima de pool) já está nomeado e não piora com
+este arco. O invariante do `CLAUDE.md` passa de *descrição* a *requisito de deploy*.
+
+**`infra/test/probe_edge_surface.sh`** — enumera a superfície por **duas fontes reconciliadas**:
+`/openapi.json` (runtime) **∪** decoradores no fonte. As duas porque **WebSocket não aparece no OpenAPI**:
+o runtime sozinho declararia que `/ws` não existe. O probe reprova nos dois sentidos — prefixo sem
+classificação, e prefixo que o runtime tem e o parser estático não achou (aí o instrumento é que mente).
+Veredicto de três estados; `/openapi.json` com menos de 5 caminhos sai INCONCLUSIVO em vez de "superfície
+limpa".
+
+⚠️ **A previsão escrita na spec estava errada por 3,5×, e o erro é o resultado da fase.** Previ *"2
+publicáveis (`/channel`, `/survey`)"* — número tirado do enquadramento do `CLAUDE.md`, não da superfície.
+São **7**: `/channel`, `/survey`, `/webhooks`, `/voice`, `/webrtc`, `/ws`, `/webchat`. O que eu esquecera é
+que **metade da superfície externa não é produto, é infraestrutura de canal** — callbacks de Meta e Twilio,
+áudio TTS que o provedor busca, WebSocket e upload do browser. Nenhum é opcional e nenhum some se a borda
+for construída. *A previsão errada ficou registrada ao lado da correção: prever serve para errar cedo.*
+
+**Consequência: o invariante era MEIA REGRA.** *"Never expose `/v1/*` at the edge"*, enunciado como
+proibição, não diz o que fazer — e um deploy que publique tudo menos `/v1` cumpre a letra enquanto expõe
+`/docs`. Reescrito como **allowlist de sete prefixos** + interno (`/v1`, `/health`) + implícitos do FastAPI
+(`/openapi.json`, `/docs`, `/redoc`).
+
+**Achado de brinde:** os três implícitos respondem **200** (`main.py:468` usa o default do FastAPI).
+Publicar o serviço publica o **mapa** das rotas internas, inclusive `POST /v1/channels/webhook/pool/{pool_id}`,
+anônima por construção. O probe reporta como testemunha — desabilitar em produção é decisão de deploy.
+
+**Medido:** `externos=7 · internos=2 · total=9`, `openapi.paths=33`, os 3 implícitos em `200`, as duas
+testemunhas presentes. Todos os números previstos antes da execução bateram.
+
+**Limite declarado pelo próprio probe:** isto é uma DECLARAÇÃO. Nenhum teste no repositório verifica o que
+o deploy realmente publica — e o probe imprime essa frase toda vez, para que o verde não seja lido como
+garantia.
+
+Docs: `CLAUDE.md` § What Never To Do (invariante reescrito),
+`docs/product/workflow-arc-implementation-spec.md` §0.1 e Fase 0.
+
+---
+
+## `sequence_index` — o índice sobrevive ao `participant_left` ✅ (2026-08-10)
+
+O índice era calculado no `participant_joined` (`INCR session:{sid}:segment_seq`) e **nunca persistido**,
+enquanto o `segment_id` ao lado era. Todo `participant_left` humano o reconstruía como `0` e, como
+`analytics.segments` é `ReplacingMergeTree`, **a linha do left substituía a do join e apagava o índice**.
+Atingia todo segmento humano; os nativos escapavam por acidente (join e left no mesmo escopo léxico).
+
+**Conserto:** `sequence_index` entra no `participant_meta:{instance_id}` — e não numa chave própria,
+porque esse registro já se declara *"fonte por-participante para o path de close"* e é lido com `get`,
+não `getdel`, em todos os left sites. **A escolha da chave É o conserto do segundo left:** uma chave
+`getdel` sobreviveria ao primeiro left e não ao republish, que voltaria a escrever `0` e desfaria tudo
+pelo outro caminho. Lido nos quatro sites humanos, cada um dentro do bloco de `participant_meta` que já
+existia: `_ha` (agent_done), `_hm` (customer_disconnect — record `human_seg` + publish), `_cl`
+(claimante de pull), `_sweep_open_human_participants`. A cadeia a jusante (`human_seg` →
+`_seed_segment_signal` → republish) não precisou de nada: ela propagava fielmente, e só herdava o zero.
+
+**O conserto QUEBRA um consumidor, e por isso ele saiu na mesma fatia.** `quality-export/exporter.py`
+ordenava por `sequence_index ASC, started_at ASC`: com tudo empatado em `0` a cláusula degenerava em
+cronológica e o export saía certo **por acidente**. Com o índice correto, um especialista de conferência
+(fora do contador ⇒ `0`) entrando tarde passaria a ordenar **antes** de um primário de handoff. Rechaveado
+para `started_at ASC, segment_id ASC`. *O critério de fatia foi neutralidade, não acoplamento: entra na
+fatia do conserto o consumidor que o conserto MOVE.*
+
+**Duas correções ao inventário de consumidores, ambas por ler o mecanismo em vez do nome do campo:**
+`handoff_count` **não era afetado** — a MV é gatilho de INSERT sobre `segments`, sem `FINAL`, agrega as
+duas versões e o `maxState` preserva o índice do join. E o empate do `argMax` da atribuição é mais estreito
+do que se supunha: `argMax` só é não-determinístico quando o **máximo** empata, o que exige **dois ou mais
+primários humanos** (transferência) — uma sessão com resume nativo no fim não exercita o defeito.
+
+**Verificação que decidiu o escopo:** `_session_agent_attribution_sql` **filtra**
+(`role='primary' AND agent_type != 'system'`), e esse escopo **coincide** com o do contador — os três
+únicos sites de `INCR` publicam `role='primary'`; `queue` e especialista nunca incrementam. Logo o conserto
+torna o índice único no conjunto agregado e o empate desaparece: o rechaveamento dos 5 `argMax` para
+`started_at` **não é pré-requisito** e virou fatia própria, onde é provadamente neutro.
+
+**Instrumento:** `infra/test/probe_sequence_index.sh` — duas lentes (`FINAL` = o que os consumidores leem;
+sem `FINAL` = as versões cruas de join e left) e veredicto de três estados. A lente B **tem prazo**: o merge
+apaga a evidência. Medido em `f1ecc571` logo após o submit: `[1,1]` (join e left concordam) e sequência
+`0, 1, 2`; minutos depois a mesma lente já vinha `[1]` — e o probe **declara isso mudo** em vez de contar
+como aprovação. Na primeira execução ele **reprovou por bug próprio** (`seq | tr` deixa espaço final que
+`$()` não come; as duas strings imprimiam idênticas) — portão julgando a própria montagem, corrigido com
+`xargs` nos dois lados e o motivo comentado no script.
+
+**Dois achados registrados, nenhum consertado aqui.** (1) A regra de atribuição — *"último primário
+não-sintético"* — credita a `f1ecc571` ao segmento nativo de **10 ms** que só processou o resume, não ao
+humano que trabalhou 3,9 s; depois do conserto ela erra **deterministicamente**, que é pior de notar.
+Não é defeito do índice: é a D4 cobrando o preço em outro lugar, e o conserto depende da transição como
+primeira classe. (2) A explicação do ADR §2.3 sobre o segmento de fila (*"item de pull não passa pela
+mesma fila que o push"*) foi **refutada** — a mesma smoke, mesmo skill e mesmo pool produziu `queue` numa
+execução e não na outra: o discriminador é haver instância livre naquele instante. A composição de
+segmentos varia **entre duas execuções do mesmo caminho**.
+
+Docs: `TODO.md` § `sequence_index` (inventário revisado + decisão de fatia),
+`docs/adr/adr-journey-session-segment-model.md` §2.3.
+
+---
+
 ## Prontidão de provisionamento + dois falsos sinais (2026-08-10)
 
 Três itens pequenos, ligados por um tema: **sinal que falta, e sinal que grita errado.**

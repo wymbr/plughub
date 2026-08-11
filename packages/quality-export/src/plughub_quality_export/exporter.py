@@ -172,13 +172,21 @@ class InternalExporter:
         return rows[0] if rows else None
 
     async def _read_segments(self, tenant_id: str, session_id: str) -> list[dict[str, Any]]:
+        # Ordem CRONOLÓGICA, não por `sequence_index` (mudou 2026-08-10).
+        # O índice não é ordenação total dos segmentos da sessão: `queue`, sintéticos e
+        # especialistas de conferência ficam FORA do contador por decisão, então saem
+        # todos em 0. Enquanto o índice estava quebrado (todo left humano gravava 0) o
+        # empate universal fazia esta cláusula cair no `started_at` e o resultado era
+        # correto POR ACIDENTE; com o índice consertado, um especialista que entra tarde
+        # (0) passaria a ordenar ANTES de um primário de handoff (1+). Ordenar por
+        # `started_at` é o único critério válido — ver ADR journey/session/segment §2.3.
         return await self._ch.query(
             "SELECT segment_id, pool_id, flow_id, deploy_version, user_id, role, "
             "agent_type, sequence_index, toString(started_at) AS started_at, "
             "toString(ended_at) AS ended_at, outcome "
             "FROM segments FINAL "
             "WHERE tenant_id = {t:String} AND session_id = {s:String} "
-            "ORDER BY sequence_index ASC, started_at ASC",
+            "ORDER BY started_at ASC, segment_id ASC",
             {"t": tenant_id, "s": session_id},
         )
 

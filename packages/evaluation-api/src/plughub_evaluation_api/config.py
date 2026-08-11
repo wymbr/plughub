@@ -34,7 +34,16 @@ class Settings(BaseSettings):
     backfill_max_segments: int = 5000   # teto de segurança por job de backfill
 
     # Workflow API (Arc 4 — review/contestation state machine)
+    # ⚠️ LEGADO em burn-down (arco de workflow, Fase 4). O resume deixou de passar por
+    # aqui na 4a — vai direto ao channel-gateway. Só permanece porque o consumer de
+    # `workflow.events` (motor de review reactive-only) ainda existe.
     workflow_api_url: str = "http://localhost:3800"
+
+    # Channel Gateway — porta INTERNA de resume (`/v1/channels/webhook/resume/{token}`).
+    # Fase 4a: a evaluation-api retoma a workflow suspensa direto, sem o salto pela
+    # workflow-api, que só reencaminhava. Interna, não externa: componente da
+    # plataforma, não terceiro.
+    channel_gateway_url: str = "http://localhost:8010"
 
     # Knowledge API (mcp-server-knowledge — Arc 13 Fase H CalibrationNote publish)
     knowledge_api_url: str = "http://localhost:3401"

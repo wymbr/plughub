@@ -979,9 +979,55 @@ PARTITION BY toYYYYMM(merged_at)
 ORDER BY (tenant_id, source_root)
 """
 
+# ── D4 / arco de workflow Fase 2: session_transitions ────────────────────────
+# A LACUNA entre dois segmentos da mesma sessão — suspend → (espera) → resume.
+#
+# POR QUE TABELA PRÓPRIA, e não colunas em `segments`: `suspend_reason` e
+# `resume_expires_at` não são fato do segmento que fechou nem do que abriu. Pendurá-los
+# no que fechou faz "por que esta sessão está parada?" — pergunta sobre o PRESENTE —
+# ser respondida por um registro do PASSADO, e não dá onde pôr `resume_expires_at`,
+# que é fato do FUTURO daquela lacuna. Ver ADR journey/session/segment §5 (D4).
+#
+# POR QUE CHAVEADA PELO `resume_token`: ele JÁ é a identidade da lacuna — nasce no
+# suspend, vive exatamente enquanto ela está aberta, e morre no `HDEL` do resume.
+# Não se inventa identidade nova; nomeia-se a que existe.
+#
+# ⚠️ INVARIANTE RMT — substitui a LINHA INTEIRA, não faz merge por coluna. São dois
+# escritores (bridge no suspend, channel-gateway no resume) e o SEGUNDO manda a linha
+# completa: ele lê `{tenant}:resume_meta:{token}` com `get` ANTES do `HDEL`, e de lá
+# tira `suspend_reason`/`step_id`/`expires_at`/`opened_at`. É por isso que a Fase 1
+# (que criou o `resume_meta`) é pré-requisito TÉCNICO desta, não só de ordem.
+#
+# `row_version = coalesce(resumed_at, suspended_at)` — mesmo padrão de `sessions`:
+# a linha do resume é sempre mais nova que a do suspend, então ela sobrevive.
+_DDL_SESSION_TRANSITIONS = """
+CREATE TABLE IF NOT EXISTS {db}.session_transitions
+(
+    tenant_id          String,
+    session_id         String,
+    resume_token       String,
+    step_id            String,
+    suspend_reason     String,
+    suspended_at       DateTime64(3, 'UTC'),
+    resume_expires_at  Nullable(DateTime64(3, 'UTC')),
+    resumed_at         Nullable(DateTime64(3, 'UTC')),
+    resume_origin      String DEFAULT '',
+    outcome            String DEFAULT 'open',
+    pool_id            String DEFAULT '',
+    origin             String DEFAULT 'live',
+    date               Date,
+    row_version        DateTime64(3, 'UTC') DEFAULT coalesce(resumed_at, suspended_at),
+    ingested_at        DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(row_version)
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, session_id, resume_token)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
     _DDL_SESSIONS,
+    _DDL_SESSION_TRANSITIONS,
     _DDL_JOURNEY_ALIASES,
     _DDL_QUEUE_EVENTS,
     _DDL_MESSAGES,
@@ -1249,6 +1295,31 @@ class AnalyticsStore:
     async def upsert_session(self, row: dict) -> None:
         await asyncio.to_thread(
             self._insert, "sessions", [_session_row(row)], self._SESSION_COLS
+        )
+
+    # session_transitions (D4 — a lacuna entre segmentos)
+
+    _TRANSITION_COLS = [
+        "tenant_id", "session_id", "resume_token", "step_id",
+        "suspend_reason", "suspended_at", "resume_expires_at",
+        "resumed_at", "resume_origin", "outcome", "pool_id",
+        "origin", "date", "row_version",
+    ]
+
+    async def upsert_session_transition(self, row: dict) -> None:
+        """
+        ⚠️ `ReplacingMergeTree` de LINHA INTEIRA: quem escreve manda TODAS as colunas.
+        A linha do suspend nasce com `outcome='open'` e `resumed_at=None`; a do resume
+        chega com `row_version` maior (`resumed_at`) e a substitui — carregando de novo
+        `suspend_reason`/`step_id`/`suspended_at`, que ela leu do `resume_meta`. Enviar
+        um resume "parcial" apagaria o motivo da suspensão da linha sobrevivente, que é
+        o único fato desta tabela sem outra fonte no sistema.
+        """
+        await asyncio.to_thread(
+            self._insert,
+            "session_transitions",
+            [_transition_row(row)],
+            self._TRANSITION_COLS,
         )
 
     # queue_events
@@ -1842,6 +1913,46 @@ def _today_utc(ts: str | None = None) -> datetime:
     """Returns a date for the partition key. Prefers the event timestamp."""
     dt = _parse_dt(ts)
     return dt if dt else datetime.utcnow()
+
+
+def _transition_row(d: dict) -> list:
+    """
+    D4 — linha de `session_transitions`, na ORDEM de `_TRANSITION_COLS`.
+
+    Existe pelo mesmo motivo que `_session_row`: o parser produz ISO strings (é a
+    fronteira com o Kafka) e o driver do ClickHouse exige `datetime`/`date` nativos.
+    A v1 desta escrita passava `row.get(c)` direto e morria em
+    `Error serializing column 'date' into data type 'Date'` — falha BARULHENTA, capturada
+    pelo `except` do consumer, então nada além desta tabela quebrou; o sintoma foi
+    tabela vazia com produtor e parser sadios.
+
+    `date` e `row_version` são DERIVADOS aqui, não recebidos: duas fontes para a chave
+    de partição e para a versão do ReplacingMergeTree é como se ganha uma linha que
+    não substitui a anterior.
+    """
+    susp = _parse_dt(d.get("suspended_at")) or datetime.utcnow()
+    res  = _parse_dt(d.get("resumed_at"))
+    return [
+        d.get("tenant_id", ""),
+        d.get("session_id", ""),
+        d.get("resume_token", ""),
+        d.get("step_id", "") or "",
+        d.get("suspend_reason", "") or "",
+        susp,
+        _parse_dt(d.get("resume_expires_at")),
+        res,
+        d.get("resume_origin", "") or "",
+        d.get("outcome") or "open",
+        d.get("pool_id", "") or "",
+        d.get("origin") or "live",
+        # Partição pelo INÍCIO da lacuna, NUNCA pelo fim: uma suspensão que atravessa
+        # a virada do mês tem de deixar abertura e fechamento na MESMA partição, senão
+        # as duas versões da linha nunca se encontram e o ReplacingMergeTree não
+        # deduplica — a transição apareceria duas vezes, uma eternamente "aberta".
+        susp.date(),
+        # Versão: o fechamento é sempre mais novo que a abertura, então ele vence.
+        res or susp,
+    ]
 
 
 def _session_row(d: dict) -> list:

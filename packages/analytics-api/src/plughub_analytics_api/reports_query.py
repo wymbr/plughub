@@ -619,7 +619,27 @@ def _fetch_sessions(
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}}
             GROUP BY session_id
-        ) AS _segdur ON _segdur.session_id = s.session_id"""
+        ) AS _segdur ON _segdur.session_id = s.session_id
+        -- ── D9: TEMPO-AGENTE (agente × tempo), não duração ────────────────────
+        -- Σ do trabalho consumido pela sessão. Os filtros têm precedente vivo no
+        -- `busy_ms` da ocupação humana (ver `_agent_availability_sql`):
+        --   · agent_type != 'system' → sintético (outage, mute queue) = zero recurso
+        --   · role IN (primary, specialist) → exclui 'queue': ESPERA não é trabalho
+        --   · duration_ms IS NOT NULL → segmento aberto some silenciosamente no sum()
+        -- ⚠️ NUNCA comparar com `elapsed_time_ms`: segmentos se SOBREPÕEM (@mention é
+        -- sempre paralelo ao primary e é rotina; especialista de conferência nasce
+        -- dentro da janela do pai; hooks posatt são paralelos entre si). Logo
+        -- Σ ≥ wall-clock com sobreposição e Σ ≤ com lacunas — as duas nunca são
+        -- comparáveis, e a soma NUNCA vira tempo de sessão. Ver ADR §D9.
+        LEFT JOIN (
+            SELECT session_id, sum(duration_ms) AS agent_ms
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND agent_type != 'system'
+              AND role IN ('primary', 'specialist')
+              AND duration_ms IS NOT NULL
+            GROUP BY session_id
+        ) AS _agt ON _agt.session_id = s.session_id"""
 
     # Use __ANI_DNIS__ placeholder instead of str.format() to avoid conflicts
     # with ClickHouse's own {param:Type} syntax inside _joins.
@@ -655,6 +675,26 @@ def _fetch_sessions(
                        toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
                 )
             ) AS handle_time_ms,
+            -- ── D9: os DOIS nomes, e eles estão em UNIDADES diferentes ──────────
+            -- `elapsed_time_ms` (tempo) = a mesma expressão de `handle_time_ms` acima,
+            --   agora com o nome que diz o que ela é. `handle_time_ms` sobrevive como
+            --   ALIAS DE COMPAT (a UI antiga o consome) e não deve ganhar leitor novo.
+            -- `agent_time_ms` (agente × tempo) = quanto RECURSO o atendimento consumiu.
+            -- Perguntas diferentes: "quanto o caso levou para o cliente" × "quanto de
+            -- gente/máquina ele gastou". Antes desta fase o mesmo nome respondia as
+            -- duas, com três comportamentos vivos e um quarto nome de saída.
+            if(
+                COALESCE(NULLIF(s.channel, ''), _ch.channel_v) = 'webhook',
+                if(s.closed_at IS NOT NULL AND _segdur.first_started_at IS NOT NULL,
+                   toInt64(dateDiff('millisecond', _segdur.first_started_at, s.closed_at)),
+                   NULL),
+                COALESCE(
+                    s.handle_time_ms,
+                    if(s.closed_at IS NOT NULL AND s.opened_at IS NOT NULL,
+                       toInt64(dateDiff('millisecond', s.opened_at, s.closed_at)), NULL)
+                )
+            ) AS elapsed_time_ms,
+            _agt.agent_ms AS agent_time_ms,
             __ANI_DNIS__,
             COALESCE(_sc.cnt, 0) AS segment_count,
             COALESCE(s.status, 'closed') AS status,
@@ -895,10 +935,38 @@ def _fetch_journeys(
                 s.outcome, s.opened_at,
                 s.session_id = {jexpr} AND s.outcome IS NOT NULL AND s.outcome != ''
             ) AS business_outcome,
-            -- J4: duração do processo (v1 = wall-clock min→max; refino "exclui suspenso
-            -- via SUM(segment.duration_ms)" fica p/ iteração).
-            toInt64(dateDiff('millisecond', min(s.opened_at), max(COALESCE(s.closed_at, s.opened_at)))) AS business_duration_ms
+            -- ── D9 no grão JOURNEY — os mesmos dois nomes do grão sessão ────────
+            -- Consertar só a sessão deixaria os dois níveis discordando, e a §7 do ADR
+            -- existe para que não discordem.
+            --
+            -- `elapsed_time_ms` (tempo) = wall-clock do processo, min→max. É o antigo
+            -- `business_duration_ms`, que sobrevive como ALIAS DE COMPAT (a
+            -- AnaliseJourneysPage o consome) e não deve ganhar leitor novo.
+            --
+            -- ⚠️ O "refino adiado" que este comentário prometia — *"exclui suspenso via
+            -- SUM(segment.duration_ms)"* — NÃO é o que `agent_time_ms` faz, e a promessa
+            -- estava errada nos dois sentidos. Somar segmentos não remove o suspenso de
+            -- um wall-clock: produz OUTRA grandeza, em OUTRA unidade (agente × tempo),
+            -- que pode ser MAIOR que o wall-clock quando há paralelismo (@mention,
+            -- conferência, hooks posatt). O tempo efetivamente suspenso agora tem lugar
+            -- próprio — `analytics.session_transitions` (D4/Fase 2) —, e é de lá que
+            -- deve sair, por união de intervalos, quando for pedido. Não daqui.
+            toInt64(dateDiff('millisecond', min(s.opened_at), max(COALESCE(s.closed_at, s.opened_at)))) AS business_duration_ms,
+            toInt64(dateDiff('millisecond', min(s.opened_at), max(COALESCE(s.closed_at, s.opened_at)))) AS elapsed_time_ms,
+            -- `agent_time_ms` (agente × tempo) = Σ do trabalho de TODAS as sessões do
+            -- processo, com os mesmos filtros do grão sessão. Sessão sem segmento
+            -- elegível entra como 0 (COALESCE) — a journey existe mesmo assim.
+            toInt64(sum(COALESCE(_jagt.agent_ms, 0))) AS agent_time_ms
         FROM {db}.sessions AS s FINAL
+        LEFT JOIN (
+            SELECT session_id, sum(duration_ms) AS agent_ms
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND agent_type != 'system'
+              AND role IN ('primary', 'specialist')
+              AND duration_ms IS NOT NULL
+            GROUP BY session_id
+        ) AS _jagt ON _jagt.session_id = s.session_id
         WHERE {where}
         GROUP BY journey_id
         {having}

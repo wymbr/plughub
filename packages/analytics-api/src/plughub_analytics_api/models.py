@@ -29,8 +29,33 @@ from typing import Any
 from . import survey_catalog
 
 
+import logging
+
+logger = logging.getLogger("plughub.analytics.models")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _log_missing_token(session_id: str) -> list:
+    """
+    Guard que ANUNCIA que pulou. Devolve sempre `[]` (existe para ser usado dentro
+    de um `*(...)` num literal de lista, onde não cabe um statement).
+
+    ⚠️ `warning`, não `info`: os serviços deste repositório sobem por
+    `uvicorn …:app` e ficam em WARNING — um `logger.info` aqui seria invisível, e
+    a ausência do log passaria por ausência do comportamento. Já catalogado em
+    `TODO.md` § "Seis serviços rodam SEM logging configurado".
+    """
+    logger.warning(
+        "session_suspended SEM resume_token (session=%s) — transição D4 não gravada. "
+        "O produtor (orchestrator-bridge) não carimbou o token no evento Kafka: "
+        "a sessão fica suspensa sem linha de transição, e 'por que está parada' "
+        "segue sem resposta.",
+        session_id,
+    )
+    return []
 
 
 def _gen_id() -> str:
@@ -394,6 +419,73 @@ def parse_conversations_event(payload: dict[str, Any]) -> list[dict] | None:
                 "root_session_id": payload.get("root_session_id") or session_id,
                 "journey_id":      payload.get("root_session_id") or session_id,
                 "origin":     origin_from_source(payload.get("source")),
+            },
+            # ── D4 / Fase 2 — a linha ABERTA da transição ────────────────────
+            # Dual-write, mesmo padrão do `parse_mcp_audit_event`. Só sai quando há
+            # `resume_token`: ele É a identidade da lacuna, e uma linha sem ele não
+            # tem chave — seria uma transição anônima que nenhum resume alcançaria.
+            # Ausência aqui é honesta (evento de produtor antigo); inventar um id
+            # sintético criaria linha órfã que nunca fecha.
+            #
+            # ⚠️ Mas a ausência LOGA. A v1 deste guard pulava em silêncio, e isso
+            # custou três rodadas de diagnóstico em 2026-08-10: a tabela ficava só
+            # com as linhas do resume, e nada — nem log de erro, nem falha de
+            # escrita — apontava o elo. "Degradação NUNCA é silenciosa" vale para o
+            # guard que eu mesmo escrevi defendendo que a ausência era honesta:
+            # honesta é dizer que faltou, não omitir sem ruído.
+            *(_log_missing_token(session_id) if not payload.get("resume_token") else []),
+            *([{
+                "table":             "session_transitions",
+                "tenant_id":         tenant_id,
+                "session_id":        session_id,
+                "resume_token":      payload["resume_token"],
+                "step_id":           payload.get("step_id") or "",
+                "suspend_reason":    payload.get("suspend_reason") or "",
+                "suspended_at":      payload.get("timestamp") or _now(),
+                "resume_expires_at": payload.get("resume_expires_at") or None,
+                "resumed_at":        None,
+                "resume_origin":     "",
+                "outcome":           "open",
+                "pool_id":           payload.get("pool_id") or "",
+                "origin":            origin_from_source(payload.get("source")),
+                # `date` e `row_version` são derivados em `_transition_row`
+                # (clickhouse.py) — chave de partição e versão do RMT têm UMA fonte.
+            }] if payload.get("resume_token") else []),
+        ]
+
+    if event_type == "session_resumed":
+        # ── D4 / Fase 2 — a linha FECHADA, e ela vem COMPLETA ────────────────
+        # O produtor (channel-gateway) lê `{tenant}:resume_meta:{token}` ANTES do
+        # `HDEL`, então tem `suspend_reason`/`step_id`/`suspended_at` em mãos e
+        # reescreve a linha inteira. Mandar só `resumed_at` faria o RMT apagar o
+        # motivo da suspensão — o único campo desta tabela sem outra fonte viva
+        # (`workflow_events` tem produtor morto e zero linhas).
+        if not payload.get("resume_token"):
+            return []
+        _res_at = payload.get("timestamp") or _now()
+        return [
+            {
+                "table":             "session_transitions",
+                "tenant_id":         tenant_id,
+                "session_id":        session_id,
+                "resume_token":      payload["resume_token"],
+                "step_id":           payload.get("step_id") or "",
+                "suspend_reason":    payload.get("suspend_reason") or "",
+                # Sem o suspend_at do meta a lacuna não tem começo — cair no
+                # instante do resume daria duração ZERO, um número plausível para
+                # um fato ausente. Preferimos o valor do meta; sem ele, o próprio
+                # resume, e o `suspend_reason` vazio denuncia a origem.
+                "suspended_at":      payload.get("suspended_at") or _res_at,
+                "resume_expires_at": payload.get("resume_expires_at") or None,
+                "resumed_at":        _res_at,
+                "resume_origin":     payload.get("resume_origin") or "token",
+                "outcome":           payload.get("outcome") or "resumed",
+                "pool_id":           payload.get("pool_id") or "",
+                "origin":            origin_from_source(payload.get("source")),
+                # `date` (partição = INÍCIO da lacuna) e `row_version` são derivados
+                # em `_transition_row`. Derivar `date` do resume aqui poria abertura e
+                # fechamento em partições diferentes numa suspensão que atravessa o
+                # mês — e aí o RMT nunca as encontraria para deduplicar.
             }
         ]
 

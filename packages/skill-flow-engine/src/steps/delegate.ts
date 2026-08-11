@@ -186,6 +186,9 @@ export async function executeDelegate(
         step_id:       step.id,
         resume_token,
         timeout_hours: timeoutHours,
+        // Fase 1: delegate suspende para obter I/O de um especialista — o motivo
+        // da lacuna é "input", literal do mesmo domínio de `suspend.reason`.
+        reason:        "input",
         ...(step.business_hours !== undefined ? { business_hours: step.business_hours } : {}),
         ...(step.calendar_id                 ? { calendar_id:    step.calendar_id }    : {}),
       })

@@ -1006,9 +1006,31 @@ diferentes** (agent_key de um segmento, pool_id de outro). Na sessão medida, at
 (seq 2) e não ao humano que efetivamente atendeu. **Nota de honestidade:** o impacto real em números de
 qualidade **não foi medido**, só derivado do código.
 
-Outros consumidores afetados: `quality-export/exporter.py:181` (`ORDER BY sequence_index ASC`, chave
-primária do export), `mv_segment_summary`/`v_segment_summary` → `handoff_count` →
-`/reports/sessions/complexity`, e o badge de handoff em `SegmentList.tsx:146`.
+⚠️ **Inventário de consumidores REVISADO 2026-08-10 (a v1 desta nota errava dois dos quatro).** Cada um
+tem de ser julgado por *como lê*, não por *se cita o campo*:
+
+| Consumidor | Como lê | Hoje | Depois do conserto |
+|---|---|---|---|
+| `_session_agent_attribution_sql` (5 `argMax`) | `segments FINAL` | empate **só quando o máximo empata** | determinístico |
+| `quality-export/exporter.py:181` | `segments FINAL`, `ORDER BY seq, started_at` | correto **por acidente** | **REGRIDE** — ver abaixo |
+| `mv_segment_summary` → `handoff_count` | **MV sobre INSERTs**, `maxState` | **correto** (vê a linha do join) | inalterado |
+| `SegmentList.tsx:146` (badge) | exibição | badge some | badge correto |
+
+- **`handoff_count` NÃO é afetado.** A MV (`clickhouse.py:922-940`) é gatilho de INSERT sobre `segments`,
+  **sem `FINAL`**: ela agrega as DUAS versões da linha e `maxState` preserva o índice do join. O defeito
+  vive só onde se lê o estado mesclado. *(A v1 listava a MV como afetada — leitura por citação do campo,
+  não pelo mecanismo.)*
+- **O empate do `argMax` é mais estreito do que a v1 dizia, e por isso mais fácil de reproduzir errado.**
+  `argMax` só é não-determinístico quando o **máximo** empata. Na sessão medida (`0, 0, 2`) o máximo é
+  único → a atribuição já sai determinística, no agente nativo. O empate real é a sessão com **dois ou
+  mais primários humanos** (transferência): ambos gravam 0, o máximo empata, e as 5 colunas podem vir de
+  linhas diferentes. Um teste que use uma sessão com resume nativo no fim **não pega** o empate.
+- ⚠️ **O exporter REGRIDE com o conserto, e por isso saiu na mesma fatia.** `ORDER BY sequence_index ASC,
+  started_at ASC`: enquanto tudo empata em 0, a cláusula degenera em cronológica e o export sai certo.
+  Com o índice correto, um especialista de conferência (fora do contador ⇒ 0) entrando tarde passa a
+  ordenar **antes** de um primário de handoff (1+). Consertar o produtor sem rechavear o consumidor
+  **quebraria** o export — caso literal de "o conserto move o número". Rechaveado para `started_at ASC,
+  segment_id ASC`.
 
 **A cadeia a jusante já está correta — não precisa de conserto** *(verificado 2026-08-10)*. O registro
 `human_seg:{pool}` é gravado **no `participant_left`** (`main.py:1613`); `_seed_segment_signal:3321` lê
@@ -1039,8 +1061,43 @@ tem de ler `0, 1, 2`.
 
 ⚠️ **Não conserta a ordenação, e não deve prometer isso.** Mesmo corrigido, `queue`, sintéticos e
 especialistas ficam fora do contador **por decisão** — o campo é *"ordem entre primários não-sintéticos"*,
-nunca ordenação total. Os dois consumidores que o usam como chave de ordem precisam mudar de chave
-**independentemente** do conserto. Ordenar por `started_at`.
+nunca ordenação total. Ordenar por `started_at`.
+
+### Decisão de fatia — tomada 2026-08-10, com o critério explícito
+
+A pergunta era *"os consumidores que usam o índice como chave de ordem entram na mesma fatia ou viram
+fatia própria?"*. O critério que decide **não é acoplamento, é neutralidade**: entra na fatia do conserto
+o consumidor que o conserto **move**; vira fatia própria o que ele deixa parado.
+
+- **Verificação pedida, feita:** `_session_agent_attribution_sql` **filtra sim** —
+  `WHERE role = 'primary' AND agent_type != 'system'` (`reports_query.py:2204-2205`). E o escopo do filtro
+  **coincide exatamente** com o escopo do contador: os três únicos sites de `INCR segment_seq`
+  (`main.py:914` humano, `:4148` nativo não-conferência, `:8045` resume) publicam todos
+  `role='primary'` com `agent_type` ∈ {`human`,`native`}; `queue` (`:5418`) e especialista (`:4136`)
+  nunca incrementam e são excluídos pelo `role`. **Logo o conserto TORNA o índice único dentro do
+  conjunto filtrado, e o empate desaparece** — a hipótese *"empata mesmo depois do conserto"* está
+  **refutada**, e o rechaveamento da atribuição não é pré-requisito.
+- **Na fatia do conserto:** o **exporter**, porque o conserto o quebra (acima). Não é zelo, é evitar
+  introduzir um defeito.
+- **Fatia própria:** o rechaveamento dos 5 `argMax` para `started_at`. Depois do conserto os dois
+  critérios **concordam** (índice e `started_at` derivam do mesmo evento de join), então a troca é
+  provadamente neutra — e é justamente por ser neutra que ela merece medição própria: se o número mudar,
+  mudou por outro motivo. Continua valendo fazê-la, por dois motivos que o conserto não remove:
+  o índice não é ordenação total, e o TTL de 4 h do contador o reinicia em 0 numa sessão longa
+  (`started_at` não tem essa borda).
+
+### ⚠️ Achado adjacente — a REGRA de atribuição erra em suspend/resume, e nem o conserto nem o rechave a corrigem
+
+`_session_agent_attribution_sql` atribui a sessão ao **último** primário não-sintético. Na sessão
+`5553c72a` esse é o segmento nativo de **13 ms** que apenas processou o resume — não o humano que passou
+30 s preenchendo o formulário. Depois do conserto isso fica **determinísticamente errado**, que é pior de
+notar do que aleatoriamente errado. Vale para toda sessão do padrão delegate→humano→resume: a lente de
+qualidade credita a máquina pelo trabalho do humano.
+
+Não é bug do índice — é a regra "último primário" encontrando um caminho de execução que ela não previu.
+O conserto certo depende da **transição como primeira classe** (D4 do ADR): com a lacuna nomeada, dá para
+atribuir ao segmento que fez o trabalho em vez do que fechou a porta. **Registrar como entrada do arco de
+workflow, não deste conserto.**
 
 **Dívidas adjacentes que apareceram junto:**
 - **O e2e 23 não pode pegar isto** — `23_contact_segments.ts:532-552` publica join **e** left já com o
@@ -1080,7 +1137,93 @@ histórico; `journey_aliases = 0` ⇒ a reconciliação da D5 nasce sem dado de 
 - **`handle_time_ms` com dois comportamentos vivos** + um terceiro que o `CLAUDE.md` afirma e o código
   registra como adiado. Virou **D9**, dentro deste arco.
 
-**Spec pendente**, e a ordem é imposta pela D8: porta externa de resume **antes** de qualquer remoção.
+**Spec escrita 2026-08-10** — [`docs/product/workflow-arc-implementation-spec.md`](docs/product/workflow-arc-implementation-spec.md).
+Fases 0→4 (declarar a borda · porta externa de resume · transição · duração · remoção), cada uma com
+instrumento e número previsto. Dois achados do inventário estático mudaram a spec antes da primeira linha
+de código:
+
+- ⚠️ **A "porta externa" não é externa.** `/channel/webhook/{slug}` (`channel-gateway/main.py:1302`) e
+  `/v1/channels/...` (`:1387`) são rotas do MESMO app na MESMA porta (`docker-compose.demo.yml:1185`);
+  não há proxy para `/channel` em `vite.config.ts` nem no `Dockerfile`, e **não existe nginx versionado no
+  repo**. A separação é o filtro `allowed_origins={"external"}` (`:1347`) — de código, não de topologia.
+  O `CLAUDE.md` opõe os dois como se a borda existisse. Virou a Fase 0: **declarar** o requisito de deploy,
+  não construir a borda no meio deste arco.
+- ⚠️ **O TTL de `{tenant}:resume_tokens` é do HASH, não do token** (`index.ts:463`, `webhook.py:1723`,
+  `:2152`): o hash é compartilhado por todo o tenant e o último escritor redefine o prazo de todos. Hoje é
+  higiene; quando o prazo virar contrato com um terceiro ("seu link vale 48 h"), vira promessa não cumprida
+  — um `collect` de 1 h escrito depois encurta o token de 48 h. Entra na Fase 1, junto com a chave
+  `resume_meta` que a Fase 2 precisa para cumprir o invariante RMT.
+
+E um terceiro que é de segurança: o **`source` do resume é asserido pelo chamador** (`webhook.py:131-141`)
+— sem JWT dá para declarar `source:"supervisor:x"` e obter `acw_supervisor_closed` no registro terminal
+durável de 25 h. Já catalogado neste TODO; **abrir a porta externa o torna explorável**, então é gate da
+Fase 1, não follow-up.
+
+---
+
+## Porta externa de resume × posse do item de pull — decisão pendente *(achado 2026-08-10, ao escrever o gate da Fase 1)*
+
+A conferência de posse do A5 é **gateada em `approver is not None`** (`webhook.py:1148`
+— `if approver is not None and claim_instance_id:`). A porta externa
+(`POST /channel/webhook/resume/{token}`, Fase 1) passa `approver=None` por construção — quem tem JWT usa
+a porta interna. **Logo ela não confere posse.**
+
+Para um token de `suspend` puro isso é correto e é o ponto da porta: o chamador está retomando a
+**própria** execução suspensa. Para um token de `delegate` a uma fila de PULL, o mesmo token é a
+conclusão de um **item de trabalho humano** — e aí o A5 existe justamente para impedir que uma submissão
+descarte trabalho que voltou à fila ou que outro agente detém.
+
+**Três estados, e só o primeiro é claramente aceitável:**
+
+| Estado do item no árbitro | Hoje pela porta externa | Deveria? |
+|---|---|---|
+| não existe item (suspend puro) | resume passa | ✅ sim — é o caso de uso da porta |
+| `found=False, in_queue=True` (na fila, sem dono) | resume passa | ⚠️ **indeciso** — submete sobre trabalho disponível a outro agente |
+| `held_by=X` (humano detém) | resume passa | ❌ **não** — descarta trabalho em curso |
+
+O terceiro caso é errado sob qualquer política e não precisa de principal para ser recusado: **é
+propriedade do ITEM, não do chamador** — o mesmo ramo (2) do A5, aplicado sem JWT. O obstáculo é
+mecânico, não conceitual: `_routing_work_task_holder` exige `pool_id`, que a porta externa não recebe;
+derivá-lo do ledger `work_task` da sessão é o caminho.
+
+**Não implementado de propósito nesta fase.** O gate `gate_external_resume.sh` nunca reivindica o item,
+então mede sempre o segundo estado — um portão que só sabe medir o caso indeciso não pode julgar o caso
+errado. Fechar isto pede um passo que **reivindique** primeiro (Console/`work_queue`), e aí a recusa vira
+verificável. Ordem sugerida: junto da Fase 2, que já vai mexer no que o resume lê antes do consumo.
+
+⚠️ **Não confundir com a Camada F.** O lock dá unicidade (só um resume vence); ele não diz *qual* dos
+dois deveria vencer. Posse é a pergunta que sobra depois da unicidade.
+
+---
+
+## Cenário e2e 28 falha por config, não por lógica — e o achado reforça a Fase 4 *(medido 2026-08-11)*
+
+Rodando `E2E_EXTRA_ARGS=--workflow-review`, o 28 estoura 60 s. **Não é regressão do arco de workflow** — a
+evidência é que a `evaluation-api` nunca chega a tentar o resume (nenhuma linha nos logs dela; os
+`webhook resume` do channel-gateway são todos da corrida do gate, horas antes). O cenário morre antes.
+
+**Causa raiz, com a linha:** `POST /v1/workflow/trigger` devolve **502 Bad Gateway**. Essa rota é proxy
+para `channel-gateway/v1/channels/webhook/{flow_id}` e **repropaga o status do gateway** — 502 é o código
+reservado a *inalcançável*. E o serviço `workflow-api` **não declara `PLUGHUB_WORKFLOW_CHANNEL_GATEWAY_URL`
+no `docker-compose.demo.yml`** (envs em `:1356-1363`): cai no default `http://localhost:8010`, que dentro do
+próprio container é ELE MESMO. Conexão recusada, 502, sempre.
+
+⚠️ **Mesma família do defeito que a Fase 4a evitou por um triz na `evaluation-api`** — default `localhost`
+dentro de container, degradando em silêncio. Lá o env foi adicionado junto com o repointe; aqui nunca foi.
+
+**Defeito secundário, visível no mesmo log:** o polling do 28 chama `GET /v1/workflow/instances/` (com
+barra final) → FastAPI responde **307** → o cliente refaz em `/v1/workflow/instances` **sem os parâmetros**
+→ **422**, em laço até o timeout. A barra final custa a query string no redirect.
+
+**Por que isto REFORÇA a Fase 4, em vez de bloqueá-la:** o trigger legado está quebrado no demo e ninguém
+percebeu, porque o cenário 28 é o **único** gatilho dele — e o motor de review por workflow que o 28
+exercita já está classificado como legado inerte (`CLAUDE.md` § Arc 6). É evidência de que *nada vivo
+depende dessa rota funcionar*. **Não consertar a config**: a 4d remove a rota. Consertar só faria o
+inventário de chamadores voltar a incluir um caminho que estamos removendo.
+
+**O que fica pendente de verdade:** a Fase 4a segue com **fiação provada e comportamento não provado** — o
+28 não consegue exercitá-la, porque quebra antes. O gate honesto da 4a precisa ser outro: um teste que
+dispare contestação→revisão sem passar pelo trigger legado.
 
 ---
 

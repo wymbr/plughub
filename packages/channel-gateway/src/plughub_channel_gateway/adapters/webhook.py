@@ -118,6 +118,37 @@ def _resume_terminal_key(tenant_id: str, resume_token: str) -> str:
     return f"{tenant_id}:resume_terminal:{resume_token}"
 
 
+def _resume_meta_key(tenant_id: str, resume_token: str) -> str:
+    """
+    `{tenant}:resume_meta:{token}` — o registro POR TOKEN (Fase 1 do arco de workflow).
+
+    ⚠️ **Por que ele existe: o TTL de `{tenant}:resume_tokens` é do HASH, não do
+    token.** Todos os escritores aplicam `EXPIRE` na chave inteira, e o hash é
+    compartilhado por TODAS as sessões do tenant — então o último escritor redefine
+    o prazo de todos. Um `collect` de 1 h escrito depois **encurta** um token de
+    suspend de 48 h, e quando o hash vence os dois somem juntos. Enquanto o resume
+    era só interno isso era higiene; com uma porta externa o prazo do token vira
+    contrato com um terceiro ("seu link vale 48 h"), e a plataforma não o cumpria.
+
+    Guarda `expires_at`, `suspend_reason`, `step_id` e `opened_at`, com TTL do
+    PRÓPRIO token. Dois consumidores, ambos vivos:
+      1. **fallback de resolução** — se a entrada do hash sumiu mas o meta está vivo,
+         o token é reidratado (e reinserido no hash, para o scanner de prazo voltar a
+         enxergá-lo). Nunca ressuscita token CONSUMIDO: o registro terminal é
+         checado antes.
+      2. **substrato da transição** (D4/Fase 2) — `suspend_reason` e
+         `resume_expires_at` não existem em lugar nenhum durável hoje
+         (`workflow_events` tem produtor morto e ZERO linhas). Lido com `get`,
+         **nunca `getdel`**, antes do consumo — é o que permite ao escritor do
+         resume mandar a LINHA INTEIRA ao `ReplacingMergeTree` sem reidratar do
+         banco.
+    """
+    return f"{tenant_id}:resume_meta:{resume_token}"
+
+
+_RESUME_META_BUFFER_S = 3600   # mesma folga de 1 h que os escritores do hash usam
+
+
 def _terminal_cause(payload: dict[str, Any]) -> str:
     """
     A causa do encerramento, das TRÊS que existem. Era uma expressão inline no
@@ -931,6 +962,87 @@ class WebhookAdapter(ChannelAdapter):
                 resume_token, exc,
             )
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Registro POR TOKEN — Fase 1 do arco de workflow. Ver `_resume_meta_key`.
+
+    async def _write_resume_meta(
+        self,
+        tenant_id:      str,
+        resume_token:   str,
+        session_id:     str,
+        step_id:        str,
+        expires_at:     str,
+        suspend_reason: str,
+        ttl_s:          int,
+    ) -> None:
+        """Grava o registro do token com TTL do PRÓPRIO token. Best-effort e barulhento."""
+        try:
+            await self._redis.set(
+                _resume_meta_key(tenant_id, resume_token),
+                json.dumps({
+                    "session_id":     session_id,
+                    "step_id":        step_id,
+                    "expires_at":     expires_at,
+                    "suspend_reason": suspend_reason,
+                    "opened_at":      datetime.now(timezone.utc).isoformat(),
+                }),
+                ex=max(ttl_s, 60),
+            )
+        except Exception as exc:
+            # Perder o meta custa o fallback de prazo e o substrato da transição —
+            # não custa o resume, que segue pelo hash. Nunca calado: sem este log,
+            # a Fase 2 nasceria com `suspend_reason` vazio sem explicação.
+            logger.warning(
+                "resume_meta: não gravou o registro do token=%s (tenant=%s): %s",
+                resume_token, tenant_id, exc,
+            )
+
+    async def _read_resume_meta(
+        self, tenant_id: str, resume_token: str,
+    ) -> dict[str, Any] | None:
+        """`get`, nunca `getdel` — o consumo é explícito, no fim do resume."""
+        try:
+            raw = await self._redis.get(_resume_meta_key(tenant_id, resume_token))
+            return json.loads(raw) if raw else None
+        except Exception:
+            return None
+
+    async def _extend_hash_ttl(self, hash_key: str, ttl_s: int) -> None:
+        """
+        `EXPIRE` que só ESTENDE, nunca encurta.
+
+        O `EXPIRE` cru que os escritores faziam é o defeito: sendo o hash
+        compartilhado pelo tenant inteiro, um token curto escrito depois derrubava
+        o prazo de um token longo escrito antes. Compara com o TTL corrente e só
+        escreve se for maior. Não é atômico — duas escritas simultâneas podem
+        intercalar —, mas o pior caso passa a ser *não estender*, e não *encurtar*:
+        a direção do erro é a segura, e o `resume_meta` cobre o resto.
+
+        ⚠️ **`-1` significa "existe, SEM expiração" — e aqui isso é BOOTSTRAP, não
+        "infinito a preservar".** A v1 desta função tratava `-1` como valor a nunca
+        tocar, raciocinando *"sem expiração é mais longo que qualquer TTL, logo
+        defini-lo seria encurtar"*. Só que uma chave recém-criada pelo `HSET` nasce
+        com `-1`: o efeito real foi que o hash **nunca mais recebia TTL nenhum** e
+        passava a viver para sempre, com todo token órfão dentro. Eu não consertei o
+        encurtamento — troquei-o por *não expira nunca*, que é pior por ser
+        silencioso: nada fica vermelho quando uma chave apenas deixa de morrer.
+        Medido pelo P6 do `gate_external_resume.sh` em 2026-08-10 (`TTL = -1`), e só
+        porque aquele passo lê o TTL antes de julgar.
+
+        Nenhum escritor deste hash quer chave perpétua ⇒ `-1` **define**.
+        """
+        try:
+            current = await self._redis.ttl(hash_key)
+            if current is None:
+                return
+            # -2 = chave inexistente → EXPIRE é no-op inócuo.
+            # -1 = existe sem TTL   → bootstrap: DEFINE (ver docstring).
+            #  n = existe com TTL   → só estende.
+            if current == -1 or current < ttl_s:
+                await self._redis.expire(hash_key, ttl_s)
+        except Exception:
+            pass   # non-fatal — hash compartilhado entre sessões
+
     async def _handle_resume_locked(
         self,
         resume_token:  str,
@@ -970,11 +1082,60 @@ class WebhookAdapter(ChannelAdapter):
                     cause      = str(terminal.get("cause") or "?"),
                     at         = str(terminal.get("at") or ""),
                 )
-            logger.warning(
-                "webhook resume: unknown or expired token=%s tenant=%s",
-                resume_token, tenant_id,
-            )
-            return None
+            # ── Fase 1 — fallback pelo registro POR TOKEN ────────────────────
+            # Chega aqui quem NÃO foi consumido (o terminal acima já respondeu por
+            # esses). Sobram dois casos, e até agora saíam iguais: token que de
+            # fato venceu, e token vivo cujo HASH COMPARTILHADO expirou por causa
+            # de outra sessão. O segundo é o defeito do TTL de hash — o resume era
+            # recusado com 404 enquanto o prazo do próprio token ainda corria.
+            #
+            # ⚠️ A ORDEM importa: o terminal vem ANTES. O meta sobrevive ao
+            # consumo (é apagado junto, mas best-effort), e ressuscitar token
+            # consumido reabriria a porta que a Camada F fechou.
+            meta = await self._read_resume_meta(tenant_id, resume_token)
+            if meta and meta.get("session_id"):
+                still_valid = True
+                try:
+                    still_valid = datetime.fromisoformat(
+                        str(meta.get("expires_at") or "")
+                    ) > datetime.now(timezone.utc)
+                except Exception:
+                    # Sem prazo legível, o TTL da própria chave já é o limite —
+                    # ela estar aqui significa que não venceu.
+                    still_valid = True
+                if still_valid:
+                    token_value = (
+                        f"{meta['session_id']}:{meta.get('step_id') or ''}"
+                        f":{meta.get('expires_at') or ''}"
+                    )
+                    # REINSERE no hash: sem isto o token volta a ser invisível ao
+                    # scanner de prazo, que varre `*:resume_tokens`. Um token que
+                    # resume mas nunca pode expirar seria um vazamento novo,
+                    # trocado por um defeito velho.
+                    try:
+                        await self._redis.hset(hash_key, resume_token, token_value)
+                        await self._extend_hash_ttl(hash_key, _RESUME_META_BUFFER_S)
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "resume_meta: token=%s (tenant=%s) REIDRATADO — a entrada do "
+                        "hash compartilhado tinha sumido, mas o prazo do token "
+                        "(%s) ainda corre. Sintoma do TTL de hash: outra sessão "
+                        "encurtou `resume_tokens`. Resume segue.",
+                        resume_token, tenant_id, meta.get("expires_at"),
+                    )
+                else:
+                    logger.warning(
+                        "resume_meta: token=%s (tenant=%s) VENCIDO de fato em %s",
+                        resume_token, tenant_id, meta.get("expires_at"),
+                    )
+                    return None
+            else:
+                logger.warning(
+                    "webhook resume: unknown or expired token=%s tenant=%s",
+                    resume_token, tenant_id,
+                )
+                return None
 
         # token_value format: "{session_id}:{step_id}:{expires_at_iso}"
         parts = token_value.split(":", 2)
@@ -1201,8 +1362,68 @@ class WebhookAdapter(ChannelAdapter):
             _terminal_cause(payload),
         )
 
+        # ── D4 / Fase 2 — FECHA a transição, com a linha INTEIRA ────────────────
+        # Evento analítico próprio em `conversations.events` — irmão do
+        # `session_suspended` que o bridge publica. NÃO é o `session_resumed` do
+        # `conversations.inbound` logo acima: aquele é o comando que faz o routing
+        # realocar, e o consumer de analytics o lê por outro parser. Dois eventos com
+        # o mesmo nome em tópicos diferentes é o preço de não sobrecarregar o caminho
+        # de execução com carga analítica; o comentário existe para que o próximo
+        # leitor não conclua que um deles é duplicata.
+        #
+        # ⚠️ Lido do `resume_meta` AQUI, antes do `HDEL` e do delete do meta: é o que
+        # torna esta linha COMPLETA e satisfaz o invariante do ReplacingMergeTree
+        # (substitui a linha inteira). Sem isto o resume apagaria `suspend_reason` da
+        # linha sobrevivente — e ele não tem outra fonte viva no sistema.
+        try:
+            _tr_meta = await self._read_resume_meta(tenant_id, resume_token) or {}
+            if not _tr_meta:
+                logger.warning(
+                    "transição: resume_meta AUSENTE no fechamento (token=%s session=%s) "
+                    "— a linha fecha sem motivo nem início reais",
+                    resume_token, session_id,
+                )
+            await self._publish(
+                {
+                    "event_type":        "session_resumed",
+                    "session_id":        session_id,
+                    "tenant_id":         tenant_id,
+                    "timestamp":         now_iso,
+                    "resume_token":      resume_token,
+                    "step_id":           step_id,
+                    "resume_origin":     resume_origin,
+                    "pool_id":           resume_pool,
+                    "suspend_reason":    _tr_meta.get("suspend_reason") or "",
+                    "suspended_at":      _tr_meta.get("opened_at") or "",
+                    "resume_expires_at": _tr_meta.get("expires_at") or None,
+                    # `expired` quando quem retomou foi o prazo, não uma resposta —
+                    # a mesma distinção que `_terminal_cause` faz, na moeda da lacuna.
+                    "outcome": (
+                        "expired"
+                        if _terminal_cause(payload) in ("acw_expired", "acw_supervisor_closed")
+                        else "resumed"
+                    ),
+                },
+                topic=self._settings.kafka_topic_events,
+            )
+        except Exception as _tr_exc:
+            # Best-effort: perder a linha analítica não pode desfazer um resume que
+            # já aconteceu. Mas nunca calado — transição faltando vira lacuna sem
+            # explicação num relatório que promete explicá-la.
+            logger.warning(
+                "transição: não publicou o fechamento (token=%s): %s",
+                resume_token, _tr_exc,
+            )
+
         # Clean up the token after successful resume (one-shot)
         await self._redis.hdel(hash_key, resume_token)
+        # O registro POR TOKEN morre junto. Best-effort: se sobrar, quem chegar
+        # depois é barrado pelo registro TERMINAL, que é checado antes do
+        # fallback — sobra vira lixo com TTL, nunca token ressuscitado.
+        try:
+            await self._redis.delete(_resume_meta_key(tenant_id, resume_token))
+        except Exception:
+            pass
 
         logger.info(
             "webhook resume: session=%s step=%s token=%s tenant=%s",
@@ -1719,10 +1940,15 @@ class WebhookAdapter(ChannelAdapter):
             collect_token,
             f"{session_id}:{step_id}:{expires_at}",
         )
-        try:
-            await self._redis.expire(f"{tenant_id}:resume_tokens", ttl_s)
-        except Exception:   # non-fatal — hash shared across sessions
-            pass
+        # Fase 1: só ESTENDE. O `expire` cru daqui é justamente o que encurtava o
+        # prazo de tokens longos de outras sessões — o hash é do tenant inteiro.
+        await self._extend_hash_ttl(f"{tenant_id}:resume_tokens", ttl_s)
+        # Registro POR TOKEN — prazo próprio + substrato da transição (D4).
+        await self._write_resume_meta(
+            tenant_id, collect_token, session_id, step_id, expires_at,
+            suspend_reason="input",   # collect = coleta de resposta do alvo
+            ttl_s=ttl_s,
+        )
 
         # ── Deliver the invitation link (mock/dev). The collect_token IS the token. ──
         # TODO(J4c fase 2): real SMS/email delivery via the negotiated channel provider.
@@ -2149,7 +2375,14 @@ class WebhookAdapter(ChannelAdapter):
             hash_key    = f"{tenant_id}:resume_tokens"
             token_value = f"{session_id}:{step_id or 'delegate_conference'}:{exp_at}"
             await self._redis.hset(hash_key, resume_token, token_value)
-            await self._redis.expire(hash_key, ttl_s)
+            # Fase 1: só ESTENDE (ver `_extend_hash_ttl`) + registro por token.
+            await self._extend_hash_ttl(hash_key, ttl_s)
+            await self._write_resume_meta(
+                tenant_id, resume_token, session_id,
+                step_id or "delegate_conference", exp_at,
+                suspend_reason="input",   # delegate = I/O delegada a um especialista
+                ttl_s=ttl_s,
+            )
         except Exception as _e:
             logger.warning("delegate_conference: could not write resume_token: %s", _e)
 

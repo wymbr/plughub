@@ -931,15 +931,25 @@ async def activate_human_agent(
         # G7 Slice 1b: per-instance participant meta (pool/agent_type/tenant/login)
         # keyed by instance_id — fonte por-participante para o path de close, evitando
         # o meta.pool_id de SESSÃO (last-writer, errado em multi-humano). Ver g7 §11.
+        #
+        # `sequence_index` (2026-08-10): o índice era CALCULADO aqui e nunca persistido,
+        # enquanto o `segment_id` ao lado era. Todo participant_left humano o reconstruía
+        # como 0 e, como `analytics.segments` é ReplacingMergeTree, a linha do left
+        # apagava o índice do join. Vive AQUI, e não numa chave própria, porque este
+        # registro já é a "fonte por-participante para o path de close" e é lido com
+        # `get` (não `getdel`) em todos os left sites — logo sobrevive a um left
+        # republicado, que uma chave `getdel` não sobreviveria (e o republish voltaria a
+        # escrever 0, desfazendo o conserto pelo outro caminho).
         try:
             await redis_client.setex(
                 f"session:{session_id}:participant_meta:{instance_id}",
                 14400,
                 json.dumps({
-                    "pool_id":       pool_id,
-                    "agent_type_id": routing_result.get("agent_type_id", "") or "",
-                    "tenant_id":     tenant_id,
-                    "user_login":    _human_user_login,
+                    "pool_id":        pool_id,
+                    "agent_type_id":  routing_result.get("agent_type_id", "") or "",
+                    "tenant_id":      tenant_id,
+                    "user_login":     _human_user_login,
+                    "sequence_index": _seq_idx,
                 }),
             )
         except Exception:
@@ -2848,6 +2858,7 @@ async def _sweep_open_human_participants(
             continue
 
         pool_id = agent_type_id = tenant_id = user_login = ""
+        sequence_index = 0
         try:
             _pm_raw = await redis_client.get(
                 f"session:{session_id}:participant_meta:{instance_id}"
@@ -2857,6 +2868,7 @@ async def _sweep_open_human_participants(
                 pool_id       = _pm.get("pool_id", "") or ""
                 agent_type_id = _pm.get("agent_type_id", "") or ""
                 user_login    = _pm.get("user_login", "") or ""
+                sequence_index = int(_pm.get("sequence_index", 0) or 0)
                 tenant_id     = _pm.get("tenant_id", "") or ""
         except Exception:
             pass
@@ -2884,6 +2896,7 @@ async def _sweep_open_human_participants(
             agent_type="human",
             role="primary",
             segment_id=segment_id,
+            sequence_index=sequence_index,
             joined_at=joined_iso,
             duration_ms=duration_ms,
             user_login=user_login,
@@ -4797,6 +4810,34 @@ async def process_routed(
                                 )
                         except Exception:
                             pass
+                        # ── D4 / Fase 2 — a lacuna ganha linha ABERTA ────────
+                        # `_susp_token` e `_susp_expires` já estavam em escopo (o
+                        # logger.info logo abaixo os imprime há tempos); só não
+                        # entravam no evento. O `suspend_reason` vem do
+                        # `{tenant}:resume_meta:{token}`, escrito pelo engine ANTES
+                        # de o agente retornar `suspended` — logo já existe aqui.
+                        # Sem ele a linha aberta responderia "está parada" sem
+                        # responder "por quê", que é metade do motivo da D4.
+                        _susp_reason = ""
+                        if _susp_token:
+                            try:
+                                _rm_raw = await redis_client.get(
+                                    f"{tenant_id}:resume_meta:{_susp_token}"
+                                )
+                                if _rm_raw:
+                                    _susp_reason = json.loads(
+                                        _rm_raw if isinstance(_rm_raw, str) else _rm_raw.decode()
+                                    ).get("suspend_reason", "") or ""
+                            except Exception:
+                                pass
+                            if not _susp_reason:
+                                # Barulhento: motivo vazio numa transição é dado
+                                # perdido para sempre — o resume não o inventa.
+                                logger.warning(
+                                    "session_suspended: resume_meta sem suspend_reason "
+                                    "(session=%s token=%s) — a transição nasce sem motivo",
+                                    session_id, _susp_token,
+                                )
                         await _kafka_producer.send_and_wait(
                             TOPIC_EVENTS,
                             json.dumps({
@@ -4811,6 +4852,10 @@ async def process_routed(
                                 "customer_id": _susp_meta.get("contact_id") or customer_id or "",
                                 # `opened_at` é a ABERTURA, não o instante do suspend.
                                 "opened_at":   _susp_meta.get("started_at") or "",
+                                # D4: identidade e conteúdo da LACUNA (linha aberta).
+                                "resume_token":      _susp_token or "",
+                                "resume_expires_at": _susp_expires or None,
+                                "suspend_reason":    _susp_reason,
                             }).encode("utf-8"),
                         )
                     except Exception as _ke:
@@ -6176,6 +6221,7 @@ async def process_contact_event(
                     # não do meta de SESSÃO (last-writer) — cada humano da conferência
                     # sai com o SEU pool. Fallback no meta p/ compat. Ver g7 §11.
                     _hm_pool = _hm_at = _hm_ten = ""
+                    _hm_seq_idx = 0
                     try:
                         _hm_pm_raw = await redis_client.get(
                             f"session:{session_id}:participant_meta:{_hm_inst_str}"
@@ -6185,6 +6231,7 @@ async def process_contact_event(
                             _hm_pool = _hm_pm.get("pool_id", "") or ""
                             _hm_at   = _hm_pm.get("agent_type_id", "") or ""
                             _hm_ten  = _hm_pm.get("tenant_id", "") or ""
+                            _hm_seq_idx = int(_hm_pm.get("sequence_index", 0) or 0)
                     except Exception:
                         pass
                     _hm_login = ""
@@ -6214,7 +6261,7 @@ async def process_contact_event(
                             "user_login":     _hm_login,
                             "joined_at":      _hm_joined_iso,
                             "duration_ms":    _hm_dur,
-                            "sequence_index": 0,
+                            "sequence_index": _hm_seq_idx,
                             "tenant_id":      _hm_ten,
                         }
                         try:
@@ -6250,6 +6297,7 @@ async def process_contact_event(
                         agent_type="human",
                         role="primary",
                         segment_id=_hm_seg_id,
+                        sequence_index=_hm_seq_idx,
                         joined_at=_hm_joined_iso,
                         duration_ms=_hm_dur,
                         # Fase A: customer left while human agent active → abandoned
@@ -6725,6 +6773,7 @@ async def process_contact_event(
                     except Exception:
                         pass
                 _ha_pool = _ha_agent_type_id = _ha_tenant = _ha_user_login = ""
+                _ha_seq_idx = 0   # recuperado do participant_meta logo abaixo
                 # G7 Slice 1b: pool/agent_type/tenant/login DESTE humano vêm do registro
                 # por-instance (participant_meta:{instance_id}), não do meta de SESSÃO
                 # (pool_id é last-writer-wins → em multi-humano o close do não-último
@@ -6739,6 +6788,7 @@ async def process_contact_event(
                         _ha_agent_type_id = _ha_pm.get("agent_type_id", "") or ""
                         _ha_user_login    = _ha_pm.get("user_login", "") or ""
                         _ha_tenant        = _ha_pm.get("tenant_id", "") or ""
+                        _ha_seq_idx       = int(_ha_pm.get("sequence_index", 0) or 0)
                 except Exception:
                     pass
                 if not _ha_pool or not _ha_tenant:
@@ -6755,8 +6805,9 @@ async def process_contact_event(
                     except Exception:
                         pass
                 # ── Arc 5: retrieve segment_id stored at activate_human_agent ────
+                # (`_ha_seq_idx` NÃO é reinicializado aqui — já veio do participant_meta
+                #  acima. Zerá-lo neste ponto era a causa raiz do índice apagado.)
                 _ha_seg_id = ""
-                _ha_seq_idx = 0
                 try:
                     _raw_ha_seg = await redis_client.getdel(
                         f"session:{session_id}:segment:{instance_id}"
@@ -8167,6 +8218,7 @@ async def _handle_webhook_session_resumed(
             except Exception:
                 pass
             _cl_pool = _cl_atid = _cl_tenant = _cl_login = ""
+            _cl_seq_idx = 0
             try:
                 _cl_pm_raw = await redis_client.get(
                     f"session:{session_id}:participant_meta:{_claimant_instance_id}"
@@ -8177,6 +8229,7 @@ async def _handle_webhook_session_resumed(
                     _cl_atid   = _cl_pm.get("agent_type_id", "") or ""
                     _cl_login  = _cl_pm.get("user_login", "") or ""
                     _cl_tenant = _cl_pm.get("tenant_id", "") or ""
+                    _cl_seq_idx = int(_cl_pm.get("sequence_index", 0) or 0)
             except Exception:
                 pass
             asyncio.create_task(_publish_participant_event(
@@ -8189,6 +8242,7 @@ async def _handle_webhook_session_resumed(
                 agent_type="human",
                 role="primary",
                 segment_id=_cl_seg_id,
+                sequence_index=_cl_seq_idx,
                 joined_at=_cl_joined_iso,
                 duration_ms=_cl_duration_ms,
                 user_login=_cl_login,

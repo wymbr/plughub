@@ -204,6 +204,10 @@ export async function executeSuspend(
       step_id:       step.id,
       resume_token:  resumeToken,
       timeout_hours: step.timeout_hours,
+      // Fase 1 do arco de workflow: o motivo da suspensão é fato da LACUNA entre
+      // segmentos (D4) e não tinha portador durável — `persistSuspend` (Arc 4) o
+      // recebia, este caminho não. Vai para `{tenant}:resume_meta:{token}`.
+      reason:        step.reason,
       // Arc 19 Fase D: forward business_hours + calendar_id so the
       // skill-flow-service can call the calendar-api for deadline calculation
       // when the suspend step requests business-hours-aware expiry.

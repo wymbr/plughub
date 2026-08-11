@@ -84,6 +84,13 @@ export interface SkillFlowEngineConfig {
     /** Arc 19 Fase D: forwarded from suspend step for business-hours deadline calculation. */
     business_hours?: boolean
     calendar_id?:    string
+    /**
+     * Fase 1 do arco de workflow — motivo da suspensão, portador do fato que a
+     * transição (D4) precisa. ⚠️ Este tipo e o `StepContext.persistSuspendWebhook`
+     * em `executor.ts` são DUAS declarações do mesmo contrato: alargar só uma
+     * compila no call site do step e quebra no implementador (ou vice-versa).
+     */
+    reason?:         string
   }) => Promise<{ resume_expires_at: string }>
 
   /**

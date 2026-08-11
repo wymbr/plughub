@@ -22,12 +22,31 @@ Existem dois padrões distintos de uso de webhook na plataforma. Cada um serve a
 > escrito em lugar nenhum. Um ambiente que o publicasse perderia a proteção **sem nada ficar vermelho** —
 > nenhum teste alcança a topologia. Registrar é a única defesa disponível.
 
-O PlugHub expõe webhook em **dois prefixos com públicos diferentes**, e a diferença é de deploy:
+> ⚠️ **Revisado 2026-08-10 (Fase 0 do arco de workflow), e a tabela anterior estava incompleta.** Ela
+> listava **dois** prefixos, como se a borda fosse "webhook externo × resto interno". Enumerando a
+> superfície real do channel-gateway (`infra/test/probe_edge_surface.sh`, duas fontes: `/openapi.json` ∪
+> decoradores no fonte), são **nove** prefixos, **sete deles obrigatoriamente externos** — porque metade
+> da superfície externa **não é produto, é infraestrutura de canal**. Enunciar a regra como *proibição*
+> (*"não publique `/v1`"*) deixava passar um deploy que publica tudo menos `/v1` e expõe `/docs`.
+> **A regra é uma ALLOWLIST.**
 
-| Prefixo | Público | Deve estar na borda? |
-|---|---|---|
-| `/channel/webhook/{identifier}` | sistemas de terceiros do tenant | **Sim** — é a porta externa. Serve apenas endpoints `origin=external` (ADR §7.6.3). |
-| `/v1/*` (inclui `/v1/channels/webhook/...`) | componentes internos da plataforma | **Não.** Restrito à rede interna. |
+| Prefixo | Público | Na borda? | Por quê |
+|---|---|---|---|
+| `/channel/webhook/{identifier}` | sistemas de terceiros do tenant | **Sim** | porta externa; serve só `origin=external` (ADR §7.6.3) |
+| `/survey/{token}` | cliente final | **Sim** | página pública, autenticada pela posse do token |
+| `/webhooks/*` | Meta, Twilio | **Sim** | callback de PROVEDOR (whatsapp/email/sms/voice) |
+| `/voice/*` | Twilio | **Sim** | áudio TTS que o provedor busca + stream de mídia |
+| `/webrtc/*` | browser do cliente | **Sim** | emissão de token LiveKit para a webapp |
+| `/ws/*` | browser do cliente | **Sim** | WebSocket do webchat e do webrtc |
+| `/webchat/v1/*` | browser do cliente | **Sim** | upload/download de anexo |
+| `/v1/*` | componentes internos | **Não** | rede interna — ver abaixo |
+| `/health` | orquestrador | **Não** | liveness; nada a ganhar publicando |
+| `/openapi.json`, `/docs`, `/redoc` | — | **Não** | implícitos do FastAPI, **respondendo 200 hoje**: publicá-los publica o MAPA das rotas internas, inclusive a porta anônima (2) |
+
+⚠️ **A distinção NÃO é topológica hoje.** `/channel/webhook/{slug}` e `/v1/channels/webhook/{skill_id}` são
+rotas do **mesmo app FastAPI na mesma porta**; o que as separa é o filtro `allowed_origins={"external"}`.
+Não existe borda versionada no repositório (sem `nginx.conf`; `vite.config.ts` e `Dockerfile` não publicam
+`/channel`). Esta tabela é **requisito para quem publica**, não descrição do que está publicado.
 
 ### Por que `/v1/*` não pode ser público
 
@@ -49,15 +68,19 @@ consequência é concreta — publicar o prefixo publica isso junto.
 
 ### O que verificar num ambiente
 
-- `/channel/webhook/*` → alcançável de fora. ✅ esperado.
-- `/v1/*` do channel-gateway (porta 8010) → **não** alcançável de fora.
+- Os **sete** prefixos da allowlist → alcançáveis de fora. ✅ esperado.
+- `/v1/*`, `/health`, `/openapi.json`, `/docs`, `/redoc` do channel-gateway (porta 8010) → **não**
+  alcançáveis de fora.
 - Endpoint `external` que precise de proteção adicional → gere token pela UI
   (`/config/channels` › Webhook). Endpoint `internal` **não recebe token**: o servidor recusa (422), e a
   razão é a porta (2) acima.
 
-**Nenhum gate cobre isto.** `probe_webhook_endpoint_inventory.sh` § F6 lê o *store* e declara
-explicitamente que **não verificou** a borda — exposição é infra, e ausência de vermelho ali não é
-prefixo fechado.
+**Nenhum gate cobre a exposição real, e dois probes dizem isso por escrito.**
+`probe_webhook_endpoint_inventory.sh` § F6 lê o *store* e declara que não verificou a borda.
+`probe_edge_surface.sh` (2026-08-10) vai um passo além: **classifica** cada prefixo e reprova se um
+prefixo novo aparecer sem linha na tabela — mas imprime, toda execução, que é uma DECLARAÇÃO e que nada
+verifica o que o deploy publica. Rodá-lo depois de acrescentar rota ao channel-gateway é o hábito que
+mantém esta seção viva; ausência de vermelho continua não sendo prefixo fechado.
 
 ---
 

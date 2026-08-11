@@ -936,6 +936,8 @@ async def _write_row(
     try:
         if table == "sessions":
             await store.upsert_session(row)
+        elif table == "session_transitions":
+            await store.upsert_session_transition(row)
         elif table == "queue_events":
             await store.insert_queue_event(row)
         elif table == "messages":

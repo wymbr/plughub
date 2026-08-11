@@ -265,7 +265,15 @@ def _fetch_customer_history(
                 return val.isoformat()
             return str(val)
 
-        # Derive duration from handle_time_ms when available, fall back to timestamps.
+        # ── D9 — este era o QUARTO nome da mesma grandeza ──────────────────────
+        # A saída chamava `duration_ms` o que a tabela chama `handle_time_ms` e o
+        # `/reports/sessions` recomputa por canal — quatro nomes, três comportamentos.
+        # `duration_ms` era o pior deles: já é o nome da coluna de SEGMENTO, então a
+        # mesma palavra significava "tempo do contato" aqui e "tempo de um
+        # participante" ali (engano já catalogado: uma query pediu `duration_ms` a
+        # `sessions`, coluna que não existe, e a aba Análise ficou vazia sem erro).
+        # Passa a sair como `elapsed_time_ms`, com `duration_ms` mantido como ALIAS
+        # DE COMPAT enquanto a `HistoricoTab` não migra.
         if handle_time_ms is not None:
             duration_ms: int | None = int(handle_time_ms)
         elif opened_at and closed_at:
@@ -284,7 +292,8 @@ def _fetch_customer_history(
             "pool_id":      pool_id,
             "opened_at":    _dt(opened_at),
             "closed_at":    _dt(closed_at),
-            "duration_ms":  duration_ms,
+            "duration_ms":      duration_ms,   # alias de compat — não ganhar leitor novo
+            "elapsed_time_ms":  duration_ms,   # D9: o nome que diz o que é
             "outcome":      outcome,
             "close_reason": close_reason,
             # HJ / bidirectional nav: the process (journey) this contact belongs to.
