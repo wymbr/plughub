@@ -297,7 +297,16 @@ de `_apply_wrapup_to_segment` — extrair um helper compartilhado evita drift.
 
 ---
 
-## 7. Emenda (2026-08-11, PROPOSTA) — Visibilidade seletiva da sessão de wrap-up em Analytics/Sessions
+## 7. Emenda (2026-08-11, ACEITA — fatia 1 implementada) — Visibilidade seletiva da sessão de wrap-up em Analytics/Sessions
+
+> **Estado:** fatia 1 (`scope` + contagem por domínio no `meta`) ✅ 2026-08-11 (CHANGELOG). Fatias 2–4 +
+> a **1b** (marcar a linha como interna na resposta — descoberta na implementação: o veredicto é
+> computado no backend e descartado, e sem ele a UI não tem o que pintar) seguem em `TODO.md`.
+>
+> **Correção de registro a §7.1:** a associação por `origin_session_id` foi **verificada no código**, não
+> só na doc. Inline e detached passam pelo MESMO `_fire_detached_hook` — o predicado
+> `_is_workflow_dispatch_entry` inclui `side == "agent" AND dispatch == "inline"` —, e o campo é gravado
+> no top-level do body (`main.py:1300`) **e** como tag de contexto (`:1248`), com `journey: "inherit"`.
 
 > **Gatilho:** operador rodou um E2E completo (webchat → IA → fila → humano → especialista → NPS do cliente +
 > wrap-up do humano) e não encontrou o wrap-up em `Analytics > Sessions` — nem como segmento da sessão principal

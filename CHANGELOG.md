@@ -2,6 +2,110 @@
 
 ---
 
+## Visibilidade seletiva do wrap-up em Analytics/Sessions — fatia 1 ✅ + predicado de despacho unificado ✅ (2026-08-11)
+
+### O predicado do barrier discordava do predicado de despacho — e o alarme era o dano
+
+`fire_pool_hooks` decide o veículo de cada hook por `dispatch == "detached" OU (side == "agent" E
+dispatch == "inline")` — o wrap-up unificado roda pelo MESMO workflow nos dois modos, mudando só a
+ENTREGA (auto-atendimento × pull manual). O dimensionador do barrier, `_entry_will_dispatch`,
+reimplementava a regra pela metade: testava só `dispatch == "detached"`. Com a config do demo
+(`retencao_humano.on_human_end` = wrap-up **inline** + NPS irmão), **todo contato humano** deixava
+`hook_pending:on_human_end = 1` que nenhum `hook_conf` decrementaria.
+
+**O que NÃO aconteceu, e foi verificado antes de consertar.** A hipótese inicial — contato preso até
+o force-close de 180 s, inflando `closed_at`/`elapsed_time_ms` — está **refutada**. Levantados os três
+únicos pontos que tocam o contador: o DECR (`main.py:4916`) é chaveado pelo `completed_hook_type` do
+`hook_conf` que terminou (o NPS decrementa `on_contact_end`, nunca lê `on_human_end`); o único GET
+(`_hook_timeout_guard:2081`) **força** o fecho quando `remaining > 0`, o oposto de segurá-lo; e a
+leitura do channel-gateway (`webchat.py:294`) é guarda anti-ghost-routing, onde presença é
+conservadora. **Nada lê `hook_pending` como precondição de fecho.** Some-se a isso que
+`_mark_contact_ended` congela o AHT em `:7279`, **antes** dos hooks — o TMA do contato não depende
+sequer do instante do fecho.
+
+O dano real era outro e é o motivo do conserto: aos 180 s de **toda sessão** o guard publicava
+`"on_human_end hooks did not complete within 180s — force-closing"` + um `_trigger_contact_close`
+idempotente que não fazia nada. Um alarme que soa sempre torna o timeout de hook **verdadeiro**
+indistinguível de ruído — é a família "teste que não pode reprovar", do lado do alerta.
+
+**Conserto:** a regra virou `_is_workflow_dispatch_entry(entry)` (módulo, `main.py`), consumida pelo
+loop de despacho **e** pelo dimensionador. Divergência fechada por construção, não por vigilância.
+
+**Risco conferido antes de aplicar:** com o contador ausente, a guarda de reconexão do webchat perde
+uma das 5 chaves durante a janela de hooks. Não descobre nada: `session:{id}:closed` é escrito em
+`main.py:7267` (ramo `agent_closed`, no_continuation) e `:6007` (ramo customer-side) — nos dois casos
+**antes** de `fire_pool_hooks`.
+
+### Fatia 1 — `scope=contacts|all` em `GET /reports/sessions` ✅
+
+Visibilidade ≠ contagem (ADR `adr-wrapup-detached-pull` §7). A E2f seguia excluindo `purpose=internal`
+de forma **incondicional**, o que resolveu a contaminação de TMA e, junto, apagou a sessão de wrap-up
+da listagem retrospectiva mesmo com `accessible_pools` liberado.
+
+- **`scope` (default `contacts`)** em `reports.py:127` → `query_sessions_report` → `_fetch_sessions`.
+  `all` relaxa **só a regra do POOL**, passando `None` ao `_apply_contact_scope`. A regra do CANAL fica
+  em qualquer escopo — ela não classifica interno×contato, ela protege da linha `channel=''` do
+  `parse_routed` que sobrescreve a do `parse_inbound` no ReplacingMergeTree (relaxá-la duplicaria
+  sessão ATIVA na tela). **Consequência a nomear na UI:** hook que roda NA CONFERÊNCIA (NPS inline) não
+  tem sessão própria e continua invisível com `scope=all` — o toggle mostra sessão de pool interno, não
+  "tudo que é interno".
+- **Duas contagens numa passada** (`count()` + `countIf(<é contato>)`): `total` pagina o que está
+  listado, `total_contacts` é o cabeçalho, `total_internal` a diferença. Nunca um número somando os dois
+  domínios. Em `scope=contacts` os dois coincidem **por construção** — e essa igualdade é a asserção que
+  prova que o default ficou bit-a-bit o de antes.
+- `_contact_only_predicate` é a MESMA regra do `WHERE` na forma de expressão; um teste fixa que as duas
+  strings são idênticas, para as metades não divergirem como as do barrier acima.
+- Nenhum endpoint de agregado ganhou o parâmetro; `/reports/journeys` (listagem topo) segue intacto.
+
+### Fatia 1b — `is_internal` na linha ✅
+
+Descoberta ao implementar a 1: o veredicto `purpose=internal` era computado a cada request e
+**descartado**. A linha atravessava a fronteira com `pool_id` e sem a resposta, e a UI não tinha o que
+pintar. Deixá-la re-derivar poria o discriminador da E2f numa segunda casa — não é fato novo, é parar
+de jogar fora o que já foi decidido. `_mark_internal_rows` carimba `is_internal` em toda linha (chave
+nunca ausente: coluna faltando em metade das linhas quebraria o `DictWriter` do CSV e faria a UI ler
+`undefined` como "não interno"). Fecha, de graça, o buraco do `format=csv`, que exportava os dois
+domínios sem coluna que os separasse.
+
+`meta.internal_pools_known` é a **contagem** do conjunto que classificou as linhas, e não um booleano
+"resolvido" — de propósito: `frozenset()` vazio significa tanto registry fora do ar quanto tenant sem
+pool interno, e o `pools_client` não distingue (ele já grita no log, na camada certa). Um booleano
+mentiria num dos dois sentidos; o número deixa a UI decidir sem afirmar o que não sabe — `0` ⇒ não
+oferecer o toggle.
+
+### Fatias 4 + 4b — drill de journey isento, e o card com dois números ✅
+
+**4:** `root_session_id` ganhou a mesma válvula do `session_id` em `_fetch_sessions`. Drill de UM
+processo não é listagem — o operador abriu aquele processo, e esconder dele a sessão de wrap-up que
+pertence ao processo mentiria sobre a composição do que ele pediu. O teste vem em par com um
+**controle negativo** (listagem sem `root_session_id` mantém a exclusão): sozinha, a asserção de
+ausência passaria também se a isenção tivesse vazado para a listagem.
+
+**4b:** isentar só o drill criava divergência que o ADR não previu — o card do L1 conta por
+`_fetch_journeys`, que exclui pool interno, então a journey diria "3 sessões" e a expansão listaria 4.
+Fechado com `internal_session_count` por **pós-passe** (`_attach_journey_internal_counts`), bounded à
+página, no padrão já existente do `_attach_journey_signals`.
+
+> **Por que não como agregado da query principal.** Para contar as internas ali, elas teriam de entrar
+> no `WHERE` — e contaminariam todos os outros agregados do mesmo `GROUP BY`: `channels`/`pool_ids`
+> ganhariam o pool de wrap-up, `open_count` contaria sessão interna aberta, e o wall-clock
+> (`min(opened_at)`→`max(closed_at)`) esticaria até o fim do wrap-up. **É o G1 reaberto um nível
+> acima.** Blindar cada agregado com `…If(<é contato>)` seria reescrever ~10 expressões numa query com
+> histórico de dois bugs sutis (`business_outcome` e as durações D9).
+
+Detalhes que os testes fixam: alias `jid`, nunca `journey_id` (a tabela `sessions` TEM essa coluna — o
+cache dormente da raiz canônica —, e alias sombreando coluna real já derrubou query inteira aqui, code
+184); e o mesmo `accessible_pools` da query principal, senão o card anunciaria "1 interna" a um
+supervisor cujo drill não mostra nenhuma. `spawned_from_root` não precisou de isenção: sessão interna
+nasce com `journey: "inherit"` e nunca atravessa a fronteira.
+
+**Achado de passagem:** `accessible_pools` **já** deriva o espelho interno (`_with_internal_mirrors`,
+ADR author-bound D2 — "quem alcança `p` alcança `p-int`"), então o ACW por segmento não some para
+supervisor com escopo. Isso **não** cobre a linha da SESSÃO de wrap-up, cujo `pool_id` é o pool webhook
+(`wrapup_detached_ia`), não um espelho `-int`.
+
+---
+
 ## Arco de workflow — Fase 4 reenquadrada + 4a (2026-08-11)
 
 ### ⚠️ A Fase 4 não é remoção — é MIGRAÇÃO. O erro era da spec, e é meu

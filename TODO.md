@@ -1822,10 +1822,27 @@ triviais.
 
 | # | Entrega | Estado |
 |---|---|---|
-| 1 | `scope=contacts\|all` em `GET /reports/sessions` — filtro condicional em vez de incondicional; cabeçalho de contagem sempre lê `scope=contacts` mesmo com a tabela expandida | pendente |
-| 2 | Coluna/badge "Origin" na linha da sessão interna (quando `scope=all`), linkando para o `session_id` pai via `origin_session_id` | pendente |
-| 3 | Toggle "Incluir sessões internas (wrap-up, dispatch)" na UI (`AnaliseSessionsPage` ou nome real do componente), desligado por padrão; tag visual distinguindo linha interna de contato | pendente |
-| 4 | Isentar o drill-down de UMA journey já aberta (`journey → sessions → segments`) do filtro E2f — sempre mostra sessões internas associadas, independente do `scope` da listagem topo | pendente |
+| 1 | `scope=contacts\|all` em `GET /reports/sessions` — filtro condicional em vez de incondicional; cabeçalho de contagem sempre lê `scope=contacts` mesmo com a tabela expandida | ✅ **2026-08-11** (ver CHANGELOG) — `meta` passou a devolver `total` (paginação) + `total_contacts` (cabeçalho) + `total_internal` |
+| 1b | **Marcar a linha como interna na resposta** — o veredicto `purpose=internal` é computado no backend (`_internal_pools_for`) e descartado; a UI recebe só `pool_id` e não tem como saber | ✅ **2026-08-11** — `is_internal` por linha (`_mark_internal_rows`) + `meta.internal_pools_known` (contagem, não flag de saúde). Entra no CSV de graça (`_to_csv` tira as colunas da 1ª linha) |
+| 2 | Coluna/badge "Origin" na linha da sessão interna (quando `scope=all`), linkando para o `session_id` pai via `origin_session_id` | pendente — **backend pronto**: a coluna já vem no SELECT (`reports_query.py:704`, e no tier-3 degradado `:753`); é UI pura |
+| 3 | Toggle "Incluir sessões internas (wrap-up, dispatch)" na UI (`ListaTab.tsx`, ns i18n `contacts`), desligado por padrão; tag visual por `row.is_internal`. Cabeçalho lê `meta.total_contacts`, paginação lê `meta.total`; com `meta.internal_pools_known == 0` **não oferecer o toggle** (não há como distinguir nada — não prometer o recurso) | pendente — **backend completo** |
+| 4 | Isentar o drill-down de UMA journey já aberta (`journey → sessions → segments`) do filtro E2f — sempre mostra sessões internas associadas, independente do `scope` da listagem topo | ✅ **2026-08-11** — mesma válvula do `session_id` em `_fetch_sessions` (`if not session_id and not root_session_id`), com controle negativo no teste (a listagem sem `root_session_id` TEM de manter a exclusão) |
+| 4b | **Segundo número no card da journey** — "3 contatos · 1 interna", para o card não discordar do drill que ele expande | ✅ **2026-08-11** — `internal_session_count` por pós-passe (`_attach_journey_internal_counts`), bounded à página, no padrão do `_attach_journey_signals`. **Não** entrou como agregado da query principal: para contar as internas ali elas teriam de entrar no `WHERE` e contaminariam `channels`/`pool_ids`/`open_count` e o wall-clock do processo — o G1 reaberto um nível acima |
+
+`spawned_from_root` **não** precisa de isenção: sessão interna nasce com `journey: "inherit"`, então
+nunca atravessa a fronteira e nunca aparece nessa lista.
+
+**Limites conhecidos do `scope=all` (fatia 1, as-built):**
+
+- Mostra sessão de **pool interno**, não "tudo que é interno": hook que roda NA CONFERÊNCIA (NPS
+  inline) não tem sessão própria e é filtrado pela regra do CANAL, que `all` **não** relaxa (relaxá-la
+  duplicaria sessão ativa — ver CHANGELOG). O rótulo do toggle tem de dizer isso.
+- ~~**`format=csv` herda o `scope`** e exporta os dois domínios sem coluna que os separe.~~ ✅ fechado
+  pela 1b: `is_internal` está na linha, e o `_to_csv` monta o cabeçalho a partir das chaves dela.
+- **Escopo ABAC:** `accessible_pools` já deriva o espelho `-int` (`_with_internal_mirrors`, ADR
+  author-bound D2), mas a linha da SESSÃO de wrap-up carrega `wrapup_detached_ia` (pool webhook, não
+  espelho). Supervisor com escopo restrito liga o toggle e pode não ver nada — decidir se o pool
+  webhook entra no escopo derivado ou se a ausência é logada.
 
 **Guardrails (não reabrir o que E2f fechou):** nenhum endpoint de agregado aceita/lê `scope`; `scope=all`
 não se estende a `/reports/journeys` (listagem topo), só a `/reports/sessions` e ao drill-down do item 4.

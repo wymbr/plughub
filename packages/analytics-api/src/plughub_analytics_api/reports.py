@@ -124,6 +124,7 @@ async def report_sessions(
     dnis:             Optional[str] = Query(None,   description="Filter by DNIS/destination identifier (partial match)"),
     status:           Optional[str] = Query(None,   description="Filter by session status (active|suspended|closed) — Arc 19"),
     origin:           str           = Query("live",  pattern="^(live|import|reeval)$", description="Substrate origin (ADR): live=produção (default), import, reeval"),
+    scope:            str           = Query("contacts", pattern="^(contacts|all)$", description="contacts=só contatos de cliente (default, = E2f); all=inclui sessões de pool interno (wrap-up, dispatch) como linhas extras. NÃO existe em endpoints de agregado."),
     page:             int           = Query(1,       ge=1),
     page_size:        int           = Query(100,     ge=1),
     format:           str           = Query("json",  pattern="^(json|csv)$"),
@@ -135,6 +136,13 @@ async def report_sessions(
     Columns: session_id, tenant_id, channel, pool_id, customer_id,
              opened_at, closed_at, close_reason, outcome,
              wait_time_ms, handle_time_ms, ani, dnis, segment_count
+
+    `scope` (ADR wrapup-detached-pull §7) — **visibilidade, nunca contagem**. Este é
+    o único endpoint que o aceita: agregados (TMA, ocupação, `/reports/agents/*`,
+    `/reports/pools/*`) e a listagem topo de `/reports/journeys` seguem excluindo
+    pool interno incondicionalmente. Mesmo aqui, `meta.total_contacts` é sempre o
+    número do domínio de contato — a tela mostra "N contatos · M internas", nunca
+    um total somado.
     """
     ps = _clamp_page_size(page_size, format == "csv")
     tags_list = [t.strip() for t in insight_tags.split(",") if t.strip()] if insight_tags else None
@@ -160,6 +168,7 @@ async def report_sessions(
         dnis             = dnis,
         status           = status,
         origin           = origin,
+        scope            = scope,
         page      = page,
         page_size = ps,
     )

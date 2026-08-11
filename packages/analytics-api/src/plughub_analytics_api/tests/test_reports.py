@@ -20,6 +20,10 @@ from ..reports_query import (
     _apply_pool_scope,
     _apply_origin_scope,
     _apply_contact_scope,
+    _attach_journey_internal_counts,
+    _contact_only_predicate,
+    _mark_internal_rows,
+    _sessions_meta,
     _clamp_page_size,
     _events_sql_branches,
     _to_csv,
@@ -53,10 +57,50 @@ def _ch_result(col_names: list[str], rows: list[list]) -> MagicMock:
 
 
 def _make_client(*query_results) -> MagicMock:
-    """Returns a mock ClickHouse client with sequential query results."""
+    """Mock do cliente ClickHouse com resultados sequenciais.
+
+    Esgotar a lista levanta `AssertionError` com o motivo, e não `StopIteration`.
+    A diferença não é cosmética: `StopIteration` cruzando um `asyncio.to_thread`
+    (que é como `_fetch_sessions` roda) **trava a suíte** em vez de falhar — foi o
+    que aconteceu ao adicionar o teste de drill de journey, cujo ramo faz uma
+    consulta a mais (`_journey_resolved_map` lê `journey_aliases`) que o teste não
+    previa. Um teste que pendura é pior que um que reprova: não diz nada e ainda
+    consome a rodada inteira.
+    """
+    pending = list(query_results)
+
+    def _next(*_args, **_kwargs):
+        if not pending:
+            raise AssertionError(
+                "mock ClickHouse esgotado: o código sob teste fez mais consultas do "
+                "que os resultados fornecidos a _make_client(). Verifique se o ramo "
+                "exercitado adiciona uma query (ex.: root_session_id → "
+                "_journey_resolved_map antes da contagem)."
+            )
+        return pending.pop(0)
+
     client = MagicMock()
-    client.query = MagicMock(side_effect=list(query_results))
+    client.query = MagicMock(side_effect=_next)
     return client
+
+
+def _sessions_count_result(n: int, contacts: int | None = None) -> MagicMock:
+    """Resultado da query de contagem de `/reports/sessions`.
+
+    **Uma definição, N consumidores.** Desde o ADR §7 a contagem devolve DOIS
+    agregados (`count()` + `countIf(<é contato>)`); enquanto cada classe de teste
+    montava o seu próprio mock de uma coluna, mudar a query quebrava só as classes
+    que alguém lembrasse de atualizar — foi assim que a
+    `TestPoolScopedSessionsReport` estourou com `list index out of range`. É a
+    mesma lição do `_is_workflow_dispatch_entry` no bridge: duas cópias da mesma
+    forma divergem por omissão.
+
+    Sem `contacts`, modela o escopo `contacts` (o `WHERE` já excluiu o pool
+    interno, então os dois agregados coincidem)."""
+    return _ch_result(
+        ["count()", "countIf(contact)"],
+        [[n, n if contacts is None else contacts]],
+    )
 
 
 # ── _to_csv ───────────────────────────────────────────────────────────────────
@@ -103,8 +147,8 @@ class TestQuerySessionsReport:
              "opened_at", "closed_at", "close_reason", "outcome",
              "wait_time_ms", "handle_time_ms"]
 
-    def _count_result(self, n: int) -> MagicMock:
-        return _ch_result(["count()"], [[n]])
+    def _count_result(self, n: int, contacts: int | None = None) -> MagicMock:
+        return _sessions_count_result(n, contacts)
 
     async def test_returns_required_keys(self):
         client = _make_client(
@@ -171,6 +215,90 @@ class TestQuerySessionsReport:
         )
         result = await query_sessions_report(client, DB, TENANT, page_size=50)
         assert result["meta"]["page_size"] == 50
+
+    # ── ADR wrapup-detached-pull §7 ──────────────────────────────────────────
+
+    async def test_default_scope_is_contacts_and_domains_coincide(self):
+        """O default tem de continuar sendo o que a E2f fechou. A igualdade
+        `total == total_contacts` é o que prova que nada foi relaxado sem pedido."""
+        client = _make_client(
+            self._count_result(7),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_sessions_report(client, DB, TENANT)
+        meta = result["meta"]
+        assert meta["scope"] == "contacts"
+        assert meta["total"] == meta["total_contacts"] == 7
+        assert meta["total_internal"] == 0
+
+    async def test_scope_all_reports_both_domains_separately(self):
+        """Com a tabela expandida, o cabeçalho ainda sabe quantos são CONTATO —
+        nunca um número só (guardrail §7.2 item 2)."""
+        client = _make_client(
+            self._count_result(9, contacts=7),
+            _ch_result(self._COLS, []),
+        )
+        result = await query_sessions_report(client, DB, TENANT, scope="all")
+        meta = result["meta"]
+        assert meta["scope"] == "all"
+        assert meta["total"] == 9            # pagina o que está listado
+        assert meta["total_contacts"] == 7   # cabeçalho
+        assert meta["total_internal"] == 2
+
+    async def test_scope_all_relaxes_pool_rule_in_the_sql(self):
+        """A prova de que o parâmetro chega ao SQL: em `all` o `WHERE` da listagem
+        não pode conter a exclusão por pool. Sem esta asserção, o teste acima
+        passaria mesmo com o `scope` ignorado no caminho da query."""
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(self._COLS, []),
+        )
+        with patch(
+            "plughub_analytics_api.reports_query._internal_pools_for",
+            return_value=frozenset({"retencao_humano-int"}),
+        ):
+            await query_sessions_report(client, DB, TENANT, scope="all")
+        listing_sql = client.query.call_args_list[-1].args[0]
+        assert "NOT IN ('retencao_humano-int')" not in listing_sql
+        # …e a contagem do domínio de contato SEGUE conhecendo o conjunto.
+        count_sql = client.query.call_args_list[0].args[0]
+        assert "countIf(s.pool_id NOT IN ('retencao_humano-int'))" in count_sql
+
+    async def test_journey_drill_is_exempt_from_the_pool_rule(self):
+        """Fatia 4 — `root_session_id` é drill de UM processo, não listagem. A
+        sessão de wrap-up pertence àquele processo; escondê-la mentiria sobre a
+        composição do que o operador pediu para ver."""
+        client = _make_client(
+            # O ramo `root_session_id` consulta journey_aliases ANTES da contagem
+            # (union-find J3) — sem esta 1ª resposta o mock esgota.
+            _ch_result(["source_root", "canonical_root"], []),
+            self._count_result(3),
+            _ch_result(self._COLS, []),
+        )
+        with patch(
+            "plughub_analytics_api.reports_query._internal_pools_for",
+            return_value=frozenset({"retencao_humano-int"}),
+        ):
+            await query_sessions_report(client, DB, TENANT, root_session_id="root-1")
+        listing_sql = client.query.call_args_list[-1].args[0]
+        assert "NOT IN ('retencao_humano-int')" not in listing_sql
+        assert "root_session_id IN" in listing_sql
+
+    async def test_plain_listing_still_applies_the_pool_rule(self):
+        """Controle negativo do teste acima: sem `root_session_id`, e em `contacts`,
+        a exclusão TEM de estar lá. Sem este par, a isenção poderia ter vazado para
+        a listagem inteira e os dois testes passariam."""
+        client = _make_client(
+            self._count_result(3),
+            _ch_result(self._COLS, []),
+        )
+        with patch(
+            "plughub_analytics_api.reports_query._internal_pools_for",
+            return_value=frozenset({"retencao_humano-int"}),
+        ):
+            await query_sessions_report(client, DB, TENANT)
+        listing_sql = client.query.call_args_list[-1].args[0]
+        assert "NOT IN ('retencao_humano-int')" in listing_sql
 
 
 # ── query_agents_report — REMOVIDO (2026-07-28) ──────────────────────────────
@@ -1097,6 +1225,194 @@ class TestApplyContactScope:
         assert conds[0] == "(s.channel != '' OR s.closed_at IS NULL)"
         assert conds[1] == "s.pool_id NOT IN ('wrapup_detached_ia')"
 
+
+# ── ADR wrapup-detached-pull §7 — scope=contacts|all na LISTAGEM ─────────────
+
+class TestScopeAllRelaxesOnlyThePoolRule:
+    """O que `scope=all` pode e o que NÃO pode relaxar.
+
+    A passagem de `None` no lugar do conjunto é o mecanismo inteiro — estes testes
+    fixam que ela relaxa a regra do POOL e **mantém** a do CANAL. Relaxar a segunda
+    faria sessão ATIVA duplicar na tela (a linha `channel=''` do `parse_routed`
+    sobrescreve a do `parse_inbound` no ReplacingMergeTree), que é um defeito de
+    dado, não de visibilidade.
+    """
+
+    INTERNAL = frozenset({"retencao_humano-int", "wrapup_detached_ia"})
+
+    def test_scope_contacts_keeps_both_rules(self):
+        conds: list = []
+        _apply_contact_scope(conds, self.INTERNAL, alias="s.")
+        assert len(conds) == 2
+        assert "NOT IN" in conds[1]
+
+    def test_scope_all_drops_pool_rule_keeps_channel_rule(self):
+        conds: list = []
+        _apply_contact_scope(conds, None, alias="s.")
+        assert conds == ["(s.channel != '' OR s.closed_at IS NULL)"]
+
+
+class TestContactOnlyPredicate:
+    """A regra do pool como EXPRESSÃO — é o que permite contar o domínio de
+    contato dentro de uma listagem que o relaxou (guardrail §7.2 item 2)."""
+
+    def test_no_internal_pools_is_always_true(self):
+        """Sem conjunto resolvido, `countIf` conta tudo — e aí `total_contacts ==
+        total`. Nunca inventa exclusão, igual ao `_apply_contact_scope`."""
+        assert _contact_only_predicate(frozenset()) == "1"
+        assert _contact_only_predicate(None) == "1"
+
+    def test_negates_membership_with_alias_and_sorted(self):
+        assert _contact_only_predicate(
+            frozenset({"z_pool", "a_pool"}), alias="s."
+        ) == "s.pool_id NOT IN ('a_pool', 'z_pool')"
+
+    def test_is_the_exact_negation_of_the_where_clause(self):
+        """O invariante que impede as duas metades de divergirem: a expressão
+        contada e a condição filtrada têm de ser a MESMA string."""
+        pools = frozenset({"w_int", "a_int"})
+        conds: list = []
+        _apply_contact_scope(conds, pools, alias="s.")
+        assert conds[1] == _contact_only_predicate(pools, alias="s.")
+
+
+class TestSessionsMeta:
+    """Dois domínios, dois números — nunca um total somado (guardrail §7.2 item 2)."""
+
+    def test_contacts_scope_has_zero_internal(self):
+        m = _sessions_meta(1, 50, 7, 7, "f", "t", "contacts")
+        assert (m["total"], m["total_contacts"], m["total_internal"]) == (7, 7, 0)
+
+    def test_all_scope_splits_the_domains(self):
+        m = _sessions_meta(1, 50, 9, 7, "f", "t", "all")
+        assert m["total_contacts"] == 7
+        assert m["total_internal"] == 2
+        assert m["scope"] == "all"
+
+    def test_total_never_below_contacts(self):
+        """Contagem impossível não vira negativo silencioso: `total_internal` é
+        clampado em 0. Se isto disparar na prática, o defeito é a query de
+        contagem, não o meta."""
+        m = _sessions_meta(1, 50, 3, 5, "f", "t", "all")
+        assert m["total_internal"] == 0
+
+    def test_keeps_base_meta_fields(self):
+        m = _sessions_meta(2, 25, 9, 7, "2026-01-01", "2026-01-02", "all")
+        assert m["page"] == 2 and m["page_size"] == 25
+        assert m["from_dt"] == "2026-01-01" and m["to_dt"] == "2026-01-02"
+
+    def test_internal_pools_known_is_a_count_not_a_health_flag(self):
+        """Deliberadamente um número: `frozenset()` vazio significa tanto registry
+        fora do ar quanto tenant sem pool interno, e o cliente não distingue. Um
+        booleano "resolvido" mentiria num dos dois casos."""
+        assert _sessions_meta(1, 50, 0, 0, "f", "t")["internal_pools_known"] == 0
+        assert _sessions_meta(
+            1, 50, 9, 7, "f", "t", "all", internal_pools_known=2,
+        )["internal_pools_known"] == 2
+
+
+class TestAttachJourneyInternalCounts:
+    """Fatia 4b — o segundo número do card, por pós-passe.
+
+    A escolha de desenho que estes testes protegem: contar as internas DENTRO do
+    `GROUP BY` principal as faria entrar no `WHERE` e contaminar `channels`,
+    `pool_ids`, `open_count` e o wall-clock do processo — o G1 reaberto um nível
+    acima. Se alguém "simplificar" movendo a contagem para lá, é aqui que dói.
+    """
+
+    def _rows(self):
+        return [{"journey_id": "j1"}, {"journey_id": "j2"}]
+
+    def test_zero_on_every_row_when_no_internal_pools(self):
+        client = MagicMock()
+        rows = self._rows()
+        _attach_journey_internal_counts(client, DB, TENANT, {}, rows, frozenset())
+        assert [r["internal_session_count"] for r in rows] == [0, 0]
+        client.query.assert_not_called()
+
+    def test_maps_counts_by_journey(self):
+        client = _make_client(_ch_result(["jid", "internal_count"], [["j1", 2]]))
+        rows = self._rows()
+        _attach_journey_internal_counts(
+            client, DB, TENANT, {}, rows, frozenset({"w_int"}),
+        )
+        assert rows[0]["internal_session_count"] == 2
+        assert rows[1]["internal_session_count"] == 0   # ausente = zero, não None
+
+    def test_alias_is_jid_not_journey_id(self):
+        """`sessions` TEM coluna `journey_id` (cache dormente da raiz canônica);
+        alias que sombreia coluna real já derrubou query inteira neste projeto."""
+        client = _make_client(_ch_result(["jid", "internal_count"], []))
+        _attach_journey_internal_counts(
+            client, DB, TENANT, {}, self._rows(), frozenset({"w_int"}),
+        )
+        sql = client.query.call_args_list[0].args[0]
+        assert "AS jid" in sql
+        assert "AS journey_id" not in sql
+
+    def test_applies_accessible_pools_scope(self):
+        """Sem isto o card anunciaria "1 interna" a um supervisor cujo drill não
+        mostra nenhuma — card e drill precisam contar o mesmo universo."""
+        client = _make_client(_ch_result(["jid", "internal_count"], []))
+        _attach_journey_internal_counts(
+            client, DB, TENANT, {}, self._rows(), frozenset({"w_int"}),
+            accessible_pools=["retencao_humano"],
+        )
+        sql = client.query.call_args_list[0].args[0]
+        assert "'retencao_humano'" in sql
+
+    def test_query_failure_degrades_to_zero_without_raising(self):
+        client = MagicMock()
+        client.query = MagicMock(side_effect=Exception("ch down"))
+        rows = self._rows()
+        _attach_journey_internal_counts(
+            client, DB, TENANT, {}, rows, frozenset({"w_int"}),
+        )
+        assert [r["internal_session_count"] for r in rows] == [0, 0]
+
+
+class TestMarkInternalRows:
+    """Fatia 1b — o veredicto atravessa a fronteira, não o conjunto bruto."""
+
+    def test_marks_only_rows_of_internal_pools(self):
+        rows = [
+            {"session_id": "s1", "pool_id": "retencao_humano"},
+            {"session_id": "s2", "pool_id": "wrapup_detached_ia"},
+        ]
+        _mark_internal_rows(rows, frozenset({"wrapup_detached_ia"}))
+        assert rows[0]["is_internal"] is False
+        assert rows[1]["is_internal"] is True
+
+    def test_field_present_on_every_row_even_when_set_is_empty(self):
+        """A chave nunca falta: coluna ausente em metade das linhas quebraria o
+        CSV (`DictWriter` tira o cabeçalho da 1ª linha) e faria a UI ler
+        `undefined` como 'não interno' sem saber que não perguntou."""
+        rows = [{"session_id": "s1", "pool_id": "retencao_humano"}]
+        _mark_internal_rows(rows, frozenset())
+        assert rows[0]["is_internal"] is False
+
+    def test_row_without_pool_id_is_not_internal(self):
+        rows = [{"session_id": "s1"}]
+        _mark_internal_rows(rows, frozenset({"w"}))
+        assert rows[0]["is_internal"] is False
+
+    async def test_reaches_the_payload_of_the_report(self):
+        """Prova de ponta: a classificação chega ao `data`, não só ao helper."""
+        client = _make_client(
+            _ch_result(["count()", "countIf(contact)"], [[2, 1]]),
+            _ch_result(
+                ["session_id", "pool_id"],
+                [["s-contact", "retencao_humano"], ["s-wrap", "wrapup_detached_ia"]],
+            ),
+        )
+        with patch(
+            "plughub_analytics_api.reports_query._internal_pools_for",
+            return_value=frozenset({"wrapup_detached_ia"}),
+        ):
+            result = await query_sessions_report(client, DB, TENANT, scope="all")
+        assert [r["is_internal"] for r in result["data"]] == [False, True]
+        assert result["meta"]["internal_pools_known"] == 1
+
     def test_active_sessions_survive_empty_channel(self):
         """Guarda contra a regressão que o comentário do _fetch_sessions descreve:
         parse_routed escreve channel='' e sobrescreve a linha do inbound no
@@ -1262,7 +1578,7 @@ class TestPoolScopedSessionsReport:
              "wait_time_ms", "handle_time_ms"]
 
     def _count_result(self, n: int) -> MagicMock:
-        return _ch_result(["count()"], [[n]])
+        return _sessions_count_result(n)
 
     async def test_none_accessible_pools_passes_through(self):
         """accessible_pools=None (unrestricted) — ClickHouse is still called."""

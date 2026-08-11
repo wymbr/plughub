@@ -1200,6 +1200,39 @@ async def _route_to_receive_waiting(
 
 # ── Pool lifecycle hooks ──────────────────────────────────────────────────────
 
+
+def _is_workflow_dispatch_entry(entry: dict) -> bool:
+    """Esta entrada de hook vira **workflow webhook** (fora da conferência)?
+
+    UMA definição, dois consumidores obrigatórios: o loop de `fire_pool_hooks`,
+    que decide para onde despachar, e o `_entry_will_dispatch`, que dimensiona o
+    contador `hook_pending` do barrier. Eles têm de concordar por construção —
+    quando divergem, o barrier conta uma entrada que nunca armará `hook_conf`, e
+    sobra um contador que ninguém decrementa.
+
+    Foi o que aconteceu até 2026-08-11: o dimensionador testava só
+    `dispatch == "detached"` e não conhecia a segunda metade da regra (wrap-up
+    unificado: `side=agent` + `inline` TAMBÉM roda pelo workflow, mudando apenas
+    a ENTREGA — auto-atendimento em vez de pull manual). Com a config do demo
+    (`retencao_humano.on_human_end` = wrap-up inline + NPS irmão), todo contato
+    humano deixava `hook_pending:on_human_end = 1` órfão e, aos 180 s, o
+    `_hook_timeout_guard` publicava um WARNING de "hooks não completaram" +
+    force-close idempotente. O fecho NUNCA foi afetado (nada lê este contador
+    como precondição — ver `_hook_timeout_guard`, que força o fecho em vez de
+    segurá-lo), mas o alarme disparava em toda sessão: um aviso que sempre soa
+    torna o timeout de hook REAL indistinguível de ruído.
+
+    O NPS (`side=customer`) permanece na CONFERÊNCIA quando inline — precisa do
+    WS do cliente —, por isso a metade `inline` da regra é restrita a
+    `side=agent`.
+    """
+    if not isinstance(entry, dict):
+        return False
+    dispatch = entry.get("dispatch", "inline") or "inline"
+    side     = entry.get("side", "agent") or "agent"
+    return dispatch == "detached" or (side == "agent" and dispatch == "inline")
+
+
 async def _fire_detached_hook(
     http:         aiohttp.ClientSession,
     session_id:   str,
@@ -1580,12 +1613,16 @@ async def fire_pool_hooks(
         """Reproduz os predicados de skip do loop abaixo para dimensionar o
         contador de conclusão da CONFERÊNCIA. Uma entrada NÃO conta quando falta
         'pool', quando é um hook de cliente com nps_on_disconnect=skip numa queda
-        do cliente, ou quando é `dispatch: detached` (Camada D) — o hook destacado
-        vira workflow webhook fora da conferência, logo NÃO participa do barrier
-        `hook_pending`/`posatt` (contá-lo travaria o contato até o force-close)."""
+        do cliente, ou quando vira **workflow webhook** — destacado OU wrap-up
+        inline —, porque aí ela roda fora da conferência e não participa do
+        barrier `hook_pending`/`posatt` (contá-la deixa contador órfão).
+
+        A regra do workflow vive em `_is_workflow_dispatch_entry`, compartilhada
+        com o loop de despacho: duplicá-la aqui foi o que produziu a divergência
+        de 2026-08-11 (ver o docstring de lá)."""
         if not isinstance(_e, dict) or not _e.get("pool"):
             return False
-        if (_e.get("dispatch", "inline") or "inline") == "detached":
+        if _is_workflow_dispatch_entry(_e):
             return False
         _s   = _e.get("side", "agent") or "agent"
         _nod = _e.get("nps_on_disconnect", "timeout") or "timeout"
@@ -1782,10 +1819,10 @@ async def fire_pool_hooks(
         # Console (flag auto_attend). O NPS (side=customer, inline) permanece na
         # CONFERÊNCIA (precisa do WS do cliente) → não entra aqui. Detached de qualquer
         # side segue pelo workflow (retrocompat).
-        _is_workflow_dispatch = (
-            _dispatch_mode == "detached"
-            or (hook_side == "agent" and _dispatch_mode == "inline")
-        )
+        #
+        # A REGRA mora em `_is_workflow_dispatch_entry` porque o dimensionador do
+        # barrier (`_entry_will_dispatch`) precisa da mesma resposta — ver lá.
+        _is_workflow_dispatch = _is_workflow_dispatch_entry(entry) if isinstance(entry, dict) else False
         if _is_workflow_dispatch:
             _auto_attend = (_dispatch_mode == "inline")   # inline → Console auto-claim
             await _fire_detached_hook(

@@ -338,6 +338,74 @@ async def _internal_pools_for(tenant_id: str) -> frozenset[str]:
     return await fetch_internal_pools(get_settings().agent_registry_url, tenant_id)
 
 
+def _contact_only_predicate(
+    internal_pools: "frozenset[str] | set[str] | None", alias: str = "",
+) -> str:
+    """Expressão booleana "esta linha é um contato de cliente" (só a regra do POOL).
+
+    É a MESMA regra (2) de `_apply_contact_scope`, na forma de expressão em vez de
+    condição de `WHERE` — para poder ser CONTADA numa listagem que a relaxou. Sem
+    ela, `scope=all` faria a tela ter um único número misturando contatos e ruído
+    operacional, que é exatamente o que a E2f existe para impedir.
+
+    Sem pools internos resolvidos ⇒ `1`: o helper nunca inventa exclusão (mesma
+    postura do `_apply_contact_scope`; quem loga a falha de resolução é o cliente).
+    """
+    if not internal_pools:
+        return "1"
+    col = f"{alias}pool_id" if alias else "pool_id"
+    lst = ", ".join(f"'{p}'" for p in sorted(internal_pools))
+    return f"{col} NOT IN ({lst})"
+
+
+def _mark_internal_rows(
+    rows: list[dict], internal_pools: "frozenset[str] | set[str] | None",
+) -> list[dict]:
+    """Carimba `is_internal` em cada linha (ADR §7, fatia 1b). Muta e devolve.
+
+    **Não é fato novo — é o veredicto que o backend já computou e descartava.** O
+    conjunto de pools internos é resolvido aqui a cada request (`_internal_pools_for`)
+    para filtrar; até esta fatia, a linha atravessava a fronteira com `pool_id` e sem
+    a resposta, e a UI não tinha como distinguir contato de ruído operacional.
+    Deixá-la re-derivar poria o discriminador da E2f numa segunda casa — o defeito
+    que o "one source per domain" existe para impedir. Quem sabe a resposta decide;
+    quem exibe apenas exibe.
+
+    Vale para o CSV de graça: `_to_csv` tira as colunas das chaves da 1ª linha.
+    """
+    known = set(internal_pools or ())
+    for r in rows:
+        r["is_internal"] = r.get("pool_id") in known
+    return rows
+
+
+def _sessions_meta(
+    page: int, page_size: int, total: int, total_contacts: int,
+    from_dt: str, to_dt: str, scope: str = "contacts",
+    internal_pools_known: int = 0,
+) -> dict:
+    """`_meta` + os DOIS domínios de contagem (ADR wrapup-detached-pull §7.2, item 2).
+
+    `total` dimensiona a PAGINAÇÃO (linhas realmente listadas); `total_contacts`
+    é o que a tela mostra no cabeçalho, sempre no escopo `contacts` mesmo com a
+    tabela expandida. Nunca um número só somando os dois domínios.
+
+    `internal_pools_known` = tamanho do conjunto que classificou estas linhas. É
+    um FATO, não um veredicto de saúde — de propósito. Um booleano "resolvido"
+    seria mentira nos dois sentidos: `frozenset()` vazio significa tanto "registry
+    não respondeu" quanto "este tenant não tem pool interno", e o `pools_client`
+    não distingue os casos (ele já grita no log, na camada certa, quando falha).
+    Com o número, a UI decide sem afirmar o que não sabe: `0` ⇒ não há como
+    distinguir nada, então não prometer o recurso na tela.
+    """
+    m = _meta(page, page_size, total, from_dt, to_dt)
+    m["total_contacts"] = total_contacts
+    m["total_internal"] = max(0, total - total_contacts)
+    m["scope"]          = scope
+    m["internal_pools_known"] = internal_pools_known
+    return m
+
+
 # ─── /reports/sessions ────────────────────────────────────────────────────────
 
 async def query_sessions_report(
@@ -367,15 +435,20 @@ async def query_sessions_report(
     dnis:                   str | None       = None,
     status:                 str | None       = None,
     origin:                 "str | list[str]" = "live",
+    # ADR wrapup-detached-pull §7 — visibilidade ≠ contagem. `contacts` (default) é
+    # bit-a-bit o comportamento que a E2f fechou; `all` acrescenta as sessões de pool
+    # interno (wrap-up, dispatch) como LINHAS, sem nunca entrar em `total_contacts`.
+    # Nenhum endpoint de AGREGADO aceita este parâmetro (guardrail §7.2 item 1).
+    scope:                  str              = "contacts",
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
     since = _ch_fmt(from_dt) if from_dt else _default_from()
     until = _ch_fmt(to_dt, upper=True) if to_dt else _default_to()
     if accessible_pools is not None and not accessible_pools:
-        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+        return {"data": [], "meta": _sessions_meta(page, page_size, 0, 0, since, until, scope)}
     if supervised_agent_types is not None and not supervised_agent_types:
-        return {"data": [], "meta": _meta(page, page_size, 0, since, until)}
+        return {"data": [], "meta": _sessions_meta(page, page_size, 0, 0, since, until, scope)}
     internal_pools = await _internal_pools_for(tenant_id)
     try:
         return await asyncio.to_thread(
@@ -384,11 +457,15 @@ async def query_sessions_report(
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
             ani, dnis, status, origin, root_session_id, spawned_from_root,
-            internal_pools,
+            internal_pools, scope,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
-        return {"data": [], "meta": _meta(page, page_size, 0, since, until), "error": "data_unavailable"}
+        return {
+            "data": [],
+            "meta": _sessions_meta(page, page_size, 0, 0, since, until, scope),
+            "error": "data_unavailable",
+        }
 
 
 def _fetch_sessions(
@@ -406,6 +483,7 @@ def _fetch_sessions(
     root_session_id: str | None = None,
     spawned_from_root: str | None = None,
     internal_pools: "frozenset[str] | None" = None,
+    scope: str = "contacts",
 ) -> dict:
     conditions = [
         "s.tenant_id = {tenant_id:String}",
@@ -418,8 +496,25 @@ def _fetch_sessions(
     # EXCETO no lookup explícito por `session_id`: o escopo filtra LISTAGENS, não
     # uma busca por id. Quem pede uma sessão pelo id (drill, deep-link, suporte)
     # está pedindo AQUELA sessão — devolver vazio seria esconder o que foi pedido.
-    if not session_id:
-        _apply_contact_scope(conditions, internal_pools, alias="s.")
+    #
+    # `scope="all"` (ADR §7) relaxa **só a regra do POOL**, passando `None` no lugar
+    # do conjunto. A regra do CANAL continua valendo em qualquer escopo, e isso é
+    # deliberado: ela não classifica "interno vs contato" — ela protege da linha que
+    # o `parse_routed` escreve com `channel=''` e que, no ReplacingMergeTree,
+    # sobrescreve a do `parse_inbound`. Relaxá-la faria sessões ATIVAS duplicarem na
+    # tela. Consequência a nomear na UI: hook que roda NA CONFERÊNCIA (NPS inline)
+    # não tem sessão própria e continua invisível mesmo com `scope=all` — o toggle
+    # mostra sessão de pool interno, não "tudo que é interno".
+    #
+    # Fatia 4 — `root_session_id` (drill de UMA journey) é ISENTO, como o `session_id`
+    # e pela mesma razão: escopo filtra LISTAGEM, e isto não é listagem. O operador
+    # abriu AQUELE processo; esconder dele a sessão de wrap-up que pertence ao
+    # processo seria mentir sobre a composição do que ele pediu para ver. Nenhuma
+    # contagem sai daqui — a agregação do processo é do card (`_fetch_journeys`), que
+    # segue excluindo pool interno do `session_count` e reporta o interno à parte.
+    _scope_pools = internal_pools if scope != "all" else None
+    if not session_id and not root_session_id:
+        _apply_contact_scope(conditions, _scope_pools, alias="s.")
     params: dict = {"tenant_id": tenant_id}
 
     if session_id:
@@ -544,11 +639,22 @@ def _fetch_sessions(
 
     offset = (page - 1) * page_size
 
-    total = _count(
-        client,
-        f"SELECT count() FROM {db}.sessions AS s FINAL {_agent_join} WHERE {where}",
-        params,
+    # Duas contagens numa passada só (ADR §7.2 item 2): `total` pagina o que está
+    # LISTADO; `total_contacts` é o cabeçalho, sempre no domínio de contato. Em
+    # `scope=contacts` os dois coincidem por construção — o `where` já excluiu o
+    # pool interno —, e essa igualdade é o invariante que prova que o default ficou
+    # bit-a-bit o de antes.
+    _contact_expr = _contact_only_predicate(internal_pools, alias="s.")
+    _counts = client.query(
+        f"SELECT count(), countIf({_contact_expr}) "
+        f"FROM {db}.sessions AS s FINAL {_agent_join} WHERE {where}",
+        parameters=params,
     )
+    if _counts.result_rows:
+        total          = int(_counts.result_rows[0][0])
+        total_contacts = int(_counts.result_rows[0][1])
+    else:
+        total = total_contacts = 0
 
     # ClickHouse 23.8 does NOT support correlated subqueries with outer-query aliases
     # (e.g. "WHERE tenant_id = s.tenant_id") in the SELECT clause — it raises:
@@ -760,7 +866,13 @@ def _fetch_sessions(
                 LIMIT {page_size} OFFSET {offset}
             """, parameters=params)
 
-    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+    return {
+        "data": _mark_internal_rows(_rows_to_dicts(result), internal_pools),
+        "meta": _sessions_meta(
+            page, page_size, total, total_contacts, since, until, scope,
+            internal_pools_known=len(internal_pools or ()),
+        ),
+    }
 
 
 # ─── /reports/journeys (Journey J2 — proveniência-only) ───────────────────────
@@ -980,8 +1092,74 @@ def _fetch_journeys(
     # CANÔNICA (mesmo transform do union-find sobre origin_session_id). Bounded à
     # página (HAVING journey_id IN ...). Degrada gracioso (sem sinais → zeros/None).
     _attach_journey_signals(client, db, tenant_id, resolved, rows)
+    # ADR §7 / fatia 4b — o segundo número do card. Pós-passe, não agregado novo.
+    _attach_journey_internal_counts(
+        client, db, tenant_id, resolved, rows, internal_pools, accessible_pools,
+    )
 
     return {"data": rows, "meta": _meta(page, page_size, total, since, until)}
+
+
+def _attach_journey_internal_counts(
+    client: Any, db: str, tenant_id: str,
+    resolved: dict[str, str], rows: list[dict],
+    internal_pools: "frozenset[str] | None",
+    accessible_pools: list[str] | None = None,
+) -> None:
+    """Anexa `internal_session_count` (wrap-up, dispatch) a cada journey da página.
+
+    **Por que pós-passe e não mais um agregado na query principal.** Para contar as
+    internas ali, elas teriam de entrar no `WHERE` — e aí contaminariam TODOS os
+    outros agregados do mesmo `GROUP BY`: `channels` e `pool_ids` ganhariam o pool
+    de wrap-up, `open_count` contaria sessão interna aberta, e o wall-clock
+    (`min(opened_at)`→`max(closed_at)`) esticaria até o fim do wrap-up — que é
+    exatamente o G1 que a E2f fechou, reaberto num nível acima. Blindar cada
+    agregado com `…If(<é contato>)` seria reescrever ~10 expressões numa query com
+    histórico de dois bugs sutis (`business_outcome` e as durações D9). O pós-passe
+    custa uma query bounded à página e não encosta em nada disso — é o mesmo padrão
+    de `_attach_journey_signals`.
+
+    Zero é o default em toda linha: journey sem sessão interna e falha de consulta
+    ficam indistinguíveis aqui, e é por isso que a falha é logada.
+    """
+    for r in rows:
+        r["internal_session_count"] = 0
+    if not internal_pools:
+        return
+    ids = [r["journey_id"] for r in rows if r.get("journey_id")]
+    if not ids:
+        return
+    jexpr    = _journey_group_expr(resolved)
+    id_list  = ", ".join(f"'{j}'" for j in ids)
+    pool_list = ", ".join(f"'{p}'" for p in sorted(internal_pools))
+    # Escopo ABAC igual ao da query principal: sem isto o card poderia anunciar
+    # "1 interna" para um supervisor cujo drill não mostra nenhuma.
+    scope_clause = ""
+    if accessible_pools:
+        _acc = ", ".join(f"'{p}'" for p in accessible_pools)
+        scope_clause = f" AND (s.pool_id IN ({_acc}) OR s.pool_id = '')"
+    # Alias `jid`, não `journey_id`: `sessions` TEM uma coluna com esse nome (o cache
+    # dormente da raiz canônica) e alias que sombreia coluna real já derrubou query
+    # inteira neste projeto (ILLEGAL_AGGREGATION, code 184).
+    sql = f"""
+        SELECT {jexpr} AS jid, count() AS internal_count
+        FROM {db}.sessions AS s FINAL
+        WHERE s.tenant_id = {{tenant_id:String}}
+          AND s.pool_id IN ({pool_list}){scope_clause}
+        GROUP BY jid
+        HAVING jid IN ({id_list})
+    """
+    try:
+        res = client.query(sql, parameters={"tenant_id": tenant_id})
+    except Exception as exc:
+        logger.warning(
+            "journey internal-count aggregation failed tenant=%s (card mostrará 0 "
+            "internas mesmo onde houver): %s", tenant_id, exc,
+        )
+        return
+    by_id = {row[0]: int(row[1]) for row in res.result_rows}
+    for r in rows:
+        r["internal_session_count"] = by_id.get(r["journey_id"], 0)
 
 
 def _attach_journey_signals(

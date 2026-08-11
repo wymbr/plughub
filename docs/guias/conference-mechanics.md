@@ -1674,5 +1674,46 @@ por construção.
 
 ---
 
+### Mudança 33 — o dimensionador do barrier passa a compartilhar o predicado de despacho (2026-08-11)
+
+**Sintoma:** aos 180 s de **todo** contato humano do demo, o log publicava
+`_hook_timeout_guard: on_human_end hooks did not complete within 180s — remaining=1, force-closing
+contact`, seguido de um `_trigger_contact_close` que não fazia nada.
+
+**Causa — duas implementações da mesma regra.** O loop de `fire_pool_hooks` decide o veículo por
+`dispatch == "detached" OU (side == "agent" E dispatch == "inline")`: desde o wrap-up unificado
+(Mudança 26/27) o wrap-up roda pelo MESMO workflow destacado nos dois modos, e o que `inline` muda é a
+ENTREGA (auto-atendimento com `auto_attend` × pull manual da inbox). O `_entry_will_dispatch`, que
+dimensiona `hook_pending`, reimplementava a regra pela metade — só `dispatch == "detached"`. Com
+`retencao_humano.on_human_end` = wrap-up **inline**, a entrada era CONTADA no barrier e depois
+despachada para fora da conferência, onde nunca armaria o `hook_conf` que a decrementaria.
+
+**O que o contador órfão NÃO fazia** (levantado antes do conserto, porque a hipótese natural é a
+errada): não segurava o contato. Os três únicos pontos que tocam `hook_pending` são o DECR
+(`main.py:4916`, chaveado pelo `completed_hook_type` do `hook_conf` que terminou — o NPS decrementa
+`on_contact_end` e nunca lê `on_human_end`), o GET do `_hook_timeout_guard` (`:2081`, que **força** o
+fecho quando `remaining > 0`) e a guarda anti-ghost-routing do webchat (`webchat.py:294`, onde
+presença é conservadora). Nenhum é precondição de fecho. O `closed_at` do contato segue governado
+pelo NPS irmão (Mudança 26) ou pelo auto-close de leva 100 %-workflow, e o AHT já estava congelado
+antes dos hooks por `_mark_contact_ended` (`:7279`).
+
+**O dano era o alarme.** Um aviso que soa em toda sessão torna o timeout de hook **verdadeiro**
+indistinguível de ruído — o mesmo modo de falha do teste que não pode reprovar, do lado do alerta.
+
+**Correção:** a regra virou `_is_workflow_dispatch_entry(entry)` (módulo, `main.py`), consumida pelo
+loop **e** pelo dimensionador. A divergência fecha por construção; não depende de alguém lembrar de
+editar os dois lugares.
+
+**Risco conferido antes de aplicar:** sem o contador, a guarda de reconexão do webchat perde uma das 5
+chaves durante a janela de hooks. Não descobre nada — `session:{id}:closed` é escrito em `:7267`
+(ramo `agent_closed`/no_continuation) e `:6007` (ramo customer-side), nos dois casos **antes** de
+`fire_pool_hooks`.
+
+**Como ficar vermelho:** contato humano no `retencao_humano`; ao fim, `session:{id}:hook_pending:on_human_end`
+deve estar **ausente**, e não deve surgir linha `did not complete within 180s` nos 200 s seguintes.
+Sem contato humano na janela o veredicto é INCONCLUSIVO, não verde.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*
