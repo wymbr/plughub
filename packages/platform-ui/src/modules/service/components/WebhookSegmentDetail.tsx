@@ -75,6 +75,18 @@ function fmtValue(val: unknown): string {
   return JSON.stringify(val)
 }
 
+/** `LocalizedText` do DialogForm: string pura ou `{locale: texto}`. Sem tradução
+ *  disponível, devolve o fallback (o id) — nunca a primeira chave do objeto. */
+function locStr(v: unknown, fallback: string): string {
+  if (typeof v === 'string' && v) return v
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    const pick = o['pt-BR'] ?? o['en'] ?? Object.values(o)[0]
+    if (typeof pick === 'string' && pick) return pick
+  }
+  return fallback
+}
+
 // ── Reason label ──────────────────────────────────────────────────────────────
 
 const REASON_STYLE: Record<string, { label: string; cls: string }> = {
@@ -96,8 +108,53 @@ function ReasonBadge({ reason }: { reason: string }) {
 
 // ── Step row ─────────────────────────────────────────────────────────────────
 
-function StepRow({ t: tr, io, isLast }: { t: StepTransition; io?: StepIO; isLast: boolean }) {
+// ── S4: respostas do formulário, não um blob ─────────────────────────────────
+//
+// O `payload` do resume carrega `answers` — as respostas que o operador digitou.
+// Renderizá-las como JSON esconde justamente o que se foi ver.
+//
+// ⚠️ O formulário é MUTÁVEL e a resposta é HISTÓRICA. Por isso a iteração é pelas
+// CHAVES DA RESPOSTA, com o form servindo só de DICIONÁRIO DE RÓTULOS: chave que o
+// formulário de hoje não conhece aparece crua (nunca com rótulo inventado), e
+// pergunta que existe hoje mas não foi respondida não aparece (não houve resposta).
+// A alternativa seria snapshotar o form na gravação, como o link de survey faz.
+
+function answersOf(payload: unknown): Record<string, unknown> | null {
+  if (!payload || typeof payload !== 'object') return null
+  const a = (payload as Record<string, unknown>)['answers']
+  if (!a || typeof a !== 'object' || Array.isArray(a)) return null
+  return a as Record<string, unknown>
+}
+
+function AnswersBlock({ answers, labels }: {
+  answers: Record<string, unknown>
+  labels:  Record<string, string>
+}) {
   const { t } = useTranslation('contacts')
+  const entries = Object.entries(answers)
+  if (entries.length === 0) return null
+  return (
+    <div className="mt-1 rounded border border-border bg-white px-2 py-1.5">
+      <div className="text-xs text-muted-light mb-1">{t('trace.answers')}</div>
+      <div className="space-y-1">
+        {entries.map(([key, val]) => (
+          <div key={key} className="text-xs">
+            <div className={labels[key] ? 'text-muted' : 'text-muted font-mono'}>
+              {labels[key] ?? key}
+            </div>
+            <div className="text-dark break-words">{fmtValue(val)}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function StepRow({ t: tr, io, isLast, labels }: {
+  t: StepTransition; io?: StepIO; isLast: boolean; labels: Record<string, string>
+}) {
+  const { t } = useTranslation('contacts')
+  const answers = answersOf(io?.payload)
   const hasIo = io && (io.decision || (io.payload !== undefined && io.payload !== null) || io.child_session_id || io.resumed_by)
   return (
     <div className="relative flex items-start gap-3 pb-4">
@@ -132,7 +189,8 @@ function StepRow({ t: tr, io, isLast }: { t: StepTransition; io?: StepIO; isLast
                 <span className="font-mono text-dark">{io!.decision}</span>
               </div>
             )}
-            {io!.payload !== undefined && io!.payload !== null && (
+            {answers && <AnswersBlock answers={answers} labels={labels} />}
+            {io!.payload !== undefined && io!.payload !== null && !answers && (
               <div className="break-all">
                 <span className="text-muted">{t('trace.resumePayload')}: </span>
                 <span className="font-mono text-dark">{fmtValue(io!.payload)}</span>
@@ -183,6 +241,37 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
   const stepIo       = data?.step_io ?? {}
   const agentLabel   = node.agent_type_id.replace(/_/g, ' ').replace(/\bv\d+$/, '').trim()
   const isActive     = node.ended_at === null
+
+  // S4 — dicionário de rótulos das respostas, do DialogForm que as coletou
+  // (`session.dialog_form_id` no ctx desta sessão). É DICIONÁRIO, não fonte: quem
+  // manda na lista é a resposta gravada. Form ausente/404 ⇒ mapa vazio ⇒ as chaves
+  // aparecem cruas, que é a degradação honesta (nunca um rótulo inventado).
+  const [answerLabels, setAnswerLabels] = useState<Record<string, string>>({})
+  const formId = typeof ctx['session.dialog_form_id']?.value === 'string'
+    ? ctx['session.dialog_form_id'].value as string
+    : ''
+
+  useEffect(() => {
+    if (!formId) { setAnswerLabels({}); return }
+    let cancelled = false
+    fetch(`/v1/dialog/forms/${encodeURIComponent(formId)}?status=published`, {
+      headers: { 'X-Tenant-ID': tenantId },
+    })
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then((doc: { nodes?: Array<Record<string, any>> }) => {
+        if (cancelled) return
+        const map: Record<string, string> = {}
+        for (const n of doc.nodes ?? []) {
+          if (Array.isArray(n.fields)) {
+            for (const f of n.fields) if (f?.id) map[f.id] = locStr(f.label, f.id)
+          }
+          if (n.output_key) map[n.output_key] = locStr(n.prompt ?? n.text, n.output_key)
+        }
+        setAnswerLabels(map)
+      })
+      .catch(() => { if (!cancelled) setAnswerLabels({}) })
+    return () => { cancelled = true }
+  }, [formId, tenantId])
 
   // Filter context to session.* tags seeded by webhook_trigger (most relevant for display)
   const inputTags = Object.entries(ctx)
@@ -272,6 +361,7 @@ export function WebhookSegmentDetail({ tenantId, node, onBack }: Props) {
                   t={tr}
                   io={stepIo[tr.from_step]}
                   isLast={idx === ps.transitions.length - 1}
+                  labels={answerLabels}
                 />
               ))}
               {/* Current state node — always shown */}

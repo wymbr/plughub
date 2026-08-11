@@ -2,6 +2,93 @@
 
 ---
 
+## Linha do tempo única do contato — "o que esta sessão originou" ✅ S1–S4 (2026-08-11)
+
+### O que construímos na fatia 3 era meia feature
+
+O toggle da fatia 3 entrega as sessões internas como LINHAS da listagem, e a validação na tela
+mostrou o limite: ordenadas por tempo, a interna cai longe do pai assim que há volume ou filtro. Ao
+discutir a correção ficou claro que **o problema não é do wrap-up** — o sistema gera sessão a partir
+de sessão em cinco situações (`collect` → sessão-filho de contato · `workflow_trigger` → processo ·
+dispatcher→worker do outbound · link de survey · wrap-up destacado), e nenhuma tinha superfície que a
+mostrasse NO LUGAR EM QUE ACONTECEU.
+
+**Não faltava modelo, faltava projeção.** Os dois eixos já eram de primeira classe (pertença via
+`root_session_id`/`spawned_from_root`; natureza via `is_internal`). O que não existia era a leitura de
+**1 salto**: havia "o que houve DENTRO da sessão" (segmentos) e "o processo INTEIRO" (journey, que
+esconde o sub-limiar de propósito). O wrap-up sumia exatamente nessa lacuna — não é insignificante, é
+sub-limiar.
+
+**Decisão que o desenho fixa: a relação reconciliadora é PROVENIÊNCIA, não journey.** Journey segue
+sendo o fecho transitivo filtrado a contatos e com limiar. A timeline é a projeção de UMA aresta da
+mesma relação. Materializar journey por contato foi recusado pelo discriminador do `CLAUDE.md`
+(*"nasceu um contato NOVO?"*): a sessão de wrap-up não é contato (sem cliente, pool interno), e fazer
+tudo virar journey mataria o discriminador e transformaria `significant_only` em ruído ou em mentira.
+Precedente: as duas remoções de contêiner largo desta base (`WorkflowInstance`, entidade `Journey`).
+
+### S1 — `origin_session_id` em `GET /reports/sessions`
+
+Filhas de UM SALTO. **Terceira isenção** do filtro de contato, ao lado de `session_id` e
+`root_session_id` e pela mesma razão (pedir as filhas de uma sessão não é listar) — sem ela a resposta
+a *"o que este contato originou"* seria "nada". **Ignora a janela de data**, como o fetch direcionado
+do `_fetch_journeys`: a filha nasce depois do pai, e um wrap-up às 23:59:58 de `to_dt` cairia fora do
+recorte produzindo uma ausência que se lê como fato. Não reusa `root_session_id` de propósito — o fecho
+transitivo penduraria neste contato, em journey multi-contato, as filhas do IRMÃO.
+
+Risco conferido antes de aplicar: `query_sessions_report` tem `*,` na assinatura (tudo após `to_dt` é
+keyword-only), então inserir o parâmetro no meio não desloca `page`/`page_size` de nenhum chamador; em
+`_fetch_sessions`, que é posicional, foi acrescentado no fim.
+
+### S2 — a prosa do wrap-up estava chegando e sendo jogada fora
+
+`/reports/segments` já selecionava `wrapup_summary`/`wrapup_next_steps` (`reports_query.py:2080`,
+"prosa do wrap-up: gravada em TODA disposição") e o `platform-ui` **nunca** os renderizou — zero
+ocorrências no `src/`. Custo de backend: nenhum. A prosa mora na linha do segmento que a gravou, que é
+onde o `segment_outcome_record` a escreveu por referência (§3α D3 do ADR) — não na sessão que a coletou.
+
+### S3 — timeline única, não bloco separado
+
+Uma sessão originada é um EVENTO na vida do contato, e a tela de Segments já é uma timeline: as duas
+listas foram fundidas por tempo (segmento pelo `started_at`, filha pelo `opened_at`). Bloco no rodapé
+foi recusado pelo caso `collect`, onde ele destruiria a informação principal — que o atendimento ficou
+parado N minutos esperando a filha.
+
+Tag por dois eixos, nesta ordem: `is_internal` → **interna**; raiz ≠ raiz do pai → **processo**
+(`journey: new`, que **linka e não expande** — expandir desfaria o corte que alguém pediu ao usar
+`journey: new`); senão **contato**. A raiz do pai é derivada das próprias filhas (interna sempre herda
+a journey, então a raiz dela É a do pai). Cabeçalho com dois números — `3 total · 1 originada` —, nunca
+somados: segmento é participação DENTRO da sessão, originada é sessão IRMÃ. É o guardrail §7.2 um nível
+acima. Falha do fetch das filhas vira faixa de aviso: erro indistinguível de "não originou nada" seria
+a mesma classe de defeito que este arco existe para fechar.
+
+**Trilha de navegação (achado na validação):** abrir a filha trocava o `sessionId` e o único caminho de
+volta era a listagem — o operador perdia o contato de onde veio, que é o contexto da visita. O
+breadcrumb ganhou a trilha de ancestrais, guardando o **canal junto do id**: sem ele, voltar a um
+ancestral webhook o renderizaria como sessão comum (lista de segmentos em vez do trace), erro que só
+apareceria em cadeia de dois saltos. No Console (sem breadcrumb) o próprio botão de voltar sobe um
+nível antes de fechar o detalhe.
+
+### S4 — respostas do formulário, não um blob
+
+O `payload` do resume carregava `answers` e era renderizado como JSON — justamente o que se ia ver.
+Agora vai como lista pergunta→resposta na janela de execução.
+
+**O formulário é MUTÁVEL e a resposta é HISTÓRICA**, então a iteração é pelas CHAVES DA RESPOSTA e o
+DialogForm (`session.dialog_form_id` no ctx) entra só como **dicionário de rótulos**: chave que o
+formulário de hoje não conhece aparece crua em mono, nunca com rótulo inventado; pergunta que existe
+hoje mas não foi respondida não aparece. Form ausente ou 404 ⇒ mapa vazio ⇒ todas cruas. A alternativa
+(snapshot do form na gravação, como o link de survey faz no `create`) fica registrada no TODO.
+
+### Validação
+
+`552 passed` no analytics-api. Gate previsto antes de medir e batido campo a campo: filhas de
+`d4a87c74-…-96ec91b2a43d` ⇒ `total: 1`, id `d49c57a4-…-ba25976fc655`, `is_internal: true` (`total: 0`
+teria denunciado a isenção não aplicada). Na tela: prosa sob o segmento humano, linha
+`spawned · internal` na posição temporal correta, `3 total · 1 originada` no cabeçalho, e breadcrumb de
+três níveis com volta ao contato.
+
+---
+
 ## Console — seletor de presença esconde pool IA ✅ · Histórico de wrap-up — colunas alinhadas ✅ (2026-08-11)
 
 Dois defeitos de UI, sem backend. O primeiro é interessante porque **o backend já estava certo**; o

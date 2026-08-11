@@ -1903,6 +1903,73 @@ já existente em `segments` mas sem UI nenhuma) — gap real, mas separado, aind
 
 ---
 
+## Linha do tempo única do contato — "o que esta sessão originou" ✅ *(S1–S4 concluídas 2026-08-11 — as-built no CHANGELOG)*
+
+> **Origem:** revisão da fatia 3 acima. O toggle entrega as sessões internas como LINHAS da listagem,
+> mas a leitura é ruim — ordenadas por tempo, a interna pode cair páginas longe do pai. Discutindo,
+> ficou claro que **o problema não é do wrap-up**: o sistema gera sessão a partir de sessão em pelo
+> menos cinco situações (`collect` → sessão-filho de contato · `workflow_trigger` → processo ·
+> dispatcher→worker do outbound (fan-out) · link de survey outbound · wrap-up destacado), e nenhuma
+> tem superfície que a mostre **no lugar em que aconteceu**.
+
+**Diagnóstico:** não falta modelo, falta PROJEÇÃO. Os dois eixos já são de primeira classe —
+pertença (`root_session_id` / `spawned_from_root`) e natureza (`is_internal`, fatia 1b). O que não
+existe é a leitura de **1 salto**: *o que esta sessão originou*. Temos "o que houve DENTRO dela"
+(segmentos) e "o processo INTEIRO" (journey, que esconde de propósito o sub-limiar — `significant_only`
++ exclusão de pool interno). O wrap-up sumiu exatamente nessa lacuna: não é insignificante, é
+sub-limiar.
+
+**Decisão 1 — a relação reconciliadora é PROVENIÊNCIA, não journey.** *(pergunta levantada: "não
+descarto usar journey para conciliar as visões")* Journey continua sendo o fecho transitivo
+(proveniência ∪ alias), filtrado a contatos e com limiar — a visão de PROCESSO. A timeline é a
+projeção de **1 aresta** da mesma relação, sem filtro. Mesma relação, três leituras:
+
+| Leitura | Relação | Filtro | Pergunta |
+|---|---|---|---|
+| Timeline "originou" | `origin_session_id`, 1 salto | nenhum | o que houve neste contato |
+| Journey / Processos | fecho transitivo ∪ alias | contatos + limiar | qual foi o processo |
+| Listagem + toggle (✅) | — | pool interno | o que existiu, sem saber o pai |
+
+**Nunca** materializar journey para todo contato: o discriminador do `CLAUDE.md` é *"nasceu um contato
+NOVO?"*, e a sessão de wrap-up **não é contato** (sem cliente, pool interno). Fazer tudo virar journey
+mata o discriminador e transforma o `significant_only` em ruído ou em mentira. Precedente: as duas
+remoções de contêiner largo desta base (`WorkflowInstance`, entidade `Journey` do Arc 10).
+
+**Decisão 2 — timeline ÚNICA, não bloco separado.** Uma sessão originada é um **evento na vida do
+contato**, e a tela de Segments já é uma timeline. Bloco no rodapé destrói a informação principal do
+caso `collect`: que o atendimento ficou parado N minutos esperando a filha. A distinção
+interno×contato×processo vira **tag na linha**.
+
+**Decisão 3 — filha com `journey: new` LINKA, não expande.** Expandir a subárvore desfaria o corte que
+alguém pediu ao usar `journey: new` (é a aresta T5, `spawned_from_root`). Linha "originou o processo X"
++ link para a Vista Processos.
+
+**Divergência ACEITA (não é bug):** a timeline dirá "4 originadas" e o card da journey dirá "1 sessão".
+São domínios diferentes (journey exclui interna e conta contatos). Mesma classe do par card×drill da
+fatia 4b — resolve-se **rotulando os domínios, nunca unificando as contagens** (guardrail ADR §7.2 um
+nível acima).
+
+### Fatias
+
+| # | Entrega | Nota |
+|---|---|---|
+| S1 | Param novo em `GET /reports/sessions` filtrando `origin_session_id = <sessão>` (filhas de 1 salto) | ✅ **2026-08-11** — 3ª isenção do filtro de contato + **ignora a janela** (filha nasce depois do pai). **Não** reusa `root_session_id`: o fecho transitivo penduraria aqui as filhas do contato IRMÃO |
+| S2 | Prosa do wrap-up na linha do segmento que a gravou | ✅ **2026-08-11** — custo zero de backend: o dado já chegava de `/reports/segments` e a UI o descartava |
+| S3 | Linhas "originou" intercaladas na timeline por tempo, com tag (interna \| contato \| processo), duração, status e link | ✅ **2026-08-11** — + trilha de ancestrais no breadcrumb (achado na validação: abrir a filha perdia o caminho de volta ao contato) |
+| S4 | Drill da prosa → formulário + respostas, como num segmento de agente | ✅ **2026-08-11** — lista pergunta→resposta na janela de execução, com o DialogForm como **dicionário de rótulos** |
+
+**Armadilha de versão — resolvida na S4 pela via barata, mas não fechada:** o formulário é MUTÁVEL e a
+resposta é HISTÓRICA. A implementação itera pelas CHAVES DA RESPOSTA e usa o form só como dicionário
+(chave desconhecida aparece crua, nunca com rótulo inventado). Isso impede o rótulo MENTIROSO, mas não
+recupera o rótulo CERTO de uma pergunta que foi editada: ela mostra o texto de hoje sobre a resposta de
+ontem. Fechar de verdade exige snapshot do form na gravação — é o que o link de survey web já faz no
+`create`. Gatilho para reabrir: primeira edição real de um `dialog_*` que já tenha respostas gravadas.
+
+**Não-objetivos:** materializar journey por contato; entidade "sessões relacionadas"; expandir
+subárvore de `journey: new`; mexer em qualquer agregado (a timeline é leitura, não contagem).
+
+---
+
 ## Capacidade, licenças e isolamento entre pools *(A e B ✅ 2026-08-02/03 — histórico no CHANGELOG; resta C + fatia 4)*
 
 > **Podada em 2026-08-03: 503 → 81 linhas.** O as-built das fatias F1–F5b e P1–P3 mora no

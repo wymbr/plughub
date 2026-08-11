@@ -130,8 +130,10 @@ function InsightCard({ row }: { row: InsightRow }) {
 
 // ─── ContactDetail ────────────────────────────────────────────────────────────
 
-function ContactDetail({ tenantId, sessionId, onBack }: {
+function ContactDetail({ tenantId, sessionId, onBack, onOpenChild }: {
   tenantId: string; sessionId: string; onBack: () => void
+  /** S3 — navega para uma sessão ORIGINADA por esta (o pai troca o sessionId). */
+  onOpenChild?: (sessionId: string) => void
 }) {
   const { t } = useTranslation('contacts')
   const [detailSegment, setDetailSegment] = useState<ContactSegment | null>(null)
@@ -165,6 +167,7 @@ function ContactDetail({ tenantId, sessionId, onBack }: {
           sessionId={sessionId}
           onSelect={seg => setDetailSegment(seg)}
           onBack={onBack}
+          onOpenChild={onOpenChild ? sid => onOpenChild(sid) : undefined}
         />
       </div>
     </div>
@@ -331,12 +334,26 @@ export default function ContactsPage() {
 
   // Shared filter state — lifted above all tabs
   const [filters, setFilters] = useState<ContactFilters>(DEFAULT_FILTERS)
+  // Escopo da listagem (ADR wrapup-detached-pull §7). Aqui em cima pela mesma razão
+  // que `filters`: o drill faz `return <ContactDetail/>` e desmonta a ListaTab.
+  const [listScopeAll, setListScopeAll] = useState(false)
 
   // Detail drill-down state
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null)
+  /** S3 — ancestrais visitados ao abrir uma sessão ORIGINADA. Sem a trilha, o botão
+   *  de voltar fecha o detalhe inteiro e o operador perde o contato de onde veio. */
+  const [sessionTrail, setSessionTrail] = useState<string[]>([])
 
-  function openDetail(sid: string) { setDetailSessionId(sid) }
-  function closeDetail()           { setDetailSessionId(null) }
+  function openDetail(sid: string) { setSessionTrail([]); setDetailSessionId(sid) }
+  function closeDetail() {
+    // Volta um nível se houver de onde voltar; só então fecha o detalhe.
+    if (sessionTrail.length > 0) {
+      setDetailSessionId(sessionTrail[sessionTrail.length - 1])
+      setSessionTrail(sessionTrail.slice(0, -1))
+      return
+    }
+    setDetailSessionId(null)
+  }
 
   if (!tenantId) {
     return (
@@ -353,6 +370,10 @@ export default function ContactsPage() {
         tenantId={tenantId}
         sessionId={detailSessionId}
         onBack={closeDetail}
+        onOpenChild={sid => {
+          setSessionTrail([...sessionTrail, detailSessionId])
+          setDetailSessionId(sid)
+        }}
       />
     )
   }
@@ -390,6 +411,8 @@ export default function ContactsPage() {
             tenantId={tenantId}
             filters={filters}
             onOpenDetail={openDetail}
+            scopeAll={listScopeAll}
+            onScopeAllChange={setListScopeAll}
           />
         )}
         {activeTab === 'monitor' && (

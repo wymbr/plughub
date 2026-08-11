@@ -363,6 +363,67 @@ export function useSessionSegments(
   return { segments, loading, error }
 }
 
+// ─── useSessionChildren (S1/S3 — timeline do contato) ────────────────────────
+//
+// Filhas de UM SALTO desta sessão (`origin_session_id`). NÃO é a journey: o fecho
+// transitivo traria, em processo multi-contato, as filhas do contato IRMÃO
+// penduradas neste. Sem janela de data — o backend a ignora quando o filtro é este,
+// porque a filha nasce DEPOIS do pai e some no recorte do dia.
+//
+// Uma passada só, sem polling: a lista é curta e o caso vivo (filha nascendo agora)
+// já é coberto pelo poll dos segmentos ao lado.
+
+export interface SessionChild {
+  session_id:         string
+  channel:            string
+  pool_id:            string | null
+  opened_at:          string | null
+  closed_at:          string | null
+  outcome:            string | null
+  status:             string | null
+  elapsed_time_ms:    number | null
+  handle_time_ms:     number | null
+  spawn_reason:       string | null
+  root_session_id:    string | null
+  origin_session_id:  string | null
+  is_internal?:       boolean
+}
+
+export function useSessionChildren(
+  tenantId:  string,
+  sessionId: string | null,
+): { children: SessionChild[]; loading: boolean; error: string | null } {
+  const [children, setChildren] = useState<SessionChild[]>([])
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
+
+  useEffect(() => {
+    setChildren([]); setError(null)
+    if (!tenantId || !sessionId) return
+    let cancelled = false
+    setLoading(true)
+    const url = `${BASE}/reports/sessions?tenant_id=${encodeURIComponent(tenantId)}`
+      + `&origin_session_id=${encodeURIComponent(sessionId)}&page_size=50`
+    fetch(url)
+      .then(async res => {
+        if (cancelled) return
+        if (!res.ok) { setError(`HTTP ${res.status}`); return }
+        const data = await safeJson<{ data: SessionChild[]; error?: string }>(res)
+        if (cancelled) return
+        // Degradação do backend NÃO pode virar "não originou nada": um erro aqui
+        // é indistinguível de ausência na tela se não for dito.
+        if (data.error) { setError(data.error); return }
+        setChildren((data.data ?? []).slice().sort((a, b) =>
+          (a.opened_at ?? '') < (b.opened_at ?? '') ? -1 : 1))
+      })
+      .catch(err => { if (!cancelled) setError(String(err)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [tenantId, sessionId])
+
+  return { children, loading, error }
+}
+
 // ─── useSupervisor ────────────────────────────────────────────────────────────
 
 export function useSupervisor(tenantId: string, sessionId: string | null): {

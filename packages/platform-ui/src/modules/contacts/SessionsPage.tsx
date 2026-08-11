@@ -161,8 +161,14 @@ export default function SessionsPage() {
   const { tenantId } = useAuth()
 
   const [filters,            setFilters]            = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
+  // Escopo da listagem (ADR wrapup-detached-pull §7). Aqui em cima pela mesma razão
+  // que `filters`: os ramos de drill abaixo dão `return` e desmontam a ListaTab.
+  const [listScopeAll,       setListScopeAll]       = useState(false)
   const [detailSessionId,    setDetailSessionId]    = useState<string | null>(null)
   const [detailSessionCh,    setDetailSessionCh]    = useState<string | null>(null)
+  /** S3 — trilha de ancestrais ao navegar para uma sessão ORIGINADA. Guarda o canal
+   *  junto do id: é ele que decide trace × segmentos ao voltar. */
+  const [sessionTrail,       setSessionTrail]       = useState<Array<{ id: string; ch: string | null }>>([])
   const [detailSegment,      setDetailSegment]      = useState<ContactSegment | null>(null)
   const [detailWebhookNode,  setDetailWebhookNode]  = useState<TraceNode | null>(null)
 
@@ -248,14 +254,34 @@ export default function SessionsPage() {
 
     return (
       <div className="flex flex-col h-full overflow-hidden">
-        {/* Breadcrumb */}
+        {/* Breadcrumb — inclui a TRILHA de sessões originadas (S3). Sem ela, abrir a
+            filha troca o `sessionId` e o único caminho de volta é a listagem: o
+            operador perde o contato de onde veio, que é o contexto da visita. */}
         <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
           <button
-            onClick={() => setDetailSessionId(null)}
+            onClick={() => { setSessionTrail([]); setDetailSessionId(null) }}
             className="text-muted-light hover:text-dark transition-colors font-medium"
           >
             {t('sessions.breadcrumbs.sessions')}
           </button>
+          {sessionTrail.map((crumb, i) => (
+            <React.Fragment key={crumb.id}>
+              <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+              <button
+                onClick={() => {
+                  // O canal viaja na trilha: sem ele, voltar a um ancestral webhook
+                  // o renderizaria como sessão comum (SegmentList em vez do trace).
+                  setSessionTrail(sessionTrail.slice(0, i))
+                  setDetailSessionId(crumb.id)
+                  setDetailSessionCh(crumb.ch)
+                }}
+                className="text-muted-light hover:text-dark transition-colors font-mono"
+                title={crumb.id}
+              >
+                {'…' + crumb.id.slice(-14)}
+              </button>
+            </React.Fragment>
+          ))}
           <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
           <span className="text-dark font-medium font-mono" title={detailSessionId}>{shortId}</span>
         </div>
@@ -277,6 +303,11 @@ export default function SessionsPage() {
               onSelect={seg => setDetailSegment(seg)}
               onBack={() => setDetailSessionId(null)}
               showBack={false}
+              onOpenChild={(sid, ch) => {
+                setSessionTrail([...sessionTrail, { id: detailSessionId, ch: detailSessionCh }])
+                setDetailSessionId(sid)
+                setDetailSessionCh(ch)
+              }}
             />
           )}
         </div>
@@ -310,6 +341,8 @@ export default function SessionsPage() {
           tenantId={tenantId}
           filters={contactFilters}
           onOpenDetail={(sid, ch) => { setDetailSessionId(sid); setDetailSessionCh(ch) }}
+          scopeAll={listScopeAll}
+          onScopeAllChange={setListScopeAll}
         />
       </div>
     </div>

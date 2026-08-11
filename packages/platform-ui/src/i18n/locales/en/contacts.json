@@ -171,6 +171,7 @@
       "sessionId":  "Session ID",
       "channel":    "Channel",
       "pool":       "Pool",
+      "parent":     "Parent contact",
       "origin":     "Origin",
       "destination":"Destination",
       "started":    "Started",
@@ -180,7 +181,13 @@
       "segments":   "Segments"
     },
     "count_one":   "{{count}} contact",
-    "count_other": "{{count}} contacts"
+    "count_other": "{{count}} contacts",
+    "countInternal_one":   "{{count}} internal",
+    "countInternal_other": "{{count}} internal",
+    "internalToggle":      "Include internal sessions (wrap-up, dispatch)",
+    "internalToggleHint":  "Shows INTERNAL POOL sessions (wrap-up, dispatch) as table rows. Hooks that run inside the conference (inline NPS) have no session of their own and stay invisible. Internal sessions never enter the contact count or any aggregate.",
+    "internalBadge":       "internal",
+    "internalBadgeHint":   "Internal pool session — outside the contact count and all aggregates."
   },
   "segments": {
     "title":        "Segments",
@@ -200,7 +207,20 @@
     "inProgress":   "in progress",
     "handoff":      "handoff #{{index}}",
     "specialist":   "↳ specialist",
-    "join":         "👁 join"
+    "join":         "👁 join",
+    "wrapupSummary":   "summary",
+    "wrapupNextSteps": "next steps",
+    "spawned":         "spawned",
+    "spawnedUnknown":  "spawned session",
+    "spawnedCount_one":   "{{count}} spawned",
+    "spawnedCount_other": "{{count}} spawned",
+    "spawnedError":    "Couldn't load spawned sessions ({{error}}) — the list below may be incomplete.",
+    "otherJourney":    "another process — not expanded here",
+    "kind": {
+      "internal": "internal",
+      "contact":  "contact",
+      "process":  "process"
+    }
   },
   "transcript": {
     "back":             "← Segments",
@@ -247,6 +267,7 @@
     "stepTimeline":         "Step timeline",
     "resumeDecision":       "resume",
     "resumePayload":        "payload",
+    "answers":              "Form answers",
     "childSession":         "child session",
     "resumedBy":            "resumed by",
     "pipelineExpired":      "Step data not available",

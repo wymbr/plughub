@@ -171,6 +171,7 @@
       "sessionId":  "Session ID",
       "channel":    "Canal",
       "pool":       "Pool",
+      "parent":     "Contato de origem",
       "origin":     "Origem",
       "destination":"Destino",
       "started":    "Iniciado",
@@ -180,7 +181,13 @@
       "segments":   "Segmentos"
     },
     "count_one":   "{{count}} contato",
-    "count_other": "{{count}} contatos"
+    "count_other": "{{count}} contatos",
+    "countInternal_one":   "{{count}} interna",
+    "countInternal_other": "{{count}} internas",
+    "internalToggle":      "Incluir sessões internas (wrap-up, dispatch)",
+    "internalToggleHint":  "Mostra sessões de POOL INTERNO (wrap-up, dispatch) como linhas da tabela. Hook que roda na conferência (NPS inline) não tem sessão própria e continua invisível. Sessões internas nunca entram na contagem de contatos nem nos agregados.",
+    "internalBadge":       "interna",
+    "internalBadgeHint":   "Sessão de pool interno — fora da contagem de contatos e dos agregados."
   },
   "segments": {
     "title":        "Segmentos",
@@ -200,7 +207,20 @@
     "inProgress":   "em andamento",
     "handoff":      "handoff #{{index}}",
     "specialist":   "↳ especialista",
-    "join":         "👁 entrar"
+    "join":         "👁 entrar",
+    "wrapupSummary":   "resumo",
+    "wrapupNextSteps": "próximos passos",
+    "spawned":         "originou",
+    "spawnedUnknown":  "sessão originada",
+    "spawnedCount_one":   "{{count}} originada",
+    "spawnedCount_other": "{{count}} originadas",
+    "spawnedError":    "Não foi possível carregar as sessões originadas ({{error}}) — a lista abaixo pode estar incompleta.",
+    "otherJourney":    "outro processo — não expande aqui",
+    "kind": {
+      "internal": "interna",
+      "contact":  "contato",
+      "process":  "processo"
+    }
   },
   "transcript": {
     "back":             "← Segmentos",
@@ -247,6 +267,7 @@
     "stepTimeline":         "Linha do tempo de steps",
     "resumeDecision":       "resume",
     "resumePayload":        "payload",
+    "answers":              "Respostas do formulário",
     "childSession":         "sessão-filho",
     "resumedBy":            "retomado por",
     "pipelineExpired":      "Dados de steps indisponíveis",

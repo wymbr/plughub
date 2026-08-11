@@ -144,6 +144,11 @@ export interface ContactSegment {
   close_reason:      string | null
   handoff_reason:    string | null
   issue_status:      string | null
+  /** S2 — prosa do wrap-up, gravada NESTE segmento por referência
+   *  (`segment_outcome_record`). Vem do `/reports/segments` desde sempre; a UI é que
+   *  nunca a renderizou. Presente em toda disposição, inclusive resolvido. */
+  wrapup_summary?:    string | null
+  wrapup_next_steps?: string | null
 }
 
 // ─── Connection status ────────────────────────────────────────────────────────

@@ -40,11 +40,27 @@ export interface ContactRow {
   status?:        string | null
   /** Arc 19: origin_session_id — for webhook sessions, the intake session that triggered them */
   origin_session_id?: string | null
+  /** ADR wrapup-detached-pull §7 (fatia 1b): linha de POOL INTERNO (wrap-up, dispatch).
+   *  Veredicto computado no backend — a UI não reclassifica por `pool_id`. */
+  is_internal?: boolean
 }
 
 export interface ContactsApiResponse {
   data: ContactRow[]
-  meta?: { total?: number; page?: number; page_size?: number }
+  meta?: {
+    total?: number
+    page?: number
+    page_size?: number
+    /** ADR §7.2: DOIS domínios de contagem, nunca somados.
+     *  `total` dimensiona a PAGINAÇÃO (linhas listadas); `total_contacts` é o
+     *  cabeçalho, sempre no domínio de contato mesmo com a tabela expandida. */
+    total_contacts?: number
+    total_internal?: number
+    scope?: string
+    /** Tamanho do conjunto de pools internos que classificou estas linhas.
+     *  É um FATO, não flag de saúde: `0` ⇒ nada a distinguir ⇒ não oferecer o toggle. */
+    internal_pools_known?: number
+  }
 }
 
 // ── Visualization format for Monitor + Análise ─────────────────────────────

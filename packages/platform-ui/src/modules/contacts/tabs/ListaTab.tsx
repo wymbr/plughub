@@ -17,15 +17,29 @@ interface Props {
   filters:      ContactFilters
   /** Arc 19: channel is passed alongside sessionId so the parent can detect webhook sessions */
   onOpenDetail: (sessionId: string, channel: string) => void
+  /** ADR wrapup-detached-pull §7 — escopo da listagem (`scope=all` quando true).
+   *  Mora no PAI pela mesma razão que `filters`: o drill desmonta esta aba (a página
+   *  faz `return <Detail/>` antes de renderizá-la), e estado local morre na volta. */
+  scopeAll:           boolean
+  onScopeAllChange:   (v: boolean) => void
 }
 
-export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
+export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAllChange }: Props) {
   const { t } = useTranslation('contacts')
   const [rows,    setRows]    = useState<ContactRow[]>([])
   const [total,   setTotal]   = useState(0)
   const [page,    setPage]    = useState(1)
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
+  // ADR wrapup-detached-pull §7 (fatia 3) — visibilidade ≠ contagem.
+  // Desligado por padrão (estado no PAI): o default `scope=contacts` é bit-a-bit o
+  // comportamento que a E2f fechou. Ligado, a tabela ganha LINHAS de pool interno;
+  // a contagem de contatos do cabeçalho não muda por isso.
+  const [totalContacts,  setTotalContacts]  = useState(0)
+  const [totalInternal,  setTotalInternal]  = useState(0)
+  // Tamanho do conjunto que classificou as linhas. 0 ⇒ não há como distinguir
+  // nada ⇒ não prometer o recurso (o toggle nem é oferecido).
+  const [internalPoolsKnown, setInternalPoolsKnown] = useState(0)
   const pendingRef = useRef(false)
 
   const load = useCallback(async (p: number) => {
@@ -52,25 +66,47 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
       if (insightCategory) params.set('insight_category', insightCategory)
       if (insightTags)     params.set('insight_tags',     insightTags)
       if (status)          params.set('status',           status)          // Arc 19
+      // ADR §7 — só o valor não-default viaja; `contacts` é o default do backend.
+      if (scopeAll)        params.set('scope',            'all')
 
       const res = await apiFetch(`/reports/sessions?${params}`)
       if (!res.ok) { setError(t('lista.httpError', { status: res.status })); return }
       const data: ContactsApiResponse = await res.json()
       const items = Array.isArray(data) ? (data as unknown as ContactRow[]) : (data.data ?? [])
       setRows(items)
-      setTotal(data.meta?.total ?? items.length)
+      const meta = Array.isArray(data) ? undefined : data.meta
+      const listed = meta?.total ?? items.length
+      setTotal(listed)
+      // Backend antigo (sem os dois domínios) ⇒ cabeçalho degrada para o total
+      // listado, que naquele backend É o total de contatos.
+      setTotalContacts(meta?.total_contacts ?? listed)
+      setTotalInternal(meta?.total_internal ?? 0)
+      setInternalPoolsKnown(meta?.internal_pools_known ?? 0)
     } catch (e) {
       setError(String(e))
     } finally {
       setLoading(false); pendingRef.current = false
     }
-  }, [tenantId, filters])
+  }, [tenantId, filters, scopeAll])
 
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1); load(1) }, [load])
 
+  // Paginação sobre o que está LISTADO (`meta.total`), não sobre a contagem de
+  // contatos do cabeçalho — com o escopo expandido os dois divergem por desenho.
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   function changePage(p: number) { setPage(p); load(p) }
+
+  // A coluna `parent` (contato pai) só existe no escopo expandido: fora dele não
+  // há linha interna, e uma coluna vazia prometeria um vínculo que a listagem de
+  // contatos não tem.
+  // ⚠️ `origin`/`destination` aqui são ANI/DNIS — o nome "origin" já está tomado
+  // na tabela; o vínculo com o contato pai (`origin_session_id`) é `parent`.
+  const columns: string[] = [
+    'sessionId', 'channel', 'pool',
+    ...(scopeAll ? ['parent'] : []),
+    'origin', 'destination', 'started', 'ended', 'duration', 'status', 'segments',
+  ]
 
   if (error) {
     return (
@@ -85,13 +121,36 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
 
       {/* Count + pagination bar */}
       <div className="flex items-center justify-between px-4 py-2 bg-white border-b border-border flex-shrink-0 text-xs">
-        <span className="text-muted-light">
+        <span className="text-muted-light flex items-center gap-3">
           {loading
             ? <><span className="animate-spin inline-block">⟳</span> {t('lista.loading')}</>
-            : <><strong className="text-dark">{t('lista.count', { count: total })}</strong>
+            : <span>
+                {/* ADR §7.2 item 2 — DOIS domínios, nunca um total somado.
+                    O cabeçalho é sempre o número de CONTATOS; a linha interna é
+                    reportada à parte, e é a paginação (não o cabeçalho) que
+                    dimensiona o que está listado. */}
+                <strong className="text-dark">{t('lista.count', { count: totalContacts })}</strong>
+                {scopeAll && (
+                  <span className="ml-1 text-muted">· {t('lista.countInternal', { count: totalInternal })}</span>
+                )}
                 {totalPages > 1 && <span className="ml-2 text-muted">· {t('lista.page', { page, total: totalPages })}</span>}
-              </>
+              </span>
           }
+          {/* Sem conjunto que classifique, não há como distinguir nada — não
+              oferecer o recurso (fatia 3, item 4). */}
+          {internalPoolsKnown > 0 && (
+            <label className={`flex items-center gap-1.5 text-muted transition-colors ${
+              loading ? 'opacity-50 cursor-wait' : 'cursor-pointer hover:text-dark'}`}
+              title={t('lista.internalToggleHint')}>
+              {/* Desabilitado em voo: o `pendingRef` do `load` descarta requisição
+                  concorrente, então um clique aqui durante o fetch seria um no-op
+                  silencioso — a tabela ficaria no escopo antigo com o toggle ligado. */}
+              <input type="checkbox" checked={scopeAll} disabled={loading}
+                onChange={e => onScopeAllChange(e.target.checked)}
+                className="accent-primary cursor-pointer disabled:cursor-wait" />
+              {t('lista.internalToggle')}
+            </label>
+          )}
         </span>
         {totalPages > 1 && (
           <div className="flex items-center gap-1">
@@ -129,7 +188,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-surface-muted border-b border-border z-10">
               <tr>
-                {(['sessionId','channel','pool','origin','destination','started','ended','duration','status','segments'] as const).map(col => (
+                {columns.map(col => (
                   <th key={col} className="text-left text-xs font-semibold text-muted uppercase tracking-wide px-4 py-2.5 whitespace-nowrap">
                     {t(`lista.columns.${col}`)}
                   </th>
@@ -139,7 +198,9 @@ export function ListaTab({ tenantId, filters, onOpenDetail }: Props) {
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map(row => (
-                <ContactRowItem key={row.session_id} row={row} onClick={() => {
+                <ContactRowItem key={row.session_id} row={row} showParent={scopeAll}
+                  onOpenParent={pid => onOpenDetail(pid, '')}
+                  onClick={() => {
                   // Fase C: classify by the REAL channel_type — não por presença de
                   // step delegate/suspend. O v2 preserva o canal no resume/conference
                   // (webchat continua webchat, webhook continua webhook), então o canal
@@ -204,19 +265,47 @@ function SessionStatusBadge({ row }: { row: ContactRow }) {
 
 // ── Row ───────────────────────────────────────────────────────────────────────
 
-function ContactRowItem({ row, onClick }: { row: ContactRow; onClick: () => void }) {
+function ContactRowItem({ row, onClick, showParent, onOpenParent }: {
+  row: ContactRow
+  onClick: () => void
+  /** escopo expandido (`scope=all`) — só então existe a coluna de contato pai */
+  showParent: boolean
+  onOpenParent: (parentSessionId: string) => void
+}) {
   const { t } = useTranslation('contacts')
   const shortId = row.session_id.length > 16 ? '…' + row.session_id.slice(-14) : row.session_id
+  const parentId = row.origin_session_id || ''
 
   return (
     <tr onClick={onClick} className="hover:bg-primary/5 cursor-pointer transition-colors">
-      <td className="px-4 py-3 font-mono text-xs text-dark whitespace-nowrap">{shortId}</td>
+      <td className="px-4 py-3 font-mono text-xs text-dark whitespace-nowrap">
+        {/* Tag por veredicto do backend (`is_internal`) — a UI não reclassifica por pool_id. */}
+        {row.is_internal && (
+          <span className="mr-2 inline-block text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-alt text-muted border border-border"
+            title={t('lista.internalBadgeHint')}>
+            {t('lista.internalBadge')}
+          </span>
+        )}
+        {shortId}
+      </td>
       <td className="px-4 py-3 text-muted whitespace-nowrap">
         {CHANNEL_ICONS[row.channel] ?? '⬡'} {row.channel || <span className="text-border-strong">—</span>}
       </td>
       <td className="px-4 py-3 text-muted text-xs whitespace-nowrap max-w-[120px] truncate" title={row.pool_id ?? ''}>
         {row.pool_id?.replace(/_/g, ' ') ?? '—'}
       </td>
+      {showParent && (
+        <td className="px-4 py-3 text-xs whitespace-nowrap">
+          {parentId ? (
+            <button
+              onClick={e => { e.stopPropagation(); onOpenParent(parentId) }}
+              title={parentId}
+              className="font-mono text-primary hover:underline">
+              {'…' + parentId.slice(-14)}
+            </button>
+          ) : <span className="text-border-strong">—</span>}
+        </td>
+      )}
       <td className="px-4 py-3 text-muted text-xs whitespace-nowrap tabular-nums">
         {row.ani ? <span className="font-mono">{row.ani}</span> : <span className="text-border-strong">—</span>}
       </td>

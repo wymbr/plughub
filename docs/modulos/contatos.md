@@ -32,6 +32,49 @@ Tabela de contatos (ativos e finalizados) com filtros por canal, pool, agente e 
 
 Fonte: `analytics-api` → ClickHouse `sessions FINAL`.
 
+#### Toggle "Incluir sessões internas (wrap-up, dispatch)"
+
+Desligado por padrão (`scope=contacts`, o comportamento fechado pela E2f). Ligado (`scope=all`), a
+tabela ganha as **linhas** de pool interno — sessão de wrap-up destacado, dispatch — com tag `INTERNAL`
+por `row.is_internal` (veredicto do backend; a UI não reclassifica por `pool_id`) e a coluna **Contato
+de origem**, que linka ao contato pai por `origin_session_id`.
+
+**Visibilidade ≠ contagem** (ADR `adr-wrapup-detached-pull` §7.2). O cabeçalho lê `meta.total_contacts`
+e **não muda** ao ligar o toggle; a interna é reportada num segundo número (`"12 contacts · 9 internal"`),
+nunca somada. Quem dimensiona a paginação é `meta.total` (o que está listado). Nenhum agregado —
+TMA, contagem de contato, métricas de pool/agente — aceita ou lê `scope`.
+
+Dois limites que a tela nomeia no tooltip, e que não são acidente:
+
+- Mostra sessão de **pool interno**, não "tudo que é interno". Hook que roda NA CONFERÊNCIA (NPS
+  inline) não tem sessão própria e continua invisível mesmo com `scope=all` — `all` relaxa a regra do
+  POOL, nunca a do CANAL (relaxar a do canal duplicaria sessão ativa na tela).
+- Com `meta.internal_pools_known == 0` o toggle **não é oferecido**: sem conjunto que classifique, não
+  há o que distinguir, e prometer o recurso seria pior que omiti-lo.
+
+#### Detalhe do contato — linha do tempo única
+
+A tela de detalhe funde num **eixo só (tempo)** duas coisas que o modelo mantém separadas:
+
+- **segmentos** — participação de cada agente DENTRO da sessão (entram pelo `started_at`);
+- **sessões originadas** — sessões que este contato gerou (entram pelo `opened_at`), buscadas por
+  `GET /reports/sessions?origin_session_id=<sessão>`: a aresta de **um salto**, não a journey.
+
+Cada originada leva tag por dois eixos: `is_internal` → **interna** (wrap-up, dispatch); raiz de
+journey ≠ a do pai → **processo** (nasceu com `journey: new` — **linka** para a Vista Processos e
+**não expande**, senão desfaria o corte que o `journey: new` pediu); senão **contato** (ex.: filha de
+um `collect`). O breadcrumb acumula a trilha de ancestrais, para que abrir uma filha não perca o
+contato de origem.
+
+O cabeçalho mostra **dois números** (`3 total · 1 originada`), nunca somados — segmento e sessão são
+escopos diferentes. Mesmo guardrail da listagem (ADR §7.2).
+
+A **prosa do wrap-up** (`wrapup_summary`/`wrapup_next_steps`) aparece sob o segmento que a gravou —
+não sob a sessão de wrap-up que a coletou —, porque é ali que o `segment_outcome_record` a escreve por
+referência. O drill até as respostas completas está na janela de execução da sessão originada, que
+renderiza `answers` como pergunta→resposta usando o DialogForm como **dicionário de rótulos** (chave
+que o formulário atual não conhece aparece crua; nunca um rótulo inventado).
+
 ### Monitor
 
 Visualização em tempo real dos contatos ativos organizados por pool. Duas visualizações disponíveis:

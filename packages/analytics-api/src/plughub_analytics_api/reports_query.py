@@ -440,6 +440,8 @@ async def query_sessions_report(
     # interno (wrap-up, dispatch) como LINHAS, sem nunca entrar em `total_contacts`.
     # Nenhum endpoint de AGREGADO aceita este parâmetro (guardrail §7.2 item 1).
     scope:                  str              = "contacts",
+    # Timeline do contato (S1): filhas de UM SALTO. Ver `_fetch_sessions`.
+    origin_session_id:      str | None       = None,
     page:      int = 1,
     page_size: int = 100,
 ) -> dict:
@@ -457,7 +459,7 @@ async def query_sessions_report(
             agent_id, insight_category, insight_tags, accessible_pools,
             supervised_agent_types, page, page_size,
             ani, dnis, status, origin, root_session_id, spawned_from_root,
-            internal_pools, scope,
+            internal_pools, scope, origin_session_id,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -484,12 +486,16 @@ def _fetch_sessions(
     spawned_from_root: str | None = None,
     internal_pools: "frozenset[str] | None" = None,
     scope: str = "contacts",
+    origin_session_id: str | None = None,
 ) -> dict:
-    conditions = [
-        "s.tenant_id = {tenant_id:String}",
-        f"s.opened_at >= '{since}'",
-        f"s.opened_at < '{until}'",
-    ]
+    conditions = ["s.tenant_id = {tenant_id:String}"]
+    # S1 — o fetch das filhas de UMA sessão IGNORA a janela, como o `_fetch_journeys`
+    # já faz no fetch direcionado. A filha nasce depois do pai: um wrap-up que começa
+    # às 23:59:58 de `to_dt` cairia fora da janela do pai e a timeline diria "não
+    # originou nada" — ausência que se lê como fato, e não como recorte.
+    if not origin_session_id:
+        conditions.append(f"s.opened_at >= '{since}'")
+        conditions.append(f"s.opened_at < '{until}'")
     # E2f — o que conta como contato: sessão de hook sem canal + sessão de pool
     # interno (wrap-up destacado) ficam de fora. Ver `_apply_contact_scope`.
     #
@@ -512,10 +518,21 @@ def _fetch_sessions(
     # processo seria mentir sobre a composição do que ele pediu para ver. Nenhuma
     # contagem sai daqui — a agregação do processo é do card (`_fetch_journeys`), que
     # segue excluindo pool interno do `session_count` e reporta o interno à parte.
+    #
+    # S1 (timeline do contato) — `origin_session_id` é a TERCEIRA isenção, pela mesma
+    # razão das duas anteriores: pedir as filhas de UMA sessão não é listar. Esconder
+    # dali a sessão de wrap-up seria responder "este contato não originou nada" a quem
+    # perguntou o que ele originou. É de propósito a aresta de UM SALTO e não a journey:
+    # `root_session_id` traria o processo inteiro e, em journey multi-contato, penduraria
+    # neste contato as filhas do IRMÃO.
     _scope_pools = internal_pools if scope != "all" else None
-    if not session_id and not root_session_id:
+    if not session_id and not root_session_id and not origin_session_id:
         _apply_contact_scope(conditions, _scope_pools, alias="s.")
     params: dict = {"tenant_id": tenant_id}
+
+    if origin_session_id:
+        conditions.append("s.origin_session_id = {origin_session_id:String}")
+        params["origin_session_id"] = origin_session_id
 
     if session_id:
         conditions.append("s.session_id = {session_id:String}")
