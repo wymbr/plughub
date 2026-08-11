@@ -46,6 +46,17 @@ Tudo isso é configurado com o mesmo Skill Flow YAML que define o comportamento 
 └─────────────────────────────────────────┘
 ```
 
+### Header — seletor de presença por pool
+
+O combo "Pools (N/M)" lista **só os pools em que o humano pode de fato entrar**: exclui os pools de
+agente IA (`agent_kind: 'ai'`, cujo login humano o backend nega com `pool_kind_mismatch`) e o espelho
+de fila interna `-int` (entrar no pool pai já entra na fila dele). "All pools" usa exatamente a mesma
+lista — marcar tudo nunca tenta uma conexão que seria recusada.
+
+Um pool sem `agent_kind` declarado **aparece**: a tela nunca é mais restritiva que o backend, e sumir
+em silêncio é a falha que ninguém percebe. Detalhe de implementação em `docs/arcos/platform-ui.md`
+§ "Seletor de presença".
+
 ### ContactList
 
 Painel lateral com cards de contatos ativos, ordenados por prioridade: SLA urgency, tempo de espera, sentimento. Clicar num card troca a sessão ativa no ChatArea. Um único WebSocket persistente serve todos os contatos simultaneamente.

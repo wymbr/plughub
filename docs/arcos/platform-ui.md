@@ -329,6 +329,17 @@ Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production
 - Never write custom CSS when a Tailwind class exists
 - Never create a NavItem without `roles` filter
 - Never modify `deploy_status` in PUT /v1/skills — only the deploy action owns that field
+- **Never build a table as two sibling grids** — um `<div grid>` para o cabeçalho e outro por linha
+  NÃO compartilham trilha: cada `auto` dimensiona pelo conteúdo da sua própria grid, e o conteúdo é
+  de naturezas diferentes (palavra no título, dígito no dado), então as colunas divergem por
+  construção. Trocar `auto` por px fixo conserta a foto e não a causa — o primeiro rótulo traduzido
+  mais longo reabre. Use `<table>` (padrão dominante: 46 usos em 31 arquivos). Aberto em
+  `work-items/WorkItemsPage.tsx` (:88/:352) e `schedules/SchedulesMonitorPage.tsx` (:101/:108);
+  corrigido em `analise/WrapupSummaryPage.tsx` (2026-08-11)
+- **Never offer in the UI a choice the backend refuses** — a opção inválida não falha com erro
+  legível, falha com um estado mudo (o pool IA no seletor do Console ficava "Disconnected" porque o
+  login era negado por `pool_kind_mismatch`). Quando a UI espelha um gate do backend, o predicado da
+  tela deve ser **igual ou mais permissivo** que o do gate: mais restritivo esconde por AUSÊNCIA
 
 ---
 
@@ -339,6 +350,30 @@ Skills follow a two-stage lifecycle: **draft** (saved YAML not yet in production
 Vite proxies added: `'^/api'` → `http://localhost:3100`, `'^/agent-ws'` → `ws://localhost:3100` (ws: true).
 
 New dependency: `recharts@^2.x` (used by EstadoTab sentiment line chart).
+
+## Seletor de presença — o que o humano pode ESCOLHER (2026-08-11)
+
+Três listas, e confundi-las é o defeito histórico desta tela:
+
+| lista | conteúdo | quem consome |
+|---|---|---|
+| `availablePools` | CRUA do registry — inclui espelho `-int` e pools IA | inbox, `poolSlaMap`, `withMirror` |
+| `selectablePools` | `!p.mirror_of && p.agent_kind !== 'ai'` | combo do Header **e** `handleJoinAll` |
+| `activePools` | pools com WS aberto (inclui o espelho) | `pullPoolIds`, roteamento de eventos |
+
+`selectablePools` mora no **`AgentAssistContext`** (dono único) porque tem dois consumidores. Enquanto
+era um `filter` local da página, o "All pools" mapeava a lista crua e tentava logar em todo pool IA do
+tenant. Duas exclusões, a mesma forma — *a opção existe na tela e não no backend*:
+
+- **espelho `-int`**: entrar no pai já entra na fila interna (ADR `adr-internal-work-queue-author-bound` D3);
+- **`agent_kind: 'ai'`**: `handleHumanLogin` nega com `pool_kind_mismatch`.
+
+**Predicado `!== 'ai'`, nunca `=== 'human'`.** `Pool.agent_kind` é nullable (o backfill por inferência
+só roda no boot do agent-registry) e o gate do backend também nega apenas em `'ai'`. Um `null` aparece
+na lista **de propósito**: esconder seria mais restritivo que o backend, e por ausência.
+
+O Header recebe `activePools.filter(p => !p.endsWith("-int"))` (`AgentAssistPage:642`) — por isso o
+contador `2/2` convive com 3 pools ativos, e isso é correto, não drift.
 
 ## Capacidade do agente na tela (2026-08-04)
 

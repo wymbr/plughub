@@ -162,6 +162,40 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
+## Tabela construída como duas grids irmãs — 2 telas abertas *(achado 2026-08-11, ao consertar `/analise/wrapup`)*
+
+O cabeçalho é um `<div grid grid-cols-[...auto...]>` e **cada linha de dado é outro**. Grids irmãs não
+compartilham trilha: `auto` dimensiona pelo conteúdo *daquela* grid, e os conteúdos são de naturezas
+diferentes — palavra no título, dígito no dado. As colunas divergem **por construção**, e o `1.4fr` da
+primeira coluna, absorvendo sobras diferentes em cada grid, espalha o cabeçalho e espreme os números.
+
+Corrigido em `analise/WrapupSummaryPage.tsx` (virou `<table>`, ver CHANGELOG 2026-08-11). **Abertos:**
+
+| arquivo | linhas | por que ainda não saltou |
+|---|---|---|
+| `work-items/WorkItemsPage.tsx` | :88 / :352 | `1.2fr_auto×5`; os dados são mais largos, então o desvio é pequeno — **não é ausência de defeito, é ausência de sintoma** |
+| `schedules/SchedulesMonitorPage.tsx` | :101 / :108 | `1fr_1fr_auto_1.4fr`; só uma coluna `auto`, o resto é `fr` (que não depende do conteúdo) |
+
+**Não trocar `auto` por px fixo** — conserta a foto e não a causa: o primeiro rótulo traduzido mais
+longo (pt-BR costuma ser) reabre o defeito sem nada ficar vermelho. A saída é `<table>`, que é também o
+padrão dominante do platform-ui (46 usos / 31 arquivos). Regra registrada em
+`docs/arcos/platform-ui.md` § "What never to do".
+
+---
+
+## `fila_humano` está declarado `agent_kind: ai` — nome e tipo discordam *(achado 2026-08-11)*
+
+`infra/registry/tenant_demo.yaml` :168-169. **Meça antes de tratar como erro de digitação**: se o pool
+tem `queue_config`, o agent-registry recusaria `ai` (`POST/PUT /v1/pools` valida *"queue_config exige
+agent_kind 'human'"*) — então ou não tem fila, ou o tipo é deliberado e o **nome** é que mente.
+
+Por que importa agora: desde 2026-08-11 o seletor de presença do Console esconde pool `'ai'`. Hoje o
+`fila_humano` não está entre os pools acessíveis do admin do demo, então nada acontece. No dia em que
+alguém der acesso dele a um humano, o pool **some da lista** e a explicação não estará no nome — o
+sintoma vai parecer permissão, e a causa é tipo.
+
+---
+
 ## ~~`Pool registration returned HTTP 401` no login do agente humano~~ ✅ **2026-08-05** *(achado 2026-08-04, na validação da Fase E)*
 
 > **Conserto:** o `POST /v1/pools` do login (`mcp-server/server.ts`) passou a mandar `x-service-token`
@@ -1824,8 +1858,8 @@ triviais.
 |---|---|---|
 | 1 | `scope=contacts\|all` em `GET /reports/sessions` — filtro condicional em vez de incondicional; cabeçalho de contagem sempre lê `scope=contacts` mesmo com a tabela expandida | ✅ **2026-08-11** (ver CHANGELOG) — `meta` passou a devolver `total` (paginação) + `total_contacts` (cabeçalho) + `total_internal` |
 | 1b | **Marcar a linha como interna na resposta** — o veredicto `purpose=internal` é computado no backend (`_internal_pools_for`) e descartado; a UI recebe só `pool_id` e não tem como saber | ✅ **2026-08-11** — `is_internal` por linha (`_mark_internal_rows`) + `meta.internal_pools_known` (contagem, não flag de saúde). Entra no CSV de graça (`_to_csv` tira as colunas da 1ª linha) |
-| 2 | Coluna/badge "Origin" na linha da sessão interna (quando `scope=all`), linkando para o `session_id` pai via `origin_session_id` | pendente — **backend pronto**: a coluna já vem no SELECT (`reports_query.py:704`, e no tier-3 degradado `:753`); é UI pura |
-| 3 | Toggle "Incluir sessões internas (wrap-up, dispatch)" na UI (`ListaTab.tsx`, ns i18n `contacts`), desligado por padrão; tag visual por `row.is_internal`. Cabeçalho lê `meta.total_contacts`, paginação lê `meta.total`; com `meta.internal_pools_known == 0` **não oferecer o toggle** (não há como distinguir nada — não prometer o recurso) | pendente — **backend completo** |
+| 2 | Coluna/badge "Origin" na linha da sessão interna (quando `scope=all`), linkando para o `session_id` pai via `origin_session_id` | ✅ **2026-08-11** — coluna **`parent`** ("Contato de origem"), **não** `origin`: `lista.columns.origin` já é **ANI** nesta tabela (e `destination` é DNIS); reusar o nome daria duas "Origem" com sentidos diferentes na mesma linha. Só renderizada com o toggle ligado — fora dele não há linha interna, e coluna vazia prometeria vínculo inexistente |
+| 3 | Toggle "Incluir sessões internas (wrap-up, dispatch)" na UI (`ListaTab.tsx`, ns i18n `contacts`), desligado por padrão; tag visual por `row.is_internal`. Cabeçalho lê `meta.total_contacts`, paginação lê `meta.total`; com `meta.internal_pools_known == 0` **não oferecer o toggle** (não há como distinguir nada — não prometer o recurso) | ✅ **2026-08-11** — medido na tela: desligado `12 contacts`, ligado `12 contacts · 9 internal` com o cabeçalho **imóvel** (é a imobilidade, não a aparição das linhas, que prova o §7.2). Toggle desabilitado durante o fetch: o `pendingRef` do `load` descarta requisição concorrente, e um clique em voo seria no-op silencioso |
 | 4 | Isentar o drill-down de UMA journey já aberta (`journey → sessions → segments`) do filtro E2f — sempre mostra sessões internas associadas, independente do `scope` da listagem topo | ✅ **2026-08-11** — mesma válvula do `session_id` em `_fetch_sessions` (`if not session_id and not root_session_id`), com controle negativo no teste (a listagem sem `root_session_id` TEM de manter a exclusão) |
 | 4b | **Segundo número no card da journey** — "3 contatos · 1 interna", para o card não discordar do drill que ele expande | ✅ **2026-08-11** — `internal_session_count` por pós-passe (`_attach_journey_internal_counts`), bounded à página, no padrão do `_attach_journey_signals`. **Não** entrou como agregado da query principal: para contar as internas ali elas teriam de entrar no `WHERE` e contaminariam `channels`/`pool_ids`/`open_count` e o wall-clock do processo — o G1 reaberto um nível acima |
 
@@ -1839,10 +1873,26 @@ nunca atravessa a fronteira e nunca aparece nessa lista.
   duplicaria sessão ativa — ver CHANGELOG). O rótulo do toggle tem de dizer isso.
 - ~~**`format=csv` herda o `scope`** e exporta os dois domínios sem coluna que os separe.~~ ✅ fechado
   pela 1b: `is_internal` está na linha, e o `_to_csv` monta o cabeçalho a partir das chaves dela.
-- **Escopo ABAC:** `accessible_pools` já deriva o espelho `-int` (`_with_internal_mirrors`, ADR
-  author-bound D2), mas a linha da SESSÃO de wrap-up carrega `wrapup_detached_ia` (pool webhook, não
-  espelho). Supervisor com escopo restrito liga o toggle e pode não ver nada — decidir se o pool
-  webhook entra no escopo derivado ou se a ausência é logada.
+- **Escopo ABAC — premissa REFUTADA por medição (2026-08-11); sobra um caso estreito.** A redação
+  original dizia que a linha da SESSÃO de wrap-up carrega `wrapup_detached_ia` (pool webhook, não
+  espelho), e daí que supervisor com escopo restrito ligaria o toggle sem ver nada. Medido:
+  `sessions.pool_id = 'retencao_humano-int'` — o **espelho**, que `_with_internal_mirrors` já deriva.
+  `wrapup_detached_ia` é o pool que **dispara** o workflow (execution metadata do trace); o que sobra na
+  linha é o do último roteamento, isto é, o pool onde o humano reivindicou o item. **Para o wrap-up
+  atendido não há problema de escopo.**
+  **O que resta medir:** wrap-up que nunca é reivindicado (expira por prazo, `acw_expired`) pode nunca
+  ser roteado a um espelho e reter o pool webhook em `sessions.pool_id` — nesse caso a linha só aparece
+  para quem tem `wrapup_detached_ia` no escopo. Repetir a query sobre uma sessão expirada; se confirmar,
+  decidir entre incluir o pool webhook no escopo derivado ou logar a ausência.
+  ```
+  SELECT session_id, pool_id, origin_session_id FROM plughub_demo.sessions FINAL
+  WHERE tenant_id='tenant_demo' AND session_id LIKE '%<sufixo>'
+  ```
+  (banco = `plughub_demo` no demo, `plughub` por default; **`analytics` não existe em ambiente nenhum** —
+  é o nome usado nos testes e o `{db}` interpolado nas queries.)
+  Se vier o espelho, apagar este bullet e corrigir a nota gêmea no CHANGELOG (fatia 4b, "Achado de
+  passagem"); se vier `wrapup_detached_ia`, então há DOIS produtores de `pool_id` para a mesma sessão e
+  o item deixa de ser sobre ABAC.
 
 **Guardrails (não reabrir o que E2f fechou):** nenhum endpoint de agregado aceita/lê `scope`; `scope=all`
 não se estende a `/reports/journeys` (listagem topo), só a `/reports/sessions` e ao drill-down do item 4.

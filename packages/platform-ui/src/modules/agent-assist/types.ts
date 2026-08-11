@@ -280,6 +280,18 @@ export interface PoolInfo {
    * de construção, não nome de produto.
    */
   mirror_of?:           string | null;
+  /**
+   * `Pool.agent_kind` — autoridade canônica de tipo de licença ("human" | "ai").
+   * Nullable de propósito no registry: o backfill por inferência só roda no boot do
+   * agent-registry, então um pool criado por API entre dois boots chega aqui `null`.
+   *
+   * Só é lido para ESCONDER da lista de presença o que o backend recusaria de qualquer
+   * forma (`handleHumanLogin` → `pool_kind_mismatch`, mcp-server-plughub/src/server.ts).
+   * Por isso o predicado é `!== 'ai'`, e não `=== 'human'`: o gate também nega apenas em
+   * `kind === 'ai'` e é fail-open quando o `pool_config` não está no cache. Um `null`
+   * aparece na lista; sumir com ele seria falha por AUSÊNCIA, que ninguém percebe.
+   */
+  agent_kind?:          'human' | 'ai' | null;
 }
 
 // ── Multi-contact session state ───────────────────────────────────────────────

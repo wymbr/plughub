@@ -26,6 +26,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -103,7 +104,7 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
     if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
     const res  = await fetch(`${API_BASE}/pools`, { headers });
     if (!res.ok) return [];
-    type RawPool = { pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null; max_reply_time_ms?: number | null; dispatch_mode?: 'push' | 'pull' };
+    type RawPool = { pool_id: string; display_name?: string; channel_types?: string[]; sla_target_ms?: number | null; max_reply_time_ms?: number | null; dispatch_mode?: 'push' | 'pull'; agent_kind?: 'human' | 'ai' | null };
     const json = await res.json() as { pools: RawPool[] } | RawPool[];
     const data = Array.isArray(json) ? json : (json.pools ?? []);
     const list: PoolInfo[] = data.map(p => ({
@@ -114,6 +115,7 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
       max_reply_time_ms:     p.max_reply_time_ms ?? null,
       dispatch_mode:         p.dispatch_mode ?? 'push',
       mirror_of:             mirrorOriginOf(p.pool_id),
+      agent_kind:            p.agent_kind ?? null,
     }));
     if (accessiblePools.length === 0) return list;
     // I2 (D2) — ACESSO DERIVADO, não associação: quem alcança `p` alcança `p-int`.
@@ -133,7 +135,10 @@ async function fetchPools(accessiblePools: string[], accessToken?: string): Prom
 // ── Context value type ─────────────────────────────────────────────────────
 export interface AgentAssistContextValue {
   // Pools
+  /** Lista CRUA do registry — inclui espelho `-int` e pools IA. Quem mede/trabalha usa esta. */
   availablePools:    PoolInfo[];
+  /** Subconjunto que o humano pode ESCOLHER (sem espelho, sem `agent_kind: 'ai'`). */
+  selectablePools:   PoolInfo[];
   activePools:       string[];
   handleTogglePool:  (poolId: string) => void;
   handleJoinAll:     () => void;
@@ -189,6 +194,28 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [activePools, setActivePools] = useState<string[]>([]);
 
   /**
+   * Pools que o agente humano pode ESCOLHER — dono único da regra.
+   *
+   * Nasceu no `AgentAssistPage` cobrindo só o espelho `-int` (D3), e a metade que
+   * faltava era a mesma pergunta pelo outro eixo: pool `agent_kind: 'ai'` é recusado
+   * no login (`handleHumanLogin` → `pool_kind_mismatch`), então oferecê-lo é oferecer
+   * uma escolha que não existe — e o efeito visível não é um erro, é a linha ficar
+   * "Disconnected" sem dizer por quê.
+   *
+   * Mora AQUI, e não na página, porque há DOIS consumidores: o seletor e o "All pools"
+   * (`handleJoinAll`), que mapeava a lista crua e por isso tentava logar em todo pool
+   * IA do tenant. Duas cópias da regra é como a primeira metade divergiu.
+   *
+   * `!== 'ai'` e não `=== 'human'`: `agent_kind` é nullable no registry (o backfill por
+   * inferência só roda no boot), e o próprio gate nega apenas em `'ai'`. Esconder o
+   * `null` seria mais restritivo que o backend — e falha por ausência.
+   */
+  const selectablePools = useMemo(
+    () => availablePools.filter(p => !p.mirror_of && p.agent_kind !== 'ai'),
+    [availablePools],
+  );
+
+  /**
    * I2/D2 — entrar num pool entra TAMBÉM na fila interna dele.
    *
    * A inbox é governada por `activePools` (= pools com WebSocket ABERTO), não por
@@ -218,8 +245,11 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, [withMirror]);
 
   const handleJoinAll = useCallback(() => {
-    setActivePools(availablePools.map(p => p.pool_id));
-  }, [availablePools]);
+    // Mesma lista do seletor + `withMirror`: entrar em todos é entrar em cada um pelo
+    // MESMO caminho de entrar em um. Mapear `availablePools` cru punha o espelho na
+    // lista por acidente (certo pelo motivo errado) e o pool IA por engano (login negado).
+    setActivePools(selectablePools.flatMap(p => withMirror(p.pool_id)));
+  }, [selectablePools, withMirror]);
 
   const handleLeaveAll = useCallback(() => {
     setActivePools([]);
@@ -598,6 +628,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const value: AgentAssistContextValue = {
     availablePools,
+    selectablePools,
     activePools,
     handleTogglePool,
     handleJoinAll,

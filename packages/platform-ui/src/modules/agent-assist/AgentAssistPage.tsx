@@ -70,6 +70,7 @@ export const AgentAssistPage: React.FC = () => {
   // ── All persistent state from context ──────────────────────────────────
   const {
     availablePools,
+    selectablePools,
     activePools,
     handleTogglePool,
     handleJoinAll,
@@ -146,12 +147,13 @@ export const AgentAssistPage: React.FC = () => {
   const atCapacity    = contacts.size >= maxConcurrent;
   const poolSlaMap: Record<string, number | null> = {};
   for (const p of availablePools) poolSlaMap[p.pool_id] = p.sla_target_ms ?? null;
-  // ADR internal-work-queue (D3) — o espelho `-int` é OCULTO onde se ESCOLHE e
-  // VISÍVEL onde se trabalha/mede. `availablePools` mantém o espelho (a inbox e o
-  // poolSlaMap precisam dele); só o seletor de presença o esconde, porque entrar no
-  // pai já entra na fila interna (handleTogglePool) — oferecê-lo como opção separada
-  // sugeriria uma escolha que não existe.
-  const selectablePools = availablePools.filter(p => !p.mirror_of);
+  // `selectablePools` mudou de lugar: a regra "o que o humano pode escolher" mora no
+  // AgentAssistContext (dono único), porque o "All pools" precisa dela também. Aqui
+  // ficou só o consumo. Motivos, os dois na mesma forma — a opção existiria na tela e
+  // não no backend: o espelho `-int` (ADR internal-work-queue D3; entrar no pai já
+  // entra na fila interna) e o pool `agent_kind: 'ai'` (login humano negado com
+  // `pool_kind_mismatch`). `availablePools` segue CRU aqui, porque a inbox e o
+  // `poolSlaMap` precisam do espelho.
   // Pools pull ativos (accessible ∩ dispatch_mode=pull). Se houver, a inbox divide
   // a coluna esquerda em duas metades (atendidos × fila pull) em vez de ficar no rodapé.
   const pullPoolIds = activePools.filter(p =>

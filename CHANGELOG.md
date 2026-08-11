@@ -2,6 +2,73 @@
 
 ---
 
+## Console — seletor de presença esconde pool IA ✅ · Histórico de wrap-up — colunas alinhadas ✅ (2026-08-11)
+
+Dois defeitos de UI, sem backend. O primeiro é interessante porque **o backend já estava certo**; o
+segundo porque **a foto e a causa pedem consertos diferentes**.
+
+### 1. O seletor oferecia uma escolha que o backend recusa
+
+`handleHumanLogin` (`mcp-server-plughub/src/server.ts`, gate (a)) nega login humano em pool
+`agent_kind: 'ai'` com `pool_kind_mismatch` desde a capacity-governance item 2. O Console listava os
+pools IA assim mesmo: marcar `nps` conectava, o gate negava e a linha ficava **"Disconnected"** — o
+sintoma não nomeia a causa, e o agente lê como tela quebrada, não como "esse pool não é seu".
+
+A metade certa da regra já existia: o espelho `-int` é ocultado onde se ESCOLHE (ADR
+`adr-internal-work-queue-author-bound` D3). Faltava a mesma pergunta pelo outro eixo — as duas têm a
+forma *"a opção existe na tela e não no backend"*.
+
+- `PoolInfo.agent_kind` passou a ser mapeado no `fetchPools` (o `GET /v1/pools` já devolvia o campo:
+  `_formatPool` retorna a linha inteira menos `id`).
+- **`selectablePools` mudou de dono**: era um `filter` local do `AgentAssistPage`, virou `useMemo` no
+  `AgentAssistContext` (`!p.mirror_of && p.agent_kind !== 'ai'`). O motivo da mudança de lugar é o
+  segundo consumidor: **`handleJoinAll` mapeava `availablePools` CRU** — o "All pools" tentava logar
+  em todo pool IA do tenant, e acertava o espelho por acidente. Agora ele faz
+  `selectablePools.flatMap(withMirror)`: entrar em todos é entrar em cada um pelo mesmo caminho de
+  entrar em um.
+- `availablePools` segue **cru** (inbox, `poolSlaMap` e resolução de espelho precisam dele).
+
+**O predicado é `!== 'ai'`, não `=== 'human'`.** `Pool.agent_kind` é nullable no registry — o backfill
+por inferência só roda no boot do agent-registry, então pool criado por API entre dois boots chega
+`null`. O gate também nega apenas em `'ai'` (e é fail-open sem `pool_config` no cache). Esconder o
+`null` deixaria a UI **mais restritiva que o backend**, e por ausência — a falha que ninguém percebe.
+
+Medido no demo (`tenant_demo`, admin com 3 pools acessíveis): `nps_ia`=`ai`, `formfill_demo`=`human`,
+`retencao_humano`=`human` ⇒ combo de **3 → 2**, "Connected". Nenhum `null` apareceu, então o ramo
+fail-open não foi exercido.
+
+**Correção de registro:** durante a análise afirmei que o contador `N/N` do combo contava o espelho e
+mostraria "2/3". **Falso** — `AgentAssistPage:642` já passa `activePools.filter(p => !p.endsWith("-int"))`
+ao Header. Internamente há 3 pools ativos (é o que faz o painel "PULL QUEUES" aparecer, lendo a lista
+sem filtro) e o cabeçalho mostra 2 de propósito. Não havia defeito ali.
+
+### 2. Histórico de wrap-up — não era espaçamento, eram duas grids
+
+`/analise/wrapup` renderizava o cabeçalho num `<div grid-cols-[1.4fr_auto_auto_auto_auto_auto]>` e
+**cada linha de dado em outro, igual**. Grids irmãs não compartilham trilha: `auto` dimensiona pelo
+conteúdo *daquela* grid, e os conteúdos são de naturezas diferentes — palavra ("Submetidos") no
+cabeçalho, um dígito ("9") no dado. Com o `1.4fr` absorvendo sobras diferentes em cada uma, o
+resultado é o da tela: títulos espalhados, números espremidos à direita, nenhum sob o seu título.
+
+Largura fixa em px consertaria a **foto** e não a causa (o primeiro rótulo traduzido mais longo reabre
+o defeito). Virou uma `<table>`: alinha por construção, sem número mágico, `<tr>` preserva borda por
+linha — e é o padrão dominante do platform-ui (46 usos em 31 arquivos, contra 4 arquivos com o par de
+grids). `w-full` no `<th>` do nome + `max-w-0` na `<td>` mantêm o `truncate` funcionando.
+
+**A classe segue aberta em duas telas** (registrado em `TODO.md`): `work-items/WorkItemsPage.tsx`
+(:88/:352) e `schedules/SchedulesMonitorPage.tsx` (:101/:108) têm o mesmo par de grids com `auto`. Lá
+o desalinhamento é menor porque os dados são mais largos — o defeito é o mesmo, só está calado.
+
+**Achado adjacente, não tratado:** `fila_humano` está declarado `agent_kind: ai` no
+`infra/registry/tenant_demo.yaml` (:168-169) — nome e tipo discordam. Não afeta esta tela (não está
+entre os pools acessíveis do admin), mas se um humano ganhar acesso a ele, o pool some do seletor e a
+explicação não estará no nome.
+
+Arquivos: `platform-ui/src/modules/agent-assist/{types.ts, AgentAssistContext.tsx, AgentAssistPage.tsx}`,
+`platform-ui/src/modules/analise/WrapupSummaryPage.tsx`. Sem mudança de i18n, de API ou de schema.
+
+---
+
 ## Visibilidade seletiva do wrap-up em Analytics/Sessions — fatia 1 ✅ + predicado de despacho unificado ✅ (2026-08-11)
 
 ### O predicado do barrier discordava do predicado de despacho — e o alarme era o dano
@@ -101,8 +168,54 @@ nasce com `journey: "inherit"` e nunca atravessa a fronteira.
 
 **Achado de passagem:** `accessible_pools` **já** deriva o espelho interno (`_with_internal_mirrors`,
 ADR author-bound D2 — "quem alcança `p` alcança `p-int`"), então o ACW por segmento não some para
-supervisor com escopo. Isso **não** cobre a linha da SESSÃO de wrap-up, cujo `pool_id` é o pool webhook
-(`wrapup_detached_ia`), não um espelho `-int`.
+supervisor com escopo. ~~Isso **não** cobre a linha da SESSÃO de wrap-up, cujo `pool_id` é o pool webhook
+(`wrapup_detached_ia`), não um espelho `-int`.~~ ⚠️ **Frase ERRADA, medida e corrigida na fatia 3 —
+o `pool_id` da sessão de wrap-up atendida é `retencao_humano-int`, o espelho. Ver abaixo.**
+
+### Fatias 2 + 3 — a UI ✅
+
+`ListaTab.tsx` + `types.ts` + i18n `contacts` (en/pt-BR). Toggle desligado por padrão que manda
+`scope=all`; cabeçalho em `meta.total_contacts` (não muda ao ligar), segundo número para as internas,
+paginação em `meta.total`; tag `INTERNAL` por `row.is_internal`; coluna **Contato de origem** ligando ao
+pai por `origin_session_id`. Toggle não é sequer renderizado com `meta.internal_pools_known == 0`.
+
+Três decisões que a implementação forçou:
+
+- **A coluna não se chama "Origin".** `lista.columns.origin` já é **ANI** nesta tabela (e `destination`
+  é DNIS). O vínculo com o contato pai virou `parent` / "Contato de origem"; reusar o nome daria duas
+  colunas "Origem" com sentidos diferentes na mesma linha.
+- **A coluna só existe com o toggle ligado.** Fora do escopo expandido não há linha interna, e coluna
+  vazia prometeria um vínculo que a listagem de contatos não tem.
+- **O toggle fica desabilitado durante o fetch.** O `pendingRef` do `load` descarta requisição
+  concorrente — um clique em voo seria no-op **silencioso**, deixando o checkbox ligado sobre uma
+  tabela ainda no escopo antigo. Estado mentiroso de graça é exatamente o que esta base recusa.
+
+**Gate (previsto antes de medir, e conferido na tela):** desligado → `12 contacts`; ligado → `12
+contacts · 9 internal`, com o cabeçalho **imóvel**. É essa imobilidade — não a aparição das linhas —
+que prova que o guardrail §7.2 vale: as internas entraram na tabela sem entrar na contagem. Drill da
+interna `…5-ba25976fc655` abre `WorkflowTraceList` (canal `webhook`) e o link do pai leva ao contato
+`…a-96ec91b2a43d`, cujo trace mostra o par `escalated_human` → wrap-up.
+
+> **Correção medida — o `pool_id` da sessão de wrap-up NÃO é o pool webhook.** A nota da fatia 4b
+> afirmava `wrapup_detached_ia`. A tela contradisse por dois caminhos independentes — (1) com
+> `scope=contacts` essas linhas são excluídas, e a exclusão roda sobre `s.pool_id` **cru** no `WHERE`,
+> logo `s.pool_id` está no conjunto `purpose=internal`; (2) a coluna Pool renderiza `retencao hu…` com
+> `is_internal=true` — e a query fechou o caso:
+>
+> ```
+> d49c57a4-…-ba25976fc655 │ retencao_humano-int │ d4a87c74-…-96ec91b2a43d
+> ```
+>
+> `wrapup_detached_ia` é o pool que **dispara** o workflow (aparece na execution metadata do trace); o
+> que sobra em `sessions.pool_id` é o do último roteamento — o espelho interno onde o humano reivindicou
+> o item. **Consequência:** `_with_internal_mirrors` já cobre esta linha, e o concern de ABAC do TODO
+> (supervisor com escopo liga o toggle e não vê nada) **não se aplica ao wrap-up atendido**. Sobra um
+> caso estreito, não medido: wrap-up que **nunca** é reivindicado (expira por prazo, `acw_expired`) pode
+> nunca ser roteado a um espelho e reter o pool webhook — aí a linha só aparece para quem tem
+> `wrapup_detached_ia` no escopo. Item vivo no TODO, agora com o recorte certo.
+>
+> (⚠️ o banco é `plughub_demo` no demo e `plughub` por default — `analytics` é o nome que aparece nos
+> testes e no `{db}` das queries, e não existe em nenhum ambiente. Custou uma passada.)
 
 ---
 

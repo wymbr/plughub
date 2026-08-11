@@ -189,46 +189,72 @@ export default function WrapupSummaryPage() {
           <EmptyState icon="📋" title={t('history.empty')} description={t('history.emptyHint')} />
         )}
 
+        {/*
+            TABELA, não duas grids.
+
+            Era um `<div grid-cols-[1.4fr_auto×5]>` para o cabeçalho e OUTRO, igual, por
+            linha de dado. Grids irmãs não compartilham trilha: `auto` dimensiona pelo
+            conteúdo DAQUELA grid, e o conteúdo é de naturezas diferentes — palavra
+            ("Submetidos") no cabeçalho, um dígito ("9") no dado. Some o `1.4fr`
+            absorvendo sobras diferentes em cada uma e o resultado é o da tela: títulos
+            espalhados, números espremidos à direita, nenhum sob o seu título.
+
+            Largura fixa em px consertaria a foto e não a causa — o primeiro rótulo
+            traduzido mais longo reabre o defeito. A tabela alinha por construção, que é
+            o que a tela pede, e ainda é o padrão dominante do platform-ui.
+            ⚠️ Mesmo par de grids vive em `work-items/WorkItemsPage.tsx` (:88/:352) e
+            `schedules/SchedulesMonitorPage.tsx` (:101/:108) — mesmo defeito, ainda de pé.
+        */}
         {!loading && !error && rows.length > 0 && (
           <div className="bg-white border border-border rounded-xl overflow-hidden">
-            <div className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2 text-2xs uppercase tracking-wide text-muted-light border-b border-border">
-              <span>{t(`axis.${axis}`)}</span>
-              <span className="text-right">{t('history.col.total')}</span>
-              <span className="text-right">{t('history.col.submitted')}</span>
-              <span className="text-right">{t('history.col.expired')}</span>
-              <span className="text-right">{t('history.col.supervisorClosed')}</span>
-              <span className="text-right">{t('history.col.avgFill')}</span>
-            </div>
-            {rows.map(r => {
-              const unfilled = (Number(r.expired) || 0) + (Number(r.supervisor_closed) || 0)
-              return (
-                <div key={r.group_key || '—'}
-                  className="grid grid-cols-[1.4fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2 items-center text-xs border-b border-border last:border-b-0">
-                  <div className="min-w-0">
-                    <div className="text-dark font-medium truncate" title={r.group_key}>
-                      {r.group_key || t('history.unknownAgent')}
-                    </div>
-                    {/* Barra proporcional: comparar agentes sem ler número a número. */}
-                    <div className="h-1 bg-surface-alt rounded mt-1 overflow-hidden">
-                      <div className="h-full bg-primary"
-                        style={{ width: maxTotal ? `${(Number(r.total) / maxTotal) * 100}%` : '0%' }} />
-                    </div>
-                  </div>
-                  <span className="text-right text-dark">{r.total}</span>
-                  <span className="text-right text-muted">{r.submitted}</span>
-                  <span className={`text-right ${Number(r.expired) > 0 ? 'text-red-text font-medium' : 'text-muted'}`}>
-                    {r.expired}
-                  </span>
-                  <span className={`text-right ${Number(r.supervisor_closed) > 0 ? 'text-warning-text font-medium' : 'text-muted'}`}>
-                    {r.supervisor_closed}
-                  </span>
-                  <span className="text-right text-muted" title={t('history.col.avgFillHint')}>
-                    {fmtDuration(r.avg_fill_ms)}
-                    {unfilled > 0 && <span className="sr-only"> ({unfilled})</span>}
-                  </span>
-                </div>
-              )
-            })}
+            <table className="w-full table-auto border-collapse">
+              <thead>
+                <tr className="text-2xs uppercase tracking-wide text-muted-light border-b border-border">
+                  <th scope="col" className="text-left font-normal px-4 py-2 w-full">{t(`axis.${axis}`)}</th>
+                  <th scope="col" className="text-right font-normal px-3 py-2 whitespace-nowrap">{t('history.col.total')}</th>
+                  <th scope="col" className="text-right font-normal px-3 py-2 whitespace-nowrap">{t('history.col.submitted')}</th>
+                  <th scope="col" className="text-right font-normal px-3 py-2 whitespace-nowrap">{t('history.col.expired')}</th>
+                  <th scope="col" className="text-right font-normal px-3 py-2 whitespace-nowrap">{t('history.col.supervisorClosed')}</th>
+                  <th scope="col" className="text-right font-normal px-3 py-2 whitespace-nowrap">{t('history.col.avgFill')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => {
+                  const unfilled = (Number(r.expired) || 0) + (Number(r.supervisor_closed) || 0)
+                  return (
+                    <tr key={r.group_key || '—'}
+                      className="text-xs border-b border-border last:border-b-0">
+                      {/* `w-full` no cabeçalho + `max-w-0` aqui: a coluna do nome absorve a
+                          sobra e o `truncate` tem de quem truncar (numa <td> sem largura
+                          resolvida o texto empurra a tabela em vez de cortar). */}
+                      <td className="px-4 py-2 align-middle max-w-0">
+                        <div className="text-dark font-medium truncate" title={r.group_key}>
+                          {r.group_key || t('history.unknownAgent')}
+                        </div>
+                        {/* Barra proporcional: comparar agentes sem ler número a número. */}
+                        <div className="h-1 bg-surface-alt rounded mt-1 overflow-hidden">
+                          <div className="h-full bg-primary"
+                            style={{ width: maxTotal ? `${(Number(r.total) / maxTotal) * 100}%` : '0%' }} />
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right align-middle text-dark tabular-nums">{r.total}</td>
+                      <td className="px-3 py-2 text-right align-middle text-muted tabular-nums">{r.submitted}</td>
+                      <td className={`px-3 py-2 text-right align-middle tabular-nums ${Number(r.expired) > 0 ? 'text-red-text font-medium' : 'text-muted'}`}>
+                        {r.expired}
+                      </td>
+                      <td className={`px-3 py-2 text-right align-middle tabular-nums ${Number(r.supervisor_closed) > 0 ? 'text-warning-text font-medium' : 'text-muted'}`}>
+                        {r.supervisor_closed}
+                      </td>
+                      <td className="px-3 py-2 text-right align-middle text-muted tabular-nums whitespace-nowrap"
+                        title={t('history.col.avgFillHint')}>
+                        {fmtDuration(r.avg_fill_ms)}
+                        {unfilled > 0 && <span className="sr-only"> ({unfilled})</span>}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
           </div>
         )}
 
