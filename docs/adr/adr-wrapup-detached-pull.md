@@ -13,6 +13,8 @@
 > [`docs/product/dialog-primitive-and-runner-design.md`](../product/dialog-primitive-and-runner-design.md)
 > (DialogForm + `form_get` + menu dinâmico), Camadas B (`assigned_to`), ~~C (`acw_gate`/`acw_pending`)~~ *(revertida
 > na Phase 0, removida em 2026-07-29 — ver D4)*, D (detached).
+> **Emenda (2026-08-11, §7 — proposta):** visibilidade seletiva da sessão de wrap-up em Analytics/Sessions
+> (`scope=contacts|all`), sem reabrir a contaminação de TMA fechada em E2f.
 
 ---
 
@@ -242,9 +244,10 @@ Reduz a coleta a **2 mecanismos** de fato (inline síncrono / assíncrono). Reus
 mas linha distinta) — precisa ser **filtrada da contagem de contatos/TMA** (como os segmentos de hook já são;
 ver a 2ª causa da Mudança 24: `parse_routed` não escreve `sessions` p/ `conference_id`; aqui **não há**
 `conference_id`, então é preciso um discriminador — ex.: marcar a sessão de wrap-up com `spawn_reason=wrapup`
-e excluí-la das métricas de contato). **É o principal ponto de atenção da E2.** (b) v1 canal-bound (Console);
-omnichannel = convergência futura a Path α. (c) `segment_outcome_record` duplica lógica de
-`_apply_wrapup_to_segment` — extrair um helper compartilhado evita drift.
+e excluí-la das métricas de contato). **Era o principal ponto de atenção da E2 — fechado em E2f (✅
+2026-07-29) via `pools.purpose`, e a visibilidade seletiva (custo residual) tem desenho em §7.** (b) v1
+canal-bound (Console); omnichannel = convergência futura a Path α. (c) `segment_outcome_record` duplica lógica
+de `_apply_wrapup_to_segment` — extrair um helper compartilhado evita drift.
 
 ---
 
@@ -291,3 +294,64 @@ omnichannel = convergência futura a Path α. (c) `segment_outcome_record` dupli
 
 **Sequência:** E2a+E2b (conteúdo+gravação) → E2c+E2d (item pull) → E2f (métricas) → E2g (config+validação).
 **Não-objetivos v1:** omnichannel (Path α); briefing rico (verbatim/copilot além do mínimo); wrap-up de IA.
+
+---
+
+## 7. Emenda (2026-08-11, PROPOSTA) — Visibilidade seletiva da sessão de wrap-up em Analytics/Sessions
+
+> **Gatilho:** operador rodou um E2E completo (webchat → IA → fila → humano → especialista → NPS do cliente +
+> wrap-up do humano) e não encontrou o wrap-up em `Analytics > Sessions` — nem como segmento da sessão principal
+> (não é; §3α D3, gravação por referência), nem como sessão própria (é, mas fica invisível). A causa é o próprio
+> E2f (§4): a exclusão de `pools.purpose = 'internal'` em `/reports/sessions`/`/reports/journeys` é
+> **incondicional**, sem parâmetro de override — resolveu a contaminação de TMA/contagem de contatos, mas também
+> apagou a visibilidade retrospectiva da sessão de wrap-up, mesmo com `accessible_pools` liberado.
+
+### 7.1 — Decisão
+
+**Visibilidade ≠ contagem.** A exclusão de E2f deve continuar protegendo todo **agregado** (TMA, "N contacts",
+métricas de pool/agente) — isso não muda. O que muda é que a **listagem bruta** de `/reports/sessions` ganha um
+parâmetro opcional `scope: contacts | all` (default `contacts` = comportamento atual, bit-a-bit idêntico ao que
+E2f fechou). Com `scope=all`, sessões de `purpose=internal` (wrap-up, dispatch, etc.) aparecem como linhas
+extras, mas o cabeçalho de contagem **nunca** lê `scope=all` — continua somando só `purpose≠internal` mesmo
+quando a listagem está expandida (ex.: "5 contacts · 2 internal", nunca "7 contacts").
+
+**Associação por `origin_session_id`, não por Journey.** Cogitou-se resolver a visibilidade só no drill-down de
+Journey — descartado: nem todo contato tem journey de N sessões, e forçar isso criaria uma journey artificial de
+1+1 para todo wrap-up, poluindo `/reports/journeys` com processos triviais que não são processos. A ligação
+correta é direta, 1:1, via `origin_session_id` — campo já gravado de forma confiável nos dois modos de dispatch
+(`inline` e `detached`; ambos passam por `_fire_detached_hook`, que grava `origin_session_id` tanto no
+top-level do body quanto em `context["session.origin_session_id"]` — gap histórico de só gravar no top-level,
+fechado em 2026-07-27, "Wrap-up-α — wiring do hook `on_human_end` `detached`", CHANGELOG). Com `scope=all`, a
+linha da sessão de wrap-up ganha uma coluna/badge "Origin" apontando para o `session_id` pai (clicável, navega
+direto — sem depender de Journey).
+
+**Drill-down de uma Journey já aberta é exceção à regra do default.** Diferente da listagem topo (que é
+agregação e deve ficar limpa por padrão), o drill de UMA journey específica (`journey → sessions → segments`) já
+está fora de qualquer contagem — o operador abriu aquele processo, não está somando nada. Esse endpoint fica
+isento do filtro de E2f (sempre mostra sessões internas associadas), independentemente do `scope` da listagem
+topo.
+
+### 7.2 — Guardrails (para não reabrir o que E2f fechou)
+
+1. `scope=all` só afeta a listagem (`/reports/sessions`); nenhum endpoint de agregado (TMA, ocupação, contagem
+   de contatos, `/reports/agents/*`, `/reports/pools/*`) aceita ou lê esse parâmetro.
+2. O cabeçalho de contagem da tela sempre computa a partir do scope `contacts`, mesmo quando a tabela abaixo
+   está expandida por `scope=all` — nunca um único número que misture os dois domínios.
+3. Na UI, o toggle "Incluir sessões internas (wrap-up, dispatch)" nasce **desligado por padrão** — o operador
+   tem que optar ativamente por ver o ruído operacional.
+4. Linhas de sessão interna carregam uma tag visual distinta (não "contact") e, quando aplicável, a coluna
+   "Origin" — nunca ficam visualmente indistinguíveis de um contato real.
+
+### 7.3 — Por que emenda e não ADR novo
+
+A tensão "sessão de wrap-up própria custa visibilidade em analytics" já estava registrada como risco aceito
+neste ADR (§4, item a) antes mesmo de E2f existir. §7 é a continuação natural dessa mesma decisão — não é um
+domínio novo, é o ajuste fino do trade-off que este documento já era dono. Criar um ADR separado fragmentaria o
+histórico de uma única decisão em dois lugares.
+
+### 7.4 — Não-objetivos
+
+- Não reabre a contagem de contatos/TMA para incluir sessões internas — E2f continua valendo para todo agregado.
+- Não introduz Journey artificial para contatos sem processo multi-sessão.
+- Não estende `scope=all` a `/reports/journeys` (listagem topo) — só ao drill-down de uma journey já aberta e a
+  `/reports/sessions`.

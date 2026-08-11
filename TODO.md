@@ -1801,6 +1801,41 @@ vez de digitar do zero.
 
 ---
 
+## Visibilidade seletiva da sessão de wrap-up em Analytics/Sessions *(proposta 2026-08-11, ver ADR §7)*
+
+> **Origem:** operador rodou um E2E completo e não achou o wrap-up em `Analytics > Sessions` — nem como
+> segmento (não é; gravação por referência, §3α D3 do ADR), nem como sessão própria (é, mas some). Causa:
+> E2f (`pools.purpose = 'internal'`) exclui de forma **incondicional**, sem parâmetro de override, e isso
+> vale mesmo com `accessible_pools` liberado — não é bug de permissão, é o comportamento como fechado.
+> **Desenho fechado em [`docs/adr/adr-wrapup-detached-pull.md`](docs/adr/adr-wrapup-detached-pull.md) §7**
+> (emenda ao ADR já dono do trade-off, não ADR novo). Este item é só o rastreio de implementação.
+
+**Decisão (ADR §7):** visibilidade ≠ contagem. Todo agregado (TMA, "N contacts", métricas de
+pool/agente) continua excluindo `purpose=internal` sem exceção — E2f não é reaberto. A **listagem**
+(`/reports/sessions`) ganha parâmetro opcional `scope: contacts|all` (default `contacts`, idêntico ao
+comportamento atual). Associação ao contato pai é por **`origin_session_id`** (já gravado de forma
+confiável nos dois modos de dispatch — inline e detached — desde o fix de 2026-07-27), não por Journey;
+Journey artificial de 1+1 para todo wrap-up foi descartada por poluir `/reports/journeys` com processos
+triviais.
+
+### Fatias
+
+| # | Entrega | Estado |
+|---|---|---|
+| 1 | `scope=contacts\|all` em `GET /reports/sessions` — filtro condicional em vez de incondicional; cabeçalho de contagem sempre lê `scope=contacts` mesmo com a tabela expandida | pendente |
+| 2 | Coluna/badge "Origin" na linha da sessão interna (quando `scope=all`), linkando para o `session_id` pai via `origin_session_id` | pendente |
+| 3 | Toggle "Incluir sessões internas (wrap-up, dispatch)" na UI (`AnaliseSessionsPage` ou nome real do componente), desligado por padrão; tag visual distinguindo linha interna de contato | pendente |
+| 4 | Isentar o drill-down de UMA journey já aberta (`journey → sessions → segments`) do filtro E2f — sempre mostra sessões internas associadas, independente do `scope` da listagem topo | pendente |
+
+**Guardrails (não reabrir o que E2f fechou):** nenhum endpoint de agregado aceita/lê `scope`; `scope=all`
+não se estende a `/reports/journeys` (listagem topo), só a `/reports/sessions` e ao drill-down do item 4.
+
+**Não-objetivos:** contar sessões internas em TMA/contagem de contatos; Journey sintética para contato
+sem processo multi-sessão; mostrar o conteúdo respondido do wrap-up (`wrapup_summary`/`wrapup_next_steps`,
+já existente em `segments` mas sem UI nenhuma) — gap real, mas separado, ainda sem item próprio aqui.
+
+---
+
 ## Capacidade, licenças e isolamento entre pools *(A e B ✅ 2026-08-02/03 — histórico no CHANGELOG; resta C + fatia 4)*
 
 > **Podada em 2026-08-03: 503 → 81 linhas.** O as-built das fatias F1–F5b e P1–P3 mora no
