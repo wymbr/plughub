@@ -1,0 +1,52 @@
+{
+  "form_id": "dialog_limite_solicitacao",
+  "name": "Solicitação de aumento de limite",
+  "description": "Coleta dos dados do pedido de aumento de limite (nível N1/c). Formulário multi-campo em UM turno: numero_cartao/cpf/limite_solicitado sobrevivem em pipeline_state e viram tags do ContextStore (mascaradas por POLÍTICA na leitura do aprovador); cvv é masked-input — fica só no escopo em memória do engine e é provadamente inalcançável por qualquer aprovador.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["limite", "credito"],
+  "nodes": [
+    {
+      "id": "intro",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Vou registrar seu pedido de aumento de limite. Preciso de alguns dados do cartão — eles ficam protegidos e só a equipe de crédito enxerga o necessário para analisar."
+      }
+    },
+    {
+      "id": "dados",
+      "kind": "question",
+      "prompt": { "pt-BR": "Preencha os dados da solicitação:" },
+      "interaction": "form",
+      "output_key": "dados",
+      "timeout_s": 300,
+      "fields": [
+        {
+          "id": "numero_cartao",
+          "label": { "pt-BR": "Número do cartão" },
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "cpf",
+          "label": { "pt-BR": "CPF do titular" },
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "limite_solicitado",
+          "label": { "pt-BR": "Novo limite desejado (R$)" },
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "cvv",
+          "label": { "pt-BR": "CVV (3 dígitos, no verso do cartão)" },
+          "type": "text",
+          "required": true,
+          "masked": true
+        }
+      ]
+    }
+  ]
+}

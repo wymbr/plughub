@@ -32,9 +32,18 @@ Deprecated aliases (kept for backward compatibility with existing deployments):
 
 Run:
   PLUGHUB_CONFIG_DATABASE_URL=... PLUGHUB_CONFIG_REDIS_URL=... python -m plughub_config_api.seed
+
+⚠️ Seed-if-absent é por (namespace, key), e várias keys guardam uma ESTRUTURA
+(masking.context_rules é UMA key com o array inteiro de regras). Acrescentar um
+item dentro dessa estrutura não é uma key nova: numa base já semeada a key existe,
+o seed pula, e o item novo não chega — sem erro e sem log. Para essas edições,
+reaplicar a key inteira é obrigatório:
+
+  plughub-config-seed --only masking.context_rules --overwrite
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
 
@@ -43,6 +52,7 @@ import redis.asyncio as aioredis
 
 from .cache import ConfigCache
 from .config import get_settings
+from .kafka_emitter import ConfigKafkaEmitter
 from .store import ConfigStore
 
 logger = logging.getLogger("plughub.config.seed")
@@ -482,6 +492,15 @@ _SEED: list[tuple[str, str, object, str]] = [
                 {"pattern": "account.numero_contrato", "role": "operator",   "type": "last_4",       "label": "Número do contrato"},
                 {"pattern": "account.valor_fatura",    "role": "operator",   "type": "financial",    "label": "Valor da fatura"},
                 {"pattern": "account.limite_credito",  "role": "operator",   "type": "hidden",       "label": "Limite de crédito (ocultado para operadores)"},
+                # Pacote de aprovação (cenário de aumento de limite). O delegate.context
+                # do workflow chega no ContextStore da sessão-filha com prefixo `session.`;
+                # é AQUI que "o aprovador vê mascarado" vira política, não código.
+                # ⚠️ NÃO acrescentar um catch-all `session.*` com type hidden: ele derrubaria
+                # session.dialog_form_id / session.decisions e a tela de aprovação deixaria
+                # de renderizar em silêncio (applyContextMaskingDynamic faz `continue`).
+                {"pattern": "session.numero_cartao",   "role": "operator",   "type": "last_4",       "label": "Número do cartão em pacote de aprovação"},
+                {"pattern": "session.cpf_titular",     "role": "operator",   "type": "last_2",       "label": "CPF do titular em pacote de aprovação"},
+                {"pattern": "session.limite_solicitado", "role": "operator", "type": "financial",    "label": "Valor solicitado em pacote de aprovação"},
                 {"pattern": "caller.*",                "role": "operator",   "type": "last_4",       "label": "Dados do cliente — catch-all (campos não mapeados)"},
                 {"pattern": "account.*",               "role": "operator",   "type": "financial",    "label": "Dados da conta — catch-all (campos não mapeados)"},
                 {"pattern": "*",                       "role": "supervisor", "type": "plain",        "label": "Supervisor e admin veem todos os campos sem máscara"},
@@ -790,25 +809,51 @@ _SEED: list[tuple[str, str, object, str]] = [
 
 # ─── seed runner ─────────────────────────────────────────────────────────────
 
-async def seed(store: ConfigStore, *, overwrite: bool = False) -> dict[str, int]:
+async def seed(
+    store: ConfigStore,
+    *,
+    overwrite: bool = False,
+    only: set[str] | None = None,
+    emitter: "ConfigKafkaEmitter | None" = None,
+) -> dict[str, int]:
     """
     Seeds all global default values.
 
     If overwrite=False (default): skips entries that already exist.
     If overwrite=True: updates all entries (useful for schema migrations).
 
+    `only` restricts the run to the given "{namespace}.{key}" identifiers. Existe
+    porque o modo de falha desta função é MUDO: quando um valor ganha um item novo
+    (uma regra a mais dentro de masking.context_rules, que é UMA key com o array
+    inteiro), o seed-if-absent pula a key e o item novo simplesmente não existe —
+    sem erro, sem log de divergência. Reaplicar a key inteira é o conserto, e
+    fazê-lo sem `only` reescreveria as outras ~90 keys de tabela.
+
     Returns {"inserted": N, "skipped": N}.
     """
     inserted = 0
     skipped  = 0
 
+    if only:
+        known = {f"{ns}.{k}" for ns, k, _v, _d in _SEED}
+        unknown = only - known
+        if unknown:
+            # Nome errado não pode sair 0/0 parecendo "nada a fazer".
+            raise SystemExit(f"--only: entrada inexistente no seed: {sorted(unknown)}")
+
     for namespace, key, value, description in _SEED:
+        if only is not None and f"{namespace}.{key}" not in only:
+            continue
         if not overwrite:
             existing = await store.get_entry("__global__", namespace, key)
             if existing is not None:
                 skipped += 1
                 continue
         await store.set(None, namespace, key, value, description)
+        if emitter is not None:
+            await emitter.emit_config_changed(
+                tenant_id=None, namespace=namespace, key=key, operation="set",
+            )
         inserted += 1
         logger.info("seeded %s.%s", namespace, key)
 
@@ -816,7 +861,7 @@ async def seed(store: ConfigStore, *, overwrite: bool = False) -> dict[str, int]
     return {"inserted": inserted, "skipped": skipped}
 
 
-async def _run() -> None:
+async def _run(*, overwrite: bool = False, only: set[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO)
     settings = get_settings()
 
@@ -827,15 +872,57 @@ async def _run() -> None:
     store = ConfigStore(pool, cache)
     await store.setup()
 
-    result = await seed(store)
-    print(f"Done: inserted={result['inserted']}  skipped={result['skipped']}")
+    # `config.changed` era publicado SÓ pelo router HTTP, então uma reaplicação com
+    # a stack de pé escrevia no DB e deixava os consumidores (mcp-server lê
+    # masking.context_rules por HTTP com cache próprio) servindo o valor antigo —
+    # "reapliquei e não mudou nada", sem erro em lugar nenhum. No boot é inócuo
+    # (ninguém cacheou ainda); fora dele não é. Broker ausente ⇒ emitter no-op,
+    # e aí o aviso abaixo é a única coisa que impede a degradação silenciosa.
+    emitter = ConfigKafkaEmitter(settings.kafka_brokers_list)
+    emit_ok = True
+    try:
+        await emitter.start()
+    except Exception as exc:
+        # O trabalho do seed é o DB; Kafka indisponível não pode derrubá-lo (era o
+        # comportamento antes desta mudança). Mas degradar calado transformaria
+        # "não propagou" em "não aconteceu" — daí o log E o aviso no fim.
+        emit_ok = False
+        logger.warning("emitter indisponível, config.changed não sairá: %s", exc)
 
+    result = await seed(store, overwrite=overwrite, only=only, emitter=emitter)
+    print(f"Done: inserted={result['inserted']}  skipped={result['skipped']}")
+    if result["inserted"] and not (emit_ok and emitter.enabled):
+        print(
+            "⚠️  config.changed NÃO publicado: os consumidores seguem com o valor "
+            "anterior em cache até reiniciarem (mcp-server lê masking por HTTP)."
+        )
+
+    await emitter.stop()
     await pool.close()
     await redis.aclose()
 
 
 def main() -> None:
-    asyncio.run(_run())
+    """
+    plughub-config-seed                                  → seed-if-absent (boot)
+    plughub-config-seed --only masking.context_rules --overwrite
+                                                         → reaplica UMA key
+    """
+    parser = argparse.ArgumentParser(prog="plughub-config-seed")
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="reescreve entradas existentes (default: pula o que já existe)",
+    )
+    parser.add_argument(
+        "--only", action="append", metavar="NS.KEY", default=None,
+        help="restringe a estas entradas; repetível. Nome inexistente é erro, "
+             "não no-op silencioso.",
+    )
+    args = parser.parse_args()
+    asyncio.run(_run(
+        overwrite=args.overwrite,
+        only=set(args.only) if args.only else None,
+    ))
 
 
 if __name__ == "__main__":

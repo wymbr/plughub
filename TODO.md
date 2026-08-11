@@ -162,6 +162,33 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
+## Subida automática falhou uma vez e a causa ficou NÃO PROVADA *(achado 2026-08-12)*
+
+`agent-assist-ui`, `skill-flow-service`, `channel-gateway` e `orchestrator-bridge` deixaram de subir
+sozinhos; só ficaram de pé iniciados na mão. Três hipóteses foram medidas e **as três caíram**:
+corrida de arranque sem gate de health (o `stop`+`start` subiu tudo), container velho × compose novo
+(o compose não muda desde 10/08), e crash-loop por 422 de capacidade dos pools novos do commit
+`32f197f` (`RestartCount 0` em todos).
+
+A leitura que sobrou — stack montada aos pedaços (containers de 46 h a 12 h, de `build X` + `up -d X`
+serviço a serviço) somada ao botão Start do Docker Desktop, que **inicia containers e não reconcilia a
+stack** — explica todas as observações sem inventar mecanismo, mas **não foi testada**: um `up -d`
+completo consertou o ambiente e destruiu a evidência antes que os logs fossem coletados.
+
+**Não atacar este item especulativamente.** O que existe hoje é instrumento, não diagnóstico:
+`infra/scripts/up.sh` grava `.logs/up-*.log` em toda subida, e os cinco serviços que não tinham
+política ganharam `restart: on-failure` (ver CHANGELOG 2026-08-12). **Gatilho de reabertura:** a
+reincidência. Quando ocorrer, a ordem é `logs` do container que falhou **antes** de qualquer conserto
+— inclusive antes do `up -d` que sabidamente resolve.
+
+Item aberto de verdade, herdado da investigação: **nada verifica que a stack em execução corresponde ao
+compose.** Um container criado há dois dias roda a config de dois dias atrás, e o único sinal disso é a
+coluna `CREATED` do `ps`, que ninguém lê. Um probe que compare `docker inspect` × `docker compose
+config` (env e `depends_on` por serviço) transformaria deriva silenciosa em vermelho — e é o que teria
+respondido esta sessão em um comando.
+
+---
+
 ## Tabela construída como duas grids irmãs — 2 telas abertas *(achado 2026-08-11, ao consertar `/analise/wrapup`)*
 
 O cabeçalho é um `<div grid grid-cols-[...auto...]>` e **cada linha de dado é outro**. Grids irmãs não

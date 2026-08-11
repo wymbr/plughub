@@ -642,6 +642,7 @@ services:
       start_period: 20s
     networks:
       - plughub-demo
+    restart: on-failure   # sem política, perder a corrida de arranque some sem erro
 
   routing-engine:
     build:
@@ -757,6 +758,7 @@ services:
       start_period: 15s
     networks:
       - plughub-demo
+    restart: on-failure   # sem política, perder a corrida de arranque some sem erro
 
   skill-flow-service:
     build:
@@ -796,6 +798,7 @@ services:
       start_period: 25s
     networks:
       - plughub-demo
+    restart: on-failure   # sem política, perder a corrida de arranque some sem erro
 
   session-replayer:
     build:
@@ -1005,10 +1008,20 @@ services:
     environment:
       PLUGHUB_CONFIG_DATABASE_URL: postgresql://plughub:plughub@postgres:5432/plughub_demo
       PLUGHUB_CONFIG_REDIS_URL:    redis://redis:6379
+      # Faltava: sem broker o seed escreve no DB e NÃO publica config.changed.
+      # No boot é inócuo, mas numa reaplicação com a stack de pé
+      # (`--only ns.key --overwrite`) o mcp-server seguiria servindo o valor
+      # antigo do seu cache HTTP — mudança aplicada e sem efeito, sem erro.
+      PLUGHUB_CONFIG_KAFKA_BROKERS: kafka:29092
     command: ["plughub-config-seed"]
     depends_on:
       config-api:
         condition: service_healthy
+      # O emitter abre o producer no arranque; broker fora do ar aborta o seed.
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     networks:
       - plughub-demo
     restart: "no"
@@ -1249,6 +1262,7 @@ services:
       start_period: 20s
     networks:
       - plughub-demo
+    restart: on-failure   # sem política, perder a corrida de arranque some sem erro
 
   calendar-api:
     build:
@@ -1658,6 +1672,7 @@ services:
       start_period: 15s
     networks:
       - plughub-demo
+    restart: on-failure   # sem política, perder a corrida de arranque some sem erro
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Observability

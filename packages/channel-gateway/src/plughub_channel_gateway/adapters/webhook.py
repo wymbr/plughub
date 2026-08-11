@@ -2114,40 +2114,120 @@ class WebhookAdapter(ChannelAdapter):
             "form_id":    pending.get("form_id") or "",
         }
 
+    # Spec de preview usada quando o delegate NÃO declara `preview`. Preserva o
+    # comportamento histórico (portabilidade) para os fluxos que já existiam.
+    _LEGACY_PREVIEW_SPEC: dict[str, str] = {
+        "operadora_destino": "plain",
+        "numero_atual":      "last_4",
+    }
+
+    @staticmethod
+    def _apply_preview_mask(value: str, mask: str) -> str | None:
+        """
+        Aplica UMA máscara de preview. Devolve None quando o campo não deve ser
+        exibido — seja por `hidden`, seja por máscara desconhecida (o chamador
+        loga esta segunda). Vocabulário espelha `masking.context_rules`.
+        """
+        if mask == "hidden":
+            return None
+        if mask == "plain":
+            return value
+        if mask in ("last_2", "last_4"):
+            keep = 2 if mask == "last_2" else 4
+            alnum = "".join(ch for ch in value if ch.isalnum())
+            return ("***" + alnum[-keep:]) if len(alnum) >= keep else "***"
+        if mask == "email_domain":
+            local, sep, domain = value.partition("@")
+            if not sep or not domain:
+                return "***"
+            return f"{local[:1]}***@{domain}" if local else f"***@{domain}"
+        return None
+
     @staticmethod
     def _pending_context_preview(context: dict[str, Any]) -> dict[str, str]:
         """
         Build a minimal, PII-conscious preview for the pending entry — shown to
-        the customer in the cross-channel reconnect offer. operadora_destino is
-        non-secret (kept in clear); numero_atual is a phone (masked to the last
-        4 digits, e.g. ***4321). Absent keys are simply omitted.
+        the customer in the cross-channel reconnect offer.
+
+        O delegate declara O QUE mostrar e COMO mascarar, num mapa JSON em
+        `context["preview"]`:
+
+            preview: '{"numero_cartao": "last_4", "limite_solicitado": "plain"}'
+
+        Máscaras: plain | last_2 | last_4 | email_domain | hidden (omite).
+        Sem `preview`, cai na spec legada (portabilidade) — fluxos anteriores a
+        esta mudança seguem idênticos.
+
+        Duas decisões de segurança, ambas deliberadas:
+          * máscara DESCONHECIDA omite o campo E loga. Rebaixar para `plain` seria
+            trocar um erro de configuração por um vazamento silencioso.
+          * spec ilegível cai no legado e loga — nunca em "mostrar tudo".
+
+        Chaves ausentes no contexto são simplesmente omitidas.
         """
+        raw_spec = context.get("preview") or context.get("session.preview")
+        spec: dict[str, str] = dict(WebhookAdapter._LEGACY_PREVIEW_SPEC)
+        if raw_spec:
+            try:
+                parsed = json.loads(raw_spec) if isinstance(raw_spec, str) else raw_spec
+                spec = {str(k): str(v) for k, v in dict(parsed).items()}
+            except (ValueError, TypeError, AttributeError) as exc:
+                logger.warning(
+                    "pending preview: spec ilegível (%s) — caindo na spec legada. raw=%r",
+                    exc, raw_spec,
+                )
+
         preview: dict[str, str] = {}
-        operadora = context.get("operadora_destino") or context.get("session.operadora_destino")
-        if operadora:
-            preview["operadora_destino"] = str(operadora)
-        numero = context.get("numero_atual") or context.get("session.numero_atual")
-        if numero:
-            digits = "".join(ch for ch in str(numero) if ch.isdigit())
-            preview["numero_atual"] = ("***" + digits[-4:]) if len(digits) >= 4 else "***"
+        for key, mask in spec.items():
+            value = context.get(key) or context.get(f"session.{key}")
+            if value in (None, ""):
+                continue
+            masked = WebhookAdapter._apply_preview_mask(str(value), mask)
+            if masked is None:
+                if mask != "hidden":
+                    logger.warning(
+                        "pending preview: máscara desconhecida %r no campo %r — campo OMITIDO",
+                        mask, key,
+                    )
+                continue
+            preview[key] = masked
         return preview
 
     @staticmethod
     def _anchors_from_context(context: dict[str, Any]) -> list[dict[str, str]]:
         """
         Extract identity anchors from a delegate context. Explicit typed hints
-        (phone/email/cpf/princ) win; otherwise a bare contact_identifier is
-        treated as a phone (the common intake case).
+        (phone/email/cpf/princ) plus `contact_identifier`, tratado como telefone
+        (o caso comum de intake).
+
+        ⚠️ NAMESPACE COMPARTILHADO: o `delegate.context` serve a dois donos — é
+        payload para a tela do aprovador E fonte de âncoras de identidade. Uma chave
+        chamada `cpf` NÃO é um campo de exibição: é uma âncora.
+
+        `contact_identifier` é ADITIVO, não fallback. Era fallback (`if not anchors`),
+        e o modo de falha foi este: um delegate que passasse `cpf` como dado de tela
+        perdia o telefone — a âncora mais forte e a única já conhecida — e o
+        `resolve_or_provision` PROVISIONAVA um cliente novo (`matched_by=provisioned`)
+        em vez de casar com o existente. A pendência era escrita sob um customer_id
+        que ninguém consultava: gravada com sucesso, invisível para sempre.
+        Descartar a âncora conhecida porque apareceu uma desconhecida é exatamente
+        a troca errada.
         """
         anchors: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(kind: str, value: Any) -> None:
+            if not value:
+                return
+            key = (kind, str(value))
+            if key in seen:
+                return
+            seen.add(key)
+            anchors.append({"kind": kind, "value": str(value)})
+
         for kind in ("phone", "email", "cpf", "princ"):
-            val = context.get(kind) or context.get(f"session.{kind}")
-            if val:
-                anchors.append({"kind": kind, "value": str(val)})
-        if not anchors:
-            ci = context.get("contact_identifier") or context.get("session.contact_identifier")
-            if ci:
-                anchors.append({"kind": "phone", "value": str(ci)})
+            add(kind, context.get(kind) or context.get(f"session.{kind}"))
+        add("phone", context.get("contact_identifier") or context.get("session.contact_identifier"))
         return anchors
 
     # ──────────────────────────────────────────────────────────────────────────

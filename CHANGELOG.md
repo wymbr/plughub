@@ -2,6 +2,82 @@
 
 ---
 
+## Subida do ambiente: ausência muda vira erro nomeado ✅ (2026-08-12)
+
+### O sintoma e o que ele NÃO era
+
+`agent-assist-ui`, `skill-flow-service` e `orchestrator-bridge` deixaram de subir sozinhos, e o
+ambiente só ficava de pé subindo-os na mão. Três hipóteses foram levantadas e as três **caíram na
+medição**, cada uma com previsão escrita antes:
+
+| hipótese | como caiu |
+|---|---|
+| corrida de arranque sem gate de health | `stop` + `start` subiu tudo — previsão de ≥1 vítima falhou |
+| container velho × compose novo | compose não muda desde 10/08; o commit de ontem não o toca |
+| crash-loop por 422 de capacidade dos pools novos | `RestartCount 0` em todos |
+
+Sobrou, **não provada**, a leitura de que a stack estava montada aos pedaços (containers de 46 h,
+37 h, 36 h, 35 h, 33 h, 17 h, 13 h e 12 h — dois dias de `build X` + `up -d X` serviço a serviço) e
+que o botão Start do Docker Desktop **inicia containers, não reconcilia a stack**. Registrada em
+`TODO.md`; o gatilho de reabertura é a reincidência, agora com log em arquivo.
+
+**Erro de método, registrado de propósito:** a evidência que nomearia a causa foi destruída por um
+`up -d` completo pedido cedo demais, antes de coletar os logs dos containers que falhavam. O recreate
+consertou o ambiente e apagou o caso. *Em falha de subida, os logs vêm ANTES de qualquer conserto —
+inclusive antes do conserto que funciona.*
+
+### O que mudou (isto sim, provado)
+
+**1. `restart: on-failure` em cinco serviços que não tinham política nenhuma** — `mcp-server-plughub`,
+`mcp-server-auth`, `skill-flow-service`, `channel-gateway`, `agent-assist-ui`. Não é a causa; é o
+motivo de a causa ter chegado como *"não subiu"* em vez de erro. Sem política, perder qualquer corrida
+de arranque produz **ausência**, que não se distingue de "nunca foi pedido". Os serviços que já tinham
+a política (`routing-engine`, `session-replayer`, `platform-ui`, `evaluation-api`, `calendar-api`) se
+recuperavam da mesma corrida sozinhos, e por isso nunca apareceram na lista de suspeitos — o conjunto
+das vítimas era exatamente o conjunto dos sem política.
+
+**2. `infra/scripts/up.sh`** — subida reconciliadora, com três propriedades que o botão do Desktop não
+tem: `up -d` (recria o que divergiu e espera `condition: service_healthy`), log em arquivo **sempre**
+(`.logs/up-*.log`), e **veredicto de estado depois do `up`** — `exit 0` não prova que o serviço
+continuou vivo, então a conferência de `running` é um segundo teste, com os one-shots de seed
+excluídos por nome. Em falha, imprime as linhas que nomeiam a causa e avisa para não subir na mão
+antes de ler.
+
+### `masking.context_rules`: o seed-if-absent aplicado a uma key que guarda estrutura
+
+Achado independente, do commit de ontem (`32f197f`): as 3 regras do pacote de aprovação
+(`session.numero_cartao`, `session.cpf_titular`, `session.limite_solicitado`) **não estavam no
+ambiente**. Medido — `{"total": 11, "session": 0}`, com o total servindo de testemunha de que o leitor
+lia.
+
+A causa é geral e vale para todo o `_SEED`: **seed-if-absent é por `(namespace, key)`, mas várias keys
+guardam uma ESTRUTURA.** `masking.context_rules` é uma única key com o array inteiro de regras — logo
+"acrescentar uma regra" não é key nova: em base já semeada a key existe, o seed pula, e o item novo não
+chega. Sem erro, sem log de divergência. A imagem stale do `config-seed` era segunda causa, que a
+primeira torna irrelevante (nem reconstruída ela aplicaria).
+
+Três consertos, na origem:
+
+- **`--only NS.KEY` + `--overwrite`** no `plughub-config-seed`. Não havia como reaplicar uma key
+  existente (`_run()` chamava `seed(store)` com `overwrite=False` fixo), e `--overwrite` sozinho
+  reescreveria as ~90 keys da tabela. `--only` com nome inexistente **levanta erro** — sair `0/0`
+  pareceria "nada a fazer".
+- **o seed passou a publicar `config.changed`.** Era publicado só pelo router HTTP; o seed escrevia
+  direto no store. No boot é inócuo (ninguém cacheou ainda), mas numa reaplicação com a stack de pé o
+  mcp-server seguiria servindo o valor antigo do seu cache HTTP — *mudança aplicada, efeito nenhum,
+  silêncio*. `config-seed` ganhou `PLUGHUB_CONFIG_KAFKA_BROKERS` + `depends_on: kafka`.
+- **broker indisponível degrada com aviso impresso**, não calado: o trabalho do seed é o DB e Kafka fora
+  do ar não pode derrubá-lo (comportamento anterior preservado), mas degradar em silêncio trocaria
+  *"não propagou"* por *"não aconteceu"*.
+
+Validado: `inserted=1 skipped=0` sem aviso, e a mesma medição devolvendo `{"total": 14, "session": 3}`.
+
+**Documentação:** mora nos próprios artefatos — cabeçalho do `up.sh`, docstring do `seed.py` (com o
+aviso sobre key-que-guarda-estrutura) e comentários no `docker-compose.demo.yml`. Não há doc de
+`docs/` correspondente porque não há feature nova: é o laço de desenvolvimento.
+
+---
+
 ## Linha do tempo única do contato — "o que esta sessão originou" ✅ S1–S4 (2026-08-11)
 
 ### O que construímos na fatia 3 era meia feature

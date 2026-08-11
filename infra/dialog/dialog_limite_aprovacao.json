@@ -1,0 +1,39 @@
+{
+  "form_id": "dialog_limite_aprovacao",
+  "name": "Análise de aumento de limite",
+  "description": "Campos editáveis do pacote de aprovação. IMPORTANTE: usa `fields[]` numa question `interaction: form`, NÃO question nodes soltos com output_key. O ApprovalPanel monta `payload.edits` a partir dos FIELDS (padrão form_ext, ADR de aprovação) e o payload de decisão é {decision, source, choice, edits, field_edits} — sem `answers`. Com question nodes soltos o aprovador digita e o valor não chega a lugar nenhum: o workflow lê $.pipeline_state.<delegate>.edits.*. As DECISÕES não vivem aqui — vêm de `decisions[]` no delegate.context. Os dados do cliente também não: o DialogForm não interpola, então eles chegam como tags do ContextStore e são mascarados por política na aba Contexto.",
+  "default_locale": "pt-BR",
+  "locales": ["pt-BR"],
+  "tags": ["limite", "credito", "aprovacao"],
+  "nodes": [
+    {
+      "id": "intro",
+      "kind": "statement",
+      "text": {
+        "pt-BR": "Confira os dados da solicitação na aba Contexto (mascarados conforme seu perfil) e registre sua análise."
+      }
+    },
+    {
+      "id": "analise",
+      "kind": "question",
+      "prompt": { "pt-BR": "Análise de crédito" },
+      "interaction": "form",
+      "output_key": "analise",
+      "timeout_s": -1,
+      "fields": [
+        {
+          "id": "limite_aprovado",
+          "label": { "pt-BR": "Limite aprovado (R$) — igual ao solicitado aprova integralmente" },
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "parecer",
+          "label": { "pt-BR": "Parecer da análise" },
+          "type": "text",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

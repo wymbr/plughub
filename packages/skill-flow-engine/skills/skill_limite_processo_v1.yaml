@@ -1,0 +1,246 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aumento de limite — PROCESSO negocial (nível N3 / (a))
+#
+# Design: docs/product/limite-credito-3-niveis-design.md
+#
+# Perfil `workflow` (pool webhook): channel-abstract por CONTRATO — não sabe, e não
+# pode saber, por onde o cliente falou. Usa apenas invoke/delegate/choice/complete;
+# menu e notify são proibidos neste perfil (Arc 19).
+#
+# Recebe os dados já coletados pelo N2 (via context_json do workflow_trigger).
+# NÃO coleta — ver o invariante de coleta em skill_limite_entrada_v1.
+#
+# Dois delegates, e a diferença entre eles é o roteiro inteiro da demo:
+#   aprovar            → pool HUMANO em fila pull, resume_policy: offer
+#   disparar_entrega   → dispara o processo de ENTREGA e FECHA esta sessão
+#
+# DOIS RETOMADORES: enquanto `aprovar` está suspenso, o aprovador (pelo Console) e
+# o cliente (cancelando) podem retomar o MESMO workflow. Isso é regra de negócio,
+# não descuido — e é seguro por causa do lock terminal-uma-vez (Camada F): quem
+# perde a corrida recebe 409 nomeado, não "token não encontrado".
+# ─────────────────────────────────────────────────────────────────────────────
+
+id: skill_limite_processo_v1
+name: "Aumento de limite — processo"
+version: "1.0"
+description: |
+  Processo negocial de aumento de limite de crédito. Monta o pacote de análise,
+  delega a decisão a um aprovador humano em fila pull, e parqueia o resultado como
+  pendência de identidade para o próximo inbound do cliente (webchat não tem
+  outbound — o retorno é oportunista).
+classification:
+  type: vertical
+  domain: credito
+
+entry: montar_pacote
+
+steps:
+  # ══ Etapa 1 — o resumo read-only do pacote ═════════════════════════════════
+  # INVARIANTE DE MASCARAMENTO: o summary é UMA tag, logo UMA regra de masking.
+  # Portanto ele carrega só texto público. Cartão, CPF e valor viajam como tags
+  # SEPARADAS no delegate.context (etapa 2) para que a política por tag × role
+  # possa mascarar cada uma no seu grão.
+  - id: montar_pacote
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "approval.summary"
+      value:      "Pedido de aumento de limite para R$ {{@ctx.session.limite_solicitado}}. Titular identificado com posse de canal verificada. Dados do cartão na aba Contexto."
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: aprovar
+    on_failure: aprovar
+
+  # ══ Etapa 2 — delega a análise ao pool humano de crédito ═══════════════════
+  # O pool `aprovacao_credito` NÃO tem skill deployada: o pacote inteiro (título,
+  # resumo, DialogForm e decisões) vem daqui, do delegate.context. O gateway grava
+  # cada chave com prefixo `session.` no ContextStore da sessão-filha — é isso que
+  # põe os valores ao alcance de `masking.context_rules` na aba Contexto.
+  #
+  # customer_resumable/offer: além do aprovador, o CLIENTE pode retomar (cancelando)
+  # a partir de qualquer canal, por identidade. É o que faz o acesso 2 existir.
+  # `preview` declara o que o cliente vê da própria pendência, e com que máscara.
+  - id: aprovar
+    type: delegate
+    pool: aprovacao_credito
+    customer_resumable: true
+    resume_policy: offer
+    context:
+      title:          "Aumento de limite — análise de crédito"
+      summary:        "@ctx.approval.summary"
+      dialog_form_id: "dialog_limite_aprovacao"
+      decisions:      '[{"id":"aprovar","label":"Aprovar limite"},{"id":"recusar","label":"Recusar"}]'
+      # Alteração de limite exige posse verificada do autor da decisão.
+      approval_threshold: "possessed"
+      # Âncora da pendência — sem isto o cliente nunca encontra o próprio pedido.
+      contact_identifier: "@ctx.session.contact_identifier"
+      # Dados sensíveis como tags SEPARADAS → mascaradas por política na leitura.
+      #
+      # ⚠️ `cpf_titular`, e não `cpf`: o delegate.context é namespace COMPARTILHADO —
+      # as chaves `phone`/`email`/`cpf`/`princ` são lidas como ÂNCORAS DE IDENTIDADE
+      # por _anchors_from_context, não como campo de tela. Com `cpf` aqui, a âncora
+      # do pending virava um CPF inédito e o resolver provisionava um cliente NOVO;
+      # a pendência ficava indexada sob um customer_id que ninguém consulta.
+      # Se algum dia quisermos anexar o CPF como âncora progressiva, isso é uma
+      # decisão explícita — não um efeito colateral do nome de um campo de formulário.
+      numero_cartao:     "@ctx.session.numero_cartao"
+      cpf_titular:       "@ctx.session.cpf_titular"
+      limite_solicitado: "@ctx.session.limite_solicitado"
+      # Status de negócio: é o campo que o acesso 2 lê. `pending_workflow_get` não
+      # devolve etapa nem progresso — a pendência é binária —, então o status viaja
+      # aqui e volta pelo context_preview.
+      status:  "Em análise pelo time de crédito"
+      preview: '{"status": "plain", "numero_cartao": "last_4", "limite_solicitado": "plain"}'
+    timeout_hours: 48
+    business_hours: false
+    on_resume:
+      next: rotear_decisao              # decision=input → o humano decidiu
+    on_reject:
+      next: encerrar_cancelado_cliente  # decision=rejected → o CLIENTE cancelou
+    on_timeout:
+      next: encerrar_timeout
+
+  # ══ Etapa 3 — o WORKFLOW roteia; o aprovador só escolheu a decisão ═════════
+  - id: rotear_decisao
+    type: choice
+    conditions:
+      # Gate de confiança avaliado ANTES da escolha: decisão apenas `claimed`
+      # (resume sem JWT verificado) é recusada mesmo que a escolha seja "aprovar".
+      - field:    "$.pipeline_state.aprovar.verification_class"
+        operator: eq
+        value:    claimed
+        next:     encerrar_nao_verificado
+      - field:    "$.pipeline_state.aprovar.choice"
+        operator: eq
+        value:    aprovar
+        next:     registrar_aprovado
+    default: registrar_recusado
+
+  - id: registrar_aprovado
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "session.resultado"
+      value:      "aprovado"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: limpar_form_do_pacote
+    on_failure: limpar_form_do_pacote
+
+  - id: registrar_recusado
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "session.resultado"
+      value:      "recusado"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: limpar_form_do_pacote
+    on_failure: limpar_form_do_pacote
+
+  # ══ Etapa 3b — DESARMAR o pacote de aprovação antes de re-delegar ══════════
+  # As tags do pacote (`session.dialog_form_id`, `session.decisions`) são escritas
+  # pelo delegate de aprovação e NUNCA são limpas pela plataforma — só o
+  # `session.delegate_resume_token` é sobrescrito no delegate seguinte.
+  #
+  # Sem esta limpeza, o delegate de PARKING (etapa 4) herda um snapshot que o
+  # Console lê como "tarefa de aprovação": o mesmo formulário reaparece no inbox e,
+  # se alguém clicar em decidir, ele resume o parking com decision=input → o
+  # processo termina em `encerrar_sucesso` e o CLIENTE NUNCA RECEBE O RESULTADO.
+  # O acesso 3 é consumido por quem estava olhando a tela.
+  #
+  # Observado ao vivo em 2026-08-11. O smoke não pega — ninguém abre o Console
+  # durante ele, e o parking fica intacto. É defeito que só existe com humano.
+  - id: limpar_form_do_pacote
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "session.dialog_form_id"
+      value:      ""
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: limpar_decisions_do_pacote
+    on_failure: limpar_decisions_do_pacote
+
+  - id: limpar_decisions_do_pacote
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "session.decisions"
+      value:      ""
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: disparar_entrega
+    on_failure: disparar_entrega
+
+  # ══ Etapa 4 — parquear o resultado para o inbound oportunista ══════════════
+  # Webchat não tem outbound: não há como avisar o cliente. O delegate a um agente
+  # de I/O num canal inbound-only encerra em silêncio (o specialist vê que não há
+  # cliente conectado) e o workflow FICA suspenso, com a pendência indexada sob a
+  # identidade. O próximo inbound do cliente, por qualquer canal, retoma.
+  #
+  # resume_policy: AUTO — aqui não há o que perguntar; o resultado já existe e a
+  # entrega é a própria retomada. É esse `auto` que o N2 usa para distinguir o
+  # acesso 3 do acesso 2, sem nenhum flag nosso.
+  #
+  # NOTA: parking tem de ser `delegate`. O `collect` NÃO gera pendência — o engine
+  # envia customer_resumable/resume_policy, mas o endpoint não lê os campos
+  # (§7.4 do design doc).
+  # A espera pelo cliente vive num PROCESSO PRÓPRIO, não aqui. O motivo é duro e foi
+  # medido três vezes: a plataforma assume que sessão em pool HUMANO acaba quando o
+  # trabalho do humano acaba. Mantendo esta sessão viva depois da decisão, tudo que é
+  # session-scoped erra —
+  #   (1) o cartão do aprovador não some do Console;
+  #   (2) o pacote de aprovação seguia armado e o parking se passava por tarefa;
+  #   (3) ao cair o WS do aprovador (trocar de aba basta), `remove_conversation`
+  #       RESTAURA a membership dos SETs do pool e a sessão volta para a fila pull,
+  #       oferecendo Claim de novo sobre um item que já foi decidido.
+  # Fechar aqui resolve os três de uma vez, porque `complete` dispara `contact_closed`
+  # e é ele que a plataforma usa para limpar fila, cartão e snapshot.
+  - id: disparar_entrega
+    type: invoke
+    tool: workflow_trigger
+    input:
+      pool_id:           "limite_entrega"
+      tenant_id:         "$.tenant_id"
+      origin_session_id: "$.session_id"   # mantém a journey: a entrega herda a raiz
+      context_json: '{"session.contact_identifier": "{{@ctx.session.contact_identifier}}", "session.numero_cartao": "{{@ctx.session.numero_cartao}}", "session.limite_solicitado": "{{@ctx.session.limite_solicitado}}", "session.resultado": "{{@ctx.session.resultado}}", "session.limite_aprovado": "{{$.pipeline_state.aprovar.edits.limite_aprovado}}", "session.parecer": "{{$.pipeline_state.aprovar.edits.parecer}}"}'
+    on_success: encerrar_sucesso
+    on_failure: encerrar_sem_entrega
+
+  # ══ Desfechos ══════════════════════════════════════════════════════════════
+  - id: encerrar_sucesso
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_cancelado_cliente
+    type: complete
+    outcome: failed
+    issue_status: "cliente cancelou a solicitação durante a análise"
+
+  - id: encerrar_nao_verificado
+    type: complete
+    outcome: failed
+    issue_status: "decisão sob limiar de confiança (claimed < possessed) — recusa segura"
+
+  - id: encerrar_timeout
+    type: complete
+    outcome: failed
+    issue_status: "SLA de análise estourou sem decisão do aprovador"
+
+  # A decisão saiu, mas a entrega não foi agendada — o cliente ficaria sem resposta.
+  # Falha ALTA de propósito: é pior que o timeout, porque nada mais vai tentar.
+  - id: encerrar_sem_entrega
+    type: complete
+    outcome: failed
+    issue_status: "decisão registrada mas o processo de entrega não pôde ser disparado"

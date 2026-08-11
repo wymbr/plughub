@@ -1,0 +1,76 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aumento de limite — ENTREGA do resultado (N3, segundo processo)
+#
+# Design: docs/product/limite-credito-3-niveis-design.md
+#
+# Existe por um motivo estrutural, não por gosto de decompor: a análise acontece
+# num pool HUMANO, e a plataforma assume que sessão em pool humano termina quando o
+# trabalho do humano termina. Manter a sessão da análise viva para esperar o cliente
+# quebrou três mecanismos session-scoped (cartão no Console, snapshot de aprovação e
+# — o pior — membership de fila, que devolvia o item decidido ao inbox).
+#
+# Então a análise FECHA na decisão, e a espera vive aqui: um processo webhook que
+# nunca toca pool humano e pode ficar suspenso por dias sem incomodar ninguém.
+#
+# Herda a raiz da journey por `origin_session_id` — do ponto de vista do relatório,
+# intake → análise → entrega são três sessões do MESMO processo.
+# ─────────────────────────────────────────────────────────────────────────────
+
+id: skill_limite_entrega_v1
+name: "Aumento de limite — entrega do resultado"
+version: "1.0"
+description: |
+  Parqueia o resultado da análise como pendência de identidade e aguarda o cliente
+  voltar por qualquer canal. Webchat não tem outbound: o retorno é oportunista.
+  Perfil workflow — só invoke/delegate/choice/complete.
+classification:
+  type: vertical
+  domain: credito
+
+entry: parquear_resultado
+
+steps:
+  # Delegate a um agente de I/O num canal inbound-only: o specialist vê que não há
+  # cliente conectado (`customer_present` ausente), encerra em silêncio e o workflow
+  # FICA suspenso — com a pendência indexada sob a identidade do cliente.
+  #
+  # resume_policy AUTO: aqui não há o que perguntar. É esse `auto` que o agente de
+  # entrada usa para distinguir o acesso 3 ("resultado pronto") do acesso 2
+  # ("em análise", que é `offer`), sem nenhum flag nosso.
+  #
+  # Tem de ser `delegate`, não `collect`: o collect NÃO gera pendência — o engine
+  # envia customer_resumable/resume_policy mas o endpoint não lê os campos.
+  - id: parquear_resultado
+    type: delegate
+    pool: limite_retorno
+    customer_resumable: true
+    resume_policy: auto
+    context:
+      contact_identifier: "@ctx.session.contact_identifier"
+      numero_cartao:      "@ctx.session.numero_cartao"
+      limite_solicitado:  "@ctx.session.limite_solicitado"
+      resultado:          "@ctx.session.resultado"
+      limite_aprovado:    "@ctx.session.limite_aprovado"
+      parecer:            "@ctx.session.parecer"
+      status:             "Análise concluída — resultado disponível"
+      # O preview é o ÚNICO caminho pelo qual estes valores voltam ao agente de
+      # entrada no acesso 3: `pending_workflow_get` devolve o context_preview, nunca
+      # o context cru do delegate. Campo não declarado aqui não chega — e o agente
+      # de retorno narraria valores vazios.
+      preview: '{"status": "plain", "numero_cartao": "last_4", "resultado": "plain", "limite_aprovado": "plain", "parecer": "plain"}'
+    timeout_hours: 168        # 7 dias para o cliente voltar
+    on_resume:
+      next: encerrar_entregue
+    on_reject:
+      next: encerrar_entregue
+    on_timeout:
+      next: encerrar_nao_retirado
+
+  - id: encerrar_entregue
+    type: complete
+    outcome: resolved
+
+  - id: encerrar_nao_retirado
+    type: complete
+    outcome: failed
+    issue_status: "resultado disponível, cliente não retornou em 7 dias"

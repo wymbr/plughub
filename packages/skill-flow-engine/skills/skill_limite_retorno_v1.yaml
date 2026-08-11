@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Aumento de limite — agente de RETORNO (nível N1 / (c))
+#
+# Design: docs/product/limite-credito-3-niveis-design.md
+#
+# Faz I/O e nada mais: entrega o resultado da análise e colhe a ciência do cliente.
+# Não conhece a regra de crédito — recebe `resultado` pronto e o narra.
+#
+# É invocado em DOIS contextos, e o discriminador é `customer_present`:
+#
+#   (1) N3 · parquear_resultado — não há cliente conectado. O agente encerra em
+#       SILÊNCIO, sem chamar workflow_resume: o N3 fica suspenso e a pendência
+#       permanece indexada sob a identidade. É assim que "webchat não tem outbound"
+#       vira "o retorno espera o próximo inbound".
+#
+#   (2) N2 · retomar_resultado — o cliente está do outro lado, agora. O agente roda
+#       como conference specialist DENTRO da sessão dele (sem troca de canal),
+#       entrega o resultado e resume os DOIS: o processo (N3) e o delegate do N2.
+#
+# `customer_present` é o sinal certo porque falha para o lado seguro: sem ele, adia.
+# ─────────────────────────────────────────────────────────────────────────────
+
+id: skill_limite_retorno_v1
+name: "Aumento de limite — retorno ao cliente"
+version: "1.0"
+description: |
+  Agente de I/O que entrega o resultado da análise de aumento de limite. Sem cliente
+  conectado, encerra em silêncio e deixa o processo suspenso (inbound oportunista).
+  Com cliente presente, narra o desfecho e retoma processo e chamador.
+classification:
+  # O enum aceito é vertical | horizontal | orchestrator — "specialist" descreve o
+  # PAPEL na conferência (role do participante), não a classificação do artefato.
+  # São dois fatos diferentes e não cabem no mesmo campo.
+  type: vertical
+  domain: credito
+
+entry: verificar_canal
+
+steps:
+  # ══ Há cliente do outro lado agora? ════════════════════════════════════════
+  - id: verificar_canal
+    type: choice
+    conditions:
+      - field:    "@ctx.session.customer_present"
+        operator: eq
+        value:    "true"
+        next:     rotear_resultado
+    default: aguardar_inbound
+
+  # Parking: encerra SEM workflow_resume. O processo segue suspenso de propósito.
+  - id: aguardar_inbound
+    type: complete
+    outcome: resolved
+
+  # ══ Entrega ════════════════════════════════════════════════════════════════
+  - id: rotear_resultado
+    type: choice
+    conditions:
+      - field:    "@ctx.session.resultado"
+        operator: eq
+        value:    "aprovado"
+        next:     notificar_aprovado
+    default: notificar_recusado
+
+  - id: notificar_aprovado
+    type: notify
+    message: "🎉 Boa notícia! Seu aumento de limite foi **aprovado**.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Novo limite: **R$ {{@ctx.session.limite_aprovado}}**\n\nO limite já está disponível para uso."
+    on_success: confirmar_ciencia
+    on_failure: confirmar_ciencia
+
+  - id: notificar_recusado
+    type: notify
+    message: "Sua solicitação de aumento de limite foi **analisada e não pôde ser aprovada** neste momento.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Parecer: {{@ctx.session.parecer}}\n\nVocê pode solicitar de novo em 30 dias."
+    on_success: confirmar_ciencia
+    on_failure: confirmar_ciencia
+
+  - id: confirmar_ciencia
+    type: menu
+    prompt: "Posso ajudar em mais alguma coisa?"
+    interaction: button
+    options:
+      - id: nao
+        label: "👍 Está tudo certo"
+      - id: atendente
+        label: "💬 Falar com um atendente"
+    output_as: ciencia
+    timeout_s: 600
+    on_success: retornar_processo
+    on_failure: retornar_processo
+    on_timeout: retornar_processo
+    on_disconnect: retornar_processo
+
+  # ══ Retomar o PROCESSO (N3) ════════════════════════════════════════════════
+  # O token veio no delegate.context do N2, que o leu da pendência.
+  - id: retornar_processo
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token:  "@ctx.session.workflow_resume_token"
+      decision:      "input"
+      resume_origin: "@ctx.session.resume_origin"
+      payload:
+        entregue: "true"
+        ciencia:  "$.pipeline_state.ciencia"
+    on_success: retornar_chamador
+    on_failure: retornar_chamador
+
+  # ══ Retomar o CHAMADOR (o delegate do N2) ══════════════════════════════════
+  # Token escrito pelo próprio step delegate. Ausente quando este agente roda no
+  # contexto (1) — mas ali nunca chegamos aqui.
+  - id: retornar_chamador
+    type: invoke
+    tool: workflow_resume
+    input:
+      resume_token:  "@ctx.session.delegate_resume_token"
+      decision:      "input"
+      resume_origin: "@ctx.session.resume_origin"
+    on_success: finalizar
+    on_failure: finalizar
+
+  - id: finalizar
+    type: complete
+    outcome: resolved

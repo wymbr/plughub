@@ -133,6 +133,18 @@ channel_endpoints:
     display_name: "Portabilidade — processo (interno)"
     origin: internal
 
+  - channel: webhook
+    identifier: skill_limite_processo_v1
+    pool_id: limite_processo
+    display_name: "Aumento de limite — processo (interno)"
+    origin: internal
+
+  - channel: webhook
+    identifier: skill_limite_entrega_v1
+    pool_id: limite_entrega
+    display_name: "Aumento de limite — entrega (interno)"
+    origin: internal
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pools
 # ─────────────────────────────────────────────────────────────────────────────
@@ -457,6 +469,72 @@ pools:
     description: "Pool de confirmação de portabilidade com o cliente (delegate I/O)"
     channel_types: [webchat, whatsapp]
     sla_target_ms: 86400000  # 24h em ms
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Aumento de limite de crédito — cenário de referência do modelo de 3 níveis
+  # Design: docs/product/limite-credito-3-niveis-design.md
+  #
+  #   limite_ia         → N2+N1 (b+c): identidade, pendência e I/O com o cliente
+  #   limite_processo   → N3 (a): a regra de negócio, channel-abstract
+  #   limite_retorno    → N1 (c): entrega o resultado; parqueia quando não há cliente
+  #   aprovacao_credito → aprovador HUMANO em fila pull (sem skill: o pacote vem
+  #                       inteiro do delegate.context do N3)
+  # ───────────────────────────────────────────────────────────────────────────
+  # Capacidade deliberadamente baixa: o tenant demo já declara mais do que contrata
+  # (ver a nota em gate_promocao_ia). Cenário de demo não precisa de volume, e
+  # estourar a validação de capacidade derrubaria o promote de outros pools.
+  - pool_id: limite_ia
+    agent_kind: ai
+    deploy: { skill_id: skill_limite_entrada_v1, max_concurrent_sessions: 5 }
+    description: "Aumento de limite — entrada (identidade + pendência + coleta)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 300000
+
+  - pool_id: limite_processo
+    agent_kind: ai
+    deploy: { skill_id: skill_limite_processo_v1, max_concurrent_sessions: 10 }
+    # Disparado pelo limite_ia via workflow_trigger (endereçado por POOL).
+    # Suspende duas vezes: na análise humana e no parking do resultado.
+    description: "Pool webhook — processo de aumento de limite (N3)"
+    channel_types: [webhook]
+    skill_id: skill_limite_processo_v1
+    # Endpoint (DNIS) — resolução determinística; sem isto o trigger cai no scan.
+    webhook_skill_id: skill_limite_processo_v1
+    sla_target_ms: 172800000  # 48h
+
+  # A ESPERA pelo cliente vive aqui, não no limite_processo. A análise roda em pool
+  # humano e a plataforma limpa fila/cartão/snapshot no `contact_closed` — manter a
+  # sessão da análise viva para esperar o cliente devolvia o item decidido à fila
+  # pull. Ver o cabeçalho de skill_limite_entrega_v1.
+  - pool_id: limite_entrega
+    agent_kind: ai
+    deploy: { skill_id: skill_limite_entrega_v1, max_concurrent_sessions: 10 }
+    description: "Pool webhook — espera o cliente voltar para entregar o resultado"
+    channel_types: [webhook]
+    skill_id: skill_limite_entrega_v1
+    webhook_skill_id: skill_limite_entrega_v1
+    sla_target_ms: 604800000  # 7 dias
+
+  - pool_id: limite_retorno
+    agent_kind: ai
+    deploy: { skill_id: skill_limite_retorno_v1, max_concurrent_sessions: 5 }
+    # Delegate I/O. Invocado em dois contextos (parking silencioso × entrega ao
+    # vivo); o discriminador é customer_present. Ver o cabeçalho do skill.
+    description: "Aumento de limite — entrega do resultado ao cliente (delegate I/O)"
+    channel_types: [webchat, whatsapp]
+    sla_target_ms: 86400000  # 24h
+
+  - pool_id: aprovacao_credito
+    agent_kind: human
+    dispatch_mode: pull
+    # SEM bloco deploy: o pacote de aprovação (título, resumo, dialog_form_id,
+    # decisions[]) vem do delegate.context do N3 e é renderizado pelo
+    # DialogFormRenderer genérico do Console. Mesmo padrão do aprovacao_deploy.
+    # ⚠️ Só quem tem ABAC approvals.operacao + approvals.decide enxerga e decide —
+    # no seed, apenas admin@plughub.local. Conceder ao operator na tela de Acesso.
+    description: "Pool de aprovadores — análise de aumento de limite"
+    channel_types: [webchat]
+    sla_target_ms: 172800000  # 48h
 
   - pool_id: dialog_runner
     agent_kind: ai
