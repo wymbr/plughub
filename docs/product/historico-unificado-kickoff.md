@@ -58,6 +58,12 @@ leitor está errado (arquivo/caminho), não o código — **inconclusivo, não "
 
 **Escreva a previsão antes de rodar**, com o total, não o delta. Três ramos:
 
+> **Previsão já escrita (2026-08-12, sessão de desenho — não rodada).** Espero ocorrências vivas em
+> `handle_delegate` **e** `handle_delegate_conference`, e **zero** em `handle_collect`. O total impresso pelo
+> `grep` inclui os comentários que documentam a ausência, então o que conta é o **token da leitura**, não a
+> menção. Registrada aqui de propósito: previsão que só existe no chat não sobrevive ao `/clear`, e uma
+> previsão feita depois do resultado não é previsão.
+
 - ocorrências em `handle_delegate` **e** `handle_delegate_conference`, **zero** em `handle_collect`
   → defeito confirmado, seguir para o trabalho;
 - ocorrências nos três → o comentário do YAML envelheceu; **parar e remedir** por que o parking usa
@@ -146,7 +152,9 @@ Decidir isto **fecha a decisão aberta #1** e é entregável de F0 tanto quanto 
 ## Fora de escopo nesta sessão
 
 - Qualquer UI (F3/F4). O ADR é explícito: não começar pela tela.
-- `journey_merge` no intake e o carimbo de endereço de entrada (F1).
+- `journey_merge` no intake (F1). ~~e o carimbo de endereço de entrada~~ — **o carimbo de endereço saiu do
+  arco em 2026-08-12** (ADR D12b): endpoint→pool é 1:1, então o pool o substitui sem perda medida. No lugar
+  dele entrou **F1b** (`entrou por`: first-write-wins em `sessions.pool_id`), que também não é desta sessão.
 - `root_session_id` em `/reports/segments` (F2).
 - `ContextStorePersister` (F5).
 - Lente de faixas por personagem (destino registrado).

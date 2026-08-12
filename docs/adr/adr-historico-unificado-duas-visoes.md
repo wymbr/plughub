@@ -152,9 +152,23 @@ aberta. A lente A mostraria a consulta como irmã, sem dizer que rodou dentro da
 | Sistema de entrada | canal + endereço discado | `sessions.channel` + carimbo de F1 |
 | Sistema que retomou | `resume_origin` | `session_transitions` (existe, invisível) |
 
-**Premissa aceita:** a plataforma só permite interação com sistemas externos via **webhook cadastrado**.
+~~**Premissa aceita:** a plataforma só permite interação com sistemas externos via **webhook cadastrado**.
 Com a Fase E do `ChannelEndpoint` (*"o registro é agora o único resolvedor; não resolveu ⇒ a sessão não
-nasce"*), toda entrada externa tem linha no registro, logo id estável e rótulo de exibição.
+nasce"*), toda entrada externa tem linha no registro, logo id estável e rótulo de exibição.~~
+
+> ⚠️ **Premissa FALSA — medido 2026-08-12.** A Fase E existe **só no webhook** (`main.py:1399-1406`).
+> `voice` (`adapters/voice.py:283-287`) e `webchat` (`main.py:517-519`) consultam o registro mas caem em
+> pool default quando não resolve; **`whatsapp`, `sms` e `email` nunca consultam** (usam `*_default_pool_id`);
+> `webrtc` (`adapters/webrtc.py:1443`) resolve com `channel="webrtc"`, ausente do enum de `ChannelEndpoint`
+> (`schemas/src/channel-endpoint.ts:11-18`), logo **nunca casa**. `channel_endpoints` tem 13 linhas de webhook
+> e 2 de webchat; os demais canais têm zero.
+>
+> Além disso, o endereço morre **antes do evento**, em dois pontos: `ResolvedEndpoint`
+> (`endpoint_resolver.py:76-90`) devolve só `pool_id`, sem `id` nem `identifier`; e
+> `NormalizedInboundEvent`/`ContactOpenEvent` (`channel-gateway/models.py:209-237`) não têm campo de endereço.
+>
+> **Isto é o que torna D12b possível:** como o endereço custaria três camadas mais seis adaptadores e o
+> pool o substitui sem perda medida (M2 = 1:1), o carimbo de `endpoint_id` sai do arco inteiro.
 
 Escopo da premissa: ela dá identidade ao **inbound**. Não cobre o outbound (PlugHub chamando CRM,
 calendar), que segue pelo caminho MCP — ver §5.
@@ -229,7 +243,55 @@ Decisão: filtrar por `segments.pool_id` (`session_id IN (SELECT … FROM segmen
 que responde *"atendido por"* em vez de *"terminou em"*. É mudança de semântica de um filtro existente —
 registrada como decisão, não aplicada como correção silenciosa.
 
-Filtros da visão 1: **período · canal · DNIS · pool**. O DNIS depende de F1.
+Filtros da visão 1: ~~**período · canal · DNIS · pool**. O DNIS depende de F1.~~ — **emendado, ver D12b.**
+
+### D12b — Emenda medida (2026-08-12): o DNIS sai, e o pool vira dois fatos
+
+D12 acertou o diagnóstico e errou o remédio pela metade. Medições em `tenant_demo`:
+
+| # | Medição | Resultado |
+|---|---|---|
+| M1 | `sessions.pool_id` × pool do primeiro segmento | **46 divergentes em 314** (14,6%), todas orgânicas |
+| M1b | os 46, por par | 5 pares, soma exata, **sem resíduo** — não há segundo mecanismo |
+| M2 | endpoints por pool (`channel_endpoints`) | **1:1** — 13 webhook/13 pools, 2 webchat/2 pools |
+| M3 | canais por pool (dado) | todos `1` — mas por **ausência de amostra**, não por estrutura |
+
+**Filtros da visão 1 passam a ser: `período · canal · entrou por · atendido por`.**
+
+- **`DNIS` sai, e não volta.** M2 mostra 1:1 — nenhum pool tem dois endereços, logo filtrar por pool não
+  perde nada que o DNIS daria. E `whatsapp`/`voice`/`sms`/`email` têm **zero** linhas em `channel_endpoints`.
+  **Consequência de escopo: F1 fica só com o `journey_merge`** — o carimbo de `endpoint_id` sai do arco.
+- **`canal` fica.** M3 mostra todos os pools com um canal só, mas isso mede a ausência de whatsapp no
+  ambiente, não a estrutura: 4 pools de `tenant_demo.yaml` declaram `[webchat, whatsapp]`. A assimetria que
+  decide não é fragilidade, é preço — tirar o DNIS economiza três camadas e seis adaptadores; tirar o canal
+  economiza **zero**, porque `channel` já está preenchido em todas as sessões.
+- **`pool` vira dois filtros com nomes distintos.** *"entrou por"* (`sessions.pool_id` com **first-write-wins**)
+  e *"atendido por"* (a subconsulta em `segments` que D12 já decidiu). Se os dois se chamarem "Pool" na tela,
+  o operador lê um e recebe o outro — o erro que D12 existe para corrigir.
+
+**O carimbo `entrou por` não é campo novo: é parar de apagar um que já existe.** O channel-gateway resolve o
+pool antes de publicar `conversations.inbound`, e `parse_inbound` já o escreve (`analytics-api/models.py:119-150`).
+`pool_id` **está** em `_IDENTITY_FIELDS`, mas `_learn_session_identity` faz `if value: entry[field] = value`
+(`consumer.py:133-136`) — a cache segue o último — e `_inject_session_identity` só preenche ausência
+(`:152-154`). O padrão correto já existe no mesmo arquivo para `opened_at` (`:137-139`, `:155-160`), sob o
+comentário *"A abertura é imutável"*.
+
+Os 46, nomeados:
+
+```
+limite_processo     → aprovacao_credito      19
+wrapup_detached_ia  → retencao_humano-int    12
+sac_ia              → retencao_humano        12
+formfill_demo_ia    → formfill_demo           2
+gate_promocao_ia    → aprovacao_deploy         1
+```
+
+Quatro pares são maquinaria interna. **`sac_ia → retencao_humano` são 12 contatos de cliente** em webchat que
+somem hoje ao filtrar por `sac_ia`. E como M3 foi computada sobre a coluna que mente, a correção não conserta
+só o filtro: `limite_processo` aparece com 1 sessão tendo sido a porta de entrada de 20 — a **atribuição de
+volume por pool** está errada em todo relatório que agrupa por `sessions.pool_id`.
+
+Desenho das telas: [`../product/historico-unificado-telas-design.md`](../product/historico-unificado-telas-design.md).
 
 ---
 
@@ -281,11 +343,24 @@ Ambos são pertença: um diz *de que processo esta sessão faz parte*, o outro *
    (`agente_portabilidade_intake_v1`, `skill_limite_entrada_v1`). Tudo o mais já existe: a tool, o topic
    `journey.merges`, a tabela `journey_aliases`, o union-find na leitura, `root_session_id` no
    `PendingEntry`.
-2. **Endereço de entrada, imutável.** Carimbar o `endpoint_id` do `ChannelEndpoint` (não a slug — slug é
-   nome, e nome muda; linha de histórico apontando para slug renomeada mente retroativamente).
-   **Deve entrar no padrão do cache de identidade do consumer + carimbo no close** — `sessions` é
-   `ReplacingMergeTree` e todo writer manda a linha inteira; uma coluna nova sem esse cuidado herda
-   exatamente o defeito do `pool_id` (D12).
+2. ~~**Endereço de entrada, imutável.** Carimbar o `endpoint_id` do `ChannelEndpoint`…~~ — **REMOVIDO do
+   arco (D12b, 2026-08-12).** M2 mediu endpoint→pool **1:1**, então o pool substitui o endereço sem perda;
+   e a premissa que dava identidade ao endereço (D7) é falsa em 5 dos 6 canais. **F1 fica só com o
+   `journey_merge`.**
+
+### F1b — `entrou por`: first-write-wins em `sessions.pool_id` *(novo, D12b)*
+
+Independente de F0 — nenhum bloqueia o outro. Estender a `_learn_session_identity`/`_inject_session_identity`
+o tratamento que `opened_at` já recebe, de modo que o pool de entrada não seja sobrescrito pelo
+`routed`/`queued`/`closed`. Não há produtor novo: o valor já chega em `parse_inbound`.
+
+Antes de virar a chave, **medir quem lê `sessions.pool_id` hoje** — dar a ela o significado *pool de entrada*
+é **definir** uma coluna que hoje não tem significado nenhum (é o que escreveu por último), mas quem depender
+do acidente quebra em silêncio.
+
+Cuidado registrado: derivar o pool de entrada do primeiro segmento **não** serve como alternativa — 5 sessões
+do ambiente têm pool e **nenhum** segmento (abandono antes de qualquer agente entrar), que é justamente o caso
+que um relatório de fila precisa ver.
 
 ### F2 — `root_session_id` em `/reports/segments` (D10)
 
@@ -385,9 +460,20 @@ Todos de 2026-08-12, salvo indicação.
 | 10 | **`mcp.audit` não tem produtor vivo**: `McpInterceptor` nunca é instanciado; `engine-runner.ts:126` faz `fetch` JSON-RPC cru sem auditar. Existe um topic órfão `audit.mcp_calls` (nome divergente) sem consumidor | varredura |
 | 11 | `/v1/audit/mcp-calls` **seleciona `actor_id` e o descarta** antes de responder; `session_timeline` ainda tem `segment_id`, que a query nem seleciona | `audit.py:170-203` |
 | 12 | **Sobreposição existe entre contatos**, não só entre segmentos: o acesso 2 roda enquanto a análise está aberta | cenário de referência |
+| 13 | **46 sessões em 314 (14,6%)** saem com `pool_id` diferente do pool de entrada — 5 pares, soma exata, todas orgânicas. Uma delas (`sac_ia → retencao_humano`, 12) são contatos de CLIENTE que somem do filtro | M1/M1b, 2026-08-12 |
+| 14 | **endpoint→pool é 1:1** (13 webhook/13 pools, 2 webchat/2 pools); `whatsapp`/`voice`/`sms`/`email` têm **zero** endpoints | `channel_endpoints`, 2026-08-12 |
+| 15 | **A Fase E do `ChannelEndpoint` só existe no webhook** — os outros 5 canais caem em pool default ou nem consultam; `webrtc` resolve com um valor de canal ausente do enum | leitura de código, 2026-08-12 |
+| 16 | **Seeds escrevem `segments` direto no ClickHouse sem carimbar `origin`**, logo saem como `live`. 15 sessões sintéticas no pool de produção `sac_ia`. O discriminador construído para isolá-las não é usado por quem as escreve | `seed_deploy_lens_demo.sh:61`, `seed_epoch_demo.sh:63` |
+| 17 | **`voice.py:236,247` chamam `_open_session`/`_route_inbound`, que não têm definição em lugar nenhum do pacote.** O teste as **cria** como `AsyncMock` e depois afirma `assert_awaited_once` — um teste que só pode passar, sobre um método que a produção não tem | grep em `packages/channel-gateway`, 2026-08-12 |
 
 Os achados **9, 10 e 11** estão fora do escopo deste ADR mas merecem item próprio — um gate de LGPD que
 a documentação dá por fechado é o pior lugar possível para doc-descreve-config.
+
+Os achados **16 e 17** também são item próprio, e pelo mesmo motivo estrutural: nos dois, o mecanismo que
+existiria para impedir o defeito **está construído e não é usado por quem escreve** — `origin`, no caso do
+seed; o teste, no caso do voice. O 17 é o mais sério: `voice` é canal que a documentação dá por entregue, e a
+suíte é verde porque afirma sobre um mock que ela mesma criou. Não pertence a este arco, mas explica por que
+não existe uma sessão de voz no ambiente — e, portanto, por que M3 não pôde decidir nada sobre canal.
 
 ---
 

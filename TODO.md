@@ -195,10 +195,21 @@ Consequência: a pertença se reparte, e só metade precisa de merge.
   `handle_collect`; migrar `skill_limite_entrega_v1.parquear_resultado` de `delegate` para `collect`,
   preservando o timeout de 7 dias. **Confirmar o defeito em `handle_collect` antes de construir** —
   ele está registrado no YAML, não medido por nós.
-- **F1 · carimbos de pertença** — `invoke journey_merge` no intake (a tool, o topic, o union-find e o
-  `root_session_id` no `PendingEntry` já existem); e **endereço de entrada imutável** (`endpoint_id` do
-  `ChannelEndpoint`, nunca a slug), que **deve** entrar no padrão do cache de identidade do consumer,
-  senão herda o defeito do `pool_id`.
+- **F1 · `journey_merge` no intake** — a tool, o topic, o union-find e o `root_session_id` no
+  `PendingEntry` já existem. ~~+ endereço de entrada (`endpoint_id`)~~ **REMOVIDO 2026-08-12 — ver F1b.**
+- **F1b · `entrou por`: first-write-wins em `sessions.pool_id`** *(novo, ADR D12b — independente de F0)*.
+  Estender a `_learn_session_identity`/`_inject_session_identity` (`analytics-api/consumer.py:133-160`) o
+  tratamento que `opened_at` já recebe. **Não há produtor novo**: `parse_inbound` já escreve o pool de
+  entrada (`models.py:119-150`); ele é apagado depois pelo `routed`/`queued`/`closed`, porque `sessions`
+  é RMT de linha inteira. `pool_id` **está** em `_IDENTITY_FIELDS`, mas a cache segue o ÚLTIMO
+  (`if value: entry[field] = value`) e a injeção só preenche ausência — protegido contra sumiço,
+  desprotegido contra sobrescrita.
+  **Medido:** 46 sessões em 314 (14,6%) divergem, em 5 pares que somam exato, todas orgânicas. Uma delas
+  — `sac_ia → retencao_humano`, 12 — são **contatos de cliente** que somem do filtro hoje.
+  **Antes de virar a chave:** medir quem lê `sessions.pool_id`. Dar-lhe o significado *pool de entrada* é
+  **definir** uma coluna que hoje não tem significado nenhum, mas quem depender do acidente quebra calado.
+  **Não derivar do primeiro segmento:** 5 sessões do ambiente têm pool e nenhum segmento (abandono antes
+  de qualquer agente entrar) — exatamente o caso que um relatório de fila precisa ver.
 - **F2** · `root_session_id` em `/reports/segments`, **com isenção da janela de data** quando presente.
 - **F3** · visão 1 (contatos + chip de processo + direção).
 - **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
@@ -214,6 +225,54 @@ métrica de cabeçalho (lacuna registrada, não fechada).
 
 **A verificar antes de construir:** o literal que o cliente usa em `messages.author_role` — foi suposto
 em D9, não medido.
+
+**Filtros da visão 1, revisados e medidos (ADR D12b):** `período · canal · entrou por · atendido por`.
+O **DNIS saiu e não volta** — endpoint→pool é **1:1** (13 webhook/13 pools, 2 webchat/2 pools), logo o pool
+o substitui sem perda; e `whatsapp`/`voice`/`sms`/`email` têm **zero** linhas em `channel_endpoints`. O
+**canal fica**: tirá-lo economizaria zero (já está preenchido em todas as sessões) e 4 pools do demo
+declaram `[webchat, whatsapp]`, então o pool não o subsume por config — só por ausência de amostra.
+
+---
+
+## Seeds escrevem substrato de produção sem carimbar `origin` *(achado 2026-08-12, ao medir o histórico)*
+
+`infra/test/seed_deploy_lens_demo.sh:61` e `infra/test/seed_epoch_demo.sh:63` inserem `segments` **direto
+no ClickHouse por HTTP**, fora do pipeline de eventos — daí não nascer linha em `sessions` (15 sessões
+órfãs medidas). A assinatura é `started_at` em `10:00:00.000` exato, `pool_id='sac_ia'`, `channel='webchat'`.
+
+**O defeito não é a órfã: é que a lista de colunas do INSERT não inclui `origin`**, então as linhas caem no
+default e saem como `live`. O discriminador `origin: live|import|reeval` foi construído exatamente para
+manter substrato não-produtivo fora dos relatórios, com filtro default `live` na camada de leitura — e o
+escritor passa por fora do mecanismo que existe para ele. É o mesmo formato de *"fonte declarativa tem
+aplicador separado"*: o mecanismo existe, quem escreve não o usa, e nada fica vermelho.
+
+Efeito medido: `sac_ia` tem 85 contatos reais **mais** 15 sessões sintéticas em `segments`, indistinguíveis
+por query. Para a lista de contatos não vaza (as órfãs caem fora ao juntar com `sessions`), mas vaza em tudo
+que agrega `segments` sem juntar — incluindo o filtro *atendido por* de D12, se implementado como agregação
+em vez de subconsulta.
+
+Conserto barato: os seeds carimbarem `origin`. Vale também um gate que reprove INSERT em tabela de substrato
+sem a coluna — senão o próximo seed repete.
+
+---
+
+## `voice.py` chama dois métodos que não existem, e o teste os fabrica *(achado 2026-08-12)*
+
+`adapters/voice.py:236` e `:247` chamam `self._open_session(...)` e `self._route_inbound(...)`. **Não há
+definição de nenhum dos dois em lugar nenhum de `packages/channel-gateway`** — nem em `ChannelAdapter`
+(`adapters/base.py:28-73`), nem em `VoiceAdapter`. As únicas outras ocorrências estão em
+`tests/test_voice_adapter.py:116,118`, que os atribui como `AsyncMock` e depois afirma
+`assert_awaited_once()` (`:350-351`).
+
+Ou seja: o teste **cria** o método que a produção não tem e então verifica que ele foi chamado. É o caso
+canônico de *"um teste que não pode reprovar é pior que teste nenhum"* — só que agravado, porque não é um
+verde por ausência de amostra, é um verde por o próprio teste ter suprido o que faltava.
+
+Consequência esperada: o caminho inbound de voz levanta `AttributeError` ao ser alcançado. Não medido em
+runtime — **não há uma única sessão de voz no ambiente**, o que é consistente com a hipótese e é, por si só,
+o sintoma que ninguém leu. Antes de consertar, decidir se o alvo é implementar os dois métodos (a
+documentação os descreve em `docs/arcos/channel-gateway-multi-channel.md:163,183`) ou reescrever o caminho
+sobre os helpers que os outros adaptadores usam.
 
 ---
 
