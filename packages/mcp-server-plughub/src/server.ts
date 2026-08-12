@@ -1053,14 +1053,36 @@ function applyMaskingTypeToValue(raw: string, type: import("@plughub/schemas").C
  */
 async function applyContextMaskingDynamic(
   rawHash:      Record<string, string>,
-  role:         string,
+  /**
+   * TODOS os papéis do visualizador (claim `roles` do JWT), não um só.
+   *
+   * Era `role: string` alimentado por `payload["role"]` — claim que **não existe**:
+   * o `create_access_token` da auth-api emite `roles` (array). O `?? "operator"` do
+   * call site disparava SEMPRE, e com isso todo visualizador — admin e supervisor
+   * inclusive — era tratado como operator, tornando a regra `* → supervisor → plain`
+   * inalcançável. Medido na tela em 2026-08-12: admin e operator viam o MESMO
+   * `***1111`.
+   *
+   * Sobreviveu porque falha SEGURO: o erro mascara DEMAIS, nunca de menos. Ninguém
+   * repara em máscara sobrando — só em máscara faltando. É preciso testar que o
+   * supervisor CONSEGUE ver em claro, e não só que o operator não consegue.
+   *
+   * Recebe o array (em vez de `roles[0]`, como fazem os 4 call sites irmãos) porque
+   * aqui a escolha importa: um usuário `["developer","admin"]` seria tratado como
+   * `developer` pelo `[0]` e perderia o privilégio de supervisor.
+   */
+  roles:        string[],
   allowedNs:    string[],
   allowTags:    string[],
   tenantId:     string,
 ): Promise<Record<string, unknown>> {
   const config       = await getContextMaskingConfig(tenantId)
   // "Who is a supervisor" is config-driven (masking config), not fixed in code.
-  const isSupervisor = config.supervisor_roles.includes(role)
+  const isSupervisor = roles.some(r => config.supervisor_roles.includes(r))
+  // Papel usado para casar REGRA: o de supervisor quando houver (é o mais
+  // permissivo e o que a regra `*` endereça); senão o primeiro declarado.
+  const role         = roles.find(r => config.supervisor_roles.includes(r))
+                       ?? roles[0] ?? "operator"
   const result: Record<string, unknown> = {}
 
   for (const [tag, raw] of Object.entries(rawHash)) {
@@ -1331,8 +1353,26 @@ export async function startServer(config: ServerConfig): Promise<void> {
         else if (delta < -0.1) trend = "declining"
       }
 
-      // Viewer role — taken from verified JWT payload for masking decisions
-      const viewerRole = (payload["role"] as string) ?? "operator"
+      // Viewer roles — taken from verified JWT payload for masking decisions.
+      // ⚠️ O claim emitido pela auth-api é `roles` (ARRAY); `role` singular não
+      // existe no token (`jwt_utils.create_access_token`). Ler só `role` fazia o
+      // fallback disparar sempre e todo visualizador virar `operator` — ver a nota
+      // em `applyContextMaskingDynamic`. Os call sites irmãos (851, 869, 1265,
+      // 1595) já liam o array; este era o único que não.
+      const viewerRoles: string[] = [
+        ...(typeof payload["role"] === "string" ? [payload["role"] as string] : []),
+        ...(Array.isArray(payload["roles"]) ? (payload["roles"] as string[]) : []),
+      ].filter(Boolean)
+      if (viewerRoles.length === 0) {
+        // Degradação nunca é silenciosa: sem papel, mascaramos como operator (mais
+        // restritivo), mas dizemos POR QUE — senão "mascarou demais" é indistinguível
+        // de "a política está certa".
+        console.warn(
+          "[supervisor_state] JWT sem `role`/`roles` — mascarando como 'operator' " +
+          "por segurança. Um supervisor legítimo verá dados mascarados até isto ser corrigido.",
+        )
+        viewerRoles.push("operator")
+      }
 
       // Read tenant_id, pool_id and historical context from session meta
       let tenantId = ""
@@ -1385,7 +1425,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         try {
           const hash = await redis.hgetall(`${tenantId}:ctx:${sessionId}`)
           if (hash && Object.keys(hash).length > 0) {
-            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRole, operatorNamespaces, operatorAllowTags, tenantId)
+            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRoles, operatorNamespaces, operatorAllowTags, tenantId)
           }
         } catch { /* non-fatal */ }
       }
