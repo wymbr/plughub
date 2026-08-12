@@ -334,9 +334,16 @@ steps:
   # ── Etapa 3e: menu de continuidade (pendência encontrada) ────────────────────
   # Informa o cliente que há um processo de portabilidade pendente e pergunta
   # se deseja continuar, cancelar ou iniciar um novo atendimento.
+  # ⚠️ SEM markdown nas mensagens ao cliente (corrigido 2026-08-12). O webchat usa
+  # `textContent`: `**negrito**` sai com os asteriscos literais. Pior aqui do que
+  # em qualquer outro lugar, porque `numero_atual` chega MASCARADO do
+  # `context_preview` (***4321) — o negrito produzia `*****4321**`, arruinando a
+  # leitura justamente na cena que demonstra masking cross-sessão. Máscara e
+  # ênfase disputam o mesmo caractere; quem já está mascarado não leva negrito.
+  # As quebras vêm de `\n`, que o `.msg` do webchat honra (white-space: pre-wrap).
   - id: menu_continuidade
     type: menu
-    prompt: "✅ Identificamos que sua portabilidade do número **{{$.pipeline_state.pendencia.context.numero_atual}}** para **{{$.pipeline_state.pendencia.context.operadora_destino}}** foi **aprovada pela operadora** e está aguardando sua confirmação!\n\nO que deseja fazer?"
+    prompt: "✅ Identificamos que sua portabilidade do número {{$.pipeline_state.pendencia.context.numero_atual}} para {{$.pipeline_state.pendencia.context.operadora_destino}} foi aprovada pela operadora e está aguardando sua confirmação!\n\nO que deseja fazer?"
     interaction: button
     options:
       - id: continuar

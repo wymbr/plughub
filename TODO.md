@@ -162,6 +162,88 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(reenquadrado 2026-08-12; sessão própria)*
+
+> Reformulação do usuário, e ela é mais exigente do que "melhorar o Workflow trace": **o objetivo
+> não é o histórico do workflow, é saber quais CONTATOS estão associados ao processo e exibi-los
+> todos em sequência, no mesmo lugar.**
+
+**O que já funciona** (medido 2026-08-12, não é preciso reinvestigar): `/reports/journeys?root_session_id=…`
+devolve `session_count: 3`; `/reports/sessions?root_session_id=…` devolve as três encadeadas por
+`origin_session_id`; a Vista Processos renderiza a árvore `ROOT WebChat → análise → entrega`. O
+agrupamento por PROVENIÊNCIA está correto ponta a ponta.
+
+**A lacuna que o reenquadramento revela — e que uma view nova NÃO resolve.** Os contatos do acesso 2
+("consultar status") e do acesso 3 ("receber resultado") são **conexões novas do webchat**: nascem
+como sessões próprias, com raiz própria, ligadas ao processo apenas por **identidade**
+(`resume_origin=identity`), nunca por proveniência. Eles **não estão** na journey — e por isso
+nenhuma tela que leia `root_session_id` vai exibi-los, por melhor que seja.
+
+Ou seja: o pedido "todos os contatos do processo, em sequência" precisa **primeiro** de um passo de
+MODELO, não de UI. As opções, na ordem em que eu as investigaria:
+
+1. **`journey_merge` no resume por identidade.** A tool existe, o topic existe, o union-find existe,
+   e o `PendingEntry` **já carrega o `root_session_id`**. Falta um `invoke` no ponto em que o intake
+   reconhece a pendência e retoma. É a lacuna que o roteiro da demo já narra com honestidade
+   ("falta um `invoke journey_merge`"). Provavelmente a mudança mais barata com o maior efeito:
+   feita ela, os 3 contatos passam a cair na MESMA journey e a árvore atual já os mostra.
+2. Só então a **apresentação em sequência** — e aqui o enquadramento do usuário barateia o trabalho:
+   *"a Vista Processos é a de Sessões um nível acima; quero ver o que cada PERSONAGEM interagiu em
+   cada sessão, em ordem cronológica."*
+
+   **Personagem = participante ⇒ a unidade é o SEGMENTO, não a mensagem.** O segmento já carrega
+   `participant_id`, `role`, `agent_type`, `user_id`, `started_at`/`ended_at`, `duration_ms` e
+   `outcome`. A linha do tempo da journey é a **união dos segmentos das sessões-membro**, ordenada
+   por `started_at` e agrupada por contato.
+
+   Isso **elimina o custo escondido**: segmento é metadado, mensagem é conteúdo. A costura em nível
+   de segmento não cruza regime de visibilidade nenhum. O transcript de MENSAGENS (que cruza três
+   regimes — cliente `all`, análise `agents_only` + PII mascarada + `[Dados sensíveis omitidos]`,
+   entrega `all`) só é necessário para ler as PALAVRAS atravessando contatos, e é esse que exige ADR
+   de masking. Fatiar assim deixa o valor principal fora do caminho da decisão cara.
+
+   ⚠️ **Segmentos se SOBREPÕEM** (`@mention` paralelo ao primary, especialista de conferência dentro
+   da janela do pai, hooks posatt paralelos entre si). Logo "ordem cronológica" no nível de journey
+   é uma **linha do tempo com sobreposição, não uma lista**, e herda o invariante de nunca somar
+   segmentos para obter duração de processo (usar `elapsed_time_ms`, não `Σ agent_time_ms`).
+
+   **Segundo eixo, do mesmo dado:** com `user_id` estável (humano) e `flow_id`/pool (IA), dá para
+   virar de *"o que aconteceu, em ordem"* para *"o que a Ana fez neste processo inteiro"*,
+   atravessando os contatos. Vale avaliar qual dos dois o operador pede primeiro.
+
+**Não começar pelo item 2.** Costurar uma view sobre um agrupamento incompleto entrega uma tela
+bonita que continua sem os contatos que motivaram o pedido.
+
+---
+
+## Workflow trace é assimétrico na proveniência — inclui o PAI, não inclui o FILHO *(achado 2026-08-12, no E2E de tela)*
+
+O *Workflow trace* de `/analise/sessions` para a sessão de ANÁLISE do cenário de limite
+(`af64c36b-…-21a1824ad58d`) lista **8 execuções**, e a primeira é `skill limite entrada` no pool
+`limite_ia` — que rodou em **outra sessão**, a de intake (`48f7cce5-…`, a raiz). Ou seja: o trace
+**atravessa a fronteira de sessão para trás**.
+
+Mas ele **para** em `skill limite processo — resolved` (13:35) e **não** inclui a sessão de entrega
+(`f4db86cf-…`, pool `limite_entrega`, 13:35→13:46), que é filha da mesma análise por
+`origin_session_id` e carrega a mesma raiz.
+
+**A pergunta em aberto não é "falta a entrega"** — é *por que o escopo é assimétrico*. Se o trace
+segue proveniência, deveria seguir nos dois sentidos; se é session-scoped, não deveria mostrar o
+intake. Uma das duas leituras está errada, e não sei qual: pode ser que o intake apareça por outro
+motivo (o `origin_session_id` da própria sessão, e não uma varredura), o que seria desenho
+consistente e não assimetria.
+
+**Medir antes de consertar:** ler a query/endpoint que alimenta o trace e responder "qual é o escopo
+declarado?". Só depois decidir. Consertar para "seguir os dois sentidos" sem saber a intenção
+transforma uma pergunta em duas.
+
+Contexto: as três sessões estão corretas no dado — `/reports/journeys?root_session_id=…` devolve
+`session_count: 3` e `/reports/sessions?root_session_id=…` devolve as três com `origin_session_id`
+encadeado. A Vista Processos renderiza a árvore certa (ROOT WebChat → análise → entrega). **Não há
+defeito de agrupamento**; isto é só sobre o escopo do trace.
+
+---
+
 ## Subida automática falhou uma vez e a causa ficou NÃO PROVADA *(achado 2026-08-12)*
 
 `agent-assist-ui`, `skill-flow-service`, `channel-gateway` e `orchestrator-bridge` deixaram de subir

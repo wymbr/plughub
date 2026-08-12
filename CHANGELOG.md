@@ -2,6 +2,135 @@
 
 ---
 
+## Preparo da demo: seeds que envelheciam, e três verificações que não podiam reprovar ✅ (2026-08-12)
+
+Sessão de preparo da demo de 30 min. O que ficou de duradouro não foi o preparo — foram **três
+instrumentos que mentiam** e um gerador de volume que destrava lentes até então inalcançáveis.
+
+### O padrão: `✅` impresso ao lado da evidência de falha
+
+`seed_deploy_lens_demo.sh` terminava com `✅ seed pronto` **logo abaixo** de duas linhas que diziam o
+contrário:
+
+```
+resposta: {"error":"unauthorized","message":"missing service token or Bearer"}
+{"lens":"deploy","min":30,"pts":0,"markers":0}
+```
+
+Três defeitos empilhados, todos antigos:
+
+1. **O POST de deploy nunca autenticou.** O G-PROBE exige `x-service-token` nas mutações de config e o
+   script não o mandava — **nenhum marker jamais foi criado por ele**, em nenhuma execução.
+2. **`pts: 0` — a série sempre esteve vazia.** A verificação consultava `entities=$SKILL`, mas a lente
+   `deploy` é **ancorada no pool**: *"a unidade da curva é o `pool_id`"* (`_compare_deploy_lens`),
+   porque o mesmo skill roda em N pools e deploy é pool-centric. Endereço errado desde a origem.
+3. **A verificação não gateava.** É o que tornou (1) e (2) invisíveis por meses. *Uma verificação que
+   não pode reprovar compra confiança sem dar nada* — e aqui ela nem precisava de um caso raro: a
+   falha estava impressa na tela, duas linhas acima do check-mark.
+
+Consertados os três: token com fallback para o valor do compose, entidade = pool, e `exit 1` com as
+hipóteses ordenadas + a query de diagnóstico. Agora sai `pts=4, markers=2`.
+
+### Datas literais: o seed que envelhece é um seed que mente
+
+Os três seeds de analytics gravavam datas fixas de junho/julho. Em agosto as lentes vinham vazias, e o
+roteiro compensava mandando o apresentador **mexer no seletor de período no meio da demo** — o passo
+mais frágil que existia. Agora ancoram em `date -u`, com `ANCHOR=` para pinar.
+
+**O conserto expôs um segundo defeito, que a versão literal escondia:** datas relativas **exigem
+limpeza**. As tabelas são `ReplacingMergeTree` particionadas por data, e o RMT só deduplica **dentro da
+partição** — re-rodar noutro dia, com os mesmos ids, não substitui: insere ao lado. Duas execuções em
+dias diferentes dariam quatro epochs onde há duas, e pontos que ninguém semeou. Os três ganharam
+`ALTER … DELETE … SETTINGS mutations_sync=1` no topo; no Postgres do `seed_epoch`, o
+`ON CONFLICT DO NOTHING` tinha a mesma falha (ids fixos, datas velhas grudadas) e virou `DO UPDATE`.
+
+Duas contagens que surpreendem e **não** são defeito, medidas e documentadas: a série da lente é do
+**pool**, e `seed_deploy_lens` + `seed_epoch` escrevem no mesmo `sac_ia` (a curva mostra a união);
+e `SkillDeployment` é **append-log**, então cada execução acrescenta um marker carimbado com `now()`.
+
+### `seed_volume_demo.sh` — volume parametrizável, e três lentes que saem do ⚠️/❌
+
+Todo seed do repositório era `INSERT` hardcoded: com N=1 as lentes *funcionavam* sem *mostrar nada*.
+O novo gerador produz **N contatos em DAYS dias** (default 200/14) preenchendo sete tabelas **com
+atribuição coerente** — o mesmo `segment_id` liga segmento → avaliação → dimensões, o mesmo
+`instance_id` liga login → pausas. Sem essa coerência o volume aparece nas contagens e some nos JOINs,
+que é a forma cara de dado falso: parece defeito da lente.
+
+Três decisões que mudam o que se vê: os **três humanos têm perfis diferentes** (0.91 / 0.82 / 0.68 —
+um board onde todos têm o mesmo número não prova que compara, prova que repete); a **versão do skill
+vira na metade da janela** (duas épocas comparáveis, e um "antes e depois" na curva diária); e a **IA é
+avaliada a 95%** — número irrealista, escolhido para cada versão passar de `min_sample=30` e o gráfico
+parar de exibir *"Low sample"*.
+
+Determinístico (`random.seed`): ensaio e apresentação mostram os mesmos números, e uma diferença vira
+sinal. Conferência que gateia, **8/0**. `CLEAN_ONLY=1` desfaz.
+
+Efeito na cobertura das 10 lentes: **`quality_criteria` era ❌ "sem seed em todo o repositório"** e
+passou a 464 notas em 4 dimensões; `availability`, `quality`, `escalation_reason` e o epoch saíram de
+⚠️ para ✅. O item "adicione um contato transferido no pré-voo" foi absorvido (26 segmentos com
+`escalation_reason`, da taxonomia real de `agent_activity`).
+
+### Journey do limite de crédito: verificado, e não era defeito
+
+`probe_journey_limite.sh` (novo, 5/0), com a previsão escrita no cabeçalho **antes** da medição — ver a
+entrada da Fase 1 abaixo.
+
+### Webchat: o `**` era o sintoma, o CSS era a causa
+
+`webchat-test.html` renderiza com `textContent` (daí markdown literal), **e** o `.msg` não tinha
+`white-space: pre-wrap` — por isso os `\n\n` colapsavam e as listas viravam linha corrida. Uma linha de
+CSS conserta as quebras de **todos** os skills; os `**` saíram do YAML porque nenhum CSS resolve
+`textContent`. Corrigido também em `agente_portabilidade_intake_v1:339`, onde o negrito envolvia um
+valor **já mascarado** (`***4321` → `*****4321**`) exatamente na cena que demonstra masking.
+
+### `supervisor_state` lia um claim que não existe — TODO visualizador era `operator`
+
+Achado no E2E de tela, e é o defeito mais importante do dia. `server.ts:1335` fazia:
+
+```ts
+const viewerRole = (payload["role"] as string) ?? "operator"
+```
+
+O `create_access_token` da auth-api (`jwt_utils.py:58`) emite **`roles`** — array. **`role`
+singular não existe no token.** Logo o `??` disparava em 100% das requisições e todo visualizador
+era tratado como `operator`, tornando a regra `* → supervisor → plain` **inalcançável por este
+caminho**. Medido na tela: `admin@plughub.local` e `operator@plughub.local` viam o MESMO `***1111`.
+
+**Por que sobreviveu:** falha **segura**. O erro mascara DEMAIS, nunca de menos — nenhum dado
+vazou. E máscara sobrando é invisível: ninguém abre um chamado porque viu `***`. Só se pega
+testando que o supervisor **CONSEGUE** ver em claro, e todo teste existente afirmava o oposto (que
+o operator não consegue). *Uma política de masking só está coberta quando os DOIS lados são
+afirmados.* Gate simétrico registrado no `TODO.md`.
+
+**Diagnóstico foi cirúrgico porque o próprio arquivo já tinha a resposta:** quatro call sites
+irmãos (851, 869, 1265, 1595) fazem `payload["role"] ?? (payload["roles"])?.[0]`. Só o 1335
+esqueceu o fallback. A correção passou o **array inteiro** para `applyContextMaskingDynamic` (em vez
+de copiar o `[0]` dos irmãos), porque aqui a escolha importa: um usuário `["developer","admin"]`
+seria tratado como `developer` pelo `[0]` e perderia o privilégio. `isSupervisor` virou `.some()`; o
+papel que casa a regra é o primeiro que estiver em `supervisor_roles`. Sem papel nenhum ⇒ mascara
+como operator **com WARNING nomeando a consequência**, em vez de degradar calado.
+
+**Correção validada na tela** (mesma sessão, duas janelas, após o rebuild): operator vê
+`***4444` com selo 🔒 PII; admin vê `1111222233334444` em claro, sem selo. É a primeira vez que a
+política `tag × role` é exercida de fato — antes o ramo de supervisor era código morto.
+
+**Confirmado no mesmo E2E (funcionando):** markdown fora e quebras de linha de volta no webchat;
+aprovação com valor **editado** (9000 sobre 12000) chegando ao cliente; fila e cartão limpos nos
+dois consoles ao fechar; e a Vista Processos agrupando as três sessões
+(`ROOT WebChat → análise → entrega`) — `session_count: 3`, encadeadas por `origin_session_id`.
+
+### ABAC de aprovação para o `operator`
+
+Só `admin` tinha `approvals.{operacao,decide}` — e `admin` está em `masking.supervisor_roles`, casando
+`* → plain`. A capacidade existia e **a política nunca era exercida por ninguém**. Concedida ao
+`operator@plughub.local` em `infra/seed/seed_auth.py` (o `set_module_config` é PUT incondicional, então
+re-rodar o job aplica em base existente — diferente da armadilha seed-if-absent do config-api).
+
+**Documentação:** [`docs/product/demo-roteiro-30min.md`](docs/product/demo-roteiro-30min.md) (Bloco B
+reescrito para o cenário de limite; portabilidade vira plano B) e os cabeçalhos dos próprios scripts.
+
+---
+
 ## Subida do ambiente: ausência muda vira erro nomeado ✅ (2026-08-12)
 
 ### O sintoma e o que ele NÃO era
@@ -75,6 +204,138 @@ Validado: `inserted=1 skipped=0` sem aviso, e a mesma medição devolvendo `{"to
 **Documentação:** mora nos próprios artefatos — cabeçalho do `up.sh`, docstring do `seed.py` (com o
 aviso sobre key-que-guarda-estrutura) e comentários no `docker-compose.demo.yml`. Não há doc de
 `docs/` correspondente porque não há feature nova: é o laço de desenvolvimento.
+
+---
+
+## Aumento de limite de crédito — cenário de referência do modelo de 3 níveis ✅ Fase 1 (2026-08-11)
+
+Cenário novo, construído para materializar `segment → session → journey` numa história que um
+arquiteto reconhece: cliente pede aumento de limite, um humano aprova (editando o valor), o cliente
+volta duas vezes e recebe o resultado. Três acessos do cliente, três sessões do mesmo processo,
+mascaramento por política e aprovação humana em fila pull — tudo sobre mecanismos que já existiam.
+**Nada de plataforma foi construído para ele**, e é esse o ponto: o cenário é um consumidor, e o que
+ele produziu de valor duradouro foram os **seis defeitos** que só aparecem quando alguém percorre o
+caminho inteiro.
+
+### Artefatos
+
+| Arquivo | Papel |
+|---|---|
+| `skills/skill_limite_entrada_v1.yaml` | N2+N1 — identidade, pendência, os três acessos, coleta |
+| `skills/skill_limite_processo_v1.yaml` | N3 — pacote de análise, delegate ao aprovador, disparo da entrega |
+| `skills/skill_limite_entrega_v1.yaml` | N3 — a ESPERA pelo cliente, em pool webhook (nasceu do defeito 3) |
+| `skills/skill_limite_retorno_v1.yaml` | N1 — entrega o resultado; parqueia quando não há cliente |
+| `infra/dialog/dialog_limite_solicitacao.json` | form multi-campo, `cvv` com `masked: true` |
+| `infra/dialog/dialog_limite_aprovacao.json` | pacote de aprovação, campos editáveis em `fields[]` |
+| `infra/registry/tenant_demo.yaml` | pools `limite_{ia,processo,entrega,retorno}` + `aprovacao_credito` |
+| `channel-gateway/.../adapters/webhook.py` | `_pending_context_preview` generalizado (§7.1 do design) |
+| `config-api/.../seed.py` | 3 regras de masking para o pacote de aprovação |
+| `infra/test/smoke_limite_tres_acessos.sh` | aceite, veredicto de 3 estados — **16/0** |
+| `infra/test/probe_flow_transitions.sh` | guard novo, de uso geral (nasceu do defeito 6) |
+
+### Três decisões tomadas durante a escrita
+
+**1. O coletor ficou INLINE no agente de entrada, não delegado ao `dialog_runner`.** Estender o runner
+segue certo, mas como Fase 2: ele é skill de produção do OTP e do NPS, e `set-next`+`promote` ali
+derruba dois fluxos que funcionam. A versão inline usa a MESMA cadeia (`form_get` → `render.fields` →
+`menu interaction: form`), que **nenhum skill do repositório exercitava** — o caminho genérico passa a
+ter um consumidor real, que é o pré-requisito honesto para extraí-lo depois.
+
+**2. `preview` é uma allowlist declarativa, e é o único canal de volta.** `pending_workflow_get`
+devolve o `context_preview`, **nunca** o `context` cru do delegate: campo não declarado não chega. Por
+isso o smoke afirma explicitamente que o **CPF não aparece** — sem essa asserção, um preview que
+virasse passthrough passaria por verde.
+
+**3. Máscara desconhecida OMITE o campo e loga; não rebaixa para `plain`.** Erro de configuração vira
+campo ausente (barulhento), não vazamento silencioso.
+
+### Os seis defeitos, e a regra que fica de cada um
+
+**1 · `delegate.context` é namespace compartilhado — a pendência foi escrita e ficou invisível.**
+`_anchors_from_context` varre `phone`/`email`/**`cpf`**/`princ` como âncoras de identidade. Uma chave
+`cpf` posta ali como *campo de tela* virou âncora, o CPF era inédito, e `resolve_or_provision`
+**provisionou um cliente novo** — a pendência ficou indexada sob um `customer_id` que ninguém consulta.
+Nada falhou, nada logou: o `found:false` do acesso 2 parecia *"pendência não escrita"* quando era
+*"escrita no lugar errado"*. Dois consertos, ambos necessários: `contact_identifier` passou de fallback
+a **aditivo** (era `if not anchors:` — uma âncora tipada **desconhecida** descartava a **conhecida**), e
+a tag virou `cpf_titular`. *Dívida estrutural: `delegate.context` serve payload de tela e âncoras de
+identidade no mesmo espaço de nomes; separar (`context` × `anchors`) é a correção, renomear é curativo.*
+
+**2 · O pacote de aprovação fica ARMADO depois da decisão.** Aprovada a tarefa, trocar de página e
+voltar **reapresentava o mesmo formulário**; aprovar de novo fechava o contato. O segundo "Aprovar"
+não re-aprovava — resumia o *parking* seguinte, e **o cliente nunca receberia o resultado: o acesso 3
+foi consumido por quem estava olhando a tela**. Causa: `session.dialog_form_id`/`session.decisions` não
+são limpos entre dois delegates da mesma sessão; só `delegate_resume_token` é sobrescrito. *Por que o
+smoke não pegou: ninguém abre o Console durante ele — o defeito só existe quando há observador. Um
+teste que não pode reprovar por construção.* Correção no fluxo (dois `context_set` que desarmam) + passo
+**7b**, que afirma sobre o ESTADO, não sobre a tela.
+
+**3 · Sessão em pool humano não pode sobreviver ao humano — a raiz de três manifestações.** Cartão do
+aprovador não sumia do Console; o form reaparecia; e **o item voltava para a fila pull** oferecendo
+Claim de novo (basta trocar de aba: ao cair o WS, `remove_conversation` restaura a membership dos SETs
+do pool, e a sessão viva e sem agente é re-oferecida). Um mecanismo só: a plataforma usa
+`contact_closed` para limpar tudo que é session-scoped, e o desenho original mantinha a sessão viva
+esperando o cliente. **Correção estrutural:** a análise **fecha na decisão** e a espera migrou para
+`skill_limite_entrega_v1`, em pool webhook que nunca toca pool humano.
+**Regra que fica: um `delegate` a pool humano deve ser o ÚLTIMO ato relevante da sessão. Precisa
+continuar depois? Dispare outro processo — não segure a sessão.**
+
+**4 · O smoke afirmava contra a própria suposição — `edits` vem de `fields[]`, não de `answers`.**
+O acesso 3 rodou ao vivo e entregou *"Novo limite: R$ "*. Vazio, com o smoke em 16/0. O `ApprovalPanel`
+monta `payload.edits` a partir dos `fields[]`; o form usava *question nodes*, e o valor digitado não
+tinha para onde ir. *Por que não podia pegar: o passo 7 **fabrica** o payload com `edits` — testa a
+capacidade do workflow de LER, nunca a do Console de PRODUZIR. Um teste que constrói a entrada que ele
+mesmo espera observa a si próprio.* **Regra: num pacote de aprovação, campo que o workflow vai ler tem
+de ser `field`, não `question`. Question node ali é decorativo.**
+
+**5 · `{t}:session:{id}:status` mente para toda workflow encerrada.** Devolvia `active` minutos depois
+de o caminho inteiro de fechamento ter rodado nos logs. A chave é escrita `"active"` pelo resume
+(`webhook.py:1254`) e quem escreveria `"closed"` é o **Core**, que não participa de sessão webhook —
+logo `GET /v1/channels/webhook/{session_id}/status` mente, portabilidade inclusive. Pré-existente e
+fora do escopo, mas nomeado. *Lição do instrumento: medir a chave errada acusou defeito onde o
+comportamento estava certo.* O 7c passou a afirmar sobre `analytics.sessions`, o fato durável.
+
+**6 · Transição para step inexistente PARA o workflow em silêncio.** Um rename deixou dois
+`on_success`/`on_failure` órfãos: o workflow **executou até a transição e parou**, sessão `active` para
+sempre, segmento de 19 ms indistinguível de sucesso — sem log, sem `isError`, sem step de falha.
+`validateFlow` (`engine.ts:268`) valida ciclos não-guardados, **não a existência dos alvos**. Guard
+escrito: **`infra/test/probe_flow_transitions.sh`**, que varre todos os YAMLs de `/skills` e reprova
+alvo inexistente em `entry`, `on_success/failure/timeout/disconnect`, `on_resume/reject.next`,
+`conditions[].next` e `default` (heurística estreita de propósito: probe barulhento é pior que probe
+nenhum). Correção de verdade é no `validateFlow`. **Sintoma para reconhecer: sessão presa em `active` +
+último segmento muito curto + o step seguinte sem rastro nos logs do tool que ele chamaria.**
+
+### Estado da validação
+
+**16/0 por API** — quatro das dezesseis asserções nasceram de defeitos reais desta bateria, não de
+imaginação: `customer_id` da pendência, pacote desarmado, contato da análise encerrado, slot `current`
+executável. **Verde ao vivo**: os três acessos percorridos no webchat com o Console aprovando —
+formulário multi-campo com CVV mascarado, menu de continuidade com cartão `***4444`, e o valor
+**editado pelo humano** chegando ao cliente.
+
+### Preço aceito e pendências
+
+O *Workflow trace* de `/analise/sessions` é **session-scoped**: com análise e entrega na mesma sessão
+mostrava 7 execuções; separadas, mostra 3. **Não é dado perdido — é dado noutra sessão**, e a leitura
+ponta-a-ponta passa a ser a Vista Processos.
+
+**Verificado em 2026-08-12** por `infra/test/probe_journey_limite.sh` (novo, 5/0), com a previsão
+escrita no cabeçalho do próprio probe **antes** da medição: as três sessões formam UMA journey, raiz =
+o intake. `handle_trigger` resolve a raiz lendo `session.root_session_id` do ctx do CHAMADOR e sempre
+semeia a tag na sessão nova — **a herança é transitiva por construção, e "workflow disparando
+workflow" não é caso especial**. *Achado colateral: a sessão da análise sai com
+`sessions.pool_id = aprovacao_credito` (o delegate ao pool humano reescreve a linha no
+`ReplacingMergeTree`) — não afeta o agrupamento, mas filtrar a Vista Processos por `limite_processo`
+não acha a journey por essa sessão.*
+
+Deploy: skills, pools e forms eram todos **inéditos**, então o seed-if-absent trabalhou a favor
+(restart do bridge + `dialog-seed`, sem `x-skill-publish` e sem `set-next`/`promote`). A exceção é
+`masking.context_rules` — a **chave** já existe e o seed é if-absent por chave, então as 3 regras novas
+não entram em base já semeada (ver a entrada de 2026-08-12, que consertou isso na origem).
+Cosmético conhecido: `webchat-test.html` não renderiza markdown.
+
+**Documentação:** [`docs/product/limite-credito-3-niveis-design.md`](docs/product/limite-credito-3-niveis-design.md)
+(§11 = as-built completo) e [`docs/product/limite-credito-handoff.md`](docs/product/limite-credito-handoff.md).
 
 ---
 

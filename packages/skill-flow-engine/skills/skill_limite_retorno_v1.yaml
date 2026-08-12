@@ -62,15 +62,19 @@ steps:
         next:     notificar_aprovado
     default: notificar_recusado
 
+  # ⚠️ SEM markdown: o webchat usa `textContent` e `**` sairia literal na tela.
+  # A estrutura vem de `\n` + `•` (o `.msg` tem `white-space: pre-wrap` desde
+  # 2026-08-12). `numero_cartao` já chega mascarado — asterisco de máscara e
+  # asterisco de ênfase disputam o mesmo caractere.
   - id: notificar_aprovado
     type: notify
-    message: "🎉 Boa notícia! Seu aumento de limite foi **aprovado**.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Novo limite: **R$ {{@ctx.session.limite_aprovado}}**\n\nO limite já está disponível para uso."
+    message: "🎉 Boa notícia! Seu aumento de limite foi aprovado.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Novo limite: R$ {{@ctx.session.limite_aprovado}}\n\nO limite já está disponível para uso."
     on_success: confirmar_ciencia
     on_failure: confirmar_ciencia
 
   - id: notificar_recusado
     type: notify
-    message: "Sua solicitação de aumento de limite foi **analisada e não pôde ser aprovada** neste momento.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Parecer: {{@ctx.session.parecer}}\n\nVocê pode solicitar de novo em 30 dias."
+    message: "Sua solicitação de aumento de limite foi analisada e não pôde ser aprovada neste momento.\n\n• Cartão: {{@ctx.session.numero_cartao}}\n• Parecer: {{@ctx.session.parecer}}\n\nVocê pode solicitar de novo em 30 dias."
     on_success: confirmar_ciencia
     on_failure: confirmar_ciencia
 

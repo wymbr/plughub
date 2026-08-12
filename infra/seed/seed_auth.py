@@ -274,6 +274,22 @@ DEMO_USERS = [
                 "operacao":   {"access": "read_write", "scope": []},  # Monitor/Agent Assist
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos
             },
+            # Aprovação humana — o operator é o ÚNICO aprovador que exercita a política
+            # de masking. Todos os papéis de `masking.supervisor_roles`
+            # (supervisor/admin/evaluator/reviewer) casam a regra `* → plain` e veem o
+            # pacote em CLARO; só o `operator` cai nas regras por tag
+            # (`session.numero_cartao → last_4`, `cpf_titular → last_2`,
+            # `limite_solicitado → financial`). Enquanto isto era só do admin, a
+            # capacidade existia e a política nunca era exercida por ninguém.
+            #
+            # `operacao` = ver e reivindicar na inbox pull; `decide` = o resume que
+            # roteia o workflow (domínio [none, read_write] — não existe read_only).
+            # Ambos NÃO-scopable de propósito: o recorte de pool vem de
+            # `accessible_pools` (vazio aqui = todos), não de um scope[] por campo.
+            "approvals": {
+                "operacao": {"access": "read_write", "scope": []},
+                "decide":   {"access": "read_write", "scope": []},
+            },
         },
     },
 ]

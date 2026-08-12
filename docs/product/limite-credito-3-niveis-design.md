@@ -619,10 +619,22 @@ Precisa continuar o processo depois? Dispare outro processo — não segure a se
 Com análise e entrega na mesma sessão ele mostrava **7 execuções**; separadas, mostra **3** e para
 em `skill limite processo — resolved`. Não é dado perdido — é dado noutra sessão. A leitura
 ponta-a-ponta passa a ser a **Vista Processos** (`/analise/processos`), que agrupa por journey; a
-sessão de entrega herda a raiz por `origin_session_id`. **Falta verificar** que o agrupamento
-acontece de fato — o caminho testado até hoje era `workflow_trigger` disparado de um agente de
-intake, não de dentro de outro workflow. Se não agrupar, é defeito de propagação de raiz, não de
-desenho. Ver handoff §2b.
+sessão de entrega herda a raiz por `origin_session_id`.
+
+**Verificado ✅ (2026-08-12) — `infra/test/probe_journey_limite.sh`, 5/0.** As três sessões formam
+UMA journey, raiz = o `session_id` do intake. A dúvida era legítima (o caminho testado até então era
+`workflow_trigger` disparado de um **agente** de intake, nunca de dentro de **outro workflow**), mas
+o mecanismo não distingue os dois casos: `handle_trigger` resolve a raiz lendo
+`session.root_session_id` do ctx do CHAMADOR (`webhook.py:476-486`) e sempre semeia a tag na sessão
+nova (`:534`) — a herança é transitiva por construção. `spawn_reason='trigger'` confirma a aresta.
+Nenhum pool `limite_*` é `purpose: internal`, logo o `_apply_contact_scope` do relatório não exclui,
+e o `HAVING` de significância (`count() > 1 OR channel='webhook'`) passa pelos dois lados.
+
+**Achado colateral da medição:** a sessão da ANÁLISE sai com `sessions.pool_id = aprovacao_credito`,
+não `limite_processo` — o delegate ao pool humano reescreve a linha inteira no `ReplacingMergeTree`
+(a mecânica que o `CLAUDE.md` já nomeia). Não afeta o agrupamento, que é por `root_session_id`, mas
+afeta a BUSCA: **filtrar a Vista Processos por pool `limite_processo` não acha esta journey** pela
+sessão da análise. Buscar pela raiz, ou pelo pool `limite_ia`/`limite_entrega`.
 
 ### O smoke afirmava contra a própria suposição — `edits` vem de `fields[]`, não de `answers`
 

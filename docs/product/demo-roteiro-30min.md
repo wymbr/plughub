@@ -1,9 +1,12 @@
 # Roteiro de demonstração — 30 min de demo + 30 min de discussão
 
-> Plateia: **técnica** (arquitetos/devs). Espinha: **`retencao_humano`** (o único pool com
-> `queue_config`, fila interna pull, `mentionable_pools` e `on_human_end`).
+> Plateia: **técnica** (arquitetos/devs).
+> Bloco A: **`retencao_humano`** (o único pool com `queue_config`, fila interna pull,
+> `mentionable_pools` e `on_human_end`). Bloco B: **aumento de limite de crédito**
+> (`limite_ia` → `limite_processo` → `aprovacao_credito` → `limite_entrega`).
 > Stack: `docker-compose.demo.yml`. Tenant: `tenant_demo`.
-> Escrito em 2026-08-11, contra o estado as-built do repositório.
+> Escrito em 2026-08-11; **Bloco B trocado de portabilidade para limite em 2026-08-12** (a
+> portabilidade permanece como plano B ensaiado, §3).
 
 ---
 
@@ -25,18 +28,21 @@ com o selo *"Reservado a você"*, e você demonstra **fila pull + fila push no m
 A diferença entre os dois modos é literalmente uma flag (`session.wrap_up_auto_attend`, injetada em
 `channel-gateway/.../main.py:1290-1291`) — narre isso e você cobre os dois modos mostrando um.
 
-**3. O contato 1 da journey roda ANTES da demo; ao vivo só o contato 2.**
-O intake tem 4 turnos e o processo suspende por 48 h. Rodar tudo ao vivo custa ~5 min e três pontos de
-falha. Rodando o contato 1 + o resume da operadora no pré-voo, você começa o Bloco B com uma **sessão
-`suspended` visível no Monitor** — que é a prova, não a encenação — e demonstra ao vivo só a parte
-interessante: reconhecimento por identidade, OTP, preview mascarado e resume.
+**3. O Bloco B é o aumento de limite, rodado 100% ao vivo** *(decidido 2026-08-12; antes era
+portabilidade, que fica como plano B em §3).*
+A portabilidade obrigava a rodar o contato 1 no pré-voo, porque o processo suspende por 48 h e o resume
+vinha de um `curl` fingindo ser a operadora. O aumento de limite não espera ninguém: **o aprovador é
+você, na janela ao lado**. Isso troca uma encenação por três coisas reais na tela — aprovação humana em
+fila pull, um valor **editado** pelo humano chegando ao cliente, e uma journey de três sessões. O preço
+é ritmo: 8 minutos apertados, que exigem dois ensaios.
 
-**4. Honestidade sobre a journey.** `journey_merge` **nunca é chamado** pelos skills de portabilidade.
-Session A (intake) e Session B (processo) compartilham `root_session_id` — isso é journey real e drilla
-em 3 níveis. O **contato 2 é uma journey separada**, ligada à primeira por identidade
-(`resume_origin=identity`), não por merge. Para essa plateia isso é um **ponto forte**, não fraqueza:
-mostra o modelo (proveniência ∪ alias) e onde falta um `invoke journey_merge`. Não finja o contrário —
-alguém vai abrir a Vista Processos e ver duas linhas.
+**4. Honestidade sobre a journey.** As três sessões do processo (intake → análise → entrega)
+compartilham `root_session_id`, e isso está **medido**, não suposto:
+`infra/test/probe_journey_limite.sh` → 5/0. A herança é transitiva por construção — um workflow
+disparou outro e a raiz atravessou. O que **não** acontece é o merge de contatos independentes:
+`journey_merge` existe como tool e **nenhum skill o chama**. Para esta plateia isso é ponto forte, não
+fraqueza — mostra o modelo (proveniência ∪ alias) e nomeia exatamente o que falta (um `invoke`). Não
+finja o contrário; alguém vai abrir a Vista Processos.
 
 ---
 
@@ -53,8 +59,9 @@ Confirme, um a um:
 | Verificação | Como | Esperado |
 |---|---|---|
 | platform-ui | `http://localhost:5174/login` | `admin@plughub.local` / `changeme_admin` |
-| cliente webchat | `http://localhost:5173/webchat-test.html` | select com `retencao_humano` e `portabilidade_ia` |
-| DialogForms semeados | `/config/dialog-forms` | `dialog_wrapup_v1`, `dialog_nps_buttons`, `dialog_otp_possession` |
+| cliente webchat | `http://localhost:5173/webchat-test.html` | select com `retencao_humano`, **`limite_ia`** e `portabilidade_ia` |
+| DialogForms semeados | `/config/dialog-forms` | `dialog_wrapup_v1`, `dialog_nps_buttons`, `dialog_otp_possession`, **`dialog_limite_solicitacao`**, **`dialog_limite_aprovacao`** |
+| quebras de linha no webchat | mandar qualquer mensagem com lista | as linhas **quebram** (o `.msg` ganhou `white-space: pre-wrap` em 2026-08-12). Se vier tudo numa linha corrida, o `agent-assist-ui` não foi rebuildado — é `COPY`, não volume |
 | instâncias humanas órfãs | `redis-cli --scan --pattern 'tenant_demo:instance:human-*'` | poucas — o limite é **10** (`seed_pricing.py:37`) |
 
 > ⚠️ **O cliente webchat da stack demo é `http://localhost:5173/webchat-test.html`** (servido pelo
@@ -82,61 +89,88 @@ bash infra/test/seed_deploy_lens_demo.sh    # lente deploy, modo diário + marke
 bash infra/test/seed_epoch_demo.sh          # lente deploy, modo epoch (por versão)
 ```
 
-> ⚠️ **As datas são hardcoded e estão no passado**, sem env var para parametrizar:
-> `seed_deploy_lens_demo.sh` grava **15, 17 e 19/06/2026** · `seed_epoch_demo.sh` grava **18 e
-> 21/06/2026** · `seed_customer_history_demo.sh` grava **01, 05, 10 e 12/07/2026**.
-> Hoje é 11/08/2026 → **o seletor de período da UI precisa apontar para 13–21/06/2026**, senão a tela
-> vem vazia. Se sobrar 20 min de preparo, o melhor investimento do dia é trocar as datas literais por
-> `now() - INTERVAL n DAY` nesses três scripts — some o passo mais frágil da demo.
-
-### T-30 min — rodar o contato 1 da journey
-
-Webchat → pool **`portabilidade_ia`** → Conectar:
-
-| Turno | O que fazer |
-|---|---|
-| 1 | digitar `11987654321` |
-| 2 | clicar **📶 Vivo** |
-| 3 | digitar `11987654321` — **telefone, nunca e-mail** ⚠️ |
-
-⚠️ O branch `confirmation_channel: email` **não tem adapter** (`skill_portabilidade_demo_v1.yaml:40-41`):
-com e-mail, o processo morre em timeout de 600 s e o cenário inteiro se perde.
-
-Fim esperado: *"✅ Solicitação de portabilidade registrada com sucesso!"*. Anote o `session_id`.
-
-Depois, simule a resposta da operadora (**não espere as 48 h**):
-
 ```bash
-# token da Session B (o processo suspenso)
-docker compose -f docker-compose.demo.yml exec -T redis \
-  redis-cli HGETALL tenant_demo:resume_tokens | paste - -
-
-# aprovar — porta INTERNA (/v1/...), que preserva `decision`
-curl -X POST http://localhost:8010/v1/channels/webhook/resume/<TOKEN> \
-  -H 'content-type: application/json' \
-  -d '{"tenant_id":"tenant_demo","payload":{"decision":"approved","source":"operadora"}}'
+bash infra/test/seed_customer_history_demo.sh   # histórico do cliente (Cliente 360)
 ```
 
-⚠️ **Não use a porta externa** `/channel/webhook/resume/{token}`: ela descarta `decision` e `source`
-de propósito (`main.py:1690-1693`) e você perde o controle do branch.
-A partir daqui você tem **24 h** de janela (o `delegate` do processo) — folga de sobra.
+> ✅ **Datas parametrizadas em 2026-08-12** — eram literais de junho/julho e envelheciam, forçando
+> mexer no seletor de período no meio da demo. Agora ancoram em **hoje**: `seed_deploy_lens_demo.sh`
+> grava D-6/D-4/D-2 · `seed_epoch_demo.sh` grava D-4 (v1.0) e D-1 (v2.0) ·
+> `seed_customer_history_demo.sh` grava D-11/D-7/D-2 e a jornada aberta em D-1. Todos os três aceitam
+> `ANCHOR=YYYY-MM-DD` para pinar.
+>
+> **Rode-os no dia da demo** (ou no dia anterior), **uma vez cada**: a janela é relativa ao momento da
+> execução, então um seed de duas semanas atrás volta a cair fora do período recente. Os três agora
+> **limpam as próprias linhas antes de inserir** — sem isso, re-rodar em outro dia deixaria os pontos
+> antigos vivos (o `ReplacingMergeTree` só deduplica dentro da partição, e a partição é por data).
+>
+> ⚠️ **Duas contagens que surpreendem, e nenhuma é defeito** (medidas em 2026-08-12): a série da lente
+> `deploy` é do **pool**, e `seed_deploy_lens` + `seed_epoch` escrevem no MESMO `sac_ia` — a curva
+> diária mostra a **união** dos dois (4 dias, não 3). E `SkillDeployment` é **append-log**: a limpeza
+> apaga linhas do ClickHouse, não deploys do registry, então **cada execução acrescenta um triângulo**,
+> todos carimbados com `now()`. Vários markers no mesmo dia = execuções repetidas, não histórico.
+
+### T-1 dia — o Bloco B não tem pré-voo, mas exige ENSAIO
+
+O aumento de limite roda inteiro ao vivo: não há contato a pré-executar nem `curl` fingindo ser a
+operadora (era o que a portabilidade obrigava). O que ele exige é ritmo — **percorra os três acessos
+duas vezes, cronometrando**. São 8 minutos apertados.
+
+```bash
+bash infra/test/smoke_limite_tres_acessos.sh   # 16/0 — o gate do cenário
+bash infra/test/probe_journey_limite.sh        # 5/0 — a journey de 3 sessões
+```
+
+⚠️ **Telefone novo a cada ensaio, e um virgem guardado para a apresentação.** Duas razões
+independentes: o índice de pendências é chaveado por sessão (só a mais recente é lida — número reusado
+esconde os pedidos anteriores) e, depois do primeiro OTP bem-sucedido, a âncora fica `possessed`
+**durável**, então no ensaio seguinte o fluxo **pula o OTP** e a cena de 16:00 desaparece.
+
+⚠️ **O aprovador tem de ser o `operator`, não o admin.** `admin` está em `masking.supervisor_roles` e
+casa a regra `* → plain`: veria tudo em claro, e a cena de mascaramento (17:45) não existiria. O ABAC
+`approvals.{operacao,decide}` foi concedido ao `operator@plughub.local` em 2026-08-12
+(`infra/seed/seed_auth.py`). Confira antes:
+
+```bash
+curl -s -X POST http://localhost:3202/auth/login -H content-type:application/json \
+  -d '{"tenant_id":"tenant_demo","email":"operator@plughub.local","password":"changeme_operator"}' \
+| python3 -c "import sys,json,base64;t=json.load(sys.stdin)['access_token'].split('.')[1];\
+print(json.loads(base64.urlsafe_b64decode(t+'==')).get('module_config',{}).get('approvals'))"
+```
+
+Esperado: `operacao` e `decide` em `read_write`. Vazio ou `None` ⇒
+`docker compose -f docker-compose.demo.yml run --rm auth-seed`.
+
+⚠️ **As 3 regras de masking do pacote de aprovação** (`session.numero_cartao → last_4`,
+`session.cpf_titular → last_2`, `session.limite_solicitado → financial`) são seed-if-absent **por
+chave**, e `masking.context_rules` é uma chave só que guarda o array inteiro — em base já semeada elas
+não entram sozinhas. Confira em `/config/masking` que existem, para o role `operator`. E **nunca**
+ponha o catch-all de `operator` em `hidden`: `applyContextMaskingDynamic` faz `continue` em campo
+oculto, derruba `session.dialog_form_id`/`session.decisions`, e **a tela de aprovação some em
+silêncio**.
 
 ### T-10 min — telas e terminais
 
 - **Janela 1** — Chrome, `http://localhost:5174/console`, logado como `admin@plughub.local`, **sem pool
-  marcado ainda** (o cliente precisa cair na fila primeiro).
+  marcado ainda** (o cliente precisa cair na fila primeiro). Serve o Bloco A **e** a contraprova de
+  masking às 18:30.
 - **Janela 2** — `http://localhost:5173/webchat-test.html`, pool `retencao_humano`, **não conectado**.
-- **Janela 3** — segunda aba do webchat, pool `portabilidade_ia`, para o Bloco B.
-- **Janela 4** — `http://localhost:5174/analise/agents`, já com o período **13–21/06/2026** selecionado.
+- **Janela 3** — segunda aba do webchat, pool **`limite_ia`**, para o Bloco B.
+- **Janela 4** — `http://localhost:5174/analise/agents`, período **últimos 14 dias** (os seeds gravam
+  relativo a hoje desde 2026-08-12; não há mais data de junho para caçar).
+- **Janela 5** — ⚠️ **janela anônima** (ou outro perfil do Chrome), `.../console`, logada como
+  **`operator@plughub.local`** / `changeme_operator`, para a aprovação do Bloco B. Tem de ser sessão de
+  navegador separada: o JWT vive no `localStorage` por origem, e logar como operator na mesma janela
+  **derruba o admin** — você perderia a contraprova das 18:30, que é o ponto alto do bloco.
 - **Terminal visível** (é parte da narrativa, não bastidor):
   ```bash
   docker compose -f docker-compose.demo.yml logs -f channel-gateway | grep -E 'OTP-DEV|session_id'
   ```
 
 > ⚠️ **Ensaie o OTP no máximo 3×** por número em 15 min — o rate-limit é 3 challenges/900 s por âncora
-> (`identity/otp.py:44-48`). E note: depois do **primeiro** OTP bem-sucedido a âncora fica `possessed`
-> **durável** — no ensaio seguinte o fluxo pula o OTP. Se quiser demonstrar o OTP ao vivo, **ensaie com
-> outro número** e guarde `11987654321` virgem para a apresentação.
+> (`identity/otp.py:44-48`). E depois do **primeiro** OTP bem-sucedido a âncora fica `possessed`
+> **durável**: no ensaio seguinte o fluxo pula o OTP. Ensaie com números descartáveis e **guarde um
+> virgem** para a apresentação.
 
 ---
 
@@ -175,20 +209,44 @@ medição saindo do mesmo dado."*
 | 13:00 | Narrar sem clicar | Duas frases de fecho do bloco: (a) trocar `dispatch: detached` por `inline` faz esse mesmo item **se auto-reivindicar** e o form abrir sozinho — mesma máquina, uma flag; (b) esse renderer **não é do wrap-up**: é o tratamento genérico de collect-form no Console. O gate de aprovação de deploy usa exatamente esta tela. |
 | 13:30 | Header → **Pausar** → escolher *Reunião* + nota → **Retomar** | Arc 8: alimenta `agent_pause_intervals` e a lente `pause_reason`, que aparece no Bloco C. |
 
-### 14:00–22:00 · Bloco B — a journey
+### 14:00–22:00 · Bloco B — a journey (aumento de limite de crédito)
+
+> **Por que este cenário e não a portabilidade** (decidido 2026-08-12): ele mostra **três acessos do
+> mesmo cliente**, uma **aprovação humana em fila pull** e **dois mecanismos de masking diferentes na
+> mesma tela** — e a journey de 3 sessões está *provada*, não suposta
+> (`infra/test/probe_journey_limite.sh`, 5/0). A portabilidade fica como plano B ensaiado (§3).
+>
+> **Tudo ao vivo, sem pré-voo.** Diferente da portabilidade, nada aqui espera 48 h: o aprovador é
+> você, na janela ao lado. O preço é ritmo — são 8 minutos apertados; ensaie o percurso duas vezes.
+>
+> ⚠️ **Um telefone novo por ensaio.** O índice de pendências é chaveado por sessão e só a mais
+> recente é lida; reusar o número esconde os pedidos anteriores. E depois do primeiro OTP a âncora
+> fica `possessed` **durável** — no ensaio seguinte o fluxo pula o OTP. Guarde um número virgem para
+> a apresentação.
 
 | min | Ação | O que apontar |
 |---|---|---|
-| 14:00 | **Monitor › Sessions**, filtro por status | A sessão do processo de portabilidade em **`suspended`**. *"Isto foi criado há 20 minutos por um cliente. O agente devolveu a vaga ao pool e a sessão persiste — o `session_id` é o mesmo através de N ciclos de suspend/resume."* |
-| 15:00 | Mostrar o `curl` de resume no terminal (já executado) | *"A operadora respondeu por webhook. Um workflow é um canal como outro qualquer — `webhook` — e o trigger cria uma sessão normal, roteada por um pool normal."* |
-| 16:00 | **Janela 3**: webchat, pool `portabilidade_ia` → Conectar | Contato **novo**, canal novo, cliente que não traz nenhum identificador de sessão. |
-| 16:30 | Digitar `11987654321` → clicar **📶 Vivo** → digitar `11987654321` | Narre a feiura com honestidade: *"o intake re-coleta antes de resolver identidade — é ergonomia a corrigir, não arquitetura."* |
-| 17:30 | *"Para acessar atendimentos anteriores com segurança…"* → **✅ Verificar meu número** | **A plataforma é autoridade de posse de canal, não de identidade de registro.** O `resume_token` **nunca sai** enquanto a âncora for `claimed`; só `possessed` (⇒ OTP verificado) libera. Isso é `verification_required`, e ele **não vaza** se existe ou não pendência. |
-| 18:00 | Pegar o código no terminal (`[OTP-DEV] … code=NNNNNN`) e digitar | O form de OTP é um `DialogForm` renderizado pelo `dialog_runner` — **mesmo primitivo** do wrap-up e do NPS. O código nunca passa pela mão do agente: gerar/enviar/verificar ficam no `OtpService`. |
-| 19:00 | Aparece o menu de continuidade | ⚠️ O número vem **mascarado**: `***4321`. Segunda prova de masking, agora num preview de contexto cross-sessão. Clicar **✅ Confirmar portabilidade**. |
-| 19:30 | Clicar **✅ Sim, confirmar portabilidade** | (Sim, são duas confirmações — o delegate re-pergunta. Narre como redundância a limpar.) O processo suspenso **retoma e completa**. |
-| 20:30 | **Analytics › Processos** (`/analise/processos`) | Drill de **3 níveis**: journey → sessions → segments. Abra a journey do intake: Session A + Session B sob a mesma raiz. |
-| 21:30 | **A frase honesta** | *"O contato de hoje aparece como journey própria. `root_session_id` liga proveniência; o que ligaria contatos independentes é `journey_merge`, e nenhum destes skills o chama — a pendência já carrega o `root_session_id`, falta um `invoke`. É lacuna de configuração de fluxo, não de modelo."* Para arquiteto, isso vale mais que uma tela perfeita. |
+| 14:00 | **Janela 3**: webchat, pool **`limite_ia`** → Conectar → digitar o telefone | Contato novo. *"Nível 1: a interação. O agente resolve identidade antes de qualquer coisa."* |
+| 14:30 | Preencher o formulário: cartão, CPF, limite atual, limite solicitado (**12000**) e **CVV** | Um `menu` `interaction: form` — **um turno, cinco campos**. O CVV vem com `masked: true`: vive em `@masked.*`, memória do processo. **Guarde este fato para 18:30.** |
+| 15:00 | *"📋 Recebido! Vou registrar seu pedido…"* → **Monitor › Sessions** | Nasceu uma sessão **`webhook`**. *"Nível 3: o processo. Workflow é um canal como outro qualquer — o trigger cria sessão normal, roteada por pool normal. E repare: a coleta aconteceu na sessão do CLIENTE, antes do processo existir. N3 recebe dados; N3 não coleta."* |
+| 15:30 | **Janela 3**, mesma aba: escrever qualquer coisa (o cliente "volta") | **Acesso 2.** O agente reconhece a identidade e encontra a pendência — mas **não a revela ainda**. |
+| 16:00 | *"Para acessar com segurança…"* → **✅ Verificar meu número** → pegar `[OTP-DEV] … code=NNNNNN` no terminal e digitar | **A plataforma é autoridade de posse de canal, não de identidade de registro.** Com a âncora só `claimed`, o tool devolve `verification_required` **sem revelar se existe pendência**. O form de OTP é um `DialogForm` no `dialog_runner` — mesmo primitivo do wrap-up e do NPS — e o código nunca passa pela mão do agente: gerar/enviar/verificar ficam no `OtpService`. |
+| 16:45 | Aparece o menu de continuidade → clicar **📋 Consultar status** | ⚠️ O cartão vem **`***4444`**. Esta é a **primeira** prova de masking, e é de outra natureza: o `context_preview` é uma **allowlist declarativa** — o CPF viaja no `delegate.context` e **não aparece aqui, porque não foi declarado**. Campo não declarado não chega. |
+| 17:15 | **Janela 5** (Console logado como **`operator`**): marcar o pool `aprovacao_credito` → o item está na **inbox pull** → **Atender (Pull)** | Mesma inbox, mesmo `DialogFormRenderer` do wrap-up do Bloco A. *"Aprovação não é um módulo — é um `collect` a um pool."* |
+| 17:45 | Aba **Contexto**, à direita | Cartão `***4444`, CPF `***25`, valor redigido, badge 🔒 PII. **Segunda** prova, agora de outra natureza ainda: política por **tag × role**, aplicada na leitura. |
+| 18:00 | Na coluna central, baixar `limite_aprovado` de **12000 → 9000** e escrever um parecer | O humano **não só aprova: edita**. Guarde o número. |
+| 18:30 | **Janela 1** (Console como `admin`), **mesma sessão** → aba Contexto | **A prova em 20 segundos:** mesma tela, mesma sessão, o cartão em **claro**. `*` × `supervisor` → `plain`. *"Mascaramento é config, não código."* E então o remate: *"o CVV vocês não viram em nenhuma das duas janelas — e não vão ver. Aquele não é mascarado por política; ele nunca foi persistido. Dois requisitos diferentes, dois mecanismos diferentes: **este eu escondo de quem não tem papel; este eu esqueci**."* |
+| 19:30 | Voltar à **Janela 5** → **Aprovar** | O item **some da fila**, o cartão some do Console e a sessão da análise **fecha**. *"Delegate a pool humano é o último ato da sessão — continuar o processo depois devolveria o item decidido à fila na primeira queda de WS. O processo continua noutra sessão."* |
+| 20:00 | **Janela 3**: cliente escreve de novo | **Acesso 3.** Sem menu, sem pergunta: `resume_policy: auto`. *"🎉 Seu aumento foi aprovado — novo limite: **R$ 9.000**."* **O valor que o humano editou chegou ao cliente**, não o que ele pediu. |
+| 21:00 | **Analytics › Processos** (`/analise/processos`) | Drill de **3 níveis**: journey → sessions → segments. **Três** sessões sob uma raiz: intake → análise → entrega. ⚠️ **Não filtre por pool `limite_processo`** — a sessão da análise sai com `pool_id = aprovacao_credito` (o delegate reescreve a linha no `ReplacingMergeTree`). Busque pela raiz, ou por `limite_ia`. |
+| 21:30 | **A frase honesta** | *"`root_session_id` liga proveniência, e essa herança é transitiva por construção — um workflow disparou outro e a raiz atravessou. O que ligaria contatos **independentes** é `journey_merge`, e nenhum destes skills o chama: a pendência já carrega o `root_session_id`, falta um `invoke`. É lacuna de configuração de fluxo, não de modelo."* Para arquiteto isso vale mais que uma tela perfeita. |
+
+**Se sobrarem 30 s — o melhor momento técnico do cenário, e ele é só narrativa:** entre o acesso 1 e a
+decisão, o **mesmo workflow suspenso tem dois retomadores possíveis** — o aprovador (pelo Console) e o
+cliente (cancelando). Não é acidente: o cliente pode desistir durante a análise. É seguro pela Camada F
+(resume terminal-uma-vez): `SET NX` no topo de `handle_resume` e um registro terminal gravado antes do
+consumo, de modo que quem perde a corrida recebe **409 nomeado** — não *"token não encontrado"*.
+*"A corrida existe de propósito. O que não pode existir é a mentira sobre quem ganhou."*
 
 ### 22:00–28:30 · Bloco C — a medição sai do mesmo dado
 
@@ -205,9 +263,13 @@ medição saindo do mesmo dado."*
 Frase-âncora: *"nada disto foi instrumentado à parte. É o mesmo substrato — `segments`, `session_signal`,
 `agent_pause_intervals` — lido por lentes diferentes."*
 
-Depois **troque o período para 13–21/06/2026** (diga que é dado semeado, sem fingir) e mostre a lente
-**`deploy`**:
+Depois mostre a lente **`deploy`** — desde 2026-08-12 os seeds gravam em datas **relativas a hoje**,
+então **o período não precisa mais ser trocado** (últimos 7–14 dias basta). Diga que é dado semeado,
+sem fingir:
 
+- ⚠️ **Nesta lente a entidade é o POOL** (`sac_ia`), não o skill — os agentes ficam desabilitados na
+  lista de propósito. *"A unidade da curva é o pool porque o mesmo skill pode rodar em N pools com
+  configs diferentes, e deploy é pool-centric."* Marcar o skill devolve gráfico vazio.
 - modo **Diário + markers**: curva de qualidade por dia, **triângulo** no dia do deploy.
 - toggle **Por versão** (`mode=epoch`): eixo X vira **versões**, não dias.
 - Ponto que fecha a demo: *"a âncora é o **pool**, e a identidade de versão é o **momento do promote**,
@@ -238,9 +300,14 @@ Três frases, sem slide:
 | Item de wrap-up não aparece na inbox | fila pull vazia após Encerrar | Deixe **um item parqueado no pré-voo** (rode um atendimento completo em `detached` no T-1 dia e **não** o conclua). Ele fica lá com o selo "Reservado a você" e salva o trecho. |
 | NPS não chega | cliente não vê os botões | O cliente **fechou a aba** → `nps_on_disconnect: skip` suprime o despacho por design. Reabrir não recupera; siga em frente e explique a regra (é um bom momento). |
 | OTP não libera | `verification_required` persiste | Código expirado (TTL 300 s) ou rate-limit (3/15 min). Tenha um **segundo número** ensaiado e pronto. |
-| Journey não drilla | Vista Processos vazia | Use o Monitor › Sessions com filtro `suspended` — a prova do suspend/resume não depende da tela de journey. |
-| Lente vazia | gráfico em branco | **Quase sempre é o período.** Deploy/epoch = junho; histórico de cliente = julho; live = hoje. |
-| `quality_criteria` vazia | radar sem dados | **Esperado** — `evaluation_dimension_scores` não tem seed e o avaliador não roda no demo. **Não coloque essa lente no roteiro.** |
+| Journey não drilla | Vista Processos vazia | Provável **filtro por pool**: a sessão da análise sai com `pool_id = aprovacao_credito`, não `limite_processo`. Busque pela raiz ou por `limite_ia`. Se ainda assim vazio, use Monitor › Sessions — a prova do suspend/resume não depende da tela de journey. |
+| Item de aprovação não aparece na inbox | fila `aprovacao_credito` vazia após o acesso 1 | Confira o ABAC do operator (§1, T-1 dia): sem `approvals.operacao` a tela de aprovação **não renderiza e não avisa**. Segunda causa: catch-all de masking em `hidden`, que derruba `session.decisions` — mesmo sintoma mudo. |
+| Aprovador vê tudo em claro | cartão sem `***` na aba Contexto | Você está logado como **admin/supervisor** (casam `* → plain`). A Janela 5 tem de ser o `operator`, em sessão de navegador separada. |
+| Acesso 3 não entrega | cliente volta e nada acontece | O `disparar_entrega` falhou → o processo caiu em `encerrar_sem_entrega`. Verifique a sessão do pool `limite_entrega` no Monitor. Recuperação: narre o desfecho de falha **alta** (`issue_status` nomeia a causa) — é um bom momento sobre degradação não-silenciosa. |
+| **Bloco B inteiro falha** | qualquer coisa acima, sem recuperação rápida | **Plano B ensaiado: a portabilidade.** Pool `portabilidade_ia`, mesmo intake, mesmo OTP, mesmo menu de continuidade. Custa o pré-voo (contato 1 + `curl` de resume na porta INTERNA `/v1/channels/webhook/resume/{token}`, que preserva `decision` — a externa a descarta de propósito). Perde a aprovação humana e o valor editado; mantém identidade, OTP, masking de preview e o drill de journey. |
+| Lente vazia | gráfico em branco | Desde 2026-08-12 os seeds gravam relativo a **hoje** — se está vazio, ou o seed não rodou nesta máquina, ou rodou há muitos dias (a janela é do momento da execução). Re-rode o seed; ele limpa e regrava. |
+| `quality_criteria` vazia | radar sem dados | Desde 2026-08-12 tem seed: rode `seed_volume_demo.sh`. Se ainda vazio, confira o período (o volume termina no `ANCHOR`, default hoje). |
+| Board com todos os agentes iguais | três barras idênticas | O volume não rodou — os perfis diferenciados (Carla/Ana/Bruno) vêm dele. Sem ele o board tem N=1 e não compara nada. |
 
 ---
 
@@ -248,28 +315,49 @@ Três frases, sem slide:
 
 São **10 lentes** na UI (`AgentsBenchPage.tsx:38`) + `session_nps`, que só existe no pop-up de detalhe.
 
+> ✅ **`seed_volume_demo.sh` (novo, 2026-08-12) mudou esta tabela**: 200 contatos em 14 dias, com
+> atribuição coerente entre as sete tabelas. Rode-o **antes** dos outros dois seeds. Medido: 8/0.
+>
+> ```bash
+> bash infra/test/seed_volume_demo.sh          # N=200, 14 dias, determinístico
+> N=500 DAYS=30 bash infra/test/seed_volume_demo.sh
+> CLEAN_ONLY=1 bash infra/test/seed_volume_demo.sh   # desfaz
+> ```
+
 | Lente | Fonte | Estado para a demo |
 |---|---|---|
-| `resolution` | `segments` | ✅ **live** — sai do Bloco A |
-| `sessions_aht` | `segments` | ✅ **live** |
-| `wrapup` | `segments.issue_status` | ✅ **live** — o form que você preenche |
-| `nps` | `session_signal` grain=segment | ✅ **live** — o 9 do cliente |
-| `pause_reason` | `agent_pause_intervals` | ✅ **live** — a pausa de 20 s |
-| `availability` | `agent_login_intervals` + pausas | ✅ **live**, mas com N=1: a curva de ocupação fica pobre |
-| `escalation_reason` | `segments` c/ `escalation_reason != ''` | ⚠️ exige um **transfer** — adicione um contato extra no pré-voo, transferido para `sac_ia` |
-| `deploy` (diário) | `evaluation_finalized` + REST do registry | ✅ `seed_deploy_lens_demo.sh` — **junho/2026** |
-| `deploy` (epoch) | `evaluation_finalized` ⋈ `segments.deploy_version` | ✅ `seed_epoch_demo.sh` — **N=6, abaixo do `min_sample`=30**, sai com aviso *"Low sample"*. Ou aumente o N no script, ou **antecipe o aviso na narrativa** ("o gráfico se recusa a fingir confiança que não tem") — o que, para plateia técnica, é melhor que esconder |
-| `quality` | `evaluation_results` ⋈ atribuição | ⚠️ só via `test_t11_quality_report.sh` (fixe `CAMP=`), datas **19/06/2026** |
-| `quality_criteria` | `evaluation_dimension_scores` | ❌ **sem seed em todo o repo.** Única via é o pipeline real (`evaluation.events` → consumer). **Fora do roteiro.** |
+| `resolution` | `segments` | ✅ **live** (Bloco A) **+ volume** — três humanos com perfis distintos: Carla ~0.91 · Ana ~0.82 · Bruno ~0.68. O board só prova que compara quando os números diferem |
+| `sessions_aht` | `segments` | ✅ **live + volume** — AHT inversamente correlacionado à resolução |
+| `wrapup` | `segments.issue_status` | ✅ **live** — o form que você preenche, sobre um fundo de 204 disposições |
+| `nps` | `session_signal` grain=segment | ✅ **live** — o 9 do cliente, sobre 55 sinais semeados |
+| `pause_reason` | `agent_pause_intervals` | ✅ **live + volume** — 94 pausas, 4 motivos da taxonomia real |
+| `availability` | `agent_login_intervals` + pausas | ✅ **resolvido pelo volume** — 3 agentes × 10 dias úteis, 8 h/dia. Era ✅ com N=1 e curva pobre |
+| `escalation_reason` | `segments` c/ `escalation_reason != ''` | ✅ **resolvido pelo volume** — 26 segmentos com a taxonomia de `agent_activity`. Era ⚠️ "adicione um contato no pré-voo" |
+| `deploy` (diário) | `evaluation_finalized` + REST do registry | ✅ `seed_deploy_lens_demo.sh` — relativo a hoje (D-6/D-4/D-2). ⚠️ entidade = **POOL** `sac_ia`, não o skill |
+| `deploy` (epoch) | `evaluation_finalized` ⋈ `segments.deploy_version` | ✅ **resolvido pelo volume** — v1.0 com 45 e v2.0 com 40 avaliações, **acima do `min_sample`=30**: o aviso *"Low sample"* sumiu. Era N=6 e saía com o aviso |
+| `quality` | `evaluation_results` ⋈ atribuição | ✅ **resolvido pelo volume** — 116 resultados atribuídos por `segment_id`. Era ⚠️ (só via `test_t11_quality_report.sh`, datas literais de junho) |
+| `quality_criteria` | `evaluation_dimension_scores` | ✅ **resolvido pelo volume** — 464 notas em 4 dimensões (Acolhimento/Diagnóstico/Resolução/Conformidade). Era **❌ sem seed em todo o repositório**, fora do roteiro por impossibilidade |
 
-**Duas dívidas de preparo, em ordem de retorno:**
+**Dívidas de preparo:**
 
-1. **Parametrizar as datas** dos três seeds (`now() - INTERVAL n DAY`). Elimina o único passo do roteiro
-   em que você precisa mexer no seletor de período no meio da demo. ~20 min.
-2. **Um gerador de volume.** Não existe nada parametrizável por N no repositório — todo seed é `INSERT`
-   hardcoded de dezenas de linhas. Com N=1 as lentes *funcionam* mas não *impressionam*. Um script que
-   gere ~200 segmentos + avaliações em 14 dias resolveria `availability`, `quality` e o `min_sample` do
-   epoch de uma vez. ~1 h.
+1. ~~**Parametrizar as datas** dos três seeds.~~ ✅ **feito em 2026-08-12** — ancoram em `date -u` com
+   override por `ANCHOR=`, e limpam as próprias linhas antes de inserir. Sumiu o passo de mexer no
+   seletor de período no meio da demo.
+2. ~~**Um gerador de volume.**~~ ✅ **feito em 2026-08-12** — `infra/test/seed_volume_demo.sh`,
+   parametrizável por `N`/`DAYS`, determinístico por `SEED`, com conferência que **gateia** (8/0) e
+   `CLEAN_ONLY=1` para desfazer. Resolveu de uma vez `availability`, `quality`, `quality_criteria`,
+   `escalation_reason` e o `min_sample` do epoch.
+3. ~~**Contato transferido para `sac_ia` no pré-voo.**~~ ✅ absorvido pelo gerador (26 segmentos com
+   `escalation_reason`, da taxonomia real de `agent_activity`).
+
+**Ordem dos seeds no dia da demo** — o volume primeiro, porque os outros dois escrevem no mesmo pool:
+
+```bash
+bash infra/test/seed_volume_demo.sh            # o fundo: 200 contatos, 14 dias
+bash infra/test/seed_deploy_lens_demo.sh       # a curva diária + markers
+bash infra/test/seed_epoch_demo.sh             # as duas épocas + pendentes
+bash infra/test/seed_customer_history_demo.sh  # o Cliente 360
+```
 
 ---
 
@@ -278,11 +366,13 @@ São **10 lentes** na UI (`AgentsBenchPage.tsx:38`) + `session_nps`, que só exi
 Para os **30 min de discussão**, com script curto de cada um. Os três primeiros são os que mais
 provavelmente mudam a conversa com arquitetos.
 
-**① Aprovação humana como passo de workflow (3 min) — o de maior retorno.**
-Pool `aprovacao_deploy` (`dispatch_mode: pull`) + `skill_gate_promocao_v1` + form
-`dialog_promocao_deploy`. O aprovador é um **agente logado**, o item cai na **mesma inbox pull** do
-wrap-up e é renderizado pelo **mesmo `DialogFormRenderer`**. A tese fica visível sem slide: *aprovação
-não é um módulo, é um `collect` a um pool.* Amarra direto no Bloco A.
+**① O MESMO renderer aprovando um deploy (2 min) — agora é uma segunda instância, não uma novidade.**
+*(A aprovação humana subiu para o Bloco B em 2026-08-12; este item deixou de ser "o de maior retorno"
+e virou a prova de que o mecanismo é genérico.)* Pool `aprovacao_deploy` (`dispatch_mode: pull`) +
+`skill_gate_promocao_v1` + form `dialog_promocao_deploy`. Abra e diga: *"esta é a mesma inbox, o mesmo
+`DialogFormRenderer` e o mesmo `collect` que vocês viram aprovar um limite de crédito há dez minutos —
+só o formulário mudou. Aprovação não é um módulo; é um `collect` a um pool."* Combinado com ⑤ e com a
+lente `deploy`, fecha o arco de governança **aprovar → promover → medir**.
 
 **② Auditoria LGPD (2 min).** `/audit` → aba **MCP Calls**: toda chamada de ferramenta que a IA fez,
 com `allowed`, `injection_detected`, `duration_ms` e `source` (`in_process` | `proxy_sidecar`). O ponto
@@ -338,10 +428,12 @@ endpoint que exige JWT — provável 401 na sua cara).
 ## 7. Checklist de 60 segundos antes de compartilhar a tela
 
 - [ ] Instâncias `human-*` órfãs limpas
-- [ ] Wrap-up em `detached` aplicado e **um item parqueado** na inbox (plano B)
-- [ ] Contato 1 da journey rodado e **resume da operadora executado** (janela de 24 h aberta)
-- [ ] Número `11987654321` **virgem de OTP** (ensaios feitos com outro número)
-- [ ] Seeds de junho rodados; `/analise/agents` já aberto com período **13–21/06/2026**
+- [ ] Wrap-up em `detached` aplicado e **um item parqueado** na inbox (plano B do Bloco A)
+- [ ] **Janela 5 aberta em sessão anônima, logada como `operator`** — e o ABAC `approvals` conferido
+- [ ] As 3 regras de masking do pacote visíveis em `/config/masking` para o role `operator`
+- [ ] **Telefone virgem de OTP** anotado num post-it (ensaios feitos com outros números)
+- [ ] Seeds rodados **hoje** (as datas são relativas ao momento da execução)
+- [ ] `smoke_limite_tres_acessos.sh` 16/0 e `probe_journey_limite.sh` 5/0 na véspera
 - [ ] Terminal com `logs -f channel-gateway | grep OTP-DEV` visível e limpo
 - [ ] Notificações do SO silenciadas; zoom do browser em 110–125%
 - [ ] Aba do webchat do cliente **não fechada** entre os blocos (o NPS depende disso)

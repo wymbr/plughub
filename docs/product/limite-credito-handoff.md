@@ -40,26 +40,23 @@ demo lê como descuido. Tirar os `**` dos `notify`/`menu` dos três skills de cl
 claro**. Sem conceder ao `operator@plughub.local` em Configuration › Access, **a cena de
 mascaramento não existe na demo**.
 
-**2b. Observabilidade: o Workflow trace ficou pela metade** *(regressão percebida, 2026-08-11)*.
-Antes de separar a entrega, `/analise/sessions` mostrava **7 execuções** para o processo — análise
-e entrega na mesma sessão. Depois da separação, mostra **3**: a trilha para em
-`skill limite processo — resolved` e a entrega não aparece.
+**2b. Observabilidade: o Workflow trace ficou pela metade** — ✅ **RESOLVIDO (2026-08-12): não era
+defeito.** Antes de separar a entrega, `/analise/sessions` mostrava **7 execuções**; depois, **3**.
+Causa: o Workflow trace é **session-scoped**, e metade da história mudou de sessão de propósito
+(§11 do design doc — foi o que consertou o re-enfileiramento na fila pull).
 
-Causa: o **Workflow trace é session-scoped**, e metade da história mudou de sessão de propósito
-(ver §11 do design doc — foi o que consertou o re-enfileiramento na fila pull). O dado não se
-perdeu; mudou de lugar.
+`infra/test/probe_journey_limite.sh` (novo, **5/0**) mediu: as três sessões (intake → análise →
+entrega) formam **UMA journey**, raiz = o `session_id` do intake, `spawn_reason='trigger'` na
+aresta. A herança de raiz é transitiva por construção — `handle_trigger` lê
+`session.root_session_id` do ctx do CHAMADOR e sempre semeia a tag na sessão nova, então "workflow
+disparando workflow" nunca foi caso especial.
 
-A fazer, nesta ordem:
-1. **Verificar** se `/analise/processos` agrupa as três sessões (intake → análise → entrega) sob a
-   mesma journey. `disparar_entrega` passa `origin_session_id` e `journey` default é `inherit`,
-   então deveria — mas ninguém olhou.
-2. Se agrupar: decidir se basta, ou se o Workflow trace ganha um link "ver processo completo".
-3. Se **não** agrupar: aí sim é defeito — investigar a propagação de `root_session_id` através do
-   `workflow_trigger` feito de dentro de um workflow (o caso testado até hoje era trigger a partir
-   de um agente de intake, não de outro workflow).
+**Consequência para a demo:** a leitura ponta-a-ponta é a **Vista Processos**, não a de Sessões.
+⚠️ Ao procurar a journey, **não filtre por pool `limite_processo`** — a sessão da análise sai com
+`pool_id = aprovacao_credito` (o delegate ao pool humano reescreve a linha no `ReplacingMergeTree`).
+Busque pela raiz, ou por `limite_ia`/`limite_entrega`.
 
-Trade-off honesto para a demo: o desenho atual é o correto operacionalmente (fecha a sessão, limpa
-fila e cartão) e o preço é que a leitura ponta-a-ponta exige a Vista Processos em vez da de Sessões.
+*Refinamento opcional, não bloqueante:* dar ao Workflow trace um link "ver processo completo".
 
 **3. Decidir a journey do roteiro.** Trocar o Bloco B (8 min, hoje portabilidade) pelo aumento de
 limite? A favor: masking por política, aprovação humana em fila pull, três acessos, tudo testado.

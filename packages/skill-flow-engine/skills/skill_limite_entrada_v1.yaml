@@ -42,7 +42,7 @@ steps:
   # ══ Abertura e identificação ═══════════════════════════════════════════════
   - id: saudacao
     type: notify
-    message: "Olá! Posso te ajudar com o **aumento de limite** do seu cartão. Vou precisar te identificar primeiro."
+    message: "Olá! Posso te ajudar com o aumento de limite do seu cartão. Vou precisar te identificar primeiro."
     on_success: coletar_contato
     on_failure: coletar_contato
 
@@ -230,11 +230,14 @@ steps:
   # porque a spec de preview do N3 os declara `plain`.
   - id: menu_continuidade
     type: menu
-    # ⚠️ Sem `**` em volta de numero_cartao: o valor JÁ vem com asteriscos do
-    # context_preview (***4444), e envolvê-lo em negrito produz `*****4444**` —
-    # markdown malformado que o webchat renderiza literalmente. Máscara e ênfase
-    # disputam o mesmo caractere; quem já está mascarado não leva negrito.
-    prompt: "📋 Você já tem um pedido de aumento de limite em andamento.\n\n• Cartão: {{$.pipeline_state.pendencia.context.numero_cartao}}\n• Limite solicitado: **R$ {{$.pipeline_state.pendencia.context.limite_solicitado}}**\n• Situação: **{{$.pipeline_state.pendencia.context.status}}**\n\nO que deseja fazer?"
+    # ⚠️ SEM markdown nas mensagens ao cliente. Duas razões independentes:
+    # (1) o webchat usa `textContent` — `**negrito**` sai com os asteriscos
+    #     literais na tela;
+    # (2) máscara e ênfase disputam o mesmo caractere — `numero_cartao` já vem
+    #     ***4444 do context_preview, e envolvê-lo produziria `*****4444**`.
+    # A estrutura vem de `\n` + `•`, que o `.msg` do webchat honra desde que
+    # tenha `white-space: pre-wrap` (corrigido 2026-08-12).
+    prompt: "📋 Você já tem um pedido de aumento de limite em andamento.\n\n• Cartão: {{$.pipeline_state.pendencia.context.numero_cartao}}\n• Limite solicitado: R$ {{$.pipeline_state.pendencia.context.limite_solicitado}}\n• Situação: {{$.pipeline_state.pendencia.context.status}}\n\nO que deseja fazer?"
     interaction: button
     options:
       - id: consultar
@@ -357,7 +360,7 @@ steps:
 
   - id: confirmar_recebimento
     type: notify
-    message: "📋 Recebido! Vou registrar seu pedido de aumento para **R$ {{$.pipeline_state.dados.limite_solicitado}}**. Um instante..."
+    message: "📋 Recebido! Vou registrar seu pedido de aumento para R$ {{$.pipeline_state.dados.limite_solicitado}}. Um instante..."
     on_success: disparar_processo
     on_failure: disparar_processo
 
