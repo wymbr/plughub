@@ -162,57 +162,58 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
-## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(reenquadrado 2026-08-12; sessão própria)*
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12 — nada implementado)*
 
-> Reformulação do usuário, e ela é mais exigente do que "melhorar o Workflow trace": **o objetivo
-> não é o histórico do workflow, é saber quais CONTATOS estão associados ao processo e exibi-los
-> todos em sequência, no mesmo lugar.**
+> **Desenho fechado em [`docs/adr/adr-historico-unificado-duas-visoes.md`](docs/adr/adr-historico-unificado-duas-visoes.md).**
+> Kickoff de F0: [`docs/product/historico-unificado-kickoff.md`](docs/product/historico-unificado-kickoff.md).
+> Handoff de origem: `docs/product/journey-contatos-em-sequencia-handoff.md`. O detalhe (D1–D12,
+> achados medidos, o que foi rejeitado) vive no ADR; aqui fica só o que está pendente e por quê.
 
-**O que já funciona** (medido 2026-08-12, não é preciso reinvestigar): `/reports/journeys?root_session_id=…`
+**O que já funciona** (medido 2026-08-12, não reinvestigar): `/reports/journeys?root_session_id=…`
 devolve `session_count: 3`; `/reports/sessions?root_session_id=…` devolve as três encadeadas por
-`origin_session_id`; a Vista Processos renderiza a árvore `ROOT WebChat → análise → entrega`. O
-agrupamento por PROVENIÊNCIA está correto ponta a ponta.
+`origin_session_id`; a Vista Processos renderiza `ROOT WebChat → análise → entrega`. O agrupamento
+por PROVENIÊNCIA está correto ponta a ponta — **não há defeito de journey a consertar.**
 
-**A lacuna que o reenquadramento revela — e que uma view nova NÃO resolve.** Os contatos do acesso 2
-("consultar status") e do acesso 3 ("receber resultado") são **conexões novas do webchat**: nascem
-como sessões próprias, com raiz própria, ligadas ao processo apenas por **identidade**
-(`resume_origin=identity`), nunca por proveniência. Eles **não estão** na journey — e por isso
-nenhuma tela que leia `root_session_id` vai exibi-los, por melhor que seja.
+**O achado que reordenou tudo.** O pedido virou quatro perguntas — direção do acesso, prova de saída,
+perna do workflow, output com confirmação — e nas quatro **o fato já está persistido sem superfície**.
+Uma delas está persistida e **desligada por um gate assimétrico**: `handle_collect` não honra
+`customer_resumable`/`resume_policy`, embora o schema tenha os campos e o engine os envie (registrado
+em `skill_limite_entrega_v1.yaml:41-42`, que por isso parqueia com `delegate`). Fechar esse gate dá,
+de uma vez: output-com-confirmação, a perna do output **como sessão**, a direção **outbound**
+(`spawn_reason='collect'`) e pertença ao processo **por proveniência**.
 
-Ou seja: o pedido "todos os contatos do processo, em sequência" precisa **primeiro** de um passo de
-MODELO, não de UI. As opções, na ordem em que eu as investigaria:
+Consequência: a pertença se reparte, e só metade precisa de merge.
 
-1. **`journey_merge` no resume por identidade.** A tool existe, o topic existe, o union-find existe,
-   e o `PendingEntry` **já carrega o `root_session_id`**. Falta um `invoke` no ponto em que o intake
-   reconhece a pendência e retoma. É a lacuna que o roteiro da demo já narra com honestidade
-   ("falta um `invoke journey_merge`"). Provavelmente a mudança mais barata com o maior efeito:
-   feita ela, os 3 contatos passam a cair na MESMA journey e a árvore atual já os mostra.
-2. Só então a **apresentação em sequência** — e aqui o enquadramento do usuário barateia o trabalho:
-   *"a Vista Processos é a de Sessões um nível acima; quero ver o que cada PERSONAGEM interagiu em
-   cada sessão, em ordem cronológica."*
+| Caso | Como entra no processo |
+|---|---|
+| **Output ativo** — nós avisamos o cliente | `collect` → proveniência, automático (F0) |
+| **Acesso espontâneo** — o cliente volta por conta (acesso 2) | `journey_merge` (F1) |
 
-   **Personagem = participante ⇒ a unidade é o SEGMENTO, não a mensagem.** O segmento já carrega
-   `participant_id`, `role`, `agent_type`, `user_id`, `started_at`/`ended_at`, `duration_ms` e
-   `outcome`. A linha do tempo da journey é a **união dos segmentos das sessões-membro**, ordenada
-   por `started_at` e agrupada por contato.
+**Fases, na ordem — e a ordem é load-bearing:**
 
-   Isso **elimina o custo escondido**: segmento é metadado, mensagem é conteúdo. A costura em nível
-   de segmento não cruza regime de visibilidade nenhum. O transcript de MENSAGENS (que cruza três
-   regimes — cliente `all`, análise `agents_only` + PII mascarada + `[Dados sensíveis omitidos]`,
-   entrega `all`) só é necessário para ler as PALAVRAS atravessando contatos, e é esse que exige ADR
-   de masking. Fatiar assim deixa o valor principal fora do caminho da decisão cara.
+- **F0 · conserto do gate do `collect`** — honrar `customer_resumable`/`resume_policy` em
+  `handle_collect`; migrar `skill_limite_entrega_v1.parquear_resultado` de `delegate` para `collect`,
+  preservando o timeout de 7 dias. **Confirmar o defeito em `handle_collect` antes de construir** —
+  ele está registrado no YAML, não medido por nós.
+- **F1 · carimbos de pertença** — `invoke journey_merge` no intake (a tool, o topic, o union-find e o
+  `root_session_id` no `PendingEntry` já existem); e **endereço de entrada imutável** (`endpoint_id` do
+  `ChannelEndpoint`, nunca a slug), que **deve** entrar no padrão do cache de identidade do consumer,
+  senão herda o defeito do `pool_id`.
+- **F2** · `root_session_id` em `/reports/segments`, **com isenção da janela de data** quando presente.
+- **F3** · visão 1 (contatos + chip de processo + direção).
+- **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
+- **F5** · `ContextStorePersister` — fase própria, desenho fechado no ADR §3 (mascarado, estado final,
+  ctx de processo a cada close, foto inteira).
 
-   ⚠️ **Segmentos se SOBREPÕEM** (`@mention` paralelo ao primary, especialista de conferência dentro
-   da janela do pai, hooks posatt paralelos entre si). Logo "ordem cronológica" no nível de journey
-   é uma **linha do tempo com sobreposição, não uma lista**, e herda o invariante de nunca somar
-   segmentos para obter duração de processo (usar `elapsed_time_ms`, não `Σ agent_time_ms`).
+**Não começar pela UI.** F0 muda o dado que a tela vai mostrar: sem ele a visão 2 renderiza *parkings*;
+com ele renderiza *acessos outbound com confirmação*, que é o que foi pedido.
 
-   **Segundo eixo, do mesmo dado:** com `user_id` estável (humano) e `flow_id`/pool (IA), dá para
-   virar de *"o que aconteceu, em ordem"* para *"o que a Ana fez neste processo inteiro"*,
-   atravessando os contatos. Vale avaliar qual dos dois o operador pede primeiro.
+**Decisões abertas** (ADR §4): `collect` que expira sem engajamento conta como contato? · texto do
+rótulo do chip quando o processo tem contatos fora da janela filtrada · `uniq(root_session_id)` como
+métrica de cabeçalho (lacuna registrada, não fechada).
 
-**Não começar pelo item 2.** Costurar uma view sobre um agrupamento incompleto entrega uma tela
-bonita que continua sem os contatos que motivaram o pedido.
+**A verificar antes de construir:** o literal que o cliente usa em `messages.author_role` — foi suposto
+em D9, não medido.
 
 ---
 
