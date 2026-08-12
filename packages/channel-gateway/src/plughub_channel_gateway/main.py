@@ -995,6 +995,13 @@ async def webhook_collect(request: Request) -> dict:
             signal_grain         = body.get("signal_grain") or "journey",
             timeout_hours        = float(body.get("timeout_hours") or 48),
             campaign_id          = body.get("campaign_id") or "",
+            # Identity Resolver (nível b · Slice 3) — gate da dual-write
+            # `pending_by_customer`, simétrico aos dois handlers de delegate.
+            # O engine SEMPRE enviou estes campos (skill-flow-service persistCollect);
+            # eram descartados aqui, porque este endpoint monta os kwargs à mão a
+            # partir de um dict cru — o campo não declarado some sem erro nenhum.
+            customer_resumable   = bool(body.get("customer_resumable") or False),
+            resume_policy        = body.get("resume_policy") or "offer",
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

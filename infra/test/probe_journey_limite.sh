@@ -73,25 +73,58 @@ C=$(chq "SELECT session_id FROM sessions FINAL
 [[ -n "$C" ]] || die "nenhuma sessão em limite_entrega — rode um caso completo antes
       (webchat → limite_ia → aprovar no Console). Ausência de amostra não é verde."
 
-read -r C_ROOT C_ORIGIN C_SPAWN <<<"$(chq "
-  SELECT root_session_id, coalesce(origin_session_id,''), coalesce(spawn_reason,'')
-  FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$C'" | tr '\t' ' ')"
+# ⚠️ Delimitador '|' montado na QUERY — e não o TSV cru com IFS=tab.
+#
+# Campo vazio no meio colapsa e os seguintes escorregam uma casa: em 2026-08-12 um
+# `origin_session_id` vazio fez `B_ORIGIN` receber o `pool_id`, e o probe reprovou
+# anunciando "raízes DIVERGEM (A=aprovacao_credito)" — um NOME DE POOL onde ia um
+# session_id. O leitor produziu um valor plausível a partir de um ausente, e o
+# veredicto culpou a propagação de raiz.
+#
+# `IFS=$'\t'` NÃO conserta, e a tentativa está registrada porque é contra-intuitiva:
+# espaço, tab e newline são "IFS whitespace" e têm regra própria — runs deles são
+# dobrados num único delimitador AINDA QUE declarados explicitamente. Medido:
+#   printf 'a\t\tb\n' | { IFS=$'\t' read -r x y z; ...}  →  x=[a] y=[b] z=[]
+# Só delimitador NÃO-BRANCO preserva campo vazio. Daí o concat na query.
+IFS='|' read -r C_ROOT C_ORIGIN C_SPAWN < <(chq "
+  SELECT concat(root_session_id,'|',coalesce(origin_session_id,''),
+                '|',coalesce(spawn_reason,''))
+  FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$C'")
 B="$C_ORIGIN"
 [[ -n "$B" ]] || bad "a entrega ($C) não tem origin_session_id — o fio de proveniência
       se rompeu no workflow_trigger de disparar_entrega"
 
 if [[ -n "$B" ]]; then
-  read -r B_ROOT B_ORIGIN B_POOL <<<"$(chq "
-    SELECT root_session_id, coalesce(origin_session_id,''), pool_id
-    FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$B'" | tr '\t' ' ')"
+  IFS='|' read -r B_ROOT B_ORIGIN B_POOL < <(chq "
+    SELECT concat(root_session_id,'|',coalesce(origin_session_id,''),'|',pool_id)
+    FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$B'")
   A="$B_ORIGIN"
-  [[ -n "$A" ]] || bad "a análise ($B) não tem origin_session_id — o fio se rompeu já no
-      trigger do intake"
   if [[ -n "$A" ]]; then
-    read -r A_ROOT A_POOL <<<"$(chq "
-      SELECT root_session_id, pool_id
-      FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$A'" | tr '\t' ' ')"
+    IFS='|' read -r A_ROOT A_POOL < <(chq "
+      SELECT concat(root_session_id,'|',pool_id)
+      FROM sessions FINAL WHERE tenant_id='$TENANT' AND session_id='$A'")
   fi
+fi
+
+# ── Terceiro ramo: AUSENTE é inconclusivo, não defeito ───────────────────────
+# A cadeia de três só existe quando o caso entrou pelo INTAKE. `smoke_limite_tres_
+# acessos.sh` dispara o processo direto por workflow_trigger (é um harness do N3, não
+# do N2), então o caso que ele cria nasce sem intake — e este probe se ancora na
+# entrega MAIS RECENTE, que passa a ser a dele. Reprovar aí seria acusar o produto
+# por uma propriedade do harness. Um teste que não pode reprovar é inútil; um que
+# reprova a coisa errada é pior, porque manda consertar o que não está quebrado.
+if [[ -z "${A:-}" ]]; then
+  echo "   intake   A=<ausente>  (a análise $B não tem origin_session_id)"
+  echo "   análise  B=$B  root=${B_ROOT:-?}  pool=${B_POOL:-?}"
+  echo "   entrega  C=$C  root=$C_ROOT  spawn=${C_SPAWN:-<vazio>}"
+  echo
+  echo "══ INCONCLUSIVO — a cadeia mais recente não passou pelo intake ══"
+  echo "   A entrega ancorada veio de um caso disparado direto no N3 (tipicamente o"
+  echo "   smoke). Para julgar a propagação de raiz é preciso um caso REAL de ponta a"
+  echo "   ponta: webchat → limite_ia → aprovar no Console. Isto NÃO é veredicto sobre"
+  echo "   o produto — é ausência de amostra, e ausência de amostra não é vermelho"
+  echo "   nem verde."
+  exit 2
 fi
 
 echo "   intake   A=${A:-<ausente>}  pool=${A_POOL:-?}  root=${A_ROOT:-?}"

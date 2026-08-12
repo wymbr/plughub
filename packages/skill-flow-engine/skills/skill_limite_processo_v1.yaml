@@ -118,18 +118,29 @@ steps:
         next:     registrar_aprovado
     default: registrar_recusado
 
+  # ⚠️ Namespace `journey.`, não `session.` — e a diferença é de ESCOPO, não de gosto.
+  # O resultado da análise é fato do PROCESSO: ele nasce aqui, tem de ser lido três
+  # sessões adiante (a entrega parqueia, o cliente volta noutro contato) e não pertence
+  # a nenhuma das sessões que o atravessam. `writeContextTag` (J5a) desvia toda tag
+  # `journey.*` para o hash da RAIZ canônica ({t}:ctx:journey:{raiz}, TTL 30d), que o
+  # `journey_merge` migra — então o valor sobrevive ao fim de cada contato.
+  #
+  # Isto SUBSTITUI a cadeia antiga (context_json → ctx da entrega → delegate.context →
+  # context_preview → pending → intake), que copiava o mesmo fato por quatro lugares
+  # porque o `delegate` não tinha onde guardá-lo. Guardar fato de processo no preview
+  # de uma pendência é o container errado, e ele some junto com a pendência.
   - id: registrar_aprovado
     type: invoke
     tool: context_set
     input:
       session_id: "$.session_id"
       tenant_id:  "$.tenant_id"
-      tag:        "session.resultado"
+      tag:        "journey.resultado"
       value:      "aprovado"
       confidence: 1.0
       visibility: "agents_only"
-    on_success: limpar_form_do_pacote
-    on_failure: limpar_form_do_pacote
+    on_success: registrar_limite_aprovado
+    on_failure: registrar_limite_aprovado
 
   - id: registrar_recusado
     type: invoke
@@ -137,8 +148,50 @@ steps:
     input:
       session_id: "$.session_id"
       tenant_id:  "$.tenant_id"
-      tag:        "session.resultado"
+      tag:        "journey.resultado"
       value:      "recusado"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_limite_aprovado
+    on_failure: registrar_limite_aprovado
+
+  # Ambos os ramos convergem: na recusa o valor chega vazio, e vazio é a resposta
+  # honesta — o agente de entrega narra o parecer, que existe nos dois casos.
+  - id: registrar_limite_aprovado
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.limite_aprovado"
+      value:      "$.pipeline_state.aprovar.edits.limite_aprovado"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_parecer
+    on_failure: registrar_parecer
+
+  - id: registrar_parecer
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.parecer"
+      value:      "$.pipeline_state.aprovar.edits.parecer"
+      confidence: 1.0
+      visibility: "agents_only"
+    on_success: registrar_cartao_journey
+    on_failure: registrar_cartao_journey
+
+  # O cartão já é fato do processo desde o acesso 1; só não tinha onde morar.
+  - id: registrar_cartao_journey
+    type: invoke
+    tool: context_set
+    input:
+      session_id: "$.session_id"
+      tenant_id:  "$.tenant_id"
+      tag:        "journey.numero_cartao"
+      value:      "@ctx.session.numero_cartao"
       confidence: 1.0
       visibility: "agents_only"
     on_success: limpar_form_do_pacote
@@ -193,9 +246,9 @@ steps:
   # entrega é a própria retomada. É esse `auto` que o N2 usa para distinguir o
   # acesso 3 do acesso 2, sem nenhum flag nosso.
   #
-  # NOTA: parking tem de ser `delegate`. O `collect` NÃO gera pendência — o engine
-  # envia customer_resumable/resume_policy, mas o endpoint não lê os campos
-  # (§7.4 do design doc).
+  # NOTA (corrigida 2026-08-12, F0.1): o parking JÁ PODE ser `collect`. O gate
+  # assimétrico foi fechado — `handle_collect` honra customer_resumable/resume_policy
+  # e escreve a dual-write `pending_by_customer`, como os dois handlers de delegate.
   # A espera pelo cliente vive num PROCESSO PRÓPRIO, não aqui. O motivo é duro e foi
   # medido três vezes: a plataforma assume que sessão em pool HUMANO acaba quando o
   # trabalho do humano acaba. Mantendo esta sessão viva depois da decisão, tudo que é
@@ -214,7 +267,13 @@ steps:
       pool_id:           "limite_entrega"
       tenant_id:         "$.tenant_id"
       origin_session_id: "$.session_id"   # mantém a journey: a entrega herda a raiz
-      context_json: '{"session.contact_identifier": "{{@ctx.session.contact_identifier}}", "session.numero_cartao": "{{@ctx.session.numero_cartao}}", "session.limite_solicitado": "{{@ctx.session.limite_solicitado}}", "session.resultado": "{{@ctx.session.resultado}}", "session.limite_aprovado": "{{$.pipeline_state.aprovar.edits.limite_aprovado}}", "session.parecer": "{{$.pipeline_state.aprovar.edits.parecer}}"}'
+      # Só a ÂNCORA viaja. Os valores do resultado saíram daqui: vivem em `journey.*`,
+      # que a entrega e o acesso 3 leem da raiz compartilhada. Copiar o mesmo fato para
+      # o ctx da sessão-filha criaria uma segunda fonte, e duas fontes divergem — foi
+      # exatamente esse hop que o preview obrigava a manter.
+      # `contact_identifier` FICA: dele o gateway deriva as âncoras sob as quais a
+      # pendência é indexada; sem ele a pendência existe e o cliente nunca a encontra.
+      context_json: '{"session.contact_identifier": "{{@ctx.session.contact_identifier}}"}'
     on_success: encerrar_sucesso
     on_failure: encerrar_sem_entrega
 

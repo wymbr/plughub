@@ -1810,6 +1810,9 @@ class WebhookAdapter(ChannelAdapter):
         signal_grain:       str = "journey",
         timeout_hours:      float = 48.0,
         campaign_id:        str = "",
+        # Identity Resolver (nível b) — gate the pending_by_customer dual-write.
+        customer_resumable: bool = False,
+        resume_policy:      str  = "offer",
     ) -> dict[str, Any]:
         """
         N2 handler for a `collect` step (Journey J4c) — LAZY. Delivers the survey
@@ -1949,6 +1952,62 @@ class WebhookAdapter(ChannelAdapter):
             suspend_reason="input",   # collect = coleta de resposta do alvo
             ttl_s=ttl_s,
         )
+
+        # ── Identity Resolver dual-write (Slice 3 gate) — simétrico ao delegate ───
+        # Sem isto o `collect` é retomável SÓ pelo token opaco: o cliente que volta
+        # por outro canal não encontra nada, e o processo fica esperando um clique
+        # num link cuja entrega real é trilha não construída. Era o gate assimétrico
+        # — `handle_delegate` e `handle_delegate_conference` honravam os campos, este
+        # handler os descartava, e o modo de falha era sucesso pelo caminho antigo.
+        #
+        # Duas diferenças de FATO em relação ao delegate, não de estilo:
+        #   • o resume_token é o próprio `collect_token` (já gravado no hash
+        #     {t}:resume_tokens acima) — não há token à parte a inventar;
+        #   • `pool` aqui é o pool NEGOCIADO pelo N2, i.e. quem atende o cliente
+        #     neste pending; no delegate é o pool a quem delegar na reconexão.
+        # `expires_at` é preenchido porque o collect o conhece (o delegate não o passa).
+        if self._identity_enabled and customer_resumable:
+            try:
+                pending_customer_id, anchors = await self._resolve_pending_customer(
+                    tenant_id, session_id, customer_id,
+                )
+                if not pending_customer_id:
+                    # Nunca degradar mudo: sem cliente resolvido a pendência seria
+                    # gravada sob uma chave que ninguém consulta — invisível para
+                    # sempre, e indistinguível de "não havia o que gravar".
+                    logger.warning(
+                        "identity: collect customer_resumable=true mas nenhum cliente "
+                        "resolvido (caller=%s customer_id=%r âncoras=%d) — pendência "
+                        "NÃO indexada; a retomada cross-canal não vai funcionar",
+                        session_id, customer_id, len(anchors),
+                    )
+                else:
+                    await self._identity.write_pending(
+                        tenant_id, pending_customer_id,
+                        PendingEntry(
+                            session_id=session_id,          # workflow chamador suspenso
+                            customer_id=pending_customer_id,
+                            resume_token=collect_token,     # o collect_token É o token
+                            pool=pool_id,                   # pool negociado pelo N2
+                            policy=resume_policy,
+                            expires_at=expires_at,
+                            root_session_id=caller_root,    # Journey J3
+                        ),
+                        ttl_s=ttl_s,
+                    )
+                    if anchors:
+                        # Gatilho concreto (§5): pendência registrada tem de sobreviver
+                        # à janela efêmera → promove o cliente ao store durável.
+                        await self._identity.promote_to_durable(
+                            tenant_id, pending_customer_id, anchors,
+                        )
+                    logger.info(
+                        "identity: pending_by_customer written (collect) customer=%s "
+                        "caller=%s token=%s policy=%s",
+                        pending_customer_id, session_id, collect_token, resume_policy,
+                    )
+            except Exception as _e:
+                logger.warning("identity: collect dual-write failed (non-fatal): %s", _e)
 
         # ── Deliver the invitation link (mock/dev). The collect_token IS the token. ──
         # TODO(J4c fase 2): real SMS/email delivery via the negotiated channel provider.
@@ -2192,6 +2251,77 @@ class WebhookAdapter(ChannelAdapter):
                 continue
             preview[key] = masked
         return preview
+
+    async def _ctx_flat(self, tenant_id: str, session_id: str) -> dict[str, Any]:
+        """
+        Achata o ContextStore de uma sessão em `{tag: valor}`, descartando entradas
+        ilegíveis e os vazios normalizados (`_CTX_EMPTY`). Fail-soft → {}.
+
+        Cada tag `caller.X` é ADITIVAMENTE espelhada como `X`, porque
+        `_anchors_from_context` conhece as chaves nuas e o namespace `session.`, mas
+        `caller.*` é justamente onde vive dado do cliente (CLAUDE.md § ContextStore).
+        Espelhar é aditivo de propósito: descartar a âncora conhecida porque apareceu
+        num namespace é o mesmo erro que o `contact_identifier` já cometeu uma vez.
+        """
+        try:
+            raw = await self._redis.hgetall(f"{tenant_id}:ctx:{session_id}")
+        except Exception:
+            return {}
+        flat: dict[str, Any] = {}
+        for k, v in (raw or {}).items():
+            tag = k.decode() if isinstance(k, bytes) else str(k)
+            try:
+                entry = json.loads(v)
+                val   = entry.get("value") if isinstance(entry, dict) else entry
+            except Exception:
+                continue
+            if val is None:
+                continue
+            text = str(val).strip()
+            if text.lower() in self._CTX_EMPTY:
+                continue
+            flat[tag] = text
+            if tag.startswith("caller."):
+                flat.setdefault(tag[len("caller."):], text)
+        return flat
+
+    async def _resolve_pending_customer(
+        self, tenant_id: str, session_id: str, customer_id: str,
+    ) -> tuple[str, list[dict[str, str]]]:
+        """
+        Resolve sob QUAL cliente indexar a pendência de um `collect`, devolvendo
+        `(customer_id, anchors)`. Âncoras vazias = nada a promover ao durável.
+
+        O `collect` não tem o mapa `context` que o `delegate` declara, então a fonte
+        de âncoras é o ContextStore do CHAMADOR — que é onde elas já estão.
+
+        Ordem deliberada, do mais forte ao mais fraco:
+          1. um `customer_id` NATIVO (`cus_…`) já é a resposta — resolver de novo só
+             criaria a chance de provisionar um cliente novo e gravar a pendência sob
+             um id que ninguém consulta;
+          2. `caller.customer_id` do ctx (o nativo que o Slice 4 carimba);
+          3. âncoras do ctx → `resolve_or_provision`.
+        Nenhum dos três → ("", anchors), e o chamador LOGA. Devolver um id inventado
+        seria trocar uma falha visível por uma pendência invisível.
+        """
+        ctx     = await self._ctx_flat(tenant_id, session_id)
+        anchors = self._anchors_from_context(ctx)
+
+        if customer_id.startswith("cus_"):
+            return customer_id, anchors
+
+        native = ctx.get("caller.customer_id") or ""
+        if isinstance(native, str) and native.startswith("cus_"):
+            return native, anchors
+
+        if anchors:
+            ref = await self._identity.resolve_or_provision(
+                tenant_id, anchors, provision=True,
+            )
+            if ref.customer_id:
+                return ref.customer_id, anchors
+
+        return "", anchors
 
     @staticmethod
     def _anchors_from_context(context: dict[str, Any]) -> list[dict[str, str]]:

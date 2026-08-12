@@ -20,9 +20,10 @@ id: skill_limite_entrega_v1
 name: "Aumento de limite — entrega do resultado"
 version: "1.0"
 description: |
-  Parqueia o resultado da análise como pendência de identidade e aguarda o cliente
-  voltar por qualquer canal. Webchat não tem outbound: o retorno é oportunista.
-  Perfil workflow — só invoke/delegate/choice/complete.
+  Contata o cliente com o resultado da análise (`collect`) e aguarda resposta ou o
+  prazo de 7 dias. A pendência fica indexada sob a identidade, então o retorno por
+  qualquer canal reencontra o processo. Perfil workflow — invoke/delegate/choice/
+  collect/complete.
 classification:
   type: vertical
   domain: credito
@@ -30,38 +31,50 @@ classification:
 entry: parquear_resultado
 
 steps:
-  # Delegate a um agente de I/O num canal inbound-only: o specialist vê que não há
-  # cliente conectado (`customer_present` ausente), encerra em silêncio e o workflow
-  # FICA suspenso — com a pendência indexada sob a identidade do cliente.
+  # `collect` — a plataforma PROCURA o cliente e fica suspensa até resposta ou prazo.
+  # Substituiu o `delegate` em 2026-08-12 (F0.2), depois que F0.1 fechou o gate
+  # assimétrico: `handle_collect` agora honra customer_resumable/resume_policy e
+  # escreve a dual-write `pending_by_customer`, que é o que faz o retorno do cliente
+  # por QUALQUER canal reencontrar este processo.
+  #
+  # O que muda de fato em relação ao delegate:
+  #   • o `collect_token` É o resume_token (não há token à parte);
+  #   • `spawn_reason='collect'` marca a direção OUTBOUND da perna — o único
+  #     spawn_reason que significa "nós procuramos o cliente";
+  #   • a pertença ao processo vem por PROVENIÊNCIA, sem journey_merge.
+  #
+  # ⚠️ O `collect` é LAZY por decisão de plataforma: ele entrega o convite e suspende
+  # SEM criar sessão nem alocar recurso. A sessão-filha só nasce se o cliente engajar
+  # (handle_collect_engage). Consequência aceita e medida: prazo vencido sem
+  # engajamento NÃO produz contato nenhum — o que também responde a decisão aberta #1
+  # do ADR do histórico unificado, por ausência e não por política.
+  #
+  # ⚠️ Nada de `context` aqui, e não é esquecimento: CollectStepSchema não tem o campo.
+  # Os valores da entrega vivem em `journey.*` (hash da raiz, TTL 30d), escritos pelo
+  # skill_limite_processo_v1 e lidos pelo acesso 3 via `@ctx.journey.*`. É o container
+  # do tamanho do fato — o `preview` do delegate existia só porque não havia outro.
   #
   # resume_policy AUTO: aqui não há o que perguntar. É esse `auto` que o agente de
   # entrada usa para distinguir o acesso 3 ("resultado pronto") do acesso 2
   # ("em análise", que é `offer`), sem nenhum flag nosso.
-  #
-  # Tem de ser `delegate`, não `collect`: o collect NÃO gera pendência — o engine
-  # envia customer_resumable/resume_policy mas o endpoint não lê os campos.
   - id: parquear_resultado
-    type: delegate
-    pool: limite_retorno
+    type: collect
+    target:
+      type: customer
+      id: "@ctx.session.contact_identifier"
+    # canal→pool. Mapa mínimo: sem entrega real de link (trilha não construída), este
+    # par só decide para onde ROTEARIA o clique. O retorno que de fato acontece neste
+    # cenário é o espontâneo, por identidade — e esse não passa por aqui.
+    channel_policy:
+      channels:
+        webchat: limite_retorno
+    interaction: text
+    prompt: "Seu pedido de aumento de limite foi analisado. Toque para ver o resultado."
     customer_resumable: true
     resume_policy: auto
-    context:
-      contact_identifier: "@ctx.session.contact_identifier"
-      numero_cartao:      "@ctx.session.numero_cartao"
-      limite_solicitado:  "@ctx.session.limite_solicitado"
-      resultado:          "@ctx.session.resultado"
-      limite_aprovado:    "@ctx.session.limite_aprovado"
-      parecer:            "@ctx.session.parecer"
-      status:             "Análise concluída — resultado disponível"
-      # O preview é o ÚNICO caminho pelo qual estes valores voltam ao agente de
-      # entrada no acesso 3: `pending_workflow_get` devolve o context_preview, nunca
-      # o context cru do delegate. Campo não declarado aqui não chega — e o agente
-      # de retorno narraria valores vazios.
-      preview: '{"status": "plain", "numero_cartao": "last_4", "resultado": "plain", "limite_aprovado": "plain", "parecer": "plain"}'
     timeout_hours: 168        # 7 dias para o cliente voltar
-    on_resume:
-      next: encerrar_entregue
-    on_reject:
+    output_as: entrega
+    on_response:
       next: encerrar_entregue
     on_timeout:
       next: encerrar_nao_retirado

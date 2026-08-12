@@ -370,9 +370,18 @@ QZ=$(redis ZSCORE "${TENANT}:pool:${POOL_PULL}:queue" "$SID" | tr -d '\r')
   || bad "sessão da análise de volta na fila de $POOL_PULL (score=$QZ) — item já
         decidido sendo re-oferecido para Claim"
 
-echo "══ 8) ACESSO 3 — a pendência vira 'auto' e carrega o resultado ══"
-# O segundo delegate (parquear_resultado) sobrescreve o primeiro no índice (mesma
-# chave session_id). É a substituição que representa "o estado mudou".
+echo "══ 8) ACESSO 3 — a pendência vira 'auto' e o resultado está na journey ══"
+# O parking (agora um `collect`, F0.2) sobrescreve a pendência da análise no índice
+# (mesma chave session_id). É a substituição que representa "o estado mudou".
+#
+# MUDANÇA DE TRANSPORTE (2026-08-12, F0.2/alternativa A): o resultado NÃO viaja mais
+# no `context_preview` da pendência. `CollectStepSchema` não tem `context`, e não
+# precisa ter: resultado é fato do PROCESSO, e mora em `journey.*` — hash da raiz
+# canônica, TTL 30d, migrado pelo journey_merge. A pendência voltou a ser o que o
+# nome diz (ponteiro de retomada), em vez de carregar carga de negócio.
+#
+# Por isso estas duas asserções mudaram de ENDEREÇO, não de intenção: continuam
+# provando que a decisão do aprovador chega ao cliente no acesso 3.
 PEND2=""; POL2=""
 for _ in $(seq 1 20); do
   PEND2=$($CURL "$CG/v1/channels/webhook/pending/by-customer/$CUST?tenant_id=$TENANT")
@@ -387,16 +396,28 @@ echo "   → $(echo "$PEND2" | jq -c '{found, policy, context}' 2>/dev/null | he
   || bad "policy esperada 'auto', veio '${POL2:-<ausente>}' — sem isso o acesso 3
         cairia no menu do acesso 2 e o cliente não receberia o resultado"
 
-RES=$(echo "$PEND2" | jq -r '.context.resultado // empty')
-[ "$RES" = "aprovado" ] \
-  && ok "resultado no preview: $RES" \
-  || bad "resultado deveria ser 'aprovado', veio '${RES:-<ausente>}'"
+# A raiz é o ENDEREÇO do contexto do processo. Sem ela não há o que ler, e o teste
+# tem de dizer isso — comparar contra vazio e seguir seria passar por coincidência.
+JROOT=$(echo "$PEND2" | jq -r '.root_session_id // empty')
+[ -n "$JROOT" ] \
+  && ok "pendência carrega a raiz da journey: $JROOT" \
+  || bad "root_session_id ausente na pendência — sem ele o acesso 3 não tem como
+        unificar a journey nem achar o contexto do processo"
 
-LA=$(echo "$PEND2" | jq -r '.context.limite_aprovado // empty')
+JKEY="${TENANT}:ctx:journey:${JROOT}"
+RES=$(redis HGET "$JKEY" "journey.resultado" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
+[ "$RES" = "aprovado" ] \
+  && ok "resultado no contexto da journey: $RES" \
+  || bad "journey.resultado deveria ser 'aprovado', veio '${RES:-<ausente>}' — em $JKEY.
+        Ausente costuma significar que o context_set gravou no hash da SESSÃO: só tag
+        com prefixo 'journey.' é desviada por writeContextTag."
+
+LA=$(redis HGET "$JKEY" "journey.limite_aprovado" | tr -d '\r' | jq -r '.value // empty' 2>/dev/null)
 [ "$LA" = "$LIMITE_OK" ] \
-  && ok "limite aprovado pelo humano chegou ao cliente: R$ $LA (pedido: R$ $LIMITE)" \
-  || bad "limite_aprovado deveria ser '$LIMITE_OK', veio '${LA:-<ausente>}' — a edição
-        do aprovador ($.pipeline_state.aprovar.edits) não atravessou o preview"
+  && ok "limite aprovado pelo humano chegou à journey: R$ $LA (pedido: R$ $LIMITE)" \
+  || bad "journey.limite_aprovado deveria ser '$LIMITE_OK', veio '${LA:-<ausente>}' — a
+        edição do aprovador ($.pipeline_state.aprovar.edits) não chegou ao contexto
+        do processo"
 
 echo
 echo "═══════════════════════════════════════════════════════════════"

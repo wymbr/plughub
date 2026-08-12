@@ -221,7 +221,7 @@ steps:
       - field:    "$.pipeline_state.pendencia.policy"
         operator: eq
         value:    "auto"
-        next:     retomar_resultado    # acesso 3
+        next:     unificar_journey     # acesso 3 (merge → entrega)
     default: menu_continuidade         # acesso 2
 
   # ══ Acesso 2 — em análise ══════════════════════════════════════════════════
@@ -303,6 +303,29 @@ steps:
     on_failure: finalizar
 
   # ══ Acesso 3 — entregar o resultado ════════════════════════════════════════
+  # PRIMEIRO unir as journeys, DEPOIS ler. A ordem não é estilo: este contato nasceu
+  # espontâneo, então a raiz dele é ele mesmo, e `@ctx.journey.*` resolveria para um
+  # hash vazio. O merge liga a componente deste contato à do processo pendente; só a
+  # partir daí `resolveJourneyRoot` devolve a raiz canônica e as tags aparecem.
+  #
+  # `root_session_id` vem achatado no topo do pending_workflow_get (J3). O merge é
+  # sempre novo→antigo, logo acíclico por construção, e idempotente: reencontrar o
+  # mesmo processo num quarto acesso é no-op.
+  #
+  # on_failure segue para a entrega assim mesmo: sem o merge o agente narra vazio,
+  # que é ruim — mas travar o cliente na porta por causa de um carimbo analítico
+  # seria pior. A falha fica no log do tool, não em silêncio.
+  - id: unificar_journey
+    type: invoke
+    tool: journey_merge
+    input:
+      session_token:  "$.session.session_token"
+      source_root:    "$.session_id"
+      canonical_root: "$.pipeline_state.pendencia.root_session_id"
+    output_as: merge
+    on_success: retomar_resultado
+    on_failure: retomar_resultado
+
   # Specialist de conferência DENTRO desta sessão: o cliente não troca de canal.
   # customer_present=true é o discriminador que autoriza o specialist a fazer I/O.
   - id: retomar_resultado
@@ -312,14 +335,14 @@ steps:
       workflow_resume_token: "$.pipeline_state.pendencia.resume_token"
       customer_present:      "true"
       resume_origin:         "identity"
-      # Vêm todos do context_preview da pendência — é o único canal de volta:
-      # pending_workflow_get devolve o preview, nunca o context cru do delegate.
-      # A spec de preview que os declara está em skill_limite_processo_v1
-      # (step parquear_resultado).
-      numero_cartao:         "$.pipeline_state.pendencia.context.numero_cartao"
-      resultado:             "$.pipeline_state.pendencia.context.resultado"
-      limite_aprovado:       "$.pipeline_state.pendencia.context.limite_aprovado"
-      parecer:               "$.pipeline_state.pendencia.context.parecer"
+      # Contexto do PROCESSO, lido da raiz canônica depois do merge acima. Antes
+      # vinham do context_preview da pendência — um payload que o `delegate` carregava
+      # porque não havia onde guardar fato de processo. O `collect` não tem `context`,
+      # e não precisa: o dado não viaja mais, ele MORA na journey.
+      numero_cartao:         "@ctx.journey.numero_cartao"
+      resultado:             "@ctx.journey.resultado"
+      limite_aprovado:       "@ctx.journey.limite_aprovado"
+      parecer:               "@ctx.journey.parecer"
     timeout_hours: 1
     on_resume:
       next: finalizar
