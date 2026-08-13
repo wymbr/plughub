@@ -145,17 +145,17 @@ kicker(s, "O QUE É");
 title(s, "Plataforma única de atendimento e processos, feita para agentes — humanos e de IA", null, 25);
 s.addText("A unidade de recurso não é o assento humano nem a licença de bot: é o agente, com pool, canais, competências, disponibilidade e score. O roteador não sabe qual dos dois está alocando. E o atendimento é feito para seguir o curso da necessidade: sem transferir para capturar um dado, sem encerrar porque a resposta não veio hoje, sem recomeçar porque o canal mudou.",
   { x: M, y: 1.55, w: 11.9, h: 0.9, fontSize: 13, color: GR2, fontFace: BF, margin: 0, lineSpacingMultiple: 1.12 });
-card(s, { x: M, y: 2.6, w: CW, h: 1.85, fill: CH, headColor: WH, bodyColor: "FBE4E7", size: 11.5,
+card(s, { x: M, y: 2.6, w: CW, h: 2.18, fill: CH, headColor: WH, bodyColor: "FBE4E7", size: 11.5,
   head: "A interface de integração é o agente especialista, não a transferência", headGap: 0.42,
-  body: "Onde o CCaaS passa o cliente para outra fila quando precisa de uma competência, aqui o orquestrador convoca um especialista para dentro da sessão que já está acontecendo — e o cliente não percebe movimento nenhum.\n\nO especialista serve os dois tipos de orquestrador: o humano, pelo Console, e o de IA, pelo fluxo. Nos incumbentes essa capacidade é construída duas vezes — copilot para a pessoa de um lado, fluxo de bot do outro, dois artefatos e dois times. Aqui é construída uma vez e rende nos dois." });
-card(s, { x: M, y: 4.6, w: 3.9, h: 2.05, fill: OW, head: "Uma superfície", headColor: CH,
+  body: "Onde o CCaaS passa o cliente para outra fila quando precisa de uma competência, aqui o orquestrador convoca um especialista para dentro da sessão que já está acontecendo — e o cliente não percebe movimento nenhum. Não é a conferência da telefonia: é o modelo base de todo contato, em qualquer canal, com visibilidade por participante e um segmento medível para cada um.\n\nO especialista serve os dois tipos de orquestrador: o humano, pelo Console, e o de IA, pelo fluxo. Nos incumbentes essa capacidade é construída duas vezes — copilot para a pessoa de um lado, fluxo de bot do outro. Aqui é construída uma vez e rende nos dois.\n\nCom ocupante único, a IA só pode ser etapa antes ou painel ao lado — nunca participante da mesma sala. É por isso que acoplar IA a uma plataforma herdada não produz a mesma coisa." });
+card(s, { x: M, y: 4.90, w: 3.9, h: 1.92, fill: OW, head: "Uma superfície", headColor: CH,
   body: "Receptivo, ativo, automação de processo, pesquisa, qualidade e conformidade no mesmo produto — não módulos licenciados à parte, com configuração, billing e times próprios." });
-card(s, { x: 4.72, y: 4.6, w: 3.9, h: 2.05, fill: TL, head: "Uma unidade de custo", headColor: WH, bodyColor: "DDEDED",
+card(s, { x: 4.72, y: 4.90, w: 3.9, h: 1.92, fill: TL, head: "Uma unidade de custo", headColor: WH, bodyColor: "DDEDED",
   body: "Licença por concorrência configurada. Humanos e IA na mesma moeda; o ganho de eficiência da IA fica com o cliente, não com o fornecedor." });
-card(s, { x: 8.89, y: 4.6, w: 3.89, h: 2.05, fill: GR, head: "Um substrato", headColor: WH, bodyColor: LT,
-  body: "Todo contato — humano, de IA, receptivo, ativo ou importado de terceiro — produz o mesmo dado de sessão, segmento e evento. Um só pipeline de qualidade e de analytics: é o que permite pôr operação, qualidade e voz do cliente no mesmo eixo, e uma pessoa ao lado de um agente de IA." });
+card(s, { x: 8.89, y: 4.90, w: 3.89, h: 1.92, fill: GR, head: "Um substrato", headColor: WH, bodyColor: LT,
+  body: "Todo contato — humano, de IA, receptivo, ativo ou importado de terceiro — produz o mesmo dado de sessão, segmento e evento. Um só pipeline de qualidade e de analytics — e uma pessoa ao lado de um agente de IA." });
 pageFoot(s, "O que é", 4);
-s.addNotes("O cartão vermelho é o slide inteiro: a diferença é de interface, não de recurso. Construir a capacidade uma vez, em vez de duas, é o argumento que o avaliador leva para o financeiro dele.");
+s.addNotes("O cartão vermelho é o slide inteiro: a diferença é de interface, não de recurso. Construir a capacidade uma vez, em vez de duas, é o argumento que o avaliador leva para o financeiro dele.\n\nO terceiro parágrafo é a justificativa de por que isto teve de ser construído do substrato para cima: 'IA e humano trabalhando juntos' é impossível sobre um modelo de sessão de ocupante único. Se o avaliador vier de um incumbente e disser 'temos conferência desde sempre', a resposta é a precisão do primeiro parágrafo — lá a conferência é caminho de exceção na voz; aqui é o modelo base de todo contato, em qualquer canal, com segmento medível por participante.\n\nO argumento mais forte com o comprador é o pedágio, não a arquitetura: com um ocupante por contato, toda competência adicional vira transferência — e transferência perde contexto, reinicia a espera e parte a medição em dois. Isso ele confere nos próprios números de transferência, recontato e TMA.");
 
 /* ---------------- 5 · como é (figura) ---------------- */
 s = pres.addSlide();
@@ -374,20 +374,84 @@ pageFoot(s, "Arquitetura · roteamento e agentes", 12);
 s.addNotes("A linha de capacidade costuma ser o momento em que arquiteto de CCaaS presta atenção: somar licenças de tipos diferentes é o erro que gera outage com agente ocioso.");
 
 /* ---------------- 13 · fronteira ---------------- */
+const TLD = "0E4E4E", TLP = "8FB8B8", CDE = "CDE3E3", CFE = "CFE7E7";
+
+function callerBox(s, y, l1, l2) {
+  s.addShape(pres.ShapeType.roundRect, { x: M, y: y, w: 2.5, h: 0.58,
+    fill: { color: GR }, line: { color: GR, width: 0 }, rectRadius: 0.06 });
+  s.addText(l1, { x: M + 0.16, y: y + 0.06, w: 2.2, h: 0.22, fontSize: 10.5, bold: true,
+    color: WH, fontFace: BF, margin: 0, valign: "middle" });
+  s.addText(l2, { x: M + 0.16, y: y + 0.26, w: 2.2, h: 0.22, fontSize: 10.5,
+    color: LT, fontFace: BF, margin: 0, valign: "middle" });
+}
+function cardRow(s, y, name, sub, muted) {
+  s.addShape(pres.ShapeType.roundRect, { x: 4.05, y: y, w: 8.53, h: 0.52,
+    fill: { color: muted ? "E4E7E7" : OW },
+    line: muted ? { color: "9AA0AA", width: 1, dashType: "dash" } : { color: OW, width: 0 },
+    rectRadius: 0.05 });
+  s.addText(name, { x: 4.22, y: y + 0.04, w: 6.6, h: 0.24, fontSize: 12, bold: true,
+    color: muted ? "5C6168" : GR, fontFace: BF, margin: 0, valign: "middle" });
+  s.addText(sub, { x: 4.22, y: y + 0.26, w: 7.0, h: 0.22, fontSize: 9.5,
+    color: muted ? "7C8288" : MU, fontFace: BF, margin: 0, valign: "middle" });
+}
+function chip(s, x, y, w, t, c) {
+  s.addShape(pres.ShapeType.roundRect, { x: x, y: y, w: w, h: 0.24,
+    fill: { color: "FFFFFF", transparency: 100 }, line: { color: c, width: 1 }, rectRadius: 0.04 });
+  s.addText(t, { x: x, y: y, w: w, h: 0.24, fontSize: 8, bold: true, color: c,
+    fontFace: BF, align: "center", valign: "middle", charSpacing: 0.6, margin: 0 });
+}
+
 s = pres.addSlide();
 kicker(s, "FRONTEIRA");
-title(s, "Agentes externos, portabilidade e convivência com o que já existe");
-lead(s, "Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A fronteira é aberta nas duas direções.", 1.42);
-card(s, { x: M, y: 2.0, w: 5.95, h: 2.05, fill: GR, head: "Incorporar agentes de terceiros", headColor: WH, bodyColor: LT,
-  body: "Um agente de outro framework participa da mesma sessão: entra pelo mesmo roteador, ocupa vaga do mesmo pool, produz segmento e é avaliado pelo mesmo formulário. O que ele não escolhe é a governança — mesmas permissões, mesma guarda, mesma auditoria não-optável." });
-card(s, { x: 6.83, y: 2.0, w: 5.95, h: 2.05, fill: OW, head: "Derivar para sistemas externos", headColor: CH,
-  body: "Webhook é canal de primeira classe: um processo aciona sistemas do cliente e é acionado por eles com o mesmo modelo de sessão, suspendendo e retomando por token. A integração é sempre mediada — a mesma capacidade fica disponível para o agente de IA, o fluxo e o Console, com uma trilha só." });
-card(s, { x: M, y: 4.23, w: 5.95, h: 2.05, fill: TL, head: "Conviver com a plataforma instalada", headColor: WH, bodyColor: "DDEDED",
-  body: "O histórico de outro contact center entra no pipeline de qualidade por um leitor plugável, que reidrata sessão, segmento e transcrição como se tivessem nascido aqui. Serve para avaliar a operação atual antes de migrar qualquer tráfego — e o caminho inverso reavalia a própria base com um formulário novo." });
-card(s, { x: 6.83, y: 4.23, w: 5.95, h: 2.05, fill: OW, head: "Não aprisionar", headColor: CH,
-  body: "A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e verificável por linha de comando quanto a contrato de execução e isolamento de dependências. Modelos trocáveis por configuração, canais como adaptadores, dado exportável.\n\nO custo de sair é uma decisão de projeto, não uma consequência." });
-pageFoot(s, "Fronteira aberta", 13);
-s.addNotes("O leitor plugável é um bom gancho comercial: dá para avaliar a operação atual deles, com os nossos formulários, sem migrar uma única chamada.");
+title(s, "A fronteira se padroniza — ela não se dissolve");
+lead(s, "A resposta comum do mercado é hospedar o agente do outro — trazer código de terceiro para dentro e prometer, sobre ele, as mesmas garantias. Nós fazemos o inverso: o seu agente continua onde está, e o que atravessa a fronteira é contrato.", 1.42);
+
+/* figura — a plataforma respondendo como servidor A2A */
+s.addText("QUEM CHAMA", { x: M, y: 2.02, w: 2.5, h: 0.22, fontSize: 9, bold: true,
+  color: MU, fontFace: BF, charSpacing: 1.2, margin: 0 });
+callerBox(s, 2.30, "o orquestrador", "do seu time");
+callerBox(s, 2.98, "um agente em", "outro framework");
+callerBox(s, 3.66, "ERP, portal,", "app interno");
+s.addText("nenhum deles precisa conhecer a plataforma — só o cartão do agente e uma credencial",
+  { x: M, y: 4.36, w: 2.5, h: 0.66, fontSize: 9.5, italic: true, color: MU, fontFace: BF,
+    margin: 0, valign: "top", lineSpacingMultiple: 1.05 });
+
+s.addShape(pres.ShapeType.roundRect, { x: 3.12, y: 2.02, w: 0.62, h: 0.24,
+  fill: { color: CH }, line: { color: CH, width: 0 }, rectRadius: 0.04 });
+s.addText("A2A", { x: 3.12, y: 2.02, w: 0.62, h: 0.24, fontSize: 9.5, bold: true, color: WH,
+  fontFace: BF, align: "center", valign: "middle", charSpacing: 1, margin: 0 });
+arrow(s, 3.12, 2.44, 0.62);
+arrow(s, 3.12, 3.12, 0.62);
+arrow(s, 3.12, 3.80, 0.62);
+
+s.addShape(pres.ShapeType.roundRect, { x: 3.85, y: 2.02, w: 8.93, h: 3.18,
+  fill: { color: TLD }, line: { color: TLD, width: 0 }, rectRadius: 0.08 });
+s.addText("A plataforma responde como servidor A2A", { x: 4.05, y: 2.14, w: 7.3, h: 0.30,
+  fontSize: 15, bold: true, color: WH, fontFace: BF, margin: 0, valign: "middle" });
+chip(s, 11.46, 2.16, 1.12, "ROADMAP", TLP);
+s.addText("cada agente publicado tem cartão próprio — o que faz, o que aceita, o que devolve, em que versão",
+  { x: 4.05, y: 2.46, w: 8.5, h: 0.24, fontSize: 10, color: CDE, fontFace: BF, margin: 0, valign: "middle" });
+
+cardRow(s, 2.76, "Cobrança e negociação", "recebe o caso · devolve o acordo e o desfecho · versão do deploy no cartão");
+cardRow(s, 3.34, "Portabilidade", "recebe a identificação · devolve o status do processo · retoma dias depois");
+cardRow(s, 3.92, "Especialistas humanos", "mesmo cartão, mesmo contrato — a tarefa entra numa fila de pessoas", true);
+chip(s, 11.30, 4.00, 1.20, "EM SEGUIDA", MU);
+
+s.addShape(pres.ShapeType.roundRect, { x: 4.05, y: 4.52, w: 8.53, h: 0.60,
+  fill: { color: TL }, line: { color: TL, width: 0 }, rectRadius: 0.05 });
+s.addText("uma tarefa entra — atrás dela pode haver uma sala inteira, e o chamador vê um agente",
+  { x: 4.22, y: 4.55, w: 8.2, h: 0.20, fontSize: 10, bold: true, color: WH, fontFace: BF, margin: 0, valign: "middle" });
+s.addText("IA orquestrando · especialista humano convocado no meio · supervisor acompanhando · avaliador depois",
+  { x: 4.22, y: 4.73, w: 8.2, h: 0.20, fontSize: 9, color: CFE, fontFace: BF, margin: 0, valign: "middle" });
+s.addText("e percorre o caminho de um contato: fila · capacidade por recurso · SLA · avaliação com versão de deploy · auditoria por chamada",
+  { x: 4.22, y: 4.91, w: 8.2, h: 0.20, fontSize: 9, color: CFE, fontFace: BF, margin: 0, valign: "middle" });
+
+card(s, { x: M, y: 5.32, w: 5.95, h: 1.56, fill: OW, head: "Nossos agentes acionam seus sistemas", headColor: CH,
+  body: "Na direção oposta, nenhum agente — humano ou de IA — alcança sistema de negócio diretamente. Toda integração passa por servidores de ferramenta autorizados, e a política de auditoria é declarada na ferramenta, não na chamada: o chamador não pode optar por sair." });
+card(s, { x: 6.83, y: 5.32, w: 5.95, h: 1.56, fill: TL, head: "Medir antes de migrar", headColor: WH, bodyColor: "DDEDED",
+  body: "O histórico de outro contact center entra por um leitor plugável, com mascaramento na entrada, e reidrata sessão, segmento e transcrição como se tivessem nascido aqui — o investimento já feito vira linha de base, não perda." });
+pageFoot(s, "Fronteira padronizada", 13);
+s.addNotes("Slide reescrito sob o binding A2A servidor (ADR adr-a2a-server-binding, proposto).\n\nA tese em uma frase: a fronteira não se dissolve, ela se padroniza — não pedimos que o agente do cliente venha para dentro, pedimos que ele fale um protocolo.\n\nHONESTIDADE, importante não escorregar: o servidor A2A é ROADMAP por inteiro (arco A0–A6, nada construído). O selo na caixa diz isso. A linha tracejada 'Especialistas humanos' é o passo seguinte ao arco — não confundir com 'já temos IA e falta humano'. O que está em operação hoje são os dois cartões de baixo.\n\nSe perguntarem 'por que não rodar o meu agente aí dentro': importar pede que a plataforma garanta capacidade, encerramento e auditoria sobre código que ela não controla — corrói a camada de governança que é o diferencial. Padronizar a fronteira custa uma linha de configuração para o cliente.\n\nO argumento comercial mais forte é o custo de experimentar: adotar não exige reescrever o orquestrador, migrar canal nem trocar o contact center instalado. O piloto deixa de ser projeto e vira parâmetro.\n\nO gancho da direita continua valendo: dá para avaliar a operação atual deles, com os nossos formulários, sem migrar uma única chamada.\n\nATENÇÃO — slides 12 e 15 ainda descrevem o modelo de agente importado (sidecar de proxy). Enquanto não forem revistos, evitar contradizê-los em voz alta na mesma reunião.");
 
 /* ---------------- 14 · grãos ---------------- */
 s = pres.addSlide();

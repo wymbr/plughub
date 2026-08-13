@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>PlugHub — página Fronteira · prova de avaliação</title>
+<style>
+  :root{
+    --graphite:#2E3138;
+    --graphite2:#3E434D;
+    --cherry:#990011;
+    --teal:#046A6A;
+    --offwhite:#F2F2F2;
+    --muted:#6B7280;
+    --line:#DDDEE1;
+    --hfont: Cambria, Georgia, serif;
+    --bfont: Calibri, "Segoe UI", Arial, sans-serif;
+    --mfont: Consolas, "Courier New", monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#7A7D84;font-family:var(--bfont);color:var(--graphite);
+       -webkit-print-color-adjust:exact;print-color-adjust:exact}
+
+  .page{width:210mm;min-height:297mm;background:#fff;margin:8mm auto;
+        padding:16mm 15mm;position:relative}
+
+  h1{font-family:var(--hfont);font-size:28pt;line-height:1.1;font-weight:700}
+  h2{font-family:var(--hfont);font-size:16pt;line-height:1.15;font-weight:700;margin-bottom:4mm}
+  h3{font-size:10.5pt;font-weight:700;margin-bottom:1.5mm}
+  h4{font-size:9.5pt;font-weight:700;margin-bottom:1.5mm}
+  p{font-size:9pt;line-height:1.48;color:var(--graphite2)}
+  .kicker{font-size:7.5pt;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+          color:var(--cherry);margin-bottom:2.5mm}
+  .kicker.pale{color:#E39AA4}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:4mm}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:3.5mm}
+  .card{background:var(--offwhite);border-radius:2mm;padding:4mm}
+  .card p{font-size:8.4pt;line-height:1.42}
+  .card.dark{background:var(--graphite)}
+  .card.dark h3,.card.dark h4{color:#fff}
+  .card.dark p{color:#C9CDD4}
+  .card.dark strong{color:#fff}
+  .card.dark em{color:#E7EAEE}
+  .card.teal{background:var(--teal)}
+  .card.teal h3,.card.teal h4{color:#fff}
+  .card.teal p{color:#DDEDED}
+  .card.teal strong{color:#fff}
+  .card.cherry{background:var(--cherry)}
+  .card.cherry h3,.card.cherry h4{color:#fff}
+  .card.cherry p{color:#FBE4E7}
+  .card.cherry strong{color:#fff}
+
+  .band{background:var(--graphite);border-radius:2mm;padding:4.5mm 5mm;color:#fff}
+  .band p{color:#C9CDD4}
+  .band strong{color:#fff}
+
+  .seal{display:inline-block;font-size:7pt;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+        border:1px solid var(--teal);color:var(--teal);border-radius:1mm;padding:.6mm 1.6mm;
+        margin-left:2mm;vertical-align:1.5mm}
+  .seal.road{border-color:var(--muted);color:var(--muted)}
+  .seal.pale{border-color:#8FB8B8;color:#8FB8B8}
+
+  .foot{margin-top:6mm;border-top:1px solid var(--line);padding-top:2mm;
+        font-size:7.5pt;color:var(--muted);display:flex;justify-content:space-between}
+
+  svg{display:block;width:100%;height:auto}
+
+  /* ---- apenas nesta prova: régua de A4 e rótulos de variante ---- */
+  .tag{width:210mm;margin:14mm auto 0;color:#fff;font-size:10pt;font-weight:700;letter-spacing:.04em}
+  .tag span{font-weight:400;color:#D6D8DC}
+  .page::after{content:"— limite de página A4 · o que estiver abaixo desta linha não cabe —";
+        position:absolute;left:0;right:0;top:297mm;border-top:1px dashed #DC2626;
+        font-size:7pt;color:#DC2626;padding-top:1mm;text-align:center;letter-spacing:.03em}
+
+  @media print{
+    body{background:#fff}
+    .tag{display:none}
+    .page::after{display:none}
+    .page{margin:0;box-shadow:none;page-break-after:always}
+    .page:last-child{page-break-after:auto}
+    @page{size:A4;margin:0}
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<div class="tag">VARIANTE 0 · página atual <span>— como está impressa hoje, para comparação</span></div>
+<section class="page">
+  <div class="kicker">Fronteira</div>
+  <h2>Agentes externos, portabilidade e convivência com o que já existe</h2>
+  <p style="max-width:172mm">
+    Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A
+    fronteira é aberta nas duas direções: <strong>incorporar</strong> agentes construídos fora e
+    <strong>derivar</strong> atendimento, dado e lógica para fora — inclusive para a plataforma que o cliente já
+    tem.
+  </p>
+
+  <div class="grid2" style="margin-top:3mm">
+    <div class="card dark">
+      <h4>Incorporar agentes de terceiros</h4>
+      <p>Um agente escrito em outro framework participa como <strong>participante de primeira classe</strong> da
+      mesma sessão: entra pelo mesmo roteador, ocupa vaga do mesmo pool, produz segmento e é avaliado pelo mesmo
+      formulário. O que ele não escolhe é a governança — as ferramentas chegam por sidecar de proxy local, e cada
+      chamada passa pela mesma validação de permissão, guarda de injeção e auditoria não-optável de um agente
+      nativo. <em>Adotar um agente externo não abre buraco de conformidade.</em></p>
+    </div>
+    <div class="card">
+      <h4>Derivar para sistemas externos</h4>
+      <p>Na direção oposta, o webhook é canal de primeira classe: um processo da plataforma aciona sistemas do
+      cliente e <em>é acionado</em> por eles com o mesmo modelo de sessão, suspendendo e retomando por token. A
+      integração com o negócio é sempre mediada por servidores de ferramenta — o que significa que a mesma
+      capacidade fica disponível para o agente de IA, para o fluxo e para o Console, com uma única trilha de
+      auditoria.</p>
+    </div>
+    <div class="card teal">
+      <h4>Conviver com a plataforma instalada</h4>
+      <p>O histórico de atendimento de outro contact center entra no pipeline de qualidade por um leitor plugável:
+      um fluxo de eventos canônicos, com mascaramento aplicado na entrada, que reidrata sessão, segmento e
+      transcrição como se tivessem nascido aqui. Serve para avaliar a operação atual antes de migrar qualquer
+      tráfego. O caminho inverso também existe: o histórico interno pode ser reexportado e reavaliado com um
+      formulário novo, sem contaminar a medição de produção — todo dado carrega a procedência.</p>
+    </div>
+    <div class="card">
+      <h4>Não aprisionar</h4>
+      <p>A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e
+      verificável por linha de comando quanto a contrato de execução e a isolamento de dependências. Os modelos são
+      trocáveis por configuração, as operadoras e provedores de canal são adaptadores, e o dado é exportável.
+      <strong>O custo de sair é uma decisão de projeto, não uma consequência.</strong></p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">Por que isto importa mais em 2026 do que importava em 2023</div>
+    <p>O protocolo aberto de ferramentas deixou de ser diferencial — virou infraestrutura, com milhares de
+    servidores disponíveis. O que <strong>não</strong> virou commodity é a governança por chamada: permissão,
+    guarda de injeção e auditoria obrigatória, válidas igualmente para o agente que você escreveu, o que comprou e
+    o que baixou. É exatamente aí que os projetos de IA agêntica travam na passagem para produção — identidade,
+    auditabilidade e lock-in —, e é o ponto em que a regulação europeia passa a cobrar evidência.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · fronteira aberta</span><span>13</span></div>
+</section>
+
+
+<!-- ============================================================ -->
+<div class="tag">VARIANTE A · proposta sem figura <span>— mesma estrutura de hoje, conteúdo novo</span></div>
+<section class="page">
+  <div class="kicker">Fronteira</div>
+  <h2>A fronteira se padroniza — ela não se dissolve</h2>
+  <p style="max-width:172mm">
+    Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A resposta
+    comum é hospedar o agente do outro — trazer código de terceiro para dentro e prometer, sobre ele, as mesmas
+    garantias de capacidade, disponibilidade, encerramento e auditoria. Nós fazemos o inverso: <strong>o seu agente
+    continua onde está</strong>, no seu framework, sob o seu deploy. O que atravessa a fronteira é contrato —
+    protocolo declarado, permissão verificada, chamada registrada. E atravessa nos dois sentidos: o que a operação
+    já tem entra sem ser descartado, o que for construído aqui sai sem ser reescrito.
+  </p>
+
+  <div class="grid2" style="margin-top:3mm">
+    <div class="card dark">
+      <h4>Um agente externo chama um agente daqui <span class="seal pale">chamada externa em operação</span></h4>
+      <p>Um processo da plataforma já é acionado de fora com o mesmo modelo de sessão de qualquer contato: cria
+      sessão, roteia, suspende aguardando sinal externo e retoma por token — inclusive dias depois. O passo seguinte
+      é publicar esse mesmo endereço em <strong>A2A</strong>, o protocolo padrão entre agentes: cada pool anuncia um
+      cartão de capacidades — o que faz, o que aceita, o que devolve, em que versão —, recebe mensagem, abre uma
+      tarefa e entrega o artefato. O orquestrador do seu time trata um agente daqui como trataria qualquer outro
+      agente A2A, <strong>sem saber que existe uma plataforma do outro lado</strong> e sem um segundo projeto de
+      integração. <em>A versão publicada é a versão do deploy; não há catálogo paralelo para manter.</em>
+      <span class="seal road" style="margin-left:0">A2A · roadmap</span></p>
+    </div>
+    <div class="card">
+      <h4>E do outro lado da chamada pode haver uma pessoa <span class="seal road">fase 2</span></h4>
+      <p>O chamador vê <em>um agente</em>. Se atrás dele há uma IA, uma pessoa ou as duas em conferência, isso é
+      decisão de roteamento — <strong>não do contrato</strong>. É o mesmo princípio de execução opaca do protocolo
+      encontrando o que a plataforma já faz: runtime único, mesma fila, mesmo ciclo de vida para humano e IA. Todo
+      projeto agêntico esbarra no momento em que o agente não sabe o que fazer e <strong>não tem para quem
+      passar</strong>. Um endpoint de framework não escala pessoas, não faz fila, não mede SLA e não avalia o que
+      aconteceu. <em>Ser o destino desse handoff é o que nenhum deles consegue copiar.</em></p>
+    </div>
+    <div class="card teal">
+      <h4>O que a operação já tem não é descartado <span class="seal pale">em operação</span></h4>
+      <p>O histórico de atendimento de outro contact center entra no pipeline de qualidade por um leitor plugável:
+      um fluxo de eventos canônicos, com mascaramento aplicado na entrada, que reidrata sessão, segmento e
+      transcrição como se tivessem nascido aqui. Serve para <strong>medir a operação instalada antes de migrar
+      qualquer tráfego</strong> — o investimento já feito vira linha de base, não perda. O caminho inverso também
+      existe: o histórico interno pode ser reexportado e reavaliado com um formulário novo, sem contaminar a
+      medição de produção — todo dado carrega a procedência.</p>
+    </div>
+    <div class="card">
+      <h4>Não aprisionar <span class="seal">em operação</span></h4>
+      <p>A lógica de atendimento é declarativa e portável, não código proprietário: extraível, versionada e
+      verificável por linha de comando quanto a contrato de execução e a isolamento de dependências. Os modelos são
+      trocáveis por configuração, as operadoras e provedores de canal são adaptadores, e o dado é exportável.
+      <strong>O custo de sair é uma decisão de projeto, não uma consequência.</strong></p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">O que se preserva quando a fronteira é padronizada</div>
+    <p>Investimento em plataforma de atendimento costuma ficar preso ao caso de uso que o justificou. Aqui ele tem
+    três saídas, e são três coisas distintas: o que se constrói é <strong>extraível</strong> — lógica declarativa,
+    versionada, verificável por linha de comando; é <strong>alcançável</strong> — cada pool publicado como agente em
+    protocolo aberto, chamável por qualquer sistema da empresa; e é <strong>reaproveitável sem regressão de
+    governança</strong> — cada novo consumidor herda a mesma fila, a mesma capacidade medida por recurso, o mesmo
+    SLA, a mesma avaliação de qualidade com versão de deploy carimbada e a mesma trilha de auditoria, sem
+    reconstruir nada. <strong>O segundo consumidor herda o que o primeiro pagou.</strong> É a diferença entre
+    publicar um agente e publicar uma chamada de API — e é por isso que padronizar a fronteira ganha de importar
+    agentes de terceiro: importar pede que a plataforma garanta capacidade, encerramento e auditoria sobre código
+    que ela não controla, corroendo exatamente a camada que dá valor ao reaproveitamento. Protocolo aberto é preço
+    de entrada; o que não vira commodity está atrás do endpoint.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · fronteira padronizada</span><span>13</span></div>
+</section>
+
+
+<!-- ============================================================ -->
+<div class="tag">VARIANTE B · proposta com figura <span>— figura de mensagem única: a plataforma respondendo como servidor A2A</span></div>
+<section class="page">
+  <div class="kicker">Fronteira</div>
+  <h2>A fronteira se padroniza — ela não se dissolve</h2>
+  <p style="max-width:172mm">
+    Uma plataforma que se propõe a orquestrar agentes não pode presumir que todos os agentes sejam dela. A resposta
+    comum é hospedar o agente do outro — trazer código de terceiro para dentro e prometer, sobre ele, as mesmas
+    garantias. Nós fazemos o inverso: <strong>o seu agente continua onde está</strong>, no seu framework, sob o seu
+    deploy. O que atravessa a fronteira é contrato — e atravessa nos dois sentidos.
+  </p>
+
+  <svg viewBox="0 0 760 316" xmlns="http://www.w3.org/2000/svg" style="margin-top:4mm">
+    <defs>
+      <marker id="f1" markerWidth="10" markerHeight="10" refX="8" refY="3.2" orient="auto">
+        <path d="M0,0 L8,3.2 L0,6.4 z" fill="#990011"/>
+      </marker>
+    </defs>
+
+    <text x="6" y="26" font-family="Calibri,Arial" font-size="9" font-weight="700" fill="#6B7280" letter-spacing="1.2">QUEM CHAMA</text>
+
+    <rect x="6" y="40" width="150" height="44" rx="6" fill="#2E3138"/>
+    <text x="20" y="60" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">o orquestrador</text>
+    <text x="20" y="74" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">do seu time</text>
+
+    <rect x="6" y="96" width="150" height="44" rx="6" fill="#2E3138"/>
+    <text x="20" y="116" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">um agente em</text>
+    <text x="20" y="130" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">outro framework</text>
+
+    <rect x="6" y="152" width="150" height="44" rx="6" fill="#2E3138"/>
+    <text x="20" y="172" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">ERP, portal,</text>
+    <text x="20" y="186" font-family="Calibri,Arial" font-size="9.5" fill="#C9CDD4">app interno</text>
+
+    <text x="6" y="228" font-family="Calibri,Arial" font-size="8.5" font-style="italic" fill="#6B7280">nenhum deles precisa</text>
+    <text x="6" y="241" font-family="Calibri,Arial" font-size="8.5" font-style="italic" fill="#6B7280">conhecer a plataforma —</text>
+    <text x="6" y="254" font-family="Calibri,Arial" font-size="8.5" font-style="italic" fill="#6B7280">só o cartão do agente</text>
+    <text x="6" y="267" font-family="Calibri,Arial" font-size="8.5" font-style="italic" fill="#6B7280">e uma credencial</text>
+
+    <rect x="170" y="18" width="64" height="18" rx="3" fill="#990011"/>
+    <text x="202" y="31" text-anchor="middle" font-family="Calibri,Arial" font-size="10" font-weight="700" fill="#fff" letter-spacing="1">A2A</text>
+
+    <line x1="158" y1="62" x2="242" y2="62" stroke="#990011" stroke-width="2" marker-end="url(#f1)"/>
+    <line x1="158" y1="118" x2="242" y2="118" stroke="#990011" stroke-width="2" marker-end="url(#f1)"/>
+    <line x1="158" y1="174" x2="242" y2="174" stroke="#990011" stroke-width="2" marker-end="url(#f1)"/>
+
+    <rect x="246" y="14" width="508" height="298" rx="8" fill="#0E4E4E"/>
+    <text x="262" y="40" font-family="Calibri,Arial" font-size="12.5" font-weight="700" fill="#fff">A plataforma responde como servidor A2A</text>
+    <rect x="640" y="27" width="102" height="17" rx="3" fill="none" stroke="#8FB8B8" stroke-width="1.2"/>
+    <text x="691" y="39" text-anchor="middle" font-family="Calibri,Arial" font-size="8" font-weight="700" fill="#8FB8B8" letter-spacing="0.8">ROADMAP</text>
+    <text x="262" y="56" font-family="Calibri,Arial" font-size="8.8" fill="#CDE3E3">cada agente publicado tem cartão próprio — o que faz, o que aceita, o que devolve, em que versão</text>
+
+    <rect x="258" y="66" width="484" height="44" rx="5" fill="#F2F2F2"/>
+    <text x="272" y="85" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#2E3138">Cobrança e negociação</text>
+    <text x="272" y="100" font-family="Calibri,Arial" font-size="8.5" fill="#6B7280">recebe o caso · devolve o acordo e o desfecho · versão do deploy no cartão</text>
+
+    <rect x="258" y="116" width="484" height="44" rx="5" fill="#F2F2F2"/>
+    <text x="272" y="135" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#2E3138">Portabilidade</text>
+    <text x="272" y="150" font-family="Calibri,Arial" font-size="8.5" fill="#6B7280">recebe a identificação · devolve o status do processo · retoma dias depois</text>
+
+    <rect x="258" y="166" width="484" height="44" rx="5" fill="#E4E7E7" stroke="#9AA0AA" stroke-width="1.2" stroke-dasharray="5 3"/>
+    <text x="272" y="185" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#5C6168">Especialistas humanos</text>
+    <text x="272" y="200" font-family="Calibri,Arial" font-size="8.5" fill="#7C8288">mesmo cartão, mesmo contrato — a tarefa entra numa fila de pessoas</text>
+    <rect x="639" y="176" width="90" height="16" rx="3" fill="none" stroke="#6B7280" stroke-width="1.2"/>
+    <text x="684" y="188" text-anchor="middle" font-family="Calibri,Arial" font-size="8" font-weight="700" fill="#6B7280" letter-spacing="0.6">EM SEGUIDA</text>
+
+    <rect x="258" y="222" width="484" height="76" rx="5" fill="#046A6A"/>
+    <text x="272" y="243" font-family="Calibri,Arial" font-size="9.5" font-weight="700" fill="#fff">uma tarefa entra — atrás dela pode haver uma sala inteira, e o chamador vê um agente</text>
+    <text x="272" y="262" font-family="Calibri,Arial" font-size="8.8" fill="#CFE7E7">IA orquestrando · especialista humano convocado no meio · supervisor acompanhando · avaliador depois</text>
+    <text x="272" y="281" font-family="Calibri,Arial" font-size="8.8" fill="#CFE7E7">e percorre o caminho de um contato: fila · capacidade por recurso · SLA · avaliação com versão · auditoria</text>
+  </svg>
+
+  <div class="grid2" style="margin-top:4mm">
+    <div class="card">
+      <h4>Nossos agentes acionam seus sistemas <span class="seal">em operação</span></h4>
+      <p>Na direção oposta, nenhum agente — humano ou de IA — alcança sistema de negócio diretamente. Toda
+      integração passa por servidores de ferramenta autorizados, e a política de auditoria é declarada <strong>na
+      ferramenta</strong>, não na chamada: o chamador não pode optar por sair.</p>
+    </div>
+    <div class="card teal">
+      <h4>Medir antes de migrar <span class="seal pale">em operação</span></h4>
+      <p>O histórico de outro contact center entra por um leitor plugável, com mascaramento na entrada, e reidrata
+      sessão, segmento e transcrição como se tivessem nascido aqui — <strong>o investimento já feito vira linha de
+      base, não perda</strong>. O caminho inverso existe: reexportar e reavaliar com formulário novo, sem contaminar
+      a medição de produção.</p>
+    </div>
+  </div>
+
+  <div class="band" style="margin-top:4mm">
+    <div class="kicker pale" style="margin-bottom:2mm">O que se preserva quando a fronteira é padronizada</div>
+    <p>Investimento em plataforma de atendimento costuma ficar preso ao caso de uso que o justificou. Aqui ele tem
+    três saídas distintas: o que se constrói é <strong>extraível</strong> — declarativo, versionado, verificável por
+    linha de comando; <strong>alcançável</strong> — cada pool publicado como agente em protocolo aberto; e
+    <strong>reaproveitável sem regressão de governança</strong> — cada novo consumidor herda a mesma fila, a mesma
+    capacidade medida por recurso, o mesmo SLA, a mesma avaliação com versão de deploy carimbada e a mesma trilha de
+    auditoria, sem reconstruir nada. <strong>O segundo consumidor herda o que o primeiro pagou.</strong> É a
+    diferença entre publicar um agente e publicar uma chamada de API — e é por isso que padronizar a fronteira ganha
+    de importar agentes de terceiro: importar pede que a plataforma garanta capacidade, encerramento e auditoria
+    sobre código que ela não controla, corroendo exatamente a camada que dá valor ao reaproveitamento.</p>
+  </div>
+  <div class="foot"><span>Arquitetura · fronteira padronizada</span><span>13</span></div>
+</section>
+
+<!-- ============================================================ -->
+<div class="tag">VARIANTE C · página 4 revisada <span>— o cartão vermelho ganha o argumento do ocupante único (§3.9)</span></div>
+<section class="page">
+  <div class="kicker">O que é</div>
+  <h2>Plataforma única de atendimento e processos, feita para agentes — humanos e de IA</h2>
+  <p style="max-width:172mm">
+    A unidade de recurso não é o assento humano nem a licença de bot: é o <strong>agente</strong>, com pool,
+    canais, competências, disponibilidade e score. O roteador não sabe qual dos dois está alocando. A sessão é uma
+    <strong>sala</strong> com participantes simultâneos e visibilidade controlada, não uma fila de passagem. E o
+    atendimento é feito para seguir o curso da necessidade: <strong>sem transferir para capturar um dado, sem
+    encerrar porque a resposta não veio hoje, sem recomeçar porque o canal mudou.</strong>
+  </p>
+
+  <div class="card cherry" style="margin-top:4mm">
+    <h4>A interface de integração é o agente especialista, não a transferência</h4>
+    <p>É a diferença mais concreta em relação ao modelo herdado. Onde o CCaaS passa o cliente para outra fila
+    quando precisa de uma competência, aqui o orquestrador <strong>convoca um especialista para dentro da sessão
+    que já está acontecendo</strong> — e o cliente não percebe movimento nenhum.</p>
+    <p style="margin-top:2.2mm">O especialista existe para automatizar serviço e dar produtividade, e serve os
+    <strong>dois</strong> tipos de orquestrador: o humano, pelo Console, e o de IA, pelo fluxo. Nos incumbentes essa
+    capacidade é construída duas vezes — copilot para a pessoa de um lado, fluxo de bot do outro, dois artefatos,
+    dois times, dois roadmaps. Aqui é construída uma vez e rende nos dois: automação e produtividade deixam de ser
+    projetos separados.</p>
+    <p style="margin-top:2.2mm">Não é a conferência da telefonia: é o <strong>modelo base de todo contato</strong>,
+    em qualquer canal, com visibilidade por participante e um segmento medível para cada um. A consequência aparece
+    na conta — onde o contato comporta um ocupante só, toda competência adicional vira transferência, e
+    transferência perde contexto, reinicia a espera e parte a medição em dois. <strong>É também por isso que
+    acoplar IA a uma plataforma herdada não produz a mesma coisa: com ocupante único, a IA só pode ser etapa antes
+    ou painel ao lado — nunca participante da mesma sala.</strong></p>
+  </div>
+
+  <div class="grid3" style="margin-top:4mm">
+    <div class="card"><h4>Uma superfície</h4>
+      <p>Receptivo, ativo, automação de processo, pesquisa, qualidade e conformidade no mesmo produto — não
+      módulos licenciados à parte, com configuração, billing e times próprios.</p></div>
+    <div class="card teal"><h4>Uma unidade de custo</h4>
+      <p>Licença por concorrência configurada. Humanos e IA na mesma moeda; o ganho de eficiência da IA fica com o
+      cliente, não com o fornecedor.</p></div>
+    <div class="card dark"><h4>Um substrato</h4>
+      <p>Todo contato — humano, de IA, receptivo, ativo ou importado de terceiro — produz o mesmo dado de sessão,
+      segmento e evento. Um só pipeline de qualidade e de analytics: é o que permite pôr operação, qualidade e voz
+      do cliente no mesmo eixo, e <strong>uma pessoa ao lado de um agente de IA</strong>.</p></div>
+  </div>
+
+  <p style="margin-top:4mm;font-size:8.5pt;color:var(--muted)">
+    O estágio do produto, os limites conhecidos e o que é roadmap declarado estão reunidos na última página, sem
+    espalhamento pelo documento.
+  </p>
+  <div class="foot"><span>O que é</span><span>4</span></div>
+</section>
+
+</body>
+</html>
