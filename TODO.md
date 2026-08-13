@@ -8,6 +8,67 @@
 
 ---
 
+## Masking — 5 mecanismos distintos, config espalhada entre seed.py, Config API e YAML *(achado 2026-08-13, ao investigar por que `session.cpf` aparece aberto pro operator no pacote de aprovação de `skill_limite_processo_v1`)*
+
+Levantamento factual (nenhum código mudado por este item). O sintoma que disparou a investigação
+não é bug: `session.cpf` simplesmente não tem regra no Mecanismo 2 (nunca teve, nem quando a
+âncora era `contact_identifier`/telefone) — mas expôs que "masking" no PlugHub não é UM sistema,
+são cinco, cada um com config/enforcement em lugar diferente, e ao menos um (seed.py) não é
+editável em produção sem redeploy de código.
+
+**Os cinco:**
+
+1. **Message/Stream masking** (`MaskingService`, `packages/mcp-server-plughub/src/lib/masking.ts`)
+   — regex sobre texto livre do cliente, produz token `[cat:tk_xxx:partial]` no `content` da
+   mensagem (stream). Config: namespace Config API `masking`, key `rule.{category}` — **editável
+   na UI** (`/config/masking`, `MaskingPage.tsx`). Vault: `token-vault.ts`.
+2. **ContextStore field-level masking** (`applyContextMaskingDynamic`,
+   `packages/mcp-server-plughub/src/server.ts:1054`) — regras casadas por NOME EXATO/glob de tag
+   (`session.numero_cartao`, `caller.*`, `*`) × role do visualizador. Config: namespace Config API
+   `masking`, key `context_rules` — **também editável na UI** (`ContextRulesSection` na mesma
+   `MaskingPage.tsx`), MAS as regras de `session.*` específicas de cada skill (ex. as três do
+   pacote de aprovação de limite) são semeadas em `packages/config-api/src/plughub_config_api/
+   seed.py:483-513` — ou seja, a INFRAESTRUTURA do mecanismo é UI-editável, mas o CONTEÚDO
+   operacional (quais tags cada skill precisa mascarar) hoje só entra via seed.py, que é
+   seed-if-absent: uma vez semeado, editar o arquivo é no-op sem reconcile+redeploy. Isto é
+   exatamente o padrão descrito em `docs/adr/...` sobre "toda config de negócio tem que ser
+   UI-editável" — este mecanismo viola o invariante na prática, mesmo tendo UI.
+3. **Masked Input** (`masked: true` em step/campo de menu, namespace `@masked.*`,
+   `begin_transaction`/`end_transaction`) — não é masking de EXIBIÇÃO, é ausência de persistência:
+   o valor nunca chega a existir em `pipeline_state`/stream/Redis/log. Declarado em YAML de skill
+   OU em campo de DialogForm JSON (`infra/dialog/*.json`, ex. `cvv` em
+   `dialog_limite_solicitacao.json`). Enforçado em `packages/skill-flow-engine/src/masking-policy.ts`
+   + `steps/begin-transaction.ts`/`end-transaction.ts`/`menu.ts`. Consumido pelo webchat como
+   `<input type="password">`.
+4. **Port Python no quality-ingest** (`packages/quality-ingest/src/plughub_quality_ingest/
+   masking.py:mask_text()`) — réplica HARDCODED (não lida de Config API) do Mecanismo 1, porque
+   não existe engine de masking em Python no repo. Roda como rede de segurança na importação de
+   transcrições externas.
+5. **Audit access log** (`packages/analytics-api/src/plughub_analytics_api/audit.py`) — não é
+   masking em si, consome o resultado dos Mecanismos 1 e 3. `masked_input_fields` está no schema
+   (`audit.ts`) e no guia, mas **não tem escritor** em `mcp-server-plughub` — sempre `[]` na
+   prática (Fase 2 pendente, já registrada em `docs/arcos/audit-lgpd.md`).
+
+**O que falta decidir antes de tocar em código** (por isso este item fica só como levantamento):
+- Os Mecanismos 1 e 2 já são via Config API/UI — o problema real é só o CONTEÚDO do Mecanismo 2
+  nascer em seed.py em vez de nascer por API/UI desde o início de cada skill novo. Precisa de um
+  fluxo (no editor de skill? no editor de DialogForm? um novo painel "regras de contexto por
+  skill"?) que evite todo skill novo com campo sensível em `delegate.context` precisar de uma
+  entrada manual em seed.py.
+- Mecanismo 3 é conceitualmente diferente dos outros (não-persistência vs. mascaramento de
+  exibição) — não faz sentido "unificar" ele com 1/2, mas vale deixar isso EXPLÍCITO em algum lugar
+  (hoje só está implícito no guia `docs/guias/masked-input.md`) para não ser confundido como
+  concorrente dos outros dois numa unificação futura.
+- Mecanismo 4 é dívida técnica pura (duplicação de regra sem fonte única) — collapse natural seria
+  o quality-ingest ler as MESMAS regras via Config API em vez de hardcode, mas isso muda o
+  contrato de "produtor puro, sem dependência do resto da stack" do quality-ingest (ver
+  `docs/arcos/quality-ingest.md`) — precisa avaliar se vale a pena.
+
+Levantamento completo (paths, funções, formatos exatos) disponível sob demanda — não replicado
+aqui para não duplicar código-fonte em prosa.
+
+---
+
 ## ⚠️ Erros de método que se repetem — ler antes de atacar qualquer item
 
 Esta seção **não descreve trabalho pendente**. Descreve como se erra aqui, e ficou depois que
