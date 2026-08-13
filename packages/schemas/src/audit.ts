@@ -325,8 +325,14 @@ export const AuditRecordSchema = z.object({
   output_snapshot:     z.unknown().optional(),
   /** Enriquecimento opcional por chamada (nunca suprime a política da tool) */
   audit_context:       AuditContextSchema.optional(),
-  /** Origem do registro: interceptor em-processo ou proxy sidecar */
-  source:              z.enum(["in_process", "proxy_sidecar"]),
+  /**
+   * Origem do registro. São TRÊS bordas de interceptação, não duas:
+   *   in_process       — McpInterceptor no processo do agente nativo (SDK)
+   *   proxy_sidecar    — plughub-sdk proxy, agente externo que chama o domain server direto
+   *   mcp_server_invoke — tool `invoke` do mcp-server-plughub, agente external-mcp
+   *                       (a interceptação acontece server-side, não no agente)
+   */
+  source:              z.enum(["in_process", "proxy_sidecar", "mcp_server_invoke"]),
   /**
    * Campos cujos valores foram omitidos por serem mascarados (originados do masked_scope).
    * Registra QUAIS campos foram enviados, mas nunca seus valores.

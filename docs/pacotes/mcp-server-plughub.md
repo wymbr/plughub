@@ -525,8 +525,8 @@ Consumidas por **agentes externos** (LangGraph, CrewAI, Anthropic SDK direto, ou
 |---|---|
 | `wait_for_assignment` | BLPOP em `{tenant_id}:agent:queue:{instance_id}` aguardando `context_package` do Routing Engine. Envia `agent_heartbeat` a cada 15s para renovar TTL da instância. |
 | `send_message` | Publica mensagem em `conversations.outbound` → Channel Gateway entrega ao cliente. |
-| `wait_for_message` | Aguarda resposta do cliente. Seta `menu:waiting:{session_id}` antes do BLPOP — sinal obrigatório para o Orchestrator Bridge entregar a mensagem. Monitora também `session:closed:{session_id}` para detectar desconexão. |
-| `invoke` | Chama uma tool de um domain MCP server com validação de permissão JWT local (~0.1ms). Registro de audit em `audit.mcp_calls`. |
+| `wait_for_message` | Aguarda resposta do cliente por `XREADGROUP BLOCK` em `session:{session_id}:stream`, consumer group `agent:{instance_id}`. Com `conference_id` o grupo nasce em offset `0` (lê o histórico desde o join); sem ele, em `$`. Desconexão = item `{type: session_closed}` no próprio stream. |
+| `invoke` | Chama uma tool de um domain MCP server com validação de permissão JWT local (~0.1ms) **e injection guard**. `AuditRecord` em `mcp.audit` nos três ramos (permitida/negada/bloqueada). |
 
 #### Fluxo completo de um ciclo external-mcp
 
@@ -537,9 +537,8 @@ Consumidas por **agentes externos** (LangGraph, CrewAI, Anthropic SDK direto, ou
                          [envia agent_heartbeat a cada 15s para manter TTL=30s no routing engine]
 4. agent_busy     → sinaliza sessão ativa (Kafka agent_busy)
 5. send_message   → envia mensagem ao cliente (Kafka conversations.outbound)
-6. wait_for_message → aguarda resposta do cliente
-                      [seta menu:waiting:{session_id} antes do BLPOP]
-                      [monitora session:closed:{session_id} — retorna client_disconnected]
+6. wait_for_message → aguarda resposta do cliente (XREADGROUP em session:{id}:stream)
+                      [item {type: session_closed} no stream → retorna client_disconnected]
 7. agent_done     → encerra conversa (Kafka agent_done)
 8. → estado retorna para 'ready' → voltar ao passo 2
 ```
@@ -555,11 +554,17 @@ BLPOP(agent:queue:{instance_id}, 15s)
                         (repete até contato chegar ou timeout total atingido)
 ```
 
-#### `wait_for_message` — convenção menu:waiting
+#### `wait_for_message` — Redis Streams, não BLPOP
 
-O Orchestrator Bridge só entrega mensagens de texto do cliente ao BLPOP de `wait_for_message` se a chave `menu:waiting:{session_id}` estiver presente no Redis. Esta é a mesma convenção usada pelo `menu` step do skill-flow. Sem essa chave, o bridge descarta a mensagem com "No active agent".
+*(Corrigido 2026-08-13: esta seção descrevia a convenção `menu:waiting` + BLPOP, que o código não usa mais.)*
 
-A tool seta `menu:waiting:{session_id}` com TTL = `timeout_s + 10` antes do BLPOP e remove no `finally`. O agente não precisa gerenciar isso.
+A entrega é por **consumer group** sobre `session:{session_id}:stream` (`XADD` cego do bridge). O que isso compra, e que o BLPOP não dava:
+
+- **fan-out nativo** — todos os participantes de uma conferência recebem a mesma mensagem, cada um pelo seu grupo, sem o bridge saber quem está esperando;
+- **sem janela de mensagem perdida** — o stream persiste antes do grupo existir (`MKSTREAM`); não há o caso do `LPUSH` chegar antes do `BLPOP` e a mensagem sumir em silêncio;
+- **desconexão na mesma ordem das mensagens** — `session_closed` é item do stream, não chave separada.
+
+⚠️ A chave é `session:{id}:**stream**`, não `session:{id}:messages` — esta última é uma List (histórico do channel-gateway); os dois tipos na mesma chave dariam `WRONGTYPE`.
 
 #### `invoke` — validação local de permissões (spec 4.6k)
 
@@ -569,10 +574,22 @@ A tool seta `menu:waiting:{session_id}` com TTL = `timeout_s + 10` antes do BLPO
   mcp_server:   string    // ex: "mcp-server-crm"
   tool:         string    // ex: "customer_get"
   params:       object    // passados sem modificação ao domain server
+  session_id?:  string    // opcional — atribui a chamada a uma sessão no AuditRecord
 }
 ```
 
-A permissão `{mcp_server}:{tool}` deve estar no JWT (emitido por `agent_login`). Validação é local — sem rede, ~0.1ms. Audit publicado em `audit.mcp_calls` (Kafka, assíncrono). O domain server é chamado via SSE reutilizando conexão em pool.
+A permissão `{mcp_server}:{tool}` deve estar no JWT (emitido por `agent_login`). Validação é local — sem rede, ~0.1ms. O domain server é chamado via SSE reutilizando conexão em pool.
+
+**Esta tool é a terceira borda de interceptação MCP da plataforma** — as outras duas são o `McpInterceptor` em-processo (agente nativo com SDK) e o proxy sidecar (agente externo que fala direto com o domain server). Aqui a interceptação é server-side, e por isso o agente `external-mcp` não precisa de sidecar. Aplica, em ordem: **permissão → injection guard → encaminhamento**, e publica `AuditRecord` (`@plughub/schemas`) em **`mcp.audit`** nos três desfechos, com `source: "mcp_server_invoke"`. O caller não tem como suprimir o registro. Veredicto puro e testável em `src/lib/invoke-audit.ts`.
+
+⚠️ Duas assimetrias deliberadas com o proxy sidecar, ambas para o lado restritivo:
+
+| | `invoke` | proxy sidecar |
+|---|---|---|
+| curinga `"{server}:*"` | não aceita | aceita |
+| `permissions[]` vazia | nega tudo | sem filtro |
+
+`session_id` é opcional por retrocompat. Ausente, o audit tenta derivar da única sessão ativa da instância; com 0 ou 2+ sessões o registro sai com `session_id` **vazio** — o consumer do analytics-api então o trata como chamada de sistema e não a atribui a nenhuma sessão. Passar `session_id` explicitamente (vem do `context_package`) é o caminho correto.
 
 ---
 

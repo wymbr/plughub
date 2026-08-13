@@ -11,7 +11,8 @@
  *   2. agent_login  → obtém session_token com permissions[] no JWT
  *   3. agent_ready  → anuncia disponibilidade nos pools
  *   4. wait_for_assignment → BLPOP em agent:queue:{instance_id} aguarda context_package
- *   5. invoke       → valida permission, chama domain MCP server (sem proxy sidecar)
+ *   5. invoke       → valida permission + injection guard, chama domain MCP server
+ *                     (a interceptação é server-side: este agente não usa sidecar)
  *   6. send_message → publica em conversations.outbound → Channel Gateway → cliente
  *   7. wait_for_message → XREADGROUP em session:{session_id}:messages — fan-out nativo
  *                         para múltiplos participantes (modelo de conferência). Cada agente
@@ -23,7 +24,9 @@
  *   - Validação de permissão em invoke é local (JWT) — sem rede, ~0.1ms
  *   - Toda tool valida JWT antes de qualquer operação
  *   - wait_for_message usa XREADGROUP BLOCK; responde mcpError("timeout") quando esgotado
- *   - Audit de chamadas de domínio publicado em audit.mcp_calls (Kafka, assíncrono)
+ *   - Audit de chamadas de domínio publicado em mcp.audit (Kafka, assíncrono),
+ *     no formato AuditRecordSchema e nos TRÊS ramos (permitida, negada, bloqueada) —
+ *     o caller não tem como suprimir o registro. Ver lib/invoke-audit.ts.
  *   - Consumer group por instance_id: idempotente, criado com MKSTREAM na primeira chamada
  */
 
@@ -38,6 +41,7 @@ import {
   verifySessionTokenSafe,
   InvalidTokenError,
 } from "../infra/jwt"
+import { judgeInvoke, buildInvokeAuditRecord } from "../lib/invoke-audit"
 
 /** Intervalo de heartbeat em segundos — deve ser menor que o instance TTL do routing engine (30s). */
 const HEARTBEAT_INTERVAL_S = 15
@@ -59,6 +63,14 @@ const InvokeInputSchema = z.object({
   tool:          z.string().min(1),
   /** Parâmetros da tool de domínio (passados sem modificação) */
   params:        z.record(z.unknown()).default({}),
+  /**
+   * Sessão a que a chamada pertence — vem do `context_package` recebido em
+   * `wait_for_assignment`. Opcional por retrocompat: quando ausente, o audit
+   * tenta derivar da única sessão ativa da instância; havendo 0 ou 2+, o
+   * `AuditRecord` sai com `session_id` VAZIO (não atribuível) e o motivo é
+   * logado. Passar explicitamente é o caminho correto.
+   */
+  session_id:    z.string().uuid().optional(),
 })
 
 const WaitForAssignmentInputSchema = z.object({
@@ -165,6 +177,43 @@ async function _getDomainClient(mcpServer: string): Promise<Client> {
   return client
 }
 
+// ─── Auditoria da chamada de domínio ─────────────────────────────────────────
+//
+// Tópico canônico: `mcp.audit` (mesmo do McpInterceptor e do proxy sidecar),
+// payload = `AuditRecordSchema`. Até 2026-08-13 esta tool publicava em
+// `audit.mcp_calls`, com payload próprio — tópico que NENHUM consumer lê (o
+// analytics-api consome `mcp.audit`), de modo que toda chamada de domínio de
+// agente external-mcp ficava fora do rastro de auditoria sem nada falhar.
+
+/**
+ * Resolve a sessão à qual a chamada pertence, para o AuditRecord.
+ * Precedência: parâmetro explícito → única sessão ativa da instância → "" (ausente).
+ * NUNCA inventa placeholder: `""` faz o consumer tratar como chamada de sistema,
+ * que é a verdade quando a atribuição é ambígua.
+ */
+async function _resolveAuditSessionId(
+  redis:      RedisClient,
+  tenantId:   string,
+  instanceId: string,
+  explicit:   string | undefined,
+): Promise<string> {
+  if (explicit) return explicit
+  try {
+    const active = await redis.smembers(keys.agentConversations(tenantId, instanceId))
+    if (active.length === 1) return active[0]!
+    console.warn(
+      `[external-agent.invoke] audit sem session_id: instância '${instanceId}' tem ` +
+      `${active.length} sessões ativas — passe session_id no invoke para atribuir a chamada.`
+    )
+  } catch (e) {
+    console.warn(
+      `[external-agent.invoke] audit sem session_id: falha ao ler sessões ativas de ` +
+      `'${instanceId}' — ${e instanceof Error ? e.message : String(e)}`
+    )
+  }
+  return ""
+}
+
 // ─── Registro das tools ───────────────────────────────────────────────────────
 
 export function registerExternalAgentTools(server: McpServer, deps: ExternalAgentDeps): void {
@@ -173,41 +222,76 @@ export function registerExternalAgentTools(server: McpServer, deps: ExternalAgen
   // ── invoke ────────────────────────────────────────────────────────────────
   server.tool(
     "invoke",
-    "Chama uma tool de um domain MCP server com validação de permissão JWT. " +
-    "A permissão '{mcp_server}:{tool}' deve estar no JWT (emitido por agent_login). " +
-    "Validação é local (~0.1ms, sem rede). Audit publicado em audit.mcp_calls. Spec 4.6k.",
+    "Chama uma tool de um domain MCP server com validação de permissão JWT e " +
+    "injection guard. A permissão '{mcp_server}:{tool}' deve estar no JWT (emitido " +
+    "por agent_login). Validação é local (~0.1ms, sem rede). Toda chamada — " +
+    "encaminhada, negada ou bloqueada — gera AuditRecord em mcp.audit. Spec 4.6k / seção 9.",
     InvokeInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
+      const startedAt = Date.now()
       try {
-        const { session_token, mcp_server, tool, params } = InvokeInputSchema.parse(input)
+        const { session_token, mcp_server, tool, params, session_id } =
+          InvokeInputSchema.parse(input)
         const { tenant_id, instance_id, permissions } = verifySessionTokenSafe(session_token)
 
-        // ── Validação de permissão (local, sem rede) ──────────────────────
-        const required = `${mcp_server}:${tool}`
-        if (!permissions.includes(required)) {
+        const auditSessionId = await _resolveAuditSessionId(
+          redis, tenant_id, instance_id, session_id,
+        )
+
+        /** Publica o AuditRecord — fire-and-forget, nunca bloqueia a resposta. */
+        const audit = (verdict: Parameters<typeof buildInvokeAuditRecord>[0]["verdict"]): void => {
+          void kafka.publish("mcp.audit", buildInvokeAuditRecord({
+            tenant_id,
+            session_id:  auditSessionId,
+            instance_id,
+            mcp_server,
+            tool,
+            permissions,
+            verdict,
+            duration_ms: Date.now() - startedAt,
+          })).catch((e: unknown) => {
+            // Degradação nunca silenciosa: se o audit não sai, isso precisa
+            // aparecer no log — o invariante é que a chamada não pode escapar
+            // do registro, e um catch mudo aqui reintroduz exatamente o defeito
+            // que este arco fechou.
+            console.error(
+              `[external-agent.invoke] AUDIT_WRITE_FAILED ${mcp_server}:${tool} — ` +
+              `${e instanceof Error ? e.message : String(e)}`
+            )
+          })
+        }
+
+        // ── Gates: permissão (local, sem rede) → injection guard ──────────
+        const verdict = judgeInvoke(permissions, mcp_server, tool, params)
+
+        if (!verdict.allowed) {
+          audit(verdict)
+          if (verdict.reason === "permission_denied") {
+            return mcpError(
+              "permission_denied",
+              `Agente '${instance_id}' não tem permissão '${verdict.required}'. ` +
+              `Permissões autorizadas: [${permissions.join(", ")}]`
+            )
+          }
           return mcpError(
-            "permission_denied",
-            `Agente '${instance_id}' não tem permissão '${required}'. ` +
-            `Permissões autorizadas: [${permissions.join(", ")}]`
+            "injection_detected",
+            `Padrão de injeção '${verdict.pattern_id}' detectado nos argumentos de ` +
+            `'${mcp_server}:${tool}' — chamada bloqueada. ${verdict.detail}`
           )
         }
 
         // ── Chamada ao domain MCP server ──────────────────────────────────
-        const client = await _getDomainClient(mcp_server)
-        const result = await client.callTool({ name: tool, arguments: params })
-
-        // ── Audit log assíncrono (não bloqueia resposta) ──────────────────
-        kafka.publish("audit.mcp_calls", {
-          event_type:  "domain_tool_called",
-          tenant_id,
-          instance_id,
-          mcp_server,
-          tool,
-          permission:  required,
-          timestamp:   new Date().toISOString(),
-        }).catch(() => { /* non-fatal — log local */ })
-
-        return ok({ content: result.content })
+        // `finally` e não linha reta depois do await: a chamada JÁ foi encaminhada
+        // ao domain server, então o registro existe mesmo quando o upstream falha.
+        // Auditar só no caminho feliz deixaria de fora exatamente as chamadas que
+        // mais interessam a um post-mortem.
+        try {
+          const client = await _getDomainClient(mcp_server)
+          const result = await client.callTool({ name: tool, arguments: params })
+          return ok({ content: result.content })
+        } finally {
+          audit(verdict)
+        }
       } catch (e) {
         return handleCaughtError(e)
       }

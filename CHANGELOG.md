@@ -2,6 +2,91 @@
 
 ---
 
+## `invoke` do agente externo: a borda que validava permissão e não deixava rastro ✅ (2026-08-13)
+
+A tool `invoke` (grupo External Agent) é por onde **toda** chamada de domínio de um agente
+`external-mcp` passa — é a borda de interceptação desses agentes, o equivalente server-side do
+`McpInterceptor` e do proxy sidecar. Ela validava permissão e nada mais.
+
+### Dois defeitos, o mesmo modo de falha
+
+1. **O audit ia para um tópico que ninguém lê.** `kafka.publish("audit.mcp_calls", …)`, com payload
+   próprio (`event_type: "domain_tool_called"`, sem `allowed`, sem `duration_ms`, sem `session_id`).
+   O consumer do analytics-api assina **`mcp.audit`**. Resultado: **nenhuma** chamada de domínio de
+   agente externo jamais apareceu em `session_timeline`, na tela de Auditoria LGPD, em lugar nenhum.
+
+   **E era pior que endereço errado: o evento nunca saía do processo.** O broker roda com
+   `KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"` (`docker-compose.demo.yml:472`) e `audit.mcp_calls`
+   **não está** na lista do `kafka-init` (`:513`) — logo todo publish morria em
+   `UNKNOWN_TOPIC_OR_PARTITION`, e o `.catch(() => { /* non-fatal */ })` do call site engolia o
+   erro. Três camadas de silêncio empilhadas: tópico inexistente → exceção → catch mudo. *Um
+   fallback que esconde o motivo do fallback não é resiliência, é cegueira* — e aqui nem fallback
+   havia, só o descarte.
+2. **Não havia injection guard.** O sidecar roda os 13 padrões sobre os argumentos antes de
+   encaminhar; o `McpInterceptor` também. O `invoke` encaminhava direto.
+
+Os dois contrariam o invariante *"nenhuma chamada MCP chega a um domain server sem validação de
+permissão, injection guard e registro de auditoria"* — e nenhum dos dois quebrava nada: a chamada
+funcionava, o agente recebia a resposta, e a única evidência era a ausência de linhas num relatório
+que ninguém tinha motivo para conferir. **Ausência de registro não faz barulho; é a forma mais
+barata de um invariante morrer.**
+
+`docs/kafka-eventos.md` já suspeitava (achado 2 da varredura de 27/07: *"dois nomes para a mesma
+coisa… verificar antes de documentar"*). A verificação confirmou a deriva e achou o resto.
+
+### O que mudou
+
+- **`lib/invoke-audit.ts`** (novo) — `judgeInvoke()` (permissão → injection, nessa ordem) e
+  `buildInvokeAuditRecord()`. Puros, sem Redis/Kafka, no mesmo padrão do `lib/assignment-filter.ts`:
+  o veredicto é testável, o I/O fica no call site. É o que impede a terceira borda de divergir das
+  outras duas sem nada ficar vermelho.
+- **`tools/external-agent.ts`** — `invoke` publica `AuditRecord` em **`mcp.audit`** nos **três**
+  ramos (encaminhada, negada por permissão, bloqueada por injeção). Antes, a negação por permissão
+  não gerava registro algum — a chamada mais interessante para auditoria era justamente a única
+  sem rastro. Falha na escrita do audit **loga** (`AUDIT_WRITE_FAILED`); catch mudo aqui
+  reintroduziria o defeito.
+- **`schemas/audit.ts`** — `source` ganhou `"mcp_server_invoke"`. São três bordas, não duas, e o
+  enum dizia duas.
+- **`session_id` opcional no `invoke`** — vem do `context_package`. Ausente, deriva da única sessão
+  ativa da instância; com 0 ou 2+, o registro sai com `session_id` **vazio** e o motivo é logado.
+  Vazio faz o consumer tratar como chamada de sistema; `"unknown"` criaria linha sob uma sessão
+  inexistente — **valor plausível escondendo a falta de atribuição**.
+- **`audit.mcp_calls` extinto** — sem produtor. Dois nomes para a mesma coisa era o defeito.
+
+### O que a correção expôs (dívida aberta, registrada)
+
+`mcp.audit` **não tinha produtor vivo**. O `McpInterceptor` do SDK só existe em definição e em
+comentários — **nunca é instanciado** em pacote de runtime; o sidecar só roda se o operador o subir.
+Desde esta mudança o único produtor efetivo é o `invoke`, que cobre apenas agentes `external-mcp`.
+**As chamadas de domínio do agente NATIVO seguem sem auditoria** — o `mcpCall` do `skill-flow-service`
+(`packages/e2e-tests/services/skill-flow-service/src/index.ts:149`, o que o bridge executa) faz
+`fetch` JSON-RPC cru, sem permissão, sem guard, sem `AuditRecord`. É o caminho de maior volume da
+plataforma. Registrado em `docs/kafka-eventos.md` (achado 7) e em `TODO.md`.
+
+### Assimetrias mantidas de propósito
+
+O `invoke` não aceita curinga `"{server}:*"` e trata `permissions[]` vazia como *nega tudo*; o
+sidecar aceita o curinga e trata lista vazia como *sem filtro*. Unificar só se faz **abrindo**
+acesso num dos dois, o que é decisão de produto — não limpeza. Pinado por teste: se alguém unificar,
+fica vermelho e a decisão fica explícita.
+
+### Cobertura
+
+`src/__tests__/invoke-audit.test.ts` — 13 casos sobre os veredictos e o `AuditRecord`. O que os faz
+reprovar: `AuditRecordSchema.parse` recusa o `source` novo se `@plughub/schemas` não tiver sido
+reconstruído (o teste falha em vez de o serviço publicar payload que o consumer descarta); ramo que
+deixe de auditar; `allowed` invertido; e a ordem dos gates (negar por injeção antes de permissão
+inspecionaria conteúdo de quem não estava autorizado).
+
+**Ordem de build obrigatória:** `schemas` **antes** de `mcp-server-plughub` — o `file:../schemas`
+resolve para o `dist`, então o enum novo só existe depois do build do primeiro.
+
+Docs: `docs/pacotes/mcp-server-plughub.md` (§ Grupo 5 — e a seção do `wait_for_message`, que ainda
+descrevia `menu:waiting` + BLPOP, mecanismo que o código substituiu por Redis Streams),
+`docs/kafka-eventos.md` (linha do mcp-server, achado 2 fechado, achado 7 novo).
+
+---
+
 ## Preparo da demo: seeds que envelheciam, e três verificações que não podiam reprovar ✅ (2026-08-12)
 
 Sessão de preparo da demo de 30 min. O que ficou de duradouro não foi o preparo — foram **três

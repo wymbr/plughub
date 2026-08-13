@@ -121,7 +121,7 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 
 | Módulo | Produz | Consome (`group_id`) |
 |---|---|---|
-| `mcp-server-plughub` (Core) | `agent.lifecycle`, `conversations.inbound`, `conversations.events`, `conversations.outbound`, `conversations.participants`, `conversations.channel_change` ⚠, `agent.events`, `evaluation.events`, `evaluation.results`, `session.signals`, `journey.merges`, `usage.events`, `audit.mcp_calls` ⚠ | **nenhum** — é produtor puro |
+| `mcp-server-plughub` (Core) | `agent.lifecycle`, `conversations.inbound`, `conversations.events`, `conversations.outbound`, `conversations.participants`, `conversations.channel_change` ⚠, `agent.events`, `evaluation.events`, `evaluation.results`, `session.signals`, `journey.merges`, `usage.events`, `mcp.audit` | **nenhum** — é produtor puro |
 | `routing-engine` | `conversations.routed`, `conversations.queued`, `conversations.events`, `conversations.participants`, `conversations.outbound`, `conversations.inbound` (re-rota), `queue.position_updated`, `pool.occupancy`, `agent.lifecycle` (`agent_crash`) | `conversations.inbound` (`routing-engine`) · `agent.lifecycle` + `agent.registry.events` + `config.changed` + `conversations.events` (`routing-engine-listener`) · `evaluation.events` (`routing-engine-evaluation`) |
 | `orchestrator-bridge` | `conversations.inbound`, `conversations.outbound`, `conversations.events`, `conversations.session_closed`, `conversations.participants`, `agent.lifecycle`, `events.dead_letter` | `conversations.routed`, `conversations.queued`, `conversations.inbound`, `conversations.events`, `registry.changed`, `config.changed` (`orchestrator-bridge`) |
 | `channel-gateway` | `conversations.inbound`, `conversations.events`, `usage.events`, `session.signals` | `conversations.outbound` (`channel-gateway-webchat`) · `collect.events` (`…-collect`) · `config.changed` (`…-config`) |
@@ -136,7 +136,7 @@ abaixo mapeia os principais tópicos aos seus schemas e arquivos:
 | `config-api` | `config.changed` | nenhum |
 | `ai-gateway` | `sentiment.updated`, `usage.events` | nenhum |
 | `skill-flow-engine` | nenhum | nenhum — não importa `kafkajs`; é biblioteca de interpretação |
-| `sdk` (`McpInterceptor` / proxy) | `mcp.audit` | nenhum |
+| `sdk` (`McpInterceptor` / proxy) | `mcp.audit` ⚠ | nenhum |
 | `workflow-api` *(legado)* | `workflow.events`, `collect.events` | nenhum |
 | `skill-flow-worker` *(legado)* | `events.dead_letter` | `workflow.events` (`skill-flow-worker`) |
 
@@ -168,11 +168,12 @@ do tipo que só aparece em varredura de código.
 | # | Achado | Situação |
 |---|---|---|
 | 1 | **`conversations.channel_change`** é produzido (`mcp-server-plughub/src/tools/session.ts:812`) e não estava documentado | Tópico real, sem seção. Consumidor não localizado — candidato a órfão. |
-| 2 | **`audit.mcp_calls`** é produzido (`mcp-server-plughub/src/tools/external-agent.ts:200`) e não estava documentado | Suspeita de deriva: o tópico canônico de auditoria é `mcp.audit`. Dois nomes para a mesma coisa é exatamente o defeito que o saneamento removeu em outros pontos. **Verificar antes de documentar.** |
+| 2 | **`audit.mcp_calls`** é produzido (`mcp-server-plughub/src/tools/external-agent.ts:200`) e não estava documentado | ✅ **RESOLVIDO 2026-08-13** — era deriva, e pior do que o achado supunha: além do nome divergente, o payload não era `AuditRecordSchema` e o tópico não tinha consumidor, então **nenhuma** chamada de domínio de agente `external-mcp` chegava à auditoria. O `invoke` agora publica em `mcp.audit` nos três ramos (permitida/negada/bloqueada) com `source: "mcp_server_invoke"`. Tópico `audit.mcp_calls` **extinto** — sem produtor. Agravante medido: ele nunca existiu no broker (`kafka-init` não o cria e `KAFKA_AUTO_CREATE_TOPICS_ENABLE=false`), então o publish falhava e o `catch` mudo do call site descartava o erro. Ver CHANGELOG. |
 | 3 | **`conversation-writer` produz `evaluation.events`** (`writer.py:196`, evento `transcript.created`) | Produtor legítimo e ausente da lista da seção `evaluation.events`. |
 | 4 | **`session-replayer` não produz nada** — cria o producer e nunca chama `send` | A seção `evaluation.events` o lista como produtor. Corrigir a lista (o comentário em `consumer.py:256` confirma que a publicação de `evaluation.requested` foi retirada). |
 | 5 | **`calendar.events`** está declarado em `calendar-api/config.py:30` e o docstring do `main.py` promete publicá-lo — **não há produtor** | Config morta. Remover a declaração ou implementar. |
 | 6 | **`journey.events`** ainda está declarado em `workflow-api/config.py:30` (`journey_topic`) | Resíduo do Arc 19 Fase F. O tópico não existe mais; a config sim. |
+| 7 | **`mcp.audit` não tinha produtor VIVO** (achado de 2026-08-13, confirma o item 10 de `adr-historico-unificado-duas-visoes.md`) | O `McpInterceptor` do SDK só aparece em definição e comentários — **nunca é instanciado** em nenhum pacote de runtime; o proxy sidecar só roda se o operador o subir. A linha do `sdk` na tabela acima descreve capacidade, não tráfego observado. Desde 2026-08-13 o único produtor efetivo é o `invoke` do mcp-server (`source: "mcp_server_invoke"`), que cobre apenas agentes `external-mcp`. **As chamadas de domínio do agente NATIVO seguem sem auditoria**: o `mcpCall` do `skill-flow-service` (`packages/e2e-tests/services/skill-flow-service/src/index.ts:149`, o que o bridge executa) e o do `skill-flow-worker` (`engine-runner.ts:150`, legado) fazem `fetch` cru, sem permissão nem guard nem `AuditRecord`. Dívida aberta — é o caminho de MAIOR volume. |
 
 > **Nenhum módulo central de constantes de tópicos existe** — os nomes são literais inline em cada call site,
 > com poucas constantes locais de arquivo. É a causa raiz das derivas 1, 2, 5 e 6: um `topics.ts`/`topics.py`
