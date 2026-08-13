@@ -61,13 +61,40 @@ export interface JourneyDeps {
 }
 
 const JourneyMergeInputSchema = z.object({
-  /** JWT from agent_login — resolves tenant_id + actor. */
-  session_token:  z.string().min(1),
+  /**
+   * JWT from agent_login — resolves tenant_id + actor. This is the path for callers that
+   * already HAVE a minted JWT (Console operators, evaluator/reviewer agents explicitly
+   * bootstrapped with one — see agente_revisor_v1.yaml header). Optional now: one of
+   * `session_token` / `tenant_id` is required, checked manually in the handler below.
+   */
+  session_token:  z.string().min(1).optional(),
+  /**
+   * Plain tenant id — alternative auth path for callers with NO session_token, which is
+   * every ORDINARY native-agent skill-flow invoke step (customer-facing pools like
+   * skill_limite_entrada_v1: channel-gateway → routing-engine → orchestrator-bridge →
+   * skill-flow-service `/execute` never mints or forwards a JWT into the pipeline
+   * context — only workflows that explicitly inject one, like skill_revisao_treplica_v1,
+   * do). Same calling convention as every OTHER tool this kind of skill already uses
+   * (customer_resolve, pending_workflow_get, context_set, workflow_trigger all take
+   * `tenant_id` as plain data). Authorization for these callers is already enforced
+   * upstream by McpInterceptor (in-process for native agents) — re-deriving it from a
+   * session_token here would mean minting a JWT for every conversational skill that has
+   * no other use for one, just to satisfy this one tool.
+   */
+  tenant_id:      z.string().min(1).optional(),
+  /** Free-form actor label for the `tenant_id` auth path (audit trail only — the
+   *  `session_token` path derives this from the JWT instead). Defaults to "skill_flow". */
+  actor:          z.string().min(1).optional(),
   /** Raiz da journey a ser absorvida (por default, a mais nova). */
   source_root:    z.string().min(1),
   /** Raiz sobrevivente (por default, a mais antiga). */
   canonical_root: z.string().min(1),
 })
+// NOTE: no `.refine()` here on purpose — `JourneyMergeInputSchema.shape` (below, in
+// registerJourneyTools) needs a plain ZodRawShape for the MCP SDK's `server.tool()`
+// call, and `.refine()` would turn this into a ZodEffects wrapper that has no `.shape`.
+// The "session_token OR tenant_id" invariant is checked manually in the handler instead
+// (same style already used there for the self_merge check).
 
 type ToolResult = { isError?: true; content: Array<{ type: "text"; text: string }> }
 function ok(data: unknown): ToolResult {
@@ -256,23 +283,36 @@ export function registerJourneyTools(server: McpServer, deps: JourneyDeps): void
     "its component root and records an alias edge between them (acyclic by construction). " +
     "Publishes journey.merges; never rewrites root_session_id. Survivor defaults to the OLDER " +
     "root when both ages resolve; otherwise the caller's designation stands. Idempotent: " +
-    "merging two roots already in the same journey is a no-op.",
+    "merging two roots already in the same journey is a no-op. Auth: pass EITHER " +
+    "session_token (JWT, for callers that already have one) OR tenant_id (+ optional actor " +
+    "label) — the latter is for ordinary native-agent skill-flow invoke steps, which never " +
+    "receive a JWT in their pipeline context.",
     JourneyMergeInputSchema.shape as any,
     async (input: Record<string, unknown>) => {
       try {
-        const { session_token, source_root, canonical_root } = JourneyMergeInputSchema.parse(input)
+        const { session_token, tenant_id: tenantIdInput, actor: actorInput, source_root, canonical_root } =
+          JourneyMergeInputSchema.parse(input)
 
         let tenant_id: string
         let actor:     string
-        try {
-          const payload = verifySessionToken(session_token)
-          tenant_id = payload.tenant_id
-          actor     = payload.instance_id || payload.agent_type_id || "agent"
-        } catch (e) {
-          if (e instanceof InvalidTokenError) {
-            return mcpError("invalid_token", "session_token is invalid or expired")
+        if (session_token) {
+          try {
+            const payload = verifySessionToken(session_token)
+            tenant_id = payload.tenant_id
+            actor     = payload.instance_id || payload.agent_type_id || "agent"
+          } catch (e) {
+            if (e instanceof InvalidTokenError) {
+              return mcpError("invalid_token", "session_token is invalid or expired")
+            }
+            throw e
           }
-          throw e
+        } else if (tenantIdInput) {
+          // Plain tenant_id path (see schema comment above) — auth already enforced
+          // upstream by McpInterceptor for native-agent invoke steps.
+          tenant_id = tenantIdInput
+          actor     = actorInput || "skill_flow"
+        } else {
+          return mcpError("missing_auth", "either session_token or tenant_id is required")
         }
 
         if (source_root === canonical_root) {

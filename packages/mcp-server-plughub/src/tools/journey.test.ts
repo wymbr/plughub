@@ -146,6 +146,30 @@ describe("journey_merge", () => {
     expect(parseResult(res).error).toBe("self_merge")
   })
 
+  // ── auth alternativa: tenant_id direto, sem JWT (native-agent invoke steps) ──
+
+  it("aceita tenant_id direto no lugar de session_token", async () => {
+    const res = parseOk(await merge({
+      tenant_id: "t1", actor: "skill_limite_entrada_v1",
+      source_root: "B", canonical_root: "A",
+    }))
+
+    expect(res.merged).toBe(true)
+    expect(await redis.hget(aliasKey("t1"), "B")).toBe("A")
+    expect(published[0]!.msg.actor).toBe("skill_limite_entrada_v1")
+  })
+
+  it("tenant_id sem actor cai no default 'skill_flow'", async () => {
+    await merge({ tenant_id: "t1", source_root: "B", canonical_root: "A" })
+    expect(published[0]!.msg.actor).toBe("skill_flow")
+  })
+
+  it("rejeita quando nem session_token nem tenant_id vêm preenchidos", async () => {
+    const res = await merge({ source_root: "B", canonical_root: "A" })
+    expect(res.isError).toBe(true)
+    expect(parseResult(res).error).toBe("missing_auth")
+  })
+
   // ── política (best-effort): sobrevivente = a mais antiga ─────────────────────
 
   it("sobrevivente = a mais ANTIGA quando as idades resolvem", async () => {

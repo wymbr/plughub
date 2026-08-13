@@ -28,6 +28,33 @@ import type { StepContext, StepResult } from "../executor"
 import { resolveInputMap }       from "../interpolate"
 import { extractOutputsToCtx }   from "../context-accumulator-util"
 
+/**
+ * Arc 16 fix: `journey_merge` pode mudar a raiz canônica da journey NO MEIO de uma
+ * execução de flow em andamento (não é o único caso — qualquer skill que faça merge
+ * e depois leia `@ctx.journey.*` no mesmo run cai nisto). `ctx.journeyId` é lido uma
+ * vez em `engine.run()` e passado por referência a cada step — mutá-lo aqui é o que
+ * faz o PRÓXIMO step da mesma execução (ex.: um `delegate` logo depois) enxergar a
+ * raiz nova, sem esperar um novo run com `journeyId` recalculado.
+ *
+ * Identifica a tool pelo NOME, não por um flag na step — `journey_merge` é uma tool
+ * nativa fixa (`@plughub/mcp-server-plughub`), então não há necessidade de tornar
+ * isto configurável por YAML.
+ */
+function applyJourneyMergeResult(
+  step: InvokeStep,
+  result: unknown,
+  ctx:  StepContext,
+): void {
+  const toolName = step.target?.tool ?? step.tool ?? ""
+  if (toolName !== "journey_merge") return
+  if (!result || typeof result !== "object") return
+
+  const canonicalRoot = (result as Record<string, unknown>).canonical_root
+  if (typeof canonicalRoot === "string" && canonicalRoot.length > 0) {
+    ctx.journeyId = canonicalRoot
+  }
+}
+
 export async function executeInvoke(
   step: InvokeStep,
   ctx:  StepContext
@@ -39,6 +66,7 @@ export async function executeInvoke(
   if (ctx.state.results[sentinelKey] === "completed") {
     // Resultado já gravado em uma execução anterior — retornar sem re-chamar MCP
     const storedResult = outputKey !== undefined ? ctx.state.results[outputKey] : undefined
+    applyJourneyMergeResult(step, storedResult, ctx)
     return {
       next_step_id:      step.on_success,
       ...(outputKey !== undefined && { output_as: outputKey }),
@@ -96,6 +124,19 @@ export async function executeInvoke(
       },
     }
     await ctx.saveState(ctx.state)
+
+    // Arc 16 — `journey_merge` muda a raiz canônica DENTRO da mesma execução de flow
+    // (ex.: skill_limite_entrada_v1's unificar_journey → retomar_resultado, dois steps
+    // consecutivos do mesmo run). `ctx.journeyId` é um parâmetro fixado uma vez no início
+    // do run (engine.run()) — sem este patch, todo `@ctx.journey.*` lido por um step
+    // POSTERIOR ao merge, na MESMA execução, resolve contra a raiz ANTIGA (a do próprio
+    // contato, pré-merge — vazia), não a canônica que acabou de receber os dados. O merge
+    // fica correto no Redis (prova: aliases + hash da raiz canônica ambos certos) e a
+    // leitura minutos depois (um NOVO run, com journeyId fresco) também funciona — só o
+    // `@ctx.journey.*` do MESMO run, logo após o merge, ficava cego. Sem isto, o sintoma
+    // é indistinguível de "merge não fez nada": campos vazios, choice de resultado cai no
+    // default (mascarando leitura falha como recusa) — mesma classe do bug do session_token.
+    applyJourneyMergeResult(step, result, ctx)
 
     // ── context_tags.outputs: escrever campos do resultado no ContextStore ──
     // Complementa McpInterceptor: aplica quando o interceptor não tem a anotação.

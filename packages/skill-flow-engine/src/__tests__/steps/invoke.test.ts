@@ -238,7 +238,72 @@ describe("executeInvoke — resolução de inputs com JSONPath", () => {
       "mcp-server-crm",
     )
   })
+})
 
+// ─────────────────────────────────────────────
+// Arc 16 — journey_merge atualiza ctx.journeyId NO MESMO run
+//
+// Bug real (2026-08-13): journey_merge acertava o Redis (aliases + hash da raiz
+// canônica), mas ctx.journeyId é fixado uma vez em engine.run() — o PRÓXIMO step
+// da mesma execução (ex.: um delegate logo depois) continuava lendo @ctx.journey.*
+// contra a raiz ANTIGA (vazia). Sintoma: campos vazios, indistinguível de "merge
+// não fez nada".
+// ─────────────────────────────────────────────
+
+describe("executeInvoke — journey_merge atualiza ctx.journeyId (Arc 16)", () => {
+  const mergeStep: InvokeStep = {
+    id:         "unificar_journey",
+    type:       "invoke",
+    tool:       "journey_merge",
+    input:      { tenant_id: "t1", source_root: "B", canonical_root: "A" },
+    on_success: "seguinte",
+    on_failure: "seguinte",
+  }
+
+  it("seta ctx.journeyId = canonical_root do resultado quando a tool é journey_merge", async () => {
+    const mcpCall = vi.fn().mockResolvedValue({ merged: true, canonical_root: "A", source_root: "B" })
+    const ctx = makeCtx({
+      journeyId: "B",   // raiz pré-merge (o próprio contato)
+      mcpCall,
+      saveState: vi.fn().mockImplementation(async (s: PipelineState) => { ctx.state = s }),
+    })
+
+    await executeInvoke(mergeStep, ctx)
+
+    expect(ctx.journeyId).toBe("A")
+  })
+
+  it("também atualiza no caminho de retomada (sentinel 'completed')", async () => {
+    const ctx = makeCtx({
+      journeyId: "B",
+      state: makeState({
+        "unificar_journey:__invoked__": "completed",
+        "merge": { merged: true, canonical_root: "A", source_root: "B" },
+      }),
+      mcpCall: vi.fn(),
+    })
+    const stepWithOutput: InvokeStep = { ...mergeStep, output_as: "merge" }
+
+    await executeInvoke(stepWithOutput, ctx)
+
+    expect(ctx.journeyId).toBe("A")
+  })
+
+  it("não mexe em ctx.journeyId para tools que não são journey_merge", async () => {
+    const mcpCall = vi.fn().mockResolvedValue({ customer_id: "c1" })
+    const ctx = makeCtx({
+      journeyId: "B",
+      mcpCall,
+      saveState: vi.fn().mockImplementation(async (s: PipelineState) => { ctx.state = s }),
+    })
+
+    await executeInvoke(step, ctx)   // `step` = customer_get, definido no topo do arquivo
+
+    expect(ctx.journeyId).toBe("B")
+  })
+})
+
+describe("executeInvoke — resolução de inputs com JSONPath (segment)", () => {
   it("resolve o built-in $.segment_id do próprio agente", async () => {
     const mcpCall = vi.fn().mockResolvedValue({ ok: true })
     const ctx = makeCtx({

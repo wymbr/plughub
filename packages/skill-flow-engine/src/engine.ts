@@ -472,7 +472,17 @@ export class SkillFlowEngine {
     segmentId?:        string
     journeyId?:        string
   }): Promise<RunResult> {
-    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, config, instanceId, resumeContext, segmentId, journeyId } = params
+    const { tenantId, sessionId, pipelineSessionId, customerId, skillId, flow, sessionContext, config, instanceId, resumeContext, segmentId } = params
+    // Arc 16 — `let`, não `const`: um step `invoke journey_merge` muda a raiz canônica
+    // NO MEIO desta mesma execução (ex.: unificar_journey → retomar_resultado, dois
+    // steps consecutivos do mesmo run). `_buildContext` roda de novo a CADA iteração
+    // do loop abaixo — se `journeyId` fosse fixo aqui, a mutação que invoke.ts faz em
+    // `ctx.journeyId` (applyJourneyMergeResult) seria descartada no próximo step, porque
+    // o `ctx` daquele step é reconstruído do zero a partir desta variável, não do `ctx`
+    // anterior. É exatamente o bug que produzia campos vazios mesmo com o merge certo
+    // no Redis: a correção em invoke.ts sozinha resolve o `ctx` do PRÓPRIO step do
+    // merge, mas não sobrevive à fronteira do loop sem isto.
+    let journeyId = params.journeyId
 
     // 1. Retomar ou iniciar pipeline (usa pipelineSessionId para state isolation)
     let state = await this.stateManager.get(tenantId, pipelineSessionId)
@@ -543,6 +553,11 @@ export class SkillFlowEngine {
       // Sincronizar estado in-memory da transação (mutados pelos executores)
       maskedScope          = ctx.maskedScope
       transactionOnFailure = ctx.transactionOnFailure
+
+      // Sincronizar journeyId — ver comentário acima (`let journeyId`). invoke.ts
+      // (journey_merge) muta ctx.journeyId; sem este sync o próximo _buildContext
+      // reconstrói o ctx com a raiz antiga e a mutação vira no-op.
+      journeyId = ctx.journeyId
 
       // Persistir output do step no pipeline_state
       if (result.output_as && result.output_value !== undefined) {
