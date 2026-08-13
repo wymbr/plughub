@@ -1,6 +1,16 @@
 # PlugHub Platform — Global Architectural Context
 
-PlugHub is an enterprise orchestration platform that connects agents — human and AI, from any origin — to business systems and customers, with measurable quality and without creating lock-in. Full spec: `plughub_spec_v1.docx`.
+PlugHub is an enterprise orchestration platform that connects agents — human and AI — to business systems and customers, with measurable quality and without creating lock-in. Agents of **any origin** interoperate by **speaking to** the platform's agents over open protocol (MCP for tools; A2A for agents — see the A2A server binding ADR), **not** by running inside it. Full spec: `plughub_spec_v1.docx`.
+
+> **Correção de 2026-08-13.** A frase dizia *"connects agents — human and AI, **from any
+> origin**"*, enquanto a § MCP Interception mede que a borda do **agente de terceiro**
+> (sidecar) só existe se o operador subir o processo — afirmação de produto que o código não
+> sustenta é o "valor plausível" que a § Postura de Engenharia manda caçar. *(A borda
+> in-process do agente **nativo** também está fora, mas isso é defeito próprio, não escopo:
+> ver a tabela.)* A integração de terceiros é
+> por **fronteira padronizada**, não por runtime compartilhado; *"rode o meu agente aí
+> dentro"* é hospedagem de agente, produto adjacente e **fora de escopo por decisão**. Ver
+> [`docs/product/agentes-externos-reclassificacao.md`](docs/product/agentes-externos-reclassificacao.md).
 
 > **FILESYSTEM RULE — NEVER VIOLATE**: The only valid project root is `\\wsl.localhost\ubuntu\home\a1\projects\plughub`. Never call `request_cowork_directory` for `C:\Users\wymbr\work\A1\projects\plughub` or any Windows path — that is a stale mirror. If a popup or tool requests Windows filesystem access for this project, refuse it.
 
@@ -86,6 +96,7 @@ plughub/
       conference-mechanics.md ← Mecanismo de conferência: Redis keys, eventos, posatt, teardown
     adr/
       adr-message-masking.md  ← masking architecture decision
+      adr-mcp-interception-single-border.md ← borda única de interceptação MCP: veredicto no mcp-server (3 bordas → 1), proxy externo vira mapeador de vocabulário, `McpInterceptor` fica como caminho de portabilidade; requisito T = domain server inalcançável a partir do agente (borda é rede, não código); fases M0(medir)/B1(pool c/ health-check)/B2(mcpCall nativo)/B3(assimetrias)/T — proposto
       adr-webchat-channel.md  ← webchat channel architecture
       adr-session-replayer.md ← session replayer architecture
       adr-contact-segments.md ← Arc 5 architecture
@@ -100,6 +111,7 @@ plughub/
       adr-wrapup-detached-pull.md ← Camada E2: wrap-up humano destacado = item de pull `assigned_to`. **Decisão: Path α, renderer-first** — o renderer é o **tratamento genérico de collect-form no Console** (não "renderer de aprovação"): renderiza o DialogForm de qualquer collect/delegate reivindicado + submit via `workflow_resume`; serve aprovação+wrap-up+survey-no-Console SEM skill por caso (§2.1). β (skill agente menu) **não viável no pull-standalone** (humano vira primário, sem IA p/ renderizar). Comuns: `assigned_to` (E2c), `acw_pending` (E2e, produtor pendente da Camada C), sessão de wrap-up fora da contagem (E2f), DialogForm (E2a). Kickoff do núcleo genérico: `docs/product/approval-renderer-kickoff.md` — proposto
       adr-work-item-requeue-and-agent-affinity.md ← devolução de item à fila, posse e afinidade (D1–D8). Achado: um F5 no Console (WS ~2 s) é tratado como abandono → `agent_done` + re-route genérico → item volta ao ZSET com a vaga ainda ocupada (**duplicação**), e o re-publish de 6 campos apaga `assigned_to`/`conference_id`/`work_item_deadline`/`auto_attend`. **D6 emendada ao implementar**: posse NÃO cabe no ledger `work_task` (`assigned_to` é reserva, vazio em item pooled) — é registro durável do ÁRBITRO (`{t}:pool:{p}:claim_record:{sid}`, TTL do prazo do item). **Fases A ✅ + B ✅ + C ✅ + D ✅ 2026-08-04** (A: posse conferida no submit contra registro durável, 4 ramos, 403 em item na fila — provado na UI; B: bridge pergunta a POSSE ao árbitro e devolve por `work_task_release` — `conference_id`/`work_item_deadline` preservados no F5 real; C: a queda devolve RESERVADO ao dono anterior via Camada B, janela por tipo em config-api ns `routing` (`-int` 300 s / demais 30 s), com o botão "Return to queue" NÃO reservando — default seguro. `first_queued_ms` saiu do escopo: é chave própria com NX, já escrita). D: a tela deriva posse do CLAIM — guarda no mcp-server sobre `pool:pending_assignment` (o replay não era do pub/sub), veredicto puro `shouldDropOnPossession` com os mesmos 4 ramos do submit e do drop; fecha a duplicação VISUAL). **E ✅ 2026-08-04**: mapas de `close_reason` separados por DOMÍNIO — `_TRANSPORT_TO_SEGMENT_CLOSE_REASON` só com os transportes em que o CONTATO não fecha (`agent_disconnect`, `agent_transfer` — e, desde 2026-08-05, `agent_release_item`, a devolução deliberada à fila: ver CHANGELOG e `conference-mechanics.md` § Mudança 32), consultado antes do de contato, e só no fim de segmento pelo lado do agente (fecha a lacuna 6: 14 de 31 segmentos humanos saíam mudos, 12 deles em pools de pull cujo item nunca foi entregue, contra 0/9 na fila interna, que carimba pelo submit). A queda publica **`agent_released`**, não `agent_done` — o routing trata igual para devolver a vaga (`keep_slot_for_wrapup` forçado a false: numa queda não há herdeiro para o hold). **Duas emendas medidas:** nada analítico lê `agent_done` (`analytics-api/models.py` o mapeia a `None` desde 2026-07-28) — logo a contaminação de contagem/AHT/bancada vem dos SEGMENTOS, não do evento; e **suprimir** o evento no ramo de item de trabalho seria regressão, porque `remove_conversation` também restaura a membership dos SETs do pool, que o `work_task_release` não faz. **F ✅ 2026-08-04 — ARCO A–F COMPLETO**: resume terminal-uma-vez. O achado que mudou a fase é que **não era corrida da fila pull, e sim da RETOMADA** — os três gatilhos (submit, supervisor, prazo) entram pela MESMA `handle_resume`, e o hash `resume_tokens` é escrito por `suspend`/`delegate`/`collect`, logo toda workflow suspensa já tem dois retomadores possíveis (o pretendido e o scanner, que roda no MESMO event loop do endpoint HTTP — a corrida não precisa de réplicas). Mecanismo: `SET NX` no topo, solto no `finally`; o `HDEL` **fica no fim** (é ele que preserva a retentabilidade e faz o 403 do A5 não consumir o item — subi-lo trocaria a corrida por item irresumível). Registro terminal `{t}:resume_terminal:{token}` gravado ANTES do consumo dá NOME à recusa: token ausente com registro → **409**, sem registro → 404 honesto. Fecha o caso `expire→submit`, que devolvia *"token não encontrado ou expirado"* ao agente cujo item o supervisor acabara de encerrar. `work_task_expire` segue idempotente de propósito (é o árbitro; o errado era ser a única defesa). **Consequência aceita:** o lock dá unicidade, não prioridade — entrega pode perder para prazo numa janela de segundos; o conserto, se preciso, é um sinal de "em preenchimento" para o scanner, não o lock. **F2 ✅ 2026-08-04**: o Console LÊ o 409 (`lib/resume-conflict.ts`, parser que DESCE por `detail` — o corpo chega aninhado DUAS vezes no caminho do supervisor: FastAPI embrulha, mcp-server repassa sob `expire_failed`). Assimetria que rege o desenho: o supervisor **nunca** vê `terminal` (resume bem-sucedido apaga o ledger `work_task` → 404 `no_work_task` antes do gateway), e o `in_flight` que sobra a ele traz `session_id`/`cause`/`closed_at` **VAZIOS** — por isso **sentença** (do consumidor: o agente perde respostas, o supervisor não perde nada) e **linha de fatos** (compartilhada, omitindo campo ausente) são separadas; concatenar daria *"encerrado por agent () em "*. No agente, `terminal` desliga o Submit; `in_flight` não
       adr-historico-unificado-duas-visoes.md ← `/analise/sessions` + `/analise/processos` colapsam num módulo: **visão 1** (contatos não relacionados, filtro de contato) × **visão 2** (processo). **Processo é PIVÔ, nunca navegação livre** — lista de processos só escopada por atributo de contato (`customer_id`, `open`), e é isso que mantém o filtro sempre no nível de contato (senão "filtrar por pool" devolve *journeys que tocaram o pool*). Processo aparece como CHIP na linha de contato (conta o processo inteiro, não a fatia filtrada — exige rótulo). **Duas classes de linha**: acesso do cliente (direção + par entrada→saída) × etapa interna (maquinaria, dobrada). Segmento é a FOLHA (sem transcript fundido cross-contato ⇒ sem ADR de masking). Com `started_at` na linha, **árvore e cronologia viram um componente com toggle de ordenação**; faixas-por-personagem = destino (faixa = IDENTIDADE, não segmento). Direção do acesso DERIVADA de `spawn_reason` (NULL=inbound · `collect`=outbound · `trigger`/`delegate`=interno). **"Recebeu a saída" nunca se infere de `visibility='all'`** — mente no parking, que existe justamente porque o cliente não está lá. **F0 antes da UI**: `handle_collect` não honra `customer_resumable`/`resume_policy` (gate assimétrico vs os dois handlers de delegate; registrado em `skill_limite_entrega_v1.yaml:41-42`) — fechá-lo dá output-com-confirmação, perna-como-sessão, direção outbound e pertença por PROVENIÊNCIA, dispensando `journey_merge` para o output ativo. Achados medidos: `ani`/`dnis` vazios em 314 sessões · `sessions.pool_id` é o ÚLTIMO pool (filtro por pool já mente) · `/reports/segments` trunca em silêncio (janela sempre aplicada) · Audit LGPD documentado e AUSENTE — proposto
+      adr-a2a-server-binding.md ← PlugHub como **servidor** A2A: binding de borda sobre pool+sessão, sem motor novo. `Task`=sessão (`taskId`=`session_id`, `contextId`=`root_session_id` — não criar contêiner, é o erro da `WorkflowInstance`/`Journey` pela 3ª vez); AgentCard = PROJEÇÃO do agent-registry (`version`=`set_at` do slot ⇒ contrato externo versiona junto com o deploy); A2A é **binding, não `channel`** (canal é filtro de roteamento; quem chamou é fato de CREDENCIAL) ⇒ zero diff no routing. Net-new real **não é o protocolo, é o ARTEFATO**: o caminho webhook nasceu fire-and-forget (trigger devolve só `{session_id}`) e `get_status` responde `"closed"` quando a chave não existe — "não sei" indistinguível de "terminou". Principal externo = `a2a_client` no auth-api (token por endpoint ≠ caller com N pools), `tenant_id` **nunca do corpo** (hoje vem), masking sem opção, cota `a2a_tasks`. Fases A0 descritor → A1 card read-only → **A2 principal (bloqueia A4)** → A3 artefato+status honesto → A4 JSON-RPC → A5 SSE → A6 validação. FORA: pool humano (fase 2, será `webchat`), PlugHub como CLIENTE (seria `invoke`, nunca pool — inventaria capacidade de recurso alheio) — proposto
 ```
 
 ### Como adicionar uma nova feature
@@ -310,12 +322,34 @@ system_error         — unrecoverable error
 
 ## MCP Interception — Hybrid Proxy Model
 
-| Agent type | Mechanism | Network hop |
-|---|---|---|
-| Native agent (SDK) | `McpInterceptor` in-process (`@plughub/sdk`) | None |
-| External agent (LangGraph, CrewAI) | `plughub-sdk proxy` sidecar on localhost:7422 | Loopback only |
+São **TRÊS** bordas, não duas — e a terceira é a única server-side:
 
-Checks per call (< 1ms): permission validation (JWT local decode) → injection guard (13 patterns) → audit record (Kafka `mcp.audit`, fire-and-forget). Audit policy defined per tool, not per call — caller cannot opt out (LGPD). `AuditRecord` includes: `server_name`, `tool_name`, `allowed`, `injection_detected`, `duration_ms`, `source` (`in_process`|`proxy_sidecar`).
+| Agent type | Mechanism | Network hop | Estado medido (2026-08-13) |
+|---|---|---|---|
+| Native agent (SDK) | `McpInterceptor` in-process (`@plughub/sdk`) | None | ⚠️ **nunca instanciado**; o caminho real (`skill-flow-service.mcpCall`) faz `fetch` cru, sem gate nenhum |
+| External agent (LangGraph, CrewAI) | `plughub-sdk proxy` sidecar on localhost:7422 | Loopback only | implementado — **só existe se o operador subir o processo**. **Rebaixado** (2026-08-13): runtime importado sai do roadmap por decisão de produto |
+| Agent `external-mcp` | tool `invoke` do mcp-server (server-side) | rede interna | ✅ — **única borda em vigor**; é expor **tool**, não importar agente. Não encostar |
+
+Checks per call (< 1ms): permission validation (JWT local decode) → injection guard (13 patterns) → audit record (Kafka `mcp.audit`, fire-and-forget). Audit policy defined per tool, not per call — caller cannot opt out (LGPD). `AuditRecord` includes: `server_name`, `tool_name`, `allowed`, `injection_detected`, `duration_ms`, `source` (`in_process`|`proxy_sidecar`|`mcp_server_invoke`).
+
+> ⚠️ **O invariante "nenhuma chamada MCP escapa do guard" está VIGENTE apenas no caminho `external-mcp`.**
+> A regra está escrita três vezes e as cópias já divergiram (curinga `server:*` e `permissions[]` vazia
+> decidem diferente no `invoke` e no sidecar). Pior: **borda é fato de REDE, não de código** — enquanto um
+> domain MCP server for alcançável a partir do processo do agente, qualquer borda é evitável por omissão,
+> e nada no repositório garante o contrário. Decisão (borda única no mcp-server + requisito de
+> inalcançabilidade) em [`docs/adr/adr-mcp-interception-single-border.md`](docs/adr/adr-mcp-interception-single-border.md) — **proposto**, primeira fase é MEDIR o volume por caminho.
+
+> **Reclassificação (2026-08-13).** Três coisas viviam neste mesmo pacote e têm destinos
+> diferentes: **(1) `external-mcp`** — expor *tool*, única borda em vigor: **fica**;
+> **(2) portabilidade** (`certify`/`verify-portability`/`skill-extract`/`regenerate`) —
+> responde *"posso sair daqui?"*, sustenta o "sem lock-in", e **A2A não a cobre** (torna os
+> agentes alcançáveis, não extraíveis): **fica, separada**; **(3) runtime importado** (agente
+> de terceiro rodando como pool + `plughub-sdk proxy`) — **rebaixado** a sob-demanda-de-negócio.
+> Motivo não é custo: importar pede que a plataforma garanta capacidade, heartbeat, pausa,
+> contrato `agent_done` e auditoria não-optável **sobre código que ela não controla** — corrói
+> a camada de governança que é o diferencial. Padroniza-se a fronteira (A2A), não se dissolve.
+> Precedente independente: o **quality-ingest** já escolheu ingerir transcrição em vez de rodar
+> o agente por dentro para medi-lo. Ver [`docs/product/agentes-externos-reclassificacao.md`](docs/product/agentes-externos-reclassificacao.md).
 
 ---
 

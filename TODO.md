@@ -8,6 +8,44 @@
 
 ---
 
+## As chamadas de domínio do agente NATIVO não passam por interceptação nenhuma *(achado 2026-08-13, ao alinhar o audit do `invoke` — ver CHANGELOG)*
+
+O invariante da plataforma diz que **nenhuma** chamada MCP chega a um domain server sem validação de
+permissão, injection guard e `AuditRecord`. Estão cobertas duas bordas de três, e a que falta é a de
+maior volume:
+
+| Borda | Quem usa | Estado |
+|---|---|---|
+| `invoke` (mcp-server) | agente `external-mcp` | ✅ desde 2026-08-13 |
+| proxy sidecar | agente externo que fala direto com o domain server | ✅ implementado — mas **só roda se o operador subir o sidecar** |
+| `McpInterceptor` (SDK, em-processo) | agente nativo | ❌ **nunca instanciado** — existe em definição e em comentários |
+
+O caminho real do agente nativo é o `mcpCall` do `skill-flow-service`
+(`packages/e2e-tests/services/skill-flow-service/src/index.ts:149`, o que o orchestrator-bridge
+executa) e o do `skill-flow-worker` (`engine-runner.ts:150`, legado): `fetch` JSON-RPC cru. Sem
+filtro de `permissions[]`, sem guard, sem registro.
+
+**Por que ninguém notou:** o modo de falha é a AUSÊNCIA de linhas num relatório. Nada fica vermelho,
+nenhuma chamada falha; o `mcp_audit_log` simplesmente não tem o que mostrar, e "não houve chamada"
+é indistinguível de "não foi auditada" para quem só olha a tela. Foi o que manteve o `invoke`
+publicando num tópico órfão por meses.
+
+**Decisão fechada em ADR** (2026-08-13, proposto): a regra mora no `mcp-server-plughub` e o
+`mcp_call` nativo passa a atravessá-lo — saída **(b)**. A saída (a), instanciar o `McpInterceptor` no
+skill-flow-service, foi descartada por criar uma segunda implementação VIVA do mesmo veredicto, em
+outro processo e outro ciclo de deploy; a regra já está escrita três vezes e as cópias já
+divergiram (curinga `server:*` e `permissions[]` vazia decidem diferente no `invoke` e no sidecar).
+
+O ADR levanta o ponto que decide de verdade: **borda é fato de rede, não de código**. Enquanto um
+domain MCP server for alcançável a partir do processo do agente, qualquer borda é evitável por
+omissão — e nada no repositório garante o contrário hoje.
+
+Fases, gates e custos: [`docs/adr/adr-mcp-interception-single-border.md`](docs/adr/adr-mcp-interception-single-border.md).
+**Primeiro passo é M0 — medir** o volume por caminho (nativo × `external-mcp`): o número diz se isto
+é lacuna de 5% ou de 95% do tráfego, e o argumento LGPD depende dele.
+
+---
+
 ## Masking — 5 mecanismos distintos, config espalhada entre seed.py, Config API e YAML *(achado 2026-08-13, ao investigar por que `session.cpf` aparece aberto pro operator no pacote de aprovação de `skill_limite_processo_v1`)*
 
 Levantamento factual (nenhum código mudado por este item). O sintoma que disparou a investigação
