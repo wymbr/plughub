@@ -142,7 +142,7 @@ Esperado: `operacao` e `decide` em `read_write`. Vazio ou `None` ⇒
 `docker compose -f docker-compose.demo.yml run --rm auth-seed`.
 
 ⚠️ **As 3 regras de masking do pacote de aprovação** (`session.numero_cartao → last_4`,
-`session.cpf_titular → last_2`, `session.limite_solicitado → financial`) são seed-if-absent **por
+`session.vencimento_cartao → last_2`, `session.limite_solicitado → financial`) são seed-if-absent **por
 chave**, e `masking.context_rules` é uma chave só que guarda o array inteiro — em base já semeada elas
 não entram sozinhas. Confira em `/config/masking` que existem, para o role `operator`. E **nunca**
 ponha o catch-all de `operator` em `hidden`: `applyContextMaskingDynamic` faz `continue` em campo
@@ -219,15 +219,15 @@ medição saindo do mesmo dado."*
 > **Tudo ao vivo, sem pré-voo.** Diferente da portabilidade, nada aqui espera 48 h: o aprovador é
 > você, na janela ao lado. O preço é ritmo — são 8 minutos apertados; ensaie o percurso duas vezes.
 >
-> ⚠️ **Um telefone novo por ensaio.** O índice de pendências é chaveado por sessão e só a mais
-> recente é lida; reusar o número esconde os pedidos anteriores. E depois do primeiro OTP a âncora
-> fica `possessed` **durável** — no ensaio seguinte o fluxo pula o OTP. Guarde um número virgem para
+> ⚠️ **Um CPF novo por ensaio.** O índice de pendências é chaveado por sessão e só a mais
+> recente é lida; reusar o CPF esconde os pedidos anteriores. E depois do primeiro OTP a âncora
+> fica `possessed` **durável** — no ensaio seguinte o fluxo pula o OTP. Guarde um CPF virgem para
 > a apresentação.
 
 | min | Ação | O que apontar |
 |---|---|---|
-| 14:00 | **Janela 3**: webchat, pool **`limite_ia`** → Conectar → digitar o telefone | Contato novo. *"Nível 1: a interação. O agente resolve identidade antes de qualquer coisa."* |
-| 14:30 | Preencher o formulário: cartão, CPF, limite atual, limite solicitado (**12000**) e **CVV** | Um `menu` `interaction: form` — **um turno, cinco campos**. O CVV vem com `masked: true`: vive em `@masked.*`, memória do processo. **Guarde este fato para 18:30.** |
+| 14:00 | **Janela 3**: webchat, pool **`limite_ia`** → Conectar → digitar o CPF | Contato novo. *"Nível 1: a interação. O agente resolve identidade antes de qualquer coisa."* |
+| 14:30 | Preencher o formulário: cartão, vencimento (MM/AA), limite solicitado (**12000**) e **CVV** | Um `menu` `interaction: form` — **um turno, quatro campos**. O CVV vem com `masked: true`: vive em `@masked.*`, memória do processo. **Guarde este fato para 18:30.** |
 | 15:00 | *"📋 Recebido! Vou registrar seu pedido…"* → **Monitor › Sessions** | Nasceu uma sessão **`webhook`**. *"Nível 3: o processo. Workflow é um canal como outro qualquer — o trigger cria sessão normal, roteada por pool normal. E repare: a coleta aconteceu na sessão do CLIENTE, antes do processo existir. N3 recebe dados; N3 não coleta."* |
 | 15:30 | **Janela 3**, mesma aba: escrever qualquer coisa (o cliente "volta") | **Acesso 2.** O agente reconhece a identidade e encontra a pendência — mas **não a revela ainda**. |
 | 16:00 | *"Para acessar com segurança…"* → **✅ Verificar meu número** → pegar `[OTP-DEV] … code=NNNNNN` no terminal e digitar | **A plataforma é autoridade de posse de canal, não de identidade de registro.** Com a âncora só `claimed`, o tool devolve `verification_required` **sem revelar se existe pendência**. O form de OTP é um `DialogForm` no `dialog_runner` — mesmo primitivo do wrap-up e do NPS — e o código nunca passa pela mão do agente: gerar/enviar/verificar ficam no `OtpService`. |
@@ -299,7 +299,7 @@ Três frases, sem slide:
 | `agent_login` recusado | linha "Disconnected" no Header, toast | `human_capacity_exhausted` (limite 10) ou `pool_kind_mismatch`. Limpe instâncias órfãs. **O Console não reconecta sozinho.** |
 | Item de wrap-up não aparece na inbox | fila pull vazia após Encerrar | Deixe **um item parqueado no pré-voo** (rode um atendimento completo em `detached` no T-1 dia e **não** o conclua). Ele fica lá com o selo "Reservado a você" e salva o trecho. |
 | NPS não chega | cliente não vê os botões | O cliente **fechou a aba** → `nps_on_disconnect: skip` suprime o despacho por design. Reabrir não recupera; siga em frente e explique a regra (é um bom momento). |
-| OTP não libera | `verification_required` persiste | Código expirado (TTL 300 s) ou rate-limit (3/15 min). Tenha um **segundo número** ensaiado e pronto. |
+| OTP não libera | `verification_required` persiste | Código expirado (TTL 300 s) ou rate-limit (3/15 min). Tenha um **segundo CPF** ensaiado e pronto. |
 | Journey não drilla | Vista Processos vazia | Provável **filtro por pool**: a sessão da análise sai com `pool_id = aprovacao_credito`, não `limite_processo`. Busque pela raiz ou por `limite_ia`. Se ainda assim vazio, use Monitor › Sessions — a prova do suspend/resume não depende da tela de journey. |
 | Item de aprovação não aparece na inbox | fila `aprovacao_credito` vazia após o acesso 1 | Confira o ABAC do operator (§1, T-1 dia): sem `approvals.operacao` a tela de aprovação **não renderiza e não avisa**. Segunda causa: catch-all de masking em `hidden`, que derruba `session.decisions` — mesmo sintoma mudo. |
 | Aprovador vê tudo em claro | cartão sem `***` na aba Contexto | Você está logado como **admin/supervisor** (casam `* → plain`). A Janela 5 tem de ser o `operator`, em sessão de navegador separada. |

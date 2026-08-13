@@ -499,7 +499,7 @@ _SEED: list[tuple[str, str, object, str]] = [
                 # session.dialog_form_id / session.decisions e a tela de aprovação deixaria
                 # de renderizar em silêncio (applyContextMaskingDynamic faz `continue`).
                 {"pattern": "session.numero_cartao",   "role": "operator",   "type": "last_4",       "label": "Número do cartão em pacote de aprovação"},
-                {"pattern": "session.cpf_titular",     "role": "operator",   "type": "last_2",       "label": "CPF do titular em pacote de aprovação"},
+                {"pattern": "session.vencimento_cartao", "role": "operator", "type": "last_2",       "label": "Vencimento do cartão em pacote de aprovação"},
                 {"pattern": "session.limite_solicitado", "role": "operator", "type": "financial",    "label": "Valor solicitado em pacote de aprovação"},
                 {"pattern": "caller.*",                "role": "operator",   "type": "last_4",       "label": "Dados do cliente — catch-all (campos não mapeados)"},
                 {"pattern": "account.*",               "role": "operator",   "type": "financial",    "label": "Dados da conta — catch-all (campos não mapeados)"},

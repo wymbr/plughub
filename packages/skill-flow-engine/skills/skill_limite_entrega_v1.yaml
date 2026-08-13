@@ -61,7 +61,7 @@ steps:
     type: collect
     target:
       type: customer
-      id: "@ctx.session.contact_identifier"
+      id: "@ctx.session.cpf"
     # canal→pool. Mapa mínimo: sem entrega real de link (trilha não construída), este
     # par só decide para onde ROTEARIA o clique. O retorno que de fato acontece neste
     # cenário é o espontâneo, por identidade — e esse não passa por aqui.

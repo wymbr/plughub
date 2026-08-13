@@ -10,9 +10,10 @@
 #      MASCARADO. Esta é a regressão do `_pending_context_preview` generalizado:
 #      antes ele era hardcoded em portabilidade e DESCARTAVA em silêncio qualquer
 #      chave que não fosse operadora_destino/numero_atual.
-#   3. A spec de preview é ALLOWLIST, não passthrough: o CPF viaja no
-#      delegate.context e NÃO pode aparecer no preview, porque não foi declarado.
-#      Sem esta asserção, um preview que vaze tudo passaria despercebido.
+#   3. A spec de preview é ALLOWLIST, não passthrough: tanto o vencimento do
+#      cartão quanto o CPF (âncora de identidade) viajam no delegate.context e
+#      NÃO podem aparecer no preview, porque não foram declarados. Sem esta
+#      asserção, um preview que vaze tudo passaria despercebido.
 #   4. ACESSO 3 — depois da decisão, a pendência vira `policy: auto` e carrega o
 #      resultado. É esse `auto` que faz o agente de entrada distinguir "em análise"
 #      de "resultado pronto" sem nenhum flag nosso.
@@ -39,11 +40,13 @@ POOL_WH="limite_processo"                 # N3 — o processo
 POOL_PULL="aprovacao_credito"             # onde o aprovador reivindica
 AD_EMAIL="${AD_EMAIL:-admin@plughub.local}"; AD_PASS="${AD_PASS:-changeme_admin}"
 
-# Dados do caso. Telefone novo a cada execução: pendência velha do mesmo número
-# faria a asserção 2 ler o pedido ANTERIOR e passar por acidente.
-PHONE="${PHONE:-11$(date +%s | tail -c 10)}"
+# Dados do caso. CPF novo a cada execução: pendência velha do mesmo CPF faria a
+# asserção 2 ler o pedido ANTERIOR e passar por acidente. O CPF é a âncora de
+# identidade do cenário (substituiu o telefone) — indexa a pendência e é lido
+# em @ctx.session.cpf pelo delegate de aprovação e pelo trigger de entrega.
+CPF="${CPF:-529$(date +%s | tail -c 9)}"
 CARD="${CARD:-4111111111111234}"          # últimos 4 = 1234 → preview ***1234
-CPF="${CPF:-52998224725}"
+VENCIMENTO="${VENCIMENTO:-1230}"          # MM/AA — substituiu o CPF do titular no form do cartão
 LIMITE="${LIMITE:-12000}"
 LIMITE_OK="${LIMITE_OK:-9000}"            # o aprovador aprova um valor MENOR
 
@@ -67,7 +70,7 @@ SUB=$(echo "$TOK" | cut -d. -f2 | tr '_-' '/+' \
   | base64 -d 2>/dev/null | jq -r '.sub // empty')
 [ -n "$SUB" ] || die "não consegui extrair o sub do JWT"
 INST="human-${SUB}"
-echo "   ✓ aprovador = $INST · telefone do caso = $PHONE"
+echo "   ✓ aprovador = $INST · CPF do caso = $CPF"
 
 echo "══ 1) os DialogForms estão publicados? ══"
 # Auto-semeia como o smoke_approval_segment_closes.sh faz: `infra/dialog` é volume
@@ -164,7 +167,7 @@ done
 
 echo "══ 2) resolve a identidade do cliente (Lookup 1) ══"
 RESOLVE=$($CURL -X POST "$CG/v1/channels/webhook/identity/resolve" $JSON \
-  -d "{\"tenant_id\":\"$TENANT\",\"provision\":true,\"anchors\":[{\"kind\":\"phone\",\"value\":\"$PHONE\"}]}")
+  -d "{\"tenant_id\":\"$TENANT\",\"provision\":true,\"anchors\":[{\"kind\":\"cpf\",\"value\":\"$CPF\"}]}")
 CUST=$(echo "$RESOLVE" | jq -r '.customer_id // empty')
 [ -n "$CUST" ] || die "identity/resolve não devolveu customer_id — ${RESOLVE:0:200}"
 echo "   ✓ customer_id = $CUST"
@@ -183,10 +186,10 @@ echo "══ 4) dispara o processo (o que o agente de entrada faz via workflow_t
 TRIG=$($CURL -X POST "$CG/v1/channels/webhook/pool/$POOL_WH" $JSON -d "{
   \"tenant_id\": \"$TENANT\",
   \"context\": {
-    \"session.contact_identifier\": \"$PHONE\",
+    \"session.cpf\":                \"$CPF\",
     \"session.customer_id\":        \"$CUST\",
     \"session.numero_cartao\":      \"$CARD\",
-    \"session.cpf_titular\":        \"$CPF\",
+    \"session.vencimento_cartao\":  \"$VENCIMENTO\",
     \"session.limite_solicitado\":  \"$LIMITE\"
   }}")
 SID=$(echo "$TRIG" | jq -r '.session_id // empty')
@@ -239,11 +242,19 @@ LS=$(echo "$PEND" | jq -r '.context.limite_solicitado // empty')
   || bad "limite_solicitado deveria vir '$LIMITE', veio '${LS:-<ausente>}'"
 
 # A asserção que impede o modo de falha mais perigoso: preview virar passthrough.
-if [ "$(echo "$PEND" | jq -r '.context | has("cpf_titular")')" = "false" ]; then
-  ok "CPF NÃO vazou — a spec de preview é allowlist, não passthrough"
+if [ "$(echo "$PEND" | jq -r '.context | has("vencimento_cartao")')" = "false" ]; then
+  ok "vencimento do cartão NÃO vazou — a spec de preview é allowlist, não passthrough"
 else
-  bad "CPF apareceu no preview sem estar declarado na spec — _pending_context_preview
-        virou passthrough. É vazamento, não cosmético."
+  bad "vencimento_cartao apareceu no preview sem estar declarado na spec —
+        _pending_context_preview virou passthrough. É vazamento, não cosmético."
+fi
+
+# A âncora de identidade (cpf) também não é dado de tela — mesma allowlist, mesmo risco.
+if [ "$(echo "$PEND" | jq -r '.context | has("cpf")')" = "false" ]; then
+  ok "CPF (âncora de identidade) NÃO vazou no preview"
+else
+  bad "CPF apareceu no preview sem estar declarado na spec — vazamento da âncora
+        de identidade, não só de dado de tela."
 fi
 
 # Regressão do namespace de âncoras: a pendência TEM de cair sob o customer_id que o
@@ -422,7 +433,7 @@ LA=$(redis HGET "$JKEY" "journey.limite_aprovado" | tr -d '\r' | jq -r '.value /
 echo
 echo "═══════════════════════════════════════════════════════════════"
 echo "  sessão do processo : $SID"
-echo "  customer_id        : $CUST   (telefone $PHONE)"
+echo "  customer_id        : $CUST   (CPF $CPF)"
 echo "  ✅ $PASS   ❌ $FAIL"
 echo "═══════════════════════════════════════════════════════════════"
 [ "$FAIL" -eq 0 ] || exit 1

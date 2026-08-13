@@ -75,18 +75,27 @@ steps:
       # Alteração de limite exige posse verificada do autor da decisão.
       approval_threshold: "possessed"
       # Âncora da pendência — sem isto o cliente nunca encontra o próprio pedido.
-      contact_identifier: "@ctx.session.contact_identifier"
+      #
+      # ⚠️ Chave `cpf`, e não `session.cpf`: o delegate.context é namespace
+      # COMPARTILHADO — as chaves `phone`/`email`/`cpf`/`princ` são lidas como
+      # ÂNCORAS DE IDENTIDADE por _anchors_from_context (channel-gateway), não como
+      # campo de tela. Aqui isso É o objetivo, de propósito: o cenário identifica
+      # por CPF, e esta chave tem de bater com a âncora (kind: cpf) que
+      # resolver_identidade usou no N2 — senão o resolver provisiona um cliente
+      # NOVO e a pendência fica indexada sob um customer_id que ninguém consulta.
+      # (Histórico: uma versão anterior deste form tinha um campo de tela `cpf` —
+      # o CPF do titular do cartão — e ele colidia com esta MESMA âncora por
+      # acidente; foi renomeado para `cpf_titular` para não ser lido como
+      # identidade. Esse campo saiu do formulário — ver `vencimento_cartao` abaixo
+      # — e a chave `cpf` ficou livre para o uso intencional de agora.)
+      cpf: "@ctx.session.cpf"
       # Dados sensíveis como tags SEPARADAS → mascaradas por política na leitura.
       #
-      # ⚠️ `cpf_titular`, e não `cpf`: o delegate.context é namespace COMPARTILHADO —
-      # as chaves `phone`/`email`/`cpf`/`princ` são lidas como ÂNCORAS DE IDENTIDADE
-      # por _anchors_from_context, não como campo de tela. Com `cpf` aqui, a âncora
-      # do pending virava um CPF inédito e o resolver provisionava um cliente NOVO;
-      # a pendência ficava indexada sob um customer_id que ninguém consulta.
-      # Se algum dia quisermos anexar o CPF como âncora progressiva, isso é uma
-      # decisão explícita — não um efeito colateral do nome de um campo de formulário.
+      # `vencimento_cartao`: substituiu o CPF do titular no formulário do cartão.
+      # Nome PRÓPRIO (não `cpf`/`phone`/`email`/`princ`) de propósito — não é uma
+      # âncora de identidade, só dado de tela do pacote.
       numero_cartao:     "@ctx.session.numero_cartao"
-      cpf_titular:       "@ctx.session.cpf_titular"
+      vencimento_cartao: "@ctx.session.vencimento_cartao"
       limite_solicitado: "@ctx.session.limite_solicitado"
       # Status de negócio: é o campo que o acesso 2 lê. `pending_workflow_get` não
       # devolve etapa nem progresso — a pendência é binária —, então o status viaja
@@ -271,9 +280,9 @@ steps:
       # que a entrega e o acesso 3 leem da raiz compartilhada. Copiar o mesmo fato para
       # o ctx da sessão-filha criaria uma segunda fonte, e duas fontes divergem — foi
       # exatamente esse hop que o preview obrigava a manter.
-      # `contact_identifier` FICA: dele o gateway deriva as âncoras sob as quais a
-      # pendência é indexada; sem ele a pendência existe e o cliente nunca a encontra.
-      context_json: '{"session.contact_identifier": "{{@ctx.session.contact_identifier}}"}'
+      # `session.cpf` FICA: dela o gateway deriva a âncora sob a qual a pendência é
+      # indexada; sem ela a pendência existe e o cliente nunca a encontra.
+      context_json: '{"session.cpf": "{{@ctx.session.cpf}}"}'
     on_success: encerrar_sucesso
     on_failure: encerrar_sem_entrega
 
