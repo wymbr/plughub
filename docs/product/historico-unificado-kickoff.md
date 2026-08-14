@@ -1,5 +1,20 @@
 # Kickoff — Histórico unificado, Fase F0: o gate assimétrico do `collect`
 
+> ## ✅ F0 CONCLUÍDA E VALIDADA — 2026-08-14. Este kickoff é histórico; não executar.
+>
+> O código foi commitado em 12/08 (`774b257`) e validado em 14/08: gate em vigor no container, slot
+> `current` do `limite_entrega` executando `type: collect`, gates `5/0` e **`18/0`**. As-built e os
+> quatro achados no `CHANGELOG.md`; próximas fases em
+> [`historico-unificado-plano-execucao.md`](historico-unificado-plano-execucao.md).
+>
+> **Duas coisas neste arquivo estavam erradas e custaram uma medição cada:**
+> - o caminho do preflight é `/app/packages/channel-gateway/src/plughub_channel_gateway/adapters/webhook.py`,
+>   **não** `/app/src/plughub_channel_gateway/main.py` (o `grep` sai com *No such file*, que é o ramo
+>   inconclusivo — não "zero ocorrências");
+> - a previsão de `session_count: 4` supunha que o `collect` materializa sessão-filha ao disparar. Ele
+>   é **lazy**: sem clique não há sessão. O `4` que apareceu de fato veio do **alias** do
+>   `journey_merge`, não do collect.
+
 > Cole isto no início da sessão. **Uma sessão = F0.** Não abrir UI nesta sessão.
 > Desenho fechado: [`../adr/adr-historico-unificado-duas-visoes.md`](../adr/adr-historico-unificado-duas-visoes.md).
 > Item no `TODO.md`: *"Ler um processo = ver seus CONTATOS em sequência, num lugar só"*.

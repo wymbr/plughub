@@ -93,20 +93,33 @@ acessos do cliente 3   ·   contatos 4   ·   decorrido 7d 02h
 [ 2 sessões internas ocultas ]  [ offset relativo à abertura ]
 ```
 
-**A aritmética do cabeçalho é onde o desenho encosta na decisão aberta #1.** No cenário de referência:
+**A aritmética do cabeçalho — revisada em 2026-08-14, com a journey de referência medida.**
 
-| Linha | Classe | Conta como contato? |
+| Linha | Classe | Conta como contato hoje? |
 |---|---|---|
-| acesso 1 (inbound webchat) | acesso do cliente | sim |
-| análise (workflow + aprovador) | etapa interna | não — `_apply_contact_scope` |
-| **saída ativa (`collect`, expirada)** | acesso do cliente, outbound | **decisão aberta #1** |
-| acesso 2 (inbound, espontâneo) | acesso do cliente | sim — depois do `journey_merge` (F1) |
-| acesso 3 (inbound, retirada) | acesso do cliente | sim |
-| wrap-up destacado | etapa interna | não |
+| acesso 1 (inbound webchat, `spawn_reason NULL`) | acesso do cliente | sim |
+| análise (webhook, `trigger`, pool `aprovacao_credito`) | etapa interna | **SIM — e não deveria** |
+| entrega (webhook, `trigger`, pool `limite_entrega`) | etapa interna | **SIM — e não deveria** |
+| acesso 2 (inbound espontâneo, trazido por alias) | acesso do cliente | sim — `journey_merge` (F1 ✅) |
+| ~~saída ativa (`collect` expirada)~~ | — | **não existe** — ver abaixo |
+| wrap-up destacado | etapa interna | não — `purpose=internal` |
 
-Se o `collect` expirado conta: `contatos 4`, chip `· 4`. Se não conta: `contatos 3`, chip `· 3`.
-**Os dois números aparecem na tela** (cabeçalho e chip), então a decisão não é adiável até F3 — ela é
-entregável de F0, como o kickoff diz.
+**Duas correções sobre a versão anterior desta seção:**
+
+1. **A linha da saída expirada não existe.** O `collect` é lazy: sem clique não nasce sessão
+   (`webhook.py:1818-1838`). Decisão aberta #1 fechada **por ausência**, não por política.
+2. **`contatos` ≠ `acessos do cliente`, e o desenho anterior supunha que `_apply_contact_scope`
+   resolvia.** Não resolve: ele exclui pool `purpose=internal`, e `aprovacao_credito`/`limite_entrega`
+   não são. Medido: `session_count: 4` para um cliente que nos procurou **2** vezes.
+
+O cabeçalho precisa, portanto, dos **dois** números — `acessos do cliente 2 · contatos 4` — e não de
+um só. O discriminador é derivável hoje, sem dado novo: `spawn_reason IS NULL` + canal de cliente (D8).
+
+> ⚠️ **A classe *acesso outbound* tem ZERO amostras no ambiente.** `spawn_reason` só assume dois
+> valores no tenant inteiro (`NULL` 342 · `trigger` 65) — nem `collect` nem `delegate`. Construir a
+> linha outbound é construir sobre um caso que nada exercita, exatamente como as colunas ANI/DNIS que
+> esta revisão removeu. **Não bloqueia F3/F4**, mas a tela não poderá ser verificada nesse ramo — e
+> isso tem de estar escrito antes da revisão, não descoberto nela.
 
 Cuidado registrado: o cabeçalho tem de bater com a tabela. Hoje `_fetch_journeys` aplica
 `_apply_contact_scope` e `/reports/sessions?root_session_id=` **não** — cabeçalho diz 3, tabela mostra 4

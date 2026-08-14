@@ -261,7 +261,18 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
-## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12 — nada implementado)*
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ validadas 2026-08-14** — restam F1b, F2, F3, F4, F5)*
+
+> ⚠️ **Cabeçalho corrigido em 2026-08-14.** Dizia *"nada implementado"*, e F0 (`774b257`) e F1
+> (`43ab761`) estavam commitadas desde 12-13/08, sem entrada no `CHANGELOG` e sem nada aqui. A sessão
+> de 14/08 mediu antes de escrever: gate do `collect` em vigor no container, slot `current` do
+> `limite_entrega` executando `type: collect`, gates `5/0` e `18/0`, e o merge provado por
+> `journey_aliases`. As-built e os quatro achados no `CHANGELOG.md`; plano das fases restantes em
+> [`docs/product/historico-unificado-plano-execucao.md`](docs/product/historico-unificado-plano-execucao.md).
+>
+> **Decisão aberta #1 FECHADA por ausência:** o `collect` é lazy — sem clique não nasce sessão, logo
+> um `collect` expirado não conta como contato porque **não existe**. Em troca, "a perna do output
+> como sessão" passou a ser **condicional ao engajamento**, o que o ADR não previa.
 
 > **Desenho fechado em [`docs/adr/adr-historico-unificado-duas-visoes.md`](docs/adr/adr-historico-unificado-duas-visoes.md).**
 > Kickoff de F0: [`docs/product/historico-unificado-kickoff.md`](docs/product/historico-unificado-kickoff.md).
@@ -288,14 +299,20 @@ Consequência: a pertença se reparte, e só metade precisa de merge.
 | **Output ativo** — nós avisamos o cliente | `collect` → proveniência, automático (F0) |
 | **Acesso espontâneo** — o cliente volta por conta (acesso 2) | `journey_merge` (F1) |
 
-**Fases, na ordem — e a ordem é load-bearing:**
+**Fases — ordem revisada em 2026-08-14 (F2 subiu na frente de F1b):**
 
-- **F0 · conserto do gate do `collect`** — honrar `customer_resumable`/`resume_policy` em
-  `handle_collect`; migrar `skill_limite_entrega_v1.parquear_resultado` de `delegate` para `collect`,
-  preservando o timeout de 7 dias. **Confirmar o defeito em `handle_collect` antes de construir** —
-  ele está registrado no YAML, não medido por nós.
-- **F1 · `journey_merge` no intake** — a tool, o topic, o union-find e o `root_session_id` no
-  `PendingEntry` já existem. ~~+ endereço de entrada (`endpoint_id`)~~ **REMOVIDO 2026-08-12 — ver F1b.**
+F2 é a menor, é backend puro sem consumidor a quebrar, e é a **única** que F4 não contorna; F1b só
+destrava um filtro de F3 e custa o inventário de ~40 leitores. Não há dependência entre as duas, então
+trocar a ordem custa zero.
+
+- ~~**F0 · conserto do gate do `collect`**~~ ✅ **2026-08-14** (código de 12/08). `handle_collect`
+  honra `customer_resumable`/`resume_policy` (`webhook.py:1956-2010`); `parquear_resultado` é
+  `collect` com `resume_policy: auto` e 168h, promovido no slot `current` do `limite_entrega`.
+- ~~**F1 · `journey_merge` no intake**~~ ✅ **2026-08-14** (`skill_limite_entrada_v1.yaml:362-372`,
+  step `unificar_journey` no ramo `policy == "auto"`). Provado por aresta ativa em `journey_aliases`.
+  **Falta só o intake de PORTABILIDADE** (`agente_portabilidade_intake_v1.yaml`: zero ocorrências de
+  `journey_merge`; vai de `avaliar_politica_retomada` direto a `retomar_processo`) — fatia pequena,
+  **fora do caminho crítico**. ~~+ endereço de entrada (`endpoint_id`)~~ **REMOVIDO 2026-08-12 — ver F1b.**
 - **F1b · `entrou por`: first-write-wins em `sessions.pool_id`** *(novo, ADR D12b — independente de F0)*.
   Estender a `_learn_session_identity`/`_inject_session_identity` (`analytics-api/consumer.py:133-160`) o
   tratamento que `opened_at` já recebe. **Não há produtor novo**: `parse_inbound` já escreve o pool de
@@ -309,21 +326,38 @@ Consequência: a pertença se reparte, e só metade precisa de merge.
   **definir** uma coluna que hoje não tem significado nenhum, mas quem depender do acidente quebra calado.
   **Não derivar do primeiro segmento:** 5 sessões do ambiente têm pool e nenhum segmento (abandono antes
   de qualquer agente entrar) — exatamente o caso que um relatório de fila precisa ver.
-- **F2** · `root_session_id` em `/reports/segments`, **com isenção da janela de data** quando presente.
+- ~~**F2** · `root_session_id` em `/reports/segments`, **com isenção da janela de data**~~ ✅
+  **2026-08-14**. Subconsulta em `sessions` (a coluna não existe em `segments`) com o mesmo union-find
+  de `/reports/journeys`; `meta.window_applied` marca o ramo isento. Gate
+  `infra/test/probe_segments_journey_window.sh` (6/0, diferencial de 4 leituras com janela absurda).
+  **Achado 6 medido e descartado**: 723 segmentos com pool, **0** com `pool_id` vazio — o defeito
+  derivado do código não tem amostra; `_apply_pool_scope` **não** foi tocado.
+  **Dívida aberta junto:** `/reports/journeys` publica `from_dt`/`to_dt` que não filtram quando há
+  `root_session_id`, e **não** tem o marcador `window_applied` — mesma mentira, sem conserto.
 - **F3** · visão 1 (contatos + chip de processo + direção).
 - **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
 - **F5** · `ContextStorePersister` — fase própria, desenho fechado no ADR §3 (mascarado, estado final,
   ctx de processo a cada close, foto inteira).
 
-**Não começar pela UI.** F0 muda o dado que a tela vai mostrar: sem ele a visão 2 renderiza *parkings*;
-com ele renderiza *acessos outbound com confirmação*, que é o que foi pedido.
+**Decisões abertas** (ADR §4): ~~`collect` que expira sem engajamento conta como contato?~~ **fechada
+2026-08-14, por ausência** · texto do rótulo do chip quando o processo tem contatos fora da janela
+filtrada · `uniq(root_session_id)` como métrica de cabeçalho (lacuna registrada, não fechada).
 
-**Decisões abertas** (ADR §4): `collect` que expira sem engajamento conta como contato? · texto do
-rótulo do chip quando o processo tem contatos fora da janela filtrada · `uniq(root_session_id)` como
-métrica de cabeçalho (lacuna registrada, não fechada).
+**A verificar antes de construir** (nenhum destes foi medido):
 
-**A verificar antes de construir:** o literal que o cliente usa em `messages.author_role` — foi suposto
-em D9, não medido.
+- o literal que o cliente usa em `messages.author_role` — suposto em D9.
+- **`contatos` ≠ `acessos do cliente`, e nada hoje os separa.** Medido em 2026-08-14: das 4 sessões da
+  journey de referência só **2** são acesso do cliente (webchat, `spawn_reason NULL`); as outras duas
+  são maquinaria (webhook, `trigger`), e `aprovacao_credito` **não** é `purpose=internal`, logo
+  `_apply_contact_scope` não a exclui. O cabeçalho de F4 diria *"contatos 4"* para quem nos procurou 2
+  vezes. O discriminador de D4 é derivável hoje, sem dado novo — **decidir o texto antes de renderizar.**
+- **O tipo de linha "acesso outbound" tem ZERO amostras.** `spawn_reason` só tem dois valores no tenant
+  (`NULL` 342 · `trigger` 65): nem `collect` nem `delegate`. F3/F4 construiriam uma classe de linha que
+  nada no ambiente exercita — mesma armadilha das colunas ANI/DNIS. O `delegate = 0` é **não
+  explicado** (o carimbo existe em `webhook.py:1604`); medir só quando F4 precisar da classe "interno".
+- **`probe_journey_limite.sh` não pode reprovar na dimensão de F1** — conta por proveniência (disse 3)
+  enquanto `/reports/journeys` conta proveniência ∪ alias (disse 4). Se ele for usado como gate de
+  journey depois de F1, compra confiança sem dar nada.
 
 **Filtros da visão 1, revisados e medidos (ADR D12b):** `período · canal · entrou por · atendido por`.
 O **DNIS saiu e não volta** — endpoint→pool é **1:1** (13 webhook/13 pools, 2 webchat/2 pools), logo o pool

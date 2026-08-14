@@ -1,6 +1,8 @@
 # ADR — Histórico unificado: duas visões sobre um só substrato
 
-**Status:** proposto (decisões fechadas em discussão 2026-08-12; nada implementado)
+**Status:** **parcialmente implementado** — F0 ✅ e F1 ✅ validadas em 2026-08-14 (código commitado em
+12-13/08 sem registro; as-built e achados no `CHANGELOG.md`). Restam F1b, F2, F3, F4, F5 — plano em
+[`../product/historico-unificado-plano-execucao.md`](../product/historico-unificado-plano-execucao.md).
 **Supersede parcialmente:** a suposição, implícita em `/analise/sessions` × `/analise/processos`, de que contato e processo são objetos de telas diferentes.
 **Não altera:** [`adr-journey-session-segment-model.md`](adr-journey-session-segment-model.md) — os três níveis e a natureza derivada da journey permanecem exatamente como estão.
 **Origem:** [`../product/journey-contatos-em-sequencia-handoff.md`](../product/journey-contatos-em-sequencia-handoff.md).
@@ -362,7 +364,17 @@ Cuidado registrado: derivar o pool de entrada do primeiro segmento **não** serv
 do ambiente têm pool e **nenhum** segmento (abandono antes de qualquer agente entrar), que é justamente o caso
 que um relatório de fila precisa ver.
 
-### F2 — `root_session_id` em `/reports/segments` (D10)
+### F2 — `root_session_id` em `/reports/segments` (D10) — ✅ **2026-08-14**
+
+Implementada como **subconsulta** em `sessions` (a coluna não existe em `segments`), com o mesmo
+union-find de `_fetch_journeys`, e `meta.window_applied` marcando o ramo isento. Gate diferencial em
+`infra/test/probe_segments_journey_window.sh` (6/0). As-built no `CHANGELOG.md`.
+
+**Achado 6 (a assimetria de ABAC) foi MEDIDO e não é defeito:** 723 segmentos com pool, **zero** com
+`pool_id` vazio. A afirmação era derivada de leitura de código e não tem amostra — segmento nasce
+quando um participante entra, e participante entra num pool. `_apply_pool_scope` **não** foi alterado;
+o risco fica registrado como latente, e o conserto certo, se ocorrer, é um parâmetro e não a mudança
+de uma função compartilhada com `_fetch_pools_volume` e `_fetch_session_complexity`.
 
 ### F3 — Visão 1: lista de contatos + chip de processo + direção do acesso (D3, D8, D12)
 
@@ -403,11 +415,21 @@ Sem custo de backend além de D10.
 
 ## 4. Decisões abertas
 
-1. **`collect` que expira sem engajamento conta como contato?** A plataforma emitiu — logo houve
-   tentativa de contato outbound —, mas não houve interação com o cliente. Contado como contato, infla
-   contagem, abandono e TMA com casos que o cliente nunca percebeu. Precedente para excluí-lo sem
-   inventar mecanismo: `_apply_contact_scope`, que já exclui pools internos, e o status `suspended`.
-   **Decidir antes de F0.2.**
+1. ~~**`collect` que expira sem engajamento conta como contato?**~~ — **FECHADA em 2026-08-14, por
+   ausência.** Não conta porque **não existe**: o `collect` as-built é **lazy**
+   (`webhook.py:1818-1838`) — entrega o convite, suspende, e não cria sessão nem aloca recurso. A
+   sessão-filha só nasce em `handle_collect_engage`, que é também o único lugar que escreve
+   `spawn_reason='collect'` (`:2076`). Sem clique não há linha a excluir, e nada infla.
+
+   **Duas consequências que este ADR não previa:**
+   - **"A perna do output como sessão" é condicional ao engajamento** (§3 F0 a lista sem ressalva).
+     No cenário de referência, cujo retorno real é o espontâneo por identidade, ela nunca materializa.
+   - **A prova de saída para o caso não-engajado perde linha própria.** Resta o par honesto de D9 —
+     `(emitiu?, close_reason)` no contato anterior — mais o `suspend` do chamador, que vive em
+     `session_transitions` e não tem superfície. Decisão de exibição de F4; escrever antes de renderizar.
+
+   Medido junto: **`spawn_reason` tem só dois valores no tenant** (`NULL` 342 · `trigger` 65), nem
+   `collect` nem `delegate` — o tipo de linha *"acesso outbound"* tem **zero amostras**.
 2. **Semântica exata do chip** quando o processo tem contatos fora da janela filtrada (D3) — o rótulo
    resolve, mas o texto precisa ser escrito.
 3. **`uniq(root_session_id)` como métrica de cabeçalho.** *"Quantos processos tive este mês"* não sai de
@@ -480,9 +502,19 @@ não existe uma sessão de voz no ambiente — e, portanto, por que M3 não pôd
 ## 7. Verificação
 
 ```bash
-bash infra/test/probe_journey_limite.sh          # 5/0 — a journey de 3 sessões
-bash infra/test/smoke_limite_tres_acessos.sh     # 16/0 — o cenário inteiro por API
+bash infra/test/probe_journey_limite.sh          # 5/0 — a cadeia por PROVENIÊNCIA
+bash infra/test/smoke_limite_tres_acessos.sh     # 18/0 — o cenário inteiro por API
 ```
+
+> **Números conferidos em 2026-08-14.** O smoke é **`18/0`**, não `16/0`: cresceu em `daeb9a9`, que
+> acrescentou as duas asserções de não-vazamento (vencimento e CPF no preview). O denominador
+> registrado estava velho — quem compara "passou" com o número antigo lê regressão onde houve reforço.
+>
+> ⚠️ **O probe conta por PROVENIÊNCIA e por isso não pode reprovar na dimensão de F1.** Ele afirmou
+> *"a journey tem 3 sessões"* minutos antes de `/reports/journeys` responder `4` para a mesma raiz — o
+> endpoint conta **proveniência ∪ alias**. Os dois estão certos e medem coisas diferentes; o problema
+> é o probe se apresentar como o gate da journey. Um gate de merge é query própria sobre
+> `journey_aliases`, não este arquivo.
 
 ```bash
 DC="docker compose -f docker-compose.demo.yml"

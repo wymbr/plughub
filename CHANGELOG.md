@@ -2,6 +2,129 @@
 
 ---
 
+## Histórico unificado F2 — `/reports/segments` responde por PROCESSO e isenta a janela ✅ (2026-08-14)
+
+D10 do ADR. O endpoint aceitava **um** `session_id` e aplicava a janela `started_at` (default 7 dias)
+**incondicionalmente**, sem a isenção que `/reports/sessions` e `/reports/journeys` já tinham — uma
+journey que atravessa semanas voltava **truncada em silêncio** (achado 5).
+
+- **`reports.py`** — query param `root_session_id` + repasse.
+- **`reports_query.py`** — `query_segments_report` ganha o parâmetro; em `_fetch_segments` a janela
+  passou a ser **condicional** (`if root_session_id: … else: started_at >= … AND < …`).
+- **O filtro é SUBCONSULTA, não coluna.** `root_session_id` vive em `sessions`, não em `segments` —
+  então `session_id IN (SELECT session_id FROM sessions FINAL WHERE root_session_id IN {jroots})`,
+  carregando o **mesmo union-find** (`_journey_resolved_map` + `_journey_member_roots`) que
+  `/reports/journeys` usa. Sem isso, duas superfícies sobre o mesmo processo devolveriam conjuntos
+  diferentes de sessões.
+- **`sorted(...)` no `jroots`:** `_journey_member_roots` devolve `set[str]` e o binding de
+  `Array(String)` precisa de sequência — é o que `_fetch_journeys:968` já fazia. O set cru estouraria
+  na serialização, e o `except` de `query_segments_report` converteria em `data_unavailable` com
+  `data: []` — indistinguível de "não há segmentos" para quem só olha a tela.
+- **`meta.window_applied`** (aditivo): `_meta` publica `from_dt`/`to_dt` sempre, e no ramo do processo
+  eles não filtraram nada. Sem o marcador, o cabeçalho afirma um recorte que não houve.
+  ⚠️ **`/reports/journeys` tem a mesma mentira e segue sem marcador** — registrado no `TODO.md`.
+
+### Achado 6 do ADR — MEDIDO, e não é defeito: **zero amostras**
+
+O ADR afirmava, por leitura de código, que `_apply_pool_scope` sem o `OR pool_id = ''` faz *"segmento
+não roteado sumir para supervisor restrito"*. Medido: **723 segmentos com pool, `0` com `pool_id`
+vazio** — a linha `VAZIO` sequer aparece no `GROUP BY`. Segmento nasce quando um participante entra, e
+participante entra num pool. **Nada mudado**: alterar uma função compartilhada com
+`_fetch_pools_volume` e `_fetch_session_complexity` para defender um caso que não ocorre é risco sem
+contrapartida. Fica como **risco latente sem amostra**; se um dia aparecer, o conserto certo é um
+parâmetro, não a mudança global.
+
+### Gate — `infra/test/probe_segments_journey_window.sh` (6/0)
+
+**Diferencial de quatro leituras, e a janela absurda é o ponto**: as journeys do ambiente são
+recentes, então a janela default já as inclui — um "voltou 11" com a janela default passaria **igual**
+se a isenção não existisse. Só uma janela que EXCLUI o processo (2026-01-01→02) separa as hipóteses.
+
+```
+A = root + janela absurda   B = root + janela default
+C = session_id + absurda    D = session_id + default
+A == B · A > 0 · C == 0 (testemunha) · A > D (o escopo é o processo) · window_applied flips
+```
+
+`A > D` é o que prova o escopo: sem ela, um endpoint que ignorasse `root_session_id` e caísse no
+`session_id` passaria. Raiz escolhida dinamicamente (`HAVING uniqExact(session_id) > 1`, mais
+recente) — id fixo envelheceria. Veredicto de 3 estados: sem journey de 2+ sessões, ou com `error` no
+corpo, sai **INCONCLUSIVO (exit 2)**, nunca verde.
+
+> **O probe reprovou o código certo na primeira corrida, por defeito do próprio leitor:**
+> `jq '.meta.window_applied // "ausente"'` — o `//` do jq trata `false` como vazio igual a `null`, e o
+> valor a ler no ramo do processo **é** `false`. Trocado por `has("window_applied")`. É a mesma
+> armadilha já registrada em `jq '.campo // empty'`, e ela custou uma corrida mesmo estando escrita.
+
+---
+
+## Histórico unificado F0 + F1 — validação as-built de código já commitado ✅ (2026-08-14)
+
+Registro **atrasado e conferido**, não implementação nova. O código de F0 (gate assimétrico do
+`collect`) e de F1 (`journey_merge` no intake) foi commitado em 2026-08-12/13 (`774b257 F0 — fecha o
+gate assimétrico do collect e move o resultado para a journey`; `43ab761 fix(journey): journey_merge
+exigia JWT inalcançável + ctx.journeyId não sobrevivia entre steps do mesmo run`) e **não tinha
+entrada aqui**, enquanto `TODO.md`, o ADR e o kickoff seguiam dizendo *"nada implementado"*. A sessão
+de 2026-08-14 mediu antes de escrever; é isso que este registro contém.
+
+### O que está em vigor, e como foi provado
+
+| Fato | Como se mediu | Resultado |
+|---|---|---|
+| F0.1 — `handle_collect` honra `customer_resumable`/`resume_policy` | `grep -c` do token da dual-write **dentro do container**, com contador-testemunha ao lado | `1` (a dual-write do collect) e `3` (as três vivas: delegate, collect, conference) |
+| F0.2 — o pool executa o `collect`, não o `delegate` | `GET /v1/pools/limite_entrega/slots` → `.slots.current.yaml_snapshot.steps[0]` | `type: "collect"`, promovido 2026-08-13T15:50:24Z |
+| O cenário não regrediu | `probe_journey_limite.sh` · `smoke_limite_tres_acessos.sh` | `5/0` · **`18/0`** |
+| F1 — o acesso espontâneo entra no processo | `/reports/journeys` + `journey_aliases FINAL` | `session_count: 4`, com a aresta `eb17fc94… → 9ba18312…` ativa |
+
+**Dois leitores tiveram de ser consertados antes de medirem qualquer coisa**, e os dois falharam
+devolvendo um número plausível: o caminho do arquivo no container é `/app/packages/channel-gateway/
+src/…` (não `/app/src/…`, como o kickoff mandava — `grep` saiu com *No such file*), e o JSON dos
+slots aninha em `.slots.current`, não `.current` — o `jq` devolvia `null` e o `grep -c` imprimia `0`,
+indistinguível de *"o pool roda o delegate"*.
+
+### Decisão aberta #1 do ADR — FECHADA, por ausência
+
+*"`collect` que expira sem engajamento conta como contato?"* — **não conta, porque não existe.** O
+`collect` as-built é **lazy** (`webhook.py:1818-1838`): entrega o convite, suspende, e **não cria
+sessão nem aloca recurso**; a sessão-filha só nasce em `handle_collect_engage`, que é também o único
+lugar que escreve `spawn_reason='collect'` (`:2076`). Sem clique não há linha a excluir.
+
+Consequência que o ADR não previa: **"a perna do output como sessão" é condicional ao engajamento.**
+No cenário de referência, cujo retorno real é o espontâneo por identidade, a perna outbound nunca
+se materializa.
+
+### Quatro achados medidos no mesmo passe
+
+1. **`spawn_reason` só tem DOIS valores no tenant inteiro:** `NULL` 342 · `trigger` 65. **Zero
+   `collect` e zero `delegate`.** Metade da tabela de derivação de direção (ADR D8) nunca foi
+   exercida — o tipo de linha *"acesso outbound"* que F3/F4 vão renderizar tem **zero amostras**,
+   mesma classe das colunas ANI/DNIS. O `delegate = 0` é **não explicado** (o carimbo existe em
+   `webhook.py:1604`); medir quando F4 precisar da classe "interno", não antes.
+2. **`contatos` ≠ `acessos do cliente`, e nada hoje os separa.** Das 4 sessões da journey de
+   referência, só **2** são acesso do cliente (webchat, `spawn_reason NULL`); as outras duas são
+   maquinaria (webhook, `trigger`), e `aprovacao_credito` **não** é `purpose=internal`, logo
+   `_apply_contact_scope` não a exclui. O cabeçalho de F4 diria *"contatos 4"* para um cliente que
+   nos procurou 2 vezes. O discriminador de D4 é derivável hoje, sem dado novo.
+3. **`probe_journey_limite.sh` é cego ao merge.** Ele afirmou *"a journey tem 3 sessões"* minutos
+   antes de `/reports/journeys` responder `4`: o probe conta **só por proveniência**, o endpoint
+   conta **proveniência ∪ alias**. Os dois estão certos e medem coisas diferentes — mas o probe se
+   apresenta como o gate da journey, e por construção **não pode reprovar** na dimensão que F1
+   entrega.
+4. **`set_at` de `current` e de `previous` são idênticos ao milissegundo** (`2026-08-13T15:50:24.116Z`)
+   no pool `limite_entrega`. Como `set_at` do slot `current` é a identidade de versão que o bridge
+   carimba em `segments.deploy_version`, dois slots com o mesmo carimbo são indistinguíveis na lente
+   `deploy`. Item próprio, fora deste arco.
+
+### Correções de registro aplicadas junto
+
+`TODO.md` (F0/F1 marcadas, fases restantes reordenadas) · ADR §4 (decisão #1 fechada), §7 (o gate é
+`18/0`, não `16/0` — cresceu em `daeb9a9`, que acrescentou as duas asserções de não-vazamento) e
+status · `historico-unificado-telas-design.md` §2 (a linha *"saída ativa expirada"* não existe) ·
+`historico-unificado-kickoff.md` (caminho do preflight + F0 concluída). Plano das fases restantes em
+[`docs/product/historico-unificado-plano-execucao.md`](docs/product/historico-unificado-plano-execucao.md).
+
+---
+
 ## `invoke` do agente externo: a borda que validava permissão e não deixava rastro ✅ (2026-08-13)
 
 A tool `invoke` (grupo External Agent) é por onde **toda** chamada de domínio de um agente
