@@ -260,6 +260,53 @@ def _apply_pool_scope(
     return True
 
 
+def _session_scope_clause(
+    db: str,
+    accessible_pools: "list[str] | None",
+    alias: str = "s",
+) -> str:
+    """
+    Predicado ABAC de escopo para a linha de SESSÃO. Devolve "" quando não há
+    restrição (o chamador simplesmente não acrescenta condição).
+
+    ── Por que existe, e por que é UM lugar só (F1b, 2026-08-14) ─────────────────
+    A regra estava copiada inline em quatro endpoints, sempre como
+        (s.pool_id IN (…) OR s.pool_id = '')
+    e as quatro cópias respondiam à pergunta errada. `sessions.pool_id` nunca foi
+    "quem atendeu": era o que escrevesse por último e, desde o carimbo
+    first-write-wins, é o pool de ENTRADA. Autorizar por ele faz o supervisor
+    perder contatos que os agentes DELE atenderam — medido em `tenant_demo`
+    2026-08-14: dos 67 contatos cujo pool de entrada difere do de atendimento,
+    **52** sairiam do escopo de `admin@plughub.local` e `operator@plughub.local`
+    (36 `aprovacao_credito`←`limite_processo` · 14 `retencao_humano`←`sac_ia` ·
+    2 `formfill_demo`←`formfill_demo_ia`). Os 14 do meio são contatos de cliente.
+
+    O predicado correto é a UNIÃO de três razões para uma sessão ser minha:
+      1. ela ENTROU por um pool meu   → `pool_id IN (…)`
+      2. ela ainda não tem pool       → `pool_id = ''` (ver o contato desde a chegada)
+      3. um pool meu PARTICIPOU dela  → existe segmento meu (é o "atendido por")
+    A (3) é a que faltava, e é estritamente AMPLIADORA: ninguém perde visibilidade
+    em relação ao que via antes — o que se recupera são sessões que o acidente do
+    "último escritor" às vezes mostrava e às vezes não.
+
+    Não altera `_apply_pool_scope`, que é compartilhada com `_fetch_pools_volume`
+    e `_fetch_session_complexity` e cujo `pool_id` é de OUTRA tabela em cada uso —
+    o precedente registrado na F2 (§Achado 6) é conserto por ponto, não por mudança
+    da função comum.
+    """
+    if not accessible_pools:
+        return ""
+    pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
+    return (
+        f"({alias}.pool_id IN ({pool_list})"
+        f" OR {alias}.pool_id = ''"
+        f" OR {alias}.session_id IN ("
+        f"SELECT session_id FROM {db}.segments FINAL"
+        " WHERE tenant_id = {tenant_id:String}"
+        f" AND pool_id IN ({pool_list})))"
+    )
+
+
 # Quality substrate isolation (ADR adr-quality-substrate-isolation) — domínio de origin.
 _VALID_ORIGINS = {"live", "import", "reeval"}
 
@@ -383,6 +430,7 @@ def _sessions_meta(
     page: int, page_size: int, total: int, total_contacts: int,
     from_dt: str, to_dt: str, scope: str = "contacts",
     internal_pools_known: int = 0,
+    window_applied: bool = True,
 ) -> dict:
     """`_meta` + os DOIS domínios de contagem (ADR wrapup-detached-pull §7.2, item 2).
 
@@ -403,6 +451,12 @@ def _sessions_meta(
     m["total_internal"] = max(0, total - total_contacts)
     m["scope"]          = scope
     m["internal_pools_known"] = internal_pools_known
+    # `window_applied` (2026-08-14) — mesmo marcador da F2 em `/reports/segments`, e
+    # pela mesma razão: `from_dt`/`to_dt` são publicados SEMPRE, inclusive nos ramos
+    # que não filtraram por eles (drill de processo, filhas de uma sessão). Sem o
+    # marcador o cabeçalho afirma um recorte que não houve, e quem o lê conclui que
+    # a lista está cortada por período. Aditivo — não quebra leitor existente.
+    m["window_applied"] = window_applied
     return m
 
 
@@ -465,7 +519,14 @@ async def query_sessions_report(
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
         return {
             "data": [],
-            "meta": _sessions_meta(page, page_size, 0, 0, since, until, scope),
+            # O marcador vale também no ramo de erro: um cabeçalho que afirma
+            # `window_applied=true` numa resposta vazia de drill somaria uma segunda
+            # explicação falsa ("está vazio porque o período recortou") ao lado do
+            # `data_unavailable`, que é a verdadeira.
+            "meta": _sessions_meta(
+                page, page_size, 0, 0, since, until, scope,
+                window_applied=not (root_session_id or origin_session_id),
+            ),
             "error": "data_unavailable",
         }
 
@@ -493,7 +554,26 @@ def _fetch_sessions(
     # já faz no fetch direcionado. A filha nasce depois do pai: um wrap-up que começa
     # às 23:59:58 de `to_dt` cairia fora da janela do pai e a timeline diria "não
     # originou nada" — ausência que se lê como fato, e não como recorte.
-    if not origin_session_id:
+    #
+    # ── `root_session_id` entrou na isenção em 2026-08-14, e era DEFEITO VIVO ────
+    # O CHANGELOG da F2 afirmava que este endpoint "já tinha" a isenção; tinha, mas
+    # só para `origin_session_id`. Medido (`probe_journeys_window_applied.sh`): o
+    # drill do processo `d62d7121…` devolve **4** sessões com a janela default e
+    # **0** com uma janela que o exclui. Não é truncar — é **esvaziar**: abrir na
+    # Vista Processos um processo mais velho que o período mostraria um processo sem
+    # nenhuma sessão, e a tela não tem como distinguir isso de "processo vazio".
+    #
+    # A razão é a mesma das outras duas isenções, e está escrita logo abaixo para o
+    # escopo de pool interno: **pedir UM processo não é listar**. O operador abriu
+    # AQUELE processo; recortá-lo por um período que ele não escolheu para esta
+    # leitura responde outra pergunta.
+    #
+    # `session_id` deliberadamente NÃO entrou: pela mesma lógica ele também deveria
+    # ser isento, mas o `probe_segments_journey_window` da F2 usa exatamente
+    # "session_id + janela absurda = 0" como TESTEMUNHA de que a janela funciona.
+    # Mudar isso junto trocaria um conserto medido por dois, um deles sem medição e
+    # derrubando o discriminador de outro gate. Registrado no TODO.md.
+    if not origin_session_id and not root_session_id:
         conditions.append(f"s.opened_at >= '{since}'")
         conditions.append(f"s.opened_at < '{until}'")
     # E2f — o que conta como contato: sessão de hook sem canal + sessão de pool
@@ -592,13 +672,12 @@ def _fetch_sessions(
         )
         params["pool_id"] = pool_id
 
-    # Pool-scope access filter (Arc 7c) — inline pool_id list (safe, values from JWT).
-    # Active sessions that have not yet been routed carry pool_id='' (parse_inbound sets it
-    # empty; parse_routed fills it in later). We must include pool_id='' so supervisors
-    # see contacts from the moment they arrive, before routing assigns a pool.
-    if accessible_pools:
-        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
-        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
+    # Pool-scope access filter (Arc 7c) — predicado ÚNICO, ver _session_scope_clause.
+    # (Era inline aqui e em mais 3 endpoints; virou função na F1b porque o carimbo
+    # `entrou por` fez as 4 cópias autorizarem pelo fato errado.)
+    _scope = _session_scope_clause(db, accessible_pools)
+    if _scope:
+        conditions.append(_scope)
     # accessible_pools=None → no restriction; accessible_pools=[] → short-circuit in async wrapper
 
     # agent_id filter — requires subquery against segments table
@@ -704,15 +783,21 @@ def _fetch_sessions(
             WHERE tenant_id = {{tenant_id:String}} AND channel != ''
             GROUP BY session_id
         ) AS _ch ON _ch.session_id = s.session_id
-        -- pool_id recovery: earliest primary-segment pool for this session
-        LEFT JOIN (
-            SELECT session_id, argMin(pool_id, started_at) AS pool_v
-            FROM {db}.segments FINAL
-            WHERE tenant_id = {{tenant_id:String}}
-              AND (parent_segment_id IS NULL OR parent_segment_id = '')
-              AND pool_id != ''
-            GROUP BY session_id
-        ) AS _pool ON _pool.session_id = s.session_id
+        -- (removido 2026-08-14, F1b) O JOIN `_pool`, que recuperava o pool do
+        -- primeiro segmento primário quando `s.pool_id` vinha vazio.
+        --
+        -- Ele existia porque a coluna não tinha significado: era o que escrevesse
+        -- por último, e às vezes nada. Com o carimbo first-write-wins no ingest
+        -- (`consumer.py::_learn_session_identity`) ela passa a significar UMA coisa
+        -- — o pool de ENTRADA — e o fallback passaria a significar OUTRA: o pool de
+        -- quem ATENDEU. Duas fontes para a mesma célula, que é o defeito que a fase
+        -- existe para fechar, um nível acima.
+        --
+        -- Medido antes de podar (`probe_entry_pool_base.sh`, 2026-08-14): a coluna
+        -- está vazia em **1** de 407 sessões do tenant. É essa 1 que passa a mostrar
+        -- ausência em vez de um pool derivado de outro fato — ausência honesta.
+        -- O filtro por pool NÃO passa por aqui: ele já é a subconsulta em `segments`
+        -- ("atendido por", linha ~586), e continua sendo.
         -- outcome recovery: most-recent closed segment outcome
         LEFT JOIN (
             SELECT session_id, argMax(outcome, ended_at) AS outcome_v
@@ -776,7 +861,8 @@ def _fetch_sessions(
             s.session_id AS session_id,
             s.tenant_id  AS tenant_id,
             COALESCE(NULLIF(s.channel,  ''), _ch.channel_v)   AS channel,
-            COALESCE(NULLIF(s.pool_id,  ''), _pool.pool_v)    AS pool_id,
+            -- F1b: `entrou por`, fonte ÚNICA. Ver o comentário do JOIN removido.
+            s.pool_id                                         AS pool_id,
             s.customer_id  AS customer_id,
             s.opened_at    AS opened_at,
             s.closed_at    AS closed_at,
@@ -888,6 +974,9 @@ def _fetch_sessions(
         "meta": _sessions_meta(
             page, page_size, total, total_contacts, since, until, scope,
             internal_pools_known=len(internal_pools or ()),
+            # Os DOIS ramos isentos, não só o novo — o marcador tem de espelhar o
+            # `if` que aplica a janela, ou ele mesmo vira uma segunda fonte.
+            window_applied=not (root_session_id or origin_session_id),
         ),
     }
 
@@ -995,10 +1084,10 @@ def _fetch_journeys(
             " WHERE tenant_id = {tenant_id:String} AND customer_id = {customer_id:String})"
         )
         params["customer_id"] = customer_id
-    # Pool-scope ABAC (Arc 7c) — inclui pool_id='' (sessão ainda não roteada).
-    if accessible_pools:
-        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
-        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
+    # Pool-scope ABAC (Arc 7c) — predicado único (F1b), ver _session_scope_clause.
+    _scope = _session_scope_clause(db, accessible_pools)
+    if _scope:
+        conditions.append(_scope)
 
     _apply_origin_scope(conditions, origin, alias="s.")
     where = " AND ".join(conditions)
@@ -1114,7 +1203,15 @@ def _fetch_journeys(
         client, db, tenant_id, resolved, rows, internal_pools, accessible_pools,
     )
 
-    return {"data": rows, "meta": _meta(page, page_size, total, since, until)}
+    # `window_applied` — a dívida que a F2 registrou e não fechou (o CHANGELOG dela
+    # diz: "/reports/journeys tem a MESMA mentira e segue sem marcador"). O ramo
+    # direcionado (fetch de UMA journey) ignora janela E `significant_only`, mas o
+    # `_meta` publica `from_dt`/`to_dt` de qualquer jeito. Medido antes de fechar
+    # (`probe_journeys_window_applied.sh`): A(janela absurda)=1 == B(default)=1, com
+    # a testemunha C=0 provando que a janela de fato exclui quando incide.
+    _jmeta = _meta(page, page_size, total, since, until)
+    _jmeta["window_applied"] = not bool(root_session_id)
+    return {"data": rows, "meta": _jmeta}
 
 
 def _attach_journey_internal_counts(
@@ -1150,11 +1247,11 @@ def _attach_journey_internal_counts(
     id_list  = ", ".join(f"'{j}'" for j in ids)
     pool_list = ", ".join(f"'{p}'" for p in sorted(internal_pools))
     # Escopo ABAC igual ao da query principal: sem isto o card poderia anunciar
-    # "1 interna" para um supervisor cujo drill não mostra nenhuma.
-    scope_clause = ""
-    if accessible_pools:
-        _acc = ", ".join(f"'{p}'" for p in accessible_pools)
-        scope_clause = f" AND (s.pool_id IN ({_acc}) OR s.pool_id = '')"
+    # "1 interna" para um supervisor cujo drill não mostra nenhuma. É o MESMO
+    # predicado do drill por construção (F1b) — antes eram duas cópias que só por
+    # sorte diziam a mesma coisa.
+    _acc_clause  = _session_scope_clause(db, accessible_pools)
+    scope_clause = f" AND {_acc_clause}" if _acc_clause else ""
     # Alias `jid`, não `journey_id`: `sessions` TEM uma coluna com esse nome (o cache
     # dormente da raiz canônica) e alias que sombreia coluna real já derrubou query
     # inteira neste projeto (ILLEGAL_AGGREGATION, code 184).
@@ -1266,15 +1363,18 @@ async def query_session_trace(
 
 
 def _trace_base_conditions(
-    tenant_id: str, accessible_pools: list[str] | None, origin: "str | list[str]",
+    db: str, tenant_id: str, accessible_pools: list[str] | None,
+    origin: "str | list[str]",
 ) -> list[str]:
     conditions = ["s.tenant_id = {tenant_id:String}"]
-    # ABAC pool-scope (Arc 7c) — inclui pool_id='' (sessão ainda não roteada).
+    # ABAC pool-scope (Arc 7c) — predicado único (F1b), ver _session_scope_clause.
     # Nós fora do escopo simplesmente não aparecem no rastro (pode partir a cadeia;
-    # aceitável — o mesmo recorte de todos os /reports).
-    if accessible_pools:
-        pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
-        conditions.append(f"(s.pool_id IN ({pool_list}) OR s.pool_id = '')")
+    # aceitável — o mesmo recorte de todos os /reports). `db` entrou na assinatura
+    # nesta fase: o predicado passou a consultar `segments`, e um rastro forense é o
+    # último lugar onde se quer um recorte diferente do da lista que levou até ele.
+    _scope = _session_scope_clause(db, accessible_pools)
+    if _scope:
+        conditions.append(_scope)
     _apply_origin_scope(conditions, origin, alias="s.")
     return conditions
 
@@ -1300,7 +1400,7 @@ def _fetch_session_trace(
     accessible_pools: list[str] | None, origin: "str | list[str]",
     max_depth: int, max_nodes: int,
 ) -> dict:
-    base   = _trace_base_conditions(tenant_id, accessible_pools, origin)
+    base   = _trace_base_conditions(db, tenant_id, accessible_pools, origin)
     params = {"tenant_id": tenant_id}
     resolved = _journey_resolved_map(client, db, tenant_id)
 
@@ -2131,7 +2231,8 @@ def _fetch_segments(
     # `from_dt`/`to_dt` sempre, e no ramo do processo eles não filtraram nada — quem
     # lê o cabeçalho concluiria que a lista está recortada por período e que os
     # segmentos antigos "sumiram". Marcador explícito, aditivo (não quebra leitor).
-    # ⚠️ `/reports/journeys` tem a MESMA mentira e segue sem marcador (ver TODO).
+    # (2026-08-14: `/reports/journeys` e `/reports/sessions` ganharam o mesmo
+    # marcador; a nota anterior dizia que journeys seguia sem ele.)
     meta["window_applied"] = not bool(root_session_id)
     return {"data": _rows_to_dicts(result), "meta": meta}
 
@@ -5413,12 +5514,24 @@ def _fetch_pools_queue(
                     "coalesce(outcome, '') != 'outage'"]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
-        s_conditions.append("pool_id = {pool_id:String}")
         params["pool_id"] = pool_id
-    _apply_pool_scope(s_conditions, accessible_pools)
     # Substrate isolation (ADR): filtra sessões por origem; segments entram via JOIN.
     _apply_origin_scope(s_conditions, origin)
     s_where = " AND ".join(s_conditions)
+
+    # F1b — o RECORTE acompanha a ATRIBUIÇÃO. O filtro por pool e o escopo ABAC
+    # saíram do `WHERE` de `sessions` (onde falavam de `sessions.pool_id`) e passaram
+    # a incidir sobre a MESMA coluna derivada que o relatório agrupa. Filtrar por um
+    # fato e agrupar por outro é como o supervisor de um pool sumia de linhas exibidas
+    # sob o próprio pool — e, ao contrário do resto de `/reports/*`, aqui a coluna
+    # exibida não é `sessions.pool_id`, então não há como o recorte segui-la.
+    # `_has_pool` já descarta a linha sem pool nenhum, o que torna o `OR pool_id = ''`
+    # dos outros endpoints desnecessário aqui.
+    outer_conditions = ["pool_id != ''"]
+    if pool_id:
+        outer_conditions.append("pool_id = {pool_id:String}")
+    _apply_pool_scope(outer_conditions, accessible_pools)
+    outer_where = " AND ".join(outer_conditions)
 
     # Queue-events side (tamanho de fila, disponíveis) — keyed on timestamp.
     q_conditions = ["tenant_id = {tenant_id:String}", f"timestamp >= '{since}'", f"timestamp <  '{until}'"]
@@ -5435,8 +5548,27 @@ def _fetch_pools_queue(
     #   q_pool   = pool_id do segmento de fila (= pool-alvo; cobre sessão nunca roteada);
     #   answered = existe segmento primary real (agent_type != 'system').
     # Segmentos começam no open da sessão → filtro started_at >= since é seguro.
+    # ⚠️ PRECEDÊNCIA INVERTIDA em 2026-08-14 (F1b). Era
+    #     if(ss.pool_id != '', ss.pool_id, segs.q_pool)
+    # — a sessão primeiro, o segmento de fila como tapa-buraco. Estava errado, e não
+    # por causa do F1b: este relatório mede ONDE ESPEROU, e `sessions.pool_id` nunca
+    # foi esse fato (era o que escreveu por último; agora é o pool de ENTRADA). O
+    # segmento `role='queue'` É a fila — ele nasce quando o contato entra nela e traz
+    # o pool-alvo.
+    #
+    # Medido antes de inverter (`probe_entry_pool_base.sh`, 2026-08-14): das 15
+    # sessões com segmento de fila, **6** tinham `sessions.pool_id` ≠ pool da fila
+    # (`aprovacao_credito`≠`limite_processo` 5 · `formfill_demo`≠`formfill_demo_ia` 1)
+    # — ou seja, 6 esperas atribuídas ao pool errado, incluindo o SLA e a taxa de
+    # abandono. Neste ambiente o carimbo de entrada coincide com o pool da fila, o
+    # que faria o F1b "consertar" o número por acidente; coincidência não é fonte.
+    #
+    # `ss.pool_id` fica como fallback para o caso que NÃO tem segmento de fila e
+    # ainda assim precisa aparecer: 5 sessões do tenant têm pool e ZERO segmentos
+    # (abandono antes de qualquer agente entrar) — exatamente o que um relatório de
+    # fila não pode perder de vista.
     _per_session = f"""
-        SELECT if(ss.pool_id != '', ss.pool_id, segs.q_pool) AS pool_id,
+        SELECT if(segs.q_pool != '', segs.q_pool, ss.pool_id) AS pool_id,
                ss.opened_at                                  AS opened_at,
                ss.sla_target_ms                              AS sla_target_ms,
                segs.q_count                                  AS q_count,
@@ -5465,7 +5597,7 @@ def _fetch_pools_queue(
     # enfileiradas — ex. webchat que conecta e não engaja) ficam FORA do
     # relatório de fila: não têm comportamento de fila a reportar (a linha
     # "—" que apareciam criava ruído). O volume delas segue no Volume report.
-    _has_pool = "pool_id != ''"
+    # (F1b: virou a 1ª cláusula de `outer_conditions`, junto com filtro e ABAC.)
 
     s_series = _rows_to_dicts(client.query(f"""
         SELECT {bucket_fn}(opened_at)                              AS bucket,
@@ -5475,7 +5607,7 @@ def _fetch_pools_queue(
                countIf({_queued})                                  AS queued,
                countIf({_abandoned})                               AS abandoned
         FROM ({_per_session})
-        WHERE {_has_pool}
+        WHERE {outer_where}
         GROUP BY bucket, pool_id
     """, parameters=params))
 
@@ -5525,7 +5657,7 @@ def _fetch_pools_queue(
                countIf(sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms) AS within_sla,
                countIf(sla_target_ms > 0)                          AS sla_eligible
         FROM ({_per_session})
-        WHERE {_has_pool}
+        WHERE {outer_where}
         GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))
     for r in by_pool:

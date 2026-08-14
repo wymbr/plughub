@@ -28,7 +28,14 @@ from ..models import (
     _normalize_signal_value,
     origin_from_source,
 )
-from ..consumer import _write_row, _enrich_signal_session_at, _session_opened_cache
+from ..consumer import (
+    _write_row,
+    _enrich_signal_session_at,
+    _session_opened_cache,
+    _learn_session_identity,
+    _inject_session_identity,
+    _session_identity_cache,
+)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -1414,3 +1421,135 @@ class TestParsersStampOrigin:
         })
         seg = next(r for r in rows if r["table"] == "segments")
         assert seg["origin"] == "live"
+
+
+# ── F1b: `entrou por` — first-write-wins em sessions.pool_id ──────────────────
+#
+# As linhas são construídas pelos PARSERS reais, não à mão: o que se quer provar é
+# que o carimbo sobrevive ao formato de payload que os produtores mandam de fato.
+# Cada asserção positiva tem a sua negativa ao lado — um teste que só afirma que o
+# pool de entrada aparece passaria também numa implementação que congelasse tudo.
+
+_T0 = "2026-08-14T10:00:00Z"   # inbound  — a entrada
+_T1 = "2026-08-14T10:05:00Z"   # routed   — depois
+_T2 = "2026-08-14T10:30:00Z"   # closed   — por último
+
+
+def _pump(*rows: dict) -> None:
+    """Um batch do consumer: aprender antes de injetar (ordem do call site)."""
+    batch = list(rows)
+    _learn_session_identity(batch)
+    _inject_session_identity(batch)
+
+
+def _inbound(pool: str, ts: str = _T0) -> dict:
+    return parse_inbound({
+        "session_id": SESSION, "tenant_id": TENANT, "channel": "webchat",
+        "pool_id": pool, "started_at": ts,
+    })
+
+
+def _routed(pool: str, ts: str = _T1) -> dict:
+    return parse_routed({
+        "session_id": SESSION, "tenant_id": TENANT, "routed_at": ts,
+        "result": {"pool_id": pool},
+    })[0]
+
+
+def _closed(pool: str, ts: str = _T2) -> dict:
+    return parse_conversations_event({
+        "event_type": "contact_closed", "session_id": SESSION, "tenant_id": TENANT,
+        "channel": "webchat", "pool_id": pool, "started_at": _T0, "ended_at": ts,
+    })[0]
+
+
+class TestEntryPoolFirstWriteWins:
+    def setup_method(self):
+        _session_identity_cache.clear()
+
+    def test_routed_no_longer_overwrites_the_entry_pool(self):
+        # O caso medido: sac_ia → retencao_humano (14 sessões em tenant_demo).
+        inbound, routed = _inbound("sac_ia"), _routed("retencao_humano")
+        _pump(inbound)
+        _pump(routed)
+        assert routed["pool_id"] == "sac_ia"
+
+    def test_close_no_longer_overwrites_the_entry_pool(self):
+        # A linha de close é a SOBREVIVENTE no ReplacingMergeTree — se ela não
+        # carregar a entrada, nada mais carrega.
+        inbound, closed = _inbound("limite_processo"), _closed("aprovacao_credito")
+        _pump(inbound)
+        _pump(closed)
+        assert closed["pool_id"] == "limite_processo"
+
+    def test_order_of_arrival_does_not_decide(self):
+        # inbound/routed são TÓPICOS diferentes: ordem entre eles não é garantida.
+        # Chegando ao contrário, a linha escrita por último (a que o RMT conserva)
+        # tem de trazer a entrada do mesmo jeito.
+        routed, inbound = _routed("retencao_humano"), _inbound("sac_ia")
+        _pump(routed)
+        _pump(inbound)
+        assert inbound["pool_id"] == "sac_ia"
+        # e um evento posterior continua recebendo a entrada, não o que veio 1º
+        closed = _closed("retencao_humano")
+        _pump(closed)
+        assert closed["pool_id"] == "sac_ia"
+
+    def test_same_batch_min_timestamp_wins(self):
+        inbound, routed = _inbound("sac_ia"), _routed("retencao_humano")
+        _pump(routed, inbound)          # ordem invertida DENTRO do batch
+        assert routed["pool_id"] == "sac_ia"
+        assert inbound["pool_id"] == "sac_ia"
+
+    def test_contact_open_empty_pool_does_not_freeze_the_session(self):
+        # `contact_open` escreve pool_id="" literal (models.py:319). Um "primeiro
+        # valor" que aceitasse vazio deixaria a sessão sem pool para SEMPRE.
+        opened = parse_conversations_event({
+            "event_type": "contact_open", "session_id": SESSION,
+            "tenant_id": TENANT, "channel": "webchat", "started_at": _T0,
+        })[0]
+        assert opened["pool_id"] == ""          # o produtor segue como era
+        _pump(opened)
+        routed = _routed("retencao_humano")
+        _pump(routed)
+        assert routed["pool_id"] == "retencao_humano"
+
+    def test_row_without_pool_still_gets_it_injected(self):
+        # A reidratação de linha parcial (o motivo original da cache) não regride.
+        _pump(_inbound("sac_ia"))
+        suspended = parse_conversations_event({
+            "event_type": "session_suspended", "session_id": SESSION,
+            "tenant_id": TENANT, "timestamp": _T1, "opened_at": _T0,
+        })[0]
+        _pump(suspended)
+        assert suspended["pool_id"] == "sac_ia"
+
+    def test_no_cache_entry_keeps_the_rows_own_pool(self):
+        # Cache fria (restart do consumer): a linha mantém o que trouxe. É a
+        # degradação DECLARADA — nunca um vazio inventado.
+        routed = _routed("retencao_humano")
+        _pump(routed)
+        assert routed["pool_id"] == "retencao_humano"
+
+    def test_two_sessions_do_not_contaminate_each_other(self):
+        _pump(_inbound("sac_ia"))
+        other = parse_inbound({
+            "session_id": "outra-sessao", "tenant_id": TENANT,
+            "channel": "webchat", "pool_id": "limite_processo", "started_at": _T0,
+        })
+        _pump(other)
+        assert other["pool_id"] == "limite_processo"
+
+    def test_channel_still_follows_last_non_empty(self):
+        # CONTROLE: prova que a regra nova é do pool e não vazou para a tupla
+        # genérica. Se este teste virar "webchat", `_IDENTITY_FIELDS` foi trocada
+        # por first-write-wins junto — e aí o teste de cima passaria por engano.
+        _pump(_inbound("sac_ia"))
+        later = parse_conversations_event({
+            "event_type": "contact_closed", "session_id": SESSION,
+            "tenant_id": TENANT, "channel": "voice", "pool_id": "retencao_humano",
+            "started_at": _T0, "ended_at": _T2,
+        })[0]
+        _pump(later)
+        assert later["channel"] == "voice"
+        assert later["pool_id"] == "sac_ia"

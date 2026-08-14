@@ -109,8 +109,12 @@ _SESSION_CACHE_MAX = 50_000
 # T1/T4: `origin_session_id` (quem me criou) e `spawn_reason` (por que existo) são
 # imutáveis por natureza — nascem com a sessão e não mudam. Entram aqui para que uma
 # escrita parcial (routed/queued/suspended) não os apague.
+#
+# ⚠️ `pool_id` SAIU desta tupla em 2026-08-14 (F1b) e NÃO deve voltar: estar aqui não
+# bastava, e o motivo é que esta tupla implementa uma regra diferente da que ele
+# precisa. Ver `_learn_session_identity`.
 _IDENTITY_FIELDS = (
-    "channel", "customer_id", "pool_id", "origin_session_id", "spawn_reason",
+    "channel", "customer_id", "origin_session_id", "spawn_reason",
 )
 
 
@@ -137,6 +141,36 @@ def _learn_session_identity(rows: list[dict]) -> None:
         opened_at = row.get("opened_at")
         if opened_at and (not entry.get("opened_at") or str(opened_at) < str(entry["opened_at"])):
             entry["opened_at"] = opened_at
+        # ── F1b: `entrou por` — a ENTRADA é imutável, como a abertura ─────────────
+        # `pool_id` estava em `_IDENTITY_FIELDS`, mas aquela regra é "último não-vazio
+        # vence", e por isso a coluna significava *o que escreveu por último*: o pool
+        # de entrada chega no `inbound` e é apagado logo depois pelo routed/queued/
+        # closed (`sessions` é ReplacingMergeTree de LINHA INTEIRA — não faz merge por
+        # coluna). Medido em `tenant_demo` 2026-08-14: 67 de 407 sessões divergiam do
+        # pool do primeiro segmento, em 5 pares, sem resíduo.
+        #
+        # O critério é o MENOR `timestamp` conhecido, não "o primeiro que chegou".
+        # A diferença não é estilo: `inbound`, `routed` e `queued` são TÓPICOS
+        # DIFERENTES, e ordem entre tópicos não é garantida — uma regra de ordem de
+        # chegada daria resultados distintos entre dois replays do mesmo histórico.
+        # Todo writer de `sessions` carrega `timestamp` (inbound=started_at ·
+        # routed/queued=routed_at · contact_open=started_at · contact_closed=ended_at ·
+        # suspended=instante do suspend), então o mínimo é sempre a entrada.
+        # `opened_at` é o fallback só para produtor antigo sem `timestamp`.
+        #
+        # LIMITE ACEITO (mesmo de `opened_at`, e por isso não é novo): a cache é de
+        # memória. Num restart do consumer, uma sessão VIVA perde o pool aprendido e a
+        # próxima escrita (tipicamente o close) volta a carimbar o último pool. Sessão
+        # que nasce e fecha dentro da mesma vida do processo não é afetada.
+        pool_id = row.get("pool_id")
+        pool_at = row.get("timestamp") or row.get("opened_at")
+        if pool_id and (
+            not entry.get("pool_id")
+            or (pool_at and (not entry.get("pool_at")
+                             or str(pool_at) < str(entry["pool_at"])))
+        ):
+            entry["pool_id"] = pool_id
+            entry["pool_at"] = pool_at
 
 
 def _inject_session_identity(rows: list[dict]) -> None:
@@ -158,6 +192,15 @@ def _inject_session_identity(rows: list[dict]) -> None:
             not row.get("opened_at") or str(cached_open) < str(row["opened_at"])
         ):
             row["opened_at"] = cached_open
+        # F1b: a ENTRADA é imutável — SOBRESCREVE, não só preenche ausência.
+        # `_learn_session_identity` roda antes e já deixou na cache o pool de MENOR
+        # timestamp (inclusive o desta linha, se for ela a mais antiga). Logo a cache
+        # é sempre o vencedor, e a linha recebe o vencedor — é isto que impede o
+        # routed/queued/closed de apagar a entrada. Ausência na cache mantém o valor
+        # da própria linha, que é o comportamento de antes.
+        cached_pool = entry.get("pool_id")
+        if cached_pool:
+            row["pool_id"] = cached_pool
 
 
 async def _enrich_session_root(row: dict, redis: object) -> None:

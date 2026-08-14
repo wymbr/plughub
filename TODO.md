@@ -261,7 +261,7 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
-## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ validadas 2026-08-14** — restam F1b, F2, F3, F4, F5)*
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ + F1b ✅ + F2 ✅** — restam F3, F4, F5)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-14.** Dizia *"nada implementado"*, e F0 (`774b257`) e F1
 > (`43ab761`) estavam commitadas desde 12-13/08, sem entrada no `CHANGELOG` e sem nada aqui. A sessão
@@ -313,27 +313,29 @@ trocar a ordem custa zero.
   **Falta só o intake de PORTABILIDADE** (`agente_portabilidade_intake_v1.yaml`: zero ocorrências de
   `journey_merge`; vai de `avaliar_politica_retomada` direto a `retomar_processo`) — fatia pequena,
   **fora do caminho crítico**. ~~+ endereço de entrada (`endpoint_id`)~~ **REMOVIDO 2026-08-12 — ver F1b.**
-- **F1b · `entrou por`: first-write-wins em `sessions.pool_id`** *(novo, ADR D12b — independente de F0)*.
-  Estender a `_learn_session_identity`/`_inject_session_identity` (`analytics-api/consumer.py:133-160`) o
-  tratamento que `opened_at` já recebe. **Não há produtor novo**: `parse_inbound` já escreve o pool de
-  entrada (`models.py:119-150`); ele é apagado depois pelo `routed`/`queued`/`closed`, porque `sessions`
-  é RMT de linha inteira. `pool_id` **está** em `_IDENTITY_FIELDS`, mas a cache segue o ÚLTIMO
-  (`if value: entry[field] = value`) e a injeção só preenche ausência — protegido contra sumiço,
-  desprotegido contra sobrescrita.
-  **Medido:** 46 sessões em 314 (14,6%) divergem, em 5 pares que somam exato, todas orgânicas. Uma delas
-  — `sac_ia → retencao_humano`, 12 — são **contatos de cliente** que somem do filtro hoje.
-  **Antes de virar a chave:** medir quem lê `sessions.pool_id`. Dar-lhe o significado *pool de entrada* é
-  **definir** uma coluna que hoje não tem significado nenhum, mas quem depender do acidente quebra calado.
-  **Não derivar do primeiro segmento:** 5 sessões do ambiente têm pool e nenhum segmento (abandono antes
-  de qualquer agente entrar) — exatamente o caso que um relatório de fila precisa ver.
+- ~~**F1b** · `entrou por`: first-write-wins em `sessions.pool_id`~~ ✅ **2026-08-14**. Critério = menor
+  `timestamp` (não ordem de chegada: `inbound`/`routed`/`queued` são tópicos distintos). Fonte única —
+  o fallback `_pool` de `_fetch_sessions` foi removido; `_fetch_pools_queue` teve a precedência
+  invertida para o segmento de fila (**já estava errado** em 6 de 15 sessões, antes desta fase). ABAC
+  **precisou de conserto**, não de conferência: 52 dos 67 contatos sairiam do escopo de 2 usuários
+  reais → `_session_scope_clause` (predicado único, união entrou ∪ sem-pool ∪ participou, +9/−0).
+  Gates `probe_entry_pool_base.sh` + `probe_entry_pool_fww.sh` (7/0). As-built no CHANGELOG.
 - ~~**F2** · `root_session_id` em `/reports/segments`, **com isenção da janela de data**~~ ✅
   **2026-08-14**. Subconsulta em `sessions` (a coluna não existe em `segments`) com o mesmo union-find
   de `/reports/journeys`; `meta.window_applied` marca o ramo isento. Gate
   `infra/test/probe_segments_journey_window.sh` (6/0, diferencial de 4 leituras com janela absurda).
   **Achado 6 medido e descartado**: 723 segmentos com pool, **0** com `pool_id` vazio — o defeito
   derivado do código não tem amostra; `_apply_pool_scope` **não** foi tocado.
-  **Dívida aberta junto:** `/reports/journeys` publica `from_dt`/`to_dt` que não filtram quando há
-  `root_session_id`, e **não** tem o marcador `window_applied` — mesma mentira, sem conserto.
+  ~~**Dívida aberta junto:** `/reports/journeys` … sem o marcador `window_applied`~~ ✅ **2026-08-14**
+  — e ao medir apareceu um **defeito vivo maior ao lado**: `/reports/sessions?root_session_id=`
+  **não** tinha a isenção que o CHANGELOG da F2 lhe atribuía (só `origin_session_id` a tinha), então
+  o drill de um processo fora da janela devolvia **0** sessões, não "menos". Os dois consertados +
+  marcador nos dois endpoints. Gate `infra/test/probe_journeys_window_applied.sh` (7/0).
+  **Resíduo declarado:** `session_id` + janela que o exclui segue devolvendo 0, e pela mesma lógica
+  ("pedir UM não é listar") também deveria ser isento. Não foi mudado junto porque o
+  `probe_segments_journey_window` da F2 usa exatamente esse comportamento como **testemunha** de que
+  a janela funciona — mudá-lo derrubaria o discriminador de outro gate. Item próprio: decidir a
+  isenção e trocar a testemunha daquele probe na mesma fatia, nunca só a primeira metade.
 - **F3** · visão 1 (contatos + chip de processo + direção).
 - **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
 - **F5** · `ContextStorePersister` — fase própria, desenho fechado no ADR §3 (mascarado, estado final,
@@ -364,6 +366,46 @@ O **DNIS saiu e não volta** — endpoint→pool é **1:1** (13 webhook/13 pools
 o substitui sem perda; e `whatsapp`/`voice`/`sms`/`email` têm **zero** linhas em `channel_endpoints`. O
 **canal fica**: tirá-lo economizaria zero (já está preenchido em todas as sessões) e 4 pools do demo
 declaram `[webchat, whatsapp]`, então o pool não o subsume por config — só por ausência de amostra.
+
+---
+
+## O adapter de whatsapp publica o `phone_number_id` DENTRO do campo `pool_id` *(achado 2026-08-14, ao desenhar o carimbo `entrou por`)*
+
+`adapters/whatsapp.py:386-387` faz `pool_id = phone_id` com o comentário
+`# pool resolved by routing engine from phone_number_id`. **A resolução prometida não existe:**
+`grep -r phone_number_id packages/routing-engine` devolve **zero**. O consumidor trata `pool_id`
+como pool literal, não acha, e cai no drop gracioso de `main.py:791`.
+
+Por que só apareceu agora: até a F1b o valor era sobrescrito pelo `routed` antes de chegar a
+qualquer leitor — invisível por acidente. Com o carimbo first-write-wins, ele **congelaria** um
+número de telefone dentro de `sessions.pool_id`.
+
+**Exposição medida (2026-08-14): ZERO.** `tenant_demo` tem 288 sessões `webchat` e 125 `webhook`,
+**nenhuma** `whatsapp` — coerente com o M2 do ADR (zero linhas de whatsapp em `channel_endpoints`).
+Por isso **nada foi feito no analytics**: pôr um `if channel == 'whatsapp'` no parser seria mascarar
+defeito de produtor e enfiar conhecimento de canal numa camada que não deve tê-lo. O conserto certo
+é no channel-gateway — ou o adapter resolve o pool de verdade, ou manda o phone num campo próprio e
+deixa `pool_id` vazio.
+
+⚠️ **Gatilho de reativação:** primeira sessão real de whatsapp. `probe_entry_pool_base.sh` bloco 3
+conta por canal e é onde isso aparece.
+
+---
+
+## 15 `session_id` existem em `segments` e NÃO existem em `sessions` *(achado 2026-08-14, no contador-testemunha da F1b)*
+
+O contador-testemunha da base acusou **422 sessões com segmento contra 413 linhas em `sessions`** —
+um lado do substrato tem sessão que o outro não tem. Nomeados (contar não é identificar): os 15 são
+**todos** `pool=sac_ia · role=primary · agent_type=ai`.
+
+Não são conferência/hook — esses compartilham o `session_id` do pai e não criariam id novo. São
+segmentos primários de IA sem linha de contato, ou seja: **o contato não aparece em nenhum relatório**
+(toda query de sessão parte de `sessions`), enquanto o trabalho do agente aparece em `/reports/segments`.
+Qualquer confronto entre as duas superfícies vai discordar em 15.
+
+Não investigado: é anterior à F1b, ortogonal a ela, e entrar nisso teria trocado o escopo da fase.
+Primeira pergunta para quem pegar: são antigos (anteriores a algum conserto de ingest) ou o
+`sac_ia` produz isso hoje? `min/max(started_at)` desses 15 responde em uma query.
 
 ---
 

@@ -2,6 +2,140 @@
 
 ---
 
+## `window_applied` em `/reports/journeys` e `/reports/sessions` — e o drill de processo que vinha VAZIO ✅ (2026-08-14)
+
+Fechamento da dívida que a F2 registrou (*"`/reports/journeys` tem a MESMA mentira e segue sem
+marcador"*). Medir antes de consertar achou **um defeito vivo maior ao lado**, num ponto que a
+documentação dava por resolvido.
+
+### O achado: a isenção que o CHANGELOG afirmava não existia
+
+O as-built da F2 diz *"sem a isenção que `/reports/sessions` e `/reports/journeys` já tinham"*.
+`_fetch_sessions:543` isentava a janela **só** para `origin_session_id`; com `root_session_id` — o
+drill de UMA journey — a janela era aplicada. Medido (`probe_journeys_window_applied.sh`, novo): o
+processo `d62d7121…` devolve **4** sessões com a janela default e **0** com uma que o exclui.
+
+**Não é truncar, é esvaziar.** Abrir na Vista Processos (F4) um processo mais velho que o período
+mostraria um processo sem nenhuma sessão, e a tela não teria como distinguir isso de "processo
+vazio". O mesmo defeito que a F2 consertou em `segments`, um nível acima e vivo.
+
+- **`_fetch_sessions`**: `root_session_id` entrou na isenção, pela razão já escrita ali para o
+  escopo de pool interno — **pedir UM processo não é listar**.
+- **`meta.window_applied`** nos dois endpoints (aditivo), espelhando o `if` que aplica a janela.
+  Também no ramo de erro de `/reports/sessions`: um cabeçalho afirmando `true` numa resposta vazia
+  somaria uma explicação falsa ("o período recortou") ao lado do `data_unavailable`, que é a real.
+
+### Resíduo declarado, não silenciado
+
+`session_id` + janela que o exclui continua devolvendo `0`, e pela mesma lógica também deveria ser
+isento. **Não foi mudado junto**: o `probe_segments_journey_window` da F2 usa exatamente esse
+comportamento como **testemunha** de que a janela funciona. Consertar a primeira metade derrubaria o
+discriminador de outro gate. Registrado no `TODO.md` como item próprio — os dois na mesma fatia.
+
+### Gate — `infra/test/probe_journeys_window_applied.sh` (7/0)
+
+Mesma técnica da F2 (janela absurda como único corte que separa as hipóteses, porque as journeys do
+ambiente são recentes e a janela default já as inclui). O que este probe acrescenta é o **bloco 3**:
+a listagem sem `root_session_id` tem de reportar `window_applied=true`. Sem ele, um marcador
+constante `false` passaria nas asserções 1 e 2 sem informar coisa alguma.
+`jq`: `has("window_applied")`, nunca `// "ausente"` — o `//` trata `false` como ausente, e `false` é
+justamente o valor a ler no ramo isento. `pytest` 561 passed.
+
+---
+
+## Histórico unificado F1b — `entrou por`: first-write-wins em `sessions.pool_id` ✅ (2026-08-14)
+
+D12b do ADR. **Não foi adicionar um campo — foi parar de apagar um que já existe.** O
+channel-gateway resolve o pool antes de publicar `conversations.inbound` e `parse_inbound` já o
+escrevia; o `routed`/`queued`/`closed` o destruíam depois, porque `sessions` é `ReplacingMergeTree`
+de **linha inteira**. `pool_id` estava em `_IDENTITY_FIELDS`, mas aquela tupla implementa
+*"último não-vazio vence"* — a regra oposta à necessária.
+
+**Base recontada antes de tocar em código** (`infra/test/probe_entry_pool_base.sh`, novo): **67
+divergentes em 407** (eram 46 em 314 no dia 12), nos **mesmos 5 pares**, soma exata, sem par novo —
+`aprovacao_credito`←`limite_processo` 36 · `retencao_humano`←`sac_ia` 14 ·
+`retencao_humano-int`←`wrapup_detached_ia` 14 · `formfill_demo`←`formfill_demo_ia` 2 ·
+`aprovacao_deploy`←`gate_promocao_ia` 1.
+
+### O carimbo (`consumer.py`)
+
+- `pool_id` **saiu de `_IDENTITY_FIELDS`** e ganhou tratamento próprio, espelhando `opened_at`.
+- **Critério = MENOR `timestamp` conhecido, não "o primeiro que chegou".** `inbound`, `routed` e
+  `queued` são **tópicos diferentes** e ordem entre tópicos não é garantida: uma regra de ordem de
+  chegada daria resultados distintos entre dois replays do mesmo histórico. Todo writer de `sessions`
+  carrega `timestamp`, então o mínimo é sempre a entrada.
+- `_inject_session_identity` **sobrescreve** (não só preenche ausência) — é isso que impede o
+  `closed`, que é a linha sobrevivente no RMT, de reverter o carimbo.
+- `contact_open` segue escrevendo `pool_id: ""` e continua **inócuo**: valor vazio nunca ensina.
+  Coberto por teste — um "primeiro valor" que aceitasse vazio congelaria a sessão sem pool para sempre.
+- **Limite aceito e declarado** (o mesmo de `opened_at`): a cache é de memória; num restart do
+  consumer, sessão VIVA perde o pool aprendido e a próxima escrita volta a carimbar o último.
+
+### Fonte única (`reports_query.py`)
+
+- **`_fetch_sessions`: o JOIN `_pool` foi REMOVIDO.** Ele recuperava o pool do primeiro segmento
+  quando a coluna vinha vazia — sob o significado novo, isso seria *"atendido por"* preenchendo uma
+  célula que diz *"entrou por"*: duas fontes para o mesmo fato, um nível acima. Medido: a coluna está
+  vazia em **1** de 407 sessões, e é essa 1 que passa a mostrar ausência honesta.
+- **`_fetch_pools_queue`: precedência INVERTIDA** para `q_pool` (segmento `role='queue'`) antes de
+  `sessions.pool_id`. Não é consequência da F1b — o relatório **já estava errado**: ele mede *onde
+  esperou*, e `sessions.pool_id` nunca foi esse fato. Medido: **6 das 15** sessões com fila tinham
+  espera, SLA e abandono atribuídos ao pool errado. Neste ambiente o carimbo de entrada coincide com
+  o pool da fila, o que faria a F1b "consertar" o número **por acidente**; coincidência não é fonte.
+- **O recorte acompanha a atribuição**: no mesmo endpoint, o filtro por pool e o escopo ABAC saíram
+  do `WHERE` de `sessions` e passaram a incidir sobre a coluna derivada que o relatório agrupa.
+
+### ABAC — a previsão errou, e a consequência era real
+
+Previu-se exposição zero ("ninguém tem `accessible_pools` não-vazio"). Medido: **2 de 3 usuários
+têm** (`admin` e `operator`, ambos com `{formfill_demo, retencao_humano, aprovacao_credito}` — e o
+`admin` **é** escopado, porque `open_access` não desliga pool-scoping). Cruzando com os pares:
+**52 dos 67** contatos sairiam do escopo deles, incluindo os 14 `sac_ia`→`retencao_humano`, que são
+contatos de cliente. Autorizar pelo pool de ENTRADA faz o supervisor perder contato que os agentes
+**dele** atenderam.
+
+Conserto: **`_session_scope_clause`**, predicado único que substitui as **4 cópias inline** de
+`(s.pool_id IN (…) OR s.pool_id = '')` (`_fetch_sessions`, `_fetch_journeys`,
+`_attach_internal_counts`, `_trace_base_conditions` — este ganhou `db` na assinatura). A união tem
+três razões para uma sessão ser minha: **entrou** por pool meu · **ainda não tem pool** · um pool meu
+**participou** (segmento). A terceira é a que faltava, e é estritamente **ampliadora**. Medido sobre
+o escopo real do `operator`: **+9 sessões, −0**. `_apply_pool_scope` **não** foi tocada — mesmo
+precedente da F2 (conserto por ponto, não em função compartilhada).
+
+### Classificação interna×contato: medida, estável
+
+`_apply_contact_scope`/`_mark_internal_rows` classificam por `sessions.pool_id`, logo passam a
+classificar pelo pool de ENTRADA. Conferido contra o registry: `retencao_humano-int` **e**
+`wrapup_detached_ia` são os dois `purpose=internal`, e nenhum dos outros 4 pares toca a lista — as 67
+sessões ficam do mesmo lado da fronteira e o `8 contatos = 8` validado na F2 não se move.
+
+### Forward-only, declarado antes de medir
+
+A correção age no **ingest**; linhas já gravadas mantêm o pool errado e **não saram sozinhas**
+(`ReplacingMergeTree` conserva a última versão escrita). Backfill não foi feito e provavelmente não
+vale — `origin`/retenção mandam não reescrever substrato.
+
+### Gates
+
+- **`infra/test/probe_entry_pool_fww.sh`** (novo, 7/0) — diferencial de 3 estados, com `SKIP_SMOKE=1`
+  para diagnosticar sem criar sessão. O que o torna um gate e não um carimbo: a asserção "sessão nova
+  concorda com o primeiro segmento" **não podia reprovar** neste fluxo, porque o processo entra em
+  `limite_processo`, passa por `aprovacao_credito` no MEIO e volta (`argMin == argMax`). O julgamento
+  verdadeiro é o **1c**: mesma forma, executada antes e depois do deploy → **33** sessões fechadas
+  com `aprovacao_credito` contra **4** com `limite_processo`, corte às 18:29 × 19:51.
+  ⚠️ **`status='closed'` não é conveniência**: sem ele os grupos se entrelaçam no tempo (uma sessão
+  `suspended` de 13/08 aparecia "do lado novo" um dia antes do deploy — sessão que nunca fecha nunca
+  recebe a linha de `contact_closed`, que era quem trazia o pool errado). O bloco **1d** mostra o corte.
+- `pytest analytics-api` — **561 passed**, 9 deles novos (`TestEntryPoolFirstWriteWins`), contados
+  isoladamente com `-k` porque "base +9" sem a base contada não é previsão falseável. Entre eles um
+  **controle**: `test_channel_still_follows_last_non_empty` — se a tupla genérica tivesse virado
+  first-write-wins junto, os 8 testes do pool passariam igual e só esse reprovaria.
+- Não-regressão: `smoke_limite_tres_acessos.sh` 18/0 (4×) · `probe_segments_journey_window.sh` 6/0.
+  `probe_journey_limite.sh` saiu **INCONCLUSIVO por artefato do gate**: ele julga a cadeia mais
+  recente, e as execuções do smoke a substituíram por casos disparados direto no N3, sem intake.
+
+---
+
 ## Histórico unificado F2 — `/reports/segments` responde por PROCESSO e isenta a janela ✅ (2026-08-14)
 
 D10 do ADR. O endpoint aceitava **um** `session_id` e aplicava a janela `started_at` (default 7 dias)

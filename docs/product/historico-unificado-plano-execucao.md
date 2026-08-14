@@ -64,7 +64,7 @@ descobri-los renderizando.
 | Fase | O que é | Depende de | Tamanho |
 |---|---|---|---|
 | **S0** | medir/validar/registrar F0+F1 · fechar decisão aberta #1 | — | ½ sessão |
-| **F1b** | `entrou por`: first-write-wins em `sessions.pool_id` | independente | 1 sessão (o inventário é o custo) |
+| ~~**F1b**~~ | ~~`entrou por`: first-write-wins em `sessions.pool_id`~~ | ✅ **2026-08-14** | 1 sessão, como previsto |
 | **F2** | `root_session_id` em `/reports/segments` + achado 6 (ABAC) | independente | ½ sessão |
 | **F3** | visão 1 — lista de contatos, chip, direção | F1b | 1–2 sessões |
 | **F4** | visão 2 — pivô, lente A/B, internas dobradas | F2, F3 | 2 sessões |
@@ -255,9 +255,24 @@ não "mais que antes".
 
 ---
 
-### F1b — `entrou por`: first-write-wins em `sessions.pool_id` *(próxima — sessão própria)*
+### F1b — ✅ CONCLUÍDA 2026-08-14
 
-> **Kickoff pronto:** [`historico-unificado-f1b-kickoff.md`](historico-unificado-f1b-kickoff.md).
+> As-built completo no `CHANGELOG.md`; decisões de desenho no ADR §F1b + §Achado 7. Gates:
+> `infra/test/probe_entry_pool_base.sh` (medição) e `probe_entry_pool_fww.sh` (7/0, diferencial).
+> O planejado abaixo fica como registro do que se esperava — **três previsões saíram erradas**, e
+> vale mais lê-las do que apagá-las.
+
+**O que o plano previu errado:**
+
+| Previsto aqui | Medido |
+|---|---|
+| divergência esperada depois do fix = **0** | **67**, e continua 67 — o conserto é *forward-only*, então o passado não sara. Zero era a previsão certa só para sessão NOVA. |
+| ABAC como item de "conferir" | precisou de **conserto**: 52 dos 67 contatos sairiam do escopo de 2 usuários reais. Ver ADR §Achado 7. |
+| `_fetch_pools_queue` = "mesmo padrão, mesma pergunta" | não era o mesmo: ali o fato é *onde esperou*, e o relatório **já estava errado** em 6 de 15 sessões, antes desta fase. |
+
+**O que o plano acertou e vale repetir:** *"o custo desta fase é o inventário, não a mudança"*. A
+mudança de ingest são ~15 linhas; o resto da sessão foi medir quem lê.
+
 > Achado que entrou no kickoff e não estava aqui: **o conserto é forward-only** — age no ingest, e as
 > linhas históricas divergentes não saram (RMT conserva a última versão escrita). O gate tem de medir
 > sessão NOVA; contar a população histórica sairia vermelho para sempre e pareceria fix quebrado.
@@ -295,6 +310,18 @@ precisa ver.
 ---
 
 ### F3 — Visão 1 (lista de contatos)
+
+> **Kickoff pronto:** [`historico-unificado-f3-kickoff.md`](historico-unificado-f3-kickoff.md), com o
+> inventário de frontend levantado em 2026-08-14 — que **corrigiu três imprecisões desta seção**:
+> `AnaliseSessionsPage` **não existe** (a rota é servida por `SessionsPage` + `ListaTab`, em
+> `modules/contacts/`); `AnaliseProcessosPage` é código morto **confirmado**; e `AnaliseJourneysPage`
+> não "deixa de ser página" — ela **é** quem serve `/analise/processos` hoje.
+>
+> Dois achados que encolhem a fase: o backend **já devolve** `spawn_reason`, `root_session_id` e
+> `elapsed_time_ms` em `/reports/sessions` (falta tipar e renderizar), e o **chip de processo já
+> existe** em `agent-assist/.../HistoricoTab.tsx:204-215`. Dois que a travam: a **decisão aberta #2**
+> (texto do rodapé do chip) bloqueia F3.3, e `columns.origin` no i18n **já significa ANI** — a coluna
+> de direção não pode reusar esse nome.
 
 Desenho em telas-design §1. `/analise/sessions` absorve `/analise/processos`;
 `AnaliseProcessosPage.tsx` é código morto (achado 7) e sai; `AnaliseJourneysPage` deixa de ser página e

@@ -1,5 +1,19 @@
 # Kickoff — Histórico unificado, Fase F1b: `entrou por` (first-write-wins em `sessions.pool_id`)
 
+> ## ✅ EXECUTADA EM 2026-08-14 — este arquivo é histórico, não instrução
+>
+> As-built no `CHANGELOG.md` · decisões no ADR §F1b e §Achado 7 · gates em
+> `infra/test/probe_entry_pool_base.sh` e `probe_entry_pool_fww.sh`.
+>
+> **O que este kickoff errou, e que a próxima pessoa deve ler antes de confiar num kickoff:**
+>
+> | Afirmação daqui | Medido |
+> |---|---|
+> | *"o channel-gateway resolve o pool antes de publicar `conversations.inbound`"* | verdade em webchat/webhook/sms/email/webrtc; **falso em whatsapp**, que publica o `phone_number_id` DENTRO do campo `pool_id` e conta com uma resolução no routing-engine que **não existe** (grep = 0). Exposição medida: 0 sessões. Registrado no `TODO.md`. |
+> | *"os 5 pares … Par novo que apareça é sinal de mecanismo novo"* | os 5 pares, sem resíduo. Certo. |
+> | ABAC como *"conferir que não altera quem vê o quê"* | **altera**, e para 52 dos 67 contatos, sobre 2 usuários reais. Virou conserto (`_session_scope_clause`), não conferência. |
+> | gate sugerido: *"para a sessão nova, `sessions.pool_id == argMin(segments.pool_id, started_at)`"* | **não pode reprovar** neste fluxo: o processo entra em `limite_processo`, passa por `aprovacao_credito` no MEIO e volta, então `argMin == argMax` e a igualdade valeria mesmo sem o conserto. O gate real é o contraste antes×depois sobre a MESMA forma, com `status` fixo. |
+>
 > Cole isto no início da sessão. **Uma sessão = F1b.** Não abrir UI.
 > Desenho: [`../adr/adr-historico-unificado-duas-visoes.md`](../adr/adr-historico-unificado-duas-visoes.md) §D12b ·
 > Plano do arco: [`historico-unificado-plano-execucao.md`](historico-unificado-plano-execucao.md).

@@ -350,19 +350,41 @@ Ambos são pertença: um diz *de que processo esta sessão faz parte*, o outro *
    e a premissa que dava identidade ao endereço (D7) é falsa em 5 dos 6 canais. **F1 fica só com o
    `journey_merge`.**
 
-### F1b — `entrou por`: first-write-wins em `sessions.pool_id` *(novo, D12b)*
+### F1b — `entrou por`: first-write-wins em `sessions.pool_id` — ✅ **2026-08-14**
 
-Independente de F0 — nenhum bloqueia o outro. Estender a `_learn_session_identity`/`_inject_session_identity`
-o tratamento que `opened_at` já recebe, de modo que o pool de entrada não seja sobrescrito pelo
-`routed`/`queued`/`closed`. Não há produtor novo: o valor já chega em `parse_inbound`.
+Independente de F0 — nenhum bloqueia o outro. As-built no `CHANGELOG.md`; abaixo só as decisões que
+o desenho não tinha e que a implementação teve de tomar.
 
-Antes de virar a chave, **medir quem lê `sessions.pool_id` hoje** — dar a ela o significado *pool de entrada*
-é **definir** uma coluna que hoje não tem significado nenhum (é o que escreveu por último), mas quem depender
-do acidente quebra em silêncio.
+1. **O critério de "primeiro" é o MENOR `timestamp`, não a ordem de chegada.** `inbound`, `routed` e
+   `queued` são tópicos diferentes e ordem entre tópicos não é garantida — a regra por ordem daria
+   resultados distintos entre dois replays do mesmo histórico. É o espelho exato de `opened_at`.
+2. **A fonte passou a ser única de verdade**: o fallback `_pool.pool_v` de `_fetch_sessions` foi
+   **removido** (servia 1 de 407 sessões e trazia *"atendido por"* para dentro de uma célula que diz
+   *"entrou por"*).
+3. **`_fetch_pools_queue` teve a precedência invertida** para o segmento `role='queue'`. Achado da
+   fase, não consequência dela: o relatório de fila **já atribuía** 6 das 15 esperas ao pool errado.
+4. **O ABAC precisou de conserto, e a medição é que disse isso.** Ver §Achado 7.
 
-Cuidado registrado: derivar o pool de entrada do primeiro segmento **não** serve como alternativa — 5 sessões
-do ambiente têm pool e **nenhum** segmento (abandono antes de qualquer agente entrar), que é justamente o caso
-que um relatório de fila precisa ver.
+Cuidado registrado, confirmado por medição: derivar o pool de entrada do primeiro segmento **não**
+serve como alternativa — **5** sessões do ambiente têm pool e **nenhum** segmento (abandono antes de
+qualquer agente entrar), que é justamente o caso que um relatório de fila precisa ver.
+
+#### Achado 7 — o ABAC autorizava pelo fato errado, e não era latente
+
+A F2 registrou um risco de ABAC que, medido, **não tinha amostra** (achado 6). Este é o oposto: a
+hipótese era a mesma — *"provavelmente ninguém tem `accessible_pools` não-vazio"* — e a medição a
+derrubou. **2 de 3 usuários têm** (`admin` inclusive, porque `open_access` não desliga pool-scoping),
+e **52 dos 67** contatos divergentes sairiam do escopo deles, incluindo os 14 `sac_ia`→
+`retencao_humano`, que são contatos de cliente.
+
+A causa é anterior ao carimbo: autorizar por `sessions.pool_id` sempre foi autorizar pelo acidente do
+último escritor. O predicado correto é a **união** — entrou por pool meu · ainda não tem pool · um
+pool meu participou (segmento). Implementado em `_session_scope_clause`, **um** lugar no lugar de
+quatro cópias inline. É estritamente ampliador: medido +9 sessões, −0.
+
+> A lição que fica das duas fases juntas: *"risco derivado de leitura de código"* não tem sinal —
+> na F2 a medição o dissolveu, na F1b a medição o confirmou e ainda mostrou que era maior do que a
+> hipótese. O que decide não é a plausibilidade do risco, é a contagem.
 
 ### F2 — `root_session_id` em `/reports/segments` (D10) — ✅ **2026-08-14**
 
