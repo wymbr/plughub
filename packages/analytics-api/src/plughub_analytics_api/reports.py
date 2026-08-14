@@ -457,6 +457,7 @@ async def get_segments_report(
     from_dt:        str | None    = None,
     to_dt:          str | None    = None,
     session_id:     str | None    = None,
+    root_session_id: str | None   = Query(None, description="Journey (D10): todos os segmentos das sessões do processo. ISENTA a janela de data."),
     pool_id:        str | None    = None,
     agent_type_id:  str | None    = None,
     role:           str | None    = None,
@@ -476,9 +477,14 @@ async def get_segments_report(
     - ended_at        : null if the participant is still active
     - duration_ms     : populated on participant_left event
 
-    Filters: session_id, pool_id, agent_type_id, role, outcome
+    Filters: session_id, root_session_id, pool_id, agent_type_id, role, outcome
     role:    primary | specialist | supervisor | evaluator | reviewer
     outcome: resolved | escalated | transferred | abandoned | timeout
+
+    `root_session_id` (D10) devolve os segmentos de TODAS as sessões do processo
+    (proveniência ∪ alias, resolvido por union-find) e **isenta a janela de data** —
+    uma journey que atravessa semanas voltava truncada em silêncio. Mesma decisão já
+    tomada em `/reports/journeys`.
 
     Columns: segment_id, session_id, tenant_id, participant_id, pool_id,
              agent_type_id, instance_id, role, agent_type,
@@ -494,6 +500,7 @@ async def get_segments_report(
         from_dt   = from_dt,
         to_dt     = to_dt,
         session_id       = session_id,
+        root_session_id  = root_session_id,
         pool_id          = pool_id,
         agent_type_id    = agent_type_id,
         role             = role,

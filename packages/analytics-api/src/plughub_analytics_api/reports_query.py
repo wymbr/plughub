@@ -2009,6 +2009,7 @@ async def query_segments_report(
     to_dt:     str | None = None,
     *,
     session_id:             str | None       = None,
+    root_session_id:        str | None       = None,
     pool_id:                str | None       = None,
     agent_type_id:          str | None       = None,
     role:                   str | None       = None,
@@ -2030,7 +2031,7 @@ async def query_segments_report(
             _fetch_segments, client, database, tenant_id, since, until,
             session_id, pool_id, agent_type_id, role, outcome,
             accessible_pools, supervised_agent_types, page, page_size,
-            origin,
+            origin, root_session_id,
         )
     except Exception as exc:
         logger.warning("query_segments_report failed tenant=%s: %s", tenant_id, exc)
@@ -2047,13 +2048,36 @@ def _fetch_segments(
     supervised_agent_types: list[str] | None,
     page: int, page_size: int,
     origin: "str | list[str]" = "live",
+    root_session_id: str | None = None,
 ) -> dict:
-    conditions = [
-        "tenant_id = {tenant_id:String}",
-        f"started_at >= '{since}'",
-        f"started_at < '{until}'",
-    ]
+    conditions = ["tenant_id = {tenant_id:String}"]
     params: dict = {"tenant_id": tenant_id}
+
+    # D10 — a janela é CONDICIONAL, como em `_fetch_journeys`. Sem a isenção, uma
+    # journey que atravessa semanas volta truncada em SILÊNCIO: o processo é o
+    # escopo, e o escopo do processo não é a semana em que se olha para ele.
+    #
+    # `root_session_id` não é coluna de `segments` (vive em `sessions`) — daí a
+    # subconsulta, e não um `IN {jroots}` direto. Ela carrega o MESMO union-find
+    # (proveniência ∪ alias) que `/reports/journeys` usa, senão as duas superfícies
+    # sobre o mesmo processo devolveriam conjuntos diferentes de sessões.
+    if root_session_id:
+        _resolved = _journey_resolved_map(client, db, tenant_id)
+        # `sorted(...)`, não o set cru: `_journey_member_roots` devolve `set[str]` e o
+        # binding de `Array(String)` precisa de sequência ordenável — é o que
+        # `_fetch_journeys` já faz (`:968`). Passar o set daria erro de serialização,
+        # que o `except` de `query_segments_report` converteria em `data_unavailable`
+        # — indistinguível de "não há segmentos" para quem só olha a tela.
+        params["jroots"] = sorted(_journey_member_roots(_resolved, root_session_id))
+        conditions.append(
+            "session_id IN ("
+            f"SELECT session_id FROM {db}.sessions FINAL "
+            "WHERE tenant_id = {tenant_id:String} "
+            "AND root_session_id IN {jroots:Array(String)})"
+        )
+    else:
+        conditions.append(f"started_at >= '{since}'")
+        conditions.append(f"started_at < '{until}'")
 
     if session_id:
         conditions.append("session_id = {session_id:String}")
@@ -2102,7 +2126,14 @@ def _fetch_segments(
         LIMIT {page_size} OFFSET {offset}
     """, parameters=params)
 
-    return {"data": _rows_to_dicts(result), "meta": _meta(page, page_size, total, since, until)}
+    meta = _meta(page, page_size, total, since, until)
+    # A janela isenta NÃO pode sair do endpoint parecendo aplicada. `_meta` publica
+    # `from_dt`/`to_dt` sempre, e no ramo do processo eles não filtraram nada — quem
+    # lê o cabeçalho concluiria que a lista está recortada por período e que os
+    # segmentos antigos "sumiram". Marcador explícito, aditivo (não quebra leitor).
+    # ⚠️ `/reports/journeys` tem a MESMA mentira e segue sem marcador (ver TODO).
+    meta["window_applied"] = not bool(root_session_id)
+    return {"data": _rows_to_dicts(result), "meta": meta}
 
 
 # ─── /reports/wrapup-summary (I5 / ADR § D7b, fatia 2) ───────────────────────
