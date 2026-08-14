@@ -5,9 +5,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { apiFetch } from '@/api/apiFetch'
+import { GitBranch } from 'lucide-react'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
 import {
-  formatMs, formatDt, CHANNEL_ICONS,
+  formatMs, formatDt, CHANNEL_ICONS, DIRECTION_ICONS,
+  contactDirection, journeyLabel,
 } from '../types'
 
 const PAGE_SIZE = 50
@@ -22,9 +24,12 @@ interface Props {
    *  faz `return <Detail/>` antes de renderizá-la), e estado local morre na volta. */
   scopeAll:           boolean
   onScopeAllChange:   (v: boolean) => void
+  /** F3.3 — pivô para a visão 2 (o processo). O chip é o ÚNICO caminho: não há
+   *  lista livre de processos (D2/ADR §D3 — processo é pivô, nunca navegação). */
+  onOpenJourney?: (journeyId: string) => void
 }
 
-export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAllChange }: Props) {
+export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAllChange, onOpenJourney }: Props) {
   const { t } = useTranslation('contacts')
   const [rows,    setRows]    = useState<ContactRow[]>([])
   const [total,   setTotal]   = useState(0)
@@ -40,6 +45,11 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
   // Tamanho do conjunto que classificou as linhas. 0 ⇒ não há como distinguir
   // nada ⇒ não prometer o recurso (o toggle nem é oferecido).
   const [internalPoolsKnown, setInternalPoolsKnown] = useState(0)
+  // F3.3 — a janela de período incidiu? É o que torna o rodapé do chip CONDICIONAL:
+  // sem recorte, "o chip conta o processo inteiro" não explica divergência nenhuma
+  // e vira ruído fixo. Default `true` (o caminho de listagem sempre recorta), então
+  // backend antigo — sem o marcador — degrada mostrando a frase, não escondendo-a.
+  const [windowApplied,      setWindowApplied]      = useState(true)
   const pendingRef = useRef(false)
 
   const load = useCallback(async (p: number) => {
@@ -52,17 +62,20 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
         page:      String(p),
         page_size: String(PAGE_SIZE),
       })
-      const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId,
-              agentId, ani, dnis, insightCategory, insightTags, status } = filters
+      const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId, entryPoolId,
+              agentId, insightCategory, insightTags, status } = filters
       if (fromDt)          params.set('from_dt',          fromDt + 'T00:00:00')
       if (toDt)            params.set('to_dt',            toDt   + 'T23:59:59')
       if (sessionIdSearch) params.set('session_id',       sessionIdSearch)
       if (channel)         params.set('channel',          channel)
       if (outcome)         params.set('outcome',          outcome)
+      // Os DOIS filtros de pool, e eles vão em parâmetros DIFERENTES: `pool_id` é
+      // "atendido por" (subconsulta em segments) e `entry_pool_id` é "entrou por"
+      // (a porta). Compõem por AND — é assim que se pergunta "entrou no sac_ia e
+      // terminou no humano".
       if (poolId)          params.set('pool_id',          poolId)
+      if (entryPoolId)     params.set('entry_pool_id',    entryPoolId)
       if (agentId)         params.set('agent_id',         agentId)
-      if (ani)             params.set('ani',              ani)
-      if (dnis)            params.set('dnis',             dnis)
       if (insightCategory) params.set('insight_category', insightCategory)
       if (insightTags)     params.set('insight_tags',     insightTags)
       if (status)          params.set('status',           status)          // Arc 19
@@ -82,6 +95,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
       setTotalContacts(meta?.total_contacts ?? listed)
       setTotalInternal(meta?.total_internal ?? 0)
       setInternalPoolsKnown(meta?.internal_pools_known ?? 0)
+      setWindowApplied(meta?.window_applied ?? true)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -100,12 +114,32 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
   // A coluna `parent` (contato pai) só existe no escopo expandido: fora dele não
   // há linha interna, e uma coluna vazia prometeria um vínculo que a listagem de
   // contatos não tem.
-  // ⚠️ `origin`/`destination` aqui são ANI/DNIS — o nome "origin" já está tomado
-  // na tabela; o vínculo com o contato pai (`origin_session_id`) é `parent`.
+  //
+  // ── F3 ────────────────────────────────────────────────────────────────────
+  // SAÍRAM `origin`/`destination` (ANI/DNIS): permanentemente vazias nos dois canais
+  // existentes — zero valores em 314 sessões (achados 1 e 3 do desenho). Duas colunas
+  // que só sabiam dizer `—`. **Não voltam.**
+  //
+  // ENTROU `direction` — e o nome importa: `origin` já significava ANI aqui, então
+  // batizar a direção de "origin" faria o operador ler um e receber o outro.
+  //
+  // `channel` foi DOBRADA em `contact` (ícone + id), como no desenho §1: o canal é
+  // atributo do contato, não coluna própria.
+  //
+  // ── Largura é requisito, não estética (corrigido na revisão da F3) ─────────
+  // A 1ª versão embarcou 11 colunas (as 7 do desenho + `ended`/`status`/`segments`,
+  // mantidas por instinto de mudança mínima) e a tabela passou a exigir SCROLL
+  // HORIZONTAL — jogando a coluna `process` para fora da tela. O chip é o ÚNICO
+  // caminho para a visão 2 (D2: processo é pivô, não navegação), então "mínima
+  // mudança" tinha escondido justamente a entrega da fase.
+  //   · `ended` SAIU — o desenho não a lista, e `started` + `duration` a dão.
+  //   · `status` foi FUNDIDA em `outcome` — é a coluna 6 do desenho ("desfecho =
+  //     outcome + close_reason"); eram duas células dizendo `resolved` e `closed`
+  //     lado a lado.
   const columns: string[] = [
-    'sessionId', 'channel', 'pool',
+    'direction', 'contact', 'pools',
     ...(scopeAll ? ['parent'] : []),
-    'origin', 'destination', 'started', 'ended', 'duration', 'status', 'segments',
+    'started', 'duration', 'outcome', 'segments', 'process',
   ]
 
   if (error) {
@@ -200,6 +234,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
               {rows.map(row => (
                 <ContactRowItem key={row.session_id} row={row} showParent={scopeAll}
                   onOpenParent={pid => onOpenDetail(pid, '')}
+                  onOpenJourney={onOpenJourney}
                   onClick={() => {
                   // Fase C: classify by the REAL channel_type — não por presença de
                   // step delegate/suspend. O v2 preserva o canal no resume/conference
@@ -214,6 +249,21 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
           </table>
         )}
       </div>
+
+      {/* ── Rodapé do chip (decisão aberta #2 do ADR, fechada aqui) ─────────────
+          O N do chip conta o processo INTEIRO, de propósito: uma janela que pega 2
+          de 3 contatos mostra `· 3`. Isso vai parecer defeito para quem não souber,
+          e esta linha é a única coisa que o impede de virar chamado.
+
+          CONDICIONAL em `meta.window_applied`: no drill (por processo/por contato) a
+          janela não incide, não há divergência a explicar, e a frase seria ruído. E
+          condicional em haver chip na página — explicar um elemento que não está na
+          tela é pior do que não explicar. */}
+      {windowApplied && rows.some(r => (r.journey_session_count ?? 0) > 1) && (
+        <div className="px-4 py-1.5 bg-surface-muted border-t border-border flex-shrink-0 text-2xs text-muted-light">
+          {t('lista.processFootnote')}
+        </div>
+      )}
 
     </div>
   )
@@ -265,34 +315,69 @@ function SessionStatusBadge({ row }: { row: ContactRow }) {
 
 // ── Row ───────────────────────────────────────────────────────────────────────
 
-function ContactRowItem({ row, onClick, showParent, onOpenParent }: {
+function ContactRowItem({ row, onClick, showParent, onOpenParent, onOpenJourney }: {
   row: ContactRow
   onClick: () => void
   /** escopo expandido (`scope=all`) — só então existe a coluna de contato pai */
   showParent: boolean
   onOpenParent: (parentSessionId: string) => void
+  onOpenJourney?: (journeyId: string) => void
 }) {
   const { t } = useTranslation('contacts')
   const shortId = row.session_id.length > 16 ? '…' + row.session_id.slice(-14) : row.session_id
   const parentId = row.origin_session_id || ''
 
+  const direction = contactDirection(row)
+  // Entrada × atendimento. O último da lista é quem atendeu POR ÚLTIMO (a lista vem
+  // ordenada por primeiro segmento). A seta só aparece quando os dois DIFEREM: num
+  // contato sem handoff, `sac_ia → sac_ia` seria ruído com cara de informação.
+  const entryPool    = row.pool_id || ''
+  const attended     = row.attended_pool_ids ?? []
+  const lastAttended = attended.length ? attended[attended.length - 1] : ''
+  const showHandoff  = !!lastAttended && lastAttended !== entryPool
+
+  // Chip só quando há processo COM MAIS DE UM contato: contato de processo único não
+  // tem para onde pivotar, e é o caso majoritário. `null`/ausente (falha de contagem
+  // no backend) cai aqui e NÃO desenha — ver `journey_session_count` em types.ts.
+  const journeyN  = row.journey_session_count ?? 0
+  const journeyId = row.journey_id || row.root_session_id || ''
+  const showChip  = journeyN > 1 && !!journeyId
+
   return (
     <tr onClick={onClick} className="hover:bg-primary/5 cursor-pointer transition-colors">
+      {/* Direção do acesso (D8) — DERIVADA, nunca armazenada. Ver `contactDirection`. */}
+      <td className="px-4 py-3 whitespace-nowrap text-center">
+        {direction ? (
+          <span className="text-base" title={t(`lista.direction.${direction}`)}
+            aria-label={t(`lista.direction.${direction}`)}>
+            {DIRECTION_ICONS[direction]}
+          </span>
+        ) : (
+          <span className="text-border-strong text-xs" title={t('lista.direction.unknownHint', { value: row.spawn_reason ?? '' })}>—</span>
+        )}
+      </td>
+      {/* Contato = canal + id (desenho §1, coluna 2). */}
       <td className="px-4 py-3 font-mono text-xs text-dark whitespace-nowrap">
+        <span className="mr-1.5" title={row.channel || ''}>{CHANNEL_ICONS[row.channel] ?? '⬡'}</span>
         {/* Tag por veredicto do backend (`is_internal`) — a UI não reclassifica por pool_id. */}
         {row.is_internal && (
-          <span className="mr-2 inline-block text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-alt text-muted border border-border"
+          <span className="mr-2 inline-block text-2xs font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-surface-alt text-muted border border-border"
             title={t('lista.internalBadgeHint')}>
             {t('lista.internalBadge')}
           </span>
         )}
         {shortId}
       </td>
-      <td className="px-4 py-3 text-muted whitespace-nowrap">
-        {CHANNEL_ICONS[row.channel] ?? '⬡'} {row.channel || <span className="text-border-strong">—</span>}
-      </td>
-      <td className="px-4 py-3 text-muted text-xs whitespace-nowrap max-w-[120px] truncate" title={row.pool_id ?? ''}>
-        {row.pool_id?.replace(/_/g, ' ') ?? '—'}
+      {/* `entrou por → atendido por` — os DOIS pools, nunca um só chamado "Pool". */}
+      <td className="px-4 py-3 text-muted text-xs whitespace-nowrap max-w-[280px] truncate"
+        title={showHandoff ? `${entryPool} → ${lastAttended}` : entryPool}>
+        {entryPool ? entryPool.replace(/_/g, ' ') : <span className="text-border-strong">—</span>}
+        {showHandoff && (
+          <>
+            <span className="mx-1 text-border-strong">→</span>
+            <span className="text-dark">{lastAttended.replace(/_/g, ' ')}</span>
+          </>
+        )}
       </td>
       {showParent && (
         <td className="px-4 py-3 text-xs whitespace-nowrap">
@@ -306,25 +391,42 @@ function ContactRowItem({ row, onClick, showParent, onOpenParent }: {
           ) : <span className="text-border-strong">—</span>}
         </td>
       )}
-      <td className="px-4 py-3 text-muted text-xs whitespace-nowrap tabular-nums">
-        {row.ani ? <span className="font-mono">{row.ani}</span> : <span className="text-border-strong">—</span>}
-      </td>
-      <td className="px-4 py-3 text-muted text-xs whitespace-nowrap tabular-nums">
-        {row.dnis ? <span className="font-mono">{row.dnis}</span> : <span className="text-border-strong">—</span>}
-      </td>
       <td className="px-4 py-3 text-muted text-xs tabular-nums whitespace-nowrap">{formatDt(row.opened_at)}</td>
-      <td className="px-4 py-3 text-muted text-xs tabular-nums whitespace-nowrap">
-        {!row.closed_at
-          ? <span className="text-green-text font-medium">{t('lista.active')}</span>
-          : formatDt(row.closed_at)}
+      {/* Duração = `elapsed_time_ms` (D9): o tempo do CASO, esperas incluídas.
+          NUNCA `agent_time_ms` (outra grandeza, agente × tempo) e NUNCA Σ segmentos —
+          eles se SOBREPÕEM (@mention é rotina), então a soma nem é uma duração.
+          `handle_time_ms` fica só como fallback de backend antigo, não como fonte. */}
+      <td className="px-4 py-3 text-dark tabular-nums whitespace-nowrap text-xs">
+        {formatMs(row.elapsed_time_ms ?? row.handle_time_ms)}
       </td>
-      <td className="px-4 py-3 text-dark tabular-nums whitespace-nowrap text-xs">{formatMs(row.handle_time_ms)}</td>
-      {/* Status — active / closed / abandoned */}
-      <td className="px-4 py-3 whitespace-nowrap"><SessionStatusBadge row={row} /></td>
+      {/* Desfecho = estado + `outcome`, com `close_reason` no título (desenho §1,
+          coluna 6). UMA célula: o badge responde "como terminou" (ou que ainda não
+          terminou — sessão viva não tem outcome) e o texto responde "com que
+          resultado". Separadas, eram duas colunas dizendo `closed` e `resolved`
+          lado a lado, e foi esse par redundante que empurrou o chip para fora da
+          tela. */}
+      <td className="px-4 py-3 whitespace-nowrap" title={row.close_reason ?? ''}>
+        <SessionStatusBadge row={row} />
+        {row.outcome && <span className="ml-1.5 text-xs text-muted">{row.outcome}</span>}
+      </td>
       <td className="px-4 py-3 text-center">
         {row.segment_count > 0 ? (
           <span className="inline-block text-xs font-semibold px-2 py-0.5 rounded-full bg-primary-light text-primary tabular-nums">
             {row.segment_count}
+          </span>
+        ) : <span className="text-border-strong text-xs">—</span>}
+      </td>
+      {/* Chip de processo — o ÚNICO pivô para a visão 2 (D2: processo nunca é linha,
+          nunca é navegação livre). O N conta o processo INTEIRO; ver o rodapé. */}
+      <td className="px-4 py-3 whitespace-nowrap">
+        {showChip ? (
+          <span
+            onClick={e => { e.stopPropagation(); onOpenJourney?.(journeyId) }}
+            title={t('lista.processChipHint', { count: journeyN })}
+            className="inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full bg-primary-light text-primary hover:underline cursor-pointer">
+            <GitBranch className="w-3 h-3" aria-hidden="true" />
+            {journeyLabel(journeyId)}
+            <span className="tabular-nums font-semibold">· {journeyN}</span>
           </span>
         ) : <span className="text-border-strong text-xs">—</span>}
       </td>

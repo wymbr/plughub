@@ -1,11 +1,16 @@
 /**
- * AnaliseJourneysPage — Vista Processos (Journey J2) — /analise/processos
+ * AnaliseJourneysPage — Vista Processos (Journey J2) — nível 2 de /analise/sessions
  *
  * Lente por PROVENIÊNCIA (agrupa sessions por root_session_id) — não a entidade
- * Journey do Arc 10 (removida). Drill 3 níveis por URL-param:
- *   L1: /analise/processos                          — lista de journeys
- *   L2: /analise/processos?journey=:root            — sessões-membro da journey
- *   L3: /analise/processos?journey=:root&session=:s — SessionTranscript
+ * Journey do Arc 10 (removida). Drill por URL-param:
+ *   L2: /analise/sessions?journey=:root            — sessões-membro da journey
+ *   L3: /analise/sessions?journey=:root&session=:s — SessionTranscript
+ *
+ * ⚠️ **O L1 (lista livre de journeys) não é mais alcançável** (F3.3 / ADR D2): o
+ * `SessionsPage` só monta este componente COM `?journey=`, e sem o parâmetro a rota
+ * mostra a lista de CONTATOS — que é para onde o `onBack` daqui aponta. O código do
+ * L1 (`JourneysList`) permanece porque a F4 o reenquadra como o pivô; ele não deve
+ * ganhar entrada de menu no caminho. Processo é pivô, nunca navegação livre.
  *
  * Fonte: GET /reports/journeys + GET /reports/sessions?root_session_id= (analytics-api).
  * Sem alias/merge (isso é J3): cada grupo é uma árvore de proveniência.

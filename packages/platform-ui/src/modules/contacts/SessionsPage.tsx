@@ -8,8 +8,10 @@
  */
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
+import AnaliseJourneysPage from '@/modules/analise/AnaliseJourneysPage'
 import { PoolDomainSelect } from '@/components/ui/PoolDomainSelect'
 import { SessionTranscript }   from '@/modules/service/components/SessionTranscript'
 import { SegmentList }         from '@/modules/service/components/SegmentList'
@@ -24,13 +26,11 @@ import { ListaTab }           from './tabs/ListaTab'
 // ── Extended filters ──────────────────────────────────────────────────────────
 
 interface SessionFilters extends ContactFilters {
-  sessionType:   string
   sessionStatus: string
 }
 
 const DEFAULT_SESSION_FILTERS: SessionFilters = {
   ...DEFAULT_FILTERS,
-  sessionType:   '',
   sessionStatus: '',
 }
 
@@ -52,11 +52,11 @@ function FilterBar({ filters, setFilters }: {
 
   function clearAll() { setFilters(DEFAULT_SESSION_FILTERS) }
 
-  const hasExtra = !!(filters.poolId || filters.agentId || filters.ani || filters.dnis
+  const hasExtra = !!(filters.poolId || filters.entryPoolId || filters.agentId
     || filters.insightCategory || filters.insightTags)
 
   const hasAny = !!(filters.sessionIdSearch || filters.channel || filters.outcome
-    || filters.sessionType || filters.sessionStatus || hasExtra
+    || filters.sessionStatus || hasExtra
     || filters.fromDt !== DEFAULT_FILTERS.fromDt || filters.toDt !== DEFAULT_FILTERS.toDt)
 
   return (
@@ -82,12 +82,13 @@ function FilterBar({ filters, setFilters }: {
           ))}
         </select>
 
-        <select value={filters.sessionType} onChange={e => set('sessionType', e.target.value)} className={`${inp} bg-white`}>
-          <option value="">{t('sessions.allTypes')}</option>
-          <option value="inbound">Inbound</option>
-          <option value="outbound">Outbound</option>
-        </select>
-
+        {/* F3 — o seletor «Inbound / Outbound» foi REMOVIDO. Ele não filtrava nada:
+            `sessionType` nunca entrou no `contactFilters` nem virou parâmetro, então
+            escolher "Outbound" devolvia a lista inteira. Um controle que promete um
+            recorte e não o aplica é pior do que sua ausência — e pior ainda agora,
+            ao lado de uma coluna de DIREÇÃO que diz a verdade sobre o mesmo eixo.
+            Filtrar por direção de verdade (parâmetro sobre `spawn_reason`) está
+            registrado no TODO como fatia própria, não contrabandeada aqui. */}
         <select value={filters.sessionStatus} onChange={e => set('sessionStatus', e.target.value)} className={`${inp} bg-white`}>
           <option value="">{t('sessions.allStatuses')}</option>
           <option value="active">{t('sessions.status.active')}</option>
@@ -105,7 +106,7 @@ function FilterBar({ filters, setFilters }: {
           {showExtra ? '▲' : '▼'} {t('filter.moreFilters')}
           {hasExtra && (
             <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-white text-2xs font-bold">
-              {[filters.poolId, filters.agentId, filters.ani, filters.dnis, filters.insightCategory, filters.insightTags].filter(Boolean).length}
+              {[filters.poolId, filters.entryPoolId, filters.agentId, filters.insightCategory, filters.insightTags].filter(Boolean).length}
             </span>
           )}
         </button>
@@ -120,24 +121,30 @@ function FilterBar({ filters, setFilters }: {
 
       {showExtra && (
         <div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-border">
+          {/* ── Os DOIS filtros de pool (D12) ────────────────────────────────────
+              `entrou por` = a PORTA (`sessions.pool_id`, first-write-wins).
+              `atendido por` = qualquer segmento daquele pool.
+              **Nenhum dos dois se chama "Pool" na tela.** Se chamassem, o operador
+              leria um e receberia o outro — que é exatamente o erro que
+              `sessions.pool_id` cometia antes da F1b, um nível abaixo.
+              Removidos aqui: ANI/DNIS (permanentemente vazios; não voltam). */}
           {([
-            { key: 'poolId',          label: t('filter.pool'),          placeholder: 'ex: sac_ia',    width: 'w-36' },
+            { key: 'entryPoolId',     label: t('filter.entryPool'),     placeholder: 'ex: sac_ia',    width: 'w-36' },
+            { key: 'poolId',          label: t('filter.attendedBy'),    placeholder: 'ex: sac_ia',    width: 'w-36' },
             { key: 'agentId',         label: t('filter.agent'),         placeholder: 'participant…',  width: 'w-44' },
-            { key: 'ani',             label: t('filter.ani'),           placeholder: '+5511…',        width: 'w-36' },
-            { key: 'dnis',            label: t('filter.dnis'),          placeholder: '+5511…',        width: 'w-36' },
             { key: 'insightCategory', label: t('filter.eventCategory'), placeholder: 'categoria…',   width: 'w-40' },
             { key: 'insightTags',     label: t('filter.tags'),          placeholder: 'tag1,tag2',     width: 'w-36' },
           ] as { key: keyof SessionFilters; label: string; placeholder: string; width: string }[]).map(f => (
             <div key={f.key} className="flex items-center gap-1">
               <span className="text-xs text-muted-light whitespace-nowrap">{f.label}:</span>
-              {f.key === 'poolId' ? (
+              {(f.key === 'poolId' || f.key === 'entryPoolId') ? (
                 // Segurança Fase E — pool = combo do DOMÍNIO (listPools ∩ accessiblePools),
                 // não texto livre. Vazio no combo = todo o domínio; o backend reintersecta.
                 <PoolDomainSelect
                   tenantId={tenantId ?? ''}
                   accessiblePools={currentUser?.accessiblePools ?? []}
-                  value={filters.poolId}
-                  onChange={v => set('poolId', v)}
+                  value={filters[f.key] as string}
+                  onChange={v => set(f.key, v)}
                   allLabel={t('filter.allPools', { defaultValue: 'Todos os pools do domínio' })}
                   className={`${inp} ${f.width}`} />
               ) : (
@@ -159,6 +166,7 @@ function FilterBar({ filters, setFilters }: {
 export default function SessionsPage() {
   const { t } = useTranslation('contacts')
   const { tenantId } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [filters,            setFilters]            = useState<SessionFilters>(DEFAULT_SESSION_FILTERS)
   // Escopo da listagem (ADR wrapup-detached-pull §7). Aqui em cima pela mesma razão
@@ -180,6 +188,22 @@ export default function SessionsPage() {
   }, [detailSessionId])
 
   const isWebhookSession = detailSessionCh === 'webhook'
+
+  // ── Nível 2: o PROCESSO (F3.3) ────────────────────────────────────────────
+  //
+  // `/analise/processos` foi absorvido: o processo passa a ser um nível DESTA rota,
+  // alcançado por `?journey=…`. A lista livre de processos deixa de existir por
+  // decisão (D2/ADR §D3): processo é **pivô**, e o único caminho até ele é o chip da
+  // linha de contato — ou um deep-link que já traz o id. Uma lista de processos
+  // reintroduziria "filtrar por pool" no nível errado, devolvendo *journeys que
+  // tocaram o pool* onde o operador pediu contatos.
+  //
+  // O componente é o mesmo (`AnaliseJourneysPage`); a rota velha redireciona
+  // preservando a query. Aqui ele só é montado COM `?journey=` — sem o parâmetro
+  // caímos na lista de contatos, que é o `onBack` dele (`setSearchParams({})`).
+  if (searchParams.get('journey')) {
+    return <AnaliseJourneysPage />
+  }
 
   if (!tenantId) {
     return (
@@ -324,9 +348,8 @@ export default function SessionsPage() {
     channel:         filters.channel,
     outcome:         filters.outcome,
     poolId:          filters.poolId,
+    entryPoolId:     filters.entryPoolId,
     agentId:         filters.agentId,
-    ani:             filters.ani,
-    dnis:            filters.dnis,
     insightCategory: filters.insightCategory,
     insightTags:     filters.insightTags,
     status:          filters.sessionStatus || undefined,  // Arc 19: pass status filter
@@ -343,6 +366,10 @@ export default function SessionsPage() {
           onOpenDetail={(sid, ch) => { setDetailSessionId(sid); setDetailSessionCh(ch) }}
           scopeAll={listScopeAll}
           onScopeAllChange={setListScopeAll}
+          // Pivô para o nível 2. Vai pela URL (e não por estado local) de propósito:
+          // é o mesmo endereço dos deep-links externos, então há UM caminho para o
+          // processo, não dois que podem divergir.
+          onOpenJourney={jid => setSearchParams({ journey: jid })}
         />
       </div>
     </div>

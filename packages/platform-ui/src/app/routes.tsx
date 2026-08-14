@@ -1,5 +1,5 @@
 import React from 'react'
-import { RouteObject, Navigate } from 'react-router-dom'
+import { RouteObject, Navigate, useLocation } from 'react-router-dom'
 import Shell from '@/shell/Shell'
 import LoginPage from '@/auth/LoginPage'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
@@ -45,7 +45,6 @@ import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
 import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
 import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
 import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'
-import AnaliseJourneysPage  from '@/modules/analise/AnaliseJourneysPage'
 import AnaliseQualidadePage from '@/modules/analise/AnaliseQualidadePage'
 import AnaliseClientesPage  from '@/modules/analise/AnaliseClientesPage'
 import CustomerVoicePage    from '@/modules/analise/CustomerVoicePage'
@@ -53,6 +52,14 @@ import AnaliseSurveysPage   from '@/modules/analise/AnaliseSurveysPage'
 import DashboardsPage from '@/modules/dashboards/DashboardsPage'
 import ConfigChannelsIndex from '@/modules/config-channels'
 import DialogFormsPage from '@/modules/dialog-forms/DialogFormsPage'
+
+/** `<Navigate>` que carrega a query string junto. O `Navigate` puro a DESCARTA, e um
+ *  redirect que perde `?journey=…` não erra: ele leva a uma tela plausível (a lista
+ *  de contatos) em vez da pedida — o modo de falha que passa despercebido. */
+function RedirectPreservingQuery({ to }: { to: string }) {
+  const { search } = useLocation()
+  return <Navigate to={`${to}${search}`} replace />
+}
 
 export const routes: RouteObject[] = [
   {
@@ -114,9 +121,13 @@ export const routes: RouteObject[] = [
       { path: 'analise/agents-legacy', element: <AnaliseAgentesPage /> },
       { path: 'analise/pools',     element: <AnalisePoolsPage   /> },
       { path: 'analise/events',    element: <EventsPage         /> },
-      // Analytics/Processos → Journey view (J2): agrupa sessions por root_session_id
-      // (proveniência), drill journey → sessão-membro → transcrição.
-      { path: 'analise/processos', element: <AnaliseJourneysPage /> },
+      // F3.3 — `/analise/processos` foi ABSORVIDO por `/analise/sessions`. O processo
+      // é nível 2 daquela rota (`?journey=…`), alcançado pelo chip da linha de contato;
+      // a lista livre de processos deixou de existir por decisão (D2: processo é pivô,
+      // nunca navegação). O redirect PRESERVA a query — há 4 deep-links vivos
+      // (`HistoricoTab` ×3, `AnaliseSurveysPage`), e perder o `?journey=` os levaria
+      // a uma lista de contatos em vez do processo pedido.
+      { path: 'analise/processos', element: <RedirectPreservingQuery to="/analise/sessions" /> },
       { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
       // Customer History H5 — lente Analytics do Cliente 360 (busca + 360 + histórico).
       { path: 'analise/customers', element: <AnaliseClientesPage /> },

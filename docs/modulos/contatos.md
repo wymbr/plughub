@@ -1,8 +1,8 @@
 # Módulo: Contatos
 
-> Última atualização: 2026-05-25 · Estado: Arc 16
+> Última atualização: 2026-08-14 · Estado: Arc 16 + histórico unificado F3
 
-> Rota UI: `/contacts` | Roles: operator, supervisor, admin, business
+> Rota UI: `/analise/sessions` (`/contacts` é redirect) | Roles: operator, supervisor, admin, business
 
 ## O que é
 
@@ -26,11 +26,42 @@ Sessões standalone não têm `journey_id`; sessões que pertencem a um processo
 
 ## Abas
 
-### Lista
+### Lista — `/analise/sessions` *(reescrita na F3, 2026-08-14)*
 
-Tabela de contatos (ativos e finalizados) com filtros por canal, pool, agente e período. Colunas: identificador do cliente, canal, pool, agente atribuído, status, duração, sentimento médio.
+A **única** lista de contatos da plataforma. Servida por `SessionsPage` + `ListaTab`
+(`modules/contacts/`). Fonte: `analytics-api` → ClickHouse `sessions FINAL`.
 
-Fonte: `analytics-api` → ClickHouse `sessions FINAL`.
+**Colunas (9).** direção · contato (canal + id) · `entrou por → atendido por` · [contato de origem] ·
+iniciado · duração · desfecho (badge de estado + `outcome`) · segmentos · processo.
+
+> **Largura é requisito, não estética.** A 1ª versão levou 11 colunas — as 7 do desenho mais
+> `ended`/`status`/`segments`, mantidas por instinto de mudança mínima — e a tabela passou a exigir
+> scroll horizontal, jogando **`processo` para fora da tela**. Como o chip é o único caminho para a
+> visão 2, "mudança mínima" escondeu justamente a entrega da fase. `ended` saiu (início + duração a
+> dão) e `status` foi fundida em `desfecho`, que é a coluna 6 do desenho.
+
+| Coluna | Fonte | O que não é |
+|---|---|---|
+| **direção** ⇣⇡⚙ | DERIVADA de `spawn_reason` + canal (`contactDirection` em `types.ts`) | não é armazenada, e **não** se chama `origin` — essa chave i18n já significava ANI |
+| **entrou por → atendido por** | `pool_id` (a porta, first-write-wins desde a F1b) e `attended_pool_ids` (pools com segmento) | nunca **um** filtro/coluna chamado "Pool": foi o operador ler um e receber o outro que originou este arco |
+| **duração** | `elapsed_time_ms` — wall-clock do caso, esperas incluídas (D9) | **nunca** `agent_time_ms`, **nunca** Σ segmentos (eles se sobrepõem; a soma não é uma duração) |
+| **processo** | chip `PRC-{journey_id[:4]} · N`, só quando `N > 1` | `journey_id` é a raiz **canônica** (union-find), não `root_session_id` cru |
+
+**Filtros.** período · canal · status · **entrou por** (`entry_pool_id`) · **atendido por** (`pool_id`)
+· agente · evento · tags. Os dois pools compõem por AND — é assim que se pergunta *"entrou no `sac_ia`
+e terminou no humano"*.
+
+**O chip conta o processo INTEIRO, de propósito.** Uma janela que pega 2 de 3 contatos mostra `· 3`.
+O rodapé da tabela nomeia isso, e só aparece quando `meta.window_applied` é verdadeiro **e** há chip na
+página — no drill não há divergência a explicar. O N usa o mesmo predicado de contato do card de
+`/reports/journeys`, para que chip e cabeçalho da visão 2 nunca discordem.
+
+**Clicar no chip abre o processo na MESMA rota** (`?journey=…`, nível 2). Não existe lista livre de
+processos: processo é pivô, nunca navegação (ADR D2). `/analise/processos` redireciona preservando a
+query — havia 4 deep-links vivos para lá.
+
+**Fora, e não voltam:** colunas e filtros ANI/DNIS (permanentemente vazios nos dois canais existentes)
+e o seletor «Inbound / Outbound», que nunca virou parâmetro e portanto não filtrava nada.
 
 #### Toggle "Incluir sessões internas (wrap-up, dispatch)"
 
@@ -109,7 +140,7 @@ Usuários `business` com `operacao: none` veem apenas a aba Lista.
 | `channel-gateway` | Produz `conversations.inbound`, assina Redis pub/sub para WS delivery |
 | `routing-engine` | Produz snapshots de pool no Redis a cada evento de roteamento |
 | `mcp-server-plughub` | Tool `supervisor_state` lê ContextStore e retorna `context_snapshot` |
-| `platform-ui` | `modules/contacts/` — ContactsPage + ListaTab + MonitorTab + AnaliseTab |
+| `platform-ui` | `modules/contacts/` — SessionsPage + ListaTab (+ MonitorTab, AnaliseTab). ⚠️ `ContactsPage.tsx` é **código morto** desde que `/contacts` virou redirect; remoção registrada no `TODO.md` |
 
 ## Eventos Kafka relevantes
 
@@ -124,7 +155,7 @@ Usuários `business` com `operacao: none` veem apenas a aba Lista.
 | Módulo | Relação |
 |---|---|
 | **Agent Assist / Console** | O Monitor exibe as mesmas sessões ativas que o Console atende; o drill-down leva da observação à orquestração (Arc 11) |
-| **Processos** | Journeys agrupam múltiplas sessões; o `journey_id` da sessão liga o contato ao processo monitorado em `/agent-flow/processos` (Arc 10/16) |
+| **Processos (visão 2)** | Desde a F3 é o **nível 2 desta rota** (`/analise/sessions?journey=…`), alcançado pelo chip da linha — não é página nem item de menu. `/agent-flow/processos` é outra coisa: o KPI dashboard de instâncias de workflow, que permanece |
 
 ## Referências
 

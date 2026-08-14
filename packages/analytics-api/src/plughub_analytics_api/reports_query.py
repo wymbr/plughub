@@ -472,7 +472,16 @@ async def query_sessions_report(
     channel:                str | None       = None,
     outcome:                str | None       = None,
     close_reason:           str | None       = None,
+    # `pool_id` é **"atendido por"**: subconsulta em `segments` (qualquer segmento
+    # daquele pool). O nome não diz isso e não vai passar a dizer nesta fase — o que
+    # muda é que ele deixa de ser o ÚNICO, e a tela nomeia os dois (D12).
     pool_id:                str | None       = None,
+    # F3.2 — **"entrou por"**: a PORTA. Igualdade sobre `sessions.pool_id`, que desde
+    # a F1b é first-write-wins e significa UMA coisa (o JOIN `_pool` de fallback foi
+    # podado junto). É parâmetro NOVO de propósito, não um modo do `pool_id`: as duas
+    # perguntas são diferentes, e um enum faria a mesma chave significar duas coisas —
+    # exatamente o defeito que este arco existe para fechar, um nível acima.
+    entry_pool_id:          str | None       = None,
     session_id:             str | None       = None,
     root_session_id:        str | None       = None,
     # Journey T5: sessões que NASCERAM desta journey mas pertencem a OUTRA — as arestas
@@ -514,6 +523,7 @@ async def query_sessions_report(
             supervised_agent_types, page, page_size,
             ani, dnis, status, origin, root_session_id, spawned_from_root,
             internal_pools, scope, origin_session_id,
+            entry_pool_id=entry_pool_id,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -548,6 +558,7 @@ def _fetch_sessions(
     internal_pools: "frozenset[str] | None" = None,
     scope: str = "contacts",
     origin_session_id: str | None = None,
+    entry_pool_id: str | None = None,
 ) -> dict:
     conditions = ["s.tenant_id = {tenant_id:String}"]
     # S1 — o fetch das filhas de UMA sessão IGNORA a janela, como o `_fetch_journeys`
@@ -671,6 +682,20 @@ def _fetch_sessions(
             " WHERE tenant_id = {tenant_id:String} AND pool_id = {pool_id:String})"
         )
         params["pool_id"] = pool_id
+
+    # F3.2 — `entrou por` (a PORTA), sobre a coluna da PRÓPRIA sessão.
+    #
+    # Os dois filtros são compostos por AND e isso é desejado: um contato que entrou
+    # no `sac_ia` e terminou no humano casa em `entry_pool_id=sac_ia` E em
+    # `pool_id=retencao_humano`, e é justamente essa diferença que a F1b tornou
+    # visível (medido: 12 contatos de cliente webchat que o filtro único escondia).
+    #
+    # ⚠️ NÃO reusar o `_session_scope_clause` aqui: aquele é o predicado de ABAC
+    # (união de três razões para a sessão ser minha) e é ampliador; este é o filtro
+    # que o operador pediu, e tem de ser estrito.
+    if entry_pool_id:
+        conditions.append("s.pool_id = {entry_pool_id:String}")
+        params["entry_pool_id"] = entry_pool_id
 
     # Pool-scope access filter (Arc 7c) — predicado ÚNICO, ver _session_scope_clause.
     # (Era inline aqui e em mais 3 endpoints; virou função na F1b porque o carimbo
@@ -969,8 +994,15 @@ def _fetch_sessions(
                 LIMIT {page_size} OFFSET {offset}
             """, parameters=params)
 
+    rows = _mark_internal_rows(_rows_to_dicts(result), internal_pools)
+    # F3.3 — o chip de processo. Pós-passe, bounded à página. Ver o docstring.
+    _attach_session_journey_chip(
+        client, db, tenant_id, rows, internal_pools, accessible_pools, origin,
+    )
+    # F3.1 — o outro lado do par `entrou por → atendido por`. Ver o docstring.
+    _attach_session_attended_pools(client, db, tenant_id, rows)
     return {
-        "data": _mark_internal_rows(_rows_to_dicts(result), internal_pools),
+        "data": rows,
         "meta": _sessions_meta(
             page, page_size, total, total_contacts, since, until, scope,
             internal_pools_known=len(internal_pools or ()),
@@ -979,6 +1011,144 @@ def _fetch_sessions(
             window_applied=not (root_session_id or origin_session_id),
         ),
     }
+
+
+def _attach_session_attended_pools(
+    client: Any, db: str, tenant_id: str, rows: list[dict],
+) -> None:
+    """F3.1 — anexa `attended_pool_ids` (pools que TRABALHARAM no contato) à linha.
+
+    A célula da lista é o PAR `entrou por → atendido por`, e sem este campo ela teria
+    só um lado: `s.pool_id` (a porta). Publicar um pool só, sob um cabeçalho que
+    promete dois, é a confusão que este arco existe para desfazer — um nível abaixo.
+
+    **Pós-passe, não JOIN.** A query principal já tem 4 JOINs e um histórico de dois
+    modos de falha caros (`ILLEGAL_AGGREGATION` por alias sombreando coluna, e a
+    degradação por tiers que respondia 200 pelo tier 3 com colunas ausentes). Um
+    `groupUniqArray` a mais ali arriscaria os dois; aqui, a falha derruba apenas esta
+    célula — e é logada, porque "sem seta" e "não consegui perguntar" não podem ficar
+    indistinguíveis na tela.
+
+    A lista vem ORDENADA por primeiro segmento (`argMin`/`min(started_at)` não cabem em
+    `groupUniqArray`, então ordenamos pelo par): a UI mostra o ÚLTIMO como destino da
+    seta, que é quem de fato atendeu por último. Sessão sem segmento (abandono antes de
+    qualquer agente entrar — 5 no ambiente) fica com lista vazia: não há atendimento, e
+    a seta não deve aparecer.
+    """
+    for r in rows:
+        r["attended_pool_ids"] = []
+    sids = sorted({r["session_id"] for r in rows if r.get("session_id")})
+    if not sids:
+        return
+    id_list = ", ".join(f"'{s}'" for s in sids)
+    sql = f"""
+        SELECT
+            session_id,
+            arrayMap(x -> tupleElement(x, 2), arraySort(groupUniqArray((first_at, pool_id)))) AS pools
+        FROM (
+            SELECT session_id, pool_id, min(started_at) AS first_at
+            FROM {db}.segments FINAL
+            WHERE tenant_id = {{tenant_id:String}}
+              AND session_id IN ({id_list})
+              AND pool_id != ''
+            GROUP BY session_id, pool_id
+        )
+        GROUP BY session_id
+    """
+    try:
+        res = client.query(sql, parameters={"tenant_id": tenant_id})
+    except Exception as exc:
+        logger.warning(
+            "attended-pools aggregation failed tenant=%s (a lista mostrará só o pool "
+            "de ENTRADA, sem a seta — não é 'ninguém atendeu'): %s", tenant_id, exc,
+        )
+        return
+    by_sid = {row[0]: list(row[1] or []) for row in res.result_rows}
+    for r in rows:
+        r["attended_pool_ids"] = by_sid.get(r.get("session_id"), [])
+
+
+def _attach_session_journey_chip(
+    client: Any, db: str, tenant_id: str, rows: list[dict],
+    internal_pools: "frozenset[str] | None",
+    accessible_pools: list[str] | None,
+    origin: "str | list[str]" = "live",
+) -> None:
+    """F3.3 — anexa `journey_id` (raiz CANÔNICA) + `journey_session_count` à linha.
+
+    É o dado do chip `PRC-{root[:4]} · N` da visão 1. Duas decisões estão aqui, e
+    nenhuma delas é implementável no front:
+
+    **1. O N é do PROCESSO INTEIRO, não da fatia filtrada.** A página só contém as
+    linhas que passaram no período/canal/pool; contar ali daria o tamanho do recorte,
+    e o processo não encolhe porque alguém olhou uma semana dele. Por isso esta query
+    NÃO herda o `WHERE` da principal: só tenant + escopo de contato + ABAC + origem.
+    A consequência (janela que pega 2 de 3 mostra `·3`) é deliberada e a tela carrega
+    o rótulo que a nomeia — condicionado a `meta.window_applied`, que já existe.
+
+    **2. O rótulo é a raiz CANÔNICA (union-find), não `root_session_id` cru.** Depois
+    de um `journey_merge` os membros absorvidos guardam a raiz antiga; sem resolver,
+    duas linhas do MESMO processo exibiriam chips com códigos diferentes — que é
+    precisamente o sintoma que o modelo de journey existe para não produzir.
+
+    **Por que o N é "contatos", com o mesmo predicado do card.** `_apply_contact_scope`
+    exclui pool interno (wrap-up, dispatch) e é o que `_fetch_journeys.session_count`
+    aplica. Ter aqui um segundo predicado faria o chip dizer `·2` e o cabeçalho da
+    visão 2, ao pivotar dele, dizer `4` — duas fontes para o mesmo número, no mesmo
+    clique. As "etapas internas" por `trigger` (`aprovacao_credito`, `limite_entrega`)
+    entram nos dois, e é a visão 2 que as separa em `acessos do cliente × contatos`.
+
+    **Falha ⇒ `journey_session_count: None`, nunca `1`.** Ausência não desenha chip;
+    um `1` inventado desenharia a afirmação "este contato não pertence a processo
+    nenhum", que é a mentira tranquila que a postura de engenharia proíbe. Por isso
+    a falha também é LOGADA — sem log, chip ausente e processo-de-um ficam
+    indistinguíveis na tela.
+    """
+    for r in rows:
+        r["journey_id"] = r.get("root_session_id") or None
+        r["journey_session_count"] = None
+    roots = sorted({r["root_session_id"] for r in rows if r.get("root_session_id")})
+    if not roots:
+        return
+
+    resolved = _journey_resolved_map(client, db, tenant_id)
+    for r in rows:
+        _rt = r.get("root_session_id")
+        if _rt:
+            r["journey_id"] = resolved.get(_rt, _rt)
+
+    jexpr    = _journey_group_expr(resolved)
+    id_list  = ", ".join(f"'{j}'" for j in sorted({resolved.get(rt, rt) for rt in roots}))
+    conds: list[str] = ["s.tenant_id = {tenant_id:String}"]
+    _apply_contact_scope(conds, internal_pools, alias="s.")
+    _apply_origin_scope(conds, origin, alias="s.")
+    _acc = _session_scope_clause(db, accessible_pools)
+    if _acc:
+        conds.append(_acc)
+    # Alias `jid`, não `journey_id`: `sessions` TEM coluna com esse nome (o cache
+    # dormente da raiz canônica) e alias que sombreia coluna real já derrubou query
+    # inteira neste projeto (ILLEGAL_AGGREGATION, code 184).
+    sql = f"""
+        SELECT {jexpr} AS jid, count() AS n
+        FROM {db}.sessions AS s FINAL
+        WHERE {" AND ".join(conds)}
+        GROUP BY jid
+        HAVING jid IN ({id_list})
+    """
+    try:
+        res = client.query(sql, parameters={"tenant_id": tenant_id})
+    except Exception as exc:
+        logger.warning(
+            "journey chip aggregation failed tenant=%s (a lista de contatos sairá SEM "
+            "chip de processo em todas as linhas — não é 'nenhum contato pertence a "
+            "processo'): %s", tenant_id, exc,
+        )
+        return
+    by_id = {row[0]: int(row[1]) for row in res.result_rows}
+    for r in rows:
+        _jid = r.get("journey_id")
+        if _jid:
+            r["journey_session_count"] = by_id.get(_jid)
 
 
 # ─── /reports/journeys (Journey J2 — proveniência-only) ───────────────────────

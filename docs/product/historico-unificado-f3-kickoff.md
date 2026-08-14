@@ -1,5 +1,20 @@
 # Kickoff — Histórico unificado, Fase F3: visão 1 (lista de contatos)
 
+> # ✅ FASE CONCLUÍDA EM 2026-08-14 — este arquivo é histórico.
+> As-built no `CHANGELOG.md`; estado das fases em `TODO.md`. **Não reexecutar.**
+>
+> **Os três 📏 deste arquivo se resolveram assim:** o backend de fato já devolvia os três campos
+> (contrato conferido por `curl`, não por `grep`); o `pool_id` existente era mesmo *"atendido por"* e
+> faltava o filtro de entrada; e o desempate `sys:` **não foi codificado** — 1 linha em 420, já
+> classificada como interna pelo primeiro ramo da regra.
+>
+> **E as três correções que ele próprio pedia que fossem medidas foram para o outro lado:**
+> `contacts.processes` **não** podia ser deletado (rota VIVA o consome — a afirmação "consumido só
+> por ela" era falsa); havia **4 deep-links vivos** para `/analise/processos?journey=`; e o
+> `Navigate` do redirect descartaria a query. Além disso, "não há trabalho de backend previsto nesta
+> fase" estava errado por **três** fatias — o chip e o par `entrou por → atendido por` não são
+> computáveis no front.
+
 > Cole isto no início da sessão. **Uma sessão = F3.** Esta é a **primeira fase de UI** do arco —
 > as anteriores foram todas backend.
 > Desenho: [`historico-unificado-telas-design.md`](historico-unificado-telas-design.md) §1 ·

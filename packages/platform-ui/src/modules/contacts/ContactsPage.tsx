@@ -210,7 +210,10 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
     setFilters(DEFAULT_FILTERS)
   }
 
-  const hasExtra = filters.poolId || filters.agentId || filters.ani || filters.dnis
+  // F3 — ANI/DNIS saíram do módulo inteiro (permanentemente vazios nos dois canais
+  // existentes; ver o desenho §5). Esta página já é código morto (nenhuma rota a
+  // monta desde que `/contacts` virou redirect), e sobrevive aqui só para compilar.
+  const hasExtra = filters.poolId || filters.agentId
     || filters.insightCategory || filters.insightTags
 
   const hasAny = filters.sessionIdSearch || filters.channel || filters.outcome || hasExtra
@@ -258,7 +261,7 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
           {showExtra ? '▲' : '▼'} {t('filter.moreFilters')}
           {hasExtra && (
             <span className="ml-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-primary text-white text-2xs font-bold">
-              {[filters.poolId, filters.agentId, filters.ani, filters.dnis, filters.insightCategory, filters.insightTags].filter(Boolean).length}
+              {[filters.poolId, filters.agentId, filters.insightCategory, filters.insightTags].filter(Boolean).length}
             </span>
           )}
         </button>
@@ -282,8 +285,6 @@ function FilterBar({ filters, setFilters, loading, totalLabel }: FilterBarProps)
           {([
             { key: 'poolId',          label: t('filter.pool'),          placeholder: 'ex: sac_ia',       width: 'w-36' },
             { key: 'agentId',         label: t('filter.agent'),        placeholder: 'participant_id…',   width: 'w-44' },
-            { key: 'ani',             label: t('filter.ani'),   placeholder: '+5511…',            width: 'w-36' },
-            { key: 'dnis',            label: t('filter.dnis'), placeholder: '+5511…',            width: 'w-36' },
             { key: 'insightCategory', label: t('filter.eventCategory'),        placeholder: 'categoria…',        width: 'w-40' },
             { key: 'insightTags',     label: t('filter.tags'),          placeholder: 'tag1,tag2',         width: 'w-36' },
           ] as { key: keyof ContactFilters; label: string; placeholder: string; width: string }[]).map(f => (

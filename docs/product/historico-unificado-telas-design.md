@@ -52,7 +52,7 @@ inventar mecanismo.
 
 | # | Coluna | Fonte | Observação |
 |---|---|---|---|
-| 1 | direção | **derivada** de `spawn_reason` + canal (D8) | `NULL`→inbound ⇣ · `collect`→outbound ⇡ · `trigger`/`delegate`→interno ⚙. Desempate: `customer_id` com prefixo `sys:` |
+| 1 | direção | **derivada** de `spawn_reason` + canal (D8) | `collect`→outbound ⇡ · `trigger`/`delegate`→interno ⚙ · ausente→ o **canal** desempata (`webhook`→interno, demais→inbound ⇣). Valor desconhecido → `—`, nunca um balde plausível |
 | 2 | contato | `session_id` (últimos 10) + `channel` | sem endereço — ver §5 |
 | 3 | entrou por → atendido por | `pool_id` (entrada) e `segments.pool_id` | uma seta quando houve handoff; um nome só quando não houve |
 | 4 | início | `opened_at` | |
@@ -66,9 +66,22 @@ nos dois canais existentes (achados 1 e 3). Mantê-las é publicar duas colunas 
 
 ### O chip
 
+> **Construído em 2026-08-14 (F3.3).** O que segue é o desenho; o as-built está no `CHANGELOG.md`.
+> Duas coisas mudaram na implementação: o chip é rotulado pela raiz **canônica** (`journey_id`,
+> union-find), não por `root_session_id` cru — na própria amostra de referência os dois **diferem**,
+> e usar o cru daria duas etiquetas para o mesmo processo; e o N não é computável no front (a página
+> só tem a fatia filtrada), então virou pós-passe no backend.
+
 - **Conta o processo inteiro, não a fatia filtrada.** Janela que pega 2 de 3 contatos mostra `· 3`.
-  Isso vai parecer defeito, e por isso o rodapé da tabela carrega o rótulo explícito. *(Decisão aberta #2
-  do ADR: o texto exato ainda não está escrito.)*
+  Isso vai parecer defeito, e por isso o rodapé da tabela carrega o rótulo explícito.
+  **Decisão aberta #2 — FECHADA (2026-08-14):** o rodapé é **condicional em `meta.window_applied`**
+  (no drill a janela não incide, não há divergência a explicar, e a frase seria ruído permanente) **e**
+  em haver chip na página. Texto: *"O número no chip conta o processo inteiro — o período recorta os
+  contatos listados, não o tamanho do processo."* / *"The chip counts the whole process — the date
+  range narrows the contacts listed, not the size of the process."*
+- **O N conta CONTATOS, com o mesmo predicado do card** (`_apply_contact_scope`, idêntico a
+  `_fetch_journeys.session_count`). Predicado próprio faria o chip dizer `·2` e o cabeçalho da visão
+  2, no clique seguinte, dizer `4`.
 - **Contato de processo único não recebe chip** — não há para onde pivotar, e é o caso majoritário.
 - Computado sobre a **página retornada** (`GROUP BY root_session_id` sobre ~200 linhas), no mesmo passe que
   já resolve `_journey_resolved_map`.
@@ -245,6 +258,22 @@ histórico devolvendo menos contatos do que existem, calada.
 **Consequência recursiva:** a própria tabela pool×canal (M3) foi computada sobre a coluna que mente.
 `limite_processo` aparece nela com 1 sessão, tendo sido a porta de entrada de 20. O conserto não melhora só
 o filtro — corrige a **atribuição de volume por pool** em todo relatório que agrupa por `sessions.pool_id`.
+
+### O desempate `sys:` — medido em 2026-08-14, e por isso NÃO codificado
+
+A coluna 1 previa `customer_id` com prefixo `sys:` como critério auxiliar. Medição antes de escrever
+a regra: **1 linha em 420**, e é `channel=webhook` + `spawn_reason=trigger` + `pool=limite_entrega`.
+
+Ela já é classificada como **interna** pelo primeiro ramo (`trigger`), antes de o canal ser
+consultado — e o canal a classificaria igual. Naquele ambiente `sys:` não é discriminador
+independente: é **consequência** de a sessão ter nascido de máquina. Implementá-lo seria uma terceira
+fonte para um veredicto que duas já dão — no arco cuja tese é fonte única. Reabrir só com população
+que o exercite.
+
+Medido no mesmo passe: `spawn_reason` assume **dois** valores no tenant (`NULL` 349 · `trigger` 71).
+Nem `collect` nem `delegate`. O ramo *outbound* da coluna existe no código porque é o domínio, e
+**não é verificável na tela** — pelo mesmo motivo que a nota da §2 já registra para a linha outbound
+da visão 2.
 
 ### Por que o DNIS sai e o canal fica
 

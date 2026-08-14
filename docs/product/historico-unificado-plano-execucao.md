@@ -66,7 +66,7 @@ descobri-los renderizando.
 | **S0** | medir/validar/registrar F0+F1 · fechar decisão aberta #1 | — | ½ sessão |
 | ~~**F1b**~~ | ~~`entrou por`: first-write-wins em `sessions.pool_id`~~ | ✅ **2026-08-14** | 1 sessão, como previsto |
 | **F2** | `root_session_id` em `/reports/segments` + achado 6 (ABAC) | independente | ½ sessão |
-| **F3** | visão 1 — lista de contatos, chip, direção | F1b | 1–2 sessões |
+| ~~**F3**~~ | ~~visão 1 — lista de contatos, chip, direção~~ | ✅ **2026-08-14** | 1 sessão *(+3 fatias de backend não previstas)* |
 | **F4** | visão 2 — pivô, lente A/B, internas dobradas | F2, F3 | 2 sessões |
 | **F5** | `ContextStorePersister` | nenhuma | fase própria, adiável |
 | — | `journey_merge` no intake de portabilidade | — | fatia pequena, **fora do caminho crítico** |
@@ -309,7 +309,31 @@ precisa ver.
 
 ---
 
-### F3 — Visão 1 (lista de contatos)
+### F3 — ✅ CONCLUÍDA 2026-08-14
+
+As-built em `CHANGELOG.md`. Contra as previsões escritas antes de rodar:
+
+| Medição | Previsto | Medido | |
+|---|---|---|---|
+| contrato do endpoint | 4 campos presentes | idem (`elapsed_time_ms` 12183) | ✅ |
+| `spawn_reason` distintos | 2 linhas (`null`, `trigger`), ≈407 | `\N` 349 · `trigger` 71 = **420** | ✅ |
+| `customer_id LIKE 'sys:%'` | **0** | **1** | ❌ *(previsão errada)* |
+| gate F3 (4 ramos) | OK, N do chip = 4 | OK, N = 4 numa página de 1 linha | ✅ |
+| paridade i18n | OK | OK, 692 chaves | ✅ |
+
+**A previsão errada não mudou a decisão, e vale registrar por quê.** A linha `sys:` é
+`webhook`+`trigger`+`limite_entrega` — já classificada como interna pelo **primeiro** ramo da regra
+de direção. `sys:` ali é consequência de nascer de máquina, não critério independente; o desempate
+**não foi codificado**. Reabrir só com população que o exercite.
+
+**Três fatias de backend que esta seção não previa** (`entry_pool_id`, o chip, os pools de
+atendimento) — detalhe e razão no CHANGELOG. E **três imprecisões do kickoff**, corrigidas por
+medição: `contacts.processes` é consumido por rota VIVA (não podia sair), havia 4 deep-links para
+`/analise/processos?journey=`, e `Navigate` puro descartaria a query do redirect.
+
+---
+
+### F3 — Visão 1 (lista de contatos) — desenho original, para referência
 
 > **Kickoff pronto:** [`historico-unificado-f3-kickoff.md`](historico-unificado-f3-kickoff.md), com o
 > inventário de frontend levantado em 2026-08-14 — que **corrigiu três imprecisões desta seção**:

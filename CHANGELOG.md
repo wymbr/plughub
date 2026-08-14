@@ -2,6 +2,95 @@
 
 ---
 
+## Histórico unificado F3 — visão 1: a lista de contatos ✅ (2026-08-14)
+
+Primeira fase de **UI** do arco (F0/F1/F1b/F2 foram todas backend). `/analise/sessions` passa a ser a
+única lista de contatos: ganha direção do acesso, os dois filtros de pool com nomes distintos, o chip
+de processo, e absorve `/analise/processos`. Desenho em `historico-unificado-telas-design.md` §1;
+ADR D2/D3/D8/D9/D12.
+
+### O kickoff dizia "não há trabalho de backend previsto nesta fase". Havia três
+
+Nenhum deles é implementável no front, e os três só apareceram ao ler o código:
+
+1. **`entry_pool_id`** — o `pool_id` de `/reports/sessions` **já é** *"atendido por"* (subconsulta em
+   `segments`); faltava *"entrou por"*, igualdade sobre `s.pool_id`, que desde a F1b é first-write-wins
+   e tem UMA fonte. Parâmetro NOVO de propósito, não um modo do `pool_id`: um enum faria a mesma chave
+   significar duas coisas — o defeito que este arco fecha, um nível acima.
+2. **`journey_id` + `journey_session_count`** (`_attach_session_journey_chip`) — o N do chip conta o
+   processo **inteiro**, e a página só tem a fatia filtrada. O rótulo é a raiz **canônica**
+   (union-find), não `root_session_id` cru.
+3. **`attended_pool_ids`** (`_attach_session_attended_pools`) — sem ele a célula
+   `entrou por → atendido por` teria só um lado, sob um cabeçalho que promete dois.
+
+Os três (2 e 3) são **pós-passes**, nunca JOIN novo na query principal: ela já tem 4 JOINs e um
+histórico de dois modos de falha caros (`ILLEGAL_AGGREGATION` por alias sombreando coluna real, e a
+degradação por tiers que respondia 200 pelo tier 3 com colunas ausentes). Assim a falha derruba uma
+célula, não a query — e é **logada**, porque "sem chip" e "não consegui contar" não podem ficar
+indistinguíveis na tela. Por isso `journey_session_count` ausente é `null`, nunca `1`: um `1`
+inventado afirmaria *"este contato não pertence a processo nenhum"*.
+
+### Decisão aberta #2 fechada — o rodapé do chip
+
+O N ignora o filtro de período, e isso **vai parecer defeito**. O rótulo é
+**condicional em `meta.window_applied`**: no drill a janela não incide, não há divergência a explicar,
+e a frase seria ruído fixo. Texto (dois locales): *"O número no chip conta o processo inteiro — o
+período recorta os contatos listados, não o tamanho do processo."* Também condicional a haver chip na
+página: explicar um elemento ausente da tela é pior do que não explicar.
+
+O **N conta contatos com o mesmo predicado do card** (`_apply_contact_scope`, igual a
+`_fetch_journeys.session_count`). Um segundo predicado faria o chip dizer `·2` e o cabeçalho da visão
+2, no clique seguinte, dizer `4` — duas fontes para o mesmo número, no mesmo gesto.
+
+### O que saiu, e por quê
+
+- **ANI/DNIS** (colunas, filtros e chaves i18n nos dois locales, `ContactFilters`/`ContactRow`):
+  permanentemente vazias nos dois canais existentes. **Não voltam.**
+- **`AnaliseProcessosPage.tsx` e `OriginSelector.tsx`**: código morto confirmado (zero `import`).
+- **«Processos» do menu lateral e do breadcrumb**: processo é **pivô**, não navegação livre (D2). O
+  L1 (lista de journeys) deixa de ser alcançável; o componente sobrevive porque a F4 o reenquadra.
+- **O seletor «Inbound / Outbound»**: não filtrava nada — `sessionType` nunca virou parâmetro.
+  Ao lado de uma coluna de direção que diz a verdade, um controle que mente no mesmo eixo é pior que
+  sua ausência. Filtro real por direção → `TODO.md`.
+
+### Três correções ao kickoff, medidas
+
+- **`contacts.processes` NÃO podia ser deletado.** O kickoff o dava como "consumido só pela página
+  morta"; `ProcessosPage` (`/flow/processos`, rota **viva**) e `MonitorTab` consomem ~40 chaves dele.
+- **Havia 4 deep-links vivos** para `/analise/processos?journey=` (`HistoricoTab` ×3,
+  `AnaliseSurveysPage`). Reapontados; e o redirect é `RedirectPreservingQuery`, porque `Navigate` puro
+  **descarta a query** — perder o `?journey=` não daria erro, daria a tela plausível errada.
+- **`columns.origin` já significava ANI.** A coluna nova é `columns.direction`.
+
+### O desempate `sys:` NÃO foi codificado — e a medição é o motivo
+
+O desenho previa `customer_id` com prefixo `sys:` como critério auxiliar da direção. Medido:
+**1 linha em 420**, e ela é `channel=webhook` + `spawn_reason=trigger` + `pool=limite_entrega` — já
+classificada como interna pelo **primeiro** ramo da regra, antes de o canal ser consultado. Naquele
+ambiente `sys:` não é discriminador independente: é consequência de a sessão ter nascido de máquina.
+Codificá-lo seria uma terceira fonte para um veredicto que duas já dão. Reabrir só com população que
+o exercite.
+
+Medido junto: `spawn_reason` assume **dois** valores no tenant (`NULL` 349 · `trigger` 71); **nem
+`collect` nem `delegate`**. O ramo *outbound* da coluna existe no código (é o domínio) e **não é
+verificável na tela** — registrado, não descoberto na revisão.
+
+### Gates
+
+- `infra/test/probe_f3_contact_list_contract.sh` — 4 ramos, **OK**. O decisivo é o **B**: pede UMA
+  sessão (página de 1 linha) de um processo de 4 e exige `journey_session_count = 4`; uma contagem
+  sobre a página devolveria `1`. **C** compara chip × card (fonte única). **D** prova que
+  `entry_pool_id` filtra (total 266 → 0 com pool inexistente) — sem essa testemunha, um parâmetro
+  ignorado passaria, porque "devolveu tudo" se parece com "não havia o que filtrar".
+  Achado do próprio gate: na amostra, `root_session_id` (`e2764d9b…`) **difere** de `journey_id`
+  (`d62d7121…`) — a resolução canônica está exercitada por dado real, não só por argumento.
+- `infra/test/probe_i18n_contacts_parity.sh` — **OK**, 692 chaves idênticas nos dois locales. Reprova
+  por chave em um só locale, por chave nova da F3 ausente, e por **ressurreição** de `filter.ani`/
+  `columns.origin`. Tem piso de leitor (<100 chaves ⇒ INCONCLUSIVO): dois arquivos que o `jq` não
+  conseguisse ler seriam iguais entre si e o probe passaria verde sem ter medido nada.
+
+---
+
 ## `window_applied` em `/reports/journeys` e `/reports/sessions` — e o drill de processo que vinha VAZIO ✅ (2026-08-14)
 
 Fechamento da dívida que a F2 registrou (*"`/reports/journeys` tem a MESMA mentira e segue sem

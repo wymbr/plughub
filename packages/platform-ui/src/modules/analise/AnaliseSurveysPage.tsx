@@ -324,7 +324,7 @@ export default function AnaliseSurveysPage() {
           t={t}
           row={selected}
           onClose={() => setSelected(null)}
-          onOpenSession={sid => navigate(`/analise/processos?journey=${encodeURIComponent(sid)}`)}
+          onOpenSession={sid => navigate(`/analise/sessions?journey=${encodeURIComponent(sid)}`)}
         />
       )}
     </div>

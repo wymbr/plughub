@@ -190,17 +190,16 @@ export function AnaliseTab({ tenantId, filters }: Props) {
       page:      '1',
       page_size: String(FETCH_LIMIT),
     })
-    const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId,
-            agentId, ani, dnis, insightCategory, insightTags } = filters
+    const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId, entryPoolId,
+            agentId, insightCategory, insightTags } = filters
     if (fromDt)          sParams.set('from_dt',          fromDt + 'T00:00:00')
     if (toDt)            sParams.set('to_dt',            toDt   + 'T23:59:59')
     if (sessionIdSearch) sParams.set('session_id',       sessionIdSearch)
     if (channel)         sParams.set('channel',          channel)
     if (outcome)         sParams.set('outcome',          outcome)
     if (poolId)          sParams.set('pool_id',          poolId)
+    if (entryPoolId)     sParams.set('entry_pool_id',    entryPoolId)
     if (agentId)         sParams.set('agent_id',         agentId)
-    if (ani)             sParams.set('ani',              ani)
-    if (dnis)            sParams.set('dnis',             dnis)
     if (insightCategory) sParams.set('insight_category', insightCategory)
     if (insightTags)     sParams.set('insight_tags',     insightTags)
 

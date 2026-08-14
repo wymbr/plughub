@@ -261,7 +261,77 @@ um item, perguntar o que ele DESBLOQUEIA.**
 
 ---
 
-## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ + F1b ✅ + F2 ✅** — restam F3, F4, F5)*
+## Volume de sessões inexplicado — +167 contatos numa execução de e2e *(observado 2026-08-14, não medido)*
+
+**Observação, não diagnóstico.** Duas leituras de `/analise/sessions` com **a mesma janela**
+(07/08→14/08), **mesmo escopo** (`contacts`, toggle desligado) e **o mesmo build**, separadas por uma
+execução de e2e:
+
+| | `meta.total_contacts` |
+|---|---|
+| antes do e2e | **118** (3 páginas) |
+| depois do e2e | **285** (6 páginas) |
+
+O e2e deveria criar **uma** sessão com 5 segmentos — no máximo ~10 sessões somando as internas.
+Apareceram **+167 contatos**. Ou a suíte rodou muito mais do que um cenário, ou algo produz contato
+sozinho. Não há dado para escolher, e as duas explicações têm consequências opostas (uma é operação
+normal, a outra contamina toda contagem, TMA e atribuição por pool do ambiente de demo).
+
+**Primeiro corte** — quem são, por minuto de abertura e por pool/canal:
+
+```
+SELECT toStartOfMinute(opened_at) AS m, pool_id, channel, count()
+FROM plughub_demo.sessions FINAL
+WHERE tenant_id='tenant_demo' AND opened_at >= '2026-08-14 18:00:00'
+GROUP BY m, pool_id, channel ORDER BY m DESC LIMIT 40
+```
+
+Se concentrarem num punhado de minutos e num pool de teste, é a suíte e o item morre. Se estiverem
+espalhados no tempo, há produtor ativo — e aí o alvo é *quem* publica `conversations.inbound` sem
+contato real. ⚠️ Conferir também `origin`: seed que escreve `origin='live'` já é achado conhecido
+(`telas-design` §5) e inflaria exatamente esta contagem.
+
+---
+
+## Segmento que nunca fecha — `participant_left` não publicado na saída por SUPERAÇÃO *(diagnosticado 2026-08-14, não consertado)*
+
+Sintoma na tela: um contato **encerrado** exibe segmento com `live` + `join`, e o cabeçalho diz
+`1 active`. A UI está honesta — `SegmentList.tsx:96` deriva `live` de `ended_at === null`.
+
+**Impacto, e por que não é cosmético:** `agent_time_ms` filtra `duration_ms IS NOT NULL`, então
+segmento que nunca fecha fica **fora** do tempo de agente; o `join` oferece entrar numa conferência
+já destruída; e o contador de ativos mente. Se a espera em fila deve contar como tempo de agente, ela
+está sumindo dos agregados; se não deve, então `role='queue'` não deveria ser segmento de agente. As
+duas leituras não podem estar certas ao mesmo tempo — decidir isso faz parte do conserto.
+
+**Cadeia medida (`tenant_demo`, sessão `61dd213c…`):**
+
+| Passo | Resultado |
+|---|---|
+| escopo — segmentos abertos em sessão FECHADA, por papel | `primary` 5/597 · `queue` 2/11 · `specialist` 2/68 ⇒ **9 em 676 (1,3%)** |
+| `queue` no tenant inteiro | **14 fechados**, 2 abertos ⇒ o caminho normal FUNCIONA |
+| os 9, nomeados | **9 sessões distintas**, `close_reason` variado (`flow_complete` ×6, `agent_hangup` ×2, `customer_abandon` ×1), 2 canais, 6 skills, 5 dias |
+| `segments` **sem `FINAL`** | 1 versão por `segment_id` ⇒ **inconclusivo** (merge pode ter comido a anterior) |
+| `participation_intervals` | fila com `left_at = ∅` ⇒ **o evento nunca foi publicado** |
+
+**Descartado — não redescobrir:** (a) *"a fila nunca fecha"* — fecha em 14 de 16; (b) *"é específico
+do papel `queue`"* — `primary` e `specialist` também têm casos; (c) *"corrida de ordenação entre
+tópicos"* — `segments` é escrita pelo par `participant_joined`/`participant_left` do **mesmo** tópico
+(`clickhouse.py:376`), não por dois; (d) *"sobrescrita RMT"* — não sustentada: se a linha nunca
+recebeu o rewrite E o evento também falta em `participation_intervals`, o fato não existiu.
+
+**Diagnóstico:** o participante de fila nasce da SAÍDA do agente anterior (`sac_ia` sai
+`16:09:28.912`, fila entra `16:09:28.965`) e desaparece quando o humano assume (`16:09:41`) — some
+por **superação**, não por término negociado, e esse caminho não publica `participant_left`.
+
+**Onde mexer:** produtor do `conversations.participants` (orchestrator-bridge / routing na alocação
+que tira o contato da fila). ⚠️ Toca mecânica de conferência ⇒ pelo `CLAUDE.md`, exige atualizar
+`docs/guias/conference-mechanics.md` § Histórico de Problemas e Correções **antes** de considerar
+concluído. Gate precisa de testemunha: os 14 que fecham têm de continuar fechando.
+
+---
+
+## Ler um processo = ver seus CONTATOS em sequência, num lugar só *(ADR fechado 2026-08-12; **F0 ✅ + F1 ✅ + F1b ✅ + F2 ✅ + F3 ✅** — restam F4, F5)*
 
 > ⚠️ **Cabeçalho corrigido em 2026-08-14.** Dizia *"nada implementado"*, e F0 (`774b257`) e F1
 > (`43ab761`) estavam commitadas desde 12-13/08, sem entrada no `CHANGELOG` e sem nada aqui. A sessão
@@ -336,14 +406,36 @@ trocar a ordem custa zero.
   `probe_segments_journey_window` da F2 usa exatamente esse comportamento como **testemunha** de que
   a janela funciona — mudá-lo derrubaria o discriminador de outro gate. Item próprio: decidir a
   isenção e trocar a testemunha daquele probe na mesma fatia, nunca só a primeira metade.
-- **F3** · visão 1 (contatos + chip de processo + direção).
+- ~~**F3** · visão 1 (contatos + chip de processo + direção)~~ ✅ **2026-08-14**. As-built no
+  `CHANGELOG.md`; gates `probe_f3_contact_list_contract.sh` (4 ramos) e
+  `probe_i18n_contacts_parity.sh` (692 chaves). **Três fatias de BACKEND que o kickoff não previa**
+  (`entry_pool_id`; `journey_id`+`journey_session_count`; `attended_pool_ids`) — nenhuma é
+  implementável no front, e as duas últimas são pós-passes justamente para não encostar na query
+  principal. Saíram: ANI/DNIS (colunas, filtros, i18n, tipos), `AnaliseProcessosPage.tsx`,
+  `OriginSelector.tsx`, «Processos» do menu, e o seletor Inbound/Outbound que não filtrava nada.
+  **Resíduos abertos por esta fase**, cada um item próprio:
+  - **filtro por direção** — o seletor removido era falso; um de verdade é parâmetro novo sobre
+    `spawn_reason` em `/reports/sessions`. Não foi contrabandeado na F3.
+  - **`/analise/sessions?session_id=…` não é honrado.** Três telas linkam para lá (`WorkItemsPage`,
+    `DeliveriesTab`, `SchedulesMonitorPage`) e a página ignora o parâmetro — abre a lista sem o
+    recorte. Defeito **anterior** à F3, agora fácil (a página já lê `useSearchParams` para o chip).
+  - **medição que ficou por rodar** (não bloqueia a F3): divergência `sessions.pool_id` × pool do
+    1º segmento, **partida antes/depois** do deploy da F1b em 14/08. A tela já provou que o ingest
+    novo está certo (`sac ia → nps ia` numa sessão que antes exibia entrada `retencao humano`), mas
+    falta o número que separa *"resíduo histórico a backfillar"* de *"a F1b tem produtor escapando"*.
+    Divergência **depois** do corte > 0 seria furo. Query pronta no histórico da sessão de 14/08.
+  - **mais duas páginas mortas**, no mesmo critério que matou as duas removidas: `ContactsPage.tsx`
+    (nenhuma rota a monta desde que `/contacts` virou redirect) e `AnaliseContatosPage.tsx`
+    (importada em `routes.tsx`, mas `analise/contatos` é `Navigate`). Não removidas junto por
+    disciplina de escopo — a F3 já tinha aberto três fatias não previstas.
 - **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
 - **F5** · `ContextStorePersister` — fase própria, desenho fechado no ADR §3 (mascarado, estado final,
   ctx de processo a cada close, foto inteira).
 
 **Decisões abertas** (ADR §4): ~~`collect` que expira sem engajamento conta como contato?~~ **fechada
-2026-08-14, por ausência** · texto do rótulo do chip quando o processo tem contatos fora da janela
-filtrada · `uniq(root_session_id)` como métrica de cabeçalho (lacuna registrada, não fechada).
+2026-08-14, por ausência** · ~~texto do rótulo do chip~~ **fechada 2026-08-14 (F3.3)**, e o achado é
+que ele é **condicional** em `meta.window_applied`, não permanente · `uniq(root_session_id)` como
+métrica de cabeçalho (lacuna registrada, não fechada).
 
 **A verificar antes de construir** (nenhum destes foi medido):
 
@@ -354,9 +446,17 @@ filtrada · `uniq(root_session_id)` como métrica de cabeçalho (lacuna registra
   `_apply_contact_scope` não a exclui. O cabeçalho de F4 diria *"contatos 4"* para quem nos procurou 2
   vezes. O discriminador de D4 é derivável hoje, sem dado novo — **decidir o texto antes de renderizar.**
 - **O tipo de linha "acesso outbound" tem ZERO amostras.** `spawn_reason` só tem dois valores no tenant
-  (`NULL` 342 · `trigger` 65): nem `collect` nem `delegate`. F3/F4 construiriam uma classe de linha que
-  nada no ambiente exercita — mesma armadilha das colunas ANI/DNIS. O `delegate = 0` é **não
-  explicado** (o carimbo existe em `webhook.py:1604`); medir só quando F4 precisar da classe "interno".
+  (re-medido 2026-08-14: `NULL` **349** · `trigger` **71**, total 420): nem `collect` nem `delegate`.
+  F3/F4 construiriam uma classe de linha que nada no ambiente exercita — mesma armadilha das colunas
+  ANI/DNIS. O `delegate = 0` é **não explicado** (o carimbo existe em `webhook.py:1604`); medir só
+  quando F4 precisar da classe "interno".
+  **F3 seguiu em frente com o ramo escrito e não verificável** — a diferença para ANI/DNIS é que aqui
+  o ramo é o DOMÍNIO do campo (não uma coluna a mais na tela), e o custo de não tê-lo seria classificar
+  um `collect` futuro como *inbound* em silêncio. Está registrado, não descoberto na revisão.
+- **`customer_id LIKE 'sys:%'` — desempate NÃO codificado, e a medição é o motivo.** Previsão: 0.
+  Medido: **1 em 420**, e é `webhook`+`trigger`+`limite_entrega`, já classificada como interna pelo
+  primeiro ramo da regra. `sys:` ali é consequência de nascer de máquina, não critério independente.
+  Reabrir só com população que o exercite.
 - **`probe_journey_limite.sh` não pode reprovar na dimensão de F1** — conta por proveniência (disse 3)
   enquanto `/reports/journeys` conta proveniência ∪ alias (disse 4). Se ele for usado como gate de
   journey depois de F1, compra confiança sem dar nada.

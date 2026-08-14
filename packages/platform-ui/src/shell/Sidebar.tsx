@@ -121,7 +121,10 @@ const Sidebar: React.FC = () => {
       roles: ['supervisor', 'admin', 'business'],
       children: [
         { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: FileText,      abac: { module: 'contacts',   field: 'visualizar' } },
-        { label: t('nav.analise.processos'), href: '/analise/processos', icon: GitBranch,     abac: { module: 'contacts',   field: 'visualizar' } },
+        // F3.3 — «Processos» saiu do menu: processo é PIVÔ, não navegação livre (D2).
+        // Chega-se a ele pelo chip da linha de contato em Análise › Sessões. Uma lista
+        // livre reintroduziria o filtro por pool no nível errado — devolveria *journeys
+        // que tocaram o pool* a quem pediu contatos.
         { label: t('nav.analise.agents'),    href: '/analise/agents',    icon: Users,         abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.pools'),     href: '/analise/pools',     icon: Package,       abac: { module: 'contacts',   field: 'visualizar' } },
         { label: t('nav.analise.events'),    href: '/analise/events',    icon: Zap,           abac: { module: 'contacts',   field: 'visualizar' } },

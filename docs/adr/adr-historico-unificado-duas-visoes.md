@@ -452,8 +452,23 @@ Sem custo de backend além de D10.
 
    Medido junto: **`spawn_reason` tem só dois valores no tenant** (`NULL` 342 · `trigger` 65), nem
    `collect` nem `delegate` — o tipo de linha *"acesso outbound"* tem **zero amostras**.
-2. **Semântica exata do chip** quando o processo tem contatos fora da janela filtrada (D3) — o rótulo
-   resolve, mas o texto precisa ser escrito.
+2. ~~**Semântica exata do chip** quando o processo tem contatos fora da janela filtrada (D3)~~ —
+   **FECHADA em 2026-08-14 (F3.3).** O N conta o processo **inteiro** e o rótulo do rodapé o nomeia:
+   *"O número no chip conta o processo inteiro — o período recorta os contatos listados, não o tamanho
+   do processo."* (EN: *"The chip counts the whole process — the date range narrows the contacts
+   listed, not the size of the process."*)
+
+   **O rótulo é CONDICIONAL, e é essa a parte que a decisão acrescenta ao desenho.** Ele só aparece
+   quando `meta.window_applied` é verdadeiro **e** há chip na página: no drill a janela não incide,
+   não há divergência a explicar, e uma frase permanente viraria ruído na tela em que a maioria das
+   linhas não tem chip. O marcador `window_applied` (entregue dias antes, para outro fim) é o que
+   tornou o condicional possível — sem ele o texto teria de ser permanente.
+
+   **Duas escolhas de implementação que a decisão fixa:** o N conta **contatos**, com o predicado
+   idêntico ao de `_fetch_journeys.session_count` (predicado próprio faria o chip dizer `·2` e o
+   cabeçalho da visão 2, no clique seguinte, dizer `4`); e o rótulo do chip é a raiz **canônica**
+   (`journey_id`, union-find), não `root_session_id` — na amostra de referência os dois **diferem**
+   (`e2764d9b…` × `d62d7121…`), e o cru daria duas etiquetas para o mesmo processo.
 3. **`uniq(root_session_id)` como métrica de cabeçalho.** *"Quantos processos tive este mês"* não sai de
    uma lista de contatos. É métrica, não linha. Lacuna registrada, não fechada.
 

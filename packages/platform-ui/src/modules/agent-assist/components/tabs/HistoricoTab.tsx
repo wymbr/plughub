@@ -207,7 +207,7 @@ const HistoryRow: React.FC<{ entry: ContactHistoryEntry }> = ({ entry }) => {
             )}
             {partOfProcess && (
               <span
-                onClick={(e) => { e.stopPropagation(); navigate(`/analise/processos?journey=${encodeURIComponent(entry.root_session_id!)}`); }}
+                onClick={(e) => { e.stopPropagation(); navigate(`/analise/sessions?journey=${encodeURIComponent(entry.root_session_id!)}`); }}
                 title={t('historico.journeys.openHint')}
                 className="inline-flex items-center gap-0.5 text-primary hover:underline cursor-pointer font-mono shrink-0"
               >
@@ -322,7 +322,7 @@ const JourneysSection: React.FC<{ customerId: string | null }> = ({ customerId }
         {open.map(j => (
           <button
             key={j.journey_id}
-            onClick={() => navigate(`/analise/processos?journey=${encodeURIComponent(j.journey_id)}`)}
+            onClick={() => navigate(`/analise/sessions?journey=${encodeURIComponent(j.journey_id)}`)}
             title={t('historico.journeys.openHint')}
             className="text-left border border-primary/20 bg-primary-light/30 rounded-lg px-3 py-2 hover:bg-primary-light/50 transition-colors"
           >
@@ -368,7 +368,7 @@ const ProcessSection: React.FC<{ sessionId: string | null }> = ({ sessionId }) =
         {t('historico.process.title', { defaultValue: 'Process' })}
         {journeyId && (
           <button
-            onClick={() => navigate(`/analise/processos?journey=${encodeURIComponent(journeyId)}`)}
+            onClick={() => navigate(`/analise/sessions?journey=${encodeURIComponent(journeyId)}`)}
             title={t('historico.process.openHint', { defaultValue: 'Open in Process view' })}
             className="ml-auto font-mono text-2xs text-primary hover:text-primary-dark"
           >
