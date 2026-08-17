@@ -246,7 +246,14 @@ system_error         — unrecoverable error
 - **`ReplacingMergeTree` substitui a LINHA INTEIRA — não faz merge por coluna.** Todo writer de
   `sessions` ou manda a linha completa, ou é reidratado antes da escrita (cache de identidade no
   consumer + carimbo no close, que é a linha sobrevivente). Três bugs de `sessions` num dia só vieram
-  disto. Vale para qualquer tabela RMT nova.
+  disto. Vale para qualquer tabela RMT nova. **Duas emendas de 2026-08-17:** (a) a coluna de versão
+  precisa ter a RESOLUÇÃO do fenômeno — `segments` é `RMT(ingested_at)` com `ingested_at DateTime`
+  (segundo) para eventos que distam milissegundos, e empate em RMT não tem vencedor definido; (b) RMT
+  **sem** coluna de versão apostando em "a última linha inserida vence" é a premissa que o DDL de
+  `sessions` já documenta como FALSA — `participation_intervals` ainda aposta nela, e ainda por cima é
+  `ORDER BY (tenant, session, participant)`, então dois segmentos do mesmo participante na mesma sessão
+  colidem numa linha só (ela **não** serve de testemunha por-segmento). Ver `TODO.md` § "Segmento que
+  nunca fecha".
 
 - **Quando a spec e o código discordam, desconfie dos DOIS.** O merge lia um `started_at` que metade dos
   canais não escrevia; a resposta certa não foi fazer o timestamp funcionar, foi ver que a aciclicidade

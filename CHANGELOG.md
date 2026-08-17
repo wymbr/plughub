@@ -2,6 +2,47 @@
 
 ---
 
+## Publicação de evento de participante deixa de degradar em silêncio ✅ (2026-08-17)
+
+Mudança **só de log**, sem alteração de comportamento, em `_publish_participant_event`
+(`orchestrator-bridge/main.py`). Os dois ramos de falha eram cegos:
+
+```python
+if _kafka_producer is None:
+    return                                                  # descarte SEM UMA LINHA
+except Exception as exc:
+    logger.debug("Could not publish participant event: …")  # DEBUG, e o serviço roda em INFO
+```
+
+Ambos viraram `WARNING`, com `event_type`, `session_id`, `participant_id`, `segment_id` e o tipo da
+exceção. O ramo do produtor ausente **não é hipotético neste ambiente**: o bridge morre no boot com
+`kafka:29092 Name or service not known` quando sobe sem o subgrafo do Kafka — uma vez em 08-14 e nove
+vezes em 08-17, medido no log.
+
+**Por que isto é conserto e não cosmética.** O par `participant_joined`/`participant_left` é o que
+FECHA um segmento. Com o publish mudo, perder um `left` ficava indistinguível de nunca tê-lo
+produzido — e foi exatamente esse ponto cego que consumiu cinco rodadas de investigação sobre os 9
+segmentos abertos em sessão fechada: para `e2764d9b` o log PROVA que o bridge chegou à chamada de
+publish (`main.py:8170`) e o ClickHouse não tem o evento, e o único trecho entre os dois pontos não
+contava nada. Viola `CLAUDE.md` § Postura de Engenharia — *"degradação NUNCA é silenciosa"* — no ponto
+exato onde o dado sumia. A investigação em si segue aberta (`TODO.md` § "Segmento que nunca fecha").
+
+### Probes novos (read-only, nenhum altera o ambiente)
+
+| Script | Responde |
+|---|---|
+| `infra/test/probe_open_segments_closed_sessions.sh` | quantos/quais segmentos ficam abertos em sessão FECHADA, classificados MID × TAIL, com timeline completa das sessões afetadas |
+| `infra/test/probe_family_b_suspend_resume.sh` | a lacuna até o próximo segmento × `session_transitions` (retomada por PRAZO ou por resposta) |
+| `infra/test/probe_orphan_segment_exception.sh` | houve exceção/retry/DLQ no instante do órfão — e **até onde o log alcança**, sem o que um grep vazio não é resposta |
+| `infra/test/probe_segment_rmt_version_tie.sh` | versões cruas em `segments` sem `FINAL` + `participation_intervals` |
+| `infra/test/probe_orphan_concurrency_rate.sh` | teste diferencial de concorrência da mesma instância, com controle de confundimento por instância |
+| `infra/test/probe_session_volume_origin.sh` | volume de sessões por minuto/pool/canal, `origin`, e sessões SEM segmento |
+
+Irmão de `report_open_human_segments.sh`, que só olha `agent_type='human'` — o achado atravessa os
+papéis (`primary`, `queue`, `specialist`), e por isso pedia instrumento próprio.
+
+---
+
 ## Histórico unificado F3 — visão 1: a lista de contatos ✅ (2026-08-14)
 
 Primeira fase de **UI** do arco (F0/F1/F1b/F2 foram todas backend). `/analise/sessions` passa a ser a

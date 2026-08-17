@@ -8,6 +8,112 @@
 
 ---
 
+## Segmento que nunca fecha — 4 hipóteses ELIMINADAS, instrumento instalado *(2026-08-17, aberto)*
+
+**Fato, remedido em 2026-08-17 (idêntico à base da F3):** 9 segmentos com `ended_at IS NULL` em
+sessões **fechadas** — `primary` 5/597 · `queue` 2/11 · `specialist` 2/68, em 676. Nove sessões
+distintas, 5 dias, 6 skills, 2 canais. Gate: `infra/test/probe_open_segments_closed_sessions.sh`.
+
+**Escopo, para não recontar errado.** O tenant tem **26** segmentos abertos, não 9: 15 são linhas de
+**seed** (`dlz_s*`/`sess_epoch_*`, `participant_id` sintético, timestamp redondo `10:00:00.000`) e 2
+estão em sessões ainda **abertas** (não são defeito). Toda contagem deste item filtra por sessão
+fechada; um probe que não filtre mede 65% de contaminação — aconteceu.
+
+### Onde o dano está (e onde NÃO está)
+
+`agent_time_ms` (`reports_query.py:1354`) filtra `role IN ('primary','specialist')` — **`queue` está
+fora por papel**, não por `duration_ms IS NOT NULL`. Logo:
+
+- a pergunta que o kickoff dizia estar embutida (*"a espera em fila conta como tempo de agente?"*)
+  **já está respondida pelo código: não**, e o segmento aberto de fila não muda isso. O custo da
+  família A é de UI (`live`, `join` numa conferência destruída, contador de ativos mentindo);
+- quem **some do `agent_time_ms`** são os 7 da família B, todos `native` e `primary`/`specialist`.
+
+### Três formas, separadas por medição — a posição do órfão é o discriminador
+
+| | forma | casos |
+|---|---|---|
+| **A** | `queue` aberto: `sac_ia` escala, o `queue-{sid}` abre 53 ms depois, o humano assume 6–13 s depois e o contato roda até o fim | `61dd213c`, `05f4bc74` |
+| **B1** | o órfão é a janela de **resume**: abre 15–19 ms depois do `resumed_at`, e nada mais acontece | `04d68192`, `fb5dcfea`, `e2764d9b` |
+| **B2** | o órfão é o **specialist** aberto 11–18 ms após o suspend do primary; o primary retoma minutos depois e fecha em 8–12 ms | `8a5d3ce3`, `fe7c611d` |
+| **B3** | o órfão é a janela **pré-suspend** (`seq=0`) e a de resume fecha normal — espelho do B1 | `3c124d3b` |
+| **B4** | sem NENHUMA linha em `session_transitions` | `7ccbbc6c` |
+
+### Hipóteses ELIMINADAS — não refazer
+
+1. **Timeout / retomada por prazo.** `session_transitions` mostra as 6 lacunas retomadas **por
+   resposta** — `resume_expires_at` a 1 h, 1 dia ou 7 dias do `resumed_at`, inclusive nas de 7 e 10
+   minutos. Ninguém foi retomado por scanner. *(Probe: `probe_family_b_suspend_resume.sh`.)*
+2. **Exceção + retry do dispatcher.** Zero `[retry`, zero `[dlq]` no instante do órfão, com o log
+   cobrindo a janela (13/08 17:50 → 17/08 10:53). Os 10 `Traceback` do log são todos o mesmo crash de
+   boot por `kafka:29092`, sem relação. *(Probe: `probe_orphan_segment_exception.sh`.)*
+3. **Empate de `ReplacingMergeTree`.** A hipótese era boa — `segments` é `RMT(ingested_at)` com
+   `ingested_at DateTime` (**resolução de segundo**), e `joined`/`left` de um segmento curto caem no
+   mesmo segundo. Mas o log de `e2764d9b` prova que o bridge chegou ao publish e nenhuma das duas
+   tabelas tem o evento; empate explicaria perda em `segments`, não em ambas.
+4. **Concorrência da mesma instância em sessões diferentes.** Teste diferencial com controle por
+   instância: **3/9 órfãos** com vizinho a ±10 s contra **35,4%** dos fechados das MESMAS instâncias.
+   Indistinguível — e no sentido oposto ao previsto. *(Probe: `probe_orphan_concurrency_rate.sh`.)*
+
+### Dívidas de versionamento que a investigação expôs (reais, mesmo não sendo a causa)
+
+- **`segments` = `ReplacingMergeTree(ingested_at)`, `ingested_at DateTime`** — versão de granularidade
+  de SEGUNDO para eventos que distam milissegundos. É a mesma família do bug que deu `row_version` à
+  `sessions` (ver o comentário do DDL, `clickhouse.py` §75-93: *"a última linha inserida vence" é
+  premissa FALSA*). Conserto natural: `coalesce(ended_at, started_at)`.
+- **`participation_intervals` = `ReplacingMergeTree()` SEM coluna de versão**, apoiada num comentário
+  que promete ordenação do Kafka. Pior: `ORDER BY (tenant_id, session_id, participant_id)` — **não por
+  segmento** —, então dois segmentos do mesmo participante na mesma sessão (exatamente o caso do
+  resume) COLIDEM numa linha só. Ela **não serve como testemunha** por-segmento; foi usada como tal
+  numa rodada desta investigação e a conclusão teve de ser retirada.
+
+### O que sobrou provado, e o próximo passo
+
+Para `e2764d9b`: o bridge **publicou** o `participant_left` (log prova execução além de `main.py:8170`
+— `Native agent executed … resolved` em .641, `_close_contact_layer` em .643) e **nenhuma** das duas
+tabelas tem o evento. O único trecho entre os dois pontos era cego, e foi instrumentado
+(`CHANGELOG.md` 2026-08-17). Reprodução serial em `limite_processo` (pool de um dos órfãos) rodou o
+ciclo completo em 17/08 e **fechou os 3 segmentos novos**, sem WARNING: o caminho funciona sozinho.
+
+**Próximo passo, em ordem de custo:**
+
+1. `grep` do log do bridge para `61dd213c` e `05f4bc74` (família A) — **estão dentro da janela do log e
+   nunca foram lidos**. Podem nomear por que o agente de fila ficou bloqueado. Candidato a verificar:
+   só DOIS lugares fazem `LPUSH __agent_available__` (`kafka_listener.py:710` e
+   `routing/main.py:1415`); `work_task_claim` **não** sinaliza — se o humano assume pelo inbox pull, o
+   agente de fila espera para sempre. **Não medido — é candidato, não diagnóstico.**
+2. Esperar a próxima ocorrência com o WARNING no ar.
+3. Só então decidir entre conserto de transporte e conserto de versionamento.
+
+---
+
+## Volume de sessões inexplicado (item 2 do kickoff) — a rajada NÃO existe no dado *(2026-08-17, aberto)*
+
+O relato: `/analise/sessions` foi de **118** para **285** contatos na mesma janela (07/08→14/08), mesmo
+escopo e mesmo build, separadas por uma execução de e2e. Medição (`probe_session_volume_origin.sh`):
+
+- **sem rajada** — as sessões vêm a ~1 por minuto, espalhadas por 8 dias e 14 pools, máximo 2 no mesmo
+  minuto;
+- `origin` = **300/300 `live`**, nenhuma importação;
+- sessões **sem nenhum segmento**: **4**, com timestamp redondo (`09:00:00.000`) — seeds conhecidos,
+  não 167;
+- e os totais de segmento batiam exatamente com a base da F3 (676), ou seja **nada rodou** entre as
+  medições.
+
+Isso derruba as DUAS explicações do kickoff (a suíte rodou muito × produtor ativo) e promove uma
+terceira, que a própria `CLAUDE.md` registra como cheiro conhecido: **os 3 tiers de recuperação do
+`/reports/sessions` degradam em silêncio**. 118 seria a leitura degradada e 285 a íntegra — mesma
+janela, mesmo build, leitor diferente. **Não medido.** Teste: ler o endpoint duas vezes e fazer o tier
+se declarar.
+
+**Achado colateral que é do item 2 e está confirmado:** os `infra/test/seed_*.sh` inserem direto no
+ClickHouse e caem no default `origin='live'` — 15 segmentos abertos e suas sessões vêm daí. Existe,
+sim, produtor que escreve sessão sem passar pelo pipeline, e ele entra indistinguível de produção,
+contaminando contagem, TMA e atribuição por pool — inclusive as bases que a F1b e a F3 usaram. É
+exatamente o que o discriminador `origin` existe para impedir.
+
+---
+
 ## Interop com n8n — alvo: eliminar o editor de fluxo local *(decisão de direção 2026-08-17, ver `docs/product/n8n-interop-boundaries-and-seams.md`)*
 
 Medição (575 arquivos de produção, `e2e-tests` **não** contado): ~12% do código é território que o

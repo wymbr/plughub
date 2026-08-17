@@ -1,5 +1,29 @@
 # Kickoff — Segmento que nunca fecha · Volume de sessões inexplicado
 
+> ## ⛔ ESTE KICKOFF FOI EXECUTADO EM 2026-08-17 — não reutilizar como está
+>
+> A sessão mediu tudo o que este arquivo pedia e **derrubou parte do que ele afirma**. O estado
+> vivo passou para:
+>
+> - [`TODO.md`](../../TODO.md) § *"Segmento que nunca fecha"* e § *"Volume de sessões inexplicado"*
+> - [`docs/guias/conference-mechanics.md`](../guias/conference-mechanics.md) § *Problema 34* (família fila)
+> - [`CHANGELOG.md`](../../CHANGELOG.md) 2026-08-17 (instrumentação do publish + 6 probes)
+>
+> **O que este arquivo diz e a medição negou:**
+>
+> | afirmação daqui | medido |
+> |---|---|
+> | *"a espera em fila deve contar como tempo de agente? as duas leituras não podem estar certas"* | pergunta **já respondida pelo código**: `agent_time_ms` filtra `role IN ('primary','specialist')` (`reports_query.py:1354`) — `queue` está fora **por papel**, não por `duration_ms IS NOT NULL`. O segmento aberto de fila não custa tempo de agente; custa UI. A perda real de `agent_time_ms` vem dos **7 casos de pools de workflow**, não da fila |
+> | *"o participante de fila sai por superação"* | é a forma dos 2 casos de fila, mas **não** dos outros 7 — são 5 formas distintas (A, B1, B2, B3, B4), com posições diferentes do órfão |
+> | *"+167 contatos numa execução de e2e"* | **a rajada não existe no dado**: ~1 sessão/minuto, 8 dias, 14 pools; `origin` 300/300 `live`; 4 sessões sem segmento. As duas explicações propostas caem; a terceira (tiers do `/reports/sessions` degradando em silêncio) segue **não medida** |
+> | *"9 segmentos abertos"* | 9 **em sessão fechada**. O tenant tem **26** abertos: 15 são seed (`dlz_*`/`sess_epoch_*`) e 2 estão em sessões abertas. Probe sem filtro mede 65% de contaminação |
+>
+> **Quatro hipóteses eliminadas por medição — estão listadas em `TODO.md` com o porquê de cada uma.**
+> Não refazer: timeout/prazo, exceção+retry do dispatcher, empate de `ReplacingMergeTree`,
+> concorrência da mesma instância.
+>
+> A cadeia de medição em tabela (§ "A cadeia medida") continua válida e reusável. O resto é histórico.
+
 > Cole isto no início da sessão. **Uma sessão = estes dois itens**, nesta ordem.
 > Os dois foram achados durante a F3 (2026-08-14) e **registrados sem conserto**, de propósito: um
 > toca mecânica de conferência, o outro nem foi medido ainda.

@@ -3208,7 +3208,25 @@ async def _publish_participant_event(
         "leave" if event_type == "participant_left" else "join",
     )
 
+    # ── Por que estes dois ramos gritam (2026-08-17) ──────────────────────────
+    # Eram `return` mudo e `logger.debug`, num serviço que roda em INFO. Resultado:
+    # perder um `participant_left` era INDISTINGUÍVEL de nunca tê-lo produzido — e é
+    # esse par que decide se um segmento fecha. Nove segmentos abertos em sessão
+    # FECHADA foram investigados por cinco rodadas sem convergir, porque o único
+    # trecho entre "o bridge publicou" (provado no log) e "o ClickHouse não tem"
+    # era justamente este, e ele não contava nada.
+    #
+    # O ramo do produtor ausente NÃO é hipotético aqui: o bridge morre no boot com
+    # `kafka:29092 Name or service not known` quando sobe sem o subgrafo do Kafka.
+    #
+    # WARNING, não DEBUG: um evento de ledger perdido não é ruído de depuração.
+    # Ver CLAUDE.md § Postura de Engenharia — "degradação NUNCA é silenciosa".
     if _kafka_producer is None:
+        logger.warning(
+            "participant event DESCARTADO (produtor Kafka ausente): %s session=%s "
+            "participant=%s segment=%s — o segmento NÃO vai fechar no analytics",
+            event_type, session_id, participant_id, event["segment_id"],
+        )
         return
     try:
         await _kafka_producer.send_and_wait(
@@ -3220,7 +3238,12 @@ async def _publish_participant_event(
             event_type, session_id, participant_id, event["segment_id"],
         )
     except Exception as exc:
-        logger.debug("Could not publish participant event: %s — %s", event_type, exc)
+        logger.warning(
+            "participant event NÃO PUBLICADO: %s session=%s participant=%s "
+            "segment=%s — %s: %s",
+            event_type, session_id, participant_id, event["segment_id"],
+            type(exc).__name__, exc,
+        )
 
 
 # ── F1.4 (bancada de agentes): outcome real do humano via wrap-up ─────────────

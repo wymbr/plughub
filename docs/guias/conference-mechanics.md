@@ -1713,6 +1713,61 @@ chaves durante a janela de hooks. Não descobre nada — `session:{id}:closed` �
 deve estar **ausente**, e não deve surgir linha `did not complete within 180s` nos 200 s seguintes.
 Sem contato humano na janela o veredicto é INCONCLUSIVO, não verde.
 
+### Problema 34 — segmento de FILA que nunca fecha (diagnosticado, **NÃO corrigido**, 2026-08-17)
+
+> Entrada de **problema**, não de correção. Está aqui porque toca o mecanismo de conferência e porque
+> o custo de alguém redescobrir isto do zero já foi pago uma vez.
+
+**Sintoma:** um contato **encerrado** exibe um segmento `role='queue'` com `ended_at IS NULL` — a UI
+mostra `live` + `join` e o cabeçalho diz `1 active`. `SegmentList.tsx:96` deriva `live` de
+`ended_at === null`, ou seja, a UI está honesta; o defeito é a montante. Dois casos medidos
+(`61dd213c` em 2026-08-14 16:09, `05f4bc74` em 21:18), ambos em `retencao_humano`/webchat.
+
+**A forma, idêntica nos dois:**
+
+```
+sac_ia            escala   → fecha  escalated_human   16:09:28.912
+queue-{sid}       abre                                16:09:28.965   (53 ms depois)  ← nunca fecha
+retencao_humano   humano assume                       16:09:41.037   → fecha resolved (80 s)
+auth_form_ia / nps_ia  specialists                                    → fecham normalmente
+```
+
+O contato roda até o fim e TODOS os outros segmentos fecham. Só o de fila fica.
+
+**Onde o par é publicado.** `process_queued` (`orchestrator-bridge/main.py`) publica os DOIS eventos:
+`participant_joined` em `:5504` e `participant_left` em `:5552` — e o segundo só sai **depois** que
+`activate_native_agent` (`:5523`) retorna. Esse `await` só volta quando o flow do agente de fila
+completa. O routing publica um `participant_left` de fila **sintético** apenas no caminho de timeout de
+fila muda (`routing/main.py:585`), que não é este caso.
+
+**O caminho normal FUNCIONA** — 14 dos 16 segmentos `queue` do tenant fecham. Não é "a fila nunca
+fecha".
+
+**Candidato NÃO verificado** (registrado como candidato, de propósito): só **dois** lugares fazem
+`LPUSH __agent_available__` para desbloquear o menu do agente de fila —
+`routing/kafka_listener.py:710` (drain) e `routing/main.py:1415` (drain periódico). **`work_task_claim`
+não sinaliza.** Se o humano assume pelo inbox pull, o agente de fila fica bloqueado no `BLPOP` para
+sempre, `activate_native_agent` nunca retorna e o `left` nunca é publicado. Isto NÃO foi medido — o
+log do bridge cobre a janela dos dois casos (13/08 17:50 → 17/08 10:53) e ainda não foi lido para
+estes `session_id`. É o primeiro passo do próximo turno.
+
+**O que o segmento aberto de fila NÃO custa:** `agent_time_ms` filtra
+`role IN ('primary','specialist')` (`reports_query.py:1354`), então `queue` está fora **por papel**. O
+dano é de UI e de contador de ativos, não de métrica de tempo de agente. *(A perda em `agent_time_ms`
+vem de outra família — 7 casos em pools de workflow, ver `TODO.md` § "Segmento que nunca fecha".)*
+
+**Hipóteses já descartadas por medição** (não redescobrir): corrida de ordenação entre tópicos (o par
+vem do MESMO tópico `conversations.participants`, `clickhouse.py:376`); sobrescrita de
+`ReplacingMergeTree`; retomada por prazo; concorrência da mesma instância. Detalhe e probes em
+`TODO.md`.
+
+**Como ficará vermelho quando alguém consertar:** contagem de `ended_at IS NULL` em sessões fechadas
+**antes e depois**, com as três linhas de papel lado a lado (`infra/test/probe_open_segments_closed_sessions.sh`;
+base atual `primary` 5 · `queue` 2 · `specialist` 2). A testemunha é obrigatória: um conserto que feche
+o segmento de fila fechando **todos** os segmentos no `session_closed` passaria numa asserção ingênua
+e destruiria a distinção entre segmento fechado por `agent_done` e fechado à força — os 14 que já
+fecham têm de continuar fechando pelo caminho deles.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
