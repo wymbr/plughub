@@ -8,6 +8,111 @@
 
 ---
 
+## Interop com n8n — alvo: eliminar o editor de fluxo local *(decisão de direção 2026-08-17, ver `docs/product/n8n-interop-boundaries-and-seams.md`)*
+
+Medição (575 arquivos de produção, `e2e-tests` **não** contado): ~12% do código é território que o
+n8n cobre melhor — `workflow-api`, `skill-flow-worker`, `scheduler-api`, `mailing-api`, importador,
+UI de workflows/schedules/outbound, e 7 dos 17 step types. Os 45% de fosso (sessão, conferência,
+roteamento, capacidade, canais, qualidade, governança) não têm equivalente em lugar nenhum.
+
+**Decisão de direção:** parar de competir na faixa de 12% e integrar. **Alvo declarado: substituir o
+bloco `flow:` do skill pelo n8n e eliminar o editor de fluxo local** — ele não acompanha os editores
+de mercado, e restaurá-lo não resolveria isso. O seguro contra dependência não é um editor de
+reserva sem investimento, é a **portabilidade** que a plataforma já vende (`skill-extract` passa a
+ter o JSON do n8n como alvo).
+
+**O skill NÃO morre — vira envelope de configuração.** `config_params`, `interface_schema`, política
+de masking, declaração de perfil e `mention_commands` mantêm a casa; o modelo de slot/`promote`/
+`deploy_version` fica **inalterado** (muda só a carga do snapshot). Consequência: skill sem lógica
+não precisa de YAML à mão — vira formulário na UI, e o que morre é a **tela de fluxo**, não a
+autoria.
+
+**Regra de fronteira:** *n8n toca sistemas; PlugHub toca pessoas.* As três fronteiras
+(`journey`/`session`/`segment`) nascem da travessia do channel-gateway, não do código que decidiu
+atravessar — por isso o n8n pode ser autor da lógica sem nunca ser autor da fronteira. Único modo de
+quebra: workflow n8n contatando cliente por fora da borda.
+
+**Resíduo não-movível — dois itens, e só dois:**
+
+1. **Evidência de execução para avaliação tier-2.** `flow_definition` (esperado) e `pipeline_state`
+   (real) são artefatos do engine local; sem eles a avaliação de IA degrada a **grau-transcript** —
+   a mesma limitação que o quality-ingest documenta para histórico externo. Exige mapeadores. É o
+   item mais caro, e é dano ao fosso, não ao editor. *(Atenua: o DialogForm já é versionado na
+   dialog-api, então o conteúdo conversacional — o que a avaliação mais olha — segue versionado em
+   casa.)*
+2. **Hook de cliente inline** (`side=customer` + `inline`, hoje só o NPS). `_is_workflow_dispatch_entry`
+   (`orchestrator-bridge/main.py:1233`) mostra que **todo o resto já migrou** para o veículo de
+   workflow. Não é destacável por natureza: destacar fecha o contato e o cliente sai do WS.
+   `begin_transaction`/`end_transaction` idem — não-retenção é invariante que um runtime feito de
+   retenção não honra.
+
+**Guarda que passa a ser load-bearing:** com o editor de fluxo morto, haverá pressão para empurrar
+control-flow para dentro do DialogForm. `adr-dialog-conditional-skip-logic.md` (guarda declarativa
+`ask_when`, *não* control-flow) precisa ser defendido — se ceder, o editor de fluxo é reconstruído
+dentro do editor de formulário, com uma linguagem pior.
+
+**Quatro costuras:** A (webhook, existe) + E (Kafka Trigger, existe) = fase 0, e **A não serve
+sozinho** (sem superfície de resultado, o n8n fica cego); B (n8n como cliente MCP — compartilha o
+principal externo com a fase A2 do ADR de A2A); C (n8n como domain MCP server — maior retorno,
+pendura na fase B2 do ADR de borda única); D (node/template — fase 5, com sub-workflow template como
+precursor barato na fase 0, porque é ali que mora a disciplina de propagação de `root_session_id`).
+
+**Bloqueio de segurança que precede tudo:** `POST /v1/channels/webhook/pool/{pool_id}` é **anônima**.
+Com n8n do outro lado vira exposição ativa. A fase 0 não sobe sem fechar.
+
+**Gate empírico antes do ponto sem volta:** instrumentar latência de turno e contagem de travessias
+no perfil `workflow` **antes** de migrar o perfil `agent`. O alvo está decidido; o gate responde
+"batemos num impedimento?", não "devemos prosseguir?". A estimativa de "5–8 round-trips" é palpite,
+não medição.
+
+### Sub-item — promover `skill-flow-service` a pacote de primeira classe
+
+Fica **aqui** e não em item separado: é onde a integração aterrissa, e a promoção e a fase 2 são a
+mesma obra.
+
+O runtime de produção dos skills conversacionais é `packages/e2e-tests/services/skill-flow-service/`
+— cujo cabeçalho diz *"Thin HTTP wrapper … for E2E testing"* e que é dependência `service_healthy`
+do orchestrator-bridge, do mcp-server e da evaluation-api. Complementa o achado da seção seguinte
+(que já identifica esse `mcpCall` como o caminho nativo sem interceptação).
+
+| Achado | Evidência |
+|---|---|
+| O `skill-flow-worker` está morto para MCP, e o código admite | `orchestrator-bridge/main.py:638-639` |
+| Ele ainda consome `workflow.events` (produtor vivo em `workflow-api/kafka_emitter.py`), mas posta em `/mcp`, rota que não existe | `engine-runner.ts:131` × mcp-server só expõe `/sse` e `/messages` |
+| Mapa de servidores MCP hardcoded com 2 entradas + **fallback silencioso** | `skill-flow-service/src/index.ts:35-38`, `:142-144` — servidor desconhecido vai ao mcp-server-plughub em vez de falhar |
+| `agente_contexto_ia_v1.yaml:96` aponta para `mcp-server-crm`, que **não existe** | O erro que aparece é "tool desconhecida", não "servidor não configurado" |
+| A tool `invoke` resolve endereço por env `MCP_SERVER_{NOME}_URL`, **não definida em lugar nenhum** | `tools/external-agent.ts:149-159` |
+| `tools/list` **não é chamado em nenhum ponto do repositório** | Zero discovery; nomes de tool sempre hardcoded |
+
+Escopo: mover para `packages/skill-flow-service/`, substituir a convenção de env pelo catálogo
+`mcp_servers` no config-api, implementar `tools/list` (+ snapshot no slot como detector de drift de
+contrato), remover o fallback mudo, e decidir o destino do `skill-flow-worker`.
+
+*Ressalva: "404" e "env ausente" são conclusões estáticas (ausência de rota e de env em todos os
+compose), não observadas em execução.*
+
+### Defeitos colaterais achados no levantamento *(independentes do n8n)*
+
+- **`llm_tokens_*` não é emitido no caminho principal.** `emit_llm_tokens` tem um único call site,
+  `InferenceEngine.infer()` (`ai-gateway/inference.py:149-161`) = `POST /inference`. O **`/v1/reason`**,
+  que é o step `reason` dos skill flows, **não emite**; `/v1/turn` também não. Verificar se alguma
+  cota ou relatório de tokens está sendo lido como se tivesse dado.
+- **`MCP_PROXY_URL` aponta para serviço inexistente.** `tools/evaluation.ts:803` faz `fetch` em
+  `localhost:7422`; não há proxy em nenhum compose; o `catch` só emite `console.warn`.
+- **DECR de `hook_pending` não inspeciona outcome** (`orchestrator-bridge/main.py:4952`); o
+  tratamento de `suspended` é guardado por `not conference_id` (`:4663`, `:4784`). Não morde hoje,
+  mas é borda desguardada.
+- **Não foi localizado o guard do engine** que rejeitaria `delegate` fora de sessão webhook — o
+  comportamento se apoia em comentário e wiring.
+- **`inline` tem dois significados** em `PoolHookEntry` conforme o `side`: conferência quando
+  `customer`, máquina destacada quando `agent`.
+- **`ai-gateway` não tem shim OpenAI** (`/v1/chat/completions`), mas `providers/openai_provider.py`
+  já converte o formato interno *para* Chat Completions na saída — a fachada de entrada é largamente
+  reverter isso, e é o que permite ao AI Agent node do n8n usar o gateway sem perder rotação
+  multi-conta e fallback.
+
+---
+
 ## As chamadas de domínio do agente NATIVO não passam por interceptação nenhuma *(achado 2026-08-13, ao alinhar o audit do `invoke` — ver CHANGELOG)*
 
 O invariante da plataforma diz que **nenhuma** chamada MCP chega a um domain server sem validação de
