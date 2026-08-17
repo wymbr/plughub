@@ -121,11 +121,22 @@ n8n cobre melhor — `workflow-api`, `skill-flow-worker`, `scheduler-api`, `mail
 UI de workflows/schedules/outbound, e 7 dos 17 step types. Os 45% de fosso (sessão, conferência,
 roteamento, capacidade, canais, qualidade, governança) não têm equivalente em lugar nenhum.
 
-**Decisão de direção:** parar de competir na faixa de 12% e integrar. **Alvo declarado: substituir o
-bloco `flow:` do skill pelo n8n e eliminar o editor de fluxo local** — ele não acompanha os editores
-de mercado, e restaurá-lo não resolveria isso. O seguro contra dependência não é um editor de
-reserva sem investimento, é a **portabilidade** que a plataforma já vende (`skill-extract` passa a
-ter o JSON do n8n como alvo).
+**Justificativa adotada é a do EDITOR, não a de "parar de duplicar"** — a distinção importa porque as
+duas autorizam coisas diferentes, e o §10 do doc mostra que a **maioria** daqueles 12% **fica** (é
+estado e governança, não orquestração). **Alvo: todo skill associado a um pool — perfis `workflow`
+E `agent` — passa a ser autorado no n8n, e o editor de fluxo sai por completo.** O ganho não é
+apagar código: é que 100% da autoria sai de YAML + canvas caseiro e vai para ferramenta madura. O
+seguro contra dependência não é um editor de reserva sem investimento, é a **portabilidade** que a
+plataforma já vende (`skill-extract` passa a ter o JSON do n8n como alvo).
+
+**O que FICA (e a revisão 2 errava ao mandar embora):** `mailing-api` **inteiro** — o n8n não tem
+entidade de audiência, nem máquina de estado por destinatário (claim atômico, idempotência,
+`max_attempts`), nem separação membership ≠ suppression; no PlugHub o pacing nunca morou ali (é a
+agenda) e o laço é o step `loop`. `scheduler-api` **fica** — cron não é agendamento em dia útil
+(`business_day_policy` → calendar-api), a autoria é ABAC-gated para operador de negócio, o ledger
+`agenda_dispatches` dá drill-through a `session_id`, e o horário é atributo de entidade do PlugHub.
+E o scheduler sai **ileso de graça** porque a agenda aciona um **pool**, nunca um skill (invariante
+S4). `calendar-api` fica com **dois** consumidores: scheduler e evaluation-api (dispatch scanner).
 
 **O skill NÃO morre — vira envelope de configuração.** `config_params`, `interface_schema`, política
 de masking, declaração de perfil e `mention_commands` mantêm a casa; o modelo de slot/`promote`/
@@ -138,19 +149,31 @@ autoria.
 atravessar — por isso o n8n pode ser autor da lógica sem nunca ser autor da fronteira. Único modo de
 quebra: workflow n8n contatando cliente por fora da borda.
 
-**Resíduo não-movível — dois itens, e só dois:**
+**O resíduo é um RUNNER, não um fluxo** — e é por isso que o editor pode morrer inteiro. O que não
+sai é **código**, não autoria:
 
-1. **Evidência de execução para avaliação tier-2.** `flow_definition` (esperado) e `pipeline_state`
-   (real) são artefatos do engine local; sem eles a avaliação de IA degrada a **grau-transcript** —
-   a mesma limitação que o quality-ingest documenta para histórico externo. Exige mapeadores. É o
-   item mais caro, e é dano ao fosso, não ao editor. *(Atenua: o DialogForm já é versionado na
-   dialog-api, então o conteúdo conversacional — o que a avaliação mais olha — segue versionado em
-   casa.)*
-2. **Hook de cliente inline** (`side=customer` + `inline`, hoje só o NPS). `_is_workflow_dispatch_entry`
-   (`orchestrator-bridge/main.py:1233`) mostra que **todo o resto já migrou** para o veículo de
-   workflow. Não é destacável por natureza: destacar fecha o contato e o cliente sai do WS.
-   `begin_transaction`/`end_transaction` idem — não-retenção é invariante que um runtime feito de
-   retenção não honra.
+- **NPS inline.** O flow do `agente_nps_v1` é `form_get → menu → notify → complete` — exatamente o
+  que um runner genérico de formulário faz. Vira **config** (qual form, qual gatilho), não fluxo.
+  Precisa ficar local porque `_is_workflow_dispatch_entry` (`orchestrator-bridge/main.py:1233`)
+  mostra que **só `side=customer` + `inline` permanece na conferência** — todo o resto já migrou —,
+  e destacar fecha o contato (`main.py:2083`) tirando o cliente do WS.
+- **Transação mascarada.** Vira DialogForm com campos `masked: true` + runner confiável, e o **n8n
+  recebe o resultado, nunca o valor**. Padrão já existente e documentado no OTP.
+- **Consequência:** o interpretador genérico é hoje ele mesmo um skill em YAML
+  (`skill_dialog_runner_v1`). Com o YAML de fluxo morto, ele precisa virar **código** — serviço de
+  primeira classe. Deixa de ser efeito colateral e vira **pré-requisito da fase 5**.
+
+**Item bloqueante — evidência de execução para avaliação tier-2.** `flow_definition` (esperado) e
+`pipeline_state` (real) são artefatos do engine local. Com o alvo cobrindo 100% dos skills, a
+avaliação de IA degradaria **em bloco** para grau-transcript — a mesma limitação que o quality-ingest
+documenta para histórico externo. Os mapeadores (`tools/list` + JSON do n8n → `flow_definition`;
+trace de execução → `pipeline_state`) são **bloqueantes da fase 5**, não trabalho opcional. *(Atenua:
+o DialogForm já é versionado na dialog-api, então o conteúdo conversacional — o que a avaliação mais
+olha — segue versionado em casa.)*
+
+**Gate de latência vira condição de prosseguir**, não prudência: com 100% dos turnos conversacionais
+atravessando o n8n, instrumentar antes de migrar o perfil `agent` é obrigatório. O que hoje é
+implícito (`@ctx.*`, `context_tags`, o `resolve` de 5 fases) vira travessia explícita.
 
 **Guarda que passa a ser load-bearing:** com o editor de fluxo morto, haverá pressão para empurrar
 control-flow para dentro do DialogForm. `adr-dialog-conditional-skip-logic.md` (guarda declarativa
@@ -203,6 +226,14 @@ compose), não observadas em execução.*
   `InferenceEngine.infer()` (`ai-gateway/inference.py:149-161`) = `POST /inference`. O **`/v1/reason`**,
   que é o step `reason` dos skill flows, **não emite**; `/v1/turn` também não. Verificar se alguma
   cota ou relatório de tokens está sendo lido como se tivesse dado.
+- **O hint de backfill mente.** A UI de campanha de qualidade diz *"Past start = reprocesses history
+  (backfill)"*, mas o backfill é endpoint manual (`POST /v1/evaluation/campaigns/{id}/backfill`,
+  `router.py:1151-1186`) e **a UI nunca o chama** — grep por `backfill` em `modules/evaluation/`
+  devolve só a própria string do hint (`CampaignsPage.tsx:600`). O operador põe data no passado e
+  nada acontece, sem sinal.
+- **Campo morto homônimo.** JSONB `schedule` com `window_start`/`window_end`/`days_of_week` em
+  `evaluation-api/db.py:73`, sem nenhum leitor. Resíduo de desenho substituído pela calendar-api — e
+  quem procurar "janela" acha esse antes do `period_start`/`period_end` verdadeiro.
 - **`MCP_PROXY_URL` aponta para serviço inexistente.** `tools/evaluation.ts:803` faz `fetch` em
   `localhost:7422`; não há proxy em nenhum compose; o `catch` só emite `console.warn`.
 - **DECR de `hook_pending` não inspeciona outcome** (`orchestrator-bridge/main.py:4952`); o
