@@ -277,8 +277,16 @@ forense *"o que a v2 continha?"* exige Workflow History (Enterprise).
 
 ### 5.1 O skill sobrevive como envelope de configuração
 
-**Só o bloco `flow:` sai.** O skill continua carregando `config_params`, `interface_schema`,
+**Só o corpo do fluxo sai.** O skill continua carregando `config_params`, `interface_schema`,
 política de masking, declaração de perfil, `mention_commands`, identidade e versionamento.
+
+> ⚠️ **Nota de vocabulário (corrigida 2026-08-17).** Este documento dizia *"o bloco `flow:`"*, e quem
+> seguir a letra e grepar `flow:` nos YAML acha **zero**. Nos 42 arquivos de
+> `packages/skill-flow-engine/skills/` a chave top-level é **`steps:`** (ex.:
+> `skill_dialog_runner_v1.yaml:49-118`); **`flow` é o nome da COLUNA** no agent-registry — é o que
+> `evaluation_context_get` lê como `sk["flow"]` (`tools/evaluation.ts:1146-1150`). São a mesma coisa em
+> dois lugares com dois nomes, e a distinção importa porque o mapeador da §5.4 escreve na **coluna**,
+> não no arquivo.
 
 | Item | Efeito |
 |---|---|
@@ -510,8 +518,8 @@ pessoa; sai a camada de orquestração.**
 | Skill como envelope de config, slot/deploy | **Fica** | §5.1 |
 | **Editor de fluxo (`agent-flow`)** | **Sai por completo** | O alvo |
 | **Bloco `flow:` de todo skill** (`outbound_dispatch`, `outbound_worker`, `deploy_promote`, agentes) | **Sai** | O alvo |
-| `workflow-api` | **Sai** | Já em depreciação pelo Arc 19 |
-| `skill-flow-worker` | **Sai ou conserta** | §9 |
+| `workflow-api` | **Escopo reduzido** | **Corrigido 2026-08-17 pela triagem — §10.4.** Sai o motor; a **porta** (trigger por token) é o único escritor de `workflow.instances` e produz fronteira |
+| `skill-flow-worker` | **Sai** | **Corrigido 2026-08-17 — §10.4.** *"Conserta"* não é opção viável: 3 das 4 saídas são 410 e a 4ª é uma rota que não existe |
 | Importador CSV/xlsx | **Escopo reduzido** | O parsing vai para o n8n; a camada A (`batch_ingest`) sobrevive como seam público |
 
 ### 10.1 Outbound — correção da revisão 2
@@ -579,13 +587,39 @@ Há portanto **duas janelas** na campanha de qualidade, e só uma é temporal:
 ⇒ `calendar-api` fica, com dois consumidores, e é autoridade compartilhada — não detalhe do
 scheduler.
 
+### 10.4 `workflow-api` e `skill-flow-worker` — correção da revisão 3
+
+Escrito na revisão 3 como *"Sai"* e *"Sai ou conserta"*. A triagem de 2026-08-17 mediu, e **nome de
+pacote não era unidade de decisão**: são três coisas dentro de um pacote só, com três destinos.
+
+| Parte do `workflow-api` | Destino | Evidência |
+|---|---|---|
+| Lifecycle já-410 (`persist-suspend`, `complete`, `fail`, `collect/persist`, `collect/respond`) | **Sai** | `router.py:223, 357, 379, 509, 542` |
+| `POST /v1/workflow/trigger` | **Sai** | Proxy sem estado para a borda: `router.py:158-194`, `gw_url` em `:184` |
+| **Trigger por token + `workflow.instances`** | **FICA** até a costura A absorver | **Único** escritor: `db_create_instance` em `router.py:797`, dentro de `trigger_via_webhook` (`:727`). **11 leitores** na UI: `platform-ui/src/modules/workflows/api/hooks.ts:57,88,115,158,202,272,303,326,342,355,365` |
+
+**`skill-flow-worker` → Sai, sem alternativa.** Das **cinco** saídas HTTP, **quatro** são endpoints hoje
+410 (`workflow-client.ts:79, 90, 104, 120`), a quinta posta em `${mcpServerUrl}/mcp`
+(`engine-runner.ts:131`) — rota que **não existe**: o mcp-server expõe `/sse` (`server.ts:1182`) e
+`/messages` (`:1258`) — e a única que funciona é um `GET` de leitura (`:71` → `router.py:444`).
+Consertar seria reconstruir para um caminho sendo abandonado. *(O kickoff dizia "três saídas, dois
+410"; o número certo é este, conferido em 2026-08-17.)* **Não leva junto**
+o tópico `workflow.events`, que tem dois consumidores vivos e independentes do pacote: evaluation-api
+(`main.py:37-124`) e analytics-api (`consumer.py:332`).
+
+⚠️ **O `collect` está longe dos dois.** Executa no `skill-flow-engine`
+(`src/executor.ts:308` → `src/steps/collect.ts:33`), hospedado pelo `skill-flow-service`; quem cria a
+sessão-filho de contato é o channel-gateway (`adapters/webhook.py:2023` `handle_collect_engage`, cujo
+docstring em `:2032-2033` diz *"this is the only place a session is created"*). **Aborta-se o motor de
+workflow; não se aborta o `collect`.**
+
 ---
 
 ## 11. Fases
 
 | Fase | Conteúdo | Depende de |
 |---|---|---|
-| **0a** | Fechar a rota anônima `POST /v1/channels/webhook/pool/{pool_id}` | — |
+| **0a** | Fechar a rota anônima `POST /v1/channels/webhook/pool/{pool_id}` — **frente NOVA, sem item no backlog**; ver nota abaixo. Junto: posse do item no resume externo e `source` não-asserido-pelo-cliente | — |
 | **0b** | Costura A + E; contrato de propagação de `root_session_id`; **sub-workflow template** | 0a |
 | **0c** | Logar auto-mint de `root_session_id` em disparo externo | — |
 | **1** | Superfície de resultado honesta: status de 3 estados + artefato buscável | 0b |
@@ -602,6 +636,23 @@ scheduler.
 
 > **A medição vem antes do ponto sem volta.** O gate da fase 3 não pergunta "devemos prosseguir?" —
 > o alvo está decidido. Pergunta "batemos num impedimento?".
+
+> ⚠️ **A fase 0a não tinha dono** (achado da triagem de 2026-08-17). Era natural supor que o arco
+> *"Autenticação de endpoint webhook"* (`TODO.md:1599`) a cobrisse — ele fecha a porta **por
+> identificador**, com `auth_required` por `ChannelEndpoint`, token, hash e rotação. Mas a rota **por
+> pool** fica de fora por construção: `channel-gateway/…/main.py:1011-1048` recebe só
+> `(pool_id: str, request: Request)`, sem `Depends`, sem `_require_*`, sem middleware global — e o
+> `tenant_id` vem do **corpo** (`:1037`), logo é cross-tenant assim que a superfície for publicada.
+> Nenhum `auth_required` muda isso, porque a rota não passa pelo registro de endpoint. É trabalho novo,
+> e é o primeiro trabalho da fase 0.
+
+> **Fusão obrigatória na fase 3.** A costura B (principal externo), a fase **A2** do
+> `adr-a2a-server-binding.md` (`a2a_client`, `:126-127`) e o item `Agent Principal`
+> (`agent_principals`, `agent-principal-identity-spec.md:40-46`) são **três nomes para o mesmo
+> mecanismo** — duas tabelas no mesmo serviço, com campos quase idênticos. Construir as duas viola o
+> §13 (*"não criar segundo mecanismo de principal externo"*). A fusão precisa preservar o que a A2
+> sozinha não cobre e a **fase 2d** exige: `origin: native` (`spec:43, 68-71`) e
+> `principal_id`/`subject_type` no `AuditRecord` (`spec:77`).
 
 ---
 
@@ -668,6 +719,22 @@ Achados no levantamento, **independentes do n8n**, e que valem correção por si
 8. **`inline` tem dois significados** em `PoolHookEntry` conforme o `side`.
 9. **Assimetria de permissão entre bordas** (`lib/invoke-audit.ts:40-46`): o sidecar aceita
    `server:*` e trata lista vazia como sem filtro; o `invoke` nega. Dívida já no ADR de borda única.
+
+**Acrescentados pela triagem de 2026-08-17** (`docs/product/n8n-triagem-2026-08-17.md` §8):
+
+10. **Avaliador de `ask_when` triplicado.** Canônico em `packages/schemas/src/dialog.ts:423`
+    (`evaluateAskWhen`); espelho JS em `channel-gateway/…/survey_web.py:386`; **terceiro** espelho em
+    `platform-ui/…/DialogFormRenderer.tsx:400`, cujo comentário em `:75` se declara *"mirror of
+    `evaluateAskWhen`"*. O ADR previu dois. Três implementações do mesmo veredicto divergem — é o
+    mesmo modo de falha do item 9.
+11. **`masked_input_fields` é um contador de ausência sem testemunha.** Existe em
+    `analytics-api/…/audit.py` e é filtro do endpoint de auditoria LGPD, mas **não tem escritor** —
+    sempre `[]`. Para o DPO, *"nenhum campo mascarado nesta sessão"* e *"ninguém nunca escreveu"* são
+    indistinguíveis.
+12. **`EventsView` pede `period=24h` a um endpoint que só aceita `from_dt`/`to_dt`**
+    (`MonitorTab.tsx:794` × `reports.py:1431`): a janela real é de 7 dias e o i18n diz *"últimas 24h"*.
+13. **`spawn_reason` tem zero amostras de `collect`/`delegate`** no demo (só `NULL` 349 e `trigger`
+    71) — e é dele que a visão 2 do histórico deriva a direção do acesso. Medir antes de renderizar.
 
 ---
 
