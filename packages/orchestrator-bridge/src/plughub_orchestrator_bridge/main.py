@@ -5583,9 +5583,23 @@ async def process_queued(
             )
             return
 
+    # ── P2/F2 (2026-08-18): DOIS pools, e eles não são o mesmo fato ───────────
+    #
+    #   · `pool_id`       = pool de DESTINO — onde o contato espera. Dimensão de
+    #                       relatório (Fila/SLA) e do segmento `role='queue'`.
+    #   · `queue_pool_id` = pool de FILA — de quem é o DEPLOY que vai executar.
+    #
+    # Até aqui os dois eram a mesma variável, e a consequência era medida: o slot
+    # consultado era sempre o do pool de destino, então `queue_config.skill_id`
+    # NUNCA era lido (config decorativa) e o agente de fila, quando rodava, rodava
+    # o skill do pool de destino. É o invariante "never store a narrower-scope
+    # fact in a wider-scope field" — e o conserto é separar, não trocar: o
+    # segmento continua carimbando o DESTINO (onde o contato esperou é o fato que
+    # o relatório de fila mede), e só a resolução do flow passa a olhar a FILA.
+    queue_pool_id = (queue_cfg.get("pool_id") or "").strip()
     agent_type_id = queue_cfg.get("agent_type_id", "") or ""
-    explicit_skill_id = queue_cfg.get("skill_id")   # optional — overrides agent's default skill
-    if not agent_type_id:
+    explicit_skill_id = queue_cfg.get("skill_id")   # LEGADO — endereço por skill
+    if not agent_type_id and not queue_pool_id:
         # Fase E (skill-first): agent_types aposentados — queue_config pode
         # vir só com skill_id (UI do pool). A skill é a identidade do agente
         # de fila (segmento role=queue) e resolve o flow direto no registry.
@@ -5593,27 +5607,29 @@ async def process_queued(
             agent_type_id = explicit_skill_id
         else:
             logger.warning(
-                "queue_config has neither agent_type_id nor skill_id for pool=%s",
+                "queue_config sem `pool_id` (endereço), `agent_type_id` ou `skill_id` "
+                "para pool=%s — nada a ativar",
                 pool_id,
             )
             return
 
-    # Resolve agent type metadata (framework, skills list)
-    agent_type = await get_agent_type(http, tenant_id, agent_type_id)
-    if agent_type is None:
-        # YAML fallback (dev environment without Agent Registry)
-        flow = _load_yaml_fallback(agent_type_id)
-        if not flow and not explicit_skill_id:
-            logger.error(
-                "Queue agent %s not found in Agent Registry and no YAML fallback in %s",
-                agent_type_id, SKILLS_DIR,
-            )
-            return
-        # explicit_skill_id present: resolve_flow_for_agent fetches the flow
-        # from the registry by skill_id — no agent type nor YAML required.
-        skills: list[dict] = []
-    else:
-        skills = agent_type.get("skills", [])
+    skills: list[dict] = []
+    if agent_type_id:
+        # Resolve agent type metadata (framework, skills list)
+        agent_type = await get_agent_type(http, tenant_id, agent_type_id)
+        if agent_type is None:
+            # YAML fallback (dev environment without Agent Registry)
+            flow = _load_yaml_fallback(agent_type_id)
+            if not flow and not explicit_skill_id and not queue_pool_id:
+                logger.error(
+                    "Queue agent %s not found in Agent Registry and no YAML fallback in %s",
+                    agent_type_id, SKILLS_DIR,
+                )
+                return
+            # explicit_skill_id present: resolve_flow_for_agent fetches the flow
+            # from the registry by skill_id — no agent type nor YAML required.
+        else:
+            skills = agent_type.get("skills", [])
 
     # Prepend explicit skill_id if given and not already in the list
     if explicit_skill_id and not any(s.get("skill_id") == explicit_skill_id for s in skills):
@@ -5634,27 +5650,35 @@ async def process_queued(
     # `return` é ANTES do marcador — escrevê-lo faria o drain sinalizar um agente
     # que não existe, e aí o `participant_left` nunca seria produzido.
     #
-    # ⚠️ ISTO NÃO CONSERTA O ENDEREÇAMENTO. `pool_id` aqui é o pool de DESTINO, e é
-    # o slot DELE que está sendo consultado — o `queue_config.skill_id` continua
-    # sem ser lido (consequências 1 e 2 do handoff). O conserto do endereço é a F2
-    # (`queue_config` passa a endereçar um POOL de fila com deploy próprio), que os
-    # invariantes já decidem: "o POOL é a unidade endereçável" + "produção = snapshot
-    # do slot do POOL" (`resolve_flow_for_agent`, docstring). Resolver por
-    # `skill_id` → `skill.flow` reabriria o vazamento fechado em 2026-07-13.
+    # F2: o pool consultado é o de FILA quando há endereço; senão, o de destino
+    # (retrocompat — e é esse ramo que produz a config decorativa que a F2 fecha).
     #
     # Custo de I/O: nenhum no caso comum. `get_pool_current_flow` guarda por pool em
     # `_pool_flow_cache` (invalidado no `registry.changed`), e é a MESMA leitura que
     # o `activate_native_agent` faria logo abaixo.
-    if await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills, pool_id) is None:
+    _flow_pool_id = queue_pool_id or pool_id
+    _resolved = await resolve_flow_for_agent(
+        http, tenant_id, agent_type_id, skills, _flow_pool_id
+    )
+    if _resolved is None:
         logger.error(
-            "Agente de fila NÃO ativado: pool=%s session=%s agent=%s — nenhum flow "
-            "executável (pool sem slot `current`, ou skill inexistente). NENHUM marcador "
-            "e NENHUM segmento de fila foram criados; o contato espera em silêncio e o "
-            "drain re-roteia normalmente. Para ter agente de fila neste pool, promova um "
-            "slot (set-next → promote).",
-            pool_id, session_id, agent_type_id,
+            "Agente de fila NÃO ativado: destino=%s fila=%s session=%s agent=%s — nenhum "
+            "flow executável (pool de fila sem slot `current`, ou skill inexistente). "
+            "NENHUM marcador e NENHUM segmento de fila foram criados; o contato espera em "
+            "silêncio e o drain re-roteia normalmente. Promova um slot no pool de FILA "
+            "(set-next → promote), ou aponte `queue_config.pool_id` para um pool que já "
+            "tenha deploy.",
+            pool_id, _flow_pool_id, session_id, agent_type_id or "-",
         )
         return
+
+    # F2 — IDENTIDADE do agente de fila quando o endereço é o pool: o skill que
+    # REALMENTE rodou (o do slot `current`), não um rótulo declarado à parte. É o
+    # mesmo princípio do carimbo de `deploy_version`: o que o segmento afirma tem
+    # de ser o que executou. Sem isto, um `queue_config` só com `pool_id` deixaria
+    # `segments.agent_type_id` vazio — ausência onde há fato conhecido.
+    if not agent_type_id:
+        agent_type_id = _resolved[0]
 
     # Resolve customer_id from session meta
     customer_id = session_id
@@ -5668,7 +5692,12 @@ async def process_queued(
     # Set Redis marker so kafka_listener knows to signal the queue agent
     # instead of re-publishing to conversations.inbound when an agent becomes ready.
     marker_value = json.dumps({
+        # DESTINO (onde o contato espera) — o campo que já existia; nada o lê como
+        # endereço de deploy, e o drain só confere a EXISTÊNCIA da chave.
         "pool_id":       pool_id,
+        # F2: a FILA que executou. Diagnóstico, não contrato: é o que permite ler
+        # um marcador vivo e saber qual deploy está segurando o BLPOP.
+        "queue_pool_id": _flow_pool_id,
         "agent_type_id": agent_type_id,
         "activated_at":  datetime.now(timezone.utc).isoformat(),
     })
@@ -5700,8 +5729,8 @@ async def process_queued(
         )
 
     logger.info(
-        "Activating queue agent: session=%s pool=%s agent=%s",
-        session_id, pool_id, agent_type_id,
+        "Activating queue agent: session=%s destino=%s fila=%s agent=%s",
+        session_id, pool_id, _flow_pool_id, agent_type_id,
     )
 
     # ── Fase C (queue-attended-model): queue segment — own ledger entry ───────
@@ -5739,9 +5768,17 @@ async def process_queued(
         agent_type_id=agent_type_id, tenant_id=tenant_id,
         skills=skills,
         instance_id="",   # queue agents don't hold a routing slot
+        # `extra_context.pool_id` é o pool de DESTINO de propósito: o YAML da fila
+        # o usa no `conversation_escalate` para saber para onde mandar o contato
+        # quando um humano libera. Trocá-lo pelo pool de fila faria o agente
+        # escalar para si mesmo.
         extra_context={"pool_id": pool_id},
         segment_id=_q_seg_id,
-        pool_id=pool_id,   # fatia 1: allow $.config from the queue pool's slot
+        # F2: o DEPLOY a executar — pool de fila (e, com ele, o `$.config` do slot
+        # DELE). O comentário anterior aqui já dizia "the queue pool's slot"
+        # enquanto o valor era o do pool de destino: doc e código discordavam, e
+        # foi a doc que estava certa sobre a intenção.
+        pool_id=_flow_pool_id,
     )
 
     # ── Fase C: close the queue segment (wait window) ─────────────────────────

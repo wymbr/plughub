@@ -41,7 +41,29 @@ reprovar**; com baseline 0 qualquer aberto novo é vermelho sem aritmética.
 
 ---
 
-## Pendência 2 — `queue_config.skill_id` é decorativo *(defeito vivo, separado)*
+## Pendência 2 — `queue_config.skill_id` é decorativo *(FECHADA 2026-08-18 — F2 + F3 ✅)*
+
+> **Estado final.** F1 (a ordem) ✅ · **F2 (o endereço) ✅** · **F3 (o deploy) ✅**, as três medidas ao
+> vivo. Detalhe em `CHANGELOG.md` § "P2 — o agente de fila passa a ter ENDEREÇO". O texto abaixo é o
+> diagnóstico que originou o arco e fica como registro; **três coisas que ele afirma foram corrigidas
+> pela medição**:
+>
+> 1. **A F3 não era "dar deploy ao pool de fila".** `fila_humano` JÁ existia com `skill_fila_v1` no slot
+>    `current` e snapshot íntegro — um deploy **órfão**, que nada endereçava. A consequência 1 é pior do
+>    que registrada aqui: não é só config inerte na tela, é um pool inteiro promovido e invisível.
+> 2. **A "ponta solta" (§ passagem) não existia.** A linha do bridge para `e7d62017` está no log, às
+>    `20:17:00.204`. Na janela em que o bridge existiu, routing enfileirou 2 e o bridge emitiu 2, com os
+>    mesmos ids. O que enganou foi comparar janelas de log diferentes (o container foi recriado às 20:06).
+> 3. **O nome `_activate_queue_agent` estava velho** — a função é `process_queued`.
+>
+> **O que a F3 destapou.** Com o agente de fila rodando pela primeira vez, a escalada executou e o contato
+> DESAPARECEU: `conversation_escalate` fabricava `tenant_id="default"` quando `session:{id}:meta` faltava,
+> e o contato ia para um tenant sem instância nenhuma — `escalated_human` no segmento e nenhum `primary`.
+> Consertado nos dois lados (recusar inventar + escrever o meta no trigger de webhook) e validado
+> diferencialmente. Ver CHANGELOG.
+
+<details>
+<summary>Diagnóstico original (mantido como registro)</summary>
 
 Não era a causa do segmento aberto, e continua de pé. `resolve_flow_for_agent`
 (`orchestrator-bridge/main.py:494-497`) resolve produção pelo **slot `current` do POOL**, e
@@ -102,11 +124,11 @@ descartada; ela parecia barata sob o alvo n8n, que foi abortado no mesmo dia.
   recusa não deixa segmento nascer"*, não *"o caminho feliz continua criando segmento"*. O gate passou a
   declarar isso em voz alta em vez de calar. Cobrir as duas metades exige, na MESMA janela, um pool que
   recusa e um que ativa — o que a F3 destrava naturalmente.
-- **F2 — o ENDEREÇO** *(pendente)*: `queue_config.pool_id` em schemas + agent-registry + UI; o bridge
-  passa o **pool de fila** ao `activate_native_agent` e mantém o **pool de destino** no segmento.
-- **F3 — o DEPLOY** *(pendente)*: dar pool de fila com slot promovido ao `retencao_humano` e validar
-  ponta a ponta que um agente de fila roda de fato. Sem F3, F2 é campo novo sem consumidor — a própria
-  consequência 1 que P2 existe para fechar.
+- **F2 — o ENDEREÇO ✅ 2026-08-18**: `queue_config.pool_id` em schemas + UI + bridge; resolução e
+  `$.config` olham a FILA, segmento/marcador/`extra_context` mantêm o DESTINO.
+- **F3 — o DEPLOY ✅ 2026-08-18**: era religar `fila_humano`, deploy órfão que já existia.
+
+</details>
 
 ---
 

@@ -563,6 +563,48 @@ class WebhookAdapter(ChannelAdapter):
             # TTL 24h — extended by skill-flow-engine suspend executor if needed
             await self._redis.expire(ctx_key, 86_400)
 
+        # ── session:{id}:meta — a sessão precisa saber de que TENANT ela é ───────
+        #
+        # Escrito aqui desde 2026-08-18, e o motivo é um defeito medido ao vivo. Esta
+        # porta criava sessão SEM `meta`; toda outra origem escreve (o canal na conexão,
+        # o `delegate`/`collect` no caminho interno). Quem lê a chave trata a ausência
+        # como "use o default", e um dos leitores é `conversation_escalate`, que
+        # inventava `tenant_id="default"`: o contato escalado ia parar num namespace
+        # sem instância nenhuma (`default:pool:…:queue`) e morria em silêncio DEPOIS de
+        # o cliente ser avisado da transferência. Reproduzido em `8b3e2b27`, com
+        # `escalated_human` no segmento e nenhum segmento `primary`.
+        #
+        # A recusa do lado do escalate (`tenant_unknown`) fecha a perda silenciosa; esta
+        # escrita fecha a AUSÊNCIA que a provoca. As duas são necessárias e nenhuma
+        # substitui a outra: a primeira impede inventar, a segunda faz haver o que ler.
+        #
+        # Escrito ANTES do publish pelo mesmo argumento do ContextStore acima: quando o
+        # routing alocar e o primeiro step rodar, a chave já tem de existir.
+        #
+        # `pool_id` fica FORA de propósito — ele é reescrito pelo bridge na alocação
+        # (`process_routed`), e semeá-lo aqui gravaria o pool de ENTRADA num campo que
+        # os leitores tomam por "pool que está atendendo".
+        try:
+            _meta = {
+                "tenant_id":  tenant_id,
+                "channel":    "webhook",
+                "contact_id": customer_id or session_id,
+            }
+            if customer_id:
+                _meta["customer_id"] = customer_id
+            await self._redis.setex(
+                f"session:{session_id}:meta", 86_400, json.dumps(_meta),
+            )
+        except Exception as exc:
+            # Degradação nunca silenciosa: sem esta chave a escalação desta sessão será
+            # RECUSADA lá na frente (`tenant_unknown`), e sem esta linha o operador veria
+            # a recusa sem a causa.
+            logger.error(
+                "webhook trigger: session:%s:meta NÃO escrito (%s: %s) — uma escalação "
+                "desta sessão será recusada por tenant desconhecido",
+                session_id, type(exc).__name__, exc,
+            )
+
         await self._publish(event, topic="conversations.inbound")
 
         logger.info(

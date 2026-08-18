@@ -83,11 +83,17 @@ export const ROUTING_WEIGHTS_DEFAULTS: RoutingWeights = {
 /** Queue treatment config (queue-attended-model). Skill-first: skill_id is
  *  the field that matters; agent_type_id is legacy (agent types retired). */
 export interface QueueConfig {
+  /**
+   * F2 — ENDEREÇO do agente de fila: o POOL cujo slot `current` traz o flow.
+   * Único endereço que resolve para produção ("o POOL é a unidade endereçável"
+   * + "produção = snapshot do slot do POOL").
+   */
+  pool_id?: string
   /** LEGACY — kept for old YAML configs. */
   agent_type_id?: string
   /** Retention bound (s). 0/absent = platform default applies. */
   max_wait_s?: number
-  /** Queue-treatment flow. */
+  /** LEGADO (F2) — endereço por skill; sobrevive como identidade/retrocompat. */
   skill_id?: string
 }
 

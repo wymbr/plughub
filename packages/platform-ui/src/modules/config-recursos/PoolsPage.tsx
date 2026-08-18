@@ -571,7 +571,10 @@ const PoolsPage: React.FC = () => {
   ]
 
   const [pools,     setPools]     = useState<Pool[]>([])
-  const [skillFlows, setSkillFlows] = useState<Array<{ skill_id: string; name: string }>>([])
+  // (F2, 2026-08-18) O catálogo de SKILLS saiu daqui junto com o seletor de
+  // `queue_config.skill_id`: o endereço do agente de fila passou a ser um POOL, e
+  // `pools` já é carregado. Manter a lista viva sem consumidor seria oferecer de
+  // novo, em código, o endereço que a F2 aposentou.
   const [calendars, setCalendars] = useState<CalendarOption[]>([])
   const [competencySkills, setCompetencySkills] = useState<CompetencySkill[]>([])
   const [llmAccountOptions, setLlmAccountOptions] = useState<LlmAccountOption[]>([])
@@ -603,7 +606,11 @@ const PoolsPage: React.FC = () => {
     context_visibility_ns:       '' as string,   // comma-separated operator_namespaces
     context_visibility_allow_tags: '' as string,  // comma-separated operator_allow_tags (exact tags visible plain)
     routing_weights:             { ...ROUTING_WEIGHTS_DEFAULTS } as RoutingWeights,
-    // Queue treatment (queue-attended-model, skill-first): flow de fila + teto
+    // Queue treatment (queue-attended-model): POOL de fila (F2 — o endereço) +
+    // teto de espera. `queue_skill_id` é LEGADO: fica no estado só para ser
+    // preservado no save (apagá-lo em silêncio ao editar outro campo seria perda
+    // de config), nunca para resolver deploy.
+    queue_pool_id:               '',
     queue_skill_id:              '',
     queue_max_wait_s:            null as number | null,
     // Lifecycle hooks (wrap-up / NPS / post) — pool references per slot
@@ -709,24 +716,12 @@ const PoolsPage: React.FC = () => {
     }
   }, [session])
 
-  // Skill-flow catalog for the queue-treatment dropdown (skill-first).
-  const loadSkillFlows = useCallback(async () => {
-    if (!session) return
-    try {
-      const result = await registryApi.listSkills(session.tenantId)
-      setSkillFlows(
-        (result.items || []).map(s => ({ skill_id: s.skill_id, name: s.name || s.skill_id }))
-      )
-    } catch { /* stale ok */ }
-  }, [session])
-
   useEffect(() => {
     void loadPools()
     void loadCalendars()
     void loadCompetencySkills()
-    void loadSkillFlows()
     void loadLlmAccounts()
-  }, [loadPools, loadCalendars, loadCompetencySkills, loadSkillFlows, loadLlmAccounts])
+  }, [loadPools, loadCalendars, loadCompetencySkills, loadLlmAccounts])
 
   // ── form helpers ──────────────────────────────────────────────────────────────
 
@@ -760,7 +755,7 @@ const PoolsPage: React.FC = () => {
       channel_types: [], webhook_skill_id: '', sla_target_ms: 30000,
       max_reply_time_ms: null, calendar_id: '', context_visibility_ns: '', context_visibility_allow_tags: '',
       routing_weights: { ...ROUTING_WEIGHTS_DEFAULTS },
-      queue_skill_id: '', queue_max_wait_s: null,
+      queue_pool_id: '', queue_skill_id: '', queue_max_wait_s: null,
       hooks: { ...EMPTY_HOOKS },
       escalation_pools: [], mention_pools: [],
       llm_account_ids: [],
@@ -787,6 +782,7 @@ const PoolsPage: React.FC = () => {
       context_visibility_ns:       (pool.context_visibility?.operator_namespaces ?? []).join(', '),
       context_visibility_allow_tags: (pool.context_visibility?.operator_allow_tags ?? []).join(', '),
       routing_weights:             buildDefaultWeights(pool),
+      queue_pool_id:               pool.queue_config?.pool_id ?? '',
       queue_skill_id:              pool.queue_config?.skill_id ?? '',
       queue_max_wait_s:            pool.queue_config?.max_wait_s ?? null,
       hooks: {
@@ -924,11 +920,14 @@ const PoolsPage: React.FC = () => {
           : {}),
         ...(routing_skills.length ? { routing_skills } : {}),
         routing_weights: rw,
-        // Queue treatment (queue-attended-model, skill-first). Desmarcar a
-        // skill num pool que tinha fila envia null → registry limpa (DbNull).
-        ...(formData.queue_skill_id.trim() ? {
+        // Queue treatment (queue-attended-model). F2: quem ATIVA a fila é o
+        // `pool_id` (endereço de deploy); `skill_id` é legado e viaja junto só
+        // para não ser apagado em silêncio de uma config que ainda o usa.
+        // Limpar AMBOS num pool que tinha fila envia null → registry limpa (DbNull).
+        ...((formData.queue_pool_id.trim() || formData.queue_skill_id.trim()) ? {
           queue_config: {
-            skill_id: formData.queue_skill_id.trim(),
+            ...(formData.queue_pool_id.trim() ? { pool_id: formData.queue_pool_id.trim() } : {}),
+            ...(formData.queue_skill_id.trim() ? { skill_id: formData.queue_skill_id.trim() } : {}),
             ...(formData.queue_max_wait_s !== null ? { max_wait_s: formData.queue_max_wait_s } : {}),
           },
         } : (editingPool?.queue_config ? { queue_config: null } : {})),
@@ -1243,7 +1242,8 @@ const PoolsPage: React.FC = () => {
               </div>
             </div>
             <p className="text-xs text-muted-light mt-0.5">{t('pools.typeCapacity.agentKindHint')}</p>
-            {formData.agent_kind === 'ai' && formData.queue_skill_id.trim() && (
+            {formData.agent_kind === 'ai' &&
+              (formData.queue_pool_id.trim() || formData.queue_skill_id.trim()) && (
               <div className="mt-2 bg-warning-light border border-warning/30 text-warning-text px-3 py-1.5 rounded text-xs">
                 {t('pools.typeCapacity.queueNeedsHuman')}
               </div>
@@ -1294,19 +1294,24 @@ const PoolsPage: React.FC = () => {
             </p>
           </div>
 
-          {/* ── Queue treatment (queue-attended-model, skill-first) ──────────── */}
+          {/* ── Queue treatment (queue-attended-model) — F2: endereço = POOL ─── */}
           <div>
             <p className="text-sm font-semibold text-dark">{t('pools.queueCfg.label')}</p>
             <p className="text-xs text-gray mt-0.5 mb-2">{t('pools.queueCfg.hint')}</p>
             <div className="flex gap-3">
               <div className="flex-1">
                 <Select
-                  label={t('pools.queueCfg.skillFlow')}
-                  value={formData.queue_skill_id}
-                  onChange={e => setFormData({ ...formData, queue_skill_id: e.target.value })}
+                  label={t('pools.queueCfg.queuePool')}
+                  value={formData.queue_pool_id}
+                  onChange={e => setFormData({ ...formData, queue_pool_id: e.target.value })}
                   options={[
                     { value: '', label: t('pools.queueCfg.tenantDefault') },
-                    ...skillFlows.map(s => ({ value: s.skill_id, label: `${s.skill_id} — ${s.name}` })),
+                    ...pools
+                      .filter(p => p.pool_id !== formData.pool_id && !p.pool_id.endsWith('-int'))
+                      .map(p => ({
+                        value: p.pool_id,
+                        label: p.description ? `${p.pool_id} — ${p.description}` : p.pool_id,
+                      })),
                   ]}
                 />
               </div>
@@ -1323,6 +1328,13 @@ const PoolsPage: React.FC = () => {
                 />
               </div>
             </div>
+            {/* Endereço LEGADO: mostrado (não editável) quando existe, para que a
+                config não desapareça da tela nem seja apagada em silêncio. */}
+            {formData.queue_skill_id.trim() && (
+              <p className="text-xs text-muted-light mt-1">
+                {t('pools.queueCfg.legacySkill', { skill: formData.queue_skill_id.trim() })}
+              </p>
+            )}
           </div>
 
           {/* ── Lifecycle hooks (wrap-up / NPS / post) ───────────────────────── */}

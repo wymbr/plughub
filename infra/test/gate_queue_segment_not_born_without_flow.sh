@@ -11,19 +11,22 @@
 # sem marcador e sem segmento. O contato espera em silêncio e o drain re-roteia, que é
 # exatamente o comportamento de um pool sem `queue_config`.
 #
-# ⚠️ ESTE GATE NÃO JULGA O ENDEREÇAMENTO. `queue_config.skill_id` continua sem ser lido
-# (consequências 1 e 2 do handoff): o slot consultado é o do pool de DESTINO. Isso é a F2
-# (`queue_config` endereça um POOL de fila com deploy próprio). Ler um verde aqui como
-# "P2 resolvido" seria trocar a parte pelo todo.
+# F2 (2026-08-18) — o gate passou a julgar TAMBÉM o endereçamento. `queue_config.pool_id`
+# endereça um POOL de fila, e o bridge separou os dois fatos que viviam na variável `pool_id`:
+#   · destino = onde o contato espera  → é o que o SEGMENTO carimba (dimensão de Fila/SLA)
+#   · fila    = de quem é o DEPLOY     → é o slot que resolve o flow
+# A asserção é DIFERENCIAL: quando `fila ≠ destino`, tem de existir segmento no destino e
+# NENHUM na fila. Um gate que só contasse segmentos não distinguiria isso de nada.
 #
-# DUAS LEITURAS, e o gate afirma a relação entre elas — porque um contador de AUSÊNCIA
+# TRÊS LEITURAS, e o gate afirma a relação entre elas — porque um contador de AUSÊNCIA
 # sozinho não distingue "parou de criar fantasma" de "quebrei o agente de fila":
 #
 #   ausência  → pools que logaram "Agente de fila NÃO ativado" NÃO têm segmento na janela
 #   presença  → pools cujo flow resolveu CONTINUAM tendo segmento na janela  ← TESTEMUNHA
+#   endereço  → segmento no DESTINO, nunca na FILA                           ← F2
 #
-# Sem nenhuma das duas, o veredicto é INCONCLUSIVO: não houve amostra, e "0 fantasmas" seria
-# ausência de reprodução, não conserto.
+# Sem nenhuma das duas primeiras, o veredicto é INCONCLUSIVO: não houve amostra, e
+# "0 fantasmas" seria ausência de reprodução, não conserto.
 #
 # REPRODUÇÃO É MANUAL (como foi na família A). Instante ABSOLUTO, nunca `--since 300s`:
 # janela por duração soma a execução anterior e faz duas reproduções virarem uma.
@@ -59,13 +62,14 @@ echo
 # ── 0. PREFLIGHT — o que RODA, não o que está no repo ────────────────────────
 # O container não monta o fonte: sem `build`, este gate mediria a imagem antiga e o
 # vermelho seria do código velho, não do mundo.
-if ! $DC exec -T orchestrator-bridge grep -q 'Agente de fila NÃO ativado' "$SRC" < /dev/null 2>/dev/null; then
-  die "a F1 não está no fonte que roda. Rodar:
+if ! $DC exec -T orchestrator-bridge grep -q 'destino=%s fila=%s' "$SRC" < /dev/null 2>/dev/null; then
+  die "a F1/F2 não está no fonte que roda (procurado: o par 'destino=/fila=' das linhas de
+        ativação e recusa, que é o TOKEN que este gate parseia — não o identificador). Rodar:
         docker compose -f docker-compose.demo.yml build orchestrator-bridge
         docker compose -f docker-compose.demo.yml up -d orchestrator-bridge
         (\`restart\` NÃO basta — recarrega a imagem antiga)"
 fi
-echo "   preflight: a F1 está na imagem em execução"
+echo "   preflight: a F1/F2 está na imagem em execução"
 echo
 
 # ── 0.5. O CONTATO CHEGOU A ENFILEIRAR? ──────────────────────────────────────
@@ -99,8 +103,10 @@ if [ -n "$RECUSAS" ]; then
 else
   echo "   (nenhuma recusa na janela)"
 fi
-# `pool=x` sai no texto do log; extrair para casar contra os segmentos.
-POOLS_RECUSA=$(printf '%s' "$RECUSAS" | grep -oE 'pool=[^ ]+' | cut -d= -f2 | sort -u)
+# O pool a casar contra os segmentos é o de DESTINO — é ele que o segmento carimbaria se
+# nascesse. (Até a F2 o log dizia `pool=`; casar pelo token antigo devolveria "nenhuma
+# recusa" em silêncio, que é um gate incapaz de reprovar.)
+POOLS_RECUSA=$(printf '%s' "$RECUSAS" | grep -oE 'destino=[^ ]+' | cut -d= -f2 | sort -u)
 N_RECUSA=$(printf '%s' "$POOLS_RECUSA" | grep -c . || true)
 echo
 echo "   pools que recusaram: ${POOLS_RECUSA:-∅}  (distintos: ${N_RECUSA:-0})"
@@ -110,9 +116,15 @@ echo
 echo "── 2. bridge: ativações concluídas na janela (testemunha de presença) ────"
 $DC logs --no-log-prefix -t --since "$T0" orchestrator-bridge 2>/dev/null \
   | grep -F 'Activating queue agent' | sed 's/^/   /' || true
-N_ATIVOU=$($DC logs --no-log-prefix -t --since "$T0" orchestrator-bridge 2>/dev/null \
-           | grep -cF 'Activating queue agent' || true)
+ATIVACOES=$($DC logs --no-log-prefix -t --since "$T0" orchestrator-bridge 2>/dev/null \
+            | grep -F 'Activating queue agent' || true)
+N_ATIVOU=$(printf '%s' "$ATIVACOES" | grep -cF 'Activating queue agent' || true)
 echo "   ativações: ${N_ATIVOU:-0}"
+# F2 — os PARES (destino, fila) de cada ativação. Montados no bash, um por linha, para
+# não empurrar quoting shell→SQL mais de uma vez.
+PARES=$(printf '%s\n' "$ATIVACOES" \
+        | grep -oE 'destino=[^ ]+ fila=[^ ]+' \
+        | sed 's/destino=//; s/ fila=/ /' | sort -u | grep . || true)
 echo
 
 # ── 3. os segmentos de fila nascidos na janela ───────────────────────────────
@@ -212,6 +224,48 @@ else
   echo "      (pool com slot promovido, ou default de tenant configurado)."
 fi
 
+# (b2) F2 — os DOIS fatos continuam separados?
+#
+# Só é julgável quando `fila ≠ destino`; com os dois iguais (pool sem `queue_config.pool_id`)
+# a igualdade é o comportamento legado e não prova nada — dizer isso em voz alta é o que
+# impede um verde de comprar cobertura que não tem.
+N_PAR_DIF=0
+if [ -n "${PARES:-}" ]; then
+  while read -r DEST FILA_P; do
+    [ -n "$DEST" ] || continue
+    if [ "$DEST" = "$FILA_P" ]; then
+      echo "   ⚠️  ativação com fila=destino ('$DEST'): endereço legado, F2 não julgável aqui."
+      continue
+    fi
+    N_PAR_DIF=$((N_PAR_DIF+1))
+    N_D=$(chq "SELECT count() FROM $DB.segments FINAL
+                WHERE tenant_id='$TENANT' AND role='queue' AND started_at >= '$T0_CH'
+                  AND pool_id='$DEST'" | tr -d '\r')
+    N_F=$(chq "SELECT count() FROM $DB.segments FINAL
+                WHERE tenant_id='$TENANT' AND role='queue' AND started_at >= '$T0_CH'
+                  AND pool_id='$FILA_P'" | tr -d '\r')
+    case "${N_D:-x}${N_F:-x}" in *[!0-9]*) die "contagem por pool não numérica (destino='$N_D' fila='$N_F')" ;; esac
+    if [ "$N_D" -gt 0 ] && [ "$N_F" -eq 0 ]; then
+      ok "F2 ENDEREÇO: fila='$FILA_P' executou o deploy e o segmento ficou no destino
+       '$DEST' ($N_D) — nenhum segmento carimbado na fila (0), como manda o invariante
+       'never store a narrower-scope fact in a wider-scope field'"
+    elif [ "$N_F" -gt 0 ]; then
+      bad "F2 ENDEREÇO: $N_F segmento(s) de fila carimbado(s) com o pool de FILA
+       ('$FILA_P') em vez do de DESTINO ('$DEST') — os dois fatos voltaram a colapsar"
+    else
+      bad "F2 ENDEREÇO: houve ativação (fila='$FILA_P', destino='$DEST') e NENHUM segmento
+       em nenhum dos dois pools — a ativação não produziu ledger de fila"
+    fi
+  done <<EOF
+$PARES
+EOF
+fi
+[ "$N_PAR_DIF" -eq 0 ] && {
+  echo "   ⚠️  F2 NÃO EXERCITADA: nenhuma ativação com pool de fila distinto do destino na"
+  echo "      janela. Para exercitá-la, o pool de destino precisa de \`queue_config.pool_id\`"
+  echo "      apontando um pool com slot \`current\` promovido (ex.: fila_humano)."
+}
+
 # (c) fantasma remanescente — vale mesmo sem recusa no log
 [ "${N_FANTASMA:-0}" -eq 0 ] 2>/dev/null \
   && ok "nenhum segmento com assinatura de fantasma na janela" \
@@ -221,8 +275,10 @@ fi
 echo
 echo "   ✅ $PASS · ❌ $FAIL"
 echo
-echo '   ⚠️  LIMITE: este gate julga a ORDEM (nascer só depois de resolver). O'
-echo '      ENDEREÇAMENTO segue quebrado — `queue_config.skill_id` continua sem ser'
-echo '      lido, e o slot consultado é o do pool de DESTINO. Isso é a F2.'
+echo '   ⚠️  LIMITE: este gate julga a ORDEM (nascer só depois de resolver) e o ENDEREÇO'
+echo '      (deploy da fila × carimbo do destino). Ele NÃO julga o CONTEÚDO do'
+echo '      atendimento de fila: que o flow certo rodou, que o cliente recebeu as'
+echo '      mensagens, que o `__agent_available__` escalou para o destino. Isso é'
+echo '      reprodução ao vivo, não contagem de segmento.'
 [ "$FAIL" -eq 0 ] && { echo "   ✅ O SEGMENTO DE FILA NÃO NASCE SEM FLOW"; exit 0; }
 echo "   ❌ REPROVOU"; exit 1

@@ -47,8 +47,9 @@
     },
     "queueCfg": {
       "label": "Queue Treatment",
-      "hint": "Skill-flow that attends the customer while waiting (attended queue). Empty = tenant default. Max wait closes the contact with max_wait_exceeded.",
-      "skillFlow": "Queue skill-flow",
+      "hint": "Queue pool that attends the customer while waiting (attended queue). The executed flow is the one in THAT pool's Current slot — with no promoted slot the queue agent does not run and the contact waits in silence. Empty = tenant default. Max wait closes the contact with max_wait_exceeded.",
+      "queuePool": "Queue pool",
+      "legacySkill": "Legacy skill address: {{skill}} — preserved, but it does not resolve the deploy. Use the queue pool above.",
       "tenantDefault": "— Tenant default —",
       "maxWaitS": "Max wait (s)",
       "platformDefault": "default: 1800"

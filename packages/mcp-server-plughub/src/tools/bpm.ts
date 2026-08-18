@@ -918,18 +918,41 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
     withGuard("conversation_escalate", async (input: Record<string, unknown>) => {
       const parsed = ConversationEscalateInputSchema.parse(input)
 
-      // Retrieve stored session metadata from Redis (written by channel-gateway + orchestrator bridge)
+      // ── TENANT NÃO TEM DEFAULT (2026-08-18) ───────────────────────────────
+      //
+      // O DEFEITO QUE ISTO FECHA, medido ao vivo. `tenantId` nascia `"default"` e
+      // `channel` nascia `"webchat"`, e a leitura do meta era envolvida por um
+      // `catch {}` comentado *"ignore — use fallbacks"*. Numa sessão SEM
+      // `session:{id}:meta` (o trigger do endpoint webhook externo não cria a
+      // chave — só o canal na conexão e o caminho interno de delegate/collect
+      // criam) o evento saía com `tenant_id="default"`, e o Routing Engine
+      // enfileirava o contato num tenant que não existe: `default:pool:…:queue`,
+      // `default:queue_contact:…`, `default:ctx:…`. Nenhuma instância mora lá, então
+      // o contato NUNCA é alocado.
+      //
+      // O que o cliente vive: o agente de fila diz *"vou transferir você agora"*, o
+      // segmento fecha com `escalated_human` e o contato morre em silêncio. Nada fica
+      // vermelho — é o "valor plausível" da § Postura, com o agravante de o valor
+      // inventado ser um IDENTIFICADOR DE ISOLAMENTO. Um tenant fabricado não é
+      // degradação: é escrever estado de um contato real num namespace alheio.
+      //
+      // REGRA: identidade não tem fallback. Canal tem (é preferência de renderização,
+      // e um palpite errado degrada a entrega); tenant NÃO (é a fronteira de
+      // isolamento, e um palpite errado corrompe a fronteira). Sem tenant conhecido a
+      // escalação RECUSA, alto, e o `on_failure` do flow decide o que fazer.
       let contactId  = parsed.session_id
-      let tenantId   = "default"
+      let tenantId   = ""
       let customerId = parsed.session_id
-      // Default to "webchat" — "chat" is not a valid ConversationInboundEvent channel
-      // and would cause the Routing Engine to silently drop the escalation event.
+      // "chat" não é canal válido do ConversationInboundEvent e faria o Routing
+      // Engine descartar o evento em silêncio — normalizado abaixo.
       let channel    = "webchat"
+      let metaFound  = false
 
       if (deps?.redis) {
         try {
           const meta = await deps.redis.get(`session:${parsed.session_id}:meta`)
           if (meta) {
+            metaFound = true
             const parsed_meta = JSON.parse(meta) as Record<string, string>
             if (parsed_meta["contact_id"])  contactId  = parsed_meta["contact_id"]
             if (parsed_meta["tenant_id"])   tenantId   = parsed_meta["tenant_id"]
@@ -941,8 +964,39 @@ export function registerBpmTools(server: McpServer, deps?: BpmDeps): void {
               channel = rawChannel === "chat" ? "webchat" : rawChannel
             }
           }
-        } catch {
-          // ignore — use fallbacks
+        } catch (err) {
+          // Degradação nunca silenciosa: o `catch` mudo aqui foi metade do defeito —
+          // ele transformava "o Redis falhou" e "a sessão não tem meta" na MESMA
+          // ausência, e as duas caíam no tenant inventado.
+          console.error(
+            `[conversation_escalate] falha ao ler session:${parsed.session_id}:meta —`,
+            err,
+          )
+        }
+      }
+
+      if (!tenantId) {
+        console.error(
+          `[conversation_escalate] RECUSADA: session=${parsed.session_id} ` +
+          `target_pool=${parsed.target_pool} — tenant_id desconhecido ` +
+          `(session:{id}:meta ${metaFound ? "existe mas não traz tenant_id" : "AUSENTE"}). ` +
+          `A escalação NÃO foi publicada: publicá-la com um tenant inventado enfileira ` +
+          `o contato num namespace que não tem instância nenhuma, e ele morre em silêncio ` +
+          `depois de o cliente ser avisado da transferência. Origem provável: sessão criada ` +
+          `por um caminho que não escreve o meta (trigger de webhook externo).`,
+        )
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              escalated:  false,
+              error:      "tenant_unknown",
+              session_id: parsed.session_id,
+              target_pool: parsed.target_pool,
+              detail:     "session meta ausente ou sem tenant_id — escalação recusada",
+            }),
+          }],
+          isError: true,
         }
       }
 

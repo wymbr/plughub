@@ -344,9 +344,20 @@ pools:
     internal_queue_enabled: true
     # Fase C (queue-attended-model): agente de fila — ativado pelo bridge no
     # conversations.queued enquanto o contato espera; gera segmento role=queue
-    # (ledger de fila da Fase D). skill_id explícito porque agent_types estão
-    # aposentados (o bridge resolve o flow direto pela skill).
+    # (ledger de fila da Fase D).
+    #
+    # P2/F3 (2026-08-18) — o ENDEREÇO é o POOL `fila_humano`, que já existia com
+    # `deploy: { skill_id: skill_fila_v1 }` e slot `current` promovido, e que
+    # ninguém endereçava: um deploy órfão. Até aqui este bloco declarava só o
+    # SKILL, e o bridge consultava o slot do pool de DESTINO (`retencao_humano`),
+    # que não tem slot nenhum — daí o agente de fila nunca ter rodado, com o
+    # `skill_id` abaixo inerte na tela e nos relatórios.
+    #
+    # `agent_type_id`/`skill_id` ficam como endereço LEGADO (retrocompat); com
+    # `pool_id` presente, a identidade do segmento passa a ser o skill REAL do
+    # slot — o que de fato executou.
     queue_config:
+      pool_id: fila_humano
       agent_type_id: agente_fila_v1
       skill_id: skill_fila_v1
       # Fase E: teto de espera da fila (max_wait_exceeded). Validado com 30s

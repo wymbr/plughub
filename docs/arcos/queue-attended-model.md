@@ -58,6 +58,47 @@ suplementar (posição histórica), não como fonte de verdade.
    posição via ContextStore escrita pelo Routing — `session.queue.position`, `session.queue.eta`)
    com **zero chamada de LLM**. "Fila muda" é um skill-flow que não fala nada.
 
+## O endereço do agente de fila é um POOL — `queue_config.pool_id` (P2/F2, 2026-08-18)
+
+> **Atenção ao ler o item 2 acima.** Ele diz *"`pool_kind`/`queue_pool_id` dispensados no MVP"*, e isso
+> continua verdadeiro para **onde o agente de fila aparece** (o segmento `role='queue'` segue carimbado
+> com o pool-alvo, que é a dimensão certa do relatório). O que a F2 traz de volta é **só o ENDEREÇO**:
+> de que pool vem o *deploy* que executa. São perguntas diferentes, e tê-las colapsado foi o defeito.
+
+Até aqui `queue_config` declarava `skill_id`, e ele **nunca era lido**: `resolve_flow_for_agent` resolve
+produção pelo slot `current` do POOL, e `process_queued` passava o pool de DESTINO. Consequências medidas:
+config visível na tela sem executar nada; o relatório de Fila/SLA registrando "espera atendida" onde
+nenhum agente de fila rodou; e um pool de fila real (`fila_humano`, com `skill_fila_v1` promovido) inteiro
+**órfão**, sem ninguém o endereçando.
+
+**Dois fatos, duas variáveis** (`process_queued`):
+
+| fato | variável | quem consome |
+|---|---|---|
+| onde o contato ESPERA (destino) | `pool_id` | segmento `role='queue'`, marcador, `extra_context.pool_id` |
+| de quem é o DEPLOY (fila) | `queue_pool_id` | `resolve_flow_for_agent`, `$.config` do slot, `activate_native_agent` |
+
+O `extra_context.pool_id` fica no DESTINO **por necessidade, não por simetria**: o `escalar` do
+`skill_fila_v1` usa `$.session.pool_id` como `target_pool` — apontá-lo para a fila faria o agente escalar
+para si mesmo.
+
+**Por que POOL e não skill.** *"O POOL é a unidade endereçável"* (o mesmo skill pode estar deployado em N
+pools ⇒ resolver por skill é ambíguo) **+** *"produção = snapshot do slot `current` do POOL. Ponto."* —
+cujos fallbacks para `skill.flow` saíram em 2026-07-13 por serem vazamento. Endereçar por `skill_id`
+reabriria o buraco fechado. `skill_id` sobrevive como legado e como IDENTIDADE do segmento quando não há
+`pool_id`; com `pool_id`, a identidade passa a ser o `skill_id` real do slot — o que de fato executou.
+
+**Sem slot no pool de fila, o agente NÃO roda** (F1 recusa antes do marcador e do segmento) e o contato
+espera em silêncio, como num pool sem `queue_config`. Gate:
+`infra/test/gate_queue_segment_not_born_without_flow.sh` — as duas metades (recusa × presença) e a
+asserção diferencial do endereço. Aplicador de config: `infra/scripts/apply_queue_pool_address.sh`
+(o YAML é seed-if-absent; editar `queue_config` de pool existente é no-op).
+
+⚠️ **Escalação exige `session:{id}:meta`.** O `escalar` chama `conversation_escalate`, que tira tenant e
+canal dessa chave. Desde 2026-08-18 ele **recusa** (`tenant_unknown`) em vez de assumir um tenant — antes
+assumia `"default"` e o contato escalado sumia num namespace sem instância, depois de o cliente ser
+avisado da transferência. Sessão criada por caminho que não escreve o meta ⇒ fila atendida sem entrega.
+
 ## Ordem da fila — o score é chegada, a prioridade é derivada (2026-08-05)
 
 Invariante que faltava estar escrito, e cuja ausência custou dois leitores invertidos:

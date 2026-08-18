@@ -47,8 +47,9 @@
     },
     "queueCfg": {
       "label": "Tratamento de Fila",
-      "hint": "Skill-flow que acompanha o cliente enquanto espera (fila atendida). Vazio = padrão do tenant. O teto de espera fecha o contato com max_wait_exceeded.",
-      "skillFlow": "Skill-flow da fila",
+      "hint": "Pool de fila que acompanha o cliente enquanto espera (fila atendida). O flow executado é o do slot Corrente DESSE pool — sem slot promovido, o agente de fila não roda e o contato espera em silêncio. Vazio = padrão do tenant. O teto de espera fecha o contato com max_wait_exceeded.",
+      "queuePool": "Pool de fila",
+      "legacySkill": "Endereço legado por skill: {{skill}} — preservado, mas não resolve o deploy. Use o pool de fila acima.",
       "tenantDefault": "— Padrão do tenant —",
       "maxWaitS": "Espera máx. (s)",
       "platformDefault": "padrão: 1800"

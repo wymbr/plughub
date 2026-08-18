@@ -74,6 +74,32 @@ export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>
 
 export const QueueConfigSchema = z.object({
   /**
+   * O ENDEREÇO do agente de fila (P2/F2, 2026-08-18): o **POOL** cujo slot
+   * `current` traz o flow de tratamento de fila. É o único endereço que resolve
+   * para produção.
+   *
+   * POR QUE POOL, e não skill. Dois invariantes já decidiam isto, e a F2 apenas
+   * os aplica:
+   *   · *"o POOL é a unidade endereçável — nunca o `skill_id`"* — o mesmo skill
+   *     pode estar deployado em N pools com configs diferentes, então resolver
+   *     por skill é AMBÍGUO (o router de webhook rejeita pelo mesmo motivo);
+   *   · *"PRODUÇÃO = snapshot do slot `current` do POOL. Ponto."*
+   *     (`resolve_flow_for_agent`) — os fallbacks para `skill.flow` foram
+   *     removidos em 2026-07-13 por serem VAZAMENTO (pool sem slot executava a
+   *     definição viva ⇒ edição ia a produção sem deploy). Fazer o agente de
+   *     fila resolver por `skill_id` reabriria exatamente esse vazamento.
+   *
+   * O pool referenciado precisa ter slot `current` promovido — sem ele o agente
+   * de fila NÃO roda (o bridge recusa antes de criar marcador ou segmento, F1) e
+   * o contato espera em silêncio, como num pool sem `queue_config`.
+   *
+   * Ausente ⇒ retrocompat: o bridge cai no pool de DESTINO, que é o
+   * comportamento que a F2 existe para corrigir (o slot consultado era o do pool
+   * onde o contato espera, nunca o do agente de fila).
+   */
+  pool_id: z.string().optional(),
+
+  /**
    * LEGACY — agent_type_id of the queue agent (agent types are retired).
    * Default "": the bridge resolves the flow directly via skill_id
    * (skill-first, Fase E). Kept for backward compat with old YAML configs.
@@ -89,8 +115,16 @@ export const QueueConfigSchema = z.object({
   max_wait_s: z.number().int().min(0).default(1800),
 
   /**
-   * skill_id of the queue-treatment flow (the field that matters, skill-first).
-   * The bridge activates the queue agent resolving this flow in the registry.
+   * LEGADO desde a F2 (2026-08-18) — endereço por skill.
+   *
+   * Sobrevive por DOIS motivos, nenhum deles "resolver o flow":
+   *   1. retrocompat de config já gravada (não apagar em silêncio a config de
+   *      quem não migrou);
+   *   2. IDENTIDADE do agente de fila — quando não há `pool_id`, é este valor
+   *      que vira `segments.agent_type_id` do segmento `role='queue'`.
+   *
+   * Com `pool_id` presente, a identidade passa a ser o `skill_id` REAL do slot
+   * `current` (o que de fato rodou), e este campo não é consultado.
    */
   skill_id: z.string().optional(),
 })

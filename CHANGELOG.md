@@ -2,6 +2,100 @@
 
 ---
 
+## P2 — o agente de fila passa a ter ENDEREÇO, e a escalada para de inventar tenant (2026-08-18)
+
+Fecha a Pendência 2 de
+[`docs/product/handoff-segmentos-abertos-2026-08-18.md`](docs/product/handoff-segmentos-abertos-2026-08-18.md)
+(F2 + F3), e o defeito que só apareceu porque a F3 fez esse trecho executar pela primeira vez.
+
+### F2 — `queue_config.pool_id`: dois fatos que viviam na mesma variável
+
+`process_queued` (o handoff o chamava `_activate_queue_agent`; o nome estava velho) usava `pool_id` para
+duas coisas incompatíveis: a **dimensão de relatório** (*"onde o contato esperou"*, que o segmento
+carimba) e o **deploy a executar** (o slot que resolve o flow). Coincidirem é a causa de
+`queue_config.skill_id` nunca ter sido lido — o slot consultado era o do pool de DESTINO.
+
+`queue_config.pool_id` endereça agora um **POOL de fila**. Não foi escolha de gosto: `resolve_flow_for_agent`
+é categórico (*"PRODUÇÃO = snapshot do slot `current` do POOL. Ponto."*) e registra que os fallbacks para
+`skill.flow` saíram em 2026-07-13 **por serem vazamento**; resolver por `skill_id` reabriria o buraco
+fechado. Somado a *"o POOL é a unidade endereçável"*, sobra uma forma coerente só.
+
+- `@plughub/schemas`: `QueueConfigSchema.pool_id`; `skill_id` rebaixado a legado **com razão declarada** —
+  sobrevive como retrocompat e como IDENTIDADE do segmento no ramo sem `pool_id`.
+- bridge: `queue_pool_id` × `pool_id` separados. Resolução e `$.config` olham a FILA; segmento, marcador e
+  `extra_context` mantêm o DESTINO — este último **não** é detalhe: o `escalar` do `skill_fila_v1` usa
+  `$.session.pool_id` como `target_pool`, e trocá-lo faria a fila escalar para si mesma. Com endereço por
+  pool, a identidade do agente passa a ser o `skill_id` REAL do slot (o que executou), não um rótulo à parte.
+- platform-ui: o seletor virou de **pool** (era de skill); o endereço legado é exibido e **preservado no
+  save** — descartá-lo ao editar outro campo seria perda silenciosa de config. O catálogo de skills saiu da
+  página junto com seu único consumidor.
+
+### F3 — não era "dar deploy": era religar um deploy ÓRFÃO
+
+Medido: `fila_humano` já existia com `deploy: { skill_id: skill_fila_v1 }`, slot `current` promovido e
+`yaml_snapshot` íntegro — e **ninguém o endereçava**. A consequência 1 do handoff era pior do que
+registrada: não é só config que não executa, é um pool de fila inteiro, promovido, invisível.
+`retencao_humano` não tem slot nenhum, que é o que produzia o ERROR da F1.
+
+Aplicado por `infra/scripts/apply_queue_pool_address.sh` (preflight de slot + **leitura de volta**) porque
+o YAML é seed-if-absent: editar `queue_config` de pool existente é no-op. O YAML foi editado também — ele
+é o que vale em base limpa.
+
+### As duas metades do gate, medidas em janelas espelhadas
+
+`gate_queue_segment_not_born_without_flow.sh` ganhou a asserção da F2 (**diferencial**: com `fila ≠ destino`,
+segmento no destino e **zero** na fila) e teve o parser corrigido — ele casava `pool=`, que a F2 renomeou
+para `destino=`; sem isso o gate ficaria **incapaz de reprovar**, verde por não achar o token.
+
+| janela | recusa | presença | endereço | veredicto |
+|---|---|---|---|---|
+| A `21:38:58Z` | não exercitada *(declarado)* | 1 ativação · 1 segmento | `fila_humano ≠ retencao_humano`, 1 no destino / 0 na fila | `✅ 3 · ❌ 0` |
+| B `21:41:09Z` | 1 recusa · 0 segmentos | não exercitada *(declarado)* | ramo só-pool, `agent=-` | `✅ 2 · ❌ 0` |
+
+Ciclo completo na janela A: marcador → ativação → `Queue drain: signalled` → escalada → segmento **fechado**
+com `escalated_human` (245 s). Primeira execução do agente de fila neste pool.
+
+### O defeito que a F3 destapou: `conversation_escalate` fabricava `tenant_id`
+
+Com o agente de fila rodando, a escalada rodou — e o contato **desapareceu**. `bpm.ts` nascia com
+`tenantId = "default"` e envolvia a leitura de `session:{id}:meta` num `catch {}` comentado *"ignore — use
+fallbacks"*. Numa sessão sem `meta` (o trigger do endpoint webhook externo não criava a chave; canal e
+delegate/collect criam) o evento saía com `tenant_id="default"` e o Routing Engine enfileirava o contato
+num tenant inexistente — `default:pool:…:queue`, `default:queue_contact:…`, `default:ctx:…`, **5 chaves**,
+nenhuma instância. Medido: sessão `8b3e2b27` com `escalated_human` no segmento `queue` e **nenhum segmento
+`primary`**; o cliente ouviu *"vou transferir você agora"* e o contato morreu em silêncio.
+
+**Regra derivada: identidade não tem fallback.** Canal tem (é preferência de renderização; palpite errado
+degrada a entrega). Tenant **não** — é a fronteira de isolamento, e um palpite errado escreve estado de um
+contato real num namespace alheio. Não é degradação: é corromper a fronteira.
+
+- `conversation_escalate` **recusa** (`tenant_unknown`, `isError`) quando não há tenant conhecido, nomeando
+  no log se o `meta` estava ausente ou apenas sem o campo — o `catch` mudo tratava "Redis falhou" e "sessão
+  sem meta" como a mesma ausência.
+- o trigger de webhook externo passa a escrever `session:{id}:meta` (tenant/channel/contact). `pool_id`
+  fica de fora de propósito: o bridge o reescreve na alocação, e semeá-lo aqui gravaria o pool de ENTRADA
+  num campo que os leitores tomam por "pool que está atendendo".
+
+As duas são necessárias e nenhuma substitui a outra: uma impede inventar, a outra faz haver o que ler.
+
+**Validação diferencial** (mesmo disparo, `fbfa54d1`): `meta` presente com `tenant_demo`/`webhook` (antes
+`nil`) · **0** chaves `default:*` (antes 5) · `Routed session=fbfa54d1 → instance=human-… pool=retencao_humano`
+sem `tenant=default` · contato entregue ao humano no Console.
+
+### Achados laterais registrados
+
+- **A "ponta solta" do handoff não existia.** A linha do bridge para `e7d62017` estava lá, às
+  `20:17:00.204`. Na janela em que o bridge existiu, routing enfileirou 2 e o bridge emitiu 2, mesmos ids.
+  O erro foi comparar janelas de log diferentes (container recriado às 20:06). Nem (a) nem (b): instrumento.
+- **`agent_pause` não recompõe o snapshot do pool.** Durante toda a reprodução o Monitor afirmou
+  `available: 2` num pool com o SET de alocação vazio (`updated_at` congelado). Mesma família que a F3a
+  consertou via `refresh_snapshots_for_instance`; este caminho ficou de fora. Valor plausível num display
+  que o `system_availability_check` usa para decidir oferta de canal ao cliente.
+- **`total_instances` do snapshot é CAPACIDADE, não gente** (Σ `max_concurrent`): 1 humano logado lia como
+  "3 instâncias". Só o `SMEMBERS` identifica.
+
+---
+
 ## Pendências do handoff de segmentos abertos: P1 · P3 · P4 fechadas, P2/F1 ✅ (2026-08-18)
 
 Sucede a investigação registrada abaixo. As quatro pendências de
