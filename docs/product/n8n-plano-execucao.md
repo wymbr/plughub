@@ -1,5 +1,15 @@
 # Plano de execução — interop n8n
 
+> ⛔ **HISTÓRICO — as fases deste plano NÃO serão executadas.** Arco abortado em 2026-08-18; ver
+> [`n8n-arco-abortado-2026-08-18.md`](n8n-arco-abortado-2026-08-18.md).
+>
+> **Duas coisas deste plano sobrevivem, com prioridade inalterada e razão própria** (§4.3 da reversão),
+> e matá-las por associação de nome seria o dano real: a **Fase 0a** — a rota anônima
+> `POST /v1/channels/webhook/pool/{pool_id}`, que este plano mediu ser *"o barramento interno de disparo
+> do produto"* com `tenant_id` vindo do corpo (cross-tenant por construção assim que for publicada) — e a
+> **Fase 2a**, promover o `skill-flow-service` a pacote de primeira classe (o runtime de produção mora em
+> `packages/e2e-tests/services/`). As duas são achados independentes do n8n.
+
 > **Status: proposto para avaliação conjunta** — 2026-08-17
 > **Entrada:** [`n8n-triagem-2026-08-17.md`](n8n-triagem-2026-08-17.md) (55 itens de direção) e
 > [`n8n-interop-boundaries-and-seams.md`](n8n-interop-boundaries-and-seams.md) §11 (as fases).

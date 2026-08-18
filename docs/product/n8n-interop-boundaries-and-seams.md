@@ -1,5 +1,15 @@
 # n8n × PlugHub — fronteiras, costuras e escopo
 
+> ⛔ **HISTÓRICO — ARCO ABORTADO em 2026-08-18.** O alvo abaixo (*"todo skill autorado no n8n; o editor
+> de fluxo local sai por completo"*) **não será perseguido**. Decisão, justificativa e reclassificação
+> item a item em [`n8n-arco-abortado-2026-08-18.md`](n8n-arco-abortado-2026-08-18.md). Não citar este
+> documento como contrato, plano ou justificativa.
+>
+> **Sobrevivem dele, com dono novo:** a direção *"config + interpretador genérico"* (§5.3), que nunca
+> dependeu do n8n; os 13 defeitos colaterais da §14, explicitamente marcados como independentes; e a
+> **costura C** (n8n como *domain MCP server* governado), que **não foi abortada** — aponta na direção
+> contrária, não toca autoria, e espera decisão explícita (§7 do documento de reversão).
+
 > **Status: proposto** — 2026-08-17 (revisão 3)
 > **Decide:** o que o n8n assume, o que o PlugHub retém, por onde os dois se falam, onde vivem
 > relatórios e histórico, e o que sai de escopo.

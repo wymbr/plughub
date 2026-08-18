@@ -2,6 +2,116 @@
 
 ---
 
+## Pendências do handoff de segmentos abertos: P1 · P3 · P4 fechadas, P2/F1 ✅ (2026-08-18)
+
+Sucede a investigação registrada abaixo. As quatro pendências de
+[`docs/product/handoff-segmentos-abertos-2026-08-18.md`](docs/product/handoff-segmentos-abertos-2026-08-18.md),
+mais a execução da §5 da reversão do n8n.
+
+### P3 — família B (`primary` de suspend/resume) MEDIDA, não mais inferida
+
+O conserto de 08-18 tinha sido validado numa forma só (falha rápida da fila, `role='queue'`, 3 ms). O
+raciocínio de que `primary`/`specialist` eram *o mesmo defeito* era **inferência**. Novo gate
+`infra/test/gate_family_b_resume_closes.sh [N]`: reproduz ao vivo trigger → delegate que suspende →
+resume → complete em `formfill_demo_ia`, exercitando `4352`/`4653` (o `left` com `outcome='suspended'`,
+que era o que sumia) e `8210`/`8241`.
+
+**Previsão escrita antes, e o medido, com N=6:** `total_janela` 12 = 12 · `fechados_suspended` 6 = 6 ·
+`abertos_janela` 0 = 0 · `abertos_total` 9 = 9. Calibração N=1 (2·1·0·9) resolveu a incerteza declarada:
+o parqueamento no pool pull **não** emite segmento `queue`. Pares `joined`/`left` a **6–21 ms** — o
+regime mais apertado, o mesmo em que a família A reproduzia.
+
+**Janela DIFERENCIAL de propósito** (`started_at >= T0`, T0 do relógio do ClickHouse, não do host): a
+baseline histórica nunca muda, então um gate por total jamais poderia ficar vermelho.
+
+**O que o verde NÃO prova**, registrado no gate: não houve controle negativo (exigiria stash + rebuild).
+O que liga as duas famílias é **código**, não estatística — `key=session_id` mora no funil
+`_publish_participant_event` (`main.py:3250`), por onde passam os 13 call sites. `specialist` segue **sem
+amostra viva**: seu único join exige `conference_id` (delegate-as-conference), e nenhum pool webhook do
+demo alcança esse caminho.
+
+### P4 — task de fundo não morre mais calada
+
+77 `asyncio.create_task` em `main.py` (as 82 do grep incluíam 1 teste, 1 docstring em
+`instance_bootstrap.py` e 3 menções em comentário), **2 com referência forte**, 75 fire-and-forget.
+Novo helper `_spawn` (`main.py:198`): referência forte em `_BG_TASKS` + `add_done_callback` que **nomeia
+a falha**. Todos os 77 migrados; sobrevive **uma** `asyncio.create_task` crua, a de dentro do `_spawn`.
+
+Dois defeitos distintos, e o caro é o segundo: **retenção** (a doc do asyncio pede referência forte; o
+loop guarda só fraca) e **atribuição** — a exceção não recuperada virava um `Task exception was never
+retrieved` tardio e **sem `session_id`**. A atribuição é extraída do frame do traceback **só no caminho
+de falha**, para não custar um dict de locals por task no caminho feliz.
+
+Gate `infra/test/gate_bg_task_visibility.sh` — **diferencial, não controle negativo**: levanta a MESMA
+exceção por `_spawn` e por `create_task` cru, no mesmo processo e na mesma janela, e afirma a
+divergência. Medido: `create_task( = 1` · `_spawn( = 80` · `TRATADO_N/ERROR/NOMEOU = 1/1/1` ·
+`CONTROLE_N = 0` · `RETIDAS_APOS = 0`.
+
+**Correção de leitura, medida:** o caminho cru **não é mudo** — emite `never retrieved` e até nomeia a
+corrotina (`coro=<explode()…>`). O que ele não consegue nomear é a **sessão** (o repr não carrega
+argumentos), e chega ~300 ms depois, esperando o GC. A diferença é *atribuição e pontualidade*.
+
+**Troca de log, não perda:** ao chamar `task.exception()` nós recuperamos a exceção, então o asyncio
+deixa de emitir a dele. Quem procurar a mensagem antiga não vai achá-la.
+
+### P1 — o passado foi EXPURGADO, não reparado *(decisão)*
+
+Os 9 órfãos históricos (5 `primary` · 2 `queue` · 2 `specialist`, de 08-10 a 08-14) eram irrecuperáveis:
+o merge já havia apagado a linha perdedora. Três opções, duas recusadas — **replay do tópico**
+(re-emite eventos que o consumer trata como `live`, e o `origin` existe para essa fronteira) e **fechar
+sinteticamente** (fabricar `ended_at` transforma "não sei quando terminou" num valor plausível, que é o
+modo de falha que a § Postura de Engenharia manda caçar).
+
+`infra/test/purge_orphan_segments.sh` — dry-run por defeito, deleta por **lista explícita de
+`segment_id`** (predicado em mutação alcança o que ninguém mediu, e mutação não desfaz), **aborta** se
+houver aberto depois do corte (expurgar durante defeito vivo apagaria a evidência junto com o lixo), e
+**não toca `participation_intervals`** (o `ORDER BY` dela colide dois segmentos do mesmo participante e
+não há como casar com segurança qual linha é qual órfão). Aplicado: 825 → **816**, alvos restantes **0**.
+
+**O ganho é do instrumento:** com baseline 9 o `probe_open_segments_closed_sessions.sh` lia 9 para sempre
+e **nunca poderia reprovar**. Baseline agora é **zero**, e o veredicto foi reescrito.
+
+> **A v1 do expurgo falhou por quoting e o script pegou a si mesmo.** A lista era montada em SQL
+> (`concat('''', segment_id, '''')`), voltou com aspas escapadas (`\'id\'`) e o ALTER morreu com
+> `SYNTAX_ERROR`. O script **não** declarou sucesso: a seção de verificação viu `alvos restantes = 9` e
+> saiu 1. Duas lições no código: quoting que atravessa shell→SQL→saída→SQL tem quatro chances de errar e
+> uma de acertar (a lista passou a ser montada no bash); e `mutações pendentes: 0` era um **zero
+> mentiroso** — não havia mutação para esperar —, então erro de submissão agora aborta antes do laço.
+
+### P2/F1 — o segmento de fila não nasce antes de haver flow
+
+A ordem em `_activate_queue_agent` era marcador → `participant_joined` → `activate_native_agent`, que é
+quem descobre se existe flow. Pool sem slot produzia segmento `queue` de 3 ms que **não enfileirou
+ninguém**. A resolução subiu para antes; sem flow, ERROR nomeando o pool e `return` **sem marcador e sem
+segmento** — mesmo comportamento de um pool sem `queue_config`. Custo de I/O zero no caso comum
+(`_pool_flow_cache` por pool). Gate: `infra/test/gate_queue_segment_not_born_without_flow.sh <T0>`.
+
+**Promovido a INFO no mesmo caminho:** o ramo *"pool sem `queue_config` e sem default de tenant"* logava
+em `DEBUG` num serviço rodando em INFO — então *"o contato não enfileirou"* e *"enfileirou e o bridge
+desistiu"* produziam a mesma janela vazia. Descoberto ao rodar o gate, que voltou INCONCLUSIVO e não
+conseguia dizer qual dos dois era. Mesmo motivo que promoveu o `marker SET`.
+
+**F1 NÃO conserta o endereçamento.** `queue_config.skill_id` continua sem ser lido; o slot consultado é o
+do pool de DESTINO. F2/F3 pendentes, com o desenho já fechado por dois invariantes: *"o POOL é a unidade
+endereçável"* e *"produção = snapshot do slot do POOL"* (docstring de `resolve_flow_for_agent`, que
+registra que os fallbacks para `skill.flow` foram removidos em 2026-07-13 por serem vazamento). Logo
+`queue_config` passa a endereçar um **pool de fila com deploy próprio** — resolver por `skill_id`
+reabriria o vazamento fechado.
+
+### Reversão do n8n — §5 executada
+
+`CLAUDE.md` § *Pending*: cabeçalho reescrito (a triagem de 08-17 deixa de ser filtro vivo), `Congela` →
+**Descongelado** em Arc 15, Usage Metering, Pricing e isolamento por `origin`; `Escopo reduzido` →
+**REEXAMINAR** em Business in Any Media e Customer Surveys. Justificativas trocadas sem mexer em
+prioridade em Audit LGPD, Record/Replay e Outbound. A guarda do `ask_when` **inverteu de razão sem
+enfraquecer**: a pressão para empurrar control-flow ao form agora vem do lado oposto (enquanto o editor
+próprio for insuficiente, o formulário é o caminho de menor resistência). Aviso ⛔ no topo dos quatro
+documentos de n8n, cada um nomeando **o que sobrevive dele**. Menções ao n8n **como concorrente**
+(`value-proposition`, `target-audience`, `competitive-analysis*`, `faturamento`) preservadas — apagá-las
+falsificaria o comparativo.
+
+---
+
 ## Segmento que nunca fecha: causa raiz e CONSERTO · volume de sessões: RESOLVIDO ✅ (2026-08-18)
 
 Investigação que vinha de cinco rodadas sem convergir, fechada com reprodução ao vivo e conserto

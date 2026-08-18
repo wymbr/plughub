@@ -104,7 +104,7 @@ plughub/
       adr-evaluation-sampling.md ← amostragem: cota por agente (virada para estado) + carimbo de versão
       adr-quality-substrate-isolation.md ← isolamento do substrato de avaliação por `origin` (híbrido; implementado ✅)
       adr-survey-form-scoring-composition.md ← composição de nota em survey (dimension+perguntas ponderadas; primitivo `scoring.ts` compartilhado c/ Quality) — proposto
-      adr-dialog-conditional-skip-logic.md ← skip-logic condicional em DialogForm (guarda declarativa `ask_when`, **não** control-flow) — **Aceito + implementado 2026-07-08**, validado ao vivo no webchat *(corrigido 2026-08-17: este índice dizia "proposto" por mais de um mês)*. **Guarda LOAD-BEARING**: com o editor de fluxo local saindo (interop n8n), a pressão para empurrar control-flow ao form aumenta — se ceder, o editor de fluxo é reconstruído dentro do editor de formulário, com linguagem pior. Avaliador canônico `evaluateAskWhen` em `schemas/src/dialog.ts:423`, **hoje triplicado** (espelhos em `survey_web.py:386` e `DialogFormRenderer.tsx:400`). Aberta só 1 das 3 decisões do ADR (`checklist` multi-valor)
+      adr-dialog-conditional-skip-logic.md ← skip-logic condicional em DialogForm (guarda declarativa `ask_when`, **não** control-flow) — **Aceito + implementado 2026-07-08**, validado ao vivo no webchat *(corrigido 2026-08-17: este índice dizia "proposto" por mais de um mês)*. **Guarda LOAD-BEARING**, e a razão mudou sem enfraquecer *(2026-08-18)*: a versão anterior dizia "com o editor de fluxo local saindo (interop n8n)" — o editor **fica**, e a pressão para empurrar control-flow ao form **existe do mesmo jeito**, agora vinda do lado oposto (enquanto o editor de fluxo próprio for insuficiente, o formulário é o caminho de menor resistência). Se ceder, o editor de fluxo é reconstruído dentro do editor de formulário, com linguagem pior. Avaliador canônico `evaluateAskWhen` em `schemas/src/dialog.ts:423`, **hoje triplicado** (espelhos em `survey_web.py:386` e `DialogFormRenderer.tsx:400`). Aberta só 1 das 3 decisões do ADR (`checklist` multi-valor)
       adr-outbound-survey-as-collect-contact.md ← survey web outbound = contato via `collect` (canal survey/web), membro N1 da journey; sinal solto vira legado/anônimo (Journey J4c) — proposto
       adr-customer-360-two-surfaces.md ← Cliente 360 (Console 4 abas × Analytics): Contexto/Histórico(jornadas em aberto)/Cliente(cadastro manual+360 quality/survey)/Ações; jornadas = filtro `customer_id` no `/reports/journeys`; cadastro v1 reusa Resolvedor Fase A/B (merge=Fase C) — proposto
       adr-human-approval-workflow-step.md ← Aprovação humana = passo de workflow (collect/delegate a pool, dispatch_mode config); conteúdo=DialogForm (reuso), aprovador=agente logado (Modo A), Console/inbox responsivo, retorno→choice; omnichannel adiado (canal-agnóstico); fases A1–A6 — proposto (fechado)
@@ -1380,30 +1380,40 @@ Outbound completo (1–5).**
 
 ## Pending (Next Iteration)
 
-> **Triado em 2026-08-17 contra a linha mestra n8n** — veredicto por item (balde + âncora de fase) em
-> [`docs/product/n8n-triagem-2026-08-17.md`](docs/product/n8n-triagem-2026-08-17.md). As subseções abaixo
-> trazem o balde entre colchetes. **Baldes:** `Segue` (fosso ou pré-requisito de fase) · `Escopo reduzido`
-> (parte morre, a linha nomeia qual) · `Congela` (não investir até o gate da fase 3) · `Aborta` (depende do
-> editor de fluxo que morre).
+> ⚠️ **A triagem de 2026-08-17 NÃO é mais filtro vivo — a direção que a ancorava foi revertida em
+> 2026-08-18.** Ver [`docs/product/n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md).
+> Os baldes que aparecem entre colchetes abaixo eram relativos a um alvo que não existe mais:
+>
+> | Balde antigo | Estado agora |
+> |---|---|
+> | `Congela` | **DESCONGELADO** — prendia "até o gate da fase 3", e esse gate não existe. Volta à fila normal, **sem prioridade herdada** |
+> | `Escopo reduzido` | **REEXAMINAR** — o corte era *"esta parte vira template n8n"*. Rejulgar item a item; **não** reverter em bloco (alguns cortes eram bons por mérito próprio) |
+> | `Aborta` | **segue abortado**, por mérito próprio — nenhum caiu por *"o n8n cobre"* |
+> | `Segue` | inalterado; onde a justificativa citava o alvo, ela foi trocada, não a prioridade |
+>
+> A evidência por item da triagem (arquivo:linha) continua válida; os baldes e as âncoras de fase, não.
+> **No lugar do alvo:** A2A server binding ([`adr-a2a-server-binding.md`](docs/adr/adr-a2a-server-binding.md))
+> e editor gráfico próprio alavancado por *execução observável*. A direção *"config + interpretador
+> genérico"* sobrevive inteira e **nunca dependeu do n8n**.
 >
 > ⚠️ Arcos concluídos foram movidos daqui para o `CHANGELOG.md` — a regra de manutenção deste arquivo
 > proíbe ✅ no `CLAUDE.md`, e item concluído dentro de uma seção chamada *Pending* volta a ser triado como
 > trabalho em aberto. Limpeza restrita ao que a triagem tocou; varredura completa da seção é escopo à parte.
 
-### Arc 15 — WebRTC (decisão em aberto) — **[Congela]**
+### Arc 15 — WebRTC (decisão em aberto) — **[Descongelado 2026-08-18]**
 - bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado). Decisão, não
-  implementação pendente; o arco em si está concluído. Não é fronteira nem governança de contato.
+  implementação pendente; o arco em si está concluído.
 
-### Usage Metering — Channel Gateway Adapters — **[Congela]**
-- `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them. **Razão do congelamento:** depende da evolução dos módulos de channel-gateway, que não andou. *(O achado de que `llm_tokens_*` não é emitido no `/v1/reason` continua valendo, mas é **defeito**, não item de direção.)*
+### Usage Metering — Channel Gateway Adapters — **[Descongelado 2026-08-18]**
+- `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them. Depende da evolução dos módulos de channel-gateway, que não andou — motivo **próprio**, e o único que sobrou depois que o gate de fase caiu. *(O achado de que `llm_tokens_*` não é emitido no `/v1/reason` continua valendo, mas é **defeito**, não item de direção.)*
 
-### Pricing Module — **[Congela]**
-- **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`. Comercial/quota; sem relação com fronteira ou contato com pessoa.
+### Pricing Module — **[Descongelado 2026-08-18]**
+- **Integração metering × pricing** *(deferred)*: módulo que aplica planos e escreve `{tenant}:quota:limit:*`.
 
-### Audit LGPD — Fases Pendentes — **[Segue — fosso, urgência AUMENTADA pelo n8n]**
-> O n8n retém execution log com PII (invariante §12.6 do doc de interop). A **Fase 5**
-> (`config_snapshot` do namespace `masking`) passa a ser o instrumento que prova a política ao DPO
-> quando parte da execução mora fora da plataforma.
+### Audit LGPD — Fases Pendentes — **[Segue — fosso]**
+> ⚠️ A urgência extra vinha de *"parte da execução mora fora da plataforma"* (retenção de log com PII
+> no motor de terceiro). Com a reversão, **a execução volta a ser toda em casa e essa urgência cai** —
+> as quatro fases seguem pendentes por obrigação de LGPD, que é razão própria e independente.
 - **Fase 2** *(deferred)*: `original_content` desmascarado via endpoint batch de resolução de tokens em Core.
 - **Fase 3** *(deferred)*: `user_access` logs — topic Kafka `user_access.events` em auth-api + ClickHouse.
 - **Fase 4** *(deferred)*: SAR/erasure pipeline — pseudonimização `sessions_stream` + anonimização ClickHouse.
@@ -1413,15 +1423,19 @@ Outbound completo (1–5).**
 *(O arco R13a–R13d está concluído; história no `CHANGELOG.md` e detalhe em `docs/arcos/quality-ingest.md`.)*
 - **Concerns** (§9 do doc do arco): (a) `ReplayContext` `session_meta`/`participants`/`sentiment` ainda em default p/ importados (transcript completo); (b) correlação por-requisição do quality-ingest — `pool_id` degrada se um contato vier partido entre POSTs. O concern (c) foi resolvido pelo discriminador `origin` (abaixo).
 
-### Isolamento do substrato por `origin` — Fase 2 — **[Congela]**
+### Isolamento do substrato por `origin` — Fase 2 — **[Descongelado 2026-08-18 — mas o gatilho próprio segue não disparado]**
 Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato, com **filtro default `live`** no report layer da analytics-api (`_apply_origin_scope`) e no sampling da evaluation-api (`_passes_filters`) — é o default no backend que dá a garantia, e a UI operacional espelha (sem seletor de origem: origem é contexto de qualidade, não dropdown operacional). **Invariantes:** `origin` é a verdade universal por-sessão; **não** estender `pool.agent_kind`.
-**Pendente = só a Fase 2** (partição CH `PARTITION BY (…, origin)` + `pool.origin_class`), **adiada por decisão em 2026-06-25**: é governança/lifecycle, não correção. **Gatilho de reativação inalterado pela triagem** — importação externa real com obrigação de retenção/erasure própria (LGPD, `DROP PARTITION`). O n8n **não** é importação de histórico e não antecipa o gatilho. → [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
+**Pendente = só a Fase 2** (partição CH `PARTITION BY (…, origin)` + `pool.origin_class`), **adiada por decisão em 2026-06-25**: é governança/lifecycle, não correção. **Gatilho de reativação inalterado pela reversão** — importação externa real com obrigação de retenção/erasure própria (LGPD, `DROP PARTITION`). Sair do balde `Congela` **não** o antecipa: o item nunca dependeu do alvo abortado, e continua esperando o gatilho de negócio. → [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
 
-### Business in Any Media — processo channel-abstract + framework de loja *(proposta)* — **[Escopo reduzido]**
+### Business in Any Media — processo channel-abstract + framework de loja *(proposta)* — **[REEXAMINAR 2026-08-18]**
 > **Fica** (fronteira/governança): resolvedor de identidade nível (b), gate de identificação,
-> commerce-cards com checkout mascarado + repasse ao PSP, novas `ChannelCapability`.
-> **Morre** (vira template n8n): o nível (a) *"fluxo negocial channel-abstract"*, o contrato delegate por
-> pool e o intake-flow — são **autoria de fluxo**, e a autoria sai por completo.
+> commerce-cards com checkout mascarado + repasse ao PSP, novas `ChannelCapability`. Esta metade
+> nunca dependeu do alvo e segue inalterada.
+> ⚠️ **A outra metade voltou a ser questão aberta.** O nível (a) *"fluxo negocial channel-abstract"*,
+> o contrato delegate-por-pool e o intake-flow tinham sido cortados com a razão *"vira template n8n,
+> porque a autoria sai por completo"* — a autoria **fica**, então o fundamento do corte caiu.
+> Rejulgar pelo mérito: são autoria de fluxo, e o que decide agora é o escopo do editor próprio
+> (quanto mais vira config + interpretador genérico, menos precisa ser fluxo autorado).
 > **Consumidor da parte que fica:** Cliente 360 / Resolvedor de Identidade Fase C.
 - Reposicionamento process-centric + comércio conversacional sobre o modelo de 3 níveis (a/b/c). Specs em `docs/product/`: arquitetura-alvo (3 níveis), resolvedor de identidade/cadastro (nível b, generaliza `pending_workflow`), contrato delegate-por-pool, commerce-cards (nível c), fluxo de intake. Detalhe e fases em `TODO.md`. Base existe (workflow+canais+suspend/resume+masking); falta cadastro de identidade completo, commerce-cards e o nível (b) de primeira classe.
 - **Resolvedor de Identidade (nível b) — Fase A · Slices 1–2 ✅** (2026-07-02, CHANGELOG): cadastro mínimo interno no channel-gateway (módulo `identity/`). **Slice 1 (Redis):** Lookup 1 `resolve_or_provision` (`{t}:identity:{kind}:{hash}`→`customer_id` nativo, PII hasheada com salt de env), Lookup 2 `pending_by_customer` (generaliza `pending_workflow`), endpoints `POST …/identity/resolve` + `GET …/pending/by-customer/{id}`, tools MCP `customer_resolve` + `pending_workflow_get(anchors)`, dual-write flag-gated no `delegate`. **Slice 2 (PG durável):** schema `identity` (`customers`/`secondary_keys`/`external_refs`/`merges`, raw asyncpg idempotente, reusa o pool dos attachments), promoção efêmero→PG no gatilho concreto (`write_pending`), fallback Redis→PG com reidratação (`matched_by="durable"`). **Destrava a retomada cross-canal** e é a chave estável que o histórico (arco H) precisa. **Slice 4 ✅** (2026-07-02): o bridge (`_close_contact_layer` → `_resolve_close_customer_id`) carimba o `caller.customer_id` **nativo** do ContextStore em `sessions.customer_id` no fechamento (fallback `contact_id`) → conserta o `contact_id`-como-`customer_id` e reconecta H1/H2/H3; `AgentAssistPage` chaveia a `HistoricoTab` pelo `caller.customer_id`. **Fase A completa (Slices 1–4).** **Wiring do intake ✅ (2026-07-03, CHANGELOG):** `agente_portabilidade_intake_v1` resolve o `customer_id` nativo (`customer_resolve`, âncoras `numero_atual`+`contact_identifier`) e grava `caller.customer_id` via `context_set` pré-ramificação → Slice 4 propaga o nativo. Validado no demo (2 intakes, mesmo número → mesmo `cus_…`). **Nota de deploy:** pool migrado a `PoolSkillSlot` exige `set-next`+`promote` (edição de YAML+restart republica `skill.flow` mas não re-snapshota o slot `current` que o bridge executa). **Slice 3 ✅ (2026-07-03, CHANGELOG):** campos opcionais `customer_resumable` (default `false`) + `resume_policy` (`offer|auto`, default `offer`) no step `delegate` e `collect` (`schemas/src/skill.ts`), propagados pelos call sites explícitos dos executores (`executeDelegate`/`executeCollect` — ponto de drop) → `persistDelegate`/`persistCollect` → skill-flow-service → channel-gateway. A **dual-write `pending_by_customer`** (antes incondicional) agora é **gated em `customer_resumable`** em `handle_delegate` **e** `handle_delegate_conference` (spec §6); `resume_policy` viaja no `PendingEntry.policy`. `session_resumed` ganha `resume_origin` (`same_channel|token|identity`; só `token` wirado — `same_channel`/`identity` ficam p/ o caminho de reconexão-oferta da Fase B). Guardrail de perfil = colocação no schema (o discriminated union descarta os campos de um `suspend`). Demo: `skill_portabilidade_demo_v1` (`notificar_e_confirmar`) seta `customer_resumable: true` p/ manter a retomada cross-canal sob o gate. **Reconexão-oferta por identidade ✅ (2026-07-03, Fase B slice, CHANGELOG):** o intake (`agente_portabilidade_intake_v1`) resolve pendências por **anchors[]** (Lookup 1→2 cross-canal via `pending_workflow_get(anchors)`) em vez de `contact_identifier`; `find_pending_by_customer` devolve `policy` + view achatada (compat legado) e a dual-write guarda `context_preview` **mascarado** (`operadora_destino` claro, `numero_atual`→`***4321`); novo `choice avaliar_politica_retomada` honra `policy` (`auto`→retoma direto, `offer`→menu); `resume_origin=identity` percorre intake delegate→`session.resume_origin`→confirmação→`workflow_resume` (tool tolerante a valor ausente→`token`)→endpoint→`handle_resume`→`session_resumed`. Validado no demo (oferta cross-canal com número mascarado). **Identidade progressiva + posse de canal (OTP) + gate seguro ✅ (2026-07-04, Fase B completa em 3 fases, CHANGELOG + ADR `adr-identity-channel-possession.md`):** (1) progressiva — `resolve_or_provision` anexa âncoras *miss* ao vencedor como `claimed` (email sozinho resolve depois); `verification_class` (`claimed|possessed`) no índice Redis (`{cid,vc}`, leitor tolerante) + PG; confiança = `f(kind,classe)` (possessed>claimed). (2) OTP como **serviço componível opcional** (`OtpService`: challenge/verify, código só-hash, rate-limit, entrega mockada gated por `PLUGHUB_OTP_DEV_RETURN_CODE`); `otp_verify`→`attach_anchor(possessed,durable)` é a **única** via para `possessed` (`customer_attach_key` só `claimed`; invariante possessed⟺verificado); tools `otp_challenge`/`otp_verify`/`customer_attach_key`/`customer_update_attributes`. (3) **default seguro**: retomada cross-canal de `customer_resumable` exige `possessed` — `pending_workflow_get` devolve `verification_required` (sem vazar existência) quando só `claimed`; intake oferece OTP (proativo com recusa)→verifica→re-consulta. **Plataforma = autoridade de posse de canal, não de identidade-de-registro** (emenda princípio 7/§4.4; identidade legal segue no CRM do tenant). **Falta (Fase C / quando houver CRM):** `external_refs` + merge de clientes; wiring do step CRM `resolve`; origem `resume_origin=same_channel` (continuidade intra-canal, platform-level); transporte real do OTP; `persistCollect` no skill-flow-worker legado. Plano: `docs/product/identity-resolver-fase-a-plano.md`.
@@ -1455,25 +1469,30 @@ Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato,
 
 ### Record/Replay Harness *(proposta)* — **[Segue — fase 5]**
 - Generaliza o Session Replayer num harness de gravação/replay em todas as costuras (driver/mock por seam) p/ regressão determinística e gate de promoção via `ComparisonReport`. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva. Spec em `docs/product/record-replay-harness-spec.md`. Detalhe em `TODO.md`.
-- **Reexaminado na triagem, não presumido:** com o runtime externo fica **mais valioso** (é o único gate capaz de pegar a avaliação tier-2 achatando sem alarme) e **mais caro** (o n8n é costura nova a gravar). Decisivo: o **trace de execução** que o harness precisa é **o mesmo** que o mapeador de `pipeline_state` da fase 5 precisa — construir uma vez, não duas.
+- **Justificativa trocada em 2026-08-18, prioridade preservada.** A razão de então era *"é o único gate capaz de pegar a avaliação tier-2 achatando sem alarme"* — ela **caiu junto com o alvo**, porque a avaliação deixa de achatar quando a execução fica em casa. Sobrevive pela razão original e própria: **gate de promoção** por regressão determinística. Também some o custo extra que a triagem lhe atribuía (não há costura nova a gravar).
 
-### Customer Surveys — Módulo de Pesquisas de Satisfação *(spec/ADR)* — **[Escopo reduzido]**
+### Customer Surveys — Módulo de Pesquisas de Satisfação *(spec/ADR)* — **[REEXAMINAR 2026-08-18]**
 > **Fica:** S5/S8/S9–S11, store per-response, resíduos do S1 (nenhum produtor CES/PMF/FCR; `value_label`
-> ignorado em `CustomerVoicePage.tsx:161`), e o **S7 = editor de DialogForm**, que sobrevive ao alvo e
-> **ganha importância**. **Absorvido:** o S2 já era literalmente *"runner genérico + DialogForm"* — passa a
-> ser a frente *"promover o interpretador a serviço de código"* (pré-requisito da fase 5).
-> **Aborta junto:** o trio `skill_survey_runner_v1`/`skill_survey_outbound_v1`/`skill_survey_trigger_v1`,
-> que nenhum pool deploya e que ensina o modelo de orquestração-em-YAML.
+> ignorado em `CustomerVoicePage.tsx:161`), e o **S7 = editor de DialogForm** — que **ganha importância
+> com a reversão**, não perde: o conteúdo conversacional continua sendo autorado em casa, e a guarda do
+> `ask_when` (sem control-flow no form) segue load-bearing.
+> **S2 — reavaliar o enquadramento.** Ele era *"runner genérico + DialogForm"* e tinha sido **absorvido**
+> pela frente *"promover o interpretador a serviço de código"*, ancorada num pré-requisito de fase 5 que
+> não existe mais. A frente sobrevive (agora como **redutor de escopo do editor próprio**), mas se o S2
+> volta a ser fatia com dono próprio ou continua absorvido é decisão a tomar, não herdada.
+> **Segue abortado por mérito próprio:** o trio `skill_survey_runner_v1`/`skill_survey_outbound_v1`/
+> `skill_survey_trigger_v1`, que nenhum pool deploya. Não foi cortado por *"o n8n cobre"*, e a reversão
+> não o ressuscita.
 - Generaliza o NPS de fim-de-contato (`skill_nps_v1` + `on_contact_end` + `survey_record` → `session_signal`) num módulo de 5 instrumentos (**CSAT/NPS/CES/PMF/FCR**; Health Score = composto futuro). Princípio: separar **instrumento** (`survey_definition`, composto de perguntas reutilizáveis `survey_question` — N formulários por tipo via form-builder; editor — ADR §16×§17: **B decidida** = 1 skill interpretador genérico + **form JSON versionado** (draft/published na evaluation-api), **engine estendido em 2 peças** (`$.config` do slot no flow + `menu.options/fields` dinâmicos), binding via `interface_schema`→`PoolSkillSlot.config_json` (`form_id` + `survey_form_get`); **A alternativa** = compile-to-skill via `SurveyCompiler`) de **gatilho** (**decisão no skill**, não na plataforma) de **veículo** (runner na conferência / link web). **Gatilho (revisão 2026-06-23)**: o hook é genérico e despacha sempre; o `skill_survey_runner_v1` lê `@ctx.session.contact_outcome` e decide — "ciclo fechado" (`resolved`) é convenção customizável do runner, não invariante de plataforma. Único pré-requisito de plataforma: carimbar `contact_outcome`/`segment_outcome` no ContextStore pré-hook. Achado corrigido: o `skill_nps_v1` é slot transacional (CSAT) com instrumento NPS colado — substituído pelo runner genérico. Net new: **quarentena** anti-fadiga (tool MCP `survey_eligibility_check` + ledger PG/Redis), schema PG `survey` (question/definition/instance/response/quarantine), **interface web pública** `/survey/:token` + envio outbound, **lente `customer_voice`/view "Visão do cliente"** na bancada 360°, **navegador de respostas** `/analise/surveys` (lista por tipo + verbatim + áudio/STT, LGPD) e **agente IA `agente_survey_analyst_v1`** (classifica sentiment/tema/urgência + endereça via Rules Engine/`workflow_trigger`). **Retorno outbound** (§19): contato ativo via `collect`/Arc 19, modo auto (rules) OU **caixa de ações no Console** (sessão outbound-intent parqueada na **inbox pull já existente** — `PullInboxPanel`/`dispatch_mode`/`work_queue`; novo = pool de retorno + skill pós-claim). **claim ≠ collect**: o claim só anexa + dispara briefing (`on_human_start` copilot: contexto da origem + verbatim + histórico); o agente coordena o `collect`/dial via menu `agents_only`. Associação à base de cliente via `customer_key` (forward-compatível com o cadastro dinâmico futuro). Fases S1–S10. **Cadastro de cliente e Health Score fora de escopo** (só os ganchos de dados).
 - **Reconciliação de store (2026-07-07, ADR `adr-survey-form-scoring-composition.md`):** a nota original "form JSON versionado na **evaluation-api** + `survey_form_get`" é **superseded** — o `survey_definition` é um **`DialogForm`+dimensions na dialog-api** (D8; o dialog primitive as-built usa dialog-api + `form_get`). Composição de nota: camada `dimension` (instrumento) agrupa perguntas com **escala+agregação na dimension** (perguntas herdam), `weighted_mean` peso-1-default com re-normalização de NA, **dimensions paralelas** (um sinal por dimension, ≠ composite único do Quality); `survey_record` **compõe** server-side (D9) via o primitivo compartilhado `@plughub/schemas/scoring.ts` (`composeScore`). Schema escrito; runtime + editor com dimension pendentes.
 - Spec: `docs/arcos/customer-surveys.md`.
 
 ### Outbound — refinamentos — **[Segue — fosso]**
 *(O arco Fases 1–5 está concluído; história no `CHANGELOG.md` e detalhe em `docs/arcos/outbound.md`.
-A §10.1 do doc de interop fechou a favor de **ficar**: o pacing nunca morou no `mailing-api` — é a agenda —,
-e o n8n não tem entidade de audiência nem máquina de estado por destinatário. **Sobe na triagem:** o
-`do_not_contact` da Fase 3b, cujo smoke está **escrito e não validado**, é veto de contato com pessoa, e o
-n8n aumenta o volume de disparo.)*
+O substrato de audiência — `mailing`/`campaign`/`campaign_delivery`, com máquina de estado por
+destinatário e pacing na agenda — é capacidade própria, e nenhuma parte dele esteve em jogo na direção
+revertida. **Item mais urgente da seção:** o `do_not_contact` da Fase 3b, cujo smoke está **escrito e
+não validado** — é veto de contato com pessoa rodando sem gate verde.)*
 - **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
   `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
   possessed-only), preferência (cadastro de cliente).

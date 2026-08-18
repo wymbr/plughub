@@ -62,7 +62,7 @@ echo
 
 # ── 1. baseline por papel, COM testemunha (total) ───────────────────────────────
 echo "── 1. abertos × total, por papel — só sessões FECHADAS ─────────────────────"
-echo "   (base de 2026-08-14: primary 5 · queue 2 · specialist 2 = 9 em 676)"
+echo "   BASELINE ESPERADA: 0 abertos (os 9 históricos foram expurgados em 2026-08-18)"
 chq "
   SELECT g.role                        AS papel,
          countIf(g.ended_at IS NULL)   AS abertos,
@@ -192,27 +192,33 @@ ABERTOS=$(chq "
 echo "── veredicto ───────────────────────────────────────────────────────────────"
 case "${ABERTOS:-x}" in
   ''|*[!0-9]*) echo "⚠️  INCONCLUSIVO: contagem não numérica ('$ABERTOS')"; exit 2 ;;
-  0)  echo "   ✅ 0 abertos em sessão fechada. Se a base de 08-14 tinha 9, ALGUÉM"
-      echo "      apagou/limpou — verificar antes de comemorar (0 também é o valor"
-      echo "      de uma tabela truncada)."; exit 0 ;;
-  *)  echo "   ⚠️  $ABERTOS aberto(s)."
+  0)  echo "   ✅ 0 abertos em sessão fechada — que é a BASELINE ESPERADA desde o"
+      echo "      expurgo de 2026-08-18 (\`purge_orphan_segments.sh\`)."
+      echo "      A testemunha \`total\` da seção 1 é o que separa isto de uma tabela"
+      echo "      truncada: se ela vier 0 também, o veredicto é INCONCLUSIVO, não verde."
+      exit 0 ;;
+  *)  echo "   ❌ $ABERTOS aberto(s) em sessão fechada — DEFEITO VIVO."
       echo
-      echo "   ⚠️  A leitura MID/TAIL foi DERRUBADA por medição em 2026-08-18 — não"
-      echo "      recomeçar por ela. A causa raiz não era caminho nem durabilidade:"
+      echo "   A baseline deste probe é ZERO. Os 9 históricos (primary 5 · queue 2 ·"
+      echo "   specialist 2, todos anteriores a 2026-08-15) foram EXPURGADOS em"
+      echo "   2026-08-18: eram irrecuperáveis (o merge já havia apagado a linha"
+      echo "   perdedora) e mantê-los tornava este gate incapaz de ficar vermelho."
+      echo "   Logo, qualquer linha aqui é nova — não há mais 'passado conhecido'"
+      echo "   para descontar."
+      echo
+      echo "   ⚠️  NÃO recomeçar pela leitura MID/TAIL: foi derrubada por medição."
+      echo "      A causa raiz não era caminho nem durabilidade —"
       echo "      'conversations.participants' era publicado SEM CHAVE num tópico de 3"
-      echo "      partições, o par joined/left do mesmo segmento invertia, e o 'joined'"
-      echo "      inserido depois vencia a dedup nas DUAS tabelas. Consertado com"
-      echo "      key=session_id + ReplacingMergeTree(row_version) — CHANGELOG 2026-08-18."
+      echo "      partições, o par joined/left invertia, e o 'joined' inserido depois"
+      echo "      vencia a dedup nas DUAS tabelas. Consertado com key=session_id +"
+      echo "      ReplacingMergeTree(row_version) — CHANGELOG 2026-08-18."
       echo
-      echo "      BASELINE ESPERADA: primary 5 · queue 2 · specialist 2 (= 9), todos"
-      echo "      anteriores a 2026-08-15. São PASSADO NÃO REPARADO: o merge já apagou a"
-      echo "      linha perdedora, e o DEFAULT do row_version só conserta onde as duas"
-      echo "      ainda coexistem."
+      echo "   Próximo passo é UM comando, e ele acha a fronteira em que o dado ainda"
+      echo "   existe (separa produtor de consumidor):"
+      echo "      bash infra/test/probe_participant_event_in_kafka.sh <session_id>"
+      echo "   left no tópico ⇒ consumidor/ClickHouse · left ausente ⇒ produtor."
       echo
-      echo "      SE APARECER UM NOVO (aberto com data > 2026-08-18), o conserto regrediu"
-      echo "      ou há outro produtor. Próximo passo é UM comando, e ele acha a fronteira"
-      echo "      em que o dado ainda existe:"
-      echo "         bash infra/test/probe_participant_event_in_kafka.sh <session_id>"
-      echo "      left no tópico ⇒ consumidor/ClickHouse · left ausente ⇒ produtor."
+      echo "   Se o papel for 'primary' de webhook, o ciclo tem gate próprio:"
+      echo "      bash infra/test/gate_family_b_resume_closes.sh 6"
       exit 1 ;;
 esac

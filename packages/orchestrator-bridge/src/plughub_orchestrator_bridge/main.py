@@ -121,6 +121,109 @@ GROUP_ID                = "orchestrator-bridge"
 _MAX_DISPATCH_ATTEMPTS    = 3
 _DISPATCH_BACKOFF_BASE_MS = 500   # 500ms → 1 000ms between retries
 
+
+# ── Tasks de fundo: retenção + exceção NOMEADA ────────────────────────────────
+#
+# POR QUE ISTO EXISTE. O bridge dispara ~77 corrotinas em fire-and-forget. Antes
+# deste helper, NENHUMA guardava referência forte e NENHUMA tinha
+# `add_done_callback`. São dois defeitos distintos, e o segundo é o caro:
+#
+#   (1) RETENÇÃO — a doc do asyncio é explícita: o event loop guarda apenas
+#       referência FRACA às tasks. Sem uma referência forte, o coletor pode
+#       levar uma task **no meio da execução**, e ela some sem erro em lugar
+#       nenhum. É raro; é também exatamente o formato de defeito que este
+#       repositório já pagou caro para aprender a não tolerar.
+#
+#   (2) ATRIBUIÇÃO — uma exceção não recuperada só vira log quando a task é
+#       coletada, e o que sai é um "Task exception was never retrieved" com
+#       traceback e **sem session_id**. Num serviço que processa N sessões em
+#       paralelo, um traceback sem sessão não diz QUAL contato quebrou: dá para
+#       saber que algo morreu, não para ir atrás. O `_bg_done` abaixo extrai
+#       `session_id`/`tenant_id`/`pool_id` do frame do traceback e os põe na
+#       linha do log.
+#
+# TROCA DE LOG, NÃO PERDA. Ao chamar `task.exception()` nós RECUPERAMOS a
+# exceção, então o asyncio deixa de emitir o "never retrieved" dele. Isso é
+# deliberado: trocamos um log genérico e tardio por um log nomeado e imediato.
+# Quem procurar a mensagem antiga no log não vai achá-la — e é assim que deve ser.
+#
+# LIMITE: retenção protege contra a coleta precoce, não contra a task NUNCA
+# terminar. Task pendurada aparece como crescimento de `_BG_TASKS`, e é para isso
+# que serve o aviso de limiar — um vazamento silencioso vira sintoma nomeado.
+_BG_TASKS: set[asyncio.Task] = set()
+
+# Acima disto, o conjunto deixou de ser "tasks em voo" e virou vazamento. Não é
+# limite rígido (nada é recusado): é o ponto em que a ausência de sintoma para de
+# ser evidência de saúde.
+_BG_TASKS_WARN_AT = 500
+_bg_warned = False
+
+
+def _bg_done(task: "asyncio.Task") -> None:
+    """Callback único de todas as tasks de fundo: solta a referência e NOMEIA a falha."""
+    _BG_TASKS.discard(task)
+    if task.cancelled():
+        return                      # cancelamento é decisão nossa, não falha
+    try:
+        exc = task.exception()
+    except Exception:               # loop fechando durante o shutdown
+        return
+    if exc is None:
+        return
+
+    # Atribuição SÓ no caminho de falha: no caminho feliz isto custaria construir
+    # um dict de locals por task, e o bridge dispara estas corrotinas por evento.
+    ctx = ""
+    try:
+        tb = exc.__traceback__
+        if tb is not None:
+            loc = tb.tb_frame.f_locals
+            bits = [
+                f"{k}={loc[k]}"
+                for k in ("session_id", "tenant_id", "pool_id", "segment_id")
+                if loc.get(k)
+            ]
+            ctx = " ".join(bits)
+    except Exception:
+        ctx = ""                    # atribuição é bônus; nunca pode derrubar o handler
+
+    logger.error(
+        "task de fundo '%s' morreu com %s: %s%s",
+        task.get_name(), type(exc).__name__, exc,
+        f"  [{ctx}]" if ctx else "  [sem contexto no frame]",
+        exc_info=exc,
+    )
+
+
+def _spawn(coro, *, name: str | None = None) -> "asyncio.Task":
+    """
+    Substitui `asyncio.create_task` em TODO site fire-and-forget do bridge.
+
+    Assinatura deliberadamente idêntica no uso comum (`_spawn(corotina(...))`)
+    para que a migração dos 77 sites seja troca de token, e não reescrita — diff
+    mecânico é diff revisável. O `name` default vem do nome da própria corrotina,
+    então o log já sai dizendo QUAL caminho morreu sem ninguém anotar nada.
+    """
+    if name is None:
+        name = getattr(getattr(coro, "cr_code", None), "co_name", None) or "anon"
+    # A ÚNICA `asyncio.create_task` que sobrevive no arquivo. O preflight do gate
+    # conta exatamente 1 e confere que a linha está aqui dentro — qualquer outra é
+    # um site que escapou da migração.
+    task = asyncio.create_task(coro, name=name)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_bg_done)
+
+    global _bg_warned
+    if len(_BG_TASKS) > _BG_TASKS_WARN_AT and not _bg_warned:
+        _bg_warned = True           # uma vez por processo: aviso não pode virar ruído
+        logger.warning(
+            "_BG_TASKS passou de %d tasks em voo (última: '%s') — suspeitar de "
+            "corrotina que nunca termina, não de carga",
+            _BG_TASKS_WARN_AT, name,
+        )
+    return task
+
+
 # Namespaces whose changes directly affect how many agent instances should exist.
 # Any change to these namespaces triggers a full reconciliation.
 _BOOTSTRAP_NAMESPACES: frozenset[str] = frozenset({"quota"})
@@ -954,7 +1057,7 @@ async def activate_human_agent(
             )
         except Exception:
             pass
-    asyncio.create_task(_publish_participant_event(
+    _spawn(_publish_participant_event(
         session_id=session_id,
         tenant_id=tenant_id,
         participant_id=instance_id,
@@ -2107,7 +2210,7 @@ async def _hook_timeout_guard(
     indefinitely), this guard force-closes the contact so the customer WebSocket is
     never left open permanently.
 
-    Called via asyncio.create_task() immediately after fire_pool_hooks().
+    Called via _spawn() immediately after fire_pool_hooks().
     """
     await asyncio.sleep(_HOOK_TIMEOUT_S)
     pending_key = f"session:{session_id}:hook_pending:{hook_type}"
@@ -3829,7 +3932,7 @@ async def process_routed(
             tenant_id=tenant_id,
             routing_result=result,
         )
-        asyncio.create_task(fire_pool_hooks(
+        _spawn(fire_pool_hooks(
             http=http, redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
             tenant_id=tenant_id, customer_id=customer_id,
@@ -3953,7 +4056,7 @@ async def process_routed(
             # agent_done here immediately after the instance is restored.
             if _kafka_producer and yaml_instance_id:
                 _yaml_pools = list((yaml_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
-                asyncio.create_task(_kafka_producer.send(
+                _spawn(_kafka_producer.send(
                     TOPIC_LIFECYCLE,
                     json.dumps({
                         "event":           "agent_done",
@@ -4001,7 +4104,7 @@ async def process_routed(
                 tenant_id=tenant_id,
                 routing_result=result,
             )
-            asyncio.create_task(fire_pool_hooks(
+            _spawn(fire_pool_hooks(
                 http=http, redis_client=redis_client,
                 session_id=session_id, pool_id=pool_id,
                 tenant_id=tenant_id, customer_id=customer_id,
@@ -4349,7 +4452,7 @@ async def process_routed(
                     session_id, _served_exc,
                 )
 
-        asyncio.create_task(_publish_participant_event(
+        _spawn(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
             participant_id=native_instance_id,
@@ -4550,7 +4653,7 @@ async def process_routed(
                 or 1
             )
             _snap_pools = list((native_snapshot or {}).get("pools") or ([pool_id] if pool_id else []))
-            asyncio.create_task(_kafka_producer.send(
+            _spawn(_kafka_producer.send(
                 TOPIC_LIFECYCLE,
                 json.dumps({
                     "event":                   "agent_ready",
@@ -4572,7 +4675,7 @@ async def process_routed(
         # is never called and _pool_active_count_key stays elevated. We publish
         # agent_done here immediately after the instance is restored.
         if _kafka_producer and native_instance_id:
-            asyncio.create_task(_kafka_producer.send(
+            _spawn(_kafka_producer.send(
                 TOPIC_LIFECYCLE,
                 json.dumps({
                     "event":           "agent_done",
@@ -4650,7 +4753,7 @@ async def process_routed(
                 )
             except Exception:
                 pass
-        asyncio.create_task(_publish_participant_event(
+        _spawn(_publish_participant_event(
             session_id=session_id,
             tenant_id=tenant_id,
             participant_id=native_instance_id,
@@ -4750,13 +4853,13 @@ async def process_routed(
                     close_origin="flow_complete",
                 )
                 if _contact_end_hooks:
-                    asyncio.create_task(fire_pool_hooks(
+                    _spawn(fire_pool_hooks(
                         http=http, redis_client=redis_client,
                         session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
                         customer_id=_ce_customer, hook_type="on_contact_end",
                         human_instance_id="",
                     ))
-                    asyncio.create_task(_hook_timeout_guard(
+                    _spawn(_hook_timeout_guard(
                         redis_client, session_id, "on_contact_end",
                     ))
                 if _process_end_hooks:
@@ -4776,13 +4879,13 @@ async def process_routed(
                         )
                     except Exception:
                         pass
-                    asyncio.create_task(fire_pool_hooks(
+                    _spawn(fire_pool_hooks(
                         http=http, redis_client=redis_client,
                         session_id=session_id, pool_id=pool_id, tenant_id=tenant_id,
                         customer_id=_ce_customer, hook_type="on_process_end",
                         human_instance_id="",
                     ))
-                    asyncio.create_task(_hook_timeout_guard(
+                    _spawn(_hook_timeout_guard(
                         redis_client, session_id, "on_process_end",
                     ))
                 # ── Camada 1 (contato) × camada 3 (conferência): não colapsar ─────
@@ -4809,7 +4912,7 @@ async def process_routed(
                     for e in _process_end_hooks
                 )
                 if not _has_customer_hooks:
-                    asyncio.create_task(_close_contact_layer(redis_client, session_id))
+                    _spawn(_close_contact_layer(redis_client, session_id))
                 logger.info(
                     "contact/process-end hooks dispatched (AI primary): session=%s pool=%s "
                     "on_contact_end=%d on_process_end=%d outcome=%s customer_hooks=%s",
@@ -4817,7 +4920,7 @@ async def process_routed(
                     _ai_outcome, _has_customer_hooks,
                 )
             else:
-                asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+                _spawn(_trigger_contact_close(redis_client, session_id))
 
         # ── Arc 19 Fase B: publish session_suspended to canonical stream ──────
         # Fired for webhook pool sessions only (channel_type: webhook).
@@ -5082,7 +5185,7 @@ async def process_routed(
                             # F7: motivo de escalação normalizado (só presente quando escalado).
                             _wp_esc = str(_wp_results.get("wrapup_escalation_reason", "") or "")
                             if _wp_cls:
-                                asyncio.create_task(_apply_wrapup_to_segment(
+                                _spawn(_apply_wrapup_to_segment(
                                     redis_client, session_id, _hook_human_seg, _wp_cls, _wp_res, _wp_esc,
                                 ))
 
@@ -5107,7 +5210,7 @@ async def process_routed(
                                 _cust_remaining,
                             )
                             if _cust_remaining <= 0:
-                                asyncio.create_task(
+                                _spawn(
                                     _close_contact_layer(redis_client, session_id)
                                 )
                         except Exception as _ca_exc:
@@ -5149,7 +5252,7 @@ async def process_routed(
                                 )
                                 if _post_human_list:
                                     # fire_pool_hooks INCRs posatt:active for each post_human hook
-                                    asyncio.create_task(fire_pool_hooks(
+                                    _spawn(fire_pool_hooks(
                                         http=http,
                                         redis_client=redis_client,
                                         session_id=session_id,
@@ -5158,7 +5261,7 @@ async def process_routed(
                                         customer_id=_ph_customer,
                                         hook_type="post_human",
                                     ))
-                                    asyncio.create_task(_hook_timeout_guard(
+                                    _spawn(_hook_timeout_guard(
                                         redis_client, session_id, "post_human",
                                     ))
                                     logger.info(
@@ -5198,7 +5301,7 @@ async def process_routed(
                         # segments were just dispatched (post_human dispatch adds more INCRs).
                         # _close_contact_layer() already closed the customer WS immediately.
                         if _posatt_remaining <= 0 and not _dispatched_post:
-                            asyncio.create_task(
+                            _spawn(
                                 _destroy_conference(redis_client, session_id)
                             )
 
@@ -5231,10 +5334,10 @@ async def process_routed(
                                         "Fan-out complete (contact_close_pending=0) — closing "
                                         "contact: session=%s", session_id,
                                     )
-                                    asyncio.create_task(
+                                    _spawn(
                                         _close_contact_layer(redis_client, session_id)
                                     )
-                                    asyncio.create_task(
+                                    _spawn(
                                         _destroy_conference(redis_client, session_id)
                                     )
                         except Exception as _ccp_exc:
@@ -5298,7 +5401,7 @@ async def process_routed(
                                         customer_participant_id=_npd_cust_pid,
                                     )
                                     if _npd_hooks:
-                                        asyncio.create_task(fire_pool_hooks(
+                                        _spawn(fire_pool_hooks(
                                             http=http, redis_client=redis_client,
                                             session_id=session_id,
                                             pool_id=_npd_pool,
@@ -5307,11 +5410,11 @@ async def process_routed(
                                             hook_type="on_human_end",
                                             human_instance_id=_npd_h_inst or "",
                                         ))
-                                        asyncio.create_task(_hook_timeout_guard(
+                                        _spawn(_hook_timeout_guard(
                                             redis_client, session_id, "on_human_end",
                                         ))
                                     if _npd_contact:
-                                        asyncio.create_task(fire_pool_hooks(
+                                        _spawn(fire_pool_hooks(
                                             http=http, redis_client=redis_client,
                                             session_id=session_id,
                                             pool_id=_npd_pool,
@@ -5320,7 +5423,7 @@ async def process_routed(
                                             hook_type="on_contact_end",
                                             human_instance_id=_npd_h_inst or "",
                                         ))
-                                        asyncio.create_task(_hook_timeout_guard(
+                                        _spawn(_hook_timeout_guard(
                                             redis_client, session_id, "on_contact_end",
                                         ))
                                     logger.info(
@@ -5329,11 +5432,11 @@ async def process_routed(
                                         session_id, _npd_pool, len(_npd_hooks), len(_npd_contact),
                                     )
                                 else:
-                                    asyncio.create_task(
+                                    _spawn(
                                         _trigger_contact_close(redis_client, session_id)
                                     )
                             else:
-                                asyncio.create_task(
+                                _spawn(
                                     _trigger_contact_close(redis_client, session_id)
                                 )
                 except Exception as _g2n_exc:
@@ -5361,7 +5464,7 @@ async def process_routed(
         # Fire on_human_start hooks non-blocking.
         # Each hook entry routes a specialist as conference participant via
         # conversations.inbound → routing engine → process_routed (conference path).
-        asyncio.create_task(fire_pool_hooks(
+        _spawn(fire_pool_hooks(
             http=http, redis_client=redis_client,
             session_id=session_id, pool_id=pool_id,
             tenant_id=tenant_id, customer_id=customer_id,
@@ -5463,7 +5566,21 @@ async def process_queued(
                 pool_id, _default_agent,
             )
         else:
-            logger.debug("No queue_config for pool=%s — customer waits silently", pool_id)
+            # ── Por que INFO e não DEBUG (2026-08-18) ─────────────────────────
+            # Este `return` é uma DEGRADAÇÃO deliberada (o contato espera em
+            # silêncio), e degradação nunca é silenciosa. Em DEBUG — com o bridge
+            # rodando em INFO — ele era invisível, e "o contato não enfileirou"
+            # ficava indistinguível de "enfileirou, o bridge foi chamado e desistiu".
+            # Medido ao rodar o gate da F1: janela sem NENHUMA linha, e as duas
+            # hipóteses igualmente compatíveis com a ausência. É o mesmo motivo que
+            # promoveu o `marker SET` a INFO.
+            logger.info(
+                "Sem agente de fila para pool=%s session=%s: o pool não tem "
+                "`queue_config` e o tenant não tem default (`queue_default_agent_type_id`). "
+                "O contato espera em SILÊNCIO e o drain re-roteia — comportamento "
+                "esperado, registrado para não ser confundido com 'não enfileirou'.",
+                pool_id, session_id,
+            )
             return
 
     agent_type_id = queue_cfg.get("agent_type_id", "") or ""
@@ -5501,6 +5618,43 @@ async def process_queued(
     # Prepend explicit skill_id if given and not already in the list
     if explicit_skill_id and not any(s.get("skill_id") == explicit_skill_id for s in skills):
         skills = [{"skill_id": explicit_skill_id}] + skills
+
+    # ── P2/F1 (2026-08-18): RESOLVER ANTES DE MARCAR ──────────────────────────
+    #
+    # O DEFEITO QUE ISTO FECHA. A ordem era: marcador (`queue:agent_active`) →
+    # `participant_joined` → só então `activate_native_agent`, que é quem descobre
+    # se existe flow. Consequência medida: pool sem slot produzia um segmento
+    # `queue` de 3 ms que não enfileirou ninguém — o `activate_native_agent`
+    # devolvia `{}` e o segmento nascia e morria sem ter havido agente de fila
+    # algum. Segmento é um FATO sobre atendimento; abri-lo antes de saber se há o
+    # que atender é afirmar o fato antes de ele existir.
+    #
+    # Sem flow, o caminho correto é o MESMO de "pool sem `queue_config`": o
+    # contato espera em silêncio e o drain re-roteia normalmente. Por isso o
+    # `return` é ANTES do marcador — escrevê-lo faria o drain sinalizar um agente
+    # que não existe, e aí o `participant_left` nunca seria produzido.
+    #
+    # ⚠️ ISTO NÃO CONSERTA O ENDEREÇAMENTO. `pool_id` aqui é o pool de DESTINO, e é
+    # o slot DELE que está sendo consultado — o `queue_config.skill_id` continua
+    # sem ser lido (consequências 1 e 2 do handoff). O conserto do endereço é a F2
+    # (`queue_config` passa a endereçar um POOL de fila com deploy próprio), que os
+    # invariantes já decidem: "o POOL é a unidade endereçável" + "produção = snapshot
+    # do slot do POOL" (`resolve_flow_for_agent`, docstring). Resolver por
+    # `skill_id` → `skill.flow` reabriria o vazamento fechado em 2026-07-13.
+    #
+    # Custo de I/O: nenhum no caso comum. `get_pool_current_flow` guarda por pool em
+    # `_pool_flow_cache` (invalidado no `registry.changed`), e é a MESMA leitura que
+    # o `activate_native_agent` faria logo abaixo.
+    if await resolve_flow_for_agent(http, tenant_id, agent_type_id, skills, pool_id) is None:
+        logger.error(
+            "Agente de fila NÃO ativado: pool=%s session=%s agent=%s — nenhum flow "
+            "executável (pool sem slot `current`, ou skill inexistente). NENHUM marcador "
+            "e NENHUM segmento de fila foram criados; o contato espera em silêncio e o "
+            "drain re-roteia normalmente. Para ter agente de fila neste pool, promova um "
+            "slot (set-next → promote).",
+            pool_id, session_id, agent_type_id,
+        )
+        return
 
     # Resolve customer_id from session meta
     customer_id = session_id
@@ -5560,7 +5714,7 @@ async def process_queued(
     _q_joined_at   = datetime.now(timezone.utc)
     _q_joined_iso  = _q_joined_at.isoformat()
     _q_participant = f"queue-{session_id}"   # instance_id="" — synthetic identity
-    asyncio.create_task(_publish_participant_event(
+    _spawn(_publish_participant_event(
         session_id=session_id,
         tenant_id=tenant_id,
         participant_id=_q_participant,
@@ -5608,7 +5762,7 @@ async def process_queued(
     except Exception:
         pass
     _q_flow_id = (((agent_result or {}).get("pipeline_state")) or {}).get("flow_id", "") or ""
-    asyncio.create_task(_publish_participant_event(
+    _spawn(_publish_participant_event(
         session_id=session_id,
         tenant_id=tenant_id,
         participant_id=_q_participant,
@@ -5836,7 +5990,7 @@ async def process_contact_event(
                                 )
                         except Exception:
                             pass
-                        asyncio.create_task(_publish_participant_event(
+                        _spawn(_publish_participant_event(
                             session_id=session_id,
                             tenant_id=_g5_tenant,
                             participant_id=instance_id,
@@ -5928,7 +6082,7 @@ async def process_contact_event(
                                         customer_participant_id=_pd_cust_pid,
                                     )
                                     if _pd_hooks:
-                                        asyncio.create_task(fire_pool_hooks(
+                                        _spawn(fire_pool_hooks(
                                             http=http, redis_client=redis_client,
                                             session_id=session_id,
                                             pool_id=_pd_pool,
@@ -5937,11 +6091,11 @@ async def process_contact_event(
                                             hook_type="on_human_end",
                                             human_instance_id=_pd_h_inst or "",
                                         ))
-                                        asyncio.create_task(_hook_timeout_guard(
+                                        _spawn(_hook_timeout_guard(
                                             redis_client, session_id, "on_human_end",
                                         ))
                                     if _pd_contact:
-                                        asyncio.create_task(fire_pool_hooks(
+                                        _spawn(fire_pool_hooks(
                                             http=http, redis_client=redis_client,
                                             session_id=session_id,
                                             pool_id=_pd_pool,
@@ -5950,15 +6104,15 @@ async def process_contact_event(
                                             hook_type="on_contact_end",
                                             human_instance_id=_pd_h_inst or "",
                                         ))
-                                        asyncio.create_task(_hook_timeout_guard(
+                                        _spawn(_hook_timeout_guard(
                                             redis_client, session_id, "on_contact_end",
                                         ))
                                 else:
-                                    asyncio.create_task(
+                                    _spawn(
                                         _trigger_contact_close(redis_client, session_id)
                                     )
                             else:
-                                asyncio.create_task(
+                                _spawn(
                                     _trigger_contact_close(redis_client, session_id)
                                 )
                 except Exception as exc:
@@ -6395,7 +6549,7 @@ async def process_contact_event(
                             )
                         except Exception:
                             pass
-                    asyncio.create_task(_publish_participant_event(
+                    _spawn(_publish_participant_event(
                         session_id=session_id,
                         tenant_id=_hm_ten,
                         participant_id=_hm_inst_str,
@@ -6454,7 +6608,7 @@ async def process_contact_event(
                         _kafka_producer is not None,
                     )
                     if _kafka_producer and _hm_ten:
-                        asyncio.create_task(_kafka_producer.send(
+                        _spawn(_kafka_producer.send(
                             TOPIC_LIFECYCLE,
                             json.dumps({
                                 "event":           "agent_done",
@@ -6581,11 +6735,11 @@ async def process_contact_event(
                             # conferência → usa o teardown completo (close + destroy).
                             _cs_agent_side_will_run = bool(_cs_on_human_end) or bool(_cs_peers)
                             if _cs_agent_side_will_run:
-                                asyncio.create_task(
+                                _spawn(
                                     _close_contact_layer(redis_client, session_id)
                                 )
                             else:
-                                asyncio.create_task(
+                                _spawn(
                                     _trigger_contact_close(redis_client, session_id)
                                 )
                             logger.info(
@@ -6595,7 +6749,7 @@ async def process_contact_event(
                                 _cs_agent_side_will_run, session_id, _cs_pool_id,
                             )
                         if _cs_on_human_end:
-                            asyncio.create_task(fire_pool_hooks(
+                            _spawn(fire_pool_hooks(
                                 http=http, redis_client=redis_client,
                                 session_id=session_id,
                                 pool_id=_cs_pool_id,
@@ -6604,7 +6758,7 @@ async def process_contact_event(
                                 hook_type="on_human_end",
                                 human_instance_id=_last_human_instance_id or "",
                             ))
-                            asyncio.create_task(_hook_timeout_guard(
+                            _spawn(_hook_timeout_guard(
                                 redis_client, session_id, "on_human_end",
                             ))
                         # NPS de fim-de-contato. Só dispara se ao menos uma entrada
@@ -6612,7 +6766,7 @@ async def process_contact_event(
                         # will_run); quando todas são skip, não há o que disparar e o
                         # fechamento já foi feito acima — evita contador/guard órfãos.
                         if _cs_on_contact_end and _cs_customer_will_run:
-                            asyncio.create_task(fire_pool_hooks(
+                            _spawn(fire_pool_hooks(
                                 http=http, redis_client=redis_client,
                                 session_id=session_id,
                                 pool_id=_cs_pool_id,
@@ -6621,7 +6775,7 @@ async def process_contact_event(
                                 hook_type="on_contact_end",
                                 human_instance_id=_last_human_instance_id or "",
                             ))
-                            asyncio.create_task(_hook_timeout_guard(
+                            _spawn(_hook_timeout_guard(
                                 redis_client, session_id, "on_contact_end",
                             ))
                         # ── G7 Fatia 2b/3 — fan-out dos peers ────────────────────
@@ -6648,7 +6802,7 @@ async def process_contact_event(
                                     session_id, _peer_inst,
                                 )
                                 continue
-                            asyncio.create_task(fire_pool_hooks(
+                            _spawn(fire_pool_hooks(
                                 http=http, redis_client=redis_client,
                                 session_id=session_id,
                                 pool_id=_peer_pool,
@@ -6667,7 +6821,7 @@ async def process_contact_event(
                         if _cs_peers_fired:
                             # Timeout-guard do contador (segment_wrapup não usa
                             # hook_pending → o _hook_timeout_guard não o cobre).
-                            asyncio.create_task(_contact_close_timeout_guard(
+                            _spawn(_contact_close_timeout_guard(
                                 redis_client, session_id,
                             ))
                         logger.info(
@@ -6685,7 +6839,7 @@ async def process_contact_event(
                     # _trigger_contact_close() handles deletion in the hook case.
                     await redis_client.delete(f"session:{session_id}:human_agent")
                     await redis_client.delete(f"session:{session_id}:human_agents")
-                    asyncio.create_task(
+                    _spawn(
                         _trigger_contact_close(redis_client, session_id)
                     )
                     logger.info(
@@ -6700,7 +6854,7 @@ async def process_contact_event(
                 # In that case the else branch must be skipped — calling
                 # _trigger_contact_close() here would fire _destroy_conference()
                 # while posatt hooks (wrapup) are still running.
-                asyncio.create_task(
+                _spawn(
                     _trigger_contact_close(redis_client, session_id)
                 )
 
@@ -6765,7 +6919,7 @@ async def process_contact_event(
                                 # `session_id` (este evento manda `conversation_id`),
                                 # então descarta a linha. Removido junto com o snapshot.
                                 if _c_ten and _c_inst:
-                                    asyncio.create_task(_kafka_producer.send(
+                                    _spawn(_kafka_producer.send(
                                         TOPIC_LIFECYCLE,
                                         json.dumps({
                                             "event":           "agent_done",
@@ -7000,7 +7154,7 @@ async def process_contact_event(
                     except Exception:
                         pass
 
-                asyncio.create_task(_publish_participant_event(
+                _spawn(_publish_participant_event(
                     session_id=session_id,
                     tenant_id=_ha_tenant,
                     participant_id=instance_id,
@@ -7123,11 +7277,11 @@ async def process_contact_event(
                     # "Return to queue" — o mesmo defeito que o comentário acima
                     # descreve para o F5, e pela mesma razão.
                     if reason in ("agent_disconnect", "agent_release_item"):
-                        asyncio.create_task(_publish_lifecycle_end(
+                        _spawn(_publish_lifecycle_end(
                             _event="agent_released", _resolve_hold=False,
                         ))
                     else:
-                        asyncio.create_task(_publish_lifecycle_end())
+                        _spawn(_publish_lifecycle_end())
                 else:
                     logger.warning(
                         "agent_done NOT published (human agent): session=%s "
@@ -7202,7 +7356,7 @@ async def process_contact_event(
                             # Sem _hook_timeout_guard: segment_wrapup não segura o
                             # contato (não há hook_pending/posatt). wrap_up_pending tem
                             # TTL próprio; hook_conf/participants expiram sozinhos.
-                            asyncio.create_task(fire_pool_hooks(
+                            _spawn(fire_pool_hooks(
                                 http=http,
                                 redis_client=redis_client,
                                 session_id=session_id,
@@ -7284,7 +7438,7 @@ async def process_contact_event(
                                     "agent_disconnect re-route failed — closing: session=%s — %s",
                                     session_id, _rr_exc,
                                 )
-                                asyncio.create_task(
+                                _spawn(
                                     _trigger_contact_close(redis_client, session_id)
                                 )
                         else:
@@ -7292,7 +7446,7 @@ async def process_contact_event(
                                 "agent_disconnect: cannot re-route (producer/pool/tenant "
                                 "missing) — closing: session=%s", session_id,
                             )
-                            asyncio.create_task(
+                            _spawn(
                                 _trigger_contact_close(redis_client, session_id)
                             )
                         return
@@ -7499,13 +7653,13 @@ async def process_contact_event(
                                     for e in _on_human_end
                                 )
                                 if not _has_customer_hooks:
-                                    asyncio.create_task(
+                                    _spawn(
                                         _close_contact_layer(redis_client, session_id)
                                     )
 
                                 # Wrap-up de fim-de-segmento (side=agent).
                                 if _on_human_end:
-                                    asyncio.create_task(fire_pool_hooks(
+                                    _spawn(fire_pool_hooks(
                                         http=http, redis_client=redis_client,
                                         session_id=session_id,
                                         pool_id=_pool_id_hooks,
@@ -7514,12 +7668,12 @@ async def process_contact_event(
                                         hook_type="on_human_end",
                                         human_instance_id=instance_id,
                                     ))
-                                    asyncio.create_task(_hook_timeout_guard(
+                                    _spawn(_hook_timeout_guard(
                                         redis_client, session_id, "on_human_end",
                                     ))
                                 # NPS de fim-de-contato (side=customer, 1ª classe).
                                 if _on_contact_end:
-                                    asyncio.create_task(fire_pool_hooks(
+                                    _spawn(fire_pool_hooks(
                                         http=http, redis_client=redis_client,
                                         session_id=session_id,
                                         pool_id=_pool_id_hooks,
@@ -7528,7 +7682,7 @@ async def process_contact_event(
                                         hook_type="on_contact_end",
                                         human_instance_id=instance_id,
                                     ))
-                                    asyncio.create_task(_hook_timeout_guard(
+                                    _spawn(_hook_timeout_guard(
                                         redis_client, session_id, "on_contact_end",
                                     ))
                                 logger.info(
@@ -7539,12 +7693,12 @@ async def process_contact_event(
                                 )
                             else:
                                 # No hooks — close the contact immediately
-                                asyncio.create_task(
+                                _spawn(
                                     _trigger_contact_close(redis_client, session_id)
                                 )
                         else:
                             # Meta not available — fall back to immediate close
-                            asyncio.create_task(
+                            _spawn(
                                 _trigger_contact_close(redis_client, session_id)
                             )
                 else:
@@ -7596,7 +7750,7 @@ async def process_contact_event(
                                 )
                         except Exception:
                             pass
-                        asyncio.create_task(fire_pool_hooks(
+                        _spawn(fire_pool_hooks(
                             http=http,
                             redis_client=redis_client,
                             session_id=session_id,
@@ -7650,7 +7804,7 @@ async def process_contact_event(
                         _leg_inst_str = (
                             _leg_inst if isinstance(_leg_inst, str) else _leg_inst.decode()
                         )
-                        asyncio.create_task(_kafka_producer.send(
+                        _spawn(_kafka_producer.send(
                             TOPIC_LIFECYCLE,
                             json.dumps({
                                 "event":           "agent_done",
@@ -7678,7 +7832,7 @@ async def process_contact_event(
                 await redis_client.delete(f"session:{session_id}:human_agents")
                 # 5. Trigger contact close (no instance_id means we can't check hooks;
                 #    fall back to immediate close so the customer WS is never left open).
-                asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+                _spawn(_trigger_contact_close(redis_client, session_id))
 
     except Exception as exc:
         logger.error("Error processing contact_closed: session=%s — %s", session_id, exc)
@@ -8207,7 +8361,7 @@ async def _handle_webhook_session_resumed(
         await redis_client.setex(f"session:{session_id}:primary_segment", 14400, _resume_seg_id)
     except Exception:
         pass
-    asyncio.create_task(_publish_participant_event(
+    _spawn(_publish_participant_event(
         session_id=session_id, tenant_id=tenant_id,
         participant_id=_resume_participant, pool_id=pool_id,
         agent_type_id=agent_type_id, event_type="participant_joined",
@@ -8238,7 +8392,7 @@ async def _handle_webhook_session_resumed(
     _resume_duration_ms = int(
         (datetime.now(timezone.utc) - _resume_joined_at).total_seconds() * 1000
     )
-    asyncio.create_task(_publish_participant_event(
+    _spawn(_publish_participant_event(
         session_id=session_id, tenant_id=tenant_id,
         participant_id=_resume_participant, pool_id=pool_id,
         agent_type_id=agent_type_id, event_type="participant_left",
@@ -8340,7 +8494,7 @@ async def _handle_webhook_session_resumed(
                     _cl_seq_idx = int(_cl_pm.get("sequence_index", 0) or 0)
             except Exception:
                 pass
-            asyncio.create_task(_publish_participant_event(
+            _spawn(_publish_participant_event(
                 session_id=session_id,
                 tenant_id=_cl_tenant or tenant_id,
                 participant_id=_claimant_instance_id,
@@ -8375,7 +8529,7 @@ async def _handle_webhook_session_resumed(
     # Any other terminal outcome closes the session.
     if _ai_outcome != "suspended":
         await _mark_contact_ended(redis_client, session_id)
-        asyncio.create_task(_trigger_contact_close(redis_client, session_id))
+        _spawn(_trigger_contact_close(redis_client, session_id))
 
     # Restore instance to pool (mirrors process_routed post-activation lifecycle).
     # Gap-A fix: always land the mirror at ready, even when native_snapshot is None
@@ -8429,7 +8583,7 @@ async def _handle_webhook_session_resumed(
                 "usará meta.pools (per-recurso). active_count pode ficar impreciso.",
                 session_id, _claimant_instance_id,
             )
-        asyncio.create_task(_kafka_producer.send(
+        _spawn(_kafka_producer.send(
             TOPIC_LIFECYCLE,
             json.dumps({
                 "event":           "agent_done",
@@ -8456,7 +8610,7 @@ async def _handle_webhook_session_resumed(
             or (native_snapshot or {}).get("max_concurrent")
             or 1
         )
-        asyncio.create_task(_kafka_producer.send(
+        _spawn(_kafka_producer.send(
             TOPIC_LIFECYCLE,
             json.dumps({
                 "event":                   "agent_ready",
@@ -8471,7 +8625,7 @@ async def _handle_webhook_session_resumed(
                 "timestamp":               datetime.now(timezone.utc).isoformat(),
             }).encode("utf-8"),
         ))
-        asyncio.create_task(_kafka_producer.send(
+        _spawn(_kafka_producer.send(
             TOPIC_LIFECYCLE,
             json.dumps({
                 "event":           "agent_done",
@@ -9341,15 +9495,15 @@ async def run() -> None:
         # Heartbeat loop runs as a background task — renews instance TTLs every 15s,
         # applies pending updates, and runs a full reconciliation every 5 min or
         # immediately when registry.changed signals a config update.
-        heartbeat_task = asyncio.create_task(bootstrap.heartbeat_loop())
+        heartbeat_task = _spawn(bootstrap.heartbeat_loop())
 
         # Session watchdog — sweeps for orphaned WebSocket sessions that died
         # without publishing a ContactClosedEvent and repairs pool counters.
-        watchdog_task = asyncio.create_task(_session_watchdog(redis_client))
+        watchdog_task = _spawn(_session_watchdog(redis_client))
 
         try:
             async for msg in consumer:
-                asyncio.create_task(_dispatch(msg.value, msg.topic, http, redis_client, bootstrap))
+                _spawn(_dispatch(msg.value, msg.topic, http, redis_client, bootstrap))
         finally:
             heartbeat_task.cancel()
             try:
@@ -9531,7 +9685,7 @@ async def _handle_config_changed(
             operation, tenant_id, namespace, key,
         )
         session_config.invalidate()
-        asyncio.create_task(session_config.reload(CONFIG_API_URL, http))
+        _spawn(session_config.reload(CONFIG_API_URL, http))
     else:
         logger.info(
             "config.changed [%s] tenant=%s %s.%s — runtime config, no bootstrap needed",

@@ -1,5 +1,10 @@
 # Kickoff — triagem do backlog contra a linha mestra n8n
 
+> ⛔ **HISTÓRICO — kickoff de uma tarefa já executada, contra uma direção depois revertida.**
+> A triagem que ele encomendou virou [`n8n-triagem-2026-08-17.md`](n8n-triagem-2026-08-17.md); a direção
+> foi abortada em 2026-08-18 ([`n8n-arco-abortado-2026-08-18.md`](n8n-arco-abortado-2026-08-18.md)).
+> **Não abrir sessão nova com este arquivo.**
+
 > **Uso:** abrir sessão NOVA com Opus e este arquivo como primeira leitura.
 > **Tarefa:** reavaliar todo o trabalho em aberto contra a decisão de direção de 2026-08-17, e
 > classificar cada item.
