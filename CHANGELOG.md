@@ -2,6 +2,134 @@
 
 ---
 
+## Segmento que nunca fecha: causa raiz e CONSERTO · volume de sessões: RESOLVIDO ✅ (2026-08-18)
+
+Investigação que vinha de cinco rodadas sem convergir, fechada com reprodução ao vivo e conserto
+validado. O caminho passou por **quatro hipóteses minhas refutadas por medição** — e cada refutação foi
+o que abriu a seguinte, então elas estão registradas junto com o resultado.
+
+### Item 2 — "+167 contatos numa execução de e2e": são DOIS PRINCIPAIS, não dois dados
+
+`infra/test/probe_contacts_count_funnel.sh` reproduz o `WHERE` de `/reports/sessions` uma condição por
+vez e **aterrissa exatamente no número que o endpoint responde** (119 = 119) — é essa igualdade que
+autoriza atribuir cada queda a um predicado:
+
+| passo | linhas | queda |
+|---|---|---|
+| tenant | 424 | — |
+| + janela `[07/08 00:00, 14/08 23:59:59)` | 300 | 124 |
+| + `origin IN ('live')` | 300 | **0** |
+| + `canal != '' OR aberta` | 300 | **0** |
+| + pool não interno | **285** | 15 |
+| + ABAC `accessible_pools` | **119** | **166** |
+
+**285 é a leitura "depois" do relato; 119 ≈ a "antes" (118).** O dado é o mesmo nas duas; muda quem
+pergunta. Confirmado com um `curl` sem header `Authorization`: o endpoint devolve **285** — o escopo de
+pool falha ABERTO para chamador sem token (`pool_auth.py:130-135`, documentado como
+retrocompatibilidade), ao lado de `admin@plughub.local`, que carrega 4 pools e vê 119 de 285.
+
+**Três explicações mortas no caminho**, cada uma por instrumento diferente: a suíte e o "produtor
+fantasma" (medição de 08-17); **os 3 tiers do `/reports/sessions`** — por leitura de código, o
+`total_contacts` sai de um `countIf` próprio (`reports_query.py:769-778`), **antes e fora** do
+`try/except` que os tiers usam, e nenhum fallback o alcança; e a **degradação do `pools_client`**, cujo
+teto medido é **15** sessões, não 167 (`probe_contacts_count_internal_pools.sh`). A terceira era a
+hipótese preferida da rodada anterior por ser "cheiro conhecido" do próprio `CLAUDE.md` — e ninguém
+tinha conferido de onde o número sai.
+
+**Defeito de produto que fica registrado** (`TODO.md`): o `meta` publica `window_applied` e
+`internal_pools_known` — dois marcadores criados justamente para a tela não afirmar um recorte que não
+houve — e **não tem nenhum para o escopo de pool**. "119 contatos" é indistinguível de "você enxerga
+119 de 285".
+
+### Item 1 — CAUSA RAIZ: `conversations.participants` era publicado SEM CHAVE
+
+O tópico tem **3 partições** (`docker-compose.demo.yml:533`) e o bridge publicava
+`send_and_wait(TOPIC_PARTICIPANTS, payload)` **sem `key`**. Sem chave o particionador espalha, e ordem
+no Kafka é por PARTIÇÃO: o `participant_joined` e o `participant_left` do MESMO segmento caíam em
+partições diferentes e podiam ser inseridos fora de ordem. Quando o `left` entrava primeiro, o
+`joined` — inserido depois — vencia a deduplicação nas DUAS tabelas, e o segmento ficava
+`ended_at`/`left_at` NULL para sempre. Sem erro em lugar nenhum, porque nada falhou.
+
+O DDL de `participation_intervals` **afirmava a premissa falsa em prosa**: *"The 'left' event is always
+inserted after 'joined' (Kafka ordering)"*. Nunca houve chave; a premissa nunca valeu.
+
+Explica tudo o que estava solto: a intermitência (2 de 4 no pool, ~1,3% no tenant), a
+sobre-representação de segmentos **curtos** (3 ms entre os dois eventos = maior chance de inversão) e a
+família B inteira, onde o log provava publicação e nenhuma tabela tinha o evento. **As duas "famílias"
+eram um defeito só.**
+
+#### O conserto (duas partes — uma só não bastaria)
+
+1. **`key=session_id` no publish** (`orchestrator-bridge/main.py`) — restaura a ordenação por segmento.
+2. **`ReplacingMergeTree(row_version)`** em `segments` e `participation_intervals`
+   (`analytics-api/clickhouse.py`), versão derivada do EVENTO (`coalesce(ended_at, started_at)` e
+   `coalesce(left_at, joined_at, …)`), espelhando o precedente de `sessions` (bug 2026-07-13). Só a
+   chave não bastava: `RMT(ingested_at)` tem resolução de **segundo**, e um par que dista 3 ms empata —
+   empate em RMT não tem vencedor definido. Só a versão não bastaria: ela vem do evento, mas o
+   `ingested_at` seguiria refletindo inserção.
+
+Migração por REBUILD (ClickHouse não altera engine), genérica em `_migrate_row_version`, idempotente.
+**Achado durante a implementação:** duas materialized views leem `FROM segments`, e em banco Atomic o
+vínculo MV→origem é por UUID — o `RENAME` as deixaria presas à tabela antiga, que o passo seguinte
+apaga, e elas parariam de receber INSERT **em silêncio**. Por isso são derrubadas antes do swap e
+recriadas em `finally` (não no caminho feliz: um rebuild que falhasse no meio deixaria os relatórios
+vazios). `sessions` não tem MV dependente — por isso a migração original pôde ignorar o ponto.
+
+#### Gate
+
+Três reproduções consecutivas do cenário de fila em `retencao_humano`: **3 de 3 segmentos fecharam**,
+todos com `dur_ms 3` — exatamente a forma que antes era moeda (2 de 4 no mesmo pool). **O passado NÃO
+é reparado**: nos casos antigos o merge já apagou fisicamente a linha perdedora, e o `DEFAULT` só
+conserta onde as duas ainda coexistem. Os eventos seguem no tópico, então reprocessar é possível —
+decisão à parte.
+
+### Defeito SEPARADO que a investigação expôs: `queue_config.skill_id` é decorativo
+
+Não é a causa do segmento aberto (isso era o Kafka), mas é real e continua vivo:
+`resolve_flow_for_agent` resolve produção pelo **slot `current` do POOL**, e `_activate_queue_agent`
+passa o **pool de destino** ⇒ o `queue_config.skill_id` nunca é consultado. `retencao_humano` declara
+`skill_fila_v1` (que existe, `published`, com flow), não tem slot, e o agente de fila **nunca roda**:
+`activate_native_agent` devolve `{}` em 3 ms. Os 12 segmentos `queue` que completam com `handoff` são
+de pools **sem** `queue_config` — rodaram o skill do próprio pool sob `role='queue'`. A config aparece
+na UI, alimenta o relatório de Fila/SLA como se tivesse havido espera atendida, e não executa nada.
+Registrado em `TODO.md`; o `ERROR` do resolvedor segue visível nas reproduções, e o conserto do Kafka
+deliberadamente não o mascarou.
+
+### Quatro hipóteses minhas, refutadas por medição (a ordem importa: cada uma abriu a seguinte)
+
+| hipótese | como caiu |
+|---|---|
+| o `LPUSH __agent_available__` não chega (candidato herdado da rodada anterior) | o ramo ELSE do drain aparece TAMBÉM em `fa2c7cfb`, que **fecha**. E o humano entrou por re-rota, não por claim de inbox |
+| o marcador `queue:agent_active` sumia | a reprodução mostrou `marker SET … ttl=14400` e `marker DELETE … deleted=1` pelo próprio dono, 7 s antes do drain: o `ttl=-2` era **honesto** |
+| empate de `ReplacingMergeTree` no mesmo segundo | meia-verdade: é o mecanismo da perda, não a causa. E eu "refutei" numa parte já MESCLADA, onde nenhuma consulta poderia ver duas versões — o mesmo erro que o probe anterior tinha registrado como inconclusivo |
+| as 78 `asyncio.create_task` sem referência forte | o `participant_left` **estava no tópico** (`joined=1 left=1`). Dívida real, mas não era isto |
+
+Instrumentação que fica: `marker SET` / `marker DELETE deleted=N` em INFO no bridge, e o **TTL da
+chave** no ramo ELSE do drain — foi ela que separou *"o marcador sumiu"* de *"o marcador foi apagado
+por quem devia"*. E `ALLOW_LIVE_FLOW_FALLBACK` passou a ser declarado no compose (vazio por defeito):
+é a única variável que separa os dois desfechos, e sem estar no bloco `environment:` não havia como
+ligá-la.
+
+Detalhe em `docs/guias/conference-mechanics.md` § Problema 34, onde a frase *"o caminho normal FUNCIONA
+— 14 dos 16 fecham"* foi **retirada**: ela contava linhas sem olhar o que cada uma era.
+
+### Probes novos (read-only, nenhum altera o ambiente)
+
+| Script | Responde |
+|---|---|
+| `infra/test/probe_family_a_queue_signal.sh` | o sinal `__agent_available__` chegou às filas órfãs — diferencial contra as que fecharam, com testemunha de que o instrumento está vivo |
+| `infra/test/probe_queue_segment_exit_paths.sh` | por qual PORTA cada segmento de fila fechou (o `outcome` é o discriminador) e qual ramo do drain rodou em cada uma |
+| `infra/test/probe_contacts_count_funnel.sh` | qual predicado do `/reports/sessions` custa cada faixa de linhas — auto-verificável: se o funil não bater com o endpoint, declara-se INCONCLUSIVO em vez de acusar |
+| `infra/test/probe_participant_event_in_kafka.sh` | o par joined/left do segmento chegou ao TÓPICO — a pergunta binária que separou produtor de consumidor e entregou a causa raiz |
+| `infra/test/watch_queue_marker.sh` | leitor da reprodução: marcador, resolução do flow, ramo do drain com TTL e o segmento resultante, a partir de um instante absoluto |
+
+O funil é o padrão a copiar quando um número de tela estiver em disputa: reproduzir a query por etapas
+e **exigir que a última bata com o endpoint** antes de atribuir culpa a qualquer passo. E o probe do
+Kafka é o padrão para "o dado sumiu": achar a fronteira em que ele ainda existe, em vez de deduzir de
+qual lado está o defeito.
+
+---
+
 ## Publicação de evento de participante deixa de degradar em silêncio ✅ (2026-08-17)
 
 Mudança **só de log**, sem alteração de comportamento, em `_publish_participant_event`

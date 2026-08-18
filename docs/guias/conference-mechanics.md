@@ -1740,16 +1740,90 @@ O contato roda até o fim e TODOS os outros segmentos fecham. Só o de fila fica
 completa. O routing publica um `participant_left` de fila **sintético** apenas no caminho de timeout de
 fila muda (`routing/main.py:585`), que não é este caso.
 
-**O caminho normal FUNCIONA** — 14 dos 16 segmentos `queue` do tenant fecham. Não é "a fila nunca
-fecha".
+~~**O caminho normal FUNCIONA** — 14 dos 16 segmentos `queue` do tenant fecham.~~
+**Retirado em 2026-08-18 por medição** — a frase contava linhas sem olhar o que cada uma é. Ver abaixo.
 
-**Candidato NÃO verificado** (registrado como candidato, de propósito): só **dois** lugares fazem
-`LPUSH __agent_available__` para desbloquear o menu do agente de fila —
-`routing/kafka_listener.py:710` (drain) e `routing/main.py:1415` (drain periódico). **`work_task_claim`
-não sinaliza.** Se o humano assume pelo inbox pull, o agente de fila fica bloqueado no `BLPOP` para
-sempre, `activate_native_agent` nunca retorna e o `left` nunca é publicado. Isto NÃO foi medido — o
-log do bridge cobre a janela dos dois casos (13/08 17:50 → 17/08 10:53) e ainda não foi lido para
-estes `session_id`. É o primeiro passo do próximo turno.
+---
+
+#### Medição de 2026-08-18 — o agente de fila do pool que declara fila NUNCA rodou
+
+*(Gates: `infra/test/probe_queue_segment_exit_paths.sh` · `infra/test/probe_family_a_queue_signal.sh`.)*
+
+**Os 16 segmentos `queue` são DUAS populações, e só uma delas é fila de verdade:**
+
+| população | pools | `queue_config` | outcome | fecha? |
+|---|---|---|---|---|
+| 12 | `formfill_demo_ia`, `limite_processo`, `aprovacao_credito`, `limite_ia` | **null** | `handoff` | 12/12 |
+| 4 | **`retencao_humano`** | `{skill_id: skill_fila_v1, max_wait_s: 1800}` | **∅ (NULL)** | 2 em **3 ms / 6 ms**, 2 **nunca** |
+
+O único pool que **declara** fila é o único em que ela nunca completa — 0 de 4. E a razão está em
+`resolve_flow_for_agent` (`main.py:494-497`, mudança de 2026-07-13): produção = **snapshot do slot
+`current` do POOL**, e `_activate_queue_agent` passa como `pool_id` o **pool de destino**. Duas
+consequências, ambas medidas:
+
+- **`queue_config.skill_id` não é consultado.** `retencao_humano` declara `skill_fila_v1` — que existe,
+  está `published` e tem `flow` — e **não tem nenhum slot** (`previous`/`current`/`next` todos
+  `set:false`). Com `ALLOW_LIVE_FLOW_FALLBACK` ausente no bridge, `resolve_flow_for_agent` devolve
+  `None`, `activate_native_agent` devolve `{}` na hora, e o `left` sai com `outcome` NULL: **são os
+  casos de 3 ms e 6 ms**. A config existe, aparece na UI e não executa nada — "valor plausível".
+- **Os 12 `handoff` não são agente de fila.** Aqueles pools não declaram `queue_config`; entram pelo
+  default de tenant (`main.py:5436`) e resolvem o slot do PRÓPRIO pool. O que rodou ali sob
+  `role='queue'` foi o skill do pool, não um flow de espera.
+
+**A ordem no código é o defeito estrutural:** o marcador (`:5504`) e o `participant_joined` (`:5527`)
+são escritos **antes** de qualquer tentativa de resolver o flow, que só acontece dentro de
+`activate_native_agent` (`:5546`). O segmento de fila nasce independentemente de o agente poder rodar
+— por isso existe segmento `queue` de 3 ms que nunca enfileirou ninguém.
+
+**O ramo do drain foi medido e NÃO é o discriminador.** Os dois órfãos trazem
+`Queue drain: re-routing … (agent=… became ready, no queue agent active)` — o ramo ELSE de
+`kafka_listener.py:707`, com o marcador ausente. Mas `fa2c7cfb` passa pelo **mesmo** ramo e **fecha**.
+Além disso `signalled queue agent` = **0 no log inteiro** (12/08 → 18/08) contra 3 do ramo ELSE: o
+caminho do sinal não é raro, **nunca rodou**. O candidato do `work_task_claim` (turno anterior) fica
+sem suporte: o humano destes casos entrou por re-rota do drain, não por claim de inbox.
+
+#### CAUSA RAIZ (2026-08-18, reproduzida) — `conversations.participants` é publicado SEM CHAVE
+
+A reprodução ao vivo (sessão `dce98532`, instrumentação de marcador + TTL) desfez tudo o que parecia
+ser o caso e nomeou o defeito:
+
+- o marcador **foi** escrito (`marker SET … ttl=14400`) e **foi** apagado pelo dono
+  (`marker DELETE … deleted=1`), 7 s antes do drain — o `ttl=-2` que o drain reportou era **honesto**.
+  Não há marcador sumindo; o "fio aberto" da versão anterior desta seção não existia;
+- o `participant_left` **ESTÁ no tópico Kafka** (`probe_participant_event_in_kafka.sh`:
+  `queue-dce98532… joined=1 left=1`, ao lado de `sac_ia-001 joined=1 left=1` como testemunha);
+- e mesmo assim ele não está em **nenhuma** das duas tabelas.
+
+**O produtor publica sem `key`** (`main.py:3232` — `send_and_wait(TOPIC_PARTICIPANTS, payload)`) e o
+tópico tem **3 partições** (`docker-compose.demo.yml:533`). Sem chave, o particionador espalha: o
+`participant_joined` e o `participant_left` do MESMO segmento podem cair em partições diferentes, e
+**a ordem do Kafka é por partição**. O consumidor (`getmany`) processa lote por partição, então pode
+inserir o `left` ANTES do `joined`. Quando isso acontece:
+
+| tabela | engine | quem vence |
+|---|---|---|
+| `segments` | `ReplacingMergeTree(ingested_at)`, `ingested_at DateTime` (segundo) | o `joined`, inserido depois ⇒ **`ended_at` NULL para sempre** |
+| `participation_intervals` | `ReplacingMergeTree()` **sem coluna de versão** | o `joined`, inserido depois ⇒ **`left_at` NULL** |
+
+As duas perdem pelo mesmo motivo, sem erro em lugar nenhum — que é exatamente o quadro medido. E o
+DDL de `participation_intervals` (`clickhouse.py:350`) **escreve a premissa falsa em prosa**:
+*"The 'left' event is always inserted after 'joined' (Kafka ordering)"*. Ordenação do Kafka é por
+partição, e nunca houve chave; a premissa nunca valeu.
+
+Encaixa em tudo o que estava solto: a intermitência (2 de 4 no `retencao_humano`, ~1,3% no tenant), a
+sobre-representação de segmentos **curtos** (os dois eventos saem com 3 ms de diferença, então
+atravessam o broker simultaneamente — é o caso de maior chance de inversão), e a família B, onde o log
+provava publicação e nenhuma tabela tinha o evento.
+
+**O conserto é de DUAS partes, e uma só não basta:**
+
+1. **`key=session_id` no publish** — restaura a ordenação por segmento (necessária, não suficiente);
+2. **coluna de versão que discrimine** — com ordenação garantida, `RMT(ingested_at)` em resolução de
+   SEGUNDO ainda empata para eventos que distam milissegundos, e empate em RMT não tem vencedor
+   definido. `participation_intervals` sequer tem coluna de versão.
+
+Não repara as linhas já quebradas: o tópico ainda tem os eventos, então um reprocessamento é possível
+— decisão à parte.
 
 **O que o segmento aberto de fila NÃO custa:** `agent_time_ms` filtra
 `role IN ('primary','specialist')` (`reports_query.py:1354`), então `queue` está fora **por papel**. O

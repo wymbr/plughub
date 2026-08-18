@@ -346,9 +346,21 @@ ORDER BY (tenant_id, collect_token)
 """
 
 # participation_intervals: one row per participant per session interval.
-# ReplacingMergeTree() — no version column (Nullable(DateTime64) is not valid as version).
-# The "left" event is always inserted after "joined" (Kafka ordering), so last-write-wins
-# keeps the row with left_at set. ORDER BY (tenant_id, session_id, participant_id).
+#
+# ⚠️ O comentário anterior afirmava: *"The 'left' event is always inserted after
+# 'joined' (Kafka ordering), so last-write-wins keeps the row with left_at set"*.
+# **A premissa era FALSA e custou o Problema 34** (`conference-mechanics.md`): ordem no
+# Kafka é por PARTIÇÃO, o tópico `conversations.participants` tem 3, e o produtor
+# publicava SEM CHAVE — logo o par joined/left do mesmo segmento podia inverter, e o
+# `joined` inserido depois vencia, deixando `left_at` NULL para sempre. Medido com o
+# evento PRESENTE no tópico e ausente aqui e em `segments`.
+#
+# Corrigido dos dois lados: `key=session_id` no produtor (orchestrator-bridge) e
+# `ReplacingMergeTree(row_version)` aqui. A versão vem do EVENTO, não da inserção —
+# então inversão futura deixa de corromper, em vez de depender de a ordem se manter.
+# A terceira parcela do `coalesce` existe porque AQUI os dois timestamps são
+# Nullable (em `sessions` o `opened_at` não é): sem ela um par sem nenhum dos dois
+# tornaria o DEFAULT NULL numa coluna não-nula.
 _DDL_PARTICIPATION_INTERVALS = """
 CREATE TABLE IF NOT EXISTS {db}.participation_intervals
 (
@@ -364,9 +376,10 @@ CREATE TABLE IF NOT EXISTS {db}.participation_intervals
     joined_at      Nullable(DateTime64(3, 'UTC')),
     left_at        Nullable(DateTime64(3, 'UTC')),
     duration_ms    Nullable(Int64),
-    date           Date
+    date           Date,
+    row_version    DateTime64(3, 'UTC') DEFAULT coalesce(left_at, joined_at, toDateTime64(0, 3, 'UTC'))
 )
-ENGINE = ReplacingMergeTree()
+ENGINE = ReplacingMergeTree(row_version)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, participant_id)
 """
@@ -374,7 +387,17 @@ ORDER BY (tenant_id, session_id, participant_id)
 # ── Arc 5: segments — one row per ContactSegment (joined+left merged via ReplacingMergeTree)
 # ORDER BY (tenant_id, session_id, segment_id) — segment_id is the primary key.
 # participant_joined writes with ended_at=NULL; participant_left rewrites with ended_at set.
-# ReplacingMergeTree(ingested_at) ensures the latest write wins on background merge.
+#
+# ⚠️ A versão era `ingested_at` — instante da INSERÇÃO, em resolução de SEGUNDO —, e
+# isso errava por dois motivos independentes (Problema 34, medido 2026-08-18):
+#   1. inserção ≠ evento. Com o produtor publicando sem chave num tópico de 3
+#      partições, o `left` podia ser inserido ANTES do `joined`, e aí o `joined` tinha
+#      `ingested_at` MAIOR e vencia — apagando o fechamento do segmento;
+#   2. mesmo em ordem, um par que dista 3 ms cai no MESMO segundo, e empate em
+#      ReplacingMergeTree não tem vencedor definido.
+# Agora a versão é o EVENTO (`coalesce(ended_at, started_at)`, ambos DateTime64(3)),
+# como em `sessions` e `session_transitions`. `ingested_at` continua na tabela — é
+# usada como corte de janela em probes/queries —, mas deixou de decidir dedup.
 _DDL_SEGMENTS = """
 CREATE TABLE IF NOT EXISTS {db}.segments
 (
@@ -406,9 +429,10 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     wrapup_next_steps  Nullable(String),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
-    date               Date
+    date               Date,
+    row_version        DateTime64(3, 'UTC') DEFAULT coalesce(ended_at, started_at)
 )
-ENGINE = ReplacingMergeTree(ingested_at)
+ENGINE = ReplacingMergeTree(row_version)
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, segment_id)
 """
@@ -1164,7 +1188,124 @@ class AnalyticsStore:
                 logger.warning("Migration skipped (already applied?): %s — %s", ddl[:60], exc)
         # Structural migration — needs a rebuild (ClickHouse cannot ALTER the engine).
         self._migrate_sessions_row_version()
+        # Problema 34 (conference-mechanics.md): o par joined/left do MESMO segmento
+        # podia inverter (tópico sem chave, 3 partições) e a linha de abertura vencia a
+        # de fechamento. As duas tabelas escritas por `parse_participant_event` passam a
+        # versionar pelo EVENTO. Ver `_migrate_row_version`.
+        self._migrate_row_version(
+            table="segments",
+            order_by="(tenant_id, session_id, segment_id)",
+            default_expr="coalesce(ended_at, started_at)",
+            why="o `joined` inserido depois do `left` vencia e o segmento nunca fechava",
+            # ⚠️ OBRIGATÓRIO: as duas MVs abaixo leem FROM segments. Em banco Atomic o
+            # vínculo MV→origem é por UUID, não por nome — sem derrubá-las antes do
+            # RENAME elas ficariam presas à tabela ANTIGA, que o passo seguinte apaga,
+            # e parariam de receber INSERT **em silêncio** (a bancada de agentes e o
+            # relatório de complexidade congelariam sem erro). `sessions` não tem MV
+            # dependente, e é por isso que a migração original pôde ignorar o ponto.
+            dependent_views=[
+                ("mv_agent_performance_daily", _DDL_MV_AGENT_PERFORMANCE),
+                ("mv_segment_summary",         _DDL_MV_SEGMENT_SUMMARY),
+            ],
+        )
+        self._migrate_row_version(
+            table="participation_intervals",
+            order_by="(tenant_id, session_id, participant_id)",
+            default_expr="coalesce(left_at, joined_at, toDateTime64(0, 3, 'UTC'))",
+            why="mesma inversão: `left_at` ficava NULL para sempre",
+        )
         logger.info("ClickHouse schema ensured (database=%s)", self._database)
+
+    def _migrate_row_version(
+        self, table: str, order_by: str, default_expr: str, why: str,
+        dependent_views: "list[tuple[str, str]] | None" = None,
+    ) -> None:
+        """
+        Reconstrói *table* com `ReplacingMergeTree(row_version)`. Idempotente.
+
+        Genérica de propósito, ao contrário de `_migrate_sessions_row_version`, que é
+        específica: são DUAS tabelas com o mesmo defeito e o mesmo conserto, e manter
+        duas cópias do procedimento é como o DDL de `participation_intervals` acabou
+        com um comentário afirmando uma garantia de ordenação que ninguém impunha.
+        A de `sessions` fica como está — reescrevê-la seria mexer, sem medição, num
+        caminho que já foi validado em produção.
+
+        `default_expr` é o que REPARA o histórico: nas linhas antigas (sem
+        `row_version` gravado) ele é computado por linha, e a linha de fechamento — a
+        única que carrega o timestamp final — passa a vencer a de abertura. O rebuild
+        conserta o passado, não só o futuro.
+
+        Falha é LOGADA em ERROR e não derruba o boot: sem a migração o consumidor
+        ainda escreve, e um analytics degradado é preferível a um serviço que não sobe.
+        Mas a linha diz exatamente o que continua quebrado.
+        """
+        db = self._database
+        try:
+            engine = self._client.command(
+                f"SELECT engine_full FROM system.tables "
+                f"WHERE database = '{db}' AND name = '{table}'"
+            )
+        except Exception as exc:            # tabela ainda não existe → DDL novo já nasce certo
+            logger.warning("%s row_version migration: cannot read engine — %s", table, exc)
+            return
+
+        engine_str = str(engine or "")
+        if not engine_str:
+            return
+        if "row_version" in engine_str:
+            return                          # já migrada
+
+        logger.warning(
+            "%s: rebuilding to ReplacingMergeTree(row_version) — %s", table, why,
+        )
+        tmp = f"{table}_rv"
+        views = dependent_views or []
+        try:
+            self._client.command(
+                f"ALTER TABLE {db}.{table} ADD COLUMN IF NOT EXISTS "
+                f"row_version DateTime64(3, 'UTC') DEFAULT {default_expr}"
+            )
+            # MVs dependentes saem ANTES do swap e voltam DEPOIS (recriadas do mesmo
+            # DDL, com POPULATE onde ele existe → reagregam sobre a tabela nova).
+            for name, _ddl in views:
+                self._client.command(f"DROP VIEW IF EXISTS {db}.{name}")
+            self._client.command(f"DROP TABLE IF EXISTS {db}.{tmp}")
+            self._client.command(
+                f"CREATE TABLE {db}.{tmp} AS {db}.{table} "
+                f"ENGINE = ReplacingMergeTree(row_version) "
+                f"PARTITION BY toYYYYMM(date) ORDER BY {order_by}"
+            )
+            # Sem FINAL: o engine NOVO deduplica corretamente por versão. Copiar com
+            # FINAL levaria junto o vencedor ERRADO escolhido pelo engine antigo — que
+            # é justamente o defeito que este rebuild existe para desfazer.
+            self._client.command(
+                f"INSERT INTO {db}.{tmp} SELECT * FROM {db}.{table}"
+            )
+            self._client.command(
+                f"RENAME TABLE {db}.{table} TO {db}.{table}_pre_rv, "
+                f"{db}.{tmp} TO {db}.{table}"
+            )
+            self._client.command(f"DROP TABLE IF EXISTS {db}.{table}_pre_rv")
+            logger.info(
+                "%s: rebuilt with ReplacingMergeTree(row_version) — history repaired", table,
+            )
+        except Exception as exc:
+            logger.error(
+                "%s row_version rebuild FAILED — %s: %s", table, why, exc,
+            )
+        finally:
+            # `finally`, não o caminho feliz: se o rebuild falhar no meio, as MVs já
+            # foram derrubadas e ficariam ausentes — trocando um defeito de dedup por
+            # um relatório vazio. Recriar é idempotente (`IF NOT EXISTS`) e o alvo é a
+            # tabela que estiver de pé, tenha o swap acontecido ou não.
+            for name, ddl in views:
+                try:
+                    self._client.command(ddl.format(db=db))
+                except Exception as exc:
+                    logger.error(
+                        "%s: MV %s NÃO recriada após o rebuild — a bancada de agentes "
+                        "vai parar de receber linhas novas: %s", table, name, exc,
+                    )
 
     def _migrate_sessions_row_version(self) -> None:
         """

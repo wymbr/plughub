@@ -1,5 +1,14 @@
 # Kickoff — Segmento que nunca fecha · Volume de sessões inexplicado
 
+> ## 🛑 ENCERRADO EM 2026-08-18 — os DOIS itens foram respondidos
+>
+> Segmento aberto: causa raiz = publish **sem `key`** em tópico de 3 partições; **consertado e
+> validado**. Volume de sessões: as duas leituras eram o mesmo dado com principais diferentes (ABAC).
+> Estado vivo, pendências e armadilhas em
+> [`handoff-segmentos-abertos-2026-08-18.md`](handoff-segmentos-abertos-2026-08-18.md).
+> **Nada abaixo desta linha deve guiar trabalho novo** — inclusive o aviso de 08-17, que já era uma
+> correção de uma correção.
+
 > ## ⛔ ESTE KICKOFF FOI EXECUTADO EM 2026-08-17 — não reutilizar como está
 >
 > A sessão mediu tudo o que este arquivo pedia e **derrubou parte do que ele afirma**. O estado

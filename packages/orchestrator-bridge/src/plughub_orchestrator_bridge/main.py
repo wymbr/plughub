@@ -3229,9 +3229,28 @@ async def _publish_participant_event(
         )
         return
     try:
+        # ── `key=session_id` — NÃO é otimização, é correção (2026-08-18) ────────
+        # O tópico tem 3 partições (`docker-compose.demo.yml`) e este publish era SEM
+        # CHAVE. Sem chave o particionador espalha, e **ordem no Kafka é por
+        # PARTIÇÃO**: o `participant_joined` e o `participant_left` do MESMO segmento
+        # podiam cair em partições diferentes e ser inseridos fora de ordem no
+        # ClickHouse. Quando o `left` entrava primeiro, o `joined` — inserido depois —
+        # vencia a deduplicação nas DUAS tabelas (`segments` e
+        # `participation_intervals`) e o segmento ficava `ended_at`/`left_at` NULL
+        # PARA SEMPRE, sem erro em lugar nenhum. É o Problema 34 de
+        # `docs/guias/conference-mechanics.md`, medido com o evento presente no tópico
+        # e ausente nas duas tabelas.
+        #
+        # A chave é `session_id` (não `segment_id`): ordena o segmento E todos os
+        # participantes da mesma sessão entre si, que é o que a leitura de topologia
+        # de conferência assume. Cardinalidade alta ⇒ distribuição continua uniforme.
+        #
+        # Sozinha ela NÃO basta: ver o `row_version` em `analytics-api/clickhouse.py`.
+        # Ordem garantida sem versão que discrimine ainda empata em RMT.
         await _kafka_producer.send_and_wait(
             TOPIC_PARTICIPANTS,
             json.dumps(event).encode("utf-8"),
+            key=session_id.encode("utf-8"),
         )
         logger.debug(
             "Participant event: %s session=%s participant=%s segment=%s",
@@ -5499,14 +5518,31 @@ async def process_queued(
         "agent_type_id": agent_type_id,
         "activated_at":  datetime.now(timezone.utc).isoformat(),
     })
+    # ── Por que este SET é logado em INFO (2026-08-18) ────────────────────────
+    # Este marcador é a ÚNICA coisa que faz o drain sinalizar o agente de fila em
+    # vez de re-rotear (`routing/kafka_listener.py:707`). Sem sinal, o `menu
+    # timeout_s:0` do agente de fila nunca destrava, `activate_native_agent` abaixo
+    # nunca retorna, e o `participant_left` da fila nunca é PRODUZIDO — o segmento
+    # `queue` fica aberto para sempre (Problema 34 em conference-mechanics.md).
+    #
+    # A investigação travou exatamente aqui: o drain registrou "no queue agent
+    # active" 12 s depois de um SET que, pela ordem do código, tinha de estar
+    # valendo — e a única testemunha possível era um `logger.debug` num serviço que
+    # roda em INFO. Confirmar a escrita não é ruído de depuração: é o par do TTL que
+    # o ramo ELSE do drain agora imprime.
     try:
         await redis_client.set(
             f"queue:agent_active:{session_id}", marker_value, ex=14_400
         )
-        logger.debug("Queue agent marker set: session=%s pool=%s", session_id, pool_id)
+        logger.info(
+            "Queue agent marker SET: session=%s pool=%s key=queue:agent_active:%s ttl=14400",
+            session_id, pool_id, session_id,
+        )
     except Exception as exc:
         logger.warning(
-            "Could not set queue agent marker: session=%s — %s", session_id, exc
+            "Queue agent marker NÃO escrito: session=%s pool=%s — %s: %s "
+            "(o drain vai re-rotear e o segmento de fila NÃO vai fechar)",
+            session_id, pool_id, type(exc).__name__, exc,
         )
 
     logger.info(
@@ -5588,11 +5624,23 @@ async def process_queued(
         flow_id=_q_flow_id,
     ))
 
-    # Clean up marker after the queue agent completes
+    # Clean up marker after the queue agent completes.
+    # Logado em INFO e com o resultado do DELETE (2026-08-18): com o SET do topo
+    # também em INFO, o par vira uma linha do tempo legível — e é ela que decide, na
+    # próxima ocorrência do Problema 34, entre "o marcador nunca foi escrito" e
+    # "alguém o apagou". `deleted=0` aqui significa que a chave JÁ não existia
+    # quando o dono dela veio limpá-la: isso é anomalia, não rotina.
     try:
-        await redis_client.delete(f"queue:agent_active:{session_id}")
-    except Exception:
-        pass
+        _deleted = await redis_client.delete(f"queue:agent_active:{session_id}")
+        logger.info(
+            "Queue agent marker DELETE: session=%s pool=%s deleted=%s",
+            session_id, pool_id, _deleted,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Queue agent marker não apagado: session=%s — %s: %s",
+            session_id, type(exc).__name__, exc,
+        )
 
     logger.info(
         "Queue agent completed: session=%s pool=%s outcome=%s wait_ms=%d",

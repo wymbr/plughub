@@ -1468,6 +1468,15 @@ services:
       # e volte ao default depois (um `up -d` sem a var). Em reconcile o YAML re-aplica
       # skills, pools e deploy-slots por cima do DB — inclusive por cima de edições da UI.
       REGISTRY_SYNC_RECONCILE: ${REGISTRY_SYNC_RECONCILE:-}
+      # Fallback legado de resolução de flow (`resolve_flow_for_agent`): sem slot
+      # `current` no pool, executa a definição VIVA do skill. Declarado aqui — e
+      # VAZIO por defeito — só para poder ser LIGADO numa medição:
+      #     ALLOW_LIVE_FLOW_FALLBACK=true docker compose -f docker-compose.demo.yml up -d orchestrator-bridge
+      # É a única variável que separa os dois desfechos do Problema 34 no
+      # `retencao_humano` (pool sem slot): desligado ⇒ o agente de fila não roda e o
+      # segmento fecha em milissegundos; ligado ⇒ roda `skill_fila_v1` e trava no
+      # `menu timeout_s:0`. Ligar em produção faz edição de skill vazar sem deploy.
+      ALLOW_LIVE_FLOW_FALLBACK: ${ALLOW_LIVE_FLOW_FALLBACK:-}
     depends_on:
       kafka:
         condition: service_healthy

@@ -717,10 +717,26 @@ class LifecycleEventHandler:
             else:
                 # No active queue agent — re-publish directly to conversations.inbound
                 await self._producer.send(self._topic_inbound, value=full_data)
+                # ── Por que este ramo diz o TTL da chave (2026-08-18) ──────────────
+                # "no queue agent active" tem DOIS significados que a mesma frase
+                # cobria, e eles pedem consertos opostos:
+                #   ausente porque nunca houve agente de fila  → nada a consertar aqui
+                #   ausente com o agente RODANDO               → o agente fica preso no
+                #     BLPOP para sempre e o segmento `queue` nunca fecha (Problema 34)
+                # O `TTL` separa os três estados sem uma segunda ida ao Redis a mais
+                # que valha: -2 = chave inexistente · -1 = existe SEM expiração (nunca
+                # deveria: o produtor escreve com ex=14400) · >0 = existe.
+                # Sem isto, a investigação dos segmentos de fila órfãos não consegue
+                # distinguir "o marcador sumiu" de "o marcador nunca foi escrito".
+                try:
+                    _marker_ttl = await self._instances._redis.ttl(queue_agent_key)
+                except Exception as _ttl_exc:            # nunca derruba o drain
+                    _marker_ttl = f"erro:{type(_ttl_exc).__name__}"
                 logger.info(
                     "Queue drain: re-routing session=%s to pool=%s tenant=%s "
-                    "(agent=%s became ready, no queue agent active)",
+                    "(agent=%s became ready, no queue agent active; marker=%s ttl=%s)",
                     contact.session_id, pool_id, tenant_id, instance_id,
+                    queue_agent_key, _marker_ttl,
                 )
             # One contact per agent activation — stop here; if the agent has
             # capacity for more, subsequent agent_ready/agent_busy cycles will
