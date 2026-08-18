@@ -8,6 +8,82 @@
 
 ---
 
+## ⚠️ Direção REVERTIDA em 2026-08-18 — leia antes de pegar qualquer item daqui
+
+A decisão de direção do n8n de 2026-08-17 — alvo *"todo skill associado a um pool passa a ser autorado
+no n8n; o editor de fluxo local sai por completo"* — foi **ABORTADA**. Justificativa, reclassificação
+item a item e o que sobrevive vivem num artefato só:
+[`docs/product/n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md).
+
+**No lugar dela:** **A2A server binding** ([`adr-a2a-server-binding.md`](docs/adr/adr-a2a-server-binding.md))
+para abrir a fronteira por protocolo padrão — uma implementação, N consumidores — e **editor gráfico
+próprio**, alavancado por *execução observável* (rodar o fluxo e ver o `pipeline_state` passo a passo),
+não por canvas. A direção *"config + interpretador genérico"* sobrevive inteira e **não dependia do n8n**.
+
+**O que a reversão faz com os baldes da triagem:**
+
+| Balde | Estado agora |
+|---|---|
+| **14 `Congela`** | **DESCONGELAM** — o gate da fase 3 que os prendia não existe mais. Voltam à triagem normal, sem prioridade herdada |
+| **9 `Escopo reduzido`** | **REEXAMINAR** — o corte era *"esta parte vira template n8n"*, fundamento que caiu. Rejulgar item a item; **não** reverter em bloco (alguns cortes eram bons por mérito próprio) |
+| **4 `Aborta`** | **SEGUEM ABORTADOS**, por mérito próprio — a própria triagem registra que nenhum caiu por *"o n8n cobre"* |
+| **28 `Segue`** | inalterados |
+
+> [`n8n-triagem-2026-08-17.md`](docs/product/n8n-triagem-2026-08-17.md) vira **insumo histórico**: a
+> evidência por item (arquivo:linha) continua válida; os baldes e as âncoras de fase, não. **Não usar
+> como filtro vivo.** O mesmo vale para `n8n-interop-boundaries-and-seams.md` e `n8n-plano-execucao.md`.
+
+> ⚠️ **A decisão que a reversão NÃO toma:** a costura C (n8n como *domain MCP server* governado) não foi
+> abortada — aponta na direção contrária, não toca autoria, e é a de maior retorno declarado. Está
+> desacoplada, sem dono, à espera de decisão explícita. Ver §7 do documento de reversão.
+
+---
+
+## Frentes abertas pela reversão *(2026-08-18)*
+
+### A2A server binding — abrir a fronteira por protocolo padrão
+
+Uma implementação, N consumidores (LangGraph, CrewAI, orquestrador do cliente — e o n8n entre eles).
+Decisão em [`adr-a2a-server-binding.md`](docs/adr/adr-a2a-server-binding.md), fases **A0→A6**.
+
+**Duas emendas de 2026-08-18:** o **D11** (graça de espera do caller) é substituído por
+[`adr-pool-no-resource-policy.md`](docs/adr/adr-pool-no-resource-policy.md) — vira config de pool
+(`on_no_resource`) e o binding só traduz para `503`/`TASK_STATE_REJECTED`; e o **D9** (cota por
+`a2a_client`) sai do v1 — a contenção é `allowed_pools` + pool dedicado + `on_no_resource: reject`.
+
+**Pools humanos seguem FORA de escopo** (§8 do ADR), condicionados a *demanda comercial nomeada*. É
+provavelmente o produto mais diferenciado que existe aqui, e exige **A5 (streaming) como pré-requisito**,
+porque o A2A é blocking por padrão e uma fila humana de minutos só é conforme com a linha aberta.
+
+### Editor de fluxo próprio — a alavanca é execução observável, não o canvas
+
+Canvas é commodity (React Flow/xyflow) e a parte difícil já existe (`validateFlow`: adjacência fechada +
+guarda de ciclo). O que falta é **rodar e ver**: executar o fluxo com dados de teste, mostrar o
+`pipeline_state` passo a passo, e **replayar uma sessão real dentro do canvas** — substrato que o
+Session Replayer e o `pipeline_state` persistido a cada transição já dão, e que o n8n não tem.
+
+**Duas frentes já existentes reduzem o escopo desta** e valem por si: **N1** (config + interpretador
+genérico) e **N4** (editor de DialogForm).
+
+**Risco herdado, que a reversão não apaga:** o diagnóstico original estava certo — editor sem
+investimento apodrece. Se passarem dois trimestres sem commit em `agent-flow`, esta frente virou o
+*"fallback sem investimento"* que o documento abortado proibia com razão.
+
+### Capacidade de IA — `reserved` × `shared`
+
+ADR: [`adr-pool-capacity-reserved-shared.md`](docs/adr/adr-pool-capacity-reserved-shared.md) ·
+Handoff: [`capacidade-reserved-shared-kickoff.md`](docs/product/capacidade-reserved-shared-kickoff.md).
+
+Medido em 2026-08-18 (`tenant_demo`): **Σ declarada = 329** em 30 pools de IA; **as três quotas `nil`**
+⇒ admissão, provisionamento e login **todos fail-open**. É construção, não conserto.
+
+⚠️ **A ordem inverte e parece engano:** a **P1** (`deployViolation` contra `C_ai`, uma linha em
+`capacity.ts:27`) vem **antes** da **P0** (ligar o pricing). Hoje é inócua; depois do P0 é mudança de
+comportamento em produção. A janela para consertar o defeito C fecha no instante em que as quotas
+existirem.
+
+---
+
 ## Segmento que nunca fecha — 4 hipóteses ELIMINADAS, instrumento instalado *(2026-08-17, aberto)*
 
 **Fato, remedido em 2026-08-17 (idêntico à base da F3):** 9 segmentos com `ended_at IS NULL` em
@@ -67,7 +143,7 @@ fora por papel**, não por `duration_ms IS NOT NULL`. Logo:
   resume) COLIDEM numa linha só. Ela **não serve como testemunha** por-segmento; foi usada como tal
   numa rodada desta investigação e a conclusão teve de ser retirada.
 
-### O que sobrou provado, e o próximo passo
+### O que sobrou provado (famílias B)
 
 Para `e2764d9b`: o bridge **publicou** o `participant_left` (log prova execução além de `main.py:8170`
 — `Native agent executed … resolved` em .641, `_close_contact_layer` em .643) e **nenhuma** das duas
@@ -75,19 +151,164 @@ tabelas tem o evento. O único trecho entre os dois pontos era cego, e foi instr
 (`CHANGELOG.md` 2026-08-17). Reprodução serial em `limite_processo` (pool de um dos órfãos) rodou o
 ciclo completo em 17/08 e **fechou os 3 segmentos novos**, sem WARNING: o caminho funciona sozinho.
 
-**Próximo passo, em ordem de custo:**
+### Família A — medida em 2026-08-18: o log NOMEIA o ramo, e a cadeia óbvia foi REFUTADA
 
-1. `grep` do log do bridge para `61dd213c` e `05f4bc74` (família A) — **estão dentro da janela do log e
-   nunca foram lidos**. Podem nomear por que o agente de fila ficou bloqueado. Candidato a verificar:
-   só DOIS lugares fazem `LPUSH __agent_available__` (`kafka_listener.py:710` e
-   `routing/main.py:1415`); `work_task_claim` **não** sinaliza — se o humano assume pelo inbox pull, o
-   agente de fila espera para sempre. **Não medido — é candidato, não diagnóstico.**
-2. Esperar a próxima ocorrência com o WARNING no ar.
-3. Só então decidir entre conserto de transporte e conserto de versionamento.
+*(Gates: `infra/test/probe_family_a_queue_signal.sh` · `infra/test/probe_queue_segment_exit_paths.sh`.)*
+
+O log do routing-engine (janela 12/08 → 18/08, cobre os dois casos) traz a MESMA linha nas duas órfãs:
+
+```
+Queue drain: re-routing session=… to pool=retencao_humano
+             (agent=human-… became ready, no queue agent active)
+```
+
+É o ramo **ELSE** de `kafka_listener.py:707`: o marcador `queue:agent_active:{sid}` não existia, então
+o drain re-publicou em vez de dar `LPUSH __agent_available__`. A cadeia que isso sugere — sem LPUSH, o
+`menu timeout_s:0` do agente de fila não destrava, `activate_native_agent` (bridge `:5546`) não
+retorna, e o `participant_left` de `:5575` nunca é PRODUZIDO — é **plausível e insuficiente**:
+
+- **`fa2c7cfb` tem o mesmo ramo ELSE e o segmento FECHOU** (em 3 ms). O ramo não é o discriminador.
+
+**O que o inventário dos 16 segmentos `queue` mostra** (o `outcome` separa as populações):
+
+| população | pools | outcome | fecha? |
+|---|---|---|---|
+| 12 casos | `formfill_demo_ia`, `limite_processo`, `aprovacao_credito`, `limite_ia` | `handoff` | **12/12 fecham** (92 ms → 296 s) |
+| 4 casos | **`retencao_humano`** | **∅ (NULL)** | 2 fecham em **3 ms / 6 ms**, 2 **nunca** |
+
+Duas leituras que a tabela impõe:
+
+1. **No `retencao_humano` o agente de fila NUNCA completa** — 0 de 4 chegam a `handoff`. Onde ele
+   funciona (12/12), o pool é de workflow. Isto é fato de POOL, não de corrida, e a comparação de
+   `queue_config` entre os dois grupos ainda **não foi feita**.
+2. O discriminador refinado é **`activate_native_agent` bloqueou ou voltou na hora**: 3 ms/6 ms com
+   `outcome` NULL é retorno imediato sem resultado (falha rápida) — e aí o `participant_left` sai
+   normal. Os órfãos são os casos em que ele de fato bloqueou.
+3. **`signalled queue agent` = 0 no log INTEIRO** (contra 3 do ramo ELSE): o caminho do sinal **nunca
+   rodou** neste ambiente. Não é um ramo raro — é um ramo morto.
+
+### A contradição que sobrou — é ali que o defeito está
+
+O marcador é escrito em `main.py:5504` **antes** do `participant_joined` (`:5527`) e apagado só em
+`:5593`, **depois** do `participant_left` (`:5575`). Nos órfãos o `left` nunca saiu ⇒ o `delete` nunca
+rodou ⇒ o marcador **deveria estar lá** 12 s depois, quando o drain o consultou. Não estava.
+Uma das duas premissas é falsa. Candidatos, **nenhum medido**:
+
+- (a) o `SET` levantou exceção — o `except` loga WARNING, e o log do bridge **cobre 25 segundos**
+  (17/08 18:18:30 → 18:18:55), então a ausência não é evidência;
+- (b) há um apagador do marcador fora dos 4 pontos conhecidos (`grep` do repositório inteiro só acha
+  set/delete/exists no bridge e dois `get` no routing);
+- (c) o bridge morreu entre o `SET` e o drain — mas isso não apaga chave com TTL de 4 h.
+
+### A causa raiz, medida no mesmo dia — `queue_config.skill_id` é decorativo
+
+A comparação de config entre os dois grupos (grátis, feita antes de instrumentar qualquer coisa)
+respondeu quase tudo:
+
+- **`retencao_humano` é o ÚNICO dos cinco com `queue_config`** (`{skill_id: skill_fila_v1,
+  max_wait_s: 1800, agent_type_id: ""}`); os outros quatro têm `null` e entram pelo default de tenant.
+- `skill_fila_v1` **existe**, `published`, com `flow` — a referência não está pendurada.
+- **`retencao_humano` não tem slot nenhum**: `previous`/`current`/`next` todos `set:false`.
+- `ALLOW_LIVE_FLOW_FALLBACK` **não está no ambiente do bridge**.
+
+Cruzando com `resolve_flow_for_agent` (`main.py:494-497`): produção = **snapshot do slot `current` do
+POOL**, e `_activate_queue_agent` passa o **pool de destino** como `pool_id`. Logo o
+`queue_config.skill_id` **nunca é consultado** — quem decide o que o "agente de fila" executa é o
+deploy do pool onde o cliente espera. Isso fecha as duas metades da tabela sem hipótese extra:
+
+- pool humano **sem slot** → `resolve` devolve `None` → `activate_native_agent` devolve `{}` na hora →
+  `left` com `outcome` NULL: **os casos de 3 ms e 6 ms**;
+- pools de workflow **com slot** → rodou o flow do PRÓPRIO pool sob `role='queue'`: **os 12 `handoff`**
+  não são agente de fila nenhum.
+
+**Dois defeitos, de níveis diferentes:**
+
+1. **`queue_config` não executa nada** (config visível na UI, sem efeito) — e o modo de falha é
+   sucesso aparente: o segmento de fila aparece no relatório de Fila/SLA como se tivesse havido espera
+   atendida. *(Toca `docs/arcos/queue-attended-model.md` — o relatório de fila mede um agente que,
+   neste pool, nunca rodou.)*
+2. **A ordem no bridge**: marcador (`:5504`) e `participant_joined` (`:5527`) são escritos **antes** de
+   qualquer tentativa de resolver o flow (`:5546`). O segmento de fila nasce mesmo quando o agente não
+   pode rodar — daí segmento `queue` de 3 ms que não enfileirou ninguém.
+
+### CAUSA RAIZ — `conversations.participants` publicado SEM CHAVE em tópico de 3 partições
+
+Reproduzido ao vivo em 2026-08-18 (sessão `dce98532`, com a instrumentação de marcador+TTL no ar). O
+que a reprodução desfez, antes de nomear o defeito:
+
+- o marcador **foi** escrito e **foi** apagado pelo dono 7 s antes do drain — o `ttl=-2` era honesto.
+  **O "fio aberto" da versão anterior desta seção não existia**;
+- o `participant_left` **está no tópico Kafka** (`probe_participant_event_in_kafka.sh`:
+  `queue-dce98532… joined=1 left=1`, com `sac_ia-001 joined=1 left=1` de testemunha) e **não está em
+  nenhuma das duas tabelas**.
+
+`main.py:3232` publica `send_and_wait(TOPIC_PARTICIPANTS, payload)` — **sem `key`** — e o tópico é
+criado com **`--partitions 3`** (`docker-compose.demo.yml:533`). Sem chave o particionador espalha, e
+**ordem no Kafka é por partição**: o `joined` e o `left` do mesmo segmento podem cair em partições
+diferentes e ser inseridos fora de ordem. Quando o `left` entra primeiro, as DUAS tabelas perdem pelo
+mesmo motivo — `segments` é `RMT(ingested_at)` e o `joined` inserido depois vence; `participation_intervals`
+é `RMT()` **sem coluna de versão** e o último inserido vence. Sem erro em lugar nenhum.
+
+O DDL de `participation_intervals` (`clickhouse.py:350`) **afirma a premissa falsa em prosa**:
+*"The 'left' event is always inserted after 'joined' (Kafka ordering)"*. Nunca houve chave; a premissa
+nunca valeu. Explica a intermitência (2 de 4 no pool, ~1,3% no tenant), a sobre-representação de
+segmentos **curtos** (3 ms entre os dois eventos = maior chance de inversão) e a família B, onde o log
+provava publicação e nenhuma tabela tinha o evento.
+
+**Conserto em DUAS partes — uma só não basta:**
+
+1. `key=session_id` no publish (ordenação por segmento — necessária, não suficiente);
+2. coluna de versão que **discrimine**: com a ordem garantida, `RMT(ingested_at)` em resolução de
+   SEGUNDO ainda empata para eventos que distam milissegundos, e empate em RMT não tem vencedor
+   definido. `participation_intervals` sequer tem versão.
+
+**Gate:** `probe_open_segments_closed_sessions.sh` antes/depois (base `primary` 5 · `queue` 2 ·
+`specialist` 2), com a testemunha obrigatória — os que já fecham têm de continuar fechando pelo caminho
+deles. **Não repara o passado**: os eventos seguem no tópico, então reprocessar é possível; decisão à
+parte.
+
+*(Instrumentação que sobreviveu e fica: `marker SET`/`marker DELETE deleted=N` em INFO no bridge e o
+TTL da chave no ramo ELSE do drain — foi ela que separou "o marcador sumiu" de "o marcador foi apagado
+por quem devia".)*
 
 ---
 
-## Volume de sessões inexplicado (item 2 do kickoff) — a rajada NÃO existe no dado *(2026-08-17, aberto)*
+## Volume de sessões inexplicado (item 2 do kickoff) — RESOLVIDO: são DOIS PRINCIPAIS, não dois dados *(2026-08-18)*
+
+> **Veredicto (2026-08-18, `infra/test/probe_contacts_count_funnel.sh`).** As duas leituras não têm
+> nada a ver com o e2e, com produtor fantasma nem com os tiers. **O dado é o mesmo nas duas; o que
+> muda é QUEM pergunta.** O funil reproduz o `WHERE` do endpoint condição a condição e aterrissa
+> EXATAMENTE no número que ele responde (119 = 119), então cada queda tem dono:
+>
+> | passo | linhas | queda |
+> |---|---|---|
+> | tenant | 424 | — |
+> | + janela `[07/08 00:00, 14/08 23:59:59)` | 300 | 124 |
+> | + `origin IN ('live')` | 300 | **0** — confirma "tudo live" DENTRO da janela |
+> | + `canal != '' OR aberta` | 300 | **0** |
+> | + pool não interno | **285** | 15 |
+> | + ABAC `accessible_pools` | **119** | **166** |
+>
+> **285 é exatamente a leitura "depois"; 119 ≈ a leitura "antes" (118).** O predicado que separa as
+> duas é o escopo de pool do JWT — `admin@plughub.local` (sub `c30b50d9…`, o mesmo humano que aparece
+> no log do item 1) carrega 4 pools e por isso vê **119 de 285** contatos.
+>
+> **Como se obtém a leitura irrestrita — está escrito no código** (`pool_auth.py:130-135`, com
+> docstring): (1) `auth_jwt_secret` não configurado; (2) **requisição sem header `Authorization`**
+> — degradação documentada como retrocompatibilidade; (3) JWT com `accessible_pools=[]` (convenção
+> de admin da auth-api). Qual dos três produziu o 285 ainda **não** foi medido; o teste é uma linha
+> (`curl` no endpoint sem o header, prevendo 285).
+>
+> **O defeito que fica, e é de produto:** o `meta` publica `window_applied` e `internal_pools_known`
+> — dois marcadores criados exatamente para impedir que a tela afirme um recorte que não houve — e
+> **não tem nenhum para o escopo de pool**. O cabeçalho diz "119 contatos", e nada distingue *"há
+> 119"* de *"você enxerga 119 de 285"*. Conserto na mesma forma da casa: marcador
+> (`pool_scope_applied` / nº de pools) em `_sessions_meta` e leitura honesta na UI.
+>
+> **Duas hipóteses mortas no caminho:** (a) *tiers do `/reports/sessions`* — por leitura de código:
+> `total_contacts` sai de um `countIf` próprio (`reports_query.py:769-778`), **antes e fora** do
+> `try/except` dos tiers, que nenhum fallback alcança; (b) *degradação do `pools_client`* — real como
+> risco, mas o teto dela é **15** sessões (2 pools internos na janela), não 167.
 
 O relato: `/analise/sessions` foi de **118** para **285** contatos na mesma janela (07/08→14/08), mesmo
 escopo e mesmo build, separadas por uma execução de e2e. Medição (`probe_session_volume_origin.sh`):
@@ -100,11 +321,11 @@ escopo e mesmo build, separadas por uma execução de e2e. Medição (`probe_ses
 - e os totais de segmento batiam exatamente com a base da F3 (676), ou seja **nada rodou** entre as
   medições.
 
-Isso derruba as DUAS explicações do kickoff (a suíte rodou muito × produtor ativo) e promove uma
-terceira, que a própria `CLAUDE.md` registra como cheiro conhecido: **os 3 tiers de recuperação do
-`/reports/sessions` degradam em silêncio**. 118 seria a leitura degradada e 285 a íntegra — mesma
-janela, mesmo build, leitor diferente. **Não medido.** Teste: ler o endpoint duas vezes e fazer o tier
-se declarar.
+Isso derruba as DUAS explicações do kickoff (a suíte rodou muito × produtor ativo) e promoveu uma
+terceira — *os 3 tiers do `/reports/sessions` degradam em silêncio* —, **também descartada** em
+2026-08-18 (ver o veredicto acima): a intuição "mesma janela, mesmo build, leitor diferente" estava
+certa, mas o leitor que muda é o **principal do JWT**, não o tier. Vale como precedente: o cheiro
+conhecido foi acusado sem que ninguém tivesse conferido de onde o número sai.
 
 **Achado colateral que é do item 2 e está confirmado:** os `infra/test/seed_*.sh` inserem direto no
 ClickHouse e caem no default `origin='live'` — 15 segmentos abertos e suas sessões vêm daí. Existe,
@@ -114,90 +335,31 @@ exatamente o que o discriminador `origin` existe para impedir.
 
 ---
 
-## Interop com n8n — alvo: eliminar o editor de fluxo local *(decisão de direção 2026-08-17, ver `docs/product/n8n-interop-boundaries-and-seams.md`)*
+## Itens do levantamento de n8n que SOBREVIVEM à reversão *(2026-08-18)*
 
-Medição (575 arquivos de produção, `e2e-tests` **não** contado): ~12% do código é território que o
-n8n cobre melhor — `workflow-api`, `skill-flow-worker`, `scheduler-api`, `mailing-api`, importador,
-UI de workflows/schedules/outbound, e 7 dos 17 step types. Os 45% de fosso (sessão, conferência,
-roteamento, capacidade, canais, qualidade, governança) não têm equivalente em lugar nenhum.
+> O arco de interop foi abortado — ver [`n8n-arco-abortado-2026-08-18.md`](docs/product/n8n-arco-abortado-2026-08-18.md).
+> **Estes itens ficam**, porque entraram na fila do n8n sem serem sobre n8n. Matá-los por associação de
+> nome repetiria o erro que a própria §10.4 do documento abortado corrigiu: *"nome de pacote não era
+> unidade de decisão"*.
+>
+> **Prioridade preservada, justificativa trocada.** Onde o texto abaixo ainda argumenta *"com n8n do
+> outro lado"*, leia *"com qualquer consumidor externo do outro lado"* — o A2A põe um lá do mesmo jeito.
 
-**Justificativa adotada é a do EDITOR, não a de "parar de duplicar"** — a distinção importa porque as
-duas autorizam coisas diferentes, e o §10 do doc mostra que a **maioria** daqueles 12% **fica** (é
-estado e governança, não orquestração). **Alvo: todo skill associado a um pool — perfis `workflow`
-E `agent` — passa a ser autorado no n8n, e o editor de fluxo sai por completo.** O ganho não é
-apagar código: é que 100% da autoria sai de YAML + canvas caseiro e vai para ferramenta madura. O
-seguro contra dependência não é um editor de reserva sem investimento, é a **portabilidade** que a
-plataforma já vende (`skill-extract` passa a ter o JSON do n8n como alvo).
+**Morreu junto com o arco** *(registrado aqui para não ser reaberto por engano)*: o alvo de autoria no
+n8n; a morte do editor `agent-flow`; a costura B (absorvida pelo principal externo do A2A, fase A2); a
+frente N2 (mapeadores `flow_definition`/`pipeline_state` ← n8n); o gate de latência de turno; a fachada
+OpenAI no ai-gateway como *requisito*; e `skill-extract` tendo o JSON do n8n como alvo.
 
-**O que FICA (e a revisão 2 errava ao mandar embora):** `mailing-api` **inteiro** — o n8n não tem
-entidade de audiência, nem máquina de estado por destinatário (claim atômico, idempotência,
-`max_attempts`), nem separação membership ≠ suppression; no PlugHub o pacing nunca morou ali (é a
-agenda) e o laço é o step `loop`. `scheduler-api` **fica** — cron não é agendamento em dia útil
-(`business_day_policy` → calendar-api), a autoria é ABAC-gated para operador de negócio, o ledger
-`agenda_dispatches` dá drill-through a `session_id`, e o horário é atributo de entidade do PlugHub.
-E o scheduler sai **ileso de graça** porque a agenda aciona um **pool**, nunca um skill (invariante
-S4). `calendar-api` fica com **dois** consumidores: scheduler e evaluation-api (dispatch scanner).
+**Guarda que continua load-bearing, com ou sem n8n:** a pressão para empurrar control-flow para dentro
+do DialogForm existe de qualquer forma — e cresce à medida que a plataforma migra de *"lógica em YAML"*
+para *"config + interpretador genérico"*. `adr-dialog-conditional-skip-logic.md` (guarda declarativa
+`ask_when`, *não* control-flow) precisa ser defendido: se ceder, o editor de fluxo é reconstruído dentro
+do editor de formulário, com uma linguagem pior.
 
-**O skill NÃO morre — vira envelope de configuração.** `config_params`, `interface_schema`, política
-de masking, declaração de perfil e `mention_commands` mantêm a casa; o modelo de slot/`promote`/
-`deploy_version` fica **inalterado** (muda só a carga do snapshot). Consequência: skill sem lógica
-não precisa de YAML à mão — vira formulário na UI, e o que morre é a **tela de fluxo**, não a
-autoria.
+### Promover `skill-flow-service` a pacote de primeira classe
 
-**Regra de fronteira:** *n8n toca sistemas; PlugHub toca pessoas.* As três fronteiras
-(`journey`/`session`/`segment`) nascem da travessia do channel-gateway, não do código que decidiu
-atravessar — por isso o n8n pode ser autor da lógica sem nunca ser autor da fronteira. Único modo de
-quebra: workflow n8n contatando cliente por fora da borda.
-
-**O resíduo é um RUNNER, não um fluxo** — e é por isso que o editor pode morrer inteiro. O que não
-sai é **código**, não autoria:
-
-- **NPS inline.** O flow do `agente_nps_v1` é `form_get → menu → notify → complete` — exatamente o
-  que um runner genérico de formulário faz. Vira **config** (qual form, qual gatilho), não fluxo.
-  Precisa ficar local porque `_is_workflow_dispatch_entry` (`orchestrator-bridge/main.py:1233`)
-  mostra que **só `side=customer` + `inline` permanece na conferência** — todo o resto já migrou —,
-  e destacar fecha o contato (`main.py:2083`) tirando o cliente do WS.
-- **Transação mascarada.** Vira DialogForm com campos `masked: true` + runner confiável, e o **n8n
-  recebe o resultado, nunca o valor**. Padrão já existente e documentado no OTP.
-- **Consequência:** o interpretador genérico é hoje ele mesmo um skill em YAML
-  (`skill_dialog_runner_v1`). Com o YAML de fluxo morto, ele precisa virar **código** — serviço de
-  primeira classe. Deixa de ser efeito colateral e vira **pré-requisito da fase 5**.
-
-**Item bloqueante — evidência de execução para avaliação tier-2.** `flow_definition` (esperado) e
-`pipeline_state` (real) são artefatos do engine local. Com o alvo cobrindo 100% dos skills, a
-avaliação de IA degradaria **em bloco** para grau-transcript — a mesma limitação que o quality-ingest
-documenta para histórico externo. Os mapeadores (`tools/list` + JSON do n8n → `flow_definition`;
-trace de execução → `pipeline_state`) são **bloqueantes da fase 5**, não trabalho opcional. *(Atenua:
-o DialogForm já é versionado na dialog-api, então o conteúdo conversacional — o que a avaliação mais
-olha — segue versionado em casa.)*
-
-**Gate de latência vira condição de prosseguir**, não prudência: com 100% dos turnos conversacionais
-atravessando o n8n, instrumentar antes de migrar o perfil `agent` é obrigatório. O que hoje é
-implícito (`@ctx.*`, `context_tags`, o `resolve` de 5 fases) vira travessia explícita.
-
-**Guarda que passa a ser load-bearing:** com o editor de fluxo morto, haverá pressão para empurrar
-control-flow para dentro do DialogForm. `adr-dialog-conditional-skip-logic.md` (guarda declarativa
-`ask_when`, *não* control-flow) precisa ser defendido — se ceder, o editor de fluxo é reconstruído
-dentro do editor de formulário, com uma linguagem pior.
-
-**Quatro costuras:** A (webhook, existe) + E (Kafka Trigger, existe) = fase 0, e **A não serve
-sozinho** (sem superfície de resultado, o n8n fica cego); B (n8n como cliente MCP — compartilha o
-principal externo com a fase A2 do ADR de A2A); C (n8n como domain MCP server — maior retorno,
-pendura na fase B2 do ADR de borda única); D (node/template — fase 5, com sub-workflow template como
-precursor barato na fase 0, porque é ali que mora a disciplina de propagação de `root_session_id`).
-
-**Bloqueio de segurança que precede tudo:** `POST /v1/channels/webhook/pool/{pool_id}` é **anônima**.
-Com n8n do outro lado vira exposição ativa. A fase 0 não sobe sem fechar.
-
-**Gate empírico antes do ponto sem volta:** instrumentar latência de turno e contagem de travessias
-no perfil `workflow` **antes** de migrar o perfil `agent`. O alvo está decidido; o gate responde
-"batemos num impedimento?", não "devemos prosseguir?". A estimativa de "5–8 round-trips" é palpite,
-não medição.
-
-### Sub-item — promover `skill-flow-service` a pacote de primeira classe
-
-Fica **aqui** e não em item separado: é onde a integração aterrissa, e a promoção e a fase 2 são a
-mesma obra.
+Achado de due diligence, independente de qualquer decisão de interop: **o runtime de produção dos skills
+mora num pacote de testes.**
 
 O runtime de produção dos skills conversacionais é `packages/e2e-tests/services/skill-flow-service/`
 — cujo cabeçalho diz *"Thin HTTP wrapper … for E2E testing"* e que é dependência `service_healthy`
@@ -219,6 +381,107 @@ contrato), remover o fallback mudo, e decidir o destino do `skill-flow-worker`.
 
 *Ressalva: "404" e "env ausente" são conclusões estáticas (ausência de rota e de env em todos os
 compose), não observadas em execução.*
+
+### Frentes NOVAS que o levantamento de 2026-08-17 descobriu
+
+Quatro foram criadas; **três sobrevivem** à reversão, com justificativa própria. Nenhuma existia como
+item no `TODO.md` nem no `CLAUDE.md` § Pending — foram **descobertas ao levantar o terreno**, não
+inventadas pelo alvo, e é por isso que sobrevivem a ele.
+
+#### N1 — Promover o interpretador genérico a serviço de código *(agora: redutor de escopo do editor)*
+
+O interpretador genérico é hoje **ele mesmo um skill em YAML**: `skill_dialog_runner_v1.yaml`, 119 linhas,
+`steps:` de `:49` a `:118`, **5 steps** (`carregar_form` → `coletar` → `retornar` → `retornar_falha` →
+`finalizar`) e **2 tools MCP apenas** (`form_get` `:58`, `workflow_resume` `:96`/`:108`). O trabalho real
+dele é repassar o render do form ao canal e devolver o escalar cru — é código, não autoria.
+
+**Justificativa após a reversão:** deixou de ser *"não tem onde morar com o YAML morto"* e virou o
+oposto — **quanto mais skill vira config sobre interpretador genérico, menos superfície o editor
+gráfico precisa cobrir.** De bloqueante da fase 5 a redutor de escopo do editor próprio. **Arrasta a
+superfície inteira do dialog primitive:** hooks de finalização, NPS inline, wrap-up, survey
+(chat/inline/web/Console) e OTP.
+
+**Escopo:** serviço de primeira classe que (a) resolve o `DialogForm` publicado, (b) renderiza na superfície
+certa e (c) devolve `payload = { value: <escalar> }` — o contrato uniforme já as-built. As *"limitações
+declaradas"* de hoje são propriedades do interpretador **em YAML** e devem sumir junto: hook que não pode
+delegar, delegate de nível único (`session.delegate_resume_token`), binding do form por `@ctx` em vez de
+`$.config`.
+
+**Achado a resolver no caminho:** o avaliador de `ask_when` está **triplicado** — canônico em
+`packages/schemas/src/dialog.ts:423`, espelho JS em `channel-gateway/…/survey_web.py:386` e terceiro
+espelho em `platform-ui/…/DialogFormRenderer.tsx:400` (o comentário em `:75` se declara *"mirror of
+`evaluateAskWhen`"*). O ADR previu dois. Três implementações do mesmo veredicto divergem.
+
+**Pré-requisito:** a 2ª passada do editor de DialogForm (N4) estável — é a superfície que passa a autorar o
+conteúdo.
+
+#### ~~N2 — Mapeadores de `flow_definition` e `pipeline_state`~~ *(MORREU com a reversão)*
+
+Existia porque, com 100% dos skills autorados no n8n, a avaliação de IA degradaria **em bloco** para
+grau-transcript. Com a autoria ficando em casa, **nada degrada** — `flow_definition` e `pipeline_state`
+continuam sendo produzidos pelo engine local. A frente inteira some.
+
+**Dois resíduos que NÃO somem junto** (eram dependências dela e valem por si):
+
+- **`sequence_index` é calculado e nunca persistido** — `orchestrator-bridge/main.py:915`; o
+  `participant_left` grava `0` e o `ReplacingMergeTree` substitui a linha do join, quebrando **5
+  `argMax`** em `reports_query.py:2183-2209`. Defeito de atribuição por segmento, independente de tudo.
+- **`evaluation.ts:1131-1155` degrada em silêncio** — lê `flow_id` de `context["pipeline_state"]`, faz
+  `fetch ${agentRegistryUrl}/v1/skills/{flow_id}` e monta `{ skill_id, version, flow: sk["flow"] }`
+  (`:1183`). **Com a coluna `flow` vazia o campo some sem erro.** É o modo de falha que a § Postura de
+  Engenharia manda caçar, e continua aberto com o engine local.
+- O **Record/Replay Harness** perde a justificativa *"é o único que pega a tier-2 apagando"*, mas
+  sobrevive com a própria: gate de promoção.
+
+#### N3 — Fechar a rota anônima `POST /v1/channels/webhook/pool/{pool_id}` *(segue, e SOBE de prioridade)*
+
+**Não é item de n8n — é achado de segurança.** Sobrevive intacto, e o A2A o torna mais urgente, não menos:
+o D7 do [`adr-a2a-server-binding.md`](docs/adr/adr-a2a-server-binding.md) exige `tenant_id` vindo
+**exclusivamente da credencial**, e sem isso o binding publica um disparador anônimo de pools que promovem
+deploy e contatam clientes.
+
+Era natural supor que o arco *"Autenticação de endpoint webhook"* a cobrisse —
+**não cobre**: aquele arco fecha a porta **por identificador** (`auth_required` por `ChannelEndpoint`), e a
+rota **por pool** fica de fora por construção, porque não passa pelo registro de endpoint e por isso não tem
+onde pendurar credencial.
+
+`channel-gateway/…/main.py:1011-1048`: a assinatura recebe só `(pool_id: str, request: Request)` — zero
+`Depends`, zero `_require_*`, e o arquivo não tem middleware de auth global. Pior, o **`tenant_id` vem do
+corpo** (`:1037`, `body.get("tenant_id") or settings.tenant_id`), logo é cross-tenant por construção assim
+que a superfície for publicada. Com n8n do outro lado, todo pool webhook do tenant — inclusive os que
+promovem deploy e contatam clientes — vira disparável por qualquer um.
+
+**Vai junto, mesma fase:** *"Porta externa de resume × posse do item de pull"* (a porta pública passa
+`approver=None` por construção, então o gate de `channel-gateway/…/adapters/webhook.py:1163` — `if approver
+is not None and claim_instance_id:` — nunca roda) e *"`source` do resume asserido pelo cliente"* (chamador
+externo escolhe a causa terminal gravada).
+
+#### N4 — Revisão do editor de diálogos *(segue, e GANHA importância)*
+
+**Âncora quebrada:** `CLAUDE.md:1226`, `CHANGELOG.md:9708`, `CHANGELOG.md:9843` e o kickoff de triagem
+`:211` apontam para uma seção *"Revisão do editor de diálogos"* neste arquivo. Ela **nunca existiu** — o
+conteúdo está espalhado em duas subseções de outras seções (`TODO.md` § OTP/primitivo, *"2ª passada"*; e o
+S7 do § Customer Surveys). Quatro documentos citando um alvo inexistente.
+
+**Por que sobe de nit a caminho crítico:** o editor de DialogForm (`/config/dialog-forms`) é a superfície
+de autoria de **conteúdo conversacional**, e ela é ortogonal ao editor de fluxo — as duas convivem. Com a
+direção *"config + interpretador genérico"* (N1) andando, é esta tela que absorve cada skill que deixa de
+ser fluxo e vira config. Ela cresce em uso independentemente do que aconteça com o editor de fluxo.
+
+**Escopo consolidado** (união das duas listas espalhadas, sem duplicar):
+- **Segurança — sobe a requisito:** o **write hoje não tem gate ABAC**, só `X-Admin-Token`.
+- Drag reorder (hoje setas ↑↓); nós colapsáveis; agrupar validação/retry/opções; campo `retry.reprompt`.
+- Locale lado-a-lado com progresso de tradução estável; **preview do que o cliente vê**.
+- Validação client-side: slug de `form_id`, `output_key` único, `dimension_id` em snake_case.
+- Confirmação de descarte; `interaction=form` com múltiplos `fields`.
+- Biblioteca de `survey_question` reutilizável (vinha do S7).
+- **Guarda a defender, não a construir:** `ask_when` é skip-logic declarativa e o limite é esse. Se o editor
+  ganhar `next` condicional, laço ou variável, o editor de fluxo é reconstruído dentro do editor de
+  formulário, com uma linguagem pior. Ver `docs/adr/adr-dialog-conditional-skip-logic.md` (**Aceito +
+  implementado**, não proposto) — de suas 3 decisões em aberto, só **uma** segue aberta de verdade
+  (`checklist` multi-valor como `field`).
+
+---
 
 ### Defeitos colaterais achados no levantamento *(independentes do n8n)*
 
@@ -247,6 +510,31 @@ compose), não observadas em execução.*
   já converte o formato interno *para* Chat Completions na saída — a fachada de entrada é largamente
   reverter isso, e é o que permite ao AI Agent node do n8n usar o gateway sem perder rotação
   multi-conta e fallback.
+
+**Acrescentados pela triagem de 2026-08-17:**
+
+- **Avaliador de `ask_when` triplicado** — canônico `evaluateAskWhen` em
+  `packages/schemas/src/dialog.ts:423`; espelho JS em `channel-gateway/…/survey_web.py:386`; **terceiro**
+  espelho em `platform-ui/…/DialogFormRenderer.tsx:400`, cujo comentário em `:75` se declara *"mirror of
+  `evaluateAskWhen`"*. O ADR previu dois. Três implementações do mesmo veredicto divergem — mesmo modo de
+  falha da assimetria de permissão entre bordas.
+- **`masked_input_fields` é um contador de ausência sem testemunha.** Existe em
+  `analytics-api/…/audit.py` e é filtro do endpoint de auditoria LGPD, mas **não tem escritor** — sempre
+  `[]`. Para o DPO, *"nenhum campo mascarado nesta sessão"* e *"ninguém nunca escreveu"* são
+  indistinguíveis.
+- **`EventsView` pede `period=24h` a um endpoint que só aceita `from_dt`/`to_dt`**
+  (`MonitorTab.tsx:794` × `reports.py:1431`): a janela real é de 7 dias e o i18n diz *"últimas 24h"*.
+  Número plausível escondendo bug.
+- **`spawn_reason` tem zero amostras de `collect`/`delegate`** no demo (só `NULL` 349 e `trigger` 71) — e é
+  dele que a visão 2 do histórico deriva a direção do acesso. Medir antes de renderizar, senão a tela nasce
+  plana e a planura parece resposta.
+- **Índice de ADR desatualizado no `CLAUDE.md`** (corrigido 2026-08-17): `adr-dialog-conditional-skip-logic.md`
+  constava como *proposto* por mais de um mês, estando **Aceito + implementado desde 2026-07-08** e validado
+  ao vivo. Doc que descreve config não é a config — três documentos já discordaram do código nesta mesma
+  investigação.
+- **`TODO.md:3698` (`### Config Consolidation / HTTP Propagation`) é filha de
+  `## Relatórios analíticos — Agentes e Pools`** — título do pai sem relação nenhuma com o conteúdo. Quem
+  procurar consolidação de config pelo índice não acha.
 
 ---
 
@@ -3425,28 +3713,6 @@ e adotado por OTP, NPS e survey multi-pergunta. ADRs: `docs/adr/adr-otp-workflow
 
 ---
 
-## Flow — step de expressão sandboxed (NÃO eval cru) *(decisão de design, 2026-06-28)*
-
-**Necessidade**: valores computados / lógica mais rica em flows (ex.: o loop p/ ler o form JSON de pesquisa de
-satisfação; condições derivadas além de JSONPath em `choice`). **Ideia descartada**: um step que roda
-**JavaScript livre (`eval`)** com acesso ao ContextStore — quebra invariantes (Redis só via routing/skill-flow,
-MCP audit, masking/LGPD, isolamento de tenant) e abre RCE/exfiltração/loop infinito.
-
-**Recomendado**: **step de expressão sandboxed, read-only**:
-- avaliador de expressão **restrito** (estilo CEL/jsonlogic), **puro e determinístico**, **sem I/O nem rede**,
-  com limite de CPU/tempo; lê `@ctx.*` (respeitando escopo/visibility), **não** escreve direto no Redis;
-- saída tipada gravada via os mecanismos já existentes (`context_tags`/output), nunca acesso bruto ao store;
-- cobre a maioria dos "flows complexos" sem o buraco de segurança do eval.
-- **Casos específicos já têm caminho seguro**: pesquisa de satisfação → form JSON interpreter + menu dinâmico
-  (decisão B do ADR de surveys); lógica que não cabe em expressão → step `reason` (AI Gateway + `output_schema`).
-- **Código de verdade** (Turing-completo) só no **SDK/agente nativo** (runtime controlado, já auditado), nunca
-  como step de flow.
-
-Invariante a preservar: nenhum step de flow executa código arbitrário do tenant com acesso ao runtime interno.
-*(discussão; sem implementação)*
-
----
-
 ## Agent Principal — identidade de máquina p/ agentes IA *(spec, 2026-06-28)*
 
 Identidade de máquina (`subject_type:"agent"`) p/ agentes nativos e externos se autenticarem, distinta das
@@ -4186,17 +4452,19 @@ original sugeria.
 
 ---
 
-## Skill hot-reload via YAML em disco sem restart *(deferred — dev/demo only)*
-
-**Fluxo editor → deploy já funciona**: `POST /v1/skills/:id/deploy` → `publishRegistryChanged` → bridge invalida `_skill_flow_cache` → próxima execução busca conteúdo atualizado do agent-registry. Nenhuma mudança necessária para este caminho.
-
-**Gap**: edição direta de arquivo YAML em disco (dev/demo) ainda requer `restart orchestrator-bridge` para o RegistrySyncer re-ler e fazer PUT para o agent-registry. A solução correta é um endpoint `POST /admin/skills/sync` (ou handler de `registry.changed` com `source: disk`) no bridge — chama `RegistrySyncer._sync_skills()` → PUT → `registry.changed` → cache invalidado. Deve ser acionado pelo processo de deploy YAML (CI/CD, script), não pelo editor.
-
----
-
 ## Arc 19 — cleanup residual de infra *(arco concluído 2026-05-28; histórico no CHANGELOG)*
 
-Remover o tópico `workflow.events` do Kafka e arquivar o package `skill-flow-worker`.
+**Arquivar o package `skill-flow-worker`.** Confirmado pela triagem de 2026-08-17: das quatro saídas do
+worker, três são endpoints hoje 410 (`workflow-client.ts:79, 90, 104, 120`) e a quarta posta em
+`${mcpServerUrl}/mcp` (`engine-runner.ts:131`), rota que **não existe** — o mcp-server expõe `/sse`
+(`server.ts:1182`) e `/messages` (`:1258`). *"Conserta"* não é opção: seria reconstruir para um caminho
+sendo abandonado.
+
+⚠️ **Corrigido 2026-08-17 — NÃO remover o tópico `workflow.events` junto.** Esta seção mandava remover os
+dois, e o tópico tem **dois consumidores vivos e independentes do package**: evaluation-api
+(`main.py:37-124`, agendado em `:578-583`) e analytics-api (`consumer.py:332` → tabela `workflow_events`).
+Removê-lo derrubaria os dois em silêncio. *(O consumer da evaluation-api é cola legada do motor de revisão
+por workflow, já declarado superseded — sai por decisão própria, não de arrasto.)*
 
 ---
 
