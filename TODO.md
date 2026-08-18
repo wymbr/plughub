@@ -84,7 +84,25 @@ existirem.
 
 ---
 
-## Segmento que nunca fecha — 4 hipóteses ELIMINADAS, instrumento instalado *(2026-08-17, aberto)*
+## ~~Segmento que nunca fecha~~ — CONSERTADO 2026-08-18; sobraram DOIS resíduos
+
+> **A causa raiz foi encontrada e corrigida** (`CHANGELOG.md` 2026-08-18): `conversations.participants`
+> era publicado **sem chave** num tópico de 3 partições, o par joined/left do mesmo segmento invertia,
+> e o `joined` inserido depois vencia a dedup nas duas tabelas. Conserto em duas partes
+> (`key=session_id` + `ReplacingMergeTree(row_version)`), gate 3/3 na forma que antes era moeda.
+>
+> **Resíduo 1 — o passado não foi reparado.** Nos casos antigos o merge já apagou fisicamente a linha
+> perdedora; o `DEFAULT` do `row_version` só conserta onde as duas ainda coexistem. A contagem segue
+> `primary` 5 · `queue` 2 · `specialist` 2. Os eventos continuam no tópico `conversations.participants`,
+> então um reprocessamento gated por `source` repararia — **decisão em aberto**, não trabalho pendente:
+> reprocessar mexe em substrato de qualidade e pede o discriminador `origin` no lugar certo.
+>
+> **Resíduo 2 — `queue_config.skill_id` é decorativo** (defeito SEPARADO, não era a causa do segmento
+> aberto). Ver a seção própria abaixo.
+>
+> O material abaixo é o histórico da investigação. Mantido só até o resíduo 1 ser decidido.
+
+## Histórico da investigação — 4 hipóteses eliminadas em 2026-08-17 *(referência)*
 
 **Fato, remedido em 2026-08-17 (idêntico à base da F3):** 9 segmentos com `ended_at IS NULL` em
 sessões **fechadas** — `primary` 5/597 · `queue` 2/11 · `specialist` 2/68, em 676. Nove sessões
