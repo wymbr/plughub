@@ -84,7 +84,7 @@ Quando um step `collect` declara `requires: [...]` em vez de um `channel` explí
 | `sms.py` | SMS | Webhooks de provider | ✅ Implementado | — |
 | `email.py` | E-mail | SMTP / API + inbound parse | ✅ Implementado | — |
 | `voice.py` | Voz (PSTN) | Twilio Media Streams | ✅ Implementado | — |
-| `webrtc.py` | WebRTC | LiveKit SFU (browser-to-SFU) | ✅ Implementado | [`docs/arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) |
+| `webrtc.py` | WebRTC | LiveKit SFU (browser-to-SFU) | ⚠️ Adapter ✅ · **SFU não provisionado** | [`docs/arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) |
 
 `channel` e `medium` são distintos: `channel` é o canal específico (`whatsapp`, `webchat`, `voice`, `email`, `sms`, `webrtc`, etc.) — hard filter para roteamento; `medium` é o tipo base (`voice`, `video`, `message`, `email`) — fator de score.
 
@@ -92,7 +92,18 @@ Quando um step `collect` declara `requires: [...]` em vez de um `channel` explí
 
 ## Canal WebRTC (Arc 15)
 
-Canal browser-to-SFU com medium negociado em tempo real (video → voice → text). Coexiste com o canal voice: `voice` = callers externos via tronco PSTN (Twilio), `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (Docker/k8s). Implementado em 6 fases:
+Canal browser-to-SFU com medium negociado em tempo real (video → voice → text). Coexiste com o canal voice: `voice` = callers externos via tronco PSTN (Twilio), `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (Docker/k8s).
+
+> ⚠️ **Medido em 2026-08-20: o SFU não está de pé em ambiente algum do repositório.** As 6 fases abaixo
+> descrevem o adapter, que existe e roda. O que NÃO existe: serviço LiveKit em qualquer `docker-compose*.yml`
+> (grep → zero), env `LIVEKIT_*`/`WEBRTC_*` em `.env*`/compose/scripts (zero), manifesto k8s sob `infra/`
+> para a topologia de `arc15-webrtc.md:81-89`, e o SDK `livekit` como dependência (`pyproject.toml:6-23`) —
+> a imagem não o instala e os imports degradam. Sem `api_key`/`api_secret` (`config.py:228-232`) o
+> `LiveKitProvider` liga `_dev_mode` (`webrtc_provider.py:167`) e devolve **token, room e egress mock**
+> (`:176`, `:213`, `:331`). O browser tem cliente real (`platform-ui/package.json:16`) sem SFU para onde
+> apontar. Ler as fases como *plano de sinalização entregue*, não como mídia em produção.
+
+Implementado em 6 fases:
 
 | Fase | Escopo |
 |---|---|

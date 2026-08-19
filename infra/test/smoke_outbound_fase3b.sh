@@ -3,8 +3,14 @@
 #
 # Prova: (a) mailing_unsubscribe scope=global grava `do_not_contact` no cadastro do
 # cliente (via Identity Resolver); (b) o contact_eligibility_check veta `opt_out`
-# (maior precedência, sem claim); (c) uma campanha `transactional` FURA o opt-out
-# (notificação obrigatória). O opt-out vive no cadastro, não no outbound.
+# (maior precedência, sem claim); (c) um cliente SEM opt-out passa na MESMA campanha
+# (testemunha — sem ela, um bug que vetasse todo mundo ficaria verde); (d) uma campanha
+# `transactional` FURA o opt-out (notificação obrigatória); (e) o opt-out por CANAL veta
+# só aquele canal. O opt-out vive no cadastro, não no outbound.
+#
+# NÃO exercitado (declarado de propósito): a degradação graciosa do portão — identity
+# fora do ar / cliente ausente → degrada para NÃO opted-out (allow, barulhento no log).
+# Esse ramo exige derrubar o channel-gateway e não cabe num smoke de API.
 #
 # Requer o Identity Resolver habilitado (PLUGHUB_IDENTITY_RESOLVER_ENABLED=true) e a
 # mailing-api com identity_api_url → channel-gateway.
@@ -17,7 +23,9 @@ ts=(-H "X-Tenant-ID: $TENANT")
 jqid()  { sed -n 's/.*"id":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1; }
 jqget() { python3 -c "import sys,json;print(json.load(sys.stdin).get('$1'))"; }
 STAMP=$(date +%s)
-CUS="cus_3b_$STAMP"
+CUS="cus_3b_$STAMP"        # opta por sair (all)
+CTRL="cus_3b_ctrl_$STAMP"  # testemunha: NUNCA opta por sair
+CHAN="cus_3b_chan_$STAMP"  # opta por sair de UM canal
 
 # cria mailing+entry(CUS)+campanha → ecoa campaign_id ; $1 = transactional (true|false)
 mk_campaign() {
@@ -30,6 +38,12 @@ mk_campaign() {
     -d "{\"name\":\"3b camp\",\"mailing_id\":\"$m\",\"pool_id\":\"outbound_demo\",\"transactional\":$1}" | jqid
 }
 
+# eligibility → ecoa o corpo ; $1=customer $2=channel $3=campaign_id $4=claim(true|false)
+elig() {
+  curl -s -X POST "$MA/v1/contact/eligibility" "${ts[@]}" -H 'content-type: application/json' \
+    -d "{\"customer_id\":\"$1\",\"channel\":\"$2\",\"campaign_id\":\"$3\",\"claim\":$4}"
+}
+
 echo "1) unsubscribe GLOBAL → grava do_not_contact.all no cadastro (via identity) ..."
 U=$(curl -s -X POST "$MA/v1/unsubscribe" "${ts[@]}" -H 'content-type: application/json' \
      -d "{\"customer_id\":\"$CUS\",\"scope\":\"global\"}")
@@ -38,20 +52,43 @@ echo "   $U"
 
 echo "2) eligibility em campanha NÃO-transactional → esperado allowed:False, reason:opt_out, claimed:False ..."
 CG=$(mk_campaign false)
-R=$(curl -s -X POST "$MA/v1/contact/eligibility" "${ts[@]}" -H 'content-type: application/json' \
-     -d "{\"customer_id\":\"$CUS\",\"channel\":\"webchat\",\"campaign_id\":\"$CG\",\"claim\":true}")
+R=$(elig "$CUS" webchat "$CG" true)
 echo "   $R"
 [ "$(echo "$R" | jqget allowed)" = "False" ]   || { echo "FALHA: opt-out deveria vetar"; exit 1; }
 [ "$(echo "$R" | jqget reason)"  = "opt_out" ] || { echo "FALHA: reason esperado opt_out"; exit 1; }
 [ "$(echo "$R" | jqget claimed)" = "False" ]   || { echo "FALHA: não deveria claimar sob opt-out"; exit 1; }
 echo "   PASS: opt-out global vetou o contato (sem claim)."
 
-echo "3) eligibility em campanha TRANSACTIONAL → esperado allowed:True (fura o opt-out) ..."
+echo "3) TESTEMUNHA — cliente SEM opt-out, MESMA campanha, MESMO canal → esperado allowed:True ..."
+# Único valor que muda em relação ao passo 2 é o cadastro do cliente. Sem este passo o
+# gate não distingue "vetou quem optou por sair" de "veta todo mundo".
+RC=$(elig "$CTRL" webchat "$CG" false)
+echo "   $RC"
+[ "$(echo "$RC" | jqget allowed)" = "True" ] || { echo "FALHA: cliente sem opt-out foi vetado — o portão não discrimina (reason: $(echo "$RC" | jqget reason))"; exit 1; }
+[ "$(echo "$RC" | jqget reason)"  = "None" ] || { echo "FALHA: testemunha negada por outro portão"; exit 1; }
+echo "   PASS: o veto é do CLIENTE que optou por sair, não da campanha."
+
+echo "4) eligibility em campanha TRANSACTIONAL → esperado allowed:True (fura o opt-out) ..."
 CGT=$(mk_campaign true)
-RT=$(curl -s -X POST "$MA/v1/contact/eligibility" "${ts[@]}" -H 'content-type: application/json' \
-      -d "{\"customer_id\":\"$CUS\",\"channel\":\"webchat\",\"campaign_id\":\"$CGT\",\"claim\":true}")
+RT=$(elig "$CUS" webchat "$CGT" true)
 echo "   $RT"
 [ "$(echo "$RT" | jqget allowed)" = "True" ] || { echo "FALHA: campanha transactional deveria furar o opt-out"; exit 1; }
+[ "$(echo "$RT" | jqget claimed)" = "True" ] || { echo "FALHA: transactional permitida deveria claimar"; exit 1; }
 echo "   PASS: campanha transactional fura o opt-out (notificação obrigatória)."
 
-echo "GATE outbound Fase 3b — OK."
+echo "5) opt-out POR CANAL → veta o canal optado e SÓ ele ..."
+UC=$(curl -s -X POST "$MA/v1/unsubscribe" "${ts[@]}" -H 'content-type: application/json' \
+      -d "{\"customer_id\":\"$CHAN\",\"scope\":\"global\",\"channel\":\"whatsapp\"}")
+echo "   $UC"
+[ "$(echo "$UC" | jqget do_not_contact_set)" = "True" ] || { echo "FALHA: do_not_contact por canal não gravado"; exit 1; }
+RW=$(elig "$CHAN" whatsapp "$CG" false)
+echo "   whatsapp: $RW"
+[ "$(echo "$RW" | jqget allowed)" = "False" ]   || { echo "FALHA: canal optado deveria ser vetado"; exit 1; }
+[ "$(echo "$RW" | jqget reason)"  = "opt_out" ] || { echo "FALHA: reason esperado opt_out no canal optado"; exit 1; }
+RO=$(elig "$CHAN" webchat "$CG" false)
+echo "   webchat:  $RO"
+[ "$(echo "$RO" | jqget allowed)" = "True" ] || { echo "FALHA: opt-out de UM canal vazou para os outros"; exit 1; }
+echo "   PASS: o opt-out por canal é escopado ao canal."
+
+echo "GATE outbound Fase 3b — OK (opt-out all + testemunha + transactional + por canal)."
+echo "     NÃO exercitado: degradação com o identity fora do ar (allow barulhento)."

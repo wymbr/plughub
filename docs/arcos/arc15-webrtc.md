@@ -1,6 +1,20 @@
 # Arc 15 — Canal WebRTC com SFU Enterprise
 
-> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Fases A + B + C + D + E + F implementadas — Arc 15 completo
+> Última atualização: 2026-08-20 · Status: Fases A–F implementadas **no plano de sinalização** —
+> **o plano de MÍDIA não está provisionado em ambiente algum do repositório**.
+
+> ⚠️ **Medição de 2026-08-20 (o "Arc 15 completo" que estava aqui era do canal, não da solução).**
+> Existe e roda: signaling WS (`main.py:729`), emissão de token (`main.py:754`), `LiveKitProvider`/
+> `LiveKitRoomClient` (`adapters/webrtc_provider.py:143`, `webrtc_room_client.py:184`) e cliente real no
+> browser (`platform-ui/package.json:11,16`). **Não existe:** serviço LiveKit em `docker-compose*.yml`
+> algum (grep → zero), env `LIVEKIT_*`/`WEBRTC_*` em `.env*`/compose/scripts (zero), manifesto k8s sob
+> `infra/` para a topologia da §5 abaixo, e o SDK `livekit` sequer é dependência do pacote
+> (`packages/channel-gateway/pyproject.toml:6-23`) — a imagem não o instala e os imports caem no ramo de
+> degradação (`webrtc_room_client.py:217-220`). Com credenciais vazias (`config.py:228-232`) o provider
+> entra em `_dev_mode` (`webrtc_provider.py:167`) e devolve **token, room, participantes e egress mock**.
+> Este doc nunca prometeu o SFU no compose — a §5 prescreve Kubernetes; foi o "completo" do cabeçalho
+> que passou a ser lido como solução de mídia pronta. **Provisionar o SFU é pré-requisito de qualquer
+> trabalho de WebRTC, não detalhe de deploy.**
 
 **Versão:** 1.6 — 2026-05-20  
 **Escopo:** `packages/channel-gateway/` · `packages/agent-registry/` · `packages/routing-engine/` · `packages/platform-ui/` · infraestrutura LiveKit

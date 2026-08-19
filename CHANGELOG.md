@@ -2,6 +2,46 @@
 
 ---
 
+## Outbound Fase 3b — o veto de opt-out valida, e o gate ganha a metade que podia reprovar (2026-08-20)
+
+O `do_not_contact` (opt-out global, Fase 3b) rodava em produção com o smoke **escrito e nunca
+validado** — um veto de contato com pessoa sem gate verde. Validado agora, e a validação achou o
+defeito no próprio gate, não no código medido.
+
+**O código estava certo, e a fiação inteira.** `infra/test/smoke_outbound_fase3b.sh` passou nos três
+passos originais na primeira execução, batendo a previsão escrita antes: `mailing_unsubscribe
+scope=global` grava `{all:true}` no cadastro via Identity Resolver (`do_not_contact_set:true`); o
+`contact_eligibility_check` devolve `allowed:false / reason:opt_out / claimed:false`; e campanha
+`transactional` fura o veto com `claimed:true`. Nada a configurar: `PLUGHUB_MAILING_IDENTITY_API_URL`
+já aponta o channel-gateway no compose, o `IdentityClient` é montado incondicionalmente
+(`main.py:69`), e o `customer_id` sintético do smoke não precisa pré-existir porque
+`update_attributes` é `INSERT … ON CONFLICT DO UPDATE`.
+
+**O gate é que não podia reprovar.** Ele provava que *alguém* era vetado — nunca que era vetado
+**quem optou por sair**. Um bug que negasse `opt_out` para todo cliente ficaria verde nos três passos,
+porque o único caso permitido era a campanha `transactional`, e ela **pula o portão antes de consultar
+o cadastro** (`db.py:863`, `if identity is not None and not transactional`). O caso permitido e o
+negado não compartilhavam o caminho de código sob teste, então a igualdade não tinha discriminador.
+
+Duas metades acrescentadas:
+
+- **Testemunha** (passo 3): cliente **sem** opt-out, na MESMA campanha não-transactional e no MESMO
+  canal do passo 2 — um único valor muda, o cadastro do cliente, e os veredictos são opostos. Com ela
+  o gate reprova nos dois sentidos: portão morto derruba o passo 2, portão que veta todo mundo derruba
+  o 3. Roda com `claim:false` para não sujar o `contact_log`.
+- **Opt-out por CANAL** (passo 5): `scope=global` + `channel=whatsapp` → `whatsapp` vetado, `webchat`
+  permitido. O ramo `channel in (dnc.get("channels") or [])` só existia em unit test; nenhuma execução
+  real o tinha atravessado.
+
+**Ramo declaradamente não exercitado**, impresso na saída do próprio gate: a degradação graciosa
+(identity fora do ar / cliente ausente → allow barulhento). Exige derrubar o channel-gateway e não
+cabe num smoke de API — mas um gate que não exercitou uma das metades tem de dizer isso.
+
+Cinco passos verdes na execução final, todos batendo a previsão. Sem rebuild: o smoke roda do host
+contra a API.
+
+---
+
 ## P2 — o agente de fila passa a ter ENDEREÇO, e a escalada para de inventar tenant (2026-08-18)
 
 Fecha a Pendência 2 de

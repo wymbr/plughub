@@ -84,6 +84,135 @@ existirem.
 
 ---
 
+## A capacidade de pool não conhece PAUSA — e o único gancho que existia está desligado por um nome *(achado 2026-08-19 na bancada da fila; MEDIDO 2026-08-20)*
+
+O registro original dizia *"`agent_pause` não recompõe o snapshot do pool"* e sugeria o conserto da F3a
+(pendurar `refresh_snapshots_for_instance` na pausa). **A medição mostrou que isso conserta o caso
+menor e deixa o maior de pé.** São dois defeitos empilhados, e a ordem importa.
+
+**(1) O gancho existe, está escrito, e nunca roda — divergência de NOME.** O consumidor casa
+`("agent_paused", "agent_logout")` (`routing-engine/kafka_listener.py:356`) e é ele que chamaria
+`refresh_pool_snapshot` (`:882`). Mas **nenhum produtor no repositório emite `agent_paused`**: o
+evento publicado é `agent_pause`, sem "d" — `mcp-server/server.ts:2573`, `tools/runtime.ts:577`, e o
+schema canônico `schemas/src/platform-events.ts:286`. `agent_paused` só existe como prefixo de chave
+Redis (`{t}:agent_paused:{iid}`). Logo o evento cai no `else: logger.debug("Lifecycle event ignored")`
+(`:358-359`) e **`_deactivate_instance` (`:791`) é inalcançável pela pausa** — sobrevive só para
+`agent_logout`. O `agent_resume` funciona por acaso: publica `agent_ready`, que tem refresh próprio
+(`:291-294`).
+› *O teste que deveria pegar isto não pode*: `runtime.test.ts:412` se chama *"publica `agent_pause`
+para que o routing-engine tire a instância dos sets"* e assere só a **publicação**. Ele é verde com o
+consumidor desligado — asserção que nunca alcança a condição que diz julgar.
+
+**(2) A aritmética canônica não lê estado — e este é o defeito de verdade.** O
+`_RECOMPUTE_POOL_OCCUPANCY_LUA` (`registry.py:630-742`) soma `max_concurrent` por **pertencimento a
+set**, nunca consultando `status`: `account(iid)` incrementa incondicionalmente (`:696-701`), o laço
+do busy_set só pula quem tem `n == 0` (`:727`), e instância com chave ilegível ainda soma capacidade
+cheia (`:739`). A pausa **não limpa o `busy_set`** — o endpoint só faz `SREM` de `:instances`
+(`server.ts:2557-2560`) e o `set_instance` só remove do busy quando `status=="ready" and
+current_sessions==0` (`registry.py:1876-1880`). Aritmética do sintoma observado: humano pausado,
+`max_concurrent=3`, 1 sessão viva, ainda no busy_set → `total=3`, `used=1` → **`available: 2`** com o
+SET de alocação vazio. Bate exatamente com o que o Monitor mostrou.
+› **Corolário que decide a ordem do conserto:** wirar só o gatilho (1) corrige o pausado **sem**
+sessões e continua publicando capacidade fantasma para o pausado **com** sessão viva — trocaria um
+número congelado por um número recalculado e igualmente errado, que é mais difícil de diagnosticar.
+› A alocação **sabe** da pausa (`get_ready_instances` filtra por `state == "ready"`,
+`registry.py:1740`); a contabilidade não. Dois caminhos, duas fontes.
+› O rollup do tenant tem o mesmo furo (`compute_tenant_capacity`, `registry.py:1292-1300`, sem teste
+de estado) **e** tem laço de fundo no flusher (`main.py:1842`) — ali o dado não congela, fica
+*recalculado e errado*.
+› Precedente de que é regressão de modelo, não limitação: a segunda implementação **já** desconta —
+`instance_bootstrap.py:676-678` (`if _pl.get("status") == "paused": continue`). E o comentário
+`:661-666` do mesmo arquivo afirma o contrário. As duas notas se contradizem no arquivo.
+
+**(3) O consumidor que decide produto não recebeu a lição da F5b.** `system_availability_check`
+(`mcp-server/tools/operational.ts:240`) computa `pools_available` de `snap.available` sem olhar idade
+(`:300`), e — pior — quando o rollup falta ele **cai de volta** no número desconfiável:
+`data.pools_available > 0 ? "available" : "unknown"` (`:326`). É o padrão que a F5b removeu do vizinho
+`pool_status_get`, sobrevivendo no tool que decide **oferta de canal ao cliente**. `queue_context_get`
+devolve `available_agents: snapshot.available` cru (`:164`). Nenhum dos dois lê `updated_at` como
+condição (`pool_status_get` até publica `snapshot_age_ms` em `:227`, e não o usa).
+
+**Ordem sugerida:** (2) antes de (1) — ensinar pausa à aritmética (Lua + rollup) e limpar o busy_set
+na pausa; só então corrigir o nome do evento, que passa a ter efeito correto. (3) é independente e
+barato: aplicar `available: null` + motivo, como a F5b fez. **Prever o número antes**: com a bancada
+da fila quente, o pool deve sair de `available: 2` para `0`.
+
+---
+
+## `session:{id}:meta` — o problema não é "quatro escritores", é uma partição de propriedade não declarada *(achado 2026-08-19; MEDIDO 2026-08-20)*
+
+Medido: **seis** escritores de produção, não quatro — e um dos quatro citados **não existe**
+(`delegate`/`collect` **não** gravam a chave; `handle_delegate`/`handle_collect` só escrevem
+ContextStore. O comentário `webhook.py:570` e o CHANGELOG afirmam que gravam — o achado herdou o
+erro). São: webchat (`webchat.py:196`), webrtc (`webrtc.py:473`), trigger de webhook
+(`webhook.py:587`), `conversation_start` (`bpm.ts:207`) e **três** sites no bridge com **três
+semânticas diferentes** — merge-só-se-existir (`main.py:960`), `SET NX` (`:4501`), merge-ou-cria
+(`:4561`). Não há schema Zod/Pydantic nem helper: **a chave é interpolada à mão em ~50 sites**, e os
+dois `SessionMeta` que existem no repo descrevem outra coisa (o `ReplayContext`) com um conjunto de
+campos quase disjunto — o nome já estava tomado, o que ajuda a explicar por que ninguém viu.
+
+**A partição implícita está CERTA; o que falta é ela ser declarada e respeitada.** Canal/trigger são
+donos de `tenant_id`/`channel`/`contact_id`/`customer_id`/`started_at`; o bridge é dono de
+`pool_id`/`instance_id`/`agent_type_id`/`user_login`. Isso está escrito em **um** comentário no
+repositório inteiro (`webhook.py:584-586`, que se abstém de `pool_id` de propósito) — e é violado:
+webchat/webrtc escrevem `pool_id`, `activate_human_agent` o sobrescreve last-writer-wins, e o merge
+do bridge escreve `tenant_id`.
+
+**Três defeitos que a medição destapou (nenhum é o padrão, são consequências dele):**
+
+1. **`ai-gateway/session.py:140` faz `HGET` numa chave que todos os seis escritores gravam como
+   string JSON** — `WRONGTYPE`, não ausência, com a inversão perfeita: **só funciona quando o meta NÃO
+   existe** (HGET em chave ausente devolve `None` → `pool_id="unknown"` → segue). Com o meta presente,
+   a exceção é engolida em `:162-163` e leva junto as **três** emissões de sentimento. O comentário
+   `:137-138` descreve a chave como hash e chama o caminho de "normal".
+   ⚠️ **DORMENTE, e a tentativa de consertar achou coisa maior (medido 2026-08-20).** Antes de editar,
+   procurei a testemunha do defeito no log e ela **não existe**: `grep -c "Sentiment pipeline failed"`
+   → **0** em 24.106 linhas cobrindo a vida inteira do processo. O motivo: `update_partial_params` só
+   é chamado de `inference.py:196`, no `/v1/inference`, e esse endpoint tem **0 requisições** contra
+   **116** no `/v1/reason` (que é por onde o step `reason` do skill-flow passa). Ou seja o `HGET` nunca
+   executa neste ambiente. **Consertá-lo às cegas teria produzido um "fix" verde sem nada mudar** —
+   eu havia escrito "defeito vivo" aqui sem contar quem sofre, que é o erro que a memória
+   *"'é latente' é hipótese"* descreve, na direção oposta.
+   › **O achado maior: a trilha de sentimento não tem produtor vivo.** `session.py:142-161` é o
+   **único** chamador de produção de `emit_sentiment_updated`/`update_sentiment_live`/
+   `write_context_store_sentiment` (todo o resto do grep é teste), e ele pendura no endpoint sem
+   tráfego. Logo o tópico `sentiment.updated`, a chave `session:{id}:sentiment`, a tag
+   `session.sentimento.current`, as faixas configuráveis por tenant e o consumidor da analytics-api
+   descrevem um pipeline **sem fonte** neste ambiente. O módulo tem suíte própria
+   (`tests/test_sentiment_emitter.py`, incluindo regressão do `_classify` de 08-02) e o cenário e2e 17
+   **simula** a escrita (`17_context_store.ts:18`) — testes verdes em volta de um caminho que não roda.
+   › **A pergunta a responder antes de qualquer conserto:** `/v1/inference` é legado (e então
+   sentimento precisa de produtor novo, provavelmente no `/v1/reason`), ou é caminho vivo que este
+   demo não exercita? Medir em ambiente com tráfego real antes de decidir. **Só depois** o `HGET`
+   importa — ele é o segundo problema desse caminho, não o primeiro.
+2. **`analytics-api/supervisor.py:99` é um guard que se auto-anula**:
+   `meta.get("tenant_id", body.tenant_id) != body.tenant_id` — com o campo ausente, o default é o
+   próprio valor comparado, então a igualdade é sempre verdadeira e o **403 de tenant mismatch nunca
+   dispara**. O `except: meta = {}` (`:96-97`) produz o mesmo efeito com JSON malformado. Fail-open
+   numa fronteira de isolamento. *(Alcance NÃO contado: os escritores normalmente gravam `tenant_id`.
+   Antes de chamar de exposição, contar quantos metas vivos não têm o campo — "é latente" é hipótese.)*
+3. **O padrão do conserto de 08-18 não foi aplicado ao irmão HTTP.** `server.ts:2236` (transferência
+   REST do Console) nasce com `tenantId = env ?? "tenant_demo"` + `catch { /* use fallbacks */ }`
+   (`:2250`) e **publica evento de roteamento** em seguida — é o defeito do `conversation_escalate`
+   pré-conserto com outro literal. Idem `:1824` e `:1866`.
+
+**TTL — truncamento silencioso 24 h → 4 h.** O trigger grava `SETEX 86_400` (`webhook.py:596`); na
+alocação o merge do bridge relê e regrava com `_stl()` = 14_400 (`main.py:4571`). Ninguém compara TTL
+antes de sobrescrever, e **nenhum escritor desta chave faz `TTL` antes de escrever** — o tratamento
+de `-1 = ausência` existe no repo, mas para o hash do ContextStore (`webhook.py:1079-1084`), e nunca
+chegou aqui. Cada merge também reprorroga a janela cheia, então sessão com muitas ativações nunca
+expira por TTL.
+
+**Conserto: nenhum dos seis pode virar dono único**, por razão estrutural — os canais só cobrem
+webchat/webrtc; o bridge chega tarde (a janela pré-alocação é onde o escalate morria, `webhook.py:581-582`);
+o trigger se abstém de `pool_id` por desenho. O conserto é **declarar a partição**: helper
+`session_meta_merge(..., owner)` por linguagem que (i) rejeite campo de outro dono, (ii) preserve o
+**maior** TTL (tratando `-1` como ausência), (iii) tenha semântica única de criação; mais um schema
+declarativo com nome que não colida com o `SessionMeta` do ReplayContext. Os três defeitos acima são
+independentes e podem cair antes.
+
+---
+
 ## ~~Segmento que nunca fecha~~ — CONSERTADO 2026-08-18; sobraram DOIS resíduos
 
 > **A causa raiz foi encontrada e corrigida** (`CHANGELOG.md` 2026-08-18): `conversations.participants`
@@ -4300,7 +4429,19 @@ domínio**. (`AnaliseJourneysPage`/`CustomerVoicePage` não têm filtro de pool.
 
 ---
 
-## Detach de hooks de finalização + Pull direcionado + ACW *(desenho fechado 2026-07-23; Camada A iniciada)*
+## Detach de hooks de finalização + Pull direcionado + ACW *(desenho fechado 2026-07-23)*
+
+> ⚠️ **SEÇÃO ESTAGNADA NO PLANO DE 2026-07-23 — não usar como estado.** Corrigido em 2026-08-20 por
+> medição do código (ver CLAUDE.md § homônima). Este cabeçalho dizia *"Camada A iniciada"* e o bullet
+> da **E2** dizia *"pendente"*, quando A–F foram entregues entre 24 e 30 de julho; o tell é que a
+> própria seção ainda lista a **E2e** como escopo, item que morreu com a reversão da Camada C em 07-29.
+> O estado vivo está em **§ "Camada E2 restante"** (~linha 2652) e no `CHANGELOG.md:6542`
+> (*Camada F — validação do arco de detach de hooks ✅ 2026-07-30*).
+> **O que sobra de aberto, medido:** (a) a F4 declara a própria lacuna — a **lease** não foi medida e
+> não há reaper; (b) **não existe gate re-executável da Camada F** (validada por medição manual, com
+> os smokes de B/D/R0/I5 reaproveitados via `DISPATCH`/`ACW_HOURS` em
+> `infra/test/smoke_internal_work_queue.sh:85-89`).
+> O texto abaixo fica como **registro do desenho original**, útil para ler a intenção — não o as-built.
 
 Unifica a coleta de finalização (survey/wrap-up) e aposenta a **Forma A (delegate `skill_survey_v1`)**. Hooks de
 finalização não podem suspender/collect (o bridge trata `suspended` como concluído → fecha o contato cedo). A
@@ -4341,7 +4482,10 @@ pool+dispatch; ramal = pull item direcionado + overflow. Embrião de transfer-to
   validado — ver CHANGELOG "Renderer genérico de collect-form no Console — R0". Superfície estável que a E2
   consome: claim de workflow suspensa (`session.dialog_form_id`+resume token) → briefing (`session.briefing_session_id`)
   + DialogForm → `workflow_resume` com `payload.answers`. Falta só o conteúdo/plumbing da E2 (abaixo).
-- **E2 — wrap-up humano → `detached` (pendente):** `agente_wrapup_v1`/`wrapup_ia` (inline hoje) vira item de pull
+- **E2 — wrap-up humano → `detached`** *(o texto abaixo é o PLANO de 07-23; entregue em 24/27/29 —
+  ver § "Camada E2 restante" ~2652. O desenho unificado de 07-27 SUPERA este plano: `inline` e
+  `detached` viraram dois modos de ENTREGA da mesma máquina, e o wrap-up não tem skill próprio):*
+  `agente_wrapup_v1`/`wrapup_ia` (inline hoje) vira item de pull
   inbox `assigned_to` o humano (fecha G1 do humano). Plumbar `assigned_to` webhook trigger→routing; `wrapup_ia`→
   `dispatch_mode: pull`; skill de wrap-up como workflow pull (DialogForm no claim); gravação do outcome por
   referência (`surveyed_segment_id`); **produtor do marker `acw_pending`** (setar no dispatch detached de pool
@@ -4360,8 +4504,12 @@ pool+dispatch; ramal = pull item direcionado + overflow. Embrião de transfer-to
   `ConversationInboundEvent`) · **E2d** (dispatch pull sintético no bridge) · **E2e** (`acw_pending` set/clear) ·
   **E2f** (analytics: sessão de wrap-up fora da contagem de contato/TMA — **ponto de atenção**) · **E2g** (config
   `wrapup_ia`→pull + smoke E2E).
-- **F — validação:** G1 (AHT), atribuição de segmento no relatório, smoke wrap-up na pull inbox (claim direcionado
-  + fallback), pool-scoping do survey sem delegate.
+- **F — validação ✅ 2026-07-30** (`CHANGELOG.md:6542`): G1 no relatório (F2), atribuição de segmento (F1),
+  pull direcionado 5/5 em duas execuções (F3), expiração com duração real (F4). **Duas lacunas, ambas
+  nomeadas pela própria entrada:** a **lease** não foi medida (sem reaper — lacuna 2 aberta), e a
+  validação **não deixou gate versionado** — rodou por medição manual instrumentada, com os smokes das
+  camadas anteriores reaproveitados por override de env. Escrever esse gate é trabalho em aberto: um
+  arco declarado completo sem gate re-executável é lembrança, não verificação.
 
 Design fechado: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md).
 
@@ -4434,9 +4582,13 @@ roteamento (bypass do pool) — é filtro de claim com fallback.
 
 ## Scheduler / Outbound — resíduos *(arco Scheduler 1–3 ✅ e arco Outbound 1–5 ✅; histórico no CHANGELOG)*
 
-- **Fase 3b do Outbound — ⚠️ a validar:** opt-out global `do_not_contact` no cadastro (identity), veto de
-  maior precedência no eligibility salvo `transactional`; `mailing_unsubscribe scope=global` escreve o
-  atributo. O smoke `infra/test/smoke_outbound_fase3b.sh` está escrito mas **não foi validado**.
+- ~~**Fase 3b do Outbound — a validar**~~ ✅ **validado 2026-08-20** (ver CHANGELOG). O smoke rodou
+  verde e ganhou as duas metades que faltavam: **testemunha** (cliente SEM opt-out na MESMA campanha e
+  MESMO canal → `allowed`) e **opt-out por canal**. Antes disso o gate provava que *alguém* era vetado,
+  não que era vetado *quem optou por sair*: passos 2 e 4 ficavam verdes mesmo se o portão vetasse todo
+  mundo, porque o único caso permitido era `transactional`, que pula o portão antes de consultar o
+  cadastro (`db.py:863`). **Ramo ainda não exercitado, declarado na saída do gate:** a degradação com o
+  identity fora do ar (→ allow barulhento) — exige derrubar o channel-gateway.
 - **Refinamentos do Outbound 5b (backlog):** `responded` por-delivery (submit → `campaign_delivery_result`);
   skill de processo que **auto-alimenta a mailing** no `complete` (journey_complete real — hoje é seed direto).
 

@@ -499,6 +499,16 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 
 ## Sentiment Tracking
 
+> ⚠️ **Sem produtor vivo no demo (medido 2026-08-20).** O único chamador de produção de
+> `emit_sentiment_updated`/`update_sentiment_live`/`write_context_store_sentiment` é
+> `ai-gateway/session.py:142-161`, alcançado só por `update_partial_params` ← `inference.py:196` ←
+> **`/v1/inference`**, que teve **0 requisições** em 24.106 linhas de log cobrindo a vida inteira do
+> processo (contra **116** no `/v1/reason`, por onde o step `reason` passa). Tudo abaixo descreve um
+> pipeline correto e **sem fonte** neste ambiente — a suíte do módulo é verde e o e2e 17 **simula** a
+> escrita da tag. Antes de mexer: decidir se `/v1/inference` é legado (⇒ sentimento precisa de
+> produtor no caminho do `reason`) ou caminho vivo não exercitado pelo demo. Detalhe e o defeito
+> secundário (`HGET` numa chave string) em `TODO.md` § `session:{id}:meta`.
+
 Score-only array in Redis during session. Labels calculated at read time using tenant-configurable ranges. Persisted to PostgreSQL (`sentiment_timeline JSONB`) on session close. Never published to canonical stream.
 
 ```
@@ -1154,7 +1164,23 @@ reavaliação. Reusa o pool original; pool dedicado sai do `source_map` (R13c) s
 
 ---
 
-## Arc 15 — Canal WebRTC com SFU (LiveKit) ✅
+## Arc 15 — Canal WebRTC com SFU (LiveKit) ⚠️ código ✅ · SFU NÃO PROVISIONADO
+
+> **Corrigido 2026-08-20 por medição.** O ✅ desta seção cobria o **canal**, e foi lido por meses como
+> se cobrisse a solução de mídia. Medido: **não há serviço LiveKit em compose nenhum** (`grep livekit
+> **/*.yml` → zero), **nenhuma env `LIVEKIT_*`/`WEBRTC_*`** em `.env*`/compose/scripts, e o SDK **não é
+> dependência** do pacote (`packages/channel-gateway/pyproject.toml:6-23`) — logo a imagem construída
+> não o tem e os imports caem no ramo de degradação (`webrtc_room_client.py:217-220`,
+> `webrtc_provider.py:183-184`). Com `api_key`/`api_secret` vazios (`config.py:228-232`) o provider liga
+> `_dev_mode` (`webrtc_provider.py:167`) e devolve token, room e egress **placebo**. O plano de
+> SINALIZAÇÃO existe e roda (WS `main.py:729`, `GET /webrtc/token/{session_id}` `main.py:754`, cliente
+> real no platform-ui `package.json:16`); o plano de **MÍDIA** não está de pé em ambiente algum do
+> repositório. O `arc15-webrtc.md:81-89` prescreve topologia Kubernetes (livekit-server, egress, redis,
+> coturn) e **não há manifesto correspondente** em `infra/` — ou seja, o doc nunca prometeu o SFU no
+> compose; foi o ✅ do cabeçalho que passou a valer por ele. É a família *"'existe' ≠ 'está pronto'"*,
+> agravada por `_dev_mode` ser exatamente um **valor plausível**: devolve token bem-formado e ninguém
+> fica vermelho. **Antes de qualquer trabalho de WebRTC, provisionar o SFU é pré-requisito, não detalhe
+> de deploy.**
 
 Canal `webrtc` browser-to-SFU com medium negociado em tempo real (video→voice→text). Coexiste com `voice` (PSTN/Twilio = tronco externo); `webrtc` = clientes na webapp. **SFU**: LiveKit self-hosted (gravação por egress, supervisão hidden subscriber, multi-participante). **Invariante**: tokens LiveKit emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser. STT/TTS reusa os FallbackProviders do voice (transporte = LiveKit PCM frames). Console: `WebRTCOverlay` (vídeo/waveform por medium). `media_capabilities: [video,voice,text]` no agente; text = fallback universal. *Futuro*: bridge PSTN→WebRTC via LiveKit SIP Ingress (ver § Pending).
 
@@ -1336,7 +1362,8 @@ fora da transação); fechado → `outside_window` sem claim; erro do calendar �
 `smoke_outbound_fase3a.sh`. **Fase 3b ✅ via API (opt-out global):** `do_not_contact` (`{all?, channels?}`) vive
 no cadastro (`identity.customers.attributes`), lido via channel-gateway `GET …/identity/customers/{id}`; o
 eligibility veta `opt_out` de **MAIOR precedência** (antes de calendar/fadiga) salvo `campaign.transactional`;
-`mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento. Smoke `smoke_outbound_fase3b.sh`.
+`mailing_unsubscribe scope=global` escreve o atributo. Degrada→ALLOW barulhento. Smoke `smoke_outbound_fase3b.sh` (**validado 2026-08-20**, com
+testemunha e caso por-canal acrescentados na validação).
 
 **Fase 4 — importador de arquivo ✅ API (2026-07-22):** adaptador anti-corrupção em **DUAS camadas** no
 `mailing-api`, REST puro (importador não é agente): **Camada A** (`batch_ingest` + `POST /v1/mailings/{id}/
@@ -1401,8 +1428,13 @@ Outbound completo (1–5).**
 > trabalho em aberto. Limpeza restrita ao que a triagem tocou; varredura completa da seção é escopo à parte.
 
 ### Arc 15 — WebRTC (decisão em aberto) — **[Descongelado 2026-08-18]**
+- **Provisionar o SFU** *(pendente de VERDADE, medido 2026-08-20)*: não há serviço LiveKit em compose
+  algum, nem env `LIVEKIT_*`, nem manifesto k8s em `infra/`, nem o SDK como dependência do
+  channel-gateway — o canal roda inteiro em `_dev_mode`/mock. Bloqueia qualquer medição de WebRTC.
 - bridge PSTN → WebRTC via LiveKit SIP Ingress (eliminar Twilio como canal separado). Decisão, não
-  implementação pendente; o arco em si está concluído.
+  implementação pendente — mas **depende do item acima**: não se decide topologia de mídia sobre um
+  SFU que não existe. *(Esta linha dizia "o arco em si está concluído"; concluído é o canal, não a
+  solução de mídia.)*
 
 ### Usage Metering — Channel Gateway Adapters — **[Descongelado 2026-08-18]**
 - `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` *(deferred)*: functions in `usage_emitter.py` ready, adapters not yet calling them. Depende da evolução dos módulos de channel-gateway, que não andou — motivo **próprio**, e o único que sobrou depois que o gate de fase caiu. *(O achado de que `llm_tokens_*` não é emitido no `/v1/reason` continua valendo, mas é **defeito**, não item de direção.)*
@@ -1462,10 +1494,10 @@ Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato,
 - **Problema:** hooks de finalização não podem suspender/collect — o bridge segura `_trigger_contact_close()` (`hook_pending`) e trata `suspended` como concluído → fecha o contato cedo. Isso força DUAS formas de coleta de survey (delegate legado `skill_survey_v1` × collect J4c). A razão de segurar é **atribuição**, que a Journey (`root_session_id`) + referência de segmento no payload resolvem **sem** segurar.
 - **Alvo:** reduzir a 2 mecanismos — `inline` (síncrono, precisa do WS vivo do cliente: NPS presente) e `collect` (assíncrono, perfil workflow) — e **aposentar a Forma A (delegate)**. Fecha **G1** (AHT inflado por wrap-up) e generaliza **G7** (desacoplamento `on_human_end`).
 - **Invariante (PABX):** o "ramal" (direcionar a um recurso) NÃO é alvo de roteamento — é work item que mora num **pool** (fila) com filtro de claim `assigned_to` + **fallback pro pool** por lease. Fila=pool+dispatch; ramal=pull direcionado+overflow. Embrião de transfer-to-agent, sem quebrar o invariante "pool é a unidade endereçável".
-- **Camadas:** **A** `dispatch: inline|detached` no `PoolHookEntry` (schema, default inline; guard rejeita `detached` em `on_human_start`) ✅ · **B** pull direcionado ✅ **(2026-07-24, smoke 5/5)** — `assigned_to`+`fallback_to_pool_after_s`+`assigned_at_ms` no work item (`QueuedContact`/`contact_data`, sem novo Zod); gate DENTRO de `Router.work_task_claim` antes do `ZREM` (dono OU idade ≥ fallback; ausente=permanente; `reason: reserved_to_other`, logado); claimant derivado de `instance_id`=`human-{userId}` (ou explícito); inbox filtra/rotula reservado×transbordado; **sem reaper de lease** (transbordo por idade do item); smoke `infra/test/smoke_directed_pull.sh`; wrap-up como consumidor = Camada E · ~~**C** `acw_gate: none|soft|hard`~~ **REVERTIDA na Phase 0 e REMOVIDA ponta a ponta (2026-07-29)** — o gate bloqueava a instância INTEIRA (não uma vaga) e reservava no dispatch (não no claim); a Phase 0 tirou o enforcement e o marker, e a coluna/plumbing/UI saíram depois (migration `20260729000000_drop_pool_acw_gate`). Capacidade de wrap-up = 1 vaga pelo semáforo `claim_instance`, nos dois modos. **Não reviver este enum**: um gate de ACW futuro se desenha sobre a VAGA · **D** bridge honra `detached` ✅ **(2026-07-24, smoke 2/2)** — `_fire_detached_hook` (workflow webhook `POST /channels/webhook/pool/{id}`, `origin`+`journey:inherit`+ref de segmento no ctx); `_entry_will_dispatch` exclui detached do `hook_pending`; auto-close `_trigger_contact_close` na leva 100% detached (fecha G1); guardas `_has_customer_hooks` excluem detached; env `CHANNEL_GATEWAY_URL`; **conference-mechanics.md Mudança 25**. Limitações: post_human+detached, segment_wrapup fanout → Camada E · **E1** ✅ **(2026-07-24)** aposentar Forma A (pools `survey_processo_ia`/`survey_collector_ia`/`survey_reconnect_ia` + skills `skill_survey_v1`/`skill_survey_nps_v1`/`skill_survey_reconnect_v1` — estavam inertes, removidos do YAML/arquivos; DB rodando persiste inerte, purge opcional via PRUNE) · **E2** wrap-up detached — **núcleo ✅** (Path α renderer-first): renderer R0 (`DialogFormRenderer.tsx`) ✅ 2026-07-24; form `dialog_wrapup_v1` + workflow `skill_wrapup_detached_v1` (E2a) ✅; tool `segment_outcome_record` (E2b, grava outcome no segmento da origem por referência) ✅ 2026-07-24 E2E; **wiring `on_human_end` `detached` ✅ 2026-07-27** (`retencao_humano.on_human_end` → `wrapup_detached_ia dispatch: detached`; `_fire_detached_hook` injeta `origin_session_id` no ctx; `fire_pool_hooks` semeia seg_signal + surveyed_*; **E2E validado com atendimento real, sem seed**). **Falta:** ~~sessão de wrap-up fora da contagem de contato/TMA (E2f)~~ ✅ · **F** validação ✅ **2026-07-30** — F1 atribuição (provada pelo `issue_status`, não pelo `outcome`), F2 G1 no relatório (8 contatos na tela = 8 no pool de contato; 11 sessões internas fora — contaminação seria na CONTAGEM, não na média: `handle_time_ms` é NULL nas internas), F3 pull direcionado 5/5 em duas execuções (flakiness era o **drain** comendo o item de um pool sem `pool_config`, corrigido na raiz), F4 expiração (`acw_expired` com duração real; vaga devolvida pelo prazo — a **lease** não foi medida, lacuna 2 segue aberta). *(E2e — produtor do marker `acw_pending` — saiu de escopo com a remoção da Camada C.)*
+- **Camadas:** **A** `dispatch: inline|detached` no `PoolHookEntry` (schema, default inline; guard rejeita `detached` em `on_human_start`) ✅ · **B** pull direcionado ✅ **(2026-07-24, smoke 5/5)** — `assigned_to`+`fallback_to_pool_after_s`+`assigned_at_ms` no work item (`QueuedContact`/`contact_data`, sem novo Zod); gate DENTRO de `Router.work_task_claim` antes do `ZREM` (dono OU idade ≥ fallback; ausente=permanente; `reason: reserved_to_other`, logado); claimant derivado de `instance_id`=`human-{userId}` (ou explícito); inbox filtra/rotula reservado×transbordado; **sem reaper de lease** (transbordo por idade do item); smoke `infra/test/smoke_directed_pull.sh`; wrap-up como consumidor = Camada E · ~~**C** `acw_gate: none|soft|hard`~~ **REVERTIDA na Phase 0 e REMOVIDA ponta a ponta (2026-07-29)** — o gate bloqueava a instância INTEIRA (não uma vaga) e reservava no dispatch (não no claim); a Phase 0 tirou o enforcement e o marker, e a coluna/plumbing/UI saíram depois (migration `20260729000000_drop_pool_acw_gate`). Capacidade de wrap-up = 1 vaga pelo semáforo `claim_instance`, nos dois modos. **Não reviver este enum**: um gate de ACW futuro se desenha sobre a VAGA · **D** bridge honra `detached` ✅ **(2026-07-24, smoke 2/2)** — `_fire_detached_hook` (workflow webhook `POST /channels/webhook/pool/{id}`, `origin`+`journey:inherit`+ref de segmento no ctx); `_entry_will_dispatch` exclui detached do `hook_pending`; auto-close `_trigger_contact_close` na leva 100% detached (fecha G1); guardas `_has_customer_hooks` excluem detached; env `CHANNEL_GATEWAY_URL`; **conference-mechanics.md Mudança 25**. Limitações: post_human+detached, segment_wrapup fanout → Camada E · **E1** ✅ **(2026-07-24)** aposentar Forma A (pools `survey_processo_ia`/`survey_collector_ia`/`survey_reconnect_ia` + skills `skill_survey_v1`/`skill_survey_nps_v1`/`skill_survey_reconnect_v1` — estavam inertes, removidos do YAML/arquivos; DB rodando persiste inerte, purge opcional via PRUNE) · **E2** wrap-up detached — **núcleo ✅** (Path α renderer-first): renderer R0 (`DialogFormRenderer.tsx`) ✅ 2026-07-24; form `dialog_wrapup_v1` + workflow `skill_wrapup_detached_v1` (E2a) ✅; tool `segment_outcome_record` (E2b, grava outcome no segmento da origem por referência) ✅ 2026-07-24 E2E; **wiring `on_human_end` ✅ 2026-07-27** (`retencao_humano.on_human_end` → `wrapup_detached_ia`; ⚠️ *corrigido 2026-08-20 — esta linha dizia `dispatch: detached`, e a config viva diz `inline`*: o `dispatch` controla só a ENTREGA sobre a MESMA máquina (`inline` = auto-atendimento no Console; `detached` = item de pull manual), e o demo está em **`inline`** (`infra/registry/tenant_demo.yaml:400`) — `detached` foi o modo usado na MEDIÇÃO da Camada F, não o estado default; `_fire_detached_hook` injeta `origin_session_id` no ctx; `fire_pool_hooks` semeia seg_signal + surveyed_*; **E2E validado com atendimento real, sem seed**). **Falta:** ~~sessão de wrap-up fora da contagem de contato/TMA (E2f)~~ ✅ · **F** validação ✅ **2026-07-30** — F1 atribuição (provada pelo `issue_status`, não pelo `outcome`), F2 G1 no relatório (8 contatos na tela = 8 no pool de contato; 11 sessões internas fora — contaminação seria na CONTAGEM, não na média: `handle_time_ms` é NULL nas internas), F3 pull direcionado 5/5 em duas execuções (flakiness era o **drain** comendo o item de um pool sem `pool_config`, corrigido na raiz), F4 expiração (`acw_expired` com duração real; vaga devolvida pelo prazo — a **lease** não foi medida, lacuna 2 segue aberta). *(E2e — produtor do marker `acw_pending` — saiu de escopo com a remoção da Camada C.)*
 - Design: [`docs/product/finalization-hooks-detach-and-directed-pull-design.md`](docs/product/finalization-hooks-detach-and-directed-pull-design.md). Detalhe/fases em `TODO.md`.
 - **Triagem 2026-08-17 — [Segue — fosso].** Governança de contato com pessoa de ponta a ponta; nada aqui depende do editor de fluxo. A **Camada E2** é o próprio movimento do alvo aplicado à superfície humana (*"o renderer trata collect-form genérico, sem skill por caso"*) — alinhada, não conflitante.
-- ⚠️ **CONFLITO DOC×DOC a resolver antes de planejar a E2:** este cabeçalho afirma *"Camada F ✅ 2026-07-30 — ARCO A–F COMPLETO"*, enquanto o `TODO.md` § homônima mantém **E2 e F abertos**. Um dos dois está errado. Resolver **por medição**, não escolhendo o mais recente.
+- ✅ **CONFLITO DOC×DOC resolvido POR MEDIÇÃO (2026-08-20).** Este cabeçalho estava certo; o `TODO.md` § homônima (~linha 4303) estava **estagnado no plano de 2026-07-23** — chamava E2 de "pendente" e ainda listava a **E2e** como escopo, item que morreu com a reversão da Camada C. O tell de que era plano velho, não medição divergente: nenhuma das duas seções do `TODO.md` concordava entre si (a de ~2652 já marcava E2f e F ✅). Medido no código: os sete sub-itens da E2 existem (`dialog_wrapup_v1` + `skill_wrapup_detached_v1`; `segment_outcome_record` nos DOIS registros do mcp-server; `assigned_to` de webhook→routing→claim; `pools.purpose` com 2 migrations e filtros no analytics; `DialogFormRenderer.tsx`), e o `CHANGELOG.md:6542` tem a entrada da Camada F datada de 2026-07-30 com F1–F4 contra o dado. **Uma correção caiu da medição** (o `dispatch` do demo, acima). **Dois fatos seguem abertos — e são fato, não conflito:** (a) a própria F4 declara sua lacuna (a **lease** não foi medida; sem reaper); (b) **não existe gate re-executável da Camada F** — ela foi validada por medição manual instrumentada, reaproveitando os smokes de B/D/R0/I5 por override de env (`infra/test/smoke_internal_work_queue.sh:85-89`, que parametriza `DISPATCH`/`ACW_HOURS`). Um arco declarado completo sem gate versionado volta a ser lembrança, não verificação.
 
 ### Record/Replay Harness *(proposta)* — **[Segue — fase 5]**
 - Generaliza o Session Replayer num harness de gravação/replay em todas as costuras (driver/mock por seam) p/ regressão determinística e gate de promoção via `ComparisonReport`. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva. Spec em `docs/product/record-replay-harness-spec.md`. Detalhe em `TODO.md`.
@@ -1491,8 +1523,8 @@ Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato,
 *(O arco Fases 1–5 está concluído; história no `CHANGELOG.md` e detalhe em `docs/arcos/outbound.md`.
 O substrato de audiência — `mailing`/`campaign`/`campaign_delivery`, com máquina de estado por
 destinatário e pacing na agenda — é capacidade própria, e nenhuma parte dele esteve em jogo na direção
-revertida. **Item mais urgente da seção:** o `do_not_contact` da Fase 3b, cujo smoke está **escrito e
-não validado** — é veto de contato com pessoa rodando sem gate verde.)*
+revertida. O `do_not_contact` da Fase 3b — que era o item mais urgente da seção, veto de contato com
+pessoa rodando sem gate verde — foi **validado em 2026-08-20**; ver CHANGELOG.)*
 - **Fase 3 — pipeline de portões** (cada um reuso, "aplica se configurado"): janela de contato (calendar-api
   `is_open`), recursos/pacing (`pool_status_get` + back-pressure da agenda), canal (`channel_policy`+resolver,
   possessed-only), preferência (cadastro de cliente).
