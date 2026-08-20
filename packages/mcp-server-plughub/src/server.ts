@@ -1146,6 +1146,52 @@ async function applyContextMaskingDynamic(
   return result
 }
 
+/**
+ * Tenant DONO da sessão, lido de `session:{id}:meta`. `null` significa **não sei**,
+ * e vem sempre com o motivo.
+ *
+ * Existe porque três rotas HTTP resolviam o tenant da mesma chave, cada uma com a
+ * sua cópia, e as três nasciam com `process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"`
+ * + `catch { /* use fallbacks *\/ }` — o defeito que o `conversation_escalate` teve
+ * até 2026-08-18, com outro literal. Três cópias da mesma regra é como as cópias
+ * divergem; uma só é o conserto estrutural, o resto é consequência.
+ *
+ * **Identidade não tem fallback.** Um `tenant_id` inventado não degrada o resultado,
+ * corrompe a fronteira: no caminho de ESCRITA ele enfileira o contato num namespace
+ * sem instância nenhuma (o cliente é avisado da transferência e ela morre em
+ * silêncio); nos de LEITURA ele lê config de pool e ContextStore de OUTRO tenant.
+ * Por isso aqui não há default — quem chama decide como recusar, mas recusa.
+ *
+ * O `catch` distingue "Redis falhou" de "sessão sem meta" no MOTIVO, porque as duas
+ * exigem ações opostas e a versão anterior as colapsava na mesma ausência muda.
+ */
+export async function resolveSessionTenant(
+  redis:     { get: (key: string) => Promise<string | null> },
+  sessionId: string,
+  caller:    string,
+): Promise<{ tenantId: string | null; meta: Record<string, string>; reason: string }> {
+  let meta: Record<string, string> = {}
+  try {
+    const raw = await redis.get(`session:${sessionId}:meta`)
+    if (!raw) {
+      return { tenantId: null, meta, reason: `session:${sessionId}:meta AUSENTE` }
+    }
+    const parsed = JSON.parse(raw) as unknown
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { tenantId: null, meta, reason: "meta presente mas não é objeto JSON" }
+    }
+    meta = parsed as Record<string, string>
+  } catch (err) {
+    console.error(`[${caller}] falha ao LER session:${sessionId}:meta —`, err)
+    return { tenantId: null, meta, reason: "falha de leitura/parse do meta (ver log)" }
+  }
+  const t = meta["tenant_id"]
+  if (!t) {
+    return { tenantId: null, meta, reason: "meta presente, SEM `tenant_id`" }
+  }
+  return { tenantId: t, meta, reason: "" }
+}
+
 export async function startServer(config: ServerConfig): Promise<void> {
   const app = express()
   app.use(express.json())
@@ -1821,16 +1867,27 @@ export async function startServer(config: ServerConfig): Promise<void> {
   // always showed "No destinations available" even with escalation_pools configured.)
   app.get("/api/supervisor_capabilities/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
-    let tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-    let poolId   = ""
-    try {
-      const metaRaw = await redis.get(`session:${sessionId}:meta`)
-      if (metaRaw) {
-        const meta = JSON.parse(metaRaw) as Record<string, string>
-        if (meta["tenant_id"]) tenantId = meta["tenant_id"]
-        poolId = meta["pool_id"] ?? ""
-      }
-    } catch { /* use fallback tenant; poolId stays "" */ }
+    // LEITURA cross-tenant se o tenant for inventado: este handler consulta o
+    // agent-registry com `x-tenant-id` e devolve ao Console os destinos de
+    // escalação de um pool. Com o fallback de env, uma sessão de outro tenant (ou
+    // um Redis fora do ar) fazia a tela listar destinos de UM TENANT ALHEIO.
+    // `String(...)`: sob `noUncheckedIndexedAccess` o tipo de `req.params` é
+    // `string | string[] | undefined`. Os usos antigos escapavam por estarem
+    // dentro de template literals, que coagem em silêncio; o helper é tipado e
+    // não coage. Em rota de path param o valor é sempre string em runtime — a
+    // coerção é explícita para que o tipo pare de mentir, não para consertar dado.
+    const { tenantId, meta, reason } = await resolveSessionTenant(
+      redis, String(sessionId), "supervisor_capabilities",
+    )
+    if (!tenantId) {
+      console.warn(
+        `[supervisor_capabilities] RECUSADA: session=${sessionId} — tenant desconhecido ` +
+        `(${reason}). Lista VAZIA em vez de destinos de outro tenant.`,
+      )
+      res.json({ suggested_agents: [], escalations: [], tenant_unknown: reason })
+      return
+    }
+    const poolId = meta["pool_id"] ?? ""
 
     const escalations: Array<{ pool_id: string }> = []
     if (poolId && tenantId) {
@@ -1862,15 +1919,27 @@ export async function startServer(config: ServerConfig): Promise<void> {
   app.get("/api/copilot_state/:sessionId", async (req: Request, res: Response) => {
     const { sessionId } = req.params
 
-    // Resolve tenant from session meta (same pattern as supervisor_state)
-    let tenantId = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-    try {
-      const metaRaw = await redis.get(`session:${sessionId}:meta`)
-      if (metaRaw) {
-        const meta = JSON.parse(metaRaw) as Record<string, string>
-        if (meta["tenant_id"]) tenantId = meta["tenant_id"]
-      }
-    } catch { /* use env fallback */ }
+    // O tenant é o PREFIXO da chave do ContextStore lida logo abaixo
+    // (`{tenantId}:ctx:{sessionId}`) — inventá-lo é ler o contexto de sessão de
+    // outro tenant e devolvê-lo ao Console. Sem fallback.
+    const { tenantId, reason: tenantReason } = await resolveSessionTenant(
+      redis, String(sessionId), "copilot_state",
+    )
+    if (!tenantId) {
+      console.warn(
+        `[copilot_state] RECUSADA: session=${sessionId} — tenant desconhecido ` +
+        `(${tenantReason}). Estado VAZIO em vez de contexto de outro tenant.`,
+      )
+      res.json({
+        session_id:         sessionId,
+        sugestao_resposta:  null,
+        flags_risco:        [],
+        acoes_recomendadas: [],
+        ultima_analise:     null,
+        tenant_unknown:     tenantReason,
+      })
+      return
+    }
 
     try {
       const ctxKey = `${tenantId}:ctx:${sessionId}`
@@ -2232,22 +2301,34 @@ export async function startServer(config: ServerConfig): Promise<void> {
         return
       }
 
-      // Resolve tenant/channel/customer/instance from session meta.
-      let tenantId       = process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"
-      let channel        = "webchat"
-      let customerId     = ""
-      let originInstance = participantId   // human-{userId}; bridge keys cleanup on this
-      try {
-        const metaRaw = await redis.get(`session:${sessionId}:meta`)
-        if (metaRaw) {
-          const meta = JSON.parse(metaRaw) as Record<string, string>
-          if (meta["tenant_id"])        tenantId       = meta["tenant_id"]
-          if (meta["channel"])          channel        = meta["channel"]
-          if (meta["customer_id"])      customerId     = meta["customer_id"]
-          else if (meta["contact_id"])  customerId     = meta["contact_id"]
-          if (meta["instance_id"])      originInstance = meta["instance_id"]
-        }
-      } catch { /* use fallbacks */ }
+      // ── Resolve tenant/channel/customer/instance do meta da sessão ───────────
+      // Este handler ESCREVE: publica evento de roteamento, XADD no stream e
+      // `agent:events`. É o irmão HTTP do `conversation_escalate`, e nasceu com o
+      // mesmo defeito que ele teve até 2026-08-18 — `tenant_demo` literal + catch
+      // mudo — só que aqui a consequência é idêntica e mais visível: o contato é
+      // re-roteado para um namespace que pode não ter instância nenhuma, DEPOIS de
+      // o cliente já ter visto o "participant_left" da transferência. Ele some, e
+      // nada fica vermelho.
+      const { tenantId, meta, reason: tenantReason } = await resolveSessionTenant(
+        redis, String(sessionId), "session_transfer",
+      )
+      if (!tenantId) {
+        console.error(
+          `[session_transfer] RECUSADA: session=${sessionId} target_pool=${targetPool} — ` +
+          `tenant_id desconhecido (${tenantReason}). A transferência NÃO foi executada: ` +
+          `o agente de origem continua no contato, que é o estado seguro. Origem provável: ` +
+          `sessão criada por um caminho que não escreve o meta.`,
+        )
+        res.status(409).json({
+          error:   "tenant_unknown",
+          reason:  tenantReason,
+          message: "Não foi possível determinar o tenant da sessão; a transferência não foi executada.",
+        })
+        return
+      }
+      let channel        = meta["channel"] || "webchat"
+      let customerId     = meta["customer_id"] || meta["contact_id"] || ""
+      let originInstance = meta["instance_id"] || participantId  // human-{userId}
 
       const eventId   = crypto.randomUUID()
       const timestamp = new Date().toISOString()

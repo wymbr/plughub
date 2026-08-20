@@ -91,12 +91,50 @@ async def join_session(body: JoinRequest, request: Request) -> JSONResponse:
     if not meta_raw:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
+    # ── O ÚNICO ponto autoritativo de tenant desta cadeia ─────────────────────
+    # `/message` e `/leave` comparam `body.tenant_id` com o estado gravado em
+    # `supervisor:{sid}:active` — que foi escrito, no join, a partir do corpo do
+    # PRÓPRIO chamador. Logo aqueles dois checam consistência, não autoridade: o
+    # único confronto contra um fato da plataforma é este, contra o meta da sessão.
+    #
+    # E ele se auto-anulava. Era:
+    #     meta.get("tenant_id", body.tenant_id) != body.tenant_id
+    # com o campo ausente, o default É o valor comparado, então a igualdade é
+    # sempre verdadeira e o 403 NUNCA dispara. O `except: meta = {}` produzia o
+    # mesmo efeito a partir de JSON malformado. Fail-open numa fronteira de
+    # isolamento, e escrito de uma forma que parece uma comparação.
+    #
+    # Alcance MEDIDO em 2026-08-21 (`infra/test/probe_session_meta_ownership.sh`):
+    # 8 metas vivos, 8 COM `tenant_id`, 0 sem, 0 malformados. O defeito é REAL no
+    # código e LATENTE nesta população — 0 em 8 é evidência fraca de "nunca", e
+    # por isso o conserto é fail-closed, não "não precisa".
     try:
         meta = json.loads(meta_raw)
-    except Exception:
-        meta = {}
+        if not isinstance(meta, dict):
+            raise ValueError(f"meta não é objeto JSON (é {type(meta).__name__})")
+    except Exception as exc:
+        logger.warning(
+            "supervisor/join RECUSADO: session=%s meta ILEGÍVEL (%s). Sem o meta não "
+            "há contra quem conferir o tenant declarado no corpo — e aceitar seria "
+            "deixar o chamador afirmar o próprio escopo.",
+            body.session_id, exc,
+        )
+        raise HTTPException(status_code=403, detail="tenant_unverifiable")
 
-    if meta.get("tenant_id", body.tenant_id) != body.tenant_id:
+    meta_tenant = meta.get("tenant_id")
+    if not meta_tenant:
+        logger.warning(
+            "supervisor/join RECUSADO: session=%s meta SEM `tenant_id` (campos: %s). "
+            "Era exatamente este caminho que o guard antigo deixava passar.",
+            body.session_id, sorted(meta.keys()),
+        )
+        raise HTTPException(status_code=403, detail="tenant_unverifiable")
+
+    if meta_tenant != body.tenant_id:
+        logger.warning(
+            "supervisor/join RECUSADO: session=%s tenant do meta=%s ≠ declarado=%s",
+            body.session_id, meta_tenant, body.tenant_id,
+        )
         raise HTTPException(status_code=403, detail="Tenant mismatch")
 
     # Reject double-join for the same session (idempotency guard)
