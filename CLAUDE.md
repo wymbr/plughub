@@ -551,6 +551,14 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 >   `WRONGTYPE` ⇒ toda medição de contato real agregada sob `unknown`. Hoje: helper único
 >   `sentiment_emitter.resolve_session_pool_id`, com quatro ramos de saída nomeados.
 >
+> ⚠️ **MEDIR não é EXIBIR — o Console ainda mente (diagnosticado 2026-08-24, não corrigido).**
+> Com o score medido em `-0.50` no ctx, a barra do Console mostra **"Neutral"**.
+> `mcp-server/src/tools/supervisor.ts:118` faz `Number(partials["sentiment_score"] ?? 0)`: lê a fonte
+> **aposentada** (`session:{id}:ai` → `partial_params`, o auto-reporte do `output_schema`) e o `?? 0`
+> converte NÃO-MEDIDO em `0.0`, que a UI classifica como neutro. Pior: a UI **se protegia** — o chip
+> só renderiza com valor não-nulo (`ActionBar.tsx:286`) — e o `?? 0` do backend desarmou a proteção.
+> Enquanto isso não for consertado, **nenhuma leitura de sentimento na tela do operador vale**.
+>
 > ⚠️ **Dívida nomeada:** o `pool_id` do meta é o pool de **ENTRADA**, não o que atende — sentimento
 > medido pelo agente de fila agrega sob o pool onde o contato começou. É a fatia C de
 > `session:{id}:meta` (`entry_pool_id` × `pool_id`), ver `docs/guias/session-meta-ownership.md`.
