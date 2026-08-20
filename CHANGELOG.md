@@ -2,6 +2,186 @@
 
 ---
 
+## Sentimento: a plataforma passou a MEDIR, em vez de aceitar o número que aparecesse (2026-08-23)
+
+Tarefa 2 da passagem de 08-23, atacada depois da credencial. O rumo previsto era *"dar ao
+`ReasonRequest` um campo que NOMEIE a fala do cliente"* — e ele estava certo, mas a premissa que o
+sustentava não: a passagem tratava `/inference` como *"o único endpoint que sabe estruturalmente o
+que é fala do cliente"*, sugerindo que ali havia medição a resgatar.
+
+**Não havia.** `/inference` isola a fala (`inference.py:163-168`) e a entrega a
+`extract_context_from_response` (`context.py:53-64`), que é **contagem de palavras-chave em
+português**: 10 negativas, 8 positivas, `(pos−neg)/total`. O próprio comentário do arquivo diz *"In
+production: sentiment model fine-tuned per vertical"*. E `/inference` **não tem chamador algum** no
+repositório (varredura completa: só a própria definição, um teste e docs). Ou seja, os dois caminhos
+pareciam medir e nenhum media:
+
+| Caminho | O que produzia | Por que passava |
+|---|---|---|
+| `/v1/reason` | `result.get("sentiment_score", 0.0)` — auto-reportado pelo LLM | nenhum skill declara o campo ⇒ **sempre 0.0**, que é NEUTRO e indistinguível de não-medido |
+| `/inference` | contagem de palavras-chave | rota morta; e heurística PT-only não sobrevive a ironia, negação ou outro idioma |
+
+**Desenho novo, três peças.** (1) `ReasonStepSchema.customer_utterance` — referência (`$.` / `@ctx.`)
+ao texto que o cliente disse, resolvida pelo engine e enviada NOMEADA em `ReasonRequest`. Nomear é
+declarar **entrada**, não pedir que o modelo se autoavalie: a alternativa rejeitada era exigir
+`sentiment_score` no `output_schema` de cada skill, o que poria invariante de plataforma em YAML de
+tenant. **Texto literal é recusado** — fala fabricada pelo autor do fluxo, medida como se fosse do
+cliente, seria o mesmo defeito por outra porta. (2) `sentiment_analyzer.py` — chamada dedicada e
+barata (haiku), **fora do turno**, alimentando os três emissores que já existiam e funcionavam
+(Kafka `sentiment.updated`, Redis `sentiment_live`, ContextStore `session.sentimento.current`); o
+encanamento nunca foi o problema, a fonte era. (3) `sentiment_score` virou `float | None`: **`None` =
+não medido**, e `update_partial_params` pula o pipeline em vez de publicar zero. Só o bloco de
+sentimento é guardado — Rules Engine e Agent Assist seguem rodando, porque `intent`/`confidence`/
+`flags` foram medidos de verdade e um `return` cedo derrubaria dois consumidores por causa de um
+terceiro.
+
+**`tenant_id` passou a ser enviado.** Confirmado por leitura nos dois chamadores, e a omissão era
+**por construção**: `engine-runner.ts:204` monta o corpo campo a campo sem incluí-lo, e
+`skill-flow-service/index.ts` faz `JSON.stringify` de um payload cujo tipo não tem o campo. Com o
+default `""` de `ReasonRequest.tenant_id`, tudo que o gateway escrevia nascia sem prefixo:
+`:pool:{p}:sentiment_live`, `:ctx:{sid}`. Dado gravado onde ninguém procura passa por "não há dado".
+Injetado no ponto onde o tenant é conhecido (runner/handler), sem propagá-lo por toda a assinatura do
+engine. O analisador **recusa** tenant vazio, com log — escrever ali é pior que não escrever.
+
+**Dois defeitos do `copilot_emitter`, empilhados, e ele nunca produziu uma análise.**
+`provider.call(..., system=_SYSTEM_PROMPT)` — `LLMProvider.call()` não tem esse parâmetro nem
+`**kwargs`, então toda invocação levantava `TypeError` **antes de qualquer rede**, capturado pelo
+`except Exception` do fim e logado como WARNING, indistinguível de soluço de infraestrutura. E
+`response.text` não existe: `LLMResponse` expõe `.content`. Cada um sozinho bastava para produzir
+silêncio. **A suíte concordava com o bug**: a fixture era `MagicMock` com `.text` fabricado sob
+demanda, e `AsyncMock` aceita qualquer assinatura — um mock mais permissivo que a coisa mockada é um
+teste que não pode reprovar. Fixture passou a usar a classe `LLMResponse` real, mais um teste que
+julga a **forma** da chamada (`assert "system" not in kwargs`), que é o que teria pego o defeito.
+
+**Três vezes o teste reprovou o código e três vezes estava certo**, e nenhuma delas apareceria no
+ambiente: `str(bytes)` corrompendo em silêncio (mascarado por `decode_responses=True`); a fixture do
+copiloto; e o fallback numérico do parser de score, que pescava o primeiro número de qualquer texto
+— `{"outro": 1}`, JSON válido **sem** o campo, virava `1.0`, "cliente encantado" fabricado a partir
+de dado alheio. O fallback existe para JSON truncado por `max_tokens` e agora só procura **depois**
+da chave `sentiment_score`. 157 testes verdes.
+
+**Efeito colateral que valeu mais que a previsão errada que o encontrou:** o rebuild derrubou o
+serviço com `ModuleNotFoundError: httpx` — import de runtime (`llm_accounts_catalog.py:45`, alcançado
+por `main.py:40`) declarado **apenas** em `optional-dependencies.dev`. Subia porque `anthropic` o
+trazia transitivamente e a camada `RUN pip install` do Dockerfile estava em cache desde uma resolução
+antiga; editar qualquer arquivo do pacote invalida o `COPY`, o pip resolve de novo, e o serviço morre
+num import que nunca mudou. Promovido a dependência de runtime. O rebuild foi o instrumento, não a
+causa — *"um ambiente que só sobe porque já subiu antes está sendo lembrado, não verificado"*.
+
+**Não fecha a trilha:** nenhum skill declara `customer_utterance` ainda, e a credencial deste demo
+segue recusada. Enquanto isso o analisador registra a falha e **não escreve nada**, que é o
+comportamento projetado — ausência honesta, jamais `0.0`.
+
+---
+
+## `/v1/health` do ai-gateway: presença de configuração deixou de passar por credencial verificada (2026-08-23)
+
+Tarefa 1 da passagem de 08-23. O enunciado já vinha certo — *"não é só repor a chave: o ai-gateway
+responde **200 no health com credencial inválida**"* — e a medição por leitura confirmou algo pior que
+o esperado: **nada no serviço jamais contatava o provedor**. `main.py:431-441` decidia
+`anthropic: "ok"` quando a *string* da chave era não-vazia e o `AccountSelector.pick()` devolvia
+alguma conta; `pick()` só consulta throttle e RPM no Redis. O docstring prometia
+*"verifies Redis and Anthropic connectivity"* e não verificava nenhuma das duas.
+
+O custo disso foi o bloqueio inteiro de 08-22: **124 requisições a `/v1/reason`, 124
+`upstream_model_error`, 124 `status_401`** — e verde no `docker ps` o tempo todo. O anestésico tem
+nome: todo step `reason` cai no `on_failure`, que é **ramo legítimo de fluxo**, então a falha não
+acende alarme em lugar nenhum. Valor plausível de um lado, ramo previsto do outro.
+
+**Três defeitos menores caíram na mesma leitura, e dois nunca haviam rodado:**
+
+| | Achado | Por que passava |
+|---|---|---|
+| **A** | `HealthResponse.anthropic` era `Literal["ok","error"]`, mas `:439` produzia `"degraded"` | `ValidationError` é subclasse de `ValueError` ⇒ caía no handler de `ValueError` e o endpoint devolvia **422 `validation_error`** em vez de veredicto. O ramo "todas as contas throttled" nunca havia sido exercido |
+| **B** | `AccountSelector.health_summary()` existe documentado *"for /v1/health endpoint"* | e o endpoint **não o chamava** |
+| **C** | Toda falha upstream passa por **um funil único** (`provider_error_handler`) que logava e esquecia | log não é estado: some no recreate do container, e ninguém o consulta |
+
+**O achado C decidiu o desenho.** O fato já nascia num lugar só — bastava pará-lo de jogar fora.
+
+**Mecanismo — passivo, com uma sonda no boot.** `ProviderError` passou a carregar `account_key_id`
+(carimbado pelos dois providers a partir do próprio `api_key`), porque com N contas no catálogo
+*"anthropic quebrou"* não distingue *"uma chave revogada"* de *"nenhuma funciona"*, e as duas pedem
+ações diferentes. O identificador virou fonte única (`providers.base.key_id_for`) — `LLMAccount.key_id`
+e os providers precisavam do **mesmo** id, senão o desfecho gravado por um não é encontrado pelo outro
+e o health reporta `unknown` sobre uma conta que acabou de falhar. `record_outcome()` grava
+`last_ok`/`last_err` **sem TTL** (é o estado da credencial; estado que expira sozinho reintroduz o
+`unknown` que o mecanismo existe para eliminar) e contadores **com** janela declarada (contagem sem
+janela é número sem unidade). Sucesso é registrado dentro de `record_usage`, que só roda depois de um
+`provider.call()` que retornou — um call site, não dois que possam divergir.
+
+A **sonda de boot** (uma chamada mínima por conta, uma vez por start) existe porque o registro passivo
+só aprende com tráfego: num ambiente ocioso o estado nasceria `unknown` e ficaria assim, que é
+exatamente onde o defeito se escondeu. Não é healthcheck ativo — o healthcheck do compose bate a cada
+10 s e sondar ali gastaria cota continuamente. Desligá-la (`PLUGHUB_LLM_BOOT_PROBE=false`) **não
+produz `ok`**: produz `unknown`, publicado como tal.
+
+**Veredicto, e o código HTTP faz parte dele** (o `docker ps` só lê o código):
+
+```
+redis inalcançável ..................... unhealthy / 503
+nenhuma conta configurada .............. degraded  / 200   ← escolha declarada
+≥1 conta com credencial ok ............. ok        / 200   ← inválidas seguem listadas
+nenhuma ok, ≥1 invalid ................. unhealthy / 503   ← o caso de 08-22
+nenhuma ok, última falha transitória ... degraded  / 200   ← 429/rede não reprovam
+nenhuma ok, nenhum desfecho ............ unknown   / 200   + nota de que NÃO julga
+```
+
+Duas separações que o desenho não podia colapsar: **`unknown` nunca vira `ok`** (ausência de evidência
+não é saúde — foi lê-la como saúde que sustentou meses de verde), e **`rate_limit` nunca vira
+`invalid`** (reprovar o container num soluço de rede faria o sinal perder o valor que acabou de
+ganhar). Chave *ausente* não reprova, chave *presente e recusada* reprova: a diferença é que no
+segundo caso alguém **pretendia** ter LLM.
+
+**Medido no ambiente, oito previsões escritas antes e oito acertadas:** 1 linha
+`boot probe: credencial RECUSADA … code=status_401`, HTTP **503**, `status: unhealthy`,
+`anthropic: error`, `accounts[0].credentials: invalid`, `last_error_code: status_401`,
+`calls_ok: 0`, `errors: {"status_401": 1}` — contador nascido da sonda, não de resíduo. O mesmo
+ambiente respondia `200 ok` antes do build.
+
+**O teste unitário reprovou o código, e estava certo.** `str(last_err_raw)` sobre `bytes` devolve
+`"b'1750000000|status_401|…'"` — **não levanta, só corrompe**: o primeiro campo deixa de ser dígito,
+o timestamp da falha vira 0 e a conta recusada aparece como `unknown`. O caminho vivo nunca exerceu
+isso porque o cliente roda com `decode_responses=True` (`session.py:35`), e `int(b"123")` funciona —
+só `str(bytes)` mente. Conserto: `_as_text()`, mais log quando o registro é ilegível (registro que
+não se consegue ler não pode virar `unknown` mudo — `unknown` significa *"não medimos"*, e ali
+mediu-se e não se soube ler). A fixture ficou **em bytes de propósito**, com um caso que roda as duas
+formas e exige o mesmo veredicto: se alguém trocar `_as_text()` por `str()` de novo, três testes ficam
+vermelhos na hora.
+
+**Gate:** `infra/test/probe_llm_credential_health.sh` — três estados, preflight do próprio instrumento
+(sem `python3` no host toda leitura volta vazia, e vazio seria diagnosticado como *"corpo antigo"*: o
+probe acusaria a coisa errada com ar de medição), e **declara qual metade não exerceu** — um ambiente
+exibe `ok` ou `invalid`, nunca os dois. A outra metade é
+`tests/test_account_selector.py::TestCredentialSummary` (8 casos, Redis mockado). 44 testes verdes.
+
+**Emenda no mesmo dia, e ela nasceu de um erro meu.** Anunciei dois achados de follow-up —
+*"`mark_throttled` não tem chamador de produção"* e *"`/inference` não alimenta `record_usage`"* —
+e **os dois eram falsos**. Ambos vieram de um `grep` **truncado** (`[Showing results with
+pagination]`) lido como conjunto completo: corte de saída tratado como ausência, que é o mesmo modo
+de falha que este repo já catalogou em *"grep conta a string, não a coisa"*. O código real:
+`mark_throttled` é chamado em `inference.py:304` (ramo 429/529, com re-`pick` e retry), e
+`record_usage` em `:288`, `:324` e `:363`.
+
+Pior que o erro: a afirmação falsa tinha sido **publicada numa nota do próprio `/v1/health`** —
+uma superfície de observabilidade é o pior lugar possível para um valor plausível e errado.
+Corrigida para o fato estreito que sobrou, e que é real: `calls_ok` **subconta**, porque
+`record_usage` só roda quando o `AccountSelector` escolheu uma CONTA; chamada que cai no alias
+legado do provedor tem sucesso sem incrementar nada.
+
+**E a medição expôs um buraco aberto por omissão no health novo:** ele não olhava throttle
+nenhum. Com todas as contas throttled, `credentials` fica `ok` (o `last_ok` é recente) e o
+veredicto sairia `ok/200` — enquanto `pick()` devolve `None` e toda chamada cai no alias legado ou
+no fallback de provedor. Verde sobre capacidade zero, exatamente a família que o arco fecha.
+`credential_summary()` passou a ler também `:throttled` e o health degrada quando todas estão fora
+de circulação — o que finalmente dá consumidor ao dado que o órfão `health_summary()` produzia.
+Credencial e disponibilidade são **fatos separados**, e o corpo publica os dois.
+
+**Não fecha o bloqueio de ambiente:** a credencial deste demo continua recusada, e toda medição de IA
+segue contaminada. O que mudou é que agora isso **aparece** — 503 no `docker ps`, código do erro
+nomeado no corpo, contagem com janela — em vez de exigir arqueologia de log.
+
+---
+
 ## Auditoria LGPD — o portão e a trilha existiam só no docstring (2026-08-22)
 
 Tarefa 3 da passagem de 08-22, que pedia "medir antes de consertar: o consumer tenta criar a tabela e

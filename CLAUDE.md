@@ -520,20 +520,36 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 > sentimento, `intent`, `confidence`, estado do supervisor. E a consequência passa muito de
 > sentimento — **todo step `reason` de todo skill está caindo no `on_failure`**, em silêncio.
 >
-> **Defeito de desenho que só aparece DEPOIS de haver credencial** (leitura de código, não medível
-> aqui): `/v1/reason` recebe `input: dict` **opaco** e o gateway não distingue fala do cliente de
-> `pipeline_state`. `main.py:352` só aproveita `sentiment_score` se o `output_schema` do step o
-> declarar, e **nenhum skill do repo declara** ⇒ o valor propagado seria sempre `0.0` (neutro,
-> indistinguível de não-medido). O único endpoint que sabe estruturalmente o que é fala do cliente é
-> o `/inference` morto (`models.py:150` + `inference.py:164-168`). Conserto de rumo: dar ao
-> `ReasonRequest` um campo que **nomeie** a fala do cliente, devolvendo a extração ao gateway —
-> **não** pedir que cada skill declare `sentiment_score`, que põe invariante de plataforma em YAML de
-> tenant e troca "a plataforma mede" por "o modelo se autoavalia". Precedente: `resolve.ts:301` já
-> passa a fala sob nome fixo. Defeito adjacente: **nenhum chamador de `/v1/reason` envia `tenant_id`**
-> (`engine-runner.ts:204`, `skill-flow-service/index.ts:249`) ⇒ escreveria sob tenant vazio.
+> **Contrato reescrito em 2026-08-23 — a plataforma passou a MEDIR.** O diagnóstico anterior desta
+> seção descrevia o defeito e apontava `/inference` como o caminho a resgatar. A medição refutou a
+> premissa: `/inference` isola a fala, mas entrega a `extract_context_from_response`
+> (`context.py:53-64`), que é **contagem de palavras-chave em português** — e a rota não tem chamador
+> algum. Os dois caminhos pareciam medir e nenhum media (`/v1/reason` lia `sentiment_score` do
+> `output_schema`, que nenhum skill declara ⇒ sempre `0.0`).
+>
+> Desenho vigente, em três peças: **(1)** `ReasonStepSchema.customer_utterance` — referência
+> (`$.` / `@ctx.`, **nunca literal**) ao texto do cliente, resolvida pelo engine e enviada nomeada em
+> `ReasonRequest`; nomear é declarar ENTRADA, não pedir que o modelo dê a própria nota. **(2)**
+> `sentiment_analyzer.py` — chamada dedicada (haiku) fora do turno, alimentando os três emissores que
+> já existiam. **(3)** `sentiment_score: float | None`, onde **`None` = não medido** e o pipeline é
+> pulado; publicar `0.0` faria toda sessão parecer medida-e-neutra. `tenant_id` passou a viajar nos
+> dois chamadores (`engine-runner.ts`, `skill-flow-service`), injetado onde o tenant é conhecido — sem
+> ele as chaves nasciam sem prefixo. O analisador **recusa** tenant vazio.
+>
+> **Pendente:** nenhum skill declara `customer_utterance` ainda ⇒ nada é medido até alguém declarar.
+> Ausência honesta, não regressão. Detalhe em [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
+> § Medição de sentimento.
 >
 > Gate: `infra/test/probe_sentiment_producer.sh` (declara INCONCLUSIVO com causa nomeada enquanto o
 > provedor recusar). Detalhe em `TODO.md`.
+>
+> **A recusa deixou de ser invisível (2026-08-23).** O `/v1/health` do ai-gateway decidia
+> `anthropic: "ok"` pela PRESENÇA da string da chave — nada contatava o provedor —, então as 124
+> recusas conviveram com verde no `docker ps`. Agora o estado é medido: desfecho gravado no funil
+> único de erro + sonda de boot, `credentials` por conta, e **503 quando a chave está configurada e
+> é recusada** (ausente ≠ recusada: só a segunda reprova). `unknown` nunca vira `ok` e `rate_limit`
+> nunca vira `invalid`. Gate `infra/test/probe_llm_credential_health.sh`; detalhe em
+> [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md) § Health de credencial.
 
 Score-only array in Redis during session. Labels calculated at read time using tenant-configurable ranges. Persisted to PostgreSQL (`sentiment_timeline JSONB`) on session close. Never published to canonical stream.
 

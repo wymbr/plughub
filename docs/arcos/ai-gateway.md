@@ -245,9 +245,114 @@ conta ou provedor).
 > escrito antes disso nunca apareceu. O `basicConfig` vive em `main.py`, no topo — se um
 > refactor movê-lo ou removê-lo, os logs voltam a degradar em silêncio.
 
+## Health de credencial — `GET /v1/health` (2026-08-23)
+
+O health reporta o que foi **medido**, nunca o que foi configurado. Até 08-23 ele decidia
+`anthropic: "ok"` a partir da *presença* da string da chave (`main.py:431-441`) — nada no
+serviço contatava o provedor. Custo: **124 chamadas, 124 `status_401`, 200 verde o tempo
+todo**, com o `on_failure` do step `reason` (ramo legítimo) servindo de anestésico.
+
+### Mecanismo
+
+Passivo, com uma sonda no boot. O fato já nascia num funil único — `provider_error_handler`
+—, que apenas logava; log não é estado (some no recreate do container).
+
+| Peça | Onde | O quê |
+|---|---|---|
+| `ProviderError.account_key_id` | `providers/base.py` | qual CONTA falhou — com N contas, "anthropic quebrou" não distingue *uma chave revogada* de *nenhuma funciona* |
+| `key_id_for()` | `providers/base.py` | identidade da conta em **fonte única**; se providers e `LLMAccount` divergirem, o desfecho gravado por um não é achado pelo outro |
+| `record_outcome()` | `account_selector.py` | `last_ok`/`last_err` **sem TTL** (é estado), contadores **com** janela declarada |
+| sucesso | dentro de `record_usage()` | único ponto que roda depois de um `provider.call()` que retornou |
+| sonda de boot | `main._probe_credentials_on_boot` | 1 chamada mínima por conta, 1 por start; `PLUGHUB_LLM_BOOT_PROBE` |
+
+Chaves Redis: `ai_gw:{provider}:{key_id}:{last_ok|last_err|ok:{w}|err:{code}:{w}}`.
+
+### Veredicto (o código HTTP faz parte dele — `docker ps` só lê isso)
+
+```
+redis inalcançável ..................... unhealthy / 503
+nenhuma conta configurada .............. degraded  / 200   escolha declarada
+≥1 conta com credencial ok ............. ok        / 200   inválidas seguem em `accounts`
+nenhuma ok, ≥1 invalid ................. unhealthy / 503
+nenhuma ok, última falha transitória ... degraded  / 200
+nenhuma ok, nenhum desfecho ............ unknown   / 200   + nota de que NÃO julga
+```
+
+### Invariantes deste endpoint
+
+- **`unknown` nunca vira `ok`.** Ausência de evidência não é saúde. Desligar a sonda de boot
+  produz `unknown`, jamais `ok`.
+- **`rate_limit`/rede nunca viram `invalid`.** Só `FATAL_CREDENTIAL_CODES` reprova o
+  container; reprovar num soluço de rede faz o container piscar e o sinal perde o valor.
+- **Chave ausente não reprova; chave presente e recusada reprova.** No segundo caso alguém
+  *pretendia* ter LLM.
+- **O contador de erro nunca anda sozinho.** `calls_ok` é a testemunha de presença; sem ela
+  `errors: {}` é indistinguível de "ninguém chamou". A janela vai junto do número.
+  ⚠️ `calls_ok` **subconta**: `record_usage` só roda quando o `AccountSelector` escolheu uma
+  CONTA (`inference.py:287`, `reason.py:136`). Chamada que cai no alias legado do provedor
+  tem sucesso sem incrementar. O health diz isso quando o contador está em zero.
+- **Credencial e disponibilidade são fatos separados.** `credentials: ok` + `throttled: true`
+  é estado real e comum: chave válida, conta fora de circulação. Com TODAS throttled o
+  `pick()` devolve `None` e tudo cai no alias legado ou no fallback de provedor — o health
+  reporta `degraded`, nunca `ok`, porque `ok` ali seria verde sobre capacidade zero.
+- **Valor lido do Redis passa por `_as_text()`, nunca por `str()`.** `str(b"…")` devolve
+  `"b'…'"` sem levantar: o timestamp da falha vira 0 e a conta recusada aparece como
+  `unknown`. O caminho vivo não exerce isso (`decode_responses=True`), o teste sim — a
+  fixture é em bytes de propósito.
+
+Gate `infra/test/probe_llm_credential_health.sh` (3 estados; **declara qual metade não
+exerceu** — um ambiente exibe `ok` ou `invalid`, nunca os dois) +
+`tests/test_account_selector.py::TestCredentialSummary` (8 casos, Redis mockado).
+
+## Medição de sentimento (2026-08-23)
+
+**`sentiment_emitter.py` publica; `sentiment_analyzer.py` mede.** A separação existe porque
+o encanamento sempre funcionou e a fonte é que era falsa.
+
+### O que havia antes
+
+| Caminho | Produzia | Por que passava |
+|---|---|---|
+| `/v1/reason` | `result.get("sentiment_score", 0.0)` — auto-reportado pelo LLM | nenhum skill declara o campo ⇒ sempre `0.0` = NEUTRO = indistinguível de não-medido |
+| `/inference` | `context.py:53-64` — contagem de 10 palavras negativas × 8 positivas, em PT | rota sem chamador algum; e heurística não sobrevive a ironia, negação ou outro idioma |
+
+### Contrato
+
+```
+skill YAML   reason: { customer_utterance: "$.pipeline_state.pergunta.value" }
+   ↓ engine  resolveCustomerUtterance() — aceita $. e @ctx., recusa literal
+   ↓ HTTP    ReasonRequest.customer_utterance (+ tenant_id)
+   ↓ gateway analyze_and_emit_sentiment() — haiku, fora do turno, fire-and-forget
+   ↓         emit_sentiment_updated · update_sentiment_live · write_context_store_sentiment
+```
+
+### Invariantes
+
+- **`None` ≠ `0.0`.** `None` é não-medido e pula o pipeline; `0.0` é um ponto legítimo da
+  escala (cliente neutro). Confundi-los fez a plataforma inteira parecer medida por meses.
+- **Nenhum caminho de falha escreve.** Modelo indisponível, resposta ilegível, tenant vazio,
+  sem provider — todos registram o motivo e não gravam nada.
+- **Fala literal é recusada.** Só referência. Texto fixo no YAML seria fala fabricada pelo
+  autor do fluxo, medida como se fosse do cliente.
+- **Não se pede `sentiment_score` no `output_schema`.** Isso põe invariante de plataforma em
+  YAML de tenant e troca "a plataforma mede" por "o modelo se autoavalia".
+- **O fallback de parse só procura número DEPOIS da chave `sentiment_score`.** Sem a âncora,
+  `{"outro": 1}` virava `1.0`.
+- **Prompt de sistema viaja como mensagem `role: "system"`.** Não existe kwarg `system` em
+  `LLMProvider.call()` — foi esse engano que manteve o `copilot_emitter` mudo (junto com
+  `.text`, que não existe em `LLMResponse`).
+- **Mock nunca mais permissivo que a coisa mockada.** As fixtures usam `LLMResponse` real; um
+  `MagicMock` com `.text` fabricado sob demanda foi o que deixou a suíte concordar com o bug.
+
+Testes: `tests/test_sentiment_analyzer.py` (16 casos) + `tests/test_copilot_emitter.py`.
+
+**Pendente:** nenhum skill declara `customer_utterance` — nada é medido até alguém declarar.
+
 ## Invariants
 
 - Erro de provedor nunca é silencioso — motivo vai ao log, não só ao corpo da resposta
+- `/v1/health` nunca reporta `ok` sem desfecho de provedor registrado — ausência é `unknown`
+- Sentimento ausente é `None` e não é publicado — `0.0` significa cliente neutro, medido
 - AI Gateway never maintains state between calls
 - AI Gateway never classifies sentiment scores — only emits numeric scores
 - `evaluation` profile is never shared with `realtime` account pool
