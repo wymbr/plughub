@@ -38,10 +38,150 @@ logger = logging.getLogger("plughub.analytics.audit")
 router = APIRouter(prefix="/v1/audit", tags=["audit"])
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Gate ABAC + registro de acesso
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Até 2026-08-22 estas duas coisas existiam **só no docstring**. O de cima dizia
+# *"ABAC gate: module_config.audit.sessions"* e *"Side-effect: writes an immutable
+# row to audit_access_log"*; o código não fazia nem uma nem outra, e a tela de
+# Auditoria mostra ao operador um banner afirmando que todo acesso fica
+# registrado. Afirmação em prosa sem produtor é a mesma família do comentário que
+# prometia ordenação de Kafka sem chave (§ Postura de Engenharia).
+#
+# O que a medição mostrou, e por que o `401` escondia o defeito
+# (`infra/test/probe_audit_surface.sh`):
+#   · sem header            → 200
+#   · com token INVÁLIDO    → 401
+# O 401 vem de `optional_pool_principal`, que confere a ASSINATURA do JWT quando
+# há header. Isso é autenticação; autorização nunca acontecia. Um token válido de
+# QUALQUER usuário do tenant — operador, business, quem for — lia mensagem de
+# cliente e trilha de chamada MCP sem ter o módulo `audit` no seu `module_config`.
+# O ambiente demo roda `PLUGHUB_ANALYTICS_OPEN_ACCESS=true`, então o 200 sem
+# header é bypass declarado; o buraco é o outro, e ele NÃO depende dessa flag.
+
+_ACCESS_LEVELS = ["none", "read_only", "write_only", "read_write"]
+
+
+def _has_abac(module_config: dict, module: str, field: str) -> bool:
+    """
+    `module_config[module][field].access` ≥ read_only.
+
+    Mesma hierarquia do `permissions.ts` da UI (`ACCESS_LEVELS`), e a paridade é
+    obrigatória: gate de tela que discorda de gate de API é gate nenhum.
+    `write_only` conta porque está acima de `read_only` na hierarquia declarada —
+    não inventar uma segunda ordem aqui.
+    """
+    field_cfg = ((module_config or {}).get(module) or {}).get(field)
+    if not isinstance(field_cfg, dict):
+        return False
+    access = field_cfg.get("access") or "none"
+    if access not in _ACCESS_LEVELS:
+        return False
+    return _ACCESS_LEVELS.index(access) >= _ACCESS_LEVELS.index("read_only")
+
+
+def _audit_actor(request: Request) -> tuple[str, str, dict]:
+    """
+    Devolve `(sub, kind, module_config)` do Bearer, sem levantar.
+
+    `optional_pool_principal` já roda como dependência e devolve o `sub`, mas NÃO
+    carrega `module_config` — decodificar aqui evita alargar o `PoolPrincipal`,
+    que é lido por dezenas de rotas que não têm nada com auditoria.
+    """
+    # ⚠️ **PyJWT (`import jwt`), NÃO `python-jose`.** Os dois convivem no repo — o
+    # auth-api usa `from jose import jwt`, a analytics-api usa PyJWT, e `jose` nem
+    # está instalado neste container. A v1 desta função copiou o import do
+    # auth-api; como ele é LOCAL e o demo roda com `open_access=true`, esta função
+    # nunca era chamada e o `ImportError` só apareceria com o bypass desligado —
+    # isto é, só em produção, na primeira vez que o gate fosse de fato exercido.
+    # Foi o teste unitário que o pegou, justamente por não passar pelo bypass.
+    import jwt
+
+    from .config import get_settings
+
+    settings = get_settings()
+    header = request.headers.get("authorization") or ""
+    token = header[7:].strip() if header.lower().startswith("bearer ") else ""
+    if not token or not settings.auth_jwt_secret:
+        return "", "anonymous", {}
+    try:
+        claims = jwt.decode(token, settings.auth_jwt_secret, algorithms=["HS256"])
+    except Exception:
+        return "", "anonymous", {}
+    return claims.get("sub") or "", "user", claims.get("module_config") or {}
+
+
+class AuditDenied(Exception):
+    """Recusa nomeada — o handler a converte em 403 e REGISTRA a tentativa."""
+
+
+def _check_audit_access(request: Request, field: str) -> tuple[str, str]:
+    """
+    Portão de `/v1/audit/*`. Devolve `(actor_sub, actor_kind)` ou levanta `AuditDenied`.
+
+    Precedência, e cada ramo é declarado:
+      1. `analytics_open_access` → LIBERA, com ator `open_access`. É bypass de
+         demo (`config.py:75`, "NEVER enable in production") e fica NOMEADO na
+         trilha, para ninguém confundir acesso autenticado com acesso de demo.
+      2. sem `auth_jwt_secret` → **RECUSA**. Aqui a postura é oposta à do
+         `pool_auth`, que degrada aberto quando não há como verificar o token: lá
+         o efeito é escopo de leitura operacional, aqui é dado pessoal sob LGPD.
+         Identidade não tem fallback — sem como provar quem é, não se entrega.
+      3. `module_config.audit.<field>` ≥ read_only → LIBERA.
+      4. caso contrário → RECUSA.
+    """
+    from .config import get_settings
+
+    if get_settings().analytics_open_access:
+        return "", "open_access"
+
+    actor_sub, actor_kind, module_config = _audit_actor(request)
+    if actor_kind == "anonymous":
+        raise AuditDenied("credencial ausente ou não verificável")
+    if not _has_abac(module_config, "audit", field):
+        raise AuditDenied(f"sem module_config.audit.{field}")
+    return actor_sub, actor_kind
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _store(request: Request):
     return request.app.state.store
+
+
+async def _record_access(
+    request: Request, *, actor_sub: str, actor_kind: str, endpoint: str,
+    target_kind: str, target_id: str, result: str, row_count: int,
+) -> None:
+    """
+    Escreve a linha imutável em `audit_access_log`.
+
+    Nunca derruba a resposta: a falha de gravação vira ERROR com prefixo estável.
+    Mas ela é ERROR, não `pass` — uma trilha de auditoria que some em silêncio é
+    pior que não ter trilha, porque a tela continua prometendo que ela existe.
+    """
+    import uuid
+    from datetime import datetime as _dt, timezone as _tz
+
+    try:
+        await _store(request).insert_audit_access_log({
+            "access_id":   str(uuid.uuid4()),
+            "tenant_id":   request.query_params.get("tenant_id") or "",
+            "actor_sub":   actor_sub,
+            "actor_kind":  actor_kind,
+            "endpoint":    endpoint,
+            "target_kind": target_kind,
+            "target_id":   target_id,
+            "result":      result,
+            "row_count":   row_count,
+            "accessed_at": _dt.now(_tz.utc),
+        })
+    except Exception as exc:
+        logger.error(
+            "[audit_access_log] NÃO registrado endpoint=%s actor=%s — %s: %s",
+            endpoint, actor_sub or actor_kind, type(exc).__name__, exc,
+        )
 
 
 def _isoformat(ts: Any) -> str:
@@ -113,7 +253,18 @@ async def audit_session_messages(
     """
     Returns masked message content for a session for LGPD audit purposes.
     Gate: module_config.audit.sessions (ABAC) or analytics_open_access.
+    Side-effect: grava uma linha imutável em audit_access_log — inclusive na recusa.
     """
+    try:
+        actor_sub, actor_kind = _check_audit_access(request, "sessions")
+    except AuditDenied as denied:
+        await _record_access(
+            request, actor_sub="", actor_kind="anonymous",
+            endpoint="audit.sessions.messages", target_kind="session",
+            target_id=session_id, result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=403, content={"detail": str(denied)})
+
     # Tenant isolation
     effective_tenant = principal.tenant_id or tenant_id
     store = _store(request)
@@ -122,10 +273,16 @@ async def audit_session_messages(
             _fetch_audit_messages,
             store.new_client(), store._database, effective_tenant, session_id,
         )
-        return JSONResponse(content={"session_id": session_id, "messages": messages})
     except Exception as exc:
         logger.error("audit_session_messages error: %s", exc)
         return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    await _record_access(
+        request, actor_sub=actor_sub, actor_kind=actor_kind,
+        endpoint="audit.sessions.messages", target_kind="session",
+        target_id=session_id, result="ok", row_count=len(messages),
+    )
+    return JSONResponse(content={"session_id": session_id, "messages": messages})
 
 
 # ── GET /v1/audit/mcp-calls ───────────────────────────────────────────────────
@@ -221,6 +378,16 @@ async def audit_mcp_calls(
     When session_id is provided, results are scoped to that session and ordered
     chronologically — the path the evaluator uses to build tool_trace (R5).
     """
+    try:
+        actor_sub, actor_kind = _check_audit_access(request, "mcp_calls")
+    except AuditDenied as denied:
+        await _record_access(
+            request, actor_sub="", actor_kind="anonymous",
+            endpoint="audit.mcp_calls", target_kind="mcp_calls",
+            target_id=session_id or "", result="denied", row_count=0,
+        )
+        return JSONResponse(status_code=403, content={"detail": str(denied)})
+
     effective_tenant = principal.tenant_id or tenant_id
     store = _store(request)
     try:
@@ -229,7 +396,13 @@ async def audit_mcp_calls(
             store.new_client(), store._database,
             effective_tenant, limit, masked_only, session_id,
         )
-        return JSONResponse(content={"calls": calls, "total": len(calls)})
     except Exception as exc:
         logger.error("audit_mcp_calls error: %s", exc)
         return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    await _record_access(
+        request, actor_sub=actor_sub, actor_kind=actor_kind,
+        endpoint="audit.mcp_calls", target_kind="mcp_calls",
+        target_id=session_id or "", result="ok", row_count=len(calls),
+    )
+    return JSONResponse(content={"calls": calls, "total": len(calls)})

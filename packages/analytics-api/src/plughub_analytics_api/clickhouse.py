@@ -1048,8 +1048,40 @@ PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, session_id, resume_token)
 """
 
+# ── audit_access_log (LGPD Fase 1) ───────────────────────────────────────────
+#
+# NUNCA `ReplacingMergeTree`, e isso é decisão de conformidade, não de gosto: o
+# valor da trilha é dizer QUANTAS vezes um dado pessoal foi acessado e por quem.
+# Deduplicar por (ator, alvo) apagaria justamente o padrão de acesso repetido,
+# que é o sinal que uma auditoria procura. `MergeTree` puro, append-only.
+#
+# ⚠️ Este DDL foi declarado como entregue no CHANGELOG de 2026-05-14 e **não
+# existia na árvore** — medido em 2026-08-22 (`probe_audit_surface.sh`: 0 de 2
+# tabelas, com `session_timeline` de testemunha). Some sem rastro no código, ao
+# contrário de outras remoções deste arquivo, que deixaram `_DDL_*_DROP`.
+_DDL_AUDIT_ACCESS_LOG = """
+CREATE TABLE IF NOT EXISTS {db}.audit_access_log
+(
+    access_id      String,
+    tenant_id      String,
+    actor_sub      String,
+    actor_kind     String DEFAULT 'user',   -- user | open_access | service
+    endpoint       String,
+    target_kind    String,                  -- session | mcp_calls
+    target_id      String DEFAULT '',
+    result         String DEFAULT 'ok',     -- ok | denied
+    row_count      UInt32 DEFAULT 0,
+    accessed_at    DateTime64(3, 'UTC'),
+    date           Date DEFAULT toDate(accessed_at)
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, accessed_at, actor_sub)
+"""
+
 _ALL_DDL = [
     _DDL_DATABASE,
+    _DDL_AUDIT_ACCESS_LOG,
     _DDL_SESSIONS,
     _DDL_SESSION_TRANSITIONS,
     _DDL_JOURNEY_ALIASES,
@@ -1656,6 +1688,41 @@ class AnalyticsStore:
             "session_timeline",
             [_timeline_row(row)],
             self._TIMELINE_COLS,
+        )
+
+    # audit_access_log (LGPD Fase 1)
+
+    _AUDIT_ACCESS_COLS = [
+        "access_id", "tenant_id", "actor_sub", "actor_kind", "endpoint",
+        "target_kind", "target_id", "result", "row_count", "accessed_at", "date",
+    ]
+
+    async def insert_audit_access_log(self, row: dict) -> None:
+        """
+        Grava UMA linha imutável de acesso a dado pessoal. Append-only por desenho.
+
+        Chamado pelos handlers de `/v1/audit/*` DEPOIS da leitura, com `row_count`,
+        e também no ramo de RECUSA — uma tentativa negada é fato de auditoria tão
+        relevante quanto um acesso concedido, e registrar só o sucesso deixaria a
+        trilha cega justamente para o caso interessante.
+        """
+        await asyncio.to_thread(
+            self._insert,
+            "audit_access_log",
+            [[
+                row.get("access_id", ""),
+                row.get("tenant_id", ""),
+                row.get("actor_sub", ""),
+                row.get("actor_kind", "user"),
+                row.get("endpoint", ""),
+                row.get("target_kind", ""),
+                row.get("target_id", ""),
+                row.get("result", "ok"),
+                int(row.get("row_count", 0) or 0),
+                row["accessed_at"],
+                row["accessed_at"].date(),
+            ]],
+            self._AUDIT_ACCESS_COLS,
         )
 
     # evaluation_results (Arc 6)
