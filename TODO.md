@@ -192,6 +192,42 @@ instância com pausa declarada.
 
 ---
 
+## NENHUM step `reason` funciona no demo — 401 do provedor em 124 de 124 *(medido 2026-08-22)*
+
+**Correlação perfeita, na vida inteira do processo do ai-gateway:**
+
+```
+POST /v1/reason ......... 124
+upstream_model_error .... 124
+status_401 .............. 124      ("API key is invalid", provider anthropic)
+```
+
+Reproduzido com chamada direta a `/v1/reason` (`infra/test/probe_sentiment_producer.sh` § P4): o
+corpo é aceito, o provedor recusa. **O ambiente não tem credencial de LLM válida.**
+
+**Por que isso é maior que o assunto em que foi encontrado.** O handler levanta antes de
+`main.py:357`, então nada pós-LLM roda — sentimento, `intent`, `confidence`, estado do supervisor
+(`EstadoTab`). E mais: **todo step `reason` de todo skill cai no `on_failure`**, em silêncio, porque
+`on_failure` é ramo legítimo do fluxo e não produz alarme. Os skills atingidos incluem
+`agente_fila_v1` (o único conversacional de verdade, pool `fila_espera`), `agente_contexto_ia_v1`,
+`agente_copilot_v1`, `agente_avaliacao_v1`, `agente_revisor_v1` e `agente_pre_revisor_v1`.
+
+**Consequência para o método, e é a parte cara:** qualquer medição de comportamento que dependa de
+IA neste ambiente estava medindo o ramo de erro sem saber. Vale reler com desconfiança tudo que foi
+concluído sobre avaliação, copilot e contexto a partir do demo — inclusive achados que "explicavam"
+ausência de dado por outras causas.
+
+**Antes de qualquer trabalho no item de sentimento:** decidir se este demo deve ter credencial. Sem
+ela, a pergunta de desenho (extração no ai-gateway × no step `reason`) **não é decidível por
+medição** aqui — nenhum caminho pós-LLM jamais executou.
+
+**Preflight barato que deveria existir:** o ai-gateway sobe e responde `200` no health com
+credencial inválida. Um health que exercitasse o provedor (ou ao menos um contador de
+`upstream_model_error` numa tela) transformaria isto de arqueologia em alarme. Hoje o único sintoma
+é fluxo tomando `on_failure`, que é indistinguível de fluxo funcionando conforme desenhado.
+
+---
+
 ## Auditoria MCP sem STORE — `mcp_audit_log` não existe em banco nenhum *(medido 2026-08-21; **reenquadrado e parcialmente fechado 2026-08-22**)*
 
 > ✅ **Fechados em 2026-08-22** (ver CHANGELOG): o **gate ABAC** de `/v1/audit/*`, que existia só no
@@ -318,26 +354,17 @@ do bridge escreve `tenant_id`.
    existe** (HGET em chave ausente devolve `None` → `pool_id="unknown"` → segue). Com o meta presente,
    a exceção é engolida em `:162-163` e leva junto as **três** emissões de sentimento. O comentário
    `:137-138` descreve a chave como hash e chama o caminho de "normal".
-   ⚠️ **DORMENTE, e a tentativa de consertar achou coisa maior (medido 2026-08-20).** Antes de editar,
-   procurei a testemunha do defeito no log e ela **não existe**: `grep -c "Sentiment pipeline failed"`
-   → **0** em 24.106 linhas cobrindo a vida inteira do processo. O motivo: `update_partial_params` só
-   é chamado de `inference.py:196`, no `/v1/inference`, e esse endpoint tem **0 requisições** contra
-   **116** no `/v1/reason` (que é por onde o step `reason` do skill-flow passa). Ou seja o `HGET` nunca
-   executa neste ambiente. **Consertá-lo às cegas teria produzido um "fix" verde sem nada mudar** —
-   eu havia escrito "defeito vivo" aqui sem contar quem sofre, que é o erro que a memória
-   *"'é latente' é hipótese"* descreve, na direção oposta.
-   › **O achado maior: a trilha de sentimento não tem produtor vivo.** `session.py:142-161` é o
-   **único** chamador de produção de `emit_sentiment_updated`/`update_sentiment_live`/
-   `write_context_store_sentiment` (todo o resto do grep é teste), e ele pendura no endpoint sem
-   tráfego. Logo o tópico `sentiment.updated`, a chave `session:{id}:sentiment`, a tag
-   `session.sentimento.current`, as faixas configuráveis por tenant e o consumidor da analytics-api
-   descrevem um pipeline **sem fonte** neste ambiente. O módulo tem suíte própria
-   (`tests/test_sentiment_emitter.py`, incluindo regressão do `_classify` de 08-02) e o cenário e2e 17
-   **simula** a escrita (`17_context_store.ts:18`) — testes verdes em volta de um caminho que não roda.
-   › **A pergunta a responder antes de qualquer conserto:** `/v1/inference` é legado (e então
-   sentimento precisa de produtor novo, provavelmente no `/v1/reason`), ou é caminho vivo que este
-   demo não exercita? Medir em ambiente com tráfego real antes de decidir. **Só depois** o `HGET`
-   importa — ele é o segundo problema desse caminho, não o primeiro.
+   ⚠️ **DORMENTE — mas o texto abaixo desta linha, escrito em 08-20, estava ERRADO em três pontos, e
+   a medição de 2026-08-22 os desfez um a um.** Ver § "Nenhum step `reason` funciona no demo" e a
+   § Sentiment Tracking do `CLAUDE.md`, ambas reescritas. Resumo do que mudou:
+   › *"a trilha só é alcançada por `/v1/inference`"* — **a rota não existe**: é `POST /inference`
+     (`main.py:286`), sem chamador nenhum no repositório. E **`/v1/reason` TAMBÉM chama**
+     `update_partial_params` (`main.py:357`), então a trilha É percorrida, 124 vezes.
+   › *"pipeline sem fonte"* — a fonte existe e é exercitada; ela morre ANTES, no 401 do provedor.
+   › *"o `HGET` é o segundo problema"* — continua verdade, mas por outro motivo: ele é inalcançável
+     porque o handler levanta antes da linha 357, não porque o endpoint não tem tráfego.
+   O que **sobrevive** de 08-20: consertar o `HGET` às cegas teria dado um "fix" verde sem mudar nada.
+   Isso segue valendo, e agora com causa nomeada.
 2. ✅ **RESOLVIDO 2026-08-21** — o guard que se auto-anulava em `analytics-api/supervisor.py`.
    Contado antes: **8 metas vivos, 8 com `tenant_id`, 0 sem** ⇒ real no código, **sem alvo** nesta
    população; a palavra "exposição" não se sustentou, e o conserto foi fail-closed assim mesmo (0 em 8
@@ -2632,6 +2659,14 @@ acima estava errado no ponto que importava** — e o erro sobreviveu porque ning
 > `dispatch: inline` (`infra/registry/tenant_demo.yaml:377`). A primeira tentativa de conserto seguiu
 > esta nota ao pé da letra, isentou só `detached`, e o ERROR continuou de pé no boot seguinte.
 > *Descrição de configuração não é configuração.*
+>
+> ⚠️ **E esta correção repetiu o erro um nível acima (visto em 2026-08-22).** Ela trocou a prosa pelo
+> **YAML** — que também não é a configuração. Registry é **seed-if-absent**: editar pool já semeado é
+> no-op e **o DB vence**. Medido pela API oficial
+> (`GET :3300/v1/pools/retencao_humano`): a config VIVA é **`"dispatch":"detached"`**, o oposto do que
+> esta nota afirma, e foi ela que levou o `CLAUDE.md` a "corrigir" a seção do arco Detach para `inline`
+> em 08-20. A frase certa é mais forte: *fonte declarativa não é estado* — para `hooks`, `deploy` e
+> `capacity`, pergunte ao agent-registry.
 
 A condição real é o espelho de `_is_workflow_dispatch` (`main.py:1775`), extraída em `_runs_as_workflow`:
 `workflow ⇔ dispatch == "detached" OU (side == "agent" E dispatch == "inline")`. No **wrap-up unificado**
