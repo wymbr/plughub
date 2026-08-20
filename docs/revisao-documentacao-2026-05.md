@@ -3,6 +3,28 @@
 > Avaliação completa do acervo `docs/` · Data: 2026-05-25 · Estado da plataforma: Arc 16
 > Escopo auditado: 123 arquivos `.md` · Fonte da verdade: `CLAUDE.md`, `CHANGELOG.md`, `TODO.md`
 
+> ⚠️ **Superseção parcial de 2026-08-19 — não reescrever, mas não citar como prova.**
+>
+> Este documento é registro datado de uma auditoria e permanece intacto. Uma de suas conclusões, porém,
+> foi **derrubada por medição** e este arquivo é o mais citado como prova dela: a *"Correção pós-auditoria
+> (2026-05-25)"* que reclassificou o canal **`voice` de "lacuna aspiracional" para "implementado"**
+> (linhas `:127`, `:175`, `:187`, `:266`, `:300`) está **errada**. Medido em 2026-08-19:
+> `VoiceAdapter.handle_inbound` chama cinco métodos que não existem em `packages/channel-gateway`
+> (`adapters/voice.py:236,247,433,558,565`), mockados em `tests/test_voice_adapter.py:116-121` —
+> `AttributeError` em runtime real, e nenhuma sessão de voz jamais existiu no ambiente. Ver
+> [`adr/adr-voice-media-plane.md`](adr/adr-voice-media-plane.md).
+>
+> **A lição de método vale mais que a correção**, e é o motivo de este aviso existir: a reclassificação
+> foi feita **lendo `docs/arcos/channel-gateway-multi-channel.md` §9**, que descreve o canal em detalhe
+> convincente — e não executando nada. Uma auditoria que compara documento com documento **propaga** a
+> afirmação em vez de verificá-la, e produz o pior resultado possível: converte uma dúvida honesta
+> ("aspiracional") em uma certeza falsa ("implementado"), que então sobrevive três meses e chega ao
+> material comercial.
+>
+> **Critério para a próxima auditoria:** "implementado" significa *existe caminho executado*, não *existe
+> seção no doc*. Onde não houver execução observável, a classificação correta é **inconclusivo** — nunca
+> o valor plausível.
+
 ---
 
 ## 1. Sumário executivo

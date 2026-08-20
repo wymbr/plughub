@@ -10,6 +10,21 @@
  * Público-alvo: avaliador técnico de cliente prospectivo. Reunião de 30–40 min.
  * Conteúdo espelha docs/product/folder-tecnico-plughub.html (18 páginas A4).
  * Notas do apresentador em todos os slides (painel de notas do PowerPoint).
+ *
+ * ⚠️ CORREÇÃO DE 2026-08-19 — MEDIDO. Este deck afirmava voz/PSTN e WebRTC como
+ * capacidades entregues. NENHUM DOS DOIS CANAIS DE ÁUDIO FUNCIONA HOJE:
+ *   · canal `voice`  — VoiceAdapter.handle_inbound chama cinco métodos inexistentes
+ *     (channel-gateway/adapters/voice.py:236,247,433,558,565), mockados no teste
+ *     (tests/test_voice_adapter.py:116-121) ⇒ AttributeError real, nada publicado
+ *     em conversations.inbound;
+ *   · canal `webrtc` — sinalização roda, mas o SFU NUNCA foi provisionado: zero
+ *     LiveKit em compose algum, SDK fora de packages/channel-gateway/pyproject.toml,
+ *     e `_dev_mode` (webrtc_provider.py:167) devolve token/sala placebo.
+ * Consequência: NÃO há "voz nativa", NÃO há "SIP/PSTN + WebRTC nativos", NÃO há
+ * "discador interno" e NÃO há "gravações de voz e WebRTC". O discador está
+ * BLOQUEADO por falta de plano de mídia, não meramente não-planejado.
+ * Reconstrução: docs/adr/adr-voice-media-plane.md (proposto 2026-08-19).
+ * NÃO usar os trechos de voz/WebRTC em proposta comercial até a fase V-F2.
  */
 const pptxgen = require("pptxgenjs");
 
@@ -316,20 +331,23 @@ s.addNotes("Dois perfis de execução com passos mutuamente exclusivos: workflow
 s = pres.addSlide();
 kicker(s, "CAMADA 3");
 title(s, "Abstração de canais — e contato ativo sem discador");
-s.addText("webchat · WhatsApp · SMS · e-mail · voz (PSTN) · WebRTC · Instagram · Telegram · webhook",
-  { x: M, y: 1.42, w: 11.9, h: 0.3, fontSize: 12, bold: true, color: MU, fontFace: BF, margin: 0 });
-card(s, { x: M, y: 1.85, w: 5.95, h: 1.5, fill: OW, head: "Canal × meio", headColor: CH, headGap: 0.36, size: 10,
-  body: "Canal é filtro duro de roteamento; meio (voz, vídeo, mensagem) é fator de score. Toda lógica específica vive no adaptador: um menu de botões vira lista numerada onde botão não existe — decisão do adaptador, nunca do fluxo." });
+s.addText([
+  { text: "webchat · WhatsApp · SMS · e-mail · Instagram · Telegram · webhook", options: { color: MU } },
+  { text: "   ⚠️  voz (PSTN) — em reconstrução · WebRTC — em reconstrução (sem SFU provisionado)",
+    options: { color: CH } }
+], { x: M, y: 1.42, w: 11.9, h: 0.3, fontSize: 12, bold: true, fontFace: BF, margin: 0 });
+card(s, { x: M, y: 1.85, w: 5.95, h: 1.5, fill: OW, head: "Canal × meio", headColor: CH, headGap: 0.36, size: 9,
+  body: "Canal é filtro duro de roteamento; meio (voz, vídeo, mensagem) é fator de score. Toda lógica específica vive no adaptador: um menu de botões vira lista numerada onde botão não existe — decisão do adaptador, nunca do fluxo.\n⚠️ Medido em 2026-08-19: os dois canais de ÁUDIO não estão entregues — voz quebra no caminho de entrada, WebRTC sem SFU provisionado. A abstração vale; o áudio está em reconstrução." });
 card(s, { x: 6.83, y: 1.85, w: 5.95, h: 1.5, fill: OW, head: "Ativo pelo mesmo motor", headColor: CH, headGap: 0.36, size: 10,
   body: "Audiência + campanha + entrega, endereçando um pool — nunca um fluxo específico. Disparo por agenda recorrente, distribuição em paralelo, importação com rejeição por linha. Sem stack de outbound paralela." });
 card(s, { x: M, y: 3.5, w: CW, h: 1.95, fill: CH, headColor: WH, bodyColor: "FBE4E7", size: 10.5, headGap: 0.38,
   head: "Contato ativo sem discador — a premissa que estamos recusando",
-  body: "O pacing do discador preditivo é função da disponibilidade do agente: ele disca N linhas porque M operadores ficarão livres em T segundos. A prova documental é o teto regulatório de taxa de abandono — a indústria admitindo, por escrito, que o modelo transfere custo para quem atende.\n\nA inversão: mensagem com motivo e assunto, e a decisão de quando conversar volta para quem foi procurado. Sobe a conversão por tentativa, cai o custo por contato útil, e o volume absoluto de conversas pode cair — é a troca, feita de propósito. O diferencial não é o link (callback existe há vinte anos): é o processo já ter estado do outro lado, então a conversa continua de onde parou.\n\nO limite: cobrança de valor relevante, prospecção fria e urgência regulatória seguem exigindo voz ativa em volume — e aí não temos discador preditivo." });
+  body: "O pacing do discador preditivo é função da disponibilidade do agente: ele disca N linhas porque M operadores ficarão livres em T segundos. A prova documental é o teto regulatório de taxa de abandono — a indústria admitindo, por escrito, que o modelo transfere custo para quem atende.\n\nA inversão: mensagem com motivo e assunto, e a decisão de quando conversar volta para quem foi procurado. Sobe a conversão por tentativa, cai o custo por contato útil, e o volume absoluto de conversas pode cair — é a troca, feita de propósito. O diferencial não é o link (callback existe há vinte anos): é o processo já ter estado do outro lado, então a conversa continua de onde parou.\n\nO limite: cobrança de valor relevante, prospecção fria e urgência regulatória seguem exigindo voz ativa em volume — e aí não temos discador preditivo — que não é só ausente, está BLOQUEADO: depende de um plano de mídia que hoje não existe (medido 2026-08-19)." });
 card(s, { x: M, y: 5.6, w: CW, h: 1.25, fill: TL, headColor: WH, bodyColor: "DDEDED", size: 10.5, headGap: 0.38,
   head: "Governança de contato — um portão só, inclusive para pesquisa",
   body: "Antes de qualquer abordagem: opt-out global (salvo transacional) → janela de calendário → fadiga (frequência, quarentena, teto por canal) → supressão de mailing. A decisão sempre nomeia a regra, e o registro é gravado na mesma transação. Por ser genérico, a pesquisa de satisfação passa pelo mesmo portão: convite para avaliar conta como abordagem." });
 pageFoot(s, "Arquitetura · canais", 10);
-s.addNotes("Amarrar com o slide 7: o caso da portabilidade é a demonstração deste slide. E a pesquisa passando pelo portão de fadiga costuma surpreender — quase ninguém trata pesquisa como contato.");
+s.addNotes("Amarrar com o slide 7: o caso da portabilidade é a demonstração deste slide. E a pesquisa passando pelo portão de fadiga costuma surpreender — quase ninguém trata pesquisa como contato.\n\n⚠️ HONESTIDADE OBRIGATÓRIA (medido 2026-08-19): NÃO afirmar voz nem WebRTC como entregues. O canal de voz levanta AttributeError no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o WebRTC não tem SFU provisionado em ambiente nenhum — sinalização roda, mídia não. Se perguntarem por voz: 'a abstração de canal está pronta e os canais de texto estão em operação; o áudio está em reconstrução sob um ADR de plano de mídia próprio, e não vendemos data até a fase de voz entrante estar de pé'. O discador está bloqueado por isso, não por escolha de roadmap.");
 
 /* ---------------- 11 · identidade ---------------- */
 s = pres.addSlide();
@@ -488,7 +506,7 @@ s.addNotes("Este é o exemplo mais concreto de arquitetura virando operação. S
 s = pres.addSlide();
 kicker(s, "MÓDULOS");
 title(s, "Como os módulos se relacionam — e o mesmo contato entre eles");
-const pipe = [["canais", "voz · chat · WA · webhook", GR, M, 2.0], ["gateway de canais", "adaptadores · normalização", GR2, 2.68, 2.25],
+const pipe = [["canais", "chat · WA · webhook  (voz ⚠️)", GR, M, 2.0], ["gateway de canais", "adaptadores · normalização", GR2, 2.68, 2.25],
   ["núcleo de sessão", "stream canônico · masking", GR, 5.16, 2.25], ["roteador", "fila · score · pull", "2C5560", 7.64, 1.95],
   ["Console", "agente humano", CH, 9.82, 1.42], ["motor de fluxo", "agente de IA", TL, 11.47, 1.31]];
 pipe.forEach(p => {
@@ -571,7 +589,7 @@ tbl(s, [
   ["PostgreSQL", "Registro durável e relacional", "Agentes, pools, skills e deploys; auth, perfis e grupos; workflow; formulários de diálogo; identidade e âncoras; agenda; audiência e campanhas; avaliação e contestação."],
   ["PostgreSQL vetorial", "Busca semântica", "Base de conhecimento para RAG, com extensão de vetores, consumida por servidor de ferramentas próprio. Guarda também as notas de calibração devolvidas ao avaliador."],
   ["ClickHouse", "Analítico e série temporal", "Sessões, segmentos, mensagens e linha do tempo; desempenho diário por agente; picos de ocupação; pausas; auditoria de chamadas e registro imutável de acesso; resultados de avaliação; sinais de cliente."],
-  ["Object storage", "Mídia", "Gravações de voz e WebRTC, anexos de webchat com expiração em duas fases."]
+  ["Object storage", "Mídia", "Anexos de webchat com expiração em duas fases. ⚠️ Gravação de voz e WebRTC NÃO está entregue (medido 2026-08-19): os dois canais de áudio não rodam — é fase da reconstrução do plano de mídia, não capacidade em operação."]
 ], { y: 1.95, colW: [1.95, 2.5, 7.78], rowH: 0.5, fontSize: 9.5 });
 card(s, { x: M, y: 5.6, w: 5.95, h: 1.25, fill: OW, size: 10,
   body: "Série temporal:  vive no ClickHouse, não no PostgreSQL — volume de evento, consulta colunar por intervalo, dado imutável. Separar os papéis evita relatório pesado competindo com escrita transacional, e é o que torna viável o WFM sobre histórico real." });
@@ -590,16 +608,17 @@ s.addText("Tudo que este material marcou como parcial ou roadmap, num lugar só.
   { x: M, y: 1.45, w: 11.4, h: 0.35, fontSize: 13, italic: true, color: LT, fontFace: BF, margin: 0 });
 const lim = [
   ["Estágio e certificações", "Pronto em arquitetura e funcionalidade, validado em ambiente controlado e parte em atendimento real. Sem produção em cliente e sem certificação emitida — em andamento, com a evidência técnica já produzida pela arquitetura."],
-  ["Discador preditivo", "Não existe. Pacing, guarda de abandono e listas restritivas são roadmap. O que substituímos é a discagem de entrega de informação, não a voz ativa de venda e negociação."],
+  ["Canais de áudio", "Voz/PSTN e WebRTC NÃO estão entregues (medido 2026-08-19): o adaptador de voz quebra no caminho de entrada e o WebRTC não tem SFU provisionado — sinalização roda, mídia não. Em reconstrução. Canais de texto e webhook seguem em operação."],
+  ["Discador preditivo", "Não existe, e está BLOQUEADO — depende do plano de mídia acima. Pacing, guarda de abandono e listas restritivas são fases posteriores. O que substituímos é a discagem de entrega de informação, não a voz ativa de venda."],
   ["Isolamento multi-tenant", "Fundação pervasiva, isolamento operacional completo em maturação. É o item nº 1 a validar em prova de conceito."],
   ["Biometria e WFM", "Roadmap nos dois casos, com o substrato já construído: escala de evidência na identidade, e série temporal de fila, TMA e ocupação para o dimensionamento."],
   ["Fusão de cadastros", "Parcial. Resolução de identidade, âncoras progressivas e posse de canal em operação; referência externa a CRM e fusão de clientes são a fase seguinte."]
 ];
 lim.forEach((l, i) => {
-  const y = 1.92 + i * 0.68;
+  const y = 1.85 + i * 0.56;
   numDot(s, M, y + 0.02, i + 1, 0.3);
   s.addText([{ text: l[0] + "  —  ", options: { bold: true, color: WH } }, { text: l[1], options: { color: LT } }],
-    { x: M + 0.44, y: y, w: 8.9, h: 0.64, fontSize: 10.5, fontFace: BF, margin: 0, valign: "top", lineSpacingMultiple: 1.06 });
+    { x: M + 0.44, y: y, w: 8.9, h: 0.54, fontSize: 9.5, fontFace: BF, margin: 0, valign: "top", lineSpacingMultiple: 1.04 });
 });
 s.addText([{ text: "Um princípio de projeto:  ", options: { bold: true, color: WH } },
   { text: "quando a conveniência de quem contata e a de quem é contatado entram em conflito, a plataforma expõe a escolha em vez de escondê-la. A política é do cliente; a regra explícita, nomeada em cada decisão e com trilha, é da plataforma.", options: { color: LT, italic: true } }],
@@ -609,7 +628,7 @@ s.addText([{ text: "Próximo passo  ", options: { bold: true, color: WH, fontSiz
   { text: "uma sessão técnica com o seu time de arquitetura e de operação, sem custo. Saímos dela com um escopo possível, os pontos a validar em prova de conceito e números — ou com a conclusão honesta de que não é o momento.", options: { color: "FBE4E7", fontSize: 10.5 } }],
   { x: M + 0.28, y: 6.1, w: 8.55, h: 0.78, fontFace: BF, valign: "middle", margin: 0, lineSpacingMultiple: 1.04 });
 pageFoot(s, "PlugHub · 2026", 18, true);
-s.addNotes("Declarar limite cedo qualifica rápido. Quem gosta de construir recebe influência sobre roadmap e acesso direto a quem constrói — e isso não se compra de um incumbente.");
+s.addNotes("Declarar limite cedo qualifica rápido. Quem gosta de construir recebe influência sobre roadmap e acesso direto a quem constrói — e isso não se compra de um incumbente.\n\n⚠️ O limite nº 2 (canais de áudio) entrou em 2026-08-19 por MEDIÇÃO, e é o mais caro de errar: se o prospect é uma operação de voz, ele desqualifica hoje. Dizer isso na primeira reunião, não na prova de conceito.");
 
 pres.writeFile({ fileName: "plughub-descritivo-tecnico.pptx" })
   .then(f => console.log("Gerado:", f));

@@ -123,10 +123,30 @@ O canal é um **filtro rígido** de roteamento (match obrigatório); o medium (`
 | `whatsapp` | Implementado | Sim | [`arcos/channel-gateway-multi-channel.md`](arcos/channel-gateway-multi-channel.md) |
 | `sms` | Implementado (via provedores externos) | Sim | [`arcos/channel-gateway-multi-channel.md`](arcos/channel-gateway-multi-channel.md) |
 | `email` | Implementado | Sim | [`arcos/channel-gateway-multi-channel.md`](arcos/channel-gateway-multi-channel.md) |
-| `webrtc` | Implementado | Não | [`arcos/arc15-webrtc.md`](arcos/arc15-webrtc.md) |
-| `voice` / PSTN | Implementado — tronco PSTN via Twilio | Sim | [`arcos/channel-gateway-multi-channel.md`](arcos/channel-gateway-multi-channel.md) |
+| `webrtc` | ⚠️ **Sinalização sim, MÍDIA não** — SFU nunca provisionado; ver correção abaixo | Não | [`arcos/arc15-webrtc.md`](arcos/arc15-webrtc.md), [`adr/adr-voice-media-plane.md`](adr/adr-voice-media-plane.md) |
+| `voice` / PSTN | ⚠️ **NÃO FUNCIONA** — ver correção abaixo | — | [`adr/adr-voice-media-plane.md`](adr/adr-voice-media-plane.md) |
 
-**WebRTC com negociação de canais.** O canal WebRTC (browser-to-SFU, LiveKit self-hosted) negocia o medium em tempo real com fallback **vídeo → voz → texto**. Agentes de IA atendem em texto; agentes humanos atendem em vídeo, voz e texto. A negociação considera as `media_capabilities` do agente e a ordem de fallback do pool. Ver [`arcos/arc15-webrtc.md`](arcos/arc15-webrtc.md).
+**WebRTC com negociação de canais** *(⚠️ projeto — o plano de sinalização roda, o de mídia nunca foi provisionado: zero serviço LiveKit em compose algum, SDK fora de `channel-gateway/pyproject.toml:6-23`, e sem credencial o provider entra em `_dev_mode` devolvendo token e sala placebo — `webrtc_provider.py:167`)*. O canal WebRTC (browser-to-SFU, LiveKit self-hosted) negocia o medium em tempo real com fallback **vídeo → voz → texto**. Agentes de IA atendem em texto; agentes humanos atendem em vídeo, voz e texto. A negociação considera as `media_capabilities` do agente e a ordem de fallback do pool. Ver [`arcos/arc15-webrtc.md`](arcos/arc15-webrtc.md).
+
+> ⚠️ **Correção de 2026-08-19 — medido.** Esta tabela classificou `voice`/PSTN como *"Implementado"*
+> desde a auditoria de 2026-05, e a seção abaixo descreve um canal que **não roda**. Medido:
+> `VoiceAdapter.handle_inbound` chama **cinco** métodos que não existem em lugar nenhum de
+> `packages/channel-gateway` — `_open_session`, `_route_inbound`, `_publish_inbound`,
+> `_normalize_text`, `_normalize_menu_result` (`adapters/voice.py:236,247,433,558,565`; ausentes em
+> `adapters/base.py:44-77`). Os cinco são **mockados** em `tests/test_voice_adapter.py:116-121`, que é
+> por isso que a suíte é verde. Em runtime real o inbound levanta `AttributeError` **antes de publicar
+> qualquer coisa** em `conversations.inbound`, e não há uma única sessão de voz no ambiente.
+>
+> Correlatos no mesmo adapter: `channel_name` em vez de `channel` (`voice.py:90`, viola a ABC);
+> `stt_queue` nunca drenada e `_handle_stt_result` sem chamador ⇒ **collect por voz morto**, só DTMF
+> (`voice.py:624-629,657`); `hangup` lê chave nunca escrita (`voice.py:884`); `_get_contact_id`
+> retorna `None` por construção (`voice.py:1032-1037`); `deliver_outbound` nunca invocado
+> (`voice.py:772` vs `outbound_consumer.py:95-106`).
+>
+> **O desenho descrito abaixo continua válido e é reaproveitado** — o que não existe é a execução.
+> A reconstrução vive em [`adr/adr-voice-media-plane.md`](adr/adr-voice-media-plane.md), onde as
+> interfaces de provider, o `FallbackSTTProvider`/`FallbackTTSProvider` e a gravação por segmento com
+> aviso LGPD são preservados. Leia o que segue como **projeto**, não como estado.
 
 **Voz/PSTN com STT e TTS.** O canal `voice` opera sobre um tronco PSTN externo: o `VoiceAdapter` faz a ponte entre o plano de eventos da plataforma e o plano de mídia (conference room do CPaaS). Os provedores são abstraídos por interfaces (`IVoiceProvider`, `ISTTProvider`, `ITTSProvider`), trocáveis sem refatorar o adapter:
 

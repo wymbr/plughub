@@ -19,15 +19,35 @@ A Gateway Layer opera na fronteira entre o exterior (canais de comunicação, pr
 
 ## Componentes
 
+> ⚠️ **Correção de 2026-08-19 — medido.** As linhas de **Voice Gateway** e de **canal WebRTC** desta
+> camada descrevem **projeto, não estado** — o desenho segue válido, a afirmação de que estão
+> implementados é **falsa**.
+> - **Não existe "Voice Gateway em Go" no repositório** — nenhum componente Go. O canal `voice` é o
+>   `VoiceAdapter` Python, e ele **não roda**: `handle_inbound` chama cinco métodos inexistentes —
+>   `_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`, `_normalize_menu_result`
+>   (`packages/channel-gateway/adapters/voice.py:236,247,433,558,565`; ausentes em
+>   `adapters/base.py:44-77`) — mockados em `tests/test_voice_adapter.py:116-121`, e é por isso que a
+>   suíte é verde. Em runtime real levanta `AttributeError` antes de publicar em
+>   `conversations.inbound`. Correlatos: `channel_name` em vez de `channel` (`voice.py:90`);
+>   `stt_queue` nunca drenada e `_handle_stt_result` sem chamador ⇒ **collect por voz morto**, só DTMF.
+> - **`webrtc` roda só na sinalização.** O plano de **mídia** nunca foi provisionado: zero serviço
+>   LiveKit em compose algum, zero env `LIVEKIT_*`, SDK fora de
+>   `packages/channel-gateway/pyproject.toml:6-23`, e sem credencial o provider entra em `_dev_mode`
+>   devolvendo token, sala e egress **placebo** (`webrtc_provider.py:167`). Ver
+>   [`../arcos/arc15-webrtc.md:3-17`](../arcos/arc15-webrtc.md).
+>
+> Consequência: o discador está **BLOQUEADO** por falta de plano de mídia — não apenas "planejado".
+> Reconstrução: [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
+
 ### Gateway de canal
 
 | Componente | Runtime | Responsabilidade |
 |---|---|---|
 | **Channel Normalizer** | Python (channel-gateway) | Envelope único para todos os canais; correlação cross-canal; rate limit por customer_id |
 | **WhatsApp / Chat / SMS / Email Adapters** | Python (channel-gateway) | Protocolo-específico: HMAC, dedup, janela, mídia, thread management |
-| **Voice Gateway** | Go | Recepção SIP, mixing de áudio, interface com STT Router. Alta concorrência e baixa latência. Horizonte 1. |
-| **STT Router** | Go | Roteamento de stream de áudio para NVIDIA Riva ou Deepgram com fallback automático. Fine-tuning LoRA por tenant. |
-| **Canal WebRTC** | Python (channel-gateway) + LiveKit (SFU self-hosted) | Canal `webrtc` implementado (Arc 15) — signaling, negociação de medium (vídeo → voz → texto), pipeline STT/TTS, gravação por egress. Ver [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md). |
+| **Voice Gateway** | *(projeto — Go)* | Recepção SIP, mixing de áudio, interface com STT Router. **Não existe no repositório** (nenhum componente Go); o canal `voice` hoje é o `VoiceAdapter` Python, que não roda. Desenho, não estado. |
+| **STT Router** | *(projeto — Go)* | Roteamento de stream de áudio para NVIDIA Riva ou Deepgram com fallback automático; fine-tuning LoRA por tenant. **Não existe no repositório** (mesmo caso do Voice Gateway acima — nenhum componente Go). O que existe é `FallbackSTTProvider` em Python (`adapters/voice_provider.py`), e ele não tem stream de áudio a rotear enquanto os canais de áudio não subirem. |
+| **Canal WebRTC** | Python (channel-gateway) + LiveKit (SFU self-hosted — **não provisionado**) | Canal `webrtc`: **só a sinalização roda**. Negociação de medium (vídeo → voz → texto), pipeline STT/TTS e gravação por egress são **projeto** — sem SFU, sem SDK, `_dev_mode` placebo. Ver [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md). |
 
 ### AI Gateway
 
@@ -54,7 +74,7 @@ A Gateway Layer opera na fronteira entre o exterior (canais de comunicação, pr
 - Saída para modelos: Anthropic API (ou outros providers configurados via `model_profile`)
 - Saída de estado: Redis `session:{session_id}:ai` + pub/sub `session:updates:{session_id}` (consumido pelo Rules Engine)
 
-**STT (pipeline de voz):**
+**STT (pipeline de voz)** — *projeto; nenhuma das duas pontas de áudio está de pé (ver correção acima)*:
 
 ```
 Voice Gateway (SIP/WebRTC) → stream de áudio
@@ -106,7 +126,7 @@ Rules Engine avaliou em paralelo via pub/sub
 
 **Fallback de modelo:** quando o provider primário retorna `ProviderError` retryável, o AI Gateway tenta automaticamente o `fallback` declarado no `model_profile`. Transparente para o chamador.
 
-**Voice Gateway — componente Go:** latência crítica (≤ 1.500ms budget). Implementado em Go para alta concorrência. Fora do monorepo principal no Horizonte 1 — repositório de infra separado.
+**Voice Gateway — componente Go *(projeto, não implementado)*:** latência crítica (≤ 1.500ms budget); *previsto* em Go para alta concorrência, fora do monorepo principal no Horizonte 1. **Não existe** — não há componente Go no repositório, e o `VoiceAdapter` Python que ocupa hoje esse papel levanta `AttributeError` em runtime real (ver correção em § Componentes).
 
 **STT fine-tuning:** LoRA por tenant para vocabulário específico de domínio (termos técnicos, nomes de produtos). Métricas WER por tenant, fallback automático Riva → Deepgram.
 
@@ -119,5 +139,5 @@ Rules Engine avaliou em paralelo via pub/sub
 - Seção 2.2a — AI Gateway
 - Seção 7.1 — Messaging Gateway
 - Seção 7.3 — Email Multi-Provider
-- Seção 7.4 — WebRTC Gateway (canal `webrtc` implementado no Arc 15)
+- Seção 7.4 — WebRTC Gateway (canal `webrtc`: sinalização de pé, plano de mídia **não provisionado** — ver correção em § Componentes)
 - Seção 5.5 — SLAs por Componente

@@ -6,6 +6,18 @@
 > **Diagrama:** `business-in-any-media-3-niveis.svg`.
 > **Data:** Junho 2026.
 
+> ⚠️ **Correção de 2026-08-19 — medido.** A classificação do nível (c) como **"Implementado — adapters de
+> webchat, WhatsApp, SMS, e-mail, voz, WebRTC"** é **falsa quanto a voz e WebRTC**, e o `dialer` pressuposto no
+> §5 não existe. `VoiceAdapter.handle_inbound` chama cinco métodos inexistentes em `packages/channel-gateway`
+> (`_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`, `_normalize_menu_result` —
+> `adapters/voice.py:236,247,433,558,565`), mockados em `tests/test_voice_adapter.py:116-121`: `AttributeError`
+> em runtime real, sem uma única sessão de voz no ambiente; `collect`/menu por voz está morto
+> (`voice.py:624-629,657`), sobrando no máximo DTMF. Em WebRTC só a sinalização roda — plano de mídia nunca
+> provisionado (zero LiveKit em compose, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode`
+> placebo em `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje**, e o discador está
+> **bloqueado por falta de plano de mídia**. O modelo de três níveis e os contratos abaixo seguem válidos como
+> arquitetura-alvo. Ver [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, V-F0..V-F5).
+
 ---
 
 ## 1. Tese
@@ -24,7 +36,7 @@ O slogan operacional disso é: **o negócio não pertence a um canal**. Ele nasc
 |---|---|---|---|
 | **(a) Fluxo negocial** | A lógica de negócio, **totalmente abstraída de canal**. Não importa por onde o cliente acessou. | Perfil `workflow` (pool `webhook`). Steps `task/choice/catch/escalate/complete/invoke/reason/suspend/collect/receive`. **Proibido** `menu/notify/begin/end_transaction`. `session_id` persistente; `suspend`/`resume` via Redis TTL. | **Implementado** — e o perfil `workflow` do Arc 19 *força por contrato* que (a) não toque canal. |
 | **(b) Fluxo de acesso aos canais** | Conduz episódios de interação nos canais e **concilia as trocas de canal**. É a ponte entre o negócio abstrato e o canal concreto. | Perfil `agent` (fino), apoiado por serviço de negociação de mídia (Arc 16). | **Parcial / a consolidar** — as peças existem dispersas (`collect`, negociação Arc 16, mapas por canal), mas não como camada explícita e reusável. |
-| **(c) Agente de I/O no canal** | A interação concreta naquele canal: render nativo, captura de input, mídia. | Perfil `agent` (`menu/notify/masked input`) + Channel Adapter (WS / webhook / bot-leg, STT/TTS, upload). | **Implementado** — adapters de webchat, WhatsApp, SMS, e-mail, voz, WebRTC. |
+| **(c) Agente de I/O no canal** | A interação concreta naquele canal: render nativo, captura de input, mídia. | Perfil `agent` (`menu/notify/masked input`) + Channel Adapter (WS / webhook / bot-leg, STT/TTS, upload). | **Parcial** — adapters de webchat, WhatsApp, SMS e e-mail implementados; **voz e WebRTC são projeto** (não funcionam — ver banner no topo). |
 
 A regra de ouro que mantém os níveis limpos: **(a) nunca sabe por onde fala; (c) nunca conhece o negócio; (b) traduz entre os dois e é o único que entende "canal".**
 
@@ -84,7 +96,7 @@ A loja é o caso de uso emblemático do "business in any media".
 - **A espinha transacional é o fluxo (a).** Oferta → cesta → pagamento → entrega → troca é um workflow perfil-`workflow`, abstraído de canal. Esperas longas (confirmação de pagamento, status de entrega, decisão de troca) usam `suspend`/`collect`. Pagamento usa `begin/end_transaction` (input mascarado nunca tocando Redis/stream/log) — mas como `begin/end_transaction` é proibido no perfil `workflow`, a coleta de pagamento é delegada a (b)/(c) via o contrato de interação. **Isto é composição, não monólito:** (a) abstrato delega a (b) interativo.
 - **(b) faz "falar com o comprador onde ele estiver"** e concilia trocas de canal; **(c) renderiza** os cards/cesta/checkout por canal.
 - **Navegação/catálogo permanece leitura pura** — alta frequência, baixa latência, read-heavy. Não rotear cada page view por sessão/agente (seria caro e bate com o billing por capacidade). Sessões nascem nos estágios **transacionais** (cesta em diante).
-- **Outbound gerador de receita** via `collect` + dialer: recuperação de carrinho, recompra, win-back.
+- **Outbound gerador de receita** via `collect` + dialer: recuperação de carrinho, recompra, win-back. *(**Projeto quanto ao dialer**: ele não existe e está bloqueado por falta de plano de mídia — banner no topo. Pelos canais de texto o `collect` outbound é real.)*
 - **Humano só na exceção** (ticket alto, fraude, troca complexa): entra como especialista na mesma sessão, sem handoff visível.
 - **Prova da substituição IA → humano:** a Bancada de Agentes já compara **humano × IA** e correlaciona com deploy epochs; o Cross-cut (resolução × qualidade × NPS) remapeia para **conversão × qualidade × satisfação**. Você demonstra com dado que o "vendedor IA v3" converte melhor que o v2 e que o humano.
 

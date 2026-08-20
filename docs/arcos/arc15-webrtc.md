@@ -606,7 +606,7 @@ webrtc_tts_injection_enabled: bool = True
 
 | Questão | Status |
 |---|---|
-| Bridge PSTN → WebRTC (caller externo entra na sala LiveKit via SIP trunk) | Deferido — requer LiveKit SIP Ingress (suportado, precisa avaliação) |
+| Bridge PSTN → WebRTC (caller externo entra na sala LiveKit via SIP trunk) | ~~Deferido~~ **DECIDIDO 2026-08-20** — [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) **V3**: um único plano de mídia, a SALA; entrada por SIP ou por navegador, internamente sempre a sala. Custos nomeados lá: transcodificação G.711↔Opus, SFU como ponto único de falha, e `REFER` de saída no gateway SIP (risco novo). Esta linha ficou "deferido, precisa avaliação" por meses e a ideia foi repetida em 4 documentos sem nunca ser estudada — ver a emenda da V3 |
 | Máximo de participantes por room (multi-party) | Definir por pool config: `webrtc_max_participants` |
 | Layout de gravação por pool (speaker/grid) | `webrtc_egress_layout: "speaker" \| "grid"` |
 | Whisper do supervisor via DataChannel (formato e visibilidade) | Usar `agents_only` visibility no stream — igual a nota interna |

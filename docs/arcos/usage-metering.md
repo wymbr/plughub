@@ -55,12 +55,25 @@ Schema: `UsageEventSchema` in `@plughub/schemas/src/usage.ts`
 
 ### Pending (wiring, not the adapters)
 
-The channel adapters (WhatsApp, SMS, Email, Voice) were all created on 2026-05-20. What remains pending is the **wiring**: the adapters do not yet call the metering functions in `usage_emitter.py`. The emitter functions are ready; the adapter call sites still need to be added.
+The channel adapters (WhatsApp, SMS, Email, Voice) were all created on 2026-05-20. For WhatsApp, SMS and Email what remains pending is the **wiring**: the adapters do not yet call the metering functions in `usage_emitter.py`. The emitter functions are ready; the adapter call sites still need to be added.
+
+> ⚠️ **Correction of 2026-08-19 — measured.** For the **audio** channels this is **not just missing
+> wiring — the adapter does not run**. `VoiceAdapter.handle_inbound` calls five methods that do not
+> exist in `packages/channel-gateway`: `_open_session`, `_route_inbound`, `_publish_inbound`,
+> `_normalize_text`, `_normalize_menu_result` (`adapters/voice.py:236,247,433,558,565`; absent from
+> `adapters/base.py:44-77`). All five are mocked in `tests/test_voice_adapter.py:116-121` — that is why
+> the suite is green. In real runtime it raises `AttributeError` before publishing to
+> `conversations.inbound`, so there is no call site to wire. WebRTC has signalling only: no LiveKit
+> service in any compose file, no `LIVEKIT_*` env, SDK absent from
+> `packages/channel-gateway/pyproject.toml:6-23`, and without credentials the provider falls into
+> `_dev_mode` returning placebo token/room/egress (`webrtc_provider.py:167`). `voice_minutes` is
+> therefore blocked on the media plane, not on metering. Rebuild:
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
 
 | Dimension | Status |
 |---|---|
 | `whatsapp_conversations` | Function in `usage_emitter.py` ready — WhatsApp adapter exists but does not yet call it |
-| `voice_minutes` | Function ready — Voice/WebRTC adapters exist but do not yet call it |
+| `voice_minutes` | Function ready — **blocked, not merely unwired**: the Voice adapter raises `AttributeError` at runtime and WebRTC has no media plane provisioned (see correction above) |
 | `sms_segments` | Function ready — SMS adapter exists but does not yet call it |
 | `email_messages` | Function ready — Email adapter exists but does not yet call it |
 

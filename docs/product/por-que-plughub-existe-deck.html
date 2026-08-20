@@ -114,8 +114,31 @@
 <div id="hint">← → navegar · N notas · P imprimir/PDF</div>
 <div id="stage">
 
+<!-- 0 · AVISO DE CORREÇÃO — 2026-08-19 -->
+<section class="slide active" data-notes="Slide de correção acrescentado em 2026-08-19 por MEDIÇÃO. Não pular: o slide 'o que já foi construído' listava 'canais e voz' como esforço entregue, e voz não está entregue. Se a plateia for comercial, dizer em voz alta que voz e WebRTC saem de qualquer proposta até a reconstrução andar.">
+  <div class="kicker">Correção — 2026-08-19</div>
+  <h3 style="color:#DC2626">Voz e WebRTC não estão entregues</h3>
+  <div style="border:2px solid #DC2626;background:#FEF2F2;padding:22px 26px;margin-top:24px;border-radius:8px">
+    <p style="font-size:17px;line-height:1.55">
+      <b style="color:#DC2626">⚠️ Medido em 2026-08-19.</b>
+      Este material trata voz/PSTN e WebRTC como capacidades entregues.
+      <b>Nenhum dos dois canais de áudio funciona hoje</b>: o adapter de voz levanta
+      <code>AttributeError</code> no caminho de entrada — cinco métodos inexistentes, mockados no teste,
+      e por isso a suíte fica verde — e nada é publicado no barramento de contatos. O WebRTC tem
+      sinalização, mas <b>nenhum SFU provisionado em ambiente algum</b>: sem LiveKit em compose, sem o SDK
+      nas dependências do gateway de canais, com token e sala devolvidos por um modo de desenvolvimento.
+    </p>
+    <p style="font-size:17px;line-height:1.55;margin-top:14px">
+      O discador está <b>bloqueado</b>, não planejado — depende desse plano de mídia.
+      <b>Não usar estes trechos em proposta comercial</b> até a reconstrução
+      (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
+      Os canais de texto e o webhook seguem em operação.
+    </p>
+  </div>
+</section>
+
 <!-- 1 -->
-<section class="slide dark active" data-notes="Deck interno. Objetivo: alinhar time/sócios sobre <b>por que o produto existe</b> — não é roteiro de venda.<br><br>Abrir dizendo: 'não vou listar funcionalidades. Vou defender por que este produto deveria existir, e admitir o que nele não justifica nada.'">
+<section class="slide dark" data-notes="Deck interno. Objetivo: alinhar time/sócios sobre <b>por que o produto existe</b> — não é roteiro de venda.<br><br>Abrir dizendo: 'não vou listar funcionalidades. Vou defender por que este produto deveria existir, e admitir o que nele não justifica nada.'">
   <div style="position:absolute;left:-160px;top:-190px;width:560px;height:560px;border-radius:50%;background:var(--graphite2)"></div>
   <div style="position:relative;padding-top:210px">
     <h1>Por que o PlugHub existe</h1>
@@ -365,7 +388,10 @@
     <div class="card">
       <div class="stat" style="color:var(--muted)">~70%</div>
       <h4 style="margin-top:12px">do esforço de engenharia</h4>
-      <p style="margin-top:8px">Canais e voz, console, dashboards, relatórios, ABAC, agenda, formulários, i18n, importadores.</p>
+      <p style="margin-top:8px">Canais de texto, console, dashboards, relatórios, ABAC, agenda, formulários, i18n, importadores.</p>
+      <p style="margin-top:8px;font-size:13px;color:#DC2626"><b>⚠️ Corrigido em 2026-08-19:</b> esta linha dizia
+      “canais e voz”. <b>Voz e WebRTC não estão entregues</b> — o adapter de voz quebra no caminho de entrada e o
+      WebRTC não tem SFU provisionado. Esforço gasto, capacidade não.</p>
     </div>
     <div>
       <div class="kicker teal" style="margin-bottom:12px">Justificam instrumentalmente:</div>

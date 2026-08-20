@@ -65,11 +65,22 @@ Esta camada vive **fora do monorepo principal** — repositório de infra separa
 
 **Fine-tuning LoRA:** técnica de fine-tuning eficiente (Low-Rank Adaptation) que adapta o Whisper ao vocabulário do tenant sem retreinar o modelo base completo. Reduz tempo de treinamento e custo de GPU.
 
-**Dimensionamento de GPU:** deve considerar os streams WebRTC (canal `webrtc` implementado — Arc 15) adicionalmente aos streams de voz/SIP — o STT pipeline é compartilhado entre os canais de áudio.
+> ⚠️ **Correção de 2026-08-19 — medido.** *"canal `webrtc` implementado — Arc 15"* é **falso** como
+> premissa de dimensionamento: **não há stream de áudio a dimensionar hoje**. O plano de mídia do
+> WebRTC nunca foi provisionado (zero serviço LiveKit em compose algum, zero env `LIVEKIT_*`, SDK fora
+> de `packages/channel-gateway/pyproject.toml:6-23`; sem credencial o provider entra em `_dev_mode` e
+> devolve token/sala/egress placebo — `webrtc_provider.py:167`; ver `docs/arcos/arc15-webrtc.md:3-17`),
+> e o canal `voice` não roda (`handle_inbound` chama cinco métodos inexistentes —
+> `adapters/voice.py:236,247,433,558,565`, ausentes em `adapters/base.py:44-77`, mockados em
+> `tests/test_voice_adapter.py:116-121` ⇒ `AttributeError` em runtime real). O texto abaixo é
+> **projeto**, válido a partir do momento em que existir plano de mídia. Reconstrução:
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
+
+**Dimensionamento de GPU *(projeto)*:** deve considerar os streams WebRTC adicionalmente aos streams de voz/SIP — o STT pipeline é compartilhado entre os canais de áudio. Hoje **nenhum dos dois canais de áudio está de pé** (ver correção acima).
 
 **Lifecycle policies:** modelos antigos no Object Storage seguem lifecycle policies por versão — versões sem instâncias ativas são arquivadas ou removidas após período configurável.
 
-**Retenção de áudio:** 30 dias (LGPD). Fine-tuning deve ser executado dentro desta janela ou usar datasets persistentes anotados separadamente.
+**Retenção de áudio:** ⚠️ *corrigido 2026-08-19* — deixou de ser um número fixo neste documento. É **item de configuração por classe de artefato** (namespace `storage` na config-api), decidido em [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) V5, porque o repositório tinha dois números conflitantes (30 dias aqui e em `07-data-layer.md`, 5 anos em `../arcos/channel-gateway-multi-channel.md:1371-1550`) e **nenhum dos dois estava implementado** — o que roda é `attachment_expiry_days: int = 30` em `channel-gateway/config.py:119`, um único valor em env para todas as classes. Consequência para MLOps: fine-tuning deve ser executado dentro da janela **configurada para a classe `call_recording`**, ou usar datasets persistentes anotados separadamente.
 
 **Horizonte 1 — escopo atual:**
 - Fine-tuning de STT por tenant
@@ -88,5 +99,5 @@ Esta camada vive **fora do monorepo principal** — repositório de infra separa
 
 - Seção 2.2 — Frameworks e SDKs (Ray Train, HuggingFace, NVIDIA Riva)
 - Seção 7.3 — STT Router e fine-tuning
-- Seção 7.4 — WebRTC Gateway (pipeline STT compartilhado; canal WebRTC implementado no Arc 15)
+- Seção 7.4 — WebRTC Gateway (pipeline STT compartilhado — **projeto**: só a sinalização do canal WebRTC roda, o plano de mídia não foi provisionado; ver correção em § Considerações operacionais)
 - Seção 13.4 — Data Mining (Horizonte 2 da Camada 3 analítica)

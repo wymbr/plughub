@@ -583,6 +583,8 @@ O Console ganhou componentes para tratar agentes AI como coparticipantes de prim
 
 ## Arc 15 — WebRTC overlay no Console
 
+> ⚠️ 2026-08-19 — os componentes abaixo **existem**; o que não existe é o SFU do outro lado (plano de mídia nunca provisionado — ver [`arc15-webrtc.md`](arc15-webrtc.md):3-17 e [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md)).
+
 - `WebRTCOverlay` — embutido no Console para sessões `channel=webrtc`; renderiza `VideoGrid` (2-up), waveform animado ou nenhum overlay conforme o medium negociado. `MediaControls`, `WebRTCSupervisorView` (observer read-only), hook `useWebRTCSession`. Namespace i18n `webrtc`.
 
 ## Audit LGPD

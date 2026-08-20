@@ -119,13 +119,36 @@ real, com agentes reais, clientes reais e volume real — só que delimitada.
 
 ### 3.2 O que fica de fora, por escolha
 
-**Voz.** O canal está **implementado e integrado** — tronco PSTN via Twilio, com transcrição e síntese de voz de
-provedores externos e substituíveis. Fica fora do piloto **de propósito**: é o caminho mais caro por minuto e o
-que menos rodou em operação até aqui, então começar por texto deixa a prova mais rápida, mais barata e com menos
-risco para você. Se sua operação exigir voz no piloto, é conversa de escopo e prazo — não impedimento técnico.
+> 🔴 **Correção de 2026-08-19 — medido. Esta seção continha compromisso comercial sobre capacidade que não
+> existe. Não usar em conversa com sponsor na forma anterior.**
+>
+> **Voz não está implementada.** Medido: `VoiceAdapter.handle_inbound` chama cinco métodos que não existem em
+> `packages/channel-gateway` (`adapters/voice.py:236,247,433,558,565`), mockados em
+> `tests/test_voice_adapter.py:116-121` — a suíte fica verde e o runtime levanta `AttributeError` **antes de
+> publicar qualquer coisa**. Não há uma única sessão de voz no ambiente. O canal `webrtc` também não tem plano de
+> mídia (nenhum SFU provisionado em ambiente algum).
+>
+> **O que isso derruba, explicitamente:** *"é conversa de escopo e prazo — não impedimento técnico"* estava
+> errado — **é impedimento técnico**, e o trabalho é um arco de construção
+> ([`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md), fases V-F0 a V-F5), não uma ativação.
+> E como o disparo outbound por voz depende do mesmo `VoiceAdapter`, *"uma campanha outbound roda"* vale **só
+> para os canais de texto** (WhatsApp, SMS, e-mail, webchat), que de fato rodam.
+>
+> **O que continua verdadeiro:** o desenho de voz (providers atrás de interface, sem stack de telefonia própria,
+> sem lock-in) segue válido e é reaproveitado; e o substrato de campanha — audiência, fadiga de contato,
+> importação, máquina de estado por destinatário — está implementado e roda pelos canais de texto.
+>
+> **Ação pendente para o time, não para a documentação:** a decisão de escopo do piloto foi tomada sobre a
+> premissa de que voz existia. Ela precisa ser retomada. Ver o mesmo aviso em
+> [`operacao-piloto-e-rodada-2.md`](operacao-piloto-e-rodada-2.md) §1.3.
 
-**Campanha ativa (outbound).** Também está implementada, ponta a ponta: audiência, campanha, controle de fadiga
-de contato, importação de base e o disparo por qualquer canal, inclusive voz. **Uma campanha outbound roda.** O
+**Voz.** ~~O canal está **implementado e integrado**~~ — **em reconstrução (ver correção acima)**. O desenho é
+tronco PSTN via provedor, com transcrição e síntese de voz de provedores externos e substituíveis. Fica fora do
+piloto: além do custo por minuto, **hoje é impedimento técnico**, não escolha.
+
+**Campanha ativa (outbound).** Implementada ponta a ponta **nos canais de texto**: audiência, campanha, controle
+de fadiga de contato, importação de base e disparo por WhatsApp, SMS, e-mail e link web. **Uma campanha outbound
+roda** — ~~inclusive voz~~ **exceto voz**, que depende do adapter em reconstrução. O
 que ainda não existe é a camada de **otimização de discagem** — o pacing preditivo que estima taxa de atendimento
 para manter o agente ocupado. Em volume moderado isso não faz falta; em alto volume, é onde as plataformas
 maduras entregam mais eficiência que nós hoje. É diferença de otimização, não de capacidade.

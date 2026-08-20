@@ -57,10 +57,32 @@ O critério de corte: **entra tudo que é difícil de provar depois; fica de for
 | Item | Motivo |
 |---|---|
 | **Multi-tenant completo** | Um sponsor = um tenant. Hardening entra na rodada, não no piloto |
-| **Otimização de discagem (pacing preditivo)** | A campanha outbound **funciona**, inclusive por voz — o que falta é o pacing preditivo e os guards regulatórios como invariante do motor (§25.3 do descritivo). Em volume moderado não faz falta. Não confundir com "outbound não existe" |
+| **Otimização de discagem (pacing preditivo)** | ⚠️ *Corrigido 2026-08-19:* a campanha outbound **funciona pelos canais de texto**; ~~inclusive por voz~~ **não por voz** (depende do adapter em reconstrução). O pacing preditivo não é o que falta primeiro — falta o plano de mídia. Segue valendo: não confundir com "outbound não existe" |
 | **WFM** | Não é foco; integra via MCP quando houver |
 | **Maioria dos canais** | Um síncrono + um assíncrono bastam para provar o modelo |
 | **Escala** | O piloto prova **valor**; a rodada prova **escala**. Não confundir os dois entregáveis |
+
+> 🔴 **A decisão abaixo foi tomada sobre uma premissa FALSA — medido em 2026-08-19. Não usar o roteiro de
+> discurso dela.**
+>
+> A decisão de 2026-07-29 se apoia inteiramente em *"voz existe"*. Não existe. `VoiceAdapter.handle_inbound`
+> chama cinco métodos que não existem em `packages/channel-gateway` (`adapters/voice.py:236,247,433,558,565`),
+> mockados em `tests/test_voice_adapter.py:116-121` — verde na suíte, `AttributeError` no runtime, e nenhuma
+> sessão de voz jamais existiu no ambiente. O canal `webrtc` também não tem plano de mídia.
+>
+> **Consequência direta na sala:** a frase *"temos voz e escolhemos não começar por ela"* **não pode ser dita**.
+> A posição honesta hoje é *"voz está em reconstrução e por isso não entra no piloto"* — que é, de fato, a mesma
+> recomendação de escopo, com fundamento diferente e sem risco de descoberta pelo sponsor. E *"se o sponsor
+> insistir em voz, é negociação de escopo e de preço — não impedimento técnico"* está **invertido**: é
+> impedimento técnico, com arco de construção próprio
+> ([`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md), fases V-F0 a V-F5).
+>
+> **Outbound:** a campanha ativa roda de verdade — mas **pelos canais de texto**. O disparo por voz depende do
+> mesmo adapter, então *"funciona por qualquer canal, inclusive voz"* é falso. O substrato (audiência, fadiga,
+> importação, máquina de estado por destinatário) está implementado e é entregável real.
+>
+> **A decisão de escopo do piloto permanece a mesma; o fundamento e o discurso mudam.** Retomar com o time antes
+> da próxima conversa comercial. Texto original preservado abaixo como registro.
 
 > **Decisão tomada — canais do piloto (2026-07-29).** Voz **existe e fica fora do escopo do piloto**. São duas
 > afirmações diferentes e as duas importam:
@@ -268,13 +290,13 @@ parte dos decks não tem.
 | **Concentração de receita** | Poucas contas grandes = risco que o investidor precifica | Segunda conta no M4 como marco explícito |
 | **Certificação atrasa a venda** | 6–12 meses de calendário que não comprimem | Começar no mês 1 da rodada; usar o piloto como ambiente de evidência |
 | **Bus factor de 2 engenheiros** | Primeiro achado de due diligence técnica | Contratação no início da rodada, não no meio |
-| **Voz no escopo do piloto** | É a parte menos madura e a mais cara | Negociar canais no escopo; preferir começar por texto |
+| **Voz no escopo do piloto** | ⚠️ *Corrigido 2026-08-19 (medido):* ~~é a parte menos madura e a mais cara~~ — não é imaturidade, é **não-entrega**: o canal de voz está em reconstrução (o `VoiceAdapter` levanta `AttributeError` em runtime e o WebRTC não tem plano de mídia), com arco de construção próprio | Negociar canais no escopo; preferir começar por texto |
 
 ---
 
 ## 6. O que ainda precisa ser decidido
 
-1. ~~**Canais do piloto**~~ — **decidido** (§1.3): voz existe, fica fora do piloto; começa por texto.
+1. ~~**Canais do piloto**~~ — **decidido** (§1.3): ~~voz existe,~~ fica fora do piloto; começa por texto. ⚠️ *Corrigido 2026-08-19: a decisão vale, o fundamento não — **voz não existe**, está em reconstrução (§1.3).*
 2. ~~**Perfil do sponsor**~~ — **decidido**: o material atende **os dois perfis**, empresa grande usuária e BPO.
    Não se sabe quem adere primeiro, e o ideal é ter mais de uma conversa viva (é também a mitigação do risco de
    sponsor único, §5). O material do sponsor tem espinha comum e dois blocos variantes — a dor e a contrapartida

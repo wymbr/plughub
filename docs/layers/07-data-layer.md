@@ -96,9 +96,23 @@ Colunar, append-only por design. Queries sobre bilhões de linhas em segundos. A
 
 Blob storage com lifecycle policies por idade para controle de custo.
 
-| Conteúdo | Retenção | Uso |
+> ⚠️ **Correção de 2026-08-19 — medido.** A retenção desta tabela **não é o que roda**, e havia
+> conflito doc×doc: 30 dias aqui, **5 anos** em `arcos/channel-gateway-multi-channel.md:1371-1550`
+> para o mesmo áudio de ligação. Nenhum dos dois descreve o código. O que existe é
+> `attachment_expiry_days: int = 30` em `channel-gateway/config.py:119` — **um número único, em env,
+> para todas as classes de artefato**, o que viola três invariantes de configuração da plataforma
+> (*env só para segredo e topologia* · *one source per domain* · *every config field is UI-editable*).
+> Como a gravação de voz já grava no AttachmentStore (`voice.py:410-416`), os 5 anos **não têm
+> implementação**: o ciclo apagaria a gravação aos 30 dias.
+>
+> **Decidido (2026-08-19, [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) V5):**
+> retenção é **item de configuração por classe de artefato**, namespace `storage` na config-api, com
+> superfície de UI. Os números abaixo passam a ser **defaults sugeridos**, não regra — e o default de
+> gravação é decisão de negócio/jurídico, não de arquitetura.
+
+| Conteúdo | Retenção *(default sugerido — ver correção acima)* | Uso |
 |---|---|---|
-| Áudio de ligações (SIP/WebRTC) | 30 dias (LGPD) | Auditoria, dataset de fine-tuning |
+| Áudio de ligações (SIP/WebRTC) | classe `call_recording` — default a definir | Auditoria, dataset de fine-tuning |
 | Datasets de fine-tuning STT | Lifecycle por uso | Ray Train (MLOps Layer) |
 | Versões de modelos STT | Lifecycle por versão | Model Registry (MLOps Layer) |
 | Mídia de WhatsApp (URLs expiram em ~5min) | 30 dias | Contexto de conversa |

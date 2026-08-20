@@ -114,6 +114,19 @@
 </head>
 <body>
 
+<!-- ================= AVISO DE CORREÇÃO — 2026-08-19 ================= -->
+<div style="border:2px solid #DC2626;background:#FEF2F2;color:#3E434D;padding:5mm 6mm;margin:6mm auto;
+            max-width:186mm;border-radius:2mm;font-size:9.5pt;line-height:1.45">
+  <strong style="color:#DC2626">⚠️ Correção de 2026-08-19 — medido.</strong>
+  Este material afirma voz/PSTN e WebRTC como capacidades entregues.
+  <strong>Nenhum dos dois canais de áudio funciona hoje</strong>: o adapter de voz levanta
+  <code>AttributeError</code> no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o
+  WebRTC não tem SFU provisionado em ambiente algum — a sinalização roda, a mídia não. O discador está
+  <strong>bloqueado</strong>, não planejado. <strong>Não usar estes trechos em proposta comercial</strong>
+  até a reconstrução (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
+  Os canais de texto (webchat, WhatsApp, SMS, e-mail, Instagram, Telegram) e o webhook seguem em operação.
+</div>
+
 <!-- ================= 1 · CAPA ================= -->
 <section class="page cover">
   <div class="orb" style="width:120mm;height:120mm;right:-40mm;top:-45mm"></div>
@@ -747,7 +760,8 @@
 <!-- ================= 9 · CAMADA 3 — CANAIS ================= -->
 <section class="page">
   <div class="kicker">Camada 3</div>
-  <h2>Abstração de canais — receptivo e ativo <span class="seal">em operação</span></h2>
+  <h2>Abstração de canais — receptivo e ativo <span class="seal">em operação (texto)</span>
+    <span class="seal" style="border-color:#DC2626;color:#DC2626">áudio em reconstrução</span></h2>
   <p style="max-width:172mm">
     Adaptadores concentram todo o conhecimento específico de canal: normalização de entrada, renderização de saída
     e degradação de interação. Nenhuma lógica de canal existe no motor de fluxo. Um menu com botões vira lista
@@ -755,15 +769,26 @@
   </p>
   <div class="chips" style="margin-bottom:3mm">
     <span class="chip">webchat</span><span class="chip">WhatsApp</span><span class="chip">SMS</span>
-    <span class="chip">e-mail</span><span class="chip">voz (PSTN)</span><span class="chip">WebRTC / SFU</span>
+    <span class="chip">e-mail</span>
+    <span class="chip" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">voz (PSTN) — em reconstrução</span>
+    <span class="chip" style="background:#FEF2F2;color:#DC2626;border:1px solid #DC2626">WebRTC / SFU — em reconstrução</span>
     <span class="chip">Instagram</span><span class="chip">Telegram</span><span class="chip">webhook</span>
+  </div>
+  <div style="border-left:3px solid #DC2626;background:#FEF2F2;padding:3mm 4mm;margin-bottom:3mm;font-size:8.6pt">
+    <strong style="color:#DC2626">⚠️ Medido em 2026-08-19 —</strong> os dois canais de <strong>áudio</strong> não
+    estão entregues. O adaptador de voz levanta erro no caminho de entrada (cinco métodos inexistentes, mockados no
+    teste) e nada chega ao barramento de contatos; o WebRTC tem sinalização, mas <strong>nenhum SFU provisionado</strong>
+    em ambiente algum — sem LiveKit em compose, sem SDK no pacote, com token e sala devolvidos por um modo de
+    desenvolvimento. A abstração de canal descrita abaixo é real e vale para os canais de texto; o áudio está em
+    reconstrução sob <code>docs/adr/adr-voice-media-plane.md</code>.
   </div>
   <div class="grid2">
     <div class="card">
       <h4>Canal × meio</h4>
       <p><em>Canal</em> é filtro duro de roteamento — casamento obrigatório. <em>Meio</em> (voz, vídeo, mensagem,
       e-mail) é fator de score, ajuste fino. Em WebRTC o meio é negociado em tempo real, de vídeo para voz e para
-      texto, sem trocar de sessão.</p>
+      texto, sem trocar de sessão — <strong style="color:#DC2626">desenho, não capacidade entregue</strong>: sem SFU
+      provisionado, a negociação de meio com áudio e vídeo não roda em ambiente algum (medido 2026-08-19).</p>
     </div>
     <div class="card">
       <h4>Ativo pelo mesmo motor</h4>
@@ -793,8 +818,10 @@
     <p style="margin-top:2.2mm"><strong>O limite, dito com clareza:</strong> a inversão não cobre tudo. Cobrança
     de valor relevante, prospecção fria e urgência regulatória continuam exigindo voz ativa em volume, e aí
     <strong>não temos discador preditivo</strong> — pacing power, progressivo e preview, guarda de taxa de abandono
-    e listas restritivas são roadmap. Um modelo que começa por mensagem também pressupõe letramento digital, que
-    nem toda base tem. Onde a inversão não serve, os incumbentes entregam hoje e nós não.</p>
+    e listas restritivas são roadmap. <strong>Correção de 2026-08-19:</strong> o discador não está apenas ausente,
+    está <strong>bloqueado</strong> — depende de um plano de mídia que hoje não existe (canal de voz quebrado no
+    caminho de entrada, WebRTC sem SFU provisionado). Um modelo que começa por mensagem também pressupõe letramento
+    digital, que nem toda base tem. Onde a inversão não serve, os incumbentes entregam hoje e nós não.</p>
   </div>
 
   <div class="card teal" style="margin-top:4mm">
@@ -1083,7 +1110,7 @@
 
     <rect x="6" y="26" width="96" height="52" rx="6" fill="#2E3138"/>
     <text x="54" y="46" text-anchor="middle" font-family="Calibri,Arial" font-size="10.5" font-weight="700" fill="#fff">canais</text>
-    <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">voz · chat · WA</text>
+    <text x="54" y="60" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">chat · WA · SMS</text>
     <text x="54" y="72" text-anchor="middle" font-family="Calibri,Arial" font-size="9" fill="#C9CDD4">e-mail · webhook</text>
 
     <line x1="104" y1="52" x2="124" y2="52" stroke="#990011" stroke-width="2" marker-end="url(#b1)"/>
@@ -1349,7 +1376,10 @@
     </tr>
     <tr>
       <td class="k">Object storage</td><td>Mídia</td>
-      <td>Gravações de voz e WebRTC, anexos de webchat com expiração em duas fases.</td>
+      <td>Anexos de webchat com expiração em duas fases.
+      <strong style="color:#DC2626">⚠️ Gravação de voz e WebRTC não está entregue</strong> (medido 2026-08-19): os
+      dois canais de áudio não rodam — o adaptador de voz levanta erro no caminho de entrada e o WebRTC não tem SFU
+      provisionado. A gravação é fase da reconstrução do plano de mídia, não capacidade em operação.</td>
     </tr>
   </table>
 
@@ -1396,11 +1426,21 @@
       trilha de auditoria por chamada, registro imutável de acesso a dado sensível e mascaramento por papel.</td>
     </tr>
     <tr>
+      <td class="k" style="color:#DC2626">Canais de áudio — voz/PSTN e WebRTC</td>
+      <td><strong>Não estão entregues</strong> (medido em 2026-08-19). O adaptador de voz levanta erro no caminho de
+      entrada — cinco métodos inexistentes, mockados no teste — e nada é publicado no barramento de contatos. O
+      WebRTC tem sinalização funcional, mas <strong>nenhum SFU provisionado em ambiente algum</strong>: sem LiveKit
+      em compose, sem o SDK como dependência do gateway de canais, com token e sala devolvidos por um modo de
+      desenvolvimento. Em reconstrução sob <code>docs/adr/adr-voice-media-plane.md</code>. Os canais de texto e o
+      webhook seguem em operação.</td>
+    </tr>
+    <tr>
       <td class="k">Discador preditivo</td>
-      <td>Não existe. Pacing power, progressivo e preview, guarda de taxa de abandono e listas restritivas
-      regulatórias são roadmap. Para voz ativa em massa — venda fria, negociação, urgência —, os incumbentes
-      entregam hoje e nós não. O que a plataforma substitui é a discagem <em>de entrega de informação</em>
-      (página 10).</td>
+      <td>Não existe — e está <strong>bloqueado</strong>, não meramente fora do roadmap: depende do plano de mídia
+      da linha acima, que hoje está em zero. Pacing power, progressivo e preview, guarda de taxa de abandono e
+      listas restritivas regulatórias são fases posteriores. Para voz ativa em massa — venda fria, negociação,
+      urgência —, os incumbentes entregam hoje e nós não. O que a plataforma substitui é a discagem
+      <em>de entrega de informação</em> (página 10).</td>
     </tr>
     <tr>
       <td class="k">Isolamento multi-tenant</td>

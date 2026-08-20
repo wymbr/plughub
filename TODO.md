@@ -84,62 +84,189 @@ existirem.
 
 ---
 
-## A capacidade de pool não conhece PAUSA — e o único gancho que existia está desligado por um nome *(achado 2026-08-19 na bancada da fila; MEDIDO 2026-08-20)*
+## Telefonia — DOIS arcos, não um *(desenho fechado 2026-08-19; nada implementado)*
 
-O registro original dizia *"`agent_pause` não recompõe o snapshot do pool"* e sugeria o conserto da F3a
-(pendurar `refresh_snapshots_for_instance` na pausa). **A medição mostrou que isso conserta o caso
-menor e deixa o maior de pé.** São dois defeitos empilhados, e a ordem importa.
+Nasceu do pedido de integrar a plataforma a uma **Avaya IP Office Server Edition** por CTI. O
+levantamento derrubou a premissa (o canal de voz não roda) e a discussão separou a coisa em dois arcos
+que **não são fases um do outro** — são ofertas paralelas, para clientes diferentes.
 
-**(1) O gancho existe, está escrito, e nunca roda — divergência de NOME.** O consumidor casa
-`("agent_paused", "agent_logout")` (`routing-engine/kafka_listener.py:356`) e é ele que chamaria
-`refresh_pool_snapshot` (`:882`). Mas **nenhum produtor no repositório emite `agent_paused`**: o
-evento publicado é `agent_pause`, sem "d" — `mcp-server/server.ts:2573`, `tools/runtime.ts:577`, e o
-schema canônico `schemas/src/platform-events.ts:286`. `agent_paused` só existe como prefixo de chave
-Redis (`{t}:agent_paused:{iid}`). Logo o evento cai no `else: logger.debug("Lifecycle event ignored")`
-(`:358-359`) e **`_deactivate_instance` (`:791`) é inalcançável pela pausa** — sobrevive só para
-`agent_logout`. O `agent_resume` funciona por acaso: publica `agent_ready`, que tem refresh próprio
-(`:291-294`).
-› *O teste que deveria pegar isto não pode*: `runtime.test.ts:412` se chama *"publica `agent_pause`
-para que o routing-engine tire a instância dos sets"* e assere só a **publicação**. Ele é verde com o
-consumidor desligado — asserção que nunca alcança a condição que diz julgar.
+**A fronteira é atendimento × telefonia interna, não controle × mídia.** A plataforma não pretende ser
+um PABX. Isso é o que faz os dois modos caírem.
 
-**(2) A aritmética canônica não lê estado — e este é o defeito de verdade.** O
-`_RECOMPUTE_POOL_OCCUPANCY_LUA` (`registry.py:630-742`) soma `max_concurrent` por **pertencimento a
-set**, nunca consultando `status`: `account(iid)` incrementa incondicionalmente (`:696-701`), o laço
-do busy_set só pula quem tem `n == 0` (`:727`), e instância com chave ilegível ainda soma capacidade
-cheia (`:739`). A pausa **não limpa o `busy_set`** — o endpoint só faz `SREM` de `:instances`
-(`server.ts:2557-2560`) e o `set_instance` só remove do busy quando `status=="ready" and
-current_sessions==0` (`registry.py:1876-1880`). Aritmética do sintoma observado: humano pausado,
-`max_concurrent=3`, 1 sessão viva, ainda no busy_set → `total=3`, `used=1` → **`available: 2`** com o
-SET de alocação vazio. Bate exatamente com o que o Monitor mostrou.
-› **Corolário que decide a ordem do conserto:** wirar só o gatilho (1) corrige o pausado **sem**
-sessões e continua publicando capacidade fantasma para o pausado **com** sessão viva — trocaria um
-número congelado por um número recalculado e igualmente errado, que é mais difícil de diagnosticar.
-› A alocação **sabe** da pausa (`get_ready_instances` filtra por `state == "ready"`,
-`registry.py:1740`); a contabilidade não. Dois caminhos, duas fontes.
-› O rollup do tenant tem o mesmo furo (`compute_tenant_capacity`, `registry.py:1292-1300`, sem teste
-de estado) **e** tem laço de fundo no flusher (`main.py:1842`) — ali o dado não congela, fica
-*recalculado e errado*.
-› Precedente de que é regressão de modelo, não limitação: a segunda implementação **já** desconta —
-`instance_bootstrap.py:676-678` (`if _pl.get("status") == "paused": continue`). E o comentário
-`:661-666` do mesmo arquivo afirma o contrário. As duas notas se contradizem no arquivo.
+### Arco 1 — CTI gateway multi-driver *(modo CTI)*
 
-**(3) O consumidor que decide produto não recebeu a lição da F5b.** `system_availability_check`
-(`mcp-server/tools/operational.ts:240`) computa `pools_available` de `snap.available` sem olhar idade
-(`:300`), e — pior — quando o rollup falta ele **cai de volta** no número desconfiável:
-`data.pools_available > 0 ? "available" : "unknown"` (`:326`). É o padrão que a F5b removeu do vizinho
-`pool_status_get`, sobrevivendo no tool que decide **oferta de canal ao cliente**. `queue_context_get`
-devolve `available_agents: snapshot.available` cru (`:164`). Nenhum dos dois lê `updated_at` como
-condição (`pool_status_get` até publica `snapshot_age_ms` em `:227`, e não o usa).
+[`adr-cti-gateway-multi-driver.md`](docs/adr/adr-cti-gateway-multi-driver.md) — proposto.
 
-**Ordem sugerida:** (2) antes de (1) — ensinar pausa à aritmética (Lua + rollup) e limpar o busy_set
-na pausa; só então corrigir o nome do evento, que passa a ter efeito correto. (3) é independente e
-barato: aplicar `available: null` + motivo, como a F5b fez. **Prever o número antes**: com a bancada
-da fila quente, o pool deve sair de `available: 2` para `0`.
+PABX ancora a chamada, a plataforma governa por CTI, **a mídia nunca sai da LAN do cliente** e **não
+existe IA na voz**. Serviço on-prem `packages/cti-gateway/` com N drivers sobre **modelo canônico =
+perfil reduzido de CSTA**. Fases **F0** (núcleo + driver IP Office; entrega os seis requisitos) →
+**F1** (segundo driver, *estruturalmente diferente*, obrigatória antes de qualquer outro) → **F2**
+(demanda).
+
+Decisões que carregam peso: capability **declarada por driver com recusa alta** (nunca emulação muda);
+identidade da chamada resolvida por **componente conexa sob aliases**, reusando o padrão
+`root_session_id`+union-find em vez de inventar o terceiro mecanismo; **monitor ⟺ ramal alocado**, que é
+o que segura o teto de sinalização do IPO; e **nenhum driver na matriz de suporte sem traço gravado** —
+o que promove o Record/Replay Harness de backlog a infraestrutura deste arco.
+
+**Bloqueio de método:** cinco medições contra a central de homologação **antes** de F0 (§8 do ADR) —
+exclusividade do `EnhTcpaService`, perfil CSTA (II × III), `DeflectCall` sobre chamada em fila, hot-desk
+comandável por CSTA ou só por short code, e teto de mensagens/monitores. Cada uma muda desenho, não
+implementação.
+
+### Arco 2 — Voz própria / plano de mídia *(modo SIP)*
+
+[`adr-voice-media-plane.md`](docs/adr/adr-voice-media-plane.md) — proposto.
+
+**Não é integração com Avaya.** No modo SIP a parte Avaya é *um tronco e um `REFER`*; todo o resto —
+terminação SIP, SFU, STT/TTS, perna do agente, gravação — vale igual contra qualquer central ou contra
+nenhuma. Classificar isso como "integração IPO" escondia o custo (parece driver, é pilha de telecom) e o
+valor (parece de um cliente, é capacidade de produto).
+
+**Consolida três dívidas que sozinhas não se justificam** e que hoje ninguém consegue priorizar: o canal
+`voice` que não roda (seção própria neste arquivo), o Arc 15 que é placebo, e o discador que está
+bloqueado por falta de mídia.
+
+**V1 resolveu a decisão que parecia grande:** o plano de mídia **não tem topologia própria — acompanha o
+deploy da plataforma**. Elimina SFU de terceiro; no on-prem não há WAN nem SBC no caminho da voz; na
+nuvem, SBC é do produto.
+
+**V6 é a decisão de método, e é a mais importante:** `_dev_mode` **sai**; sem credencial o provider
+**recusa alto**. Token bem-formado e falso é o valor plausível mais caro que este repositório já
+produziu — foi ele que deixou o Arc 15 passar por pronto por meses, sobrevivendo inclusive a revisões de
+arquitetura.
+
+Fases **V-F0** (infra de pé — fase própria e primeira) → **V-F1** (perna SIP entrante) → **V-F2** (bot
+leg STT/TTS; conserta o `collect` morto) → **V-F3** (gravação) → **V-F4** (egress + supervisão) →
+**V-F5** (validação com instalação limpa).
+
+### Derivado — retenção de artefato é config, e hoje viola três invariantes
+
+**Achado 2026-08-19.** A retenção de artefato existe como `attachment_expiry_days: int = 30` em
+`channel-gateway/config.py:119`: **env** (a regra é *env só para segredo e topologia*), **um número
+único para todas as classes** (a regra é *one source per domain*), e **sem superfície de UI** (a regra é
+*every config field is UI-editable*).
+
+Consequência medida: a gravação de voz já grava no AttachmentStore (`voice.py:410-416`), então **os "5
+anos" de `channel-gateway-multi-channel.md:1371-1550` não têm implementação** — o ciclo apagaria tudo aos
+30 dias. E `docs/layers/07-data-layer.md:101` dizia 30 dias por LGPD. Dois documentos, dois números,
+nenhum descrevendo o código.
+
+**Decidido (V5):** namespace `storage` na config-api, **uma entrada por classe de artefato**
+(`call_recording`, `webchat_attachment`, `whatsapp_media`, `survey_audio`, …), com UI. O que resta é o
+**default de cada classe**, que é decisão de negócio/jurídico. Bloqueia V-F3.
+
+### Dívida de método que este levantamento expôs
+
+Os três documentos de estado (`visao-geral.md`, `layers/01-channel-layer.md`,
+`product/value-proposition.md`) afirmavam voz **entregue** desde a auditoria de 2026-05, e o
+`pacotes/channel-gateway.md` carimbava `✅ Implementado`. Todos corrigidos em 2026-08-19 com a medição.
+
+O padrão vale além da voz: **auditoria de documentação que classifica por leitura de doc, e não por
+execução, propaga a afirmação em vez de verificá-la.** A `revisao-documentacao-2026-05.md:266,300` é
+exatamente onde `voice` saiu de "lacuna aspiracional" para "implementado" — e nada rodou no meio.
+Próxima auditoria: o critério de "implementado" é *existe caminho executado*, não *existe seção no doc*.
 
 ---
 
-## `session:{id}:meta` — o problema não é "quatro escritores", é uma partição de propriedade não declarada *(achado 2026-08-19; MEDIDO 2026-08-20)*
+## Capacidade × PAUSA — ARCO FECHADO em 2026-08-21 *(achado 08-19 · medido 08-20 · consertado 08-21)*
+
+> ✅ **Os três defeitos estão fechados.** História no `CHANGELOG.md` §§ "A capacidade de pool aprende
+> PAUSA" e "Tools `operational`"; invariante da linha no `CLAUDE.md` § Operational Visibility; gates
+> `infra/test/gate_pause_capacity.sh` (VERDE) e `__tests__/operational.test.ts` (9). A ordem prevista
+> pela medição se confirmou: (1) e (2) davam o MESMO `2`, então consertar só o gatilho não teria
+> movido o número.
+>
+> **Duas coisas que a medição corrigiu no PLANO, e que valem mais que o conserto:**
+> · *"limpar o `busy_set` na pausa"* (ordem sugerida original) **está errado e não foi feito** — o
+>   `busy_set` é justamente onde o pausado-COM-sessão vive, e limpá-lo zeraria o `busy` do pool com
+>   atendimento em andamento. Quem tira capacidade de circulação é a aritmética, não a membership.
+> · *"ler `updated_at` como CONDIÇÃO"* **também não foi feito, de propósito** — pool ocioso tem linha
+>   antiga e CORRETA, e depois que a pausa passou a recompor o snapshot não há produtor de linha
+>   velha-e-errada. `snapshot_model`/`snapshot_age_ms` viram diagnóstico, não veredicto.
+
+**Resíduo desta seção — um só, e é de outro componente.** Para agente de **IA** a pausa passou a
+agir, mas o `agent_ready` da reconciliação do bootstrap (15 s) a desfaz. Não é regressão (antes não
+agia nada); o conserto é no `instance_bootstrap`, que precisa parar de republicar `ready` para
+instância com pausa declarada.
+
+---
+
+## Auditoria MCP sem STORE — `mcp_audit_log` não existe em banco nenhum *(medido 2026-08-21)*
+
+Consulta a `system.tables` por `%audit%` **ou** `%mcp%`, sem filtro de database, voltou **vazia**.
+Nem `mcp_audit_log` nem `audit_access_log` existem neste ambiente — as duas que o `CLAUDE.md`
+§ Audit LGPD descreve como criadas pela analytics-api.
+
+Peso: o invariante *"nenhum caller pode optar por sair do audit — política definida na tool"* é de
+LGPD, e a única borda de interceptação **em vigor** (`invoke` do mcp-server, `source:
+"mcp_server_invoke"`) publica em `mcp.audit` para um consumidor que não tem onde gravar. É a família
+*"'existe' ≠ 'está pronto'"*, com o agravante de que o produtor não fica vermelho: publicar em Kafka
+funciona; é o outro lado que não materializa.
+
+**Antes de consertar, medir** (a lição de 08-20): o consumer da analytics-api chega a tentar criar a
+tabela? Falha no boot e degrada mudo, ou o DDL nunca foi chamado? Uma tabela ausente e um consumer
+que nunca rodou produzem a mesma tela. Descoberto de raspão — a pergunta original era "quem chama os
+tools `operational`", e ela ficou **inconclusiva por falta deste instrumento**.
+
+---
+
+## `npx vitest` no host mede `@plughub/schemas` de 2026-08-02 *(medido 2026-08-21)*
+
+`packages/schemas/dist/` está congelado em 2 de agosto e **não contém `mcp_server_invoke`**, valor que
+o fonte (`schemas/src/audit.ts:335`) declara. Consequência imediata: duas falhas em
+`invoke-audit.test.ts` que **não são defeito** — o teste valida contra o contrato de 17 dias atrás.
+
+O modo de falha perigoso é o simétrico: uma mudança de schema pode ficar **verde** no host porque o
+`dist/` velho ainda aceita a forma antiga. No container não acontece (o Dockerfile do mcp-server
+roda `npm run build` do schemas antes do consumidor, linhas 16-17), então produção não é afetada —
+**é o instrumento do host que está velho, não o produto**.
+
+Decidir: `npm run build -w @plughub/schemas` como pré-passo declarado da suíte de host, ou aceitar
+que a suíte de host não julga contrato e dizer isso onde ela roda.
+
+---
+
+## `bpm.test.ts` assere o comportamento PRÉ-endurecimento do `conversation_escalate` *(medido 2026-08-21)*
+
+`conversation_escalate publica evento de roteamento com pool_id explícito` falha porque o tool agora
+**recusa** quando `session:{id}:meta` está ausente (arco P2, 2026-08-18 — "a escalada para de inventar
+tenant"). O teste não foi atualizado naquele arco e não semeia o meta.
+
+Não é regressão: a recusa é o conserto, e ela loga o motivo inteiro. Mas uma suíte que fica vermelha
+por dívida conhecida **deixa de sinalizar regressão nova** — a próxima falha real entra no meio de
+três vermelhos já aceitos. Conserto: semear o meta no setup (o caminho legítimo) e acrescentar o caso
+simétrico, que hoje não existe — meta ausente ⇒ recusa, com o motivo nomeado.
+
+---
+
+## `session:{id}:meta` — o problema não é "quatro escritores", é uma partição de propriedade não declarada *(achado 2026-08-19; MEDIDO 2026-08-20; **fatia A FECHADA 2026-08-22**)*
+
+> ✅ **Fatia A entregue em 2026-08-22** — partição declarada e MEDIDA, helper
+> `session_meta_merge` (3 modos, `EVAL` único, `soft` para backfill), regra do MAIOR TTL nos três
+> sites do bridge, gate `probe_meta_ttl_bridge_off.sh` com `SELFTEST`. Ver `CHANGELOG.md` e
+> [`docs/guias/session-meta-ownership.md`](docs/guias/session-meta-ownership.md).
+>
+> **O defeito que a fatia A consertou não estava nesta lista** — ele apareceu ao medir: o bridge
+> reescrevia com `_stl()` (4 h) o meta que a porta webhook escreve com 86 400 s (24 h), e a workflow
+> descrita fica suspensa por `timeout_hours*3600+3600` (48 h). Contagem antes do conserto:
+> **7 tokens de resume condenados, 0 cobertos**. A recusa `tenant_unknown` do arco P2 estava sendo
+> desfeita a jusante pelo prazo.
+>
+> **Abertos desta seção (rejulgados 2026-08-22):**
+> · **B — recusar campo alheio.** O helper hoje LOGA `[session_meta] DONO VIOLADO` e não recusa.
+>   Recusar só no bridge enquanto webchat/webrtc/webhook/`bpm.ts` gravam `SETEX` cego por fora
+>   fecharia o caminho certo e deixaria os errados abertos. Exige o helper também em TypeScript e
+>   compartilhado entre os dois pacotes Python — ou um gate que compare as listas de campos.
+> · **C — `pool_id` carrega DOIS fatos.** Pool de ENTRADA (`webchat.py:210`, `webrtc.py:484`) × pool
+>   que ATENDE (bridge; é a acepção que `webhook.py:1330` lê no resume). Separar em `entry_pool_id`;
+>   família de `elapsed_time_ms` × `agent_time_ms` (D9). Muda contrato de vários leitores.
+> · **Suspeita adjacente, NÃO medida:** `session:{id}:wf_agent` (escrito ao lado do site W6) nasce
+>   com o mesmo `_stl()` = 4 h e descreve a mesma workflow de até 48 h. Mesmo mecanismo; medir antes
+>   de consertar.
+> · **Sub-item TTL 24 h → 4 h da passagem de 08-21: RESOLVIDO ao contrário do que se supunha.** A
+>   dúvida era se havia truncamento; há, e o conserto **não** foi baixar o teto — foi parar de
+>   encurtar. Não uniformizar TTL aqui.
 
 Medido: **seis** escritores de produção, não quatro — e um dos quatro citados **não existe**
 (`delegate`/`collect` **não** gravam a chave; `handle_delegate`/`handle_collect` só escrevem
@@ -185,16 +312,16 @@ do bridge escreve `tenant_id`.
    sentimento precisa de produtor novo, provavelmente no `/v1/reason`), ou é caminho vivo que este
    demo não exercita? Medir em ambiente com tráfego real antes de decidir. **Só depois** o `HGET`
    importa — ele é o segundo problema desse caminho, não o primeiro.
-2. **`analytics-api/supervisor.py:99` é um guard que se auto-anula**:
-   `meta.get("tenant_id", body.tenant_id) != body.tenant_id` — com o campo ausente, o default é o
-   próprio valor comparado, então a igualdade é sempre verdadeira e o **403 de tenant mismatch nunca
-   dispara**. O `except: meta = {}` (`:96-97`) produz o mesmo efeito com JSON malformado. Fail-open
-   numa fronteira de isolamento. *(Alcance NÃO contado: os escritores normalmente gravam `tenant_id`.
-   Antes de chamar de exposição, contar quantos metas vivos não têm o campo — "é latente" é hipótese.)*
-3. **O padrão do conserto de 08-18 não foi aplicado ao irmão HTTP.** `server.ts:2236` (transferência
-   REST do Console) nasce com `tenantId = env ?? "tenant_demo"` + `catch { /* use fallbacks */ }`
-   (`:2250`) e **publica evento de roteamento** em seguida — é o defeito do `conversation_escalate`
-   pré-conserto com outro literal. Idem `:1824` e `:1866`.
+2. ✅ **RESOLVIDO 2026-08-21** — o guard que se auto-anulava em `analytics-api/supervisor.py`.
+   Contado antes: **8 metas vivos, 8 com `tenant_id`, 0 sem** ⇒ real no código, **sem alvo** nesta
+   população; a palavra "exposição" não se sustentou, e o conserto foi fail-closed assim mesmo (0 em 8
+   é evidência fraca de "nunca"). *Alcançabilidade DEMONSTRADA*, não inferida: o gate deu
+   `P1 = HTTP 200` contra a imagem antiga. Ver `CHANGELOG.md` § "`session:{id}:meta` — o tenant deixa
+   de ter fallback" e `infra/test/gate_supervisor_tenant_guard.sh`.
+3. ✅ **RESOLVIDO 2026-08-21** — os três sites do `server.ts` (`session_transfer` que escreve;
+   `supervisor_capabilities` e `copilot_state` que leem com o tenant como prefixo de chave). Trocados
+   por um resolvedor único (`resolveSessionTenant`) que devolve `null` **mais o motivo**, nunca um
+   default. Escrita recusa com 409; leituras devolvem vazio + `tenant_unknown`.
 
 **TTL — truncamento silencioso 24 h → 4 h.** O trigger grava `SETEX 86_400` (`webhook.py:596`); na
 alocação o merge do bridge relê e regrava com `_stl()` = 14_400 (`main.py:4571`). Ninguém compara TTL
@@ -202,6 +329,12 @@ antes de sobrescrever, e **nenhum escritor desta chave faz `TTL` antes de escrev
 de `-1 = ausência` existe no repo, mas para o hash do ContextStore (`webhook.py:1079-1084`), e nunca
 chegou aqui. Cada merge também reprorroga a janela cheia, então sessão com muitas ativações nunca
 expira por TTL.
+
+**ESTADO 2026-08-21: sobra a PARTIÇÃO — os dois defeitos-consequência caíram.** Medido no mesmo
+probe: **8/8 metas carregam `pool_id`**, que pela partição implícita é do bridge. A violação é a
+regra, não a exceção — e é isso que o helper abaixo tem de fechar. O TTL também foi medido: **8/8 na
+faixa ≤ 4 h, 0 acima**, mas isso *não prova* truncamento sozinho (sessão de webchat nasce com 4 h); só
+uma sessão de TRIGGER que passou por alocação prova, e comparar exige saber a origem, não só o TTL.
 
 **Conserto: nenhum dos seis pode virar dono único**, por razão estrutural — os canais só cobrem
 webchat/webrtc; o bridge chega tarde (a janela pré-alocação é onde o escalate morria, `webhook.py:581-582`);
@@ -1208,7 +1341,23 @@ sem a coluna — senão o próximo seed repete.
 
 ---
 
-## `voice.py` chama dois métodos que não existem, e o teste os fabrica *(achado 2026-08-12)*
+## `voice.py` chama ~~dois~~ **CINCO** métodos que não existem, e o teste os fabrica *(achado 2026-08-12; recontado e DECIDIDO 2026-08-19)*
+
+> **Atualização 2026-08-19.** Duas correções e uma decisão. **(1) São cinco, não dois** — além de
+> `_open_session` e `_route_inbound`, faltam `_publish_inbound` (`voice.py:433,565`), `_normalize_text`
+> (`:558`) e `_normalize_menu_result` (`:724`), todos igualmente mockados em
+> `tests/test_voice_adapter.py:116-121`. Subcontar aqui não é detalhe: "dois métodos" soa como remendo,
+> "o caminho inbound inteiro" é o que de fato é. **(2) Não está sozinho** — o mesmo adapter tem
+> `channel_name` em vez de `channel` (`:90`, viola a ABC); `_collect_loop` prometido no docstring e
+> inexistente, com `stt_queue` nunca drenada e `_handle_stt_result` sem chamador (`:624-629,657`) ⇒
+> **collect por voz morto, só DTMF**; `hangup` lendo chave nunca escrita (`:884` vs `:229-233`);
+> `_get_contact_id` retornando `None` por construção (`:1032-1037`); e `deliver_outbound` (81 linhas)
+> que **nunca é invocado** (`:772` vs `outbound_consumer.py:95-106`). **(3) A pergunta "implementar os
+> dois ou reescrever" está RESPONDIDA: reescrever.** Ver [`docs/adr/adr-voice-media-plane.md`](docs/adr/adr-voice-media-plane.md)
+> — o canal é reconstruído sobre plano de mídia próprio, e o `VoiceAdapter` atual não é o ponto de
+> partida (o molde é o `WebRTCAdapter`). O que se aproveita é `voice_provider.py`
+> (`FallbackSTTProvider`/`FallbackTTSProvider`, Deepgram, ElevenLabs) e o **desenho** de
+> `docs/arcos/channel-gateway-multi-channel.md` §9/§13, que segue válido.
 
 `adapters/voice.py:236` e `:247` chamam `self._open_session(...)` e `self._route_inbound(...)`. **Não há
 definição de nenhum dos dois em lugar nenhum de `packages/channel-gateway`** — nem em `ChannelAdapter`

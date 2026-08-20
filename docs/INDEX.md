@@ -127,7 +127,7 @@ Documentação técnica detalhada por Arc ou componente: implementação, contra
 | [arcos/arc12-agent-business-events.md](arcos/arc12-agent-business-events.md) | Agent Business Events — tool `agent_event`, KPIs de negócio |
 | [arcos/arc13-review-contestation.md](arcos/arc13-review-contestation.md) | Evaluation Review, Contestation & Calibration (fases A–H) |
 | [arcos/arc14-posatt-independent-segments.md](arcos/arc14-posatt-independent-segments.md) | Segmentos independentes de pós-atendimento |
-| [arcos/arc15-webrtc.md](arcos/arc15-webrtc.md) | Canal WebRTC com SFU enterprise (fases A–F) |
+| [arcos/arc15-webrtc.md](arcos/arc15-webrtc.md) | Canal WebRTC (fases A–F) — ⚠️ **só a sinalização roda**; o SFU nunca foi provisionado (medido 2026-08-19). Reconstrução em [adr/adr-voice-media-plane.md](adr/adr-voice-media-plane.md) |
 | [arcos/arc16-flow-orchestration.md](arcos/arc16-flow-orchestration.md) | Orquestração de processos em três camadas, channel capability negotiation |
 | [arcos/audit-lgpd.md](arcos/audit-lgpd.md) | Audit LGPD — módulo ABAC `audit`, acesso DPO/compliance |
 
@@ -143,7 +143,7 @@ Documentação técnica detalhada por Arc ou componente: implementação, contra
 | [arcos/session-replayer.md](arcos/session-replayer.md) | Session Replayer — ensure-before-read, Hydrator, ReplayContext |
 | [arcos/session-conference-lifecycle.md](arcos/session-conference-lifecycle.md) | Ciclo de vida de conferência — modelo de 3 camadas |
 | [arcos/dashboard.md](arcos/dashboard.md) | Dashboard — DisplayTool registry, ENDPOINT_CATALOG, cards |
-| [arcos/channel-gateway-multi-channel.md](arcos/channel-gateway-multi-channel.md) | Channel Gateway multi-canal — WhatsApp, SMS, Email, Voice |
+| [arcos/channel-gateway-multi-channel.md](arcos/channel-gateway-multi-channel.md) | Channel Gateway multi-canal — WhatsApp, SMS, Email implementados; **Voice é especificação, não roda** (medido 2026-08-19: `AttributeError` em runtime real). Reconstrução em [adr/adr-voice-media-plane.md](adr/adr-voice-media-plane.md) |
 | [arcos/evaluation-agents.md](arcos/evaluation-agents.md) | Agentes de avaliação — design de fluxos |
 
 ### Propostas e relatórios pontuais
@@ -218,6 +218,8 @@ Decisões arquiteturais com contexto, opções consideradas e consequências.
 | [adr/adr-message-masking.md](adr/adr-message-masking.md) | Mascaramento de mensagens com tokenização e partial display |
 | [adr/adr-session-replayer.md](adr/adr-session-replayer.md) | Session Replayer — ensure-before-read com Hydrator opcional |
 | [adr/adr-webchat-channel.md](adr/adr-webchat-channel.md) | WebChat — hybrid stream model, WebSocket tipado, upload dois estágios |
+| [adr/adr-cti-gateway-multi-driver.md](adr/adr-cti-gateway-multi-driver.md) | Telefonia legada por CTI — `cti-gateway` on-prem, N drivers sobre perfil reduzido de CSTA; PABX ancora, mídia nunca sai da LAN |
+| [adr/adr-voice-media-plane.md](adr/adr-voice-media-plane.md) | Voz própria — terminação SIP, SFU, STT/TTS e gravação; a mídia acompanha o deploy da plataforma. Reconstrói o canal `voice`, que **não roda** |
 
 ---
 

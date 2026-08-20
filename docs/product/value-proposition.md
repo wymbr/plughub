@@ -117,9 +117,19 @@ Em pico de carga, o cliente paga pelo que está logado *naquele momento*; em val
 
 Todo CCaaS no mercado vende inbound e outbound como dois produtos com modelos de configuração distintos. Genesys, NICE e Talkdesk têm "Outbound Campaigns" como módulo licenciado à parte; Five9 tem outbound nativo mas em configuração separada do inbound; Salesforce Agentforce praticamente não tem outbound fora do Marketing Cloud.
 
-No PlugHub o motor é um só. Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é um Skill Flow declarativo, idêntico em primitivos a um atendimento inbound. O step `collect` inicia o contato outbound assíncrono multicanal (WhatsApp, e-mail, SMS e voz/PSTN). O canal de **voz/PSTN** (tronco Twilio, STT Deepgram, TTS ElevenLabs) e o canal **WebRTC** (Arc 15) cobrem o atendimento por áudio com gravação, STT e TTS server-side.
+No PlugHub o motor é um só. Uma campanha de cobrança, pesquisa NPS ou onboarding com etapas manuais é um Skill Flow declarativo, idêntico em primitivos a um atendimento inbound. O step `collect` inicia o contato outbound assíncrono multicanal (WhatsApp, e-mail, SMS ~~e voz/PSTN~~ — **voz não, ver correção abaixo**). ~~O canal de **voz/PSTN** (tronco Twilio, STT Deepgram, TTS ElevenLabs) e o canal **WebRTC** (Arc 15) cobrem o atendimento por áudio com gravação, STT e TTS server-side.~~ **Nenhum dos dois canais de áudio funciona hoje** — o desenho existe, a execução não.
 
-> **Roadmap.** O canal de voz/PSTN já está entregue (tronco Twilio, com STT e TTS server-side). O que permanece **planejado** é o **dialer preditivo** — loop de discagem com pacing (power, predictive, progressive, preview), compliance guard de abandonment ratio TCPA/LGPD e listas DNC. Uma decisão arquitetural em aberto avalia ainda fazer a ponte PSTN → WebRTC via LiveKit SIP Ingress para unificar os canais de áudio.
+> ⚠️ **Correção de 2026-08-19 — medido.** *"O canal de voz/PSTN já está entregue"* é **falso**, e o
+> parágrafo acima também afirma cobertura de áudio que não existe. `VoiceAdapter.handle_inbound` chama
+> cinco métodos inexistentes (`adapters/voice.py:236,247,433,558,565`), mockados no teste
+> (`tests/test_voice_adapter.py:116-121`) — `AttributeError` em runtime real. E o canal `webrtc` tem
+> sinalização, mas **nenhum SFU provisionado** (zero LiveKit em compose, `_dev_mode` devolvendo token
+> falso). **Nenhum dos dois canais de áudio funciona hoje.** Isto é material de venda: não use estes
+> parágrafos em proposta comercial até o arco
+> [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) fechar V-F2. Em consequência, o
+> dialer não está apenas "planejado" — está **bloqueado** por falta de plano de mídia.
+
+> **Roadmap.** ~~O canal de voz/PSTN já está entregue (tronco Twilio, com STT e TTS server-side).~~ **[FALSO — ver correção acima; o canal está em reconstrução.]** O que permanece **planejado** ~~é~~ *(na verdade, **bloqueado** por falta de plano de mídia)* é o **dialer preditivo** — loop de discagem com pacing (power, predictive, progressive, preview), compliance guard de abandonment ratio TCPA/LGPD e listas DNC. Uma decisão arquitetural em aberto avalia ainda fazer a ponte PSTN → WebRTC via LiveKit SIP Ingress para unificar os canais de áudio.
 
 A consequência arquitetural elegante: **após a conexão, o fluxo outbound é tratado como inbound, sem diferenciação**. Mesmo context package, mesmo roteamento, mesmo session replay, mesma avaliação de qualidade. O agente que atende não precisa saber se o contato foi inbound ou outbound — a experiência operacional é uniforme.
 

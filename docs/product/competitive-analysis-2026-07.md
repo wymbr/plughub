@@ -1,5 +1,19 @@
 # PlugHub — Análise Competitiva Atualizada e Honesta (Julho 2026)
 
+> ⚠️ **Superseção parcial de 2026-08-19 — medido.** Este é um **snapshot datado de 2026-07-27** e as linhas
+> abaixo ficam como estavam, mas a classificação de **voz/áudio e WebRTC como "Entregue — Arc 15"** (`:74`,
+> `:155`) foi **derrubada por medição** e é **falsa**. `VoiceAdapter.handle_inbound` chama cinco métodos que não
+> existem em `packages/channel-gateway` (`_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`,
+> `_normalize_menu_result` — `adapters/voice.py:236,247,433,558,565`), mockados em
+> `tests/test_voice_adapter.py:116-121`: em runtime real dá `AttributeError` antes de publicar em
+> `conversations.inbound`, e não há uma única sessão de voz no ambiente; `collect`/menu por voz está morto
+> (`voice.py:624-629,657`). Em WebRTC só a sinalização roda — plano de mídia nunca provisionado (zero LiveKit em
+> compose algum, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode` devolvendo
+> token/sala/egress placebo em `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje**, e o
+> dialer está **bloqueado por falta de plano de mídia**, não apenas em roadmap. **Material de venda: esta tabela
+> não deve ser reusada em conversa comercial nem em proposta** até o arco fechar V-F2. Ver
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, V-F0..V-F5).
+
 > Estado: síntese de produto · Data: 2026-07-27 · Autor: sessão de análise
 > Supersedes parcial de [`competitive-analysis.md`](competitive-analysis.md) (mai/2026) e complementa
 > [`fin-intercom-comparativo-e-cunha-resolucao-auditavel.md`](fin-intercom-comparativo-e-cunha-resolucao-auditavel.md) (jun/2026)

@@ -3,6 +3,19 @@
 > Fonte: `plughub_analise_competitiva_2026.md` — Abril 2026  
 > Atualização desta síntese: Maio 2026
 
+> ⚠️ **Correção de 2026-08-19 — medido.** Duas linhas da Matriz de capacidades foram corrigidas: **"Voz com
+> stack interno — ✅ SIP + WebRTC nativos"** e **"Outbound unificado — ✅ Mesmo motor + dialer interno"** eram
+> **falsas**. `VoiceAdapter.handle_inbound` chama cinco métodos que não existem em `packages/channel-gateway`
+> (`_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`, `_normalize_menu_result` —
+> `adapters/voice.py:236,247,433,558,565`), mockados em `tests/test_voice_adapter.py:116-121`: em runtime real dá
+> `AttributeError` antes de publicar em `conversations.inbound`, e não há uma única sessão de voz no ambiente;
+> `collect`/menu por voz está morto (`voice.py:624-629,657`). Em WebRTC só a sinalização roda — plano de mídia
+> nunca provisionado (zero LiveKit em compose, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`,
+> `_dev_mode` placebo em `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje**, e o
+> dialer — que depende do `VoiceAdapter` — está **bloqueado por falta de plano de mídia**. **Material de venda:
+> não usar estes trechos em proposta comercial** até o arco fechar V-F2. Ver
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, V-F0..V-F5).
+
 ## Contexto do mercado
 
 Em 2025–2026, o mercado de agentes IA para contact center e automação enterprise convergiu em torno de três arquétipos, cada um com um gap que o PlugHub pode ocupar.
@@ -140,12 +153,12 @@ Para o comprador enterprise, isso muda a pergunta inicial. Não é mais "qual é
 | Billing previsível | Não | Não | Parcial | Sim | Parcial | Parcial | Parcial | Não | Parcial | **✅ Licenças simultâneas (humanos + IA)** |
 | Supervisão operacional em tempo real | Sim | Sim | Sim | Sim | Sim | Sim | Não | Não | Não | **✅** |
 | Escopo granular de supervisor (grupo + turno + módulo) | Parcial | Parcial | Custom | Custom | Custom | Custom | N/A | N/A | N/A | **✅ JWT-resolved nativo** |
-| Voz com stack interno (gravação + transcrição + STT/TTS) | Parcial (CCAI) | Parceiro (Vonage) | Sim | Sim | Sim | Parceiro (AWS) | N/A | N/A | N/A | **✅ SIP + WebRTC nativos** |
+| Voz com stack interno (gravação + transcrição + STT/TTS) | Parcial (CCAI) | Parceiro (Vonage) | Sim | Sim | Sim | Parceiro (AWS) | N/A | N/A | N/A | **⚠️ Não — projeto.** Voz não roda (`voice.py:236,247,433,558,565`); WebRTC só sinaliza, sem SFU |
 | Motor único para todos os fluxos | Múltiplos (Agent Engine + CCAI + Vertex) | Múltiplos (Atlas + Flow + MC + SC) | Múltiplos (Architect + AI Studio + Outbound) | Múltiplos (CXone + Cognigy + Outbound) | Parcial | Múltiplos (CXA + Autopilot + Outbound) | Só engine IA | Só engine IA | Só workflow | **✅ Skill Flow unificado** |
 | Customização completa por pool/fila | Limitada | Tópicos+ações | Por queue | Por queue | Por queue | Por queue | N/A | N/A | N/A | **✅ Inbound + outbound + especialistas + wrap-up + hooks por pool** |
 | Visibilidade por participante (per-field per-role) | Não (Model Armor pré-LLM) | Parcial (Trust Layer pré-LLM) | Não | Não | Não | Não | N/A | N/A | N/A | **✅ Por participante + por campo + por role** |
 | Delegação de dados sensíveis com supervisão | Não | Não | Não | Não | Não | Não | N/A | N/A | N/A | **✅ Humano supervisiona sem ver o dado** |
-| Outbound unificado (mesmo motor que inbound) | Não (CCAI sep.) | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **✅ Mesmo motor + dialer interno** |
+| Outbound unificado (mesmo motor que inbound) | Não (CCAI sep.) | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **✅ Mesmo motor** (canais de texto) · **⚠️ dialer interno: NÃO — bloqueado por falta de plano de mídia** |
 | Journey multi-contato como primitive (routing + analytics) | Não | Case (CRM-side) | Pointillist (analytics) | XM (parcial) | Não | Não | Thread (técnico) | Não | Não | **✅ Routing + Analytics** |
 
 ---

@@ -83,7 +83,7 @@ Quando um step `collect` declara `requires: [...]` em vez de um `channel` explí
 | `whatsapp.py` | WhatsApp | Meta Cloud API webhooks | ✅ Implementado | — |
 | `sms.py` | SMS | Webhooks de provider | ✅ Implementado | — |
 | `email.py` | E-mail | SMTP / API + inbound parse | ✅ Implementado | — |
-| `voice.py` | Voz (PSTN) | Twilio Media Streams | ✅ Implementado | — |
+| `voice.py` | Voz (PSTN) | Twilio Media Streams | ⚠️ **NÃO RODA** — 5 métodos inexistentes no inbound (`voice.py:236,247,433,558,565`), mockados em `tests/test_voice_adapter.py:116-121`; `AttributeError` real. Reconstrução: [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) | *(medido 2026-08-19)* |
 | `webrtc.py` | WebRTC | LiveKit SFU (browser-to-SFU) | ⚠️ Adapter ✅ · **SFU não provisionado** | [`docs/arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) |
 
 `channel` e `medium` são distintos: `channel` é o canal específico (`whatsapp`, `webchat`, `voice`, `email`, `sms`, `webrtc`, etc.) — hard filter para roteamento; `medium` é o tipo base (`voice`, `video`, `message`, `email`) — fator de score.
@@ -217,8 +217,11 @@ FastAPI          ← endpoints de webhook + WebSocket
 aiokafka         ← producer/consumer Kafka assíncrono
 redis[hiredis]   ← estado de canal (coleta, conexões WS, medium)
 pydantic         ← validação de payloads
-livekit-api      ← SFU para o canal WebRTC
 ```
+
+> ⚠️ `livekit-api` (SFU do canal WebRTC) **não é dependência deste pacote** — está fora de
+> `packages/channel-gateway/pyproject.toml:6-23`, logo a imagem construída não o tem e os imports caem
+> no ramo de degradação. Constava desta lista até 2026-08-19, contradizendo o próprio banner do topo.
 
 ---
 

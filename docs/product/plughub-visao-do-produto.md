@@ -3,6 +3,18 @@
 > Texto de visão e divulgação · Revisão 3 (síntese; payback como destino) · 2026-06-16
 > Backbone de engenharia, payoff de negócio.
 
+> ⚠️ **Correção de 2026-08-19 — medido.** Em §4, a afirmação de que os canais com o cliente incluem **voz** e
+> **WebRTC** como parte **nativa** da plataforma é **falsa**. `VoiceAdapter.handle_inbound` chama cinco métodos
+> que não existem em `packages/channel-gateway` (`_open_session`, `_route_inbound`, `_publish_inbound`,
+> `_normalize_text`, `_normalize_menu_result` — `adapters/voice.py:236,247,433,558,565`), mockados em
+> `tests/test_voice_adapter.py:116-121`: em runtime real dá `AttributeError` antes de publicar em
+> `conversations.inbound`, e não há uma única sessão de voz no ambiente; `collect`/menu por voz está morto
+> (`voice.py:624-629,657`). Em WebRTC só a sinalização roda — plano de mídia nunca provisionado (zero LiveKit em
+> compose, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode` placebo em
+> `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje.** **Material de venda: não usar
+> estes trechos em proposta comercial** até o arco fechar V-F2. Ver
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, V-F0..V-F5).
+
 A queixa é real: muitas empresas não acham payback na IA. A causa raramente é falta de um modelo maior — é a arquitetura. A nossa proposta vai na linha de **decompor agentes e amarrá-los em workflow** — atacando as duas alavancas do retorno, **custo e resultado**, para chegar ao payback. O PlugHub foi concebido sobre essas premissas.
 
 ---
@@ -40,7 +52,7 @@ Não é um modelo nem um agente — e não é só um orquestrador. É a **plataf
 - **Workflow de ciclo longo com estado persistente** — Skill Flow decompõe em passos; `suspend`/`resume` sustenta dias; o ContextStore isola contexto por etapa.
 - **Modelo certo por etapa** — o AI Gateway aplica o perfil adequado (rápido/barato vs. raciocínio) por passo e troca de provedor por configuração.
 - **Reuso e portabilidade** — traga o especialista que já existe, inclusive externo; integração só por MCP, auditada; sem lock-in.
-- **A operação ao redor, nativa** — os canais com o cliente (voz, WhatsApp, webchat, WebRTC, e-mail), a medição de qualidade e o compliance (mascaramento, auditoria) são parte da mesma plataforma, não integrações avulsas. É o que torna o processo decomposto **operável, medível e auditável** de ponta a ponta — sem o que a decomposição seria só teoria.
+- **A operação ao redor, nativa** — os canais com o cliente (WhatsApp, webchat, e-mail, SMS; **voz e WebRTC são projeto, não entrega** — ver banner), a medição de qualidade e o compliance (mascaramento, auditoria) são parte da mesma plataforma, não integrações avulsas. É o que torna o processo decomposto **operável, medível e auditável** de ponta a ponta — sem o que a decomposição seria só teoria.
 
 ## 5. O resultado: custo menor, ganho maior, payback
 

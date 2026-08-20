@@ -65,6 +65,20 @@
   <span class="t">PlugHub — Descritivo Técnico-Funcional</span>
   <button onclick="window.print()">Salvar como PDF / Imprimir</button>
 </div>
+<div style="max-width:880px;margin:0 auto;padding:24px 56px 0">
+  <div style="border:2px solid #DC2626;background:#FEF2F2;padding:14px 18px;margin:16px 0;border-radius:6px;font-size:14px;line-height:1.55">
+    <strong style="color:#DC2626">⚠️ Correção de 2026-08-19 — medido.</strong>
+    Este material afirma voz/PSTN e WebRTC como capacidades entregues.
+    <strong>Nenhum dos dois canais de áudio funciona hoje</strong>: o adapter de voz levanta
+    <code>AttributeError</code> no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o WebRTC
+    não tem SFU provisionado em ambiente algum — a sinalização roda, a mídia não. O discador está
+    <strong>bloqueado</strong>, não planejado. <strong>Não usar estes trechos em proposta comercial</strong>
+    até a reconstrução (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
+    Em concreto, caem as afirmações de <em>"voz nativa"</em>, <em>"SIP/PSTN + WebRTC nativos"</em>,
+    <em>"discador interno"</em> e <em>"gravações de voz e WebRTC"</em>. Os canais de texto
+    (webchat, WhatsApp, SMS, e-mail, Instagram, Telegram) e o webhook seguem em operação.
+  </div>
+</div>
 <main id="content"></main>
 
 <script id="md" type="text/markdown">
@@ -94,7 +108,7 @@ Os cinco diferenciais que sustentam essa posição e que um avaliador técnico d
 1. **Sala de conferência unificada** — humano e IA são participantes simétricos da mesma sessão. Não há "handoff" visível ao cliente; há entrada e saída de participantes na mesma sala.
 2. **MCP como protocolo único de integração, com interception guard como invariante arquitetural** — nenhuma chamada a sistema de negócio escapa de validação de permissão, guarda anti-injeção e auditoria. Compliance não é plugin; é primitiva.
 3. **AI Gateway agnóstico e multi-conta** — troca de LLM e de provedor sem tocar o agente; rotação e fallback de contas administrados centralmente.
-4. **Motor único de fluxo (Skill Flow)** para inbound, outbound e automação de processos — o mesmo artefato declarativo serve atendimento e workflow, com discador interno.
+4. **Motor único de fluxo (Skill Flow)** para inbound, outbound e automação de processos — o mesmo artefato declarativo serve atendimento e workflow. ⚠️ *Correção de 2026-08-19: **não há discador interno**. O contato ativo em operação é por mensagem (WhatsApp, SMS, e-mail, link web); a discagem depende de um plano de mídia que hoje não existe.*
 5. **Billing por capacidade** — você paga pela capacidade configurada (instâncias simultâneas, humanas + IA), não por turno, ação ou token. O custo é previsível do mês 1 ao mês 13.
 
 ---
@@ -116,7 +130,7 @@ Agentes que precisam manter estado entre turnos declaram `execution_model: state
 | **Redis Cluster** | Estado de conversa em tempo real, `pipeline_state`, filas, heartbeats, ContextStore, canonical stream |
 | **PostgreSQL + pgvector** | Agent Registry, schemas `auth`/`workflow`/`evaluation`, histórico de conversas, base de conhecimento vetorial (RAG) |
 | **ClickHouse** | Analytics operacional, audit log, métricas de qualidade — consolidação de alto volume |
-| **Object Storage** | Áudio de ligações, anexos, gravações WebRTC, datasets |
+| **Object Storage** | Anexos, datasets. ⚠️ *Áudio de ligações e gravações WebRTC: **não entregue** (medido 2026-08-19) — os dois canais de áudio não rodam* |
 
 ### 2.3 Alta disponibilidade e alto volume
 
@@ -171,7 +185,7 @@ Este é o diferencial estrutural mais importante e o mais difícil de copiar.
 | `agents_only` | Todos os agentes, sem o cliente | Nota interna, sugestão de copiloto/especialista |
 | `["part_abc", ...]` | Apenas participant_ids listados | Supervisor → agente específico; NPS só para o cliente |
 
-A consequência competitiva: **humano e IA são simétricos**. Um especialista de IA pode entrar numa sessão de voz conduzida por um humano e sugerir respostas que só o agente vê (`agents_only`); um supervisor pode injetar uma mensagem privada para um único participante; um agente de IA pode conduzir e transferir para humano sem o cliente perceber a transição. Nos concorrentes, IA→humano e humano→IA são **handoffs** — transferências com contexto perdido e scripts diferentes. Aqui, é entrada e saída de participantes na mesma sala, com o mesmo stream e o mesmo contexto.
+A consequência competitiva: **humano e IA são simétricos**. Um especialista de IA pode entrar numa sessão conduzida por um humano e sugerir respostas que só o agente vê (`agents_only`); um supervisor pode injetar uma mensagem privada para um único participante; um agente de IA pode conduzir e transferir para humano sem o cliente perceber a transição. Nos concorrentes, IA→humano e humano→IA são **handoffs** — transferências com contexto perdido e scripts diferentes. Aqui, é entrada e saída de participantes na mesma sala, com o mesmo stream e o mesmo contexto.
 
 **Status de sessão:** `active`, `closed`, `abandoned` e — desde o Arc 19 — `suspended` (workflow suspenso aguardando sinal externo, com TTL estendido no Redis). **Domínio de `close_reason`** normalizado (`no_resource`, `max_wait_exceeded`, `customer_disconnect`, `customer_hangup`, `customer_abandon`, `flow_complete`, `agent_transfer`, `agent_hangup`, `session_timeout`, `system_error`) — base para relatórios consistentes de desfecho.
 
@@ -200,7 +214,7 @@ Os três elementos do modelo:
 Capacidades-chave (implementadas):
 
 - **Preservação de contexto entre quedas e esperas.** Em desconexão ou espera, todo o contexto é preservado (ContextStore + canonical stream + Redis com TTL calibrado ao `timeout_hours`) até a resolução ou o próximo contato. Um workflow suspenso retoma com novo segmento via `resume_token` (hash Redis `{tenant}:resume_tokens → session_id`), no **mesmo `session_id`**.
-- **Troca de canal em qualquer etapa.** A negociação de capacidade de canal (Arc 16) permite oferecer/realizar troca de mídia (ex.: de webchat para voz) preservando o processo.
+- **Troca de canal em qualquer etapa.** A negociação de capacidade de canal (Arc 16) permite oferecer/realizar troca de mídia preservando o processo. ⚠️ *Correção de 2026-08-19: o exemplo original era "de webchat para voz" — **esse destino não existe hoje**, os dois canais de áudio não funcionam. A troca vale entre canais de texto (webchat ↔ WhatsApp ↔ SMS ↔ e-mail).*
 - **Retomada por reaparecimento do cliente.** Um processo suspenso aguardando o cliente é detectável quando ele volta: o fluxo de entrada coleta um identificador e consulta as pendências (`pending_workflow_get` → `workflow_resume`), oferecendo continuar de onde parou. Já em produção no demo de portabilidade.
 - **Modelo de três níveis (arquitetura).** O processo channel-abstract (a) delega a interação a um fluxo de acesso a canais (b), que aciona o agente de I/O do canal (c). A segregação por perfil (`workflow` × `agent`, Arc 19) **força** que o processo nunca toque canal — é o que garante o "any media".
 
@@ -208,11 +222,22 @@ Capacidades-chave (implementadas):
 
 ---
 
-## 5. Canais — omnichannel real, com voz e WebRTC nativos
+## 5. Canais — omnichannel nos canais de texto; ⚠️ voz e WebRTC **em reconstrução**
 
-O modelo "todo contato é conferência" se aplica **sem mudança** a todos os canais. O que varia por canal é apenas como o cliente entra na sala e como mensagens entram e saem. Para canais de texto há um único plano (controle = Redis stream + Kafka); para voz emerge um segundo plano (mídia = conference room do CPaaS), e o `VoiceAdapter` é a única ponte entre eles.
+<div style="border:2px solid #DC2626;background:#FEF2F2;padding:12px 16px;margin:16px 0;border-radius:6px">
+<strong>⚠️ Correção de 2026-08-19 — medido.</strong> O título desta seção dizia <em>"com voz e WebRTC nativos"</em>.
+<strong>Nenhum dos dois canais de áudio funciona hoje.</strong> O canal <code>voice</code> não roda:
+<code>VoiceAdapter.handle_inbound</code> chama cinco métodos inexistentes, mockados no teste — em execução real
+levanta <code>AttributeError</code> e nada é publicado em <code>conversations.inbound</code>. O canal
+<code>webrtc</code> tem sinalização funcional, mas o <strong>SFU nunca foi provisionado</strong>: zero LiveKit em
+compose algum, SDK fora das dependências do channel-gateway, e um modo de desenvolvimento devolvendo token e sala
+placebo. Tudo o que esta seção descreve sobre áudio é <strong>desenho</strong>, não capacidade entregue; a
+reconstrução está em <code>docs/adr/adr-voice-media-plane.md</code> (proposto 2026-08-19).
+</div>
 
-**Premissa central:** agentes de IA são **sempre texto**. Em voz, STT converte fala→texto na entrada e TTS converte texto→áudio na saída; o pipeline central (AI Gateway, ContextStore, Skill Flow, qualidade) opera sempre em texto e não muda por canal.
+O modelo "todo contato é conferência" se aplica **sem mudança** a todos os canais. O que varia por canal é apenas como o cliente entra na sala e como mensagens entram e saem. Para canais de texto há um único plano (controle = Redis stream + Kafka); para voz *previa-se* um segundo plano (mídia = conference room do CPaaS), com o `VoiceAdapter` como única ponte entre eles — ⚠️ *essa ponte está quebrada, ver aviso acima*.
+
+**Premissa central:** agentes de IA são **sempre texto**. Em voz, STT converteria fala→texto na entrada e TTS texto→áudio na saída; o pipeline central (AI Gateway, ContextStore, Skill Flow, qualidade) opera sempre em texto e não muda por canal. ⚠️ *A premissa é a de projeto e segue válida na reconstrução; o caminho de áudio que a exercitaria não está de pé.*
 
 ### 5.1 Canais implementados
 
@@ -222,19 +247,20 @@ O modelo "todo contato é conferência" se aplica **sem mudança** a todos os ca
 | **WhatsApp** | Webhook HTTP | Meta Cloud API (BSPs Twilio/Infobip/360dialog via `IWhatsAppProvider`) | Botões (≤3), list (4–10), fallback de coleta sequencial; mídia via AttachmentStore |
 | **SMS** | Webhook HTTP | Twilio (extensível: Telnyx, Vonage, SNS via `ISMSProvider`) | Concatenação de longos, coleta sequencial, segmentação outbound |
 | **Email** | Webhook HTTP | Mailgun (extensível: SES, SendGrid, Graph, Gmail) | Correlação por Reply-To → In-Reply-To → endereço; strip de quoted text; thread estruturado via `email_get_thread` |
-| **Voz / PSTN** | Webhook + WS de mídia | Twilio (tronco PSTN) + Deepgram (STT) + ElevenLabs/Deepgram Aura/Twilio Say (TTS) | Bot leg na conference; DTMF e STT por step (`input_mode`); STT do agente humano "ligável"; outbound via `collect` |
-| **WebRTC** | Signaling WS + SFU | LiveKit self-hosted (egress de gravação, supervisão hidden subscriber) | Negociação de mídia **vídeo → voz → texto**; tokens emitidos só pelo Channel Gateway |
+| ⚠️ **Voz / PSTN** — **NÃO ENTREGUE** | Webhook + WS de mídia | Twilio (tronco PSTN) + Deepgram (STT) + ElevenLabs/Deepgram Aura/Twilio Say (TTS) | **Não roda** (medido 2026-08-19): `handle_inbound` chama cinco métodos inexistentes, mockados no teste → `AttributeError` real, nada publicado em `conversations.inbound`. Bot leg, DTMF/STT por step e outbound via `collect` são **desenho**, não capacidade |
+| ⚠️ **WebRTC** — **SEM SFU PROVISIONADO** | Signaling WS + SFU | LiveKit self-hosted (previsto) | Sinalização roda; **mídia não**: nenhum LiveKit em compose, SDK fora das dependências do channel-gateway, modo de desenvolvimento devolve token/sala placebo. Negociação vídeo→voz→texto e egress de gravação são **desenho** |
 | **Webhook (workflow)** | HTTP | Próprio | Workflows como canal `webhook` (Arc 19); cada skill registrada num pool webhook é um "endpoint" |
 
 ### 5.2 Abstração de providers
 
-Toda integração externa fica atrás de um `Protocol` (provider): trocar Twilio por Telnyx em SMS, ou Mailgun por SES em email, ou adicionar um BSP de WhatsApp, **não toca o adapter**. Em voz, três interfaces independentes (`IVoiceProvider`, `ISTTProvider`, `ITTSProvider`) com encadeamento de fallback (ex.: ElevenLabs → Twilio Say como último recurso que nunca falha; Deepgram → Mock que mantém a chamada viva).
+Toda integração externa fica atrás de um `Protocol` (provider): trocar Twilio por Telnyx em SMS, ou Mailgun por SES em email, ou adicionar um BSP de WhatsApp, **não toca o adapter**. Em voz, três interfaces independentes (`IVoiceProvider`, `ISTTProvider`, `ITTSProvider`) com encadeamento de fallback (ex.: ElevenLabs → Twilio Say como último recurso que nunca falha; Deepgram → Mock que mantém a chamada viva). ⚠️ *Correção de 2026-08-19: as interfaces de voz existem, mas **nunca foram exercidas em execução real** — o adapter que as chamaria quebra antes. Na reconstrução, o Twilio é rebaixado a um `IVoiceProvider` entre outros, e o fallback silencioso para mock sai (sem credencial, o provider recusa em vez de devolver placebo).*
 
 ### 5.3 Web-site como front dos canais web
 
-O site do cliente usa agentes e workflows como backend, integrando os canais web (webchat e WebRTC). O mesmo motor de fluxo e os mesmos agentes especialistas atendem o widget web.
+O site do cliente usa agentes e workflows como backend, integrando os canais web (webchat e ⚠️ WebRTC — *em reconstrução, sem SFU*). O mesmo motor de fluxo e os mesmos agentes especialistas atendem o widget web; **hoje isso vale para o webchat**.
 
-> **Vs. concorrência:** voz com stack interno (gravação + transcrição + STT/TTS) e WebRTC nativo com negociação de mídia é território de CCaaS maduro (Genesys, NICE, Five9). Hyperscalers e dev-first dependem de parceiros (Vonage, AWS) ou não têm voz. O diferencial do PlugHub é ter **SIP/PSTN + WebRTC nativos** mantendo o pipeline de IA agnóstico e o Twilio restrito ao papel de tronco (nunca produz o TTS no plano de dados).
+> **Vs. concorrência:** voz com stack interno (gravação + transcrição + STT/TTS) e WebRTC nativo com negociação de mídia é território de CCaaS maduro (Genesys, NICE, Five9). Hyperscalers e dev-first dependem de parceiros (Vonage, AWS) ou não têm voz.
+> ⚠️ **Correção de 2026-08-19 — medido:** este parágrafo afirmava que *"o diferencial do PlugHub é ter **SIP/PSTN + WebRTC nativos**"*. **Não é verdade hoje** — nenhum dos dois canais de áudio funciona, e neste eixo estamos **atrás** dos CCaaS maduros, não à frente. O que se sustenta é o pipeline de IA agnóstico de canal e a arquitetura que mantém o CPaaS restrito ao papel de tronco; o áudio é reconstrução (`docs/adr/adr-voice-media-plane.md`), não diferencial. **Não usar este trecho em proposta comercial.**
 
 ---
 
@@ -267,14 +293,22 @@ O Skill Flow é a **ferramenta única de design de fluxos e workflows**. Um inte
 
 **Validação de fluxo (`validateFlow`):** adjacência fechada (todo destino existe) + política de guarda de ciclo — o YAML é validado antes de publicar.
 
-### 6.2 Outbound baseado em workflow, com discador interno
+### 6.2 Outbound baseado em workflow — ⚠️ **sem discador**
 
-O mesmo motor faz outbound. O step `collect` contata o cliente via canal (voz, WhatsApp, SMS) e suspende até resposta ou timeout, compartilhando **todas as ferramentas e agentes especialistas** do ambiente. Para voz, o `VoiceAdapter` consome `collect.events` e executa a discagem (pacing) com o tronco PSTN.
+<div style="border:2px solid #DC2626;background:#FEF2F2;padding:12px 16px;margin:16px 0;border-radius:6px">
+<strong>⚠️ Correção de 2026-08-19 — medido.</strong> O título desta seção dizia <em>"com discador interno"</em>.
+<strong>Não há discador</strong>, e ele não está apenas fora do roadmap: está <strong>bloqueado</strong> por falta de
+plano de mídia — o canal de voz quebra no caminho de entrada e o WebRTC não tem SFU provisionado. O outbound que
+funciona hoje é <strong>por mensagem</strong> (WhatsApp, SMS, e-mail, link web).
+</div>
 
-- **Canais com outbound** (voz, WhatsApp, SMS): tentativa de contato + execução do fluxo definido; usados pelo workflow para a função de retorno assíncrono.
+O mesmo motor faz outbound. O step `collect` contata o cliente via canal e suspende até resposta ou timeout, compartilhando **todas as ferramentas e agentes especialistas** do ambiente.
+
+- **Canais com outbound em operação** (WhatsApp, SMS, e-mail, link web): tentativa de contato + execução do fluxo definido; usados pelo workflow para a função de retorno assíncrono.
+- ⚠️ **Voz:** o desenho previa o `VoiceAdapter` consumindo `collect.events` e executando a discagem com pacing sobre o tronco PSTN. **Não está entregue** — o adapter quebra antes disso.
 - **Canais sem outbound:** o fluxo pode tentar outros canais com outbound, ou ficar **pendente e disponível para retomada** no primeiro inbound do cliente em qualquer canal suportado.
 
-> **Vs. concorrência:** nos incumbentes, inbound e outbound são módulos separados (Genesys Outbound, NICE Outbound, etc.), e os agentes/ferramentas de IA não atravessam essa fronteira. Aqui é **o mesmo motor declarativo** com dialer interno — inbound, outbound e automação de processo na mesma definição.
+> **Vs. concorrência:** nos incumbentes, inbound e outbound são módulos separados (Genesys Outbound, NICE Outbound, etc.), e os agentes/ferramentas de IA não atravessam essa fronteira. Aqui é **o mesmo motor declarativo** — inbound, outbound e automação de processo na mesma definição. ⚠️ *Este parágrafo dizia "com dialer interno": não há. Em voz ativa em volume, os incumbentes entregam hoje e nós não.*
 
 ### 6.3 Deploy lifecycle — hot deploy, agendamento, rollback, graceful shutdown
 
@@ -476,10 +510,10 @@ O PlugHub é **anti-lock-in por quatro vias que não dependem de "rodar qualquer
 | Billing previsível | Não | Não | Parcial | Sim | Parcial | Parcial | Parcial | Não | Parcial | **Capacidade** |
 | Supervisão em tempo real | Sim | Sim | Sim | Sim | Sim | Sim | Não | Não | Não | **Sim** |
 | Escopo de supervisor (grupo+turno+módulo) | Parcial | Parcial | Custom | Custom | Custom | Custom | N/A | N/A | N/A | **Nativo (JWT)** |
-| Voz com stack interno (gravação+STT/TTS) | Parcial | Parceiro | Sim | Sim | Sim | Parceiro | N/A | N/A | N/A | **SIP+WebRTC** |
+| Voz com stack interno (gravação+STT/TTS) | Parcial | Parceiro | Sim | Sim | Sim | Parceiro | N/A | N/A | N/A | ⚠️ **Não entregue — em reconstrução** (medido 2026-08-19; este campo dizia "SIP+WebRTC") |
 | Motor único p/ todos os fluxos | Múltiplos | Múltiplos | Múltiplos | Múltiplos | Parcial | Múltiplos | Só IA | Só IA | Só workflow | **Skill Flow** |
 | Visibilidade por participante (campo×role) | Não | Parcial | Não | Não | Não | Não | N/A | N/A | N/A | **Sim** |
-| Outbound unificado (mesmo motor) | Não | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **Mesmo motor + dialer** |
+| Outbound unificado (mesmo motor) | Não | Não | Módulo sep. | Módulo sep. | Config sep. | Módulo sep. | N/A | N/A | Custom | **Mesmo motor** — ⚠️ *sem dialer* (medido 2026-08-19; este campo dizia "+ dialer") |
 | Processo multi-etapa/multi-contato, agnóstico de canal (workflow + trace + roteamento) | Não | Case (CRM) | Analytics-only | Parcial | Não | Não | Thread | Não | Não | **Workflow + trace unificado** |
 | Continuidade cross-canal do processo ("business in any media") | Não | Não | Parcial | Parcial | Não | Não | N/A | N/A | N/A | **✅ suspend/resume + retomada por reaparecimento** |
 
@@ -515,13 +549,15 @@ Esta seção registra, para um avaliador criterioso, onde vale calibrar expectat
 
 4. **Calendário unificado** → o `calendar-api` é um **motor puro** (`is_open`, `next_open_slot`, `add_business_duration`, status open/closed/holiday, feriados recorrentes `MM-DD`, timezone por tenant). Atende plenamente **horários de funcionamento, feriados e a retomada de workflow em horário útil** (steps `suspend`/`collect` com `business_hours`). Já o **"horário de deploy"** é, na prática, **agendamento por data/hora** (workflow `skill_scheduled_deploy_v1`), não uma janela de calendário de negócio. Unificar deploy ao mesmo calendário de feriados/funcionamento é uma extensão natural (§20.2).
 
-5. **Usage metering — adapters de canal** → as dimensões `whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` têm as funções de emissão prontas, mas **os adapters ainda não as acionam** (pendente declarado). O metering de `sessions`, `messages` e `llm_tokens_*` está ativo.
+5. **Usage metering — adapters de canal** → as dimensões `whatsapp_conversations`, `sms_segments`, `email_messages` têm as funções de emissão prontas, mas **os adapters ainda não as acionam** (wiring pendente). O metering de `sessions`, `messages` e `llm_tokens_*` está ativo. ⚠️ *Correção de 2026-08-19 (medido): `voice_minutes` não é wiring pendente — está **bloqueado**. Não há call site a wirar porque o `VoiceAdapter` não roda (`adapters/voice.py:236,247,433,558,565` — `AttributeError` antes de publicar em `conversations.inbound`).*
 
 6. **Integração metering × pricing** → o módulo que aplica planos e escreve `{tenant}:quota:limit:*` automaticamente está pendente; hoje as quotas são armadas na ativação de plano/capacity governance.
 
 7. **Auditoria LGPD — fases pendentes** → `original_content` desmascarado em batch (requer endpoint no Core), logs de `user_access`, pipeline de SAR/erasure (pseudonimização/anonimização) e `config_snapshot` para o DPO estão em fases futuras. Os eixos de sessão e de chamadas MCP estão ativos.
 
-8. **Áudio inbound de WhatsApp** → hoje armazenado como documento; STT de áudio de WhatsApp é fase futura (STT está pleno no canal de voz).
+8. **Áudio inbound de WhatsApp** → hoje armazenado como documento; STT de áudio de WhatsApp é fase futura. ⚠️ *Correção de 2026-08-19: este item afirmava que "STT está pleno no canal de voz" — **não está**, o canal de voz não roda (o adapter levanta `AttributeError` no caminho de entrada), então o STT nunca foi exercido em execução real.*
+
+8b. ⚠️ **Canais de áudio — voz/PSTN e WebRTC (correção de 2026-08-19, medido)** → **não estão entregues**. O canal `voice` quebra no caminho de entrada (cinco métodos inexistentes em `VoiceAdapter.handle_inbound`, mockados no teste — daí a suíte verde) e nada é publicado em `conversations.inbound`. O canal `webrtc` tem sinalização funcional, mas **nenhum SFU provisionado em ambiente algum**: sem LiveKit em compose, sem o SDK nas dependências do channel-gateway, com um modo de desenvolvimento devolvendo token e sala placebo. Consequências diretas: não há voz nativa, não há SIP/PSTN + WebRTC nativos, não há discador interno (está **bloqueado**, não meramente não-planejado) e não há gravações de voz/WebRTC. Reconstrução em `docs/adr/adr-voice-media-plane.md` (proposto 2026-08-19). **Este é o item mais caro de errar em qualificação: um prospect de operação de voz desqualifica hoje.**
 
 9. **Gaps conhecidos do ciclo de conferência** (registrados internamente): AHT pode ser inflado por wrap-up em alguns caminhos; algumas contagens de "remaining" não consideram todos os especialistas de IA; supervisor sem heartbeat de cleanup em certos cenários. Correções incrementais em andamento; relevante para operações de altíssimo volume.
 
@@ -583,7 +619,7 @@ Por quê: comprador diferente do CCaaS (Head de Digital Commerce / Growth, métr
 
 ### 21.3 Onde concorrentes ainda levam vantagem (seja honesto na avaliação)
 
-- **Maturidade de telefonia pura/discador em escala industrial:** Genesys/NICE/Five9 têm décadas de hardening em PSTN, WFM (workforce management) completo e certificações. O PlugHub tem voz nativa, mas WFM (escala/previsão de força de trabalho) não é foco atual.
+- **Telefonia e discador — vantagem inteira deles, não parcial (corrigido 2026-08-19, medido):** Genesys/NICE/Five9 têm décadas de hardening em PSTN, WFM completo e certificações. Esta linha dizia *"o PlugHub tem voz nativa, mas WFM não é foco"* — **não tem**: os dois canais de áudio não funcionam (voz quebra no caminho de entrada; WebRTC sem SFU provisionado) e o discador está bloqueado por falta de plano de mídia. Em voz e em WFM, eles entregam hoje e nós não.
 - **Ecossistema CRM/dados:** quem já vive dentro de Salesforce/ServiceNow ganha integração de dados out-of-the-box que aqui exigiria MCP Servers customizados.
 - **Selos de compliance prontos (SOC 2 etc.):** ainda no roadmap (§20.3) — embora a arquitetura de auditoria já produza a evidência técnica.
 

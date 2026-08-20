@@ -5,6 +5,22 @@
 > **Base:** `CLAUDE.md`, `CHANGELOG.md` até 2026-07-27, varredura de `packages/` e `docs/arcos/`.
 > **Data:** julho de 2026 · substitui a versão de 09/06/2026.
 
+> ⚠️ **Correção de 2026-08-19 — medido.** A afirmação de que os canais de áudio (voz/PSTN e WebRTC) e o
+> discador estão **entregues** — selo `[implementado]`, "completos e integrados", "uma campanha outbound de voz
+> **roda**" — é **falsa**. `VoiceAdapter.handle_inbound` chama **cinco métodos que não existem** em
+> `packages/channel-gateway` (`_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`,
+> `_normalize_menu_result` — `adapters/voice.py:236,247,433,558,565`), mockados em
+> `tests/test_voice_adapter.py:116-121`: em runtime real dá `AttributeError` antes de publicar qualquer coisa em
+> `conversations.inbound`, e **não há uma única sessão de voz** no ambiente. `collect`/menu por voz está morto
+> (`stt_queue` sem consumidor, `_handle_stt_result` sem chamador — `voice.py:624-629,657`). Em WebRTC a
+> sinalização roda, mas o **plano de mídia nunca foi provisionado**: zero LiveKit em compose algum, SDK fora de
+> `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode` devolvendo token/sala/egress placebo
+> (`webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje**, e o discador — que depende do
+> `VoiceAdapter` — está **bloqueado por falta de plano de mídia**, não apenas pendente de validação. O
+> compromisso registrado neste documento de que "o que falta não é função, é exercício em operação" **não se
+> sustenta**: falta função. **Material de venda: não usar estes trechos em proposta comercial** até o arco fechar
+> V-F2. Reconstrução em [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, fases V-F0..V-F5).
+
 Este documento descreve **o que está implementado hoje**. Onde o estado é parcial, está marcado como parcial;
 onde é projeto, vive isolado na §25. A §24 registra, com honestidade de engenharia, onde a narrativa de produto
 antecede a implementação.
@@ -21,8 +37,10 @@ antecede a implementação.
 
 > A distinção entre **[implementado]** e **[smoke]** é a que mais importa numa avaliação honesta. "Existe no
 > código" e "foi exercitado" são afirmações diferentes, e confundi-las nas duas direções é igualmente danoso:
-> subvender faz dimensionar trabalho já feito; sobrevender quebra a confiança na primeira verificação. O canal de
-> voz e o outbound por voz são os casos típicos — completos e pouco exercitados.
+> subvender faz dimensionar trabalho já feito; sobrevender quebra a confiança na primeira verificação. ~~O canal de
+> voz e o outbound por voz são os casos típicos — completos e pouco exercitados.~~ **Corrigido 2026-08-19:** o
+> canal de voz e o outbound por voz eram exatamente o caso oposto — classificados como `[implementado]` sem
+> estarem, e a medição os rebaixou a **[projeto]** (ver banner no topo). O exemplo virou o contra-exemplo.
 
 **O que mudou desde a versão de junho.** Sete semanas de implementação e três correções factuais: o processo
 multi-contato **voltou** (a v1 dizia que a entidade Journey fora eliminada por redundância — foi, mas o modelo
@@ -111,7 +129,7 @@ Duas consequências verificáveis:
 | **Redis** | Estado de conversa em tempo real, `pipeline_state`, filas, heartbeats, ContextStore, canonical stream, tokens de retomada |
 | **PostgreSQL + pgvector** | Agent Registry; schemas `auth`, `workflow`, `evaluation`, `identity`, `dialog`, `scheduler`, `outbound`; histórico de sessões; base vetorial (RAG) |
 | **ClickHouse** | Analytics operacional, audit log, métricas de qualidade, sinais de cliente |
-| **Object Storage** | Áudio de ligações, anexos, gravações WebRTC |
+| **Object Storage** | Anexos de webchat (**[real]**). ~~Áudio de ligações, gravações WebRTC~~ — **[projeto]** *(corrigido 2026-08-19)*: os canais de áudio estão em reconstrução (o `VoiceAdapter` não roda; WebRTC não tem plano de mídia provisionado), logo não existe hoje áudio de ligação nem gravação WebRTC a armazenar |
 
 ### 2.3 Inventário de serviços
 
@@ -298,13 +316,22 @@ canal e à espera de dias.
 
 ---
 
-## 6. Canais — omnichannel com voz e WebRTC nativos
+## 6. Canais — omnichannel; áudio (voz e WebRTC) é projeto
 
-> **[real]** para webchat, WhatsApp, SMS, e-mail, webhook · **[implementado]** para voz/PSTN e WebRTC
->
-> Voz e WebRTC estão **completos e integrados** — tronco PSTN via Twilio, STT e TTS de provedores externos atrás
-> das três interfaces, SFU LiveKit com gravação e supervisão. O que falta não é função: é **exercício em
-> operação**. É a diferença entre o selo [implementado] e o [real].
+> **[real]** para webchat, WhatsApp, SMS, e-mail, webhook · **[projeto]** para voz/PSTN e WebRTC
+
+> ⚠️ **Correção de 2026-08-19 — medido.** O texto original desta seção dizia que voz e WebRTC estavam
+> **[implementado]**, "completos e integrados", e que "o que falta não é função: é exercício em operação". É
+> **falso**. `VoiceAdapter.handle_inbound` chama cinco métodos inexistentes
+> (`adapters/voice.py:236,247,433,558,565`, mockados em `tests/test_voice_adapter.py:116-121`) → `AttributeError`
+> em runtime real, antes de qualquer publicação em `conversations.inbound`; `collect`/menu por voz está morto
+> (`voice.py:624-629,657`), sobrando no máximo DTMF. Em WebRTC só a sinalização roda: **nenhum SFU LiveKit
+> provisionado** em compose algum, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode`
+> devolvendo token/sala/egress placebo (`webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona
+> hoje** — falta função, e o compromisso "é só exercício em operação" **não se sustenta**. O desenho abaixo
+> (bot leg, três interfaces de provider, negociação de medium) permanece válido **como projeto**.
+> **Material de venda: não usar estes trechos em proposta comercial** até o arco fechar V-F2. Ver
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
 
 O modelo "todo contato é conferência" aplica-se **sem mudança** a todos os canais. O que varia é apenas como o
 cliente entra na sala e como mensagens entram e saem. Para texto há um plano só (controle = Redis stream +
@@ -320,16 +347,19 @@ em texto e não muda por canal.
 | **WhatsApp** | Webhook HTTP | Meta Cloud API (BSPs via `IWhatsAppProvider`) | Botões (≤3), list (4–10), fallback de coleta sequencial |
 | **SMS** | Webhook HTTP | Twilio (extensível via `ISMSProvider`) | Concatenação, coleta sequencial, segmentação outbound |
 | **E-mail** | Webhook HTTP | Mailgun (extensível) | Correlação Reply-To → In-Reply-To → endereço; strip de quoted text |
-| **Voz / PSTN** | Webhook + WS de mídia | Twilio (tronco) + Deepgram (STT) + ElevenLabs/Aura (TTS) | Bot leg na conference; DTMF e STT por step; outbound via `collect` |
-| **WebRTC** | Signaling WS + SFU | LiveKit self-hosted | Negociação **vídeo → voz → texto**; tokens emitidos só pelo Channel Gateway |
+| **Voz / PSTN** ⚠️ **[projeto]** | Webhook + WS de mídia | Twilio (tronco) + Deepgram (STT) + ElevenLabs/Aura (TTS) | **NÃO funciona**: `handle_inbound` quebra com `AttributeError` (`voice.py:236,247,433,558,565`); `collect`/menu por voz sem consumidor (`voice.py:624-629,657`). Bot leg, STT por step e outbound via `collect` são **desenho**, não entrega |
+| **WebRTC** ⚠️ **[projeto]** | Signaling WS + SFU | LiveKit self-hosted | Só a **sinalização** roda. **SFU nunca provisionado** (zero LiveKit em compose, SDK fora do `pyproject.toml:6-23`, `_dev_mode` placebo em `webrtc_provider.py:167`). Negociação vídeo→voz→texto é desenho |
 | **Webhook** | HTTP | Próprio | Workflows como canal (Arc 19); cada pool webhook é um endpoint |
 
 **Abstração de providers.** Toda integração externa fica atrás de um `Protocol`: trocar Twilio por Telnyx em SMS,
 ou Mailgun por SES, **não toca o adapter**. Em voz, três interfaces independentes (`IVoiceProvider`,
 `ISTTProvider`, `ITTSProvider`) com encadeamento de fallback — ElevenLabs → Twilio Say como último recurso que
-nunca falha; Deepgram → Mock que mantém a chamada viva.
+nunca falha; Deepgram → Mock que mantém a chamada viva. *(A abstração vale hoje para SMS e e-mail; em voz as três
+interfaces existem em código mas nunca foram exercidas — o adapter que as consumiria não roda. **Projeto**.)*
 
-**Invariante WebRTC:** tokens LiveKit são emitidos exclusivamente pelo Channel Gateway, nunca expostos ao browser.
+**Invariante WebRTC (projeto):** tokens LiveKit devem ser emitidos exclusivamente pelo Channel Gateway, nunca
+expostos ao browser. Hoje o invariante é vazio na prática: sem SFU provisionado, o `_dev_mode` devolve token
+placebo (`webrtc_provider.py:167`).
 
 ---
 
@@ -502,16 +532,29 @@ aborta a importação. Teto síncrono configurável (default 5.000 linhas → 41
 
 A distinção aqui é entre **capacidade** e **otimização**, e confundir as duas subvende o produto.
 
-**Existe e funciona:** o substrato de campanha completo (mailing, campanha, delivery, governança de fadiga,
-importador, fan-out dispatcher/worker) e o **contato ativo por qualquer canal**, inclusive **voz** — o step
-`collect` dispara o contato e o `VoiceAdapter` executa a discagem sobre o tronco PSTN. Uma campanha outbound de
-voz **roda**.
+> ⚠️ **Correção de 2026-08-19 — medido.** A afirmação de que "uma campanha outbound de voz **roda**" e de que a
+> discagem existe é **falsa**. A discagem depende do `VoiceAdapter`, que **não roda**: `handle_inbound` chama
+> cinco métodos inexistentes (`adapters/voice.py:236,247,433,558,565`, mockados em
+> `tests/test_voice_adapter.py:116-121`) e estoura `AttributeError` antes de publicar em `conversations.inbound`;
+> não há uma única sessão de voz no ambiente. O discador está **bloqueado por falta de plano de mídia**, não
+> pendente de otimização — logo o enquadramento abaixo ("falta só o pacing preditivo") inverte a realidade: falta
+> a **capacidade**, e o pacing vem depois dela. **Material de venda: não usar estes trechos em proposta
+> comercial** até o arco fechar V-F2. Ver [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
 
-**Falta a camada de otimização de discagem:** pacing preditivo — os algoritmos que estimam taxa de atendimento
+**Existe e funciona:** o substrato de campanha completo (mailing, campanha, delivery, governança de fadiga,
+importador, fan-out dispatcher/worker) e o **contato ativo pelos canais de texto**. ~~inclusive **voz** — o step
+`collect` dispara o contato e o `VoiceAdapter` executa a discagem sobre o tronco PSTN. Uma campanha outbound de
+voz **roda**.~~ **Voz não:** o `collect` por voz é **projeto** — o adapter que executaria a discagem quebra em
+runtime (acima).
+
+**Falta, antes de qualquer otimização, o próprio canal de voz** (arco V-F0..V-F2 do
+[`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md)). Só depois dele entra a camada de otimização de
+discagem: pacing preditivo — os algoritmos que estimam taxa de atendimento
 para maximizar a ocupação do agente —, além do guard de *abandonment ratio* (TCPA/LGPD) e das listas DNC como
 **invariantes do motor**, e não responsabilidade do YAML (§25.3).
 
-**A consequência prática:** em volume moderado, a operação funciona. Em alto volume de **lista**, a ocupação de
+**A consequência prática** *(vale para os canais de texto; para voz, nenhuma operação funciona hoje)***:** em
+volume moderado, a operação funciona. Em alto volume de **lista**, a ocupação de
 agente fica abaixo do que um discador preditivo maduro entrega — é aí que os incumbentes têm vantagem, e é
 otimização de eficiência, não ausência de função.
 
@@ -521,8 +564,9 @@ processo — retorno prometido, segundo passo de negociação, coleta assíncron
 indiferenciada. Para uma operação centrada em processo, ele pode nem aparecer; para um BPO contratado justamente
 para discagem de carteira em massa, ele é material e deve ser dito.
 
-> **Selo:** o substrato de campanha é **[smoke]** (Fases 1–5 com smoke end-to-end). O **outbound por voz** é
-> **[implementado]** — completo, pouco exercitado. Validá-lo é item explícito de teste, não de construção.
+> **Selo:** o substrato de campanha é **[smoke]** (Fases 1–5 com smoke end-to-end, **canais de texto**). O
+> **outbound por voz** é **[projeto]** — *(corrigido 2026-08-19; dizia `[implementado]`, "completo, pouco
+> exercitado", e que validá-lo era item de teste e não de construção — **é de construção**)*.
 
 > **Vs. concorrência:** nos incumbentes, outbound é módulo licenciado à parte, com configuração, billing e time
 > próprios, e os agentes de IA não atravessam a fronteira inbound/outbound. Aqui é o mesmo motor declarativo, o
@@ -1019,8 +1063,9 @@ colada por cima: decorre de humano e IA disputarem os mesmos slots da mesma fila
 
 Metering (`usage.events`) é estritamente **medição**, separado de pricing — registros de uso não carregam preço.
 Dimensões ativas: `sessions`, `messages`, `llm_tokens_input/output`, `webchat_attachments`. Pendentes:
-`whatsapp_conversations`, `voice_minutes`, `sms_segments`, `email_messages` — funções prontas, adapters ainda não
-as acionam (§24.5).
+`whatsapp_conversations`, `sms_segments`, `email_messages` — funções prontas, adapters ainda não as acionam.
+`voice_minutes` **não é wiring pendente e sim bloqueado** *(corrigido 2026-08-19 — medido)*: não há call site a
+wirar porque o `VoiceAdapter` não roda (`AttributeError` em runtime, §24.5).
 
 | Produto | Variáveis de custo | Previsibilidade |
 |---|---|---|
@@ -1126,8 +1171,11 @@ homologação dedicado, com entrypoint de teste e MCP apontando para sandbox, is
 o deploy agendável da skill validada ao pool de produção. Falta o **gate gerenciado** (aprovação humana + replay
 como critério automático + assinatura) — §25.1.
 
-**24.5 Metering de canal.** `whatsapp_conversations`, `voice_minutes`, `sms_segments` e `email_messages` têm
-funções prontas mas **os adapters ainda não as acionam**.
+**24.5 Metering de canal** *(reescrito 2026-08-19 — medido)*. `whatsapp_conversations`, `sms_segments` e
+`email_messages` têm funções prontas mas **os adapters ainda não as acionam** — é wiring pendente.
+`voice_minutes` **não**: ~~pendente declarado~~ está **bloqueado**, e não há call site a wirar, porque o
+`VoiceAdapter` não roda (`voice.py:236,247,433,558,565` — `AttributeError` antes de publicar em
+`conversations.inbound`). Destravar é o arco de plano de mídia, não uma linha de metering.
 
 **24.6 Integração metering × pricing.** O módulo que aplica planos e escreve as quotas automaticamente está
 pendente; hoje as quotas são armadas na ativação de plano.
@@ -1135,13 +1183,22 @@ pendente; hoje as quotas são armadas na ativação de plano.
 **24.7 Auditoria LGPD.** Ativos os eixos de sessão e de chamadas MCP. Pendentes: desmascaramento em lote, logs de
 `user_access`, pipeline de SAR e apagamento, snapshot de config.
 
-**24.8 Otimização de discagem.** A campanha outbound por voz **funciona** (§8.4); o que não existe é o **pacing
-preditivo** e os guards regulatórios como invariante do motor. Em alto volume, a ocupação de agente fica abaixo
-do que os incumbentes entregam — é diferença de eficiência, não de capacidade.
+**24.8 Discagem** *(reescrito 2026-08-19 — medido)*. ~~A campanha outbound por voz **funciona** (§8.4); o que não
+existe é o pacing preditivo…~~ **Falso.** Não existe discagem: ela depende do `VoiceAdapter`, que quebra em
+runtime (`voice.py:236,247,433,558,565`). O discador está **bloqueado por falta de plano de mídia**. Pacing
+preditivo e guards regulatórios continuam ausentes, mas são a camada **seguinte**, não a lacuna atual — a lacuna
+é de **capacidade**, não de eficiência.
 
-**24.8b Voz e outbound por voz são [implementado], não [real].** Estão completos e integrados, e **pouco
-exercitados** em operação. É o maior bloco de "código pronto e não validado" da plataforma, e validá-lo é item
-explícito do plano de testes — não de construção.
+**24.8b Voz e WebRTC são [projeto], não [implementado]** *(reescrito 2026-08-19 — medido)*. ~~Estão completos e
+integrados, e pouco exercitados; validá-los é item do plano de testes, não de construção.~~ **Falso, e é o pior
+erro deste documento.** Voz: cinco métodos inexistentes chamados por `handle_inbound`
+(`adapters/voice.py:236,247,433,558,565`), mockados no teste (`tests/test_voice_adapter.py:116-121`) — o teste
+verde nunca podia reprovar; `collect`/menu por voz sem consumidor (`voice.py:624-629,657`). WebRTC: sinalização
+roda, **plano de mídia nunca provisionado** (zero LiveKit em compose, SDK fora de
+`packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode` placebo em `webrtc_provider.py:167`). **Nenhum dos
+dois canais de áudio funciona hoje.** Reconstrução em
+[`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md), fases V-F0..V-F5. **Material de venda: não usar
+estes trechos em proposta comercial** até o arco fechar V-F2.
 
 **24.9 Gaps do ciclo de conferência.** `remaining` não considera todos os especialistas de IA em alguns caminhos;
 supervisor sem cleanup de heartbeat em certos cenários; a sessão de wrap-up ainda entra na contagem de contato e
@@ -1154,8 +1211,9 @@ Cliente 360 agregado seguem pendentes**.
 não acessa as capacidades nativas. A linha "BYO framework" de qualquer matriz competitiva deve ser lida com essa
 fronteira. BYO-**LLM** é diferente e permanece pleno.
 
-**24.12 Áudio inbound de WhatsApp** é armazenado como documento; STT desse canal é fase futura. STT é pleno no
-canal de voz.
+**24.12 Áudio inbound de WhatsApp** é armazenado como documento; STT desse canal é fase futura. ~~STT é pleno no
+canal de voz.~~ *(Corrigido 2026-08-19: **não é** — o canal de voz não roda, e o caminho de STT por step está sem
+consumidor, `voice.py:624-629,657`. Não há STT pleno em canal algum.)*
 
 **24.13 WFM.** Não substitui workforce management dedicado — não há forecasting de demanda, escala de turnos nem
 gestão de aderência. Integra com WFM externo via MCP.
@@ -1178,7 +1236,10 @@ deploy" em "promover com evidência".
 `audit_access_log` e `mcp.audit` como evidência técnica. É **pré-requisito** do discurso de auditabilidade e
 condição de operação sob o EU AI Act — não um item opcional de backlog.
 
-**25.3 Otimização de discagem.** Não é o discador — a discagem existe (§8.4). É a camada de **pacing preditivo**
+**25.3 Discador e otimização de discagem.** ~~Não é o discador — a discagem existe (§8.4).~~ *(Corrigido
+2026-08-19 — medido: **a discagem não existe**; depende do `VoiceAdapter`, que quebra em runtime, e está
+bloqueada por falta de plano de mídia — [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md), V-F0..V-F2.
+O discador entra nesta seção de roadmap junto com o que segue.)* Depois dele, a camada de **pacing preditivo**
 (estimativa de taxa de atendimento para maximizar ocupação), mais o guard de *abandonment ratio* TCPA/LGPD e as
 listas DNC **como invariante do motor**: um cliente que configure o fluxo errado não consegue violar a regulação,
 porque o guard fica no gateway de mídia e não no YAML.

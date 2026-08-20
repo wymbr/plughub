@@ -2,6 +2,18 @@
 
 > Última atualização: 2026-05-25 · Estado: Arc 16
 
+> ⚠️ **Correção de 2026-08-19 — medido.** A afirmação de que **WebRTC** está "implementado no Arc 15" e de que o
+> canal de **voz/PSTN opera** sobre tronco Twilio com STT/TTS é **falsa**. `VoiceAdapter.handle_inbound` chama
+> cinco métodos que não existem em `packages/channel-gateway` (`_open_session`, `_route_inbound`,
+> `_publish_inbound`, `_normalize_text`, `_normalize_menu_result` — `adapters/voice.py:236,247,433,558,565`),
+> mockados em `tests/test_voice_adapter.py:116-121`: em runtime real dá `AttributeError` antes de publicar em
+> `conversations.inbound`, e não há uma única sessão de voz no ambiente. `collect`/menu por voz está morto
+> (`voice.py:624-629,657`). Em WebRTC só a sinalização roda — o plano de **mídia nunca foi provisionado** (zero
+> LiveKit em compose algum, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`, `_dev_mode` devolvendo
+> token/sala/egress placebo em `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje.**
+> **Material de venda: não usar estes trechos em proposta comercial** até o arco fechar V-F2. Reconstrução em
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, fases V-F0..V-F5).
+
 ## O que é o PlugHub
 
 O **PlugHub** é uma plataforma de orquestração enterprise que conecta agentes humanos e agentes de IA — de qualquer origem — a sistemas de negócio e clientes, com qualidade mensurável e sem criar dependência de fornecedor.
@@ -22,9 +34,9 @@ O PlugHub atende três perfis de comprador:
 
 ### Atendimento omnichannel
 
-Suporte nativo a **WhatsApp, Webchat, E-mail, SMS, Instagram e Telegram**, além de **WebRTC** (web/mobile) — implementado no Arc 15. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
+Suporte nativo a **WhatsApp, Webchat, E-mail, SMS, Instagram e Telegram**. **WebRTC** (web/mobile) e **voz/PSTN** são **projeto** — só a sinalização WebRTC roda; ver banner no topo. O Channel Gateway normaliza cada canal para um envelope de evento uniforme — agentes nunca conhecem o protocolo do canal de origem. Menus são renderizados nativamente (botões no WhatsApp, formulários no Webchat) ou coletados sequencialmente em canais sem suporte nativo.
 
-O canal **WebRTC** é construído sobre um SFU LiveKit self-hosted, com negociação de medium em tempo real (video → voice → text), gravação por egress, STT e TTS server-side. O canal de **voz/PSTN** opera sobre tronco Twilio, com STT (Deepgram) e TTS (ElevenLabs, com fallbacks) — o agente de IA atende em texto, convertido de/para áudio pelo `VoiceAdapter`. Uma decisão arquitetural em aberto avalia, no futuro, fazer a ponte PSTN → WebRTC via LiveKit SIP Ingress para unificar os dois canais de áudio.
+**Projeto (não entregue — medido 2026-08-19):** o canal **WebRTC** é *desenhado* sobre um SFU LiveKit self-hosted, com negociação de medium em tempo real (video → voice → text), gravação por egress, STT e TTS server-side — mas o SFU nunca foi provisionado e o provider devolve token/sala/egress placebo. O canal de **voz/PSTN** é *desenhado* sobre tronco Twilio, com STT (Deepgram) e TTS (ElevenLabs, com fallbacks) e o agente de IA atendendo em texto pela conversão do `VoiceAdapter` — mas o `VoiceAdapter` quebra em runtime e nunca abriu uma sessão. O desenho segue válido; a entrega não existe. A ponte PSTN → WebRTC via LiveKit SIP Ingress é decisão posterior, e depende de um plano de mídia que ainda não está de pé.
 
 ### Roteamento multicritério
 

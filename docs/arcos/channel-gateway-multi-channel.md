@@ -1,6 +1,25 @@
 # Channel Gateway — Arquitetura Multi-Canal
 
-> Última atualização: 2026-05-25 · Estado: Arc 16 · Status: Phase 1 (abstrações) + WhatsApp + SMS + Email + Voice + WebRTC implementados
+> Última atualização: 2026-08-19 · Estado: Arc 16 · Status: Phase 1 (abstrações) + WhatsApp + SMS + Email implementados · **Voice = especificação, não roda** · **WebRTC = só sinalização, plano de mídia não provisionado** (ver correção abaixo)
+
+> ⚠️ **Correção de 2026-08-19 — medido. O cabeçalho acima está errado em dois canais.**
+>
+> - **Voice (§9) NÃO roda.** `handle_inbound` chama cinco métodos que **não existem** em
+>   `packages/channel-gateway`: `_open_session`, `_route_inbound`, `_publish_inbound`,
+>   `_normalize_text`, `_normalize_menu_result` (`adapters/voice.py:236,247,433,558,565`; ausentes em
+>   `adapters/base.py:44-77`). Os cinco são mockados em `tests/test_voice_adapter.py:116-121` — o teste
+>   **cria** o que a produção não tem e verifica que foi chamado. Este doc descreve os helpers em
+>   §:163,183 como se fossem infraestrutura herdada da ABC; **não são**. Mais: `_collect_loop` é
+>   prometido no docstring do módulo e não existe, `stt_queue` nunca é drenada e `_handle_stt_result`
+>   não tem chamador ⇒ **collect por voz está morto**, só DTMF funciona.
+> - **WebRTC roda só na sinalização.** O plano de mídia nunca foi provisionado (zero LiveKit em
+>   compose, SDK fora do `pyproject`, `_dev_mode` devolvendo placebo) — ver `arc15-webrtc.md:3-17`.
+>
+> **O desenho deste documento continua sendo a referência canônica de canal de voz** — o modelo de
+> conference-como-sala, os três Protocols, a matriz DTMF×STT, a gravação por segmento com aviso LGPD
+> e a sequência de fases são reaproveitados sem mudança pelo arco de reconstrução
+> ([`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md)). O que falta é execução, não
+> projeto. Leia §9 e §13 como **especificação**, nunca como as-built.
 
 **Versão:** 1.2 — 2026-05-25  
 **Escopo:** `packages/channel-gateway/`
@@ -113,7 +132,7 @@ class ContactOpenEvent(BaseModel):
 ChannelAdapter (ABC)  —  adapters/base.py
 ├── WebSocketAdapter  —  adapters/ws_base.py
 │   ├── WebchatAdapter    adapters/webchat.py   (refatorado)
-│   └── WebRTCAdapter     adapters/webrtc.py    (Arc 15 — implementado)
+│   └── WebRTCAdapter     adapters/webrtc.py    (Arc 15 — só sinalização; sem SFU)
 ├── WebhookAdapter    —  adapters/webhook_base.py
 │   ├── WhatsAppAdapter   adapters/whatsapp.py
 │   ├── SMSAdapter        adapters/sms.py
@@ -129,7 +148,7 @@ ChannelAdapter (ABC)  —  adapters/base.py
         └── TwilioSayTTSProvider
 ```
 
-> O canal WebRTC (browser-to-SFU, LiveKit) foi implementado no Arc 15 (6 fases A–F). Tem hierarquia própria de providers — ver [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md). Apenas `TwilioProvider` foi implementado como `IVoiceProvider`; a abstração `IVoiceProvider` permite adicionar outros CPaaS sem refatorar o adapter.
+> O canal WebRTC (browser-to-SFU, LiveKit) teve as 6 fases A–F do Arc 15 **escritas em código**, mas o plano de **mídia nunca foi provisionado** (sem serviço LiveKit em compose, sem env `LIVEKIT_*`, SDK fora do `pyproject`, `_dev_mode` placebo) — de pé, só a sinalização. Hierarquia própria de providers em [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md):3-17. Do lado `voice`, apenas `TwilioProvider` existe como `IVoiceProvider`, e o `VoiceAdapter` que o consome **não roda** (ver correção no topo); a abstração `IVoiceProvider` permite adicionar outros CPaaS sem refatorar o adapter.
 
 ---
 
@@ -1351,7 +1370,7 @@ com o filtro `identifier` adicionado na sessão anterior.
 16. Correlação por `In-Reply-To` / reply+{session_id}@ routing
 17. `main.py` — endpoint `POST /webhooks/email`
 
-### Fase 5 — Voice — implementada
+### Fase 5 — Voice — **NÃO entregue** (código escrito, não executável — ver correção no topo)
 
 18. `adapters/voice.py` — `VoiceAdapter` + `IVoiceProvider` / `ISTTProvider` / `ITTSProvider`
 19. Provider `TwilioProvider` (CPaaS — único provider implementado)
@@ -1360,11 +1379,12 @@ com o filtro `identifier` adicionado na sessão anterior.
 22. `main.py` — endpoints `/webhooks/voice/inbound` + `/webhooks/voice/status`
     + WS `/voice/media/{call_sid}`
 
-### Fase 6 — WebRTC — implementada (Arc 15)
+### Fase 6 — WebRTC — **parcial**: sinalização de pé, mídia não provisionada (Arc 15)
 
 23. `adapters/webrtc.py` — `WebRTCAdapter` (browser-to-SFU via LiveKit); negociação
-    de medium, STT/TTS server-side, egress recording, signaling WS. 6 fases A–F
-    concluídas — ver [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md).
+    de medium, STT/TTS server-side, egress recording, signaling WS. As 6 fases A–F
+    foram **codificadas**, mas nada de mídia foi provisionado (sem SFU, sem SDK,
+    `_dev_mode` placebo) — ver [`docs/arcos/arc15-webrtc.md`](arc15-webrtc.md):3-17.
 
 ---
 

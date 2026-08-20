@@ -284,8 +284,21 @@ arquivo e fan-out dispatcher/worker — sem stack paralela, sem SKU separado, se
 
 ## 5. O que não justifica — e vale admitir
 
-Canais e voz (WebRTC, PSTN), console de operador, dashboards, relatórios, ABAC e autenticação, agenda e
-calendário, formulários de diálogo, i18n, importadores. Provavelmente **70% do esforço de engenharia**.
+> ⚠️ **Correção de 2026-08-19 — medido.** Contabilizar **voz (PSTN) e WebRTC** como esforço **entregue** é
+> **falso**. `VoiceAdapter.handle_inbound` chama cinco métodos que não existem em `packages/channel-gateway`
+> (`_open_session`, `_route_inbound`, `_publish_inbound`, `_normalize_text`, `_normalize_menu_result` —
+> `adapters/voice.py:236,247,433,558,565`), mockados em `tests/test_voice_adapter.py:116-121`: em runtime real dá
+> `AttributeError` antes de publicar em `conversations.inbound`, e não há uma única sessão de voz no ambiente;
+> `collect`/menu por voz está morto (`voice.py:624-629,657`). Em WebRTC só a sinalização roda — plano de mídia
+> nunca provisionado (zero LiveKit em compose, SDK fora de `packages/channel-gateway/pyproject.toml:6-23`,
+> `_dev_mode` placebo em `webrtc_provider.py:167`). **Nenhum dos dois canais de áudio funciona hoje** — logo o
+> esforço deles é **por gastar**, não gasto, e a conta dos "70%" está inflada. Ver
+> [`adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md) (proposto, V-F0..V-F5).
+
+Canais de texto (WhatsApp, webchat, SMS, e-mail), console de operador, dashboards, relatórios, ABAC e
+autenticação, agenda e calendário, formulários de diálogo, i18n, importadores. Provavelmente **70% do esforço de
+engenharia** — *com a ressalva do banner: os canais de áudio (WebRTC, PSTN) estavam nesta conta como entregues e
+não estão entregues.*
 
 Estes justificam **instrumentalmente**: sem console e canais reais não se prova a co-presença; sem relatório não
 se prova que o AHT ficou verdadeiro. São o custo de entrada da aposta, não a aposta.

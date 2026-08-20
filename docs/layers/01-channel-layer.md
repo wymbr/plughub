@@ -33,7 +33,20 @@ O Channel Gateway também é responsável pela **coleta sequencial de MenuPayloa
 
 ## Canais suportados
 
-Oito canais ativos. `channel` é um filtro hard de roteamento (match obrigatório); `medium` (`voice`, `video`, `message`, `email`) é apenas fator de score.
+> ⚠️ **Correção de 2026-08-19 — medido.** *"Oito canais ativos"* é falso para **dois** deles, e a
+> tabela abaixo descreve projeto, não estado:
+> - **`voice`** — `handle_inbound` chama cinco métodos inexistentes (`adapters/voice.py:236,247,433,558,565`),
+>   mockados em `tests/test_voice_adapter.py:116-121`. `AttributeError` em runtime real; nada é
+>   publicado em `conversations.inbound`. O `collect` por voz está morto (`stt_queue` sem consumidor).
+> - **`webrtc`** — o plano de **sinalização** roda; o de **mídia** nunca foi provisionado: zero serviço
+>   LiveKit em compose algum, zero env `LIVEKIT_*`, SDK fora de `channel-gateway/pyproject.toml:6-23`,
+>   e sem credencial o provider entra em `_dev_mode` devolvendo token, sala e egress **placebo**
+>   (`webrtc_provider.py:167`). Ver `docs/arcos/arc15-webrtc.md:3-17`.
+>
+> Ativos de fato: **whatsapp · webchat · email · sms · webhook**. Reconstrução em
+> [`../adr/adr-voice-media-plane.md`](../adr/adr-voice-media-plane.md).
+
+Oito canais **declarados**, **cinco ativos** — `voice` e `webrtc` não estão de pé (ver correção acima); `instagram`/`telegram` seguem como no restante deste doc. `channel` é um filtro hard de roteamento (match obrigatório); `medium` (`voice`, `video`, `message`, `email`) é apenas fator de score.
 
 ```
 whatsapp · webchat · voice · email · sms · instagram · telegram · webrtc
@@ -126,7 +139,7 @@ O step `collect` do Skill Flow passa a aceitar `requires: [text | audio | video 
 - Seção 7.1 — Messaging Gateway (WhatsApp + Chat Web)
 - Seção 7.2 — Email Gateway
 - Seção 7.3 — Email Multi-Provider
-- Seção 7.4 — Canal WebRTC (implementado no Arc 15 — SFU LiveKit self-hosted)
+- Seção 7.4 — Canal WebRTC (SFU LiveKit self-hosted = **projeto, não provisionado**; só a sinalização roda — ver correção em § Canais suportados)
 - Seção 5.1–5.3 — Arquitetura Multi-Site
 - [`../arcos/arc15-webrtc.md`](../arcos/arc15-webrtc.md) — Canal WebRTC
 - [`../arcos/arc16-flow-orchestration.md`](../arcos/arc16-flow-orchestration.md) — Channel Capability Negotiation

@@ -101,6 +101,19 @@
 
 <div class="page">
 
+  <!-- ===== CORRECTION NOTICE — 2026-08-19 ===== -->
+  <div style="border:2px solid #DC2626;background:#FEF2F2;color:#333;padding:12px 16px;margin:16px 0;
+              border-radius:6px;font-size:13px;line-height:1.5">
+    <strong style="color:#DC2626">⚠️ Correction of 2026-08-19 — measured.</strong>
+    This material presents voice/PSTN and WebRTC as delivered capabilities.
+    <strong>Neither audio channel works today</strong>: the voice adapter raises an
+    <code>AttributeError</code> on the inbound path (five non-existent methods, mocked in the test suite),
+    and WebRTC has no SFU provisioned in any environment — signalling runs, media does not. The dialer is
+    <strong>blocked</strong>, not merely unplanned. <strong>Do not use these claims in a commercial
+    proposal</strong> until the rebuild (<code>docs/adr/adr-voice-media-plane.md</code>) delivers phase V-F2.
+    The text channels (WhatsApp, webchat, SMS, email) remain in operation.
+  </div>
+
   <!-- COVER -->
   <section class="cover">
     <div class="brand"><span class="dot"></span>PlugHub</div>
@@ -146,7 +159,7 @@
       <li><b>Orchestrator and specialists, human and AI</b> — equal participants in a single conversation, which is what makes automation gradual.</li>
       <li><b>Long-cycle workflows with memory</b> — steps that persist for days through suspend and resume, each reading only what's relevant to it.</li>
       <li><b>The right model for every step, with no lock-in</b> — switch providers through configuration, and bring the agents you've already built, third-party ones included.</li>
-      <li><b>The surrounding operation, built in</b> — channels (voice, WhatsApp, webchat, WebRTC, email), quality measurement and compliance (masking, audit) on one platform, keeping the decomposed process operable, measurable and auditable.</li>
+      <li><b>The surrounding operation, built in</b> — channels (WhatsApp, webchat, SMS, email), quality measurement and compliance (masking, audit) on one platform, keeping the decomposed process operable, measurable and auditable. <b style="color:#DC2626">⚠️ Voice and WebRTC: under rebuild, not delivered</b> (measured 2026-08-19).</li>
     </ul>
 
     <h2><span class="n">5.</span>The outcome: lower cost, greater impact, real return</h2>

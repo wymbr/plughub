@@ -85,6 +85,19 @@
 </head>
 <body>
 
+<!-- ================= AVISO DE CORREÇÃO — 2026-08-19 ================= -->
+<div style="border:2px solid #DC2626;background:#FEF2F2;color:#3E434D;padding:5mm 6mm;margin:6mm auto;
+            max-width:186mm;border-radius:2mm;font-size:9.5pt;line-height:1.45">
+  <strong style="color:#DC2626">⚠️ Correção de 2026-08-19 — medido.</strong>
+  Este material afirma voz/PSTN e WebRTC como capacidades entregues.
+  <strong>Nenhum dos dois canais de áudio funciona hoje</strong>: o adapter de voz levanta
+  <code>AttributeError</code> no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o
+  WebRTC não tem SFU provisionado em ambiente algum — a sinalização roda, a mídia não. O discador está
+  <strong>bloqueado</strong>, não planejado. <strong>Não usar estes trechos em proposta comercial</strong>
+  até a reconstrução (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
+  Os canais de texto (webchat, WhatsApp, SMS, e-mail) e o webhook seguem em operação.
+</div>
+
 <!-- ================= PÁGINA 1 — CAPA: A PERGUNTA ================= -->
 <section class="page cover">
   <div class="orb" style="width:130mm;height:130mm;right:-45mm;top:-50mm"></div>
@@ -215,7 +228,9 @@
   <h2>O que a plataforma abrange</h2>
 
   <table>
-    <tr><td>Canais</td><td>Webchat, WhatsApp, SMS, e-mail, voz (PSTN), WebRTC e integrações por webhook</td></tr>
+    <tr><td>Canais</td><td>Webchat, WhatsApp, SMS, e-mail e integrações por webhook.
+      <strong style="color:#DC2626">⚠️ Voz (PSTN) e WebRTC: em reconstrução, não entregues</strong> — medido em
+      2026-08-19; o adaptador de voz quebra no caminho de entrada e o WebRTC não tem SFU provisionado.</td></tr>
     <tr><td>Atendimento</td><td>Receptivo e ativo no mesmo motor, com atendentes humanos e agentes de IA no mesmo roteamento</td></tr>
     <tr><td>Processos</td><td>Automação com espera em horário útil, aprovação humana e coleta assíncrona multicanal</td></tr>
     <tr><td>Contato ativo</td><td>Audiência, campanha, controle de fadiga, importação de base e disparo por qualquer canal</td></tr>

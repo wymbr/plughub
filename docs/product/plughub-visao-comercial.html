@@ -105,6 +105,19 @@
 
 <div class="page">
 
+  <!-- ===== AVISO DE CORREÇÃO — 2026-08-19 ===== -->
+  <div style="border:2px solid #DC2626;background:#FEF2F2;color:#333;padding:12px 16px;margin:16px 0;
+              border-radius:6px;font-size:13px;line-height:1.5">
+    <strong style="color:#DC2626">⚠️ Correção de 2026-08-19 — medido.</strong>
+    Este material afirma voz/PSTN e WebRTC como capacidades entregues.
+    <strong>Nenhum dos dois canais de áudio funciona hoje</strong>: o adapter de voz levanta
+    <code>AttributeError</code> no caminho de entrada (cinco métodos inexistentes, mockados no teste) e o
+    WebRTC não tem SFU provisionado em ambiente algum — a sinalização roda, a mídia não. O discador está
+    <strong>bloqueado</strong>, não planejado. <strong>Não usar estes trechos em proposta comercial</strong>
+    até a reconstrução (<code>docs/adr/adr-voice-media-plane.md</code>) entregar a fase V-F2.
+    Os canais de texto (WhatsApp, webchat, SMS, e-mail) seguem em operação.
+  </div>
+
   <!-- COVER -->
   <section class="cover">
     <div class="brand"><span class="dot"></span>PlugHub</div>
@@ -150,7 +163,7 @@
       <li><b>Orquestrador + especialistas, humanos e IA</b> — participantes iguais da mesma conversa; é o que torna a automação gradual possível.</li>
       <li><b>Workflow de ciclo longo com memória</b> — passos que persistem por dias com suspensão e retomada; cada etapa lê só o contexto que lhe diz respeito.</li>
       <li><b>O modelo certo em cada etapa, sem amarras</b> — troca de provedor por configuração; traga o agente que já existe, inclusive externo.</li>
-      <li><b>A operação ao redor, nativa</b> — canais (voz, WhatsApp, webchat, WebRTC, e-mail), qualidade e compliance (mascaramento, auditoria) na mesma plataforma: o processo decomposto fica operável, medível e auditável.</li>
+      <li><b>A operação ao redor, nativa</b> — canais (WhatsApp, webchat, SMS, e-mail), qualidade e compliance (mascaramento, auditoria) na mesma plataforma: o processo decomposto fica operável, medível e auditável. <b style="color:#DC2626">⚠️ Voz e WebRTC: em reconstrução, não entregues</b> (medido em 2026-08-19).</li>
     </ul>
 
     <h2><span class="n">5.</span>O resultado: custo menor, ganho maior, payback</h2>
