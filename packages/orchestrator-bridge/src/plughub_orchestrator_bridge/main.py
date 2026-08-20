@@ -266,6 +266,182 @@ def _stl() -> int:
     return int(session_config.get("orchestrator_session_ttl_s", 14_400))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# session:{id}:meta — escrita com DONO declarado e prazo que só ESTENDE
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A chave tem SEIS escritores em quatro pacotes, e até 2026-08-22 nenhum schema,
+# nenhum helper e a chave interpolada à mão em ~50 sites. Medido antes de mexer
+# (`infra/test/probe_meta_ttl_bridge_off.sh`, com o bridge como única variável):
+#
+#     TTL 86397 ──(alocação)──> 14398     na MESMA chave, em 6 s
+#     campos ganhos: agent_type_id · instance_id · pool_id     perdidos: nenhum
+#
+# Ou seja: dos dois defeitos candidatos, o real é o PRAZO, não a perda de campo.
+# A porta webhook escreve 24 h (`webhook.py:596`) porque a workflow que o meta
+# descreve fica suspensa por `timeout_hours*3600 + 3600` — 48 h de default. O
+# bridge reescrevia com `_stl()` (4 h) e o meta passava a morrer ANTES da sessão
+# que ele descreve. Consequência contada, não suposta
+# (`infra/test/probe_resume_outlives_meta.sh`): **7 de 7 tokens de resume vivos
+# ficavam descobertos, 0 cobertos** — meta 233 min contra token 23 h. Quando a
+# hora chega, o token é aceito e a retomada morre em `tenant_unknown`, que é a
+# recusa do arco P2 fazendo exatamente o seu trabalho sobre uma chave que alguém
+# encurtou.
+#
+# ── A partição, MEDIDA (não suposta) ────────────────────────────────────────
+# O probe leu os campos com o bridge fora e com o bridge dentro; a diferença é a
+# fronteira de propriedade:
+#
+#   PORTA (canal/trigger) : tenant_id · channel · contact_id · customer_id
+#                           session_id · started_at · customer_participant_id
+#   BRIDGE (alocação)     : agent_type_id · instance_id · pool_id · user_login
+#
+# ⚠️ `pool_id` é o caso sujo e está aqui de propósito: o `webhook.py` se ABSTÉM
+#    dele ("o bridge reescreve na alocação"), mas `webchat.py:210` e
+#    `webrtc.py:484` o gravam na conexão com OUTRO significado — pool de ENTRADA,
+#    não pool que ATENDE. Um nome carregando dois fatos, a mesma família de
+#    `elapsed_time_ms` × `agent_time_ms` (D9). Separar em `entry_pool_id` é a
+#    correção de raiz e está FORA desta fatia: mudaria contrato lido por vários
+#    componentes. Registrado no TODO.
+#
+# ── O que este helper garante ───────────────────────────────────────────────
+# (i)   dono declarado por campo — hoje OBSERVA e loga violação; ainda não
+#       recusa, porque os quatro escritores de canal não passam por aqui e
+#       recusar sem os readers mapeados troca um bug quieto por uma queda alta;
+# (ii)  o prazo só ESTENDE. `-1` (existe sem TTL) e `-2` (ausente) são ausência
+#       de prazo e portanto DEFINEM — a mesma lição que `_extend_hash_ttl`
+#       (`webhook.py:1052`) comprou caro: tratar `-1` como "infinito a preservar"
+#       troca encurtamento por chave imortal, que é pior por ser silencioso;
+# (iii) TRÊS modos de criação, enumerados uma vez, em vez de três semânticas
+#       espalhadas pelo arquivo.
+#
+# Merge e prazo num único EVAL porque o helper é o ponto de estrangulamento: um
+# GET+SETEX aqui pode perder o campo de outro escritor entre as duas chamadas, e
+# perder campo é justamente o defeito que ele existe para impedir.
+_SESSION_META_MERGE_LUA = """
+local cur  = redis.call('GET', KEYS[1])
+local ttl  = redis.call('TTL', KEYS[1])
+local want = tonumber(ARGV[2])
+local mode = ARGV[3]
+
+if not cur then
+  if mode == 'merge' then return {-2, 0} end          -- exige existir: no-op honesto
+  local okp, patch = pcall(cjson.decode, ARGV[1])
+  local oks, soft  = pcall(cjson.decode, ARGV[4])
+  if not okp or type(patch) ~= 'table' then return {-3, 0} end
+  if oks and type(soft) == 'table' then
+    for k, v in pairs(soft) do if patch[k] == nil then patch[k] = v end end
+  end
+  redis.call('SET', KEYS[1], cjson.encode(patch), 'EX', want)
+  return {want, -2}
+end
+
+if mode == 'create' then return {-4, ttl} end         -- já existe: não toca conteúdo
+
+local okc, base  = pcall(cjson.decode, cur)
+local okp, patch = pcall(cjson.decode, ARGV[1])
+local oks, soft  = pcall(cjson.decode, ARGV[4])
+if not okc or not okp or type(base) ~= 'table' or type(patch) ~= 'table' then
+  return {-3, ttl}                                    -- ilegível: NÃO sobrescreve às cegas
+end
+for k, v in pairs(patch) do base[k] = v end
+if oks and type(soft) == 'table' then
+  -- string vazia conta como AUSENTE: os call sites originais testavam
+  -- `if not meta.get(x)`, e trocar isso por `== nil` mudaria comportamento
+  -- silenciosamente num campo que o resume lê.
+  for k, v in pairs(soft) do
+    if base[k] == nil or base[k] == '' then base[k] = v end
+  end
+end
+
+-- -1 (sem expiração) e -2 (ausente) são MENORES que qualquer `want`, então caem
+-- naturalmente no ramo "define". É o comportamento correto, e é acidente feliz
+-- da comparação: mantido explícito no comentário para ninguém "consertar".
+local eff = want
+if ttl > want then eff = ttl end
+redis.call('SET', KEYS[1], cjson.encode(base), 'EX', eff)
+return {eff, ttl}
+"""
+
+# Partição de propriedade — declarada uma vez, aqui.
+_META_FIELDS_GATEWAY = {
+    "tenant_id", "channel", "contact_id", "customer_id",
+    "session_id", "started_at", "customer_participant_id",
+}
+_META_FIELDS_BRIDGE = {"agent_type_id", "instance_id", "pool_id", "user_login"}
+_META_OWNERS: dict[str, set[str]] = {
+    "gateway": _META_FIELDS_GATEWAY,
+    "bridge":  _META_FIELDS_BRIDGE,
+}
+
+
+async def session_meta_merge(
+    redis_client,
+    session_id: str,
+    patch:      dict,
+    *,
+    mode:       str,               # 'merge' | 'upsert' | 'create'
+    owner:      str = "bridge",
+    soft:       dict | None = None,   # aplicado só onde o campo AINDA não existe
+    ttl_s:      int | None = None,
+    caller:     str = "?",
+) -> int:
+    """
+    Escreve `session:{id}:meta` preservando o MAIOR prazo. Devolve o TTL efetivo,
+    ou negativo quando não escreveu (-2 ausente em modo merge · -3 JSON ilegível ·
+    -4 já existe em modo create · -9 erro de transporte).
+
+    Degradação nunca silenciosa: todo ramo que não escreve LOGA por quê.
+    """
+    want = int(ttl_s if ttl_s is not None else _stl())
+    dono = _META_OWNERS.get(owner, set())
+    # `soft` fica FORA da conferência de dono de propósito: preencher um buraco
+    # que o dono deixou (backfill se ausente) não é reivindicar o campo. É o que
+    # o bridge faz com `tenant_id` quando a porta não escreveu — sem esta isenção
+    # o aviso dispararia em toda alocação e viraria ruído, que é como um alarme
+    # verdadeiro deixa de ser lido.
+    alheios = sorted(set(patch) - dono)
+    if alheios:
+        # Ainda NÃO recusa (fatia A observa; a recusa é a fatia B, que precisa dos
+        # quatro escritores de canal passando por aqui). Prefixo estável para o gate.
+        logger.warning(
+            "[session_meta] DONO VIOLADO owner=%s caller=%s campos=%s session=%s",
+            owner, caller, ",".join(alheios), session_id,
+        )
+    try:
+        res = await redis_client.eval(
+            _SESSION_META_MERGE_LUA, 1, f"session:{session_id}:meta",
+            json.dumps(patch), str(want), mode, json.dumps(soft or {}),
+        )
+        eff  = int(res[0]) if isinstance(res, (list, tuple)) else int(res)
+        prev = int(res[1]) if isinstance(res, (list, tuple)) and len(res) > 1 else 0
+    except Exception as exc:
+        logger.warning(
+            "[session_meta] EVAL falhou caller=%s session=%s — %s: %s",
+            caller, session_id, type(exc).__name__, exc,
+        )
+        return -9
+    if eff == -3:
+        logger.error(
+            "[session_meta] conteúdo ILEGÍVEL caller=%s session=%s — escrita "
+            "ABORTADA para não sobrescrever às cegas", caller, session_id,
+        )
+    elif eff == -2:
+        logger.debug("[session_meta] ausente em modo merge caller=%s session=%s", caller, session_id)
+    elif eff == -4:
+        logger.debug("[session_meta] já existe em modo create caller=%s session=%s", caller, session_id)
+    elif prev > want:
+        # O caso que motivou o helper. WARNING, não INFO, por dois motivos: só
+        # dispara quando um encurtamento foi de fato impedido (não é ruído de
+        # rotina), e vários serviços deste repo sobem com o logger em WARNING —
+        # um alarme em INFO seria um alarme que ninguém vê.
+        logger.warning(
+            "[session_meta] prazo PRESERVADO caller=%s session=%s: %ss (pedido %ss)",
+            caller, session_id, prev, want,
+        )
+    return eff
+
+
 def _live_flow_fallback_enabled() -> bool:
     """
     Escape hatch para o fallback LEGADO de resolução de flow (ver resolve_flow_for_agent).
@@ -956,17 +1132,19 @@ async def activate_human_agent(
                 _human_user_login = (json.loads(_raw_inst) or {}).get("user_login", "") or ""
         except Exception:
             pass
-        try:
-            raw_meta = await redis_client.get(f"session:{session_id}:meta")
-            if raw_meta:
-                meta = json.loads(raw_meta)
-                meta["instance_id"]   = instance_id
-                meta["pool_id"]       = pool_id
-                meta["agent_type_id"] = routing_result.get("agent_type_id", "")
-                meta["user_login"]    = _human_user_login
-                await redis_client.setex(f"session:{session_id}:meta", _stl(), json.dumps(meta))
-        except Exception as exc:
-            logger.warning("Could not update session meta with instance_id: session=%s — %s", session_id, exc)
+        # `mode='merge'` reproduz o `if raw_meta:` de antes — este site nunca criou
+        # o meta, só o completou. O que muda é o PRAZO: era `setex(_stl())` cego, e
+        # encurtava um meta de 24 h para 4 h (medido; ver session_meta_merge).
+        await session_meta_merge(
+            redis_client, session_id,
+            {
+                "instance_id":   instance_id,
+                "pool_id":       pool_id,
+                "agent_type_id": routing_result.get("agent_type_id", ""),
+                "user_login":    _human_user_login,
+            },
+            mode="merge", caller="activate_human_agent",
+        )
 
     event = {
         "type":          "conversation.assigned",
@@ -4500,21 +4678,24 @@ async def process_routed(
 
         if _is_webhook_pool and native_instance_id:
             try:
-                _wh_meta = json.dumps({
-                    "contact_id":    customer_id,
-                    "channel":       "webhook",
-                    "agent_type_id": agent_type_id,
-                    "pool_id":       pool_id,
-                    "tenant_id":     tenant_id,
-                    "customer_id":   customer_id,
-                    "instance_id":   native_instance_id,
-                })
-                # NX: do not overwrite if already present (e.g. on a resume re-allocation)
-                await redis_client.set(
-                    f"session:{session_id}:meta",
-                    _wh_meta,
-                    nx=True,
-                    ex=_stl(),
+                # `mode='create'` é o antigo `nx=True`: se a chave já existe, não
+                # toca o conteúdo NEM o prazo. Os campos da porta entram como
+                # `soft` porque aqui o bridge está SEMEANDO o que o canal escreveria
+                # se houvesse canal — não reivindicando a propriedade deles.
+                await session_meta_merge(
+                    redis_client, session_id,
+                    {
+                        "agent_type_id": agent_type_id,
+                        "pool_id":       pool_id,
+                        "instance_id":   native_instance_id,
+                    },
+                    soft={
+                        "contact_id":  customer_id,
+                        "channel":     "webhook",
+                        "tenant_id":   tenant_id,
+                        "customer_id": customer_id,
+                    },
+                    mode="create", caller="process_routed:webhook_pool",
                 )
                 # Wrap-up-α / robustez do resume: identidade ESTÁVEL do WORKFLOW
                 # (agent_type_id + pool + INSTÂNCIA). O `session:{id}:meta` compartilhado
@@ -4560,16 +4741,17 @@ async def process_routed(
         # Merge it in here (preserving existing meta fields) for the primary agent.
         if not conference_id and native_instance_id:
             try:
-                _raw_meta_m = await redis_client.get(f"session:{session_id}:meta")
-                _meta_m = json.loads(_raw_meta_m) if _raw_meta_m else {}
-                _meta_m["agent_type_id"] = agent_type_id
-                _meta_m["instance_id"]   = native_instance_id
-                if not _meta_m.get("pool_id"):
-                    _meta_m["pool_id"] = pool_id
-                if not _meta_m.get("tenant_id"):
-                    _meta_m["tenant_id"] = tenant_id
-                await redis_client.setex(
-                    f"session:{session_id}:meta", _stl(), json.dumps(_meta_m),
+                # Este é o site que o probe flagrou encurtando 86397 → 14398.
+                # `pool_id`/`tenant_id` continuam sendo backfill-se-ausente (era
+                # `if not _meta_m.get(...)`), agora expressos como `soft`.
+                await session_meta_merge(
+                    redis_client, session_id,
+                    {
+                        "agent_type_id": agent_type_id,
+                        "instance_id":   native_instance_id,
+                    },
+                    soft={"pool_id": pool_id, "tenant_id": tenant_id},
+                    mode="upsert", caller="process_routed:primary",
                 )
             except Exception as _mm_exc:
                 logger.warning(
