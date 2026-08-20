@@ -236,6 +236,9 @@ async function aiGatewayCall(payload: {
   attempt:       number
   json_schema?:  Record<string, unknown>   // T7b — forwardado via JSON.stringify(payload)
   model_profile?: string                    // R8d — forwardado ao /v1/reason (ReasonRequest)
+  preferred_config_ids?: string[]           // LLM Accounts — session.pool.llm_account_ids
+  customer_utterance?: string               // fala do cliente — habilita medição de sentimento
+  tenant_id?:    string                     // injetado pelo handler; sem ele o gateway grava sem prefixo
 }): Promise<unknown> {
   const url = `${AI_GATEWAY_URL}/v1/reason`
   console.log(
@@ -608,7 +611,11 @@ app.post("/execute", async (req: Request, res: Response) => {
   const engine = new SkillFlowEngine({
     redis:        dedicatedRedis,
     mcpCall,
-    aiGatewayCall,
+    // O tenant é fato do REQUEST (`tenant_id` do corpo), não do engine — o
+    // `StepContext.aiGatewayCall` não o carrega. Sem esta injeção o `/v1/reason`
+    // chegava sem `tenant_id`, `ReasonRequest` caía no default `""` (models.py:98)
+    // e tudo que o gateway escrevia depois nascia sem prefixo de tenant.
+    aiGatewayCall: (payload) => aiGatewayCall({ ...payload, tenant_id }),
     contextStore,
     ...(persistSuspendWebhookFn ? { persistSuspendWebhook: persistSuspendWebhookFn } : {}),
     ...(persistDelegateFn       ? { persistDelegate:       persistDelegateFn }       : {}),

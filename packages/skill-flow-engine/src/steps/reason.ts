@@ -39,6 +39,12 @@ export async function executeReason(
   // restrição (AccountSelector usa o pool inteiro de contas do provider).
   const preferredConfigIds = await resolvePreferredConfigIds(ctx)
 
+  // Fala do cliente NOMEADA — habilita a medição de sentimento no ai-gateway.
+  // Resolvida uma vez, fora do laço de retry: o texto do cliente não muda entre
+  // tentativas de formato, e re-resolver dispararia leitura de ContextStore por
+  // tentativa sem nenhum ganho.
+  const customerUtterance = await resolveCustomerUtterance(step, ctx)
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const result = await ctx.aiGatewayCall({
@@ -49,6 +55,7 @@ export async function executeReason(
         attempt,
         ...(jsonSchema ? { json_schema: jsonSchema } : {}),
         ...(modelProfile ? { model_profile: modelProfile } : {}),
+        ...(customerUtterance ? { customer_utterance: customerUtterance } : {}),
         ...(preferredConfigIds && preferredConfigIds.length > 0 ? { preferred_config_ids: preferredConfigIds } : {}),
       })
 
@@ -189,6 +196,46 @@ async function resolvePreferredConfigIds(ctx: StepContext): Promise<string[] | u
   } catch {
     return undefined
   }
+}
+
+
+/**
+ * Resolve `step.customer_utterance` — a referência ao texto que o CLIENTE disse.
+ *
+ * O ai-gateway usa esse texto para MEDIR sentimento. Ele não pode adivinhá-lo: o
+ * `input` do reason é opaco por contrato, e um chute produziria score sobre
+ * `pipeline_state`. Aceita `$.` (JSONPath sobre pipeline_state/session, mesma
+ * máquina do `model_profile`) e `@ctx.` (ContextStore).
+ *
+ * Devolve undefined quando ausente ou quando a referência não resolve para string
+ * não-vazia — e nesse caso **nenhum sentimento é medido**, que é o desfecho
+ * honesto. Nunca inventa texto: medir a fala errada é pior que não medir.
+ */
+export async function resolveCustomerUtterance(
+  step: ReasonStep,
+  ctx:  StepContext,
+): Promise<string | undefined> {
+  const ref = (step as { customer_utterance?: string }).customer_utterance
+  if (!ref) return undefined
+
+  let resolved: unknown
+  if (ref.startsWith("$.")) {
+    const evalContext = { pipeline_state: ctx.state.results, session: ctx.sessionContext }
+    resolved = JSONPath({ path: ref, json: evalContext as object, wrap: false })
+  } else if (ref.startsWith("@ctx.")) {
+    if (!ctx.contextStore) return undefined
+    try {
+      resolved = await ctx.contextStore.getValue(ctx.sessionId, ref.slice("@ctx.".length))
+    } catch {
+      return undefined
+    }
+  } else {
+    // Texto literal não é aceito: seria fala fabricada pelo autor do fluxo, medida
+    // como se fosse do cliente. Referência ou nada.
+    return undefined
+  }
+
+  return typeof resolved === "string" && resolved.trim().length > 0 ? resolved : undefined
 }
 
 

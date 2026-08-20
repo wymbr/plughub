@@ -704,10 +704,21 @@ services:
       # PLUGHUB_ANTHROPIC_API_KEY above when the catalog is empty/unreachable.
       PLUGHUB_CONFIG_API_URL: http://config-api:3600
       PLUGHUB_TENANT_ID: tenant_demo
+      # Sonda de credencial no boot: uma chamada mínima por conta, uma vez por
+      # start. `false` para subir offline — e nesse caso o /v1/health reporta
+      # `unknown`, nunca `ok`.
+      PLUGHUB_LLM_BOOT_PROBE: "${PLUGHUB_LLM_BOOT_PROBE:-true}"
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
+      # `urlopen` levanta em 4xx/5xx, então o 503 do /v1/health (credencial
+      # configurada e RECUSADA pelo provedor, ou redis fora) marca o container
+      # unhealthy — que é o ponto: até 2026-08-23 este serviço ficava verde no
+      # `docker ps` durante 124 recusas seguidas de credencial.
+      # Chave AUSENTE não reprova (200 `degraded`): rodar a demo sem LLM é escolha
+      # legítima. Chave PRESENTE e recusada reprova: alguém pretendia ter LLM.
+      # Nenhum serviço tem `depends_on: ai-gateway`, logo isto não bloqueia o boot.
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:3200/v1/health', timeout=3)\" 2>/dev/null && echo ok || exit 1"]
       interval: 10s
       timeout: 5s

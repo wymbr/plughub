@@ -14,11 +14,11 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import logging
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -46,6 +46,7 @@ from .models     import (
     CopilotAnalyzeRequest,
 )
 from .copilot_emitter import analyze_for_copilot
+from .sentiment_analyzer import analyze_and_emit_sentiment
 from .gateway    import AIGateway
 from .providers  import AnthropicProvider, OpenAIProvider, ProviderError
 from .rate_limit import RateLimiter, RateLimitExceeded
@@ -62,6 +63,69 @@ except ImportError:
 # ─────────────────────────────────────────────
 # Lifespan — startup and teardown
 # ─────────────────────────────────────────────
+
+async def _probe_credentials_on_boot(
+    providers: dict,
+    accounts:  list[LLMAccount],
+    selector:  AccountSelector,
+    settings,
+) -> None:
+    """
+    Uma chamada mínima ao provedor por conta, gravando o desfecho.
+
+    Nunca derruba o boot: um provedor fora do ar não deve impedir o serviço de
+    subir (as demais rotas não dependem dele). Mas o resultado é sempre
+    REGISTRADO — inclusive o timeout, que vira `connection_error` e não silêncio.
+    """
+    for acc in accounts:
+        provider = providers.get(acc.provider_key)
+        if provider is None:
+            continue
+        try:
+            await asyncio.wait_for(
+                provider.call(
+                    messages=[{"role": "user", "content": "ping"}],
+                    tools=None,
+                    model_id=settings.model_for_profile("fast"),
+                    max_tokens=1,
+                ),
+                timeout=settings.llm_boot_probe_timeout_s,
+            )
+            await selector.record_outcome(acc.provider_key, ok=True)
+            logger.info(
+                "boot probe: credencial OK provider=%s key_id=%s config_id=%s",
+                acc.provider, acc.key_id, acc.config_id or "-",
+            )
+        except ProviderError as exc:
+            await selector.record_outcome(
+                acc.provider_key, ok=False,
+                error_code=exc.error_code, message=exc.message,
+            )
+            logger.error(
+                "boot probe: credencial RECUSADA provider=%s key_id=%s code=%s — %s",
+                acc.provider, acc.key_id, exc.error_code, exc.message[:200],
+            )
+        except asyncio.TimeoutError:
+            await selector.record_outcome(
+                acc.provider_key, ok=False,
+                error_code="connection_error",
+                message=f"boot probe timeout após {settings.llm_boot_probe_timeout_s}s",
+            )
+            logger.warning(
+                "boot probe: TIMEOUT provider=%s key_id=%s", acc.provider, acc.key_id,
+            )
+        except Exception as exc:
+            # Exceção inesperada não pode virar `unknown` mudo: `unknown` significa
+            # "não medimos", e aqui medimos e deu errado. Nomear é o mínimo.
+            await selector.record_outcome(
+                acc.provider_key, ok=False,
+                error_code="probe_error", message=str(exc),
+            )
+            logger.error(
+                "boot probe: erro inesperado provider=%s key_id=%s — %s",
+                acc.provider, acc.key_id, exc,
+            )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -213,6 +277,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.session_mgr = session_mgr
 
+    # ── Sonda de credencial no boot ──────────────────────────────────────────
+    # Uma chamada mínima por conta, uma vez por start do container. Existe porque o
+    # registro passivo (funil de erro + record_usage) só aprende com TRÁFEGO: num
+    # ambiente ocioso o estado nasceria `unknown` e ficaria assim — que é
+    # exatamente o cenário em que o defeito de 08-22 se escondeu.
+    #
+    # Não é healthcheck ativo: o healthcheck do compose bate a cada 10 s e sondar
+    # ali gastaria cota continuamente. Uma vez no boot é o instante em que a
+    # pergunta "esta chave serve?" tem resposta útil e custo desprezível.
+    #
+    # Desligável (`PLUGHUB_LLM_BOOT_PROBE=false`) para teste offline — e desligá-la
+    # NÃO produz `ok`: produz `unknown`, que o health publica como tal.
+    if settings.llm_boot_probe and account_selector is not None:
+        await _probe_credentials_on_boot(providers, accounts, account_selector, settings)
+    elif account_selector is not None:
+        logger.info("llm_boot_probe desligado — credencial fica `unknown` até haver tráfego")
+
     yield
 
     if kafka_producer is not None:
@@ -249,6 +330,30 @@ async def provider_error_handler(request: Request, exc: ProviderError) -> JSONRe
         "upstream_model_error path=%s provider=%s code=%s retryable=%s detail=%s",
         request.url.path, exc.provider, exc.error_code, exc.retryable, exc.message,
     )
+
+    # ── E o fato vira ESTADO, não só linha de log ────────────────────────────
+    # Este é o funil ÚNICO por onde passa toda falha de provedor. Até 2026-08-23 ele
+    # logava e esquecia: o `/v1/health` respondia `ok` durante 124 recusas seguidas
+    # de credencial, e a única evidência morria no recreate do container. Registrar
+    # aqui é o mínimo que faz o health poder ser honesto.
+    selector: AccountSelector | None = getattr(request.app.state, "account_selector", None)
+    if selector is not None and exc.account_key_id:
+        await selector.record_outcome(
+            f"{exc.provider}:{exc.account_key_id}",
+            ok=False,
+            error_code=exc.error_code,
+            message=exc.message,
+        )
+    elif selector is not None:
+        # Erro sem conta identificada não deveria existir (todo provider carimba o
+        # seu key_id). Se aparecer, é um caminho de construção de provider fora do
+        # registro de contas — barulho de propósito, não `pass`.
+        logger.warning(
+            "upstream_model_error SEM account_key_id provider=%s code=%s — "
+            "desfecho não registrado, o health ficará `unknown` para esta conta",
+            exc.provider, exc.error_code,
+        )
+
     return JSONResponse(
         status_code=502,
         content={
@@ -349,9 +454,23 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
     result          = response.result
     intent          = result.get("intent")          if isinstance(result.get("intent"),          str)          else None
     confidence      = float(result.get("confidence",      0.0)) if isinstance(result.get("confidence"),      (int, float)) else 0.0
-    sentiment_score = float(result.get("sentiment_score", 0.0)) if isinstance(result.get("sentiment_score"), (int, float)) else 0.0
     flags           = result.get("flags",           [])  if isinstance(result.get("flags"),           list)         else []
     elapsed_ms      = int((time.time() - start_time) * 1000)
+
+    # `sentiment_score` deixou de cair para 0.0 quando o schema não o declara
+    # (2026-08-23). Zero é NEUTRO — um ponto legítimo da escala —, então o default
+    # antigo publicava "cliente neutro" em toda sessão da plataforma e ninguém
+    # conseguia distinguir isso de medição real. `None` = não medido, e o
+    # `update_partial_params` pula o pipeline em vez de propagar a mentira.
+    #
+    # Quando o schema DECLARA o campo, o valor é honrado por compatibilidade — mas
+    # é auto-reportado pelo modelo que está atendendo, não medido. A medição de
+    # verdade vem do `sentiment_analyzer` disparado abaixo.
+    sentiment_score = (
+        float(result["sentiment_score"])
+        if isinstance(result.get("sentiment_score"), (int, float))
+        else None
+    )
 
     try:
         await session_mgr.update_partial_params(
@@ -371,7 +490,40 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
             req.session_id, exc,
         )
 
+    # ── Medição de sentimento, fora do turno ─────────────────────────────────
+    # Só roda quando o step NOMEOU a fala do cliente (`customer_utterance`). O
+    # `input` do reason é opaco por contrato — o gateway não tem como adivinhar
+    # qual chave é fala de cliente e qual é `pipeline_state`, e chutar produziria
+    # score sobre texto de máquina.
+    if req.customer_utterance:
+        engine_ref: Any = request.app.state.inference_engine
+        provider = getattr(engine_ref, "providers", {}).get("anthropic")
+        task = asyncio.create_task(
+            analyze_and_emit_sentiment(
+                redis              = request.app.state.redis,
+                provider           = provider,
+                producer           = request.app.state.kafka_producer,
+                tenant_id          = req.tenant_id,
+                session_id         = req.session_id,
+                customer_utterance = req.customer_utterance,
+                model_id           = get_settings().model_for_profile("fast"),
+            )
+        )
+        # Task de background sem observador morre CALADA: a exceção fica presa no
+        # objeto Task e nada a lê. O callback é o que impede o serviço de ficar
+        # verde com um produtor a menos.
+        task.add_done_callback(_log_task_exception)
+
     return response
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Observa uma task fire-and-forget para que a exceção não morra em silêncio."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("task de background falhou: %s", exc, exc_info=exc)
 
 
 @app.post("/v1/copilot/analyze", status_code=202)
@@ -418,34 +570,119 @@ async def copilot_analyze(req: CopilotAnalyzeRequest, request: Request) -> dict:
 
 
 @app.get("/v1/health", response_model=HealthResponse)
-async def health(request: Request) -> HealthResponse:
-    """Healthcheck — verifies Redis and Anthropic connectivity."""
-    settings = get_settings()
+async def health(request: Request, response: Response) -> HealthResponse:
+    """
+    Healthcheck honesto — reporta o que foi MEDIDO, nunca o que foi configurado.
 
+    Tabela de veredicto (o código HTTP faz parte dela: `docker ps` só lê isso):
+
+      redis inalcançável ......................... unhealthy / 503
+      nenhuma conta configurada .................. degraded  / 200  (escolha declarada:
+                                                   demo sem LLM é legítimo)
+      ≥1 conta com credencial `ok` ............... ok        / 200  (contas inválidas
+                                                   continuam listadas em `accounts`)
+      nenhuma `ok`, ≥1 `invalid` ................. unhealthy / 503  ← o caso de 08-22
+      nenhuma `ok`, nenhuma `invalid` ............ unknown   / 200  + nota dizendo
+                                                   que este health NÃO julga
+
+    O último ramo é o que separa este endpoint do anterior: ausência de evidência
+    sai como `unknown` e se DECLARA, em vez de virar `ok` por omissão.
+    """
     redis_status = "ok"
     try:
         await request.app.state.redis.ping()
-    except Exception:
+    except Exception as exc:
         redis_status = "error"
+        logger.error("health: redis inalcançável — %s", exc)
 
-    # Anthropic: ok if at least one key configured and not all accounts throttled
-    anthropic_keys = settings.get_anthropic_keys()
-    if not anthropic_keys:
+    selector: AccountSelector | None = getattr(request.app.state, "account_selector", None)
+    accounts  = await selector.credential_summary() if selector is not None else []
+    counters  = await selector.outcome_counters()   if selector is not None else {}
+    notes: list[str] = []
+
+    states = {a["credentials"] for a in accounts}
+
+    if not accounts:
+        anthropic_status = "not_configured"
+        notes.append(
+            "Nenhuma conta de LLM configurada — o health NÃO julga credencial. "
+            "Todo step `reason` cairá no `on_failure`, que é ramo legítimo de fluxo "
+            "e portanto não acende alarme em lugar nenhum."
+        )
+    elif "ok" in states:
+        anthropic_status = "ok"
+        if "invalid" in states:
+            notes.append(
+                "Há conta com credencial recusada, mas ao menos uma funciona — "
+                "serviço de pé, capacidade reduzida. Ver `accounts`."
+            )
+        # Credencial e DISPONIBILIDADE são fatos diferentes. Com todas as contas
+        # throttled o `pick()` devolve None e toda chamada cai no alias legado ou
+        # no fallback de provedor — a credencial está boa e a capacidade é zero.
+        # Reportar `ok` aqui seria verde sobre indisponibilidade.
+        if all(a["throttled"] for a in accounts):
+            anthropic_status = "degraded"
+            notes.append(
+                "TODAS as contas estão throttled: a credencial é válida, mas o "
+                "AccountSelector não tem conta a escolher e as chamadas caem no "
+                "alias legado ou no fallback de provedor."
+            )
+    elif "invalid" in states:
         anthropic_status = "error"
+    elif "error" in states:
+        # Medimos, e falhou por causa TRANSITÓRIA (rate limit, rede, 5xx). Não é
+        # `unknown` — há evidência — e não é `error` de credencial: reprovar o
+        # healthcheck por um soluço de rede faria o container piscar e o sinal
+        # perderia o valor que ele acabou de ganhar.
+        anthropic_status = "degraded"
+        notes.append(
+            "Última chamada falhou por causa transitória, e nenhuma bem-sucedida "
+            "depois dela. Ver `last_error_code` em `accounts`."
+        )
     else:
-        selector: AccountSelector | None = getattr(request.app.state, "account_selector", None)
-        if selector is not None:
-            best = await selector.pick("anthropic")
-            anthropic_status = "ok" if best is not None else "degraded"
-        else:
-            anthropic_status = "ok"
+        anthropic_status = "unknown"
+        notes.append(
+            "Nenhum desfecho de provedor registrado. Isto NÃO é saúde: é ausência "
+            "de evidência. Causas: sonda de boot desligada "
+            "(PLUGHUB_LLM_BOOT_PROBE), ou o serviço subiu e ainda não chamou o LLM."
+        )
 
-    overall = "ok" if redis_status == "ok" and anthropic_status == "ok" else "degraded"
+    if redis_status == "error":
+        overall, code = "unhealthy", 503
+    elif anthropic_status == "error":
+        overall, code = "unhealthy", 503
+    elif anthropic_status in ("not_configured", "degraded"):
+        overall, code = "degraded", 200
+    elif anthropic_status == "unknown":
+        overall, code = "unknown", 200
+    else:
+        overall, code = "ok", 200
 
+    # `calls_ok` SUBCONTA no caminho do alias legado: tanto `/inference` (:287)
+    # quanto `/v1/reason` só chamam `record_usage` quando o AccountSelector
+    # escolheu uma CONTA específica. Se `pick()` devolveu None — todas throttled,
+    # ou nenhum selector — a chamada usa o alias `"anthropic"` e, mesmo tendo
+    # sucesso, não incrementa nada. Dizer isso é mais barato que alguém ler
+    # `calls_ok=0` como "o LLM não respondeu nenhuma vez".
+    #
+    # (Correção 2026-08-23: esta nota afirmou por algumas horas que `/inference`
+    # não chamava `record_usage`. Era FALSO — ele chama em :288, :324 e :363. A
+    # afirmação nasceu de um grep truncado lido como ausência.)
+    if counters.get("available") and counters.get("calls_ok", 0) == 0 and accounts:
+        notes.append(
+            "calls_ok=0 na janela. Atenção: o contador só é alimentado quando o "
+            "AccountSelector escolhe uma conta específica — chamadas que caem no "
+            "alias legado do provedor têm sucesso sem incrementá-lo."
+        )
+
+    response.status_code = code
     return HealthResponse(
-        status=overall,
-        redis=redis_status,           # type: ignore[arg-type]
-        anthropic=anthropic_status,   # type: ignore[arg-type]
+        status=overall,          # type: ignore[arg-type]
+        redis=redis_status,      # type: ignore[arg-type]
+        anthropic=anthropic_status,  # type: ignore[arg-type]
+        accounts=accounts,
+        counters=counters,
+        notes=notes,
     )
 
 

@@ -98,7 +98,7 @@ class SessionManager:
         elapsed_ms:      int,
         intent:          str | None,
         confidence:      float,
-        sentiment_score: float,
+        sentiment_score: float | None,
         flags:           list[str],
     ) -> None:
         """
@@ -107,18 +107,27 @@ class SessionManager:
         turn: the previous current_turn is consolidated to history before the
         new data is written, so consolidated_turns grows with every step.
         Spec 2.2a: Rules Engine can evaluate current_turn in real time.
+
+        `sentiment_score=None` significa **não medido** e é diferente de `0.0`, que é
+        um ponto legítimo da escala (cliente neutro). Com `None`, o pipeline de
+        sentimento é PULADO: publicar zero faria toda sessão da plataforma parecer
+        medida-e-neutra, que foi o estado real até 2026-08-23. A medição vive em
+        `sentiment_analyzer.analyze_and_emit_sentiment`.
         """
         state = await self.get(session_id)
 
         # Close the previous turn: move current_turn data → consolidated_turns.
         # Only close if there was meaningful data (avoid empty initial turn).
         prev = state.current_turn.partial_params
-        if prev.get("intent") is not None or prev.get("sentiment_score", 0.0) != 0.0:
+        # `or 0.0` porque `sentiment_score` agora pode ser None, e `None != 0.0` é
+        # True — sem isto, todo turno sem sentimento seria consolidado como se
+        # tivesse dado, inflando `consolidated_turns`.
+        if prev.get("intent") is not None or (prev.get("sentiment_score") or 0.0) != 0.0:
             state.consolidated_turns.append(ConsolidatedTurn(
                 turn_number     = len(state.consolidated_turns) + 1,
                 intent          = prev.get("intent"),
                 confidence      = float(prev.get("confidence", 0.0)),
-                sentiment_score = float(prev.get("sentiment_score", 0.0)),
+                sentiment_score = float(prev.get("sentiment_score") or 0.0),
                 flags           = list(state.current_turn.detected_flags),
             ))
 
@@ -136,31 +145,45 @@ class SessionManager:
         # Publish sentiment.updated to Kafka + update sentiment_live in Redis (fire-and-forget).
         # pool_id is stored in session:{session_id}:meta under key "pool_id".
         # Missing key is normal for new sessions routed before first turn — silently skipped.
-        try:
-            pool_id_raw = await self._redis.hget(f"session:{session_id}:meta", "pool_id")
-            pool_id = pool_id_raw if pool_id_raw else "unknown"
-            await emit_sentiment_updated(
-                producer   = self._producer,
-                tenant_id  = tenant_id,
-                session_id = session_id,
-                pool_id    = pool_id,
-                score      = sentiment_score,
+        #
+        # `sentiment_score is None` = NÃO MEDIDO, e o pipeline é pulado. Só o bloco
+        # de sentimento é guardado: o resto desta função (Rules Engine, Agent Assist)
+        # continua rodando, porque intent/confidence/flags foram medidos de verdade e
+        # não têm nada a ver com o sentimento. Um `return` cedo aqui derrubaria dois
+        # consumidores por causa de um terceiro.
+        if sentiment_score is None:
+            logger.debug(
+                "sentiment: não medido neste turno (session=%s) — pipeline pulado. "
+                "A medição vem do sentiment_analyzer, quando o step nomeia a fala do "
+                "cliente via customer_utterance.",
+                session_id,
             )
-            await update_sentiment_live(
-                redis      = self._redis,
-                tenant_id  = tenant_id,
-                pool_id    = pool_id,
-                score      = sentiment_score,
-                session_id = session_id,
-            )
-            await write_context_store_sentiment(
-                redis      = self._redis,
-                tenant_id  = tenant_id,
-                session_id = session_id,
-                score      = sentiment_score,
-            )
-        except Exception as exc:
-            logger.warning("Sentiment pipeline failed for %s: %s", session_id, exc)
+        else:
+            try:
+                pool_id_raw = await self._redis.hget(f"session:{session_id}:meta", "pool_id")
+                pool_id = pool_id_raw if pool_id_raw else "unknown"
+                await emit_sentiment_updated(
+                    producer   = self._producer,
+                    tenant_id  = tenant_id,
+                    session_id = session_id,
+                    pool_id    = pool_id,
+                    score      = sentiment_score,
+                )
+                await update_sentiment_live(
+                    redis      = self._redis,
+                    tenant_id  = tenant_id,
+                    pool_id    = pool_id,
+                    score      = sentiment_score,
+                    session_id = session_id,
+                )
+                await write_context_store_sentiment(
+                    redis      = self._redis,
+                    tenant_id  = tenant_id,
+                    session_id = session_id,
+                    score      = sentiment_score,
+                )
+            except Exception as exc:
+                logger.warning("Sentiment pipeline failed for %s: %s", session_id, exc)
 
         # Publish to Rules Engine pub/sub channel (fire-and-forget).
         # A Rules Engine outage must never block the AI Gateway response path.

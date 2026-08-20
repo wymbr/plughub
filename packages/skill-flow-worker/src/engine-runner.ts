@@ -73,10 +73,15 @@ export class EngineRunner {
       // when triggered from a contact), which differs from the workflow instance UUID
       // that workflow-api requires in the URL path.
       const capturedInstanceId = instance.id
+      // O tenant é fato do RUNNER, não do engine: o `StepContext.aiGatewayCall` não
+      // o recebe, e era essa lacuna que fazia o `/v1/reason` chegar sem `tenant_id`
+      // e o gateway gravar sob prefixo vazio. Capturado aqui, no ponto onde ele é
+      // conhecido, em vez de propagado por toda a assinatura do engine.
+      const capturedTenantId = instance.tenant_id
       const engine = new SkillFlowEngine({
         redis:          this.redis,
         mcpCall:        this.mcpCall.bind(this),
-        aiGatewayCall:  this.aiGatewayCall.bind(this),
+        aiGatewayCall:  (payload) => this.aiGatewayCall({ ...payload, tenant_id: capturedTenantId }),
         persistSuspend: (params) => this._persistSuspend(capturedInstanceId, params),
         persistCollect: (params) => this._persistCollect(capturedInstanceId, params),
       })
@@ -195,6 +200,8 @@ export class EngineRunner {
     attempt:       number
     json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
     preferred_config_ids?: string[]          // LLM Accounts — session.pool.llm_account_ids
+    customer_utterance?: string              // fala do cliente — habilita medição de sentimento
+    tenant_id?:    string
   }): Promise<unknown> {
     const url = `${this.settings.aiGatewayUrl}/v1/reason`
 
@@ -207,8 +214,16 @@ export class EngineRunner {
         input:         payload.input,
         output_schema: payload.output_schema,
         attempt:       payload.attempt,
+        // `tenant_id` faltava desde sempre, e o corpo era montado campo a campo —
+        // omissão por construção, não acidente de spread. `ReasonRequest.tenant_id`
+        // tem default `""` (models.py:98), então tudo que o gateway escrevia a
+        // seguir nascia SEM prefixo de tenant: `:pool:{p}:sentiment_live`,
+        // `:ctx:{sid}`. Dado gravado no lugar onde ninguém procura passa por
+        // "não há dado".
+        ...(payload.tenant_id ? { tenant_id: payload.tenant_id } : {}),
         ...(payload.json_schema ? { json_schema: payload.json_schema } : {}),
         ...(payload.preferred_config_ids ? { preferred_config_ids: payload.preferred_config_ids } : {}),
+        ...(payload.customer_utterance ? { customer_utterance: payload.customer_utterance } : {}),
       }),
     })
 

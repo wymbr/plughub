@@ -18,7 +18,7 @@ Model IDs:
 from __future__ import annotations
 from typing import Any
 
-from .base import LLMProvider, LLMResponse, ProviderError
+from .base import LLMProvider, LLMResponse, ProviderError, key_id_for
 
 # Status codes that justify automatic fallback
 _RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -46,6 +46,12 @@ class OpenAIProvider(LLMProvider):
         except ImportError:
             self._client = None
         self._api_key = api_key
+        self._key_id = key_id_for(api_key)
+
+    @property
+    def key_id(self) -> str:
+        """Identificador curto da conta desta instância (ver providers.base.key_id_for)."""
+        return self._key_id
 
     async def call(
         self,
@@ -68,6 +74,7 @@ class OpenAIProvider(LLMProvider):
                     "openai package is not installed. "
                     "Install it with: pip install openai>=1.0.0"
                 ),
+                account_key_id=self._key_id,
             )
 
         try:
@@ -165,6 +172,7 @@ class OpenAIProvider(LLMProvider):
                 error_code="rate_limit",
                 retryable=True,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except _openai.APIConnectionError as e:
             raise ProviderError(
@@ -172,6 +180,7 @@ class OpenAIProvider(LLMProvider):
                 error_code="connection_error",
                 retryable=True,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except _openai.APIStatusError as e:
             retryable = e.status_code in _RETRYABLE_STATUS_CODES
@@ -180,6 +189,7 @@ class OpenAIProvider(LLMProvider):
                 error_code=f"status_{e.status_code}",
                 retryable=retryable,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except _openai.APIError as e:
             raise ProviderError(
@@ -187,4 +197,5 @@ class OpenAIProvider(LLMProvider):
                 error_code="api_error",
                 retryable=False,
                 message=str(e),
+                account_key_id=self._key_id,
             )

@@ -24,6 +24,21 @@ ContextStore tags escritas:
 Confidence: 0.75 — inferência de co-pilot (não verificada pelo agente)
 Source: "ai_inferred:copilot_emitter"
 Visibility: "agents_only" — nunca exposto ao cliente
+
+⚠️ **Este módulo NUNCA produziu uma análise até 2026-08-23** — dois defeitos
+independentes, empilhados, cada um suficiente para produzir silêncio:
+
+  1. `provider.call(..., system=_SYSTEM_PROMPT)` — `LLMProvider.call()` não tem esse
+     parâmetro nem `**kwargs` (`providers/base.py:56`), então toda invocação levantava
+     `TypeError` **antes de qualquer rede**. O `except Exception` do fim capturava e
+     logava em WARNING, indistinguível de um erro transitório de infraestrutura.
+  2. Mesmo corrigido o item 1, `response.text` não existe: `LLMResponse` expõe
+     `.content` (`providers/base.py:17`). O texto sairia `""`, o parse devolveria
+     vazio e a função retornaria no `if not sugestao and not flags and not acoes`.
+
+O prompt de sistema viaja como MENSAGEM `role: "system"`; o provider a extrai para o
+parâmetro nativo (`anthropic_provider.py:88-91`). Foi assim desde sempre — o
+`system=` era invenção do chamador, não contrato do provider.
 """
 from __future__ import annotations
 
@@ -277,7 +292,13 @@ async def analyze_for_copilot(
             motivo_contato   = motivo_contato,
             sentimento_score = sentimento_score,
         )
-        messages = [{"role": "user", "content": user_prompt}]
+        # O prompt de sistema viaja como MENSAGEM com `role: "system"` — o provider
+        # a extrai para o parâmetro nativo (`anthropic_provider.py:88-91`). Não
+        # existe kwarg `system` em `LLMProvider.call()`.
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": user_prompt},
+        ]
 
         # 3. Call LLM (fire; let provider handle retries/throttle internally)
         response = await provider.call(
@@ -285,15 +306,10 @@ async def analyze_for_copilot(
             tools      = [],
             model_id   = model_id,
             max_tokens = max_tokens,
-            system     = _SYSTEM_PROMPT,
         )
 
         # 4. Parse response text
-        text = ""
-        if response and hasattr(response, "text"):
-            text = response.text or ""
-        elif response and isinstance(response, dict):
-            text = response.get("text", "")
+        text = getattr(response, "content", "") or "" if response else ""
 
         sugestao, flags, acoes = _parse_llm_response(text)
         if not sugestao and not flags and not acoes:

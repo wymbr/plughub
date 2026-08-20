@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from ..providers.base import LLMResponse
 from ..copilot_emitter import (
     _build_user_prompt,
     _parse_llm_response,
@@ -44,9 +45,26 @@ def make_redis(hmget_vals: list | None = None) -> MagicMock:
 
 
 def make_provider(response_text: str = "{}") -> MagicMock:
+    """
+    Devolve um provider cujo retorno tem a forma REAL de `LLMResponse`.
+
+    A versão anterior era `MagicMock()` com `resp.text = ...`, e isso escondeu por
+    meses os dois defeitos do `copilot_emitter` (corrigidos 2026-08-23):
+
+      · `LLMResponse` não tem `.text` — tem `.content` (`providers/base.py:17`). O
+        `MagicMock` fabricava `.text` sob demanda, então o teste concordava com o
+        chamador errado em vez de com o contrato.
+      · o código chamava `provider.call(..., system=...)`, kwarg que
+        `LLMProvider.call()` não aceita e que em produção levantava `TypeError` —
+        mas `AsyncMock` aceita qualquer assinatura, então o teste passava.
+
+    Um mock mais permissivo que a coisa mockada é um teste que não pode reprovar.
+    Usar a classe real fixa o contrato: se `LLMResponse` mudar, isto quebra aqui.
+    """
     p = MagicMock()
-    resp = MagicMock()
-    resp.text = response_text
+    resp = LLMResponse(
+        content=response_text, model_used="test", raw={}, stop_reason="end_turn",
+    )
     p.call = AsyncMock(return_value=resp)
     return p
 
@@ -248,6 +266,28 @@ class TestAnalyzeForCopilot:
         }))
         await analyze_for_copilot(redis, provider, SESSION, TENANT, "Estou muito frustrado!")
         provider.call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_call_respects_provider_signature(self):
+        """
+        `assert_called_once` não bastava: `AsyncMock` aceita QUALQUER assinatura, então
+        o `system=` inválido passava por ele e só quebrava em produção. Este teste
+        julga a FORMA da chamada contra o contrato de `LLMProvider.call()`.
+        """
+        redis    = make_redis()
+        provider = make_provider(json.dumps({
+            "sugestao_resposta": "ok", "flags_risco": [], "acoes_recomendadas": [],
+        }))
+        await analyze_for_copilot(redis, provider, SESSION, TENANT, "Oi")
+
+        kwargs = provider.call.call_args.kwargs
+        assert "system" not in kwargs, (
+            "LLMProvider.call() não tem parâmetro `system` — o prompt de sistema "
+            "viaja como mensagem com role='system'"
+        )
+        assert set(kwargs) <= {"messages", "tools", "model_id", "max_tokens", "force_tool"}
+        roles = [m["role"] for m in kwargs["messages"]]
+        assert "system" in roles and "user" in roles
 
     @pytest.mark.asyncio
     async def test_writes_context_and_publishes_on_success(self):

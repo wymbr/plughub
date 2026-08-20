@@ -12,7 +12,7 @@ from typing import Any
 
 import anthropic
 
-from .base import LLMProvider, LLMResponse, ProviderError
+from .base import LLMProvider, LLMResponse, ProviderError, key_id_for
 
 # Status codes that justify automatic fallback
 _RETRYABLE_STATUS_CODES = {429, 529, 503, 502, 504}
@@ -34,6 +34,12 @@ class AnthropicProvider(LLMProvider):
 
     def __init__(self, api_key: str) -> None:
         self._client = anthropic.AsyncAnthropic(api_key=api_key or None)
+        self._key_id = key_id_for(api_key)
+
+    @property
+    def key_id(self) -> str:
+        """Identificador curto da conta desta instância (ver providers.base.key_id_for)."""
+        return self._key_id
 
     async def call(
         self,
@@ -124,6 +130,7 @@ class AnthropicProvider(LLMProvider):
                 error_code="rate_limit",
                 retryable=True,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except anthropic.APIConnectionError as e:
             raise ProviderError(
@@ -131,6 +138,7 @@ class AnthropicProvider(LLMProvider):
                 error_code="connection_error",
                 retryable=True,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except anthropic.APIStatusError as e:
             retryable = e.status_code in _RETRYABLE_STATUS_CODES
@@ -139,6 +147,7 @@ class AnthropicProvider(LLMProvider):
                 error_code=f"status_{e.status_code}",
                 retryable=retryable,
                 message=str(e),
+                account_key_id=self._key_id,
             )
         except anthropic.APIError as e:
             raise ProviderError(
@@ -146,4 +155,5 @@ class AnthropicProvider(LLMProvider):
                 error_code="api_error",
                 retryable=False,
                 message=str(e),
+                account_key_id=self._key_id,
             )

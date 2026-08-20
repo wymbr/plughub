@@ -334,6 +334,25 @@ export const ReasonStepSchema = z.object({
   type:               z.literal("reason"),
   prompt_id:          z.string(),
   input:              StepInputSchema.optional(),
+  /**
+   * Referência (`$.pipeline_state.*` / `@ctx.*`) ao texto que o CLIENTE disse.
+   *
+   * Existe para que a plataforma possa MEDIR sentimento. O `input` do reason é
+   * opaco por contrato: o ai-gateway não distingue fala de cliente de
+   * `pipeline_state`, e chutar produziria score sobre texto de máquina. Nomear é
+   * declarar ENTRADA (que dado é este), não pedir que o modelo se autoavalie —
+   * distinção que importa, porque a alternativa rejeitada era exigir
+   * `sentiment_score` no `output_schema` de cada skill, o que poria invariante de
+   * plataforma em YAML de tenant e trocaria "a plataforma mede" por "o modelo dá a
+   * própria nota".
+   *
+   * Ausente → nenhum sentimento é medido neste step. Ausência é honesta; o default
+   * anterior era `0.0`, que é NEUTRO e indistinguível de medido.
+   *
+   * Exemplo:
+   *   customer_utterance: "$.pipeline_state.pergunta_inicial.value"
+   */
+  customer_utterance: z.string().optional(),
   output_schema:      z.record(ReasonOutputFieldSchema),
   // T7b — JSON Schema completo (montado UPSTREAM a partir do form) para tool-use
   // nativo no ai-gateway. Inline (`json_schema`) OU referência JSONPath resolvida do

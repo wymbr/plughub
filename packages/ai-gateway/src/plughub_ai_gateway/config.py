@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     config_api_url: str = "http://localhost:3600"
     tenant_id:      str = "tenant_demo"
 
+    # Sonda de credencial no boot — UMA chamada mínima por conta, uma vez por start
+    # do container. Sem ela o estado da credencial só é aprendido quando alguém
+    # exercita um step `reason`, e num ambiente ocioso ficaria `unknown` para sempre.
+    # Desligar NÃO produz `ok`: produz `unknown`, que o /v1/health publica como tal.
+    llm_boot_probe:           bool = True
+    llm_boot_probe_timeout_s: int  = 10
+
     def get_anthropic_keys(self) -> list[str]:
         """Returns list of Anthropic API keys. Prefers anthropic_api_keys (comma-separated)."""
         raw = self.anthropic_api_keys.strip() or self.anthropic_api_key.strip()

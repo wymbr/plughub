@@ -8,8 +8,22 @@ Never leaks native SDK exceptions — converts them to ProviderError.
 """
 
 from __future__ import annotations
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+
+def key_id_for(api_key: str) -> str:
+    """
+    Short, non-reversible identifier of an API key — safe to put in Redis keys,
+    logs and HTTP bodies. Never exposes the key itself.
+
+    Fonte ÚNICA de propósito: `LLMAccount.key_id` (account_selector) e os providers
+    precisam do MESMO id, senão o desfecho gravado por um não é encontrado pelo
+    outro e o health reporta `unknown` sobre uma conta que acabou de falhar —
+    duas implementações da mesma identidade divergindo em silêncio.
+    """
+    return hashlib.sha256(api_key.encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -39,12 +53,18 @@ class ProviderError(Exception):
         error_code: str,
         retryable:  bool,
         message:    str = "",
+        account_key_id: str = "",
     ) -> None:
         super().__init__(message or f"{provider}/{error_code}")
         self.provider   = provider
         self.error_code = error_code
         self.retryable  = retryable
         self.message    = message
+        # QUAL conta falhou. Sem este campo o funil único de erro
+        # (main.provider_error_handler) só sabe "anthropic quebrou", e com N contas
+        # no catálogo isso não distingue "uma chave revogada" de "nenhuma funciona".
+        # Vazio = provider construído fora do caminho de conta (não deve ocorrer).
+        self.account_key_id = account_key_id
 
 
 class LLMProvider(ABC):

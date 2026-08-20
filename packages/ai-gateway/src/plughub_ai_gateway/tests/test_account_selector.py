@@ -50,6 +50,7 @@ def _make_redis(
     pipe.incr = MagicMock(return_value=pipe)
     pipe.expire = MagicMock(return_value=pipe)
     pipe.incrby = MagicMock(return_value=pipe)
+    pipe.set = MagicMock(return_value=pipe)   # record_outcome grava last_ok/last_err
     pipe.execute = AsyncMock(return_value=[1, True, 1, True])
     redis.pipeline.return_value = pipe
     return redis
@@ -293,8 +294,26 @@ class TestRecordUsage:
         pipe = redis.pipeline.return_value
         selector = AccountSelector(redis, [acc])
         await selector.record_usage(acc.provider_key, tokens=0)
-        pipe.incr.assert_called_once()
+        # DOIS incr, e o segundo é de propósito: `record_usage` passou a ser o
+        # ponto único que também registra o desfecho da credencial (o contador
+        # de sucessos, testemunha do contador de erros). Era `assert_called_once`
+        # até 2026-08-23; afrouxar para `assert_called` esconderia a diferença,
+        # então o teste afirma QUAIS chaves foram incrementadas.
+        incremented = [c.args[0] for c in pipe.incr.call_args_list]
+        assert f"ai_gw:anthropic:{acc.key_id}:rpm" in incremented
+        assert any(k.startswith(f"ai_gw:anthropic:{acc.key_id}:ok:") for k in incremented)
+        assert len(incremented) == 2
         pipe.expire.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_records_success_outcome(self) -> None:
+        acc = _make_account()
+        redis = _make_redis()
+        pipe = redis.pipeline.return_value
+        selector = AccountSelector(redis, [acc])
+        await selector.record_usage(acc.provider_key, tokens=10)
+        set_keys = [c.args[0] for c in pipe.set.call_args_list]
+        assert f"ai_gw:anthropic:{acc.key_id}:last_ok" in set_keys
 
     @pytest.mark.asyncio
     async def test_increments_tpm_when_tokens_positive(self) -> None:
@@ -313,6 +332,120 @@ class TestRecordUsage:
         selector = AccountSelector(redis, [acc])
         await selector.record_usage(acc.provider_key, tokens=0)
         pipe.incrby.assert_not_called()
+
+
+# ─── AccountSelector — credential_summary() ──────────────────────────────────
+#
+# Estes testes julgam a metade que o probe do demo NÃO julga. O `/v1/health` só é
+# honesto se `unknown` nunca virar `ok` e se um 401 for distinguido de um 429, e
+# nenhuma das duas coisas se prova contra um ambiente cuja credencial funciona.
+
+def _make_credential_redis(
+    last_ok: int | None,
+    last_err: str | None,
+    as_bytes: bool = True,
+    throttled: bool = False,
+) -> MagicMock:
+    """
+    Devolve os valores como BYTES por padrão, de propósito.
+
+    O cliente de produção usa `decode_responses=True` (session.py) e entrega `str`,
+    então o caminho vivo nunca exerce o ramo de bytes. Foi justamente por isso que
+    `str(bytes)` — que corrompe sem levantar — passou despercebido até este teste
+    reprovar. Manter a fixture em bytes fixa a robustez: se alguém trocar
+    `_as_text()` por `str()` de novo, três testes ficam vermelhos na hora.
+    """
+    def enc(v: str):
+        return v.encode() if as_bytes else v
+
+    redis = MagicMock()
+    redis.mget = AsyncMock(return_value=[
+        enc(str(last_ok)) if last_ok else None,
+        enc(last_err) if last_err else None,
+        enc("1") if throttled else None,
+    ])
+    return redis
+
+
+class TestCredentialSummary:
+    @pytest.mark.asyncio
+    async def test_no_outcome_is_unknown_never_ok(self) -> None:
+        """A regra inteira em uma linha: sem evidência não existe conta saudável."""
+        selector = AccountSelector(_make_credential_redis(None, None), [_make_account()])
+        entry = (await selector.credential_summary())[0]
+        assert entry["credentials"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_auth_failure_is_invalid(self) -> None:
+        redis = _make_credential_redis(None, "1750000000|status_401|API key is invalid")
+        selector = AccountSelector(redis, [_make_account()])
+        entry = (await selector.credential_summary())[0]
+        assert entry["credentials"] == "invalid"
+        assert entry["last_error_code"] == "status_401"
+        assert "invalid" in entry["last_error"]
+
+    @pytest.mark.asyncio
+    async def test_transient_failure_is_error_not_invalid(self) -> None:
+        """429 não é credencial ruim — se virasse `invalid`, um pico de tráfego
+        reprovaria o healthcheck e o sinal perderia todo o valor."""
+        redis = _make_credential_redis(None, "1750000000|rate_limit|429")
+        selector = AccountSelector(redis, [_make_account()])
+        assert (await selector.credential_summary())[0]["credentials"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_success_after_failure_is_ok(self) -> None:
+        redis = _make_credential_redis(1_750_000_100, "1750000000|status_401|old")
+        selector = AccountSelector(redis, [_make_account()])
+        assert (await selector.credential_summary())[0]["credentials"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_failure_after_success_wins(self) -> None:
+        """Ordem importa: a chave que FUNCIONOU e depois foi revogada é inválida."""
+        redis = _make_credential_redis(1_750_000_000, "1750000100|status_401|revoked")
+        selector = AccountSelector(redis, [_make_account()])
+        assert (await selector.credential_summary())[0]["credentials"] == "invalid"
+
+    @pytest.mark.asyncio
+    async def test_decoded_str_values_behave_identically(self) -> None:
+        """O cliente de produção entrega `str`, o mock entrega `bytes`. As duas
+        formas TÊM de dar o mesmo veredicto — se divergirem, o ambiente e a suíte
+        param de julgar a mesma coisa e nenhum dos dois avisa."""
+        for as_bytes in (True, False):
+            redis = _make_credential_redis(
+                None, "1750000000|status_401|API key is invalid", as_bytes=as_bytes,
+            )
+            selector = AccountSelector(redis, [_make_account()])
+            entry = (await selector.credential_summary())[0]
+            assert entry["credentials"] == "invalid", f"as_bytes={as_bytes}"
+            assert entry["last_error_code"] == "status_401", f"as_bytes={as_bytes}"
+
+    @pytest.mark.asyncio
+    async def test_throttled_is_orthogonal_to_credentials(self) -> None:
+        """Credencial boa + conta throttled = os DOIS fatos, não um só. Se o health
+        lesse só `credentials`, todas as contas throttled dariam ok/200 enquanto o
+        `pick()` devolve None — verde sobre capacidade zero."""
+        redis = _make_credential_redis(1_750_000_000, None, throttled=True)
+        entry = (await AccountSelector(redis, [_make_account()]).credential_summary())[0]
+        assert entry["credentials"] == "ok"
+        assert entry["throttled"] is True
+
+    @pytest.mark.asyncio
+    async def test_not_throttled_by_default(self) -> None:
+        redis = _make_credential_redis(1_750_000_000, None)
+        entry = (await AccountSelector(redis, [_make_account()]).credential_summary())[0]
+        assert entry["throttled"] is False
+
+    @pytest.mark.asyncio
+    async def test_redis_unreachable_degrades_to_unknown(self) -> None:
+        redis = MagicMock()
+        redis.mget = AsyncMock(side_effect=RuntimeError("redis down"))
+        selector = AccountSelector(redis, [_make_account()])
+        assert (await selector.credential_summary())[0]["credentials"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_no_accounts_returns_empty(self) -> None:
+        selector = AccountSelector(_make_credential_redis(None, None), [])
+        assert await selector.credential_summary() == []
 
 
 # ─── AccountSelector — health_summary() ──────────────────────────────────────

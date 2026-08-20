@@ -81,6 +81,12 @@ export interface StepContext {
     json_schema?:  Record<string, unknown>   // T7b — tool-use nativo quando presente
     model_profile?: string                    // R8d — perfil de modelo (revisor heterogêneo)
     preferred_config_ids?: string[]           // LLM Accounts — session.pool.llm_account_ids
+    /**
+     * Fala do CLIENTE, já resolvida a partir de `step.customer_utterance`.
+     * Habilita a medição de sentimento no ai-gateway. Ausente = não medir.
+     * Nunca inferida do `input`, que é opaco por contrato.
+     */
+    customer_utterance?: string
   }): Promise<unknown>
 
   /** Persiste o pipeline_state atual */
