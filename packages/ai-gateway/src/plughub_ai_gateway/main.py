@@ -257,6 +257,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.account_selector = account_selector
 
+    # Providers por NOME, publicados explicitamente. Existe porque a medição de
+    # sentimento precisa de um provider fora do turno, e a versão anterior o
+    # buscava em `inference_engine.providers` — atributo que a classe não tem (é
+    # `_providers`, privado). `getattr(..., "providers", {})` devolvia `{}` sempre,
+    # e a medição NUNCA rodou: o default do getattr transformou "o atributo não
+    # existe" em "não há provider configurado", que é um fato diferente e plausível.
+    # Alcançar o privado de outro objeto teria o mesmo defeito com outra grafia —
+    # a dependência é declarada aqui, onde o dict é construído.
+    app.state.llm_providers = providers
+
     # Legacy components (/v1/turn, /v1/reason) — use the "anthropic" alias provider.
     # Falls back to None when no Anthropic API key is configured (dev / test mode).
     _legacy_provider = providers.get("anthropic")
@@ -496,12 +506,10 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
     # qual chave é fala de cliente e qual é `pipeline_state`, e chutar produziria
     # score sobre texto de máquina.
     if req.customer_utterance:
-        engine_ref: Any = request.app.state.inference_engine
-        provider = getattr(engine_ref, "providers", {}).get("anthropic")
         task = asyncio.create_task(
             analyze_and_emit_sentiment(
                 redis              = request.app.state.redis,
-                provider           = provider,
+                provider           = sentiment_provider(request.app.state),
                 producer           = request.app.state.kafka_producer,
                 tenant_id          = req.tenant_id,
                 session_id         = req.session_id,
@@ -515,6 +523,34 @@ async def reason(req: ReasonRequest, request: Request) -> ReasonResponse:
         task.add_done_callback(_log_task_exception)
 
     return response
+
+
+def sentiment_provider(state: Any) -> Any | None:
+    """
+    Resolve o provider usado pela medição de sentimento (chamada fora do turno).
+
+    Existe como função NOMEADA porque os dois modos de "não há provider" precisam
+    sair por portas diferentes, e a versão inline os juntava:
+
+      · `llm_providers` ausente em `app.state` → **defeito de fiação**. Foi o bug
+        real: o handler lia `inference_engine.providers`, atributo que a classe não
+        tem (é `_providers`, privado), e `getattr(obj, "providers", {})` devolvia
+        `{}` — silenciosamente indistinguível de "ambiente sem chave". A medição
+        nunca rodou, e o log dizia "sem provider LLM", que soa como ambiente.
+      · alias `anthropic` ausente no dict → **ambiente sem chave Anthropic**, que é
+        degradação legítima e já é registrada pelo próprio analisador.
+
+    Devolve None nos dois casos (nunca levanta: sentimento jamais derruba o turno),
+    mas só o primeiro é ERROR.
+    """
+    registry = getattr(state, "llm_providers", None)
+    if registry is None:
+        logger.error(
+            "sentimento: app.state.llm_providers AUSENTE — defeito de fiação no "
+            "startup, não ambiente sem chave. Nada será medido."
+        )
+        return None
+    return registry.get("anthropic")
 
 
 def _log_task_exception(task: asyncio.Task) -> None:

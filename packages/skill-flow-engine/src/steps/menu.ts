@@ -208,7 +208,25 @@ export async function executeMenu(
   // instâncias legadas sem instanceId.  O bridge faz HGETALL e roteia por
   // visibility — customer messages vão para agentes com visibility "all"
   // ou array incluindo o customer; agents_only vai para agentes internos.
-  const waitingField = ctx.instanceId ?? "_default_"
+  //
+  // ⚠️ `||`, NUNCA `??` — e o valor em jogo é a string VAZIA, não null.
+  //
+  // Este campo e a chave de BLPOP (`redisKeys.menuResult`, linha 201) derivam do
+  // MESMO `ctx.instanceId` e TÊM de concordar sobre o que é "sem instância".
+  // `menuResult` decide por truthiness (`redis-keys.ts:28`), então `""` cai no
+  // ramo session-scoped `menu:result:{sid}`. Com `??` aqui, `""` sobrevivia e o
+  // campo do hash nascia com nome VAZIO — e os leitores (bridge `main.py:9180`,
+  // mcp-server `server.ts:2471/2487/2497/3641`) testam `!== "_default_"`, que é
+  // verdadeiro para `""`, logo faziam LPUSH em `menu:result:{sid}:` (dois-pontos
+  // final). Mensagem entregue a uma lista que ninguém escuta, sem erro nenhum.
+  //
+  // Quem sofria: o AGENTE DE FILA, único ativado com `instance_id=""` de propósito
+  // (`orchestrator-bridge/main.py:5952` — "queue agents don't hold a routing slot").
+  // Ele ficava SURDO à mensagem do cliente enquanto o `__agent_available__`
+  // continuava funcionando, porque o routing publica esse sinal na chave
+  // session-scoped hardcoded (`kafka_listener.py:728`) — a mesma do BLPOP. Meia
+  // funcionalidade viva é o que manteve o defeito invisível.
+  const waitingField = ctx.instanceId || "_default_"
   const waitingMeta  = JSON.stringify({
     visibility:    resolvedVisibility,
     masked:        step.masked === true,

@@ -35,6 +35,7 @@ poria invariante de plataforma em YAML de tenant.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -42,6 +43,7 @@ from typing import Any
 
 from .sentiment_emitter import (
     emit_sentiment_updated,
+    resolve_session_pool_id,
     update_sentiment_live,
     write_context_store_sentiment,
 )
@@ -50,6 +52,9 @@ logger = logging.getLogger("plughub.ai_gateway.sentiment_analyzer")
 
 _MAX_UTTERANCE_LEN = 1_000
 _MAX_TOKENS        = 64
+# Teto da emissão Kafka. Menor que o request timeout do aiokafka (40 s por default)
+# de propósito: o objetivo é NÃO herdar o tempo de espera do broker.
+_EMIT_TIMEOUT_S    = 5.0
 
 _SYSTEM_PROMPT = """\
 You rate the sentiment of a customer's message in a customer-service conversation.
@@ -122,22 +127,10 @@ def _parse_score(text: str) -> float | None:
     return None
 
 
-async def _resolve_pool_id(redis: Any, session_id: str) -> str:
-    """
-    Lê `pool_id` de `session:{id}:meta` — mesma fonte que `session.py:140` usa.
-
-    Ausente devolve `"unknown"` porque o agregado por pool ainda tem valor sem ele,
-    mas o caso é LOGADO: `"unknown"` que aparece em massa é sintoma de meta não
-    escrito, não de fluxo sem pool.
-    """
-    try:
-        pool_id = await redis.hget(f"session:{session_id}:meta", "pool_id")
-        if pool_id:
-            return pool_id
-        logger.info("sentiment: session:%s:meta sem pool_id — agregando sob 'unknown'", session_id)
-    except Exception as exc:
-        logger.warning("sentiment: falha ao ler pool_id de session:%s:meta — %s", session_id, exc)
-    return "unknown"
+# `_resolve_pool_id` foi REMOVIDO daqui em 2026-08-24 e virou
+# `sentiment_emitter.resolve_session_pool_id`. Motivo: existiam DUAS cópias da mesma
+# leitura (aqui e em `session.py`), e as duas usavam `HGET` numa chave que é String
+# (JSON). Duplicata é o que permite que um conserto pareça feito e não seja.
 
 
 async def analyze_and_emit_sentiment(
@@ -199,12 +192,26 @@ async def analyze_and_emit_sentiment(
     if score is None:
         return  # `_parse_score` já registrou o motivo
 
-    pool_id = await _resolve_pool_id(redis, session_id)
+    pool_id = await resolve_session_pool_id(redis, session_id)
 
-    await emit_sentiment_updated(
-        producer=producer, tenant_id=tenant_id, session_id=session_id,
-        pool_id=pool_id, score=score,
-    )
+    # ORDEM: Redis primeiro, Kafka por último — e não é gosto.
+    #
+    # Medido em 2026-08-24: com o broker momentaneamente inalcançável (o ai-gateway
+    # tinha acabado de reiniciar e o aiokafka logava `Connection refused`),
+    # `producer.send` NÃO levanta — ele BLOQUEIA ~40 s no refresh de metadata, e o
+    # erro (`UnknownTopicOrPartitionError`) só aparece quando estoura o request
+    # timeout. Como o emit estava primeiro, as duas escritas locais ficavam reféns:
+    # o score já estava calculado e ninguém conseguia lê-lo por 40 s. O `try` do
+    # emissor protege contra EXCEÇÃO, nunca contra travamento — "fire-and-forget:
+    # nunca levanta" é verdadeiro e insuficiente.
+    #
+    # ⚠️ Não confundir com tópico ausente: `sentiment.updated` É criado pelo
+    # `kafka-init` e estava lá (conferido na lista do broker). A mensagem de erro
+    # do aiokafka nomeia o tópico e induz a esse diagnóstico errado.
+    #
+    # As duas escritas de Redis são o que alguém LÊ (ctx da sessão e agregado do
+    # painel); o Kafka é derivado. Um consumidor indisponível não pode atrasar a
+    # disponibilidade do dado.
     await update_sentiment_live(
         redis=redis, tenant_id=tenant_id, pool_id=pool_id,
         score=score, session_id=session_id,
@@ -215,3 +222,22 @@ async def analyze_and_emit_sentiment(
     logger.info(
         "sentiment: medido session=%s pool=%s score=%+.2f", session_id, pool_id, score,
     )
+
+    # Teto explícito no emissor. Sem ele a task de background segura um slot do
+    # event loop por dezenas de segundos por chamada — e num pico isso deixa de ser
+    # "só lento". O timeout é LOGADO: emissão perdida em silêncio faria o analytics
+    # divergir do ctx sem que nada ficasse vermelho.
+    try:
+        await asyncio.wait_for(
+            emit_sentiment_updated(
+                producer=producer, tenant_id=tenant_id, session_id=session_id,
+                pool_id=pool_id, score=score,
+            ),
+            timeout=_EMIT_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "sentiment: emissão Kafka excedeu %ss session=%s — score JÁ gravado no "
+            "Redis (ctx + live); o que se perdeu foi a trilha analítica, não a medida.",
+            _EMIT_TIMEOUT_S, session_id,
+        )

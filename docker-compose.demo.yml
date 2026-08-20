@@ -695,11 +695,19 @@ services:
       dockerfile: packages/ai-gateway/Dockerfile
     ports:
       - "3200:3200"
+    # A credencial de LLM entra por AQUI, e não pelo bloco `environment:` abaixo.
+    # Motivo (medido 2026-08-24): `environment:` vence `env_file:`, e a linha antiga
+    #   PLUGHUB_ANTHROPIC_API_KEY: ${PLUGHUB_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-}}
+    # interpolava da SHELL de quem rodou o `up -d`. Uma chave exportada e revogada no
+    # perfil do host vencia em silêncio o valor do `.env.demo`, e o sintoma era
+    # "a chave do arquivo é inválida" — quando o arquivo nem estava sendo lido.
+    # Estado da shell não é entrada declarada; `.env.demo` (gitignored) é.
+    env_file:
+      - .env.demo
     environment:
       PLUGHUB_REDIS_URL: redis://redis:6379
       PLUGHUB_PORT: "3200"
       PLUGHUB_WORKERS: "1"
-      PLUGHUB_ANTHROPIC_API_KEY: ${PLUGHUB_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-}}
       # LLM Accounts — catalog fetch (namespace llm_accounts); graceful fallback to
       # PLUGHUB_ANTHROPIC_API_KEY above when the catalog is empty/unreachable.
       PLUGHUB_CONFIG_API_URL: http://config-api:3600

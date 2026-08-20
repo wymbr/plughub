@@ -35,6 +35,57 @@ _TOPIC = "sentiment.updated"
 _SENTIMENT_LIVE_TTL = 300  # seconds
 
 
+# ── Pool de agregação ─────────────────────────────────────────────────────────
+
+async def resolve_session_pool_id(redis: Any, session_id: str) -> str:
+    """
+    Lê o `pool_id` de `session:{id}:meta` — a chave é **String (JSON)**, não hash.
+
+    ⚠️ Este helper existe porque o ai-gateway errava o TIPO da chave, em dois lugares
+    independentes (`session.py` e `sentiment_analyzer.py`), ambos com `HGET`. O
+    contrato está escrito (`orchestrator-bridge/CLAUDE.md:35` — "String (JSON)") e
+    todos os leitores do bridge usam `GET`; só o ai-gateway divergia.
+
+    O modo de falha era caro justamente por ser plausível: `HGET` numa string levanta
+    `WRONGTYPE`, o `except` devolvia `"unknown"`, e o painel de sentimento agregava
+    TODO contato real sob um balde só — com o dado presente na chave o tempo inteiro.
+    Só aparecia em contato de verdade: sessão sintética não tem a chave, `HGET` numa
+    chave AUSENTE devolve `None` sem levantar, e o log saía pelo ramo benigno
+    ("sem pool_id"). Medido em 2026-08-24.
+
+    Cada saída diz por que saiu, e são quatro motivos DIFERENTES: chave ausente ·
+    leitura falhou · JSON ilegível · campo ausente. Um `"unknown"` mudo os
+    confundiria, que foi o que escondeu o defeito.
+
+    ⚠️ SEMÂNTICA (dívida conhecida, não corrigida aqui): o `pool_id` do meta é o pool
+    de ENTRADA do contato, não o que está atendendo no momento. Um cliente que entrou
+    pelo `sac_ia` e está falando com o agente de FILA tem o sentimento agregado sob
+    `sac_ia`. É a ambiguidade registrada na fatia C de `session:{id}:meta`
+    (`entry_pool_id` × `pool_id`) — ver `docs/guias/session-meta-ownership.md`.
+    """
+    if redis is None:
+        return "unknown"
+    key = f"session:{session_id}:meta"
+    try:
+        raw = await redis.get(key)
+    except Exception as exc:
+        logger.warning("sentiment: falha ao LER %s — %s. Agregando sob 'unknown'.", key, exc)
+        return "unknown"
+    if not raw:
+        logger.info("sentiment: %s ausente — agregando sob 'unknown'", key)
+        return "unknown"
+    try:
+        meta = json.loads(raw if isinstance(raw, str) else raw.decode())
+    except Exception as exc:
+        logger.warning("sentiment: %s não é JSON legível — %s", key, exc)
+        return "unknown"
+    pool_id = meta.get("pool_id") if isinstance(meta, dict) else None
+    if not pool_id:
+        logger.info("sentiment: %s sem campo pool_id — agregando sob 'unknown'", key)
+        return "unknown"
+    return str(pool_id)
+
+
 # ── Kafka emission ────────────────────────────────────────────────────────────
 
 async def emit_sentiment_updated(

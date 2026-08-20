@@ -178,3 +178,64 @@ class TestAnalyzeAndEmit:
             customer_utterance="demorou muito", model_id="haiku",
         )
         redis.hset.assert_called()
+
+
+# ── sentiment_provider — de ONDE o provider vem ──────────────────────────────
+#
+# Estes casos existem por um defeito medido em 2026-08-24: a medição de sentimento
+# estava wired a `inference_engine.providers`, atributo que `InferenceEngine` NÃO
+# tem — o nome real é `_providers`, privado. Como a leitura era
+# `getattr(engine, "providers", {})`, o default transformava "atributo inexistente"
+# em "dicionário vazio", e o desfecho era o log `sem provider LLM`, indistinguível
+# de "ambiente sem chave configurada". A medição nunca rodou uma única vez, e o
+# sintoma parecia ambiente. Nenhum teste podia pegar isso, porque a suíte só
+# exercitava `analyze_and_emit_sentiment` recebendo o provider PRONTO.
+
+class TestSentimentProvider:
+    def test_missing_registry_is_wiring_defect_not_environment(self, caplog):
+        """`llm_providers` ausente tem de sair por ERROR — é bug, não ambiente."""
+        from ..main import sentiment_provider
+
+        class BareState:
+            pass
+
+        with caplog.at_level("ERROR"):
+            assert sentiment_provider(BareState()) is None
+        assert any("llm_providers" in r.message for r in caplog.records)
+
+    def test_engine_shaped_object_is_not_a_valid_source(self, caplog):
+        """O objeto que causou o bug: expõe `_providers`, nunca `providers`.
+
+        Passá-lo aqui tem de dar o ramo de FIAÇÃO (ERROR), e não um None mudo —
+        senão o defeito volta com outra grafia e o log volta a culpar o ambiente.
+        """
+        from ..main import sentiment_provider
+
+        class EngineShaped:
+            def __init__(self):
+                self._providers = {"anthropic": object()}
+
+        with caplog.at_level("ERROR"):
+            assert sentiment_provider(EngineShaped()) is None
+        assert any("llm_providers" in r.message for r in caplog.records)
+
+    def test_registry_without_alias_is_silent_degradation(self, caplog):
+        """Sem chave Anthropic: None, mas SEM ERROR — o analisador é que registra."""
+        from ..main import sentiment_provider
+
+        class State:
+            llm_providers = {"openai": object()}
+
+        with caplog.at_level("ERROR"):
+            assert sentiment_provider(State()) is None
+        assert not [r for r in caplog.records if "llm_providers" in r.message]
+
+    def test_alias_present_returns_provider(self):
+        from ..main import sentiment_provider
+
+        sentinel = object()
+
+        class State:
+            llm_providers = {"anthropic": sentinel, "anthropic:abc123": object()}
+
+        assert sentiment_provider(State()) is sentinel

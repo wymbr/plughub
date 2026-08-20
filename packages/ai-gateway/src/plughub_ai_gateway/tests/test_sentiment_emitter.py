@@ -227,14 +227,42 @@ class TestSessionManagerSentimentIntegration:
     """
 
     async def test_pool_id_looked_up_from_meta(self):
+        """
+        `session:{id}:meta` é String (JSON), lida com GET.
+
+        ⚠️ Esta fixture CODIFICAVA o bug até 2026-08-24: ela montava
+        `redis.hget = AM(return_value="retencao_humano")`, isto é, falava o mesmo
+        protocolo errado que o código. O teste tinha o nome certo, passava, e não
+        podia reprovar o caso real — em produção `HGET` numa string levanta
+        `WRONGTYPE` e todo contato agregava sob `unknown`. Mock que concorda com o
+        defeito compra confiança sem dar nada.
+
+        Agora o `get` responde POR CHAVE (o `SessionManager` lê duas coisas
+        diferentes com o mesmo verbo) e o `hget` **levanta** — uma regressão ao
+        protocolo antigo fica vermelha em vez de verde.
+        """
         from unittest.mock import patch, AsyncMock as AM
         from ..session import SessionManager
 
+        META_KEY  = f"session:{SESSION}:meta"
+        META_JSON = '{"pool_id": "retencao_humano", "channel": "webchat"}'
+
+        async def _get(key, *_a, **_kw):
+            if key == META_KEY:
+                return META_JSON
+            return None                        # no existing AI state
+
+        async def _hget_proibido(*_a, **_kw):
+            raise AssertionError(
+                "HGET em session:{id}:meta — a chave é String (JSON). "
+                "Em produção isto seria WRONGTYPE e o pool cairia em 'unknown'."
+            )
+
         redis = make_redis()
-        redis.get    = AM(return_value=None)   # no existing AI state
-        redis.set    = AM()
+        redis.get     = AM(side_effect=_get)
+        redis.set     = AM()
         redis.publish = AM()
-        redis.hget   = AM(return_value="retencao_humano")
+        redis.hget    = AM(side_effect=_hget_proibido)
 
         producer = make_producer()
         mgr = SessionManager(redis, kafka_producer=producer)
@@ -268,10 +296,9 @@ class TestSessionManagerSentimentIntegration:
         from ..session import SessionManager
 
         redis = make_redis()
-        redis.get    = AM(return_value=None)
+        redis.get    = AM(return_value=None)  # meta ausente (e nenhum estado de IA)
         redis.set    = AM()
         redis.publish = AM()
-        redis.hget   = AM(return_value=None)  # pool_id not found
 
         mgr = SessionManager(redis, kafka_producer=make_producer())
 
@@ -289,6 +316,70 @@ class TestSessionManagerSentimentIntegration:
             # pool_id falls back to "unknown"
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["pool_id"] == "unknown"
+
+
+# ── resolve_session_pool_id ───────────────────────────────────────────────────
+#
+# Helper único (2026-08-24) para os dois leitores que antes tinham cópias com HGET.
+# Os quatro motivos de "unknown" são fatos DIFERENTES e precisam continuar
+# separados: foi o `unknown` mudo que fez um defeito de TIPO passar por
+# "esta sessão não tem pool".
+
+class TestResolveSessionPoolId:
+
+    async def test_reads_pool_id_from_json_string(self):
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(return_value='{"pool_id": "sac_ia", "channel": "webchat"}')
+        assert await resolve_session_pool_id(redis, SESSION) == "sac_ia"
+
+    async def test_accepts_bytes_from_client_without_decode_responses(self):
+        """Nem todo cliente Redis devolve `str` — `str(b'{...}')` viraria lixo silencioso."""
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(return_value=b'{"pool_id": "sac_ia"}')
+        assert await resolve_session_pool_id(redis, SESSION) == "sac_ia"
+
+    async def test_missing_key_is_unknown(self):
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(return_value=None)
+        assert await resolve_session_pool_id(redis, SESSION) == "unknown"
+
+    async def test_wrongtype_does_not_propagate(self):
+        """O caso REAL de produção: a chave existe com outro tipo e o GET levanta."""
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(side_effect=Exception("WRONGTYPE Operation against a key"))
+        assert await resolve_session_pool_id(redis, SESSION) == "unknown"
+
+    async def test_unparseable_json_is_unknown(self):
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(return_value="isto não é json")
+        assert await resolve_session_pool_id(redis, SESSION) == "unknown"
+
+    async def test_json_without_pool_id_is_unknown(self):
+        from unittest.mock import AsyncMock as AM
+        from ..sentiment_emitter import resolve_session_pool_id
+
+        redis = make_redis()
+        redis.get = AM(return_value='{"channel": "webchat", "tenant_id": "t"}')
+        assert await resolve_session_pool_id(redis, SESSION) == "unknown"
+
+    async def test_null_redis_is_unknown(self):
+        from ..sentiment_emitter import resolve_session_pool_id
+        assert await resolve_session_pool_id(None, SESSION) == "unknown"
 
 
 # ── write_context_store_sentiment ─────────────────────────────────────────────

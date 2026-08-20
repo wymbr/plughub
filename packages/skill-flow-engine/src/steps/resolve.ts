@@ -189,7 +189,11 @@ export async function executeResolve(
   const waitingKey  = redisKeys.menuWaiting(ctx.sessionId)
 
   // Flag de espera — HASH com metadados por agente (mesma lógica do menu step)
-  const waitingField = ctx.instanceId ?? "_default_"
+  // `||`, não `??`: tem de concordar com `redisKeys.menuResult` (linha 187), que
+  // decide por truthiness. Ver o comentário longo em `steps/menu.ts` — com `??` a
+  // string vazia vira um campo de nome vazio e a mensagem é entregue a
+  // `menu:result:{sid}:`, lista que ninguém consome.
+  const waitingField = ctx.instanceId || "_default_"
   const waitingMeta  = JSON.stringify({ visibility: "all", masked: false })
   try {
     await ctx.redis.hset(waitingKey, waitingField, waitingMeta)

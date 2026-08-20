@@ -19,7 +19,12 @@ import redis.asyncio as aioredis
 logger = logging.getLogger("plughub.ai_gateway.session")
 
 from .config import get_settings
-from .sentiment_emitter import emit_sentiment_updated, update_sentiment_live, write_context_store_sentiment
+from .sentiment_emitter import (
+    emit_sentiment_updated,
+    resolve_session_pool_id,
+    update_sentiment_live,
+    write_context_store_sentiment,
+)
 
 
 async def get_redis() -> aioredis.Redis:
@@ -160,8 +165,10 @@ class SessionManager:
             )
         else:
             try:
-                pool_id_raw = await self._redis.hget(f"session:{session_id}:meta", "pool_id")
-                pool_id = pool_id_raw if pool_id_raw else "unknown"
+                # `session:{id}:meta` é String (JSON), NÃO hash — este HGET levantava
+                # WRONGTYPE em todo contato real (medido 2026-08-24). Helper único
+                # compartilhado com o sentiment_analyzer.
+                pool_id = await resolve_session_pool_id(self._redis, session_id)
                 await emit_sentiment_updated(
                     producer   = self._producer,
                     tenant_id  = tenant_id,

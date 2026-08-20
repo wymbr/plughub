@@ -1,192 +1,189 @@
 #!/usr/bin/env bash
-# probe_sentiment_producer.sh — a trilha de sentimento roda, morre, ou nem é chamada?
+# probe_sentiment_producer.sh — a plataforma MEDE sentimento, ou só parece medir?
 #
-# ── A contradição que este probe existe para resolver ────────────────────────
-# O TODO/passagem diz "sentimento sem produtor", apoiado em duas leituras que
-# NÃO podem estar as duas certas:
+# ── O que este probe julga (contrato de 2026-08-23) ──────────────────────────
+# Sentimento é medido por uma chamada DEDICADA ao modelo, fora do turno, disparada
+# por `/v1/reason` **somente quando o step NOMEOU a fala do cliente** em
+# `ReasonRequest.customer_utterance` (`main.py:498` → `analyze_and_emit_sentiment`).
+# O gateway não adivinha: o `input` do reason é opaco por contrato.
 #
-#   (i)  `update_partial_params` só é alcançado por `/v1/inference`, que teve 0
-#        requisições — daí "sem produtor".
-#   (ii) `session.py:140` faz `HGET` numa chave que é string JSON ⇒ `WRONGTYPE`,
-#        e o `except` de `:162` loga "Sentiment pipeline failed".
+# Saídas, os três emissores que já existiam:
+#   · Kafka  `sentiment.updated`
+#   · Redis  {tenant}:pool:{pool}:sentiment_live        (TTL 300 s)
+#   · ctx    {tenant}:ctx:{session} → session.sentimento.current   (TTL 4 h)
 #
-# Varredura de código de 2026-08-22 refuta (i) e reabre (ii):
-#   · a rota é `POST /inference`, não `/v1/inference` — e não tem chamador nenhum
-#     no repositório inteiro (nem produção, nem teste);
-#   · **`/v1/reason` TAMBÉM chama `update_partial_params`** (`main.py:357`), e é
-#     ele que carrega as 116 requisições.
-# Logo a trilha É percorrida. Então ou ela falha 116 vezes (e o log de 08-20 não
-# viu), ou ela roda e grava — e o que grava é `sentiment_score = 0.0`, porque
-# `main.py:352` só aproveita o campo se o `output_schema` do step o declarar, e
-# **nenhum skill do repo declara**. Zero é NEUTRO: indistinguível de não-medido.
+# ⚠️ Contrato ANTERIOR, deliberadamente aposentado — não voltar a testá-lo:
+# `/v1/reason` lia `sentiment_score` do `output_schema` que o SKILL declarava. Como
+# nenhum skill o declarava, o valor era sempre 0.0 — neutro, indistinguível de
+# não-medido. E sentimento auto-reportado pelo modelo que está atendendo é o
+# avaliado dando a própria nota. A v1 deste probe testava esse caminho.
 #
-# ── PREVISÕES ────────────────────────────────────────────────────────────────
-#   P1  requisições a /v1/reason no log: > 0        (TESTEMUNHA — sem ela nada julga)
-#   P2  ramifica em três, e os três são desfechos DIFERENTES:
-#        (a) N falhas "Sentiment pipeline failed" ≈ N reasons
-#            ⇒ o pipeline MORRE no WRONGTYPE. O `HGET` deixa de ser "o segundo
-#              problema" e passa a ser o ÚNICO bloqueio.
-#        (b) 0 falhas + chaves `*sentiment_live*` existindo
-#            ⇒ o pipeline RODA e grava 0.0 sob tenant vazio. Pior que (a): valor
-#              plausível, ninguém fica vermelho, e o painel mostra "neutro".
-#        (c) 0 falhas + 0 chaves
-#            ⇒ não escreveu e não falhou: investigar antes de concluir.
-#   P3  as chaves nascem com tenant VAZIO (`:pool:{p}:sentiment_live`), porque
-#       nenhum chamador de `/v1/reason` envia `tenant_id` (`engine-runner.ts:204`,
-#       `skill-flow-service/index.ts:249`). Por isso o scan NÃO filtra por tenant:
-#       filtrar por `tenant_demo:*` devolveria vazio e eu concluiria (c) por engano.
+# ── DESENHO DO TESTE ────────────────────────────────────────────────────────
+# Duas chamadas que diferem em UMA coisa só: a presença de `customer_utterance`.
+# É essa diferença que torna o resultado falseável — "existe chave de sentimento
+# no Redis" não julga nada sozinho, porque a chave pode ter vindo de outro tráfego.
 #
-# Veredicto de TRÊS estados: 0 = grava · 1 = morre · 3 = INCONCLUSIVO
+#   A · SEM customer_utterance  → TESTEMUNHA NEGATIVA: nada pode ser escrito.
+#                                 Se A escrever, o campo não está gateando e o
+#                                 gateway está medindo texto que ninguém nomeou.
+#   B · COM customer_utterance  → tem de escrever, e com score NEGATIVO: a fala
+#                                 é uma reclamação irritada. Score ≥ 0 significa
+#                                 que mediu OUTRA COISA (pipeline_state, prompt),
+#                                 que é o modo de falha caro — mede e mente.
+#
+# PREVISÕES:
+#   P-A  ctx de A ausente · P-B ctx de B presente e < 0 · sentiment_live de B presente
+#
+# Veredicto de TRÊS estados: 0 = mede · 1 = não mede / mede errado · 3 = INCONCLUSIVO
 set -uo pipefail
 
 COMPOSE="${COMPOSE:-docker compose -f docker-compose.demo.yml}"
 TENANT="${TENANT:-tenant_demo}"
+AIGW="${AIGW:-http://localhost:3200}"
 
 R() { $COMPOSE exec -T redis redis-cli "$@" < /dev/null 2>/dev/null | tr -d '\r'; }
 
-echo "══ trilha de sentimento — produtor vivo? ══"
+echo "══ medição de sentimento — a plataforma mede? ══"
 [ "$(R PING)" = "PONG" ] || { echo "   ⛔ INCONCLUSIVO — redis inalcançável"; exit 3; }
 
-# ── P1 · testemunha: o caminho é percorrido? ─────────────────────────────────
+# ── Pré-flight: a credencial de LLM está de pé? ──────────────────────────────
+# Sem provedor não há medição, e a falha seria lida como "a trilha não escreve".
+# O /v1/health já responde isso na hora, com a causa nomeada.
 echo
-echo "── P1 · tráfego no ai-gateway ────────────────────────────────────────────"
+echo "── pré-flight · credencial de LLM ────────────────────────────────────────"
+HCODE="$(curl -s -o /tmp/_sent_health.json -w '%{http_code}' --max-time 10 "$AIGW/v1/health" 2>/dev/null)"
+echo "      GET /v1/health : $HCODE"
+if [ "$HCODE" != "200" ]; then
+  echo "   ⛔ INCONCLUSIVO — ai-gateway não está saudável (corpo abaixo)."
+  head -c 400 /tmp/_sent_health.json 2>/dev/null; echo
+  echo "      Sem provedor a medição não roda, e a ausência de escrita NÃO julga o código."
+  exit 3
+fi
+
+# ── Contexto passivo (nunca aborta) ──────────────────────────────────────────
+# Estes números situam, não decidem. Na v1 o P1 dava `exit 3` quando o log estava
+# vazio — e o log fica vazio a cada recriação do container, matando justamente a
+# parte ATIVA, que é a única que julga. Contexto não pode vetar o experimento.
+echo
+echo "── contexto · tráfego já ocorrido nesta janela de log ────────────────────"
 LOG="$($COMPOSE logs ai-gateway 2>/dev/null | tr -d '\r')"
-NLOG="$(printf '%s\n' "$LOG" | grep -c .)"
-N_REASON="$(printf '%s\n' "$LOG" | grep -c 'POST /v1/reason')"
-N_INFER="$(printf '%s\n' "$LOG" | grep -cE 'POST /inference')"
-echo "      linhas de log        : $NLOG"
-echo "      POST /v1/reason      : $N_REASON"
-echo "      POST /inference      : $N_INFER   (a rota que a doc chamava de /v1/inference)"
-if [ "$NLOG" -eq 0 ]; then
-  echo "   ⛔ INCONCLUSIVO — log vazio; container recriado?"; exit 3
-fi
-if [ "$N_REASON" -eq 0 ]; then
-  echo "   ⛔ INCONCLUSIVO — nenhuma requisição a /v1/reason nesta janela."
-  echo "      Sem tráfego a trilha não é exercitada e P2 não julga nada."
-  exit 3
-fi
+echo "      linhas de log                    : $(printf '%s\n' "$LOG" | grep -c .)"
+echo "      POST /v1/reason                  : $(printf '%s\n' "$LOG" | grep -c 'POST /v1/reason')"
+echo "      'sentiment: medido'              : $(printf '%s\n' "$LOG" | grep -c 'sentiment: medido')"
+echo "      'sentimento NÃO medido'          : $(printf '%s\n' "$LOG" | grep -c 'sentimento NÃO medido')"
+echo "      (log recriado junto com o container — 0 aqui não é ausência de comportamento)"
 
-# ── P2 · morreu, ou gravou? ──────────────────────────────────────────────────
+# ── O experimento ────────────────────────────────────────────────────────────
 echo
-echo "── P2 · a trilha falhou? ─────────────────────────────────────────────────"
-N_FAIL="$(printf '%s\n' "$LOG" | grep -c 'Sentiment pipeline failed')"
-N_FAIL2="$(printf '%s\n' "$LOG" | grep -c 'Failed to update session params')"
-echo "      'Sentiment pipeline failed'      : $N_FAIL"
-echo "      'Failed to update session params': $N_FAIL2   (except de fora, main.py:366)"
-echo "      (as DUAS mensagens, porque falham em pontos diferentes e 08-20 só"
-echo "       procurou a primeira — ausência de uma não é ausência da outra)"
+echo "── experimento · duas chamadas, uma diferença ────────────────────────────"
+SA="probe-sent-sem-$$"; SB="probe-sent-com-$$"
+MSG='Já é a terceira vez que ligo e ninguém resolve. Estou muito irritado.'
 
-echo
-echo "── P3 · escreveu alguma coisa? ───────────────────────────────────────────"
-# SEM filtro de tenant, de propósito: os chamadores não enviam tenant_id, então a
-# chave nasce com prefixo vazio. Filtrar por tenant devolveria 0 e eu concluiria
-# "não gravou" quando gravou no lugar errado — que é um ACHADO, não uma ausência.
-LIVE="$(R --scan --pattern '*sentiment_live*' | head -20)"
-N_LIVE="$(printf '%s\n' "$LIVE" | grep -c .)"
-echo "      chaves *sentiment_live* : $N_LIVE"
-[ "$N_LIVE" -gt 0 ] && printf '%s\n' "$LIVE" | sed 's/^/         /'
-CTX="$(R --scan --pattern '*:ctx:*' | head -40)"
-N_TAG=0
-for k in $CTX; do
-  [ -n "$k" ] || continue
-  v="$(R HGET "$k" 'session.sentimento.current')"
-  [ -n "$v" ] && { N_TAG=$((N_TAG+1)); [ "$N_TAG" -le 3 ] && echo "         $k → $v"; }
-done
-echo "      hashes ctx com session.sentimento.current : $N_TAG"
+# A forma do `output_schema` é {campo: {type: ...}}, copiada de um skill real
+# (agente_fila_v1.yaml) — a v1 mandou {"resposta":"string"} e levou 422, e teria
+# concluído "não escreveu" sobre requisição que nem chegou ao código sob teste.
+call_reason() {   # $1 = session_id · $2 = arquivo de saída · $3 = bloco extra (pode ser vazio)
+  curl -s --max-time 90 -X POST "$AIGW/v1/reason" -H 'content-type: application/json' \
+    -d "{\"session_id\":\"$1\",\"tenant_id\":\"$TENANT\",\"prompt_id\":\"probe\",
+         \"input\":{\"mensagem_cliente\":\"$MSG\"},
+         \"output_schema\":{\"resposta\":{\"type\":\"string\"}}$3}" > "$2"
+}
 
-# ── P4 · o teste ATIVO, que é o único que julga ──────────────────────────────
-#
-# ⚠️ P3 sozinho NÃO julga, e a v1 deste probe concluiu (c) por causa disso:
-# `sentiment_live` tem TTL de 300 s (`_SENTIMENT_LIVE_TTL`) e o ctx, 4 h. Procurar
-# essas chaves depois de um tráfego de idade DESCONHECIDA mede expiração, não
-# ausência de escrita. Artefato com prazo curto só se mede contra tráfego que
-# você acabou de gerar.
-#
-# Aqui eu chamo `/v1/reason` DIRETO — é exatamente o caminho sob teste, e me deixa
-# controlar `tenant_id` e `output_schema`, que são as duas variáveis da pergunta.
-#
-# DOIS casos, e a diferença entre eles é a resposta de desenho:
-#   A · output_schema SEM `sentiment_score` (como todo skill do repo hoje)
-#       ⇒ previsto: escreve, com score 0.0 — NEUTRO, indistinguível de não-medido
-#   B · output_schema COM `sentiment_score`
-#       ⇒ previsto: escreve o valor que o LLM devolveu
-# Se A e B derem o MESMO valor, o campo não está sendo aproveitado e o diagnóstico
-# muda de novo.
-echo
-echo "── P4 · chamada ATIVA a /v1/reason ───────────────────────────────────────"
-AIGW="${AIGW:-http://localhost:3200}"
-SA="probe-sent-a-$$"; SB="probe-sent-b-$$"
-MSG="Já é a terceira vez que ligo e ninguém resolve. Estou muito irritado."
+call_reason "$SA" /tmp/_sent_a.json ""
+echo "      A · SEM customer_utterance : $(head -c 160 /tmp/_sent_a.json)"
 
-# ⚠️ A forma do `output_schema` é `{campo: {type: ...}}`, COPIADA de um skill real
-# (`agente_fila_v1.yaml:95-97`), não inventada. A v1 mandou `{"resposta":"string"}`
-# e levou 422 do Pydantic — o handler nem rodou, e o probe teria concluído
-# "não escreveu" sobre uma requisição que nunca chegou ao código sob teste.
-curl -s --max-time 60 -X POST "$AIGW/v1/reason" -H 'content-type: application/json' \
-  -d "{\"session_id\":\"$SA\",\"tenant_id\":\"$TENANT\",\"prompt_id\":\"probe\",
-       \"input\":{\"mensagem_cliente\":\"$MSG\"},
-       \"output_schema\":{\"resposta\":{\"type\":\"string\"}}}" > /tmp/_sent_a.json
-echo "      A (schema SEM sentiment_score): $(head -c 200 /tmp/_sent_a.json)"
+call_reason "$SB" /tmp/_sent_b.json ",\"customer_utterance\":\"$MSG\""
+echo "      B · COM customer_utterance : $(head -c 160 /tmp/_sent_b.json)"
 
-curl -s --max-time 60 -X POST "$AIGW/v1/reason" -H 'content-type: application/json' \
-  -d "{\"session_id\":\"$SB\",\"tenant_id\":\"$TENANT\",\"prompt_id\":\"probe\",
-       \"input\":{\"mensagem_cliente\":\"$MSG\"},
-       \"output_schema\":{\"resposta\":{\"type\":\"string\"},
-                          \"sentiment_score\":{\"type\":\"number\"}}}" > /tmp/_sent_b.json
-echo "      B (schema COM sentiment_score): $(head -c 260 /tmp/_sent_b.json)"
-
-# DOIS modos de "não rodou", e eles exigem mensagens diferentes. A v1 casava
-# `"detail"`, campo que aparece nos DOIS — então um 401 do provedor era anunciado
-# como "corpo inválido (422)", mandando consertar a coisa errada. Distinguir pelo
-# discriminador de cada forma, nunca por um campo que ambas têm.
-if grep -q 'upstream_model_error' /tmp/_sent_a.json 2>/dev/null; then
+# Dois modos de "não rodou", com mensagens diferentes. Casar por "detail" — campo
+# que as DUAS formas têm — fazia um 401 do provedor ser anunciado como 422.
+if grep -q 'upstream_model_error' /tmp/_sent_b.json 2>/dev/null; then
   echo
-  echo "   ⛔ INCONCLUSIVO — o PROVEDOR recusou (ver corpo acima; 401 = credencial)."
-  echo "      Consequência que passa muito de sentimento: se o LLM falha, o handler"
-  echo "      levanta ANTES de main.py:357, e nada pós-LLM roda — sentimento, intent,"
-  echo "      confidence, estado do supervisor. E todo step reason de todo skill cai"
-  echo "      no on_failure. Sem credencial válida este probe NÃO pode julgar a trilha."
+  echo "   ⛔ INCONCLUSIVO — o PROVEDOR recusou a chamada do turno."
+  echo "      Sem LLM nada pós-turno roda; a ausência de escrita não julga o código."
   exit 3
 fi
-if grep -q '"loc"' /tmp/_sent_a.json 2>/dev/null; then
-  echo "   ⛔ INCONCLUSIVO — /v1/reason recusou o CORPO (422 de validação)."
-  echo "      O caminho sob teste não foi exercitado; conserte o corpo antes de ler P4."
+if grep -q '"loc"' /tmp/_sent_b.json 2>/dev/null; then
+  echo "   ⛔ INCONCLUSIVO — /v1/reason recusou o CORPO (422). O caminho sob teste"
+  echo "      não foi exercitado; conserte o corpo antes de ler o veredicto."
   exit 3
 fi
 
-sleep 2
+# A medição é fire-and-forget: uma SEGUNDA chamada ao modelo, disparada depois da
+# resposta. Ler o Redis imediatamente mediria a latência do haiku, não a escrita.
 echo
-echo "      chaves logo após as chamadas:"
-LIVE2="$(R --scan --pattern '*sentiment_live*')"
-N_LIVE2="$(printf '%s\n' "$LIVE2" | grep -c .)"
-echo "      *sentiment_live* : $N_LIVE2"
-printf '%s\n' "$LIVE2" | sed 's/^/         /'
-for s in "$SA" "$SB"; do
-  echo "         $TENANT:ctx:$s → $(R HGET "$TENANT:ctx:$s" 'session.sentimento.current')"
+echo "      aguardando a task de background (chamada dedicada ao modelo)..."
+CTX_B=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 2
+  CTX_B="$(R HGET "$TENANT:ctx:$SB" 'session.sentimento.current')"
+  [ -n "$CTX_B" ] && break
 done
 
+CTX_A="$(R HGET "$TENANT:ctx:$SA" 'session.sentimento.current')"
+LIVE="$(R --scan --pattern "$TENANT:pool:*:sentiment_live")"
+N_LIVE="$(printf '%s\n' "$LIVE" | grep -c .)"
+
+# O ctx NÃO guarda um número: guarda um ContextEntry
+# {value, confidence, source, visibility, updated_at}. A v2 deste probe comparou a
+# BLOB inteira com awk — que avalia string não-numérica como 0, logo "não < 0" — e
+# acusou "mediu o texto errado" sobre uma medição CORRETA de -0.5. Acusação
+# confiante e falsa é pior que reprovar: manda consertar o que está certo.
+extract_score() {  # ContextEntry JSON → o campo `value`, ou vazio se ilegível
+  printf '%s' "$1" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*\(-\{0,1\}[0-9][0-9.]*\).*/\1/p'
+}
+SCORE_B="$(extract_score "$CTX_B")"
+
 echo
-if [ "$N_LIVE2" -gt 0 ]; then
-  echo "   ✅ A TRILHA GRAVA — o produtor está vivo e no caminho do /v1/reason."
-  echo "      O 'sem produtor' do TODO estava errado no mecanismo. Compare o score"
-  echo "      de A e de B acima: se A saiu 0.0, o sentimento não é MEDIDO pela"
-  echo "      plataforma, é auto-reportado pelo schema — e nenhum skill o declara."
-  exit 0
+echo "── medidas ───────────────────────────────────────────────────────────────"
+echo "      ctx de A (SEM utterance) : ${CTX_A:-<ausente>}   ← previsto: ausente"
+echo "      ctx de B (COM utterance) : ${CTX_B:-<ausente>}"
+echo "      score extraído de B      : ${SCORE_B:-<ilegível>}   ← previsto: < 0"
+echo "      chaves *:sentiment_live  : $N_LIVE"
+[ "$N_LIVE" -gt 0 ] && printf '%s\n' "$LIVE" | sed 's/^/         /'
+
+# ── Veredicto ────────────────────────────────────────────────────────────────
+echo
+if [ -n "$CTX_A" ]; then
+  echo "   ❌ A TESTEMUNHA NEGATIVA ESCREVEU — a chamada SEM customer_utterance"
+  echo "      produziu sentimento ($CTX_A). O campo não está gateando a medição, e o"
+  echo "      gateway está pontuando texto que ninguém nomeou como fala de cliente."
+  exit 1
 fi
 
-if [ "$N_FAIL" -gt 0 ]; then
-  echo "   ❌ (a) A TRILHA MORRE — $N_FAIL falhas para $N_REASON reasons."
-  echo "      O HGET numa chave string é o ÚNICO bloqueio, não 'o segundo problema'."
+if [ -z "$CTX_B" ]; then
+  echo "   ❌ NÃO MEDIU — a chamada COM customer_utterance não escreveu nada em 20 s."
+  echo "      Próximo passo é o LOG, não o código: cada saída do analisador diz por"
+  echo "      que saiu (sem provider · tenant vazio · modelo falhou · resposta ilegível):"
+  echo "         $COMPOSE logs --tail 80 ai-gateway | grep -i sentiment"
   exit 1
 fi
-if [ "$N_LIVE" -gt 0 ] || [ "$N_TAG" -gt 0 ]; then
-  echo "   ⚠️  (b) A TRILHA RODA E GRAVA — e é o desfecho PIOR."
-  echo "      Nenhum skill declara sentiment_score no output_schema, então o valor"
-  echo "      gravado é 0.0 = NEUTRO, indistinguível de 'não medido'. E o tenant"
-  echo "      vai vazio, então o dado não está no namespace onde alguém o procura."
+
+# Ilegível ≠ errado. Sem conseguir LER o score não há veredicto — o probe tem de
+# se declarar inconclusivo em vez de escolher um ramo por default.
+if [ -z "$SCORE_B" ]; then
+  echo "   ⛔ INCONCLUSIVO — o ctx foi escrito, mas o campo \`value\` não foi legível:"
+  echo "      $CTX_B"
+  echo "      A forma do ContextEntry mudou? Ajuste o extrator antes de julgar o score."
+  exit 3
+fi
+
+# Sinal, não magnitude: a fala é uma reclamação irritada. Score ≥ 0 não é "modelo
+# generoso" — é forte indício de que mediu OUTRO texto, que é a falha cara.
+if ! awk -v s="$SCORE_B" 'BEGIN{exit !(s+0 < 0)}'; then
+  echo "   ❌ MEDIU, MAS O SINAL ESTÁ ERRADO — score $SCORE_B para uma reclamação"
+  echo "      irritada. Suspeita ordenada: mediu o texto errado (pipeline_state,"
+  echo "      prompt do sistema) e não a fala do cliente. Conferir o que chegou em"
+  echo "      ReasonRequest.customer_utterance antes de culpar o modelo."
   exit 1
 fi
-echo "   ⛔ (c) INCONCLUSIVO — não falhou e não escreveu. Há um ramo antes do"
-echo "      bloco de sentimento que retorna cedo. Ler session.py:111 (self.get)"
-echo "      antes de concluir qualquer coisa."
-exit 3
+
+echo "   ✅ A PLATAFORMA MEDE — score $SCORE_B para a fala do cliente, e a chamada"
+echo "      sem \`customer_utterance\` não escreveu nada (testemunha negativa limpa)."
+echo
+echo "      Escopo do que este gate PROVA e do que NÃO prova:"
+echo "      · prova a metade GATEWAY (contrato → analisador → três emissores);"
+echo "      · NÃO prova a metade ENGINE — que um skill real resolva a referência"
+echo "        \$./@ctx. e a envie. Isso exige contato de verdade sobre um skill que"
+echo "        declare o campo (hoje: agente_fila_v1.responder_cliente)."
+exit 0

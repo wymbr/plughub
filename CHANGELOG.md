@@ -2,6 +2,123 @@
 
 ---
 
+## Sentimento medido de ponta a ponta — e cinco defeitos empilhados no caminho (2026-08-24)
+
+Tarefas 1 → 2 → 3 da passagem de 08-24. A metade de engenharia do sentimento tinha sido entregue em
+08-23 e o único pendente declarado era *"nenhum skill declara `customer_utterance`"*. Declarar o campo
+levou 4 linhas de YAML. O resto da sessão foi **descascar cinco defeitos que só apareciam um de cada
+vez**, cada um mascarado pelo anterior — o padrão que a § Postura de Engenharia descreve como *"cada
+correção só revela o próximo por remover um anestésico"*, desta vez em cinco camadas.
+
+**Estado final, medido:** `probe_sentiment_producer.sh` ✅ (metade gateway) e
+`gate_sentiment_engine_half.sh` ✅ (metade engine, contato real: score `-0.50`, pool `sac_ia`, ctx e
+`sentiment_live` gravados).
+
+### As cinco camadas, na ordem em que apareceram
+
+**1. A credencial não vinha de onde todo mundo achava.** O `docker-compose.demo.yml` não tinha
+`env_file`, então `.env.demo` **nunca era lido** — a chave que rodava vinha exportada na shell de quem
+deu `up -d`, e estava revogada (`status_401`, 10 recusas na janela). Pior: `.env.demo:12` era
+`PLUGHUB_ANTHROPIC_API_KEY=ANTHROPIC_API_KEY` — arquivo `.env` **não expande variável**, então aquilo
+era a string literal de 17 caracteres. Ligar o `env_file` sem ver isso teria injetado o literal, o
+provedor devolveria o mesmo `401`, e pareceria "a chave nova também é inválida". Conserto: valor por
+extenso no arquivo, `env_file: - .env.demo` no serviço, e a linha `PLUGHUB_ANTHROPIC_API_KEY:`
+**removida** do bloco `environment:` — que vence o `env_file` e era o que deixava o estado da shell
+mandar em silêncio. *Estado da shell não é entrada declarada.*
+
+**2. A medição de sentimento nunca havia rodado — nem uma vez.** O handler buscava o provider em
+`inference_engine.providers`, atributo que a classe **não tem** (é `_providers`, privado). Como a
+leitura era `getattr(engine, "providers", {})`, o default transformava *"o atributo não existe"* em
+*"não há provider configurado"*, e o log saía `sem provider LLM` — indistinguível de ambiente sem
+chave. Conserto: `app.state.llm_providers` publicado explicitamente no startup, e a leitura extraída
+para `main.sentiment_provider()`, que separa os dois motivos em portas diferentes (ERROR para fiação,
+silêncio para ambiente sem chave). Coberto por 4 testes, incluindo um que passa um objeto com a FORMA
+da `InferenceEngine` (`_providers` e nada mais) e exige o ramo de fiação.
+
+**3. O emissor Kafka segurava as escritas locais por 40 s.** Com o broker momentaneamente
+inalcançável, `producer.send` **não levanta — bloqueia** no refresh de metadata até o request timeout.
+Como o emit vinha ANTES das duas escritas em Redis, o score já estava calculado e ninguém conseguia
+lê-lo. *O `try` do emissor protege contra exceção, nunca contra travamento; "fire-and-forget: nunca
+levanta" era verdadeiro e insuficiente.* Conserto: Redis primeiro (é o que alguém lê), Kafka por
+último e sob `asyncio.wait_for` de 5 s, com o timeout LOGADO. ⚠️ Não confundir com tópico ausente: o
+`sentiment.updated` É criado pelo `kafka-init` e estava na lista do broker — a mensagem de erro do
+aiokafka (`UnknownTopicOrPartitionError`) nomeia o tópico e induz ao diagnóstico errado.
+
+**4. O agente de fila era SURDO à mensagem do cliente — e isso não tem nada a ver com sentimento.**
+Achado colateral, o mais grave da sessão. `steps/menu.ts:211` derivava o campo do hash
+`menu:waiting:{sid}` com `ctx.instanceId ?? "_default_"`, enquanto `redis-keys.ts:28` deriva a chave
+do BLPOP do MESMO valor por **truthiness**. O agente de fila é ativado de propósito com
+`instance_id=""` (`orchestrator-bridge/main.py:5952` — *"queue agents don't hold a routing slot"*),
+e a string vazia caía em lados opostos das duas guardas: campo do hash nascia com **nome vazio**, e os
+leitores (bridge `main.py:9180`, mcp-server `server.ts:2471/2487/2497/3641`) testam `!== "_default_"`,
+verdadeiro para `""` — logo faziam LPUSH em `menu:result:{sid}:` (dois-pontos final), lista que
+ninguém consome. Medido no Redis: a fala do cliente parada na lista órfã, e o log do bridge com
+`agent= key=menu:result:{sid}:` ao lado de um `agent=sac_ia-009 key=…:sac_ia-009` que funcionava.
+
+*Por que sobreviveu tanto tempo:* o sinal `__agent_available__` é publicado pelo routing na chave
+session-scoped **hardcoded** (`kafka_listener.py:728`), que é exatamente onde o BLPOP estava. O
+agente de fila ouvia "chegou humano" e era surdo ao cliente — **meia funcionalidade viva**, e a metade
+viva é a que aparece na demo. Nenhum cenário e2e cobre a fila. Conserto: `||` no lugar de `??` em
+`menu.ts:211` e `resolve.ts:192` (cópia idêntica). Teste com asserção **relacional** — *campo é
+`_default_` se e somente se a chave não tem sufixo* —, porque fixar só o literal passaria com a outra
+metade errada. O mock do teste também não tinha `hset`, e o step o chama dentro de `try/catch`: a
+ausência virava exceção engolida, então nenhum teste podia ver esse registro.
+
+**5. O ai-gateway lia `session:{id}:meta` com o TIPO errado.** A chave é **String (JSON)** por
+contrato (`orchestrator-bridge/CLAUDE.md:35`) e todos os leitores do bridge usam `GET`; o ai-gateway
+usava `HGET`, em **duas cópias** (`session.py` e `sentiment_analyzer.py`). `HGET` numa string levanta
+`WRONGTYPE`, o `except` devolvia `"unknown"`, e **toda** medição de contato real caía num balde só —
+com `"pool_id":"sac_ia"` presente na chave o tempo inteiro. Só aparecia em contato de verdade: sessão
+sintética não tem a chave, e `HGET` em chave AUSENTE devolve `None` sem levantar, saindo pelo ramo
+benigno. Conserto: helper único `sentiment_emitter.resolve_session_pool_id` (GET + `json.loads`), com
+quatro ramos de saída NOMEADOS (chave ausente · leitura falhou · JSON ilegível · campo ausente).
+
+*Nota de arqueologia:* esta era a hipótese **(ii)** registrada no cabeçalho do
+`probe_sentiment_producer.sh` original (*"`session.py:140` faz `HGET` numa chave que é string JSON ⇒
+`WRONGTYPE`"*). A medição de 08-22 concluiu que a causa era a credencial e (ii) ficou sem veredicto.
+**As duas eram verdadeiras** — a credencial mascarava esta.
+
+### Declaração do campo
+
+`agente_fila_v1.responder_cliente` ganhou `customer_utterance: "$.pipeline_state.ultima_mensagem"` —
+o único step `reason` sobre fala de cliente no repositório (o `skill_atendimento_sac_v1`, apesar da
+descrição *"via LLM"*, é todo menu/choice/notify). Publicado no slot com
+`deploy_skill_to_slot.sh … fila_humano customer_utterance`; editar o YAML não bastaria.
+
+### Gates
+
+- **`probe_sentiment_producer.sh` reescrito.** Ele testava o contrato **aposentado**
+  (`output_schema.sentiment_score`) e não enviava `customer_utterance` — não podia julgar a trilha
+  vigente. Agora são duas chamadas que diferem em UMA coisa (o campo), com **testemunha negativa**: a
+  chamada sem o campo não pode escrever nada. O `P1` também deixou de ABORTAR por log vazio — ele
+  dava `exit 3` quando o container tinha sido recriado, matando a única parte que julga.
+- **`gate_sentiment_engine_half.sh` (novo).** Julga os quatro elos de runtime que o probe não alcança.
+  Duas correções de desenho feitas na própria sessão: (a) o discriminador classificava origem por
+  `pool=unknown` e chamou um contato REAL de "chamada sintética" — origem se decide pela FORMA DO ID,
+  e pool irresolvível é achado próprio; (b) o extrator do score comparava o `ContextEntry` JSON inteiro
+  como número (`awk` avalia string não-numérica como 0) e **acusou "mediu o texto errado" sobre uma
+  medição correta de −0.50**. Acusação confiante e falsa é pior que reprovar: manda consertar o certo.
+
+### Dívida nomeada, não consertada
+
+O `pool_id` do meta é o pool de **ENTRADA**, não o que atende: o sentimento medido pelo agente de fila
+é agregado sob `sac_ia`. É a ambiguidade da fatia C de `session:{id}:meta` (`entry_pool_id` ×
+`pool_id`) — documentada no helper, e fora do escopo de um fix de tipo, porque mexer nela é decidir
+semântica de atribuição.
+
+Resíduo menor: `window = now // 86400` nos contadores de credencial é **balde de calendário**, não
+janela deslizante — na virada zera de vez, e `calls_ok=0` logo depois é indistinguível de "nunca
+funcionou", que é a condição que dispara a nota do `main.py:671`.
+
+Arquivos: `docker-compose.demo.yml`, `.env.demo`, `packages/ai-gateway/src/plughub_ai_gateway/`
+(`main.py`, `session.py`, `sentiment_analyzer.py`, `sentiment_emitter.py`, `tests/`),
+`packages/skill-flow-engine/src/steps/{menu,resolve}.ts` + `__tests__/steps/menu.test.ts`,
+`packages/skill-flow-engine/skills/agente_fila_v1.yaml`,
+`infra/test/{probe_sentiment_producer.sh,gate_sentiment_engine_half.sh}`.
+Detalhe em [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md) § Medição de sentimento.
+
+---
+
 ## Sentimento: a plataforma passou a MEDIR, em vez de aceitar o número que aparecesse (2026-08-23)
 
 Tarefa 2 da passagem de 08-23, atacada depois da credencial. O rumo previsto era *"dar ao

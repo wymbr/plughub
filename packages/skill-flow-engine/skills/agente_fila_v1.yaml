@@ -89,6 +89,17 @@ steps:
   - id: responder_cliente
     type: reason
     prompt_id: queue_agent_response_v1
+    # Nomeia a fala do CLIENTE para o gateway MEDIR sentimento (chamada dedicada,
+    # fora do turno). O `input` é opaco por contrato — sem esta referência o
+    # gateway não tem como saber qual chave é fala de cliente e qual é
+    # pipeline_state, e não mede (ausência honesta, nunca 0.0).
+    #
+    # Aponta para a MESMA fonte que `input.mensagem_cliente` de propósito: aqui
+    # `ultima_mensagem` é sempre fala real do cliente, porque `verificar_sinal`
+    # desvia os sentinelas `__agent_available__` e `__queue_timeout__` ANTES de
+    # chegar a este step. Se algum sentinela novo passar a cair no `default`, esta
+    # linha começa a medir texto de máquina — atualizar junto.
+    customer_utterance: "$.pipeline_state.ultima_mensagem"
     input:
       instrucoes: "O cliente está aguardando atendimento humano na fila. Responda de forma amigável e empática em português. Confirme o recebimento da mensagem. Se o assunto for simples de esclarecer brevemente, faça isso. Tranquilize o cliente sobre o tempo de espera. Informe que um especialista atenderá em breve. Seja breve (2 a 3 frases). Não resolva problemas complexos — apenas acolha e mantenha o cliente informado."
       mensagem_cliente: "$.pipeline_state.ultima_mensagem"

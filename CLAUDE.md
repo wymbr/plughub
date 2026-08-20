@@ -505,22 +505,19 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 
 ## Sentiment Tracking
 
-> ⚠️ **Nada de sentimento é produzido no demo — e a causa NÃO é a que estava escrita aqui.**
-> *(Reescrito 2026-08-22 por medição; a versão de 08-20 errava em três pontos.)*
+> ✅ **A plataforma MEDE sentimento, e isso está provado de ponta a ponta (2026-08-24).**
+> Duas metades, dois gates: `probe_sentiment_producer.sh` (contrato → analisador → três emissores,
+> com **testemunha negativa**: chamada sem `customer_utterance` não pode escrever nada) e
+> `gate_sentiment_engine_half.sh` (contato REAL: referência resolvida pelo engine → skill-flow-service
+> → gateway → ctx + `sentiment_live`). Medição de referência: score `-0.50`, pool `sac_ia`.
 >
-> **O que era afirmado × o que foi medido:**
-> · *"a trilha só é alcançada por `/v1/inference`"* — **a rota nem existe**. É `POST /inference`
->   (`main.py:286`), e ela tem **zero chamadores no repositório inteiro**, nem produção nem teste.
-> · *"`/v1/reason` não alcança a trilha"* — **alcança**: `main.py:357` chama `update_partial_params`.
-> · *"pipeline sem fonte"* — a fonte existe e é exercitada 124 vezes. Ela morre **antes**.
+> ⚠️ **O bloqueio de credencial que dominava esta seção CAIU** — a chave do demo foi reposta e o
+> `/v1/health` responde 200/`ok`. O diagnóstico de 08-22 (*"124 `status_401`, todo step `reason` de
+> todo skill caindo no `on_failure`"*) está **encerrado**, mas a causa dele merece registro: o
+> `docker-compose.demo.yml` não tinha `env_file`, então o `.env.demo` **nunca era lido** e a chave
+> vinha exportada da shell de quem subiu a stack. Estado de shell não é entrada declarada.
 >
-> **A causa real: o ambiente não tem credencial de LLM válida.** `124` requisições a `/v1/reason`,
-> `124` `upstream_model_error`, `124` `status_401` (`API key is invalid`) — correlação perfeita na
-> vida inteira do processo. O handler levanta antes da linha 357, então **nada pós-LLM roda**:
-> sentimento, `intent`, `confidence`, estado do supervisor. E a consequência passa muito de
-> sentimento — **todo step `reason` de todo skill está caindo no `on_failure`**, em silêncio.
->
-> **Contrato reescrito em 2026-08-23 — a plataforma passou a MEDIR.** O diagnóstico anterior desta
+> **Contrato de 2026-08-23 — a plataforma passou a MEDIR.** O diagnóstico anterior desta
 > seção descrevia o defeito e apontava `/inference` como o caminho a resgatar. A medição refutou a
 > premissa: `/inference` isola a fala, mas entrega a `extract_context_from_response`
 > (`context.py:53-64`), que é **contagem de palavras-chave em português** — e a rota não tem chamador
@@ -536,12 +533,32 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 > dois chamadores (`engine-runner.ts`, `skill-flow-service`), injetado onde o tenant é conhecido — sem
 > ele as chaves nasciam sem prefixo. O analisador **recusa** tenant vazio.
 >
-> **Pendente:** nenhum skill declara `customer_utterance` ainda ⇒ nada é medido até alguém declarar.
-> Ausência honesta, não regressão. Detalhe em [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md)
-> § Medição de sentimento.
+> **Declarado (2026-08-24):** `agente_fila_v1.responder_cliente` traz
+> `customer_utterance: "$.pipeline_state.ultima_mensagem"` — **o único** step `reason` sobre fala de
+> cliente no repositório (`skill_atendimento_sac_v1`, apesar da descrição *"via LLM"*, é todo
+> menu/choice/notify). Enquanto for o único, sentimento só existe para contato que passou pela FILA.
 >
-> Gate: `infra/test/probe_sentiment_producer.sh` (declara INCONCLUSIVO com causa nomeada enquanto o
-> provedor recusar). Detalhe em `TODO.md`.
+> **Três defeitos que esta trilha revelou, e que não são de sentimento** (detalhe no `CHANGELOG.md`
+> de 2026-08-24) — todos da família *valor plausível*, cada um mascarado pelo anterior:
+> · a medição **nunca rodara**: o provider era buscado em `inference_engine.providers`, atributo
+>   inexistente (é `_providers`), e o `getattr(..., {})` fazia defeito de fiação sair pela porta de
+>   "ambiente sem chave". Hoje: `app.state.llm_providers` + `main.sentiment_provider()`, que separa
+>   os dois motivos;
+> · **ordem dos emissores**: Kafka vinha antes das escritas locais e `producer.send` BLOQUEIA (não
+>   levanta) com broker inalcançável — o score ficava ilegível por 40 s. Hoje: Redis primeiro, Kafka
+>   por último sob `wait_for` de 5 s;
+> · `session:{id}:meta` é **String (JSON)**, e o ai-gateway a lia com `HGET` em duas cópias ⇒
+>   `WRONGTYPE` ⇒ toda medição de contato real agregada sob `unknown`. Hoje: helper único
+>   `sentiment_emitter.resolve_session_pool_id`, com quatro ramos de saída nomeados.
+>
+> ⚠️ **Dívida nomeada:** o `pool_id` do meta é o pool de **ENTRADA**, não o que atende — sentimento
+> medido pelo agente de fila agrega sob o pool onde o contato começou. É a fatia C de
+> `session:{id}:meta` (`entry_pool_id` × `pool_id`), ver `docs/guias/session-meta-ownership.md`.
+>
+> Gates: `infra/test/probe_sentiment_producer.sh` (metade gateway) +
+> `infra/test/gate_sentiment_engine_half.sh` (metade engine, reprodução manual com contato que
+> ENFILEIRE). Detalhe em [`docs/arcos/ai-gateway.md`](docs/arcos/ai-gateway.md) § Medição de
+> sentimento.
 >
 > **A recusa deixou de ser invisível (2026-08-23).** O `/v1/health` do ai-gateway decidia
 > `anthropic: "ok"` pela PRESENÇA da string da chave — nada contatava o provedor —, então as 124

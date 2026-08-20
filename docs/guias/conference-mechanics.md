@@ -1844,5 +1844,61 @@ fecham têm de continuar fechando pelo caminho deles.
 
 ---
 
+### Mudança 35 — o agente de FILA era surdo à mensagem do cliente: `""` caindo em lados opostos de duas guardas (2026-08-24)
+
+**Sintoma:** cliente na fila digita, a mensagem aparece na tela dele, e o agente de fila **nunca
+responde**. Nenhum erro em lugar nenhum. O `on_failure` do step `responder_cliente` volta para
+`aguardar_mensagem` sem falar com o cliente, então a tela é indistinguível de "o agente ignorou".
+
+**O que mede o caso** (sessão `c1cdcfc1`, reproduzida ao vivo):
+
+```
+menu:waiting:{sid}          → campo com NOME VAZIO, valor {"visibility":"all",…}
+menu:result:{sid}:          → a fala do cliente PARADA na lista (dois-pontos final)
+bridge log                  → agent=          key=menu:result:{sid}:            ← órfã
+                              agent=sac_ia-009 key=menu:result:{sid}:sac_ia-009  ← funcionava
+```
+
+A lista **ainda existia**: um `BLPOP` teria consumido e apagado. Ou seja, escritor e leitor estavam em
+nomes diferentes.
+
+**Causa raiz — duas derivações do MESMO `ctx.instanceId`, com guardas incompatíveis:**
+
+| lado | arquivo | guarda | com `""` |
+|---|---|---|---|
+| campo do hash | `skill-flow-engine/src/steps/menu.ts:211` | `ctx.instanceId ?? "_default_"` | `??` só pega null/undefined ⇒ campo **vazio** |
+| chave do BLPOP | `skill-flow-engine/src/redis-keys.ts:28` | `instanceId ? …suffix : …` | truthiness ⇒ chave **sem sufixo** |
+| leitores | `orchestrator-bridge/main.py:9180`, `mcp-server/server.ts:2471/2487/2497/3641` | `!== "_default_"` | `""` não é o sentinela ⇒ **sufixa com nada** |
+
+O vazio é **legítimo e deliberado**: o agente de fila é o único ativado com `instance_id=""`
+(`orchestrator-bridge/main.py:5952` — *"queue agents don't hold a routing slot"*, porque
+`conversations.queued` traz `allocated=False`). Quem errou foi o `??`, não o bridge. E
+`activate_native_agent` inclui `instance_id` no payload **incondicionalmente** (`main.py:898`, ao
+contrário de `segment_id`/`journey_id`/`config`, todos condicionais), então o `""` atravessa intacto
+os dois `??` (`engine.ts:421`, `menu.ts:211`) sem ser normalizado.
+
+**Por que sobreviveu:** o sinal `__agent_available__` é publicado pelo routing na chave session-scoped
+**hardcoded** (`kafka_listener.py:728`, `main.py:1415`), que coincide com o BLPOP. O agente de fila
+ouvia *"chegou humano"* e era surdo ao cliente — **meia funcionalidade viva**, e a metade viva é a que
+aparece na demo. Nenhum cenário e2e cobre a fila (`packages/e2e-tests/scenarios/` não tem nenhum; o 07
+só chama `queue_context_get` direto por MCP, sem flow rodando).
+
+**Correção:** `||` no lugar de `??` em `menu.ts:211` e em `resolve.ts:192` (cópia idêntica do mesmo
+trecho). O campo passa a ser `_default_`, os leitores caem no ramo session-scoped, e as duas pontas
+concordam.
+
+**Teste** (`skill-flow-engine/src/__tests__/steps/menu.test.ts`): a asserção que importa é
+**relacional** — *o campo é `_default_` se e somente se a chave do BLPOP não tem sufixo* —, varrendo
+`""`, `undefined` e dois ids reais. Fixar só o literal de `waitingField` passaria com a chave errada.
+O mock do teste também ganhou `hset`/`hdel`: o step os chama dentro de `try/catch`, então a ausência
+virava exceção **engolida** e nenhum teste podia enxergar o registro em `menu:waiting`.
+
+**Resíduo:** a assimetria `!== "_default_"` × truthiness continua nos 5 leitores; nenhum normaliza
+`""`. Hoje não há produtor de campo vazio, mas o próximo caminho que ativar um agente nativo sem
+`instance_id` reabre o mesmo buraco. Normalizar no leitor (tratar `""` como `_default_` e LOGAR) é
+conserto de defesa em profundidade, ainda não feito.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

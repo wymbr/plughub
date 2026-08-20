@@ -344,9 +344,46 @@ skill YAML   reason: { customer_utterance: "$.pipeline_state.pergunta.value" }
 - **Mock nunca mais permissivo que a coisa mockada.** As fixtures usam `LLMResponse` real; um
   `MagicMock` com `.text` fabricado sob demanda foi o que deixou a suíte concordar com o bug.
 
-Testes: `tests/test_sentiment_analyzer.py` (16 casos) + `tests/test_copilot_emitter.py`.
+- **O provider vem de `app.state.llm_providers`, publicado no startup — nunca do privado de outro
+  objeto.** A versão anterior lia `inference_engine.providers`, atributo que a classe não tem (é
+  `_providers`), e `getattr(obj, "providers", {})` devolvia `{}`: defeito de FIAÇÃO saindo pela porta
+  de "ambiente sem chave". `main.sentiment_provider()` separa os dois — ERROR para o primeiro,
+  silêncio para o segundo (o analisador já registra esse).
+- **Redis antes de Kafka, e o Kafka com teto de tempo.** `producer.send` com broker inalcançável
+  **bloqueia** (~40 s até o request timeout) em vez de levantar. Com o emit primeiro, o score existia
+  e ninguém conseguia lê-lo. O `try` protege contra exceção, nunca contra travamento.
+- **`session:{id}:meta` é String (JSON), lida com `GET`.** Ler com `HGET` levanta `WRONGTYPE`, o
+  `except` devolve `"unknown"`, e toda medição de contato real agrega num balde só — com o dado
+  presente na chave. Helper único: `sentiment_emitter.resolve_session_pool_id`, quatro ramos de saída
+  nomeados (chave ausente · leitura falhou · JSON ilegível · campo ausente), porque um `"unknown"`
+  mudo confunde os quatro. *Só aparece em contato real:* sessão sintética não tem a chave, e `HGET` em
+  chave ausente devolve `None` sem levantar.
 
-**Pendente:** nenhum skill declara `customer_utterance` — nada é medido até alguém declarar.
+Testes: `tests/test_sentiment_analyzer.py` (16 casos + 4 de `sentiment_provider`) +
+`tests/test_copilot_emitter.py`.
+
+### Estado (2026-08-24) — medido de ponta a ponta
+
+Declarado em `agente_fila_v1.responder_cliente`
+(`customer_utterance: "$.pipeline_state.ultima_mensagem"`), **único** step `reason` sobre fala de
+cliente no repositório. Enquanto for o único, sentimento só existe para contato que passou pela FILA.
+
+| Metade | Gate | Prova |
+|---|---|---|
+| gateway | `infra/test/probe_sentiment_producer.sh` | duas chamadas que diferem só no campo; a SEM `customer_utterance` não pode escrever nada (testemunha negativa) |
+| engine  | `infra/test/gate_sentiment_engine_half.sh` | contato REAL: slot declara o campo · ref resolvida · pool ≠ `unknown` · ctx + `sentiment_live` gravados |
+
+Medição de referência: score `-0.50` para *"Já é a terceira vez que entro em contato e ninguém
+resolve, estou muito irritado"*, pool `sac_ia`.
+
+⚠️ **Dívida:** o `pool_id` do meta é o pool de ENTRADA, não o que atende — o sentimento medido pelo
+agente de fila agrega sob o pool onde o contato começou (`sac_ia`, não `fila_humano`). Fatia C de
+`session:{id}:meta`; ver `docs/guias/session-meta-ownership.md`.
+
+⚠️ **Achado colateral, fora deste arco:** provar a metade engine exigiu consertar um defeito que
+deixava o **agente de fila surdo à mensagem do cliente** — assimetria `??` × truthiness na derivação
+do campo `menu:waiting` e da chave de BLPOP (`skill-flow-engine/src/steps/menu.ts`). Ver `CHANGELOG.md`
+de 2026-08-24, camada 4.
 
 ## Invariants
 

@@ -45,6 +45,11 @@ function makeCtx(
     del:    vi.fn().mockResolvedValue(1),
     expire: vi.fn().mockResolvedValue(1),
     blpop:  vi.fn().mockResolvedValue(blpopReturn),
+    // `hset`/`hdel` faltavam neste mock, e o step os chama dentro de um try/catch:
+    // a ausência virava exceção ENGOLIDA, então nenhum teste podia ver o registro
+    // em `menu:waiting` — que é exatamente onde morava o defeito de 2026-08-24.
+    hset:   vi.fn().mockResolvedValue(1),
+    hdel:   vi.fn().mockResolvedValue(1),
   }
 
   return {
@@ -295,5 +300,100 @@ describe("executeMenu — masked input", () => {
 
     expect(result.next_step_id).toBe("desconectou")
     expect(result.transition_reason).toBe("on_failure")
+  })
+})
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Endereçamento da espera — o campo do hash e a chave do BLPOP TÊM de concordar
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Defeito medido em runtime (2026-08-24): o agente de FILA é ativado de propósito
+// com `instance_id=""` (`orchestrator-bridge/main.py:5952` — "queue agents don't
+// hold a routing slot"). Duas derivações do MESMO `ctx.instanceId` discordavam
+// sobre o que é "sem instância":
+//
+//   · campo do hash  `ctx.instanceId ?? "_default_"`   → `??` só pega null/undefined
+//                                                        ⇒ com "" o campo nascia VAZIO
+//   · chave do BLPOP `instanceId ? …suffix : …`        → truthiness
+//                                                        ⇒ com "" ia p/ a chave sem sufixo
+//
+// Os leitores (bridge `main.py:9180`, mcp-server `server.ts:2471`) testam
+// `!== "_default_"`, que é VERDADEIRO para "", então faziam LPUSH em
+// `menu:result:{sid}:` — lista que ninguém consome. Resultado: o agente de fila
+// ficava surdo à mensagem do cliente, sem erro em lugar nenhum, enquanto o sinal
+// `__agent_available__` continuava chegando (o routing o publica na chave
+// session-scoped hardcoded, que casa com o BLPOP). Meia funcionalidade viva foi o
+// que manteve o defeito invisível por tanto tempo.
+//
+// A asserção é RELACIONAL, não literal: não interessa qual nome foi escolhido,
+// interessa que os dois lados escolham o MESMO. Um teste que fixasse só o valor de
+// `waitingField` passaria com a chave de BLPOP errada.
+
+describe("executeMenu — endereçamento da espera (hash × BLPOP)", () => {
+
+  async function capture(instanceId: string | undefined) {
+    const step: MenuStep = {
+      id:          "aguardar_mensagem",
+      type:        "menu",
+      prompt:      "Pode enviar sua mensagem.",
+      interaction: "text",
+      on_success:  "proximo",
+      on_failure:  "falhou",
+      timeout_s:   30,
+      output_as:   "ultima_mensagem",
+    }
+    const ctx = makeCtx([`menu:result:s1`, "oi"], { instanceId } as Partial<StepContext>)
+    await executeMenu(step, ctx)
+
+    const redis = ctx.redis as any
+    const blpopKey = (redis.blpop.mock.calls[0]?.[0] as string[] | undefined)?.[0]
+    // Levantar, não coagir para "": um default aqui faria "o BLPOP nem aconteceu"
+    // passar pela asserção de "chave sem sufixo" — o teste ficaria verde sobre um
+    // step que não esperou por nada.
+    if (typeof blpopKey !== "string") {
+      throw new Error("executeMenu não chamou blpop com uma lista de chaves")
+    }
+    return {
+      waitingKey:   redis.hset.mock.calls[0][0] as string,
+      waitingField: redis.hset.mock.calls[0][1] as string,
+      blpopKey,
+    }
+  }
+
+  it("instância vazia: campo e chave concordam no ramo session-scoped", async () => {
+    const { waitingKey, waitingField, blpopKey } = await capture("")
+
+    expect(waitingKey).toBe("menu:waiting:s1")
+    // O campo NUNCA pode ser a string vazia: os leitores tratam "" como nome de
+    // instância legítimo e sufixam a chave com nada.
+    expect(waitingField).not.toBe("")
+    expect(waitingField).toBe("_default_")
+    // E a chave do BLPOP tem de ser a sem sufixo — jamais terminada em ":".
+    expect(blpopKey).toBe("menu:result:s1")
+    expect(blpopKey.endsWith(":")).toBe(false)
+  })
+
+  it("instância ausente (undefined) se comporta como a vazia", async () => {
+    const { waitingField, blpopKey } = await capture(undefined)
+    expect(waitingField).toBe("_default_")
+    expect(blpopKey).toBe("menu:result:s1")
+  })
+
+  it("instância nomeada: campo e chave usam o MESMO id", async () => {
+    const { waitingField, blpopKey } = await capture("sac_ia-009")
+    expect(waitingField).toBe("sac_ia-009")
+    expect(blpopKey).toBe("menu:result:s1:sac_ia-009")
+  })
+
+  // A invariante que amarra os três casos. Sem ela, os testes acima só fixam
+  // constantes e nada impede que uma das duas derivações mude sozinha de novo.
+  it("INVARIANTE: campo é '_default_' se e somente se a chave não tem sufixo", async () => {
+    for (const iid of ["", undefined, "inst-1", "sac_ia-009"]) {
+      const { waitingField, blpopKey } = await capture(iid)
+      const isDefaultField = waitingField === "_default_"
+      const isBareKey      = blpopKey === "menu:result:s1"
+      expect(isDefaultField).toBe(isBareKey)
+    }
   })
 })
