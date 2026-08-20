@@ -192,7 +192,33 @@ instância com pausa declarada.
 
 ---
 
-## Auditoria MCP sem STORE — `mcp_audit_log` não existe em banco nenhum *(medido 2026-08-21)*
+## Auditoria MCP sem STORE — `mcp_audit_log` não existe em banco nenhum *(medido 2026-08-21; **reenquadrado e parcialmente fechado 2026-08-22**)*
+
+> ✅ **Fechados em 2026-08-22** (ver CHANGELOG): o **gate ABAC** de `/v1/audit/*`, que existia só no
+> docstring — qualquer token válido do tenant lia dado pessoal, e o `401` de token malformado é
+> autenticação, não autorização — e o **`audit_access_log`**, cuja promessa ("todo acesso é
+> registrado", no docstring e no banner da UI) era falsa. Gate: `probe_audit_surface.sh` +
+> `tests/test_audit_gate.py` (17).
+>
+> **O enquadramento desta seção estava errado**, e a medição é que mostrou: o pipeline **não degrada
+> mudo**. `parse_mcp_audit_event` grava em `session_timeline` e é de lá que `/v1/audit/mcp-calls` lê —
+> a chamada MCP é registrada e é legível. A pergunta "o consumer tenta criar a tabela?" tem resposta
+> simples: o DDL **nunca esteve** em `_ALL_DDL` (`clickhouse.py`), e não há `DROP` registrado, ao
+> contrário de outras remoções deliberadas do mesmo arquivo. Sumiu sem rastro no código, com rastro só
+> no CHANGELOG de 2026-05-14, que também declarava entregues o `audit_router.py` e o
+> `_require_audit_access` — nenhum dos dois existia.
+>
+> **ABERTO — `mcp_audit_log`, e é DORMENTE por medição, não por opinião.** `session_timeline` tem 0
+> linhas e recebe linha de um único parser (o de `mcp.audit`) ⇒ a borda `invoke` nunca foi exercitada
+> neste ambiente. **Não criar a tabela antes de haver tráfego**: uma tabela vazia com cara de pronta é
+> indistinguível de "ninguém acessou", e é o modo de falha que já custou caro aqui. Ordem correta:
+> (1) exercitar `invoke` de verdade e confirmar linha em `session_timeline`; (2) só então DDL +
+> dual-write em `parse_mcp_audit_event` + branch em `_write_row`.
+>
+> **Resíduo medido de lado, não consertado:** o `invoke` emite `session_id: ""` quando a instância tem
+> 0 ou 2+ sessões ativas (`external-agent.ts:194-215`), e `parse_mcp_audit_event` **descarta** evento
+> sem `session_id` (`models.py:713-718`) — perda silenciosa que nenhum contador acusa. Vale medir junto
+> com (1), porque decide se o dual-write chega a receber a linha.
 
 Consulta a `system.tables` por `%audit%` **ou** `%mcp%`, sem filtro de database, voltou **vazia**.
 Nem `mcp_audit_log` nem `audit_access_log` existem neste ambiente — as duas que o `CLAUDE.md`

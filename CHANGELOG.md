@@ -2,6 +2,315 @@
 
 ---
 
+## Auditoria LGPD — o portão e a trilha existiam só no docstring (2026-08-22)
+
+Tarefa 3 da passagem de 08-22, que pedia "medir antes de consertar: o consumer tenta criar a tabela e
+degrada mudo, ou o DDL nunca é chamado?". **A pergunta estava mal colocada, e a varredura mostrou por
+quê** — o problema não era o store ausente. Três coisas viviam no mesmo pacote com gravidades
+diferentes, e só separá-las deu um alvo:
+
+| | Achado | Testemunha viva? |
+|---|---|---|
+| **A** | Gate ABAC prometido em `audit.py:115`/`:218`, **inexistente** no corpo do handler | sim, e independe de config |
+| **B** | "Todo acesso é registrado" (docstring + banner da UI): sem tabela e **sem `INSERT`** | sim — os acessos do próprio probe não deixaram rastro |
+| **C** | `mcp_audit_log` sem DDL | **não** — a borda `invoke` nunca foi exercitada aqui |
+
+**A — o `401` era o que escondia o buraco.** Medido (`infra/test/probe_audit_surface.sh`): sem header →
+`200`; com token **inválido** → `401`. O 401 vem de `optional_pool_principal`, que confere a ASSINATURA
+do JWT quando há header. Isso é **autenticação; autorização nunca acontecia**. Um token válido de
+qualquer usuário do tenant — operador, business, quem for — lia mensagem de cliente e trilha de chamada
+MCP sem ter o módulo `audit` no seu `module_config`. Conserto: `_check_audit_access(request, field)`,
+quatro ramos declarados, com **recusa quando não há `auth_jwt_secret`** — postura deliberadamente oposta
+à do `pool_auth`, que degrada aberto: lá o efeito é escopo de leitura operacional, aqui é dado pessoal
+sob LGPD, e identidade não tem fallback.
+
+**B — `audit_access_log` criada e ligada, inclusive na recusa.** `MergeTree` puro, **nunca**
+`ReplacingMergeTree`: o valor da trilha é dizer quantas vezes um dado foi acessado e por quem, e
+deduplicar por (ator, alvo) apagaria justamente o padrão de acesso repetido. Tentativa negada grava
+também — registrar só o sucesso deixaria a trilha cega no caso interessante. O ator sai nomeado
+(`user` × `open_access`), para ninguém confundir acesso autenticado com bypass de demo.
+
+**C — NÃO criei a tabela, de propósito.** `session_timeline` tem 0 linhas, e recebe linha de um único
+parser (`models.py:740`, o de `mcp.audit`) ⇒ a borda `invoke` nunca rodou neste ambiente. Criar
+`mcp_audit_log` agora produziria uma tabela vazia com cara de pronta, indistinguível de "ninguém
+acessou" — o "existe ≠ está pronto" pelo qual este repo já pagou. Fica como dívida dormente no `TODO.md`.
+
+> ⚠️ **Um defeito que o demo esconderia por construção, pego pelo teste unitário.** A v1 do gate usou
+> `from jose import jwt`, copiado do auth-api; **a analytics-api usa PyJWT (`import jwt`)** e `jose` nem
+> está no container. Como o import é local e o demo roda `PLUGHUB_ANALYTICS_OPEN_ACCESS=true`,
+> `_audit_actor` nunca é chamado ali: o `ImportError` só apareceria com o bypass DESLIGADO — isto é, na
+> primeira vez que o gate fosse de fato exercido, em produção. Nenhum probe de ambiente pegaria isso.
+
+**Instrumentos, e o que cada um NÃO julga.** `probe_audit_surface.sh` (0/1/3) mede tabelas com
+**testemunha ao lado** (`session_timeline` presente, para que uma query errada não vire "ausência"), o
+tráfego, e o `audit_access_log` por **antes × depois com a base contada** (delta 2 de 2 previstos). Ele
+**declara explicitamente que não julga o gate ABAC**, porque sob `open_access=true` o primeiro ramo
+retorna e um 200 é compatível com gate correto E com gate ausente — que era o estado real.
+`tests/test_audit_gate.py` (**17 passed**) cobre essa metade; o caso que carrega o peso é
+`test_token_valido_sem_modulo_audit_recusa`, com token bem-formado de usuário sem o módulo.
+
+> **Duas correções de instrumento pagas no caminho:** `analytics_open_access` **não é namespace do
+> config-api**, é settings/env (`config.py:75`) — a v1 do probe consultava o config-api e imprimia
+> `<não lido>`, e eu quase acusei "porta aberta" quando era bypass declarado em
+> `docker-compose.demo.yml:945`. E o denominador do P2 (`session_timeline` total) está **dentro** do
+> fenômeno que ele mede: denominador tem de vir de fora.
+
+---
+
+## `session:{id}:meta` — partição de propriedade declarada e o prazo que só ESTENDE (2026-08-22)
+
+Fatia **A** do item que a passagem de 08-22 chamava de "o coração da tarefa 3". Sucede o conserto de
+08-21 (que tirou o fallback de tenant) atacando a causa de trás: a chave tem **seis escritores em
+quatro pacotes**, sem schema, sem helper e interpolada à mão em ~50 sites, e ninguém jamais escreveu
+qual campo é de quem. → [`docs/guias/session-meta-ownership.md`](docs/guias/session-meta-ownership.md)
+
+**O defeito, provado com o bridge como única variável.** Duas medições anteriores voltaram
+INCONCLUSIVAS e o motivo nunca foi o defeito — foi o instrumento: (1) ler o TTL logo após o POST perde
+a corrida, porque cada `docker exec` custa ~0,5 s e a alocação cabe nisso; (2) usar
+`max_concurrent_sessions: 1` para deixar sessões NA FILA como controle não funciona, porque o skill
+suspende no `delegate` e devolve a vaga antes da primeira leitura — as cinco nasceram "já em 14400".
+Preflight de símbolo no container descartou a terceira hipótese (o `SETEX 86_400` **está** na imagem).
+O controle que decidiu foi parar o `orchestrator-bridge`, disparar, e religar — o evento de alocação
+espera no Kafka e a transição acontece na MESMA chave:
+
+```
+TTL 86397 ──(alocação)──> 14398        campos ganhos: agent_type_id · instance_id · pool_id
+                                       campos perdidos: NENHUM
+```
+
+Isso separou os dois candidatos: o `SETEX` cego dos quatro escritores de canal **poderia** perder
+campo, mas neste caminho o bridge funde de verdade. O defeito real é o **prazo**.
+
+**Quem sofria — contado, não suposto** (`probe_resume_outlives_meta.sh`): **7 condenados, 0 cobertos**.
+Meta de 233 min contra token de 23 h, a população inteira. A porta webhook escreve 24 h porque a
+workflow que o meta descreve fica suspensa por `timeout_hours*3600 + 3600` (48 h de default); o bridge
+reescrevia com `_stl()` (4 h). Quando a hora chega, o token é aceito e a retomada morre em
+`tenant_unknown` — a recusa do arco P2 (08-18) funcionando perfeitamente sobre uma chave que alguém
+encurtou. **As duas metades daquele conserto existem; uma delas estava sendo desfeita a jusante.**
+
+**A partição, derivada da mesma medição** (o que aparece só com o bridge dentro é dele):
+
+| Dono | Campos |
+|---|---|
+| PORTA (canal/trigger) | `tenant_id` `channel` `contact_id` `customer_id` `session_id` `started_at` `customer_participant_id` |
+| BRIDGE (alocação) | `agent_type_id` `instance_id` `pool_id` `user_login` |
+
+**`session_meta_merge`** (`orchestrator-bridge/main.py`) substitui os três sites do bridge: `mode`
+enumera de uma vez as três semânticas que estavam implícitas e espalhadas (`merge` exige existir ·
+`create` é o antigo `nx=True` · `upsert` cria ou funde); `soft` expressa o backfill-se-ausente que era
+`if not meta.get(x)` (string vazia conta como ausente — trocar por `== nil` mudaria comportamento em
+silêncio num campo que o resume lê). Merge e prazo num **único `EVAL`**, porque um `GET`+`SETEX` no
+próprio helper poderia perder o campo de outro escritor entre as duas chamadas — exatamente o que ele
+existe para impedir. `-1` e `-2` são ausência de prazo e **definem**, a lição que `_extend_hash_ttl`
+comprou em 08-10. Quando um encurtamento é impedido sai `[session_meta] prazo PRESERVADO` em WARNING,
+não INFO: vários serviços daqui sobem com o logger em WARNING, e um alarme em INFO é um alarme que
+ninguém vê.
+
+**Gate `infra/test/probe_meta_ttl_bridge_off.sh`** (0 preservou · 1 truncou · 3 inconclusivo; muta
+estado de serviço, com `trap`). Depois do conserto: `esperado 86352 · observado 86353`, rc=0.
+
+> ⚠️ **Um falso vermelho no meio do caminho, e ele custa o mesmo que um falso verde.** A v1 do
+> critério usava "caiu mais de 120 s abaixo de A" e reprovou o código JÁ CONSERTADO: 86397 → 86275,
+> queda de 122 s — mas o laço tinha levado ~122 s de relógio, porque o contador `i*2` só somava os
+> `sleep` e ignorava o ~1 s de cada `docker exec`. **O instrumento mediu a própria lentidão e chamou de
+> defeito.** O critério passou a comparar com o decaimento natural medido em `date +%s`, imprimindo
+> `esperado`, `observado` e a subtração; e a saída do laço passou a ser a ESCRITA DO BRIDGE, não um
+> número de voltas — sem isso o probe encerra antes de o bridge agir e chama de "sem truncamento" o que
+> é "não mediu".
+
+> **`SELFTEST=1` porque as duas reprovações anteriores não provavam nada sobre o critério ATUAL** (a 1ª
+> foi o defeito real sob o limiar antigo; a 2ª foi o limiar errando). Ele injeta o `EXPIRE 14400` que o
+> código antigo produzia e **exige vermelho**. Verificado: `observado 14400` contra `esperado 86353` →
+> vermelho. Sem isso, o verde da execução normal seria confiança sem lastro.
+
+**Fora desta fatia, e registrado:** (B) recusa de campo alheio — o helper hoje **observa e loga**
+`DONO VIOLADO`; recusar só no bridge enquanto os quatro escritores de canal gravam `SETEX` cego por
+fora fecharia o caminho certo e deixaria os errados abertos. (C) `pool_id` carrega DOIS fatos — pool de
+ENTRADA (`webchat.py:210`, `webrtc.py:484`) × pool que ATENDE (bridge, e é a acepção que
+`webhook.py:1330` lê no resume); a separação em `entry_pool_id` é a correção de raiz, na família de
+`elapsed_time_ms` × `agent_time_ms` (D9). **Suspeita adjacente não medida:** `session:{id}:wf_agent`
+nasce com o mesmo `_stl()` ao lado do W6 e descreve a mesma workflow de 48 h.
+
+---
+
+## `session:{id}:meta` — o tenant deixa de ter fallback em quatro lugares (2026-08-21)
+
+Dois dos três defeitos que a medição de 08-20 destapou em torno de `session:{id}:meta`. O terceiro
+(o `HGET` do ai-gateway) segue adiado por decisão: ele é o **segundo** problema daquele caminho, e o
+primeiro é a trilha de sentimento não ter produtor vivo.
+
+**Contagem antes de qualquer conserto** (`infra/test/probe_session_meta_ownership.sh`): **8 metas
+vivos, 8 COM `tenant_id`, 0 sem, 0 malformados, 8/8 com `pool_id`**. Isso desqualificou a palavra
+"exposição" para o defeito do guard — ele é real no código e **sem alvo nesta população**. `0 em 8` é
+evidência fraca de "nunca", e é por isso que o conserto foi fail-closed em vez de "não precisa".
+
+**(A) `analytics-api/supervisor.py` — um guard que se auto-anulava.**
+`meta.get("tenant_id", body.tenant_id) != body.tenant_id`: com o campo ausente o default **é** o valor
+comparado, a igualdade é sempre verdadeira e o **403 nunca dispara**. O `except: meta = {}` produzia o
+mesmo efeito a partir de JSON malformado. Escrito assim, *parece* uma comparação.
+› **Por que este ponto é o gate inteiro:** `/supervisor/message` e `/supervisor/leave` comparam o
+tenant do corpo com o estado de `supervisor:{sid}:active` — que foi escrito, no join, **a partir do
+corpo do próprio chamador**. Eles conferem consistência, não autoridade. O único confronto contra um
+fato da plataforma acontece no join.
+› **Demonstrado ponta a ponta, não inferido:** o gate rodou contra a imagem ANTIGA e deu
+`P1 = HTTP 200` (meta sem `tenant_id` aceito); contra a nova, `403`. O mesmo gate discrimina.
+
+**(B) Três rotas do mcp-server resolviam o tenant da mesma chave, cada uma com a sua cópia**, todas
+nascendo `process.env["PLUGHUB_TENANT_ID"] ?? "tenant_demo"` + `catch { /* use fallbacks */ }` — o
+defeito que o `conversation_escalate` teve até 2026-08-18, com outro literal. Consequências
+diferentes por rota, e por isso tratamentos diferentes:
+· `session_transfer` **ESCREVE** (publica roteamento + XADD): re-roteia o contato para um namespace
+  que pode não ter instância nenhuma, **depois** de o cliente ver o `participant_left`. Agora **409**.
+· `supervisor_capabilities` e `copilot_state` **LEEM** com o tenant como prefixo de chave (config de
+  pool no agent-registry; `{tenant}:ctx:{session}` no ContextStore) — devolviam ao Console dado de
+  **outro tenant**. Agora resposta vazia + `tenant_unknown: <motivo>`.
+
+**O conserto estrutural é o resolvedor ÚNICO** (`resolveSessionTenant`, exportado): devolve
+`tenantId: null` **mais o MOTIVO**, nunca um default. O motivo não é enfeite — "Redis falhou" e
+"sessão sem meta" pedem ações opostas, e a versão anterior as colapsava na mesma ausência muda. Três
+cópias da mesma regra é como as cópias divergem.
+
+**Testes e gate:** `__tests__/session-tenant.test.ts` (6 ramos: ok · ausente · sem `tenant_id` ·
+malformado · JSON válido não-objeto · falha de Redis, este último exigindo motivo **diferente** do de
+ausência); `tests/test_supervisor_tenant_guard.py` (6, com o CONTROLE de entrada legítima — sem ele um
+guard que recusasse tudo passaria); e `infra/test/gate_supervisor_tenant_guard.sh`, que julga o
+**deploy**, não a função (P0 200 · P1 403 · P2 403 · P3/P4/P5 recusam sem tenant). O gate **declara na
+saída** que o ramo positivo do `session_transfer` não é exercitado de propósito — publicaria evento de
+roteamento real para uma sessão de rascunho.
+
+**Ainda em aberto nesta seção:** a **declaração da partição de propriedade** (helper
+`session_meta_merge(..., owner)` por linguagem, TTL máximo em vez de last-writer-wins, semântica única
+de criação, schema com nome que não colida com o `SessionMeta` do ReplayContext). Medido: **8/8 metas
+carregam `pool_id`**, que pela partição implícita é do bridge — a violação é a regra, não a exceção.
+
+---
+
+## Tools `operational` — a abstenção do produtor passa a sobreviver ao consumidor (2026-08-21)
+
+Item (3) do arco de capacidade × pausa. **Medido ANTES de consertar**
+(`infra/test/probe_operational_tools_reach.sh`), e a medição mudou o que o conserto é: **nenhum skill
+do repositório chama os três tools** (`system_availability_check`, `pool_status_get`,
+`queue_context_get`) — os únicos chamadores são o cenário e2e 07 e a lib de teste. Logo isto é
+conserto de **CONTRATO**, não de sintoma: o valor é impedir que o primeiro consumidor herde o número
+desconfiável, e está escrito assim de propósito.
+
+**O achado que a medição trouxe, e que eu não esperava:** **30 das 36 linhas vivas de snapshot eram
+`bootstrap_placeholder`**, não `resource_semaphore`. O produtor tratado como exceção é a MAIORIA em
+pool ocioso (a linha boa tem TTL 3600 s e só é reescrita em transição). Ele **omite `available` de
+propósito** quando a soma seria parcial (`capacity_unknown: "unmanaged_members"`) — e o tipo
+`PoolSnapshot` declarava `available: number`, afirmando uma garantia que produtor nenhum dá. Em
+TypeScript `undefined > 0` é `false`, então a abstenção do produtor virava **"não há agente"** no
+grupo de tools que decide **oferta de canal ao cliente**. É o mesmo defeito que a F5b removeu do
+caminho "sem snapshot", sobrevivendo no caminho "snapshot presente que se abstém".
+
+**Mudanças:** `available?`/`paused_capacity?`/`model?`/`capacity_unknown?` opcionais no tipo (o
+contrato real); helper `publishedAvailable()` que devolve `null` na abstenção; `pool_status_get`
+responde `status: "unknown"` + `reason` em vez de `empty`, e publica `paused_capacity` (distingue "não
+há agente" de "há agente, pausado" — duas decisões de produto que `available: 0` colapsa numa);
+`queue_context_get` devolve `available_agents: null`; `system_availability_check` ganha o balde
+`pools_capacity_unknown` (três estados, não dois) e — o principal — **para de cair em
+`pools_available > 0 ? "available" : "unknown"` quando o rollup falta**. O comentário três linhas
+acima daquele ternário já proibia exatamente isso (*"nunca cair de volta na soma das linhas: a soma é
+o defeito, não o fallback dele"*): a prosa estava certa e o código fazia o contrário.
+`pools_available` continua no payload como DADO; o que ele não pode mais é virar sentença.
+
+**Sobre idade de snapshot: NENHUM limiar foi introduzido, de propósito.** O TODO pedia "ler
+`updated_at` como condição". Pool ocioso tem linha antiga e **correta** — reprovar por idade faria um
+pool saudável se declarar desconhecido, e não há produtor de linha velha-e-errada depois que a pausa
+passou a recompor o snapshot. `snapshot_model` e `snapshot_age_ms` viram DIAGNÓSTICO no payload, para
+quem quiser condicionar; a decisão não é tomada por eles.
+
+**Teste:** `__tests__/operational.test.ts`, 9 casos, cada bloco com o seu CONTROLE (linha que afirma
+capacidade continua respondendo o número; `available: 0` segue distinto de `unknown`; com o rollup o
+veredicto volta a ser afirmativo). Sem tráfego real, esta é a única posição que pega a regressão.
+
+**Dois achados registrados no TODO, de outros arcos:** (a) `mcp_audit_log`/`audit_access_log` **não
+existem em banco nenhum** deste ambiente (consulta a `system.tables` por `%audit%`/`%mcp%` voltou
+vazia) — o invariante "toda chamada MCP é auditada" não tem store aqui, e foi por isso que a pergunta
+de tráfego ficou inconclusiva; (b) `npx vitest run` no host valida contra `@plughub/schemas`
+**compilado em 2026-08-02** — duas falhas de `invoke-audit.test.ts` são esse artefato velho, não
+defeito (o fonte tem `mcp_server_invoke`; o `dist/` não). No container o schemas compila dentro do
+build de cada consumidor, então produção não é afetada.
+
+**Duas correções no próprio instrumento**, ambas do tipo que quase virou achado sobre o produto: o
+probe contou **6 snapshots "sem `available`"** que eram leituras falhas (36 `docker compose exec`
+sequenciais → passou a `MGET` único, e o contador de leitura-vazia foi separado do de campo-ausente);
+e contou **0 `bootstrap_placeholder`** enquanto o histograma ao lado contava 30, porque o padrão
+exigia `"model":"…` sem espaço e `json.dumps` escreve com espaço — duas contagens da mesma coisa
+discordando na mesma tela. *"grep conta a string, não a coisa"*, duas vezes em dez minutos.
+
+---
+
+## A capacidade de pool aprende PAUSA — dois defeitos empilhados, na ordem que importava (2026-08-21)
+
+Um agente humano pausado continuava publicando capacidade. Medido antes de tocar em código
+(`infra/test/probe_pause_capacity_baseline.sh`, tenant_demo/`retencao_humano`): humano de 3 vagas com
+1 sessão viva, pausado no Console → a linha dizia **`available: 2` com o `ready_set` VAZIO**. É
+capacidade fantasma no registro que o `system_availability_check` lê para decidir **oferta de canal ao
+cliente**.
+
+**São dois defeitos, e consertar o de cima primeiro teria escondido o de baixo.**
+
+**(1) O gancho existia, estava escrito, e nunca rodou — divergência de NOME.** O consumidor casava
+`("agent_paused", "agent_logout")` (`kafka_listener.py`) e nenhum produtor no repositório jamais
+emitiu `agent_paused`: o evento é **`agent_pause`**, sem "d" (`server.ts`, `tools/runtime.ts`, e o
+schema canônico `platform-events.ts`). `agent_paused` só existe como prefixo de chave Redis. O evento
+caía no `else: logger.debug("Lifecycle event ignored")` e `_deactivate_instance` era **inalcançável
+pela pausa** — sobrevivia só para o logout. O `agent_resume` funcionava por acaso (publica
+`agent_ready`, que tem refresh próprio).
+
+**(2) A aritmética não lia estado — e é este o defeito de verdade.** O
+`_RECOMPUTE_POOL_OCCUPANCY_LUA` somava `max_concurrent` por **pertencimento a set**, sem nunca
+consultar `status`; e a pausa **não limpa o `busy_set`** (o endpoint faz `SREM` só de `:instances`).
+Logo o pausado-com-sessão sobrevivia inteiro no `busy_set` e a capacidade dele era contada.
+› **Por isso a ordem:** wirar só o gatilho corrigiria o pausado OCIOSO (que sai dos dois SETs) e
+deixaria o pausado COM sessão publicando fantasma — trocaria número congelado por número recalculado
+e igualmente errado, que é mais difícil de diagnosticar. **Medido: os dois davam `2`.** A alocação
+sempre soube da pausa (`get_ready_instances` filtra `state == "ready"`); só a contabilidade não —
+dois caminhos, duas fontes.
+
+**A semântica adotada é a do produto, não a da soma:** pausar **não** interrompe a sessão em curso;
+o que sai de circulação são as vagas **livres**. Daí `paused_capacity = Σ max(0, max_concurrent −
+ocupação)` **por instância** — 2, não 3 —, e a linha publicada passa a FECHAR:
+
+```
+total_instances = busy + busy_elsewhere + paused_capacity + available
+```
+
+`paused_capacity` é campo novo do snapshot e não é enfeite: sem ele `available < total − busy` fica
+inexplicável na tela e alguém "conserta" de volta para o modelo sem pausa — exatamente o papel que
+`busy_elsewhere` já cumpre ao lado.
+
+**Mudanças:** lista de estados inativos como **fonte única** (`_INACTIVE_STATES` em Python, com o
+trecho Lua **gerado** dela — duas cópias da mesma lista é a família de defeito que a regra de
+interceptação MCP já pagou); `registro_of` devolve `(max_concurrent, status)` da mesma leitura;
+aridade do script 7 → 8, com padding que faz um script antigo em cache degradar para o comportamento
+anterior, não para lixo; `compute_tenant_capacity` ganha o mesmo teste de estado (tinha o mesmo furo
+um nível acima, e **sem congelar** — o flusher o recalculava errado a cada volta);
+`_deactivate_instance` passa a casar `agent_pause` e **não** limpa o `busy_set` na pausa (limpar
+zeraria o `busy` com sessão em andamento e deflacionaria o `busy_elsewhere` dos pools irmãos — seria
+trocar capacidade fantasma por ocupação fantasma).
+
+**Gate re-executável:** `infra/test/gate_pause_capacity.sh` — três pontos, e o primeiro é o que dá ao
+gate poder de reprovar (P0 ativo `available > 0` · P1 pausado `== 0` · P2 retomado `== P0`). Sem P0 e
+P2, um recompute que devolvesse zero sempre ficaria verde. O gate **descobre** o agente logado no pool
+e autentica **como ele** (o endpoint deriva a instância do `sub` do JWT), declara na saída se a metade
+"pausado COM sessão viva" foi exercitada, e trata a instância humana como PRÉ-CONDIÇÃO — ela nasce só
+no login WS e forjá-la em Redis testaria a forja. Execução: **VERDE**, com os cinco números batendo a
+previsão escrita antes (P0 2/1/0/3 · P1 0/1/2/3 · P2 2). Regressão em
+`test_pool_snapshot_invariant.py` com o controle no mesmo teste.
+
+**Testemunha corrigida em `runtime.test.ts`:** o teste se chamava *"publica `agent_pause` **para que o
+routing-engine tire a instância dos sets**"* e assere só a publicação — ficou verde durante todo o
+período em que o consumidor casava o nome errado. Título trocado pelo que ele pode julgar (o **nome do
+contrato**), mais um controle que reprova se o nome errado voltar a aparecer.
+
+**Limitação registrada:** para agente de **IA** a pausa passa a agir, mas o `agent_ready` da
+reconciliação do bootstrap (15 s) a desfaz. Não é regressão (antes não agia nada), e o conserto é do
+lado do bootstrap.
+
+---
+
 ## Outbound Fase 3b — o veto de opt-out valida, e o gate ganha a metade que podia reprovar (2026-08-20)
 
 O `do_not_contact` (opt-out global, Fase 3b) rodava em produção com o smoke **escrito e nunca

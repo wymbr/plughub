@@ -1114,9 +1114,27 @@ MCP tool `agent_event(category, value, tags?)` para agentes publicarem KPIs de n
 
 Módulo ABAC `audit` para DPO/compliance — ortogonal às roles existentes. Qualquer usuário com `module_config.audit.*` no JWT tem acesso escalonado. Cinco campos: `sessions`, `mcp_calls`, `user_access`, `data_requests`, `config_snapshot` — os dois primeiros ativos.
 
-**analytics-api** tem dois novos endpoints em `/v1/audit`: `GET /sessions/{id}/messages` (requer `audit.sessions`, escreve linha imutável em `audit_access_log`) e `GET /mcp-calls` (requer `audit.mcp_calls`, filtra por `masked_input_fields`). `_require_audit_access()` decodifica JWT e verifica ABAC — tenant isolation obrigatório.
+**analytics-api** tem dois endpoints em `/v1/audit`: `GET /sessions/{id}/messages` e `GET /mcp-calls`.
+Gate `_check_audit_access(request, field)` (`audit.py`) — quatro ramos declarados: `analytics_open_access`
+LIBERA nomeando o ator como `open_access`; **sem `auth_jwt_secret` RECUSA** (postura oposta à do
+`pool_auth`, que degrada aberto: lá é escopo de leitura, aqui é dado pessoal); `module_config.audit.{sessions|mcp_calls}`
+≥ `read_only` LIBERA; senão 403. **Usa PyJWT (`import jwt`), nunca `python-jose`** — as duas convivem no
+repo e `jose` não está neste container; o import errado só falharia com o bypass DESLIGADO, isto é, só em
+produção. Ambos gravam `audit_access_log` **inclusive na recusa**.
 
-**ClickHouse**: `mcp_audit_log` (`ReplacingMergeTree`, idempotente) + `audit_access_log` (`MergeTree` — nunca deduplicado por design LGPD). `parse_mcp_audit_event()` agora dual-write: retorna `[timeline_row, mcp_audit_log_row]`.
+> ⚠️ **Corrigido 2026-08-22 por medição.** Esta seção afirmava `_require_audit_access()` e o dual-write
+> `[timeline_row, mcp_audit_log_row]` como entregues (CHANGELOG de 2026-05-14). **Nada disso existia na
+> árvore**: nenhum gate no handler — só `optional_pool_principal`, que confere ASSINATURA e não
+> autorização, então qualquer token válido do tenant lia dado pessoal —, nenhum `INSERT`, e nenhuma das
+> duas tabelas em `_ALL_DDL` (`probe_audit_surface.sh`: 0 de 2, com `session_timeline` de testemunha).
+> O `401` que o token malformado devolve é o que fazia o buraco parecer coberto.
+
+**ClickHouse**: `audit_access_log` (`MergeTree` — **nunca** deduplicado por design LGPD: o valor da trilha
+é dizer quantas vezes um dado foi acessado e por quem). **`mcp_audit_log` NÃO existe e não foi criado de
+propósito** — medido zero tráfego na borda `invoke` neste ambiente (`session_timeline` recebe linha de um
+único parser, o de `mcp.audit`, e está vazia), e criar tabela que ninguém preenche é o "existe ≠ está
+pronto" de novo. Dívida dormente registrada no `TODO.md`. `parse_mcp_audit_event()` grava **uma** linha,
+em `session_timeline`, que é de onde `/v1/audit/mcp-calls` lê.
 
 **platform-ui**: `AuditPage` em `/audit` (5 tabs: Sessions + MCP Calls ativos; 3 stubs). Nav entry standalone "Auditoria LGPD" (🔍) com ABAC gate `audit.sessions`. Warning banner: todo acesso registrado em log.
 
