@@ -11,6 +11,18 @@ dependencies    = [
     "pydantic-settings>=2.6.0",
     "redis[hiredis]>=5.2.0",
     "aiokafka>=0.11.0",
+    # RUNTIME, não dev (corrigido 2026-08-23). `llm_accounts_catalog.py:45` faz
+    # `import httpx` em nível de módulo e `main.py:40` importa esse módulo
+    # incondicionalmente — sem httpx o serviço não sobe, ponto.
+    #
+    # Estava listado APENAS em optional-dependencies.dev, e o container subia porque
+    # `anthropic` trazia httpx transitivamente e a camada `RUN pip install` do
+    # Dockerfile estava em cache desde uma resolução antiga. Ao editar qualquer
+    # arquivo do pacote, a camada COPY invalida, o pip resolve de novo, e o serviço
+    # morre com ModuleNotFoundError num import que nunca mudou. Depender de
+    # dependência transitiva não declarada é o mesmo que depender de estado herdado:
+    # funciona até a primeira vez que alguém verifica.
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
@@ -20,7 +32,8 @@ plughub-ai-gateway = "plughub_ai_gateway.main:app"
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
-    "httpx>=0.27.0",
+    # httpx saiu daqui: virou dependência de RUNTIME (ver acima). Mantê-lo nos dois
+    # lugares faria a próxima leitura concluir que é só de teste.
 ]
 
 [build-system]
