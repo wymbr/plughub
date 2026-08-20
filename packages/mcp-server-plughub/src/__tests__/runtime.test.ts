@@ -409,16 +409,29 @@ describe("Tools Agent Runtime — integração com Redis", () => {
       expect(await redis.hget(instanceKey, "state")).toBe("paused")
     })
 
-    it("publica agent_pause para que o routing-engine tire a instância dos sets", async () => {
+    // ⚠️ TÍTULO CORRIGIDO 2026-08-21. Ele dizia "publica agent_pause **para que o
+    // routing-engine tire a instância dos sets**" — e assere só a publicação, do
+    // lado do produtor. Este teste ficou VERDE durante todo o período em que o
+    // consumidor casava `agent_paused` (com "d"), um nome que produtor nenhum
+    // jamais emitiu: `_deactivate_instance` era inalcançável pela pausa e a
+    // capacidade do agente pausado continuava publicada. Asserção que não alcança
+    // a condição que o título diz julgar compra confiança sem dar nada.
+    //
+    // O nome do evento é CONTRATO (`AgentLifecycleEventSchema`), e é isso que esta
+    // posição pode verificar. Quem prova que o consumidor age é o gate de
+    // integração `infra/test/gate_pause_capacity.sh`.
+    it("publica o evento com o NOME do contrato: 'agent_pause' (sem 'd')", async () => {
       const token = await _loginAndReadyToken()
       await server.callTool("agent_pause", { session_token: token })
 
-      // Esta é a asserção que substitui as de `:available`: o efeito no
-      // roteamento é do EVENTO, e é ele que precisa existir.
       const ev = kafka.events.find(e => e.message["event"] === "agent_pause")
       expect(ev).toBeDefined()
       expect(ev!.topic).toBe("agent.lifecycle")
       expect(ev!.message["instance_id"]).toBe(INSTANCE_ID)
+
+      // Controle: o nome errado NÃO pode aparecer. Sem esta metade, um produtor
+      // que publicasse os DOIS nomes passaria, e a divergência voltaria calada.
+      expect(kafka.events.find(e => e.message["event"] === "agent_paused")).toBeUndefined()
     })
 
     it("sessões ativas não são alteradas por agent_pause", async () => {

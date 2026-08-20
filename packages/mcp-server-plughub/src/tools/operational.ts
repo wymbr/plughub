@@ -7,7 +7,19 @@
  * whether to offer a customer a channel switch, inform wait time, or escalate.
  *
  * Data source: Redis snapshots written by the Routing Engine after every
- * routing event ({tenant_id}:pool:{pool_id}:snapshot, TTL 120s).
+ * routing event ({tenant_id}:pool:{pool_id}:snapshot, **TTL 3600s** — a nota
+ * "TTL 120s" aqui estava desatualizada e é justamente o número que decide se uma
+ * linha antiga é suspeita).
+ *
+ * ⚠️ **DOIS produtores escrevem esta chave, e a linha diz qual** (`model`):
+ *   · `resource_semaphore`    — Routing Engine, dirigido por evento, linha completa;
+ *   · `bootstrap_placeholder` — orchestrator-bridge (NX, TTL 60s), que OMITE
+ *     `busy`/`busy_elsewhere`/`untagged` e **omite `available` de propósito**
+ *     quando a soma seria parcial (`capacity_unknown: "unmanaged_members"`).
+ * Medido em 2026-08-21 no tenant demo: **30 das 36 linhas vivas eram
+ * `bootstrap_placeholder`** — o produtor "de exceção" é a maioria em pool ocioso.
+ * Ler `snapshot.available` como se fosse sempre número é, portanto, ler um campo
+ * OPCIONAL como obrigatório.
  *
  * Tools:
  *   queue_context_get         — queue position + estimated wait for a session
@@ -35,7 +47,19 @@ export interface OperationalDeps {
 interface PoolSnapshot {
   pool_id:       string
   tenant_id:     string
-  available:     number
+  /** OPCIONAL no contrato. O tipo dizia `number` e afirmava uma garantia que
+   *  produtor nenhum dá: o bootstrap OMITE o campo quando só saberia somar uma
+   *  parcela. Em TypeScript `undefined > 0` é `false` — a omissão virava "não há
+   *  agente", o oposto exato do que o produtor quis dizer. Use `publishedAvailable`. */
+  available?:       number
+  /** Vagas fora de circulação por PAUSA (2026-08-21). Ausente na linha do
+   *  bootstrap. Serve para o chamador distinguir "não há agente" de "há agente,
+   *  pausado" — decisões de produto diferentes. */
+  paused_capacity?: number
+  /** Discriminador de PRODUTOR: `resource_semaphore` | `bootstrap_placeholder`. */
+  model?:           string
+  /** Motivo pelo qual a linha não afirma capacidade (ex.: `unmanaged_members`). */
+  capacity_unknown?: string
   queue_length:  number
   sla_target_ms: number
   channel_types: string[]
@@ -93,6 +117,19 @@ async function getTenantCapacity(
   } catch {
     return null
   }
+}
+
+/**
+ * Capacidade que a linha AFIRMA, ou `null` quando ela se abstém.
+ *
+ * Existe para que a abstenção do produtor sobreviva até o consumidor. Sem ela,
+ * `snapshot.available > 0` transforma "não sei" em "não há" — e este é o grupo
+ * de tools que decide **oferta de canal ao cliente**, o pior lugar possível para
+ * um número plausível. Mesmo princípio da F5b, que já removeu do vizinho o
+ * fallback por `SCARD` de membership.
+ */
+function publishedAvailable(s: PoolSnapshot): number | null {
+  return typeof s.available === "number" ? s.available : null
 }
 
 function mcpOk(data: unknown) {
@@ -156,14 +193,23 @@ export function registerOperationalTools(
         ? Math.round((position - 1) * avgHandleMs)
         : Math.round(snapshot.queue_length * avgHandleMs)
 
+      const availAgents = publishedAvailable(snapshot)
       return mcpOk({
         session_id,
         pool_id,
         position:           position,
         queue_length:       snapshot.queue_length,
-        available_agents:   snapshot.available,
+        // `null` quando a linha se abstém — nunca 0. Zero diria ao agente "não há
+        // ninguém para atender", e ele informaria espera indefinida ao cliente
+        // com base numa omissão.
+        available_agents:   availAgents,
+        capacity_unknown:   availAgents === null
+          ? (snapshot.capacity_unknown ?? "snapshot_sem_capacidade")
+          : null,
+        paused_capacity:    snapshot.paused_capacity ?? null,
         estimated_wait_ms:  estimatedWaitMs,
         sla_target_ms:      snapshot.sla_target_ms,
+        snapshot_model:     snapshot.model ?? null,
         snapshot_age_ms:    Date.now() - Date.parse(snapshot.updated_at),
       })
     },
@@ -212,18 +258,39 @@ export function registerOperationalTools(
         })
       }
 
+      // 2026-08-21 — a lição da F5b valia só para snapshot AUSENTE. Ela vale
+      // igual para snapshot PRESENTE que se abstém de afirmar capacidade: o
+      // bootstrap omite `available` de propósito quando a soma seria parcial, e
+      // `undefined > 0` levava o ramo a `queued`/`empty` — publicando "não há
+      // agente" a partir de um "não sei". Mesmo defeito, outro caminho.
+      const avail  = publishedAvailable(snapshot)
       const status =
-        snapshot.available > 0            ? "available"
+        avail === null                    ? "unknown"
+        : avail > 0                       ? "available"
         : snapshot.queue_length > 0       ? "queued"
         : "empty"
 
       return mcpOk({
         pool_id:        snapshot.pool_id,
-        available:      snapshot.available,
+        available:      avail,
+        // Distingue "não há agente" de "há agente, pausado" — duas decisões de
+        // produto diferentes que `available: 0` sozinho colapsa numa só.
+        paused_capacity: snapshot.paused_capacity ?? null,
         queue_length:   snapshot.queue_length,
         sla_target_ms:  snapshot.sla_target_ms,
         channel_types:  snapshot.channel_types,
         status,
+        reason: avail === null
+          ? (snapshot.capacity_unknown
+              ? `capacity_unknown: ${snapshot.capacity_unknown}`
+              : "snapshot presente mas SEM o campo `available` — a linha não afirma capacidade")
+          : null,
+        // Qual dos DOIS produtores escreveu esta linha, e há quanto tempo. Ambos
+        // são DIAGNÓSTICO, não condição: não existe limiar de idade defensável
+        // aqui — pool ocioso tem linha antiga e CORRETA, e reprovar por idade
+        // faria um pool saudável se declarar desconhecido. Quem quiser condicionar
+        // agora tem com quê.
+        snapshot_model:  snapshot.model ?? null,
         snapshot_age_ms: Date.now() - Date.parse(snapshot.updated_at),
         live_fallback:   false,
       })
@@ -283,21 +350,32 @@ export function registerOperationalTools(
       // vaga e profundidade de fila são grandezas aditivas legítimas — respondem "há por
       // onde entrar?" e "quanto está esperando?", que são outras perguntas.
       const channelMap: Record<string, {
-        pools_available: number
-        total_queued:    number
-        pools:           string[]
+        pools_available:       number
+        pools_capacity_unknown: number
+        total_queued:          number
+        pools:                 string[]
       }> = {}
 
       for (const snap of snapshots) {
         if (!snap) continue
+        const a = publishedAvailable(snap)
         for (const ch of snap.channel_types) {
           if (filterChannels && !filterChannels.includes(ch)) continue
           if (!channelMap[ch]) {
-            channelMap[ch] = { pools_available: 0, total_queued: 0, pools: [] }
+            channelMap[ch] = {
+              pools_available: 0, pools_capacity_unknown: 0,
+              total_queued: 0, pools: [],
+            }
           }
           channelMap[ch]!.total_queued += snap.queue_length
           channelMap[ch]!.pools.push(snap.pool_id)
-          if (snap.available > 0) channelMap[ch]!.pools_available += 1
+          // TRÊS baldes, não dois: pool que AFIRMA vaga, pool que afirma não ter,
+          // e pool que se ABSTÉM. Antes o terceiro caía no segundo em silêncio
+          // (`undefined > 0` é false), e `pools_available` passava a significar
+          // "pools que sabidamente têm vaga" sem que nada dissesse quantos não
+          // foram consultáveis.
+          if (a === null)     channelMap[ch]!.pools_capacity_unknown += 1
+          else if (a > 0)     channelMap[ch]!.pools_available += 1
         }
       }
 
@@ -321,9 +399,20 @@ export function registerOperationalTools(
           // cair de volta na soma das linhas: a soma é o defeito, não o fallback dele.
           available_by_kind: known ? byKind : null,
           capacity_unknown:  !known,
+          // 2026-08-21 — o ramo sem rollup dizia `pools_available > 0 ?
+          // "available" : "unknown"`, e o comentário TRÊS LINHAS ACIMA já
+          // proibia: *"nunca cair de volta na soma das linhas: a soma é o
+          // defeito, não o fallback dele"*. A prosa estava certa e o código
+          // fazia o contrário — publicava o veredicto "available" a partir do
+          // número que ele mesmo acabara de declarar não confiável, no tool que
+          // decide oferta de canal AO CLIENTE.
+          //
+          // Sem o rollup deduplicado a resposta é **`"unknown"`, sempre**.
+          // `pools_available` continua no payload como DADO (é contagem aditiva
+          // legítima); o que ele não pode mais é virar sentença.
           status: known
             ? (anyAgent ? "available" : data.total_queued > 0 ? "queued" : "no_agents")
-            : (data.pools_available > 0 ? "available" : "unknown"),
+            : "unknown",
         }
       }
 

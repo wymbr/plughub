@@ -14,7 +14,9 @@ Consumes two topics:
 
 2. agent.lifecycle — mcp-server-plughub events (agent_ready, agent_busy, etc.)
    Expected formats:
-     { "event": "agent_ready"|"agent_busy"|"agent_paused"|"agent_logout"|"agent_heartbeat"|"agent_done",
+     { "event": "agent_ready"|"agent_busy"|"agent_pause"|"agent_logout"|"agent_heartbeat"|"agent_done",
+       -- `agent_pause`, sem "d". Este docstring dizia `agent_paused` e o `elif`
+       -- abaixo casava o mesmo nome inexistente; nenhum produtor jamais o emitiu.
        "tenant_id": str, "instance_id": str, "agent_type_id": str,
        "status": str, "current_sessions": int, "pools": [...],
        "max_concurrent_sessions": int,
@@ -353,7 +355,23 @@ class LifecycleEventHandler:
                     "tenant=%s instance=%s pools=%s",
                     event_type, tenant_id, instance_id, fallback_pools,
                 )
-        elif event_type in ("agent_paused", "agent_logout"):
+        elif event_type in ("agent_pause", "agent_paused", "agent_logout"):
+            # ── 2026-08-21 — `agent_pause` entrou na lista; `agent_paused` NUNCA
+            # existiu como evento ────────────────────────────────────────────────
+            # O nome publicado é `agent_pause`, sem "d": `mcp-server/server.ts`
+            # (endpoint humano), `tools/runtime.ts` (tool de IA) e o schema
+            # canônico `schemas/src/platform-events.ts`. `agent_paused` só existe
+            # como prefixo de chave Redis (`{t}:agent_paused:{iid}`). Logo esta
+            # cláusula nunca casava e `_deactivate_instance` era inalcançável pela
+            # pausa — sobrevivia só para o logout.
+            #
+            # `agent_paused` FICA na lista por retrocompatibilidade barata (não há
+            # produtor; se algum aparecer, o efeito é o pretendido). Removê-lo não
+            # ganharia nada e reabriria a mesma classe de divergência de nome.
+            #
+            # Medido antes de mexer: 0 linhas `[deactivate] … state=paused` no log
+            # do routing-engine, com `Pool snapshot` = 7 e 742 linhas INFO na mesma
+            # janela — ausência do comportamento, não do instrumento.
             await self._deactivate_instance(tenant_id, instance_id, event)
         else:
             logger.debug("Lifecycle event ignored: %s", event_type)
@@ -792,8 +810,12 @@ class LifecycleEventHandler:
         self, tenant_id: str, instance_id: str, event: dict
     ) -> None:
         """
-        Removes instance from all pool sets (paused/logout) and refreshes
-        pool snapshots so the Monitor reflects the change immediately.
+        Tira a instância de circulação (pausa/logout) e reescreve os snapshots dos
+        pools afetados, para que o Monitor reflita a mudança na hora.
+
+        **Pausa e logout NÃO são o mesmo movimento** (2026-08-21): os dois saem do
+        `ready_set`, mas só o logout limpa o `busy_set`. Ver o bloco de comentário
+        no laço abaixo — a pausa acontece com sessão viva, e a sessão continua.
 
         For agent_logout the mcp-server may already have DEL'd the instance key
         before the Kafka event arrives.  In that case get_instance() returns None
@@ -802,7 +824,8 @@ class LifecycleEventHandler:
         sends pools=[allPools] on full logout).
         """
         event_type = event.get("event", "")
-        new_state  = "paused" if event_type == "agent_paused" else "logged_out"
+        is_pause   = event_type in ("agent_pause", "agent_paused")
+        new_state  = "paused" if is_pause else "logged_out"
 
         # Determine which pools need cleanup.
         # Primary source: instance key in Redis (most accurate).
@@ -826,18 +849,41 @@ class LifecycleEventHandler:
                 # Sintoma medido: `available 1 / total 1` num pool SEM ninguém
                 # logado. Capacidade fantasma — pior que número errado, porque o
                 # roteamento acredita nela.
+                #
+                # ── 2026-08-21 — a PAUSA não mexe no busy_set ────────────────────
+                # Pausa e logout dizem coisas diferentes sobre a sessão EM CURSO:
+                # o logout só chega quando não há mais nenhuma; a pausa acontece
+                # COM sessão viva, e a promessa do produto é que ela continue
+                # ("Sessões ativas não são interrompidas" — agent_pause).
+                #
+                # O `busy_set` é onde o agente pausado-com-sessão vive (medido:
+                # ready_set vazio, busy_set com ele). Removê-lo dali zeraria o
+                # `busy` do pool com uma sessão em andamento e derrubaria o
+                # `used_global`, deflacionando o `busy_elsewhere` dos pools irmãos
+                # do mesmo recurso. Seria trocar capacidade fantasma por ocupação
+                # fantasma — o número muda de lado, não some.
+                #
+                # Quem tira a capacidade de circulação é a ARITMÉTICA, que agora
+                # lê `status` (`_INACTIVE_STATES` em registry.py): a instância
+                # segue membro, contribui `available: 0` e mantém a sessão em
+                # `busy`. Se ela ficar sem sessão, o próprio recompute a despeja
+                # do busy_set (ramo `n == 0`).
                 _redis = self._instances._redis
                 for pool_id in affected_pools:
                     await _redis.srem(
                         f"{tenant_id}:pool:{pool_id}:instances", instance_id
                     )
-                    await _redis.srem(
-                        f"{tenant_id}:pool:{pool_id}:busy_instances", instance_id
-                    )
+                    if not is_pause:
+                        await _redis.srem(
+                            f"{tenant_id}:pool:{pool_id}:busy_instances", instance_id
+                        )
                 logger.info(
                     "[deactivate] Instance found and deactivated: "
-                    "tenant=%s instance=%s state=%s pools=%s (removido dos sets)",
+                    "tenant=%s instance=%s state=%s pools=%s "
+                    "(fora do ready_set; busy_set %s)",
                     tenant_id, instance_id, new_state, affected_pools,
+                    "PRESERVADO (pausa não interrompe sessão em curso)"
+                    if is_pause else "limpo",
                 )
             else:
                 # Instance key already deleted (mcp-server DEL'd before Kafka delivery).

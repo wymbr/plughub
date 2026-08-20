@@ -604,10 +604,30 @@ return val
 # (`{t}:instance:{iid}:sessions`), nunca de um contador. Sobre
 # I = ready_set(P) ∪ busy_set(P):
 #
-#   total_capacity = Σ max_concurrent(i)
-#   used_global    = Σ SCARD(sessions_i)                  ← inclui irmãos E holds
-#   used_here      = Σ #{ m ∈ sessions_i : tag(m) = P }   ← projeção pela tag (F1)
-#   untagged       = Σ #{ m ∈ sessions_i : tag(m) = nil } ← membro legado / escritor mudo
+#   total_capacity  = Σ max_concurrent(i)                  ← capacidade INSTALADA
+#   used_global     = Σ SCARD(sessions_i)                  ← inclui irmãos E holds
+#   used_here       = Σ #{ m ∈ sessions_i : tag(m) = P }   ← projeção pela tag (F1)
+#   untagged        = Σ #{ m ∈ sessions_i : tag(m) = nil } ← membro legado / escritor mudo
+#   paused_capacity = Σ max(0, max_concurrent(i) − SCARD(sessions_i)) sobre i INATIVA
+#
+# `paused_capacity` (2026-08-21) — a PAUSA retira as vagas LIVRES de circulação,
+# não a sessão em curso. Pausar um agente de 3 vagas com 1 sessão viva retira 2,
+# e a sessão continua até o fim; é assim que o operador entende a pausa, e é o
+# que o produto promete ("Sessões ativas não são interrompidas", agent_pause).
+# Por isso a subtração é por INSTÂNCIA e clampada em zero — `total − used` global
+# daria 3 − 1 = 2 de sobra, exatamente o número fantasma que se está removendo.
+#
+# Medido em 2026-08-21 (tenant_demo, pool retencao_humano, humano pausado com 1
+# sessão): a linha publicava `available: 2` com o ready_set VAZIO. Sem ler
+# `status`, o recompute soma capacidade por PERTENCIMENTO a set, e a pausa não
+# tira ninguém do busy_set — logo a capacidade do pausado sobrevivia inteira.
+# A alocação SEMPRE soube da pausa (`get_ready_instances` filtra `state ==
+# "ready"`); era só a contabilidade que não. Duas fontes para o mesmo fato.
+#
+# A linha publicada fecha aritmeticamente, e é isso que impede alguém de
+# "consertar" de volta para o modelo errado:
+#
+#   total_instances = busy + busy_elsewhere + paused_capacity + available
 #
 # Por que não adotar `current_sessions` (o espelho no registro da instância), que
 # hoje está CERTO: é da mesma família do contador por pool — número paralelo que
@@ -626,10 +646,36 @@ return val
 # KEYS[1] = ready_set  ({t}:pool:{p}:instances)
 # KEYS[2] = busy_set   ({t}:pool:{p}:busy_instances)
 # ARGV[1] = tenant_id   ARGV[2] = pool_id
-# → { total_capacity, used_global, used_here, untagged, instances, evicted, unknown }
+# → { total_capacity, used_global, used_here, untagged, instances, evicted,
+#     unknown, paused_capacity }
+# Estados em que a instância NÃO oferece vaga nova.
+#
+# É lista de NEGAÇÃO, não de permissão, de propósito: um status desconhecido (ou
+# ausente) continua contando capacidade, como antes de 2026-08-21. Uma allow-list
+# faria todo produtor futuro de status novo apagar capacidade em SILÊNCIO — o modo
+# de falha caro é esse, não o oposto.
+#
+# `logout`/`draining` são o vocabulário do mcp-server; `logged_out` é o interno
+# (ver `_map_status_to_state`). Os dois chegam nesta mesma chave, porque
+# `set_instance` grava `status` como alias de `state` e o mcp-server escreve o
+# seu próprio vocabulário direto.
+#
+# UMA fonte, dois consumidores: o trecho Lua abaixo é GERADO deste conjunto. Duas
+# cópias da mesma lista é a família de defeito que este repositório já pagou (a
+# regra de interceptação MCP escrita três vezes, com as cópias divergindo).
+_INACTIVE_STATES: frozenset[str] = frozenset(
+    {"paused", "logged_out", "logout", "draining"}
+)
+
+_INACTIVE_LUA = "local INACTIVE = { " + ", ".join(
+    f"[{json.dumps(s)}] = true" for s in sorted(_INACTIVE_STATES)
+) + " }"
+
 _RECOMPUTE_POOL_OCCUPANCY_LUA = """
 local HOLD = '__wrapup_hold__::'
 local HLEN = string.len(HOLD)
+
+--@INACTIVE@
 
 local function tag_of(m)
   local parts = {}
@@ -659,14 +705,15 @@ local busy  = redis.call('SMEMBERS', KEYS[2])
 local in_ready = {}
 for i = 1, #ready do in_ready[ready[i]] = true end
 
-local total_capacity = 0
-local used_global    = 0
-local used_here      = 0
-local untagged       = 0
-local instances      = 0
-local evicted        = 0
-local unknown        = 0
-local default_mc     = 0
+local total_capacity   = 0
+local used_global      = 0
+local used_here        = 0
+local untagged         = 0
+local instances        = 0
+local evicted          = 0
+local unknown          = 0
+local paused_capacity  = 0
+local default_mc       = 0
 
 local function occupancy(iid)
   local members = redis.call('SMEMBERS', tenant .. ':instance:' .. iid .. ':sessions')
@@ -683,19 +730,25 @@ local function occupancy(iid)
   return n, here, unt
 end
 
-local function max_concurrent_of(iid)
+-- Devolve (max_concurrent, status). Os dois saem da MESMA leitura: se a chave
+-- não pôde ser lida, nem a capacidade nem o estado são conhecidos — e é por isso
+-- que `status` nunca é nil enquanto `mc` não é.
+local function registro_of(iid)
   local raw = redis.call('GET', tenant .. ':instance:' .. iid)
-  if not raw then return nil end
+  if not raw then return nil, nil end
   local ok, data = pcall(cjson.decode, raw)
-  if not ok or type(data) ~= 'table' then return nil end
+  if not ok or type(data) ~= 'table' then return nil, nil end
   local v = tonumber(data['max_concurrent'])
-  if v == nil or v < 1 then return nil end
-  return v
+  if v == nil or v < 1 then v = nil end
+  local st = data['status']
+  if type(st) ~= 'string' then st = data['state'] end
+  if type(st) ~= 'string' then st = nil end
+  return v, st
 end
 
 local function account(iid)
   instances = instances + 1
-  local mc = max_concurrent_of(iid)
+  local mc, st = registro_of(iid)
   if mc ~= nil then
     if default_mc == 0 then default_mc = mc end
     total_capacity = total_capacity + mc
@@ -710,6 +763,14 @@ local function account(iid)
   used_global = used_global + n
   used_here   = used_here + here
   untagged    = untagged + unt
+  -- Vagas retiradas de circulação pela pausa: só as LIVRES desta instância.
+  -- Clampado em zero por instância (não no agregado): sobre-alocação de um
+  -- pausado não pode virar crédito de capacidade para o pool.
+  if mc ~= nil and st ~= nil and INACTIVE[st] then
+    local livres = mc - n
+    if livres < 0 then livres = 0 end
+    paused_capacity = paused_capacity + livres
+  end
 end
 
 for i = 1, #ready do
@@ -738,8 +799,9 @@ end
 if default_mc == 0 then default_mc = 1 end
 total_capacity = total_capacity + (unknown * default_mc)
 
-return { total_capacity, used_global, used_here, untagged, instances, evicted, unknown }
-"""
+return { total_capacity, used_global, used_here, untagged, instances, evicted,
+         unknown, paused_capacity }
+""".replace("--@INACTIVE@", _INACTIVE_LUA)
 
 
 # ─────────────────────────────────────────────
@@ -1132,15 +1194,21 @@ class InstanceRegistry:
                 tenant_id, pool_id, exc,
             )
             vals = []
-        vals += [0] * (7 - len(vals))
+        vals += [0] * (8 - len(vals))
         occ = {
-            "total_capacity": vals[0],
-            "used_global":    vals[1],
-            "used_here":      vals[2],
-            "untagged":       vals[3],
-            "instances":      vals[4],
-            "evicted":        vals[5],
-            "unknown":        vals[6],
+            "total_capacity":  vals[0],
+            "used_global":     vals[1],
+            "used_here":       vals[2],
+            "untagged":        vals[3],
+            "instances":       vals[4],
+            "evicted":         vals[5],
+            "unknown":         vals[6],
+            # Capacidade retirada de circulação por PAUSA (vagas livres de
+            # instância inativa). Zero em toda a base que não tem ninguém
+            # pausado — o padding acima garante que uma versão antiga do script
+            # em cache degrade para zero, que é o comportamento pré-2026-08-21,
+            # e não para lixo.
+            "paused_capacity": vals[7],
         }
         return occ
 
@@ -1163,6 +1231,13 @@ class InstanceRegistry:
         `Σ` sobre instâncias distintas de `max(0, max_concurrent − SCARD(sessions))`.
         A dedução por instância é a única forma de não contar o mesmo recurso uma vez
         por pool — e é por isso que este número não sai das linhas de pool.
+
+        **Instância INATIVA (pausa/logout/drain) contribui `available: 0`** e a mesma
+        parcela vai para `paused_capacity` (2026-08-21, `_INACTIVE_STATES`). Ela
+        continua somando `total_capacity` (é capacidade instalada) e `used` (a sessão
+        em curso do pausado é real). Antes disto o rollup somava as vagas livres de
+        quem estava fora de circulação — o mesmo defeito da linha do pool, um nível
+        acima, e sem congelar: o flusher o recalculava errado a cada volta.
 
         **O tipo vem do POOL (`agent_kind`), que é a autoridade canônica** — não de
         `source`/`agent_type_id` da instância, que seriam uma segunda fonte de verdade
@@ -1289,24 +1364,36 @@ class InstanceRegistry:
                 kind = "unknown"
             else:
                 kind = next(iter(kinds))
-            mc = 1
+            mc    = 1
+            state = None
             if inst_raw:
                 try:
                     d  = json.loads(inst_raw) or {}
                     mc = int(d.get("max_concurrent") or d.get("max_concurrent_sessions") or 1)
+                    _st = d.get("status") or d.get("state")
+                    state = _st if isinstance(_st, str) else None
                 except Exception:
                     pass
             used  = int(used_raw or 0)
-            avail = max(0, mc - used)
+            # Mesmo teste de estado do recompute por pool (mesma fonte:
+            # `_INACTIVE_STATES`). Sem ele o rollup repetia o furo da linha do
+            # pool um nível acima — e com agravante: o rollup tem laço de fundo no
+            # flusher, então o número não congelava, ficava *recalculado e errado*,
+            # que é mais difícil de diagnosticar.
+            inativa    = state in _INACTIVE_STATES
+            livres     = max(0, mc - used)
+            avail      = 0 if inativa else livres
+            paused_cap = livres if inativa else 0
 
             k = by_kind.setdefault(kind, {
                 "total_capacity": 0, "used": 0, "available": 0,
-                "instances": 0, "by_channel": {},
+                "paused_capacity": 0, "instances": 0, "by_channel": {},
             })
-            k["total_capacity"] += mc
-            k["used"]           += used
-            k["available"]      += avail
-            k["instances"]      += 1
+            k["total_capacity"]  += mc
+            k["used"]            += used
+            k["available"]       += avail
+            k["paused_capacity"] += paused_cap
+            k["instances"]       += 1
             for ch in inst_channels.get(iid, set()):
                 c = k["by_channel"].setdefault(
                     ch, {"available": 0, "instances": 0, "pools_available": 0}
@@ -2844,11 +2931,23 @@ class InstanceRegistry:
                             do recurso e em projeção nenhuma. Publicado, nunca
                             descartado em silêncio: deve ir a zero em ≤ 24 h (TTL do
                             SET); persistente é bug de ESCRITOR.
+          paused_capacity — vagas LIVRES de instância inativa (pausa/logout/drain),
+                            retiradas de circulação. A sessão em curso do agente
+                            pausado NÃO é retirada: ela continua e aparece em `busy`.
+                            Por isso a parcela é `Σ max(0, max_concurrent − ocupação)`
+                            por instância, não `Σ max_concurrent`.
           total_instances — CAPACIDADE total do pool (soma de `max_concurrent` sobre
                             ready_set ∪ busy_set), NÃO contagem de instâncias. O nome
                             é herança do modelo antigo (contagem), abandonado quando
                             `max_concurrent > 1` passou a existir.
                             INVARIANTE: `available ≤ total_instances`, sempre.
+                            INVARIANTE (2026-08-21): a linha FECHA —
+                            `total_instances = busy + busy_elsewhere
+                                             + paused_capacity + available`,
+                            salvo SOBRE-ALOCAÇÃO, em que `available` é clampado em
+                            zero e a soma EXCEDE o total. O clamp é deliberado (não
+                            existe vaga negativa) e a diferença é o excedente — que
+                            é sinal de bug de escritor, não de arredondamento.
           queue_length    — contacts waiting in queue
 
         Gatilhos: `route()`, `mark_busy`, `remove_conversation`,
@@ -2868,7 +2967,8 @@ class InstanceRegistry:
         busy            = occ["used_here"]
         busy_elsewhere  = max(0, used_global - busy)
         untagged        = occ["untagged"]
-        available       = max(0, total_capacity - used_global)
+        paused_capacity = occ["paused_capacity"]
+        available       = max(0, total_capacity - used_global - paused_capacity)
         total_instances = total_capacity
         queue_length    = await self.get_queue_length(tenant_id, pool_id)
 
@@ -2890,6 +2990,17 @@ class InstanceRegistry:
                 "contada pelo default (o bootstrap restaura em ~15 s)",
                 pool_id, tenant_id, occ["unknown"],
             )
+        if paused_capacity:
+            # Nunca silencioso, e pelo mesmo motivo de `busy_elsewhere`: sem esta
+            # parcela a linha fica aritmeticamente inexplicável (`available` menor
+            # que `total − busy`, sem motivo visível) e alguém "conserta" de volta
+            # para o modelo que ignora a pausa.
+            logger.info(
+                "pool=%s tenant=%s: %d vaga(s) fora de circulação por PAUSA "
+                "(instância inativa ainda membro do pool). A sessão em curso "
+                "continua e aparece em `busy`; só as vagas LIVRES são retiradas.",
+                pool_id, tenant_id, paused_capacity,
+            )
 
         # Arc 19 (revisado 2026-06-04): max_concurrent_sessions pool-level é um
         # THROTTLE OPCIONAL de downstream (backpressure p/ sistemas frágeis) —
@@ -2905,6 +3016,10 @@ class InstanceRegistry:
             # publicado como diagnóstico — para instância de webhook ele é 0 por
             # construção (uma instância pertence a um pool), e diferente de 0
             # significa que a premissa quebrou, que é justamente o que se quer ver.
+            # `paused_capacity` NÃO entra aqui: o teto é do POOL (throttle de
+            # backpressure), não do recurso, e pool webhook não tem pausa de
+            # agente. Segue publicado no payload como diagnóstico — diferente de
+            # zero significa que a premissa quebrou, que é o que se quer ver.
             available       = max(0, max_concurrent_sessions - busy)
             total_instances = max_concurrent_sessions
 
@@ -2915,6 +3030,10 @@ class InstanceRegistry:
             "busy":             busy,
             "busy_elsewhere":   busy_elsewhere,
             "untagged":         untagged,
+            # Vagas retiradas de circulação por pausa. É o termo que faz a linha
+            # FECHAR: total_instances = busy + busy_elsewhere + paused_capacity
+            # + available.
+            "paused_capacity":  paused_capacity,
             "total_instances":  total_instances,
             "queue_length":     queue_length,
             "sla_target_ms":    sla_target_ms,
@@ -2963,7 +3082,7 @@ class InstanceRegistry:
         sla_target_ms, channel_types, and max_reply_time_ms from the existing
         snapshot so callers don't need to supply pool config.
 
-        Used after agent_logout / agent_paused events where only the capacity
+        Used after agent_logout / agent_pause events where only the capacity
         numbers need updating, not the pool-level config fields.
         Falls back to defaults if no existing snapshot is found.
 

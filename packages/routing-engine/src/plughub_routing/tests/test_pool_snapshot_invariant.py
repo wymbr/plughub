@@ -197,6 +197,81 @@ async def test_logged_out_agent_stops_counting_capacity(env):
 
 
 @pytest.mark.asyncio
+async def test_paused_agent_with_live_session_offers_no_free_slot(env):
+    """
+    Agente PAUSADO com sessão viva: a sessão continua, as vagas LIVRES somem.
+
+    Medido em 2026-08-21 (tenant_demo/retencao_humano): humano de 3 vagas com 1
+    sessão, pausado no Console → a linha publicava `available: 2` com o ready_set
+    VAZIO. Duas causas empilhadas, e esta é a de baixo: o recompute soma
+    `max_concurrent` por PERTENCIMENTO a set e nunca lê `status`; a pausa faz
+    `SREM` só de `:instances`, então o agente sobrevive no `busy_set` inteiro.
+
+    O ESTADO é montado como o endpoint `/api/agent-pause` o monta — `status`
+    gravado na chave da instância + `SREM` do ready_set, **sem** tocar no
+    busy_set. Montá-lo de outro jeito testaria uma pausa que não existe.
+
+    As duas metades no mesmo teste, de propósito: a asserção de controle (sem
+    pausa → 2 vagas) é o que impede um bug que devolva sempre zero de passar por
+    conserto.
+    """
+    reg, client, tenant, pool = env
+    inst = "human-snap-paused"
+    await _seed(reg, client, tenant, pool, capacity=3, instance=inst)
+
+    assert await reg.claim_instance(
+        tenant, inst, "conv-paused", None, 3, pool_id=pool
+    ) == 1
+    await reg.mark_busy(tenant, pool, inst, "conv-paused")
+
+    # ── CONTROLE: mesma situação, agente ATIVO. Sem esta metade, um recompute
+    #    que devolvesse zero sempre ficaria verde abaixo.
+    ctrl = await _snap(client, tenant, pool)
+    assert (ctrl["available"], ctrl["busy"]) == (2, 1), (
+        f"controle não chegou ao estado esperado (3 vagas, 1 em uso): {ctrl}"
+    )
+    assert ctrl.get("paused_capacity", 0) == 0, (
+        f"ninguém pausado e a linha já declara capacidade em pausa: {ctrl}"
+    )
+
+    # ── PAUSA, exatamente como o endpoint do mcp-server a escreve ────────────
+    raw = json.loads(await client.get(f"{tenant}:instance:{inst}"))
+    raw["status"] = "paused"
+    await client.set(f"{tenant}:instance:{inst}", json.dumps(raw), keepttl=True)
+    await client.srem(f"{tenant}:pool:{pool}:instances", inst)
+    assert await client.sismember(f"{tenant}:pool:{pool}:busy_instances", inst), (
+        "a pausa não deixou o agente no busy_set — o cenário medido não foi "
+        "reproduzido, e o teste abaixo passaria por motivo errado"
+    )
+
+    await reg.write_pool_snapshot(
+        tenant_id=tenant, pool_id=pool, sla_target_ms=480_000,
+        channel_types=["webchat"],
+    )
+    snap = await _snap(client, tenant, pool)
+
+    assert snap["available"] == 0, (
+        f"pool oferece {snap['available']} vaga(s) de um agente PAUSADO: {snap}"
+    )
+    # A sessão em curso NÃO é interrompida pela pausa — ela continua e aparece.
+    assert snap["busy"] == 1, (
+        f"a sessão viva do agente pausado sumiu da linha: {snap}"
+    )
+    assert snap["paused_capacity"] == 2, (
+        f"a parcela retirada de circulação deveria ser 2 (as vagas LIVRES), não "
+        f"3 (a capacidade inteira): {snap}"
+    )
+    assert snap["total_instances"] == 3, (
+        f"capacidade INSTALADA não muda com a pausa: {snap}"
+    )
+    # A linha FECHA — é o que impede alguém de reverter para o modelo sem pausa.
+    assert (
+        snap["busy"] + snap["busy_elsewhere"]
+        + snap["paused_capacity"] + snap["available"]
+    ) == snap["total_instances"], f"a linha não fecha: {snap}"
+
+
+@pytest.mark.asyncio
 async def test_agent_ready_without_resource_facts_does_not_recreate_human(env):
     """
     `agent_ready` tardio (aba obsoleta / republish) NÃO pode recriar a instância
