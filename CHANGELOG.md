@@ -2,6 +2,84 @@
 
 ---
 
+## Produtor da janela de espera (D12) — P1+P2 construídos e validados, e o portão que nasceu morto (2026-08-21)
+
+Fecha o **Problema 36.3** (`conference-mechanics.md`): a espera na fila passou a ter produtor. O
+código foi escrito na sessão anterior; esta o **construiu, mediu e provou** — antes disto não havia
+build nem gate, e código não exercitado não é implementação concluída.
+
+### O que mudou
+
+- **`mute_queue.resolve_mute_exit` → `resolve_queue_exit`** (routing-engine). A função já estava
+  plugada em todas as saídas de fila e apenas **se recusava a agir** fora do tier mudo; a mudança foi
+  remover a recusa. O `SREM(unadmitted)` virou bookkeeping e o portão passou a ser o carimbo
+  `first_queued_ms`, que existe nos dois tiers. Sem carimbo não emite — ausência honesta.
+- **`queue_wait_segment_id()`** = `uuid5(NAMESPACE_URL, "plughub:queue-wait:{tenant}:{sid}")`. Em vez
+  de garantir "emite uma vez só" em N saídas concorrentes (impossível), garante que emitir N vezes
+  seja a **mesma linha**.
+- **Dois pontos de saída que nenhuma das 4 chamadas cobria:** `SessionClosedEventHandler`
+  (`abandoned` — o caminho do 36.3, cliente que cai *na* fila; o handler não tinha producer) e o
+  drain com agente disponível (`handoff` — com agente de fila ativo o contato é sinalizado por LPUSH,
+  não re-publicado, então o roteamento não roda de novo).
+- **`key=session_id`** no publish de `conversations.participants` do routing (P1).
+- **Bridge, `activate_queue_agent`:** `role='queue'` → **`'specialist'`** (é trabalho de agente, não
+  espera), `pool_id` → `_flow_pool_id` (D10) e `segment_id` determinístico.
+
+### O defeito que o próprio conserto introduziu
+
+O portão novo era `if raw is None`, e **`_decode` devolve `""` para chave ausente, nunca `None`**
+(`mute_queue.py:60-63`). O `return False` jamais disparava e todo contato roteado direto emitia um
+segmento `role='queue' outcome='handoff' duration_ms=0` — espera fantasma exibida como a *primeira
+participação do contato*. Corrigido para `if not raw`.
+
+É a **Mudança 35 outra vez** (`""` do lado errado de uma guarda), quatro dias depois e no mesmo
+mecanismo. Regra derivada: **guarda sobre retorno de Redis testa `if not x`, nunca `is None`.**
+
+⚠️ A fantasma era **invisível na query canônica do 36.2**, que conta `outcome='abandoned'` — a
+fantasma é `handoff`. O verde daquela query era verdadeiro e incompleto ao mesmo tempo.
+
+⚠️ **`key=session_id` não era cosmético — mas a evidência que provou isso caiu com o fix.** O log de
+um contato que escala mostrou **três** `participant_left` para a mesma sessão, todos com o mesmo
+`segment_id`; **duas eram as fantasmas**, e pós-fix uma passagem pela fila emite uma vez só. O
+descarte de *"o evento é único"* sobrevive por outro caminho: sessão que passa por **duas** filas
+emite duas vezes. Registrado com a correção à vista, não reescrito.
+
+🔎 **Resíduo aberto (não medido):** `queue_wait_segment_id` não discrimina passagem nem pool — duas
+esperas da mesma sessão colapsam numa linha. **Bloqueia a D14** (SLA por segmento de espera).
+
+### Medição
+
+Preflight de símbolo nos dois containers antes de medir (`True True` / `1`). Coorte de 3 contatos
+reais, antes e depois do fix: linhas `role='queue'` **3 → 1**; o contato com espera real (47 327 ms)
+sobreviveu, os 2 sem fila perderam a fantasma (taxa antes: 2 de 2).
+
+Testemunhas do 36.2 (`infra/test/q_baseline_36_2.sql`, materializada nesta sessão): `closed +
+queue_abandoned` 10 → **11**; `never_closed + queue_abandoned` **imóvel em 5**, como previsto —
+verde-e-imóvel era o resultado esperado, porque a duplicação não explica o 36.2 (interseção = 1).
+Nenhuma linha antiga migrou de balde. *(A baseline "inalterada desde 08-21" já não valia: havia 5
+sessões novas de antes do corte — a aritmética fecha, mas o pressuposto não.)*
+
+### Gate
+
+`packages/routing-engine/src/plughub_routing/tests/test_queue_wait_segment.py` — 4 testes, Redis
+real, skip explícito lendo `REDIS_URL` **e** `PLUGHUB_REDIS_URL`. Cobre: ausência não emite; presença
+emite (testemunha de presença — sem ela um produtor que nunca emite passaria); `key=session_id`;
+`segment_id` determinístico. **Falseabilidade conferida:** revertendo o portão para `is None` dentro
+do container, dá `1 failed, 3 passed` e o que falha é exatamente `test_no_stamp_emits_nothing`.
+
+### Resíduos declarados
+
+- `_emit_queue_timeout` mantém emissor próprio; unificar agora daria emissão dupla. **Lacuna:**
+  `max_wait_exceeded` na fila **atendida** segue sem segmento de espera.
+- `role='specialist'` no agente de fila move o tempo dele para `agent_time_ms`: `retencao_humano`
+  456 083 → 477 968 ms (**+4,8 %**), 27 sessões, 11 hoje em zero. **Não é retroativo.**
+- `pool_id → _flow_pool_id` (D10) é **no-op** enquanto o `queue_config` do pool tiver só `skill_id`.
+- **36.2 segue sem causa identificada.**
+
+→ `docs/guias/conference-mechanics.md` § Mudança 37 · `docs/arcos/system-queue.md` item 4
+
+---
+
 ## Reexame dos 9 em `Escopo reduzido` + poda de 11 seções do TODO (2026-08-26)
 
 Item 8 da passagem de 08-26. A reversão do arco n8n (2026-08-18) deixou **9 itens** cujo corte

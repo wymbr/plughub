@@ -2033,5 +2033,95 @@ sessões novas.
 
 ---
 
+### Mudança 37 — a janela de espera ganha produtor, e o portão dele nasceu morto: `""` no lugar de ausência (2026-08-21)
+
+Corrige o **36.3** (a espera que não tinha produtor) e, na mesma passada, um defeito que o próprio
+conserto introduziu e que só apareceu porque se mediu a população que **não** devia ter linha.
+
+**O que passou a existir.** `mute_queue.resolve_mute_exit` → **`resolve_queue_exit`**: a função já
+estava plugada em todas as saídas de fila, mas se recusava a agir fora do tier mudo (abria com
+`SREM(unadmitted)` + `return False`). A mudança foi **remover a recusa** — o `SREM` virou bookkeeping
+e quem decide passou a ser o `first_queued_ms`, que existe nos dois tiers. Mais dois pontos de saída
+que nenhuma das 4 chamadas cobria: `SessionClosedEventHandler` (o caminho do 36.3 — o handler não
+tinha producer) e o drain com agente disponível (com agente de fila ativo o contato é *sinalizado* por
+LPUSH, não re-publicado, então o roteamento não roda de novo).
+
+**O defeito introduzido, e por que ele é da família catalogada.** O portão novo era:
+
+```python
+raw = _decode(await redis_client.get(fq_key))
+if raw is None:          # ← nunca verdadeiro
+    return False
+```
+
+`_decode` devolve **`""`** para chave ausente (`mute_queue.py:60-63`), nunca `None`. O `return False`
+jamais disparava; logo abaixo, `int(float(raw)) if raw else now_ms` caía no `now_ms` e a subtração dava
+zero. Resultado: **todo contato roteado direto — sem fila nenhuma — emitia um segmento
+`role='queue' outcome='handoff' duration_ms=0`**, e ele aparecia na UI como a *primeira participação do
+contato* (drill de sessão: `queue system · 0s · handoff`, antes do `primary`).
+
+É a **Mudança 35 outra vez**: lá o `""` caía em lados opostos de duas guardas (`??` × truthiness);
+aqui ele cai do lado errado de uma guarda só. Duas ocorrências no mesmo mecanismo em quatro dias ⇒
+não é azar, é o vazio sendo tratado como valor em Python. Regra derivada: **guarda sobre retorno de
+Redis testa `if not x`, nunca `is None`** — o decodificador do repo normaliza ausência para string
+vazia, e `is None` compara com um valor que ele não produz.
+
+**Medição** (3 contatos reais, mesma coorte antes e depois):
+
+| caso | antes | depois |
+|---|---|---|
+| escalou → F5 na fila | `primary` + `queue/abandoned/47 327 ms` | **igual** |
+| atendido até o fim, com NPS | `primary` + `specialist` + **`queue/handoff/0`** | `primary` + `specialist` |
+| menu inicial + F5 | `primary` + **`queue/handoff/0`** | `primary` |
+
+Linhas `role='queue'` na coorte: **3 → 1**. Taxa da fantasma antes do fix: **2 de 2** contatos sem fila.
+
+⚠️ **A fantasma era invisível na query canônica do 36.2**, que conta `outcome='abandoned'` — a fantasma
+é `handoff`. O verde daquela query era verdadeiro *e* incompleto ao mesmo tempo: testemunha correta
+para o defeito que ela mede, cega para o que o conserto criou.
+
+**`key=session_id`: a justificativa original caiu, mas a evidência que a derrubou caiu junto.** Dizia-se
+*"este caminho emite um evento só, então não há par que possa se inverter"*. O log de um contato que
+escala mostrou **três** `participant_left` para a mesma sessão, todos com o mesmo `segment_id`
+determinístico — quem vence a dedup é quem chega por último, e isso só é determinístico **dentro de uma
+partição**.
+
+⚠️ **Duas daquelas três eram as fantasmas.** Com o portão corrigido, uma passagem pela fila emite
+**uma** vez (a 1ª apaga o carimbo) e aquele caso deixou de ser reproduzível. *Registrado assim, e não
+reescrito, porque a diferença entre "medi" e "medi antes de consertar o que produzia a medição" é
+exatamente o que este documento existe para preservar.*
+
+O que sobrevive: *"o evento é único"* segue falso por um caminho legítimo — sessão que passa por **duas**
+filas (espera no pool A, transferência, espera no pool B) recebe dois carimbos e emite duas vezes. E a
+chave continua exigida para ordenar contra os **demais** eventos da mesma sessão. Ver **Problema 34** (o
+mesmo tópico, sem chave, custou o defeito mais caro do repositório).
+
+🔎 **Resíduo que isto expõe, ainda não medido:** `queue_wait_segment_id` é `uuid5(tenant, session_id)`,
+**sem discriminador de passagem nem de pool** — as duas esperas do parágrafo acima colapsam numa linha
+só e vence a última. Mesma família do resíduo de `participation_intervals`. **Bloqueia a D14**: pôr o
+alvo de SLA no segmento não adianta enquanto os dois segmentos forem a mesma linha.
+
+**Gate re-executável:** `packages/routing-engine/src/plughub_routing/tests/test_queue_wait_segment.py`
+(4 testes, Redis real, skip explícito lendo as duas variáveis de ambiente). O que cada um faria ficar
+vermelho está no docstring. **Falseabilidade conferida**, não presumida: revertendo o portão para
+`is None` dentro do container, o resultado é `1 failed, 3 passed` e o que falha é exatamente
+`test_no_stamp_emits_nothing`. O `_FakeProducer` exige `key=` na forma real da chamada — mock mais
+permissivo que o contrato já escondeu bug aqui antes.
+
+**Resíduos declarados:**
+- `_emit_queue_timeout` mantém emissor próprio (`emit_segment=False` no caminho de `max_wait`).
+  Unificar agora produziria emissão dupla. **Lacuna:** `max_wait_exceeded` na fila **atendida** segue
+  sem segmento de espera.
+- A reclassificação do agente de fila para `role='specialist'` (bridge) move o tempo dele para dentro
+  de `agent_time_ms`: medido `retencao_humano` 456 083 → 477 968 ms (**+4,8 %**), 27 sessões, 11 hoje
+  em zero. **Não é retroativo** — linhas antigas mantêm `role='queue'`; o número deriva com tráfego
+  novo.
+- A linha `pool_id → _flow_pool_id` (D10) é **no-op** enquanto o `queue_config` do pool tiver só
+  `skill_id`.
+- **36.2 segue sem causa** (as 5 sessões que não fecham). Confirmado nesta rodada: a população ficou
+  **imóvel em 5**, como previsto — a duplicação não a explica (interseção medida = 1).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

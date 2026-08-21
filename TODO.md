@@ -1268,6 +1268,32 @@ atendido. Cobertura parcial sem sintoma próprio: some no mesmo silêncio da esp
    a proteção é acidental, e some no instante em que alguém acrescentar o `participant_joined`.
    O bridge já usa `key=session_id` (`main.py:3513`). ⚠️ **Conserto independente da D12 — não adiar.**
 
+   > ⚠️ **Emendado por medição (2026-08-21, P3) — e a emenda foi CORRIGIDA no mesmo dia.**
+   >
+   > **O que se mediu:** um contato que escala produziu **TRÊS** `participant_left` para a mesma
+   > sessão (`handoff 0 ms` no `sac_ia`, `handoff 0 ms` no `retencao_humano`, `abandoned 8 273 ms`),
+   > todos com o **mesmo** `segment_id` determinístico. Sem `participant_joined` nenhum: quem vence a
+   > dedup do `ReplacingMergeTree` é quem chega por último, e isso só é determinístico dentro de uma
+   > partição.
+   >
+   > ⚠️ **Mas duas daquelas três eram as FANTASMAS do portão morto.** Com o portão corrigido, uma
+   > passagem pela fila emite **uma** vez (a 1ª emissão apaga o carimbo), e aquele caso específico
+   > deixou de ser reproduzível. *Escrevi a refutação apoiado em evidência que o próprio fix removeu —
+   > registrado aqui em vez de silenciosamente reescrito.*
+   >
+   > **O que sobrevive, e por quê:** *"o evento é único"* segue falso, agora por um caminho legítimo —
+   > uma sessão que passa por **DUAS** filas (espera no pool A, handoff, transferência, espera no pool
+   > B) recebe dois carimbos e emite duas vezes. A chave continua exigida para ordenar contra os
+   > **demais** eventos da mesma sessão, que é o que a leitura de topologia assume.
+   >
+   > 🔎 **Resíduo NOVO que isto expõe:** `queue_wait_segment_id` é `uuid5(tenant, session_id)` — **sem
+   > discriminador de passagem nem de pool**. As duas esperas do parágrafo acima colapsam numa linha
+   > só, e vence a última. É a mesma família do resíduo de `participation_intervals` (`ORDER BY` sem
+   > discriminador, § Postura de Engenharia). **Bloqueia a D14**, que é exatamente sobre o contato que
+   > espera em duas filas: pôr o alvo de SLA no segmento não adianta enquanto os dois segmentos forem
+   > a mesma linha. Conserto provável: incluir o `pool_id` de destino no namespace do `uuid5`. **Não
+   > medido** — não há caso de duas filas na população atual.
+
 ### A ordem de implementação é FORÇADA por um `anyIf`, não por preferência
 
 `reports_query.py:5754`: `q_outcome = anyIf(outcome, role='queue')`, agregado **por sessão**. Com dois
@@ -1285,11 +1311,25 @@ sobra nenhum `role='queue'`.)*
 | # | O quê | Verde é |
 |---|---|---|
 | P0 ✅ | baseline rodada 2026-08-28 | **inalterada desde 08-21**: 469 `closed`/sem-fila · 27 `suspended` · **10** `closed`+ab · 8 `active` · **5** `never_closed`+ab · 3 nulas. População 522. Segmentos `queue`: 41 sessões com 1, 4 com 2, 1 com 3 (= 52) |
-| P1 ✅ | `key=session_id` no emissor do routing (`mute_queue.py`) — isolado | escrito 2026-08-28; não muda dado, fecha o defeito latente de partição |
-| P2 ✅ *(escrito, NÃO validado)* | ver "as-built" abaixo | pendente de build + gate |
-| P3 | re-rodar a baseline do P0 + a testemunha | os **10** que fecham continuam fechando; os 469 `closed` não mudam de forma; TMA/AHT medidos **antes e depois** e a mudança declarada |
+| P1 ✅ | `key=session_id` no emissor do routing (`mute_queue.py`) — isolado | escrito 2026-08-28; **não** era isolado nem cosmético: ver refutação acima |
+| P2 ✅ | ver "as-built" abaixo | construído e validado 2026-08-21 |
+| P3 ✅ | build + preflight + gate + testemunha | **fechado 2026-08-21**: coorte `role='queue'` 3 → 1 · `closed`+ab 10 → **11** · `never_closed`+ab **imóvel em 5** (previsto) · gate `test_queue_wait_segment.py` 4/4 com falseabilidade conferida |
 
-#### P2 as-built (escrito 2026-08-28 — **ainda sem build e sem gate**)
+#### P2 as-built (escrito 2026-08-28 · **construído, medido e corrigido 2026-08-21**)
+
+> ⚠️ **O portão descrito abaixo nasceu MORTO, e o P3 só o encontrou porque mediu a população que NÃO
+> devia ter linha.** O código dizia `if raw is None`, e `_decode` devolve `""` para chave ausente
+> (`mute_queue.py:60-63`), nunca `None` — logo o `return False` jamais disparava e **todo contato
+> roteado direto emitia `role='queue' outcome='handoff' duration_ms=0`**. Espera fantasma, exibida no
+> drill como a *primeira participação do contato*. Corrigido para `if not raw`; coorte medida **3 → 1**
+> linha de fila, com o caso legítimo (47 327 ms) intacto e taxa da fantasma antes do fix de **2 em 2**.
+> A frase *"sem carimbo não emite nada"* abaixo era a **intenção**, não o comportamento.
+>
+> Duas lições que valem além deste item: (a) a fantasma era **invisível na query canônica do 36.2**
+> (lá o predicado é `outcome='abandoned'`; a fantasma é `handoff`) — testemunha certa para o defeito
+> que ela mede, cega para o que o conserto criou; (b) é a **Mudança 35 outra vez** (`""` do lado
+> errado de uma guarda), quatro dias depois e no mesmo mecanismo ⇒ virou invariante de método no
+> `CLAUDE.md` § Postura de Engenharia.
 
 O desenho mudou ao implementar, e para melhor: **não foi preciso extrair função nem espalhar chamadas
 novas**. `resolve_mute_exit` já estava plugado em TODAS as saídas de fila — só se recusava a agir no
@@ -1320,7 +1360,24 @@ tier atendido. A mudança foi **remover a recusa**.
 **Não tocado, de propósito:** o emissor próprio do `_emit_queue_timeout` (passo 3). Unificá-lo agora
 produziria emissão dupla; a lacuna (`max_wait` na fila atendida) está nomeada no docstring e aqui.
 
-**Falta:** `docs/arcos/system-queue.md:134` cita o nome antigo · build dos dois serviços · gate.
+~~**Falta:** `docs/arcos/system-queue.md:134` cita o nome antigo · build dos dois serviços · gate.~~
+**✅ Tudo pago em 2026-08-21** — `system-queue.md` item 4 corrigido (com nota da mudança de escopo),
+build + `up -d` dos dois serviços, preflight de símbolo (`True True` / `1`), gate manual em 3 contatos
+reais e gate re-executável `packages/routing-engine/src/plughub_routing/tests/test_queue_wait_segment.py`
+(4 testes, Redis real, skip explícito lendo as DUAS variáveis). Registro: `CHANGELOG.md` +
+`conference-mechanics.md` § **Mudança 37**.
+
+**Ainda aberto neste arco** (nenhum é bloqueio do que foi entregue):
+- **Unificar o emissor do `_emit_queue_timeout`** — fatia própria; junto daria emissão dupla.
+  Lacuna viva: `max_wait_exceeded` na fila **ATENDIDA** segue sem segmento de espera.
+- **A linha `pool_id → _flow_pool_id` (D10) é no-op** enquanto o `queue_config` do pool tiver só
+  `skill_id` — destravada pelo defeito 2 (tenant default suprimido), que sobe na fila por dois
+  caminhos independentes (este e o estado-alvo da D10.1).
+- **O efeito colateral de TMA ainda não foi observado em dado novo.** O `+4,8 %` em `retencao_humano`
+  é recomputação hipotética sobre histórico; **não é retroativo** (linhas antigas mantêm
+  `role='queue'`), então o número só deriva com tráfego novo. Nada a fazer — só não confundir a
+  previsão com medição quando alguém reabrir o relatório.
+- **36.2 segue sem causa.** Confirmado nesta rodada pela imobilidade prevista (5 → 5).
 
 ### SLA está no grão errado — é do SEGMENTO, não da sessão *(D14, 2026-08-28)*
 
@@ -1338,6 +1395,16 @@ violação da segunda espera é **invisível**, e a média mistura populações 
 
 **Destravado pela D12:** enquanto a espera não tinha registro por segmento, não havia onde pôr o alvo.
 Agora há.
+
+⚠️ **Mas ainda BLOQUEADO por um resíduo do próprio produtor (achado 2026-08-21):**
+`queue_wait_segment_id` é `uuid5(tenant, session_id)`, **sem discriminador de passagem nem de pool**.
+O caso de motivação desta decisão — contato que espera 30 s por um pool e 120 s por outro — produz
+**dois carimbos e duas emissões que colapsam na MESMA linha**, vencendo a última. Pôr `sla_target_ms`
+no segmento não resolve nada enquanto os dois segmentos forem um só. **A ordem é: discriminar o id
+ANTES de migrar os três leitores.** Conserto provável: incluir o pool de destino no namespace do
+`uuid5` (barato, mas muda a identidade das linhas já gravadas — declarar a descontinuidade).
+**Não medido:** a população atual não tem caso de duas filas, então o defeito é dedutivo, não
+observado.
 
 ⏳ **A decidir antes de codar:** alvo **copiado** para o segmento no fechamento da espera (denormalização
 simétrica à que o routing já faz para a sessão — sobrevive a mudança de config, guarda "o alvo do dia")

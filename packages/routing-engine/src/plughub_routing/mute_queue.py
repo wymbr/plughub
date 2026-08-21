@@ -169,8 +169,25 @@ async def resolve_queue_exit(
 
     fq_key = first_queued_key(tenant_id, session_id)
     raw    = _decode(await redis_client.get(fq_key))
-    if raw is None:
+    if not raw:
         # Nunca passou pela fila (ou o carimbo expirou): não há espera a declarar.
+        #
+        # ⚠️ Era `if raw is None`, e esse teste NUNCA era verdadeiro: `_decode`
+        # devolve `""` para chave ausente (linha 60-63), não `None`. O portão
+        # ficava morto e todo contato roteado DIRETO — sem fila nenhuma —
+        # emitia um segmento `role='queue' outcome='handoff' duration_ms=0`,
+        # porque logo abaixo `int(float(raw)) if raw else now_ms` cai no
+        # `now_ms` e a subtração dá zero. Espera fantasma no relatório de
+        # Fila/SLA, que é justamente o que este produtor existe para consertar.
+        #
+        # Medido 2026-08-21, coorte de 3 contatos: 2 sem fila → 2 fantasmas
+        # (100%); o contato com espera real (47 327 ms) saiu correto ao lado.
+        # Invisível na query canônica do Problema 36.2, que conta
+        # `outcome='abandoned'` — a fantasma é `handoff`.
+        #
+        # É o "valor plausível" da § Postura de Engenharia: `""` no lugar de
+        # ausência derruba a guarda sem deixar rastro, e o defeito só aparece
+        # quando alguém conta a população que NÃO devia ter linha.
         return False
     await redis_client.delete(fq_key)
 

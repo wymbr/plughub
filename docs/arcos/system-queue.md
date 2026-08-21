@@ -131,9 +131,17 @@ Isenção de C remove o limite comercial → os limites técnicos são explícit
    hard-coded no `routing_config`, nunca ilimitado com Config fora). Sweep de
    timeout channel-aware p/ filas mudas (atendida mantém max_wait_s do pool);
    canal 0 no enqueue mudo → close gracioso imediato (nunca dead air).
-4. ✅ Segmentos sintéticos (`mute_queue.resolve_mute_exit`): `handoff` na
+4. ✅ Segmentos sintéticos (`mute_queue.resolve_queue_exit`): `handoff` na
    transição unadmitted→admitida; `abandoned` nos drains (desistência) e
    limpeza-sem-segmento no caminho de max_wait (que já emite o dele).
+   ⚠️ **Renomeada em 2026-08-21** (era `resolve_mute_exit`): passou a registrar a
+   espera nos **DOIS** tiers — atendido e mudo —, porque já era chamada em todas
+   as saídas de fila e só se recusava a agir fora do mudo. O portão deixou de ser
+   a pertença ao SET `unadmitted` e passou a ser o carimbo `first_queued_ms`, que
+   existe nos dois. Sem carimbo não se emite nada — ausência honesta, nunca
+   `duration_ms` fabricado a partir de `now`. Ver `conference-mechanics.md`
+   § Mudança 37 (inclui o defeito `if raw is None` × `""` que veio junto e o
+   gate `test_queue_wait_segment.py`).
 5. ✅ Reconciler da admissão limpa `{t}:queue:unadmitted` de sessões fechadas
    (backstop; TTL 7d nas chaves `first_queued`).
 6. ✅ Drain com orçamento — **corrigido na validação** (2026-06-05): a checagem

@@ -303,6 +303,17 @@ system_error         — unrecoverable error
   calmo, não no dia em que você precisa da stack de pé. Corolário para diagnóstico: quando um
   serviço falha logo após um wipe, a hipótese ordenada não é "o wipe quebrou", é "o wipe revelou".
 
+- **Guarda sobre valor decodificado testa `if not x`, NUNCA `is None` — o vazio é o valor plausível
+  mais barato de produzir.** Os decodificadores deste repo normalizam ausência para string vazia
+  (`mute_queue._decode` devolve `""`, não `None`), então `is None` compara com um valor que a fonte
+  **não produz**: o ramo fica morto e o caminho segue como se o dado existisse. Duas ocorrências no
+  MESMO mecanismo em quatro dias: `??` × truthiness sobre `instanceId` (Mudança 35, agente de fila
+  surdo ao cliente) e `if raw is None` sobre `first_queued_ms` (Mudança 37 — todo contato roteado
+  direto emitindo uma espera fantasma de 0 ms). O modo de falha é sempre o mesmo e nunca fica
+  vermelho: **o defeito só aparece quando alguém conta a população que NÃO deveria ter linha.** Ao
+  criar um produtor, o teste que importa não é "registrou o fato", é "**não** registrou o não-fato" —
+  e ele precisa da testemunha de presença ao lado, senão um produtor que nunca emite passa.
+
 - **Em ClickHouse, alias de agregado NUNCA repete nome de coluna real da tabela.** `any(pool_id) AS
   pool_id` faz o alias sombrear a coluna que o `WHERE` usa, e a query inteira falha
   (`ILLEGAL_AGGREGATION`, code 184) — não a coluna, a query. Já aconteceu duas vezes: `any(attr.agent_type)`
