@@ -1029,11 +1029,15 @@ independentes e podem cair antes.
 > e o `joined` inserido depois vencia a dedup nas duas tabelas. Conserto em duas partes
 > (`key=session_id` + `ReplacingMergeTree(row_version)`), gate 3/3 na forma que antes era moeda.
 >
-> **Resíduo 1 — o passado não foi reparado.** Nos casos antigos o merge já apagou fisicamente a linha
-> perdedora; o `DEFAULT` do `row_version` só conserta onde as duas ainda coexistem. A contagem segue
-> `primary` 5 · `queue` 2 · `specialist` 2. Os eventos continuam no tópico `conversations.participants`,
-> então um reprocessamento gated por `source` repararia — **decisão em aberto**, não trabalho pendente:
-> reprocessar mexe em substrato de qualidade e pede o discriminador `origin` no lugar certo.
+> **Resíduo 1 — ~~o passado não foi reparado~~ REVISTO 2026-08-21: ele FOI reparado, nos dois papéis que
+> importavam.** A contagem `primary` 5 · `queue` 2 · `specialist` 2 está **stale**. Re-medido em
+> sessão fechada: **`primary` 0 · `specialist` 0 · `queue` 4** (e os 4 de fila são todos POSTERIORES ao
+> fix, logo não são passado — são produção nova, ver a seção do diagnóstico refutado abaixo).
+> O `DEFAULT` do `row_version` reparou onde as duas linhas ainda coexistiam, e aparentemente isso cobriu
+> a população de `primary`/`specialist`. **A decisão sobre reprocessar deixa de ser urgente** — não há
+> passado de `primary`/`specialist` a reparar, e o de fila não se conserta por reprocessamento (o evento
+> de saída nunca foi produzido). Se algum dia voltar à mesa, segue valendo que reprocessar mexe em
+> substrato de qualidade e pede o discriminador `origin` no lugar certo.
 >
 > **Resíduo 2 — `queue_config.skill_id` é decorativo** (defeito SEPARADO, não era a causa do segmento
 > aberto). Ver a seção própria abaixo.
@@ -1072,7 +1076,53 @@ contato real. ⚠️ Conferir também `origin`: seed que escreve `origin='live'`
 
 ---
 
-## Segmento que nunca fecha — `participant_left` não publicado na saída por SUPERAÇÃO *(diagnosticado 2026-08-14, não consertado)*
+## ~~Segmento que nunca fecha — por SUPERAÇÃO~~ — DIAGNÓSTICO REFUTADO por medição *(2026-08-21)*
+
+> ⚠️ **A "superação" não é a causa, e não há UM defeito aqui — há TRÊS.** Medição completa, com
+> transcrição e log de produção, em
+> [`docs/product/fila-janela-de-espera-2026-08-21.md`](docs/product/fila-janela-de-espera-2026-08-21.md).
+>
+> **Contagem de abertos em sessão FECHADA** (o escopo que julga — aberto em sessão viva é normal, e foi
+> esse discriminador que faltou na medição de 14/08):
+>
+> | Papel | 2026-08-14 | 2026-08-21 |
+> |---|---|---|
+> | `primary` | 5 | **0** |
+> | `specialist` | 2 | **0** |
+> | `queue` | 2 | **4** — e **4 de 4 posteriores a 2026-08-18** |
+>
+> `primary`/`specialist` **caíram com o fix de 18/08** (chave no Kafka + `row_version`), que fechou a
+> produção e reparou o passado desses dois papéis. O que sobra é específico de fila, é vivo, e são três
+> mecanismos distintos:
+>
+> 1. **Re-entrância** — `activate_queue_agent` roda DUAS vezes para a mesma sessão (medido: dois
+>    `marker SET` a 32 ms um do outro). A 2ª bate em `Skill already running`, retorna, e **apaga o
+>    marcador que a 1ª escreveu**; a 1ª fica bloqueada esperando sinal que depende da chave apagada.
+>    Dois defeitos de ORDEM: o `participant_joined` é publicado **antes** do guard (guard depois do
+>    efeito não previne, aborta), e o `DELETE` **não confere posse**. Gatilho provável: escalate/transfer
+>    chegando para sessão já enfileirada.
+> 2. **Ativação única que nunca retorna** — a causa DOMINANTE. `marker SET` + `Activating` e depois
+>    silêncio, sem `Skill already running` e sem `DELETE`. Contador: 2 ocorrências do guard em 6 h para
+>    4 segmentos abertos ⇒ a re-entrância explica no máximo metade. **Causa não identificada.**
+> 3. **O INVERSO — sessão `active` com segmento `closed`.** `sess-e2e-2920b0d1-…` aparece na tela com
+>    status `active`, outcome `abandoned`, e o segmento de fila fechado (6 s, `abandoned`). É o que o
+>    operador reproduz derrubando o webchat na fila: **o abandono não fecha a sessão**, então
+>    `customer_abandon`/`max_wait_exceeded` perdem casos em silêncio. `active` + `abandoned` na mesma
+>    linha é estado impossível e deveria ser barulhento na tela. Não medido em volume.
+>
+> **E o maior de todos não é nenhum dos três: é o segmento que NÃO NASCE** — ver a seção
+> *"A janela de espera não tem produtor"* abaixo.
+>
+> **Conserto do (1) tem forma conhecida:** `segment_id` determinístico derivado do `session_id` (hoje
+> `uuid.uuid4()` por invocação, `main.py:5924`) faz invocação repetida produzir a MESMA linha e o
+> `ReplacingMergeTree` deduplicar — sem guard novo. Mais `SET NX` no marcador e posse no `DELETE`.
+>
+> **Gate possível:** os casos são reproduzíveis pelo **e2e** (`e2e-inbound-*`,
+> `e2e-conference-specialist-*`), não por teste manual. Testemunha obrigatória: os 47 segmentos de fila
+> que fecham têm de continuar fechando.
+>
+> O material abaixo é o histórico da investigação de 14/08. Mantido porque a cadeia medida ali continua
+> válida como observação — só a conclusão ("superação") não se sustenta.
 
 Sintoma na tela: um contato **encerrado** exibe segmento com `live` + `join`, e o cabeçalho diz
 `1 active`. A UI está honesta — `SegmentList.tsx:96` deriva `live` de `ended_at === null`.
@@ -1107,6 +1157,113 @@ por **superação**, não por término negociado, e esse caminho não publica `p
 que tira o contato da fila). ⚠️ Toca mecânica de conferência ⇒ pelo `CLAUDE.md`, exige atualizar
 `docs/guias/conference-mechanics.md` § Histórico de Problemas e Correções **antes** de considerar
 concluído. Gate precisa de testemunha: os 14 que fecham têm de continuar fechando.
+
+---
+
+## A janela de espera não tem produtor — e o segmento `role='queue'` nunca foi ela *(medido 2026-08-21; **D12** do ADR)*
+
+**Contato real, manual, no WebChat** (`81d194ad-…-ce81b30e8343`): o segmento de IA fecha às
+`18:14:46.926` com `escalated_human`, o humano entra às `18:15:08.276`. **21,35 s de espera, zero
+registro** — nem segmento, nem `session_transitions`, nem nada. O pool tem `SLA (ms) = 300000`
+configurado na tela; nada mede contra ele.
+
+E não é vazamento: existem **52** segmentos `role='queue'` no tenant. É **ausência seletiva** — a fila
+nasce em alguns caminhos e não no que um contato real percorre.
+
+**O achado que reordena:** o segmento `role='queue'` **não é a janela de espera** — é o segmento de
+trabalho do agente de fila. A transcrição de `sess-e2e-2920b0d1-…` mostra conversa real dentro da janela
+(*"você está na fila… pode enviar mensagens"* → cliente responde → agente responde), e a duração de 6 s
+é a do **flow**, não a do tempo aguardado (`_q_joined_at` é carimbado antes de `activate_native_agent`;
+o fim é o retorno dessa chamada). **Refuta a linha *(espera)* da D9** do ADR, que atribuía a espera ao
+`duration_ms` de `role='queue'`.
+
+**Logo a janela de espera nunca existiu como fato** — nem no caso atendido (onde o segmento mede outra
+coisa) nem no mudo (onde não há segmento nenhum).
+
+**Decidido (D12):** a espera é fato de **ROTEAMENTO**. Quem tem o fato é o routing-engine, que já loga
+as duas bordas (`Queued session=… — no agents available` / `Contact persisted to queue` na entrada;
+`Queue cleanup: removed … reason=…` na saída). O bridge só sabe da espera quando decide entreter.
+
+**Veículo = segmento, não tabela nova.** `session_transitions` **não comporta**: medido, é livro-razão de
+suspend/resume com token (`resume_token`, `step_id`, `suspend_reason`, `resume_expires_at`), sem
+`from_state`/`to_state` e sem enum de estado — *o nome é mais largo que o conteúdo*, mesma família da
+colisão `SessionMeta` × `ReplayContext`. Alargá-la deixaria a maioria das colunas nula por linha; tabela
+nova violaria *"nunca inventar o 3º mecanismo"*.
+
+**Emenda junto (D12):** o agente de fila passa a ser `specialist`. ⚠️ **Efeito colateral a declarar:**
+`agent_time_ms` filtra `role IN ('primary','specialist')`, então a reclassificação **move o tempo do
+agente de fila para dentro do tempo de agente** e muda TMA/AHT do ambiente. Defensável (é trabalho de
+IA), mas mudança de número sem pedido é *valor plausível* — entra declarada ou não entra.
+
+⏳ **Aberto:** `retencao_humano` é **push** (confirmado na tela), então os 21,35 s são fila de verdade.
+Mas em pool de **pull** existe uma segunda espera — "agente disponível que ainda não reivindicou" — e
+para SLA as duas contam. Nenhuma tem registro hoje.
+
+---
+
+## O tenant default de fila é suprimido pelo `skill_id` legado *(medido 2026-08-21)*
+
+Estado do pool no agent-registry (não no YAML): `"queue_config": {"skill_id": "skill_fila_v1"}`, **sem
+`pool_id`**. A tela mostra `Queue pool: — Tenant default —` e o texto de ajuda diz *"Empty = tenant
+default"*. **É falso nesta configuração.**
+
+| Linha | O que acontece |
+|---|---|
+| `main.py:5735` | `if not queue_cfg:` → o objeto é **truthy** (tem `skill_id`) ⇒ **ramo do tenant default PULADO** |
+| `:5788-5789` | `agent_type_id = explicit_skill_id` = `skill_fila_v1` |
+| `:5841` | `_flow_pool_id = "" or pool_id` = **`retencao_humano`** |
+| `:5845-5855` | `resolve_flow_for_agent` → `None` → ERROR, retorno cedo, nada criado |
+
+Log casando linha a linha: `Agente de fila NÃO ativado: destino=retencao_humano fila=retencao_humano
+agent=skill_fila_v1`.
+
+**O `skill_id` legado não é inerte.** A tela o descreve como *"preserved, but it does not resolve the
+deploy"* — verdade pela metade: ele não resolve o deploy **e** bloqueia o default. Agrava:
+`PoolsPage.tsx:927` envia `queue_config` sempre que **qualquer** dos dois campos está preenchido, então
+limpar o Queue pool na UI **não** esvazia o objeto enquanto o legado estiver lá.
+
+Duas famílias conhecidas num defeito só: *"preservado" lido como inerte* (irmão de *"campo morto pode
+gatear tela viva"*) e **valor plausível** — `queue_pool_id or pool_id` transforma config ausente num alvo
+que parece razoável e nunca pode funcionar, convertendo lacuna de config em erro de runtime num log que
+ninguém lê, com o contato esperando mudo.
+
+**Três frentes independentes:**
+
+- **config-time:** a tela do pool sabe se o queue pool escolhido tem slot promovido — deve **recusar ou
+  avisar**, não deixar salvar tratamento de fila que não roda;
+- **semântica:** o gatilho do tenant default deve ser *"não há pool de fila resolvível"*, não *"o objeto
+  `queue_config` é vazio"*;
+- **fallback:** `queue_pool_id or pool_id` deve **recusar alto**, não adivinhar.
+
+---
+
+## Papel de participante tem DOIS vocabulários declarados, e o masking usa o estreito *(medido 2026-08-21)*
+
+| Schema | Valores | Quem usa |
+|---|---|---|
+| `ParticipantRoleSchema` (`schemas/src/common.ts:81`) | 5 — **sem `queue`** | `SessionParticipant.role` **e `authorized_roles` do masking** (`audit.ts:247`) |
+| literal inline em `ContactSegmentSchema.role` (`contact-segment.ts:62`) e `participant_role` (`:115`) | 6 — **com `queue`** | segmento e evento Kafka |
+
+O segundo **não referencia** o primeiro: repete a lista à mão. Divergência de um valor não é descuido
+isolado — é o resultado esperado de duas fontes para o mesmo vocabulário. Há ainda um **terceiro**
+vocabulário adjacente: `author_role` da mensagem, que na transcrição de `sess-e2e-2920b0d1-…` exibe
+`PRIMARY` para o participante cujo segmento é `queue`.
+
+**Onde morde:** `authorized_roles` é `z.array(ParticipantRoleSchema)`, default `["evaluator","reviewer"]`.
+Logo o papel `queue` **não pode nem ser expresso** numa política de masking — nem para autorizar, nem
+para negar. E o agente de fila é justamente quem conversa com o cliente (é o único step `reason` sobre
+fala de cliente no repositório).
+
+**Supervisor, o furo simétrico:** está nos dois enums e **nenhum caminho o emite** (a D9.1 do ADR já
+registra). `_part_role = "specialist" if conference_id else "primary"` (`main.py:4503`) é a única decisão
+de papel do sistema, e é binária. Consequência que a discussão de 2026-08-21 acrescenta: **o supervisor
+hoje lê a sessão SEM ser participante** — `supervisor_state`, `supervisor_capabilities`, `copilot_state`,
+`/api/inject-context` são tools/endpoints, não entrada na conferência. Logo o acesso **não aparece no
+roster** (não é auditável como participação) e **não há evento de entrada para anunciar** — a exigência
+de *"o Console deve avisar que um supervisor entrou"* só é implementável depois que o supervisor virar
+participante de verdade.
+
+Encadeia com o pré-requisito 2 do **R8** (*"produzir o vocabulário"*).
 
 ---
 
@@ -1262,6 +1419,22 @@ Qualquer confronto entre as duas superfícies vai discordar em 15.
 Não investigado: é anterior à F1b, ortogonal a ela, e entrar nisso teria trocado o escopo da fase.
 Primeira pergunta para quem pegar: são antigos (anteriores a algum conserto de ingest) ou o
 `sac_ia` produz isso hoje? `min/max(started_at)` desses 15 responde em uma query.
+
+> ✅ **Convergência medida 2026-08-21 — esta seção e a do "segmento que nunca fecha" descreviam as
+> MESMAS 15 linhas.** Medido: **16** segmentos `primary` abertos no tenant, e **uma única sessão** os
+> contém (status `active`, legítima). Os outros **15** pertencem a `session_id` que não existem em
+> `sessions` — e a contagem de órfãos por papel devolve **`primary` 15 e mais nada**.
+>
+> **Muda o enquadramento:** não é *"o segmento não fecha"*, é *"a sessão nunca existiu, então nunca
+> houve fechamento para acontecer"*. São defeitos diferentes — um é do produtor de participantes, o
+> outro do ingest de sessão — e foram contados juntos por meses.
+>
+> **Também explica por que `primary` travado em sessão fechada foi a 0:** os 5 de 14/08 caíram mesmo com
+> o fix de 18/08; os 15 nunca estiveram nessa população. ⚠️ *Um zero só julga se o filtro que o produziu
+> não puder tê-lo fabricado* — o `status='closed'` da minha query os excluía por construção.
+>
+> O número **não cresceu** (15 em 14/08, 15 em 21/08), o que favorece "resíduo histórico" sobre "produtor
+> vivo" — mas `min/max(started_at)` continua sendo a query que decide, e continua não tendo sido rodada.
 
 ---
 

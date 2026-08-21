@@ -1,7 +1,11 @@
 # ADR — Modelo de três níveis: segment, session, journey
 
-**Status:** aceito — decisões D1–D8 fixadas 2026-08-10. Seções marcadas ⏳ dependem de medição
-(ver §8) e serão fechadas antes do arco de workflow começar.
+**Status:** aceito — D1–D8 fixadas 2026-08-10, D9 no mesmo dia, **D10–D13 em 2026-08-21**. Seções
+marcadas ⏳ dependem de medição (ver §8).
+
+> ⚠️ **A linha *(espera)* da D9 foi REFUTADA por medição em 2026-08-21** e substituída pela **D12**.
+> `duration_ms` de `role='queue'` mede o flow do agente de fila, não a espera do cliente — e não existe
+> quando o agente não roda. Ver a correção dentro da D9.
 
 **Contexto imediato:** o arco de remoção do legado de workflow por token travou numa pergunta que não
 era sobre workflow — *"qual dos três níveis substitui a `WorkflowInstance`?"*. Ninguém conseguia
@@ -350,7 +354,22 @@ As duas grandezas são legítimas, precisam de nomes diferentes — e, o achado 
 |---|---|---|---|
 | **tempo-agente** | agente × tempo | quanto RECURSO este atendimento consumiu? | `SUM(segment.duration_ms)` filtrado |
 | **tempo decorrido** | tempo | quanto o caso levou, do ponto de vista do cliente? | wall-clock (sessão) / `min→max` (journey) |
-| *(espera)* | tempo | quanto o cliente esperou? | `duration_ms` de `role='queue'`, **parcela separada** |
+| *(espera)* | tempo | quanto o cliente esperou? | ⚠️ **REFUTADO 2026-08-21 — ver bloco abaixo** |
+
+> ⚠️ **Correção medida em 2026-08-21: `duration_ms` de `role='queue'` NÃO é a espera do cliente.**
+> É a duração do **flow do agente de fila** — `_q_joined_at` é carimbado imediatamente antes de
+> `activate_native_agent` e o fim é o retorno dessa chamada (`main.py:5924-5998`). Transcrição de um caso
+> real (sessão `sess-e2e-2920b0d1-…`, segmento `queue` de 6 s) mostra o agente **conversando** com o
+> cliente dentro da janela. É segmento de trabalho, e vinha sendo lido como espera.
+>
+> Pior: ele **só existe se o agente de fila rodar**. Contato real medido no mesmo dia
+> (`81d194ad-…-ce81b30e8343`) esperou **21,35 s** entre o fim do segmento de IA (`escalated_human`,
+> 18:14:46.926) e a entrada do humano (18:15:08.276) e produziu **zero** registro — nem segmento, nem
+> linha em `session_transitions`, nem nada. **A janela de espera nunca existiu como fato**, nem no caso
+> atendido (onde o segmento mede outra coisa) nem no mudo (onde não há segmento).
+>
+> Consequência para a D9: a linha *(espera)* não tem fonte hoje. Ver **D12** e
+> [`docs/product/fila-janela-de-espera-2026-08-21.md`](../product/fila-janela-de-espera-2026-08-21.md).
 
 ⚠️ **A soma NÃO é uma duração, e chamá-la assim é o erro a evitar.** Segmentos **se sobrepõem**, por três
 mecanismos distintos:
@@ -408,6 +427,101 @@ Levantado junto, e a spec tem de usar o real:
 gates e smokes; nenhuma exercita suspend→resume→continua→fecha. Sete sessões, das quais uma passou pelo
 resume e foi encerrada pelo *scanner*. Todo `0` aqui é *"não houve o fenômeno na amostra"*, não
 *"o fenômeno não ocorre"* — a distinção que este repositório já pagou caro para aprender.
+
+---
+
+## D10–D13 — vocabulário de contato, pool e espera
+
+**Aceitas 2026-08-21.** Discussão e medição em
+[`docs/product/fila-janela-de-espera-2026-08-21.md`](../product/fila-janela-de-espera-2026-08-21.md).
+
+As quatro caem sob a **D2** (regra dual de escopo) — é isso que dá confiança de que não são preferência:
+cada uma põe um fato no escopo dele.
+
+### D10 — Pool de ENTRADA é da sessão; pool que ATENDE é do segmento
+
+`entry_pool_id` é fato da **sessão** (imutável, nasce com o contato; já entregue pela F1b como
+first-write-wins). Pool que atende é fato do **segmento**. `attended_pool_ids` na linha da sessão é
+**projeção** — legítima para filtrar, nunca verdade, e por isso a F3 a construiu como pós-passe.
+
+**Consequência que fecha uma sobrecarga viva:** o segmento de fila carrega hoje o pool de **destino**
+(`main.py:5919-5923`, dimensão do relatório Fila/SLA) enquanto quem executa é o pool de **fila**
+(`_flow_pool_id`). Um campo carrega a verdade que o relatório quer ao custo da que a atribuição quer.
+Com a D12 são dois registros, cada um com o seu pool, e a sobrecarga desaparece sem campo novo.
+
+**Aplica-se também ao runtime:** em `session:{id}:meta`, o canal escreve `entry_pool_id` (dono: canal) e o
+bridge escreve `pool_id` (dono: bridge). Isso fecha a fatia C de
+[`session-meta-ownership.md`](../guias/session-meta-ownership.md) **e** a maior parte da fatia B — hoje
+webchat/webrtc não roubam campo do bridge, escrevem *entrada* num campo chamado *atendimento*; renomeado,
+a violação some por construção, e "recusar campo alheio" passa a não ter violador legítimo a acomodar.
+
+### D11 — `session` é qualquer acesso à plataforma; **"contato" é FILTRO, não nível**
+
+Os três níveis do §2 continuam fechados: `segment · session · journey`. `session` = **qualquer acesso à
+plataforma por qualquer canal** — inclusive maquinaria (`trigger`), retorno assíncrono e sessão de
+wrap-up. **"Contato" deixa de ser um nível e passa a ser um filtro** sobre um atributo da sessão.
+
+Medido: 518 sessões no tenant, **96 delas `trigger`** — maquinaria sem cliente do outro lado. Na journey
+de referência, 2 das 4 sessões são acesso do cliente. *Sessões ≠ contatos* já era decisão as-built em três
+lugares independentes (`purpose=internal`, exclusão do wrap-up, `spawn_reason`); o que faltava era admitir
+que o termo sobrecarregado é **"contato"**, não o modelo.
+
+**Journey NÃO substitui isto.** Journey agrupa, não classifica: uma journey com 4 sessões não diz quais 2
+o cliente tocou. Usá-la como resposta a *"quantas vezes o cliente nos procurou"* move o erro de cabeçalho
+um nível acima. É a **D3** aplicada ao caso: pertença tem uma regra, o resto é filtro.
+
+### D12 — A janela de espera é fato de ROTEAMENTO, e precisa de produtor próprio
+
+Refuta a linha *(espera)* da D9 (ver a correção lá). A espera não pode ser efeito colateral da ativação do
+agente de fila, porque essa ativação depende de config que degrada em silêncio — e quando ela não ocorre,
+não sobra registro nenhum.
+
+**Quem tem o fato é o routing-engine**, que já loga as duas bordas (`Queued session=… — no agents
+available` / `Contact persisted to queue` na entrada; `Queue cleanup: removed … reason=…` na saída). O
+bridge só sabe da espera quando decide entreter.
+
+**Veículo = segmento**, não tabela nova: `session_transitions` é livro-razão de suspend/resume com token
+(`resume_token`, `step_id`, `suspend_reason`, `resume_expires_at`) — **o nome é mais largo que o
+conteúdo**, não há `from_state`/`to_state`, e alargá-la deixaria a maioria das colunas nula por linha.
+Criar uma terceira tabela violaria *"nunca inventar o 3º mecanismo"*.
+
+Duas emendas ao veículo:
+
+1. **`segment_id` determinístico** derivado do `session_id` — hoje `uuid.uuid4()` por invocação
+   (`main.py:5924`). O padrão existe no repositório (quality-ingest deriva ids determinísticos para
+   idempotência). Com id determinístico, invocação repetida produz a mesma linha e o `ReplacingMergeTree`
+   deduplica — o defeito de re-entrância medido some sem guard novo.
+2. **O agente de fila é `specialist`**, não `queue`: ele é agente, faz trabalho de agente e consome
+   inferência. `primary` está descartado por razão dura — o invariante analítico *"atendido = primeiro
+   segmento `primary` da sessão"* faria o contato parecer atendido no instante em que entrou na fila.
+   ⚠️ **Efeito colateral a declarar:** `agent_time_ms` filtra `role IN ('primary','specialist')`, logo a
+   reclassificação **move o tempo do agente de fila para dentro do tempo de agente**. É defensável (é
+   trabalho de IA), mas muda TMA/AHT do ambiente — mudança de número sem pedido é a família *valor
+   plausível*, e tem de entrar declarada.
+
+⏳ **Aberto, não medido:** se `retencao_humano` opera em pull, existem **duas** esperas distintas — "sem
+agente disponível" (fila) e "agente disponível que ainda não reivindicou" (inbox). Para SLA as duas
+contam; hoje nenhuma tem registro confiável.
+
+### D13 — Discriminador de contato é ÚNICO e ternário, derivado de `spawn_reason`
+
+| `spawn_reason` | Classe |
+|---|---|
+| `NULL` | acesso **inbound** |
+| `collect` | acesso **outbound** |
+| `trigger` / `delegate` | **interno** — não há cliente |
+
+**`pools.purpose` deixa de ser critério de contato** e volta a ser só atributo de pool. É a D2 outra vez:
+*"esta sessão teve cliente"* é fato da **sessão**, não do pool — e é exatamente por classificar pelo pool
+que `aprovacao_credito` escapa hoje de `_apply_contact_scope`.
+
+Binário não serve: com só `inbound|outbound`, as 96 sessões `trigger` teriam de virar outbound, inflando
+justamente o número que a D11 existe para tornar confiável.
+
+⚠️ **Medido 2026-08-21: a classe *outbound* tem ZERO amostras** (`collect` e `delegate` ausentes de
+`spawn_reason`), 13 dias depois do F0 do histórico unificado. A decisão vale **no modelo**; *renderizar* a
+terceira classe numa tela hoje seria construir o ramo que nada exercita — a armadilha ANI/DNIS.
+`delegate = 0` segue não explicado, embora o carimbo exista em `webhook.py:1604`.
 
 ---
 
