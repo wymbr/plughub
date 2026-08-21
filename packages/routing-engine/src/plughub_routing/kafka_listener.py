@@ -106,9 +106,16 @@ class SessionClosedEventHandler:
 
     _CLOSED_TTL_S = 7 * 24 * 3600  # 7 days — same as drain_queue comment
 
-    def __init__(self, instance_registry: InstanceRegistry, admission=None) -> None:
+    def __init__(self, instance_registry: InstanceRegistry, admission=None,
+                 producer=None) -> None:
         self._instances = instance_registry
         self._admission = admission
+        # D12 (2026-08-28): este handler é a saída de fila do ABANDONO — cliente
+        # que cai enquanto espera. Era o único ponto de saída SEM emissor de
+        # segmento, e é exatamente o caso do Problema 36.3 (*"o segmento de fila
+        # nunca nasce"*). Sem producer ele degrada para o comportamento antigo,
+        # com log — nunca em silêncio.
+        self._producer = producer
 
     async def handle(self, event: dict) -> None:
         if event.get("event_type") != "contact_closed":
@@ -161,6 +168,20 @@ class SessionClosedEventHandler:
                         "Queue cleanup: removed session=%s pool=%s reason=%s",
                         session_id, pool_id, reason,
                     )
+                    # D12 — a espera acabou em ABANDONO: registra o segmento.
+                    # Este é o caminho do contato que cai NA FILA, antes de
+                    # qualquer agente (Problema 36.3). `resolve_queue_exit` não
+                    # emite nada se não houver `first_queued_ms`.
+                    if self._producer is not None:
+                        await mute_queue.resolve_queue_exit(
+                            self._instances._redis, self._producer,
+                            tenant_id, pool_id, session_id, "abandoned",
+                        )
+                    else:
+                        logger.warning(
+                            "Queue cleanup: producer ausente — segmento de espera "
+                            "NÃO emitido session=%s pool=%s", session_id, pool_id,
+                        )
         except Exception as exc:
             logger.warning(
                 "Queue cleanup: could not remove session=%s from queue: %s",
@@ -667,11 +688,11 @@ class LifecycleEventHandler:
                 await self._instances.remove_queued_contact(
                     tenant_id, pool_id, contact.session_id
                 )
-                # Fila de sistema (Fase A): desistência em fila muda → segmento
-                # sintético de abandono (ledger Fase D).
+                # Desistência na fila → segmento de abandono (ledger Fase D).
+                # D12 (2026-08-28): vale nos DOIS tiers, não só na fila muda.
                 try:
                     if self._producer is not None:
-                        await mute_queue.resolve_mute_exit(
+                        await mute_queue.resolve_queue_exit(
                             self._instances._redis, self._producer,
                             tenant_id, pool_id, contact.session_id, "abandoned",
                         )
@@ -711,6 +732,21 @@ class LifecycleEventHandler:
             await self._instances.remove_queued_contact(
                 tenant_id, pool_id, contact.session_id
             )
+
+            # D12 — a espera acabou em HANDOFF: há agente para este contato.
+            # Este é o instante certo, e ele NÃO é coberto pelo resolve do
+            # `route()`: quando existe agente de fila ativo o contato é
+            # SINALIZADO (LPUSH abaixo) em vez de re-publicado em
+            # `conversations.inbound`, então o caminho de roteamento não roda
+            # de novo e a saída passaria em branco.
+            # Emitir aqui e no `route()` é INÓCUO: o `first_queued_ms` é apagado
+            # na primeira emissão e o `segment_id` é determinístico — a segunda
+            # não encontra carimbo, e se encontrasse produziria a MESMA linha.
+            if self._producer is not None:
+                await mute_queue.resolve_queue_exit(
+                    self._instances._redis, self._producer,
+                    tenant_id, pool_id, contact.session_id, "handoff",
+                )
 
             # Check whether a Queue Agent is currently active for this session.
             # If so, signal the agent via LPUSH '__agent_available__' to unblock its
@@ -1007,7 +1043,9 @@ async def run_listeners(
         http_client    = _http_client,
     )
 
-    session_closed_handler = SessionClosedEventHandler(instance_registry, admission=admission)
+    session_closed_handler = SessionClosedEventHandler(
+        instance_registry, admission=admission, producer=kafka_producer,
+    )
 
     topics = [kafka_topic_lifecycle, kafka_topic_registry]
     if kafka_topic_config_changed:

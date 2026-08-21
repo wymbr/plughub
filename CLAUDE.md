@@ -801,7 +801,32 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   linha na tabela — mas nada verifica o que o deploy realmente publica. Ver
   [`docs/guias/webhook-patterns.md`](docs/guias/webhook-patterns.md) § Exposição na borda e
   [`docs/product/workflow-arc-implementation-spec.md`](docs/product/workflow-arc-implementation-spec.md) §0.1
-- **Never create a wide container for a fact that fits a narrow one** — dual da regra abaixo, e as duas só cobrem os dois modos de falha juntas. A regra de escopo sozinha não impediu a `WorkflowInstance` (que não guardou fato largo em campo estreito: criou contêiner novo para o que já era sessão + journey), e o Arc 10 repetiu com a entidade `Journey`. Os três níveis são fechados: **segment** = janela de UM participante · **session** = UM contato (identidade estável através de suspend/resume — duração e nº de segmentos são consequência, não critério) · **journey** = processo sobre N contatos, **derivado** por (proveniência ∪ alias), nunca entidade. Discriminador session↔journey: *nasceu um contato NOVO?* Outro agrupamento (cliente, campanha) é **filtro**, não journey. See [`docs/adr/adr-journey-session-segment-model.md`](docs/adr/adr-journey-session-segment-model.md)
+- **Never create a wide container for a fact that fits a narrow one** — dual da regra abaixo, e as duas só cobrem os dois modos de falha juntas. A regra de escopo sozinha não impediu a `WorkflowInstance` (que não guardou fato largo em campo estreito: criou contêiner novo para o que já era sessão + journey), e o Arc 10 repetiu com a entidade `Journey`. Os três níveis são fechados: **segment** = janela de UM participante · **session** = UM ACESSO (identidade estável através de suspend/resume — duração e nº de segmentos são consequência, não critério) · **journey** = processo sobre N acessos, **derivado** por (proveniência ∪ alias), nunca entidade. Discriminador session↔journey: *nasceu um acesso NOVO?* Outro agrupamento (cliente, campanha) é **filtro**, não journey.
+
+  > **Emenda D10–D13 (aceitas 2026-08-21).** **D11: "contato" é FILTRO, não nível** — esta linha dizia
+  > *"session = UM contato"*, e era o nível se confundindo com o recorte que o operador olha. Sessão é
+  > qualquer acesso; "contato" é o subconjunto com cliente do outro lado (`spawn_reason` NULL/`collect`),
+  > e é assim que `scope=contacts` deve ser lido. **D13:** o discriminador é **ternário sobre
+  > `spawn_reason`** (NULL=inbound · `collect`=outbound · `trigger`/`delegate`=interno); `pools.purpose`
+  > **sai** do critério — pool é config de roteamento, não classifica acesso. **D10: dois pools, não
+  > um** — o da SESSÃO é o de ENTRADA (first-write-wins), o do SEGMENTO é quem ATENDE;
+  > `attended_pool_ids` é projeção derivada, e filtrar contato por "pool" sem dizer qual dos dois mente.
+  > **D12: espera é fato de ROTEAMENTO**, com produtor próprio (veículo = segmento, id determinístico) —
+  > hoje **não existe**. ⚠️ **A linha *(espera)* da D9 está REFUTADA**: `duration_ms` de `role='queue'`
+  > mede o flow do agente de fila, não a espera do cliente. Ver [`docs/adr/adr-journey-session-segment-model.md`](docs/adr/adr-journey-session-segment-model.md)
+  > e [`docs/guias/conference-mechanics.md`](docs/guias/conference-mechanics.md) § Problema 36.
+  >
+  > **Emenda D10.1 + D14 (aceitas 2026-08-28).** **D14: SLA é fato do SEGMENTO DE ESPERA, nunca da
+  > sessão** — não existe SLA por sessão na prática de contact center, e somar esperas contra alvos
+  > diferentes dá número sem uso. Hoje `sla_target_ms` é **coluna de `sessions`** e os **três** leitores
+  > de SLA do repo leem dali (`query.py:240`, `reports_query.py:3802`, `:5743`); uma sessão carrega **um**
+  > alvo, então contato que espera em duas filas perde a violação da segunda. É a regra de escopo outra
+  > vez. **D10.1: o `pool_id` do segmento de ESPERA é o DESTINO** (é a dimensão do Fila/SLA —
+  > `reports_query.py:5741` — e movê-lo para o pool de fila colapsaria todas as esperas numa linha, já
+  > que a fila é a default do tenant); a fila que executou vai em campo **próprio** (`queue_pool_id`).
+  > *"Pool de fila sempre distinto do destino"* não é modelo alternativo: é o estado-alvo da CONFIG, que
+  > `queue_config.pool_id` já suporta e o `skill_id` legado bloqueia. O TMA não depende dessa escolha —
+  > `agent_time_ms` filtra `role IN ('primary','specialist')` e a espera está fora por construção.
 - **Never store a narrower-scope fact in a wider-scope field — derive it where the scope is known.** Quatro aplicações vivas: (a) **identidade de participante** é fato de escopo no ContextStore — fato de contato → `session.*`, fato de segmento → `segment.{segId}.*` (ex.: qual humano um hook de wrap-up serve → `segment.{segId}.served_human_participant_id`); nunca num campo de sessão lido por vários componentes (colapsa em multi-humano). (b) **Identidade e membership de instância** são fato de **(recurso, pool)** — derivadas do pool em escopo (`human_agent_{pool}`), nunca congeladas no registro global do recurso; capacidade (`max_concurrent`, semáforo de vagas) é do RECURSO e não fragmenta por pool. (c) **Evento de liveness (heartbeat) nunca carrega identidade nem membership, e nunca cria instância** — só prova que o recurso está vivo; criação é do login. (d) **"Papel" são DOIS fatos, não um** — *propósito do agente* (`agent_role`: `executor`/`orchestrator`/`evaluator`) é fato do ARTEFATO (skill), estável, declarado no registry, e é entrada de AUTORIZAÇÃO (lido do registry pelo `agent_login`, nunca do input do agente); *papel de participação* (`primary`/`specialist`/`supervisor`) é fato de **(participante, sessão)** e NÃO cabe no hash da instância — a mesma instância atende `max_concurrent_sessions` sessões e é `primary` numa e `specialist` noutra ao mesmo tempo. Ler os dois do mesmo campo foi o que deixou o gate de `evaluation_context_get` sem produtor e, por isso, falhando ABERTO sobre `original_content` desmascarado. See [`docs/adr/adr-participant-identity-single-source.md`](docs/adr/adr-participant-identity-single-source.md), [`docs/adr/adr-human-agent-pool-scoped-identity.md`](docs/adr/adr-human-agent-pool-scoped-identity.md)
 - **Never run `prisma db push --accept-data-loss` as part of normal agent-registry boot** — it diffs the live schema and drops whatever diverges (has caused real data loss twice). Normal boot always runs `packages/agent-registry/scripts/bootstrap-db.js` (auto-detects fresh/legacy/migrated DB state, only ever applies `prisma migrate deploy`). The destructive path only runs when `FRESH_INSTALL=true` is set on purpose (`infra/scripts/fresh-install.sh`)
 

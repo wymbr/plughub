@@ -15,11 +15,21 @@ Chaves:
                                        re-enfileiramentos (re-admissão negada
                                        no drain) e dá a duração do segmento.
 
-Saídas da fila muda (emitem o segmento sintético e limpam o estado):
-  handoff   — sessão foi ADMITIDA (transição unadmitted→admitted no inbound).
-  abandoned — cliente desconectou enquanto esperava (marker closed no drain).
+⚠️ **O nome do módulo ficou ESTREITO (D12, 2026-08-28).** `resolve_queue_exit` (ex-
+`resolve_mute_exit`) passou a registrar a espera nos **DOIS** tiers — atendido e
+mudo —, porque a espera é fato de ROTEAMENTO e não pode depender de o agente de
+fila rodar. O resto do módulo segue específico da fila muda (isenção de C, buffer,
+tetos). Não renomeei o arquivo para não espalhar diff por N imports; a divergência
+está declarada aqui em vez de descoberta depois.
+
+Saídas da fila (emitem o segmento e limpam o estado) — o portão é o
+`first_queued_ms`, que existe nos dois tiers (`registry.py` add_queued_contact):
+  handoff   — há agente para o contato: admitido no inbound, OU dequeue no drain.
+  abandoned — cliente desconectou esperando (contact_closed, ou marker no drain).
   (max_wait_exceeded é emitido pelo _emit_queue_timeout, que já tinha o seu
-   próprio segmento sintético — aqui só limpamos o estado.)
+   próprio segmento sintético — aqui só limpamos o estado. ⚠️ Aquele emissor só
+   cobre o tier MUDO, então max_wait na fila ATENDIDA segue sem segmento de
+   espera: lacuna nomeada, fatia à parte, ver TODO.md.)
 
 Proteções (spec § Proteções operacionais): tetos vêm do namespace `routing` do
 Config API via `routing_config` (cache com defaults hard-coded e degradação
@@ -96,7 +106,25 @@ async def mark_mute_queued(redis_client, tenant_id: str, session_id: str, now_ms
         return now_ms
 
 
-async def resolve_mute_exit(
+def queue_wait_segment_id(tenant_id: str, session_id: str) -> str:
+    """
+    Id DETERMINÍSTICO do segmento de espera (D12, emenda 1).
+
+    Uma sessão tem UMA passagem pela fila, logo o segmento que a registra tem
+    identidade derivável — não sorteável. Com `uuid4()` (o que havia aqui e ainda
+    há no bridge, `main.py:5924`) duas emissões viram duas LINHAS; com id derivado
+    viram a mesma linha, e o `ReplacingMergeTree` deduplica sozinho. É o padrão que
+    o `quality-ingest` já usa para idempotência de importação.
+
+    Isso substitui um guard: em vez de garantir "emite uma vez só" no caminho
+    (impossível de garantir em N saídas concorrentes), garante-se que emitir duas
+    vezes seja INÓCUO.
+    """
+    return str(uuid.uuid5(uuid.NAMESPACE_URL,
+                          f"plughub:queue-wait:{tenant_id}:{session_id}"))
+
+
+async def resolve_queue_exit(
     redis_client,
     producer,
     tenant_id:  str,
@@ -106,19 +134,44 @@ async def resolve_mute_exit(
     emit_segment: bool = True,
 ) -> bool:
     """
-    Encerra a passagem pela fila muda: SREM do unadmitted (retorna False se a
-    sessão não estava em fila muda — no-op barato no caminho quente) e, quando
-    `emit_segment`, publica o segmento sintético `role=queue` (agent_type=system)
-    com a espera real — o ledger que o /reports/pools/queue (Fase D) já lê.
-    `emit_segment=False` para o caminho de max_wait (o _emit_queue_timeout já
-    emite o segmento dele).
+    Encerra a passagem pela fila — **nos DOIS tiers** (atendida e muda) — e publica
+    o segmento `role='queue'` com a espera REAL.
+
+    ── Por que esta função mudou de nome e de escopo (D12, 2026-08-28) ────────────
+    Era `resolve_mute_exit`, e abria com `SREM(unadmitted)` + `return False`: quem
+    não estava em fila **muda** saía sem nada. Como ela já é chamada em TODAS as
+    saídas de fila, o efeito era uma cobertura pela metade sem sintoma próprio — a
+    fila ATENDIDA nunca registrava espera, e a ausência sumia no mesmo silêncio do
+    resto. Medido: 19 segmentos de espera no tenant, todos do tier mudo.
+
+    O `SREM` continua, mas agora é **bookkeeping de admissão**, não portão: o seu
+    resultado não decide mais se o fato é registrado. Quem decide é o
+    `first_queued_ms` — que `add_queued_contact` escreve com **NX** para os dois
+    tiers (`registry.py:2618-2633`). **Sem esse carimbo não há espera a declarar, e
+    aí não se emite nada**: ausência honesta, nunca um `duration_ms` fabricado a
+    partir de `now`.
+
+    ⚠️ O nome antigo prometia menos do que a função faz agora; mantê-lo seria a
+    armadilha que este repositório já catalogou duas vezes (*"o nome pode ser mais
+    largo que o conteúdo"* — `session_transitions`, `SessionMeta`). Aqui é o
+    inverso: o conteúdo ficou mais largo que o nome.
+
+    `emit_segment=False` para o caminho de max_wait (o `_emit_queue_timeout` emite o
+    segmento dele). ⚠️ **Lacuna nomeada:** aquele emissor próprio só cobre o tier
+    MUDO (passo 3 do docstring dele), logo `max_wait_exceeded` na fila ATENDIDA
+    segue sem segmento de espera. Unificá-lo é fatia à parte — feito aqui, junto,
+    produziria emissão dupla no relatório que este arco existe para consertar.
+
+    Devolve `True` se emitiu (ou se havia passagem de fila a encerrar).
     """
-    removed = await redis_client.srem(unadmitted_key(tenant_id), session_id)
-    if not removed:
-        return False
+    # Bookkeeping de admissão — não é mais o portão do registro (ver docstring).
+    await redis_client.srem(unadmitted_key(tenant_id), session_id)
 
     fq_key = first_queued_key(tenant_id, session_id)
     raw    = _decode(await redis_client.get(fq_key))
+    if raw is None:
+        # Nunca passou pela fila (ou o carimbo expirou): não há espera a declarar.
+        return False
     await redis_client.delete(fq_key)
 
     if not emit_segment:
@@ -134,12 +187,36 @@ async def resolve_mute_exit(
     joined_iso  = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).isoformat()
 
     try:
-        await producer.send("conversations.participants", value={
+        # ── `key=session_id` — mesma correção do bridge (2026-08-18), que faltava
+        # AQUI (medido 2026-08-28) ────────────────────────────────────────────────
+        # `conversations.participants` tem 3 partições e este publish era SEM CHAVE.
+        # Publicar sem chave nesse tópico é o defeito mais caro já registrado neste
+        # repositório (CLAUDE.md § Postura de Engenharia; conference-mechanics.md
+        # § Problema 34): sem chave o particionador espalha, e ordem no Kafka é por
+        # PARTIÇÃO.
+        #
+        # ⚠️ Por que não mordia HOJE — e por que isso não é justificativa para deixar:
+        # este caminho emite UM evento só (`participant_left`, já com `joined_at` e
+        # `duration_ms`), então não existe o par `joined`/`left` que possa se
+        # inverter. A proteção é ACIDENTAL, não projetada: ela desaparece no instante
+        # em que alguém acrescentar o `participant_joined` — e desaparece com o
+        # agravante de o caminho já parecer testado. Ordenar também contra os DEMAIS
+        # eventos da mesma sessão (que é o que a leitura de topologia assume) só se
+        # obtém com a chave.
+        #
+        # Chave = `session_id`, não `segment_id`: idêntica à do bridge (`main.py:3534`),
+        # de propósito — duas convenções de chave no mesmo tópico reabririam o
+        # problema pelo lado da cardinalidade.
+        #
+        # NOTE: o producer tem `value_serializer=json.dumps().encode` — o `value` vai
+        # como dict; a CHAVE não passa por serializer nenhum e vai como bytes.
+        await producer.send("conversations.participants", key=session_id.encode("utf-8"), value={
             "event_id":       str(uuid.uuid4()),
             "type":           "participant_left",
             "session_id":     session_id,
             "tenant_id":      tenant_id,
-            "segment_id":     str(uuid.uuid4()),
+            # D12 emenda 1: id DERIVADO, não sorteado — ver queue_wait_segment_id.
+            "segment_id":     queue_wait_segment_id(tenant_id, session_id),
             "participant_id": "system-queue",
             "pool_id":        pool_id,
             "agent_type_id":  "system",

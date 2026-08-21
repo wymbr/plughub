@@ -1900,5 +1900,138 @@ conserto de defesa em profundidade, ainda não feito.
 
 ---
 
+### Problema 36 — abandono na FILA: o segmento que não nasce, a sessão que não fecha, e duas definições de "abandono" que discordam (medido 2026-08-21, **NÃO corrigido**)
+
+Irmão do **Problema 34** (segmento de fila que não fecha) e lacuna da **Mudança 24** (sessão presa em
+`active` no customer-disconnect). A Mudança 24 cobriu a queda do cliente **com humano atendendo** — os
+dois guards que ela instalou moram no `agent_done` e no dispatch de hooks. Quando o cliente cai **na
+fila, antes de qualquer humano**, não há `on_human_end`, não há `agent_done`, e nenhum dos dois
+caminhos chega a rodar.
+
+**Três defeitos distintos, medidos juntos e separados pelo contador.** Nada aqui é hipótese: cada
+linha tem query ou arquivo:linha.
+
+#### 36.1 — O "estado impossível" da tela é montado na LEITURA, não existe no dado
+
+`sess-e2e-2920b0d1-…-c803d28a171a` aparece na lista de contatos como badge verde **`active`** ao lado
+da palavra **`abandoned`**. A linha em `plughub_demo.sessions` tem `status`, `outcome`, `close_reason`
+e `closed_at` **todos nulos**, em versão única. As duas palavras vêm de lugares diferentes:
+
+| Palavra | Origem | Regra |
+|---|---|---|
+| `active` | frontend, `ListaTab.tsx:294` | `if (!row.closed_at)` — **não lê `status`** |
+| `abandoned` | backend, `reports_query.py:895` | `COALESCE(NULLIF(s.outcome,''), _seg_out.outcome_v)` — cai no outcome do **segmento** |
+
+Nenhuma das duas é bug sozinha. ⚠️ **Consequência para quem for medir isto:** procurar o par
+`status='active' AND outcome='abandoned'` no ClickHouse devolve **zero**, e o zero é fabricado pelo
+recorte — o instrumento certo é `closed_at IS NULL`. Foi exatamente esse erro que custou quatro
+previsões erradas seguidas na sessão de medição.
+
+#### 36.2 — A sessão com fila abandonada não fecha em 1 de cada 3 casos
+
+Recorte correto (`closed_at IS NULL` × existe segmento `role='queue'` com `outcome='abandoned'`),
+`tenant_demo`, população 522 sessões:
+
+| | tem fila abandonada | sem fila abandonada |
+|---|---|---|
+| **nunca fechada** | **5** ← o defeito | 8 `active` + 3 nulas + 27 `suspended` |
+| **fechada** | **10** ← a testemunha | 469 |
+
+Query re-executável (é ela que tem de ser rodada antes e depois de qualquer conserto):
+
+```sql
+WITH q AS (
+  SELECT session_id, countIf(outcome = 'abandoned') AS ab
+  FROM plughub_demo.segments FINAL
+  WHERE tenant_id = 'tenant_demo' AND role = 'queue'
+  GROUP BY session_id
+)
+SELECT if(s.closed_at IS NULL, 'never_closed', 'closed')                  AS sess,
+       coalesce(s.status, '(null)')                                       AS st,
+       if(coalesce(q.ab, 0) > 0, 'queue_abandoned', 'no_abandoned_queue') AS segq,
+       count() AS n
+FROM plughub_demo.sessions AS s FINAL
+LEFT JOIN q ON q.session_id = s.session_id
+WHERE s.tenant_id = 'tenant_demo'
+GROUP BY sess, st, segq ORDER BY n DESC
+```
+
+⚠️ `FROM t AS alias FINAL`, nunca `FROM t FINAL AS alias` — a segunda forma é erro de sintaxe no
+ClickHouse 23.8.
+
+**10 fecham e 5 não ⇒ intermitência, não produtor ausente.** Qualquer conserto tem de manter os 10
+fechando pelo caminho deles.
+
+> ⚠️ **Medido 2026-08-28 — a intermitência NÃO é explicada por duplicação de segmento de fila, e a
+> hipótese nasceu de uma coincidência numérica.** Há **5** sessões com mais de um segmento `role='queue'`
+> (4 com dois, 1 com três) e **5** sessões `never_closed` com fila abandonada. Mesmo número; **a
+> interseção é 1**, não 5. Recorte completo, `INNER JOIN` sessão × fila, 46 sessões com fila:
+>
+> | duplicado? | sessão | fila abandonada? | segs abertos | n |
+> |---|---|---|---|---|
+> | single | closed | não | 2 | 24 |
+> | single | closed | sim | 0 | 7 |
+> | single | never_closed | não | 0 | 6 |
+> | **single** | **never_closed** | **sim** | **0** | **4** ← o defeito 36.2, sem duplicação |
+> | dup | closed | sim | 2 | 3 |
+> | dup | closed | não | 0 | 1 |
+> | dup | never_closed | sim | 1 | 1 |
+>
+> **Três leituras que a tabela força:**
+> 1. **4 das 5 sessões que não fecham têm exatamente UM segmento de fila, e ele FECHOU** (`duration_ms`
+>    não-nulo, `outcome='abandoned'`). O produtor rodou e terminou; a sessão é que ficou. Duplicação não
+>    é a causa.
+> 2. **4 das 5 sessões duplicadas FECHAM normalmente.** Duplicar não impede o fechamento — os dois
+>    fenômenos são independentes, não dois sintomas de um.
+> 3. **Os segmentos abertos são outra população ainda:** 5 no total, sendo **4 em sessões FECHADAS**
+>    (2+2 na tabela — casa com o `queue 4` já medido) e 1 na única sessão que é dup **e** never_closed.
+>    *Segmento aberto em sessão fechada* (Problema 34) e *sessão aberta com segmento fechado* (36.2) são
+>    **inversos um do outro**, não variantes.
+>
+> **Consequência para qualquer plano:** o id determinístico da D12 conserta a duplicação (5 sessões) e
+> **deve-se prever que ele NÃO mova o `never_closed = 5`**. Escrever essa previsão antes é o que impede
+> a leitura *"consertei e não mudou nada, logo não aplicou"*. As 8 `active` e as 3 nulas **sem** fila abandonada são família à parte e
+não devem ser misturadas neste item.
+
+As 8 sessões `active` foram conferidas no Redis: **`keys=0`, `ttl=-2` em todas as 8**, contra 56
+chaves `session:*` vivas (testemunha). Elas morreram no runtime e deixaram a linha aberta. Coerente
+com isto: `close_reason` declara `session_timeout`, `no_resource` e `system_error` no domínio, e os
+**três têm zero ocorrência** nas 522 linhas — promessa sem produtor. Na direção oposta, `agent_closed`
+aparece 14 vezes e **não está no domínio**.
+
+#### 36.3 — O reload na fila fecha bem, não deixa rastro de fila, e as duas telas discordam
+
+Reproduzido ao vivo duas vezes (`e6056b6b…`, `11c288a9…`): cliente escalado do `sac_ia` para a fila,
+recarrega a página enquanto espera. A sessão **fecha corretamente**, em 11 s e 24 s, com
+`outcome='escalated_human'` e `close_reason='customer_disconnect'`. Tem **1 segmento** — o do `sac_ia`.
+O segmento de fila **nunca nasce** (é a D12 do ADR: a espera não tem produtor).
+
+O efeito que ainda não estava registrado não é a espera não medida, é o **abandono não contado**:
+
+| Superfície | Define abandono como | Este caso |
+|---|---|---|
+| Lista de contatos (`ListaTab.tsx:276`) | `close_reason ∈ {customer_abandon, no_resource, max_wait_exceeded, **customer_disconnect**, customer_hangup, session_timeout}` | **exibe "abandoned"** |
+| Relatório Fila/SLA (`reports_query.py:5762`) | entra com `q_count > 0`, conta com `q_outcome='abandoned'` | **invisível** — fora do numerador **e** do denominador |
+
+Sem segmento de fila o contato não é "enfileirado" para o relatório que existe para medir fila. Nem a
+taxa de abandono acusa, porque ele sai dos dois lados da fração ao mesmo tempo. Há 13 sessões com
+`customer_disconnect` na população.
+
+**Ordem de conserto.** 36.3 é pré-requisito dos outros dois: enquanto o segmento de fila não nascer,
+não há onde pendurar nem o fechamento nem a contagem. ⚠️ Criar o produtor tem efeito colateral
+declarado — reclassificar o agente de fila para `specialist` move o tempo dele para dentro de
+`agent_time_ms` e muda TMA/AHT do ambiente (ver ADR §D9 e D12).
+
+**Gate.** Os casos são reproduzíveis pelo e2e (`e2e-inbound-*`). Testemunha obrigatória em qualquer
+correção: os **10** que fecham têm de continuar fechando, e os 469 `closed` não podem mudar de forma.
+
+**Não-achado, registrado para não ser redescoberto:** durante a medição pareceu haver um quarto
+defeito — "o contato não aparece na lista". Medido: a API devolve a linha no recorte default
+(`alvo=1`), e depois de `Ctrl+Shift+R` a tela passou de 72 para 103 contatos com as linhas presentes.
+Era render velho. O tell que quase passou batido é que o total **não tinha mudado** apesar de duas
+sessões novas.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

@@ -1104,11 +1104,20 @@ contato real. ⚠️ Conferir também `origin`: seed que escreve `origin='live'`
 > 2. **Ativação única que nunca retorna** — a causa DOMINANTE. `marker SET` + `Activating` e depois
 >    silêncio, sem `Skill already running` e sem `DELETE`. Contador: 2 ocorrências do guard em 6 h para
 >    4 segmentos abertos ⇒ a re-entrância explica no máximo metade. **Causa não identificada.**
-> 3. **O INVERSO — sessão `active` com segmento `closed`.** `sess-e2e-2920b0d1-…` aparece na tela com
->    status `active`, outcome `abandoned`, e o segmento de fila fechado (6 s, `abandoned`). É o que o
->    operador reproduz derrubando o webchat na fila: **o abandono não fecha a sessão**, então
->    `customer_abandon`/`max_wait_exceeded` perdem casos em silêncio. `active` + `abandoned` na mesma
->    linha é estado impossível e deveria ser barulhento na tela. Não medido em volume.
+> 3. **O INVERSO — sessão que não fecha.** ✅ **MEDIDO EM VOLUME 2026-08-21** — e a descrição original
+>    estava certa no conteúdo e **errada na evidência**. Detalhe completo em
+>    [`conference-mechanics.md` § Problema 36](../guias/conference-mechanics.md). Três correções ao que
+>    esta linha dizia:
+>    · **`active` + `abandoned` não existe como linha.** O par é montado na LEITURA — `active` vem de
+>      `!row.closed_at` no frontend (`ListaTab.tsx:294`, **não** lê `status`) e `abandoned` vem do
+>      outcome do **segmento** pelo fallback `COALESCE(NULLIF(s.outcome,''), _seg_out.outcome_v)`
+>      (`reports_query.py:895`). A linha da sessão está inteiramente nula. ⚠️ Procurar
+>      `status='active' AND outcome='abandoned'` devolve **zero fabricado pelo recorte**; o instrumento
+>      é `closed_at IS NULL`.
+>    · **Volume: 5 nunca fechadas contra 10 fechadas**, entre as que têm segmento de fila `abandoned`
+>      (população 522). É intermitência de ~⅓, não produtor ausente — e os 10 são a testemunha
+>      obrigatória de qualquer conserto.
+>    · **O caminho do reload não é este defeito.** Ver a seção nova abaixo.
 >
 > **E o maior de todos não é nenhum dos três: é o segmento que NÃO NASCE** — ver a seção
 > *"A janela de espera não tem produtor"* abaixo.
@@ -1160,6 +1169,39 @@ concluído. Gate precisa de testemunha: os 14 que fecham têm de continuar fecha
 
 ---
 
+## "Abandono" tem DOIS vocabulários, e eles discordam no caso mais comum *(medido 2026-08-21)*
+
+> Reproduzido ao vivo duas vezes: cliente escalado do `sac_ia` para a fila **recarrega a página**
+> enquanto espera. Sessões `e6056b6b…` (11 s) e `11c288a9…` (24 s).
+
+A sessão **fecha corretamente** — `outcome='escalated_human'`, `close_reason='customer_disconnect'` —
+e tem **1 segmento só**, o do `sac_ia`. O segmento de fila nunca nasce (é a D12, seção abaixo). O
+efeito novo não é a espera não medida; é o **abandono não contado**:
+
+| Superfície | Define abandono como | Este caso |
+|---|---|---|
+| Lista de contatos (`ListaTab.tsx:276`) | `close_reason ∈ {customer_abandon, no_resource, max_wait_exceeded, **customer_disconnect**, customer_hangup, session_timeout}` | **exibe "abandoned"** (confirmado na tela) |
+| Relatório Fila/SLA (`reports_query.py:5762`) | entra com `q_count > 0`, conta com `q_outcome='abandoned'` | **invisível**: fora do numerador **e** do denominador |
+
+Sem segmento de fila o contato não é "enfileirado" para o relatório que existe para medir fila — sai
+dos dois lados da fração ao mesmo tempo, então nem a **taxa** de abandono acusa. Há **13** sessões com
+`customer_disconnect` na população de 522.
+
+**Decisão de produto pendente, e ela vem antes do código:** *cair enquanto espera é abandono?* A lista
+diz que sim, o relatório de fila diz que não existe. As duas não podem estar certas. Enquanto a
+pergunta não for respondida, unificar o vocabulário é escolher em silêncio.
+
+**Ordem:** este item **depende** do produtor da janela de espera (D12) — sem segmento de fila não há
+onde pendurar a contagem. Consertar só a leitura faria as duas telas concordarem sobre um contato que
+continua sem registro nenhum de espera.
+
+**Achado de domínio, de brinde e independente:** `close_reason` declara `session_timeout`,
+`no_resource` e `system_error`, e os **três têm zero ocorrência** em 522 linhas (promessa sem
+produtor — a mesma família de `session:{id}:sentiment`). Na direção oposta, `agent_closed` aparece
+**14 vezes** e não está no domínio do `CLAUDE.md`.
+
+---
+
 ## A janela de espera não tem produtor — e o segmento `role='queue'` nunca foi ela *(medido 2026-08-21; **D12** do ADR)*
 
 **Contato real, manual, no WebChat** (`81d194ad-…-ce81b30e8343`): o segmento de IA fecha às
@@ -1198,6 +1240,208 @@ IA), mas mudança de número sem pedido é *valor plausível* — entra declarad
 ⏳ **Aberto:** `retencao_humano` é **push** (confirmado na tela), então os 21,35 s são fila de verdade.
 Mas em pool de **pull** existe uma segunda espera — "agente disponível que ainda não reivindicou" — e
 para SLA as duas contam. Nenhuma tem registro hoje.
+
+### ⚠️ Correção de 2026-08-28 — o produtor JÁ EXISTE para o tier MUDO; a D12 é GENERALIZAÇÃO
+
+A frase acima (*"a janela de espera nunca existiu como fato… nem no mudo"*) está **errada na segunda
+metade**. Lido no código:
+
+| Peça | Onde já está |
+|---|---|
+| emissor do segmento de espera | `mute_queue.resolve_mute_exit` (`mute_queue.py:99-164`), no **routing-engine** |
+| forma | `conversations.participants`, `role='queue'`, `agent_type='system'`, `participant_id="system-queue"` |
+| início da espera | `first_queued_key` — **NX**, TTL 7 d |
+| desfechos | `handoff` / `abandoned`, + `max_wait_exceeded` pelo `_emit_queue_timeout` |
+| **carimbo de entrada nos DOIS tiers** | `add_queued_contact` escreve a MESMA chave, mesmo NX, mesmo TTL (`registry.py:2618-2633`) |
+
+⇒ **Da fila atendida falta só o fato de SAÍDA.** O de entrada já é durável e sobrevive ao
+re-enfileiramento. `resolve_mute_exit` abre com `SREM(unadmitted)` e **retorna `False`** para quem não
+é fila muda (`:116-118`) — é chamado nos 4 pontos de saída e simplesmente não faz nada no tier
+atendido. Cobertura parcial sem sintoma próprio: some no mesmo silêncio da espera não medida.
+
+**Dois defeitos latentes no emissor que existe** (os dois consertados de graça pela D12):
+
+1. `segment_id = str(uuid.uuid4())` (`:142`) — idêntico ao `:5924` do bridge. Protegido hoje só por o
+   `SREM` ser one-shot; id determinístico remove a dependência do acidente.
+2. `producer.send(...)` **sem `key=`** (`:137`), em tópico de 3 partições — o defeito mais caro já
+   registrado neste repo. Não morde **hoje** só porque o evento é único (não há `joined` para vencer);
+   a proteção é acidental, e some no instante em que alguém acrescentar o `participant_joined`.
+   O bridge já usa `key=session_id` (`main.py:3513`). ⚠️ **Conserto independente da D12 — não adiar.**
+
+### A ordem de implementação é FORÇADA por um `anyIf`, não por preferência
+
+`reports_query.py:5754`: `q_outcome = anyIf(outcome, role='queue')`, agregado **por sessão**. Com dois
+segmentos `role='queue'` na mesma sessão (o da espera + o do agente, enquanto o bridge não migrar), o
+`abandoned` do relatório Fila/SLA vira **escolha arbitrária entre duas linhas** — não dobra, **sorteia**.
+`q_count > 0` e `maxIf(duration_ms)` toleram a coexistência; `anyIf` não.
+
+⇒ **As duas emendas da D12 não são deployáveis em separado.** Ou landam juntas, ou o relatório passa a
+mentir de forma não-determinística na janela entre elas — que é pior que o defeito atual, porque é
+irreprodutível. *(O inverso também não serve: migrar o bridge primeiro esvazia o relatório, porque não
+sobra nenhum `role='queue'`.)*
+
+**Fases propostas:**
+
+| # | O quê | Verde é |
+|---|---|---|
+| P0 ✅ | baseline rodada 2026-08-28 | **inalterada desde 08-21**: 469 `closed`/sem-fila · 27 `suspended` · **10** `closed`+ab · 8 `active` · **5** `never_closed`+ab · 3 nulas. População 522. Segmentos `queue`: 41 sessões com 1, 4 com 2, 1 com 3 (= 52) |
+| P1 ✅ | `key=session_id` no emissor do routing (`mute_queue.py`) — isolado | escrito 2026-08-28; não muda dado, fecha o defeito latente de partição |
+| P2 ✅ *(escrito, NÃO validado)* | ver "as-built" abaixo | pendente de build + gate |
+| P3 | re-rodar a baseline do P0 + a testemunha | os **10** que fecham continuam fechando; os 469 `closed` não mudam de forma; TMA/AHT medidos **antes e depois** e a mudança declarada |
+
+#### P2 as-built (escrito 2026-08-28 — **ainda sem build e sem gate**)
+
+O desenho mudou ao implementar, e para melhor: **não foi preciso extrair função nem espalhar chamadas
+novas**. `resolve_mute_exit` já estava plugado em TODAS as saídas de fila — só se recusava a agir no
+tier atendido. A mudança foi **remover a recusa**.
+
+**routing-engine**
+- `mute_queue.resolve_mute_exit` → **`resolve_queue_exit`** (renomeada: o conteúdo ficou mais largo que
+  o nome). O `SREM(unadmitted)` continua, mas virou **bookkeeping**, não portão; quem decide é o
+  `first_queued_ms`. **Sem carimbo não emite nada** — ausência honesta, nunca `duration_ms` fabricado.
+- `queue_wait_segment_id()` — `uuid5(NAMESPACE_URL, "plughub:queue-wait:{tenant}:{sid}")`.
+- `key=session_id` no publish (P1).
+- Call sites migrados: `main.py` (route/admitida · `_emit_queue_timeout` · drain periódico) +
+  `kafka_listener.py` (drain com marker closed).
+- **DOIS pontos de saída que nenhum dos 4 cobria, agora cobertos:**
+  · `SessionClosedEventHandler` (contact_closed) → `abandoned` — **é o caminho do Problema 36.3**, o
+    cliente que cai NA FILA; o handler não tinha producer, passou a receber `kafka_producer` e loga em
+    WARNING se vier ausente;
+  · drain com agente disponível → `handoff` — não era coberto pelo resolve do `route()`, porque com
+    agente de fila ativo o contato é **sinalizado** (LPUSH) em vez de re-publicado no inbound, e o
+    roteamento não roda de novo.
+- Emitir duas vezes é **inócuo por construção**: o `first_queued_ms` é apagado na 1ª, e o id
+  determinístico faria a 2ª ser a MESMA linha.
+
+**orchestrator-bridge** (`activate_queue_agent`) — as três juntas, por causa do `anyIf`:
+`role='queue'`→**`'specialist'`** · `pool_id`→**`_flow_pool_id`** (D10) · `segment_id` **determinístico**
+(`uuid5`, namespace `queue-agent`, distinto do `queue-wait`).
+
+**Não tocado, de propósito:** o emissor próprio do `_emit_queue_timeout` (passo 3). Unificá-lo agora
+produziria emissão dupla; a lacuna (`max_wait` na fila atendida) está nomeada no docstring e aqui.
+
+**Falta:** `docs/arcos/system-queue.md:134` cita o nome antigo · build dos dois serviços · gate.
+
+### SLA está no grão errado — é do SEGMENTO, não da sessão *(D14, 2026-08-28)*
+
+Levantado por argumento de domínio (*"não conheço SLA por sessão; o normal é do segmento, senão soma-se
+coisa diferente sem utilidade prática"*) e confirmado por leitura:
+
+- `sla_target_ms` é **coluna de `sessions`** (`clickhouse.py:114`), populada por `parse_routed`;
+  `segments` **não tem** a coluna.
+- Os **três** leitores de SLA do repositório leem da sessão: `query.py:240`
+  (`wait_time_ms <= sla_target_ms`), `reports_query.py:3802` (overlay) e `:5743` (Fila/SLA).
+
+**Consequência concreta:** uma sessão carrega **um** alvo. Contato que espera 30 s por `retencao_humano`
+(alvo 300 s), é transferido e espera 120 s por outro pool (alvo 60 s) só registra um dos dois — a
+violação da segunda espera é **invisível**, e a média mistura populações não comparáveis.
+
+**Destravado pela D12:** enquanto a espera não tinha registro por segmento, não havia onde pôr o alvo.
+Agora há.
+
+⏳ **A decidir antes de codar:** alvo **copiado** para o segmento no fechamento da espera (denormalização
+simétrica à que o routing já faz para a sessão — sobrevive a mudança de config, guarda "o alvo do dia")
+× **resolvido na leitura** pelo pool de destino do segmento (não duplica dado, mas re-lê config de hoje
+para medir ontem). `sessions.sla_target_ms` fica como **projeção**, nunca fonte de cálculo.
+
+⚠️ **Os números de conformidade VÃO mudar** — contar antes, por pool, e declarar. Migrar os três
+leitores é fatia própria; não entra no P2.
+
+#### ⚠️ E antes do grão: o campo é DECLARADO como um SLA e CONSUMIDO como outro (D14.1)
+
+- **Rótulo** (`configRecursos.json:29`, nos DOIS locales): *"Total service SLA (ms)"* / *"SLA total do
+  atendimento (ms)"*.
+- **Consumidores**: todos comparam com **ESPERA** — `query.py:240`, `reports_query.py:3802-3803`,
+  Fila/SLA `:5743`/`:5816`.
+- **Default do próprio formulário**: `30000` ms (`PoolsPage.tsx:603,755`) — 30 s só é alvo de espera.
+  O código contradiz o rótulo até no valor que escreve.
+
+**Já morde:** `aprovacao_deploy` está com **86 400 000 ms (24 h)** — coerente com o rótulo, absurdo como
+espera ⇒ **aquele pool não pode violar SLA** e a conformidade dele é 100% por construção (verde que não
+pode ficar vermelho). `retencao_humano` está com 300 000 ms, configurado como espera. **Duas intenções
+no mesmo campo, em pools diferentes.**
+
+**⚠️ Contado (36 pools, 2026-08-28): é METADE do parque, não um outlier.** 18 pools entre 15 s e 10 min
+(alvo de espera, plausível) × **18 pools com ≥ 1 hora** (prazo de processo, impossível violar como
+espera): 5 em 1 h, 9 em 24 h, 3 em 48 h e **um em 7 DIAS** (`limite_entrega`). O default de 30 s é usado
+por **2** pools ⇒ o parque foi configurado à mão, seguindo o rótulo.
+**A divisão coincide com o TIPO de pool** — o grupo ≥1 h é exatamente processo/aprovação/workflow, onde
+não há cliente em fila. **O discriminador é o mesmo da D13** (contato × interno), o que torna a correção
+tratável sem adivinhar intenção pool a pool. E significa que **todo número agregado de SLA hoje mistura
+duas populações incomparáveis**.
+
+**Três SLAs no domínio, um campo e meio:** espera (fila, grão de segmento) · atendimento total (o que o
+rótulo promete) · tempo máx. de resposta por mensagem (**já tem campo próprio** — *Max. reply time* —, e
+isso é a evidência de que a separação é natural).
+
+⚠️ **Decidir o que `sla_target_ms` É vem ANTES de migrar os leitores para o segmento** — senão leva-se
+número errado para grão melhor. Saídas: renomear o rótulo para o que o código faz (barato; reabre "onde
+fica o SLA de atendimento total?") ou **partir em dois campos** (exige varrer os valores já
+configurados, porque há pool preenchido segundo a leitura errada).
+
+### Decisão de nome: **`queue` := espera** (tomada 2026-08-28, com inventário como evidência)
+
+Reconfirma a emenda 2 da D12 (agente de fila → `specialist`), que a passagem de 08-29 tinha reaberto
+propondo um papel novo `wait`. O que decidiu foi o **inventário dos 52 segmentos** — `role='queue'`
+já carrega DOIS significados hoje, e cada caminho herda um lado pronto:
+
+- **`queue` := espera** ⇒ os **19** segmentos do routing (mute + timeout) **já estão corretos**, zero
+  migração; o Fila/SLA não muda de query e passa a admitir a fila atendida; e o routing vira produtor
+  único, com o padrão de **evento único** que torna segmento de fila aberto **estruturalmente
+  impossível** (os 5 abertos são todos do bridge; os 19 do routing têm zero).
+- **`wait` novo** ⇒ preservaria TMA/AHT, mas migraria os 19, mexeria no Fila/SLA, deixaria
+  `role='queue'` significando "trabalho do agente" contra o próprio nome, e manteria os 5 abertos.
+
+⚠️ **Efeito colateral MEDIDO (2026-08-28), não estimado — vai declarado no CHANGELOG.**
+**A medição certa é POR POOL, não por tenant** — TMA é lido por pool, e a primeira versão deste item
+declarava a média do tenant (+3,44%, 188 967 → 195 464 ms sobre 507 sessões), que não corresponde a
+tela nenhuma. Por pool:
+
+| Pool | sessões | `agent_time_ms` hoje | depois | Δ |
+|---|---|---|---|---|
+| `retencao_humano` | 146 | 456 083 ms | 477 968 ms | **+4,8%** |
+| *(pool vazio)* | 1 | 0 | 9 ms | ruído |
+
+**Nenhum outro pool muda.** Toca **27 sessões**, das quais **11 hoje reportam tempo-agente ZERO** e
+passarão a reportar — os casos em que a IA de fila trabalhou e nada contou. Os 5 segmentos abertos
+ficam de fora pelo filtro `duration_ms IS NOT NULL`.
+
+### ⚠️ Requisito que a pergunta "TMA não é por pool?" revelou — a D10 entra no MESMO pacote
+
+O segmento do agente de fila carrega hoje o pool de **DESTINO** (`main.py:5919-5923`) — a sobrecarga
+que a própria D10 nomeia. Logo a reclassificação ingênua joga o tempo da IA de fila **dentro do TMA do
+pool humano**, concentrado em quem usa fila atendida. O conserto é a D10 (pool do segmento = quem
+ATENDE ⇒ o segmento do agente passa a carregar `_flow_pool_id`), e ela **tem de entrar junto**, senão
+o arco publica uma inflação que ele mesmo sabe como evitar.
+
+⚠️ **E a D10-attribution é NO-OP neste ambiente até o defeito 2 ser consertado.** Com
+`queue_config = {"skill_id": "skill_fila_v1"}` **sem `pool_id`**, `_flow_pool_id = "" or pool_id`
+(`main.py:5841`) resolve para o **próprio `retencao_humano`** — não existe pool de fila separado para
+onde mandar o tempo. **Ordem imposta:** defeito 2 (tenant default suprimido) **antes** da atribuição
+da D10 ter destino. Enquanto isso, o +4,8% no `retencao_humano` é o número a declarar.
+
+> ⚠️ **Armadilha de medição paga nesta rodada, e ela quase publicou o número errado.** A 1ª versão da
+> query deu *"16 afetadas, +1,19%"*. As duas estavam erradas: `sumIf` sobre coluna **`Nullable`**
+> devolve **NULL** (não 0) quando nenhuma linha casa, então (a) sessão cujo ÚNICO tempo é o segmento
+> de fila tinha `hoje = NULL`, e `depois > hoje` virava NULL — o `countIf` **pulava** exatamente a
+> população mais afetada; e (b) `avg` ignora NULL, então as duas médias saíram sobre **denominadores
+> diferentes**. Conserto: `coalesce(sumIf(...), 0)`. A confirmação não foi argumento, foi aritmética —
+> `16 + 11 (só-fila) = 27`, e o delta bateu com o cálculo à mão feito antes. *Irmão do
+> `clickhouse-agregado-vazio-devolve-default`, na versão inversa: o vazio não devolve default, devolve
+> NULL, e move o denominador em silêncio.*
+
+⚠️ **PREVISÃO OBRIGATÓRIA do P3, escrita antes de rodar:** o P2 conserta a **duplicação** (5 sessões) e
+**não deve mover** o `never_closed = 5` nem os 4 segmentos abertos em sessão fechada. Medido
+2026-08-28: a interseção entre "tem fila duplicada" e "sessão nunca fechou" é **1**, não 5 — o número
+igual era coincidência, e 4 das 5 sessões que não fecham têm **um único** segmento de fila, **já
+fechado**. Sem essa previsão no papel, o P3 verde-mas-imóvel será lido como *"não aplicou"*. Tabela
+completa em [`conference-mechanics.md` § Problema 36.2](../guias/conference-mechanics.md).
+
+⚠️ **O que o P2 NÃO conserta — três populações distintas, agora separadas pelo contador:**
+(a) duplicação (5 sessões, 4 delas fechando normalmente) — **é o que o P2 fecha**;
+(b) sessão que nunca fecha com fila abandonada (5) — independente, causa não identificada;
+(c) segmento de fila aberto (5 segmentos, **4 em sessão FECHADA** = Problema 34) — inverso de (b),
+não variante. Renomear para `specialist` não fecha nenhum: viram `specialist` abertos.
 
 ---
 

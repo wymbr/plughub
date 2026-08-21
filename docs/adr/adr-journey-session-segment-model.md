@@ -1,7 +1,11 @@
 # ADR — Modelo de três níveis: segment, session, journey
 
-**Status:** aceito — D1–D8 fixadas 2026-08-10, D9 no mesmo dia, **D10–D13 em 2026-08-21**. Seções
-marcadas ⏳ dependem de medição (ver §8).
+**Status:** aceito — D1–D8 fixadas 2026-08-10, D9 no mesmo dia, **D10–D13 em 2026-08-21**,
+**D10.1 e D14 em 2026-08-28**. Seções marcadas ⏳ dependem de medição (ver §8).
+
+> **D14 (2026-08-28):** *SLA é fato do segmento de espera, nunca da sessão.* Hoje `sla_target_ms` é
+> coluna de `sessions` e os três leitores de SLA do repositório leem dali — uma sessão só consegue
+> carregar **um** alvo, e contato que espera em duas filas perde a segunda violação.
 
 > ⚠️ **A linha *(espera)* da D9 foi REFUTADA por medição em 2026-08-21** e substituída pela **D12**.
 > `duration_ms` de `role='queue'` mede o flow do agente de fila, não a espera do cliente — e não existe
@@ -522,6 +526,127 @@ justamente o número que a D11 existe para tornar confiável.
 `spawn_reason`), 13 dias depois do F0 do histórico unificado. A decisão vale **no modelo**; *renderizar* a
 terceira classe numa tela hoje seria construir o ramo que nada exercita — a armadilha ANI/DNIS.
 `delegate = 0` segue não explicado, embora o carimbo exista em `webhook.py:1604`.
+
+---
+
+## D10.1 / D14 — emendas de 2026-08-28 (pool da espera, e o grão do SLA)
+
+Nascidas de uma pergunta durante a implementação da D12: *"se a fila é sempre um segmento com um pool
+próprio, diferente do destino, o TMA do destino não fica intacto?"*. A discussão separou três coisas
+que estavam juntas — duas já resolvidas, uma que muda decisão.
+
+### D10.1 — O pool do segmento de ESPERA é o DESTINO; a fila que executou é campo PRÓPRIO
+
+**Decidido.** São dois fatos e precisam de dois campos:
+
+| Fato | Campo | Por quê |
+|---|---|---|
+| para onde se esperou | `pool_id` do segmento de espera = **destino** | é a dimensão do relatório e onde o SLA está configurado |
+| qual fila executou | campo próprio (`queue_pool_id`) | identidade do deploy que atendeu a espera |
+
+**Por que o pool da espera NÃO vira o pool de fila** — e isto é medível, não preferência: o Fila/SLA
+agrupa por `if(segs.q_pool != '', segs.q_pool, ss.pool_id)` (`reports_query.py:5741`), ou seja, **o pool
+do segmento de fila É a dimensão do relatório**. Como a fila é a *default do tenant* por desenho, movê-lo
+para o pool de fila faria **todas as esperas colapsarem numa linha só**, e *"para qual destino se espera
+demais?"* deixaria de ter resposta. A espera é espera **por** alguém; o destino é o que lhe dá sentido.
+
+⚠️ **E o modelo "sempre um pool de fila distinto" quebra no tier MUDO**, que é definido justamente por
+*pool sem `queue_config`*: não há pool de fila. Mantê-lo literal exigiria **inventar** um pool sintético
+que ninguém configurou e que apareceria em relatório agrupado por pool — *valor plausível* com cara de
+configuração. O campo próprio já existe como diagnóstico no marcador do bridge
+(`"queue_pool_id": _flow_pool_id`, marcado lá como *"diagnóstico, não contrato"*); promovê-lo a contrato
+é barato e não custa a dimensão.
+
+**O que a proposta acerta, e é importante:** *"pool de fila sempre distinto do destino"* **não é modelo
+alternativo — é o estado-alvo da CONFIGURAÇÃO**, que `queue_config.pool_id` já suporta e que o defeito
+do `skill_id` legado bloqueia (`_flow_pool_id = "" or pool_id` cai no próprio destino). Segundo caminho
+independente chegando à mesma ordem: **consertar o tenant default vem antes.**
+
+**Sobre o TMA, os dois modelos são equivalentes** — `agent_time_ms` filtra
+`role IN ('primary','specialist')`, logo o segmento de espera (`role='queue'`) está fora **por
+construção, qualquer que seja o pool dele**. A contaminação nunca veio da espera: veio de reclassificar
+o *agente* de fila para `specialist`, e o conserto é a D10 aplicada a **esse** segmento
+(`pool_id → _flow_pool_id`), já escrita.
+
+### D14 — SLA é fato do SEGMENTO DE ESPERA, nunca da sessão
+
+**Decidido**, por argumento de domínio: *não existe SLA por sessão na prática de contact center — o
+alvo é do segmento/fila, e somar esperas contra alvos diferentes produz um número sem utilidade.*
+
+**Estado as-built, medido:** `sla_target_ms` é **coluna de `sessions`** (`clickhouse.py:114`, ALTER
+`Nullable(Int64)`), populada por `parse_routed`, e **as três computações de SLA do repositório leem
+dali** — `query.py:240` (`wait_time_ms <= sla_target_ms`), `reports_query.py:3802` (overlay de SLA) e o
+Fila/SLA (`:5743`, via `ss.sla_target_ms`). **Nenhuma lê do segmento**, e `segments` não tem a coluna.
+
+**É a D2 outra vez, e do lado que este ADR já nomeia:** o alvo de SLA é fato de **uma espera** —
+guardá-lo na sessão força **um valor por sessão**. Consequência concreta: contato que espera 30 s por
+`retencao_humano` (alvo 300 s), é transferido e espera 120 s por outro pool (alvo 60 s) só consegue
+carregar **um** alvo; a violação da segunda espera fica invisível, e a média mistura populações que não
+são comparáveis. Com o produtor da D12 a espera passa a ter registro por segmento — e é ali que o alvo
+tem de estar.
+
+#### ⚠️ D14.1 — antes do grão, há um problema de IDENTIDADE: o campo é declarado como um SLA e consumido como outro
+
+Levantado na mesma discussão, com a tela de config à vista (2026-08-28). **O grão errado não é o defeito
+mais grave — o campo mede outra coisa que a que promete.**
+
+| | O que diz | Onde |
+|---|---|---|
+| **Rótulo da UI** | *"Total service SLA (ms)"* / *"SLA total do atendimento (ms)"* | `configRecursos.json:29`, **nos dois locales** |
+| **Todos os consumidores** | comparam com **tempo de ESPERA** | `query.py:240` (`wait_time_ms <= sla_target_ms`), `reports_query.py:3802-3803`, Fila/SLA `:5743` + `:5816` (*"compara a duração do segmento de fila com o sla_target"*) |
+| **Default do formulário** | `30000` ms | `PoolsPage.tsx:603,755` — 30 s só faz sentido como alvo de **espera** |
+
+O código contradiz o próprio rótulo **inclusive no default que ele escreve**.
+
+**E isso já morde, não é latente.** Medido na tela: `aprovacao_deploy` tem
+`sla_target_ms = 86 400 000` (**24 h**) — valor coerente com o rótulo (aprovação de deploy pode levar um
+dia) e **sem sentido como alvo de espera**. Consequência: aquele pool **não pode violar SLA**, e sua
+conformidade é 100% por construção — um verde que não pode ficar vermelho, que é a família de teste que
+este repositório já catalogou. Ao lado, `retencao_humano` tem `300 000` (5 min), configurado como
+espera. **O mesmo campo carrega duas intenções diferentes em pools diferentes**, e o operador não tem
+como saber qual vale: ele leu o rótulo.
+
+**⚠️ E não é um pool desviante — é METADE do parque (contagem dos 36 pools, 2026-08-28):**
+
+| Faixa | Pools | Leitura |
+|---|---|---|
+| 15 s – 10 min | **18** | alvo de **espera** — plausível |
+| **≥ 1 hora** | **18** | prazo de **processo** — impossível violar como espera |
+
+Dentro dos ≥1 h: 5 em 1 h (`outbound_*`), 9 em 24 h, 3 em 48 h e **um em 7 DIAS**
+(`limite_entrega`, 604 800 000 ms). O default do formulário (30 s) é usado por **2** pools — ou seja, o
+parque foi configurado **majoritariamente à mão, seguindo o rótulo**.
+
+**E a divisão não é aleatória: ela coincide com o tipo de pool.** O grupo ≥1 h é exatamente o de
+processo/aprovação/workflow (`gate_promocao_ia`, `formfill_*`, `wrapup_detached_ia`, `deploy_promote_ia`,
+`outbound_*`, `limite_processo`, `aprovacao_credito`, `portabilidade_processo_ia`, `limite_retorno`,
+`retencao_humano-int`) — pools em que **não há cliente esperando em fila**. O campo já carrega as duas
+semânticas, e **o discriminador que as separa é o mesmo da D13** (acesso de contato × interno). Isso
+torna a correção tratável: não é preciso adivinhar a intenção pool a pool.
+
+**Consequência para qualquer número agregado de SLA hoje:** ele mistura duas populações incomparáveis —
+metade medida contra alvo de espera, metade contra prazo de processo que nunca vence. É o mesmo
+argumento que motivou a D14, um nível acima: *somar esperas contra alvos diferentes não produz número
+com uso*.
+
+**Há pelo menos TRÊS SLAs distintos no domínio, e hoje um campo e meio:** (a) **espera** — alvo da fila,
+grão de segmento (D14); (b) **atendimento total** — o que o rótulo promete, grão de sessão ou de
+processo; (c) **tempo máximo de resposta por mensagem** — este já tem campo próprio (*"Max. reply
+time"*, `Per customer message — optional`). Que (c) exista separado é a evidência de que a separação é
+natural no domínio; (a) e (b) é que estão fundidos.
+
+⚠️ **Ordem imposta:** decidir **o que `sla_target_ms` É** vem **antes** de migrar os leitores para o
+segmento. Migrar primeiro só levaria um número errado para um grão melhor. As saídas são renomear o
+rótulo para o que o código faz (barato, honesto, e reabre a pergunta "onde fica o SLA de atendimento
+total?") ou **partir em dois campos** — e a segunda exige varrer os valores já configurados, porque
+`aprovacao_deploy` prova que há pools preenchidos segundo a leitura errada.
+
+⏳ **Não decidido aqui:** se o alvo é **copiado** para o segmento no fechamento da espera (denormalização,
+simétrico ao que o routing já faz para a sessão) ou **resolvido na leitura** a partir do pool de destino
+do segmento. O primeiro sobrevive a mudança de config (o alvo do dia); o segundo não duplica dado.
+`sessions.sla_target_ms` permanece como **projeção** — nunca como fonte de cálculo de SLA — e a
+migração dos três leitores é fatia própria, com contagem antes e depois (os números de conformidade
+**vão** mudar).
 
 ---
 

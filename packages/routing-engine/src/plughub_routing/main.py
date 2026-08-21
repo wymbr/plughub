@@ -275,13 +275,13 @@ async def _process_message(
             # remoção do pote misto ele virou um ramo que nenhuma entrada alcança.
             await _emit_outage(event, decision, producer, redis_client)
             return
-        # ── Fila de sistema: transição unadmitted→admitted ────────────────────
-        # Sessão que esperava em fila muda acabou de ser admitida — fecha a
-        # passagem pela fila com segmento sintético role=queue outcome=handoff
-        # (mesma fonte que o /reports/pools/queue Fase D já lê). No-op barato
-        # (um SREM) para sessões que nunca enfileiraram.
+        # ── Saída de fila: a espera acabou (admitida / agente disponível) ─────
+        # Fecha a passagem pela fila com o segmento `role=queue outcome=handoff`
+        # — a fonte que o /reports/pools/queue (Fase D) já lê. Desde a D12
+        # (2026-08-28) vale para os DOIS tiers, não só a fila muda; quem não
+        # passou por fila não tem `first_queued_ms` e sai sem emitir nada.
         try:
-            await mute_queue.resolve_mute_exit(
+            await mute_queue.resolve_queue_exit(
                 redis_client, producer, event.tenant_id,
                 event.pool_id or "", event.session_id, "handoff",
             )
@@ -531,10 +531,15 @@ async def _emit_queue_timeout(
     wait_ms      = max(now_ms - queued_at_ms, 0) if queued_at_ms else 0
     sla_target   = await _pool_sla_target(redis_client, tenant_id, pool_id)
 
-    # Fila de sistema (Fase A): limpa o estado de fila muda SEM emitir segmento
-    # — este caminho já emite o seu próprio segmento sintético (passo 3).
+    # Limpa o estado de fila SEM emitir segmento — este caminho emite o seu
+    # próprio sintético (passo 3).
+    # ⚠️ LACUNA NOMEADA (D12, 2026-08-28): o emissor do passo 3 só cobre o tier
+    # MUDO, então `max_wait_exceeded` na fila ATENDIDA continua sem segmento de
+    # espera. Unificar os dois emissores é fatia à parte — trocar para
+    # `emit_segment=True` aqui, sem remover o passo 3, produziria emissão DUPLA
+    # no mesmo relatório que este arco existe para consertar.
     try:
-        await mute_queue.resolve_mute_exit(
+        await mute_queue.resolve_queue_exit(
             redis_client, producer, tenant_id, pool_id, session_id,
             "abandoned", emit_segment=False,
         )
@@ -1357,10 +1362,10 @@ async def _periodic_queue_drain(
                     if closed_marker:
                         await redis_client.zrem(key, session_id)
                         await redis_client.delete(f"{tenant_id}:queue_contact:{session_id}")
-                        # Fila de sistema: cliente desistiu esperando em fila
-                        # muda → segmento sintético de abandono (ledger Fase D).
+                        # Cliente desistiu esperando → segmento de abandono
+                        # (ledger Fase D). D12: vale nos dois tiers.
                         try:
-                            await mute_queue.resolve_mute_exit(
+                            await mute_queue.resolve_queue_exit(
                                 redis_client, producer, tenant_id, pool_id,
                                 session_id, "abandoned",
                             )

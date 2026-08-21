@@ -5915,13 +5915,36 @@ async def process_queued(
         session_id, pool_id, _flow_pool_id, agent_type_id,
     )
 
-    # ── Fase C (queue-attended-model): queue segment — own ledger entry ───────
-    # role='queue' marks the wait window in analytics.segments. pool_id stays =
-    # the TARGET pool (the Fila/SLA reporting dimension — "where did the contact
-    # wait"). Queue segments never touch segment_seq nor primary_segment: the
-    # analytic invariant is "atendido" = first `primary` segment of the session,
-    # and agent metrics (primary/specialist filters) exclude queue by construction.
-    _q_seg_id      = str(uuid.uuid4())
+    # ── Segmento do AGENTE DE FILA (D12 + D10, 2026-08-28) ────────────────────
+    # Era `role='queue'`, descrito como "the wait window". **Não era.** Medido: o
+    # `duration_ms` daqui é a duração do FLOW (o carimbo abre imediatamente antes
+    # de `activate_native_agent` e fecha no retorno), e a transcrição mostra o
+    # agente CONVERSANDO com o cliente dentro da janela. É segmento de trabalho.
+    # A espera passou a ter produtor próprio no routing-engine
+    # (`mute_queue.resolve_queue_exit`), que é quem tem o fato — e que a registra
+    # inclusive quando este agente NÃO roda.
+    #
+    # Três mudanças, e elas são UMA só (ver TODO.md § janela de espera):
+    #   1. `role` → 'specialist': é agente, faz trabalho de agente, consome
+    #      inferência. `primary` está descartado por razão dura — o invariante
+    #      analítico "atendido = 1º segmento primary" faria o contato parecer
+    #      atendido no instante em que ENTROU na fila.
+    #   2. `pool_id` → `_flow_pool_id` (D10): o pool do segmento é quem ATENDE,
+    #      não o destino. Carregar o destino era a sobrecarga que a D10 nomeia, e
+    #      sem esta linha a reclassificação jogaria o tempo da IA de fila dentro
+    #      do TMA do pool HUMANO. ⚠️ No-op enquanto o `queue_config` do pool tiver
+    #      só `skill_id` (aí `_flow_pool_id` resolve para o próprio destino) —
+    #      ver TODO.md § tenant default suprimido.
+    #   3. `segment_id` DETERMINÍSTICO: emissão repetida vira a MESMA linha e o
+    #      ReplacingMergeTree deduplica, em vez de exigir guard de re-entrância.
+    #
+    # ⚠️ Efeito colateral DECLARADO (medido antes): `agent_time_ms` filtra
+    # `role IN ('primary','specialist')`, logo o tempo deste agente passa a
+    # contar. Medido em `retencao_humano`: 456 083 → 477 968 ms (+4,8%), 27
+    # sessões tocadas, 11 delas hoje reportando ZERO.
+    _q_seg_id      = str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"plughub:queue-agent:{tenant_id}:{session_id}"
+    ))
     _q_joined_at   = datetime.now(timezone.utc)
     _q_joined_iso  = _q_joined_at.isoformat()
     _q_participant = f"queue-{session_id}"   # instance_id="" — synthetic identity
@@ -5929,11 +5952,11 @@ async def process_queued(
         session_id=session_id,
         tenant_id=tenant_id,
         participant_id=_q_participant,
-        pool_id=pool_id,
+        pool_id=_flow_pool_id,      # D10: quem ATENDE, não o destino
         agent_type_id=agent_type_id,
         event_type="participant_joined",
         agent_type="native",
-        role="queue",
+        role="specialist",          # D12: é trabalho de agente, não espera
         segment_id=_q_seg_id,
         joined_at=_q_joined_iso,
     ))
@@ -5985,11 +6008,11 @@ async def process_queued(
         session_id=session_id,
         tenant_id=tenant_id,
         participant_id=_q_participant,
-        pool_id=pool_id,
+        pool_id=_flow_pool_id,      # D10 — par do joined acima
         agent_type_id=agent_type_id,
         event_type="participant_left",
         agent_type="native",
-        role="queue",
+        role="specialist",          # D12 — par do joined acima
         segment_id=_q_seg_id,
         joined_at=_q_joined_iso,
         duration_ms=_q_duration_ms,

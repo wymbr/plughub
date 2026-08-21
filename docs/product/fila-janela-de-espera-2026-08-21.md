@@ -138,6 +138,77 @@ Fica como **segmento** (reusa mecanismo, aparece no drill, sem tabela nova), com
    e o `ReplacingMergeTree` deduplica — o defeito da §5.1 sumiria sem guard novo.
 2. **`queue` admitido no `ParticipantRoleSchema`** — ver §6.
 
+### 3.3b ⚠️ CORREÇÃO — o produtor da espera JÁ EXISTE, para o tier MUDO (lido 2026-08-28)
+
+Esta seção afirmava que *"a janela de espera nunca existiu como fato"*. **É verdade só para a fila
+ATENDIDA.** Para a fila **muda** o produtor existe, está no routing-engine, e tem a forma exata que a
+D12 prescreve — `mute_queue.resolve_mute_exit` (`mute_queue.py:99-164`):
+
+| Peça da D12 | Como já está no `resolve_mute_exit` |
+|---|---|
+| fato é do **roteamento** | emitido pelo routing-engine, não pelo bridge |
+| veículo = **segmento** | `conversations.participants`, `role='queue'`, `agent_type='system'` |
+| início da espera | `first_queued_ms` — chave própria, **NX**, TTL 7 d |
+| desfecho | `outcome` ∈ `handoff` \| `abandoned`, mais `max_wait_exceeded` pelo `_emit_queue_timeout` |
+| existe **sem** agente de fila | é sintético por construção — `participant_id="system-queue"` |
+
+E o carimbo de entrada **não é privilégio do tier mudo**: `add_queued_contact` escreve a **mesma**
+chave `first_queued_key`, com o mesmo `NX` e TTL 7 d, para os **dois** tiers (`registry.py:2618-2633`),
+justamente para sobreviver ao re-enfileiramento. *O fato de entrada da fila atendida já tem produtor
+durável; o que falta é só o fato de SAÍDA.*
+
+**Isso rebaixa a D12 de construção para GENERALIZAÇÃO**, e muda o risco: o desenho não precisa ser
+inventado nem validado do zero — precisa ser **estendido ao tier que não o tem**, reusando um caminho
+que já roda em produção. É o oposto de "inventar o 3º mecanismo": o 1º mecanismo existe e está sendo
+usado pela metade.
+
+**Por que ninguém viu:** `resolve_mute_exit` abre com `SREM(unadmitted)` e **retorna `False` se a
+sessão não estava em fila muda** (`:116-118`) — no-op barato e mudo no caminho quente. Para a fila
+atendida ele é chamado nos mesmos 4 pontos e não faz nada. A cobertura parcial não tem sintoma
+próprio: some no mesmo silêncio da espera que não é medida.
+
+**Dois defeitos no emissor que existe, ambos latentes e ambos consertados de graça pela D12:**
+
+1. **`segment_id = str(uuid.uuid4())`** (`:142`) — igual ao `:5924` do bridge. Duas saídas para a mesma
+   passagem pela fila produzem **duas linhas** em vez de uma deduplicada. Hoje protegido só pelo
+   `SREM` ser one-shot; a emenda 1 da D12 (id determinístico) remove a dependência desse acidente.
+2. **`producer.send(...)` SEM `key=`** (`:137`) — o tópico `conversations.participants` tem 3
+   partições, e publicar sem chave nele é **exatamente** o defeito mais caro já registrado neste
+   repositório (`CLAUDE.md` § Postura de Engenharia; `conference-mechanics.md` § Problema 34). Aqui
+   não morde **hoje** porque o evento é único (só `participant_left`, sem `joined` para vencer), mas a
+   proteção é acidental: qualquer emenda que acrescente o `participant_joined` reabre o defeito com o
+   agravante de já parecer testado. O bridge já corrige isso com `key=session_id`
+   (`main.py:3513`). ⚠️ *Consertar a chave aqui é barato e independente da D12 — não deixar para depois.*
+
+**Consequência para o plano:** a fila atendida precisa da **saída**, não do fato inteiro; e o emissor
+compartilhado deve nascer com id determinístico + `key=session_id`, herdando os dois consertos.
+
+### 3.3c São TRÊS produtores de `role='queue'`, e a colisão foi DELIBERADA (medido 2026-08-28)
+
+Inventário completo dos **52** segmentos `role='queue'` do tenant:
+
+| Produtor | `agent_type` | `participant_id` | segs | abertos | `duration_ms` médio | O que mede |
+|---|---|---|---|---|---|---|
+| bridge `activate_queue_agent` | `native` | `queue-{sid}` | **33** | **5** | 117 638 ms | o **flow do agente** |
+| `mute_queue.resolve_mute_exit` | `system` | `system-queue` | **18** | 0 | 29 121 ms | a **espera real** |
+| `_emit_queue_timeout` (passo 3) | `system` | outro | **1** | 0 | 1 802 441 ms | a **espera** até o max_wait |
+
+**Duas leituras que a tabela força:**
+
+1. **A colisão é decisão as-built, não deriva.** O docstring de `_emit_queue_timeout`
+   (`main.py:502-508`) diz, em prosa: *"queue agent active → … the bridge closes the **REAL** queue
+   segment"* × *"mute queue (no queue agent) → **synthetic** role=queue segment **so the segments
+   ledger still records the wait**"*. O sintético existe **como suplente** do segmento do agente para a
+   MESMA vaga de livro-razão. Ou seja: o segmento do agente foi **adotado de propósito** como registro
+   da espera, e o fallback prova a intenção. A D12 não está corrigindo um descuido — está desfazendo um
+   desenho que mediu errado. *(Reforça o §3.1b: a palavra "REAL" no comentário é o tell.)*
+2. **Os 5 segmentos abertos estão TODOS do lado do bridge; os 19 do routing têm zero.** Não é sorte: os
+   emissores do routing publicam **um único `participant_left`** já com `joined_at` + `duration_ms`, e
+   por isso **não têm estado aberto possível**. O par `joined`/`left` do bridge tem, e vaza 5.
+   ⇒ Mover a espera para o routing não só cria o fato que falta: **elimina por construção o modo de
+   falha do Problema 34 para esse fato.** O padrão de evento único é a parte do desenho que já está
+   provada em produção — 19 segmentos, nenhum aberto.
+
 ### 3.4 Hipótese aberta: existem DOIS tipos de espera
 
 Se `retencao_humano` opera em **pull**, o contato vira item de inbox e espera **reivindicação**, que não
