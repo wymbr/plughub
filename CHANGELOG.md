@@ -2,6 +2,418 @@
 
 ---
 
+## Reexame dos 9 em `Escopo reduzido` + poda de 11 seções do TODO (2026-08-26)
+
+Item 8 da passagem de 08-26. A reversão do arco n8n (2026-08-18) deixou **9 itens** cujo corte
+tinha como fundamento *"esta parte vira template n8n"* — fundamento que caiu com ela. Reexaminados
+um a um, com a regra de que **corte com fundamento próprio sobrevive sozinho**.
+
+### Veredicto
+
+**4 cortes mantidos** — itens 2 e 5 (`workflow-api`: os stubs 410 morrem por serem stubs mortos, não
+por n8n), 20 (`agente_wrapup_v1.yaml`, que nenhum pool deploya) e 9 (ampliado, abaixo).
+**2 revertidos** — 12 (Business in Any Media: nível (a), contrato delegate-por-pool e intake-flow,
+cortados literalmente como *"autoria, que vira template n8n"*) e 16 (guard de teardown-hook, cujo
+mecanismo morria porque *"sem o bloco de steps não há o que varrer"* — o bloco não morre mais).
+**3 reatribuídos** — 15, 17 e 55: a absorção sobrevive, o dono não (o item 7, *mapeadores de
+`flow_definition`/`pipeline_state`*, deixou de existir na reversão).
+
+**Achado adjacente:** 2 dos 4 itens em `Aborta` (10, step de expressão sandboxed; 11, hot-reload de
+YAML em disco) foram abortados com a premissa *"o corpo do fluxo morre"*, que caiu junto — contra o
+que a §4.6 do doc de reversão afirma. Registrados para o mesmo rejulgamento (tarefa D1).
+
+### Item 9 — a cola do G-S2.4 era maior do que o registro dizia
+
+O `TODO.md` descrevia 4 peças. A medição achou três acoplamentos não registrados:
+
+- **O campo morto gateia uma tela VIVA do Arc 13.** `CampaignsPage.tsx:1359` só renderiza o
+  `CurationSamplingRulesDetailPanel` quando `review_workflow_skill_id === 'skill_revisao_treplica_v1'`.
+  E **zero campanhas têm esse valor** — o painel de curadoria nunca renderiza hoje. Dropar a coluna
+  sem trocar o discriminador esconderia a curadoria de vez.
+- **O caminho VIVO lê estado que só a cola morta escreve.** `router.py:2285`/`:2404` fazem
+  `if result.get("resume_token")`, e `:2276-2282` grava `session.review_decision` no ContextStore
+  *"so the suspended workflow YAML choice step can branch on it"*. Removida a cola, viram ramos
+  permanentemente falsos — *promessa sem produtor*.
+- **`skill_revisao_simples_v1` não existe em lugar nenhum** (sem arquivo, sem linha no registry),
+  mas `seed_evaluation.py:198` o grava em toda campanha e o cenário 28 dispara por ele. Referência
+  pendurada.
+
+Duas armadilhas de nome, ambas da família *"triar por pacote, não por função"*:
+`agente_revisor_v1.yaml:80` declara **`id: skill_revisao_v1`** (arquivo ≠ id), e das 3 skills
+agrupadas sob `skill_revisao_*` duas têm entrada **viva** no Arc 13 (`evaluation_review_submit`,
+`submit_pre_review`).
+
+**O único argumento que mantinha a cola caiu:** o `TODO.md` dizia *"mantido por compat com o cenário
+28 — raio de teste no 28"*. Medido: o 28 é opt-in (`--workflow-review`), está fora da suíte default
+01–18, e **estoura o timeout de 60 s com zero asserções**. Não há raio de teste.
+
+### Poda — 11 seções, 1.145 linhas (−21%)
+
+`TODO.md`: **5.470 → 4.325 linhas**, 90 → 79 seções. **8 das 10 primeiras tinham resíduo VIVO
+enterrado no corpo** (a rodada de 2026-08-03 teve 3 de 7 — a armadilha piorou). Resgatados à mão
+ANTES da remoção, em § *"Resíduos resgatados da poda de 2026-08-26"* (R1–R8): pausa de IA desfeita
+pelo bootstrap · marcador de escopo de pool ausente no `_sessions_meta` · carimbo de DNIS · 5
+cenários e2e tomando 404 · 2 pontos não medidos do requeue · snapshot de form · docstring obsoleto
+em `registry.py` + medição do `reap:` · pré-requisitos 1 e 2 do `participant_id`.
+
+**Consolidados em vez de duplicados:** o *portão de deriva do seed do config-api* e os *3 timeouts
+constantes* foram para dentro da § I5, cujo cabeçalho já os nomeava. **Não resgatados de propósito**
+(já tinham casa aberta): rota anônima (§ N3), fase I5 dita "faltante" (fechada em 08-07),
+`PresenceSidebar` órfão (§ Eventos), cenário 10 (§ Fixtures do e2e).
+
+A 11ª seção saiu por medição: *"NENHUM step `reason` funciona no demo — 401 em 124 de 124"*
+contradizia o `CLAUDE.md` havia 4 dias. `curl -s localhost:3200/v1/health` → `anthropic: "ok"`,
+`credentials: "ok"`, `last_ok_age_s: 6838`, `errors: {}`. A causa-raiz foi preservada antes do
+corte: o `docker-compose.demo.yml` não tinha `env_file`, então o `.env.demo` nunca era lido e a
+chave vinha da shell de quem subiu a stack — *estado de shell não é entrada declarada*.
+
+### Ferramentas
+
+- `infra/scripts/prune_todo_closed.py` — os 7 padrões de 08-03 saíram de `CLOSED` para
+  `ALREADY_PRUNED`. Já aplicados, imprimiam 7 `NÃO ENCONTRADO` em toda execução: o *"alarme com
+  álibi permanente"* que o comentário do próprio script descreve, e que treina quem lê a ignorá-lo.
+  Regra anotada no código: aplicou, move.
+- `infra/scripts/group_todo_by_theme.py` **(novo)** — reagrupa as seções por tema, movendo cada uma
+  byte a byte (não reescreve conteúdo, para o diff continuar auditável). Três alarmes: seção sem
+  tema vai para um balde nomeado e é listada; padrão sem seção é listado; **padrão ambíguo aborta**
+  — é o único dos três que causaria perda, e alarme que não impede o dano é decoração. Idempotente.
+
+### Documentos
+
+`TODO.md` § *"Reexame dos 9 em `Escopo reduzido`"* (veredicto, medições, tarefas A0–A7 · B1/B2 ·
+C1–C4 · D1) · aviso no topo de `n8n-triagem-2026-08-17.md` · `CLAUDE.md` (os dois
+`[REEXAMINAR 2026-08-18]` viraram veredicto, senão o índice contradiria o registro).
+
+---
+
+## Cenário e2e 29 — a fila atendida passa a ser exercitada (2026-08-25)
+
+Tarefa 5 da passagem de 08-25. A suíte tinha 28 cenários e **nenhum colocava um contato
+em fila com o agente de fila rodando**. Foi essa ausência que deixou a surdez do agente de
+fila sobreviver meses, e ela não era óbvia porque a fila *parecia* coberta.
+
+### O que tornava o buraco invisível
+
+Duas coisas, e a segunda é pior que a primeira:
+
+1. O cenário 07 é o único ponto da suíte que menciona fila — e chama `queue_context_get`
+   **direto por MCP, sem flow algum**.
+2. A asserção dele era um **`pass()` incondicional** (`07_inbound_full.ts:133`), com o
+   comentário anunciando isso como escolha: *"always pass in e2e (tool contract verified)"*.
+   Qualquer retorno, inclusive `isError`, virava verde. Corrigida na mesma fatia: agora
+   reprova em erro de protocolo, e segue aceitando ausência de snapshot — que é desfecho
+   legítimo, ao contrário de a tool falhar.
+
+### O discriminador do defeito não é "fila" — é `instance_id=""`
+
+O agente de fila é o **único caller em produção ativado com `instance_id` vazio**
+(`orchestrator-bridge/main.py:5952`). Esse valor decide **dois nomes que precisam casar**:
+
+| | onde | regra |
+|---|---|---|
+| campo do hash `menu:waiting:{sid}` | `menu.ts:229` | `ctx.instanceId \|\| "_default_"` |
+| lista do BLPOP | `redis-keys.ts:27-30` | `instanceId ? …:{iid} : …` (truthiness) |
+
+Com `??`, a string vazia **sobrevivia no campo** e era **falsy na chave**: o engine escutava
+`menu:result:{sid}` e o bridge — que testa `campo !== "_default_"` — entregava em
+`menu:result:{sid}:` (dois-pontos final), lista que ninguém consome. *O campo é `_default_`
+se e somente se a chave não tem sufixo* — é a **relação** que o cenário verifica, não cada
+literal em separado.
+
+E metade da funcionalidade continuava viva, escondendo o resto: o sentinela
+`__agent_available__` é publicado pelo routing numa chave session-scoped **hardcoded**
+(`kafka_listener.py:728`), então a transferência da fila funcionava. Só a fala do cliente sumia.
+
+### Camadas, para que cada vermelho aponte para UMA causa
+
+**P — precondições MEDIDAS, não assumidas.** `P1` lê o `ready_set`
+(`{t}:pool:{p}:instances`) e exige zero agentes prontos; `P2` confere que o pool declara
+`queue_config` (sem ele a fila é **muda** e o agente nunca ativa — regressão de *config*, e
+a mensagem diz isso). **`A` — o bridge ativou** (`queue:agent_active:{sid}`, que só existe
+depois de o flow resolver). **`B1` — TRANSPORTE:** o hash tem o campo `_default_` — a
+asserção que teria pego a surdez, determinística, sem LLM. **`B2` — testemunha negativa:**
+a lista-fantasma `menu:result:{sid}:` não pode existir. **`C1` — o agente OUVIU**
+(`ultima_mensagem` no `pipeline_state`, com marcador único no texto para que a igualdade não
+possa casar por acaso). **`D1` — o agente RESPONDEU**, separado de propósito: o
+`on_failure` do `responder_cliente` volta ao menu **sem falar com o cliente**
+(`agente_fila_v1.yaml:111`), então falha de LLM é, para o cliente, indistinguível de "o
+agente ignorou". Aqui elas têm nomes diferentes: **C1 verde + D1 vermelho = ouviu, e o LLM
+falhou.**
+
+### Duas decisões que valem registro
+
+**A precondição é medida, não prevenida.** O contato só enfileira se ninguém estiver pronto
+no pool humano. O `flushTestData` do runner apaga `{tenant}:*` antes de cada cenário — e o
+`ready_set` morre junto —, então na prática isso vale mesmo com o Console aberto: instância
+humana não é gerida pelo Bootstrap e **heartbeat não cria instância** (criação é do login).
+O que ainda pode quebrar é um re-login dentro da janela. Um `SCARD` resolve: o cenário
+**mede e nomeia** em vez de assumir, e reprova dizendo o que encontrou.
+
+**O 29 fica FORA do `--demo`.** Depende de uma precondição de ambiente sobre a qual reprova;
+numa suíte corrida com o Console aberto, viraria vermelho intermitente — e vermelho
+intermitente ensina a ignorar a cor. Roda por `--queue` ou `--only 29`.
+
+**Teto de tempo 150 s** (contra 60 s do default): os três prazos internos somam ~90 s no pior
+caso, e o teto do runner tem de ser **maior que a soma** — senão o cenário morre antes das
+asserções e "morreu" fica indistinguível de "reprovou". `orchestrator-bridge` entrou no
+`depends_on` do `e2e-runner` (só `service_started` — ele não tem health HTTP): sem a
+dependência declarada, ele fora do ar apareceria como timeout de ativação, que aponta para o
+lugar errado.
+
+### O primeiro 8/8 tinha um verde que não podia reprovar — e o tell foi a DURAÇÃO
+
+A execução que fechou verde levou **1059 ms**, com uma chamada real de LLM dentro. Não fecha:
+o `D1` lia o **WebSocket** e aceitava *"o primeiro texto que não contém o marcador"* — e a
+**saudação** (`boas_vindas`) é um `notify` que chega ANTES da fala do cliente e naturalmente
+não tem marcador. O `D1` casava com ela. Passaria com o `responder_cliente` completamente
+morto, que é exatamente a metade que ele existe para julgar.
+
+Ironia útil: a fatia que conserta um `pass()` incondicional no cenário 07 quase entregou outro.
+A diferença é que desta vez havia um instrumento — *prever o número antes de rodar* — e o
+número que denunciou não foi uma asserção, foi o **relógio**. **Verde rápido demais é hipótese,
+não resultado.**
+
+Corrigido para julgar o ARTEFATO do step: `resposta_ia` é o `output_as` do `responder_cliente`
+e **só existe se o `reason` teve sucesso** — o `on_failure` desvia para `aguardar_mensagem`
+sem gravá-lo. Não depende de ordem de chegada no WS nem do texto configurado da saudação.
+
+**Confirmado pela mesma unidade que denunciou:** 1059 ms → **4078 ms**, com as mesmas 8
+asserções verdes. Os ~3 s de diferença são a chamada de LLM que a versão anterior não esperava
+— isto é, não estava julgando. Estado final: **8/8 em 4078 ms.**
+
+### Achado colateral: o `e2e-runner` não sabia assinar um JWT de webchat
+
+A primeira execução reprovou em `A1` com `invalid_token` — e o valor do vermelho foi apontar
+para fora do cenário. O `e2e-runner` **não declarava `WEBCHAT_JWT_SECRET`**, então assinava
+com o default do código (`test_e2e_webchat_secret_32chars`), enquanto o channel-gateway
+verifica resolvendo Redis `{tenant}:config:webchat:jwt_secret` → `PLUGHUB_JWT_SECRET`
+(`webchat.py:466`; no demo, `changeme_32chars_webchat_secret!`). E o `flushTestData` apaga
+`{tenant}:*` antes de cada cenário, logo **a chave do Redis nunca existe em e2e** e vale
+sempre o fallback.
+
+**Previsão feita e MEDIDA — confirmada na causa, incompleta no desfecho.** Previu-se que o
+cenário 12 (webchat), dentro do `--demo`, vinha reprovando pelo mesmo motivo. Rodado: as três
+asserções de auth **passaram**, e o 12 usa `ctx.webchatJwtSecret` direto (não foi tocado), logo
+só a env mudou — o handshake estava mesmo bloqueado pelo segredo. O que a previsão não
+antecipou é que havia **um segundo defeito embaixo**: o cenário agora chega à Parte C e morre no
+upload. É o padrão que a § Postura de Engenharia descreve — *cada correção só revela a próxima
+por remover um anestésico*.
+
+**O segundo defeito, e por que o conserto óbvio seria o errado.** O `upload.ready` devolve
+`webchat_upload_base_url`, cujo default é `http://localhost:8010/...` (`config.py:134`). Esse
+valor está **CERTO**: o consumidor real do webchat é um browser rodando no host. O e2e-runner é
+um container na rede do compose, onde `localhost` é ele mesmo — o POST morria com
+`FetchError … reason: ` (sem status, sem asserção), estourando o cenário inteiro no `catch`.
+Apontar `PLUGHUB_WEBCHAT_UPLOAD_BASE_URL` para o host interno consertaria o teste e
+**quebraria o webchat de verdade**. O cenário passou a reescrever só o host/porta, e ganhou
+uma asserção sobre o **path** — o contrato do servidor continua julgado, e é o que sobrou de
+verificável ali. 14 → 15 asserções.
+
+**E havia uma TERCEIRA camada.** Com o POST finalmente chegando ao servidor, veio um status
+HTTP de verdade: **415**, *"conteúdo não corresponde ao tipo declarado: image/jpeg"*. O fixture
+era `Buffer.alloc(2048, 0x42)` — 2 KB da letra "B" com o comentário *"synthetic JPEG"* — e o
+servidor valida magic bytes contra o MIME declarado (`attachment_store.py:131`: `FF D8 FF` no
+offset 0). **O servidor estava certo**; quem mentia era o teste, e a mentira estava escrita no
+comentário. Corrigido com SOI/APP0 + EOI reais.
+
+**Consequência que vale mais que os três consertos:** o cenário 12 está no `--demo` e
+**nunca passou nesta stack** — três defeitos independentes empilhados, cada um invisível
+enquanto o anterior existia (segredo → host → magic bytes). Um cenário que nunca passou não é
+cobertura; é uma linha verde-clara no relatório que ninguém leu até o fim.
+
+### E a QUARTA camada não é do teste — é do produto (`--only 12` fica 14/15)
+
+Removidos os três anestésicos, sobrou a Parte D: *"replay de mensagem não entregue após
+reconexão"*. Aqui a série de "era o teste" acabou, e a diferença foi ter parado de adivinhar:
+a asserção só ecoava o texto esperado — **contador de ausência sem testemunha de presença** —,
+e a instrumentação (o que chegou + o estado do stream) deu a resposta numa execução:
+
+```
+mensagens_recebidas: [{ type: "conn.session_ended" }]
+entradas_no_stream:  []          ← vazio, não "sem a entrada semeada"
+```
+
+O stream foi **apagado** e o cliente recebeu **sessão encerrada**. Isto contradiz o `CLAUDE.md`
+§ WebChat, que promete *"Reconnect via cursor: zero messages lost"*.
+
+⚠️ **A primeira explicação foi refutada por medição, e o erro vale mais que ela.** Lendo
+`webchat.py:320-329` — queda do WS → `close_reason = "client_disconnect"` → `_close` →
+`contact_closed` com `customer_disconnect`, sem janela de graça — concluiu-se que era esse o
+caminho. Instrumentado o campo que faltava, o `conn.session_ended` veio com
+**`reason: "session_expired"`**. A leitura estava certa sobre o que aquele caminho faz e errada
+sobre ser ele o percorrido. *Um mecanismo plausível que explica o sintoma não é prova de que
+foi ele que agiu* — é o mesmo gênero de "valor plausível", agora numa hipótese em vez de num
+dado. Quem apaga o stream segue **não medido**.
+
+**Deixado vermelho de propósito, e registrado no `TODO.md`.** Segurar o contato através de uma
+reconexão é decisão de produto com custo próprio (por quanto tempo? o que acontece com AHT e
+com o `close_reason` da analítica?), e as duas saídas honestas são implementar a graça **ou
+apagar a promessa do doc**. Um verde aqui exigiria enfraquecer a asserção para não julgar
+exatamente a garantia que está em questão.
+
+Consertado nos dois lados, de propósito: a env entrou no compose **e** os cenários passaram a
+**ler o segredo efetivo** do Redis quando ele existe, em vez de depender de duas linhas
+mantidas iguais à mão. E a mensagem de falha do `A1` agora diz qual segredo foi usado — sem
+isso, `invalid_token` parece defeito de handshake, que é o lugar errado para procurar.
+
+**Não coberto:** a medição de sentimento. `gate_sentiment_engine_half.sh` segue exigindo
+reprodução manual — automatizá-lo é acrescentar asserções de ctx/`sentiment_live` a este
+cenário, agora que ele produz um contato de fila reprodutível.
+
+### A suíte inteira, medida pela primeira vez: `--demo` 0/17 → 10/17
+
+Antes de tudo isto, o `--demo` **não chegava a rodar**: morria no `waitForService` do config-api
+porque `CONFIG_API_URL` não era declarada no `e2e-runner` e o default `localhost:3600` aponta,
+dentro do container, para o próprio runner. Fatal, antes do primeiro cenário.
+
+| Cenário | Causa | Classe |
+|---|---|---|
+| 01–04, 06, 08–11 | — | já verdes |
+| **07** | asserção nova conservadora demais (minha) | corrigida |
+| **13, 14, 18** | `PLUGHUB_WORKFLOW_CHANNEL_GATEWAY_URL` ausente → 502 | **produto**, corrigido |
+| **12** | reconexão: stream apagado + `session_expired` | **produto**, em aberto |
+| **15, 16** | testam `/v1/agent-types`, entidade **aposentada** | teste morto |
+| **17** | chama `POST /mcp`, rota inexistente (HTML 404) | teste morto |
+
+**O 13/14/18 era um defeito só, e de PRODUTO.** `POST /v1/workflow/trigger` é o proxy do Arc 19
+Fase D: sem a env, `channel_gateway_url` cai em `localhost:8010` — dentro do container, ele
+mesmo — e o endpoint devolvia 502 para **qualquer** chamador, não só para o e2e. O prefixo é a
+armadilha: o Settings usa `env_prefix="PLUGHUB_WORKFLOW_"` (`config.py:48`), então um
+`CHANNEL_GATEWAY_URL` sem prefixo — como o do skill-flow-service, correto no serviço dele —
+seria ignorado em silêncio.
+
+**Previsão errada, registrada:** previu-se **13/17** e vieram **10/17**. Os três da diferença
+são 13/14/18: a env consertou o 502 e revelou a camada seguinte — `404 No webhook endpoint
+'flow_approval_test_v1' configured for this tenant`. Os cenários disparam flows por `flow_id`
+sem endpoint de webhook semeado no tenant demo. **O erro de previsão é instrutivo:** este mesmo
+CHANGELOG registra o padrão *"cada correção só revela a próxima"* duas vezes na mesma sessão, e
+a previsão foi feita como se ele não fosse se aplicar. Assumir que a camada visível é a última
+é o modo de falha, mesmo depois de nomeá-lo.
+
+**Correção de escopo (mesma sessão):** a primeira correção do 07 exigia ausência de erro e
+reprovava com *"No operational snapshot found for pool retencao_humano"*. Conservador demais e
+culpando a coisa errada — o snapshot é do Routing Engine, o flush o apaga, e o cenário não faz
+nada passar por lá. O critério final separa pelo NOME: ausência de snapshot é desfecho legítimo,
+qualquer outro erro reprova. Mantém a capacidade de falhar sem exigir do ambiente o que o
+cenário não cria.
+
+**Arquivos:** `packages/e2e-tests/scenarios/29_queue_agent.ts` (novo) · `runner.ts` (guarda de
+env `localhost`) · `scenarios/07_inbound_full.ts` · `scenarios/12_webchat_channel.ts` ·
+`docker-compose.demo.yml`.
+
+---
+
+## MEDIR não é EXIBIR — a Console lê o sentimento medido (2026-08-25)
+
+Tarefa 1 da passagem de 08-25. Com o score medido em `-0.50` no ContextStore, a barra da Console
+anunciava **"Neutral"**. O sintoma era de sentimento; o defeito é de uma classe mais larga — *é o único
+lugar onde a plataforma exibe um número medido ao operador, e ele mentia com cara de normalidade*.
+
+### O achado que mudou o alvo antes de escrever uma linha
+
+A passagem apontava `mcp-server/src/tools/supervisor.ts:118`. Medindo, o cálculo tinha **duas
+implementações independentes e byte-a-byte equivalentes**: a tool MCP `supervisor_state` e o endpoint
+HTTP `GET /api/supervisor_state/:sessionId` (`server.ts:1385`) — **e é o segundo que a Console
+consome**. Consertar o site apontado teria deixado a tela dizendo "Neutral" com o commit no lugar, e o
+verde de qualquer teste de tool teria confirmado o conserto errado.
+
+Por isso o conserto não foi editar duas vezes: as duas passaram a chamar
+**`mcp-server/src/lib/session-sentiment.ts`**. Duas cópias de uma regra são duas grafias esperando
+divergir — o `CLAUDE.md` já registra o mesmo modo de falha na regra de interceptação MCP, escrita três
+vezes e já divergida.
+
+### Os dois defeitos da linha, que se compunham
+
+**(a) A fonte estava aposentada.** Lia-se `session:{id}:ai → current_turn.partial_params.sentiment_score`
+— o auto-reporte do `output_schema`, abandonado em 08-23 porque **nenhum skill declara o campo**. O
+valor medido vive no ContextStore e a tela nunca olhava para lá.
+
+**(b) `?? 0` transformava NÃO-MEDIDO em medição.** `0.0` é um ponto legítimo da escala e classifica
+como `neutral` (`ActionBar.tsx:39`). O agravante dá o nome à regra: **a UI se protegia** — o chip só
+renderiza com valor não-nulo (`ActionBar.tsx:286`) — e o default do backend **desarmou a proteção antes
+que ela pudesse agir**. *Um default no produtor derruba a guarda do consumidor sem deixar rastro
+nenhum.* O mesmo valia para `trend`, cujo default era `"stable"`: soa como leitura, é invenção.
+
+### Fonte canônica decidida por medição, não por gosto
+
+ContextStore (`{tenant}:ctx:{sid}` → `session.sentimento.current`) é **superconjunto estrito** da fonte
+antiga: todo caminho que produz um score passa por `update_partial_params` →
+`write_context_store_sentiment`, inclusive o auto-reporte do `output_schema` se algum skill voltar a
+declará-lo. Ler as duas fontes seria redundante *e* perderia dado; ler só o ctx não perde nada.
+
+⚠️ **Lê-se o hash CRU, nunca o `contextSnapshot`.** O snapshot passa por
+`applyContextMaskingDynamic`, cujo filtro é por **namespace de operador**
+(`context_visibility.operator_namespaces`, configurável POR POOL). O default inclui `session`, mas um
+pool que estreitasse a lista apagaria o sentimento em silêncio — e "chip sumiu" é indistinguível de
+"não houve medição". Sentimento não é PII; sua `visibility` é `agents_only`, e o operador é um agente.
+
+### O inventário que a passagem não tinha: QUATRO superfícies, três graus de proteção
+
+| Superfície | Guarda que tinha | Efeito do `?? 0` |
+|---|---|---|
+| `ActionBar` (chip) | `!== null` | nunca disparava — desarmada |
+| `ContactList` | `?? null` | idem (o dot já é cinza com `null`) |
+| `ChatArea` (faixa) | `!== 0` | protegia por ACIDENTE — **e escondia um `0.0` medido de verdade** |
+| `EstadoTab` | nenhuma | anunciava "0% neutral" em toda sessão da plataforma |
+
+Some-se **`packages/agent-assist-ui/`** — app legado que renderiza a mesma tela e é **serviço vivo na
+porta 5173 do `docker-compose.demo.yml`**, sem profile que o segure. Não estava na passagem. Ali
+`null * 100` renderizaria `0%` em silêncio, isto é, o defeito sobreviveria intacto num segundo Console
+enquanto o primeiro estivesse correto. Recebeu o mesmo conserto (`types.ts`, `ChatArea`, `EstadoTab`).
+
+### Decisão de produto: ausência SOME, não se anuncia
+
+Sem medição, nenhuma superfície renderiza sentimento. É o comportamento que `ActionBar` e `ContactList`
+já tentavam ter — o conserto devolve a proteção que o backend desarmou e a estende às que não tinham.
+A alternativa (um estado "não medido" explícito, com i18n nos dois locales) é mais verdadeira e mais
+cara; fica registrada como escolha consciente, não como esquecimento.
+
+### Trajetória e tendência: ausentes por decisão
+
+O ctx guarda **só o valor corrente**, sobrescrito a cada turno. `consolidated_turns` não serve de
+substituto: o `float(… or 0.0)` de `update_partial_params` já achatou lá dentro, tornando um `0.0`
+medido indistinguível de turno sem medição — filtrá-lo por `!== 0` repetiria a mesma mentira um nível
+abaixo. Achado colateral: **`session:{id}:sentiment`, documentado no `CLAUDE.md` § Sentiment Tracking
+como o array de histórico, não tem produtor nenhum** — promessa sem produtor, a mesma família do DDL de
+`participation_intervals` que afirmava em prosa a ordenação que ninguém impunha. Enquanto não tiver,
+`trajectory: []` e `trend: null`, e o gráfico da `EstadoTab` some. Registrado no `TODO.md`.
+
+### Gate
+
+`infra/test/gate_console_sentiment_source.sh` — **re-executável, sem contato real** (semeia duas
+sessões sintéticas e as apaga), sobre o endpoint que a Console de fato consome. Três julgamentos:
+score medido chega à tela · `trend` não é inventado · e a **testemunha negativa**, que é a metade que
+importa: sessão **com ctx presente e sem a tag de sentimento** tem de devolver `null`, nunca `0`.
+Testemunha severa de propósito — separa "não há contexto nenhum" de "há contexto e não houve medição",
+que é o caso real de toda sessão que não passou pela fila. Preflight confere o **artefato**
+(`dist/lib/session-sentiment.js` no container), não o fonte no repo: nenhum serviço monta o fonte, e
+medir sem rebuild julgaria a imagem antiga.
+
+### Verificação nos pixels (2026-08-25, contato real na Console)
+
+O gate julga o endpoint; a tela foi conferida à mão, com os dois casos lado a lado. **Medido** (cliente
+irritado, score `-0.50`): chip `😤 Frustrated` na barra + faixa `● -50% Negative` **sem seta de
+tendência**. **Não medido** (contato que não passou pela fila): **nenhum chip e nenhuma faixa** — a
+conversa começa direto abaixo das abas.
+
+⚠️ **Um susto que vale como regra operacional.** Na primeira conferência, a faixa ainda dizia
+`0% Neutral →` com o backend já correto. Não era defeito sobrevivente: era o `index.html` cacheado
+pelo browser apontando para o bundle de hash antigo — JS velho (`null * 100 = 0`, e o `?? "→"` que o
+conserto removeu) contra backend novo. **Depois de `build` + `up -d` de um serviço de UI, o
+`Ctrl+Shift+R` é parte do procedimento, não zelo.** O discriminador que evita a caçada errada: se
+UMA superfície da mesma tela já reflete o comportamento novo e outra não (aqui o chip sumia e a faixa
+não), é cache de browser — código não se aplica pela metade.
+
+**Não verificado nos pixels:** `EstadoTab` (as abas desta rota são Actions/Customer/Context/History) e
+a tool MCP `supervisor_state`.
+
+**Arquivos:** `mcp-server-plughub/src/lib/session-sentiment.ts` (novo) · `src/tools/supervisor.ts` ·
+`src/server.ts` · `platform-ui/src/modules/agent-assist/{types.ts,components/ChatArea.tsx,components/tabs/EstadoTab.tsx}` ·
+`agent-assist-ui/src/{types.ts,components/ChatArea.tsx,components/tabs/EstadoTab.tsx}` ·
+`infra/test/gate_console_sentiment_source.sh` (novo).
+
+---
+
 ## Sentimento medido de ponta a ponta — e cinco defeitos empilhados no caminho (2026-08-24)
 
 Tarefas 1 → 2 → 3 da passagem de 08-24. A metade de engenharia do sentimento tinha sido entregue em

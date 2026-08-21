@@ -551,13 +551,40 @@ Messages carry `content` (masked) and `original_content` (unmasked, authorized r
 >   `WRONGTYPE` ⇒ toda medição de contato real agregada sob `unknown`. Hoje: helper único
 >   `sentiment_emitter.resolve_session_pool_id`, com quatro ramos de saída nomeados.
 >
-> ⚠️ **MEDIR não é EXIBIR — o Console ainda mente (diagnosticado 2026-08-24, não corrigido).**
-> Com o score medido em `-0.50` no ctx, a barra do Console mostra **"Neutral"**.
-> `mcp-server/src/tools/supervisor.ts:118` faz `Number(partials["sentiment_score"] ?? 0)`: lê a fonte
-> **aposentada** (`session:{id}:ai` → `partial_params`, o auto-reporte do `output_schema`) e o `?? 0`
-> converte NÃO-MEDIDO em `0.0`, que a UI classifica como neutro. Pior: a UI **se protegia** — o chip
-> só renderiza com valor não-nulo (`ActionBar.tsx:286`) — e o `?? 0` do backend desarmou a proteção.
-> Enquanto isso não for consertado, **nenhuma leitura de sentimento na tela do operador vale**.
+> ✅ **MEDIR não é EXIBIR — a leitura foi consertada (2026-08-25), e o achado mudou o alvo.**
+> A passagem apontava `tools/supervisor.ts:118`; medindo, o cálculo tinha **duas implementações
+> independentes e idênticas**, e a que desenha a tela é a OUTRA — o endpoint HTTP
+> `GET /api/supervisor_state/:sessionId` (`server.ts`), que a Console consome. Consertar só a tool
+> teria deixado a barra dizendo "Neutral" com o commit no lugar. Hoje as duas chamam
+> **`lib/session-sentiment.ts`**, fonte única.
+>
+> **Fonte canônica = ContextStore** (`{tenant}:ctx:{sid}` → `session.sentimento.current`), e isso é
+> medição, não gosto: todo caminho que produz score passa por `update_partial_params` →
+> `write_context_store_sentiment`, inclusive o auto-reporte do `output_schema`. O ctx é
+> **superconjunto estrito** de `partial_params`; ler as duas fontes seria redundante *e* perderia dado.
+> Lê-se sempre o hash **CRU**, nunca o `contextSnapshot` já filtrado por `applyContextMaskingDynamic`
+> — o filtro é por namespace de operador, configurável POR POOL, e um pool que estreitasse a lista
+> apagaria o sentimento em silêncio.
+>
+> **`current: null` = NÃO MEDIDO**, e nenhuma superfície renderiza sem valor. O `?? 0` convertia
+> ausência num ponto legítimo da escala; pior, **desarmava a guarda que a UI já tinha** (`ActionBar`
+> só renderiza com valor não-nulo) antes que ela pudesse agir. *Um default no produtor derruba a
+> guarda do consumidor sem deixar rastro.* Idem `trend`, cujo default era `"stable"` — invenção da
+> mesma família.
+>
+> **Quatro superfícies, três graus de proteção** — inventário que a passagem não tinha: `ActionBar` e
+> `ContactList` guardavam por `!== null` (desarmadas); `ChatArea` inventara `!== 0`, que protegia por
+> acidente **e escondia um `0.0` medido de verdade**; `EstadoTab` não tinha guarda nenhuma e
+> anunciava "0% neutral" em toda sessão. Some `packages/agent-assist-ui/` — app legado, **serviço vivo
+> na porta 5173 do compose demo** —, que renderiza a mesma tela e caiu no mesmo conserto.
+>
+> Gate: `infra/test/gate_console_sentiment_source.sh` (re-executável, sem contato real; testemunha
+> negativa = ctx presente com outra tag e sentimento ausente ⇒ tem de vir `null`, nunca `0`).
+>
+> ⚠️ **Sem histórico**: o ctx guarda só o valor corrente. `trajectory` é `[]` e `trend` é `null` —
+> `consolidated_turns` não serve de substituto (o `float(… or 0.0)` já achatou lá dentro, tornando um
+> `0.0` medido indistinguível de turno sem medição). O array `session:{id}:sentiment` documentado
+> abaixo **não tem produtor**; enquanto não tiver, gráfico e seta ficam ausentes em vez de fabricados.
 >
 > ⚠️ **Dívida nomeada:** o `pool_id` do meta é o pool de **ENTRADA**, não o que atende — sentimento
 > medido pelo agente de fila agrega sob o pool onde o contato começou. É a fatia C de
@@ -583,6 +610,13 @@ session:{id}:sentiment → [{ score: 0.40, timestamp: "..." }, ...]
 TTL: same as session TTL
 Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → frustrated | [-1.0,-0.6] → angry
 ```
+
+> ⚠️ **`session:{id}:sentiment` NÃO TEM PRODUTOR** (medido 2026-08-25: nenhum componente escreve a
+> chave). É promessa sem produtor — a mesma família de `participation_intervals`, cujo DDL *afirmava
+> em prosa* a ordenação que ninguém impunha. O emitter grava três destinos e nenhum é este:
+> `{tenant}:ctx:{sid}` (valor corrente, sobrescrito), `{tenant}:pool:{p}:sentiment_live` (agregado por
+> pool) e o tópico `sentiment.updated`. Consequência viva: **não existe histórico por sessão**, logo
+> trajetória e tendência são ausentes por decisão, não fabricadas. Ver `TODO.md`.
 
 ## Skill Flow — Fourteen Step Types
 
@@ -1557,7 +1591,11 @@ Outbound completo (1–5).**
 Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato, com **filtro default `live`** no report layer da analytics-api (`_apply_origin_scope`) e no sampling da evaluation-api (`_passes_filters`) — é o default no backend que dá a garantia, e a UI operacional espelha (sem seletor de origem: origem é contexto de qualidade, não dropdown operacional). **Invariantes:** `origin` é a verdade universal por-sessão; **não** estender `pool.agent_kind`.
 **Pendente = só a Fase 2** (partição CH `PARTITION BY (…, origin)` + `pool.origin_class`), **adiada por decisão em 2026-06-25**: é governança/lifecycle, não correção. **Gatilho de reativação inalterado pela reversão** — importação externa real com obrigação de retenção/erasure própria (LGPD, `DROP PARTITION`). Sair do balde `Congela` **não** o antecipa: o item nunca dependeu do alvo abortado, e continua esperando o gatilho de negócio. → [`docs/adr/adr-quality-substrate-isolation.md`](docs/adr/adr-quality-substrate-isolation.md)
 
-### Business in Any Media — processo channel-abstract + framework de loja *(proposta)* — **[REEXAMINAR 2026-08-18]**
+### Business in Any Media — processo channel-abstract + framework de loja *(proposta)* — **[REEXAMINADO 2026-08-26 — corte REVERTIDO]**
+> O corte do nível (a), do contrato delegate-por-pool e do intake-flow tinha como razão literal
+> *"autoria, que vira template n8n"* — fundamento que caiu com a reversão. **Voltam à fila**, a
+> rejulgar pelo mérito sob a pergunta *"quanto disso vira config + interpretador genérico"* (tarefa
+> **B1**). Veredicto e tarefas em `TODO.md` § *"Reexame dos 9 em `Escopo reduzido`"*.
 > **Fica** (fronteira/governança): resolvedor de identidade nível (b), gate de identificação,
 > commerce-cards com checkout mascarado + repasse ao PSP, novas `ChannelCapability`. Esta metade
 > nunca dependeu do alvo e segue inalterada.
@@ -1607,7 +1645,12 @@ Discriminador `origin: live|import|reeval` por-sessão nas tabelas de substrato,
 - Generaliza o Session Replayer num harness de gravação/replay em todas as costuras (driver/mock por seam) p/ regressão determinística e gate de promoção via `ComparisonReport`. Falta captura full-fidelity MCP/AI Gateway, clock/seed injetável, gravação seletiva. Spec em `docs/product/record-replay-harness-spec.md`. Detalhe em `TODO.md`.
 - **Justificativa trocada em 2026-08-18, prioridade preservada.** A razão de então era *"é o único gate capaz de pegar a avaliação tier-2 achatando sem alarme"* — ela **caiu junto com o alvo**, porque a avaliação deixa de achatar quando a execução fica em casa. Sobrevive pela razão original e própria: **gate de promoção** por regressão determinística. Também some o custo extra que a triagem lhe atribuía (não há costura nova a gravar).
 
-### Customer Surveys — Módulo de Pesquisas de Satisfação *(spec/ADR)* — **[REEXAMINAR 2026-08-18]**
+### Customer Surveys — Módulo de Pesquisas de Satisfação *(spec/ADR)* — **[REEXAMINADO 2026-08-26 — parcial]**
+> **S7 (editor de DialogForm) sobe, confirmado.** O **S2** segue absorvido no interpretador genérico,
+> mas *se ele volta a ter dono próprio é decisão a tomar, não herdada* (tarefa **C2**) — a frente que
+> o absorvia mudou de dono, não morreu. O trio de skills sem pool **segue abortado por mérito próprio**.
+> ⚠️ O resíduo do `value_label` foi citado com **arquivo errado** na triagem e precisa ser remedido
+> antes de entrar em plano (**C4**). Veredicto em `TODO.md` § *"Reexame dos 9 em `Escopo reduzido`"*.
 > **Fica:** S5/S8/S9–S11, store per-response, resíduos do S1 (nenhum produtor CES/PMF/FCR; `value_label`
 > ignorado em `CustomerVoicePage.tsx:161`), e o **S7 = editor de DialogForm** — que **ganha importância
 > com a reversão**, não perde: o conteúdo conversacional continua sendo autorado em casa, e a guarda do

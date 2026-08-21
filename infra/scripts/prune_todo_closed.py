@@ -46,6 +46,18 @@ ALREADY_PRUNED = [
     "`agent_events` — fatia 2: DROP",
     "`agent_done` de crash-recovery",
     "`bootstrap_placeholder` publica capacidade ZERO",
+    # ── 2026-08-03, 3ª sessão (aplicada; movidas de CLOSED em 2026-08-26) ──────────────────
+    # Ficaram em CLOSED depois de aplicadas e passaram a imprimir 7 "NÃO ENCONTRADO" em toda
+    # execução — exatamente o "alarme com álibi permanente" que o comentário de ALREADY_PRUNED
+    # descreve. O dry-run de 2026-08-26 mostrou os 7 juntos, e um alarme que sempre dispara
+    # treina quem lê a ignorá-lo. Regra: aplicou, MOVE para cá.
+    "`close_reason` do contato só é persistido",
+    "Zero testes coletados em 6 pacotes",
+    "Suítes vermelhas — os 4 pacotes restantes",
+    "analytics-api — 23 testes vermelhos há tempo",
+    "Arc 12 — `segment_id` em `agent_business_events`",
+    "evaluation-api — 10 testes de `test_router.py`",
+    "Pricing → quota Redis não existe",
 ]
 
 # Substrings que identificam o cabeçalho `## ` de cada seção a remover NESTA execução.
@@ -62,14 +74,31 @@ ALREADY_PRUNED = [
 #   · Suítes vermelhas → 2 das 5 regras de dublê viraram § Erros de método nº 7
 # A do Arc 12 saiu por estar STALE de um jeito ativo: afirmava *"não há produtor algum"*, e a
 # fatia 3 do wrap-up criou o primeiro produtor no mesmo dia.
+#
+# ── 2026-08-26 ───────────────────────────────────────────────────────────────────────────
+# Onze seções, conferidas uma a uma contra o CHANGELOG antes de entrar aqui. **Oito das dez
+# primeiras tinham resíduo VIVO enterrado no corpo** — a armadilha piorou em relação à rodada
+# de 08-03 (3 de 7), e a conferência é o que impede a perda, não o script.
+# O resgate foi feito ANTES e está em § "Resíduos resgatados da poda de 2026-08-26" (R1–R8),
+# exceto dois blocos que foram para dentro da § I5 (portão de deriva do seed; 3 timeouts),
+# cujo cabeçalho já os nomeava como resíduo.
+# NÃO resgatados de propósito, por já terem casa em seção aberta: a rota anônima (§ N3), a
+# fase I5 dita "faltante" no wrap-up (fechada em 08-07), o `PresenceSidebar` órfão (§ Eventos)
+# e o cenário 10 barrado por fixtures (§ Fixtures do e2e).
+# A 11ª ("NENHUM step reason ... 401") entrou por MEDIÇÃO em 08-26: `/v1/health` responde
+# `anthropic: ok` com `last_ok_age_s` não-nulo. Contradizia o CLAUDE.md havia 4 dias.
 CLOSED = [
-    "`close_reason` do contato só é persistido",
-    "Zero testes coletados em 6 pacotes",
-    "Suítes vermelhas — os 4 pacotes restantes",
-    "analytics-api — 23 testes vermelhos há tempo",
-    "Arc 12 — `segment_id` em `agent_business_events`",
-    "evaluation-api — 10 testes de `test_router.py`",
-    "Pricing → quota Redis não existe",
+    "Capacidade × PAUSA — ARCO FECHADO",
+    "Volume de sessões inexplicado (item 2 do kickoff)",
+    "Pool registration returned HTTP 401",
+    "`agent_ready` não inscreve instância em pool nenhum",
+    "Webhook — registro único e identificador opaco",
+    "Guard de teardown-hook — falso positivo a cada boot",
+    "Linha do tempo única do contato",
+    "Segmento humano do wrap-up NUNCA fecha",
+    "Vaga só é liberada no `agent_done`",
+    "`role` nunca é escrito no hash de participante",
+    "NENHUM step `reason` funciona no demo",
 ]
 
 
