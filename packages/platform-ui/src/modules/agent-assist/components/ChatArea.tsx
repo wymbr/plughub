@@ -13,9 +13,10 @@ import { SubmitResult } from "./MenuCard";
 import { useMaskingDisplayRules } from "@/components/MaskedToken";
 
 interface LiveState {
-  sentimentScore: number;
+  /** `null` = NÃO MEDIDO. Ver SentimentState.current em ../types. */
+  sentimentScore: number | null;
   sentimentAlert: boolean;
-  sentimentTrend: "improving" | "stable" | "declining";
+  sentimentTrend: "improving" | "stable" | "declining" | null;
   intent: string | null;
   flags: string[];
 }
@@ -86,10 +87,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (c) c.scrollTo({ top: c.scrollHeight, behavior: "smooth" });
   }, [messages, aiTyping]);
 
+  // `sentimentScore !== 0` era uma guarda de instinto correto e critério errado:
+  // enquanto o backend mandava `0` para "não medido", ela protegia por acidente —
+  // e escondia um `0.0` MEDIDO de verdade, que é cliente neutro legítimo. Com
+  // `null` = não medido, o critério passa a ser o discriminador real.
+  const sentimentScore = liveState?.sentimentScore ?? null;
+  const sentimentTrend = liveState?.sentimentTrend ?? null;
   const hasLiveData = liveState && (
     liveState.intent !== null ||
     liveState.flags.length > 0 ||
-    liveState.sentimentScore !== 0
+    sentimentScore !== null
   );
 
   return (
@@ -106,7 +113,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       {hasLiveData && (
         <div
           role="status"
-          aria-label={`Sentimento: ${sentimentLabel(liveState!.sentimentScore)}, ${(liveState!.sentimentScore * 100).toFixed(0)}%${liveState!.sentimentAlert ? ', alerta ativo' : ''}`}
+          aria-label={
+            sentimentScore !== null
+              ? `Sentimento: ${sentimentLabel(sentimentScore)}, ${(sentimentScore * 100).toFixed(0)}%${liveState!.sentimentAlert ? ', alerta ativo' : ''}`
+              : 'Estado da conversa'
+          }
           aria-live="polite"
           aria-atomic="true"
           className={`flex items-center gap-2 px-3 py-1.5 text-xs flex-shrink-0 border-b transition-colors ${
@@ -115,25 +126,33 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               : "bg-surface border-border"
           }`}
         >
-          <span
-            aria-hidden="true"
-            className={`w-2 h-2 rounded-full flex-shrink-0 motion-safe:${liveState!.sentimentAlert ? "animate-pulse" : ""} ${sentimentBulletColor(
-              liveState!.sentimentScore,
-              liveState!.sentimentAlert
-            )}`}
-          />
-          <span aria-hidden="true" className={sentimentTextColor(liveState!.sentimentScore, liveState!.sentimentAlert)}>
-            {(liveState!.sentimentScore * 100).toFixed(0)}%
-          </span>
-          <span aria-hidden="true" className="text-muted text-2xs">
-            {sentimentLabel(liveState!.sentimentScore)}
-          </span>
-          <span
-            aria-label={`Tendência: ${liveState!.sentimentTrend === 'improving' ? 'melhorando' : liveState!.sentimentTrend === 'declining' ? 'piorando' : 'estável'}`}
-            className="text-muted ml-0.5"
-          >
-            {TREND_ICON[liveState!.sentimentTrend] ?? "→"}
-          </span>
+          {/* Sem medição, nada de sentimento é renderizado — a faixa continua
+              existindo para intent/flags, que são medidos por outro caminho. */}
+          {sentimentScore !== null && (
+            <>
+              <span
+                aria-hidden="true"
+                className={`w-2 h-2 rounded-full flex-shrink-0 motion-safe:${liveState!.sentimentAlert ? "animate-pulse" : ""} ${sentimentBulletColor(
+                  sentimentScore,
+                  liveState!.sentimentAlert
+                )}`}
+              />
+              <span aria-hidden="true" className={sentimentTextColor(sentimentScore, liveState!.sentimentAlert)}>
+                {(sentimentScore * 100).toFixed(0)}%
+              </span>
+              <span aria-hidden="true" className="text-muted text-2xs">
+                {sentimentLabel(sentimentScore)}
+              </span>
+            </>
+          )}
+          {sentimentTrend !== null && (
+            <span
+              aria-label={`Tendência: ${sentimentTrend === 'improving' ? 'melhorando' : sentimentTrend === 'declining' ? 'piorando' : 'estável'}`}
+              className="text-muted ml-0.5"
+            >
+              {TREND_ICON[sentimentTrend]}
+            </span>
+          )}
 
           {liveState!.intent && (
             <span className="text-muted truncate max-w-[140px] ml-1 border-l border-border pl-2">

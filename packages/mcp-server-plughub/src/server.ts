@@ -55,6 +55,7 @@ import { createPostgresClient }    from "./infra/postgres"
 import { parseMentions }           from "./lib/mention-parser"
 import { routeMentions }           from "./lib/mention-routing"
 import { writeStreamEntry }        from "./lib/write-stream-entry"
+import { sentimentFromCtxHash }    from "./lib/session-sentiment"
 import { shouldDropAssignment, shouldDropOnPossession } from "./lib/assignment-filter"
 import { MaskingService }          from "./lib/masking"
 import type { ContextMaskingConfig } from "@plughub/schemas"
@@ -1381,23 +1382,11 @@ export async function startServer(config: ServerConfig): Promise<void> {
       const partials    = currentTurn.partial_params ?? {}
       const turns       = ai?.consolidated_turns ?? []
 
-      // Build sentiment trajectory: completed turns + current partial as last point
-      const trajectory: number[] = [
-        ...turns.map((t: Record<string, unknown>) => Number(t.sentiment_score ?? 0)),
-        Number(partials.sentiment_score ?? 0),
-      ]
-      const currentSentiment = Number(partials.sentiment_score ?? 0)
-
-      // Compute trend by comparing the last window vs the first window of the trajectory
-      let trend: "improving" | "stable" | "declining" = "stable"
-      if (trajectory.length >= 3) {
-        const window      = Math.min(3, Math.floor(trajectory.length / 2))
-        const firstAvg    = trajectory.slice(0, window).reduce((a, b) => a + b, 0) / window
-        const recentAvg   = trajectory.slice(-window).reduce((a, b) => a + b, 0) / window
-        const delta       = recentAvg - firstAvg
-        if      (delta >  0.1) trend = "improving"
-        else if (delta < -0.1) trend = "declining"
-      }
+      // Sentimento: calculado mais abaixo, depois da leitura do ContextStore —
+      // a fonte é `{tenant}:ctx:{sid}`, e o `tenant_id` só é conhecido adiante.
+      // Este é o endpoint que a Console consome; a tool MCP `supervisor_state`
+      // tem o MESMO cálculo, e por isso os dois compartilham um helper único
+      // (`lib/session-sentiment.ts`) em vez de duas cópias que já divergiram.
 
       // Viewer roles — taken from verified JWT payload for masking decisions.
       // ⚠️ O claim emitido pela auth-api é `roles` (ARRAY); `role` singular não
@@ -1467,14 +1456,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // Applies namespace filtering and PII masking based on viewer role.
       // Rules loaded dynamically from Config API (with in-process TTL cache).
       let contextSnapshot: Record<string, unknown> | null = null
+      let ctxHash: Record<string, string> = {}
       if (tenantId) {
         try {
-          const hash = await redis.hgetall(`${tenantId}:ctx:${sessionId}`)
-          if (hash && Object.keys(hash).length > 0) {
-            contextSnapshot = await applyContextMaskingDynamic(hash, viewerRoles, operatorNamespaces, operatorAllowTags, tenantId)
+          ctxHash = (await redis.hgetall(`${tenantId}:ctx:${sessionId}`)) ?? {}
+          if (Object.keys(ctxHash).length > 0) {
+            contextSnapshot = await applyContextMaskingDynamic(ctxHash, viewerRoles, operatorNamespaces, operatorAllowTags, tenantId)
           }
         } catch { /* non-fatal */ }
       }
+
+      // Sentimento medido — do hash CRU, NUNCA do `contextSnapshot`.
+      // O snapshot é filtrado por namespace de operador (configurável por pool):
+      // um pool que estreite `operator_namespaces` apagaria o sentimento em
+      // silêncio, e "chip sumiu" é indistinguível de "não houve medição".
+      // `current: null` = NÃO MEDIDO — ver lib/session-sentiment.ts.
+      const sentiment = sentimentFromCtxHash(ctxHash, undefined, "[supervisor_state]")
 
       // Read contact_context from pipeline_state (written by agente_contexto_ia_v1)
       // Path: results.acumular_contexto.contexto_final.contact_context
@@ -1621,12 +1618,7 @@ export async function startServer(config: ServerConfig): Promise<void> {
         session_id:   sessionId,
         turn_count:   turns.length,
         is_stale:     false,
-        sentiment: {
-          current:    currentSentiment,
-          trajectory: trajectory.slice(0, -1),
-          trend,
-          alert:      currentSentiment < -0.5,
-        },
+        sentiment,
         intent: {
           current:    partials.intent    ?? null,
           confidence: partials.confidence ?? 0,

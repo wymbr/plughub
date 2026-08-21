@@ -128,9 +128,20 @@ export type WsServerEvent =
 // ── supervisor_state response ─────────────────────────────────────────────────
 
 export interface SentimentState {
-  current: number;          // -1 to +1
+  /**
+   * Score medido, -1 a +1. **`null` = NÃO MEDIDO** — e isso é diferente de `0`,
+   * que é um ponto legítimo da escala ("neutro").
+   *
+   * O backend publicava `0` para toda sessão sem medição (`?? 0` sobre uma fonte
+   * aposentada), o que desarmava as guardas `!== null` que já existiam aqui. Com
+   * `null`, cada superfície decide — e a decisão desta plataforma é **não
+   * renderizar**: sem medição, nenhum indicador de sentimento aparece.
+   */
+  current: number | null;
+  /** Pontos MEDIDOS. Vazio enquanto não houver produtor de histórico. */
   trajectory: number[];
-  trend: "improving" | "stable" | "declining";
+  /** `null` quando não há histórico suficiente — "stable" também seria invenção. */
+  trend: "improving" | "stable" | "declining" | null;
   alert: boolean;
 }
 

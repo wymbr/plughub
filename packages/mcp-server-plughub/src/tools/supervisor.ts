@@ -13,6 +13,7 @@ import type { McpServer }     from "@modelcontextprotocol/sdk/server/mcp.js"
 import type { Redis }         from "ioredis"
 import type { KafkaProducer } from "../infra/kafka"
 import { readRoutingRefPool } from "../lib/routing-ref"
+import { sentimentFromCtxHash } from "../lib/session-sentiment"
 
 // ─────────────────────────────────────────────
 // Deps
@@ -110,23 +111,21 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       const snapshotAge = Date.now() - new Date(snapshotAt).getTime()
       const isStale     = snapshotAge > 30_000
 
-      // 4. Build sentiment trajectory from completed turns + current partial
-      const trajectory: number[] = [
-        ...turns.map((t) => Number(t["sentiment_score"] ?? 0)),
-        Number(partials["sentiment_score"] ?? 0),
-      ]
-      const currentSentiment = Number(partials["sentiment_score"] ?? 0)
-
-      // 5. Compute trend over last vs first window of trajectory
-      let trend: "improving" | "stable" | "declining" = "stable"
-      if (trajectory.length >= 3) {
-        const window    = Math.min(3, Math.floor(trajectory.length / 2))
-        const firstAvg  = trajectory.slice(0, window).reduce((a, b) => a + b, 0) / window
-        const recentAvg = trajectory.slice(-window).reduce((a, b) => a + b, 0) / window
-        const delta     = recentAvg - firstAvg
-        if      (delta >  0.1) trend = "improving"
-        else if (delta < -0.1) trend = "declining"
+      // 4. ContextStore da sessão — hash CRU, lido UMA vez e reusado abaixo (6b).
+      //    É a fonte do sentimento (ver lib/session-sentiment.ts) e do
+      //    context_snapshot. A leitura tem de vir ANTES do bloco de sentimento.
+      let ctxHash: Record<string, string> = {}
+      if (tenantId) {
+        try {
+          ctxHash = (await redis.hgetall(`${tenantId}:ctx:${parsed.session_id}`)) ?? {}
+        } catch { /* non-fatal — ContextStore ainda não populado nesta sessão */ }
       }
+
+      // 5. Sentimento medido. `current: null` = NÃO MEDIDO.
+      //    A fonte antiga (`partials["sentiment_score"]`) está aposentada e o
+      //    `?? 0` que a acompanhava publicava "cliente neutro" para toda sessão
+      //    da plataforma — ver o cabeçalho de lib/session-sentiment.ts.
+      const sentiment = sentimentFromCtxHash(ctxHash, undefined, "[supervisor_state]")
 
       // 6. Read additional context (historical insights) if available
       //    Key: {tenant_id}:session:{id}:context — written by routing-engine insights consumer
@@ -150,23 +149,19 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       //     Can be removed once all agents are migrated to ContextStore.
       let contextSnapshot: Record<string, unknown> | null = null
 
-      if (tenantId) {
-        try {
-          const hash = await redis.hgetall(`${tenantId}:ctx:${parsed.session_id}`)
-          if (hash && Object.keys(hash).length > 0) {
-            // Parse each field as ContextEntry, expose as flat tag→entry map
-            // Grouped by namespace (caller.*, account.*, session.*) for easy UI consumption
-            const parsed_entries: Record<string, unknown> = {}
-            for (const [tag, raw] of Object.entries(hash)) {
-              try {
-                parsed_entries[tag] = JSON.parse(raw) as unknown
-              } catch {
-                parsed_entries[tag] = raw
-              }
-            }
-            contextSnapshot = parsed_entries
+      // `ctxHash` já foi lido no passo 4 — uma leitura por chamada, não duas.
+      if (Object.keys(ctxHash).length > 0) {
+        // Parse each field as ContextEntry, expose as flat tag→entry map
+        // Grouped by namespace (caller.*, account.*, session.*) for easy UI consumption
+        const parsed_entries: Record<string, unknown> = {}
+        for (const [tag, raw] of Object.entries(ctxHash)) {
+          try {
+            parsed_entries[tag] = JSON.parse(raw) as unknown
+          } catch {
+            parsed_entries[tag] = raw
           }
-        } catch { /* non-fatal — ContextStore not yet populated for this session */ }
+        }
+        contextSnapshot = parsed_entries
       }
 
       // Legacy fallback: read contact_context from pipeline_state
@@ -345,12 +340,7 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
             session_id: parsed.session_id,
             turn_count: turns.length,
             is_stale:   isStale,
-            sentiment: {
-              current:    currentSentiment,
-              trajectory: trajectory.slice(0, -1),  // exclude current partial from history
-              trend,
-              alert:      currentSentiment < -0.5,
-            },
+            sentiment,
             intent: {
               current:    partials["intent"]     ?? null,
               confidence: partials["confidence"] ?? 0,

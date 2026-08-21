@@ -48,6 +48,8 @@
  *   ts-node runner.ts --only 27          — run only scenario 27 (grant/list/update/resolve/revoke perms)
  *   ts-node runner.ts --workflow-review  — run scenario 28 (Arc 6 v2 — workflow review/contestation cycle)
  *   ts-node runner.ts --only 28          — run only scenario 28 (workflow motor, anti-replay, ContextStore lock)
+ *   ts-node runner.ts --queue            — run scenario 29 (fila atendida — o agente de fila ouve o cliente)
+ *   ts-node runner.ts --only 29          — run only scenario 29 (queue agent transport + heard + reply)
  *
  * Environment variables (all optional — defaults work with docker-compose.test.yml):
  *   MCP_SERVER_URL            (default: http://localhost:3100)
@@ -119,6 +121,7 @@ import { run as scenario25 } from "./scenarios/25_evaluation_contestation";
 import { run as scenario26 } from "./scenarios/26_ai_gateway_fallback";
 import { run as scenario27 } from "./scenarios/27_evaluation_permissions";
 import { run as scenario28 } from "./scenarios/28_evaluation_workflow_cycle";
+import { run as scenario29 } from "./scenarios/29_queue_agent";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -171,6 +174,7 @@ const runContestation = args.includes("--contestation") || onlyScenario === "25"
 const runFallback         = args.includes("--fallback")         || onlyScenario === "26";
 const runPermissions      = args.includes("--permissions")      || onlyScenario === "27";
 const runWorkflowReview   = args.includes("--workflow-review")  || onlyScenario === "28";
+const runQueue            = args.includes("--queue")            || onlyScenario === "29";
 const runDemo             = args.includes("--demo");  // runs all scenarios 01–18
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +284,14 @@ if (runWorkflowReview || onlyScenario === "28") {
   ALL_SCENARIOS.push({ id: "28", fn: scenario28 });
 }
 
+// Cenário 29 fica FORA do `--demo` de propósito: ele depende de uma precondição
+// de ambiente (nenhum agente pronto no pool humano) que ele MEDE e sobre a qual
+// reprova. Numa suíte corrida com o Console aberto, isso viraria vermelho
+// intermitente e ensinaria a ignorar a cor.
+if (runQueue || onlyScenario === "29") {
+  ALL_SCENARIOS.push({ id: "29", fn: scenario29 });
+}
+
 const SCENARIOS_TO_RUN = onlyScenario
   ? ALL_SCENARIOS.filter((s) => s.id === onlyScenario)
   : ALL_SCENARIOS;
@@ -303,6 +315,45 @@ async function main(): Promise<void> {
   console.log(
     `  Scenarios:   ${SCENARIOS_TO_RUN.map((s) => s.id).join(", ")}`
   );
+
+  // ── Guarda contra env de serviço AUSENTE ──────────────────────────────────
+  // Todo default deste arquivo é uma URL `localhost`. Dentro de um container,
+  // `localhost` é o PRÓPRIO runner — uma URL bem-formada e errada, que é o
+  // "valor plausível" da § Postura de Engenharia: não quebra na configuração,
+  // quebra no uso, longe da causa.
+  //
+  // Já aconteceu duas vezes no mesmo dia (2026-08-25): `CONFIG_API_URL` ausente
+  // matava o `--demo` no `waitForService`, com `fetch failed` e nenhuma pista de
+  // que a causa era env; e `WEBCHAT_JWT_SECRET` ausente reprovava o handshake com
+  // `invalid_token`, que parece defeito de auth. Nos dois casos a informação que
+  // faltava era o NOME da variável.
+  const HOST_DEFAULTS: Array<[string, string]> = [
+    ["MCP_SERVER_URL",           config.mcpServerUrl],
+    ["AGENT_REGISTRY_URL",       config.agentRegistryUrl],
+    ["SKILL_FLOW_URL",           config.skillFlowUrl],
+    ["RULES_ENGINE_URL",         config.rulesEngineUrl],
+    ["AI_GATEWAY_URL",           config.aiGatewayUrl],
+    ["CHANNEL_GATEWAY_WS_URL",   config.channelGatewayWsUrl],
+    ["CHANNEL_GATEWAY_HTTP_URL", config.channelGatewayHttpUrl],
+    ["WORKFLOW_API_URL",         config.workflowApiUrl],
+    ["CALENDAR_API_URL",         config.calendarApiUrl],
+    ["ANALYTICS_API_URL",        config.analyticsApiUrl],
+    ["EVALUATION_API_URL",       config.evaluationApiUrl],
+    ["CONFIG_API_URL",           config.configApiUrl],
+    ["REDIS_URL",                config.redisUrl],
+  ];
+  const localhosty = HOST_DEFAULTS.filter(([, v]) => v.includes("localhost"));
+  if (localhosty.length > 0) {
+    console.log("─".repeat(60));
+    console.log("  ⚠️  URLs apontando para `localhost`:");
+    for (const [name, value] of localhosty) console.log(`       ${name} = ${value}`);
+    console.log(
+      "     Se este runner está DENTRO de um container, `localhost` é ele mesmo\n" +
+      "     e a chamada vai falhar longe daqui (fetch failed / connection refused).\n" +
+      "     Declare a(s) variável(is) acima no serviço `e2e-runner` do compose.\n" +
+      "     Rodando a partir do HOST, isto é normal — ignore."
+    );
+  }
   console.log("─".repeat(60) + "\n");
 
   // ── Wait for services (only those needed by the selected scenarios) ─────────
@@ -412,7 +463,14 @@ async function main(): Promise<void> {
     // Scenario 18: two Kafka round-trips + two worker engine runs → 120s
     // Scenario 19: LLM reason step (real API) + BLPOP cycles → 90s
     // Scenarios 20 + 21: BLPOP cycles, two form/text menu interactions → 60s
-    const timeoutMs = id === "18" ? 120_000 : id === "19" ? 90_000 : 60_000;
+    // Scenario 29: enfileiramento + ativação do agente de fila pelo bridge
+    //   (Kafka `conversations.queued` + resolução de flow) + entrega da fala +
+    //   um `reason` com LLM real. Os três prazos internos somam ~90s no pior
+    //   caso, e o teto tem de ser MAIOR que a soma — senão o timeout do runner
+    //   mata o cenário antes das asserções, e "morreu" vira indistinguível de
+    //   "reprovou". → 150s
+    const timeoutMs =
+      id === "18" ? 120_000 : id === "29" ? 150_000 : id === "19" ? 90_000 : 60_000;
 
     let result: ScenarioResult;
     try {

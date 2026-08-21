@@ -129,11 +129,41 @@ async function runPartA(
   // queue_context_get reads the Redis snapshot written by Routing Engine.
   // In e2e tests without a live Routing Engine, it returns gracefully with null.
   const queueCtx = await mcp.queueContextGet(sessionId, ctx.tenantId, "retencao_humano");
-  // queue_context_get requires a live Routing Engine snapshot — always pass in e2e (tool contract verified)
+  // ⚠️ Esta asserção era um `pass()` INCONDICIONAL (corrigido 2026-08-25). Ela não
+  // podia reprovar: qualquer retorno — inclusive `isError` — virava verde, e o
+  // comentário ("sempre passa; contrato verificado") anunciava isso como escolha.
+  // Comprava confiança sem dar nada, e ajudava a fazer a fila PARECER coberta:
+  // este é o único ponto da suíte que menciona fila, e nenhum cenário exercitava
+  // um contato realmente enfileirado com o agente de fila rodando — foi por isso
+  // que a surdez do agente de fila sobreviveu meses. A cobertura de verdade é o
+  // cenário 29; aqui a asserção passou a julgar o que o nome dela promete: que a
+  // tool RESPONDE sem erro de protocolo. Ausência de snapshot segue sendo um
+  // desfecho legítimo (o Routing Engine pode não ter escrito ainda) — o que não é
+  // legítimo é a tool falhar.
+  //
+  // ⚠️ EMENDA (mesma sessão, medida): a primeira correção exigia ausência de erro
+  // e reprovou com *"No operational snapshot found for pool retencao_humano"*.
+  // Isso é conservador demais e culpa a coisa errada: o snapshot é escrito pelo
+  // Routing Engine, o `flushTestData` o apaga antes de cada cenário, e ESTE
+  // cenário não faz nada passar pelo Routing Engine — ele dirige tools MCP
+  // diretamente. A tool está sendo HONESTA ao dizer que não há snapshot.
+  //
+  // O critério certo separa os dois desfechos pelo NOME: ausência de snapshot é
+  // legítima aqui; qualquer outro erro é falha de contrato. Isso preserva a
+  // capacidade de reprovar — que era o problema do `pass()` incondicional — sem
+  // exigir do ambiente uma condição que o cenário não cria.
+  const queueErr = "isError" in queueCtx ? String(queueCtx.error) : "";
+  const isNoSnapshot = /no operational snapshot/i.test(queueErr);
   assertions.push(
-    pass("A: queue_context_get returns (snapshot may be unavailable without live Routing Engine)", {
-      result: "isError" in queueCtx ? queueCtx.error : (queueCtx as { position?: number }).position,
-    })
+    !("isError" in queueCtx)
+      ? pass("A: queue_context_get respondeu com snapshot", {
+          position: (queueCtx as { position?: number }).position ?? null,
+        })
+      : isNoSnapshot
+        ? pass("A: queue_context_get sem snapshot — desfecho legítimo (nada passou pelo Routing Engine)", {
+            error: queueErr,
+          })
+        : fail("A: queue_context_get falhou por outro motivo", { error: queueErr })
   );
 
   const notify = await mcp.notificationSend(

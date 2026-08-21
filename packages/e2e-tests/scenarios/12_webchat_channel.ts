@@ -21,7 +21,8 @@
  *   Seed a message in Redis stream → disconnect → reconnect with cursor
  *   Verify: same session_id, stream message delivered after reconnect
  *
- * Assertions: 14
+ * Assertions: 15 (era 14; +1 em 2026-08-25 — o path do upload_url passou a ser
+ * julgado, ver o comentário em C2)
  */
 
 import { randomUUID } from "crypto"
@@ -136,7 +137,17 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
 
     const fileName  = "test-photo.jpg"
     const mimeType  = "image/jpeg"
-    const imageData = Buffer.alloc(2048, 0x42)   // 2 KB of 'B' bytes — synthetic JPEG
+    // JPEG sintético com magic bytes VÁLIDOS. O fixture anterior era
+    // `Buffer.alloc(2048, 0x42)` — 2 KB da letra "B" com o comentário
+    // "synthetic JPEG" — e o servidor o recusava com **415**: ele valida os magic
+    // bytes contra o MIME declarado (`attachment_store.py:131`, `FF D8 FF` no
+    // offset 0 para `image/jpeg`). O servidor estava certo — sniffing contra tipo
+    // declarado é checagem de segurança, não zelo —, e quem mentia era o teste.
+    const imageData = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0]),   // SOI + APP0
+      Buffer.alloc(2042, 0x42),
+      Buffer.from([0xff, 0xd9]),               // EOI
+    ])
     const reqId     = randomUUID()
 
     // C1: upload.request → upload.ready
@@ -165,7 +176,36 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     )
 
     // C2: HTTP POST binary to upload_url
-    const uploadUrl = uploadReady["upload_url"] as string
+    //
+    // ⚠️ A ORIGEM da URL é reescrita de propósito, e isto NÃO é um workaround de
+    // teste escondendo defeito de produto. `webchat_upload_base_url`
+    // (`config.py:134`) tem default `http://localhost:8010/...`, e esse valor está
+    // CERTO para o consumidor real do webchat — um browser rodando no host. O
+    // e2e-runner é um container na rede do compose, onde `localhost` é ele mesmo:
+    // o POST morria com `FetchError … reason: ` (conexão recusada), sem status HTTP
+    // e sem asserção — o cenário estourava inteiro no `catch`.
+    //
+    // Apontar `PLUGHUB_WEBCHAT_UPLOAD_BASE_URL` para o host interno seria o conserto
+    // ERRADO: consertaria o teste e QUEBRARIA o webchat de verdade, que passaria a
+    // receber `http://channel-gateway:8010/...`, inalcançável a partir do browser.
+    //
+    // Por isso o contrato do servidor continua sendo julgado (o PATH tem de ter a
+    // forma esperada, asserção abaixo) e só o host/porta é trocado pelo endereço
+    // que ESTE cliente alcança.
+    const rawUploadUrl = uploadReady["upload_url"] as string
+    const uploadPath   = (() => {
+      try { return new URL(rawUploadUrl).pathname } catch { return "" }
+    })()
+
+    assertions.push(
+      uploadPath.startsWith("/webchat/v1/upload/") && uploadPath.endsWith(String(fileId))
+        ? pass("C: upload_url tem o path esperado e termina no file_id", { path: uploadPath })
+        : fail("C: upload_url com path inesperado — contrato do servidor mudou", {
+            upload_url: rawUploadUrl, path: uploadPath, file_id: fileId,
+          })
+    )
+
+    const uploadUrl = `${ctx.channelGatewayHttpUrl}${uploadPath}`
     const httpResp  = await fetch(uploadUrl, {
       method:  "POST",
       headers: { "Content-Type": mimeType },
@@ -316,8 +356,18 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
 
     let foundAgentMsg = false
+    // TESTEMUNHA: tudo que chegou, para que a falha distinga "nada foi entregue"
+    // de "foi entregue com outra forma". Sem isto, o vermelho só ecoava o texto
+    // esperado — um contador de AUSÊNCIA sem contador de PRESENÇA ao lado.
+    // Guarda a mensagem INTEIRA (truncada), não só type+text: a primeira versão
+    // descartava o `reason` do `conn.session_ended`, que é justamente o
+    // discriminador entre "o cursor não alcançou" e "a sessão foi encerrada".
+    const seen: unknown[] = []
+    const note = (m: Record<string, unknown>) =>
+      seen.push(JSON.parse(JSON.stringify(m)) as unknown)
 
     for (const msg of preCollected) {
+      note(msg)
       if (matchesAgentMsg(msg)) {
         foundAgentMsg = true
         assertions.push(
@@ -340,6 +390,7 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
         } catch {
           break
         }
+        note(msg)
         if (matchesAgentMsg(msg)) {
           foundAgentMsg = true
           assertions.push(
@@ -353,8 +404,19 @@ export async function run(ctx: ScenarioContext): Promise<ScenarioResult> {
     }
 
     if (!foundAgentMsg) {
+      // Estado do stream no momento da falha: separa as três hipóteses que o
+      // vermelho anterior não separava — (1) a entrada semeada não existe;
+      // (2) existe mas o cursor não a alcança; (3) existe, foi entregue, e a
+      // FORMA não bate com o que a asserção espera.
+      const tail = await ctx.redis.xrevrange(streamKey, "+", "-", "COUNT", 3)
       assertions.push(
-        fail("D: replay de mensagem não entregue após reconexão", { agentText })
+        fail("D: replay de mensagem não entregue após reconexão", {
+          esperado:            agentText,
+          cursor_enviado:      cursorBeforeAgent,
+          cursor_no_reauth:    reAuthed?.["stream_cursor"] ?? null,
+          mensagens_recebidas: seen,
+          entradas_no_stream:  tail.map((e) => (e as unknown as [string, string[]])[0]),
+        })
       )
     }
 

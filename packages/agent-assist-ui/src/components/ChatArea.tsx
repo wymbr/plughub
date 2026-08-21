@@ -10,9 +10,10 @@ import { ChatMessage } from "../types";
 import { MessageBubble } from "./MessageBubble";
 
 interface LiveState {
-  sentimentScore: number;   // -1 to +1
+  /** -1 a +1. **`null` = NÃO MEDIDO** — diferente de 0, que é "neutro". */
+  sentimentScore: number | null;
   sentimentAlert: boolean;
-  sentimentTrend: "improving" | "stable" | "declining";
+  sentimentTrend: "improving" | "stable" | "declining" | null;
   intent: string | null;
   flags: string[];
 }
@@ -61,10 +62,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveStat
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, aiTyping]);
 
+  // `!== 0` protegia por acidente enquanto o backend mandava 0 para "não medido"
+  // — e escondia um 0.0 MEDIDO. O discriminador real é `null`.
+  const sentimentScore = liveState?.sentimentScore ?? null;
+  const sentimentTrend = liveState?.sentimentTrend ?? null;
   const hasLiveData = liveState && (
     liveState.intent !== null ||
     liveState.flags.length > 0 ||
-    liveState.sentimentScore !== 0
+    sentimentScore !== null
   );
 
   return (
@@ -88,22 +93,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ messages, aiTyping, liveStat
               : "bg-white border-gray-100"
           }`}
         >
-          {/* Sentiment dot + score */}
-          <span
-            className={`w-2 h-2 rounded-full flex-shrink-0 ${sentimentBulletColor(
-              liveState!.sentimentScore,
-              liveState!.sentimentAlert
-            )}`}
-          />
-          <span className={sentimentTextColor(liveState!.sentimentScore, liveState!.sentimentAlert)}>
-            {(liveState!.sentimentScore * 100).toFixed(0)}%
-          </span>
-          <span className="text-gray-400 text-[10px]">
-            {sentimentLabel(liveState!.sentimentScore)}
-          </span>
-          <span className="text-gray-400 ml-0.5">
-            {TREND_ICON[liveState!.sentimentTrend] ?? "→"}
-          </span>
+          {/* Sentiment dot + score — só quando MEDIDO. Sem a guarda,
+              `null * 100` renderiza 0% em silêncio, que é o defeito de novo. */}
+          {sentimentScore !== null && (
+            <>
+              <span
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${sentimentBulletColor(
+                  sentimentScore,
+                  liveState!.sentimentAlert
+                )}`}
+              />
+              <span className={sentimentTextColor(sentimentScore, liveState!.sentimentAlert)}>
+                {(sentimentScore * 100).toFixed(0)}%
+              </span>
+              <span className="text-gray-400 text-[10px]">
+                {sentimentLabel(sentimentScore)}
+              </span>
+            </>
+          )}
+          {sentimentTrend !== null && (
+            <span className="text-gray-400 ml-0.5">
+              {TREND_ICON[sentimentTrend]}
+            </span>
+          )}
 
           {/* Intent */}
           {liveState!.intent && (

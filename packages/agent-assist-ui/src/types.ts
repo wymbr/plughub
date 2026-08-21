@@ -111,9 +111,12 @@ export type WsServerEvent =
 // ── supervisor_state response ─────────────────────────────────────────────────
 
 export interface SentimentState {
-  current: number;          // -1 to +1
+  /** -1 a +1. **`null` = NÃO MEDIDO** — ver lib/session-sentiment.ts no mcp-server. */
+  current: number | null;
+  /** Pontos MEDIDOS. Vazio enquanto não houver produtor de histórico. */
   trajectory: number[];
-  trend: "improving" | "stable" | "declining";
+  /** `null` sem histórico suficiente — "stable" também seria invenção. */
+  trend: "improving" | "stable" | "declining" | null;
   alert: boolean;
 }
 

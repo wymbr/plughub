@@ -1086,6 +1086,14 @@ services:
     depends_on:
       auth-api:
         condition: service_healthy
+      # Sem healthcheck HTTP (o bridge sinaliza prontidão escrevendo
+      # `{tenant}:bootstrap:ready` no Redis), então só `service_started`. Está
+      # aqui porque o cenário 29 depende dele para DUAS coisas — ativar o agente
+      # de fila (`process_queued`) e entregar a fala do cliente
+      # (`process_inbound`) — e sem a dependência declarada a falha apareceria
+      # como timeout de ativação, que aponta para o lugar errado.
+      orchestrator-bridge:
+        condition: service_started
     networks:
       - plughub-demo
     restart: "no"
@@ -1394,6 +1402,16 @@ services:
       PLUGHUB_WORKFLOW_JOURNEY_TOPIC:    journey.events
       PLUGHUB_WORKFLOW_CALENDAR_API_URL:      http://calendar-api:3700
       PLUGHUB_WORKFLOW_AGENT_REGISTRY_URL:   http://agent-registry:3300
+      # ⚠️ FALTAVA (medido 2026-08-25) — e não era só problema de teste.
+      # `channel_gateway_url` cai em `http://localhost:8010` (`config.py:40`), que
+      # dentro deste container é ELE MESMO, então `POST /v1/workflow/trigger`
+      # devolvia `502 Channel gateway unreachable` para QUALQUER chamador — é o
+      # proxy do Arc 19 Fase D, endpoint de produto. Derrubou os cenários e2e
+      # 13, 14 e 18 de uma vez. Note o PREFIXO: o Settings usa
+      # `env_prefix="PLUGHUB_WORKFLOW_"` (`config.py:48`), então um
+      # `CHANNEL_GATEWAY_URL` sem prefixo — como o do skill-flow-service §800 —
+      # seria ignorado em silêncio.
+      PLUGHUB_WORKFLOW_CHANNEL_GATEWAY_URL:  http://channel-gateway:8010
     depends_on:
       postgres:
         condition: service_healthy
@@ -1758,10 +1776,27 @@ services:
       WORKFLOW_API_URL:         http://workflow-api:3800
       CALENDAR_API_URL:         http://calendar-api:3700
       ANALYTICS_API_URL:        http://analytics-api:3500
+      # ⚠️ Faltavam (medido 2026-08-25). O runner cai em `http://localhost:3600`
+      # quando a env não vem (`runner.ts` §139), e dentro do container `localhost`
+      # é o PRÓPRIO runner: o `--demo` morria no `waitForService` do config-api
+      # ANTES do primeiro cenário, com `fetch failed`. Não é erro de cenário — é
+      # env ausente, e o modo de falha (fatal, na espera) escondia que o `--demo`
+      # nunca completou nesta stack.
+      CONFIG_API_URL:           http://config-api:3600
+      CONFIG_API_ADMIN_TOKEN:   demo_config_admin_token   # == PLUGHUB_CONFIG_ADMIN_TOKEN §1001
       REDIS_URL:                redis://redis:6379
       KAFKA_BROKERS:            kafka:29092
       TENANT_ID:                tenant_demo
       JWT_SECRET:               demo_plughub_secret_32chars__
+      # Segredo com que o runner ASSINA o JWT do webchat. Tem de bater com o que o
+      # channel-gateway usa para VERIFICAR, e ele resolve em dois passos
+      # (`webchat.py:466`): Redis `{tenant}:config:webchat:jwt_secret` primeiro,
+      # `PLUGHUB_JWT_SECRET` como fallback. O `flushTestData` do runner apaga
+      # `{tenant}:*` antes de cada cenário — a chave do Redis some junto —, então o
+      # que vale em e2e é SEMPRE o fallback, e este valor espelha §1229.
+      # (Os cenários leem a chave do Redis quando ela existe, para não depender de
+      # duas linhas mantidas iguais à mão.)
+      WEBCHAT_JWT_SECRET:       changeme_32chars_webchat_secret!
       AUTH_JWT_SECRET:          changeme_auth_jwt_secret_demo_32c
       AUTH_ADMIN_TOKEN:         changeme_auth_admin_token_demo
       EVAL_ADMIN_TOKEN:         changeme_eval_admin_token_demo

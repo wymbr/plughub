@@ -66,7 +66,9 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
-      {/* Sentiment */}
+      {/* Sentiment — só existe quando FOI MEDIDO. Sem a guarda, `null * 100`
+          renderiza "0% Neutro" para toda sessão sem medição, em silêncio. */}
+      {sentiment.current !== null && (
       <section>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
           Sentimento
@@ -80,9 +82,11 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
           <span className={`text-sm ${sentimentColor(sentiment.current)}`}>
             {sentimentLabel(sentiment.current)}
           </span>
-          <span className="text-sm text-gray-400 ml-auto">
-            {trendIcon(sentiment.trend)} {sentiment.trend}
-          </span>
+          {sentiment.trend !== null && (
+            <span className="text-sm text-gray-400 ml-auto">
+              {trendIcon(sentiment.trend)} {sentiment.trend}
+            </span>
+          )}
         </div>
         {sentiment.alert && (
           <div className="mt-1 text-xs font-semibold text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
@@ -113,6 +117,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
           </div>
         )}
       </section>
+      )}
 
       {/* Intent */}
       <section>

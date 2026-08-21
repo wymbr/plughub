@@ -99,7 +99,12 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
         </section>
       )}
 
-      {/* Sentiment */}
+      {/* Sentiment — só existe quando FOI MEDIDO.
+          Esta seção renderizava incondicionalmente e, com o `?? 0` do backend,
+          anunciava "0% neutral" para toda sessão da plataforma: era a superfície
+          sem guarda nenhuma das quatro. `current === null` = não medido, e a
+          decisão é não renderizar (nem o título). */}
+      {sentiment.current !== null && (
       <section>
         <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
           {t('state.sentiment')}
@@ -111,9 +116,11 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
           <span className={`text-sm ${sentimentColor(sentiment.current)}`}>
             {sentimentLabel(sentiment.current, t)}
           </span>
-          <span className="text-sm text-muted-light ml-auto">
-            {trendIcon(sentiment.trend)} {sentiment.trend}
-          </span>
+          {sentiment.trend !== null && (
+            <span className="text-sm text-muted-light ml-auto">
+              {trendIcon(sentiment.trend)} {sentiment.trend}
+            </span>
+          )}
         </div>
         {sentiment.alert && (
           <div className="mt-1 text-xs font-semibold text-red-text bg-red-light border border-red/30 rounded px-2 py-1">
@@ -144,6 +151,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
           </div>
         )}
       </section>
+      )}
 
       {/* Intent */}
       <section>
