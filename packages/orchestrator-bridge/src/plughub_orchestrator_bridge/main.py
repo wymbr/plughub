@@ -5710,8 +5710,11 @@ async def process_queued(
       Checked by kafka_listener._drain_queue_for_agent() to decide whether to
       signal the queue agent (LPUSH) or re-publish to conversations.inbound.
 
-    If queue_config is absent or the agent type cannot be resolved, the contact
-    waits silently (original behaviour — routing engine drain still works).
+    Sem ENDEREÇO de fila (`queue_config.pool_id` vazio) ou sem flow executável no
+    pool endereçado, o contato espera em silêncio (comportamento original — o
+    drain do routing engine segue funcionando). As duas ausências são distintas e
+    logam diferente: a primeira é configuração deliberada (INFO), a segunda é
+    deploy faltando (ERROR).
     """
     session_id = msg.get("session_id", "")
     tenant_id  = msg.get("tenant_id", "")
@@ -5731,39 +5734,52 @@ async def process_queued(
         )
         return
 
-    queue_cfg = pool.get("queue_config")
-    if not queue_cfg:
-        # Fase C (queue-attended-model): tenant-wide default queue agent.
-        # Pool-level queue_config wins; the Config API session namespace
-        # provides the fallback (queue_default_agent_type_id / _skill_id).
-        # Empty default = original behaviour (customer waits silently).
-        _default_agent = session_config.get("queue_default_agent_type_id", "") or ""
-        if _default_agent:
-            queue_cfg = {"agent_type_id": _default_agent}
-            _default_skill = session_config.get("queue_default_skill_id", "") or ""
-            if _default_skill:
-                queue_cfg["skill_id"] = _default_skill
-            logger.info(
-                "No queue_config for pool=%s — using tenant default queue agent %s",
-                pool_id, _default_agent,
-            )
-        else:
-            # ── Por que INFO e não DEBUG (2026-08-18) ─────────────────────────
-            # Este `return` é uma DEGRADAÇÃO deliberada (o contato espera em
-            # silêncio), e degradação nunca é silenciosa. Em DEBUG — com o bridge
-            # rodando em INFO — ele era invisível, e "o contato não enfileirou"
-            # ficava indistinguível de "enfileirou, o bridge foi chamado e desistiu".
-            # Medido ao rodar o gate da F1: janela sem NENHUMA linha, e as duas
-            # hipóteses igualmente compatíveis com a ausência. É o mesmo motivo que
-            # promoveu o `marker SET` a INFO.
-            logger.info(
-                "Sem agente de fila para pool=%s session=%s: o pool não tem "
-                "`queue_config` e o tenant não tem default (`queue_default_agent_type_id`). "
-                "O contato espera em SILÊNCIO e o drain re-roteia — comportamento "
-                "esperado, registrado para não ser confundido com 'não enfileirou'.",
-                pool_id, session_id,
-            )
-            return
+    # ── Tier por ENDEREÇO, e ele é UM campo (defeito 2, 2026-08-24) ───────────
+    #
+    # Era `if not queue_cfg:` → default de tenant → senão silêncio. Dois erros
+    # numa linha só: (1) a presença do OBJETO respondia por "há quem atenda?",
+    # quando o objeto também carrega política (`max_wait_s`) e endereço legado
+    # (`skill_id`); e (2) o default de tenant só sabia falar o vocabulário morto
+    # (`queue_default_agent_type_id`/`_skill_id`), que desde 2026-07-13 não
+    # resolve flow nenhum — produção é o slot `current` do POOL. Resultado
+    # medido: pool com `{"skill_id": ..., "max_wait_s": 1800}` e sem endereço
+    # pulava o default, adivinhava o próprio pool de destino como pool de fila e
+    # terminava em ERROR de "deploy quebrado" — num pool deliberadamente sem
+    # tratamento de fila. Diagnóstico invertido: "desligado" saía como "quebrado".
+    #
+    # O default de tenant foi REMOVIDO (decisão 2026-08-24), não consertado:
+    # estava vazio nos 2 campos, tinha zero usuários em 36 pools e prometia na
+    # tela ("Empty = tenant default") algo que nenhum caminho entregava.
+    #
+    # Os dois cenários de produto — pool humano COM e SEM fila de IA — são este
+    # mesmo caminho com `queue_config.pool_id` preenchido ou vazio.
+    queue_cfg = pool.get("queue_config") or {}
+    if not isinstance(queue_cfg, dict):
+        queue_cfg = {}
+    queue_pool_id = (queue_cfg.get("pool_id") or "").strip()
+
+    if not queue_pool_id:
+        # ── Por que INFO e não DEBUG (2026-08-18) ─────────────────────────────
+        # Este `return` é uma DEGRADAÇÃO deliberada (o contato espera em
+        # silêncio), e degradação nunca é silenciosa. Em DEBUG — com o bridge
+        # rodando em INFO — ele era invisível, e "o contato não enfileirou"
+        # ficava indistinguível de "enfileirou, o bridge foi chamado e desistiu".
+        #
+        # 2026-08-24: o log passa a nomear o campo LEGADO quando ele existe. Sem
+        # isso, um operador que preencheu `skill_id` na tela lê "sem tratamento
+        # de fila" olhando para um campo preenchido — e conclui que o log mente.
+        _legacy = (queue_cfg.get("skill_id") or queue_cfg.get("agent_type_id") or "").strip()
+        logger.info(
+            "Sem agente de fila para pool=%s session=%s: `queue_config.pool_id` "
+            "está vazio%s. O contato espera em SILÊNCIO e o drain re-roteia — "
+            "comportamento esperado, registrado para não ser confundido com "
+            "'não enfileirou'. Para tratar a espera, aponte o Queue pool a um "
+            "pool com slot `current` promovido.",
+            pool_id, session_id,
+            (f" (o legado `{_legacy}` está preenchido e é IGNORADO: desde "
+             f"2026-07-13 produção é o slot do POOL, não o skill)") if _legacy else "",
+        )
+        return
 
     # ── P2/F2 (2026-08-18): DOIS pools, e eles não são o mesmo fato ───────────
     #
@@ -5778,22 +5794,15 @@ async def process_queued(
     # fact in a wider-scope field" — e o conserto é separar, não trocar: o
     # segmento continua carimbando o DESTINO (onde o contato esperou é o fato que
     # o relatório de fila mede), e só a resolução do flow passa a olhar a FILA.
-    queue_pool_id = (queue_cfg.get("pool_id") or "").strip()
+    #
+    # 2026-08-24: `queue_pool_id` já foi lido no gate acima (é o predicado do
+    # tier). Os dois campos LEGADOS continuam sendo lidos, mas nunca como
+    # endereço — só como pista de identidade para o caso de fallback legado
+    # (`ALLOW_LIVE_FLOW_FALLBACK`), onde a lista de skills ainda importa. A
+    # identidade real do agente de fila vem do slot que EXECUTOU (`_resolved[0]`,
+    # abaixo): o que o segmento afirma tem de ser o que rodou.
     agent_type_id = queue_cfg.get("agent_type_id", "") or ""
-    explicit_skill_id = queue_cfg.get("skill_id")   # LEGADO — endereço por skill
-    if not agent_type_id and not queue_pool_id:
-        # Fase E (skill-first): agent_types aposentados — queue_config pode
-        # vir só com skill_id (UI do pool). A skill é a identidade do agente
-        # de fila (segmento role=queue) e resolve o flow direto no registry.
-        if explicit_skill_id:
-            agent_type_id = explicit_skill_id
-        else:
-            logger.warning(
-                "queue_config sem `pool_id` (endereço), `agent_type_id` ou `skill_id` "
-                "para pool=%s — nada a ativar",
-                pool_id,
-            )
-            return
+    explicit_skill_id = queue_cfg.get("skill_id")   # LEGADO — não é endereço
 
     skills: list[dict] = []
     if agent_type_id:
@@ -5827,29 +5836,38 @@ async def process_queued(
     # algum. Segmento é um FATO sobre atendimento; abri-lo antes de saber se há o
     # que atender é afirmar o fato antes de ele existir.
     #
-    # Sem flow, o caminho correto é o MESMO de "pool sem `queue_config`": o
+    # Sem flow, o caminho correto é o MESMO de "pool sem endereço de fila": o
     # contato espera em silêncio e o drain re-roteia normalmente. Por isso o
     # `return` é ANTES do marcador — escrevê-lo faria o drain sinalizar um agente
     # que não existe, e aí o `participant_left` nunca seria produzido.
     #
-    # F2: o pool consultado é o de FILA quando há endereço; senão, o de destino
-    # (retrocompat — e é esse ramo que produz a config decorativa que a F2 fecha).
+    # ── O `or pool_id` SAIU (2026-08-24) ──────────────────────────────────────
+    # Ele era o fallback que ADIVINHA: sem endereço, mandava resolver o slot do
+    # próprio pool de DESTINO. Um pool humano nunca tem slot (slot é deploy de
+    # IA), então o palpite não podia dar certo em nenhum caso — convertia
+    # "config ausente" em "erro de runtime", com o contato esperando mudo e o
+    # ERROR abaixo culpando um deploy que ninguém pediu. Valor plausível
+    # clássico: um alvo que parece razoável e nunca pode funcionar.
+    # Hoje a recusa é ALTA e acontece no gate lá em cima, onde ainda é config.
     #
     # Custo de I/O: nenhum no caso comum. `get_pool_current_flow` guarda por pool em
     # `_pool_flow_cache` (invalidado no `registry.changed`), e é a MESMA leitura que
     # o `activate_native_agent` faria logo abaixo.
-    _flow_pool_id = queue_pool_id or pool_id
+    _flow_pool_id = queue_pool_id
     _resolved = await resolve_flow_for_agent(
         http, tenant_id, agent_type_id, skills, _flow_pool_id
     )
     if _resolved is None:
+        # Aqui o ERROR é honesto: há endereço, e ele não resolve. Antes esta linha
+        # também disparava para pool SEM endereço, e era o que fazia "desligado de
+        # propósito" ser lido como "deploy quebrado".
         logger.error(
-            "Agente de fila NÃO ativado: destino=%s fila=%s session=%s agent=%s — nenhum "
-            "flow executável (pool de fila sem slot `current`, ou skill inexistente). "
-            "NENHUM marcador e NENHUM segmento de fila foram criados; o contato espera em "
-            "silêncio e o drain re-roteia normalmente. Promova um slot no pool de FILA "
-            "(set-next → promote), ou aponte `queue_config.pool_id` para um pool que já "
-            "tenha deploy.",
+            "Agente de fila NÃO ativado: destino=%s fila=%s session=%s agent=%s — o "
+            "Queue pool está configurado mas NÃO tem flow executável (sem slot "
+            "`current` promovido, ou skill inexistente). NENHUM marcador e NENHUM "
+            "segmento de fila foram criados; o contato espera em silêncio e o drain "
+            "re-roteia normalmente. Promova um slot no pool de FILA (set-next → "
+            "promote), ou aponte `queue_config.pool_id` a um pool que já tenha deploy.",
             pool_id, _flow_pool_id, session_id, agent_type_id or "-",
         )
         return

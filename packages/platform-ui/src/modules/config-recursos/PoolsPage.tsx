@@ -924,7 +924,13 @@ const PoolsPage: React.FC = () => {
         // `pool_id` (endereço de deploy); `skill_id` é legado e viaja junto só
         // para não ser apagado em silêncio de uma config que ainda o usa.
         // Limpar AMBOS num pool que tinha fila envia null → registry limpa (DbNull).
-        ...((formData.queue_pool_id.trim() || formData.queue_skill_id.trim()) ? {
+        //
+        // 2026-08-24: `max_wait_s` entrou na condição. Ele é POLÍTICA de espera do
+        // pool e vale também sem endereço (fila muda) — enquanto dependia do
+        // endereço, um pool que só queria declarar o teto não tinha como, e quem
+        // declarasse os dois via o objeto inteiro ser lido como "há fila atendida".
+        ...((formData.queue_pool_id.trim() || formData.queue_skill_id.trim()
+             || formData.queue_max_wait_s !== null) ? {
           queue_config: {
             ...(formData.queue_pool_id.trim() ? { pool_id: formData.queue_pool_id.trim() } : {}),
             ...(formData.queue_skill_id.trim() ? { skill_id: formData.queue_skill_id.trim() } : {}),
@@ -1305,12 +1311,17 @@ const PoolsPage: React.FC = () => {
                   value={formData.queue_pool_id}
                   onChange={e => setFormData({ ...formData, queue_pool_id: e.target.value })}
                   options={[
-                    { value: '', label: t('pools.queueCfg.tenantDefault') },
+                    // 2026-08-24: era "— Tenant default —", e o default de tenant
+                    // nunca existiu como caminho executável (ver seed.py § queue).
+                    // Vazio = ninguém atende a espera.
+                    { value: '', label: t('pools.queueCfg.noTreatment') },
                     ...pools
                       .filter(p => p.pool_id !== formData.pool_id && !p.pool_id.endsWith('-int'))
                       .map(p => ({
                         value: p.pool_id,
-                        label: p.description ? `${p.pool_id} — ${p.description}` : p.pool_id,
+                        label: p.deployed_skill_id
+                          ? `${p.pool_id} — ${p.deployed_skill_id}`
+                          : `${p.pool_id} — ${t('pools.queueCfg.noDeploy')}`,
                       })),
                   ]}
                 />
@@ -1328,6 +1339,16 @@ const PoolsPage: React.FC = () => {
                 />
               </div>
             </div>
+            {/* Config-time (defeito 2, 2026-08-24): endereçar um pool SEM slot
+                `current` promovido salva um tratamento de fila que não roda — o
+                contato espera mudo e só o log do bridge sabe. Avisar aqui é o
+                único momento em que ainda é configuração, não runtime. */}
+            {formData.queue_pool_id.trim() &&
+              !pools.find(p => p.pool_id === formData.queue_pool_id.trim())?.deployed_skill_id && (
+              <div className="mt-2 bg-warning-light border border-warning/30 text-warning-text px-3 py-1.5 rounded text-xs">
+                {t('pools.queueCfg.queuePoolNoDeploy', { pool: formData.queue_pool_id.trim() })}
+              </div>
+            )}
             {/* Endereço LEGADO: mostrado (não editável) quando existe, para que a
                 config não desapareça da tela nem seja apagada em silêncio. */}
             {formData.queue_skill_id.trim() && (

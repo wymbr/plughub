@@ -1,8 +1,8 @@
 """
 mute_queue.py — Fila de sistema (tier gratuito) — system-queue.md, Fase A.
 
-Helpers do ciclo de vida da fila MUDA (pool sem `queue_config`, ou overflow de
-admissão): isenção de C, contador total, tetos por canal e o ledger analítico
+Helpers do ciclo de vida da fila MUDA (pool sem ENDEREÇO de fila — isto é, sem
+`queue_config.pool_id`; ver `queue_address` abaixo — ou overflow de admissão): isenção de C, contador total, tetos por canal e o ledger analítico
 via SEGMENTO SINTÉTICO `role=queue` — mesma fonte que a Fase D do
 queue-attended-model já consome no /reports/pools/queue (sem tópicos novos).
 
@@ -63,6 +63,59 @@ def _decode(v) -> str:
     return v.decode() if isinstance(v, bytes) else str(v)
 
 
+# ── Tier da fila: ENDEREÇO, nunca presença de objeto (defeito 2, 2026-08-24) ──
+
+def queue_address(pool_cfg: dict | None) -> str:
+    """
+    Pool que ATENDE a espera deste pool. `""` ⇒ fila MUDA.
+
+    **É o predicado único do tier**, e existe porque havia quatro testes
+    diferentes sobre o mesmo objeto, cada um respondendo a outra pergunta:
+
+      · `main.py:808`  — `if queue_config:`            (presença do OBJETO)
+      · `main.py:1272` — `if max_wait_s > 0:`          (teto, rotulado como tier)
+      · bridge `:5735` — `if not queue_cfg:`           (presença do OBJETO)
+      · bridge `:5841` — `queue_pool_id or pool_id`    (ADIVINHA o endereço)
+
+    O que quebrou na prática: `queue_config` carrega TRÊS fatos de escopos
+    diferentes — endereço (`pool_id`), política de espera (`max_wait_s`) e um
+    endereço LEGADO que não endereça mais nada (`skill_id`/`agent_type_id`, mortos
+    desde que produção passou a ser o slot `current` do POOL, 2026-07-13). Logo um
+    pool que só queria configurar o teto de espera ficava classificado como fila
+    ATENDIDA, pulava a isenção de licença de IA e o veto de canal, e o bridge
+    logava ERROR de deploy quebrado num pool deliberadamente sem tratamento.
+
+    Só `pool_id` é endereço. Ausente = ninguém atende = fila muda — os dois
+    cenários do produto (com e sem pool de IA na fila de um pool humano) são o
+    MESMO caminho com o campo preenchido ou vazio, nunca dois códigos.
+    """
+    if not pool_cfg:
+        return ""
+    qc = pool_cfg.get("queue_config") or {}
+    if not isinstance(qc, dict):
+        return ""
+    return (qc.get("pool_id") or "").strip()
+
+
+def pool_max_wait_s(pool_cfg: dict | None) -> int:
+    """
+    Teto de espera declarado NO POOL (segundos); 0 = não declarado.
+
+    Ortogonal ao tier: vale na fila muda também. Quem vence é o pool — o teto por
+    canal é DEFAULT de quem não declarou, mais o veto do `0` (ver
+    `channel_max_wait_s`). Decidido 2026-08-24: espera é fato do pool.
+    """
+    if not pool_cfg:
+        return 0
+    qc = pool_cfg.get("queue_config") or {}
+    if not isinstance(qc, dict):
+        return 0
+    try:
+        return max(0, int(qc.get("max_wait_s") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
 # ── Tetos (proteções operacionais — Config API namespace `routing`) ───────────
 
 def max_queue_total() -> int:
@@ -76,7 +129,14 @@ def max_queue_total() -> int:
 
 def channel_max_wait_s(settings, channel: str) -> int:
     """
-    Teto de espera muda por canal (0 = canal não aceita fila muda → outage).
+    Tolerância do CANAL a espera em silêncio (segundos).
+
+    **`0` é VETO, não teto** — o canal não aceita fila muda nenhuma (voice: dead
+    air segura tronco) e o contato é encerrado gracioso na porta (`main.py:816`).
+    Qualquer outro valor é apenas o DEFAULT de quem não declarou `max_wait_s` no
+    pool; declarado, o pool vence (decisão 2026-08-24 — espera é fato do pool, e
+    esta tabela é tolerância física do canal, não promessa de atendimento).
+
     Config: `queue_max_wait_by_channel` {canal: segundos}; canais ausentes caem
     no `queue_max_wait_default_s` dos settings (1800).
     """
@@ -106,22 +166,63 @@ async def mark_mute_queued(redis_client, tenant_id: str, session_id: str, now_ms
         return now_ms
 
 
-def queue_wait_segment_id(tenant_id: str, session_id: str) -> str:
+def queue_wait_segment_id(tenant_id: str, session_id: str,
+                          first_queued_ms: int) -> str:
     """
-    Id DETERMINÍSTICO do segmento de espera (D12, emenda 1).
+    Id DETERMINÍSTICO do segmento de espera (D12 emenda 1; discriminado 2026-09-01).
 
-    Uma sessão tem UMA passagem pela fila, logo o segmento que a registra tem
-    identidade derivável — não sorteável. Com `uuid4()` (o que havia aqui e ainda
-    há no bridge, `main.py:5924`) duas emissões viram duas LINHAS; com id derivado
-    viram a mesma linha, e o `ReplacingMergeTree` deduplica sozinho. É o padrão que
-    o `quality-ingest` já usa para idempotência de importação.
+    Uma passagem pela fila tem identidade derivável — não sorteável. Com `uuid4()`
+    (o que havia aqui e ainda há no `_emit_queue_timeout` e no bridge) duas
+    emissões viram duas LINHAS; com id derivado viram a mesma linha, e o
+    `ReplacingMergeTree` deduplica sozinho. É o padrão que o `quality-ingest` já
+    usa para idempotência de importação.
 
     Isso substitui um guard: em vez de garantir "emite uma vez só" no caminho
-    (impossível de garantir em N saídas concorrentes), garante-se que emitir duas
-    vezes seja INÓCUO.
+    (impossível em N saídas concorrentes), garante-se que emitir duas vezes seja
+    INÓCUO.
+
+    ── Por que o `first_queued_ms` entra no namespace (2026-09-01) ────────────────
+    A premissa antiga estava escrita aqui em prosa — *"uma sessão tem UMA passagem
+    pela fila"* — e é **falsa**. Medido num contato real
+    (`9403a14b-3020-4cf9-85f2-6a937dae41c4`): espera de 24 118 ms em
+    `retencao_humano` (saída `handoff`, humano assumiu), transferência, espera de
+    85 009 ms em `especialista_onboarding` (saída `abandoned`). **Duas emissões, um
+    id, uma linha** — o ClickHouse guardou a segunda e os 24 118 ms **deixaram de
+    existir**. Não é defeito de exibição: é perda de dado, irrecuperável.
+
+    O discriminador é o **carimbo de entrada**, não o pool, e a razão é de escopo:
+
+      · o carimbo é fato da PASSAGEM — `add_queued_contact` o escreve com NX
+        (`registry.py:2628`) e a saída o apaga (abaixo), então a chave já
+        SIGNIFICA "esta passagem". Re-enfileiramento dentro da mesma passagem
+        preserva o valor (é o que `test_release_preserves_first_queued` exige),
+        logo o id continua estável onde tem de ser.
+      · o `pool_id` é fato do CALL SITE. Em `main.py:286` o emissor passa
+        `event.pool_id or ""` — duas saídas da mesma passagem chegando por sites
+        com pools diferentes (ou uma com `""`) dariam DOIS ids para UMA passagem,
+        destruindo justamente a idempotência acima. Discriminar por pool também
+        não separaria duas esperas no MESMO pool.
+
+    ⚠️ **DESCONTINUIDADE DE IDENTIDADE.** As linhas gravadas antes desta mudança
+    têm o id sem carimbo; nenhuma delas é reescrita e nenhuma migração as alcança
+    (o `first_queued_ms` original não é recuperável — a chave é apagada na saída).
+    Consequência prática: nenhuma. Ninguém junta segmento por id calculado fora do
+    produtor, e o `ReplacingMergeTree` só dedupe dentro da mesma chave de ORDER BY.
+
+    ⚠️ **O que esta mudança NÃO conserta, de propósito:** o relatório Fila/SLA
+    colapsa a sessão numa linha (`anyIf(pool_id, role='queue')` /
+    `anyIf(outcome, ...)` / `maxIf(duration_ms, ...)` em `reports_query.py:5752`),
+    então a segunda linha que passa a existir aqui continua descartada na leitura —
+    e o `anyIf` passa a sortear onde as duas discordam. Medido: a exposição JÁ
+    existe (2 de 5 sessões multi-linha discordam hoje), mas era resíduo histórico
+    congelado e passa a crescer com o tráfego. O conserto do colapso é a **D14**
+    (SLA é fato do segmento), e somar as esperas NÃO é o conserto — somar duas
+    esperas contra um alvo é o que a D14 diz não ter uso.
     """
-    return str(uuid.uuid5(uuid.NAMESPACE_URL,
-                          f"plughub:queue-wait:{tenant_id}:{session_id}"))
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"plughub:queue-wait:{tenant_id}:{session_id}:{int(first_queued_ms)}",
+    ))
 
 
 async def resolve_queue_exit(
@@ -199,6 +300,15 @@ async def resolve_queue_exit(
     try:
         first_ms = int(float(raw)) if raw else now_ms
     except ValueError:
+        # Degradação NUNCA silenciosa: com carimbo ilegível a duração vira 0 E o
+        # id passa a depender de `now` (deixa de ser determinístico). Os dois
+        # sintomas são plausíveis — `duration_ms=0` some no relatório e um id
+        # novo vira "outra passagem" —, então o motivo tem de ficar no log.
+        logger.warning(
+            "queue exit: carimbo ilegível (%r) session=%s pool=%s — duração vai a "
+            "0 e o segment_id deixa de ser estável para esta passagem",
+            raw, session_id, pool_id,
+        )
         first_ms = now_ms
     duration_ms = max(0, now_ms - first_ms)
     joined_iso  = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).isoformat()
@@ -233,7 +343,9 @@ async def resolve_queue_exit(
             "session_id":     session_id,
             "tenant_id":      tenant_id,
             # D12 emenda 1: id DERIVADO, não sorteado — ver queue_wait_segment_id.
-            "segment_id":     queue_wait_segment_id(tenant_id, session_id),
+            # `first_ms` (2026-09-01) discrimina a PASSAGEM: sem ele, duas esperas
+            # da mesma sessão colapsam numa linha e a primeira é perdida.
+            "segment_id":     queue_wait_segment_id(tenant_id, session_id, first_ms),
             "participant_id": "system-queue",
             "pool_id":        pool_id,
             "agent_type_id":  "system",

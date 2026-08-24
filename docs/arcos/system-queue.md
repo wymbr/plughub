@@ -54,6 +54,22 @@ Logo: a isenção de C e o `max_queue_length` são **condicionados à ausência 
 `queue_config`** (mesmo branch que já decide suprimir o aviso de espera), não
 ao enqueue em si. A atendida tem teto natural (slots do pool de fila + admissão).
 
+> ⚠️ **Corrigido 2026-08-24 (defeito 2): o discriminador é o ENDEREÇO, não o objeto.**
+> Onde este doc diz *"sem `queue_config`"*, leia **"sem `queue_config.pool_id`"**. O
+> objeto carrega três fatos de escopos diferentes — endereço (`pool_id`), política de
+> espera (`max_wait_s`) e endereço legado morto (`skill_id`/`agent_type_id`) —, e testar
+> a presença dele fazia um pool que só declarava o TETO ser classificado como fila
+> atendida: perdia a isenção de C durante uma espera em que **ninguém atendia** e o
+> bridge logava ERROR de deploy quebrado. Predicado único hoje:
+> `mute_queue.queue_address(pool_cfg)`. Medido no `retencao_humano` e validado em contato
+> real — ver `CHANGELOG.md` 2026-08-24.
+>
+> Na mesma correção: o **teto de espera é fato do POOL** e vale nos dois tiers;
+> `queue_max_wait_by_channel` é **tolerância do canal** (default de quem não declarou),
+> e o `0` ali é **veto** de fila muda, não teto. A varredura de expiração já fazia isso
+> (`main.py` lê `max_wait_s` sem consultar tier); o que estava errado era o rótulo dos
+> dois ramos, que dizia "atendida × muda".
+
 ## Decisões (fechadas com o usuário — 2026-06-05)
 
 1. **Isenção de C: libera no enqueue ✅** — ao persistir na fila muda, SREM dos

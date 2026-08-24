@@ -2,6 +2,224 @@
 
 ---
 
+## O segmento de espera passou a discriminar a PASSAGEM — perda de dado medida e fechada (2026-08-24)
+
+Fecha a opção **(A)** da passagem 09-01 (`TODO.md` § *"janela de espera"*, resíduo aberto em 08-21).
+O item estava registrado como *"conserto provável: incluir o `pool_id` no namespace do `uuid5`"* e
+marcado **DEDUTIVO** — *"não há caso de duas filas na população"*. As duas coisas mudaram ao medir: o
+caso foi **produzido**, e o discriminador certo **não é o pool**.
+
+### O defeito, com o tamanho honesto
+
+`queue_wait_segment_id` era `uuid5(NAMESPACE_URL, "plughub:queue-wait:{tenant}:{session}")`, e o
+docstring afirmava a premissa em prosa: *"uma sessão tem UMA passagem pela fila"*. **É falsa.** Uma
+sessão que espera, é atendida, é transferida e espera de novo emite **dois** `participant_left` com o
+**mesmo** `segment_id`; o `ReplacingMergeTree` guarda a última e a primeira espera **deixa de existir**.
+
+Não é defeito de exibição — é **perda de dado, irrecuperável**: o `first_queued_ms` da passagem
+perdida é apagado na saída, então nenhuma migração alcança a linha depois. Foi esse o argumento que
+priorizou a fatia: o colapso do relatório (abaixo) é consertável a qualquer momento; a linha perdida
+não volta.
+
+Mesma família do resíduo já catalogado em `participation_intervals` (`ORDER BY` sem discriminador) e
+do DDL que *afirmava em prosa* a ordenação que ninguém impunha — aqui era um **docstring** prometendo
+uma invariante que nenhum mecanismo garantia.
+
+### Medido (contato real, não dedução)
+
+Produzido de propósito — `sac_ia` → escala → espera → humano assume → transfere → espera → cliente cai:
+
+| Sessão | Passagem 1 | Passagem 2 | Linhas `role='queue'` |
+|---|---|---|---|
+| `9403a14b-…-6a937dae41c4` (**antes**) | `retencao_humano` `handoff` **24 118 ms** | `especialista_onboarding` `abandoned` **85 009 ms** | **1** — id `4a539b95-458d-56a5-…`, idêntico ao `uuid5` previsto ⇒ colisão provada, e os 24 118 ms sumiram |
+| `27651d1b-…-dc9a3d1a0c0c` (**depois**) | `retencao_humano` `handoff` **43 791 ms** | `especialista_onboarding` `abandoned` **80 980 ms** | **2** — `3cc267dd-376c-5fdd-…` e `b4d51ae4-6220-5c4a-…`, distintos ⇒ 124 771 ms de espera no ledger |
+
+O instrumento é um **par**: saídas registradas no log do routing (testemunha de presença) × linhas
+sobreviventes no ClickHouse (contador de ausência). Sozinho, *"1 linha"* não distingue **colisão** de
+*"houve uma espera só"* — probe `infra/test/q_queue_collision_witness.sh`.
+
+### O discriminador é o carimbo, não o pool — e a razão é de escopo
+
+- o **`first_queued_ms` é fato da PASSAGEM**: `add_queued_contact` o escreve com NX
+  (`registry.py:2628`) e a saída o apaga, então a chave já *significa* "esta passagem".
+  Re-enfileiramento dentro da mesma passagem preserva o valor — é o que
+  `test_release_preserves_first_queued` exige —, logo o id continua estável onde tem de ser.
+- o **`pool_id` é fato do CALL SITE**: `main.py:286` emite com `event.pool_id or ""`. Duas saídas da
+  mesma passagem chegando por sites com pools diferentes (ou uma com `""`) dariam **dois ids para uma
+  passagem**, destruindo a idempotência que a D12 comprou. E o pool não separa duas esperas no
+  **mesmo** pool.
+
+### Mudanças
+
+- `mute_queue.queue_wait_segment_id(tenant_id, session_id, first_queued_ms)` — 3º parâmetro
+  **obrigatório** (default deixaria um chamador reproduzir o id colidente em silêncio).
+- call site passa `first_ms`, o **mesmo** valor de que a duração deriva.
+- `except ValueError` do parse do carimbo deixou de ser mudo: carimbo ilegível zera a duração **e**
+  torna o id dependente de `now` — dois valores plausíveis, agora com `logger.warning`.
+
+⚠️ **Descontinuidade de identidade declarada.** Linhas anteriores mantêm o id sem carimbo; nenhuma é
+reescrita e nenhuma migração as alcança. Consequência prática: nenhuma — ninguém junta segmento por id
+calculado fora do produtor. Assinatura verificável: no contato de depois, o `queue-wait` pela fórmula
+antiga (`b20aa0f0-…`) não bate com nenhuma das duas linhas.
+
+### Gate
+
+`test_queue_wait_segment.py` **10 passed** (8 + 2). Os dois novos são um **par que não se separa**:
+`test_two_passages_get_distinct_ids` ficaria verde com `uuid4()` de volta (ids sempre distintos) e
+`test_same_passage_emits_the_same_id_twice` ficaria verde com o defeito antigo (ids sempre iguais).
+Preflight de símbolo antes de medir: `3 True` (aridade + discriminação).
+
+### Fora desta fatia, nomeados
+
+- **O relatório Fila/SLA continua descartando a linha resgatada.** `reports_query.py:5752` colapsa a
+  sessão numa linha (`anyIf(pool_id, role='queue')` / `anyIf(outcome, …)` / `maxIf(duration_ms, …)`),
+  então a tela ainda mostra 80 980 ms, não 124 771. **(A) sozinha não melhora nenhuma tela** — conserta
+  o ledger, que é o pré-requisito da D14. E o conserto do colapso **não é somar**: somar duas esperas
+  contra um alvo é o que a D14 diz não ter uso.
+- **O `anyIf` já sorteia hoje, e passa a crescer.** Medido: 61 linhas `role='queue'` no tenant, 50
+  sessões com 1, 4 com 2, 1 com 3; **2 das 5 multi-linha discordam** (`049167a2…` em `outcome`,
+  `dce98532…` em `pool_id`). Era resíduo histórico congelado; com esta mudança a população cresce com
+  o tráfego. Probe `infra/test/q_queue_multirow_impact.sh`.
+- **O bridge tem o mesmo defeito** (`main.py:5963`, namespace `queue-agent`, sem discriminador),
+  confirmado na mesma medição: `c0d15c24-454b-5adb-…` bate com o `uuid5` previsto. Hoje inalcançável —
+  exige **dois** pools com fila atendida, e só o `retencao_humano` tem endereço. Fatia própria: o
+  discriminador dele não pode ser wall-clock, ou a idempotência morre.
+- **`_emit_queue_timeout` passo 3** segue com `uuid4()` e publish **sem `key=`** — é a opção (B).
+- **`duration_ms` × janela dos carimbos** divergiu no segmento humano nas **duas** medições
+  (26 448 ms para 80 s; 25 519 ms para 60 s). Duas ocorrências não é ruído; backlog próprio.
+
+---
+
+## Tier de fila decidido por ENDEREÇO — o defeito 2, e o "default de tenant" que nunca existiu (2026-08-24)
+
+Fecha o **defeito 2** (`TODO.md` § *"O tenant default de fila é suprimido pelo `skill_id` legado"*). O
+título daquela seção descrevia um sintoma; medindo, o defeito era maior e de outra natureza:
+**`queue_config` carrega três fatos de escopos diferentes, e quatro call sites perguntavam "há quem
+atenda?" testando a presença do OBJETO.**
+
+| Onde | Pergunta real | Teste que usava |
+|---|---|---|
+| routing `main.py:808` | esta fila é ATENDIDA? | presença do objeto |
+| routing `main.py:1272` | qual o teto de espera? | `max_wait_s > 0`, **rotulado como tier** |
+| bridge `:5735` | há tratamento de fila? | presença do objeto |
+| bridge `:5841` | qual pool executa o flow? | `queue_pool_id or pool_id` — **adivinha** |
+
+Os três fatos: **endereço** (`pool_id`), **política** (`max_wait_s`) e um **endereço legado que não
+endereça mais nada** (`skill_id`/`agent_type_id` — mortos desde 2026-07-13, quando produção passou a
+ser exclusivamente o snapshot do slot `current` do POOL).
+
+### Medido antes de mexer (36 pools, `tenant_demo`)
+
+- `queue_config` presente em **1** pool (`retencao_humano`): `{agent_type_id:"", max_wait_s:1800,
+  skill_id:"skill_fila_v1"}` — política + endereço morto, **zero endereço**.
+- **`addressable: 0`** — nenhum dos 36 pools usa `queue_config.pool_id`, o único endereço que
+  funciona. Testemunha de presença ao lado do contador de ausência: sem ela, "ninguém usa" seria
+  suposição.
+- `queue_default_agent_type_id` e `queue_default_skill_id`: **`""` os dois**.
+- `fila_humano` existe, é `agent_kind: ai` e **tem slot `current` promovido** (`skill_fila_v1`) — o
+  pool de fila estava de pé e nada apontava para ele.
+- probe re-executável: `infra/test/q_queue_config_inventory.py`.
+
+### O que estava quebrado, com o tamanho honesto
+
+1. **Licença de IA retida numa espera que ninguém atende.** Classificado como atendido pela presença
+   do objeto, o `retencao_humano` pulava o bloco `if not attended:` inteiro — e com ele o
+   `admission.release`, que é a isenção de C do tier gratuito. Contato escalado segurava `C_ai`
+   durante a espera toda. **É a consequência viva; o resto é diagnóstico.**
+2. **Diagnóstico invertido:** um pool deliberadamente sem tratamento de fila logava `ERROR — Agente de
+   fila NÃO ativado` a cada contato. "Desligado de propósito" saía como "deploy quebrado".
+3. **Promessa falsa na tela:** *"Empty = tenant default"* com o objeto não-vazio, e um default de
+   tenant que não poderia funcionar nem preenchido.
+4. **`queue_pool_id or pool_id`**: sem endereço, mandava resolver o slot do próprio pool de DESTINO —
+   e pool humano nunca tem slot. Palpite que não podia dar certo em caso nenhum, convertendo config
+   ausente em erro de runtime.
+5. **Latente, não vivo:** o veto de canal (`0` em `queue_max_wait_by_channel`) também era pulado.
+   Contado antes de chamar de risco: `voice 300 · webrtc 300 · webchat 1800 · whatsapp 14400` —
+   nenhum canal em `0`, logo ninguém sofria.
+
+### Decisões (2026-08-24)
+
+- **Tier = ENDEREÇO.** Predicado único `mute_queue.queue_address(pool_cfg)`, usado pelo routing e pelo
+  bridge. Só `queue_config.pool_id` endereça. Os dois cenários de produto — pool humano **com** e
+  **sem** fila de IA — passam a ser o mesmo caminho com o campo preenchido ou vazio, nunca dois
+  códigos.
+- **Espera é fato do POOL.** `max_wait_s` é política ortogonal ao tier e vale também na fila muda; a
+  tabela por canal é **tolerância física do canal** (default de quem não declarou), e o `0` é **veto**,
+  não teto. *A varredura já implementava exatamente isto (`:1272` nunca consultou tier) — só o rótulo
+  "atendida × muda" mentia, e foi ele que me fez prever um efeito de fator 8 no whatsapp que **não
+  existe**. Previsão corrigida antes de virar mudança.*
+- **Default de tenant REMOVIDO, não consertado** (`queue_default_agent_type_id`/`_skill_id` fora do
+  seed e do `session_config`). Falava o vocabulário pré-slot, tinha zero usuários e prometia na tela o
+  que nenhum caminho entregava. Reintroduzir exige um campo de POOL — nunca estes dois.
+  ⚠️ Linhas já gravadas no config store ficam **órfãs e inertes** (seed é if-absent); DELETE explícito
+  se quiser higiene.
+- **Recusa alta** no lugar do palpite: sem endereço o bridge sai no gate, ainda em config, com INFO
+  que **nomeia o campo legado ignorado** — senão o operador lê "sem tratamento de fila" olhando para um
+  campo preenchido e conclui que o log mente.
+
+### Superfície
+
+`PoolsPage`: *"— Tenant default —"* → **"— Sem tratamento de fila (espera muda) —"**; cada pool da
+lista mostra o skill deployado ou "sem deploy promovido"; aviso em **config-time** ao endereçar pool
+sem slot `current` (o único momento em que ainda é configuração, não runtime); o legado passa a ser
+descrito como **IGNORADO**. E `max_wait_s` entrou na condição de envio — enquanto dependia do
+endereço, um pool que só queria declarar o teto não tinha como.
+
+### Validação — os DOIS cenários, em contato real
+
+**Cenário 1 — sem Queue pool** (fila muda; sessão `a7275f7f…`):
+
+| Medida | Antes | Depois |
+|---|---|---|
+| `ERROR Agente de fila NÃO ativado` | 1 por contato | **0** |
+| `INFO espera em SILÊNCIO` (testemunha de presença) | 0 | **1** |
+| sessão em `{t}:queue:unadmitted` | não | **sim** |
+| sessão em `{t}:admission:kind:ai` | sim (licença retida) | **não** |
+
+**Cenário 2 — `queue_config.pool_id = fila_humano`** (fila atendida; sessão `…13315bc9968c`). É a
+metade que exercita a remoção do `or pool_id`: com endereço, o caminho tem de funcionar inteiro.
+`{t}:queue:unadmitted` **não** contém a sessão — o inverso exato do cenário 1, que é o que prova que o
+tier virou pelo campo, e não por acaso. Segmentos:
+
+```
+primary       sac_ia             native   escalated_human     2 761 ms
+queue         retencao_humano    system   abandoned         176 431 ms
+specialist    fila_humano        native   abandoned         176 424 ms
+```
+
+⇒ **a atribuição da D10 deixou de ser no-op**: o segmento do agente de fila carrega `fila_humano` (quem
+ATENDE), e o da espera segue carimbando `retencao_humano` (o DESTINO — D10.1). Consequência a
+registrar: os ~176 s de trabalho da IA de fila entram no `agent_time_ms` do **`fila_humano`**, e a
+inflação de `+4,8 %` no TMA do `retencao_humano`, declarada como efeito colateral da D12, **não
+ocorre** quando há pool de fila endereçado.
+
+⚠️ As duas linhas de 176 s são a **mesma janela** vista de dois ângulos (espera do cliente × trabalho
+da IA) — sobreposição quase total, e ilustração viva do invariante *"nunca somar segmentos para obter
+tempo de sessão"*.
+
+⚠️ Instrumento com janela: `queue:agent_active:{session_id}` é apagado no fim (`main.py:6048`), então
+`EXISTS` após o contato encerrar devolve `0` **sem reprovar nada**. A prova durável da ativação é o
+segmento `specialist`. Na fila em andamento aparece o `specialist` e **ainda não** o `queue` — o
+segmento de espera nasce na SAÍDA da fila, por construção.
+
+Gate: `test_queue_wait_segment.py` **8 passed** (4 da D12 + 4 do tier, estes puros — nunca pulam por
+ambiente). Falseabilidade conferida trocando o predicado pela regra antiga em memória: a testemunha
+negativa **reprova**, e pela asserção certa.
+
+⚠️ **Dois erros meus nesta sessão, registrados porque o modo de falha se repete.** (a) Previ um desvio
+de fator 8 no teto do whatsapp lendo o **rótulo** do ramo em vez do teste — o mesmo "terceiro
+vocabulário" que o defeito criou; corrigido antes de virar código. (b) O preflight que propus para o
+bridge (`'or pool_id' in source`) **não podia reprovar**: o comentário que documenta a remoção
+reescreve a string. É `grep-conta-a-string-não-a-coisa` de novo, e desta vez em um preflight, que é
+justamente o instrumento que deveria ser à prova disso.
+
+⚠️ **Não destrava a D10 sozinho.** A atribuição do pool do segmento só deixa de ser no-op quando um
+Queue pool for efetivamente endereçado; a configuração atual do demo é, por decisão do operador, sem
+pool de fila. Vale por mérito próprio (o operador configurou muda e a plataforma rodava atendida), não
+como pré-requisito.
+
+---
+
 ## Produtor da janela de espera (D12) — P1+P2 construídos e validados, e o portão que nasceu morto (2026-08-21)
 
 Fecha o **Problema 36.3** (`conference-mechanics.md`): a espera na fila passou a ter produtor. O

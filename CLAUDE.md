@@ -224,6 +224,19 @@ system_error         — unrecoverable error
   (`Webhook endpoint AMBÍGUO`). `skill_id` sobrevive só como endereço legado, válido enquanto **um
   único** pool o declara.
 
+  > **Corolário medido em 2026-08-24 — "tem config" ≠ "tem endereço".** Um objeto de configuração que
+  > mistura endereço com política não pode ser testado por PRESENÇA. `pool.queue_config` carregava
+  > três fatos de escopos diferentes (`pool_id` = endereço · `max_wait_s` = política · `skill_id` =
+  > endereço legado que não endereça nada desde que produção virou o slot do POOL), e **quatro** call
+  > sites perguntavam *"há quem atenda?"* testando `if queue_config:`. Consequência: pool que só
+  > declarava o teto de espera era classificado como fila ATENDIDA, retinha licença de IA durante uma
+  > espera que ninguém atendia, e o log acusava deploy quebrado num pool desligado de propósito.
+  > Regra: **o tier é decidido pelo ENDEREÇO, por um predicado único compartilhado** (aqui,
+  > `mute_queue.queue_address`) — duas respostas para "esta fila é atendida?" é como se paga a licença
+  > de um agente que não existe. E fallback de endereço **recusa alto**: `queue_pool_id or pool_id`
+  > adivinhava um alvo que não podia funcionar em caso nenhum, convertendo config ausente em erro de
+  > runtime. Ver `CHANGELOG.md` 2026-08-24.
+
 ---
 
 ## Postura de Engenharia — invariantes de MÉTODO
@@ -273,6 +286,21 @@ system_error         — unrecoverable error
   always inserted after 'joined' (Kafka ordering)"*). Comentário que promete invariante sem produtor é
   a mesma família de "valor plausível". Ver `CHANGELOG.md` 2026-08-18 e
   `docs/guias/conference-mechanics.md` § Problema 34.
+
+- **Identidade DERIVADA tem de conter o discriminador do FENÔMENO, não o do contêiner dele.** Id
+  determinístico (`uuid5`) é a forma correta de tornar emissão repetida inócua — mas só se a chave
+  descrever a coisa que se quer contar. `queue_wait_segment_id` era `uuid5(tenant, session_id)`:
+  identificava a SESSÃO, enquanto o fato registrado é a PASSAGEM pela fila. Medido em 2026-08-24 num
+  contato real — espera de 24 118 ms num pool, transferência, espera de 85 009 ms noutro, **duas
+  emissões, uma linha**, e a primeira espera **deixou de existir** (o `ReplacingMergeTree` não funde,
+  substitui). Não é defeito de exibição: o carimbo da passagem perdida é apagado na saída, logo
+  nenhuma migração a alcança depois. **Escolha do discriminador é escolha de escopo**: o
+  `first_queued_ms` serviu porque seu ciclo de vida (NX na entrada, DELETE na saída) *já significa* uma
+  passagem; o `pool_id` foi recusado porque é fato do CALL SITE (o emissor passa `event.pool_id or ""`)
+  e daria dois ids para uma passagem. **Agravante que é a lição de método:** a premissa falsa
+  (*"uma sessão tem UMA passagem pela fila"*) vivia no **docstring da própria função** — comentário que
+  promete invariante sem mecanismo que a imponha, exatamente como o DDL de `participation_intervals`.
+  Ver `CHANGELOG.md` 2026-08-24 e `conference-mechanics.md` § Mudança 38.
 
 - **Quando a spec e o código discordam, desconfie dos DOIS.** O merge lia um `started_at` que metade dos
   canais não escrevia; a resposta certa não foi fazer o timestamp funcionar, foi ver que a aciclicidade

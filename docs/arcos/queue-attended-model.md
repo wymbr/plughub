@@ -355,10 +355,16 @@ emissão do evento analítico:
   conclusão; **não** toca `segment_seq`/`primary_segment`/`last_outcome` (só primary dirige
   outcome de sessão); (3) routing `_write_queue_context` — `session.queue.position` (tamanho
   do bucket pós-SADD, 1-based) + `session.queue.eta_ms` (posição × sla_target_ms × 0.7) no
-  ContextStore a cada tentativa de enqueue (drain re-attempts refrescam posição); (4) default
+  ContextStore a cada tentativa de enqueue (drain re-attempts refrescam posição); (4) ~~default
   de tenant — Config API namespace `session` keys `queue_default_agent_type_id`/
   `queue_default_skill_id` (seed + `session_config.py`); pool sem `queue_config` cai no
-  default; vazio = comportamento original (espera muda). Pendências da fase: timeout de fila
+  default; vazio = comportamento original (espera muda)~~ — **REMOVIDO em 2026-08-24**
+  (defeito 2). O item (4) endereçava por agent_type/skill, vocabulário que morreu em
+  2026-07-13 quando produção passou a ser o slot `current` do POOL: o default não podia
+  funcionar nem preenchido, e o gatilho *"pool sem `queue_config`"* testava a presença de um
+  objeto que também carrega política (`max_wait_s`) e endereço legado. Hoje o tier é decidido
+  por **endereço** (`queue_config.pool_id`, predicado único `mute_queue.queue_address`), e
+  sem endereço a espera é muda. Ver `CHANGELOG.md` 2026-08-24. Pendências da fase: timeout de fila
   (`queue_config.max_wait_s` não é enforced em lugar nenhum — cenário `max_wait_exceeded` é
   da Fase E); posição não re-escrita entre drains (só on-enqueue); `close_reason` do segmento
   de fila fica NULL (outcome basta pra Fase D); i18n do role `queue` no detalhe de sessão da UI.

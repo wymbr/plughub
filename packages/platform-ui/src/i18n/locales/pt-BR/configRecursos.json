@@ -47,10 +47,12 @@
     },
     "queueCfg": {
       "label": "Tratamento de Fila",
-      "hint": "Pool de fila que acompanha o cliente enquanto espera (fila atendida). O flow executado é o do slot Corrente DESSE pool — sem slot promovido, o agente de fila não roda e o contato espera em silêncio. Vazio = padrão do tenant. O teto de espera fecha o contato com max_wait_exceeded.",
+      "hint": "Pool de fila que acompanha o cliente enquanto espera (fila atendida). O flow executado é o do slot Corrente DESSE pool — sem slot promovido, o agente de fila não roda e o contato espera em silêncio. Vazio = sem tratamento de fila: o contato espera em silêncio até liberar um agente. A espera máxima é deste pool e vale nos dois casos, fechando o contato com max_wait_exceeded.",
       "queuePool": "Pool de fila",
-      "legacySkill": "Endereço legado por skill: {{skill}} — preservado, mas não resolve o deploy. Use o pool de fila acima.",
-      "tenantDefault": "— Padrão do tenant —",
+      "legacySkill": "Endereço legado por skill: {{skill}} — mantido para não ser apagado em silêncio, mas IGNORADO: desde o modelo de deploy por slot de pool, só o pool de fila acima resolve um flow.",
+      "noTreatment": "— Sem tratamento de fila (espera muda) —",
+      "noDeploy": "sem deploy promovido",
+      "queuePoolNoDeploy": "{{pool}} não tem slot Corrente promovido: salvar assim deixa um tratamento de fila que nunca roda — o contato espera em silêncio. Promova um slot naquele pool (definir próximo → promover) antes.",
       "maxWaitS": "Espera máx. (s)",
       "platformDefault": "padrão: 1800"
     },

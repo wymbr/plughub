@@ -1,5 +1,10 @@
 """
-test_queue_wait_segment.py — produtor da janela de espera (D12).
+test_queue_wait_segment.py — janela de espera (D12) + tier da fila (defeito 2).
+
+Duas propriedades do MESMO mecanismo, e as duas são sobre não afirmar fato que
+não houve: *a espera só é registrada se houve espera* (D12, testes de integração,
+precisam de Redis) e *a fila só é ATENDIDA se alguém atende* (defeito 2, predicado
+puro, no fim do arquivo — nunca pulado por ambiente).
 
 Sob teste está UMA propriedade, e ela é sobre AUSÊNCIA: **contato que não esperou
 não produz segmento de espera.** O caminho que a viola não fica vermelho em lugar
@@ -18,6 +23,14 @@ Cada teste diz o que o faria REPROVAR:
   · test_stamp_emits_wait_segment    → o produtor para de registrar espera real
   · test_publish_is_keyed_by_session → some o `key=` do publish (P1)
   · test_segment_id_is_deterministic → o id volta a ser sorteado (uuid4)
+  · test_two_passages_get_distinct_ids       → o discriminador de passagem sai do
+    namespace e duas esperas voltam a colapsar numa linha (2026-09-01)
+  · test_same_passage_emits_the_same_id_twice → o id passa a depender de `now()`
+    e duas saídas concorrentes da MESMA passagem viram duas linhas
+
+⚠️ Os dois últimos são um PAR e só julgam juntos: sozinho, o primeiro fica verde
+com um `uuid4()` de volta (ids sempre distintos) e o segundo fica verde com o
+defeito de 2026-08-24 (ids sempre iguais). Não separar.
 
 ⚠️ O `_FakeProducer` daqui aceita `key` **na forma exata** em que o código chama e
 falha se ela não vier. Mock mais permissivo que o contrato foi o que já escondeu
@@ -193,14 +206,176 @@ async def test_segment_id_is_deterministic(env):
     por saída, inflando o volume de fila do relatório.
     """
     client, producer, tenant = env
-    sid = "ses-id"
-    await client.set(first_queued_key(tenant, sid), str(int(time.time() * 1000)))
+    sid      = "ses-id"
+    first_ms = int(time.time() * 1000)
+    await client.set(first_queued_key(tenant, sid), str(first_ms))
 
     await resolve_queue_exit(client, producer, tenant, "sac_ia", sid, "handoff")
 
     _topic, _key, value = producer.sent[0]
-    assert value["segment_id"] == queue_wait_segment_id(tenant, sid)
-    assert value["segment_id"] == queue_wait_segment_id(tenant, sid), "não é estável"
-    assert value["segment_id"] != mute_queue.queue_wait_segment_id(tenant, "outra"), (
+    assert value["segment_id"] == queue_wait_segment_id(tenant, sid, first_ms)
+    assert value["segment_id"] == queue_wait_segment_id(tenant, sid, first_ms), (
+        "não é estável"
+    )
+    assert value["segment_id"] != queue_wait_segment_id(tenant, "outra", first_ms), (
         "o id não discrimina sessão"
     )
+
+
+@pytest.mark.asyncio
+async def test_two_passages_get_distinct_ids(env):
+    """
+    REGRESSÃO do contato real `9403a14b-3020-4cf9-85f2-6a937dae41c4` (2026-08-24).
+
+    Ele esperou DUAS vezes — 24 118 ms em `retencao_humano` (saída `handoff`) e
+    85 009 ms em `especialista_onboarding` (saída `abandoned`) — e o ledger ficou
+    com UMA linha: mesmo `segment_id`, `ReplacingMergeTree` guardou a segunda. A
+    primeira espera não existe em lugar nenhum, e não volta.
+
+    Reprova se o discriminador sair do namespace: aí os dois ids voltam a ser
+    iguais e o assert de desigualdade cai. É o teste que autoriza a mudança de
+    identidade — sem ele, "o id é determinístico" continuaria verde com o defeito
+    de volta, porque determinismo nunca foi a propriedade que faltava.
+
+    ⚠️ Só julga porque a população do teste TEM o caso em que os valores diferem:
+    duas passagens com carimbos distintos. Com um carimbo só, `!=` passaria por
+    acidente em qualquer implementação.
+    """
+    client, producer, tenant = env
+    sid = "ses-duas-filas"
+
+    # Passagem 1 — o humano assume; a saída apaga o carimbo (é o que permite a 2ª).
+    first_a = int(time.time() * 1000) - 24_118
+    await client.set(first_queued_key(tenant, sid), str(first_a))
+    await resolve_queue_exit(
+        client, producer, tenant, "retencao_humano", sid, "handoff",
+    )
+    assert await client.get(first_queued_key(tenant, sid)) is None, (
+        "a passagem 1 não apagou o carimbo — sem isso a passagem 2 herdaria o "
+        "carimbo antigo e nem chegaria a existir como passagem própria"
+    )
+
+    # Passagem 2 — transferido, espera de novo em OUTRO pool, cliente desiste.
+    first_b = int(time.time() * 1000) - 85_009
+    await client.set(first_queued_key(tenant, sid), str(first_b))
+    await resolve_queue_exit(
+        client, producer, tenant, "especialista_onboarding", sid, "abandoned",
+    )
+
+    assert len(producer.sent) == 2, (
+        f"esperadas 2 emissões (uma por passagem), vieram {len(producer.sent)}"
+    )
+    id_a = producer.sent[0][2]["segment_id"]
+    id_b = producer.sent[1][2]["segment_id"]
+    assert id_a != id_b, (
+        "as duas esperas têm o MESMO segment_id — no ClickHouse elas colapsam "
+        "numa linha e a primeira espera é perdida (colisão de 2026-08-24)"
+    )
+    assert producer.sent[0][2]["outcome"] == "handoff"
+    assert producer.sent[1][2]["outcome"] == "abandoned", (
+        "o desfecho da 2ª passagem foi sobrescrito pelo da 1ª"
+    )
+    assert producer.sent[0][2]["pool_id"] == "retencao_humano"
+    assert producer.sent[1][2]["pool_id"] == "especialista_onboarding"
+
+
+@pytest.mark.asyncio
+async def test_same_passage_emits_the_same_id_twice(env):
+    """
+    TESTEMUNHA DE PRESENÇA do teste acima — sem ela, um id que embutisse `now()`
+    (ou `uuid4()`) passaria em "duas passagens, dois ids" e destruiria em silêncio
+    a propriedade que a D12 comprou: emitir a MESMA passagem duas vezes tem de
+    produzir a MESMA linha, porque as saídas concorrem.
+
+    Duas saídas da mesma passagem ⇒ mesmo carimbo ⇒ mesmo id.
+    """
+    client, producer, tenant = env
+    sid      = "ses-mesma-passagem"
+    first_ms = int(time.time() * 1000) - 3_000
+
+    await client.set(first_queued_key(tenant, sid), str(first_ms))
+    await resolve_queue_exit(client, producer, tenant, "sac_ia", sid, "handoff")
+
+    # Segunda saída da MESMA passagem (corrida real: drain × contact_closed). O
+    # carimbo foi apagado, então o produtor recusa — por isso o id é conferido
+    # pela função, que é o que o ClickHouse veria se a corrida tivesse empatado.
+    await resolve_queue_exit(client, producer, tenant, "sac_ia", sid, "abandoned")
+
+    assert len(producer.sent) == 1, (
+        "a segunda saída da mesma passagem emitiu de novo — o carimbo deveria "
+        "tê-la barrado"
+    )
+    assert producer.sent[0][2]["segment_id"] == queue_wait_segment_id(
+        tenant, sid, first_ms
+    ), "o id da passagem não é reconstruível a partir do carimbo dela"
+
+
+# ══ Tier da fila: ENDEREÇO × política × endereço legado (defeito 2, 2026-08-24) ══
+#
+# Mesmo mecanismo, propriedade complementar: os testes acima cuidam de "a espera
+# só é registrada se houve espera"; os de baixo, de "a fila só é ATENDIDA se
+# alguém atende". Sem Redis — predicado puro, nunca pulado por ambiente.
+#
+# O defeito: `queue_config` carrega três fatos de escopos diferentes, e quatro
+# call sites perguntavam "há quem atenda?" testando a PRESENÇA do objeto. Um pool
+# que só declarava teto de espera era classificado como fila atendida, segurava
+# licença de IA durante uma espera que ninguém atendia, e o bridge logava ERROR
+# de deploy quebrado num pool deliberadamente sem tratamento.
+
+def test_legacy_skill_and_policy_are_not_an_address():
+    """
+    TESTEMUNHA NEGATIVA — a config VIVA do `retencao_humano` em 2026-08-24.
+
+    Reprova se o predicado voltar a considerar o objeto (ou o `skill_id` legado,
+    ou o `max_wait_s`) como endereço. É o caso que produzia o defeito inteiro, e
+    ele parece configurado: dois campos preenchidos e nenhum endereça nada.
+    """
+    pool_cfg = {"queue_config": {"agent_type_id": "", "max_wait_s": 1800,
+                                 "skill_id": "skill_fila_v1"}}
+    assert mute_queue.queue_address(pool_cfg) == "", (
+        "objeto sem `pool_id` foi lido como fila atendida — é o defeito 2 de volta"
+    )
+    assert mute_queue.pool_max_wait_s(pool_cfg) == 1800, (
+        "a política de espera sumiu junto com o endereço: são fatos separados, e "
+        "o teto do pool vale também na fila muda"
+    )
+
+
+def test_address_is_the_pool_id():
+    """
+    TESTEMUNHA DE PRESENÇA — sem ela, um `queue_address` que devolvesse `""`
+    sempre passaria no teste acima, e a fila atendida nunca mais ativaria.
+
+    Cobre o cenário 2 do produto: pool humano COM pool de IA na fila.
+    """
+    pool_cfg = {"queue_config": {"pool_id": " fila_humano ", "max_wait_s": 300}}
+    assert mute_queue.queue_address(pool_cfg) == "fila_humano"
+    assert mute_queue.pool_max_wait_s(pool_cfg) == 300
+
+
+def test_absent_config_is_mute_and_has_no_ceiling():
+    """
+    Cenário 1: pool sem tratamento nenhum (35 dos 36 pools do demo).
+
+    `0` em `pool_max_wait_s` significa NÃO DECLARADO — é o que faz a varredura
+    cair na tolerância do canal. Se alguém "consertar" para 1800, o pool passa a
+    ter teto próprio sem ninguém ter configurado, e o teto por canal morre.
+    """
+    for pool_cfg in ({}, {"queue_config": None}, {"queue_config": {}}):
+        assert mute_queue.queue_address(pool_cfg) == ""
+        assert mute_queue.pool_max_wait_s(pool_cfg) == 0
+    assert mute_queue.queue_address(None) == ""
+    assert mute_queue.pool_max_wait_s(None) == 0
+
+
+def test_malformed_config_degrades_to_mute_not_to_crash():
+    """
+    `queue_config` vem de JSON de terceiros (registry → Redis). Tipo inesperado
+    não pode derrubar o roteamento — mas também não pode virar endereço.
+    Reprova se alguém remover a checagem de tipo e o `.get` estourar.
+    """
+    for bad in ("fila_humano", ["fila_humano"], 42):
+        assert mute_queue.queue_address({"queue_config": bad}) == ""
+        assert mute_queue.pool_max_wait_s({"queue_config": bad}) == 0
+    assert mute_queue.pool_max_wait_s({"queue_config": {"max_wait_s": "abc"}}) == 0
+    assert mute_queue.pool_max_wait_s({"queue_config": {"max_wait_s": -5}}) == 0

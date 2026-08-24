@@ -2100,6 +2100,9 @@ mesmo tópico, sem chave, custou o defeito mais caro do repositório).
 **sem discriminador de passagem nem de pool** — as duas esperas do parágrafo acima colapsam numa linha
 só e vence a última. Mesma família do resíduo de `participation_intervals`. **Bloqueia a D14**: pôr o
 alvo de SLA no segmento não adianta enquanto os dois segmentos forem a mesma linha.
+✅ **Fechado pela Mudança 38 (2026-08-24)** — e com duas correções ao que está escrito acima: o caso
+deixou de ser hipotético (foi produzido e medido) e o conserto **não** foi o pool, foi o
+`first_queued_ms`.
 
 **Gate re-executável:** `packages/routing-engine/src/plughub_routing/tests/test_queue_wait_segment.py`
 (4 testes, Redis real, skip explícito lendo as duas variáveis de ambiente). O que cada um faria ficar
@@ -2120,6 +2123,71 @@ permissivo que o contrato já escondeu bug aqui antes.
   `skill_id`.
 - **36.2 segue sem causa** (as 5 sessões que não fecham). Confirmado nesta rodada: a população ficou
   **imóvel em 5**, como previsto — a duplicação não a explica (interseção medida = 1).
+
+---
+
+### Mudança 38 — o segmento de espera discrimina a PASSAGEM: a premissa estava no docstring, não no mecanismo (2026-08-24)
+
+**O que mudou:** `mute_queue.queue_wait_segment_id` passou a receber o `first_queued_ms` e a embuti-lo
+no namespace do `uuid5`. Assinatura de 3 parâmetros, o terceiro **obrigatório**.
+
+**Por quê.** O id era `uuid5(NAMESPACE_URL, "plughub:queue-wait:{tenant}:{session}")`, e a
+justificativa vivia no docstring: *"uma sessão tem UMA passagem pela fila"*. **Falso.** Um contato que
+espera, é atendido, é transferido e espera de novo emite dois `participant_left` em
+`conversations.participants` com o **mesmo** `segment_id` — o `ReplacingMergeTree` guarda a última e a
+primeira espera **deixa de existir**. Irrecuperável: o carimbo da passagem perdida é apagado na saída,
+então nenhuma migração alcança a linha depois.
+
+É a família já catalogada aqui no **Problema 34** (o DDL de `participation_intervals` *afirmando em
+prosa* uma ordenação que nenhum produtor impunha) e na § Postura de Engenharia do `CLAUDE.md`. A
+diferença de forma: lá era comentário de DDL, aqui era docstring de função. **Comentário que promete
+invariante sem mecanismo que a imponha é a mesma dívida com outra roupa.**
+
+**Medição — o caso foi produzido, não deduzido.** O resíduo estava registrado desde 08-21 como
+*"não medido — não há caso de duas filas na população"*, e o instrumento confirmou: 3 saídas de fila no
+log, nenhuma sessão repetida. Montado de propósito (`sac_ia` → escala → espera → humano assume →
+transfere → espera → cliente cai):
+
+| Sessão | Passagem 1 | Passagem 2 | Linhas `role='queue'` |
+|---|---|---|---|
+| `9403a14b-…6a937dae41c4` (antes) | `retencao_humano` `handoff` 24 118 ms | `especialista_onboarding` `abandoned` 85 009 ms | **1** (`4a539b95-458d-56a5-…` = `uuid5` previsto) |
+| `27651d1b-…dc9a3d1a0c0c` (depois) | `retencao_humano` `handoff` 43 791 ms | `especialista_onboarding` `abandoned` 80 980 ms | **2** (`3cc267dd-…`, `b4d51ae4-…`) |
+
+**O instrumento é um par**, e sozinho nenhum lado julga: saídas registradas no log do routing
+(testemunha de PRESENÇA) × linhas sobreviventes no ClickHouse (contador de AUSÊNCIA). *"1 linha"* não
+distingue colisão de "houve uma espera só". Probe: `infra/test/q_queue_collision_witness.sh`.
+
+**O discriminador é o carimbo, e o pool foi recusado** — a proposta registrada em 08-21 dizia
+*"incluir o `pool_id` de destino"*:
+
+- `first_queued_ms` é fato da **passagem**: NX na entrada (`registry.py:2628`), DELETE na saída ⇒ a
+  chave já *significa* "esta passagem". Re-enfileiramento dentro da mesma passagem preserva o valor
+  (exigido por `test_release_preserves_first_queued`), logo o id segue estável onde precisa.
+- `pool_id` é fato do **call site**: `main.py:286` emite com `event.pool_id or ""`. Duas saídas da
+  mesma passagem por sites com pools diferentes dariam dois ids para uma passagem — matando a
+  idempotência que a Mudança 37 comprou. E não separa duas esperas no mesmo pool.
+
+**Descontinuidade de identidade declarada.** Linhas anteriores mantêm o id sem carimbo; nenhuma é
+reescrita. Assinatura verificável: no contato de depois, o id pela fórmula antiga (`b20aa0f0-…`) não
+bate com nenhuma das duas linhas.
+
+**Gate:** `test_queue_wait_segment.py` **10 passed** (8 + 2). Os dois novos são um **par que não se
+separa** — `test_two_passages_get_distinct_ids` ficaria verde com `uuid4()` de volta e
+`test_same_passage_emits_the_same_id_twice` ficaria verde com o defeito antigo.
+
+**Resíduos declarados:**
+- **A tela não melhorou, e isso é esperado.** `reports_query.py:5752` colapsa a sessão numa linha
+  (`anyIf(pool_id, role='queue')` / `anyIf(outcome, …)` / `maxIf(duration_ms, …)`), então a segunda
+  linha é descartada na leitura: o relatório mostra 80 980 ms de 124 771 medidos. Onde as duas
+  discordam, o `anyIf` **sorteia** — 2 de 5 sessões multi-linha já discordam hoje. Era resíduo
+  histórico congelado; agora cresce com o tráfego. Conserto = **D14**, e **não é somar**.
+- **O bridge tem a mesma colisão** (`main.py:5963`, namespace `queue-agent`), confirmada na mesma
+  medição. Hoje inalcançável (exige dois pools com fila atendida). Fatia própria, com uma pergunta
+  extra: o discriminador dele **não pode ser wall-clock**, ou a idempotência morre.
+- `_emit_queue_timeout` passo 3 segue com `uuid4()` **e sem `key=`** — os dois defeitos que este
+  emissor já pagou.
+- `duration_ms` do segmento humano divergiu da janela dos próprios carimbos nas **duas** medições
+  (26 448 ms/80 s; 25 519 ms/60 s). Não investigado; backlog fora do arco de fila.
 
 ---
 

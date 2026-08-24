@@ -295,21 +295,25 @@ _SEED: list[tuple[str, str, object, str]] = [
         "5 minutes. Kept here (session namespace) alongside sentiment.live_ttl_s "
         "so orchestrator-bridge can read all TTLs from a single namespace."
     ),
-    (
-        "session", "queue_default_agent_type_id",
-        "",
-        "Fase C (queue-attended-model): tenant-wide default queue-treatment agent. "
-        "Used by orchestrator-bridge process_queued when the target pool has no "
-        "queue_config — empty string disables the fallback (contact waits silently). "
-        "Example: 'agente_fila_v1'."
-    ),
-    (
-        "session", "queue_default_skill_id",
-        "",
-        "Fase C (queue-attended-model): optional skill override paired with "
-        "queue_default_agent_type_id (same semantics as queue_config.skill_id). "
-        "Empty = use the agent's default skill."
-    ),
+    # `queue_default_agent_type_id` e `queue_default_skill_id` REMOVIDAS em
+    # 2026-08-24 (defeito 2 — tenant default suprimido pelo `skill_id` legado).
+    #
+    # Elas endereçavam o tratamento de fila por agent_type/skill, vocabulário que
+    # morreu em 2026-07-13, quando produção passou a ser exclusivamente o snapshot
+    # do slot `current` do POOL: `resolve_flow_for_agent` resolve por pool, e uma
+    # skill declarada aqui não resolvia flow nenhum. Ou seja, o "default de
+    # tenant" não podia funcionar nem preenchido — e a tela de pool prometia
+    # "Empty = tenant default" para todo mundo.
+    #
+    # Medido antes de remover (2026-08-24): as duas vazias no tenant_demo, e
+    # ZERO dos 36 pools usando o único endereço que funciona
+    # (`queue_config.pool_id`). Sem leitor sobrevivente — o ramo do bridge saiu
+    # junto (`main.py` process_queued).
+    #
+    # ⚠️ Linhas já gravadas no store NÃO somem com esta edição (seed é
+    # if-absent). Ficam órfãs até um DELETE explícito; inertes, porque não há
+    # leitor. Reintroduzir default de tenant exige um campo de POOL
+    # (`queue_default_pool_id`), nunca estes dois.
 
     # ── analytics_consumer ────────────────────────────────────────────────────
     # Source: analytics-api/config.py, consumer.py

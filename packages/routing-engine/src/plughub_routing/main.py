@@ -779,7 +779,9 @@ async def _persist_queued_contact(
     an agent becomes available (drain-on-ready).
 
     Fila de sistema (system-queue.md Fase A): quando a fila é MUDA (**pool sem
-    `queue_config`** — única origem desde a fatia 3), a sessão é isenta de C
+    ENDEREÇO de fila — `queue_config.pool_id` vazio**; corrigido 2026-08-24, antes
+    dizia "sem `queue_config`" e o código testava a presença do objeto, que também
+    carrega política e endereço legado), a sessão é isenta de C
     (admission.release) e marcada em {t}:queue:unadmitted; a espera real é
     preservada através de re-enfileiramentos (first_queued NX vira o score).
 
@@ -800,13 +802,25 @@ async def _persist_queued_contact(
         await _emit_no_resource_drop(redis_client, producer, settings, event)
         return
 
-    # Tier da fila: atendida (`queue_config` no pool) × muda (sem).
+    # ── Tier da fila: ENDEREÇO, não presença de objeto (defeito 2, 2026-08-24) ──
+    #
+    # Era `if (pool_config).get("queue_config")`, e isso perguntava "existe o
+    # objeto?" para responder "alguém atende?". O objeto carrega TRÊS fatos —
+    # endereço (`pool_id`), política (`max_wait_s`) e endereço legado morto
+    # (`skill_id`) —, então um pool que só declarava o teto de espera era
+    # classificado como ATENDIDO e pulava este bloco inteiro: perdia a isenção de
+    # licença de IA (`admission.release`) durante uma espera em que NINGUÉM
+    # atendia, e perdia o veto de canal. Medido no `retencao_humano`.
+    #
+    # Predicado único em `mute_queue.queue_address` — o mesmo que o bridge usa
+    # para decidir se ativa agente de fila. Duas respostas diferentes para "esta
+    # fila é atendida?" é como se paga a licença de um agente que não existe.
     attended     = False
     mute_requeue = False
     try:
         raw_cfg = await redis_client.get(f"{event.tenant_id}:pool_config:{pool_id}")
-        if raw_cfg and (json.loads(raw_cfg) or {}).get("queue_config"):
-            attended = True
+        if raw_cfg:
+            attended = bool(mute_queue.queue_address(json.loads(raw_cfg) or {}))
     except Exception:
         pass
 
@@ -1232,9 +1246,18 @@ async def _periodic_queue_drain(
                     # Pool-level queue_config.max_wait_s wins; fallback is the
                     # platform default (bounds mute queues too). ZREM-first makes
                     # the expiry race-safe against a concurrent drain.
+                    #
+                    # ⚠️ Os dois ramos abaixo NÃO são "atendida × muda" — chamá-los
+                    # assim (até 2026-08-24) foi o terceiro vocabulário sobre o
+                    # mesmo objeto e me fez prever um efeito que não existe. O
+                    # discriminador aqui sempre foi o TETO DO POOL, lido sem
+                    # consultar tier nenhum: com `max_wait_s` declarado vale ele,
+                    # sem ele vale a tolerância do canal. É exatamente a regra
+                    # decidida em 2026-08-24 — este trecho já a implementava, e só
+                    # o rótulo mentia.
                     _pool_cfg: dict = {}
                     try:
-                        attended_wait_s = 0
+                        pool_wait_s = 0
                         raw_cfg = await redis_client.get(
                             f"{tenant_id}:pool_config:{pool_id}"
                         )
@@ -1256,9 +1279,10 @@ async def _periodic_queue_drain(
                             #       segmento sintético `role=queue`. Num item de wrap-up
                             #       ou aprovação não há cliente: seria contato abandonado
                             #       falso no ledger;
-                            #   (b) sem `queue_config.max_wait_s` o pool cai no ramo da
-                            #       fila muda e herda `queue_max_wait_default_s` (1800 s)
-                            #       — teto que ninguém configurou para itens de trabalho;
+                            #   (b) sem `queue_config.max_wait_s` o pool cai no ramo do
+                            #       teto por CANAL e herda `queue_max_wait_default_s`
+                            #       (1800 s) — teto que ninguém configurou p/ itens
+                            #       de trabalho;
                             #   (c) duas autoridades de expiração sobre o mesmo item, e
                             #       esta não apaga o ledger `work_task` nem devolve vaga.
                             #
@@ -1268,14 +1292,14 @@ async def _periodic_queue_drain(
                             # não esta varredura.
                             if _pool_cfg.get("dispatch_mode") == "pull":
                                 continue
-                            _qc = _pool_cfg.get("queue_config") or {}
-                            attended_wait_s = int(_qc.get("max_wait_s") or 0)
+                            pool_wait_s = mute_queue.pool_max_wait_s(_pool_cfg)
                         _now_ms = int(
                             datetime.now(timezone.utc).timestamp() * 1000
                         )
-                        if attended_wait_s > 0:
-                            # Fila ATENDIDA: teto único do pool (comportamento Fase E).
-                            cutoff  = _now_ms - attended_wait_s * 1000
+                        if pool_wait_s > 0:
+                            # Teto DO POOL declarado: vale para todo contato deste
+                            # pool, em qualquer tier e em qualquer canal.
+                            cutoff  = _now_ms - pool_wait_s * 1000
                             expired = await redis_client.zrangebyscore(
                                 key, "-inf", cutoff
                             )
@@ -1289,9 +1313,10 @@ async def _periodic_queue_drain(
                                 )
                                 drained += 1
                         else:
-                            # Fila MUDA (system-queue.md): teto POR CANAL.
-                            # Varre candidatos acima do menor teto configurado e
-                            # refina por entrada (canal está no contact JSON).
+                            # Pool não declarou teto: cai na tolerância do CANAL
+                            # (system-queue.md). Varre candidatos acima do menor
+                            # teto configurado e refina por entrada (o canal está
+                            # no contact JSON).
                             default_s = int(getattr(settings, "queue_max_wait_default_s", 1800))
                             by_ch     = routing_config.get("queue_max_wait_by_channel") or {}
                             positive  = [int(v) for v in by_ch.values()

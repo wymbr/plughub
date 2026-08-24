@@ -1286,13 +1286,19 @@ atendido. Cobertura parcial sem sintoma próprio: some no mesmo silêncio da esp
    > B) recebe dois carimbos e emite duas vezes. A chave continua exigida para ordenar contra os
    > **demais** eventos da mesma sessão, que é o que a leitura de topologia assume.
    >
-   > 🔎 **Resíduo NOVO que isto expõe:** `queue_wait_segment_id` é `uuid5(tenant, session_id)` — **sem
-   > discriminador de passagem nem de pool**. As duas esperas do parágrafo acima colapsam numa linha
-   > só, e vence a última. É a mesma família do resíduo de `participation_intervals` (`ORDER BY` sem
-   > discriminador, § Postura de Engenharia). **Bloqueia a D14**, que é exatamente sobre o contato que
-   > espera em duas filas: pôr o alvo de SLA no segmento não adianta enquanto os dois segmentos forem
-   > a mesma linha. Conserto provável: incluir o `pool_id` de destino no namespace do `uuid5`. **Não
-   > medido** — não há caso de duas filas na população atual.
+   > ~~🔎 **Resíduo NOVO que isto expõe:** `queue_wait_segment_id` é `uuid5(tenant, session_id)`…~~
+   > ✅ **FECHADO 2026-08-24** — ver `CHANGELOG.md` § *"O segmento de espera passou a discriminar a
+   > PASSAGEM"*. Duas correções ao que estava escrito aqui, ambas por medição:
+   >
+   > · **deixou de ser dedutivo.** O caso foi produzido (contato real `9403a14b…`): espera de
+   >   24 118 ms em `retencao_humano` + 85 009 ms em `especialista_onboarding`, **duas emissões, uma
+   >   linha**, id gravado idêntico ao `uuid5` previsto. Não era risco latente — era **perda de dado**
+   >   acontecendo, e irrecuperável (o carimbo da passagem perdida é apagado na saída).
+   > · **o conserto proposto aqui estava errado.** *"Incluir o `pool_id` de destino"* não serve: o
+   >   pool é fato do CALL SITE (`main.py:286` emite com `event.pool_id or ""`), então duas saídas da
+   >   mesma passagem por sites diferentes dariam dois ids para uma passagem — matando a idempotência
+   >   que a D12 comprou. E não separa duas esperas no mesmo pool. O discriminador é o
+   >   **`first_queued_ms`**, que já *significa* "esta passagem" (NX na entrada, DELETE na saída).
 
 ### A ordem de implementação é FORÇADA por um `anyIf`, não por preferência
 
@@ -1370,9 +1376,36 @@ reais e gate re-executável `packages/routing-engine/src/plughub_routing/tests/t
 **Ainda aberto neste arco** (nenhum é bloqueio do que foi entregue):
 - **Unificar o emissor do `_emit_queue_timeout`** — fatia própria; junto daria emissão dupla.
   Lacuna viva: `max_wait_exceeded` na fila **ATENDIDA** segue sem segmento de espera.
-- **A linha `pool_id → _flow_pool_id` (D10) é no-op** enquanto o `queue_config` do pool tiver só
-  `skill_id` — destravada pelo defeito 2 (tenant default suprimido), que sobe na fila por dois
-  caminhos independentes (este e o estado-alvo da D10.1).
+  ⚠️ **Ganhou um segundo motivo em 2026-08-24:** aquele emissor ainda usa `uuid4()` **e publica sem
+  `key=`**, os dois defeitos que o `resolve_queue_exit` já pagou. Enquanto for assim, a espera que
+  estoura o teto entra no ledger sem identidade derivável — não dá para deduplicar nem para
+  discriminar passagem.
+- **O bridge tem a MESMA colisão** (`main.py:5963`, namespace `queue-agent`, `uuid5(tenant, session)`
+  sem discriminador). Confirmado na medição de 08-24: o id gravado no `specialist fila_humano` bate
+  com o `uuid5` previsto. **Hoje inalcançável** — exige DOIS pools com fila atendida, e só o
+  `retencao_humano` tem endereço. Fatia própria, e ela tem uma pergunta que o routing não tinha: o
+  discriminador do agente de fila **não pode ser wall-clock** (`_q_joined_at`), senão duas emissões da
+  mesma ativação viram duas linhas e a idempotência morre. Achar o fato equivalente ao
+  `first_queued_ms` é o trabalho.
+- **O relatório Fila/SLA colapsa a sessão numa linha de fila** — `reports_query.py:5752`:
+  `anyIf(pool_id, role='queue')`, `anyIf(outcome, …)`, `maxIf(duration_ms, …)`. Consequência viva:
+  a segunda linha que o conserto de 08-24 passou a gravar **é descartada na leitura** (a tela mostra
+  80 980 ms de 124 771 medidos), e onde as duas discordam o `anyIf` **sorteia**. Medido: 2 de 5
+  sessões multi-linha já discordam hoje (`049167a2…` em outcome, `dce98532…` em pool) — era resíduo
+  congelado, agora cresce com o tráfego. ⚠️ **O conserto não é `sum()`** — somar duas esperas contra
+  um alvo é exatamente o que a D14 recusa. É a D14, e ela depende da D14.1.
+  Probe: `infra/test/q_queue_multirow_impact.sh`.
+- **`duration_ms` do segmento humano diverge da janela dos próprios carimbos.** Duas medições
+  independentes: `26 448 ms` para 11:44:50→11:46:10 (80 s) e `25 519 ms` para 13:22:55→13:23:55
+  (60 s). Duas ocorrências não é ruído. Não investigado — pode ser wrap-up fora da conta (o que seria
+  correto e mal rotulado) ou carimbo de fim errado. Backlog próprio, fora do arco de fila.
+- ~~**A linha `pool_id → _flow_pool_id` (D10) é no-op**~~ ✅ **PROVADA 2026-08-24**, e a lição é sobre
+  atribuição: ela nunca dependeu do defeito 2 (esta linha dizia que sim — **falso**), e sim de haver um
+  Queue pool ENDEREÇADO, que é ato de configuração. Medida com `queue_config.pool_id = fila_humano` num
+  contato real (`…13315bc9968c`): `specialist | fila_humano` × `queue | retencao_humano`. Os ~176 s da
+  IA de fila entram no TMA do `fila_humano` ⇒ a inflação de `+4,8 %` no `retencao_humano` **não ocorre**
+  quando há pool de fila. Sem endereço (config atual do demo, por decisão do operador) não há para onde
+  atribuir, e isso deixou de ser defeito: é o cenário 1, com fila muda honesta.
 - **O efeito colateral de TMA ainda não foi observado em dado novo.** O `+4,8 %` em `retencao_humano`
   é recomputação hipotética sobre histórico; **não é retroativo** (linhas antigas mantêm
   `role='queue'`), então o número só deriva com tráfego novo. Nada a fazer — só não confundir a
@@ -1396,13 +1429,23 @@ violação da segunda espera é **invisível**, e a média mistura populações 
 **Destravado pela D12:** enquanto a espera não tinha registro por segmento, não havia onde pôr o alvo.
 Agora há.
 
-⚠️ **Mas ainda BLOQUEADO por um resíduo do próprio produtor (achado 2026-08-21):**
-`queue_wait_segment_id` é `uuid5(tenant, session_id)`, **sem discriminador de passagem nem de pool**.
-O caso de motivação desta decisão — contato que espera 30 s por um pool e 120 s por outro — produz
-**dois carimbos e duas emissões que colapsam na MESMA linha**, vencendo a última. Pôr `sla_target_ms`
-no segmento não resolve nada enquanto os dois segmentos forem um só. **A ordem é: discriminar o id
-ANTES de migrar os três leitores.** Conserto provável: incluir o pool de destino no namespace do
-`uuid5` (barato, mas muda a identidade das linhas já gravadas — declarar a descontinuidade).
+~~⚠️ **Mas ainda BLOQUEADO por um resíduo do próprio produtor (achado 2026-08-21)**~~
+✅ **DESBLOQUEADO 2026-08-24.** O id do segmento de espera discrimina a passagem (`first_queued_ms` no
+namespace do `uuid5`), e o caso de motivação **existe medido**, não mais suposto: contato
+`27651d1b-…-dc9a3d1a0c0c` com 43 791 ms em `retencao_humano` + 80 980 ms em `especialista_onboarding`,
+**duas linhas** no ledger. Ver `CHANGELOG.md` de 2026-08-24.
+
+⚠️ **O que a D14 herda, e que só apareceu ao consertar o produtor:** o ledger agora tem os dois fatos,
+mas `reports_query.py:5740-5760` **colapsa a sessão numa linha** antes de qualquer leitura de SLA —
+`anyIf(pool_id, role='queue')`, `anyIf(outcome, …)`, `maxIf(duration_ms, …)`. Migrar `sla_target_ms`
+para o segmento **não basta**: enquanto o colapso existir, o alvo por-segmento é comparado contra um
+`wait_ms` que é o `max` de esperas diferentes, e o `pool_id` da linha é sorteado entre os dois. ⇒ **a
+D14 é, em ordem: (i) parar de colapsar — uma linha por segmento de espera; (ii) `sla_target_ms` no
+segmento; (iii) migrar os três leitores.** E (i) depende de (D14.1), porque não se decide a granulação
+da comparação sem decidir o que o alvo mede.
+
+**NÃO somar as duas esperas.** É a tentação óbvia do `maxIf`, e é o erro que a própria D14 nomeia:
+somar esperas contra alvos diferentes dá número sem uso prático.
 **Não medido:** a população atual não tem caso de duas filas, então o defeito é dedutivo, não
 observado.
 
@@ -1512,7 +1555,21 @@ não variante. Renomear para `specialist` não fecha nenhum: viram `specialist` 
 
 ---
 
-## O tenant default de fila é suprimido pelo `skill_id` legado *(medido 2026-08-21)*
+## ~~O tenant default de fila é suprimido pelo `skill_id` legado~~ ✅ **RESOLVIDO 2026-08-24**
+
+> ✅ **Fechado, e o defeito era maior do que este título.** Medindo, a supressão do default era um
+> sintoma: o problema é que `queue_config` carrega **três fatos de escopos diferentes** (endereço ×
+> política × endereço legado morto) e **quatro** call sites perguntavam *"há quem atenda?"* testando a
+> presença do OBJETO. Conserto: tier decidido por ENDEREÇO (`queue_address`, predicado único), política
+> de espera do pool ortogonal ao tier, default de tenant **removido** (vocabulário pré-slot, zero
+> usuários, promessa falsa na tela) e `queue_pool_id or pool_id` trocado por recusa alta. Consequência
+> viva que isto fechou: **licença de IA retida durante espera que ninguém atende**. Validado em contato
+> real (`a7275f7f…`): `unadmitted` ganhou a sessão e `admission:kind:ai` a perdeu. Detalhe, medições e
+> os dois erros de previsão no `CHANGELOG.md` de 2026-08-24. Probe: `infra/test/q_queue_config_inventory.py`.
+>
+> **Das três frentes listadas abaixo, as três foram feitas** — config-time (aviso na tela ao endereçar
+> pool sem slot promovido), semântica (gatilho é "não há endereço", não "objeto vazio") e fallback
+> (recusa alta). O texto original fica como registro do diagnóstico.
 
 Estado do pool no agent-registry (não no YAML): `"queue_config": {"skill_id": "skill_fila_v1"}`, **sem
 `pool_id`**. A tela mostra `Queue pool: — Tenant default —` e o texto de ajuda diz *"Empty = tenant
@@ -3929,6 +3986,49 @@ Descritivo técnico-funcional consolidado (com a seção de roadmap §20.7): [`d
 ---
 
 ## 📂 TEMA · Analytics e UI
+
+## Console não libera a tela após `Transfer` — histórico e contexto ficam com a sessão já fechada *(inconformidade relatada 2026-08-24, NÃO diagnosticada)*
+
+**Relato do operador (é o requisito, não uma hipótese):** depois de executar **Transfer**, o esperado é
+que o Console se comporte como o **Close** — apagar histórico da conversa e contexto da tela e ficar
+livre para o próximo contato. Não é o que acontece: a tela mantém a transcrição e o painel de contexto
+mesmo com `Session closed`.
+
+**Observado na tela (contato `27651d1b-…dc9a3d1a0c0c`, transferido para `especialista_onboarding`):**
+
+| Elemento | Estado |
+|---|---|
+| cartão do contato | badge `ended`, ainda listado em `CONTACTS (1)` |
+| cabeçalho | `Session closed` + botão `Close` ativo |
+| faixa 1 | `Client disconnected — fill in the close form to release the contact.` |
+| faixa 2 | `Wrap-up in progress — respond to the finalization agents' prompts below.` |
+| painel direito | `Admin · primary · ✓ Closed` |
+| toasts | `Transferred to especialista_onboarding` + `Contato transferido. Aguardando encerramento...` |
+
+**A hipótese "o wrap-up está segurando a tela" foi levantada e REFUTADA no mesmo dia**, por dois fatos
+independentes — fica registrada para ninguém a reabrir:
+
+- **fato do dono do código:** o wrap-up **sempre** apaga a tela, porque **sempre restaura o histórico
+  ao exibir**. Ficou assim quando `inline`/`detached` virou configurável — os dois modos foram
+  padronizados e a tela de wrap-up mostra um histórico REDUZIDO próprio. Logo a transcrição da tela 1
+  não é a do wrap-up.
+- **fato medido:** `GET :3300/v1/pools/retencao_humano` → `hooks.on_human_end[0].pool =
+  "wrapup_detached_ia"`, `side: agent` ⇒ o pool está em **`detached`**, e o `CLAUDE.md` (medido
+  2026-08-22) estava certo. O conflito doc × tela que eu havia registrado **não existe**.
+- **e o que fecha:** a tela permanece **mesmo depois de o wrap-up ser finalizado**. Não há input
+  pendente para justificar a retenção.
+
+⇒ **Diagnóstico: teardown ausente no caminho do `Transfer`.** O `Close` libera a tela; o `Transfer`
+não. Não é config de hook, não é wrap-up, não é modo de dispatch.
+
+**Pergunta que abre a investigação:** `Transfer` e `Close` compartilham o caminho de teardown do
+Console, ou são dois? Se forem dois, a divergência é estrutural e reaparece a cada mudança — mesma
+família do `agent-assist-ui` logo abaixo (dois lugares para o mesmo conserto). ⚠️ E se houver conserto
+de Console, ele provavelmente precisa ser feito **duas vezes** enquanto o `agent-assist-ui` viver.
+
+⚠️ **Escopo do relato:** observado no fluxo transfer → cliente desconecta → wrap-up finalizado. **Não**
+foi testado transfer com o cliente ainda conectado — caso em que a sessão do agente de origem termina
+mas o contato CONTINUA, e aí "limpar a tela" tem outro significado. Vale cobrir os dois no conserto.
 
 ## `agent-assist-ui` é um SEGUNDO Console vivo — aposentar ou assumir *(migrado da passagem de 2026-08-26)*
 

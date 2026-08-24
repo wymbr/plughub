@@ -47,10 +47,12 @@
     },
     "queueCfg": {
       "label": "Queue Treatment",
-      "hint": "Queue pool that attends the customer while waiting (attended queue). The executed flow is the one in THAT pool's Current slot — with no promoted slot the queue agent does not run and the contact waits in silence. Empty = tenant default. Max wait closes the contact with max_wait_exceeded.",
+      "hint": "Queue pool that attends the customer while waiting (attended queue). The executed flow is the one in THAT pool's Current slot — with no promoted slot the queue agent does not run and the contact waits in silence. Empty = no queue treatment: the contact waits silently until an agent frees up. Max wait belongs to this pool and applies either way, closing the contact with max_wait_exceeded.",
       "queuePool": "Queue pool",
-      "legacySkill": "Legacy skill address: {{skill}} — preserved, but it does not resolve the deploy. Use the queue pool above.",
-      "tenantDefault": "— Tenant default —",
+      "legacySkill": "Legacy skill address: {{skill}} — kept so it is not deleted silently, but IGNORED: since the pool-slot deploy model, only the queue pool above resolves a flow.",
+      "noTreatment": "— No queue treatment (silent wait) —",
+      "noDeploy": "no promoted deploy",
+      "queuePoolNoDeploy": "{{pool}} has no promoted Current slot: saving this leaves a queue treatment that never runs — the contact waits in silence. Promote a slot for that pool (set next → promote) first.",
       "maxWaitS": "Max wait (s)",
       "platformDefault": "default: 1800"
     },

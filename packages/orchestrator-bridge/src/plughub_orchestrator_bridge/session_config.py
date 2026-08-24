@@ -28,10 +28,14 @@ _DEFAULTS: dict[str, Any] = {
     "replay_context_ttl_s":          3_600,   # 1h — ReplayContext key TTL
     "pool_config_ttl_s":             3_600,   # 1h — pool config cache TTL
     "sentiment_live_ttl_s":            300,   # 5m — live sentiment in Redis
-    # Fase C (queue-attended-model): tenant default queue-treatment agent —
-    # used by process_queued when the pool has no queue_config. "" = disabled.
-    "queue_default_agent_type_id":      "",
-    "queue_default_skill_id":           "",
+    # `queue_default_agent_type_id` / `queue_default_skill_id` REMOVIDAS
+    # (2026-08-24, defeito 2). Falavam o vocabulário PRÉ-SLOT: desde 2026-07-13
+    # produção é o snapshot do slot `current` do POOL, então nem agent_type nem
+    # skill resolvem flow — o "default de tenant" não tinha como funcionar mesmo
+    # preenchido. Medido antes de remover: as duas vazias, zero usuários em 36
+    # pools, e a tela prometendo "Empty = tenant default" o tempo todo.
+    # Tratamento de fila agora tem UM endereço: `pool.queue_config.pool_id`.
+    # Não reintroduzir default de tenant sem um campo de POOL.
 }
 
 
