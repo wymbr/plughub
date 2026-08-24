@@ -2233,5 +2233,44 @@ então a saída é real e o novo segmento também.*
 
 ---
 
+### Mudança 40 — `max_wait_exceeded` passa a registrar espera nos DOIS tiers: um produtor, um parâmetro (2026-08-24)
+
+**O que mudou no mecanismo:** o `_emit_queue_timeout` (routing-engine) **deixou de publicar segmento
+de espera por conta própria**. A publicação passou inteira para o `mute_queue.resolve_queue_exit`,
+que já era o produtor único das demais saídas de fila (`handoff`, `abandoned`) desde a D12.
+
+**O que havia:** um segundo emissor, no ramo `else` do teste `queue:agent_active` — isto é, **só a
+fila MUDA**. Na fila ATENDIDA, um contato fechado por teto de retenção saía sem nenhum segmento
+`role='queue'`. Não é linha errada, é linha **ausente**: o relatório de Fila/SLA perdia exatamente a
+população de que trata, sem sintoma próprio. Junto vinham `uuid4()` no `segment_id` (duas emissões =
+duas linhas) e publish **sem `key=`** em `conversations.participants`.
+
+**O que fechou:** `resolve_queue_exit` ganhou `close_reason` (era hardcoded `""`). Era o único campo
+que o segundo emissor tinha e este não — e era o que sustentava a duplicação de código.
+
+**Ordem, e ela é o mecanismo:** a chamada fica no **topo** de `_emit_queue_timeout`, antes de
+`session:{id}:closed`. O DRAIN lê esse marker (`kafka_listener.py:695`) e chama o mesmo resolve com
+`"abandoned"`/`close_reason=""`; emitir depois abriria corrida em que o drain carimba primeiro e o
+motivo real vira abandono genérico. Emitindo antes, quem tem a informação escreve, e o drain encontra
+o `first_queued_ms` já consumido ⇒ `False`, sem emissão. **É o carimbo que dá a idempotência, não um
+guard.**
+
+⚠️ **O aviso de "emissão dupla" que estava nos dois docstrings havia EXPIRADO.** Ele foi escrito
+antes de a própria D12 reclassificar o segmento do agente de fila para `role='specialist'`
+(`orchestrator-bridge\main.py:6007`). Depois disso não existe outro produtor de `role='queue'` no
+tier atendido, e o aviso sobreviveu à mudança que o tornou falso — **comentário que descreve um
+estado anterior é da mesma família do DDL que promete invariante sem produtor.** Foi medido antes de
+mexer, não deduzido.
+
+**Exposição × dano, contados separado:** 70 segmentos de espera no tenant, **1** com
+`close_reason='max_wait_exceeded'` (`retencao_humano`, 1 802 441 ms = o teto de 1800 s, 2026-08-18) e
+**1** sessão fechada por teto — com segmento. Ou seja: **dano histórico ZERO**, porque em 08-18
+aquele pool ainda era `legacy_only` (tier MUDO, caminho que funcionava). Só em 08-24 ele ganhou
+`queue_config.pool_id` e virou fila ATENDIDA — a exposição é **prospectiva**. Consequência de método:
+a população não contém o caso consertado, logo **medição em runtime é inconclusiva como gate** e quem
+julga é o teste (`test_queue_wait_segment.py`, 4 novos, 14 passed).
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*

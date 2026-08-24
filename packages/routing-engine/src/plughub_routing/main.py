@@ -499,16 +499,48 @@ async def _emit_queue_timeout(
     Mirrors _emit_outage: routing is the authoritative sessions writer for
     never-routed sessions (the bridge cannot close them — Fase A gap).
 
+      0. Wait segment — `resolve_queue_exit(close_reason='max_wait_exceeded')`,
+         o produtor ÚNICO da espera (mute_queue). Ver § abaixo.
       1. Markers session:{id}:closed=max_wait_exceeded + contact_close_fired —
          block the bridge re-close on the WS teardown that follows.
       2. Queue agent active → LPUSH session:closed:{id}: its menu BLPOP exits
-         via on_disconnect and the bridge closes the REAL queue segment with
-         the Fase C abandoned override.
-      3. Mute queue (no queue agent) → synthetic role=queue segment so the
-         segments ledger still records the wait (Fila/SLA Fase D counts it).
-      4. Courtesy message + outbound session.closed (gateway closes the WS).
-      5. Authoritative contact_closed: close_reason=max_wait_exceeded,
+         via on_disconnect and the bridge closes the agent's own segment
+         (role='specialist' since D12) with the Fase C abandoned override.
+      3. Courtesy message + outbound session.closed (gateway closes the WS).
+      4. Authoritative contact_closed: close_reason=max_wait_exceeded,
          outcome=abandoned.
+
+    ── O passo 3 antigo SAIU (2026-08-24, fatia B) ───────────────────────────────
+    Havia aqui um segundo produtor de segmento `role='queue'`, no ramo `else` do
+    teste `queue:agent_active`. Três defeitos, e o terceiro é o que motivou:
+
+      · `uuid4()` no `segment_id` — duas emissões viram duas LINHAS, quando o
+        padrão do repositório é id derivado que o ReplacingMergeTree deduplica;
+      · publish **sem `key=`** em `conversations.participants` (3 partições) — o
+        defeito mais caro já registrado aqui (CLAUDE.md § Postura de Engenharia);
+      · morar no `else` significa que **só a fila MUDA registrava a espera**. Na
+        fila ATENDIDA, `max_wait_exceeded` fechava o contato sem nenhum segmento
+        `role='queue'` — o relatório de Fila/SLA perdia exatamente a população de
+        que ele trata, e a perda não tinha sintoma próprio.
+
+    Os três somem de uma vez porque o `resolve_queue_exit` já resolvia os três:
+    id derivado de (`session_id`, `first_queued_ms`), `key=session_id`, e chamada
+    ANTES do teste de tier — logo os dois tiers passam pelo mesmo caminho.
+
+    ⚠️ **Ordem importa e é deliberada:** a chamada fica no TOPO, antes dos markers.
+    Ela consome (`DELETE`) o `first_queued_ms`, que é o portão de "houve espera a
+    declarar" — qualquer saída posterior encontra a chave ausente e devolve `False`
+    sem emitir. É a idempotência do desenho, não um efeito colateral.
+
+    E o topo não é só higiene: o passo 1 escreve `session:{id}:closed`, que o DRAIN
+    lê (`kafka_listener.py:695`) para chamar o mesmo resolve com `"abandoned"` e
+    `close_reason=""`. Emitir depois do marker abriria uma corrida em que o drain
+    carimba primeiro e o motivo real — `max_wait_exceeded` — é perdido para um
+    abandono genérico. Emitindo antes, quem tem a informação escreve, e o drain
+    chega numa chave já consumida.
+
+    ⚠️ **Não há emissão dupla no tier atendido:** o segmento que o bridge fecha lá
+    é o do AGENTE (`role='specialist'` desde a D12, `main.py:6007`), não espera.
 
     Admission slots are released by the admission reconciler via the closed
     marker (~60s lag, acceptable). Caller has already ZREM'd the queue entry.
@@ -531,20 +563,26 @@ async def _emit_queue_timeout(
     wait_ms      = max(now_ms - queued_at_ms, 0) if queued_at_ms else 0
     sla_target   = await _pool_sla_target(redis_client, tenant_id, pool_id)
 
-    # Limpa o estado de fila SEM emitir segmento — este caminho emite o seu
-    # próprio sintético (passo 3).
-    # ⚠️ LACUNA NOMEADA (D12, 2026-08-28): o emissor do passo 3 só cobre o tier
-    # MUDO, então `max_wait_exceeded` na fila ATENDIDA continua sem segmento de
-    # espera. Unificar os dois emissores é fatia à parte — trocar para
-    # `emit_segment=True` aqui, sem remover o passo 3, produziria emissão DUPLA
-    # no mesmo relatório que este arco existe para consertar.
+    # 0. Encerra a passagem pela fila e EMITE o segmento de espera — produtor
+    # único, os dois tiers (fatia B, 2026-08-24; a lacuna nomeada aqui em
+    # 2026-08-28 está fechada, ver docstring).
+    #
+    # ⚠️ O `except` continua engolindo a exceção porque este caminho ainda tem de
+    # FECHAR o contato mesmo que o ledger falhe — mas o motivo não se perde: o
+    # `resolve_queue_exit` loga a falha de publish por dentro. Um `pass` mudo aqui
+    # seria degradação silenciosa; o log vive um nível abaixo, de propósito.
+    wait_segment_emitted = False
     try:
-        await mute_queue.resolve_queue_exit(
+        wait_segment_emitted = await mute_queue.resolve_queue_exit(
             redis_client, producer, tenant_id, pool_id, session_id,
-            "abandoned", emit_segment=False,
+            "abandoned", close_reason="max_wait_exceeded",
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning(
+            "queue timeout: falha ao registrar o segmento de espera session=%s "
+            "pool=%s — %s: %s (o contato fecha assim mesmo; o Fila/SLA perde ESTA "
+            "espera)", session_id, pool_id, type(exc).__name__, exc,
+        )
 
     # 1. Markers FIRST — bridge re-entry must not overwrite this close.
     try:
@@ -558,7 +596,8 @@ async def _emit_queue_timeout(
         logger.warning("queue timeout: could not set close markers session=%s — %s",
                        session_id, exc)
 
-    # 2/3. Queue agent signal or synthetic ledger segment.
+    # 2. Queue agent signal. (O segmento de espera já saiu no passo 0, para os
+    # DOIS tiers — este teste não decide mais se o fato é registrado.)
     queue_agent_active = False
     try:
         queue_agent_active = bool(
@@ -579,37 +618,8 @@ async def _emit_queue_timeout(
         except Exception as exc:
             logger.warning("queue timeout: could not signal queue agent session=%s — %s",
                            session_id, exc)
-    else:
-        # Mute queue — no real segment exists; emit a synthetic one so the
-        # contact ledger (segments) still records the wait window.
-        try:
-            joined_iso = (
-                datetime.fromtimestamp(queued_at_ms / 1000, tz=timezone.utc).isoformat()
-                if queued_at_ms else now_iso
-            )
-            await producer.send("conversations.participants", value={
-                "event_id":       str(uuid.uuid4()),
-                "type":           "participant_left",
-                "session_id":     session_id,
-                "tenant_id":      tenant_id,
-                "segment_id":     str(uuid.uuid4()),
-                "participant_id": f"queue-{session_id}",
-                "pool_id":        pool_id,
-                "agent_type_id":  "system",
-                "agent_type":     "system",
-                "role":           "queue",
-                "sequence_index": 0,
-                "joined_at":      joined_iso,
-                "timestamp":      now_iso,
-                "duration_ms":    wait_ms,
-                "outcome":        "abandoned",
-                "close_reason":   "max_wait_exceeded",
-            })
-        except Exception as exc:
-            logger.error("queue timeout: failed to publish synthetic queue segment "
-                         "session=%s — %s", session_id, exc)
 
-    # 4. Close the customer connection. Attended queue: o aviso vem do flow
+    # 3. Close the customer connection. Attended queue: o aviso vem do flow
     # (notify → stream) — adia o session.closed por um grace para a mensagem
     # renderizar antes do WS fechar. Mute queue: render v2 — farewell_text no
     # próprio session.closed (adapter renderiza antes do close, sem corrida).
@@ -646,7 +656,7 @@ async def _emit_queue_timeout(
         logger.warning("queue timeout: failed to publish outbound close session=%s — %s",
                        session_id, exc)
 
-    # 5. Authoritative sessions close row.
+    # 4. Authoritative sessions close row.
     try:
         await producer.send("conversations.events", value={
             "event_type":   "contact_closed",
@@ -667,9 +677,19 @@ async def _emit_queue_timeout(
         logger.error("queue timeout: failed to publish contact_closed session=%s — %s",
                      session_id, exc)
 
+    # ⚠️ `wait_ms` aqui é ESTIMATIVA (vem do `queued_at_ms` do `queue_contact`), não
+    # a duração do ledger — essa sai do `first_queued_ms` e é logada pelo próprio
+    # `resolve_queue_exit` ("queue exit: … wait_ms=…"). Normalmente coincidem (a
+    # devolução re-enfileira com o `queued_at_ms` original), e é justamente por
+    # coincidirem que valia dizer qual é qual: dois números iguais com fontes
+    # diferentes é como um deles vira fonte por engano.
+    # `wait_segment_emitted=False` significa espera NÃO registrada — carimbo
+    # ausente/expirado, ou falha de publish. Não é o caso normal.
     logger.warning(
-        "QUEUE TIMEOUT: session=%s tenant=%s pool=%s wait_ms=%d queue_agent=%s",
+        "QUEUE TIMEOUT: session=%s tenant=%s pool=%s wait_ms~%d queue_agent=%s "
+        "wait_segment=%s",
         session_id, tenant_id, pool_id, wait_ms, queue_agent_active,
+        wait_segment_emitted,
     )
 
 

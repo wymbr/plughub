@@ -27,6 +27,9 @@ Cada teste diz o que o faria REPROVAR:
     namespace e duas esperas voltam a colapsar numa linha (2026-09-01)
   · test_same_passage_emits_the_same_id_twice → o id passa a depender de `now()`
     e duas saídas concorrentes da MESMA passagem viram duas linhas
+  · test_timeout_{mute,attended}_tier_… + …_without_stamp_… → o `max_wait_exceeded`
+    volta a ter emissor próprio, ou a emissão volta a depender do tier
+    (fatia B, 2026-08-24 — o do tier ATENDIDO nasceu vermelho)
 
 ⚠️ Os dois últimos são um PAR e só julgam juntos: sozinho, o primeiro fica verde
 com um `uuid4()` de volta (ids sempre distintos) e o segundo fica verde com o
@@ -45,6 +48,7 @@ as DUAS variáveis — `REDIS_URL` não existe dentro do container.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 import uuid
@@ -308,6 +312,239 @@ async def test_same_passage_emits_the_same_id_twice(env):
     assert producer.sent[0][2]["segment_id"] == queue_wait_segment_id(
         tenant, sid, first_ms
     ), "o id da passagem não é reconstruível a partir do carimbo dela"
+
+
+# ══ max_wait_exceeded: UM produtor, os DOIS tiers (fatia B, 2026-08-24) ═════════
+#
+# Até aqui o `_emit_queue_timeout` tinha um emissor PRÓPRIO de segmento de espera,
+# no ramo `else` do teste `queue:agent_active`. Consequência: na fila ATENDIDA o
+# contato era fechado por teto de retenção **sem nenhum segmento `role='queue'`** —
+# o relatório de Fila/SLA perdia exatamente a população de que trata, e a perda não
+# tinha sintoma próprio (não é linha errada; é linha ausente).
+#
+# ⚠️ Estes três só julgam JUNTOS, e cada um cobre o buraco do outro:
+#   · mute_tier      → reprova se o segundo emissor VOLTAR (2 linhas em vez de 1),
+#                      ou se o `close_reason` se perder no caminho unificado
+#   · attended_tier  → reprova se a emissão voltar a depender do tier. **É o único
+#                      que estava VERMELHO antes desta fatia** (emitia 0)
+#   · sem carimbo    → testemunha de AUSÊNCIA: sem ela, um produtor que emitisse
+#                      incondicionalmente passaria nos dois de cima
+#
+# Previsão escrita antes de rodar: 1 · 1 · 0. Antes da mudança seria 1 · **0** · 0.
+
+
+class _TimeoutProducer:
+    """
+    Fake do `_emit_queue_timeout`, que publica em TRÊS tópicos com contratos de
+    chave DIFERENTES — e o fake reflete isso em vez de nivelar por baixo.
+
+    `conversations.participants` **exige** `key`: é o tópico de 3 partições cuja
+    publicação sem chave é o defeito mais caro já registrado no repositório. Os
+    outros dois (outbound, `conversations.events`) hoje publicam sem chave, e essa
+    é dívida à parte — o fake a tolera **e a declara aqui**, para que ninguém leia
+    a tolerância como aprovação. Mock mais permissivo que o contrato já escondeu
+    bug aqui; mock mais estrito que o código só produziria vermelho falso.
+    """
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, bytes | None, dict]] = []
+
+    async def send(self, topic: str, *, key: bytes | None = None, value: dict) -> None:
+        if topic == "conversations.participants":
+            assert isinstance(key, (bytes, bytearray)), (
+                "publish em conversations.participants SEM key= — ordem no Kafka é "
+                f"por partição (veio {type(key).__name__})"
+            )
+        self.sent.append((topic, key, value))
+
+    def wait_segments(self) -> list[dict]:
+        return [v for t, _, v in self.sent
+                if t == "conversations.participants" and v.get("role") == "queue"]
+
+
+class _Settings:
+    kafka_topic_outbound       = "conversations.outbound"
+    queue_timeout_close_grace_s = 0
+
+
+async def _run_timeout(client, tenant: str, sid: str,
+                       *, attended: bool, stamp_ms: int | None) -> _TimeoutProducer:
+    """
+    Exercita `_emit_queue_timeout` de verdade — não uma reimplementação dele.
+
+    ⚠️ **O producer é criado AQUI, não recebido do fixture.** O `_FakeProducer` do
+    fixture exige `key=` em TODOS os tópicos, o que é o contrato certo para o
+    `resolve_queue_exit` (que só publica em `conversations.participants`) e errado
+    para este caminho, que também publica em outbound e `conversations.events` —
+    os dois ainda sem chave, dívida à parte. Usar o do fixture fazia os três
+    publishes de fechamento levantarem `TypeError` dentro dos `try/except` do
+    código, e o teste morria por `AttributeError` antes de qualquer asserção.
+
+    ⚠️ As chaves de tier e de fechamento (`queue:agent_active:*`,
+    `session:*`) NÃO são prefixadas por tenant, logo escapam da limpeza do fixture
+    (`scan_iter(f"{tenant}:*")`). Removidas à mão aqui: teste que suja o Redis de
+    um ambiente compartilhado volta como flakiness de outro teste.
+    """
+    from plughub_routing.main import _emit_queue_timeout
+
+    producer = _TimeoutProducer()
+    if stamp_ms is not None:
+        await client.set(first_queued_key(tenant, sid), str(stamp_ms))
+    if attended:
+        await client.set(f"queue:agent_active:{sid}", "1")
+    try:
+        await _emit_queue_timeout(
+            client, producer, _Settings(), tenant, "retencao_humano", sid,
+            int(time.time() * 1000),
+        )
+        # O ramo atendido agenda o close num `create_task`; com grace 0 basta
+        # ceder o loop uma vez para ele terminar antes do teardown.
+        await asyncio.sleep(0)
+    finally:
+        await client.delete(
+            f"queue:agent_active:{sid}",
+            f"session:{sid}:closed",
+            f"session:{sid}:contact_close_fired",
+            f"session:{sid}:contact_id",
+            f"menu:result:{sid}",
+        )
+    return producer
+
+
+@pytest.mark.asyncio
+async def test_timeout_mute_tier_emits_exactly_one_wait_segment(env):
+    """
+    Reprova se o emissor duplicado voltar (2 linhas), se o `close_reason` sumir no
+    caminho unificado, ou se o id voltar a ser sorteado.
+    """
+    client, _unused, tenant = env
+    sid      = "ses-timeout-mudo"
+    first_ms = int(time.time() * 1000) - 12_000
+
+    producer = await _run_timeout(client, tenant, sid,
+                                  attended=False, stamp_ms=first_ms)
+
+    segs = producer.wait_segments()
+    assert len(segs) == 1, (
+        f"esperado 1 segmento de espera, vieram {len(segs)} — "
+        f"{[s.get('segment_id') for s in segs]} (dois emissores de volta?)"
+    )
+    assert segs[0]["close_reason"] == "max_wait_exceeded", (
+        f"o motivo real virou {segs[0]['close_reason']!r}: o teto de retenção "
+        f"ficou indistinguível de um abandono qualquer"
+    )
+    assert segs[0]["outcome"] == "abandoned"
+    assert segs[0]["segment_id"] == queue_wait_segment_id(tenant, sid, first_ms), (
+        "o id não é reconstruível a partir do carimbo — voltou a ser sorteado"
+    )
+    assert segs[0]["duration_ms"] >= 12_000, (
+        f"duração {segs[0]['duration_ms']} ms não reflete a espera carimbada"
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeout_attended_tier_also_emits_wait_segment(env):
+    """
+    **O teste que estava vermelho.** Fila ATENDIDA (`queue:agent_active` presente)
+    fechada por teto: até 2026-08-24 saíam ZERO segmentos de espera daqui, porque o
+    emissor morava no ramo `else`.
+
+    Reprova se a emissão voltar a depender do tier.
+    """
+    client, _unused, tenant = env
+    sid      = "ses-timeout-atendido"
+    first_ms = int(time.time() * 1000) - 9_000
+
+    producer = await _run_timeout(client, tenant, sid,
+                                  attended=True, stamp_ms=first_ms)
+
+    segs = producer.wait_segments()
+    assert len(segs) == 1, (
+        f"fila ATENDIDA fechada por max_wait produziu {len(segs)} segmentos de "
+        f"espera — era exatamente esta a lacuna que a fatia B fechou"
+    )
+    assert segs[0]["close_reason"] == "max_wait_exceeded"
+    # A unificação não pode ter trocado um caminho pelo outro: o contato ainda
+    # fecha.
+    assert any(t == "conversations.events" and v.get("event_type") == "contact_closed"
+               for t, _, v in producer.sent), (
+        "o contato não foi fechado — a unificação não pode ter comido o passo 4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_timeout_without_stamp_emits_no_wait_segment(env):
+    """
+    TESTEMUNHA DE AUSÊNCIA dos dois acima: sessão sem `first_queued_ms` (carimbo
+    expirado, ou fechada por um caminho que já o consumiu) **não** produz espera.
+
+    Reprova se alguém "consertar" a ausência fabricando duração a partir de `now`
+    — que é exatamente o que o emissor removido fazia quando o `queued_at_ms` do
+    `queue_contact` também faltava (`joined_iso = now_iso`, `wait_ms = 0`).
+    """
+    client, _unused, tenant = env
+    sid = "ses-timeout-sem-carimbo"
+
+    assert await client.get(first_queued_key(tenant, sid)) is None
+
+    producer = await _run_timeout(client, tenant, sid,
+                                  attended=False, stamp_ms=None)
+
+    segs = producer.wait_segments()
+    assert segs == [], (
+        f"declarou espera para sessão sem carimbo: "
+        f"{[s.get('duration_ms') for s in segs]} ms"
+    )
+    # Testemunha de presença DO PRÓPRIO CAMINHO: o contato fecha mesmo assim.
+    # Sem ela, uma função que abortasse no topo passaria neste teste.
+    assert any(t == "conversations.events" and v.get("event_type") == "contact_closed"
+               for t, _, v in producer.sent), (
+        "nada foi publicado — o teste acima passaria por caminho morto"
+    )
+
+
+def test_timeout_has_no_participants_publish_of_its_own():
+    """
+    Guarda ESTRUTURAL do produtor único — e serve de preflight de símbolo: se este
+    passar dentro do container, o código medido é o código novo.
+
+    Pergunta feita à AST, não ao texto: *quantos `…send("conversations.participants",
+    …)` existem dentro do `_emit_queue_timeout`?* Resposta exigida: **zero** — a
+    espera é publicada pelo `resolve_queue_exit`, que é quem tem o id derivado e a
+    chave.
+
+    ⚠️ Por que AST e não `grep`/`in`: o docstring da própria função **cita** o nome
+    do tópico ao explicar por que o emissor saiu. Uma busca textual contaria o
+    comentário que documenta a remoção e reproduziria o número ANTIGO — armadilha
+    já paga neste repositório.
+
+    Sem Redis: nunca pulado por ambiente.
+    """
+    import ast
+    import inspect
+
+    from plughub_routing.main import _emit_queue_timeout
+
+    tree = ast.parse(inspect.getsource(_emit_queue_timeout))
+    topics = [
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "attr", "") == "send"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    ]
+
+    assert "conversations.participants" not in topics, (
+        "o `_emit_queue_timeout` voltou a publicar segmento por conta própria — "
+        "é o emissor com uuid4() e sem key= que a fatia B removeu, e ele só cobre "
+        "o tier MUDO"
+    )
+    # TESTEMUNHA DE PRESENÇA: sem ela, um `getsource` que devolvesse a função
+    # errada (ou vazia) passaria na asserção acima por caminho morto.
+    assert "conversations.events" in topics, (
+        f"a AST não encontrou o publish de contact_closed — o instrumento está "
+        f"medindo outra coisa (tópicos vistos: {topics})"
+    )
 
 
 # ══ Tier da fila: ENDEREÇO × política × endereço legado (defeito 2, 2026-08-24) ══

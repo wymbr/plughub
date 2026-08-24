@@ -26,10 +26,10 @@ Saídas da fila (emitem o segmento e limpam o estado) — o portão é o
 `first_queued_ms`, que existe nos dois tiers (`registry.py` add_queued_contact):
   handoff   — há agente para o contato: admitido no inbound, OU dequeue no drain.
   abandoned — cliente desconectou esperando (contact_closed, ou marker no drain).
-  (max_wait_exceeded é emitido pelo _emit_queue_timeout, que já tinha o seu
-   próprio segmento sintético — aqui só limpamos o estado. ⚠️ Aquele emissor só
-   cobre o tier MUDO, então max_wait na fila ATENDIDA segue sem segmento de
-   espera: lacuna nomeada, fatia à parte, ver TODO.md.)
+  max_wait_exceeded — teto de retenção estourado. **Desde 2026-08-24 (fatia B)
+   também sai daqui**, via `close_reason=`. Era emitido por um segundo produtor
+   dentro do `_emit_queue_timeout`, que sorteava o id, publicava sem `key=` e —
+   por viver no ramo `else` do `queue:agent_active` — só cobria o tier MUDO.
 
 Proteções (spec § Proteções operacionais): tetos vêm do namespace `routing` do
 Config API via `routing_config` (cache com defaults hard-coded e degradação
@@ -233,6 +233,7 @@ async def resolve_queue_exit(
     session_id: str,
     outcome:    str,                 # "handoff" | "abandoned"
     emit_segment: bool = True,
+    close_reason: str = "",
 ) -> bool:
     """
     Encerra a passagem pela fila — **nos DOIS tiers** (atendida e muda) — e publica
@@ -257,11 +258,25 @@ async def resolve_queue_exit(
     largo que o conteúdo"* — `session_transitions`, `SessionMeta`). Aqui é o
     inverso: o conteúdo ficou mais largo que o nome.
 
-    `emit_segment=False` para o caminho de max_wait (o `_emit_queue_timeout` emite o
-    segmento dele). ⚠️ **Lacuna nomeada:** aquele emissor próprio só cobre o tier
-    MUDO (passo 3 do docstring dele), logo `max_wait_exceeded` na fila ATENDIDA
-    segue sem segmento de espera. Unificá-lo é fatia à parte — feito aqui, junto,
-    produziria emissão dupla no relatório que este arco existe para consertar.
+    ── `close_reason` e o fim do segundo emissor (2026-08-24, fatia B) ───────────
+    A lacuna que este docstring nomeava — *"`emit_segment=False` para o caminho de
+    max_wait, porque o `_emit_queue_timeout` emite o segmento dele; unificar é fatia
+    à parte"* — **está fechada**, e o que a fechou foi o parâmetro abaixo.
+
+    O emissor de lá era um SEGUNDO produtor do mesmo fato, com três diferenças que
+    não eram escolha de ninguém: `uuid4()` no lugar do id derivado (duas emissões =
+    duas linhas), publish **sem `key=`** no tópico de 3 partições, e — a que doía —
+    ele vivia no ramo `else` do teste `queue:agent_active`, logo **só o tier MUDO
+    registrava espera**. `max_wait_exceeded` na fila ATENDIDA saía sem segmento
+    nenhum, e a ausência sumia no mesmo silêncio que a D12 já tinha catalogado.
+
+    A única coisa que aquele emissor tinha e esta função não era o `close_reason`
+    (hardcoded `""` aqui). Um campo — e era ele que sustentava o segundo produtor.
+
+    ⚠️ **Não há emissão dupla**, e isso é medido, não deduzido: no tier ATENDIDO o
+    bridge emite `role='specialist'` para o agente de fila desde a D12
+    (`orchestrator-bridge/main.py:6007`), não `role='queue'`. O único produtor de
+    espera é este.
 
     Devolve `True` se emitiu (ou se havia passagem de fila a encerrar).
     """
@@ -356,15 +371,18 @@ async def resolve_queue_exit(
             "timestamp":      now.isoformat(),
             "duration_ms":    duration_ms,
             "outcome":        outcome,
-            "close_reason":   "",
+            "close_reason":   close_reason,
         })
+        # "queue exit", não "mute queue exit": a função cobre os DOIS tiers desde a
+        # D12, e desde a fatia B cobre também o max_wait. Log que descreve escopo
+        # menor que o do código é a mesma armadilha do nome antigo da função.
         logger.info(
-            "mute queue exit: session=%s pool=%s outcome=%s wait_ms=%d",
-            session_id, pool_id, outcome, duration_ms,
+            "queue exit: session=%s pool=%s outcome=%s close_reason=%s wait_ms=%d",
+            session_id, pool_id, outcome, close_reason or "-", duration_ms,
         )
     except Exception as exc:
         logger.warning(
-            "mute queue exit: failed to publish synthetic segment session=%s — %s",
+            "queue exit: failed to publish synthetic segment session=%s — %s",
             session_id, exc,
         )
     return True
