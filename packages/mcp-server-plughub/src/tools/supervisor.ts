@@ -71,7 +71,20 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       let tenantId      = ""
       let poolId        = ""
       let startedAt     = Date.now()
-      let slaTargetMs   = 480_000  // 8 min default
+      // ⚠️ D14.1 (2026-08-24) — DUAS dívidas nesta linha, nenhuma consertada aqui
+      // porque isto é contrato de tool MCP e os consumidores não foram mapeados:
+      //
+      //  1. É a TERCEIRA cópia do fallback `480_000` (as outras duas viraram
+      //     `SLA_TARGET_MS_FALLBACK` no routing-engine; TS não importa de Python).
+      //     O default do PRODUTO são 30 s do formulário — os dois divergem 16×.
+      //  2. Pior: o `urgency` calculado abaixo é `(now − session.started_at) /
+      //     slaTargetMs`, ou seja compara ATENDIMENTO TOTAL com um alvo que a D14.1
+      //     decidiu ser de **espera em fila** — e a espera já acabou quando há
+      //     sessão para supervisionar. A razão não mede coisa nenhuma.
+      //
+      // O endpoint HTTP homônimo (`server.ts`) devolvia isto como constantes e a
+      // barra do Console que o consumia foi REMOVIDA. Ver `TODO.md` § Analytics e UI.
+      let slaTargetMs   = 480_000  // 8 min — fallback, não default do produto
       let maxReplyTimeMs: number | null = null
 
       try {

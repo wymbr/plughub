@@ -61,7 +61,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
     );
   }
 
-  const { sentiment, intent, flags, sla, turn_count, ai_participants } = state;
+  const { sentiment, intent, flags, turn_count, ai_participants } = state;
 
   // Build chart data from trajectory
   const chartData = sentiment.trajectory.map((v, i) => ({
@@ -69,13 +69,10 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
     value: Math.round(v * 100) / 100,
   }));
 
-  const slaPercent = Math.min(sla.percentage, 100);
-  const slaBar =
-    sla.breach_imminent
-      ? "bg-red"
-      : slaPercent > 70
-      ? "bg-warning"
-      : "bg-green";
+  // A barra de SLA saiu na D14.1 (2026-08-24). Ela lia `sla.percentage`, campo que
+  // NENHUM produtor escrevia — o endpoint HTTP mandava `0` fixo e a tool devolve
+  // `urgency` —, então exibia "0%" em toda sessão desde sempre. Não existe alvo de
+  // atendimento por segmento no produto; ver `TODO.md` § Analytics e UI.
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
@@ -201,27 +198,11 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({
         </section>
       )}
 
-      {/* SLA */}
+      {/* Turnos — o que a seção de SLA de fato tinha de informativo. */}
       <section>
-        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide mb-1">
-          {t('estado.slaTurn', { count: turn_count })}
+        <h3 className="text-xs font-semibold text-muted uppercase tracking-wide">
+          {t('estado.turnCount', { count: turn_count })}
         </h3>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-2 bg-border rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${slaBar}`}
-              style={{ width: `${slaPercent}%` }}
-            />
-          </div>
-          <span className="text-xs text-muted w-10 text-right">
-            {slaPercent.toFixed(0)}%
-          </span>
-        </div>
-        {sla.breach_imminent && (
-          <p className="text-xs text-red-text font-semibold mt-1 animate-pulse">
-            {t('estado.slaRisk')}
-          </p>
-        )}
       </section>
     </div>
   );

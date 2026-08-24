@@ -47,6 +47,22 @@ interface AppProps {
 let toastSeq = 0;
 function makeToastId(): string { return `toast-${++toastSeq}`; }
 
+// Âncora do segmento — servidor, nunca navegador (D14.1, 2026-08-24). Mesmo
+// conserto aplicado ao `platform-ui`: o `conversation.assigned` é REPUBLICADO na
+// reconexão, então `new Date()` fazia todo F5 zerar o relógio do atendimento.
+// Degradação BARULHENTA de propósito — um fallback mudo aqui restaura o defeito
+// sem deixar rastro (relógio errado conta igual a relógio certo).
+function parseAssignedAt(raw: unknown, sessionId: string): Date {
+  if (typeof raw === "string" && raw) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d;
+    console.warn(`[agent-assist] assigned_at ilegível (${raw}) session=${sessionId} — relógio ZERA no F5`);
+    return new Date();
+  }
+  console.warn(`[agent-assist] conversation.assigned sem assigned_at session=${sessionId} — relógio ZERA no F5`);
+  return new Date();
+}
+
 function makeContact(sessionId: string, channel = "webchat"): ContactSession {
   return {
     sessionId,
@@ -175,7 +191,7 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
 
     // ── New contact assigned ──────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      const { session_id, contact_id } = event;
+      const { session_id, contact_id, assigned_at } = event;
 
       // Reject sessions already handled by the agent — routing drain re-emits
       // conversation.assigned for dead sessions long after agent_done.
@@ -196,6 +212,8 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
         next.set(session_id, {
           ...makeContact(session_id),
           contactId:        contact_id ?? null,
+          // Âncora do SERVIDOR — sobrevive ao F5 (ver parseAssignedAt).
+          sessionStartedAt: parseAssignedAt(assigned_at, session_id),
           sessionClosed:    alreadyClosed,
           pendingCloseModal: alreadyClosed,
         });
@@ -470,7 +488,6 @@ const App: React.FC<AppProps> = ({ agentName, poolId }) => {
         poolId={poolId}
         sessionId={selectedSessionId}
         wsStatus={wsStatus}
-        sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
       />
 

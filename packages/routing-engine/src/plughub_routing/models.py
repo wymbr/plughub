@@ -219,6 +219,20 @@ def resolve_agent_type(instance: "AgentInstance", pool_id: str) -> str:
 # Never access PostgreSQL directly.
 # ─────────────────────────────────────────────
 
+# FALLBACK de `sla_target_ms`, **não** o default do produto (D14.1, 2026-08-24).
+#
+# O default do produto são os 30 s do formulário (`platform-ui/PoolsPage.tsx`); este
+# valor só existe para o caso em que a config do pool chega SEM o campo — que o
+# contrato Zod declara **obrigatório** (`schemas/agent-registry.ts`), logo só acontece
+# em evento malformado ou legado.
+#
+# Ficou nomeado porque estava duplicado em dois arquivos (`kafka_listener`,
+# `registry`) e divergia do formulário por 16×, sem que nada dissesse qual valia.
+# **Quem o usa TEM de logar** — um alvo de espera fabricado alimenta aging, breach,
+# ETA ao cliente e a aderência de SLA sem nada ficar vermelho.
+SLA_TARGET_MS_FALLBACK = 480_000
+
+
 class PoolConfig(BaseModel):
     # Ignore unknown fields so the routing engine stays forward-compatible when
     # new fields are added to pool_config (e.g. mentionable_pools, supervisor_config).

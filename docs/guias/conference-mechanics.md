@@ -2188,6 +2188,48 @@ separa** — `test_two_passages_get_distinct_ids` ficaria verde com `uuid4()` de
   emissor já pagou.
 - `duration_ms` do segmento humano divergiu da janela dos próprios carimbos nas **duas** medições
   (26 448 ms/80 s; 25 519 ms/60 s). Não investigado; backlog fora do arco de fila.
+  ⚠️ **Uma hipótese já foi levantada e REFUTADA** em 2026-08-24 (*"a duração sai do último F5"*) —
+  ver Mudança 39. Não repetir esse caminho.
+
+---
+
+### Mudança 39 — N segmentos por contato NÃO são duplicação: hipótese levantada e REFUTADA no mesmo dia (2026-08-24)
+
+**Nada foi alterado no mecanismo.** Registrado porque a aparência é convincente, o diagnóstico
+errado é sedutor, e já custou uma rodada — quem vier depois vai ver o mesmo sintoma.
+
+**Sintoma que dispara a suspeita:** o relógio de atendimento do Console zera a cada F5, e um contato
+acumula muitos segmentos `primary` — medidos **8** em `18232569-…`, **6** em `af64c36b-…`, **6** em
+`fb66eed5-…`. Teste do gatilho confirma: **7 → 8** e **2 → 3** após um único F5.
+
+**Diagnóstico "óbvio" pela leitura do código, e é FALSO:** `activate_human_agent` roda de novo a cada
+reconexão e `setex session:{sid}:segment:{inst}` sobrescreveria o id do segmento anterior — que
+então nunca receberia `participant_left` e ficaria aberto para sempre.
+
+**O número que refuta é `countIf(duration_ms IS NULL)`:** aquelas sessões têm **ZERO segmentos
+abertos**. Todos fecham. A ordem real é **fechar-depois-abrir**, não abrir-sobre-abrir:
+
+| reconexão | o que acontece | segmento |
+|---|---|---|
+| **> `UNREGISTER_GRACE_MS`** (2,5 s, `mcp-server/server.ts:2879`) | queda GENUÍNA → `contact_closed(agent_disconnect)` → segmento fechado + GETDEL da chave de join → contato volta à fila → re-rota → ativação nova | **novo, e correto** |
+| **< grace** | o unregister é cancelado; o contato não volta à fila e `activate_human_agent` **não roda** — a tela é restaurada pelo replay de `pool:pending_assignment` (forward no mcp-server), que não cria segmento | **o mesmo** |
+
+⇒ **N segmentos = N quedas reais = N janelas de participação**, que é a definição de segmento
+(`CLAUDE.md`: *"segment = janela de UM participante"*). `assigned_at = now()` está **certo**: é o
+início da janela nova. E o relógio zerando na tela está certo pelo mesmo motivo.
+
+**Por que o guard "reusa o segmento se já há join aberto" foi escrito e revertido:** ele guarda um
+estado inalcançável (se a chave sobreviveu, não houve segunda ativação para suprimir) e, no dia em
+que disparasse, suprimiria um segmento legítimo. Código morto no melhor caso, defeito no pior.
+
+⚠️ **Se um dia houver suspeita real de duplicação, o discriminador é SEGMENTO ÓRFÃO**
+(`duration_ms IS NULL` acima de 1 por sessão viva), **nunca a contagem**. Contar segmentos e chamar
+de duplicação é medir exposição e chamar de dano — o invariante que o `CLAUDE.md` ganhou nesta mesma
+sessão, violado duas horas depois de ser escrito.
+
+*Precedente coerente: o ADR `adr-work-item-requeue-and-agent-affinity` já decidira que tratar um F5
+como abandono era bug — mas para item de fila pull, e por causa do grace. Aqui o grace **venceu**,
+então a saída é real e o novo segmento também.*
 
 ---
 

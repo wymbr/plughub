@@ -366,7 +366,7 @@
       "total":         "Total",
       "occupancy":     "Occupancy",
       "queue":         "Queue",
-      "slaTarget":     "SLA Target",
+      "slaTarget":     "Wait target",
       "avgWait":       "Avg Wait",
       "slaCompliance": "SLA %"
     },

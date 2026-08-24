@@ -300,6 +300,31 @@ export const PoolRegistrationSchema = z.object({
   agent_kind:             z.enum(["human", "ai"]).optional(),
   description:            z.string().optional(),
   channel_types:          z.array(ChannelSchema).min(1),
+  /**
+   * **Alvo de ESPERA EM FILA** (ms) — nunca de atendimento total (D14.1, 2026-08-24).
+   *
+   * É **alvo** (soft), não teto: o `aging_factor` cresce até ele e o `breach_factor`
+   * acelera depois, ou seja o contato **sobe na fila**. Nada é encerrado por este
+   * campo. Quem encerra é o **teto**: `Pool.queue_config.max_wait_s` e o
+   * `queue_max_wait_by_channel` do namespace `routing` (onde **`0` é VETO**, usado
+   * por voz — dead air segura tronco).
+   *
+   * Confundir os dois foi o que fez metade do parque (18 de 36 pools medidos) carregar
+   * prazo de processo num campo que não retém ninguém: `limite_entrega` com 7 dias não
+   * segura por 7 dias, apenas torna o aging inerte. Licença de IA também não passa por
+   * aqui — a admissão tem portão próprio (`{t}:admission:kind:ai`).
+   *
+   * Sete consumidores, todos de espera. Comportamento: `scorer.py` (aging + breach do
+   * ZSET), `decide.py` (`sla_urgency > 1.0 → inf`), `saturated.py` (ETA, `>2.0` →
+   * redirect + oncall), `routing/main.py` (`avg_handle_ms = sla × 0.7`, ETA publicada
+   * **ao cliente**). Relatório: `query.py`, `reports_query.py` ×2.
+   *
+   * ⚠️ Este comentário afirmava o contrário — *"mede o atendimento como um todo"* — e
+   * **nenhum consumidor jamais leu assim**: a única superfície que parecia fazê-lo (a
+   * barra de SLA do Console) consumia constantes e foi removida. Não reintroduzir a
+   * leitura "atendimento total" sem antes criar o campo que a suporte.
+   * Ver `TODO.md` § "SLA está no grão errado" → D14.1.
+   */
   sla_target_ms:          z.number().int().positive(),
   /**
    * Arc 19 — Pool webhook: skill_id que este pool executa (o "DIN" do canal webhook).
@@ -387,7 +412,11 @@ export const PoolRegistrationSchema = z.object({
   /**
    * Tempo máximo (ms) para o agente responder a cada mensagem do cliente.
    * Opcional — sem limite por mensagem quando ausente.
-   * Independente do sla_target_ms (que mede o atendimento como um todo).
+   *
+   * Ortogonal ao `sla_target_ms`, que é alvo de **espera em fila** (D14.1): este mede
+   * o agente já DENTRO do atendimento, aquele mede o cliente ANTES dele. São os dois
+   * únicos alvos de tempo do produto — não existe alvo de atendimento total, e a
+   * existência deste campo é a evidência de que a separação é natural.
    */
   max_reply_time_ms:      z.number().int().positive().nullable().optional(),
   routing_expression:     RoutingExpressionSchema.optional(),

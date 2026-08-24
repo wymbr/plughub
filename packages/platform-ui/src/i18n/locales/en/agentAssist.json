@@ -332,8 +332,7 @@
     "waiting":      "Awaiting data…",
     "aiAgents":     "AI Agents in Session",
     "sentimentAlert":"⚠ Critical sentiment alert",
-    "slaTurn":      "SLA · Turn {{count}}",
-    "slaRisk":      "SLA at imminent risk",
+    "turnCount":    "Turns · {{count}}",
     "confidence":   "{{pct}}% confidence",
     "sentimentLabel": {
       "veryPositive": "Very positive",
@@ -498,7 +497,8 @@
     "ended":            "ended",
     "awaitingResponse": "Awaiting your response",
     "responded": "Responded — awaiting next customer message",
-    "aiTyping":         "AI typing"
+    "aiTyping":         "AI typing",
+    "segmentTime":      "Time on this contact (since it was assigned to you)"
   },
   "orchestration": {
     "waiting":                "Awaiting session data…",

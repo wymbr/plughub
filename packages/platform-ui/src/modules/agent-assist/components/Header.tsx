@@ -26,8 +26,8 @@ interface HeaderProps {
   /** @deprecated — session identity now shown only in the contact list (Fase B) */
   sessionId?:        string | null;
   wsStatus:         WsStatus;
-  /** @deprecated — SLA now shown only in the contact list (Fase B) */
-  sla?:              unknown;
+  // A prop `sla` foi REMOVIDA na D14.1 (2026-08-24) — o indicador não existe mais
+  // em superfície nenhuma, e o campo que a alimentava era constante.
   /** @deprecated — timer now shown only in the contact list and ActionBar (Fase B) */
   sessionStartedAt?: Date | null;
   contactCount?:    number;

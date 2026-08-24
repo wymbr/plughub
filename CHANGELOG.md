@@ -2,6 +2,215 @@
 
 ---
 
+## Hipótese de duplicação de segmento por F5 — levantada e REFUTADA no mesmo dia (2026-08-24)
+
+**Nenhuma mudança de comportamento.** Entra no CHANGELOG porque um conserto foi escrito, revertido
+por medição e o caminho errado ficou documentado — a aparência é convincente e vai reaparecer.
+
+### Como começou
+
+O operador, validando a remoção da barra de SLA, reportou: *"o relógio do Console zera a cada F5"*.
+Medindo o ledger: **8 segmentos `primary`** para UM contato (`18232569-…`), 6 em `af64c36b-…`, 6 em
+`fb66eed5-…`, e o gatilho confirmado direto — **7 → 8** e **2 → 3** após um único F5.
+
+Diagnóstico escrito a partir da leitura do código: `activate_human_agent` roda de novo a cada
+reconexão e `setex session:{sid}:segment:{inst}` sobrescreveria o id do segmento anterior,
+orfanando-o. Um conserto de idempotência foi implementado.
+
+### O que refutou
+
+**`countIf(duration_ms IS NULL)` — as sessões têm ZERO segmentos abertos.** Todos fecham. A ordem é
+fechar-depois-abrir: um F5 que passa do `UNREGISTER_GRACE_MS` (2,5 s) é queda **genuína**, dispara
+`contact_closed(agent_disconnect)`, fecha o segmento e consome a chave de join; o contato volta à
+fila e é re-roteado. Um F5 **dentro** do grace nem chega aqui — o unregister é cancelado e a tela é
+restaurada pelo replay de `pool:pending_assignment`, que não cria segmento.
+
+⇒ **N segmentos = N quedas reais = N janelas de participação**, que é a definição de segmento. O
+relógio zerando está certo, `assigned_at = now()` está certo, e a objeção do operador (*"a cada F5
+houve queda e reconexão, portanto um segmento novo"*) estava certa desde o começo.
+
+### Revertido
+
+Bridge de volta ao estado anterior; no lugar do guard ficou um bloco de comentário explicando por que
+**não** se conserta isso, com o discriminador correto nomeado. O gate
+`gate_rejoin_no_duplicate_segment.sh` foi removido — ele reprovaria a corrida CORRETA, porque
+comparava contagem em vez de orfandade.
+
+### A lição, e ela dói
+
+**Contei exposição e chamei de dano.** "8 segmentos" e "8 segmentos órfãos" são fatos diferentes, e
+só o segundo é defeito — exatamente o invariante que o `CLAUDE.md` ganhou **nesta mesma sessão**
+(§ Postura de Engenharia, *"um instrumento pode ser falseável, ramificado e honesto — e ainda medir a
+proposição ERRADA"*), violado duas horas depois de ser escrito. E o gate que escrevi herdou o furo:
+ramificava sobre `count()`, a grandeza errada.
+
+O que teria evitado: `countIf(duration_ms IS NULL)` ao lado de `count()` **na primeira query** — uma
+coluna. Foi o operador quem forçou a medição, ao perguntar por que a duplicação não seria o
+comportamento correto.
+
+⚠️ **Se a suspeita voltar, o discriminador é SEGMENTO ÓRFÃO** (`duration_ms IS NULL` acima de 1 por
+sessão viva), **nunca a contagem**. Registrado em `conference-mechanics.md` § Mudança 39.
+
+⚠️ **O backlog `duration_ms` ≠ janela dos carimbos (26 448 ms/80 s · 25 519 ms/60 s) volta a estar
+SEM causa** — a explicação *"a duração sai do último F5"* caiu junto.
+
+---
+
+## D14.1 decidida — `sla_target_ms` := alvo de ESPERA em fila (2026-08-24)
+
+Fatia de **decisão + medição**, sem mudança de comportamento: entram dois probes e a correção de
+três afirmações erradas em `TODO.md`/`CLAUDE.md`. Destrava a **D14-i** (parar de colapsar a sessão
+numa linha de fila) e, atrás dela, a **D14** (SLA no grão do segmento).
+
+Decisão do dono do produto: *"é o tempo de espera alvo na fila que leva ao SLA desejado numa fila de
+espera humana"*. **Não foi escolha entre duas leituras — é o que o código já fazia.**
+
+### Três afirmações corrigidas por medição
+
+1. **`TODO.md` dizia *"Consumidores: todos comparam com ESPERA"*, listando 3 leitores de analytics.**
+   São **13 sites**, e o lado espera inclui **quatro que decidem comportamento** e que a seção nunca
+   mencionou: `scorer.py:177` (aging + breach do ZSET), `decide.py:287` (`sla_urgency > 1.0 → inf`),
+   `saturated.py:92/109/126` (ETA e redirect + oncall) e `main.py:1055`
+   (`avg_handle_ms = sla × 0.7` → ETA publicada **ao cliente**). O campo não é de relatório: é do
+   árbitro.
+
+2. **`TODO.md` dizia que a divisão coincide com `purpose` (contato × interno), *"o que torna a
+   correção tratável sem adivinhar intenção pool a pool"*.** ❌ `purpose` separa **2 de 18** — 16
+   pools da faixa ≥1 h são `purpose=contact`. O discriminador real é **como o pool é ENTRADO**:
+   espera de contato 18 · `webhook` 12 · `pull` 4 · I/O de `delegate` 2. E os 2 últimos
+   (`limite_retorno`, `portabilidade_confirmacao`) **não têm discriminador no registro do pool** —
+   são `push` + canal de cliente como os 18, e o que os separa é serem alvo de `delegate`, fato do
+   **skill que chama**. Só o próprio valor os distingue, o que é circular para migração automática.
+
+3. **O lado "atendimento total" do inventário é FANTASMA.** O `supervisor_state` tem duas
+   implementações e quem alimenta a tela é o endpoint HTTP (`server.ts:1617`), que devolve
+   `sla{elapsed_ms:0, target_ms:480_000, percentage:0, breach_imminent:false}` — **constantes**.
+   Logo o rótulo *"Total service SLA"* e o comentário do contrato (`agent-registry.ts:390`) mentem
+   **sozinhos**, sem consumidor. É por isso que *"partir em dois campos"* foi descartado: o segundo
+   campo não teria quem o lesse. Bug próprio, registrado em `TODO.md` § *Analytics e UI*.
+
+### Medido (36 pools · 63 segmentos de espera)
+
+- faixas: **18** entre 15 s e 10 min · **0** entre 10 min e 1 h · **18** com ≥ 1 h · 0 ausente
+- **dois defaults convivem em código**: `30_000` (formulário, `PoolsPage.tsx`) × `480_000`
+  (`kafka_listener.py:218` · `registry.py:3133` · `supervisor.ts:74`). Um campo com dois defaults
+  não tem default.
+  ⚠️ **Correção da própria medição (mesma sessão):** afirmou-se aqui que o `480_000` *"já vazou
+  para o store"*, porque 2 pools estão nesse valor. **Falso** — `demo_ia` e `sac_ia` o **declaram
+  explicitamente** no YAML de seed (`tenant_demo.yaml:159,166`). É coincidência de valor, não
+  vazamento. Segunda afirmação não medida desta sessão; a primeira foi a duplicação de segmento.
+- **pela definição decidida o campo vale para 2 pools de 36** — `retencao_humano` e
+  `especialista_onboarding`, os únicos humanos `push`. Os outros 4 humanos são `pull` (item de
+  trabalho) e já estão em valores de prazo-de-processo: **o parque foi configurado seguindo uma
+  distinção que o código não faz.**
+- composição das 63 esperas: **43** em fila humana `push` · **19** em pool de **IA** · **1** em fila
+  `pull` ⇒ o relatório Fila/SLA mistura hoje **32%** que não pertencem, e é o que a D14-i encontra.
+
+### ⚠️ Previsão ERRADA, e o erro é o achado
+
+Previu-se o aging inerte como **latente** (zero esperas em pool de alvo ≥1 h). Medido: **16 das 63**
+estão lá. Mas o dano é **nulo** — as esperas nesses pools são de **5 a 14 segundos** (`sla_ratio`
+entre 0,00005 e 0,0017), e quem espera 8 s não precisa de aging.
+
+**O instrumento não sabia responder o que importava.** Três ramos bem formados
+(`VIVO`/`LATENTE`/`INCONCLUSIVO`) com testemunha de presença ao lado — e mesmo assim colapsavam dois
+fatos num só: *"contato esperou aqui"* × *"a espera foi longa o bastante para o alvo importar"*.
+Publicar o ramo teria anunciado um defeito que não existe. Virou invariante no `CLAUDE.md`
+§ Postura de Engenharia. Único caso que chega perto: `aprovacao_credito`, **4,9 min contra alvo de 2
+dias** — com alvo de espera estaria em `sla_ratio ≈ 0,99`; havia **um item só** na fila, então não
+existia ordem a inverter. Dano zero por sorte de população, não por proteção.
+
+### Consequências fechadas na mesma sessão (contrato, rótulo, default)
+
+O que a decisão gerava de barato foi feito, porque decisão registrada em prosa com o contrato
+afirmando o oposto é a pior combinação: quem abre o Zod amanhã lê o contrário, e o Zod é que vale.
+
+- **Contrato** (`schemas/agent-registry.ts`): o comentário dizia *"mede o atendimento como um todo"*.
+  Passa a declarar alvo de **espera em fila**, com a distinção **alvo × teto** nomeada (o teto é
+  `queue_config.max_wait_s` / `queue_max_wait_by_channel`, onde `0` é VETO) e os sete consumidores
+  listados. O `max_reply_time_ms` ao lado ganhou a contrapartida: os dois são os **únicos** alvos de
+  tempo do produto, um antes do atendimento e outro dentro dele.
+- **Rótulo** nos dois locales: `configRecursos` "SLA (ms)" → "Alvo de espera em fila (ms)", com hint
+  explicando alvo≠teto; `contacts` "SLA alvo" → "Alvo de espera" (coluna vizinha de "Espera média").
+- **Default**: `SLA_TARGET_MS_FALLBACK` em `routing-engine/models.py`, citado por `kafka_listener` e
+  `registry` — e os dois passaram a **logar** quando o fallback dispara. O campo é obrigatório no
+  contrato, então o ramo só existe para evento malformado; fabricar um alvo de espera em silêncio
+  alimenta aging, breach, ETA **ao cliente** e aderência de SLA sem nada ficar vermelho.
+  `supervisor.ts` ficou **comentado, não alterado** — é contrato de tool MCP com consumidores não
+  mapeados, e o comentário nomeia a segunda dívida dele: o `urgency` compara atendimento total com
+  alvo de espera, razão que não mede nada.
+
+🔴 **Achado da varredura, e não é duplicação: `sla_default_ms` NÃO TEM LEITOR.** A chave é semeada
+(`config-api/seed.py`), cacheada (`routing_config.py`), emitida (`kafka_emitter.py`), coberta por
+teste e **exibida ao operador** na tela do namespace `routing` — e `routing_config.get(...)` não
+aparece em lugar nenhum fora dos testes. Editar não muda comportamento. *Botão que promete efeito e
+não tem é pior que default duplicado.* Documentado no ponto de definição e registrado no `TODO.md`;
+remover exige cuidado porque `smoke_config_routing_orphan_keys.sh` a usa como **canário**.
+
+⏳ Restam 3 cópias do `480_000` com donos diferentes (`instance_bootstrap.py`, `bpm.ts`, `seed.py`).
+
+### Mudanças
+
+- `infra/test/q_sla_target_inventory.py` — inventário por faixa × `purpose`/`agent_kind`/`dispatch`/
+  canal, com três testemunhas (duas populações · dano vivo ou latente · dois defaults).
+- `infra/test/q_sla_band_wait_witness.sh` — esperas `role='queue'` **cruas por pool** (a faixa se lê
+  contra o inventário; lista de pool embutida em script envelhece calada) + testemunha de presença.
+- `CLAUDE.md` — § Routing Algorithm regra **4b** (alvo × teto, e os 7 consumidores) e § Postura de
+  Engenharia (o invariante do instrumento fiel à proposição errada).
+- `TODO.md` § D14.1 reescrita; a contagem de 08-28 fica, a correlação com `purpose` fica **riscada**.
+
+### Consequência entregue na mesma sessão — a barra de SLA do Console SAIU
+
+Decisão do dono, depois de localizar o indicador na tela: **remover**. Não existe alvo de
+atendimento por segmento no produto, e a barra não lia o campo (constantes). O relógio ⏱ ao lado
+passa a mostrar o **tempo neste segmento**, ancorado no servidor.
+
+- **Produtor** — `server.ts`: bloco `sla` removido da resposta de `/api/supervisor_state/:id`.
+- **`platform-ui`** — `ContactList` (barra + cor de urgência da borda, que usava o mesmo cálculo),
+  `EstadoTab` (a seção virou contagem de turnos), `Header` (prop deprecated), `AgentAssistPage`
+  (a linha que fazia o `480_000` constante sobrescrever o alvo do pool a cada poll), `types`
+  (`SlaState` e `ContactSession.slaTargetMs` — campo alimentado e nunca mais lido).
+- **`agent-assist-ui`** — mesmas quatro superfícies no app legado da 5173.
+- **i18n** — `contactList.segmentTime` nos dois locales; `estado.slaTurn`/`slaRisk` → `turnCount`.
+
+⚠️ **Achado ao remover:** das seis superfícies, **cinco** guardavam com `sla &&` e teriam degradado
+sozinhas; **`agent-assist-ui/EstadoTab.tsx:59` não guardava** e teria lançado em runtime assim que o
+servidor parasse de enviar o campo. Tirar o produtor sem varrer os consumidores teria trocado um
+indicador morto por uma tela branca.
+
+### E o relógio ao lado tinha defeito PRÓPRIO — zerava no F5
+
+`sessionStartedAt` era **`new Date()`**: o instante em que aquela aba criou o objeto do contato. Como
+o `conversation.assigned` é **republicado na reconexão**, todo F5 recriava o contato e zerava o
+relógio do atendimento.
+
+O carimbo do servidor **já existia e já viajava**: `orchestrator-bridge/main.py:1155` grava
+`assigned_at`, o **mesmo `event_json`** é persistido em `pool:pending_assignment` (⇒ o replay
+preserva o valor original), e `WsConversationAssigned.assigned_at` já era campo **obrigatório** no
+tipo do front. Ninguém o lia.
+
+Corrigido nos dois apps via `parseAssignedAt`, com **degradação barulhenta**: carimbo ausente ou
+ilegível volta ao relógio do navegador **e loga**. Um fallback mudo aqui restauraria exatamente o
+defeito que a função existe para fechar, e sem rastro — relógio errado conta igualzinho a relógio
+certo.
+
+⏳ **Não decidido:** exibir *tempo de contato* e *espera antes de chegar ao agente* (os outros dois
+fatos que o modelo tem e a tela não mostra). São informação nova, não conserto.
+
+⚠️ **Fora isso, nada de comportamento mudou.** O trabalho que a decisão gera está enfileirado no `TODO.md` em
+5 passos (contrato → rótulo → default único → o que fazer com os 34 pools → onde os valores altos
+deviam estar), e o passo 4 tem **pré-requisito não medido**: o que `scorer`/`decide`/`saturated`/
+`main.py:1055` fazem com `null`. `max(sla, 1)` sugere degradação limpa, mas o `saturated` multiplica
+e o `main.py:1055` publica ETA ao cliente. Medir antes de anular.
+
+### Resíduos registrados sem perseguir
+
+- `sac_ia` tem **2 esperas de 0 ms** — a espera fantasma da Mudança 37, que consta como corrigida.
+  Ou é dado pré-correção, ou a correção não pegou tudo.
+- `retencao_humano` mantém os **5 segmentos de fila abertos** já conhecidos (todos do bridge).
+
+---
+
 ## O segmento de espera passou a discriminar a PASSAGEM — perda de dado medida e fechada (2026-08-24)
 
 Fecha a opção **(A)** da passagem 09-01 (`TODO.md` § *"janela de espera"*, resíduo aberto em 08-21).

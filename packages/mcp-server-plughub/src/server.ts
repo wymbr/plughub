@@ -1625,12 +1625,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
           history:    turns.map((t: Record<string, unknown>) => t.intent).filter(Boolean),
         },
         flags: (partials.flags ?? []) as string[],
-        sla: {
-          elapsed_ms:      0,
-          target_ms:       480_000,
-          percentage:      0,
-          breach_imminent: false,
-        },
+        // ── `sla` REMOVIDO (D14.1, 2026-08-24) ────────────────────────────────
+        //
+        // Este bloco devolvia CONSTANTES — `elapsed_ms: 0`, `target_ms: 480_000`,
+        // `percentage: 0`, `breach_imminent: false` — e não cálculo nenhum. A
+        // Console consome ESTE endpoint (não a tool `supervisor_state`, que
+        // calcula mas devolve `urgency`, nome que a UI não lê), então a barra de
+        // SLA da tela normalizava todo contato por 8 min independentemente do
+        // pool, e o `breach_imminent: false` desarmava o `??` da própria UI —
+        // um default do produtor derrubando a guarda do consumidor, exatamente
+        // como no caso de sentimento.
+        //
+        // Removido junto com a barra, e não substituído por cálculo: `sla_target_ms`
+        // é alvo de ESPERA EM FILA (D14.1) e a espera já terminou quando o contato
+        // chega ao Console. **Não existe alvo de atendimento por segmento neste
+        // produto** — reintroduzir o campo exige criar o alvo primeiro.
+        // Ver `TODO.md` § Analytics e UI.
         customer_context: {
           historical_insights:   ctxInsights,
           conversation_insights: turns

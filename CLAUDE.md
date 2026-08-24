@@ -302,6 +302,20 @@ system_error         — unrecoverable error
   promete invariante sem mecanismo que a imponha, exatamente como o DDL de `participation_intervals`.
   Ver `CHANGELOG.md` 2026-08-24 e `conference-mechanics.md` § Mudança 38.
 
+- **Um instrumento pode ser falseável, ramificado e honesto — e ainda medir a proposição ERRADA.**
+  Não é o teste que não pode reprovar (essa família já está abaixo); é o teste que reprova
+  corretamente **uma pergunta adjacente à que se fez**. Medido em 2026-08-24 na D14.1: o probe do
+  aging inerte tinha três ramos (`VIVO`/`LATENTE`/`INCONCLUSIVO`) e testemunha de presença ao lado,
+  e mesmo assim não sabia responder o que importava — porque *"contato esperou neste pool"* e *"a
+  espera foi longa o bastante para o alvo importar"* são **dois fatos**, e só o segundo é dano. A
+  medição saiu `VIVO` (16 de 63 esperas em pools de alvo absurdo) enquanto o dano era **zero** (as
+  esperas ali são de 5 a 14 segundos, e quem espera 8 s não precisa de aging). Um relatório fiel ao
+  ramo teria publicado um defeito que não existe. **Ao desenhar o veredicto, pergunte de qual
+  PROPOSIÇÃO cada ramo é evidência** — e quando a pergunta tem a forma *"isto machuca?"*, exposição
+  e dano são grandezas separadas, que precisam de dois números, nunca de um ramo só. *(Irmão de
+  `exposicao-latente-e-hipotese`, na direção inversa: lá faltou contar quem sofre antes de declarar
+  inócuo; aqui contou-se quem foi exposto e chamou-se de sofrimento.)*
+
 - **Quando a spec e o código discordam, desconfie dos DOIS.** O merge lia um `started_at` que metade dos
   canais não escrevia; a resposta certa não foi fazer o timestamp funcionar, foi ver que a aciclicidade
   **nunca deveria depender de relógio** (união de componentes disjuntas). O teste não verifica só a
@@ -685,6 +699,18 @@ Ranges: [ 0.3, 1.0] → satisfied | [-0.3, 0.3] → neutral | [-0.6,-0.3] → fr
 2. **agent pause is a hard filter** — paused agents excluded
 3. **gateway heartbeat TTL** — agents on gateways >90s expired = excluded
 4. **SLA lazy evaluation** — `min(wait_time / sla_target, max_score)` at queue head only
+4b. **`sla_target_ms` é ALVO DE ESPERA EM FILA, nunca de atendimento total** *(D14.1, decidido
+   2026-08-24)*. É **alvo** (soft): o aging cresce até ele e o `breach_bonus` acelera depois — o
+   contato **sobe na fila**, nada é encerrado. Quem encerra é o **teto** (`queue_config.max_wait_s`
+   e `queue_max_wait_by_channel`, onde **`0` é VETO**), e confundir os dois é o erro que fez metade
+   do parque carregar prazo de processo num campo que não segura ninguém: `limite_entrega` com 7
+   dias não retém por 7 dias, só torna o aging inerte. Licença de IA tampouco passa por aqui — a
+   admissão tem portão próprio (`{t}:admission:kind:ai`). O campo tem **sete consumidores em
+   comportamento e relatório** (`scorer.py:177` · `decide.py:287` · `saturated.py:92/109/126` ·
+   `main.py:1055`, que publica ETA **ao cliente** · `query.py:240` · `reports_query.py:3803` ·
+   `:5827`) e **nenhum** que o leia como atendimento total — o rótulo *"Total service SLA"* e o
+   comentário de contrato (`agent-registry.ts:390`) mentem sozinhos, e a barra do Console que
+   pareceria consumi-los lê constantes (`server.ts:1628`). Ver `TODO.md` § D14.1.
 5. **Tie-breaking** — equal-score pools broken by shortest queue length
 6. **close_reason detection** — `no_resource` when no queue; `max_wait_exceeded` by lazy eval
 7. **O score do ZSET de fila é CHEGADA (`queued_at_ms`), nunca prioridade — e toda janela de

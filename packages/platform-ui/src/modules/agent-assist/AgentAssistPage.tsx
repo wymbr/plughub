@@ -271,7 +271,8 @@ export const AgentAssistPage: React.FC = () => {
         ...c,
         supervisorState: supervisorState ?? c.supervisorState,
         capabilities:    capabilities    ?? c.capabilities,
-        slaTargetMs:     supervisorState?.sla?.target_ms ?? c.slaTargetMs,
+        // `slaTargetMs` saiu na D14.1 — a linha aqui era a que fazia o 480_000
+        // constante do endpoint sobrescrever o alvo real do pool a cada poll.
       });
       return next;
     });
@@ -634,7 +635,6 @@ export const AgentAssistPage: React.FC = () => {
         poolId={headerPoolId}
         sessionId={selectedSessionId}
         wsStatus={wsStatus}
-        sla={selected?.supervisorState?.sla ?? null}
         sessionStartedAt={selected?.sessionStartedAt ?? null}
         contactCount={contacts.size}
         maxConcurrent={maxConcurrent}

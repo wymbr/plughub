@@ -50,6 +50,36 @@ const API_BASE = import.meta.env.VITE_REGISTRY_URL ?? "/v1";
 let toastSeq = 0;
 function makeToastId(): string { return `toast-${++toastSeq}`; }
 
+// ── Âncora do segmento — servidor, nunca navegador (D14.1, 2026-08-24) ─────
+//
+// `sessionStartedAt` era `new Date()`: o instante em que ESTA ABA criou o objeto.
+// Como o `conversation.assigned` é REPUBLICADO na reconexão (o bridge persiste o
+// mesmo `event_json` em `pool:pending_assignment`), todo F5 recriava o contato e
+// **zerava o relógio do atendimento**. O carimbo do servidor já viajava no evento
+// (`orchestrator-bridge/main.py:1155`) e o tipo já o declarava
+// (`WsConversationAssigned.assigned_at`) — só ninguém o lia.
+//
+// A degradação é BARULHENTA de propósito: carimbo ausente ou ilegível volta ao
+// relógio do navegador, mas LOGA. Um fallback mudo aqui restauraria exatamente o
+// defeito que esta função existe para fechar, e ele não deixa rastro na tela
+// (um relógio errado conta igualzinho a um relógio certo).
+function parseAssignedAt(raw: unknown, sessionId: string): Date {
+  if (typeof raw === "string" && raw) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return d;
+    console.warn(
+      `[agent-assist] assigned_at ilegível (${raw}) para session=${sessionId} — ` +
+      `relógio do segmento cai no relógio do navegador e ZERA no F5`,
+    );
+    return new Date();
+  }
+  console.warn(
+    `[agent-assist] conversation.assigned sem assigned_at para session=${sessionId} — ` +
+    `relógio do segmento cai no relógio do navegador e ZERA no F5`,
+  );
+  return new Date();
+}
+
 // ── ContactSession factory ─────────────────────────────────────────────────
 function makeContact(sessionId: string, poolId: string, channel = "webchat"): ContactSession {
   return {
@@ -59,7 +89,6 @@ function makeContact(sessionId: string, poolId: string, channel = "webchat"): Co
     channel,
     poolId,
     instanceId:        null,
-    slaTargetMs:       null,
     maxReplyTimeMs:    null,
     messages:          [],
     supervisorState:   null,
@@ -337,7 +366,7 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     // ── New contact assigned ──────────────────────────────────────────────
     if (event.type === "conversation.assigned") {
-      const { session_id, contact_id, pool_id, instance_id } = event;
+      const { session_id, contact_id, pool_id, instance_id, assigned_at } = event;
       const resolvedPool = pool_id ?? sourcePoolId;
 
       // Register session→pool mapping so send() targets the correct WS connection
@@ -350,7 +379,6 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
       notifiedAssignments.current.add(session_id);
 
       const poolInfo      = availablePools.find(p => p.pool_id === resolvedPool);
-      const slaTargetMs   = poolInfo?.sla_target_ms    ?? null;
       const maxReplyTimeMs = poolInfo?.max_reply_time_ms ?? null;
 
       setContacts(prev => {
@@ -362,7 +390,8 @@ export const AgentAssistProvider: React.FC<{ children: React.ReactNode }> = ({ c
           ...makeContact(session_id, resolvedPool),
           contactId:         contact_id ?? null,
           instanceId:        instance_id ?? null,
-          slaTargetMs,
+          // Âncora do SERVIDOR — sobrevive ao F5 (ver parseAssignedAt).
+          sessionStartedAt:  parseAssignedAt(assigned_at, session_id),
           maxReplyTimeMs,
           sessionClosed:     alreadyClosed,
           pendingCloseModal: alreadyClosed,

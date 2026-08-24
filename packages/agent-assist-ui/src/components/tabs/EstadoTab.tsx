@@ -48,7 +48,7 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
     );
   }
 
-  const { sentiment, intent, flags, sla, turn_count } = state;
+  const { sentiment, intent, flags, turn_count } = state;
 
   // Build chart data from trajectory
   const chartData = sentiment.trajectory.map((v, i) => ({
@@ -56,13 +56,11 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
     value: Math.round(v * 100) / 100,
   }));
 
-  const slaPercent = Math.min(sla.percentage, 100);
-  const slaBar =
-    sla.breach_imminent
-      ? "bg-red-500"
-      : slaPercent > 70
-      ? "bg-yellow-400"
-      : "bg-green-500";
+  // Barra de SLA removida na D14.1 (2026-08-24). Diferente do Header e do
+  // ContactList deste mesmo app, esta era a ÚNICA superfície SEM guarda `sla &&`:
+  // com o servidor deixando de enviar o bloco, `sla.percentage` lançaria em
+  // runtime. Exibia "0%" em toda sessão desde sempre — `percentage` nunca teve
+  // produtor. Ver `TODO.md` § Analytics e UI.
 
   return (
     <div className="flex flex-col gap-4 p-3 overflow-y-auto h-full">
@@ -167,27 +165,11 @@ export const EstadoTab: React.FC<EstadoTabProps> = ({ state }) => {
         </section>
       )}
 
-      {/* SLA */}
+      {/* Turnos — o que a seção de SLA tinha de informativo. */}
       <section>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-          SLA · Turn {turn_count}
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+          Turnos · {turn_count}
         </h3>
-        <div className="flex items-center gap-2">
-          <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${slaBar}`}
-              style={{ width: `${slaPercent}%` }}
-            />
-          </div>
-          <span className="text-xs text-gray-600 w-10 text-right">
-            {slaPercent.toFixed(0)}%
-          </span>
-        </div>
-        {sla.breach_imminent && (
-          <p className="text-xs text-red-600 font-semibold mt-1 animate-pulse">
-            SLA em risco iminente
-          </p>
-        )}
       </section>
     </div>
   );

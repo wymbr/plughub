@@ -1,18 +1,19 @@
 /**
  * Header
- * Shows agent name, pool, session ID, WS connection status, SLA progress bar,
- * and a live handle-time counter (elapsed since conversation.assigned).
+ * Shows agent name, pool, session ID, WS connection status, and a live
+ * handle-time counter (elapsed since conversation.assigned).
+ *
+ * A barra de SLA saiu na D14.1 (2026-08-24) — ver `TODO.md` § Analytics e UI.
  */
 
 import React, { useEffect, useState } from "react";
-import { SlaState, WsStatus } from "../types";
+import { WsStatus } from "../types";
 
 interface HeaderProps {
   agentName: string;
   poolId: string;
   sessionId: string | null;
   wsStatus: WsStatus;
-  sla: SlaState | null;
   /** Timestamp at which the current conversation was assigned to this agent. */
   sessionStartedAt: Date | null;
 }
@@ -40,7 +41,6 @@ export const Header: React.FC<HeaderProps> = ({
   poolId,
   sessionId,
   wsStatus,
-  sla,
   sessionStartedAt,
 }) => {
   // Live handle-time counter — ticks every second while a session is active.
@@ -59,12 +59,7 @@ export const Header: React.FC<HeaderProps> = ({
     return () => clearInterval(id);
   }, [sessionStartedAt]);
 
-  const slaPercent = sla ? Math.min(sla.percentage, 100) : 0;
-  const slaColor =
-    !sla ? "bg-gray-300"
-    : sla.breach_imminent ? "bg-red-500"
-    : slaPercent > 70 ? "bg-yellow-400"
-    : "bg-green-500";
+  // Barra de SLA removida na D14.1 (2026-08-24) — ver `TODO.md` § Analytics e UI.
 
   return (
     <header className="bg-white border-b border-gray-200 px-4 py-2 flex-shrink-0">
@@ -104,27 +99,6 @@ export const Header: React.FC<HeaderProps> = ({
               >
                 {formatElapsed(handleMs)}
               </span>
-            </div>
-          )}
-
-          {/* SLA bar */}
-          {sla && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">SLA</span>
-              <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${slaColor}`}
-                  style={{ width: `${slaPercent}%` }}
-                />
-              </div>
-              <span className="text-xs text-gray-600 w-10 text-right">
-                {formatElapsed(sla.elapsed_ms)}
-              </span>
-              {sla.breach_imminent && (
-                <span className="text-xs font-semibold text-red-600 animate-pulse">
-                  BREACH
-                </span>
-              )}
             </div>
           )}
 

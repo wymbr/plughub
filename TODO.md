@@ -1457,14 +1457,64 @@ para medir ontem). `sessions.sla_target_ms` fica como **projeção**, nunca font
 ⚠️ **Os números de conformidade VÃO mudar** — contar antes, por pool, e declarar. Migrar os três
 leitores é fatia própria; não entra no P2.
 
-#### ⚠️ E antes do grão: o campo é DECLARADO como um SLA e CONSUMIDO como outro (D14.1)
+#### ✅ D14.1 DECIDIDA (2026-08-24): `sla_target_ms` := **alvo de ESPERA em fila**
 
-- **Rótulo** (`configRecursos.json:29`, nos DOIS locales): *"Total service SLA (ms)"* / *"SLA total do
-  atendimento (ms)"*.
-- **Consumidores**: todos comparam com **ESPERA** — `query.py:240`, `reports_query.py:3802-3803`,
-  Fila/SLA `:5743`/`:5816`.
+Decisão do dono do produto, com o inventário abaixo como evidência: *"é o tempo de espera alvo na
+fila que leva ao SLA desejado numa fila de espera humana"*.
+
+**Não foi escolha entre duas leituras — é o que o código já faz.** A medição derrubou a premissa
+desta própria seção (ver § *"O que a medição corrigiu"*): a metade "atendimento total" do inventário
+é **fantasma**, e o campo é consumido em comportamento **só como espera**.
+
+⏳ **Sub-pergunta que a definição abre e que NÃO foi decidida:** o dono disse *"fila humana"*, e o
+mecanismo não distingue — dos 63 segmentos `role='queue'` medidos, **19 estão em pools de IA**.
+Ou "alvo de espera" vale para qualquer fila (e o rótulo perde o "humana"), ou pool de IA não tem
+alvo e os 16 pools de IA da faixa de espera deviam carregar `null`. Decidir antes da D14 (ii).
+
+##### O que a medição corrigiu nesta seção
+
+⚠️ **A frase original — *"Consumidores: todos comparam com ESPERA"* — estava ERRADA por omissão**,
+e listava só os 3 leitores de analytics. São **13 sites em dois campos**, e o lado "espera" inclui
+**quatro que decidem comportamento**, que esta seção nunca mencionou:
+
+| lê como | onde |
+|---|---|
+| atendimento total *(**fantasma** — ver abaixo)* | `schemas/agent-registry.ts:390` (contrato) · `configRecursos.json:29` (rótulo, 2 locales) · `supervisor.ts:202` · `ContactList.tsx:60,149` · `agent-assist-ui` ×3 |
+| espera — **relatório** | `query.py:240` · `reports_query.py:3803` · `:5827` |
+| espera — **comportamento** | `scorer.py:177` (aging + breach do ZSET) · `decide.py:287` (`sla_urgency > 1.0 → inf`) · `saturated.py:92/109/126` (ETA, `>2.0` → redirect + oncall) · `main.py:1055` (`avg_handle_ms = sla×0.7` → ETA publicada **ao cliente**) |
+
+⚠️ **O lado "atendimento total" NÃO TEM CONSUMIDOR VIVO.** Medido: o `supervisor_state` tem duas
+implementações e quem alimenta a tela é o endpoint HTTP (`useSupervisorState.ts:30` →
+`server.ts:1617`), que devolve `sla{elapsed_ms:0, target_ms:480_000, percentage:0,
+breach_imminent:false}` — **constantes, não cálculo**. Logo o campo nunca chegou àquela leitura.
+Bug próprio, fora do escopo da D14.1 — ver § *Analytics e UI*.
+
 - **Default do próprio formulário**: `30000` ms (`PoolsPage.tsx:603,755`) — 30 s só é alvo de espera.
   O código contradiz o rótulo até no valor que escreve.
+- ⚠️ **E há um SEGUNDO default, em código.** `480_000` vive em `kafka_listener.py:218` ·
+  `registry.py:3133` · `supervisor.ts:74`. **Um campo com dois defaults não tem default** — quem lê
+  a tela e quem lê o runtime discordam quando a config está ausente.
+  ⚠️ **Não é vazamento, é coincidência** *(corrigido na mesma sessão)*: os 2 pools em 8 min
+  (`demo_ia`, `sac_ia`) **declaram** o valor no YAML de seed (`tenant_demo.yaml:159,166`). A
+  primeira versão desta linha dizia *"o default do runtime vazou para o store"* — afirmação não
+  medida.
+
+##### ⚠️ A intenção que o dono descreveu para os valores ≥ 1 h já tem campo próprio
+
+O dono lê os 18 valores altos como *"tempo máximo de espera por recurso de IA… o tempo que o canal
+suporta ficar em mudo antes de cair"*. **Isso é `max_wait_s`/`channel_max_wait_s`, não
+`sla_target_ms`** — e a diferença é operacional, não terminológica:
+
+| | `sla_target_ms` | `max_wait_s` · `queue_max_wait_by_channel` |
+|---|---|---|
+| natureza | **alvo** (soft) | **teto** (hard) |
+| ao ser ultrapassado | aging cresce até ele, `breach_bonus` acelera depois — o contato **sobe na fila** | o contato é **encerrado** (`max_wait_exceeded`) |
+| encerra? | **nunca** | é o único que encerra |
+| mudo por canal | não | sim (`voice 300 · webrtc 300 · webchat 1800 · whatsapp 14400`; **`0` é VETO**) |
+
+⇒ `limite_entrega` com 7 dias **não segura ninguém por 7 dias**; quem seguraria é o `max_wait_s`,
+que aquele pool não declara. O valor alto só torna o aging inerte. Licença de IA também não passa
+por aqui — a admissão tem portão próprio (`{t}:admission:kind:ai`, `cause="quota"` na porta).
 
 **Já morde:** `aprovacao_deploy` está com **86 400 000 ms (24 h)** — coerente com o rótulo, absurdo como
 espera ⇒ **aquele pool não pode violar SLA** e a conformidade dele é 100% por construção (verde que não
@@ -1475,19 +1525,113 @@ no mesmo campo, em pools diferentes.**
 (alvo de espera, plausível) × **18 pools com ≥ 1 hora** (prazo de processo, impossível violar como
 espera): 5 em 1 h, 9 em 24 h, 3 em 48 h e **um em 7 DIAS** (`limite_entrega`). O default de 30 s é usado
 por **2** pools ⇒ o parque foi configurado à mão, seguindo o rótulo.
-**A divisão coincide com o TIPO de pool** — o grupo ≥1 h é exatamente processo/aprovação/workflow, onde
-não há cliente em fila. **O discriminador é o mesmo da D13** (contato × interno), o que torna a correção
-tratável sem adivinhar intenção pool a pool. E significa que **todo número agregado de SLA hoje mistura
-duas populações incomparáveis**.
+E significa que **todo número agregado de SLA hoje mistura duas populações incomparáveis**.
+
+~~**A divisão coincide com o TIPO de pool** … **O discriminador é o mesmo da D13** (contato × interno),
+o que torna a correção tratável sem adivinhar intenção pool a pool.~~
+❌ **REFUTADO por medição (2026-08-24, `infra/test/q_sla_target_inventory.py`).** `purpose` separa
+**2 de 18**: dezesseis pools da faixa ≥1 h são `purpose=contact`. O discriminador real é **como o
+pool é ENTRADO**, e ele não é um campo só:
+
+| entrada | n | o que o alvo significa lá |
+|---|---|---|
+| contato espera atendimento (`push` + canal de cliente) | 18 | **espera na fila** — o único caso em que o campo é o que a D14.1 decidiu |
+| trigger de workflow (`webhook` em `channel_types`) | 12 | prazo do processo |
+| item de trabalho (`dispatch=pull`) | 4 | prazo do item |
+| I/O de `delegate`/`collect` | 2 | prazo de resposta do **cliente** |
+
+⚠️ **Os 2 últimos não têm discriminador no registro do pool.** `limite_retorno` e
+`portabilidade_confirmacao` são `push` + canal de cliente, iguais aos 18 — o que os separa é serem
+alvo de `delegate` (`skill_limite_entrada_v1:378`, `skill_limite_entrega_v1:70` via
+`channel_policy`, `agente_confirmacao_portabilidade_v1:5`), fato do **skill que chama**, não do pool.
+Só o próprio VALOR os distingue hoje, o que é circular para migração automática. Qualquer migração
+em massa precisa tratá-los à mão ou introduzir o discriminador que falta.
+
+⚠️ **E a definição do dono estreita mais: são 2 pools, não 18.** *"fila de espera humana"* — dos 6
+pools humanos, só **`retencao_humano`** (5 min) e **`especialista_onboarding`** (10 min) são fila de
+espera (`push`); os outros 4 são `pull`, que é item de trabalho. Os 18 da faixa de espera são **16 de
+IA**. Consistência interna que vale registrar: os 4 humanos `pull` já estão em valores de
+prazo-de-processo (1d/2d) — **o parque foi configurado seguindo uma distinção que o código não faz.**
 
 **Três SLAs no domínio, um campo e meio:** espera (fila, grão de segmento) · atendimento total (o que o
 rótulo promete) · tempo máx. de resposta por mensagem (**já tem campo próprio** — *Max. reply time* —, e
 isso é a evidência de que a separação é natural).
 
-⚠️ **Decidir o que `sla_target_ms` É vem ANTES de migrar os leitores para o segmento** — senão leva-se
-número errado para grão melhor. Saídas: renomear o rótulo para o que o código faz (barato; reabre "onde
-fica o SLA de atendimento total?") ou **partir em dois campos** (exige varrer os valores já
-configurados, porque há pool preenchido segundo a leitura errada).
+##### O aging inerte: mecanismo VIVO, dano medido NULO *(2026-08-24, `q_sla_band_wait_witness.sh`)*
+
+Com alvo de 24 h, `sla_ratio` após 10 min de espera é 0,0069 ⇒ o aging vale ~0,7% do fator e o
+`breach_bonus` é **zero para sempre**; o ramo de prioridade máxima absoluta (`sla_urgency > 1.0 →
+inf`) é inalcançável em qualquer horizonte prático. Previu-se que isso fosse **latente** (nenhuma
+espera em pool da faixa ≥1 h). **Previsão ERRADA:** 16 das 63 esperas estão lá — `formfill_demo_ia`
+9 · `limite_processo` 5 · `aprovacao_credito` 1 · `wrapup_detached_ia` 1.
+
+Mas o dano é outro fato, e ele é **nulo**: as esperas nesses pools são de **5 a 14 segundos**, e
+quem espera 8 s não precisa de aging. O `sla_ratio` real ficou entre 0,00005 e 0,0017.
+
+⚠️ **Lição de método — o instrumento não sabia responder o que importa.** Os três ramos eram
+VIVO / LATENTE / INCONCLUSIVO, e a verdade não é nenhum: *"contato esperou aqui"* e *"a espera foi
+longa o bastante para o aging importar"* são **dois fatos**, e o probe colapsou os dois num ramo só.
+Só o segundo é dano. Irmão de *"um contador de ausência precisa de contador-testemunha"*: um
+predicado que responde pergunta adjacente passa por resposta.
+
+Único caso que chega perto: **`aprovacao_credito`, 4,9 min contra alvo de 2 dias**. Com alvo de
+espera (5 min) aquele contato estaria em `sla_ratio ≈ 0,99` — aging máximo, quase breach. Havia
+**um item só** na fila, então não existia ordem a inverter. Mecanismo exercido, dano zero por sorte
+de população — não por proteção.
+
+##### Composição dos 63 segmentos de espera, pela definição decidida
+
+| classe | n | pertence ao Fila/SLA? |
+|---|---|---|
+| fila humana `push` (`retencao_humano` 41 · `especialista_onboarding` 2) | **43** | sim |
+| espera em pool de **IA** (6 pools) | **19** | ⏳ sub-pergunta acima |
+| item de fila `pull` (`aprovacao_credito`) | **1** | não — é prazo de item |
+
+⇒ o relatório Fila/SLA mistura hoje 43 que pertencem com 20 que não: **32% de contaminação**, e é
+isso que a **D14-i** encontra ao parar de colapsar. Testemunha de presença: 63 segmentos, 9 pools,
+56 sessões — o instrumento estava medindo.
+
+**Resíduos que a medição jogou fora, registrados sem perseguir:** `sac_ia` tem **2 esperas de 0 ms**
+(a espera fantasma da Mudança 37, que consta como corrigida — ou é dado pré-correção, ou a correção
+não pegou tudo) e `retencao_humano` mantém os **5 segmentos abertos** já conhecidos.
+
+~~⚠️ **Decidir o que `sla_target_ms` É vem ANTES de migrar os leitores para o segmento**… Saídas:
+renomear o rótulo … ou **partir em dois campos**…~~
+✅ **Decidido 2026-08-24 (acima): := alvo de ESPERA em fila.** E a saída escolhida é a barata, por
+um motivo que só a medição deu: **"partir em dois campos" não se justifica**, porque o segundo campo
+não teria consumidor — o lado "atendimento total" é fantasma (`server.ts:1628` devolve constantes).
+Não se cria campo para alimentar tela que não lê.
+
+**Trabalho que a decisão gera, em ordem, e nada dele é a D14 ainda:**
+
+1. **Contrato** — `schemas/src/agent-registry.ts:390` afirma *"mede o atendimento como um todo"*.
+   É a fonte canônica e está errada; corrigir primeiro (comentário que promete o que ninguém impõe,
+   mesma família do DDL de `participation_intervals`).
+2. **Rótulo** — `configRecursos.json:29` nos DOIS locales; `slaHint` passa a dizer espera em fila.
+3. ✅ **Default nomeado e barulhento (2026-08-24)** — não eram dois, são **sete** sites. Feito:
+   `SLA_TARGET_MS_FALLBACK` em `routing-engine/models.py`, citado por `kafka_listener.py` e
+   `registry.py`, os dois agora **logando** quando o fallback dispara (o campo é obrigatório no
+   contrato Zod, então o ramo só existe para evento malformado — e fabricar alvo de espera em
+   silêncio alimenta aging, breach, ETA ao cliente e aderência de SLA). `supervisor.ts` ficou
+   comentado, não alterado: é contrato de tool MCP com consumidores não mapeados.
+   ⏳ **Restam 3 cópias, cada uma com dono diferente:** `orchestrator-bridge/instance_bootstrap.py:709`
+   (placeholder do bootstrap) · `mcp-server/tools/bpm.ts:281` · `config-api/seed.py:158`.
+   🔴 **E um achado que não é duplicação: `sla_default_ms` NÃO TEM LEITOR.**
+   `routing_config.get("sla_default_ms")` não aparece fora dos testes — a chave é semeada
+   (`config-api/seed.py:157`), cacheada (`routing_config.py:47`), emitida
+   (`kafka_emitter.py:11`), testada, e **exibida ao operador** na tela do namespace `routing`
+   (`ROTEIRO_TESTES.md:209`). Editar não muda comportamento nenhum. Botão que promete efeito e
+   não tem é pior que default duplicado. ⚠️ Remover exige cuidado: o
+   `smoke_config_routing_orphan_keys.sh:118` a usa como **canário** de "namespace intacto".
+4. **Os 34 pools que não são fila de espera** — ⏳ **decisão pendente**, e a opção que a medição
+   sugere é `null` onde não é fila (torna *"não medimos"* distinguível de *"medimos e deu verde"*,
+   e faz os 4 sites de roteamento caírem no ramo sem alvo em vez de num alvo falso). **Pré-requisito
+   não medido:** o que `scorer.py:177`, `decide.py:287`, `saturated.py:92` e `main.py:1055` fazem
+   com `null`/`0` — `max(pool.sla_target_ms, 1)` sugere que degradam sem quebrar, mas o
+   `saturated` multiplica e o `main.py:1055` publica ETA **ao cliente**. Medir antes de anular.
+5. **Onde os valores altos deviam estar** — se expressam teto, o campo é `queue_config.max_wait_s`
+   (ver tabela alvo × teto acima). Migração à mão: os 2 pools de `delegate` I/O não têm
+   discriminador no registro.
 
 ### Decisão de nome: **`queue` := espera** (tomada 2026-08-28, com inventário como evidência)
 
@@ -3986,6 +4130,94 @@ Descritivo técnico-funcional consolidado (com a seção de roadmap §20.7): [`d
 ---
 
 ## 📂 TEMA · Analytics e UI
+
+## ✅ A barra de SLA do Console não estava ligada em nada — REMOVIDA *(medido e resolvido 2026-08-24)*
+
+**Achado colateral da D14.1.** Decisão do dono: **remover** (não existe alvo de atendimento por
+segmento no produto) e o relógio ⏱ passa a mostrar o **tempo neste segmento**, ancorado no servidor.
+Entregue — ver `CHANGELOG.md` de 2026-08-24. O diagnóstico abaixo fica como registro do que havia.
+
+O `supervisor_state` tem **duas implementações**, e quem alimenta a tela é o endpoint
+HTTP (`useSupervisorState.ts:30` → `server.ts:1617`) — não a tool. Ele devolve:
+
+```
+sla: { elapsed_ms: 0, target_ms: 480_000, percentage: 0, breach_imminent: false }
+```
+
+**Constantes.** Quatro efeitos, todos verificáveis na tela sem instrumentação:
+
+| superfície | onde | efeito |
+|---|---|---|
+| aba **Estado** (painel direito) | `EstadoTab.tsx:72,213,217` | `sla.percentage` = 0 sempre ⇒ barra vazia, "0%", breach nunca acende |
+| **barra fina** da linha na lista de contatos | `ContactList.tsx:146-147` | `slaFromState?.target_ms ?? contact.slaTargetMs` — `480_000` é **truthy** e vence **assim que o primeiro poll chega**; antes disso o valor do pool é usado ⇒ a barra **muda de escala sozinha** no primeiro poll e depois fica em 8 min para todo contato (um em `retencao_humano` 5 min e um em `limite_entrega` 7 d passam a ter a **mesma**) |
+| **borda esquerda** de urgência (3 px) + cor do cronômetro | `ContactList.tsx:60-66` | mesma coisa: 8 min para todos |
+| **breach** | `ContactList.tsx:151` | `slaFromState?.breach_imminent ?? (…)` — `false` é boolean, o `??` não cai fora ⇒ **o fallback que a UI já tinha está desarmado** |
+
+⚠️ **O último é o `CLAUDE.md` § Sentiment se repetindo palavra por palavra:** *"Um default no
+produtor derruba a guarda do consumidor sem deixar rastro."* Mesmo modo de falha, campo diferente —
+e, como lá, o defeito estava na implementação HTTP, não na tool que todo mundo lê primeiro.
+
+⚠️ **Nem o caminho calculado entrega.** `tools/supervisor.ts:202-204` computa de verdade
+(`elapsedMs`, `urgency`, `breach_imminent`) mas devolve **`urgency`**, e a UI lê **`percentage`**
+(`types.ts:157`) — nome que **nenhum produtor escreve**. Duas implementações, nenhuma alimenta o
+campo que a tela consome.
+
+**Saída escolhida: (a) a barra sai.** Uma barra que normaliza o tempo de um contato **já atendido**
+por um alvo de espera não mede nada — a espera acabou quando o contato chega ao Console. O que
+sobrou e mede de verdade é o `max_reply_time_ms` (campo real, por mensagem, com superfície própria
+no timer 💬). **Não foi consertado o cálculo**: dar precisão a um indicador sem alvo definido seria
+trocar um valor plausível por outro mais convincente.
+
+Removido nos **dois apps** — `platform-ui` (`ContactList`, `EstadoTab`, `Header`, `AgentAssistPage`,
+`types`) e `agent-assist-ui` (`ContactList`, `Header`, `EstadoTab`, `App`) — mais o produtor
+(`server.ts`), que era a origem. ⚠️ **Achado no caminho:** das seis superfícies, cinco guardavam com
+`sla &&` e teriam degradado sozinhas; **`agent-assist-ui/EstadoTab.tsx:59` não guardava** e teria
+lançado em runtime ao remover o campo do servidor.
+
+### ⚠️ E o relógio ao lado da barra tem defeito PRÓPRIO — a base é do navegador
+
+Achado ao investigar a barra (2026-08-24). O ⏱ rotulado *"Tempo em atendimento"*
+(`ContactList.tsx:140`) e o `HandleTimer` do `ActionBar.tsx:271` derivam ambos de
+`contact.sessionStartedAt`, que é **`new Date()`** — o instante em que **aquela aba do navegador**
+criou o objeto do contato (`AgentAssistContext.tsx:67`). **Nenhum caminho o preenche com dado do
+servidor**; a fábrica é o único escritor.
+
+Consequências:
+
+- **zera no F5.** O agente recarrega e o relógio do contato volta a zero.
+- não é o início do **segmento** nem o do **contato** — é *"desde que esta aba soube deste contato"*.
+- é a **mesma base** do `handleMs` que alimenta a barra morta e a cor da borda de urgência.
+
+⇒ Não são "uma barra quebrada e um relógio bom": são **dois indicadores sobre a mesma base errada**,
+e a barra só chama mais atenção por não ter número que denuncie. Consertar a barra sem consertar a
+base seria dar precisão a um valor que reinicia sozinho.
+
+**Três fatos distintos existem no modelo e nenhum está na tela** (levantado pelo operador, que
+perguntou se valeria exibir o tempo de contato):
+
+| fato | nível | valor para o agente ao vivo |
+|---|---|---|
+| tempo neste **segmento** | segmento | é o que o ⏱ tenta ser; alimenta o AHT do agente |
+| **tempo de contato** | sessão | *"está nisto há 22 min, com dois agentes antes de mim"* — muda o tom |
+| **espera antes de chegar a mim** | segmento de fila | *"esperou 8 min"* — muda a primeira frase |
+
+O terceiro passou a ser fato de ledger confiável com a fatia (A) de 2026-08-24 (antes duas esperas
+colidiam numa linha só).
+
+✅ **Decidido e entregue (2026-08-24): o ⏱ mostra o TEMPO NESTE SEGMENTO**, ancorado no `assigned_at`
+do servidor. O carimbo já viajava no evento (`orchestrator-bridge/main.py:1155`), o tipo já o
+declarava (`WsConversationAssigned.assigned_at`) e o replay preserva o valor original (o bridge
+persiste o **mesmo `event_json`** em `pool:pending_assignment`) — **só ninguém o lia**. Corrigido nos
+dois apps, com degradação BARULHENTA: carimbo ausente/ilegível volta ao relógio do navegador **e
+loga**. Fallback mudo aqui restauraria o defeito sem deixar rastro, porque relógio errado conta
+igualzinho a relógio certo.
+
+⏳ **Aberto:** exibir *tempo de contato* e *espera antes de chegar ao agente* segue sem decisão — são
+informação nova (não conserto), e pedem desenho de onde cabem na linha.
+
+⚠️ **Sem gate.** Falseabilidade sugerida: o probe pede `/api/supervisor_state/{sid}` de uma sessão
+viva e reprova se `sla.percentage` vier `0` **com** `elapsed_ms` `0` — testemunha de presença ao
+lado: `turn_count > 0` no mesmo payload (senão "sessão vazia" e "campo morto" têm a mesma cara).
 
 ## Console não libera a tela após `Transfer` — histórico e contexto ficam com a sessão já fechada *(inconformidade relatada 2026-08-24, NÃO diagnosticada)*
 

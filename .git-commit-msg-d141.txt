@@ -1,0 +1,96 @@
+D14.1: sla_target_ms := alvo de ESPERA em fila; remove a barra de SLA morta
+
+Decide o que `sla_target_ms` É, corrige o contrato/rótulo/default que afirmavam
+o contrário, e remove a barra de SLA do Console — que não lia o campo há tempo
+indeterminado. Desbloqueia a D14-i (parar de colapsar a sessão numa linha de
+fila) e, atrás dela, a D14 (SLA no grão do segmento).
+
+Nenhuma mudança de comportamento de roteamento ou relatório.
+
+DECISÃO (dono do produto)
+  "tempo de espera alvo na fila que leva ao SLA desejado numa fila humana".
+  Não foi escolha entre duas leituras — é o que o código já fazia.
+
+TRÊS AFIRMAÇÕES CORRIGIDAS POR MEDIÇÃO
+  1. TODO dizia "todos os consumidores comparam com ESPERA" listando 3 leitores
+     de analytics. São 13 sites, e o lado espera inclui QUATRO que decidem
+     comportamento: scorer.py:177 (aging+breach do ZSET), decide.py:287
+     (sla_urgency>1 → inf), saturated.py:92/109/126 (ETA, >2.0 → redirect+oncall)
+     e routing/main.py:1055 (avg_handle_ms = sla*0.7 → ETA publicada AO CLIENTE).
+  2. TODO dizia que a divisão coincide com `purpose` (contato × interno). Falso:
+     separa 2 de 18. O discriminador real é COMO O POOL É ENTRADO — espera de
+     contato 18 · webhook 12 · pull 4 · I/O de delegate 2. Os 2 últimos não têm
+     discriminador no registro do pool (são alvo de `delegate`, fato do skill).
+  3. O lado "atendimento total" é FANTASMA: server.ts devolvia
+     sla{elapsed_ms:0,target_ms:480_000,percentage:0,breach_imminent:false} —
+     constantes. Por isso "partir em dois campos" foi descartado: o campo novo
+     não teria leitor.
+
+MEDIDO (36 pools · 63 segmentos de espera)
+  faixas: 18 entre 15s e 10min · 0 entre 10min e 1h · 18 com >= 1h · 0 ausente
+  pela definição, o campo vale para 2 pools de 36 (retencao_humano,
+    especialista_onboarding — os únicos humanos push)
+  63 esperas: 43 em fila humana push · 19 em pool de IA · 1 em fila pull
+    => o Fila/SLA mistura hoje 32% que não pertencem (é o que a D14-i encontra)
+
+CONSEQUÊNCIAS FECHADAS
+  contrato  schemas/agent-registry.ts — dizia "mede o atendimento como um todo";
+            passa a declarar espera em fila, com alvo × teto nomeados e os sete
+            consumidores listados
+  rótulo    configRecursos "SLA (ms)" -> "Alvo de espera em fila (ms)" + hint
+            alvo!=teto; contacts "SLA alvo" -> "Alvo de espera" (2 locales)
+  default   SLA_TARGET_MS_FALLBACK em routing/models.py, citado por
+            kafka_listener e registry, ambos agora LOGANDO quando dispara (o
+            campo é obrigatório no contrato; fabricar alvo em silêncio alimenta
+            aging, breach, ETA ao cliente e aderência de SLA)
+
+BARRA DE SLA DO CONSOLE — REMOVIDA (7 superfícies + o produtor)
+  server.ts (bloco sla), platform-ui (ContactList barra + cor de urgência,
+  EstadoTab, Header, AgentAssistPage, types), agent-assist-ui (mesmas 4).
+  Efeitos que ela tinha: aba Estado sempre "0%"; todo contato normalizado por
+  8 min independentemente do pool; breach_imminent:false desarmando o `??` da
+  própria UI — um default do produtor derrubando a guarda do consumidor.
+  Ao remover: 5 das 6 superfícies guardavam com `sla &&`; agent-assist-ui/
+  EstadoTab.tsx:59 NÃO guardava e teria lançado em runtime.
+
+RELÓGIO DO SEGMENTO
+  sessionStartedAt era `new Date()` do navegador; passa a `assigned_at` do
+  servidor via parseAssignedAt, com degradação BARULHENTA (carimbo ausente ou
+  ilegível volta ao relógio local E loga). Vale para a reconexão rápida
+  (< UNREGISTER_GRACE_MS), em que o segmento é o mesmo.
+
+DUAS HIPÓTESES MINHAS, REFUTADAS POR MEDIÇÃO NA MESMA SESSÃO
+  a) "F5 duplica segmento" — FALSO. As sessões com 6-8 segmentos primary têm
+     ZERO abertos: cada F5 além do grace de 2,5s é queda genuína, o segmento é
+     FECHADO e o contato re-roteado. N segmentos = N janelas de participação.
+     Contei exposição (count) e chamei de dano (órfão). O conserto escrito no
+     bridge foi revertido; no lugar ficou o comentário explicando por que NÃO se
+     conserta, com o discriminador certo nomeado (duration_ms IS NULL).
+  b) "o default 480_000 vazou para o store" — FALSO. demo_ia e sac_ia DECLARAM
+     o valor no YAML de seed (tenant_demo.yaml:159,166). Coincidência, não
+     vazamento.
+
+ACHADO DA VARREDURA (não é duplicação)
+  `sla_default_ms` NÃO TEM LEITOR: semeada (config-api/seed.py), cacheada
+  (routing_config.py), emitida (kafka_emitter.py), testada e EXIBIDA ao
+  operador na tela do namespace `routing` — e routing_config.get(...) não
+  aparece fora dos testes. Botão que promete efeito e não tem. Documentada no
+  ponto de definição; remover exige cuidado (smoke_config_routing_orphan_keys
+  a usa como canário).
+
+INSTRUMENTOS
+  infra/test/q_sla_target_inventory.py    inventário por faixa, 3 testemunhas
+  infra/test/q_sla_band_wait_witness.sh   esperas role='queue' cruas por pool
+
+INVARIANTES
+  CLAUDE.md § Routing Algorithm 4b (alvo × teto, 7 consumidores)
+  CLAUDE.md § Postura de Engenharia (instrumento falseável que mede a
+    proposição errada — escrito nesta sessão e violado 2h depois, ver (a))
+  conference-mechanics.md § Mudança 39 (a refutação, para não se re-derivar)
+  queue-attended-model.md § sla_target_ms é ALVO, max_wait_s é TETO
+
+ABERTO
+  D14-i (parar de colapsar) · os 34 pools cujo valor não é espera (pré-requisito
+  não medido: o que scorer/decide/saturated/main:1055 fazem com null) · 3 cópias
+  restantes do 480_000 · duration_ms != janela dos carimbos (voltou a não ter
+  causa) · exibir tempo de contato / espera no Console (sem decisão)

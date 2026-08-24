@@ -44,6 +44,17 @@ _DEFAULTS: dict[str, Any] = {
     # removida no mesmo dia — era o erro de categoria que a migration
     # `20260730000000_pool_internal_queue` nomeia, com cara de parâmetro.
     "drop_reserve_window_default_s":   30,
+    # ⚠️ SEM LEITOR (medido 2026-08-24, D14.1). `routing_config.get("sla_default_ms")`
+    # não aparece em lugar nenhum fora dos testes — a chave é semeada, cacheada,
+    # testada e **exibida ao operador** na tela do namespace `routing`, e não faz
+    # nada. Botão que promete efeito e não tem é pior que default duplicado.
+    #
+    # O alvo de espera efetivo vem do POOL (`sla_target_ms`); quando ausente, do
+    # `SLA_TARGET_MS_FALLBACK` do `models.py`, que é o mesmo número por coincidência
+    # histórica, não por referência. **Não conectar esta chave sem decidir antes qual
+    # deve vencer** — hoje um operador que a edite não muda comportamento nenhum.
+    # Remoção registrada no `TODO.md`; cuidado: `smoke_config_routing_orphan_keys.sh`
+    # a usa como CANÁRIO de "namespace intacto".
     "sla_default_ms":           480_000,
     "estimated_wait_factor":    0.7,
     "congestion_sla_factor":    1.5,

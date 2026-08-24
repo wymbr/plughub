@@ -197,7 +197,21 @@ export interface SupervisorState {
   sentiment: SentimentState;
   intent: IntentState;
   flags: string[];
-  sla: SlaState;
+  /**
+   * @deprecated D14.1 (2026-08-24) — o servidor NÃO envia mais este bloco.
+   *
+   * Ele devolvia constantes (`percentage: 0`, `target_ms: 480_000`,
+   * `breach_imminent: false`), não cálculo. Ficou OPCIONAL em vez de removido
+   * porque este app já guarda com `sla &&` em todas as três superfícies
+   * (ContactList, Header, EstadoTab) — com o campo ausente elas simplesmente não
+   * renderizam, que é o comportamento desejado. Tipo obrigatório aqui seria a
+   * declaração mentindo sobre o que chega no fio.
+   *
+   * Não reintroduzir: não existe alvo de SLA de atendimento por segmento no
+   * produto (`sla_target_ms` é alvo de ESPERA em fila). O `platform-ui` é o app
+   * canônico e já removeu as três superfícies.
+   */
+  sla?: SlaState;
   customer_context: CustomerContext;
   issue_status?: string;
 }

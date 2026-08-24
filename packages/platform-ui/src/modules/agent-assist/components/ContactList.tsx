@@ -7,8 +7,8 @@
  *   - ANI / user_id (contactId) or short session_id fallback
  *   - Unread badge
  *   - AI-typing indicator
- *   - Live wait-time counter (from sessionStartedAt)
- *   - SLA mini-bar (when data is available)
+ *   - Segment timer (from sessionStartedAt = `assigned_at` do servidor)
+ *   - (a mini-barra de SLA foi REMOVIDA na D14.1 — ver o bloco de comentário abaixo)
  *   - Sentiment dot
  *   - Red tint + "encerrado" when session is closed
  */
@@ -51,34 +51,27 @@ function sentimentColor(score: number | null): string {
   return "bg-red";
 }
 
-// ── SLA urgency (for left-edge colour bar only) ────────────────────────────────
-type UrgencyLevel = "low" | "medium" | "high" | "critical";
-
-function urgencyLevel(contact: ContactSession, nowMs: number): UrgencyLevel {
-  if (contact.sessionClosed) return "low";
-  const waitMs = nowMs - contact.sessionStartedAt.getTime();
-  const sla = contact.supervisorState?.sla?.target_ms ?? contact.slaTargetMs;
-  if (!sla) return "low";
-  const ratio = waitMs / sla;
-  if (ratio >= 1.0) return "critical";
-  if (ratio >= 0.7) return "high";
-  if (ratio >= 0.4) return "medium";
-  return "low";
-}
-
-const URGENCY_BORDER: Record<UrgencyLevel, string> = {
-  low:      "border-l-green",
-  medium:   "border-l-warning",
-  high:     "border-l-contested",
-  critical: "border-l-red",
-};
-
-const URGENCY_TIMER: Record<UrgencyLevel, string> = {
-  low:      "text-muted-light",
-  medium:   "text-warning-text",
-  high:     "text-contested font-semibold",
-  critical: "text-red font-bold",
-};
+// ── SLA REMOVIDO (D14.1, 2026-08-24) ───────────────────────────────────────────
+//
+// A barra de SLA e a cor de urgência da borda saíram daqui, e a razão não é
+// estética: **não existe alvo de SLA de atendimento por segmento neste produto**.
+// `sla_target_ms` é alvo de ESPERA em fila (decisão D14.1) e a espera já acabou
+// quando o contato aparece nesta lista — normalizar o tempo de um contato já
+// atendido por um alvo de fila não mede nada.
+//
+// E não era só semântica: os dois indicadores liam `supervisorState.sla`, que o
+// endpoint HTTP devolvia como CONSTANTES (`server.ts`: `target_ms: 480_000`,
+// `percentage: 0`, `breach_imminent: false`). Efeitos medidos antes da remoção:
+// todo contato normalizado por 8 min independentemente do pool, e o `??` do
+// `breach_imminent` nunca caindo fora — um `false` do produtor desarmando a
+// guarda que esta tela já tinha.
+//
+// O que SOBROU e mede de verdade: o timer de resposta (💬, colorido por
+// `max_reply_time_ms`, que é campo real e por-mensagem) e o relógio do segmento
+// (⏱), agora ancorado no `assigned_at` do servidor.
+//
+// NÃO reintroduzir uma barra aqui sem antes existir um campo de alvo — a versão
+// anterior parecia informação e era uma constante pintada.
 
 // ── Elapsed time ───────────────────────────────────────────────────────────────
 function formatElapsed(ms: number): string {
@@ -137,28 +130,21 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
     return () => clearInterval(id);
   }, []);
 
+  // Tempo NESTE SEGMENTO — desde que o contato foi atribuído a este agente.
+  // `sessionStartedAt` vem do `assigned_at` do servidor (ver AgentAssistContext);
+  // antes era `new Date()` do navegador e ZERAVA no F5.
   const handleMs    = nowMs - contact.sessionStartedAt.getTime();
-  const level       = urgencyLevel(contact, nowMs);
   const sentimentScore = contact.supervisorState?.sentiment.current ?? null;
-
-  // SLA bar: prefer supervisorState.sla (most accurate), fall back to pool's
-  // slaTargetMs (available from the first moment the contact arrives).
-  const slaFromState  = contact.supervisorState?.sla ?? null;
-  const slaTargetMs   = slaFromState?.target_ms ?? contact.slaTargetMs ?? null;
-  const slaPercent    = slaTargetMs
-    ? Math.min(Math.round((handleMs / slaTargetMs) * 100), 100)
-    : (slaFromState ? Math.min(slaFromState.percentage, 100) : null);
-  const slaBreaching  = slaFromState?.breach_imminent ?? (slaPercent !== null && slaPercent >= 100);
-  const slaBarColor   = slaPercent === null ? "bg-border-strong"
-    : slaBreaching || slaPercent >= 100 ? "bg-red"
-    : slaPercent > 70 ? "bg-warning"
-    : "bg-green";
 
   // Tab visual: selected row bleeds right (box-shadow covers the container's right border)
   // creating the illusion of a browser tab extending into the white central surface.
+  //
+  // D14.1 — a borda deixou de codificar urgência de SLA (ver o bloco no topo). Ela
+  // volta a ser só SELEÇÃO × ENCERRADO, que são os dois estados que a tela de fato
+  // conhece. Pintar urgência exigiria um alvo, e não existe alvo de atendimento.
   const borderAccent = contact.sessionClosed
     ? (selected ? "#ef4444" : "#fca5a5")
-    : (selected ? "#1B4F8A" : URGENCY_BORDER[level].replace("border-l-", ""));
+    : (selected ? "#1B4F8A" : "transparent");
 
   const selectedStyle: React.CSSProperties = selected
     ? {
@@ -254,25 +240,18 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
           );
         })()}
 
+        {/* Relógio do SEGMENTO — tempo desde a atribuição a este agente.
+            Sem cor derivada de alvo: não existe alvo de atendimento (D14.1). */}
         <span
-          className={`inline-flex items-center gap-0.5 text-xs font-mono tabular-nums flex-shrink-0
-            ${contact.sessionClosed ? "text-muted-light" : URGENCY_TIMER[level]}`}
-          title="Tempo em atendimento"
+          className="inline-flex items-center gap-0.5 text-xs font-mono tabular-nums flex-shrink-0
+            text-muted-light"
+          title={t('contactList.segmentTime')}
         >
           <Timer className="w-3 h-3" aria-hidden="true" />{formatElapsed(handleMs)}
         </span>
 
-        {slaPercent !== null && (
-          <div
-            className="flex-1 h-1 bg-border rounded-full overflow-hidden ml-1"
-            title={`SLA ${slaPercent.toFixed(0)}%`}
-          >
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${slaBarColor}`}
-              style={{ width: `${slaPercent}%` }}
-            />
-          </div>
-        )}
+        {/* Espaçador — ocupava a barra de SLA removida na D14.1. */}
+        <span className="flex-1" />
 
         {aiTyping && (
           <span className="flex-shrink-0 animate-pulse text-ai" title={t('contactList.aiTyping')}>

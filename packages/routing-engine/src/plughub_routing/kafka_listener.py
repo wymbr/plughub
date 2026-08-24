@@ -38,6 +38,7 @@ import redis.asyncio as aioredis
 
 from .models import (
     AgentInstance, PoolConfig, RoutingExpression, HUMAN_LOGIN_SOURCE,
+    SLA_TARGET_MS_FALLBACK,
 )
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
@@ -211,11 +212,23 @@ class RegistryEventHandler:
             return
         try:
             expr_data = pool_data.get("routing_expression") or {}
+            # `sla_target_ms` é OBRIGATÓRIO no contrato (`schemas/agent-registry.ts`),
+            # então este fallback só dispara em evento malformado/legado. Fabricar um
+            # alvo de espera em silêncio alimentaria aging, breach, ETA ao cliente e
+            # aderência de SLA com um número inventado — logo ele grita.
+            _sla_raw = pool_data.get("sla_target_ms")
+            if _sla_raw is None:
+                logger.warning(
+                    "pool.registered SEM sla_target_ms: pool=%s tenant=%s — usando "
+                    "FALLBACK %d ms. O campo é obrigatório no contrato; o alvo de "
+                    "espera deste pool NÃO descreve a config dele.",
+                    pool_data["pool_id"], tenant_id, SLA_TARGET_MS_FALLBACK,
+                )
             config = PoolConfig(
                 pool_id              = pool_data["pool_id"],
                 tenant_id            = tenant_id,
                 channel_types        = pool_data.get("channel_types", []),
-                sla_target_ms        = pool_data.get("sla_target_ms", 480_000),
+                sla_target_ms        = _sla_raw if _sla_raw is not None else SLA_TARGET_MS_FALLBACK,
                 max_reply_time_ms    = pool_data.get("max_reply_time_ms") or None,
                 routing_expression   = RoutingExpression(**expr_data),
                 is_human_pool        = bool(pool_data.get("supervisor_config")),

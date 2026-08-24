@@ -151,12 +151,11 @@ export interface IntentState {
   history: string[];
 }
 
-export interface SlaState {
-  elapsed_ms: number;
-  target_ms: number;
-  percentage: number;
-  breach_imminent: boolean;
-}
+// `SlaState` REMOVIDO (D14.1, 2026-08-24). O endpoint devolvia constantes, e o
+// campo `percentage` que esta interface declarava **nenhum produtor escrevia** —
+// a tool calcula `urgency`, o endpoint HTTP mandava `0` fixo. Não existe alvo de
+// SLA de atendimento por segmento no produto: `sla_target_ms` é alvo de ESPERA em
+// fila, e a espera acabou quando o contato chega ao Console.
 
 export interface InsightItem {
   content: string;
@@ -229,7 +228,6 @@ export interface SupervisorState {
   sentiment: SentimentState;
   intent: IntentState;
   flags: string[];
-  sla: SlaState;
   customer_context: CustomerContext;
   issue_status?: string;
   /** Arc 11 — AI participants active in this session, with Skill-Flow step state. */
@@ -345,8 +343,8 @@ export interface ContactSession {
    * last-writer). Null until the assigned event arrives. Ver g7 §10 / Slice 1.
    */
   instanceId:       string | null;
-  /** SLA target in ms for this contact — from pool config or supervisorState */
-  slaTargetMs:      number | null;
+  // `slaTargetMs` REMOVIDO (D14.1): era alimentado do pool e lido só pela barra de
+  // SLA, que saiu. Campo populado e nunca lido é valor plausível esperando leitor.
   /** Maximum reply time per customer message (ms). Null = no per-message SLA configured. */
   maxReplyTimeMs:   number | null;
   messages:         ChatMessage[];

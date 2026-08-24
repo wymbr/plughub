@@ -136,6 +136,46 @@ integral tornaria o drain O(fila).
 - **Sem `pool_config`, cai no ramo de fila MUDA** (teto por canal, default 1800 s), não no teto
   atendido do pool. Semear com timestamps antigos entrega os itens ao sweep antes de qualquer medição.
 
+## `sla_target_ms` é ALVO de espera, `max_wait_s` é TETO — D14.1 (decidido 2026-08-24)
+
+O score da fila depende de um alvo, e qual campo é esse alvo estava ambíguo no repositório. Decidido:
+**`sla_target_ms` := tempo de espera alvo na fila.** Não é SLA de atendimento total, apesar do
+rótulo (*"Total service SLA"*) e do comentário do contrato (`agent-registry.ts:390`) — os dois estão
+errados e **não têm consumidor**: a barra do Console que pareceria lê-los consome constantes
+(`server.ts:1628`).
+
+**Alvo e teto não são o mesmo eixo**, e confundi-los é o que fez metade do parque carregar prazo de
+processo num campo que não retém ninguém:
+
+| | `sla_target_ms` | `queue_config.max_wait_s` · `queue_max_wait_by_channel` |
+|---|---|---|
+| natureza | **alvo** (soft) | **teto** (hard) |
+| ultrapassado | aging cresce até ele; `breach_bonus` acelera depois — o contato **sobe na fila** | contato **encerrado** com `max_wait_exceeded` |
+| encerra? | **nunca** | é o único que encerra |
+| tolerância do canal a mudo | não | sim; **`0` é VETO** (ver `channel_max_wait_s`) |
+
+⇒ `limite_entrega` com alvo de 7 dias **não retém por 7 dias**. Quem reteria é o `max_wait_s`, que
+aquele pool não declara — o valor alto só torna o aging inerte.
+
+**Sete consumidores, todos de espera:** comportamento — `scorer.py:177` (aging + breach do ZSET),
+`decide.py:287` (`sla_urgency > 1.0 → inf`), `saturated.py:92/109/126` (ETA, `>2.0` → redirect +
+oncall), `main.py:1055` (`avg_handle_ms = sla × 0.7`, ETA publicada **ao cliente**); relatório —
+`query.py:240`, `reports_query.py:3803`, `:5827`.
+
+**Medido (36 pools, 63 esperas):** metade do parque (18 pools) está em ≥ 1 h, e o discriminador
+**não é `purpose`** (separa 2 de 18) — é *como o pool é entrado*: espera de contato 18 · `webhook`
+12 · `pull` 4 · I/O de `delegate` 2. Pela definição decidida (*fila humana*), o campo vale para **2
+pools**: `retencao_humano` e `especialista_onboarding`. Das 63 esperas, **43** são fila humana `push`,
+**19** são pool de IA e **1** é fila `pull` ⇒ **32%** do Fila/SLA hoje não pertence a ele.
+
+**Aging inerte: mecanismo vivo, dano nulo.** 16 esperas ocorreram em pools de alvo ≥ 1 h, mas duram
+5 a 14 s (`sla_ratio` 0,00005–0,0017). O caso limítrofe é `aprovacao_credito` (4,9 min contra 2
+dias): com alvo de espera estaria em `sla_ratio ≈ 0,99`, e só não houve dano porque havia um item só
+na fila. Instrumentos: `infra/test/q_sla_target_inventory.py` + `q_sla_band_wait_witness.sh`.
+
+Detalhe, trabalho pendente e a sub-pergunta aberta (pool de IA tem alvo, ou deve ser `null`?) em
+`TODO.md` § *"SLA está no grão errado"* → D14.1.
+
 ## Outcome mora no segmento (decisão 2026-06-03)
 
 **`segments.outcome` é a única fonte de verdade de outcome.** Motivos: (1) evita dupla

@@ -1146,6 +1146,36 @@ async def activate_human_agent(
             mode="merge", caller="activate_human_agent",
         )
 
+    # ⚠️ NÃO "consertar" a multiplicidade de segmentos por reconexão — MEDIDO em
+    # 2026-08-24 e a hipótese de defeito foi REFUTADA. Registro aqui porque a
+    # aparência é convincente e já custou uma rodada inteira.
+    #
+    # A observação que dispara a suspeita: um contato pode acumular MUITOS
+    # segmentos `primary` (medidos 8 em `18232569-…`, 6 em `af64c36b-…`), um por
+    # F5 do agente no Console, e o relógio da tela reinicia a cada um. Lendo só o
+    # código, o diagnóstico "óbvio" é que esta função é não-idempotente e que
+    # `setex session:{sid}:segment:{inst}` orfana o segmento anterior — que então
+    # nunca receberia `participant_left`.
+    #
+    # **É falso, e o número que refuta é `countIf(duration_ms IS NULL)`:** aquelas
+    # sessões têm ZERO segmentos abertos. Todos fecham. A ordem real é
+    # fechar-depois-abrir, não abrir-sobre-abrir:
+    #
+    #   F5 > UNREGISTER_GRACE_MS (2,5 s, `mcp-server/server.ts`) ⇒ queda GENUÍNA
+    #     ⇒ `contact_closed(agent_disconnect)` ⇒ segmento fechado + GETDEL da
+    #       chave de join ⇒ contato volta à fila ⇒ re-rota ⇒ ativação nova.
+    #   F5 < grace ⇒ o unregister é cancelado, o contato NÃO volta à fila, e esta
+    #     função **não roda**: a tela é restaurada pelo replay de
+    #     `pool:pending_assignment` (forward no mcp-server), que não cria segmento.
+    #
+    # Logo N segmentos = N quedas reais = N janelas de participação, que é o
+    # significado de segmento (`CLAUDE.md`: "segment = janela de UM participante").
+    # `assigned_at = now()` está CERTO: é o início da janela nova.
+    #
+    # Um guard "se já existe join aberto, reusa o segmento" seria código morto no
+    # melhor caso e supressão de segmento legítimo no pior. Se algum dia houver
+    # suspeita de duplicação de verdade, o discriminador é **segmento ÓRFÃO**
+    # (`duration_ms IS NULL` acima de 1 por sessão viva), nunca a CONTAGEM.
     event = {
         "type":          "conversation.assigned",
         "session_id":    session_id,

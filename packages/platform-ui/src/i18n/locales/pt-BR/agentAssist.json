@@ -332,8 +332,7 @@
     "waiting":      "Aguardando dados…",
     "aiAgents":     "Agentes AI na Sessão",
     "sentimentAlert":"⚠ Alerta de sentimento crítico",
-    "slaTurn":      "SLA · Turn {{count}}",
-    "slaRisk":      "SLA em risco iminente",
+    "turnCount":    "Turnos · {{count}}",
     "confidence":   "{{pct}}% confiança",
     "sentimentLabel": {
       "veryPositive": "Muito positivo",
@@ -497,7 +496,8 @@
     "ended":            "encerrado",
     "awaitingResponse": "Aguardando sua resposta",
     "responded": "Respondido — aguardando próxima mensagem do cliente",
-    "aiTyping":         "IA digitando"
+    "aiTyping":         "IA digitando",
+    "segmentTime":      "Tempo neste atendimento (desde a atribuição a você)"
   },
   "orchestration": {
     "waiting":                "Aguardando dados da sessão…",

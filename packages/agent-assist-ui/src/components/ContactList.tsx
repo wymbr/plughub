@@ -81,13 +81,9 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
   }, [contact.sessionStartedAt]);
 
   const sentimentScore = contact.supervisorState?.sentiment.current ?? null;
-  const sla            = contact.supervisorState?.sla ?? null;
-  const slaPercent     = sla ? Math.min(sla.percentage, 100) : 0;
-  const slaColor       =
-    !sla ? "bg-gray-300"
-    : sla.breach_imminent ? "bg-red-500"
-    : slaPercent > 70 ? "bg-yellow-400"
-    : "bg-green-400";
+  // Barra de SLA removida na D14.1 (2026-08-24) — o servidor não envia mais o
+  // bloco `sla`, que eram constantes. A guarda `sla &&` já a esconderia sozinha;
+  // o cálculo saiu junto para não deixar código morto que sugere indicador vivo.
 
   const displayName =
     contact.customerName
@@ -142,15 +138,8 @@ const ContactRow: React.FC<RowProps> = ({ contact, selected, aiTyping, onSelect 
           {formatElapsed(handleMs)}
         </span>
 
-        {/* SLA mini-bar */}
-        {sla && (
-          <div className="flex-1 h-1 bg-gray-200 rounded-full overflow-hidden ml-1" title={`SLA ${slaPercent.toFixed(0)}%`}>
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${slaColor}`}
-              style={{ width: `${slaPercent}%` }}
-            />
-          </div>
-        )}
+        {/* Espaçador — ocupava a mini-barra de SLA removida na D14.1. */}
+        <span className="flex-1" />
 
         {/* AI typing indicator */}
         {aiTyping && (
