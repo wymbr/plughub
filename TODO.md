@@ -1363,8 +1363,12 @@ tier atendido. A mudança foi **remover a recusa**.
 `role='queue'`→**`'specialist'`** · `pool_id`→**`_flow_pool_id`** (D10) · `segment_id` **determinístico**
 (`uuid5`, namespace `queue-agent`, distinto do `queue-wait`).
 
-**Não tocado, de propósito:** o emissor próprio do `_emit_queue_timeout` (passo 3). Unificá-lo agora
-produziria emissão dupla; a lacuna (`max_wait` na fila atendida) está nomeada no docstring e aqui.
+~~**Não tocado, de propósito:** o emissor próprio do `_emit_queue_timeout` (passo 3). Unificá-lo agora
+produziria emissão dupla; a lacuna (`max_wait` na fila atendida) está nomeada no docstring e aqui.~~
+✅ **UNIFICADO em 2026-08-24 (fatia B).** E a premissa do "de propósito" **tinha expirado**: unificar
+não produz emissão dupla, porque o segmento que o bridge fecha no tier atendido é `role='specialist'`
+desde a própria D12 (`orchestrator-bridge/main.py:6007`) — o aviso descrevia o estado anterior à
+reclassificação e sobreviveu a ela. Ver `CHANGELOG.md` 2026-08-24.
 
 ~~**Falta:** `docs/arcos/system-queue.md:134` cita o nome antigo · build dos dois serviços · gate.~~
 **✅ Tudo pago em 2026-08-21** — `system-queue.md` item 4 corrigido (com nota da mudança de escopo),
@@ -1374,12 +1378,18 @@ reais e gate re-executável `packages/routing-engine/src/plughub_routing/tests/t
 `conference-mechanics.md` § **Mudança 37**.
 
 **Ainda aberto neste arco** (nenhum é bloqueio do que foi entregue):
-- **Unificar o emissor do `_emit_queue_timeout`** — fatia própria; junto daria emissão dupla.
-  Lacuna viva: `max_wait_exceeded` na fila **ATENDIDA** segue sem segmento de espera.
-  ⚠️ **Ganhou um segundo motivo em 2026-08-24:** aquele emissor ainda usa `uuid4()` **e publica sem
-  `key=`**, os dois defeitos que o `resolve_queue_exit` já pagou. Enquanto for assim, a espera que
-  estoura o teto entra no ledger sem identidade derivável — não dá para deduplicar nem para
-  discriminar passagem.
+- ~~**Unificar o emissor do `_emit_queue_timeout`**~~ ✅ **2026-08-24 (fatia B).** `resolve_queue_exit`
+  ganhou **um** parâmetro (`close_reason`) e o ramo `else` inteiro saiu; com ele saem os três defeitos
+  de uma vez (`uuid4()`, publish sem `key=`, e a cobertura só do tier MUDO). Gate: 4 testes novos em
+  `test_queue_wait_segment.py` (14 passed).
+  ⚠️ **Medido, e as duas grandezas ficam separadas:** exposição prospectiva ALTA (o `retencao_humano`
+  tem teto 1800 s e virou fila ATENDIDA em 08-24 — o próximo timeout cairia no buraco), dano
+  histórico **ZERO** (1 timeout na vida do tenant, em 08-18, no tier mudo, registrado certo). A
+  população **não contém** o caso consertado ⇒ medição em runtime é **inconclusiva** como gate.
+  ⚠️ **Não observado:** o teste do tier atendido não foi visto vermelho pelo motivo certo — reprovou
+  por defeito do harness. Fechar custa um `git stash` + build.
+  ⏳ **Encostado e não pago:** aquele caminho publica em outbound e `conversations.events` **sem
+  `key=`**. Tópicos diferentes, fatia diferente.
 - **O bridge tem a MESMA colisão** (`main.py:5963`, namespace `queue-agent`, `uuid5(tenant, session)`
   sem discriminador). Confirmado na medição de 08-24: o id gravado no `specialist fila_humano` bate
   com o `uuid5` previsto. **Hoje inalcançável** — exige DOIS pools com fila atendida, e só o
@@ -1443,6 +1453,19 @@ para o segmento **não basta**: enquanto o colapso existir, o alvo por-segmento 
 D14 é, em ordem: (i) parar de colapsar — uma linha por segmento de espera; (ii) `sla_target_ms` no
 segmento; (iii) migrar os três leitores.** E (i) depende de (D14.1), porque não se decide a granulação
 da comparação sem decidir o que o alvo mede.
+
+✅ **(i) ENTREGUE em 2026-08-24** (`CHANGELOG.md`; gate `infra/test/gate_queue_report_per_wait.sh`,
+VERDE). `_per_session` → `_per_wait`; `contacts`/`queued` em SESSÕES, `waits` (nova) e o resto em
+PASSAGENS. Medido: 71 esperas em 59 sessões ⇒ **12 descartadas** (17%), **3 sessões** com pool ou
+desfecho divergente onde o `anyIf` sorteava. Três exclusões de aderência entraram junto — só espera
+**concluída, com alvo e não-abandonada** é julgável —, e `retencao_humano` saiu de **0,913** para
+**0,6364**.
+
+🔵 **(ii) ganhou EVIDÊNCIA NUMÉRICA, e ela veio da (i).** Decomposição medida do `retencao_humano`:
+**48 esperas = 5 abertas + 10 SEM ALVO + 33 julgáveis**. As 10 pertencem a sessões cujo
+`sessions.sla_target_ms` é 0/NULL — **enquanto o pool tem alvo configurado (300 000 ms) e a espera
+aconteceu naquele pool**. 23% das esperas concluídas daquele pool são injulgáveis por o alvo estar
+guardado na entidade errada. O argumento de domínio virou contagem; a (ii) deixou de precisar de fé.
 
 **NÃO somar as duas esperas.** É a tentação óbvia do `maxIf`, e é o erro que a própria D14 nomeia:
 somar esperas contra alvos diferentes dá número sem uso prático.
@@ -1623,12 +1646,50 @@ Não se cria campo para alimentar tela que não lê.
    (`ROTEIRO_TESTES.md:209`). Editar não muda comportamento nenhum. Botão que promete efeito e
    não tem é pior que default duplicado. ⚠️ Remover exige cuidado: o
    `smoke_config_routing_orphan_keys.sh:118` a usa como **canário** de "namespace intacto".
-4. **Os 34 pools que não são fila de espera** — ⏳ **decisão pendente**, e a opção que a medição
-   sugere é `null` onde não é fila (torna *"não medimos"* distinguível de *"medimos e deu verde"*,
-   e faz os 4 sites de roteamento caírem no ramo sem alvo em vez de num alvo falso). **Pré-requisito
-   não medido:** o que `scorer.py:177`, `decide.py:287`, `saturated.py:92` e `main.py:1055` fazem
-   com `null`/`0` — `max(pool.sla_target_ms, 1)` sugere que degradam sem quebrar, mas o
-   `saturated` multiplica e o `main.py:1055` publica ETA **ao cliente**. Medir antes de anular.
+4. **Os 34 pools que não são fila de espera** — ⏳ decisão pendente, mas a opção que estava escrita
+   aqui **caiu por medição (2026-08-24)**.
+
+   ~~a opção que a medição sugere é `null` onde não é fila… faz os 4 sites caírem no ramo sem alvo~~
+   ❌ **Não existe "ramo sem alvo".** `PoolConfig.sla_target_ms` é `int`, **não** `int | None`
+   (`models.py:244`), e o `kafka_listener:231` converte ausência em `SLA_TARGET_MS_FALLBACK` antes
+   de construir o modelo. Nenhum dos consumidores jamais vê `None` — logo **"anular o campo" não é
+   expressável hoje**, e os dois valores candidatos significam outra coisa:
+
+   | valor escrito | o que o runtime faz |
+   |---|---|
+   | `null` / ausente | vira **480 000 ms** (`kafka_listener:231`, com WARNING). "Sem alvo" vira "8 minutos" — silencioso exceto pelo log |
+   | `0` | **pior, e em quatro lugares**: `scorer.py:177` `max(0,1)=1` ⇒ `sla_ratio` = elapsed em ms ⇒ aging no teto e `breach_bonus` sem limite · `decide.py:287` ⇒ `sla_urgency > 1.0` **sempre** ⇒ prioridade absoluta · `saturated.py:74` voz ⇒ `>2.0` ⇒ **redirect p/ site secundário + oncall** a cada espera, e `int(0×1.5)=0` ⇒ ETA 0 · `main.py:1075` ⇒ `avg_handle_ms=0` ⇒ **ETA 0 ms publicada AO CLIENTE** |
+
+   🔴 **Achado colateral — os dois escritores do campo DISCORDAM sobre o `0`.**
+   `kafka_listener:231` usa `_sla_raw if _sla_raw is not None else FALLBACK` (**preserva** 0);
+   `registry.py:3149` usa `int(_sla_src or SLA_TARGET_MS_FALLBACK)` (**truthiness** ⇒ 0 → 480 000).
+   Com `0` configurado, o snapshot que o operador lê no Monitor diz **8 min** enquanto o motor se
+   comporta como prioridade infinita. É a terceira ocorrência da família `??`×truthiness neste
+   repositório (Mudanças 35 e 37), agora no campo que a D14.1 acabou de definir. Fatia própria,
+   pequena: escolher UM predicado e compartilhá-lo.
+
+   **As opções reais do passo 4, então:**
+   (a) tornar o campo **Optional de ponta a ponta** — Zod, `PoolConfig`, e ramo `None` explícito nos
+   sete consumidores. É o único que torna *"não medimos"* distinguível, e custa o que custa.
+   (b) **não anular nada e mudar quem LÊ** — os 34 pools mantêm o número; o Fila/SLA passa a separar
+   as populações, que é o que a **D14-i** faz de qualquer forma. Custo marginal ≈ zero.
+   (c) migrar os valores altos para `max_wait_s` — é o passo 5, e não anula nada.
+   ✅ **DECIDIDO (b) em 2026-08-24, pelo dono do produto.** Nada é anulado; muda **quem lê**. O passo
+   4 portanto **não gera trabalho próprio** — é absorvido pela **D14-i**, que separa as populações no
+   relatório. Consequências que a decisão fixa:
+
+   - os 34 pools mantêm o valor que têm; nenhuma migração em massa, e o problema dos 2 pools de
+     `delegate` I/O sem discriminador (`limite_retorno`, `portabilidade_confirmacao`) **deixa de ser
+     bloqueio** — não há migração automática a fazer;
+   - **nenhum comportamento de roteamento muda.** Aging, breach, ETA ao cliente e as ações de
+     saturação continuam lendo exatamente o que liam. Isso é o valor da opção: a correção fica no
+     relatório, que é onde o defeito é;
+   - a opção (a) fica registrada, **não descartada** — reabre se alguém precisar da distinção no
+     COMPORTAMENTO (ex.: pool de processo que não deveria participar de aging nenhum). Hoje não há
+     esse requisito;
+   - 🔴 **a divergência de escritores sobre o `0` NÃO é fechada por (b)** e continua aberta como
+     fatia própria. Ela não depende de ninguém escrever `0` para ser errada — depende para
+     MORDER, e hoje ninguém escreve.
 5. **Onde os valores altos deviam estar** — se expressam teto, o campo é `queue_config.max_wait_s`
    (ver tabela alvo × teto acima). Migração à mão: os 2 pools de `delegate` I/O não têm
    discriminador no registro.

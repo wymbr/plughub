@@ -2,6 +2,178 @@
 
 ---
 
+## D14-i — o relatório Fila/SLA para de colapsar a sessão numa linha (2026-08-24)
+
+`reports_query.py` — a subquery `_per_session` virou `_per_wait`: **uma linha por passagem
+pela fila**, não por sessão. O `anyIf(pool_id, role='queue')` / `anyIf(outcome, …)` /
+`maxIf(duration_ms, …)` saíram.
+
+### O tamanho do buraco, medido antes
+
+| | |
+|---|---|
+| segmentos `role='queue'` | **71** em **59 sessões** |
+| esperas descartadas pelo `maxIf` | **12** (17% do ledger) |
+| sessões com 2+ esperas | **8** (6×2 · 1×3 · **1×5**) |
+| dessas, com pool ou desfecho DIVERGENTE ⇒ `anyIf` sorteava | **3** |
+
+Duas grandezas, separadas de propósito: **má atribuição** atinge 3 sessões (o `anyIf` sorteia
+pool/desfecho); **estatística de duração** atinge as 8 (12 durações nunca entravam em
+`avg_wait`/`p95`). A sessão de 5 esperas é `18232569-…` — a mesma da hipótese de duplicação por
+F5 **refutada** na Mudança 39. As 5 esperas correspondem às 5 quedas reais: se aquele "conserto"
+tivesse entrado, teria apagado 4 esperas legítimas.
+
+⚠️ **O grão da SAÍDA não mudou** — `by_pool` e `series` continuam uma linha por `(pool[, bucket]);`
+o colapso vivia na subquery intermediária. O que muda é que sessão que esperou em dois pools passa a
+contar nos DOIS, em vez de num sorteado.
+
+### Duas unidades, nomeadas (decisão do dono)
+
+`contacts` e `queued` contam **sessões distintas** — significado preservado, porque é o número que
+o operador já lê. `waits` (**coluna nova**), `abandoned`, `handoff`, `avg_wait_ms`, `p95_wait_ms`
+contam **passagens**. `abandon_rate` é passagem/passagem: misturar as unidades entre numerador e
+denominador seria a falácia de aditividade de novo. Assinatura visível do conserto:
+`retencao_humano` com **48 esperas para 39 sessões em fila**.
+
+Sessões que **não** esperaram continuam no relatório (decisão do dono) — são o denominador e
+incluem o abandono antes de qualquer agente. `duration_ms` é Nullable, então a linha delas traz
+`wait_ms` **NULL** e o `avg()` a ignora, em vez de somar um zero que não é espera.
+
+### Aderência: três exclusões que a query nova tornou CONTÁVEIS
+
+O predicado era `sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms` sobre toda linha, e o
+`coalesce` transformava três ausências em "esperou zero, logo cumpriu". Nenhuma é regressão desta
+fatia — todas são anteriores; o que mudou é que passaram a ter número:
+
+| exclusão | evidência que a derrubou |
+|---|---|
+| contato que **nunca enfileirou** | `limite_entrega`: 37 contatos, **zero** esperas, aderência **100%**. Idem `demo_ia`, `formfill_demo`, `aprovacao_deploy`. Verde que não pode ficar vermelho |
+| espera **em curso** (`duration_ms IS NULL`) | os 5 segmentos abertos do `retencao_humano`, contados como cumprimento |
+| espera **ABANDONADA** | `especialista_onboarding`: 2 esperas, **as duas abandonadas**, aderência **100%** — quem desistia mais cedo melhorava o indicador |
+
+Regra nova: **só espera CONCLUÍDA, com alvo e não-abandonada é julgável.**
+
+**Os números mudaram, e o principal é este:** `retencao_humano` sai de **0,913** para **0,6364**.
+91% nunca descreveu aquele pool — o número só sobrevivia porque contato-que-nunca-esperou e
+cliente-que-desistiu entravam no numerador.
+
+### Achado que sustenta a D14 (ii) com número, não com argumento
+
+Decomposição de `retencao_humano`: **48 esperas = 5 abertas + 10 SEM ALVO + 33 julgáveis**.
+
+As 10 pertencem a sessões cujo `sessions.sla_target_ms` é 0/NULL — **enquanto o pool tem alvo
+configurado (300 000 ms) e a espera aconteceu naquele pool**. 23% das esperas concluídas são
+injulgáveis porque o alvo está guardado na entidade errada. É exatamente o que a D14 (ii) propõe
+mover, e deixou de depender de argumento de domínio.
+
+### `?? 0` desarmado na UI
+
+`AnalisePoolsPage.tsx` fazia `r.sla_attainment ?? 0`, pintando ausência como barra **vermelha em
+0%**. O filtro `sla_eligible > 0` a montante o tornava inalcançável — mas com a D14-i mais pools
+passam a ter `sla_eligible = 0`, e o default estava a uma edição de voltar a mentir. Agora ausência
+renderiza "não medido". Mesma família do `?? 0` do sentimento (§ Sentiment Tracking).
+
+### Superfícies
+
+`reports_query.py` (`_per_wait`, `series`, `by_pool`, `_sla_eligible`) · `display_formatters.py`
+(coluna `waits` no dashboard) · `AnalisePoolsPage.tsx` (interfaces, coluna, guarda de null, hint) ·
+i18n `agentReports.json` e `dashboards.json` nos **dois** locales.
+
+### Gate
+
+`infra/test/gate_queue_report_per_wait.sh` — **não existia teste nenhum** desta rota antes (medido:
+zero em `analytics-api/tests/` e zero em `infra/test/`). Três asserções + testemunha:
+**A** `Σ waits(API) == ledger` (perda ou duplicação de linha; delta ⇒ INCONCLUSIVO, porque
+`outage`/origem não-`live` saem por projeto) · **B** pool sem espera não pode ter aderência ·
+**C** `within_sla <= waits - abandoned` · **T** ledger vazio ⇒ INCONCLUSIVO, nunca verde.
+
+---
+
+## `max_wait_exceeded`: um produtor de espera, os dois tiers (fatia B, 2026-08-24)
+
+Fecha a lacuna que a D12 nomeou em dois docstrings e deixou em aberto: *"o emissor do
+`_emit_queue_timeout` só cobre o tier MUDO, então `max_wait_exceeded` na fila ATENDIDA segue sem
+segmento de espera"*.
+
+### O que havia
+
+Um **segundo produtor** de segmento `role='queue'`, dentro do `_emit_queue_timeout`, no ramo `else`
+do teste `queue:agent_active`. Três defeitos, e nenhum deles era escolha de alguém:
+
+- `uuid4()` no `segment_id` — duas emissões viram duas LINHAS, contra o padrão de id derivado que o
+  `ReplacingMergeTree` deduplica sozinho;
+- publish **sem `key=`** em `conversations.participants` (3 partições) — a família do defeito mais
+  caro já registrado aqui (§ Postura de Engenharia; `conference-mechanics.md` § Problema 34);
+- morar no `else` ⇒ **só a fila muda registrava a espera**. Na fila atendida o contato era fechado
+  por teto de retenção sem nenhum segmento `role='queue'`, e o relatório de Fila/SLA perdia
+  exatamente a população de que trata. Não é linha errada: é linha **ausente**, que não tem sintoma.
+
+### O que fechou a lacuna: **um parâmetro**
+
+`resolve_queue_exit` ganhou `close_reason` (era hardcoded `""`). Era só isso que o segundo produtor
+tinha e este não — e era o que sustentava a duplicação. O `_emit_queue_timeout` passou a chamá-lo
+com `close_reason="max_wait_exceeded"` e o ramo `else` inteiro saiu.
+
+Os três defeitos somem juntos porque o `resolve_queue_exit` já resolvia os três: id derivado de
+(`session_id`, `first_queued_ms`), `key=session_id`, e chamada **antes** do teste de tier.
+
+**Ordem deliberada — a chamada fica no topo, antes dos markers.** O passo seguinte escreve
+`session:{id}:closed`, que o DRAIN lê (`kafka_listener.py:695`) para chamar o mesmo resolve com
+`"abandoned"` e `close_reason=""`. Emitir depois do marker abriria corrida em que o drain carimba
+primeiro e o motivo real vira abandono genérico. Emitindo antes, quem tem a informação escreve, e o
+drain chega numa chave já consumida (`first_queued_ms` deletado ⇒ `False`, sem emissão).
+
+### O aviso de "emissão dupla" estava desatualizado, e isso foi medido
+
+Os dois docstrings alertavam que unificar produziria emissão dupla. **Não produz:** no tier atendido
+o bridge emite `role='specialist'` desde a D12 (`orchestrator-bridge/main.py:6007`), não
+`role='queue'`. O aviso descrevia o estado anterior àquela reclassificação e sobreviveu a ela.
+
+### Medido antes de mexer — e as duas grandezas separadas
+
+| | |
+|---|---|
+| segmentos `role='queue'` no tenant | **70** *(testemunha de presença)* |
+| com `close_reason='max_wait_exceeded'` | **1** — `retencao_humano`, 1 802 441 ms (o teto de 1800 s), 2026-08-18 |
+| sessões fechadas em `max_wait_exceeded` | **1** |
+| …dessas, com segmento de espera | **1** |
+
+⇒ **Exposição alta e prospectiva, dano histórico ZERO.** O único timeout da vida do tenant caiu no
+tier MUDO (em 08-18 o `retencao_humano` ainda era `legacy_only`) e foi registrado corretamente. Só
+em 08-24 aquele pool ganhou `queue_config.pool_id` e virou fila ATENDIDA — é o próximo timeout que
+cairia no buraco. A população **não contém** o caso que a fatia conserta, logo **a medição em runtime
+é INCONCLUSIVA como gate** e o gate é o teste. Registrado assim de propósito: verde por ausência de
+amostra é o que este repositório trata como teste que não pode reprovar.
+
+### Gate
+
+`test_queue_wait_segment.py`, 4 testes novos (14 passed, 0 skipped), e eles só julgam juntos:
+
+- `…mute_tier_emits_exactly_one…` → reprova se o segundo emissor voltar (2 linhas) ou se o
+  `close_reason` se perder;
+- `…attended_tier_also_emits…` → reprova se a emissão voltar a depender do tier;
+- `…without_stamp_emits_no_wait_segment` → **testemunha de ausência**: sem ela, um produtor que
+  emitisse incondicionalmente passaria nos dois de cima;
+- `…has_no_participants_publish_of_its_own` → guarda **estrutural** (AST, sem Redis) e preflight de
+  símbolo. Pergunta à AST quantos `send("conversations.participants", …)` existem na função:
+  exigido **zero**. ⚠️ Deliberadamente não é `grep`: o docstring da própria função **cita** o nome do
+  tópico ao explicar a remoção, e a busca textual contaria o comentário que documenta o conserto.
+
+⚠️ **O que NÃO foi observado:** o teste do tier atendido nunca foi visto vermelho *pelo motivo
+certo*. Ele reprovou por defeito do harness (o `_run_timeout` usava o `_FakeProducer` estrito do
+fixture, que exige `key=` em todo tópico — correto para o `resolve_queue_exit`, errado para este
+caminho, que também publica em outbound e `conversations.events`, os dois ainda sem chave). Que ele
+contaria zero antes da mudança é dedução do diff, não observação. Fechar isso custa um ciclo de
+build (`git stash` no `main.py`).
+
+### Dívida que a fatia encostou e não pagou
+
+`_emit_queue_timeout` publica em outbound e `conversations.events` **sem `key=`**. Tópicos
+diferentes, escopo diferente — não entra aqui, mas o `_TimeoutProducer` do teste declara a tolerância
+em comentário para que ninguém a leia como aprovação.
+
+---
+
 ## Hipótese de duplicação de segmento por F5 — levantada e REFUTADA no mesmo dia (2026-08-24)
 
 **Nenhuma mudança de comportamento.** Entra no CHANGELOG porque um conserto foi escrito, revertido
