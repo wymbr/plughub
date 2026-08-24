@@ -79,6 +79,7 @@
     "paused_min":      "Pausado (min)",
     "contacts":        "Contatos",
     "queued":          "Enfileirados",
+    "waits":           "Esperas",
     "abandoned":       "Abandonos",
     "abandon_rate":    "Abandono %",
     "avg_wait":        "Espera Média",

@@ -5737,27 +5737,86 @@ def _fetch_pools_queue(
     # ainda assim precisa aparecer: 5 sessões do tenant têm pool e ZERO segmentos
     # (abandono antes de qualquer agente entrar) — exatamente o que um relatório de
     # fila não pode perder de vista.
-    _per_session = f"""
-        SELECT if(segs.q_pool != '', segs.q_pool, ss.pool_id) AS pool_id,
-               ss.opened_at                                  AS opened_at,
-               ss.sla_target_ms                              AS sla_target_ms,
-               segs.q_count                                  AS q_count,
-               segs.q_outcome                                AS q_outcome,
-               segs.q_wait_ms                                AS wait_ms,
-               segs.primary_count                            AS primary_count
-        FROM (SELECT session_id, pool_id, opened_at, sla_target_ms
-              FROM {db}.sessions FINAL WHERE {s_where}) ss
+    # ── D14-i (2026-08-24): UMA LINHA POR ESPERA, não por sessão ─────────────────
+    #
+    # Era `_per_session`, e colapsava a sessão ANTES de qualquer leitura de SLA:
+    # `anyIf(pool_id, role='queue')` · `anyIf(outcome, …)` · `maxIf(duration_ms, …)`.
+    # Com UMA espera por sessão isso é determinístico. Com duas, `anyIf` não dobra —
+    # **SORTEIA**, e o sorteado alimenta `abandoned`/`abandon_rate`/`handoff`; o
+    # `maxIf` **descarta** a espera menor.
+    #
+    # Medido em 2026-08-24, tenant demo: **71 segmentos de espera em 59 sessões** ⇒
+    # 12 esperas (17% do ledger) invisíveis no relatório. Uma sessão tem CINCO e só
+    # uma sobrevive. O caso de motivação não é hipotético — contato
+    # `27651d1b-…` esperou em `retencao_humano` e depois em `especialista_onboarding`.
+    #
+    # ⚠️ **O conserto NÃO é `sum()`.** Somar esperas contra alvos diferentes é
+    # exatamente o que a D14 recusa: dá número sem uso prático. O conserto é não
+    # colapsar — cada passagem pela fila é uma linha, julgada contra o alvo do pool
+    # onde ela aconteceu.
+    #
+    # ⚠️ O GRÃO DA SAÍDA NÃO MUDOU. `by_pool` e `series` continuam devolvendo uma
+    # linha por `(pool[, bucket])`; o colapso vivia na subquery intermediária. O que
+    # muda é que uma sessão que esperou em dois pools passa a contar nos DOIS, em vez
+    # de num sorteado.
+    #
+    # ── Duas unidades na mesma linha, e elas são nomeadas ────────────────────────
+    # `contacts`/`queued` contam **sessões distintas** (decisão do dono, 2026-08-24:
+    # não mudar o significado de coluna que o operador já lê). `waits`, `abandoned`,
+    # `handoff`, `avg_wait_ms`, `p95_wait_ms`, `within_sla` e `sla_eligible` contam
+    # **passagens**. `abandon_rate` é passagem/passagem — misturar as unidades no
+    # numerador e denominador seria a falácia de aditividade de novo.
+    #
+    # ── Sessões que NÃO esperaram continuam no relatório (decisão do dono) ───────
+    # São o denominador de "quanto % esperou" e incluem o abandono ANTES de qualquer
+    # agente (5 sessões medidas com pool e ZERO segmentos de fila). O `LEFT JOIN`
+    # entrega a linha delas com `q_count=0` e `wait_ms` **NULL** — `duration_ms` é
+    # Nullable, então a ausência sobrevive ao join e o `avg()` a ignora, em vez de
+    # somar um zero que não é espera.
+    #
+    # ⚠️ **Herdado, NÃO decidido nesta fatia:** `within_sla` conta a sessão
+    # não-enfileirada como dentro do alvo (`coalesce(wait_ms,0) <= sla_target_ms`),
+    # o que é defensável ("atendido na hora está dentro") mas mistura não-esperas com
+    # esperas no mesmo percentual. Preservado como está para não trocar duas coisas
+    # de uma vez; registrado no TODO.
+    #
+    # A precedência `q_pool → ss.pool_id` continua: o relatório mede ONDE ESPEROU, e
+    # `sessions.pool_id` é o pool de ENTRADA (D10), que não é esse fato.
+    _per_wait = f"""
+        SELECT if(w.w_pool != '', w.w_pool, ss.pool_id) AS pool_id,
+               ss.session_id                            AS session_id,
+               ss.opened_at                             AS opened_at,
+               ss.sla_target_ms                         AS sla_target_ms,
+               w.w_present                              AS q_count,
+               w.w_outcome                              AS q_outcome,
+               w.w_wait_ms                              AS wait_ms,
+               ss.primary_count                         AS primary_count
+        FROM (
+            SELECT s.session_id                   AS session_id,
+                   s.pool_id                      AS pool_id,
+                   s.opened_at                    AS opened_at,
+                   s.sla_target_ms                AS sla_target_ms,
+                   coalesce(p.primary_count, 0)   AS primary_count
+            FROM (SELECT session_id, pool_id, opened_at, sla_target_ms
+                  FROM {db}.sessions FINAL WHERE {s_where}) s
+            LEFT JOIN (
+                SELECT session_id,
+                       countIf(role = 'primary' AND agent_type != 'system') AS primary_count
+                FROM {db}.segments FINAL
+                WHERE tenant_id = {{tenant_id:String}} AND started_at >= '{since}'
+                GROUP BY session_id
+            ) p ON s.session_id = p.session_id
+        ) ss
         LEFT JOIN (
             SELECT session_id,
-                   anyIf(pool_id, role = 'queue')                       AS q_pool,
-                   maxIf(duration_ms, role = 'queue')                   AS q_wait_ms,
-                   anyIf(outcome, role = 'queue')                       AS q_outcome,
-                   countIf(role = 'queue')                              AS q_count,
-                   countIf(role = 'primary' AND agent_type != 'system') AS primary_count
+                   pool_id     AS w_pool,
+                   outcome     AS w_outcome,
+                   duration_ms AS w_wait_ms,
+                   1           AS w_present
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}} AND started_at >= '{since}'
-            GROUP BY session_id
-        ) segs ON ss.session_id = segs.session_id
+              AND role = 'queue'
+        ) w ON ss.session_id = w.session_id
     """
     _queued    = "q_count > 0"
     _abandoned = "coalesce(q_outcome, '') = 'abandoned'"
@@ -5773,10 +5832,11 @@ def _fetch_pools_queue(
         SELECT {bucket_fn}(opened_at)                              AS bucket,
                pool_id,
                round(avg(wait_ms), 0)                              AS avg_wait_ms,
-               count()                                             AS contacts,
-               countIf({_queued})                                  AS queued,
+               uniqExact(session_id)                               AS contacts,
+               uniqExactIf(session_id, {_queued})                  AS queued,
+               countIf({_queued})                                  AS waits,
                countIf({_abandoned})                               AS abandoned
-        FROM ({_per_session})
+        FROM ({_per_wait})
         WHERE {outer_where}
         GROUP BY bucket, pool_id
     """, parameters=params))
@@ -5802,31 +5862,58 @@ def _fetch_pools_queue(
         k = (r["pool_id"], _iso(r["bucket"]))
         merged[k] = {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
                      "avg_wait_ms": int(r.get("avg_wait_ms") or 0), "contacts": int(r.get("contacts") or 0),
-                     "queued": int(r.get("queued") or 0), "abandoned": int(r.get("abandoned") or 0),
+                     "queued": int(r.get("queued") or 0), "waits": int(r.get("waits") or 0),
+                     "abandoned": int(r.get("abandoned") or 0),
                      "max_queue_len": 0}
     for r in q_series:
         k = (r["pool_id"], _iso(r["bucket"]))
         m = merged.setdefault(k, {"bucket": _iso(r["bucket"]), "pool_id": r["pool_id"],
-                                  "avg_wait_ms": 0, "contacts": 0, "queued": 0, "abandoned": 0,
+                                  "avg_wait_ms": 0, "contacts": 0, "queued": 0, "waits": 0,
+                                  "abandoned": 0,
                                   "max_queue_len": 0})
         m["max_queue_len"]    = int(r.get("max_queue_len") or 0)
     series = sorted(merged.values(), key=lambda x: (x["bucket"], x["pool_id"]))
 
-    # SLA: contato não-enfileirado espera 0 (dentro do SLA por construção);
-    # enfileirado compara a duração do segmento de fila com o sla_target.
+    # ── Elegibilidade a SLA (D14-i, 2026-08-24) — TRÊS exclusões, uma regra ──────
+    #
+    # Regra: **só uma espera CONCLUÍDA e com alvo é julgável.** Antes, o predicado
+    # era `sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms` sobre TODA
+    # linha, e o `coalesce` era o buraco — ele transformava três ausências
+    # diferentes em "esperou zero, logo cumpriu":
+    #
+    #   1. **contato que nunca enfileirou.** Era descrito como "dentro do SLA por
+    #      construção", e o número que derrubou a justificativa foi medido nesta
+    #      fatia: `limite_entrega` com 37 contatos, ZERO esperas e **aderência
+    #      100%**. Idem `demo_ia`, `formfill_demo`, `aprovacao_deploy`. Verde que
+    #      não pode ficar vermelho — a definição de indicador inútil.
+    #   2. **espera em curso** (`duration_ms IS NULL` — os 5 segmentos abertos do
+    #      `retencao_humano`). Julgar o que não terminou é a mesma mentira, e o
+    #      `coalesce` a fabricava como cumprimento.
+    #   3. **espera ABANDONADA.** Medido: `especialista_onboarding`, 2 esperas, as
+    #      DUAS abandonadas (~83 s contra alvo de 10 min), aderência **100%**. O
+    #      cliente que desistiu contava como atendido no prazo — quanto mais cedo
+    #      desistisse, melhor o indicador ficava. Inverte o sentido da métrica.
+    #
+    # ⚠️ **Os números de conformidade MUDAM, e muito.** Declarado antes de medir:
+    # `retencao_humano` sai de 0,913 (com 20 de 48 esperas abandonadas — 91% nunca
+    # descreveu aquele pool) e os pools sem fila passam a devolver `null`, que a UI
+    # já renderiza como ausente. Aderência ausente ≠ aderência zero.
+    _sla_eligible = f"({_queued} AND wait_ms IS NOT NULL AND sla_target_ms > 0)"
     by_pool = _rows_to_dicts(client.query(f"""
         SELECT pool_id,
-               count()                                             AS contacts,
-               countIf({_queued})                                  AS queued,
+               uniqExact(session_id)                               AS contacts,
+               uniqExactIf(session_id, {_queued})                  AS queued,
+               countIf({_queued})                                  AS waits,
                countIf({_abandoned})                               AS abandoned,
                countIf({_handoff})                                 AS handoff,
                round(countIf({_abandoned}) / greatest(countIf({_queued}), 1), 4) AS abandon_rate,
                round(avg(wait_ms), 0)                              AS avg_wait_ms,
                round(quantile(0.95)(wait_ms), 0)                   AS p95_wait_ms,
                max(sla_target_ms)                                  AS sla_target_max,
-               countIf(sla_target_ms > 0 AND coalesce(wait_ms, 0) <= sla_target_ms) AS within_sla,
-               countIf(sla_target_ms > 0)                          AS sla_eligible
-        FROM ({_per_session})
+               countIf({_sla_eligible} AND NOT ({_abandoned})
+                                       AND wait_ms <= sla_target_ms) AS within_sla,
+               countIf({_sla_eligible})                            AS sla_eligible
+        FROM ({_per_wait})
         WHERE {outer_where}
         GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))

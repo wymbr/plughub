@@ -62,13 +62,15 @@
       "tableTitle": "Queue by pool",
       "noData": "No queue data in the period.",
       "waitAvg": "Avg wait (s)",
-      "hint": "Wait = duration of the queue segment (attended queue). Abandon % over queued contacts.",
-      "cols": { "pool": "Pool", "tier": "Queue", "contacts": "Contacts", "queued": "Queued", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" },
+      "hint": "Contacts and Queued count sessions; Waits and everything after it count queue passages — a contact transferred between pools waits more than once. Abandon % is over passages.",
+      "cols": { "pool": "Pool", "tier": "Queue", "contacts": "Contacts", "queued": "Queued", "waits": "Waits", "handoff": "Post-queue", "abandoned": "Abandoned", "abandonRate": "Aband. %", "avgWait": "Avg wait", "p95Wait": "p95" },
       "tier": { "attended": "Attended (AI)", "system": "System (free)", "none": "—" }
     },
     "sla": {
       "title": "SLA attainment by pool",
       "noData": "No SLA data in the period.",
+      "hint": "Only a completed wait with a target is judged. Contacts that never queued, waits still in progress and abandoned waits are all excluded — a customer who gave up is not a target met.",
+      "notMeasured": "not measured",
       "cols": { "pool": "Pool", "target": "Target", "within": "Within", "attainment": "Attainment" }
     }
   },

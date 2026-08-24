@@ -52,8 +52,17 @@ interface OccData      {
 }
 
 // F5: `available_agents` saiu do contrato — produtor, query e gráfico removidos juntos.
-interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; abandoned: number; max_queue_len: number }
-interface QPoolRow    { pool_id: string; contacts: number; queued: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
+// D14-i (2026-08-24): DUAS unidades no mesmo contrato, e elas são nomeadas.
+//   `contacts` / `queued` → SESSÕES distintas (significado inalterado — é o que o
+//                           operador já lê nesta tela).
+//   `waits` (NOVO) / `abandoned` / `handoff` / `avg_wait_ms` / `p95_wait_ms`
+//                         → PASSAGENS pela fila. Uma sessão que espera em dois
+//                           pools conta 1 contato em cada e 2 esperas no total.
+// Antes, o backend colapsava a sessão numa linha e SORTEAVA (`anyIf`) o pool e o
+// desfecho quando havia mais de uma espera: 12 de 71 esperas eram invisíveis.
+// ⚠️ `max_queue_len` continua sem leitor nesta tela (declarado e nunca renderizado).
+interface QSeriesRow  { bucket: string; pool_id: string; avg_wait_ms: number; contacts: number; queued: number; waits: number; abandoned: number; max_queue_len: number }
+interface QPoolRow    { pool_id: string; contacts: number; queued: number; waits: number; abandoned: number; handoff: number; abandon_rate: number; avg_wait_ms: number; p95_wait_ms: number; sla_target_ms: number; within_sla: number; sla_eligible: number; sla_attainment: number | null }
 interface QueueData   { series: QSeriesRow[]; by_pool: QPoolRow[] }
 
 const CHANNEL_COLORS = ['#1B4F8A', '#2D9CDB', '#00B4D8', '#059669', '#D97706', '#7C3AED', '#DC2626', '#0891B2']
@@ -507,6 +516,7 @@ const FilaSubTab: React.FC<{
               <th className="text-left px-3 py-2">{t('pools.queue.cols.tier')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.contacts')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.queued')}</th>
+              <th className="text-right px-3 py-2">{t('pools.queue.cols.waits')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.handoff')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.abandoned')}</th>
               <th className="text-right px-3 py-2">{t('pools.queue.cols.abandonRate')}</th>
@@ -531,6 +541,10 @@ const FilaSubTab: React.FC<{
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-dark">{r.contacts}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{r.queued}</td>
+                {/* Passagens ≥ sessões em fila: a diferença é a re-espera (transferência,
+                    devolução à fila). Onde os dois números divergem, o relatório antigo
+                    mostrava só um deles — e sorteava qual. */}
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{r.waits ?? 0}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-green">{r.handoff ?? 0}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-warning-text">{r.abandoned}</td>
                 <td className="px-3 py-2 text-right tabular-nums text-muted">{Math.round((r.abandon_rate ?? 0) * 100)}%</td>
@@ -561,6 +575,7 @@ const SlaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ dat
     <div className="bg-white rounded-lg border border-border overflow-hidden">
       <div className="px-4 py-2.5 border-b border-border bg-surface-muted">
         <p className="text-xs font-semibold text-muted uppercase tracking-wide">{t('pools.sla.title')}</p>
+        <p className="text-2xs text-muted-light mt-0.5">{t('pools.sla.hint')}</p>
       </div>
       <table className="min-w-full text-xs border-collapse">
         <thead className="bg-surface-muted">
@@ -573,7 +588,22 @@ const SlaSubTab: React.FC<{ data: QueueData | null; loading: boolean }> = ({ dat
         </thead>
         <tbody>
           {rows.map((r, i) => {
-            const a = r.sla_attainment ?? 0
+            // `sla_attainment` NULL = não medido (nenhuma espera concluída com alvo).
+            // O `?? 0` que havia aqui pintava a barra de VERMELHO em 0% — ausência
+            // virando ponto legítimo da escala, a mesma família do sentimento
+            // (CLAUDE.md § Sentiment Tracking). Hoje o filtro `sla_eligible > 0`
+            // acima o tornava inalcançável, mas guarda a montante não é motivo para
+            // manter mentira a jusante: com a D14-i mais pools passam a ter
+            // `sla_eligible = 0`, e o default estava a uma edição de voltar a mentir.
+            const a = r.sla_attainment
+            if (a === null || a === undefined) return (
+              <tr key={i} className="border-b border-border hover:bg-surface-muted">
+                <td className="px-3 py-2 text-dark">{r.pool_id || '—'}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted">{fmtMs(r.sla_target_ms)}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-muted-light">—</td>
+                <td className="px-3 py-2 text-2xs text-muted-light">{t('pools.sla.notMeasured')}</td>
+              </tr>
+            )
             const c = a >= 0.9 ? '#059669' : a >= 0.75 ? '#D97706' : '#DC2626'
             return (
               <tr key={i} className="border-b border-border hover:bg-surface-muted">

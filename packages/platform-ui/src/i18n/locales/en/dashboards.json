@@ -79,6 +79,7 @@
     "paused_min":      "Paused (min)",
     "contacts":        "Contacts",
     "queued":          "Queued",
+    "waits":           "Waits",
     "abandoned":       "Abandoned",
     "abandon_rate":    "Abandon %",
     "avg_wait":        "Avg Wait",

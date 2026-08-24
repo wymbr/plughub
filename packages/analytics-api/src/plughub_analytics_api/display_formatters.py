@@ -473,10 +473,14 @@ async def fmt_pools_queue(
     )
     by_pool = (result.get("data") or {}).get("by_pool", [])
 
+    # D14-i: `contacts`/`queued` são SESSÕES; `waits` e o resto são PASSAGENS pela
+    # fila. Um contato transferido espera mais de uma vez, e até 2026-08-24 só uma
+    # das esperas sobrevivia à leitura (o resto era descartado pelo `maxIf`).
     columns = [
         {"key": "pool_id",      "label": "Pool",         "sortable": True},
         {"key": "contacts",     "label": "Contatos",     "sortable": True, "align": "right"},
         {"key": "queued",       "label": "Enfileirados", "sortable": True, "align": "right"},
+        {"key": "waits",        "label": "Esperas",      "sortable": True, "align": "right"},
         {"key": "abandoned",    "label": "Abandonos",    "sortable": True, "align": "right"},
         {"key": "abandon_rate", "label": "Abandono %",   "sortable": True, "align": "right"},
         {"key": "avg_wait",     "label": "Espera Média", "sortable": True, "align": "right"},
@@ -491,6 +495,7 @@ async def fmt_pools_queue(
             "pool_id":      r.get("pool_id", "-"),
             "contacts":     int(r.get("contacts", 0)),
             "queued":       int(r.get("queued", 0)),
+            "waits":        int(r.get("waits", 0)),
             "abandoned":    int(r.get("abandoned", 0)),
             "abandon_rate": f"{float(r.get('abandon_rate', 0)) * 100:.1f}%",
             "avg_wait":     f"{int(r.get('avg_wait_ms', 0) or 0):,} ms",
