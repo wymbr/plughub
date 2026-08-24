@@ -128,8 +128,30 @@ export const QueuePositionUpdatedEventSchema = z.object({
    * em `{tenant}:capacity:snapshot`, deduplicada por instância distinta e por tipo.
    */
   available_agents:  z.number().int().nonnegative().optional(),
-  estimated_wait_ms: z.number().int().nonnegative(),
-  sla_target_ms:     z.number().int().nonnegative(),
+  /**
+   * NULO quando o alvo de espera do pool não é conhecível (2026-08-24).
+   *
+   * ⚠️ Eram `nonnegative()` e **obrigatórios**, e a combinação tornava "não sei"
+   * inexpressável enquanto legitimava `0`. O produtor fazia exatamente isso: com o
+   * cache `{t}:pool_config:{p}` ausente — que tem TTL, logo o gatilho é o relógio —
+   * publicava `estimated_wait_ms: 0`, uma espera de zero milissegundo com cara de
+   * estimativa. Um contrato que não sabe dizer "ausente" empurra o produtor para o
+   * valor plausível mais próximo.
+   *
+   * O schema irmão já tinha a forma honesta para o MESMO campo:
+   * `RoutingResultEventSchema.sla_target_ms` é `positive().nullable().optional()`.
+   * Duas declarações do mesmo fato divergiam; agora concordam.
+   *
+   * ⚠️ **Os dois não têm o mesmo piso, e a assimetria é deliberada.** O alvo é
+   * CONFIGURADO, e `0` nunca é um alvo — `PoolSchema.sla_target_ms` já o proíbe, e
+   * preservá-lo dá prioridade absoluta no scorer ⇒ `.positive()`. A ETA é
+   * DERIVADA (`position × int(alvo × 0.7)`), e um alvo válido porém pequeno produz
+   * legitimamente `0` ⇒ `.nonnegative()`. O que desfaz a ambiguidade não é o piso e
+   * sim a existência do `null`: com ele, `0` volta a significar "calculado como
+   * zero" em vez de "não sabemos". Ver `models.resolve_sla_target_ms`.
+   */
+  estimated_wait_ms: z.number().int().nonnegative().nullable(),
+  sla_target_ms:     z.number().int().positive().nullable(),
   published_at:      z.string().datetime(),
 })
 export type QueuePositionUpdatedEvent = z.infer<typeof QueuePositionUpdatedEventSchema>

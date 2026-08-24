@@ -36,7 +36,7 @@ import redis.asyncio as aioredis
 
 from .models import (
     AgentInstance, InstanceMeta, PoolConfig, QueuedContact, RoutingExpression,
-    SLA_TARGET_MS_FALLBACK,
+    SLA_TARGET_MS_FALLBACK, resolve_sla_target_ms,
 )
 from .config import get_settings
 from .mute_queue import first_queued_key, _TTL_S as _FIRST_QUEUED_TTL_S
@@ -3133,20 +3133,23 @@ class InstanceRegistry:
                 )
 
         src = existing or cfg
-        # Fallback nomeado e BARULHENTO (D14.1): o `warning` acima cobre o caso
-        # "sem snapshot E sem pool_config"; este cobre o caso em que a fonte EXISTE
-        # mas não traz o campo — que era silencioso e publicava um alvo de espera
-        # inventado no snapshot que o Console e os relatórios leem.
-        _sla_src = src.get("sla_target_ms")
-        if not _sla_src:
-            logger.warning(
-                "refresh_pool_snapshot: pool=%s tenant=%s sem sla_target_ms na fonte "
-                "(%s) — publicando FALLBACK %d ms. O alvo de espera desta linha NÃO "
-                "descreve a config do pool.",
-                pool_id, tenant_id, "snapshot" if existing else "pool_config",
-                SLA_TARGET_MS_FALLBACK,
-            )
-        sla_target_ms          = int(_sla_src or SLA_TARGET_MS_FALLBACK)
+        # Fallback nomeado e BARULHENTO (D14.1): o `warning` do bloco acima cobre o
+        # caso "sem snapshot E sem pool_config"; o predicado abaixo cobre o caso em
+        # que a fonte EXISTE mas não traz um alvo utilizável — que era silencioso e
+        # publicava um número inventado no snapshot que o Console e os relatórios leem.
+        #
+        # ⚠️ Era `int(_sla_src or SLA_TARGET_MS_FALLBACK)`, e a truthiness fazia este
+        # site DISCORDAR do `kafka_listener` (que preservava `0`) sobre exatamente um
+        # valor. Com `0` configurado, o operador lia 8 min no Monitor enquanto o motor
+        # se comportava como prioridade infinita — a tela e o comportamento contando
+        # histórias diferentes sobre o mesmo pool. Um predicado, uma resposta.
+        _sla = resolve_sla_target_ms(
+            src.get("sla_target_ms"),
+            where     = f"refresh_pool_snapshot({'snapshot' if existing else 'pool_config'})",
+            pool_id   = pool_id,
+            tenant_id = tenant_id,
+        )
+        sla_target_ms          = _sla if _sla is not None else SLA_TARGET_MS_FALLBACK
         channel_types          = src.get("channel_types", []) or []
         max_reply_time_ms      = src.get("max_reply_time_ms")
         # Arc 19: campos de pool webhook — do snapshot quando existe, senão do

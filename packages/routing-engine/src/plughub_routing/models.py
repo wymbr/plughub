@@ -5,8 +5,11 @@ Spec: PlugHub v24.0 sections 3.3, 3.3a, 4.6
 """
 
 from __future__ import annotations
+import logging
 from typing import Literal, Any
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger("plughub.routing")
 
 
 # ─────────────────────────────────────────────
@@ -231,6 +234,93 @@ def resolve_agent_type(instance: "AgentInstance", pool_id: str) -> str:
 # **Quem o usa TEM de logar** — um alvo de espera fabricado alimenta aging, breach,
 # ETA ao cliente e a aderência de SLA sem nada ficar vermelho.
 SLA_TARGET_MS_FALLBACK = 480_000
+
+
+def resolve_sla_target_ms(
+    raw:       object,
+    *,
+    where:     str,
+    pool_id:   str = "",
+    tenant_id: str = "",
+) -> int | None:
+    """
+    **A ÚNICA resposta** à pergunta *"este valor é um alvo de espera utilizável?"*.
+
+    Devolve o alvo em ms, ou **`None` quando não há alvo conhecível** — nunca `0`,
+    nunca um número fabricado. Quem precisa de um `int` aplica o
+    `SLA_TARGET_MS_FALLBACK` **no próprio call site**, para que a fabricação fique
+    visível onde acontece em vez de escondida aqui dentro.
+
+    ── Por que esta função existe (2026-08-24) ──────────────────────────────────
+    O mesmo campo era derivado da mesma fonte em **quatro** lugares, com **quatro**
+    respostas diferentes — e a divergência não era escolha de ninguém:
+
+    | site | ausente → | `0` → |
+    |---|---|---|
+    | `kafka_listener` (evento `pool.registered`) | fallback, com log | **preservava `0`** |
+    | `registry.refresh_pool_snapshot` | fallback, com log | fallback (truthiness) |
+    | `main._pool_sla_target` | `None`, mudo | preservava `0` |
+    | `main._queue_position_and_eta` | **`0`**, mudo | preservava `0` |
+
+    Consequência da última linha: `avg_handle_ms = int(0 * 0.7) = 0` ⇒ **ETA de
+    `0 ms` publicada AO CLIENTE** sempre que o cache `{t}:pool_config:{p}` estivesse
+    ausente — que não é evento malformado, é chave expirada, com gatilho de relógio.
+
+    É a terceira ocorrência da família `??` × truthiness neste repositório
+    (`conference-mechanics.md` Mudanças 35 e 37), e a lição do invariante do
+    CLAUDE.md vale literalmente aqui: *duas respostas para a mesma pergunta é como
+    se paga a licença de um agente que não existe.* Quatro é pior que duas.
+
+    ── Por que `0` é INVÁLIDO, e não "alvo instantâneo" ─────────────────────────
+    O contrato declara `z.number().int().positive()`
+    (`schemas/src/agent-registry.ts:328`), logo `0` **não é configurável** — só
+    chega por evento malformado ou linha legada. E preservá-lo não seria "respeitar
+    a config": `scorer.py:177` faz `max(0, 1) = 1`, então `sla_ratio` vira o elapsed
+    em ms cru ⇒ aging no teto e `breach_bonus` sem limite; `decide.py:287` passa a
+    ter `sla_urgency > 1.0` **sempre** ⇒ prioridade absoluta; `saturated.py:74` dá
+    `> 2.0` na voz ⇒ **redirect para site secundário + oncall** a cada espera.
+    Nada disso é sinal de diagnóstico — é dano, e um pager acordado por engano.
+    O barulho tem de estar no LOG, nunca no comportamento.
+
+    ⚠️ **`bool` é `int` em Python.** `isinstance(True, int)` é `True`, e sem a
+    guarda explícita um `true` no JSON viraria alvo de 1 ms — valor plausível
+    produzido por um tipo errado, que é a forma mais barata de todas.
+    """
+    if raw is None:
+        logger.warning(
+            "sla_target_ms AUSENTE em %s (pool=%s tenant=%s). O campo é obrigatório "
+            "no contrato Zod — este pool NÃO tem alvo de espera conhecido.",
+            where, pool_id or "?", tenant_id or "?",
+        )
+        return None
+
+    if isinstance(raw, bool):
+        logger.warning(
+            "sla_target_ms com tipo BOOLEANO (%r) em %s (pool=%s tenant=%s) — "
+            "recusado. Em Python `bool` é `int`, então sem esta guarda viraria um "
+            "alvo de 1 ms.", raw, where, pool_id or "?", tenant_id or "?",
+        )
+        return None
+
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "sla_target_ms ILEGÍVEL (%r) em %s (pool=%s tenant=%s) — sem alvo.",
+            raw, where, pool_id or "?", tenant_id or "?",
+        )
+        return None
+
+    if value <= 0:
+        logger.warning(
+            "sla_target_ms NÃO-POSITIVO (%d) em %s (pool=%s tenant=%s) — recusado. "
+            "O contrato exige `.positive()`; preservar o valor daria prioridade "
+            "absoluta no scorer, breach sem teto e ETA de 0 ms ao cliente.",
+            value, where, pool_id or "?", tenant_id or "?",
+        )
+        return None
+
+    return value
 
 
 class PoolConfig(BaseModel):

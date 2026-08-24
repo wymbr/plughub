@@ -331,6 +331,25 @@ async def test_same_passage_emits_the_same_id_twice(env):
 #                      incondicionalmente passaria nos dois de cima
 #
 # Previsão escrita antes de rodar: 1 · 1 · 0. Antes da mudança seria 1 · **0** · 0.
+#
+# ── Falseabilidade CONFERIDA em 2026-08-24 ───────────────────────────────────────
+# A linha "estava VERMELHO antes desta fatia" era **dedução**, não observação:
+# quando foi escrita o código já estava consertado, e o único vermelho que o autor
+# tinha visto era o do harness (o `_FakeProducer` do fixture exigindo `key=` em
+# todos os tópicos ⇒ `TypeError` engolido ⇒ `AttributeError` antes de qualquer
+# asserção — ver `_run_timeout` abaixo). Comentário que afirma medição sem tê-la
+# feito é a mesma família do DDL de `participation_intervals`, então foi medido:
+#
+#   mutação: a chamada a `resolve_queue_exit` em `_emit_queue_timeout` re-gatilhada
+#   por `queue:agent_active` (o ramo `else` reencenado)
+#   resultado: **1 failed, 3 passed** — `attended_tier` vermelho com
+#   "fila ATENDIDA fechada por max_wait produziu 0 segmentos de espera"
+#
+# ⚠️ **Não use `git stash` para repetir isto.** Com a fatia B commitada o stash é
+# no-op, o teste segue verde, e *verde por ausência de mudança* é indistinguível de
+# *teste que não pode reprovar* — que é a proposição sob exame. Mute de propósito, e
+# confirme QUAL código rodou por `inspect.getsource` da função carregada (não por
+# `grep`: este bloco de comentário cita os nomes que a busca contaria).
 
 
 class _TimeoutProducer:

@@ -1386,8 +1386,27 @@ reais e gate re-executável `packages/routing-engine/src/plughub_routing/tests/t
   tem teto 1800 s e virou fila ATENDIDA em 08-24 — o próximo timeout cairia no buraco), dano
   histórico **ZERO** (1 timeout na vida do tenant, em 08-18, no tier mudo, registrado certo). A
   população **não contém** o caso consertado ⇒ medição em runtime é **inconclusiva** como gate.
-  ⚠️ **Não observado:** o teste do tier atendido não foi visto vermelho pelo motivo certo — reprovou
-  por defeito do harness. Fechar custa um `git stash` + build.
+  ~~⚠️ **Não observado:** o teste do tier atendido não foi visto vermelho pelo motivo certo — reprovou
+  por defeito do harness. Fechar custa um `git stash` + build.~~
+  ✅ **OBSERVADO em 2026-08-24.** Mutação nomeada e reversível em `_emit_queue_timeout` (a chamada a
+  `resolve_queue_exit` re-gatilhada por `queue:agent_active`, reencenando o ramo `else`) → **1 failed,
+  3 passed**, e o vermelho veio com a mensagem que o teste declara: *"fila ATENDIDA fechada por
+  max_wait produziu **0** segmentos de espera"*. Previsão escrita antes de rodar (mute VERDE ·
+  attended VERMELHO · sem-carimbo VERDE · guarda AST VERDE ⇒ **1 de 4**): **acertada nos quatro**.
+  Revertido; `ORIG` no preflight e **14 passed**.
+  ⚠️ **`git stash` teria sido o instrumento ERRADO, e o erro seria mudo:** com a fatia B já commitada
+  o stash é no-op e o teste segue verde — e *verde por ausência de mudança* é indistinguível de
+  *teste que não pode reprovar*, que é exatamente a proposição sob exame. Por isso o preflight não é
+  `grep` de texto e sim `inspect.getsource` da função **carregada**: "o build não pegou" e "o teste é
+  inútil" produzem os dois um verde e são conclusões opostas.
+  ⚠️ **Reconciliação doc×código:** o comentário em `test_queue_wait_segment.py:328-333` afirmava *"é o
+  único que estava VERMELHO antes desta fatia"* — a **afirmação era verdadeira, o status epistêmico
+  não**: era dedução do autor, escrita depois do conserto, e o vermelho que ele de fato viu foi o do
+  harness (`_FakeProducer` do fixture exigindo `key=` em todos os tópicos → `TypeError` engolido →
+  `AttributeError`, documentado em `_run_timeout:374-380`). Agora é observação, com citação.
+  🟢 **Subproduto:** o defeito original era mudo, e a fatia B **deixou testemunha** — `main.py:711`
+  loga `wait_segment=%s`, que sob a mutação saiu `wait_segment=False` ao lado de `queue_agent=True`.
+  Antes da fatia a variável não existia. É a § *Degradação NUNCA é silenciosa* honrada de graça.
   ⏳ **Encostado e não pago:** aquele caminho publica em outbound e `conversations.events` **sem
   `key=`**. Tópicos diferentes, fatia diferente.
 - **O bridge tem a MESMA colisão** (`main.py:5963`, namespace `queue-agent`, `uuid5(tenant, session)`
@@ -1660,13 +1679,42 @@ Não se cria campo para alimentar tela que não lê.
    | `null` / ausente | vira **480 000 ms** (`kafka_listener:231`, com WARNING). "Sem alvo" vira "8 minutos" — silencioso exceto pelo log |
    | `0` | **pior, e em quatro lugares**: `scorer.py:177` `max(0,1)=1` ⇒ `sla_ratio` = elapsed em ms ⇒ aging no teto e `breach_bonus` sem limite · `decide.py:287` ⇒ `sla_urgency > 1.0` **sempre** ⇒ prioridade absoluta · `saturated.py:74` voz ⇒ `>2.0` ⇒ **redirect p/ site secundário + oncall** a cada espera, e `int(0×1.5)=0` ⇒ ETA 0 · `main.py:1075` ⇒ `avg_handle_ms=0` ⇒ **ETA 0 ms publicada AO CLIENTE** |
 
-   🔴 **Achado colateral — os dois escritores do campo DISCORDAM sobre o `0`.**
-   `kafka_listener:231` usa `_sla_raw if _sla_raw is not None else FALLBACK` (**preserva** 0);
-   `registry.py:3149` usa `int(_sla_src or SLA_TARGET_MS_FALLBACK)` (**truthiness** ⇒ 0 → 480 000).
-   Com `0` configurado, o snapshot que o operador lê no Monitor diz **8 min** enquanto o motor se
-   comporta como prioridade infinita. É a terceira ocorrência da família `??`×truthiness neste
-   repositório (Mudanças 35 e 37), agora no campo que a D14.1 acabou de definir. Fatia própria,
-   pequena: escolher UM predicado e compartilhá-lo.
+   ~~🔴 **Achado colateral — os dois escritores do campo DISCORDAM sobre o `0`.**~~
+   ✅ **FECHADO 2026-08-24 — e não eram dois escritores, eram QUATRO sites.** A conta original
+   (`kafka_listener:231` preservando `0` × `registry.py:3149` com truthiness) estava certa e
+   **incompleta**; ao medir por `grep` de derivação (não de menção) apareceram mais dois, ambos
+   mudos e ambos em `main.py`:
+
+   | site | fonte | ausente → | `0` → |
+   |---|---|---|---|
+   | `kafka_listener` | evento `pool.registered` | fallback, com log | **preservava `0`** |
+   | `registry.refresh_pool_snapshot` | snapshot / pool_config | fallback, com log | fallback (truthiness) |
+   | `main._pool_sla_target` | cache `pool_config` | `None`, **mudo** | preservava `0` |
+   | `main._queue_position_and_eta` | cache `pool_config` | **`0`**, **mudo** | preservava `0` |
+
+   🔴 **A última linha era o defeito ATIVO, e não precisava de `0` configurado para morder.**
+   `avg_handle_ms = int(0 × 0.7) = 0` ⇒ **ETA de `0 ms` publicada AO CLIENTE**, e ausência ali não é
+   evento malformado: `{t}:pool_config:{p}` **tem TTL**, logo o gatilho é o RELÓGIO. O `0` era portão
+   fechado; este não era portão nenhum.
+
+   Conserto: predicado único `models.resolve_sla_target_ms` (`int | None`, nunca `0`, log nomeando
+   QUAL violação), com o `SLA_TARGET_MS_FALLBACK` aplicado **no call site** dos dois que precisam de
+   `int` — a fabricação aparece onde acontece em vez de ficar escondida no predicado. Contrato
+   corrigido junto: `QueuePositionUpdatedEventSchema.estimated_wait_ms`/`sla_target_ms` eram
+   `nonnegative()` **obrigatórios**, o que tornava *"não sei"* inexpressável e legitimava `0` —
+   enquanto o schema irmão `RoutingResultEventSchema:163` já declarava o MESMO campo como
+   `positive().nullable().optional()`. Gate: `test_sla_target_predicate.py` (**23 passed**).
+
+   ⚠️ **O que dava valor ao gate era a linha do `0`**, e por um motivo de método: um teste de
+   *"todos concordam"* só julga se a população contiver o caso em que eles DISCORDAVAM. Sem ela a
+   mesma tabela passaria idêntica sobre o código velho.
+
+   🟢 **Achado de graça — a "fonte única" já tinha dois consumidores discordando.**
+   `_write_queue_context:1120` guardava (`if avg_handle_ms > 0`) e omitia a tag; `_publish_queue_position`
+   publicava `estimated_wait_ms: 0` sem guarda. Uma função só não faz fonte única quando o valor de
+   "não sei" é indistinguível de um valor medido: **a unicidade estava no cálculo, não no vocabulário.**
+   E nenhuma das duas funções de `main.py` tinha teste algum — a ETA que fala com o cliente estava sem
+   cobertura.
 
    **As opções reais do passo 4, então:**
    (a) tornar o campo **Optional de ponta a ponta** — Zod, `PoolConfig`, e ramo `None` explícito nos
@@ -1687,9 +1735,45 @@ Não se cria campo para alimentar tela que não lê.
    - a opção (a) fica registrada, **não descartada** — reabre se alguém precisar da distinção no
      COMPORTAMENTO (ex.: pool de processo que não deveria participar de aging nenhum). Hoje não há
      esse requisito;
-   - 🔴 **a divergência de escritores sobre o `0` NÃO é fechada por (b)** e continua aberta como
-     fatia própria. Ela não depende de ninguém escrever `0` para ser errada — depende para
-     MORDER, e hoje ninguém escreve.
+   - ~~🔴 **a divergência de escritores sobre o `0` NÃO é fechada por (b)** e continua aberta como
+     fatia própria.~~ ✅ **Fechada em 2026-08-24** — ver o bloco acima. A frase *"hoje ninguém
+     escreve `0`, então não morde"* estava **certa sobre o `0` e errada sobre a fatia**: o site que
+     mordia era o da ETA, e ele não precisava de `0` na config — bastava a chave de cache expirar.
+##### Achados adjacentes da fatia do predicado (2026-08-24) — registrados, NÃO perseguidos
+
+🔴 **1. O TTL de `{t}:pool_config:{p}` é 1 HORA, não 24 — e a razão é que dois serviços escrevem a
+MESMA chave com TTLs diferentes.** `routing-engine/registry.py:3298` usa `pool_config_ttl_seconds`
+(**86 400**); `orchestrator-bridge/instance_bootstrap.py:477,939` usa `_POOL_CONFIG_TTL_S` (**3 600**).
+Último escritor vence, e o bridge reconcilia a cada 5 min (`_RECONCILE_INTERVAL_S = 300`) ⇒ **o
+escritor efetivo é sempre o bridge e o 24 h do routing-engine está morto**. Medido: 36 chaves, todas
+em `ttl 3592`.
+⚠️ **E `config-api/seed.py:288` afirma em PROSA a separação que não existe:** *"Routing-engine has a
+separate pool_config_ttl_seconds (24h) for its own cache"* — é a mesma chave, mesmo namespace.
+Comentário que promete invariante sem mecanismo, família do DDL de `participation_intervals`.
+⚠️ **O 24 h foi um conserto deliberado que o bridge desfez em silêncio:** `changelog-2026-04-16.md`
+documenta a falha (TTL expirado → `get_pool()` `None` → tudo enfileirado com agentes livres) e a
+correção 300 s → 86 400. A janela real após queda do bridge é **1 hora**.
+*(A fatia do predicado já removeu o dano mais caro desta expiração — a ETA de 0 ms —, mas a
+divergência de TTL segue de pé e afeta todo consumidor do cache.)*
+
+🆕 **2. `estimated_wait_factor` (0.7) e `congestion_sla_factor` (1.5) são o 2º e o 3º órfão do
+namespace `routing`.** Semeados (`config-api/seed.py:163,170`), cacheados (`routing_config.py:59-60`),
+testados — e **sem leitor**: `main.py` fixa `* 0.7` em código e `saturated.py` fixa `* 1.5`. Editar na
+tela não muda comportamento nenhum. Mesma família do `sla_default_ms` já registrado no passo 3 acima,
+que agora são **três** botões que prometem efeito e não têm.
+
+🔴 **3. `test_expire_returns_the_slot_even_after_the_lease_expired` está VERMELHO, e é anterior a esta
+fatia** (medido: nada em `router.py` foi tocado). Asserta `claimed_via == "semaphore"`, e o código
+devolve `"record"` — porque a emenda **D6** (2026-08-04) inseriu o registro durável de posse
+**ANTES** do semáforo (`router.py:1140`, que o diz literalmente). O teste não foi atualizado.
+⚠️ **Não é discrepância cosmética.** O comentário em `router.py:1158` declara que a linha do
+`semaphore` é *"a MEDIDA da lacuna 2"* — item reivindicado, sem lease, vaga presa. Com o `record`
+respondendo primeiro, **esse ramo ficou inalcançável neste cenário**, e o instrumento da lacuna 2
+parou de ser exercido sem que nada além deste vermelho o dissesse. Casa com a lacuna que a **Camada F**
+do arco de detach já declarava (*"a lease não foi medida"*).
+⏳ **Consertar não é trocar a string para `"record"`** — é decidir onde vive a medida da lacuna 2
+depois que o registro durável passou a responder antes dela.
+
 5. **Onde os valores altos deviam estar** — se expressam teto, o campo é `queue_config.max_wait_s`
    (ver tabela alvo × teto acima). Migração à mão: os 2 pools de `delegate` I/O não têm
    discriminador no registro.

@@ -20,7 +20,11 @@ from .admission import AdmissionController, AdmissionDecision
 from .config import get_settings
 from .crash_detector import CrashDetector
 from .evaluation_consumer import EvaluationConsumer, load_evaluation_flow
-from .models import ConversationInboundEvent, ConversationRoutedEvent
+from .models import (
+    ConversationInboundEvent,
+    ConversationRoutedEvent,
+    resolve_sla_target_ms,
+)
 from .registry import (
     InstanceRegistry,
     PoolRegistry,
@@ -342,13 +346,24 @@ async def _pool_sla_target(
 ) -> int | None:
     """SLA (ms) do pool a partir do cache de pool_config — para denormalizar
     nos contact_closed autoritativos do routing (a linha de close é a que
-    sobrevive no ReplacingMergeTree do analytics)."""
+    sobrevive no ReplacingMergeTree do analytics).
+
+    `None` = alvo não conhecível, e o campo vai NULO para o analytics. Nunca `0`:
+    a coluna alimenta a aderência de SLA, e um zero ali seria uma espera cujo alvo
+    é instantâneo — 100% de violação fabricada. Veredicto pelo predicado único
+    (`models.resolve_sla_target_ms`), que também é quem loga o motivo.
+    """
     if not tenant_id or not pool_id:
         return None
     try:
         raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
         if raw:
-            return (json.loads(raw) or {}).get("sla_target_ms")
+            return resolve_sla_target_ms(
+                (json.loads(raw) or {}).get("sla_target_ms"),
+                where     = "_pool_sla_target",
+                pool_id   = pool_id,
+                tenant_id = tenant_id,
+            )
     except Exception:
         pass
     return None
@@ -1040,10 +1055,19 @@ async def _queue_position_and_eta(
     session_id:        str,
     pool_id:           str,
     instance_registry: InstanceRegistry,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int | None, int | None, int]:
     """
     FONTE ÚNICA da posição na fila. Retorna `(position, eta_ms, sla_target_ms,
-    queue_length)`.
+    queue_length)`, com **`eta_ms` e `sla_target_ms` NULÁVEIS**: ausentes quando o
+    alvo do pool não é conhecível. `position` e `queue_length` continuam sempre
+    presentes — são fatos do ZSET e não dependem de config nenhuma.
+
+    ⚠️ A "fonte única" já tinha DOIS consumidores discordando sobre isto antes de
+    2026-08-24: `_write_queue_context` guardava (`if avg_handle_ms > 0`) e omitia a
+    tag, enquanto `_publish_queue_position` publicava `estimated_wait_ms: 0` sem
+    guarda. Uma função só não faz fonte única quando o valor de "não sei" é
+    indistinguível de um valor medido — a unicidade estava no cálculo, não no
+    vocabulário.
 
     `position` = posição 1-based DESTE contato, por `ZRANK` no ZSET da fila (score =
     queued_at_ms, então o rank é a ordem de chegada). Fallback para o comprimento da
@@ -1068,12 +1092,28 @@ async def _queue_position_and_eta(
     if position <= 0:
         position = max(queue_length, 1)
 
-    sla_target_ms = 0
-    raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
-    if raw:
-        sla_target_ms = int(json.loads(raw).get("sla_target_ms", 0) or 0)
-    avg_handle_ms = int(sla_target_ms * 0.7)
+    # ⚠️ Era `sla_target_ms = 0` como default de AUSÊNCIA, e o zero atravessava
+    # `avg_handle_ms = int(0 * 0.7) = 0` até virar **ETA de 0 ms publicada AO
+    # CLIENTE** — mudo. E ausência aqui não é evento malformado: a chave
+    # `{t}:pool_config:{p}` tem TTL (medido: 1 h, escrito pelo bridge), então o
+    # gatilho é o RELÓGIO, não um produtor errado.
+    #
+    # Agora `None` = **não sabemos**, e o que não se sabe não se publica. Um alvo
+    # fabricado (`SLA_TARGET_MS_FALLBACK`) seria pior que a omissão: a ETA é a
+    # única saída deste módulo que fala com o cliente, e um número inventado ali é
+    # indistinguível de uma estimativa medida.
+    _cfg_raw = await redis_client.get(f"{tenant_id}:pool_config:{pool_id}")
+    _cfg     = json.loads(_cfg_raw) if _cfg_raw else {}
+    sla_target_ms = resolve_sla_target_ms(
+        _cfg.get("sla_target_ms"),
+        where     = "_queue_position_and_eta (ETA ao cliente)",
+        pool_id   = pool_id,
+        tenant_id = tenant_id,
+    )
+    if sla_target_ms is None:
+        return position, None, None, queue_length
 
+    avg_handle_ms = int(sla_target_ms * 0.7)
     return position, position * avg_handle_ms, sla_target_ms, queue_length
 
 
@@ -1103,7 +1143,10 @@ async def _write_queue_context(
         position, eta_ms, _sla, _qlen = await _queue_position_and_eta(
             redis_client, tenant_id, session_id, pool_id, instance_registry,
         )
-        avg_handle_ms = eta_ms // position if position else 0
+        # `eta_ms is None` = alvo do pool não conhecível. A guarda `> 0` logo abaixo
+        # já omitia a tag nesse caso — por acidente, porque o produtor devolvia 0.
+        # Agora ela omite pelo motivo certo, e o `None` não estoura o `//`.
+        avg_handle_ms = (eta_ms // position) if (eta_ms is not None and position) else 0
 
         def _entry(value: object) -> str:
             return json.dumps({

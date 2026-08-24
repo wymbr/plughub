@@ -2,6 +2,119 @@
 
 ---
 
+## `sla_target_ms` passa a ter UM predicado — e a ETA para de publicar 0 ms ao cliente (2026-08-24)
+
+A fatia foi aberta como *"os dois escritores discordam sobre o `0`"*. Ao medir por derivação (não por
+menção), eram **quatro sites com quatro respostas**, e o pior deles não precisava de `0` na config
+para morder.
+
+| site | fonte | ausente → | `0` → |
+|---|---|---|---|
+| `kafka_listener._handle_pool_event` | evento `pool.registered` | fallback, com log | **preservava `0`** |
+| `registry.refresh_pool_snapshot` | snapshot / pool_config | fallback, com log | fallback (truthiness) |
+| `main._pool_sla_target` | cache `pool_config` | `None`, **mudo** | preservava `0` |
+| `main._queue_position_and_eta` | cache `pool_config` | **`0`**, **mudo** | preservava `0` |
+
+### O defeito ativo estava na quarta linha, não na primeira
+
+`avg_handle_ms = int(0 × 0.7) = 0` ⇒ **ETA de `0 ms` publicada AO CLIENTE**. E ausência ali não é
+evento malformado: `{t}:pool_config:{p}` tem TTL, então o gatilho é o **relógio**. O `0` era portão
+fechado (o contrato Zod é `.positive()`); este não era portão nenhum.
+
+### Conserto
+
+`models.resolve_sla_target_ms(raw, where=…) -> int | None` — uma única resposta a *"este valor é um
+alvo de espera utilizável?"*. Nunca devolve `0`; loga **qual** violação ocorreu (ausente ×
+não-positivo × ilegível × booleano). O `SLA_TARGET_MS_FALLBACK` é aplicado **no call site** dos dois
+que precisam de `int` (`PoolConfig.sla_target_ms` é `int` — a opção "Optional de ponta a ponta" é a
+(a) da D14.1, registrada e recusada), para que a fabricação apareça onde acontece.
+
+`bool` tem guarda própria: `isinstance(True, int)` é `True` em Python, e sem ela um `true` no JSON
+viraria alvo de **1 ms** — valor plausível produzido por tipo errado.
+
+### O contrato empurrava o produtor para o valor plausível
+
+`QueuePositionUpdatedEventSchema.estimated_wait_ms`/`sla_target_ms` eram `nonnegative()` e
+**obrigatórios**: *"não sei"* era inexpressável e `0` era legítimo. Agora são nuláveis, com pisos
+**deliberadamente diferentes** — o alvo é configurado e `0` nunca é alvo (`.positive()`); a ETA é
+derivada e um alvo pequeno produz `0` legítimo (`.nonnegative()`). O que desfaz a ambiguidade é a
+existência do `null`, não o piso. O schema irmão `RoutingResultEventSchema:163` já tinha a forma
+honesta para o mesmo campo — duas declarações do mesmo fato divergiam.
+
+### Gate
+
+`test_sla_target_predicate.py` — **23 passed**, em duas metades que só julgam juntas: a **tabela** do
+veredicto e uma guarda **AST** de que os quatro sites consultam o predicado e nenhum aplica o
+fallback dentro de um `BoolOp` (a truthiness que era a divergência).
+
+⚠️ **A linha que dá valor à tabela é a do `0`** — um teste de "todos concordam" só julga se a
+população contiver o caso em que eles DISCORDAVAM; sem ela a mesma tabela passaria idêntica sobre o
+código velho. A linha do alvo válido é a testemunha de presença: sem ela, um predicado que recusasse
+tudo passaria em todas as outras. AST e não `grep` porque o docstring do próprio predicado **lista os
+quatro sites pelo nome**.
+
+🟢 **Achado de graça: a "fonte única" já tinha dois consumidores discordando.**
+`_write_queue_context:1120` guardava (`if avg_handle_ms > 0`) e omitia a tag; `_publish_queue_position`
+publicava `estimated_wait_ms: 0` sem guarda. **A unicidade estava no cálculo, não no vocabulário** —
+uma função só não faz fonte única quando "não sei" é indistinguível de um valor medido. Nenhuma das
+duas funções de `main.py` tinha teste: a ETA que fala com o cliente estava sem cobertura.
+
+Não-regressão: 278 passed. O único vermelho da suíte
+(`test_expire_returns_the_slot_even_after_the_lease_expired`) é **anterior e não relacionado** —
+asserta `claimed_via == "semaphore"` contra o ramo `record` que a emenda D6 inseriu antes dele em
+2026-08-04. Registrado em `TODO.md` com o motivo pelo qual não se conserta trocando a string.
+
+Registro: `TODO.md` § *"SLA está no grão errado"* (passo 4 e achados adjacentes).
+
+---
+
+## Falseabilidade da fatia B conferida — o gate do `max_wait_exceeded` reprova pelo motivo certo (2026-08-24)
+
+Nenhuma linha de produção mudou. O que mudou é o **estatuto** do verde de 14 testes que a fatia B
+deixou: ele passou de "verde" a "verde que sabe ficar vermelho", que é o que a § *Postura de
+Engenharia* exige (*"antes de aceitar um verde, pergunte o que o faria ficar vermelho"*).
+
+### Como
+
+Mutação nomeada e reversível em `_emit_queue_timeout`: a chamada a `resolve_queue_exit` re-gatilhada
+por `queue:agent_active`, reencenando o ramo `else` que a fatia B removeu. Resultado contra a
+previsão escrita antes de rodar:
+
+| teste | previsto | medido |
+|---|---|---|
+| `timeout_mute_tier` | verde | verde |
+| `timeout_attended_tier` | **vermelho**, `produziu 0 segmentos` | **vermelho**, `produziu 0 segmentos de espera` |
+| `timeout_without_stamp` | verde | verde |
+| `no_participants_publish` (AST) | verde | verde |
+
+**1 de 4, e os quatro acertados.** Revertido em seguida: preflight `ORIG`, **14 passed**.
+
+### O instrumento que a passagem propunha estava errado, e o erro seria mudo
+
+A dívida vinha escrita como *"custa um `git stash` no `main.py` + build"*. Com a fatia B commitada o
+stash é **no-op**, o teste segue verde, e **verde por ausência de mudança é indistinguível de teste
+que não pode reprovar** — que é exatamente a proposição sob exame. Pela mesma razão o preflight não é
+`grep` (o bloco de comentário do teste **cita** os nomes que a busca contaria) e sim
+`inspect.getsource` da função **carregada**: *"o build não pegou"* e *"o teste é inútil"* produzem os
+dois um verde e são conclusões **opostas**. Sem esse ramo, a rodada não julgava nada.
+
+### O que a rodada corrigiu no registro
+
+O comentário em `test_queue_wait_segment.py:328-333` afirmava que o teste do tier atendido *"estava
+VERMELHO antes desta fatia"*. **A afirmação era verdadeira; o estatuto dela não** — era dedução,
+escrita depois do conserto. O vermelho que o autor de fato viu foi o do **harness** (`_FakeProducer`
+do fixture exigindo `key=` em todos os tópicos ⇒ `TypeError` engolido ⇒ `AttributeError` antes de
+qualquer asserção). Comentário que afirma medição sem tê-la feito é a família do DDL de
+`participation_intervals`; agora tem citação.
+
+🟢 **Subproduto medido:** o defeito original era mudo, mas a fatia B deixou **testemunha** —
+`main.py:711` loga `wait_segment=%s`, e sob a mutação saiu `wait_segment=False` ao lado de
+`queue_agent=True`. Antes da fatia a variável não existia.
+
+Registro: `TODO.md` § *"Ainda aberto neste arco"* · citação no próprio teste.
+
+---
+
 ## D14-i — o relatório Fila/SLA para de colapsar a sessão numa linha (2026-08-24)
 
 `reports_query.py` — a subquery `_per_session` virou `_per_wait`: **uma linha por passagem
