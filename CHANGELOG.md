@@ -2,6 +2,149 @@
 
 ---
 
+## A consulta de status virou membro do processo — passo 2b (2026-08-25)
+
+A metade que faltou da F1. Achado ao **decidir o texto do cabeçalho do F4**: ao dizer que
+um processo tem abertura + **N** consultas + resposta, o dono expôs que os acessos do meio
+não eram membros de nada.
+
+### O defeito
+
+`skill_limite_entrada_v1.yaml` ramificava a pendência em `avaliar_politica_retomada`:
+`policy == "auto"` (acesso 3, o resultado) ia a `unificar_journey` → `journey_merge`; o
+**default — a consulta de status (`offer`) — ia direto ao menu, sem merge**. Única
+ocorrência de `journey_merge` no arquivo. Abertura era raiz, resposta entrava por merge, e
+**toda consulta nascia raiz de si mesma e ficava fora do processo**, quantas fossem.
+
+A tabela de pertença do ADR manda o contrário (*acesso espontâneo → `journey_merge`*), e a
+F1 constava ✅ *"provada por aresta ativa em `journey_aliases`"*. A aresta existia — vinda do
+ramo `auto`. **Um gate que só exercita o ramo que funciona não pode reprovar o ramo que não
+funciona**, e por isso o defeito conviveu com verde por onze dias.
+
+⚠️ **Não confundir com a decisão vizinha, que está certa:** o acesso 2 recusa
+`workflow_resume` de propósito (*"é o que torna o acesso 2 uma leitura, não uma ação"*).
+Merge é carimbo de **proveniência**; resume é ação de negócio. Independentes.
+
+### A correção é de ESCOPO, não de lógica
+
+`avaliar_pendencia(found)` → **`unificar_journey`** → `avaliar_politica_retomada`; o ramo
+`auto` passa a ir direto a `retomar_resultado`. Pertença é fato de *"este acesso encontrou um
+processo pendente"*; `policy` é fato do *que fazer em seguida*. Amarrar o primeiro ao segundo
+fazia um subconjunto arbitrário dos acessos virar membro. **Um site só** — duplicar o merge
+nos dois ramos daria duas verdades a divergir no próximo ramo que alguém acrescentasse.
+
+### Vermelho → verde no mesmo instrumento
+
+`infra/test/probe_journey_merge_status_access.sh` — contato webchat real, agente de entrada
+real, dirigido por `infra/test/_ws_chat.py`.
+
+| | pré-fix | pós-fix |
+|---|---|---|
+| posição do merge no snapshot | `ANTIGO` | `NOVO` |
+| aresta da consulta em `journey_aliases` | **nenhuma** | ativa → raiz do processo |
+| `/reports/journeys` do processo | 1 sessão | **3** (processo + 2 consultas) |
+| veredicto | ✅2 ❌3 | **✅6 ❌0** |
+
+**A segunda consulta está no gate de propósito.** A decisão do dono foi *"são N acessos"*, e
+provar UM prova a forma, não o número — o modo de falha que só a segunda pega (pertença
+chaveada por cliente, ou token de merge consumido no primeiro uso) passaria no passo anterior.
+
+### Três achados de instrumento, todos da mesma família
+
+- **`yaml_snapshot` é objeto JSON, não texto YAML**, e o payload traz `previous` ao lado de
+  `current`. A v1 do leitor fatiava texto e varria os dois slots — teria respondido sobre um
+  deploy que não roda. Hoje o slot é escolhido explicitamente e o grafo é lido por `targets()`.
+- **Menu com `interaction: text` não vira `interaction.request`** — o engine o entrega como
+  mensagem comum e espera `msg.text` de volta (`skill-flow-engine/src/steps/menu.ts:167-168`).
+  O cliente v1 só respondia a `interaction.request` e ficava mudo na pergunta do CPF: **o probe
+  acusou o fluxo por um defeito do instrumento**. São duas superfícies de pergunta, não uma.
+- **Crase dentro de string com aspas duplas em `bash`** virou substituição de comando
+  (`offer: command not found`) e mutilou a própria mensagem de erro.
+
+### Deploy: cirúrgico, nunca reconcile
+
+`infra/test/redeploy_limite_entrada.sh` + `infra/test/_publish_skill.py` publicam **um** skill
+e re-snapshotam **um** slot. `REGISTRY_SYNC_RECONCILE=true` reaplicaria o YAML sobre skills,
+pools **e** slots do tenant inteiro — e reverteria config DB-owned deliberada (a
+`queue_config.pool_id` do `retencao_humano`, que só existe no DB). O `config_json` do slot é
+**lido e reenviado**: mandar `{}` apagaria config de deploy sem aviso, porque o slot grava o
+que recebe em vez de fazer merge.
+
+---
+
+## `spawn_reason='collect'` tem produtor — o zero era ausência de população (2026-08-25)
+
+Passo 2 da § *Ordem de trabalho PROPOSTA*: medição + decisão, sem código de produto. Fechou os dois
+bloqueios que o F4 declarava e **abriu um terceiro que ninguém tinha**.
+
+### O resultado
+
+| | antes | depois |
+|---|---|---|
+| `<NULL>` | 449 | 450 |
+| `trigger` | 109 | 110 |
+| `collect` | **0** | **1** |
+| `delegate` | 0 | 0 (por DESENHO) |
+
+Linha em `analytics.sessions` fechada em **1 s** com `spawn_reason='collect'`. Gate re-executável:
+`infra/test/probe_spawn_reason_collect.sh` (8/0) + `infra/test/_ws_engage.py`.
+
+### O plano teria medido ZERO, e o zero pareceria defeito pela terceira vez
+
+O passo estava escrito como *"rodar o cenário `limite_entrega` (parqueamento) e reler
+`spawn_reason`"*. Ler o produtor antes de rodar mostrou que isso não podia funcionar:
+
+1. **O rótulo nasce no ENGAJAMENTO, não no parqueamento.** Produtor único em
+   `handle_collect_engage` (`webhook.py:2118`); `handle_collect` é lazy e suspende **sem criar
+   sessão** (`:1860`). O cenário parqueia e para — zero por construção.
+2. **Ninguém clica, e isso está declarado no próprio YAML** (`skill_limite_entrega_v1.yaml:65-67`:
+   *"sem entrega real de link (trilha não construída)"*; `webhook.py:2055` carrega o
+   `TODO(J4c fase 2)`). O clique virou a **única parte sintética do gate** — e é exatamente a parte
+   cuja infraestrutura não existe.
+3. **`GET /survey/{token}` não publica inbound.** Só semeia o ctx e cunha o JWT; quem publica é a
+   PÁGINA ao conectar o WS (`webchat.py:304`). Um `curl` teria medido a metade errada, com o ctx
+   correto e nenhuma linha em `sessions` — indistinguível de produtor mudo.
+4. **`sessions.spawn_reason` só é carimbado no fechamento** (`orchestrator-bridge/main.py:2918`) ⇒
+   sessão ABERTA devolve `NULL` legítimo. Quarta ausência, nomeada no gate em vez de contada.
+
+> **Lição de método:** *"rodar o fluxo que menciona o campo"* e *"atingir a linha que escreve o
+> campo"* não são a mesma coisa, e o zero das duas é idêntico. Antes de rodar um cenário para
+> popular um campo, leia QUEM o escreve — o call site, não o arquivo.
+
+### `delegate = 0` está explicado: é desenho, não produtor mudo
+
+O `TODO.md` o registrava como *"não explicado (o carimbo existe em `webhook.py:1604`)"*. O carimbo
+existe (hoje `:1610`/`:1646` — as linhas andaram desde a anotação), mas o caminho que o executa está
+**morto por decisão**: `skill-flow-service/src/index.ts:509-514` declara que `delegate()` **sempre**
+roda como conference specialist dentro da sessão do chamador, e o único chamador é
+`/v1/channels/webhook/delegate-conference`. `webhook.py:1669` diz o mesmo por escrito (*"este caminho
+está inerte hoje"*). Conferência reusa o `session_id` do pai ⇒ nenhuma sessão-filha nasce.
+**Nenhuma rodada de cenário mudaria isso.** Resíduo: `handle_delegate` e a rota
+`/v1/channels/webhook/delegate` são caminho morto com rota viva — decidir entre remover e declarar.
+
+### Dois achados de lambuja, e um deles é defeito vivo
+
+- 🔴 **O cliente que CLICA no link não recebe nada.** A sessão de engajamento roteia para
+  `limite_retorno`, cujo `skill_limite_retorno_v1:41-48` ramifica em `@ctx.session.customer_present`
+  — tag que `handle_collect_engage` **não semeia**. Medido: `aguardar_inbound` → `complete resolved`
+  em 1 s, `CLOSED_BY_SERVER`, cliente presente e tela vazia. **Hoje está mascarado porque ninguém
+  clica** — dois defeitos se cobrindo, e consertar a entrega do link desmascara o segundo.
+- **`main.py:960` promete o que a função não faz:** o docstring de `POST /v1/channels/webhook/collect`
+  diz *"creates a ROUTED child contact session"*, e o handler é lazy. Família *promessa sem
+  produtor*, agora do lado do docstring de rota.
+
+### A decisão do dono, e o bloqueio que ela revelou
+
+Texto do cabeçalho do F4: **acessos do cliente**, e são **N** — abertura + N consultas de status +
+resposta. Ao nomear a forma real do processo, o dono expôs que **os acessos intermediários não são
+membros**: `skill_limite_entrada_v1.yaml:254-261` só faz `journey_merge` no ramo `policy == "auto"`
+(a resposta); a consulta de status (`offer`) vai ao menu sem merge. Abertura é raiz, resposta entra
+por merge, e **toda consulta nasce raiz de si mesma e fica fora do processo**. Rebaixa a prova da F1
+(a aresta em `journey_aliases` veio do ramo que funciona) e **precede o texto**: não se conta acesso
+que não é membro. Registrado no `TODO.md` como passo 2b.
+
+---
+
 ## TTL de `pool_config` ganha fonte única — e o namespace `session` estava inerte (2026-08-25)
 
 Primeiro item da § *Ordem de trabalho PROPOSTA*. Entrou pelo argumento do ledger de SLA e saiu

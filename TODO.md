@@ -49,16 +49,24 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
    empilhadas (env ausente no compose, porta 3500 em vez de 3600, GET sem `tenant_id`), seis chaves
    de TTL editáveis na tela e inertes. Consertar só uma não moveria nada.
 
-2. **Destravar o F4 — e é medição + decisão, não código.** Meia sessão, e são exatamente os dois
-   bloqueios que o F4 declara:
-   - **rodar o cenário `limite_entrega` (parqueamento)** e reler `spawn_reason`. ⚠️ O *"acesso
-     outbound tem ZERO amostras"* é uma contagem com **dois mundos que ela não separa**: produtor
-     mudo × ninguém rodou o cenário. Repare na data — a **F0 entregou o gate do `collect` em
-     14/08 e a medição `NULL 349 · trigger 71` é do MESMO dia**. Zero medido logo depois de ligar o
-     produtor não é evidência de produtor mudo. A mesma rodada responde o `delegate = 0` não
-     explicado (`webhook.py:1604`).
-   - **decidir o texto `contatos` × `acessos do cliente`** (decisão do dono, sem código). Sem ela o
-     cabeçalho do F4 diz *"contatos 4"* para quem nos procurou 2 vezes.
+2. ~~**Destravar o F4 — medição + decisão, não código.**~~ ✅ **FEITO em 2026-08-25 — e os dois
+   bloqueios declarados fecharam, revelando um TERCEIRO que ninguém tinha.**
+   - ✅ **`spawn_reason='collect'` TEM produtor** (`collect` 0 → 1; gate
+     `infra/test/probe_spawn_reason_collect.sh`, 8/0). O zero era ausência de população.
+     ⚠️ **A medição como estava planejada teria medido zero:** *"rodar o cenário até parquear"* não
+     produz amostra — o `collect` é lazy e o rótulo nasce no **engajamento**, não no parqueamento. Foi
+     preciso dar o clique, e a entrega do link não existe. **Lição de método: antes de rodar um
+     cenário para popular um campo, leia QUEM escreve o campo** — "rodar o fluxo que o menciona" e
+     "atingir a linha que o escreve" não são a mesma coisa, e o zero das duas é idêntico.
+   - ✅ **`delegate = 0` está explicado — é DESENHO**, não produtor mudo (`delegate()` sempre roda como
+     conferência, reusando o `session_id` do pai). Detalhe na § do arco. **Não re-medir.**
+   - ✅ **Texto decidido pelo dono: ACESSOS DO CLIENTE**, e são **N** (abertura + N consultas de
+     status + resposta), não 2.
+   - ~~🔴 **Bloqueio 3: os acessos intermediários não são membros do processo.**~~ ✅ **FECHADO no
+     mesmo dia (passo 2b).** `avaliar_pendencia(found)` → `unificar_journey` →
+     `avaliar_politica_retomada`: pertença antes da política, um site só. Gate
+     `infra/test/probe_journey_merge_status_access.sh` **vermelho→verde** (✅2❌3 → ✅6❌0), com
+     **duas** consultas no gate porque a decisão era sobre N, não sobre uma. Ver `CHANGELOG.md`.
 
    **Construir o F4 antes disso repete a armadilha que a F3 JÁ PAGOU:** as colunas ANI/DNIS foram
    construídas e depois removidas por não terem população que as exercitasse.
@@ -80,8 +88,11 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
 - Amostra de `collect` aparecendo no passo 2 **fecha** o bloqueio principal do F4 e o torna a fatia
   óbvia seguinte.
 
-**Estado após 2026-08-25: o passo 1 está fechado; o próximo é o passo 2** (rodar o cenário
-`limite_entrega` e reler `spawn_reason` + a decisão de texto `contatos` × `acessos do cliente`).
+**Estado após 2026-08-25 (segunda sessão do dia): passos 1, 2 e 2b FECHADOS.** O passo 2 descobriu
+um bloqueio de pertença (acessos de consulta fora do processo) e o **2b o fechou no mesmo dia** —
+era a metade que faltou da F1, não fatia nova. **O próximo é o passo 3 (F4 + resíduos da F3)**, agora
+sem bloqueio declarado: a classe de linha `collect` tem prova, o texto está decidido (acessos do
+cliente, N) e os acessos que o cabeçalho vai contar são membros de fato.
 
 ---
 
@@ -2187,19 +2198,89 @@ métrica de cabeçalho (lacuna registrada, não fechada).
 **A verificar antes de construir** (nenhum destes foi medido):
 
 - o literal que o cliente usa em `messages.author_role` — suposto em D9.
-- **`contatos` ≠ `acessos do cliente`, e nada hoje os separa.** Medido em 2026-08-14: das 4 sessões da
+- ~~**`contatos` ≠ `acessos do cliente`, e nada hoje os separa.**~~ **DECIDIDO pelo dono em 2026-08-25:
+  o cabeçalho conta ACESSOS DO CLIENTE, e são N, não 2.** Medido em 2026-08-14: das 4 sessões da
   journey de referência só **2** são acesso do cliente (webchat, `spawn_reason NULL`); as outras duas
   são maquinaria (webhook, `trigger`), e `aprovacao_credito` **não** é `purpose=internal`, logo
   `_apply_contact_scope` não a exclui. O cabeçalho de F4 diria *"contatos 4"* para quem nos procurou 2
-  vezes. O discriminador de D4 é derivável hoje, sem dado novo — **decidir o texto antes de renderizar.**
-- **O tipo de linha "acesso outbound" tem ZERO amostras.** `spawn_reason` só tem dois valores no tenant
-  (re-medido 2026-08-14: `NULL` **349** · `trigger` **71**, total 420): nem `collect` nem `delegate`.
-  F3/F4 construiriam uma classe de linha que nada no ambiente exercita — mesma armadilha das colunas
-  ANI/DNIS. O `delegate = 0` é **não explicado** (o carimbo existe em `webhook.py:1604`); medir só
-  quando F4 precisar da classe "interno".
+  vezes. O discriminador de D4 é derivável hoje, sem dado novo.
+
+  > ✅ **A decisão abriu um bloqueio de MEMBERSHIP, e ele foi FECHADO no mesmo dia (2026-08-25,
+  > passo 2b — ver `CHANGELOG.md`).** O relato abaixo é o do defeito, preservado porque a lição de
+  > método é o achado: a F1 constava ✅ com gate que só exercitava o ramo que funciona.
+  > O dono nomeou a forma real do processo: acesso de **abertura** + N acessos intermediários de
+  > **consulta de status** + acesso **final** de resposta — *"os intermediários não estão relacionados
+  > e precisariam estar"*. Confirmado no código em 2026-08-25, e é um ramo, não uma ausência de
+  > desenho: `skill_limite_entrada_v1.yaml:254-261` manda `policy == "auto"` (acesso 3) para
+  > `unificar_journey` → `journey_merge`, e o **default — que é a consulta de status (`offer`, "em
+  > análise") — vai direto ao `menu_continuidade`, sem merge**. É a **única** ocorrência de
+  > `journey_merge` no arquivo (`:362`). Consequência: abertura é raiz, resposta entra por merge, e
+  > **todo acesso de consulta nasce raiz de si mesmo e fica fora do processo** — quantos forem.
+  >
+  > ⚠️ **Não confundir com a decisão vizinha, que está certa:** `:305-306` recusa `workflow_resume` no
+  > acesso 2 de propósito (*"é o que torna o acesso 2 uma leitura, não uma ação"*). Merge é carimbo de
+  > **proveniência**, não ação de negócio — as duas coisas são independentes, e a segunda não justifica
+  > a primeira. O ADR manda o contrário na própria tabela de pertença (*acesso espontâneo → merge, F1*).
+  >
+  > ⚠️ **Isto rebaixa a prova da F1.** Ela consta ✅ *"provada por aresta ativa em `journey_aliases`"* —
+  > a aresta existe, mas veio do ramo `auto`. Um gate que só exercita o ramo que funciona não pode
+  > reprovar o ramo que não funciona: mesma família do `probe_journey_limite` registrado logo abaixo.
+  > **A F1 está entregue para o acesso 3 e AUSENTE para o acesso 2**, e o cabeçalho não dizia isso.
+  >
+  > **Consequência para a ordem:** o passo 2 tinha dois bloqueios declarados; são **três**. Este é de
+  > pertença, precede o texto (não se conta acesso que não é membro) e é a fatia menor das três.
+- ~~**O tipo de linha "acesso outbound" tem ZERO amostras.**~~ ✅ **RESOLVIDO POR MEDIÇÃO 2026-08-25 —
+  o produtor de `collect` EXISTE e funciona ponta a ponta.** Gate:
+  `infra/test/probe_spawn_reason_collect.sh` (8/0, re-executável). Medido: baseline `NULL` **449** ·
+  `trigger` **109** · `collect` **0** → depois do cenário **`collect` 1**, com a linha em
+  `analytics.sessions` fechada em **1 s** e `spawn_reason='collect'`. O zero era **ausência de
+  população**, nunca produtor mudo — e a contagem sozinha não podia dizer qual dos dois, que era
+  exatamente o achado que travava o passo 2.
+
+  **Três coisas que a leitura do código estabeleceu ANTES de rodar, e que mudaram o desenho da
+  medição** (a versão do plano — *"rodar o cenário `limite_entrega` e reler `spawn_reason`"* — teria
+  medido zero e o zero pareceria defeito pela terceira vez):
+  1. `spawn_reason='collect'` tem produtor ÚNICO em `handle_collect_engage` (`webhook.py:2118`), que é
+     o **engajamento**. `handle_collect` é LAZY e suspende sem criar sessão ⇒ **parquear produz zero por
+     construção**. O clique é obrigatório, e é a única parte sintética do gate.
+  2. `GET /survey/{token}` **não** publica inbound — só semeia o ctx e cunha o JWT; quem publica é a
+     PÁGINA ao conectar o WS (`webchat.py:304`). Um `curl` mede a metade errada. Daí o
+     `infra/test/_ws_engage.py` (cliente WS mínimo, roda dentro do channel-gateway).
+  3. `sessions.spawn_reason` só é carimbado no **fechamento** (`orchestrator-bridge/main.py:2918`) ⇒
+     sessão ABERTA devolve `NULL` legítimo. É uma **quarta** ausência, e o gate a nomeia em vez de
+     contá-la como defeito.
+
+  🔴 **O `delegate = 0` está EXPLICADO, e não é defeito — é desenho.** Esta linha dizia *"não
+  explicado (o carimbo existe em `webhook.py:1604`)"*. O carimbo existe (hoje `:1610`/`:1646` — as
+  linhas andaram), mas o caminho que o executa está **morto por decisão**:
+  `e2e-tests/services/skill-flow-service/src/index.ts:509-514` declara que `delegate()` **sempre** roda
+  como conference specialist DENTRO da sessão do chamador, e o único chamador é
+  `/v1/channels/webhook/delegate-conference`. `webhook.py:1669` diz o mesmo por escrito (*"este caminho
+  está inerte hoje"*). Conferência **reusa o `session_id` do pai** ⇒ nenhuma sessão-filha nasce ⇒
+  nenhuma linha com esse rótulo, e nenhuma rodada de cenário mudaria isso. **Não medir de novo.**
+  Item próprio: `handle_delegate` + a rota `/v1/channels/webhook/delegate` são caminho morto — decidir
+  entre remover e declarar (hoje a rota está viva e nada a chama).
+
   **F3 seguiu em frente com o ramo escrito e não verificável** — a diferença para ANI/DNIS é que aqui
   o ramo é o DOMÍNIO do campo (não uma coluna a mais na tela), e o custo de não tê-lo seria classificar
   um `collect` futuro como *inbound* em silêncio. Está registrado, não descoberto na revisão.
+
+  ⚠️ **RESÍDUO — "o produtor funciona" ≠ "a classe tem população no mundo real".** O gate provou o
+  caminho **dando o clique ele mesmo**, e é honesto sobre isso. Em produção ninguém clica: a entrega
+  do link é trilha NÃO construída (`skill_limite_entrega_v1.yaml:65-67`; `webhook.py:2055`
+  `TODO(J4c fase 2): real SMS/email delivery`). Enquanto não houver entrega, `collect` continua
+  crescendo só por gate. **Para o F4 isto basta** — a classe de linha deixou de ser não-verificável e o
+  ramo tem prova; para o negócio, não.
+
+  🔴 **Defeito vivo que o gate revelou de lambuja: o cliente que CLICA no link não recebe nada.** A
+  sessão de engajamento roteia para `limite_retorno`, cujo `skill_limite_retorno_v1:41-48` ramifica em
+  `@ctx.session.customer_present` — e `handle_collect_engage` **não semeia essa tag**. Resultado
+  medido: `aguardar_inbound` → `complete resolved` em **1 s**, `CLOSED_BY_SERVER`, cliente presente e
+  tela vazia. Hoje está mascarado porque ninguém clica: **dois defeitos se cobrindo**, e o primeiro a
+  ser consertado (entrega do link) desmascara o segundo. Conserto provável = semear
+  `session.customer_present=true` no ctx do engajamento, junto do `spawn_reason` — mas é DECISÃO, não
+  obviedade: o discriminador foi desenhado para *falhar adiando*, e ligar a tag sem medir troca o lado
+  seguro do erro.
 - **`customer_id LIKE 'sys:%'` — desempate NÃO codificado, e a medição é o motivo.** Previsão: 0.
   Medido: **1 em 420**, e é `webhook`+`trigger`+`limite_entrega`, já classificada como interna pelo
   primeiro ramo da regra. `sys:` ali é consequência de nascer de máquina, não critério independente.

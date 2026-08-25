@@ -337,6 +337,27 @@ Isto reparte o pré-requisito de pertença em dois, e só um sobra para o merge:
 | **Output ativo** — nós avisamos o cliente | `collect` → proveniência, automático |
 | **Acesso espontâneo** — o cliente volta por conta (acesso 2) | `journey_merge` (F1) |
 
+> ✅ **A segunda linha desta tabela passou a valer em 2026-08-25 (passo 2b).** `unificar_journey`
+> subiu para logo depois de `avaliar_pendencia`, então a pertença acontece antes da política e vale
+> para os dois acessos. Gate `infra/test/probe_journey_merge_status_access.sh` (vermelho→verde,
+> ✅6❌0, com DUAS consultas). O diagnóstico abaixo fica como registro do defeito e da lição.
+>
+> 🔴 **Medido 2026-08-25 — a segunda linha desta tabela NÃO estava implementada, e a F1 constava ✅.**
+> `skill_limite_entrada_v1.yaml:254-261` ramifica a pendência: `policy == "auto"` (acesso **3**, o
+> resultado) vai a `unificar_journey` → `journey_merge`; o **default — que é a consulta de status
+> (`offer`, "em análise"), ou seja o acesso 2 desta tabela — vai direto ao menu, sem merge**. É a
+> única ocorrência de `journey_merge` no arquivo (`:362`). Consequência: abertura é raiz, resposta
+> entra por merge, e **todo acesso de consulta nasce raiz de si mesmo e fica fora do processo** —
+> quantos forem, e o dono confirmou que na prática são N.
+>
+> ⚠️ **Não confundir com a decisão vizinha, que está certa:** `:305-306` recusa `workflow_resume` no
+> acesso 2 de propósito (*"é o que torna o acesso 2 uma leitura, não uma ação"*). Merge é carimbo de
+> **proveniência**; resume é ação de negócio. São independentes, e a segunda não justifica a primeira.
+>
+> ⚠️ **E rebaixa a prova da F1:** ela foi declarada entregue *"provada por aresta ativa em
+> `journey_aliases`"* — a aresta existe, mas veio do ramo `auto`. **Um gate que só exercita o ramo
+> que funciona não pode reprovar o ramo que não funciona.** Ver `TODO.md` § passo 2b.
+
 ### F1 — Carimbos de pertença
 
 Ambos são pertença: um diz *de que processo esta sessão faz parte*, o outro *por onde ela entrou*.

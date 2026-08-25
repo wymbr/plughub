@@ -245,20 +245,67 @@ steps:
       - field:    "$.pipeline_state.pendencia.found"
         operator: eq
         value:    true
-        next:     avaliar_politica_retomada
+        next:     unificar_journey     # pertença ANTES da política (2b)
     default: iniciar_solicitacao       # acesso 1
+
+  # ══ Pertença ao processo — de TODO acesso que encontrou pendência ══════════
+  #
+  # ⚠️ Este step ficava pendurado no ramo `auto` de `avaliar_politica_retomada`, e a
+  # consequência era invisível: o acesso 3 (resultado) entrava na journey e o acesso 2
+  # (consulta de status) NÃO — nascia raiz de si mesmo e ficava fora do processo,
+  # quantas consultas fossem. Medido em 2026-08-25 com contato real: zero arestas em
+  # `journey_aliases` para a sessão da consulta, e `/reports/journeys` contando 1.
+  #
+  # A correção é de ESCOPO, não de lógica: pertença é fato de *"este acesso encontrou
+  # um processo pendente"*, e a `policy` é fato do que fazer em seguida. Amarrar o
+  # primeiro ao segundo fez um subconjunto arbitrário dos acessos virar membro. Com o
+  # merge aqui, o ponto é ÚNICO — duplicá-lo nos dois ramos daria duas verdades a
+  # divergir no próximo ramo que alguém acrescentar.
+  #
+  # A ordem que o comentário antigo defendia continua valendo, e agora vale para os
+  # dois: PRIMEIRO unir, DEPOIS ler. Este contato nasceu espontâneo, então a raiz dele
+  # é ele mesmo e `@ctx.journey.*` resolveria para um hash vazio; o merge liga a
+  # componente deste contato à do processo pendente, e só a partir daí
+  # `resolveJourneyRoot` devolve a raiz canônica e as tags aparecem.
+  #
+  # `root_session_id` vem achatado no topo do `pending_workflow_get` (J3). O merge é
+  # sempre novo→antigo, logo acíclico por construção, e idempotente: reencontrar o
+  # mesmo processo numa quarta consulta é no-op — é por isso que N acessos custam zero.
+  #
+  # on_failure segue em frente: sem o merge o acesso 3 narra vazio e o acesso 2 perde o
+  # carimbo analítico — ruim, mas travar o cliente na porta por causa de um carimbo
+  # seria pior. A falha fica no log do tool, não em silêncio.
+  #
+  # `tenant_id`, não `session_token`: este skill roda no caminho comum (channel-gateway →
+  # routing-engine → orchestrator-bridge → skill-flow-service), que NUNCA injeta um JWT
+  # no contexto — só workflows que o fazem explicitamente (ex. skill_revisao_treplica_v1)
+  # têm `$.session.session_token`. Usar esse campo aqui sempre resolvia vazio, o
+  # journey_merge SEMPRE rejeitava (Zod: session_token min(1)), e o on_failure engolia o
+  # erro em silêncio — o acesso 3 nunca uniu journey nenhuma, nunca, em nenhum teste.
+  - id: unificar_journey
+    type: invoke
+    tool: journey_merge
+    input:
+      tenant_id:      "$.tenant_id"
+      actor:          "skill_limite_entrada_v1"
+      source_root:    "$.session_id"
+      canonical_root: "$.pipeline_state.pendencia.root_session_id"
+    output_as: merge
+    on_success: avaliar_politica_retomada
+    on_failure: avaliar_politica_retomada
 
   # A política vem do step delegate do N3 e viaja no PendingEntry — não é decisão
   # deste agente. `auto` = o resultado já saiu (acesso 3); `offer` = ainda em
-  # análise, o cliente escolhe (acesso 2).
+  # análise, o cliente escolhe (acesso 2). Decide só o QUE FAZER — a pertença já
+  # aconteceu acima, para os dois.
   - id: avaliar_politica_retomada
     type: choice
     conditions:
       - field:    "$.pipeline_state.pendencia.policy"
         operator: eq
         value:    "auto"
-        next:     unificar_journey     # acesso 3 (merge → entrega)
-    default: menu_continuidade         # acesso 2
+        next:     retomar_resultado    # acesso 3 (entrega)
+    default: menu_continuidade         # acesso 2 (consulta / cancelar / novo)
 
   # ══ Acesso 2 — em análise ══════════════════════════════════════════════════
   # `pendencia.context` é o context_preview mascarado na ESCRITA (o PendingEntry
@@ -339,37 +386,12 @@ steps:
     on_failure: finalizar
 
   # ══ Acesso 3 — entregar o resultado ════════════════════════════════════════
-  # PRIMEIRO unir as journeys, DEPOIS ler. A ordem não é estilo: este contato nasceu
-  # espontâneo, então a raiz dele é ele mesmo, e `@ctx.journey.*` resolveria para um
-  # hash vazio. O merge liga a componente deste contato à do processo pendente; só a
-  # partir daí `resolveJourneyRoot` devolve a raiz canônica e as tags aparecem.
-  #
-  # `root_session_id` vem achatado no topo do pending_workflow_get (J3). O merge é
-  # sempre novo→antigo, logo acíclico por construção, e idempotente: reencontrar o
-  # mesmo processo num quarto acesso é no-op.
-  #
-  # on_failure segue para a entrega assim mesmo: sem o merge o agente narra vazio,
-  # que é ruim — mas travar o cliente na porta por causa de um carimbo analítico
-  # seria pior. A falha fica no log do tool, não em silêncio.
-  # `tenant_id`, não `session_token`: este skill roda no caminho comum (channel-gateway →
-  # routing-engine → orchestrator-bridge → skill-flow-service), que NUNCA injeta um JWT
-  # no contexto — só workflows que o fazem explicitamente (ex. skill_revisao_treplica_v1)
-  # têm `$.session.session_token`. Usar esse campo aqui sempre resolvia vazio, o
-  # journey_merge SEMPRE rejeitava (Zod: session_token min(1)), e o on_failure engolia o
-  # erro em silêncio — o acesso 3 nunca uniu journey nenhuma, nunca, em nenhum teste.
-  # `journey_merge` agora aceita `tenant_id` direto, mesma convenção dos outros tools
-  # deste skill (customer_resolve, pending_workflow_get, context_set, workflow_trigger).
-  - id: unificar_journey
-    type: invoke
-    tool: journey_merge
-    input:
-      tenant_id:      "$.tenant_id"
-      actor:          "skill_limite_entrada_v1"
-      source_root:    "$.session_id"
-      canonical_root: "$.pipeline_state.pendencia.root_session_id"
-    output_as: merge
-    on_success: retomar_resultado
-    on_failure: retomar_resultado
+  # A união da journey NÃO acontece mais aqui: subiu para `unificar_journey`, logo
+  # depois de `avaliar_pendencia` (2b, 2026-08-25). Pertença é fato de "este acesso
+  # encontrou o processo", e vale igual para quem vem consultar e para quem vem
+  # receber — pendurada neste ramo, ela só alcançava o segundo. O raciocínio inteiro
+  # (ordem merge-antes-de-ler, idempotência, `tenant_id` × `session_token`) mora agora
+  # no comentário daquele step, num lugar só.
 
   # Specialist de conferência DENTRO desta sessão: o cliente não troca de canal.
   # customer_present=true é o discriminador que autoriza o specialist a fazer I/O.
