@@ -41,7 +41,11 @@ import AgentsPage   from '@/modules/contacts/AgentsPage'
 import PoolsPage    from '@/modules/contacts/PoolsPage'
 import EventsPage   from '@/modules/contacts/EventsPage'
 // Análise
-import AnaliseContatosPage  from '@/modules/analise/AnaliseContatosPage'
+// (F4 — `AnaliseContatosPage` e `ContactsPage` REMOVIDAS. A primeira ainda era
+//  importada aqui e não era usada por rota nenhuma desde que `/analise/contatos`
+//  virou `Navigate`; a segunda não era sequer importada. Import órfão não é
+//  inofensivo: mantém a página compilando e viva no bundle, e sugere ao próximo
+//  leitor que existe um caminho até ela.)
 import AnaliseAgentesPage   from '@/modules/analise/AnaliseAgentesPage'
 import AgentsBenchPage      from '@/modules/analise/AgentsBenchPage'
 import AnalisePoolsPage     from '@/modules/analise/AnalisePoolsPage'

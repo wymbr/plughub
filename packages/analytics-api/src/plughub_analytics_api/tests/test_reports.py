@@ -22,6 +22,8 @@ from ..reports_query import (
     _apply_contact_scope,
     _attach_journey_internal_counts,
     _contact_only_predicate,
+    _DIRECTION_EXPR,
+    SESSION_DIRECTIONS,
     _mark_internal_rows,
     _sessions_meta,
     _clamp_page_size,
@@ -299,6 +301,76 @@ class TestQuerySessionsReport:
             await query_sessions_report(client, DB, TENANT)
         listing_sql = client.query.call_args_list[-1].args[0]
         assert "NOT IN ('retencao_humano-int')" in listing_sql
+
+    # ── F4/F3 — direção do acesso (ADR histórico-unificado D8) ───────────────
+    #
+    # O que estes testes protegem NÃO é "o filtro funciona" — é que a COLUNA e o
+    # FILTRO continuem sendo a mesma pergunta. Enquanto a direção foi derivada em
+    # TypeScript e o filtro não existia, não havia como divergir; a partir do
+    # momento em que passam a ser duas expressões, divergem em silêncio, e o
+    # sintoma seria uma linha marcada `interno` aparecendo sob o filtro `inbound`.
+    #
+    # O teste que pega isso tem de assertar sobre o SQL EXECUTADO — no fonte,
+    # `grep` contaria também o comentário que documenta a regra.
+
+    async def test_direction_filter_and_column_are_the_same_expression(self):
+        client = _make_client(
+            self._count_result(2),
+            _ch_result(self._COLS, []),
+        )
+        await query_sessions_report(client, DB, TENANT, direction="outbound")
+        listing_sql = client.query.call_args_list[-1].args[0]
+        # Duas ocorrências: a coluna (`AS direction`) e o predicado do WHERE.
+        assert listing_sql.count(_DIRECTION_EXPR) == 2, (
+            "coluna e filtro deixaram de compartilhar a expressão de direção"
+        )
+        assert f"{_DIRECTION_EXPR} AS direction" in listing_sql
+        assert f"{_DIRECTION_EXPR} = {{direction:String}}" in listing_sql
+        assert client.query.call_args_list[-1].kwargs["parameters"]["direction"] == "outbound"
+
+    async def test_unfiltered_listing_still_returns_the_column(self):
+        """Controle negativo: sem filtro, a coluna FICA (a Vista Processos separa
+        acesso de etapa interna por ela) e o predicado SAI. Sem este par, o teste
+        acima passaria com o filtro aplicado sempre."""
+        client = _make_client(
+            self._count_result(2),
+            _ch_result(self._COLS, []),
+        )
+        await query_sessions_report(client, DB, TENANT)
+        listing_sql = client.query.call_args_list[-1].args[0]
+        assert f"{_DIRECTION_EXPR} AS direction" in listing_sql
+        assert "{direction:String}" not in listing_sql
+
+    async def test_count_query_joins_the_channel_recovery_when_filtering(self):
+        """A contagem pagina a lista; se ela resolvesse o canal de outro jeito, o
+        total e as linhas responderiam diferente para a MESMA sessão ativa (a que
+        o `parse_routed` deixa com `channel=''`) — a paginação passaria a mentir
+        exatamente na população que o JOIN existe para não perder."""
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(self._COLS, []),
+        )
+        await query_sessions_report(client, DB, TENANT, direction="internal")
+        count_sql = client.query.call_args_list[0].args[0]
+        assert "AS _ch ON _ch.session_id = s.session_id" in count_sql
+
+    async def test_count_query_has_no_extra_join_without_the_filter(self):
+        """…e o join NÃO entra fora do filtro: contagem é caminho quente, e um JOIN
+        que só o filtro precisa não deve pesar sobre toda listagem."""
+        client = _make_client(
+            self._count_result(1),
+            _ch_result(self._COLS, []),
+        )
+        await query_sessions_report(client, DB, TENANT)
+        count_sql = client.query.call_args_list[0].args[0]
+        assert "AS _ch" not in count_sql
+
+    def test_unknown_spawn_reason_is_claimed_by_no_direction(self):
+        """A regra que torna `Σ das três ≤ total` verdadeira — e é ela que o gate
+        usa para CONTAR a população não classificada em vez de escondê-la num
+        balde plausível."""
+        assert "ifNull(s.spawn_reason, '') != '', ''," in _DIRECTION_EXPR
+        assert set(SESSION_DIRECTIONS) == {"inbound", "outbound", "internal"}
 
 
 # ── query_agents_report — REMOVIDO (2026-07-28) ──────────────────────────────

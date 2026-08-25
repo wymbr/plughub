@@ -107,8 +107,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const refreshingRef                   = useRef<Promise<Session | null> | null>(null)
 
   // G-PROBE platform-wide: espelha o access token num holder de módulo p/ módulos
-  // não-React (ex.: api/registry.ts) mandarem Authorization: Bearer fora de hook.
-  useEffect(() => { setAccessToken(session?.accessToken ?? null) }, [session])
+  // não-React (ex.: api/registry.ts, api/apiFetch.ts) mandarem Authorization: Bearer
+  // fora de hook.
+  //
+  // ⚠️ **ISTO ERA UM `useEffect`, e por isso a primeira leitura de TODO reload saía
+  // sem `Authorization`** (medido 2026-08-25). Não era corrida de rede — era ordem de
+  // efeitos, que no React é determinística: **efeito de filho roda ANTES do efeito do
+  // pai**. No commit em que a re-auth silenciosa termina, o `ProtectedRoute` para de
+  // mostrar o spinner e a árvore inteira monta; o efeito da página (`ListaTab.load`)
+  // dispara o `fetch` antes de o efeito daqui ter escrito o token.
+  //
+  // A consequência não é cosmética: sem o Bearer o backend degrada para
+  // `accessible_pools = None` — **irrestrito** —, que é a degradação documentada no
+  // `apiFetch`. Um operador com escopo de pools restrito via, por alguns segundos,
+  // contatos de fora do domínio dele. O sintoma na tela era a MESMA URL devolver
+  // contagens diferentes conforme se chegasse pelo menu ou por F5.
+  //
+  // O conserto é escrever no store **durante o render**, que acontece antes de
+  // qualquer efeito de qualquer nível. A guarda por `ref` torna a escrita idempotente
+  // (StrictMode renderiza duas vezes) e evita trabalho em re-render sem troca de
+  // sessão. Não pode ser `useLayoutEffect`: layout effects também rodam filho-primeiro.
+  const mirroredTokenRef = useRef<string | null>(null)
+  const currentToken = session?.accessToken ?? null
+  if (mirroredTokenRef.current !== currentToken) {
+    mirroredTokenRef.current = currentToken
+    setAccessToken(currentToken)
+  }
 
   // ── Build Session from token response ───────────────────────────────────────
 

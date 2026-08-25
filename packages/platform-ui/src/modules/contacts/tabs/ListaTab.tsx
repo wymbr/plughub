@@ -63,7 +63,7 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
         page_size: String(PAGE_SIZE),
       })
       const { fromDt, toDt, sessionIdSearch, channel, outcome, poolId, entryPoolId,
-              agentId, insightCategory, insightTags, status } = filters
+              agentId, insightCategory, insightTags, status, direction } = filters
       if (fromDt)          params.set('from_dt',          fromDt + 'T00:00:00')
       if (toDt)            params.set('to_dt',            toDt   + 'T23:59:59')
       if (sessionIdSearch) params.set('session_id',       sessionIdSearch)
@@ -79,6 +79,10 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
       if (insightCategory) params.set('insight_category', insightCategory)
       if (insightTags)     params.set('insight_tags',     insightTags)
       if (status)          params.set('status',           status)          // Arc 19
+      // D8 — a direção viaja para o BACKEND, que a filtra pela mesma expressão que
+      // desenha a coluna. Recortar no cliente daria um número certo para a página e
+      // errado para o cabeçalho, que é servido pela contagem.
+      if (direction)       params.set('direction',        direction)
       // ADR §7 — só o valor não-default viaja; `contacts` é o default do backend.
       if (scopeAll)        params.set('scope',            'all')
 
@@ -345,7 +349,8 @@ function ContactRowItem({ row, onClick, showParent, onOpenParent, onOpenJourney 
 
   return (
     <tr onClick={onClick} className="hover:bg-primary/5 cursor-pointer transition-colors">
-      {/* Direção do acesso (D8) — DERIVADA, nunca armazenada. Ver `contactDirection`. */}
+      {/* Direção do acesso (D8) — derivada NO BACKEND, nunca armazenada, e lida daqui
+          sem re-derivar: é a mesma expressão que o filtro `?direction=` aplica. */}
       <td className="px-4 py-3 whitespace-nowrap text-center">
         {direction ? (
           <span className="text-base" title={t(`lista.direction.${direction}`)}

@@ -4,7 +4,11 @@
  * Lente por PROVENIÊNCIA (agrupa sessions por root_session_id) — não a entidade
  * Journey do Arc 10 (removida). Drill por URL-param:
  *   L2: /analise/sessions?journey=:root            — sessões-membro da journey
- *   L3: /analise/sessions?journey=:root&session=:s — SessionTranscript
+ *
+ * O nível de SESSÃO não mora mais aqui: clicar numa sessão-membro leva a
+ * `?journey=:root&session_id=:s`, que o `SessionsPage` trata com o drill único
+ * (renderer escolhido pelo canal) e com o processo no breadcrumb. `?…&session=:s`
+ * é endereço legado e redireciona.
  *
  * ⚠️ **O L1 (lista livre de journeys) não é mais alcançável** (F3.3 / ADR D2): o
  * `SessionsPage` só monta este componente COM `?journey=`, e sem o parâmetro a rota
@@ -22,7 +26,11 @@ import { apiFetch } from '@/api/apiFetch'
 import { ChevronRight, GitBranch, FileText, Route, X } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import Spinner from '@/components/ui/Spinner'
-import { SessionTranscript } from '@/modules/service/components/SessionTranscript'
+// F4 — o rótulo do processo e a leitura da direção vêm da visão 1, não de cópias
+// locais: o chip que trouxe o operador até aqui e o cabeçalho que ele encontra têm
+// de dizer o MESMO código, e a classe da linha tem de usar a MESMA direção que a
+// coluna de lá. Ver `journeyLabel` e `contactDirection` em `modules/contacts/types`.
+import { contactDirection, DIRECTION_ICONS, journeyLabel } from '@/modules/contacts/types'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -58,6 +66,9 @@ interface MemberSession {
   // T1/T4 — a ARESTA (quem me criou) e o seu RÓTULO (por quê).
   origin_session_id: string | null
   spawn_reason:      string | null   // trigger | delegate | collect | null (topo)
+  /** F4/D8 — direção do acesso, DERIVADA pelo backend. `''`/ausente = não
+   *  classificada. É o discriminador das duas classes de linha (D4). */
+  direction?:        string | null
 }
 
 // ── T5: árvore de proveniência ───────────────────────────────────────────────
@@ -196,20 +207,79 @@ function truncateId(id: string | undefined | null): string {
   return id.length > 16 ? `…${id.slice(-12)}` : id
 }
 
+// T5 — o rótulo da journey (`PRC-…`) mora em `modules/contacts/types` e é IMPORTADO.
+//
+// Ele era duplicado aqui, e as duas cópias divergiam: o chip da visão 1 cortava o id
+// em 4 caracteres e este cabeçalho em 8, então o mesmo processo tinha dois códigos —
+// um no lugar de onde se clica e outro no lugar aonde se chega. A prosa da outra
+// cópia ainda afirmava que a convenção era a mesma. Unificado em 8 na F4.
+//
+// (O modelo não muda: a journey é identificada pela RAIZ CANÔNICA, e o `journey_id`
+// **é** um `session_id` — como um branch do git é identificado por um hash. O
+// prefixo conserta a APRESENTAÇÃO, para que ninguém leia "o processo é a sessão".)
+
+// ── F4 — as DUAS classes de linha (ADR D4) ──────────────────────────────────
+//
+// Tratar as sessões-membro como pares é o que fazia o processo parecer que não
+// respondia à pergunta. Um processo de 3 sessões pode ter 1 acesso do cliente e 2
+// etapas de maquinaria — e o cabeçalho que diz "3 sessões" está certo sobre a
+// tabela e errado sobre o caso.
+//
+//   · **acesso do cliente** — protagonista. `inbound` (o cliente procurou) ou
+//     `outbound` (nós procuramos). É o que o cliente PERCEBE.
+//   · **etapa interna**     — maquinaria entre acessos. Dobrada por default (D11).
+//   · **não classificada**  — `spawn_reason` que o backend não classificou. NÃO é
+//     um terceiro balde de conveniência: aparece como linha, nunca é dobrada e
+//     nunca entra na contagem de acessos. Somá-la a "acessos" inflaria o número
+//     protagonista com uma linha que ninguém sabe ler.
+type LineClass = 'access' | 'internal' | 'unknown'
+type Lens      = 'tree' | 'chrono'
+
+function lineClass(s: MemberSession): LineClass {
+  const d = contactDirection(s)
+  if (d === null) return 'unknown'
+  return d === 'internal' ? 'internal' : 'access'
+}
+
+/** Grupo das etapas internas sem NENHUM acesso acima delas na proveniência. */
+const ORPHAN_GROUP = '__orphan__'
+
 /**
- * T5 — rótulo da journey com prefixo.
+ * Para cada sessão, o ACESSO a que ela pertence: o ancestral de proveniência mais
+ * próximo que é acesso do cliente (ou ela mesma, se for um). É o que permite dobrar
+ * a maquinaria SOB o acesso que a originou, em vez de escondê-la numa lista à parte.
  *
- * A journey é identificada pela RAIZ CANÔNICA, ou seja, o `journey_id` **é** um
- * `session_id`. Isso é correto no modelo (como um branch do git é identificado por um
- * hash de commit), mas exibir o UUID cru, idêntico ao da sessão, convida exatamente à
- * confusão "o processo é a mesma coisa que a sessão?".
- *
- * O prefixo conserta a APRESENTAÇÃO sem tocar no modelo — nada de entidade Journey
- * (Arc 10), nada de id cunhado, nada para sincronizar.
+ * Etapa interna sem acesso ancestral cai em `ORPHAN_GROUP` e é EXIBIDA como grupo
+ * próprio — pendurá-la no primeiro acesso qualquer afirmaria uma origem que o dado
+ * não tem.
  */
-function journeyLabel(id: string | undefined | null): string {
-  if (!id) return '—'
-  return `PRC-${id.slice(0, 8)}`
+function buildGroups(tree: TreeNode[]): Map<string, string> {
+  const groups = new Map<string, string>()
+  const walk = (n: TreeNode, currentAccess: string | null) => {
+    const cls = lineClass(n.session)
+    const isInternal = cls === 'internal'
+    groups.set(n.session.session_id, isInternal ? (currentAccess ?? ORPHAN_GROUP) : n.session.session_id)
+    const nextAccess = isInternal ? currentAccess : n.session.session_id
+    n.children.forEach(c => walk(c, nextAccess))
+  }
+  tree.forEach(r => walk(r, null))
+  return groups
+}
+
+/**
+ * Deslocamento desde a abertura do PROCESSO (`+7m54s`).
+ *
+ * Refinamento barato de leitura (ADR D6): dois timestamps absolutos em níveis de
+ * indentação diferentes são difíceis de comparar de olho, e o aninhamento salta
+ * quando o offset está ao lado. A base é o MENOR `opened_at` do conjunto, não o da
+ * raiz — depois de um merge a raiz canônica é a de outro contato, e usar a raiz
+ * produziria offsets negativos sem explicação.
+ */
+function fmtOffset(base: string | null, iso: string | null): string {
+  if (!base || !iso) return ''
+  const ms = new Date(iso).getTime() - new Date(base).getTime()
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  return `+${fmtDurationMs(ms)}`
 }
 
 // J4 — cor do badge de desfecho do processo (business_outcome).
@@ -488,6 +558,18 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
   const [loading, setLoading] = useState(false)
   // T6 — sessão cujo rastro forense está aberto (drawer). null = fechado.
   const [traceFor, setTraceFor] = useState<string | null>(null)
+  // F4/D6 — as lentes A e B **não são dois modelos**: com `opened_at` na linha (custo
+  // zero, já vem no shape), são o mesmo componente com dois eixos de ordenação.
+  // Árvore responde "quem criou quem"; cronologia responde "o que aconteceu quando".
+  const [lens, setLens] = useState<Lens>('tree')
+  // F4/D11 — etapas internas escondidas por default. **Visibilidade, nunca contagem**:
+  // o cabeçalho reporta os dois domínios em qualquer estado do toggle. Foi por
+  // misturar as duas coisas que a divergência "cabeçalho diz 3, tabela mostra 4"
+  // existia — e ela some sem inventar um quarto número.
+  const [showAllInternal, setShowAllInternal] = useState(false)
+  // …e o desdobramento LOCAL, por acesso. O toggle global é o de D11; este é o que
+  // permite abrir a maquinaria de UM acesso sem encher a tela com a dos outros.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   // Item 1 / Fatia 2 — deep-link ao L2: a JourneyRow não veio do L1. Rebusca a própria
   // linha via /reports/journeys?root_session_id= (fetch direcionado, resolve canônico,
   // ignora janela+significant). Se o L1 já passou a `journey`, não busca nada.
@@ -530,7 +612,79 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
   }, [tenantId, root])
 
   const tree = buildTree(rows)
-  const nodes = flattenTree(tree)
+  const treeNodes = flattenTree(tree)
+  const groups = buildGroups(tree)
+
+  // ── F4 — os DOIS domínios de contagem, nunca somados (D4) ─────────────────
+  // O cabeçalho conta ACESSOS DO CLIENTE. As etapas internas são reportadas ao
+  // lado, e as não classificadas só aparecem quando existem — um "· 0 não
+  // classificadas" fixo seria ruído com cara de informação.
+  const accessCount  = rows.filter(s => lineClass(s) === 'access').length
+  const internalCount = rows.filter(s => lineClass(s) === 'internal').length
+  const unknownCount  = rows.filter(s => lineClass(s) === 'unknown').length
+
+  // Base do offset: o menor `opened_at` do conjunto. Ver `fmtOffset`.
+  const baseOpenedAt = rows.reduce<string | null>(
+    (min, s) => (!min || (s.opened_at && s.opened_at < min) ? (s.opened_at ?? min) : min), null)
+
+  // Quantas internas cada acesso esconde — é o número do rótulo dobrado.
+  const hiddenByGroup = new Map<string, number>()
+  for (const s of rows) {
+    if (lineClass(s) !== 'internal') continue
+    const g = groups.get(s.session_id) ?? ORPHAN_GROUP
+    hiddenByGroup.set(g, (hiddenByGroup.get(g) ?? 0) + 1)
+  }
+  const groupOpen = (g: string) => showAllInternal || openGroups.has(g)
+  const toggleGroup = (g: string) => setOpenGroups(prev => {
+    const next = new Set(prev)
+    if (next.has(g)) next.delete(g)
+    else next.add(g)
+    return next
+  })
+
+  // ── F4/D6 — a ORDEM, que é a única coisa que separa as duas lentes ─────────
+  //
+  // `tree`   — caminhada de PROVENIÊNCIA, indentada por profundidade. Responde
+  //            *quem criou quem*, e por isso agrupa a maquinaria sob o acesso que a
+  //            originou. Esconde a SOBREPOSIÇÃO: um acesso que rodou dentro da
+  //            janela de outro aparece como irmão — é por isso que o offset ao lado
+  //            do horário deixou de ser opcional.
+  // `chrono` — **ordem global estrita por `opened_at`, sem agrupamento nenhum.**
+  //            Responde *o que aconteceu quando*, e nada mais.
+  //
+  // ⚠️ **Emenda ao ADR D6, medida na tela (2026-08-25).** O desenho dizia
+  // *"ordenação por started_at, contato como cabeçalho de grupo"* — as duas coisas
+  // juntas. Implementado assim, a maquinaria ficava presa ao acesso de origem e
+  // uma etapa das 17:11:31 era renderizada ACIMA de um acesso das 17:10:52. Pior:
+  // com as internas dobradas (o default), as duas lentes produziam **exatamente as
+  // mesmas linhas**, porque os acessos já saem em ordem na árvore. Um controle que
+  // não muda nada no caso comum é indistinguível de um controle quebrado — a mesma
+  // família do seletor «Inbound/Outbound» que a F3 removeu por não filtrar nada.
+  //
+  // O agrupamento por acesso NÃO se perde: ele é a lente árvore, do lado. O que se
+  // ganha é uma lente que faz o que o nome promete, e a diferença entre as duas
+  // passa a ser visível na primeira olhada.
+  interface RenderRow { s: MemberSession; depth: number; cls: LineClass; group: string }
+  const byOpened = (a: MemberSession, b: MemberSession) =>
+    (a.opened_at ?? '').localeCompare(b.opened_at ?? '')
+
+  const isTree = lens === 'tree'
+  const ordered: RenderRow[] = isTree
+    ? treeNodes.map(n => ({
+        s: n.session, depth: n.depth, cls: lineClass(n.session),
+        group: groups.get(n.session.session_id) ?? ORPHAN_GROUP,
+      }))
+    : [...rows].sort(byOpened).map(s => ({
+        s, depth: 0, cls: lineClass(s),
+        group: groups.get(s.session_id) ?? ORPHAN_GROUP,
+      }))
+  // As órfãs precisam de um dono visível para pendurar o rótulo dobrado. Só na
+  // ÁRVORE: na cronologia não há grupo a rotular, e o marcador seria uma promessa
+  // de agrupamento que aquela lente não faz. `null` = não há órfã.
+  const firstOrphanId = isTree
+    ? (ordered.find(r => r.group === ORPHAN_GROUP)?.s.session_id ?? null)
+    : null
+
   // Arestas cruzando, agrupadas pelo PAI — para pendurar o marcador na linha certa.
   const crossingByParent = new Map<string, MemberSession[]>()
   for (const s of spawned) {
@@ -549,7 +703,52 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
         </button>
         <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
         <span className="text-dark font-medium font-mono" title={root}>{journeyLabel(root)}</span>
-        <span className="ml-1 text-muted-light">· {t('journeys.memberCount', { count: rows.length, defaultValue: `${rows.length} sessões` })}</span>
+
+        {/* ── F4/D4 — os DOIS domínios, e por que não há um total ──────────────
+            "3 sessões" está certo sobre a tabela e errado sobre o caso: um
+            processo de 3 sessões pode ter 1 acesso do cliente e 2 etapas de
+            maquinaria. O número protagonista é o de ACESSOS; as etapas internas
+            aparecem ao lado, nunca somadas — e é essa separação (não um toggle)
+            que dissolve o "cabeçalho diz 3, tabela mostra 4" registrado no D11. */}
+        <span className="ml-1 text-dark font-medium" title={t('journeys.countsHint')}>
+          · {t('journeys.accessCount', { count: accessCount })}
+        </span>
+        {internalCount > 0 && (
+          <span className="text-muted-light">· {t('journeys.internalCount', { count: internalCount })}</span>
+        )}
+        {/* Só aparece quando existe: um "· 0 não classificadas" fixo seria ruído
+            com cara de informação. Quando aparece, é para ser lido. */}
+        {unknownCount > 0 && (
+          <span className="text-warning" title={t('journeys.unclassifiedHint')}>
+            · {t('journeys.unclassifiedCount', { count: unknownCount })}
+          </span>
+        )}
+
+        <span className="flex-1" />
+
+        {/* D6 — mesmo componente, dois eixos de ordenação. */}
+        <div className="inline-flex rounded border border-border overflow-hidden" role="group"
+          title={t('journeys.lens.hint')}>
+          {(['tree', 'chrono'] as Lens[]).map(l => (
+            <button key={l} onClick={() => setLens(l)}
+              aria-pressed={lens === l}
+              className={`px-2 py-0.5 transition-colors ${
+                lens === l ? 'bg-primary text-white' : 'bg-white text-muted hover:text-dark'}`}>
+              {t(`journeys.lens.${l}`)}
+            </button>
+          ))}
+        </div>
+
+        {/* D11 — visibilidade, nunca contagem: o cabeçalho acima não muda com ele. */}
+        {internalCount > 0 && (
+          <label className="flex items-center gap-1.5 text-muted cursor-pointer select-none"
+            title={t('journeys.showInternalHint')}>
+            <input type="checkbox" checked={showAllInternal}
+              onChange={e => { setShowAllInternal(e.target.checked); setOpenGroups(new Set()) }}
+              className="accent-primary cursor-pointer" />
+            {t('journeys.showInternal')}
+          </label>
+        )}
       </div>
 
       {/* Item 1 — sinal N3 do processo. Vem do L1 (clique) ou é rebuscado no deep-link (Fatia 2). */}
@@ -573,18 +772,60 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
               </tr>
             </thead>
             <tbody>
-              {nodes.map(({ session: s, depth }) => (
+              {ordered.map(({ s, depth, cls, group }) => {
+                const isInternal = cls === 'internal'
+                // Na cronologia não há grupo: o único controle é o toggle global.
+                // Desdobrar "só este acesso" é uma pergunta de PROVENIÊNCIA, e a
+                // lente que a responde é a árvore.
+                const open   = isTree ? groupOpen(group) : showAllInternal
+                const hidden = hiddenByGroup.get(group) ?? 0
+                // Etapa interna dobrada: some da tabela e vira o contador do grupo.
+                if (isInternal && !open
+                    && !(isTree && group === ORPHAN_GROUP && s.session_id === firstOrphanId)) {
+                  return null
+                }
+                const direction = contactDirection(s)
+                return (
                 <React.Fragment key={s.session_id}>
+                {/* Grupo ÓRFÃO — etapas internas sem acesso ancestral. Ganha rótulo
+                    próprio em vez de ser pendurado no primeiro acesso: a origem que
+                    o dado não tem não se inventa. */}
+                {isTree && group === ORPHAN_GROUP && s.session_id === firstOrphanId && (
+                  <tr className="border-t border-border bg-surface-muted/60">
+                    <td colSpan={6} className="px-3 py-1.5">
+                      <button onClick={() => toggleGroup(ORPHAN_GROUP)}
+                        className="inline-flex items-center gap-1.5 text-[11px] text-muted hover:text-dark transition-colors">
+                        <span aria-hidden="true">{open ? '▾' : '▸'}</span>
+                        {t('journeys.orphanGroup')}
+                        <span className="tabular-nums">({hidden})</span>
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                {(!isInternal || open) && (
                 <tr onClick={() => onSelectSession(s.session_id)}
                   className={`group border-t border-border hover:bg-surface-muted transition-colors cursor-pointer ${
-                    s.session_id === root ? 'bg-primary-light/30' : ''}`}>
+                    s.session_id === root ? 'bg-primary-light/30' : ''} ${
+                    isInternal ? 'text-muted-light bg-surface-muted/30' : ''}`}>
                   <td className="px-3 py-2.5 font-mono text-dark" title={s.session_id}>
-                    {/* T5 — indentação = profundidade na árvore de proveniência.
-                        O rótulo (T4) diz POR QUE o filho existe: sem ele, vê-se a
-                        hierarquia mas não o motivo de cada nó estar ali. */}
+                    {/* T5 — indentação = profundidade (proveniência na lente árvore,
+                        pertença ao acesso na cronologia). O rótulo (T4) diz POR QUE o
+                        filho existe: sem ele, vê-se a hierarquia mas não o motivo. */}
                     <span style={{ paddingLeft: `${depth * 16}px` }} className="inline-flex items-center gap-1.5">
                       {depth > 0 && (
                         <span className="text-border-strong select-none" aria-hidden="true">└─</span>
+                      )}
+                      {/* D4/D8 — a CLASSE da linha, no mesmo ícone da visão 1. Direção
+                          não classificada mostra `—` e nomeia o valor cru no título:
+                          um `spawn_reason` novo não pode cair num balde plausível. */}
+                      {direction ? (
+                        <span title={t(`lista.direction.${direction}`, { ns: 'contacts' })}
+                          aria-label={t(`lista.direction.${direction}`, { ns: 'contacts' })}>
+                          {DIRECTION_ICONS[direction]}
+                        </span>
+                      ) : (
+                        <span className="text-warning" title={t('lista.direction.unknownHint', {
+                          ns: 'contacts', value: s.spawn_reason ?? '' })}>—</span>
                       )}
                       {truncateId(s.session_id)}
                       {depth > 0 && s.spawn_reason && (
@@ -611,7 +852,20 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
                     {s.channel ? t(`enums.channel.${s.channel}`, { defaultValue: s.channel }) : '—'}
                   </td>
                   <td className="px-3 py-2.5"><StatusBadge t={t} status={s.status} /></td>
-                  <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">{fmtDate(s.opened_at)}</td>
+                  {/* D6 — absoluto + OFFSET desde a abertura do processo. Dois
+                      horários absolutos em indentações diferentes não se comparam de
+                      olho; com o `+7m54s` ao lado, o aninhamento salta. É também o
+                      único lugar em que a SOBREPOSIÇÃO fica legível na lente árvore,
+                      que mostra como irmão o acesso que rodou dentro de outro. */}
+                  <td className="px-3 py-2.5 text-muted-light whitespace-nowrap">
+                    {fmtDate(s.opened_at)}
+                    {baseOpenedAt && s.opened_at && s.opened_at !== baseOpenedAt && (
+                      <span className="ml-1.5 text-border-strong tabular-nums"
+                        title={t('journeys.offsetHint')}>
+                        {fmtOffset(baseOpenedAt, s.opened_at)}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-3 py-2.5 text-muted-light">{s.segment_count || 0}</td>
                   <td className="px-3 py-2.5 text-muted-light" title={s.outcome ?? ''}>
                     {s.outcome
@@ -619,6 +873,25 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
                       : <span className="text-border-strong">—</span>}
                   </td>
                 </tr>
+                )}
+
+                {/* D4/D11 — a maquinaria DOBRADA sob o acesso que a originou.
+                    Contada, nunca omitida em silêncio: sem este rótulo, um processo
+                    com duas etapas internas escondidas seria indistinguível de um
+                    que não teve nenhuma. Clicar abre só este grupo. */}
+                {isTree && !isInternal && hidden > 0 && !open && (
+                  <tr className="border-t border-border/50 bg-surface-muted/40 hover:bg-surface-muted cursor-pointer"
+                    onClick={() => toggleGroup(group)}>
+                    <td colSpan={6} className="px-3 py-1.5">
+                      <span style={{ paddingLeft: `${(depth + 1) * 16}px` }}
+                        className="inline-flex items-center gap-1.5 text-[11px] text-muted"
+                        title={t('journeys.foldedHint')}>
+                        <span className="text-border-strong select-none" aria-hidden="true">⋯</span>
+                        {t('journeys.internalCount', { count: hidden })}
+                      </span>
+                    </td>
+                  </tr>
+                )}
 
                 {/* T5 — ARESTAS QUE ATRAVESSAM A FRONTEIRA (`journey: new`).
                     Este atendimento originou OUTRO processo. Vira um LINK, nunca uma
@@ -647,7 +920,8 @@ function JourneySessions({ tenantId, root, journey, onBack, onSelectSession, onS
                   </tr>
                 ))}
                 </React.Fragment>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         )}
@@ -825,6 +1099,15 @@ export default function AnaliseJourneysPage() {
   const root      = searchParams.get('journey')
   const sessionId = searchParams.get('session')
 
+  // Redirect do endereço LEGADO `?journey=…&session=…` (ver o bloco do L3 removido,
+  // abaixo). Em efeito, não no render: `setSearchParams` durante o render é efeito
+  // colateral em fase de render, e o React pode reexecutá-la.
+  useEffect(() => {
+    if (root && sessionId) {
+      setSearchParams({ journey: root, session_id: sessionId }, { replace: true })
+    }
+  }, [root, sessionId])   // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!tenantId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-light text-sm">
@@ -833,19 +1116,23 @@ export default function AnaliseJourneysPage() {
     )
   }
 
-  // L3 — transcript
-  if (root && sessionId) {
-    return (
-      <div className="h-full overflow-hidden">
-        <SessionTranscript
-          tenantId={tenantId}
-          sessionId={sessionId}
-          canJoin={false}
-          onBack={() => setSearchParams({ journey: root })}
-        />
-      </div>
-    )
-  }
+  // ── L3 REMOVIDO — o nível de sessão é UM só (2026-08-25) ──────────────────
+  //
+  // Aqui vivia um `SessionTranscript` **incondicional**, e era a segunda
+  // implementação do nível de sessão: pela lista, `?session_id=` escolhe o
+  // renderer pelo CANAL (`webhook` → trace de workflow; demais → segmentos);
+  // por aqui, tudo virava transcrição. A mesma sessão interna aparecia como
+  // "Workflow trace" por um caminho e como transcrição VAZIA pelo outro, e
+  // nada ficava vermelho — o operador só via uma tela sem eventos e concluía
+  // que o dado não existia.
+  //
+  // Hoje o clique numa sessão-membro vai para `?journey=…&session_id=…`, que o
+  // `SessionsPage` trata com o MESMO drill da lista, carregando o processo no
+  // breadcrumb. Mesma correção que a F4 fez com a direção do acesso: uma casa.
+  //
+  // `?journey=…&session=…` (o endereço antigo) sobrevive como REDIRECT — pode
+  // haver favorito e há histórico de navegador apontando para ele.
+  if (root && sessionId) return null   // o efeito acima já reescreveu a URL
 
   // L2 — member sessions
   if (root) {
@@ -855,7 +1142,10 @@ export default function AnaliseJourneysPage() {
         root={root}
         journey={selectedJourney}
         onBack={() => setSearchParams({})}
-        onSelectSession={sid => setSearchParams({ journey: root, session: sid })}
+        // O clique numa sessão-membro leva ao drill ÚNICO (o mesmo da lista),
+        // preservando o processo na URL — é o `journey` que o breadcrumb de lá usa
+        // para oferecer a volta. Não existe mais um nível de sessão daqui.
+        onSelectSession={sid => setSearchParams({ journey: root, session_id: sid })}
         // T5: navegar para a journey vizinha (a que nasceu daqui com `journey: new`).
         // O grafo completo é PERCORRIDO por links, não renderizado de uma vez. A linha
         // dessa journey vizinha não está em memória → limpa o painel (não mostra dado

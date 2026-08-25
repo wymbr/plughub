@@ -600,8 +600,14 @@ function InstancesTab({ tenantId }: { tenantId: string }) {
                 <div className="text-xs font-bold text-muted uppercase tracking-wider mb-2">
                   {t('processes.instances.detail.originSession')}
                 </div>
+                {/* F3 (resíduo) — este link estava quebrado em TRÊS camadas, e cada
+                    uma sozinha já o anulava: o parâmetro tinha outro nome
+                    (`sessionId`), a rota `/contacts/sessions` é um `Navigate` que
+                    NÃO preserva query, e o destino ignorava o parâmetro de qualquer
+                    forma. Três ausências dando o mesmo resultado: a lista inteira,
+                    sem sinal de que algo tinha sido pedido. */}
                 <Link
-                  to={`/contacts/sessions?sessionId=${detail.origin_session_id}`}
+                  to={`/analise/sessions?session_id=${encodeURIComponent(detail.origin_session_id)}`}
                   className="text-xs text-secondary font-mono hover:underline">
                   {detail.origin_session_id}
                 </Link>

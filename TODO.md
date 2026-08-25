@@ -71,10 +71,20 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
    **Construir o F4 antes disso repete a armadilha que a F3 JÁ PAGOU:** as colunas ANI/DNIS foram
    construídas e depois removidas por não terem população que as exercitasse.
 
-3. **F4 junto dos resíduos da F3** — são a **mesma superfície**, e numa passada só custam bem menos
-   que em duas: `/analise/sessions?session_id=…` ignorado (três telas linkam para lá), filtro por
-   direção de verdade (o seletor removido era falso), e as duas páginas mortas (`ContactsPage.tsx`,
-   `AnaliseContatosPage.tsx`).
+3. ~~**F4 junto dos resíduos da F3**~~ — ✅ **FEITO em 2026-08-25** (ver `CHANGELOG.md`). Os três
+   resíduos e a visão 2 fecharam na mesma passada, e a aposta de que eram a mesma superfície se
+   confirmou: o filtro por direção **destravou** o F4 em vez de competir com ele, porque foi ele
+   que forçou a direção a ter um predicado único — e é esse predicado que separa as duas classes
+   de linha da visão 2.
+
+   **O que a fase revelou, e não era item dela:**
+   - **Eram QUATRO telas linkando com `session_id`, não três.** A quarta
+     (`ProcessosPage.tsx:604`) usava o caminho legado e estava quebrada em três camadas
+     independentes. O grep da passagem procurou `analise/sessions?` e não alcançava
+     `/contacts/sessions?sessionId=`.
+   - **A direção estava a um passo de virar duas verdades.** Ver ADR §F4 item 1.
+   - **`journeyLabel` já eram duas**, com a prosa de uma afirmando que não.
+   - 🆕 **`AnaliseTab.tsx` ficou sem NENHUM consumidor** — ver Backlog.
 
 ### O que mudaria esta ordem
 
@@ -88,11 +98,73 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
 - Amostra de `collect` aparecendo no passo 2 **fecha** o bloqueio principal do F4 e o torna a fatia
   óbvia seguinte.
 
+### 🆕 Aberto pela fase 3 (2026-08-25)
+
+- **`AnaliseTab.tsx` perdeu o último consumidor.** Ela era usada só por `ContactsPage` e
+  `AnaliseContatosPage`, as duas removidas — e **já estava inalcançável antes disso**, porque
+  nenhuma das duas tinha rota desde a F3.3. Não foi apagada junto de propósito: é uma FEATURE
+  (métricas agregadas do conjunto filtrado de contatos), e decidir se ela volta — como aba de
+  `/analise/sessions`, ou não volta — é do dono, não consequência de uma limpeza. **Enquanto
+  não se decide, é código morto que compila.** Mesma classe do trio de skills do item 13.
+- **O gate novo (`probe_f4_direction_and_classes.sh`) não é chamado por runner nenhum** —
+  mesma dívida de quase todo `infra/test/`, agora com mais um.
+- **O ramo "não classificadas" existe sem população** (0 em 115). Está certo que exista; mas
+  ele **nunca foi exercido**, e um ramo nunca exercido é uma promessa, não uma verificação.
+  Para exercê-lo bastaria um `spawn_reason` novo — o que é exatamente o dia em que ele
+  importa.
+- **O dobramento (D11) foi exercido com 2 internas** no processo de referência. Processo com
+  maquinaria profunda (N níveis de `trigger` aninhado) **não foi visto** — a árvore agrupa
+  pelo acesso ancestral mais próximo, e isso só tem uma forma de errar que a amostra atual não
+  distingue.
+- 🔴 **O chip da lista e o cabeçalho do processo contam coisas diferentes, e o operador clica
+  num e encontra o outro.** Medido na tela em 2026-08-25: chip `PRC-8c47326d · 5` → cabeçalho
+  `3 customer accesses · 2 internal steps`. **Os dois estão certos** — o chip conta SESSÕES do
+  processo (`journey_session_count`, predicado de contato) e o cabeçalho conta ACESSOS DO CLIENTE
+  (D4, que a F4 introduziu). É a mesma família do *"cabeçalho diz 3, tabela mostra 4"* que o D11
+  fechou um nível abaixo, ressurgindo um nível acima — e desta vez foi a F4 que a criou, ao dar
+  ao cabeçalho um domínio que o chip não tem. Três saídas, decisão do dono: **(i)** o chip passa
+  a contar acessos (fica consistente, mas some a informação de tamanho do processo); **(ii)** o
+  chip ganha os dois números (`· 3 + 2`); **(iii)** só o rótulo muda (`{{count}} sessões`, não
+  `contacts`) — o mais barato e o que menos promete. ⚠️ A chave i18n hoje diz
+  *"Process with {{count}} contacts"*, que é a leitura MENOS defensável das três.
+- 🆕 **`GET /config/dashboards?tenant_id=tenant_demo` responde 404 repetidamente** (visto no
+  console do browser, 4+ ocorrências por carga de página). Não foi investigado — pode ser rota
+  removida com chamador vivo, ou proxy faltando, que é o defeito que a H1 do arco de histórico
+  já pagou uma vez.
+- 🆕 **Do drill de uma sessão-membro não há caminho de volta ao PROCESSO.** ✅ **FECHADO no mesmo
+  dia** (ver `CHANGELOG.md`): selo `PRC-… · N` no breadcrumb, alimentado pelo mesmo lookup que
+  resolve o canal. O registro fica porque a CAUSA vale: o único pivô era o chip, e o chip mora
+  na lista — quem chega por deep-link nunca passa por ela. Achado ao ver a
+  tela: o operador abriu `?session_id=` (um dos deep-links que esta mesma fatia consertou),
+  viu o `Workflow trace` de uma sessão interna e concluiu que *"os dois contatos não aparecem
+  em lugar nenhum"* — estavam a um clique de distância, na visão 2. O único pivô para o
+  processo é o chip, e ele mora na LISTA; quem chega por link direto nunca passa por ela. O
+  conserto óbvio (um selo `PRC-…` no breadcrumb do drill quando a sessão tem processo com
+  N > 1) é barato, mas é decisão de navegação: hoje o drill não pede a journey da sessão.
+- ~~🆕 **A lente "Cronologia" agrupa por acesso, e por isso NÃO está em ordem cronológica
+  estrita**~~ — ✅ **FECHADO no mesmo dia, pela saída (ii)** (ordem global estrita, internas
+  soltas no eixo). Ver a emenda ao D6 no ADR. **A pergunta que fechou não foi a que abriu:** o
+  registro dizia *"a cronologia contradiz o próprio rótulo"*, e a medição mostrou algo pior —
+  com as internas dobradas (o default) **as duas lentes produziam exatamente as mesmas linhas**,
+  e a única diferença era a indentação de um neto. Foi o dono quem notou, perguntando se o
+  toggle *"por enquanto não faz nada"*. **Um controle que não muda nada no caso comum é
+  indistinguível de um quebrado** — e essa é a família do seletor que a própria F3 removeu.
+
 **Estado após 2026-08-25 (segunda sessão do dia): passos 1, 2 e 2b FECHADOS.** O passo 2 descobriu
 um bloqueio de pertença (acessos de consulta fora do processo) e o **2b o fechou no mesmo dia** —
-era a metade que faltou da F1, não fatia nova. **O próximo é o passo 3 (F4 + resíduos da F3)**, agora
-sem bloqueio declarado: a classe de linha `collect` tem prova, o texto está decidido (acessos do
-cliente, N) e os acessos que o cabeçalho vai contar são membros de fato.
+era a metade que faltou da F1, não fatia nova.
+
+**Estado após a terceira sessão de 2026-08-25: os quatro passos (1, 2, 2b, 3) estão FECHADOS, e a
+ordem acabou.** Ela se conferiu três vezes e se corrigiu duas — e a terceira correção é a que vale
+guardar: **o passo 3 parecia ser "duas coisas na mesma superfície, por economia", e era uma só**.
+O filtro por direção não foi contrabandeado ao lado do F4; foi ele que obrigou a direção a ter um
+predicado único, e é esse predicado que separa acesso de etapa interna na visão 2. A economia
+prevista era de passada; a real foi de MODELO.
+
+**O que resta desta linha de trabalho:** a **F5** (`ContextStorePersister`, fase própria, desenho
+fechado no ADR §3) e a **lente C** (faixas por personagem, destino registrado). Nenhuma das duas
+tem bloqueio declarado, e nenhuma é continuação óbvia — a próxima fatia volta a ser escolha do
+dono, não posição numa fila.
 
 ---
 

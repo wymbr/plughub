@@ -42,14 +42,19 @@ iniciado · duração · desfecho (badge de estado + `outcome`) · segmentos · 
 
 | Coluna | Fonte | O que não é |
 |---|---|---|
-| **direção** ⇣⇡⚙ | DERIVADA de `spawn_reason` + canal (`contactDirection` em `types.ts`) | não é armazenada, e **não** se chama `origin` — essa chave i18n já significava ANI |
+| **direção** ⇣⇡⚙ | campo `direction`, DERIVADO no backend (`reports_query._DIRECTION_EXPR`) a partir de `spawn_reason` + canal efetivo; a UI só exibe | não é armazenada, e **não** se chama `origin` — essa chave i18n já significava ANI. A UI **não re-deriva** desde a F4: coluna e filtro são a mesma expressão |
 | **entrou por → atendido por** | `pool_id` (a porta, first-write-wins desde a F1b) e `attended_pool_ids` (pools com segmento) | nunca **um** filtro/coluna chamado "Pool": foi o operador ler um e receber o outro que originou este arco |
 | **duração** | `elapsed_time_ms` — wall-clock do caso, esperas incluídas (D9) | **nunca** `agent_time_ms`, **nunca** Σ segmentos (eles se sobrepõem; a soma não é uma duração) |
-| **processo** | chip `PRC-{journey_id[:4]} · N`, só quando `N > 1` | `journey_id` é a raiz **canônica** (union-find), não `root_session_id` cru |
+| **processo** | chip `PRC-{journey_id[:8]} · N`, só quando `N > 1` | `journey_id` é a raiz **canônica** (union-find), não `root_session_id` cru. O corte é de **8** desde a F4 — eram dois rótulos (4 aqui, 8 no cabeçalho da visão 2) para o mesmo processo |
 
-**Filtros.** período · canal · status · **entrou por** (`entry_pool_id`) · **atendido por** (`pool_id`)
-· agente · evento · tags. Os dois pools compõem por AND — é assim que se pergunta *"entrou no `sac_ia`
-e terminou no humano"*.
+**Filtros.** período · canal · **direção** · status · **entrou por** (`entry_pool_id`) · **atendido
+por** (`pool_id`) · agente · evento · tags. Os dois pools compõem por AND — é assim que se pergunta
+*"entrou no `sac_ia` e terminou no humano"*.
+
+**O filtro de direção usa a MESMA expressão que a coluna** (`?direction=inbound|outbound|internal`).
+Não é detalhe de implementação: é o que impede a linha de dizer `interno` e o filtro `inbound` a
+devolver. Sessão que o backend não classificou fica **fora das três** — logo `Σ das três ≤ total`, e a
+diferença é a população não classificada. Valor fora do domínio é **recusado (422)**, nunca ignorado.
 
 **O chip conta o processo INTEIRO, de propósito.** Uma janela que pega 2 de 3 contatos mostra `· 3`.
 O rodapé da tabela nomeia isso, e só aparece quando `meta.window_applied` é verdadeiro **e** há chip na
@@ -60,8 +65,63 @@ página — no drill não há divergência a explicar. O N usa o mesmo predicado
 processos: processo é pivô, nunca navegação (ADR D2). `/analise/processos` redireciona preservando a
 query — havia 4 deep-links vivos para lá.
 
-**Fora, e não voltam:** colunas e filtros ANI/DNIS (permanentemente vazios nos dois canais existentes)
-e o seletor «Inbound / Outbound», que nunca virou parâmetro e portanto não filtrava nada.
+#### Visão 2 — o processo *(F4, 2026-08-25)*
+
+`/analise/sessions?journey=<raiz canônica>`, servida por `AnaliseJourneysPage`. Fonte:
+`GET /reports/journeys?root_session_id=` (o card) + `GET /reports/sessions?root_session_id=` (as
+sessões-membro, **isento** da janela de período e do escopo de contato — pedir UM processo não é
+listar).
+
+**Duas classes de linha (ADR D4), e é isso que responde a pergunta do operador:**
+
+| Classe | Quem é | Como aparece |
+|---|---|---|
+| **acesso do cliente** | `direction` = `inbound` ou `outbound` | protagonista, sempre visível |
+| **etapa interna** | `direction` = `internal` | **dobrada** sob o acesso que a originou, com contador |
+| **não classificada** | `direction` vazio | linha visível, `—` em destaque, nunca dobrada |
+
+**O cabeçalho conta ACESSOS** (`2 acessos do cliente · 2 etapas internas`). Nunca um total somado, e
+o toggle de internas é **visibilidade**: o cabeçalho não muda com ele. É essa separação por domínio —
+não o toggle — que dissolve o *"cabeçalho diz 3, tabela mostra 4"* registrado no ADR D11.
+
+**Duas lentes, um componente** (ADR D6). `Árvore` ordena por proveniência (indentação = quem criou
+quem); `Cronologia` ordena por `opened_at`, com cada acesso como cabeçalho do seu grupo. A única
+diferença é a ORDEM. Ao lado do horário absoluto vai o **offset desde a abertura do processo**
+(`+7m54s`) — é o único lugar onde a **sobreposição** fica legível na árvore, que mostra como irmão o
+acesso que rodou dentro da janela de outro.
+
+Etapa interna sem acesso ancestral cai num grupo **órfão** com rótulo próprio: pendurá-la no
+primeiro acesso afirmaria uma origem que o dado não tem.
+
+Continuam: o rastro forense por sessão (drawer, atravessa fronteiras de processo), as arestas
+`journey: new` como **link** (nunca expansão) e o painel de sinal N3 do processo.
+
+**Fora, e não voltam:** colunas e filtros ANI/DNIS (permanentemente vazios nos dois canais existentes).
+O seletor «Inbound / Outbound» **voltou na F4** — mas o que voltou não é o mesmo controle: o antigo
+nunca virou parâmetro e devolvia a lista inteira; o novo tem predicado no backend e testemunha
+negativa no gate.
+
+#### Deep-link por `?session_id=` *(F4, 2026-08-25)*
+
+`/analise/sessions?session_id=<id>` abre o **nível 2 daquela sessão**. A URL é a fonte única desse
+nível (o mesmo desenho de `?journey=`), e quatro telas linkam para cá: `WorkItemsPage`,
+`SchedulesMonitorPage`, `DeliveriesTab` e `ProcessosPage`. Até a F4 o parâmetro era **ignorado** — o
+operador clicava em "ver a sessão" e caía na lista, sem sinal de que o pedido tinha sido descartado.
+
+O **canal** decide a tela (`webhook` → trace de workflow; demais → segmentos) e nem sempre viaja no
+link: quando falta, é resolvido por lookup (`?session_id=`, isento de escopo de contato). Adivinhar
+renderizaria um workflow como conversa. O canal fica **amarrado ao id** (`{id, ch}`): navegar entre
+sessões pelo botão VOLTAR do navegador não passa pelo clique, e um canal solto sobreviveria à troca.
+
+**Este é o ÚNICO nível de sessão da plataforma.** A visão 2 não tem drill próprio: clicar numa
+sessão-membro vai para `?journey=X&session_id=Y`, que cai aqui com o processo no breadcrumb
+(`← Sessions › PRC-… · N › …id`, e o selo volta ao processo). Até 2026-08-25 havia dois, e a mesma
+sessão interna aparecia como *Workflow trace* por um caminho e como transcrição **vazia** pelo
+outro. `?journey=…&session=…` sobrevive como redirect.
+
+Não encontrou: **tela própria**, nomeando as duas causas possíveis (não existe × fora do escopo de
+pools do usuário), com botão de volta. Nunca a lista — uma listagem cheia é indistinguível de "nada
+foi pedido".
 
 #### Toggle "Incluir sessões internas (wrap-up, dispatch)"
 
@@ -119,6 +179,11 @@ Fonte: `analytics-api` → Redis snapshots (SSE `/dashboard/operational`, poll 5
 
 ### Análise
 
+> ⚠️ **Esta aba não está alcançável.** `AnaliseTab` era montada por `ContactsPage` e
+> `AnaliseContatosPage`, ambas removidas na F4 — e já estava sem rota desde a F3.3. O componente
+> continua no repositório porque **é uma feature, e se ela volta (como aba de `/analise/sessions`,
+> ou não volta) é decisão do dono**, não consequência de uma limpeza. Registrado no `TODO.md`.
+
 Métricas agregadas do conjunto filtrado: volume por canal, handle time médio, score de qualidade médio, distribuição por outcome. Gráficos de timeseries com interval picker.
 
 Fonte: `analytics-api` → ClickHouse + endpoints `/reports/sessions`, `/reports/agents`, `/reports/timeseries/*`.
@@ -140,7 +205,7 @@ Usuários `business` com `operacao: none` veem apenas a aba Lista.
 | `channel-gateway` | Produz `conversations.inbound`, assina Redis pub/sub para WS delivery |
 | `routing-engine` | Produz snapshots de pool no Redis a cada evento de roteamento |
 | `mcp-server-plughub` | Tool `supervisor_state` lê ContextStore e retorna `context_snapshot` |
-| `platform-ui` | `modules/contacts/` — SessionsPage + ListaTab (+ MonitorTab, AnaliseTab). ⚠️ `ContactsPage.tsx` é **código morto** desde que `/contacts` virou redirect; remoção registrada no `TODO.md` |
+| `platform-ui` | `modules/contacts/` — SessionsPage + ListaTab (+ MonitorTab); `modules/analise/AnaliseJourneysPage` para a visão 2. `ContactsPage.tsx` e `AnaliseContatosPage.tsx` **removidas na F4**; `AnaliseTab` ficou sem consumidor (ver aba Análise) |
 
 ## Eventos Kafka relevantes
 

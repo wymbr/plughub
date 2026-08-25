@@ -9,8 +9,9 @@
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, GitBranch } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
+import { apiFetch } from '@/api/apiFetch'
 import AnaliseJourneysPage from '@/modules/analise/AnaliseJourneysPage'
 import { PoolDomainSelect } from '@/components/ui/PoolDomainSelect'
 import { SessionTranscript }   from '@/modules/service/components/SessionTranscript'
@@ -20,7 +21,7 @@ import { WebhookSegmentDetail } from '@/modules/service/components/WebhookSegmen
 import type { ContactSegment } from '@/modules/service/types'
 import type { TraceNode }      from '@/modules/service/components/WorkflowTraceList'
 import type { ContactFilters } from './types'
-import { DEFAULT_FILTERS }    from './types'
+import { DEFAULT_FILTERS, journeyLabel } from './types'
 import { ListaTab }           from './tabs/ListaTab'
 
 // ── Extended filters ──────────────────────────────────────────────────────────
@@ -56,7 +57,7 @@ function FilterBar({ filters, setFilters }: {
     || filters.insightCategory || filters.insightTags)
 
   const hasAny = !!(filters.sessionIdSearch || filters.channel || filters.outcome
-    || filters.sessionStatus || hasExtra
+    || filters.sessionStatus || filters.direction || hasExtra
     || filters.fromDt !== DEFAULT_FILTERS.fromDt || filters.toDt !== DEFAULT_FILTERS.toDt)
 
   return (
@@ -82,13 +83,24 @@ function FilterBar({ filters, setFilters }: {
           ))}
         </select>
 
-        {/* F3 — o seletor «Inbound / Outbound» foi REMOVIDO. Ele não filtrava nada:
-            `sessionType` nunca entrou no `contactFilters` nem virou parâmetro, então
-            escolher "Outbound" devolvia a lista inteira. Um controle que promete um
-            recorte e não o aplica é pior do que sua ausência — e pior ainda agora,
-            ao lado de uma coluna de DIREÇÃO que diz a verdade sobre o mesmo eixo.
-            Filtrar por direção de verdade (parâmetro sobre `spawn_reason`) está
-            registrado no TODO como fatia própria, não contrabandeada aqui. */}
+        {/* F4 — o seletor de DIREÇÃO, agora de verdade.
+            A F3 removeu o antigo «Inbound / Outbound» porque ele não filtrava nada:
+            `sessionType` nunca virou parâmetro, então escolher "Outbound" devolvia a
+            lista inteira. O que muda aqui não é o controle — é que existe UM
+            predicado: `?direction=` no backend usa a MESMA expressão que preenche a
+            coluna, então o que o filtro devolve e o que a linha mostra não podem
+            divergir. Sem essa identidade, este seletor voltaria a ser o de antes,
+            só que mentindo mais devagar. */}
+        <select value={filters.direction ?? ''}
+          onChange={e => set('direction', e.target.value as SessionFilters['direction'])}
+          className={`${inp} bg-white`}
+          title={t('filter.directionHint')}>
+          <option value="">{t('filter.allDirections')}</option>
+          <option value="inbound">{t('filter.direction.inbound')}</option>
+          <option value="outbound">{t('filter.direction.outbound')}</option>
+          <option value="internal">{t('filter.direction.internal')}</option>
+        </select>
+
         <select value={filters.sessionStatus} onChange={e => set('sessionStatus', e.target.value)} className={`${inp} bg-white`}>
           <option value="">{t('sessions.allStatuses')}</option>
           <option value="active">{t('sessions.status.active')}</option>
@@ -161,6 +173,36 @@ function FilterBar({ filters, setFilters }: {
   )
 }
 
+// ── Selo do processo no breadcrumb do drill ───────────────────────────────────
+//
+// A volta ao PROCESSO, que não existia. Até 2026-08-25 o único pivô para a visão 2
+// era o chip na LISTA — e quem chegava ao drill por deep-link (`?session_id=`, que
+// três telas usam) nunca passava pela lista. O sintoma foi relatado como
+// *"os contatos do processo não aparecem em lugar nenhum"*: apareciam, a um clique,
+// numa tela sem caminho até ela.
+//
+// Só é renderizado com processo de MAIS DE UM contato — mesma regra do chip: sem
+// isso não há para onde pivotar, e um selo apontando para um processo de um contato
+// só afirmaria uma relação que não existe.
+function ProcessCrumb({ journeyId, count, onOpen }: {
+  journeyId: string; count?: number; onOpen: () => void
+}) {
+  const { t } = useTranslation('contacts')
+  return (
+    <>
+      <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
+      <button
+        onClick={onOpen}
+        title={count ? t('lista.processChipHint', { count }) : journeyId}
+        className="inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full bg-primary-light text-primary hover:underline">
+        <GitBranch className="w-3 h-3" aria-hidden="true" />
+        {journeyLabel(journeyId)}
+        {count ? <span className="tabular-nums font-semibold">· {count}</span> : null}
+      </button>
+    </>
+  )
+}
+
 // ── SessionsPage ──────────────────────────────────────────────────────────────
 
 export default function SessionsPage() {
@@ -173,21 +215,119 @@ export default function SessionsPage() {
   // que `filters`: os ramos de drill abaixo dão `return` e desmontam a ListaTab.
   const [listScopeAll,       setListScopeAll]       = useState(false)
   const [detailSessionId,    setDetailSessionId]    = useState<string | null>(null)
-  const [detailSessionCh,    setDetailSessionCh]    = useState<string | null>(null)
+  /** Canal da sessão aberta, **amarrado ao id a que pertence**.
+   *
+   *  Era um valor solto, e isso é um defeito com sintoma silencioso: navegar de uma
+   *  sessão A para uma B pelo BOTÃO VOLTAR do navegador troca o id sem passar por
+   *  `openSession`, e o canal de A sobrevivia — B renderizava com o renderer errado
+   *  (workflow como conversa, ou o contrário). Com o par `{id, ch}`, "não resolvido
+   *  para ESTE id" é uma pergunta que se pode fazer, e é ela que dispara o lookup.
+   *
+   *  `''` continua sendo "resolvido e vazio" — diferente de não resolvido. */
+  const [chEntry, setChEntry] = useState<{ id: string; ch: string } | null>(null)
+  /** Processo a que a sessão aberta pertence, quando tem mais de um contato. É o
+   *  selo `PRC-…` do breadcrumb — a volta ao processo, que não existia. */
+  const [sessionJourney, setSessionJourney] = useState<{ id: string; n: number } | null>(null)
   /** S3 — trilha de ancestrais ao navegar para uma sessão ORIGINADA. Guarda o canal
    *  junto do id: é ele que decide trace × segmentos ao voltar. */
   const [sessionTrail,       setSessionTrail]       = useState<Array<{ id: string; ch: string | null }>>([])
   const [detailSegment,      setDetailSegment]      = useState<ContactSegment | null>(null)
   const [detailWebhookNode,  setDetailWebhookNode]  = useState<TraceNode | null>(null)
+  /** F3 (resíduo) — a sessão pedida por `?session_id=` não voltou. Ver o efeito. */
+  const [deepLinkMiss,       setDeepLinkMiss]       = useState<string | null>(null)
+
+  // ── F3 (resíduo) — `?session_id=` é ENDEREÇO, não sugestão ────────────────
+  //
+  // Três telas já linkavam para cá com este parâmetro (`WorkItemsPage`,
+  // `SchedulesMonitorPage`, `DeliveriesTab`) e o parâmetro era IGNORADO: o operador
+  // clicava em "ver a sessão" e caía na lista inteira, sem nada dizendo que o pedido
+  // tinha sido descartado. Silêncio, e do tipo que parece funcionar.
+  //
+  // A URL passa a ser a fonte ÚNICA do nível de sessão — o mesmo desenho que
+  // `?journey=` já usa. Estado local aqui criaria dois endereços para o mesmo lugar,
+  // que divergem no reload e no botão "voltar" do navegador.
+  const urlSession = searchParams.get('session_id')
+  /** Processo no endereço. Presente ⇒ chegamos aqui PELO processo, e é para ele que
+   *  o selo do breadcrumb volta (sem precisar redescobri-lo). */
+  const urlJourney = searchParams.get('journey')
+  useEffect(() => {
+    if (urlSession) {
+      setDetailSessionId(prev => (prev === urlSession ? prev : urlSession))
+    } else {
+      setDetailSessionId(null)
+      setSessionTrail([])
+    }
+  }, [urlSession])
 
   // Clear drill-down state when session changes
   useEffect(() => {
     setDetailSegment(null)
     setDetailWebhookNode(null)
-    if (!detailSessionId) setDetailSessionCh(null)
+    setDeepLinkMiss(null)
   }, [detailSessionId])
 
+  // ── Resolução da SESSÃO: canal (qual tela) + processo (a volta) ───────────
+  //
+  // O canal decide o nível 2 (`webhook` → trace de workflow; demais → segmentos);
+  // adivinhar renderizaria um workflow como conversa. O processo decide se há selo
+  // `PRC-…` no breadcrumb. **Os dois vêm do MESMO lookup** — `journey_id` e
+  // `journey_session_count` já viajam na linha desde a F3.3, então o selo não custa
+  // requisição nenhuma, e não existe caminho em que um apareça sem o outro.
+  //
+  // Roda sempre que o id muda, inclusive quando o canal já veio do clique: quem
+  // navega pelo BOTÃO VOLTAR não passa por `openSession`, e sem esta releitura o
+  // selo ficaria apontando para o processo da sessão anterior.
+  //
+  // Não achou a sessão: **não cai na lista em silêncio**. Uma lista com filtro vazio
+  // é indistinguível de "não existe" e de "existe, mas fora do seu escopo" (ABAC), e
+  // essas respostas pedem ações diferentes do operador.
+  useEffect(() => {
+    if (!tenantId || !detailSessionId) { setSessionJourney(null); return }
+    let cancelled = false
+    apiFetch(`/reports/sessions?${new URLSearchParams({
+      tenant_id: tenantId, session_id: detailSessionId, page_size: '1',
+    })}`)
+      .then(r => r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`))
+      .then(d => {
+        if (cancelled) return
+        const row = d.data?.[0]
+        if (!row) { setDeepLinkMiss(detailSessionId); return }
+        // Só completa o canal se ele ainda não foi resolvido PARA ESTE id — o valor
+        // que veio do clique é o mesmo, e sobrescrevê-lo causaria um repaint à toa.
+        setChEntry(prev => (prev && prev.id === detailSessionId
+          ? prev
+          : { id: detailSessionId, ch: row.channel ?? '' }))
+        const jid = row.journey_id || row.root_session_id || null
+        const n   = row.journey_session_count ?? 0
+        // Mesma regra do chip da lista: sem processo com N > 1 não há para onde
+        // pivotar, e um selo apontando para um processo de um contato só afirmaria
+        // uma relação que não existe.
+        setSessionJourney(jid && n > 1 ? { id: jid, n } : null)
+      })
+      .catch(e => { if (!cancelled) setDeepLinkMiss(String(e)) })
+    return () => { cancelled = true }
+  }, [tenantId, detailSessionId])
+
+  /** Abre o nível 2 pelo ENDEREÇO, **preservando o processo** quando há um. `ch =
+   *  null` ⇒ resolve antes de escolher a tela. Único caminho para abrir uma sessão —
+   *  inclusive o clique da lista e o da visão 2. */
+  function openSession(sid: string, ch: string | null) {
+    setChEntry(ch === null ? null : { id: sid, ch })
+    setSearchParams(urlJourney ? { journey: urlJourney, session_id: sid } : { session_id: sid })
+  }
+  /** Sai do drill. Volta ao PROCESSO quando foi por ele que se entrou; à lista
+   *  quando não. O selo `PRC-…` do breadcrumb é o caminho explícito para o processo
+   *  no outro caso (deep-link, clique na lista) — um controle, um significado. */
+  function closeSession() {
+    setSessionTrail([])
+    setSearchParams(urlJourney ? { journey: urlJourney } : {})
+  }
+
+  /** `null` = canal NÃO RESOLVIDO para o id corrente (ver `chEntry`). */
+  const detailSessionCh  = chEntry && chEntry.id === detailSessionId ? chEntry.ch : null
   const isWebhookSession = detailSessionCh === 'webhook'
+  /** O processo do breadcrumb: o da URL (viemos dele) ou o resolvido pela sessão. */
+  const crumbJourney = urlJourney ?? sessionJourney?.id ?? null
 
   // ── Nível 2: o PROCESSO (F3.3) ────────────────────────────────────────────
   //
@@ -201,7 +341,13 @@ export default function SessionsPage() {
   // O componente é o mesmo (`AnaliseJourneysPage`); a rota velha redireciona
   // preservando a query. Aqui ele só é montado COM `?journey=` — sem o parâmetro
   // caímos na lista de contatos, que é o `onBack` dele (`setSearchParams({})`).
-  if (searchParams.get('journey')) {
+  //
+  // ⚠️ **`&& !urlSession`** — a condição mudou ao unificar o nível de sessão
+  // (2026-08-25). `?journey=X&session_id=Y` significa *"a sessão Y, vista de dentro
+  // do processo X"*, e quem a renderiza é o drill ABAIXO, não a visão 2. Sem esta
+  // cláusula o processo engoliria o endereço e voltaríamos a ter dois níveis de
+  // sessão — o defeito que a unificação existe para fechar.
+  if (urlJourney && !urlSession) {
     return <AnaliseJourneysPage />
   }
 
@@ -209,6 +355,33 @@ export default function SessionsPage() {
     return (
       <div className="flex items-center justify-center h-full text-muted-light text-sm">
         {t('noTenant')}
+      </div>
+    )
+  }
+
+  // ── Deep-link por `?session_id=`: resolvendo, ou não encontrado ────────────
+  //
+  // Estado próprio, e barulhento. Cair na lista aqui daria uma tela plausível — a
+  // listagem inteira, sem nada errado à vista — para um pedido que não foi
+  // atendido. As duas causas possíveis são nomeadas porque pedem ações diferentes:
+  // a sessão pode não existir, ou pode estar fora do escopo de pools do usuário.
+  if (detailSessionId && detailSessionCh === null) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-sm">
+        {deepLinkMiss ? (
+          <>
+            <span className="text-3xl" aria-hidden="true">🔍</span>
+            <span className="text-dark font-medium">{t('sessions.deepLink.notFound')}</span>
+            <span className="text-xs text-muted font-mono break-all max-w-lg text-center">{detailSessionId}</span>
+            <span className="text-xs text-muted-light max-w-md text-center">{t('sessions.deepLink.notFoundHint')}</span>
+            <button onClick={closeSession}
+              className="text-xs px-3 py-1.5 rounded-lg border border-border-strong text-muted hover:border-primary hover:text-primary transition-colors">
+              {t('sessions.deepLink.backToList')}
+            </button>
+          </>
+        ) : (
+          <span className="text-muted-light text-xs">{t('sessions.deepLink.resolving')}</span>
+        )}
       </div>
     )
   }
@@ -221,11 +394,15 @@ export default function SessionsPage() {
         {/* Breadcrumb */}
         <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
           <button
-            onClick={() => setDetailSessionId(null)}
+            onClick={closeSession}
             className="text-muted-light hover:text-dark transition-colors font-medium"
           >
             {t('sessions.breadcrumbs.sessions')}
           </button>
+          {crumbJourney && (
+            <ProcessCrumb journeyId={crumbJourney} count={sessionJourney?.n}
+              onOpen={() => setSearchParams({ journey: crumbJourney })} />
+          )}
           <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
           <button
             onClick={() => setDetailWebhookNode(null)}
@@ -283,11 +460,17 @@ export default function SessionsPage() {
             operador perde o contato de onde veio, que é o contexto da visita. */}
         <div className="bg-white border-b border-border px-5 py-2.5 flex items-center gap-2 text-xs flex-shrink-0 sticky top-0 z-10">
           <button
-            onClick={() => { setSessionTrail([]); setDetailSessionId(null) }}
+            onClick={closeSession}
             className="text-muted-light hover:text-dark transition-colors font-medium"
           >
             {t('sessions.breadcrumbs.sessions')}
           </button>
+          {/* A volta ao PROCESSO. Fica ANTES da trilha de ancestrais porque é o
+              escopo mais largo: processo › contato de origem › … › esta sessão. */}
+          {crumbJourney && (
+            <ProcessCrumb journeyId={crumbJourney} count={sessionJourney?.n}
+              onOpen={() => setSearchParams({ journey: crumbJourney })} />
+          )}
           {sessionTrail.map((crumb, i) => (
             <React.Fragment key={crumb.id}>
               <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
@@ -295,9 +478,9 @@ export default function SessionsPage() {
                 onClick={() => {
                   // O canal viaja na trilha: sem ele, voltar a um ancestral webhook
                   // o renderizaria como sessão comum (SegmentList em vez do trace).
-                  setSessionTrail(sessionTrail.slice(0, i))
-                  setDetailSessionId(crumb.id)
-                  setDetailSessionCh(crumb.ch)
+                  const trail = sessionTrail.slice(0, i)
+                  openSession(crumb.id, crumb.ch)
+                  setSessionTrail(trail)
                 }}
                 className="text-muted-light hover:text-dark transition-colors font-mono"
                 title={crumb.id}
@@ -325,12 +508,12 @@ export default function SessionsPage() {
               tenantId={tenantId}
               sessionId={detailSessionId}
               onSelect={seg => setDetailSegment(seg)}
-              onBack={() => setDetailSessionId(null)}
+              onBack={closeSession}
               showBack={false}
               onOpenChild={(sid, ch) => {
-                setSessionTrail([...sessionTrail, { id: detailSessionId, ch: detailSessionCh }])
-                setDetailSessionId(sid)
-                setDetailSessionCh(ch)
+                const trail = [...sessionTrail, { id: detailSessionId, ch: detailSessionCh }]
+                openSession(sid, ch)
+                setSessionTrail(trail)
               }}
             />
           )}
@@ -353,6 +536,7 @@ export default function SessionsPage() {
     insightCategory: filters.insightCategory,
     insightTags:     filters.insightTags,
     status:          filters.sessionStatus || undefined,  // Arc 19: pass status filter
+    direction:       filters.direction,                   // D8 (F4)
   }
 
   return (
@@ -363,7 +547,7 @@ export default function SessionsPage() {
         <ListaTab
           tenantId={tenantId}
           filters={contactFilters}
-          onOpenDetail={(sid, ch) => { setDetailSessionId(sid); setDetailSessionCh(ch) }}
+          onOpenDetail={(sid, ch) => openSession(sid, ch || null)}
           scopeAll={listScopeAll}
           onScopeAllChange={setListScopeAll}
           // Pivô para o nível 2. Vai pela URL (e não por estado local) de propósito:

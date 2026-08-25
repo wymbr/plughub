@@ -410,6 +410,67 @@ def _contact_only_predicate(
     return f"{col} NOT IN ({lst})"
 
 
+# ── Direção do acesso (ADR histórico-unificado D8) — UMA expressão, dois usos ──
+#
+# A direção é **derivada, nunca armazenada** (D8): `spawn_reason` foi criado para
+# isto, e o canal desempata o caso "ninguém me criou".
+#
+#   `collect`             → outbound  (a plataforma procurou o cliente)
+#   `trigger` / `delegate`→ interno   (maquinaria criou a sessão)
+#   ausente/NULL          → canal decide: `webhook` é máquina falando com máquina
+#                           (interno); qualquer outro é o cliente chegando (inbound)
+#   qualquer outro valor  → `''` (NÃO classificado)
+#
+# **O último ramo é o que torna esta expressão honesta.** Um `spawn_reason` novo
+# não cai num balde plausível: sai vazio, a UI mostra `—`, e o filtro por direção
+# não o reivindica. Valor ausente denuncia; valor plausível esconde.
+#
+# ⚠️ **Por que a expressão é UMA e mora aqui, e não na UI.** Até a F4 esta regra
+# vivia em TypeScript (`contactDirection`, `modules/contacts/types.ts`), enquanto o
+# filtro que a F3 pedia teria de ser SQL — duas implementações da MESMA pergunta,
+# que é o defeito que este arco existe para fechar um nível acima. Agora a coluna
+# `direction` e o `WHERE` do filtro são **literalmente a mesma string**: divergir
+# entre "o que a linha diz" e "o que o filtro devolve" deixou de ser possível.
+# Mesma postura do `_mark_internal_rows` logo abaixo: quem sabe a resposta decide;
+# quem exibe apenas exibe.
+SESSION_DIRECTIONS = ("inbound", "outbound", "internal")
+
+# Canal EFETIVO da sessão. Não é `s.channel` cru: `parse_routed` escreve `channel=''`
+# e, no ReplacingMergeTree, essa linha sobrescreve a do `parse_inbound` — uma sessão
+# ATIVA de webhook apareceria com canal vazio e cairia em `inbound`. O JOIN `_ch`
+# recupera qualquer linha não-vazia da mesma sessão, e por isso ele é **pré-requisito
+# desta expressão** (ver `_CH_JOIN_SQL`).
+_CHANNEL_EXPR = "COALESCE(NULLIF(s.channel, ''), _ch.channel_v)"
+
+# `ifNull` em toda condição de propósito: `spawn_reason` é `Nullable(String)` e uma
+# condição NULL dentro de `multiIf` não é "falsa" — contamina o resultado inteiro.
+_DIRECTION_EXPR = (
+    "multiIf("
+    "ifNull(s.spawn_reason, '') = 'collect', 'outbound',"
+    " ifNull(s.spawn_reason, '') IN ('trigger', 'delegate'), 'internal',"
+    " ifNull(s.spawn_reason, '') != '', '',"
+    f" ifNull({_CHANNEL_EXPR}, '') = 'webhook', 'internal',"
+    " 'inbound')"
+)
+
+
+def _ch_join_sql(db: str) -> str:
+    """JOIN de recuperação de canal — o que `_CHANNEL_EXPR` exige para existir.
+
+    Extraído de `_joins` (onde já vivia) porque a query de CONTAGEM também passou a
+    precisar dele: sem o join ali, filtrar por direção contaria sobre um canal cru
+    que a query de listagem não usa, e as duas responderiam diferente para a mesma
+    sessão ativa. O alias é sufixado (`_v`) — ver o aviso de `ILLEGAL_AGGREGATION`.
+    """
+    return f"""
+        LEFT JOIN (
+            SELECT session_id, anyIf(channel, channel != '') AS channel_v
+            FROM {db}.sessions
+            WHERE tenant_id = {{tenant_id:String}} AND channel != ''
+            GROUP BY session_id
+        ) AS _ch ON _ch.session_id = s.session_id"""
+
+
 def _mark_internal_rows(
     rows: list[dict], internal_pools: "frozenset[str] | set[str] | None",
 ) -> list[dict]:
@@ -487,6 +548,12 @@ async def query_sessions_report(
     # perguntas são diferentes, e um enum faria a mesma chave significar duas coisas —
     # exatamente o defeito que este arco existe para fechar, um nível acima.
     entry_pool_id:          str | None       = None,
+    # F3 (resíduo) — direção do ACESSO, sobre a mesma expressão que devolve a coluna
+    # `direction`. Ver `_DIRECTION_EXPR`. Valor fora de `SESSION_DIRECTIONS` é
+    # IGNORADO aqui? Não: é recusado na borda (`pattern` do Query), porque um filtro
+    # que não filtra devolve a lista inteira e parece funcionar — foi exatamente o
+    # que o seletor «Inbound/Outbound» removido na F3 fazia.
+    direction:              str | None       = None,
     session_id:             str | None       = None,
     root_session_id:        str | None       = None,
     # Journey T5: sessões que NASCERAM desta journey mas pertencem a OUTRA — as arestas
@@ -529,6 +596,7 @@ async def query_sessions_report(
             ani, dnis, status, origin, root_session_id, spawned_from_root,
             internal_pools, scope, origin_session_id,
             entry_pool_id=entry_pool_id,
+            direction=direction,
         )
     except Exception as exc:
         logger.warning("query_sessions_report failed tenant=%s: %s", tenant_id, exc)
@@ -564,6 +632,7 @@ def _fetch_sessions(
     scope: str = "contacts",
     origin_session_id: str | None = None,
     entry_pool_id: str | None = None,
+    direction: str | None = None,
 ) -> dict:
     conditions = ["s.tenant_id = {tenant_id:String}"]
     # S1 — o fetch das filhas de UMA sessão IGNORA a janela, como o `_fetch_journeys`
@@ -702,6 +771,15 @@ def _fetch_sessions(
         conditions.append("s.pool_id = {entry_pool_id:String}")
         params["entry_pool_id"] = entry_pool_id
 
+    # F3 (resíduo) — direção do ACESSO (D8). A MESMA expressão que sai na coluna
+    # `direction`; ver `_DIRECTION_EXPR`. Note o que ela NÃO faz: sessão de
+    # `spawn_reason` desconhecido sai `''` e não é reivindicada por nenhuma das três
+    # direções — logo `Σ(inbound, outbound, internal) ≤ total`, e a diferença é
+    # exatamente a população não classificada. É assim que o gate a conta.
+    if direction:
+        conditions.append(f"{_DIRECTION_EXPR} = {{direction:String}}")
+        params["direction"] = direction
+
     # Pool-scope access filter (Arc 7c) — predicado ÚNICO, ver _session_scope_clause.
     # (Era inline aqui e em mais 3 endpoints; virou função na F1b porque o carimbo
     # `entrou por` fez as 4 cópias autorizarem pelo fato errado.)
@@ -771,9 +849,13 @@ def _fetch_sessions(
     # pool interno —, e essa igualdade é o invariante que prova que o default ficou
     # bit-a-bit o de antes.
     _contact_expr = _contact_only_predicate(internal_pools, alias="s.")
+    # O JOIN `_ch` entra na CONTAGEM quando (e só quando) o filtro de direção está
+    # ativo: a expressão de direção o exige (canal efetivo, não cru). É pré-agregado
+    # por `session_id`, então não multiplica linha — a contagem não muda por ele.
+    _counts_join = f"{_agent_join}{_ch_join_sql(db) if direction else ''}"
     _counts = client.query(
         f"SELECT count(), countIf({_contact_expr}) "
-        f"FROM {db}.sessions AS s FINAL {_agent_join} WHERE {where}",
+        f"FROM {db}.sessions AS s FINAL {_counts_join} WHERE {where}",
         parameters=params,
     )
     if _counts.result_rows:
@@ -806,13 +888,11 @@ def _fetch_sessions(
     # O "Segs: 0" que aparecia em todas as telas nunca foi um zero: era coluna que a
     # query não trazia. Por isso os aliases abaixo são sufixados (`_v`).
     _joins = f"""{_agent_join}
-        -- channel recovery: any non-empty channel row for this session
-        LEFT JOIN (
-            SELECT session_id, anyIf(channel, channel != '') AS channel_v
-            FROM {db}.sessions
-            WHERE tenant_id = {{tenant_id:String}} AND channel != ''
-            GROUP BY session_id
-        ) AS _ch ON _ch.session_id = s.session_id
+        -- channel recovery: any non-empty channel row for this session.
+        -- (extraído para `_ch_join_sql` na F4 — a query de CONTAGEM passou a precisar
+        --  do mesmo join para o filtro de direção; duas cópias divergiriam no caso
+        --  exato em que o join existe para não mentir: a sessão ATIVA.)
+{_ch_join_sql(db)}
         -- (removido 2026-08-14, F1b) O JOIN `_pool`, que recuperava o pool do
         -- primeiro segmento primário quando `s.pool_id` vinha vazio.
         --
@@ -942,7 +1022,10 @@ def _fetch_sessions(
             -- sem o rótulo, vê-se a hierarquia mas não por que cada filho existe.
             s.origin_session_id AS origin_session_id,
             s.spawn_reason      AS spawn_reason,
-            s.root_session_id   AS root_session_id
+            s.root_session_id   AS root_session_id,
+            -- D8 — direção DERIVADA (nunca armazenada), na mesma expressão que o
+            -- filtro `direction` usa. `''` = não classificada, e a UI mostra `—`.
+            {_DIRECTION_EXPR} AS direction
         FROM {db}.sessions AS s FINAL
         {_joins}
         WHERE {where}
@@ -991,9 +1074,15 @@ def _fetch_sessions(
                     -- estes dois a UI perde a hierarquia e o motivo de cada nó existir.
                     s.origin_session_id,
                     s.spawn_reason,
-                    s.root_session_id
+                    s.root_session_id,
+                    -- A direção sobrevive ao modo degradado pelo mesmo motivo que a
+                    -- aresta: sem ela a Vista Processos não sabe separar acesso do
+                    -- cliente de etapa interna, e passa a contar as duas coisas juntas.
+                    -- O JOIN `_ch` é sobre `sessions`, tabela que o tier 3 tem por
+                    -- definição (o tier existe porque falta `segments`).
+                    {_DIRECTION_EXPR} AS direction
                 FROM {db}.sessions AS s FINAL
-                {_agent_join}
+                {_agent_join}{_ch_join_sql(db)}
                 WHERE {where}
                 ORDER BY s.opened_at DESC
                 LIMIT {page_size} OFFSET {offset}

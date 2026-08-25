@@ -74,7 +74,21 @@
     "empty": "Nenhum processo no período",
     "totalCount": "{{count}} processos",
     "breadcrumb": "Processos",
-    "memberCount": "{{count}} sessões",
+    "accessCount": "{{count}} acessos do cliente",
+    "internalCount": "{{count}} etapas internas",
+    "unclassifiedCount": "{{count}} não classificadas",
+    "unclassifiedHint": "spawn_reason que o backend não classificou. A linha aparece e fica fora das três direções — não somamos ao número de acessos.",
+    "countsHint": "Acessos do cliente e etapas internas são domínios distintos: nunca somados num total.",
+    "showInternal": "Mostrar etapas internas",
+    "showInternalHint": "Só visibilidade — o cabeçalho não muda com este seletor.",
+    "foldedHint": "Maquinaria entre acessos — clique para abrir só este grupo",
+    "orphanGroup": "Etapas sem acesso de origem",
+    "offsetHint": "Desde a abertura do processo",
+    "lens": {
+      "tree": "Árvore",
+      "chrono": "Cronologia",
+      "hint": "Árvore: quem criou quem, com a maquinaria sob o acesso que a originou. Cronologia: ordem estrita de tempo, sem agrupamento."
+    },
     "rootBadge": "raiz",
     "provisional": "provisório",
     "provisionalHint": "Provisório: o processo ainda tem sessões abertas",
@@ -139,6 +153,9 @@
     "sessionId":      "Session ID…",
     "allChannels":    "Todos os canais",
     "allOutcomes":    "Todos os outcomes",
+    "allDirections":  "Todas as direções",
+    "directionHint":  "Direção do acesso — quem procurou quem. Sessão que o backend não classificou fica fora das três.",
+    "direction":      { "inbound": "Entrada", "outbound": "Saída", "internal": "Interno" },
     "moreFilters":    "Mais filtros",
     "clearFilters":   "✕ Limpar",
     "pool":           "Pool",
@@ -638,6 +655,12 @@
     },
     "breadcrumbs": {
       "sessions": "← Sessões"
+    },
+    "deepLink": {
+      "resolving":    "Abrindo a sessão…",
+      "notFound":     "Sessão não encontrada",
+      "notFoundHint": "Ou ela não existe, ou está fora do seu escopo de pools. As duas coisas pedem ações diferentes, por isso a tela não devolve a lista como se nada tivesse sido pedido.",
+      "backToList":   "Voltar à lista"
     }
   },
   "quality": {

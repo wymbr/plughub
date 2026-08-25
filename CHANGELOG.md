@@ -2,6 +2,187 @@
 
 ---
 
+## Navegação: um nível de sessão só — e os dois defeitos que a conferência revelou (2026-08-25)
+
+Fatia que nasceu de uma pergunta do dono depois da F4 (*"como chego na tela que relaciona os
+contatos, e por que o drill não volta?"*). O alvo era navegação; o que a verificação achou pelo
+caminho vale mais que ela.
+
+### 1. O nível de sessão estava implementado DUAS vezes
+
+`AnaliseJourneysPage` tinha um L3 próprio que chamava `SessionTranscript`
+**incondicionalmente**; a lista, pelo `?session_id=`, escolhe o renderer pelo CANAL (`webhook` →
+trace de workflow; demais → segmentos). **A mesma sessão interna aparecia como "Workflow trace"
+por um caminho e como transcrição VAZIA pelo outro** — e o operador lia a tela sem eventos como
+*"o dado não existe"*.
+
+Hoje o clique numa sessão-membro vai para `?journey=…&session_id=…`, tratado pelo drill único com
+o processo no breadcrumb. `?journey=…&session=…` sobrevive como redirect. **Provado com a mesma
+sessão pelos dois endereços: os dois caem em `Workflow trace`.**
+
+Junto vieram dois consertos que a unificação exigiu:
+
+- **Selo `PRC-… · N` no breadcrumb** — a volta ao processo, que não existia: o pivô era o chip, e
+  o chip mora na LISTA, por onde quem chega de deep-link nunca passa. O selo sai do MESMO lookup
+  que resolve o canal (`journey_id`/`journey_session_count` já viajam na linha desde a F3.3), então
+  não custa requisição e não há caminho em que um apareça sem o outro.
+- **Canal amarrado ao id** (`{id, ch}` no lugar de um valor solto). Navegar de A para B pelo botão
+  VOLTAR do navegador não passa por `openSession`: o canal de A sobrevivia e B renderizava com o
+  renderer errado. *"Não resolvido para ESTE id"* virou uma pergunta que se pode fazer.
+
+### 2. 🔴 Toda leitura de analytics após um RELOAD saía sem `Authorization`
+
+Sintoma relatado: **a mesma URL devolvia contagens diferentes** conforme se chegasse pelo menu
+(81 contatos) ou por F5 (126). Não era corrida de rede — era **ordem de efeitos**, que no React é
+determinística: **efeito de filho roda antes de efeito do pai**.
+
+`AuthContext` espelhava o access token no holder de módulo dentro de um `useEffect`. No commit em
+que a re-auth silenciosa termina, o `ProtectedRoute` para de mostrar o spinner e a árvore inteira
+monta — o efeito da página dispara o `fetch` **antes** de o efeito do provider ter escrito o token.
+Sem Bearer, o backend degrada para `accessible_pools = None`, **irrestrito**, que é a degradação
+documentada no `apiFetch`. Um operador com escopo restrito via, por alguns segundos, contatos de
+fora do domínio dele.
+
+Conserto: a escrita passou a acontecer **durante o render** do provider — antes de qualquer efeito,
+de qualquer nível —, guardada por `ref` para ser idempotente sob StrictMode. **Não pode ser
+`useLayoutEffect`: layout effects também rodam filho-primeiro.**
+
+### 3. …e o defeito de cima escondia um de baixo
+
+Com o token finalmente aplicado, a coluna Process **esvaziou** e o processo passou a dizer
+`0 customer accesses`. Não era regressão: a tela passou a obedecer ao ABAC, e o escopo do admin é
+que estava defasado — `{formfill_demo, retencao_humano, nps_ia, aprovacao_credito}`, sem nenhum
+`limite_*`. **O admin enxergava menos que o supervisor** (que tem `{}` = todos, pelo contrato do
+JWT). Não é defeito de seed: o seed não escreve o campo e o default é `[]`; a lista era estado
+editado à mão, DB-owned, como config de pool.
+
+Decisão do dono: `accessible_pools = []` para o admin. Escrito pela API oficial —
+`infra/test/set_user_pools.sh <email> '<json array>'`, que **imprime o valor anterior** e avisa que
+só um logout/login reemite o JWT.
+
+> **A lição de método está no script, não no conserto.** A primeira execução pareceu falhar porque
+> as quatro linhas de `curl` foram coladas de uma vez: o bash leu `A=… TOK=… AID=… curl …` como
+> atribuições PREFIXANDO o comando, e nesse formato as expansões acontecem **antes** de as
+> atribuições valerem — `$A` saiu vazio nas três e, sob `-s`, tudo falhou em silêncio. E foi o
+> `antes:` de uma segunda execução que dirimiu se a escrita tinha pegado. **Uma ferramenta de
+> escrita que não imprime o valor anterior não deixa como saber o que mudou.**
+
+### Verificação, com dado real
+
+| | antes | depois |
+|---|---|---|
+| lista pelo menu × após F5 | **81 × 126** | **126 × 126** |
+| coluna Process | vazia (menu) | chips `PRC-8c47326d · 5` |
+| processo `PRC-8c47326d` | `0 customer accesses · 1 internal steps` | **`3 customer accesses · 2 internal steps`** |
+| sessão interna pelos dois caminhos | trace × transcrição vazia | **`Workflow trace` nos dois** |
+| volta ao processo a partir do drill | não existia | `← Sessions › PRC-8c47326d · 5 › …de3d9a7418f7` |
+
+Árvore com internas ligadas: aninhadas por proveniência, badge `trigger`, offsets `+23s` e `+1m 9s`.
+
+---
+
+## F4 (visão 2) + resíduos da F3 — passo 3 (2026-08-25)
+
+Primeira fatia de TELA da linha de trabalho do histórico unificado. Fecha o passo 3 da ordem
+proposta no `TODO.md`, e o achado principal não é de UI: é que **a regra da direção do acesso
+estava prestes a existir em duas casas**.
+
+### 1. A direção passou a ter UM predicado, no backend
+
+`contactDirection` (TypeScript) derivava a direção para a COLUNA; o filtro que a F3 deixou
+pendente teria de ser SQL. Duas implementações da mesma pergunta — e o sintoma seria mudo:
+uma linha marcada `interno` aparecendo sob o filtro `inbound`, sem nada ficar vermelho.
+
+Hoje há **uma expressão** (`reports_query._DIRECTION_EXPR`), usada literalmente duas vezes na
+mesma query: como coluna `direction` e como predicado de `?direction=`. A UI **consome** o
+campo e não re-deriva — mesma postura do `_mark_internal_rows` (*quem sabe a resposta decide;
+quem exibe apenas exibe*). `contactDirection` sobrevive como leitor de 4 linhas.
+
+- **`''` = não classificada**, e nenhuma das três direções a reivindica ⇒ `Σ(inbound,
+  outbound, internal) ≤ total`, com a diferença sendo a população não classificada. É essa
+  desigualdade que o gate mede: parâmetro ignorado dá `Σ = 3 × total`.
+- O JOIN `_ch` (canal efetivo) saiu de dentro de `_joins` para `_ch_join_sql()` porque a
+  query de **contagem** passou a precisar dele. Sem isso, contagem e listagem resolveriam o
+  canal de formas diferentes para a sessão ATIVA — justamente a população que o JOIN existe
+  para não perder.
+- Valor fora do domínio é **recusado na borda** (`pattern` do `Query` → 422), não ignorado:
+  um filtro que aceita tudo devolve a lista inteira e se parece com sucesso.
+
+### 2. Visão 2: duas classes de linha, dois eixos, maquinaria dobrada
+
+- **D4** — cada sessão-membro é **acesso do cliente** (`inbound`/`outbound`, protagonista),
+  **etapa interna** (maquinaria, dobrada por default) ou **não classificada** (aparece,
+  nunca dobra, nunca entra na contagem de acessos).
+- **O cabeçalho conta ACESSOS**, com as internas ao lado e **nunca somadas** — é a separação
+  por domínio, não um toggle, que dissolve o *"cabeçalho diz 3, tabela mostra 4"* do D11. O
+  toggle de internas é **visibilidade**, e o cabeçalho não muda com ele.
+- **D6** — árvore e cronologia viraram o mesmo componente com dois eixos de ordenação. Com
+  `+7m54s` (offset desde a abertura do processo) ao lado do horário absoluto, que é o único
+  lugar onde a **sobreposição** fica legível na árvore.
+
+  > ⚠️ **Emendado no mesmo dia, e a pergunta veio do dono:** *"a chave Tree/Timeline por
+  > enquanto não faz nada, é isso mesmo?"*. Fazia — e a diferença era a indentação de um neto.
+  > O D6 pedia *"ordenar por tempo"* **e** *"contato como cabeçalho de grupo"*, e as duas
+  > juntas se anulam: agrupada por acesso, a cronologia punha uma etapa das 17:11:31 acima de um
+  > acesso das 17:10:52 e, com as internas dobradas (o default), produzia **exatamente as mesmas
+  > linhas** da árvore. A lente B passou a ser **ordem global estrita, sem agrupamento**; o
+  > agrupamento não se perde, é a lente A ao lado. **Um controle que não muda nada no caso comum
+  > é indistinguível de um controle quebrado** — a família do seletor «Inbound/Outbound» que a
+  > própria F3 removeu por não filtrar nada. Emenda registrada no ADR §D6.
+- Etapa interna sem acesso ancestral vai a um grupo **órfão** com rótulo próprio: pendurá-la
+  no primeiro acesso afirmaria uma origem que o dado não tem.
+
+### 3. Resíduos da F3
+
+- **`?session_id=` deixou de ser ignorado.** A URL virou a fonte única do nível de sessão (o
+  mesmo desenho de `?journey=`). O canal, que decide trace × segmentos, é RESOLVIDO por
+  lookup quando não veio junto — adivinhar renderizaria um workflow como conversa. Não achou:
+  **tela própria** nomeando as duas causas (não existe × fora do escopo de pools), nunca a
+  lista inteira, que é indistinguível de "nada foi pedido".
+- **Eram QUATRO linkadores, não três.** `ProcessosPage.tsx:604` apontava para
+  `/contacts/sessions?sessionId=…` e estava quebrado em três camadas independentes — nome do
+  parâmetro errado, rota de `Navigate` que não preserva query, e destino que ignorava o
+  parâmetro. Três ausências, um resultado só.
+- **Seletor de direção de verdade** na barra de filtros (o removido na F3 não filtrava nada).
+- **`ContactsPage.tsx` e `AnaliseContatosPage.tsx` removidas.** A primeira não era importada;
+  a segunda era importada em `routes.tsx` e não usada por rota alguma desde que
+  `/analise/contatos` virou `Navigate`.
+- **`journeyLabel` era DOIS rótulos** — chip da visão 1 cortava o id em 4 caracteres, o
+  cabeçalho da visão 2 em 8, e o comentário do primeiro afirmava que a convenção era a mesma.
+  Unificado em 8 (4 hex colidem perto de 300 processos, e dois processos com o mesmo código é
+  pior que um rótulo mais largo).
+
+### Vermelho → verde
+
+`infra/test/probe_f4_direction_and_classes.sh` — 5 ramos (contrato · partição · linha ×
+filtro · classes no processo de referência · testemunha negativa).
+
+| | pré-fix | pós-fix |
+|---|---|---|
+| `direction` na linha | **ausente** | `inbound` |
+| `Σ` das três direções | **348** para total 116 | **115** para total 115 |
+| linhas conferindo com o balde | 0 de 150 | 50/50 · 1/1 · 34/34 |
+| classes no processo `d62d7121…` | 0 acessos / 0 internas / 4 não classificadas | **2 acessos · 2 internas · 0** |
+| `direction=banana` | HTTP 200 | **422** |
+
+Suítes: analytics-api **607 → 612 passed** (5 testes novos; o que importa asserta sobre o
+**SQL EXECUTADO** — no fonte, `grep` contaria o comentário que documenta a regra). Build do
+platform-ui verde.
+
+**Verificação na tela, com dado real** (processo `8c47326d…`, 2026-08-25): cabeçalho
+`3 customer accesses · 2 internal steps`, três acessos `inbound webchat` com offsets `+30s` e
+`+1m 17s`, duas etapas dobradas em `⋯ 2 internal steps`, e o `curl` do mesmo processo conferindo
+linha a linha (3 inbound + 2 internal = 5 sessões).
+
+> ⚠️ **O relato que abriu a verificação foi "os dois contatos não aparecem em lugar nenhum" — e
+> eles apareciam.** O operador estava no drill de UMA sessão (`?session_id=`, que a mesma fatia
+> acabara de fazer funcionar) e não na visão 2 (`?journey=`). **Duas superfícies vizinhas na
+> mesma rota, e a de baixo não diz que a de cima existe:** do drill de uma sessão-membro não há
+> caminho de volta ao processo, só à lista. O chip é o único pivô, e ele mora numa terceira tela.
+> Registrado como achado de navegação, não como defeito desta fase.
+
+---
+
 ## A consulta de status virou membro do processo — passo 2b (2026-08-25)
 
 A metade que faltou da F1. Achado ao **decidir o texto do cabeçalho do F4**: ao dizer que

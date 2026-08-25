@@ -20,6 +20,11 @@ export interface ContactFilters {
   insightTags:     string
   /** Arc 19: filter by session status (active | suspended | closed) */
   status?:         string
+  /** F3 (resíduo) — direção do ACESSO (D8), filtrada NO BACKEND pela mesma
+   *  expressão que devolve a coluna. Vazio = todas. Nunca filtrar direção no
+   *  cliente: a paginação é do servidor, e recortar a página já entregue diria
+   *  "3 contatos" onde há 300. */
+  direction?:      '' | ContactDirection
   /** Substrate isolation (ADR): origem do substrato (live=produção default | import | reeval).
    *  Usado só pelas telas de Analytics; ausente no Console (= produção). */
   origin?:         'live' | 'import' | 'reeval'
@@ -49,9 +54,15 @@ export interface ContactRow {
   /** ADR wrapup-detached-pull §7 (fatia 1b): linha de POOL INTERNO (wrap-up, dispatch).
    *  Veredicto computado no backend — a UI não reclassifica por `pool_id`. */
   is_internal?: boolean
-  /** Journey T4 — POR QUE esta sessão nasceu. É a fonte da coluna de direção (D8):
-   *  ausente/`null` = ninguém a criou ⇒ o cliente chegou. Ver `contactDirection`. */
+  /** Journey T4 — POR QUE esta sessão nasceu. É a MATÉRIA-PRIMA da direção, não a
+   *  direção: quem classifica é o backend (`direction`). Exibido cru só no título
+   *  da célula `—`, para nomear o valor que não foi classificado. */
   spawn_reason?: string | null
+  /** D8 — direção do acesso, DERIVADA pelo backend (`inbound|outbound|internal`).
+   *  `''`/ausente = não classificada ⇒ `—`. Mesma expressão que o filtro
+   *  `?direction=` usa, e é essa identidade que impede a linha e o filtro de
+   *  discordarem. Ver `contactDirection`. */
+  direction?: string | null
   /** Journey T1 — raiz LOCAL da árvore de proveniência (pré-merge). Para exibir use
    *  `journey_id`, que é a raiz CANÔNICA. */
   root_session_id?: string | null
@@ -101,24 +112,26 @@ export interface ContactsApiResponse {
 export type ContactDirection = 'inbound' | 'outbound' | 'internal'
 
 /**
- * Direção do acesso, DERIVADA de `spawn_reason` + canal — nunca armazenada.
+ * Direção do acesso, lida do campo `direction` que o backend DERIVA
+ * (`reports_query._DIRECTION_EXPR`). A regra continua sendo a do D8 — `collect` →
+ * outbound, `trigger`/`delegate` → interno, ausente → o canal desempata —, mas ela
+ * mora num lugar só.
  *
- * - `collect`            → **outbound**: nós procuramos o cliente.
- * - `trigger`/`delegate` → **interno**: uma etapa da maquinaria criou a sessão.
- * - ausente/`null`       → ninguém a criou. Aí o CANAL desempata: `webhook` é
- *   máquina falando com máquina (**interno**); qualquer outro é o cliente
- *   chegando (**inbound**).
+ * ⚠️ **Esta função já foi a derivação, e deixou de ser na F4.** Enquanto o filtro
+ * por direção não existia, ter a regra aqui era inofensivo; no instante em que o
+ * `WHERE` precisou dela em SQL, manter a cópia em TypeScript criaria duas respostas
+ * para a mesma pergunta — a linha diria `interno` e o filtro `inbound` a devolveria,
+ * sem nada ficar vermelho. Quem sabe a resposta decide; quem exibe apenas exibe.
  *
- * Valor desconhecido devolve `null` ⇒ a célula mostra `—`. É de propósito: um
- * `spawn_reason` novo cairia num balde plausível e passaria despercebido, e a regra
- * deste projeto é que valor ausente denuncie enquanto valor plausível esconde.
+ * Valor ausente ou desconhecido devolve `null` ⇒ a célula mostra `—`. Vale para as
+ * duas causas, que são diferentes e ambas honestas: backend antigo (campo ausente)
+ * e `spawn_reason` novo (o backend não classificou). Nenhuma vira balde plausível.
  */
-export function contactDirection(row: ContactRow): ContactDirection | null {
-  const sr = row.spawn_reason ?? ''
-  if (sr === 'collect')                     return 'outbound'
-  if (sr === 'trigger' || sr === 'delegate') return 'internal'
-  if (sr === '')                            return row.channel === 'webhook' ? 'internal' : 'inbound'
-  return null
+export function contactDirection(
+  row: Pick<ContactRow, 'direction'>,
+): ContactDirection | null {
+  const d = row.direction ?? ''
+  return d === 'inbound' || d === 'outbound' || d === 'internal' ? d : null
 }
 
 export const DIRECTION_ICONS: Record<ContactDirection, string> = {
@@ -178,10 +191,24 @@ export const DEFAULT_FILTERS: ContactFilters = {
   agentId:         '',
   insightCategory: '',
   insightTags:     '',
+  direction:       '',
 }
 
-/** F3.3 — rótulo curto e estável do processo: `PRC-` + 4 primeiros do id da raiz
- *  CANÔNICA. Mesma convenção do cabeçalho da visão 2 (`PRC-3f9c`). */
-export function journeyLabel(journeyId: string): string {
-  return `PRC-${journeyId.slice(0, 4)}`
+/**
+ * Rótulo curto e estável do processo: `PRC-` + 8 primeiros do id da raiz CANÔNICA.
+ *
+ * ⚠️ **Eram DOIS rótulos, e o comentário afirmava que eram um.** Esta função cortava
+ * em 4 caracteres e dizia *"mesma convenção do cabeçalho da visão 2 (`PRC-3f9c`)"*;
+ * o cabeçalho da visão 2 cortava em 8. O mesmo processo aparecia como `PRC-3f9c` no
+ * chip e `PRC-3f9c1234` no cabeçalho para onde o chip levava — e a prosa dizia que
+ * não. Unificado em 8 na F4, com a visão 2 passando a IMPORTAR daqui.
+ *
+ * Por que 8 e não 4: 4 hex são 65 mil valores, e a colisão de aniversário chega a
+ * 50% perto de 300 processos — dois processos diferentes exibindo o mesmo código é
+ * pior do que um rótulo mais largo. O id inteiro continua no `title` de toda
+ * superfície que o mostra.
+ */
+export function journeyLabel(journeyId: string | null | undefined): string {
+  if (!journeyId) return '—'
+  return `PRC-${journeyId.slice(0, 8)}`
 }

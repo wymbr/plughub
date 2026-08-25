@@ -1,7 +1,8 @@
 # ADR — Histórico unificado: duas visões sobre um só substrato
 
-**Status:** **parcialmente implementado** — F0 ✅ e F1 ✅ validadas em 2026-08-14 (código commitado em
-12-13/08 sem registro; as-built e achados no `CHANGELOG.md`). Restam F1b, F2, F3, F4, F5 — plano em
+**Status:** **implementado até a F4** — F0 · F1 · F1b · F2 · F3 · F4 ✅ (as-built e achados por fase
+no `CHANGELOG.md`; a F4 é de 2026-08-25). **Resta a F5** (`ContextStorePersister`, fase própria) e a
+**lente C** (faixas por personagem, destino registrado, sem bloqueio). Plano em
 [`../product/historico-unificado-plano-execucao.md`](../product/historico-unificado-plano-execucao.md).
 **Supersede parcialmente:** a suposição, implícita em `/analise/sessions` × `/analise/processos`, de que contato e processo são objetos de telas diferentes.
 **Não altera:** [`adr-journey-session-segment-model.md`](adr-journey-session-segment-model.md) — os três níveis e a natureza derivada da journey permanecem exatamente como estão.
@@ -119,8 +120,19 @@ modelos**: viram o mesmo componente com dois eixos de ordenação.
 | Lente | Esqueleto | Status |
 |---|---|---|
 | **A · árvore** | proveniência (indentação por `origin_session_id`) | v1 |
-| **B · cronologia** | ordenação por `started_at`, contato como cabeçalho de grupo | v1 — mesmo componente, toggle |
+| **B · cronologia** | ~~ordenação por `started_at`, contato como cabeçalho de grupo~~ → **ordem global estrita por `opened_at`, sem agrupamento** | v1 — mesmo componente, toggle. **Emendado 2026-08-25** |
 | **C · faixas por personagem** | participante × tempo | **destino registrado** |
+
+> ⚠️ **Emenda medida na tela (2026-08-25): "ordenar por tempo" e "contato como cabeçalho de
+> grupo" eram duas coisas, e juntas se anulavam.** Com o agrupamento, a maquinaria fica presa ao
+> acesso que a originou — uma etapa das 17:11:31 renderizava ACIMA de um acesso das 17:10:52 — e,
+> com as internas dobradas (o default), **as duas lentes produziam exatamente as mesmas linhas**,
+> porque os acessos já saem em ordem na caminhada da árvore. O dono perguntou se o toggle "por
+> enquanto não faz nada": fazia, e a diferença era a indentação de um neto.
+>
+> **Um controle que não muda nada no caso comum é indistinguível de um controle quebrado** — a
+> mesma família do seletor «Inbound/Outbound» que a F3 removeu por não filtrar nada. A lente B
+> passou a ser ordem de tempo e só; o agrupamento por acesso não se perde, é a lente A ao lado.
 
 Refinamento de leitura, barato: além do `started_at` absoluto, exibir **offset relativo à abertura do
 processo** (`+7m54s`). Dois timestamps absolutos em níveis de indentação diferentes são difíceis de
@@ -421,7 +433,38 @@ de uma função compartilhada com `_fetch_pools_volume` e `_fetch_session_comple
 
 ### F3 — Visão 1: lista de contatos + chip de processo + direção do acesso (D3, D8, D12)
 
-### F4 — Visão 2: pivô, lente A/B com toggle de ordenação, internas dobradas (D4, D6, D11)
+As-built no `CHANGELOG.md` (2026-08-14). **Resíduos fechados na F4** (2026-08-25): filtro por
+direção, `?session_id=` honrado e as duas páginas mortas removidas — ver abaixo.
+
+### F4 — Visão 2: pivô, lente A/B com toggle de ordenação, internas dobradas (D4, D6, D11) — ✅ **2026-08-25**
+
+As-built no `CHANGELOG.md`. Abaixo só o que o desenho não tinha e a implementação teve de decidir.
+
+1. **A direção mudou de casa, e isso não era item da fase.** O D8 diz *derivada, nunca
+   armazenada* e não diz ONDE. Enquanto só existia a coluna, derivar na UI era inofensivo; no
+   instante em que o resíduo da F3 pediu um FILTRO, derivar nos dois lados criaria duas
+   respostas para a mesma pergunta. A expressão passou a ser única
+   (`reports_query._DIRECTION_EXPR`), usada como coluna e como predicado **na mesma query**.
+   *Generaliza:* uma regra derivada em dois runtimes só é segura enquanto um dos dois não
+   precisar decidir nada com ela.
+
+2. **O cabeçalho não precisou de toggle — precisou de dois domínios.** O D11 propunha que
+   `internal_session_count` entrasse no cabeçalho quando o toggle ligasse. Implementado assim,
+   o número protagonista mudaria de significado conforme um controle de VISIBILIDADE. Os dois
+   domínios são reportados sempre (`N acessos · M etapas internas`), como a `ListaTab` já faz
+   com contatos × internas, e o *"diz 3, mostra 4"* some sem inventar um quarto número.
+
+3. **Três classes, não duas.** `spawn_reason` desconhecido não é acesso nem etapa: vira linha
+   própria, contada à parte, nunca dobrada. Somá-la a "acessos" inflaria o número protagonista
+   com uma linha que ninguém sabe ler — e o balde plausível é o que este arco recusa em toda
+   parte. Medido no ambiente: **0 não classificadas** em 115 sessões (o tenant só tem `NULL`,
+   `trigger` e `collect`), então o ramo existe sem população — e é assim que ele deve existir.
+
+4. **A lente C (faixas por personagem) segue destino registrado.** Nada nesta fase a bloqueia.
+
+5. **Achado da fase, fora do escopo dela:** `journeyLabel` tinha duas implementações (4 × 8
+   caracteres do id) e o comentário de uma afirmava que eram a mesma convenção. O chip levava
+   a um cabeçalho com outro código para o mesmo processo. Unificado em 8.
 
 ### F5 — `ContextStorePersister` *(fase própria, desenho fechado)*
 

@@ -74,7 +74,21 @@
     "empty": "No processes in range",
     "totalCount": "{{count}} processes",
     "breadcrumb": "Processes",
-    "memberCount": "{{count}} sessions",
+    "accessCount": "{{count}} customer accesses",
+    "internalCount": "{{count}} internal steps",
+    "unclassifiedCount": "{{count}} unclassified",
+    "unclassifiedHint": "spawn_reason the backend could not classify. The row shows up and stays out of all three directions — it is never added to the access count.",
+    "countsHint": "Customer accesses and internal steps are separate domains: never summed into one total.",
+    "showInternal": "Show internal steps",
+    "showInternalHint": "Visibility only — the header does not change with this toggle.",
+    "foldedHint": "Machinery between accesses — click to open just this group",
+    "orphanGroup": "Steps with no originating access",
+    "offsetHint": "Since the process opened",
+    "lens": {
+      "tree": "Tree",
+      "chrono": "Timeline",
+      "hint": "Tree: who created whom, machinery nested under the access that spawned it. Timeline: strict time order, no grouping."
+    },
     "rootBadge": "root",
     "provisional": "provisional",
     "provisionalHint": "Provisional: the process still has open sessions",
@@ -139,6 +153,9 @@
     "sessionId":      "Session ID…",
     "allChannels":    "All channels",
     "allOutcomes":    "All outcomes",
+    "allDirections":  "All directions",
+    "directionHint":  "Access direction — who reached whom. Sessions the backend could not classify are excluded from all three.",
+    "direction":      { "inbound": "Inbound", "outbound": "Outbound", "internal": "Internal" },
     "moreFilters":    "More filters",
     "clearFilters":   "✕ Clear",
     "pool":           "Pool",
@@ -638,6 +655,12 @@
     },
     "breadcrumbs": {
       "sessions": "← Sessions"
+    },
+    "deepLink": {
+      "resolving":    "Opening the session…",
+      "notFound":     "Session not found",
+      "notFoundHint": "Either it does not exist, or it is outside your pool scope. Those call for different actions, which is why this screen does not hand back the list as if nothing had been asked.",
+      "backToList":   "Back to the list"
     }
   },
   "quality": {
