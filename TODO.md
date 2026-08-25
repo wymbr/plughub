@@ -29,13 +29,25 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
 
 ### Critério da ordem: IRREVERSIBILIDADE, não tamanho nem pedido
 
-1. **TTL de `{t}:pool_config:{p}` primeiro** — é o único item aberto que **perde dado que não
-   volta**. Desde a D14 (ii), a expiração da chave grava um **segmento de espera sem alvo**, e o
-   `first_queued_ms` que daria o alvo já foi consumido na saída da fila ⇒ **nenhum deploy conserta
-   depois**. Tela ruim espera; ledger furado não. A (iii) acabou de entregar o instrumento para
-   dimensionar antes de mexer: `by_pool[].sla_unstamped`.
-   ⚠️ **Medir antes de codar, e não confundir exposição com dano** (lição da D14.1): `sla_unstamped`
-   em **0** ⇒ latente, declarar e seguir; **> 0** ⇒ o número é o argumento.
+1. ~~**TTL de `{t}:pool_config:{p}` primeiro**~~ — ✅ **FEITO em 2026-08-25** (ver `CHANGELOG.md`).
+   **A ordem se conferiu, e o passo 1 saiu diferente do que a proposta previa — nas duas pontas.**
+
+   **A medição REBAIXOU o argumento de entrada.** `sla_unstamped = 0`, mas sobre `elig = 1` em 72
+   esperas ⇒ **INCONCLUSIVO, não latente**: o zero mede a ausência de população depois da época, não
+   a ausência do defeito. ⚠️ **A regra escrita abaixo (*"`sla_unstamped = 0` rebaixa o item 1 na
+   hora"*) estava incompleta** — ela só vale com população pós-época, e sem essa cláusula teria
+   mandado rebaixar por um gate vazio, que é o defeito do `discord = 0`. Corrigida aqui, e a lição
+   é geral: **um critério de decisão escrito em cima de um contador precisa dizer qual população
+   torna aquele contador legível.**
+
+   **E o argumento REAL era outro, maior.** Quem respondeu foi parar o serviço: o bridge renova a
+   chave a cada 15 s, logo ela só expira se ele ficar fora do ar por mais que o TTL — e nesse
+   estado `get_candidate_pools` devolve **vazio** e todo contato é enfileirado (incidente de
+   `changelog-2026-04-16`). O ledger de SLA era sintoma colateral, não a consequência principal.
+
+   **Achado que ninguém tinha:** o namespace `session` **nunca foi lido** pelo bridge — três causas
+   empilhadas (env ausente no compose, porta 3500 em vez de 3600, GET sem `tenant_id`), seis chaves
+   de TTL editáveis na tela e inertes. Consertar só uma não moveria nada.
 
 2. **Destravar o F4 — e é medição + decisão, não código.** Meia sessão, e são exatamente os dois
    bloqueios que o F4 declara:
@@ -61,9 +73,15 @@ Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo co
 - **Inverter 1 e 2** é defensável se o negócio estiver pedindo o processo — o custo é o ledger seguir
   furando enquanto isso, e ele é mensurável (`sla_unstamped`). **Inverter 2 e 3 não é**: é construir a
   tela antes de saber se a classe de linha tem população.
-- `sla_unstamped = 0` medido no passo 1 rebaixa o item 1 na hora, e o 2 sobe.
+- ~~`sla_unstamped = 0` medido no passo 1 rebaixa o item 1 na hora~~ — **regra corrigida ao ser
+  aplicada (2026-08-25)**: `0` só é evidência de latência **se houver população pós-época**
+  (`sla_eligible > 0`). Veio `0` sobre `elig = 1` ⇒ inconclusivo, e o item foi decidido por outra
+  via (o mecanismo, medido parando o serviço). Ver o passo 1 acima.
 - Amostra de `collect` aparecendo no passo 2 **fecha** o bloqueio principal do F4 e o torna a fatia
   óbvia seguinte.
+
+**Estado após 2026-08-25: o passo 1 está fechado; o próximo é o passo 2** (rodar o cenário
+`limite_entrega` e reler `spawn_reason` + a decisão de texto `contatos` × `acessos do cliente`).
 
 ---
 
@@ -1850,26 +1868,49 @@ Não se cria campo para alimentar tela que não lê.
      mordia era o da ETA, e ele não precisava de `0` na config — bastava a chave de cache expirar.
 ##### Achados adjacentes da fatia do predicado (2026-08-24) — registrados, NÃO perseguidos
 
-🔴 **1. O TTL de `{t}:pool_config:{p}` é 1 HORA, não 24 — e a razão é que dois serviços escrevem a
-MESMA chave com TTLs diferentes.** `routing-engine/registry.py:3298` usa `pool_config_ttl_seconds`
-(**86 400**); `orchestrator-bridge/instance_bootstrap.py:477,939` usa `_POOL_CONFIG_TTL_S` (**3 600**).
-Último escritor vence, e o bridge reconcilia a cada 5 min (`_RECONCILE_INTERVAL_S = 300`) ⇒ **o
-escritor efetivo é sempre o bridge e o 24 h do routing-engine está morto**. Medido: 36 chaves, todas
-em `ttl 3592`.
-⚠️ **E `config-api/seed.py:288` afirma em PROSA a separação que não existe:** *"Routing-engine has a
-separate pool_config_ttl_seconds (24h) for its own cache"* — é a mesma chave, mesmo namespace.
-Comentário que promete invariante sem mecanismo, família do DDL de `participation_intervals`.
-⚠️ **O 24 h foi um conserto deliberado que o bridge desfez em silêncio:** `changelog-2026-04-16.md`
-documenta a falha (TTL expirado → `get_pool()` `None` → tudo enfileirado com agentes livres) e a
-correção 300 s → 86 400. A janela real após queda do bridge é **1 hora**.
-*(A fatia do predicado já removeu o dano mais caro desta expiração — a ETA de 0 ms —, mas a
-divergência de TTL segue de pé e afeta todo consumidor do cache.)*
+✅ **1. O TTL de `{t}:pool_config:{p}`** — **FECHADO em 2026-08-25** (fonte única no Config API,
+namespace `session`, 86 400). Ver `CHANGELOG.md` e `docs/arcos/instance-bootstrap.md` § TTL.
+
+Duas correções ao diagnóstico que estava escrito aqui, e a segunda mudou o desenho:
+
+- **Não era o reconcile de 5 min que fazia o bridge vencer — é o `_heartbeat_tick`, a cada 15 s.**
+  O 86 400 não perdia uma corrida no boot: era sobrescrito quinze segundos por vez, indefinidamente.
+  Provado parando o serviço (TTL decai 3587 → 3546 → 3462 e não reseta; religado, volta a 3594).
+- **A consequência principal não é o cache do routing-engine — é o apagão.** Se a chave expira,
+  `get_candidate_pools` devolve vazio e TODO contato é enfileirado. E a expiração exige o bridge
+  fora do ar por mais que o TTL, o que torna o defeito **condicional**, não corrente: o item entrou
+  na fila como *"perde dado agora"* e isso não se sustentou.
+
+⚠️ **Achado que este item não continha, e é maior que ele:** o `SessionConfigCache` do bridge
+**nunca leu** o Config API — `CONFIG_API_URL` ausente do compose (todos os outros serviços a têm),
+default hardcoded em `localhost:3500` (porta da analytics-api) e GET sem `?tenant_id=`. Três causas
+empilhadas, cada uma suficiente, todas degradando para "usa o default". As seis chaves de TTL do
+namespace `session` eram editáveis na tela e **inertes**. Conferido depois: os valores do store são
+idênticos aos defaults, então ligar a leitura não mudou mais nada.
 
 🆕 **2. `estimated_wait_factor` (0.7) e `congestion_sla_factor` (1.5) são o 2º e o 3º órfão do
 namespace `routing`.** Semeados (`config-api/seed.py:163,170`), cacheados (`routing_config.py:59-60`),
 testados — e **sem leitor**: `main.py` fixa `* 0.7` em código e `saturated.py` fixa `* 1.5`. Editar na
 tela não muda comportamento nenhum. Mesma família do `sla_default_ms` já registrado no passo 3 acima,
 que agora são **três** botões que prometem efeito e não têm.
+
+🆕 **2b. `wrapup_hold_ttl_s` é o caso INVERSO — leitor sem chave** (medido 2026-08-25).
+`kafka_listener.py:411` faz `routing_config.get("wrapup_hold_ttl_s", 90)`, mas a chave **não está**
+no `_DEFAULTS` do `routing_config.py` **nem no seed**. Resultado: resolve sempre para o `90` inline,
+e o operador não a vê na tela do namespace `routing`.
+
+Vale registrar porque é a metade que a heurística dos órfãos não pega — procura-se chave sem leitor,
+e esta é leitor sem chave. As duas violam a mesma invariante por lados opostos: *"todo campo de
+config tem superfície na tela"* (§ Configuration) e o contrato escrito no próprio
+`routing_config.py:21` (*"ou ela existe no seed E tem leitor, ou não entra"*). Conserto: semear a
+chave, ou assumir o 90 como constante de código e tirar o `routing_config.get`. **Decidir qual
+antes de codar** — semear sem necessidade cria o 4º botão inútil.
+
+🆕 **2c. `queue_default_agent_type_id` e `queue_default_skill_id` continuam no config store**
+(medido 2026-08-25 em `GET /config/session?tenant_id=tenant_demo`, ambas `""`). Saíram do código e
+do seed em 2026-08-24 (defeito 2), mas o store é DB-owned: remover do seed não remove a linha. É a
+pendência herdada *"resíduos do defeito 2"*, agora com evidência. Conserto é um DELETE pela API
+oficial, não edição de seed.
 
 🔴 **3. `test_expire_returns_the_slot_even_after_the_lease_expired` está VERMELHO, e é anterior a esta
 fatia** (medido: nada em `router.py` foi tocado). Asserta `claimed_via == "semaphore"`, e o código

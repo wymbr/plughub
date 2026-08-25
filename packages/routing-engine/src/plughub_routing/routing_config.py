@@ -85,6 +85,18 @@ _DEFAULTS: dict[str, Any] = {
     "msg_queue_full": "Nossa fila de espera está cheia no momento. Por favor, tente novamente mais tarde.",
 }
 
+# Defaults matching Config API seed — session namespace.
+#
+# O routing-engine lê UMA chave deste namespace, e é por necessidade, não por
+# conveniência: `{t}:pool_config:{p}` tem DOIS escritores (aqui, via
+# `registry.save_pool_config`, e o orchestrator-bridge), e enquanto cada um
+# carregava o próprio número eles discordavam (86 400 × 3 600) com o bridge
+# vencendo a cada 15 s. Ler a mesma chave é o que impede a divergência de
+# voltar. Ver `instance_bootstrap._pool_config_ttl_s` do outro lado.
+_SESSION_DEFAULTS: dict[str, Any] = {
+    "pool_config_ttl_s": 86_400,   # 24h — espelha config-api seed.py § session
+}
+
 
 class RoutingConfigCache:
     """
@@ -100,7 +112,19 @@ class RoutingConfigCache:
         cache.invalidate()                                  # on config.changed
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        namespace: str = "routing",
+        defaults: dict[str, Any] | None = None,
+    ) -> None:
+        # `namespace` parametrizado em 2026-08-25 para que o routing-engine possa
+        # ler também `session` (chave `pool_config_ttl_s`). O default preserva
+        # todo call site existente — a classe continua sendo "a cache do
+        # namespace routing" para quem já a usava.
+        self._namespace: str = namespace
+        self._defaults: dict[str, Any] = (
+            _DEFAULTS if defaults is None else defaults
+        )
         self._data: dict[str, Any] = {}
         self._loaded_at: float = 0.0
         self._invalidated: bool = True   # start invalid — forces first reload
@@ -125,7 +149,7 @@ class RoutingConfigCache:
         """
         if key in self._data:
             return self._data[key]
-        return _DEFAULTS.get(key, default)
+        return self._defaults.get(key, default)
 
     def invalidate(self) -> None:
         """
@@ -147,11 +171,11 @@ class RoutingConfigCache:
         http_client: httpx.AsyncClient,
     ) -> None:
         """
-        Fetches GET {config_api_url}/config/routing and populates the cache.
+        Fetches GET {config_api_url}/config/{namespace} and populates the cache.
         Falls back silently to defaults on any error so the routing-engine
         remains operational when the Config API is temporarily unreachable.
         """
-        url = f"{config_api_url.rstrip('/')}/config/routing"
+        url = f"{config_api_url.rstrip('/')}/config/{self._namespace}"
         try:
             resp = await http_client.get(
                 url, params={"tenant_id": self._tenant_id}, timeout=5.0
@@ -172,18 +196,44 @@ class RoutingConfigCache:
             self._loaded_at = time.monotonic()
             self._invalidated = False
             logger.info(
-                "RoutingConfigCache reloaded: %d keys from %s",
-                len(new_data), url,
+                "RoutingConfigCache[%s] reloaded: %d keys from %s",
+                self._namespace, len(new_data), url,
             )
         except Exception as exc:
             # Degraded mode: keep whatever was cached (or defaults) and re-mark
             # as stale so the next config.changed event will trigger another reload.
             self._invalidated = True
             logger.warning(
-                "RoutingConfigCache reload failed (%s) — using cached/default values",
-                exc,
+                "RoutingConfigCache[%s] reload failed (%s) — using cached/default values",
+                self._namespace, exc,
             )
 
 
 # Module-level singleton — imported by kafka_listener and router
 routing_config = RoutingConfigCache()
+
+# Segundo singleton, namespace `session` — UMA chave (`pool_config_ttl_s`).
+# Não é "a cache de sessão do routing-engine": é o outro lado da fonte única do
+# TTL de `{t}:pool_config:{p}`. Acrescentar chave aqui exige a mesma prova que a
+# do namespace `routing`: existe no seed E tem leitor, ou não entra.
+session_config = RoutingConfigCache(
+    namespace="session", defaults=_SESSION_DEFAULTS
+)
+
+
+def pool_config_ttl_s() -> int:
+    """TTL de `{t}:pool_config:{p}`, do Config API (namespace `session`).
+
+    Lido no momento da escrita (não capturado no import) para que
+    `config.changed` valha sem restart — simétrico a
+    `orchestrator-bridge/instance_bootstrap._pool_config_ttl_s`.
+    """
+    raw = session_config.get("pool_config_ttl_s", _SESSION_DEFAULTS["pool_config_ttl_s"])
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "pool_config_ttl_s inválido no Config API (%r) — usando %d",
+            raw, _SESSION_DEFAULTS["pool_config_ttl_s"],
+        )
+        return int(_SESSION_DEFAULTS["pool_config_ttl_s"])

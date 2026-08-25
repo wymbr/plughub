@@ -282,10 +282,15 @@ _SEED: list[tuple[str, str, object, str]] = [
     ),
     (
         "session", "pool_config_ttl_s",
-        3_600,
-        "Redis TTL (seconds) for pool configuration snapshots cached by "
-        "orchestrator-bridge (used by PoolConfigCache). 1 hour. "
-        "Routing-engine has a separate pool_config_ttl_seconds (24h) for its own cache."
+        86_400,
+        "Redis TTL (seconds) for {tenant}:pool_config:{pool}. 24 hours. "
+        "SINGLE SOURCE: read by orchestrator-bridge (instance_bootstrap) AND by "
+        "routing-engine (registry.save_pool_config) — they write the SAME key, "
+        "and until 2026-08-25 they disagreed (3600 vs 86400) with the bridge "
+        "silently winning every 15s via its heartbeat. Expiry empties "
+        "get_candidate_pools and queues every contact — the 2026-04-16 incident. "
+        "Do not lower without re-reading that changelog: cleanup of removed pools "
+        "is done by explicit DELETE in _reconcile_pool_configs, never by this TTL."
     ),
     (
         "session", "sentiment_live_ttl_s",

@@ -26,7 +26,13 @@ _DEFAULTS: dict[str, Any] = {
     "transcript_ttl_s":             14_400,   # 4h — conversation-writer Redis buffer
     "replayer_hydration_ttl_s":      3_600,   # 1h — stream hydration for evaluation
     "replay_context_ttl_s":          3_600,   # 1h — ReplayContext key TTL
-    "pool_config_ttl_s":             3_600,   # 1h — pool config cache TTL
+    # 24h — TTL de `{t}:pool_config:{p}`. GANHOU LEITOR em 2026-08-25
+    # (`instance_bootstrap._pool_config_ttl_s`); até então era semeada, cacheada
+    # e sem uso — o 4º órfão de config do repositório. Subiu de 3 600 para
+    # 86 400 porque a expiração da chave apaga os pools do routing inteiro
+    # (`get_candidate_pools` → lista vazia), e não é o TTL que limpa pool
+    # removido: `_reconcile_pool_configs` o DELETA explicitamente.
+    "pool_config_ttl_s":            86_400,
     "sentiment_live_ttl_s":            300,   # 5m — live sentiment in Redis
     # `queue_default_agent_type_id` / `queue_default_skill_id` REMOVIDAS
     # (2026-08-24, defeito 2). Falavam o vocabulário PRÉ-SLOT: desde 2026-07-13
@@ -57,6 +63,23 @@ class SessionConfigCache:
         self._data: dict[str, Any] = {}
         self._loaded_at: float = 0.0
         self._invalidated: bool = True   # start invalid — forces first reload
+        # ⚠️ `GET /config/{namespace}` EXIGE `?tenant_id=` (Query obrigatório em
+        # `config-api/router.py:174`). Sem ele a resposta é **422**, o reload cai
+        # no ramo de warning e o cache fica nos _DEFAULTS PARA SEMPRE — isto é,
+        # a tela do namespace `session` promete efeito e não tem.
+        #
+        # É o MESMO defeito que o routing-engine teve e consertou em 2026-06-05
+        # (ver `routing_config.py:107`); aqui ele sobreviveu porque o modo de
+        # falha é ficar no default, que quase sempre parece certo. Medido em
+        # 2026-08-25 ao dar leitor à chave `pool_config_ttl_s`.
+        #
+        # "__global__" resolve os defaults da instalação; main.py configura o
+        # tenant real no boot.
+        self._tenant_id: str = "__global__"
+
+    def configure_tenant(self, tenant_id: str) -> None:
+        if tenant_id:
+            self._tenant_id = tenant_id
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,7 +120,11 @@ class SessionConfigCache:
         """
         url = f"{config_api_url.rstrip('/')}/config/session"
         try:
-            async with http.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with http.get(
+                url,
+                params={"tenant_id": self._tenant_id},
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
                 if resp.status == 200:
                     body = await resp.json()
                     # Config API returns { "entries": { key: { "value": ..., ... } } }
@@ -118,18 +145,29 @@ class SessionConfigCache:
                         len(new_data), url,
                     )
                 else:
-                    logger.warning(
-                        "SessionConfigCache: Config API returned HTTP %d — using cached/default values",
-                        resp.status,
-                    )
                     self._invalidated = True
+                    self._warn_degraded(f"HTTP {resp.status}", url)
         except Exception as exc:
             # Degraded mode: keep whatever was cached (or defaults) and re-mark
             # as stale so the next config.changed event triggers another reload.
             self._invalidated = True
-            logger.warning(
-                "SessionConfigCache reload failed (%s) — using cached/default values", exc
-            )
+            self._warn_degraded(str(exc), url)
+
+    def _warn_degraded(self, cause: str, url: str) -> None:
+        """Degradação NUNCA é silenciosa — e "usando defaults" não é o mesmo que
+        dizer O QUE passou a ser default.
+
+        Esta linha existe porque a anterior não bastou: ela avisava havia meses
+        (`Cannot connect to host localhost:3500`) e ninguém leu, porque não dizia
+        que a consequência era o namespace `session` INTEIRO — seis TTLs
+        editáveis na tela — deixar de valer. Ver `main.py` § CONFIG_API_URL.
+        """
+        logger.warning(
+            "SessionConfigCache reload FALHOU (%s) em %s — o namespace `session` "
+            "NÃO foi lido; estas chaves passam a vir do código e a tela do "
+            "Config API não tem efeito sobre elas: %s",
+            cause, url, ", ".join(sorted(_DEFAULTS)),
+        )
 
 
 # Module-level singleton — imported by main.py

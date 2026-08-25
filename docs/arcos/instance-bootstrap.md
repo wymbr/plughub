@@ -101,6 +101,39 @@ reconcile(tenant_id):
 | `registry.changed` (Kafka) | `reconcile()` — immediate after signal |
 | `config.changed` namespace=`quota` (Kafka) | `reconcile()` — quota limits changed, may affect instance count |
 
+### TTL de `pool_config` — fonte única, e o bridge é o renovador ÚNICO (2026-08-25)
+
+O TTL de `{t}:pool_config:{p}` vem do **Config API** (namespace `session`, chave
+`pool_config_ttl_s`, **86 400**), lido por `_pool_config_ttl_s()` **no momento da escrita** — não
+capturado no import, senão `config.changed` não valeria sem restart.
+
+**Por que deixou de ser constante deste módulo.** A chave tem dois escritores: este e o
+`routing-engine/registry.save_pool_config`. Enquanto cada um carregava o próprio número
+(3 600 aqui × 86 400 lá), o de lá **nunca valia** — e não por perder uma corrida no boot: o
+`_heartbeat_tick` re-SETa a chave a cada 15 s, então o valor do routing-engine era sobrescrito
+quinze segundos por vez, para sempre. Provado parando o serviço: com o bridge fora, o TTL decai
+monotonicamente (3587 → 3546 → 3462) e **não reseta**; ao religar, volta a 3594.
+
+**Consequência do valor, e não é o relatório de SLA.** Como a renovação é de 15 s, a chave só
+expira se o bridge ficar fora do ar por mais que o TTL. Nesse estado
+`PoolRegistry.get_candidate_pools` devolve lista **vazia** e todo contato cai em fila/`no_resource`
+— o incidente de [`../guias/changelog-2026-04-16.md`](../guias/changelog-2026-04-16.md), cujo
+conserto (300 s → 86 400) este arquivo desfazia em silêncio. O segmento de espera sem alvo
+(`sla_unstamped`, D14-iii) é sintoma colateral do mesmo estado.
+
+⚠️ **Não baixar este TTL alegando limpeza.** A justificativa antiga do 3 600 era *"fast enough for
+cleanup"*, e não é o TTL que limpa: `_reconcile_pool_configs` **DELETA** o pool removido do
+Registry. O TTL é backstop só para "pool removido enquanto o bridge está morto".
+
+**Achado adjacente do mesmo conserto:** o `SessionConfigCache` nunca conseguiu ler o Config API
+neste serviço — `CONFIG_API_URL` ausente do compose, default hardcoded na porta da analytics-api
+(3500) e GET sem `?tenant_id=`. Três causas empilhadas, cada uma suficiente, todas degradando para
+"usa o default". As seis chaves de TTL do namespace `session` eram editáveis na tela e inertes.
+Corrigido; o aviso de degradação agora **nomeia as chaves** que perdem efeito.
+
+Gates: `test_pool_config_ttl_single_source.py` (bridge e routing-engine) +
+`infra/test/gate_pool_config_ttl_source.sh` (ponta a ponta, valor discriminante `4242`).
+
 ### `_pool_config_diverged` — campos gerenciados (2026-06-16)
 
 O `SET pool_config` no reconcile só dispara quando o conteúdo **diverge** (`_pool_config_diverged`); senão só

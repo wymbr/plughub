@@ -1491,6 +1491,13 @@ services:
       # por work_task_release. Ausente ⇒ o holder falha e o bridge degrada para a
       # re-rota antiga COM LOG — o defeito volta, mas não em silêncio.
       ROUTING_ENGINE_URL:   http://routing-engine:3550
+      # ⚠️ AUSENTE até 2026-08-25, e a ausência era MUDA. Sem esta linha o bridge
+      # caía no default hardcoded `http://localhost:3500` — host errado (dentro do
+      # container) E porta errada (3500 é a analytics-api; config-api é 3600) —,
+      # então o namespace `session` NUNCA foi lido deste serviço: as seis chaves
+      # de TTL editáveis na tela vinham todas do `_DEFAULTS` do código.
+      # Todos os outros serviços do compose já tinham a linha; só o bridge não.
+      CONFIG_API_URL:       http://config-api:3600
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — RegistrySyncer
       BOOTSTRAP_TENANT_IDS: tenant_demo
       REGISTRY_CONFIG_DIR:  /registry

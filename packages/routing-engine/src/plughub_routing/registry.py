@@ -40,6 +40,7 @@ from .models import (
 )
 from .config import get_settings
 from .mute_queue import first_queued_key, _TTL_S as _FIRST_QUEUED_TTL_S
+from .routing_config import pool_config_ttl_s
 
 logger = logging.getLogger("plughub.routing.registry")
 
@@ -3301,10 +3302,17 @@ class PoolRegistry:
         """
         key  = _pool_config_key(config.tenant_id, config.pool_id)
         data = config.model_dump()
+        # ⚠️ TTL vem do Config API, NÃO de `self._settings.pool_config_ttl_seconds`
+        # (env). Esta chave tem DOIS escritores — este e o `_heartbeat_tick` do
+        # orchestrator-bridge, que re-SETa a cada 15 s. Enquanto cada lado
+        # carregava o próprio número, o 86 400 daqui era sobrescrito por 3 600 e
+        # o conserto de `changelog-2026-04-16` estava desfeito em silêncio.
+        # Medido em 2026-08-25 parando o bridge: o TTL decai e não reseta, logo o
+        # renovador é único e este valor só vale quando o bridge está fora.
         await self._redis.set(
             key,
             json.dumps(data),
-            ex=self._settings.pool_config_ttl_seconds,
+            ex=pool_config_ttl_s(),
         )
         # Register pool_id in the tenant set
         await self._redis.sadd(_pool_set_key(config.tenant_id), config.pool_id)

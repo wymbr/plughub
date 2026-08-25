@@ -76,7 +76,13 @@ KAFKA_DLQ_TOPIC     = os.getenv("KAFKA_DLQ_TOPIC",     "events.dead_letter")
 REDIS_URL           = os.getenv("REDIS_URL",            "redis://localhost:6379")
 SKILL_FLOW_URL      = os.getenv("SKILL_FLOW_URL",       "http://localhost:3400")
 AGENT_REGISTRY_URL  = os.getenv("AGENT_REGISTRY_URL",  "http://localhost:3300")
-CONFIG_API_URL      = os.getenv("CONFIG_API_URL",       "http://localhost:3500")
+# ⚠️ A porta era 3500 — que é a ANALYTICS-API, não a config-api (3600). Como o
+# compose do bridge também não declarava `CONFIG_API_URL` (corrigido 2026-08-25),
+# o reload do namespace `session` falhava na CONEXÃO e o cache ficava nos
+# `_DEFAULTS` para sempre, em silêncio. Três causas empilhadas para o mesmo
+# sintoma: env ausente, porta errada e GET sem `?tenant_id=` (422). Consertar uma
+# só não teria movido nada.
+CONFIG_API_URL      = os.getenv("CONFIG_API_URL",       "http://localhost:3600")
 # Camada D (detach de hooks de finalização): o bridge dispara hooks `detached`
 # como workflow webhook (fire-and-forget) via channel-gateway, em vez de convidar
 # um especialista de conferência. Só usado no caminho detached.
@@ -9745,7 +9751,11 @@ async def run() -> None:
 
     async with aiohttp.ClientSession() as http:
         # 0. Load session TTLs from Config API — replaces hardcoded 14400 literals.
-        #    Falls back silently to defaults (14400s) if Config API is unreachable.
+        #    Falls back silently to defaults if Config API is unreachable.
+        #    ⚠️ `configure_tenant` ANTES do reload: sem tenant o GET sai sem
+        #    `?tenant_id=` e o Config API responde 422 — o cache ficava nos
+        #    defaults para sempre (medido 2026-08-25).
+        session_config.configure_tenant(BOOTSTRAP_TENANT_IDS[0])
         await session_config.reload(CONFIG_API_URL, http)
 
         # 1. Sync registry first (upsert pools + agent types from YAML)

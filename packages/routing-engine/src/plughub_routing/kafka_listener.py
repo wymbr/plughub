@@ -42,7 +42,7 @@ from .models import (
 )
 from .registry import InstanceRegistry, PoolRegistry
 from .config import get_settings
-from .routing_config import routing_config
+from .routing_config import routing_config, session_config
 from . import mute_queue
 
 if TYPE_CHECKING:
@@ -53,13 +53,34 @@ if TYPE_CHECKING:
 logger = logging.getLogger("plughub.routing.kafka_listener")
 
 
+def _cache_for_namespace(namespace: str):
+    """Resolve o cache do namespace LENDO O GLOBAL DO MÓDULO a cada chamada.
+
+    ⚠️ Não transformar num dict de módulo nem em atributo de classe. Qualquer um
+    dos dois avalia `routing_config`/`session_config` UMA vez, no import, e
+    congela o objeto — a partir daí `patch("…kafka_listener.routing_config")`
+    troca o nome e o handler continua usando o singleton real. O caso não é
+    hipotético: foi assim que `test_routing_namespace_triggers_invalidation`
+    ficou vermelho em 2026-08-25, e o teste estava certo — o singleton de módulo
+    é a costura que o resto da suíte usa para observar este handler.
+    """
+    if namespace == "routing":
+        return routing_config
+    if namespace == "session":
+        return session_config
+    return None
+
+
 class ConfigChangedHandler:
     """
-    Processes config.changed Kafka events for the routing namespace.
+    Processes config.changed Kafka events for the namespaces this service reads.
 
-    When the Config API publishes a change to namespace "routing", this handler
-    marks the local RoutingConfigCache as stale and schedules a background
-    reload so fresh values are picked up without a routing-engine restart.
+    Two, e a segunda tem escopo estreito de propósito:
+      · `routing`  — a cache principal (scoring, mensagens, tetos de fila).
+      · `session`  — UMA chave, `pool_config_ttl_s`, fonte única do TTL de
+        `{t}:pool_config:{p}`, que este serviço e o orchestrator-bridge
+        escrevem. Sem este ramo, mudar o TTL na tela valeria no bridge e não
+        aqui — que é exatamente a divergência que a fonte única fecha.
 
     Events from other namespaces are silently ignored — each component is
     responsible for the namespaces it cares about.
@@ -72,7 +93,8 @@ class ConfigChangedHandler:
 
     async def handle(self, event: dict) -> None:
         namespace = event.get("namespace", "")
-        if namespace != "routing":
+        cache     = _cache_for_namespace(namespace)
+        if cache is None:
             logger.debug("config.changed ignored: namespace=%s", namespace)
             return
 
@@ -81,13 +103,13 @@ class ConfigChangedHandler:
         operation = event.get("operation", "<unknown>")
 
         logger.info(
-            "config.changed received: namespace=routing key=%s tenant=%s op=%s — invalidating cache",
-            key, tenant_id, operation,
+            "config.changed received: namespace=%s key=%s tenant=%s op=%s — invalidating cache",
+            namespace, key, tenant_id, operation,
         )
-        routing_config.invalidate()
+        cache.invalidate()
         # Reload in background so we don't block the consumer loop.
         asyncio.create_task(
-            routing_config.reload(self._config_api_url, self._http_client)
+            cache.reload(self._config_api_url, self._http_client)
         )
 
 
@@ -1035,8 +1057,9 @@ async def run_listeners(
     automatic queue drain (Scenario 2 — spec 3.3b).
 
     When kafka_topic_config_changed + http_client are supplied, config.changed
-    events for the "routing" namespace invalidate and reload the local
-    RoutingConfigCache (spec: config.changed → routing-engine cache refresh).
+    events for the "routing" AND "session" namespaces invalidate and reload the
+    corresponding local cache (spec: config.changed → routing-engine cache
+    refresh). `session` carrega uma única chave lida aqui, `pool_config_ttl_s`.
 
     When kafka_topic_events is supplied, contact_closed events from the channel
     gateway set session:{id}:closed in Redis and remove orphan queue entries,

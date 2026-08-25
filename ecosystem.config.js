@@ -101,7 +101,12 @@ const ENV = {
   SKILL_FLOW_URL:                   "http://localhost:3400",
   MCP_PROXY_URL:                    "http://localhost:7422",
   PLUGHUB_INSTANCE_TTL_SECONDS:     "3600",
-  PLUGHUB_POOL_CONFIG_TTL_SECONDS:  "86400",   // 24h — pool configs são estáticas
+  // ⚠️ IGNORADA desde 2026-08-25 — mantida só para não quebrar deploy que a define.
+  // O TTL de {t}:pool_config:{p} passou ao Config API (namespace `session`,
+  // chave `pool_config_ttl_s`), porque a chave tem DOIS escritores
+  // (routing-engine + orchestrator-bridge) e env não é onde mora tuning.
+  // Editar esta linha não muda comportamento nenhum. Ver config.py § REMOVIDA.
+  PLUGHUB_POOL_CONFIG_TTL_SECONDS:  "86400",   // sem efeito — ver acima
 
   // Orchestrator Bridge — YAML skill flow fallback directory
   SKILLS_DIR:                       path.join(ROOT, "packages/skill-flow-engine/skills"),

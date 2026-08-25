@@ -46,10 +46,24 @@ class Settings(BaseSettings):
     # Redis TTL
     # Spec: "TTL: 30s, renewed on each agent_ready or agent_busy"
     instance_ttl_seconds:   int = 30
-    # Pool configuration cache — renewed when agent-registry publishes a pool.registered/pool.updated event.
-    # Pool configs are essentially static (changed only via REST API) — 24h TTL is safe.
-    # Set PLUGHUB_POOL_CONFIG_TTL_SECONDS=0 to disable expiry entirely (not supported by Redis SET ex=0).
-    pool_config_ttl_seconds: int = 86400  # 24h (was 5 min — too short for long-running agents)
+    # ⚠️ REMOVIDA em 2026-08-25 — `pool_config_ttl_seconds` NÃO decide mais nada.
+    #
+    # Era env (`PLUGHUB_POOL_CONFIG_TTL_SECONDS=86400`) e valia para o único
+    # escritor deste serviço, `registry.save_pool_config`. Só que a chave
+    # `{t}:pool_config:{p}` tem DOIS escritores, e o outro (orchestrator-bridge)
+    # a re-SETa a cada 15 s com o número dele — então este valor era sobrescrito
+    # 15 segundos por vez e o conserto de `docs/guias/changelog-2026-04-16.md`
+    # (300 s → 86 400) estava desfeito desde então, sem nada ficar vermelho.
+    #
+    # Deixar a linha aqui, mesmo correta, seria manter um botão que promete
+    # efeito e não tem — a família de `sla_default_ms`. O TTL agora vem do
+    # Config API (namespace `session`, `pool_config_ttl_s`), lido pelos DOIS
+    # escritores: `routing_config.pool_config_ttl_s()` deste lado e
+    # `instance_bootstrap._pool_config_ttl_s()` do outro. Config de tuning não
+    # mora em env (§ Configuration — Single Source Invariants).
+    #
+    # `PLUGHUB_POOL_CONFIG_TTL_SECONDS` continua sendo aceita pelo ambiente e
+    # IGNORADA — ver `ecosystem.config.js`, onde a linha foi anotada.
 
     # Capacity alert: time before triggering oncall (spec 3.3a)
     keda_alert_timeout_seconds: int = 60

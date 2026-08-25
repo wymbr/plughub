@@ -2,6 +2,128 @@
 
 ---
 
+## TTL de `pool_config` ganha fonte única — e o namespace `session` estava inerte (2026-08-25)
+
+Primeiro item da § *Ordem de trabalho PROPOSTA*. Entrou pelo argumento do ledger de SLA e saiu
+com outro, maior: o que a medição achou não foi um número discordante, foi **um namespace de
+config inteiro que nunca foi lido**.
+
+### O passo 0 foi medir, e a medição REBAIXOU o argumento de entrada
+
+O item estava justificado como *"o único item aberto que perde dado que não volta"*, com a
+irreversibilidade implicando *acontecendo agora*. Medido no tenant demo pelo instrumento que a
+D14-iii entregou (`GET /reports/pools/queue`):
+
+| | |
+|---|---|
+| esperas no período | **72** |
+| elegíveis a SLA (pós-época) | **1** |
+| `sla_unstamped` | **0** |
+
+**Veredicto: INCONCLUSIVO, não "latente".** O `TODO.md` registrava que `sla_unstamped = 0`
+rebaixaria o item na hora — mas essa regra só vale com população depois da época. Com `elig = 1`,
+o zero mede a ausência de tráfego, não a ausência do defeito. Rebaixar por ele seria o gate sem
+população discriminante que esta linha de trabalho já pagou duas vezes.
+
+### O que respondeu foi PARAR O SERVIÇO
+
+O `_heartbeat_tick` re-SETa `{t}:pool_config:{p}` **a cada 15 s** a partir do cache em memória.
+Com o bridge parado o TTL decai e **não reseta** — 3587 → 3546 → 3462 —, e volta a 3594 ao
+religar. Logo:
+
+- o bridge é o renovador **ÚNICO**, e o `86 400` do routing-engine não perdia uma corrida no
+  boot: era sobrescrito **15 segundos por vez, para sempre**;
+- a expiração exige **bridge fora do ar por mais de 1 h**, com o routing ainda atendendo;
+- nesse estado o dano não é o alvo de espera ausente — é `get_candidate_pools` devolvendo lista
+  **vazia** e todo contato caindo em fila/`no_resource`. É o incidente de
+  `docs/guias/changelog-2026-04-16.md` de volta, com janela de 1 h em vez de 5 min, e o conserto
+  de lá (300 s → 86 400) desfeito em silêncio desde então.
+
+O `3 600` se justificava como *"fast enough for cleanup"*, e não é o TTL que limpa:
+`_reconcile_pool_configs` **DELETA** o pool removido do Registry. O TTL é backstop só para "pool
+removido enquanto o bridge está morto" — e entre *entrada obsoleta por até 24 h* e *zero pools
+por 1 h*, o apagão é o lado pior. **Decisão do dono: 86 400, lido do Config API.**
+
+### O achado que só apareceu porque a previsão ERROU
+
+Previ que o reload do bridge devolvia **422** (GET sem `?tenant_id=`, o defeito que o
+routing-engine consertou em 2026-06-05). Veio outra coisa: `Cannot connect to host
+localhost:3500`. **Três causas empilhadas**, cada uma suficiente sozinha:
+
+1. `CONFIG_API_URL` **ausente** do ambiente do bridge no compose — todos os outros serviços têm
+   a linha;
+2. o default hardcoded era `http://localhost:3500`, e **3500 é a analytics-api** (config-api é 3600);
+3. o GET saía sem `tenant_id`, que daria 422 mesmo com a URL certa.
+
+Consertar só a (3), como eu ia fazer, **não teria movido nada** — e teria parecido "não aplicou".
+
+**A consequência é maior que a fatia:** o bridge **nunca leu** o namespace `session` neste
+ambiente. As seis chaves de TTL editáveis na tela vinham todas do `_DEFAULTS`. Não era o 4º
+órfão de config do repositório — era um namespace inteiro. Conferido depois do conserto: os seis
+valores do store são **idênticos** aos defaults, então ligar a leitura não mudou mais nada.
+
+O aviso existia e ninguém leu, porque dizia *"using cached/default values"* sem dizer **o quê**
+deixava de valer. Agora nomeia as chaves afetadas.
+
+### Conserto
+
+- `instance_bootstrap.py`: constante `_POOL_CONFIG_TTL_S` **removida**; `_pool_config_ttl_s()` lê
+  a config **no momento da escrita** (não no import — capturar congelaria o valor do boot e a
+  tela voltaria a não ter efeito). Três call sites migrados: heartbeat, SET do reconcile e o
+  EXPIRE do ramo "conteúdo idêntico". O `except: pass` da renovação passou a **logar**.
+- `session_config.py`: `configure_tenant` + `params={"tenant_id"}`; default a 86 400; aviso de
+  degradação nomeia as chaves.
+- `main.py` (bridge): `configure_tenant` antes do reload; default do `CONFIG_API_URL` 3500 → 3600.
+- `docker-compose.demo.yml`: `CONFIG_API_URL` acrescentada ao bridge.
+- `routing_config.py`: cache parametrizada por namespace; singleton `session_config` e helper
+  `pool_config_ttl_s()`. `registry.save_pool_config` lê a config; `Settings.pool_config_ttl_seconds`
+  **removida** (env que prometia efeito e não tinha — família do `sla_default_ms`), com
+  `PLUGHUB_POOL_CONFIG_TTL_SECONDS` anotada como sem efeito no `ecosystem.config.js`.
+- `kafka_listener.py`: `config.changed` trata `session` além de `routing`.
+- `seed.py`: 86 400, e a prosa que afirmava serem *"caches separados"* reescrita — eram a mesma chave.
+
+### Falseabilidade
+
+Unit tests (10 no bridge, 10 no routing-engine) com **`4242`** como população discriminante —
+valor que nenhum default do repositório produz. Um teste que usasse 86 400 passaria idêntico no
+dia em que alguém trocasse só a constante de volta. Asserções **estruturais** (`hasattr`,
+`model_fields`, `call_args`), nunca `grep`: o comentário que documenta a remoção reescreve o nome
+do símbolo removido.
+
+`infra/test/gate_pool_config_ttl_source.sh` fecha o que o mock não alcança — entre a config e o
+Redis há Kafka, reload HTTP e o heartbeat de 15 s. Muda o valor na config, espera e lê o TTL:
+🟢 3595 → **4241** → **86397**, com testemunha de presença e três veredictos.
+
+🟢 **Mutação** (`_pool_config_ttl_s()` devolvendo `3600` fixo, sem reintroduzir o símbolo, para
+que o teste estrutural ficasse verde de propósito): **6 failed, 90 passed**, os seis nomeados
+antes. Gate vermelho no veredicto 1.
+
+⚠️ **O ramo de diagnóstico do gate estava errado, e só a previsão da mutação o pegou.** Um TTL
+parado num default conhecido lia como *"chave não renovada, o heartbeat parou?"* — mandando
+procurar processo parado quando o problema é código. Separado em três ramos: default conhecido
+(escritor ignora a config) × valor fora de qualquer default acima (escritor novo) × abaixo
+(renovação parada).
+
+Suítes: bridge **96 passed** (baseline 86) · routing-engine **1 failed, 294 passed** (baseline
+1 failed/284 — o vermelho é o do `claimed_via`, anterior e não tocado) · analytics-api **607**.
+
+### Erros de previsão
+
+11 acertos (baselines 1f/284 · 607 · 86 · inventário `addressable 1` · `waits 72` · `elig 1` ·
+`unst 0` · os quatro TTLs do experimento de parada · bridge 96 · routing 294 · mutação 6f/90 ·
+os seis nomes) e **dois erros**:
+
+- ❌ **previ 422, veio falha de conexão.** Duas causas acima da minha, e a minha era invisível
+  atrás delas. *Quando uma hipótese sobre um caminho degradado se confirma "quase", conte quantas
+  camadas há antes dela.*
+- ❌ **previ `1 failed, 293 passed` no routing; veio `2 failed, 292`.** O `_CACHES` como atributo
+  de **classe** congela o binding no import, e `patch("…kafka_listener.routing_config")` deixava
+  de alcançar o handler — `test_routing_namespace_triggers_invalidation` reprovou, **com razão**:
+  o singleton de módulo é a costura que a suíte usa para observar aquele handler. Trocado por
+  resolução via global no momento da chamada, e o ramo `session` ganhou o espelho da mesma guarda.
+
+---
+
 ## Os três leitores de SLA passam a ler o SEGMENTO — D14 (iii) (2026-08-25)
 
 Fecha o arco D14 (i→ii→iii). A (i) parou de colapsar as passagens pela fila, a (ii) carimbou o alvo

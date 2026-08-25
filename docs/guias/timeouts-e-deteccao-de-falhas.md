@@ -167,8 +167,24 @@ Se `wait_for_message` não setar essa chave antes do BLPOP, o bridge loga `"No a
 | `{tenant_id}:queue:{pool_id}` (ZSET score) | 4h | Contato em fila aguardando agente |
 | `{tenant_id}:session:{session_id}` | 4h | Metadados da sessão ativa |
 | `menu:waiting:{session_id}` | `timeout_s + 10` | Flag para o bridge entregar mensagens ao BLPOP do step `menu` |
-| `{tenant_id}:pool_config:{pool_id}` | 24h | Configuração de pool (padrão; via `PLUGHUB_POOL_CONFIG_TTL_SECONDS`) |
+| `{tenant_id}:pool_config:{pool_id}` | 24h | Configuração de pool — Config API, namespace `session`, chave `pool_config_ttl_s` (ver nota abaixo) |
 | `{tenant_id}:pipeline:{conversation_id}:running` | Enquanto em execução | Lock de execução do Skill Flow Engine — CrashDetector o respeita |
+
+> **`pool_config` tem DOIS escritores, e isso é o que importa saber (2026-08-25).**
+> `routing-engine/registry.save_pool_config` escreve nos eventos `pool.registered`/`pool.updated`;
+> o `orchestrator-bridge/_heartbeat_tick` re-SETa **a cada 15 s**. Durante meses cada um carregava
+> o próprio número (86 400 × 3 600) e o bridge vencia sempre — o `PLUGHUB_POOL_CONFIG_TTL_SECONDS`
+> do routing-engine era sobrescrito 15 segundos por vez. A env **foi removida** e o TTL passou ao
+> Config API, lido pelos dois.
+>
+> Consequência prática do valor: como o bridge renova a cada 15 s, a chave **só expira se o bridge
+> ficar fora do ar por mais que o TTL**. E, se expirar, `get_candidate_pools` devolve lista vazia e
+> **todo contato vai para fila/`no_resource`** — o incidente de
+> [`changelog-2026-04-16.md`](changelog-2026-04-16.md). Não baixe este TTL sem ler aquele registro:
+> a limpeza de pool removido é feita por DELETE explícito em `_reconcile_pool_configs`, nunca por
+> expiração.
+>
+> Gate: `infra/test/gate_pool_config_ttl_source.sh`.
 
 ---
 

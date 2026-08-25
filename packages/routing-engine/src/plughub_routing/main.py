@@ -35,7 +35,7 @@ from .registry import (
 from .router import Router
 from .http_api import start_http_api
 from .kafka_listener import run_listeners
-from .routing_config import routing_config
+from .routing_config import routing_config, session_config
 from . import mute_queue
 
 logger = logging.getLogger("plughub.routing")
@@ -62,6 +62,15 @@ async def run() -> None:
     routing_config.configure_tenant(settings.tenant_id)
     await routing_config.reload(settings.config_api_url, http_client)
     logger.info("Routing config cache pre-loaded from %s", settings.config_api_url)
+
+    # Namespace `session` — UMA chave (`pool_config_ttl_s`), fonte única do TTL
+    # de `{t}:pool_config:{p}`, que este serviço e o orchestrator-bridge
+    # escrevem. Pré-carregar aqui importa porque `save_pool_config` roda no
+    # primeiro `pool.registered`, que pode chegar antes de qualquer
+    # `config.changed`.
+    session_config.configure_tenant(settings.tenant_id)
+    await session_config.reload(settings.config_api_url, http_client)
+    logger.info("Session config cache pre-loaded from %s", settings.config_api_url)
 
     consumer = AIOKafkaConsumer(
         settings.kafka_topic_inbound,

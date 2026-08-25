@@ -398,6 +398,26 @@ system_error         — unrecoverable error
   topologia (URLs, brokers, portas, tenant). Config de negócio/tuning nunca em env. Quando env e
   config-api têm a mesma chave, **config-api vence**.
 
+  > **Corolário medido em 2026-08-25 — chave com DOIS escritores não tem dois valores, tem um: o do
+  > escritor mais FREQUENTE.** `{t}:pool_config:{p}` era escrita pelo routing-engine (86 400, em
+  > `pool.registered`) e pelo orchestrator-bridge (3 600, no `_heartbeat_tick`). O 86 400 não perdia
+  > uma corrida no boot — era sobrescrito **a cada 15 s, para sempre**, e com ele o conserto
+  > deliberado de `changelog-2026-04-16` (300 s → 86 400) ficou desfeito em silêncio por meses.
+  > **Ao encontrar dois valores para a mesma chave, meça a CADÊNCIA de cada escritor antes de
+  > raciocinar sobre precedência** — e o instrumento é PARAR o serviço suspeito: se o valor decai e
+  > não reseta, ele é o renovador único. Regra derivada: TTL de chave compartilhada mora em UM lugar,
+  > lido pelos dois no momento da escrita (não capturado no import, senão `config.changed` não vale
+  > sem restart).
+  >
+  > **E a leitura de config falha por CAMADAS, todas com a mesma cara.** O mesmo arco achou o
+  > namespace `session` **inteiro inerte** no bridge, por três causas empilhadas — env ausente no
+  > compose, porta errada no default hardcoded (3500 = analytics-api), e GET sem `?tenant_id=` (422).
+  > Cada uma sozinha bastava, e as três degradam para *"usa o default"*, que quase sempre parece
+  > certo. **Consertar a de cima não move o número e parece "não aplicou"**; por isso o aviso de
+  > degradação tem de nomear **o que** deixa de valer, não só dizer *"using default values"* — foi
+  > exatamente essa frase genérica que ninguém leu por meses. Ver `CHANGELOG.md` 2026-08-25 e
+  > [`docs/arcos/instance-bootstrap.md`](docs/arcos/instance-bootstrap.md) § TTL.
+
 ---
 
 ## MCP Interception — Hybrid Proxy Model

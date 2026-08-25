@@ -57,6 +57,8 @@ from datetime import datetime, timezone
 import aiohttp
 import redis.asyncio as aioredis
 
+from .session_config import session_config
+
 logger = logging.getLogger("plughub.orchestrator-bridge.bootstrap")
 
 # ─── Tunables ─────────────────────────────────────────────────────────────────
@@ -67,8 +69,56 @@ _INSTANCE_TTL_S        = 35
 _HEARTBEAT_INTERVAL_S  = 15
 # Intervalo da reconciliação completa periódica (auto-healing de drift)
 _RECONCILE_INTERVAL_S  = 300   # 5 min
-# TTL dos pool_config no Redis
-_POOL_CONFIG_TTL_S     = 3600   # 1h — sufficient for crash recovery, fast enough for cleanup
+
+
+# ─── TTL do pool_config — fonte única ─────────────────────────────────────────
+#
+# ⚠️ ERA a constante `_POOL_CONFIG_TTL_S = 3600`, e ela era o SEGUNDO escritor de
+# `{t}:pool_config:{p}`. O outro é `routing-engine/registry.py:save_pool_config`,
+# com 86 400. Não é uma corrida que o bridge ganha no boot: o `_heartbeat_tick`
+# re-SETa a chave **a cada 15 s**, então o 86 400 era sobrescrito 15 segundos por
+# vez, para sempre. Medido em 2026-08-25 parando o serviço: com o bridge vivo o
+# TTL fica em ~3 590; parado, decai monotonicamente (3587 → 3546 → 3462) e não
+# reseta; religado, volta a ~3 594. O bridge é o renovador ÚNICO.
+#
+# Consequência do valor baixo, e não é o ledger: se o bridge fica fora do ar por
+# mais de 1 h, as chaves expiram, `PoolRegistry.get_candidate_pools` devolve
+# lista VAZIA e todo contato cai em fila/`no_resource` — exatamente o incidente
+# de `docs/guias/changelog-2026-04-16.md`, cujo conserto (300 s → 86 400) este
+# arquivo desfazia em silêncio. O segmento de espera sem alvo (`sla_unstamped`,
+# D14-iii) é sintoma colateral do mesmo estado, não a consequência principal.
+#
+# O `3600` se justificava como *"fast enough for cleanup"* — e não é o TTL que
+# limpa: `_reconcile_pool_configs` DELETA explicitamente o pool removido do
+# Registry. O TTL só é backstop para "pool removido enquanto o bridge está
+# morto", e nesse par (entrada obsoleta por até 24 h × zero pools por 1 h) o
+# apagão é o lado pior.
+#
+# Agora o valor vem do Config API (namespace `session`, chave `pool_config_ttl_s`),
+# que ANTES desta mudança era semeada, cacheada e **sem nenhum leitor** — o 4º
+# órfão do repositório, ao lado de `sla_default_ms`. O default abaixo espelha o
+# seed e existe só para o bridge operar com o Config API inalcançável.
+_POOL_CONFIG_TTL_FALLBACK_S = 86_400   # 24h — espelha config-api seed.py § session
+
+
+def _pool_config_ttl_s() -> int:
+    """TTL de `{t}:pool_config:{p}`, do Config API (namespace `session`).
+
+    Função e não constante de módulo de propósito: o `session_config` é
+    invalidado por `config.changed`, então ler no momento da escrita é o que
+    faz a mudança de config valer sem restart. Uma constante capturada no
+    import congelaria o valor do boot e a tela voltaria a prometer efeito sem ter.
+    """
+    try:
+        return int(session_config.get(
+            "pool_config_ttl_s", _POOL_CONFIG_TTL_FALLBACK_S
+        ))
+    except (TypeError, ValueError):
+        logger.warning(
+            "pool_config_ttl_s inválido no Config API (%r) — usando %d",
+            session_config.get("pool_config_ttl_s"), _POOL_CONFIG_TTL_FALLBACK_S,
+        )
+        return _POOL_CONFIG_TTL_FALLBACK_S
 
 
 # ─── ReconciliationReport ─────────────────────────────────────────────────────
@@ -468,16 +518,26 @@ class InstanceBootstrap:
 
         # Renova (ou recria) pool_config keys a partir do cache em memória.
         # Usa SET com EX para recriar chaves que foram deletadas (ex.: flushTestData).
+        #
+        # ⚠️ É ESTE laço, a cada 15 s, que torna o bridge o renovador ÚNICO da
+        # chave — e o que fazia o TTL do routing-engine ser inalcançável.
+        _ttl = _pool_config_ttl_s()
         for tenant_id, pool_map in self._pool_configs.items():
             for pool_id, pool_data in pool_map.items():
                 try:
                     await self._redis.set(
                         f"{tenant_id}:pool_config:{pool_id}",
                         json.dumps(pool_data),
-                        ex=_POOL_CONFIG_TTL_S,
+                        ex=_ttl,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Degradação NUNCA é silenciosa (§ Postura de Engenharia).
+                    # Era `except: pass`, e a falha aqui é justamente a que leva
+                    # o pool a sumir do routing sem que nada fique vermelho.
+                    logger.warning(
+                        "pool_config heartbeat renew failed pool=%s tenant=%s: %s",
+                        pool_id, tenant_id, exc,
+                    )
 
         # Garante que todos os pools configurados sempre tenham um snapshot visível
         # no feed SSE — evita que o KPI Online cresça gradualmente conforme mais
@@ -926,7 +986,7 @@ class InstanceBootstrap:
                     if not _pool_config_diverged(existing, pool_data):
                         # Conteúdo idêntico — apenas renova TTL
                         if not dry_run:
-                            await self._redis.expire(config_key, _POOL_CONFIG_TTL_S)
+                            await self._redis.expire(config_key, _pool_config_ttl_s())
                         # Sempre atualiza cache em memória para o heartbeat
                         if tenant_id not in self._pool_configs:
                             self._pool_configs[tenant_id] = {}
@@ -936,7 +996,7 @@ class InstanceBootstrap:
                 # Chave inexistente ou conteúdo divergente — escreve
                 if not dry_run:
                     await self._redis.set(
-                        config_key, json.dumps(pool_data), ex=_POOL_CONFIG_TTL_S
+                        config_key, json.dumps(pool_data), ex=_pool_config_ttl_s()
                     )
                     logger.debug(
                         "Pool config %s: %s",
