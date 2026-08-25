@@ -8,6 +8,65 @@
 
 ---
 
+## 🧭 Ordem de trabalho PROPOSTA — SLA/ledger → destravar F4 → visão 2 de processos *(2026-08-25)*
+
+> **Status: PROPOSTA, não decidida.** Nasceu da pergunta do dono *"quando começar o arco de
+> processos — depois de terminar a lista?"*. Fica aqui e **em lugar nenhum mais**: a passagem
+> aponta para esta seção em vez de repeti-la, porque duas cópias de um plano divergem, e este
+> repositório já pagou por isso mais de uma vez.
+
+**A premissa que a pergunta trazia não se sustenta, e é o achado principal:** *"terminar a lista
+antes"* acopla coisas que não se tocam. Os resíduos abertos da D14.1 (TTL do `pool_config`,
+`claimed_via`, chaves órfãs do namespace `routing`, cópias do `480_000`) são de **roteamento e
+config**; o F4 é bloqueado por **três outras coisas**, todas declaradas na § *"Ler um processo = ver
+seus CONTATOS em sequência"*. Nenhum item da primeira lista destrava a segunda.
+
+**E não há regressão pressionando** *(conferido por grep em 2026-08-25, não lembrado)*: a Vista
+Processos **existe** — `AnaliseJourneysPage.tsx`, montada como nível de `/analise/sessions`
+(`SessionsPage.tsx:205`), com `/analise/processos` como redirect (`routes.tsx:130`). O F4 é
+**melhoria** (toggle árvore↔cronologia, internas dobradas, pivô explícito), não conserto de buraco.
+Isso rebaixa a urgência dele, e vale registrar contra o impulso de tratá-lo como emergência.
+
+### Critério da ordem: IRREVERSIBILIDADE, não tamanho nem pedido
+
+1. **TTL de `{t}:pool_config:{p}` primeiro** — é o único item aberto que **perde dado que não
+   volta**. Desde a D14 (ii), a expiração da chave grava um **segmento de espera sem alvo**, e o
+   `first_queued_ms` que daria o alvo já foi consumido na saída da fila ⇒ **nenhum deploy conserta
+   depois**. Tela ruim espera; ledger furado não. A (iii) acabou de entregar o instrumento para
+   dimensionar antes de mexer: `by_pool[].sla_unstamped`.
+   ⚠️ **Medir antes de codar, e não confundir exposição com dano** (lição da D14.1): `sla_unstamped`
+   em **0** ⇒ latente, declarar e seguir; **> 0** ⇒ o número é o argumento.
+
+2. **Destravar o F4 — e é medição + decisão, não código.** Meia sessão, e são exatamente os dois
+   bloqueios que o F4 declara:
+   - **rodar o cenário `limite_entrega` (parqueamento)** e reler `spawn_reason`. ⚠️ O *"acesso
+     outbound tem ZERO amostras"* é uma contagem com **dois mundos que ela não separa**: produtor
+     mudo × ninguém rodou o cenário. Repare na data — a **F0 entregou o gate do `collect` em
+     14/08 e a medição `NULL 349 · trigger 71` é do MESMO dia**. Zero medido logo depois de ligar o
+     produtor não é evidência de produtor mudo. A mesma rodada responde o `delegate = 0` não
+     explicado (`webhook.py:1604`).
+   - **decidir o texto `contatos` × `acessos do cliente`** (decisão do dono, sem código). Sem ela o
+     cabeçalho do F4 diz *"contatos 4"* para quem nos procurou 2 vezes.
+
+   **Construir o F4 antes disso repete a armadilha que a F3 JÁ PAGOU:** as colunas ANI/DNIS foram
+   construídas e depois removidas por não terem população que as exercitasse.
+
+3. **F4 junto dos resíduos da F3** — são a **mesma superfície**, e numa passada só custam bem menos
+   que em duas: `/analise/sessions?session_id=…` ignorado (três telas linkam para lá), filtro por
+   direção de verdade (o seletor removido era falso), e as duas páginas mortas (`ContactsPage.tsx`,
+   `AnaliseContatosPage.tsx`).
+
+### O que mudaria esta ordem
+
+- **Inverter 1 e 2** é defensável se o negócio estiver pedindo o processo — o custo é o ledger seguir
+  furando enquanto isso, e ele é mensurável (`sla_unstamped`). **Inverter 2 e 3 não é**: é construir a
+  tela antes de saber se a classe de linha tem população.
+- `sla_unstamped = 0` medido no passo 1 rebaixa o item 1 na hora, e o 2 sobe.
+- Amostra de `collect` aparecendo no passo 2 **fecha** o bloqueio principal do F4 e o torna a fatia
+  óbvia seguinte.
+
+---
+
 ## ⚠️ Direção REVERTIDA em 2026-08-18 — leia antes de pegar qualquer item daqui
 
 A decisão de direção do n8n de 2026-08-17 — alvo *"todo skill associado a um pool passa a ser autorado
@@ -1683,18 +1742,31 @@ Não se cria campo para alimentar tela que não lê.
 
 **Trabalho que a decisão gera, em ordem, e nada dele é a D14 ainda:**
 
-1. **Contrato** — `schemas/src/agent-registry.ts:390` afirma *"mede o atendimento como um todo"*.
-   É a fonte canônica e está errada; corrigir primeiro (comentário que promete o que ninguém impõe,
-   mesma família do DDL de `participation_intervals`).
-2. **Rótulo** — `configRecursos.json:29` nos DOIS locales; `slaHint` passa a dizer espera em fila.
+1. ✅ **Contrato — FEITO** *(conferido por grep em 2026-08-25; esta linha dizia "pendente")*.
+   `schemas/src/agent-registry.ts:322-328` já traz o comentário corrigido, incluindo a nota de que a
+   afirmação anterior (*"mede o atendimento como um todo"*) **nunca teve consumidor** e o aviso de
+   não reintroduzir a leitura sem criar o campo que a suporte. O campo irmão (`:416`) declara a
+   ortogonalidade. **Item era eco de plano, não estado.**
+2. ✅ **Rótulo — FEITO** *(conferido por grep em 2026-08-25)*. `configRecursos.json:22` diz *"Alvo de
+   espera em fila (ms)"* e o `slaHint` (`:29`) já separa alvo × teto por extenso. ⏳ **Não conferido:
+   o locale `en`** — o item pedia os DOIS, e só o `pt-BR` foi medido.
 3. ✅ **Default nomeado e barulhento (2026-08-24)** — não eram dois, são **sete** sites. Feito:
    `SLA_TARGET_MS_FALLBACK` em `routing-engine/models.py`, citado por `kafka_listener.py` e
    `registry.py`, os dois agora **logando** quando o fallback dispara (o campo é obrigatório no
    contrato Zod, então o ramo só existe para evento malformado — e fabricar alvo de espera em
    silêncio alimenta aging, breach, ETA ao cliente e aderência de SLA). `supervisor.ts` ficou
    comentado, não alterado: é contrato de tool MCP com consumidores não mapeados.
-   ⏳ **Restam 3 cópias, cada uma com dono diferente:** `orchestrator-bridge/instance_bootstrap.py:709`
-   (placeholder do bootstrap) · `mcp-server/tools/bpm.ts:281` · `config-api/seed.py:158`.
+   ⏳ **Restam cópias — mas a contagem "3" estava ERRADA nos dois sentidos** *(medido por grep em
+   2026-08-25)*:
+   · `orchestrator-bridge/instance_bootstrap.py:709` — ✅ **existe**, é o placeholder do bootstrap e é
+     a única cópia legítima em aberto;
+   · `mcp-server/tools/bpm.ts:281` — ❌ **NÃO EXISTE**: o arquivo não tem nenhuma ocorrência de
+     `sla_target_ms`. Ou já saiu, ou a referência nasceu errada;
+   · `config-api/seed.py:158` — ⚠️ **não é cópia do default**: é o VALOR semeado da chave
+     `sla_default_ms`, que é o órfão sem leitor logo abaixo. Contá-la aqui dobrava o mesmo item em
+     duas listas;
+   · 🆕 `orchestrator-bridge/registry_syncer.py:19` — **quarta ocorrência, que a lista não tinha**
+     (exemplo de YAML em docstring). Inócua, registrada para a contagem fechar.
    🔴 **E um achado que não é duplicação: `sla_default_ms` NÃO TEM LEITOR.**
    `routing_config.get("sla_default_ms")` não aparece fora dos testes — a chave é semeada
    (`config-api/seed.py:157`), cacheada (`routing_config.py:47`), emitida
@@ -2059,6 +2131,10 @@ trocar a ordem custa zero.
     (importada em `routes.tsx`, mas `analise/contatos` é `Navigate`). Não removidas junto por
     disciplina de escopo — a F3 já tinha aberto três fatias não previstas.
 - **F4** · visão 2 (pivô, árvore/cronologia num componente com toggle, internas dobradas).
+  ⏳ **Ordem e pré-requisitos: ver § "🧭 Ordem de trabalho PROPOSTA" no topo deste arquivo.** Resumo de
+  uma linha, para não duplicar o plano: o F4 **não é bloqueado** pelos resíduos da D14.1, e sim por
+  uma **medição** (rodar `limite_entrega` e reler `spawn_reason`) e uma **decisão de texto**
+  (`contatos` × `acessos do cliente`) — as duas baratas, as duas antes de renderizar.
 - **F5** · `ContextStorePersister` — fase própria, desenho fechado no ADR §3 (mascarado, estado final,
   ctx de processo a cada close, foto inteira).
 
