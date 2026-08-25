@@ -427,6 +427,7 @@ CREATE TABLE IF NOT EXISTS {db}.segments
     escalation_reason  Nullable(String),
     wrapup_summary     Nullable(String),
     wrapup_next_steps  Nullable(String),
+    sla_target_ms      Nullable(Int64),
     conference_id      Nullable(String),
     ingested_at        DateTime DEFAULT now(),
     date               Date,
@@ -498,6 +499,34 @@ _DDL_SEGMENTS_MIGRATE_WRAPUP_SUMMARY = (
 )
 _DDL_SEGMENTS_MIGRATE_WRAPUP_NEXT_STEPS = (
     "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS wrapup_next_steps Nullable(String)"
+)
+
+# D14 (ii), 2026-08-24: alvo de espera por SEGMENTO.
+#
+# ── Por que a coluna existe aqui, e não só em `sessions` ─────────────────────────
+# SLA é fato do segmento de ESPERA, nunca da sessão. Uma sessão carrega UM alvo,
+# então contato que espera 30 s numa fila (alvo 300 s), é transferido e espera
+# 120 s noutra (alvo 60 s) só registra um dos dois — a violação da segunda fica
+# invisível, e a média mistura populações não comparáveis.
+#
+# Medido no `retencao_humano` depois da (i): 48 esperas = 5 abertas + **10 SEM
+# ALVO** + 33 julgáveis. As 10 pertencem a sessões cujo `sessions.sla_target_ms`
+# é 0/NULL **enquanto o pool tem 300 000 ms configurado e a espera aconteceu
+# naquele pool** — 23% das esperas concluídas injulgáveis por o alvo estar
+# guardado na entidade errada.
+#
+# ── O que NULL significa, e depende da linha ────────────────────────────────────
+#   role='queue'  → não havia alvo conhecível quando a espera fechou (config
+#                   ausente do cache, ou pool sem alvo). Injulgável, honestamente.
+#   demais roles  → este segmento não mede espera. Ausência por construção.
+# Nunca `0`: o contrato do pool é `.positive()`, e zero faria a espera parecer
+# violada por construção.
+#
+# ⚠️ `sessions.sla_target_ms` NÃO é removida — vira PROJEÇÃO. Migrar os três
+# leitores (`query.py:240` · `reports_query.py:3803` · `_sla_eligible`) é a fatia
+# (iii), deliberadamente fora desta.
+_DDL_SEGMENTS_MIGRATE_SLA_TARGET = (
+    "ALTER TABLE {db}.segments ADD COLUMN IF NOT EXISTS sla_target_ms Nullable(Int64)"
 )
 
 # ── Arc 5: session_timeline — time-series events tied to segments.
@@ -1137,6 +1166,7 @@ _MIGRATIONS = [
     _DDL_SEGMENTS_MIGRATE_ESCALATION,     # F7: escalation_reason normalizado por segmento
     _DDL_SEGMENTS_MIGRATE_WRAPUP_SUMMARY,    # prosa do wrap-up (antes descartada quando resolved)
     _DDL_SEGMENTS_MIGRATE_WRAPUP_NEXT_STEPS,
+    _DDL_SEGMENTS_MIGRATE_SLA_TARGET,     # D14 (ii): alvo de espera no SEGMENTO, não na sessão
     # Quality substrate isolation (ADR) — passo 1: origin (live|import|reeval) no substrato.
     _DDL_SESSIONS_MIGRATE_ORIGIN_CLASS,
     _DDL_SEGMENTS_MIGRATE_ORIGIN_CLASS,
@@ -1660,6 +1690,7 @@ class AnalyticsStore:
         "started_at", "ended_at", "duration_ms",
         "outcome", "close_reason", "handoff_reason", "issue_status",
         "escalation_reason", "wrapup_summary", "wrapup_next_steps",
+        "sla_target_ms",   # D14 (ii): alvo de ESPERA, só em role='queue'
         "conference_id", "date",
         "origin",   # substrate isolation (ADR)
     ]
@@ -2370,6 +2401,50 @@ def _participation_row(d: dict) -> list:
     ]
 
 
+def _wait_sla_target(d: dict) -> int | None:
+    """
+    Alvo de espera do segmento — `None` quando não há alvo conhecível (D14 ii).
+
+    ⚠️ **Não é `d.get(...) or None`**, embora o resto deste row builder use essa
+    forma. Truthiness sobre número mapeia `0` e `None` para a mesma saída *sem
+    dizer que o fez*, e aqui os dois casos têm causas diferentes que interessam:
+    ausência é o caminho normal (segmento que não é espera, ou config fora do
+    cache), enquanto um `0` que chegou até aqui significa que ALGUM produtor
+    escapou do predicado `resolve_sla_target_ms` — que é exatamente a espécie de
+    coisa que precisa ficar barulhenta em vez de virar `NULL` no meio de milhares.
+
+    O piso é o mesmo do contrato do pool (`.positive()`): zero não é um alvo
+    instantâneo, é ausência disfarçada.
+    """
+    raw = d.get("sla_target_ms")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        # `bool` é `int` em Python: sem esta guarda, `true` viraria alvo de 1 ms.
+        logger.warning(
+            "segments.sla_target_ms com tipo BOOLEANO (%r) — recusado. "
+            "segment=%s session=%s", raw, d.get("segment_id"), d.get("session_id"),
+        )
+        return None
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "segments.sla_target_ms ilegível (%r) — segmento gravado SEM alvo. "
+            "segment=%s session=%s", raw, d.get("segment_id"), d.get("session_id"),
+        )
+        return None
+    if val <= 0:
+        logger.warning(
+            "segments.sla_target_ms NÃO-POSITIVO (%d) — segmento gravado sem alvo. "
+            "O produtor deveria ter aplicado `resolve_sla_target_ms` e enviado "
+            "null; se esta linha aparecer, há um produtor fora do predicado. "
+            "segment=%s session=%s", val, d.get("segment_id"), d.get("session_id"),
+        )
+        return None
+    return val
+
+
 def _segment_row(d: dict) -> list:
     """Row builder for the segments table (Arc 5 — ContactSegment)."""
     ts         = d.get("timestamp") or d.get("joined_at")
@@ -2407,6 +2482,7 @@ def _segment_row(d: dict) -> list:
         d.get("escalation_reason") or None,
         d.get("wrapup_summary") or None,
         d.get("wrapup_next_steps") or None,
+        _wait_sla_target(d),
         d.get("conference_id") or None,
         _today_utc(ts),
         d.get("origin") or "live",   # substrate isolation (ADR)

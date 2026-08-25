@@ -222,6 +222,26 @@ def resolve_agent_type(instance: "AgentInstance", pool_id: str) -> str:
 # Never access PostgreSQL directly.
 # ─────────────────────────────────────────────
 
+def pool_config_key(tenant_id: str, pool_id: str) -> str:
+    """
+    Cache de config do pool — alimentado pelo `kafka_listener` a partir de
+    `pool.registered`/`pool.updated`. Fonte autoritativa de config no
+    routing-engine (ver `registry.refresh_pool_snapshot`).
+
+    ── Por que o formato mora AQUI, e não no `registry` (D14 ii, 2026-08-24) ─────
+    O `registry` importa de `mute_queue` (`registry.py:42`), então `mute_queue`
+    **não pode** importar do `registry` — e é o `mute_queue` quem precisa da chave
+    para carimbar o alvo de espera no segmento (`resolve_queue_exit`).
+
+    A saída errada seria escrever o formato uma segunda vez lá; `models` não
+    importa nada e já hospeda `resolve_sla_target_ms`, então é aqui que a
+    definição fica ÚNICA. Duas grafias da mesma chave é a família de defeito que
+    esta seção inteira existe para não repetir: a divergência não fica vermelha,
+    ela devolve `None` e vira "pool sem alvo".
+    """
+    return f"{tenant_id}:pool_config:{pool_id}"
+
+
 # FALLBACK de `sla_target_ms`, **não** o default do produto (D14.1, 2026-08-24).
 #
 # O default do produto são os 30 s do formulário (`platform-ui/PoolsPage.tsx`); este

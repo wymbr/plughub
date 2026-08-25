@@ -2,6 +2,78 @@
 
 ---
 
+## O alvo de SLA vira fato do SEGMENTO de espera — D14 (ii) (2026-08-24)
+
+Sucede a fatia do predicado (abaixo), que entrou **antes de propósito**: a (ii) carimba o alvo no
+ledger, e alvo carimbado errado deixa de ser corrigível por deploy.
+
+### O que estava errado
+
+`sla_target_ms` era coluna de `sessions` apenas. Uma sessão carrega **um** alvo ⇒ contato que espera
+em duas filas perde a violação da segunda, e a média mistura populações não comparáveis. Medido no
+`retencao_humano` depois da (i): **48 esperas = 5 abertas + 10 SEM ALVO + 33 julgáveis**. As 10 são de
+sessões com `sessions.sla_target_ms` 0/NULL **enquanto o pool tem 300 000 ms configurado e a espera
+aconteceu naquele pool** — 23% das esperas concluídas daquele pool injulgáveis por o alvo morar na
+entidade errada. O argumento de domínio virou contagem.
+
+### Duas decisões do dono, tomadas antes de codar
+
+1. **Pool de IA tem alvo?** — sim: *espera é espera*, sem ramo por `agent_kind`. Fecha a sub-pergunta
+   da D14.1 aberta desde 08-24 (dos 63 segmentos `role='queue'`, 19 eram de pools de IA). Gravado
+   como teste para não ser reaberto por engano.
+2. **Copiado no fechamento**, não resolvido na leitura. Só a cópia guarda "o alvo do dia"; resolver na
+   leitura re-leria a config de hoje para julgar ontem, reescrevendo a conformidade histórica sem
+   rastro.
+
+### Conserto
+
+`mute_queue.resolve_wait_sla_target_ms()` resolve o alvo do `{t}:pool_config:{p}` e
+`resolve_queue_exit` o carimba no `participant_left` que já publicava. Nova coluna
+`analytics.segments.sla_target_ms` (`Nullable(Int64)`, ALTER idempotente em `_ALL_DDL`), mais o campo
+no `ConversationParticipantEventSchema` (piso `.positive()`, nulável).
+
+**Um site, não seis.** `resolve_queue_exit` tem seis chamadores; passar o alvo por parâmetro faria o
+campo ser derivado em seis lugares — o defeito que a fatia anterior desfez em quatro. **Sem
+`SLA_TARGET_MS_FALLBACK`**: o cache expira (TTL medido **3 593 s**), então ausência é rotina com
+gatilho de relógio, e fabricar 480 s gravaria no ledger um número com cara de config do tenant.
+
+`models.pool_config_key()` nasceu porque `registry` importa `mute_queue` e o inverso criaria ciclo —
+a alternativa era grafar a chave duas vezes, que não fica vermelha: devolve `None` e vira "pool sem
+alvo".
+
+### O ponto cego era o consumidor
+
+`parse_participant_event` é uma **allowlist**: campo fora do dict é descartado em silêncio ⇒ produtor
+correto, consumidor verde, coluna `NULL`. Tem teste próprio.
+
+### Medições
+
+| o quê | previsto | medido |
+|---|---|---|
+| routing-engine | `1 failed, 284 passed` | igual (o vermelho é o `claimed_via`, anterior) |
+| analytics-api | `595 passed` (584 baseline + 11) | igual |
+| mutação: fallback no ramo de ausência | `2 failed, 283` | igual, vermelho no teste nomeado |
+| mutação: campo fora da allowlist | `2 failed, 593` | igual, os dois testes do parser |
+| E2E em tráfego | `sla_target_ms=300000` | igual (`duration_ms=10 065`, 5 linhas antigas `\N`) |
+
+Falseabilidade por **mutação deliberada**, nunca `git stash` (no-op com a fatia em disco), com
+preflight `inspect.getsource` da função carregada nas duas rodadas.
+
+**Achado de instrumento:** a testemunha negativa do parser usava indexação e levantava `KeyError` ao
+perder a chave — reprovava medindo **presença**, não a proposição declarada. Corrigida para `.get()`.
+
+### O que esta fatia NÃO faz
+
+⚠️ **Forward-only**: linha antiga fica `NULL`, sem migração possível (o `first_queued_ms` já foi
+consumido). ⚠️ **Ninguém lê ainda**: `query.py:240`, `reports_query.py:3803` e `_sla_eligible` seguem
+lendo `sessions.sla_target_ms`, que passa a ser **PROJEÇÃO, nunca fonte de cálculo**. Migrá-los é a
+(iii), fatia própria. **Nenhum número de conformidade se moveu** — quem esperar isso concluirá que a
+mudança não pegou.
+
+Detalhe: [`docs/guias/conference-mechanics.md`](docs/guias/conference-mechanics.md) § Mudança 41.
+
+---
+
 ## `sla_target_ms` passa a ter UM predicado — e a ETA para de publicar 0 ms ao cliente (2026-08-24)
 
 A fatia foi aberta como *"os dois escritores discordam sobre o `0`"*. Ao medir por derivação (não por

@@ -36,7 +36,7 @@ import redis.asyncio as aioredis
 
 from .models import (
     AgentInstance, InstanceMeta, PoolConfig, QueuedContact, RoutingExpression,
-    SLA_TARGET_MS_FALLBACK, resolve_sla_target_ms,
+    SLA_TARGET_MS_FALLBACK, pool_config_key, resolve_sla_target_ms,
 )
 from .config import get_settings
 from .mute_queue import first_queued_key, _TTL_S as _FIRST_QUEUED_TTL_S
@@ -80,8 +80,14 @@ def _pool_busy_instances_key(tenant_id: str, pool_id: str) -> str:
 # Não ressuscitar: um contador paralelo à fonte diverge por construção.
 
 def _pool_config_key(tenant_id: str, pool_id: str) -> str:
-    """Pool configuration cache — populated by kafka_listener."""
-    return f"{tenant_id}:pool_config:{pool_id}"
+    """Pool configuration cache — populated by kafka_listener.
+
+    DELEGA para `models.pool_config_key`: o formato da chave é definido lá (e não
+    aqui) porque o `mute_queue` também precisa dele e não pode importar este
+    módulo — ver o docstring de lá. Este alias sobrevive só para não espalhar diff
+    pelos cinco call sites internos.
+    """
+    return pool_config_key(tenant_id, pool_id)
 
 def _pool_set_key(tenant_id: str) -> str:
     """Set of all pool_ids for the tenant."""

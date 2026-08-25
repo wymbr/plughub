@@ -38,10 +38,12 @@ config.changed).
 """
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
 
+from .models import pool_config_key, resolve_sla_target_ms
 from .routing_config import routing_config
 
 logger = logging.getLogger("plughub.routing.mute_queue")
@@ -225,6 +227,75 @@ def queue_wait_segment_id(tenant_id: str, session_id: str,
     ))
 
 
+async def resolve_wait_sla_target_ms(redis_client, tenant_id: str, pool_id: str) -> int | None:
+    """
+    Alvo de espera do pool onde a espera aconteceu, em ms — ou `None`.
+
+    ── Por que a resolução mora AQUI, e não nos chamadores (D14 ii) ──────────────
+    `resolve_queue_exit` tem **seis** chamadores (`main.py:288,591,1456` ·
+    `kafka_listener.py:177,713,764`). Receber o alvo por parâmetro faria o campo
+    ser DERIVADO em seis lugares, que é literalmente o defeito que a fatia do
+    predicado (2026-08-24) acabou de desfazer em quatro. Um site.
+
+    ── Fonte: `{t}:pool_config:{p}`, e o que isso implica ───────────────────────
+    É o cache que o `kafka_listener` alimenta de `pool.registered`/`pool.updated`
+    — a mesma fonte que `refresh_pool_snapshot` trata como autoritativa. Não é o
+    snapshot: snapshot é PUBLICAÇÃO derivada, e carimbar o ledger a partir de uma
+    projeção deixaria o alvo depender de quando alguém escreveu um snapshot.
+
+    ⚠️ **A chave EXPIRA** (TTL efetivo medido: 1 h, escrito pelo bridge — ver o
+    item de backlog dos dois escritores com TTLs diferentes). Chave expirada ⇒
+    alvo ausente ⇒ carimbo `null`. Isso é ausência HONESTA e é o comportamento
+    desejado: o contrário — fabricar `SLA_TARGET_MS_FALLBACK` — gravaria 480 s no
+    ledger como se fosse config do tenant, e alvo carimbado errado **não é
+    corrigível por deploy**, só por migração. É por isso que o fallback NÃO é
+    aplicado neste call site, embora `models` o ofereça.
+
+    ── Não há ramo por `agent_kind` (decisão do dono, 2026-08-24) ───────────────
+    Sub-pergunta da D14.1: dos 63 segmentos `role='queue'` medidos, 19 estavam em
+    pools de IA. Decidido que **espera é espera** — qualquer fila carrega o alvo
+    do seu pool, e o rótulo perde o "humana". Um pool de IA sem alvo configurado
+    cai no ramo de ausência acima, como qualquer outro.
+    """
+    try:
+        raw_cfg = _decode(await redis_client.get(pool_config_key(tenant_id, pool_id)))
+    except Exception as exc:
+        # Degradação NUNCA silenciosa: sem isto, uma falha de Redis viraria
+        # "pool sem alvo" e a espera ficaria injulgável sem nada dizer por quê.
+        logger.warning(
+            "queue exit: falha ao ler pool_config para o alvo de espera "
+            "pool=%s tenant=%s — %s. O segmento sai SEM alvo.",
+            pool_id, tenant_id, exc,
+        )
+        return None
+
+    if not raw_cfg:
+        logger.warning(
+            "queue exit: pool_config AUSENTE (pool=%s tenant=%s) — segmento de "
+            "espera sai sem alvo. Chave expirada ou pool fora do cache do "
+            "kafka_listener (pool.registered não chegou?).",
+            pool_id, tenant_id,
+        )
+        return None
+
+    try:
+        cfg = json.loads(raw_cfg) or {}
+    except Exception as exc:
+        logger.warning(
+            "queue exit: pool_config ILEGÍVEL (pool=%s tenant=%s) — %s. O segmento "
+            "sai sem alvo.", pool_id, tenant_id, exc,
+        )
+        return None
+
+    # Predicado ÚNICO — nunca `0`, nunca fabricado; ele mesmo loga qual violação foi.
+    return resolve_sla_target_ms(
+        cfg.get("sla_target_ms"),
+        where     = "queue_wait_segment",
+        pool_id   = pool_id,
+        tenant_id = tenant_id,
+    )
+
+
 async def resolve_queue_exit(
     redis_client,
     producer,
@@ -328,6 +399,15 @@ async def resolve_queue_exit(
     duration_ms = max(0, now_ms - first_ms)
     joined_iso  = datetime.fromtimestamp(first_ms / 1000, tz=timezone.utc).isoformat()
 
+    # D14 (ii): o alvo é COPIADO para o ledger no fechamento da espera, não
+    # resolvido na leitura. Decisão do dono (2026-08-24), e o motivo é que só a
+    # cópia guarda "o alvo do dia": resolver na leitura re-lê a config de HOJE
+    # para julgar ONTEM, então mudar o alvo de um pool reescreveria toda a
+    # conformidade histórica sem deixar rastro. É a mesma denormalização que o
+    # routing já faz para `sessions.sla_target_ms` — que a partir daqui é
+    # PROJEÇÃO, nunca fonte de cálculo.
+    sla_target_ms = await resolve_wait_sla_target_ms(redis_client, tenant_id, pool_id)
+
     try:
         # ── `key=session_id` — mesma correção do bridge (2026-08-18), que faltava
         # AQUI (medido 2026-08-28) ────────────────────────────────────────────────
@@ -372,13 +452,21 @@ async def resolve_queue_exit(
             "duration_ms":    duration_ms,
             "outcome":        outcome,
             "close_reason":   close_reason,
+            # `None` = não há alvo conhecível para esta espera. NUNCA `0`: o
+            # contrato do pool é `.positive()`, então zero não é configurável, e
+            # preservá-lo faria a espera parecer violada por construção.
+            "sla_target_ms":  sla_target_ms,
         })
         # "queue exit", não "mute queue exit": a função cobre os DOIS tiers desde a
         # D12, e desde a fatia B cobre também o max_wait. Log que descreve escopo
         # menor que o do código é a mesma armadilha do nome antigo da função.
         logger.info(
-            "queue exit: session=%s pool=%s outcome=%s close_reason=%s wait_ms=%d",
+            "queue exit: session=%s pool=%s outcome=%s close_reason=%s wait_ms=%d "
+            "sla_target_ms=%s",
             session_id, pool_id, outcome, close_reason or "-", duration_ms,
+            # `-` e não `0`: a linha de log é lida por humano depurando, e um zero
+            # aqui seria indistinguível de alvo configurado como zero.
+            sla_target_ms if sla_target_ms is not None else "-",
         )
     except Exception as exc:
         logger.warning(

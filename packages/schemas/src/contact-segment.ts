@@ -136,6 +136,21 @@ export const ConversationParticipantEventSchema = z.object({
   escalation_reason: z.string().nullable().optional(),   // F7
   wrapup_summary:    z.string().nullable().optional(),   // prosa do wrap-up, sempre gravada
   wrapup_next_steps: z.string().nullable().optional(),
+
+  // ── D14 (ii), 2026-08-24: alvo de espera COPIADO no fechamento da espera.
+  //
+  // Só o segmento `role='queue'` o carrega — é ele que mede espera. `null` num
+  // segmento de atendimento significa "este segmento não é uma espera", e num
+  // segmento de fila significa "não havia alvo conhecível quando ela fechou".
+  //
+  // Piso `.positive()`, igual ao contrato do pool (`agent-registry.ts:328`) e ao
+  // `sla_target_ms` do `QueuePositionUpdatedEventSchema`: `0` não é alvo, é
+  // ausência disfarçada — e preservá-lo faria toda espera parecer violada.
+  //
+  // SLA é fato do SEGMENTO DE ESPERA, nunca da sessão: uma sessão carrega UM
+  // alvo, então contato que espera em duas filas perde a violação da segunda.
+  // `sessions.sla_target_ms` passa a ser PROJEÇÃO, nunca fonte de cálculo.
+  sla_target_ms:     z.number().int().positive().nullable().optional(),
 })
 
 export type ConversationParticipantEvent = z.infer<typeof ConversationParticipantEventSchema>

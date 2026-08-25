@@ -950,6 +950,17 @@ def parse_participant_event(payload: dict[str, Any]) -> list[dict] | None:
         # Prosa do wrap-up — sempre gravada, inclusive quando resolvido (fix 2026-07-30).
         "wrapup_summary":    payload.get("wrapup_summary") or None,
         "wrapup_next_steps": payload.get("wrapup_next_steps") or None,
+        # D14 (ii): alvo de ESPERA copiado pelo produtor no fechamento da espera
+        # (`mute_queue.resolve_queue_exit`). Só `role='queue'` o traz.
+        #
+        # ⚠️ Pass-through CRU de propósito — a normalização (não-positivo, bool,
+        # ilegível → NULL **com log**) vive em `clickhouse._wait_sla_target`, que
+        # é o funil por onde TODO escritor de `segments` passa. Normalizar aqui
+        # também daria duas respostas para a mesma pergunta.
+        #
+        # ⚠️ Este dicionário é uma ALLOWLIST: campo que não estiver aqui é
+        # descartado em silêncio e a coluna nasce NULL com o pipeline verde.
+        "sla_target_ms":     payload.get("sla_target_ms"),
         "timestamp":         payload.get("timestamp") or _now(),
         # Substrate isolation: procedência derivada do source (live|import|reeval).
         "origin":            origin_from_source(payload.get("source")),

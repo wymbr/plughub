@@ -883,10 +883,19 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   >
   > **Emenda D10.1 + D14 (aceitas 2026-08-28).** **D14: SLA é fato do SEGMENTO DE ESPERA, nunca da
   > sessão** — não existe SLA por sessão na prática de contact center, e somar esperas contra alvos
-  > diferentes dá número sem uso. Hoje `sla_target_ms` é **coluna de `sessions`** e os **três** leitores
-  > de SLA do repo leem dali (`query.py:240`, `reports_query.py:3802`, `:5743`); uma sessão carrega **um**
-  > alvo, então contato que espera em duas filas perde a violação da segunda. É a regra de escopo outra
-  > vez. **D10.1: o `pool_id` do segmento de ESPERA é o DESTINO** (é a dimensão do Fila/SLA —
+  > diferentes dá número sem uso. Uma sessão carrega **um** alvo, então contato que espera em duas
+  > filas perde a violação da segunda. É a regra de escopo outra vez.
+  > **✅ ESCRITA fechada em 2026-08-24 — LEITURA não.** `analytics.segments.sla_target_ms` existe e é
+  > carimbada na saída da fila por `mute_queue.resolve_queue_exit` (um site, a partir do
+  > `{t}:pool_config:{p}`; **sem fallback** — ausência vira `null`, porque o cache expira em ~1 h e
+  > alvo fabricado no ledger não se corrige por deploy). Alvo **copiado no fechamento**, e vale para
+  > **qualquer fila**, sem ramo por `agent_kind` (as duas decisões do dono, D14 ii). Mas os **três**
+  > leitores (`query.py:240` · `reports_query.py:3803` · `_sla_eligible` em `:5901`) seguem lendo
+  > `sessions.sla_target_ms`, que a partir daqui é **PROJEÇÃO, nunca fonte de cálculo** — migrá-los é
+  > a **(iii)**, pendente. ⚠️ É **forward-only**: linha antiga fica `NULL` e não há migração possível
+  > (o `first_queued_ms` é consumido na saída), logo a (iii) tem de decidir explicitamente entre
+  > fallback à sessão durante a transição × corte de série em data declarada. Ver
+  > `conference-mechanics.md` § Mudança 41. **D10.1: o `pool_id` do segmento de ESPERA é o DESTINO** (é a dimensão do Fila/SLA —
   > `reports_query.py:5741` — e movê-lo para o pool de fila colapsaria todas as esperas numa linha, já
   > que a fila é a default do tenant); a fila que executou vai em campo **próprio** (`queue_pool_id`).
   > *"Pool de fila sempre distinto do destino"* não é modelo alternativo: é o estado-alvo da CONFIG, que

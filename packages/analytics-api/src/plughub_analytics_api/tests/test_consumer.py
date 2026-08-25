@@ -519,6 +519,47 @@ class TestParseParticipantEvent:
         seg = next(r for r in rows if r["table"] == "segments")
         assert seg.get("escalation_reason") is None
 
+    # ── D14 (ii): alvo de espera carimbado no SEGMENTO ───────────────────────
+    #
+    # ⚠️ Este parser é uma **ALLOWLIST**. Campo que o produtor envie e que não
+    # esteja no dict é descartado em silêncio: a coluna nasce NULL com o produtor
+    # correto, o consumidor verde e nada vermelho em lugar nenhum. É o modo de
+    # falha mais barato desta fatia inteira, e é o que os dois testes abaixo
+    # existem para pegar.
+
+    def test_sla_target_ms_survives_the_allowlist(self):
+        payload = self._left_payload()
+        payload["role"] = "queue"
+        payload["sla_target_ms"] = 300_000
+        rows = parse_participant_event(payload)
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg["sla_target_ms"] == 300_000, (
+            "o alvo não atravessou o parser — a allowlist o descartou e a coluna "
+            "nasceria NULL com todo o pipeline verde"
+        )
+
+    def test_sla_target_ms_absent_is_none_not_zero(self):
+        """
+        TESTEMUNHA NEGATIVA do teste acima. Segmento que não é espera não tem
+        alvo — e a ausência tem de chegar como `None`, nunca `0`.
+
+        Se alguém "consertar" isto com `payload.get("sla_target_ms", 0)` ou com
+        `or 0`, todo segmento de atendimento passaria a declarar alvo zero, e
+        toda espera do relatório viraria violação.
+
+        ⚠️ `.get()`, não indexação — e a diferença foi MEDIDA, não estilo. Com
+        `seg["sla_target_ms"]` este teste levantava `KeyError` quando o campo
+        saía da allowlist, ou seja, reprovava por **presença de chave** em vez da
+        proposição que ele declara. Reprovar pelo motivo errado é o mesmo defeito
+        que passar pelo motivo errado: presença é trabalho do teste acima, e
+        misturar os dois deixaria a suíte sem quem responda "ausente vira None?".
+        """
+        rows = parse_participant_event(self._left_payload())   # role='primary'
+        seg = next(r for r in rows if r["table"] == "segments")
+        assert seg.get("sla_target_ms") is None, (
+            f"segmento sem espera saiu com alvo {seg.get('sla_target_ms')!r}"
+        )
+
     def test_conference_id_propagated(self):
         rows = parse_participant_event(self._joined_payload(conference_id="conf-abc"))
         assert rows is not None

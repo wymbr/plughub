@@ -1491,13 +1491,32 @@ somar esperas contra alvos diferentes dá número sem uso prático.
 **Não medido:** a população atual não tem caso de duas filas, então o defeito é dedutivo, não
 observado.
 
-⏳ **A decidir antes de codar:** alvo **copiado** para o segmento no fechamento da espera (denormalização
-simétrica à que o routing já faz para a sessão — sobrevive a mudança de config, guarda "o alvo do dia")
-× **resolvido na leitura** pelo pool de destino do segmento (não duplica dado, mas re-lê config de hoje
-para medir ontem). `sessions.sla_target_ms` fica como **projeção**, nunca fonte de cálculo.
+✅ **(ii) ENTREGUE em 2026-08-24** (`CHANGELOG.md`; `conference-mechanics.md` § Mudança 41). Coluna
+`analytics.segments.sla_target_ms`, carimbada por `mute_queue.resolve_queue_exit` a partir do
+`{t}:pool_config:{p}`. **As duas decisões do dono, tomadas antes de codar:**
+  1. **pool de IA TEM alvo** — *espera é espera*, sem ramo por `agent_kind`. Fecha a sub-pergunta da
+     D14.1 (§ abaixo), aberta desde 08-24. Gravado como teste (`test_ai_pool_also_carries_a_target`)
+     para não ser reaberta por engano.
+  2. **copiado no fechamento**, não resolvido na leitura — só a cópia guarda "o alvo do dia".
+Gates: `test_queue_wait_sla_stamp.py` (6, routing-engine) + `test_segment_sla_column.py` (9) + 2 no
+`test_consumer.py`. Falseabilidade por **mutação** em ambos os lados (produtor: `2 failed, 283`;
+allowlist do parser: `2 failed, 593`). E2E em tráfego real: espera de 10 065 ms com
+`sla_target_ms=300 000`, contra 5 esperas anteriores em `\N`.
 
-⚠️ **Os números de conformidade VÃO mudar** — contar antes, por pool, e declarar. Migrar os três
-leitores é fatia própria; não entra no P2.
+⚠️ **É forward-only.** Linha antiga fica `NULL` e **não há migração possível** — o `first_queued_ms`
+que daria o alvo é consumido na saída da fila. As 10 esperas injulgáveis medidas acima continuam
+injulgáveis; o conserto vale para tráfego novo.
+
+⚠️ **Os números de conformidade NÃO mudaram com a (ii)** — e isso é o esperado, não sintoma. Os três
+leitores seguem lendo `sessions.sla_target_ms` (que a partir daqui é **projeção**, nunca fonte de
+cálculo). É na **(iii)** que os números se movem: contar antes, por pool, e declarar.
+
+⏳ **(iii) PENDENTE, fatia própria** — migrar `query.py:240` · `reports_query.py:3803` ·
+`_sla_eligible` (`reports_query.py:5901`) para o alvo do segmento. ⚠️ **Cuidado de ordem:** enquanto
+houver linha antiga com `NULL`, trocar a fonte muda o denominador (`countIf(sla_target_ms > 0)`) e
+esvazia a série histórica. Decidir se a (iii) lê o segmento **com fallback à sessão** durante a
+transição, ou se corta a série numa data declarada — as duas são defensáveis, mas escolher em silêncio
+não é.
 
 #### ✅ D14.1 DECIDIDA (2026-08-24): `sla_target_ms` := **alvo de ESPERA em fila**
 
@@ -1508,10 +1527,11 @@ fila que leva ao SLA desejado numa fila de espera humana"*.
 desta própria seção (ver § *"O que a medição corrigiu"*): a metade "atendimento total" do inventário
 é **fantasma**, e o campo é consumido em comportamento **só como espera**.
 
-⏳ **Sub-pergunta que a definição abre e que NÃO foi decidida:** o dono disse *"fila humana"*, e o
-mecanismo não distingue — dos 63 segmentos `role='queue'` medidos, **19 estão em pools de IA**.
-Ou "alvo de espera" vale para qualquer fila (e o rótulo perde o "humana"), ou pool de IA não tem
-alvo e os 16 pools de IA da faixa de espera deviam carregar `null`. Decidir antes da D14 (ii).
+✅ **Sub-pergunta DECIDIDA em 2026-08-24, junto com a (ii): "alvo de espera" vale para QUALQUER
+fila** — o rótulo perde o "humana". O dono dissera *"fila humana"* e o mecanismo não distinguia; dos
+63 segmentos `role='queue'` medidos, **19 estavam em pools de IA**. A alternativa (pool de IA carrega
+`null`) foi recusada: o que torna uma espera injulgável passa a ser a CONFIG do pool, nunca o tipo do
+agente. Gravada como teste no produtor, porque decisão que só vive em prosa é reaberta por engano.
 
 ##### O que a medição corrigiu nesta seção
 

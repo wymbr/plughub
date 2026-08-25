@@ -2272,5 +2272,78 @@ julga é o teste (`test_queue_wait_segment.py`, 4 novos, 14 passed).
 
 ---
 
+### Mudança 41 — o alvo de SLA passa a ser fato do segmento de espera, copiado no fechamento (D14 ii, 2026-08-24)
+
+**O que mudou no mecanismo:** `mute_queue.resolve_queue_exit` passou a resolver o alvo de espera do
+pool e a **carimbá-lo no evento** `participant_left` que já publicava. Nova coluna
+`analytics.segments.sla_target_ms` (`Nullable(Int64)`).
+
+**O que havia:** `sla_target_ms` só existia como coluna de `sessions`, escrita por `parse_routed`. Uma
+sessão carrega **um** alvo, então contato que espera 30 s numa fila (alvo 300 s), é transferido e
+espera 120 s noutra (alvo 60 s) registra só um dos dois — a violação da segunda é **invisível**, e a
+média mistura populações não comparáveis. Não é hipótese: medido no `retencao_humano` depois da (i),
+**48 esperas = 5 abertas + 10 SEM ALVO + 33 julgáveis**, e as 10 pertencem a sessões cujo
+`sessions.sla_target_ms` é 0/NULL **enquanto o pool tem 300 000 ms configurado e a espera aconteceu
+naquele pool**. 23% das esperas concluídas daquele pool injulgáveis por o alvo estar guardado na
+entidade errada.
+
+**Um site de derivação, não seis.** `resolve_queue_exit` tem seis chamadores (`main.py:288,591,1456` ·
+`kafka_listener.py:177,713,764`). Receber o alvo por parâmetro faria o campo ser derivado em seis
+lugares — literalmente o defeito que a fatia do predicado (`resolve_sla_target_ms`) acabara de
+desfazer em quatro, dias antes. A resolução mora **dentro** da função.
+
+**Obstáculo estrutural, e por que ele mudou um arquivo terceiro:** `registry.py:42` importa de
+`mute_queue`, então `mute_queue` não pode importar do `registry` — e era lá que vivia
+`_pool_config_key`. Escrever o formato uma segunda vez seria a família de defeito de sempre: duas
+grafias da mesma chave não ficam vermelhas, devolvem `None` e viram "pool sem alvo". O formato passou
+a `models.pool_config_key`, definição única, e o `registry` delega.
+
+**Copiado, não resolvido na leitura** (decisão do dono). Só a cópia guarda "o alvo do dia": resolver na
+leitura re-lê a config de HOJE para julgar ONTEM, e mudar o alvo de um pool reescreveria toda a
+conformidade histórica sem deixar rastro. Preço aceito: alvo carimbado errado **não é corrigível por
+deploy**, só por migração — e é por isso que a fatia do predicado entrou de propósito ANTES desta.
+
+**`SLA_TARGET_MS_FALLBACK` NÃO é aplicado neste call site**, embora `models` o ofereça. O
+`{t}:pool_config:{p}` expira (TTL efetivo medido: **3 593 s**, escrito pelo bridge — o 86 400 do
+routing-engine está morto), logo ausência é **rotina com gatilho de relógio**, não anomalia. Fabricar
+480 s aqui gravaria no ledger um número com cara de config do tenant. Ausente ⇒ `null`, honestamente.
+
+**Sem ramo por `agent_kind`** — sub-pergunta da D14.1, aberta desde 08-24 e agora decidida: **espera é
+espera**. Dos 63 segmentos `role='queue'` medidos, 19 estavam em pools de IA; qualquer fila carrega o
+alvo do seu pool e o rótulo perde o "humana". Gravado como teste para não ser reaberto por engano.
+
+**A allowlist era o ponto cego.** `analytics_api.models.parse_participant_event` monta o `segment_row`
+campo a campo: o que não está no dict é descartado **em silêncio**. Produtor correto, consumidor
+verde, coluna `NULL` — e nada vermelho em lugar nenhum. Tem teste próprio, e a mutação que o comprova
+está descrita abaixo.
+
+**Falseabilidade provada por MUTAÇÃO, não por `git stash`** (que com a fatia em disco é no-op, e verde
+por ausência de mudança é indistinguível de teste que não pode reprovar):
+· fallback vazando no ramo de ausência ⇒ `2 failed, 283 passed`, o vermelho novo sendo exatamente
+  `test_absent_pool_config_stamps_null_never_zero_nor_fallback`;
+· campo fora da allowlist ⇒ `2 failed, 593 passed`, os dois testes do parser.
+Preflight em ambas por `inspect.getsource` da função **carregada** (`MUT`/`ORIG`) — "o build não
+pegou" e "o teste é inútil" produzem os dois um verde e são conclusões opostas.
+
+**Defeito de instrumento achado pela própria mutação:** a testemunha negativa do parser usava
+indexação (`seg["sla_target_ms"]`) e por isso levantava `KeyError` quando o campo saía da allowlist —
+reprovava pelo motivo certo mas medindo **presença de chave**, não a proposição que declara. Corrigida
+para `.get()`. Reprovar pelo motivo errado é o mesmo defeito que passar pelo motivo errado.
+
+**E2E em tráfego real** (00:52 UTC de 2026-08-25): contato que enfileirou em `retencao_humano`,
+`duration_ms=10 065`, **`sla_target_ms=300 000`** — contra as cinco esperas anteriores, todas `\N`,
+que servem de testemunha de que a consulta alcança a população. O `pool_id` da linha é
+`retencao_humano` (o **destino**), não `fila_humano` (quem executou a fila): D10.1 se comportando como
+especificada.
+
+⚠️ **É forward-only e ninguém lê ainda.** Linha antiga fica `NULL` e não há migração possível — o
+`first_queued_ms` que daria o alvo já foi consumido na saída. E os três leitores de SLA
+(`query.py:240` · `reports_query.py:3803` · `_sla_eligible`) seguem lendo `sessions.sla_target_ms`,
+que a partir daqui é **PROJEÇÃO, nunca fonte de cálculo**. Migrá-los é a (iii), fatia própria por
+decisão. **Nenhum número de conformidade se moveu com esta mudança** — quem esperar isso vai concluir
+que ela não pegou.
+
+---
+
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*
 *Qualquer mudança no funcionamento deve ser registrada neste arquivo antes de ir para CHANGELOG.md.*
