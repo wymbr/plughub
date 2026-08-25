@@ -2,6 +2,112 @@
 
 ---
 
+## Os três leitores de SLA passam a ler o SEGMENTO — D14 (iii) (2026-08-25)
+
+Fecha o arco D14 (i→ii→iii). A (i) parou de colapsar as passagens pela fila, a (ii) carimbou o alvo
+no segmento — e **nenhuma das duas moveu um número, de propósito**. Esta move.
+
+### O que ainda estava errado depois da (ii)
+
+A (i) passou a produzir uma linha por espera, mas as duas linhas continuavam sendo julgadas contra o
+**mesmo** alvo, o da sessão: o defeito que a D14 nomeia sobrevivia dentro da correção que o expôs.
+Os três leitores liam `sessions.sla_target_ms` — `query.py:240` · `reports_query.py:3803` ·
+`_sla_eligible` em `reports_query.py:5901`.
+
+Pior: desde a (ii) a regra *"`sessions.sla_target_ms` é projeção, nunca fonte de cálculo"* existia
+**só em prosa** (CLAUDE.md, este arquivo, `conference-mechanics.md` § 41). É a família do DDL de
+`participation_intervals` — comentário que afirma um invariante sem mecanismo que o imponha.
+
+### A decisão do dono, tomada antes de codar
+
+A (ii) é **forward-only**: linha antiga tem `NULL` e não há migração possível (o `first_queued_ms`
+que daria o alvo é consumido na saída da fila). Trocar a fonte encolhe o denominador. Duas saídas
+defensáveis — ler o segmento **com fallback à sessão** durante a transição (preserva a série, mas
+mistura duas fontes num mesmo número, sem dizer qual respondeu em cada linha) ou **cortar a série
+numa data declarada**.
+
+**Escolhida a (b), corte declarado.** Escolher em silêncio é que não podia.
+
+### Contado ANTES de trocar (`infra/test/q_sla_source_delta.py`, tenant demo)
+
+| | pela SESSÃO (hoje) | pelo SEGMENTO (depois) |
+|---|---|---|
+| esperas elegíveis | **51** | **1** |
+| aderência global | **70,6%** | 100,0% (n=1 — ruído, não melhora) |
+| `retencao_humano` | 34 elegíveis · **64,7%** | 1 elegível |
+
+Encolher é o esperado, não sintoma. Sem esta contagem, a mudança de número chegaria ao operador como
+*"o relatório quebrou"*.
+
+⚠️ **O probe errou na primeira rodada, e o erro é da família que este repositório persegue.** Ele
+reescreveu o predicado de memória e excluiu a espera **abandonada** do denominador — o
+`_sla_eligible` real não a exclui (só o `within_sla`, `:5913`). Saía `retencao_humano` a 95,7%
+enquanto a tela mostra 0,6364: um instrumento falseável, ramificado e honesto medindo a **proposição
+adjacente**. Corrigido copiando o predicado do relatório em vez de reescrevê-lo.
+
+### Conserto
+
+`sla_source.py` — definição única da época (`SEGMENT_SLA_EPOCH = "2026-08-25 00:52:29"`, o instante
+**medido** da primeira espera carimbada, nunca `now()` nem a data do deploy) e do helper de cláusula.
+
+**A época NÃO é o que exclui a linha antiga** — o `sla_target_ms > 0` já a excluiria sozinho. Ela
+existe para separar duas ausências de aparência idêntica: espera **anterior** a ela não tinha
+produtor; espera **posterior** sem alvo é o `{t}:pool_config:{p}` **expirado antes do fechamento**
+(dois escritores da mesma chave, 86 400 × 3 600, e o último vence). Sem a época a segunda se esconde
+dentro da primeira e o buraco no ledger fica invisível para sempre — por isso `query_pools_queue`
+publica **`sla_unstamped`**, que conta a segunda população. Degradação nunca é silenciosa.
+
+O corte é sobre `segments.started_at` (não sobre o instante do carimbo): a espera é carimbada quando
+FECHA mas indexada por quando COMEÇOU, então uma espera a cavalo do deploy sai do denominador. Borda
+conservadora — perde-se uma linha, não se inventa nenhuma.
+
+Três consertos colaterais que vieram junto, e nenhum é cosmético:
+
+- **`pool_sla_1h` largou `sessions` inteira.** Com isso o `pool_id` deixa de ser o pool de **ENTRADA**
+  (D10) e passa a ser onde se esperou — medido em 2026-08-14, 6 de 15 sessões tinham os dois campos
+  divergentes. `avg_wait_ms`/`p95_wait_ms` se movem junto; inevitável, e na direção certa.
+- **`coalesce(wait_time_ms, 0)` saiu do overlay da Voz do Cliente.** Era o mesmo buraco que a D14-i
+  fechou no Fila/SLA: transformava "não esperou" em "esperou zero, logo cumpriu" (medido lá:
+  `limite_entrega`, 37 contatos, ZERO esperas, aderência 100% — verde que não pode ficar vermelho).
+- **`maxIf` + normalização em Python**: alvo ausente devolve `None`, nunca `0`. `0` não é "sem alvo" —
+  é o valor que os quatro sites de roteamento leem como prioridade absoluta e como ETA de 0 ms
+  publicada ao cliente.
+- **`coalesce(sla_target_ms, 0)` em toda comparação.** Sobre `Nullable`, um predicado com NULL devolve
+  NULL e o `countIf` **pula** a linha em vez de contá-la como falsa: o denominador se moveria sem
+  nada ficar vermelho.
+
+Eixo do overlay **preservado** em `sessions.opened_at` (paga um JOIN): ele existe para ficar lado a
+lado com os sinais de survey, que são datados pela sessão, e datá-lo pela espera desalinharia as duas
+curvas numa virada de meia-noite.
+
+### Falseabilidade — e por que o unit test não bastava
+
+`test_sla_reads_the_segment.py` (12 testes) asserta sobre o **SQL que a função passou ao cliente**,
+não sobre o fonte: `grep`/`inspect.getsource` contariam o comentário que documenta a migração. Chama
+as funções **síncronas** internas, nunca os wrappers `async` — o de `query_pools_queue` tem
+`except → {"error": "data_unavailable"}`, e por ele um teste quebrado devolveria envelope vazio.
+
+Mas ele **não alcança a proposição da D14**: a agregação acontece dentro do ClickHouse e um mock
+devolve o que se mandou. Pior, a população discriminante **não existe no ambiente** — medido,
+`discord = 0`, nenhuma espera do tenant tem os dois alvos presentes e diferentes. Um teste de
+"as duas fontes concordam" passaria idêntico sobre o código velho.
+
+Por isso `infra/test/gate_sla_segment_target.sh` **insere** o caso: uma sessão, duas esperas
+(30 s contra 300 s ⇒ dentro · 90 s contra 60 s ⇒ fora), com `sessions.sla_target_ms` gravado de
+propósito em **999 999 999** — valor que não é o de nenhum dos dois segmentos, para que a regressão
+saia errada de um jeito reconhecível em vez de coincidir por acaso.
+
+**Mutação (revertendo `w.w_sla_target` → `ss.sla_target_ms`), com os dois lados nomeados antes:**
+`test_no_reader_takes_the_target_from_the_sessions_table` vermelho (**1 failed, 606 passed**) e o
+gate vermelho com `pool_b` em **1/1** — o JSON da mutação registra o defeito por extenso
+(`sla_target_ms: 999999999` nas duas esperas, `sla_attainment: 1.0` nas duas, a violação de 90 s
+contra 60 s desaparecida). Colateral previsto e confirmado: `pool_c` virou elegível e o
+`sla_unstamped` foi a **0**, provando que a época é o que mantém o buraco do TTL visível.
+
+Suíte: **607 passed** (baseline 595).
+
+---
+
 ## O alvo de SLA vira fato do SEGMENTO de espera — D14 (ii) (2026-08-24)
 
 Sucede a fatia do predicado (abaixo), que entrou **antes de propósito**: a (ii) carimba o alvo no

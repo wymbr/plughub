@@ -885,17 +885,25 @@ Any change to `platform-ui` that adds or modifies **text visible to the user** M
   > sessão** — não existe SLA por sessão na prática de contact center, e somar esperas contra alvos
   > diferentes dá número sem uso. Uma sessão carrega **um** alvo, então contato que espera em duas
   > filas perde a violação da segunda. É a regra de escopo outra vez.
-  > **✅ ESCRITA fechada em 2026-08-24 — LEITURA não.** `analytics.segments.sla_target_ms` existe e é
+  > **✅ ARCO D14 COMPLETO (i→ii→iii) em 2026-08-25.** `analytics.segments.sla_target_ms` existe e é
   > carimbada na saída da fila por `mute_queue.resolve_queue_exit` (um site, a partir do
   > `{t}:pool_config:{p}`; **sem fallback** — ausência vira `null`, porque o cache expira em ~1 h e
   > alvo fabricado no ledger não se corrige por deploy). Alvo **copiado no fechamento**, e vale para
   > **qualquer fila**, sem ramo por `agent_kind` (as duas decisões do dono, D14 ii). Mas os **três**
-  > leitores (`query.py:240` · `reports_query.py:3803` · `_sla_eligible` em `:5901`) seguem lendo
-  > `sessions.sla_target_ms`, que a partir daqui é **PROJEÇÃO, nunca fonte de cálculo** — migrá-los é
-  > a **(iii)**, pendente. ⚠️ É **forward-only**: linha antiga fica `NULL` e não há migração possível
-  > (o `first_queued_ms` é consumido na saída), logo a (iii) tem de decidir explicitamente entre
-  > fallback à sessão durante a transição × corte de série em data declarada. Ver
-  > `conference-mechanics.md` § Mudança 41. **D10.1: o `pool_id` do segmento de ESPERA é o DESTINO** (é a dimensão do Fila/SLA —
+  > leitores (`query.py` · `_cv_sla_series` · `_sla_eligible`) foram migrados na **(iii)**, e
+  > `sessions.sla_target_ms` é **PROJEÇÃO, nunca fonte de cálculo** — regra que deixou de viver só em
+  > prosa: o mecanismo é `test_sla_reads_the_segment.py`, que asserta sobre o **SQL EXECUTADO** (não
+  > sobre o fonte, onde `grep` contaria o comentário que documenta a migração).
+  > ⚠️ É **forward-only**: linha antiga fica `NULL` e não há migração possível (o `first_queued_ms` é
+  > consumido na saída). **Decisão do dono: corte da série em data declarada**
+  > (`sla_source.SEGMENT_SLA_EPOCH`), não fallback à sessão — fallback preservaria a série misturando
+  > duas fontes num número só, sem dizer qual respondeu em cada linha. Medido antes de trocar
+  > (`q_sla_source_delta.py`): 51 elegíveis a 70,6% → **1**; encolher é o esperado, não sintoma.
+  > ⚠️ **A época não é o que exclui a linha antiga** (o `sla_target_ms > 0` já excluiria): ela separa
+  > duas ausências de aparência idêntica — *"não medíamos"* (pré-produtor) × **`{t}:pool_config:{p}`
+  > expirado antes do fechamento da espera**. A segunda virou **contador** (`sla_unstamped` no
+  > `by_pool`) em vez de silêncio, e é a mesma dívida dos dois TTLs discordantes (86 400 × 3 600).
+  > Ver `conference-mechanics.md` § Mudança 41. **D10.1: o `pool_id` do segmento de ESPERA é o DESTINO** (é a dimensão do Fila/SLA —
   > `reports_query.py:5741` — e movê-lo para o pool de fila colapsaria todas as esperas numa linha, já
   > que a fila é a default do tenant); a fila que executou vai em campo **próprio** (`queue_pool_id`).
   > *"Pool de fila sempre distinto do destino"* não é modelo alternativo: é o estado-alvo da CONFIG, que

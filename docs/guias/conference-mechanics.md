@@ -2274,6 +2274,24 @@ julga é o teste (`test_queue_wait_segment.py`, 4 novos, 14 passed).
 
 ### Mudança 41 — o alvo de SLA passa a ser fato do segmento de espera, copiado no fechamento (D14 ii, 2026-08-24)
 
+> ✅ **Complemento (D14 iii, 2026-08-25) — a LEITURA migrou, e o arco D14 fechou.** Os três leitores
+> (`query.py:get_pool_sla_1h` · `reports_query._cv_sla_series` · `query_pools_queue`) passaram a ler
+> o alvo do segmento; `sessions.sla_target_ms` virou projeção com **mecanismo** que o impõe
+> (`test_sla_reads_the_segment.py`, asserção sobre o SQL EXECUTADO). Decisão do dono: **corte da
+> série em data declarada** (`sla_source.SEGMENT_SLA_EPOCH = "2026-08-25 00:52:29"`, o instante
+> medido da primeira espera carimbada), nunca fallback à sessão.
+>
+> ⚠️ **Consequência que este documento precisa registrar, porque é do mecanismo e não do relatório:**
+> a época existe para separar *"não medíamos"* (pré-produtor) de **`{t}:pool_config:{p}` expirado
+> antes do fechamento da espera** — o TTL medido acima (**3 593 s**, do bridge; o 86 400 do
+> routing-engine está morto) faz a segunda ser rotina com gatilho de RELÓGIO. Ela agora é contada
+> (`sla_unstamped` no `by_pool` do Fila/SLA) em vez de se esconder dentro do histórico. **O conserto
+> do TTL discordante continua aberto**, e esta é a evidência de que ele deixou de ser "só cache
+> frio": é buraco no ledger, e o ledger não se corrige por deploy.
+>
+> Gate próprio: `infra/test/gate_sla_segment_target.sh`, que **insere** a população discriminante
+> (uma sessão, duas esperas, alvos diferentes) porque ela **não existe** no ambiente (`discord = 0`).
+
 **O que mudou no mecanismo:** `mute_queue.resolve_queue_exit` passou a resolver o alvo de espera do
 pool e a **carimbá-lo no evento** `participant_left` que já publicava. Nova coluna
 `analytics.segments.sla_target_ms` (`Nullable(Int64)`).

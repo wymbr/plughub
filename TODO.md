@@ -1511,12 +1511,29 @@ injulgáveis; o conserto vale para tráfego novo.
 leitores seguem lendo `sessions.sla_target_ms` (que a partir daqui é **projeção**, nunca fonte de
 cálculo). É na **(iii)** que os números se movem: contar antes, por pool, e declarar.
 
-⏳ **(iii) PENDENTE, fatia própria** — migrar `query.py:240` · `reports_query.py:3803` ·
-`_sla_eligible` (`reports_query.py:5901`) para o alvo do segmento. ⚠️ **Cuidado de ordem:** enquanto
-houver linha antiga com `NULL`, trocar a fonte muda o denominador (`countIf(sla_target_ms > 0)`) e
-esvazia a série histórica. Decidir se a (iii) lê o segmento **com fallback à sessão** durante a
-transição, ou se corta a série numa data declarada — as duas são defensáveis, mas escolher em silêncio
-não é.
+✅ **(iii) ENTREGUE em 2026-08-25 — ARCO D14 (i→ii→iii) COMPLETO** (`CHANGELOG.md`). Os três leitores
+passaram ao alvo do segmento. **Decisão do dono: saída (b), corte da série em data declarada** — a (a)
+(fallback à sessão) preservaria a série misturando duas fontes num mesmo número, sem dizer qual
+respondeu em cada linha.
+
+**Contado ANTES de trocar** (`infra/test/q_sla_source_delta.py`): 51 elegíveis a **70,6%** → **1**
+elegível; `retencao_humano` 34 a **64,7%** → 1. Encolher é o esperado; sem a contagem, viraria "o
+relatório quebrou".
+
+⚠️ **O probe errou na 1ª rodada e a lição é de método:** reescreveu o `_sla_eligible` de memória e
+excluiu a espera ABANDONADA do denominador — o predicado real não a exclui (só o `within_sla`). Saía
+95,7% onde a tela mostra 0,6364. Falseável, ramificado, honesto — e medindo a proposição **adjacente**.
+Predicado de relatório se COPIA, não se reescreve.
+
+**A época (`sla_source.SEGMENT_SLA_EPOCH`) não é o que exclui a linha antiga** — o `> 0` já excluiria.
+Ela separa duas ausências idênticas na aparência: pré-produtor ("não medíamos") × pós-deploy sem alvo
+(**`pool_config` expirado**, que é a opção "TTL" desta lista). A segunda virou contador
+(`sla_unstamped` no `by_pool`) em vez de silêncio.
+
+Gates: `test_sla_reads_the_segment.py` (12, asserta sobre o SQL EXECUTADO, não sobre o fonte) +
+`infra/test/gate_sla_segment_target.sh`, que **insere** a sessão de duas esperas com alvos distintos —
+população que o ambiente **não tem** (`discord = 0`), logo um teste de concordância passaria idêntico
+sobre o código velho. Mutação reprovou os dois lados com os nomes previstos. Suíte **607 passed**.
 
 #### ✅ D14.1 DECIDIDA (2026-08-24): `sla_target_ms` := **alvo de ESPERA em fila**
 

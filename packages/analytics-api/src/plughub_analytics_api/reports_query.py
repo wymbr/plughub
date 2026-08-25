@@ -19,7 +19,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import survey_catalog
+from . import sla_source, survey_catalog
 
 logger = logging.getLogger("plughub.analytics.reports")
 
@@ -238,9 +238,14 @@ def _agent_scope_session_join(
 def _apply_pool_scope(
     conditions: list[str],
     accessible_pools: "list[str] | None",
+    column: str = "pool_id",
 ) -> bool:
     """
     Mutates *conditions* in-place to add a pool_id IN (...) filter when needed.
+
+    *column* existe porque a D14 (iii) passou a escopar pelo pool do SEGMENTO
+    de espera (`w.pool_id`), e não pelo da sessão. Default preservado para não
+    tocar nenhum dos call sites existentes.
 
     Returns False if the caller has NO access to any pool (empty whitelist),
     which means the caller should short-circuit and return an empty result
@@ -256,7 +261,7 @@ def _apply_pool_scope(
         return False  # no pools allowed
     # pool_ids come from a verified JWT — safe to inline as string literals
     pool_list = ", ".join(f"'{p}'" for p in accessible_pools)
-    conditions.append(f"pool_id IN ({pool_list})")
+    conditions.append(f"{column} IN ({pool_list})")
     return True
 
 
@@ -3786,24 +3791,50 @@ def _cv_sla_series(
     client: Any, db: str, tenant_id: str, since: str, until: str,
     pool_id: str | None, accessible_pools: list[str] | None,
 ) -> list[dict]:
-    """Aderência de SLA diária (% de contatos elegíveis dentro do alvo). KPI objetivo,
-    sem interpretação: wait_time_ms ≤ sla_target_ms. Overlay no mesmo eixo do survey."""
+    """Aderência de SLA diária (% de esperas elegíveis dentro do alvo). KPI objetivo,
+    sem interpretação: duração da espera ≤ alvo daquela espera. Overlay no mesmo
+    eixo do survey.
+
+    ⚠️ **D14 (iii), 2026-08-25 — fonte migrada de `sessions` para `segments`.**
+    A unidade passa a ser a PASSAGEM pela fila e o alvo vem do segmento; ver
+    `sla_source.py`. Duas escolhas explícitas:
+
+      · **o eixo continua sendo `sessions.opened_at`**, não a data da espera. O
+        overlay existe para ficar lado a lado com os sinais de survey, que são
+        datados pela sessão — mudar o eixo desalinharia as duas curvas por até
+        uma virada de meia-noite. O JOIN paga por isso.
+      · **`pool_id` e escopo ABAC passam a ser lidos do SEGMENTO** (onde se
+        esperou), não da sessão (pool de ENTRADA, D10). Filtrar por pool na
+        sessão devolvia esperas de outro pool.
+
+    ⚠️ **O `coalesce(wait_time_ms, 0)` SAIU, e não por limpeza.** Ele
+    transformava "não esperou" em "esperou zero, logo cumpriu" — o mesmo buraco
+    que a D14-i fechou no Fila/SLA, onde produziu pools com 100% de aderência e
+    ZERO esperas. Aqui só entra quem tem segmento de fila concluído."""
     conds = [
-        "tenant_id = {tenant_id:String}",
-        f"opened_at >= '{since}'",
-        f"opened_at <  '{until}'",
+        "w.tenant_id = {tenant_id:String}",
+        "w.role = 'queue'",
+        "w.duration_ms IS NOT NULL",
+        sla_source.segment_sla_epoch_clause("w.started_at"),
+        f"s.opened_at >= '{since}'",
+        f"s.opened_at <  '{until}'",
     ]
     params: dict = {"tenant_id": tenant_id}
     if pool_id:
-        conds.append("pool_id = {pool_id:String}"); params["pool_id"] = pool_id
-    _apply_pool_scope(conds, accessible_pools)
+        conds.append("w.pool_id = {pool_id:String}"); params["pool_id"] = pool_id
+    _apply_pool_scope(conds, accessible_pools, column="w.pool_id")
     rows = _rows_to_dicts(client.query(f"""
-        SELECT toString(toDate(opened_at)) AS date,
-               countIf(sla_target_ms > 0)                                          AS eligible,
-               countIf(sla_target_ms > 0 AND coalesce(wait_time_ms, 0) <= sla_target_ms) AS within_sla
-        FROM {db}.sessions FINAL
+        SELECT toString(toDate(s.opened_at)) AS date,
+               countIf(coalesce(w.sla_target_ms, 0) > 0)               AS eligible,
+               countIf(coalesce(w.sla_target_ms, 0) > 0
+                       AND w.duration_ms <= w.sla_target_ms)           AS within_sla
+        FROM {db}.segments AS w FINAL
+        INNER JOIN (SELECT session_id, opened_at
+                    FROM {db}.sessions FINAL
+                    WHERE tenant_id = {{tenant_id:String}}) AS s
+               ON w.session_id = s.session_id
         WHERE {" AND ".join(conds)}
-        GROUP BY toDate(opened_at) ORDER BY date
+        GROUP BY toDate(s.opened_at) ORDER BY date
     """, parameters=params))
     out: list[dict] = []
     for r in rows:
@@ -5782,11 +5813,30 @@ def _fetch_pools_queue(
     #
     # A precedência `q_pool → ss.pool_id` continua: o relatório mede ONDE ESPEROU, e
     # `sessions.pool_id` é o pool de ENTRADA (D10), que não é esse fato.
+    # ── D14-iii (2026-08-25): o ALVO passa a vir do SEGMENTO ────────────────────
+    #
+    # Era `ss.sla_target_ms` — o alvo da SESSÃO, copiado igual para todas as
+    # esperas dela. A D14-i parou de colapsar as passagens, mas as duas linhas
+    # que ela passou a produzir continuavam sendo julgadas contra o MESMO alvo:
+    # o defeito que a D14 nomeia sobrevivia à correção que o expôs.
+    #
+    # `w_sla_target` é `Nullable(Int64)` e a ausência é significativa — ver
+    # `sla_source.py`. Duas ausências com a mesma cara, separadas pela época:
+    # espera anterior a ela não tinha produtor (a (ii) é forward-only e não há
+    # migração possível); espera POSTERIOR sem alvo é o `pool_config` expirado.
+    # `sla_unstamped` conta a segunda, abaixo.
+    #
+    # ⚠️ A linha SEM espera (LEFT JOIN, `q_count=0`) vem com `sla_target_ms`
+    # NULL — e isso é correto, não regressão: sessão que não esperou não tem
+    # alvo de espera a cumprir. Ela já estava fora do `_sla_eligible` pelo
+    # `_queued`, e continua contando em `contacts` como denominador de "quanto %
+    # esperou".
     _per_wait = f"""
         SELECT if(w.w_pool != '', w.w_pool, ss.pool_id) AS pool_id,
                ss.session_id                            AS session_id,
                ss.opened_at                             AS opened_at,
-               ss.sla_target_ms                         AS sla_target_ms,
+               w.w_sla_target                           AS sla_target_ms,
+               w.w_started_at                           AS wait_started_at,
                w.w_present                              AS q_count,
                w.w_outcome                              AS q_outcome,
                w.w_wait_ms                              AS wait_ms,
@@ -5795,9 +5845,8 @@ def _fetch_pools_queue(
             SELECT s.session_id                   AS session_id,
                    s.pool_id                      AS pool_id,
                    s.opened_at                    AS opened_at,
-                   s.sla_target_ms                AS sla_target_ms,
                    coalesce(p.primary_count, 0)   AS primary_count
-            FROM (SELECT session_id, pool_id, opened_at, sla_target_ms
+            FROM (SELECT session_id, pool_id, opened_at
                   FROM {db}.sessions FINAL WHERE {s_where}) s
             LEFT JOIN (
                 SELECT session_id,
@@ -5809,10 +5858,12 @@ def _fetch_pools_queue(
         ) ss
         LEFT JOIN (
             SELECT session_id,
-                   pool_id     AS w_pool,
-                   outcome     AS w_outcome,
-                   duration_ms AS w_wait_ms,
-                   1           AS w_present
+                   pool_id       AS w_pool,
+                   outcome       AS w_outcome,
+                   duration_ms   AS w_wait_ms,
+                   sla_target_ms AS w_sla_target,
+                   started_at    AS w_started_at,
+                   1             AS w_present
             FROM {db}.segments FINAL
             WHERE tenant_id = {{tenant_id:String}} AND started_at >= '{since}'
               AND role = 'queue'
@@ -5898,7 +5949,24 @@ def _fetch_pools_queue(
     # `retencao_humano` sai de 0,913 (com 20 de 48 esperas abandonadas — 91% nunca
     # descreveu aquele pool) e os pools sem fila passam a devolver `null`, que a UI
     # já renderiza como ausente. Aderência ausente ≠ aderência zero.
-    _sla_eligible = f"({_queued} AND wait_ms IS NOT NULL AND sla_target_ms > 0)"
+    # ── D14-iii: o alvo é do segmento, e a ÉPOCA separa duas ausências ──────────
+    #
+    # `coalesce(sla_target_ms, 0) > 0` e não `sla_target_ms > 0`: a coluna virou
+    # Nullable, e sobre Nullable um predicado com NULL devolve NULL — o `countIf`
+    # PULA a linha em vez de contá-la como falsa. O denominador se moveria sem
+    # nada ficar vermelho.
+    #
+    # `_stamped_era` NÃO é o que exclui a linha antiga (o teste de alvo já a
+    # excluiria sozinho). Ele existe para que `sla_unstamped` conte só o que é
+    # DEFEITO: espera fechada depois do deploy da (ii) e mesmo assim sem alvo,
+    # que é o `{t}:pool_config:{p}` expirado antes do fechamento. Sem a época,
+    # esse buraco se esconde dentro do histórico pré-produtor e fica invisível
+    # para sempre.
+    _stamped_era   = sla_source.segment_sla_epoch_clause("wait_started_at")
+    _sla_eligible  = (f"({_queued} AND wait_ms IS NOT NULL"
+                      f" AND coalesce(sla_target_ms, 0) > 0 AND {_stamped_era})")
+    _sla_unstamped = (f"({_queued} AND wait_ms IS NOT NULL"
+                      f" AND coalesce(sla_target_ms, 0) = 0 AND {_stamped_era})")
     by_pool = _rows_to_dicts(client.query(f"""
         SELECT pool_id,
                uniqExact(session_id)                               AS contacts,
@@ -5909,17 +5977,25 @@ def _fetch_pools_queue(
                round(countIf({_abandoned}) / greatest(countIf({_queued}), 1), 4) AS abandon_rate,
                round(avg(wait_ms), 0)                              AS avg_wait_ms,
                round(quantile(0.95)(wait_ms), 0)                   AS p95_wait_ms,
-               max(sla_target_ms)                                  AS sla_target_max,
+               maxIf(sla_target_ms, {_sla_eligible})               AS sla_target_max,
                countIf({_sla_eligible} AND NOT ({_abandoned})
                                        AND wait_ms <= sla_target_ms) AS within_sla,
-               countIf({_sla_eligible})                            AS sla_eligible
+               countIf({_sla_eligible})                            AS sla_eligible,
+               countIf({_sla_unstamped})                           AS sla_unstamped
         FROM ({_per_wait})
         WHERE {outer_where}
         GROUP BY pool_id ORDER BY contacts DESC
     """, parameters=params))
     for r in by_pool:
-        r["sla_target_ms"] = r.pop("sla_target_max", 0)
+        # `maxIf` sem nenhuma linha elegível devolve o DEFAULT do tipo, não NULL
+        # — e para `Nullable(Int64)` o default é NULL, mas o driver pode
+        # entregar 0 quando a coluna do resultado não é nulável. Normalizar aqui
+        # é o que impede "alvo ausente" de virar "alvo zero", que os quatro
+        # sites de roteamento leem como prioridade absoluta.
+        target = r.pop("sla_target_max", None)
+        r["sla_target_ms"] = int(target) if target else None
         elig = int(r.get("sla_eligible") or 0)
+        r["sla_unstamped"] = int(r.get("sla_unstamped") or 0)
         r["sla_attainment"] = round(int(r.get("within_sla") or 0) / elig, 4) if elig else None
 
     return {"data": {"series": series, "by_pool": by_pool},

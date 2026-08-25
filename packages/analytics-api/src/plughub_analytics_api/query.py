@@ -19,6 +19,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from . import sla_source
+
 logger = logging.getLogger("plughub.analytics.query")
 
 
@@ -209,20 +211,39 @@ def _empty_metrics() -> dict:
 
 async def get_pool_sla_1h(client: Any, database: str, tenant_id: str) -> list[dict]:
     """
-    Per-pool SLA performance over the last 1 hour based on wait_time_ms
-    already stored in analytics.sessions (written by Core on session_closed).
+    Per-pool SLA performance over the last 1 hour.
+
+    ⚠️ **D14 (iii), 2026-08-25 — a fonte mudou de `sessions` para `segments`.**
+    Antes lia `sessions.wait_time_ms` contra `sessions.sla_target_ms`. Agora lê
+    o segmento de espera (`role='queue'`): `duration_ms` contra o
+    `sla_target_ms` **daquela passagem**. Ver `sla_source.py` para o porquê e
+    para a época do corte.
+
+    Três coisas mudam de significado, e nenhuma é cosmética:
+
+      1. **grão** — a unidade passa a ser a PASSAGEM pela fila, não a sessão.
+         Contato que esperou em duas filas conta duas vezes, cada uma contra o
+         alvo do pool onde esperou. Era o defeito inteiro da D14.
+      2. **atribuição de pool** — `pool_id` passa a vir do segmento de espera.
+         `sessions.pool_id` é o pool de ENTRADA (D10), que não é onde se
+         esperou; medido em 2026-08-14, 6 de 15 sessões tinham os dois campos
+         divergentes. `avg_wait_ms`/`p90_wait_ms` se movem junto — inevitável,
+         e na direção certa.
+      3. **sample_count** — conta esperas concluídas, não sessões.
 
     Returns a list of:
       {
         "pool_id":              str,
-        "avg_wait_ms":          float | None,  # average queue wait time
-        "p90_wait_ms":          float | None,  # 90th percentile
-        "sla_compliance_pct":   float | None,  # % sessions served within sla_target_ms
-        "sessions_count":       int            # sample size (0 = no data)
+        "avg_wait_ms":          float | None,  # média da espera em fila
+        "p90_wait_ms":          float | None,  # percentil 90
+        "sla_compliance_pct":   float | None,  # % de esperas dentro do alvo
+        "sessions_count":       int            # nº de esperas (0 = sem dado)
       }
 
-    Note: sla_compliance_pct requires sla_target_ms to be present in the sessions
-    table. When it is absent (NULL / 0), compliance is returned as None.
+    `sla_compliance_pct` é **None quando não há espera com alvo** — ausência,
+    nunca zero. Espera sem alvo depois da época é defeito de TTL de
+    `pool_config`, e quem o CONTA é o Fila/SLA (`sla_unstamped`); aqui ela
+    apenas não entra no denominador.
     """
     try:
         return await asyncio.to_thread(_fetch_pool_sla_1h, client, database, tenant_id)
@@ -232,21 +253,26 @@ async def get_pool_sla_1h(client: Any, database: str, tenant_id: str) -> list[di
 
 
 def _fetch_pool_sla_1h(client: Any, db: str, tenant_id: str) -> list[dict]:
+    # `coalesce(sla_target_ms, 0) > 0` e não `sla_target_ms > 0`: a coluna é
+    # Nullable, e sobre Nullable um predicado com NULL devolve NULL — o
+    # `countIf` PULA a linha em vez de contá-la como falsa, movendo o
+    # denominador sem que nada fique vermelho.
     rows = _run_query(client, f"""
         SELECT
             pool_id,
-            avgOrNull(wait_time_ms)                           AS avg_wait_ms,
-            quantileOrNull(0.90)(wait_time_ms)                AS p90_wait_ms,
-            countIf(wait_time_ms <= sla_target_ms
-                    AND sla_target_ms > 0)                    AS within_sla,
-            countIf(wait_time_ms IS NOT NULL
-                    AND sla_target_ms > 0)                    AS total_with_sla,
+            avgOrNull(duration_ms)                            AS avg_wait_ms,
+            quantileOrNull(0.90)(duration_ms)                 AS p90_wait_ms,
+            countIf(coalesce(sla_target_ms, 0) > 0
+                    AND duration_ms <= sla_target_ms)         AS within_sla,
+            countIf(coalesce(sla_target_ms, 0) > 0)           AS total_with_sla,
             count()                                           AS sessions_count
-        FROM {db}.sessions FINAL
-        WHERE tenant_id     = {{tenant_id:String}}
-          AND opened_at     >= now() - INTERVAL 1 HOUR
-          AND wait_time_ms  IS NOT NULL
-          AND wait_time_ms  > 0
+        FROM {db}.segments FINAL
+        WHERE tenant_id    = {{tenant_id:String}}
+          AND role         = 'queue'
+          AND started_at   >= now() - INTERVAL 1 HOUR
+          AND {sla_source.segment_sla_epoch_clause()}
+          AND duration_ms  IS NOT NULL
+          AND duration_ms  > 0
         GROUP BY pool_id
     """, {"tenant_id": tenant_id})
 
