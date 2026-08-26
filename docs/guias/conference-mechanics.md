@@ -2361,6 +2361,99 @@ que a partir daqui é **PROJEÇÃO, nunca fonte de cálculo**. Migrá-los é a (
 decisão. **Nenhum número de conformidade se moveu com esta mudança** — quem esperar isso vai concluir
 que ela não pegou.
 
+### Mudança 42 — o release da tela é fato do FIM DO SEGMENTO, não da conclusão do wrap-up (Transfer, 2026-08-26)
+
+**Sintoma, relatado em 2026-08-24.** O Console não liberava a tela depois de um `Transfer`: contato
+preso na lista, input desabilitado, toast persistente *"Contato transferido. Aguardando
+encerramento…"* — indefinidamente.
+
+**O contrato.** `AgentAssistContext.tsx` não remove o contato no `session.closed
+reason=agent_transfer` (o contato SEGUE pelo destino); ele espera um segundo evento —
+`session.closed reason="posatt_segment_complete"` com este agente em `recipients`. Esse evento é
+publicado por `process_routed` a partir de **dois artefatos**: `session:{sid}:hook_conf:{conf}` e o
+SET `posatt:{conf}:participants`, ambos gravados por `fire_pool_hooks` **só no caminho de
+conferência**.
+
+**A causa é a Mudança 26, e o defeito é de ESCOPO, não de código errado.** O wrap-up unificado tirou
+o wrap-up de agente da conferência:
+
+```python
+_is_workflow_dispatch_entry:  dispatch == "detached" or (side == "agent" and dispatch == "inline")
+```
+
+Wrap-up é `side=agent` ⇒ verdadeiro nos **dois** modos ⇒ `fire_pool_hooks` faz `continue` **antes**
+de gravar `hook_conf` e o SET. Ninguém publica mais o `posatt_segment_complete`.
+
+⚠️ **A Mudança 26 já tinha consertado exatamente esta classe de problema — para o CLOSE.** A sua
+"Regressão 2" fez o `POST /api/agent_done` resolver o modo do wrap-up e devolver `inline_wrapup`,
+para o Console **limpar a tela na hora** quando detached. Ou seja: o autor sabia que a tela precisa
+ser liberada, e cobriu o caminho que estava olhando. **O `Transfer` não passa por `handleClose` nem
+por `/api/agent_done`** — vai por `POST /api/session_transfer` e dependia do outro mecanismo, que a
+mesma mudança removeu. Isto **responde** a pergunta que a passagem de 09-10 deixou aberta
+(*"`Transfer` e `Close` compartilham o teardown, ou são dois caminhos?"*): **são dois caminhos**, e
+um deles ficou sem dono.
+
+**A lição de método.** Nada ficou vermelho porque o front continuou fiel a um **comentário** que
+deixou de ser verdade — `AgentAssistContext.tsx:536` ainda descreve o mundo anterior. É a família
+*"'foi escrito' ≠ 'ainda vale'"*, com um agravante: **um conserto quebrou um contrato que ele não
+menciona**. E as duas refutações do diagnóstico herdado (*"não é wrap-up"*, *"não é config de
+dispatch"*) estavam **ambas certas** e mesmo assim apontavam para longe da causa — a causa era o
+wrap-up, por um caminho que nenhuma das duas hipóteses testava. Trocar `detached`↔`inline` não
+mudaria nada: os dois modos tomam o mesmo ramo.
+
+**O conserto.** `_publish_segment_release()`, chamada no ramo de transfer no ponto em que o bridge
+já sabe que o segmento da origem acabou. **Zero diff no front e no mcp-server** — reusa o contrato
+que os dois já implementam.
+
+- **Por que no fim do segmento e não no fim do wrap-up.** Amarrá-la à conclusão reabriria o **G1 na
+  UI**: em `detached` o item pode ser reivindicado minutos depois e o painel ficaria preso até lá —
+  o oposto do motivo pelo qual o wrap-up foi destacado. O formulário chega pela inbox (ou
+  auto-claim) com briefing próprio, sem depender daquele painel.
+- **Fora do guard `if http and _ha_pool and _ha_tenant`**, de propósito: aquele guard existe para o
+  DESPACHO do wrap-up, e a tela do agente não pode ficar presa porque um hook não pôde ser disparado.
+- **Duas formas de nomear o mesmo humano.** O filtro do mcp-server compara `recipients` com
+  `agentInstanceId`, que vem de `conversation.assigned.instance_id` **ou**, em fallback, de
+  `participant_id`; o SET da conferência já mistura as duas fontes (`_fixed_pid` é um `instance_id`
+  com nome de pid). Publicar só uma faria o defeito voltar de forma **intermitente**.
+- ⚠️ **`session.human_agent_participant_id` é campo de escopo LARGO** e num conferência multi-humano
+  nomeia o humano errado. É seguro **aqui e só aqui** porque o caminho roda dentro de
+  `remaining <= 0`: a origem era o ÚLTIMO humano, logo não há peer ativo cuja tela pudesse ser
+  liberada por engano. Não copiar este padrão para outro call site sem refazer essa conta.
+- **Nunca broadcast.** Sem `recipients` array o filtro do mcp-server não age e TODO agente inscrito
+  remove o contato — inclusive o DESTINO. Lista vazia **aborta** e loga; degradar para broadcast
+  trocaria um contato preso por um contato perdido.
+
+**Previsão herdada, REFUTADA.** A passagem dizia *"conserto provavelmente em DOIS apps (o
+`agent-assist-ui` vive na 5173)"*. Medido: o app legado remove o contato em **qualquer** `reason`
+exceto `client_disconnect` (`App.tsx:312`) — **nunca teve este defeito**; o release novo chega a um
+contato já removido (no-op). O conserto é só do bridge.
+
+**Defeito de instrumento achado no caminho:** o comando de baseline da suíte do bridge, herdado por
+várias passagens, aponta para `/app/packages/orchestrator_bridge` (underscore) e o diretório é
+`orchestrator-bridge` (hífen) — ele **nunca rodou**, e o "96 passed" era número herdado sem comando
+que o produzisse. Resolvido estruturalmente (`import … ; print(p.__file__)`), e o 96 ficou
+retroativamente validado (102 − 6 novos).
+
+**E2E em tráfego real (2026-08-26, 10:58 e 11:04 UTC).** Dois Transfers, dois releases publicados
+**1 ms** depois do fim do segmento, e a lista de contatos do Console vazia na sequência:
+
+```
+Transfer: origin segment ended … session=bf7bac13… instance=human-c30b50d9…
+segment release published: session=bf7bac13… recipients=['human-c30b50d9…']
+```
+
+⚠️ **O que a medição NÃO cobre — e o log diz qual é.** `recipients` saiu com **um** elemento: o
+`session.human_agent_participant_id` estava ausente, então a segunda forma de nomear o humano — a
+defesa contra o retorno INTERMITENTE do defeito — **nunca foi exercida em tráfego real**. Tem teste
+unitário; não tem população. Ramo coberto por teste e não por uso continua sendo promessa parcial.
+
+⚠️ Também **não** foi medido que o contato CONTINUOU no destino — provou-se que a origem foi
+liberada, que é outra proposição. E o caso *transfer com o cliente ainda CONECTADO* segue sem teste,
+como a passagem já registrava.
+
+Sites: `orchestrator-bridge/main.py` (`_publish_segment_release` + chamada no ramo de transfer);
+`tests/test_segment_release_on_transfer.py` (6 testes, com testemunha negativa). Suíte **96 → 102**.
+
 ---
 
 *Este documento é a referência canônica para o mecanismo de conferência do PlugHub.*

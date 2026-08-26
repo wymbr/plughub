@@ -201,8 +201,9 @@
       "internal":    "Interno — etapa da maquinaria, sem acesso do cliente",
       "unknownHint": "Direção indeterminada: spawn_reason desconhecido ({{value}})"
     },
-    "processChipHint":  "Processo com {{count}} contatos — abrir",
-    "processFootnote":  "O número no chip conta o processo inteiro — o período recorta os contatos listados, não o tamanho do processo.",
+    "processChipHint":  "{{count}} sessões neste processo — clique para abrir",
+    "processChipOpen":  "clique para abrir o processo",
+    "processFootnote":  "Os números do chip contam o processo inteiro — o período recorta os contatos listados, não o tamanho do processo. Acessos do cliente e etapas internas aparecem separados, nunca somados.",
     "count_one":   "{{count}} contato",
     "count_other": "{{count}} contatos",
     "countInternal_one":   "{{count}} interna",

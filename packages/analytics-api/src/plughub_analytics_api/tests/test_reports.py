@@ -21,6 +21,7 @@ from ..reports_query import (
     _apply_origin_scope,
     _apply_contact_scope,
     _attach_journey_internal_counts,
+    _attach_session_journey_chip,
     _contact_only_predicate,
     _DIRECTION_EXPR,
     SESSION_DIRECTIONS,
@@ -371,6 +372,102 @@ class TestQuerySessionsReport:
         balde plausível."""
         assert "ifNull(s.spawn_reason, '') != '', ''," in _DIRECTION_EXPR
         assert set(SESSION_DIRECTIONS) == {"inbound", "outbound", "internal"}
+
+
+# ── chip de processo: o total e a QUEBRA (2026-08-26) ────────────────────────
+#
+# O que estes testes protegem não é "o chip conta certo" — é que **o número que o
+# operador clica e o cabeçalho aonde ele chega continuem sendo a mesma população**.
+# Antes desta fatia o chip publicava `· 5` sob o rótulo "contatos" e a visão 2, para
+# onde ele pivota, publicava `3 acessos · 2 etapas internas`: dois números certos,
+# uma divergência criada pela F4 ao dar ao cabeçalho um domínio que o chip não tinha.
+#
+# A garantia é aritmética e vem da expressão ÚNICA: os três baldes saem de `countIf`
+# sobre `_DIRECTION_EXPR`, cujo `multiIf` é exaustivo ⇒ `acesso + interna + não
+# classificada == total`, sempre. Um teste que só olhasse os campos existirem não
+# pegaria a regressão que importa (alguém recortar o total por direção, fazendo o
+# chip dizer `·3` e a tela mostrar 5 linhas).
+
+class TestJourneyChipCounts:
+    _ALIAS_COLS = ["source_root", "canonical_root"]
+    _CHIP_COLS  = ["jid", "n", "n_access", "n_internal", "n_unknown"]
+
+    def _rows(self):
+        return [{"session_id": "s1", "root_session_id": "r1"}]
+
+    def test_breakdown_uses_the_same_direction_expression(self):
+        """Três `countIf`, uma expressão. Se alguém reescrever a regra aqui, a
+        contagem do chip e a coluna `direction` da mesma tela passam a poder
+        discordar — e o sintoma seria mudo: um chip `· 3 + 2` sobre uma tabela
+        que mostra 4 acessos."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0]]),
+        )
+        _attach_session_journey_chip(client, DB, TENANT, self._rows(), None, None)
+        chip_sql = client.query.call_args_list[-1].args[0]
+        assert chip_sql.count(_DIRECTION_EXPR) == 3, (
+            "a quebra do chip deixou de compartilhar a expressão de direção"
+        )
+
+    def test_breakdown_query_joins_the_channel_recovery(self):
+        """`_DIRECTION_EXPR` lê `_ch.channel_v`: sem o join ela nem compila, e um
+        `s.channel` cru no lugar faria a sessão ATIVA de webhook (a que o
+        `parse_routed` deixa com `channel=''`) cair em `inbound` aqui e em
+        `internal` na listagem."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0]]),
+        )
+        _attach_session_journey_chip(client, DB, TENANT, self._rows(), None, None)
+        chip_sql = client.query.call_args_list[-1].args[0]
+        assert "AS _ch ON _ch.session_id = s.session_id" in chip_sql
+
+    def test_the_three_buckets_add_up_to_the_total(self):
+        """A invariante que o chip publica. Vale com a classe não classificada
+        POVOADA — o ramo que hoje tem 0 sessões no tenant e por isso nunca foi
+        exercido em tela."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 6, 3, 2, 1]]),
+        )
+        rows = self._rows()
+        _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
+        r = rows[0]
+        assert r["journey_session_count"]       == 6
+        assert r["journey_access_count"]        == 3
+        assert r["journey_internal_step_count"] == 2
+        assert r["journey_unclassified_count"]  == 1
+        assert (r["journey_access_count"] + r["journey_internal_step_count"]
+                + r["journey_unclassified_count"]) == r["journey_session_count"]
+
+    def test_missing_journey_leaves_all_four_absent(self):
+        """Testemunha negativa. Journey sem linha no agregado fica `None` nos
+        QUATRO campos — zerar só a quebra desenharia `· 0 + 0` num chip cujo
+        total ninguém sabe, que é o valor plausível de sempre."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, []),
+        )
+        rows = self._rows()
+        _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
+        assert rows[0]["journey_session_count"]       is None
+        assert rows[0]["journey_access_count"]        is None
+        assert rows[0]["journey_internal_step_count"] is None
+        assert rows[0]["journey_unclassified_count"]  is None
+
+    def test_query_failure_leaves_all_four_absent(self):
+        """Falha da agregação não vira `1` nem `0` em campo nenhum — chip ausente
+        e processo-de-um contato precisam continuar distinguíveis."""
+        client = MagicMock()
+        client.query.side_effect = [
+            _ch_result(self._ALIAS_COLS, []),
+            RuntimeError("clickhouse down"),
+        ]
+        rows = self._rows()
+        _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
+        assert rows[0]["journey_session_count"]      is None
+        assert rows[0]["journey_unclassified_count"] is None
 
 
 # ── query_agents_report — REMOVIDO (2026-07-28) ──────────────────────────────

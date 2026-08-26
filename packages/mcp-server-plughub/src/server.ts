@@ -39,7 +39,10 @@ import { registerCalendarTools }    from "./tools/calendar"
 import type { CalendarDeps }        from "./tools/calendar"
 import { registerAgentEventTools }  from "./tools/agent-events"
 import type { AgentEventDeps }      from "./tools/agent-events"
-import { registerJourneyTools, writeContextTag } from "./tools/journey"
+// `resolveJourneyRoot` + `journeyCtxKey` entram aqui pelo snapshot de PERSISTÊNCIA
+// (F5): a raiz canônica do processo tem de ser resolvida pela MESMA via do
+// `writeContextTag` e do `journey_merge`, senão o contexto compartilhado se parte.
+import { registerJourneyTools, writeContextTag, resolveJourneyRoot, journeyCtxKey } from "./tools/journey"
 import { registerSurveyTools }      from "./tools/survey"
 import type { SurveyDeps }          from "./tools/survey"
 import { registerSegmentTools }     from "./tools/segment"
@@ -879,7 +882,22 @@ function requireJwtRole(
   }
 }
 
-/** Namespaces visible to operator by default (conservative). Overridden per-pool. */
+/**
+ * Namespaces visible to operator by default (conservative). Overridden per-pool.
+ *
+ * ⚠️ **Este valor é DESCRITO em dois textos de UI**, e eles já divergiram: até
+ * 2026-08-26 as duas locales de `configRecursos.contextVisibility.hint` diziam
+ * *"Padrão: service, journey, session"* — prometendo `journey`, que nunca esteve
+ * aqui. A divergência é do tipo pior: promete MAIS visibilidade do que existe,
+ * então o sintoma é *"o operador não vê o que a tela disse que veria"*, e ninguém
+ * abre chamado sobre um campo que não apareceu.
+ *
+ * **Não há mecanismo que impeça a volta** — só este comentário, que é
+ * exatamente a família de promessa-sem-produtor que a § Postura de Engenharia
+ * critica. Ao mexer aqui, mexa também em
+ * `platform-ui/src/i18n/locales/{en,pt-BR}/configRecursos.json`. Registrado no
+ * `TODO.md`.
+ */
 const DEFAULT_OPERATOR_NAMESPACES = ["service", "session"]
 // Platform default for context_visibility.operator_allow_tags — exact tags an
 // operator sees regardless of namespace. caller.customer_id is an internal id (not
@@ -925,12 +943,41 @@ async function getContextMaskingConfig(
  *
  * Pattern specificity:
  *   exact match    → 20
- *   prefix glob    → 10  ("caller.*" matches "caller.cpf")
+ *   suffix glob    → 15 + (segmentos-1)   ("*.cpf" matches "session.cpf")
+ *   prefix glob    → 10 + (segmentos-1)   ("caller.*" matches "caller.cpf")
  *   wildcard *     →  0  (matches anything)
  *
  * Role specificity added on top:
  *   matches caller's role category exactly → +2
  *   matches "*"                            → +0
+ *
+ * ── Por que o SUFIXO existe (2026-08-26) ─────────────────────────────────────
+ *
+ * As regras protegiam por NAMESPACE (`caller.*`, `account.*`), mas a varredura do
+ * ContextStore vivo mostrou que o PII cai em `session.*` e `journey.*` — e esses
+ * **não podem ter catch-all**: um `session.* → hidden` derruba
+ * `session.dialog_form_id`/`session.decisions` e a tela de aprovação para de
+ * renderizar em silêncio (o seed do config-api avisa isso por escrito).
+ *
+ * A razão é estrutural: o `delegate.context` de um workflow chega na sessão-filha
+ * com prefixo `session.`, então **todo campo que um workflow passa adiante nasce
+ * desprotegido** e só fica protegido se alguém lembrar de escrever uma regra
+ * EXATA. Foi assim que `session.cpf` ficou em claro enquanto `caller.cpf` estava
+ * mascarado, e `journey.numero_cartao` enquanto `session.numero_cartao` estava.
+ *
+ * O sufixo protege por TIPO DE CAMPO em vez de por namespace: `*.cpf` cobre
+ * `session.cpf`, `journey.cpf` e o namespace que ninguém previu ainda.
+ *
+ * ⚠️ **Casamento em FRONTEIRA DE SEGMENTO, nunca substring.** `tag.endsWith("." + s)`
+ * — com `includes`, `*.cpf` casaria `session.xcpf`. Regra que casa DEMAIS é tão
+ * ruim quanto a que casa de menos; só falha do outro lado, e mascarar demais é
+ * invisível (ninguém abre chamado por ver `***`).
+ *
+ * ⚠️ **A profundidade entra no score** porque sem ela dois globs da mesma família
+ * empatam e o desempate vira ORDEM DA LISTA — `*.limite_aprovado` ×
+ * `*.finance.limite_aprovado` responderiam conforme quem foi escrito primeiro.
+ * Nenhuma regra atual tem profundidade > 1, então isto não move nada hoje; existe
+ * para que o dia em que mover, mova de forma declarada.
  */
 function ruleSpecificity(
   pattern:      string,
@@ -942,11 +989,16 @@ function ruleSpecificity(
   let patternScore: number
   if (pattern === tag) {
     patternScore = 20
+  } else if (pattern.startsWith("*.")) {
+    // Suffix glob: protege por TIPO DE CAMPO, através de namespaces.
+    const suffix = pattern.slice(2)               // "*.cpf" → "cpf"
+    if (!suffix || !tag.endsWith(`.${suffix}`)) return null
+    patternScore = 15 + (suffix.split(".").length - 1)
   } else if (pattern.endsWith(".*")) {
     const prefix = pattern.slice(0, -2) // "caller.*" → "caller"
     const tagNs  = tag.split(".").slice(0, prefix.split(".").length).join(".")
     if (tagNs !== prefix) return null
-    patternScore = 10
+    patternScore = 10 + (prefix.split(".").length - 1)
   } else if (pattern === "*") {
     patternScore = 0
   } else {
@@ -1145,6 +1197,93 @@ async function applyContextMaskingDynamic(
   }
 
   return result
+}
+
+/**
+ * Snapshot do ContextStore para PERSISTÊNCIA durável (F5) — valor mascarado em
+ * grau OPERATOR, **sem portão de namespace**.
+ *
+ * ── Por que NÃO é `applyContextMaskingDynamic` (desvio deliberado do ADR) ─────
+ *
+ * Aquela função faz DUAS coisas que o ADR trata como uma: o **portão de namespace**
+ * (concern de EXIBIÇÃO — quais namespaces o pool do operador expõe na aba Contexto)
+ * e o **mascaramento de valor** (concern de PII). Só o segundo pertence a um
+ * registro durável.
+ *
+ * Aplicar o portão aqui faria a config de UI de um pool **apagar história**: um pool
+ * que estreitasse `operator_namespaces` deletaria entradas do snapshot, em silêncio
+ * e para sempre. É o mesmo defeito que o `CLAUDE.md` já registra para o sentimento
+ * (*"um pool que estreitasse a lista apagaria o sentimento em silêncio"*), e por isso
+ * lá também se lê o hash CRU. O portão continua valendo na LEITURA, por quem exibe.
+ *
+ * ── Grau OPERATOR, para sempre (decisão do dono, 2026-08-26) ─────────────────
+ *
+ * Masking é função de (tag × papel) e um snapshot não tem papel. Persistimos no grau
+ * mais restritivo: `caller.cpf` vira `***-00` no registro, e **nem supervisor
+ * recupera o valor real por aqui**. Alinhado à minimização LGPD e ao caso de uso
+ * declarado (*"o que a plataforma SABIA quando decidiu"*).
+ *
+ * ⚠️ **Consequência a não esquecer: este snapshot NÃO serve a auditoria que precise
+ * do valor real.** Essa continua sendo o `TokenVault` de mensagens, que existe para
+ * isso e tem controle de acesso próprio. Persistir em grau supervisor seria recriar
+ * o cofre que a R7 recusou, com outro nome.
+ *
+ * ── `hidden` é CONTADO, não omitido ─────────────────────────────────────────
+ *
+ * Regra de exibição do ADR §3, aplicada já no armazenamento: a entrada fica na
+ * linha com `value: null` e `category: "hidden"`. Dropar a chave faria o leitor
+ * concluir que a chamada nunca escreveu nada — ausência plausível de novo.
+ *
+ * `agent.*` sai (visibilidade por participante, resolvida noutro lugar) e **não
+ * entra no total**: não é fato do contato, então contá-lo como "oculto" mentiria
+ * sobre quantas entradas o operador deixou de ver.
+ */
+interface PersistenceSnapshot {
+  entries:      Record<string, unknown>
+  total:        number
+  hidden_count: number
+}
+
+async function maskContextForPersistence(
+  rawHash:  Record<string, string>,
+  tenantId: string,
+): Promise<PersistenceSnapshot> {
+  const config = await getContextMaskingConfig(tenantId)
+  const entries: Record<string, unknown> = {}
+  let total  = 0
+  let hidden = 0
+
+  for (const [tag, raw] of Object.entries(rawHash)) {
+    const ns = tag.split(".")[0] ?? ""
+    if (ns === "agent") continue
+    total++
+
+    let entry: Record<string, unknown>
+    try { entry = JSON.parse(raw) as Record<string, unknown> }
+    catch { entry = { value: raw } }
+
+    const rule     = resolveContextMaskingRule(tag, "operator", config)
+    const maskType = rule ? rule.type : config.default_unmatched_operator
+
+    if (maskType === "hidden") {
+      hidden++
+      entries[tag] = { ...entry, value: null, masked: true, category: "hidden" }
+      continue
+    }
+    if (maskType === "plain") {
+      entries[tag] = entry
+      continue
+    }
+    entries[tag] = {
+      ...entry,
+      value:    applyMaskingTypeToValue(String(entry["value"] ?? ""), maskType),
+      pii:      true,
+      masked:   true,
+      category: maskType,
+    }
+  }
+
+  return { entries, total, hidden_count: hidden }
 }
 
 /**
@@ -1364,6 +1503,82 @@ export async function startServer(config: ServerConfig): Promise<void> {
         })
       }
       res.json({ session_id: sessionId, count: decisions.length, decisions })
+    } catch (err) {
+      res.status(500).json({ error: String(err) })
+    }
+  })
+
+  // ── F5 — snapshot do ContextStore para PERSISTÊNCIA (2026-08-26) ───────────
+  //
+  // O `ContextStorePersister` (session-replayer, Python) precisa gravar o ctx
+  // MASCARADO no fechamento da sessão, e o mascarador existe **só aqui**
+  // (`resolveContextMaskingRule` + `applyMaskingTypeToValue`). As três saídas eram:
+  // reimplementar em Python (segunda implementação de regra de SEGURANÇA, com os
+  // dois lados decidindo e divergência que não fica vermelha), mudar o persister
+  // para TypeScript (o mcp-server ganharia pool PG e consumer Kafka, contra a regra
+  // de "só expõe tools"), ou este hop. Escolhido o hop: **o masking continua com um
+  // dono só**, e o session-replayer já fala HTTP com o config-api no boot.
+  //
+  // O PII **não viaja no corpo da requisição**: o caller manda `session_id`, e é o
+  // mcp-server que lê o hash do Redis e devolve já mascarado.
+  app.post("/internal/context-snapshot", async (req: Request, res: Response) => {
+    // Sem credencial, RECUSA — nunca abre. Endpoint que devolve ctx mascarado de
+    // qualquer sessão do tenant não pode ficar aberto porque um env não foi setado;
+    // token bem-formado e ausente é o valor plausível mais caro (V6 do ADR de voz).
+    const expected = process.env["MCP_INTERNAL_SERVICE_TOKEN"] ?? ""
+    if (!expected) {
+      console.error(
+        "[context-snapshot] MCP_INTERNAL_SERVICE_TOKEN não configurado — RECUSANDO. " +
+        "O ContextStorePersister não vai gravar snapshot nenhum até isto ser setado " +
+        "(nos DOIS serviços). Ausência de snapshot ≠ sessão sem contexto.",
+      )
+      res.status(503).json({ error: "internal_token_not_configured" })
+      return
+    }
+    if (req.header("x-service-token") !== expected) {
+      res.status(401).json({ error: "Unauthorized" })
+      return
+    }
+
+    const body      = (req.body ?? {}) as Record<string, unknown>
+    const tenantId  = typeof body["tenant_id"]  === "string" ? body["tenant_id"]  : ""
+    const sessionId = typeof body["session_id"] === "string" ? body["session_id"] : ""
+    if (!tenantId || !sessionId) {
+      res.status(400).json({ error: "tenant_id + session_id required" })
+      return
+    }
+    const includeJourney = body["include_journey"] === true
+
+    try {
+      const rawHash = (await redis.hgetall(`${tenantId}:ctx:${sessionId}`)) ?? {}
+      const out: Record<string, unknown> = {
+        session: await maskContextForPersistence(rawHash, tenantId),
+      }
+
+      // ⚠️ A raiz canônica é resolvida AQUI, não pelo caller. Ela exige o union-find
+      // sobre `journey_aliases` (`resolveJourneyRoot`), e essa é a definição de "qual
+      // journey é esta" — uma segunda implementação dela, em Python, partiria o
+      // contexto compartilhado no merge exatamente como o comentário de
+      // `writeContextTag` descreve. Mesma via de proveniência que o bridge usa:
+      // `session.root_session_id` do ctx → find da componente.
+      if (includeJourney) {
+        let provenanceRoot = sessionId
+        const rawRoot = rawHash["session.root_session_id"]
+        if (rawRoot) {
+          try {
+            const parsed = JSON.parse(rawRoot) as { value?: unknown }
+            if (parsed?.value) provenanceRoot = String(parsed.value)
+          } catch { /* fallback: a própria sessão é a raiz de proveniência */ }
+        }
+        const canonicalRoot = await resolveJourneyRoot(redis, tenantId, provenanceRoot)
+        const jHash = (await redis.hgetall(journeyCtxKey(tenantId, canonicalRoot))) ?? {}
+        out["journey"] = {
+          root: canonicalRoot,
+          ...(await maskContextForPersistence(jHash, tenantId)),
+        }
+      }
+
+      res.json(out)
     } catch (err) {
       res.status(500).json({ error: String(err) })
     }

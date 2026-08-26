@@ -510,6 +510,28 @@ _SEED: list[tuple[str, str, object, str]] = [
                 {"pattern": "session.numero_cartao",   "role": "operator",   "type": "last_4",       "label": "Número do cartão em pacote de aprovação"},
                 {"pattern": "session.vencimento_cartao", "role": "operator", "type": "last_2",       "label": "Vencimento do cartão em pacote de aprovação"},
                 {"pattern": "session.limite_solicitado", "role": "operator", "type": "financial",    "label": "Valor solicitado em pacote de aprovação"},
+                # ── Sufixo: protege por TIPO DE CAMPO, através de namespaces ──────
+                # Acrescentadas em 2026-08-26 depois de VARRER o ContextStore vivo
+                # (`infra/test/sweep_ctx_tags.sh`), que achou `session.cpf` e
+                # `journey.numero_cartao` em CLARO — enquanto `caller.cpf` e
+                # `session.numero_cartao` estavam mascarados.
+                #
+                # A causa é estrutural, não esquecimento: `caller.*`/`account.*` têm
+                # catch-all, mas `session.*` e `journey.*` NÃO PODEM ter (ver o aviso
+                # acima — derrubaria a tela de aprovação), e é justamente ali que o
+                # `delegate.context` de um workflow deposita os campos. Todo campo novo
+                # que um workflow passa adiante nascia desprotegido.
+                #
+                # As exatas acima continuam vencendo (20 > 15): nada regride.
+                {"pattern": "*.resume_token",          "role": "operator",   "type": "hidden",       "label": "Token de retomada — CAPACIDADE, nunca retida (a F5 tornou o ctx durável)"},
+                {"pattern": "*.cpf",                   "role": "operator",   "type": "last_2",       "label": "CPF em qualquer namespace"},
+                {"pattern": "*.cnpj",                  "role": "operator",   "type": "last_2",       "label": "CNPJ em qualquer namespace"},
+                {"pattern": "*.telefone",              "role": "operator",   "type": "last_4",       "label": "Telefone em qualquer namespace"},
+                {"pattern": "*.email",                 "role": "operator",   "type": "email_domain", "label": "E-mail em qualquer namespace"},
+                {"pattern": "*.numero_cartao",         "role": "operator",   "type": "last_4",       "label": "Número de cartão em qualquer namespace"},
+                {"pattern": "*.vencimento_cartao",     "role": "operator",   "type": "last_2",       "label": "Vencimento de cartão em qualquer namespace"},
+                {"pattern": "*.limite_solicitado",     "role": "operator",   "type": "financial",    "label": "Valor solicitado em qualquer namespace"},
+                {"pattern": "*.limite_aprovado",       "role": "operator",   "type": "financial",    "label": "Limite aprovado em qualquer namespace"},
                 {"pattern": "caller.*",                "role": "operator",   "type": "last_4",       "label": "Dados do cliente — catch-all (campos não mapeados)"},
                 {"pattern": "account.*",               "role": "operator",   "type": "financial",    "label": "Dados da conta — catch-all (campos não mapeados)"},
                 {"pattern": "*",                       "role": "supervisor", "type": "plain",        "label": "Supervisor e admin veem todos os campos sem máscara"},

@@ -617,6 +617,11 @@ services:
       EVALUATION_API_URL: http://evaluation-api:3400   # G-PROBE fase 2 — base p/ pre-review
       PLUGHUB_EVALUATION_SERVICE_TOKEN: changeme_eval_service_token_demo   # G-PROBE fase 2 — credencial de serviço
       AGENT_REGISTRY_SERVICE_TOKEN: changeme_agent_registry_service_token_demo   # G-PROBE — skill_deploy (deploy.ts)
+      # F5 — credencial do `POST /internal/context-snapshot`, que devolve o ctx
+      # MASCARADO de uma sessão ao ContextStorePersister. Ausente ⇒ o endpoint
+      # RECUSA (503) e loga; nunca fica aberto por env não setado. DEVE casar com o
+      # MCP_INTERNAL_SERVICE_TOKEN do session-replayer.
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
       SKILL_FLOW_URL: http://skill-flow-service:3460
       CALENDAR_API_URL: http://calendar-api:3700
       WORKFLOW_API_URL: http://workflow-api:3800
@@ -835,6 +840,16 @@ services:
       # EVALUATOR_POOL / REPLAY_SPEED_FACTOR removidos (config-consolidation item 7b):
       # vêm do config-api namespace `evaluation` (evaluator_pool=avaliacao_ia,
       # replay_speed_factor=10.0), lidos no startup via GET /config/evaluation.
+      # F5 — ContextStorePersister: pede o ctx MASCARADO ao mcp-server, porque o
+      # masking existe só lá. DEVE casar com o MCP_INTERNAL_SERVICE_TOKEN do
+      # mcp-server; divergir faz o persister receber 401 e gravar ZERO linhas.
+      # ⚠️ O serviço chama-se `mcp-server-plughub` — `mcp-server` NÃO resolve.
+      # A grafia certa já era a convenção em quatro serviços (751, 801, 1454, 1784);
+      # esta linha nasceu com a quinta e o sintoma foi `Name or service not known`
+      # a cada fechamento de sessão. Duas grafias da mesma coisa é o defeito de
+      # sempre — aqui não ficou mudo só porque o `except` nomeia o motivo.
+      MCP_SERVER_URL:             http://mcp-server-plughub:3100
+      MCP_INTERNAL_SERVICE_TOKEN: changeme_mcp_internal_service_token_demo
     depends_on:
       kafka:
         condition: service_healthy

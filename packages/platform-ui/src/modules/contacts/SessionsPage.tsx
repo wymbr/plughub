@@ -9,7 +9,7 @@
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
-import { ChevronRight, GitBranch } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { useAuth } from '@/auth/useAuth'
 import { apiFetch } from '@/api/apiFetch'
 import AnaliseJourneysPage from '@/modules/analise/AnaliseJourneysPage'
@@ -21,8 +21,12 @@ import { WebhookSegmentDetail } from '@/modules/service/components/WebhookSegmen
 import type { ContactSegment } from '@/modules/service/types'
 import type { TraceNode }      from '@/modules/service/components/WorkflowTraceList'
 import type { ContactFilters } from './types'
-import { DEFAULT_FILTERS, journeyLabel } from './types'
-import { ListaTab }           from './tabs/ListaTab'
+import { DEFAULT_FILTERS } from './types'
+import { ListaTab }        from './tabs/ListaTab'
+// Mesmo componente que a coluna "Processo" da lista usa — ver o comentário do
+// `ProcessCrumb` abaixo para por que isto não é conveniência.
+import { ProcessChip, processCounts, hasProcess } from './ProcessChip'
+import type { ProcessCounts } from './ProcessChip'
 
 // ── Extended filters ──────────────────────────────────────────────────────────
 
@@ -181,24 +185,22 @@ function FilterBar({ filters, setFilters }: {
 // *"os contatos do processo não aparecem em lugar nenhum"*: apareciam, a um clique,
 // numa tela sem caminho até ela.
 //
-// Só é renderizado com processo de MAIS DE UM contato — mesma regra do chip: sem
+// Só é renderizado com processo de MAIS DE UMA sessão — mesma regra do chip: sem
 // isso não há para onde pivotar, e um selo apontando para um processo de um contato
 // só afirmaria uma relação que não existe.
-function ProcessCrumb({ journeyId, count, onOpen }: {
-  journeyId: string; count?: number; onOpen: () => void
+//
+// ⚠️ **É o MESMO componente da lista** (`ProcessChip`), não um parecido. Enquanto
+// eram dois, divergiram no corte do id (4 × 8 caracteres) — mesmo processo, dois
+// códigos, um em cada ponta do clique. A regra do pivô (`hasProcess`) e os números
+// vêm de lá pela mesma razão.
+function ProcessCrumb({ journeyId, counts, onOpen }: {
+  journeyId: string; counts: ProcessCounts | null; onOpen: () => void
 }) {
   const { t } = useTranslation('contacts')
   return (
     <>
       <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
-      <button
-        onClick={onOpen}
-        title={count ? t('lista.processChipHint', { count }) : journeyId}
-        className="inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full bg-primary-light text-primary hover:underline">
-        <GitBranch className="w-3 h-3" aria-hidden="true" />
-        {journeyLabel(journeyId)}
-        {count ? <span className="tabular-nums font-semibold">· {count}</span> : null}
-      </button>
+      <ProcessChip journeyId={journeyId} counts={counts} t={t} onOpen={onOpen} />
     </>
   )
 }
@@ -227,7 +229,7 @@ export default function SessionsPage() {
   const [chEntry, setChEntry] = useState<{ id: string; ch: string } | null>(null)
   /** Processo a que a sessão aberta pertence, quando tem mais de um contato. É o
    *  selo `PRC-…` do breadcrumb — a volta ao processo, que não existia. */
-  const [sessionJourney, setSessionJourney] = useState<{ id: string; n: number } | null>(null)
+  const [sessionJourney, setSessionJourney] = useState<{ id: string; counts: ProcessCounts } | null>(null)
   /** S3 — trilha de ancestrais ao navegar para uma sessão ORIGINADA. Guarda o canal
    *  junto do id: é ele que decide trace × segmentos ao voltar. */
   const [sessionTrail,       setSessionTrail]       = useState<Array<{ id: string; ch: string | null }>>([])
@@ -297,12 +299,13 @@ export default function SessionsPage() {
         setChEntry(prev => (prev && prev.id === detailSessionId
           ? prev
           : { id: detailSessionId, ch: row.channel ?? '' }))
-        const jid = row.journey_id || row.root_session_id || null
-        const n   = row.journey_session_count ?? 0
-        // Mesma regra do chip da lista: sem processo com N > 1 não há para onde
-        // pivotar, e um selo apontando para um processo de um contato só afirmaria
-        // uma relação que não existe.
-        setSessionJourney(jid && n > 1 ? { id: jid, n } : null)
+        const jid    = row.journey_id || row.root_session_id || null
+        const counts = processCounts(row)
+        // Mesma regra do chip da lista, e o MESMO predicado — não uma reescrita
+        // dele: sem processo com mais de uma sessão não há para onde pivotar, e um
+        // selo apontando para um processo de um contato só afirmaria uma relação
+        // que não existe.
+        setSessionJourney(jid && counts && hasProcess(counts) ? { id: jid, counts } : null)
       })
       .catch(e => { if (!cancelled) setDeepLinkMiss(String(e)) })
     return () => { cancelled = true }
@@ -400,7 +403,7 @@ export default function SessionsPage() {
             {t('sessions.breadcrumbs.sessions')}
           </button>
           {crumbJourney && (
-            <ProcessCrumb journeyId={crumbJourney} count={sessionJourney?.n}
+            <ProcessCrumb journeyId={crumbJourney} counts={sessionJourney?.counts ?? null}
               onOpen={() => setSearchParams({ journey: crumbJourney })} />
           )}
           <ChevronRight className="w-3.5 h-3.5 text-border-strong" aria-hidden="true" />
@@ -468,7 +471,7 @@ export default function SessionsPage() {
           {/* A volta ao PROCESSO. Fica ANTES da trilha de ancestrais porque é o
               escopo mais largo: processo › contato de origem › … › esta sessão. */}
           {crumbJourney && (
-            <ProcessCrumb journeyId={crumbJourney} count={sessionJourney?.n}
+            <ProcessCrumb journeyId={crumbJourney} counts={sessionJourney?.counts ?? null}
               onOpen={() => setSearchParams({ journey: crumbJourney })} />
           )}
           {sessionTrail.map((crumb, i) => (

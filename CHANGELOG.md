@@ -2,6 +2,336 @@
 
 ---
 
+## F5 — `ContextStorePersister`: o que a plataforma SABIA vira registro durável (2026-08-26)
+
+Última fase do arco de histórico unificado (ADR §3 F5). Irmão do `PipelineStatePersister`,
+mesma justificativa: o ContextStore vive só no Redis com TTL de 24 h, e sem snapshot não há como
+responder depois *"o que a plataforma sabia quando decidiu escalar?"*.
+
+**Gatilho** `session_closed` · **destino** PG `session_context_snapshot` · **conteúdo** o hash
+`{t}:ctx:{sid}` entrada a entrada, preservando `{value, confidence, source, visibility,
+updated_at}` · **estado final**, nunca trajetória · **foto inteira**, nunca delta · e uma foto do
+ctx de PROCESSO por close de sessão-membro.
+
+A propriedade que amarra "estado final" e "foto por close": estado final perde a sobrescrita
+DENTRO do contato, mas uma foto por close **recupera a sobrescrita ENTRE contatos**. A
+granularidade de trajetória vira exatamente o contato — a unidade da hierarquia —, e o valor de
+leitura está no **diff entre fotos consecutivas**.
+
+### O custo que o ADR não precificou: o mascarador é TypeScript
+
+O ADR manda *"persistir mascarado, e ponto"*. Medido: `applyContextMaskingDynamic` +
+`resolveContextMaskingRule` + `applyMaskingTypeToValue` existem **só no mcp-server**, e o
+persister vive num serviço Python. Três saídas, e a escolhida foi a do meio:
+
+| | custo |
+|---|---|
+| Reimplementar em Python | **segunda implementação de regra de SEGURANÇA**, com os dois lados decidindo — de menos vaza PII, de mais é invisível |
+| Persister em TypeScript | o mcp-server ganharia pool PG e consumer Kafka, contra a regra de "só expõe tools"; quebra a família dos persisters |
+| **Hop HTTP** ✅ | `POST /internal/context-snapshot` no mcp-server; o masking fica com **um dono só** |
+
+O PII **não viaja no corpo**: o caller manda `session_id` e o mcp-server lê o hash e devolve já
+mascarado. Credencial `MCP_INTERNAL_SERVICE_TOKEN`; **ausente ⇒ RECUSA (503)**, nunca fica aberto
+por env não setado.
+
+### Dois desvios deliberados da letra do ADR
+
+**1. O portão de namespace NÃO é aplicado.** `applyContextMaskingDynamic` faz duas coisas numa
+função só: o portão por `operator_namespaces` (concern de EXIBIÇÃO, config por pool) e o
+mascaramento de valor (concern de PII). Só o segundo pertence a um registro durável — aplicar o
+primeiro faria a config de UI de um pool **apagar história em silêncio**, que é o defeito que o
+`CLAUDE.md` já documenta para o sentimento. O ramo E do gate fica vermelho se alguém "consertar".
+
+**2. A raiz canônica é resolvida no mcp-server, não no persister.** Ela exige o union-find sobre
+`journey_aliases`, que é a definição de *"qual journey é esta"*; em Python seria a segunda
+implementação, e o sintoma seria uma foto pendurada na raiz errada, sem nada ficar vermelho. Por
+isso o endpoint aceita `include_journey` e devolve os dois escopos numa chamada.
+
+**Grau OPERATOR, para sempre** (decisão do dono): masking é (tag × papel) e snapshot não tem papel.
+⚠️ **Consequência declarada: este registro NÃO serve a auditoria que precise do valor real** — essa
+continua sendo o `TokenVault` de mensagens. Persistir em grau supervisor recriaria o cofre que a R7
+recusou, com outro nome.
+
+**`hidden` é CONTADO, não omitido** — a entrada fica na linha com `value: null` e `category:
+"hidden"`, e `hidden_count` viaja em coluna própria. Dropar a chave faria o leitor concluir que a
+chamada nunca escreveu nada.
+
+### Três defeitos que o arco encontrou, e nenhum era dele
+
+- 🔴 **As restrições de versão do `session-replayer` eram INERTES havia meses.** `pip install
+  aiokafka>=0.10.0` **sem aspas** é redirecionamento de shell: o pip recebe `aiokafka` e o `>` cria
+  um arquivo `=0.10.0`. As cinco specs instalavam sem pin. A evidência estava visível em `ls /app`
+  (`=0.10.0`, `=0.29.0`, `=1.0.0`, `=2.5.0`, `=5.0.0`) e ninguém olhou — **o build ficava verde, e
+  restrição que não restringe não reprova**. Só neste Dockerfile; os demais conferidos.
+- 🔴 **A suíte do `session-replayer` era inalcançável no container** — o `tests/` nunca foi copiado
+  na imagem, o que explica o pacote não aparecer em baseline nenhuma das passagens. Corrigido no
+  mesmo Dockerfile; a F5 nasce com teste que roda em vez de teste que ninguém alcança.
+- **Quinta grafia de um host que já tinha quatro.** `MCP_SERVER_URL:
+  http://mcp-server-plughub:3100` existia em quatro serviços; a linha nova nasceu como
+  `mcp-server` e falhou com `Name or service not known` a cada fechamento. **Não ficou mudo só
+  porque o `except` nomeia o motivo** — com `except: pass` a tabela ficaria vazia e o arco pareceria
+  entregue. Corrigido no compose E no default do código (um default `localhost` num serviço que só
+  roda em container é a mesma armadilha esperando a próxima instalação).
+
+### A varredura que a F5 obrigou — e três buracos de PII que ela achou
+
+Persistir o ctx mudou o regime de retenção do hash **inteiro**, de efêmero (Redis, 24 h) para
+durável. O hash nunca fora revisado sob esse regime, e o primeiro olhar ao dado gravado achou
+`session.delegate_resume_token` — uma **capacidade** — em claro. Isso motivou varrer o resto
+(`infra/test/sweep_ctx_tags.sh`, novo: inventário de tags por frequência, com `--values`).
+
+Em 24 sessões vivas, três tags em claro — e o padrão importa mais que as três:
+
+| tag | sessões | por que estava exposta |
+|---|---|---|
+| `session.cpf` | 2 | havia regra para `caller.cpf`, não para `session.cpf` |
+| `journey.numero_cartao` | 1 | havia para `session.numero_cartao`, não para `journey.` |
+| `session.delegate_resume_token` | 11 | capacidade, sem regra nenhuma |
+
+**Causa estrutural, não esquecimento.** `caller.*`/`account.*` têm catch-all; `session.*` e
+`journey.*` **não podem ter** (o seed avisa: derrubaria a tela de aprovação, em silêncio), e é
+exatamente ali que o `delegate.context` de um workflow deposita os campos — logo **todo campo que
+um workflow passa adiante nasce desprotegido**.
+
+**Conserto: globs de SUFIXO**, que protegem por TIPO DE CAMPO em vez de por namespace. O matcher
+(`ruleSpecificity`) só entendia exato / prefixo / `*`; um `*.cpf` teria sido **regra que não regra**
+— apareceria na tela de Masking e nunca casaria. Acrescentado com duas cautelas:
+- **fronteira de SEGMENTO, nunca substring** (`tag.endsWith("." + s)`) — com `includes`, `*.cpf`
+  casaria `session.xcpf`, e regra que casa DEMAIS falha tão feio quanto a que casa de menos, só
+  que do lado invisível;
+- **profundidade entra no score** (prefixo `10+n`, sufixo `15+n`, exato 20) — sem isso dois globs
+  da mesma família empatam e o desempate vira ORDEM DA LISTA. Nenhuma regra atual tem profundidade
+  > 1, então não move nada hoje; existe para que no dia em que mover, mova declarado.
+
+Nove regras novas (`*.resume_token → hidden`, `*.cpf`, `*.cnpj`, `*.telefone`, `*.email`,
+`*.numero_cartao`, `*.vencimento_cartao`, `*.limite_solicitado`, `*.limite_aprovado`), no seed **e**
+na config viva — seed é seed-if-absent, então editar `seed.py` sozinho é no-op em tenant existente.
+Aplicação por `infra/test/apply_masking_suffix_rules.sh`, que **lê de volta** porque `200` não é
+prova (foi a leitura de volta, não o 200, que pegou o strip silencioso do Zod uma vez neste repo).
+
+⚠️ **Isto é REMENDO, não modelo.** `default_unmatched_operator: "plain"` continua sendo
+deny-nothing: cobrimos os tipos de campo que por acaso conhecemos, e um `session.rg` amanhã nasce
+exposto de novo. A inversão para allowlist foi **proposta pelo dono e aceita**, com briefing
+completo em `TODO.md` § *ARCO PROPOSTO — ContextStore como ALLOWLIST* — inclui o pré-requisito
+(a omissão precisa deixar de ser muda, senão troca-se vazamento de PII por quebra muda de UI) e as
+sete perguntas que o ADR tem de fechar.
+
+**As-built:** `mcp-server-plughub/server.ts` (`maskContextForPersistence` +
+`POST /internal/context-snapshot`); `session-replayer/context_persister.py` (novo, `urllib` em
+executor — o mecanismo que o serviço já usa, sem dependência nova); wiring em `consumer.py`;
+Dockerfile (aspas + `tests/`); compose (env nos dois lados).
+**Testes:** `test_context_persister.py` (7) — inclui testemunha negativa (sem token ⇒ **não**
+chama e **não** grava), "o persister nunca mascara", e "raiz ausente ⇒ nenhuma foto de processo".
+**Gates:** `probe_context_snapshot_endpoint.sh` (**6 ramos**; A/B recusa sem e com token errado,
+D o CPF injetado não volta cru, E o portão de namespace **não** poda o registro durável, **F** o
+glob de SUFIXO está em vigor). O ramo F injeta `session.cpf`, que **não tem regra exata** — sem
+ele o gate passaria idêntico num mundo onde o sufixo nunca funcionou, e `session.cpf` em claro foi
+um dos buracos que abriram esta varredura. Medido verde nos seis.
+
+### Deriva seed × config viva, achada no `antes:` do apply
+
+O inventário das 14 regras vigentes mostrou que `config-api/seed.py` e a config em execução
+**divergiram nos dois sentidos**: o seed tem `session.vencimento_cartao` e a base viva não; a base
+viva tem `session.cpf_titular` e o seed não. Armadilha conhecida (*fonte declarativa tem aplicador
+separado*): o seed foi editado depois de a base estar semeada, e seed-if-absent nunca reaplicou.
+
+Consequências medidas: **`session.vencimento_cartao` nunca esteve protegido neste ambiente** — e a
+tag existe (quarto buraco, hoje coberto pelo `*.vencimento_cartao`); e `session.cpf_titular` só
+existe vivo, então **instalação limpa nasce sem ele** — `*.cpf` **não** o cobre, porque o sufixo é
+`cpf_titular` e o casamento é em fronteira de segmento. **Hoje nenhuma das duas fontes é a verdade
+com confiança**; decidir isso é item do ADR novo (`TODO.md` § ARCO, pergunta 1b).
+
+⚠️ **A tela de Masking mostra `0 regras configuradas` com 14 regras em vigor.** As regras vêm do
+config-api e funcionam (o `***25` sai dali); o defeito é da UI. Primeiro alvo do arco novo.
+**E2E:** duas sessões reais gravadas (11 e 20 entradas, 0 ocultas), ctx de processo vazio **com o
+motivo logado** — ausência honesta, não silêncio.
+⚠️ **O gate nasceu VERDE** — o vermelho-primeiro se perdeu (o mcp-server foi recriado antes da
+primeira execução). Segunda vez no mesmo dia.
+⚠️ **Forward-only e sem leitor.** Nada consome `session_context_snapshot` ainda; o valor de leitura
+(o diff entre fotos consecutivas do mesmo processo) é fatia própria.
+
+---
+
+## Transfer: a tela da origem volta a ser liberada — e o defeito veio de um conserto (2026-08-26)
+
+Inconformidade relatada em **2026-08-24**: *"o Console não libera a tela depois do `Transfer`"*.
+O contato ficava na lista, input desabilitado, com o toast persistente *"Contato transferido.
+Aguardando encerramento…"* — indefinidamente.
+
+### O contrato que ninguém quebrou de propósito
+
+`AgentAssistContext.tsx` declara, em comentário e em código: depois de `session.closed
+reason=agent_transfer`, o contato **não é removido** — entra em modo wrap-up e só sai quando chega
+`session.closed reason="posatt_segment_complete"` com este agente em `recipients`.
+
+Esse evento é publicado em `process_routed` (`main.py`) a partir de **dois artefatos**:
+`session:{sid}:hook_conf:{conf}` e o SET `posatt:{conf}:participants`. Os dois são gravados por
+`fire_pool_hooks` **apenas no caminho de conferência**.
+
+### O que mudou por baixo
+
+O **wrap-up unificado (2026-07-27, Camada E2)** tirou o wrap-up de agente da conferência:
+
+```python
+_is_workflow_dispatch_entry:  dispatch == "detached" or (side == "agent" and dispatch == "inline")
+```
+
+Wrap-up é `side=agent` ⇒ **verdadeiro nos DOIS modos** ⇒ `fire_pool_hooks` faz `continue`
+**antes** de gravar `hook_conf` e o SET. Ninguém publica mais o `posatt_segment_complete`, e o
+front espera para sempre. O comentário do front seguiu descrevendo o mundo anterior — *"foi
+escrito" ≠ "ainda vale"*.
+
+**Isto explica as duas refutações que o diagnóstico anterior já tinha fechado, e as fortalece:**
+não era wrap-up (ele roda normalmente, como item de trabalho) e não era config de dispatch —
+trocar `detached`↔`inline` não muda nada, porque **os dois modos tomam o mesmo ramo**.
+
+### O conserto: o release é fato do FIM DO SEGMENTO, não da conclusão do wrap-up
+
+`_publish_segment_release()`, chamada no ramo de transfer no exato ponto em que o bridge já
+sabe que o segmento da origem acabou. Amarrá-la à conclusão do wrap-up reabriria o **G1 na UI**:
+em `detached` o item pode ser reivindicado minutos depois, e o painel ficaria preso até lá — o
+oposto do motivo pelo qual o wrap-up foi destacado. O formulário chega pela inbox (ou auto-claim),
+com briefing próprio, sem depender daquele painel.
+
+Fica **fora** do guard `if http and _ha_pool and _ha_tenant`: aquele guard existe para o DESPACHO
+do wrap-up, e a tela do agente não pode ficar presa porque um hook não pôde ser disparado.
+
+**Zero diff no front e no mcp-server** — o evento reusa o contrato que os dois já implementam.
+
+### Identidade do destinatário: as duas formas, e por que é seguro aqui
+
+O filtro do mcp-server compara `recipients` com `agentInstanceId`, que vem de
+`conversation.assigned.instance_id` **ou**, em fallback, de `participant_id`. O SET da conferência
+já mistura as duas fontes (`_fixed_pid` é um `instance_id` com nome de pid). Publicar só uma faria
+o defeito voltar de forma **intermitente** — a variante mais cara. Vão as duas.
+
+⚠️ `session.human_agent_participant_id` é campo de **escopo largo** e num conferência multi-humano
+nomeia o humano errado. É seguro **aqui e só aqui** porque o caminho roda dentro de
+`remaining <= 0`: a origem era o ÚLTIMO humano, logo não há peer ativo cuja tela pudesse ser
+liberada por engano.
+
+**Nunca broadcast.** Sem `recipients` array o filtro do mcp-server não age e TODO agente inscrito
+remove o contato — inclusive o DESTINO, que acabou de recebê-lo. Lista vazia **aborta** a
+publicação e loga; degradar para broadcast trocaria um contato preso por um contato perdido.
+
+### A pergunta que a passagem deixou aberta tem resposta: são DOIS caminhos
+
+*"`Transfer` e `Close` compartilham o teardown do Console, ou são dois caminhos?"* — dois. E a
+própria **Mudança 26 já havia consertado esta classe de problema para o Close**: a "Regressão 2"
+fez `POST /api/agent_done` resolver o modo do wrap-up e devolver `inline_wrapup`, para o Console
+limpar a tela na hora quando detached. O autor sabia que a tela precisa ser liberada; cobriu o
+caminho que estava olhando. O `Transfer` não passa por `handleClose` nem por `/api/agent_done` —
+vai por `POST /api/session_transfer` e dependia do mecanismo que a mesma mudança removeu.
+
+### Um defeito de instrumento, achado no caminho
+
+O comando de baseline da suíte do bridge — herdado por várias passagens — aponta para
+`/app/packages/orchestrator_bridge` (underscore); o diretório é `orchestrator-bridge` (hífen).
+**Ele nunca rodou**, e o "96 passed" era número herdado sem comando que o produzisse (a passagem
+até registrava *"não re-medido nesta sessão"*). Resolvido estruturalmente, pelo import
+(`print(p.__file__)`) em vez de palpite de diretório — e o 96 ficou retroativamente validado
+(102 − 6 novos).
+
+### Uma previsão herdada, refutada
+
+A passagem avisava: *"conserto provavelmente em DOIS apps (o `agent-assist-ui` vive na 5173)"*.
+Medido: o app legado remove o contato em **qualquer** `reason` exceto `client_disconnect`
+(`App.tsx:312`) — **nunca teve este defeito**, e o release novo chega a um contato já removido
+(`delete` de chave ausente, no-op). O conserto é só do bridge.
+
+**As-built:** `orchestrator-bridge/main.py` — `_publish_segment_release()` + chamada no ramo de
+transfer. **Testes:** `test_segment_release_on_transfer.py` (6), com testemunha negativa
+(sem destinatário ⇒ **não** publica) e os dois ramos de degradação do ctx. Suíte do bridge
+**96 → 102**.
+**Validado ao vivo (2026-08-26, 10:58 e 11:04 UTC):** dois Transfers, dois releases publicados 1 ms
+depois do fim do segmento, lista de contatos do Console vazia em seguida. Inconformidade de
+2026-08-24 **fechada**.
+⚠️ **Três coisas que a validação não cobre**, e nenhuma delas é o defeito consertado: (a)
+`recipients` saiu com **um** elemento — o `human_agent_participant_id` estava ausente, então a
+segunda forma de nomear o humano tem teste unitário e **nenhuma população real**; (b) provou-se que
+a origem foi LIBERADA, não que o contato CONTINUOU no destino — outra proposição; (c) *transfer com
+o cliente ainda CONECTADO* segue sem teste.
+
+---
+
+## Chip × cabeçalho: o número que o operador clica passou a ser o da tela (2026-08-26)
+
+O chip de processo publicava **`PRC-8c47326d · 5`** sob o rótulo *"Process with {{count}}
+contacts"*; o cabeçalho da visão 2 — **para onde o próprio chip pivota** — publicava
+**`3 acessos · 2 etapas internas`**. Os dois estavam certos e contavam coisas diferentes:
+sessões × classes de linha. **Foi a F4 que criou a divergência**, ao dar ao cabeçalho um domínio
+que o chip não tinha; o defeito nasceu de um conserto.
+
+**O consertado é a APRESENTAÇÃO, não a população.** O chip continua contando o processo INTEIRO
+(fora do filtro de período, decisão da F3.3 que o rodapé explica) — o que mudou é publicar em
+**dois domínios** em vez de um número sob um rótulo indefensável: `· 3 + 2`.
+
+### Por que NÃO foi "o chip conta acessos"
+
+Era a leitura mais óbvia das três, e a medição a descartou. Recortar o **total** por direção faria
+o chip dizer `·3` e a tela para onde ele leva mostrar **5 linhas** — a mesma divergência, invertida.
+Pior, é literalmente o que o docstring de `_attach_session_journey_chip` já proibia por escrito
+(*"ter aqui um segundo predicado faria o chip dizer ·2 e o cabeçalho, ao pivotar dele, dizer 4"*).
+A quebra não é um segundo predicado: `journey_access_count + journey_internal_step_count +
+journey_unclassified_count == journey_session_count` **por construção**, porque os três saem de
+`countIf` sobre a MESMA `_DIRECTION_EXPR`, cujo `multiIf` é exaustivo.
+
+### As três armadilhas que a medição achou antes do código
+
+- **`_DIRECTION_EXPR` exige o join `_ch`** (`_CHANNEL_EXPR` lê `_ch.channel_v`), que esta query não
+  tinha. Sem ele a expressão nem compila; com um `s.channel` cru no lugar, a sessão ATIVA de webhook
+  (a que o `parse_routed` deixa com `channel=''`) cairia em `inbound` aqui e em `internal` na
+  listagem — a divergência de novo, um nível abaixo.
+- **"Interno" tem DOIS sentidos no mesmo arquivo.** Aqui é *etapa interna* (`direction='internal'`,
+  de `spawn_reason`), que ENTRA no escopo de contato. `_attach_journey_internal_counts` conta outra
+  coisa: sessão de POOL interno (wrap-up, dispatch), que `_apply_contact_scope` **exclui** destes
+  números. Somar os dois contaria wrap-up como etapa de processo.
+- **O chip era renderizado em DOIS lugares** (coluna da lista e selo do breadcrumb) e as duas cópias
+  **já haviam divergido uma vez, na F3**: uma cortava o id em 4 caracteres e a outra em 8 — o mesmo
+  processo com um código em cada ponta do clique. Viraram um componente (`modules/contacts/
+  ProcessChip.tsx`), com a regra do pivô (`hasProcess`) e os números junto.
+
+### Vocabulário também é fonte única
+
+O tooltip do chip usa as chaves i18n **do cabeçalho** (`journeys.accessCount`/`internalCount`/
+`unclassifiedCount`), não um texto próprio. Um vocabulário paralelo aqui seria a mesma divergência
+na camada de texto: o chip diria "contatos" e a tela aonde ele leva, "acessos".
+
+### A terceira classe aparece só quando existe
+
+Mesma regra do cabeçalho (que só desenha `internalCount` com `> 0`). Somar a não classificada aos
+acessos inflaria o número protagonista com uma linha que ninguém sabe ler; omiti-la faria o chip
+deixar de bater com o nº de linhas da tela. Hoje a população é **0** no tenant — o ramo continua
+sem ter sido exercido em tela, e isso segue registrado como dívida.
+
+### Ausência nunca vira zero
+
+Journey fora do agregado, ou falha da consulta, deixa os **quatro** campos `None` e a UI cai no
+número único. Zerar só a quebra desenharia `· 0 + 0` num chip cujo total ninguém sabe.
+
+**As-built:** `reports_query._attach_session_journey_chip` (quebra + join `_ch`);
+`modules/contacts/ProcessChip.tsx` (novo, componente único); `ListaTab.tsx` e `SessionsPage.tsx`
+passam a consumi-lo; `types.ts` com os três campos; i18n en + pt-BR.
+**Testes:** `TestJourneyChipCounts` (5) — expressão única, join `_ch`, aritmética com a terceira
+classe POVOADA, e duas testemunhas negativas (journey ausente, consulta falhando). Suíte
+analytics-api **612 → 617**.
+**Gate:** `infra/test/probe_chip_breakdown.sh` (4 ramos; o C compara o chip com o cabeçalho no
+processo de referência, que são **duas queries** e nada além dele as obriga a concordar).
+⚠️ **O gate nasceu VERDE** — o vermelho-primeiro não foi observado nesta rodada (o build veio
+antes da primeira execução). Sua capacidade de reprovar nos ramos A e C está argumentada, não
+medida.
+🔴 **E o primeiro check de falseabilidade achou um defeito NO GATE.** Com `J=` inexistente, o
+ramo C — o único que compara chip e cabeçalho — saiu INCONCLUSIVO e o veredicto global imprimiu
+**OK**. Um processo de referência que sumisse apagaria a medição principal sem nada ficar
+vermelho, que é exatamente *"um teste que não pode reprovar é pior que teste nenhum"*. Corrigido:
+o gate rastreia ramo inconclusivo e sai **2**, nunca 0. ⚠️ **`probe_f4_direction_and_classes.sh`
+tem a MESMA forma** (três ramos podem sair INCONCLUSIVO sem afetar o exit) — dívida irmã,
+registrada e não corrigida aqui.
+**Medido:** `d62d7121…` = `2 + 2` (4 sessões) · `8c47326d…` = `3 + 2` (5) · 108/108 linhas fecham
+a aritmética · 0 não classificadas.
+
+---
+
 ## Navegação: um nível de sessão só — e os dois defeitos que a conferência revelou (2026-08-25)
 
 Fatia que nasceu de uma pergunta do dono depois da F4 (*"como chego na tela que relaciona os

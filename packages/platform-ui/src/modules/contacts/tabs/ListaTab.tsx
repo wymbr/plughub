@@ -5,12 +5,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { apiFetch } from '@/api/apiFetch'
-import { GitBranch } from 'lucide-react'
 import type { ContactFilters, ContactRow, ContactsApiResponse } from '../types'
 import {
   formatMs, formatDt, CHANNEL_ICONS, DIRECTION_ICONS,
-  contactDirection, journeyLabel,
+  contactDirection,
 } from '../types'
+// O chip do processo (rótulo, números e a regra do pivô) mora num componente só,
+// compartilhado com o selo do breadcrumb do drill — as duas cópias já divergiram
+// uma vez, na F3 (4 caracteres aqui, 8 lá, no MESMO processo).
+import { ProcessChip, processCounts, hasProcess } from '../ProcessChip'
 
 const PAGE_SIZE = 50
 
@@ -340,12 +343,13 @@ function ContactRowItem({ row, onClick, showParent, onOpenParent, onOpenJourney 
   const lastAttended = attended.length ? attended[attended.length - 1] : ''
   const showHandoff  = !!lastAttended && lastAttended !== entryPool
 
-  // Chip só quando há processo COM MAIS DE UM contato: contato de processo único não
+  // Chip só quando há processo COM MAIS DE UMA sessão: processo de um contato não
   // tem para onde pivotar, e é o caso majoritário. `null`/ausente (falha de contagem
   // no backend) cai aqui e NÃO desenha — ver `journey_session_count` em types.ts.
-  const journeyN  = row.journey_session_count ?? 0
+  // A regra e os números vivem em `ProcessChip.tsx`, com o selo do breadcrumb.
+  const counts    = processCounts(row)
   const journeyId = row.journey_id || row.root_session_id || ''
-  const showChip  = journeyN > 1 && !!journeyId
+  const showChip  = hasProcess(counts) && !!journeyId
 
   return (
     <tr onClick={onClick} className="hover:bg-primary/5 cursor-pointer transition-colors">
@@ -422,17 +426,13 @@ function ContactRowItem({ row, onClick, showParent, onOpenParent, onOpenJourney 
         ) : <span className="text-border-strong text-xs">—</span>}
       </td>
       {/* Chip de processo — o ÚNICO pivô para a visão 2 (D2: processo nunca é linha,
-          nunca é navegação livre). O N conta o processo INTEIRO; ver o rodapé. */}
+          nunca é navegação livre). Os números contam o processo INTEIRO (ver o
+          rodapé) e nos MESMOS dois domínios do cabeçalho aonde o clique leva. */}
       <td className="px-4 py-3 whitespace-nowrap">
-        {showChip ? (
-          <span
-            onClick={e => { e.stopPropagation(); onOpenJourney?.(journeyId) }}
-            title={t('lista.processChipHint', { count: journeyN })}
-            className="inline-flex items-center gap-1 text-xs font-mono px-2 py-0.5 rounded-full bg-primary-light text-primary hover:underline cursor-pointer">
-            <GitBranch className="w-3 h-3" aria-hidden="true" />
-            {journeyLabel(journeyId)}
-            <span className="tabular-nums font-semibold">· {journeyN}</span>
-          </span>
+        {showChip && counts ? (
+          <ProcessChip
+            journeyId={journeyId} counts={counts} t={t}
+            onOpen={() => onOpenJourney?.(journeyId)} />
         ) : <span className="text-border-strong text-xs">—</span>}
       </td>
       <td className="px-4 py-3 text-muted-light text-right">›</td>

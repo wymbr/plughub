@@ -70,10 +70,30 @@ export interface ContactRow {
    *  rotula o chip: usar `root_session_id` cru faria duas linhas do MESMO processo
    *  exibirem códigos diferentes depois de um `journey_merge`. */
   journey_id?: string | null
-  /** F3.3 — nº de contatos do processo **INTEIRO**, deliberadamente fora do filtro de
+  /** F3.3 — nº de sessões do processo **INTEIRO**, deliberadamente fora do filtro de
    *  período. `null`/ausente = o backend não conseguiu contar ⇒ **não desenhar chip**
    *  (um `1` inventado afirmaria "não pertence a processo nenhum"). */
   journey_session_count?: number | null
+  /** Quebra do total acima por classe de linha (2026-08-26) — os MESMOS baldes do
+   *  cabeçalho da visão 2, para onde o chip pivota. `acesso + interna + não
+   *  classificada === total`, por construção: os três saem de `countIf` sobre a
+   *  mesma `_DIRECTION_EXPR`, que é exaustiva.
+   *
+   *  ⚠️ **A quebra é da APRESENTAÇÃO, não da população.** O chip continua contando o
+   *  processo inteiro; o que mudou é publicar em dois domínios em vez de um número
+   *  sob o rótulo "contatos". Recortar o TOTAL por direção (chip contar só acessos)
+   *  faria o chip dizer `·3` e a tela para onde ele leva mostrar 5 linhas.
+   *
+   *  ⚠️ **`journey_internal_step_count` é ETAPA interna** (`direction='internal'`,
+   *  de `spawn_reason`), que entra no escopo de contato. Não confundir com o
+   *  `internal_session_count` do card de `/reports/journeys`, que conta sessão de
+   *  POOL interno (wrap-up, dispatch) — essa é EXCLUÍDA destes números.
+   *
+   *  Ausentes juntos (backend antigo, ou journey sem linha no agregado) ⇒ a UI cai
+   *  no número único; nunca zerar só a quebra. */
+  journey_access_count?: number | null
+  journey_internal_step_count?: number | null
+  journey_unclassified_count?: number | null
   /** F3.1 — pools que TRABALHARAM no contato, em ordem de primeiro segmento. É o lado
    *  direito do par `entrou por → atendido por` (`pool_id` é o esquerdo). Lista vazia
    *  = nenhum segmento (abandono antes de qualquer agente entrar). */

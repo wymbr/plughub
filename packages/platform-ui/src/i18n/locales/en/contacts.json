@@ -201,8 +201,9 @@
       "internal":    "Internal — a machinery step, no customer access",
       "unknownHint": "Direction undetermined: unknown spawn_reason ({{value}})"
     },
-    "processChipHint":  "Process with {{count}} contacts — open",
-    "processFootnote":  "The chip counts the whole process — the date range narrows the contacts listed, not the size of the process.",
+    "processChipHint":  "{{count}} sessions in this process — click to open",
+    "processChipOpen":  "click to open the process",
+    "processFootnote":  "The chip counts the whole process — the date range narrows the contacts listed, not the size of the process. Customer accesses and internal steps are shown apart, never summed.",
     "count_one":   "{{count}} contact",
     "count_other": "{{count}} contacts",
     "countInternal_one":   "{{count}} internal",

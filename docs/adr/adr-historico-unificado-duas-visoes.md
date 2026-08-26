@@ -1,8 +1,9 @@
 # ADR — Histórico unificado: duas visões sobre um só substrato
 
-**Status:** **implementado até a F4** — F0 · F1 · F1b · F2 · F3 · F4 ✅ (as-built e achados por fase
-no `CHANGELOG.md`; a F4 é de 2026-08-25). **Resta a F5** (`ContextStorePersister`, fase própria) e a
-**lente C** (faixas por personagem, destino registrado, sem bloqueio). Plano em
+**Status:** **F0 · F1 · F1b · F2 · F3 · F4 · F5 ✅** — arco de fases COMPLETO (as-built e achados por
+fase no `CHANGELOG.md`; F4 em 2026-08-25, **F5 em 2026-08-26**). Aberta só a **lente C** (faixas por
+personagem), **SUSPENSA por decisão do dono em 2026-08-26**: não é essencial e traz risco de desenho
+(ver §"Riscos de C" no D6 — colisão intra-faixa no fan-out, e o cliente não ter segmento). Plano em
 [`../product/historico-unificado-plano-execucao.md`](../product/historico-unificado-plano-execucao.md).
 **Supersede parcialmente:** a suposição, implícita em `/analise/sessions` × `/analise/processos`, de que contato e processo são objetos de telas diferentes.
 **Não altera:** [`adr-journey-session-segment-model.md`](adr-journey-session-segment-model.md) — os três níveis e a natureza derivada da journey permanecem exatamente como estão.
@@ -466,7 +467,34 @@ As-built no `CHANGELOG.md`. Abaixo só o que o desenho não tinha e a implementa
    caracteres do id) e o comentário de uma afirmava que eram a mesma convenção. O chip levava
    a um cabeçalho com outro código para o mesmo processo. Unificado em 8.
 
-### F5 — `ContextStorePersister` *(fase própria, desenho fechado)*
+### F5 — `ContextStorePersister` — ✅ **2026-08-26**
+
+> **O desenho abaixo foi implementado, com DOIS desvios que a medição obrigou.** As-built completo
+> no `CHANGELOG.md`; aqui só o que o desenho não previa.
+>
+> **1. *"Persistir mascarado"* custava mais do que o ADR supunha: o mascarador é TypeScript.**
+> `applyContextMaskingDynamic` e amigos existem só no mcp-server, e o persister vive num serviço
+> Python. Reimplementar seria a segunda implementação de uma regra de SEGURANÇA — de menos vaza,
+> de mais é invisível. Resolvido por hop HTTP (`POST /internal/context-snapshot`), com o PII **não**
+> viajando no corpo (vai `session_id`; volta mascarado) e credencial que **recusa** quando ausente.
+>
+> **2. O portão de NAMESPACE não é aplicado na persistência.** A frase *"persistir mascarado"*
+> trata como uma coisa o que são duas: filtro de EXIBIÇÃO por pool × mascaramento de PII. Só o
+> segundo pertence a um registro durável — aplicar o primeiro faria a config de UI de um pool
+> **apagar história em silêncio**, o mesmo defeito que o `CLAUDE.md` documenta para o sentimento.
+> Gate `probe_context_snapshot_endpoint.sh` ramo E fica vermelho se alguém reverter.
+>
+> **3. A raiz canônica é resolvida no mcp-server**, pela mesma via de `writeContextTag`
+> (proveniência → union-find). Em Python seria a terceira casa da definição de *"qual journey é
+> esta"*, e uma foto na raiz errada não fica vermelha.
+>
+> **Grau OPERATOR, para sempre** (decisão do dono): ⚠️ este registro **não serve a auditoria que
+> precise do valor real** — essa continua sendo o `TokenVault` de mensagens.
+>
+> ⚠️ **Forward-only e sem leitor.** O valor de leitura (o diff entre fotos consecutivas) é fatia
+> própria, e depende de processos com ctx de journey — hoje raros no demo.
+
+*(desenho original, mantido para referência)*
 
 Irmão do `PipelineStatePersister` (R5/B), mesma justificativa: *"a trajetória real não vai ao stream e o
 Redis tem TTL 24h"*.

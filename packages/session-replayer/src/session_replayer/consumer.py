@@ -31,6 +31,7 @@ from .replayer import Replayer, REPLAY_CONTEXT_TTL
 from .stream_hydrator import StreamHydrator, StreamNotAvailableError, HYDRATION_TTL_SECONDS
 from .stream_persister import StreamPersister
 from .pipeline_persister import PipelineStatePersister
+from .context_persister import ContextStorePersister
 from .import_stream_consumer import ImportStreamConsumer
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,15 @@ class SessionReplayerConsumer:
         self._postgres_dsn       = os.getenv("DATABASE_URL",     "postgresql://plughub:plughub@localhost:5432/plughub")
         self._config_api_url     = os.getenv("CONFIG_API_URL",   "http://localhost:3600")
         self._eval_api_url       = os.getenv("EVALUATION_API_URL", "http://localhost:3400")
+        # F5 — o ContextStorePersister pede o ctx MASCARADO ao mcp-server (o masking
+        # mora lá e só lá). Sem token o persister RECUSA e loga; nunca degrada para
+        # gravar cru, que seria criar um cofre de PII por omissão de env.
+        # Default alinhado à convenção do compose (`mcp-server-plughub`), não a um
+        # `localhost` que só vale fora do container: default errado degrada para
+        # "falha ao pedir o ctx" a cada fechamento, e o arco parece entregue com
+        # zero linhas na tabela.
+        self._mcp_url            = os.getenv("MCP_SERVER_URL", "http://mcp-server-plughub:3100")
+        self._mcp_service_token  = os.getenv("MCP_INTERNAL_SERVICE_TOKEN", "")
         self._tenant_id          = os.getenv("PLUGHUB_TENANT_ID", "tenant_demo")
         # config-consolidation item 7b: evaluator_pool + replay speed come from the
         # Config API `evaluation` namespace (fetched in start()); these are the
@@ -172,6 +182,18 @@ class SessionReplayerConsumer:
         await persister.ensure_schema()
         pipeline_persister = PipelineStatePersister(self._redis, self._pg_pool)
         await pipeline_persister.ensure_schema()
+        context_persister = ContextStorePersister(
+            self._pg_pool, self._mcp_url, self._mcp_service_token,
+        )
+        await context_persister.ensure_schema()
+        if not self._mcp_service_token:
+            # Degradação NUNCA silenciosa: sem isto o arco F5 fica "de pé" com a
+            # tabela criada e ZERO linhas, e "não há snapshot" vira indistinguível
+            # de "as sessões não tinham contexto".
+            logger.error(
+                "ContextStorePersister: MCP_INTERNAL_SERVICE_TOKEN não configurado — "
+                "a tabela existe e NENHUM snapshot será gravado.",
+            )
 
         # R13b — consumer Y: rebuilds session_stream_events for IMPORTED contacts from
         # the canonical events (gated source=external_import), sharing the Persister's
@@ -250,6 +272,24 @@ class SessionReplayerConsumer:
         except Exception as exc:
             logger.warning(
                 "Persister: pipeline_state snapshot failed for session %s: %s",
+                event.session_id, exc,
+            )
+
+        # F5 — snapshot durável do ContextStore (sessão + processo), MASCARADO em
+        # grau operator pelo mcp-server. Irmão do de cima e igualmente best-effort:
+        # é o que a plataforma SABIA no fechamento, não a condição de fechar.
+        # `ensure_schema` a cada persist pela mesma razão do Stream Persister — um
+        # reset de volume com o serviço de pé deixava o insert quebrando até o
+        # próximo restart.
+        try:
+            context_persister = ContextStorePersister(
+                self._pg_pool, self._mcp_url, self._mcp_service_token,
+            )
+            await context_persister.ensure_schema()
+            await context_persister.persist(event.session_id, event.tenant_id)
+        except Exception as exc:
+            logger.warning(
+                "Persister: context snapshot failed for session %s: %s",
                 event.session_id, exc,
             )
 

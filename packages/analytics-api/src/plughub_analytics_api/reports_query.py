@@ -1197,10 +1197,39 @@ def _attach_session_journey_chip(
     nenhum", que é a mentira tranquila que a postura de engenharia proíbe. Por isso
     a falha também é LOGADA — sem log, chip ausente e processo-de-um ficam
     indistinguíveis na tela.
+
+    **3. A QUEBRA por classe de linha (2026-08-26), e por que ela NÃO é o "segundo
+    predicado" que o parágrafo acima proíbe.** Até aqui o chip publicava um número
+    só (`· 5`) sob o rótulo *"contatos"*, e o cabeçalho da visão 2 — para onde o
+    próprio chip pivota — publicava `3 acessos · 2 etapas internas`. Os dois estavam
+    certos e contavam coisas diferentes: foi a F4 que criou a divergência, ao dar ao
+    cabeçalho um domínio que o chip não tinha. O operador clicava num `5` e chegava
+    a um `3`.
+
+    O consertado é a APRESENTAÇÃO, não a população: `journey_access_count +
+    journey_internal_step_count + journey_unclassified_count == journey_session_count`
+    **por construção**, porque os três saem de `countIf` sobre a MESMA
+    `_DIRECTION_EXPR`, cujo `multiIf` é exaustivo. Trocar o total por um recorte
+    (chip contando só acessos) é que seria o segundo predicado — o chip diria `·3` e
+    a tela para onde ele leva mostraria 5 linhas.
+
+    ⚠️ **`_DIRECTION_EXPR` exige o join `_ch`** (`_CHANNEL_EXPR` lê `_ch.channel_v`).
+    Sem ele a expressão nem compila; com um `s.channel` cru no lugar, uma sessão
+    ativa de webhook cairia em `inbound` aqui e em `internal` na listagem — a mesma
+    divergência, um nível abaixo.
+
+    ⚠️ **"Interno" tem DOIS sentidos neste arquivo e eles não se substituem.** Aqui é
+    *etapa interna* (`direction = 'internal'`, derivada de `spawn_reason`), que ENTRA
+    no escopo de contato e é contada. `_attach_journey_internal_counts` conta outra
+    coisa: sessão de POOL interno (wrap-up, dispatch), que `_apply_contact_scope`
+    EXCLUI destes números. Somar os dois seria contar wrap-up como etapa de processo.
     """
     for r in rows:
         r["journey_id"] = r.get("root_session_id") or None
-        r["journey_session_count"] = None
+        r["journey_session_count"]        = None
+        r["journey_access_count"]         = None
+        r["journey_internal_step_count"]  = None
+        r["journey_unclassified_count"]   = None
     roots = sorted({r["root_session_id"] for r in rows if r.get("root_session_id")})
     if not roots:
         return
@@ -1222,9 +1251,21 @@ def _attach_session_journey_chip(
     # Alias `jid`, não `journey_id`: `sessions` TEM coluna com esse nome (o cache
     # dormente da raiz canônica) e alias que sombreia coluna real já derrubou query
     # inteira neste projeto (ILLEGAL_AGGREGATION, code 184).
+    # Domínio das direções vindo da constante, nunca reescrito à mão: uma direção
+    # nova entraria em `SESSION_DIRECTIONS` e cairia sozinha no balde certo. Escrever
+    # `'inbound', 'outbound'` aqui criaria uma segunda lista para manter em sincronia
+    # com a expressão — e a que esquecesse de crescer classificaria em silêncio.
+    _dir_access = ", ".join(f"'{d}'" for d in SESSION_DIRECTIONS if d != "internal")
+    _dir_all    = ", ".join(f"'{d}'" for d in SESSION_DIRECTIONS)
     sql = f"""
-        SELECT {jexpr} AS jid, count() AS n
+        SELECT
+            {jexpr} AS jid,
+            count() AS n,
+            countIf({_DIRECTION_EXPR} IN ({_dir_access}))     AS n_access,
+            countIf({_DIRECTION_EXPR} = 'internal')           AS n_internal,
+            countIf({_DIRECTION_EXPR} NOT IN ({_dir_all}))    AS n_unknown
         FROM {db}.sessions AS s FINAL
+        {_ch_join_sql(db)}
         WHERE {" AND ".join(conds)}
         GROUP BY jid
         HAVING jid IN ({id_list})
@@ -1238,11 +1279,21 @@ def _attach_session_journey_chip(
             "processo'): %s", tenant_id, exc,
         )
         return
-    by_id = {row[0]: int(row[1]) for row in res.result_rows}
+    by_id = {
+        row[0]: (int(row[1]), int(row[2]), int(row[3]), int(row[4]))
+        for row in res.result_rows
+    }
     for r in rows:
         _jid = r.get("journey_id")
-        if _jid:
-            r["journey_session_count"] = by_id.get(_jid)
+        if not _jid:
+            continue
+        _hit = by_id.get(_jid)
+        if _hit is None:
+            # Journey sem linha no agregado: continua `None` nos QUATRO campos. Zerar
+            # só a quebra desenharia `· 0 + 0` num chip cujo total é desconhecido.
+            continue
+        (r["journey_session_count"], r["journey_access_count"],
+         r["journey_internal_step_count"], r["journey_unclassified_count"]) = _hit
 
 
 # ─── /reports/journeys (Journey J2 — proveniência-only) ───────────────────────

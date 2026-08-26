@@ -45,7 +45,7 @@ iniciado · duração · desfecho (badge de estado + `outcome`) · segmentos · 
 | **direção** ⇣⇡⚙ | campo `direction`, DERIVADO no backend (`reports_query._DIRECTION_EXPR`) a partir de `spawn_reason` + canal efetivo; a UI só exibe | não é armazenada, e **não** se chama `origin` — essa chave i18n já significava ANI. A UI **não re-deriva** desde a F4: coluna e filtro são a mesma expressão |
 | **entrou por → atendido por** | `pool_id` (a porta, first-write-wins desde a F1b) e `attended_pool_ids` (pools com segmento) | nunca **um** filtro/coluna chamado "Pool": foi o operador ler um e receber o outro que originou este arco |
 | **duração** | `elapsed_time_ms` — wall-clock do caso, esperas incluídas (D9) | **nunca** `agent_time_ms`, **nunca** Σ segmentos (eles se sobrepõem; a soma não é uma duração) |
-| **processo** | chip `PRC-{journey_id[:8]} · N`, só quando `N > 1` | `journey_id` é a raiz **canônica** (union-find), não `root_session_id` cru. O corte é de **8** desde a F4 — eram dois rótulos (4 aqui, 8 no cabeçalho da visão 2) para o mesmo processo |
+| **processo** | chip `PRC-{journey_id[:8]} · A + I`, só quando o processo tem mais de uma sessão | `journey_id` é a raiz **canônica** (union-find), não `root_session_id` cru. O corte é de **8** desde a F4 — eram dois rótulos (4 aqui, 8 no cabeçalho da visão 2) para o mesmo processo. `A + I` são os **mesmos dois domínios** do cabeçalho (2026-08-26) |
 
 **Filtros.** período · canal · **direção** · status · **entrou por** (`entry_pool_id`) · **atendido
 por** (`pool_id`) · agente · evento · tags. Os dois pools compõem por AND — é assim que se pergunta
@@ -56,10 +56,32 @@ Não é detalhe de implementação: é o que impede a linha de dizer `interno` e
 devolver. Sessão que o backend não classificou fica **fora das três** — logo `Σ das três ≤ total`, e a
 diferença é a população não classificada. Valor fora do domínio é **recusado (422)**, nunca ignorado.
 
-**O chip conta o processo INTEIRO, de propósito.** Uma janela que pega 2 de 3 contatos mostra `· 3`.
-O rodapé da tabela nomeia isso, e só aparece quando `meta.window_applied` é verdadeiro **e** há chip na
-página — no drill não há divergência a explicar. O N usa o mesmo predicado de contato do card de
-`/reports/journeys`, para que chip e cabeçalho da visão 2 nunca discordem.
+**O chip conta o processo INTEIRO, de propósito.** Uma janela que pega 2 de 3 contatos mostra o
+processo com 3. O rodapé da tabela nomeia isso, e só aparece quando `meta.window_applied` é verdadeiro
+**e** há chip na página — no drill não há divergência a explicar. Os números usam o mesmo predicado de
+contato do card de `/reports/journeys`, para que chip e cabeçalho da visão 2 nunca discordem.
+
+**O chip publica DOIS domínios, como o cabeçalho** *(2026-08-26)*. Até aqui ele publicava um número
+só (`· 5`) sob o rótulo *"contatos"*, e o cabeçalho da visão 2 — aonde o clique leva — publicava
+`3 acessos · 2 etapas internas`. Os dois estavam certos e contavam coisas diferentes; **foi a F4 que
+criou a divergência**, ao dar ao cabeçalho um domínio que o chip não tinha. Hoje o chip mostra
+`· 3 + 2`, e a terceira classe entra como `+ N` **só quando existe** (mesma regra do cabeçalho).
+
+⚠️ **É a quebra do total, nunca um recorte dele.** `journey_access_count +
+journey_internal_step_count + journey_unclassified_count == journey_session_count` por construção —
+os três saem de `countIf` sobre a mesma `_DIRECTION_EXPR`. Fazer o chip contar **só** acessos o faria
+dizer `·3` numa tela com 5 linhas: a mesma divergência, invertida. Gate:
+`infra/test/probe_chip_breakdown.sh` (o ramo C compara chip e cabeçalho, que são duas queries
+distintas).
+
+⚠️ **`journey_internal_step_count` é *etapa interna* (`spawn_reason`), não *pool interno*.** O
+`internal_session_count` do card de `/reports/journeys` conta wrap-up/dispatch, que
+`_apply_contact_scope` **exclui** destes números. São nomes parecidos para populações disjuntas.
+
+**Uma renderização, dois lugares.** O chip da coluna e o selo `PRC-…` do breadcrumb do drill são o
+mesmo componente (`modules/contacts/ProcessChip.tsx`), incluindo a regra do pivô e o tooltip — que
+reusa as chaves i18n **do cabeçalho** (`journeys.accessCount` etc.). Enquanto eram duas cópias, já
+divergiram uma vez: 4 caracteres de um lado, 8 do outro, no mesmo processo.
 
 **Clicar no chip abre o processo na MESMA rota** (`?journey=…`, nível 2). Não existe lista livre de
 processos: processo é pivô, nunca navegação (ADR D2). `/analise/processos` redireciona preservando a

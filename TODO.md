@@ -1106,6 +1106,11 @@ Specs: `docs/product/arc6-phase2-deploy-observability-spec.md`, `docs/product/ca
 > · **C — `pool_id` carrega DOIS fatos.** Pool de ENTRADA (`webchat.py:210`, `webrtc.py:484`) × pool
 >   que ATENDE (bridge; é a acepção que `webhook.py:1330` lê no resume). Separar em `entry_pool_id`;
 >   família de `elapsed_time_ms` × `agent_time_ms` (D9). Muda contrato de vários leitores.
+>   **Consumidor novo, achado em 2026-08-26:** `server.ts:1421` resolve por aqui o pool cuja
+>   `context_visibility` governa a aba Contexto do Console — logo, num contato TRANSFERIDO a
+>   política aplicada é a do pool de ORIGEM, e configurar o pool que atende não tem efeito. Some
+>   à lista de leitores a migrar; é o primeiro em que a acepção errada tem consequência de
+>   **exposição de PII**, não só de relatório. Ver TEMA · Segurança § `Context Store Visibility`.
 > · **Suspeita adjacente, NÃO medida:** `session:{id}:wf_agent` (escrito ao lado do site W6) nasce
 >   com o mesmo `_stl()` = 4 h e descreve a mesma workflow de até 48 h. Mesmo mecanismo; medir antes
 >   de consertar.
@@ -4045,6 +4050,181 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 ---
 
 ## 📂 TEMA · Segurança, LGPD e Masking
+
+## 🆕 ARCO PROPOSTO — ContextStore como ALLOWLIST: campo sem regra não é acessível *(proposto pelo dono 2026-08-26; ADR a escrever em sessão limpa)*
+
+> **Este item é BRIEFING para escrever o ADR, não plano de implementação.** As decisões
+> abaixo estão marcadas como DECIDIDA / A DISCUTIR de propósito — o valor da próxima sessão
+> está em fechar as segundas, não em codar as primeiras.
+
+### O problema, medido
+
+`default_unmatched_operator: "plain"` é **deny-nothing**: toda tag sem regra é exibida (e, desde
+a F5, **persistida**) em claro. A proteção depende de alguém lembrar de escrever uma regra exata.
+
+Medido em 2026-08-26 com `infra/test/sweep_ctx_tags.sh` sobre 24 sessões vivas — três buracos, e
+o padrão entre eles importa mais que os três:
+
+| tag | sessões | o que é |
+|---|---|---|
+| `session.cpf` | 2 | CPF em claro. Havia regra para `caller.cpf`, não para `session.cpf` |
+| `journey.numero_cartao` | 1 | cartão em claro. Havia para `session.numero_cartao`, não para `journey.` |
+| `session.delegate_resume_token` | 11 | **capacidade** em claro |
+
+**A causa é estrutural, não esquecimento.** `caller.*` e `account.*` têm catch-all; `session.*` e
+`journey.*` **não podem ter** — o seed do config-api avisa por escrito que um `session.* → hidden`
+derruba `session.dialog_form_id`/`session.decisions` e a tela de aprovação para de renderizar. E é
+exatamente em `session.` que o `delegate.context` de um workflow deposita os campos. **Todo campo
+que um workflow passa adiante nasce desprotegido.**
+
+**Remendo já aplicado (2026-08-26, dentro da F5), que NÃO fecha o arco:** globs de SUFIXO
+(`*.cpf`, `*.resume_token`, …) protegem por TIPO DE CAMPO em vez de por namespace. Cobrem os tipos
+que **por acaso conhecemos** — um `session.rg` amanhã nasce exposto de novo. É patch no modelo,
+não o modelo.
+
+### A proposta do dono
+
+1. Padronizar: **tudo que vai ao ContextStore é declarado** em `Configuration › Masking › Regras de
+   Context Store`.
+2. **Campo não configurado NÃO é acessível** (inversão para deny-by-default).
+3. Na tela do pool, `Context Store Visibility` lista **só o que está configurado**, em vez de texto
+   livre.
+
+### O que já está DECIDIDO
+
+- **A inversão está certa.** É a mesma forma que o repo já adota na borda do channel-gateway
+  (*"é uma ALLOWLIST de sete prefixos — nunca uma proibição"*). Inverte o modo de falha: esquecer
+  uma regra passa a ser *"o operador não vê um campo"* — visível, reclamável, corrigível — em vez
+  de vazamento silencioso.
+- **A tela do pool vira seletor**, não texto livre. Foi texto livre que deixou a dica prometer o
+  namespace `journey` num default que nunca o teve (corrigido em 2026-08-26).
+- **Não entra por dentro de outra fatia.** Mexe em política de exibição de PII: ADR próprio.
+
+### PRÉ-REQUISITO inegociável — a omissão precisa deixar de ser MUDA
+
+Hoje `applyContextMaskingDynamic` faz `continue` e o campo **some sem dizer**. Virar a chave sem
+consertar isso **troca um vazamento de PII por uma quebra muda de UI** — trade pior: vazamento se
+descobre auditando; tela que some sem motivo se descobre com o operador parado.
+
+O conserto já existe em FORMA, na F5: **contar, não omitir** (`value: null` + `category: "hidden"`
++ `hidden_count` em coluna própria). A UI precisa do mesmo: *"3 campos ocultos por política"*,
+dizendo quais. **Esta fatia vale sozinha, mesmo que a inversão nunca aconteça.**
+
+### O que o ADR precisa DISCUTIR e fechar
+
+1. **✅ RESPONDIDA em 2026-08-26 — as regras VÊM do config-api, e a TELA é que mente.**
+   Medido: `GET /config/masking?tenant_id=tenant_demo` devolve `entries.context_rules` com **14
+   regras** (nível global, que o tenant resolve). Elas estão em vigor — o `***25` do CPF sai dali.
+   **O defeito é da tela:** `MaskingPage` mostra *"Nenhuma regra configurada — usando defaults do
+   sistema"* e `0 regras configuradas`. Ela lê
+   `maskingEntries['context_rules']?.value ?? maskingEntries['context_rules']`, e o `??` deveria
+   cair no objeto cru — então há algo antes disso (fetch sem `tenant_id`? outra forma em
+   `maskingEntries`?). **É o melhor primeiro alvo da sessão nova:** barato, visível, e é a razão da
+   desconfiança que abriu este arco (*"não sei se seguem"*).
+   ⚠️ **Armadilha de medição que quase produziu a conclusão OPOSTA:** a 1ª versão de
+   `apply_masking_suffix_rules.sh` lia `.entries.context_rules.value` — mas o envelope `.value` é
+   do **corpo do PUT**, não da resposta do GET. O script saiu `não consegui ler` e a leitura
+   natural seria *"a chave não existe ⇒ a página é decorativa"*, que é FALSO. **Leitor quebrado e
+   ausência real produzem saída idêntica.** Corrigido com `select(has("rules"))`.
+
+1b. **🔴 O seed e a config VIVA divergiram — nos dois sentidos** (medido no `antes:` do apply):
+
+   | regra | `config-api/seed.py` | config viva |
+   |---|---|---|
+   | `session.vencimento_cartao` | ✓ | **ausente** |
+   | `session.cpf_titular` | **ausente** | ✓ |
+
+   Armadilha conhecida (*fonte declarativa tem aplicador separado*): o `seed.py` foi editado depois
+   de a base estar semeada, e seed-if-absent nunca reaplicou. Consequências medidas: (a)
+   `session.vencimento_cartao` **nunca esteve protegido** neste ambiente, e a varredura mostra que
+   a tag existe — quarto buraco, hoje coberto pelo `*.vencimento_cartao`; (b) `session.cpf_titular`
+   só existe vivo, então **instalação limpa nasce sem ele** — e `*.cpf` **não** o cobre (o sufixo é
+   `cpf_titular`, e o casamento é em fronteira de segmento). **O ADR precisa decidir quem é a fonte
+   de verdade destas regras**, porque hoje não é nenhuma das duas com confiança.
+2. **Como declarar as ~40 tags reais sem virar um formulário impraticável.** A varredura mostra
+   famílias, não campos soltos: `session.pool.*`, `hook.*`, `segment.{uuid}.*`, `session.queue.*`.
+   Um `segment.{uuid}.inviter_participant_id` **não tem padrão exato possível** — precisa de
+   `segment.*`. Pergunta: a allowlist é por família (prefixo/sufixo) ou por campo? Se for por
+   campo, quem mantém?
+3. **Quem semeia a allowlist inicial.** Sem semente, virar a chave apaga a tela. A varredura é a
+   fonte natural — mas ela vê só o que o demo exercitou. Tag de fluxo raro não aparece, e o
+   modo de falha é a tela sumir em produção, não em teste.
+4. **O default é `hidden` ou `full`?** `hidden` some da linha (e a UI conta); `full` mostra `***`.
+   Para campo funcional (`dialog_form_id`) os dois quebram igual; para PII, `full` é mais
+   informativo e `hidden` mais restritivo.
+5. **Vale um modo de AUDITORIA antes de virar a chave?** Rodar deny-by-default em modo "só loga o
+   que teria sido escondido" por N dias produz a lista real sem quebrar ninguém. É a versão
+   honesta do que hoje seria adivinhação — e a passagem de hoje tem três casos de gate que nasceu
+   verde por falta de população.
+6. **O escopo da inversão inclui a PERSISTÊNCIA (F5)?** O snapshot hoje usa
+   `maskContextForPersistence`, que aplica masking de VALOR e **não** o portão de namespace (desvio
+   deliberado, ver ADR de histórico §F5). Deny-by-default no valor afeta o registro durável; no
+   portão, não deve afetar — mas isso precisa ser dito, não presumido.
+7. **`journey.*` agora é durável e tem TTL de 30 dias.** Merece política própria ou herda a de
+   `session.*`? O ctx de processo atravessa N contatos e sobrevive a todos eles.
+
+### Armadilhas registradas — não redescobrir
+
+- **`session.*` não pode receber catch-all `hidden`** (derruba a tela de aprovação, em silêncio).
+- **Matcher só entende exato, prefixo `x.*`, sufixo `*.x` e `*`** — qualquer outro padrão devolve
+  `null` e vira **regra que não regra** (aparece na tela, não faz nada). Multi-nível funciona nos
+  dois lados; casamento é em **fronteira de segmento**, nunca substring (`*.cpf` não pode casar
+  `session.xcpf`).
+- **Score é sensível à profundidade** desde 2026-08-26 (prefixo `10+n`, sufixo `15+n`, exato 20).
+  Sem isso, dois globs da mesma família empatam e o desempate vira ORDEM DA LISTA.
+- **`admin` é `supervisor_role` por default** e pula o portão inteiro. **Testar a política logado
+  como `operator`** — comparar duas telas de admin não julga nada, e comparar admin × operator
+  numa sessão sem PII também não (aconteceu em 2026-08-26: as duas telas idênticas, zero
+  informação). Discriminador pronto: `infra/test/probe_context_visibility.sh`.
+- **O mcp-server cacheia a config de masking por 60 s.** Medir antes disso lê a política antiga e
+  parece que a escrita não pegou.
+
+### Evidência e ferramentas prontas
+
+`infra/test/sweep_ctx_tags.sh` (inventário de tags, com `--values <tag>`) ·
+`infra/test/probe_context_visibility.sh` (portão × allow-tag × bypass, com controle positivo) ·
+`infra/test/probe_context_snapshot_endpoint.sh` (o endpoint da F5) ·
+`infra/test/apply_masking_suffix_rules.sh` (escrita pela API oficial, com leitura de volta) ·
+`server.ts` `ruleSpecificity` / `applyContextMaskingDynamic` / `maskContextForPersistence` ·
+`config-api/seed.py` § `masking/context_rules`.
+
+
+## `Context Store Visibility` — o portão FUNCIONA; o que sobra são dois desalinhamentos *(medido 2026-08-26)*
+
+> ✅ **A pergunta original foi respondida por medição, e a resposta é "sim, respeita".**
+> `infra/test/probe_context_visibility.sh` (novo, re-executável, sem resíduo): portão de namespace
+> ✓, allow-tag furando o portão ✓, bypass de supervisor ✓, testemunha de presença ✓.
+> Discriminador visível no número: **admin 5 campos, operator 4** — a diferença é o `caller.nome`.
+>
+> ⚠️ **A tentativa ingênua não julgava nada.** Comparar a aba Contexto como admin × operator deu as
+> duas telas IDÊNTICAS — porque (a) `admin` está em `supervisor_roles` por default e pula o portão,
+> e (b) a sessão só tinha tags `session.pool.*`, dentro do default. *Um teste de igualdade só julga
+> se a população contiver o caso em que A ≠ B.* O probe INJETA `caller.nome` (ns barrado) +
+> `caller.customer_id` (allow-tag) — os dois no MESMO namespace de propósito, que é o par que separa
+> "portão por namespace" de "bloqueio por namespace".
+
+**1. A tela prometia um namespace que o código não concede — CORRIGIDO, sem mecanismo.**
+As duas locales diziam *"Padrão: service, journey, session"*; `DEFAULT_OPERATOR_NAMESPACES` é
+`["service", "session"]`. Divergência na direção pior: promete MAIS visibilidade do que existe, e o
+sintoma é *"o operador não vê o que a tela disse que veria"* — ninguém abre chamado sobre um campo
+que não apareceu. Decisão do dono: **alinhar o TEXTO ao código** (o código é o comportamento vigente
+e foi escolhido conservador; acrescentar `journey` ampliaria a exposição de todo operador em todos
+os pools de uma vez, e isso é decisão de produto, não conserto de texto).
+⚠️ **Não há mecanismo que impeça a volta** — só um comentário cruzado em `server.ts`, que é a mesma
+família de promessa-sem-produtor que a § Postura de Engenharia critica. Um gate por `grep` da
+constante seria frágil (o próprio comentário que a documenta reescreve o nome). **Aberto: como
+travar constante × texto de UI sem inventar um teste que não pode reprovar.**
+
+**2. A visibilidade é lida do pool de ENTRADA, não do que atende.** `server.ts:1421` resolve o
+`poolId` de `session:{id}:meta` — e esse campo é o pool de entrada (fatia C, abaixo). Num contato
+transferido, a config aplicada é a do pool de ORIGEM: configurar `retencao_humano` não teria efeito
+para quem entrou pelo `sac_ia`, e nada fica vermelho. **É consumidor novo da fatia C**, não item
+próprio — ver `session:{id}:meta` no TEMA · Sessão.
+
+**3. Degradação silenciosa na leitura da config** (`server.ts:1452`): `catch {}` sem log, e o
+`if (cfgRaw)` cai no default sem dizer. Hoje inócuo — o bridge é renovador único da chave a cada
+15 s —, mas "config não aplicada" e "config é o default" são indistinguíveis se um dia falhar.
+Conserto é uma linha de log, e cabe junto de qualquer toque futuro nesse bloco.
 
 ## Auditoria MCP sem STORE — `mcp_audit_log` não existe em banco nenhum *(medido 2026-08-21; **reenquadrado e parcialmente fechado 2026-08-22**)*
 

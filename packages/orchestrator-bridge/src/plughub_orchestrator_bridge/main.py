@@ -1550,6 +1550,107 @@ def _is_workflow_dispatch_entry(entry: dict) -> bool:
     return dispatch == "detached" or (side == "agent" and dispatch == "inline")
 
 
+async def _publish_segment_release(
+    redis_client,
+    session_id:  str,
+    tenant_id:   str,
+    instance_id: str,
+) -> None:
+    """Libera a TELA de um agente cujo segmento acabou, sem fechar o contato.
+
+    ── O defeito que isto conserta (2026-08-26) ──────────────────────────────
+
+    Relatado em 2026-08-24: *"o Console não libera a tela depois do Transfer"*. O
+    contato ficava na lista com o input desabilitado e o toast persistente
+    *"Contato transferido. Aguardando encerramento…"* — para sempre.
+
+    O front implementa um contrato explícito (`AgentAssistContext.tsx`): depois de
+    `session.closed reason=agent_transfer`, o contato só é REMOVIDO quando chega
+    `session.closed reason=posatt_segment_complete` com este agente em `recipients`.
+    Esse evento é publicado em `process_routed` a partir do `hook_conf` + do SET
+    `posatt:{conf}:participants` — **artefatos que só o caminho de CONFERÊNCIA cria**.
+
+    O wrap-up de agente saiu da conferência no **wrap-up unificado (2026-07-27)**:
+    `_is_workflow_dispatch_entry` devolve `True` para `side=agent` nos DOIS modos
+    (`detached` e `inline`), então `fire_pool_hooks` faz `continue` ANTES de gravar
+    os dois artefatos. Ninguém publica o evento; o front espera para sempre. O
+    teardown do Transfer foi dano colateral de outra fatia, e o comentário do front
+    seguiu descrevendo o mundo anterior — *"foi escrito" ≠ "ainda vale"*.
+
+    ⚠️ **Por que o release mora no FIM DO SEGMENTO e não no fim do wrap-up.** Ligá-lo
+    à conclusão do wrap-up reabriria o G1 na UI: em `detached` o item pode ser
+    reivindicado minutos depois, e o painel do contato ficaria preso até lá — o
+    oposto do motivo pelo qual o wrap-up foi destacado. O wrap-up chega ao agente
+    pela inbox (ou auto-claim), com briefing próprio, sem depender deste painel.
+
+    ── Identidade do destinatário ───────────────────────────────────────────
+
+    O filtro do mcp-server (`server.ts`, `posatt_segment_complete`) compara
+    `recipients` com `agentInstanceId`, que vem de `conversation.assigned.instance_id`
+    **ou**, em fallback, de `participant_id`. O SET da conferência já mistura as duas
+    fontes (`_fixed_pid` é um `instance_id` com nome de pid, e o fallback é um
+    participant_id de verdade), então publicamos as duas formas que temos.
+
+    ⚠️ **O campo global `session.human_agent_participant_id` é de escopo largo** e num
+    conferência multi-humano nomeia o humano ERRADO — incluí-lo seria a violação de
+    escopo que o CLAUDE.md descreve. É seguro **aqui e só aqui** porque este caminho
+    roda dentro de `remaining <= 0`: a origem era o ÚLTIMO humano, logo não existe
+    peer humano ativo cuja tela pudesse ser liberada por engano. Num handoff
+    sequencial o campo pode nomear um humano de segmento anterior — inofensivo: ele
+    não tem socket nesta sessão.
+
+    **Nunca broadcast.** Sem `recipients` array o filtro do mcp-server não age e
+    TODO agente inscrito remove o contato — inclusive o DESTINO, que acabou de
+    recebê-lo. Por isso lista vazia ABORTA em vez de publicar.
+    """
+    _recipients: list[str] = []
+    if instance_id:
+        _recipients.append(instance_id)
+    try:
+        _ha_raw = await redis_client.hget(
+            f"{tenant_id}:ctx:{session_id}", "session.human_agent_participant_id",
+        )
+        if _ha_raw:
+            _ha_entry = json.loads(_ha_raw if isinstance(_ha_raw, str) else _ha_raw.decode())
+            _pid = (_ha_entry or {}).get("value") or ""
+            if _pid and _pid not in _recipients:
+                _recipients.append(_pid)
+    except Exception as _pid_exc:
+        logger.debug(
+            "segment release: could not read human_agent_participant_id "
+            "session=%s — %s (seguindo só com instance_id)", session_id, _pid_exc,
+        )
+
+    if not _recipients:
+        # Degradação NUNCA silenciosa: sem destinatário não há release, e o sintoma
+        # é exatamente o defeito que esta função existe para fechar.
+        logger.warning(
+            "segment release NÃO publicado: session=%s instance=%r sem nenhuma "
+            "identidade — a tela da origem ficará presa no 'Aguardando encerramento'",
+            session_id, instance_id,
+        )
+        return
+
+    try:
+        await redis_client.publish(
+            f"agent:events:{session_id}",
+            json.dumps({
+                "type":       "session.closed",
+                "reason":     "posatt_segment_complete",
+                "session_id": session_id,
+                "recipients": _recipients,
+            }),
+        )
+        logger.info(
+            "segment release published: session=%s recipients=%s (origem liberada; "
+            "o contato SEGUE pelo destino)", session_id, _recipients,
+        )
+    except Exception as _rel_exc:
+        logger.warning(
+            "segment release publish failed: session=%s — %s", session_id, _rel_exc,
+        )
+
+
 async def _fire_detached_hook(
     http:         aiohttp.ClientSession,
     session_id:   str,
@@ -7636,6 +7737,29 @@ async def process_contact_event(
                             "(re-routed) — session=%s instance=%s",
                             session_id, instance_id,
                         )
+                        # ── Libera a TELA da origem AQUI, no fim do segmento ─────
+                        # Não depende do wrap-up: ele saiu da conferência no wrap-up
+                        # unificado (2026-07-27) e por isso deixou de publicar o
+                        # `posatt_segment_complete` que o Console espera — era este o
+                        # defeito *"a tela não libera depois do Transfer"*. Amarrar o
+                        # release à conclusão do wrap-up reabriria o G1 na UI (em
+                        # `detached` o item pode demorar minutos). Ver
+                        # `_publish_segment_release`.
+                        #
+                        # ⚠️ Fica FORA do `if http and _ha_pool and _ha_tenant` de
+                        # propósito: aquele guard existe para o DESPACHO do wrap-up, e
+                        # a tela do agente não pode ficar presa porque um hook não
+                        # pôde ser disparado. Só `_ha_tenant` é requisito real (a chave
+                        # do ctx é prefixada por tenant).
+                        if _ha_tenant:
+                            await _publish_segment_release(
+                                redis_client, session_id, _ha_tenant, instance_id,
+                            )
+                        else:
+                            logger.warning(
+                                "segment release NÃO publicado: session=%s sem tenant "
+                                "— a tela da origem ficará presa", session_id,
+                            )
                         if http and _ha_pool and _ha_tenant:
                             _tr_customer = session_id
                             try:
