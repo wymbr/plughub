@@ -58,13 +58,19 @@ export type MaskingRulesMap = Record<string, MaskingDisplayRule>
 
 // ── Category metadata ─────────────────────────────────────────────────────────
 
+// ⚠️ Fallback de ÚLTIMA instância. A fonte é o catálogo de tipos
+// (`masking.types` no config-api, ver useMaskingDisplayRules); este mapa só serve
+// ao primeiro render, antes de o catálogo chegar.
+//
+// `iban` e `passport` foram REMOVIDOS em 2026-08-26 (fase V2 do arco ALLOWLIST):
+// não existem no enum DataCategory, não têm regex de detecção e não têm regra —
+// nenhum token jamais pôde chegar aqui com essas categorias. Eram o 7º inventário
+// de categoria do repositório, e o único lugar onde os dois "existiam".
 const CATEGORY_META: Record<string, { icon: string; label: string }> = {
   credit_card: { icon: '💳', label: 'Cartão' },
   cpf:         { icon: '🪪', label: 'CPF' },
   phone:       { icon: '📞', label: 'Fone' },
   email_addr:  { icon: '📧', label: 'E-mail' },
-  iban:        { icon: '🏦', label: 'IBAN' },
-  passport:    { icon: '🛂', label: 'Passaporte' },
 }
 
 function getCategoryMeta(category: string) {
@@ -176,8 +182,18 @@ export function renderWithTokens(
 
 /**
  * Fetches masking display rules from Config API namespace "masking".
- * Keys follow the pattern rule.{category} → MaskingDisplayRule object.
- * Returns empty map (all defaults) while loading or on error.
+ *
+ * Fonte primária: o CATÁLOGO DE TIPOS (`masking.types` → `type.mascara.display`),
+ * declaração única do arco ALLOWLIST (fase V2). Fallback legado: as chaves soltas
+ * `rule.{category}`, que a MaskingPage gravava antes do catálogo — lidas ainda, e
+ * CONTADAS no aviso, porque é o contador que diz quando removê-las.
+ *
+ * ⚠️ Corrigido em 2026-08-26: a URL era `/api/config/{tenant}/masking`, caminho que
+ * NENHUM proxy do platform-ui serve (a base é `/config` — a ocorrência era única no
+ * repositório inteiro). O 404 morria em `r.ok ? … : null` e o resto no `.catch(() => {})`
+ * vazio, então o mapa era SEMPRE vazio e toda regra de display por categoria era
+ * inerte. Degradação sem log é o que fez isso durar: agora ela NOMEIA o que deixa de
+ * valer.
  */
 export function useMaskingDisplayRules(): MaskingRulesMap {
   const { tenantId } = useAuth()
@@ -185,22 +201,56 @@ export function useMaskingDisplayRules(): MaskingRulesMap {
 
   useEffect(() => {
     if (!tenantId) return
-    fetch(`/api/config/${tenantId}/masking`)
-      .then(r => r.ok ? r.json() : null)
-      .then((data: Record<string, { value?: unknown }> | null) => {
-        if (!data) return
+    fetch(`/config/masking?tenant_id=${encodeURIComponent(tenantId)}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((body: { entries?: Record<string, unknown> } | null) => {
+        const entries = body?.entries
+        if (!entries || typeof entries !== 'object') {
+          console.warn('[masking] resposta sem .entries — regras de display por categoria NÃO aplicadas; vale o default para todo token')
+          return
+        }
+        const unwrap = (v: unknown): unknown =>
+          (v !== null && typeof v === 'object' && 'value' in (v as object))
+            ? (v as { value: unknown }).value
+            : v
+
         const map: MaskingRulesMap = {}
-        for (const [key, entry] of Object.entries(data)) {
-          if (!key.startsWith('rule.')) continue
-          const category = key.slice('rule.'.length)
-          const v = entry?.value ?? entry
-          if (v && typeof v === 'object') {
-            map[category] = v as MaskingDisplayRule
+
+        // 1. catálogo de tipos — fonte primária
+        const catalog = unwrap(entries['types']) as { types?: Array<{ id?: string; mascara?: { display?: unknown } }> } | undefined
+        for (const t of catalog?.types ?? []) {
+          const display = t?.mascara?.display
+          if (t?.id && display && typeof display === 'object') {
+            map[t.id] = display as MaskingDisplayRule
           }
+        }
+        const fromCatalog = Object.keys(map).length
+
+        // 2. chaves legadas rule.{category} — vencem sobre o catálogo (são override
+        //    explícito de tenant) e são contadas para que a remoção seja MEDIDA.
+        let legacy = 0
+        for (const [key, entry] of Object.entries(entries)) {
+          if (!key.startsWith('rule.')) continue
+          const v = unwrap(entry)
+          if (v && typeof v === 'object') {
+            map[key.slice('rule.'.length)] = v as MaskingDisplayRule
+            legacy++
+          }
+        }
+
+        if (fromCatalog === 0) {
+          console.warn(`[masking] catálogo masking.types ausente ou vazio — ${legacy} regra(s) legada(s) rule.*; categorias sem regra caem no DEFAULT_DISPLAY_RULE`)
+        } else if (legacy > 0) {
+          console.info(`[masking] catálogo com ${fromCatalog} tipo(s) + ${legacy} override(s) legado(s) rule.* — remover as legadas quando este número zerar`)
         }
         setRules(map)
       })
-      .catch(() => { /* keep empty map — defaults apply */ })
+      .catch(e => {
+        console.warn(`[masking] falha ao ler o catálogo (${String(e)}) — regras de display por categoria NÃO aplicadas; vale o default para todo token`)
+      })
   }, [tenantId])
 
   return rules

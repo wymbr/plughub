@@ -19,16 +19,37 @@ import { useNamespace, putConfig } from '../config-plataforma/api/config-hooks'
 import type { DisplayScreen, DisplayVoice, MaskingDisplayRule } from '@/components/MaskedToken'
 import { DEFAULT_DISPLAY_RULE } from '@/components/MaskedToken'
 
-// ── Masking categories (mirrors DEFAULT_MASKING_RULES in schemas/audit.ts) ─────
-// Labels are translated inline in the component
-const DEFAULT_CATEGORIES = [
-  { id: 'credit_card',  example: '****1234',      icon: '💳' },
-  { id: 'cpf',          example: '***-00',        icon: '🪪' },
-  { id: 'phone',        example: '(11) ****-4321', icon: '📞' },
-  { id: 'email_addr',   example: 'j***@emp.com',  icon: '📧' },
-  { id: 'iban',         example: 'BR***1234',     icon: '🏦' },
-  { id: 'passport',     example: '***1234',       icon: '🛂' },
-]
+// ── Catálogo de tipos (mirror de DataTypeCatalog em @plughub/schemas/audit.ts) ──
+//
+// ⚠️ Aqui existia `DEFAULT_CATEGORIES`, uma lista HARDCODED de 6 categorias cujo
+// comentário prometia "mirrors DEFAULT_MASKING_RULES" e não espelhava: `iban` e
+// `passport` não existem no enum DataCategory, não têm regex e não têm regra
+// nenhuma — e a tela lhes dava selo "Ativo" incondicional, além de oferecer editor
+// de regra de canal que gravava numa chave que ninguém lê. Era o 3º de SETE
+// inventários de categoria do repositório.
+//
+// A lista agora VEM DO DADO (`masking.types` no config-api). Nenhuma categoria pode
+// aparecer nesta tela sem estar declarada, e o selo é DERIVADO do que o tipo tem.
+type LgpdClass = 'pessoal' | 'sensivel' | 'financeiro' | 'credencial' | 'none'
+
+interface DataTypeFormat {
+  display?:              string
+  detect_pattern?:       string
+  replacement?:          string
+  preserve_last_digits?: number
+  preserve_pattern?:     string
+}
+
+interface DataTypeEntry {
+  id:       string
+  label?:   string
+  icon?:    string
+  formato?: DataTypeFormat
+  mascara?: { by_role?: Record<string, string>; display?: MaskingDisplayRule }
+  lgpd?:    LgpdClass
+}
+
+interface DataTypeCatalog { types: DataTypeEntry[] }
 
 const ROLES_OPTIONS = ['evaluator', 'reviewer', 'supervisor', 'admin', 'developer']
 
@@ -133,14 +154,35 @@ export default function MaskingPage() {
     }
   }
 
+  // ── Catálogo de tipos — a lista que esta tela mostra ────────────────────────
+
+  const rawCatalog = maskingEntries['types']?.value ?? maskingEntries['types']
+  const catalog: DataTypeCatalog = (
+    rawCatalog && typeof rawCatalog === 'object' && Array.isArray((rawCatalog as DataTypeCatalog).types)
+  ) ? (rawCatalog as DataTypeCatalog) : { types: [] }
+  const dataTypes = catalog.types
+
+  /**
+   * A regra de canal mora NO TIPO (`mascara.display`). Gravar é reescrever o
+   * catálogo inteiro — mesmo padrão de `saveContextRules` logo abaixo, e é o que
+   * mantém UMA casa em vez de duas.
+   *
+   * ⚠️ As chaves legadas `rule.{category}` continuam sendo LIDAS pelo consumidor
+   * (MaskedToken), como override de tenant, mas esta tela não escreve mais nelas.
+   * Medido em 2026-08-26: existem ZERO no ambiente — não há migração a fazer.
+   */
   async function saveMaskingRule(category: string, rule: MaskingDisplayRule) {
     if (!adminToken) { showToast(t('toast.tokenRequired'), false); return }
-    const key = `rule.${category}`
-    setSaving(key)
+    setSaving(`type.${category}`)
     try {
-      await putConfig('masking', key, rule, tenantId, '', adminToken)
+      const next: DataTypeCatalog = {
+        types: dataTypes.map(dt => dt.id === category
+          ? { ...dt, mascara: { ...(dt.mascara ?? {}), display: rule } }
+          : dt),
+      }
+      await putConfig('masking', 'types', next, tenantId, '', adminToken)
       reloadMasking()
-      showToast(t('toast.keySaved', { key }), true)
+      showToast(t('toast.keySaved', { key: `types.${category}` }), true)
     } catch (e) {
       showToast(String(e), false)
     } finally {
@@ -149,9 +191,11 @@ export default function MaskingPage() {
   }
 
   function getMaskingRule(category: string): MaskingDisplayRule {
-    const key = `rule.${category}`
-    const v = maskingEntries[key]?.value ?? maskingEntries[key]
-    if (v && typeof v === 'object') return v as MaskingDisplayRule
+    // legado primeiro (override explícito de tenant), depois o tipo, depois o default
+    const legacy = maskingEntries[`rule.${category}`]?.value ?? maskingEntries[`rule.${category}`]
+    if (legacy && typeof legacy === 'object') return legacy as MaskingDisplayRule
+    const fromType = dataTypes.find(dt => dt.id === category)?.mascara?.display
+    if (fromType && typeof fromType === 'object') return fromType
     return DEFAULT_DISPLAY_RULE
   }
 
@@ -298,22 +342,45 @@ export default function MaskingPage() {
           title={t('section.categories.title')}
           desc={t('section.categories.description')}
         >
+          {dataTypes.length === 0 && (
+            <div style={{ marginTop: 12, padding: '10px 14px', background: '#1a1206', border: '1px solid #78350f', borderRadius: 8, fontSize: 12, color: '#fbbf24' }}>
+              {t('section.categories.catalogMissing')}
+            </div>
+          )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10, marginTop: 12 }}>
-            {DEFAULT_CATEGORIES.map(cat => (
-              <div key={cat.id} style={{
-                background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8,
-                padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 12,
-              }}>
-                <span style={{ fontSize: 22 }}>{cat.icon}</span>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{t(`categories.${cat.id}`)}</div>
-                  <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                    {t('section.categories.display')}: <code style={{ color: '#94a3b8', background: '#1e293b', padding: '0 4px', borderRadius: 3 }}>{cat.example}</code>
+            {dataTypes.map(dt => {
+              // ⚠️ Selo DERIVADO do que o tipo tem, nunca constante. O selo "Ativo"
+              // incondicional que vivia aqui é o que deixou `iban`/`passport` passarem
+              // por categorias em vigor por meses.
+              const detects = typeof dt.formato?.detect_pattern === 'string' && dt.formato.detect_pattern.length > 0
+              return (
+                <div key={dt.id} style={{
+                  background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8,
+                  padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 12,
+                }}>
+                  <span style={{ fontSize: 22 }}>{dt.icon ?? '🔒'}</span>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>
+                      {t(`categories.${dt.id}`, { defaultValue: dt.label ?? dt.id })}
+                    </div>
+                    {dt.formato?.display && (
+                      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                        {t('section.categories.display')}: <code style={{ color: '#94a3b8', background: '#1e293b', padding: '0 4px', borderRadius: 3 }}>{dt.formato.display}</code>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                      {detects
+                        ? badge(t('section.categories.detects'), '#22c55e')
+                        : badge(t('section.categories.declaredOnly'), '#94a3b8')}
+                      {dt.lgpd && dt.lgpd !== 'none' && badge(
+                        t(`lgpd.${dt.lgpd}`, { defaultValue: dt.lgpd }),
+                        dt.lgpd === 'sensivel' ? '#dc2626' : dt.lgpd === 'credencial' ? '#a78bfa' : '#f59e0b',
+                      )}
+                    </div>
                   </div>
-                  <div style={{ marginTop: 6 }}>{badge(t('section.categories.active'), '#22c55e')}</div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
           <div style={{ marginTop: 12, padding: '10px 14px', background: '#0f172a', borderRadius: 8, border: '1px solid #1e293b' }}>
             <p style={{ margin: 0, fontSize: 12, color: '#64748b', lineHeight: 1.6 }}>
@@ -333,10 +400,10 @@ export default function MaskingPage() {
           desc={t('section.displayRules.description', { defaultValue: 'Configure how masked tokens are shown per channel. Changes apply immediately to new sessions.' })}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
-            {DEFAULT_CATEGORIES.map(cat => {
+            {dataTypes.map(cat => {
               const rule = getMaskingRule(cat.id)
-              const key  = `rule.${cat.id}`
-              const isSaving = saving === key
+              const isSaving = saving === `type.${cat.id}`
+              const isLegacy = Boolean(maskingEntries[`rule.${cat.id}`])
               function update(patch: Partial<MaskingDisplayRule>) {
                 saveMaskingRule(cat.id, { ...rule, ...patch })
               }
@@ -347,9 +414,12 @@ export default function MaskingPage() {
                 }}>
                   {/* Category header */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                    <span style={{ fontSize: 18 }}>{cat.icon}</span>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>{t(`categories.${cat.id}`)}</span>
+                    <span style={{ fontSize: 18 }}>{cat.icon ?? '🔒'}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: '#e2e8f0' }}>
+                      {t(`categories.${cat.id}`, { defaultValue: cat.label ?? cat.id })}
+                    </span>
                     <code style={{ fontSize: 10, color: '#475569', marginLeft: 4 }}>{cat.id}</code>
+                    {isLegacy && <span style={{ fontSize: 10, color: '#f59e0b', marginLeft: 6 }}>{t('section.displayRules.legacyOverride')}</span>}
                     {isSaving && <span style={{ fontSize: 10, color: '#3b82f6', marginLeft: 'auto' }}>saving…</span>}
                   </div>
 

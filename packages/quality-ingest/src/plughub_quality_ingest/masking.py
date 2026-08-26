@@ -43,7 +43,8 @@ DEFAULT_MASKING_RULES: list[MaskingRule] = [
         preserve_last_digits=4,
     ),
     MaskingRule(
-        pattern=r"\b(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b",
+        # `(?<!\w)` e não `\b` — ver audit.ts: com `\b` o `\(?` é ramo morto.
+        pattern=r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b",
         category="phone",
         replacement="(##) ****-####",
         preserve_last_digits=4,
@@ -60,23 +61,36 @@ DEFAULT_MASKING_RULES: list[MaskingRule] = [
 def _mask_match(match_text: str, rule: MaskingRule) -> str:
     """Build the masked display for one matched span, honoring preserve rules.
 
-    preserve_pattern takes precedence over preserve_last_digits (mirrors TS).
+    preserve_pattern takes precedence over preserve_last_digits.
+
+    ⚠️ CORRIGIDO em 2026-08-26. Esta função declarava fidelidade ao TS
+    ("same preserve_last_digits / preserve_pattern semantics") e NÃO era fiel: ela
+    montava o display a partir de `replacement`, enquanto o canônico
+    (`MaskingService.buildDisplay`, mcp-server-plughub/src/lib/masking.ts) monta
+    `"*" * (n_dígitos − N) + cauda` e só cai em `replacement` como ÚLTIMO recurso.
+    Medido lado a lado (`infra/test/q_masking_display_parity.sh`): o mesmo CPF saía
+    `*********00` pelo stream vivo e `***.***.***.00` por aqui — três portas, três
+    displays, e nenhuma comparação entre elas.
+
+    O canônico é o TS por ser o que produz o `display_partial` que o cliente recebe
+    pelo WebSocket; alinhar na outra direção mudaria o que o operador lê no stream e
+    deixaria os tokens já gravados com o display antigo, duas grafias na mesma sessão.
+
+    `replacement` continua no schema e tem um único papel: fallback quando não há
+    nada a preservar.
     """
     if rule.preserve_pattern:
         m = re.search(rule.preserve_pattern, match_text)
-        if not m:
-            return rule.replacement
-        suffix = m.group(1)
-        # Keep only the replacement portion before the suffix's leading delimiter,
-        # so an email "****@****.***" + "@example.com" → "****@example.com"
-        # (not a doubled "@").
-        delim = suffix[0]
-        base = rule.replacement.split(delim)[0] if delim in rule.replacement else rule.replacement
-        return f"{base}{suffix}"
+        if m:
+            preserved = m.group(1) if m.lastindex else m.group(0)
+            prefix = match_text[: len(match_text) - len(preserved)]
+            masked_len = max(1, -(-len(prefix) // 4))  # ceil(len/4), como o Math.ceil do TS
+            return f"{'*' * masked_len}{preserved}"
     if rule.preserve_last_digits and rule.preserve_last_digits > 0:
         digits = re.sub(r"\D", "", match_text)
-        tail = digits[-rule.preserve_last_digits:] if digits else ""
-        return f"{rule.replacement[:-len(tail)]}{tail}" if tail else rule.replacement
+        if len(digits) > rule.preserve_last_digits:
+            tail = digits[-rule.preserve_last_digits:]
+            return f"{'*' * (len(digits) - rule.preserve_last_digits)}{tail}"
     return rule.replacement
 
 

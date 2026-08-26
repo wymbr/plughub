@@ -25,13 +25,24 @@
       "description": "Tempo em dias que os tokens de mascaramento são mantidos no Redis. Após expirar, o original_content não pode mais ser resolvido — use apenas em sessões encerradas ou relatórios com dados já exportados."
     },
     "categories": {
-      "title": "Categorias de Mascaramento",
-      "description": "Categorias ativas por padrão (DEFAULT_MASKING_RULES em @plughub/schemas/audit.ts). Para adicionar regras customizadas ou desativar categorias, configure {{tenantId}}:masking:config diretamente no Redis.",
+      "title": "Catálogo de Tipos de Dado",
+      "description": "Declaração única de cada tipo: formato (incluindo a detecção em texto livre), máscara por papel e canal, e classe LGPD. Vem do Config API (namespace masking, chave types) — nenhum tipo aparece aqui sem estar declarado.",
       "display": "Exibe",
-      "active": "ativo",
+      "detects": "detecta",
+      "declaredOnly": "declarado, não detecta",
+      "catalogMissing": "Catálogo ausente ou vazio (masking.types). Nenhum tipo declarado — isto não significa que não há mascaramento: significa que esta tela não sabe dizer qual.",
       "tokenFormat": "Formato do token inline",
       "tokenExplanation": "substituído por display_partial na entrega ao cliente via WebSocket. Resolvido para o valor original por roles autorizados via MCP tools."
+    },
+    "displayRules": {
+      "legacyOverride": "override legado (rule.*)"
     }
+  },
+  "lgpd": {
+    "pessoal": "dado pessoal",
+    "sensivel": "dado sensível",
+    "financeiro": "financeiro",
+    "credencial": "credencial"
   },
   "retention": {
     "save": "Salvar",
@@ -49,7 +60,8 @@
     "cpf": "CPF",
     "phone": "Telefone",
     "email_addr": "E-mail",
-    "iban": "IBAN",
-    "passport": "Passaporte"
+    "address": "Endereço",
+    "health": "Dados de Saúde",
+    "financial": "Dados Financeiros"
   }
 }

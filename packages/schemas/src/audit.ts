@@ -249,39 +249,292 @@ export const MaskingAccessPolicySchema = z.object({
 export type MaskingAccessPolicy = z.infer<typeof MaskingAccessPolicySchema>
 
 // ─────────────────────────────────────────────
+// Catálogo de TIPOS de dado — declaração única (ADR adr-contextstore-allowlist D1, fase V2)
+// ─────────────────────────────────────────────
+
+/**
+ * Classe LGPD do dado — eixo de autorização, retenção e auditoria.
+ * Propriedade do TIPO, não eixo paralelo: `AuditPolicy.data_categories` precisa da
+ * resposta *"isto é dado pessoal sensível?"*, que "que forma tem" não responde.
+ */
+export const LgpdClassSchema = z.enum([
+  "pessoal",    // dado pessoal comum (LGPD art. 5º I)
+  "sensivel",   // dado pessoal sensível (art. 5º II) — saúde, biometria, etc.
+  "financeiro", // dado financeiro / PCI-DSS
+  "credencial", // segredo ou capacidade (token, senha) — nunca retido
+  "none",       // não pessoal
+])
+export type LgpdClass = z.infer<typeof LgpdClassSchema>
+
+/**
+ * DataTypeFormat — apresentação do valor quando visível E, quando existir, a
+ * DETECÇÃO em texto livre.
+ *
+ * Todos os campos são opcionais por decisão (D1: `formato` pode ser vazio). Um tipo
+ * SEM `detect_pattern` é declarável e legítimo — apenas não é detectável em texto
+ * livre, e a tela deve dizer isso em vez de exibir "Ativo".
+ *
+ * ⚠️ Formatação é RENDER-TIME, nunca storage (ADR §5): gravar "R$ 1.234,56"
+ * corromperia o valor que o agente passa ao CRM. E a ordem é declarada, não
+ * emergente: **máscara opera no canônico; `display` só se aplica quando a máscara
+ * é ∅ ou `plain`**.
+ */
+export const DataTypeFormatSchema = z.object({
+  /** Máscara de apresentação — ex: "###.###.###-##", "R$ #.##0,00" */
+  display:              z.string().optional(),
+  /** Regex de DETECÇÃO em texto livre. Ausente = tipo não detectável. */
+  detect_pattern:       z.string().optional(),
+  /** Placeholder usado quando a detecção casa */
+  replacement:          z.string().optional(),
+  preserve_last_digits: z.number().int().min(0).optional(),
+  preserve_pattern:     z.string().optional(),
+})
+export type DataTypeFormat = z.infer<typeof DataTypeFormatSchema>
+
+/** Canal de exibição de um token mascarado — tela */
+export const DisplayScreenSchema = z.enum(["display_partial", "full_mask", "hidden"])
+export type DisplayScreen = z.infer<typeof DisplayScreenSchema>
+
+/** Canal de exibição de um token mascarado — voz */
+export const DisplayVoiceSchema = z.enum(["beep", "silence", "speak_placeholder"])
+export type DisplayVoice = z.infer<typeof DisplayVoiceSchema>
+
+/**
+ * MaskingDisplayRule — a dimensão CANAL do mascaramento.
+ * Vivia apenas em `platform-ui/src/components/MaskedToken.tsx` (sem contrato
+ * compartilhado) e era gravada solta como `masking.rule.{category}` no config-api.
+ * Passa a ser propriedade do tipo (§D1: `mascara` opcionalmente carrega canal).
+ */
+export const MaskingDisplayRuleSchema = z.object({
+  display_screen:   DisplayScreenSchema.default("display_partial"),
+  display_voice:    DisplayVoiceSchema.default("silence"),
+  echo_to_customer: z.boolean().default(false),
+  echo_to_operator: z.boolean().default(true),
+})
+export type MaskingDisplayRule = z.infer<typeof MaskingDisplayRuleSchema>
+
+/**
+ * DataTypeMask — a dimensão PAPEL (e, opcionalmente, CANAL) do mascaramento.
+ * `by_role` mapeia papel → ContextMaskingType. Pode ser vazio (D1).
+ */
+export const DataTypeMaskSchema = z.object({
+  by_role: z.record(ContextMaskingTypeSchema).default({}),
+  display: MaskingDisplayRuleSchema.optional(),
+})
+export type DataTypeMask = z.infer<typeof DataTypeMaskSchema>
+
+/**
+ * DataType — a declaração ÚNICA de um tipo de dado.
+ *
+ * Funde as três METADES que viviam em casas separadas, cada uma com a dimensão
+ * que faltava às outras (ADR §1.4):
+ *   `MaskingRule` + regex      → detecção, sem papel nem canal   → vira `formato`
+ *   `MaskingDisplayRule`       → canal, sem papel                → vira `mascara.display`
+ *   `ContextMaskingRule`/Type  → papel, sem detecção nem canal   → vira `mascara.by_role`
+ * mais a classe LGPD, que nenhuma das três carregava.
+ *
+ * **Invariante: um campo declara EXATAMENTE UM tipo.** Se dois campos precisam de
+ * políticas diferentes, são dois tipos — nunca um tipo com exceção no campo.
+ */
+export const DataTypeSchema = z.object({
+  id:      z.string().min(1),
+  label:   z.string().optional(),
+  icon:    z.string().optional(),
+  formato: DataTypeFormatSchema.default({}),
+  mascara: DataTypeMaskSchema.default({}),
+  lgpd:    LgpdClassSchema.default("none"),
+})
+export type DataType = z.infer<typeof DataTypeSchema>
+
+/**
+ * DataTypeCatalog — armazenado no Config API, namespace "masking", chave "types".
+ * Fonte de verdade é o config-api; o seed apenas semeia base vazia (D7).
+ */
+export const DataTypeCatalogSchema = z.object({
+  types: z.array(DataTypeSchema).default([]),
+})
+export type DataTypeCatalog = z.infer<typeof DataTypeCatalogSchema>
+
+/**
+ * DEFAULT_DATA_TYPE_CATALOG — o catálogo global semeado.
+ *
+ * **Contém apenas o que é ALCANÇÁVEL por um mecanismo existente** (decisão de
+ * 2026-08-26, medida antes de tomada):
+ *   · `formato.detect_pattern` presente ⇒ alcançável por DETECÇÃO em texto livre;
+ *   · id ∈ `DataCategorySchema` ⇒ alcançável por declaração de tool
+ *     (`AuditPolicy.data_categories`, lido em `sdk/src/mcp-interceptor.ts`).
+ *
+ * `iban` e `passport` NÃO entram: não estão no enum, não têm regra, não têm regex —
+ * existiam só como card de tela com selo "Ativo" incondicional. Um tipo que nenhum
+ * mecanismo alcança é o defeito que este catálogo existe para impedir, não um item
+ * de backlog.
+ *
+ * Os valores de `mascara.by_role` NÃO são inventados: são a política VIVA medida no
+ * config-api (`masking.context_rules`, 23 regras) — `caller.cpf → last_2`,
+ * `caller.telefone`/`*.numero_cartao → last_4`, `caller.email → email_domain`.
+ * `mascara.display` é `DEFAULT_DISPLAY_RULE` porque a medição de 2026-08-26 achou
+ * ZERO chaves `masking.rule.*` gravadas — o default É o valor efetivo hoje.
+ */
+export const DEFAULT_DATA_TYPE_CATALOG: DataTypeCatalog = {
+  types: [
+    {
+      id:    "cpf",
+      label: "CPF",
+      icon:  "🪪",
+      formato: {
+        display:              "###.###.###-##",
+        detect_pattern:       "\\b\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}\\b",
+        replacement:          "***.***.***.--",
+        preserve_last_digits: 2,
+      },
+      mascara: {
+        by_role: { operator: "last_2" },
+        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+      },
+      lgpd: "pessoal",
+    },
+    {
+      id:    "credit_card",
+      label: "Cartão de crédito",
+      icon:  "💳",
+      formato: {
+        display:              "#### #### #### ####",
+        detect_pattern:       "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b",
+        replacement:          "**** **** **** ****",
+        preserve_last_digits: 4,
+      },
+      mascara: {
+        by_role: { operator: "last_4" },
+        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+      },
+      lgpd: "financeiro",
+    },
+    {
+      id:    "phone",
+      label: "Telefone",
+      icon:  "📞",
+      formato: {
+        display: "(##) #####-####",
+        // ⚠️ O `\b` inicial foi trocado por `(?<!\w)` em 2026-08-26, e é conserto de
+        // RAMO MORTO, não ajuste de gosto: `\b` exige transição \W→\w, que NUNCA
+        // ocorre antes de um `(`. Logo o `\(?` desta alternativa jamais podia casar —
+        // o match sempre começava no primeiro dígito e o parêntese de abertura ficava
+        // órfão, colado na máscara, nas três portas de masking (`(***4321`,
+        // `((##) ****-4321`, `([phone:tk_x:*******4321]`).
+        // O conserto muda o TRECHO casado, nunca o CONJUNTO de telefones detectados:
+        // os dígitos já eram detectados, só o `(` ficava de fora.
+        detect_pattern:       "(?<!\\w)(?:\\+55\\s?)?(?:\\(?\\d{2}\\)?[\\s-]?)?9?\\d{4}[-\\s]?\\d{4}\\b",
+        replacement:          "(##) ****-####",
+        preserve_last_digits: 4,
+      },
+      mascara: {
+        by_role: { operator: "last_4" },
+        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+      },
+      lgpd: "pessoal",
+    },
+    {
+      id:    "email_addr",
+      label: "E-mail",
+      icon:  "📧",
+      formato: {
+        detect_pattern:   "\\b[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}\\b",
+        replacement:      "****@****.***",
+        preserve_pattern: "(@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})$",
+      },
+      mascara: {
+        by_role: { operator: "email_domain" },
+        display: { display_screen: "display_partial", display_voice: "silence", echo_to_customer: false, echo_to_operator: true },
+      },
+      lgpd: "pessoal",
+    },
+    // ── Sem detecção em texto livre ────────────────────────────────────────────
+    // Alcançáveis SÓ por declaração de tool (`AuditPolicy.data_categories`).
+    // Medido em 2026-08-26: NENHUMA tool do repositório declara `audit_policy`,
+    // então hoje não há produtor — o caminho existe, o uso não. A tela mostra isso
+    // ("declarado, não detecta"), em vez do selo "Ativo" que mentia.
+    {
+      id:      "address",
+      label:   "Endereço",
+      icon:    "🏠",
+      formato: {},
+      mascara: { by_role: { operator: "first_word" } },
+      lgpd:    "pessoal",
+    },
+    {
+      id:      "health",
+      label:   "Dados de saúde",
+      icon:    "🩺",
+      formato: {},
+      mascara: { by_role: { operator: "full" } },
+      lgpd:    "sensivel",
+    },
+    {
+      id:      "financial",
+      label:   "Dados financeiros",
+      icon:    "🏦",
+      formato: { display: "R$ #.##0,00" },
+      mascara: { by_role: { operator: "financial" } },
+      lgpd:    "financeiro",
+    },
+  ],
+}
+
+// ─────────────────────────────────────────────
 // Regras de mascaramento padrão (defaults do sistema)
 // ─────────────────────────────────────────────
 
 /**
  * DEFAULT_MASKING_RULES — aplicadas quando o tenant não configurou regras próprias.
  * Alinhadas com LGPD e PCI-DSS.
+ *
+ * ⚠️ **DERIVADO do catálogo, nunca redigitado.** Era uma lista literal, e essa lista
+ * era o 2º de SETE inventários de categoria que já haviam divergido entre si. A
+ * derivação é o mecanismo que impede o 8º: não há como acrescentar uma regra sem
+ * declarar o tipo, nem declarar um tipo detectável que não vire regra.
+ *
+ * A ordem do catálogo é a ordem das regras (as 4 detectáveis vêm primeiro, na mesma
+ * ordem do literal anterior) — o masking aplica na sequência, então ordem é contrato.
  */
-export const DEFAULT_MASKING_RULES: MaskingRule[] = [
-  {
-    pattern:              "\\b\\d{3}\\.\\d{3}\\.\\d{3}-\\d{2}\\b",
-    category:             "cpf",
-    replacement:          "***.***.***.--",
-    preserve_last_digits: 2,
-  },
-  {
-    pattern:              "\\b(?:\\d{4}[\\s-]?){3}\\d{4}\\b",
-    category:             "credit_card",
-    replacement:          "**** **** **** ****",
-    preserve_last_digits: 4,
-  },
-  {
-    pattern:              "\\b(?:\\+55\\s?)?(?:\\(?\\d{2}\\)?[\\s-]?)?9?\\d{4}[-\\s]?\\d{4}\\b",
-    category:             "phone",
-    replacement:          "(##) ****-####",
-    preserve_last_digits: 4,
-  },
-  {
-    pattern:              "\\b[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}\\b",
-    category:             "email_addr",
-    replacement:          "****@****.***",
-    preserve_pattern:     "(@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})$",
-  },
-]
+export const DEFAULT_MASKING_RULES: MaskingRule[] = DEFAULT_DATA_TYPE_CATALOG.types
+  .filter(t =>
+    typeof t.formato.detect_pattern === "string" &&
+    typeof t.formato.replacement === "string" &&
+    DataCategorySchema.safeParse(t.id).success
+  )
+  .map(t => {
+    const rule: MaskingRule = {
+      pattern:     t.formato.detect_pattern as string,
+      category:    t.id as DataCategory,
+      replacement: t.formato.replacement as string,
+    }
+    if (typeof t.formato.preserve_last_digits === "number") rule.preserve_last_digits = t.formato.preserve_last_digits
+    if (typeof t.formato.preserve_pattern === "string")     rule.preserve_pattern     = t.formato.preserve_pattern
+    return rule
+  })
+
+/**
+ * verifyDataTypeCatalog — o ORÁCULO do gate da V2, exportado para não ser reimplementado
+ * pelo teste (um gate que reconstrói a regra que julga testa a si mesmo).
+ *
+ * Devolve as DUAS listas, porque um lado só não julga (ADR §7):
+ *   · `orphan_types`            — tipo que nenhum mecanismo alcança (o caso `iban`/`passport`)
+ *   · `categories_without_type` — valor do enum sem tipo declarado (o inverso)
+ * Ambas vazias ⇒ os dois inventários fecham. Vazias sobre catálogo VAZIO não é
+ * aprovação — por isso `declared` viaja junto, como testemunha de presença.
+ */
+export function verifyDataTypeCatalog(catalog: DataTypeCatalog = DEFAULT_DATA_TYPE_CATALOG): {
+  declared: number
+  orphan_types: string[]
+  categories_without_type: string[]
+} {
+  const ids = catalog.types.map(t => t.id)
+  const orphan_types = catalog.types
+    .filter(t => !t.formato.detect_pattern && !DataCategorySchema.safeParse(t.id).success)
+    .map(t => t.id)
+  const categories_without_type = DataCategorySchema.options.filter(c => !ids.includes(c))
+  return { declared: catalog.types.length, orphan_types, categories_without_type }
+}
 
 // ─────────────────────────────────────────────
 // Registro de auditoria de MCP — tópico mcp.audit

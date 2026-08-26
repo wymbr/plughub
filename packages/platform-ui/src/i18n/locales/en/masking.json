@@ -25,13 +25,24 @@
       "description": "Time in days that masking tokens are kept in Redis. After expiration, original_content cannot be resolved — use only on closed sessions or exported reports."
     },
     "categories": {
-      "title": "Masking Categories",
-      "description": "Active categories by default (DEFAULT_MASKING_RULES in @plughub/schemas/audit.ts). To add custom rules or disable categories, configure {{tenantId}}:masking:config directly in Redis.",
+      "title": "Data Type Catalog",
+      "description": "Single declaration per type: format (including free-text detection), masking by role and channel, and LGPD class. Served by the Config API (namespace masking, key types) — no type shows up here without being declared.",
       "display": "Display",
-      "active": "active",
+      "detects": "detects",
+      "declaredOnly": "declared, no detection",
+      "catalogMissing": "Catalog missing or empty (masking.types). No type declared — this does not mean there is no masking: it means this screen cannot tell you which.",
       "tokenFormat": "Inline token format",
       "tokenExplanation": "replaced by display_partial on delivery to client via WebSocket. Resolved to original value by authorized roles via MCP tools."
+    },
+    "displayRules": {
+      "legacyOverride": "legacy override (rule.*)"
     }
+  },
+  "lgpd": {
+    "pessoal": "personal data",
+    "sensivel": "sensitive data",
+    "financeiro": "financial",
+    "credencial": "credential"
   },
   "retention": {
     "save": "Save",
@@ -49,7 +60,8 @@
     "cpf": "CPF",
     "phone": "Phone",
     "email_addr": "Email",
-    "iban": "IBAN",
-    "passport": "Passport"
+    "address": "Address",
+    "health": "Health Data",
+    "financial": "Financial Data"
   }
 }

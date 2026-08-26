@@ -49,6 +49,17 @@ export {
   ContextMaskingRuleSchema,
   ContextMaskingConfigSchema,
   DEFAULT_CONTEXT_MASKING_CONFIG,
+  // Catálogo de TIPOS — declaração única (adr-contextstore-allowlist D1, fase V2)
+  LgpdClassSchema,
+  DataTypeFormatSchema,
+  DisplayScreenSchema,
+  DisplayVoiceSchema,
+  MaskingDisplayRuleSchema,
+  DataTypeMaskSchema,
+  DataTypeSchema,
+  DataTypeCatalogSchema,
+  DEFAULT_DATA_TYPE_CATALOG,
+  verifyDataTypeCatalog,
 } from "./audit"
 
 export type {
@@ -66,6 +77,15 @@ export type {
   ContextMaskingType,
   ContextMaskingRule,
   ContextMaskingConfig,
+  // Catálogo de TIPOS
+  LgpdClass,
+  DataTypeFormat,
+  DisplayScreen,
+  DisplayVoice,
+  MaskingDisplayRule,
+  DataTypeMask,
+  DataType,
+  DataTypeCatalog,
 } from "./audit"
 
 // ── v2: Mensagem ─────────────────────────────

@@ -63,24 +63,43 @@ O remendo aplicado em 2026-08-26 — globs de sufixo (`*.cpf`, `*.resume_token`,
 **tipo de campo** em vez de por namespace, e cobre os tipos que *por acaso* conhecemos hoje. Um
 `session.rg` amanhã nasce exposto de novo. É patch no modelo, não o modelo.
 
-### 1.3 Achado — há três (quase quatro) inventários de "categoria", e eles discordam
+### 1.3 Achado — há ~~três (quase quatro)~~ **SETE** inventários de "categoria", e eles discordam
 
-Medido nesta sessão:
+> ⚠️ **Corrigido em 2026-08-26 (fase V2), por varredura de símbolo.** Esta seção dizia *"três (quase
+> quatro)"*; são **sete**, e os três que faltavam são justamente os que têm **produtor vivo em
+> Python** — isto é, os que podiam divergir sem que nenhum teste de TypeScript notasse. A
+> subcontagem tem a forma que o `CLAUDE.md` cataloga em *"contar sites por DERIVAÇÃO"*: o inventário
+> foi feito por menção, e quem não usa o nome `DataCategory` não apareceu.
 
-| fonte | valores |
-|---|---|
-| `schemas/src/audit.ts:14` `DataCategorySchema` | cpf, credit_card, phone, email_addr, **address, health, financial** |
-| `schemas/src/audit.ts:259` `DEFAULT_MASKING_RULES` (as que têm regex e portanto detectam) | cpf, credit_card, phone, email_addr — **só 4** |
-| `platform-ui/.../MaskingPage.tsx:24` `DEFAULT_CATEGORIES` (o que a tela mostra) | credit_card, cpf, phone, email_addr, **iban, passport** |
+| # | fonte | valores | detecta? |
+|---|---|---|---|
+| 1 | `schemas/src/audit.ts` `DataCategorySchema` | cpf, credit_card, phone, email_addr, **address, health, financial** | — |
+| 2 | `schemas/src/audit.ts` `DEFAULT_MASKING_RULES` | os 4 primeiros — **só 4** | **sim** |
+| 3 | `platform-ui/.../MaskingPage.tsx` `DEFAULT_CATEGORIES` | os 4 + **iban, passport** | não |
+| 4 | `platform-ui/.../MaskedToken.tsx` `MaskingRulesMap` → `rule.{category}` | chaveado pelos 6 da tela | não |
+| 5 | `quality-ingest/.../masking.py` `DEFAULT_MASKING_RULES` | porta Python dos 4 | **sim** |
+| 6 | `channel-gateway/.../adapters/webhook.py` `_PII_MASKERS` | 4 regexes **sem categoria nenhuma** | **sim** |
+| 7 | `platform-ui/.../MaskedToken.tsx` `CATEGORY_META` | os 4 + **iban, passport**, rótulos hardcoded | não |
 
-`iban` e `passport` **não existem** no enum e não têm regra nenhuma — e a tela renderiza o selo
-**"Ativo"** neles **incondicionalmente** (`MaskingPage.tsx:313`, sem ramo). `address` e `health`
-existem no enum e **nunca disparam** (sem regex). O comentário na linha 22 promete
-*"mirrors DEFAULT_MASKING_RULES"* — promessa sem produtor, a mesma família que o `CLAUDE.md`
-§ Postura de Engenharia cataloga.
+`iban` e `passport` **não existem** no enum e não têm regra nenhuma — e a tela renderizava o selo
+**"Ativo"** neles **incondicionalmente** (sem ramo), além de oferecer editor de regra de canal que
+gravava numa chave que ninguém lia. O comentário prometia *"mirrors DEFAULT_MASKING_RULES"* —
+promessa sem produtor.
 
-O quarto inventário é `MaskingRulesMap` (`platform-ui/src/components/MaskedToken.tsx:57`), chaveado
-por essas mesmas categorias e escrito como `rule.{category}` no config-api.
+**E eles não só podiam divergir: divergiam.** Medido lado a lado com
+`infra/test/q_masking_display_parity.sh` (5 vetores × 3 portas que aplicam masking): **nenhuma das
+cinco linhas era unânime**. O mesmo CPF saía `*********00` (nº 2, o caminho vivo), `***.***.***.00`
+(nº 5, cuja docstring declarava fidelidade ao TS) e `***.***.***-00` (nº 6). A única coincidência era
+acidente aritmético. Nada no repositório comparava as portas entre si: cada uma tinha teste próprio,
+todos verdes, todos medindo a porta contra ela mesma.
+
+> ✅ **FECHADO na V2** (ver `CHANGELOG.md`). Os inventários 1–7 passaram a derivar de **um** catálogo
+> (`masking.types` no config-api, espelhado por `DEFAULT_DATA_TYPE_CATALOG`); `DEFAULT_MASKING_RULES`
+> deixou de ser lista literal e passou a ser **derivada** dele; os fantasmas saíram; e as três portas
+> de masking foram alinhadas à semântica canônica, com gate de paridade
+> (`infra/test/probe_masking_display_parity.sh`) que reprova a divergência **e** o caso vácuo em que
+> as três não mascaram nada. As cópias Python **permanecem cópias** — o fim delas é lerem o catálogo
+> em runtime, e isso exige recusar alto quando a config não vier. Fase própria.
 
 ### 1.4 Achado — os mecanismos de masking são três METADES, cada uma com uma dimensão que falta às outras
 
@@ -422,7 +441,7 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | **V0** | Consertar a tela que mente. **Metade FEITA em 2026-08-26** (ver `CHANGELOG.md`): a causa não era o `??` — era **colisão de rota no nginx** (`masking` é nome de página *e* namespace; `location` casa a URI sem a query string, então o `fetch` recebia `index.html` com HTTP 200). Discriminador passou a ser o `Accept`. Gate `probe_config_route_collision.sh`, visto vermelho antes de verde. **Metade ABERTA:** colapsar os inventários de categoria de §1.3 — depende da V2 | sim |
 | **V1** | A omissão deixa de ser muda. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `MaskedContextView` com `total` + `by_rule` + `by_pool_scope`, `context_withheld` no endpoint, faixa na aba Contexto. **Duas listas** porque as causas se consertam em telas diferentes. Gate `probe_context_withheld.sh` (6 ramos; D = testemunha negativa, F = aritmética) | sim |
 | **V1b** | A segunda porta (§1.5). **FEITA em 2026-08-26** (ver `CHANGELOG.md`): política extraída para `lib/context-masking.ts` e aplicada ao tool MCP `supervisor_state`, em **grau operator sem portão de namespace**; `context_masking` no retorno. Gate `probe_supervisor_tool_masking.sh` (6 ramos; **C** = testemunha negativa contra blanket-mask, **B** usa o endpoint HTTP como **oráculo** em vez de valor hardcodado). Barata porque **0 skills consumiam** o campo — o custo teria crescido com o primeiro consumidor | sim |
-| **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo | sim |
+| **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `DataTypeSchema` + `DEFAULT_DATA_TYPE_CATALOG` (7 tipos, só o ALCANÇÁVEL — `iban`/`passport` fora), `DEFAULT_MASKING_RULES` passou a ser **derivada** do catálogo, `masking.types` semeado, e a tela iterando o dado com **selo derivado** em vez do "Ativo" incondicional. Gates `probe_type_catalog.sh` (dois lados + testemunha do ORÁCULO) e `probe_masking_display_parity.sh` (três portas, com testemunha contra o caso vácuo). Dois defeitos alheios caíram junto: o leitor de regras de canal apontava para uma rota inexistente (**inerte desde sempre**) e o `\(?` do regex de telefone era ramo morto | sim |
 | **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria** (só registra o que teria sido escondido/recusado) | sim |
 | **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |
 | **V5** | Tela do pool vira seletor (D6); fechamento dos aliases cujo contador zerou | sim |

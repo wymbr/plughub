@@ -2306,20 +2306,84 @@ com `n=1`, o front esconde o chip (`ListaTab.tsx:269`, `> 1`) e a tela passa a *
 contato não pertence a processo nenhum"* — exatamente a mentira que o mesmo docstring proíbe quatro
 parágrafos abaixo (*"Falha ⇒ `None`, nunca `1`"*). A regra foi aplicada à FALHA e não ao RECORTE.
 
-**Decisão aberta (do dono, adiada em 2026-08-26):**
+**✅ DECIDIDO pelo dono em 2026-08-26 — caminho (a), o marcador de existência.** Código escrito;
+falta `build` + baseline + gate (ver o fim desta seção). As três opções, para o registro:
 
-- **(a) marcador de existência, sem tamanho** — booleano `journey_has_scoped_out_members` ao lado da
-  contagem escopada; chip volta como `PRC-xxxx · 1+`, dizendo *"há mais, você não alcança"* sem
-  revelar quantos nem quais. Preserva a intenção da ABAC e mata o silêncio. Custo: uma coluna na
-  query, um campo no meta, um ramo no front.
+- **(a) marcador de existência, sem tamanho — ESCOLHIDA.** Booleano
+  `journey_has_scoped_out_members` ao lado da contagem escopada; chip volta como `PRC-xxxx · 1+`,
+  dizendo *"há mais, você não alcança"* sem revelar quantos nem quais. Preserva a intenção da ABAC e
+  mata o silêncio.
 - **(b) tirar a ABAC da contagem** — alinhado ao §1 do docstring (*"o processo não encolhe porque
   alguém olhou uma semana dele"*), mas revela o TAMANHO de processos que tocam pools fora do escopo.
+  ⚠️ **Reclassificada na mesma sessão:** deixou de ser alternativa e passou a ser a **primeira fatia
+  da (d)** — e a fatia cuja ordem está errada (ver a seção da (d) abaixo).
 - **(c) manter como está** e consertar só o texto — o rodapé condicional já existe
   (`lista.processFootnote`); precisaria dizer que o chip é escopado. Mais barato, menos honesto: o
   chip continua AUSENTE, e rodapé não explica ausência.
 
-**Não decidir por (b) sem olhar (a):** o dado que falta ao front não é o tamanho, é a EXISTÊNCIA — e
-`journey_id` já viaja em toda linha (`:1228`/`:1241`), inclusive nas 6 escopadas.
+**O que decidiu:** o dado que falta ao front não é o tamanho, é a EXISTÊNCIA — e `journey_id` já
+viaja em toda linha (`:1228`/`:1241`), inclusive nas 6 escopadas.
+
+**Como está implementado** (`reports_query.py`, `_attach_session_journey_chip`): a ABAC **saiu do
+`WHERE`** e virou o predicado dos `countIf`. A população agregada passa a ser o processo inteiro; o
+que SAI continua escopado (os quatro números são `countIf(acc)`, idênticos aos de antes). O único
+fato novo é `count() > countIf(acc)`. Sem restrição o predicado colapsa em `1` e o marcador sai
+`false` — **medido, nunca `null`**: `false` é *"não há membro fora do seu alcance"* e `null` é *"não
+consegui medir"*, e colapsá-los faria o front tratar quem tem visão completa como caso desconhecido.
+
+No front (`ProcessChip.tsx`, superfície ÚNICA — lista + breadcrumb): `hasProcess` ganhou a segunda
+razão para pivotar (`total > 1 || scopedOut`), e **sob o marcador a QUEBRA não é desenhada**. Isso
+não é economia de espaço: a quebra também é escopada, e uma classe inteira fora do alcance
+apareceria como `0` — publicar `· 3 + 0` afirmaria *"não há etapa interna"*, o mesmo defeito um nível
+abaixo, convivendo com o marcador que anuncia o contrário. Sob o marcador: um número e o `+`.
+
+✅ **PROVADO em 2026-08-26** — `infra/test/probe_process_chip_scoped_marker.sh`, com
+`operator@plughub.local` (o admin tem 22 pools e **não exerce** o defeito). Medido:
+
+```
+linhas anon=120 · auth=80 · chave presente 120/120 e 80/80
+anon (sem ABAC): false=120 · true=0 · null=0
+população derivada: PERDEM membro=6 · escopo cobre=74 · impossíveis=0
+  4→1 · 3→1 · 4→1 · 4→1 · 4→1 · 5→1   (todas com o marcador `true`)
+VERDE
+```
+
+São **as mesmas 6 linhas** que a triagem tinha encontrado reportando `1` contra `4`/`3`/`4`/`4`/`4`.
+A contagem continua escopada (`→ 1`), o marcador acende, e os 74 processos cobertos saem `false` —
+as duas proposições opostas provadas na mesma execução. Baseline da analytics-api: **620 passed**
+(617 + 3 testes novos).
+
+⚠️ **A COBAIA É O `operator`, NÃO O ADMIN — e isso é permanente, não circunstancial.** O gate sai
+**INCONCLUSIVO** com o admin (`PERDEM membro=0 · escopo cobre=29`), e está CERTO em sair: escopo
+largo não refuta o defeito, apenas não o exercita. Quem rodar isto com o admin e ler o exit 2 como
+"não há defeito" repete o erro que a v1 deste gate cometeu ao contrário.
+
+🔴 **A v1 deste gate reprovava código CORRETO, e a lição é de método.** Ela tomava a INTERSEÇÃO
+(*"linhas multi visíveis"*) como sendo *"processos com membro fora do escopo"* — verdade só enquanto
+o admin tinha 5 pools. Com 22, imprimiu `4 → 4 · false` em 29 linhas e chamou as 29 de defeito, em
+DOIS ramos (mudo + vazamento). **A população de um gate se DERIVA do dado, nunca se assume do
+recorte**: `auth_n < anon_n` ⇒ marcador deve ser `true`; `==` ⇒ deve ser `false`; `>` ⇒ impossível.
+Sem nenhuma linha `<`, não julga. Agravante: o erro foi cometido **depois** de eu consertar o
+idêntico no `q_scope_delta_stage2.sh` (que decidia por "interseção não-vazia" e imprimia
+`anon=4 auth=4` nas próprias linhas de prova). Ver D14.1 na § Postura de Engenharia.
+
+✅ **METADE VISUAL CONFIRMADA (2026-08-26)**, com `supervisor@plughub.local` escopado em
+`limite_ia` + `limite_retorno` — previsão escrita antes, **4 de 4**:
+
+| linha | antes | depois |
+|---|---|---|
+| 3× `PRC-8c47326d` (total 5, alcança 3) | `· 3` | **`· 3+`** |
+| 2× `PRC-faf611c6` (total 3, alcança 2) | `· 2` | **`· 2+`** |
+| `…0-4ecf5c0f49c0` (total 5, alcança **1**) | **`—`** | **`PRC-ca44ca47 · 1+`** |
+| `…4-0ddf15a02b31`, `…b-a3ae157e0fad` (`scoped_out=false`) | `—` | `—` |
+
+A terceira linha é o defeito em estado puro: a tela AFIRMAVA *"não pertence a processo nenhum"* sobre
+um processo de cinco sessões. A quarta é a testemunha negativa **na tela** — se elas tivessem ganhado
+chip, o marcador estaria aceso onde não há nada fora do alcance.
+
+⚠️ **A cobaia foi o `supervisor`, não o `operator`** — o `operator` tem o escopo certo mas não alcança
+a tela (portão de papel no `Sidebar.tsx:121`, seção própria abaixo). Montar o caso exigiu conceder
+dois pools ao supervisor pela tela de Acesso.
 
 **Scripts (rodam do host, sem build):**
 `infra/test/q_process_chip_delta.sh` (grade 2×2 token × page_size, com testemunha de presença
@@ -2328,6 +2392,199 @@ ao lado do contador de ausência) · `infra/test/q_scope_delta_stage2.sh` (o dis
 claims do token — foi ele que derrubou o `accessible_pools = []` herdado).
 ⚠️ O `q_scope_delta_stage2.sh` ainda imprime o aviso *"`accessible_pools: []` significa
 IRRESTRITO"*, que era relevante sob a premissa herdada e hoje só confunde — corrigir ao tocar.
+🔴 **E o aviso está CERTO como fato de código, embora fosse enganoso como diagnóstico:**
+`pool_auth.py:157-161` implementa exatamente essa convenção (`[] → None → irrestrito`). Ver a
+seção do furo abaixo, onde ela deixa de ser curiosidade e vira decisão.
+
+### 🟡 (d) "ABAC no conteúdo, lista aberta" — proposta do dono, ADIADA com a ORDEM INVERTIDA (2026-08-26)
+
+**A proposta.** Tirar a ABAC da montagem do chip *e da lista* — todos enxergam todos os contatos e
+segmentos — e aplicá-la **na exibição do conteúdo**, de modo que só quem tem escopo faça drill-down.
+
+**O diagnóstico está certo, e é o da casa:** `accessible_pools` carrega HOJE dois fatos num campo só
+— **relevância** (*"esta é a minha operação"*, por isso o supervisor vê 86 e não 120) e
+**autorização** (*"posso ver isto"*). É a mesma família de *"papel são DOIS fatos"* e de *"tem config
+≠ tem endereço"*.
+
+**A medição (estática, por DERIVAÇÃO, 2026-08-26) mostrou que só um dos dois existe.** Endpoints de
+conteúdo/drill de UM contato, na analytics-api:
+
+| Endpoint (arquivo:linha) | Devolve | ABAC por pool? |
+|---|---|---|
+| `transcript.py:192` `/transcript/sessions/{id}` | transcrição mascarada | **NÃO** — principal só resolve tenant; o docstring diz *"this read enforces tenant isolation only"* |
+| `sessions.py:463` `/{id}/stream` | eventos da sessão **AO VIVO** (SSE) | **NÃO** |
+| `sessions.py:696` `/{id}/workflow-trace` | trajetória | **NÃO** |
+| `sessions.py:979` `/{id}/pipeline-state` | estado do fluxo | **NÃO** |
+| `sessions.py:183` `/customer/{id}` | contatos do cliente | **NÃO** |
+| `sessions.py:350` `/customer/{id}/search` | **busca dentro das mensagens** | **NÃO** |
+| `reports.py:1408` `/customers/{id}/360` | agregado do cliente | **NÃO** (sem principal) |
+| `supervisor.py:81` `POST /join` | entra na sessão viva e **ESCREVE no stream** | **NÃO** — confere só tenant |
+| `audit.py:246` `/audit/sessions/{id}/messages` | mensagens | gate próprio, por `module_config.audit` — não por pool |
+| `reports.py:1435` `/sessions/{id}/trace` | árvore de proveniência | **SIM** |
+| `reports.py:457` `/segments` · `:1361` `/journeys` · `:107` `/sessions` | listas | **SIM** |
+
+O módulo `sessions.py` inteiro importa `from fastapi import APIRouter, Query, Request` — **nenhum
+`Depends`**. Não é escopo mal aplicado: é escopo ausente por construção.
+
+🔴 **Por que a (d) NÃO é decomponível na ordem proposta.** O que protege a transcrição hoje não é
+permissão — é o supervisor **não receber o `session_id`**. Como os ids são uuid, isso funciona como
+barreira de CAPACIDADE (obscuridade que, na prática, segura). Abrir as linhas primeiro **entrega as
+chaves** de endpoints que não checam nada: o supervisor passaria a ver os contatos fora dos pools
+dele *e*, a um clique, a transcrição e o stream ao vivo deles. **Ordem correta: portões de conteúdo
+primeiro, abrir as linhas depois** — e são ~8 endpoints, um SSE e um POST que escreve.
+
+**Terceiro item que a (d) exige e ninguém pediu:** o **filtro de relevância** tem de nascer no lugar
+que a ABAC desocupar, senão todo agregado escopado (Fila/SLA, TMA, bancada) passa a contar pools que
+não são do supervisor no mesmo dia. Escopo não é só segredo — é também *"o relatório é da MINHA
+operação"*.
+
+**Estado: adiada por decisão do dono em 2026-08-26**, em favor da (a). Se voltar, vira ADR com as
+três peças na ordem acima. A (b) é a fatia 1 dela e **não deve ser feita isolada**.
+
+### 🔴 O ABAC de pool é OPT-IN DO CHAMADOR — sem header, lê tudo (medido 2026-08-26)
+
+`pool_auth.py` declara três bypasses, todos por escrito e todos fail-OPEN:
+
+1. `:130-131` — **sem `auth_jwt_secret`** configurado ⇒ `accessible_pools=None` (irrestrito).
+2. `:16-18` e `:133-135` — **sem header `Authorization`** ⇒ irrestrito, com o motivo declarado:
+   *"backward-compatible with existing dashboard/report consumers"*. **Não há 401**: quem omite o
+   token lê os contatos de todos os pools do tenant.
+3. `:182-184` — `accessible_pools_from_token` (caminho SSE, token na query string) degrada aberto
+   **de propósito**: token ausente, inválido OU **expirado** ⇒ irrestrito. O comentário justifica
+   (*"a bad token can't 401 a stream"*), e a consequência é que o pior caso — token vencido — é o
+   mais permissivo.
+
+Confirmado pela medição da sessão anterior: `curl` **sem token** devolveu **120 contatos** (todos os
+pools) e com token de 5 pools devolveu **86**, sem 401 em nenhum dos dois.
+
+✅ **E NÃO é ele a causa do que apareceu na tela do dono — MEDIDO 2026-08-26, as duas hipóteses
+caíram.** A queixa era *"o admin enxerga sessões de pools não liberados"*, com a lista em 120. Nem
+H1 (requisição sem header) nem H2 (token com lista vazia): o token traz **22 pools** (43 com os
+espelhos `-int`), e eles simplesmente **alcançam as 120 linhas da janela**.
+
+`infra/test/q_scope_leak_check.sh` (novo) reconstrói as TRÊS cláusulas do
+`_session_scope_clause` a partir da mesma resposta que a tela recebe, com uma testemunha de presença
+por cláusula:
+
+```
+linhas=120 · cláusula 1 (entrou por pool meu)=101 · cláusula 2 (sem pool)=9
+            cláusula 3 (pool meu ATENDEU)=10 · SUSPEITAS=0        → VERDE
+```
+
+🟡 **A cláusula 3 é o que engana o olho, e ela é desenho** (`reports_query.py`, docstring do
+`_session_scope_clause`): um contato que ENTROU por `sac_ia` e foi ATENDIDO por `retencao_humano` é
+do supervisor de retenção, mesmo sem `sac_ia` no escopo. São **10 linhas** aqui. Ver a coluna
+*"ENTERED VIA"* mostrando pool alheio **não é** evidência de furo — só é furo a linha que falha nas
+três, e essas são zero. Fica registrado como **discutível enquanto DESENHO** (é ampliação
+deliberada), não como defeito.
+
+⚠️ **O furo de transporte segue REAL e não medido em produção** — o que caiu foi a atribuição a ele
+do sintoma da tela, não ele. `curl` sem token continua devolvendo as 120 linhas sem 401.
+
+🔴 **DECISÃO DO DONO (2026-08-26): o admin RESPEITA a ABAC como qualquer um. Não há bypass por
+papel.** Isso resolve a ambiguidade e move o defeito de lugar: o problema deixa de ser *"falta um ramo
+para o admin"* e passa a ser **a convenção `accessible_pools: [] → irrestrito`**
+(`pool_auth.py:157-161`), que é um bypass por AUSÊNCIA de grant — exatamente o contrário de
+grant-first. O `pool_auth` nunca lê `roles`, e sob esta decisão isso está **certo**; o que está errado
+é a lista vazia significar "tudo".
+
+**Precedente na casa:** a ABAC do `scheduler.{configurar,operacao}` é **grant-first, sem role default
+nem bypass de admin** (D2 do arco Scheduler). A regra do dono alinha `accessible_pools` a ela.
+
+✅ **CONFIRMADO NA TELA em 2026-08-26, e a confirmação é o próprio problema:** o
+`supervisor@plughub.local` tem **zero pools** e vê **120 contatos com todos os chips** em
+`/analise/sessions`. Não há dúvida a resolver — lista vazia É acesso a tudo, no analytics inteiro
+(`pool_auth.py:157-161`), e a tela é a demonstração de que ninguém precisa de grant para ler tudo.
+
+⚠️ **Mas NÃO inverter direto para `[] → nada`.** Hoje `[]` é o que admin/developer carregam; virar o
+significado num commit tranca todo mundo fora, e "ninguém vê nada" é tão mudo quanto "todo mundo vê
+tudo". A forma é a mesma da V1-antes-da-V4 do arco ALLOWLIST — **contar antes de inverter**:
+1. **Fechar o fail-open de transporte** (sem header ⇒ **401**, não "todos os pools"). Independe da
+   convenção e é o furo de verdade.
+2. **Tornar o irrestrito EXPLÍCITO** — claim próprio (`unrestricted: true` ou lista completa gravada),
+   nunca inferido de vazio. Medir quantos principals dependem hoje do vazio.
+3. **Só então** `[]` passa a significar "nenhum pool", com o inventário do passo 2 na mão.
+
+*(Estado do token do admin, medido 2026-08-26 com `q_scope_delta_stage2.sh`: **22 pools**, incluindo o
+espelho `retencao_humano-int` — não vazio, não 5, não 36. O número herdado de "5 pools" da passagem
+anterior estava velho.)*
+
+### 🔴 Analytics e Monitor têm um portão de PAPEL a montante da ABAC — hardcoded, não editável na UI (medido 2026-08-26)
+
+Levantado pelo dono; confirmado no código. O grupo de navegação `analise` declara
+**`roles: ['supervisor', 'admin', 'business']`** (`platform-ui/src/shell/Sidebar.tsx:121`), e só
+DEPOIS cada item declara sua ABAC (`:123` — `abac: { module: 'contacts', field: 'visualizar' }`). São
+dois portões em série, e **o de cima não é configurável**: o `operator` tem
+`contacts.visualizar: read_only` no seed (`seed_auth.py:275`) e mesmo assim não alcança o menu,
+porque o portão de papel falha antes de a ABAC ser consultada. O de baixo — o que a tela de Acesso
+edita — nunca é atingido.
+
+Isso viola a invariante **"Every config field is UI-editable"** (CLAUDE.md § Configuration) e esvazia
+o `module_config` justamente onde ele deveria decidir. O mesmo padrão vale para os outros grupos com
+`roles:` (`:47`, `:55`, `:65`, `:86`, `:99`, `:146`, `:156`).
+
+⚠️ **E o portão é COSMÉTICO, não autorização.** `app/routes.tsx:122-147` registra
+`analise/sessions` (e as irmãs) como elemento nu — **sem guard nenhum**. O papel esconde o MENU;
+digitar a URL entra. A única restrição real de dados é o escopo de pool no backend, que é outro eixo.
+*(Casa com a dívida já registrada "guard de rota ABAC em `analise/*`" — que aqui deixa de ser dívida
+genérica e ganha o par: **guard ausente na rota + portão de papel na navegação**, os dois errados em
+direções opostas.)*
+
+🔴 **Consequência imediata, e ela travou a validação visual do chip:** não existe hoje usuário que
+combine *acesso ao Analytics* com *escopo de pool estreito*. O `operator` tem escopo estreito e não
+alcança a tela; o `supervisor` alcança a tela e tem `accessible_pools: []` (irrestrito). A prova pela
+API foi feita com o `operator` (gate verde); a prova pela TELA depende de conceder alguns pools ao
+`supervisor` em Configuração › Acesso.
+
+### 🔴 `POST /supervisor/join` não tem autorização — só confere tenant (medido 2026-08-26)
+
+`supervisor.py:81`. Qualquer token válido do tenant entra numa sessão **ao vivo** e **escreve** no
+stream dela (`participant_joined` via `_xadd`). Não é escopo de leitura: é fronteira de autorização
+ausente num caminho de ESCRITA. Achado de lambuja da varredura da (d), independente dela.
+*(O arquivo já carrega a cicatriz de um fail-open vizinho: `:100-104` documenta o check de tenant que
+se auto-anulava por default igual ao valor comparado.)*
+
+### ✅ REFUTADO — "chip diz `· 3` com CINCO linhas do mesmo processo" NÃO é defeito (2026-08-26)
+
+**Medido com `infra/test/q_chip_row_dump.sh`** (novo — despeja os cinco campos crus por linha):
+
+```
+a-aeda66758c14  jid=8c47326d  total=5  acc=3  int=2  unk=0  scoped_out=false
+4-06745737b1b6  jid=faf611c6  total=3  acc=2  int=1  unk=0  scoped_out=false
+```
+
+A invariante FECHA (`5 = 3+2+0`, `3 = 2+1+0`): o backend classifica as etapas internas
+corretamente e o chip publica `· 3 + 2`. O que a tela mostrava era `· 3` porque **a coluna PROCESS é
+a última de uma tabela com rolagem horizontal** — o ` + 2` estava fora da viewport.
+
+🔴 **A lição de método é a do observador, não a do código.** Duas telas foram lidas como *"o chip
+publica só os acessos"*, e a hipótese chegou a ser registrada aqui como provável defeito de backend
+(`_apply_contact_scope` excluindo do agregado o que a lista mostra). A evidência que a desmentia
+estava **na mesma imagem**: a barra de rolagem horizontal. **Tela é evidência do que ela MOSTRA, não
+do que ela contém** — antes de inferir estado de backend a partir de um render, garantir que o render
+foi visto inteiro. Custo: uma seção inteira de TODO escrita sobre um defeito inexistente, e uma
+previsão errada (previ `int=0`, veio `int=2`).
+
+⚠️ **Sobra um item de UX, esse real:** o chip fica cortado em telas comuns, e ele é o ÚNICO pivô da
+visão 1 para a visão 2. Truncar silenciosamente o número que o operador clica é a mesma família do
+resto deste arco — a tela mostrando menos do que sabe. Candidatos: mover PROCESS para antes de
+SEGMENTS, ou fixar a coluna (`sticky`) à direita.
+
+### ~~🟡 Chip diz `· 3` com CINCO linhas do mesmo processo na tela~~ (registro original, mantido pela lição)
+
+Na tela do dono, `PRC-8c47326d` aparece em **5** linhas (3 acessos `↓` + 2 etapas internas `⚙️`) e o
+chip publica **· 3**. `PRC-faf611c6`: **3** linhas (2 `↓` + 1 `⚙️`), chip **· 2**. O padrão é exato —
+o chip está publicando **só os acessos**, com a parte "etapas internas" chegando falsy.
+
+Isso contradiz o que o código promete: `acesso + interna + não classificada == total`, e o comentário
+de `_attach_session_journey_chip` §3 nomeia justamente *"o chip diria `·3` e a tela para onde ele leva
+mostraria 5 linhas"* como a regressão que os testes existem para pegar.
+
+**Não teorizar — é uma query.** Hipótese a testar primeiro: `_apply_contact_scope` excluindo as duas
+`⚙️` do AGREGADO mas não da LISTA (o helper exclui sessão de pool **interno**; a `⚙️` da lista é
+direção `internal`, derivada de `spawn_reason` — são os DOIS sentidos de "interno" que o próprio
+docstring avisa não se substituírem). Se for isso, o defeito não é do marcador nem da (a): é a
+divergência entre os dois predicados, e é anterior a esta sessão.
 
 **A verificar antes de construir** (nenhum destes foi medido):
 
@@ -4110,13 +4367,37 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 
 ## 🆕 ARCO PROPOSTO — ContextStore como ALLOWLIST: campo sem regra não é acessível *(proposto pelo dono 2026-08-26; **ADR ESCRITO 2026-08-26**)*
 
-> ✅ **Fases entregues (ver `CHANGELOG.md`): V0 (metade), V1 e V1b.** A V1b fechou a **segunda
+> ✅ **Fases entregues (ver `CHANGELOG.md`): V0, V1, V1b e V2.** A V1b fechou a **segunda
 > porta** do §1.5 — o tool MCP `supervisor_state` devolvia o hash CRU. A política mudou-se para
 > `packages/mcp-server-plughub/src/lib/context-masking.ts` (uma casa, importada pelas duas portas) e
 > o tool entrega em **grau operator, sem portão de namespace**, com
 > `customer_context.context_masking = { grade, total, hidden_count }`. Gate
-> `infra/test/probe_supervisor_tool_masking.sh`. **Próxima fase é a V2** (catálogo de tipos), que
-> também destrava a metade ABERTA da V0 (os três inventários de categoria que discordam).
+> `infra/test/probe_supervisor_tool_masking.sh`. **Próxima fase é a V3** (mapa + aliases contados +
+> modo auditoria).
+>
+> ### 🆕 O que a V2 deixou aberto (2026-08-26)
+>
+> · 🔴 **As duas portas Python de masking continuam CÓPIA** (`quality-ingest/masking.py`,
+>   `channel-gateway/adapters/webhook.py`). Estão alinhadas e há gate
+>   (`probe_masking_display_parity.sh`), mas o fim da duplicação é lerem `masking.types` do
+>   config-api em runtime — e isso exige **recusar alto** quando a config não vier, porque degradar
+>   em masking é vazar PII. É a única das quatro políticas de D4 em que o fallback silencioso não é
+>   opção. Fase própria, não backlog difuso.
+> · 🆕 **`CATEGORY_META` (`MaskedToken.tsx`) tem rótulos hardcoded em português** — `'Cartão'`,
+>   `'Fone'`, `'Passaporte'`. Viola a invariante i18n do `CLAUDE.md`. A V2 tirou os fantasmas de lá
+>   mas não os rótulos; o destino é o `label` do próprio tipo, traduzido.
+> · 🆕 **Contador de aliases: `masking.rule.*` = 0 hoje.** O leitor mantém o fallback legado e o
+>   CONTA (aviso no console). É o mesmo mecanismo do D3 — a remoção do fallback é **medida** por
+>   este número continuar zerado, não agendada por opinião.
+> · 🆕 **O namespace `masking` ainda carrega 4 chaves marcadas `[DEPRECATED — use audit_policy.*]`**
+>   (`authorized_roles`, `default_retention_days`, `capture_input_default`, `capture_output_default`),
+>   duplicadas em `audit_policy`. São duas grafias da mesma config, e ninguém as está contando.
+> · 🆕 **`address`/`health`/`financial` estão declarados e não têm produtor nenhum** — o caminho que
+>   os alcança (`AuditPolicy.data_categories`, declarado por tool) **não é usado por nenhuma tool do
+>   repositório**. Não é defeito: é o inventário que a V3 precisa ter à mão quando decidir se o
+>   catálogo declara capacidade ou uso.
+> · ⚠️ **`financial` é a MESMA palavra em dois enums** — `DataCategory` (classe de dado) e
+>   `ContextMaskingType` (forma de máscara). Convivem por acaso; num mapa que cruze os dois, colidem.
 >
 > ✅ **O ADR existe:** [`docs/adr/adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md)
 > — status **proposto**. As sete perguntas abaixo estão **respondidas

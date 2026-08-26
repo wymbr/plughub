@@ -63,18 +63,92 @@ logger = logging.getLogger("plughub.channel-gateway.webhook")
 
 # A5.4 — masking net-pass de PII em valores de edição de aprovação (defesa em
 # profundidade; o mecanismo primário é o `masked` field-level do DialogForm, que
-# nem chega ao servidor). Mesmos alvos das DEFAULT_MASKING_RULES: CPF, cartão,
-# e-mail, telefone BR. Nunca gravar PII crua na stream/log.
-_PII_MASKERS: list[tuple[re.Pattern, Any]] = [
-    (re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
-     lambda m: "***.***.***-" + m.group(0)[-2:]),
-    (re.compile(r"\b(?:\d[ -]?){13,16}\b"),
-     lambda m: "**** " + re.sub(r"\D", "", m.group(0))[-4:]),
-    (re.compile(r"\b[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
-     lambda m: "***@" + m.group(0).split("@")[-1]),
-    (re.compile(r"\b(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
-     lambda m: "***" + re.sub(r"\D", "", m.group(0))[-4:]),
+# nem chega ao servidor). Nunca gravar PII crua na stream/log.
+#
+# ⚠️ ALINHADO em 2026-08-26 (fase V2 do arco ALLOWLIST). Esta tabela dizia em prosa
+# *"mesmos alvos das DEFAULT_MASKING_RULES"* e JÁ HAVIA DIVERGIDO — era o 6º de sete
+# inventários de categoria do repositório, e o único com produtor vivo divergente:
+#   · cartão casava `\b(?:\d[ -]?){13,16}\b` (13 a 16 dígitos, qualquer separador),
+#     enquanto o canônico casa `(?:\d{4}[\s-]?){3}\d{4}` — grupos de 4;
+#   · CPF devolvia `***.***.***-00`, o canônico devolve `*********00`;
+#   · cartão devolvia `**** 3456`, o canônico devolve `************3456`;
+#   · telefone devolvia `(***4321`, o canônico devolve `(*******4321`;
+#   · nenhuma linha carregava a CATEGORIA, então nada aqui podia ser auditado nem
+#     comparado com o resto.
+# A divergência não era teórica e nem era de duas portas: MEDIDAS as três
+# (`infra/test/q_masking_display_parity.sh`, 5 vetores), NENHUMA das cinco linhas era
+# unânime. A única coincidência — e-mail entre TS e esta porta — é acidente
+# aritmético: aqui era `"***"` fixo, lá é `ceil(len(prefixo)/4)`, e o prefixo do vetor
+# tinha 10 caracteres.
+#
+# Estrutura agora espelha `quality-ingest/masking.py` (que espelha
+# `DEFAULT_MASKING_RULES` em @plughub/schemas/audit.ts): tabela de dados + UMA função
+# de aplicação, em vez de lambdas por linha. Regexes, replacements e semântica de
+# preserve são os canônicos, e o gate `probe_masking_rule_parity.sh` compara as três
+# portas sobre os MESMOS vetores.
+#
+# Dívida declarada, não escondida: continua sendo CÓPIA. O fim dela é o catálogo
+# (`masking.types` no config-api) ser lido em runtime — o que exige recusar alto se a
+# config não vier, porque degradar em masking é vazar PII. Fase própria.
+_PII_RULES: list[dict[str, Any]] = [
+    {
+        "category":             "cpf",
+        "pattern":              re.compile(r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b"),
+        "replacement":          "***.***.***.--",
+        "preserve_last_digits": 2,
+    },
+    {
+        "category":             "credit_card",
+        "pattern":              re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b"),
+        "replacement":          "**** **** **** ****",
+        "preserve_last_digits": 4,
+    },
+    {
+        "category":             "phone",
+        # `(?<!\w)` e não `\b` — ver audit.ts: com `\b` o `\(?` é ramo morto e o
+        # parêntese de abertura ficava órfão (`(***4321`).
+        "pattern":              re.compile(r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b"),
+        "replacement":          "(##) ****-####",
+        "preserve_last_digits": 4,
+    },
+    {
+        "category":         "email_addr",
+        "pattern":          re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b"),
+        "replacement":      "****@****.***",
+        "preserve_pattern": re.compile(r"(@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})$"),
+    },
 ]
+
+
+def _mask_match(match_text: str, rule: dict[str, Any]) -> str:
+    """Constrói o display mascarado de UM trecho casado.
+
+    Semântica CANÔNICA = `MaskingService.buildDisplay`
+    (`mcp-server-plughub/src/lib/masking.ts`), que é a que produz o `display_partial`
+    entregue ao cliente pelo WebSocket:
+      1. `preserve_pattern` → `"*" × ceil(len(prefixo)/4)` + trecho preservado;
+      2. `preserve_last_digits` → `"*" × (n_dígitos − N)` + últimos N dígitos;
+      3. senão → `replacement` (ÚLTIMO recurso, não a forma padrão).
+
+    ⚠️ Escolha registrada em 2026-08-26, depois de medir as três portas lado a lado
+    (`infra/test/q_masking_display_parity.sh`): nenhuma das cinco linhas era unânime.
+    Alinhar na direção do `replacement` mudaria o que o operador vê no stream vivo e
+    deixaria tokens já gravados com a grafia antiga.
+    """
+    preserve_pattern = rule.get("preserve_pattern")
+    if preserve_pattern is not None:
+        m = preserve_pattern.search(match_text)
+        if m:
+            preserved = m.group(1) if m.lastindex else m.group(0)
+            prefix = match_text[: len(match_text) - len(preserved)]
+            masked_len = max(1, -(-len(prefix) // 4))  # ceil(len/4)
+            return f"{'*' * masked_len}{preserved}"
+    keep = rule.get("preserve_last_digits") or 0
+    if keep > 0:
+        digits = re.sub(r"\D", "", match_text)
+        if len(digits) > keep:
+            return f"{'*' * (len(digits) - keep)}{digits[-keep:]}"
+    return rule["replacement"]
 
 
 # ── Fase F (D7) — resume terminal-uma-vez ─────────────────────────────────────
@@ -241,12 +315,15 @@ class ResumeAlreadyTerminalError(RuntimeError):
 
 
 def _mask_pii(value: Any) -> str | None:
-    """Mascara PII formatada num valor (net-pass). None permanece None."""
+    """Mascara PII formatada num valor (net-pass). None permanece None.
+
+    Ordem das regras é contrato — a mesma de `DEFAULT_MASKING_RULES`.
+    """
     if value is None:
         return None
     s = str(value)
-    for pat, repl in _PII_MASKERS:
-        s = pat.sub(repl, s)
+    for rule in _PII_RULES:
+        s = rule["pattern"].sub(lambda m, r=rule: _mask_match(m.group(0), r), s)
     return s
 
 

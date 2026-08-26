@@ -542,6 +542,112 @@ _SEED: list[tuple[str, str, object, str]] = [
         "tenant overrides set via the Masking page. Consumed by mcp-server via "
         "GET /config/masking (config-http-propagation arc)."
     ),
+    # ── masking.types — CATÁLOGO DE TIPOS (fase V2 do arco ALLOWLIST) ──────────
+    # Espelha DEFAULT_DATA_TYPE_CATALOG em @plughub/schemas/audit.ts.
+    #
+    # Declaração ÚNICA que funde as três metades que viviam separadas (ADR §1.4):
+    # detecção (formato) × canal (mascara.display) × papel (mascara.by_role), mais a
+    # classe LGPD, que nenhuma das três carregava.
+    #
+    # ⚠️ Contém apenas o ALCANÇÁVEL. `iban` e `passport` NÃO entram: não estão no
+    # enum DataCategory, não têm regex e não têm regra — existiam só como card na
+    # MaskingPage, com selo "Ativo" incondicional. `address`/`health`/`financial`
+    # entram SEM `detect_pattern`: são alcançáveis por declaração de tool
+    # (AuditPolicy.data_categories), caminho que existe e que nenhuma tool usa hoje.
+    #
+    # Fonte de verdade é ESTE store, não o arquivo (D7) — editar aqui depois de a
+    # base estar semeada é NO-OP.
+    (
+        "masking", "types",
+        {
+            "types": [
+                {
+                    "id": "cpf", "label": "CPF", "icon": "🪪",
+                    "formato": {
+                        "display": "###.###.###-##",
+                        "detect_pattern": r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
+                        "replacement": "***.***.***.--",
+                        "preserve_last_digits": 2,
+                    },
+                    "mascara": {
+                        "by_role": {"operator": "last_2"},
+                        "display": {"display_screen": "display_partial", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": True},
+                    },
+                    "lgpd": "pessoal",
+                },
+                {
+                    "id": "credit_card", "label": "Cartão de crédito", "icon": "💳",
+                    "formato": {
+                        "display": "#### #### #### ####",
+                        "detect_pattern": r"\b(?:\d{4}[\s-]?){3}\d{4}\b",
+                        "replacement": "**** **** **** ****",
+                        "preserve_last_digits": 4,
+                    },
+                    "mascara": {
+                        "by_role": {"operator": "last_4"},
+                        "display": {"display_screen": "display_partial", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": True},
+                    },
+                    "lgpd": "financeiro",
+                },
+                {
+                    "id": "phone", "label": "Telefone", "icon": "📞",
+                    "formato": {
+                        "display": "(##) #####-####",
+                        # `(?<!\w)` e não `\b`: ver o comentário em audit.ts — com `\b`
+                        # o `\(?` é ramo morto e o parêntese de abertura fica órfão.
+                        "detect_pattern": r"(?<!\w)(?:\+55\s?)?(?:\(?\d{2}\)?[\s-]?)?9?\d{4}[-\s]?\d{4}\b",
+                        "replacement": "(##) ****-####",
+                        "preserve_last_digits": 4,
+                    },
+                    "mascara": {
+                        "by_role": {"operator": "last_4"},
+                        "display": {"display_screen": "display_partial", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": True},
+                    },
+                    "lgpd": "pessoal",
+                },
+                {
+                    "id": "email_addr", "label": "E-mail", "icon": "📧",
+                    "formato": {
+                        "detect_pattern": r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b",
+                        "replacement": "****@****.***",
+                        "preserve_pattern": r"(@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})$",
+                    },
+                    "mascara": {
+                        "by_role": {"operator": "email_domain"},
+                        "display": {"display_screen": "display_partial", "display_voice": "silence",
+                                    "echo_to_customer": False, "echo_to_operator": True},
+                    },
+                    "lgpd": "pessoal",
+                },
+                {
+                    "id": "address", "label": "Endereço", "icon": "🏠",
+                    "formato": {},
+                    "mascara": {"by_role": {"operator": "first_word"}},
+                    "lgpd": "pessoal",
+                },
+                {
+                    "id": "health", "label": "Dados de saúde", "icon": "🩺",
+                    "formato": {},
+                    "mascara": {"by_role": {"operator": "full"}},
+                    "lgpd": "sensivel",
+                },
+                {
+                    "id": "financial", "label": "Dados financeiros", "icon": "🏦",
+                    "formato": {"display": "R$ #.##0,00"},
+                    "mascara": {"by_role": {"operator": "financial"}},
+                    "lgpd": "financeiro",
+                },
+            ],
+        },
+        "Catálogo de tipos de dado — declaração única de formato × máscara (papel e "
+        "canal) × classe LGPD. Espelha DEFAULT_DATA_TYPE_CATALOG em "
+        "@plughub/schemas/audit.ts. Substitui os inventários de categoria dispersos "
+        "(DataCategorySchema, DEFAULT_MASKING_RULES, MaskingPage.DEFAULT_CATEGORIES, "
+        "MaskedToken.CATEGORY_META)."
+    ),
 
     # ── pricing ───────────────────────────────────────────────────────────────
     # Source: packages/pricing-api — unit prices per resource type.

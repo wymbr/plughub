@@ -2,6 +2,175 @@
 
 ---
 
+## V2 do arco ALLOWLIST — o catálogo de TIPOS, e a paridade que ninguém media (2026-08-26)
+
+Fase V2 de [`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md): o catálogo de
+tipos (D1) declarado e semeado, **sem consumidor novo** — os mecanismos atuais passam a lê-lo. Fecha a
+metade ABERTA da V0 (os inventários de categoria que discordavam).
+
+O ADR contava *"três (quase quatro)"* inventários. A varredura por símbolo achou **sete**, e três
+divergências entre eles que ninguém tinha medido porque **nada comparava as portas entre si** — cada
+uma tinha teste próprio, todos verdes, todos medindo a porta contra ela mesma.
+
+### O que foi medido antes de decidir
+
+- **`AuditPolicy.data_categories` não é declarado em lugar nenhum** (zero `audit_policy:` em registro
+  de tool; só a leitura em `sdk/src/mcp-interceptor.ts`). Isso traça a linha divisória sem depender de
+  gosto: `address`/`health`/`financial` **são** alcançáveis por esse caminho — que existe e ninguém
+  usa —, enquanto `iban`/`passport` não são alcançáveis por mecanismo nenhum. Os primeiros entram no
+  catálogo sem `detect_pattern`; os segundos saem.
+- **`RULE_KEYS_TOTAL=0`** — o editor de regras de canal nunca gravou nada. Não porque ninguém editou:
+  porque **editar não tinha efeito** (achado abaixo). Isso tornou a fusão gratuita — não havia dado a
+  migrar.
+- **As três portas de masking produziam displays diferentes.** `infra/test/q_masking_display_parity.sh`
+  (5 vetores × 3 portas): **nenhuma das cinco linhas era unânime**. A única coincidência — e-mail entre
+  TS e channel-gateway — era acidente aritmético (`"***"` fixo de um lado, `ceil(len(prefixo)/4)` do
+  outro, e o prefixo do vetor tinha 10 caracteres).
+
+### Entregue
+
+- **`schemas/src/audit.ts` — `DataTypeSchema` + `DEFAULT_DATA_TYPE_CATALOG` (7 tipos).** Funde as três
+  METADES de §1.4 numa declaração: `formato` (apresentação **e** detecção) × `mascara` (`by_role` e
+  `display` por canal) × `lgpd`. Os valores de `by_role` **não são invenção**: são a política viva
+  medida no config-api.
+- **`DEFAULT_MASKING_RULES` passou a ser DERIVADA do catálogo**, não uma lista literal. É o mecanismo
+  que impede o 8º inventário: não há como acrescentar regra sem declarar tipo, nem declarar tipo
+  detectável que não vire regra. O gate compara as duas listas **e a ordem**, que é contrato.
+- **`verifyDataTypeCatalog()` exportado** — o ORÁCULO do gate, para que o teste não reconstrua a regra
+  que julga. Devolve as duas listas (`orphan_types`, `categories_without_type`) **e** `declared`, que é
+  a testemunha de presença: zero sobre zero não é aprovação.
+- **`config-api/seed.py` — `masking.types`.** Seed-if-absent; a fonte de verdade é o store (D7).
+- **`MaskingPage.tsx`** — `DEFAULT_CATEGORIES` (a lista hardcoded com os fantasmas) **saiu**. As duas
+  seções iteram o catálogo, e o **selo é DERIVADO**: `detecta` quando há `detect_pattern`,
+  `declarado, não detecta` quando não há. Era o selo `Ativo` **incondicional** que fazia `iban` e
+  `passport` passarem por categorias em vigor. O editor de canal grava **no tipo**, não mais na chave
+  solta.
+- **`MaskedToken.tsx`** — `CATEGORY_META` sem os fantasmas (nenhum token jamais pôde chegar com essas
+  categorias), e o hook lendo o catálogo.
+- **i18n** `section.categories.{detects,declaredOnly,catalogMissing}`, `section.displayRules.legacyOverride`,
+  `lgpd.*` (en + pt-BR); `categories.iban`/`.passport` removidas, `.address`/`.health`/`.financial`
+  acrescentadas.
+
+### Dois defeitos que a fase revelou, e que não eram dela
+
+- 🔴 **`useMaskingDisplayRules` buscava `/api/config/{tenant}/masking` — caminho que nenhum proxy
+  serve.** A ocorrência era **única em todo o platform-ui** (a base é `/config`). O 404 morria em
+  `r.ok ? … : null` e o resto num `.catch(() => {})` vazio ⇒ mapa sempre vazio ⇒ **toda regra de
+  display por categoria era inerte, desde sempre**. É o espelho de "produtor sem consumidor": um
+  **leitor sem rota**, e o silêncio é o que o fez durar. Agora a degradação NOMEIA o que deixa de valer.
+- 🔴 **`\(?` era RAMO MORTO no regex de telefone.** Em `\b(?:\+55\s?)?(?:\(?\d{2}\)?…`, o `\b` exige
+  transição `\W→\w`, que **nunca ocorre antes de um `(`** — o match sempre começava no primeiro dígito
+  e o parêntese de abertura sobrava colado à máscara, nas três portas (`(***4321`, `((##) ****-4321`,
+  `([phone:tk_x:*******4321]`). Trocado por `(?<!\w)`. **O conserto muda o TRECHO casado, nunca o
+  CONJUNTO de telefones detectados** — os dígitos já eram detectados —, e há teste para os dois lados.
+
+### A decisão de display, e por quê
+
+Canônico = **`MaskingService.buildDisplay`** (TS), alinhando as duas portas Python a ele:
+
+1. é o único que roda no caminho **vivo** do dado do cliente (stream → WebSocket). Alinhar na outra
+   direção mudaria o que o operador vê hoje **e** deixaria os tokens já gravados com a grafia antiga —
+   duas grafias na mesma sessão;
+2. deixa `replacement` com **um** significado (fallback quando não há o que preservar) em vez de dois;
+3. a alternativa "duas semânticas por finalidade" (o TS produz um *chip com rótulo*; as portas Python
+   substituem *texto solto*) é defensável, mas criaria um segundo eixo no catálogo **antes de existir
+   consumidor que peça os dois** — a forma exata do erro do `iban`. Se a legibilidade virar queixa
+   real, vira propriedade do tipo, com produtor.
+
+### Provado
+
+- `infra/test/probe_type_catalog.sh` — `declared=7` · órfãos=0 · faltantes=0 · regras≡detectáveis
+  (`cpf,credit_card,phone,email_addr`, mesma ordem) · **config viva ≡ código** · fantasmas 0 nos dois
+  lados · `rule.*`=0. **Ramo E, testemunha do oráculo:** um catálogo sabidamente órfão reprova nos dois
+  lados (`órfãos=1, faltantes=7`) — sem ele, "0 órfãos" não distinguiria catálogo limpo de verificador
+  quebrado.
+- `infra/test/probe_masking_display_parity.sh` — as cinco linhas unânimes: `*********00` ·
+  `************3456` ×2 · `***@empresa.com.br` · `*******4321` (sem o `(` órfão). **Com testemunha
+  obrigatória**, porque três portas que não mascaram nada concordam perfeitamente: cada célula exige
+  saída ≠ entrada, e um texto sem PII tem de atravessar intacto.
+
+⚠️ **Dívida declarada, não escondida:** as duas portas Python continuam sendo CÓPIA. O fim delas é
+lerem o catálogo em runtime — o que exige **recusar alto** se a config não vier, porque degradar em
+masking é vazar PII. Fase própria. Até lá, o gate de paridade é o que impede a divergência voltar.
+
+---
+
+## Chip de processo — o MARCADOR de existência para o usuário escopado (2026-08-26)
+
+Fecha a decisão que a triagem de 08-26 deixou aberta, pelo caminho **(a)**. O defeito: a tela
+**afirmava** o que não sabia. `journey_session_count` é contado sob a ABAC de propósito — contar os
+membros que o operador não alcança revelaria o tamanho de um processo que toca pools fora do escopo
+dele —, mas com contagem `1` o front escondia o chip (`> 1`) e a linha passava a dizer *"este contato
+não pertence a processo nenhum"*. **A regra tinha sido escrita para a FALHA** (o docstring já
+proibia `1` inventado, *"Falha ⇒ `None`, nunca `1`"*) **e nunca estendida ao RECORTE.**
+
+O conserto publica a **EXISTÊNCIA, não o tamanho** — que era o dado que faltava ao front.
+
+### Entregue
+
+- **`reports_query.py`, `_attach_session_journey_chip`** — a ABAC saiu do `WHERE` e virou o predicado
+  dos `countIf`. A população agregada passa a ser o processo inteiro; **o que sai continua escopado**
+  (os quatro números são `countIf(acc)`, idênticos aos de antes). O fato novo é um booleano:
+  `count() > countIf(acc)` → `journey_has_scoped_out_members`.
+- **Sem restrição, o predicado colapsa em `1` e o marcador sai `false` — medido, nunca `null`.** São
+  proposições diferentes: `false` = *"não há membro fora do seu alcance"*; `null` = *"não consegui
+  medir"*. Colapsá-las faria o front tratar quem tem visão completa como caso desconhecido.
+- **`ProcessChip.tsx`** (superfície única — lista + breadcrumb) — `hasProcess` ganhou a segunda razão
+  para pivotar (`total > 1 || scopedOut`); o chip volta como `PRC-xxxx · 1+`. **Sob o marcador a
+  QUEBRA não é desenhada**, e não é economia de espaço: a quebra também é escopada, e uma classe
+  inteira fora do alcance apareceria como `0` — publicar `· 3 + 0` afirmaria *"não há etapa interna"*,
+  o mesmo defeito um nível abaixo, convivendo com o marcador que anuncia o contrário.
+- **`ListaTab.tsx`** — a condição do rodapé passou a ser `hasProcess`, a MESMA função que decide cada
+  chip. Era `journey_session_count > 1`, cópia da regra antiga: numa página em que todo chip aparece
+  pelo `+`, o rodapé que os explica sumia.
+- **i18n** `lista.processChipScopedHint` (en + pt-BR) — sob o marcador o tooltip da quebra leria como
+  inventário completo do processo, então ele vem primeiro.
+
+### Provado
+
+`infra/test/probe_process_chip_scoped_marker.sh` (novo), com `operator@plughub.local`:
+**PERDEM membro=6** (`4→1 · 3→1 · 4→1 · 4→1 · 4→1 · 5→1`, todas com marcador `true`) · **escopo
+cobre=74** (todas `false`) · **anon `false`=120, `true`=0, `null`=0**. São as mesmas 6 linhas que a
+triagem encontrou reportando `1`. Suíte: **620 passed** (617 + 3).
+
+⚠️ **O gate só julga com usuário de escopo ESTREITO.** Com o admin (22 pools) ele sai
+**INCONCLUSIVO** — e está certo: escopo largo não refuta o defeito, apenas não o exercita.
+
+**E na TELA** (`supervisor@plughub.local` em `limite_ia` + `limite_retorno`), previsão escrita antes,
+4 de 4: `· 3+` nas três linhas de `PRC-8c47326d` · `· 2+` nas duas de `PRC-faf611c6` ·
+**`—` → `PRC-ca44ca47 · 1+`** na linha que alcança UMA sessão de um processo de cinco (o defeito em
+estado puro) · e as duas linhas de `scoped_out=false` **continuando sem chip**, que é a testemunha
+negativa na própria tela.
+
+### A lição que este arco cobrou duas vezes
+
+A **v1 do gate reprovou código correto**: tomava a interseção (*"linhas multi visíveis"*) como sendo
+*"processos com membro fora do escopo"* — verdade só enquanto o admin tinha 5 pools. Com 22, imprimiu
+`4 → 4 · false` em 29 linhas e chamou as 29 de defeito, em dois ramos. O erro não estava nos ramos:
+**a população de um gate se DERIVA do dado, nunca se assume do recorte.** O mesmo erro estava no
+`q_scope_delta_stage2.sh` (decidia por "interseção não-vazia" e imprimia `anon=4 auth=4` nas próprias
+linhas de prova), consertado na mesma sessão — e repetido no gate seguinte, uma tela depois.
+Os dois agora ramificam sobre `auth_n < anon_n`. Irmão do D14.1 na § Postura de Engenharia.
+
+### Medições de lambuja (registradas no `TODO.md`, não consertadas aqui)
+
+- **`_session_scope_clause` não tem furo** — `infra/test/q_scope_leak_check.sh` (novo) reconstrói as
+  três cláusulas: 101 por *entrou por pool meu* · 9 por *sem pool* · **10 por "um pool meu ATENDEU"**
+  · **0 suspeitas**. É a cláusula 3 que faz parecer que se vê pool não liberado — ampliação
+  deliberada, discutível como desenho, não como defeito.
+- **O ABAC de pool é opt-in do chamador** — sem header `Authorization`, `pool_auth` devolve
+  irrestrito **sem 401** (`:16-18`, `:133-135`), e o caminho SSE degrada aberto até com token
+  expirado (`:182-184`).
+- **`POST /supervisor/join` não tem autorização** — qualquer token do tenant entra numa sessão viva e
+  **escreve** no stream dela.
+- ~~**Chip `· 3` com 5 linhas do mesmo processo**~~ — **REFUTADO por medição** (`q_chip_row_dump.sh`,
+  novo): `total=5 acc=3 int=2 unk=0`, a invariante FECHA. O ` + 2` estava **cortado pela rolagem
+  horizontal** da tabela, e eu inferi estado de backend a partir de um render que não tinha visto
+  inteiro — com a barra de rolagem visível na mesma imagem. Sobra um item de UX real: o chip, único
+  pivô da visão 1 para a visão 2, fica truncado em telas comuns.
+
+---
+
 ## V1b (arco ALLOWLIST) — a SEGUNDA PORTA do ContextStore ganhou política (2026-08-26)
 
 Fecha o `⚠️` que a V1 deixou escrito na própria linha da fase: a V1 cobriu a porta **HTTP**, e o
