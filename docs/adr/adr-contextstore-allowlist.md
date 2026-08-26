@@ -93,7 +93,7 @@ por essas mesmas categorias e escrito como `rule.{category}` no config-api.
 Nenhuma é errada; nenhuma é completa. São três recortes do mesmo objeto morando em três casas, e o
 `iban`/`passport` fantasma é o que acontece quando o catálogo não tem dono.
 
-### 1.5 Achado — o ContextStore tem uma SEGUNDA porta, sem política
+### 1.5 Achado — o ContextStore tem uma SEGUNDA porta, sem política ✅ FECHADO (V1b, 2026-08-26)
 
 `applyContextMaskingDynamic` (`server.ts:1107`) tem **um único call site**: `server.ts:1679`, o
 endpoint HTTP `GET /api/supervisor_state/:sessionId` que a Console consome.
@@ -102,6 +102,18 @@ O **tool MCP `supervisor_state`** (`tools/supervisor.ts:163-177`) monta o seu `c
 fazendo `JSON.parse` do hash **cru** e o devolve em `:380` — **sem portão de namespace e sem
 mascaramento**. É a mesma duplicação que mordeu a leitura de sentimento em 2026-08-25 (duas
 implementações independentes, só uma consertada), agora sobre PII.
+
+> ✅ **Fechado na V1b** (ver `CHANGELOG.md`). Provado ao vivo antes do conserto: `session.probe.cpf`
+> injetado como `123.456.789-00` voltava **idêntico** pelo tool enquanto o endpoint entregava
+> `***00` ao mesmo operador. A política mudou-se para **`lib/context-masking.ts`** — uma casa,
+> importada pelas duas portas —, e o tool entrega em **grau operator, sem portão de namespace**
+> (decisão do dono; o argumento é que nenhum dos dois consumidores daquela função tem visualizador
+> com PAPEL, e no caso do tool o pool disponível é o de ENTRADA, não o que atende). Contrato novo:
+> `customer_context.context_masking = { grade, total, hidden_count }` — a máscara **não é muda**.
+> Gate `infra/test/probe_supervisor_tool_masking.sh`.
+>
+> ⚠️ **`R-agente` não foi tocado** (§D4): `@ctx.*` no fluxo continua cru por design. O que se fechou
+> é a leitura em BLOCO do hash inteiro, que não é "o agente precisa deste campo".
 
 ### 1.6 Achado — o PREFIXO da tag roteia storage e TTL, e essa regra vive em pelo menos três casas
 
@@ -408,7 +420,8 @@ hierárquico hoje (`ContextTagEntrySchema.tag`, regex multi-nível em `context-s
 | fase | entrega | reversível |
 |---|---|---|
 | **V0** | Consertar a tela que mente. **Metade FEITA em 2026-08-26** (ver `CHANGELOG.md`): a causa não era o `??` — era **colisão de rota no nginx** (`masking` é nome de página *e* namespace; `location` casa a URI sem a query string, então o `fetch` recebia `index.html` com HTTP 200). Discriminador passou a ser o `Accept`. Gate `probe_config_route_collision.sh`, visto vermelho antes de verde. **Metade ABERTA:** colapsar os inventários de categoria de §1.3 — depende da V2 | sim |
-| **V1** | A omissão deixa de ser muda. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `MaskedContextView` com `total` + `by_rule` + `by_pool_scope`, `context_withheld` no endpoint, faixa na aba Contexto. **Duas listas** porque as causas se consertam em telas diferentes. Gate `probe_context_withheld.sh` (6 ramos; D = testemunha negativa, F = aritmética). ⚠️ Cobre a porta **HTTP**; o tool `supervisor_state` (§1.5) segue cru — fechá-lo é aplicar política onde não havia, fatia própria (medido: 0 skills o consomem) | sim |
+| **V1** | A omissão deixa de ser muda. **FEITA em 2026-08-26** (ver `CHANGELOG.md`): `MaskedContextView` com `total` + `by_rule` + `by_pool_scope`, `context_withheld` no endpoint, faixa na aba Contexto. **Duas listas** porque as causas se consertam em telas diferentes. Gate `probe_context_withheld.sh` (6 ramos; D = testemunha negativa, F = aritmética) | sim |
+| **V1b** | A segunda porta (§1.5). **FEITA em 2026-08-26** (ver `CHANGELOG.md`): política extraída para `lib/context-masking.ts` e aplicada ao tool MCP `supervisor_state`, em **grau operator sem portão de namespace**; `context_masking` no retorno. Gate `probe_supervisor_tool_masking.sh` (6 ramos; **C** = testemunha negativa contra blanket-mask, **B** usa o endpoint HTTP como **oráculo** em vez de valor hardcodado). Barata porque **0 skills consumiam** o campo — o custo teria crescido com o primeiro consumidor | sim |
 | **V2** | Catálogo de tipos (D1) declarado e semeado, **sem nenhum consumidor novo** — os mecanismos atuais passam a lê-lo | sim |
 | **V3** | Mapa do ContextStore (D2) + aliases contados (D3) + **modo auditoria** (só registra o que teria sido escondido/recusado) | sim |
 | **V4** | Inverter para deny-by-default, com a lista real que a V3 produziu | **não** |

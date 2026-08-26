@@ -14,6 +14,9 @@ import type { Redis }         from "ioredis"
 import type { KafkaProducer } from "../infra/kafka"
 import { readRoutingRefPool } from "../lib/routing-ref"
 import { sentimentFromCtxHash } from "../lib/session-sentiment"
+// Política de máscara do ContextStore — a MESMA casa que o endpoint HTTP usa.
+// Ver o passo 6b de `supervisor_state`: este tool devolvia o hash cru.
+import { maskContextForPersistence } from "../lib/context-masking"
 
 // ─────────────────────────────────────────────
 // Deps
@@ -160,21 +163,46 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
       //
       //     Fallback (v1, legacy): pipeline_state contact_context search.
       //     Can be removed once all agents are migrated to ContextStore.
-      let contextSnapshot: Record<string, unknown> | null = null
+      //
+      // ── A SEGUNDA PORTA, fechada em 2026-08-26 ──────────────────────────────
+      //
+      // Este bloco fazia `JSON.parse` do hash **CRU** e devolvia tudo: `caller.cpf`
+      // em claro, `session.delegate_resume_token` em claro, `agent.*` incluído —
+      // enquanto o endpoint HTTP homônimo (`server.ts`), a três arquivos daqui,
+      // aplicava a política inteira. Duas implementações da mesma leitura e só uma
+      // com política é literalmente o defeito do SENTIMENTO de 2026-08-25, agora
+      // sobre PII: lá também a cópia consertada não era a que desenhava a tela.
+      // Medido no ADR (`adr-contextstore-allowlist.md` §1.5), e barato de fechar
+      // porque **nenhuma skill consumia** este campo — caro no dia em que alguma
+      // consumisse.
+      //
+      // **Grau OPERATOR e SEM portão de namespace**, decisão do dono, pela mesma
+      // razão que a persistência durável (o cabeçalho de `lib/context-masking.ts`
+      // carrega o argumento inteiro): não há visualizador com PAPEL para consultar,
+      // e o pool que este tool tem à mão é o de ENTRADA (`session:{id}:meta`), não o
+      // que atende — aplicar o portão imporia a política de um pool que pode não ter
+      // relação com a sessão em curso.
+      //
+      // ⚠️ **Mudança de contrato:** o campo continua populado (o e2e 17 Parte E
+      // segue válido), mas o VALOR vem mascarado e `hidden` chega com `value: null`
+      // em vez de sumir. Quem precisar do valor real não deve reabrir esta porta —
+      // é `@ctx.*` no fluxo, que é R-agente e permanece cru por design (ADR §D4).
+      let contextSnapshot:    Record<string, unknown> | null = null
+      let contextMaskingMeta: Record<string, unknown> | null = null
 
       // `ctxHash` já foi lido no passo 4 — uma leitura por chamada, não duas.
-      if (Object.keys(ctxHash).length > 0) {
-        // Parse each field as ContextEntry, expose as flat tag→entry map
-        // Grouped by namespace (caller.*, account.*, session.*) for easy UI consumption
-        const parsed_entries: Record<string, unknown> = {}
-        for (const [tag, raw] of Object.entries(ctxHash)) {
-          try {
-            parsed_entries[tag] = JSON.parse(raw) as unknown
-          } catch {
-            parsed_entries[tag] = raw
-          }
+      if (Object.keys(ctxHash).length > 0 && tenantId) {
+        const view = await maskContextForPersistence(ctxHash, tenantId)
+        contextSnapshot = view.entries
+        // A máscara NUNCA é muda: quem recebe o snapshot sabe em que grau o recebeu
+        // e quantas entradas vieram sem valor. Sem isto, "o campo veio ***" e "o
+        // campo é assim" ficam indistinguíveis — a mesma razão do `context_withheld`
+        // da V1 na porta HTTP.
+        contextMaskingMeta = {
+          grade:        "operator",
+          total:        view.total,
+          hidden_count: view.hidden_count,
         }
-        contextSnapshot = parsed_entries
       }
 
       // Legacy fallback: read contact_context from pipeline_state
@@ -377,7 +405,11 @@ export function registerSupervisorTools(server: McpServer, deps: SupervisorDeps)
               // context_snapshot: unified ContextStore snapshot (v2)
               // Keys: "caller.nome", "caller.cpf", "account.plano_atual", etc.
               // Values: ContextEntry { value, confidence, source, updated_at }
+              // ⚠️ MASCARADO em grau operator desde 2026-08-26 — ver o passo 6b.
               context_snapshot: contextSnapshot,
+              // Em que grau o snapshot acima foi entregue. `null` = não houve
+              // ContextStore para avaliar, que é diferente de "nada foi mascarado".
+              context_masking: contextMaskingMeta,
               // contact_context: legacy field from pipeline_state (v1 — backward compat)
               // Present only when ContextStore snapshot is absent.
               contact_context: contextSnapshot ? null : contactContext,

@@ -2272,6 +2272,63 @@ trocar a ordem custa zero.
 que ele é **condicional** em `meta.window_applied`, não permanente · `uniq(root_session_id)` como
 métrica de cabeçalho (lacuna registrada, não fechada).
 
+### 🔴 O chip de PROCESSO SOME para usuário escopado — decisão aberta (medido 2026-08-26)
+
+> **Triado, e a triagem herdada estava errada em dois pontos.** A passagem 09-12 mandava marcar
+> *"Include internal sessions"* e ver se a contagem voltava a 108. **Não pode**: o toggle manda
+> `scope=all` e acrescenta LINHAS, mas o cabeçalho é sempre `meta.total_contacts` — a própria
+> `ListaTab.tsx:45` diz *"a contagem de contatos do cabeçalho não muda por isso"*. E a passagem
+> afirmava `accessible_pools = []` (irrestrito) para o admin; o token traz **5 pools**.
+
+**Metade 1 — `120 → 86` NÃO é defeito.** São os 34 contatos em pools fora dos 5 do admin. O
+`108 → 84` que a passagem registrou como regressão é a própria mudança de ambiente que ela
+descreve duas seções acima. **Encerrado.**
+
+**Metade 2 — o chip é defeito próprio, e a causa é comum à metade 1.** Medição (dois scripts novos,
+re-executáveis):
+
+| | anon | admin (5 pools) |
+|---|---|---|
+| `meta.total_contacts` | 120 | **86** |
+| linhas com `journey_session_count > 1` | 29 | **0** |
+| linhas com o campo presente (testemunha) | 120 | **86** |
+
+`page_size` (50 × 200) é inerte — não é a contagem-derivada-da-página de `/reports/segments`.
+Discriminador: das 29 linhas multi, **6 estão VISÍVEIS ao admin** e reportam `1`, contra `4`, `3`,
+`4`, `4`, `4` no escopo aberto. Logo não é "as linhas sumiram": é
+**`journey_session_count` computado SOB o recorte** — `_attach_session_journey_chip` inclui
+`_session_scope_clause(db, accessible_pools)` (`reports_query.py:1248-1250`).
+
+**E isso é DELIBERADO** (`:1179`: *"só tenant + escopo de contato + **ABAC** + origem"*) — o que o
+docstring recusa é herdar período/canal/pool, não a ABAC. A razão é boa: contar as 4 revelaria o
+tamanho de um processo que toca pools inacessíveis. **O que não estava previsto é a consequência:**
+com `n=1`, o front esconde o chip (`ListaTab.tsx:269`, `> 1`) e a tela passa a **afirmar** *"este
+contato não pertence a processo nenhum"* — exatamente a mentira que o mesmo docstring proíbe quatro
+parágrafos abaixo (*"Falha ⇒ `None`, nunca `1`"*). A regra foi aplicada à FALHA e não ao RECORTE.
+
+**Decisão aberta (do dono, adiada em 2026-08-26):**
+
+- **(a) marcador de existência, sem tamanho** — booleano `journey_has_scoped_out_members` ao lado da
+  contagem escopada; chip volta como `PRC-xxxx · 1+`, dizendo *"há mais, você não alcança"* sem
+  revelar quantos nem quais. Preserva a intenção da ABAC e mata o silêncio. Custo: uma coluna na
+  query, um campo no meta, um ramo no front.
+- **(b) tirar a ABAC da contagem** — alinhado ao §1 do docstring (*"o processo não encolhe porque
+  alguém olhou uma semana dele"*), mas revela o TAMANHO de processos que tocam pools fora do escopo.
+- **(c) manter como está** e consertar só o texto — o rodapé condicional já existe
+  (`lista.processFootnote`); precisaria dizer que o chip é escopado. Mais barato, menos honesto: o
+  chip continua AUSENTE, e rodapé não explica ausência.
+
+**Não decidir por (b) sem olhar (a):** o dado que falta ao front não é o tamanho, é a EXISTÊNCIA — e
+`journey_id` já viaja em toda linha (`:1228`/`:1241`), inclusive nas 6 escopadas.
+
+**Scripts (rodam do host, sem build):**
+`infra/test/q_process_chip_delta.sh` (grade 2×2 token × page_size, com testemunha de presença
+ao lado do contador de ausência) · `infra/test/q_scope_delta_stage2.sh` (o discriminador
+`multi_ids ∩ auth_ids`, que separa *"linhas removidas"* de *"contagem colapsada"*, e imprime os
+claims do token — foi ele que derrubou o `accessible_pools = []` herdado).
+⚠️ O `q_scope_delta_stage2.sh` ainda imprime o aviso *"`accessible_pools: []` significa
+IRRESTRITO"*, que era relevante sob a premissa herdada e hoje só confunde — corrigir ao tocar.
+
 **A verificar antes de construir** (nenhum destes foi medido):
 
 - o literal que o cliente usa em `messages.author_role` — suposto em D9.
@@ -4053,8 +4110,16 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 
 ## 🆕 ARCO PROPOSTO — ContextStore como ALLOWLIST: campo sem regra não é acessível *(proposto pelo dono 2026-08-26; **ADR ESCRITO 2026-08-26**)*
 
+> ✅ **Fases entregues (ver `CHANGELOG.md`): V0 (metade), V1 e V1b.** A V1b fechou a **segunda
+> porta** do §1.5 — o tool MCP `supervisor_state` devolvia o hash CRU. A política mudou-se para
+> `packages/mcp-server-plughub/src/lib/context-masking.ts` (uma casa, importada pelas duas portas) e
+> o tool entrega em **grau operator, sem portão de namespace**, com
+> `customer_context.context_masking = { grade, total, hidden_count }`. Gate
+> `infra/test/probe_supervisor_tool_masking.sh`. **Próxima fase é a V2** (catálogo de tipos), que
+> também destrava a metade ABERTA da V0 (os três inventários de categoria que discordam).
+>
 > ✅ **O ADR existe:** [`docs/adr/adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md)
-> — status **proposto**, nenhuma fase implementada. As sete perguntas abaixo estão **respondidas
+> — status **proposto**. As sete perguntas abaixo estão **respondidas
 > lá** (§3), e o modelo mudou em três pontos por decisão do dono na sessão de 08-26:
 > **(1)** categoria abstrata virou **TIPO** (formato × máscara-por-papel × classe LGPD numa
 > declaração só, qualquer uma podendo ser vazia); **(2)** a hierarquia de negócio entra na CHAVE,
@@ -4066,7 +4131,29 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 >
 > ⚠️ **Duas referências deste bloco estão OBSOLETAS** (conferidas em 08-26): o defeito do pool de
 > entrada não está em `server.ts:1421` (é `:1636` + `:1654-1668`) e o `catch {}` mudo não está em
-> `:1452` (é `:1667`). O arquivo deslocou ~215 linhas com a F5.
+> `:1452` (é `:1667`). O arquivo deslocou ~215 linhas com a F5. **E deslocou de novo na V1b**, que
+> tirou ~190 linhas do `server.ts` para a lib — os dois números acima estão outra vez defasados,
+> desta vez para MENOS. Conferir por conteúdo, nunca por linha herdada.
+>
+> ### 🆕 Três achados da V1b, nenhum consertado
+>
+> · 🔴 **`packages/e2e-tests/scenarios/17_context_store.ts` Parte E nunca exerceu o tool.** Faz
+>   `POST ${mcpServerUrl}/mcp` à mão — **rota que não existe** (o transporte é SSE: `GET /sse`
+>   anuncia `/messages?sessionId=…`, e as respostas voltam pelo stream). Recebe o HTML de 404 do
+>   Express e cai no `catch` → `fail`. As três asserções sobre `context_snapshot` daquele cenário
+>   são inertes, apesar de o mesmo pacote ter um cliente MCP correto
+>   (`packages/e2e-tests/lib/mcp-client.ts`, `SSEClientTransport`) usado por seis outros cenários.
+>   O conserto é trocar o `fetch` pelo `McpTestClient`; a Parte E então passa a exercer a máscara
+>   nova, e as asserções de PRESENÇA de chave continuam válidas (a máscara preserva a chave).
+> · 🔴 **`src/__tests__/bpm.test.ts` — `conversation_escalate` VERMELHO desde 2026-08-18, e o
+>   serviço está CERTO.** O teste não escreve `session:{id}:meta`, e a recusa por tenant
+>   desconhecido é o conserto deliberado daquela data (*"identidade não tem fallback"*). Baseline
+>   do pacote medida em 08-26: **`1 failed | 221 passed`**. Consertar é escrever o meta no setup —
+>   ou, melhor, ASSERTAR a recusa, que é o comportamento que se quer proteger.
+> · 🆕 **`invalidateContextMaskingCache` não tem call site nenhum** (agora em
+>   `lib/context-masking.ts`). O comentário promete um consumidor de `config.changed` que não
+>   existe — promessa-sem-produtor. A janela real de propagação é o **TTL de 60 s**, e é ele que
+>   faz medição logo após editar a regra ler a política ANTIGA.
 
 > **Este item era BRIEFING para escrever o ADR, não plano de implementação.** As decisões
 > abaixo estão marcadas como DECIDIDA / A DISCUTIR de propósito — o valor da próxima sessão

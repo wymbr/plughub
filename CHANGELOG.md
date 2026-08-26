@@ -2,6 +2,94 @@
 
 ---
 
+## V1b (arco ALLOWLIST) — a SEGUNDA PORTA do ContextStore ganhou política (2026-08-26)
+
+Fecha o `⚠️` que a V1 deixou escrito na própria linha da fase: a V1 cobriu a porta **HTTP**, e o
+tool MCP `supervisor_state` continuava devolvendo o hash **CRU**. Medido no
+[`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md) §1.5 e confirmado ao vivo
+antes do conserto: `session.probe.cpf` injetado como `123.456.789-00` voltava **idêntico** pelo tool
+enquanto o endpoint, a três arquivos de distância, entregava `***00` ao mesmo operador.
+
+**É a duplicação do SENTIMENTO de 2026-08-25 outra vez** — duas implementações independentes da
+mesma leitura, só uma com política, e a consertada não sendo a que importava —, agora sobre PII. O
+conserto tem a mesma forma daquele: **uma casa só**, `lib/context-masking.ts`, importada pelas duas
+portas.
+
+### Entregue
+
+- **`packages/mcp-server-plughub/src/lib/context-masking.ts`** (novo) — `getContextMaskingConfig`,
+  `resolveContextMaskingRule` (+ `ruleSpecificity`), `applyMaskingTypeToValue` e
+  `maskContextForPersistence` saíram de `server.ts` **com os comentários inteiros**, que são a
+  documentação de por que o glob de sufixo existe e de por que o snapshot durável é grau operator.
+  Nenhuma linha de lógica reescrita.
+- **`tools/supervisor.ts`** — o laço de `JSON.parse` cru virou uma chamada a
+  `maskContextForPersistence`. O campo `context_snapshot` continua populado; o **valor** vem
+  mascarado.
+- **`customer_context.context_masking`** (novo no retorno do tool): `{ grade, total, hidden_count }`.
+  `null` = não houve ContextStore para avaliar, que é diferente de *"nada foi mascarado"*.
+
+### A decisão: grau OPERATOR, sem portão de namespace
+
+Escolhida pelo dono entre três (paridade total com o endpoint · remover o campo · esta), e o
+argumento não é conveniência: **nenhum dos dois consumidores de `maskContextForPersistence` tem
+visualizador com PAPEL**, e masking é função de (tag × papel). Persistir/entregar no grau mais
+restritivo é a mesma decisão já tomada para o snapshot durável em 08-26.
+
+O portão de namespace fica **fora**, por dois motivos somados. O primeiro já estava escrito em
+`server.ts`: o portão é concern de **exibição** do pool do operador, e aplicá-lo a um registro faria
+a config de UI de um pool **apagar conteúdo em silêncio**. O segundo é novo e vale só para o tool: o
+pool que ele tem à mão é o de **ENTRADA** (`session:{id}:meta`) — fatia C de
+`session-meta-ownership.md` —, então o portão imporia ali a política de um pool que pode não ter
+relação com a sessão em curso.
+
+**`R-agente` não muda:** quem precisa do valor real continua lendo `@ctx.*` no fluxo, cru por design
+(ADR §D4). A porta que se fechou é a de leitura em BLOCO do hash inteiro.
+
+### Gate: `infra/test/probe_supervisor_tool_masking.sh`
+
+Seis ramos, visto **REPROVADO** antes (B/D/E/F vermelhos, com o tool devolvendo o CPF cru) e **OK**
+depois. Duas propriedades de desenho:
+
+- **O valor esperado não é escrito à mão — é lido do endpoint HTTP, que é o oráculo.** Hardcodar
+  `***00` mediria a REGRA do tenant (editável na tela de Masking) em vez da PORTA, e reprovaria
+  código correto no dia em que alguém mexesse na regra. Quando o oráculo devolve o valor cru
+  (regra ausente), o ramo sai **INCONCLUSIVO**, nunca verde — porta aberta e porta fechada são
+  indistinguíveis nesse estado.
+- **Todas as tags injetadas são `session.*`**, dentro do default de namespace do operador. Com
+  `caller.cpf` o endpoint retém por PORTÃO e não publica valor nenhum: o oráculo emudeceria e o gate
+  julgaria com instrumento cego.
+
+Ramos: **A** presença · **B** a porta (triplo: igual ao oráculo ✓ / igual ao cru ✗ / oráculo em claro
+INCONCLUSIVO) · **C** 🔴 testemunha negativa — `session.probe_witness`, que nenhuma regra alcança,
+tem de voltar **em claro**; é o ramo que pega o conserto preguiçoso *"mascare tudo"*, que passaria em
+B sozinho · **D** `agent.*` fora · **E** `hidden` **contado** (chave preservada, `value: null`) ·
+**F** aritmética `total == campos não-agent no hash cru`.
+
+Medição do verde: `18 entradas` · `tool='***00' == endpoint='***00'` · `hidden_count=2` ·
+`total=18 == cru não-agent=18`.
+
+### 🔴 Achado colateral: o e2e 17 Parte E nunca exerceu o tool
+
+**Não existe `POST /mcp` neste servidor** — o transporte é SSE (`GET /sse` anuncia
+`/messages?sessionId=…`, e as respostas voltam pelo stream, não pelo POST). O cenário
+`packages/e2e-tests/scenarios/17_context_store.ts` Parte E faz `POST ${mcpServerUrl}/mcp` à mão,
+recebe o **HTML de 404 do Express** e cai no `catch` → `fail`. Ou seja: as três asserções sobre
+`context_snapshot` daquele cenário **nunca chegaram ao tool**, apesar de o mesmo pacote ter um
+cliente MCP correto (`packages/e2e-tests/lib/mcp-client.ts`, com `SSEClientTransport`) usado por seis
+outros cenários. Registrado no `TODO.md`.
+
+O gate novo é o **primeiro `infra/test/` a chamar um tool MCP** — o handshake em bash fica lá como
+referência para os próximos.
+
+### Dívida nomeada, não consertada
+
+`invalidateContextMaskingCache` mudou-se junto e **não tem nenhum call site no repositório**: o
+comentário promete um consumidor de `config.changed` que não existe. Ficou com a promessa marcada no
+próprio docblock, porque a janela real de propagação é o **TTL de 60 s** — e é ele que faz uma
+medição feita logo após editar a regra ler a política ANTIGA.
+
+---
+
 ## V1 (arco ALLOWLIST) — a omissão do ContextStore deixou de ser MUDA (2026-08-26)
 
 Segunda fase do arco [`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md) §D5,
