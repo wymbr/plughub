@@ -195,13 +195,37 @@ RUN printf 'server {\n\
     }\n\
 \n\
     # SPA routes under /config — must come BEFORE config-api proxy.\n\
-    # These are React Router PAGE routes (single segment). Use /?$ so only the exact\n\
-    # page (optionally trailing slash) is served by the SPA — config-api key writes\n\
-    # like /config/masking/context_rules (2 segments) fall through to the proxy below.\n\
-    # (`masking` is both a page name and a config-api namespace, so the old\n\
-    #  ^/config/masking(/|$) wrongly captured PUT /config/masking/context_rules → 405.)\n\
+    # These are React Router PAGE routes (single segment).\n\
+    #\n\
+    # O DISCRIMINADOR E O `Accept`, NUNCA O CAMINHO. `masking` e ao mesmo tempo nome de\n\
+    # pagina do React Router E namespace do config-api, e as duas URIs sao IDENTICAS:\n\
+    # a query string NAO entra no match de `location`, entao GET /config/masking?tenant_id=x\n\
+    # tem URI /config/masking, igual a navegacao. Navegacao manda Accept: text/html;\n\
+    # `fetch` manda */*. Mesmo discriminador que o proxy do vite ja usa\n\
+    # (vite.config.ts:90-94) — sem ele, dev e container DIVERGEM e o defeito so existe\n\
+    # em producao, que foi exatamente o que aconteceu.\n\
+    #\n\
+    # Historico: a versao anterior separava por NUMERO DE SEGMENTOS (`/?$`), raciocinando\n\
+    # so sobre ESCRITA (`PUT /config/masking/context_rules`, 2 segmentos, caia no proxy).\n\
+    # A LEITURA de namespace tambem tem 1 segmento — entao ela casava aqui e recebia\n\
+    # `index.html` com HTTP 200. O `safeJson` (config-hooks.ts:13-19) via `text/html` e\n\
+    # lancava, o `catch` deixava `entries` vazio, e a tela de Masking dizia\n\
+    # "0 regras configuradas" com 23 em vigor. As regras de categoria caiam no mesmo\n\
+    # fetch e degradavam para DEFAULT_DISPLAY_RULE — invisivel, porque default parece certo.\n\
+    # Medido 2026-08-26. Gate: infra/test/probe_config_route_collision.sh\n\
+    #\n\
+    # `rewrite ... last` dentro de `if` e um dos dois usos seguros de `if` em location.\n\
     location ~ ^/config/(access|billing|platform|masking|recursos|resources|channels|canais|groups|calendars|schedules|outbound)/?$ {\n\
-        try_files $uri $uri/ /index.html;\n\
+        if ($http_accept ~* "text/html") {\n\
+            rewrite ^ /index.html last;\n\
+        }\n\
+        set $up_config_ns http://config-api:3600;\n\
+        proxy_pass         $up_config_ns;\n\
+        proxy_http_version 1.1;\n\
+        proxy_set_header   Host $host;\n\
+        proxy_set_header   X-Admin-Token $http_x_admin_token;\n\
+        proxy_buffering    off;\n\
+        proxy_read_timeout 60s;\n\
     }\n\
 \n\
     # config-api (namespace/key CRUD — all other /config/* routes)\n\

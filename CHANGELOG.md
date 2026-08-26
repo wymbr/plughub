@@ -2,6 +2,146 @@
 
 ---
 
+## V1 (arco ALLOWLIST) — a omissão do ContextStore deixou de ser MUDA (2026-08-26)
+
+Segunda fase do arco [`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md) §D5,
+e **pré-requisito inegociável da inversão** (V4). Vale sozinha: mesmo que o deny-by-default nunca
+aconteça, o operador para de perder campo em silêncio.
+
+`applyContextMaskingDynamic` tinha dois `continue` que faziam o campo sumir sem dizer — o **portão de
+namespace** (config do pool) e o tipo **`hidden`** (regra do tenant). Enquanto o default do tenant for
+`plain` isso é ruído; no dia da inversão, *"não existe"* e *"existe e você não pode ver"* ficariam
+indistinguíveis, e a inversão trocaria um vazamento de PII por uma **quebra muda de UI** — trade pior,
+porque vazamento se descobre auditando e tela que some sem motivo se descobre com o operador parado.
+
+**Entregue:** `applyContextMaskingDynamic` devolve `MaskedContextView`
+(`entries` + `total` + `by_rule` + `by_pool_scope`); o endpoint publica `customer_context.context_withheld`;
+a aba Contexto do Console ganha a faixa *"N campo(s) oculto(s) por política"*, nomeando as tags e
+separando as causas. i18n em `en` e `pt-BR`.
+
+### Quatro decisões que o código carrega
+
+- **Duas listas, não um contador.** As causas se consertam em **telas diferentes** (`by_rule` →
+  Configuration › Masking; `by_pool_scope` → Configuration › Resources › Pool). Um número único diria
+  *"3 campos ocultos"* sem dizer a quem reclamar — e a § Postura de Engenharia já exige que quem
+  degrada diga POR QUÊ.
+- **Os ocultos NÃO entram em `entries`** — ao contrário de `maskContextForPersistence`, que mantém a
+  entrada com `value: null` porque o leitor dela não tem outro canal. Aqui o canal é a faixa. Assim o
+  contador de campos visíveis continua honesto: **dois números com dois significados**, nunca um
+  inflado. Confirmado na tela: cabeçalho *"3 fields"* com 2 retidos.
+- **`agent.*` fica fora do `total`**, igual ao persister: não é fato do contato para aquele
+  visualizador, e contá-lo mentiria sobre quanto o operador deixou de ver.
+- **As listas levam o NOME da tag, nunca o valor** — mesmo grau de exposição que o snapshot durável
+  já pratica (chave preservada, valor nulo).
+
+**Gate:** `infra/test/probe_context_withheld.sh` — 6 ramos, visto vermelho antes e verde depois.
+Injeta **um caso de cada causa** (`caller.nome` para o portão; `session.probe.resume_token` para a
+regra, com o ponto no nome porque o glob de sufixo casa em **fronteira de segmento**). Dois ramos
+carregam o peso: **D**, testemunha negativa — para o admin (`supervisor_role`) as duas listas têm de
+vir **vazias**, e é o único ramo que pega um produtor que conta SEMPRE; e **F**, aritmética
+`total == entregues + by_rule + by_pool_scope`, que pega caminho de saída não contabilizado.
+
+`infra/test/seed_withheld_demo.sh` faz a mesma injeção **sem limpar**, para inspeção na tela.
+
+### 🔴 O gate teve um ramo que não podia reprovar — e foi outro ramo que o pegou
+
+O ramo **E** (disjunção entregue × retido) acusou *"3 tags em ambos"* enquanto o **F** fechava exato.
+Dois ramos medindo proposições relacionadas discordaram, e a discordância era a evidência: o
+`jq` estava errado, não o código.
+
+```
+select( ($s|keys) | index(.) != null )      # SEMPRE VERDADEIRO
+```
+
+Dentro de `index(.)`, o `.` é reavaliado contra a entrada do pipe — o próprio array de chaves. A
+expressão procura o array dentro dele mesmo, acha na posição `0`, e `0 != null` passa. Todo tag
+retido "casava": 3 retidos, 3 falsos duplicados.
+
+Corrigido com `as $tag` (que fixa o valor antes do `has`), e o ramo ganhou **preflight do próprio
+detector**: casos sintéticos com e sem duplicata, exigindo `1` e `0` — falhou o controle, o ramo sai
+**INCONCLUSIVO**, nunca verde. Sem isso, leitor cego e ausência de duplicata produzem a mesma saída.
+
+**A lição não é sobre `jq`.** É que **E e F medem a mesma propriedade por caminhos diferentes** (lista
+× aritmética), e foi só por isso que o instrumento cego apareceu. Um gate com o ramo E sozinho teria
+publicado um defeito inexistente — irmão do caso registrado na passagem de 08-26, em que um `jq`
+quebrado quase virou conclusão arquitetural.
+
+### Duas armadilhas de VERIFICAÇÃO, medidas ao olhar a tela
+
+- **`admin` não pode ver a faixa, e isso é o desenho.** Ele está em `supervisor_roles`: pula o portão
+  e não casa regra de papel `operator` ⇒ `by_rule=0`, `by_pool_scope=0` ⇒ nada renderiza (aviso
+  permanente vira moldura). **Testar logado como `operator`** — a tela do admin sozinha não prova
+  nada em direção nenhuma.
+- **O Console só lista contatos DO agente logado.** Não existe "abrir o contato de outro agente"; para
+  ver a faixa, o contato tem de nascer no operator. E o `HSET` do seed é **fora de banda** (não
+  publica `supervisor_state.updated`), então a tela já carregada **só mostra após refresh** — o
+  caminho real, com agente/tool escrevendo no ctx, publica o evento.
+
+**Não tocado, de propósito:** o `agent-assist-ui` legado (5173) não ganha a faixa — o campo é aditivo,
+não regride; e o **tool MCP `supervisor_state` continua devolvendo o ctx CRU** (segunda porta, ADR
+§1.5). Medido: **nenhum skill do repositório o chama** — consumidores são o e2e 17, o mock e a
+skill-flow-service de teste. Fechá-la é aplicar política onde não havia, não "contar": fatia própria.
+
+---
+
+## V0 (arco ALLOWLIST) — a tela de Masking dizia `0 regras` com 23 em vigor: colisão de rota no proxy (2026-08-26)
+
+Primeira fase do arco [`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md).
+Foi esta tela que abriu o arco inteiro — o dono viu `0 regras configuradas` e desconfiou de que a
+política não estivesse em vigor. **A política estava**; a tela é que mentia.
+
+**Causa, medida:** o nginx do platform-ui serve as páginas do React Router sob `/config/<nome>`, e
+`masking` é **ao mesmo tempo** nome de página e namespace do config-api. Em `location`, a regex casa
+contra a URI **sem a query string** — então `GET /config/masking?tenant_id=x` tem URI
+`/config/masking`, idêntica à navegação, casava na rota do SPA e recebia **`index.html` com HTTP
+200**. O `safeJson` (`config-hooks.ts:13-19`) lançava por content-type, o `catch` deixava `entries`
+vazio, e o `?? EMPTY_CONTEXT_CONFIG` fazia o resto.
+
+**A hipótese herdada estava um passo adiante do defeito.** O `TODO.md` apontava o `??` de
+`MaskingPage.tsx:160`; ele nunca chegava a ser exercido.
+
+**Conserto:** o discriminador passou a ser o **`Accept`**, não o número de segmentos do caminho —
+navegação (`text/html`) → `rewrite ^ /index.html last`; `fetch` (`*/*`) → proxy ao config-api. É o
+mesmo critério que `vite.config.ts:90-94` já usava.
+
+### Três coisas que este caso ensina, e nenhuma é sobre nginx
+
+- **Meia correção parece pronta.** O mesmo bloco já fora consertado uma vez (comentário em
+  `Dockerfile:197-202`), raciocinando **só sobre ESCRITA**: `PUT …/context_rules` tem 2 segmentos e
+  caía no proxy. A **leitura** de namespace também tem 1 segmento, igual à página. Quem separa por
+  contagem de segmentos precisa perguntar quais VERBOS têm aquela forma.
+- **O dano invisível vinha junto.** As regras de categoria (`rule.{category}`) morriam no MESMO
+  fetch e caíam em `DEFAULT_DISPLAY_RULE` — e default **parece certo**. Só o contador de regras do
+  ContextStore denunciou, porque `0` não é um valor plausível. Sem ele, a tela seria "estranha", não
+  "quebrada".
+- **Dev e container divergiam, e a divergência era o esconderijo.** O proxy do vite discrimina por
+  `Accept` desde sempre; o defeito **não existia em desenvolvimento**. Quando um defeito só aparece
+  no container, a primeira pergunta é o que o dev faz de diferente — não o que o código faz.
+
+**Gate:** `infra/test/probe_config_route_collision.sh` — **visto vermelho antes** (`FALHA`, exit 1) e
+verde depois (exit 0), na mesma execução de sessão. Três propriedades deliberadas:
+**(1)** lê a lista de páginas do **próprio Dockerfile** e a de namespaces do **próprio config-api**,
+então um namespace novo que colida passa a reprovar sozinho, sem editar o gate;
+**(2)** **testemunha de presença** (namespace sem colisão tem de vir JSON) — sem ela, proxy inteiro
+fora do ar reprovaria com a mesma cara da colisão;
+**(3)** **contra-teste** (navegação tem de continuar recebendo HTML) — o conserto ingênuo, apagar a
+rota do SPA, passaria no ramo principal e quebraria a página. Interseção vazia sai **INCONCLUSIVO**,
+nunca verde.
+
+Medido: 12 páginas × 17 namespaces, interseção = `{masking}` · testemunha `agent_activity`.
+
+**Achado colateral, visível na tela depois do conserto:** a lista mostra `session.numero_cartao` →
+`session.cpf_titular` → `session.limite_solicitado`, enquanto o `config-api/seed.py` traz
+`vencimento_cartao` nessa posição e **não** traz `cpf_titular`. É a divergência seed × config viva
+do ADR §D7 — antes inferida por diff de API, agora legível a olho.
+
+**Aberto (outra metade da V0):** os três inventários de categoria que discordam — a tela lista
+`iban` e `passport` com selo **"Ativo"** incondicional (`MaskingPage.tsx:24,313`) e eles não existem
+em `DataCategorySchema` nem têm regra; `address`/`health` existem no enum e nunca disparam. Depende
+de qual lista vira canônica, que é decisão da V2 (catálogo de tipos).
+
+---
+
 ## F5 — `ContextStorePersister`: o que a plataforma SABIA vira registro durável (2026-08-26)
 
 Última fase do arco de histórico unificado (ADR §3 F5). Irmão do `PipelineStatePersister`,

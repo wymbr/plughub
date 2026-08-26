@@ -1096,6 +1096,49 @@ function applyMaskingTypeToValue(raw: string, type: import("@plughub/schemas").C
 // ── Main masking function (dynamic, async) ────────────────────────────────────
 
 /**
+ * Resultado de `applyContextMaskingDynamic` — V1 do arco ALLOWLIST
+ * (`docs/adr/adr-contextstore-allowlist.md` §D5).
+ *
+ * ── Por que isto deixou de ser um `Record` ────────────────────────────────────
+ *
+ * A função tinha DOIS `continue` que faziam o campo sumir **sem dizer**: o portão
+ * de namespace e o tipo `hidden`. Enquanto o default do tenant for `plain`
+ * (deny-nothing) isso é só ruído; no dia em que a inversão acontecer, um campo
+ * ausente e um campo barrado ficam **indistinguíveis** — e o ADR marca a ordem
+ * como inegociável: **contar antes de inverter**, senão troca-se um vazamento de
+ * PII por uma quebra MUDA de UI. Vazamento se descobre auditando; tela que some
+ * sem motivo se descobre com o operador parado.
+ *
+ * ── Por que DUAS listas, e não um contador só ────────────────────────────────
+ *
+ * As duas causas têm consertos em telas DIFERENTES:
+ *   by_rule       → regra de masking do TENANT (Configuration › Masking)
+ *   by_pool_scope → `context_visibility.operator_namespaces` do POOL
+ * Um número único diria *"3 campos ocultos"* sem dizer a quem reclamar. É a mesma
+ * regra que a § Postura de Engenharia aplica a fallback: quem degrada diz POR QUÊ.
+ *
+ * ── Por que os ocultos NÃO entram em `entries` ───────────────────────────────
+ *
+ * Diferente de `maskContextForPersistence`, que mantém a entrada com `value: null`
+ * porque o leitor dela não tem outro canal — aqui o canal existe (o aviso na aba).
+ * Mantê-los fora preserva a honestidade do contador de campos VISÍVEIS: são dois
+ * números com dois significados, nunca um número inflado.
+ *
+ * ⚠️ As listas carregam o NOME da tag, nunca o valor. É o mesmo grau de exposição
+ * que o snapshot durável já pratica (chave preservada, valor nulo).
+ */
+interface MaskedContextView {
+  /** tag → entry visível (já mascarada quando a regra pede) */
+  entries:       Record<string, unknown>
+  /** entradas consideradas — exclui `agent.*` (ver abaixo) */
+  total:         number
+  /** tags ocultadas por REGRA de masking do tenant (type `hidden`) */
+  by_rule:       string[]
+  /** tags barradas pelo PORTÃO de namespace do pool */
+  by_pool_scope: string[]
+}
+
+/**
  * Filter and mask a raw ContextStore hgetall snapshot.
  *
  * Replaces the former synchronous applyContextMasking() that relied on the
@@ -1128,7 +1171,7 @@ async function applyContextMaskingDynamic(
   allowedNs:    string[],
   allowTags:    string[],
   tenantId:     string,
-): Promise<Record<string, unknown>> {
+): Promise<MaskedContextView> {
   const config       = await getContextMaskingConfig(tenantId)
   // "Who is a supervisor" is config-driven (masking config), not fixed in code.
   const isSupervisor = roles.some(r => config.supervisor_roles.includes(r))
@@ -1137,6 +1180,9 @@ async function applyContextMaskingDynamic(
   const role         = roles.find(r => config.supervisor_roles.includes(r))
                        ?? roles[0] ?? "operator"
   const result: Record<string, unknown> = {}
+  const byRule:      string[] = []
+  const byPoolScope: string[] = []
+  let   total = 0
 
   for (const [tag, raw] of Object.entries(rawHash)) {
     let entry: Record<string, unknown>
@@ -1145,8 +1191,12 @@ async function applyContextMaskingDynamic(
 
     const ns = tag.split(".")[0] ?? ""
 
-    // agent.* — always removed (per-participant visibility, resolved elsewhere)
+    // agent.* — always removed (per-participant visibility, resolved elsewhere).
+    // FORA do total, e de propósito: não é fato do contato para este visualizador,
+    // então contá-lo como "oculto por política" mentiria sobre quantas entradas o
+    // operador deixou de ver. Mesma decisão de `maskContextForPersistence`.
     if (ns === "agent") continue
+    total++
 
     // operator_allow_tags (config-driven, per pool: context_visibility.operator_allow_tags)
     // — exact tags the operator sees PLAIN, bypassing the namespace gate AND masking
@@ -1159,8 +1209,9 @@ async function applyContextMaskingDynamic(
       continue
     }
 
-    // Namespace gate — operator sees only allowedNs namespaces
-    if (!isSupervisor && !allowedNs.includes(ns)) continue
+    // Namespace gate — operator sees only allowedNs namespaces.
+    // V1: CONTA em vez de sumir. Conserto desta causa é na config do POOL.
+    if (!isSupervisor && !allowedNs.includes(ns)) { byPoolScope.push(tag); continue }
 
     // Resolve masking rule for this tag × role
     const matchedRule = resolveContextMaskingRule(tag, role, config)
@@ -1177,7 +1228,9 @@ async function applyContextMaskingDynamic(
 
     // Apply type
     if (maskType === "hidden") {
-      // Field omitted entirely — do not add to result
+      // Field omitted entirely — do not add to result.
+      // V1: CONTA em vez de sumir. Conserto desta causa é na tela de Masking.
+      byRule.push(tag)
       continue
     }
 
@@ -1196,7 +1249,7 @@ async function applyContextMaskingDynamic(
     }
   }
 
-  return result
+  return { entries: result, total, by_rule: byRule, by_pool_scope: byPoolScope }
 }
 
 /**
@@ -1671,12 +1724,22 @@ export async function startServer(config: ServerConfig): Promise<void> {
       // Applies namespace filtering and PII masking based on viewer role.
       // Rules loaded dynamically from Config API (with in-process TTL cache).
       let contextSnapshot: Record<string, unknown> | null = null
+      // V1 (arco ALLOWLIST §D5): o que foi RETIDO viaja ao lado do que foi entregue.
+      // `null` = não houve ContextStore para avaliar — diferente de "nada foi retido",
+      // que é `total > 0` com as duas listas vazias. A UI precisa distinguir os dois.
+      let contextWithheld: { total: number; by_rule: string[]; by_pool_scope: string[] } | null = null
       let ctxHash: Record<string, string> = {}
       if (tenantId) {
         try {
           ctxHash = (await redis.hgetall(`${tenantId}:ctx:${sessionId}`)) ?? {}
           if (Object.keys(ctxHash).length > 0) {
-            contextSnapshot = await applyContextMaskingDynamic(ctxHash, viewerRoles, operatorNamespaces, operatorAllowTags, tenantId)
+            const view = await applyContextMaskingDynamic(ctxHash, viewerRoles, operatorNamespaces, operatorAllowTags, tenantId)
+            contextSnapshot = view.entries
+            contextWithheld = {
+              total:         view.total,
+              by_rule:       view.by_rule,
+              by_pool_scope: view.by_pool_scope,
+            }
           }
         } catch { /* non-fatal */ }
       }
@@ -1862,6 +1925,10 @@ export async function startServer(config: ServerConfig): Promise<void> {
             .flatMap((t: Record<string, unknown>) => (t["insights"] as unknown[]) ?? []),
           // context_snapshot: ContextStore data filtered and masked by viewer role (v2)
           context_snapshot: contextSnapshot,
+          // context_withheld: o que a POLÍTICA reteve, por causa (V1 do arco ALLOWLIST).
+          // Sem isto o campo some da linha e "não existe" fica indistinguível de
+          // "existe e você não pode ver" — o pré-requisito da inversão (ADR §D5).
+          context_withheld: contextWithheld,
           // contact_context: legacy pipeline_state field (v1 — present only when ContextStore absent)
           contact_context: contextSnapshot ? null : contactContext,
         },

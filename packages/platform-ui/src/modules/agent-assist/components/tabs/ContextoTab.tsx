@@ -483,12 +483,63 @@ const CtxFieldRow: React.FC<CtxFieldRowProps> = ({ tag, entry, t }) => {
   );
 };
 
+/**
+ * WithheldNotice — "N campos ocultos por política", dizendo QUAIS e por qual causa.
+ *
+ * V1 do arco ALLOWLIST (`docs/adr/adr-contextstore-allowlist.md` §D5). Antes, campo
+ * barrado sumia da linha: "não existe" e "existe e você não pode ver" ficavam
+ * indistinguíveis. É o pré-requisito da inversão para deny-by-default — sem ele, a
+ * inversão trocaria vazamento de PII por quebra MUDA de tela.
+ *
+ * Duas causas, dois blocos, porque o conserto é em telas diferentes:
+ *   by_rule       → Configuration › Masking (regra do tenant)
+ *   by_pool_scope → Configuration › Resources › Pool (operator_namespaces)
+ *
+ * ⚠️ Não renderiza nada quando não há retenção — um aviso permanente vira moldura e
+ * para de ser lido. Ausência de aviso é informação: nada foi retido.
+ */
+const WithheldNotice: React.FC<{
+  withheld: NonNullable<CustomerContext['context_withheld']>;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}> = ({ withheld, t }) => {
+  const count = withheld.by_rule.length + withheld.by_pool_scope.length;
+  if (count === 0) return null;
+
+  const block = (tags: string[], labelKey: string) =>
+    tags.length === 0 ? null : (
+      <div className="flex flex-col gap-0.5">
+        <span className="text-2xs text-warning-text">{t(labelKey)}</span>
+        <div className="flex flex-wrap gap-1">
+          {tags.map(tag => (
+            <code
+              key={tag}
+              className="text-2xs font-mono px-1 py-0.5 rounded bg-warning/10 text-warning-text"
+            >
+              {tag}
+            </code>
+          ))}
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="px-3 py-2 border-b border-warning/30 bg-warning/5 flex flex-col gap-1.5">
+      <span className="text-2xs font-semibold text-warning-text uppercase tracking-wide">
+        {t('contexto.withheldTitle', { count })}
+      </span>
+      {block(withheld.by_rule,       'contexto.withheldByRule')}
+      {block(withheld.by_pool_scope, 'contexto.withheldByPoolScope')}
+    </div>
+  );
+};
+
 const ContextSnapshotCard: React.FC<{
   snapshot:    Record<string, ContextEntry>;
+  withheld?:   CustomerContext['context_withheld'];
   sessionId?:  string | null;
   onTagSaved?: () => void;
   viewerRole?: string;
-}> = ({ snapshot, sessionId, onTagSaved, viewerRole }) => {
+}> = ({ snapshot, withheld, sessionId, onTagSaved, viewerRole }) => {
   const { t } = useTranslation('agentAssist');
   const [addOpen, setAddOpen] = useState(false);
   const groups = groupByNamespace(snapshot, t);
@@ -521,6 +572,9 @@ const ContextSnapshotCard: React.FC<{
           )}
         </div>
       </div>
+
+      {/* O que a política reteve — antes das linhas, porque explica a ausência delas */}
+      {withheld && <WithheldNotice withheld={withheld} t={t} />}
 
       {/* Manual tag form (toggleable) */}
       {addOpen && sessionId && (
@@ -623,6 +677,7 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
     conversation_insights,
     contact_context,
     context_snapshot,
+    context_withheld,
   } = context;
 
   return (
@@ -637,6 +692,7 @@ export const ContextoTab: React.FC<ContextoTabProps> = ({
       {context_snapshot && (
         <ContextSnapshotCard
           snapshot={context_snapshot}
+          withheld={context_withheld}
           sessionId={sessionId}
           viewerRole={viewerRole}
           onTagSaved={handleTagSaved}

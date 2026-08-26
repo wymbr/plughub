@@ -219,6 +219,27 @@ export interface CustomerContext {
    * Supersedes contact_context when present.
    */
   context_snapshot?:    Record<string, ContextEntry>;
+  /**
+   * O que a POLÍTICA reteve, por causa — V1 do arco ALLOWLIST
+   * (`docs/adr/adr-contextstore-allowlist.md` §D5).
+   *
+   * `null`/ausente = não houve ContextStore para avaliar. **Diferente** de "nada foi
+   * retido", que é `total > 0` com as duas listas vazias — e distinguir os dois é o
+   * ponto: campo que some sem dizer torna "não existe" indistinguível de "existe e
+   * você não pode ver".
+   *
+   * Duas listas porque os consertos são em telas diferentes: `by_rule` → regra de
+   * masking do tenant; `by_pool_scope` → `operator_namespaces` do pool.
+   * Carregam o NOME da tag, nunca o valor.
+   */
+  context_withheld?: {
+    /** entradas consideradas (exclui `agent.*`) */
+    total:         number;
+    /** ocultadas por regra de masking do tenant (type `hidden`) */
+    by_rule:       string[];
+    /** barradas pelo portão de namespace do pool */
+    by_pool_scope: string[];
+  } | null;
 }
 
 export interface SupervisorState {

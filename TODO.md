@@ -4051,11 +4051,26 @@ Quando qualquer adapter de voz/TTS for criado, deve consultar `rule.{category}.d
 
 ## 📂 TEMA · Segurança, LGPD e Masking
 
-## 🆕 ARCO PROPOSTO — ContextStore como ALLOWLIST: campo sem regra não é acessível *(proposto pelo dono 2026-08-26; ADR a escrever em sessão limpa)*
+## 🆕 ARCO PROPOSTO — ContextStore como ALLOWLIST: campo sem regra não é acessível *(proposto pelo dono 2026-08-26; **ADR ESCRITO 2026-08-26**)*
 
-> **Este item é BRIEFING para escrever o ADR, não plano de implementação.** As decisões
+> ✅ **O ADR existe:** [`docs/adr/adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md)
+> — status **proposto**, nenhuma fase implementada. As sete perguntas abaixo estão **respondidas
+> lá** (§3), e o modelo mudou em três pontos por decisão do dono na sessão de 08-26:
+> **(1)** categoria abstrata virou **TIPO** (formato × máscara-por-papel × classe LGPD numa
+> declaração só, qualquer uma podendo ser vazia); **(2)** a hierarquia de negócio entra na CHAVE,
+> em `escopo.dominio.campo` — o escopo fica no primeiro segmento porque hoje ele roteia hash+TTL;
+> **(3)** o legado vira **alias contado e datado** no próprio nó do mapa, com a NOVA como canônica.
+>
+> Este bloco permanece como **evidência medida** (a varredura, a divergência seed×config viva, as
+> armadilhas). O plano vive no ADR § 6.
+>
+> ⚠️ **Duas referências deste bloco estão OBSOLETAS** (conferidas em 08-26): o defeito do pool de
+> entrada não está em `server.ts:1421` (é `:1636` + `:1654-1668`) e o `catch {}` mudo não está em
+> `:1452` (é `:1667`). O arquivo deslocou ~215 linhas com a F5.
+
+> **Este item era BRIEFING para escrever o ADR, não plano de implementação.** As decisões
 > abaixo estão marcadas como DECIDIDA / A DISCUTIR de propósito — o valor da próxima sessão
-> está em fechar as segundas, não em codar as primeiras.
+> estava em fechar as segundas, não em codar as primeiras.
 
 ### O problema, medido
 
@@ -4110,7 +4125,12 @@ O conserto já existe em FORMA, na F5: **contar, não omitir** (`value: null` + 
 + `hidden_count` em coluna própria). A UI precisa do mesmo: *"3 campos ocultos por política"*,
 dizendo quais. **Esta fatia vale sozinha, mesmo que a inversão nunca aconteça.**
 
-### O que o ADR precisa DISCUTIR e fechar
+### O que o ADR precisa DISCUTIR e fechar → **RESPONDIDAS em `adr-contextstore-allowlist.md` §3**
+
+> As sete abaixo ficam como registro do raciocínio. Duas mudaram de forma ao serem respondidas:
+> a **4** (`hidden` × `full`) deixou de ser escolha global — virou propriedade do TIPO; e a **2**
+> (granularidade) ficou: allowlist **por campo**, reuso **por tipo**. `segment.{uuid}.*` continua
+> sendo o caso sem padrão exato possível, agora declarado como trabalho da fase V3.
 
 1. **✅ RESPONDIDA em 2026-08-26 — as regras VÊM do config-api, e a TELA é que mente.**
    Medido: `GET /config/masking?tenant_id=tenant_demo` devolve `entries.context_rules` com **14
