@@ -390,7 +390,7 @@ class TestQuerySessionsReport:
 
 class TestJourneyChipCounts:
     _ALIAS_COLS = ["source_root", "canonical_root"]
-    _CHIP_COLS  = ["jid", "n", "n_access", "n_internal", "n_unknown"]
+    _CHIP_COLS  = ["jid", "n", "n_access", "n_internal", "n_unknown", "has_scoped_out"]
 
     def _rows(self):
         return [{"session_id": "s1", "root_session_id": "r1"}]
@@ -402,7 +402,7 @@ class TestJourneyChipCounts:
         que mostra 4 acessos."""
         client = _make_client(
             _ch_result(self._ALIAS_COLS, []),
-            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0]]),
+            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0, 0]]),
         )
         _attach_session_journey_chip(client, DB, TENANT, self._rows(), None, None)
         chip_sql = client.query.call_args_list[-1].args[0]
@@ -417,7 +417,7 @@ class TestJourneyChipCounts:
         `internal` na listagem."""
         client = _make_client(
             _ch_result(self._ALIAS_COLS, []),
-            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0]]),
+            _ch_result(self._CHIP_COLS, [["r1", 5, 3, 2, 0, 0]]),
         )
         _attach_session_journey_chip(client, DB, TENANT, self._rows(), None, None)
         chip_sql = client.query.call_args_list[-1].args[0]
@@ -429,7 +429,7 @@ class TestJourneyChipCounts:
         exercido em tela."""
         client = _make_client(
             _ch_result(self._ALIAS_COLS, []),
-            _ch_result(self._CHIP_COLS, [["r1", 6, 3, 2, 1]]),
+            _ch_result(self._CHIP_COLS, [["r1", 6, 3, 2, 1, 0]]),
         )
         rows = self._rows()
         _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
@@ -441,22 +441,24 @@ class TestJourneyChipCounts:
         assert (r["journey_access_count"] + r["journey_internal_step_count"]
                 + r["journey_unclassified_count"]) == r["journey_session_count"]
 
-    def test_missing_journey_leaves_all_four_absent(self):
+    def test_missing_journey_leaves_all_five_absent(self):
         """Testemunha negativa. Journey sem linha no agregado fica `None` nos
-        QUATRO campos — zerar só a quebra desenharia `· 0 + 0` num chip cujo
-        total ninguém sabe, que é o valor plausível de sempre."""
+        CINCO campos — zerar só a quebra desenharia `· 0 + 0` num chip cujo
+        total ninguém sabe, que é o valor plausível de sempre. E um `False` no
+        marcador afirmaria "não há nada além do que você vê" sem ter medido."""
         client = _make_client(
             _ch_result(self._ALIAS_COLS, []),
             _ch_result(self._CHIP_COLS, []),
         )
         rows = self._rows()
         _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
-        assert rows[0]["journey_session_count"]       is None
-        assert rows[0]["journey_access_count"]        is None
-        assert rows[0]["journey_internal_step_count"] is None
-        assert rows[0]["journey_unclassified_count"]  is None
+        assert rows[0]["journey_session_count"]           is None
+        assert rows[0]["journey_access_count"]            is None
+        assert rows[0]["journey_internal_step_count"]     is None
+        assert rows[0]["journey_unclassified_count"]      is None
+        assert rows[0]["journey_has_scoped_out_members"]  is None
 
-    def test_query_failure_leaves_all_four_absent(self):
+    def test_query_failure_leaves_all_five_absent(self):
         """Falha da agregação não vira `1` nem `0` em campo nenhum — chip ausente
         e processo-de-um contato precisam continuar distinguíveis."""
         client = MagicMock()
@@ -466,8 +468,87 @@ class TestJourneyChipCounts:
         ]
         rows = self._rows()
         _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
-        assert rows[0]["journey_session_count"]      is None
-        assert rows[0]["journey_unclassified_count"] is None
+        assert rows[0]["journey_session_count"]          is None
+        assert rows[0]["journey_unclassified_count"]     is None
+        assert rows[0]["journey_has_scoped_out_members"] is None
+
+
+# ── chip de processo: o MARCADOR de existência (2026-08-26, caminho (a)) ──────
+#
+# O defeito que estes testes travam não é de contagem: é a tela AFIRMANDO o que não
+# mediu. Processo do qual o operador escopado só alcança uma sessão dava contagem
+# `1`, o front escondia o chip (`> 1`) e a linha passava a dizer "este contato não
+# pertence a processo nenhum" — a mesma mentira tranquila que o docstring já proibia
+# para o caso de FALHA e que ninguém tinha estendido ao RECORTE.
+#
+# A escolha do dono foi publicar a EXISTÊNCIA, não o tamanho. Logo há DUAS
+# proposições a proteger, e elas puxam em direções opostas: os quatro números têm de
+# continuar escopados (senão o marcador vira vazamento do tamanho real) e o booleano
+# tem de enxergar fora do escopo (senão não há marcador nenhum). É por isso que o
+# teste do predicado olha o SQL, não só o resultado: um refactor que "simplificasse"
+# os `countIf` de volta a `count()` passaria em qualquer teste de valor.
+
+class TestJourneyChipScopedOutMarker:
+    _ALIAS_COLS = TestJourneyChipCounts._ALIAS_COLS
+    _CHIP_COLS  = TestJourneyChipCounts._CHIP_COLS
+
+    def _rows(self):
+        return [{"session_id": "s1", "root_session_id": "r1"}]
+
+    def test_marker_is_true_and_the_count_stays_scoped(self):
+        """O caso medido em `tenant_demo`: processo de 4 membros, 1 alcançável.
+        O que sai é `1` (escopado, como antes) + `True` — nunca `4`."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 1, 1, 0, 0, 1]]),
+        )
+        rows = self._rows()
+        _attach_session_journey_chip(client, DB, TENANT, rows, None, ["p1"])
+        assert rows[0]["journey_session_count"]          == 1
+        assert rows[0]["journey_has_scoped_out_members"] is True
+
+    def test_unrestricted_scope_measures_false_never_absent(self):
+        """Irrestrito é MEDIDO, não desconhecido: `False` ≠ `None`. O operador sem
+        restrição é justamente quem tem a visão completa — tratá-lo como caso
+        indeterminado inverteria a leitura da tela."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 4, 3, 1, 0, 0]]),
+        )
+        rows = self._rows()
+        _attach_session_journey_chip(client, DB, TENANT, rows, None, None)
+        assert rows[0]["journey_has_scoped_out_members"] is False
+        chip_sql = client.query.call_args_list[-1].args[0]
+        assert "countIf(1)" in chip_sql, (
+            "sem ABAC o predicado tem de colapsar em `1` — um `countIf` vazio ou "
+            "ausente devolveria o marcador por um caminho diferente do escopado"
+        )
+
+    def test_abac_is_the_countif_predicate_and_not_the_where(self):
+        """A regressão que nenhum teste de VALOR pega. Se a ABAC voltar para o
+        `WHERE`, os quatro números continuam certos e o marcador fica mudo (sempre
+        `False`): o defeito reaparece inteiro, com a suíte verde."""
+        client = _make_client(
+            _ch_result(self._ALIAS_COLS, []),
+            _ch_result(self._CHIP_COLS, [["r1", 1, 1, 0, 0, 1]]),
+        )
+        _attach_session_journey_chip(client, DB, TENANT, self._rows(), None, ["p1"])
+        chip_sql = client.query.call_args_list[-1].args[0]
+        acc = "s.pool_id IN ('p1')"
+        assert acc in chip_sql
+        # Recorte pelo WHERE **da query principal**, não pelo primeiro "WHERE" do
+        # texto: o próprio predicado de ABAC embute um `IN (SELECT … WHERE …)`, e
+        # `split("WHERE")` cru cairia dentro da subconsulta — o teste passaria a
+        # medir a proposição vizinha.
+        where = chip_sql.split("\n        WHERE ", 1)[1].split("GROUP BY", 1)[0]
+        assert acc not in where, (
+            "a ABAC voltou ao WHERE — o marcador não tem mais como enxergar os "
+            "membros fora do escopo, e a tela volta a afirmar 'processo de um'"
+        )
+        # …e o que se PUBLICA continua escopado: os quatro `countIf` carregam o
+        # predicado. Sem isto, o conserto viraria o vazamento que a ABAC evita.
+        assert chip_sql.count(f"countIf(({acc}") >= 1
+        assert "count() > countIf(" in chip_sql
 
 
 # ── query_agents_report — REMOVIDO (2026-07-28) ──────────────────────────────

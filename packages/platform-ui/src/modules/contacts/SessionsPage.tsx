@@ -185,9 +185,11 @@ function FilterBar({ filters, setFilters }: {
 // *"os contatos do processo não aparecem em lugar nenhum"*: apareciam, a um clique,
 // numa tela sem caminho até ela.
 //
-// Só é renderizado com processo de MAIS DE UMA sessão — mesma regra do chip: sem
-// isso não há para onde pivotar, e um selo apontando para um processo de um contato
-// só afirmaria uma relação que não existe.
+// Só é renderizado quando há para onde pivotar — a regra é `hasProcess`, do chip, e
+// não uma cópia dela aqui: um selo apontando para um processo de um contato só
+// afirmaria uma relação que não existe. Desde 2026-08-26 "há para onde pivotar" tem
+// DUAS razões (mais de uma sessão, ou membros fora do escopo do usuário), e é por
+// morar numa função só que este selo não ficou para trás da lista.
 //
 // ⚠️ **É o MESMO componente da lista** (`ProcessChip`), não um parecido. Enquanto
 // eram dois, divergiram no corte do id (4 × 8 caracteres) — mesmo processo, dois
@@ -302,9 +304,9 @@ export default function SessionsPage() {
         const jid    = row.journey_id || row.root_session_id || null
         const counts = processCounts(row)
         // Mesma regra do chip da lista, e o MESMO predicado — não uma reescrita
-        // dele: sem processo com mais de uma sessão não há para onde pivotar, e um
-        // selo apontando para um processo de um contato só afirmaria uma relação
-        // que não existe.
+        // dele: sem processo para onde pivotar, um selo afirmaria uma relação que
+        // não existe. O predicado cresceu (marcador de escopo) sem que esta linha
+        // precisasse saber — que é o ponto de ele viver em `ProcessChip.tsx`.
         setSessionJourney(jid && counts && hasProcess(counts) ? { id: jid, counts } : null)
       })
       .catch(e => { if (!cancelled) setDeepLinkMiss(String(e)) })

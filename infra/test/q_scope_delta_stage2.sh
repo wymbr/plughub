@@ -47,8 +47,15 @@ echo "$PAY" | base64 -d 2>/dev/null \
   | jq -c '{roles, accessible_pools, supervised_groups, supervised_user_ids,
             analytics_open_access, module_config: (.module_config|keys?)}' \
   || echo "  (não decodificou — token opaco?)"
-echo "  ⚠️ \`accessible_pools: []\` significa IRRESTRITO. Se está vazio e ainda"
-echo "     assim recorta, o recorte vem de outro lugar."
+# A v1 desta linha dizia só *"[] significa IRRESTRITO; se está vazio e ainda assim
+# recorta, o recorte vem de outro lugar"* — verdadeiro como fato de código
+# (`pool_auth.py:157-161`) e enganoso como diagnóstico: em 2026-08-26 o token trazia
+# CINCO pools, e meia triagem partiu do valor errado por confiar no aviso em vez de
+# ler a linha acima. O aviso agora diz o que fazer com cada um dos dois casos.
+echo "  ⚠️ LEIA a linha acima antes de supor: \`accessible_pools\` VAZIO = irrestrito"
+echo "     (convenção da auth-api, \`pool_auth.py:157-161\`); NÃO-vazio = restrito a"
+echo "     esses pools + os espelhos \`-int\`. Papel NÃO entra: o \`pool_auth\` nunca lê"
+echo "     \`roles\`, então 'admin vê tudo' vale só enquanto a lista dele estiver vazia."
 echo
 
 URL="$AN/reports/sessions?tenant_id=$TENANT&from_dt=$FROM&to_dt=$TO&page=1&page_size=200"
@@ -81,15 +88,34 @@ elif [ "$N_INTER" -eq 0 ]; then
               | (.entry_pool_id // .pool_id // "?")] | group_by(.)
      | map({pool: .[0], n: length}) | sort_by(-.n) | .[] | "    \(.n)× \(.pool)"'
 else
-  echo "VEREDICTO (ii): $N_INTER linha(s) multi ESTÃO VISÍVEIS ao admin — e ainda"
-  echo "  assim o chip não aparece. Logo \`journey_session_count\` é computado SOB o"
-  echo "  recorte: o processo encolhe para o tamanho que o principal enxerga, e a"
-  echo "  tela diz 'não há processo' onde há."
-  echo
-  echo "  Prova, lado a lado (anon × auth) nas primeiras 5:"
-  for sid in $(echo "$INTER" | head -5); do
-    a=$(echo "$ANON"  | jq -r --arg s "$sid" '.data[]|select(.session_id==$s)|.journey_session_count')
-    b=$(echo "$AUTHD" | jq -r --arg s "$sid" '.data[]|select(.session_id==$s)|.journey_session_count')
-    echo "    ${sid: -14}  anon=$a  auth=$b"
+  # ⚠️ CONSERTO 2026-08-26 — a v1 decidia (ii) só por `N_INTER > 0`, e isso mede a
+  # proposição VIZINHA: interseção não-vazia diz que as linhas ficaram, não que a
+  # CONTAGEM encolheu. Com o escopo do admin cobrindo os membros (22 pools), a v1
+  # imprimiu "o chip não aparece / o processo encolhe" tendo `anon=4 auth=4` nas
+  # próprias linhas de prova logo abaixo — um veredicto contradito pelo dado que ele
+  # mesmo exibe. O ramo agora conta as linhas que DIVERGEM, que é o fato do defeito.
+  # (Mesma família do D14.1: três ramos, falseável, e ainda assim a pergunta errada.)
+  DIFF=0; SAME=0; LINES=""
+  for sid in $INTER; do
+    a=$(echo "$ANON"  | jq -r --arg s "$sid" '.data[]|select(.session_id==$s)|.journey_session_count|tostring')
+    b=$(echo "$AUTHD" | jq -r --arg s "$sid" '.data[]|select(.session_id==$s)|.journey_session_count|tostring')
+    if [ "$a" = "$b" ]; then SAME=$((SAME+1)); else DIFF=$((DIFF+1)); fi
+    LINES="$LINES    ${sid: -14}  anon=$a  auth=$b\n"
   done
+  echo "3 · contagem do chip na interseção: DIVERGEM=$DIFF · IGUAIS=$SAME"
+  echo
+  printf "%b" "$(echo -e "$LINES" | head -6)"
+  echo
+  if [ "$DIFF" -eq 0 ]; then
+    echo "VEREDICTO (iii): as linhas ficaram E a contagem NÃO encolheu — o escopo deste"
+    echo "  usuário alcança todos os membros dos processos da janela. O defeito do chip"
+    echo "  não está refutado: ele simplesmente NÃO TEM POPULAÇÃO aqui. Para exercê-lo é"
+    echo "  preciso um usuário cujo escopo deixe membros de fora (ver"
+    echo "  \`probe_process_chip_scoped_marker.sh\`, que aceita ADMIN_EMAIL/ADMIN_PASS)."
+  else
+    echo "VEREDICTO (ii): $DIFF linha(s) multi estão VISÍVEIS e mesmo assim reportam uma"
+    echo "  contagem MENOR. Logo \`journey_session_count\` é computado SOB o recorte: o"
+    echo "  processo encolhe para o tamanho que o principal enxerga, e a tela diz 'não há"
+    echo "  processo' onde há."
+  fi
 fi

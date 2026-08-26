@@ -265,8 +265,15 @@ export function ListaTab({ tenantId, filters, onOpenDetail, scopeAll, onScopeAll
           CONDICIONAL em `meta.window_applied`: no drill (por processo/por contato) a
           janela não incide, não há divergência a explicar, e a frase seria ruído. E
           condicional em haver chip na página — explicar um elemento que não está na
-          tela é pior do que não explicar. */}
-      {windowApplied && rows.some(r => (r.journey_session_count ?? 0) > 1) && (
+          tela é pior do que não explicar.
+
+          ⚠️ A condição "há chip na página" é `hasProcess`, a MESMA função que decide
+          desenhar cada chip, e não uma segunda regra escrita aqui. Ela era
+          `journey_session_count > 1` — cópia da regra ANTIGA, que ficou para trás
+          quando o marcador de escopo entrou: numa página em que todos os chips
+          aparecem pelo `+`, o rodapé que os explica sumia. Duas fontes para "há
+          chip?" é como se paga uma divergência muda. */}
+      {windowApplied && rows.some(r => hasProcess(processCounts(r))) && (
         <div className="px-4 py-1.5 bg-surface-muted border-t border-border flex-shrink-0 text-2xs text-muted-light">
           {t('lista.processFootnote')}
         </div>

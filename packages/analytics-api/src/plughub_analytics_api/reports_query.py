@@ -1223,6 +1223,30 @@ def _attach_session_journey_chip(
     no escopo de contato e é contada. `_attach_journey_internal_counts` conta outra
     coisa: sessão de POOL interno (wrap-up, dispatch), que `_apply_contact_scope`
     EXCLUI destes números. Somar os dois seria contar wrap-up como etapa de processo.
+
+    **4. O MARCADOR DE EXISTÊNCIA (`journey_has_scoped_out_members`, 2026-08-26).**
+    A ABAC no §1 é deliberada — contar os membros que o operador não alcança
+    revelaria o TAMANHO de um processo que toca pools fora do escopo dele. O que não
+    estava previsto é a consequência: a contagem escopada de um processo do qual só
+    uma sessão é visível dá `1`, o front esconde o chip com `> 1`, e a tela passa a
+    **afirmar** *"este contato não pertence a processo nenhum"* — exatamente a mentira
+    que o §"Falha ⇒ `None`, nunca `1`" quatro parágrafos acima proíbe. A regra tinha
+    sido escrita para a FALHA e nunca estendida ao RECORTE. Medido em `tenant_demo`
+    (2026-08-26): das 29 linhas com processo multi-sessão no escopo aberto, **6 são
+    visíveis ao admin de 5 pools e as 6 reportavam `1`** contra `4`/`3`/`4`/`4`/`4`.
+
+    O conserto **não é publicar o tamanho real** — é publicar a EXISTÊNCIA, que é o
+    dado que faltava ao front. Por isso a ABAC saiu do `WHERE` e virou o predicado de
+    um `countIf`: a população agregada passa a ser o processo inteiro, mas **o que
+    sai daqui continua escopado** — os quatro números são `countIf(acc)`, idênticos
+    aos de antes. O único fato novo é o booleano `count() > countIf(acc)`, que diz
+    *"há mais, você não alcança"* sem dizer quantos nem quais.
+
+    ⚠️ **Sem restrição de ABAC o marcador é `False`, nunca `None`.** São proposições
+    diferentes: `False` = *"medi e não há membro fora do seu alcance"*; `None` = *"não
+    consegui medir"* (falha ou journey fora do agregado, o mesmo balde dos quatro
+    números). Colapsar os dois faria o front tratar o operador irrestrito como caso
+    desconhecido — e é justamente ele quem tem a visão completa.
     """
     for r in rows:
         r["journey_id"] = r.get("root_session_id") or None
@@ -1230,6 +1254,7 @@ def _attach_session_journey_chip(
         r["journey_access_count"]         = None
         r["journey_internal_step_count"]  = None
         r["journey_unclassified_count"]   = None
+        r["journey_has_scoped_out_members"] = None
     roots = sorted({r["root_session_id"] for r in rows if r.get("root_session_id")})
     if not roots:
         return
@@ -1245,9 +1270,14 @@ def _attach_session_journey_chip(
     conds: list[str] = ["s.tenant_id = {tenant_id:String}"]
     _apply_contact_scope(conds, internal_pools, alias="s.")
     _apply_origin_scope(conds, origin, alias="s.")
-    _acc = _session_scope_clause(db, accessible_pools)
-    if _acc:
-        conds.append(_acc)
+    # A ABAC **não** entra no `WHERE` (ver §4 do docstring): ela é o predicado dos
+    # `countIf` abaixo, para que o mesmo agregado devolva o número ESCOPADO (o que se
+    # publica) e a existência de membros fora do escopo (o que se publica como
+    # booleano). Contato/origem continuam no `WHERE` — não são autorização, são a
+    # definição da população que o chip conta.
+    # Sem restrição, o predicado é `1`: o `countIf` colapsa em `count()` e o marcador
+    # sai `0` — medido, não desconhecido.
+    _acc = _session_scope_clause(db, accessible_pools) or "1"
     # Alias `jid`, não `journey_id`: `sessions` TEM coluna com esse nome (o cache
     # dormente da raiz canônica) e alias que sombreia coluna real já derrubou query
     # inteira neste projeto (ILLEGAL_AGGREGATION, code 184).
@@ -1260,10 +1290,11 @@ def _attach_session_journey_chip(
     sql = f"""
         SELECT
             {jexpr} AS jid,
-            count() AS n,
-            countIf({_DIRECTION_EXPR} IN ({_dir_access}))     AS n_access,
-            countIf({_DIRECTION_EXPR} = 'internal')           AS n_internal,
-            countIf({_DIRECTION_EXPR} NOT IN ({_dir_all}))    AS n_unknown
+            countIf({_acc}) AS n,
+            countIf({_acc} AND {_DIRECTION_EXPR} IN ({_dir_access}))  AS n_access,
+            countIf({_acc} AND {_DIRECTION_EXPR} = 'internal')        AS n_internal,
+            countIf({_acc} AND {_DIRECTION_EXPR} NOT IN ({_dir_all})) AS n_unknown,
+            count() > countIf({_acc})                                 AS has_scoped_out
         FROM {db}.sessions AS s FINAL
         {_ch_join_sql(db)}
         WHERE {" AND ".join(conds)}
@@ -1280,7 +1311,7 @@ def _attach_session_journey_chip(
         )
         return
     by_id = {
-        row[0]: (int(row[1]), int(row[2]), int(row[3]), int(row[4]))
+        row[0]: (int(row[1]), int(row[2]), int(row[3]), int(row[4]), bool(row[5]))
         for row in res.result_rows
     }
     for r in rows:
@@ -1289,11 +1320,14 @@ def _attach_session_journey_chip(
             continue
         _hit = by_id.get(_jid)
         if _hit is None:
-            # Journey sem linha no agregado: continua `None` nos QUATRO campos. Zerar
-            # só a quebra desenharia `· 0 + 0` num chip cujo total é desconhecido.
+            # Journey sem linha no agregado: continua `None` nos CINCO campos. Zerar
+            # só a quebra desenharia `· 0 + 0` num chip cujo total é desconhecido, e
+            # um `False` no marcador afirmaria "não há nada além do que você vê" sem
+            # ter medido nada.
             continue
         (r["journey_session_count"], r["journey_access_count"],
-         r["journey_internal_step_count"], r["journey_unclassified_count"]) = _hit
+         r["journey_internal_step_count"], r["journey_unclassified_count"],
+         r["journey_has_scoped_out_members"]) = _hit
 
 
 # ─── /reports/journeys (Journey J2 — proveniência-only) ───────────────────────

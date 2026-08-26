@@ -202,6 +202,7 @@
       "unknownHint": "Direction undetermined: unknown spawn_reason ({{value}})"
     },
     "processChipHint":  "{{count}} sessions in this process — click to open",
+    "processChipScopedHint": "You can reach {{count}} session(s) of this process; there are more in pools outside your access — click to open",
     "processChipOpen":  "click to open the process",
     "processFootnote":  "The chip counts the whole process — the date range narrows the contacts listed, not the size of the process. Customer accesses and internal steps are shown apart, never summed.",
     "count_one":   "{{count}} contact",

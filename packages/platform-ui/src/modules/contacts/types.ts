@@ -94,6 +94,21 @@ export interface ContactRow {
   journey_access_count?: number | null
   journey_internal_step_count?: number | null
   journey_unclassified_count?: number | null
+  /** 2026-08-26 — **existência, nunca tamanho.** Os quatro números acima são contados
+   *  SOB a ABAC do usuário (deliberado: contar os membros que ele não alcança
+   *  revelaria o tamanho de um processo que toca pools fora do escopo dele). A
+   *  consequência não prevista era a tela AFIRMAR o oposto: processo do qual só uma
+   *  sessão é alcançável dava `1`, o chip sumia por `> 1`, e a linha passava a dizer
+   *  "este contato não pertence a processo nenhum".
+   *
+   *  Este booleano é o dado que faltava — `true` = *"há membros que você não
+   *  alcança"*, sem dizer quantos nem quais. Com ele o chip volta a aparecer.
+   *
+   *  ⚠️ **Três valores, três proposições.** `true` = há mais · `false` = **medi e não
+   *  há** (é o caso do usuário irrestrito) · `null`/ausente = **não medi** (falha da
+   *  agregação, ou backend antigo). Tratar `null` como `false` é a mesma família do
+   *  `1` inventado: afirma completude que ninguém verificou. */
+  journey_has_scoped_out_members?: boolean | null
   /** F3.1 — pools que TRABALHARAM no contato, em ordem de primeiro segmento. É o lado
    *  direito do par `entrou por → atendido por` (`pool_id` é o esquerdo). Lista vazia
    *  = nenhum segmento (abandono antes de qualquer agente entrar). */

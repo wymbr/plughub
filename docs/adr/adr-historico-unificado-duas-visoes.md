@@ -73,6 +73,19 @@ processo único não recebe chip — não há para onde pivotar, e esse é o cas
   `· 3`. É correto e vai parecer defeito: exige rótulo explícito.
 - Computado sobre a **página retornada** (`GROUP BY root_session_id` sobre ~200 linhas), no mesmo passe
   que já resolve `_journey_resolved_map`. Sobre a janela inteira seria caro.
+- 🆕 **"Processo inteiro" tem um limite que esta decisão não previu: a ABAC** (emenda de 2026-08-26,
+  implementada — ver `CHANGELOG.md`). A contagem é feita SOB `accessible_pools`, de propósito — contar
+  os membros que o operador não alcança revelaria o tamanho de um processo que toca pools fora do
+  escopo dele. A consequência não prevista era a linha acima (*"processo único não recebe chip"*)
+  passar a valer para o processo que é único **apenas aos olhos de quem olha**: com `1`, o chip sumia
+  e a tela **afirmava** *"este contato não pertence a processo nenhum"*. A regra da D3 foi escrita
+  para o processo REAL e aplicada ao processo RECORTADO.
+  **Emenda:** o chip publica também `journey_has_scoped_out_members` — **existência, nunca tamanho** —
+  e pivota com `PRC-xxxx · 1+`. Sob o marcador a quebra da D4 **não** é desenhada: ela também é
+  escopada, e uma classe inteira fora do alcance apareceria como `0`, afirmando *"não há etapa
+  interna"*. Medido no `tenant_demo`: 6 processos de 4/3/4/4/4/5 sessões chegavam como `1` a um
+  operador escopado. Gate: `infra/test/probe_process_chip_scoped_marker.sh` (exige usuário de escopo
+  estreito; com escopo largo sai INCONCLUSIVO, porque não exercita o caso).
 
 ### D4 — Duas classes de linha: acesso × etapa interna
 
