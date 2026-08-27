@@ -52,26 +52,43 @@ está hoje: um job só, misturando os dois.
 | `pricing-seed` | recursos contratados `ai_agent×300 + human_agent×10` | `tenant_demo` | PACOTE |
 | `auth-seed` | usuários `supervisor@` e `operator@` + `module_config` (o admin já vem do boot do auth-api) | `tenant_demo` | PACOTE |
 | `eval-seed` | formulário "SAC Padrão" + campanha "Demo SAC" | `tenant_demo` | PACOTE |
-| `dialog-seed` | 10 DialogForms de `infra/dialog/*.json` | `tenant_demo` | **MISTO** |
+| `dialog-seed` | 10 DialogForms de `infra/dialog/*.json` | `tenant_demo` | **PACOTE** *(era "MISTO" — corrigido, ver abaixo)* |
 
 `kafka-init` e `minio-init` são piso. `plughub-demo` na linha 235 **não é serviço**: é o `name:` do
 projeto — ou seja, o `COMPOSE_PROJECT_NAME` já está fixado ali, e trocá-lo por ambiente é uma linha.
 
-### `dialog-seed` é misto, e classificá-lo inteiro erra dos DOIS lados
+### ⚠️ `dialog-seed` NÃO é misto — a tabela anterior estava errada (corrigido 2026-08-27)
 
-| forma | classe |
+A versão anterior desta seção classificava metade dos forms como **piso**, derivando isso do
+comentário do compose (*"um banco NOVO sobe sem nenhum DialogForm e os consumidores degradam em
+silêncio: NPS não aparece, wrap-up abre vazio"*). **Medido: essa degradação só acontece porque o
+`tenant_demo` fia aqueles hooks.** Num ambiente sem o pacote de demo não há hook, logo não há falha.
+
+O que a medição diz, consumidor a consumidor:
+
+| forma | consumidor real |
 |---|---|
-| `dialog_wrapup_v1`, `dialog_wrapup_arc12_v1` | **piso** — painel de wrap-up no Console |
-| `dialog_nps_buttons`, `dialog_nps_v1` | **piso** — hook de fim de contato |
-| `dialog_otp_possession` | **piso** — primitivo de posse de canal |
-| `dialog_promocao_deploy` | **piso** — ops |
-| `dialog_formfill_demo`, `dialog_limite_*` | pacote (demo) |
-| `dialog_survey_multi_v1` | fronteiriço — decidir |
+| `dialog_wrapup_v1` | `tenant_demo.yaml:407` (config de hook) |
+| `dialog_nps_buttons` | `agente_nps_v1.yaml:64` |
+| `dialog_otp_possession` | `skill_limite_entrada_v1`, `agente_portabilidade_intake_v1` |
+| `dialog_promocao_deploy` | `skill_gate_promocao_v1` |
+| `dialog_limite_aprovacao` · `dialog_limite_solicitacao` | skills do fluxo de limite |
+| `dialog_formfill_demo` | `skill_formfill_demo_v1` |
+| `dialog_survey_multi_v1` | `PoolSkillSlot.config_json` de `survey_multi_ia` |
+| `dialog_wrapup_arc12_v1` | **só** `smoke_wrapup_arc12_capture.sh` — fixture de teste |
+| `dialog_nps_v1` | **NINGUÉM** — superseded por `dialog_nps_buttons`. Form morto. |
 
-Marcá-lo como pacote faz o ambiente sem-demo subir **exatamente com a falha que o comentário do
-compose descreve**: NPS não aparece ao cliente e o painel de wrap-up abre vazio, os dois **em
-silêncio**. Marcá-lo como piso enfia conteúdo de demo em todo ambiente. A divisão é **por arquivo**, e
-`DIALOG_FORMS_DIR` já é env — então é mover arquivo, não escrever código.
+**Nenhum id de form está cravado em código de produto** (o único `dialog_*` em platform-ui /
+analytics-api / mcp-server é o nome do campo `dialog_form_id` e chaves de erro). Todo consumidor é
+skill YAML, registry de tenant, ou config de slot.
+
+**Conclusão:** os 10 são **conteúdo de tenant**, e o piso do diálogo é o *serviço* `dialog-api`, não
+qualquer form. Não há divisão piso × pacote a fazer aqui — o que existe é um pacote só, hoje implícito
+(`TENANT_ID: tenant_demo` cravado no job). O passo com evidência é **parametrizar**, não separar.
+
+*Lição de método: eu derivei uma classificação de um COMENTÁRIO em vez de dos consumidores, e ela
+sobreviveu a um commit. Comentário descreve o que era verdade quando foi escrito; consumidor é
+medível agora.*
 
 ### O que JÁ está parametrizado (medido — o trabalho é menor do que parece)
 

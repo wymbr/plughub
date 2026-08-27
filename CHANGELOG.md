@@ -2,6 +2,50 @@
 
 ---
 
+## O contrato entre skill e deploy passou a ter mecanismo (2026-08-27)
+
+Fui dividir o `dialog-seed` em piso × pacote. **A medição refutou a premissa** e, no caminho, achou um
+deploy quebrado que ninguém via.
+
+### A classificação que eu tinha escrito estava errada
+
+Eu havia classificado metade dos DialogForms como **piso**, derivando isso do comentário do compose:
+*"um banco NOVO sobe sem nenhum DialogForm e os consumidores degradam em silêncio — NPS não aparece,
+wrap-up abre vazio"*. Verdade — **mas só porque o `tenant_demo` fia aqueles hooks**. Sem o pacote de
+demo não há hook, logo não há falha.
+
+Medido consumidor a consumidor: os 10 forms são consumidos por **skill YAML**, **registry de tenant**
+ou **config de slot** — e **nenhum id está cravado em código de produto**. Logo os 10 são conteúdo de
+tenant, e o piso do diálogo é o *serviço* `dialog-api`, não qualquer form. Não há divisão a fazer; o
+passo com evidência é parametrizar.
+
+*Eu derivei a classificação de um COMENTÁRIO em vez dos consumidores, e ela sobreviveu a um commit.*
+
+Dois achados de passagem: **`dialog_nps_v1` não tem consumidor** (superseded por `dialog_nps_buttons`)
+e **`dialog_wrapup_arc12_v1` só é usado por um smoke** — fixture, não conteúdo de produto.
+
+### `probe_slot_required_config.sh` — o achado que valeu o desvio
+
+`skill_survey_multi_v1` declara `config_params: [{key: form_id, required: true}]`, e o próprio
+comentário do skill avisa *"sem isso, `form_get` falha"*. Medido no **registry**, não no YAML (regra
+registrada hoje de manhã): o slot `current` de `survey_multi_ia` estava promovido com
+`config_json: {"max_concurrent_sessions": 5}` — **sem `form_id`**. O primeiro step do fluxo caía no
+`on_failure` e o survey multi-pergunta morria calado.
+
+`required: true` estava escrito, correto, e **não valia nada**: nada o impunha no promote. Declaração
+sem mecanismo, a família de sempre.
+
+O gate novo confere **todo** slot promovido contra os `config_params.required` do skill dele. Duas
+testemunhas, porque sem elas um verde seria vazio: ao menos um pool com slot promovido, e ao menos um
+skill declarando `required` — se nenhum declarar, o gate diz INCONCLUSIVO em vez de aprovar o nada.
+
+Medição: **36 pools · 30 com slot promovido · 1 chave obrigatória no tenant inteiro · 1 violação**.
+O deploy foi corrigido (`set-next` + `promote` com `form_id: dialog_survey_multi_v1`) e o gate ficou
+verde. Que exista **uma** chave obrigatória em 30 deploys também é informação: `config_params.required`
+é praticamente inexplorado, e a superfície que o gate protege hoje é fina — o valor está na forma.
+
+---
+
 ## O histórico do cliente ganhou portão — e o caminho até lá achou quatro defeitos (2026-08-27)
 
 `GET /sessions/customer/{id}` e `.../search` serviam histórico de contato chaveado por `customer_id`

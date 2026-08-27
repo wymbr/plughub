@@ -58,6 +58,11 @@ probe_release_presence.sh
 probe_force_complete_branches.sh
 
 # ── Config e registro ────────────────────────────────────────────────────────
+# Confere o CONTRATO entre skill e deploy: `config_params.required` declarado no
+# artefato vs `config_json` do slot promovido. Achou `survey_multi_ia` promovido sem
+# o `form_id` obrigatorio — o primeiro step caia no `on_failure` e o fluxo morria
+# calado. Declaracao sem mecanismo que a imponha.
+probe_slot_required_config.sh
 gate_pool_config_ttl_source.sh
 gate_webhook_registry_resolution.sh
 probe_config_route_collision.sh
