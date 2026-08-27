@@ -102,7 +102,7 @@ def require_admin(
     if not getattr(settings, "jwt_secret", ""):
         raise HTTPException(status_code=503, detail="jwt secret not configured")
     claims = _verify_hs256(auth[len("Bearer "):], settings.jwt_secret)
-    if not _check_config_field(claims, "plataforma", "read_write"):
+    if not _check_config_field(claims, "platform", "read_write"):
         raise HTTPException(status_code=403, detail="forbidden: requires config.plataforma (read_write)")
 
 

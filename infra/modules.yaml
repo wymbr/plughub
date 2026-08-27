@@ -206,7 +206,7 @@ modules:
     icon: "⚙️"
     nav_path: /config
     permission_schema:
-      plataforma:
+      platform:
         label: Configurações gerais (namespaces, valores)
         domain: [none, read_only, read_write]
         scopable: false
@@ -216,12 +216,12 @@ modules:
         domain: [none, read_only, read_write]
         scopable: false
         default: none
-      canais:
+      channels:
         label: Configuração de canais e credenciais
         domain: [none, read_only, read_write]
         scopable: false
         default: none
-      usuarios:
+      users:
         label: Gestão de usuários e permissões
         domain: [none, read_only, read_write]
         scopable: false

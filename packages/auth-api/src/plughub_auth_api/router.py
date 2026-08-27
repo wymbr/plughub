@@ -87,7 +87,7 @@ def _require_config_usuarios(write: bool):
     async def _dep(request: Request, settings: Settings = Depends(_settings)) -> dict[str, Any]:
         claims = await _bearer_claims(request, settings)
         need = "read_write" if write else "read_only"
-        if not _check_config_field(claims, "usuarios", need):
+        if not _check_config_field(claims, "users", need):
             raise HTTPException(status_code=403, detail=f"forbidden: requires config.usuarios ({need})")
         return claims
     return _dep

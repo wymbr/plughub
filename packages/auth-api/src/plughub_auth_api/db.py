@@ -132,6 +132,44 @@ SET module_config = jsonb_set(
 WHERE (module_config -> 'config') ? 'mascaramento'
 """
 
+
+# ── Language Cleanup — os TRES campos de `config` que ficaram para tras ────────
+# `recursos->resources` e `mascaramento->masking` foram renomeados dos DOIS lados
+# (catalogo + leitores). `plataforma`/`canais`/`usuarios` so mudaram na UI, entao os
+# itens de menu gateados em `config.platform|users|channels` pediam campos que o
+# catalogo NAO definia: nenhum grant podia satisfaze-los, e eles passavam apenas pelo
+# bypass de papel. Mesmo padrao idempotente das tres migracoes acima — o `WHERE` so
+# casa a linha que ainda carrega o nome velho.
+DDL_MIGRATE_ABAC_PLATAFORMA = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{config}',
+    ((module_config -> 'config') - 'plataforma')
+      || jsonb_build_object('platform', module_config -> 'config' -> 'plataforma')
+)
+WHERE (module_config -> 'config') ? 'plataforma'
+"""
+
+DDL_MIGRATE_ABAC_CANAIS = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{config}',
+    ((module_config -> 'config') - 'canais')
+      || jsonb_build_object('channels', module_config -> 'config' -> 'canais')
+)
+WHERE (module_config -> 'config') ? 'canais'
+"""
+
+DDL_MIGRATE_ABAC_USUARIOS = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{config}',
+    ((module_config -> 'config') - 'usuarios')
+      || jsonb_build_object('users', module_config -> 'config' -> 'usuarios')
+)
+WHERE (module_config -> 'config') ? 'usuarios'
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -180,6 +218,9 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
             await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
             await conn.execute(DDL_MIGRATE_ABAC_MASCARAMENTO)
+            await conn.execute(DDL_MIGRATE_ABAC_PLATAFORMA)
+            await conn.execute(DDL_MIGRATE_ABAC_CANAIS)
+            await conn.execute(DDL_MIGRATE_ABAC_USUARIOS)
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)

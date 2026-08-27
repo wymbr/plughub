@@ -1,5 +1,37 @@
 # TODO — PlugHub Itens Pendentes
 
+## 🔴 DECISÃO PENDENTE — o supervisor vê 18 itens de menu só pelo papel (medido 2026-08-27)
+
+`q_nav_gates_matrix.py` mede quem vê o quê e **por qual razão**. Depois do rename ABAC o admin caiu de
+8 para 1 item por bypass; **o supervisor continua em 18**, entre eles o menu de Configuração inteiro,
+Monitor, Fluxo e a Auditoria LGPD.
+
+**Nenhuma dessas telas funciona** — o backend recusa (agent-registry 403 · audit 403 · config-api
+gateado por `module_config` sem bypass de papel). Falha fechada, então é consistência, não escalação.
+
+**A decisão é sua, e tem duas metades:**
+
+1. **Configuração e Auditoria** — o supervisor deve alcançá-las? Se **não**, some o menu ao remover o
+   bypass e o alinhamento é gratuito. Se **sim**, precisa de grant explícito antes.
+2. **Monitor e Fluxo** (`contacts.operacao`, `skill_flows.operacao`) — aqui o supervisor **usa** as
+   telas. Hoje ele as vê por papel; o backend delas não foi medido item a item. Remover o bypass sem
+   conceder `contacts.operacao` tira Monitor do supervisor.
+
+**Depois de decidido**, a implementação é `strict: true` nas regras não-estritas (27 de 37 hoje) mais
+os grants correspondentes — e o bypass de papel sai de `passesAbacRule`, cumprindo a decisão de
+2026-08-26.
+
+⚠️ **Não remover o bypass antes de conceder**: a matriz mostra exatamente quem perde o quê, e o
+número > 0 é a instrução de que há grant a dar primeiro.
+
+### Resíduo separado — o menu oferece a Auditoria LGPD a quem o backend recusa
+
+`nav.audit` aparece para admin e supervisor por bypass; `GET /v1/audit/mcp-calls` devolve **403 para os
+três usuários do tenant**. Ninguém tem `module_config.audit.sessions` — o que está correto, porque esse
+módulo é do DPO. O defeito é o menu, não a permissão: ele deveria ser `strict: true` já, sem esperar a
+decisão acima.
+
+
 ## Gates — o que o runner ainda NÃO cobre (2026-08-27)
 
 `infra/test/run_gates.sh` cobre **21 gates AUTO**. Quatro ficam de fora por natureza, e a lista existe

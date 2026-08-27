@@ -59,7 +59,7 @@ def _mint_bootstrap_jwt() -> str:
         "sub":           "seed_bootstrap",
         "tenant_id":     TENANT_ID,
         "roles":         ["admin"],
-        "module_config": {"config": {"usuarios": {"access": "read_write", "scope": []}}},
+        "module_config": {"config": {"users": {"access": "read_write", "scope": []}}},
         "iat":           now,
         "exp":           now + 3600,
     }
@@ -216,10 +216,10 @@ DEMO_USERS = [
                 "gerenciar":  {"access": "read_write", "scope": []},
             },
             "config": {
-                "plataforma": {"access": "read_write", "scope": []},
+                "platform":   {"access": "read_write", "scope": []},
                 "resources":  {"access": "read_write", "scope": []},
-                "canais":     {"access": "read_write", "scope": []},
-                "usuarios":   {"access": "read_write", "scope": []},
+                "channels":   {"access": "read_write", "scope": []},
+                "users":      {"access": "read_write", "scope": []},
                 "masking":    {"access": "read_write", "scope": []},
             },
             "skill_flows": {

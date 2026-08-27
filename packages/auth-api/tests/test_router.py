@@ -147,7 +147,7 @@ def _access_token(
 
 # ─── Autorização das rotas de gestão (G-PROBE, 2026-06-26) ────────────────────
 # Gestão de usuários/permissões/templates/módulos NÃO usa mais `X-Admin-Token`:
-# autoriza pelo JWT do operador + ABAC `config.usuarios` (`router.py:62-66`,
+# autoriza pelo JWT do operador + ABAC `config.users` (`router.py:62-66`,
 # *"Strict: sem fallback de admin-token"*). Um teste que ainda mandasse o header
 # antigo receberia **401 por falta de Bearer** — que é o que os 23 vermelhos
 # relatavam (`assert 401 == 204`), e não um defeito de código.
@@ -158,13 +158,13 @@ def _access_token(
 # >= 400` passaria pelos dois motivos errados (rota inexistente, payload inválido).
 #
 #   sem Authorization            → 401 (_bearer_claims)
-#   Bearer sem config.usuarios   → 403 (_require_config_usuarios)
+#   Bearer sem config.users      → 403 (_require_config_usuarios)
 #   Bearer read_only em escrita  → 403 (rank insuficiente)
 
 
 def _usuarios_token(access: str = "read_write") -> str:
     """JWT com o grant ABAC que as rotas de gestão exigem."""
-    return _access_token(module_config={"config": {"usuarios": {"access": access, "scope": []}}})
+    return _access_token(module_config={"config": {"users": {"access": access, "scope": []}}})
 
 
 def _admin_headers(access: str = "read_write") -> dict[str, str]:
@@ -622,7 +622,7 @@ class TestGrantPermission:
             user_id=str(_SAMPLE_USER["id"]), tenant_id="tenant_test",
             email=_SAMPLE_USER["email"], name=_SAMPLE_USER["name"],
             roles=["admin"], accessible_pools=[], settings=expired,
-            module_config={"config": {"usuarios": {"access": "read_write", "scope": []}}},
+            module_config={"config": {"users": {"access": "read_write", "scope": []}}},
         )
         r = c.post("/auth/permissions",
                    json={"tenant_id": "t", "user_id": "u", "module": "analytics", "action": "view"},

@@ -2,6 +2,72 @@
 
 ---
 
+## O portão de papel do menu era inerte — e o motivo era um rename pela metade (2026-08-27)
+
+Fui atacar os dois resíduos do T4: os `roles:` que sobraram no menu, e o bypass de admin/supervisor
+dentro de `passesAbacRule`. Medi antes, e a medição achou a causa de ambos.
+
+### `q_nav_gates_matrix.py` — a matriz que faltava
+
+Novo script de medição: cruza as regras ABAC do menu (**derivadas** de `Sidebar.tsx` por regex, nunca
+copiadas — uma cópia divergiria no primeiro ajuste) com o `module_config` real de cada usuário, e diz
+**por qual razão** cada um vê cada item: `grant` · `BYPASS` (só pelo papel) · `legado` (conta sem
+`module_config`).
+
+*Defeito do instrumento, corrigido antes de confiar nele:* o regex `label: …(.*?)abac:` com `re.S`
+atravessava a fronteira da entrada e casava o `abac:` do item **seguinte** — `nav.billing`, que tem
+`roles:` e não `abac:`, aparecia associado ao `config.users` do `nav.access` logo abaixo. O relatório
+inventava uma regra. Guarda: entre o label e o `abac:` não pode haver outro `label:`.
+
+### O achado
+
+Primeira medição: **admin via 8 itens só pelo bypass; supervisor, 18.** Ao tentar conceder ao admin o
+que ele alcançava por papel, o `PATCH` não pegou — e o motivo estava na resposta: o `config` do admin
+tem os campos em **português** (`plataforma`, `canais`, `usuarios`), enquanto o `Sidebar.tsx` pede
+`platform`, `channels`, `users`.
+
+`infra/modules.yaml` — o catálogo canônico — declarava o módulo `config` **metade em inglês, metade em
+português**: `recursos → resources` e `mascaramento → masking` foram renomeados **dos dois lados** (há
+migração em `db.py` e o catálogo acompanhou); `plataforma`/`canais`/`usuarios` foram renomeados **só na
+UI**.
+
+Consequência exata: os itens gateados em `config.platform|users|channels` pediam campos que o catálogo
+**não define**. Nenhum grant podia satisfazê-los, para ninguém — eles passavam **apenas** pelo bypass
+de papel. O portão ABAC daqueles itens era **inerte por construção**, e enquanto fosse, a decisão do
+dono (*"o admin RESPEITA a ABAC como qualquer um"*) não tinha como valer.
+
+### Não era furo — verificado, não suposto
+
+Antes de concluir gravidade, medi se o bypass era load-bearing no backend:
+
+| superfície | resultado |
+|---|---|
+| `POST /v1/pools` (agent-registry) | **403** para supervisor e operator |
+| `GET /v1/audit/mcp-calls` | **403** para os três usuários |
+| config-api `PUT`/`DELETE` | gateado por `_check_config_field` sobre `module_config`, **sem bypass de papel**, e a guarda está ativa (`admin_token` setado no demo) |
+
+Ou seja: o supervisor vê o menu inteiro de Configuração e a Auditoria LGPD **por papel**, e nenhuma
+dessas telas funciona. É divergência UI × backend falhando **fechada** — defeito de consistência, não
+escalação de privilégio.
+
+### O conserto: terminar o rename
+
+Alvo = **inglês**, pela Language Rule do próprio projeto, que lista *"ABAC field names"* entre os
+identificadores técnicos. Cinco superfícies numa mudança só, porque separá-las quebraria um portão
+entre commits: catálogo (`infra/modules.yaml`) · três leitores de backend (`auth-api`, `pricing-api`,
+`config-api`) · seed (`seed_auth.py`) · três migrações idempotentes em `db.py`, no mesmo padrão das
+três que já existiam.
+
+**Resultado medido: admin caiu de 8 → 1 item por bypass.** O que sobra é `nav.audit`, e **não** foi
+concedido de propósito: o módulo `audit` é do DPO e o `CLAUDE.md` o declara ortogonal às roles — o
+defeito ali é o menu oferecer a tela, não a falta do grant.
+
+Baselines: auth-api **64 → 64** (2 chaves ABAC nos testes migradas; a asserção *"não sobrou nenhuma"*
+pegou a segunda ocorrência antes da escrita — sem ela, metade da suíte seguiria vermelha e eu teria
+lido isso como "o rename quebrou algo"). Gates **24/24**.
+
+---
+
 ## O contrato entre skill e deploy passou a ter mecanismo (2026-08-27)
 
 Fui dividir o `dialog-seed` em piso × pacote. **A medição refutou a premissa** e, no caminho, achou um
