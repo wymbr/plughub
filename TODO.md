@@ -1,5 +1,95 @@
 # TODO — PlugHub Itens Pendentes
 
+## Ambientes componíveis — PISO × PACOTES DE CONTEÚDO *(direção, decidida 2026-08-27)*
+
+**O modelo não é "demo × dev".** É: **partindo de vazio, um ambiente é uma composição de pacotes de
+conteúdo sobre um piso comum.** Demo é um pacote; CI, carga e o que aparecer são outros. Decisão do
+dono; abaixo a medição que a sustenta e o que ela exige.
+
+### Os dois eixos
+
+| eixo | o que é | leva `profiles:`? |
+|---|---|---|
+| **PISO (bootstrap)** | o que a plataforma precisa para funcionar, ponto: `config-seed` (defaults globais), `kafka-init`, `minio-init`, o admin do boot do auth-api, e as DialogForms **de plataforma** | **nunca** |
+| **PACOTE (conteúdo)** | material com escopo de tenant: registry de pools/skills, usuários, formulários, campanhas, recursos de pricing | sim — aditivos e múltiplos |
+
+Sem essa separação, cada ambiente novo re-litiga o que é o piso. É exatamente onde o `dialog-seed`
+está hoje: um job só, misturando os dois.
+
+### Classificação medida dos jobs de seed
+
+| serviço | o que escreve | escopo | veredicto |
+|---|---|---|---|
+| `config-seed` | `platform_config`: sentiment, routing, **session TTLs**, audit_policy/masking, ai_gateway, evaluation, dashboards… | **global, sem `TENANT_ID`** — o docstring diz *"tenant-specific overrides are never set by the seed"* | **PISO** |
+| `pricing-seed` | recursos contratados `ai_agent×300 + human_agent×10` | `tenant_demo` | PACOTE |
+| `auth-seed` | usuários `supervisor@` e `operator@` + `module_config` (o admin já vem do boot do auth-api) | `tenant_demo` | PACOTE |
+| `eval-seed` | formulário "SAC Padrão" + campanha "Demo SAC" | `tenant_demo` | PACOTE |
+| `dialog-seed` | 10 DialogForms de `infra/dialog/*.json` | `tenant_demo` | **MISTO** |
+
+`kafka-init` e `minio-init` são piso. `plughub-demo` na linha 235 **não é serviço**: é o `name:` do
+projeto — ou seja, o `COMPOSE_PROJECT_NAME` já está fixado ali, e trocá-lo por ambiente é uma linha.
+
+### `dialog-seed` é misto, e classificá-lo inteiro erra dos DOIS lados
+
+| forma | classe |
+|---|---|
+| `dialog_wrapup_v1`, `dialog_wrapup_arc12_v1` | **piso** — painel de wrap-up no Console |
+| `dialog_nps_buttons`, `dialog_nps_v1` | **piso** — hook de fim de contato |
+| `dialog_otp_possession` | **piso** — primitivo de posse de canal |
+| `dialog_promocao_deploy` | **piso** — ops |
+| `dialog_formfill_demo`, `dialog_limite_*` | pacote (demo) |
+| `dialog_survey_multi_v1` | fronteiriço — decidir |
+
+Marcá-lo como pacote faz o ambiente sem-demo subir **exatamente com a falha que o comentário do
+compose descreve**: NPS não aparece ao cliente e o painel de wrap-up abre vazio, os dois **em
+silêncio**. Marcá-lo como piso enfia conteúdo de demo em todo ambiente. A divisão é **por arquivo**, e
+`DIALOG_FORMS_DIR` já é env — então é mover arquivo, não escrever código.
+
+### O que JÁ está parametrizado (medido — o trabalho é menor do que parece)
+
+- `REGISTRY_CONFIG_DIR: /registry` e `SKILLS_DIR: /skills` — env + mount, com ramo próprio para "não
+  setado" (`registry_syncer.py:241`). O `RegistrySyncer` roda dentro do `orchestrator-bridge` e está
+  fora do alcance de profile, mas **não precisa dele**: a alavanca é o diretório.
+- `DIALOG_FORMS_DIR` idem.
+- `${VAR:-default}` já é idioma do compose (**7 ocorrências** — `REGISTRY_SYNC_RECONCILE`,
+  `ALLOW_LIVE_FLOW_FALLBACK`, `PLUGHUB_LLM_BOOT_PROBE`, `E2E_EXTRA_ARGS`, chaves de LLM). Não é
+  mecanismo novo.
+- **Idempotência (seed-if-absent) já é disciplina da casa** em `config-seed`, `dialog-seed`,
+  `RegistrySyncer` e `pricing-seed`. É justamente a propriedade que permite EMPILHAR pacotes — a parte
+  difícil está feita.
+
+⚠️ *Correção de medição:* numa primeira passagem eu reportei **zero** interpolações no compose. Falso —
+o `grep` teve o `\$` mastigado na passagem para o WSL e devolveu 0. Valor plausível, instrumento
+quebrado; a família de sempre.
+
+### Falta pouco
+
+1. Separar piso de conteúdo **dentro** de cada seed job (o `dialog-seed` é o caso claro).
+2. Parametrizar `TENANT_ID`, hoje cravado em cada job de seed.
+3. `profiles:` nos jobs de conteúdo.
+
+### 🔴 A regra a escrever ANTES do segundo pacote
+
+**Seed-if-absent torna pacotes não-composáveis quando se SOBREPÕEM — e em silêncio.** Se o pacote A
+semeia `pool_x` e o B quer um `pool_x` diferente, o B perde e ninguém fica sabendo.
+
+> **Pacotes disjuntos por construção, ou colisão BARULHENTA.**
+
+Custa nada agora e é cara depois. O precedente certo já existe: o `RegistrySyncer` **loga DRIFT** em
+vez de sobrescrever calado.
+
+### Duas consequências aceitas
+
+- **`down -v` vira a porta de entrada**, não evento raro: "montar qualquer ambiente a partir de vazio"
+  só é verdade a partir de volume limpo (o profile controla o que é ESCRITO, não o que ESTÁ lá). Isso é
+  bom — é o teste de instalação limpa que o `CLAUDE.md` cobra e que ninguém roda.
+- **Hoje `infra/registry/` tem UM arquivo (`tenant_demo.yaml`)**, então o ambiente sem pacote de demo é
+  uma plataforma **sem pool nenhum**. Isso é a instalação limpa, não um ambiente de desenvolvimento —
+  se houver necessidade de um "dev" próprio, ele é um PACOTE a criar, não a ausência do demo.
+- O `agent-assist-ui` **sai desta conversa**: sob este modelo ele não é questão de ambiente, é
+  superfície de produto duplicada. Eixo diferente, decisão independente (ver seção própria).
+
+
 ## 🔴 `/sessions/customer/*` — histórico do cliente SEM autenticação e SEM escopo (medido 2026-08-27)
 
 Achado depois de fechar os três furos de autorização; **nenhum deles cobria este**. `sessions.py` tem
