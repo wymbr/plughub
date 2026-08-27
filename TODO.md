@@ -1,5 +1,66 @@
 # TODO — PlugHub Itens Pendentes
 
+## 🔴 `/sessions/customer/*` — histórico do cliente SEM autenticação e SEM escopo (medido 2026-08-27)
+
+Achado depois de fechar os três furos de autorização; **nenhum deles cobria este**. `sessions.py` tem
+**zero** ocorrências de `pool_principal`, e não há dependência global no `include_router`.
+
+**Instrumento:** token **inválido** — é ele que discrimina, porque o portão recusa mesmo com
+`analytics_open_access` ligado, enquanto "sem header" devolve 200 pelos dois motivos possíveis e não
+distingue nada. Foi assim que a primeira medição (`sem token` → 200 nos três) saiu inconclusiva.
+
+| endpoint | com `Bearer lixo.lixo.lixo` | |
+|---|---|---|
+| `GET /sessions/customer/{id}` | **200** | sem portão |
+| `GET /sessions/customer/{id}/search` | **200** | sem portão |
+| `GET /reports/pools/queue` (controle) | 401 | com portão |
+
+O dado é histórico de contato **chaveado por `customer_id`** — lista e busca. Os trechos são
+masked-by-construction (vêm de `messages` no ClickHouse), mas a associação identidade↔contatos é o
+próprio dado pessoal, e **não há `audit_access_log`** em nenhum dos dois. O módulo `audit` existe
+exatamente para esta classe e **recusa alto** por padrão (`_check_audit_access`); aqui não é aplicado.
+
+⚠️ **Correção de uma afirmação minha do mesmo dia:** eu disse que endurecer o demo
+(`PLUGHUB_ANALYTICS_OPEN_ACCESS: "false"`) dependia de decidir sobre o `agent-assist-ui`. **Falso** — a
+única chamada que aquele app faz ao analytics é justamente este endpoint, que não consulta a flag. A
+ordem verdadeira é a inversa: **fechar `/sessions/customer/*` é que quebra o `agent-assist-ui`**, logo
+o app é pré-requisito DESTE item, não do endurecimento.
+
+Pendente: decidir o portão (`optional_pool_principal` escopando por pool das sessões, ou o gate de
+`audit` com trilha) e **contar os consumidores antes**, como no passo 2.
+
+
+## `agent-assist-ui` — recomendação: APOSENTAR o app, PRESERVAR o `webchat-test.html` (2026-08-27)
+
+Decisão do dono; abaixo a medição que a sustenta. São **duas coisas num pacote só**, e só uma é legado.
+
+**O app React (22 arquivos) — evidência para aposentar:**
+
+| eixo | medido |
+|---|---|
+| duplicação | as 4 abas (`Estado`/`Capacidades`/`Contexto`/`Historico`) existem **1:1** em `packages/platform-ui/src/modules/agent-assist/components/tabs/` |
+| acoplamento | **nenhum**: as ~20 referências fora do pacote são **comentário** (`platform-ui/Dockerfile:65`, `mcp-server/server.ts:1262`, `mock-agent-ws.ts:13`, `channel-gateway/session_registry.py:130`) ou **launcher** (`ecosystem.config.js`, `scripts/linux/setup.sh`, os composes) |
+| uso | zero user-agent de navegador nos logs do container; só `curl` |
+| arquitetura | viola a invariante explícita do `CLAUDE.md`: *"Never create a new `packages/my-ui/` standalone frontend app — add a module to platform-ui"* |
+| custo já pago | trabalho dobrado **duas vezes** (conserto do sentimento; remoção da barra de SLA morta na D14.1) |
+| segurança | **sem `login`/`Bearer`/`AuthContext`** em nenhum dos 22 arquivos |
+
+**O que NÃO pode ir junto:** `packages/agent-assist-ui/webchat-test.html` — o simulador de cliente do
+demo (citado 2× no `docker-compose.demo.yml`). São **533 linhas com zero `src=`/`href=`/`import`
+externo**: autocontido, move para qualquer serviço de estático.
+
+**Custo de aposentar:** mover o HTML · repontar `infra/test/probe_duration_definitions.sh:21-22`
+(usa o 5173 **só como proxy de analytics**: `API="$UI/analytics"`) · remover o serviço de
+`docker-compose.demo.yml` e `docker-compose.full.yml`, de `ecosystem.config.js` e de
+`scripts/linux/setup.sh` · atualizar as URLs de console nos comentários dos composes e em
+`scripts/linux/seed-demo.sh:164`.
+
+⚠️ **O que a medição NÃO respondeu, e só o dono responde:** se alguém de fato abre a tela. Ausência de
+navegador na janela de log é evidência, não prova. Também não identifiquei a origem do `curl` periódico
+que bate no 5173 a cada ~5 min — o único script que aponta para a porta é o probe acima, e ele não é
+periódico.
+
+
 ## 🔴 Quatro testes vermelhos que ninguém estava vendo (medido 2026-08-27)
 
 As suítes de `evaluation-api` e `channel-gateway` **não são rodadas de rotina** — só foram executadas
