@@ -1918,23 +1918,108 @@ class TestPoolPrincipalAuth:
             principal = await optional_pool_principal(credentials=None)
         assert principal.accessible_pools is None
 
-    async def test_no_secret_returns_unrestricted(self):
+    # ══════════════════════════════════════════════════════════════════════════
+    # O FAIL-OPEN DE TRANSPORTE (invertido em 2026-08-27)
+    # ══════════════════════════════════════════════════════════════════════════
+    #
+    # Os dois testes abaixo se chamavam `test_no_secret_returns_unrestricted` e
+    # `test_no_token_returns_unrestricted`, e FIXAVAM o furo: com o open_access
+    # DESLIGADO, omitir o token devolvia irrestrito. Medido em 2026-08-27 no demo:
+    # `curl` sem header devolvia 120 linhas de TODOS os pools sem 401, enquanto um
+    # token LIXO no mesmo endpoint devolvia 401 — o mecanismo de recusa existia, e o
+    # 200 do anonimo era escolha.
+    #
+    # O contrato agora: o bypass e decisao declarada do OPERADOR
+    # (`analytics_open_access`, default `False`), nunca consequencia de o CHAMADOR ter
+    # omitido o header. Cada caso tem os DOIS lados da flag — sem o par, "recusa" seria
+    # indistinguivel de "recusa sempre, inclusive onde nao devia".
+
+    async def test_sem_segredo_RECUSA_quando_open_access_desligado(self):
         from unittest.mock import patch
+        from fastapi import HTTPException
         from ..pool_auth import optional_pool_principal
         with patch("plughub_analytics_api.pool_auth.get_settings") as m:
             m.return_value.analytics_open_access = False
             m.return_value.auth_jwt_secret = ""
+            with pytest.raises(HTTPException) as exc:
+                await optional_pool_principal(credentials=None)
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "auth_unavailable"
+
+    async def test_sem_segredo_LIBERA_quando_open_access_ligado(self):
+        # O par do teste acima. Sem ele, o 401 seria compativel com "recusa sempre",
+        # e o demo (que roda com a flag ligada) quebraria sem nada ficar vermelho.
+        from unittest.mock import patch
+        from ..pool_auth import optional_pool_principal
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = True
+            m.return_value.auth_jwt_secret = ""
             principal = await optional_pool_principal(credentials=None)
         assert principal.accessible_pools is None
+        # O ator e NOMEADO — era `"open"`/`"anonymous"`, que nao dizia por que passou.
+        assert principal.sub == "open_access"
 
-    async def test_no_token_returns_unrestricted(self):
+    async def test_sem_token_RECUSA_quando_open_access_desligado(self):
+        # ESTE e o furo medido: producao, segredo configurado, chamador sem header.
         from unittest.mock import patch
+        from fastapi import HTTPException
         from ..pool_auth import optional_pool_principal
         with patch("plughub_analytics_api.pool_auth.get_settings") as m:
             m.return_value.analytics_open_access = False
             m.return_value.auth_jwt_secret = "mysecret"
+            with pytest.raises(HTTPException) as exc:
+                await optional_pool_principal(credentials=None)
+        assert exc.value.status_code == 401
+        assert exc.value.detail == "auth_required"
+
+    async def test_sem_token_LIBERA_quando_open_access_ligado(self):
+        from unittest.mock import patch
+        from ..pool_auth import optional_pool_principal
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = True
+            m.return_value.auth_jwt_secret = "mysecret"
             principal = await optional_pool_principal(credentials=None)
         assert principal.accessible_pools is None
+        assert principal.sub == "open_access"
+
+    # ── caminho SSE (`?token=`) — o pior caso era o mais permissivo ────────────
+
+    async def test_sse_token_EXPIRADO_recusa_quando_open_access_desligado(self):
+        # Antes: ausente, invalido OU expirado => None (irrestrito), justificado com
+        # "a bad token can't 401 a stream". O pior caso — vencido — era o mais
+        # permissivo, num stream AO VIVO de dados de contato.
+        import datetime as _dt
+        import jwt as _jwt
+        from unittest.mock import patch
+        from fastapi import HTTPException
+        from ..pool_auth import accessible_pools_from_token
+        vencido = _jwt.encode(
+            {"sub": "u", "tenant_id": "t", "accessible_pools": ["pool_a"],
+             "exp": _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)},
+            "s", algorithm="HS256",
+        )
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = "s"
+            with pytest.raises(HTTPException) as exc:
+                accessible_pools_from_token(vencido)
+        assert exc.value.status_code == 401
+
+    async def test_sse_token_VALIDO_e_restrito_continua_escopado(self):
+        # TESTEMUNHA DE PRESENCA do bloco SSE: sem este, os 401 acima seriam
+        # compativeis com "o caminho SSE parou de funcionar".
+        import jwt as _jwt
+        from unittest.mock import patch
+        from ..pool_auth import accessible_pools_from_token
+        tok = _jwt.encode(
+            {"sub": "u", "tenant_id": "t", "accessible_pools": ["pool_a"]},
+            "s", algorithm="HS256",
+        )
+        with patch("plughub_analytics_api.pool_auth.get_settings") as m:
+            m.return_value.analytics_open_access = False
+            m.return_value.auth_jwt_secret = "s"
+            pools = accessible_pools_from_token(tok)
+        assert set(pools) == {"pool_a", "pool_a-int"}
 
     async def test_valid_jwt_empty_pools_returns_unrestricted(self):
         """JWT with accessible_pools=[] means all pools (admin convention)."""
@@ -2028,6 +2113,88 @@ class TestPoolPrincipalAuth:
 
 
 # ── query_contact_insights_report ─────────────────────────────────────────────
+
+class TestUnrestrictedClaim:
+    """
+    Passo 2 do plano `accessible_pools` (2026-08-27) — `unrestricted` EXPLICITO.
+
+    O que estes testes ficariam VERMELHOS por: (a) o claim deixar de ser lido; (b) o
+    claim passar a vencer uma lista nao-vazia (alargamento invisivel); (c) o ramo
+    legado ser removido antes do passo 3 (quebraria todo token em circulacao); (d) os
+    dois tradutores — header e SSE — divergirem.
+    """
+
+    def test_claim_explicito_da_irrestrito(self):
+        from ..pool_auth import _resolve_scope
+        assert _resolve_scope({"sub": "u", "unrestricted": True, "accessible_pools": []},
+                              "header") is None
+
+    def test_lista_VENCE_o_claim(self):
+        """
+        O restritivo vence. Se o claim vencesse, um `unrestricted` setado por engano
+        ALARGARIA o acesso de um operador escopado — e alargamento nao aparece na tela
+        como erro, aparece como dado a mais.
+        """
+        from ..pool_auth import _resolve_scope
+        got = _resolve_scope(
+            {"sub": "u", "unrestricted": True, "accessible_pools": ["sac"]}, "header")
+        assert got == ["sac", "sac-int"]
+
+    def test_legado_ainda_vale_e_e_CONTADO(self, caplog):
+        """
+        Token sem o claim (emitido antes do deploy, ou por outro emissor) segue
+        irrestrito — inverter aqui seria fazer o passo 3 cedo. Mas nao em silencio.
+        """
+        import logging
+        from ..pool_auth import _resolve_scope, _LEGACY_MARK
+        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
+            got = _resolve_scope({"sub": "velho", "accessible_pools": []}, "header")
+        assert got is None
+        assert _LEGACY_MARK in caplog.text
+        assert "claim_presente=False" in caplog.text
+
+    def test_claim_presente_e_false_e_populacao_DIFERENTE(self, caplog):
+        """
+        `claim ausente` (token velho) e `claim false com lista vazia` (usuario sem
+        escopo declarado) caem no mesmo ramo hoje, mas so o segundo e decisao de
+        alguem. O passo 3 precisa da lista, nao de uma estimativa — logo o log
+        distingue os dois.
+        """
+        import logging
+        from ..pool_auth import _resolve_scope
+        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
+            _resolve_scope({"sub": "u", "unrestricted": False, "accessible_pools": []},
+                           "header")
+        assert "claim_presente=True" in caplog.text
+
+    def test_escopado_NAO_loga_legado(self, caplog):
+        """Testemunha negativa: contador que dispara sempre nao conta nada."""
+        import logging
+        from ..pool_auth import _resolve_scope, _LEGACY_MARK
+        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
+            _resolve_scope({"sub": "u", "accessible_pools": ["sac"]}, "header")
+        assert _LEGACY_MARK not in caplog.text
+
+    def test_irrestrito_explicito_NAO_loga_legado(self, caplog):
+        import logging
+        from ..pool_auth import _resolve_scope, _LEGACY_MARK
+        with caplog.at_level(logging.WARNING, logger="plughub.analytics.pool_auth"):
+            _resolve_scope({"sub": "u", "unrestricted": True, "accessible_pools": []},
+                           "header")
+        assert _LEGACY_MARK not in caplog.text
+
+    def test_header_e_SSE_sao_a_MESMA_funcao(self):
+        """
+        Os dois tradutores do analytics precisam concordar: o mesmo relatorio nao pode
+        mostrar pools diferentes conforme o token venha no header ou na query.
+        """
+        import inspect
+        from .. import pool_auth
+        src = inspect.getsource(pool_auth.accessible_pools_from_token)
+        assert "_resolve_scope(payload, \"SSE\")" in src
+        src2 = inspect.getsource(pool_auth.optional_pool_principal)
+        assert "_resolve_scope(payload, \"header\")" in src2
+
 
 class TestQueryContactInsightsReport:
     """Tests for the _fetch_contact_insights path via query_contact_insights_report."""

@@ -3,7 +3,7 @@ import { RouteObject, Navigate, useLocation } from 'react-router-dom'
 import Shell from '@/shell/Shell'
 import LoginPage from '@/auth/LoginPage'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
-import { RequireEvalAccess } from '@/auth/RequireEvalAccess'
+import { RequireEvalAccess, RequireAbac } from '@/auth/RequireEvalAccess'
 import HomePage from '@/modules/home/HomePage'
 import ConfigRecursosIndex from '@/modules/config-recursos'
 import ConfigPlataformaPage from '@/modules/config-plataforma/ConfigPlataformaPage'
@@ -120,11 +120,11 @@ export const routes: RouteObject[] = [
       { path: 'campaigns',         element: <Navigate to="/analise/sessions" replace /> },
 
       // ── Analytics (historical views) ──────────────────────────────
-      { path: 'analise/sessions',  element: <SessionsPage       /> },
-      { path: 'analise/agents',    element: <AgentsBenchPage    /> },
-      { path: 'analise/agents-legacy', element: <AnaliseAgentesPage /> },
-      { path: 'analise/pools',     element: <AnalisePoolsPage   /> },
-      { path: 'analise/events',    element: <EventsPage         /> },
+      { path: 'analise/sessions',  element: <RequireAbac module="contacts" field="visualizar"><SessionsPage /></RequireAbac> },
+      { path: 'analise/agents',    element: <RequireAbac module="contacts" field="visualizar"><AgentsBenchPage /></RequireAbac> },
+      { path: 'analise/agents-legacy', element: <RequireAbac module="contacts" field="visualizar"><AnaliseAgentesPage /></RequireAbac> },
+      { path: 'analise/pools',     element: <RequireAbac module="contacts" field="visualizar"><AnalisePoolsPage /></RequireAbac> },
+      { path: 'analise/events',    element: <RequireAbac module="contacts" field="visualizar"><EventsPage /></RequireAbac> },
       // F3.3 — `/analise/processos` foi ABSORVIDO por `/analise/sessions`. O processo
       // é nível 2 daquela rota (`?journey=…`), alcançado pelo chip da linha de contato;
       // a lista livre de processos deixou de existir por decisão (D2: processo é pivô,
@@ -132,15 +132,15 @@ export const routes: RouteObject[] = [
       // (`HistoricoTab` ×3, `AnaliseSurveysPage`), e perder o `?journey=` os levaria
       // a uma lista de contatos em vez do processo pedido.
       { path: 'analise/processos', element: <RedirectPreservingQuery to="/analise/sessions" /> },
-      { path: 'analise/quality',   element: <AnaliseQualidadePage /> },
+      { path: 'analise/quality',   element: <RequireAbac module="contacts" field="visualizar"><AnaliseQualidadePage /></RequireAbac> },
       // Customer History H5 — lente Analytics do Cliente 360 (busca + 360 + histórico).
-      { path: 'analise/customers', element: <AnaliseClientesPage /> },
-      { path: 'analise/customer-voice', element: <CustomerVoicePage /> },
+      { path: 'analise/customers', element: <RequireAbac module="contacts" field="visualizar"><AnaliseClientesPage /></RequireAbac> },
+      { path: 'analise/customer-voice', element: <RequireAbac module="contacts" field="visualizar"><CustomerVoicePage /></RequireAbac> },
       // Survey response navigator (S8) — per-response list from PG survey_response.
-      { path: 'analise/surveys', element: <AnaliseSurveysPage /> },
+      { path: 'analise/surveys', element: <RequireAbac module="contacts" field="visualizar"><AnaliseSurveysPage /></RequireAbac> },
       // I5 / ADR § D7b fatia 2 — histórico do trabalho author-bound (wrap-up).
       // Contraparte retrospectiva de Monitor › Pendências, que só mostra o vivo.
-      { path: 'analise/wrapup', element: <WrapupSummaryPage /> },
+      { path: 'analise/wrapup', element: <RequireAbac module="contacts" field="visualizar"><WrapupSummaryPage /></RequireAbac> },
       // Legacy redirects
       { path: 'analise/contatos',  element: <Navigate to="/analise/sessions" replace /> },
       { path: 'analise/agentes',   element: <Navigate to="/analise/agents"   replace /> },

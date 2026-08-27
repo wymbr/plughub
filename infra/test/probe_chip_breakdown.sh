@@ -32,6 +32,9 @@
 #
 # INCONCLUSIVO (exit 2) quando falta amostra — nunca verde por ausência.
 set -u
+# Credencial (2026-08-27): o `pool_auth` deixou de devolver irrestrito na ausencia
+# de header. O shim anexa o Bearer SO nas chamadas a analytics-api. Ver _auth.sh.
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 
 API=${API:-http://localhost:3500}
 TENANT=${TENANT:-tenant_demo}

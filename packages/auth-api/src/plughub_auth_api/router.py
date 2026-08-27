@@ -105,6 +105,7 @@ def _user_to_response(row: dict[str, Any]) -> UserResponse:
         name=row["name"],
         roles=list(row["roles"]),
         accessible_pools=list(row["accessible_pools"]),
+        unrestricted=bool(row.get("unrestricted", False)),
         max_concurrent_sessions=int(row.get("max_concurrent_sessions", 3)),
         active=row["active"],
         created_at=row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
@@ -133,6 +134,7 @@ async def _make_token_response(
         roles=list(user["roles"]),
         accessible_pools=list(user["accessible_pools"]),
         settings=settings,
+        unrestricted=bool(user.get("unrestricted", False)),
         module_config=module_config,
         supervised_groups=sup_groups,
         supervised_user_ids=sup_user_ids,
@@ -275,6 +277,7 @@ async def create_user(body: CreateUserRequest, request: Request) -> UserResponse
         name=body.name,
         roles=body.roles,
         accessible_pools=body.accessible_pools,
+        unrestricted=body.unrestricted,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )
     return _user_to_response(row)
@@ -324,6 +327,7 @@ async def update_user(
         password_hash=ph,
         roles=body.roles,
         accessible_pools=body.accessible_pools,
+        unrestricted=body.unrestricted,
         active=body.active,
         max_concurrent_sessions=body.max_concurrent_sessions,
     )

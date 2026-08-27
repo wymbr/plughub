@@ -2842,13 +2842,24 @@ export async function startServer(config: ServerConfig): Promise<void> {
 
       // Segurança Fase D — escopa ao DOMÍNIO de pools do chamador (Bearer). Filtrar a
       // lista de pools aqui já escopa as instâncias (só as de pools acessíveis). Sem
-      // token / inválido / accessible_pools=[] (convenção admin) → irrestrito. Erros nunca
-      // 401 (read-only, consistente com os demais snapshots operacionais).
+      // token / inválido → irrestrito. Erros nunca 401 (read-only, consistente com os
+      // demais snapshots operacionais).
+      //
+      // Passo 2 do plano `accessible_pools` (2026-08-27): lista não-vazia decide (o
+      // RESTRITIVO vence); senão o claim `unrestricted`; senão o LEGADO `[] = todos`,
+      // que é contado e desaparece no passo 3.
       let accessible: string[] | null = null
       try {
         const payload = verifyJwtPayload(req.headers["authorization"] as string | undefined)
         const raw = payload["accessible_pools"]
-        if (Array.isArray(raw) && raw.length > 0) accessible = raw.map(String)
+        if (Array.isArray(raw) && raw.length > 0) {
+          accessible = raw.map(String)
+        } else if (payload["unrestricted"] !== true) {
+          console.warn(
+            `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio e sem claim ` +
+            `unrestricted. claim_presente=${"unrestricted" in payload} sub=${payload["sub"] ?? ""}`,
+          )
+        }
       } catch { /* sem token / inválido → irrestrito */ }
       const scopedPoolIds = accessible
         ? poolIds.filter(pid => accessible!.includes(pid))

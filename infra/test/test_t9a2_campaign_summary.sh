@@ -8,6 +8,9 @@
 #   humano sc 8 → open (janela de contestação)
 # ──────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+# Credencial (2026-08-27): o `pool_auth` deixou de devolver irrestrito na ausencia
+# de header. O shim anexa o Bearer SO nas chamadas a analytics-api. Ver _auth.sh.
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 EVAL="${EVAL:-http://localhost:3400}"
 TENANT="${TENANT:-tenant_demo}"
 EVAL_POOL_ID="${EVAL_POOL_ID:-retencao_humano}"

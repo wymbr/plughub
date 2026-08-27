@@ -818,7 +818,8 @@ export interface PlatformUser {
   email:                   string
   name:                    string
   roles:                   string[]
-  accessible_pools:        string[]   // [] = all pools
+  accessible_pools:        string[]   // [] = all pools (LEGADO — ver `unrestricted`)
+  unrestricted?:           boolean    // declaracao explicita: sem recorte de pool
   module_config?:          ModuleConfig
   active:                  boolean
   max_concurrent_sessions?: number
@@ -833,6 +834,7 @@ export interface CreateUserInput {
   password:                string
   roles:                   string[]
   accessible_pools?:       string[]
+  unrestricted?:           boolean
   max_concurrent_sessions?: number
 }
 
@@ -841,6 +843,7 @@ export interface UpdateUserInput {
   password?:                string
   roles?:                   string[]
   accessible_pools?:        string[]
+  unrestricted?:            boolean
   active?:                  boolean
   max_concurrent_sessions?: number
 }

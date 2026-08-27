@@ -33,6 +33,23 @@
 #
 # Uso: infra/test/gate_queue_report_per_wait.sh [tenant] [analytics_url]
 set -uo pipefail
+# Credencial (2026-08-27, passo 2 do plano `accessible_pools`).
+#
+# Este gate compara um agregado da API contra um ledger lido DIRETO (Redis/ClickHouse),
+# logo so fecha sob um principal que enxergue o TENANT INTEIRO. Medido: o tenant tem 36
+# pools e o `admin` alcanca 22 — com token de admin o gate caia de 80 para 71 esperas
+# (falta `formfill_demo_ia`) e saia INCONCLUSIVO. Ate o passo 2 ele dependia do caminho
+# SEM HEADER, e era por isso que endurecer o demo estava bloqueado aqui.
+#
+# Criar um usuario com `accessible_pools: []` teria resolvido e seria retrabalho por
+# construcao: o passo 3 inverte `[]` para "nenhum pool". O principal usado abaixo declara
+# `unrestricted: true` COM lista vazia — e o unico arranjo que sobrevive ao passo 3, ja
+# que o ramo restritivo vence a lista nao-vazia.
+PLUGHUB_TEST_EMAIL="${PLUGHUB_TEST_EMAIL:-probe@plughub.local}"
+PLUGHUB_TEST_PASS="${PLUGHUB_TEST_PASS:-changeme_probe}"
+export PLUGHUB_TEST_EMAIL PLUGHUB_TEST_PASS
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
+# Ver `TODO.md` § "endurecer o DEMO" e `_auth.sh`.
 
 TENANT="${1:-tenant_demo}"
 API="${2:-http://localhost:3500}"

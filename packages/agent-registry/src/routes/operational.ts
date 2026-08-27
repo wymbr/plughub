@@ -42,8 +42,20 @@ function _accessiblePools(req: Request): string[] | null {
   try {
     const claims = verifyHs256(auth.slice("Bearer ".length), secret)
     const raw = claims["accessible_pools"]
-    if (!Array.isArray(raw) || raw.length === 0) return null   // [] = todos (convenção)
-    return raw.map((p) => String(p))
+    // Passo 2 do plano `accessible_pools` (2026-08-27). Ordem idêntica à do
+    // `_resolve_scope` da analytics-api — dois serviços que respondem diferente a
+    // "qual é o meu domínio?" divergem no primeiro ajuste:
+    //   1. lista não-vazia → escopado. O RESTRITIVO vence, sempre (um `unrestricted`
+    //      setado por engano não pode ALARGAR o domínio de um operador escopado);
+    //   2. claim `unrestricted` = true → irrestrito EXPLÍCITO;
+    //   3. senão → irrestrito LEGADO, contado. Some no passo 3.
+    if (Array.isArray(raw) && raw.length > 0) return raw.map((p) => String(p))
+    if (claims["unrestricted"] === true) return null
+    console.warn(
+      `[operational] LEGADO_POOLS_VAZIO — accessible_pools vazio e sem claim ` +
+      `unrestricted. claim_presente=${"unrestricted" in claims} sub=${claims["sub"] ?? ""}`,
+    )
+    return null
   } catch {
     return null   // token inválido/expirado → degrada aberto (read-only, não bloqueia)
   }

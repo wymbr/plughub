@@ -12,6 +12,9 @@
 #   1 segmento seg_mid [12:00:30 , 12:02:30]  → janela cobre m1,m2 (2 msgs)
 # ──────────────────────────────────────────────────────────────────────────────
 set -uo pipefail
+# Credencial (2026-08-27): o `pool_auth` deixou de devolver irrestrito na ausencia
+# de header. O shim anexa o Bearer SO nas chamadas a analytics-api. Ver _auth.sh.
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 ANALYTICS="${ANALYTICS:-http://localhost:3500}"
 CH="${CH:-http://localhost:8123}"
 CH_USER="${CH_USER:-plughub}"

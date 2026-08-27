@@ -246,6 +246,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
   const [selectedPools,setSelectedPools]= useState<Set<string>>(
     new Set(user?.accessible_pools ?? [])
   )
+  const [unrestricted, setUnrestricted] = useState(user?.unrestricted ?? false)
   const [moduleConfig,            setModuleConfig]            = useState<ModuleConfig>(user?.module_config ?? {})
   const [maxConcurrentSessions,   setMaxConcurrentSessions]   = useState(user?.max_concurrent_sessions ?? 3)
   const [active,  setActive]  = useState(user?.active ?? true)
@@ -335,7 +336,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
     try {
       const accessiblePools = Array.from(selectedPools)
       if (isEdit) {
-        const body: UpdateUserInput = { name: name || undefined, roles, accessible_pools: accessiblePools, active, max_concurrent_sessions: maxConcurrentSessions }
+        const body: UpdateUserInput = { name: name || undefined, roles, accessible_pools: accessiblePools, unrestricted, active, max_concurrent_sessions: maxConcurrentSessions }
         if (password) body.password = password
         await apiFetch(`/auth/users/${user!.id}`, adminToken, { method: 'PATCH', body: JSON.stringify(body) })
         // Save ABAC module config separately (PUT replaces the whole config)
@@ -344,7 +345,7 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
         })
         await applyGroupChanges(user!.id)
       } else {
-        const body: CreateUserInput = { tenant_id: tenantId, email, name, password, roles, accessible_pools: accessiblePools, max_concurrent_sessions: maxConcurrentSessions }
+        const body: CreateUserInput = { tenant_id: tenantId, email, name, password, roles, accessible_pools: accessiblePools, unrestricted, max_concurrent_sessions: maxConcurrentSessions }
         const created = await apiFetch<{ id: string }>('/auth/users', adminToken, { method: 'POST', body: JSON.stringify(body) })
         // Set ABAC module config on the newly created user if anything was configured
         if (Object.keys(moduleConfig).length > 0) {
@@ -427,8 +428,23 @@ function UserModal({ tenantId, adminToken, user, availablePools, modules, templa
             <p className="text-xs text-muted-light mt-1">{t('users.maxConcurrentSessionsDescription')}</p>
           </div>
 
+          {/* Escopo irrestrito — declaracao EXPLICITA (passo 2, 2026-08-27).
+              Marcar aqui e diferente de "nao escolher nenhum pool": o segundo depende
+              da convencao implicita `[] = todos`, que sera invertida. */}
+          <div className="rounded-lg border border-border-strong p-3">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" checked={unrestricted}
+                onChange={e => { setUnrestricted(e.target.checked); if (e.target.checked) setSelectedPools(new Set()) }}
+                className="mt-0.5" />
+              <span>
+                <span className="text-sm font-medium text-dark">{t('users.unrestricted')}</span>
+                <span className="block text-xs text-muted-light mt-0.5">{t('users.unrestrictedDescription')}</span>
+              </span>
+            </label>
+          </div>
+
           {/* Pool multi-select */}
-          <div>
+          <div className={unrestricted ? 'opacity-40 pointer-events-none' : undefined}>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-sm font-medium text-dark">
                 {t('users.pools')}
@@ -903,7 +919,9 @@ function UsersPane({ tenantId, adminToken, availablePools, modules, templates, u
                       <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{u.roles.map(r => <RoleBadge key={r} role={r} />)}</div></td>
                       <td className="px-4 py-3">
                         {u.accessible_pools.length === 0
-                          ? <span className="text-xs text-muted-light italic">{t('users.allPools')}</span>
+                          ? (u.unrestricted
+                              ? <span className="text-xs text-muted-light italic">{t('users.allPools')}</span>
+                              : <span className="text-xs text-warning italic" title={t('users.legacyAllPoolsHint')}>{t('users.legacyAllPools')}</span>)
                           : <div className="flex flex-wrap gap-1">
                               {u.accessible_pools.slice(0, 3).map(p => (
                                 <span key={p} className="text-xs bg-surface-alt text-muted px-1.5 py-0.5 rounded font-mono">{p}</span>

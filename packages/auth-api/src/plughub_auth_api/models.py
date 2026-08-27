@@ -37,7 +37,8 @@ class CreateUserRequest(BaseModel):
     password: str = Field(min_length=8)
     name: str = ""
     roles: list[Role] = ["operator"]
-    accessible_pools: list[str] = []   # [] = todos os pools
+    accessible_pools: list[str] = []   # [] = todos os pools (LEGADO — ver `unrestricted`)
+    unrestricted: bool = False         # True = sem recorte de pool (ve o tenant inteiro)
     max_concurrent_sessions: int = Field(default=3, ge=1, le=50)
 
 
@@ -46,6 +47,7 @@ class UpdateUserRequest(BaseModel):
     password: str | None = Field(default=None, min_length=8)
     roles: list[Role] | None = None
     accessible_pools: list[str] | None = None
+    unrestricted: bool | None = None
     active: bool | None = None
     max_concurrent_sessions: int | None = Field(default=None, ge=1, le=50)
 
@@ -78,6 +80,7 @@ class UserResponse(BaseModel):
     name: str
     roles: list[str]
     accessible_pools: list[str]
+    unrestricted: bool = False
     max_concurrent_sessions: int = 3
     active: bool
     created_at: str

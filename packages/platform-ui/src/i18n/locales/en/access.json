@@ -89,7 +89,11 @@
     "group": "Group",
     "colMember": "Member",
     "colSupervisor": "Owner",
-    "groupsHint": "Member or owner of the group. Owner data scope is applied on the user's next login."
+    "groupsHint": "Member or owner of the group. Owner data scope is applied on the user's next login.",
+    "unrestricted": "No pool restriction",
+    "unrestrictedDescription": "This user sees every pool in the tenant. Declare it here — leaving the list empty relies on a legacy convention that is being reversed.",
+    "legacyAllPools": "All (legacy)",
+    "legacyAllPoolsHint": "Empty list, no explicit declaration: this user sees every pool only because of the implicit convention. Tick “No pool restriction” to keep that access."
   },
   "roles": {
     "operator": "Operator",

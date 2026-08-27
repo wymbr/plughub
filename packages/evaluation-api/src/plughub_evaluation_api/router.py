@@ -403,6 +403,34 @@ def _can_view_transcript(jwt_payload: dict[str, Any] | None, pool_id: str | None
     return _has_any_evaluation_access(jwt_payload)
 
 
+# ── Tradução da convenção do auth-api → domínio interno (passo 2, 2026-08-27) ──
+#
+# `accessible_pools == []` significava "todos os pools" — convenção IMPLÍCITA, lida
+# por sete tradutores em serviços diferentes. O passo 3 do plano inverte esse
+# significado para "nenhum pool"; sem uma forma EXPLÍCITA de dizer "este usuário não
+# tem recorte", a inversão apagaria o acesso de quem depende da convenção.
+#
+# Ordem idêntica à do `_resolve_scope` da analytics-api — dois serviços que respondem
+# diferente a "qual é o meu domínio?" divergem no primeiro ajuste:
+#   1. lista não-vazia → escopado (o RESTRITIVO vence, sempre);
+#   2. claim `unrestricted` = true → irrestrito EXPLÍCITO;
+#   3. senão → irrestrito LEGADO, **contado** (some no passo 3).
+def _scope_from_claims(jwt_payload: dict, origem: str) -> list[str] | None:
+    """`None` = sem restrição de pool; lista = domínio."""
+    raw = (jwt_payload.get("accessible_pools") if jwt_payload else None) or []
+    if raw:
+        return list(raw)
+    if jwt_payload and jwt_payload.get("unrestricted") is True:
+        return None
+    logger.warning(
+        "eval scope(%s): irrestrito por LEGADO_POOLS_VAZIO — accessible_pools vazio e "
+        "sem claim `unrestricted`. claim_presente=%s sub=%s",
+        origem, bool(jwt_payload) and "unrestricted" in jwt_payload,
+        (jwt_payload or {}).get("sub", ""),
+    )
+    return None
+
+
 def _compute_result_scope(
     jwt_payload: dict[str, Any] | None,
 ) -> tuple[list[str] | None, list[str] | None, str | None]:
@@ -429,7 +457,7 @@ def _compute_result_scope(
     result não carrega `agent_type_id` (exigiria join/enriquecimento); a posse humana é o escopo novo."""
     if not jwt_payload:
         return None, None, None
-    accessible = (jwt_payload.get("accessible_pools") or []) or None
+    accessible = _scope_from_claims(jwt_payload, "results")
     roles = jwt_payload.get("roles") or []
     if "admin" in roles:
         return None, accessible, None
@@ -1396,7 +1424,7 @@ async def list_survey_responses(
     REINTERSECCIONADO com o domínio no backend — a UI nunca é a fronteira. Filtro fora do
     domínio → vazio (respeita o domínio); sem filtro → todo o domínio."""
     jwt_payload = _decode_jwt_optional(request)
-    domain = (jwt_payload.get("accessible_pools") if jwt_payload else None) or None
+    domain = _scope_from_claims(jwt_payload, "transcript") if jwt_payload else None
     filt = [p for p in (pool_ids or ([pool_id] if pool_id else [])) if p]
     if domain is not None:
         effective = [p for p in filt if p in domain] if filt else domain

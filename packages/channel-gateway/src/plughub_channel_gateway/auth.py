@@ -65,9 +65,32 @@ def accessible_pools(payload: dict) -> list[str]:
 
 
 def pool_in_scope(payload: dict, pool_id: str) -> bool:
-    """True se `pool_id` está em accessible_pools, ou se a lista é vazia (= todos)."""
+    """
+    True se `pool_id` está no domínio do chamador.
+
+    Ordem dos ramos (passo 2 do plano `accessible_pools`, 2026-08-27) — a MESMA do
+    `_resolve_scope` da analytics-api, de propósito: dois serviços que respondem
+    diferente à pergunta "este pool está no meu domínio?" é como se paga um vazamento.
+
+      1. lista não-vazia → decide a lista. O RESTRITIVO vence, sempre: um
+         `unrestricted` setado por engano não pode ALARGAR o domínio de um operador
+         escopado, porque alargamento não aparece na tela como erro.
+      2. claim `unrestricted` = true → irrestrito EXPLÍCITO.
+      3. senão → irrestrito LEGADO (`[] = todos`), **contado**. Este ramo tem de
+         sobreviver ao passo 2 inteiro: token vive 1h, então tokens sem o claim
+         circulam depois do deploy. Ele desaparece no passo 3.
+    """
     ap = accessible_pools(payload)
-    return (not ap) or (pool_id in ap)
+    if ap:
+        return pool_id in ap
+    if payload.get("unrestricted") is True:
+        return True
+    logger.warning(
+        "pool_in_scope: irrestrito por LEGADO_POOLS_VAZIO — accessible_pools vazio e "
+        "sem claim `unrestricted`. claim_presente=%s sub=%s pool=%s",
+        "unrestricted" in payload, payload.get("sub", ""), pool_id,
+    )
+    return True
 
 
 def bearer_from_header(authorization: str | None) -> str | None:

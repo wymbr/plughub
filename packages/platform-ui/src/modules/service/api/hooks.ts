@@ -27,6 +27,18 @@ function _tok(): string {
   return t ? `&token=${encodeURIComponent(t)}` : ''
 }
 
+// Segurança 2026-08-27 — `POST /supervisor/{join,message,leave}` passou a EXIGIR token
+// (antes a rota não tinha `Depends` nenhum: entrava-se numa conferência ao vivo e
+// escrevia-se no stream dela sem credencial). Ao contrário do `_tok()` acima, aqui não
+// há EventSource no caminho, então o token vai no header, que é onde ele pertence.
+// Sem token o backend responde 401 — de propósito: é escrita, não relatório.
+function _authHeaders(): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' }
+  const t = getAccessToken()
+  if (t) h['Authorization'] = `Bearer ${t}`
+  return h
+}
+
 // ─── usePoolSnapshots ─────────────────────────────────────────────────────────
 
 export function usePoolSnapshots(tenantId: string): {
@@ -445,7 +457,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
     setState(s => ({ ...s, status: 'joining', error: null }))
     try {
       const res = await fetch(`${BASE}/supervisor/join`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, operator_id: operatorId }),
       })
       if (!res.ok) { const e = await safeJson<{detail?:string}>(res).catch(() => ({})); throw new Error((e as {detail?:string}).detail ?? `HTTP ${res.status}`) }
@@ -460,7 +472,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
     if (!sessionId || !tenantId || !state.participantId) return
     try {
       const res = await fetch(`${BASE}/supervisor/message`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, participant_id: state.participantId, text, visibility }),
       })
       if (!res.ok) { const e = await safeJson<{detail?:string}>(res).catch(() => ({})); throw new Error((e as {detail?:string}).detail ?? `HTTP ${res.status}`) }
@@ -477,7 +489,7 @@ export function useSupervisor(tenantId: string, sessionId: string | null): {
     setState(s => ({ ...s, status: 'leaving', error: null }))
     try {
       await fetch(`${BASE}/supervisor/leave`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: _authHeaders(),
         body: JSON.stringify({ tenant_id: tenantId, session_id: sessionId, participant_id: state.participantId }),
       })
     } catch { /* leave is best-effort */ }

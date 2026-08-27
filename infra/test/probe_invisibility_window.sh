@@ -48,6 +48,9 @@
 # Saída: 0 = mediu e concluiu · 1 = mediu e o número pede ação · 2 = INCONCLUSIVO (não é zero).
 
 set -uo pipefail
+# Credencial (2026-08-27): o `pool_auth` deixou de devolver irrestrito na ausencia
+# de header. O shim anexa o Bearer SO nas chamadas a analytics-api. Ver _auth.sh.
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 
 DC="docker compose -f docker-compose.demo.yml"
 TENANT="${1:-tenant_demo}"

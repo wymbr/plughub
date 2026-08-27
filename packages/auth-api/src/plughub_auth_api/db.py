@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS auth.users (
     password_hash    TEXT        NOT NULL,
     roles            TEXT[]      NOT NULL DEFAULT '{}',
     accessible_pools TEXT[]      NOT NULL DEFAULT '{}',
+    unrestricted     BOOL        NOT NULL DEFAULT FALSE,
     active           BOOL        NOT NULL DEFAULT TRUE,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -76,6 +77,22 @@ ALTER TABLE auth.users
 DDL_MIGRATE_USERS_MAX_CONCURRENT = """
 ALTER TABLE auth.users
     ADD COLUMN IF NOT EXISTS max_concurrent_sessions INT NOT NULL DEFAULT 3
+"""
+
+# ── Passo 2 do plano `accessible_pools` (2026-08-27) ───────────────────────────
+# `accessible_pools = []` significa HOJE "todos os pools" — convencao implicita, lida
+# por SETE tradutores em servicos diferentes. O passo 3 inverte esse significado para
+# "nenhum pool", e sem um jeito EXPLICITO de dizer "este usuario nao tem recorte" a
+# inversao apagaria o acesso de quem depende da convencao, em silencio.
+#
+# `unrestricted` e essa declaracao. Default FALSE de proposito: NAO ha backfill.
+# Backfillar converteria em concessao declarada aquilo que hoje pode ser acidente (a
+# coluna nasce `'{}'` por default), e na direcao irreversivel. Em vez disso, cada
+# tradutor CONTA quando resolve irrestrito pelo caminho legado — e o passo 3 decide
+# com a lista na mao, nao com esperanca.
+DDL_MIGRATE_USERS_UNRESTRICTED = """
+ALTER TABLE auth.users
+    ADD COLUMN IF NOT EXISTS unrestricted BOOL NOT NULL DEFAULT FALSE
 """
 
 # ── Language Cleanup Phase 2 — rename Portuguese ABAC field keys in module_config
@@ -158,6 +175,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MODULE_REGISTRY)
             await conn.execute(DDL_MIGRATE_USERS_MODULE_CONFIG)
             await conn.execute(DDL_MIGRATE_USERS_MAX_CONCURRENT)
+            await conn.execute(DDL_MIGRATE_USERS_UNRESTRICTED)
             # Language Cleanup Phase 2 — rename Portuguese ABAC field names
             await conn.execute(DDL_MIGRATE_ABAC_RELATORIO)
             await conn.execute(DDL_MIGRATE_ABAC_RECURSOS)
@@ -183,16 +201,19 @@ async def create_user(
     roles: list[str],
     accessible_pools: list[str],
     max_concurrent_sessions: int = 3,
+    unrestricted: bool = False,
 ) -> dict[str, Any]:
     row = await pool.fetchrow(
         """
         INSERT INTO auth.users
-            (tenant_id, email, password_hash, name, roles, accessible_pools, max_concurrent_sessions)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, tenant_id, email, name, roles, accessible_pools,
+            (tenant_id, email, password_hash, name, roles, accessible_pools,
+             max_concurrent_sessions, unrestricted)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, tenant_id, email, name, roles, accessible_pools, unrestricted,
                   max_concurrent_sessions, active, created_at, updated_at
         """,
-        tenant_id, email, password_hash, name, roles, accessible_pools, max_concurrent_sessions,
+        tenant_id, email, password_hash, name, roles, accessible_pools,
+        max_concurrent_sessions, unrestricted,
     )
     return dict(row)
 
@@ -239,7 +260,7 @@ async def list_users(
 ) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         """
-        SELECT id, tenant_id, email, name, roles, accessible_pools,
+        SELECT id, tenant_id, email, name, roles, accessible_pools, unrestricted,
                module_config, max_concurrent_sessions, active, created_at, updated_at
         FROM auth.users
         WHERE tenant_id = $1
@@ -261,6 +282,7 @@ async def update_user(
     accessible_pools: list[str] | None = None,
     active: bool | None = None,
     max_concurrent_sessions: int | None = None,
+    unrestricted: bool | None = None,
 ) -> dict[str, Any] | None:
     sets = []
     params: list[Any] = []
@@ -278,6 +300,8 @@ async def update_user(
         sets.append(f"active = ${i}"); params.append(active); i += 1
     if max_concurrent_sessions is not None:
         sets.append(f"max_concurrent_sessions = ${i}"); params.append(max_concurrent_sessions); i += 1
+    if unrestricted is not None:
+        sets.append(f"unrestricted = ${i}"); params.append(unrestricted); i += 1
 
     if not sets:
         return await get_user_by_id(pool, user_id)
@@ -289,7 +313,7 @@ async def update_user(
         f"""
         UPDATE auth.users SET {", ".join(sets)}
         WHERE id = ${i}
-        RETURNING id, tenant_id, email, name, roles, accessible_pools,
+        RETURNING id, tenant_id, email, name, roles, accessible_pools, unrestricted,
                   module_config, max_concurrent_sessions, active, created_at, updated_at
         """,
         *params,
@@ -819,6 +843,7 @@ async def seed_admin_if_absent(
         name=name,
         roles=["admin", "developer"],
         accessible_pools=[],
+        unrestricted=True,
     )
     logger.info("seed admin user created: %s @ %s", email, tenant_id)
     return True

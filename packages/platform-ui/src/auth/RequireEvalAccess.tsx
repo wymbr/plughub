@@ -15,7 +15,7 @@
 import React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuth } from './useAuth'
-import { makePermissions } from '@/lib/permissions'
+import { makePermissions, passesAbacRule } from '@/lib/permissions'
 
 const MODULE = 'evaluation'
 
@@ -51,3 +51,52 @@ export const RequireEvalAccess: React.FC<RequireEvalAccessProps> = ({ field, any
 }
 
 export default RequireEvalAccess
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RequireAbac — guard de rota GENÉRICO (2026-08-27)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// O problema que ele fecha: as rotas de `analise/*` (e irmãs) eram registradas NUAS
+// em `app/routes.tsx` — o papel escondia o MENU e digitar a URL entrava. Dois erros
+// em direções opostas: navegação restritiva demais, rota permissiva demais.
+//
+// ⚠️ Isto NÃO é a fronteira de autorização — essa é o escopo de pool no backend.
+// É defesa em profundidade + coerência de UX: a rota passa a responder o MESMO que o
+// menu, porque as duas chamam `passesAbacRule`. Enquanto os ~8 endpoints de conteúdo
+// da (d) não tiverem portão próprio, quem digitar a URL de um DRILL ainda alcança o
+// dado; o que muda é que a PÁGINA deixa de se abrir para quem o menu já negava.
+//
+// Escrito neste arquivo, e não num novo, de propósito: arquivo novo exige
+// `build --no-cache` na imagem.
+
+interface RequireAbacProps {
+  module: string
+  field?: string
+  anyOf?: string[]
+  /** grant-first: exige o grant mesmo com config vazio e mesmo para admin. */
+  strict?: boolean
+  children: React.ReactNode
+}
+
+export const RequireAbac: React.FC<RequireAbacProps> = ({
+  module, field, anyOf, strict, children,
+}) => {
+  const { session } = useAuth()
+  const { t } = useTranslation('evaluation')
+
+  const allowed = passesAbacRule(
+    { module, field, anyOf, strict },
+    session?.moduleConfig,
+    session?.role,
+  )
+
+  if (!allowed) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-light gap-2 p-8 text-center">
+        <p className="text-sm">{t('guard.noAccess')}</p>
+      </div>
+    )
+  }
+  return <>{children}</>
+}

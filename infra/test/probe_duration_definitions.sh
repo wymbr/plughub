@@ -13,6 +13,9 @@
 # Uso:  bash infra/test/probe_duration_definitions.sh
 # Veredicto de TRÊS estados: 0 = OK · 1 = REPROVOU · 3 = INCONCLUSIVO
 set -uo pipefail
+# Credencial (2026-08-27): o `pool_auth` deixou de devolver irrestrito na ausencia
+# de header. O shim anexa o Bearer SO nas chamadas a analytics-api. Ver _auth.sh.
+source "$(dirname "$0")/_auth.sh"; plughub_auth_curl_shim
 
 TENANT="${TENANT:-tenant_demo}"
 UI="${UI:-http://localhost:5173}"

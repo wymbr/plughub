@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '@/auth/useAuth'
+import { passesAbacRule } from '@/lib/permissions'
 import { useTranslation } from 'react-i18next'
 import {
   Home, Monitor, Radio, GitBranch, ClipboardCheck, ClipboardList, BarChart2, Settings, Search,
@@ -26,7 +27,7 @@ interface NavItem {
 }
 
 const Sidebar: React.FC = () => {
-  const { session, perms } = useAuth()
+  const { session } = useAuth()
   const { t } = useTranslation('shell')
   const location = useLocation()
   const [expandedGroups, setExpandedGroups] = useState<string[]>([])
@@ -118,7 +119,16 @@ const Sidebar: React.FC = () => {
       label: t('nav.analise'),
       href: '#',
       icon: BarChart2,
-      roles: ['supervisor', 'admin', 'business'],
+      // ⚠️ `roles: ['supervisor','admin','business']` REMOVIDO em 2026-08-27.
+      // Era um portão de PAPEL a montante da ABAC, hardcoded e não editável pela tela
+      // de Acesso — violava "Every config field is UI-editable" e esvaziava o
+      // `module_config` justamente onde ele deveria decidir. O `operator` tem
+      // `contacts.visualizar: read_only` no seed (medido nos 3 usuários) e mesmo assim
+      // não alcançava o menu, porque o papel falhava ANTES de a ABAC ser consultada.
+      // Agora quem decide é o grant de cada filho (`contacts.visualizar`).
+      // Efeito colateral desejado: passa a existir usuário que combina *alcança o
+      // Analytics* com *escopo de pool estreito* — a cobaia que faltava para validar
+      // escopo pela TELA, e que até aqui só existia por remendo à mão.
       children: [
         { label: t('nav.analise.sessions'),  href: '/analise/sessions',  icon: FileText,      abac: { module: 'contacts',   field: 'visualizar' } },
         // F3.3 — «Processos» saiu do menu: processo é PIVÔ, não navegação livre (D2).
@@ -184,19 +194,11 @@ const Sidebar: React.FC = () => {
     return location.pathname === href || location.pathname.startsWith(href + '/')
   }
 
+  // A decisão vive em `lib/permissions.ts` (`passesAbacRule`) porque o GUARD DE ROTA
+  // precisa da mesma resposta. Duas implementações da mesma regra é como a divergência
+  // de masking nasceu — cada porta com teste próprio, nenhum comparando as portas.
   function passesAbac(item: NavItem): boolean {
-    if (!item.abac) return true
-    const strict = item.abac.strict === true
-    // Degradação graciosa (config vazio/legado → libera) e bypass de admin/supervisor
-    // valem APENAS para itens NÃO-strict. Itens strict são grant-first: exigem o grant
-    // mesmo com config vazio e mesmo para admin (igual à API que enforça ABAC).
-    if (!strict) {
-      if (!session?.moduleConfig || Object.keys(session.moduleConfig).length === 0) return true
-      if (['admin', 'supervisor'].includes(session?.role ?? '')) return true
-    }
-    const { module, field, anyOf } = item.abac
-    if (anyOf && anyOf.length > 0) return anyOf.some(f => perms.can(module, f))
-    return field ? perms.can(module, field) : true
+    return passesAbacRule(item.abac, session?.moduleConfig, session?.role)
   }
 
   const childVisible = (child: NavItem) =>

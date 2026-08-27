@@ -123,3 +123,49 @@ export function makePermissions(moduleConfig: ModuleConfig | undefined | null): 
 export function usePermissionsOf(moduleConfig: ModuleConfig | undefined | null): Permissions {
   return makePermissions(moduleConfig)
 }
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Regra ABAC de navegação — UMA casa, dois consumidores
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Até 2026-08-27 esta regra existia só dentro do `passesAbac` do `Sidebar.tsx`, e as
+// rotas de `analise/*` não tinham guard NENHUM (`app/routes.tsx` as registrava nuas):
+// o papel escondia o MENU, e digitar a URL entrava. Eram dois erros em direções
+// opostas — navegação restritiva demais, rota permissiva demais.
+//
+// Ao dar guard à rota, a tentação é reimplementar a decisão lá. Seriam duas portas
+// medindo a mesma regra, que é como a divergência de masking nasceu (ver CHANGELOG
+// § V2: três implementações, cada uma com teste próprio, e nenhum comparando as
+// portas entre si). Por isso o predicado mora aqui e os dois o chamam.
+//
+// ⚠️ O ramo NÃO-STRICT carrega um bypass de admin/supervisor que contradiz a decisão
+// do dono de 2026-08-26 ("o admin respeita a ABAC como qualquer um"). Ele é
+// PRESERVADO aqui de propósito: mudá-lo altera todo item não-strict de uma vez, e é
+// decisão própria — o que este movimento faz é apenas garantir que MENU e ROTA
+// respondam a mesma coisa. Fazer as duas mudanças juntas tornaria qualquer regressão
+// ambígua entre "o guard está errado" e "a semântica mudou".
+
+export interface AbacNavRule {
+  module: string
+  field?: string
+  anyOf?: string[]
+  /** grant-first: exige o grant mesmo com config vazio e mesmo para admin. */
+  strict?: boolean
+}
+
+export function passesAbacRule(
+  rule: AbacNavRule | undefined,
+  moduleConfig: ModuleConfig | undefined | null,
+  role: string | undefined,
+): boolean {
+  if (!rule) return true
+  const strict = rule.strict === true
+  if (!strict) {
+    if (!moduleConfig || Object.keys(moduleConfig).length === 0) return true
+    if (['admin', 'supervisor'].includes(role ?? '')) return true
+  }
+  const perms = makePermissions(moduleConfig)
+  if (rule.anyOf && rule.anyOf.length > 0) return rule.anyOf.some(f => perms.can(rule.module, f))
+  return rule.field ? perms.can(rule.module, rule.field) : true
+}

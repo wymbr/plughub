@@ -2,6 +2,415 @@
 
 ---
 
+## Passo 2 do plano `accessible_pools` — o irrestrito virou DECLARAÇÃO (2026-08-27)
+
+`accessible_pools == []` significava "todos os pools". Convenção **implícita**, e o passo 3 do plano
+inverte esse significado para "nenhum pool" — sem uma forma explícita de dizer *"este usuário não tem
+recorte"*, a inversão apagaria o acesso de quem depende da convenção, em silêncio e um serviço de cada
+vez. Agora existe o claim `unrestricted: true`.
+
+### A medição veio antes, e reduziu a tarefa
+
+**35 arquivos mencionam `accessible_pools`; 7 TRADUZEM a convenção; 1 CUNHA o token.** A diferença
+entre menção e derivação é o que separou uma tarefa de sete arquivos de uma de trinta e cinco.
+
+| Tradutor | Idioma antigo |
+|---|---|
+| analytics-api (header) | `None if not raw_pools` (`pool_auth.py:194`) |
+| analytics-api (SSE) | idem, em cópia |
+| channel-gateway | `(not ap) or (pool_id in ap)` (`auth.py:70`) |
+| evaluation-api ×2 | `(… or []) or None` (`router.py:432`, `:1399`) |
+| agent-registry | `raw.length === 0 → null` (`operational.ts:45`) |
+| mcp-server-plughub | `raw.length > 0` (`server.ts:2851`) |
+
+O **routing-engine não traduz** — recebe `only_pools` já resolvido, e só menciona em docstring.
+
+**A cunhagem é um site só** (`_make_token_response`), e login e refresh passam os dois por ele, lendo o
+usuário por `SELECT *`. Logo a coluna nova chega sozinha aos dois caminhos — o modo de falha clássico
+de claim novo (nasce no login, some na renovação, e o sintoma aparece uma hora depois) **não podia
+acontecer aqui**, e o gate prova isso em vez de supor.
+
+### A ordem dos ramos é a decisão, não o claim
+
+```
+1. accessible_pools não-vazio → escopado.   O RESTRITIVO vence, sempre.
+2. claim unrestricted = true  → irrestrito EXPLÍCITO.
+3. senão                      → irrestrito LEGADO, e CONTADO.
+```
+
+Eu tinha escrito o claim vencendo a lista. Está errado: um `unrestricted` setado por engano
+**alargaria** o domínio de um operador escopado, e alargamento **não aparece na tela como erro** —
+aparece como dado a mais. Com a lista vencendo, o mesmo engano é inerte. A ambiguidade "os dois
+setados" fica assim inofensiva na LEITURA; recusá-la também na escrita exigiria validar contra a linha
+do banco no update parcial, e **validação pela metade é pior que nenhuma** — segue como follow-up.
+
+O ramo 3 tem de sobreviver ao passo 2 inteiro (token vive 1h; há tokens sem o claim em circulação
+depois do deploy). Ele **loga** `LEGADO_POOLS_VAZIO` distinguindo `claim_presente=False` (token velho)
+de `claim_presente=True` (usuário sem escopo declarado — **decisão de alguém**). São populações
+diferentes, e é essa distinção que dá ao passo 3 uma LISTA em vez de uma estimativa. É a mesma forma
+do "V1 antes da V4" do arco ALLOWLIST: **contar antes de inverter**.
+
+### Sem backfill, de propósito
+
+A coluna nasce `FALSE`. Backfillar todo `accessible_pools = []` para `unrestricted = true` preservaria
+o comportamento de hoje — e converteria em **concessão declarada** o que pode ser acidente (a coluna
+tem default `'{}'`), na direção irreversível. O ramo 3 conta; o dono decide depois, com a lista.
+
+### O achado que mudou o alvo
+
+**O admin do demo não depende do legado: ele tem 22 pools EXPLÍCITOS** (`unrestricted=false`, e
+**zero** usuários do tenant tinham a declaração). Com o restritivo vencendo, conceder-lhe o claim seria
+**inerte** — irrestrito de verdade exige `unrestricted=true` **e** lista vazia. Isso é melhor do que o
+plano previa: separa **quem opera** de **quem verifica**, e não mexe nos 22 pools que os 16 scripts
+convertidos ontem passaram a medir. O principal novo é `probe@plughub.local`
+(`infra/test/mk_unrestricted_principal.sh`, idempotente).
+
+### Os dois gates bloqueados fecharam
+
+`gate_queue_report_per_wait.sh` e `gate_sla_segment_target.sh` comparam agregado da **API** contra
+**ledger** lido direto, e por isso dependiam do caminho SEM HEADER. Convertidos ao principal declarado,
+**os dois seguem verdes** — e com eles **o endurecimento do demo
+(`PLUGHUB_ANALYTICS_OPEN_ACCESS: "false"`) deixou de estar bloqueado**.
+
+### A tela deixou de esconder a diferença
+
+A lista de usuários dizia *"Todos os pools"* para quem tem lista vazia — rótulo que **passa a mentir no
+passo 3** e que já hoje funde dois estados distintos. Agora são três: declarado · **"Todos (legado)"**
+em cor de aviso, com o motivo no `title` · lista. Mais a caixa "Sem restrição de pool" no formulário
+(zera e desabilita o seletor), fechando a invariante *"todo campo de config tem superfície na tela"*.
+Chaves nos dois locales.
+
+### Gate
+
+`infra/test/probe_unrestricted_claim.sh` — **visto VERMELHO antes de verde** (S1/S2/S3 falharam contra
+os containers antigos, com a testemunha S4 já verde). Cinco seções; INCONCLUSIVO é ramo próprio e conta
+como falha do instrumento. A S4 tem **ternário**, não binário: `irrestrito == admin` é INCONCLUSIVO
+("não há dado fora do escopo do admin nesta janela"), nunca OK — *exposição e dano são grandezas
+separadas*, a lição da D14.1. Medição de referência: **irrestrito 11 · admin 10 · supervisor 2**.
+
+Baselines: **analytics-api 630 → 637** (7 testes novos de `_resolve_scope`), **auth-api 64 → 64**,
+**channel-gateway 676 passando**, **evaluation-api 211 passando**.
+
+### Quatro vermelhos PRÉ-EXISTENTES, provados como tais
+
+As suítes de `evaluation-api` e `channel-gateway` não são rodadas de rotina, e nesta passagem apareceram
+4 falhas. Nenhuma é desta mudança — **medido**, não deduzido: o `router.py`/`auth.py` de `HEAD` foi
+copiado por cima dentro do container e as falhas saíram **idênticas**.
+
+| suíte | teste | veredicto |
+|---|---|---|
+| evaluation-api | `TestConfigAbacGate::test_create_form_no_token_401` | pré-existente |
+| evaluation-api | `TestConfigAbacGate::test_create_form_without_grant_403` | pré-existente |
+| evaluation-api | `TestConfigAbacGate::test_create_form_readonly_grant_403` | pré-existente |
+| channel-gateway | `test_webhook_adapter::test_handle_resume_publishes_kafka_event` | pré-existente |
+
+Os três da evaluation-api falham com `ResponseValidationError` e são justamente **testes de portão
+ABAC** — a família que menos pode estar vermelha sem alguém saber. Registrados no `TODO.md`.
+
+*(Nota de escopo medida de passagem: `pool_in_scope` do channel-gateway tem **um único** call site,
+`main.py:1566`, o resume de aprovação. A mudança ali é pequena por construção.)*
+
+### Defeitos meus, registrados
+
+- **Heredoc e `$var` não sobrevivem a `wsl … bash -c '…'`**: crases nos comentários viraram substituição
+  de comando e `$f`/`$s`/`$?` chegaram vazios. Duas medições saíram erradas por isso. Toda edição passou
+  a ir por **arquivo de script com asserção** (alvo tem de casar exatamente 1×; delta de linhas tem de
+  bater com o previsto) — foi a asserção que impediu a escrita nas duas vezes.
+- **Um `cd` no topo do gate quebrou `$HERE`**, o `source` falhou e o `set -u` matou o subshell do login.
+  O INCONCLUSIVO estava certo — sobre o **instrumento**, não sobre o alvo.
+- **`auth-api` não tem os testes na imagem** (só `src/`), além de não ter pytest. Mais fundo que o
+  débito registrado ontem: não é "falta uma dependência", é que a suíte só roda por `docker cp`.
+
+---
+
+## `_auth.sh` — os scripts de teste passaram a autenticar, e a medição achou o bloqueio real (2026-08-27)
+
+Pré-requisito para endurecer o demo (virar `PLUGHUB_ANALYTICS_OPEN_ACCESS` para `false`). Dos 29
+scripts de `infra/test/` que falam com a analytics-api, **18 chamavam sem token** — e um gate que passa
+a receber 401 **não fica vermelho**: fica INCONCLUSIVO, ou conta zero linhas e lê isso como *"não há
+dado"*.
+
+### O shim, e por que não foi edição chamada a chamada
+
+`infra/test/_auth.sh` (novo, para `source`): `plughub_token` · `plughub_auth_header` · `acurl` ·
+`plughub_scope_line` · **`plughub_auth_curl_shim`**. Grafia copiada dos 11 que já autenticavam
+(`AUTH=${AUTH:-http://localhost:3202/auth}` + `jq -r '.access_token'`), para não virar o 12º dialeto.
+
+**A detecção estática de call site é comprovadamente incompleta neste repositório**: medido, **6 dos 18**
+scripts não casam nenhum padrão de `curl … 3500|/reports` e **mesmo assim** chamam a analytics-api — o
+`curl` é multi-linha, ou a URL vem montada numa variável. Editar chamada a chamada erraria justamente
+esses, **em silêncio**, e o sintoma apareceria só no dia da virada. O shim sombreia `curl` dentro do
+script e decide sobre a **URL real, em runtime** — não pode errar por forma do fonte. Ele anexa o
+Bearer **só** para analytics (`:3500`, `/reports/`, `/v1/audit`, `/analytics/`): mandar um token do
+auth-api ao config-api daria um 401 vindo do serviço errado, que se depura pelo lado errado.
+
+### Medido antes, no meio e depois — e as três medições disseram coisas diferentes
+
+**Testemunha de que o header chega** (o `200` sozinho não prova nada, porque com `open_access` ligado o
+anônimo também dá 200): `/reports/sessions` → sem header **97**, admin **97**, supervisor (2 pools)
+**28**. O principal estreito vê menos ⇒ o header chega.
+
+🔴 **E eu generalizei errado a partir dessa medição.** De `97 = 97` concluí *"os 22 pools do admin
+cobrem a janela"*. **Falso para outro endpoint:** em `/reports/pools/queue` o admin cai de **80 para
+71 esperas** — falta `formfill_demo_ia`. Medido então o que eu deveria ter medido primeiro: o tenant
+tem **36 pools**, o admin alcança **22**, e **14 ficam fora**.
+
+> **Nenhum usuário deste ambiente enxerga o tenant inteiro, exceto pelo caminho sem header.**
+
+*(De lambuja, o instrumento errou antes do diagnóstico: a primeira comparação cruzou `pools.id` (UUID)
+com `accessible_pools` (slug) e teria reportado *"o admin cobre 0 de 36"*.)*
+
+### O que isso muda no plano
+
+Dois gates comparam um agregado da **API** contra um **ledger** lido direto (Redis/ClickHouse), logo só
+fecham sob um principal que veja o tenant inteiro: `gate_queue_report_per_wait.sh` e
+`gate_sla_segment_target.sh` (este semeia `pool_a/b/c` sintéticos, que ninguém tem concedidos). **Não
+foram convertidos**, e o motivo está escrito dentro de cada um, não num backlog.
+
+Criar um usuário com `accessible_pools: []` resolveria hoje e seria **retrabalho por construção** — o
+**passo 3** do plano inverte `[]` para significar *"nenhum pool"*.
+
+> ⚠️ **Achado que reordena o plano: endurecer o demo está bloqueado no PASSO 2** (irrestrito EXPLÍCITO,
+> claim próprio `unrestricted: true`), **não apenas na conversão dos scripts**. O passo 2 deixou de ser
+> follow-up e virou pré-requisito.
+
+### Resultado
+
+**16 convertidos · 2 bloqueados com motivo declarado · 11 já autenticavam.** Comparação antes/depois
+dos 18: **todos os `rc` idênticos**, inclusive os **dois que já falhavam antes** (`probe_f3_contact_list_contract.sh`
+rc=2, `test_t9a2_campaign_summary.sh` rc=1) — preexistentes que, sem a baseline, eu teria atribuído à
+conversão. Um terceiro script mudou de saída (`probe_invisibility_window.sh`, `no_sample` → `measured`)
+e **não é meu**: uma chave de ledger apareceu entre as duas execuções. Confundidor nomeado antes de
+medir — o demo gera dados, então comparação por número exato tem ruído; o sinal confiável é o `rc` e a
+linha de veredicto.
+
+`q_analytics_authless_inventory.sh` **§6 reescrita** para publicar **três** classes (já autenticavam /
+convertidos / **bloqueados**, com o motivo). Sem isso a próxima sessão leria *"18 pendentes"* e refaria
+a análise inteira. O contador ganhou exclusão do próprio `_auth.sh` e do próprio inventário, que
+casavam a busca e inflavam "convertidos" de 16 para 18.
+
+---
+
+## O portão de PAPEL saiu do Analytics, e a rota ganhou guard — os dois erros opostos (2026-08-27)
+
+Furo 3 dos três. O `Sidebar.tsx` declarava `roles: ['supervisor','admin','business']` no grupo
+`analise` **a montante** da ABAC, e `app/routes.tsx` registrava as rotas `analise/*` **nuas**. Dois
+erros em direções opostas: **navegação restritiva demais** (o papel falhava antes de a ABAC ser
+consultada, e não é editável pela tela de Acesso — viola *"Every config field is UI-editable"*) e
+**rota permissiva demais** (o papel escondia o MENU; digitar a URL entrava).
+
+**Medido antes de mexer**, porque o `Sidebar.tsx:190` documenta *"degradação graciosa (config
+vazio/legado → libera)"* e remover o portão de papel **sobre** uma ABAC que libera no vazio faria todo
+mundo ver tudo. Os três usuários do demo **têm** `module_config`, e os três têm
+**`contacts.visualizar: read_only`** — inclusive o `operator`. Ou seja: a ABAC já concedia, e só o
+papel bloqueava. Remover não tira nada de ninguém.
+
+**Efeito colateral desejado:** passa a existir usuário que combina *alcança o Analytics* com *escopo de
+pool estreito* (`operator`, 3 pools). Era a cobaia que faltava para validar escopo pela TELA, e que até
+aqui só existia porque o `supervisor` foi remendado à mão pela tela de Acesso.
+
+### A regra passou a ter UMA casa
+
+Dar guard à rota convida a reimplementar a decisão lá. Seriam duas portas medindo a mesma regra — que
+é exatamente como a divergência de masking nasceu (ver § V2: três implementações, cada uma com teste
+próprio, e **nenhum comparando as portas entre si**). Por isso o predicado foi extraído para
+**`lib/permissions.ts::passesAbacRule`**, e tanto o `passesAbac` do Sidebar quanto o guard novo o
+chamam. O guard **`RequireAbac`** foi escrito **dentro de `RequireEvalAccess.tsx`** (arquivo existente)
+de propósito — arquivo novo exigiria `build --no-cache`. `RequireEvalAccess` fica intacto.
+
+### O que este movimento NÃO faz — e é importante não confundir
+
+⚠️ **Não é a fronteira de autorização.** Essa é o escopo de pool no backend. Um guard de rota no front
+é UX + defesa em profundidade: quem digitar a URL de um **drill** ainda alcança o dado, porque os ~8
+endpoints de conteúdo da (d) seguem sem portão. O que muda é que a PÁGINA deixa de se abrir para quem
+o menu já negava.
+
+⚠️ **O bypass de admin/supervisor do ramo NÃO-STRICT foi PRESERVADO**, embora contradiga a decisão do
+dono de 2026-08-26 (*"o admin respeita a ABAC como qualquer um"*). Mudá-lo altera **todo** item
+não-strict de uma vez, e é decisão própria. Fazer as duas mudanças juntas tornaria qualquer regressão
+ambígua entre *"o guard está errado"* e *"a semântica do portão mudou"*. Registrado no `TODO.md`.
+
+⚠️ **Os outros 7 grupos com `roles:` continuam como estavam** (`:47`, `:55`, `:65`, `:86`, `:99`,
+`:146`, `:156`). Cada um gateia campos ABAC diferentes e precisa da mesma medição que o `analise`
+recebeu. É dívida registrada, não esquecimento — e o gate tem uma testemunha que **conta** os
+restantes, para que "zero" nunca signifique "o padrão mudou".
+
+### Gate
+
+**`infra/test/probe_analise_route_guard.sh`** (novo, só lê arquivo). Estrutural, no molde do
+`probe_edge_surface.sh`: reprova quem **adicionar** rota `analise/*` nua amanhã. Cinco seções, e
+`INCONCLUSIVO` **nunca sai OK** (o `probe_f4_direction_and_classes.sh` tem exatamente esse defeito e
+segue registrado). Testemunhas: **A'** (outros grupos ainda têm `roles:` — sem ela, um Sidebar
+renomeado passaria na seção A por ausência) e **B'** (testemunha **negativa**: redirect NÃO pode estar
+envolvido — sem ela, a seção B viraria *"achei `RequireAbac` em algum lugar"* em vez de *"cada página
+tem o seu"*).
+
+**Visto vermelho antes de verde**, contra `git show HEAD` dos dois arquivos: **11 reprovações**
+(o `roles:` presente + as 10 rotas nuas + o Sidebar com decisão própria), com as duas testemunhas
+verdes — que é o resultado certo, porque elas medem o que **não** mudou.
+
+---
+
+## O ABAC de pool deixou de ser opt-in do CHAMADOR — o bypass virou declaração do OPERADOR (2026-08-27)
+
+Furo 2 dos três, passo 1 do plano do `TODO.md`. `pool_auth.py` devolvia **irrestrito** quando o header
+`Authorization` estava ausente, sem 401, com o motivo escrito no código (*"backward-compatible with
+existing dashboard/report consumers"*). Medido no demo: `curl` sem header → **200, `total=94`, todos os
+pools**; token **lixo** no mesmo endpoint → **401**. O mecanismo de recusa existia — o 200 do anônimo
+era **escolha**.
+
+O defeito, no nome que o `TODO.md` lhe deu, era *"opt-in do CHAMADOR"*: **omitir o header era decisão
+de quem chama**. Agora é decisão declarada do **operador** — `analytics_open_access`, default `False`
+no código (`config.py:75`) e `"true"` só no `docker-compose.demo.yml:979`.
+
+**Por que esta flag e não outra coisa:** é o mesmo mecanismo, com a **mesma grafia de ator**
+(`open_access`), que o gate de **auditoria** já usa — e aquele é o portão mais sensível da casa
+(`audit.py`: *"`analytics_open_access` LIBERA nomeando o ator como `open_access`"*). Inventar um
+segundo eixo de bypass ao lado de um que já existe seria criar a divergência que a V2 do arco ALLOWLIST
+acabou de fechar noutro lugar.
+
+### O que mudou
+
+- **`optional_pool_principal`** — os dois ramos de fail-open (sem `auth_jwt_secret`; sem header) passam
+  a **401** (`auth_unavailable` / `auth_required`) quando a flag está desligada. Com ela ligada, liberam
+  **nomeando o ator** (`sub="open_access"`, era `"open"`/`"anonymous"`) e **logando o que deixa de
+  valer** — *"o escopo de pool NÃO está valendo nesta requisição"*, que é a diferença entre *"não há
+  filtro"* e *"o filtro não rodou"*.
+- **`accessible_pools_from_token`** (caminho SSE, token na query) — era *lenient by design*: ausente,
+  inválido **ou expirado** → irrestrito, justificado com *"a bad token can't 401 a stream"*. **O pior
+  caso era o mais permissivo**, num stream **ao vivo** de dados de contato. E a justificativa não se
+  sustenta: um stream **pode** 401 no *connect*; o que ele não pode é 401 no meio. Agora segue a mesma
+  regra, e **levanta** 401 (os três call sites, todos em `dashboard.py`, estão dentro de handlers).
+
+### O que este passo deliberadamente NÃO fez
+
+**Não endureceu o demo.** A flag continua `true` ali, e isso é escolha com motivo medido: **18 dos 30
+scripts de `infra/test/` que falam com o analytics chamam sem token** — entre eles **3 gates**
+(`gate_sla_segment_target.sh`, `gate_queue_report_per_wait.sh`, `gate_pool_config_ttl_source.sh`).
+Virar a flag no demo sem tratá-los não os deixaria vermelhos: deixaria **inconclusivos**, ou contando
+zero linhas e lendo isso como *"não há dado"* — a família de defeito que este repositório cataloga,
+criada por atacado. Endurecer o demo é passo próprio, com o inventário na mão (§6 do
+`q_analytics_authless_inventory.sh`).
+
+⚠️ E há um consumidor anônimo **sem login para consertar**: o `agent-assist-ui` legado (porta 5173,
+vivo no compose) não tem `getAccessToken`/`Authorization` em lugar nenhum. Hoje ele só toca
+`/analytics/sessions/customer/{id}`, que **não é gateada** — logo este passo não o quebra. Mas ele
+quebra no dia em que os portões de conteúdo da (d) chegarem, e não há onde pendurar credencial.
+
+**Passos 2 e 3 do plano seguem abertos**: tornar o irrestrito EXPLÍCITO (claim próprio, nunca inferido
+de lista vazia) e só então inverter `[] → nenhum pool`. O inventário do passo 2 já foi medido (ver
+`TODO.md`): **zero dependentes do vazio nesta base**, mas o **DEFAULT da coluna** (`db.py:30`,
+`TEXT[] NOT NULL DEFAULT '{}'`) e o seed do admin (`db.py:821`) continuam produzindo irrestrito, então
+a inversão tem de tocar o default junto.
+
+### Gates
+
+- **6 testes novos em `test_reports.py::TestPoolPrincipalAuth`**, cada caso com **os DOIS lados da
+  flag** — sem o par, um 401 seria indistinguível de *"recusa sempre, inclusive onde não devia"*, e o
+  demo quebraria sem nada ficar vermelho. Inclui o caminho SSE (token **expirado** recusa) com
+  **testemunha de presença** (token válido restrito continua escopado, `{pool_a, pool_a-int}`).
+- **Dois testes que fixavam o furo foram reescritos**, não removidos: `test_no_secret_returns_unrestricted`
+  e `test_no_token_returns_unrestricted` afirmavam, com a flag DESLIGADA, que omitir o token devolvia
+  irrestrito. Eram verdes e corretos quanto ao código — e é por isso que o furo tinha cobertura e
+  sobreviveu mesmo assim.
+- `q_analytics_authless_inventory.sh` **§5 reescrita**: deixou de narrar um furo aberto (o que
+  enganaria a próxima sessão) e passa a **ramificar sobre a flag** — `COERENTE` quando flag e
+  comportamento concordam, `DIVERGE` quando não, `INCONCLUSIVO` quando a testemunha do token lixo não
+  dá 401. Medido: flag `true`, anônimo `200`, testemunha `401` → **COERENTE**.
+- Baseline: **626 → 630**. Os quatro scripts afetados que rodei (`gate_sla_segment_target`,
+  `gate_queue_report_per_wait`, `probe_segments_journey_window`, `probe_f4_direction_and_classes`)
+  seguem `rc=0` — a mudança é **no-op no demo** por construção.
+
+---
+
+## `POST /supervisor/*` deixou de ser anônimo — autorização numa fronteira de ESCRITA (2026-08-27)
+
+Furo 1 dos três de autorização (`TODO.md`). O router `supervisor.py` **não tinha `Depends` nenhum**:
+qualquer um que alcançasse a porta entrava numa conferência de cliente **ao vivo** e **escrevia** no
+stream dela (`participant_joined` via `_xadd`), declarando o próprio `tenant_id` e o próprio
+`operator_id` no corpo. Não era escopo de leitura mal aplicado — era fronteira de autorização ausente
+por construção, num caminho de escrita.
+
+**A medição, antes do conserto** (`probe_supervisor_join_authz.sh` contra a imagem antiga): anônimo
+→ **200**, token **lixo** → **200**, sessão de pool **fora do escopo** → **200 com `participant_id`**.
+Três ramos de recusa que não recusavam nada.
+
+### O que mudou
+
+- **`pool_auth.py` ganhou `require_pool_principal`** — o irmão **estrito** de `optional_pool_principal`.
+  Este último degrada aberto em dois ramos declarados (sem `auth_jwt_secret`; sem header
+  `Authorization`), o que é defensável numa leitura de relatório e indefensável numa escrita. O estrito
+  **recusa nos dois**, com motivo nomeado (`auth_unavailable` × `auth_required`) — nunca um 401 mudo,
+  porque quem depura precisa distinguir *faltou config no serviço* de *faltou token no chamador*.
+  É também a peça que o passo 1 do plano de `accessible_pools` vai reusar nos 43 call sites.
+- **`resolve_live_session_pools(redis, tenant_id, session_id)`**, no mesmo arquivo: os pools que
+  **tocam** uma sessão viva = `meta.pool_id` ∪ os `pools[]` de cada instância em
+  `session:{sid}:ai_agents` e `session:{sid}:human_agents`.
+- **`supervisor.py`**: os três endpoints exigem principal; o **tenant vem do TOKEN** (o do corpo só pode
+  *concordar* — divergir vira `tenant_mismatch_token`, recusa nomeada em vez de silêncio); `join` confere
+  escopo de pool; `message`/`leave` são **author-bound** (só o `sub` que entrou fala — sem isso, conhecer
+  o par `(session_id, participant_id)`, que viaja no corpo, bastaria para escrever).
+- **Identidade no stream = `sub` do token.** O `operator_id` do corpo tinha default literal `"operator"`
+  (`hooks.ts:443`), logo a trilha de auditoria registrava uma **constante, não uma pessoa**. O declarado
+  fica gravado ao lado (`declared_operator_id`) para depurar cliente desatualizado.
+- **`platform-ui`**: `_authHeaders()` em `modules/service/api/hooks.ts`, aplicado às três chamadas.
+  Único consumidor no repositório — o `agent-assist-ui` legado não chama estas rotas, então não há
+  quebra colateral.
+
+### Por que a autorização NÃO é `meta["pool_id"]` e ponto
+
+Medido em 2026-08-27, e é o achado que desenhou o resolvedor: **o campo significa coisas diferentes
+conforme o canal e o momento.** `webchat.py:202` e `webrtc.py:477` gravam o pool de **ENTRADA** na
+criação; `webhook.py:660` o **omite de propósito**, com comentário dizendo que semeá-lo *"gravaria o
+pool de ENTRADA num campo que os leitores tomam por 'pool que está atendendo'"*; e o bridge
+(`activate_human_agent`) o **sobrescreve com o pool alocado** — mas só quando um agente **humano** é
+ativado. Entrada, ausente ou atendimento: é a fatia C da dívida de `session:{id}:meta`.
+
+⚠️ **E isso corrige uma linha do `CLAUDE.md`**: a § Sentiment Tracking afirma *"o `pool_id` do meta é o
+pool de ENTRADA"*. É verdade para webchat/webrtc e **falso** para webhook (ausente) e para sessão com
+humano ativado (atendimento). Autorizar sobre um campo ambíguo seria construir a fronteira sobre o
+defeito — daí a **união**, que é a mesma semântica que o `_session_scope_clause` do analytics já usa
+(*entrou por pool meu OU pool meu atendeu*). Restringir ao pool de entrada negaria o supervisor de
+retenção no contato que entrou por `sac_ia` e está sendo atendido por ele — mais restritivo que a
+própria lista de onde ele clicou.
+
+### Escopo indeterminável RECUSA
+
+União vazia ⇒ **403 `session_pools_undeterminable`**, não "entra". Não é o mesmo que *"nenhum pool
+bate"*: é *"não consegui determinar"*, e numa escrita em conferência de cliente **"não sei" tem de
+reprovar**. É a postura oposta à do `pool_auth` de leitura, e deliberadamente.
+
+Nada aqui lê `roles` — **decisão do dono (2026-08-26): o admin respeita a ABAC como qualquer um, sem
+bypass por papel.** Alinhado ao precedente `scheduler.{configurar,operacao}` (grant-first).
+
+### Gates
+
+- **`infra/test/probe_supervisor_join_authz.sh`** (novo, roda do host, sem build) — 6 ramos, **visto
+  vermelho antes de verde**. Fabrica sessões vivas no Redis (o estado que o endpoint lê) e as apaga.
+  Três testemunhas, e elas são o que faz o verde valer: **D** (presença — o caminho feliz tem de dar
+  200, senão "quebrei tudo" produz A/B/C/E verdes e passa por sucesso), **F** (a união — sessão sem
+  `pool_id` no meta mas com instância no SET tem de ser autorizada, provando que o resolvedor não
+  colapsou para o meta) e **A'** (a rota existe e responde, logo o 401 do ramo A é de auth, não de
+  roteamento). Sai **INCONCLUSIVO** se o usuário for irrestrito — com `[]` os ramos C e E não podem
+  reprovar, porque o guard retorna cedo.
+- **`test_supervisor_tenant_guard.py`**: os 6 testes de tenant preservados via
+  `dependency_overrides[require_pool_principal]` — sem o override eles passariam a medir a porta de
+  auth em vez do guard de tenant, isto é, ficariam verdes **pelo motivo errado**. +6 testes novos
+  (sem token ⇒ 401 · escopo que bate ⇒ 200 (controle) · escopo que não bate ⇒ 403 · indeterminável ⇒
+  403 · pool derivado da instância ⇒ 200 · identidade gravada = `sub`). Baseline: **620 → 626**.
+
+### Achado de lambuja — as cinco baselines só rodam em container HERDADO
+
+`packages/analytics-api/Dockerfile:9` faz `pip install --no-cache-dir -e .`, e `pytest` vive em
+`[project.optional-dependencies].dev`. Logo **imagem recém-construída não tem pytest**: a baseline de
+620 que a passagem lista como rede de segurança some no primeiro `build` — exatamente quando ela é
+necessária. Foi assim que apareceu aqui (`No module named pytest` logo após o build). É a lição
+*"ambiente que só sobe porque já subiu antes"* aplicada ao **instrumento**, e um teste que não pode
+rodar é da mesma família do que não pode reprovar. Registrado no `TODO.md`; contorno de hoje foi
+`pip install pytest pytest-asyncio httpx` dentro do container após cada build.
+
+---
+
 ## V2 do arco ALLOWLIST — o catálogo de TIPOS, e a paridade que ninguém media (2026-08-26)
 
 Fase V2 de [`adr-contextstore-allowlist.md`](docs/adr/adr-contextstore-allowlist.md): o catálogo de
