@@ -2,6 +2,59 @@
 
 ---
 
+## Os grants do supervisor — passo 4 (2026-08-27)
+
+As decisões 1 e 3 do dono viram grants, em **duas casas** mantidas idênticas pelo S6 do
+`probe_role_preset_on_create`: `role_defaults` no catálogo (vale para quem **nascer** supervisor)
+e `seed_auth.py` (alcança o supervisor que **já existe** — o preset sozinho não o toca, porque
+papel é certidão de nascimento).
+
+| campo | decisão |
+|---|---|
+| `contacts.operacao` | 3 — mantém Monitor ("precisa para operar") |
+| `config.users` | 1 — Access + Groups |
+| `config.calendars` | 1 |
+| `scheduler.configurar` · `scheduler.operacao` | 1 — autoria de agendas + Monitor › Agendas |
+
+**`config.permissions` fica de fora de propósito.** Com ele o supervisor reescreveria a própria
+fronteira e as decisões 2 e 4 virariam sugestão. Verificado ao vivo: ele lista usuários e grupos
+(**200**), e leva **403** ao tentar trocar papel, escrever `module_config` ou redefinir a senha
+do admin.
+
+⚠️ **`contacts.operacao` também abre o Console** — Monitor e Console compartilham o campo.
+Separá-los seria modelagem nova, não grant; anotado no seed.
+
+### O critério de prontidão que eu tinha dado estava ERRADO
+
+Eu havia escrito, e o próprio `q_nav_gates_matrix.py` afirmava, que *"depois do passo 4 o placar
+do supervisor tem de ir a 0"*. Medido: foi de **17 para 8** — e os 8 restantes são exatamente os
+que o dono decidiu que ele **não** deve alcançar (Fluxo ×2, e as 6 telas de config de
+plataforma). Exigir zero teria pedido para conceder o que se decidiu negar.
+
+O instrumento passou a fazer a **pergunta** em vez de afirmar um alvo numérico falso: para cada
+item restante, é acesso a dar (conceda antes do `strict`) ou acesso a tirar (o `strict` é o que o
+remove, e a remoção é o efeito pretendido)?
+
+### 🔴 Achado: o editor de Fluxo tem a mesma divergência do `nav.channels`
+
+Medindo se a decisão 2 já valia no backend, encontrei o defeito do passo 2 em outro serviço:
+
+- `nav.flow.editor` / `nav.flow.deploy` gateiam em **`skill_flows.operacao`**;
+- o `PUT /v1/skills/:id` do agent-registry exige **`config.resources`**
+  (`require-resource-write.ts:62`).
+
+Quem receber `skill_flows.operacao` vê o editor e **não consegue salvar**; quem tiver
+`config.resources` salva e não vê o item. E o catálogo tem `skill_flows.editar` com o rótulo
+*"Criar e editar skill flows"* — o campo existe e não é o que o backend consulta.
+
+Não corrigido aqui: qual dos dois está certo é decisão (os campos significam coisas diferentes),
+e o `probe_nav_backend_field_agreement` só cobre o config-api hoje. Registrado no `TODO.md`.
+
+**Medido junto:** o agent-registry **não gateia leitura** — `GET /v1/skills` e `GET /v1/pools`
+respondem **200 anônimo**. As escritas são gateadas (401 sem token, 403 sem o campo).
+
+---
+
 ## O papel vira preset de nascimento, não portão (2026-08-27)
 
 Passo 3 do arco de ABAC total, e **pré-requisito medido do passo 6**.

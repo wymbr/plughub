@@ -125,6 +125,7 @@ modules:
         role_defaults:
           admin: read_write
           operator: read_write
+          supervisor: read_write
       visualizar:
         label: Visualizar contatos e transcrições
         domain: [none, read_only]
@@ -296,6 +297,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+          supervisor: read_write
       dialog_forms:
         label: Formulários de diálogo (DialogForms)
         domain: [none, read_only, read_write]
@@ -336,6 +338,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+          supervisor: read_write
       permissions:
         label: Conceder permissões (papéis, módulos, escopo de pools)
         domain: [none, read_only, read_write]
@@ -432,6 +435,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+          supervisor: read_write
       operacao:
         label: Operar agendas no Monitor (disparar, pausar, cancelar)
         domain: [none, read_only, read_write]
@@ -439,6 +443,7 @@ modules:
         default: none
         role_defaults:
           admin: read_write
+          supervisor: read_write
 
   # ── Outbound (mailings + campanhas + entregas) ────────────────────────────────
   # Módulo Outbound (fatia 1b). Grant-first (strict, sem bypass de admin): a nav

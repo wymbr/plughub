@@ -16,7 +16,8 @@ Este script NAO decide nada — mede, para que a decisao seja tomada com numero:
   §2  os usuarios e o que o `module_config` deles concede
   §3  por item de menu: quem ve, e por qual RAZAO (grant · bypass de papel ·
       degradacao de conta legada)
-  §4  o placar do bypass: quantos itens cada usuario ve APENAS por ele
+  §4  o placar do bypass: quantos itens cada usuario ve APENAS por ele — e a
+      pergunta a fazer sobre cada um (o alvo NAO e zero; ver a nota no §4)
 
 As regras sao DERIVADAS de `Sidebar.tsx` por regex, nunca copiadas: uma copia aqui
 divergiria do menu no primeiro ajuste, e o relatorio ficaria confiante e errado.
@@ -207,9 +208,15 @@ def main() -> int:
             print(f"   \033[33m{email:<28} ve {n} item(ns) SO pelo bypass de papel\033[0m")
         else:
             print(f"   {email:<28} 0 — nao depende do bypass")
-    print("\n   Zero em todos = o bypass pode cair sem tirar nada de ninguem, e a")
-    print("   decisao do dono ('nao ha bypass por papel') vira `strict: true` em bloco.")
-    print("   Numero > 0 = conceder o grant ANTES, senao a remocao tira tela de quem usa.")
+    print("\n   \033[1mComo ler este numero\033[0m — e NAO e 'tem de ir a zero'.")
+    print("   Zero = o bypass pode cair sem tirar nada de ninguem.")
+    print("   > 0  = para CADA item restante, responda uma pergunta de PRODUTO:")
+    print("            · e acesso que a pessoa deve ter?  -> conceda o grant ANTES do strict")
+    print("            · e acesso que ela nao deve ter?   -> o strict e o que o REMOVE, e")
+    print("                                                  a remocao e o efeito pretendido")
+    print("   Medido em 2026-08-27: depois de conceder tudo o que o dono decidiu, o")
+    print("   supervisor ficou em 8 — e os 8 sao justamente os que ele NAO deve alcancar.")
+    print("   Exigir zero teria pedido para conceder o que se decidiu negar.")
     return 0
 
 

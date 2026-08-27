@@ -27,7 +27,7 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 | 1 | Split `config.users` → `users` + `permissions` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 3 | **Papel → preset de seed**, aplicado em `create_user` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
-| 4 | Grants: supervisor recebe os 4 campos da decisão 1; sai `billing.visualizar` | pendente |
+| 4 | Grants: supervisor recebe os campos das decisões 1 e 3; saiu `billing.visualizar` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 5 | `strict: true` em bloco + regra ABAC nas 7 entradas sem regra | pendente |
 | 6 | Caem os **dois** bypasses juntos (papel **e** config vazia); `unrestricted` vira a única porta larga | pendente |
 | 7 | Apagar os 7 `roles:` do `Sidebar.tsx` | pendente |
@@ -39,8 +39,41 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 nasce com config vazio*, dentro da degradação. Inverter o 6 antes do 3 faria cada usuário novo
 **nascer cego**, e quem o criou leria isso como "a tela de Acesso quebrou".
 
-⚠️ **Não remover bypass antes de conceder.** Depois do passo 4 o placar do supervisor tem de ir a
-**0 dependências de bypass** — só então 5/6 são seguros.
+⚠️ **Não remover bypass antes de conceder** — mas **o alvo NÃO é zero**. *(Corrigido em
+2026-08-27: esta linha, e a mensagem do próprio `q_nav_gates_matrix.py`, diziam "tem de ir a 0".
+Medido: depois de conceder tudo o que o dono decidiu, o supervisor foi de 17 para **8**, e os 8
+são exatamente os que ele **não** deve alcançar. Exigir zero teria pedido para conceder o que se
+decidiu negar.)*
+
+O critério certo é **item a item**: para cada um que sobra no placar, é acesso a dar (conceda
+antes do `strict`) ou acesso a tirar (o `strict` é o que o remove, e a remoção é o efeito
+pretendido)? Os 8 do supervisor hoje — `nav.flow.editor` e `nav.flow.deploy` (decisão 2) mais
+`nav.dashboards`, `nav.resources`, `nav.platform`, `nav.channels`, `nav.masking` e
+`nav.dialogForms` (decisão 1) — são **todos a tirar**.
+
+### 🔴 O editor de Fluxo repete a divergência do `nav.channels` (achado do passo 4)
+
+| lado | campo exigido |
+|---|---|
+| menu (`nav.flow.editor`, `nav.flow.deploy`) | `skill_flows.operacao` |
+| backend (`PUT /v1/skills/:id`, `require-resource-write.ts:62`) | `config.resources` |
+
+Quem receber `skill_flows.operacao` vê o editor e **não salva**; quem tiver `config.resources`
+salva e **não vê** o item. Mesma família do defeito que o passo 2 fechou, em outro serviço — e o
+catálogo ainda tem `skill_flows.editar` (*"Criar e editar skill flows"*), um campo que existe e
+não é o que o backend consulta.
+
+**Qual lado está certo é decisão**, não conserto óbvio: `config.resources` significa "CRUD de
+pools/skills/instâncias" e `skill_flows.editar` significa "autorar fluxos" — capacidades
+diferentes que hoje colidem no mesmo endpoint.
+
+⚠️ O `probe_nav_backend_field_agreement.sh` **não pega isto**: cobre só os namespaces do
+config-api, e `resources` está declarado em `NAO_CONFIG_API`. Estender a cobertura ao
+agent-registry é parte do encaminhamento.
+
+**Medido junto:** o agent-registry **não gateia leitura** — `GET /v1/skills` e `GET /v1/pools`
+respondem **200 anônimo**. Escritas são gateadas (401 sem token, 403 sem o campo). É divulgação
+de config, não de dado pessoal, mas é superfície.
 
 ### 🟡 Presets de `developer` e `business` precisam de decisão (achado do passo 3)
 

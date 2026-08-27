@@ -13,6 +13,11 @@ Usuários criados:
         evaluation.curar      = read_write  (G-PROBE perna humana, 2026-07-02 — curadoria/calibração)
         contacts.visualizar   = read_only
         contacts.exportar     = read_write
+        contacts.operacao     = read_write  (Monitor — decisão 3 do dono, 2026-08-27)
+        config.users          = read_write  (Access + Groups — decisão 1)
+        config.calendars      = read_write  (decisão 1)
+        scheduler.configurar  = read_write  (decisão 1)
+        scheduler.operacao    = read_write  (decisão 1)
 
   operator@plughub.local    / changeme_operator  (roles: operator)
       module_config (campos do catálogo infra/modules.yaml):
@@ -263,6 +268,22 @@ DEMO_USERS = [
             "contacts": {
                 "visualizar": {"access": "read_only",  "scope": []},  # vê contatos/relatórios
                 "exportar":   {"access": "read_write", "scope": []},  # exporta dados
+                # Monitor (decisão 3 do dono, 2026-08-27: "precisa para operar").
+                # ⚠️ Este campo também abre o Console — os dois compartilham
+                # `contacts.operacao`; separá-los seria modelagem nova, não grant.
+                "operacao":   {"access": "read_write", "scope": []},
+            },
+            # Decisão 1 do dono (2026-08-27): o supervisor administra Access, Groups,
+            # Calendars e Schedules. `config.permissions` fica de FORA de propósito —
+            # com ele o supervisor reescreveria a própria fronteira e as decisões 2 e 4
+            # viravam sugestão (ver o split do passo 1).
+            "config": {
+                "users":     {"access": "read_write", "scope": []},   # Access + Groups
+                "calendars": {"access": "read_write", "scope": []},
+            },
+            "scheduler": {
+                "configurar": {"access": "read_write", "scope": []},  # autoria de agendas
+                "operacao":   {"access": "read_write", "scope": []},  # Monitor › Agendas
             },
             # `billing.visualizar` REMOVIDO em 2026-08-27 (decisão 4 do dono: "o grant
             # é apenas um teste, pode desconsiderar"). Era a única divergência entre
