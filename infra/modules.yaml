@@ -206,8 +206,28 @@ modules:
     icon: "⚙️"
     nav_path: /config
     permission_schema:
+      # ⚠️ `platform` era o catch-all de CINCO telas (Dashboards, Platform, Channels,
+      # Calendars, DialogForms) — medido 2026-08-27. Conceder uma delas concedia as
+      # cinco, e o `channels` abaixo existia sem nenhum consumidor no menu (o backend
+      # do config-api ja gateava os namespaces de canal nele; era o MENU que apontava
+      # para `platform`). Os campos abaixo desfazem o catch-all.
       platform:
         label: Configurações gerais (namespaces, valores)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      dashboards:
+        label: Dashboards (templates e catálogo por papel)
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      calendars:
+        label: Calendários e feriados
+        domain: [none, read_only, read_write]
+        scopable: false
+        default: none
+      dialog_forms:
+        label: Formulários de diálogo (DialogForms)
         domain: [none, read_only, read_write]
         scopable: false
         default: none

@@ -192,6 +192,25 @@ WHERE (module_config -> 'config') ? 'users'
   AND NOT ((module_config -> 'config') ? 'permissions')
 """
 
+# Passo 2 (2026-08-27): `config.platform` era catch-all de cinco telas. Os campos
+# novos sao recortados DELE, entao quem ja o tinha continua alcancando as mesmas
+# telas — mesmo raciocinio do split `users`/`permissions`: preservar o que ja era
+# verdade, nao inferir intencao a partir de ausencia. Sem isto o admin perderia
+# Dashboards, Calendars e DialogForms no deploy.
+DDL_MIGRATE_ABAC_PLATFORM_SPLIT = """
+UPDATE auth.users
+SET module_config = jsonb_set(
+    module_config, '{config}',
+    (module_config -> 'config')
+      || jsonb_build_object(
+           'dashboards',   module_config -> 'config' -> 'platform',
+           'calendars',    module_config -> 'config' -> 'platform',
+           'dialog_forms', module_config -> 'config' -> 'platform')
+)
+WHERE (module_config -> 'config') ? 'platform'
+  AND NOT ((module_config -> 'config') ? 'dashboards')
+"""
+
 # ── Arc 9 — Agent Groups & Supervisor Scope ───────────────────────────────────
 
 DDL_AGENT_GROUPS = """
@@ -244,6 +263,7 @@ async def ensure_schema(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_MIGRATE_ABAC_CANAIS)
             await conn.execute(DDL_MIGRATE_ABAC_USUARIOS)
             await conn.execute(DDL_MIGRATE_ABAC_PERMISSIONS)
+            await conn.execute(DDL_MIGRATE_ABAC_PLATFORM_SPLIT)
             # Arc 9 — Agent Groups (member/shift tables removed 2026-07-02 — see
             # docs/arcos/arc9-agent-groups.md; tables may still exist physically
             # in older DBs, just no longer created/read/written by this service)

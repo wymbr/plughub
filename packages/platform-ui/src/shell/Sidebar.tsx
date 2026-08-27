@@ -173,17 +173,24 @@ const Sidebar: React.FC = () => {
       icon: Settings,
       roles: ['admin', 'business'],
       children: [
-        { label: t('nav.dashboards'),    href: '/dashboards',           icon: LayoutDashboard, abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.dashboards'),    href: '/dashboards',           icon: LayoutDashboard, abac: { module: 'config', field: 'dashboards' } },
         { label: t('nav.resources'),     href: '/config/resources',     icon: Package,         abac: { module: 'config', field: 'resources' } },
         { label: t('nav.platform'),      href: '/config/platform',      icon: Tv2,             abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'platform'  } },
-        { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'platform'  } },
+        { label: t('nav.channels'),      href: '/config/channels',      icon: Radio,           abac: { module: 'config', field: 'channels'  } },
+        // ⚠️ MENU-ONLY: o calendar-api nao tem portao nenhum — medido em 2026-08-27,
+        // `POST /v1/calendars` SEM credencial devolveu 201 e criou o recurso. Este campo
+        // decide quem VE a tela, nao quem pode escrever. Ver `TODO.md` § "Serviços de
+        // config sem portão".
+        { label: t('nav.calendars'),     href: '/config/calendars',     icon: Calendar,        abac: { module: 'config', field: 'calendars' } },
         // Scheduler Fase 3 — grant-first (strict): visível só com scheduler.configurar (D2).
         { label: t('nav.schedules'),     href: '/config/schedules',     icon: CalendarClock,   abac: { module: 'scheduler', field: 'configurar', strict: true } },
         // Outbound (fatia 1b) — grant-first (strict): visível só com outbound.configurar.
         { label: t('nav.outbound'),      href: '/config/outbound',      icon: Send,            abac: { module: 'outbound', field: 'configurar', strict: true } },
         { label: t('nav.masking'),       href: '/config/masking',       icon: ShieldOff,       abac: { module: 'config', field: 'masking'   } },
-        { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'platform'  } },
+        // ⚠️ MENU-ONLY, mesma razao: `DIALOG_ADMIN_TOKEN` vazio no compose torna o
+        // `_require_admin` do dialog-api inerte (`if expected and ...`) — criar E PUBLICAR
+        // form sem credencial devolveu 200 nos dois.
+        { label: t('nav.dialogForms'),   href: '/config/dialog-forms',  icon: MessageSquare,   abac: { module: 'config', field: 'dialog_forms' } },
         { label: t('nav.billing'),       href: '/config/billing',       icon: CreditCard,      roles: ['admin', 'business'] },
         { label: t('nav.access'),        href: '/config/access',        icon: Lock,            abac: { module: 'config', field: 'users'     } },
         { label: t('nav.groups'),        href: '/config/groups',        icon: Users,           abac: { module: 'config', field: 'users'     } },

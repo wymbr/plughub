@@ -257,14 +257,25 @@ Icon: ⚙️ — roles: admin, business
 
 | Child | Icon | href | ABAC gate |
 |-------|------|------|-----------|
-| Dashboards | 📊 | `/dashboards` | `config.platform` |
+| Dashboards | 📊 | `/dashboards` | `config.dashboards` |
 | Resources | 📦 | `/config/resources` | `config.resources` |
 | Platform | 🖥️ | `/config/platform` | `config.platform` |
-| Channels | 📡 | `/config/channels` | `config.platform` |
-| Calendars | 📅 | `/config/calendars` | `config.platform` |
+| Channels | 📡 | `/config/channels` | `config.channels` |
+| Calendars | 📅 | `/config/calendars` | `config.calendars` ⚠️ menu-only |
+| Schedules | ⏰ | `/config/schedules` | `scheduler.configurar` (strict) |
+| Outbound | 📣 | `/config/outbound` | `outbound.configurar` (strict) |
 | Masking | 🔒 | `/config/masking` | `config.masking` |
+| DialogForms | 💬 | `/config/dialog-forms` | `config.dialog_forms` ⚠️ menu-only |
 | Billing | 💳 | `/config/billing` | roles: admin, business (no ABAC gate) |
 | Access | 🔐 | `/config/access` | `config.users` |
+| Groups | 👥 | `/config/groups` | `config.users` (aba Donos: `config.permissions`) |
+
+> **Atualizada em 2026-08-27 (passo 2 do arco de ABAC total).** Cinco linhas diziam
+> `config.platform` — era catch-all, e no caso do Channels **divergia do backend**, que já
+> exigia `config.channels`. Ver `docs/arcos/arc7-auth.md`.
+>
+> ⚠️ **menu-only** = o campo decide quem VÊ a tela, não quem pode escrever: `calendar-api` e
+> `dialog-api` não têm portão (medido — escrita anônima aceita). Dívida em `TODO.md`.
 
 ### Filtering rules
 

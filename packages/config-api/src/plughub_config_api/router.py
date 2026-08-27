@@ -61,6 +61,11 @@ _NS_FIELD_OVERRIDES = {
     "masking":      "masking",
     "audit_policy": "masking",   # MaskingPage edita masking + audit_policy → mesmo campo
     "webchat":  "channels", "webhook": "channels", "sms": "channels", "whatsapp": "channels", "voice": "channels", "webrtc": "channels",
+    # Passo 2 do arco de ABAC total (2026-08-27): Dashboards deixa de cair no
+    # catch-all `platform`. O MENU passa a apontar para o mesmo campo — a divergência
+    # menu×backend do Channels (menu em `platform`, backend em `channels`) é o defeito
+    # que este passo fecha, e repeti-lo aqui seria criá-lo de novo.
+    "dashboards":   "dashboards",
 }
 
 

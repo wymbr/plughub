@@ -25,7 +25,7 @@ UI-editável"*, que vale para o `module_config` de cada pessoa.
 | # | passo | estado |
 |---|---|---|
 | 1 | Split `config.users` → `users` + `permissions` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
-| 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | pendente |
+| 2 | Campos `config.calendars` / `config.dialog_forms` / `config.dashboards`; `nav.channels` → `config.channels` | ✅ **2026-08-27** (ver `CHANGELOG.md`) |
 | 3 | **Papel → preset de seed**, aplicado em `create_user` | pendente — **pré-requisito do passo 6** |
 | 4 | Grants: supervisor recebe os 4 campos da decisão 1; sai `billing.visualizar` | pendente |
 | 5 | `strict: true` em bloco + regra ABAC nas 7 entradas sem regra | pendente |
@@ -41,6 +41,44 @@ nasce com config vazio*, dentro da degradação. Inverter o 6 antes do 3 faria c
 
 ⚠️ **Não remover bypass antes de conceder.** Depois do passo 4 o placar do supervisor tem de ir a
 **0 dependências de bypass** — só então 5/6 são seguros.
+
+### 🔴 Serviços de config SEM portão (achado do passo 2, 2026-08-27)
+
+Não é dívida de ABAC — é **escrita não autenticada** em config de produção. Medido:
+
+| serviço | medição |
+|---|---|
+| `calendar-api` (3700) | `POST /v1/calendars` **sem credencial** → **201**, recurso criado. Não há dependência de auth em rota nenhuma do CRUD |
+| `dialog-api` (3760) | `DIALOG_ADMIN_TOKEN: ""` no compose torna `_require_admin` inerte (`if expected and ...`). Criar **e publicar** DialogForm anônimo → **200** nos dois |
+
+Consequência hoje: `config.calendars` e `config.dialog_forms` decidem quem **vê** a tela, não
+quem **escreve**. Está anotado ao lado de cada regra no `Sidebar.tsx` para que o campo não seja
+lido como proteção.
+
+⚠️ **A decisão que trava a correção não é "gatear ou não", é ONDE mora o verificador.** Já
+existem **cinco** implementações independentes de *verificar JWT + ler `module_config`*
+(`analytics-api/audit.py`, `channel-gateway/auth.py`, `config-api/router.py`, `evaluation-api`,
+`auth-api`). Copiar mais duas vezes leva a sete, e é exatamente a forma como a divergência de
+masking nasceu (três implementações, cada uma com teste próprio, nenhum comparando as portas).
+As opções são **(a)** copiar e registrar a dívida, ou **(b)** extrair um helper compartilhado
+antes. É decisão do dono; nenhuma foi tomada.
+
+### 🟡 Layout pessoal de dashboard exige permissão de plataforma (achado do passo 2)
+
+O namespace `dashboards` do config-api mistura **template do tenant** (`template:*`,
+`role_catalog:*`) com **preferência pessoal** (`layout:{tenant}:{user}`). Como o gate é por
+namespace, salvar o próprio Home pede permissão de administração. Medido em 2026-08-27:
+
+```
+operator     PUT dashboards/<layout>  ->  403
+supervisor   PUT dashboards/<layout>  ->  403
+admin        PUT dashboards/<layout>  ->  passa
+```
+
+**Renomear o campo não conserta** — `config.dashboards` só muda o nome do campo errado. É a
+regra de escopo outra vez: preferência pessoal não é config de plataforma. O `user_id` está
+**dentro da chave** (`layout:{tenantId}:{userId}`), e o config-api já lê o `sub` do JWT, então a
+saída é uma **regra de posse** (a chave é minha ⇒ posso escrever), não um campo novo.
 
 ### Cauda de papel no backend (passo 8) — medida
 

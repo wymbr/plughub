@@ -2,6 +2,74 @@
 
 ---
 
+## `config.platform` deixa de gatear cinco telas (2026-08-27)
+
+Passo 2 do arco de ABAC total. Um campo cobria **Dashboards, Platform, Channels,
+Calendars e DialogForms** — conceder uma delas concedia as cinco.
+
+### O defeito que estava lá antes: menu e backend gateando em campos diferentes
+
+`config.channels` **existia**, estava concedido ao admin, e **nenhuma entrada de menu o
+usava**: `nav.channels` apontava para `config.platform`. Mas o config-api **já** mapeava os
+namespaces de canal (`webchat`, `whatsapp`, `voice`, `sms`, `webrtc`, `webhook`) para
+`channels` — o comentário no router até dizia *"inativo até a migração de Channels"*, e o lado
+que ficou de pé foi o errado. As duas metades discordavam:
+
+- conceder só `config.channels` → a API funciona e o menu **esconde** a tela
+- conceder só `config.platform` → o menu mostra a tela e a API **recusa**
+
+Nenhum dos dois fica vermelho em lugar nenhum. Um vira *"sumiu do menu"*, o outro vira
+*"salvei e deu erro"* — e é por isso que sobreviveu.
+
+### Entregue
+
+Três campos novos (`config.dashboards`, `config.calendars`, `config.dialog_forms`), o
+`nav.channels` apontando para o campo que o backend já exigia, e o namespace `dashboards`
+saindo do catch-all no config-api. Migração `DDL_MIGRATE_ABAC_PLATFORM_SPLIT` recorta os três
+de `platform` — mesmo raciocínio do split anterior: preservar o que já era verdade, nunca
+inferir intenção a partir de ausência.
+
+### Gate — e por que ele deriva em vez de declarar
+
+`infra/test/probe_nav_backend_field_agreement.sh` mede a concordância por **comportamento**:
+concede a um principal **só** o campo que o menu exige e confere se o backend aceita a
+escrita.
+
+O campo é **derivado** do `Sidebar.tsx` (`_nav_fields.py`), nunca copiado para a tabela do
+probe. Copiá-lo faria o instrumento repetir o erro do menu em vez de o denunciar — *um teste
+que copia a coisa medida não mede nada*. Só o **namespace** é declarado, porque vive no código
+da página e não é derivável.
+
+**Contraprova executada:** reintroduzindo o bug original (`nav.channels` → `config.platform`),
+o gate fica **vermelho** com a mensagem certa, exit 1.
+
+Coberto também: **campo `config.*` novo sem classificação reprova**, em vez de passar por
+omissão — o modo de falha que a tabela existe para impedir.
+
+### 🔴 Dois achados que NÃO são deste passo
+
+Vieram da medição e estão registrados no `TODO.md`; nenhum foi corrigido aqui.
+
+**(1) `calendar-api` e `dialog-api` não têm portão.** `POST /v1/calendars` **sem credencial
+nenhuma** devolveu **201 e criou o recurso**. No dialog-api, `DIALOG_ADMIN_TOKEN: ""` no compose
+torna `_require_admin` inerte (`if expected and ...`) — criar **e publicar** um DialogForm
+anônimo devolveu **200 nos dois**. Consequência: os campos `config.calendars` e
+`config.dialog_forms` decidem hoje quem **vê** a tela, não quem pode **escrever**. Está escrito
+no próprio `Sidebar.tsx`, ao lado de cada regra, para que ninguém leia o campo como proteção.
+
+*Medido com payload válido depois de um 422 — ler o 422 do payload errado como "está protegido"
+teria sido exatamente o valor plausível que a casa persegue.*
+
+**(2) Ninguém além do admin consegue salvar o próprio layout de dashboard.** O namespace
+`dashboards` mistura dois escopos: template do tenant (`template:*`, `role_catalog:*`) e
+**preferência pessoal** (`layout:{tenant}:{user}`). Como o gate é por namespace, salvar o
+próprio Home exige permissão de administração de plataforma — medido: operator **403**,
+supervisor **403**, admin passa. Renomear o campo para `config.dashboards` não conserta; só
+muda o nome do campo errado. O `user_id` está dentro da chave, então a saída é uma regra de
+posse, não um campo novo.
+
+---
+
 ## `config.users` deixa de ser a chave-mestra do tenant (2026-08-27)
 
 Passo 1 do arco de ABAC total (decisão do dono, escopo fechado hoje). **Administrar uma PESSOA e

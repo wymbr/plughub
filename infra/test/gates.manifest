@@ -47,6 +47,13 @@ probe_customer_history_authz.sh
 # a senha de quem detem o campo). Testemunhas de presenca nos dois lados: o mesmo
 # principal cria e edita pessoa, e o admin continua concedendo.
 probe_config_permissions_split.sh
+# Uma tela e gateada duas vezes — pelo campo no `Sidebar.tsx` (quem VE) e pelo campo
+# que o servico exige (quem ESCREVE) — e nada obrigava os dois a coincidir. Media-se
+# por COMPORTAMENTO: concede so o campo do menu e confere se o backend aceita. O campo
+# e DERIVADO do Sidebar (`_nav_fields.py`), nunca copiado — copiar faria o probe
+# repetir o erro do menu em vez de o denunciar. Contraprova executada: reintroduzir o
+# bug original do `nav.channels` deixa este gate vermelho.
+probe_nav_backend_field_agreement.sh
 # Este mede o BROWSER, nao o backend: chamada de UI com `fetch` cru contra endpoint
 # que exige credencial deixa a TELA VAZIA sem erro, e nenhum gate de backend pega —
 # do lado do backend o 401 esta certo.

@@ -788,3 +788,58 @@ elas, *"tudo 403"* seria lido como sucesso quando a rota quebrou para todo mundo
 `useradmin@plughub.local` (`changeme_useradmin`) — papel `supervisor`, `config.users: read_write`,
 **sem** `config.permissions`. O papel é `supervisor` de propósito: se algum bypass de papel
 sobreviver, ele aparece como um 2xx onde o gate espera 403. Criado pelo próprio probe se ausente.
+
+
+---
+
+## `config.platform` deixa de ser catch-all — passo 2 (2026-08-27)
+
+**Estado anterior.** Cinco telas gateadas por um campo só:
+
+| tela | rota | campo (antes) |
+|---|---|---|
+| Dashboards | `/dashboards` | `config.platform` |
+| Platform | `/config/platform` | `config.platform` |
+| Channels | `/config/channels` | `config.platform` ⚠️ |
+| Calendars | `/config/calendars` | `config.platform` |
+| DialogForms | `/config/dialog-forms` | `config.platform` |
+
+A linha do Channels é o defeito: `config.channels` **já existia** e o config-api **já** o
+exigia para os namespaces `webchat`/`whatsapp`/`voice`/`sms`/`webrtc`/`webhook`
+(`_NS_FIELD_OVERRIDES`). Só o menu apontava para outro campo. As duas metades discordavam em
+direções opostas, e **nenhuma delas fica vermelha**: conceder `channels` dá API funcionando com
+o item invisível; conceder `platform` dá item visível com a API recusando.
+
+**Estado atual:** `config.dashboards`, `config.calendars`, `config.dialog_forms` como campos
+próprios; `nav.channels` → `config.channels`; namespace `dashboards` fora do catch-all no
+config-api. Migração `DDL_MIGRATE_ABAC_PLATFORM_SPLIT` recorta os três de `platform`.
+
+### Gate — derivar, não copiar
+
+`infra/test/probe_nav_backend_field_agreement.sh` concede a um principal **só** o campo do menu
+e confere se o backend aceita a escrita.
+
+O que é **declarado** ali: entrada de menu → namespace (vive no código da página, não é
+derivável). O que é **derivado** do `Sidebar.tsx` via `_nav_fields.py`: o **campo**. A
+distinção é o que faz o gate valer — se o campo fosse copiado para a tabela, o probe repetiria
+o erro do menu em vez de o denunciar. Contraprova executada: reintroduzir o bug do
+`nav.channels` deixa o gate vermelho.
+
+Cobertura conferida: todo campo `config.*` do catálogo tem de estar classificado (servido pelo
+config-api, ou na lista `NAO_CONFIG_API`); campo novo sem classificação **reprova**.
+
+### ⚠️ Os campos de Calendars e DialogForms são MENU-ONLY
+
+Medido em 2026-08-27: `calendar-api` não tem portão em rota nenhuma (`POST /v1/calendars` sem
+credencial → **201**), e no `dialog-api` o `DIALOG_ADMIN_TOKEN` vazio torna `_require_admin`
+inerte, então criar **e publicar** form anônimo → **200**. Os dois campos decidem quem **vê** a
+tela, não quem **escreve**. Anotado ao lado de cada regra no `Sidebar.tsx`; dívida em
+`TODO.md` § *"Serviços de config sem portão"*, junto com a decisão que a trava (já são **cinco**
+implementações de verificar JWT + `module_config`; copiar duas vezes faz sete).
+
+### ⚠️ Layout pessoal de dashboard
+
+O namespace `dashboards` mistura template do tenant com preferência pessoal
+(`layout:{tenant}:{user}`), e o gate é por namespace — então salvar o próprio Home exige
+permissão de administração (operator e supervisor: **403**). O campo novo **não** conserta
+isso; a saída é regra de posse, e o `user_id` já está dentro da chave. Ver `TODO.md`.
